@@ -42,6 +42,8 @@ impl Upvalue {
         self.state = UpvalState::Closed(v);
     }
 
+    // kept inline in the drain loop, which visits every upvalue
+    #[inline(always)]
     pub(crate) fn trace(&self, m: &mut Marker) {
         match self.state {
             UpvalState::Closed(v) => {

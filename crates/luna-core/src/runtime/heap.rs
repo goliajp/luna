@@ -52,6 +52,7 @@ pub struct GcHeader {
     ///   bit 3 FIN    — registered for `__gc` (tracked in `finalize`)
     ///   bit 4 FINALIZED — already enqueued or finalized once this lifetime
     ///   bit 5 DEFERRED  — 5.3 cycle-finalize deferral marker (gc.lua :502)
+    ///   bit 6 LEAF   — nothing to trace (a string, a native without upvalues)
     /// Gray = no white bits, no BLACK; that is the in-stack state between the
     /// time a Marker visits an object and the time it traces it.
     flags: u8,
@@ -73,6 +74,8 @@ const FINALIZED: u8 = 16;
 /// break cycle"). The next time the object is found unreachable it is moved
 /// to `tobefnz` without re-deferring.
 const DEFERRED: u8 = 32;
+/// the object has no children; fixed at creation
+const LEAF: u8 = 64;
 
 #[inline(always)]
 fn is_white(flags: u8) -> bool {
@@ -97,7 +100,15 @@ impl GcHeader {
         GcHeader {
             next: ptr::null_mut(),
             tag,
-            flags: 0,
+            flags: if tag == ObjTag::Str { LEAF } else { 0 },
+        }
+    }
+
+    /// A native function's header; one without upvalues has nothing to trace.
+    fn native(upvals: &[Value]) -> GcHeader {
+        GcHeader {
+            flags: if upvals.is_empty() { LEAF } else { 0 },
+            ..GcHeader::new(ObjTag::Native)
         }
     }
 }
@@ -445,7 +456,7 @@ impl Heap {
         upvals: Box<[Value]>,
     ) -> Gc<NativeClosure> {
         self.adopt(Box::new(NativeClosure {
-            hdr: GcHeader::new(ObjTag::Native),
+            hdr: GcHeader::native(&upvals),
             f,
             upvals,
             is_async: false,
@@ -466,7 +477,7 @@ impl Heap {
         upvals: Box<[Value]>,
     ) -> Gc<NativeClosure> {
         self.adopt(Box::new(NativeClosure {
-            hdr: GcHeader::new(ObjTag::Native),
+            hdr: GcHeader::native(&upvals),
             f,
             upvals,
             is_async: true,
@@ -694,16 +705,18 @@ impl Heap {
     /// reachable objects are BLACK and `current_white` has flipped, so the
     /// caller's sweep tests `other-white` for dead. Does NOT change `phase`.
     fn mark_all(&mut self, roots: &[Value], extra: &[*mut GcHeader]) {
+        // The gray queue starts as any barrier-grayed objects carried over
+        // (each demoted from BLACK by a write barrier and awaiting re-trace),
+        // and its buffer goes back to `gray` afterwards, so a collection
+        // does not regrow a fresh stack
         let mut m = Marker {
-            stack: Vec::new(),
+            stack: std::mem::take(&mut self.gray),
             weak: Vec::new(),
             ephemeron: Vec::new(),
             no_ephemeron: self.no_ephemeron,
             cached_protos: Vec::new(),
+            leaf_black: LEAF,
         };
-        // Drain any barrier-grayed objects carried over: each was demoted from
-        // BLACK back to gray by a write barrier and is awaiting (re-)trace.
-        m.stack.append(&mut self.gray);
         for &r in roots {
             m.value(r);
         }
@@ -734,6 +747,8 @@ impl Heap {
             }
         }
         self.atomic_tail(&mut m);
+        debug_assert!(m.stack.is_empty());
+        self.gray = m.stack;
     }
 
     /// PUC `atomic()` tail: weak-table value-clear, finalizer resurrection,
@@ -897,6 +912,7 @@ impl Heap {
             ephemeron: std::mem::take(&mut prop.ephemeron),
             no_ephemeron: prop.no_ephemeron,
             cached_protos: std::mem::take(&mut prop.cached_protos),
+            leaf_black: 0,
         }
     }
 
@@ -1229,32 +1245,27 @@ impl Heap {
         let new_white = self.current_white;
         // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
-            let mut cur = std::mem::replace(&mut self.all, ptr::null_mut());
-            let mut kept_head: *mut GcHeader = ptr::null_mut();
-            let mut kept_tail: *mut GcHeader = ptr::null_mut();
-            while !cur.is_null() {
-                let next = (*cur).next;
+            // PUC `sweeplist`: `link` is the field that points at `cur`, so
+            // a survivor costs one store (its color) and only a freed object
+            // relinks its predecessor
+            let mut head = std::mem::replace(&mut self.all, ptr::null_mut());
+            let mut link: *mut *mut GcHeader = ptr::addr_of_mut!(head);
+            while !(*link).is_null() {
+                let cur = *link;
                 let f = (*cur).flags;
                 // dead = other-white (i.e. white but not current-white).
                 // Survivors are BLACK (just-marked) or current-white (born
                 // during the sweep itself).
-                let dead = is_white(f) && (f & new_white) == 0;
-                if !dead {
-                    (*cur).flags = (f & !COLOR_BITS) | new_white;
-                    (*cur).next = ptr::null_mut();
-                    if kept_tail.is_null() {
-                        kept_head = cur;
-                    } else {
-                        (*kept_tail).next = cur;
-                    }
-                    kept_tail = cur;
-                } else {
+                if is_white(f) && (f & new_white) == 0 {
+                    *link = (*cur).next;
                     self.free_obj(cur);
                     freed += 1;
+                } else {
+                    (*cur).flags = (f & !COLOR_BITS) | new_white;
+                    link = ptr::addr_of_mut!((*cur).next);
                 }
-                cur = next;
             }
-            self.all = kept_head;
+            self.all = head;
         }
         self.live -= freed;
         #[cfg(feature = "gc-verify")]
@@ -1420,101 +1431,6 @@ impl Default for Heap {
     }
 }
 
-/// Mark accumulator: gray stack plus entry points for Values and bare
-/// object headers (Protos/Upvalues are not first-class Values).
-pub(crate) struct Marker {
-    stack: Vec<*mut GcHeader>,
-    /// live tables with a weak `__mode`, collected during marking and processed
-    /// (dead weak entries cleared) before the sweep
-    pub(crate) weak: Vec<*mut Table>,
-    /// ephemeron tables (weak keys, strong values): their hash values are not
-    /// marked during trace but in a fixpoint pass keyed on key-reachability
-    pub(crate) ephemeron: Vec<*mut Table>,
-    /// PUC 5.1 mode: skip ephemeron handling — `__mode='k'` tables mark their
-    /// values strongly during the normal trace pass (see [`Heap::no_ephemeron`]).
-    pub(crate) no_ephemeron: bool,
-    /// Protos with a non-null closure cache (PUC `Proto.cache`). After
-    /// marking is done, any cached LClosure that ended the cycle unmarked is
-    /// cleared so the sweep can collect it — the cache is a *weak* reference
-    /// (PUC `traverseproto` checks `iswhite(cache)`). Seen via [`Proto::trace`].
-    pub(crate) cached_protos: Vec<*mut crate::runtime::Proto>,
-}
-
-/// Drain the gray stack: pop each marked object and trace its children until
-/// the worklist is empty (iterative, so deep graphs don't overflow the Rust
-/// stack). Shared by the root mark and the post-resurrection remark.
-fn drain_marker(m: &mut Marker) {
-    while let Some(h) = m.stack.pop() {
-        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
-        unsafe {
-            // PUC `propagatemark`: gray → black before scanning children, so a
-            // child that points back at us (cycle) re-traces us as already
-            // black and does not loop. White bits were cleared on push.
-            (*h).flags = ((*h).flags & !WHITE_BITS) | BLACK;
-            match (*h).tag {
-                ObjTag::Str => {}
-                ObjTag::Table => (*(h as *mut Table)).trace(m),
-                ObjTag::Proto => (*(h as *mut Proto)).trace(m),
-                ObjTag::Closure => (*(h as *mut LuaClosure)).trace(m),
-                ObjTag::Upvalue => (*(h as *mut Upvalue)).trace(m),
-                ObjTag::Native => (*(h as *mut NativeClosure)).trace(m),
-                ObjTag::Coro => (*(h as *mut crate::runtime::Coro)).trace(m),
-                ObjTag::Userdata => (*(h as *mut Userdata)).trace(m),
-            }
-        }
-    }
-}
-
-impl Marker {
-    /// Mark a value, returning true if it was newly marked (was white).
-    pub(crate) fn value(&mut self, v: Value) -> bool {
-        let h = match v {
-            Value::Str(s) => s.as_ptr() as *mut GcHeader,
-            Value::Table(t) => t.as_ptr() as *mut GcHeader,
-            Value::Closure(c) => c.as_ptr() as *mut GcHeader,
-            Value::Native(n) => n.as_ptr() as *mut GcHeader,
-            Value::Coro(c) => c.as_ptr() as *mut GcHeader,
-            Value::Userdata(u) => u.as_ptr() as *mut GcHeader,
-            _ => return false,
-        };
-        self.header(h)
-    }
-
-    /// Mark a bare header, returning true if it was newly marked (was white).
-    /// Transitions white → gray (in PUC `reallymarkobject` terms): clears the
-    /// current-white bit and pushes onto the gray stack. `drain_marker` later
-    /// pops it, traces children, and stamps it BLACK.
-    pub(crate) fn header(&mut self, h: *mut GcHeader) -> bool {
-        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
-        unsafe {
-            let f = (*h).flags;
-            if is_white(f) {
-                (*h).flags = f & !WHITE_BITS;
-                self.stack.push(h);
-                true
-            } else {
-                false
-            }
-        }
-    }
-}
-
-/// Whether a value is "alive" for ephemeron key purposes: non-collectable
-/// values and strings are always alive (strings are never weakly cleared);
-/// a collectable object is alive only once marked (gray or black).
-fn weak_key_alive(v: Value) -> bool {
-    let h = match v {
-        Value::Table(t) => t.as_ptr() as *mut GcHeader,
-        Value::Closure(c) => c.as_ptr() as *mut GcHeader,
-        Value::Native(n) => n.as_ptr() as *mut GcHeader,
-        Value::Coro(c) => c.as_ptr() as *mut GcHeader,
-        Value::Userdata(u) => u.as_ptr() as *mut GcHeader,
-        _ => return true, // strings, numbers, booleans: never weak-collected
-    };
-    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
-    unsafe { !is_white((*h).flags) }
-}
-
 /// Hash seed from address entropy (ASLR) and clock, luaL_makeseed style.
 fn make_seed() -> u32 {
     let stack_var = 0u8;
@@ -1528,6 +1444,11 @@ fn make_seed() -> u32 {
     h ^= h >> 33;
     h as u32
 }
+
+#[path = "heap_mark.rs"]
+mod mark;
+pub(crate) use self::mark::Marker;
+use self::mark::{drain_marker, weak_key_alive};
 
 #[cfg(feature = "gc-verify")]
 #[path = "heap_verify.rs"]
