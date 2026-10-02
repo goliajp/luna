@@ -28,6 +28,8 @@
 //!   `Call`, `Return`, `LoadNil`, `Concat`, `SetList`, `Vararg` and the loop
 //!   ops, lies below `max_stack`;
 //! - constant, upvalue and child-function indices are in range;
+//! - the constant key of `GetField`, `SetField`, `GetTabUp`, `SetTabUp` and
+//!   a `k` `SelfOp` is a string (the interpreter reads it as one);
 //! - every successor (fall-through, jump target, the slot after a skipped
 //!   instruction) lies inside the code, so control never runs off its end;
 //! - `ExtraArg` follows exactly `LoadKx` and `SetList` with `k` set, and is

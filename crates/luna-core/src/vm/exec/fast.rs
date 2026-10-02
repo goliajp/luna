@@ -541,10 +541,20 @@ impl Vm {
                         } else {
                             regs.wrapping_add(inst.c() as usize)
                         };
-                        // SAFETY: a register or constant of the running frame;
-                        // the object is read from its copy, `R[A]` may be `R[B]`
-                        // or `R[C]`, and is written last
-                        if unsafe { Vm::index_raw_kstr_at(po, pk, regs.add(inst.a() as usize)) } {
+                        // SAFETY: a register or constant of the running frame
+                        // (a string constant when `k` is set, see
+                        // `index_raw_kstr_at`); the object is read from its
+                        // copy, `R[A]` may be `R[B]` or `R[C]`, and is written
+                        // last
+                        let hit = unsafe {
+                            let dst = regs.add(inst.a() as usize);
+                            if inst.k() {
+                                Vm::index_raw_kstr_at(po, pk, dst)
+                            } else {
+                                Vm::index_raw_at(po, pk, dst)
+                            }
+                        };
+                        if hit {
                             next!()
                         }
                         save!();

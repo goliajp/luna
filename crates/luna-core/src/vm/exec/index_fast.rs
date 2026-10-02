@@ -63,18 +63,17 @@ unsafe fn table_get_into(tb: &Table, pk: *const Value, dst: *mut Value) -> bool 
     }
 }
 
-/// [`table_get_into`] for a constant key (`GetField`, `GetTabUp`, `SelfOp`),
-/// which is nearly always a string: that case first, the rest out of line.
+/// [`table_get_into`] for a string constant key (`GetField`, `GetTabUp`, a
+/// `k` `SelfOp`): the compiler, the PUC translators and the bytecode
+/// verifier keep those keys strings, so the tag is not looked at.
 ///
 /// # Safety
-/// As for `table_get_into`.
+/// As for `table_get_into`, and `pk` points at a string.
 #[inline(always)]
 unsafe fn table_get_kstr_into(tb: &Table, pk: *const Value, dst: *mut Value) -> bool {
-    // SAFETY: the caller's contract; payloads are read after their tags
+    // SAFETY: the caller's contract
     unsafe {
-        if raw_tag(pk) != tag::STR {
-            return table_get_cold(tb, *pk, dst, tb.metatable().is_none());
-        }
+        debug_assert_eq!(raw_tag(pk), tag::STR);
         let key = Gc::from_ptr_unchecked(raw_gc(pk) as *mut LuaStr);
         match tb.str_slot_by_ptr(key) {
             Some(slot) => {
@@ -213,11 +212,11 @@ impl Vm {
         false
     }
 
-    /// [`Self::index_raw_at`] for a constant key (see
+    /// [`Self::index_raw_at`] for a string constant key (see
     /// [`table_get_kstr_into`]).
     ///
     /// # Safety
-    /// As for `index_raw_at`.
+    /// As for `index_raw_at`, and `pk` points at a string.
     #[inline(always)]
     #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
     pub(super) unsafe fn index_raw_kstr_at(
@@ -238,7 +237,7 @@ impl Vm {
     /// [`Self::index_raw_kstr_at`] on a table value.
     ///
     /// # Safety
-    /// `pk` points at an initialised value and `dst` at a register.
+    /// `pk` points at a string and `dst` at a register.
     #[inline(always)]
     #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
     pub(super) unsafe fn index_raw_kstr_key_at(
@@ -289,12 +288,12 @@ impl Vm {
         false
     }
 
-    /// [`Self::newindex_raw_at`] for a constant key (`SetField`), nearly
-    /// always a string: an existing string key is overwritten here, the
+    /// [`Self::newindex_raw_at`] for a string constant key (`SetField`; see
+    /// [`table_get_kstr_into`]): an existing key is overwritten here, the
     /// rest goes through [`Self::newindex_raw_at`] out of line.
     ///
     /// # Safety
-    /// As for `newindex_raw_at`.
+    /// As for `newindex_raw_at`, and `pk` points at a string.
     #[inline(always)]
     #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
     pub(super) unsafe fn newindex_raw_kstr_at(
@@ -306,7 +305,8 @@ impl Vm {
         #[cfg(not(feature = "gc-verify"))]
         // SAFETY: the caller's contract; a table tag means a live table
         unsafe {
-            if raw_tag(pt) == tag::TABLE && raw_tag(pk) == tag::STR {
+            debug_assert_eq!(raw_tag(pk), tag::STR);
+            if raw_tag(pt) == tag::TABLE {
                 let tb = raw_gc(pt) as *mut Table;
                 let key = Gc::from_ptr_unchecked(raw_gc(pk) as *mut LuaStr);
                 // a nil value in a node is how a removed key is kept
