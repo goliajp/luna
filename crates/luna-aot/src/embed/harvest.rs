@@ -147,7 +147,7 @@ pub(super) fn harvest_and_emit_aot_traces(
         return Ok(HarvestedTraces::None);
     }
 
-    emit_meta_sections(&mut module, &installable, blob_payload, &per_trace_meta)?;
+    emit_meta_sections(&mut module, blob_payload, &per_trace_meta)?;
 
     let product = module.finish();
     let bytes = product
