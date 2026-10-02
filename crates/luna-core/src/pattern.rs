@@ -6,6 +6,9 @@
 //! NUL-terminated patterns are the caller's business: it passes the pattern
 //! cut at the first NUL.
 
+mod search;
+pub use search::*;
+
 const MAX_CAPTURES: usize = 32;
 /// PUC `MAXCCALLS`: nested `match` calls allowed before "pattern too complex".
 const MAXCCALLS: u32 = 200;
@@ -96,6 +99,7 @@ impl<'a> MatchState<'a> {
     }
 
     /// Match the whole pattern at exactly `s`; `Some(end)` on success.
+    #[inline]
     pub(crate) fn try_at(&mut self, s: usize) -> Result<Option<usize>, PatError> {
         self.level = 0;
         self.do_match(s, 0)
@@ -424,141 +428,5 @@ impl<'a> MatchState<'a> {
     }
 }
 
-/// Split a leading `^` anchor from the pattern body. The caller decides what
-/// the anchor means (find/match scan at most once; gsub stops after the first
-/// position).
-pub fn anchor_split(pat: &[u8]) -> (bool, &[u8]) {
-    match pat.first() {
-        Some(b'^') => (true, &pat[1..]),
-        _ => (false, pat),
-    }
-}
-
-/// Try to match `pat_body` (already `^`-stripped) at exactly position `s`,
-/// with no forward scan. Returns the Match (whose `start == s`) or None; a
-/// capture left open by a successful match is an error.
-pub fn match_at(src: &[u8], pat_body: &[u8], s: usize) -> Result<Option<Match>, PatError> {
-    let mut ms = MatchState::new(src, pat_body, Flavor::Lua53);
-    let Some(e) = ms.try_at(s)? else {
-        return Ok(None);
-    };
-    let caps = (0..ms.level())
-        .map(|i| {
-            ms.get_capture(i, s, e).map(|c| match c {
-                CapValue::Span(a, b) => Cap::Span(a, b),
-                CapValue::Pos(p) => Cap::Pos(p),
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(Some(Match {
-        start: s,
-        end: e,
-        caps,
-    }))
-}
-
-/// Scan from `init` for the first match (PUC str_find_aux without the plain
-/// fast path). A leading `^` anchors the search to `init`.
-pub fn find(src: &[u8], pat: &[u8], init: usize) -> Result<Option<Match>, PatError> {
-    if init > src.len() {
-        return Ok(None);
-    }
-    let (anchor, pat_body) = anchor_split(pat);
-    let mut s = init;
-    loop {
-        if let Some(m) = match_at(src, pat_body, s)? {
-            return Ok(Some(m));
-        }
-        if anchor || s >= src.len() {
-            return Ok(None);
-        }
-        s += 1;
-    }
-}
-
-/// Whether the pattern contains a byte from PUC's `SPECIALS`; a pattern
-/// without one is searched for as plain text.
-pub fn has_specials(pat: &[u8]) -> bool {
-    pat.iter().any(|c| {
-        matches!(
-            c,
-            b'^' | b'$' | b'*' | b'+' | b'?' | b'.' | b'(' | b'[' | b'%' | b'-'
-        )
-    })
-}
-
-/// Plain substring search (find with plain=true).
-pub fn plain_find(hay: &[u8], needle: &[u8], init: usize) -> Option<usize> {
-    if init > hay.len() {
-        return None;
-    }
-    if needle.is_empty() {
-        return Some(init);
-    }
-    hay[init..]
-        .windows(needle.len())
-        .position(|w| w == needle)
-        .map(|i| i + init)
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn m(src: &str, pat: &str) -> Option<(usize, usize)> {
-        find(src.as_bytes(), pat.as_bytes(), 0)
-            .unwrap()
-            .map(|m| (m.start, m.end))
-    }
-
-    #[test]
-    fn basics() {
-        assert_eq!(m("hello", "l+"), Some((2, 4)));
-        assert_eq!(m("hello", "^h"), Some((0, 1)));
-        assert_eq!(m("hello", "^e"), None);
-        assert_eq!(m("hello", "o$"), Some((4, 5)));
-        assert_eq!(m("hello", "%a+"), Some((0, 5)));
-        assert_eq!(m("a1b2", "%d"), Some((1, 2)));
-        assert_eq!(m("abc", "a.c"), Some((0, 3)));
-        assert_eq!(m("", ".*"), Some((0, 0)));
-        assert_eq!(m("abc", "x*"), Some((0, 0)));
-    }
-
-    #[test]
-    fn sets_and_quantifiers() {
-        assert_eq!(m("hello world", "[aeiou]"), Some((1, 2)));
-        assert_eq!(m("hello", "[^aeiou]+"), Some((0, 1)));
-        assert_eq!(m("x123y", "[0-9]+"), Some((1, 4)));
-        assert_eq!(m("aaa", "a-"), Some((0, 0)));
-        assert_eq!(m("<a><b>", "<.->"), Some((0, 3)));
-        assert_eq!(m("<a><b>", "<.*>"), Some((0, 6)));
-        assert_eq!(m("abc", "ab?c"), Some((0, 3)));
-        assert_eq!(m("ac", "ab?c"), Some((0, 2)));
-    }
-
-    #[test]
-    fn captures_and_specials() {
-        let mm = find(b"key=value", b"(%w+)=(%w+)", 0).unwrap().unwrap();
-        assert_eq!(mm.caps.len(), 2);
-        assert_eq!(mm.caps[0], Cap::Span(0, 3));
-        assert_eq!(mm.caps[1], Cap::Span(4, 9));
-        // position capture
-        let mm = find(b"abc", b"a()b", 0).unwrap().unwrap();
-        assert_eq!(mm.caps[0], Cap::Pos(1));
-        // balanced
-        assert_eq!(m("(foo(bar))baz", "%b()"), Some((0, 10)));
-        // frontier
-        assert_eq!(m("THE (quick) fox", "%f[%a]%a+"), Some((0, 3)));
-        // back-reference
-        assert_eq!(m("abcabc", "(abc)%1"), Some((0, 6)));
-        assert_eq!(m("abcabd", "(abc)%1"), None);
-    }
-
-    #[test]
-    fn errors() {
-        assert!(find(b"x", b"%", 0).is_err());
-        assert!(find(b"x", b"[abc", 0).is_err());
-        assert!(find(b"a", b"(a", 0).is_err()); // unfinished capture
-        assert!(find(b"x", b"%1", 0).is_err());
-    }
-}
+mod tests;

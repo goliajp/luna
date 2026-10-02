@@ -37,6 +37,9 @@ use crate::vm::dump::header;
 use crate::vm::dump::reader::Reader;
 use crate::vm::isa::Op;
 
+mod closure;
+use closure::lower_closure;
+
 const DIALECT: &str = "PUC 5.1";
 
 /// Header: signature, version, format, endianness, then the sizes of
@@ -445,38 +448,7 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
                 let a = lw.r(i.a)?;
                 lw.emit(enc_abc(Op::Close, a, 0, 0, false)?);
             }
-            OP_CLOSURE => {
-                let idx = i.bx() as usize;
-                let Some(child) = raw.protos.get_mut(idx) else {
-                    return Err(lw.err(format_args!("CLOSURE of missing function {idx}")));
-                };
-                if std::mem::replace(&mut closed[idx], true) {
-                    return Err(lw.err(format_args!("function {idx} instantiated twice")));
-                }
-                for u in 1..child.upvals.len() {
-                    let Some(&w) = code.get(pc + u) else {
-                        return Err(lw.err("CLOSURE without its upvalue pseudo-instructions"));
-                    };
-                    let p = I51::decode(w);
-                    let (in_stack, index) = match p.op {
-                        OP_MOVE => (true, lw.r(p.b)?),
-                        OP_GETUPVAL => (false, p.b + 1),
-                        op => {
-                            return Err(lw.err(format_args!(
-                                "CLOSURE upvalue pseudo-instruction has opcode {op}"
-                            )));
-                        }
-                    };
-                    let index = u8::try_from(index)
-                        .map_err(|_| lw.err(format_args!("upvalue index {index} past 255")))?;
-                    child.upvals[u].in_stack = in_stack;
-                    child.upvals[u].index = index;
-                }
-                let n_pseudo = child.upvals.len() - 1;
-                let a = lw.r(i.a)?;
-                lw.emit(enc_abx(Op::Closure, a, idx as u32)?);
-                pc += n_pseudo;
-            }
+            OP_CLOSURE => pc = lower_closure(&mut lw, &mut raw.protos, &mut closed, code, pc, i)?,
             OP_VARARG => {
                 let b = lw.byte(i.b, "VARARG B")?;
                 let a = lw.run(i.a, b.saturating_sub(1).max(1))?;
