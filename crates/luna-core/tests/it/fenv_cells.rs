@@ -54,6 +54,7 @@ fn creator_and_children_keep_their_own_env() {
 fn setfenv_on_the_running_function() {
     all_true(
         "x = 'g' \
+         local setfenv = setfenv \
          local function f() \
            local early = x \
            setfenv(1, {x = 'l'}) \
