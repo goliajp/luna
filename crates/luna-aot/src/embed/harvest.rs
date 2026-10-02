@@ -27,6 +27,7 @@ use std::path::Path;
 use luna_core::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
+use luna_core::vm::Vm;
 
 use super::target::TargetSpec;
 use super::trace_object::{build_object_module, emit_meta_sections, lower_and_encode_meta};
@@ -120,7 +121,9 @@ pub(super) fn harvest_and_emit_aot_traces(
     out: &Path,
     target: &TargetSpec,
 ) -> Result<HarvestedTraces, AotError> {
-    let Some(captured) = warmup_and_capture(dump_bytes, version) else {
+    // the captured records point into the warmup vm's heap (head_proto and
+    // the traces hanging off it), so the vm must outlive every use of them
+    let Some((_warmup_vm, captured)) = warmup_and_capture(dump_bytes, version) else {
         return Ok(HarvestedTraces::None);
     };
 
@@ -159,11 +162,12 @@ pub(super) fn harvest_and_emit_aot_traces(
 
 /// Run the chunk once on a recording warmup `Vm` and return every
 /// `TraceRecord` the dispatcher tried to compile. `None` when the dump
-/// does not load.
+/// does not load. The `Vm` is returned with the records because they hold
+/// raw pointers into its heap.
 fn warmup_and_capture(
     dump_bytes: &[u8],
     version: LuaVersion,
-) -> Option<Vec<([u8; 16], u32, TraceRecord)>> {
+) -> Option<(Vm, Vec<([u8; 16], u32, TraceRecord)>)> {
     // Reset the capture buffer for this harvest call. A previous run
     // in the same process (e.g. unit tests running back-to-back) must
     // not leak its records into this one.
@@ -207,7 +211,8 @@ fn warmup_and_capture(
     // Snapshot the captured records. Take ownership so the thread-
     // local Vec is empty going forward (matches the test-isolation
     // invariant established at the top of this fn).
-    Some(AOT_CAPTURED_RECORDS.with(|cell| std::mem::take(&mut *cell.borrow_mut())))
+    let captured = AOT_CAPTURED_RECORDS.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+    Some((vm, captured))
 }
 
 /// Pair each captured record with the `CompiledTrace` that landed in
