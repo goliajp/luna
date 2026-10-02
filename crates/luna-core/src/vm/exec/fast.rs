@@ -528,7 +528,7 @@ impl Vm {
                         let pb = regs.wrapping_add(inst.b() as usize);
                         let po = regs.wrapping_add(inst.a() as usize + 1);
                         // SAFETY: registers of the running frame
-                        unsafe { Value::copy_raw(po, pb) };
+                        unsafe { Value::copy_whole(po, pb) };
                         // PUC OP_SELF's C is a constant index when the k-flag is
                         // set; otherwise it points to a register that holds the
                         // (constant-loaded) key. luna's compiler falls back to the
@@ -826,7 +826,7 @@ impl Vm {
                         let t = unsafe { raw_truthy(pb) } == inst.k();
                         if t {
                             // SAFETY: as above
-                            unsafe { Value::copy_raw(regs.add(inst.a() as usize), pb) };
+                            unsafe { Value::copy_whole(regs.add(inst.a() as usize), pb) };
                         }
                         cond_jump!(t)
                     }
@@ -935,7 +935,7 @@ impl Vm {
                                 }
                             }
                             // SAFETY: as above
-                            unsafe { Value::copy_raw(regs.add(a as usize + 2), pc4) };
+                            unsafe { Value::copy_whole(regs.add(a as usize + 2), pc4) };
                             npc = npc.wrapping_sub(inst.bx());
                             // a recording that just started must see the next
                             // instruction from the loop head

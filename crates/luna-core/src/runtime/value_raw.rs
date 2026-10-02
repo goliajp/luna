@@ -58,6 +58,20 @@ impl Value {
         }
     }
 
+    /// Copy the value at `src` to `dst` as one 16-byte access. For a source
+    /// that was not just written a byte and a word at a time (an object
+    /// register `SelfOp` copies, a `TestSet` operand, a generic-for control
+    /// value): there the split copy of [`Self::copy_raw`] gains no store
+    /// forwarding and only costs instructions.
+    ///
+    /// # Safety
+    /// As for `copy_raw`.
+    #[inline(always)]
+    pub(crate) unsafe fn copy_whole(dst: *mut Value, src: *const Value) {
+        // SAFETY: the caller's contract
+        unsafe { dst.write(src.read()) }
+    }
+
     /// [`Self::pack`] written straight to `dst`, as a tag byte and a
     /// payload word.
     ///
