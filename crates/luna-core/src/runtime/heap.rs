@@ -56,7 +56,14 @@ pub struct GcHeader {
     /// Gray = no white bits, no BLACK; that is the in-stack state between the
     /// time a Marker visits an object and the time it traces it.
     flags: u8,
+    /// Per-type word in what would otherwise be padding: a table keeps its
+    /// absent-metamethod bits here. Zero for a new object.
+    pub(crate) aux: u32,
 }
+
+// strings are the most numerous objects the sweep walks
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<LuaStr>() == 32);
 
 const WHITE0: u8 = 1;
 const WHITE1: u8 = 2;
@@ -101,6 +108,7 @@ impl GcHeader {
             next: ptr::null_mut(),
             tag,
             flags: if tag == ObjTag::Str { LEAF } else { 0 },
+            aux: 0,
         }
     }
 
@@ -320,12 +328,9 @@ impl Heap {
                 // metatable were already cleared in `free_obj` before
                 // pool push, so we only reset stack-resident fields here.
                 (*t).hdr = GcHeader::new(ObjTag::Table);
-                (*t).array_ptr = std::ptr::null_mut();
-                (*t).asize = 0;
                 (*t).inline_storage =
                     std::cell::UnsafeCell::new([0; crate::runtime::table::INLINE_U64S]);
                 (*t).lastfree = 0;
-                (*t).flags = 0;
             }
             t
         } else {
@@ -384,11 +389,8 @@ impl Heap {
             drop(upvals);
             g
         } else {
-            // Large closure — store the input Box directly in
-            // `overflow`, no copy.
-            self.adopt_closure_with(proto, n as u32, |c| {
-                c.overflow = upvals;
-            })
+            // large closure: the input Box becomes its storage, no copy
+            self.adopt_closure_with(proto, n as u32, |c| c.set_overflow(upvals))
         }
     }
 
@@ -415,7 +417,7 @@ impl Heap {
                     }
                 }
             } else {
-                c.overflow = upvals.to_vec().into_boxed_slice();
+                c.set_overflow(upvals.to_vec().into_boxed_slice());
             }
         })
     }
@@ -437,7 +439,6 @@ impl Heap {
                 [std::mem::MaybeUninit::<Gc<Upvalue>>::uninit();
                     crate::runtime::function::INLINE_UPVALS_N],
             ),
-            overflow: Box::new([]),
         });
         // Box is heap-stable now — populate storage at the final
         // address so `upvals_ptr` will be valid.
@@ -1338,15 +1339,8 @@ impl Heap {
                     if self.table_pool.len() < TABLE_POOL_CAP {
                         // Free interior heap allocations now; an empty Box is
                         // dangling, so reassigning is just a pointer move.
-                        (*t).slab = Box::new([]);
+                        (*t).drop_array_part();
                         (*t).drop_hash_part();
-                        // drop the SoA Robin Hood parallel arrays too
-                        // (usually Box::new([]) dangling stubs).
-                        (*t).keys = Box::new([]);
-                        (*t).vals = Box::new([]);
-                        (*t).meta = Box::new([]);
-                        (*t).tombstones = 0;
-                        (*t).iter_depth = 0;
                         (*t).metatable = None;
                         // Stash the raw pointer for future reuse.
                         // SAFETY: t is non-null (came from a live Gc<Table>);

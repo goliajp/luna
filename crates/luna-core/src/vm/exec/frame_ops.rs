@@ -216,22 +216,19 @@ impl Vm {
         // function carried its own `env` slot, snapshotted from
         // the creating function's env at closure time, so a
         // `setfenv` on one closure never bled into a sibling.
-        // luna models that by giving the 5.1 closure a *fresh*
-        // closed upvalue for whichever cell holds `_ENV`, seeded
-        // from the parent's current env value. Only that cell is
-        // cloned — every other upvalue keeps its open/shared
-        // identity (so e.g. `local function range(...) ...
-        // range(...) ... end` still sees its self-reference). 5.2+
-        // keeps the shared-upval model (and the proto cache that
-        // depends on it).
+        // luna shares the creator's closed `_ENV` cell instead of
+        // copying it: `setfenv` never writes a cell in place but gives
+        // the target a new one (`set_closure_env`), so sharing reads
+        // the same as a snapshot. An open cell can change under the
+        // child, so that one is still snapshotted. 5.2+ keeps the
+        // shared-upval model (and the proto cache that depends on it).
         let v51 = self.version() <= LuaVersion::Lua51;
         if v51 && proto.env_upval_idx != u8::MAX {
             let i = proto.env_upval_idx as usize;
-            let cur = match ups[i].state() {
-                UpvalState::Open { slot, thread } => self.read_slot(slot, thread),
-                UpvalState::Closed(v) => v,
-            };
-            ups[i] = self.heap.new_upvalue(UpvalState::Closed(cur));
+            if let UpvalState::Open { slot, thread } = ups[i].state() {
+                let cur = self.read_slot(slot, thread);
+                ups[i] = self.heap.new_upvalue(UpvalState::Closed(cur));
+            }
         }
         let ups_slice: &[Gc<crate::runtime::function::Upvalue>] = ups;
         // PUC 5.2+ `getcached`: a Proto remembers its last LClosure
@@ -265,5 +262,17 @@ impl Vm {
         };
         self.set_r(base, inst.a(), Value::Closure(nc));
         self.maybe_collect_garbage(base + inst.a() + 1);
+    }
+
+    /// 5.1 `setfenv` on a Lua function: give `cl` a new `_ENV` cell (slot
+    /// `idx`) holding `env`. A 5.1 env cell is never written in place —
+    /// closures share their creator's cell, and replacing it here is what
+    /// keeps the change to this one function.
+    pub(crate) fn set_closure_env(&mut self, cl: Gc<LuaClosure>, idx: usize, env: Gc<Table>) {
+        let uv = self.heap.new_upvalue(UpvalState::Closed(Value::Table(env)));
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        unsafe { cl.as_mut() }.upvals_mut()[idx] = uv;
+        // a cell born during propagation is black: its value needs the barrier
+        self.barrier_forward_upvalue(uv, Value::Table(env));
     }
 }

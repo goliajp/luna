@@ -27,19 +27,18 @@ pub struct LuaStr {
     hash: Cell<u32>,
     hashed: Cell<bool>,
     short: bool,
-    len: u32,
-    // `len` bytes follow the struct
+    // `hdr.aux` is the byte length; that many bytes follow the struct
 }
 
 impl LuaStr {
     /// Byte length of the string (not character count).
     pub fn len(&self) -> usize {
-        self.len as usize
+        self.hdr.aux as usize
     }
 
     /// True when the string is zero bytes long.
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.hdr.aux == 0
     }
 
     pub(crate) fn is_short(&self) -> bool {
@@ -85,7 +84,7 @@ impl crate::runtime::heap::Gc<LuaStr> {
 
 /// SAFETY: `p` must point to a live string allocation (with its tail).
 pub(crate) unsafe fn bytes_of<'a>(p: *const LuaStr) -> &'a [u8] {
-    unsafe { slice::from_raw_parts(p.add(1) as *const u8, (*p).len as usize) }
+    unsafe { slice::from_raw_parts(p.add(1) as *const u8, (*p).hdr.aux as usize) }
 }
 
 /// SAFETY: as `bytes_of`.
@@ -132,13 +131,14 @@ fn alloc_str(bytes: &[u8], short: bool, hash: u32, hashed: bool) -> *mut LuaStr 
         if p.is_null() {
             handle_alloc_error(layout);
         }
+        let mut hdr = GcHeader::new(ObjTag::Str);
+        hdr.aux = bytes.len() as u32;
         p.write(LuaStr {
-            hdr: GcHeader::new(ObjTag::Str),
+            hdr,
             hnext: ptr::null_mut(),
             hash: Cell::new(hash),
             hashed: Cell::new(hashed),
             short,
-            len: bytes.len() as u32,
         });
         ptr::copy_nonoverlapping(bytes.as_ptr(), p.add(1) as *mut u8, bytes.len());
         p
@@ -153,7 +153,7 @@ pub(crate) fn alloc_long(bytes: &[u8], seed: u32) -> *mut LuaStr {
 /// SAFETY: `p` must come from `alloc_str` and not be freed twice.
 pub(crate) unsafe fn free(p: *mut LuaStr) {
     unsafe {
-        let l = layout((*p).len as usize);
+        let l = layout((*p).hdr.aux as usize);
         ptr::drop_in_place(p);
         dealloc(p as *mut u8, l);
     }
@@ -183,7 +183,7 @@ impl StringTable {
         // SAFETY: `self.as_ptr()` is the start of this `LuaStr`'s header which was allocated with the trailing bytes / hash fields in the same allocation by `StringTable::intern`.
         unsafe {
             while !cur.is_null() {
-                if (*cur).len as usize == bytes.len() && bytes_of(cur) == bytes {
+                if (*cur).hdr.aux as usize == bytes.len() && bytes_of(cur) == bytes {
                     return (cur, false);
                 }
                 cur = (*cur).hnext;
