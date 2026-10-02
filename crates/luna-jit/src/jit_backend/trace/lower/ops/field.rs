@@ -69,11 +69,7 @@ pub(super) fn emit_get_field_op<M: Module>(
                 opts.aot,
                 &mut lw.defined_aot_data,
             );
-            let inferred = if i + 1 < effective_end {
-                infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-            } else {
-                None
-            };
+            let inferred = infer_getx_exit(record, i, effective_end);
             let want = getx_want(inferred);
 
             // table-field IC scaffold.
@@ -109,6 +105,8 @@ pub(super) fn emit_get_field_op<M: Module>(
 
             let v = if ic_active {
                 emit_field_ic_read(lw, pl, oc, t, key_arg, want)
+            } else if let (Some(slot), Some((_, w))) = (record.field_slot(i), want) {
+                emit_field_slot_read(lw, pl, oc, t, key_arg, slot, w)
             } else if let Some((_, w)) = want {
                 checked_read!(lw, pl, get_field_checked_id, t, key_arg, w, rop.pc, i)
             } else {
@@ -118,11 +116,9 @@ pub(super) fn emit_get_field_op<M: Module>(
             };
             lw.bcx.def_var(regs[ins.a() as usize], v);
 
-            match inferred {
-                Some(ExitTag::Int) => lw.current_kinds[off + ins.a() as usize] = RegKind::Int,
-                Some(ExitTag::Table) => lw.current_kinds[off + ins.a() as usize] = RegKind::Table,
-                Some(ExitTag::Float) => lw.current_kinds[off + ins.a() as usize] = RegKind::Float,
-                _ => {
+            match getx_want(inferred) {
+                Some((kind, _)) => lw.current_kinds[off + ins.a() as usize] = kind,
+                None => {
                     // as for GetI
                     lw.current_kinds[off + ins.a() as usize] = RegKind::Unknown;
                     lw.dispatchable = false;
@@ -134,6 +130,39 @@ pub(super) fn emit_get_field_op<M: Module>(
         _ => unreachable!("routed by emit_op"),
     }
     Some(())
+}
+
+/// A field read straight from the hash slot the key was recorded in; the
+/// trace leaves for the interpreter when the slot no longer holds it (see
+/// `array_read`).
+#[allow(clippy::too_many_arguments)]
+fn emit_field_slot_read<M: Module>(
+    lw: &mut Lower<'_, '_, M>,
+    pl: &Plan<'_>,
+    oc: &OpCx<'_>,
+    t: Value,
+    key_arg: Value,
+    slot: u32,
+    w: u8,
+) -> Value {
+    let OpCx { i, rop, .. } = *oc;
+    let hit = lw.bcx.create_block();
+    lw.bcx.append_block_param(hit, types::I64);
+    let miss = lw.bcx.create_block();
+    let merge = lw.bcx.create_block();
+    lw.bcx.append_block_param(merge, types::I64);
+    field_slot::emit_field_slot_check(&mut lw.bcx, t, key_arg, slot, Some(w), hit, miss);
+    lw.bcx.switch_to_block(hit);
+    lw.bcx.seal_block(hit);
+    let node = lw.bcx.block_params(hit)[0];
+    let fast = field_slot::emit_slot_load(&mut lw.bcx, node);
+    lw.bcx.ins().jump(merge, &[fast.into()]);
+    lw.bcx.switch_to_block(miss);
+    lw.bcx.seal_block(miss);
+    guard_exit(lw, pl, rop.pc, i);
+    lw.bcx.switch_to_block(merge);
+    lw.bcx.seal_block(merge);
+    lw.bcx.block_params(merge)[0]
 }
 
 /// Global reads through an upvalue table.
@@ -178,11 +207,7 @@ pub(super) fn emit_get_tab_up_op<M: Module>(
                 opts.aot,
                 &mut lw.defined_aot_data,
             );
-            let inferred = if i + 1 < effective_end {
-                infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-            } else {
-                None
-            };
+            let inferred = infer_getx_exit(record, i, effective_end);
             let v = if let Some((_, w)) = getx_want(inferred) {
                 checked_read!(
                     lw,
@@ -200,11 +225,9 @@ pub(super) fn emit_get_tab_up_op<M: Module>(
                 lw.bcx.inst_results(call)[0]
             };
             lw.bcx.def_var(regs[ins.a() as usize], v);
-            match inferred {
-                Some(ExitTag::Int) => lw.current_kinds[off + ins.a() as usize] = RegKind::Int,
-                Some(ExitTag::Table) => lw.current_kinds[off + ins.a() as usize] = RegKind::Table,
-                Some(ExitTag::Float) => lw.current_kinds[off + ins.a() as usize] = RegKind::Float,
-                _ => {
+            match getx_want(inferred) {
+                Some((kind, _)) => lw.current_kinds[off + ins.a() as usize] = kind,
+                None => {
                     // as for GetI
                     lw.current_kinds[off + ins.a() as usize] = RegKind::Unknown;
                     lw.dispatchable = false;

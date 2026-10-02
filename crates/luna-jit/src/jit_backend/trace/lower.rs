@@ -42,6 +42,7 @@ macro_rules! guard {
     }};
 }
 
+mod alt;
 mod begin;
 mod body;
 mod downrec_tail;
@@ -54,6 +55,7 @@ mod ops;
 mod plan;
 mod prologue;
 mod tail;
+use alt::*;
 use begin::*;
 use body::*;
 use downrec_tail::*;
@@ -104,8 +106,17 @@ struct Lower<'f, 'm, M: Module> {
     )>,
     call_chain: Vec<FrameMaterializeInfo>,
     upval_cache: std::collections::HashMap<u32, Variable>,
+    /// Per upvalue index, the checked typed read: its variable, out slot,
+    /// check result and type.
+    upval_checked:
+        std::collections::HashMap<u32, (Variable, cranelift_codegen::ir::StackSlot, Value, u8)>,
+    /// The upvalues whose checked read has been guarded.
+    upval_check_done: Vec<u32>,
     head_closure_var: Option<Variable>,
     known_int: Vec<Option<i64>>,
+    /// Blocks the other way of a comparison jumps to, by the recorded op
+    /// it rejoins at, with the registers the skipped ops write.
+    alt_joins: std::collections::HashMap<usize, (Block, Vec<u32>)>,
 }
 
 /// `always_codegen = false` leaves the function undefined in `module`

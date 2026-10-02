@@ -260,7 +260,8 @@ impl Vm {
                 };
             }
 
-            let mut heads = [crate::runtime::function::TRACE_HEADS_NONE; 2];
+            let mut heads = [crate::runtime::function::TRACE_HEADS_NONE;
+                crate::runtime::function::TRACE_HEADS_CAP];
             let stay = !self.trap
                 && (!trace_on
                     || self.jit.active_trace.is_none() && {

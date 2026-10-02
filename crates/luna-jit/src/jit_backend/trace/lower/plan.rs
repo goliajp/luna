@@ -52,6 +52,9 @@ pub(super) struct Plan<'r> {
     pub(super) active_accum: Option<BufferedAccum>,
     pub(super) consumed_by_cmp: Vec<bool>,
     pub(super) cmp_dirs: Vec<Option<CmpDir>>,
+    /// A comparison's other way, taken in the trace (not for 5.1/5.2,
+    /// whose integers stand for floats).
+    pub(super) alt_paths: Vec<Option<alt_path::AltPath>>,
 }
 
 /// The constant held by the virtual register of op `i`, if it has one.
@@ -151,7 +154,12 @@ pub(super) fn plan_trace<'r>(
     // The head-frame registers the dispatcher checks on entry (see
     // `entry_live`); the others start held on the stack.
     let parent_exit_tags = side_parent_exit_tags(record);
-    let head_live = entry_live(
+    let alt_paths: Vec<Option<alt_path::AltPath>> = if opts.pre53 || float_only {
+        vec![None; effective_end]
+    } else {
+        alt_path::find_alt_paths(record, effective_end, head_proto)
+    };
+    let mut head_live = entry_live(
         record,
         &op_offsets,
         effective_end,
@@ -159,6 +167,11 @@ pub(super) fn plan_trace<'r>(
         do_internal_loop,
         parent_exit_tags.as_deref(),
     );
+    for r in alt_path::alt_written(&alt_paths) {
+        if let Some(l) = head_live.get_mut(r as usize) {
+            *l = true;
+        }
+    }
     let active_accum: Option<BufferedAccum> = escape
         .accum_sites
         .iter()
@@ -220,6 +233,7 @@ pub(super) fn plan_trace<'r>(
             active_accum,
             consumed_by_cmp,
             cmp_dirs,
+            alt_paths,
         },
         escape,
     ))

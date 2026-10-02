@@ -240,9 +240,8 @@ pub(super) fn validate_value_op(
             }
         }
         Op::LoadK => {
-            // R[A] := proto.consts[Bx]. Step-8 only lowers
-            // Int / Float consts; Str / Bool / Nil need a
-            // wider marshalling story.
+            // R[A] := proto.consts[Bx]: a number or a string (its
+            // pointer, the constant table keeping it alive)
             if a >= max_stack {
                 {
                     checkpoint("bail:cmp-dirs-body-other");
@@ -258,7 +257,9 @@ pub(super) fn validate_value_op(
             }
             if !matches!(
                 head_proto.consts[bx],
-                luna_core::runtime::Value::Int(_) | luna_core::runtime::Value::Float(_)
+                luna_core::runtime::Value::Int(_)
+                    | luna_core::runtime::Value::Float(_)
+                    | luna_core::runtime::Value::Str(_)
             ) {
                 {
                     checkpoint("bail:cmp-dirs-body-other");
@@ -313,14 +314,17 @@ pub(super) fn validate_value_op(
                     return None;
                 }
             }
-            if !matches!(
-                head_proto.consts[bx],
-                luna_core::runtime::Value::Int(_) | luna_core::runtime::Value::Float(_)
-            ) {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
+            // a short string is interned: equal ones are one object
+            let comparable = match head_proto.consts[bx] {
+                luna_core::runtime::Value::Int(_) | luna_core::runtime::Value::Float(_) => true,
+                luna_core::runtime::Value::Str(k) => {
+                    k.len() <= luna_core::runtime::string::MAX_SHORT_LEN
                 }
+                _ => false,
+            };
+            if !comparable {
+                checkpoint("bail:cmp-dirs-body-other");
+                return None;
             }
             // EqK pairs with the same trailing Jmp at
             // cmp_pc + 1 contract as Lt/Le/Eq.

@@ -9,10 +9,11 @@ use luna_jit::version::LuaVersion;
 
 #[test]
 fn downrec_close_keeps_an_earlier_dispatch_off_mark() {
-    // `t` read through an upvalue and not called: the lowerer cannot
-    // type it and marks the trace not dispatchable
+    // `t` read through an upvalue and not called: a boolean is not a type
+    // the lowerer reads an upvalue as, so it marks the trace not
+    // dispatchable
     let src = b"
-        local t = {1}
+        local t = true
         local function fib(n)
             local v = t
             if n < 2 then return n end

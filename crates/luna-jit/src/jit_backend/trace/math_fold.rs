@@ -38,6 +38,17 @@ pub(super) enum FoldKind {
     Libm1,
     Min2,
     Max2,
+    /// `string.sub(s, i [, j])`, a split window like `Min2`, run as a
+    /// direct helper call
+    StrSub,
+}
+
+impl FoldKind {
+    /// Whether the fold leaves the arg-prep ops alone and emits at its
+    /// `Call` (the GetTabUp / GetField emit nothing).
+    pub(super) fn split(self) -> bool {
+        !matches!(self, FoldKind::Libm1)
+    }
 }
 
 /// Source of a Libm1 fold's argument register slot. Only `Move`
@@ -99,6 +110,8 @@ pub(super) struct TraceMathFold {
     pub(super) arg1_reg: u32,
     /// `R[A+2]` of the Call — only meaningful for `Min2 / Max2`.
     pub(super) arg2_reg: u32,
+    /// Arguments the Call passes (`B - 1`).
+    pub(super) nargs: u32,
 }
 
 /// Maximum number of arg-prep ops the `Min2 / Max2` fold scans
@@ -163,7 +176,8 @@ pub(super) fn try_match_trace_math_fold(
     let luna_core::runtime::Value::Str(s) = k_math else {
         return None;
     };
-    if s.as_bytes() != b"math" {
+    let lib = s.as_bytes();
+    if lib != b"math" && lib != b"string" {
         return None;
     }
 
@@ -176,6 +190,24 @@ pub(super) fn try_match_trace_math_fold(
         return None;
     };
     let fname_bytes = fname.as_bytes();
+    if lib == b"string" {
+        return match fname_bytes {
+            b"sub" => split_window(record, i, head_proto, a, &[3, 4]).map(|(call_idx, nargs)| {
+                TraceMathFold {
+                    start_idx: i,
+                    fn_name: "sub",
+                    kind: FoldKind::StrSub,
+                    arg_src: None,
+                    call_idx,
+                    dst_reg: a,
+                    arg1_reg: a + 1,
+                    arg2_reg: a + 2,
+                    nargs,
+                }
+            }),
+            _ => None,
+        };
+    }
 
     // ── Libm1 arm (4-op window, B=2 C=2 call) ─────────────────
     if let Some(fn_name) = MATH_LIBM_FNS
@@ -226,6 +258,7 @@ pub(super) fn try_match_trace_math_fold(
             dst_reg: a,
             arg1_reg: 0,
             arg2_reg: 0,
+            nargs: 1,
         });
     }
 
@@ -242,32 +275,7 @@ pub(super) fn try_match_trace_math_fold(
         b"max" => FoldKind::Max2,
         _ => return None,
     };
-    let mut call_idx: Option<usize> = None;
-    let search_limit = (i + 2 + MINMAX_FOLD_ARG_PREP_MAX + 1).min(record.ops.len());
-    for j in (i + 2)..search_limit {
-        let rop_j = &record.ops[j];
-        if !std::ptr::eq(rop_j.proto.as_ptr(), head_proto.as_ptr()) || rop_j.inline_depth != 0 {
-            return None;
-        }
-        let inst_j = rop_j.inst;
-        if matches!(inst_j.op(), Op::Call) {
-            // Call R[A], B=3 (2 args), C=2 (1 result), A matches
-            // the GetTabUp dest (the fn lives in R[A]).
-            if inst_j.a() != a || inst_j.b() != 3 || inst_j.c() != 2 {
-                return None;
-            }
-            call_idx = Some(j);
-            break;
-        }
-        // Arg-prep ops between GetField and Call must not overwrite
-        // the fn slot R[A] — the Call expects R[A] = the resolved
-        // math.<fn>. (In practice the parser allocates A+1/A+2 for
-        // args, leaving R[A] untouched, but we double-check.)
-        if inst_j.a() == a {
-            return None;
-        }
-    }
-    let call_idx = call_idx?;
+    let (call_idx, _) = split_window(record, i, head_proto, a, &[3])?;
     let diag_name = if matches!(kind, FoldKind::Min2) {
         "min"
     } else {
@@ -282,7 +290,41 @@ pub(super) fn try_match_trace_math_fold(
         dst_reg: a,
         arg1_reg: a + 1,
         arg2_reg: a + 2,
+        nargs: 2,
     })
+}
+
+/// The `Call A B C=2` with `B` one of `bs` that closes a split-window fold
+/// whose GetField is at `i + 1`, within [`MINMAX_FOLD_ARG_PREP_MAX`] ops,
+/// and the number of arguments it passes. All scanned ops must come from
+/// `head_proto` at depth 0. The arg-prep ops between are not constrained:
+/// they execute normally and leave the call args at `R[A+1..]` by the
+/// standard Lua Call ABI; they only must not overwrite the function slot.
+fn split_window(
+    record: &TraceRecord,
+    i: usize,
+    head_proto: Gc<Proto>,
+    a: u32,
+    bs: &[u32],
+) -> Option<(usize, u32)> {
+    let search_limit = (i + 2 + MINMAX_FOLD_ARG_PREP_MAX + 1).min(record.ops.len());
+    for j in (i + 2)..search_limit {
+        let rop_j = &record.ops[j];
+        if !std::ptr::eq(rop_j.proto.as_ptr(), head_proto.as_ptr()) || rop_j.inline_depth != 0 {
+            return None;
+        }
+        let inst_j = rop_j.inst;
+        if matches!(inst_j.op(), Op::Call) {
+            if inst_j.a() != a || !bs.contains(&inst_j.b()) || inst_j.c() != 2 {
+                return None;
+            }
+            return Some((j, inst_j.b() - 1));
+        }
+        if inst_j.a() == a {
+            return None;
+        }
+    }
+    None
 }
 
 /// `math.floor` / `math.ceil`: on 5.3+ they keep integers integral and

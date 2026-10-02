@@ -347,7 +347,9 @@ pub(super) fn open_body_loop(
             // the key is K[B] for both
             Op::SetField | Op::SetTabUp => match key(rop.inst.b()) {
                 Some(name) => {
-                    name == b"math" || math_folds.iter().any(|f| f.fn_name.as_bytes() == name)
+                    name == b"math"
+                        || name == b"string"
+                        || math_folds.iter().any(|f| f.fn_name.as_bytes() == name)
                 }
                 None => true,
             },

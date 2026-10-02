@@ -13,13 +13,11 @@ pub(super) fn emit_table_new_get_op<M: Module>(
     } = *pl;
     let OpHelpers {
         new_table_id,
-        get_int_checked_id,
+        get_field_checked_id,
         ..
     } = lw.h.op;
     let RuntimeHelpers { get_int_id, .. } = lw.h.rt;
-    let OpCx {
-        i, rop, off, ins, ..
-    } = *oc;
+    let OpCx { i, off, ins, .. } = *oc;
     let regs: &[Variable] = &oc.regs;
     match oc.op {
         Op::NewTable => {
@@ -77,13 +75,9 @@ pub(super) fn emit_table_new_get_op<M: Module>(
             // GetX inference: look at the immediate next op. The read
             // is checked against it, so a value of another type (or
             // a table with a metatable) leaves the trace here.
-            let inferred = if i + 1 < effective_end {
-                infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-            } else {
-                None
-            };
+            let inferred = infer_getx_exit(record, i, effective_end);
             if let Some((kind, want)) = getx_want(inferred) {
-                let v = checked_read!(lw, pl, get_int_checked_id, t, k_imm, want, rop.pc, i);
+                let v = array_read(lw, pl, oc, t, k_imm, want);
                 lw.bcx.def_var(regs[ins.a() as usize], v);
                 lw.current_kinds[off + ins.a() as usize] = kind;
             } else {
@@ -114,16 +108,19 @@ pub(super) fn emit_table_new_get_op<M: Module>(
             }
             let t = lw.bcx.use_var(regs[ins.b() as usize]);
             let key = lw.bcx.use_var(regs[ins.c() as usize]);
-            let inferred = if i + 1 < effective_end {
-                infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-            } else {
-                None
-            };
+            let inferred = infer_getx_exit(record, i, effective_end);
             // the helper reads the key as an integer
             let key_is_int = matches!(k_op(&lw.current_kinds, off as u32 + ins.c()), RegKind::Int);
+            let key_is_str = matches!(k_op(&lw.current_kinds, off as u32 + ins.c()), RegKind::Str);
             match getx_want(inferred) {
                 Some((kind, want)) if key_is_int => {
-                    let v = checked_read!(lw, pl, get_int_checked_id, t, key, want, rop.pc, i);
+                    let v = array_read(lw, pl, oc, t, key, want);
+                    lw.bcx.def_var(regs[ins.a() as usize], v);
+                    lw.current_kinds[off + ins.a() as usize] = kind;
+                }
+                // a string key reads as a field does
+                Some((kind, want)) if key_is_str => {
+                    let v = checked_read!(lw, pl, get_field_checked_id, t, key, want, oc.rop.pc, i);
                     lw.bcx.def_var(regs[ins.a() as usize], v);
                     lw.current_kinds[off + ins.a() as usize] = kind;
                 }
@@ -206,6 +203,7 @@ pub(super) fn emit_table_set_op<M: Module>(
                 return None;
             }
             let val = lw.bcx.use_var(regs[ins.c() as usize]);
+            let stored_inline = array_write(&mut lw.bcx, t, k_imm, val, val_kind);
             let done = emit_table_set(
                 &mut lw.bcx,
                 &mut lw.module,
@@ -217,6 +215,7 @@ pub(super) fn emit_table_set_op<M: Module>(
                 val_kind,
             );
             guard!(lw, pl, done, i, rop.pc);
+            array_write_join(&mut lw.bcx, stored_inline);
         }
         Op::SetTable => {
             // sunk path: escape sweep tagged
@@ -264,6 +263,11 @@ pub(super) fn emit_table_set_op<M: Module>(
                 return None;
             }
             let val = lw.bcx.use_var(regs[ins.c() as usize]);
+            let stored_inline = if key_kind == RegKind::Int {
+                array_write(&mut lw.bcx, t, key, val, val_kind)
+            } else {
+                None
+            };
             let done = emit_table_set(
                 &mut lw.bcx,
                 &mut lw.module,
@@ -275,6 +279,7 @@ pub(super) fn emit_table_set_op<M: Module>(
                 val_kind,
             );
             guard!(lw, pl, done, i, rop.pc);
+            array_write_join(&mut lw.bcx, stored_inline);
         }
         _ => unreachable!("routed by emit_op"),
     }
@@ -351,6 +356,28 @@ pub(super) fn emit_set_field<M: Module>(
         return None;
     }
     let val = lw.bcx.use_var(regs[ins.c() as usize]);
+    // a number overwriting a value already under the key goes
+    // straight into its slot; anything else through the helper
+    let slot = pl
+        .record
+        .field_slot(i)
+        .filter(|_| matches!(val_kind, RegKind::Int | RegKind::Float));
+    let merge = slot.map(|slot| {
+        let bcx = &mut lw.bcx;
+        let hit = bcx.create_block();
+        bcx.append_block_param(hit, types::I64);
+        let miss = bcx.create_block();
+        let merge = bcx.create_block();
+        field_slot::emit_field_slot_check(bcx, t, key_arg, slot, None, hit, miss);
+        bcx.switch_to_block(hit);
+        bcx.seal_block(hit);
+        let node = bcx.block_params(hit)[0];
+        field_slot::emit_slot_store(bcx, node, val, kind_tag(val_kind));
+        bcx.ins().jump(merge, &[]);
+        bcx.switch_to_block(miss);
+        bcx.seal_block(miss);
+        merge
+    });
     let done = emit_table_set(
         &mut lw.bcx,
         &mut lw.module,
@@ -362,5 +389,10 @@ pub(super) fn emit_set_field<M: Module>(
         val_kind,
     );
     guard!(lw, pl, done, i, rop.pc);
+    if let Some(merge) = merge {
+        lw.bcx.ins().jump(merge, &[]);
+        lw.bcx.switch_to_block(merge);
+        lw.bcx.seal_block(merge);
+    }
     Some(())
 }

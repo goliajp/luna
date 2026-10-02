@@ -24,10 +24,11 @@ macro_rules! fast_cmp_arms {
                         proto.trace_hot_count.set(c + 1);
                     }
                     let target = ($pc as i32 + 1 + off).max(0) as u32;
-                    save!();
-                    if c >= $vm.jit.trace_hot_threshold
-                        && $vm.trace_start_at_jmp(cl!(), base!(), target)
-                    {
+                    // SAFETY: a jump target is inside the function
+                    if $vm.jit.loop_hot_tick(unsafe { $code.add(target as usize) }) && {
+                        save!();
+                        $vm.trace_start_at_back_edge(cl!(), base!(), target, None)
+                    } {
                         // the recording sees the next instruction from
                         // the loop head
                         // SAFETY: see `next!`
@@ -35,7 +36,7 @@ macro_rules! fast_cmp_arms {
                         return Ok(FastExit::Reload);
                     }
                 }
-                next!()
+                next_jumped!()
             }};
         }
         macro_rules! op_eq {

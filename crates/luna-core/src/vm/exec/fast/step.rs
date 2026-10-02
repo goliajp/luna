@@ -25,9 +25,8 @@ macro_rules! fast_step_macros {
         macro_rules! next {
             () => {{
                 // nothing in a fast arm sets `trap`, so `stay` holds for the
-                // whole loop; with a trace this function could enter, the
-                // arms stop at the pcs where one starts, for the dispatcher
-                if WATCH && (!$stay || $npc == $heads[0] || $npc == $heads[1]) {
+                // whole loop
+                if WATCH && !$stay {
                     // SAFETY: `fr` is the running frame, which no fast arm
                     // moves
                     unsafe { (*$fr).pc = $npc };
@@ -41,6 +40,21 @@ macro_rules! fast_step_macros {
                     unsafe { (*$fr).pc = $npc };
                 }
                 continue;
+            }};
+        }
+        // after a jump: with a trace this function could enter, stop where
+        // one starts, for the dispatcher. Trace heads are loop heads, and a
+        // loop entered by falling into it is caught at its first back-edge;
+        // checking every instruction cost a call-heavy loop 5%.
+        macro_rules! next_jumped {
+            () => {{
+                if WATCH && $heads.contains(&$npc) {
+                    // SAFETY: `fr` is the running frame, which no fast arm
+                    // moves
+                    unsafe { (*$fr).pc = $npc };
+                    return Ok(FastExit::Reload);
+                }
+                next!()
             }};
         }
         // The end of a comparison or a test: the `Jmp` after it runs when

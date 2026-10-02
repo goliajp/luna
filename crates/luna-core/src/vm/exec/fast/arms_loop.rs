@@ -76,13 +76,12 @@ macro_rules! fast_loop_arms {
                     if c < u32::MAX / 2 {
                         proto.trace_hot_count.set(c + 1);
                     }
-                    if c == $vm.jit.trace_hot_threshold && $vm.jit.active_trace.is_none()
-                    {
-                        // the back-edge target is the body's first op
-                        let target = ($pc as i32 + 1 - $inst.bx() as i32).max(0) as u32;
+                    // the back-edge target is the body's first op
+                    let target = ($pc as i32 + 1 - $inst.bx() as i32).max(0) as u32;
+                    // SAFETY: as for `Jmp`
+                    if $vm.jit.loop_hot_tick(unsafe { $code.add(target as usize) }) {
                         save!();
-                        $vm.trace_start_at_loop(cl!(), base!(), target, None);
-                        slow = true;
+                        slow |= $vm.trace_start_at_back_edge(cl!(), base!(), target, None);
                     }
                 }
                 if slow {
@@ -90,7 +89,7 @@ macro_rules! fast_loop_arms {
                     unsafe { (*$fr).pc = $npc };
                     return Ok(FastExit::Reload);
                 }
-                next!()
+                next_jumped!()
             }};
         }
         macro_rules! op_t_for_loop {
@@ -108,13 +107,12 @@ macro_rules! fast_loop_arms {
                         if c < u32::MAX / 2 {
                             proto.trace_hot_count.set(c + 1);
                         }
-                        if c == $vm.jit.trace_hot_threshold
-                            && $vm.jit.active_trace.is_none()
-                        {
-                            // the body's first op, right after TForPrep
-                            let target = ($pc as i32 + 1 - $inst.bx() as i32).max(0) as u32;
+                        // the body's first op, right after TForPrep
+                        let target = ($pc as i32 + 1 - $inst.bx() as i32).max(0) as u32;
+                        // SAFETY: as for `Jmp`
+                        if $vm.jit.loop_hot_tick(unsafe { $code.add(target as usize) }) {
                             save!();
-                            $vm.trace_start_at_loop(cl!(), base!(), target, Some(a));
+                            $vm.trace_start_at_back_edge(cl!(), base!(), target, Some(a));
                         }
                     }
                     // SAFETY: as above
@@ -128,7 +126,7 @@ macro_rules! fast_loop_arms {
                         return Ok(FastExit::Reload);
                     }
                 }
-                next!()
+                next_jumped!()
             }};
         }
     };

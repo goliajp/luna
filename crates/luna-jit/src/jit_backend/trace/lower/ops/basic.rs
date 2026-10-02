@@ -62,7 +62,17 @@ pub(super) fn emit_basic_op<M: Module>(
                     let bits = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), fv);
                     (bits, RegKind::Float)
                 }
-                _ => unreachable!("pre-emit gates Int / Float consts"),
+                luna_core::runtime::Value::Str(k) => (
+                    emit_str_key_arg(
+                        lw.module,
+                        &mut lw.bcx,
+                        k,
+                        pl.opts.aot,
+                        &mut lw.defined_aot_data,
+                    ),
+                    RegKind::Str,
+                ),
+                _ => unreachable!("pre-emit gates number and string consts"),
             };
             lw.bcx.def_var(regs[ins.a() as usize], v);
             lw.current_kinds[off + ins.a() as usize] = k;

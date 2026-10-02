@@ -39,6 +39,9 @@ impl Vm {
             self.frames.len() - 1 - self.jit.recording_frame_base
         };
         let depth_cap_hit = cur_depth > crate::jit::trace::MAX_INLINE_DEPTH as usize;
+        if !returned_past_head {
+            self.note_result_tag(cl, base, cur_depth);
+        }
         let rec = self.jit.active_trace.as_mut().expect("just checked Some");
         let at_head_loop = cur_depth == 0
             && !rec.ops.is_empty()
@@ -203,6 +206,26 @@ impl Vm {
         }
     }
 
+    /// Note the tag the last recorded op left in its `R[A]`, when the
+    /// instruction about to run is in the same frame (`base` of `cl` at
+    /// `cur_depth`): the op has finished, and no call it made is running.
+    fn note_result_tag(&mut self, cl: Gc<LuaClosure>, base: u32, cur_depth: usize) {
+        let rec = self.jit.active_trace.as_mut().expect("recording");
+        let Some(last) = rec.ops.last() else {
+            return;
+        };
+        if last.inline_depth as usize != cur_depth
+            || !std::ptr::eq(last.proto.as_ptr(), cl.proto.as_ptr())
+        {
+            return;
+        }
+        let i = rec.ops.len() - 1;
+        let slot = (base + last.inst.a()) as usize;
+        if let (Some(t), Some(v)) = (rec.result_tags.get_mut(i), self.stack.get(slot)) {
+            *t = v.unpack().0;
+        }
+    }
+
     /// Append `inst` to the active recording at inline depth `cur_depth`.
     fn trace_record_push(
         &mut self,
@@ -337,10 +360,32 @@ impl Vm {
                 }
             }
         }
+        let slot = self.field_slot_of(cl, inst, base);
+        let rec = self.jit.active_trace.as_mut().expect("recording");
         if !rec.push(op) {
             // recorder overflow (MAX_TRACE_LEN)
             self.abort_recording("trace-overflow");
+        } else if let (Some(slot), Some(s)) = (slot, rec.field_slots.last_mut()) {
+            *s = slot;
         }
+    }
+
+    /// For `GetField` / `SetField` / `Self`, the hash slot of the table
+    /// operand holding the constant string key, if the key is there.
+    fn field_slot_of(&self, cl: Gc<LuaClosure>, inst: Inst, base: u32) -> Option<u32> {
+        use crate::vm::isa::Op;
+        let (t, k) = match inst.op() {
+            Op::GetField | Op::SelfOp => (inst.b(), inst.c()),
+            Op::SetField => (inst.a(), inst.b()),
+            _ => return None,
+        };
+        let Value::Table(t) = *self.stack.get((base + t) as usize)? else {
+            return None;
+        };
+        let key @ Value::Str(_) = *cl.proto.consts.get(k as usize)? else {
+            return None;
+        };
+        t.find_node_idx(key).map(|i| i as u32)
     }
 
     /// Drop the recording, tallied under `cause`. Counted like a failed

@@ -261,6 +261,8 @@ pub(super) fn trace_helper(name: &str) -> Option<*const u8> {
         "luna_jit_math_fn_is_library" => {
             crate::jit_backend::luna_jit_math_fn_is_library as *const u8
         }
+        "luna_jit_str_sub" => crate::jit_backend::luna_jit_str_sub as *const u8,
+        "luna_jit_upval_get_checked" => crate::jit_backend::luna_jit_upval_get_checked as *const u8,
         "luna_jit_suppress_trace_admit" => {
             crate::jit_backend::luna_jit_suppress_trace_admit as *const u8
         }

@@ -4,6 +4,9 @@ use super::*;
 
 impl Table {
     pub(super) fn rehash(&mut self, heap: &mut Heap, pending: Value) -> Result<(), TableError> {
+        if let Some(r) = self.rehash_append(heap, pending) {
+            return r;
+        }
         let mut nums = [0usize; 65];
         let mut int_keys = 0usize;
         let mut total = 1; // the pending key

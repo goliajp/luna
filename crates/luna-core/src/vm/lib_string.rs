@@ -2,7 +2,7 @@
 //! (find/match/gmatch/gsub) on top of src/pattern.rs, and the shared string
 //! metatable — method syntax on every dialect, arithmetic from 5.4.
 
-use crate::runtime::{Gc, Value};
+use crate::runtime::{Gc, LuaStr, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
@@ -103,16 +103,34 @@ fn s_len(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 fn s_sub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let s = argcheck::check_string(vm, a, 0)?;
+    let i = argcheck::check_integer(vm, a, 1)?;
+    let j = argcheck::opt_integer(vm, a, 2, -1)?;
+    let r = Value::Str(str_sub(vm, s, i, j));
+    Ok(vm.nat_return(fs, &[r]))
+}
+
+/// `string.sub(s, i, j)` past its argument checks.
+#[doc(hidden)]
+pub fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Gc<LuaStr> {
     let l = s.len();
-    let start = posrelat(argcheck::check_integer(vm, a, 1)?, l).max(1);
-    let end = posrelat(argcheck::opt_integer(vm, a, 2, -1)?, l).min(l as i64);
+    let start = posrelat(i, l).max(1);
+    let end = posrelat(j, l).min(l as i64);
     let bytes: &[u8] = if start <= end {
         &s.as_bytes()[(start - 1) as usize..end as usize]
     } else {
         b""
     };
-    let r = Value::Str(vm.heap.intern(bytes));
-    Ok(vm.nat_return(fs, &[r]))
+    vm.heap.intern(bytes)
+}
+
+/// The library function `string.<name>` that the trace JIT may run as a
+/// direct call on arguments of known types, if `name` is one.
+#[doc(hidden)]
+pub fn inlinable_native(name: &[u8]) -> Option<crate::runtime::value::NativeFn> {
+    match name {
+        b"sub" => Some(s_sub),
+        _ => None,
+    }
 }
 
 fn s_upper(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

@@ -59,6 +59,8 @@ pub mod jit_layout;
 mod array;
 #[path = "table_get.rs"]
 mod get;
+#[path = "table_grow.rs"]
+mod grow;
 #[path = "table_node.rs"]
 mod node;
 #[path = "table_resize.rs"]
