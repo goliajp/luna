@@ -81,6 +81,8 @@ fn normalize_err(text: &str) -> (bool, String) {
 fn run_puc(bin: &str, args: &[&Path], stdin: &[u8]) -> Outcome {
     let mut child = Command::new(bin)
         .args(args)
+        // luna has no time zones: its local time is UTC
+        .env("TZ", "UTC")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -189,6 +189,10 @@ optimization.
 - With the JIT on, a 5.1 / 5.2 function that the method JIT compiled and
   that stored into a table under a NaN key went on silently instead of
   raising "table index is NaN" as the interpreter does.
+- `os.time` (5.3 and later) now writes the normalised fields back into
+  its table before raising "time result cannot be represented" for a
+  time of exactly -1, as PUC does; a time past the range of `tm_year`
+  (5.4 / 5.5) writes the fields back as given.
 
 ### Added
 

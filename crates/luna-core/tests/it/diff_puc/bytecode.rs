@@ -50,6 +50,7 @@ enum Outcome {
 fn run_luac_on_puc(bin: &str, luac_file: &Path) -> Outcome {
     let out = Command::new(bin)
         .arg(luac_file)
+        .env("TZ", "UTC")
         .output()
         .unwrap_or_else(|e| panic!("[diff_puc] cannot run `{bin}`: {e}"));
     if out.status.success() && out.stderr.is_empty() {

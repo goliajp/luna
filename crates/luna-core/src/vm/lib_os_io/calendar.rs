@@ -68,8 +68,7 @@ pub(super) fn gmtime(t: i64) -> Option<Tm> {
 }
 
 /// `mktime` over UTC: normalise the out-of-range fields and return the
-/// time, or `None` when it cannot be represented. A result of -1 is a
-/// failure to `mktime`'s callers too.
+/// time, or `None` when it cannot be represented.
 pub(super) fn mktime(
     year: i64,
     mon0: i64,
@@ -85,7 +84,7 @@ pub(super) fn mktime(
         .checked_mul(86_400)?
         .checked_add(hour * 3600 + min * 60 + sec)?;
     gmtime(t)?;
-    (t != -1).then_some(t)
+    Some(t)
 }
 
 /// ISO 8601 week-based year and week (for `%G`, `%g`, `%V`).
