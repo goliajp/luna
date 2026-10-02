@@ -68,8 +68,7 @@ use prologue::*;
 use tail::*;
 
 /// The trace function under construction and everything the emit pass
-/// tracks while lowering it; the fields keep the names the single
-/// lowering function used for its locals.
+/// tracks while lowering it.
 struct Lower<'f, 'm, M: Module> {
     module: &'m mut M,
     bcx: FunctionBuilder<'f>,
