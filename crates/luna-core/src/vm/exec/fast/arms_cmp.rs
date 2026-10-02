@@ -36,7 +36,7 @@ macro_rules! fast_cmp_arms {
                         return Ok(FastExit::Reload);
                     }
                 }
-                next!()
+                next_jumped!()
             }};
         }
         macro_rules! op_eq {
