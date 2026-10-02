@@ -10,6 +10,7 @@ use call_fast::Returned;
 use fast_arith::{
     arith_arm, arith_imm_arm, cold_path, put_int, raw_flt, raw_gc, raw_int, raw_tag, raw_truthy,
 };
+use index_fast::self_key;
 
 /// The running frame, as the loop head found it.
 pub(super) struct Fast {
@@ -528,34 +529,17 @@ impl Vm {
                         let pb = regs.wrapping_add(inst.b() as usize);
                         let po = regs.wrapping_add(inst.a() as usize + 1);
                         // SAFETY: registers of the running frame
-                        unsafe { Value::copy_raw(po, pb) };
-                        // PUC OP_SELF's C is a constant index when the k-flag is
-                        // set; otherwise it points to a register that holds the
-                        // (constant-loaded) key. luna's compiler falls back to the
-                        // register form when the constant index exceeds OP_SELF's
-                        // 8-bit C field (5.1 big.lua's `a:findfield(...)` against
-                        // a table with 250+ string keys, where "findfield" lands
-                        // past const #255). The exec must honour the same split.
-                        let pk = if inst.k() {
-                            kptr.wrapping_add(inst.c() as usize)
-                        } else {
-                            regs.wrapping_add(inst.c() as usize)
-                        };
-                        // SAFETY: a register or constant of the running frame;
-                        // the object is read from its copy, `R[A]` may be `R[B]`
-                        // or `R[C]`, and is written last
-                        if unsafe { Vm::index_raw_kstr_at(po, pk, regs.add(inst.a() as usize)) } {
+                        unsafe { Value::copy_whole(po, pb) };
+                        // SAFETY: registers and constants of the running frame;
+                        // the object is read from its copy, `R[A]` is written last
+                        if unsafe { Vm::self_probe(regs, kptr, inst) } {
                             next!()
                         }
                         save!();
                         let dst = base!() + inst.a();
                         // SAFETY: as above, worked out again (see `get_arm!`)
                         unsafe {
-                            let pk = if inst.k() {
-                                kptr.wrapping_add(inst.c() as usize)
-                            } else {
-                                regs.wrapping_add(inst.c() as usize)
-                            };
+                            let pk = self_key(regs, kptr, inst);
                             self.index_miss_at(regs.wrapping_add(inst.a() as usize + 1), pk, dst)
                         }?;
                         resume_same!()
@@ -826,7 +810,7 @@ impl Vm {
                         let t = unsafe { raw_truthy(pb) } == inst.k();
                         if t {
                             // SAFETY: as above
-                            unsafe { Value::copy_raw(regs.add(inst.a() as usize), pb) };
+                            unsafe { Value::copy_whole(regs.add(inst.a() as usize), pb) };
                         }
                         cond_jump!(t)
                     }
@@ -935,7 +919,7 @@ impl Vm {
                                 }
                             }
                             // SAFETY: as above
-                            unsafe { Value::copy_raw(regs.add(a as usize + 2), pc4) };
+                            unsafe { Value::copy_whole(regs.add(a as usize + 2), pc4) };
                             npc = npc.wrapping_sub(inst.bx());
                             // a recording that just started must see the next
                             // instruction from the loop head
@@ -1031,12 +1015,18 @@ impl Vm {
                     // does the rest
                     Op::Return0 => {
                         let base = base!();
-                        let done = self.return_fast::<WATCH>(base, base, 0, entry_depth);
+                        let done = self.return_fast::<WATCH>(base, base, 0, entry_depth, inst.k());
                         returned!(done)
                     }
                     Op::Return1 => {
                         let base = base!();
-                        let done = self.return_fast::<WATCH>(base, base + inst.a(), 1, entry_depth);
+                        let done = self.return_fast::<WATCH>(
+                            base,
+                            base + inst.a(),
+                            1,
+                            entry_depth,
+                            inst.k(),
+                        );
                         returned!(done)
                     }
                     // they stay in this frame: run out of line, then go on

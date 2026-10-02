@@ -132,7 +132,7 @@ pub(super) fn translate(
     raw: &mut RawProto,
 ) -> Result<Lowered, String> {
     let windows = loop_windows(dialect, &raw.code, ops)?;
-    let mut lw = Lowering::new(dialect, raw.code.len(), raw.max_stack, windows);
+    let mut lw = Lowering::new(dialect, raw.code.len(), raw.max_stack, windows, &raw.consts);
     let mut closed = vec![false; raw.protos.len()];
     let code = &raw.code;
     let mut pc = 0;

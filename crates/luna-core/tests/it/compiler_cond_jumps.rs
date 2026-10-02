@@ -185,3 +185,51 @@ fn repeat_conditions_jump_without_a_value() {
         }
     }
 }
+
+/// A `Return0` / `Return1` carries `k` exactly when its function has a
+/// register a nested function captures or a to-be-closed variable; the
+/// fast return looks for something to close only then, and the closures
+/// must still see their variables closed.
+#[test]
+fn returns_that_must_close_carry_k() {
+    let ks = |src: &str, v: LuaVersion| -> Vec<bool> {
+        let ast = parse(src.as_bytes(), v).expect("parse");
+        let mut heap = Heap::new();
+        let proto = compile_chunk(&ast, v, b"=ret", &mut heap).expect("compile");
+        let f = &proto.protos[0];
+        f.code
+            .iter()
+            .filter(|i| matches!(i.op(), Op::Return0 | Op::Return1))
+            .map(|i| i.k())
+            .collect()
+    };
+    for v in VERSIONS {
+        let plain = ks("local function f(a) if a then return 1 end return end", v);
+        assert!(
+            !plain.is_empty() && plain.iter().all(|&k| !k),
+            "{v:?}: {plain:?}"
+        );
+        let captured = ks(
+            "local function f(a) local x = a local g = function() return x end if a then return 1 end end",
+            v,
+        );
+        assert!(
+            !captured.is_empty() && captured.iter().all(|&k| k),
+            "{v:?}: {captured:?}"
+        );
+        assert_eq!(
+            eval_str(
+                "local function mk(a) local x = a local g = function() return x end return g end \
+                 local g1, g2 = mk('p'), mk('q') local h = mk('r') return g1() .. g2() .. h()",
+                v
+            ),
+            "pqr",
+            "{v:?}"
+        );
+    }
+    let tbc = ks(
+        "local function f(a) local c <close> = nil if a then return 1 end end",
+        LuaVersion::Lua54,
+    );
+    assert!(!tbc.is_empty() && tbc.iter().all(|&k| k), "{tbc:?}");
+}

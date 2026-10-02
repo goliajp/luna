@@ -1336,11 +1336,10 @@ impl Heap {
                     // at 4096 entries to bound idle memory.
                     const TABLE_POOL_CAP: usize = 4096;
                     if self.table_pool.len() < TABLE_POOL_CAP {
-                        // Free interior heap allocations now (slab + nodes).
-                        // Each Box::new([]) is a dangling no-alloc empty
-                        // slice, so reassigning is just a pointer move.
+                        // Free interior heap allocations now; an empty Box is
+                        // dangling, so reassigning is just a pointer move.
                         (*t).slab = Box::new([]);
-                        (*t).nodes = Box::new([]);
+                        (*t).drop_hash_part();
                         // drop the SoA Robin Hood parallel arrays too
                         // (usually Box::new([]) dangling stubs).
                         (*t).keys = Box::new([]);

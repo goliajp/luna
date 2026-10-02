@@ -12,7 +12,13 @@ use crate::frontend::span::Span;
 use crate::frontend::token::{Near, Token, TokenInfo, near_text};
 use crate::version::LuaVersion;
 
+mod scratch;
+mod token_source;
 mod upval51;
+use scratch::Arenas;
+pub(crate) use scratch::ParseScratch;
+use token_source::Cur;
+pub(crate) use token_source::TokenSource;
 use upval51::FnUvSlot;
 
 /// PUC `LUAI_MAXCCALLS` — the parser's nesting cap. PUC sets it to 200 and
@@ -94,124 +100,6 @@ fn un_op_of(tok: &Token) -> Option<UnOp> {
     })
 }
 
-/// Token feed for the recursive-descent parser. Either a live [`Lexer`]
-/// (the default `parse(src, version)` path) or a pre-materialized token
-/// vector (the [`parse_tokens`] entry point used by the MacroLua expander
-/// pre-pass — see `frontend::macro_expander`). Both arms support
-/// `next_token` and `src()`.
-pub(crate) enum TokenSource<'s> {
-    /// Streaming lexer over raw source bytes.
-    Lexer(Lexer<'s>),
-    /// Pre-materialized token stream + a back-pointer to the original
-    /// source bytes so `Token::describe` can still slice spans for
-    /// `... near 'tok'` error reporting.
-    PreExpanded {
-        tokens: Vec<TokenInfo>,
-        cursor: usize,
-        src: &'s [u8],
-        /// the names of the tokens read so far
-        names: Names,
-    },
-}
-
-/// A token as the parser holds it. `char` is set when the lexer handed back
-/// a byte no token starts with; `info.tok` is then a placeholder that no
-/// grammar rule accepts ([`Token::At`], which only MacroLua lexes, and
-/// MacroLua never parses from a live lexer).
-struct Cur {
-    info: TokenInfo,
-    char: Option<u8>,
-    /// the interned name of a `Token::Name`, whose text is left empty
-    sym: Sym,
-}
-
-impl<'s> TokenSource<'s> {
-    fn next_token(&mut self) -> Result<Cur, SyntaxError> {
-        match self {
-            TokenSource::Lexer(l) => Ok(match l.next_lexed()? {
-                Lexed::Tok(info) => Cur {
-                    info,
-                    char: None,
-                    sym: l.last_sym,
-                },
-                Lexed::Char(c, mut info) => {
-                    info.tok = Token::At;
-                    Cur {
-                        info,
-                        char: Some(c),
-                        sym: Sym(0),
-                    }
-                }
-            }),
-            TokenSource::PreExpanded {
-                tokens,
-                cursor,
-                src,
-                names,
-            } => {
-                if *cursor >= tokens.len() {
-                    let line = tokens.last().map(|t| t.line).unwrap_or(1);
-                    let _ = src;
-                    Ok(Cur {
-                        info: TokenInfo {
-                            tok: Token::Eof,
-                            span: Span::new(0, 0),
-                            line,
-                        },
-                        char: None,
-                        sym: Sym(0),
-                    })
-                } else {
-                    let t = tokens[*cursor].clone();
-                    *cursor += 1;
-                    let sym = match &t.tok {
-                        Token::Name(text) => names.intern(text),
-                        _ => Sym(0),
-                    };
-                    Ok(Cur {
-                        info: t,
-                        char: None,
-                        sym,
-                    })
-                }
-            }
-        }
-    }
-
-    fn names(&self) -> &Names {
-        match self {
-            TokenSource::Lexer(l) => l.names(),
-            TokenSource::PreExpanded { names, .. } => names,
-        }
-    }
-
-    fn take_names(&mut self) -> Names {
-        match self {
-            TokenSource::Lexer(l) => l.take_names(),
-            TokenSource::PreExpanded { names, .. } => std::mem::take(names),
-        }
-    }
-
-    fn src(&self) -> &'s [u8] {
-        match self {
-            TokenSource::Lexer(l) => l.src(),
-            TokenSource::PreExpanded { src, .. } => src,
-        }
-    }
-
-    /// PUC `ls->linenumber`: where the scanner stands, which is where every
-    /// syntax error is reported.
-    fn line(&self) -> u32 {
-        match self {
-            TokenSource::Lexer(l) => l.line(),
-            TokenSource::PreExpanded { tokens, cursor, .. } => tokens
-                .get(cursor.saturating_sub(1))
-                .or(tokens.last())
-                .map_or(1, |t| t.line),
-        }
-    }
-}
-
 /// Parse a Lua source chunk for the given dialect into an arena AST
 /// ([`Chunk`]).
 ///
@@ -233,6 +121,8 @@ pub(crate) struct Parsed {
     /// `StatId` (0 for other statements): PUC attributes the code it emits
     /// after reading that `end` to its line
     pub(crate) end_lines: Vec<u32>,
+    /// the lexer's token buffer, kept for the next load
+    pub(crate) lex_buf: Vec<u8>,
 }
 
 impl Parsed {
@@ -255,8 +145,25 @@ pub(crate) fn parse_at_depth(
     version: LuaVersion,
     c_depth: u32,
 ) -> Result<Parsed, SyntaxError> {
-    let lex = Lexer::interning(src, version);
-    parse_from_source(TokenSource::Lexer(lex), version, c_depth, src.len())
+    parse_reusing(src, version, c_depth, ParseScratch::default())
+}
+
+/// [`parse_at_depth`] building the tree in the vectors of an earlier parse
+/// (see [`ParseScratch`]).
+pub(crate) fn parse_reusing(
+    src: &[u8],
+    version: LuaVersion,
+    c_depth: u32,
+    scratch: ParseScratch,
+) -> Result<Parsed, SyntaxError> {
+    let lex = Lexer::interning(src, version, scratch.names, scratch.lex_buf);
+    let arenas = (
+        scratch.exprs,
+        scratch.stats,
+        scratch.stat_lines,
+        scratch.end_lines,
+    );
+    parse_from_source(TokenSource::Lexer(lex), version, c_depth, src.len(), arenas)
 }
 
 /// Parse a **pre-materialized** token stream. Used by the MacroLua
@@ -288,6 +195,7 @@ pub(crate) fn parse_tokens_at_depth(
         version,
         c_depth,
         src.len(),
+        Default::default(),
     )
 }
 
@@ -296,11 +204,17 @@ fn parse_from_source<'s>(
     version: LuaVersion,
     c_depth: u32,
     src_len: usize,
+    arenas: Arenas,
 ) -> Result<Parsed, SyntaxError> {
+    let (mut exprs, mut stats, mut stat_lines, mut end_lines) = arenas;
     let cur = lex.next_token()?;
     // typical source has an expression node per dozen bytes or so and a
     // statement per few dozen; starting near that skips most regrowth
     let (n_exprs, n_stats) = (src_len / 16, src_len / 64);
+    exprs.reserve(n_exprs);
+    stats.reserve(n_stats);
+    stat_lines.reserve(n_stats);
+    end_lines.reserve(n_stats);
     let mut p = Parser {
         lex,
         tok: cur.info,
@@ -308,10 +222,10 @@ fn parse_from_source<'s>(
         tok_sym: cur.sym,
         peeked: None,
         prev_line: 1,
-        exprs: Vec::with_capacity(n_exprs),
-        stats: Vec::with_capacity(n_stats),
-        stat_lines: Vec::with_capacity(n_stats),
-        end_lines: Vec::with_capacity(n_stats),
+        exprs,
+        stats,
+        stat_lines,
+        end_lines,
         depth: c_depth,
         version,
         // the main chunk is the bottom-most function context (line 0 → main)
@@ -342,6 +256,7 @@ fn parse_from_source<'s>(
     let end_line = p.prev_line;
     Ok(Parsed {
         names: p.lex.take_names(),
+        lex_buf: p.lex.take_buf(),
         chunk: Chunk {
             exprs: p.exprs,
             stats: p.stats,

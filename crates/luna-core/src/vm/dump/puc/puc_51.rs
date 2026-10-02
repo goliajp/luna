@@ -289,7 +289,7 @@ fn loop_windows(code: &[u32]) -> Result<Vec<Window>, String> {
 
 fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
     let windows = loop_windows(&raw.code)?;
-    let mut lw = Lowering::new(DIALECT, raw.code.len(), raw.max_stack, windows);
+    let mut lw = Lowering::new(DIALECT, raw.code.len(), raw.max_stack, windows, &raw.consts);
     let mut closed = vec![false; raw.protos.len()];
     let code = &raw.code;
     let mut pc = 0;

@@ -120,9 +120,12 @@ pub struct Table {
     /// `&`/`&mut` borrow of the array contents.
     pub(crate) inline_storage: std::cell::UnsafeCell<[u64; INLINE_U64S]>,
     /// hash part: power-of-two length (or empty)
-    /// hash part: power-of-two length (or empty)
     /// `pub(crate)` so `Heap::free_obj` (pool recycle path) can reset.
     pub(crate) nodes: Box<[Node]>,
+    /// `nodes.len() - 1`, or `u64::MAX` (top bit set) when there are no
+    /// nodes: a string probe masks with it and tests its top bit, without
+    /// first deriving the mask from the length
+    pub(crate) node_mask: u64,
     /// free-slot search position, counts down (PUC lastfree).
     /// `pub(crate)` so `Heap::new_table` can reset on pool recycle.
     pub(crate) lastfree: u32,
@@ -189,6 +192,7 @@ impl Table {
             asize: 0,
             inline_storage: std::cell::UnsafeCell::new([0; INLINE_U64S]),
             nodes: Box::new([]),
+            node_mask: u64::MAX,
             lastfree: 0,
             acount: 0,
             keys: Box::new([]),
@@ -511,57 +515,6 @@ impl Table {
             }
             idx = n.next as usize;
         }
-    }
-
-    /// The node holding the string key `key`, found by pointer (PUC
-    /// `luaH_getshortstr`). Exact for a short (interned) string; for a long
-    /// one a hit is exact and a miss proves nothing.
-    #[inline(always)]
-    fn str_node_by_ptr(&self, key: Gc<crate::runtime::string::LuaStr>) -> Option<usize> {
-        #[cfg(feature = "gc-verify")]
-        self.verify_find_node_keys(Value::Str(key));
-        let n = self.nodes.len();
-        if n == 0 {
-            return None;
-        }
-        // a short string's hash is set when it is interned; a long one's
-        // may still be the seed, which only makes a hit unlikely
-        let mut idx = key.stored_hash() as usize & (n - 1);
-        loop {
-            // SAFETY: the main position is masked to the node count and
-            // every `next` link is a node index written by `insert_new`
-            let node = unsafe { self.nodes.get_unchecked(idx) };
-            if node.key_is_str(key) {
-                return Some(idx);
-            }
-            if node.next == NONE {
-                return None;
-            }
-            idx = node.next as usize;
-        }
-    }
-
-    /// The value slot of string key `key`; see [`Self::str_node_by_ptr`].
-    #[inline(always)]
-    pub(crate) fn str_slot_by_ptr(
-        &self,
-        key: Gc<crate::runtime::string::LuaStr>,
-    ) -> Option<&Value> {
-        let i = self.str_node_by_ptr(key)?;
-        // SAFETY: a node index found above
-        Some(unsafe { &self.nodes.get_unchecked(i).val })
-    }
-
-    /// [`Self::str_slot_by_ptr`] for a write.
-    #[inline(always)]
-    #[cfg_attr(feature = "gc-verify", allow(dead_code))]
-    pub(crate) fn str_slot_by_ptr_mut(
-        &mut self,
-        key: Gc<crate::runtime::string::LuaStr>,
-    ) -> Option<&mut Value> {
-        let i = self.str_node_by_ptr(key)?;
-        // SAFETY: a node index found above
-        Some(unsafe { &mut self.nodes.get_unchecked_mut(i).val })
     }
 
     // ---- writes ----
@@ -960,6 +913,7 @@ impl Table {
             hash_entries.next_power_of_two()
         };
         self.nodes = vec![Node::EMPTY; hsize].into_boxed_slice();
+        self.node_mask = (hsize as u64).wrapping_sub(1);
         self.lastfree = hsize as u32;
         // PUC `g->GCtotalbytes` analogue: credit (or debit) the box-size
         // delta so `Heap.bytes` reflects this table's actual internal

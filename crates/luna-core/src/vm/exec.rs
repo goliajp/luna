@@ -33,6 +33,7 @@ use frames_sync::{frames_pop_known, frames_pop_sync, frames_push_sync};
 mod index;
 mod index_fast;
 mod index_miss;
+mod index_set;
 mod limits;
 pub(crate) mod native_call;
 mod num;
@@ -95,7 +96,9 @@ pub struct Vm {
     /// own. Settable via debug.setmetatable.
     type_mt: [Option<Gc<Table>>; 5],
     /// pre-interned metamethod event names, indexed by `Mm`
-    mm_names: Vec<Gc<crate::runtime::LuaStr>>,
+    mm_names: [Gc<crate::runtime::LuaStr>; MM_NAMES.len()],
+    /// the parser's vectors, kept from one `load` to the next
+    parse_scratch: crate::frontend::parser::ParseScratch,
     /// native↔Lua nesting depth (PUC C-stack guard analogue)
     c_depth: u32,
     /// number of live pcall/xpcall continuation frames on the running thread
@@ -905,7 +908,7 @@ impl Vm {
         // finalize in a single cycle (5.4/5.5 gc.lua :544 assert exactly one).
         heap.defer_thread_cycle_finalize = version == LuaVersion::Lua53;
         let globals = heap.new_table();
-        let mm_names = MM_NAMES.iter().map(|n| heap.intern(n.as_bytes())).collect();
+        let mm_names = std::array::from_fn(|i| heap.intern(MM_NAMES[i].as_bytes()));
 
         Vm {
             heap,
@@ -918,6 +921,7 @@ impl Vm {
             globals,
             type_mt: [None; 5],
             mm_names,
+            parse_scratch: Default::default(),
             c_depth: 0,
             pcall_depth: 0,
             nny: 0,
@@ -1435,15 +1439,18 @@ impl Vm {
         } else {
             // PUC's `nCcalls` counts protected calls as well
             let depth = self.c_depth + self.pcall_depth;
-            let parsed = crate::frontend::parser::parse_at_depth(src, self.version, depth)?;
-            crate::compiler::compile_parsed(
+            let scratch = std::mem::take(&mut self.parse_scratch);
+            let parsed = crate::frontend::parser::parse_reusing(src, self.version, depth, scratch)?;
+            let proto = crate::compiler::compile_parsed(
                 &parsed.chunk,
                 &parsed.names,
                 &parsed.end_lines,
                 self.version,
                 chunkname,
                 &mut self.heap,
-            )?
+            )?;
+            self.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
+            proto
         };
         // PUC `lua_load` (lapi.c) only seeds the loaded closure's first
         // upvalue with the globals table when the closure has *exactly* one
@@ -2740,26 +2747,6 @@ impl Vm {
             unsafe { mt.as_mut() }.flags |= bit;
         }
         v
-    }
-
-    /// [`Self::fast_tm`] as the slot holding the metamethod, `None` when it
-    /// is absent (nil).
-    #[inline]
-    #[cfg_attr(feature = "gc-verify", allow(dead_code))]
-    pub(crate) fn fast_tm_slot(&self, mt: Gc<Table>, mm: Mm) -> Option<*const Value> {
-        let bit = 1u32 << mm as u32;
-        if mt.flags & bit != 0 {
-            return None;
-        }
-        // metamethod names are interned, so the pointer walk is exact
-        match mt.str_slot_by_ptr(self.mm_names[mm as usize]) {
-            Some(v) if !v.is_nil() => Some(v as *const Value),
-            _ => {
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                unsafe { mt.as_mut() }.flags |= bit;
-                None
-            }
-        }
     }
 
     /// PUC 5.1 `get_compTM`: a comparison metamethod (`__eq` / `__lt` / `__le`)
@@ -6392,7 +6379,7 @@ impl Vm {
                     self.top = self.top.max(abs_a + nret);
                     if matches!(inst.op(), Op::Return0 | Op::Return1)
                         && !matches!(
-                            self.return_fast::<true>(base, abs_a, nret, entry_depth),
+                            self.return_fast::<true>(base, abs_a, nret, entry_depth, inst.k()),
                             call_fast::Returned::No
                         )
                     {

@@ -258,42 +258,6 @@ fn call_results_beyond_max_stack() {
 }
 
 #[test]
-fn constant_index_out_of_range() {
-    refused(
-        "return function() return 'k' end",
-        |p| {
-            let pc = find(p, Op::LoadK);
-            set(p, pc, |i| with_bx(i, 999));
-        },
-        "constant 999 out of range",
-    );
-}
-
-#[test]
-fn upvalue_index_out_of_range() {
-    refused(
-        "local u = 1 return function() return u end",
-        |p| {
-            let pc = find(p, Op::GetUpval);
-            set(p, pc, |i| with_b(i, 9));
-        },
-        "upvalue 9 out of range",
-    );
-}
-
-#[test]
-fn closure_index_out_of_range() {
-    refused(
-        "return function() return function() end end",
-        |p| {
-            let pc = find(p, Op::Closure);
-            set(p, pc, |i| with_bx(i, 5));
-        },
-        "function 5 out of range",
-    );
-}
-
-#[test]
 fn jump_outside_the_code() {
     refused(
         "return function(x) if x then x = 1 end return x end",
@@ -610,3 +574,6 @@ fn load_overhead() {
         );
     }
 }
+
+#[path = "bytecode_verify/operand_cases.rs"]
+mod operand_cases;
