@@ -14,9 +14,11 @@ use std::collections::HashMap;
 mod assign_gate;
 mod binop;
 mod cond;
+mod const_map;
 mod ctconst;
 mod fold;
 mod vararg_scan;
+use const_map::ConstMap;
 use ctconst::{CtConst, ct_value};
 use fold::{fold_arith, is_logical, numeral};
 
@@ -335,7 +337,7 @@ struct Level<'a> {
     code: Vec<Inst>,
     lines: Vec<u32>,
     consts: Vec<Value>,
-    const_map: HashMap<ConstKey, u32>,
+    const_map: ConstMap,
     locals: Vec<LocalVar<'a>>,
     /// ordered active-variable sequence (locals + global decls) for goto scope
     avars: Vec<AVar<'a>>,
@@ -385,7 +387,7 @@ impl<'a> Level<'a> {
             code: Vec::with_capacity(32),
             lines: Vec::with_capacity(32),
             consts: Vec::with_capacity(8),
-            const_map: HashMap::with_capacity(8),
+            const_map: ConstMap::with_capacity_and_hasher(8, Default::default()),
             locals: Vec::with_capacity(8),
             avars: Vec::with_capacity(8),
             blocks: Vec::with_capacity(4),

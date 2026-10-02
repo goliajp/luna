@@ -353,7 +353,9 @@ impl<'s> Lexer<'s> {
             b"until" => Token::Until,
             b"while" => Token::While,
             _ => {
-                let text = str::from_utf8(text).expect("ascii identifier");
+                // SAFETY: the loop above took only ASCII letters, digits and
+                // `_`
+                let text = unsafe { str::from_utf8_unchecked(text) };
                 match &mut self.names {
                     Some(names) => {
                         self.last_sym = names.intern(text);
