@@ -305,3 +305,6 @@ fn aot_data_section(triple: &target_lexicon::Triple, name: &str, coff_name: &str
         _ => name.to_owned(),
     }
 }
+
+#[cfg(test)]
+mod tests;
