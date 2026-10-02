@@ -81,6 +81,7 @@ pub(super) fn lower_and_encode_meta(
             pre53: version <= LuaVersion::Lua53,
             aot: true,
             tier: Default::default(),
+            tier_up_at: 0,
         };
         // Re-lower this record into the ObjectModule under a unique
         // exported name. Any bail here = the record was lowerable at

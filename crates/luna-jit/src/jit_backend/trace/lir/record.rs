@@ -276,6 +276,12 @@ impl Emit for Lir {
     fn declare_data_in_func(&mut self, _data: DataId) -> GlobalValue {
         unreachable!("only AOT lowering declares data, and it builds Cranelift IR")
     }
+    fn tier_count(&mut self, cell: i64, at: u32, hot: Block, cont: Block) {
+        self.edge(hot);
+        self.edge(cont);
+        let op = Op::TierCount { cell, at };
+        self.push(op, Ty::I64, NONE, NONE, hot.as_u32(), cont.as_u32());
+    }
 }
 
 /// The C math functions a folded `math.*` call reaches, which Cranelift's

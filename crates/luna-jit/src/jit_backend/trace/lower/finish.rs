@@ -20,6 +20,7 @@ pub(super) struct Emitted {
     pub(super) global_side_trace_box: Box<TCellPtr>,
     pub(super) downrec_link_for_compiled: Option<(u32, u32)>,
     pub(super) downrec_multi_way_count_for_compiled: u8,
+    pub(super) tier_count: Option<(Box<TCellU32>, u32)>,
 }
 
 /// The kinds the loop edge leaves and the dispatch gates that need the
@@ -50,21 +51,15 @@ fn apply_tail_kinds_and_gates(
     // Op::ForLoop at the tail writes R[A] (next loop var), R[A+1]
     // (decremented count), and R[A+3] (visible loop var copy) —
     // all Int per the 5.4+ count form. Op::TForLoop writes R[A+2]
-    // = R[A+4] on continue (TForLoop tail emit; R[A+4] = Int gated
-    // by the tag check).
+    // = R[A+4] on continue, of the key's kind, which the generic-for
+    // tail already left in `current_kinds`.
     if let Some(for_loop_idx) = for_loop_idx_opt {
         let rop = &record.ops[for_loop_idx];
         let a = rop.inst.a() as usize;
-        match rop.inst.op() {
-            Op::ForLoop => {
-                current_kinds[a] = RegKind::Int;
-                current_kinds[a + 1] = RegKind::Int;
-                current_kinds[a + 3] = RegKind::Int;
-            }
-            Op::TForLoop => {
-                current_kinds[a + 2] = RegKind::Int;
-            }
-            _ => {}
+        if rop.inst.op() == Op::ForLoop {
+            current_kinds[a] = RegKind::Int;
+            current_kinds[a + 1] = RegKind::Int;
+            current_kinds[a + 3] = RegKind::Int;
         }
     }
     // Derive exit_tags from the kind tracker's final state. Slots
@@ -165,6 +160,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         global_side_trace_box,
         downrec_link_for_compiled,
         downrec_multi_way_count_for_compiled,
+        tier_count,
     } = em;
     let (current_kinds, dispatchable, dispatch_off_reason) = apply_tail_kinds_and_gates(
         pl,
@@ -341,5 +337,19 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         // `1` for single-CMP-fallback DownRec; `>= 2` for the
         // lifted `dispatchable = true` path.
         downrec_multi_way_count: downrec_multi_way_count_for_compiled,
+        tier_up: tier_count.map(|(count, at)| tier_up(count, at)),
     }
+}
+
+/// The record of a baseline trace that moves to Cranelift after `at`
+/// iterations and entries, counted in `count`.
+fn tier_up(count: Box<TCellU32>, at: u32) -> Box<TierUp> {
+    Box::new(TierUp {
+        count,
+        at,
+        optimized: TCellPtr::null(),
+        tried: TCellBool::new(false),
+        parent_cells: [TCellPtr::null(), TCellPtr::null()],
+        source: TRefLock::new(None),
+    })
 }

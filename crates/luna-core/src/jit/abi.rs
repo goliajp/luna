@@ -152,6 +152,19 @@ pub trait TraceCompiler {
     /// Name of the lowerer's last-reached checkpoint (diagnostic; lets
     /// the recorder bucket failures by phase).
     fn last_compile_checkpoint(&self) -> &'static str;
+
+    /// Compiles `ct`, whose code came from a quicker, less optimizing code
+    /// generator, again from what [`crate::jit::trace::TierUp::source`]
+    /// holds; the new entry behaves exactly like the old one. `None` when
+    /// the backend has no better code for it.
+    fn tier_up(
+        &self,
+        storage: &mut dyn crate::jit::JitStorage,
+        ct: &CompiledTrace,
+    ) -> Option<crate::jit::trace::TraceFn> {
+        let _ = (storage, ct);
+        None
+    }
 }
 
 /// No-op backend installed by [`crate::vm::Vm::new_minimal`] in

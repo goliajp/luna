@@ -46,7 +46,6 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
     let Lower {
         reg_state,
         trace_fn_sig_ref,
-        body_loop,
         ..
     } = *lw;
     // the caller window: see `emit_tail`
@@ -111,8 +110,7 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
         && body_pc == record.head_pc
         && loop_kinds_match(&tail_kinds, &lw.head_kinds)
     {
-        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
-        lw.bcx.ins().jump(body_loop, &[]);
+        emit_back_edge(lw, pl);
     } else {
         emit_store_back_and_return_pc(
             &mut lw.bcx,
@@ -147,7 +145,6 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
         trace_fn_sig_ref,
         tforcall_tag_var,
         tforcall_val_tag_var,
-        body_loop,
         ..
     } = *lw;
     let RuntimeHelpers {
@@ -285,12 +282,12 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     // from the kinds the emit pass ends with: the loop variables hold the
     // next iteration's values, which the interpreter must get back
     lw.current_kinds[vars.clone()].copy_from_slice(&tail_kinds[vars]);
+    lw.current_kinds[a + 2] = tail_kinds[a + 2];
     if do_internal_loop
         && body_pc == record.head_pc
         && loop_kinds_match(&tail_kinds, &lw.head_kinds)
     {
-        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
-        lw.bcx.ins().jump(body_loop, &[]);
+        emit_back_edge(lw, pl);
     } else {
         emit_store_back_and_return_pc(
             &mut lw.bcx,
@@ -305,4 +302,40 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
         );
     }
     Some(())
+}
+
+/// The edge back to the loop head. With an iteration count to keep, the
+/// trace leaves at its head once the count is reached; the dispatcher then
+/// moves it to the optimizing tier.
+pub(super) fn emit_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
+    let Plan {
+        record, max_stack, ..
+    } = *pl;
+    let Lower {
+        reg_state,
+        trace_fn_sig_ref,
+        body_loop,
+        ..
+    } = *lw;
+    sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+    let Some((cell, at)) = &lw.tier_count else {
+        lw.bcx.ins().jump(body_loop, &[]);
+        return;
+    };
+    let (cell, at) = (&**cell as *const TCellU32 as i64, *at);
+    let hot = lw.bcx.create_block();
+    lw.bcx.tier_count(cell, at, hot, body_loop);
+    lw.bcx.switch_to_block(hot);
+    lw.bcx.seal_block(hot);
+    emit_store_back_and_return_pc(
+        &mut lw.bcx,
+        &lw.regs_full[..max_stack],
+        &lw.stored,
+        reg_state,
+        record.head_pc,
+        lw.flush_ctx.as_ref(),
+        0i64,
+        trace_fn_sig_ref,
+        encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
+    );
 }
