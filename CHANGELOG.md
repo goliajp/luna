@@ -160,6 +160,13 @@ optimization.
   the hidden environment of the function, so `_ENV = x` replaced the
   environment of every function sharing it. `setfenv`, `getfenv` and
   `module` are unchanged.
+- On 5.2–5.5 the functions of the standard library are never collected,
+  as PUC's light C functions are not: the collector no longer visits them,
+  and a weak table keeps one even after it was removed from its library.
+  The memory of a library function a script deletes is released only when
+  the Vm is dropped; the most this holds is the library's own functions,
+  so it does not grow with run time. 5.1 still collects them, as PUC 5.1
+  does: its library functions are ordinary collectable C closures.
 - A table lookup by a short string key no longer goes through the
   general key-comparison walk, which saved and restored a dozen
   registers on every lookup: field reads and writes such as `t.x` run

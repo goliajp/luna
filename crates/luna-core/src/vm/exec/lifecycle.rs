@@ -277,56 +277,65 @@ impl Vm {
     /// `newproxy`, `gcinfo` when version == 5.1). Safe to call at most
     /// once per Vm.
     pub fn open_base(&mut self) {
-        crate::vm::builtins::open_base(self);
+        self.open_lib(crate::vm::builtins::open_base);
     }
 
     /// Install the `math` standard library.
     pub fn open_math(&mut self) {
-        crate::vm::lib_math::open_math(self);
+        self.open_lib(crate::vm::lib_math::open_math);
     }
 
     /// Install the `table` standard library.
     pub fn open_table(&mut self) {
-        crate::vm::lib_table::open_table(self);
+        self.open_lib(crate::vm::lib_table::open_table);
     }
 
     /// Install the `string` standard library (and the shared string metatable).
     pub fn open_string(&mut self) {
-        crate::vm::lib_string::open_string(self);
+        self.open_lib(crate::vm::lib_string::open_string);
     }
 
     /// Install the `utf8` standard library (5.3+).
     pub fn open_utf8(&mut self) {
-        crate::vm::lib_utf8::open_utf8(self);
+        self.open_lib(crate::vm::lib_utf8::open_utf8);
     }
 
     /// `os` and `io` are merged because file userdata shares state with both
     /// (`io.tmpname` and `os.tmpname` are the same function, `io.popen`
     /// wraps `os.execute`'s shell).
     pub fn open_os_io(&mut self) {
-        crate::vm::lib_os_io::open_os_io(self);
+        self.open_lib(crate::vm::lib_os_io::open_os_io);
     }
 
     /// Install the `debug` standard library (introspection / hooks). Off by
     /// default for sandbox embedders.
     pub fn open_debug(&mut self) {
-        crate::vm::lib_debug::open_debug(self);
+        self.open_lib(crate::vm::lib_debug::open_debug);
     }
 
     /// Install the `coroutine` standard library.
     pub fn open_coroutine(&mut self) {
-        crate::vm::lib_coroutine::open_coroutine(self);
+        self.open_lib(crate::vm::lib_coroutine::open_coroutine);
     }
 
     /// `package` plus the 5.1-only `module` and `package.seeall` aliases.
     pub fn open_package(&mut self) {
-        crate::vm::lib_package::open_package(self);
+        self.open_lib(crate::vm::lib_package::open_package);
     }
 
     /// 5.2-only `bit32` library (5.3+ retired in favour of native bitwise
     /// ops on 64-bit integers).
     pub fn open_bit32(&mut self) {
-        crate::vm::lib_bit32::open_bit32(self);
+        self.open_lib(crate::vm::lib_bit32::open_bit32);
+    }
+
+    /// From 5.2 on, library functions are PUC light C functions, which are
+    /// not collectable: luna keeps them off the swept list and frees them
+    /// with the Vm, so a weak table never drops one. 5.1 collects them.
+    fn open_lib(&mut self, open: fn(&mut Vm)) {
+        self.heap.fix_natives = self.version >= LuaVersion::Lua52;
+        open(self);
+        self.heap.fix_natives = false;
     }
 }
 
