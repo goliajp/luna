@@ -1,0 +1,99 @@
+use super::*;
+
+/// What a chunk's entry verifies before running the body.
+pub(super) struct EntryChecks {
+    /// Upvalue the self-recursive calls go through.
+    pub(super) self_upval: Option<u32>,
+    /// `("math", name)` key pairs of the folded `math.<name>` calls.
+    pub(super) math_fns: Vec<(Gc<LuaStr>, Gc<LuaStr>)>,
+}
+
+/// Defines the entry that runs `checks` before calling the chunk body
+/// `body_id`: when one fails it returns at once with a deopt parked, and
+/// the dispatcher runs the call in the interpreter.
+pub(super) fn define_checked_entry<M: Module>(
+    module: &mut M,
+    ctx: &mut cranelift_codegen::Context,
+    body_id: FuncId,
+    checks: &EntryChecks,
+    num_params: usize,
+) -> Option<FuncId> {
+    let mut sig = module.make_signature();
+    for _ in 0..num_params {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    let entry_id = module
+        .declare_function("luna_jit_chunk_entry", Linkage::Local, &sig)
+        .ok()?;
+    let mut self_sig = module.make_signature();
+    self_sig.params.push(AbiParam::new(types::I64));
+    self_sig.returns.push(AbiParam::new(types::I64));
+    let self_check_id = module
+        .declare_function("luna_jit_self_upval_check", Linkage::Import, &self_sig)
+        .ok()?;
+    let mut math_sig = module.make_signature();
+    math_sig.params.push(AbiParam::new(types::I64));
+    math_sig.params.push(AbiParam::new(types::I64));
+    math_sig.returns.push(AbiParam::new(types::I64));
+    let math_check_id = module
+        .declare_function("luna_jit_math_fn_is_library", Linkage::Import, &math_sig)
+        .ok()?;
+    let park_id = module
+        .declare_function(
+            "luna_jit_park_deopt",
+            Linkage::Import,
+            &module.make_signature(),
+        )
+        .ok()?;
+
+    ctx.func.signature = sig;
+    ctx.func.name = UserFuncName::user(0, entry_id.as_u32());
+    let mut fbc = FunctionBuilderContext::new();
+    let mut bcx = FunctionBuilder::new(&mut ctx.func, &mut fbc);
+    let entry = bcx.create_block();
+    let bail = bcx.create_block();
+    bcx.append_block_params_for_function_params(entry);
+    bcx.switch_to_block(entry);
+    let args: Vec<Value> = bcx.block_params(entry).to_vec();
+    // luna_jit_self_upval_check parks its own deopt; the math check
+    // leaves that to the bail block.
+    let park_on_bail = !checks.math_fns.is_empty();
+    if let Some(idx) = checks.self_upval {
+        let check_ref = module.declare_func_in_func(self_check_id, bcx.func);
+        let idx = bcx.ins().iconst(types::I64, i64::from(idx));
+        let call = bcx.ins().call(check_ref, &[idx]);
+        let ok = bcx.inst_results(call)[0];
+        let next = bcx.create_block();
+        bcx.ins().brif(ok, next, &[], bail, &[]);
+        bcx.switch_to_block(next);
+    }
+    for &(math_key, name_key) in &checks.math_fns {
+        let check_ref = module.declare_func_in_func(math_check_id, bcx.func);
+        let m = bcx.ins().iconst(types::I64, math_key.as_ptr() as i64);
+        let k = bcx.ins().iconst(types::I64, name_key.as_ptr() as i64);
+        let call = bcx.ins().call(check_ref, &[m, k]);
+        let ok = bcx.inst_results(call)[0];
+        let next = bcx.create_block();
+        bcx.ins().brif(ok, next, &[], bail, &[]);
+        bcx.switch_to_block(next);
+    }
+    let body_ref = module.declare_func_in_func(body_id, bcx.func);
+    let call = bcx.ins().call(body_ref, &args);
+    let r = bcx.inst_results(call)[0];
+    bcx.ins().return_(&[r]);
+
+    bcx.switch_to_block(bail);
+    if park_on_bail {
+        let park_ref = module.declare_func_in_func(park_id, bcx.func);
+        bcx.ins().call(park_ref, &[]);
+    }
+    let zero = bcx.ins().iconst(types::I64, 0);
+    bcx.ins().return_(&[zero]);
+
+    bcx.seal_all_blocks();
+    bcx.finalize(module.target_config());
+    module.define_function(entry_id, ctx).ok()?;
+    module.clear_context(ctx);
+    Some(entry_id)
+}
