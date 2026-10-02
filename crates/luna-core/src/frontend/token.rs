@@ -3,9 +3,15 @@
 use crate::frontend::span::Span;
 use crate::version::LuaVersion;
 
+mod light;
+pub(crate) use light::{LexTok, Tok};
+
 /// One lexical token produced by the lexer.
-#[derive(Clone, PartialEq, Debug)]
-pub enum Token {
+///
+/// The type parameters are the payloads of [`Token::Str`], [`Token::Name`]
+/// and [`Token::MacroQuote`]; every token handed out uses the defaults.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Token<S = Vec<u8>, N = Box<str>, Q = Box<[TokenInfo]>> {
     // keywords
     /// `and` keyword.
     And,
@@ -134,12 +140,12 @@ pub enum Token {
     /// String literal (raw bytes; Lua strings are 8-bit clean).
     Str(
         /// Decoded byte contents.
-        Vec<u8>,
+        S,
     ),
     /// Identifier.
     Name(
         /// Source text of the identifier.
-        Box<str>,
+        N,
     ),
     /// MacroLua `@` sigil. Lexed only when
     /// `version.is_macro_lua()`; PUC 5.1-5.5 sources continue to
@@ -158,7 +164,7 @@ pub enum Token {
     /// before the parser proper sees them.
     MacroQuote(
         /// Captured token run.
-        Box<[TokenInfo]>,
+        Q,
     ),
     /// End-of-file marker.
     Eof,

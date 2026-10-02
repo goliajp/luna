@@ -58,7 +58,7 @@ struct Up {
     index: u8,
     /// 5.4/5.5 `kind`: 1 (`<const>`) for a read-only capture, else 0
     kind: u8,
-    name: Box<str>,
+    name: crate::runtime::DebugName,
 }
 
 /// One function, re-encoded, ready to serialise.
@@ -76,7 +76,7 @@ struct Out {
     consts: Vec<Value>,
     upvals: Vec<Up>,
     protos: Vec<Out>,
-    locvars: Vec<(Box<str>, u32, u32)>,
+    locvars: Vec<(crate::runtime::DebugName, u32, u32)>,
 }
 
 /// Serialise `proto` as a chunk of the PUC version `version` names;
@@ -168,7 +168,7 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
         ));
     }
 
-    let mut locvars: Vec<(u32, u32, (Box<str>, u32, u32))> = p
+    let mut locvars: Vec<(u32, u32, (crate::runtime::DebugName, u32, u32))> = p
         .locvars
         .iter()
         .zip(&loc_regs)

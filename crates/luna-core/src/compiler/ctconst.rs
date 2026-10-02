@@ -5,8 +5,8 @@
 //! function sees it without an upvalue). This module decides that value
 //! the way `luaK_exp2const` does after PUC parsed `e`.
 
-use super::{Chunk, Expr, SymName};
-use crate::frontend::ast::{BinOp, ExprId, UnOp};
+use super::{Chunk, Expr, Name};
+use crate::frontend::ast::{BinOp, ExprId, Sym, UnOp};
 use crate::runtime::value::f2i_exact;
 
 /// The value of a compile-time constant.
@@ -16,7 +16,8 @@ pub(super) enum CtConst {
     Bool(bool),
     Int(i64),
     Float(f64),
-    Str(Box<[u8]>),
+    /// a literal, by its number in the chunk's names
+    Str(Sym),
 }
 
 impl CtConst {
@@ -30,7 +31,7 @@ impl CtConst {
 pub(super) fn ct_value(
     ast: &Chunk,
     id: ExprId,
-    named: &mut dyn FnMut(&SymName) -> Option<CtConst>,
+    named: &mut dyn FnMut(&Name) -> Option<CtConst>,
 ) -> Option<CtConst> {
     match ast.expr(id) {
         Expr::Nil => Some(CtConst::Nil),
@@ -38,7 +39,7 @@ pub(super) fn ct_value(
         Expr::False => Some(CtConst::Bool(false)),
         Expr::Int(i) => Some(CtConst::Int(*i)),
         Expr::Float(f) => Some(CtConst::Float(*f)),
-        Expr::Str(s) => Some(CtConst::Str(s.clone().into_boxed_slice())),
+        Expr::Str(s) => Some(CtConst::Str(*s)),
         Expr::Name(n) => named(n),
         Expr::Paren(inner) => ct_value(ast, *inner, named),
         Expr::UnOp { op, operand, .. } => {

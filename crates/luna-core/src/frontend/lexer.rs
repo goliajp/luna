@@ -6,7 +6,7 @@
 use crate::frontend::error::SyntaxError;
 use crate::frontend::names::{Names, Sym};
 use crate::frontend::span::Span;
-use crate::frontend::token::{Near, Token, TokenInfo, near_text};
+use crate::frontend::token::{LexTok, Near, Tok, Token, TokenInfo, near_text};
 use crate::numeric::{self, Num, hex_digit};
 use crate::version::LuaVersion;
 
@@ -26,11 +26,15 @@ pub struct Lexer<'s> {
     /// dialect's scanner leaves it in (escapes half-decoded, delimiters
     /// kept, and so on).
     buf: Vec<u8>,
-    /// set for the load path: identifiers are interned here and handed out
-    /// as `last_sym` with an empty `Token::Name`
+    /// set for the load path: identifiers and string literals are interned
+    /// here and handed out as `last_sym` with an empty `Token::Name` /
+    /// `Token::Str`
     names: Option<Names>,
-    /// the number of the identifier just read, when interning
+    /// the number of the identifier or literal just read, when interning
     pub(crate) last_sym: Sym,
+    /// where the contents of the string literal just read are in `buf`,
+    /// when not interning
+    str_range: (usize, usize),
 }
 
 /// One lexed item as the parser sees it: either a token, or a byte PUC's
@@ -38,8 +42,8 @@ pub struct Lexer<'s> {
 /// `&` before 5.3, ...). Those are only an error once the parser finds no
 /// use for them, and what it then says depends on where they appear.
 pub(crate) enum Lexed {
-    Tok(TokenInfo),
-    Char(u8, TokenInfo),
+    Tok(LexTok),
+    Char(u8, LexTok),
 }
 
 impl<'s> Lexer<'s> {
@@ -53,6 +57,7 @@ impl<'s> Lexer<'s> {
             buf: Vec::new(),
             names: None,
             last_sym: Sym(0),
+            str_range: (0, 0),
         }
     }
 
@@ -147,7 +152,7 @@ impl<'s> Lexer<'s> {
     /// including a byte no token starts with.
     pub fn next_token(&mut self) -> Result<TokenInfo, SyntaxError> {
         match self.next_lexed()? {
-            Lexed::Tok(t) => Ok(t),
+            Lexed::Tok(t) => Ok(self.token_info(t)),
             // PUC's token code for a NUL byte is 0, which `lexerror` takes
             // as "no near-token".
             Lexed::Char(0, _) => Err(SyntaxError::new(self.line, "unexpected symbol")),
@@ -163,7 +168,7 @@ impl<'s> Lexer<'s> {
             let start = self.pos;
             let line = self.line;
             let Some(c) = self.cur() else {
-                return Ok(Lexed::Tok(TokenInfo {
+                return Ok(Lexed::Tok(LexTok {
                     tok: Token::Eof,
                     span: Span::new(self.pos, self.pos),
                     line: self.line,
@@ -178,7 +183,7 @@ impl<'s> Lexer<'s> {
                 }
                 _ => {
                     let tok = self.token(c)?;
-                    let info = |tok| TokenInfo {
+                    let info = |tok| LexTok {
                         tok,
                         span: Span::new(start, self.pos),
                         line,
@@ -210,14 +215,14 @@ impl<'s> Lexer<'s> {
 
     /// One token starting at byte `c`. `Err(byte)` is a byte PUC returns as
     /// a single-character token that no Lua syntax uses.
-    fn token(&mut self, c: u8) -> Result<Result<Token, u8>, SyntaxError> {
+    fn token(&mut self, c: u8) -> Result<Result<Tok, u8>, SyntaxError> {
         let v = self.version;
         let tok = match c {
             b'A'..=b'Z' | b'a'..=b'z' | b'_' => self.name_or_keyword(),
             b'0'..=b'9' => self.number(self.pos)?,
             b'"' | b'\'' => self.string(c)?,
             b'[' => match self.skip_sep() {
-                Some(level) => Token::Str(self.long_string(level, false)?),
+                Some(level) => self.long_string(level, false)?,
                 None if self.buf.len() == 1 => Token::LBracket,
                 None => return Err(self.buf_error("invalid long string delimiter")),
             },
@@ -286,7 +291,7 @@ impl<'s> Lexer<'s> {
         Ok(Ok(tok))
     }
 
-    fn name_or_keyword(&mut self) -> Token {
+    fn name_or_keyword(&mut self) -> Tok {
         let start = self.pos;
         while matches!(
             self.cur(),
@@ -323,16 +328,10 @@ impl<'s> Lexer<'s> {
             b"until" => Token::Until,
             b"while" => Token::While,
             _ => {
-                // SAFETY: the loop above took only ASCII letters, digits and
-                // `_`
-                let text = unsafe { str::from_utf8_unchecked(text) };
-                match &mut self.names {
-                    Some(names) => {
-                        self.last_sym = names.intern(text);
-                        Token::Name(Box::default())
-                    }
-                    None => Token::Name(text.into()),
+                if let Some(names) = &mut self.names {
+                    self.last_sym = names.intern(text);
                 }
+                Token::Name(())
             }
         }
     }
@@ -354,8 +353,8 @@ impl<'s> Lexer<'s> {
     }
 
     /// Body of a long string/comment; the opener up to its second bracket is
-    /// in the buffer, that bracket is current. Returns the contents.
-    fn long_string(&mut self, level: u32, is_comment: bool) -> Result<Vec<u8>, SyntaxError> {
+    /// in the buffer, that bracket is current. Returns the string token.
+    fn long_string(&mut self, level: u32, is_comment: bool) -> Result<Tok, SyntaxError> {
         let open_line = self.line;
         self.save_next();
         if self.cur_is_newline() {
@@ -376,10 +375,10 @@ impl<'s> Lexer<'s> {
                     if self.skip_sep() == Some(level) {
                         self.save_next();
                         if is_comment {
-                            return Ok(Vec::new());
+                            return Ok(Token::Eof);
                         }
                         let n = 2 + level as usize;
-                        return Ok(self.buf[n..self.buf.len() - n].to_vec());
+                        return Ok(self.str_token(n, self.buf.len() - n));
                     }
                 }
                 // 5.1 (LUA_COMPAT_LSTR == 1) rejects a nested `[[` inside a
@@ -418,7 +417,7 @@ impl<'s> Lexer<'s> {
     /// bytes are kept for error messages differs per dialect (5.1 never
     /// keeps the backslash, 5.2 rebuilds the buffer from the escape on
     /// error, 5.3+ keep everything until the escape is complete).
-    fn string(&mut self, del: u8) -> Result<Token, SyntaxError> {
+    fn string(&mut self, del: u8) -> Result<Tok, SyntaxError> {
         self.save_next();
         while self.cur() != Some(del) {
             match self.cur() {
@@ -433,7 +432,7 @@ impl<'s> Lexer<'s> {
             }
         }
         self.save_next();
-        Ok(Token::Str(self.buf[1..self.buf.len() - 1].to_vec()))
+        Ok(self.str_token(1, self.buf.len() - 1))
     }
 
     /// PUC `read_numeral` over the numeral starting at `start` (a leading
@@ -442,7 +441,7 @@ impl<'s> Lexer<'s> {
     /// digits and dots, an exponent, then any alphanumerics; 5.2+ take hex
     /// digits, dots and exponents, and 5.4+ also swallow one touching
     /// letter so `3x` is malformed instead of `3` followed by `x`.
-    fn number(&mut self, start: usize) -> Result<Token, SyntaxError> {
+    fn number(&mut self, start: usize) -> Result<Tok, SyntaxError> {
         let v = self.version;
         if v <= LuaVersion::Lua51 {
             while self.cur().is_some_and(|c| c.is_ascii_digit() || c == b'.') {

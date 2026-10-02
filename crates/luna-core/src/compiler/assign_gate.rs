@@ -87,11 +87,7 @@ impl Compiler<'_> {
             && self.rhs_calls_nothing_unknown(exprs[0])
     }
 
-    /// [`ast::rhs_calls_nothing_unknown`] on the interned tree.
     fn rhs_calls_nothing_unknown(&self, rhs: ExprId) -> bool {
-        let names = self.names;
-        ast::rhs_calls_nothing_unknown_with(self.ast, rhs, &|n: &SymName| {
-            ast::is_known_pure_stdlib_root(names.text(n.sym))
-        })
+        ast::rhs_calls_nothing_unknown(self.ast, rhs)
     }
 }
