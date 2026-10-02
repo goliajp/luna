@@ -95,7 +95,8 @@ impl Vm {
         // `decode_hit_counts`. For parent decode
         // they're aliased (clone of the parent's
         // own Rc).
-        if let Some(c) = decode_hit_counts.get(exit_hit_idx) {
+        let tier_exit = !child_ran && is_tier_exit(ct, cont_pc);
+        if let Some(c) = decode_hit_counts.get(exit_hit_idx).filter(|_| !tier_exit) {
             let v = c.get();
             if v < u32::MAX {
                 c.set(v + 1);
@@ -245,4 +246,16 @@ impl Vm {
         self.jit.recording_frame_base = self.frames.len() - 1;
         self.jit.counters.side_trace_started += 1;
     }
+}
+
+/// Whether `ct` left at `cont_pc` to move to the optimizing tier: that exit
+/// is no guard failing, so it neither counts nor starts a side trace. Its
+/// count equals `at` only between that exit and the next dispatch, which
+/// tiers up first.
+fn is_tier_exit(ct: &CompiledTrace, cont_pc: u32) -> bool {
+    cont_pc == ct.head_pc
+        && ct
+            .tier_up
+            .as_ref()
+            .is_some_and(|t| !t.tried.get() && t.count.get() == t.at)
 }

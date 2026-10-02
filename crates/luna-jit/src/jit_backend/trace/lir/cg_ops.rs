@@ -12,6 +12,7 @@ fn pure(op: Op) -> bool {
             | Op::StackStore(..)
             | Op::Jump
             | Op::Brif(_)
+            | Op::TierCount { .. }
             | Op::Call
             | Op::CallIndirect
             | Op::Return
@@ -156,6 +157,7 @@ impl<M: Masm> Gen<'_, M> {
                 self.jump(i.a, &args, next);
             }
             Op::Brif(n_then) => self.brif(&i, n_then, next),
+            Op::TierCount { cell, at } => self.tier_count(cell, at, i.b, i.c, next),
             Op::Call | Op::CallIndirect => {
                 let lir = self.lir;
                 let (f, addr) = match i.op {

@@ -341,6 +341,24 @@ impl<M: Masm> Gen<'_, M> {
         self.jump(eb, ea, next);
     }
 
+    pub(crate) fn tier_count(&mut self, cell: i64, at: u32, hot: u32, cont: u32, next: u32) {
+        let [a, n] = M::SCRATCH;
+        self.m.mov_imm(a, cell);
+        self.m.load(Width::B4, n, a, 0);
+        if !self.m.alu_imm(Alu::Add, false, n, n, 1) {
+            unreachable!("adding one always encodes");
+        }
+        self.m.store(Width::B4, n, a, 0);
+        if !self.m.cmp_imm(false, n, i64::from(at as i32)) {
+            self.m.mov_imm(a, i64::from(at));
+            self.m.cmp(false, n, a);
+        }
+        self.m.jcc(Cond::Eq, self.labels[hot as usize]);
+        if cont != next {
+            self.m.jmp(self.labels[cont as usize]);
+        }
+    }
+
     /// A call: arguments into the argument registers, the result out.
     pub(crate) fn call(&mut self, i: &Inst, addr: Option<usize>, params: &[Ty]) {
         let args = &self.lir.args[i.args_at as usize..(i.args_at + i.n_args) as usize];

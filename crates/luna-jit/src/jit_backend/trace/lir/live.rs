@@ -51,7 +51,11 @@ fn reset<T: Clone>(v: &mut Vec<T>, n: usize, x: T) {
 pub(crate) fn for_uses(lir: &Lir, i: &Inst, mut f: impl FnMut(u32)) {
     let nv = lir.value_ty.len() as u32;
     match i.op {
-        Op::Iconst(_) | Op::Fconst(_) | Op::StackAddr(..) | Op::StackLoad(..) => {}
+        Op::Iconst(_)
+        | Op::Fconst(_)
+        | Op::StackAddr(..)
+        | Op::StackLoad(..)
+        | Op::TierCount { .. } => {}
         Op::Bin(_) | Op::Icmp(_) | Op::Fcmp(_) | Op::Store(_) => {
             f(i.a);
             f(i.b);
@@ -108,6 +112,7 @@ fn succs(lir: &Lir, b: u32) -> [u32; 2] {
         Op::Jump => [i.a, NONE],
         // the guarded path is visited last, so it is laid out first
         Op::Brif(_) => [i.c, i.b],
+        Op::TierCount { .. } => [i.b, i.c],
         _ => [NONE, NONE],
     }
 }

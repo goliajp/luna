@@ -54,6 +54,7 @@ mod aot_data;
 mod block_params;
 mod compile;
 mod tiers;
+pub(crate) use tiers::tier_up_trace;
 use tiers::*;
 pub use tiers::{baseline_codegen_count, baseline_fallback};
 mod escape;

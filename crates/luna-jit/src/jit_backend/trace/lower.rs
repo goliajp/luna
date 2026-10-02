@@ -117,6 +117,9 @@ struct Lower<E: Emit> {
     /// Blocks the other way of a comparison jumps to, by the recorded op
     /// it rejoins at, with the registers the skipped ops write.
     alt_joins: std::collections::HashMap<usize, (Block, Vec<u32>)>,
+    /// The iteration count the back edge keeps for tiering up, and the
+    /// count to leave at.
+    tier_count: Option<(Box<TCellU32>, u32)>,
 }
 
 /// `always_codegen = false` leaves the function undefined in `module`
@@ -184,7 +187,11 @@ pub(super) fn lower_trace_lir(
                 h
             }
         };
-        let (e, emitted) = emit_trace(e, pl, h, escape)?;
+        let count_at = match opts.tier {
+            TraceTier::Auto => opts.tier_up_at,
+            _ => 0,
+        };
+        let (e, emitted) = emit_trace(e, pl, h, escape, count_at)?;
         Some((e, build_compiled(pl, emitted)))
     })?
 }
@@ -221,7 +228,7 @@ fn lower_clif<M: Module>(
     e.b.func.signature = sig;
     e.b.func.name = UserFuncName::user(0, fn_id.as_u32());
 
-    let (e, emitted) = emit_trace(e, pl, h, escape)?;
+    let (e, emitted) = emit_trace(e, pl, h, escape, 0)?;
     let ClifEmit { b: bcx, m: module } = e;
     bcx.finalize(module.target_config());
     drop_unused_block_params(&mut ctx.func);
@@ -282,11 +289,14 @@ fn lower_clif<M: Module>(
 
 /// Emits the whole trace through `bcx`: the entry block, the body and the
 /// tail. Returns the builder with what the emit pass decided.
+/// `count_at > 0` keeps an iteration count at the back edge (see
+/// [`Emit::tier_count`]).
 fn emit_trace<E: Emit>(
     mut bcx: E,
     pl: &Plan<'_>,
     h: Helpers,
     escape: EscapeAnalysis,
+    count_at: u32,
 ) -> Option<(E, Emitted)> {
     // track which AOT data slots
     // we've already `define_data`'d this lower call. `declare_data`
@@ -311,6 +321,9 @@ fn emit_trace<E: Emit>(
         flush_ctx,
         blocks,
     );
+    if count_at > 0 {
+        lower.tier_count = Some((Box::new(TCellU32::new(0)), count_at));
+    }
     let lw = &mut lower;
     emit_fold_precheck(lw, pl);
     emit_body(lw, pl)?;
@@ -327,6 +340,7 @@ fn emit_trace<E: Emit>(
         closure_seen,
         escape,
         global_side_trace_box,
+        tier_count,
         ..
     } = lower;
     Some((
@@ -344,6 +358,7 @@ fn emit_trace<E: Emit>(
             global_side_trace_box,
             downrec_link_for_compiled,
             downrec_multi_way_count_for_compiled,
+            tier_count,
         },
     ))
 }

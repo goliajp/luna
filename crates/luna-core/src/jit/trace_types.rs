@@ -108,7 +108,14 @@ pub struct CompileOptions {
     pub aot: bool,
     /// Which code generator compiles the trace.
     pub tier: TraceTier,
+    /// With [`TraceTier::Auto`]: the loop iterations plus entries after
+    /// which the trace is compiled again by the optimizing tier (`0`:
+    /// never).
+    pub tier_up_at: u32,
 }
+
+/// Default for [`CompileOptions::tier_up_at`].
+pub const TIER_UP_THRESHOLD: u32 = 8192;
 
 /// The code generator a trace is compiled with.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

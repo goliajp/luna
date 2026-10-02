@@ -52,7 +52,7 @@ impl Vm {
         // of cloning. The outer `ct: Rc<CompiledTrace>` is held
         // across the entire dispatch block so the fields outlive
         // all consumers.
-        let entry_fn = ct.entry;
+        let entry_fn = self.trace_entry_counted(&ct);
         let head_pc_val = ct.head_pc;
         let window_size = ct.window_size;
         let compile_entry_tags = &ct.entry_tags;
@@ -372,4 +372,49 @@ fn downrec_close_exit(continuation_pc: i64, head_pc_val: u32) -> bool {
     from_side_trace
         && (crate::jit::trace_types::is_downrec_sentinel(sentinel_code)
             || (sentinel_code == global_deopt_code && raw_body == head_pc_val as u64))
+}
+
+impl Vm {
+    /// The entry to call for `ct`, counting the entry towards its move to
+    /// the optimizing tier and making that move when it is due.
+    fn trace_entry_counted(
+        &mut self,
+        ct: &crate::jit::trace::CompiledTrace,
+    ) -> crate::jit::trace::TraceFn {
+        if let Some(t) = &ct.tier_up
+            && !t.tried.get()
+        {
+            let n = t.count.get().wrapping_add(1);
+            t.count.set(n);
+            if n >= t.at {
+                self.trace_tier_up(ct);
+            }
+        }
+        ct.current_entry()
+    }
+
+    /// Hands a hot trace to the optimizing tier and points everything that
+    /// enters it at the new code.
+    #[cold]
+    fn trace_tier_up(&mut self, ct: &crate::jit::trace::CompiledTrace) {
+        let Some(t) = &ct.tier_up else { return };
+        t.tried.set(true);
+        let entry = {
+            let jit = &mut self.jit;
+            let storage: &mut dyn crate::jit::JitStorage = jit.storage.as_mut();
+            jit.trace_compiler.tier_up(storage, ct)
+        };
+        let Some(entry) = entry else { return };
+        let p = entry as *const () as *const u8;
+        t.optimized.set(p);
+        for cell in &t.parent_cells {
+            let c = cell.get() as *const crate::jit::send_compat::TCellPtr;
+            if !c.is_null() {
+                // SAFETY: the cell belongs to the parent trace, which stays
+                // in its proto's `traces` as long as this child can run
+                unsafe { (*c).set(p) };
+            }
+        }
+        self.jit.counters.tiered_up += 1;
+    }
 }

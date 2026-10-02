@@ -61,6 +61,9 @@ fn compile_trace_baseline(
         return Ok(None);
     };
     let entry = lir::assemble(&lir, &mut cs.baseline_code);
+    if let Some(t) = &compiled.tier_up {
+        *t.source.borrow_mut() = Some(Box::new(lir.detach()));
+    }
     lir.give();
     let entry = entry?;
     BASELINE_CODEGEN.with(|c| c.set(c.get() + 1));
@@ -108,4 +111,28 @@ pub(super) fn compile_trace_cranelift(
         _entry_raw: ptr,
     });
     Some(compiled)
+}
+
+/// Compiles a baseline trace again with Cranelift, from the instructions the
+/// baseline tier ran (see `TraceCompiler::tier_up`).
+pub(crate) fn tier_up_trace(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    ct: &CompiledTrace,
+) -> Option<TraceFn> {
+    let source = ct.tier_up.as_ref()?.source.borrow_mut().take()?;
+    let lir = source.downcast::<lir::Lir>().ok()?;
+    let mut module =
+        crate::jit_backend::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
+    let fn_id = lir::define_clif(&lir, &mut *module)?;
+    module.finalize_definitions().ok()?;
+    TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
+    let ptr = module.get_finalized_function(fn_id);
+    let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
+    cs.trace_handles.push(TraceHandle {
+        _module: module.publish(),
+        _entry_raw: ptr,
+    });
+    // SAFETY: `define_clif` declares the `TraceFn` signature, `(i64) -> i64`
+    // in the platform calling convention, and `storage` now owns the module
+    Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) })
 }

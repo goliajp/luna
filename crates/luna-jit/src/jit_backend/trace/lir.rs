@@ -8,6 +8,7 @@ mod alloc;
 mod build;
 mod cg;
 mod cg_ops;
+mod clif;
 mod code;
 mod dump;
 mod live;
@@ -20,6 +21,7 @@ mod a64;
 #[cfg(target_arch = "x86_64")]
 mod x64;
 
+pub(crate) use clif::define as define_clif;
 pub(crate) use code::{CodeArena, assemble};
 
 /// No value / no block.
@@ -135,6 +137,12 @@ pub(crate) enum Op {
     CallIndirect,
     /// Returns value `a`.
     Return,
+    /// `*(u32 *)cell += 1`, then to block `b` when it equals `at`, else
+    /// to block `c`.
+    TierCount {
+        cell: i64,
+        at: u32,
+    },
     /// The value of variable `a`.
     VarRead,
     /// Variable `a` takes value `b`.
@@ -267,5 +275,36 @@ impl Lir {
 
     pub(crate) fn give(self) {
         SPARE.with(|s| *s.borrow_mut() = Some(self));
+    }
+}
+
+impl Lir {
+    /// The parts of `self` code generation reads, in buffers of their own
+    /// (kept for the optimizing tier).
+    pub(crate) fn detach(&self) -> Lir {
+        Lir {
+            insts: self.insts.clone(),
+            blocks: self
+                .blocks
+                .iter()
+                .map(|b| BlockData {
+                    first: b.first,
+                    last: b.last,
+                    params_at: b.params_at,
+                    n_params: b.n_params,
+                    ..BlockData::default()
+                })
+                .collect(),
+            value_ty: self.value_ty.clone(),
+            var_ty: self.var_ty.clone(),
+            args: self.args.clone(),
+            slots: self.slots.clone(),
+            funcs: self.funcs.clone(),
+            sigs: self.sigs.clone(),
+            param_tys: self.param_tys.clone(),
+            bparams: self.bparams.clone(),
+            arg0: self.arg0,
+            ..Lir::new()
+        }
     }
 }

@@ -220,6 +220,7 @@ pub(crate) fn try_compile_trace(
         body_writes: Box::from([]),
         downrec_link: None,
         downrec_multi_way_count: 0,
+        tier_up: None,
     })
 }
 

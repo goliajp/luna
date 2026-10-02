@@ -193,5 +193,6 @@ pub(super) fn begin_body<E: Emit>(
         head_closure_var,
         known_int,
         alt_joins: std::collections::HashMap::new(),
+        tier_count: None,
     }
 }
