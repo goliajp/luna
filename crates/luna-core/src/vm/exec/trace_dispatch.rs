@@ -108,6 +108,7 @@ impl Vm {
             compile_entry_tags,
             &mut entry_tags,
             &mut reg_state,
+            !ct.has_any_side_wired.get(),
         );
 
         if dispatch_ok {
@@ -210,6 +211,10 @@ impl Vm {
     /// Copy the frame's registers into the trace's entry buffer. `false` when a
     /// register the trace checks has a tag other than the one the trace was
     /// compiled for, or one that cannot be passed as a raw payload.
+    /// `checked_only`: copy only the registers the trace checks. The others
+    /// are held on the stack (see the lowering's `StackHeld`), and only a
+    /// side trace run from one of its exits reads them, or their entry tags,
+    /// from the buffers.
     fn trace_marshal_in(
         &self,
         base_us: usize,
@@ -217,6 +222,7 @@ impl Vm {
         compile_entry_tags: &[u8],
         entry_tags: &mut [u8],
         reg_state: &mut [i64],
+        checked_only: bool,
     ) -> bool {
         use crate::jit::trace::ENTRY_TAG_ANY;
         use crate::runtime::value::raw;
@@ -232,6 +238,9 @@ impl Vm {
         let regs = &mut reg_state[..max_stack];
         let tags = &mut entry_tags[..max_stack];
         for i in 0..max_stack {
+            if checked_only && compile_entry_tags.get(i) == Some(&ENTRY_TAG_ANY) {
+                continue;
+            }
             let (tag, payload) = frame[i].unpack();
             // SAFETY: the raw payload of the slot's own value.
             regs[i] = unsafe { payload.zero as i64 };
