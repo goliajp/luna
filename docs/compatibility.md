@@ -323,6 +323,10 @@ messages. What still differs does so on purpose:
 - **Local time.** luna-core links no C library timezone code:
   `os.date` without a leading `!` formats UTC, and `os.time`'s valid
   range is computed rather than taken from the host's `mktime`.
+  A true `isdst` in `os.time`'s table moves the result an hour back,
+  as newer glibc's `mktime` does in UTC; PUC's result here depends on
+  the C library (older glibc reports that the time cannot be
+  represented).
 - **`collectgarbage("step")`'s result** says whether the step finished a
   cycle. luna's collector is its own, so this follows luna's progress,
   not PUC's. Everything else about `collectgarbage` — options per
