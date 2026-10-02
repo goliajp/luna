@@ -2,7 +2,9 @@ use super::*;
 use cranelift_codegen::ir::MemFlagsData;
 
 /// `t[key]` for an integer key, typed `want`: from the array part when
-/// the slot is there and holds that type, else through the checked helper.
+/// the slot is there and holds that type; otherwise the trace leaves for
+/// the interpreter, which runs the read. A helper call in its place
+/// doubled the IR a read takes, and Cranelift's time with it.
 pub(super) fn array_read<M: Module>(
     lw: &mut Lower<'_, '_, M>,
     pl: &Plan<'_>,
@@ -11,9 +13,6 @@ pub(super) fn array_read<M: Module>(
     key: Value,
     want: u8,
 ) -> Value {
-    let OpHelpers {
-        get_int_checked_id, ..
-    } = lw.h.op;
     let OpCx { i, rop, .. } = *oc;
     let hit = lw.bcx.create_block();
     lw.bcx.append_block_param(hit, types::I64);
@@ -31,8 +30,7 @@ pub(super) fn array_read<M: Module>(
     lw.bcx.ins().jump(merge, &[fast.into()]);
     lw.bcx.switch_to_block(miss);
     lw.bcx.seal_block(miss);
-    let slow = checked_read!(lw, pl, get_int_checked_id, t, key, want, rop.pc, i);
-    lw.bcx.ins().jump(merge, &[slow.into()]);
+    guard_exit(lw, pl, rop.pc, i);
     lw.bcx.switch_to_block(merge);
     lw.bcx.seal_block(merge);
     lw.bcx.block_params(merge)[0]
