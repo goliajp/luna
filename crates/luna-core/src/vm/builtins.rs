@@ -3,7 +3,7 @@
 
 use std::io::Write;
 
-use crate::runtime::Value;
+use crate::runtime::{Gc, LuaStr, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::error::LuaError;
@@ -678,25 +678,30 @@ pub(crate) fn nat_load(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             Err(msg) => Ok(vm.nat_return(fs, &[Value::Nil, msg])),
         };
     }
-    let text = argcheck::to_str_bytes(vm, a.get(vm, 0));
+    let first = a.get(vm, 0);
     let mode = load_mode(vm, a, 2)?;
-    let (src, name) = match text {
-        Some(src) => {
-            let name = argcheck::opt_string(vm, a, 1)?;
-            let name = name.map_or_else(|| src.clone(), |n| n.as_bytes().to_vec());
-            (src, name)
-        }
-        None => {
-            let name = argcheck::opt_string(vm, a, 1)?;
-            let name = name.map_or_else(|| b"=(load)".to_vec(), |n| n.as_bytes().to_vec());
-            let reader = argcheck::check_function(vm, a, 0)?;
-            match read_chunk(vm, reader)? {
-                Ok(src) => (src, name),
-                Err(msg) => return Ok(vm.nat_return(fs, &[Value::Nil, msg])),
-            }
-        }
+    // 5.2-5.4 default to "bt"; 5.5 has no default and allows both
+    let mode = match &mode {
+        Some(m) => Some(m.as_bytes()),
+        None if vm.version() < LuaVersion::Lua55 => Some(&b"bt"[..]),
+        None => None,
     };
-    load_chunk(vm, a, &src, &name, mode.as_deref())
+    let name = argcheck::opt_string(vm, a, 1)?;
+    // a string chunk is read in place: the argument keeps it alive
+    if let Value::Str(src) = first {
+        let name = name.unwrap_or(src);
+        return load_chunk(vm, a, src.as_bytes(), name.as_bytes(), mode);
+    }
+    if let Some(src) = argcheck::to_str_bytes(vm, first) {
+        let name = name.map_or_else(|| src.clone(), |n| n.as_bytes().to_vec());
+        return load_chunk(vm, a, &src, &name, mode);
+    }
+    let name = name.map_or_else(|| b"=(load)".to_vec(), |n| n.as_bytes().to_vec());
+    let reader = argcheck::check_function(vm, a, 0)?;
+    match read_chunk(vm, reader)? {
+        Ok(src) => load_chunk(vm, a, &src, &name, mode),
+        Err(msg) => Ok(vm.nat_return(fs, &[Value::Nil, msg])),
+    }
 }
 
 /// 5.1 `loadstring(s [, chunkname])`: the source is a string (or a number,
@@ -711,15 +716,12 @@ fn nat_loadstring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// The `mode` argument of 5.2+ `load`: `luaL_optstring` with the dialect's
 /// default ("bt" up to 5.4, none on 5.5, where an absent mode allows both).
 /// 5.5 refuses 'B' (a fixed-buffer chunk, which Lua code cannot supply).
-fn load_mode(vm: &mut Vm, a: Args, i: u32) -> Result<Option<Vec<u8>>, LuaError> {
-    let mode = argcheck::opt_string(vm, a, i)?.map(|m| m.as_bytes().to_vec());
-    if vm.version() >= LuaVersion::Lua55 {
-        if mode.as_ref().is_some_and(|m| m.contains(&b'B')) {
-            return Err(arg_error(vm, i + 1, "invalid mode"));
-        }
-        return Ok(mode);
+fn load_mode(vm: &mut Vm, a: Args, i: u32) -> Result<Option<Gc<LuaStr>>, LuaError> {
+    let mode = argcheck::opt_string(vm, a, i)?;
+    if vm.version() >= LuaVersion::Lua55 && mode.is_some_and(|m| m.as_bytes().contains(&b'B')) {
+        return Err(arg_error(vm, i + 1, "invalid mode"));
     }
-    Ok(Some(mode.unwrap_or_else(|| b"bt".to_vec())))
+    Ok(mode)
 }
 
 /// Drain a `load` reader: it is called until it returns nil, no value or
