@@ -42,7 +42,7 @@ impl Vm {
             tbc: Vec::new(),
             top: 0,
             globals,
-            type_mt: [None; 5],
+            type_mt: [None; 7],
             mm_names,
             parse_scratch: Default::default(),
             compile_scratch: Default::default(),
