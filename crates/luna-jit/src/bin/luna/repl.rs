@@ -289,7 +289,7 @@ fn l_print(interp: &mut Interp, vals: Vec<Value>) {
     }
     let key = interp.str_value("print");
     let print = interp.vm.globals().get(key);
-    if let Err(e) = interp.vm.call_value(print, &vals) {
+    if let Err(e) = interp.in_pmain(print, Value::Nil, &vals) {
         // lua_pushfstring renders a NULL string as "(null)"
         let err = lua_tostring(&mut interp.vm, e.0).unwrap_or_else(|| b"(null)".to_vec());
         let mut msg = b"error calling 'print' (".to_vec();
