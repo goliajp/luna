@@ -84,14 +84,14 @@ impl Vm {
                         .traces
                         .borrow()
                         .iter()
-                        .find(|t| t.entry as *const () as *const u8 == fn_ptr)
+                        .find(|t| t.current_entry() as *const () as *const u8 == fn_ptr)
                         .cloned()
                 })
                 .flatten();
             if let Some(child) = child
                 && self.child_reads_stack_held_ok(base_us, entry_tags, &child.entry_tags)
             {
-                let cent = child.entry;
+                let cent = child.current_entry();
                 let child_raw_ret = {
                     // chunk_compiler.enter
                     // (side-trace entry).

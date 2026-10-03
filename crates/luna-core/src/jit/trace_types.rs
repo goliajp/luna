@@ -106,4 +106,47 @@ pub struct CompileOptions {
     /// any AOT trace dispatches. JIT path is unaffected — same
     /// `iconst` it always emitted.
     pub aot: bool,
+    /// Which code generator compiles the trace.
+    pub tier: TraceTier,
+    /// With [`TraceTier::Auto`]: the loop iterations plus entries after
+    /// which the trace is compiled again by the optimizing tier (`0`:
+    /// never).
+    pub tier_up_at: u32,
+}
+
+/// Whether a register holding a value of `tag` (a `raw` tag) can enter a
+/// trace that reads it: only a tag whose payload stands for the value.
+pub fn entry_tag_enterable(tag: u8) -> bool {
+    use crate::runtime::value::raw;
+    const PAYLOAD_TAGS: u32 = 1 << raw::INT
+        | 1 << raw::FLOAT
+        | 1 << raw::TABLE
+        | 1 << raw::CLOSURE
+        | 1 << raw::NATIVE
+        | 1 << raw::STR
+        | 1 << raw::NIL;
+    PAYLOAD_TAGS >> tag & 1 != 0
+}
+
+/// Default for [`CompileOptions::tier_up_at`].
+pub const TIER_UP_THRESHOLD: u32 = 16384;
+
+/// A trace whose function has been called again since the trace was
+/// compiled moves to the optimizing tier after this fraction of
+/// [`CompileOptions::tier_up_at`]: like HotSpot's tiered policy, which
+/// weighs invocations as well as back edges, it tells code that keeps
+/// being reused from a long loop that runs once.
+pub const TIER_UP_REUSED_DIVISOR: u32 = 4;
+
+/// The code generator a trace is compiled with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TraceTier {
+    /// The baseline tier first, the optimizing one once the trace is hot.
+    #[default]
+    Auto,
+    /// Only the baseline code generator (the optimizing one still takes a
+    /// trace the baseline cannot handle).
+    Baseline,
+    /// Only the optimizing code generator (Cranelift).
+    Optimizing,
 }

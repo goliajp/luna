@@ -1,11 +1,7 @@
 use super::*;
 
 /// Inlined calls and returns.
-pub(super) fn emit_call_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
-    pl: &Plan<'_>,
-    oc: &OpCx<'_>,
-) -> Option<()> {
+pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<()> {
     let Plan {
         effective_end,
         self_link_idx_opt,
@@ -17,7 +13,7 @@ pub(super) fn emit_call_op<M: Module>(
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         // inline self-recursive Call: emit nothing.
         // The recorder's depth bump (next op at depth+1) drives the
@@ -43,7 +39,7 @@ pub(super) fn emit_call_op<M: Module>(
             let head_cl = match lw.head_closure_var {
                 Some(var) => lw.bcx.use_var(var),
                 None => {
-                    let func_ref = lw.module.declare_func_in_func(head_closure_id, lw.bcx.func);
+                    let func_ref = lw.bcx.import_func(head_closure_id);
                     let call = lw.bcx.ins().call(func_ref, &[]);
                     let v = lw.bcx.inst_results(call)[0];
                     let var = lw.bcx.declare_var(types::I64);

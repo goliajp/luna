@@ -38,22 +38,22 @@ pub(super) struct RuntimeHelpers {
     pub(super) mat_sunk_id: FuncId,
 }
 
-/// Every helper a trace calls, declared in `module` once per trace.
+/// Every helper a trace calls, declared in `bcx` once per trace.
 #[derive(Clone, Copy)]
-pub(super) struct Helpers {
+pub(in crate::jit_backend::trace) struct Helpers {
     pub(super) op: OpHelpers,
     pub(super) rt: RuntimeHelpers,
 }
 
-pub(super) fn declare_helpers<M: Module>(module: &mut M) -> Option<Helpers> {
+pub(super) fn declare_helpers<E: Emit>(bcx: &mut E) -> Option<Helpers> {
     Some(Helpers {
-        op: declare_op_helpers(module)?,
-        rt: declare_runtime_helpers(module)?,
+        op: declare_op_helpers(bcx)?,
+        rt: declare_runtime_helpers(bcx)?,
     })
 }
 
-fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
-    // `module` arrives as `&mut M` from the
+fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
+    // `bcx` arrives as `&mut M` from the
     // caller. The JIT wrapper [`try_compile_trace_with_options`]
     // constructs a `JITModule` via [`build_trace_jit_module`]; the AOT
     // pipeline (luna-aot) feeds an `ObjectModule` of its own. The
@@ -63,16 +63,16 @@ fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
     // Helper signatures — declared up front so emit can look them
     // up without re-declaring per call site. Unused declarations
     // get tree-shaken at optimization.
-    let mut new_table_sig = module.make_signature();
+    let mut new_table_sig = bcx.make_signature();
     new_table_sig.returns.push(AbiParam::new(types::I64));
-    let new_table_id = module
+    let new_table_id = bcx
         .declare_function("luna_jit_new_table", Linkage::Import, &new_table_sig)
         .ok()?;
 
     // `fn luna_jit_table_set_{int,field}_checked(t, key, val_raw, val_tag)
     // -> stored` and `fn luna_jit_table_set_checked(t, key_raw, key_tag,
     // val_raw, val_tag) -> stored`
-    let mut set_sig = module.make_signature();
+    let mut set_sig = bcx.make_signature();
     for _ in 0..4 {
         set_sig.params.push(AbiParam::new(types::I64));
     }
@@ -80,54 +80,54 @@ fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
     let mut set_any_sig = set_sig.clone();
     set_any_sig.params.push(AbiParam::new(types::I64));
     let set_ids = StoreHelpers {
-        int_key: module
+        int_key: bcx
             .declare_function("luna_jit_table_set_int_checked", Linkage::Import, &set_sig)
             .ok()?,
-        str_key: module
+        str_key: bcx
             .declare_function(
                 "luna_jit_table_set_field_checked",
                 Linkage::Import,
                 &set_sig,
             )
             .ok()?,
-        any_key: module
+        any_key: bcx
             .declare_function("luna_jit_table_set_checked", Linkage::Import, &set_any_sig)
             .ok()?,
     };
 
     // `fn luna_jit_table_get_field(t, key_ptr) -> raw`.
-    let mut get_field_sig = module.make_signature();
+    let mut get_field_sig = bcx.make_signature();
     get_field_sig.params.push(AbiParam::new(types::I64));
     get_field_sig.params.push(AbiParam::new(types::I64));
     get_field_sig.returns.push(AbiParam::new(types::I64));
-    let get_field_id = module
+    let get_field_id = bcx
         .declare_function("luna_jit_table_get_field", Linkage::Import, &get_field_sig)
         .ok()?;
 
     // `fn luna_jit_op_get_tab_up(upval_idx, key_ptr) -> raw`.
-    let mut get_tab_up_sig = module.make_signature();
+    let mut get_tab_up_sig = bcx.make_signature();
     get_tab_up_sig.params.push(AbiParam::new(types::I64));
     get_tab_up_sig.params.push(AbiParam::new(types::I64));
     get_tab_up_sig.returns.push(AbiParam::new(types::I64));
-    let get_tab_up_id = module
+    let get_tab_up_id = bcx
         .declare_function("luna_jit_op_get_tab_up", Linkage::Import, &get_tab_up_sig)
         .ok()?;
 
     // Checked table reads (`luna_jit_table_get_field_checked` et al.):
     // `fn(table_or_upval, key, want_tag, out: *mut i64) -> ok`.
-    let mut get_checked_sig = module.make_signature();
+    let mut get_checked_sig = bcx.make_signature();
     for _ in 0..4 {
         get_checked_sig.params.push(AbiParam::new(types::I64));
     }
     get_checked_sig.returns.push(AbiParam::new(types::I64));
-    let get_field_checked_id = module
+    let get_field_checked_id = bcx
         .declare_function(
             "luna_jit_table_get_field_checked",
             Linkage::Import,
             &get_checked_sig,
         )
         .ok()?;
-    let get_tab_up_checked_id = module
+    let get_tab_up_checked_id = bcx
         .declare_function(
             "luna_jit_op_get_tab_up_checked",
             Linkage::Import,
@@ -137,30 +137,30 @@ fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
 
     // `fn luna_jit_op_closure(proto_idx: i64) -> i64`.
     // Returns the new Gc<LuaClosure> raw payload bits.
-    let mut op_closure_sig = module.make_signature();
+    let mut op_closure_sig = bcx.make_signature();
     op_closure_sig.params.push(AbiParam::new(types::I64));
     op_closure_sig.returns.push(AbiParam::new(types::I64));
-    let op_closure_id = module
+    let op_closure_id = bcx
         .declare_function("luna_jit_op_closure", Linkage::Import, &op_closure_sig)
         .ok()?;
 
     // `fn luna_jit_spill_to_stack(slot_offset, tag, raw_bits)`.
     // Writes vm.stack[base + slot_offset] = Value::pack(tag, raw).
-    let mut spill_sig = module.make_signature();
+    let mut spill_sig = bcx.make_signature();
     spill_sig.params.push(AbiParam::new(types::I64));
     spill_sig.params.push(AbiParam::new(types::I64));
     spill_sig.params.push(AbiParam::new(types::I64));
-    let spill_id = module
+    let spill_id = bcx
         .declare_function("luna_jit_spill_to_stack", Linkage::Import, &spill_sig)
         .ok()?;
 
     // `fn luna_jit_op_close(start_offset: i64) -> i64`.
     // Returns 0 (continue) or 1 (deopt — handler would run or
     // pre-existing pending_err).
-    let mut op_close_sig = module.make_signature();
+    let mut op_close_sig = bcx.make_signature();
     op_close_sig.params.push(AbiParam::new(types::I64));
     op_close_sig.returns.push(AbiParam::new(types::I64));
-    let op_close_id = module
+    let op_close_id = bcx
         .declare_function("luna_jit_op_close", Linkage::Import, &op_close_sig)
         .ok()?;
 
@@ -172,24 +172,24 @@ fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
     // cranelift `stack_load` IR (skips per-slot `stack_load` /
     // `stack_tag` helper calls — 4 helpers per iter would be the
     // bottleneck).
-    let mut op_tforcall_sig = module.make_signature();
+    let mut op_tforcall_sig = bcx.make_signature();
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
     op_tforcall_sig.returns.push(AbiParam::new(types::I64));
-    let op_tforcall_id = module
+    let op_tforcall_id = bcx
         .declare_function("luna_jit_op_tforcall", Linkage::Import, &op_tforcall_sig)
         .ok()?;
 
     // `fn luna_jit_stack_load(slot) -> i64` returns
     // raw bits of vm.stack[trace_head_frame.base + slot]. Used to
     // reload trace IR Variables after TForCall mutates vm.stack.
-    let mut stack_load_sig = module.make_signature();
+    let mut stack_load_sig = bcx.make_signature();
     stack_load_sig.params.push(AbiParam::new(types::I64));
     stack_load_sig.returns.push(AbiParam::new(types::I64));
-    let stack_load_id = module
+    let stack_load_id = bcx
         .declare_function("luna_jit_stack_load", Linkage::Import, &stack_load_sig)
         .ok()?;
 
@@ -197,10 +197,10 @@ fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
     // the raw::* tag byte of vm.stack[trace_head_frame.base + slot].
     // TForLoop tail emit dispatches on this to pick exit-on-Nil /
     // continue-on-Int / deopt-on-other.
-    let mut stack_tag_sig = module.make_signature();
+    let mut stack_tag_sig = bcx.make_signature();
     stack_tag_sig.params.push(AbiParam::new(types::I64));
     stack_tag_sig.returns.push(AbiParam::new(types::I64));
-    let stack_tag_id = module
+    let stack_tag_id = bcx
         .declare_function("luna_jit_stack_tag", Linkage::Import, &stack_tag_sig)
         .ok()?;
 
@@ -208,11 +208,11 @@ fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
     // 0 on success (result at vm.stack[base+a]) or -1 on deopt
     // (metamethod path, type error, length overflow,
     // pre-existing pending_err).
-    let mut op_concat_sig = module.make_signature();
+    let mut op_concat_sig = bcx.make_signature();
     op_concat_sig.params.push(AbiParam::new(types::I64));
     op_concat_sig.params.push(AbiParam::new(types::I64));
     op_concat_sig.returns.push(AbiParam::new(types::I64));
-    let op_concat_id = module
+    let op_concat_id = bcx
         .declare_function("luna_jit_op_concat", Linkage::Import, &op_concat_sig)
         .ok()?;
 
@@ -234,22 +234,22 @@ fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
 }
 
 /// An imported helper taking `n_params` `i64`s and returning one.
-fn declare_i64_import<M: Module>(module: &mut M, name: &str, n_params: usize) -> Option<FuncId> {
-    let mut sig = module.make_signature();
+fn declare_i64_import<E: Emit>(bcx: &mut E, name: &str, n_params: usize) -> Option<FuncId> {
+    let mut sig = bcx.make_signature();
     for _ in 0..n_params {
         sig.params.push(AbiParam::new(types::I64));
     }
     sig.returns.push(AbiParam::new(types::I64));
-    module.declare_function(name, Linkage::Import, &sig).ok()
+    bcx.declare_function(name, Linkage::Import, &sig).ok()
 }
 
-fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> {
+fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
     // `fn luna_jit_str_buf_acquire() -> i64`.
     // Returns a `*mut Vec<u8>` (boxed-leaked); used by buffered
     // accumulator emit at trace fn entry.
-    let mut str_buf_acquire_sig = module.make_signature();
+    let mut str_buf_acquire_sig = bcx.make_signature();
     str_buf_acquire_sig.returns.push(AbiParam::new(types::I64));
-    let str_buf_acquire_id = module
+    let str_buf_acquire_id = bcx
         .declare_function(
             "luna_jit_str_buf_acquire",
             Linkage::Import,
@@ -258,9 +258,9 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
         .ok()?;
 
     // `fn luna_jit_str_buf_release(buf: i64)`.
-    let mut str_buf_release_sig = module.make_signature();
+    let mut str_buf_release_sig = bcx.make_signature();
     str_buf_release_sig.params.push(AbiParam::new(types::I64));
-    let str_buf_release_id = module
+    let str_buf_release_id = bcx
         .declare_function(
             "luna_jit_str_buf_release",
             Linkage::Import,
@@ -269,11 +269,11 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
         .ok()?;
 
     // `fn luna_jit_str_buf_extend(buf, str_ptr) -> i64`.
-    let mut str_buf_extend_sig = module.make_signature();
+    let mut str_buf_extend_sig = bcx.make_signature();
     str_buf_extend_sig.params.push(AbiParam::new(types::I64));
     str_buf_extend_sig.params.push(AbiParam::new(types::I64));
     str_buf_extend_sig.returns.push(AbiParam::new(types::I64));
-    let str_buf_extend_id = module
+    let str_buf_extend_id = bcx
         .declare_function(
             "luna_jit_str_buf_extend",
             Linkage::Import,
@@ -282,10 +282,10 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
         .ok()?;
 
     // `fn luna_jit_str_buf_intern(buf) -> i64`.
-    let mut str_buf_intern_sig = module.make_signature();
+    let mut str_buf_intern_sig = bcx.make_signature();
     str_buf_intern_sig.params.push(AbiParam::new(types::I64));
     str_buf_intern_sig.returns.push(AbiParam::new(types::I64));
-    let str_buf_intern_id = module
+    let str_buf_intern_id = bcx
         .declare_function(
             "luna_jit_str_buf_intern",
             Linkage::Import,
@@ -302,10 +302,10 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
 
     // `fn luna_jit_stack_update_raw(slot, raw)`.
     // Used in Op::Concat operand spill for Unset-kind slots.
-    let mut update_raw_sig = module.make_signature();
+    let mut update_raw_sig = bcx.make_signature();
     update_raw_sig.params.push(AbiParam::new(types::I64));
     update_raw_sig.params.push(AbiParam::new(types::I64));
-    let update_raw_id = module
+    let update_raw_id = bcx
         .declare_function(
             "luna_jit_stack_update_raw",
             Linkage::Import,
@@ -313,26 +313,26 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
         )
         .ok()?;
 
-    let mut get_int_sig = module.make_signature();
+    let mut get_int_sig = bcx.make_signature();
     get_int_sig.params.push(AbiParam::new(types::I64));
     get_int_sig.params.push(AbiParam::new(types::I64));
     get_int_sig.returns.push(AbiParam::new(types::I64));
-    let get_int_id = module
+    let get_int_id = bcx
         .declare_function("luna_jit_table_get_int", Linkage::Import, &get_int_sig)
         .ok()?;
 
-    let suppress_admit_id = module
+    let suppress_admit_id = bcx
         .declare_function(
             "luna_jit_suppress_trace_admit",
             Linkage::Import,
-            &module.make_signature(),
+            &bcx.make_signature(),
         )
         .ok()?;
-    let mut math_fn_check_sig = module.make_signature();
+    let mut math_fn_check_sig = bcx.make_signature();
     math_fn_check_sig.params.push(AbiParam::new(types::I64));
     math_fn_check_sig.params.push(AbiParam::new(types::I64));
     math_fn_check_sig.returns.push(AbiParam::new(types::I64));
-    let math_fn_check_id = module
+    let math_fn_check_id = bcx
         .declare_function(
             "luna_jit_math_fn_is_library",
             Linkage::Import,
@@ -340,19 +340,19 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
         )
         .ok()?;
 
-    let mut str_sub_sig = module.make_signature();
+    let mut str_sub_sig = bcx.make_signature();
     for _ in 0..3 {
         str_sub_sig.params.push(AbiParam::new(types::I64));
     }
     str_sub_sig.returns.push(AbiParam::new(types::I64));
-    let str_sub_id = module
+    let str_sub_id = bcx
         .declare_function("luna_jit_str_sub", Linkage::Import, &str_sub_sig)
         .ok()?;
 
-    let mut len_sig = module.make_signature();
+    let mut len_sig = bcx.make_signature();
     len_sig.params.push(AbiParam::new(types::I64));
     len_sig.returns.push(AbiParam::new(types::I64));
-    let len_checked_id = module
+    let len_checked_id = bcx
         .declare_function("luna_jit_table_len_checked", Linkage::Import, &len_sig)
         .ok()?;
 
@@ -362,27 +362,27 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
     // dispatcher's exit_tags must use the Untouched fallback
     // (carry the entry tag through) since we can't statically
     // determine what kind of Value an upval holds.
-    let mut upval_get_sig = module.make_signature();
+    let mut upval_get_sig = bcx.make_signature();
     upval_get_sig.params.push(AbiParam::new(types::I64));
     upval_get_sig.returns.push(AbiParam::new(types::I64));
-    let upval_get_checked_id = declare_i64_import(module, "luna_jit_upval_get_checked", 3)?;
-    let upval_get_id = module
+    let upval_get_checked_id = declare_i64_import(bcx, "luna_jit_upval_get_checked", 3)?;
+    let upval_get_id = bcx
         .declare_function("luna_jit_upval_get", Linkage::Import, &upval_get_sig)
         .ok()?;
-    let mut head_closure_sig = module.make_signature();
+    let mut head_closure_sig = bcx.make_signature();
     head_closure_sig.returns.push(AbiParam::new(types::I64));
-    let head_closure_id = module
+    let head_closure_id = bcx
         .declare_function("luna_jit_head_closure", Linkage::Import, &head_closure_sig)
         .ok()?;
 
     // `fn luna_jit_trace_materialize_frames(n: u64,
     // metas: *const FrameMaterializeInfo) -> i64`. Called by the
     // lowerer's cmp@d>0 emit.
-    let mut materialize_sig = module.make_signature();
+    let mut materialize_sig = bcx.make_signature();
     materialize_sig.params.push(AbiParam::new(types::I64));
     materialize_sig.params.push(AbiParam::new(types::I64));
     materialize_sig.returns.push(AbiParam::new(types::I64));
-    let materialize_id = module
+    let materialize_id = bcx
         .declare_function(
             "luna_jit_trace_materialize_frames",
             Linkage::Import,
@@ -401,7 +401,7 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
     // 7 i64 args:
     //   cap, arr_raws, arr_kinds, n_hash, hash_keys, hash_raws, hash_kinds
     // Returns: heap table raw payload (i64 Gc<Table> ptr).
-    let mut mat_sunk_sig = module.make_signature();
+    let mut mat_sunk_sig = bcx.make_signature();
     mat_sunk_sig.params.push(AbiParam::new(types::I64));
     mat_sunk_sig.params.push(AbiParam::new(types::I64));
     mat_sunk_sig.params.push(AbiParam::new(types::I64));
@@ -410,7 +410,7 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
     mat_sunk_sig.params.push(AbiParam::new(types::I64));
     mat_sunk_sig.params.push(AbiParam::new(types::I64));
     mat_sunk_sig.returns.push(AbiParam::new(types::I64));
-    let mat_sunk_id = module
+    let mat_sunk_id = bcx
         .declare_function(
             "luna_jit_materialize_sunk_table",
             Linkage::Import,

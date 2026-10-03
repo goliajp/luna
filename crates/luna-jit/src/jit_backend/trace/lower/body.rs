@@ -2,7 +2,7 @@ use super::*;
 
 /// The emit pass over the body: enters the loop head and lowers each
 /// recorded op up to `effective_end`.
-pub(super) fn emit_body<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>) -> Option<()> {
+pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()> {
     let Plan {
         record,
         max_stack,
@@ -29,6 +29,9 @@ pub(super) fn emit_body<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>) -> 
     );
     // the virtual register of a constant-operand op (see `vconsts`)
     let kvar = lw.bcx.declare_var(types::I64);
+    // this op's register window (a copy, so the emit code can take `lw`
+    // mutably while it reads it), plus `kvar` for a constant operand
+    let mut regs_w: Vec<Variable> = Vec::with_capacity(max_stack + 1);
     checkpoint("pre:main-emit-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
         // Commit the previous op's register writes to reg_state.
@@ -61,27 +64,22 @@ pub(super) fn emit_body<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>) -> 
         // cross-window write) — emit code reads/writes via the full
         // Vec with explicit `off + X` indexing.
         let off = pl.op_offsets[i] as usize;
-        // a copy, so the emit code can take `lw` mutably while it reads `regs`
-        let regs_w: Vec<Variable> = lw.regs_full[off..off + max_stack].to_vec();
-        let regs: &[Variable] = &regs_w;
+        regs_w.clear();
+        regs_w.extend_from_slice(&lw.regs_full[off..off + max_stack]);
         // a constant operand: its value in `kvar`, which `regs` gets as
         // register `max_stack`
-        let regs_v: Vec<Variable>;
-        let regs: &[Variable] = match vk {
-            Some(k) => {
-                let v = match k {
-                    VConst::Int(n) => lw.bcx.ins().iconst(types::I64, n),
-                    VConst::Float(f) => {
-                        let fv = lw.bcx.ins().f64const(f);
-                        lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), fv)
-                    }
-                };
-                lw.bcx.def_var(kvar, v);
-                regs_v = regs.iter().copied().chain([kvar]).collect();
-                &regs_v
-            }
-            None => regs,
-        };
+        if let Some(k) = vk {
+            let v = match k {
+                VConst::Int(n) => lw.bcx.ins().iconst(types::I64, n),
+                VConst::Float(f) => {
+                    let fv = lw.bcx.ins().f64const(f);
+                    lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), fv)
+                }
+            };
+            lw.bcx.def_var(kvar, v);
+            regs_w.push(kvar);
+        }
+        let regs: &[Variable] = &regs_w;
         // body emit handler for the 4-op
         // string-accumulator idiom. Skip the 2 pre-Moves + the
         // post-Move (they're collapsed into the buffered emit).
@@ -98,9 +96,7 @@ pub(super) fn emit_body<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>) -> 
                 // Read piece slot raw bits + buf ptr.
                 let piece_raw = lw.bcx.use_var(regs[ba.piece_slot as usize]);
                 let buf_ptr = lw.bcx.use_var(fctx.buf_var);
-                let extend_ref = lw
-                    .module
-                    .declare_func_in_func(str_buf_extend_id, lw.bcx.func);
+                let extend_ref = lw.bcx.import_func(str_buf_extend_id);
                 let call_inst = lw.bcx.ins().call(extend_ref, &[buf_ptr, piece_raw]);
                 let status = lw.bcx.inst_results(call_inst)[0];
                 // Branch on -1 (signed less than 0) → deopt.
@@ -147,7 +143,7 @@ pub(super) fn emit_body<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>) -> 
             vk,
             rc_const,
             off,
-            regs: regs.to_vec(),
+            regs,
             ins: rop.inst,
             op: rop.inst.op(),
             max_stack,

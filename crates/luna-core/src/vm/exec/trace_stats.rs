@@ -115,6 +115,11 @@ impl Vm {
         self.jit.counters.dispatched
     }
 
+    /// Traces moved from the baseline to the optimizing tier.
+    pub fn trace_tiered_up_count(&self) -> u64 {
+        self.jit.counters.tiered_up
+    }
+
     /// Number of trace entries that came back with
     /// `jit_pending_err` set (typically a metatable shadowed an
     /// index inside a helper, forcing the dispatcher to fall back

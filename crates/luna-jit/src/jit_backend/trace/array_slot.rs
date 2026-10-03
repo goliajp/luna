@@ -9,7 +9,7 @@ const ACOUNT: i32 = super::super::TABLE_ACOUNT_OFFSET;
 const APREFIX: i32 = super::super::TABLE_APREFIX_OFFSET;
 
 /// `(avals, atags)`: the array part's values and, after them, its raw tags.
-fn array_part(bcx: &mut FunctionBuilder<'_>, t: Value, asize: Value) -> (Value, Value) {
+fn array_part<E: Emit>(bcx: &mut E, t: Value, asize: Value) -> (Value, Value) {
     let avals = bcx.ins().load(
         types::I64,
         MemFlagsData::trusted(),
@@ -21,7 +21,7 @@ fn array_part(bcx: &mut FunctionBuilder<'_>, t: Value, asize: Value) -> (Value, 
     (avals, atags)
 }
 
-fn load_asize(bcx: &mut FunctionBuilder<'_>, t: Value) -> Value {
+fn load_asize<E: Emit>(bcx: &mut E, t: Value) -> Value {
     bcx.ins().load(
         types::I64,
         MemFlagsData::trusted(),
@@ -35,8 +35,8 @@ fn load_asize(bcx: &mut FunctionBuilder<'_>, t: Value) -> Value {
 /// holds a value of raw tag `want` (not nil, so no `__index` is consulted);
 /// to `miss` otherwise. Leaves the builder in no block; the caller seals
 /// `hit` and `miss`.
-pub(super) fn emit_array_get_check(
-    bcx: &mut FunctionBuilder<'_>,
+pub(super) fn emit_array_get_check<E: Emit>(
+    bcx: &mut E,
     t: Value,
     key: Value,
     want: u8,
@@ -71,8 +71,8 @@ pub(super) fn emit_array_get_check(
 /// the non-nil prefix past further filled slots, which the table scans
 /// for). Leaves the builder in no block; the caller seals `miss` and
 /// `done`.
-pub(super) fn emit_array_set(
-    bcx: &mut FunctionBuilder<'_>,
+pub(super) fn emit_array_set<E: Emit>(
+    bcx: &mut E,
     t: Value,
     key: Value,
     val: Value,
@@ -166,7 +166,7 @@ pub(super) fn emit_array_set(
 /// the table has no metatable and its non-nil slots are exactly a prefix
 /// shorter than the array part (`Table::len`'s first case); to `miss`
 /// otherwise.
-pub(super) fn emit_len_check(bcx: &mut FunctionBuilder<'_>, t: Value, hit: Block, miss: Block) {
+pub(super) fn emit_len_check<E: Emit>(bcx: &mut E, t: Value, hit: Block, miss: Block) {
     let flags = MemFlagsData::trusted();
     let mt = bcx.ins().load(
         types::I64,

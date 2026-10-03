@@ -311,6 +311,48 @@ pub struct CompiledTrace {
     /// Read by the close handler in `crates/luna-core/src/vm/exec.rs`
     /// to bump `JitCounters.multi_way_guard_emitted`.
     pub downrec_multi_way_count: u8,
+    /// Set when a quicker code generator compiled this trace and a better
+    /// one can take over once it is hot.
+    pub tier_up: Option<Box<TierUp>>,
+}
+
+/// A trace on its way to the optimizing tier.
+pub struct TierUp {
+    /// Loop iterations run in the trace's code plus entries: the code adds
+    /// one per iteration through this cell (whose address it holds), the
+    /// dispatcher one per entry.
+    pub count: Box<TCellU32>,
+    /// [`CompileOptions::tier_up_at`] the trace was compiled with.
+    pub at: u32,
+    /// The head function's `call_hot_count` when the trace was compiled.
+    /// Once that function has been called again, the code is being reused
+    /// rather than run once, and the trace moves after
+    /// `at / TIER_UP_REUSED_DIVISOR` iterations and entries.
+    pub calls_at: u32,
+    /// The optimizing tier's entry once compiled (null before).
+    pub optimized: TCellPtr,
+    /// Set once the optimizing tier was asked, whatever it answered.
+    pub tried: TCellBool,
+    /// For a side trace: the parent's exit cells holding this trace's entry
+    /// (addresses of [`TCellPtr`]s; null when not wired).
+    pub parent_cells: [TCellPtr; 2],
+    /// What the backend compiles the trace from; taken when it does.
+    pub source: TRefLock<Option<Box<dyn std::any::Any + Send + Sync>>>,
+}
+
+impl CompiledTrace {
+    /// The entry to call: the optimizing tier's once it exists.
+    pub fn current_entry(&self) -> TraceFn {
+        match &self.tier_up {
+            Some(t) if !t.optimized.get().is_null() => {
+                // SAFETY: `optimized` only ever holds an entry the backend
+                // returned from `TraceCompiler::tier_up`, which has the
+                // `TraceFn` ABI
+                unsafe { std::mem::transmute::<*const u8, TraceFn>(t.optimized.get()) }
+            }
+            _ => self.entry,
+        }
+    }
 }
 
 impl std::fmt::Debug for CompiledTrace {
@@ -435,6 +477,7 @@ impl CompiledTrace {
             // DownRec close (no recorder fires on the deploy-side
             // install), so the candidate count is always `0`.
             downrec_multi_way_count: 0,
+            tier_up: None,
         }
     }
 }

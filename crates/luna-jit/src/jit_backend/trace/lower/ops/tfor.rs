@@ -1,8 +1,8 @@
 use super::*;
 
 /// The generic-for iterator call.
-pub(super) fn emit_tfor_call_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_tfor_call_op<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
@@ -11,7 +11,7 @@ pub(super) fn emit_tfor_call_op<M: Module>(
     } = *pl;
     let OpHelpers { spill_id, .. } = lw.h.op;
     let OpCx { off, ins, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         // generic-for body tail. Sequence:
         //   1. Spill regs[A..=A+2] (iter / state / control) to
@@ -49,11 +49,11 @@ pub(super) fn emit_tfor_call_op<M: Module>(
             //   is what the slow_blk helper reads). R[A+2] is
             //   spilled INSIDE slow_blk only, so fast iters pay
             //   nothing.
-            let spill_ref = lw.module.declare_func_in_func(spill_id, lw.bcx.func);
+            let spill_ref = lw.bcx.import_func(spill_id);
             // a copy: the guard exits below take `lw` whole while this
             // closure lives, and nothing changes the kinds meanwhile
             let spill_kinds = lw.current_kinds.clone();
-            let spill_slot = |bcx: &mut FunctionBuilder<'_>, slot: usize| {
+            let spill_slot = |bcx: &mut E, slot: usize| {
                 let k = spill_kinds[off + slot];
                 let Some(tag_byte) = known_tag(k) else {
                     return;
@@ -91,8 +91,8 @@ pub(super) fn emit_tfor_call_op<M: Module>(
 /// Allocates the 3-slot buffer, calls the helper,
 /// brif-checks the result, def_vars regs + tag from
 /// the buffer.
-pub(super) fn emit_tfor_helper_call<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_tfor_helper_call<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
     a_us: usize,
@@ -106,7 +106,7 @@ pub(super) fn emit_tfor_helper_call<M: Module>(
     } = *lw;
     let OpHelpers { op_tforcall_id, .. } = lw.h.op;
     let OpCx { i, rop, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     let out_ss = lw
         .bcx
         .create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
@@ -119,7 +119,7 @@ pub(super) fn emit_tfor_helper_call<M: Module>(
     let val_addr = lw.bcx.ins().stack_addr(types::I64, out_ss, 16);
     let a_arg = lw.bcx.ins().iconst(types::I64, a_us as i64);
     let nvars_arg = lw.bcx.ins().iconst(types::I64, nvars);
-    let func_ref = lw.module.declare_func_in_func(op_tforcall_id, lw.bcx.func);
+    let func_ref = lw.bcx.import_func(op_tforcall_id);
     let call_inst = lw
         .bcx
         .ins()
@@ -148,13 +148,13 @@ pub(super) fn emit_tfor_helper_call<M: Module>(
 }
 
 /// `TForCall` over `ipairs`: the array read inline, the helper when it misses.
-pub(super) fn emit_ipairs_tfor_call<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_ipairs_tfor_call<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
     a_us: usize,
     nvars: i64,
-    spill_slot: &impl Fn(&mut FunctionBuilder<'_>, usize),
+    spill_slot: &impl Fn(&mut E, usize),
 ) {
     let Plan {
         record, max_stack, ..
@@ -165,7 +165,7 @@ pub(super) fn emit_ipairs_tfor_call<M: Module>(
         ..
     } = *lw;
     let OpCx { i, rop, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     // Inline aget fast path. The recorder confirmed
     // R[A] = ipairs_iter at trace start. The standard
     // ipairs loop has R[A+1] = Table (state) and
