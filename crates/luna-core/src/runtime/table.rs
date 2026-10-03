@@ -163,6 +163,7 @@ pub struct Table {
 // lifetime. No thread-unsafety concern: tables are accessed only
 // through the Vm, single-threaded.
 unsafe impl Send for Table {}
+// SAFETY: as for `Send`
 unsafe impl Sync for Table {}
 
 // the sweep and the mark walk every table; keep it within a 96-byte
