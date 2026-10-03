@@ -50,13 +50,11 @@ use super::{JIT_CL, JIT_VM};
 /// Internal restorer used by [`super::enter_jit`]. Writes the captured
 /// previous slot values back into the TLS cells.
 ///
-/// SAFETY: the function pointer is wrapped in `JitVmRebindRestore` and
-/// only ever invoked via [`JitVmGuard::drop`], which calls it once per
-/// guard at scope end. The cells are plain `Cell<*mut Vm>` /
-/// `Cell<*const LuaClosure>` so the write itself is not unsafe Rust;
-/// the `unsafe fn` signature carries the contract that the slot
-/// participates in the JIT helper invariant (`current_jit_vm` /
-/// `current_jit_closure` debug-assert non-null).
+/// # Safety
+/// Only [`JitVmGuard::drop`] calls it, once per guard, with the slot
+/// values that guard's [`super::enter_jit`] replaced; the guards drop in
+/// the reverse order of their `enter_jit` calls. The body itself is safe
+/// code: the `unsafe fn` type is what `JitVmRebindRestore` stores.
 pub(super) unsafe fn restore_tls(prev_vm: *mut Vm, prev_cl: *const LuaClosure) {
     JIT_VM.with(|c| c.set(prev_vm));
     JIT_CL.with(|c| c.set(prev_cl));

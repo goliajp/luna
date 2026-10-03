@@ -20,7 +20,8 @@
 //! - Every helper is called only under an active `enter_jit` guard
 //!   (which pins `JIT_VM` / `JIT_CL` for the dispatch window) and
 //!   reads the Vm/closure pointer via `current_jit_vm()` /
-//!   `current_jit_closure()`.
+//!   `current_jit_closure()`. Each helper's `# Safety` section names
+//!   what else its arguments must be.
 
 // All helpers use fully-qualified `luna_core::*` paths internally.
 // Only the `JitVmGuard` re-export is needed by the `enter_jit`
@@ -91,20 +92,27 @@ pub fn __jit_tls_ptrs() -> (
     (vm, cl)
 }
 
-/// Read the active Vm pointer. SAFETY: the caller (always
-/// a Rust helper invoked from inside JIT'd code) must be running
-/// under an active [`enter_jit`] guard.
+/// The Vm that entered the running compiled code.
+///
+/// # Safety
+/// The caller runs inside an [`enter_jit`] window on this thread, and
+/// does not hold the returned borrow past its own return.
 #[inline]
 unsafe fn current_jit_vm<'a>() -> &'a mut luna_core::vm::Vm {
     let p = JIT_VM.with(|cell| cell.get());
     debug_assert!(!p.is_null(), "JIT helper called outside enter_jit scope");
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    // SAFETY: inside an enter_jit window JIT_VM holds the `&mut Vm` the
+    // dispatcher passed to `enter_jit`; the dispatcher does not touch that
+    // Vm until the compiled code (and so this helper) returns, so this is
+    // the only live borrow of it
     unsafe { &mut *p }
 }
 
-/// Read the active LuaClosure pointer. SAFETY: caller is
-/// a JIT helper running under an `enter_jit` guard whose closure
-/// argument was non-None.
+/// The closure the running compiled code was entered with.
+///
+/// # Safety
+/// The caller runs inside an [`enter_jit`] window on this thread that
+/// was opened with `Some(closure)`.
 #[inline]
 unsafe fn current_jit_closure() -> luna_core::runtime::Gc<luna_core::runtime::LuaClosure> {
     let p = JIT_CL.with(|cell| cell.get());
@@ -114,6 +122,27 @@ unsafe fn current_jit_closure() -> luna_core::runtime::Gc<luna_core::runtime::Lu
     );
     luna_core::runtime::Gc::from_ptr(p as *mut luna_core::runtime::LuaClosure)
 }
+
+/// The payload word of `v` as compiled code keeps a register: the
+/// integer, the float's bits, or the object pointer; zero for nil and
+/// the booleans.
+#[inline]
+fn payload_bits(v: luna_core::runtime::Value) -> i64 {
+    raw_bits(v.unpack().1)
+}
+
+/// `raw`'s eight bytes as an integer.
+#[inline]
+fn raw_bits(raw: luna_core::runtime::value::RawVal) -> i64 {
+    // SAFETY: every `RawVal` field is eight bytes wide here (asserted
+    // below), so whichever field the value was written through, all of
+    // `zero` is initialised
+    unsafe { raw.zero as i64 }
+}
+
+// `raw_bits` reads a pointer payload as `u64`; the JIT backends only
+// target 64-bit hosts
+const _: () = assert!(std::mem::size_of::<*const ()>() == 8);
 
 mod table_write;
 pub use table_write::*;
