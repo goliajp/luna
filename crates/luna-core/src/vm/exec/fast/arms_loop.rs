@@ -79,7 +79,7 @@ macro_rules! fast_loop_arms {
                     }
                     // the back-edge target is the body's first op
                     let target = ($pc as i32 + 1 - $inst.bx() as i32).max(0) as u32;
-                    if $vm.jit.loop_hot_tick($code.wrapping_add(target as usize)) {
+                    if $vm.jit.loop_hot_tick(&proto, target) {
                         save!();
                         slow |= $vm.trace_start_at_back_edge(cl!(), base!(), target, None);
                     }
@@ -97,6 +97,11 @@ macro_rules! fast_loop_arms {
                 let pc4 = $regs.wrapping_add(a as usize + 4);
                 // SAFETY: the loop's registers are in the frame
                 if unsafe { raw_tag(pc4) } != tag::NIL {
+                    // the control variable takes the new key first: a
+                    // recording started below snapshots the registers
+                    // as the body will see them
+                    // SAFETY: as above
+                    unsafe { Value::copy_whole($regs.add(a as usize + 2), pc4) };
                     // the generic-for's back-edge, counted like a
                     // numeric one; an iterator that returned nothing
                     // takes no back-edge
@@ -108,13 +113,11 @@ macro_rules! fast_loop_arms {
                         }
                         // the body's first op, right after TForPrep
                         let target = ($pc as i32 + 1 - $inst.bx() as i32).max(0) as u32;
-                        if $vm.jit.loop_hot_tick($code.wrapping_add(target as usize)) {
+                        if $vm.jit.loop_hot_tick(&proto, target) {
                             save!();
                             $vm.trace_start_at_back_edge(cl!(), base!(), target, Some(a));
                         }
                     }
-                    // SAFETY: as above
-                    unsafe { Value::copy_whole($regs.add(a as usize + 2), pc4) };
                     $npc = $npc.wrapping_sub($inst.bx());
                     // a recording that just started must see the next
                     // instruction from the loop head
