@@ -87,8 +87,10 @@ impl<M: Masm> Gen<'_, M> {
                 if i.ty.is_float() {
                     return Err("float select");
                 }
+                // the condition may be any integer type; narrow ones are
+                // held zero-extended, so a full-width test is right for all
                 let c = self.src(i.a, 0);
-                if !self.m.cmp_imm(false, c, 0) {
+                if !self.m.cmp_imm(true, c, 0) {
                     unreachable!("comparing with zero always encodes");
                 }
                 let x = self.src(i.b, 0);
