@@ -86,4 +86,25 @@ impl Vm {
             (h.reset)(self, co);
         }
     }
+
+    /// `co` returned `outcome`: a thread the C API has seen returns what was
+    /// under its body on its C stack too, as PUC's resume finds every value
+    /// of the thread's stack there and `coroutine.resume` takes them all.
+    pub(crate) fn host_returned(
+        &mut self,
+        co: Gc<Coro>,
+        outcome: Result<Vec<Value>, LuaError>,
+    ) -> Result<Vec<Value>, LuaError> {
+        let Ok(vals) = outcome else {
+            return outcome;
+        };
+        if co.host_state.is_none() || co.host_stack.is_empty() {
+            return Ok(vals);
+        }
+        // SAFETY: `co` is the coroutine that just returned, held by the
+        // caller; its C frames are gone and no reference into it is live
+        let mut all = std::mem::take(&mut unsafe { co.as_mut() }.host_stack);
+        all.extend(vals);
+        Ok(all)
+    }
 }
