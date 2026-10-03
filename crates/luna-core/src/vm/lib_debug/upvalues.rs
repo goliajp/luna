@@ -10,7 +10,7 @@ use crate::vm::exec::Vm;
 
 /// 1-based upvalue index → raw `upvals[]` index. 5.1 functions keep their
 /// environment outside the upvalues, so luna's `_ENV` cell is skipped there.
-fn visible_upvalue_index(vm: &Vm, cl: Gc<LuaClosure>, n: i64) -> Option<usize> {
+pub(crate) fn visible_upvalue_index(vm: &Vm, cl: Gc<LuaClosure>, n: i64) -> Option<usize> {
     if n < 1 {
         return None;
     }
@@ -27,7 +27,7 @@ fn visible_upvalue_index(vm: &Vm, cl: Gc<LuaClosure>, n: i64) -> Option<usize> {
 
 /// PUC `aux_upvalue`'s name for upvalue `idx` of a Lua closure: `None` when
 /// 5.1 has no name for it (a stripped function carries none).
-fn upvalue_name(vm: &Vm, cl: Gc<LuaClosure>, idx: usize) -> Option<String> {
+pub(crate) fn upvalue_name(vm: &Vm, cl: Gc<LuaClosure>, idx: usize) -> Option<String> {
     let name = &cl.proto.upvals[idx].name;
     if !name.is_empty() {
         return Some(name.to_string());

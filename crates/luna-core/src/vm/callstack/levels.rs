@@ -39,7 +39,10 @@ impl Vm {
                     Some(CallFrame::Cont(nc)) if matches!(nc.kind, ContKind::Host(_))
                 );
                 let yield_slot = match c.status {
-                    CoroStatus::Suspended if !parked_in_c => c.resume_at.map(|(fs, _)| fs),
+                    CoroStatus::Suspended if !parked_in_c => c
+                        .resume_at
+                        .map(|(fs, _)| fs)
+                        .filter(|&fs| fs != crate::vm::exec::HOOK_YIELD_SLOT),
                     _ => None,
                 };
                 // a normal coroutine is inside the natives that resumed

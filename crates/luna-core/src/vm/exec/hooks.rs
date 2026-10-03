@@ -165,6 +165,9 @@ impl Vm {
         let Some(hook) = self.hook.func else {
             return Ok(());
         };
+        if let (Value::LightUserdata(cf), Some(host)) = (hook, self.host_hook) {
+            return self.run_host_hook(host, cf, event, line);
+        }
         let saved_top = self.top;
         let saved_len = self.stack.len();
         let name = Value::Str(self.heap.intern(event));
@@ -189,6 +192,28 @@ impl Vm {
         self.stack.truncate(saved_len);
         self.top = saved_top;
         r.map(|_| ())
+    }
+
+    /// Run the thread's C hook `cf` through the C API's dispatcher, as
+    /// `run_hook` runs a Lua hook: with hooks off, and the whole running
+    /// frame rooted.
+    fn run_host_hook(
+        &mut self,
+        host: super::host_c::HostHookFn,
+        cf: *const (),
+        event: &[u8],
+        line: Option<i64>,
+    ) -> Result<(), LuaError> {
+        self.in_hook = true;
+        let gc_top = self.gc_top;
+        self.gc_top = gc_top.max(self.stack.len() as u32);
+        let saved_top = self.top;
+        let r = host(self, cf, event, line);
+        self.gc_top = gc_top;
+        self.top = saved_top;
+        self.in_hook = false;
+        self.trap = true;
+        r
     }
 
     /// Fire the "call" hook on entry to a function, if armed and not already in
@@ -282,14 +307,23 @@ impl Vm {
             Some(lines[(pc as usize).min(lines.len() - 1)] as i64)
         };
         // count hook: fire every `count_base` instructions
+        let mut counthook = false;
         if self.hook.count {
             self.hook.count_left -= 1;
             if self.hook.count_left <= 0 {
                 self.hook.count_left = self.hook.count_base;
-                // hooked function is the running Lua frame: its frame
-                // is on the stack, so no synthetic C level is needed.
-                self.run_hook(b"count", cur_line, false)?;
+                counthook = true;
             }
+        }
+        // the instruction a hook yielded at: its hooks have run (5.2+)
+        if self.hook_resumed && (counthook || self.hook.line) {
+            self.hook_resumed = false;
+            return Ok(());
+        }
+        if counthook {
+            // hooked function is the running Lua frame: its frame
+            // is on the stack, so no synthetic C level is needed.
+            self.run_hook(b"count", cur_line, false)?;
         }
         // line hook: fire on a fresh frame, a backward jump (loop), or a
         // change of source line.
@@ -320,6 +354,34 @@ impl Vm {
                 self.top_frame_mut().hook_oldpc = pc;
             }
         }
+        if std::mem::take(&mut self.hook_yield) {
+            return Err(self.yield_from_hook(pc, counthook));
+        }
         Ok(())
     }
+
+    /// A C line or count hook yielded before the instruction at `pc` ran
+    /// (PUC `luaG_traceexec`'s `L->status == LUA_YIELD`): suspend the
+    /// coroutine with no values; the resume runs the instruction. 5.2+
+    /// mark the instruction so its hooks are not called again, and put the
+    /// count back one short of the event; 5.1 just runs it again.
+    fn yield_from_hook(&mut self, pc: u32, counthook: bool) -> LuaError {
+        let v51 = self.version == LuaVersion::Lua51;
+        if counthook && !v51 {
+            self.hook.count_left = 1;
+        }
+        let f = self.top_frame_mut();
+        f.pc = pc;
+        if v51 {
+            // PUC 5.1 leaves `savedpc` at the instruction, so the line hook
+            // compares with the line of the one before it
+            f.hook_oldpc = pc.checked_sub(1).unwrap_or(u32::MAX);
+        }
+        self.yielding = Some((Vec::new(), HOOK_YIELD_SLOT, 0));
+        LuaError(Value::Nil)
+    }
 }
+
+/// The resume point of a coroutine a hook suspended: no call waits for the
+/// resume's values.
+pub(crate) const HOOK_YIELD_SLOT: u32 = u32::MAX;

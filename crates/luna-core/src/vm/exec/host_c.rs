@@ -20,6 +20,7 @@ mod load;
 mod threads;
 mod values;
 pub use block::HostBlock;
+pub use debug::{HostAr, HostHookFn, HostLevel};
 
 /// The C API's side of a [`ContKind::Host`] continuation.
 #[derive(Clone, Copy)]
