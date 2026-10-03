@@ -37,9 +37,19 @@ static void loadfile(lua_State *L, const char *label, const char *content, size_
   report(L, label, st, lua_gettop(L) - (st == 0 ? 1 : 1));
 }
 
+/* the dump collected outside Lua: 5.5's lua_dump keeps values of its own
+   on the stack while it writes */
+struct dumpbuf {
+  char b[4096];
+  size_t n;
+};
+
 static int writer(lua_State *L, const void *p, size_t sz, void *ud) {
-  luaL_addlstring((luaL_Buffer *)ud, (const char *)p, sz);
+  struct dumpbuf *d = (struct dumpbuf *)ud;
   (void)L;
+  if (d->n + sz > sizeof(d->b)) return 1;
+  memcpy(d->b + d->n, p, sz);
+  d->n += sz;
   return 0;
 }
 
@@ -78,17 +88,16 @@ int main(void) {
 #endif
   /* a binary chunk, from string.dump */
   {
-    luaL_Buffer b;
+    static struct dumpbuf d;
     size_t len;
     const char *s;
     luaL_loadstring(L, "return 'binary'");
-    luaL_buffinit(L, &b);
 #if LUA_VERSION_NUM >= 503
-    lua_dump(L, writer, &b, 0);
+    lua_dump(L, writer, &d, 0);
 #else
-    lua_dump(L, writer, &b);
+    lua_dump(L, writer, &d);
 #endif
-    luaL_pushresult(&b);
+    lua_pushlstring(L, d.b, d.n);
     s = lua_tolstring(L, -1, &len);
     st = luaL_loadbuffer(L, s, len, "=bin");
     report(L, "loadbuffer binary", st, 3);

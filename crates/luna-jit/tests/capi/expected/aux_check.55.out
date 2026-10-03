@@ -1,0 +1,60 @@
+checkinteger 7: status=0: top=1 7
+checkinteger '8': status=0: top=1 8
+checkinteger 2.0: status=0: top=1 2
+checkinteger 2.5: status=2: top=1 [bad argument #1 to '?' (number has no integer representation)]
+checkinteger '2.5': status=2: top=1 [bad argument #1 to '?' (number has no integer representation)]
+checkinteger nil: status=2: top=1 [bad argument #1 to '?' (number expected, got nil)]
+checkinteger none: status=2: top=1 [bad argument #1 to '?' (number expected, got no value)]
+checkinteger table: status=2: top=1 [bad argument #1 to '?' (number expected, got table)]
+checkinteger huge: status=2: top=1 [bad argument #1 to '?' (number has no integer representation)]
+checknumber 1.5: status=0: top=1 1.5
+checknumber ' 0x10 ': status=0: top=1 16.0
+checknumber 'z': status=2: top=1 [bad argument #1 to '?' (number expected, got string)]
+checknumber true: status=2: top=1 [bad argument #1 to '?' (number expected, got boolean)]
+checkstring: status=0: top=2 [a\0b] 3
+checkstring number: status=0: top=2 [12] 2
+checkstring bool: status=2: top=1 [bad argument #1 to '?' (string expected, got boolean)]
+opts none: status=0: top=6 [dflt] 4 4 [4.0] false 3
+opts nils: status=0: top=6 [dflt] 4 -5 0.5 true 0
+opts given: status=0: top=6 [abc] 3 9 2.25 false 1
+opts bad int: status=2: top=1 [bad argument #2 to '?' (number expected, got string)]
+opts bad num: status=2: top=1 [bad argument #3 to '?' (number expected, got table)]
+checktype ok: status=0: top=1 [ok]
+checktype bad: status=2: top=1 [bad argument #1 to '?' (table expected, got string)]
+checktype none: status=2: top=1 [bad argument #1 to '?' (table expected, got no value)]
+checkany ok: status=0: top=1 [ok]
+checkany none: status=2: top=1 [bad argument #2 to '?' (value expected)]
+checkoption ok: status=2: top=1 [bad argument #2 to '?' (invalid option '1')]
+checkoption default: status=0: top=2 0 2
+checkoption bad: status=2: top=1 [bad argument #1 to '?' (invalid option 'delta')]
+checkoption bad default: status=2: top=1 [bad argument #2 to '?' (invalid option 'zeta')]
+checkoption missing: status=2: top=1 [bad argument #1 to '?' (string expected, got no value)]
+argerror: status=2: top=1 [bad argument #2 to '?' (custom message)]
+argerror 0: status=2: top=1 [bad extra argument #0 to '?' (custom message)]
+typeerror nil: status=2: top=1 [bad argument #1 to '?' (widget expected, got nil)]
+typeerror light: status=2: top=1 [bad argument #1 to '?' (widget expected, got no value)]
+error: status=2: top=1 [fail 3 x]
+where 0: status=0: top=1 []
+where 1: status=0: top=1 []
+where 5: status=0: top=1 []
+checkstack: status=2: top=1 [stack overflow (too many)]
+checkstack null: status=2: top=1 [stack overflow]
+global ci	false	[string "local t = {}..."]:8: bad argument #1 to 'ci' (number expected, got string)
+local ci	false	[string "local t = {}..."]:9: bad argument #1 to 'f' (number expected, got table)
+method ci	false	[string "local t = {}..."]:10: calling 'ci' on bad self (number expected, got table)
+method arg	false	[string "local t = {}..."]:11: calling 'cn' on bad self (number expected, got table)
+field cs	false	[string "local t = {}..."]:12: bad argument #1 to 'cs' (string expected, got table)
+field ct	false	[string "local t = {}..."]:13: bad argument #1 to 'ct' (table expected, got number)
+direct ae	false	bad argument #3 to 'ae' (custom message)
+method ae self	false	[string "local t = {}..."]:15: calling 'ae' on bad self (number expected, got table)
+method ae 2	false	[string "local t = {}..."]:16: calling 'ae' on bad self (number expected, got table)
+te	false	[string "local t = {}..."]:17: bad argument #1 to 'te' (widget expected, got nil)
+te ud	false	[string "local t = {}..."]:18: bad argument #1 to 'te' (widget expected, got FILE*)
+er	false	[string "local t = {}..."]:19: fail 3 x
+er direct	false	fail 3 x
+where Lua	[string "local function f() return wh(1) end..."]:1: 
+where C	
+where main	
+typeerror light: status=2 [bad argument #1 to 'te' (widget expected, got light userdata)]
+named userdata: status=2 [bad argument #1 to 'ci' (number expected, got MyType)]
+top at end=0

@@ -76,7 +76,9 @@ static void open_direct(const struct lib *lib) {
   returned(L, lib->name, n, 1);
   census(L, lib->name);
   if (strcmp(lib->name, "string") == 0) {
-    dochunk(L, "print('  string methods', ('x'):rep(3))");
+    int st = luaL_dostring(L, "return ('x'):rep(3)");
+    printf("  string methods: %d %s\n", st, lua_tostring(L, -1));
+    lua_settop(L, 0);
   }
   lua_close(L);
 }
@@ -124,7 +126,11 @@ static int f_open_mod(lua_State *L) {
 int main(void) {
   const struct lib *lib;
   lua_State *L;
-  for (lib = libs; lib->name; lib++) open_direct(lib);
+  /* 5.1's package and io libraries set the environment of the running C
+     function, so they open only through a call */
+  for (lib = libs; lib->name; lib++)
+    if (LUA_VERSION_NUM >= 502 || (lib->f != luaopen_package && lib->f != luaopen_io))
+      open_direct(lib);
   for (lib = libs; lib->name; lib++) open_call(lib);
   /* luaL_openlibs */
   L = luaL_newstate();
