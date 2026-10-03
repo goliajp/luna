@@ -63,7 +63,9 @@ fn check(src: &str, traced: &[LuaVersion]) {
                 let got = show(vm.eval(src).map_err(|e| vm.error_text(&e)));
                 dispatched += vm.trace_dispatched_count();
                 if got != want {
-                    bad.push(format!("{v:?} {tier:?} hot {hot:?}: {got} (interpreter: {want})"));
+                    bad.push(format!(
+                        "{v:?} {tier:?} hot {hot:?}: {got} (interpreter: {want})"
+                    ));
                 }
             }
         }
@@ -71,7 +73,11 @@ fn check(src: &str, traced: &[LuaVersion]) {
             assert!(dispatched > 0, "{v:?}: no trace ran");
         }
     }
-    assert!(bad.is_empty(), "JIT differs from the interpreter:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "JIT differs from the interpreter:\n{}",
+        bad.join("\n")
+    );
 }
 
 /// The versions whose numeric `for` runs as a trace (the trace JIT

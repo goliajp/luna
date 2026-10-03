@@ -271,7 +271,11 @@ fn sweep_op(
             // way, if B (source table) is bound, escape. So does a
             // bound key register of GetTable: it is read as a value.
             let b = ins.b();
-            let keys: &[u32] = if op == Op::GetTable { &[b, ins.c()] } else { &[b] };
+            let keys: &[u32] = if op == Op::GetTable {
+                &[b, ins.c()]
+            } else {
+                &[b]
+            };
             for &r in keys {
                 if (r as usize) < max_stack
                     && let Some(sid) = lookup(bindings, depth, r)
@@ -307,7 +311,11 @@ fn sweep_op(
             // a fixed end, so take every register from A up
             let b = ins.b();
             let c = ins.c();
-            let args_end = if b == 0 { max_stack as u32 } else { a.saturating_add(b) };
+            let args_end = if b == 0 {
+                max_stack as u32
+            } else {
+                a.saturating_add(b)
+            };
             for src in a..args_end.min(max_stack as u32) {
                 if let Some(src_sid) = lookup(bindings, depth, src) {
                     mark_escape(sites, src_sid);
