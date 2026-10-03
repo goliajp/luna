@@ -252,10 +252,12 @@ impl Vm {
         self.native(f)
     }
 
-    /// How many errors have become "error in error handling" (PUC's
-    /// `LUA_ERRERR`): a protected call compares it before and after.
+    /// How many errors have taken a status of their own: "error in error
+    /// handling" (PUC's `LUA_ERRERR`), and 5.2/5.3's finalizer error of a
+    /// full collection (`LUA_ERRGCMM`). A protected call compares it before
+    /// and after, and tells them apart by the message.
     pub fn host_errerr_count(&self) -> u64 {
-        self.errerr_raised
+        self.errerr_raised + self.gcmm_raised
     }
 
     /// Close `co` (PUC `lua_closethread`): run its pending `__close`
