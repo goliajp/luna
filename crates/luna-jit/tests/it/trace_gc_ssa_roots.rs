@@ -204,3 +204,42 @@ fn concat_keeps_a_table_an_inlined_call_returned() {
          return CHECK_CHAIN(last, 400)",
     );
 }
+
+/// An inlined function that builds a table and then runs an op that can
+/// collect (a concat) while the table is only in its registers. The
+/// lowerer takes no op that can collect inside an inlined function (concat
+/// and the generic-for call are lowered at depth 0 only), so such a
+/// recording is not compiled and the interpreter, which holds the table on
+/// its stack, runs the loop. Nothing is freed early.
+#[test]
+fn concat_inside_an_inlined_function_with_its_own_new_table() {
+    for v in VERSIONS {
+        for tier in TIERS {
+            let mut vm = luna_jit::new_with_jit(v);
+            vm.set_trace_tier(tier);
+            if let Err(e) = vm.eval(&format!("{}\n{CHAIN}", gc_every_safe_point(v))) {
+                panic!("{v:?} {tier:?} setup: {e}");
+            }
+            let r = vm
+                .eval(
+                    "local function link(prev, n)
+                       local t = {n = n}
+                       local name = 'node' .. n
+                       t.prev = prev
+                       t.name = name
+                       return t
+                     end
+                     local last = {n = 0}
+                     for i = 1, 400 do last = link(last, i) end
+                     local cur, k = last, 400
+                     while cur.n ~= 0 do
+                       if cur.name ~= 'node' .. k then error('name of ' .. k) end
+                       cur, k = cur.prev, k - 1
+                     end
+                     return CHECK_CHAIN(last, 400)",
+                )
+                .unwrap_or_else(|e| panic!("{v:?} {tier:?}: {e}"));
+            assert_eq!(show(&r), "ok", "{v:?} {tier:?}");
+        }
+    }
+}
