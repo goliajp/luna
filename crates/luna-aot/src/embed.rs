@@ -212,8 +212,8 @@ pub fn embed_bytecode(
 //   3. Build `libluna_runtime_helpers.a` via `cargo build -p
 //      luna-runtime-helpers --release` (idempotent — cargo caches).
 //   4. Write a tiny C `main.c` that extern-decls the bracket symbols
-//      + extern-decls `luna_aot_run`, then calls
-//      `luna_aot_run(start, end - start)`. Compile via `cc -c`.
+//      + extern-decls `luna_aot_run_dialect`, then calls
+//      `luna_aot_run_dialect(start, end - start, dialect)`. Compile via `cc -c`.
 //   5. Link bytecode.o + main.o + libluna_runtime_helpers.a +
 //      platform libs (`-lpthread -ldl -lm -framework CoreFoundation`
 //      on Mac) into the final binary.
@@ -230,7 +230,8 @@ pub fn embed_bytecode(
 ///
 /// Differs from [`embed_bytecode`]:
 /// - Builds and links `luna-runtime-helpers` (staticlib carrying
-///   luna-core + a `luna_aot_run` C-ABI entry).
+///   luna-core + a `luna_aot_run_dialect` C-ABI entry, which runs the
+///   chunk on a `Vm` of `version`).
 /// - Produced binary actually **runs** the script — `print(...)` lands
 ///   on stdout, runtime errors print to stderr + exit 1, etc.
 ///
@@ -308,7 +309,7 @@ pub fn compile_and_link_with(
     // is target-independent (extern decls only); the `cc -c` invocation
     // routes through the target-aware cc driver so the .o has the right
     // ABI / object-format magic.
-    write_aot_cmain_object_for(&cmain_obj_path, &target)?;
+    write_aot_cmain_object_for(&cmain_obj_path, &target, version)?;
 
     // Offline trace recorder + AOT trace mcode emission. The warmup `Vm` always runs on the **host**
     // (we can't dispatch target mcode at warmup time), but the
