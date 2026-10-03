@@ -108,15 +108,12 @@ fn load_proto_with_field_const(vm: &mut luna_core::vm::Vm) -> Gc<Proto> {
         .expect("eval");
     let key = vm.intern_str("setter");
     let g = vm.globals();
-    // SAFETY: `g` is the live globals `Gc<Table>`; nothing else
-    // borrows for this read.
-    let v = unsafe { (*g.as_ptr()).get(luna_core::runtime::Value::Str(key)) };
+    let v = g.get(luna_core::runtime::Value::Str(key));
     let cl = match v {
         luna_core::runtime::Value::Closure(c) => c,
         other => panic!("expected closure for `setter`, got {other:?}"),
     };
-    // SAFETY: `cl` live `Gc<LuaClosure>` from the read above.
-    let proto = unsafe { (*cl.as_ptr()).proto };
+    let proto = cl.proto;
     // Locate index of "field" in const pool — the synthetic trace
     // below addresses it by index.
     let field_idx = proto
