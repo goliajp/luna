@@ -98,7 +98,8 @@ impl Vm {
 
     /// With [`crate::jit::trace::TraceTier::Auto`]: the loop iterations
     /// plus entries after which a trace compiled from now on moves to the
-    /// optimizing tier (`0`: never).
+    /// optimizing tier (`0`: never); a quarter of that once the function the
+    /// trace starts in has been called again since it was compiled.
     pub fn set_trace_tier_up_at(&mut self, n: u32) {
         self.jit.tier_up_at = n;
     }

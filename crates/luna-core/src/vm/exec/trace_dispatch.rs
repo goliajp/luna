@@ -52,7 +52,7 @@ impl Vm {
         // of cloning. The outer `ct: Rc<CompiledTrace>` is held
         // across the entire dispatch block so the fields outlive
         // all consumers.
-        let entry_fn = self.trace_entry_counted(&ct);
+        let entry_fn = self.trace_entry_counted(&ct, cl.proto.call_hot_count.get());
         let head_pc_val = ct.head_pc;
         let window_size = ct.window_size;
         let compile_entry_tags = &ct.entry_tags;
@@ -368,17 +368,21 @@ fn downrec_close_exit(continuation_pc: i64, head_pc_val: u32) -> bool {
 
 impl Vm {
     /// The entry to call for `ct`, counting the entry towards its move to
-    /// the optimizing tier and making that move when it is due.
+    /// the optimizing tier and making that move when it is due. `calls`:
+    /// the head function's `call_hot_count` now.
     fn trace_entry_counted(
         &mut self,
         ct: &crate::jit::trace::CompiledTrace,
+        calls: u32,
     ) -> crate::jit::trace::TraceFn {
         if let Some(t) = &ct.tier_up
             && !t.tried.get()
         {
             let n = t.count.get().wrapping_add(1);
             t.count.set(n);
-            if n >= t.at {
+            let reused =
+                calls != t.calls_at && n >= t.at / crate::jit::trace::TIER_UP_REUSED_DIVISOR;
+            if n >= t.at || reused {
                 self.trace_tier_up(ct);
             }
         }

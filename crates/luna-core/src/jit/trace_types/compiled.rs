@@ -324,6 +324,11 @@ pub struct TierUp {
     pub count: Box<TCellU32>,
     /// [`CompileOptions::tier_up_at`] the trace was compiled with.
     pub at: u32,
+    /// The head function's `call_hot_count` when the trace was compiled.
+    /// Once that function has been called again, the code is being reused
+    /// rather than run once, and the trace moves after
+    /// `at / TIER_UP_REUSED_DIVISOR` iterations and entries.
+    pub calls_at: u32,
     /// The optimizing tier's entry once compiled (null before).
     pub optimized: TCellPtr,
     /// Set once the optimizing tier was asked, whatever it answered.
