@@ -74,6 +74,7 @@ pub(super) enum Case {
     Loop,
     Pressure,
     Calls,
+    ManyArgs,
 }
 
 const NO: &[BlockArg] = &[];
@@ -277,6 +278,7 @@ pub(super) fn emit<E: Sigs>(e: &mut E, case: &Case, p: Value) {
             out(e, p, 0, r);
         }
         Case::Calls => calls(e, p),
+        Case::ManyArgs => many_args(e, p),
     }
     let r = ld(e, types::I64, 8);
     e.return_(&[r]);
@@ -418,4 +420,66 @@ fn calls<E: Sigs>(e: &mut E, p: Value) {
     out(e, p, 0, acc);
     out(e, p, 1, r2);
     out(e, p, 2, fy);
+}
+
+#[allow(clippy::too_many_arguments)]
+extern "C" fn wide(
+    a: i64,
+    f: f64,
+    b: i64,
+    g: f64,
+    c: i64,
+    h: f64,
+    d: i64,
+    i: f64,
+    e: i64,
+    j: f64,
+    k: i64,
+    l: f64,
+    m: i64,
+    n: f64,
+    o: i64,
+    q: f64,
+    r: i64,
+) -> i64 {
+    let ints = [a, b, c, d, e, k, m, o, r];
+    let floats = [f, g, h, i, j, l, n, q];
+    let mut acc = 0i64;
+    for (s, x) in ints.iter().enumerate() {
+        acc = acc.wrapping_mul(31).wrapping_add(x ^ s as i64);
+    }
+    for x in floats {
+        acc = acc.wrapping_mul(17) ^ x.to_bits() as i64;
+    }
+    acc
+}
+
+/// More arguments than either target passes in registers, integers and
+/// floats interleaved: the rest go on the stack in each ABI's order.
+fn many_args<E: Sigs>(e: &mut E, p: Value) {
+    let x = e.load(types::I64, mem(), p, at(0));
+    let y = e.load(types::I64, mem(), p, at(1));
+    let mut s = e.make_sig();
+    let mut args = Vec::new();
+    for k in 0..17i64 {
+        if k % 2 == 1 && k < 16 {
+            s.params.push(AbiParam::new(types::F64));
+            let c = e.iconst(types::I64, k);
+            let v = e.iadd(y, c);
+            args.push(e.fcvt_from_sint(types::F64, v));
+        } else {
+            s.params.push(AbiParam::new(types::I64));
+            let c = e.iconst(types::I64, k * 1000);
+            args.push(e.bxor(x, c));
+        }
+    }
+    s.returns.push(AbiParam::new(types::I64));
+    let s = e.sig(s);
+    let callee = e.iconst(types::I64, wide as *const () as usize as i64);
+    let call = e.call_indirect(s, callee, &args);
+    let r = e.inst_results(call)[0];
+    out(e, p, 0, r);
+    // values live across the call come back intact
+    let after = e.iadd(args[0], args[16]);
+    out(e, p, 1, after);
 }
