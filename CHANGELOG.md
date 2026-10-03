@@ -23,6 +23,24 @@ optimization.
 
 ### Breaking
 
+- `Vm::take_error_traceback` returns PUC's text as a whole: it starts with
+  the `stack traceback:` line, and in 5.1 and 5.2 leaves out the middle of
+  a deep stack where `luaL_traceback` (5.1: `debug.traceback`), run by a
+  message handler at the error, leaves it out. It used to start with the
+  first level's newline and elide as if the stack had no handler on top.
+  The level lines themselves are unchanged and already listed C functions
+  (`[C]: in function 'error'`, `[C]: in function 'string.gsub'`); the
+  embedding guide now describes the format per dialect.
+  `Coro::error_traceback` also starts with `stack traceback:`.
+
+- `Vm::call_value_with_handler` is no longer a level of the stack: a
+  traceback taken in its handler ends with the function the host called,
+  as one taken under PUC's `lua_pcall` does, instead of with a
+  `[C]: in ?` line. The `luna` command line keeps that line: it calls
+  `Vm::call_value_with_handler_in_c` (hidden from the docs), the same call
+  made from inside a C function of the host's, as `lua.c`'s `docall` runs
+  inside `pmain`.
+
 - `luna_core::jit::trace::ExitTag` has a `Bool` variant and `TraceRecord`
   the `index_slots`, `index_key` and `settings` fields; the frame-materialise helper
   `luna_jit_trace_materialize_frames` takes a third argument, the
@@ -234,6 +252,11 @@ optimization.
 
 ### Fixed
 
+- An error raised by a native the host calls directly (`vm.call_value`
+  on `error` or another library function, with no Lua function between)
+  left no traceback for `take_error_traceback`; it now has one, whose only
+  level is that native.
+
 - A binary built with `luna-aot compile --dialect 5.1` (or 5.2, 5.3, 5.4,
   `macrolua`) ran its script on a Lua 5.5 `Vm`. A 5.3 or 5.4 binary
   stopped at startup with "PUC bytecode loading is disabled"; a 5.1 or
@@ -241,10 +264,12 @@ optimization.
   "Lua 5.5". The generated `main` now passes the dialect to
   the runtime entry, which creates the `Vm` for it. Affects every release
   with `--dialect`, 1.3.0 through 4.0.1.
+
 - The table-field inline cache of a trace compiled ahead of time compared
   the cached node's key with the address the key had in the process that
   compiled it, so it never hit; it now reads the key from the slot the
   deploy side fills, like the trace's other string keys.
+
 - A trace whose entry reads a register holding a boolean could never be
   entered, yet it was compiled and kept its loop or function head, so no
   trace ever ran there. Booleans now enter traces (see Changed); a

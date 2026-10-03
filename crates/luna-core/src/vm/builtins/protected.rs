@@ -26,12 +26,21 @@ pub(crate) fn nat_xpcall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     xpcall_native(vm, fs, nargs, vm.version() > LuaVersion::Lua51)
 }
 
-/// The C level of a host's protected call (`Vm::call_value_with_handler`):
-/// an `xpcall` that passes its extra arguments on in every dialect, as
-/// `lua_pcall` does. The dispatcher runs it as it runs `xpcall`; this body
-/// only runs for a call that reaches it through `call_value`.
+/// A host's protected call (`Vm::call_value_with_handler`): an `xpcall`
+/// that passes its extra arguments on in every dialect, as `lua_pcall`
+/// does, and is not a level of the stack. The dispatcher runs it as it
+/// runs `xpcall`; this body only runs for a call that reaches it through
+/// `call_value`.
 pub(crate) fn nat_host_xpcall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     xpcall_native(vm, fs, nargs, true)
+}
+
+/// [`nat_host_xpcall`] made from inside a C function of the host's, which
+/// is a level of the stack (`Vm::call_value_with_handler_in_c`). Natives
+/// are told apart by address, so the body must not be one the compiler can
+/// fold into `nat_host_xpcall`'s.
+pub(crate) fn nat_host_xpcall_in_c(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    xpcall_native(vm, fs, nargs, std::hint::black_box(true))
 }
 
 fn xpcall_native(vm: &mut Vm, fs: u32, nargs: u32, forward: bool) -> Result<u32, LuaError> {

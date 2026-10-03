@@ -1,0 +1,25 @@
+== 5.1
+stack traceback:
+	sortcmp.lua:1: in function <sortcmp.lua:1>
+	[C]: in function 'sort'
+	sortcmp.lua:1: in main chunk
+== 5.2
+stack traceback:
+	sortcmp.lua:1: in function <sortcmp.lua:1>
+	[C]: in function 'sort'
+	sortcmp.lua:1: in main chunk
+== 5.3
+stack traceback:
+	sortcmp.lua:1: in function <sortcmp.lua:1>
+	[C]: in function 'table.sort'
+	sortcmp.lua:1: in main chunk
+== 5.4
+stack traceback:
+	sortcmp.lua:1: in function <sortcmp.lua:1>
+	[C]: in function 'table.sort'
+	sortcmp.lua:1: in main chunk
+== 5.5
+stack traceback:
+	sortcmp.lua:1: in function <sortcmp.lua:1>
+	[C]: in field 'sort'
+	sortcmp.lua:1: in main chunk

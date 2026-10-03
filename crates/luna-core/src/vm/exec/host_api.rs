@@ -234,24 +234,46 @@ impl Vm {
     }
 
     /// Call `f` with `args` in protected mode with the message handler
-    /// `msgh`: PUC `lua_pcall(L, nargs, LUA_MULTRET, msgh)` made from a C
-    /// function of the host's, as lua.c's `docall` does from `pmain`.
+    /// `msgh`: PUC `lua_pcall(L, nargs, LUA_MULTRET, msgh)` made by the host.
     ///
     /// `msgh` runs where the error was raised, before the stack unwinds, so
     /// it can take a traceback of the failing call ([`Vm::traceback`]); an
     /// error inside it calls it again with the new error, as in PUC. The
     /// returned error carries what the handler returned.
     ///
-    /// The call counts as one C level on the stack, the host function
-    /// making it: `debug.getinfo` finds it below `f`, and a traceback taken
-    /// inside ends with `[C]: in ?` (`[C]: ?` in 5.1).
+    /// Like `lua_pcall`, the call is not a level of the stack: a traceback
+    /// taken inside ends with `f`.
     pub fn call_value_with_handler(
         &mut self,
         f: Value,
         args: &[Value],
         msgh: Value,
     ) -> Result<Vec<Value>, LuaError> {
-        let level = self.native(crate::vm::builtins::nat_host_xpcall);
+        self.host_pcall(crate::vm::builtins::nat_host_xpcall, f, args, msgh)
+    }
+
+    /// [`Vm::call_value_with_handler`] made from inside a C function of the
+    /// host's, as lua.c's `docall` runs inside `pmain`: that function is one
+    /// C level below `f`, which `debug.getinfo` finds and a traceback ends
+    /// with (`[C]: in ?`, 5.1 `[C]: ?`).
+    #[doc(hidden)]
+    pub fn call_value_with_handler_in_c(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        msgh: Value,
+    ) -> Result<Vec<Value>, LuaError> {
+        self.host_pcall(crate::vm::builtins::nat_host_xpcall_in_c, f, args, msgh)
+    }
+
+    fn host_pcall(
+        &mut self,
+        level: crate::runtime::value::NativeFn,
+        f: Value,
+        args: &[Value],
+        msgh: Value,
+    ) -> Result<Vec<Value>, LuaError> {
+        let level = self.native(level);
         let mut call_args = Vec::with_capacity(args.len() + 2);
         call_args.push(f);
         call_args.push(msgh);
@@ -301,6 +323,12 @@ impl Vm {
             return Ok(vs);
         }
         let r = self.call_value_impl(f, args, true);
+        if let Err(e) = r
+            && self.public_call_depth == 1
+            && self.current.is_none()
+        {
+            self.raise_native_to_host(e.0);
+        }
         self.public_call_depth -= 1;
         r
     }
