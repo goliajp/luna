@@ -38,7 +38,10 @@ LUNA_HIDDEN int luna_aux_pushglobalfuncname(lua_State *L, aux_debug *d) {
   else
     lua_getfield(L, REGIDX(L), "_LOADED");
   if (VNUM(L) >= 504) luna_c_luaL_checkstack(L, 6, "not enough stack");
-  if (findfield(L, top + 1, 2)) {
+  /* PUC 5.2 walks the globals depth first, in their hash order, which
+     usually reaches a global before the same function under _G._G;
+     luna's order differs, so 5.2 looks at the globals themselves first */
+  if ((VNUM(L) == 502 && findfield(L, top + 1, 1)) || findfield(L, top + 1, 2)) {
     const char *name = lua_tostring(L, -1);
     if (VNUM(L) >= 503 && strncmp(name, "_G.", 3) == 0) {
       lua_pushstring(L, name + 3);

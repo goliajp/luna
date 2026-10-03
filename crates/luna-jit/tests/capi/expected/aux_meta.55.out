@@ -31,3 +31,17 @@ len none	false	attempt to get length of a number value
 version	true	version ok
 version bad	false	version mismatch: app. needs 400.0, Lua core provides 505.0
 version size	false	core and library have incompatible numeric types
+tolstring -1: top=2 77 [77]
+registry refs: 4 5 nil=-1 reuse=4 6 top=0
+  values: top=3 [three] [two] [four]
+table refs: 2 3 nil=-1 reuse=2 4 top=0
+  values: top=4 [three] [two] [four]
+gsub [a::b::c] [none] [] [] top=4
+fileresult ok: top=1 true
+fileresult fail n=3 top=3 nil=1 errno=1
+fileresult no errno n=3 code=0
+execresult 0: top=3 true [exit] 0
+execresult 3: top=3 nil [exit] 3
+execresult signal: top=3 nil [signal] 9
+execresult -1 n=3 top=3 first=nil
+top at end=0
