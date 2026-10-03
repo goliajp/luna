@@ -265,6 +265,14 @@ impl Vm {
             .and_then(CallFrame::lua)
             .map(|f| (f.base + f.closure.proto.max_stack as u32) as usize)
             .unwrap_or(0);
+        if fslot == HOOK_YIELD_SLOT {
+            // a hook yielded: the instruction it interrupted runs now
+            if self.stack.len() < frame_need {
+                self.stack.resize(frame_need, Value::Nil);
+            }
+            self.hook_resumed = self.version >= LuaVersion::Lua52;
+            return self.exec_with(1);
+        }
         let need = frame_need.max((fslot + n) as usize);
         if self.stack.len() < need {
             self.stack.resize(need, Value::Nil);

@@ -210,9 +210,13 @@ pub unsafe extern "C" fn lua_newthread(L: *mut LuaState) -> *mut LuaState {
     api.push(Value::Coro(co));
     let globals = api.thread_globals();
     api.vm.host_set_thread_globals(co, globals);
-    let hook = api.st().hook;
+    let (func, mask, count) = {
+        let h = &api.st().hook;
+        (h.func, h.mask, h.count)
+    };
     let l1 = state_of(api.vm, co);
-    st(l1).hook = hook;
+    let h1 = &mut st(l1).hook;
+    (h1.func, h1.mask, h1.count) = (func, mask, count);
     l1
 }
 
