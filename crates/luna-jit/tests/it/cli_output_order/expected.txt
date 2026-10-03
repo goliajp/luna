@@ -1,0 +1,1337 @@
+=== 5.1 a.file
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in function 'error'
+	a.lua:2: in main chunk
+	[C]: ?
+a
+status 1
+
+=== end
+=== 5.1 a.pipe
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in function 'error'
+	a.lua:2: in main chunk
+	[C]: ?
+a
+status 1
+
+=== end
+=== 5.1 a.pty
+a
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in function 'error'
+	a.lua:2: in main chunk
+	[C]: ?
+status 1
+
+=== end
+=== 5.1 b.file
+E1
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in function 'error'
+	b.lua:7: in main chunk
+	[C]: ?
+xy
+z
+partialstatus 1
+
+=== end
+=== 5.1 b.pipe
+E1
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in function 'error'
+	b.lua:7: in main chunk
+	[C]: ?
+xy
+z
+partialstatus 1
+
+=== end
+=== 5.1 b.pty
+xy
+E1
+z
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in function 'error'
+	b.lua:7: in main chunk
+	[C]: ?
+partialstatus 1
+
+=== end
+=== 5.1 c.file
+Eno newlinestatus 3
+
+=== end
+=== 5.1 c.pipe
+Eno newlinestatus 3
+
+=== end
+=== 5.1 c.pty
+Eno newlinestatus 3
+
+=== end
+=== 5.1 d.file
+<a*3000>
+<b*3000>
+<c*2190>MID
+lua: d.lua:4: big
+stack traceback:
+	[C]: in function 'error'
+	d.lua:4: in main chunk
+	[C]: ?
+<c*810>
+1
+2
+3
+status 1
+
+=== end
+=== 5.1 d.pipe
+<a*3000>
+<b*3000>
+<c*2190>MID
+lua: d.lua:4: big
+stack traceback:
+	[C]: in function 'error'
+	d.lua:4: in main chunk
+	[C]: ?
+<c*810>
+1
+2
+3
+status 1
+
+=== end
+=== 5.1 d.pty
+<a*3000>
+<b*3000>
+<c*3000>
+MID
+1
+2
+3
+lua: d.lua:4: big
+stack traceback:
+	[C]: in function 'error'
+	d.lua:4: in main chunk
+	[C]: ?
+status 1
+
+=== end
+=== 5.1 e.file
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.1 e.pipe
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.1 e.pty
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.1 f.file
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>lua: f.lua:6: end
+stack traceback:
+	[C]: in function 'error'
+	f.lua:6: in main chunk
+	[C]: ?
+14006
+status 1
+
+=== end
+=== 5.1 f.pipe
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>lua: f.lua:6: end
+stack traceback:
+	[C]: in function 'error'
+	f.lua:6: in main chunk
+	[C]: ?
+nil	Illegal seek	29
+status 1
+
+=== end
+=== 5.1 f.pty
+<w*4096>|E|<w*904><v*8312>|F|<v*688>nil	Illegal seek	29
+lua: f.lua:6: end
+stack traceback:
+	[C]: in function 'error'
+	f.lua:6: in main chunk
+	[C]: ?
+status 1
+
+=== end
+=== 5.1 g.file
+caught g.lua:2: co err
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: ?
+before
+in co
+after
+status 1
+
+=== end
+=== 5.1 g.pipe
+caught g.lua:2: co err
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: ?
+before
+in co
+after
+status 1
+
+=== end
+=== 5.1 g.pty
+before
+in co
+caught g.lua:2: co err
+after
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: ?
+status 1
+
+=== end
+=== 5.1 h.file
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in function 'error'
+	h.lua:5: in main chunk
+	[C]: ?
+status 1
+
+=== end
+=== 5.1 h.pipe
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in function 'error'
+	h.lua:5: in main chunk
+	[C]: ?
+status 1
+
+=== end
+=== 5.1 h.pty
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in function 'error'
+	h.lua:5: in main chunk
+	[C]: ?
+status 1
+
+=== end
+=== 5.1 repl.pipe
+> w> 1
+> stdin:1: x
+stack traceback:
+	[C]: in function 'error'
+	stdin:1: in main chunk
+	[C]: ?
+> p> E
+> 1
+> 
+status 0
+
+=== end
+=== 5.2 a.file
+a
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in function 'error'
+	a.lua:2: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.2 a.pipe
+a
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in function 'error'
+	a.lua:2: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.2 a.pty
+a
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in function 'error'
+	a.lua:2: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.2 b.file
+xy
+E1
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in function 'error'
+	b.lua:7: in main chunk
+	[C]: in ?
+z
+partialstatus 1
+
+=== end
+=== 5.2 b.pipe
+xy
+E1
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in function 'error'
+	b.lua:7: in main chunk
+	[C]: in ?
+z
+partialstatus 1
+
+=== end
+=== 5.2 b.pty
+xy
+E1
+z
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in function 'error'
+	b.lua:7: in main chunk
+	[C]: in ?
+partialstatus 1
+
+=== end
+=== 5.2 c.file
+Eno newlinestatus 3
+
+=== end
+=== 5.2 c.pipe
+Eno newlinestatus 3
+
+=== end
+=== 5.2 c.pty
+Eno newlinestatus 3
+
+=== end
+=== 5.2 d.file
+<a*3000>
+<b*3000>
+<c*3000>
+MID
+1
+2
+3
+lua: d.lua:4: big
+stack traceback:
+	[C]: in function 'error'
+	d.lua:4: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.2 d.pipe
+<a*3000>
+<b*3000>
+<c*3000>
+MID
+1
+2
+3
+lua: d.lua:4: big
+stack traceback:
+	[C]: in function 'error'
+	d.lua:4: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.2 d.pty
+<a*3000>
+<b*3000>
+<c*3000>
+MID
+1
+2
+3
+lua: d.lua:4: big
+stack traceback:
+	[C]: in function 'error'
+	d.lua:4: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.2 e.file
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.2 e.pipe
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.2 e.pty
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.2 f.file
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>14006
+lua: f.lua:6: end
+stack traceback:
+	[C]: in function 'error'
+	f.lua:6: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.2 f.pipe
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>nil	Illegal seek	29
+lua: f.lua:6: end
+stack traceback:
+	[C]: in function 'error'
+	f.lua:6: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.2 f.pty
+<w*4096>|E|<w*904><v*8312>|F|<v*688>nil	Illegal seek	29
+lua: f.lua:6: end
+stack traceback:
+	[C]: in function 'error'
+	f.lua:6: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.2 g.file
+before
+in co
+caught g.lua:2: co err
+after
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: in ?
+gc at close
+status 1
+
+=== end
+=== 5.2 g.pipe
+before
+in co
+caught g.lua:2: co err
+after
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: in ?
+gc at close
+status 1
+
+=== end
+=== 5.2 g.pty
+before
+in co
+caught g.lua:2: co err
+after
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: in ?
+gc at close
+status 1
+
+=== end
+=== 5.2 h.file
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in function 'error'
+	h.lua:5: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.2 h.pipe
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in function 'error'
+	h.lua:5: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.2 h.pty
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in function 'error'
+	h.lua:5: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.2 repl.pipe
+> w> 1
+> stdin:1: x
+stack traceback:
+	[C]: in function 'error'
+	stdin:1: in main chunk
+	[C]: in ?
+> p> E
+> 1
+> 
+status 0
+
+=== end
+=== 5.3 a.file
+a
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in function 'error'
+	a.lua:2: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.3 a.pipe
+a
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in function 'error'
+	a.lua:2: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.3 a.pty
+a
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in function 'error'
+	a.lua:2: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.3 b.file
+xy
+E1
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in function 'error'
+	b.lua:7: in main chunk
+	[C]: in ?
+z
+partialstatus 1
+
+=== end
+=== 5.3 b.pipe
+xy
+E1
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in function 'error'
+	b.lua:7: in main chunk
+	[C]: in ?
+z
+partialstatus 1
+
+=== end
+=== 5.3 b.pty
+xy
+E1
+z
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in function 'error'
+	b.lua:7: in main chunk
+	[C]: in ?
+partialstatus 1
+
+=== end
+=== 5.3 c.file
+Eno newlinestatus 3
+
+=== end
+=== 5.3 c.pipe
+Eno newlinestatus 3
+
+=== end
+=== 5.3 c.pty
+Eno newlinestatus 3
+
+=== end
+=== 5.3 d.file
+<a*3000>
+<b*3000>
+<c*3000>
+MID
+1
+2
+3
+lua: d.lua:4: big
+stack traceback:
+	[C]: in function 'error'
+	d.lua:4: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.3 d.pipe
+<a*3000>
+<b*3000>
+<c*3000>
+MID
+1
+2
+3
+lua: d.lua:4: big
+stack traceback:
+	[C]: in function 'error'
+	d.lua:4: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.3 d.pty
+<a*3000>
+<b*3000>
+<c*3000>
+MID
+1
+2
+3
+lua: d.lua:4: big
+stack traceback:
+	[C]: in function 'error'
+	d.lua:4: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.3 e.file
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.3 e.pipe
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.3 e.pty
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.3 f.file
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>14006
+lua: f.lua:6: end
+stack traceback:
+	[C]: in function 'error'
+	f.lua:6: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.3 f.pipe
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>nil	Illegal seek	29
+lua: f.lua:6: end
+stack traceback:
+	[C]: in function 'error'
+	f.lua:6: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.3 f.pty
+<w*4096>|E|<w*904><v*8312>|F|<v*688>nil	Illegal seek	29
+lua: f.lua:6: end
+stack traceback:
+	[C]: in function 'error'
+	f.lua:6: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.3 g.file
+before
+in co
+caught g.lua:2: co err
+after
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: in ?
+gc at close
+status 1
+
+=== end
+=== 5.3 g.pipe
+before
+in co
+caught g.lua:2: co err
+after
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: in ?
+gc at close
+status 1
+
+=== end
+=== 5.3 g.pty
+before
+in co
+caught g.lua:2: co err
+after
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: in ?
+gc at close
+status 1
+
+=== end
+=== 5.3 h.file
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in function 'error'
+	h.lua:5: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.3 h.pipe
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in function 'error'
+	h.lua:5: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.3 h.pty
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in function 'error'
+	h.lua:5: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.3 repl.pipe
+> w> 1
+> stdin:1: x
+stack traceback:
+	[C]: in function 'error'
+	stdin:1: in main chunk
+	[C]: in ?
+> p> E
+> 1
+> 
+status 0
+
+=== end
+=== 5.4 a.file
+a
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in function 'error'
+	a.lua:2: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.4 a.pipe
+a
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in function 'error'
+	a.lua:2: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.4 a.pty
+a
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in function 'error'
+	a.lua:2: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.4 b.file
+xy
+E1
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in function 'error'
+	b.lua:7: in main chunk
+	[C]: in ?
+z
+partialstatus 1
+
+=== end
+=== 5.4 b.pipe
+xy
+E1
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in function 'error'
+	b.lua:7: in main chunk
+	[C]: in ?
+z
+partialstatus 1
+
+=== end
+=== 5.4 b.pty
+xy
+E1
+z
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in function 'error'
+	b.lua:7: in main chunk
+	[C]: in ?
+partialstatus 1
+
+=== end
+=== 5.4 c.file
+Eno newlinestatus 3
+
+=== end
+=== 5.4 c.pipe
+Eno newlinestatus 3
+
+=== end
+=== 5.4 c.pty
+Eno newlinestatus 3
+
+=== end
+=== 5.4 d.file
+<a*3000>
+<b*3000>
+<c*3000>
+MID
+1
+2
+3
+lua: d.lua:4: big
+stack traceback:
+	[C]: in function 'error'
+	d.lua:4: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.4 d.pipe
+<a*3000>
+<b*3000>
+<c*3000>
+MID
+1
+2
+3
+lua: d.lua:4: big
+stack traceback:
+	[C]: in function 'error'
+	d.lua:4: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.4 d.pty
+<a*3000>
+<b*3000>
+<c*3000>
+MID
+1
+2
+3
+lua: d.lua:4: big
+stack traceback:
+	[C]: in function 'error'
+	d.lua:4: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.4 e.file
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.4 e.pipe
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.4 e.pty
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.4 f.file
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>14006
+lua: f.lua:6: end
+stack traceback:
+	[C]: in function 'error'
+	f.lua:6: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.4 f.pipe
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>nil	Illegal seek	29
+lua: f.lua:6: end
+stack traceback:
+	[C]: in function 'error'
+	f.lua:6: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.4 f.pty
+<w*4096>|E|<w*904><v*8312>|F|<v*688>nil	Illegal seek	29
+lua: f.lua:6: end
+stack traceback:
+	[C]: in function 'error'
+	f.lua:6: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.4 g.file
+before
+in co
+caught g.lua:2: co err
+after
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: in ?
+gc at close
+status 1
+
+=== end
+=== 5.4 g.pipe
+before
+in co
+caught g.lua:2: co err
+after
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: in ?
+gc at close
+status 1
+
+=== end
+=== 5.4 g.pty
+before
+in co
+caught g.lua:2: co err
+after
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: in ?
+gc at close
+status 1
+
+=== end
+=== 5.4 h.file
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in function 'error'
+	h.lua:5: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.4 h.pipe
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in function 'error'
+	h.lua:5: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.4 h.pty
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in function 'error'
+	h.lua:5: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.4 repl.pipe
+> w> 1
+> stdin:1: x
+stack traceback:
+	[C]: in function 'error'
+	stdin:1: in main chunk
+	[C]: in ?
+> p> E
+> 1
+> 
+status 0
+
+=== end
+=== 5.5 a.file
+a
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in global 'error'
+	a.lua:2: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.5 a.pipe
+a
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in global 'error'
+	a.lua:2: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.5 a.pty
+a
+lua: a.lua:2: boom
+stack traceback:
+	[C]: in global 'error'
+	a.lua:2: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.5 b.file
+xy
+E1
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in global 'error'
+	b.lua:7: in main chunk
+	[C]: in ?
+z
+partialstatus 1
+
+=== end
+=== 5.5 b.pipe
+xy
+E1
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in global 'error'
+	b.lua:7: in main chunk
+	[C]: in ?
+z
+partialstatus 1
+
+=== end
+=== 5.5 b.pty
+xy
+E1
+z
+E2
+lua: b.lua:7: e
+stack traceback:
+	[C]: in global 'error'
+	b.lua:7: in main chunk
+	[C]: in ?
+partialstatus 1
+
+=== end
+=== 5.5 c.file
+Eno newlinestatus 3
+
+=== end
+=== 5.5 c.pipe
+Eno newlinestatus 3
+
+=== end
+=== 5.5 c.pty
+Eno newlinestatus 3
+
+=== end
+=== 5.5 d.file
+<a*3000>
+<b*3000>
+<c*3000>
+MID
+1
+2
+3
+lua: d.lua:4: big
+stack traceback:
+	[C]: in global 'error'
+	d.lua:4: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.5 d.pipe
+<a*3000>
+<b*3000>
+<c*3000>
+MID
+1
+2
+3
+lua: d.lua:4: big
+stack traceback:
+	[C]: in global 'error'
+	d.lua:4: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.5 d.pty
+<a*3000>
+<b*3000>
+<c*3000>
+MID
+1
+2
+3
+lua: d.lua:4: big
+stack traceback:
+	[C]: in global 'error'
+	d.lua:4: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.5 e.file
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.5 e.pipe
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.5 e.pty
+a12b
+3c
+4
+5
+status 0
+
+=== end
+=== 5.5 f.file
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>14006
+lua: f.lua:6: end
+stack traceback:
+	[C]: in global 'error'
+	f.lua:6: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.5 f.pipe
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>nil	Illegal seek	29
+lua: f.lua:6: end
+stack traceback:
+	[C]: in global 'error'
+	f.lua:6: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.5 f.pty
+<w*4096>|E|<w*904><v*8312>|F|<v*688>nil	Illegal seek	29
+lua: f.lua:6: end
+stack traceback:
+	[C]: in global 'error'
+	f.lua:6: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.5 g.file
+before
+in co
+caught g.lua:2: co err
+after
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: in ?
+gc at close
+status 1
+
+=== end
+=== 5.5 g.pipe
+before
+in co
+caught g.lua:2: co err
+after
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: in ?
+gc at close
+status 1
+
+=== end
+=== 5.5 g.pty
+before
+in co
+caught g.lua:2: co err
+after
+lua: g.lua:7: attempt to concatenate a nil value
+stack traceback:
+	g.lua:7: in main chunk
+	[C]: in ?
+gc at close
+status 1
+
+=== end
+=== 5.5 h.file
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in global 'error'
+	h.lua:5: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.5 h.pipe
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in global 'error'
+	h.lua:5: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.5 h.pty
+1E	x	2
+3F	y	4
+lua: h.lua:5: h
+stack traceback:
+	[C]: in global 'error'
+	h.lua:5: in main chunk
+	[C]: in ?
+status 1
+
+=== end
+=== 5.5 repl.pipe
+> w> 1
+> stdin:1: x
+stack traceback:
+	[C]: in global 'error'
+	stdin:1: in main chunk
+	[C]: in ?
+> p> E
+> stdin:1: unexpected symbol near '='
+> 
+status 0
+
+=== end
