@@ -19,7 +19,7 @@ pub(super) fn emit_tfor_call_op<E: Emit>(
         //      `vm.stack[A+4..=A+6] = vm.stack[A..=A+2]` copy
         //      sees current trace values (control changes each
         //      iter via TForLoop's R[A+2] = R[A+4] writeback).
-        //   2. Call `luna_jit_op_tforcall(A, nvars)`. Status
+        //   2. Call `luna_jit_op_tforcall(A, nvars, ..)`. Status
         //      `< 0` → deopt (Lua-closure iter or runtime err).
         //   3. Continue branch: reload regs[A+2] + regs[A+4..]
         //      from vm.stack so subsequent body iters (after the
@@ -117,13 +117,16 @@ pub(super) fn emit_tfor_helper_call<E: Emit>(
     let ctrl_addr = lw.bcx.ins().stack_addr(types::I64, out_ss, 0);
     let key_addr = lw.bcx.ins().stack_addr(types::I64, out_ss, 8);
     let val_addr = lw.bcx.ins().stack_addr(types::I64, out_ss, 16);
+    // a native iterator can collect: R[A..=A+2] are on the stack (spilled
+    // or never changed) and the registers below them go as roots
+    let roots = emit_ssa_roots(lw, i, oc.off + a_us);
     let a_arg = lw.bcx.ins().iconst(types::I64, a_us as i64);
     let nvars_arg = lw.bcx.ins().iconst(types::I64, nvars);
     let func_ref = lw.bcx.import_func(op_tforcall_id);
-    let call_inst = lw
-        .bcx
-        .ins()
-        .call(func_ref, &[a_arg, nvars_arg, ctrl_addr, key_addr, val_addr]);
+    let call_inst = lw.bcx.ins().call(
+        func_ref,
+        &[a_arg, nvars_arg, ctrl_addr, key_addr, val_addr, roots],
+    );
     let status_or_tag = lw.bcx.inst_results(call_inst)[0];
     // -1: not a native iterator, or it raised; the
     // interpreter redoes the op
