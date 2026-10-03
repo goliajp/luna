@@ -21,7 +21,6 @@ mod threads;
 mod values;
 pub use block::HostBlock;
 pub use debug::{HostAr, HostHookFn, HostLevel};
-pub use load::HostChunkProgress;
 pub use values::{HOST_OP_BNOT, HOST_OP_UNM};
 
 /// The C API's side of a [`ContKind::Host`] continuation.
@@ -118,6 +117,18 @@ impl Vm {
             numeric::Num::Int(i) => Value::Int(i),
             numeric::Num::Float(f) => Value::Float(f),
         })
+    }
+
+    /// The function the C API made for the light C function `key`, made
+    /// with `make` the first time (5.2+'s functions without upvalues, which
+    /// PUC compares by their C pointer). It lives as long as the Vm.
+    pub fn host_light_fn(&mut self, key: usize, make: impl FnOnce(&mut Vm) -> Value) -> Value {
+        if let Some(&v) = self.host_light.get(&key) {
+            return v;
+        }
+        let v = make(self);
+        self.host_light.insert(key, v);
+        v
     }
 
     /// The native running on top of the dispatch chain.
@@ -252,10 +263,12 @@ impl Vm {
         self.native(f)
     }
 
-    /// How many errors have become "error in error handling" (PUC's
-    /// `LUA_ERRERR`): a protected call compares it before and after.
+    /// How many errors have taken a status of their own: "error in error
+    /// handling" (PUC's `LUA_ERRERR`), and 5.2/5.3's finalizer error of a
+    /// full collection (`LUA_ERRGCMM`). A protected call compares it before
+    /// and after, and tells them apart by the message.
     pub fn host_errerr_count(&self) -> u64 {
-        self.errerr_raised
+        self.errerr_raised + self.gcmm_raised
     }
 
     /// Close `co` (PUC `lua_closethread`): run its pending `__close`

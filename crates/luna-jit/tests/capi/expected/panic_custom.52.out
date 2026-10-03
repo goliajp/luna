@@ -1,0 +1,3 @@
+luaL_newstate has a panic function: yes
+the previous one is returned: yes
+custom panic: [the error], 3 values on the stack

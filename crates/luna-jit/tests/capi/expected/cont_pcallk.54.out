@@ -13,8 +13,8 @@ k_pcall: status=2 ctx=9 frame: top=3 [base <function> handled: [string "return f
 resume 2: status=0 nres=4 lua_status=0 co: top=4 [base <function> handled: [string "return function(a) coroutine.yield('y'); erro..."]:1: late 2]
 -- yield then table error with handler
 resume 1: status=1 nres=1 lua_status=1 co: top=1 [y]
-k_pcall: status=2 ctx=9 frame: top=3 [base <function> handled: table: 0x559b5d1940]
-resume 2: status=0 nres=4 lua_status=0 co: top=4 [base <function> handled: table: 0x559b5d1940 2]
+k_pcall: status=2 ctx=9 frame: top=3 [base <function> handled: table]
+resume 2: status=0 nres=4 lua_status=0 co: top=4 [base <function> handled: table 2]
 -- error without yield
 k_pcall: status=2 ctx=9 frame: top=2 [base early]
 resume 1: status=0 nres=3 lua_status=0 co: top=3 [base early 2]
