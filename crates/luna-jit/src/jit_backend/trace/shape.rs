@@ -75,7 +75,6 @@ pub(crate) fn verify_depth_invariant(items: &[(u8, bool)]) -> bool {
 pub(super) fn plain_trace_end(
     record: &TraceRecord,
     folded_ops: &[bool],
-    head_proto: Gc<Proto>,
 ) -> Option<(usize, TraceEnd)> {
     let mut found: Option<(usize, TraceEnd)> = None;
     for (i, r) in record.ops.iter().enumerate() {
@@ -83,22 +82,13 @@ pub(super) fn plain_trace_end(
             continue;
         }
         let depth = r.inline_depth as usize;
-        if depth > MAX_INLINE_DEPTH as usize || !std::ptr::eq(r.proto.as_ptr(), head_proto.as_ptr())
-        {
+        if depth > MAX_INLINE_DEPTH as usize {
             found = Some((i, TraceEnd::InlineAbort));
             break;
         }
         match r.inst.op() {
             Op::Call => {
-                let nxt = record.ops.get(i + 1);
-                let is_self_recursive = nxt
-                    .map(|n_op| {
-                        n_op.inline_depth as usize == depth + 1
-                            && depth < MAX_INLINE_DEPTH as usize
-                            && std::ptr::eq(n_op.proto.as_ptr(), head_proto.as_ptr())
-                    })
-                    .unwrap_or(false);
-                if is_self_recursive {
+                if call_inlinable(record, i) {
                     // Continue walking — Op::Call emits nothing in
                     // the inline path and op_offsets handles the
                     // window shift for the callee's subsequent ops.
@@ -143,6 +133,35 @@ pub(super) fn plain_trace_end(
         }
     }
     found
+}
+
+/// Whether the `Op::Call` at `i` is lowered inline: the recorder followed
+/// it into a Lua function (the next op is one level deeper) and the inline
+/// path can hold the call without a real frame, and the frame-materialise
+/// helper rebuild one at an exit inside the callee:
+///   - the caller wants 0 or 1 results (`C` = 1 or 2, or `C` = 0 when the
+///     callee returned exactly one value while recording): the callee's
+///     `Return0` / `Return1` writes the caller's R[A] or not
+///   - the argument count is fixed (`B` > 0): a missing parameter is
+///     written nil by the call, a surplus argument is not seen
+///   - the callee is not vararg: its frame would first move the arguments
+///     above the fixed parameters, which neither the inline path nor the
+///     helper does
+///
+/// Any other call ends the trace there, as a call the trace leaves to the
+/// interpreter.
+pub(super) fn call_inlinable(record: &TraceRecord, i: usize) -> bool {
+    let rop = &record.ops[i];
+    let depth = rop.inline_depth as usize;
+    let Some(next) = record.ops.get(i + 1) else {
+        return false;
+    };
+    let c = rop.inst.c();
+    next.inline_depth as usize == depth + 1
+        && depth < MAX_INLINE_DEPTH as usize
+        && (c == 1 || c == 2 || (c == 0 && rop.var_count == Some(1)))
+        && rop.inst.b() != 0
+        && !next.proto.is_vararg
 }
 
 pub(super) fn compute_op_offsets(record: &TraceRecord) -> (Vec<u32>, Vec<Option<u8>>) {
@@ -390,11 +409,21 @@ pub(super) fn is_whitelisted_op(op: Op) -> bool {
             // right-associative fold over `R[A..A+B-1]`, writing
             // the resulting string to R[A]. Trace emit spills the
             // operand window to vm.stack and calls
-            // `luna_jit_op_concat(A, B)` helper which runs
+            // `luna_jit_op_concat(A, B, roots)` helper which runs
             // concat_run + detects/deopts on the __concat
             // metamethod path. Helper-path equivalent to interp
             // (perf wash); the perf wins live in the buffered string
             // accumulator path.
             | Op::Concat
+            // Op::SelfOp `R[A+1] := R[B]; R[A] := R[B][K[C]]`: a method
+            // lookup through the receiver's table-valued `__index` links
+            // (`luna_jit_op_self_checked`)
+            | Op::SelfOp
+            // booleans: `LFalseSkip` writes false and skips the next op,
+            // which the recording already did not follow
+            | Op::LoadFalse
+            | Op::LoadTrue
+            | Op::LFalseSkip
+            | Op::Not
     )
 }

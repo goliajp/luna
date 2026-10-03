@@ -1,0 +1,30 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	metaadd.lua:1: in function <metaadd.lua:1>
+	metaadd.lua:2: in function 'h'
+	metaadd.lua:3: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	metaadd.lua:1: in function '__add'
+	metaadd.lua:2: in function 'h'
+	metaadd.lua:3: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	metaadd.lua:1: in metamethod '__add'
+	metaadd.lua:2: in local 'h'
+	metaadd.lua:3: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	metaadd.lua:1: in metamethod 'add'
+	metaadd.lua:2: in local 'h'
+	metaadd.lua:3: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	metaadd.lua:1: in metamethod 'add'
+	metaadd.lua:2: in local 'h'
+	metaadd.lua:3: in main chunk

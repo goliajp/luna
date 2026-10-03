@@ -153,5 +153,7 @@ use iter::{nat_ipairs, nat_next};
 pub(crate) use iter::{nat_pairs, pairs_mm_results};
 pub(crate) use load::nat_load;
 use load::nat_loadstring;
-pub(crate) use protected::{nat_host_xpcall, nat_pcall, nat_xpcall, xpcall_handler};
+pub(crate) use protected::{
+    nat_host_xpcall, nat_host_xpcall_in_c, nat_pcall, nat_xpcall, xpcall_handler,
+};
 pub(crate) use tonumber::nat_tonumber;

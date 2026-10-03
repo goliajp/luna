@@ -102,9 +102,26 @@ impl LuaTable {
         // SAFETY: `self.ticket` pins `t` as a host root, so no collection
         // frees it, and the `&mut Table` lives only for this `set`, which
         // reaches no other reference to `t`
-        unsafe { t.as_mut() }.set(&mut lua.0.heap, k, v)?;
+        if let Err(e) = unsafe { t.as_mut() }.set(&mut lua.0.heap, k, v) {
+            return Err(lua.0.table_error(e));
+        }
         lua.0.heap.barrier_back(t);
         Ok(())
+    }
+
+    /// Mark the table read-only (`on = true`) or writable again; see
+    /// [`Vm::set_readonly`]. [`LuaTable::set`]
+    /// on a read-only table returns the error a script's write raises.
+    pub fn set_readonly(self, lua: &mut Lua, on: bool) {
+        let t = match lua
+            .0
+            .read_host(self.ticket)
+            .expect("LuaTable used after unpin / unpin_all")
+        {
+            Value::Table(t) => t,
+            _ => return,
+        };
+        lua.0.set_readonly(t, on);
     }
 
     /// Read `t[k]`; decode as `V`. Returns `Err` if the key is

@@ -229,6 +229,38 @@ pub(super) fn cache_trace(
     proto.traces.borrow_mut().push(TArc::new(ct));
 }
 
+/// [`cache_trace`] for a trace compiled from `record`, keeping alive the
+/// prototypes of the other functions it inlined.
+pub(super) fn cache_compiled_trace(
+    proto: Gc<crate::runtime::function::Proto>,
+    ct: crate::jit::trace::CompiledTrace,
+    record: &crate::jit::trace::TraceRecord,
+) {
+    cache_trace(proto, ct);
+    keep_inlined(
+        proto,
+        record
+            .ops
+            .iter()
+            .filter(|op| op.inline_depth > 0)
+            .map(|op| op.proto),
+    );
+}
+
+/// Keeps the prototypes in `inlined` alive while `proto` lives: a trace
+/// cached on `proto` checks callees against them by address.
+pub(super) fn keep_inlined(
+    proto: Gc<crate::runtime::function::Proto>,
+    inlined: impl IntoIterator<Item = Gc<crate::runtime::function::Proto>>,
+) {
+    let mut kept = proto.inlined_protos.borrow_mut();
+    for p in inlined {
+        if !p.ptr_eq(proto) && !kept.iter().any(|k| k.ptr_eq(p)) {
+            kept.push(p);
+        }
+    }
+}
+
 pub(super) fn trace_head_abandoned(
     proto: Gc<crate::runtime::function::Proto>,
     head_pc: u32,

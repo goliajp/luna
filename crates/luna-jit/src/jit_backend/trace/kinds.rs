@@ -40,6 +40,9 @@ pub(super) enum RegKind {
     /// through the tag-preserving `update_raw` helper which can't
     /// handle a stale vm.stack tag.
     Str,
+    /// a boolean: payload 0 (false) or 1 (true); its value tag is
+    /// `raw::FALSE` plus the payload, known only at run time
+    Bool,
 }
 
 impl RegKind {
@@ -51,6 +54,9 @@ impl RegKind {
             luna_core::runtime::value::raw::CLOSURE => Some(RegKind::Closure),
             luna_core::runtime::value::raw::NIL => Some(RegKind::Nil),
             luna_core::runtime::value::raw::STR => Some(RegKind::Str),
+            luna_core::runtime::value::raw::FALSE | luna_core::runtime::value::raw::TRUE => {
+                Some(RegKind::Bool)
+            }
             _ => None,
         }
     }
@@ -72,6 +78,7 @@ pub(super) fn kinds_to_exit_tags(kinds: &[RegKind]) -> Vec<ExitTag> {
             RegKind::Closure => ExitTag::Closure,
             RegKind::Nil => ExitTag::Nil,
             RegKind::Str => ExitTag::Str,
+            RegKind::Bool => ExitTag::Bool,
         })
         .collect()
 }
@@ -102,6 +109,7 @@ pub(super) fn kind_to_raw_tag(k: RegKind) -> u8 {
         RegKind::Closure => raw::CLOSURE,
         RegKind::Str => raw::STR,
         RegKind::Unset | RegKind::Unknown | RegKind::StackHeld | RegKind::Nil => raw::NIL,
+        RegKind::Bool => unreachable!("a boolean's tag is computed (`emit_kind_tag`)"),
     }
 }
 
@@ -116,8 +124,19 @@ pub(super) fn known_tag(k: RegKind) -> Option<u8> {
         RegKind::Closure => Some(raw::CLOSURE),
         RegKind::Str => Some(raw::STR),
         RegKind::Nil => Some(raw::NIL),
-        RegKind::Unset | RegKind::Unknown | RegKind::StackHeld => None,
+        RegKind::Unset | RegKind::Unknown | RegKind::StackHeld | RegKind::Bool => None,
     }
+}
+
+/// The value tag of a register of kind `k` holding `payload`, as an `i64`
+/// value: a constant, or for a boolean `raw::FALSE` plus its payload.
+/// `None` when the kind does not say.
+pub(super) fn emit_kind_tag<E: Ins>(bcx: &mut E, k: RegKind, payload: Value) -> Option<Value> {
+    if k == RegKind::Bool {
+        let f = i64::from(luna_core::runtime::value::raw::FALSE);
+        return Some(bcx.ins().iadd_imm_u(payload, f));
+    }
+    known_tag(k).map(|t| bcx.ins().iconst(types::I64, i64::from(t)))
 }
 
 /// The value tag (`runtime::value::raw`) of a register of kind `k`.

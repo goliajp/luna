@@ -41,6 +41,8 @@ struct Replay<'a, 'f> {
     blocks: Vec<Option<Block>>,
     slots: Vec<cranelift_codegen::ir::StackSlot>,
     call_conv: CallConv,
+    /// The data symbol each relocation is read from.
+    reloc_gv: Vec<cranelift_codegen::ir::GlobalValue>,
 }
 
 impl Replay<'_, '_> {
@@ -124,6 +126,13 @@ impl Replay<'_, '_> {
         match i.op {
             Op::Iconst(n) => {
                 let v = self.b.ins().iconst(t, n);
+                self.set(i.dst, v);
+            }
+            Op::Reloc(n) => {
+                let v = self
+                    .b
+                    .ins()
+                    .symbol_value(types::I64, self.reloc_gv[n as usize]);
                 self.set(i.dst, v);
             }
             Op::Fconst(bits) => {
@@ -279,7 +288,13 @@ fn targets(i: &Inst) -> [Option<u32>; 2] {
 }
 
 /// Defines the trace function in `module` from `lir`.
-pub(crate) fn define<M: Module>(lir: &Lir, module: &mut M) -> Option<FuncId> {
+/// `relocs`: the addresses the relocations stand for in the Vm the code is
+/// for.
+pub(crate) fn define<M: Module>(
+    lir: &Lir,
+    relocs: &[(super::super::RelocKind, i64)],
+    module: &mut M,
+) -> Option<FuncId> {
     let mut an = live::Analysis::default();
     live::analyze(lir, &mut an);
     let call_conv = module.isa().default_call_conv();
@@ -325,6 +340,18 @@ pub(crate) fn define<M: Module>(lir: &Lir, module: &mut M) -> Option<FuncId> {
             ))
         })
         .collect();
+    let mut reloc_gv = Vec::with_capacity(relocs.len());
+    for n in 0..relocs.len() {
+        let id = module
+            .declare_data(
+                &crate::jit_backend::trace::reloc_symbol(n),
+                Linkage::Import,
+                false,
+                false,
+            )
+            .ok()?;
+        reloc_gv.push(module.declare_data_in_func(id, b.func));
+    }
     let mut r = Replay {
         lir,
         b,
@@ -333,6 +360,7 @@ pub(crate) fn define<M: Module>(lir: &Lir, module: &mut M) -> Option<FuncId> {
         blocks,
         slots,
         call_conv,
+        reloc_gv,
     };
     // each block is sealed once its last predecessor branches to it: with
     // every block left open until the end, Cranelift's SSA construction
@@ -387,7 +415,10 @@ pub(crate) fn define<M: Module>(lir: &Lir, module: &mut M) -> Option<FuncId> {
     if asm_dump {
         ctx.set_disasm(true);
     }
+    crate::jit_backend::trace::reloc::set_values(relocs);
     module.define_function(fn_id, &mut ctx).ok()?;
+    crate::jit_backend::trace::code_dump::note_size(&ctx);
+    crate::jit_backend::trace::reloc::note_sites(&*module, &ctx);
     if asm_dump && let Some(vcode) = ctx.compiled_code().and_then(|c| c.vcode.as_ref()) {
         eprintln!("=== TRACE ASM DUMP (from baseline) ===\n{vcode}\n=== END ===");
     }

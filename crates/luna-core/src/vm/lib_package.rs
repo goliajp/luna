@@ -7,7 +7,7 @@
 //! luna links no dynamic loader: `package.loadlib` and the C searchers fail
 //! the way a PUC build without dynamic-library support does.
 
-use crate::runtime::{Gc, Table, UserdataPayload, Value};
+use crate::runtime::{Gc, Table, TableError, UserdataPayload, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::raise_str;
@@ -162,8 +162,10 @@ fn raw_set(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) {
 /// part raises "table overflow" as any other store does.
 fn raw_set_checked(vm: &mut Vm, t: Gc<Table>, k: Value, v: Value) -> Result<(), LuaError> {
     // SAFETY: `t` is a table the caller holds (the package table or one reached from it); no reference into it is live across the `set`, which does not collect
-    if unsafe { t.as_mut() }.set(&mut vm.heap, k, v).is_err() {
-        return Err(vm.rt_err("table overflow"));
+    match unsafe { t.as_mut() }.set(&mut vm.heap, k, v) {
+        Ok(()) => {}
+        Err(e @ TableError::ReadOnly) => return Err(vm.table_error(e)),
+        Err(_) => return Err(vm.rt_err("table overflow")),
     }
     vm.barrier_back_table(t);
     Ok(())

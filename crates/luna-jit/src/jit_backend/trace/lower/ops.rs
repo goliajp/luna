@@ -7,6 +7,7 @@ mod call;
 mod closure;
 mod compare;
 mod field;
+mod method;
 mod order;
 mod sequence;
 mod table;
@@ -18,6 +19,7 @@ use call::*;
 use closure::*;
 use compare::*;
 use field::*;
+use method::*;
 use order::*;
 use sequence::*;
 use table::*;
@@ -52,9 +54,16 @@ impl OpCx<'_> {
 /// Lowers one op of the body; `None` when the trace cannot be compiled.
 pub(super) fn emit_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<()> {
     match oc.op {
-        Op::Jmp | Op::Move | Op::LoadI | Op::LoadF | Op::LoadNil | Op::LoadK => {
-            emit_basic_op(lw, pl, oc)
-        }
+        Op::Jmp
+        | Op::Move
+        | Op::LoadI
+        | Op::LoadF
+        | Op::LoadNil
+        | Op::LoadK
+        | Op::LoadFalse
+        | Op::LoadTrue
+        | Op::LFalseSkip
+        | Op::Not => emit_basic_op(lw, pl, oc),
         Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Pow => emit_float_arith_op(lw, pl, oc),
         Op::IDiv
         | Op::Mod
@@ -71,6 +80,7 @@ pub(super) fn emit_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) 
         Op::NewTable | Op::GetI | Op::GetTable => emit_table_new_get_op(lw, pl, oc),
         Op::SetField | Op::SetI | Op::SetTable => emit_table_set_op(lw, pl, oc),
         Op::GetField => emit_get_field_op(lw, pl, oc),
+        Op::SelfOp => emit_self_op(lw, pl, oc),
         Op::GetTabUp => emit_get_tab_up_op(lw, pl, oc),
         Op::SetList | Op::Len | Op::Concat => emit_sequence_op(lw, pl, oc),
         Op::Closure | Op::Close | Op::GetUpval => emit_closure_op(lw, pl, oc),

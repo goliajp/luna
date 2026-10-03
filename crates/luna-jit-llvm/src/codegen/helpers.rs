@@ -154,7 +154,7 @@ fn helper_registry() -> Vec<(&'static str, usize, u32, bool)> {
         (
             "luna_jit_op_concat",
             luna_jit_op_concat as *const () as usize,
-            2,
+            3,
             true,
         ),
         (
@@ -184,7 +184,7 @@ fn helper_registry() -> Vec<(&'static str, usize, u32, bool)> {
         (
             "luna_jit_op_tforcall",
             luna_jit_op_tforcall as *const () as usize,
-            5,
+            6,
             true,
         ),
         (

@@ -108,6 +108,7 @@ pub use luna_jit_helpers::*;
 // (cache + cache_handles + trace_handles). Installed alongside the
 // `CraneliftBackend` by `crate::install_default_jit`. luna-core sees
 // it through the opaque `JitStorage` trait only.
+pub(crate) mod engine;
 pub(crate) mod storage;
 
 #[cfg(test)]
@@ -136,11 +137,15 @@ fn test_vm_new_minimal(version: luna_core::version::LuaVersion) -> luna_core::vm
 }
 
 mod chunk_cache;
+mod chunk_share;
+pub use chunk_share::chunk_codegen_count;
 mod chunk_lower;
 mod chunk_module;
 mod jit_handle;
 pub(crate) use chunk_cache::CacheEntry;
-pub use chunk_cache::{cache_clear, cache_entry_count, cache_lookup_or_compile};
+pub use chunk_cache::{
+    cache_clear, cache_entry_count, cache_lookup_or_compile, chunk_adopted_count,
+};
 pub use chunk_lower::lower_int_chunk_into;
 pub use chunk_module::try_compile_int_chunk;
 pub use jit_handle::JitHandle;
@@ -205,10 +210,21 @@ pub(crate) const TABLE_ASIZE_OFFSET: usize = std::mem::offset_of!(luna_core::run
 pub(crate) const TABLE_METATABLE_OFFSET: usize =
     std::mem::offset_of!(luna_core::runtime::Table, metatable);
 pub(crate) const STR_SHORT_OFFSET: usize = luna_core::runtime::string::jit_layout::STR_SHORT_OFFSET;
+/// A string's `u32` hash (see `field_slot::emit_str_key_absent`).
+pub(crate) const STR_HASH_OFFSET: usize = luna_core::runtime::string::jit_layout::STR_HASH_OFFSET;
+/// A node's `i32` link to the next node of its chain (`-1` at the end).
+pub(crate) const NODE_NEXT_OFFSET: usize = luna_core::runtime::table::jit_layout::NODE_NEXT_OFFSET;
 pub(crate) const TABLE_ACOUNT_OFFSET: i32 =
     luna_core::runtime::table::jit_layout::TABLE_ACOUNT_OFFSET as i32;
 pub(crate) const TABLE_APREFIX_OFFSET: i32 =
     luna_core::runtime::table::jit_layout::TABLE_APREFIX_OFFSET as i32;
+/// The byte holding a table's read-only bit, and the bit: a trace's
+/// inline stores leave a read-only table to the store helper, which
+/// refuses it.
+pub(crate) const TABLE_READONLY_BYTE_OFFSET: i32 =
+    luna_core::runtime::table::jit_layout::TABLE_READONLY_BYTE_OFFSET as i32;
+pub(crate) const TABLE_READONLY_BYTE_MASK: i64 =
+    luna_core::runtime::table::jit_layout::TABLE_READONLY_BYTE_MASK as i64;
 
 /// table-field IC scaffold.
 ///

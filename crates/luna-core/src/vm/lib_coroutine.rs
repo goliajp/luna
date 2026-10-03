@@ -3,7 +3,7 @@
 //! lives on `Vm` in exec.rs; these are the thin library wrappers, shaped per
 //! dialect after 5.1's lbaselib and 5.2–5.5's lcorolib.
 
-use crate::runtime::{Coro, CoroStatus, Gc, Table, Value};
+use crate::runtime::{Coro, CoroStatus, Gc, Table, TableError, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{Args, check_function, type_error};
 use crate::vm::builtins::{arg_error, raise_str};
@@ -137,11 +137,10 @@ fn mark_in_wrap(vm: &mut Vm, in_wrap: Gc<Table>, on: bool) -> Result<(), LuaErro
     // the table is reachable through `debug.getupvalue`, so a script can
     // fill it; only adding a key can fail
     // SAFETY: `in_wrap` is the table the running wrap/resume native carries as its upvalue, so the native keeps it alive; no reference into it is live across the `set`, which does not collect
-    if unsafe { in_wrap.as_mut() }
-        .set(&mut vm.heap, me, v)
-        .is_err()
-    {
-        return Err(vm.rt_err("table overflow"));
+    match unsafe { in_wrap.as_mut() }.set(&mut vm.heap, me, v) {
+        Ok(()) => {}
+        Err(e @ TableError::ReadOnly) => return Err(vm.table_error(e)),
+        Err(_) => return Err(vm.rt_err("table overflow")),
     }
     vm.barrier_back_table(in_wrap);
     Ok(())

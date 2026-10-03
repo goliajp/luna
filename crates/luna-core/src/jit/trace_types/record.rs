@@ -213,6 +213,11 @@ pub struct FieldIcSnapshot {
 pub struct TraceRecord {
     /// The PC the trace starts at (back-edge target).
     pub head_proto: Gc<Proto>,
+    /// The recording Vm's switches that shape what is recorded (bit 0:
+    /// field inline cache, bit 1: self-link): traces recorded under other
+    /// switches are not shared.
+    #[doc(hidden)]
+    pub settings: u8,
     /// Pc within `head_proto` where the trace begins (the back-edge target).
     pub head_pc: u32,
     /// Per-register `Value` tag (from `runtime::value::raw`) at
@@ -303,7 +308,17 @@ pub struct TraceRecord {
     /// [`FIELD_SLOT_UNKNOWN`]. The lowerer reads and writes that slot
     /// directly once it checks the slot still holds the key.
     pub field_slots: Vec<u32>,
+    /// Per recorded op, for a `SelfOp` whose receiver lacked the key: the
+    /// hash slot of `__index` in the receiver's metatable (high half) and
+    /// of the key in that `__index` table (low half), or
+    /// [`INDEX_SLOTS_UNKNOWN`]. The lowerer looks the method up there.
+    pub index_slots: Vec<u64>,
+    /// The interned `"__index"`, set when an op has `index_slots`.
+    pub index_key: Option<Gc<crate::runtime::string::LuaStr>>,
 }
+
+/// [`TraceRecord::index_slots`] for an op with none.
+pub const INDEX_SLOTS_UNKNOWN: u64 = u64::MAX;
 
 /// [`TraceRecord::field_slots`] for an op with no slot.
 pub const FIELD_SLOT_UNKNOWN: u32 = u32::MAX;
@@ -318,6 +333,16 @@ impl TraceRecord {
             .get(i)
             .copied()
             .filter(|&t| t != RESULT_TAG_UNKNOWN)
+    }
+
+    /// For `SelfOp` `i`: the slots of `__index` in the receiver's metatable
+    /// and of the key in that table, if recorded.
+    pub fn index_slots(&self, i: usize) -> Option<(u32, u32)> {
+        self.index_slots
+            .get(i)
+            .copied()
+            .filter(|&s| s != INDEX_SLOTS_UNKNOWN)
+            .map(|s| ((s >> 32) as u32, s as u32))
     }
 
     /// The hash slot op `i` found its key in, if any.
@@ -342,6 +367,7 @@ impl TraceRecord {
     ) -> Self {
         TraceRecord {
             head_proto: proto,
+            settings: 0,
             head_pc,
             entry_tags,
             ops: Vec::with_capacity(MAX_TRACE_LEN),
@@ -356,6 +382,8 @@ impl TraceRecord {
             field_ic_snapshot: None,
             result_tags: Vec::with_capacity(MAX_TRACE_LEN),
             field_slots: Vec::with_capacity(MAX_TRACE_LEN),
+            index_slots: Vec::with_capacity(MAX_TRACE_LEN),
+            index_key: None,
         }
     }
 
@@ -380,6 +408,7 @@ impl TraceRecord {
     ) -> Self {
         TraceRecord {
             head_proto: proto,
+            settings: 0,
             head_pc,
             entry_tags,
             ops: Vec::with_capacity(MAX_TRACE_LEN),
@@ -394,6 +423,8 @@ impl TraceRecord {
             field_ic_snapshot: None,
             result_tags: Vec::with_capacity(MAX_TRACE_LEN),
             field_slots: Vec::with_capacity(MAX_TRACE_LEN),
+            index_slots: Vec::with_capacity(MAX_TRACE_LEN),
+            index_key: None,
         }
     }
 
@@ -406,6 +437,7 @@ impl TraceRecord {
         self.ops.push(op);
         self.result_tags.push(RESULT_TAG_UNKNOWN);
         self.field_slots.push(FIELD_SLOT_UNKNOWN);
+        self.index_slots.push(INDEX_SLOTS_UNKNOWN);
         true
     }
 }

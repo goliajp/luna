@@ -73,7 +73,8 @@ pub fn embedded_bytecode() -> &'static [u8] {
     }
 }
 
-/// AOT-binary entry point. Constructs a fully-loaded `Vm`, undumps
+/// AOT-binary entry point for a Lua 5.5 dump (the `luna-aot` CLI
+/// default; [`aot_main_as`] takes the dialect). Constructs a fully-loaded `Vm`, undumps
 /// the embedded bytecode into the heap via `Vm::load` (which routes
 /// through `luna_core::vm::dump::undump` because the dump bytes start
 /// with `\x1bLua`), calls the resulting closure with no args, and
@@ -90,18 +91,15 @@ pub fn embedded_bytecode() -> &'static [u8] {
 ///   (matches PUC `lua` behaviour: scripts don't compose with
 ///   process exit codes unless they call `os.exit`).
 pub fn aot_main() -> i32 {
-    // The dialect baked into the produced binary defaults to 5.5.
-    // The AOT pipeline always dumps with the dialect that compiled the
-    // source, so a `Vm::new(Lua55)` matched against a 5.4 dump would
-    // be a dialect mismatch — `MacroLua` falls back to the
-    // 5.4 header, and `dump::undump` rejects mismatches with a clear
-    // "header mismatch" message.
-    //
-    // The stub pins 5.5 — the CLI default — and rejects loads that
-    // don't match. Emitting a `__luna_version` byte alongside the
-    // bytecode bracket symbols would let it pick the dialect
-    // automatically.
-    let mut vm = Vm::new(LuaVersion::Lua55);
+    aot_main_as(LuaVersion::Lua55)
+}
+
+/// [`aot_main`] for a dump compiled for `version`. luna's dump header does
+/// not tell 5.1 / 5.2 / 5.5 apart, so the dialect has to come from
+/// whoever compiled the script; a `Vm` of another dialect refuses the dump
+/// or runs it with the wrong library set.
+pub fn aot_main_as(version: LuaVersion) -> i32 {
+    let mut vm = Vm::new(version);
 
     // Enable bytecode loading explicitly. `Vm::new` defaults to
     // `bytecode_loading = true` (see `exec.rs:910`) but a future

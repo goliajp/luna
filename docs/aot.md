@@ -71,7 +71,10 @@ Behind the scenes, `luna-aot compile`:
    mcode and emitted as additional `.o` sections.
 4. Links `luna-runtime-helpers` (the static-link runtime entry
    crate) against the generated `.o` files; the entry symbol
-   `luna_aot_run(ptr, len) -> i32` runs the embedded bytecode.
+   `luna_aot_run_dialect(ptr, len, dialect) -> i32` runs the embedded
+   bytecode on a `Vm` of the dialect it was compiled for (the generated
+   C `main` passes it). `luna_aot_run(ptr, len)` is the same entry for
+   a 5.5 dump.
 5. Produces the final native binary at the path passed via `--out`
    (or the input stem if `--out` is omitted).
 
@@ -92,14 +95,44 @@ syntax (`<arch>-<vendor>-<sys>-<env>`). For trace-mcode codegen the
 Cranelift `all-arch` backend feature is enabled in `luna-aot`'s
 crate, so the **build-time** binary supports every Cranelift target
 without rebuilding `luna-aot` itself. The **link** step uses the
-system `cc` (or `clang-cl` / `link.exe` on Windows MSVC); it will
-self-skip if the matching cross-linker isn't installed, falling back
-to interp + JIT codegen on the build host's triple.
+system `cc`, a named cross compiler, or for Windows MSVC the tools
+listed below; a missing tool is an error that names what to install.
 
 Tier-1 verified on macOS aarch64 host: `aarch64-apple-darwin`,
 `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`,
 `x86_64-unknown-linux-musl`, `x86_64-pc-windows-gnu`,
 `x86_64-pc-windows-msvc`.
+
+### Windows
+
+A Windows host is a first-class AOT host: CI builds and runs AOT
+binaries on `windows-latest` for both Windows targets, traces
+included.
+
+| Target | Host | C compiler + linker | Setup |
+|---|---|---|---|
+| `x86_64-pc-windows-msvc` (default on a Windows host with the MSVC Rust toolchain) | Windows | `cl.exe` + `link.exe` | Visual Studio 2017 or newer, or its Build Tools, with the "Desktop development with C++" workload. luna-aot finds the newest install and sets `INCLUDE` / `LIB` / `PATH` itself, so a plain `cmd` or PowerShell works; inside a Developer Command Prompt its environment is used as is |
+| `x86_64-pc-windows-msvc` | Windows, no Visual Studio C++ tools | `clang-cl` + `lld-link` from LLVM on `PATH` | They still need the Windows SDK and the MSVC libraries |
+| `x86_64-pc-windows-msvc` | macOS / Linux | `clang-cl` + `lld-link` | `brew install llvm` / `apt install clang lld`, plus the Windows SDK and CRT libraries given through `LIB` (an `xwin` download); CI checks the PE layout of this leg, not a run |
+| `x86_64-pc-windows-gnu` | Windows | MinGW `x86_64-w64-mingw32-gcc`, or its plain `gcc` | `rustup target add x86_64-pc-windows-gnu` and a MinGW-w64 toolchain on `PATH` (MSYS2, or the one on GitHub's runners) |
+| `x86_64-pc-windows-gnu` | macOS / Linux | `x86_64-w64-mingw32-gcc` | `brew install mingw-w64` / `apt install gcc-mingw-w64-x86-64` |
+
+`CC` and `LD` override the compiler and linker for either target. On a
+Windows target an `--out` path without an extension gets `.exe`.
+
+The two targets differ in what the binary needs at run time. Both use
+the Universal CRT that ships with Windows 10 and later (the
+`api-ms-win-crt-*` imports). The MSVC binary also imports
+`VCRUNTIME140.dll`, which comes with the Visual C++ Redistributable;
+install it, or ship it next to the binary, on a machine without Visual
+Studio. The MinGW binary built by a UCRT MinGW toolchain (MSYS2's
+`ucrt64`, GitHub's runners) needs nothing beyond Windows; one built by
+an older `msvcrt` toolchain imports `msvcrt.dll` instead. AOT traces,
+the per-dialect `Vm` and the `.lt_*` sections the runtime reads behave
+the same on both.
+
+Windows on ARM (`aarch64-pc-windows-msvc`) is not supported: Cranelift's
+PE/COFF writer lacks a relocation the AArch64 traces need.
 
 Tier-2 (build-succeeds but actual-run not CI-verified on every
 release): `aarch64-unknown-linux-musl`, RISC-V, s390x.

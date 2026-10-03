@@ -3,6 +3,8 @@
 use std::fs;
 use std::path::Path;
 
+use luna_core::version::LuaVersion;
+
 use object::write::{Object, Symbol, SymbolSection};
 use object::{SectionKind, SymbolKind, SymbolScope};
 
@@ -113,7 +115,9 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
     // is 8 — `.lt_chai` mirrors `.lt_skix` / `.lt_meta`. Both names
     // must match the lowerer's section choice in
     // `emit_chain_ptr_arg` and the deploy resolver's bracket /
-    // section-walker needles.
+    // section-walker needles. `luna_proto_idx` / `.lt_prix` hold the
+    // proto slots of inlined calls (`emit_proto_arg`), placeheld the same
+    // way.
     match target.os {
         TargetOs::MacOs => {
             "__attribute__((used, section(\"__DATA,luna_strkey_idx\"), aligned(8)))\n\
@@ -121,7 +125,9 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
              __attribute__((used, section(\"__DATA,luna_trace_meta\"), aligned(8)))\n\
              static const char luna_trace_meta_placeholder[48] = {0};\n\
              __attribute__((used, section(\"__DATA,luna_inline_chnx\"), aligned(8)))\n\
-             static const char luna_inline_chnx_placeholder[16] = {0};\n"
+             static const char luna_inline_chnx_placeholder[16] = {0};\n\
+             __attribute__((used, section(\"__DATA,luna_proto_idx\"), aligned(8)))\n\
+             static const char luna_proto_idx_placeholder[16] = {0};\n"
         }
         TargetOs::Linux => {
             "__attribute__((used, section(\"luna_strkey_idx\"), aligned(8)))\n\
@@ -129,7 +135,9 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
              __attribute__((used, section(\"luna_trace_meta\"), aligned(8)))\n\
              static const char luna_trace_meta_placeholder[48] = {0};\n\
              __attribute__((used, section(\"luna_inline_chnx\"), aligned(8)))\n\
-             static const char luna_inline_chnx_placeholder[16] = {0};\n"
+             static const char luna_inline_chnx_placeholder[16] = {0};\n\
+             __attribute__((used, section(\"luna_proto_idx\"), aligned(8)))\n\
+             static const char luna_proto_idx_placeholder[16] = {0};\n"
         }
         // Windows COFF.
         //
@@ -178,7 +186,10 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
              static const char luna_trace_meta_placeholder[48] = {0};\n\
              #pragma section(\".lt_chai\", read)\n\
              __declspec(allocate(\".lt_chai\")) __declspec(align(8))\n\
-             static const char luna_inline_chnx_placeholder[16] = {0};\n"
+             static const char luna_inline_chnx_placeholder[16] = {0};\n\
+             #pragma section(\".lt_prix\", read)\n\
+             __declspec(allocate(\".lt_prix\")) __declspec(align(8))\n\
+             static const char luna_proto_idx_placeholder[16] = {0};\n"
         }
         TargetOs::Windows => {
             "__attribute__((used, section(\".lt_skix\"), aligned(8)))\n\
@@ -186,7 +197,9 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
              __attribute__((used, section(\".lt_meta\"), aligned(8)))\n\
              static const char luna_trace_meta_placeholder[48] = {0};\n\
              __attribute__((used, section(\".lt_chai\"), aligned(8)))\n\
-             static const char luna_inline_chnx_placeholder[16] = {0};\n"
+             static const char luna_inline_chnx_placeholder[16] = {0};\n\
+             __attribute__((used, section(\".lt_prix\"), aligned(8)))\n\
+             static const char luna_proto_idx_placeholder[16] = {0};\n"
         }
     }
 }
@@ -194,8 +207,13 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
 /// Target-aware variant of [`write_aot_cmain_object`]. Generates the
 /// same C source but invokes the target-specific cc driver so the
 /// produced `.o` has the right ABI.
-pub(super) fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), AotError> {
+pub(super) fn write_aot_cmain_object_for(
+    out: &Path,
+    target: &TargetSpec,
+    version: LuaVersion,
+) -> Result<(), AotError> {
     let placeholder = section_placeholders(target);
+    let dialect = dialect_code(version);
 
     let c_src = format!(
         r#"#include <stddef.h>
@@ -203,14 +221,14 @@ pub(super) fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Res
 
 extern uint8_t __luna_bytecode_start[];
 extern uint8_t __luna_bytecode_end[];
-extern int luna_aot_run(const uint8_t *bytecode, size_t len);
+extern int luna_aot_run_dialect(const uint8_t *bytecode, size_t len, uint32_t dialect);
 
 {placeholder}
 
 int main(int argc, char **argv) {{
     (void)argc; (void)argv;
     size_t len = (size_t)(__luna_bytecode_end - __luna_bytecode_start);
-    return luna_aot_run(__luna_bytecode_start, len);
+    return luna_aot_run_dialect(__luna_bytecode_start, len, {dialect});
 }}
 "#
     );
@@ -225,12 +243,12 @@ int main(int argc, char **argv) {{
     let mut cmd = if target.is_msvc() {
         let Some(mut cl) = target.msvc_cc_command() else {
             return Err(AotError::Link(format!(
-                "MSVC C compiler not on PATH for target {} — install one of: \
-                 (a) `clang-cl` via LLVM (`brew install llvm` on macOS; \
-                 `apt install clang` on Linux), or (b) Visual Studio Build \
-                 Tools 2022 (`cl.exe`, Windows host only — invoke luna-aot \
-                 from a Developer Command Prompt). Override with `CC=...` \
-                 to point at a custom driver.",
+                "no MSVC C compiler found for target {} — on a Windows host, \
+                 install Visual Studio or the Build Tools with the \"Desktop \
+                 development with C++\" workload (`cl.exe` is found without a \
+                 Developer Command Prompt); on any host, LLVM's `clang-cl` on \
+                 PATH also works. Override with `CC=...` to point at a custom \
+                 driver.",
                 target.triple
             )));
         };
@@ -245,6 +263,9 @@ int main(int argc, char **argv) {{
         cl.arg(format!("/Fo:{}", out.display()));
         // Suppress the cl.exe banner (clang-cl no-ops on this flag).
         cl.arg("/nologo");
+        // the dynamic CRT, as the Rust staticlib is built against it; cl's
+        // default static CRT (/MT) pulls libcmt.lib into the same link
+        cl.arg("/MD");
         // Cross-compile target: clang-cl accepts `--target=<triple>` to
         // override the default host. cl.exe rejects this; we only set it
         // for clang-cl by detecting the program name (heuristic — first
@@ -377,4 +398,19 @@ pub(super) fn link_aot_binary_for(
         )));
     }
     Ok(())
+}
+
+/// The number `luna_aot_run_dialect` in `luna-runtime-helpers` maps back to
+/// `version` (its `dialect_code`). The two crates do not depend on each
+/// other, so the table is written twice; the per-dialect end-to-end tests
+/// fail if they disagree.
+fn dialect_code(version: LuaVersion) -> u32 {
+    match version {
+        LuaVersion::Lua51 => 51,
+        LuaVersion::Lua52 => 52,
+        LuaVersion::Lua53 => 53,
+        LuaVersion::Lua54 => 54,
+        LuaVersion::Lua55 => 55,
+        LuaVersion::MacroLua => 254,
+    }
 }

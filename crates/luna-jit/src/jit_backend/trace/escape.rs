@@ -104,6 +104,17 @@ pub enum OpAction {
     },
 }
 
+/// One register bound to a sunk site: the site's index in
+/// [`EscapeAnalysis::sites`] and the register, in the site's frame,
+/// that holds the table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveBinding {
+    /// Allocation site index.
+    pub site: u32,
+    /// Frame-relative register.
+    pub reg: u32,
+}
+
 /// buffer state for a candidate `Op::Concat`
 /// accumulator. Mirrors [`EscapeState`] semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,13 +162,14 @@ pub struct EscapeAnalysis {
     /// Per-op action, length = `effective_end`. Indexed by op index
     /// in `record.ops`. `None` for ops the sweep didn't tag.
     pub op_actions: Vec<Option<OpAction>>,
-    /// Per-op snapshot of bound site indices (sites whose binding
-    /// is live BEFORE this op processes), length = `effective_end`.
-    /// Read at cmp emit sites to know which sites'
-    /// virt slots must materialise into a heap `Gc<Table>` on
-    /// side-exit. Sites that end up Escaped after the sweep are
-    /// still in the snapshot but emit gates on the final state.
-    pub live_at_op: Vec<Vec<u32>>,
+    /// Per-op snapshot of the registers bound to a site BEFORE this op
+    /// processes, length = `effective_end`. Read at exit emit sites:
+    /// each listed site is materialised into a heap `Gc<Table>` once
+    /// and written into every register listed for it (a `Move` makes
+    /// more than one register hold the same table). Sites that end up
+    /// Escaped after the sweep are still in the snapshot but emit gates
+    /// on the final state.
+    pub live_at_op: Vec<Vec<LiveBinding>>,
     /// Accumulator sites identified in this trace.
     pub accum_sites: Vec<AccumSite>,
     /// per-op snapshot of bound accumulator-site

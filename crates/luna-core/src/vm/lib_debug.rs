@@ -154,6 +154,8 @@ fn d_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     };
     match v {
         Value::Table(t) => {
+            // Redis's `lua_setmetatable` refuses a read-only table
+            vm.refuse_readonly(t)?;
             // SAFETY: `t` is the first argument, kept alive by its stack slot; the borrow covers one call, and `m` is a separate handle, not a reference into `t`
             unsafe { t.as_mut() }.set_metatable(m);
             vm.barrier_back_table(t);

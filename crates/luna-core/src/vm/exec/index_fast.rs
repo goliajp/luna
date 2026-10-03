@@ -218,7 +218,10 @@ impl Vm {
     /// table, the key and the value read in place: overwriting a key that is
     /// present with a non-nil value never involves `__newindex`, and with no
     /// metatable the write is a raw set. `false` leaves the write to
-    /// [`Self::newindex_miss`], having done nothing.
+    /// [`Self::newindex_miss`], having done nothing; so does a read-only
+    /// table, whose write raises there, and a black one, which needs the
+    /// write barrier: one flag test (`GcHeader::plain_store`) turns both
+    /// away, in place of the barrier test the store took afterwards.
     ///
     /// # Safety
     /// `pt`, `pk` and `pv` point at initialised values.
@@ -236,11 +239,11 @@ impl Vm {
         unsafe {
             if raw_tag(pt) == tag::TABLE {
                 let tb = raw_gc(pt) as *mut Table;
-                if table_set_existing_at(&mut *tb, pk, pv)
-                    || (*tb).metatable().is_none()
-                        && table_raw_set_at(&mut *tb, &mut self.heap, pk, pv)
+                if (*tb).hdr.plain_store()
+                    && (table_set_existing_at(&mut *tb, pk, pv)
+                        || (*tb).metatable().is_none()
+                            && table_raw_set_at(&mut *tb, &mut self.heap, pk, pv))
                 {
-                    self.heap.barrier_back(Gc::from_ptr_unchecked(tb));
                     return true;
                 }
             }
@@ -272,9 +275,9 @@ impl Vm {
                 // a nil value in a node is how a removed key is kept
                 if let Some(slot) = (*tb).str_slot_by_ptr_mut(key)
                     && raw_tag(slot) != tag::NIL
+                    && (*tb).hdr.plain_store()
                 {
                     Value::copy_raw(slot, pv);
-                    self.heap.barrier_back(Gc::from_ptr_unchecked(tb));
                     return true;
                 }
             }
@@ -311,10 +314,10 @@ impl Vm {
     ) -> bool {
         #[cfg(not(feature = "gc-verify"))]
         if let Value::Table(tb) = t
+            && tb.hdr.plain_store()
             // SAFETY: the caller's contract; see `newindex_raw_at`
             && unsafe { table_set_existing_at(tb.as_mut(), pk, pv) }
         {
-            self.heap.barrier_back(tb);
             return true;
         }
         false

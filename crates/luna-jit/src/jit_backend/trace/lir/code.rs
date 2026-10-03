@@ -34,7 +34,7 @@ const MAX_SPARE: usize = 8;
 
 impl CodeArena {
     /// Copies `code` to fresh pages and makes them executable.
-    fn place(&mut self, code: &[u8]) -> Result<*const u8, &'static str> {
+    pub(crate) fn place(&mut self, code: &[u8]) -> Result<*const u8, &'static str> {
         let page = region::page::size();
         let len = code.len().next_multiple_of(page);
         if len > self.left {
@@ -103,7 +103,7 @@ type Target = super::x64::X64;
     any(target_arch = "aarch64", target_arch = "x86_64"),
     not(all(windows, target_arch = "aarch64"))
 ))]
-pub(crate) fn assemble(lir: &Lir, arena: &mut CodeArena) -> Result<*const u8, &'static str> {
+pub(crate) fn assemble(lir: &Lir, arena: &mut CodeArena, capture: bool) -> Assembled {
     use super::cg::Masm;
     if let Some(u) = lir.unsupported {
         return Err(u);
@@ -115,10 +115,19 @@ pub(crate) fn assemble(lir: &Lir, arena: &mut CodeArena) -> Result<*const u8, &'
     let out = cg::generate(lir, an, al, Target::new(std::mem::take(masm)), cg)?;
     dump::write(lir, an, al, &out.bytes);
     let entry = arena.place(&out.bytes);
+    let code = capture.then(|| crate::jit_backend::trace::reloc::Code {
+        bytes: out.bytes.as_slice().into(),
+        sites: out.sites.as_slice().into(),
+    });
     *masm = out;
     WORK.with(|x| *x.borrow_mut() = Some(w));
-    entry
+    Ok((entry?, code))
 }
+
+/// The entry of the code [`assemble`] placed, and a copy of the code to
+/// share when asked for.
+pub(crate) type Assembled =
+    Result<(*const u8, Option<crate::jit_backend::trace::reloc::Code>), &'static str>;
 
 /// The backend's buffers, kept from one trace to the next on a thread.
 #[derive(Default)]
@@ -137,6 +146,6 @@ thread_local! {
     any(target_arch = "aarch64", target_arch = "x86_64"),
     not(all(windows, target_arch = "aarch64"))
 )))]
-pub(crate) fn assemble(_lir: &Lir, _arena: &mut CodeArena) -> Result<*const u8, &'static str> {
+pub(crate) fn assemble(_lir: &Lir, _arena: &mut CodeArena, _capture: bool) -> Assembled {
     Err("no baseline code generator for this target")
 }
