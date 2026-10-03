@@ -278,8 +278,8 @@ pub unsafe extern "C" fn lua_gethook(L: *mut LuaState) -> Option<LuaHook> {
         return own_c_hook(&mut api, &state);
     }
     match state.func {
-        // SAFETY: a C hook's light userdata came from a `lua_Hook`
         Some(Value::LightUserdata(p)) => {
+            // SAFETY: a C hook's light userdata came from a `lua_Hook`
             Some(unsafe { std::mem::transmute::<*const (), LuaHook>(p) })
         }
         Some(_) => Some(hookf()),

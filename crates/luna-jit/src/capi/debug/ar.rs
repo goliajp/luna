@@ -195,20 +195,20 @@ impl DebugPtr {
         DebugPtr { v, p }
     }
 
-    fn d51(&self) -> &mut D51 {
+    fn d51<'a>(self) -> &'a mut D51 {
         // SAFETY: `p` is a writable `lua_Debug` of this dialect (`new`), and
         // the borrow ends with the caller's statement
         unsafe { &mut *self.p.cast() }
     }
-    fn d52(&self) -> &mut D52 {
+    fn d52<'a>(self) -> &'a mut D52 {
         // SAFETY: as `d51`
         unsafe { &mut *self.p.cast() }
     }
-    fn d54(&self) -> &mut D54 {
+    fn d54<'a>(self) -> &'a mut D54 {
         // SAFETY: as `d51`
         unsafe { &mut *self.p.cast() }
     }
-    fn d55(&self) -> &mut D55 {
+    fn d55<'a>(self) -> &'a mut D55 {
         // SAFETY: as `d51`
         unsafe { &mut *self.p.cast() }
     }
@@ -348,7 +348,7 @@ impl DebugPtr {
     /// 5.1 `info_tailcall`: every field of a lost tail call, whatever the
     /// options.
     pub(in super::super) fn fill_tail(&self, info: &HostAr, strs: &mut CStrings) {
-        for c in [b'S', b'l', b'u'] {
+        for c in *b"Slu" {
             self.fill(c, info, strs);
         }
         let d = self.d51();
