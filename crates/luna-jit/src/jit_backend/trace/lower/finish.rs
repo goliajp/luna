@@ -337,16 +337,19 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         // `1` for single-CMP-fallback DownRec; `>= 2` for the
         // lifted `dispatchable = true` path.
         downrec_multi_way_count: downrec_multi_way_count_for_compiled,
-        tier_up: tier_count.map(|(count, at)| tier_up(count, at)),
+        tier_up: tier_count
+            .map(|(count, at)| tier_up(count, at, record.head_proto.call_hot_count.get())),
     }
 }
 
 /// The record of a baseline trace that moves to Cranelift after `at`
-/// iterations and entries, counted in `count`.
-fn tier_up(count: Box<TCellU32>, at: u32) -> Box<TierUp> {
+/// iterations and entries, counted in `count` (fewer once its function,
+/// called `calls_at` times so far, is called again).
+fn tier_up(count: Box<TCellU32>, at: u32, calls_at: u32) -> Box<TierUp> {
     Box::new(TierUp {
         count,
         at,
+        calls_at,
         optimized: TCellPtr::null(),
         tried: TCellBool::new(false),
         parent_cells: [TCellPtr::null(), TCellPtr::null()],
