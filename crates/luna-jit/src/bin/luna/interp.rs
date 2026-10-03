@@ -248,7 +248,7 @@ impl Interp {
 /// luna's addition to `lua.c`: the values a chunk returned, printed.
 pub(crate) fn show(vals: Vec<Value>) {
     for v in vals {
-        println!("=> {}", render(v));
+        luna_core::stdio::write_stdout(format!("=> {}\n", render(v)).as_bytes());
     }
 }
 

@@ -57,7 +57,7 @@ pub(crate) fn flush_all(vm: &mut Vm) {
             let _ = drain_write_buf(u);
         }
     }
-    let _ = std::io::stdout().flush(); // same: fflush(NULL) reports nothing
+    let _ = crate::stdio::flush_stdout(); // same: fflush(NULL) reports nothing
 }
 
 // ---- closing ----
@@ -157,7 +157,7 @@ pub(super) fn f_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let s = if u.file().is_closed() {
         "file (closed)".to_string()
     } else {
-        format!("file ({:p})", u.as_ptr())
+        format!("file ({})", crate::vm::cfmt::c_pointer(u.as_ptr() as usize))
     };
     let v = Value::Str(vm.heap.intern(s.as_bytes()));
     Ok(vm.nat_return(fs, &[v]))

@@ -9,7 +9,10 @@ pub(super) fn fill(u: Gc<Userdata>) -> std::io::Result<bool> {
     let mut chunk = vec![0u8; READ_CHUNK];
     let n = match m.file_mut() {
         FileHandle::File(f) => f.read(&mut chunk)?,
-        FileHandle::Stdin => std::io::stdin().read(&mut chunk)?,
+        FileHandle::Stdin => {
+            crate::stdio::before_stdin_read();
+            std::io::stdin().read(&mut chunk)?
+        }
         // stdout/stderr are write-only streams
         FileHandle::Stdout | FileHandle::Stderr => {
             return Err(posix_error(EBADF));
@@ -74,7 +77,7 @@ fn write_to(u: Gc<Userdata>, bytes: &[u8]) -> std::io::Result<()> {
     // SAFETY: `u` is held by the caller; the borrow lives for the one match, which runs no Lua code and takes no other reference into `u`
     match unsafe { u.as_mut() }.file_mut() {
         FileHandle::File(f) => f.write_all(bytes),
-        FileHandle::Stdout => std::io::stdout().write_all(bytes),
+        FileHandle::Stdout => crate::stdio::try_write_stdout(bytes),
         FileHandle::Stderr => std::io::stderr().write_all(bytes),
         FileHandle::Stdin => Err(posix_error(EBADF)),
         FileHandle::Closed => unreachable!("writes check the stream is open"),
@@ -130,7 +133,7 @@ pub(super) fn flush_stream(u: Gc<Userdata>) -> std::io::Result<()> {
     // SAFETY: `u` is held by the caller; `drain_write_buf`'s borrow has ended, and this one lives for the one match
     match unsafe { u.as_mut() }.file_mut() {
         FileHandle::File(f) => f.flush(),
-        FileHandle::Stdout => std::io::stdout().flush(),
+        FileHandle::Stdout => crate::stdio::flush_stdout(),
         FileHandle::Stderr => std::io::stderr().flush(),
         FileHandle::Stdin | FileHandle::Closed => Ok(()),
     }

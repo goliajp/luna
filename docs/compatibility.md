@@ -114,7 +114,15 @@ where PUC's output depends on the platform: a NaN is spelled by the C
 library's `printf`, so luna follows the platform it runs on — `nan` on
 macOS; `-nan` for a negative NaN (which is what 0/0 gives on x86) and
 `+nan` / ` nan` under those `string.format` flags on Linux; `-nan(ind)`
-for that default NaN on Windows.
+for that default NaN on Windows. The NaN's sign comes from the operation
+that made it, as in PUC: the hardware's (x86 makes 0/0, `inf - inf` and
+`math.sqrt(-1)` negative, aarch64 positive), unary minus flips it and
+`math.abs` clears it; luna folds no constant expression whose result is a
+NaN. Pointers (`tostring` of a table, function, thread or userdata,
+`file (...)`, `string.format("%p")`) are written as the platform's C
+library writes `%p`: a NULL light userdata is `userdata: (nil)` with
+glibc, `userdata: 0` with musl, `userdata: 0x0` on macOS, and Windows
+writes 16 upper-case hex digits without `0x`.
 
 `io` and `os` share a single opener because they share a threat model:
 either the host is giving the script filesystem and process access or it
@@ -135,20 +143,36 @@ those headers that expand to functions luna does not export
 `lua_pushcfunction` → `lua_pushcclosure`, `lua_tointeger` →
 `lua_tointegerx`). Call the covered functions by these names directly.
 
-Covered — `crates/luna-jit/tests/it/capi.rs` is the conformance suite
-(13 tests):
+Covered — `crates/luna-jit/tests/it/capi.rs` and
+`capi_pcall_handler.rs` are the conformance suite:
 
-- `lua_State` lifecycle: `luaL_newstate`, `luaL_openlibs`, `lua_close`
+- `lua_State` lifecycle: `luaL_newstate` (5.5), `luna_newstate(501..505)`
+  (any dialect, by its `LUA_VERSION_NUM`), `luaL_openlibs`, `lua_close`,
+  `lua_version`
 - pushes: `lua_pushnil`, `lua_pushboolean`, `lua_pushinteger`,
-  `lua_pushnumber`, `lua_pushstring`, `lua_pushlstring`,
-  `lua_pushcfunction`
-- reads: `lua_isnumber`, `lua_tointeger`, `lua_tonumber`,
-  `lua_tostring`, `lua_type`, `lua_typename`
-- stack: `lua_settop`, `lua_pop`, `lua_gettop`, `lua_pushvalue`
-- tables: `lua_newtable`, `lua_settable`, `lua_gettable`,
-  `lua_setfield`, `lua_getfield`, `lua_rawget`, `lua_rawset`
-- calls: `lua_call`, `lua_pcall`
-- load: `luaL_loadstring`, `luaL_loadbuffer`, `luaL_dostring`
+  `lua_pushnumber`, `lua_pushstring`, `lua_pushcfunction`,
+  `lua_pushvalue`
+- reads: `lua_isnil`, `lua_isnumber`, `lua_isinteger`, `lua_isstring`,
+  `lua_isboolean`, `lua_isfunction`, `lua_tointeger`, `lua_tonumber`,
+  `lua_toboolean`, `lua_tostring`, `lua_type`
+- stack: `lua_settop`, `lua_pop`, `lua_gettop`
+- globals: `lua_getglobal`, `lua_setglobal`, `lua_register`
+- calls: `lua_pcall`, with a message handler as in PUC: it runs before
+  the stack unwinds, its first result is the error object, and when it
+  fails itself the status is the dialect's `LUA_ERRERR` (5 in 5.1, 5.4
+  and 5.5; 6 in 5.2 and 5.3) with "error in error handling"
+- load: `luaL_loadstring` (the source is the chunk name, as in PUC)
+- Redis's `lua_enablereadonlytable(L, idx, enabled)`
+
+`lua_getglobal` and `lua_setglobal` go through `_G`'s `__index` and
+`__newindex`, as in PUC. An error they raise (from a metamethod, or a
+write to a read-only `_G`) is raised out of the C function that made the
+call, so the `lua_pcall` that called it returns it. PUC stops the C
+function at that point; luna cannot unwind through C frames, so the C
+function runs on to its `return` and its results are dropped in favour of
+the error. Raised outside any C function luna called, the error is
+unprotected: as with PUC's default panic function, the process prints
+`PANIC: unprotected error in call to Lua API (...)` and aborts.
 
 Not covered — use the Rust API:
 
@@ -432,11 +456,21 @@ longer than `lua.c`'s 512-byte buffer is read in pieces. It reads more
 lines while a statement is incomplete. From 5.3 on a line is first tried
 as `return <line>;`; through 5.4 a first line `=expr` means
 `return expr`; 5.5 warns about a line starting with `local`. The results
-go through the global `print` and an error is reported with its
-traceback, without the program name. End of input ends it with a
+go through the global `print`, called from inside a C level as `lua.c`
+calls it from `pmain`, and an error is reported with its traceback,
+without the program name. End of input ends it with a
 newline. The cases `crates/luna-jit/tests/it/cli_repl.rs` and
 `cli_repl_edges.rs` pin include the dialects' quirks, such as 5.3
 reporting its `_PROMPT2` value when the input ends inside a statement.
+
+The `luna` command buffers standard output as C stdio does under glibc:
+line by line on a terminal, in blocks of the descriptor's size on a pipe
+or file. `print` flushes it from 5.2 on (`lua_writeline`), 5.1's does
+not, `io.write` never does, and standard error is unbuffered, so a
+script's output and its error messages reach a shared pipe, file or
+terminal in the order they do with PUC (`cli_output_order.rs`). A host
+that embeds luna keeps Rust's line-flushed standard output unless it calls
+`luna_core::stdio::use_c_stdout`.
 
 Things that differ from `lua.c`:
 

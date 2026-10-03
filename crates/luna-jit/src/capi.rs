@@ -40,6 +40,10 @@ pub const LUA_ERRRUN: c_int = 2;
 pub const LUA_ERRSYNTAX: c_int = 3;
 /// PUC `LUA_ERRMEM` — memory-allocation failure.
 pub const LUA_ERRMEM: c_int = 4;
+/// PUC `LUA_ERRERR` — the message handler of `lua_pcall` itself failed.
+/// This is the value in 5.1, 5.4 and 5.5; a 5.2 or 5.3 state returns 6,
+/// that dialect's `LUA_ERRERR`.
+pub const LUA_ERRERR: c_int = 5;
 
 /// PUC `lua_type` constants — match the values PUC uses so a C header
 /// shared with PUC code resolves to the same tags.
@@ -69,7 +73,8 @@ pub type LuaCFunction = extern "C" fn(*mut LuaState) -> c_int;
 /// Resolve a (possibly negative) PUC-style index into a Vm `capi_stack`
 /// slot. Returns None when the index is out of bounds.
 fn abs_index(vm: &Vm, idx: c_int) -> Option<usize> {
-    let len = vm.capi_stack.len() as c_int;
+    let base = vm.capi_base;
+    let len = (vm.capi_stack.len() - base) as c_int;
     let abs = if idx > 0 {
         idx
     } else if idx < 0 {
@@ -80,12 +85,33 @@ fn abs_index(vm: &Vm, idx: c_int) -> Option<usize> {
     if abs < 1 || abs > len {
         None
     } else {
-        Some((abs - 1) as usize)
+        Some(base + (abs - 1) as usize)
     }
 }
 
 fn get_at(vm: &Vm, idx: c_int) -> Option<Value> {
     abs_index(vm, idx).map(|i| vm.capi_stack[i])
+}
+
+/// PUC `lua_error` for an error a C API function raised. Inside a C
+/// function luna called, the error is thrown when that function returns,
+/// in place of its results, so the protected call around it receives it.
+/// Outside one nothing can catch it: PUC's default panic function prints
+/// it and the process aborts.
+fn raise(vm: &mut Vm, e: LuaError) {
+    if vm.capi_calls == 0 {
+        let msg = match e.0 {
+            Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            v => format!("error object is a {} value", v.type_name()),
+        };
+        eprintln!("PANIC: unprotected error in call to Lua API ({msg})");
+        std::process::abort();
+    }
+    // the first error ends the C function in PUC; later calls cannot
+    // replace it
+    if vm.capi_error.is_none() {
+        vm.capi_error = Some(e.0);
+    }
 }
 
 /// The Vm behind `L`.
@@ -140,6 +166,26 @@ pub extern "C" fn luaL_newstate() -> *mut LuaState {
     Box::into_raw(l)
 }
 
+/// Allocate a new Lua state for the dialect whose `LUA_VERSION_NUM` is
+/// `version` (501 to 505), otherwise like `luaL_newstate`. Returns null for
+/// any other number.
+// SAFETY: no other item in the link is named `luna_newstate`: PUC's liblua
+// has no such symbol and this crate defines it once
+#[unsafe(no_mangle)]
+pub extern "C" fn luna_newstate(version: c_int) -> *mut LuaState {
+    let v = match version {
+        501 => LuaVersion::Lua51,
+        502 => LuaVersion::Lua52,
+        503 => LuaVersion::Lua53,
+        504 => LuaVersion::Lua54,
+        505 => LuaVersion::Lua55,
+        _ => return std::ptr::null_mut(),
+    };
+    let mut vm = Vm::new_minimal(v);
+    crate::install_default_jit(&mut vm);
+    Box::into_raw(Box::new(LuaState { vm }))
+}
+
 /// Free the state and its Vm (PUC `lua_close`). Safe to call with a null
 /// pointer (no-op); calling with a previously-closed pointer is UB just
 /// like in PUC.
@@ -177,8 +223,9 @@ pub unsafe extern "C" fn luaL_openlibs(L: *mut LuaState) {
 
 /// Compile `src` (NUL-terminated C string) under `chunkname`; push the
 /// resulting function on the stack and return LUA_OK, or push the error
-/// string and return LUA_ERRSYNTAX (PUC `luaL_loadstring`). `chunkname`
-/// may be null — in that case the compiler uses `"=?"`.
+/// string and return LUA_ERRSYNTAX (PUC `luaL_loadstring`). As in PUC,
+/// the source itself is the chunk name, so messages name the chunk
+/// `[string "..."]`.
 ///
 /// # Safety
 /// `L` is a state from `luaL_newstate` that `lua_close` has not freed, and no other API
@@ -195,7 +242,7 @@ pub unsafe extern "C" fn luaL_loadstring(L: *mut LuaState, src: *const c_char) -
     let vm = unsafe { vm_mut(L) };
     // SAFETY: `src` is non-null (checked above), NUL-terminated and valid for this call (# Safety)
     let src_bytes = unsafe { CStr::from_ptr(src).to_bytes() };
-    match vm.load(src_bytes, b"=(load)") {
+    match vm.load(src_bytes, src_bytes) {
         Ok(cl) => {
             vm.capi_stack.push(Value::Closure(cl));
             LUA_OK
@@ -211,10 +258,14 @@ pub unsafe extern "C" fn luaL_loadstring(L: *mut LuaState, src: *const c_char) -
 
 /// Call `stack[-(nargs + 1)]` with the top `nargs` values as arguments,
 /// expecting `nresults` results (use -1 to mean "all"). Pops the function
-/// + arguments and pushes the results; on error pushes the error message
-/// and returns LUA_ERRRUN. `msgh` (message handler) is accepted for ABI
-/// compatibility but currently ignored — the error object is forwarded
-/// raw (PUC `lua_pcall` with `msgh=0` is the same).
+/// and arguments and pushes the results (PUC `lua_pcall`).
+///
+/// On an error it pushes the error object and returns LUA_ERRRUN. A
+/// nonzero `msgh` is the stack index of a message handler: it runs where
+/// the error was raised, before the stack unwinds, and its first result
+/// becomes the error object. When the handler itself fails the object is
+/// "error in error handling" and the status is the dialect's LUA_ERRERR
+/// (5 in 5.1, 5.4 and 5.5; 6 in 5.2 and 5.3).
 ///
 /// # Safety
 /// `L` is a state from `luaL_newstate` that `lua_close` has not freed, and no other API
@@ -226,40 +277,48 @@ pub unsafe extern "C" fn lua_pcall(
     L: *mut LuaState,
     nargs: c_int,
     nresults: c_int,
-    _msgh: c_int,
+    msgh: c_int,
 ) -> c_int {
     // SAFETY: `L` is an open state no other call is using (# Safety)
     let vm = unsafe { vm_mut(L) };
     let needed = (nargs + 1) as usize;
-    if vm.capi_stack.len() < needed {
+    if vm.capi_stack.len() - vm.capi_base < needed {
         let v = Value::Str(vm.heap.intern(b"not enough values on stack"));
         vm.capi_stack.push(v);
         return LUA_ERRRUN;
     }
+    // the index is resolved before the function and arguments are popped
+    let handler = (msgh != 0).then(|| get_at(vm, msgh).unwrap_or(Value::Nil));
     let func_idx = vm.capi_stack.len() - needed;
     let args: Vec<Value> = vm.capi_stack[func_idx + 1..].to_vec();
     let f = vm.capi_stack[func_idx];
     vm.capi_stack.truncate(func_idx);
-    match vm.call_value(f, &args) {
+    let r = match handler {
+        Some(h) => vm.call_value_with_handler_status(f, &args, h),
+        None => vm.call_value(f, &args).map_err(|e| (e, false)),
+    };
+    match r {
         Ok(mut results) => {
             if nresults >= 0 {
                 results.resize(nresults as usize, Value::Nil);
             }
-            for v in results {
-                vm.capi_stack.push(v);
-            }
+            vm.capi_stack.extend(results);
             LUA_OK
         }
-        Err(e) => {
-            let err_val = match e.0 {
-                Value::Str(_) => e.0,
-                _ => {
-                    let rendered = vm.error_text(&e);
-                    Value::Str(vm.heap.intern(rendered.as_bytes()))
-                }
+        Err((e, errerr)) => {
+            // 5.5's `luaG_errormsg` names a nil error object; with a
+            // handler the vm has already done so
+            let obj = if e.0.is_nil() && vm.version() >= LuaVersion::Lua55 {
+                Value::Str(vm.heap.intern(b"<no error object>"))
+            } else {
+                e.0
             };
-            vm.capi_stack.push(err_val);
-            LUA_ERRRUN
+            vm.capi_stack.push(obj);
+            match (errerr, vm.version()) {
+                (false, _) => LUA_ERRRUN,
+                (true, LuaVersion::Lua52 | LuaVersion::Lua53) => 6,
+                (true, _) => LUA_ERRERR,
+            }
         }
     }
 }
@@ -285,7 +344,15 @@ pub unsafe extern "C" fn lua_getglobal(L: *mut LuaState, name: *const c_char) ->
     // SAFETY: `name` is non-null (checked above), NUL-terminated and valid for this call (# Safety)
     let name_bytes = unsafe { CStr::from_ptr(name).to_bytes() };
     let key = Value::Str(vm.heap.intern(name_bytes));
-    let v = vm.globals().get(key);
+    let g = Value::Table(vm.globals());
+    // `_G`'s `__index` runs, and an error in it is raised
+    let v = match vm.index_with_mm(g, key) {
+        Ok(v) => v,
+        Err(e) => {
+            raise(vm, e);
+            Value::Nil
+        }
+    };
     vm.capi_stack.push(v);
     type_tag(v)
 }
@@ -306,10 +373,37 @@ pub unsafe extern "C" fn lua_setglobal(L: *mut LuaState, name: *const c_char) {
     }
     // SAFETY: `L` is an open state no other call is using (# Safety)
     let vm = unsafe { vm_mut(L) };
-    let v = vm.capi_stack.pop().unwrap_or(Value::Nil);
+    let v = if vm.capi_stack.len() > vm.capi_base {
+        vm.capi_stack.pop().unwrap_or(Value::Nil)
+    } else {
+        Value::Nil
+    };
     // SAFETY: `name` is non-null (checked above), NUL-terminated and valid for this call (# Safety)
-    let name_str = unsafe { CStr::from_ptr(name).to_str().unwrap_or("?") };
-    let _ = vm.set_global(name_str, v); // capi swallows: lua_setglobal is void in C ABI
+    let name_bytes = unsafe { CStr::from_ptr(name).to_bytes() };
+    let key = Value::Str(vm.heap.intern(name_bytes));
+    let g = Value::Table(vm.globals());
+    // `_G`'s `__newindex` runs; its error, or a read-only `_G`'s, is raised
+    if let Err(e) = vm.set_index_with_mm(g, key, v) {
+        raise(vm, e);
+    }
+}
+
+/// Mark the table at `idx` read-only (`enabled` nonzero) or writable
+/// again (Redis's `lua_enablereadonlytable`): see `Vm::set_readonly`. A
+/// value that is not a table is left alone.
+///
+/// # Safety
+/// `L` is a state from `luaL_newstate` that `lua_close` has not freed, and no other API
+/// call on it is running other than a C function it is calling into.
+// SAFETY: no other item in the link is named `lua_enablereadonlytable`: the host does not
+// link PUC's or Redis's liblua next to this crate, which defines each `lua_*` symbol once
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lua_enablereadonlytable(L: *mut LuaState, idx: c_int, enabled: c_int) {
+    // SAFETY: `L` is an open state no other call is using (# Safety)
+    let vm = unsafe { vm_mut(L) };
+    if let Some(Value::Table(t)) = get_at(vm, idx) {
+        vm.set_readonly(t, enabled != 0);
+    }
 }
 
 mod callbacks;
