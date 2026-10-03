@@ -1,0 +1,2 @@
+malloc(): corrupted top size
+.dev/tools/antirot-probes/capi-record.sh: line 33: 3403772 Aborted                 "$exe"

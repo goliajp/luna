@@ -1,0 +1,2 @@
+PANIC: unprotected error in call to Lua API (42)
+.dev/tools/antirot-probes/capi-record.sh: line 33: 3403656 Aborted                 "$exe"

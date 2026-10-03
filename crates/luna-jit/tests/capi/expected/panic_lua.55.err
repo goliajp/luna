@@ -1,0 +1,2 @@
+PANIC: unprotected error in call to Lua API ([string "local t = nil..."]:2: attempt to index a nil value (local 't'))
+.dev/tools/antirot-probes/capi-record.sh: line 33: 3404184 Aborted                 "$exe"
