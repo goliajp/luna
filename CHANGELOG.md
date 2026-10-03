@@ -84,9 +84,9 @@ optimization.
   takes a `Value`; `jit_stack_update_raw` is replaced by
   `jit_stack_slot_mut`, which returns the slot to write; the string
   accumulator works on owned buffers (`jit_str_buf_acquire` returns a
-  `Box<Vec<u8>>`, `jit_str_buf_release` takes the `Vec<u8>`,
-  `jit_str_buf_intern` takes `&mut Vec<u8>`, and `jit_str_buf_extend` is
-  removed: append `Gc<LuaStr>::as_bytes` to the buffer); and
+  `Box<Vec<u8>>`, which `jit_str_buf_release` takes back,
+  `jit_str_buf_intern` takes `&mut Vec<u8>`, and `jit_str_buf_extend`
+  takes the buffer and a `Gc<LuaStr>`); and
   `jit_op_tforcall` writes its results through `&mut i64`. The C ABI
   helpers keep their signatures. `JitVmRebindRestore::restore_fn` is a
   plain `fn`, and an `IntChunkCompiler::enter` implementation now only

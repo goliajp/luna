@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **904** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **908** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 197 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **5** | all `#[doc(hidden)]`, see §5 |
 | **`pub unsafe extern "C" fn`** | 75 | the `lua.h` C API (29), the `luna_jit_*` helpers compiled code calls (45, re-exported by `luna-jit`) and the AOT entry (1); see §5 |
@@ -39,7 +39,7 @@ quotes the pattern counts too.
 | `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `fast_arith.rs`) | 56 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch |
 | | `vm/exec/index_*` | 38 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
 | | `vm/exec` (other) | 63 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls |
-| | `runtime/heap*`, `gc_ptr.rs` | 66 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle |
+| | `runtime/heap*`, `gc_ptr.rs` | 70 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle |
 | | `runtime/table*` | 48 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
 | | `runtime` (other) | 36 | string headers and their trailing bytes, the value tag/payload encoding, closure upvalue storage |
 | | `vm/lib_*` | 44 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`) and the table writes that build each library |
@@ -59,7 +59,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **904** | |
+| **Total** | | **908** | |
 
 ## 3. Pattern catalog
 
@@ -178,7 +178,7 @@ Two CI checks cover `unsafe`:
 - the `unsafe-drift` job in `.github/workflows/ci.yml` counts the sites
   in every `.rs` file under `crates/` on every push, `luna-jit-llvm`
   included although CI does not build it, and fails above the ceiling.
-  The ceiling is the exact count, **904**, with no headroom;
+  The ceiling is the exact count, **908**, with no headroom;
 - `clippy::undocumented_unsafe_blocks` is set in the workspace
   `[lints.clippy]` table, and the lint job runs clippy with
   `-D warnings`, so a block or `unsafe impl` without a `SAFETY:` note
@@ -223,8 +223,11 @@ take handles or references, or became `unsafe fn`s where the pointer
 cannot be typed (`Gc::from_ptr`, the marker's raw-header entry, the
 heap's object linking and the string table's removal). Each call that
 builds a handle from a raw pointer is now a block with its own note,
-mostly in the `luna_jit_*` helpers, which brought the count to 904, the
-ceiling now.
+mostly in the `luna_jit_*` helpers. The write barriers keep one
+non-generic `unsafe fn` body behind their generic entry points: a
+generic body changed how LTO compiled `Table::resize`, which cost
+every table rehash about 700 instructions. That brought the count to
+908, the ceiling now.
 
 ## 5. Public `unsafe` surface
 
@@ -269,7 +272,7 @@ wrapper in `luna-jit/benches/bench_send_overhead.rs`.
 
 ```sh
 grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' crates | wc -l
-# 904, the ceiling in ci.yml's unsafe-drift job
+# 908, the ceiling in ci.yml's unsafe-drift job
 cargo clippy --workspace --all-targets \
     --exclude llvm-jit-probe --exclude luna-jit-llvm -- -D warnings
 # no undocumented_unsafe_blocks warnings (the LLVM crates need
