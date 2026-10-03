@@ -4,7 +4,9 @@
 //! closures, metatables, NaN / inf / -0, integer overflow, varargs) whose
 //! operand types and metatables change while traces run, or whose
 //! compiled loops are entered again with NaN or another type, or that
-//! collect garbage while a trace holds new tables, then runs each twice
+//! collect garbage while a trace holds new tables, or that keep a table
+//! built in an iteration past it (in an outer local, an upvalue, a second
+//! register at an exit), then runs each twice
 //! in-process: with the JIT on and hot thresholds lowered (the
 //! method and trace JIT together for half the inputs, each alone for a
 //! quarter), and with the JIT off. The captured `print` output and the
@@ -51,6 +53,9 @@ mod jit_reentry;
 
 #[path = "jit_gc.rs"]
 mod jit_gc;
+
+#[path = "jit_carry.rs"]
+mod jit_carry;
 
 struct Outcome {
     out: String,
