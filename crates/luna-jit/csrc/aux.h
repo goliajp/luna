@@ -91,6 +91,7 @@ int lua_rawget(lua_State *L, int idx);
 int lua_rawgeti(lua_State *L, int idx, lua_Integer n);
 void lua_rawset(lua_State *L, int idx);
 void lua_rawseti(lua_State *L, int idx, lua_Integer n);
+void lua_rawsetp(lua_State *L, int idx, const void *p);
 void lua_settable(lua_State *L, int idx);
 void lua_createtable(lua_State *L, int narr, int nrec);
 void *lua_newuserdatauv(lua_State *L, size_t sz, int nuvalue);
