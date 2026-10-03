@@ -57,7 +57,11 @@ fn results(vm: &mut Vm, src: &str, calls: usize) -> Vec<String> {
     };
     (0..calls)
         .map(|_| match vm.call_value(Value::Closure(f), &[]) {
-            Ok(v) => v.iter().map(|v| show(v, dbl)).collect::<Vec<_>>().join(", "),
+            Ok(v) => v
+                .iter()
+                .map(|v| show(v, dbl))
+                .collect::<Vec<_>>()
+                .join(", "),
             Err(e) => format!("error: {}", vm.error_display(&e)),
         })
         .collect()
@@ -265,7 +269,10 @@ fn nan_limits() {
     for v in [LuaVersion::Lua51, LuaVersion::Lua52] {
         assert_eq!(agree(v, &src).0[0], "0:", "{v:?}");
     }
-    assert_traced(&[LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55], &src);
+    assert_traced(
+        &[LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55],
+        &src,
+    );
     let src = collect("for i = 1, 0/0 do", 50);
     for v in ALL {
         let (r, _) = agree(v, &src);
@@ -310,7 +317,10 @@ fn integer_overflow_wraps_in_53() {
     let r = assert_traced(&[LuaVersion::Lua54, LuaVersion::Lua55], &up);
     assert!(r[0].starts_with("21:"), "{}", r[0]);
     let down = collect("for i = math.mininteger + 20, math.mininteger, -1 do", 40);
-    assert_traced(&[LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55], &down);
+    assert_traced(
+        &[LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55],
+        &down,
+    );
 }
 
 #[test]
@@ -347,8 +357,12 @@ fn instruction_budget_keeps_loops_out_of_traces() {
     // one is armed, even after the loop was compiled without one
     for v in ALL {
         let mut vm = traced(v, TraceTier::Auto, 0);
-        vm.eval("local s = 0 for i = 1, 5000 do s = s + i end").expect("warm");
-        assert!(vm.trace_dispatched_count() > 0, "{v:?}: no trace before the budget");
+        vm.eval("local s = 0 for i = 1, 5000 do s = s + i end")
+            .expect("warm");
+        assert!(
+            vm.trace_dispatched_count() > 0,
+            "{v:?}: no trace before the budget"
+        );
         let before = vm.trace_dispatched_count();
         vm.set_instr_budget(Some(50_000));
         let err = vm.eval("for i = 1, 1000000000 do end").unwrap_err();

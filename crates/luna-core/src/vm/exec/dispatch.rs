@@ -221,9 +221,8 @@ impl Vm {
             // could be admitted, which needs the proto's flag.
             // Compiled code does not tick the instruction budget: while one
             // is armed, every loop stays in the interpreter.
-            let admit = trace_on
-                && cl.proto.has_dispatchable_trace.get()
-                && self.instr_budget.is_none();
+            let admit =
+                trace_on && cl.proto.has_dispatchable_trace.get() && self.instr_budget.is_none();
             let downrec_admit_blocked =
                 admit && std::mem::take(&mut self.jit.suppress_downrec_admit_once);
             if admit && self.trace_dispatch(cl, pc, base, downrec_admit_blocked) {
