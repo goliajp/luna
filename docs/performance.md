@@ -15,12 +15,17 @@ section spells out:
   signal, not the noise.
 
 No public comparison matrix is published. What guards performance
-release over release is the CI perf-gate: each push runs the `redis_lua_shape` benchmark on the same
-runner for both the previous release (`PERF_REF` in `perf.yml`) and the
-pushed commit, measuring each cell as alternating release/commit pairs over
-three rounds, and fails when a cell's median is more than 5% slower in every
-round (a commit can waive it with `[perf-allow]` in its message). It covers that one
-workload, not luna's performance in general.
+release over release is the CI perf-gate: each push builds the `redis_lua_shape` benchmark for
+both the previous release (`PERF_REF` in `perf.yml`) and the pushed commit,
+then seven runners each measure every cell as alternating release/commit
+pairs over three rounds. A runner's figure for a cell is the median of its
+three rounds, and the gate fails when the geometric mean of the seven
+figures is more than 3.15% slower than the release. That threshold is set so
+that a 5% slowdown in any cell fails with probability of at least 0.95 while
+an unchanged commit fails with probability of at most 0.01, so slowdowns of
+2-3% fail some of the time. A pushed commit whose message contains
+`[perf-allow]` skips the check; for a merge, that is the merge commit's
+message. It covers that one workload, not luna's performance in general.
 
 ---
 
