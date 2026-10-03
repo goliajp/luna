@@ -242,7 +242,8 @@ impl Vm {
                 continue;
             }
             let (tag, payload) = frame[i].unpack();
-            // SAFETY: the raw payload of the slot's own value.
+            // SAFETY: every field of `RawVal` is one plain 8-byte word, and
+            // `unpack` returned it fully initialised
             regs[i] = unsafe { payload.zero as i64 };
             // a slot past the compile-time tags is checked like one read
             let want = compile_entry_tags.get(i).copied().unwrap_or(tag);

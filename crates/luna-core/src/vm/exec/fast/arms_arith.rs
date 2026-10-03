@@ -196,8 +196,7 @@ macro_rules! fast_arith_arms {
         }
         macro_rules! op_not {
             () => {{
-                // SAFETY: a register of the running frame
-                let t = unsafe { raw_truthy($regs.add($inst.b() as usize)) };
+                let t = reg_truthy!($inst.b());
                 set_reg!($inst.a(), Value::Bool(!t));
                 next!()
             }};

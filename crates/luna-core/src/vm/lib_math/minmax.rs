@@ -35,11 +35,12 @@ pub(super) fn minmax(vm: &mut Vm, fs: u32, nargs: u32, want_max: bool) -> Result
         // the stack may have moved under a metamethod; take it again
         let (pb, pv) = (&vm.stack[first + best], &vm.stack[first + i]);
         let swap = match (pb.tag_byte(), pv.tag_byte()) {
-            // SAFETY: the tags say which payload each holds
-            (tag::INT, tag::INT) => unsafe {
-                let (x, y) = (pb.as_int_unchecked(), pv.as_int_unchecked());
+            (tag::INT, tag::INT) => {
+                let (Value::Int(x), Value::Int(y)) = (*pb, *pv) else {
+                    unreachable!("int tags")
+                };
                 if want_max { x < y } else { y < x }
-            },
+            }
             (tag::FLOAT, tag::FLOAT) => {
                 let (Value::Float(x), Value::Float(y)) = (*pb, *pv) else {
                     unreachable!("float tags")

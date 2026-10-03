@@ -31,8 +31,7 @@ macro_rules! fast_flow_macros {
                 $npc = f.pc;
                 let base = f.base;
                 $fr = f;
-                // SAFETY: as at the start
-                $regs = unsafe { $vm.stack.as_mut_ptr().add(base as usize) };
+                $regs = $vm.regs_at(base);
                 next!()
             }};
         }

@@ -112,17 +112,16 @@ impl Vm {
         {
             return Returned::No;
         }
-        // SAFETY: `n >= 2`; popping the top frame leaves this one in place
-        let caller: Option<*mut Frame> = match unsafe { self.frames.get_unchecked_mut(n - 2) } {
+        // popping the top frame leaves this one in place
+        let caller: Option<*mut Frame> = match &mut self.frames[n - 2] {
             CallFrame::Lua(f) => Some(f),
             CallFrame::Cont(c) if matches!(c.kind, ContKind::Meta(_)) => None,
             CallFrame::Cont(_) => return Returned::No,
         };
         let to_meta = caller.is_none();
-        // SAFETY: the running frame is on top, and it is a Lua frame
-        let (func_slot, wanted) = match unsafe { self.frames.get_unchecked(n - 1) } {
+        let (func_slot, wanted) = match &self.frames[n - 1] {
             CallFrame::Lua(f) => (f.func_slot, f.nresults),
-            // SAFETY: see above
+            // SAFETY: the running frame is on top, and it is a Lua frame
             CallFrame::Cont(_) => unsafe { std::hint::unreachable_unchecked() },
         };
         frames_pop_known(
