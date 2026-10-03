@@ -24,8 +24,8 @@ macro_rules! fast_cmp_arms {
                         proto.trace_hot_count.set(c + 1);
                     }
                     let target = ($pc as i32 + 1 + off).max(0) as u32;
-                    // SAFETY: a jump target is inside the function
-                    if $vm.jit.loop_hot_tick(unsafe { $code.add(target as usize) }) && {
+                    // the counter is keyed by the target's address
+                    if $vm.jit.loop_hot_tick($code.wrapping_add(target as usize)) && {
                         save!();
                         $vm.trace_start_at_back_edge(cl!(), base!(), target, None)
                     } {

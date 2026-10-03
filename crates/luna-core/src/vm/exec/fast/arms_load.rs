@@ -88,8 +88,7 @@ macro_rules! fast_load_arms {
                 $vm.upval_set(cl!(), $inst.b(), v);
                 // the write may have gone through `self.stack`
                 let base = base!();
-                // SAFETY: as at the loop head
-                $regs = unsafe { $vm.stack.as_mut_ptr().add(base as usize) };
+                $regs = $vm.regs_at(base);
                 next!()
             }};
         }
