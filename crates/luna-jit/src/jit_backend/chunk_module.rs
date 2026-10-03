@@ -61,7 +61,7 @@ fn method_helper(name: &str) -> Option<*const u8> {
         "luna_jit_park_deopt" => luna_jit_park_deopt as *const u8,
         "luna_jit_table_get_int_checked" => luna_jit_table_get_int_checked as *const u8,
         "luna_jit_table_get_float_checked" => luna_jit_table_get_float_checked as *const u8,
-        _ => return None,
+        _ => return super::trace::reloc::resolve_symbol(name),
     })
 }
 
@@ -80,6 +80,7 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
     let mut module = send_jit_module::UnpublishedModule::new(build_jit_module_with_helpers()?);
     let (fn_id, meta) = lower_int_chunk_into(&mut *module, proto, pre53, float_only)?;
     module.finalize_definitions().ok()?;
+    chunk_share::count_codegen();
 
     // `LUNA_JIT_TRACE=1` prints one line per
     // successful JIT compile with the Proto's source location +

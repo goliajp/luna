@@ -20,8 +20,8 @@ impl Vm {
     /// Build the raw `Vm` struct without main coroutine / RNG seed / library
     /// setup. Private helper shared by `Vm::new` and `Vm::new_minimal`; the
     /// caller is responsible for the rest of the bring-up.
-    pub(super) fn new_inner(version: LuaVersion) -> Vm {
-        let mut heap = Heap::new();
+    pub(super) fn new_inner(version: LuaVersion, heap: Heap) -> Vm {
+        let mut heap = heap;
         // PUC 5.1 had no ephemeron pass — `__mode='k'` tables marked their
         // values strongly. gc.lua's "weak tables" section relies on that.
         heap.no_ephemeron = version <= LuaVersion::Lua51;
@@ -171,7 +171,19 @@ impl Vm {
     /// selectively. The Vm is otherwise fully initialized (main coroutine,
     /// RNG seed, GC) so `eval` and `call_value` are immediately usable.
     pub fn new_minimal(version: LuaVersion) -> Vm {
-        let mut vm = Vm::new_inner(version);
+        Vm::new_minimal_on(version, Heap::new())
+    }
+
+    /// [`Vm::new_minimal`] with string hashing seeded by `seed` instead of
+    /// a seed of its own. Where a table's string keys sit depends on the
+    /// seed, and compiled traces read keys where they found them when
+    /// recording, so `Vm`s that share compiled traces share a seed.
+    pub fn new_minimal_with_hash_seed(version: LuaVersion, seed: u32) -> Vm {
+        Vm::new_minimal_on(version, Heap::with_seed(seed))
+    }
+
+    fn new_minimal_on(version: LuaVersion, heap: Heap) -> Vm {
+        let mut vm = Vm::new_inner(version, heap);
         let mc = vm.heap.new_coro(Value::Nil, vm.globals);
         // SAFETY: `mc` was allocated on the line above and is held only by this local; the borrow covers one field store
         unsafe { mc.as_mut() }.status = CoroStatus::Running;

@@ -221,6 +221,12 @@ pub struct Heap {
     /// gc.lua :544 asserts collected after one `collectgarbage()`). 5.1/5.2
     /// don't exercise this path. Set by the VM at construction.
     pub(crate) defer_thread_cycle_finalize: bool,
+    /// The main functions of the chunks loaded while `track_chunk_roots`
+    /// is set, without keeping them alive: the collector drops each one it
+    /// finds dead. Compiled traces taken over from another Vm find the
+    /// functions they inlined in these chunks.
+    pub(crate) chunk_roots: Vec<Gc<Proto>>,
+    pub(crate) track_chunk_roots: bool,
     /// Pool of freed Table allocations.
     /// btrees-style workloads create + free ~32k tables per iter;
     /// jemalloc's malloc/free roundtrip costs ~30ns per table = ~960µs
@@ -250,12 +256,22 @@ const GC_MIN_THRESHOLD: usize = 1 << 20;
 impl Heap {
     /// Build a fresh empty heap with default GC pacing and no memory cap.
     pub fn new() -> Heap {
+        Heap::with_seed(make_seed())
+    }
+
+    /// The seed strings are hashed with.
+    pub fn seed(&self) -> u32 {
+        self.seed
+    }
+
+    /// [`Heap::new`] hashing strings with `seed`.
+    pub fn with_seed(seed: u32) -> Heap {
         Heap {
             all: ptr::null_mut(),
             fixed: ptr::null_mut(),
             fix_natives: false,
             strings: StringTable::new(),
-            seed: make_seed(),
+            seed,
             live: 0,
             bytes: 0,
             next_gc: GC_MIN_THRESHOLD,
@@ -271,6 +287,8 @@ impl Heap {
             no_ephemeron: false,
             signed_zero_keys: false,
             defer_thread_cycle_finalize: false,
+            chunk_roots: Vec::new(),
+            track_chunk_roots: false,
             mem_cap: None,
             table_pool: Vec::new(),
             #[cfg(feature = "gc-verify")]

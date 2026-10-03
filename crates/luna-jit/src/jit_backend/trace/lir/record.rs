@@ -157,6 +157,16 @@ impl Lir {
         self.var_cur[..n as usize].copy_from_slice(&self.snaps[at as usize..(at + n) as usize]);
     }
 
+    fn reloc_index(&mut self, kind: super::super::RelocKind, live: i64) -> u32 {
+        match self.relocs.iter().position(|&r| r == (kind, live)) {
+            Some(n) => n as u32,
+            None => {
+                self.relocs.push((kind, live));
+                self.relocs.len() as u32 - 1
+            }
+        }
+    }
+
     pub(super) fn ty_of_value(&self, x: Value) -> Ty {
         self.value_ty[v(x) as usize]
     }
@@ -279,8 +289,13 @@ impl Emit for Lir {
     fn tier_count(&mut self, cell: i64, at: u32, hot: Block, cont: Block) {
         self.edge(hot);
         self.edge(cont);
-        let op = Op::TierCount { cell, at };
+        let n = self.reloc_index(super::super::RelocKind::TierCell, cell);
+        let op = Op::TierCount { n, at };
         self.push(op, Ty::I64, NONE, NONE, hot.as_u32(), cont.as_u32());
+    }
+    fn reloc(&mut self, kind: super::super::RelocKind, live: i64) -> Value {
+        let n = self.reloc_index(kind, live);
+        self.def(Op::Reloc(n), Ty::I64, NONE, NONE, NONE)
     }
 }
 

@@ -127,6 +127,16 @@ impl Vm {
         self.jit.field_ic_enabled
     }
 
+    /// Before recording a trace, ask the trace compiler for one other Vms
+    /// compiled for code of the same content, and remember the chunks
+    /// loaded from now on so such traces find the functions they inlined.
+    /// The JIT crate's shared engine turns this on for the Vms it builds.
+    #[doc(hidden)]
+    pub fn enable_trace_sharing(&mut self) {
+        self.jit.share_traces = true;
+        self.heap.track_chunk_roots = true;
+    }
+
     #[doc(hidden)]
     #[deprecated(since = "3.2.0", note = "renamed to `set_self_link_enabled`")]
     pub fn set_p16_self_link_enabled(&mut self, enabled: bool) {

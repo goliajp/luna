@@ -56,6 +56,7 @@ pub mod inspect {
     pub use luna_core::vm::inspect::*;
 }
 
+pub use jit_backend::engine::Engine;
 pub use lua_facade::{IntoLuaArgs, Lua, LuaFunction, LuaRoot, LuaSandboxBuilder, LuaTable};
 
 /// Unified `jit` namespace — combines luna-core's trait surface +
@@ -72,7 +73,7 @@ pub mod jit {
     // per-Vm storage, so they are exported unconditionally: integration
     // tests and embedders can probe a Vm's JIT cache size
     // / reset it without a downcast.
-    pub use crate::jit_backend::{cache_clear, cache_entry_count};
+    pub use crate::jit_backend::{cache_clear, cache_entry_count, chunk_adopted_count};
 
     /// `Send` wrapper newtype for `cranelift_jit::JITModule`. Exposed
     /// `#[doc(hidden)]` so integration tests under
