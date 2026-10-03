@@ -49,10 +49,10 @@ impl Vm {
                 };
                 for i in 1..=n {
                     let v = self.r(base, a + i);
-                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                    if let Err(TableError::Overflow) =
-                        unsafe { t.as_mut() }.set_int(&mut self.heap, offset + i as i64, v)
-                    {
+                    // SAFETY: `t` is a live table (see `Gc`), and no
+                    // reference into it is held across the call
+                    let r = unsafe { t.as_mut() }.set_int(&mut self.heap, offset + i as i64, v);
+                    if let Err(TableError::Overflow) = r {
                         return Err(self.rt_err("table overflow"));
                     }
                 }

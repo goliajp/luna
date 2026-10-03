@@ -92,6 +92,7 @@ pub(crate) unsafe fn bytes_of<'a>(p: *const LuaStr) -> &'a [u8] {
 /// SAFETY: as `bytes_of`.
 #[inline]
 pub(crate) unsafe fn hash_of(p: *const LuaStr) -> u32 {
+    // SAFETY: the caller's contract
     unsafe {
         if !(*p).hashed.get() {
             (*p).hash.set(lua_hash(bytes_of(p), (*p).hash.get()));
@@ -154,6 +155,8 @@ pub(crate) fn alloc_long(bytes: &[u8], seed: u32) -> *mut LuaStr {
 
 /// SAFETY: `p` must come from `alloc_str` and not be freed twice.
 pub(crate) unsafe fn free(p: *mut LuaStr) {
+    // SAFETY: the caller's contract; the layout is the one `alloc_str`
+    // used, recomputed from the byte count in `hdr.aux`
     unsafe {
         let l = layout((*p).hdr.aux as usize);
         ptr::drop_in_place(p);

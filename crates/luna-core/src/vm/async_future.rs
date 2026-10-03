@@ -80,9 +80,9 @@ impl<'vm> Future for EvalFuture<'vm> {
     type Output = Result<Vec<Value>, LuaError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // `EvalFuture` holds no self-referential state — `vm` is a
-        // plain mutable borrow, `state` is owned by value. Safe to
-        // project out of the pin without `pin-project`.
+        // SAFETY: `EvalFuture` holds no self-referential state (`vm` is a
+        // plain mutable borrow, `state` is owned by value), so nothing
+        // relies on it staying where it is pinned
         let this = unsafe { self.as_mut().get_unchecked_mut() };
 
         loop {

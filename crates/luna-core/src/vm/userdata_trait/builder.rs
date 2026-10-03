@@ -133,6 +133,7 @@ impl<'vm, T: LuaUserdata> MetatableBuilder<'vm, T> {
 
         // Direct metatable entries (metamethods + static fns).
         for (k, v) in meta_entries {
+            // SAFETY: as above
             unsafe { mt.as_mut() }.set(&mut vm.heap, Value::Str(k), v)?;
         }
         vm.heap
