@@ -1,0 +1,3 @@
+close 2:	original
+close 1:	replaced
+panic: [replaced], 1 values on the stack
