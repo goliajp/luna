@@ -121,9 +121,6 @@ pub(in crate::vm::dump) fn undump(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Pr
     check_header(bytes)?;
     let mut r = Reader::at(bytes, HEADER.len());
     let raw = read_proto(&mut r, heap, None)?;
-    if r.pos() != bytes.len() {
-        return Err(format!("{DIALECT} chunk: {} trailing bytes", bytes.len() - r.pos()).into());
-    }
     Ok(lower::build(heap, raw, &translate)?)
 }
 

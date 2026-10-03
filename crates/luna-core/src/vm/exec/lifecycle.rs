@@ -103,6 +103,7 @@ impl Vm {
             msgh_running: None,
             msgh_runs: 0,
             errerr_raised: 0,
+            gcmm_raised: 0,
             msgh_applied: None,
             keep_error_traceback: true,
             hook_ftransfer: 0,

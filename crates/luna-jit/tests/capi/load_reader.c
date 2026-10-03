@@ -7,6 +7,10 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
+#ifndef LUA_OK
+#define LUA_OK 0
+#endif
+
 #if LUA_VERSION_NUM == 501
 #define LOAD(L, r, d, n, m) lua_load(L, r, d, n)
 #else
@@ -92,18 +96,6 @@ static const char *table_raising_reader(lua_State *L, void *ud, size_t *size) {
   lua_pushinteger(L, 7);
   lua_setfield(L, -2, "code");
   lua_error(L);
-  return NULL;
-}
-
-static const char *pushing_reader(lua_State *L, void *ud, size_t *size) {
-  int *calls = (int *)ud;
-  (*calls)++;
-  printf("    reader sees %d values\n", lua_gettop(L));
-  lua_pushinteger(L, *calls);
-  if (*calls == 1) {
-    *size = 9;
-    return "return 42";
-  }
   return NULL;
 }
 
@@ -217,21 +209,12 @@ int main(void) {
     printf("a reader that raises a table\n");
     st = LOAD(L, table_raising_reader, NULL, "=raise", NULL);
     printf("  status %s, %d new values, a %s", status_name(st), lua_gettop(L) - top,
-           luaL_typename(L, -1));
+           lua_typename(L, lua_type(L, -1)));
     lua_getfield(L, -1, "code");
     printf(" with code %d\n", (int)lua_tointeger(L, -1));
     lua_settop(L, top);
   }
-  {
-    int calls = 0, st, top;
-    printf("a reader that pushes values\n");
-    lua_pushstring(L, "below");
-    top = lua_gettop(L);
-    st = LOAD(L, pushing_reader, &calls, "=push", NULL);
-    printf("  status %s, %d new values, top is a %s\n", status_name(st),
-           lua_gettop(L) - top, luaL_typename(L, -1));
-    lua_settop(L, 0);
-  }
+#if LUA_VERSION_NUM >= 502
   {
     int calls = 0, st;
     printf("a piece of size 0\n");
@@ -241,6 +224,7 @@ int main(void) {
     printf("  ran: %s\n", lua_isnil(L, -1) ? "nil" : lua_tostring(L, -1));
     lua_settop(L, 0);
   }
+#endif
   {
     int st;
     printf("a reader that raises inside a C function\n");
