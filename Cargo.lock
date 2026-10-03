@@ -994,6 +994,7 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "cranelift-object",
+ "find-msvc-tools",
  "luna-core",
  "luna-jit",
  "object 0.40.0",
