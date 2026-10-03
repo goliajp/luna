@@ -41,7 +41,7 @@ impl Vm {
                 // shared self.jit.chunk_compiler read.
                 let vm_ptr: *mut Vm = self;
                 let _jit_vm_guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                // SAFETY: `f` is the compiled chunk's entry, transmuted above from the entry pointer the backend returned for this proto with this signature; the guard above pins this Vm and `cl` for the helpers the code calls
                 let r = unsafe { f() };
                 drop(_jit_vm_guard);
                 // A JIT helper may have detected a metatable

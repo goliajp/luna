@@ -29,6 +29,8 @@ fn noop_waker() -> Waker {
         static VT: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
         RawWaker::new(std::ptr::null(), &VT)
     }
+    // SAFETY: the vtable functions ignore the data pointer and do nothing, and `clone` hands back a
+    // waker with the same vtable, so a null data pointer meets every `RawWaker` contract
     unsafe { Waker::from_raw(raw()) }
 }
 

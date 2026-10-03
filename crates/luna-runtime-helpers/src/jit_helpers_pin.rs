@@ -4,13 +4,12 @@ use luna_jit::jit_backend as jb;
 /// nothing in this crate actually invokes the pointers.
 type AnyFn = *const u8;
 
-/// SAFETY: a `*const u8` of a `fn` symbol is `Send + Sync` (the
-/// address is a process-global text-section constant). The `Sync`
-/// impl is needed so the `static` below typechecks.
+/// A helper's address. `Sync` so the `static` below typechecks.
 #[repr(transparent)]
 struct PinnedFn(AnyFn);
-// SAFETY: fn pointer addresses are immutable globals, safe to share
-// across threads — they're only ever read, never dereferenced.
+// SAFETY: the only `PinnedFn`s are the elements of the immutable static
+// below, each the address of a function; nothing writes through or
+// dereferences them, so sharing them across threads shares a constant
 unsafe impl Sync for PinnedFn {}
 
 /// The link-anchor array. `#[used]` (and `#[unsafe(no_mangle)]` so
@@ -72,6 +71,22 @@ static LUNA_AOT_HELPER_PIN: [PinnedFn; 42] = [
     PinnedFn(jb::luna_jit_head_closure as AnyFn),
 ];
 
+/// Run-time-mutable flag that defeats LTO's branch elimination on
+/// the `if NEVER.load(...) { /* call helpers */ }` guard below.
+///
+/// `black_box(false)` alone is not enough under `lto = true` —
+/// the cross-crate LTO inliner observes the branch as dead and
+/// strips the calls (verified empirically: with the
+/// `if black_box(false)` form the cgu containing
+/// `force_link_jit_helpers` had zero `U _luna_jit_*` refs).
+///
+/// `AtomicBool` with default `false` + `Ordering::Relaxed` load
+/// is opaque to LTO — the optimizer cannot prove the atomic is
+/// never written by another translation unit, so the branch
+/// survives. The atomic IS never written (nobody calls a
+/// setter), so the branch is dynamically dead at run time.
+static NEVER_TRIP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Pulls the link-anchor static into the public API surface so
 /// downstream `cargo build --release -p luna-runtime-helpers`
 /// keeps it through the rlib → staticlib bundling step.
@@ -91,31 +106,9 @@ static LUNA_AOT_HELPER_PIN: [PinnedFn; 42] = [
 /// `nm` reports `T _luna_jit_*` count = 0 when only the static
 /// references the helpers).
 ///
-/// # Safety
-///
-/// All `luna_jit_*` helpers are `unsafe extern "C"` and must be
-/// called under an active [`luna_jit::jit_backend::enter_jit`]
-/// guard. The branches below are gated on
-/// `black_box(false)` so the calls never execute at run time;
-/// they exist solely as link-time anchors. Calling
-/// `force_link_jit_helpers` is therefore safe despite invoking
-/// `unsafe` functions inside the (unreachable) branch body.
-/// Run-time-mutable flag that defeats LTO's branch elimination on
-/// the `if NEVER.load(...) { /* call helpers */ }` guard below.
-///
-/// `black_box(false)` alone is not enough under `lto = true` —
-/// the cross-crate LTO inliner observes the branch as dead and
-/// strips the calls (verified empirically: with the
-/// `if black_box(false)` form the cgu containing
-/// `force_link_jit_helpers` had zero `U _luna_jit_*` refs).
-///
-/// `AtomicBool` with default `false` + `Ordering::Relaxed` load
-/// is opaque to LTO — the optimizer cannot prove the atomic is
-/// never written by another translation unit, so the branch
-/// survives. The atomic IS never written (nobody calls a
-/// setter), so the branch is dynamically dead at run time.
-static NEVER_TRIP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
+/// The `luna_jit_*` calls below sit behind a branch on `NEVER_TRIP`,
+/// which is never taken, so calling this function is safe although it
+/// names those `unsafe` helpers.
 #[allow(unreachable_code)]
 pub fn force_link_jit_helpers() -> usize {
     // Address-table touch keeps `LUNA_AOT_HELPER_PIN` live.
@@ -129,10 +122,9 @@ pub fn force_link_jit_helpers() -> usize {
     // (`NEVER_TRIP` is never written), but the call edges to each
     // `luna_jit_*` helper survive into the staticlib bundling.
     if NEVER_TRIP.load(std::sync::atomic::Ordering::Relaxed) {
-        // SAFETY: the surrounding `if black_box(false)` is
-        // never entered at run time. The calls exist solely to
-        // pin the helper symbols' cgus into the staticlib
-        // bundling step's reachable set.
+        // SAFETY: never runs: nothing stores to `NEVER_TRIP`, so this
+        // branch is dead at run time and the calls are only link-time
+        // anchors
         unsafe {
             let _ = jb::luna_jit_new_table();
             let _ = jb::luna_jit_new_table_sized(0);

@@ -26,10 +26,11 @@ impl Vm {
         let v51 = self.version() <= LuaVersion::Lua51;
         match co {
             Some(co) if !self.is_current_thread(Some(co)) => {
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is
-                // single-threaded and `co` is reachable (the caller holds it
-                // as a native argument) for as long as the view lives, and
-                // nothing mutates a non-running coroutine meanwhile.
+                // SAFETY: `co` stays allocated while the view lives (the
+                // caller holds it as a native argument, and no collect runs
+                // while the view borrows `self`); it is not the running
+                // thread, and nothing writes a non-running coroutine while
+                // `&self` is held, so the shared reference is not aliased
                 let c: &Coro = unsafe { &*co.as_ptr() };
                 let yield_slot = match c.status {
                     CoroStatus::Suspended => c.resume_at.map(|(fs, _)| fs),
@@ -185,8 +186,7 @@ impl Vm {
 
     pub(crate) fn closure_ar(&self, cl: Gc<LuaClosure>) -> Ar {
         let proto = cl.proto;
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        let raw = unsafe { crate::runtime::string::bytes_of(proto.source.as_ptr()) };
+        let raw = proto.source.as_bytes();
         // PUC `funcinfo` substitutes "=?" for a Proto without a source (a
         // stripped binary chunk); luna marks that as no source and no line
         // table, so a text chunk named "" still reads `[string ""]`.
@@ -362,7 +362,7 @@ impl Vm {
                 // the coroutine's saved stack is traced through `co`; re-gray it
                 self.heap
                     .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                // SAFETY: `co` is a suspended thread the caller holds (a native argument), not the running one, so the Vm holds no reference into its saved stack; the borrow lives until the slot is written, which does not collect
                 unsafe { &mut co.as_mut().stack }
             }
             _ => &mut self.stack,

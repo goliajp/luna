@@ -104,13 +104,19 @@ fn collect_traces_table_contents() {
     let t = heap.new_table();
     let k = heap.intern(b"key-string-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); // long
     let v = heap.intern(b"val");
+    // SAFETY: `t` was allocated above and is held by a local; nothing has collected since, and the
+    // borrow covers one call
     unsafe { t.as_mut() }
         .set(&mut heap, Value::Str(k), Value::Str(v))
         .unwrap();
     let inner = heap.new_table();
+    // SAFETY: `t` was allocated above and is held by a local; nothing has collected since, and the
+    // borrow covers one call
     unsafe { t.as_mut() }
         .set(&mut heap, Value::Int(1), Value::Table(inner))
         .unwrap();
+    // SAFETY: `inner` was allocated above and is held by a local; nothing has collected since, and
+    // the borrow covers one call
     unsafe { inner.as_mut() }.set_metatable(Some(t));
     assert_eq!(heap.live_objects(), 4);
     // root only the outer table: everything reachable through it survives
@@ -146,10 +152,14 @@ fn bytes_and_live_round_trip_to_zero() {
     for ti in 0..50 {
         let t = heap.new_table();
         for k in 1..=200 {
+            // SAFETY: `t` was allocated at the top of this iteration and nothing collects inside
+            // the loop; the borrow covers one call
             let _ = unsafe { t.as_mut() }.set(&mut heap, Value::Int(k), Value::Int(ti * 1000 + k));
         }
         for sk in 0..32 {
             let key = Value::Str(heap.intern(format!("k{ti}-{sk}").as_bytes()));
+            // SAFETY: `t` was allocated at the top of this iteration and nothing collects inside
+            // the loop; the borrow covers one call
             let _ = unsafe { t.as_mut() }.set(&mut heap, key, Value::Int(sk));
         }
         roots.push(Value::Table(t));
@@ -241,6 +251,8 @@ fn deep_table_chain_marks_iteratively() {
     let mut cur = head;
     for _ in 0..n {
         let next = heap.new_table();
+        // SAFETY: `cur` is `head` or the table allocated in the previous iteration, and nothing
+        // collects inside the loop; the borrow covers one call
         unsafe { cur.as_mut() }
             .set(&mut heap, Value::Int(1), Value::Table(next))
             .unwrap();

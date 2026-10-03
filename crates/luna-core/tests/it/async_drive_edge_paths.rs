@@ -40,12 +40,16 @@ fn noop_waker() -> Waker {
         static VT: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
         RawWaker::new(std::ptr::null(), &VT)
     }
+    // SAFETY: the vtable functions ignore the data pointer and do nothing, and `clone` hands back a
+    // waker with the same vtable, so a null data pointer meets every `RawWaker` contract
     unsafe { Waker::from_raw(raw()) }
 }
 
 fn block_on<F: Future>(mut fut: F) -> F::Output {
     let waker = noop_waker();
     let mut cx = Context::from_waker(&waker);
+    // SAFETY: `fut` is a local of this function that is not moved after this point and is dropped
+    // in place on return, so pinning it is sound
     let mut fut = unsafe { Pin::new_unchecked(&mut fut) };
     loop {
         match fut.as_mut().poll(&mut cx) {
@@ -82,6 +86,8 @@ fn eval_future_drop_mid_execution_restores_state() {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
         let mut fut = vm.eval_async("local s=0 for i=1,1000000 do s=s+i end return s");
+        // SAFETY: `fut` is a local of this function that is not moved after this point and is
+        // dropped in place on return, so pinning it is sound
         let mut pinned = unsafe { Pin::new_unchecked(&mut fut) };
         match pinned.as_mut().poll(&mut cx) {
             Poll::Ready(_) => {
@@ -194,6 +200,8 @@ fn eval_future_panics_when_polled_after_ready() {
     let waker = noop_waker();
     let mut cx = Context::from_waker(&waker);
     let mut fut = vm.eval_async("return 1");
+    // SAFETY: `fut` is a local of this function that is not moved after this point and is dropped
+    // in place on return, so pinning it is sound
     let mut pinned = unsafe { Pin::new_unchecked(&mut fut) };
     // Drive to Ready.
     loop {

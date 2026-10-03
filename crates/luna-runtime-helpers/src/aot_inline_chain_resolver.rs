@@ -68,6 +68,8 @@ struct IndexEntry {
 // `section$end$<seg>$<sect>`, synthesised by Apple `ld`. Windows
 // COFF has neither — see the runtime PE-header walker in the
 // `resolve_all` arm.
+// SAFETY: the linker defines both symbols, at the start and the end of the
+// section; they are declared as bytes and only their addresses are taken
 #[cfg(all(unix, not(target_vendor = "apple")))]
 unsafe extern "C" {
     #[link_name = "__start_luna_inline_chnx"]
@@ -76,6 +78,8 @@ unsafe extern "C" {
     static mut LUNA_INLINE_CHNX_END: u8;
 }
 
+// SAFETY: the linker defines both symbols, at the start and the end of the
+// section; they are declared as bytes and only their addresses are taken
 #[cfg(target_vendor = "apple")]
 unsafe extern "C" {
     #[link_name = "\u{1}section$start$__DATA$luna_inline_chnx"]
@@ -136,7 +140,11 @@ pub fn resolve_all() -> usize {
             return 0;
         }
     };
-    walk_index_bytes(base, len_bytes)
+    // SAFETY: `(base, len_bytes)` bounds the `luna_inline_chnx` section
+    // (`.lt_chai` on Windows): the linker's start/stop symbols, or the
+    // section the PE header names, and `luna-aot` fills that section
+    // only with `IndexEntry`s laid out as `walk_index_bytes` reads them
+    unsafe { walk_index_bytes(base, len_bytes) }
 }
 
 /// Common per-entry walk shared by the Unix/Mach-O bracket-symbol
@@ -155,7 +163,13 @@ pub fn resolve_all() -> usize {
 /// are skipped silently with an `LUNA_AOT_PROBE` line on stderr —
 /// the trace's first inline side-exit dispatch will then deopt via
 /// the helper's `pending_err` path because the slot stays NULL.
-fn walk_index_bytes(base: *const u8, len_bytes: usize) -> usize {
+///
+/// # Safety
+/// `base` is null or points at `len_bytes` readable bytes holding
+/// `IndexEntry`s, aligned for them, as `luna-aot` emits the section:
+/// each entry's non-null `bytes_ptr` points at a count followed by that
+/// many records, and its non-null `slot_ptr` at a writable pointer slot.
+unsafe fn walk_index_bytes(base: *const u8, len_bytes: usize) -> usize {
     if base.is_null() || len_bytes == 0 {
         return 0;
     }
@@ -163,68 +177,66 @@ fn walk_index_bytes(base: *const u8, len_bytes: usize) -> usize {
     let n_entries = len_bytes / core::mem::size_of::<IndexEntry>();
     let start = base as *const IndexEntry;
     let mut populated = 0usize;
-    // SAFETY: caller guarantees `[base, base + len_bytes)` is
-    // mapped readable memory owned by a linker-defined section.
-    // Each IndexEntry read is bounded by n_entries. Bytes-payload
-    // reads are bounded by the per-entry count (validated for
-    // overflow before the slice constructor). Slot writes target
-    // the `slot_ptr` field which the lowerer guarantees points at
-    // a writable 8-byte slot in the same image.
-    unsafe {
-        for i in 0..n_entries {
-            let entry = &*start.add(i);
-            if entry.bytes_ptr.is_null() || entry.slot_ptr.is_null() {
-                continue;
-            }
-            // Bytes layout: little-endian u64 record count, then
-            // `count * FRAME_MATERIALIZE_INFO_SIZE` packed bytes.
-            let count = core::ptr::read_unaligned(entry.bytes_ptr as *const u64) as usize;
-            let Some(bytes_len) = count.checked_mul(FRAME_MATERIALIZE_INFO_SIZE) else {
-                if probe_on {
-                    eprintln!(
-                        "luna-runtime-helpers: aot_inline_chain skip entry {i} reason=count_overflow count={count}"
-                    );
-                }
-                continue;
-            };
-            let payload = entry.bytes_ptr.add(8);
-            let raw = core::slice::from_raw_parts(payload, bytes_len);
-            let mut vec: Vec<FrameMaterializeInfo> = Vec::with_capacity(count);
-            for j in 0..count {
-                let off = j * FRAME_MATERIALIZE_INFO_SIZE;
-                let base_offset = u32::from_le_bytes(raw[off..off + 4].try_into().unwrap());
-                let pc = u32::from_le_bytes(raw[off + 4..off + 8].try_into().unwrap());
-                let nresults = i32::from_le_bytes(raw[off + 8..off + 12].try_into().unwrap());
-                vec.push(FrameMaterializeInfo {
-                    base_offset,
-                    pc,
-                    nresults,
-                });
-            }
-            let rc: luna_core::jit::send_compat::TArc<[FrameMaterializeInfo]> = vec.into();
-            // `Rc<[T]>::as_ptr` returns a fat `*const [T]`; the
-            // first-element address is what the IR's
-            // `luna_jit_trace_materialize_frames` consumes. For a
-            // non-empty chain, `rc[0]` is the data pointer; for an
-            // empty chain (count == 0) the IR never reaches the
-            // helper (the side-exit's `if !call_chain.is_empty()`
-            // gate at compile time would have routed through the
-            // d=0 arm), so the slot stays at a dangling-but-unused
-            // value. Guard anyway for paranoia.
-            let chain_ptr: *const FrameMaterializeInfo = if count == 0 {
-                core::ptr::null()
-            } else {
-                &rc[0] as *const FrameMaterializeInfo
-            };
-            // Leak ownership so the chain bytes stay alive for the
-            // process. AOT-installed traces never tear down (no
-            // `proto.traces.borrow_mut().remove(...)` path on
-            // deploy), so a single leak per unique chain matches
-            // the lifetime requirement exactly.
-            core::mem::forget(rc);
-            core::ptr::write(entry.slot_ptr, chain_ptr);
-            populated += 1;
+    // SAFETY: `base` points at `len_bytes` readable bytes of aligned
+    // `IndexEntry`s (# Safety), and `n_entries` of them fit there
+    let entries = unsafe { core::slice::from_raw_parts(start, n_entries) };
+    for (i, entry) in entries.iter().enumerate() {
+        if entry.bytes_ptr.is_null() || entry.slot_ptr.is_null() {
+            continue;
         }
+        // Bytes layout: little-endian u64 record count, then
+        // `count * FRAME_MATERIALIZE_INFO_SIZE` packed bytes.
+        // SAFETY: a non-null `bytes_ptr` starts with an eight-byte count
+        // (# Safety)
+        let count = unsafe { core::ptr::read_unaligned(entry.bytes_ptr as *const u64) } as usize;
+        let Some(bytes_len) = count.checked_mul(FRAME_MATERIALIZE_INFO_SIZE) else {
+            if probe_on {
+                eprintln!(
+                    "luna-runtime-helpers: aot_inline_chain skip entry {i} reason=count_overflow count={count}"
+                );
+            }
+            continue;
+        };
+        // SAFETY: the count is followed by `count` records of
+        // `FRAME_MATERIALIZE_INFO_SIZE` bytes (# Safety), `bytes_len` in all
+        let raw = unsafe { core::slice::from_raw_parts(entry.bytes_ptr.add(8), bytes_len) };
+        let mut vec: Vec<FrameMaterializeInfo> = Vec::with_capacity(count);
+        for j in 0..count {
+            let off = j * FRAME_MATERIALIZE_INFO_SIZE;
+            let base_offset = u32::from_le_bytes(raw[off..off + 4].try_into().unwrap());
+            let pc = u32::from_le_bytes(raw[off + 4..off + 8].try_into().unwrap());
+            let nresults = i32::from_le_bytes(raw[off + 8..off + 12].try_into().unwrap());
+            vec.push(FrameMaterializeInfo {
+                base_offset,
+                pc,
+                nresults,
+            });
+        }
+        let rc: luna_core::jit::send_compat::TArc<[FrameMaterializeInfo]> = vec.into();
+        // `Rc<[T]>::as_ptr` returns a fat `*const [T]`; the
+        // first-element address is what the IR's
+        // `luna_jit_trace_materialize_frames` consumes. For a
+        // non-empty chain, `rc[0]` is the data pointer; for an
+        // empty chain (count == 0) the IR never reaches the
+        // helper (the side-exit's `if !call_chain.is_empty()`
+        // gate at compile time would have routed through the
+        // d=0 arm), so the slot stays at a dangling-but-unused
+        // value. Guard anyway for paranoia.
+        let chain_ptr: *const FrameMaterializeInfo = if count == 0 {
+            core::ptr::null()
+        } else {
+            &rc[0] as *const FrameMaterializeInfo
+        };
+        // Leak ownership so the chain bytes stay alive for the
+        // process. AOT-installed traces never tear down (no
+        // `proto.traces.borrow_mut().remove(...)` path on
+        // deploy), so a single leak per unique chain matches
+        // the lifetime requirement exactly.
+        core::mem::forget(rc);
+        // SAFETY: a non-null `slot_ptr` points at a writable pointer slot
+        // (# Safety)
+        unsafe { core::ptr::write(entry.slot_ptr, chain_ptr) };
+        populated += 1;
     }
     populated
 }

@@ -50,6 +50,9 @@ fn closed_empty_trace_returns_head_pc_and_passes_regs_through() {
     // Resize to head_proto.max_stack so the trace's full store-back
     // pass has somewhere to write. Extra slots default to 0.
     state.resize(p.max_stack as usize, 0);
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer arithmetic
+    // calls no helper
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
 
     assert_eq!(
@@ -79,6 +82,9 @@ fn add_trace_computes_sum_into_dst_reg() {
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[1] = 10;
     state[2] = 3;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer arithmetic
+    // calls no helper
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
 
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 11);
@@ -108,6 +114,9 @@ fn chained_arith_threads_results_through_regs() {
     state[1] = 3;
     state[2] = 4;
     state[3] = 7;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer arithmetic
+    // calls no helper
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
 
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 0, "head_pc 0");
@@ -132,6 +141,9 @@ fn move_then_mul_propagates_via_move() {
     state[0] = 999; // overwritten by Move
     state[1] = 6;
     state[3] = 7;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer arithmetic
+    // calls no helper
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
 
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
@@ -160,6 +172,9 @@ fn trailing_jmp_is_emit_no_op() {
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[1] = 4;
     state[2] = 5;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer arithmetic
+    // calls no helper
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
     assert_eq!(state[0], 9);
@@ -269,6 +284,9 @@ fn compiled_trace_is_callable_repeatedly() {
     for k in 0..1000 {
         state[1] = k;
         state[2] = 2 * k;
+        // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+        // proto's `max_stack` slots, and the trace's integer arithmetic
+        // calls no helper
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
         assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
         assert_eq!(state[0], 3 * k);

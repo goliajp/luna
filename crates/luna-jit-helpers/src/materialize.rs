@@ -39,17 +39,14 @@ pub fn trace_materialize_frames_fires() -> u64 {
 ///   `m.nresults` is therefore always 1. The helper writes whatever
 ///   the metadata says, no validation.
 ///
-/// Safety:
-/// - Caller runs under an `enter_jit(vm, Some(cl))` guard so
-///   `current_jit_vm()` / `current_jit_closure()` return live
-///   references.
-/// - `metas` points to a valid array of length `n` of
-///   `FrameMaterializeInfo`, alive for the duration of the call —
-///   today it's a pointer into the owning `CompiledTrace.frame_metas`
-///   `Box`, which lives at least as long as the trace's mmap.
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread
+/// opened with the running closure; `metas` points at `n` readable
+/// `FrameMaterializeInfo`s (the trace passes its own `frame_metas`, which
+/// live as long as its code).
+// SAFETY: no other item in the link is named `luna_jit_trace_materialize_frames`: only this crate
+// defines `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
     n: u64,
     metas: *const luna_core::jit::trace::FrameMaterializeInfo,
@@ -58,16 +55,15 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
     // Relaxed ordering: the counter is purely diagnostic; the read
     // side runs after process work has quiesced.
     TRACE_MATERIALIZE_FRAMES_FIRES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
+    // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
+    // Vm lent to this call and JIT_CL that closure
+    let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
     // Honour the existing deopt protocol: if any earlier helper in
     // this JIT entry parked a deopt, don't push frames — the
     // dispatcher will unwind via the deopt path.
     if vm.jit.pending_err.is_some() {
         return -1;
     }
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let cl = unsafe { current_jit_closure() };
     let head_frame = match vm.jit_last_lua_frame() {
         Some(f) => f,
         // No live Lua frame at trace head — shouldn't happen under
@@ -77,8 +73,8 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
     };
     let max_stack = cl.proto.max_stack as u32;
     for i in 0..n as usize {
-        // SAFETY: caller-supplied `metas` points to a valid array of
-        // length `n` per the contract above.
+        // SAFETY: `i < n`, and `metas` points at `n` readable entries
+        // (# Safety)
         let m = unsafe { *metas.add(i) };
         let new_base = head_frame.base + m.base_offset;
         vm.jit_ensure_stack((new_base + max_stack) as usize);

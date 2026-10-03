@@ -74,7 +74,7 @@ impl LuaUserdata for Vec3 {
             MetaMethod::Add,
             |vm, this, (rhs,): (Value,)| -> Result<Value, _> {
                 let rhs = match rhs {
-                    Value::Userdata(g) => unsafe { &*g.as_ptr() }
+                    Value::Userdata(g) => g
                         .downcast::<Vec3>()
                         .copied()
                         .ok_or_else(|| vm.rt_err("__add expected Vec3"))?,
@@ -222,7 +222,7 @@ impl LuaUserdata for Bag {
     fn add_methods<M: UserdataMethods<Self>>(m: &mut M) {
         m.add_meta_method(MetaMethod::Eq, |_vm, this, (rhs,): (Value,)| {
             let rhs_tag = match rhs {
-                Value::Userdata(g) => unsafe { &*g.as_ptr() }.downcast::<Bag>().map(|b| b.tag),
+                Value::Userdata(g) => g.downcast::<Bag>().map(|b| b.tag),
                 _ => None,
             };
             Ok::<_, _>(rhs_tag == Some(this.tag))

@@ -85,10 +85,11 @@ impl JitHandle {
             self.num_args, 0,
             "JitHandle::call() is the zero-arg form; use call_with for higher arity"
         );
-        // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-        let f: IntChunkFn = unsafe { std::mem::transmute(self.entry_raw) };
-        // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-        unsafe { f() }
+        // SAFETY: `entry_raw` is the finalized entry of `_module`, which
+        // this handle owns, compiled with no parameters (the assertion
+        // above). A chunk that calls a `luna_jit_*` helper also needs an
+        // `enter_jit` guard, which this method does not check
+        unsafe { std::mem::transmute::<*const u8, IntChunkFn>(self.entry_raw)() }
     }
 
     /// Invoke the entry with a slice of i64 args. Length must match
@@ -96,7 +97,11 @@ impl JitHandle {
     /// shape and transmutes at the call site.
     pub fn call_with(&self, args: &[i64]) -> i64 {
         debug_assert_eq!(args.len(), self.num_args as usize);
-        // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+        // SAFETY: `entry_raw` is the finalized entry of `_module`, which
+        // this handle owns, compiled with `num_args` i64 parameters, and
+        // each arm calls it as the function type of that arity. A chunk
+        // that calls a `luna_jit_*` helper also needs an `enter_jit`
+        // guard, which this method does not check
         unsafe {
             match self.num_args {
                 0 => (std::mem::transmute::<*const u8, IntChunkFn>(self.entry_raw))(),

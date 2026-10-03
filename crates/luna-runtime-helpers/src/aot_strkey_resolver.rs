@@ -70,6 +70,8 @@ struct IndexEntry {
 // emit-side choice. Empty-section (no AOT traces linked in) is
 // handled by `find_section` returning `None` and `resolve_all`
 // short-circuiting to 0.
+// SAFETY: the linker defines both symbols, at the start and the end of the
+// section; they are declared as bytes and only their addresses are taken
 #[cfg(all(unix, not(target_vendor = "apple")))]
 unsafe extern "C" {
     #[link_name = "__start_luna_strkey_idx"]
@@ -78,6 +80,8 @@ unsafe extern "C" {
     static mut LUNA_STRKEY_IDX_END: u8;
 }
 
+// SAFETY: the linker defines both symbols, at the start and the end of the
+// section; they are declared as bytes and only their addresses are taken
 #[cfg(target_vendor = "apple")]
 unsafe extern "C" {
     #[link_name = "\u{1}section$start$__DATA$luna_strkey_idx"]
@@ -144,7 +148,11 @@ pub fn resolve_all(vm: &mut Vm) -> usize {
             return 0;
         }
     };
-    walk_index_bytes(vm, base, len_bytes)
+    // SAFETY: `(base, len_bytes)` bounds the `luna_strkey_idx` section
+    // (`.lt_skix` on Windows): the linker's start/stop symbols, or the
+    // section the PE header names, and `luna-aot` fills that section
+    // only with `IndexEntry`s laid out as `walk_index_bytes` reads them
+    unsafe { walk_index_bytes(vm, base, len_bytes) }
 }
 
 /// Common per-entry walk shared by the Unix/Mach-O bracket-symbol
@@ -159,31 +167,37 @@ pub fn resolve_all(vm: &mut Vm) -> usize {
 /// emits one zero-filled IndexEntry to guarantee the section exists
 /// even when no real traces are linked in) via the
 /// `entry.bytes_ptr.is_null() || entry.slot_ptr.is_null()` skip.
-fn walk_index_bytes(vm: &mut Vm, base: *const u8, len_bytes: usize) -> usize {
+///
+/// # Safety
+/// `base` is null or points at `len_bytes` readable bytes holding
+/// `IndexEntry`s, aligned for them, as `luna-aot` emits the section:
+/// each entry's non-null `bytes_ptr` points at a length followed by that
+/// many bytes, and its non-null `slot_ptr` at a writable pointer slot.
+unsafe fn walk_index_bytes(vm: &mut Vm, base: *const u8, len_bytes: usize) -> usize {
     if base.is_null() || len_bytes == 0 {
         return 0;
     }
     let n_entries = len_bytes / core::mem::size_of::<IndexEntry>();
     let start = base as *const IndexEntry;
     let mut populated = 0usize;
-    // SAFETY: caller guarantees `[base, base + len_bytes)` is
-    // mapped readable memory owned by a linker-defined section.
-    // Each IndexEntry read is bounded by n_entries. Slot writes
-    // target the `slot_ptr` field which the lowerer guarantees
-    // points at a writable 8-byte slot in the same image.
-    unsafe {
-        for i in 0..n_entries {
-            let entry = &*start.add(i);
-            if entry.bytes_ptr.is_null() || entry.slot_ptr.is_null() {
-                continue;
-            }
-            let len = core::ptr::read_unaligned(entry.bytes_ptr as *const u64) as usize;
-            let payload = entry.bytes_ptr.add(8);
-            let bytes = core::slice::from_raw_parts(payload, len);
-            let interned = vm.heap.intern(bytes);
-            core::ptr::write(entry.slot_ptr, interned.as_ptr() as *const u8);
-            populated += 1;
+    // SAFETY: `base` points at `len_bytes` readable bytes of aligned
+    // `IndexEntry`s (# Safety), and `n_entries` of them fit there
+    let entries = unsafe { core::slice::from_raw_parts(start, n_entries) };
+    for entry in entries {
+        if entry.bytes_ptr.is_null() || entry.slot_ptr.is_null() {
+            continue;
         }
+        // SAFETY: a non-null `bytes_ptr` points at an eight-byte length and
+        // then that many bytes (# Safety)
+        let bytes = unsafe {
+            let len = core::ptr::read_unaligned(entry.bytes_ptr as *const u64) as usize;
+            core::slice::from_raw_parts(entry.bytes_ptr.add(8), len)
+        };
+        let interned = vm.heap.intern(bytes);
+        // SAFETY: a non-null `slot_ptr` points at a writable pointer slot
+        // (# Safety)
+        unsafe { core::ptr::write(entry.slot_ptr, interned.as_ptr() as *const u8) };
+        populated += 1;
     }
     populated
 }

@@ -73,23 +73,16 @@ pub fn jit_add(a: i64, b: i64) -> Result<i64, String> {
         .build_return(Some(&sum))
         .map_err(|e| format!("build_return: {e}"))?;
 
-    // SAFETY: `get_function` reads the JIT engine's symbol table for the
-    // function we just emitted, casting the returned pointer to the
-    // `AddFunc` C-ABI type. The cast is sound because the IR above
-    // declares `add` with exactly `(i64, i64) -> i64` and LLVM's
-    // default JIT calling convention on aarch64 / x86_64 matches Rust's
-    // `extern "C"` for primitive integer arguments + return.
-    let add_fn: JitFunction<AddFunc> = unsafe {
-        execution_engine
+    // SAFETY: `add` is declared above as `i64 (i64, i64)` with LLVM's
+    // default C calling convention, which is `AddFunc`; the code it
+    // points at is owned by `execution_engine`, alive until the end of
+    // this function, past the call
+    let result = unsafe {
+        let add_fn: JitFunction<AddFunc> = execution_engine
             .get_function("add")
-            .map_err(|e| format!("get_function: {e}"))?
+            .map_err(|e| format!("get_function: {e}"))?;
+        add_fn.call(a, b)
     };
-
-    // SAFETY: invoking the JIT-compiled function dereferences a code
-    // pointer owned by `execution_engine`. The engine remains alive for
-    // the duration of this scope, so the pointer is valid. The argument
-    // types match the IR signature declared above.
-    let result = unsafe { add_fn.call(a, b) };
 
     Ok(result)
 }

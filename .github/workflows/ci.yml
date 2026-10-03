@@ -252,20 +252,24 @@ jobs:
   # ─────────────────────────────────────────────────────────────────
   # unsafe-usage drift detection.
   #
-  # Counts `unsafe (\{|fn |impl |trait |extern )` sites across first-party
-  # src trees and fails CI if the count exceeds the recorded ceiling.
-  # Cheap (no cargo-geiger install) and catches the common case:
-  # someone adds an `unsafe { ... }` block to silence a borrow-check
-  # error rather than fix the root cause.
+  # Counts `unsafe (\{|fn |impl |trait |extern )` lines in every `.rs`
+  # file under crates/ (src, tests, benches, examples of every crate,
+  # luna-jit-llvm included although CI does not build it) and fails if
+  # the count exceeds the recorded ceiling. Cheap (no cargo-geiger
+  # install) and catches the common case: someone adds an
+  # `unsafe { ... }` block to silence a borrow-check error rather than
+  # fix the root cause. The lint job's clippy run checks the other half:
+  # `undocumented_unsafe_blocks` is a workspace lint, so a block without
+  # a SAFETY note fails it.
   #
-  # The ceiling is the exact count. It was 490 through v1.3; the
-  # October 2026 interpreter performance work took the count to 613,
-  # and an audit of every site that work added (safe replacements,
-  # blocks sharing a premise folded into one) brought it to 575, the
-  # ceiling now. docs/unsafe-accounting.md has the count per module and
-  # why each kind of site exists. Each justified unsafe addition needs
-  # an explicit ceiling bump to the new exact count. Never widen to a
-  # round number to silence drift.
+  # The ceiling is the exact count. Until October 2026 only luna-core and
+  # luna-jit src were counted (490 through v1.3, 575 after the audit of
+  # the interpreter performance work). The audit that extended the count
+  # to every crate brought the whole tree from 981 to 862, the ceiling
+  # now. docs/unsafe-accounting.md has the count per crate and module
+  # and why each kind of site exists. Each justified unsafe addition
+  # needs an explicit ceiling bump to the new exact count. Never widen to
+  # a round number to silence drift.
   # ─────────────────────────────────────────────────────────────────
   unsafe-drift:
     name: unsafe-usage drift detection
@@ -274,9 +278,9 @@ jobs:
       - uses: actions/checkout@v7
       - name: count first-party unsafe sites
         run: |
-          count=$(grep -rE 'unsafe (\{|fn |impl |trait |extern )' \
-                  crates/luna-core/src crates/luna-jit/src | wc -l | tr -d ' ')
-          ceiling=575
+          count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
+                  crates | wc -l | tr -d ' ')
+          ceiling=862
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then

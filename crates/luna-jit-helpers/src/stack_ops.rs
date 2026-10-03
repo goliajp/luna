@@ -1,15 +1,19 @@
 //! Stack-slot access and the opcode helpers that work on the frame (close, concat, tforcall, closure).
 
-use crate::{current_jit_closure, current_jit_vm};
+use crate::{current_jit_closure, current_jit_vm, payload_bits};
 
 /// Trace JIT helper for `Op::Close A`. Wraps
 /// `Vm::jit_op_close` which does the predict-and-deopt logic:
 /// returns 0 to continue the trace, 1 to deopt (handler would run
 /// or pre-existing pending_err).
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread.
+// SAFETY: no other item in the link is named `luna_jit_op_close`: only this crate defines
+// `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     vm.jit_op_close(start_offset as u32)
 }
@@ -22,11 +26,14 @@ pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
 /// but have no `RegKind::Str` variant). The interp's previous
 /// execution of the same op already wrote the right `tag` to
 /// that slot — the trace just needs to refresh the raw bits.
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread.
+// SAFETY: no other item in the link is named `luna_jit_stack_update_raw`: only this crate defines
+// `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 pub unsafe extern "C" fn luna_jit_stack_update_raw(slot_offset: i64, raw_bits: i64) {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     if vm.jit.pending_err.is_some() {
         return;
@@ -45,11 +52,14 @@ pub unsafe extern "C" fn luna_jit_stack_update_raw(slot_offset: i64, raw_bits: i
 /// Returns `0` on success (result lives at `vm.stack[base + a]`),
 /// `-1` on deopt (pending_err set; metamethod path, type error,
 /// length overflow, or pre-existing pending_err).
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread.
+// SAFETY: no other item in the link is named `luna_jit_op_concat`: only this crate defines
+// `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 pub unsafe extern "C" fn luna_jit_op_concat(slot_offset: i64, n: i64) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     vm.jit_op_concat(slot_offset as u32, n as i32)
 }
@@ -70,8 +80,11 @@ pub unsafe extern "C" fn luna_jit_op_concat(slot_offset: i64, n: i64) -> i64 {
 /// Returns `0` on success, `-1` on deopt (pending_err set OR
 /// pre-existing pending_err).
 ///
-/// Safety: caller (trace JIT IR) runs under `enter_jit` so
-/// `current_jit_vm()` is live.
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread; `ctrl_out`, `key_out` and
+/// `val_out` are each valid for writing one `i64`.
+// SAFETY: no other item in the link is named `luna_jit_op_tforcall`: only this crate defines
+// `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_op_tforcall(
     abs_offset: i64,
@@ -80,7 +93,7 @@ pub unsafe extern "C" fn luna_jit_op_tforcall(
     key_out: *mut i64,
     val_out: *mut i64,
 ) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     vm.jit_op_tforcall(abs_offset as u32, nvars as i32, ctrl_out, key_out, val_out)
 }
@@ -90,13 +103,16 @@ pub unsafe extern "C" fn luna_jit_op_tforcall(
 /// `Variable`s after a helper (e.g. `luna_jit_op_tforcall`) has
 /// mutated `vm.stack` directly.
 ///
-/// Safety: caller (trace JIT IR) runs under `enter_jit` so
-/// `current_jit_vm()` is live. Returns `0` if the slot is out of
-/// stack range (defensive — emit-time bounds check should make this
-/// unreachable).
+/// Returns `0` if the slot is out of stack range (defensive —
+/// emit-time bounds check should make this unreachable).
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread.
+// SAFETY: no other item in the link is named `luna_jit_stack_load`: only this crate defines
+// `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_stack_load(slot_offset: i64) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     vm.jit_stack_load(slot_offset as u32)
 }
@@ -106,10 +122,15 @@ pub unsafe extern "C" fn luna_jit_stack_load(slot_offset: i64) -> i64 {
 /// to dispatch on the iterator's return-key tag (Nil → loop end,
 /// Int → continue for ipairs, other → deopt for v2).
 ///
-/// Safety: caller (trace JIT IR) runs under `enter_jit`. Returns
-/// `raw::NIL` (0) if slot out of range.
+/// Returns `raw::NIL` (0) if slot out of range.
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread.
+// SAFETY: no other item in the link is named `luna_jit_stack_tag`: only this crate defines
+// `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_stack_tag(slot_offset: i64) -> i64 {
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     vm.jit_stack_tag(slot_offset as u32) as i64
 }
@@ -127,13 +148,14 @@ pub unsafe extern "C" fn luna_jit_stack_tag(slot_offset: i64) -> i64 {
 /// the trace IR's i64 payload for the register (Float held as
 /// `f64::to_bits`, Table/Closure as raw `Gc::as_ptr` cast).
 ///
-/// Safety: caller (trace JIT IR) runs under `enter_jit` so
-/// `current_jit_vm()` is live; the (tag, raw_bits) pair is
-/// generated by the same emit path that proves the kind, so
-/// `Value::pack` round-trips correctly.
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread; `tag` and `raw_bits` are
+/// one value's tag and payload.
+// SAFETY: no other item in the link is named `luna_jit_spill_to_stack`: only this crate defines
+// `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_spill_to_stack(slot_offset: i64, tag: i64, raw_bits: i64) {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     if vm.jit.pending_err.is_some() {
         return;
@@ -162,19 +184,20 @@ pub unsafe extern "C" fn luna_jit_spill_to_stack(slot_offset: i64, tag: i64, raw
 /// payload). On error (`pending_err` already set) returns 0
 /// sentinel so the dispatcher deopts.
 ///
-/// Safety: caller runs under `enter_jit(vm, Some(cl))` guard so
-/// `current_jit_vm()` / `current_jit_closure()` return live
-/// references. `proto_idx` is in-bounds by the emit pre-check.
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread opened with the running
+/// closure.
+// SAFETY: no other item in the link is named `luna_jit_op_closure`: only this crate defines
+// `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     use luna_core::runtime::function::{INLINE_UPVALS_N, UpvalState, Upvalue};
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
+    // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
+    // Vm lent to this call and JIT_CL that closure
+    let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
     if vm.jit.pending_err.is_some() {
         return 0;
     }
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let cl = unsafe { current_jit_closure() };
     let inner = cl.proto.protos[proto_idx as usize];
     let n_ups = inner.upvals.len();
     // Determine the caller frame's base for in_stack captures. The
@@ -215,8 +238,10 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
         }
     }
     let ups: &mut [luna_core::runtime::Gc<Upvalue>] = if use_inline {
-        // SAFETY: first n_ups slots of stack_buf were initialised
-        // by the loop above; we expose exactly that range.
+        // SAFETY: `use_inline` means `n_ups <= INLINE_UPVALS_N`, and the
+        // loop above wrote `stack_buf[i]` for every `i < n_ups`
+        // (`inner.upvals` has `n_ups` entries), so the slice covers only
+        // initialised slots
         unsafe {
             std::slice::from_raw_parts_mut(
                 stack_buf.as_mut_ptr() as *mut luna_core::runtime::Gc<Upvalue>,
@@ -237,7 +262,5 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
         ups[i] = vm.heap.new_upvalue(UpvalState::Closed(cur));
     }
     let nc = vm.closure_from_proto(inner, ups);
-    let (_tag, raw) = luna_core::runtime::Value::Closure(nc).unpack();
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    unsafe { raw.zero as i64 }
+    payload_bits(luna_core::runtime::Value::Closure(nc))
 }

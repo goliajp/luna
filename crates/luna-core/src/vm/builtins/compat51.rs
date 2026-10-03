@@ -16,7 +16,7 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         v if !v.truthy() => None,
         Value::Bool(true) => {
             let m = vm.heap.new_table();
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            // SAFETY: `proxies` is the weak set newproxy carries as its upvalue, so the running native keeps it alive; no reference into it is live across the `set`, which does not collect
             unsafe { proxies.as_mut() }
                 .set(&mut vm.heap, Value::Table(m), Value::Bool(true))
                 .expect("a table key is never nil or NaN");
@@ -30,7 +30,7 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     };
     let u = vm.heap.new_userdata(UserdataPayload::Empty, false);
     if let Some(mt) = mt {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `u` was allocated on the line above and is held only by this local; the borrow covers one call
         unsafe { u.as_mut() }.set_metatable(Some(mt));
         // PUC 5.1 registered *every* userdata with a metatable for
         // finalization (`luaC_checkfinalizer` deferred the `__gc` check to
