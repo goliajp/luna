@@ -33,5 +33,7 @@ mod branches;
 mod dead_locals;
 #[path = "llvm_smoke/fib_shape.rs"]
 mod fib_shape;
+#[path = "llvm_smoke/mod_guards.rs"]
+mod mod_guards;
 #[path = "llvm_smoke/moves_and_jumps.rs"]
 mod moves_and_jumps;

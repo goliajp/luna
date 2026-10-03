@@ -123,19 +123,47 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
     /// ints, arithmetic → int) and a constant operand is admitted only
     /// when it is an integer.
     pub(super) fn emit_arith(&self, ins: Inst, consts: &[Value]) -> Option<()> {
-        let (op, lhs, rhs) = int_arith(ins, consts)?;
+        let (op, lhs, rhs_operand) = int_arith(ins, consts)?;
         let lhs = self.operand_value(lhs, "arith_lhs")?;
-        let rhs = self.operand_value(rhs, "arith_rhs")?;
+        let rhs = self.operand_value(rhs_operand, "arith_rhs")?;
         let b = self.builder;
         let result = match op {
             Op::Add => b.build_int_add(lhs, rhs, "add_res").ok()?,
             Op::Sub => b.build_int_sub(lhs, rhs, "sub_res").ok()?,
             Op::Mul => b.build_int_mul(lhs, rhs, "mul_res").ok()?,
-            Op::Mod => self.floor_mod(lhs, rhs)?,
+            Op::Mod => {
+                // a constant divisor is never zero (`int_arith` refuses
+                // one); a register one is checked here
+                if matches!(rhs_operand, Operand::Reg(_)) {
+                    self.deopt_if_zero(rhs)?;
+                }
+                self.floor_mod(lhs, rhs)?
+            }
             _ => return None,
         };
         let dst = self.reg_slot_ptr(ins.a(), "arith_dst")?;
         b.build_store(dst, result).ok()?;
+        Some(())
+    }
+
+    /// When `v` is zero, park a deopt and return from the chunk: the
+    /// interpreter runs the call again and raises the error (`n%0`).
+    fn deopt_if_zero(&self, v: inkwell::values::IntValue<'ctx>) -> Option<()> {
+        let park = self.helpers.get("luna_jit_park_deopt").copied()?;
+        let zero = self.i64_type.const_zero();
+        let is_zero = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, v, zero, "div_by_zero")
+            .ok()?;
+        let zero_bb = self.ctx.append_basic_block(self.function, "div_zero");
+        let go_bb = self.ctx.append_basic_block(self.function, "div_go");
+        self.builder
+            .build_conditional_branch(is_zero, zero_bb, go_bb)
+            .ok()?;
+        self.builder.position_at_end(zero_bb);
+        self.builder.build_call(park, &[], "park").ok()?;
+        self.builder.build_return(Some(&zero)).ok()?;
+        self.builder.position_at_end(go_bb);
         Some(())
     }
 
@@ -164,12 +192,26 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         // different signs?"; combined with r != 0 it catches
         // exactly the rows above where Lua and C disagree.)
         //
-        // Branch-free via `select`. Division-by-zero is the
-        // interpreter's job (it raises "attempt to perform
-        // 'n%%0'"); a `ModK` by a constant zero is refused up front, and
-        // a Mod chunk that dynamically uses zero as R[C] still wouldn't
-        // reach here through normal parser-emitted bytecode, so we accept
-        // LLVM's UB on `srem x, 0` rather than emit a runtime check.
+        // Branch-free via `select`. The caller has ruled out a zero
+        // divisor. `srem` traps on `mininteger % -1` (the quotient
+        // overflows); any `x % -1` is 0, as is `x % 1`, so -1 is
+        // replaced by 1.
+        let minus_one = self.i64_type.const_all_ones();
+        let one = self.i64_type.const_int(1, false);
+        let is_minus_one = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                rhs,
+                minus_one,
+                "mod_by_minus_one",
+            )
+            .ok()?;
+        let rhs = self
+            .builder
+            .build_select(is_minus_one, one, rhs, "mod_divisor")
+            .ok()?
+            .into_int_value();
         let raw = self
             .builder
             .build_int_signed_rem(lhs, rhs, "mod_srem")
