@@ -235,10 +235,12 @@ impl Vm {
         base: u32,
         cur_depth: usize,
     ) {
-        if self.version <= LuaVersion::Lua52 && self.int_operand(inst, base) {
+        if self.version <= LuaVersion::Lua52 && self.int_arith(&cl.proto, inst, base) {
             // 5.1/5.2 integers stand for doubles; the trace lowering does
             // integer arithmetic in machine integers, without the rounding
-            // and the -0 those need
+            // and the -0 those need. With one float operand the operation
+            // is a float one (an integer kept for a double converts to it
+            // exactly), which the trace does as the doubles do
             self.abort_recording("int-arith-on-doubles");
             return;
         }
@@ -391,15 +393,16 @@ impl Vm {
         note_trace_compile_failure(rec.head_proto, rec.head_pc);
     }
 
-    /// True when `inst` is arithmetic that can take an integer operand.
-    fn int_operand(&self, inst: Inst, base: u32) -> bool {
+    /// True when `inst` is arithmetic on integers only: every operand,
+    /// register or constant, is an integer.
+    fn int_arith(&self, proto: &crate::runtime::Proto, inst: Inst, base: u32) -> bool {
         use crate::vm::isa::Op;
         let is_int = |r: u32| matches!(self.stack[(base + r) as usize], Value::Int(_));
+        let k_int = |k: u32| matches!(proto.consts.get(k as usize), Some(Value::Int(_)));
         match inst.op() {
-            Op::Add | Op::Sub | Op::Mul | Op::Mod => is_int(inst.b()) || is_int(inst.c()),
-            Op::Unm | Op::AddI | Op::SubI | Op::AddK | Op::SubK | Op::MulK | Op::ModK => {
-                is_int(inst.b())
-            }
+            Op::Add | Op::Sub | Op::Mul | Op::Mod => is_int(inst.b()) && is_int(inst.c()),
+            Op::Unm | Op::AddI | Op::SubI => is_int(inst.b()),
+            Op::AddK | Op::SubK | Op::MulK | Op::ModK => is_int(inst.b()) && k_int(inst.c()),
             _ => false,
         }
     }

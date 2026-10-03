@@ -56,8 +56,9 @@ pub(super) struct Plan<'r> {
     pub(super) active_accum: Option<BufferedAccum>,
     pub(super) consumed_by_cmp: Vec<bool>,
     pub(super) cmp_dirs: Vec<Option<CmpDir>>,
-    /// A comparison's other way, taken in the trace (not for 5.1/5.2,
-    /// whose integers stand for floats).
+    /// A comparison's other way, taken in the trace. Its moves and loads
+    /// leave each register the kind the recorded way leaves, so in 5.1 /
+    /// 5.2 no integer reaches arithmetic the recorder did not check.
     pub(super) alt_paths: Vec<Option<alt_path::AltPath>>,
 }
 
@@ -159,11 +160,7 @@ pub(super) fn plan_trace<'r>(
     // The head-frame registers the dispatcher checks on entry (see
     // `entry_live`); the others start held on the stack.
     let parent_exit_tags = side_parent_exit_tags(record);
-    let alt_paths: Vec<Option<alt_path::AltPath>> = if opts.pre53 || float_only {
-        vec![None; effective_end]
-    } else {
-        alt_path::find_alt_paths(record, effective_end, head_proto)
-    };
+    let alt_paths = alt_path::find_alt_paths(record, effective_end, head_proto);
     let mut head_live = entry_live(
         record,
         &op_offsets,
@@ -204,7 +201,6 @@ pub(super) fn plan_trace<'r>(
         record,
         head_proto,
         max_stack,
-        opts,
         effective_end,
         &consumed_by_cmp,
         call_idx_opt,

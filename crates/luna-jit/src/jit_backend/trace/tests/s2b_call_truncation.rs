@@ -291,7 +291,7 @@ fn forloop_one_shot_returns_body_pc_on_continue() {
 }
 
 #[test]
-fn forloop_pre53_bails() {
+fn forloop_pre53_compiles_the_limit_form() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let p = load_proto(&mut vm, WIDE_SRC);
     let prog = [Inst::iabc(Op::ForLoop, 0, 0, 0, false)];
@@ -303,7 +303,7 @@ fn forloop_pre53_bails() {
         tier: Default::default(),
         tier_up_at: 0,
     };
-    assert!(try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, opts).is_none());
+    assert!(try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, opts).is_some());
 }
 
 #[test]

@@ -66,3 +66,14 @@ pub(super) fn array_write_join<E: Emit>(bcx: &mut E, stored_inline: Option<Block
         bcx.seal_block(stored_inline);
     }
 }
+
+/// A float key `key` (its bits) as an array index: the integer it equals,
+/// or 0, which no array part holds, when it has a fraction, is out of the
+/// integer range, is NaN or is -0.0 (a key of its own in 5.1/5.2). An
+/// access by 0 misses the inline path and goes the way a miss goes, with
+/// the float key itself.
+pub(super) fn float_key_index<E: Emit>(bcx: &mut E, key: Value) -> Value {
+    let (i, exact) = float_exact_int(bcx, key);
+    let zero = bcx.ins().iconst(types::I64, 0);
+    bcx.ins().select(exact, i, zero)
+}
