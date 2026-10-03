@@ -21,9 +21,9 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **862** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
-| of which in tests, benches and examples | 192 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
-| **`pub unsafe fn` in the public API** | **4** | all `#[doc(hidden)]`, see §5 |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **904** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| of which in tests, benches and examples | 197 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
+| **`pub unsafe fn` in the public API** | **5** | all `#[doc(hidden)]`, see §5 |
 | **`pub unsafe extern "C" fn`** | 75 | the `lua.h` C API (29), the `luna_jit_*` helpers compiled code calls (45, re-exported by `luna-jit`) and the AOT entry (1); see §5 |
 | **`unsafe impl Send` / `Sync`** | 8 | see §5 |
 
@@ -38,28 +38,28 @@ quotes the pattern counts too.
 |---|---|---:|---|
 | `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `fast_arith.rs`) | 56 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch |
 | | `vm/exec/index_*` | 38 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
-| | `vm/exec` (other) | 68 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls |
-| | `runtime/heap*`, `gc_ptr.rs` | 50 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle |
+| | `vm/exec` (other) | 63 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls |
+| | `runtime/heap*`, `gc_ptr.rs` | 66 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle |
 | | `runtime/table*` | 48 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
-| | `runtime` (other) | 35 | string headers and their trailing bytes, the value tag/payload encoding, closure upvalue storage |
+| | `runtime` (other) | 36 | string headers and their trailing bytes, the value tag/payload encoding, closure upvalue storage |
 | | `vm/lib_*` | 44 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`) and the table writes that build each library |
 | | `vm` (other) | 48 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
-| | `jit`, `frontend` | 11 | trace metadata handed to the backend; interned-name text |
+| | `jit`, `frontend` | 10 | trace metadata handed to the backend; interned-name text |
 | | unit-test files under `src/` | 13 | tests that inspect raw layouts |
 | | `tests/` | 43 | integration tests: a poisoning global allocator, async wakers, userdata internals |
 | `luna-jit` | `capi*` | 69 | the `lua.h` C ABI: raw `lua_State` pointers and C strings across the boundary |
-| | `jit_backend` | 41 | executable code memory, compiled-function entry points, `Send` for handles that own JIT modules |
+| | `jit_backend` | 40 | executable code memory, compiled-function entry points, `Send` for handles that own JIT modules |
 | | other | 2 | the CLI's `arg` table and the `lua_facade` table handle |
-| | unit-test files under `src/` | 40 | tests that call compiled code or the `extern "C"` helpers directly |
+| | unit-test files under `src/` | 45 | tests that call compiled code or the `extern "C"` helpers directly |
 | | `tests/`, `benches/`, `examples/` | 58 | the C API from Rust, a counting global allocator, the `send` overhead bench |
-| `luna-jit-helpers` | | 111 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
-| `luna-jit-llvm` | `src/` | 9 | LLVM execution engines and the register-file GEPs |
+| `luna-jit-helpers` | | 139 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
+| `luna-jit-llvm` | `src/` | 8 | LLVM execution engines and the register-file GEPs |
 | | `tests/` | 35 | calling LLVM-compiled chunks |
 | `luna-runtime-helpers` | | 38 | the AOT binary's C entry, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor |
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **862** | |
+| **Total** | | **904** | |
 
 ## 3. Pattern catalog
 
@@ -74,6 +74,14 @@ This holds because `Vm` is `!Send + !Sync` by default, and the Vm's
 root set covers every reachable handle (host roots, globals, stack,
 frames, metatables, hooks, the running coroutine). For cross-thread
 use see `SendVm` (§5).
+
+Only the heap makes handles: `Gc::from_ptr` is an `unsafe fn` whose
+caller vouches that the pointer is a live object the heap manages, so a
+safe function that takes a `Gc` can read through it. Code that needs an
+object's GC header (the write barriers, the marker) takes the handle
+and gets the header from it; the sealed `GcObject` trait, implemented
+only for the runtime's object types, guarantees each of them is
+`#[repr(C)]` with the header first (checked at compile time).
 
 ### 3.2 In-place register and value access (interpreter fast loop)
 
@@ -132,10 +140,19 @@ key, a value's tag with its payload, a writable out slot). Inside the
 window the thread-local `JIT_VM` holds the `Vm` the dispatcher lent to
 the compiled call, which the dispatcher does not touch until the call
 returns. The symbols are `#[unsafe(no_mangle)]`; only this crate
-defines `luna_jit_` names.
+defines `luna_jit_` names. The helpers turn their raw arguments into
+handles, values and references themselves, so the `Vm` methods they
+call (`jit_spill_stack`, `jit_op_tforcall`, the string accumulator)
+have safe signatures. `IntChunkCompiler::enter` and the guard that
+restores the thread-locals only store pointers; the dereference happens
+in the helpers, under the contract of whoever ran the compiled code.
 
 The C API (`luna-jit/src/capi*`) receives raw `lua_State` pointers and
-C strings across the ABI boundary. `Box::into_raw` / `Box::from_raw`
+C strings across the ABI boundary. Each `lua_*` function's `# Safety`
+section says what it needs: a state from `luaL_newstate` that
+`lua_close` has not freed and that no other call is using (a C function
+the state is running may call back in), and string arguments that are
+null or NUL-terminated. `Box::into_raw` / `Box::from_raw`
 pairs move trace metadata between Cranelift's symbol table and the
 trace cache; each `into_raw` has one matching `from_raw` on eviction.
 The LLVM backend keeps each `(Context, ExecutionEngine)` pair by value
@@ -161,7 +178,7 @@ Two CI checks cover `unsafe`:
 - the `unsafe-drift` job in `.github/workflows/ci.yml` counts the sites
   in every `.rs` file under `crates/` on every push, `luna-jit-llvm`
   included although CI does not build it, and fails above the ceiling.
-  The ceiling is the exact count, **862**, with no headroom;
+  The ceiling is the exact count, **904**, with no headroom;
 - `clippy::undocumented_unsafe_blocks` is set in the workspace
   `[lints.clippy]` table, and the lint job runs clippy with
   `-D warnings`, so a block or `unsafe impl` without a `SAFETY:` note
@@ -196,15 +213,26 @@ helpers have their contracts written down, the AOT section walkers
 that dereferenced the pointers they were given from safe functions
 became `unsafe fn`s, and reads a safe form covers (through the `Gc`
 handle, `as_bytes`, `downcast`, `table_of`, a compiled chunk's
-`call_with`) replaced their blocks. The count went to 862, the ceiling
-now; `luna-core` and `luna-jit` `src/` hold 563 of them.
+`call_with`) replaced their blocks. The count went to 862; `luna-core`
+and `luna-jit` `src/` held 563 of them.
+
+That audit left 17 safe functions that dereferenced raw pointers their
+callers passed in (`Gc::from_ptr`, the write barriers, the marker, the
+`Vm` methods the JIT helpers call, `IntChunkCompiler::enter`). They now
+take handles or references, or became `unsafe fn`s where the pointer
+cannot be typed (`Gc::from_ptr`, the marker's raw-header entry, the
+heap's object linking and the string table's removal). Each call that
+builds a handle from a raw pointer is now a block with its own note,
+mostly in the `luna_jit_*` helpers, which brought the count to 904, the
+ceiling now.
 
 ## 5. Public `unsafe` surface
 
-### `pub unsafe fn` (4, all `#[doc(hidden)]`)
+### `pub unsafe fn` (5, all `#[doc(hidden)]`)
 
 | Location | Function | Why |
 |---|---|---|
+| `runtime/gc_ptr.rs` | `Gc::<T>::from_ptr` | Rebuilds a handle from a pointer compiled code passes around; the pointer must be a live object. |
 | `runtime/gc_ptr.rs` | `Gc::<T>::as_mut` | Internal mutation; embedders use `TableBuilder` / `LuaUserdata`. |
 | `runtime/value.rs` | `Value::as_closure_unchecked` | JIT hot path; skips the tag match. Safe alternative: match `Value::Closure(_)`. |
 | `runtime/value.rs` | `Value::as_int_unchecked` | Same shape. |
@@ -241,7 +269,7 @@ wrapper in `luna-jit/benches/bench_send_overhead.rs`.
 
 ```sh
 grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' crates | wc -l
-# 862, the ceiling in ci.yml's unsafe-drift job
+# 904, the ceiling in ci.yml's unsafe-drift job
 cargo clippy --workspace --all-targets \
     --exclude llvm-jit-probe --exclude luna-jit-llvm -- -D warnings
 # no undocumented_unsafe_blocks warnings (the LLVM crates need

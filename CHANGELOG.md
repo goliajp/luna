@@ -59,6 +59,39 @@ optimization.
   `mcode-disasm` feature with its unused `capstone` dependency. For line
   editing, build the `luna` binary with luna-jit's `repl-line-editor`
   feature.
+- Safe functions no longer accept raw pointers they would dereference.
+  `Heap::barrier_forward` and `Heap::barrier_back` take the parent as a
+  `Gc<T>` instead of a `*mut GcHeader`, and `UserdataMarker::mark` takes
+  a `Gc<T>` with `T: GcObject`. `GcObject` is a new sealed trait in
+  `luna_core::runtime` that every GC object type implements (`LuaStr`,
+  `Table`, `Proto`, `LuaClosure`, `Upvalue`, `NativeClosure`, `Coro`,
+  `Userdata`), so marking any handle the runtime gave you compiles
+  unchanged. Migration: pass the handle itself, `heap.barrier_back(t)`
+  instead of `heap.barrier_back(t.as_ptr() as *mut GcHeader)`.
+- `Gc::from_ptr` (hidden from the docs) is an `unsafe fn`: the pointer
+  must be a live object the heap manages. Migration: keep the `Gc` the
+  runtime handed out instead of rebuilding it from `as_ptr()`; where the
+  pointer really comes from elsewhere, call it in an `unsafe` block that
+  states why the object is alive.
+- `JitHandle::call` and `JitHandle::call_with` are removed. They called
+  the compiled code with whatever arguments they were given and without
+  the JIT window the code's helper calls need. Migration: call the
+  function through `Vm::call_value` (or the `Lua` facade), which runs
+  the compiled code when the arguments fit it and the interpreter
+  otherwise.
+- The JIT hooks on `Vm` that the `luna_jit_*` helpers call (hidden from
+  the docs) take checked types instead of raw words: `jit_spill_stack`
+  takes a `Value`; `jit_stack_update_raw` is replaced by
+  `jit_stack_slot_mut`, which returns the slot to write; the string
+  accumulator works on owned buffers (`jit_str_buf_acquire` returns a
+  `Box<Vec<u8>>`, `jit_str_buf_release` takes the `Vec<u8>`,
+  `jit_str_buf_intern` takes `&mut Vec<u8>`, and `jit_str_buf_extend` is
+  removed: append `Gc<LuaStr>::as_bytes` to the buffer); and
+  `jit_op_tforcall` writes its results through `&mut i64`. The C ABI
+  helpers keep their signatures. `JitVmRebindRestore::restore_fn` is a
+  plain `fn`, and an `IntChunkCompiler::enter` implementation now only
+  stores the Vm pointer it gets (luna-jit-helpers' `enter_jit_ptr` does
+  that) instead of dereferencing it.
 
 ### Changed
 
