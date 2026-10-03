@@ -152,7 +152,10 @@ impl Heap {
                     drop(Box::from_raw(h as *mut crate::runtime::Coro));
                 }
                 ObjTag::Userdata => {
-                    self.bytes = self.bytes.saturating_sub(std::mem::size_of::<Userdata>());
+                    let extra = (*(h as *mut Userdata)).extra_bytes;
+                    self.bytes = self
+                        .bytes
+                        .saturating_sub(std::mem::size_of::<Userdata>() + extra);
                     drop(Box::from_raw(h as *mut Userdata));
                 }
                 ObjTag::Str => {

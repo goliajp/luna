@@ -47,9 +47,10 @@ pub struct Vm {
     pub(super) globals: Gc<Table>,
     /// shared metatable for all strings (populated by the string lib)
     /// per-basic-type metatables (PUC luaT): indexed by `type_mt_slot`
-    /// (0 nil, 1 boolean, 2 number, 3 string, 4 function); tables carry their
+    /// (0 nil, 1 boolean, 2 number, 3 string, 4 function, 5 light userdata,
+    /// 6 thread); tables and full userdata carry their
     /// own. Settable via debug.setmetatable.
-    pub(super) type_mt: [Option<Gc<Table>>; 5],
+    pub(super) type_mt: [Option<Gc<Table>>; 7],
     /// pre-interned metamethod event names, indexed by `Mm`
     pub(super) mm_names: [Gc<crate::runtime::LuaStr>; MM_NAMES.len()],
     /// the parser's vectors, kept from one `load` to the next
@@ -146,6 +147,9 @@ pub struct Vm {
     /// keep the older raise semantics).
     pub(crate) warn_state: WarnState,
     pub(crate) warn_buf: Vec<u8>,
+    /// the default warning function is in the middle of a message (PUC
+    /// `warnfcont`)
+    pub(crate) warn_cont: bool,
     /// Embedding cooperative budget: a per-Vm tick counter that the run
     /// loop decrements once per dispatch turn. When it hits zero the loop
     /// raises a catchable "instruction budget exceeded" error so the embedder

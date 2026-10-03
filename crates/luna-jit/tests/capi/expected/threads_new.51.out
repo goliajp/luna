@@ -1,0 +1,29 @@
+main pushthread=1 type=thread same=1
+newthread: L top=1 type=thread same=1 co top=0 status=0
+co pushthread=0 co top=1 same=1
+moved thread equal=1 L top=2 co top=0
+co after xmove: top=2 [two <table>]
+L top=2
+after xmove 0: L top=2 co top=2
+table identity=1
+c_self: ismain=1 same_as_seen=1 top=1 status=0
+main thread from C	false
+c_self: ismain=0 same_as_seen=1 top=1 status=0
+coroutine from C	true	true
+seen status=0
+empty newthread status	dead
+resume empty	false	cannot resume dead coroutine
+co top=2
+with body	suspended
+c_body got 2: 1 x
+resume	true	below	c_body done
+after	dead
+co after Lua resume: top=0 []
+restart: status=1 nres=1 lua_status=1 co: top=1 [42]
+restarted	suspended	true	end
+final	dead
+lua coroutine: status=0 co: top=1 [<function>]
+resume1: status=1 nres=1 lua_status=1 co: top=1 [7]
+from Lua	suspended	true	42
+after: status=0
+co: top=0 []

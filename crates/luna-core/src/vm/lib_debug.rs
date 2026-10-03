@@ -184,23 +184,34 @@ fn d_getuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     if vm.version() <= LuaVersion::Lua53 {
         let r = match a.get(vm, 0) {
-            Value::Userdata(u) if !a.is_none(0) => u.user_value,
+            Value::Userdata(u) if !a.is_none(0) => vm.host_uservalue(u, 1).unwrap_or(Value::Nil),
             _ => Value::Nil,
         };
         return Ok(vm.nat_return(fs, &[r]));
     }
-    // 5.4+: user value `n` of a full userdata; luna's userdata carry none,
-    // so every index is out of range (PUC pushes nil and no flag)
-    opt_integer(vm, a, 1, 1)?;
-    Ok(vm.nat_return(fs, &[Value::Nil]))
+    // 5.4+: user value `n` of a full userdata and `true`, or nil alone when
+    // it has no such value
+    let n = opt_integer(vm, a, 1, 1)? as i32;
+    let found = match a.get(vm, 0) {
+        Value::Userdata(u) if !a.is_none(0) => usize::try_from(n)
+            .ok()
+            .and_then(|n| vm.host_uservalue(u, n)),
+        _ => None,
+    };
+    match found {
+        Some(v) => Ok(vm.nat_return(fs, &[v, Value::Bool(true)])),
+        None => Ok(vm.nat_return(fs, &[Value::Nil])),
+    }
 }
 
 fn d_setuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
-    if v >= LuaVersion::Lua54 {
-        opt_integer(vm, a, 2, 1)?;
-    }
+    let n = if v >= LuaVersion::Lua54 {
+        opt_integer(vm, a, 2, 1)? as i32
+    } else {
+        1
+    };
     if v == LuaVersion::Lua52 && matches!(a.get(vm, 0), Value::LightUserdata(_)) && !a.is_none(0) {
         return Err(arg_error(
             vm,
@@ -221,13 +232,11 @@ fn d_setuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     } else {
         check_any(vm, a, 1)?
     };
-    if v >= LuaVersion::Lua54 {
-        // no user value slots: `lua_setiuservalue` fails
+    let set = usize::try_from(n).is_ok_and(|n| vm.host_set_uservalue(u, n, value));
+    if !set {
+        // `lua_setiuservalue` failed: no such user value
         return Ok(vm.nat_return(fs, &[Value::Nil]));
     }
-    // SAFETY: `u` came from a native argument, kept alive by its stack slot; the borrow covers one field store
-    unsafe { u.as_mut() }.user_value = value;
-    vm.heap.barrier_back(u);
     Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
 }
 
@@ -328,8 +337,12 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                 vm.heap.barrier_back(co);
             }
         }
-        // luna keeps no environment on natives or userdata; PUC's change
-        // would be observable only through `getfenv` of that object
+        // a userdata the C API made keeps its environment as its user
+        // value; luna keeps none on natives or other userdata, where PUC's
+        // change would be observable only through `getfenv` of that object
+        Value::Userdata(u) if vm.host_block(u).is_some() => {
+            vm.host_set_uservalue(u, 1, Value::Table(env_t));
+        }
         Value::Native(_) | Value::Userdata(_) => {}
         _ => {
             return Err(raise_str(
@@ -355,6 +368,9 @@ fn d_getfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             None => Value::Table(vm.globals()),
         },
         Value::Coro(co) if !vm.is_current_thread(Some(co)) => Value::Table(co.globals),
+        Value::Userdata(u) if vm.host_block(u).is_some() => {
+            vm.host_uservalue(u, 1).unwrap_or(Value::Nil)
+        }
         Value::Coro(_) | Value::Native(_) | Value::Userdata(_) => Value::Table(vm.globals()),
         _ => Value::Nil,
     };
