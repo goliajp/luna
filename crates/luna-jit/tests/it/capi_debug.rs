@@ -26,3 +26,8 @@ fn hook_events() {
 fn hook_yield() {
     check("hook_yield")
 }
+
+#[test]
+fn hook_transfer() {
+    check("hook_transfer")
+}
