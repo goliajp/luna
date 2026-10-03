@@ -136,7 +136,7 @@ fn capi_zero_result_callback_no_sigabrt_post_fix() {
     unsafe {
         let l = luaL_newstate();
         luaL_openlibs(l);
-        lua_register(l, name.as_ptr(), c_void);
+        luna_capi_lua_register(l, name.as_ptr(), c_void);
         assert_eq!(luaL_loadstring(l, src.as_ptr()), LUA_OK);
         assert_eq!(
             lua_pcall(l, 0, 1, 0),
