@@ -375,6 +375,18 @@ impl Vm {
         ct: &crate::jit::trace::CompiledTrace,
         calls: u32,
     ) -> crate::jit::trace::TraceFn {
+        self.count_towards_tier_up(ct, calls);
+        ct.current_entry()
+    }
+
+    /// Counts an entry of `ct` towards its move to the optimizing tier and
+    /// makes the move when it is due. `calls`: the head function's
+    /// `call_hot_count` now.
+    pub(super) fn count_towards_tier_up(
+        &mut self,
+        ct: &crate::jit::trace::CompiledTrace,
+        calls: u32,
+    ) {
         if let Some(t) = &ct.tier_up
             && !t.tried.get()
         {
@@ -386,7 +398,6 @@ impl Vm {
                 self.trace_tier_up(ct);
             }
         }
-        ct.current_entry()
     }
 
     /// Hands a hot trace to the optimizing tier and points everything that

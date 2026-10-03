@@ -324,3 +324,21 @@ fn a_trace_moves_sooner_once_its_function_is_called_again() {
         "one call below tier_up_at moved the loop"
     );
 }
+
+/// A side trace runs one pass per return to the dispatcher; counted there,
+/// a hot one moves to Cranelift like its parent.
+#[test]
+fn a_hot_side_trace_moves_to_cranelift() {
+    let mut side_moved = false;
+    for at in [50, 200, 800] {
+        let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+        vm.set_jit_enabled(false);
+        vm.set_trace_tier(TraceTier::Auto);
+        vm.set_trace_tier_up_at(at);
+        compare_calls(&mut vm, SIDE_EXITS, 5);
+        let side = vm.trace_side_trace_compiled_count();
+        let roots = vm.trace_compiled_count() - side;
+        side_moved |= side > 0 && vm.trace_tiered_up_count() > roots;
+    }
+    assert!(side_moved, "no side trace moved to Cranelift");
+}
