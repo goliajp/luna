@@ -21,7 +21,6 @@ mod threads;
 mod values;
 pub use block::HostBlock;
 pub use debug::{HostAr, HostHookFn, HostLevel};
-pub use load::HostChunkProgress;
 pub use values::{HOST_OP_BNOT, HOST_OP_UNM};
 
 /// The C API's side of a [`ContKind::Host`] continuation.

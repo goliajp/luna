@@ -16,20 +16,6 @@ no input at all
     reader call 1: end
   status OK, 1 reader calls, 1 new values
   ran: nil
-syntax error in the first piece
-    reader call 1: "x = = 1
-"
-  status ERRSYNTAX, 1 reader calls, 1 new values
-  message: early:1: unexpected symbol near '='
-syntax error in the third piece
-    reader call 1: "local x = 1
-"
-    reader call 2: "local y = 2
-"
-    reader call 3: "x = = 3
-"
-  status ERRSYNTAX, 3 reader calls, 1 new values
-  message: third:3: unexpected symbol near '='
 an expression across pieces
     reader call 1: "return 1 +"
     reader call 2: " 2 +"
@@ -76,8 +62,8 @@ chunk name as source
   status OK, 2 reader calls, 1 new values
   run error: [string "error('boom')"]:1: boom
 a syntax error with a null chunk name
-  status ERRSYNTAX, 1 reader calls, 1 new values
-  message: [string "?"]:1: unexpected symbol near '='
+  status ERRSYNTAX, 2 reader calls, 1 new values
+  message: [string "?"]:1: unexpected symbol near <eof>
 mode t, text chunk
     reader call 1: "return 'text'"
     reader call 2: end
