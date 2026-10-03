@@ -31,6 +31,8 @@ fn fixture_dir() -> PathBuf {
 fn expected(name: &str, dialect: &str) -> String {
     let path = fixture_dir().join(format!("{name}.txt"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}: {path:?}"));
+    // a Windows checkout may turn the line ends into CRLF
+    let text = text.replace("\r\n", "\n");
     let head = format!("== {dialect}\n");
     let start = text.find(&head).expect("dialect section") + head.len();
     let end = text[start..]
