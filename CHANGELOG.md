@@ -279,6 +279,12 @@ optimization.
 
 ### Fixed
 
+- On x86 Linux, float `%` (5.3 to 5.5) and `math.fmod` (every dialect)
+  with two NaN operands returned the first one, so `print` could show
+  `-nan` where PUC shows `nan` (affects 3.1.0 through 4.0.1). PUC built by
+  gcc there computes `fmod` with the x87 `fprem` instruction, which picks
+  the NaN with the larger significand, or the positive one when the two
+  differ only in sign; luna now picks the same one.
 - C API: `lua_pcall` calls its message handler (`msgh`, 5.1's
   `errfunc`), which it used to ignore: the handler runs where the error
   was raised, before the stack unwinds, its first result becomes the error
@@ -325,6 +331,7 @@ optimization.
   dialects have only doubles, and such a loop is now a float loop as on
   PUC. In 5.3, a zero step with a NaN or `-math.huge` limit now starts
   the index at 0, as PUC's `forlimit` does.
+||||||| 713abad4
 - Wrong values from the trace JIT when a loop keeps a table it builds in
   an iteration (affects 1.3.0 through 4.0.1, on 5.4 and 5.5): after
   `last = t` or `prev = {n = i}` in a numeric `for`, the variable held
