@@ -60,10 +60,11 @@ pub struct JitState {
     /// traces.
     pub tier_up_at: u32,
 
-    /// Back-edge counts per loop head, indexed by a hash of the head
-    /// instruction's address (LuaJIT's `hotcount`): each loop of a
-    /// function gets hot on its own. Two heads sharing a slot only make
-    /// each other hot sooner.
+    /// Back-edge counts per loop head, indexed by a hash of the head's
+    /// pc and its function's first line (LuaJIT's `hotcount`): each loop
+    /// of a function gets hot on its own. Two heads sharing a slot make
+    /// each other hot sooner, which changes where recording starts; the
+    /// hash uses no address so that this is the same on every run.
     pub(crate) loop_hot: Box<[u32; LOOP_HOT_SLOTS]>,
 
     /// Opt-in flag for the self-link cycle catch. Default `false`:
@@ -327,12 +328,16 @@ impl JitCounters {
 const LOOP_HOT_SLOTS: usize = 256;
 
 impl JitState {
-    /// Count a back-edge to the loop head at `head`; `true` once that
-    /// head has been crossed more than [`Self::trace_hot_threshold`]
-    /// times, which starts its count over.
+    /// Count a back-edge to the loop head at pc `head` of `proto`; `true`
+    /// once that head has been crossed more than
+    /// [`Self::trace_hot_threshold`] times, which starts its count over.
     #[inline]
-    pub(crate) fn loop_hot_tick(&mut self, head: *const crate::vm::isa::Inst) -> bool {
-        let slot = &mut self.loop_hot[(head as usize >> 2) & (LOOP_HOT_SLOTS - 1)];
+    pub(crate) fn loop_hot_tick(&mut self, proto: &crate::runtime::Proto, head: u32) -> bool {
+        let key = proto
+            .line_defined
+            .wrapping_mul(0x9e37_79b1)
+            .wrapping_add(head);
+        let slot = &mut self.loop_hot[key as usize & (LOOP_HOT_SLOTS - 1)];
         if *slot >= self.trace_hot_threshold {
             *slot = 0;
             true

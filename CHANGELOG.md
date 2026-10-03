@@ -277,6 +277,12 @@ optimization.
 - `Vm::set_field_ic_enabled` / `Vm::field_ic_enabled`: turn the trace
   JIT's table-field inline cache on or off for one Vm. A new Vm starts
   from `LUNA_JIT_FIELD_IC` as before.
+- `luna-soak --vm-churn` (luna-tools, not published): creates a JIT Vm
+  per iteration, runs the workload until the method JIT and the trace
+  JIT have both compiled code, and drops it; `--max-second-half-rss-drift-pct`
+  fails the run when RSS grows more than that from the middle sample to
+  the last. The report (schema 2) records the mode, the Vm count per
+  sample and the second-half drift.
 
 ---
 

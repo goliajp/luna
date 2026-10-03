@@ -34,7 +34,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        workload: [token_bucket_1k]
+        include:
+          - workload: token_bucket_1k
+            args: ""
+          # a fresh JIT Vm per iteration, dropped once both JITs compiled
+          # code: what a dropped Vm keeps (machine code, heap) shows as RSS
+          # growth, and growth past 1% in the second half fails the job
+          - workload: vm_churn
+            args: --vm-churn --max-second-half-rss-drift-pct 1
     env:
       RUST_BACKTRACE: full
       CARGO_TERM_COLOR: always
@@ -49,6 +56,7 @@ jobs:
             --workload crates/luna-tools/workloads/${{ matrix.workload }}.lua \
             --duration "$SOAK_SECONDS" \
             --interval 300 \
+            ${{ matrix.args }} \
             --out soak-${{ matrix.workload }}-5h30m.json
       - name: Upload metrics report
         if: always()
