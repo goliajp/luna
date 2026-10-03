@@ -126,9 +126,6 @@ struct Lower<E: Emit> {
     /// The iteration count the back edge keeps for tiering up, and the
     /// count to leave at.
     tier_count: Option<(Box<TCellU32>, u32)>,
-    /// The protos of other functions the trace inlined (its guards hold
-    /// their addresses).
-    inlined_protos: Vec<Gc<Proto>>,
 }
 
 /// `always_codegen = false` leaves the function undefined in `module`
@@ -372,7 +369,6 @@ fn emit_trace<E: Emit>(
         escape,
         global_side_trace_box,
         tier_count,
-        inlined_protos,
         ..
     } = lower;
     Some((
@@ -391,7 +387,6 @@ fn emit_trace<E: Emit>(
             downrec_link_for_compiled,
             downrec_multi_way_count_for_compiled,
             tier_count,
-            inlined_protos,
         },
     ))
 }

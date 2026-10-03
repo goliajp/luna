@@ -240,7 +240,7 @@ fn a_call_wanting_two_results_ends_the_trace() {
     rec.closed = true;
     let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec);
     assert!(
-        ct.is_none_or(|ct| ct.per_exit_inline.is_empty() && ct.inlined_protos.is_empty()),
+        ct.is_none_or(|ct| ct.per_exit_inline.is_empty()),
         "the call was inlined"
     );
 }

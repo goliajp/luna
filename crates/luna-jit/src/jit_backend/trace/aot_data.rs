@@ -318,7 +318,7 @@ pub(super) fn emit_chain_ptr_arg<E: Emit>(
 
 /// The pointer of `proto`, which an inlined call checks the callee's
 /// function against. JIT: the live pointer (the trace keeps the proto
-/// alive, see `CompiledTrace::inlined_protos`). AOT: a load through
+/// alive: its head prototype holds the protos it inlined). AOT: a load through
 /// `__luna_aot_proto_slot_<hash>`, which the deploy side fills with the
 /// loaded chunk's proto of the same `Proto::stable_hash`; an index entry
 /// `[hash_addr, slot_addr]` in section `luna_proto_idx` (COFF `.lt_prix`)

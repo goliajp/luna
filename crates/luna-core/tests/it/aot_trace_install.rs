@@ -56,7 +56,6 @@ fn make_dummy_trace(head_pc: u32, max_stack: u32) -> CompiledTrace {
         downrec_link: None,
         downrec_multi_way_count: 0,
         tier_up: None,
-        inlined_protos: Box::new([]),
     }
 }
 

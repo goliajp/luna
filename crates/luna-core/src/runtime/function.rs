@@ -133,6 +133,10 @@ pub struct Proto {
     /// are not reset after a recording, so without this every later call
     /// or back-edge would record and compile the same failing trace again.
     pub(crate) trace_compile_failures: crate::jit::send_compat::TRefLock<Vec<HeadFailures>>,
+    /// The prototypes of other functions this prototype's traces inlined.
+    /// A trace checks a callee against them by address, so the collector
+    /// keeps them alive while this prototype lives (`Proto::trace`).
+    pub(crate) inlined_protos: std::cell::RefCell<Vec<Gc<Proto>>>,
     /// Compiled trace cache for this Proto. A successful
     /// `compile_trace(record)` parks its `CompiledTrace` here;
     /// `Vm::run`'s trace dispatcher iterates this on each
