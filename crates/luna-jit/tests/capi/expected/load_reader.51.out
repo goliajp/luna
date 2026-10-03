@@ -83,9 +83,9 @@ a reader that raises
   status ERRRUN after 2 calls, 1 new values: reader failed
 a reader that raises a table
   status ERRRUN, 1 new values, a table with code 7
-a reader that pushes values
-    reader sees 1 values
-    reader sees 4 values
-  status OK, 3 new values, top is a function
-a piece of size 0
-  status ERRSYNTAX after 3 calls
+a reader that raises inside a C function
+  inside a C function: status ERRRUN after 2 calls: reader failed
+  pcall status OK
+the chunk's globals
+  status OK, 2 reader calls, 1 new values
+  ran: 6

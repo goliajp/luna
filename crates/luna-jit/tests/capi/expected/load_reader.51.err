@@ -1,1 +1,0 @@
-PANIC: unprotected error in call to Lua API (attempt to call a string value)
