@@ -306,6 +306,39 @@ fn pairs_loop_meeting_other_key_kinds() {
     }
 }
 
+/// A generic `for` recorded from its first back-edge: the entry snapshot
+/// must hold the key the body starts with, not the nil the loop began
+/// with, or the trace never matches an entry and keeps the head from
+/// being recorded again.
+#[test]
+fn generic_for_recorded_at_its_first_back_edge() {
+    let src = r#"
+        local function count(t)
+          local ks = {}
+          for k in pairs(t) do ks[#ks + 1] = k end
+          return #ks
+        end
+        local tabs = {{a = 1, bb = 2}, {ccc = 1, d = 2, ee = 3}, {f = 1, gg = 2}}
+        local s = 0
+        for i = 1, 30 do s = s + count(tabs[i % 3 + 1]) end
+        return tostring(s)"#;
+    for v in INT_DIALECTS {
+        let (interp, _) = run(v, src, false);
+        assert_eq!(interp, "70", "{v:?}");
+        let mut vm = luna_jit::new_with_jit(v);
+        vm.jit.trace_hot_threshold = 0;
+        let jit = match vm.eval(src).expect("eval").first() {
+            Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(jit, interp, "{v:?}");
+        assert!(
+            vm.trace_dispatched_count() > 0,
+            "{v:?}: no trace dispatched"
+        );
+    }
+}
+
 /// A numeric string in arithmetic is coerced; the trace added the
 /// string's pointer as an integer.
 #[test]
