@@ -267,16 +267,16 @@ impl Table {
     #[inline]
     pub(crate) fn aset(&mut self, idx: usize, v: Value) {
         let (t, b) = v.unpack();
-        // SAFETY: see `aget`. callers (`set_norm`, `set_int`) gate on
-        // `idx < self.asize()`. The two `*_mut` calls each take a
-        // distinct `&mut self` borrow whose lifetime ends at the
-        // statement boundary, so they don't overlap.
-        // SAFETY: as above, `idx < self.asize()`.
-        let old = unsafe { *self.atags().get_unchecked(idx) };
-        unsafe {
+        // SAFETY: callers (`set_norm`, `set_int`) gate on
+        // `idx < self.asize()`, and both slices are `asize` long. The two
+        // `*_mut` calls each take a distinct `&mut self` borrow whose
+        // lifetime ends at the statement boundary, so they don't overlap.
+        let old = unsafe {
+            let old = *self.atags().get_unchecked(idx);
             *self.atags_mut().get_unchecked_mut(idx) = t;
             *self.avals_mut().get_unchecked_mut(idx) = b;
-        }
+            old
+        };
         self.note_atag_change(idx, old, t);
     }
 }
