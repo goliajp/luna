@@ -20,26 +20,19 @@
 //!
 //! # E2E run-on-target?
 //!
-//! No. The cross-compile produces a Windows PE binary; running it
-//! requires either a Windows host or an emulator (wine / qemu). This
-//! test verifies the **emit** side only — that the PE structure
-//! carries the expected sections in the expected shape. Running the
-//! binary E2E is the manual verification recipe (see "Manual
-//! verification" comment block at the bottom of this file).
+//! On a Windows host the produced binary is run natively, with the AOT
+//! probe on, and must print the sum and install at least one trace. On
+//! a Unix host only the emit side is checked; aot-cross runs MinGW
+//! binaries under Wine.
 //!
 //! # Skip conditions
 //!
-//! - Host = Windows: this test is for the **cross-compile** path
-//!   from a Unix host. Native Windows pipeline goes through a
-//!   different driver setup (link.exe) that we don't yet drive.
 //! - Missing `rustup` target `x86_64-pc-windows-gnu`: skipped with
 //!   install hint.
-//! - Missing `x86_64-w64-mingw32-gcc` on PATH: skipped (the staticlib
-//!   build can still run, but without MinGW gcc the final link to
-//!   produce the .exe is blocked).
-//! - Harvest produces zero traces (small / non-loopy source): the
-//!   produced binary still has the C placeholder sections; we assert
-//!   their presence even when no real trace `.o` got linked in.
+//! - No MinGW gcc on PATH (`x86_64-w64-mingw32-gcc`, or on a Windows
+//!   host also plain `gcc`): skipped.
+//! - On a Unix host, a link failing on a known cross-toolchain marker.
+//!   With both tools present on a Windows host, any failure fails.
 
 use std::path::Path;
 use std::process::Command;
@@ -92,14 +85,7 @@ fn read_pe_section_names(path: &Path) -> Vec<String> {
 }
 
 #[test]
-fn cross_compile_windows_emits_lt_meta_and_lt_skix_sections() {
-    if cfg!(target_os = "windows") {
-        eprintln!(
-            "aot_windows_mingw_link: skip — this test exercises the cross-compile path \
-             from a Unix host. Native Windows pipeline uses link.exe (not yet wired)."
-        );
-        return;
-    }
+fn windows_gnu_binary_has_lt_meta_and_lt_skix_sections() {
     if !have_on_path("cargo") {
         eprintln!("aot_windows_mingw_link: skip — cargo missing");
         return;
@@ -112,7 +98,9 @@ fn cross_compile_windows_emits_lt_meta_and_lt_skix_sections() {
         );
         return;
     }
-    if !have_on_path("x86_64-w64-mingw32-gcc") {
+    let has_gcc =
+        have_on_path("x86_64-w64-mingw32-gcc") || (cfg!(windows) && have_on_path("gcc"));
+    if !has_gcc {
         eprintln!(
             "aot_windows_mingw_link: skip — x86_64-w64-mingw32-gcc not on PATH \
              (install MinGW cross-toolchain: `brew install mingw-w64` on macOS / \
@@ -126,18 +114,14 @@ fn cross_compile_windows_emits_lt_meta_and_lt_skix_sections() {
     let target = TargetSpec::from_triple(triple).expect("parse triple");
     assert_eq!(target.os, luna_aot::embed::TargetOs::Windows);
 
-    // Lua source: a tight counted loop that the warmup recorder
-    // should close at least one trace on. Note: trace mcode emission
-    // is **host-only** (cranelift_native::builder()), so on a Unix
-    // host targeting Windows we won't have a `.luna_traces.o` to
-    // link. The C placeholder sections in the cmain shim are what
-    // we're asserting — they exist unconditionally on Windows
-    // targets.
+    // a hot counted loop the warmup recorder closes a trace on; the
+    // sections checked below come from the C placeholders, so they are
+    // there whether or not a trace `.o` was linked
     let td = tempfile::tempdir().expect("tempdir");
     let src_path = td.path().join("loop.lua");
     std::fs::write(
         &src_path,
-        b"local s = 0\nfor i = 1, 1000 do s = s + i end\nprint(s)\n",
+        b"local s = 0\nfor i = 1, 1000000 do s = s + i end\nprint(s)\n",
     )
     .expect("write source");
 
@@ -148,6 +132,10 @@ fn cross_compile_windows_emits_lt_meta_and_lt_skix_sections() {
         Err(e) => Some(format!("{e}")),
     };
     if let Some(msg) = link_err {
+        assert!(
+            !cfg!(windows),
+            "aot_windows_mingw_link: MinGW build on a Windows host failed:\n{msg}"
+        );
         // Mirror aot_cross_compile's skip-marker pattern: a missing
         // rust-std / linker is a skip not a hard fail.
         let skip_markers = [
@@ -188,37 +176,29 @@ fn cross_compile_windows_emits_lt_meta_and_lt_skix_sections() {
         "expected section `.lt_skix` in linked PE; found sections: [{names_dbg}]"
     );
 
+    if cfg!(windows) {
+        let output = Command::new(&out_path)
+            .env("LUNA_AOT_PROBE", "1")
+            .output()
+            .expect("run the MinGW binary");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "500000500000\n",
+            "stderr: {stderr}"
+        );
+        assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+        let installed: usize = stderr
+            .lines()
+            .find_map(|l| l.split("aot_trace_install_count = ").nth(1))
+            .and_then(|n| n.trim().parse().ok())
+            .unwrap_or_else(|| panic!("no install-count probe line; stderr:\n{stderr}"));
+        assert!(installed >= 1, "no AOT trace installed; stderr:\n{stderr}");
+    }
+
     eprintln!(
         "aot_windows_mingw_link: PE section table verified — found {} sections, \
          including `.lt_meta` and `.lt_skix`",
         names.len()
     );
 }
-
-// ────────────────────────────────────────────────────────────────────
-// Manual verification recipe (when CI can't run wine/qemu):
-//
-// 1. Build on a Unix host with MinGW installed:
-//      $ cargo run -p luna-aot --release -- compile loop.lua -o loop.exe \
-//          --target x86_64-pc-windows-gnu
-//    Expected: `loop.exe` produced, no link errors.
-//
-// 2. Verify section names via `llvm-readobj` (or `objdump -h`):
-//      $ llvm-readobj --sections loop.exe | grep -E 'Name:.*lt_(meta|skix)'
-//    Expected: two matches, `.lt_meta` and `.lt_skix`.
-//
-// 3. Run on Windows (or wine ≥ 8.0):
-//      $ wine ./loop.exe
-//    Expected: "500500" on stdout, exit 0.
-//
-// 4. With probe enabled to verify the section walker found entries:
-//      $ wine sh -c "LUNA_AOT_PROBE=1 ./loop.exe"
-//    Expected stderr lines:
-//      - "aot_strkey_resolved = 0" (no AOT traces linked in for Unix-
-//        host-cross targets, so the placeholder section yields 0)
-//      - "aot_trace_install_count = 0"
-//    A non-zero count would only appear when luna-aot itself runs on
-//    a Windows host (so cranelift_native::builder() targets COFF and
-//    the harvester actually emits a .o targeting the deploy binary's
-//    PE format). Cross-targeted trace emission is out of scope.
-// ────────────────────────────────────────────────────────────────────
