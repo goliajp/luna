@@ -27,7 +27,6 @@ static int openlib(lua_State *L, const char *name) {
   LUNA_HIDDEN int luna_c_##fn(lua_State *L) { return openlib(L, name); }
 
 OPENER(luaopen_base, "_G")
-OPENER(luaopen_package, "package")
 OPENER(luaopen_coroutine, "coroutine")
 OPENER(luaopen_table, "table")
 OPENER(luaopen_io, "io")
@@ -37,6 +36,46 @@ OPENER(luaopen_bit32, "bit32")
 OPENER(luaopen_math, "math")
 OPENER(luaopen_utf8, "utf8")
 OPENER(luaopen_debug, "debug")
+
+/* the finalizer of the table of loaded C libraries; luna loads none */
+static int gctm(lua_State *L) {
+  (void)L;
+  return 0;
+}
+
+static const int clibs53 = 0;
+
+/* the table of loaded C libraries luaopen_package makes in the registry:
+   5.1's "_LOADLIB" metatable, "_CLIBS" (5.3: a light userdata key) with a
+   finalizer; 5.1, 5.2 and 5.4 leave it on the stack */
+LUNA_HIDDEN int luna_c_luaopen_package(lua_State *L) {
+  switch (VNUM(L)) {
+    case 501:
+      luna_c_luaL_newmetatable(L, "_LOADLIB");
+      lua_pushcfunction(L, gctm);
+      lua_setfield(L, -2, "__gc");
+      break;
+    case 503:
+      lua_newtable(L);
+      lua_createtable(L, 0, 1);
+      lua_pushcfunction(L, gctm);
+      lua_setfield(L, -2, "__gc");
+      lua_setmetatable(L, -2);
+      lua_rawsetp(L, REGIDX(L), &clibs53);
+      break;
+    case 505:
+      luna_c_luaL_getsubtable(L, REGIDX(L), "_CLIBS");
+      lua_pop(L, 1);
+      break;
+    default:
+      luna_c_luaL_getsubtable(L, REGIDX(L), "_CLIBS");
+      lua_createtable(L, 0, 1);
+      lua_pushcfunction(L, gctm);
+      lua_setfield(L, -2, "__gc");
+      lua_setmetatable(L, -2);
+  }
+  return openlib(L, "package");
+}
 
 /* each version's luaL_openlibs list, in its order */
 static const luaL_Reg libs51[] = {
