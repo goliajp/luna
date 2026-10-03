@@ -184,8 +184,8 @@ pub(super) fn alloc_sunk_sites<E: Emit>(
     //
     // Note: looping traces (`opts.internal_loop = true`) that have
     // any cmp in body are already excluded by the sweep escape
-    // rule. ForLoop terminators escape via the terminator rule
-    // (TraceEnd::ForLoop → all live). So we don't need an explicit
+    // rule. A ForLoop terminator escapes the bindings it carries
+    // (below the loop's `A + 4`). So we don't need an explicit
     // `internal_loop` check here.
     const MAX_SUNK_CAP: u32 = 8;
     let return_a_for_sunk_check: Option<u32> = match end_idx_opt {
