@@ -275,3 +275,52 @@ fn moving_to_cranelift_around_side_trace_linking_keeps_the_results() {
     assert!(side > 0, "no side trace was linked");
     assert!(moved > 0, "nothing moved to Cranelift");
 }
+
+const SUM_MOD: &str = r#"
+return function(n)
+    local s = 0
+    for i = 1, n do s = s + i % 7 end
+    return s
+end
+"#;
+
+fn sum_mod(vm: &mut Vm, n: i64) -> i64 {
+    let main = vm.load(SUM_MOD.as_bytes(), b"=t").expect("load");
+    let f = vm.call_value(Value::Closure(main), &[]).expect("chunk")[0];
+    let call = |vm: &mut Vm| match vm.call_value(f, &[Value::Int(n)]).expect("call")[..] {
+        [Value::Int(s), ..] => s,
+        ref other => panic!("not an integer: {other:?}"),
+    };
+    let first = call(vm);
+    assert_eq!(vm.trace_tiered_up_count(), 0, "moved within the first call");
+    let second = call(vm);
+    assert_eq!(first, second);
+    second
+}
+
+/// A loop in a function that is called again moves to Cranelift after a
+/// quarter of `tier_up_at`; one call running more iterations than that
+/// but fewer than `tier_up_at` stays in the baseline tier.
+#[test]
+fn a_trace_moves_sooner_once_its_function_is_called_again() {
+    let want = |n: i64| (1..=n).map(|i| i % 7).sum::<i64>();
+    let mut vm = tiered(LuaVersion::Lua54, 8, TraceTier::Auto, 1000);
+    assert_eq!(sum_mod(&mut vm, 300), want(300));
+    assert_eq!(
+        vm.trace_tiered_up_count(),
+        1,
+        "the second call did not move the loop"
+    );
+
+    let mut vm = tiered(LuaVersion::Lua54, 8, TraceTier::Auto, 1000);
+    let main = vm.load(SUM_MOD.as_bytes(), b"=t").expect("load");
+    let f = vm.call_value(Value::Closure(main), &[]).expect("chunk")[0];
+    let r = vm.call_value(f, &[Value::Int(900)]).expect("call");
+    assert!(matches!(r[0], Value::Int(s) if s == want(900)));
+    assert!(vm.trace_dispatched_count() > 0);
+    assert_eq!(
+        vm.trace_tiered_up_count(),
+        0,
+        "one call below tier_up_at moved the loop"
+    );
+}
