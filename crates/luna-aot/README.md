@@ -116,10 +116,12 @@ Vec<u8>
 foo.luna_bytecode.o   ELF / Mach-O / PE
   │ cc bytecode.o cmain.o libluna_runtime_helpers.a -o foo
   ▼
-foo   single-binary, runs through luna_aot_run → Vm → call_value
+foo   single-binary, runs through luna_aot_run_dialect → Vm → call_value
 ```
 
-`luna_aot_run` lives in `crates/luna-runtime-helpers/` as a dual
+The generated C `main` passes the dialect the script was compiled for,
+and the `Vm` that runs it is created for that dialect.
+`luna_aot_run_dialect` lives in `crates/luna-runtime-helpers/` as a dual
 `staticlib + rlib`. The staticlib carries rust stdlib + all of
 luna-core; the rlib is what `luna-aot`'s integration tests link
 against so they can drive the same code path in-process without

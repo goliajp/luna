@@ -71,7 +71,10 @@ Behind the scenes, `luna-aot compile`:
    mcode and emitted as additional `.o` sections.
 4. Links `luna-runtime-helpers` (the static-link runtime entry
    crate) against the generated `.o` files; the entry symbol
-   `luna_aot_run(ptr, len) -> i32` runs the embedded bytecode.
+   `luna_aot_run_dialect(ptr, len, dialect) -> i32` runs the embedded
+   bytecode on a `Vm` of the dialect it was compiled for (the generated
+   C `main` passes it). `luna_aot_run(ptr, len)` is the same entry for
+   a 5.5 dump.
 5. Produces the final native binary at the path passed via `--out`
    (or the input stem if `--out` is omitted).
 
