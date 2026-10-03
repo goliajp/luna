@@ -354,9 +354,9 @@ impl<M: Masm> Gen<'_, M> {
         self.jump(eb, ea, next);
     }
 
-    pub(crate) fn tier_count(&mut self, cell: i64, at: u32, hot: u32, cont: u32, next: u32) {
+    pub(crate) fn tier_count(&mut self, cell: u32, at: u32, hot: u32, cont: u32, next: u32) {
         let [a, n] = M::SCRATCH;
-        self.m.mov_imm(a, cell);
+        self.m.mov_reloc(a, self.lir.relocs[cell as usize].1, cell);
         self.m.load(Width::B4, n, a, 0);
         if !self.m.alu_imm(Alu::Add, false, n, n, 1) {
             unreachable!("adding one always encodes");

@@ -11,11 +11,13 @@ use crate::runtime::Gc;
 use crate::runtime::function::Proto;
 use crate::vm::isa::Inst;
 
+mod adopt;
 mod compiled;
 mod compiled_aot;
 mod exit;
 mod record;
 mod side_exit;
+pub use adopt::*;
 pub use compiled::*;
 pub use exit::*;
 pub use record::*;

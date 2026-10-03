@@ -20,6 +20,7 @@ mod downrec_dispatcher_stitch;
 mod downrec_keeps_dispatch_off;
 mod downrec_lowerer_stitch;
 mod downrec_multi_way_guard;
+mod engine_shared_traces;
 mod field_ic_switch;
 mod forced_jit_corpus;
 mod jit_code_reuse_icache;
