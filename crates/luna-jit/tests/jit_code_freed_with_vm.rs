@@ -21,6 +21,7 @@ static LIVE: AtomicIsize = AtomicIsize::new(0);
 // SAFETY: forwards to `System`, only counting sizes
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: `GlobalAlloc::alloc`'s contract, passed through
         let p = unsafe { System.alloc(layout) };
         if !p.is_null() {
             LIVE.fetch_add(layout.size() as isize, Ordering::Relaxed);
@@ -29,6 +30,7 @@ unsafe impl GlobalAlloc for Counting {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: `GlobalAlloc::alloc_zeroed`'s contract, passed through
         let p = unsafe { System.alloc_zeroed(layout) };
         if !p.is_null() {
             LIVE.fetch_add(layout.size() as isize, Ordering::Relaxed);
@@ -37,11 +39,16 @@ unsafe impl GlobalAlloc for Counting {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: `ptr` was allocated by this allocator, which got it
+        // from `System` with the same `layout`
         unsafe { System.dealloc(ptr, layout) };
         LIVE.fetch_sub(layout.size() as isize, Ordering::Relaxed);
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // SAFETY: `ptr` was allocated by this allocator, which got it
+        // from `System` with `layout`; `new_size` is the caller's, under
+        // `GlobalAlloc::realloc`'s contract
         let p = unsafe { System.realloc(ptr, layout, new_size) };
         if !p.is_null() {
             LIVE.fetch_add(

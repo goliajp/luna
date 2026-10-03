@@ -131,6 +131,8 @@ fn capi_zero_result_callback_no_sigabrt_post_fix() {
     }
     let name = CString::new("c_void").unwrap();
     let src = CString::new("return select('#', c_void(1, 2, 3))").unwrap();
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; `name` and `src` outlive the calls
     unsafe {
         let l = luaL_newstate();
         luaL_openlibs(l);

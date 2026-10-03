@@ -403,7 +403,6 @@ impl IntChunkCompiler for CraneliftBackend {
         // `?Send` / single-threaded. The raw-ptr indirection here
         // only sidesteps the lexical borrow conflict against
         // `self.chunk_compiler`.
-        // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
         let vm_ref: &mut luna_core::vm::Vm = unsafe { &mut *vm };
         enter_jit(vm_ref, cl)
     }
