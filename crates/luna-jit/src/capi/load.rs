@@ -3,7 +3,6 @@
 
 use super::ccall::{take_error, with_c};
 use super::*;
-use luna_core::vm::exec::host_c::HostChunkProgress;
 
 /// PUC `lua_Reader`.
 pub type LuaReader =
@@ -92,9 +91,11 @@ fn load(
     }
 }
 
-/// Call `reader` until it signals the end, or until PUC's parser would
-/// have stopped asking (see `Vm::host_chunk_progress`), checking the kind
-/// of chunk against `mode` once its first byte is known.
+/// Call `reader` until it signals the end, checking the kind of chunk
+/// against `mode` once its first byte is known. A binary chunk stops
+/// being read once its bytes are complete, as PUC's undumper stops; a text
+/// chunk is read to the end and parsed once, where PUC's parser stops at
+/// the first syntax error.
 fn read_chunk(
     api: &mut Api,
     reader: LuaReader,
@@ -131,7 +132,7 @@ fn read_chunk(
         if first {
             check_mode(api, mode, src[0] == 0x1b)?;
         }
-        if api.vm.host_chunk_progress(&src) == HostChunkProgress::Done {
+        if src[0] == 0x1b && api.vm.host_binary_chunk_complete(&src) {
             return Ok(src);
         }
     }
