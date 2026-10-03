@@ -1,0 +1,145 @@
+add 7 2: n:9 top=2
+sub 7 2: n:5 top=2
+mul 7 2: n:14 top=2
+mod 7 2: n:1 top=2
+pow 7 2: n:49.0 top=2
+div 7 2: n:3.5 top=2
+idiv 7 2: n:3 top=2
+band 7 2: n:2 top=2
+bor 7 2: n:7 top=2
+bxor 7 2: n:5 top=2
+shl 7 2: n:28 top=2
+shr 7 2: n:1 top=2
+unm 7 : n:-7 top=2
+bnot 7 : n:-8 top=2
+add 7.5 2: n:9.5 top=2
+sub 7.5 2: n:5.5 top=2
+mul 7.5 2: n:15.0 top=2
+mod 7.5 2: n:1.5 top=2
+pow 7.5 2: n:56.25 top=2
+div 7.5 2: n:3.75 top=2
+idiv 7.5 2: n:3.0 top=2
+band 7.5 2: error s:number has no integer representation
+bor 7.5 2: error s:number has no integer representation
+bxor 7.5 2: error s:number has no integer representation
+shl 7.5 2: error s:number has no integer representation
+shr 7.5 2: error s:number has no integer representation
+unm 7.5 : n:-7.5 top=2
+bnot 7.5 : error s:number has no integer representation
+add -7 2: n:-5 top=2
+sub -7 2: n:-9 top=2
+mul -7 2: n:-14 top=2
+mod -7 2: n:1 top=2
+pow -7 2: n:49.0 top=2
+div -7 2: n:-3.5 top=2
+idiv -7 2: n:-4 top=2
+band -7 2: n:0 top=2
+bor -7 2: n:-5 top=2
+bxor -7 2: n:-5 top=2
+shl -7 2: n:-28 top=2
+shr -7 2: n:4611686018427387902 top=2
+unm -7 : n:7 top=2
+bnot -7 : n:6 top=2
+add '10' '3': n:13.0 top=2
+sub '10' '3': n:7.0 top=2
+mul '10' '3': n:30.0 top=2
+mod '10' '3': n:1.0 top=2
+pow '10' '3': n:1000.0 top=2
+div '10' '3': n:3.3333333333333 top=2
+idiv '10' '3': n:3.0 top=2
+band '10' '3': n:2 top=2
+bor '10' '3': n:11 top=2
+bxor '10' '3': n:9 top=2
+shl '10' '3': n:80 top=2
+shr '10' '3': n:1 top=2
+unm '10' : n:-10.0 top=2
+bnot '10' : n:-11 top=2
+add 0 0.5: n:0.5 top=2
+sub 0 0.5: n:-0.5 top=2
+mul 0 0.5: n:0.0 top=2
+mod 0 0.5: n:0.0 top=2
+pow 0 0.5: n:0.0 top=2
+div 0 0.5: n:0.0 top=2
+idiv 0 0.5: n:0.0 top=2
+band 0 0.5: error s:number has no integer representation
+bor 0 0.5: error s:number has no integer representation
+bxor 0 0.5: error s:number has no integer representation
+shl 0 0.5: error s:number has no integer representation
+shr 0 0.5: error s:number has no integer representation
+unm 0 : n:0 top=2
+bnot 0 : n:-1 top=2
+add A 1: s:add top=2
+sub A 1: error s:attempt to perform arithmetic on a table value
+mul A 1: error s:attempt to perform arithmetic on a table value
+mod A 1: error s:attempt to perform arithmetic on a table value
+pow A 1: error s:attempt to perform arithmetic on a table value
+div A 1: error s:attempt to perform arithmetic on a table value
+idiv A 1: s:idiv top=2
+band A 1: error s:attempt to perform bitwise operation on a table value
+bor A 1: error s:attempt to perform bitwise operation on a table value
+bxor A 1: error s:attempt to perform bitwise operation on a table value
+shl A 1: error s:attempt to perform bitwise operation on a table value
+shr A 1: error s:attempt to perform bitwise operation on a table value
+unm A : s:unm true top=2
+bnot A : s:bnot true top=2
+arith keeps the rest: n:5 n:13 top=2
+arith nil: status=2 s:attempt to perform arithmetic on a nil value top=0
+arith table: status=2 s:attempt to perform arithmetic on a table value top=0
+arith mm error: status=2 s:mulerr top=0
+add 3.0 1: n:4.0 top=2
+sub 3.0 1: n:2.0 top=2
+mul 3.0 1: n:3.0 top=2
+mod 3.0 1: n:0.0 top=2
+pow 3.0 1: n:3.0 top=2
+div 3.0 1: n:3.0 top=2
+idiv 3.0 1: n:3.0 top=2
+band 3.0 1: n:1 top=2
+bor 3.0 1: n:3 top=2
+bxor 3.0 1: n:2 top=2
+shl 3.0 1: n:6 top=2
+shr 3.0 1: n:1 top=2
+unm 3.0 : n:-3.0 top=2
+bnot 3.0 : n:-4 top=2
+idiv zero: status=2 s:attempt to divide by zero top=0
+mod zero: status=2 s:attempt to perform 'n%0' top=0
+band float: status=2 s:number has no integer representation top=0
+bnot string: status=2 s:attempt to perform bitwise operation on a string value top=0
+cmp 1 2: eq=0 lt=1 le=1 top=2
+cmp 2 1: eq=0 lt=0 le=0 top=2
+cmp 1 1.0: eq=1 lt=0 le=1 top=2
+cmp 'a' 'b': eq=0 lt=1 le=1 top=2
+cmp 'b' 'a': eq=0 lt=0 le=0 top=2
+cmp 'a' 'a': eq=1 lt=0 le=1 top=2
+cmp A B: eq=1 lt=1 le=1 top=2
+cmp B A: eq=1 lt=0 le=0 top=2
+cmp A A: eq=1 lt=0 le=1 top=2
+cmp A P: eq=1 lt=1 le=1 top=2
+cmp {} {}: eq=0 error s:attempt to compare two table values
+cmp nil false: eq=0 error s:attempt to compare nil with boolean
+cmp 0/0 0/0: eq=0 lt=0 le=0 top=2
+cmp invalid: eq=0 lt=0 top=1
+lt mixed: status=2 s:attempt to compare number with string top=0
+lt mm error: status=2 s:lterr top=0
+compare mixed: status=2 s:attempt to compare number with string top=0
+compare tables le: status=2 s:attempt to compare two table values top=0
+le fallback	true	true
+concat a 1: s:a1 top=1
+concat x 2.5 y: s:x2.5y top=1
+concat 1 2: s:12 top=1
+concat a A b c: s:aM top=1
+concat A s: s:M top=1
+concat 1 1.0 -0.0: s:11.0-0.0 top=1
+concat 0: s: top=1
+concat 1: number : n:3 top=1
+concat keeps the rest: s:below s:pq top=2
+concat gc: n:103 top=1
+concat nil: status=2 s:attempt to concatenate a nil value top=0
+concat table: status=2 s:attempt to concatenate a table value top=0
+concat mm error: status=2 s:caterr top=0
+len string: n:5 top=2
+len table: n:3 top=2
+len __len: s:L top=2
+len registry: number
+len number: status=2 s:attempt to get length of a number value top=0
+len nil: status=2 s:attempt to get length of a nil value top=0
+final top=0
