@@ -73,13 +73,6 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
                 );
                 let same = lw.bcx.ins().icmp(IntCC::Equal, proto, want);
                 guard!(lw, pl, same, i, rop.pc);
-                if !lw
-                    .inlined_protos
-                    .iter()
-                    .any(|p| std::ptr::eq(p.as_ptr(), callee_proto.as_ptr()))
-                {
-                    lw.inlined_protos.push(callee_proto);
-                }
             }
             // SelfLink close: the LAST recorded op is the
             // Op::Call whose "next" op (the tripping deepest-depth
