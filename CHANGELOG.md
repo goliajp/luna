@@ -234,11 +234,17 @@ optimization.
 
 ### Fixed
 
+- A binary built with `luna-aot compile --dialect 5.1` (or 5.2, 5.3, 5.4,
+  `macrolua`) ran its script on a Lua 5.5 `Vm`. A 5.3 or 5.4 binary
+  stopped at startup with "PUC bytecode loading is disabled"; a 5.1 or
+  5.2 binary ran with the 5.5 library and reported `_VERSION` as
+  "Lua 5.5". The generated `main` now passes the dialect to
+  the runtime entry, which creates the `Vm` for it. Affects every release
+  with `--dialect`, 1.3.0 through 4.0.1.
 - The table-field inline cache of a trace compiled ahead of time compared
   the cached node's key with the address the key had in the process that
   compiled it, so it never hit; it now reads the key from the slot the
   deploy side fills, like the trace's other string keys.
-
 - A trace whose entry reads a register holding a boolean could never be
   entered, yet it was compiled and kept its loop or function head, so no
   trace ever ran there. Booleans now enter traces (see Changed); a
@@ -278,6 +284,12 @@ optimization.
 
 ### Added
 
+- `luna_runtime_helpers::luna_aot_run_dialect`, the C entry an AOT
+  binary's `main` now calls with the dialect the script was compiled
+  for; `run_bytecode_as`, its Rust counterpart; `dialect_code` and
+  `dialect_from_code` for the numbers it takes. `luna_aot_run` and
+  `run_bytecode` keep running a 5.5 dump. `luna_aot::runtime_stub::aot_main_as`
+  takes the dialect the same way.
 - `luna_jit::Engine`: VMs built through one engine (`engine.new_vm`,
   `engine.new_minimal_vm`, `Lua::with_engine`) share the traces and
   method-JIT functions they compile. A VM reaching code of the same

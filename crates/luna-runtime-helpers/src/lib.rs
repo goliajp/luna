@@ -10,15 +10,17 @@
 //! 2. Emit a `.luna.bytecode` data section in a fresh `.o`.
 //! 3. **Build this crate as a `staticlib`** — `libluna_runtime_helpers.a`
 //!    bundles the rust stdlib + luna-core + this thin C-ABI entry.
-//! 4. Emit a tiny C `main` that calls into [`luna_aot_run`] passing
-//!    the bracket-symbol bounds of the bytecode section.
+//! 4. Emit a tiny C `main` that calls into [`luna_aot_run_dialect`]
+//!    passing the bracket-symbol bounds of the bytecode section and the
+//!    dialect the script was compiled for.
 //! 5. `cc` links `bytecode.o` + `main.o` + `libluna_runtime_helpers.a`
 //!    + `-lpthread -ldl -lm` into the final executable.
 //!
 //! The produced binary at run time:
 //!
-//! - the C `main` calls [`luna_aot_run(bytecode_ptr, len)`][luna_aot_run]
-//! - [`luna_aot_run`] constructs a `Vm`, allows bytecode loading,
+//! - the C `main` calls
+//!   [`luna_aot_run_dialect(bytecode_ptr, len, dialect)`][luna_aot_run_dialect]
+//! - [`luna_aot_run_dialect`] constructs a `Vm` of that dialect, allows bytecode loading,
 //!   calls `Vm::load(slice, b"=embedded")` (which routes through
 //!   `luna_core::vm::dump::undump` because the slice starts with
 //!   `\x1bLua`), then `Vm::call_value` on the resulting root closure
@@ -59,17 +61,64 @@ use luna_core::vm::Vm;
 #[cfg(all(target_os = "windows", feature = "jit-helpers"))]
 mod windows_section;
 
+/// The `dialect` code [`luna_aot_run_dialect`] takes for `version`: the
+/// version number without its dot (51 for Lua 5.1, ..., 55 for 5.5), and
+/// 254 for MacroLua. `luna-aot` writes this number into the C `main` it
+/// generates.
+pub const fn dialect_code(version: LuaVersion) -> u32 {
+    match version {
+        LuaVersion::Lua51 => 51,
+        LuaVersion::Lua52 => 52,
+        LuaVersion::Lua53 => 53,
+        LuaVersion::Lua54 => 54,
+        LuaVersion::Lua55 => 55,
+        LuaVersion::MacroLua => 254,
+    }
+}
+
+/// The dialect a [`dialect_code`] stands for; `None` for any other number.
+pub const fn dialect_from_code(code: u32) -> Option<LuaVersion> {
+    match code {
+        51 => Some(LuaVersion::Lua51),
+        52 => Some(LuaVersion::Lua52),
+        53 => Some(LuaVersion::Lua53),
+        54 => Some(LuaVersion::Lua54),
+        55 => Some(LuaVersion::Lua55),
+        254 => Some(LuaVersion::MacroLua),
+        _ => None,
+    }
+}
+
+/// [`luna_aot_run_dialect`] for a Lua 5.5 dump. A binary that `luna-aot`
+/// links calls [`luna_aot_run_dialect`] with the dialect it compiled the
+/// script for; this entry stays for C hosts written against it.
+///
+/// # Safety
+///
+/// Same contract as [`luna_aot_run_dialect`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_aot_run(bytecode: *const u8, len: usize) -> i32 {
+    // SAFETY: the caller upholds this function's contract, which is
+    // `luna_aot_run_dialect`'s for the same two arguments
+    unsafe { luna_aot_run_dialect(bytecode, len, dialect_code(LuaVersion::Lua55)) }
+}
+
 /// AOT-binary C-ABI entry. The auto-generated C `main` calls this
 /// once with a pointer + length pair derived from the bracket
 /// symbols `__luna_bytecode_start` / `__luna_bytecode_end` that
-/// `luna-aot` emits into the `.luna.bytecode` section.
+/// `luna-aot` emits into the `.luna.bytecode` section, and the
+/// [`dialect_code`] of the dialect the script was compiled for. The
+/// `Vm` that runs the dump is created for that dialect: luna's dump
+/// header does not tell 5.1 / 5.2 / 5.5 apart, and a 5.5 `Vm` refuses
+/// a 5.3 or 5.4 dump as foreign PUC bytecode.
 ///
 /// Returns the process exit code:
 ///
 /// - `0` — script ran to completion (any `return` values are ignored,
 ///   matching `lua foo.lua` semantics: PUC discards top-level returns)
-/// - `1` — bytecode load failed (header mismatch, truncated dump,
-///   unsupported opcode), runtime error, or a panic escaped luna-core
+/// - `1` — unknown `dialect`, bytecode load failed (header mismatch,
+///   truncated dump, unsupported opcode), runtime error, or a panic
+///   escaped luna-core
 ///
 /// # Safety
 ///
@@ -87,7 +136,15 @@ mod windows_section;
 /// host process) are caught here and turned into exit code 1 with the
 /// payload printed to stderr.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_aot_run(bytecode: *const u8, len: usize) -> i32 {
+pub unsafe extern "C" fn luna_aot_run_dialect(
+    bytecode: *const u8,
+    len: usize,
+    dialect: u32,
+) -> i32 {
+    let Some(version) = dialect_from_code(dialect) else {
+        eprintln!("luna-runtime-helpers: unknown dialect code {dialect}");
+        return 1;
+    };
     // Defensive: a null/zero-len section means the linker didn't wire
     // the bytecode object — clearer error than a slice deref.
     if bytecode.is_null() || len == 0 {
@@ -121,7 +178,9 @@ pub unsafe extern "C" fn luna_aot_run(bytecode: *const u8, len: usize) -> i32 {
     // call does
     let bytecode_slice: &'static [u8] = unsafe { slice::from_raw_parts(bytecode, len) };
 
-    let result = panic::catch_unwind(panic::AssertUnwindSafe(|| run_inner(bytecode_slice)));
+    let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        run_inner(bytecode_slice, version)
+    }));
     match result {
         Ok(code) => code,
         Err(payload) => {
@@ -138,13 +197,11 @@ pub unsafe extern "C" fn luna_aot_run(bytecode: *const u8, len: usize) -> i32 {
 /// The Rust-side body of [`luna_aot_run`]. Split out so the C-ABI
 /// boundary stays minimal and the `panic::catch_unwind` closure has
 /// a clear, self-contained body.
-fn run_inner(bytecode: &[u8]) -> i32 {
-    // The dialect picked here governs which header bytes `Vm::load`
-    // accepts. It is pinned to 5.5 — the `luna-aot` CLI default. A
-    // `--dialect 5.4` invocation would compile against 5.4's header;
-    // this relies on the embedder running the AOT pipeline with a
-    // matching dialect on both sides.
-    let mut vm = Vm::new(LuaVersion::Lua55);
+fn run_inner(bytecode: &[u8], version: LuaVersion) -> i32 {
+    // `Vm::load` takes a luna dump only from a `Vm` of the dialect that
+    // wrote it; the library set and the number semantics are the
+    // dialect's too.
+    let mut vm = Vm::new(version);
 
     // `Vm::new` defaults to `bytecode_loading = true` (see luna-core
     // `exec.rs:910`), but a future sandbox-default flip would break
@@ -298,12 +355,18 @@ fn panic_payload_text(payload: &(dyn std::any::Any + Send)) -> String {
 
 /// Convenience entry for in-process Rust drivers (`luna-aot`'s
 /// integration tests, embedders that want to invoke the same code
-/// path without going through `cc` link).
+/// path without going through `cc` link), for a Lua 5.5 dump.
 ///
 /// Identical semantics to [`luna_aot_run`] but skips the raw-ptr +
 /// `catch_unwind` shim. Panics propagate.
 pub fn run_bytecode(bytecode: &[u8]) -> i32 {
-    run_inner(bytecode)
+    run_inner(bytecode, LuaVersion::Lua55)
+}
+
+/// [`run_bytecode`] for a dump of any dialect: identical semantics to
+/// [`luna_aot_run_dialect`] without the raw-ptr + `catch_unwind` shim.
+pub fn run_bytecode_as(bytecode: &[u8], version: LuaVersion) -> i32 {
+    run_inner(bytecode, version)
 }
 
 // Re-export of the 44 `luna_jit_*` Cranelift

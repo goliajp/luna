@@ -21,10 +21,10 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **946** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **948** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 201 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **5** | all `#[doc(hidden)]`, see §5 |
-| **`pub unsafe extern "C" fn`** | 77 | the `lua.h` C API (29), the `luna_jit_*` helpers compiled code calls (47, re-exported by `luna-jit`) and the AOT entry (1); see §5 |
+| **`pub unsafe extern "C" fn`** | 78 | the `lua.h` C API (29), the `luna_jit_*` helpers compiled code calls (47, re-exported by `luna-jit`) and the AOT entries (2); see §5 |
 | **`unsafe impl Send` / `Sync`** | 10 | see §5 |
 
 A "site" is a line matching `unsafe (\{|fn |impl |trait |extern )`,
@@ -55,11 +55,11 @@ quotes the pattern counts too.
 | `luna-jit-helpers` | | 149 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
 | `luna-jit-llvm` | `src/` | 8 | LLVM execution engines and the register-file GEPs |
 | | `tests/` | 35 | calling LLVM-compiled chunks |
-| `luna-runtime-helpers` | | 43 | the AOT binary's C entry, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor |
+| `luna-runtime-helpers` | | 45 | the AOT binary's C entries, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor |
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **946** | |
+| **Total** | | **948** | |
 
 ## 3. Pattern catalog
 
@@ -179,7 +179,7 @@ Two CI checks cover `unsafe`:
 - the `unsafe-drift` job in `.github/workflows/ci.yml` counts the sites
   in every `.rs` file under `crates/` on every push, `luna-jit-llvm`
   included although CI does not build it, and fails above the ceiling.
-  The ceiling is the exact count, **946**, with no headroom;
+  The ceiling is the exact count, **948**, with no headroom;
 - `clippy::undocumented_unsafe_blocks` is set in the workspace
   `[lints.clippy]` table, and the lint job runs clippy with
   `-D warnings`, so a block or `unsafe impl` without a `SAFETY:` note
@@ -254,7 +254,12 @@ of the prototype-slot section (its bracket symbols on ELF and Mach-O,
 the slice of index entries, the read of each 16-byte hash and the write
 of its slot). That is 936.
 
-Sharing compiled code between the Vms of an engine added 8. In
+Running an AOT binary's script on a `Vm` of the dialect it was compiled
+for added 2, both in `luna-runtime-helpers`: the C entry that takes the
+dialect (`luna_aot_run_dialect`), and the block in the old two-argument
+entry `luna_aot_run` that calls it for 5.5. That is 938.
+
+Sharing compiled code between the Vms of an engine added 10. In
 `luna-jit` 7: copying a compiled function's bytes out of the code
 memory that holds it (an `unsafe fn` and its block, plus its two
 callers when a trace and when the optimizing tier's code is shared),
@@ -263,10 +268,10 @@ installed from the engine, one for a trace and one for the optimizing
 tier's code taken at tier-up (a pointer turned into a `TraceFn`). In
 `luna-core` 1: dropping the chunks the collector found dead from the
 list a Vm keeps to find inlined functions by content, which reads the
-header of each listed prototype before the sweep. And 2 in a unit test
+header of each listed prototype before the sweep. In a unit test 2
 that runs a trace's code before and after its addresses are rewritten
 (calling the code, and copying the Cranelift function out). That is
-946, the ceiling now.
+948, the ceiling now.
 
 ## 5. Public `unsafe` surface
 
@@ -282,13 +287,13 @@ that runs a trace's code before and after its addresses are rewritten
 
 None of these appears in the `cargo doc` view of the API.
 
-### `pub unsafe extern "C" fn` (75)
+### `pub unsafe extern "C" fn` (78)
 
 | Location | Count | Why |
 |---|---:|---|
 | `luna-jit/src/capi*` | 29 | the `lua.h` C API, called from C with raw `lua_State` pointers |
 | `luna-jit-helpers/src/*` | 47 | the `luna_jit_*` helpers compiled code calls (§3.5); each has a `# Safety` section |
-| `luna-runtime-helpers/src/lib.rs` | 1 | `luna_aot_run`, the AOT binary's entry, called by the generated C `main` |
+| `luna-runtime-helpers/src/lib.rs` | 2 | `luna_aot_run_dialect`, the AOT binary's entry, called by the generated C `main` with the dialect the script was compiled for; `luna_aot_run`, the same entry for 5.5 |
 
 ### `unsafe impl Send` / `Sync` (10)
 
@@ -313,7 +318,7 @@ wrapper in `luna-jit/benches/bench_send_overhead.rs`.
 
 ```sh
 grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' crates | wc -l
-# 946, the ceiling in ci.yml's unsafe-drift job
+# 948, the ceiling in ci.yml's unsafe-drift job
 cargo clippy --workspace --all-targets \
     --exclude llvm-jit-probe --exclude luna-jit-llvm -- -D warnings
 # no undocumented_unsafe_blocks warnings (the LLVM crates need
