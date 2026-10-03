@@ -45,11 +45,9 @@ fn return_i_compiles_and_returns_immediate() {
     assert!(!ret_is_float, "int-immediate chunk returns i64, not f64");
     assert!(!entry.is_null(), "compute path must yield a non-null entry");
 
-    // SAFETY: matches the dead-locals smoke's calling convention; the
-    // compute path emits the same `fn() -> i64` shape.
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    let returned = unsafe { entry_fn() };
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
     assert_eq!(
         returned, 42,
         "Return1 chunk's JIT entry must return the loaded immediate"
@@ -83,9 +81,9 @@ fn return_i_handles_negative_immediate() {
     else {
         panic!("`return -7` must compile");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    let returned = unsafe { entry_fn() };
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
     assert_eq!(returned, -7);
 }
 
@@ -120,9 +118,9 @@ fn add_two_loaded_ints() {
     else {
         panic!("must compile `local x=2; local y=3; return x+y`");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    let returned = unsafe { entry_fn() };
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
     assert_eq!(returned, 5, "2 + 3 must equal 5 through the JIT entry");
 }
 
@@ -158,9 +156,9 @@ fn add_negative_and_positive() {
     else {
         panic!("must compile the neg+pos add chunk");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    let returned = unsafe { entry_fn() };
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
     assert_eq!(returned, -6);
 }
 
@@ -181,9 +179,10 @@ fn sub_two_loaded_ints() {
     else {
         panic!("must compile the Sub chunk");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    assert_eq!(unsafe { entry_fn() }, 2);
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
+    assert_eq!(returned, 2);
 }
 
 #[test]
@@ -202,9 +201,10 @@ fn mul_two_loaded_ints() {
     else {
         panic!("must compile the Mul chunk");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    assert_eq!(unsafe { entry_fn() }, 42);
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
+    assert_eq!(returned, 42);
 }
 
 /// Lua-semantic Mod, positive operands.
@@ -225,9 +225,10 @@ fn mod_positive_operands() {
     else {
         panic!("must compile the Mod chunk");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    assert_eq!(unsafe { entry_fn() }, 2);
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
+    assert_eq!(returned, 2);
 }
 
 /// Lua Mod with cross-sign operands. This is the
@@ -266,9 +267,9 @@ fn mod_negative_dividend_lua_semantics() {
     else {
         panic!("must compile the neg-dividend Mod chunk");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    let returned = unsafe { entry_fn() };
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
     assert_eq!(
         returned, 2,
         "Lua `(-7) %% 3` must equal 2 (floor-mod, sign of divisor); \

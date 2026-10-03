@@ -216,9 +216,11 @@ fn proto_cache_key(proto: &Proto, pre53: bool) -> u64 {
 /// fast path; the compute path uses [`compile_compute_chunk`].
 fn compile_constant_zero_chunk() -> Option<(*const u8, EnginePair)> {
     let ctx_box: Box<Context> = Box::new(Context::create());
-    // SAFETY: see `compile_compute_chunk` below for the full lifetime
-    // discussion; the same reasoning applies — ctx_box outlives the
-    // engine via `EnginePair`'s field-order drop discipline.
+    // SAFETY: the `Context` lives in a box whose address does not
+    // change when the box moves; the module and builder made from it
+    // are locals declared after `ctx_box`, so they drop first, and
+    // `finalize_module` moves the box into the `EnginePair` that drops
+    // the engine before the context
     let ctx_static: &'static Context = unsafe { &*(ctx_box.as_ref() as *const Context) };
 
     let module = ctx_static.create_module("luna_jit_llvm_dead_locals");
@@ -257,13 +259,10 @@ pub(crate) fn finalize_module<'ctx>(
         bind_helper_symbols(&engine, map);
     }
     let entry_ptr = engine.get_function_address("luna_jit_llvm_entry").ok()? as *const u8;
-    // SAFETY: `EnginePair` holds the engine as
-    // `ExecutionEngine<'static>` — see the constructor of
-    // `compile_compute_chunk` for the lifetime upgrade discussion.
-    // The transmute below relabels `EE<'ctx>` to `EE<'static>`; the
-    // `'ctx` borrow stays live for the engine's observable lifetime
-    // because `ctx_box` is moved into the pair on the same line and
-    // pinned by struct field-order drop.
+    // SAFETY: only the lifetime changes. `'ctx` is the lifetime of the
+    // context in `ctx_box` (every caller builds `module` from a
+    // reference into that box), and the box goes into the same
+    // `EnginePair` as the engine, which drops the engine first
     let engine_static: inkwell::execution_engine::ExecutionEngine<'static> =
         unsafe { std::mem::transmute(engine) };
     let pair = EnginePair {

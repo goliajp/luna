@@ -12,8 +12,8 @@
 //! 4. Asserts the result is `CompileResult::Compiled` with the
 //!    expected metadata (zero args, no return value, no float / table
 //!    masks).
-//! 5. Transmutes the returned entry pointer to
-//!    `unsafe extern "C" fn() -> i64` and invokes it; asserts the
+//! 5. Calls the returned entry pointer as an
+//!    `extern "C" fn() -> i64`; asserts the
 //!    call returns 0 (the chunk has no observable return value).
 //!
 //! This proves the inkwell → LLVM 18 toolchain emits + JIT-compiles +
@@ -21,6 +21,9 @@
 //! surface, with the per-`Vm` storage cache keeping the Context /
 //! ExecutionEngine (and so the mmap) alive for the duration of the
 //! test.
+
+#[path = "support/mod.rs"]
+mod support;
 
 #[path = "llvm_smoke/arith.rs"]
 mod arith;
