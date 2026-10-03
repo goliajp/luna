@@ -71,7 +71,8 @@ fn load(
         let t = Value::Table(api.vm.heap.new_table());
         api.push(t);
     }
-    let r = read_chunk(api, reader, data, mode.as_deref()).and_then(|src| compile(api, &src, &name));
+    let r =
+        read_chunk(api, reader, data, mode.as_deref()).and_then(|src| compile(api, &src, &name));
     if v >= LuaVersion::Lua52 {
         api.vm.host_nny_leave();
     }

@@ -183,7 +183,14 @@ fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: u32) -> *mut
     let kind = if v == LuaVersion::Lua51 { 0 } else { 8 };
     // SAFETY: `alloc` is the host's `lua_Alloc`, called as PUC calls it for
     // a new block
-    let block = unsafe { alloc(ud, std::ptr::null_mut(), kind, std::mem::size_of::<Global>()) };
+    let block = unsafe {
+        alloc(
+            ud,
+            std::ptr::null_mut(),
+            kind,
+            std::mem::size_of::<Global>(),
+        )
+    };
     if block.is_null() {
         return std::ptr::null_mut();
     }
@@ -245,7 +252,8 @@ pub extern "C" fn luaL_newstate() -> *mut LuaState {
 }
 
 /// `luaL_newstate` for the dialect whose `LUA_VERSION_NUM` is `version`
-/// (501 to 505); null for any other number.
+/// (501 to 505); null for any other number. Its allocation function is
+/// `luaL_alloc`, as PUC's.
 // SAFETY: no other item in the link is named `luna_newstate`: PUC's liblua
 // has no such symbol and this crate defines it once
 #[unsafe(no_mangle)]
@@ -326,7 +334,9 @@ pub unsafe extern "C" fn lua_close(L: *mut LuaState) {
     // pointer is the Vm's own allocation
     unsafe {
         let g = (*L).g;
-        let main = state_of(&*(*g).vm_box, (*(*g).vm_box).host_main_thread());
+        let vmr = &mut *(*g).vm_box;
+        let mt = vmr.host_main_thread();
+        let main = state_of(vmr, mt);
         let mut api = Api::new(main);
         let _ = super::tbc::close_with(&mut api, 0, None);
         let vm = &mut *(*g).vm_box;

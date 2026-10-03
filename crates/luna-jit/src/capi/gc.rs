@@ -47,7 +47,13 @@ fn gc(api: &mut Api, what: c_int, args: [i64; 3]) -> c_int {
 // SAFETY: no other item in the link is named `luna_capi_gc`; the C function
 // `luna_c_lua_gc` is its only caller
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_capi_gc(L: *mut LuaState, what: c_int, a: i64, b: i64, c: i64) -> c_int {
+pub unsafe extern "C" fn luna_capi_gc(
+    L: *mut LuaState,
+    what: c_int,
+    a: i64,
+    b: i64,
+    c: i64,
+) -> c_int {
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
     gc(&mut api, what, [a, b, c])
@@ -104,7 +110,11 @@ fn call_warnf(
 // not link PUC's liblua next to this crate, which defines each `lua_*`
 // symbol once
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lua_setwarnf(L: *mut LuaState, f: Option<LuaWarnFunction>, ud: *mut c_void) {
+pub unsafe extern "C" fn lua_setwarnf(
+    L: *mut LuaState,
+    f: Option<LuaWarnFunction>,
+    ud: *mut c_void,
+) {
     // SAFETY: the caller's contract (# Safety)
     let api = unsafe { Api::new(L) };
     let main = state_of(api.vm, api.vm.host_main_thread());
@@ -124,7 +134,11 @@ pub unsafe extern "C" fn lua_setwarnf(L: *mut LuaState, f: Option<LuaWarnFunctio
 // SAFETY: no other item in the link is named `luna_capi_lua_warning`; the C
 // wrapper is its only caller
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_capi_lua_warning(L: *mut LuaState, msg: *const c_char, tocont: c_int) {
+pub unsafe extern "C" fn luna_capi_lua_warning(
+    L: *mut LuaState,
+    msg: *const c_char,
+    tocont: c_int,
+) {
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
     // SAFETY: `msg` is NUL-terminated (# Safety)
