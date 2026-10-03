@@ -98,13 +98,12 @@ fn write_upvals(p: &Proto, out: &mut Vec<u8>) {
 /// a hit is confirmed by comparing the content itself.
 pub(crate) fn hash64(b: &[u8]) -> u64 {
     let mut h: u64 = 0x9e37_79b9_7f4a_7c15 ^ b.len() as u64;
-    let mut chunks = b.chunks_exact(8);
-    for c in &mut chunks {
-        let w = u64::from_le_bytes(c.try_into().expect("eight bytes"));
-        h = (h.rotate_left(5) ^ w).wrapping_mul(0x51_7cc1_b727_220a_95);
+    let (chunks, rest) = b.as_chunks::<8>();
+    for c in chunks {
+        h = (h.rotate_left(5) ^ u64::from_le_bytes(*c)).wrapping_mul(0x517c_c1b7_2722_0a95);
     }
-    for &x in chunks.remainder() {
-        h = (h.rotate_left(5) ^ u64::from(x)).wrapping_mul(0x51_7cc1_b727_220a_95);
+    for &x in rest {
+        h = (h.rotate_left(5) ^ u64::from(x)).wrapping_mul(0x517c_c1b7_2722_0a95);
     }
     h ^ (h >> 29)
 }
@@ -255,8 +254,7 @@ impl Meta {
     /// with its own cells. `tiered`: the trace runs the optimizing tier's
     /// code and moves no further.
     pub(crate) fn instantiate(&self, tiered: bool, calls_at: u32) -> CompiledTrace {
-        let arc =
-            |t: &[ExitTag]| -> TArc<[ExitTag]> { t.iter().copied().collect::<Vec<_>>().into() };
+        let arc = |t: &[ExitTag]| -> TArc<[ExitTag]> { TArc::from(t) };
         let per_exit_tags: Vec<(u32, TArc<[ExitTag]>)> = self
             .per_exit_tags
             .iter()
@@ -269,7 +267,7 @@ impl Meta {
                 cont_pc: *cont_pc,
                 head_resume_pc: *head_resume_pc,
                 exit_tags: arc(tags),
-                chain: chain.iter().copied().collect::<Vec<_>>().into(),
+                chain: TArc::from(&chain[..]),
                 side_trace_ptr: Box::new(TCellPtr::null()),
             })
             .collect();
@@ -294,7 +292,7 @@ impl Meta {
             window_size: self.window_size,
             exit_tags: arc(&self.exit_tags),
             global_tag_res_kind: self.global_tag_res_kind,
-            entry_tags: self.entry_tags.iter().copied().collect::<Vec<_>>().into(),
+            entry_tags: TArc::from(&self.entry_tags[..]),
             tags_side_trace_ptrs: (0..per_exit_tags.len())
                 .map(|_| Box::new(TCellPtr::null()))
                 .collect::<Vec<_>>()

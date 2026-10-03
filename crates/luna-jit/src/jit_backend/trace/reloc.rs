@@ -134,14 +134,11 @@ pub(crate) fn note_sites<M: Module>(module: &M, ctx: &cranelift_codegen::Context
             }
             let id = cranelift_module::DataId::from_u32(name.index);
             let decl = module.declarations().get_data_decl(id);
-            let Some(n) = decl
+            let n = decl
                 .name
                 .as_deref()
                 .and_then(|s| s.strip_prefix("__luna_reloc_"))
-                .and_then(|s| s.parse::<u32>().ok())
-            else {
-                return None;
-            };
+                .and_then(|s| s.parse::<u32>().ok())?;
             sites.push(Site {
                 at: r.offset,
                 n,
