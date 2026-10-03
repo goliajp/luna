@@ -164,7 +164,11 @@ impl Vm {
             5 => {
                 // 5.5 takes a `size_t`; one that does not fit a signed
                 // count is a basic step
-                let n = if v >= Lua55 { args[0].max(0) } else { i64::from(a) };
+                let n = if v >= Lua55 {
+                    args[0].max(0)
+                } else {
+                    i64::from(a)
+                };
                 i32::from(lib_gc::step(self, n))
             }
             GC_SETPAUSE => self.host_gc_set(Param::Pause, a),
@@ -172,7 +176,11 @@ impl Vm {
             GC_SETMAJORINC => self.host_gc_set(Param::MajorInc, a),
             GC_ISRUNNING => i32::from(!self.heap.gc_is_stopped() && !self.gc_finalizing),
             GC_GEN | GC_INC => {
-                let mode = if op == GC_GEN { "generational" } else { "incremental" };
+                let mode = if op == GC_GEN {
+                    "generational"
+                } else {
+                    "incremental"
+                };
                 if matches!(v, Lua54 | MacroLua) {
                     let vals = args.map(|x| x as i32);
                     lib_gc::set_mode_params(self, mode, &vals);
