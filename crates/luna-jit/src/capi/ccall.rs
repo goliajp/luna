@@ -189,7 +189,25 @@ pub(super) fn pop_call(l: *mut LuaState, co: Gc<Coro>, token: usize) {
     let (base, outer) = (c.base, c.outer_base);
     s.calls.truncate(token);
     s.base = outer;
+    s.tbc.retain(|&i| i < base);
     cstack(co).truncate(base);
+}
+
+/// Close the to-be-closed slots of call `token`'s frame as it leaves,
+/// passing the error it leaves with (`None`: it returns); an error a
+/// `__close` raises replaces that.
+fn close_frame(
+    vm: &mut Vm,
+    l: *mut LuaState,
+    token: usize,
+    err: Option<Value>,
+) -> Result<(), LuaError> {
+    let base = st(l).calls[token].base;
+    if !st(l).tbc.last().is_some_and(|&i| i >= base) {
+        return Ok(());
+    }
+    let mut api = Api { vm, l };
+    super::tbc::close_with(&mut api, base, err)
 }
 
 /// The C function of call `token` came back from C with `status`: finish
@@ -232,12 +250,16 @@ fn leave(
             return Err(LuaError(s));
         }
         let results: Vec<Value> = cstack(co)[top - n..].to_vec();
+        let closed = close_frame(vm, l, token, None);
         pop_call(l, co, token);
         let _ = nresults;
+        closed?;
         return Ok(vm.nat_return(fs, &results));
     }
     let err = take_error(l);
+    let closed = close_frame(vm, l, token, Some(err));
     pop_call(l, co, token);
+    closed?;
     Err(LuaError(err))
 }
 
