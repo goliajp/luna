@@ -77,19 +77,42 @@ end
     }
 }
 
-/// Addresses (`table: 0x…`) differ between two Vms.
+/// Addresses (`table: 0x…`, on Windows 16 upper-case hex digits) differ
+/// between two Vms.
 fn mask_addresses(s: &str) -> String {
+    let b = s.as_bytes();
     let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(i) = rest.find("0x") {
-        out.push_str(&rest[..i]);
-        let hex = rest[i + 2..]
-            .find(|c: char| !c.is_ascii_hexdigit())
-            .unwrap_or(rest.len() - i - 2);
-        out.push_str("ADDR");
-        rest = &rest[i + 2 + hex..];
+    let mut i = 0;
+    while i < b.len() {
+        let hex_run = |from: usize| {
+            b[from..]
+                .iter()
+                .take_while(|c| c.is_ascii_hexdigit())
+                .count()
+        };
+        let n = if b[i..].starts_with(b"0x") {
+            2 + hex_run(i + 2)
+        } else {
+            0
+        };
+        let windows = (i == 0 || !b[i - 1].is_ascii_alphanumeric())
+            && b[i..]
+                .iter()
+                .take_while(|c| {
+                    c.is_ascii_digit() || c.is_ascii_uppercase() && c.is_ascii_hexdigit()
+                })
+                .count()
+                == 16
+            && b.get(i + 16).is_none_or(|c| !c.is_ascii_alphanumeric());
+        if n > 2 || windows {
+            out.push_str("ADDR");
+            i += if windows { 16 } else { n };
+        } else {
+            let ch = s[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
     }
-    out.push_str(rest);
     out
 }
 
