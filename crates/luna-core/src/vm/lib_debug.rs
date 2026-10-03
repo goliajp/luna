@@ -18,10 +18,13 @@ mod locals;
 mod traceback;
 mod upvalues;
 use hooks::{d_gethook, d_sethook};
+pub(crate) use info::activelines;
 use info::d_getinfo;
+pub(crate) use locals::param_name;
 use locals::{d_getlocal, d_setlocal};
 use traceback::d_traceback;
 use upvalues::{d_getupvalue, d_setupvalue, d_upvalueid, d_upvaluejoin};
+pub(crate) use upvalues::{upvalue_name, visible_upvalue_index};
 
 pub(crate) fn open_debug(vm: &mut Vm) {
     let v = vm.version();

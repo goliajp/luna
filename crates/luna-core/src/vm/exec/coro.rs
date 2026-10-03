@@ -11,7 +11,17 @@ impl Vm {
         // (PUC `lua_newthread`: the new state copies `g->mainthread`'s
         // `l_gt`). `Vm.globals` always reflects the live thread, so reading
         // it here picks the creator regardless of which coro is running.
-        self.heap.new_coro(body, self.globals)
+        let co = self.heap.new_coro(body, self.globals);
+        // a new thread inherits the creator's C hook (PUC `lua_newthread`); a
+        // Lua hook stays with its thread, as PUC's hook table keeps it
+        if matches!(self.hook.func, Some(Value::LightUserdata(_))) {
+            let mut h = self.hook;
+            h.rust_func = None;
+            h.count_left = h.count_base;
+            // SAFETY: `co` was just allocated and nothing else refers to it
+            unsafe { co.as_mut() }.hook = h;
+        }
+        co
     }
 
     /// Is `t` the thread whose context is currently live in the VM?
