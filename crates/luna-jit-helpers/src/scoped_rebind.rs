@@ -48,14 +48,10 @@ use luna_core::vm::Vm;
 use super::{JIT_CL, JIT_VM};
 
 /// Internal restorer used by [`super::enter_jit`]. Writes the captured
-/// previous slot values back into the TLS cells.
-///
-/// # Safety
-/// Only [`JitVmGuard::drop`] calls it, once per guard, with the slot
-/// values that guard's [`super::enter_jit`] replaced; the guards drop in
-/// the reverse order of their `enter_jit` calls. The body itself is safe
-/// code: the `unsafe fn` type is what `JitVmRebindRestore` stores.
-pub(super) unsafe fn restore_tls(prev_vm: *mut Vm, prev_cl: *const LuaClosure) {
+/// previous slot values back into the TLS cells. [`JitVmGuard::drop`]
+/// calls it once per guard, with the slot values that guard's
+/// [`super::enter_jit`] replaced.
+fn restore_tls(prev_vm: *mut Vm, prev_cl: *const LuaClosure) {
     JIT_VM.with(|c| c.set(prev_vm));
     JIT_CL.with(|c| c.set(prev_cl));
 }
@@ -66,15 +62,17 @@ pub(super) unsafe fn restore_tls(prev_vm: *mut Vm, prev_cl: *const LuaClosure) {
 /// 2. Installs the dispatcher's new `(vm, cl)` pair.
 /// 3. Returns a [`JitVmGuard`] whose drop calls [`restore_tls`] with
 ///    the snapshot.
+///
+/// `vm` is only stored, never dereferenced here.
 #[inline]
-pub(super) fn scoped_jit_vm_rebind(vm: &mut Vm, cl: Option<Gc<LuaClosure>>) -> JitVmGuard {
+pub(super) fn scoped_jit_vm_rebind(vm: *mut Vm, cl: Option<Gc<LuaClosure>>) -> JitVmGuard {
     // 1. Snapshot the previous slots BEFORE the install (otherwise
     //    we'd capture our own newly-installed values).
     let prev_vm = JIT_VM.with(|c| c.get());
     let prev_cl = JIT_CL.with(|c| c.get());
 
     // 2. Install the new values.
-    JIT_VM.with(|c| c.set(vm as *mut Vm));
+    JIT_VM.with(|c| c.set(vm));
     let cl_ptr = cl
         .map(|c| c.as_ptr() as *const LuaClosure)
         .unwrap_or(std::ptr::null());

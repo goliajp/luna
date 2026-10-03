@@ -77,6 +77,18 @@ pub fn enter_jit(
     scoped_rebind::scoped_jit_vm_rebind(vm, cl)
 }
 
+/// [`enter_jit`] for a backend's `IntChunkCompiler::enter`, which gets
+/// the Vm as a pointer. The pointer is only stored; the helpers that
+/// read it rely on the caller that then runs compiled code having made
+/// it from a live `&mut Vm`.
+#[doc(hidden)]
+pub fn enter_jit_ptr(
+    vm: *mut luna_core::vm::Vm,
+    cl: Option<luna_core::runtime::Gc<luna_core::runtime::LuaClosure>>,
+) -> JitVmGuard {
+    scoped_rebind::scoped_jit_vm_rebind(vm, cl)
+}
+
 /// Test-only inspector of the active `(JIT_VM, JIT_CL)` TLS
 /// pointers. Used by the scoped-rebind regression test
 /// (`luna-jit/tests/it/jit_vm_scoped_rebind.rs`) to assert RAII install +
