@@ -343,7 +343,8 @@ fn item54(
     Ok(p + 1)
 }
 
-/// `lua_topointer`: collectable objects by address, everything else NULL.
+/// `lua_topointer`: collectable objects by address, a light userdata's own
+/// pointer, everything else NULL.
 /// The addresses match what `tostring` prints.
 fn topointer(v: Value) -> Option<usize> {
     match v {
@@ -353,7 +354,7 @@ fn topointer(v: Value) -> Option<usize> {
         Value::Native(n) => Some(n.as_ptr() as usize),
         Value::Coro(c) => Some(c.as_ptr() as usize),
         Value::Userdata(u) => Some(u.as_ptr() as usize),
-        Value::LightUserdata(p) => Some(p as usize),
+        Value::LightUserdata(p) => (!p.is_null()).then_some(p as usize),
         Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_) => None,
     }
 }
