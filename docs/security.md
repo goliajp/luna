@@ -110,7 +110,9 @@ let r: i64 = lua.eval("return 1 + 2").unwrap();
 ```
 
 The instruction budget is consumed per dispatch turn and resets on
-each new `call_value` / `eval` entry; the memory cap is fire-once
+each new `call_value` / `eval` entry. Compiled code does not consume
+it: while a budget is armed no trace is entered, and the method JIT
+has to be turned off with `Vm::set_jit_enabled(false)`; the memory cap is fire-once
 and disarms itself after raising, so re-arm before reusing the Vm
 across requests. See `Vm::set_instr_budget` and `Vm::set_memory_cap`
 rustdoc for the precise semantics.
