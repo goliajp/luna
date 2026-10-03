@@ -23,6 +23,22 @@ optimization.
 
 ### Breaking
 
+- `Vm::take_error_traceback` returns PUC's text as a whole: it starts with
+  the `stack traceback:` line, and in 5.1 and 5.2 leaves out the middle of
+  a deep stack where `luaL_traceback` (5.1: `debug.traceback`), run by a
+  message handler at the error, leaves it out. It used to start with the
+  first level's newline and elide as if the stack had no handler on top.
+  The level lines themselves are unchanged and already listed C functions
+  (`[C]: in function 'error'`, `[C]: in function 'string.gsub'`); the
+  embedding guide now describes the format per dialect.
+  `Coro::error_traceback` also starts with `stack traceback:`.
+
+- `Vm::call_value_with_handler` is no longer a level of the stack: a
+  traceback taken in its handler ends with the function the host called,
+  as one taken under PUC's `lua_pcall` does, instead of with a
+  `[C]: in ?` line. The `luna` command line keeps that line, now from a C
+  level of its own that stands for `lua.c`'s `pmain`.
+
 - `luna_core::jit::trace::ExitTag` has a `Bool` variant and `TraceRecord`
   the `index_slots` and `index_key` fields; the frame-materialise helper
   `luna_jit_trace_materialize_frames` takes a third argument, the
@@ -233,6 +249,11 @@ optimization.
   about 20 fewer machine instructions each.
 
 ### Fixed
+
+- An error raised by a native the host calls directly (`vm.call_value`
+  on `error` or another library function, with no Lua function between)
+  left no traceback for `take_error_traceback`; it now has one, whose only
+  level is that native.
 
 - A trace whose entry reads a register holding a boolean could never be
   entered, yet it was compiled and kept its loop or function head, so no
