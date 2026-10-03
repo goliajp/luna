@@ -92,6 +92,25 @@ impl RegFile<'_> {
         rhs: IntValue<'static>,
     ) -> Option<IntValue<'static>> {
         let builder = self.builder;
+        // `srem` traps on `mininteger % -1`; any `x % -1` is 0, as is
+        // `x % 1`. The caller has ruled out a zero divisor
+        let is_minus_one = builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                rhs,
+                self.i64_type.const_all_ones(),
+                "mod_m1",
+            )
+            .ok()?;
+        let rhs = builder
+            .build_select(
+                is_minus_one,
+                self.i64_type.const_int(1, false),
+                rhs,
+                "mod_div",
+            )
+            .ok()?
+            .into_int_value();
         let raw = builder.build_int_signed_rem(lhs, rhs, "mod_srem").ok()?;
         let zero_v = self.i64_type.const_zero();
         let nonzero = builder
