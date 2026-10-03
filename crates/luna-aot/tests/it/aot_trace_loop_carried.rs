@@ -60,7 +60,7 @@ fn aot_trace_keeps_tables_carried_past_their_iteration() {
     let src_path = td.path().join("loop_carried.lua");
     fs::write(&src_path, SCRIPT).expect("write source");
     let out_path = td.path().join("loop_carried_aot");
-    compile_and_link(&src_path, &out_path, None, LuaVersion::Lua54)
+    compile_and_link(&src_path, &out_path, None, LuaVersion::Lua55)
         .unwrap_or_else(|e| panic!("compile_and_link failed: {e}"));
     let output = Command::new(&out_path)
         .env("LUNA_AOT_PROBE", "1")
