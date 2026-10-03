@@ -103,6 +103,11 @@ pub(super) fn f_seek(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
 /// `fseek` + `ftell`: flush pending output, give back read-ahead, move.
 fn seek_stream(u: Gc<Userdata>, op: usize, offset: i64) -> std::io::Result<u64> {
     drain_write_buf(u)?;
+    if matches!(u.file(), FileHandle::Stdout) {
+        // liolib always calls `fseek`, which writes out what stdout
+        // buffers, even where the move then fails (a pipe)
+        crate::stdio::flush_stdout()?;
+    }
     let ahead = read_ahead(u);
     // SAFETY: `u` is a file handle the caller holds; `drain_write_buf` and `read_ahead` have returned, and `m` is the only reference into it until return
     let m = unsafe { u.as_mut() };
@@ -151,6 +156,9 @@ pub(super) fn f_setvbuf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let mode = [BUF_NO, BUF_FULL, BUF_LINE][op];
     // SAFETY: `u` came from `check_open` on a native argument, so the stack keeps it; the borrow covers one field store
     unsafe { u.as_mut() }.buf_mode = mode;
+    if matches!(u.file(), FileHandle::Stdout) {
+        crate::stdio::setvbuf_stdout(mode);
+    }
     if mode == BUF_NO
         && let Err(e) = drain_write_buf(u)
     {

@@ -185,7 +185,9 @@ fn print_version(v: LuaVersion) {
     if v == LuaVersion::Lua51 {
         eprintln!("{line}");
     } else {
-        println!("{line}");
+        // lua_writestring + lua_writeline, which flushes
+        luna_core::stdio::write_stdout(format!("{line}\n").as_bytes());
+        let _ = luna_core::stdio::flush_stdout();
     }
 }
 
@@ -306,6 +308,9 @@ fn pmain(interp: &mut Interp, argv: &[String], args: &LuaArgs) -> bool {
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
     let (opts, argv) = take_luna_opts(argv);
+    // stdout is buffered as lua.c's C stdio buffers it, so output and the
+    // messages on stderr interleave as they do with PUC
+    luna_core::stdio::use_c_stdout();
     let progname = match argv.first() {
         Some(p) if !p.is_empty() => p.clone(),
         _ => "lua".to_string(),
@@ -331,5 +336,7 @@ fn main() {
     // lua.c closes the state before it exits, which finalizes open files
     // and so writes out what they still buffer
     drop(interp);
+    // C's exit flushes stdout
+    let _ = luna_core::stdio::flush_stdout();
     std::process::exit(if ok { 0 } else { 1 });
 }

@@ -90,5 +90,6 @@ pub mod jit;
 pub mod numeric;
 pub mod pattern;
 pub mod runtime;
+pub mod stdio;
 pub mod version;
 pub mod vm;
