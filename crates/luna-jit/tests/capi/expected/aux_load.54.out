@@ -11,11 +11,11 @@ loadstring hash: status=3: top=2 [[string "#!shebang..."]:1: unexpected symbol n
 loadbufferx t: status=0 call=0: top=2 2
 loadbufferx b: status=3: top=2 [attempt to load a text chunk (mode is 'b')]
 loadbufferx bt: status=0 call=0: top=2 2
-loadbuffer binary: status=0 call=0: top=3
-loadbufferx binary as t: status=0 call=0: top=3
-loadfile binary: status=0 call=0: top=3
-loadfilex binary as t: status=0 call=0: top=3
-loadfile shebang binary: status=0 call=0: top=3
+loadbuffer binary: status=0 call=0: top=4 [binary]
+loadbufferx binary as t: status=3: top=4 [attempt to load a binary chunk (mode is 't')]
+loadfile binary: status=0 call=0: top=4 [binary]
+loadfilex binary as t: status=3: top=4 [attempt to load a binary chunk (mode is 't')]
+loadfile shebang binary: status=0 call=0: top=4 [binary]
 loadfile: status=0 call=0: top=2 [file]
 loadfile error line: status=3: top=2 [aux_load_tmp.lua:2: ')' expected near <eof>]
 loadfile shebang: status=0 call=2: top=2 [aux_load_tmp.lua:2: line]
