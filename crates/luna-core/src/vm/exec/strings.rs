@@ -1,6 +1,7 @@
 //! Concatenation and `tostring` conversion.
 
 use super::*;
+use crate::vm::cfmt::c_pointer;
 
 impl Vm {
     /// Fast string concatenation of an adjacent pair, or `None` when a
@@ -162,16 +163,22 @@ impl Vm {
                 numeric::num_to_string_for(Num::Float(f), self.float_fmt()).into_bytes()
             }
             Value::Str(s) => s.as_bytes().to_vec(),
-            Value::Table(t) => format!("table: {:p}", t.as_ptr()).into_bytes(),
-            Value::Closure(c) => format!("function: {:p}", c.as_ptr()).into_bytes(),
-            Value::Native(n) => format!("function: {:p}", n.as_ptr()).into_bytes(),
-            Value::Coro(co) => format!("thread: {:p}", co.as_ptr()).into_bytes(),
+            Value::Table(t) => format!("table: {}", c_pointer(t.as_ptr() as usize)).into_bytes(),
+            Value::Closure(c) => {
+                format!("function: {}", c_pointer(c.as_ptr() as usize)).into_bytes()
+            }
+            Value::Native(n) => {
+                format!("function: {}", c_pointer(n.as_ptr() as usize)).into_bytes()
+            }
+            Value::Coro(co) => format!("thread: {}", c_pointer(co.as_ptr() as usize)).into_bytes(),
             // PUC names file handles `file (0x…)`; a bare userdata is
             // `userdata: 0x…`. The io library overrides this via __tostring.
-            Value::Userdata(u) => format!("userdata: {:p}", u.as_ptr()).into_bytes(),
+            Value::Userdata(u) => {
+                format!("userdata: {}", c_pointer(u.as_ptr() as usize)).into_bytes()
+            }
             // PUC `lua_topointer`/tostring on light udata: "userdata: 0x…"
             // (the "light" qualifier only appears in `luaL_typeerror`).
-            Value::LightUserdata(p) => format!("userdata: {p:p}").into_bytes(),
+            Value::LightUserdata(p) => format!("userdata: {}", c_pointer(p as usize)).into_bytes(),
         }
     }
 }
