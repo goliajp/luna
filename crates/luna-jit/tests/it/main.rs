@@ -95,6 +95,7 @@ mod trace_loop_coverage;
 mod trace_math_minmax_fold;
 mod trace_move_alias_escape;
 mod trace_overflow_head_given_up;
+mod trace_readonly_tables;
 mod trace_recorder_clean_close;
 mod trace_recording_smoke;
 mod trace_reentry_kinds;

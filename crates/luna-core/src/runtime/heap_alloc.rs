@@ -171,7 +171,7 @@ impl Heap {
                 let h = g.as_ptr() as *mut GcHeader;
                 self.all = (*h).next;
                 (*h).next = self.fixed;
-                (*h).flags &= !COLOR_BITS;
+                (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
                 self.fixed = h;
             }
         }
@@ -274,7 +274,8 @@ impl Heap {
                 unsafe {
                     let f = (*(p as *mut GcHeader)).flags;
                     if is_white(f) && (f & self.current_white) == 0 {
-                        (*(p as *mut GcHeader)).flags = (f & !WHITE_BITS) | self.current_white;
+                        (*(p as *mut GcHeader)).flags = (*(p as *mut GcHeader))
+                            .with_slow((f & !WHITE_BITS) | self.current_white);
                     }
                 }
             }

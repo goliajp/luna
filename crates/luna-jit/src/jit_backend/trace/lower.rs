@@ -55,6 +55,7 @@ mod loop_tail;
 mod ops;
 mod plan;
 mod prologue;
+mod readonly;
 mod tail;
 use alt::*;
 use begin::*;
@@ -70,6 +71,7 @@ use loop_tail::*;
 use ops::*;
 use plan::*;
 use prologue::*;
+use readonly::*;
 use tail::*;
 
 /// The trace function under construction and everything the emit pass
@@ -84,6 +86,9 @@ struct Lower<E: Emit> {
     tforcall_tag_var: Variable,
     tforcall_val_tag_var: Variable,
     precheck: Option<Block>,
+    /// The block before the loop head that tests the tables
+    /// `ro_invariant` names (see `readonly`).
+    ro_precheck: Option<Block>,
     body_loop: Block,
     head_kinds: Vec<RegKind>,
     defined_aot_data: std::collections::HashSet<DataId>,
@@ -123,6 +128,12 @@ struct Lower<E: Emit> {
     /// Blocks the other way of a comparison jumps to, by the recorded op
     /// it rejoins at, with the registers the skipped ops write.
     alt_joins: std::collections::HashMap<usize, (Block, Vec<u32>)>,
+    /// The head-frame registers whose table is tested before the loop head
+    /// instead of at each store (see `readonly`).
+    ro_invariant: Vec<bool>,
+    /// The table values tested since the last op that may have run host
+    /// code.
+    ro_checked: Vec<Value>,
     /// The iteration count the back edge keeps for tiering up, and the
     /// count to leave at.
     tier_count: Option<(Box<TCellU32>, u32)>,
@@ -308,6 +319,7 @@ fn lower_clif<M: Module>(
             ctx.set_disasm(true);
         }
         module.define_function(fn_id, &mut ctx).ok()?;
+        super::code_dump::note_size(&ctx);
         reloc::note_sites(&*module, &ctx);
         if want_asm_dump
             && let Some(cc) = ctx.compiled_code()
@@ -364,6 +376,7 @@ fn emit_trace<E: Emit>(
     }
     let lw = &mut lower;
     emit_fold_precheck(lw, pl);
+    emit_readonly_precheck(lw, pl);
     emit_body(lw, pl)?;
     let (downrec_link_for_compiled, downrec_multi_way_count_for_compiled) = emit_tail(lw, pl)?;
     let Lower {

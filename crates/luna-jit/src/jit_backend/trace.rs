@@ -55,6 +55,7 @@ pub(crate) use emit::{ClifEmit, Emit, Ins, RelocKind, reloc_symbol};
 pub(crate) use lir::CodeArena;
 mod aot_data;
 mod block_params;
+mod code_dump;
 mod compile;
 mod tiers;
 pub(crate) use share::adopt as adopt_traces;

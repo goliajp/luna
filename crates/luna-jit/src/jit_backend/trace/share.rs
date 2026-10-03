@@ -180,7 +180,9 @@ fn install(
     let code: Option<&Code> = optimized.or(img.code.as_ref().map(|(_, c)| c));
     if let Some(code) = code {
         let vals: Vec<i64> = relocs.iter().map(|r| r.1).collect();
-        let entry = cs.baseline_code.place(&code.relocated(&vals)).ok()?;
+        let bytes = code.relocated(&vals);
+        let entry = cs.baseline_code.place(&bytes).ok()?;
+        super::code_dump::dump_len("image", ct.head_pc, entry, bytes.len());
         // SAFETY: the code is a copy of a trace compiled for code of this
         // content, with the `TraceFn` ABI, and this Vm's addresses written
         // where it held the compiling Vm's; it stays mapped until this Vm
@@ -264,7 +266,9 @@ pub(crate) fn tier_up(
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     if let Some(code) = src.image.as_ref().and_then(|i| i.optimized.get()) {
         let vals: Vec<i64> = src.relocs.iter().map(|r| r.1).collect();
-        let entry = cs.baseline_code.place(&code.relocated(&vals)).ok()?;
+        let bytes = code.relocated(&vals);
+        let entry = cs.baseline_code.place(&bytes).ok()?;
+        super::code_dump::dump_len("tier-up-image", ct.head_pc, entry, bytes.len());
         // SAFETY: as in `install`: the optimizing tier's code for this
         // trace, with this Vm's addresses written in
         return Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) });
@@ -275,6 +279,7 @@ pub(crate) fn tier_up(
     module.finalize_definitions().ok()?;
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     let ptr = module.get_finalized_function(fn_id);
+    super::code_dump::dump("tier-up", ct.head_pc, ptr);
     let sites = reloc::take_sites();
     cs.trace_handles.push(TraceHandle {
         _module: module.publish(),

@@ -156,6 +156,7 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
             continue;
         }
         emit_op(lw, pl, &oc)?;
+        readonly_after_op(lw, oc.op);
     }
     sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
     alt_join(lw, effective_end);

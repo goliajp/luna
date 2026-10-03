@@ -48,6 +48,7 @@ mod puc_53_undump;
 mod puc_54_undump;
 mod puc_55_undump;
 mod puc_dump;
+mod readonly_tables;
 mod rust_coroutine;
 mod rust_debug_hook;
 mod sandbox_builder;
