@@ -19,9 +19,8 @@ setmetatable light: 1 top=1
 light	light:x
 getmetatable light: 1 pushed=1
 getmetatable cleared: 0 pushed=0
-lua error: s:[string "co1 = coroutine.create(print)"]:1: bad argument #1 to 'create' (Lua function expected)
 setmetatable thread: 1 top=1
-lua error: s:[string "print('thread', thread.x, coroutine.create(..."]:1: bad argument #1 to 'create' (Lua function expected)
+thread	thread:x	thread:y
 getmetatable thread: 1 pushed=1
 getmetatable cleared: 0 pushed=0
 setmetatable fn: 1 top=1
@@ -49,10 +48,9 @@ setfenv C function: 1 top=1
 getfenv C function: table globals=0 mark=s:cf
 getfenv userdata made in it: table globals=0 mark=s:cf
 getfenv library function: table globals=1 mark=nil
-lua error: s:[string "co2 = coroutine.create(print)"]:1: bad argument #1 to 'create' (Lua function expected)
-getfenv thread: nil globals=0 mark=
-setfenv thread: 0 top=1
-getfenv thread: nil globals=0 mark=
+getfenv thread: table globals=1 mark=nil
+setfenv thread: 1 top=1
+getfenv thread: table globals=0 mark=s:th
 getfenv userdata: table globals=1 mark=nil
 setfenv userdata: 1 top=1
 getfenv userdata: table globals=0 mark=s:ud
