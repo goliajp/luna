@@ -63,6 +63,10 @@ pub struct LuaState {
     pub(super) hook: CHook,
     /// C stack indices of its to-be-closed slots, ascending
     pub(super) tbc: Vec<usize>,
+    /// after a yield from Lua code that a resume from C reported: where
+    /// the yielded values start on the C stack, and the base to put back
+    /// when the thread is resumed
+    pub(super) parked: Option<(usize, usize)>,
 }
 
 /// PUC `LUA_EXTRASPACE`: raw memory just below the `lua_State` pointer,
@@ -112,6 +116,7 @@ fn new_thread_state(g: *mut Global, co: Gc<Coro>, extra: [u8; EXTRASPACE]) -> *m
             pending_yield: None,
             hook: CHook::default(),
             tbc: Vec::new(),
+            parked: None,
         },
     }));
     // SAFETY: `co` is a live thread the caller holds and the Vm is not
@@ -123,8 +128,9 @@ fn new_thread_state(g: *mut Global, co: Gc<Coro>, extra: [u8; EXTRASPACE]) -> *m
 
 /// The `lua_State` of thread `co` of the state `vm` belongs to, made on
 /// first use with a copy of the main thread's extra space, as
-/// `lua_newthread` makes it.
-pub(super) fn state_of(vm: &Vm, co: Gc<Coro>) -> *mut LuaState {
+/// `lua_newthread` makes it. A coroutine that has not started has its body
+/// on its stack, as `coroutine.create` leaves it in PUC.
+pub(super) fn state_of(vm: &mut Vm, co: Gc<Coro>) -> *mut LuaState {
     if let Some(l) = existing(co) {
         return l;
     }
@@ -135,7 +141,14 @@ pub(super) fn state_of(vm: &Vm, co: Gc<Coro>) -> *mut LuaState {
         let b = main.cast::<u8>().sub(EXTRASPACE).cast::<ThreadBox>();
         ((*main).g, (*b).extra)
     };
-    new_thread_state(g, co, extra)
+    let l = new_thread_state(g, co, extra);
+    if !co.started && !co.body.is_nil() {
+        // SAFETY: `co` is held by the caller and has not started, so no
+        // context is loaded from it; the borrow covers one push
+        unsafe { co.as_mut() }.host_stack.push(co.body);
+        vm.heap.barrier_back(co);
+    }
+    l
 }
 
 // SAFETY: the declarations match the definitions in `csrc/shim_core.c`;
