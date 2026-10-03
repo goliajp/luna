@@ -14,16 +14,14 @@ macro_rules! fast_loop_arms {
             () => {{
                 let ra = $regs.wrapping_add($inst.a() as usize);
                 let back = $npc.wrapping_sub($inst.bx());
-                let mut slow = false;
-                // SAFETY: the loop's four registers are in the frame
-                // (the verifier checks the run)
-                let (t0, t1, t2) =
-                    unsafe { (raw_tag(ra), raw_tag(ra.add(1)), raw_tag(ra.add(2))) };
-                if t0 == tag::INT && t1 == tag::INT && t2 == tag::INT {
-                    // SAFETY: three integers; the index and the count
-                    // or limit keep their tags, the control variable
-                    // is the body's to change
-                    unsafe {
+                // SAFETY: the loop's four registers are in the frame (the
+                // verifier checks the run); payloads are read as the type
+                // their tags name, and the index and the count or limit
+                // keep their tags (the control variable is the body's to
+                // change)
+                let fast = unsafe {
+                    let (t0, t1, t2) = (raw_tag(ra), raw_tag(ra.add(1)), raw_tag(ra.add(2)));
+                    if t0 == tag::INT && t1 == tag::INT && t2 == tag::INT {
                         let (cur, x, st) =
                             (raw_int(ra), raw_int(ra.add(1)), raw_int(ra.add(2)));
                         if !$pre53 {
@@ -42,12 +40,10 @@ macro_rules! fast_loop_arms {
                                 $npc = back;
                             }
                         }
-                    }
-                } else {
-                    cold_path();
-                    if t0 == tag::FLOAT && t1 == tag::FLOAT && t2 == tag::FLOAT {
-                        // SAFETY: three floats
-                        unsafe {
+                        true
+                    } else {
+                        cold_path();
+                        if t0 == tag::FLOAT && t1 == tag::FLOAT && t2 == tag::FLOAT {
                             let (cur, lim, st) =
                                 (raw_flt(ra), raw_flt(ra.add(1)), raw_flt(ra.add(2)));
                             let next = cur + st;
@@ -56,16 +52,21 @@ macro_rules! fast_loop_arms {
                                 ra.add(3).write(Value::Float(next));
                                 $npc = back;
                             }
+                            true
+                        } else {
+                            false
                         }
-                    } else {
-                        // `for_loop` is the reference: 5.1–5.3 step and
-                        // compare with the limit, 5.4+ count down;
-                        // anything else it raises on
-                        save!();
-                        $vm.for_loop($inst, base!())?;
-                        $npc = $vm.top_frame().pc;
-                        slow = true;
                     }
+                };
+                let mut slow = false;
+                if !fast {
+                    // `for_loop` is the reference: 5.1–5.3 step and compare
+                    // with the limit, 5.4+ count down; anything else it
+                    // raises on
+                    save!();
+                    $vm.for_loop($inst, base!())?;
+                    $npc = $vm.top_frame().pc;
+                    slow = true;
                 }
                 // The trace JIT counts the back-edges taken and starts
                 // recording at the body once the count reaches the
@@ -84,8 +85,7 @@ macro_rules! fast_loop_arms {
                     }
                 }
                 if slow {
-                    // SAFETY: see `next!`
-                    unsafe { (*$fr).pc = $npc };
+                    store_pc!();
                     return Ok(FastExit::Reload);
                 }
                 next_jumped!()
@@ -119,8 +119,7 @@ macro_rules! fast_loop_arms {
                     // a recording that just started must see the next
                     // instruction from the loop head
                     if $trace_on && $vm.jit.active_trace.is_some() {
-                        // SAFETY: see `next!`
-                        unsafe { (*$fr).pc = $npc };
+                        store_pc!();
                         return Ok(FastExit::Reload);
                     }
                 }
