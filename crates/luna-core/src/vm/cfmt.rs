@@ -337,5 +337,34 @@ fn hex(x: f64, prec: Option<usize>, hash: bool, upper: bool) -> (&'static [u8], 
 
 /// `%p`: the libc's pointer rendering.
 pub(crate) fn pointer(out: &mut Vec<u8>, sp: &Spec, p: usize) {
-    pad(out, sp, false, b"", format!("{p:#x}").as_bytes());
+    pad(out, sp, false, b"", c_pointer(p).as_bytes());
+}
+
+/// `p` as the target's C library writes it for `printf("%p")`, where every
+/// pointer text of PUC's comes from (`tostring`, `string.format("%p")`,
+/// `file (%p)`): glibc writes NULL as `(nil)`, musl as `0`, MSVC's runtime
+/// writes every pointer as fixed-width upper-case hex without `0x`, and the
+/// BSD libcs (macOS) write `0x0`.
+pub(crate) fn c_pointer(p: usize) -> String {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    let s = if p == 0 {
+        "(nil)".to_string()
+    } else {
+        format!("{p:#x}")
+    };
+    #[cfg(target_env = "musl")]
+    let s = if p == 0 {
+        "0".to_string()
+    } else {
+        format!("{p:#x}")
+    };
+    #[cfg(windows)]
+    let s = format!("{p:0w$X}", w = 2 * std::mem::size_of::<usize>());
+    #[cfg(not(any(
+        all(target_os = "linux", target_env = "gnu"),
+        target_env = "musl",
+        windows
+    )))]
+    let s = format!("{p:#x}");
+    s
 }

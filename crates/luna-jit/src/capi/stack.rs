@@ -300,7 +300,7 @@ pub unsafe extern "C" fn lua_isfunction(L: *mut LuaState, idx: c_int) -> c_int {
 pub unsafe extern "C" fn lua_gettop(L: *mut LuaState) -> c_int {
     // SAFETY: `L` is an open state no other call is using (# Safety)
     let vm = unsafe { vm_mut(L) };
-    vm.capi_stack.len() as c_int
+    (vm.capi_stack.len() - vm.capi_base) as c_int
 }
 
 /// PUC `lua_settop` — set the stack height to `idx`, padding with `nil`
@@ -315,10 +315,11 @@ pub unsafe extern "C" fn lua_gettop(L: *mut LuaState) -> c_int {
 pub unsafe extern "C" fn lua_settop(L: *mut LuaState, idx: c_int) {
     // SAFETY: `L` is an open state no other call is using (# Safety)
     let vm = unsafe { vm_mut(L) };
+    let base = vm.capi_base;
     let new_len = if idx >= 0 {
-        idx as usize
+        base + idx as usize
     } else {
-        (vm.capi_stack.len() as c_int + idx + 1).max(0) as usize
+        base + ((vm.capi_stack.len() - base) as c_int + idx + 1).max(0) as usize
     };
     if new_len < vm.capi_stack.len() {
         vm.capi_stack.truncate(new_len);

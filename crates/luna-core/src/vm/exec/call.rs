@@ -237,7 +237,7 @@ impl Vm {
                 return Err(self.rt_err("stack overflow"));
             }
             if func_slot + 256 > MAX_LUA_STACK + ERROR_STACK_EXTRA {
-                return Err(self.plain_err("error in error handling"));
+                return Err(LuaError(self.errerr()));
             }
         }
         let proto = cl.proto;

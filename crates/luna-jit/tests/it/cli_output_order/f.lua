@@ -1,0 +1,6 @@
+io.write(string.rep("w", 5000))
+io.stderr:write("|E|")
+io.write(string.rep("v", 9000))
+io.stderr:write("|F|")
+print(io.stdout:seek())
+error("end")

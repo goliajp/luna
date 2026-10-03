@@ -283,8 +283,11 @@ jobs:
   # helpers that can collect took it to 924; inlining calls into other
   # prototypes took it to 936, running AOT binaries of other dialects to
   # 938, sharing compiled code between Vms to 948, read-only tables (the
-  # table flag, its debug check, a test) to 952, and the trace
-  # machine-code dump to 953, the ceiling now.
+  # table flag, its debug check, a test) to 952, the trace
+  # machine-code dump to 953, and the C API's message handlers, read-only
+  # tables and per-dialect states with their tests, and a test of the
+  # host's `%p`, and C-style standard output writing descriptor 1, to
+  # 978, the ceiling now.
   # docs/unsafe-accounting.md has the count per crate and module
   # and why each kind of site exists. Each justified unsafe addition
   # needs an explicit ceiling bump to the new exact count. Never widen to
@@ -299,7 +302,7 @@ jobs:
         run: |
           count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
                   crates | wc -l | tr -d ' ')
-          ceiling=953
+          ceiling=978
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then

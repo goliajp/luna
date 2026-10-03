@@ -306,6 +306,61 @@ impl Vm {
         self.host_pcall(crate::vm::builtins::nat_host_xpcall_in_c, f, args, msgh)
     }
 
+    /// `f(args)` in protected mode with no message handler, made from inside
+    /// a C function of the host's: PUC `lua_pcall(L, n, r, 0)` inside a C
+    /// function, as lua.c's `l_print` calls `print` from `pmain`. That
+    /// function is one C level below `f`, as for
+    /// [`Vm::call_value_with_handler_in_c`].
+    #[doc(hidden)]
+    pub fn call_value_in_c(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
+        let level = self.native(crate::vm::builtins::nat_host_pcall_in_c);
+        let mut call_args = Vec::with_capacity(args.len() + 1);
+        call_args.push(f);
+        call_args.extend_from_slice(args);
+        let mut results = self.call_value(level, &call_args)?;
+        if results.first().is_some_and(|ok| ok.truthy()) {
+            results.remove(0);
+            Ok(results)
+        } else {
+            Err(LuaError(results.get(1).copied().unwrap_or(Value::Nil)))
+        }
+    }
+
+    /// `t[key]` with metamethods, as the Lua expression does (PUC
+    /// `lua_gettable`). For the C API.
+    #[doc(hidden)]
+    pub fn index_with_mm(&mut self, t: Value, key: Value) -> Result<Value, LuaError> {
+        self.index_value(t, key)
+    }
+
+    /// `t[key] = v` with metamethods, as the Lua assignment does (PUC
+    /// `lua_settable`). For the C API.
+    #[doc(hidden)]
+    pub fn set_index_with_mm(&mut self, t: Value, key: Value, v: Value) -> Result<(), LuaError> {
+        self.newindex_value(t, key, v)
+    }
+
+    /// [`Vm::call_value_with_handler`] that also says how it failed: `true`
+    /// when the handler itself failed and the error is "error in error
+    /// handling" (PUC's LUA_ERRERR), `false` for any other error
+    /// (LUA_ERRRUN). For the C API's `lua_pcall`.
+    #[doc(hidden)]
+    pub fn call_value_with_handler_status(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        msgh: Value,
+    ) -> Result<Vec<Value>, (LuaError, bool)> {
+        let before = self.errerr_raised;
+        self.call_value_with_handler(f, args, msgh).map_err(|e| {
+            // a handler may return the same text itself; only an error the
+            // vm turned into it during this call is LUA_ERRERR
+            let errerr = self.errerr_raised != before
+                && matches!(e.0, Value::Str(s) if s.as_bytes() == b"error in error handling");
+            (e, errerr)
+        })
+    }
+
     fn host_pcall(
         &mut self,
         level: crate::runtime::value::NativeFn,
@@ -391,7 +446,7 @@ impl Vm {
                 return Err(self.runerror("C stack overflow"));
             }
             if self.c_depth >= MAX_C_DEPTH / 10 * 11 {
-                return Err(self.plain_err("error in error handling"));
+                return Err(LuaError(self.errerr()));
             }
         }
         self.c_depth += 1;

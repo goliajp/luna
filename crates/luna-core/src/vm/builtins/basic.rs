@@ -23,8 +23,17 @@ pub(super) fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         None
     };
     let mut out = Vec::new();
+    // PUC writes each piece to stdout as soon as it is converted; with C
+    // stdio buffering a conversion that runs Lua code can write to stderr
+    // or change stdout's buffering in between, so the pieces before it go
+    // out first
+    let c_stdio = crate::stdio::c_mode();
     for i in 0..nargs {
         let v = vm.nat_arg(fs, nargs, i);
+        if c_stdio && !out.is_empty() && may_run_code(vm, v, global_tostring) {
+            write_stdout(&out);
+            out.clear();
+        }
         let piece = match global_tostring {
             // `lua_call` from C: not yieldable.
             Some(ts) => match vm.call_noyield(ts, &[v]) {
@@ -59,14 +68,32 @@ pub(super) fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         out.extend_from_slice(piece);
     }
     out.push(b'\n');
-    write_stdout(&out);
+    // 5.2 on end with `lua_writeline`, which flushes stdout
+    if c_stdio && vm.version() >= LuaVersion::Lua52 {
+        crate::stdio::write_line_flushed(&out);
+    } else {
+        write_stdout(&out);
+    }
     Ok(0)
+}
+
+/// Whether converting `v` for `print` can run Lua code: a `__tostring`, or
+/// a `tostring` global that is not the library's.
+fn may_run_code(vm: &Vm, v: Value, global_tostring: Option<Value>) -> bool {
+    let library_tostring = match global_tostring {
+        None => true,
+        Some(Value::Native(nc)) => {
+            std::ptr::fn_addr_eq(nc.f, nat_tostring as crate::runtime::value::NativeFn)
+        }
+        Some(_) => false,
+    };
+    !library_tostring || !vm.get_mm(v, crate::vm::exec::Mm::ToString).is_nil()
 }
 
 fn write_stdout(bytes: &[u8]) {
     // PUC's `lua_writestring` is an unchecked `fwrite`: a closed or full
     // stdout does not make `print` fail.
-    let _ = std::io::stdout().write_all(bytes);
+    crate::stdio::write_stdout(bytes);
 }
 
 pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

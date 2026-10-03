@@ -1,0 +1,5 @@
+io.stdout:setvbuf("no")
+print(1, setmetatable({}, {__tostring = function() io.stderr:write("E") return "x" end}), 2)
+io.stdout:setvbuf("full")
+print(3, setmetatable({}, {__tostring = function() io.stderr:write("F") io.stdout:setvbuf("no") return "y" end}), 4)
+error("h")
