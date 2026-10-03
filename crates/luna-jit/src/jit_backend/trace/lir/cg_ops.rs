@@ -170,7 +170,7 @@ impl<M: Masm> Gen<'_, M> {
                     _ => (&lir.sigs[i.b as usize], None),
                 };
                 let params = lir.params(f);
-                if addr == Some(0) || !Self::fits(params) {
+                if addr == Some(0) || Self::stack_args(params).is_none() {
                     return Err("call");
                 }
                 self.call(&i, addr, params);
