@@ -108,6 +108,10 @@ pub(crate) enum UnOp {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Op {
     Iconst(i64),
+    /// The address of relocation `n` ([`Lir::relocs`]): never folded into
+    /// another instruction, and emitted in a form another Vm's address can
+    /// be written over.
+    Reloc(u32),
     Fconst(u64),
     Bin(BinOp),
     /// `a op imm`; `c` is the constant's value when the lowerer passed
@@ -142,9 +146,9 @@ pub(crate) enum Op {
     /// Returns value `a`.
     Return,
     /// `*(u32 *)cell += 1`, then to block `b` when it equals `at`, else
-    /// to block `c`.
+    /// to block `c`; `cell` is relocation `n`.
     TierCount {
-        cell: i64,
+        n: u32,
         at: u32,
     },
     /// The value of variable `a`.
@@ -204,6 +208,8 @@ pub(crate) struct Lir {
     pub(crate) value_ty: Vec<Ty>,
     /// Per value: its value when it is an integer constant.
     pub(crate) konst: Vec<Option<i64>>,
+    /// The Vm-specific addresses the code holds (see [`Op::Reloc`]).
+    pub(crate) relocs: Vec<(super::RelocKind, i64)>,
     pub(crate) var_ty: Vec<Ty>,
     pub(crate) args: Vec<u32>,
     /// `(size, align_log2)` of each explicit stack slot.
@@ -228,7 +234,7 @@ pub(crate) struct Lir {
     /// The helpers declared by the first trace this `Lir` recorded, and how
     /// many [`Lir::funcs`] / [`Lir::param_tys`] entries they take: they stay
     /// declared for the next trace.
-    pub(crate) helpers: Option<(super::lower::Helpers, u32, u32)>,
+    pub(in crate::jit_backend::trace) helpers: Option<(super::lower::Helpers, u32, u32)>,
 }
 
 impl Lir {
@@ -256,6 +262,7 @@ impl Lir {
                 l.blocks.clear();
                 l.value_ty.clear();
                 l.konst.clear();
+                l.relocs.clear();
                 l.var_ty.clear();
                 l.args.clear();
                 l.slots.clear();
@@ -283,6 +290,15 @@ impl Lir {
 }
 
 impl Lir {
+    /// Bytes `self` takes, roughly.
+    pub(crate) fn size(&self) -> usize {
+        std::mem::size_of::<Lir>()
+            + self.insts.len() * std::mem::size_of::<Inst>()
+            + self.blocks.len() * std::mem::size_of::<BlockData>()
+            + self.value_ty.len()
+            + 4 * (self.args.len() + self.bparams.len())
+    }
+
     /// The parts of `self` code generation reads, in buffers of their own
     /// (kept for the optimizing tier).
     pub(crate) fn detach(&self) -> Lir {
@@ -300,6 +316,7 @@ impl Lir {
                 })
                 .collect(),
             value_ty: self.value_ty.clone(),
+            relocs: self.relocs.clone(),
             var_ty: self.var_ty.clone(),
             args: self.args.clone(),
             slots: self.slots.clone(),

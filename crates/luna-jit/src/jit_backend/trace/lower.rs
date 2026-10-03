@@ -235,7 +235,11 @@ fn lower_clif<M: Module>(
     let mut ctx = module.make_context();
     let mut fbc = FunctionBuilderContext::new();
     let b = FunctionBuilder::new(&mut ctx.func, &mut fbc);
-    let mut e = ClifEmit { b, m: module };
+    let mut e = ClifEmit {
+        b,
+        m: module,
+        relocs: Vec::new(),
+    };
     let h = declare_helpers(&mut e)?;
     let mut sig = e.make_signature();
     // Param 0 — reg_state ptr (caller-owned, lives across the call).
@@ -257,9 +261,14 @@ fn lower_clif<M: Module>(
     e.b.func.name = UserFuncName::user(0, fn_id.as_u32());
 
     let (e, emitted) = emit_trace(e, pl, h, escape, 0)?;
-    let ClifEmit { b: bcx, m: module } = e;
+    let ClifEmit {
+        b: bcx,
+        m: module,
+        relocs,
+    } = e;
     bcx.finalize(module.target_config());
     drop_unused_block_params(&mut ctx.func);
+    reloc::set_values(&relocs);
     // `LUNA_TRACE_IR_DUMP=1` dumps the cranelift IR of every
     // compiled trace fn to stderr. Categorization + density-reduction
     // tool for layer-6 attribution (per-call IR op count is the gap).
@@ -299,6 +308,7 @@ fn lower_clif<M: Module>(
             ctx.set_disasm(true);
         }
         module.define_function(fn_id, &mut ctx).ok()?;
+        reloc::note_sites(&*module, &ctx);
         if want_asm_dump
             && let Some(cc) = ctx.compiled_code()
             && let Some(vcode) = cc.vcode.as_ref()

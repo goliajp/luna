@@ -70,8 +70,8 @@ pub(super) fn define_checked_entry<M: Module>(
     }
     for &(math_key, name_key) in &checks.math_fns {
         let check_ref = module.declare_func_in_func(math_check_id, bcx.func);
-        let m = bcx.ins().iconst(types::I64, math_key.as_ptr() as i64);
-        let k = bcx.ins().iconst(types::I64, name_key.as_ptr() as i64);
+        let m = chunk_share::str_arg(module, &mut bcx, math_key);
+        let k = chunk_share::str_arg(module, &mut bcx, name_key);
         let call = bcx.ins().call(check_ref, &[m, k]);
         let ok = bcx.inst_results(call)[0];
         let next = bcx.create_block();
@@ -94,6 +94,7 @@ pub(super) fn define_checked_entry<M: Module>(
     bcx.seal_all_blocks();
     bcx.finalize(module.target_config());
     module.define_function(entry_id, ctx).ok()?;
+    chunk_share::note(module, ctx, entry_id);
     module.clear_context(ctx);
     Some(entry_id)
 }

@@ -215,6 +215,7 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     bcx.finalize(module.target_config());
 
     module.define_function(fn_id, &mut ctx).ok()?;
+    chunk_share::note(module, &ctx, fn_id);
     module.clear_context(&mut ctx);
 
     define_entry(module, &mut ctx, fn_id, scan, any_self_call, num_params)
