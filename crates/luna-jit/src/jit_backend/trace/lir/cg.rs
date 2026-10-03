@@ -55,7 +55,20 @@ pub(crate) fn generate<M: Masm>(
     m: M,
     bufs: &mut CgBufs,
 ) -> Result<Bufs, &'static str> {
-    let mut off = M::CALL_SHADOW as i32;
+    // outgoing arguments past the registers go right above the shadow space
+    let out_args = an
+        .code
+        .iter()
+        .map(|&ii| &lir.insts[ii as usize])
+        .filter_map(|i| match i.op {
+            Op::Call => Some(&lir.funcs[i.a as usize]),
+            Op::CallIndirect => Some(&lir.sigs[i.b as usize]),
+            _ => None,
+        })
+        .filter_map(|c| Gen::<M>::stack_args(lir.params(c)))
+        .max()
+        .unwrap_or(0);
+    let mut off = M::CALL_SHADOW as i32 + 8 * out_args as i32;
     let mut slot_off = std::mem::take(&mut bufs.slot_off);
     slot_off.clear();
     for &(size, align) in &lir.slots {
@@ -366,18 +379,27 @@ impl<M: Masm> Gen<'_, M> {
             let r = self.src(i.a, 0);
             self.m.mov(M::CALL_TARGET, r);
         }
-        let (mut ni, mut nf) = (0, 0);
+        let (mut ni, mut nf, mut ns) = (0, 0, 0);
         for (k, (&a, &t)) in args.iter().zip(params).enumerate() {
-            let s = Src::Loc(self.loc(a));
+            let s = self.loc(a);
             if M::POSITIONAL_ARGS {
                 (ni, nf) = (k, k);
             }
-            if t.is_float() {
-                self.mv[1].push((Loc::Reg(M::FLOAT_ARGS[nf]), s));
+            let reg = if t.is_float() {
                 nf += 1;
+                M::FLOAT_ARGS.get(nf - 1)
             } else {
-                self.mv[0].push((Loc::Reg(M::INT_ARGS[ni]), s));
                 ni += 1;
+                M::INT_ARGS.get(ni - 1)
+            };
+            match reg {
+                Some(&r) => self.mv[usize::from(t.is_float())].push((Loc::Reg(r), Src::Loc(s))),
+                // stored before the register moves, which may overwrite
+                // the registers these arguments are read from
+                None => {
+                    self.store_arg(s, t.is_float(), M::CALL_SHADOW as i32 + 8 * ns);
+                    ns += 1;
+                }
             }
         }
         self.flush_moves(0);
@@ -397,12 +419,52 @@ impl<M: Masm> Gen<'_, M> {
         }
     }
 
-    /// Whether a call with these parameter types fits the argument registers.
-    pub(crate) fn fits(params: &[Ty]) -> bool {
-        if M::POSITIONAL_ARGS {
-            return params.len() <= M::INT_ARGS.len().min(M::FLOAT_ARGS.len());
+    /// How many arguments of a call with these parameter types go on the
+    /// stack, one 8-byte slot each; `None` on Apple's aarch64 ABI when one of
+    /// them is narrower than 8 bytes (it packs those).
+    pub(crate) fn stack_args(params: &[Ty]) -> Option<u32> {
+        let (mut ni, mut nf, mut ns) = (0, 0, 0);
+        for (k, &t) in params.iter().enumerate() {
+            if M::POSITIONAL_ARGS {
+                (ni, nf) = (k, k);
+            }
+            let in_reg = if t.is_float() {
+                nf += 1;
+                nf <= M::FLOAT_ARGS.len()
+            } else {
+                ni += 1;
+                ni <= M::INT_ARGS.len()
+            };
+            if !in_reg {
+                if cfg!(all(target_arch = "aarch64", target_vendor = "apple")) && t.bits() != 64 {
+                    return None;
+                }
+                ns += 1;
+            }
         }
-        let nf = params.iter().filter(|t| t.is_float()).count();
-        nf <= M::FLOAT_ARGS.len() && params.len() - nf <= M::INT_ARGS.len()
+        Some(ns)
+    }
+
+    /// Stores the argument at `s` to the outgoing slot at `sp + off`.
+    fn store_arg(&mut self, s: Loc, float: bool, off: i32) {
+        let r = match s {
+            Loc::Reg(p) => p,
+            Loc::Stack(sl) => {
+                let o = self.spill_off(sl);
+                if float {
+                    self.m.fload(M::FSCRATCH[0], M::SP, o);
+                    M::FSCRATCH[0]
+                } else {
+                    self.m.load(Width::B8, M::SCRATCH[0], M::SP, o);
+                    M::SCRATCH[0]
+                }
+            }
+            Loc::None => return,
+        };
+        if float {
+            self.m.fstore(r, M::SP, off);
+        } else {
+            self.m.store(Width::B8, r, M::SP, off);
+        }
     }
 }
