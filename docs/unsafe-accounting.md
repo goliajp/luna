@@ -21,10 +21,10 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **936** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **938** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 199 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **5** | all `#[doc(hidden)]`, see §5 |
-| **`pub unsafe extern "C" fn`** | 77 | the `lua.h` C API (29), the `luna_jit_*` helpers compiled code calls (47, re-exported by `luna-jit`) and the AOT entry (1); see §5 |
+| **`pub unsafe extern "C" fn`** | 78 | the `lua.h` C API (29), the `luna_jit_*` helpers compiled code calls (47, re-exported by `luna-jit`) and the AOT entries (2); see §5 |
 | **`unsafe impl Send` / `Sync`** | 10 | see §5 |
 
 A "site" is a line matching `unsafe (\{|fn |impl |trait |extern )`,
@@ -55,7 +55,7 @@ quotes the pattern counts too.
 | `luna-jit-helpers` | | 149 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
 | `luna-jit-llvm` | `src/` | 8 | LLVM execution engines and the register-file GEPs |
 | | `tests/` | 35 | calling LLVM-compiled chunks |
-| `luna-runtime-helpers` | | 43 | the AOT binary's C entry, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor |
+| `luna-runtime-helpers` | | 45 | the AOT binary's C entries, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor |
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
@@ -252,7 +252,12 @@ and the frame-materialise helper turning each frame's closure payload
 back into a handle. In `luna-runtime-helpers` 5: the deploy-side walker
 of the prototype-slot section (its bracket symbols on ELF and Mach-O,
 the slice of index entries, the read of each 16-byte hash and the write
-of its slot). That is 936, the ceiling now.
+of its slot). That is 936.
+
+Running an AOT binary's script on a `Vm` of the dialect it was compiled
+for added 2, both in `luna-runtime-helpers`: the C entry that takes the
+dialect (`luna_aot_run_dialect`), and the block in the old two-argument
+entry `luna_aot_run` that calls it for 5.5. That is 938, the ceiling now.
 
 ## 5. Public `unsafe` surface
 
@@ -268,13 +273,13 @@ of its slot). That is 936, the ceiling now.
 
 None of these appears in the `cargo doc` view of the API.
 
-### `pub unsafe extern "C" fn` (75)
+### `pub unsafe extern "C" fn` (78)
 
 | Location | Count | Why |
 |---|---:|---|
 | `luna-jit/src/capi*` | 29 | the `lua.h` C API, called from C with raw `lua_State` pointers |
 | `luna-jit-helpers/src/*` | 47 | the `luna_jit_*` helpers compiled code calls (§3.5); each has a `# Safety` section |
-| `luna-runtime-helpers/src/lib.rs` | 1 | `luna_aot_run`, the AOT binary's entry, called by the generated C `main` |
+| `luna-runtime-helpers/src/lib.rs` | 2 | `luna_aot_run_dialect`, the AOT binary's entry, called by the generated C `main` with the dialect the script was compiled for; `luna_aot_run`, the same entry for 5.5 |
 
 ### `unsafe impl Send` / `Sync` (10)
 
