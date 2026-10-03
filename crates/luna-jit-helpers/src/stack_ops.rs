@@ -1,6 +1,6 @@
 //! Stack-slot access and the opcode helpers that work on the frame (close, concat, tforcall, closure).
 
-use crate::{current_jit_closure, current_jit_vm, payload_bits};
+use crate::{current_jit_closure, current_jit_vm, payload_bits, push_ssa_roots};
 
 /// Trace JIT helper for `Op::Close A`. Wraps
 /// `Vm::jit_op_close` which does the predict-and-deopt logic:
@@ -61,15 +61,26 @@ pub unsafe extern "C" fn luna_jit_stack_update_raw(slot_offset: i64, raw_bits: i
 /// `-1` on deopt (pending_err set; metamethod path, type error,
 /// length overflow, or pre-existing pending_err).
 ///
+/// The concat steps the collector, so `roots` carries the collectable
+/// values the trace holds only in registers (see `push_ssa_roots`).
+///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread.
+/// Called from compiled code inside an `enter_jit` window on this thread; `roots` is 0 or the
+/// address of a root list as `push_ssa_roots` takes it.
 // SAFETY: no other item in the link is named `luna_jit_op_concat`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_op_concat(slot_offset: i64, n: i64) -> i64 {
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
-    let vm = unsafe { current_jit_vm() };
-    vm.jit_op_concat(slot_offset as u32, n as i32)
+pub unsafe extern "C" fn luna_jit_op_concat(slot_offset: i64, n: i64, roots: i64) -> i64 {
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, and
+    // `roots` is 0 or a root list (# Safety)
+    let (vm, mark) = unsafe {
+        let vm = current_jit_vm();
+        let mark = push_ssa_roots(vm, roots);
+        (vm, mark)
+    };
+    let r = vm.jit_op_concat(slot_offset as u32, n as i32);
+    vm.jit.ssa_roots.truncate(mark);
+    r
 }
 
 /// Trace JIT helper for `Op::TForCall A 0 C`.
@@ -88,9 +99,14 @@ pub unsafe extern "C" fn luna_jit_op_concat(slot_offset: i64, n: i64) -> i64 {
 /// Returns `0` on success, `-1` on deopt (pending_err set OR
 /// pre-existing pending_err).
 ///
+/// A native iterator can allocate, call back into Lua and collect, so
+/// `roots` carries the collectable values the trace holds only in
+/// registers (see `push_ssa_roots`).
+///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread; `ctrl_out`, `key_out` and
-/// `val_out` are each valid for writing one `i64`.
+/// `val_out` are each valid for writing one `i64`; `roots` is 0 or the address of a root list as
+/// `push_ssa_roots` takes it.
 // SAFETY: no other item in the link is named `luna_jit_op_tforcall`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
@@ -100,18 +116,19 @@ pub unsafe extern "C" fn luna_jit_op_tforcall(
     ctrl_out: *mut i64,
     key_out: *mut i64,
     val_out: *mut i64,
+    roots: i64,
 ) -> i64 {
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, and the
-    // three out-pointers are each valid for one `i64` for the length of this call
-    let (vm, ctrl, key, val) = unsafe {
-        (
-            current_jit_vm(),
-            &mut *ctrl_out,
-            &mut *key_out,
-            &mut *val_out,
-        )
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, the
+    // three out-pointers are each valid for one `i64` for the length of this call, and `roots`
+    // is 0 or a root list
+    let (vm, ctrl, key, val, mark) = unsafe {
+        let vm = current_jit_vm();
+        let mark = push_ssa_roots(vm, roots);
+        (vm, &mut *ctrl_out, &mut *key_out, &mut *val_out, mark)
     };
-    vm.jit_op_tforcall(abs_offset as u32, nvars as i32, ctrl, key, val)
+    let r = vm.jit_op_tforcall(abs_offset as u32, nvars as i32, ctrl, key, val);
+    vm.jit.ssa_roots.truncate(mark);
+    r
 }
 
 /// Load the raw `i64` payload of `vm.stack[base + slot_offset]`

@@ -3,10 +3,11 @@
 use crate::{current_jit_vm, str_arg, table_arg};
 
 /// Allocate an empty `Gc<Table>` on the active Vm's heap.
-/// Returns the Gc pointer pun'd to `i64`. The fresh table is rooted
-/// only through the Cranelift Variable the JIT writes it into; no
-/// `maybe_collect_garbage` runs inside the helper so the SSA-only
-/// rooting suffices for the duration of the JIT entry.
+/// Returns the Gc pointer pun'd to `i64`. Allocating never collects, but
+/// the fresh table lives only in a register of the compiled code until
+/// the code stores it somewhere the collector sees. Compiled code that
+/// later calls a helper which can collect (a trace's concat or
+/// generic-for call) passes such registers to it as roots.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread.
