@@ -283,7 +283,9 @@ impl DebugPtr {
                         true
                     }
                     b't' => {
-                        d.istailcall = c_char::from(info.istailcall);
+                        // PUC stores the `CIST_TAIL` bit itself
+                        let bit = if self.v == LuaVersion::Lua52 { 64 } else { 32 };
+                        d.istailcall = if info.istailcall { bit } else { 0 };
                         true
                     }
                     _ => common!(d, c, info, strs),
@@ -329,7 +331,7 @@ impl DebugPtr {
                         true
                     }
                     b't' => {
-                        d.istailcall = c_char::from(info.istailcall);
+                        d.istailcall = if info.istailcall { 32 } else { 0 };
                         true
                     }
                     b'r' => {
