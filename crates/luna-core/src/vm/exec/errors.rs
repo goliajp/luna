@@ -4,13 +4,38 @@
 use super::*;
 
 impl Vm {
-    /// Take the error traceback captured at the latest error point and
+    /// Take the traceback of the latest error that reached the host, and
     /// reset it. Embedders should call this immediately after a failed
     /// `call_value`/`eval`/`call`/etc. — the next public `call_value`
     /// entry clears it. Returns `None` if no error was in flight.
+    ///
+    /// The text is what PUC's `luaL_traceback(L, L, NULL, 1)` returns in a
+    /// message handler of the host's `lua_pcall` (5.1: `debug.traceback`
+    /// called there with level 2), taken where the error was raised:
+    /// `stack traceback:` and then one `\n\t` line per stack level,
+    /// innermost first, C functions included. The first level is the
+    /// function that raised: `\n\t[C]: in function 'error'` for `error`,
+    /// the library function for an argument error, or the Lua function for
+    /// an error raised by an operation. A Lua level reads
+    /// `\n\t<short_src>:<line>: in <name>`, a C level `\n\t[C]: in <name>`.
+    /// Levels are left out as `luaL_traceback` leaves them out of a deep
+    /// stack, and names follow the dialect, as the embedding guide lists.
     pub fn take_error_traceback(&mut self) -> Option<String> {
         let levels = self.error_traceback.take()?;
-        let tb = crate::vm::callstack::traceback_from_lines(self.version, &levels, 0);
+        let mut tb = b"stack traceback:".to_vec();
+        // the handler's own level (5.1: and `debug.traceback`'s) sits above
+        // the stack that raised
+        let hidden = if self.version == LuaVersion::Lua51 {
+            2
+        } else {
+            1
+        };
+        tb.extend(crate::vm::callstack::traceback_from_lines(
+            self.version,
+            &levels,
+            0,
+            hidden,
+        ));
         Some(String::from_utf8_lossy(&tb).into_owned())
     }
 

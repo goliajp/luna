@@ -629,17 +629,80 @@ match vm.eval("error('something failed')") {
         // Or get details from the Vm:
         let kind = vm.error_kind();  // -> LuaErrorKind::Runtime
         let source = vm.error_source();  // -> Option<(&str, u32)>
-        let traceback = vm.take_error_traceback();  // -> Option<String>
+        let traceback = vm.take_error_traceback();  // -> Option<String>, see below
         eprintln!("kind={kind} source={source:?}");
     }
 }
 ```
 
+### The traceback snapshot
+
+When an error reaches the host (nothing in Lua catches it), the Vm keeps
+the traceback of the stack as it stood where the error was raised, before
+it unwound. `vm.take_error_traceback()` returns it once; the next call into
+the Vm clears it. Its text is exactly what PUC gives a C host that calls the
+function with `lua_pcall` under a message handler returning
+`luaL_traceback(L, L, NULL, 1)` (5.1, which has no `luaL_traceback`:
+`debug.traceback("", 2)`, without the leading newline):
+
+```text
+stack traceback:
+	[C]: in function 'error'
+	[C]: in function 'string.gsub'
+	user_script:3: in local 'f'
+	user_script:5: in main chunk
+```
+
+That is, `stack traceback:` followed by one line per stack level, innermost
+first, each line starting with a newline and a tab. There is no message
+line: the error value is the `Err` itself.
+
+- The first level is what raised the error: the C function for `error`,
+  `assert` or a library function's argument error, the Lua function for an
+  error raised by an operation (`attempt to index a nil value`).
+- C functions are levels of their own, written `[C]: in <name>` (5.1:
+  `[C]: in function '<name>'`, or `[C]: ?` without a name). luna's library
+  functions and natives registered by the host appear as C functions. The
+  host's own call adds no level, as `lua_pcall` adds none.
+- A Lua level is `<short_src>:<line>: in <name>`, where `<short_src>` is
+  the chunk name as PUC shortens it (`@user_script` reads `user_script`,
+  a string chunk `[string "..."]`). Without line information (a stripped
+  binary chunk) it is `<short_src>: in <name>`.
+
+`<name>` follows the dialect:
+
+| dialect | name |
+|---|---|
+| 5.1 | `function '<name>'` for any name the calling instruction gives (global, local, method, field, upvalue); `main chunk`; `function <src:line>` for an unnamed Lua function; a C function without a name prints ` ?` in place of `in <name>`. A tail call left a level `(tail call): ?` |
+| 5.2 | `function '<name>'` for a name from the calling instruction; `main chunk`; an unnamed C function by the global it is reachable from (`function 'string.gsub'`, else `?`); `function <src:line>` |
+| 5.3, 5.4 | first the name the function is reachable by from `package.loaded`, two tables deep, without `_G.` (`function 'error'`, `function 'string.gsub'`, `function 'mymod.f'`); else `<kind> '<name>'` with kind `global`, `local`, `method`, `field`, `upvalue`, `metamethod`, `for iterator` or `hook`; else `main chunk`, `function <src:line>`, or `?` |
+| 5.5 | first `<kind> '<name>'` from the calling instruction (`global 'error'`, `field 'gsub'`, `method 'rep'`); else `main chunk`; else the `package.loaded` name; else `function <src:line>` or `?` |
+
+From 5.2 on, a level whose function was entered by a tail call is followed
+by the line `(...tail calls...)`.
+
+A deep stack is shortened as `luaL_traceback` shortens it. 5.1 leaves out
+the middle of a stack of 22 or more levels: the first 10 levels, a line
+`...`, the last 10. 5.2 and 5.3 do it from 23 levels: the first 10, `...`,
+the last 11. 5.4 and 5.5 do the same with the line
+`...	(skipping <n> levels)`, where `<n>`, as PUC computes it, is one less than
+the number of levels left out.
+
+The same text in the same format is what `debug.traceback(co)` returns for
+a coroutine an error killed, from level 0, and what `Coro::error_traceback`
+holds.
+
+A program that only needs the innermost Lua level (Redis-style
+`@user_script:<line>`) finds it as the first line whose `<short_src>` is
+not `[C]`; one that, like Redis, wants the level that raised, takes the
+first level when it is a Lua level and otherwise the next one.
+
 To handle an error where it is raised, before the stack unwinds — as
 `lua.c` does to print a traceback — call through a message handler:
 `vm.call_value_with_handler(f, &args, msgh)` is PUC's `lua_pcall` with a
 handler, and inside the handler `vm.traceback(Some(msg), 1)` is
-`luaL_traceback`. `vm.load_file(name, mode)` and
+`luaL_traceback`. Like `lua_pcall`, the call is not a level of the stack
+the handler sees: the traceback ends with the function the host called. `vm.load_file(name, mode)` and
 `vm.load_buffer(src, chunkname, mode)` are `luaL_loadfilex` /
 `luaL_loadbufferx`, returning the error message those leave. The `luna`
 CLI (`crates/luna-jit/src/bin/luna.rs`) is built on these.

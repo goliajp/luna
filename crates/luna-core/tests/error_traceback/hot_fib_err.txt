@@ -1,0 +1,55 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:3: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:2: in function 'fib'
+	hot_fib_err.lua:3: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in local 'fib'
+	hot_fib_err.lua:3: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in local 'fib'
+	hot_fib_err.lua:3: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in upvalue 'fib'
+	hot_fib_err.lua:2: in local 'fib'
+	hot_fib_err.lua:3: in main chunk

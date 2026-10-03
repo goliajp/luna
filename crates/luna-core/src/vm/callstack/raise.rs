@@ -50,6 +50,20 @@ impl Vm {
         self.errored_natives.push(ErroredNative { act, err });
     }
 
+    /// An error a native raised when the host called it directly (no Lua
+    /// function between them) reaches the host without unwinding a Lua
+    /// frame, the point where `raise_to_handler` usually runs: run it here,
+    /// with that native still counted, so the host gets its traceback.
+    pub(crate) fn raise_native_to_host(&mut self, err: Value) {
+        let raised_here = self
+            .errored_natives
+            .last()
+            .is_some_and(|e| e.err.raw_eq(err) && e.act.depth as usize == self.frames.len());
+        if raised_here && self.error_traceback.is_none() {
+            self.raise_to_handler(err);
+        }
+    }
+
     /// The natives recorded for `err` that were running at the top of the
     /// stack, innermost first.
     fn take_errored_natives(&mut self, err: Value) -> Vec<ErroredNative> {

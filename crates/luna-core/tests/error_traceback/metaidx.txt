@@ -1,0 +1,25 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	metaidx.lua:1: in function <metaidx.lua:1>
+	metaidx.lua:3: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	metaidx.lua:1: in function '__index'
+	metaidx.lua:3: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	metaidx.lua:1: in metamethod '__index'
+	metaidx.lua:3: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	metaidx.lua:1: in metamethod 'index'
+	metaidx.lua:3: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	metaidx.lua:1: in metamethod 'index'
+	metaidx.lua:3: in main chunk

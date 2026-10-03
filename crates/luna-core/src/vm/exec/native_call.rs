@@ -11,7 +11,10 @@ pub(crate) enum NativeKind {
     Async,
     Pcall,
     Xpcall,
+    /// `Vm::call_value_with_handler`: not a level of the stack
     HostXpcall,
+    /// `Vm::call_value_with_handler_in_c`: a level of the stack
+    HostXpcallInC,
     Pairs,
 }
 
@@ -19,11 +22,15 @@ impl NativeKind {
     /// The kind of a synchronous native calling `f`.
     pub(crate) fn of(f: crate::runtime::value::NativeFn) -> NativeKind {
         use crate::runtime::value::NativeFn;
-        use crate::vm::builtins::{nat_host_xpcall, nat_pairs, nat_pcall, nat_xpcall};
+        use crate::vm::builtins::{
+            nat_host_xpcall, nat_host_xpcall_in_c, nat_pairs, nat_pcall, nat_xpcall,
+        };
         if std::ptr::fn_addr_eq(f, nat_pcall as NativeFn) {
             NativeKind::Pcall
         } else if std::ptr::fn_addr_eq(f, nat_xpcall as NativeFn) {
             NativeKind::Xpcall
+        } else if std::ptr::fn_addr_eq(f, nat_host_xpcall_in_c as NativeFn) {
+            NativeKind::HostXpcallInC
         } else if std::ptr::fn_addr_eq(f, nat_host_xpcall as NativeFn) {
             NativeKind::HostXpcall
         } else if std::ptr::fn_addr_eq(f, nat_pairs as NativeFn) {
@@ -124,7 +131,9 @@ impl Vm {
                 let forward = self.version > LuaVersion::Lua51;
                 Some(self.begin_xpcall(func_slot, nargs, nresults, forward))
             }
-            NativeKind::HostXpcall => Some(self.begin_xpcall(func_slot, nargs, nresults, true)),
+            NativeKind::HostXpcall | NativeKind::HostXpcallInC => {
+                Some(self.begin_xpcall(func_slot, nargs, nresults, true))
+            }
             // From 5.4 on, pairs(t) calls a __pairs metamethod yieldably
             // (PUC luaB_pairs uses lua_callk). 5.2/5.3 use a plain
             // lua_call, and 5.1 has no `__pairs`: the native handles those.

@@ -1,0 +1,30 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	modf.lua:2: in function 'f'
+	modf.lua:4: in function 'g'
+	modf.lua:5: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	modf.lua:2: in function 'f'
+	modf.lua:4: in function 'g'
+	modf.lua:5: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	modf.lua:2: in function 'mymod.f'
+	modf.lua:4: in local 'g'
+	modf.lua:5: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	modf.lua:2: in function 'mymod.f'
+	modf.lua:4: in local 'g'
+	modf.lua:5: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	modf.lua:2: in field 'f'
+	modf.lua:4: in local 'g'
+	modf.lua:5: in main chunk

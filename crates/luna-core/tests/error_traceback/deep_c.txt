@@ -1,0 +1,119 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	deep_c.lua:2: in function 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'sort'
+	deep_c.lua:2: in function 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'sort'
+	deep_c.lua:2: in function 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'sort'
+	...
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'sort'
+	deep_c.lua:2: in function 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'sort'
+	deep_c.lua:2: in function 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'sort'
+	deep_c.lua:2: in function 'r2'
+	deep_c.lua:3: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	deep_c.lua:2: in function 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'sort'
+	deep_c.lua:2: in function 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'sort'
+	deep_c.lua:2: in function 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'sort'
+	...
+	deep_c.lua:2: in function 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'sort'
+	deep_c.lua:2: in function 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'sort'
+	deep_c.lua:2: in function 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'sort'
+	deep_c.lua:2: in function 'r2'
+	deep_c.lua:3: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'table.sort'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'table.sort'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'table.sort'
+	...
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'table.sort'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'table.sort'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'table.sort'
+	deep_c.lua:2: in local 'r2'
+	deep_c.lua:3: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'table.sort'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'table.sort'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'table.sort'
+	...	(skipping 26 levels)
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'table.sort'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'table.sort'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in function 'table.sort'
+	deep_c.lua:2: in local 'r2'
+	deep_c.lua:3: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in field 'sort'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in field 'sort'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in field 'sort'
+	...	(skipping 26 levels)
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in field 'sort'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in field 'sort'
+	deep_c.lua:2: in upvalue 'r2'
+	deep_c.lua:2: in function <deep_c.lua:2>
+	[C]: in field 'sort'
+	deep_c.lua:2: in local 'r2'
+	deep_c.lua:3: in main chunk
