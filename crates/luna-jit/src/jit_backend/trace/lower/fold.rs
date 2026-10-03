@@ -101,7 +101,7 @@ pub(super) fn emit_fold<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>
         math_fn_check_id, ..
     } = lw.h.rt;
     let OpCx { i, rop, off, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     // Resolve which fold this index belongs to: the start
     // (Libm1 emit site or Min2/Max2 silent GetTabUp), the
     // GetField mid-op (Min2/Max2 silent), or the Call
@@ -237,7 +237,7 @@ fn emit_str_sub_fold<E: Emit>(
 ) -> Option<()> {
     let RuntimeHelpers { str_sub_id, .. } = lw.h.rt;
     let off = oc.off;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     let kind = |r: u32| k_op(&lw.current_kinds, off as u32 + r);
     let a = fold.dst_reg;
     if kind(a + 1) != RegKind::Str
@@ -272,7 +272,7 @@ pub(super) fn emit_minmax_fold<E: Emit>(
         record, float_only, ..
     } = *pl;
     let OpCx { i, off, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     // 2-arg min/max. From 5.3 PUC's `math.min(a, b)`
     // returns one of its operands as it is, so the
     // lowering follows the recorded operand kinds:

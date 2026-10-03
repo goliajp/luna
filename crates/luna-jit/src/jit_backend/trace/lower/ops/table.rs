@@ -18,7 +18,7 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
     } = lw.h.op;
     let RuntimeHelpers { get_int_id, .. } = lw.h.rt;
     let OpCx { i, off, ins, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::NewTable => {
             // sunk path: skip the heap alloc helper.
@@ -152,7 +152,7 @@ pub(super) fn emit_table_set_op<E: Emit>(
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::SetField => {
             emit_set_field(lw, pl, oc)?;
@@ -281,7 +281,7 @@ pub(super) fn emit_set_field<E: Emit>(
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     // sunk path: when escape sweep tagged
     // SetFieldSunkWrite, def_var the source register into
     // the matching virt slot (array_cap + hash_slot) +

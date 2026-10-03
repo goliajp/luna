@@ -11,7 +11,7 @@ pub(super) fn emit_tfor_call_op<E: Emit>(
     } = *pl;
     let OpHelpers { spill_id, .. } = lw.h.op;
     let OpCx { off, ins, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         // generic-for body tail. Sequence:
         //   1. Spill regs[A..=A+2] (iter / state / control) to
@@ -106,7 +106,7 @@ pub(super) fn emit_tfor_helper_call<E: Emit>(
     } = *lw;
     let OpHelpers { op_tforcall_id, .. } = lw.h.op;
     let OpCx { i, rop, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     let out_ss = lw
         .bcx
         .create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
@@ -165,7 +165,7 @@ pub(super) fn emit_ipairs_tfor_call<E: Emit>(
         ..
     } = *lw;
     let OpCx { i, rop, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     // Inline aget fast path. The recorder confirmed
     // R[A] = ipairs_iter at trace start. The standard
     // ipairs loop has R[A+1] = Table (state) and

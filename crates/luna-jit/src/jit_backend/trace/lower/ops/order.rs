@@ -10,7 +10,7 @@ pub(super) fn emit_order_op<E: Emit>(
     let OpCx {
         i, rop, ins, op, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::Lt | Op::Le | Op::Eq => {
             // Lua semantics: `if (R[A] op R[B]) ~= K then pc++`.
@@ -262,7 +262,7 @@ pub(super) fn emit_eq_cond<E: Emit>(
     k_effective: bool,
 ) -> Value {
     let OpCx { i, rop, ins, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     let lhs = lw.bcx.use_var(regs[ins.a() as usize]);
     let rhs = lw.bcx.use_var(regs[ins.b() as usize]);
     let int_cc = if k_effective {

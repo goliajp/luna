@@ -21,7 +21,7 @@ pub(super) fn emit_get_field_op<E: Emit>(
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::GetField => {
             // sunk path: use_var the virt slot
@@ -174,7 +174,7 @@ pub(super) fn emit_get_tab_up_op<E: Emit>(
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::GetTabUp => {
             // `R[A] := upvals[B][K[C]:string]`.

@@ -22,7 +22,7 @@ pub(super) fn emit_sequence_op<E: Emit>(
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::SetList => {
             // `R[A][C+i] := R[A+i]` for i in
