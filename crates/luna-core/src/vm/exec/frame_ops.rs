@@ -58,8 +58,7 @@ impl Vm {
                 }
                 // one barrier_back covers every store this op did — PUC's
                 // `luaC_barrierback_` once-per-table optimisation
-                self.heap
-                    .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                self.heap.barrier_back(t);
                 // the element temps above the table are now consumed
                 self.maybe_collect_garbage(base + a + 1);
             }
@@ -155,8 +154,7 @@ impl Vm {
                 }
                 // once-per-table barrier (mirror SETLIST): t is born BLACK
                 // during Propagate; the bulk inserts above don't barrier.
-                self.heap
-                    .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                self.heap.barrier_back(t);
                 self.stack[func_slot as usize] = Value::Table(t);
                 self.set_r(base, inst.a(), Value::Table(t));
             }

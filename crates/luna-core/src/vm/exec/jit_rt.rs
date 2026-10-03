@@ -81,15 +81,12 @@ impl Vm {
     /// which must hold the right value at call time (trace IR's
     /// Variable hasn't yet been written back).
     ///
-    /// Parameters arrive as i64 from the IR: `slot_offset` is the
-    /// caller-frame register index (`u32` in practice, depth=0
-    /// only — depth>0 Closure is not supported); `tag` is the
-    /// `crate::runtime::value::raw` byte for the slot's RegKind;
-    /// `raw_bits` is the trace Variable's `use_var` payload
-    /// (i64-shaped — Float is its bit-pattern, Table/Closure is the
-    /// raw `Gc::as_ptr` cast).
+    /// `slot_offset` is the caller-frame register index (depth=0
+    /// only — depth>0 Closure is not supported); `v` is the trace
+    /// register's value, which the helper packs from its tag and
+    /// payload.
     #[doc(hidden)]
-    pub fn jit_spill_stack(&mut self, slot_offset: u32, tag: u8, raw_bits: u64) {
+    pub fn jit_spill_stack(&mut self, slot_offset: u32, v: Value) {
         let Some(f) = self.jit_last_lua_frame() else {
             self.jit.pending_err =
                 Some(self.rt_err("JIT spill: no Lua frame on jit_last_lua_frame()"));
@@ -99,37 +96,20 @@ impl Vm {
         if self.stack.len() <= idx {
             self.stack.resize(idx + 1, Value::Nil);
         }
-        // SAFETY: the trace passes a register's tag with the payload it
-        // holds, the shape `Value::unpack` produces; the fn is safe to call,
-        // so nothing but that convention ties `raw_bits` to `tag`
-        let v = unsafe {
-            crate::runtime::Value::pack(tag, crate::runtime::value::RawVal { zero: raw_bits })
-        };
         self.stack[idx] = v;
     }
 
-    /// Refresh only the raw payload of
-    /// `vm.stack[base + slot_offset]`, preserving its existing
-    /// `Value` tag. The caller (trace JIT Op::Concat body emit)
-    /// uses this when the slot's `RegKind` is `Unset` (no compile-
-    /// time tag info; commonly `Str` slots which the trace doesn't
-    /// model). The interp's previous execution of the same op
-    /// already populated the slot with the right tag — the trace
-    /// only needs to swap in its current raw value.
+    /// `vm.stack[base + slot_offset]` of the trace's head frame, or
+    /// `None` when there is no Lua frame or the slot is past the
+    /// stack. The trace JIT's Op::Concat body emit refreshes the
+    /// payload of a slot whose `RegKind` is `Unset` (no compile-time
+    /// tag info; commonly `Str` slots which the trace doesn't model)
+    /// through it, keeping the tag the interpreter left there.
     #[doc(hidden)]
-    pub fn jit_stack_update_raw(&mut self, slot_offset: u32, raw_bits: u64) {
-        let Some(f) = self.jit_last_lua_frame() else {
-            return;
-        };
+    pub fn jit_stack_slot_mut(&mut self, slot_offset: u32) -> Option<&mut Value> {
+        let f = self.jit_last_lua_frame()?;
         let idx = (f.base as usize) + (slot_offset as usize);
-        if idx >= self.stack.len() {
-            return;
-        }
-        let (tag, _) = self.stack[idx].unpack();
-        // SAFETY: `tag` is the slot's current tag, and the trace passes the payload of a value of that type (it calls this only for a slot the interpreter last left holding the same kind of value); the fn is safe to call, so nothing but that convention ties `raw_bits` to `tag`
-        self.stack[idx] = unsafe {
-            crate::runtime::Value::pack(tag, crate::runtime::value::RawVal { zero: raw_bits })
-        };
+        self.stack.get_mut(idx)
     }
 
     /// Trace JIT path for `Op::Concat A B`.
@@ -169,70 +149,33 @@ impl Vm {
         0
     }
 
-    /// Pop a reusable `Vec<u8>` from the JIT
-    /// accumulator buffer pool, returning a raw pointer. The trace
-    /// fn's IR holds this pointer in a stack slot through the loop
-    /// and calls `jit_str_buf_extend` per iter. If the pool is
-    /// empty, allocate fresh.
-    ///
-    /// Safety: the returned pointer is valid until
-    /// `jit_str_buf_release` is called or the Vm is dropped. The
-    /// caller MUST not retain it across `enter_jit` boundaries.
+    /// Pop a reusable `Vec<u8>` from the JIT accumulator buffer
+    /// pool, or allocate one when the pool is empty. The trace keeps
+    /// it (as the boxed pointer the helper leaks) in a stack slot
+    /// through the loop and appends each piece to it.
     #[doc(hidden)]
-    pub fn jit_str_buf_acquire(&mut self) -> *mut Vec<u8> {
-        let buf = self.jit.str_buf_pool.pop().unwrap_or_default();
-        // Move into a Box so the pointer is stable until release.
-        Box::into_raw(Box::new(buf))
+    pub fn jit_str_buf_acquire(&mut self) -> Box<Vec<u8>> {
+        Box::new(self.jit.str_buf_pool.pop().unwrap_or_default())
     }
 
     /// Return a previously-acquired buffer to the
     /// pool, dropping any excess past `jit_str_buf_pool_cap`. The
     /// buffer is `clear`ed (capacity retained) so the next acquire
     /// gets a ready-to-extend Vec.
-    ///
-    /// Safety: `buf` must have been returned by a prior
-    /// `jit_str_buf_acquire` on the same Vm.
     #[doc(hidden)]
-    #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `buf` round-trips through `Box::into_raw`; SAFETY documented below.
-    pub fn jit_str_buf_release(&mut self, buf: *mut Vec<u8>) {
-        if buf.is_null() {
-            return;
-        }
-        // SAFETY: by the contract in the doc above, `buf` came from
-        // `Box::into_raw` in `jit_str_buf_acquire` on this Vm and is released
-        // once, so this takes back sole ownership; the signature is safe and
-        // does not enforce that contract
-        let mut owned = unsafe { Box::from_raw(buf) };
-        owned.clear();
+    #[allow(clippy::boxed_local)] // the trace held the buffer boxed; it comes back that way
+    pub fn jit_str_buf_release(&mut self, mut buf: Box<Vec<u8>>) {
+        buf.clear();
         if self.jit.str_buf_pool.len() < self.jit.str_buf_pool_cap {
-            self.jit.str_buf_pool.push(*owned);
+            self.jit.str_buf_pool.push(*buf);
         }
         // Else: drop the buffer.
     }
 
-    /// Append a LuaStr's bytes to the accumulator
-    /// buffer. The trace IR computes the `str_ptr` (= raw bits of
-    /// the piece slot) and passes it through; we treat it as a
-    /// `*mut LuaStr` and append its bytes.
-    ///
-    /// Returns 0 on success, -1 if the piece isn't a Str (would
-    /// trip __concat metamethod path → deopt to interp).
-    ///
-    /// Safety: `buf` from prior `acquire`; `str_ptr` from the
-    /// trace's piece slot raw bits.
+    /// Append a piece's bytes to an accumulator buffer.
     #[doc(hidden)]
-    #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `buf` from prior `acquire`; `str_ptr` from trace piece slot; SAFETY documented below.
-    pub fn jit_str_buf_extend(&mut self, buf: *mut Vec<u8>, str_ptr: i64) -> i64 {
-        if buf.is_null() || str_ptr == 0 {
-            return -1;
-        }
-        // SAFETY: `buf` is non-null and, by the contract in the doc above, came from `jit_str_buf_acquire` on this Vm and is not released yet, so it is a live boxed `Vec` that only this call uses; the signature is safe and does not enforce that contract
-        let buf = unsafe { &mut *buf };
-        let lua_str_ptr = str_ptr as *const crate::runtime::string::LuaStr;
-        // SAFETY: `str_ptr` is non-zero and is the raw payload of a string register of the running trace, so it points at a string that register keeps alive; nothing here checks that the register holds a string (the signature is safe)
-        let bytes = unsafe { crate::runtime::string::bytes_of(lua_str_ptr) };
-        buf.extend_from_slice(bytes);
-        0
+    pub fn jit_str_buf_extend(&mut self, buf: &mut Vec<u8>, piece: Gc<crate::runtime::LuaStr>) {
+        buf.extend_from_slice(piece.as_bytes());
     }
 
     /// Drain the accumulator buffer into a fresh
@@ -240,18 +183,10 @@ impl Vm {
     /// the trace to write into the accumulator slot.
     ///
     /// Returns the LuaStr ptr as i64 on success, 0 on overflow
-    /// (the hard cap; the trace deopts).
-    ///
-    /// Safety: `buf` from prior `acquire`. The buffer is left
-    /// CLEAR (drained) ready for `release`.
+    /// (the hard cap; the trace deopts). The buffer is left
+    /// CLEAR (drained) ready for release.
     #[doc(hidden)]
-    #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `buf` from prior `acquire`; SAFETY documented below.
-    pub fn jit_str_buf_intern(&mut self, buf: *mut Vec<u8>) -> i64 {
-        if buf.is_null() {
-            return 0;
-        }
-        // SAFETY: `buf` is non-null and, by the contract in the doc above, came from `jit_str_buf_acquire` on this Vm and is not released yet; the signature is safe and does not enforce that contract
-        let buf = unsafe { &mut *buf };
+    pub fn jit_str_buf_intern(&mut self, buf: &mut Vec<u8>) -> i64 {
         let bytes = std::mem::take(buf);
         // hard cap at 256KB
         if bytes.len() > 256 * 1024 {
@@ -275,14 +210,13 @@ impl Vm {
     ///     else R[A+4]'s tag byte | R[A+5]'s tag byte << 8 (the value's
     ///     tag only when `nvars >= 2`, 0 otherwise).
     #[doc(hidden)]
-    #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `ctrl_out`/`key_out`/`val_out` are caller-stack buffers from Cranelift-emitted prologue; SAFETY documented below.
     pub fn jit_op_tforcall(
         &mut self,
         slot_offset: u32,
         nvars: i32,
-        ctrl_out: *mut i64,
-        key_out: *mut i64,
-        val_out: *mut i64,
+        ctrl_out: &mut i64,
+        key_out: &mut i64,
+        val_out: &mut i64,
     ) -> i64 {
         let Some(f) = self.jit_last_lua_frame() else {
             return -1;
@@ -358,12 +292,9 @@ impl Vm {
         } else {
             (0, 0u64)
         };
-        // SAFETY: the trace passes three 8-byte slots of its own stack frame, valid and unaliased for this call; the signature is safe, so nothing enforces that for other callers
-        unsafe {
-            ctrl_out.write(ctrl_raw as i64);
-            key_out.write(key_raw as i64);
-            val_out.write(val_raw as i64);
-        }
+        *ctrl_out = ctrl_raw as i64;
+        *key_out = key_raw as i64;
+        *val_out = val_raw as i64;
         i64::from(key_tag) | i64::from(val_tag) << 8
     }
 

@@ -126,8 +126,7 @@ impl Vm {
             UpvalState::Closed(_) => {
                 // SAFETY: `uv` is an upvalue of `cl`, a closure the caller holds (a debug.setupvalue argument); the `state()` copy has ended, so no reference into the cell is live, and the borrow covers one call
                 unsafe { uv.as_mut() }.set_closed(v);
-                self.heap
-                    .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, v);
+                self.heap.barrier_forward(uv, v);
             }
         }
     }

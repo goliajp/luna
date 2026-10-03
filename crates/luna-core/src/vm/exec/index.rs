@@ -278,8 +278,7 @@ impl Vm {
                     // the table and does not collect
                     if !std::mem::take(&mut skip) && unsafe { tb.as_mut() }.try_set_existing(key, v)
                     {
-                        self.heap
-                            .barrier_back(tb.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                        self.heap.barrier_back(tb);
                         return Ok(MmOut::Done(Value::Nil));
                     }
                     let mm = self.get_mm(cur, Mm::NewIndex);
@@ -318,8 +317,7 @@ impl Vm {
         // SAFETY: `t` is a table the caller holds (an operand of the running op or a native argument); the borrow lives for the one `set_inlined`, which touches only the heap and the table and does not collect
         match unsafe { t.as_mut() }.set_inlined(&mut self.heap, key, v) {
             Ok(()) => {
-                self.heap
-                    .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                self.heap.barrier_back(t);
                 Ok(())
             }
             Err(TableError::NilIndex) => Err(self.runerror("table index is nil")),

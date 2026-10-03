@@ -77,8 +77,7 @@ impl Vm {
         m.globals = c.globals;
         // bulk-overwrite of every collectable field traced by Coro::trace:
         // demote the coro back to gray so propagate re-traces its new state.
-        self.heap
-            .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
+        self.heap.barrier_back(co);
     }
 
     /// `coroutine.resume` core: drive `co` with `args` until it yields, returns
@@ -116,8 +115,7 @@ impl Vm {
                 m.natives = self.natives_base..self.running_natives.len();
                 // bulk overwrite of every traced field on r — mirror
                 // store_coro_ctx's barrier_back so propagate re-traces r.
-                self.heap
-                    .barrier_back(r.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                self.heap.barrier_back(r);
             }
             None => self.main_ctx = Some(rctx),
         }
@@ -131,8 +129,7 @@ impl Vm {
         }
         // co.resumer is a traced Gc field; barrier_back covers the new
         // resumer reference and any future field writes during this call.
-        self.heap
-            .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
+        self.heap.barrier_back(co);
         self.current = Some(co);
         let resumer_natives_base = self.natives_base;
         self.natives_base = self.running_natives.len();
@@ -160,8 +157,7 @@ impl Vm {
                 Some(e) => {
                     // SAFETY: `co` is still `self.current`, a root, and the coroutine's frames have all unwound; the borrow covers one field store
                     unsafe { co.as_mut() }.error_value = Some(e);
-                    self.heap
-                        .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                    self.heap.barrier_back(co);
                     (Err(LuaError(e)), CoroStatus::Dead)
                 }
                 None => (Ok(Vec::new()), CoroStatus::Dead),
@@ -192,8 +188,7 @@ impl Vm {
                     if let Err(e) = drive {
                         // SAFETY: `co` is still `self.current`, a root; the borrow covers one field store
                         unsafe { co.as_mut() }.error_value = Some(e.0);
-                        self.heap
-                            .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                        self.heap.barrier_back(co);
                     }
                     (drive, CoroStatus::Dead)
                 }

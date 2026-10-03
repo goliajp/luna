@@ -107,8 +107,7 @@ impl Vm {
             }
             // co.hook.func is a traced Value (Coro::trace covers it); demote
             // co back to gray so propagate sees the new hook function.
-            self.heap
-                .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
+            self.heap.barrier_back(co);
         }
     }
 

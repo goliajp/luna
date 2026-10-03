@@ -41,7 +41,8 @@ fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let vm_ptr: *mut Vm = vm as *mut Vm;
     let nret = cf(vm_ptr as *mut LuaState) as usize;
     // Re-borrow.
-    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
+    // SAFETY: `vm_ptr` came from the `&mut Vm` this function holds for its whole call, and the C
+    // function has returned, so no reference it made from `L` is still in use
     let vm = unsafe { &mut *vm_ptr };
     let stack_len = vm.capi_stack.len();
     if stack_len < baseline + nret {
@@ -62,10 +63,15 @@ fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// the calling `LuaState*` and reads its args from positions 1..N on the
 /// stack; it must push its results and return the result count (PUC's
 /// `lua_pushcfunction`).
-// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
+///
+/// # Safety
+/// `L` is a state from `luaL_newstate` that `lua_close` has not freed, and no other API
+/// call on it is running other than a C function it is calling into.
+// SAFETY: no other item in the link is named `lua_pushcfunction`: the host does not link PUC's liblua
+// next to this crate, which defines each `lua_*` symbol once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pushcfunction(L: *mut LuaState, f: LuaCFunction) {
-    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
+    // SAFETY: `L` is an open state no other call is using (# Safety)
     let vm = unsafe { vm_mut(L) };
     let cf_ptr = f as *const ();
     let trampoline: luna_core::runtime::value::NativeFn = capi_trampoline;
@@ -76,22 +82,32 @@ pub unsafe extern "C" fn lua_pushcfunction(L: *mut LuaState, f: LuaCFunction) {
 /// `lua_register(L, name, f)`: install `f` as the global named `name`
 /// (PUC `lua_register`, defined in lua.h as a macro over pushcfunction
 /// + setglobal).
-// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
+///
+/// # Safety
+/// `L` is a state from `luaL_newstate` that `lua_close` has not freed, and no other API
+/// call on it is running other than a C function it is calling into.
+/// `name` is null or a NUL-terminated string that stays valid for the call.
+// SAFETY: no other item in the link is named `lua_register`: the host does not link PUC's liblua
+// next to this crate, which defines each `lua_*` symbol once
 #[unsafe(no_mangle)]
-// SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
 pub unsafe extern "C" fn lua_register(L: *mut LuaState, name: *const c_char, f: LuaCFunction) {
-    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
+    // SAFETY: `L` is an open state no other call is using (# Safety)
     unsafe { lua_pushcfunction(L, f) };
-    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
+    // SAFETY: `L` as above, and `name` is null or NUL-terminated and valid for the call (# Safety)
     unsafe { lua_setglobal(L, name) };
 }
 
 /// Return the Lua version this state targets (e.g. 505 for 5.5), matching
 /// PUC's `LUA_VERSION_NUM` shape.
-// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
+///
+/// # Safety
+/// `L` is a state from `luaL_newstate` that `lua_close` has not freed, and no other API
+/// call on it is running other than a C function it is calling into.
+// SAFETY: no other item in the link is named `lua_version`: the host does not link PUC's liblua
+// next to this crate, which defines each `lua_*` symbol once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_version(L: *mut LuaState) -> c_int {
-    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
+    // SAFETY: `L` is an open state no other call is using (# Safety)
     let vm = unsafe { vm_mut(L) };
     match vm.version() {
         LuaVersion::Lua51 => 501,

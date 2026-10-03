@@ -59,7 +59,7 @@ impl Table {
             self.trace_weak(wk, wv, m);
         }
         if let Some(mt) = self.metatable {
-            m.header(mt.as_ptr() as *mut GcHeader);
+            m.mark(mt);
         }
     }
 
@@ -93,8 +93,9 @@ impl Table {
             if raw::is_gc(t) {
                 // SAFETY: the tag and payload arrays are kept in step by
                 // every writer; a collectable tag's payload is the object
-                // pointer, whichever pointer field of the union holds it
-                m.header(unsafe { v.s } as *mut GcHeader);
+                // pointer, whichever pointer field of the union holds it, and
+                // the object is allocated because this live table holds it
+                unsafe { m.header(v.s as *mut GcHeader) };
             }
         }
     }
@@ -104,12 +105,14 @@ impl Table {
         for n in self.nodes().iter() {
             // a dead key's tag is nil, so it is skipped here
             if KEYS && value_tag_is_gc(n.key_tag) {
-                // SAFETY: the tag was just checked
-                m.header(unsafe { key_obj(n) });
+                // SAFETY: the tag was just checked, and the key's object is
+                // allocated because this live table holds it
+                unsafe { m.header(key_obj(n)) };
             }
             if VALS && value_tag_is_gc(n.val.tag_byte()) {
-                // SAFETY: the tag was just checked
-                m.header(unsafe { value_obj(&n.val) });
+                // SAFETY: the tag was just checked, and the value's object is
+                // allocated because this live table holds it
+                unsafe { m.header(value_obj(&n.val)) };
             }
         }
     }

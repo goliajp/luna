@@ -237,8 +237,12 @@ impl StringTable {
     }
 
     /// Unlink a dying interned string (called from sweep).
-    pub(crate) fn remove(&mut self, p: *mut LuaStr) {
-        // SAFETY: the caller (`free_obj`) passes a short string that is still allocated and linked in its bucket; `cur` points at a bucket slot or at the `hnext` of a chained, allocated string
+    ///
+    /// # Safety
+    /// `p` is a short string this table interned, still allocated and in its
+    /// bucket.
+    pub(crate) unsafe fn remove(&mut self, p: *mut LuaStr) {
+        // SAFETY: `p` is allocated and chained (the caller's contract), and every other chained string is allocated too, so `cur` always points at a bucket slot or at the `hnext` of a live string
         unsafe {
             let b = (*p).hash.get() as usize & (self.buckets.len() - 1);
             let mut cur: *mut *mut LuaStr = &mut self.buckets[b];

@@ -1,6 +1,6 @@
 //! Table allocation and store helpers.
 
-use crate::current_jit_vm;
+use crate::{current_jit_vm, str_arg, table_arg};
 
 /// Allocate an empty `Gc<Table>` on the active Vm's heap.
 /// Returns the Gc pointer pun'd to `i64`. The fresh table is rooted
@@ -121,11 +121,11 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
                 zero: *hash_raws_ptr.add(i),
             };
             (
-                key,
+                luna_core::runtime::Gc::from_ptr(key),
                 luna_core::runtime::Value::pack(*hash_kinds_ptr.add(i), raw),
             )
         };
-        let key = luna_core::runtime::Value::Str(luna_core::runtime::Gc::from_ptr(key));
+        let key = luna_core::runtime::Value::Str(key);
         let _ = table.set(&mut vm.heap, key, v);
     }
     g.as_ptr() as i64
@@ -150,8 +150,8 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) {
     if vm.jit.pending_err.is_some() {
         return;
     }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    // SAFETY: `t` is a live table (# Safety)
+    let g = unsafe { table_arg(t) };
     // A metatable on the target table means PUC would route
     // this write through __newindex; the JIT helper would bypass it. Park
     // a deopt request and let the dispatcher re-run the call through the
@@ -190,8 +190,8 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64,
     if vm.jit.pending_err.is_some() {
         return;
     }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    // SAFETY: `t` is a live table (# Safety)
+    let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
         vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return;
@@ -238,14 +238,14 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
     if vm.jit.pending_err.is_some() {
         return;
     }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    // SAFETY: `t` is a live table (# Safety)
+    let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
         vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return;
     }
-    let key_gc: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
-        luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
+    // SAFETY: `key_ptr` is an interned string (# Safety)
+    let key_gc = unsafe { str_arg(key_ptr) };
     let key = luna_core::runtime::Value::Str(key_gc);
     // SAFETY: `t` is a live table and (`val_tag`, `val_raw`) one value's
     // tag and payload (# Safety); `g` is not dereferenced again while
@@ -280,8 +280,8 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to
     // this call
     let vm = unsafe { current_jit_vm() };
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    // SAFETY: `t` is a live table (# Safety)
+    let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
         vm.jit.counters.deopt += 1;
         return 0;
@@ -318,8 +318,7 @@ fn barrier_for(
 ) {
     use luna_core::runtime::value::raw;
     if raw::is_gc(val.unpack().0) || raw::is_gc(key.unpack().0) {
-        vm.heap
-            .barrier_back(g.as_ptr() as *mut luna_core::runtime::heap::GcHeader);
+        vm.heap.barrier_back(g);
     }
 }
 
@@ -356,8 +355,8 @@ pub unsafe extern "C" fn luna_jit_table_set_field_checked(
     val_raw: i64,
     val_tag: i64,
 ) -> i64 {
-    let key: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
-        luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
+    // SAFETY: `key_ptr` is an interned string (# Safety)
+    let key = unsafe { str_arg(key_ptr) };
     // SAFETY: `checked_store` asks what this helper's own contract
     // guarantees (# Safety)
     unsafe { checked_store(t, luna_core::runtime::Value::Str(key), val_raw, val_tag) }
@@ -415,8 +414,8 @@ pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
     if vm.jit.pending_err.is_some() {
         return;
     }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    // SAFETY: `t` is a live table (# Safety)
+    let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
         vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return;
@@ -445,8 +444,8 @@ pub unsafe extern "C" fn luna_jit_table_set_float_float(t: i64, key_bits: i64, v
     if vm.jit.pending_err.is_some() {
         return;
     }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    // SAFETY: `t` is a live table (# Safety)
+    let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
         vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return;

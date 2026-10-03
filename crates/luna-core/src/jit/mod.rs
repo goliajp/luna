@@ -133,23 +133,16 @@ pub struct JitVmRebindRestore {
     pub prev_vm: *mut crate::vm::Vm,
     pub prev_cl: *const crate::runtime::LuaClosure,
     /// luna-jit-side function that writes `(prev_vm, prev_cl)` back
-    /// into the TLS cells. Set by `enter_jit`; never null when this
-    /// struct exists.
-    pub restore_fn:
-        unsafe fn(prev_vm: *mut crate::vm::Vm, prev_cl: *const crate::runtime::LuaClosure),
+    /// into the TLS cells. Set by `enter_jit`. It only stores the two
+    /// pointers; the helpers that read them are the ones with a
+    /// contract.
+    pub restore_fn: fn(prev_vm: *mut crate::vm::Vm, prev_cl: *const crate::runtime::LuaClosure),
 }
 
 impl Drop for JitVmGuard {
     fn drop(&mut self) {
         if let Some(r) = self.restore.take() {
-            // SAFETY: `restore_fn` is set only by luna-jit's
-            // `enter_jit`, which threads the prior TLS values into
-            // the guard at construction time. The fn ptr type is
-            // `unsafe fn` because the cells participate in the JIT
-            // helper SAFETY contract (`current_jit_vm` /
-            // `current_jit_closure` rely on slot validity during the
-            // dispatch window).
-            unsafe { (r.restore_fn)(r.prev_vm, r.prev_cl) };
+            (r.restore_fn)(r.prev_vm, r.prev_cl);
         }
     }
 }

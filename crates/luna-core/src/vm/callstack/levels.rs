@@ -360,8 +360,7 @@ impl Vm {
         let stack = match co {
             Some(co) if !self.is_current_thread(Some(co)) => {
                 // the coroutine's saved stack is traced through `co`; re-gray it
-                self.heap
-                    .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                self.heap.barrier_back(co);
                 // SAFETY: `co` is a suspended thread the caller holds (a native argument), not the running one, so the Vm holds no reference into its saved stack; the borrow lives until the slot is written, which does not collect
                 unsafe { &mut co.as_mut().stack }
             }

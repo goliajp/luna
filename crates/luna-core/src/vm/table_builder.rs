@@ -84,8 +84,7 @@ impl<'vm> TableBuilder<'vm> {
     /// are visible to the collector) and return the table handle.
     pub fn build(self) -> Gc<Table> {
         let TableBuilder { vm, t } = self;
-        vm.heap
-            .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+        vm.heap.barrier_back(t);
         t
     }
 }

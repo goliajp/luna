@@ -50,8 +50,7 @@ impl Vm {
                     // co.stack is traced by Coro::trace; demote co back to
                     // gray so propagate re-traces this slot if it was
                     // already black.
-                    self.heap
-                        .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                    self.heap.barrier_back(co);
                 }
                 None => self.main_ctx.as_mut().expect("main context").stack[s] = v,
             }

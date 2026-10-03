@@ -4,6 +4,8 @@ use std::fmt;
 use std::ops::Deref;
 use std::ptr::NonNull;
 
+use super::GcHeader;
+
 /// `Copy` handle to a heap-allocated GC-managed object. Layout is a single
 /// `NonNull<T>`; the GC walks reachability via root scanning and intrusive
 /// linkage on [`GcHeader`](super::GcHeader), not via reference counts.
@@ -19,8 +21,14 @@ impl<T> Clone for Gc<T> {
 impl<T> Copy for Gc<T> {}
 
 impl<T> Gc<T> {
+    /// Handle to the object at `p`. Panics when `p` is null.
+    ///
+    /// # Safety
+    /// `p` points at a live object of type `T` that a [`Heap`](super::Heap)
+    /// allocated and still manages, and whoever uses the handle keeps that
+    /// object reachable while doing so: [`Deref`] reads through it.
     #[doc(hidden)]
-    pub fn from_ptr(p: *mut T) -> Gc<T> {
+    pub unsafe fn from_ptr(p: *mut T) -> Gc<T> {
         Gc {
             ptr: NonNull::new(p).expect("gc pointer must be non-null"),
         }
@@ -29,7 +37,7 @@ impl<T> Gc<T> {
     /// [`Self::from_ptr`] without the null check.
     ///
     /// # Safety
-    /// `p` is not null.
+    /// As for [`Self::from_ptr`], and `p` is not null.
     #[inline(always)]
     pub(crate) unsafe fn from_ptr_unchecked(p: *mut T) -> Gc<T> {
         Gc {
@@ -65,6 +73,42 @@ impl<T> Gc<T> {
     pub unsafe fn as_mut<'a>(self) -> &'a mut T {
         // SAFETY: `ptr` is non-null and points at an object of the heap that allocated it; the caller's contract above keeps that object unfreed and unaliased for as long as the returned borrow lives
         unsafe { &mut *self.ptr.as_ptr() }
+    }
+}
+
+/// A type the GC allocates: `#[repr(C)]` with its [`GcHeader`] as the first
+/// field, so a pointer to the object is a pointer to its header. Sealed: only
+/// the runtime's own object types implement it.
+pub trait GcObject: sealed::Sealed {}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+macro_rules! gc_objects {
+    ($($t:ty),* $(,)?) => {$(
+        impl sealed::Sealed for $t {}
+        impl GcObject for $t {}
+        const _: () = assert!(std::mem::offset_of!($t, hdr) == 0);
+    )*};
+}
+
+gc_objects!(
+    crate::runtime::LuaStr,
+    crate::runtime::Table,
+    crate::runtime::Proto,
+    crate::runtime::LuaClosure,
+    crate::runtime::function::Upvalue,
+    crate::runtime::NativeClosure,
+    crate::runtime::Coro,
+    crate::runtime::Userdata,
+);
+
+impl<T: GcObject> Gc<T> {
+    /// The object's GC header.
+    #[inline(always)]
+    pub(crate) fn header(self) -> *mut GcHeader {
+        self.ptr.as_ptr().cast()
     }
 }
 

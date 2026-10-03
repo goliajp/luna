@@ -62,19 +62,11 @@ impl IntChunkCompiler for LlvmBackend {
         }
     }
 
-    #[allow(clippy::not_unsafe_ptr_arg_deref)] // Trait impl required by IntChunkCompiler; SAFETY contract documented in the body — caller is the dispatcher with a live `&mut Vm`. Matches `CraneliftBackend::enter`.
     fn enter(&self, vm: *mut Vm, cl: Option<Gc<LuaClosure>>) -> JitVmGuard {
-        // Reuse the shared `enter_jit` from `luna-jit-helpers` so the
+        // Reuse the shared entry from `luna-jit-helpers` so the
         // `JIT_VM` / `JIT_CL` TLS slots stay single-source-of-truth
         // across backends. Same RAII semantics as Cranelift's path.
-        //
-        // SAFETY: `IntChunkCompiler::enter` requires `vm` to be a live,
-        // exclusively borrowed Vm for the life of the guard; every
-        // caller (the chunk and trace dispatch paths in luna-core's
-        // `vm/exec`) passes a pointer made from its own `&mut Vm`,
-        // which outlives the guard it holds
-        let vm_ref = unsafe { &mut *vm };
-        luna_jit_helpers::enter_jit(vm_ref, cl)
+        luna_jit_helpers::enter_jit_ptr(vm, cl)
     }
 }
 
