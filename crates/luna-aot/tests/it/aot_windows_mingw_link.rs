@@ -131,10 +131,9 @@ fn windows_gnu_binary_has_lt_meta_and_lt_skix_sections() {
         Err(e) => Some(format!("{e}")),
     };
     if let Some(msg) = link_err {
-        assert!(
-            !cfg!(windows),
-            "aot_windows_mingw_link: MinGW build on a Windows host failed:\n{msg}"
-        );
+        if cfg!(windows) {
+            panic!("aot_windows_mingw_link: MinGW build on a Windows host failed:\n{msg}");
+        }
         // Mirror aot_cross_compile's skip-marker pattern: a missing
         // rust-std / linker is a skip not a hard fail.
         let skip_markers = [
