@@ -5,21 +5,6 @@
  */
 #include "shim.h"
 
-#define WRAP_V(name, P, A)                    \
-  void luna_capi_##name P;                    \
-  LUNA_HIDDEN void luna_c_##name P {          \
-    luna_capi_##name A;                       \
-    luna_check(L);                            \
-  }
-
-#define WRAP_R(R, name, P, A)                 \
-  R luna_capi_##name P;                       \
-  LUNA_HIDDEN R luna_c_##name P {             \
-    R r_ = luna_capi_##name A;                \
-    luna_check(L);                            \
-    return r_;                                \
-  }
-
 WRAP_V(lua_callk, (lua_State *L, int nargs, int nresults, lua_KContext ctx, lua_KFunction k),
        (L, nargs, nresults, ctx, k))
 WRAP_V(luna_callk_52, (lua_State *L, int nargs, int nresults, int ctx, lua_CFunction k),
