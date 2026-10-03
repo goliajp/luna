@@ -235,7 +235,7 @@ optimization.
 ### Fixed
 
 - Wrong values from the trace JIT when a loop keeps a table it builds in
-  an iteration (affects 2.1.0 through 4.0.1, on 5.4 and 5.5): after
+  an iteration (affects 1.3.0 through 4.0.1, on 5.4 and 5.5): after
   `last = t` or `prev = {n = i}` in a numeric `for`, the variable held
   the table of the iteration the trace was recorded on once the loop
   ended (`last.n` was 66 instead of 400), and so did the next
