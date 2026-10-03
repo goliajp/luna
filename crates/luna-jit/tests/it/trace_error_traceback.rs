@@ -77,6 +77,8 @@ fn source(name: &str) -> Vec<u8> {
 
 fn expected(name: &str, dialect: &str) -> String {
     let text = std::fs::read_to_string(fixture_dir().join(format!("{name}.txt"))).expect("read");
+    // a Windows checkout may turn the line ends into CRLF
+    let text = text.replace("\r\n", "\n");
     let head = format!("== {dialect}\n");
     let start = text.find(&head).expect("dialect section") + head.len();
     let end = text[start..]
