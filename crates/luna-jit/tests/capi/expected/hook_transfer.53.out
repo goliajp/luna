@@ -1,0 +1,8 @@
+call main ? locals: (*temporary)=<table> (*temporary)=cadd (*temporary)=bit32 (*temporary)=<function>
+call Lua g locals: x=x (*temporary)=rshift (*temporary)=<nil> (*temporary)=<function> | up main line=6
+tail Lua ? locals: a=x b=y (*temporary)=<function> (*temporary)=<nil> | up Lua line=5
+ret Lua ? locals: a=x b=y c=xy (*temporary)=xy | up main line=6
+call C cadd locals: (*temporary)=1 (*temporary)=2 | up main line=7
+ret C cadd locals: (*temporary)=1 (*temporary)=2 (*temporary)=3 (*temporary)=extra | up main line=7
+ret main ? locals: f=<function> g=<function> r=xy s=3
+status 0

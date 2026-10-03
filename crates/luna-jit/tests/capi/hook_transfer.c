@@ -29,10 +29,15 @@ static void hook(lua_State *L, lua_Debug *ar) {
   }
   printf(" ]");
 #endif
-  printf(" locals:");
-  for (i = 1; i <= 4; i++) {
-    name = lua_getlocal(L, ar, i);
-    if (name) { printf(" %s=", name); val(L, -1); lua_pop(L, 1); }
+  /* a Lua function's named locals as it starts; a C function's stack as
+     it is called */
+  if (ev == LUA_HOOKCALL) {
+    printf(" locals:");
+    for (i = 1; i <= 4; i++) {
+      name = lua_getlocal(L, ar, i);
+      if (name && (name[0] != '(' || *ar->what == 'C')) { printf(" %s=", name); val(L, -1); }
+      if (name) lua_pop(L, 1);
+    }
   }
   if (lua_getstack(L, 1, &up)) {
     lua_getinfo(L, "Sl", &up);
@@ -62,7 +67,7 @@ int main(void) {
     "  local c = a .. b\n"
     "  return c, 'r2'\n"
     "end\n"
-    "local function g(x) return f(x, 'y') end\n"
+    "local function g(x) local r = f(x, 'y') return r end\n"
     "local r = g('x')\n"
     "local s, t = cadd(1, 2)\n");
   lua_sethook(L, hook, LUA_MASKCALL | LUA_MASKRET, 0);
