@@ -59,8 +59,14 @@ impl Vm {
         // distance in luna's encoding is `loop_pc - prep_pc`; firing
         // `add_pc(bx - 1)` lands the running pc on OP_FORLOOP itself.
         let pre53 = self.version() <= LuaVersion::Lua53;
+        // 5.1/5.2 have only doubles: PUC steps every loop in floating
+        // point, so a loop over integers the VM keeps (`#t`) is a float
+        // loop too. An integer loop there would wrap instead of rounding
+        // and would compare with a floored limit (`for i = 1, 1.5, 0`
+        // runs zero times on PUC, forever with the limit floored to 1).
+        let dbl = self.version() <= LuaVersion::Lua52;
         match (init_n, step_n) {
-            (Num::Int(i0), Num::Int(st)) => {
+            (Num::Int(i0), Num::Int(st)) if !dbl => {
                 if pre53 {
                     // PUC 5.3 `forlimit`: int limit passes through; float limit
                     // gets clamped to MIN/MAX with a `stopnow` flag set only
@@ -86,7 +92,7 @@ impl Vm {
                             } else if f > 0.0 {
                                 (i64::MAX, st < 0)
                             } else {
-                                (i64::MIN, st > 0)
+                                (i64::MIN, st >= 0)
                             }
                         }
                     };
