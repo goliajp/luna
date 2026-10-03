@@ -1,0 +1,20 @@
+== 5.1
+stack traceback:
+	runtime.lua:1: in function 'f'
+	runtime.lua:3: in main chunk
+== 5.2
+stack traceback:
+	runtime.lua:1: in function 'f'
+	runtime.lua:3: in main chunk
+== 5.3
+stack traceback:
+	runtime.lua:1: in local 'f'
+	runtime.lua:3: in main chunk
+== 5.4
+stack traceback:
+	runtime.lua:1: in local 'f'
+	runtime.lua:3: in main chunk
+== 5.5
+stack traceback:
+	runtime.lua:1: in local 'f'
+	runtime.lua:3: in main chunk

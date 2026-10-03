@@ -237,10 +237,26 @@ pub(super) fn cache_compiled_trace(
     record: &crate::jit::trace::TraceRecord,
 ) {
     cache_trace(proto, ct);
+    keep_inlined(
+        proto,
+        record
+            .ops
+            .iter()
+            .filter(|op| op.inline_depth > 0)
+            .map(|op| op.proto),
+    );
+}
+
+/// Keeps the prototypes in `inlined` alive while `proto` lives: a trace
+/// cached on `proto` checks callees against them by address.
+pub(super) fn keep_inlined(
+    proto: Gc<crate::runtime::function::Proto>,
+    inlined: impl IntoIterator<Item = Gc<crate::runtime::function::Proto>>,
+) {
     let mut kept = proto.inlined_protos.borrow_mut();
-    for op in record.ops.iter().filter(|op| op.inline_depth > 0) {
-        if !op.proto.ptr_eq(proto) && !kept.iter().any(|p| p.ptr_eq(op.proto)) {
-            kept.push(op.proto);
+    for p in inlined {
+        if !p.ptr_eq(proto) && !kept.iter().any(|k| k.ptr_eq(p)) {
+            kept.push(p);
         }
     }
 }

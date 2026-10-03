@@ -36,7 +36,8 @@ pub(super) fn array_read<E: Emit>(
     lw.bcx.block_params(merge)[0]
 }
 
-/// `t[key] = val` into the array part for a number value: emits the
+/// `t[key] = val` into the array part for a number value (testing that
+/// `t` is not read-only when `test_readonly`): emits the
 /// inline store and leaves the builder in its miss block, where the
 /// caller emits the helper store and then calls [`array_write_join`] with
 /// the returned block.
@@ -46,13 +47,14 @@ pub(super) fn array_write<E: Emit>(
     key: Value,
     val: Value,
     kind: RegKind,
+    test_readonly: bool,
 ) -> Option<Block> {
     if !matches!(kind, RegKind::Int | RegKind::Float) {
         return None;
     }
     let done = bcx.create_block();
     let miss = bcx.create_block();
-    array_slot::emit_array_set(bcx, t, key, val, kind_tag(kind), done, miss);
+    array_slot::emit_array_set(bcx, t, key, val, kind_tag(kind), done, miss, test_readonly);
     bcx.switch_to_block(miss);
     bcx.seal_block(miss);
     Some(done)

@@ -82,5 +82,7 @@ pub(super) fn alt_join<E: Emit>(lw: &mut Lower<E>, i: usize) {
             lw.known_int[w as usize] = None;
             lw.const_str[w as usize] = false;
         }
+        // a table tested on only one of the ways is not tested here
+        lw.ro_checked.clear();
     }
 }

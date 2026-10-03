@@ -44,6 +44,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      # the AOT tests build and run both Windows targets natively: MSVC
+      # (cl.exe / link.exe found in the Visual Studio install) and MinGW
+      # (the runner's C:\mingw64 gcc)
+      - name: rustup target add x86_64-pc-windows-gnu
+        if: runner.os == 'Windows'
+        run: rustup target add x86_64-pc-windows-gnu
       - uses: Swatinem/rust-cache@v2
         with:
           # keep what cargo built for workspace crates too: pruning them
@@ -248,6 +254,10 @@ jobs:
         run: cargo clippy -p luna-core --features send --tests -- -D warnings
       - name: 'cargo test -p luna-core --features send --test it -- send_vm::'
         run: 'cargo test -p luna-core --features send --test it -- send_vm::'
+      # a JIT Vm of a shared engine, moved to another thread, installs the
+      # engine's traces there
+      - name: 'cargo test -p luna-jit --features send --test it -- engine_shared_traces::'
+        run: 'cargo test -p luna-jit --features send --test it -- engine_shared_traces::'
 
   # ─────────────────────────────────────────────────────────────────
   # unsafe-usage drift detection.
@@ -270,7 +280,11 @@ jobs:
   # handle built from a pointer, mostly in the luna_jit_* helpers) took
   # it to 908; the baseline trace tier's code pages and entries took it
   # to 921; rooting the values a trace holds only in registers across
-  # helpers that can collect took it to 924, the ceiling now.
+  # helpers that can collect took it to 924; inlining calls into other
+  # prototypes took it to 936, running AOT binaries of other dialects to
+  # 938, sharing compiled code between Vms to 948, read-only tables (the
+  # table flag, its debug check, a test) to 952, and the trace
+  # machine-code dump to 953, the ceiling now.
   # docs/unsafe-accounting.md has the count per crate and module
   # and why each kind of site exists. Each justified unsafe addition
   # needs an explicit ceiling bump to the new exact count. Never widen to
@@ -285,7 +299,7 @@ jobs:
         run: |
           count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
                   crates | wc -l | tr -d ' ')
-          ceiling=938
+          ceiling=953
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then

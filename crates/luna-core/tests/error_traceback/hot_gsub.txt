@@ -1,0 +1,35 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	hot_gsub.lua:1: in function <hot_gsub.lua:1>
+	[C]: in function 'gsub'
+	hot_gsub.lua:2: in function 'g'
+	hot_gsub.lua:3: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	hot_gsub.lua:1: in function <hot_gsub.lua:1>
+	[C]: in function 'gsub'
+	hot_gsub.lua:2: in function 'g'
+	hot_gsub.lua:3: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	hot_gsub.lua:1: in function <hot_gsub.lua:1>
+	[C]: in function 'string.gsub'
+	hot_gsub.lua:2: in local 'g'
+	hot_gsub.lua:3: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	hot_gsub.lua:1: in function <hot_gsub.lua:1>
+	[C]: in function 'string.gsub'
+	hot_gsub.lua:2: in local 'g'
+	hot_gsub.lua:3: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	hot_gsub.lua:1: in function <hot_gsub.lua:1>
+	[C]: in field 'gsub'
+	hot_gsub.lua:2: in local 'g'
+	hot_gsub.lua:3: in main chunk

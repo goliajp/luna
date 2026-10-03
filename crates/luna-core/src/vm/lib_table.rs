@@ -4,7 +4,7 @@
 //! metamethods with `lua_Integer` indices. `sort` is PUC's quicksort run in
 //! place, so the comparator sees the same calls in the same order.
 
-use crate::runtime::Value;
+use crate::runtime::{TableError, Value};
 use crate::version::LuaVersion as V;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::raise_str;
@@ -170,11 +170,11 @@ fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value) -> Result<(), LuaError> {
     if vm.version() <= V::Lua52 {
         if let Value::Table(t) = tv {
             // SAFETY: `t` is the table argument, kept alive by its stack slot; no reference into it is live across the `set`, which does not collect
-            if unsafe { t.as_mut() }
-                .set(&mut vm.heap, Value::Int(i), v)
-                .is_err()
-            {
-                return Err(vm.rt_err("table overflow"));
+            match unsafe { t.as_mut() }.set(&mut vm.heap, Value::Int(i), v) {
+                Ok(()) => {}
+                // lua_rawseti in Redis refuses a read-only table
+                Err(e @ TableError::ReadOnly) => return Err(vm.table_error(e)),
+                Err(_) => return Err(vm.rt_err("table overflow")),
             }
             vm.barrier_back_table(t);
         }

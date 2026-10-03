@@ -1,0 +1,30 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	hot_inline_method.lua:4: in function 'get'
+	hot_inline_method.lua:5: in function 'twice'
+	hot_inline_method.lua:7: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	hot_inline_method.lua:4: in function 'get'
+	hot_inline_method.lua:5: in function 'twice'
+	hot_inline_method.lua:7: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	hot_inline_method.lua:4: in method 'get'
+	hot_inline_method.lua:5: in method 'twice'
+	hot_inline_method.lua:7: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	hot_inline_method.lua:4: in method 'get'
+	hot_inline_method.lua:5: in method 'twice'
+	hot_inline_method.lua:7: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	hot_inline_method.lua:4: in method 'get'
+	hot_inline_method.lua:5: in method 'twice'
+	hot_inline_method.lua:7: in main chunk

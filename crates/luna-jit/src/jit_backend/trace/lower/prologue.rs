@@ -315,7 +315,10 @@ pub(super) fn start_accum<E: Emit>(
 
 /// Creates the loop head (and the math-fold precheck block, when the
 /// folds are checked once) and jumps there from the entry block.
-pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> (Option<Block>, Block) {
+pub(super) fn open_body_loop<E: Emit>(
+    bcx: &mut E,
+    pl: &Plan<'_>,
+) -> (Option<Block>, Option<Block>, Block) {
     let Plan {
         record,
         effective_end,
@@ -349,11 +352,17 @@ pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> (Option<Blo
     });
     // Filled in below, once the exit bookkeeping exists.
     let precheck = (fold_check_once && !math_folds.is_empty()).then(|| bcx.create_block());
+    // the read-only tests before the loop head (see `readonly`)
+    let ro_precheck = record.ops[..effective_end]
+        .iter()
+        .any(|rop| matches!(rop.inst.op(), Op::SetField | Op::SetI | Op::SetTable))
+        .then(|| bcx.create_block());
 
     let body_loop = bcx.create_block();
-    bcx.ins().jump(precheck.unwrap_or(body_loop), &[]);
+    bcx.ins()
+        .jump(precheck.or(ro_precheck).unwrap_or(body_loop), &[]);
     // `body_loop` is entered after the precheck block is emitted (below):
     // reading a register there first would leave it half-built while
     // another block is emitted, which the builder rejects.
-    (precheck, body_loop)
+    (precheck, ro_precheck, body_loop)
 }

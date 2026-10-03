@@ -98,6 +98,7 @@ pub(super) fn ll_seeall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let mt = match t.metatable() {
         Some(mt) => mt,
         None => {
+            vm.refuse_readonly(t)?;
             let mt = vm.heap.new_table();
             // SAFETY: `t` is the table argument, kept alive by its stack slot; `mt` is a separate new table, and the borrow covers one call
             unsafe { t.as_mut() }.set_metatable(Some(mt));

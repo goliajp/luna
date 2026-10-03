@@ -1,0 +1,23 @@
+== 5.1
+stack traceback:
+	hot_native.lua:3: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'rep'
+	hot_native.lua:1: in function 'f'
+	hot_native.lua:3: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'string.rep'
+	hot_native.lua:1: in local 'f'
+	hot_native.lua:3: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'string.rep'
+	hot_native.lua:1: in local 'f'
+	hot_native.lua:3: in main chunk
+== 5.5
+stack traceback:
+	[C]: in field 'rep'
+	hot_native.lua:1: in local 'f'
+	hot_native.lua:3: in main chunk

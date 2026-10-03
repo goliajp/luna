@@ -11,13 +11,7 @@ use std::process::Command;
 use luna_aot::embed::compile_and_link;
 use luna_core::version::LuaVersion;
 
-fn have_on_path(bin: &str) -> bool {
-    Command::new(bin)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success() || o.status.code().is_some())
-        .unwrap_or(false)
-}
+use crate::host_link::host_can_link;
 
 // a `while` loop, not a numeric `for`: the trace JIT leaves a numeric `for`
 // of 5.1-5.3 to the interpreter (their loop semantics differ from 5.4's),
@@ -28,14 +22,8 @@ const HOT_LOOP: &str =
 /// Build `script` for `version`, run it with the AOT probe on, and check
 /// its stdout and that at least one AOT trace was installed and fired.
 fn build_and_run(stem: &str, version: LuaVersion, script: &str, expected_stdout: &str) {
-    // a Windows host links through the MSVC driver, which CI's Windows
-    // runner does not have; aot-cross runs each dialect's PE under Wine
-    if cfg!(target_os = "windows") {
-        eprintln!("skipped: not supported on Windows");
-        return;
-    }
-    if !have_on_path("cc") || !have_on_path("cargo") {
-        eprintln!("skipped: cc / cargo not on PATH");
+    if !host_can_link() {
+        eprintln!("skipped: cargo / cc not on PATH");
         return;
     }
     let td = tempfile::tempdir().expect("tempdir");
