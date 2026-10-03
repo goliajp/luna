@@ -18,6 +18,12 @@ use cranelift_codegen::ir::{
 };
 use cranelift_frontend::Variable;
 
+/// A memory access's flags as the replay needs them (the lowerer only uses
+/// `MemFlagsData::new()` and `MemFlagsData::trusted()`): `1` for trusted.
+fn trusted(flags: impl Into<MemFlagsData>) -> u32 {
+    u32::from(flags.into().notrap())
+}
+
 impl Ins for Lir {
     fn create_block(&mut self) -> Block {
         self.blocks.push(BlockData {
@@ -191,9 +197,9 @@ impl Ins for Lir {
         let t = self.ty_of_value(x);
         let d = self.new_value(Ty::I8);
         if let Some(c) = self.konst[v(y) as usize] {
-            self.push(Op::IcmpImm(cc, c), t, d, v(x), NONE, NONE);
+            self.push(Op::IcmpImm(cc, c), t, d, v(x), NONE, v(y));
         } else if let Some(c) = self.konst[v(x) as usize] {
-            self.push(Op::IcmpImm(cc.swap_args(), c), t, d, v(y), NONE, NONE);
+            self.push(Op::IcmpImm(cc.swap_args(), c), t, d, v(y), NONE, v(x));
         } else {
             self.push(Op::Icmp(cc), t, d, v(x), v(y), NONE);
         }
@@ -259,30 +265,33 @@ impl Ins for Lir {
     fn load(
         &mut self,
         ty: Type,
-        _flags: impl Into<MemFlagsData>,
+        flags: impl Into<MemFlagsData>,
         p: Value,
         off: impl Into<Offset32>,
     ) -> Value {
-        self.def(Op::Load(off.into().into()), Ty::of(ty), v(p), NONE, NONE)
+        let op = Op::Load(off.into().into());
+        self.def(op, Ty::of(ty), v(p), NONE, trusted(flags))
     }
     fn uload8(
         &mut self,
         ty: Type,
-        _flags: impl Into<MemFlagsData>,
+        flags: impl Into<MemFlagsData>,
         p: Value,
         off: impl Into<Offset32>,
     ) -> Value {
-        self.def(Op::Uload8(off.into().into()), Ty::of(ty), v(p), NONE, NONE)
+        let op = Op::Uload8(off.into().into());
+        self.def(op, Ty::of(ty), v(p), NONE, trusted(flags))
     }
     fn store(
         &mut self,
-        _flags: impl Into<MemFlagsData>,
+        flags: impl Into<MemFlagsData>,
         x: Value,
         p: Value,
         off: impl Into<Offset32>,
     ) -> CInst {
         let t = self.ty_of_value(x);
-        CInst::from_u32(self.push(Op::Store(off.into().into()), t, NONE, v(x), v(p), NONE))
+        let op = Op::Store(off.into().into());
+        CInst::from_u32(self.push(op, t, NONE, v(x), v(p), trusted(flags)))
     }
     fn stack_addr(&mut self, _ty: Type, ss: StackSlot, off: impl Into<Offset32>) -> Value {
         self.def(

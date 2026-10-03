@@ -59,6 +59,16 @@ impl Replay<'_, '_> {
         args.iter().map(|&a| BlockArg::Value(a)).collect()
     }
 
+    /// The immediate operand of `i`: the lowerer's constant when it is
+    /// defined here (one register for every use, as in the lowerer's own
+    /// Cranelift IR), else a new one.
+    fn imm(&mut self, i: &Inst, t: Type, imm: i64) -> Value {
+        match self.vals.get(i.c as usize).copied().flatten() {
+            Some(c) => c,
+            None => self.b.ins().iconst(t, imm),
+        }
+    }
+
     fn set(&mut self, dst: u32, v: Value) {
         self.vals[dst as usize] = Some(v);
     }
@@ -111,7 +121,6 @@ impl Replay<'_, '_> {
     fn inst(&mut self, i: &Inst) {
         let lir = self.lir;
         let t = cty(i.ty);
-        let trusted = MemFlagsData::trusted();
         match i.op {
             Op::Iconst(n) => {
                 let v = self.b.ins().iconst(t, n);
@@ -126,7 +135,7 @@ impl Replay<'_, '_> {
                 self.set(i.dst, v);
             }
             Op::BinImm(op, imm) => {
-                let c = self.b.ins().iconst(t, imm);
+                let c = self.imm(i, t, imm);
                 let v = self.bin(op, self.v(i.a), c);
                 self.set(i.dst, v);
             }
@@ -141,7 +150,7 @@ impl Replay<'_, '_> {
                 self.set(i.dst, v);
             }
             Op::IcmpImm(cc, imm) => {
-                let c = self.b.ins().iconst(t, imm);
+                let c = self.imm(i, t, imm);
                 let o0 = self.v(i.a);
                 let v = self.b.ins().icmp(cc, o0, c);
                 self.set(i.dst, v);
@@ -161,18 +170,18 @@ impl Replay<'_, '_> {
             }
             Op::Load(off) => {
                 let o0 = self.v(i.a);
-                let v = self.b.ins().load(t, trusted, o0, off);
+                let v = self.b.ins().load(t, flags(i.c), o0, off);
                 self.set(i.dst, v);
             }
             Op::Uload8(off) => {
                 let o0 = self.v(i.a);
-                let v = self.b.ins().uload8(t, trusted, o0, off);
+                let v = self.b.ins().uload8(t, flags(i.c), o0, off);
                 self.set(i.dst, v);
             }
             Op::Store(off) => {
                 let o0 = self.v(i.a);
                 let o1 = self.v(i.b);
-                self.b.ins().store(trusted, o0, o1, off);
+                self.b.ins().store(flags(i.c), o0, o1, off);
             }
             Op::StackAddr(slot, off) => {
                 let v = self
@@ -249,6 +258,26 @@ impl Replay<'_, '_> {
     }
 }
 
+/// The flags the lowerer gave a memory access (see `Op::Load`).
+fn flags(trusted: u32) -> MemFlagsData {
+    if trusted == 1 {
+        MemFlagsData::trusted()
+    } else {
+        MemFlagsData::new()
+    }
+}
+
+/// The blocks the replay of `i` branches to (only the continuation of a
+/// `TierCount`, which Cranelift code does not count).
+fn targets(i: &Inst) -> [Option<u32>; 2] {
+    match i.op {
+        Op::Jump => [Some(i.a), None],
+        Op::Brif(_) => [Some(i.b), Some(i.c)],
+        Op::TierCount { .. } => [Some(i.c), None],
+        _ => [None, None],
+    }
+}
+
 /// Defines the trace function in `module` from `lir`.
 pub(crate) fn define<M: Module>(lir: &Lir, module: &mut M) -> Option<FuncId> {
     let mut an = live::Analysis::default();
@@ -305,15 +334,40 @@ pub(crate) fn define<M: Module>(lir: &Lir, module: &mut M) -> Option<FuncId> {
         slots,
         call_conv,
     };
+    // each block is sealed once its last predecessor branches to it: with
+    // every block left open until the end, Cranelift's SSA construction
+    // gives loop heads and merges a parameter for each variable read there,
+    // and the loop carries all of them
+    let mut preds = vec![0u32; lir.blocks.len()];
     for &blk in &an.order {
-        r.b.switch_to_block(r.blocks[blk as usize].expect("laid out"));
+        let (lo, hi) = an.block_at[blk as usize];
+        for c in lo..hi {
+            for t in targets(&lir.insts[an.code[c as usize] as usize])
+                .into_iter()
+                .flatten()
+            {
+                preds[t as usize] += 1;
+            }
+        }
+    }
+    for &blk in &an.order {
+        let cb = r.blocks[blk as usize].expect("laid out");
+        r.b.switch_to_block(cb);
+        if preds[blk as usize] == 0 {
+            r.b.seal_block(cb);
+        }
         let (lo, hi) = an.block_at[blk as usize];
         for c in lo..hi {
             let i = lir.insts[an.code[c as usize] as usize];
             r.inst(&i);
+            for t in targets(&i).into_iter().flatten() {
+                preds[t as usize] -= 1;
+                if preds[t as usize] == 0 {
+                    r.b.seal_block(r.blocks[t as usize].expect("laid out"));
+                }
+            }
         }
     }
-    r.b.seal_all_blocks();
     r.b.finalize(module.target_config());
     crate::jit_backend::trace::drop_unused_block_params(&mut ctx.func);
     // `LUNA_TRACE_IR_DUMP=1`, as for the lowerer's own Cranelift IR
@@ -323,7 +377,15 @@ pub(crate) fn define<M: Module>(lir: &Lir, module: &mut M) -> Option<FuncId> {
             ctx.func.display()
         );
     }
+    // and `LUNA_TRACE_ASM_DUMP=1` for the machine code
+    let asm_dump = std::env::var_os("LUNA_TRACE_ASM_DUMP").is_some_and(|v| v == "1");
+    if asm_dump {
+        ctx.set_disasm(true);
+    }
     module.define_function(fn_id, &mut ctx).ok()?;
+    if asm_dump && let Some(vcode) = ctx.compiled_code().and_then(|c| c.vcode.as_ref()) {
+        eprintln!("=== TRACE ASM DUMP (from baseline) ===\n{vcode}\n=== END ===");
+    }
     module.clear_context(&mut ctx);
     Some(fn_id)
 }

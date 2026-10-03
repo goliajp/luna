@@ -55,6 +55,9 @@ pub(crate) fn write(lir: &Lir, an: &Analysis, al: &Allocation, code: &[u8]) {
                 Op::Jump => (format!("block{}", i.a), String::new(), String::new()),
                 Op::Brif(_) => (name(i.a), format!("block{}", i.b), format!("block{}", i.c)),
                 Op::Call => (format!("fn{}", i.a), String::new(), String::new()),
+                Op::Load(_) | Op::Uload8(_) | Op::Store(_) => {
+                    (name(i.a), name(i.b), format!("trusted={}", i.c))
+                }
                 _ => (name(i.a), name(i.b), name(i.c)),
             };
             let _ = writeln!(
