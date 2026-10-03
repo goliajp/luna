@@ -97,7 +97,7 @@ impl Vm {
         if target.is_none() || self.is_current_thread(target) {
             self.install_hook(state);
         } else if let Some(co) = target {
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            // SAFETY: `co` is a thread the caller holds (a native argument) and not the running one, so the Vm holds no reference into its saved frames; `m` is the only reference into it until the function returns
             let m = unsafe { co.as_mut() };
             m.hook = state;
             if state.line
@@ -107,8 +107,7 @@ impl Vm {
             }
             // co.hook.func is a traced Value (Coro::trace covers it); demote
             // co back to gray so propagate sees the new hook function.
-            self.heap
-                .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
+            self.heap.barrier_back(co);
         }
     }
 

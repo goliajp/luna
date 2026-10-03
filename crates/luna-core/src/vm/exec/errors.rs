@@ -336,8 +336,7 @@ impl Vm {
             return Some(self.stripped_prefix());
         }
         let line = proto.lines[(f.pc as usize).saturating_sub(1).min(proto.lines.len() - 1)];
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        let raw = unsafe { crate::runtime::string::bytes_of(proto.source.as_ptr()) };
+        let raw = proto.source.as_bytes();
         let display = crate::vm::lib_debug::chunk_id(self.version, raw);
         let src = String::from_utf8_lossy(&display).into_owned();
         Some(format!("{src}:{line}: "))

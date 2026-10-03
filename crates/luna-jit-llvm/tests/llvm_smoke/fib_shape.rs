@@ -77,13 +77,10 @@ fn fib_shape_nested_branchy_chunk() {
         panic!("fib-shape chunk must compile via compute path");
     };
     assert!(returns_one);
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    assert_eq!(
-        unsafe { entry_fn() },
-        104,
-        "n=7 → else → d=4 → d==4 → return 104",
-    );
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
+    assert_eq!(returned, 104, "n=7 → else → d=4 → d==4 → return 104",);
 }
 
 /// Same chunk, then-branch path (n=3):
@@ -115,9 +112,10 @@ fn fib_shape_nested_branchy_chunk_then_path() {
     else {
         panic!("then-branch chunk must compile");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    assert_eq!(unsafe { entry_fn() }, 9);
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
+    assert_eq!(returned, 9);
 }
 
 /// Deepest else-branch (n=11 → else → d=8 →
@@ -149,7 +147,8 @@ fn fib_shape_nested_branchy_chunk_deep_else() {
     else {
         panic!("deep-else chunk must compile");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    assert_eq!(unsafe { entry_fn() }, 2);
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
+    assert_eq!(returned, 2);
 }

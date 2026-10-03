@@ -112,7 +112,7 @@ pub(crate) fn nat_loadfile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             if vm.version() >= LuaVersion::Lua52 && !a.is_none(2) && !cl.upvals().is_empty() {
                 let env = a.get(vm, 2);
                 let uv = vm.heap.new_upvalue(crate::runtime::UpvalState::Closed(env));
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                // SAFETY: `cl` is the closure `load_path` just built, held only by this local, and `new_upvalue` does not collect; the borrow covers one slot store, inside the bounds checked by `upvals().is_empty()`
                 unsafe { cl.as_mut() }.upvals_mut()[0] = uv;
             }
             Ok(vm.nat_return(fs, &[Value::Closure(cl)]))

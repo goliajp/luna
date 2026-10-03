@@ -11,6 +11,8 @@ mod cli_lua_init;
 mod cli_options;
 mod cli_repl;
 mod cli_repl_edges;
+#[cfg(all(windows, feature = "repl-line-editor"))]
+mod cli_repl_terminal;
 mod close_cause_counts;
 mod corrupt_register_state_jit;
 mod downrec_close_recording;
@@ -18,6 +20,7 @@ mod downrec_dispatcher_stitch;
 mod downrec_keeps_dispatch_off;
 mod downrec_lowerer_stitch;
 mod downrec_multi_way_guard;
+mod field_ic_switch;
 mod forced_jit_corpus;
 mod jit_code_reuse_icache;
 mod jit_compare_operand_kinds;

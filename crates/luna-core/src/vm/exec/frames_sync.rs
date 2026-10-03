@@ -84,8 +84,7 @@ pub(super) fn frames_pop_known(
         cont_below,
         matches!(frames[frames.len() - 2], CallFrame::Cont(_))
     );
-    // SAFETY: the caller's contract; `CallFrame` is `Copy`, so nothing drops
-    unsafe { frames.set_len(frames.len() - 1) };
+    frames.truncate(frames.len() - 1);
     if cont_below {
         *trap = true;
     }

@@ -240,8 +240,7 @@ impl Vm {
                     || (*tb).metatable().is_none()
                         && table_raw_set_at(&mut *tb, &mut self.heap, pk, pv)
                 {
-                    self.heap
-                        .barrier_back(tb as *mut crate::runtime::heap::GcHeader);
+                    self.heap.barrier_back(Gc::from_ptr_unchecked(tb));
                     return true;
                 }
             }
@@ -275,24 +274,26 @@ impl Vm {
                     && raw_tag(slot) != tag::NIL
                 {
                     Value::copy_raw(slot, pv);
-                    self.heap
-                        .barrier_back(tb as *mut crate::runtime::heap::GcHeader);
+                    self.heap.barrier_back(Gc::from_ptr_unchecked(tb));
                     return true;
                 }
             }
         }
-        self.newindex_raw_at_cold(pt, pk, pv)
+        // SAFETY: the caller's contract
+        unsafe { self.newindex_raw_at_cold(pt, pk, pv) }
     }
 
+    /// # Safety
+    /// As for `newindex_raw_at`.
     #[cold]
     #[inline(never)]
-    fn newindex_raw_at_cold(
+    unsafe fn newindex_raw_at_cold(
         &mut self,
         pt: *const Value,
         pk: *const Value,
         pv: *const Value,
     ) -> bool {
-        // SAFETY: as for `newindex_raw_kstr_at`
+        // SAFETY: the caller's contract
         unsafe { self.newindex_raw_at(pt, pk, pv) }
     }
 
@@ -313,8 +314,7 @@ impl Vm {
             // SAFETY: the caller's contract; see `newindex_raw_at`
             && unsafe { table_set_existing_at(tb.as_mut(), pk, pv) }
         {
-            self.heap
-                .barrier_back(tb.as_ptr() as *mut crate::runtime::heap::GcHeader);
+            self.heap.barrier_back(tb);
             return true;
         }
         false

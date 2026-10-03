@@ -104,7 +104,7 @@ pub(super) fn f_seek(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
 fn seek_stream(u: Gc<Userdata>, op: usize, offset: i64) -> std::io::Result<u64> {
     drain_write_buf(u)?;
     let ahead = read_ahead(u);
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` is a file handle the caller holds; `drain_write_buf` and `read_ahead` have returned, and `m` is the only reference into it until return
     let m = unsafe { u.as_mut() };
     let from = match op {
         0 if offset < 0 => return Err(posix_error(EINVAL)),
@@ -149,7 +149,7 @@ pub(super) fn f_setvbuf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let op = argcheck::check_option(vm, a, 1, None, &["no", "full", "line"])?;
     argcheck::opt_integer(vm, a, 2, LUAL_BUFFERSIZE)?;
     let mode = [BUF_NO, BUF_FULL, BUF_LINE][op];
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` came from `check_open` on a native argument, so the stack keeps it; the borrow covers one field store
     unsafe { u.as_mut() }.buf_mode = mode;
     if mode == BUF_NO
         && let Err(e) = drain_write_buf(u)

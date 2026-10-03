@@ -18,10 +18,10 @@
 //!       order discipline;
 //!   (c) per-compile throwaway `Context` (slower but trivially correct).
 //!
-//! This uses **option (b) light**: each compile gets its
-//! own freshly-`Box::leak`-ed `Context` (so `Context` is `'static`),
-//! then its `ExecutionEngine` naturally lives `'static` too and
-//! lands in the cache `Vec` as a `Box<ExecutionEngine<'static>>`.
+//! This uses **option (b) light**: each compile gets its own boxed
+//! `Context`, borrowed as `'static`; its `ExecutionEngine<'static>`
+//! and the box land together in an [`EnginePair`] in the storage's
+//! `Vec`, which drops the engine before the context.
 //! Memory grows linearly with first-compile count (no growth on
 //! cache hit). If the per-compile init cost becomes measurable in
 //! benches, option (b) proper with one shared Context per Vm is the
@@ -71,9 +71,9 @@ impl CachedEntry {
 ///
 /// Two collections:
 /// - [`Self::cache`] — proto-key → cached entry. Lookups O(1).
-/// - [`Self::engines`] — owning vector of leaked
-///   `Box<ExecutionEngine<'static>>` so the JIT mmap stays alive
-///   for the Vm's lifetime.
+/// - [`Self::engines`] — owning vector of `EnginePair`s so the JIT
+///   mmap stays alive for the Vm's lifetime. A pair can move: the
+///   engine refers to the context through its box, not the pair.
 ///
 /// The cache key (`u64`) is computed by the codegen module from the
 /// proto's bytecode + constants (mirrors the Cranelift backend's
@@ -81,19 +81,15 @@ impl CachedEntry {
 #[derive(Default)]
 pub struct LlvmJitStorage {
     pub(crate) cache: HashMap<u64, CachedEntry>,
-    /// Owning rooted pairs of `(Context, ExecutionEngine)` keeping
-    /// the JIT mmap alive. Stored as `*mut ()` because the underlying
-    /// values are heterogeneous-lifetime inkwell types that don't
-    /// have a stable concrete type without the `'ctx` parameter.
-    /// Each entry is a `Box::into_raw` of an `EnginePair` allocated
-    /// on the heap; `Drop` walks the vec and reclaims them.
-    pub(crate) engines: Vec<*mut EnginePair>,
+    /// Owning pairs of `(Context, ExecutionEngine)` keeping the JIT
+    /// mmap alive. Declared after `cache`, whose entries point into
+    /// that code, so a drop releases the entries first.
+    pub(crate) engines: Vec<EnginePair>,
 }
 
-/// Heap-allocated `(Context, ExecutionEngine)` pair. Stored behind a
-/// raw pointer in [`LlvmJitStorage::engines`] because Rust's
-/// borrow checker can't express the self-referential
-/// `EE<'self::ctx>` relationship without `ouroboros`. The field
+/// Heap-allocated `(Context, ExecutionEngine)` pair. The engine is
+/// typed `'static` because the borrow checker can't express the
+/// self-referential `EE<'self::ctx>` relationship without `ouroboros`. The field
 /// order matters: `engine` must be dropped before `context` — Rust
 /// drops struct fields in declaration order, so engine first is the
 /// safe layout.
@@ -116,12 +112,7 @@ impl LlvmJitStorage {
     /// force a fresh compile between cases.
     pub fn clear(&mut self) {
         self.cache.clear();
-        for raw in self.engines.drain(..) {
-            // SAFETY: each pointer in `engines` originated from
-            // `Box::into_raw` in `LlvmJitStorage::insert` below; we
-            // reclaim it exactly once here.
-            drop(unsafe { Box::from_raw(raw) });
-        }
+        self.engines.clear();
     }
 
     /// Number of compiled entries currently cached. Used by tests
@@ -133,11 +124,9 @@ impl LlvmJitStorage {
     }
 
     /// Park a freshly-compiled (Context, EE) pair on the cache. The
-    /// `EnginePair` is heap-allocated and the pointer kept in
-    /// [`Self::engines`]; on drop / `clear` the box is reclaimed.
+    /// `EnginePair` is kept in [`Self::engines`] until drop / `clear`.
     pub(crate) fn insert(&mut self, key: u64, pair: EnginePair, entry: CachedEntry) {
-        let boxed = Box::into_raw(Box::new(pair));
-        self.engines.push(boxed);
+        self.engines.push(pair);
         self.cache.insert(key, entry);
     }
 
@@ -147,8 +136,7 @@ impl LlvmJitStorage {
     /// `CompiledTrace::entry` is the caller's handle; storage just owns
     /// the lifetime.
     pub(crate) fn park_engine(&mut self, pair: EnginePair) {
-        let boxed = Box::into_raw(Box::new(pair));
-        self.engines.push(boxed);
+        self.engines.push(pair);
     }
 }
 

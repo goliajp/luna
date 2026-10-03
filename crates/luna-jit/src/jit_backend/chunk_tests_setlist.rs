@@ -266,8 +266,7 @@ mod s5d_b {
         // Warm: drive a couple of calls with a normal (no-metatable)
         // table so the JIT path is reached. The cache lookup happens
         // on first call; subsequent calls run the cached entry.
-        let table = vm.heap.new_table();
-        let _ = unsafe { table.as_mut() }.set_int(&mut vm.heap, 1, Value::Float(42.0));
+        let table = vm.table_of([(1i64, Value::Float(42.0))]);
         for _ in 0..3 {
             let _ = vm
                 .call_value(

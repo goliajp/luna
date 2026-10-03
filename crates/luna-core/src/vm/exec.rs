@@ -9,7 +9,6 @@
 use crate::frontend::SyntaxError;
 use crate::jit::send_compat::TArc;
 use crate::numeric::{self, Num};
-use crate::runtime::heap::GcHeader;
 use crate::runtime::{
     AfterClose, CallFrame, CloseCont, ContKind, Coro, CoroStatus, Frame, Gc, Heap, LuaClosure,
     MetaAction, MetaCont, NativeCont, Table, TableError, UpvalState, Upvalue, Value,

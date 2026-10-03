@@ -36,7 +36,7 @@ pub use function::{
     MetaCont, NativeClosure, NativeCont, Proto, UpvalDesc, UpvalState, Upvalue,
 };
 pub use heap::ObjTag;
-pub use heap::{Gc, Heap};
+pub use heap::{Gc, GcObject, Heap};
 pub use string::LuaStr;
 pub use table::{Table, TableError};
 pub use userdata::{FileHandle, Userdata, UserdataPayload};

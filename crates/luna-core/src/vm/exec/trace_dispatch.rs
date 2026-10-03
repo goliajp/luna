@@ -154,7 +154,7 @@ impl Vm {
                 // NullJitBackend returns an inert guard).
                 let vm_ptr: *mut Vm = self;
                 let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                // SAFETY: `entry_fn` is the entry of `ct`, a compiled trace `cl.proto.traces` keeps alive; `reg_state` was sized above to the trace's window (plus the saved-pc slot for a down-recursion entry) and filled by `trace_marshal_in`; the guard above pins this Vm and `cl` for the helpers the trace calls
                 unsafe { entry_fn(reg_state.as_mut_ptr()) }
             };
             self.jit.counters.dispatched += 1;
@@ -242,7 +242,8 @@ impl Vm {
                 continue;
             }
             let (tag, payload) = frame[i].unpack();
-            // SAFETY: the raw payload of the slot's own value.
+            // SAFETY: every field of `RawVal` is one plain 8-byte word, and
+            // `unpack` returned it fully initialised
             regs[i] = unsafe { payload.zero as i64 };
             // a slot past the compile-time tags is checked like one read
             let want = compile_entry_tags.get(i).copied().unwrap_or(tag);

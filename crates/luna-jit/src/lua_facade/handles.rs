@@ -99,12 +99,11 @@ impl LuaTable {
         };
         let k = k.into_value(&mut lua.0);
         let v = v.into_value(&mut lua.0);
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is
-        // single-threaded (see heap.rs:5-7).
+        // SAFETY: `self.ticket` pins `t` as a host root, so no collection
+        // frees it, and the `&mut Table` lives only for this `set`, which
+        // reaches no other reference to `t`
         unsafe { t.as_mut() }.set(&mut lua.0.heap, k, v)?;
-        lua.0
-            .heap
-            .barrier_back(t.as_ptr() as *mut luna_core::runtime::heap::GcHeader);
+        lua.0.heap.barrier_back(t);
         Ok(())
     }
 
@@ -127,8 +126,7 @@ impl LuaTable {
             _ => return Err(LuaError(Value::Nil)),
         };
         let k = k.into_value(&mut lua.0);
-        // SAFETY: see set() — same single-threaded GC contract.
-        Ok(unsafe { t.as_mut() }.get(k))
+        Ok(t.get(k))
     }
 }
 

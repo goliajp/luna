@@ -38,9 +38,9 @@ fn move_then_return_propagates_through_reg() {
     else {
         panic!("`local x = 9; local y = x; return y` must compile");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    let returned = unsafe { entry_fn() };
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
     assert_eq!(
         returned, 9,
         "Move must propagate the value to the return reg"

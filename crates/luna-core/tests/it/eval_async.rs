@@ -35,6 +35,8 @@ fn noop_waker() -> Waker {
         static VT: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
         RawWaker::new(std::ptr::null(), &VT)
     }
+    // SAFETY: the vtable functions ignore the data pointer and do nothing, and `clone` hands back a
+    // waker with the same vtable, so a null data pointer meets every `RawWaker` contract
     unsafe { Waker::from_raw(raw()) }
 }
 
@@ -65,6 +67,8 @@ fn block_on_counting<F: Future>(mut fut: F) -> (F::Output, usize) {
         make_counting_waker(counter)
     };
     let mut cx = Context::from_waker(&waker);
+    // SAFETY: `fut` is a local of this function that is not moved after this point and is dropped
+    // in place on return, so pinning it is sound
     let mut fut = unsafe { Pin::new_unchecked(&mut fut) };
     let mut polls = 0usize;
     loop {
@@ -81,6 +85,9 @@ fn make_counting_waker(counter: Arc<AtomicUsize>) -> Waker {
     let data = Arc::into_raw(counter) as *const ();
 
     unsafe fn clone(data: *const ()) -> RawWaker {
+        // SAFETY: `data` came from `Arc::into_raw` of an `Arc<AtomicUsize>` (in
+        // `make_counting_waker` or a previous clone) and the waker being cloned still owns that
+        // count; it is forgotten again below so the count stays with it
         let arc = unsafe { Arc::<AtomicUsize>::from_raw(data as *const AtomicUsize) };
         let cloned = arc.clone();
         // Don't drop the original; keep both refs live.
@@ -88,19 +95,27 @@ fn make_counting_waker(counter: Arc<AtomicUsize>) -> Waker {
         RawWaker::new(Arc::into_raw(cloned) as *const (), &VT)
     }
     unsafe fn wake(data: *const ()) {
+        // SAFETY: `data` came from `Arc::into_raw` and `wake` consumes the waker, so this takes
+        // back the count the waker owned
         let arc = unsafe { Arc::<AtomicUsize>::from_raw(data as *const AtomicUsize) };
         arc.fetch_add(1, Ordering::SeqCst);
     }
     unsafe fn wake_by_ref(data: *const ()) {
+        // SAFETY: `data` came from `Arc::into_raw` and the waker still owns that count; it is
+        // forgotten again below, so the count is not released
         let arc = unsafe { Arc::<AtomicUsize>::from_raw(data as *const AtomicUsize) };
         arc.fetch_add(1, Ordering::SeqCst);
         std::mem::forget(arc);
     }
     unsafe fn drop_fn(data: *const ()) {
+        // SAFETY: `data` came from `Arc::into_raw` and the waker being dropped owns that count,
+        // which this releases
         drop(unsafe { Arc::<AtomicUsize>::from_raw(data as *const AtomicUsize) });
     }
     static VT: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop_fn);
 
+    // SAFETY: `data` owns one count of the `Arc` and `VT`'s functions treat it as such: `clone`
+    // adds a count, `wake` and `drop_fn` release one, `wake_by_ref` keeps it
     unsafe { Waker::from_raw(RawWaker::new(data, &VT)) }
 }
 

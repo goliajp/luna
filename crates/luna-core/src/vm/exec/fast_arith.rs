@@ -89,6 +89,14 @@ pub(super) fn is_num_tag(t: u8) -> bool {
     (t | 1) == tag::FLOAT
 }
 
+/// The operands of an arithmetic arm, as their tags let it read them.
+pub(super) enum Operands {
+    Ints(i64, i64),
+    Nums(f64, f64),
+    /// anything else: the slow path reads the values themselves
+    Other,
+}
+
 /// `R[A] := L op R` on the values at `$pl` and `$pr`: two integers and two
 /// numbers are computed here (an arm yielding `None` falls through), the
 /// rest by `$slow` with both operands. `true` when the arm finished the
@@ -97,38 +105,32 @@ macro_rules! arith_arm {
     ($regs:ident, $inst:ident, $pl:expr, $pr:expr,
      int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr,
      slow($l:ident, $r:ident) => $sv:expr) => {{
-        use $crate::vm::exec::fast_arith::{cold_path, is_num_tag, raw_int, raw_num, raw_tag};
+        use $crate::vm::exec::fast_arith::{
+            Operands, cold_path, is_num_tag, raw_int, raw_num, raw_tag,
+        };
         let (pl, pr): (*const Value, *const Value) = ($pl, $pr);
         // SAFETY: both point at initialised values, a register of the
-        // running frame or a constant of its proto
-        let (tl, tr) = unsafe { (raw_tag(pl), raw_tag(pr)) };
-        let v: Option<Value> = if tl == tag::INT && tr == tag::INT {
-            // SAFETY: both are integers
-            let ($ia, $ib) = unsafe { (raw_int(pl), raw_int(pr)) };
-            $iv
-        } else {
-            cold_path();
-            if is_num_tag(tl) && is_num_tag(tr) {
-                // SAFETY: both are numbers
-                let ($fa, $fb) = unsafe { (raw_num(pl, tl), raw_num(pr, tr)) };
-                $fv
+        // running frame or a constant of its proto; a payload is read as
+        // the type its tag names
+        let ops = unsafe {
+            let (tl, tr) = (raw_tag(pl), raw_tag(pr));
+            if tl == tag::INT && tr == tag::INT {
+                Operands::Ints(raw_int(pl), raw_int(pr))
             } else {
-                None
+                cold_path();
+                if is_num_tag(tl) && is_num_tag(tr) {
+                    Operands::Nums(raw_num(pl, tl), raw_num(pr, tr))
+                } else {
+                    Operands::Other
+                }
             }
         };
-        match v {
-            Some(v) => {
-                // SAFETY: `$regs` is the running frame's register window
-                unsafe { $regs.add($inst.a() as usize).write(v) };
-                true
-            }
-            None => {
-                // SAFETY: as above
-                let ($l, $r) = unsafe { (*pl, *pr) };
-                $sv?;
-                false
-            }
-        }
+        let v: Option<Value> = match ops {
+            Operands::Ints($ia, $ib) => $iv,
+            Operands::Nums($fa, $fb) => $fv,
+            Operands::Other => None,
+        };
+        $crate::vm::exec::fast_arith::arith_result!($regs, $inst, v, (*pl, *pr), slow($l, $r) => $sv)
     }};
 }
 pub(super) use arith_arm;
@@ -138,41 +140,55 @@ macro_rules! arith_imm_arm {
     ($regs:ident, $inst:ident, $pl:expr, $im:expr,
      int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr,
      slow($l:ident, $r:ident) => $sv:expr) => {{
-        use $crate::vm::exec::fast_arith::{cold_path, raw_flt, raw_int, raw_tag};
+        use $crate::vm::exec::fast_arith::{Operands, cold_path, raw_flt, raw_int, raw_tag};
         let pl: *const Value = $pl;
         let im: i64 = $im;
-        // SAFETY: a register of the running frame
-        let tl = unsafe { raw_tag(pl) };
-        let v: Option<Value> = if tl == tag::INT {
-            // SAFETY: an integer
-            let ($ia, $ib) = (unsafe { raw_int(pl) }, im);
-            $iv
-        } else {
-            cold_path();
-            if tl == tag::FLOAT {
-                // SAFETY: a float
-                let ($fa, $fb) = (unsafe { raw_flt(pl) }, im as f64);
-                $fv
+        // SAFETY: a register of the running frame; its payload is read as
+        // the type its tag names
+        let ops = unsafe {
+            let tl = raw_tag(pl);
+            if tl == tag::INT {
+                Operands::Ints(raw_int(pl), im)
             } else {
-                None
+                cold_path();
+                if tl == tag::FLOAT {
+                    Operands::Nums(raw_flt(pl), im as f64)
+                } else {
+                    Operands::Other
+                }
             }
         };
-        match v {
+        let v: Option<Value> = match ops {
+            Operands::Ints($ia, $ib) => $iv,
+            Operands::Nums($fa, $fb) => $fv,
+            Operands::Other => None,
+        };
+        $crate::vm::exec::fast_arith::arith_result!($regs, $inst, v, (*pl, Value::Int(im)), slow($l, $r) => $sv)
+    }};
+}
+pub(super) use arith_imm_arm;
+
+/// The end of [`arith_arm`] and [`arith_imm_arm`]: `R[A] := v`, or the slow
+/// path with the operands `$read` reads.
+macro_rules! arith_result {
+    ($regs:ident, $inst:ident, $v:ident, $read:expr, slow($l:ident, $r:ident) => $sv:expr) => {
+        match $v {
             Some(v) => {
-                // SAFETY: `$regs` is the running frame's register window
+                // SAFETY: `$regs` is the running frame's register window,
+                // `A` one of its registers
                 unsafe { $regs.add($inst.a() as usize).write(v) };
                 true
             }
             None => {
-                // SAFETY: as above
-                let ($l, $r) = (unsafe { *pl }, Value::Int(im));
+                // SAFETY: as where the operands were read
+                let ($l, $r) = unsafe { $read };
                 $sv?;
                 false
             }
         }
-    }};
+    };
 }
-pub(super) use arith_imm_arm;
+pub(super) use arith_result;
 
 /// The object pointer of a collectable value at `p`.
 ///

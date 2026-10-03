@@ -55,9 +55,10 @@ impl<'vm> TableBuilder<'vm> {
         let TableBuilder { vm, t } = self;
         let k = k.into_value(vm);
         let v = v.into_value(vm);
-        // SAFETY: Gc<T> is NonNull<T> over the single-threaded GC heap
-        // (see heap.rs:5-7); the TableBuilder's exclusive &mut Vm borrow
-        // guarantees no concurrent access to the table.
+        // SAFETY: `t` is the table this builder allocated; the builder keeps
+        // it alive and owns the only handle until `build`, and its exclusive
+        // `&mut Vm` borrow means no other code can reach the table during
+        // the `set`, which does not collect
         unsafe { t.as_mut() }
             .set(&mut vm.heap, k, v)
             .expect("table builder overflow");
@@ -83,8 +84,7 @@ impl<'vm> TableBuilder<'vm> {
     /// are visible to the collector) and return the table handle.
     pub fn build(self) -> Gc<Table> {
         let TableBuilder { vm, t } = self;
-        vm.heap
-            .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+        vm.heap.barrier_back(t);
         t
     }
 }

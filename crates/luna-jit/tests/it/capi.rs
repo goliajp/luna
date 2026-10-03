@@ -1,6 +1,6 @@
-//! C ABI integration tests. Each test simulates a C caller — `unsafe extern "C"`
-//! is the only API surface used so we exercise exactly the bytes a real
-//! `lua.h` consumer would.
+//! C ABI integration tests. Each test simulates a C caller — the
+//! `extern "C"` `lua_*` functions are the only API surface used, so we
+//! exercise exactly the bytes a real `lua.h` consumer would.
 #![allow(non_snake_case)]
 #![allow(clippy::approx_constant)] // 3.14 is a float test fixture in this file, not π.
 
@@ -15,6 +15,10 @@ fn cs(s: &str) -> CString {
 
 #[test]
 fn capi_state_lifecycle() {
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; every stack index names a slot pushed
+    // above, every C string is a `CString` alive across the call, and a
+    // `lua_tostring` result is read while its value is still on the stack
     unsafe {
         let l = luaL_newstate();
         assert!(!l.is_null());
@@ -22,11 +26,16 @@ fn capi_state_lifecycle() {
         lua_close(l);
     }
     // `lua_close(NULL)` is a no-op.
+    // SAFETY: `lua_close` accepts a null state and does nothing
     unsafe { lua_close(std::ptr::null_mut()) };
 }
 
 #[test]
 fn capi_load_and_pcall_basic() {
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; every stack index names a slot pushed
+    // above, every C string is a `CString` alive across the call, and a
+    // `lua_tostring` result is read while its value is still on the stack
     unsafe {
         let l = luaL_newstate();
         luaL_openlibs(l);
@@ -46,6 +55,10 @@ fn capi_load_and_pcall_basic() {
 
 #[test]
 fn capi_pcall_args_and_multi_results() {
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; every stack index names a slot pushed
+    // above, every C string is a `CString` alive across the call, and a
+    // `lua_tostring` result is read while its value is still on the stack
     unsafe {
         let l = luaL_newstate();
         luaL_openlibs(l);
@@ -64,6 +77,10 @@ fn capi_pcall_args_and_multi_results() {
 
 #[test]
 fn capi_pcall_runtime_error_pushes_message() {
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; every stack index names a slot pushed
+    // above, every C string is a `CString` alive across the call, and a
+    // `lua_tostring` result is read while its value is still on the stack
     unsafe {
         let l = luaL_newstate();
         luaL_openlibs(l);
@@ -82,6 +99,10 @@ fn capi_pcall_runtime_error_pushes_message() {
 
 #[test]
 fn capi_load_syntax_error() {
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; every stack index names a slot pushed
+    // above, every C string is a `CString` alive across the call, and a
+    // `lua_tostring` result is read while its value is still on the stack
     unsafe {
         let l = luaL_newstate();
         let src = cs("local 1bad = 2");
@@ -95,6 +116,10 @@ fn capi_load_syntax_error() {
 
 #[test]
 fn capi_globals_round_trip() {
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; every stack index names a slot pushed
+    // above, every C string is a `CString` alive across the call, and a
+    // `lua_tostring` result is read while its value is still on the stack
     unsafe {
         let l = luaL_newstate();
         luaL_openlibs(l);
@@ -125,6 +150,10 @@ fn capi_globals_round_trip() {
 
 #[test]
 fn capi_stack_push_pop_settop() {
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; every stack index names a slot pushed
+    // above, every C string is a `CString` alive across the call, and a
+    // `lua_tostring` result is read while its value is still on the stack
     unsafe {
         let l = luaL_newstate();
         lua_pushinteger(l, 1);
@@ -145,6 +174,10 @@ fn capi_stack_push_pop_settop() {
 
 #[test]
 fn capi_type_queries() {
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; every stack index names a slot pushed
+    // above, every C string is a `CString` alive across the call, and a
+    // `lua_tostring` result is read while its value is still on the stack
     unsafe {
         let l = luaL_newstate();
         lua_pushnil(l);
@@ -175,6 +208,10 @@ fn capi_type_queries() {
 
 #[test]
 fn capi_lua_version_returns_505() {
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; every stack index names a slot pushed
+    // above, every C string is a `CString` alive across the call, and a
+    // `lua_tostring` result is read while its value is still on the stack
     unsafe {
         let l = luaL_newstate();
         assert_eq!(lua_version(l), 505);
@@ -187,6 +224,10 @@ fn capi_lua_version_returns_505() {
 /// would write — only the public extern surface is used.
 #[allow(non_snake_case)]
 extern "C" fn c_add(L: *mut LuaState) -> std::os::raw::c_int {
+    // SAFETY: `L` is the state luna passes to a C function it calls,
+    // valid for this call; the indexes read are the call's arguments,
+    // a missing one reads as nil, and a `lua_tostring` result is read
+    // while its value is still on the stack
     unsafe {
         let a = lua_tointeger(L, 1);
         let b = lua_tointeger(L, 2);
@@ -198,6 +239,10 @@ extern "C" fn c_add(L: *mut LuaState) -> std::os::raw::c_int {
 /// A C callback that takes a string and returns its length as an integer.
 #[allow(non_snake_case)]
 extern "C" fn c_strlen(L: *mut LuaState) -> std::os::raw::c_int {
+    // SAFETY: `L` is the state luna passes to a C function it calls,
+    // valid for this call; the indexes read are the call's arguments,
+    // a missing one reads as nil, and a `lua_tostring` result is read
+    // while its value is still on the stack
     unsafe {
         let s = lua_tostring(L, 1);
         if s.is_null() {
@@ -212,6 +257,10 @@ extern "C" fn c_strlen(L: *mut LuaState) -> std::os::raw::c_int {
 
 #[test]
 fn capi_register_c_callback() {
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; every stack index names a slot pushed
+    // above, every C string is a `CString` alive across the call, and a
+    // `lua_tostring` result is read while its value is still on the stack
     unsafe {
         let l = luaL_newstate();
         luaL_openlibs(l);
@@ -227,6 +276,10 @@ fn capi_register_c_callback() {
 
 #[test]
 fn capi_push_c_function_and_call_from_lua() {
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; every stack index names a slot pushed
+    // above, every C string is a `CString` alive across the call, and a
+    // `lua_tostring` result is read while its value is still on the stack
     unsafe {
         let l = luaL_newstate();
         luaL_openlibs(l);
@@ -250,6 +303,10 @@ extern "C" fn c_void(_: *mut LuaState) -> std::os::raw::c_int {
 
 #[test]
 fn capi_zero_result_callback() {
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; every stack index names a slot pushed
+    // above, every C string is a `CString` alive across the call, and a
+    // `lua_tostring` result is read while its value is still on the stack
     unsafe {
         let l = luaL_newstate();
         luaL_openlibs(l);
@@ -265,6 +322,10 @@ fn capi_zero_result_callback() {
 
 #[test]
 fn capi_pushvalue_duplicates() {
+    // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
+    // only, until `lua_close`; every stack index names a slot pushed
+    // above, every C string is a `CString` alive across the call, and a
+    // `lua_tostring` result is read while its value is still on the stack
     unsafe {
         let l = luaL_newstate();
         lua_pushinteger(l, 7);

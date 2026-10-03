@@ -47,6 +47,9 @@ fn single_call_op_side_exits_at_call_pc() {
 
     let mut state: Vec<i64> = vec![42, 43, 44, 0, 0];
     state.resize(p.max_stack as usize, 0);
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has at
+    // least the proto's `max_stack` slots, and the trace's integer ops
+    // call no helper (it ends at its `Call`)
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     // Trace's "head_pc" was 5 — but the side-exit at the Call
     // returns the Call's PC (= 0 in this 1-op trace).
@@ -75,6 +78,9 @@ fn arith_then_call_stores_back_post_arith_state() {
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[0] = 100;
     state[1] = 7;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has at
+    // least the proto's `max_stack` slots, and the trace's integer ops
+    // call no helper (it ends at its `Call`)
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     // Call is at index 1 → pc 1.
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 1);
@@ -104,6 +110,9 @@ fn ops_after_first_call_are_silently_dropped() {
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[1] = 30;
     state[2] = 12;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has at
+    // least the proto's `max_stack` slots, and the trace's integer ops
+    // call no helper (it ends at its `Call`)
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     assert_eq!(
         crate::jit_backend::trace::exit_pc(r),
@@ -162,6 +171,9 @@ fn cmp_then_jmp_then_call_truncation() {
     state[0] = 5;
     state[1] = 10;
     state[2] = 7;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has at
+    // least the proto's `max_stack` slots, and the trace's integer ops
+    // call no helper (it ends at its `Call`)
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     assert_eq!(
         crate::jit_backend::trace::exit_pc(r),
@@ -175,6 +187,9 @@ fn cmp_then_jmp_then_call_truncation() {
     state[0] = 99;
     state[1] = 10;
     state[2] = 7;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has at
+    // least the proto's `max_stack` slots, and the trace's integer ops
+    // call no helper (it ends at its `Call`)
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     assert_eq!(
         crate::jit_backend::trace::exit_pc(r),
@@ -218,6 +233,9 @@ fn forloop_continues_internal_loop_until_count_hits_zero() {
     state[2] = 5; // count
     state[3] = 1; // step / body add operand
     state[4] = 0;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has at
+    // least the proto's `max_stack` slots, and the trace's integer ops
+    // call no helper (it ends at its `Call`)
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     // ForLoop at index 1, pc=1; exit PC = pc+1 = 2.
     assert_eq!(
@@ -249,6 +267,9 @@ fn forloop_one_shot_returns_body_pc_on_continue() {
     state[1] = 3; // count > 0 → continue
     state[2] = 1; // step
     state[3] = 0;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has at
+    // least the proto's `max_stack` slots, and the trace's integer ops
+    // call no helper (it ends at its `Call`)
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     // ForLoop continue returns the BODY START pc = (rop.pc + 1) -
     // bx, not head_pc: re-dispatching the same ForLoop op would
@@ -310,6 +331,9 @@ fn op_call_then_unwhitelisted_op_still_compiles() {
         .expect("compile despite post-truncation Return0");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has at
+    // least the proto's `max_stack` slots, and the trace's integer ops
+    // call no helper (it ends at its `Call`)
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
 }

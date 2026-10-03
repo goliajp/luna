@@ -77,7 +77,7 @@ impl Vm {
     /// roots (open upvalues, which are not first-class Values). Shared by the
     /// full collector and the incremental-sweep driver so both snapshot the
     /// exact same live set.
-    pub(super) fn gc_roots(&self) -> (Vec<Value>, Vec<*mut GcHeader>) {
+    pub(super) fn gc_roots(&self) -> (Vec<Value>, Vec<Gc<Upvalue>>) {
         let mut roots: Vec<Value> = Vec::with_capacity(self.stack.len() + 32);
         roots.push(Value::Table(self.globals));
         for mt in self.type_mt.into_iter().flatten() {
@@ -188,17 +188,9 @@ impl Vm {
                 }
             }
         }
-        let mut extra: Vec<*mut GcHeader> = self
-            .open_upvals
-            .iter()
-            .map(|&(_, uv)| uv.as_ptr() as *mut GcHeader)
-            .collect();
+        let mut extra: Vec<Gc<Upvalue>> = self.open_upvals.iter().map(|&(_, uv)| uv).collect();
         if let Some(m) = &self.main_ctx {
-            extra.extend(
-                m.open_upvals
-                    .iter()
-                    .map(|&(_, uv)| uv.as_ptr() as *mut GcHeader),
-            );
+            extra.extend(m.open_upvals.iter().map(|&(_, uv)| uv));
         }
         (roots, extra)
     }

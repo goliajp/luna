@@ -22,22 +22,49 @@ macro_rules! fast_step_macros {
                 unsafe { *$regs.add(($d i) as usize) = $d v }
             };
         }
+        // store `npc` as the running frame's pc
+        macro_rules! store_pc {
+            () => {
+                // SAFETY: `fr` points at the running frame, the top of
+                // `frames`, which no fast arm pushes or pops without taking
+                // `fr` again
+                unsafe { (*$fr).pc = $npc }
+            };
+        }
+        // the instruction at `pc` of the running function
+        macro_rules! fetch {
+            ($d pc:expr) => {
+                // `code` is the running proto's code; the compiler
+                // and the bytecode verifier keep every pc an instruction
+                // reaches (the next one, a jump target, the `Jmp` after a
+                // test) inside it, and every function ends in a return
+                {
+                    let pc: u32 = $d pc;
+                    // SAFETY: see above
+                    unsafe { *$code.add(pc as usize) }
+                }
+            };
+        }
+        // Lua truth of register `i`
+        macro_rules! reg_truthy {
+            ($d i:expr) => {{
+                let i: u32 = $d i;
+                // SAFETY: as for `reg!`
+                unsafe { raw_truthy($regs.add(i as usize)) }
+            }};
+        }
         macro_rules! next {
             () => {{
                 // nothing in a fast arm sets `trap`, so `stay` holds for the
                 // whole loop
                 if WATCH && !$stay {
-                    // SAFETY: `fr` is the running frame, which no fast arm
-                    // moves
-                    unsafe { (*$fr).pc = $npc };
+                    store_pc!();
                     return Ok(FastExit::Reload);
                 }
-                // SAFETY: as for the fetch at the loop head
-                $inst = unsafe { *$code.add($npc as usize) };
+                $inst = fetch!($npc);
                 $npc += 1;
                 if WATCH {
-                    // SAFETY: see above
-                    unsafe { (*$fr).pc = $npc };
+                    store_pc!();
                 }
                 continue;
             }};
@@ -49,9 +76,7 @@ macro_rules! fast_step_macros {
         macro_rules! next_jumped {
             () => {{
                 if WATCH && $heads.contains(&$npc) {
-                    // SAFETY: `fr` is the running frame, which no fast arm
-                    // moves
-                    unsafe { (*$fr).pc = $npc };
+                    store_pc!();
                     return Ok(FastExit::Reload);
                 }
                 next!()
@@ -69,9 +94,9 @@ macro_rules! fast_step_macros {
                 if !$d taken {
                     $npc += 1;
                 } else if !WATCH {
-                    // SAFETY: the compiler and the bytecode verifier put a
-                    // `Jmp` after every comparison and test
-                    let j = unsafe { *$code.add($npc as usize) };
+                    // the compiler and the bytecode verifier put a `Jmp`
+                    // after every comparison and test
+                    let j = fetch!($npc);
                     debug_assert!(j.op() == Op::Jmp);
                     let off = j.sj();
                     if !($trace_on && off < 0) {
@@ -87,8 +112,7 @@ macro_rules! fast_step_macros {
         macro_rules! save {
             () => {
                 if !WATCH {
-                    // SAFETY: `fr` is the running frame
-                    unsafe { (*$fr).pc = $npc };
+                    store_pc!();
                 }
             };
         }
@@ -97,11 +121,13 @@ macro_rules! fast_step_macros {
             () => {{
                 debug_assert!(!$vm.trap);
                 // SAFETY: the running thread has a frame, and with `trap`
-                // clear it is not a continuation (see `frames_pop_sync`)
-                match unsafe { $vm.frames.last_mut().unwrap_unchecked() } {
-                    CallFrame::Lua(f) => f,
-                    // SAFETY: see above
-                    CallFrame::Cont(_) => unsafe { std::hint::unreachable_unchecked() },
+                // clear the top one is not a continuation (see
+                // `frames_pop_sync`)
+                unsafe {
+                    match $vm.frames.last_mut().unwrap_unchecked() {
+                        CallFrame::Lua(f) => f,
+                        CallFrame::Cont(_) => std::hint::unreachable_unchecked(),
+                    }
                 }
             }};
         }

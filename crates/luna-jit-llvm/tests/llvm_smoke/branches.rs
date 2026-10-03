@@ -32,13 +32,10 @@ fn if_lt_then_else_takes_correct_branch() {
     else {
         panic!("must compile the if/else chunk");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    assert_eq!(
-        unsafe { entry_fn() },
-        1,
-        "x=5 < 10 → then-branch → return 1",
-    );
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
+    assert_eq!(returned, 1, "x=5 < 10 → then-branch → return 1",);
 }
 
 /// Same chunk shape, false condition. `x = 20`
@@ -60,9 +57,10 @@ fn if_lt_then_else_false_takes_else() {
     else {
         panic!("must compile the if/else chunk (false branch)");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    assert_eq!(unsafe { entry_fn() }, 0);
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
+    assert_eq!(returned, 0);
 }
 
 /// Lt with return-the-operand branches.
@@ -86,9 +84,9 @@ fn lt_xy_returns_smaller() {
     else {
         panic!("must compile lt_xy");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    let returned = unsafe { entry_fn() };
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
     assert_eq!(
         returned, 2,
         "min(3, 2) via Lt-then-Jmp lowering must equal 2",
@@ -121,9 +119,10 @@ fn le_boundary_returns_then() {
     else {
         panic!("must compile the Le chunk");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    assert_eq!(unsafe { entry_fn() }, 1);
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
+    assert_eq!(returned, 1);
 }
 
 /// Eq.
@@ -152,9 +151,10 @@ fn eq_returns_then() {
     else {
         panic!("must compile the Eq chunk");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    assert_eq!(unsafe { entry_fn() }, 1);
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
+    assert_eq!(returned, 1);
 }
 
 /// Branchy chunk with multi-op then/else.
@@ -185,9 +185,10 @@ fn branchy_chunk_then_path() {
     else {
         panic!("must compile the branchy chunk");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    assert_eq!(unsafe { entry_fn() }, 10);
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
+    assert_eq!(returned, 10);
 }
 
 /// Branchy chunk, else path. n=20 → r = 20-1
@@ -209,7 +210,8 @@ fn branchy_chunk_else_path() {
     else {
         panic!("must compile the branchy chunk (else)");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    assert_eq!(unsafe { entry_fn() }, 19);
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
+    assert_eq!(returned, 19);
 }

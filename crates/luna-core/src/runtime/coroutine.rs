@@ -86,7 +86,7 @@ impl Coro {
         for cf in self.frames.iter() {
             match cf {
                 CallFrame::Lua(f) => {
-                    m.header(f.closure.as_ptr() as *mut GcHeader);
+                    m.mark(f.closure);
                 }
                 CallFrame::Cont(nc) => {
                     if let ContKind::Xpcall { handler } = nc.kind {
@@ -96,10 +96,10 @@ impl Coro {
             }
         }
         for &(_, uv) in self.open_upvals.iter() {
-            m.header(uv.as_ptr() as *mut GcHeader);
+            m.mark(uv);
         }
         if let Some(r) = self.resumer {
-            m.header(r.as_ptr() as *mut GcHeader);
+            m.mark(r);
         }
         if let Some(e) = self.error_value {
             m.value(e);

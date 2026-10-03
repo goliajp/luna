@@ -202,17 +202,26 @@ jobs:
   # job above.
   # ─────────────────────────────────────────────────────────────────
   repl-line-editor:
-    name: luna-jit --features repl-line-editor build + clippy
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} luna-jit --features repl-line-editor
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: Swatinem/rust-cache@v2
       - name: cargo build -p luna-jit --features repl-line-editor
         run: cargo build -p luna-jit --features repl-line-editor
       - name: cargo clippy -p luna-jit --bin luna --features repl-line-editor -- -D warnings
         run: cargo clippy -p luna-jit --bin luna --features repl-line-editor -- -D warnings
+      # piped stdin takes lua.c's plain-line path; on Windows the REPL also
+      # runs on a pseudo console, where the line editor reads the lines
+      - name: cargo test -p luna-jit --features repl-line-editor --test it -- cli_repl
+        run: cargo test -p luna-jit --features repl-line-editor --test it -- cli_repl
 
   # ─────────────────────────────────────────────────────────────────
   # feature="send" matrix coverage. SendVm is the
@@ -243,16 +252,27 @@ jobs:
   # ─────────────────────────────────────────────────────────────────
   # unsafe-usage drift detection.
   #
-  # Counts `unsafe (\{|fn |impl |trait |extern )` sites across first-party
-  # src trees and fails CI if the count exceeds the recorded ceiling.
-  # Cheap (no cargo-geiger install) and catches the common case:
-  # someone adds an `unsafe { ... }` block to silence a borrow-check
-  # error rather than fix the root cause.
+  # Counts `unsafe (\{|fn |impl |trait |extern )` lines in every `.rs`
+  # file under crates/ (src, tests, benches, examples of every crate,
+  # luna-jit-llvm included although CI does not build it) and fails if
+  # the count exceeds the recorded ceiling. Cheap (no cargo-geiger
+  # install) and catches the common case: someone adds an
+  # `unsafe { ... }` block to silence a borrow-check error rather than
+  # fix the root cause. The lint job's clippy run checks the other half:
+  # `undocumented_unsafe_blocks` is a workspace lint, so a block without
+  # a SAFETY note fails it.
   #
-  # Baseline: docs/unsafe-accounting.md records 461 sites at v1.1;
-  # the ceiling is 490. Each justified unsafe addition needs an
-  # explicit ceiling bump. Never widen to a round number to silence
-  # drift.
+  # The ceiling is the exact count. Until October 2026 only luna-core and
+  # luna-jit src were counted (490 through v1.3, 575 after the audit of
+  # the interpreter performance work). The audit that extended the count
+  # to every crate brought the whole tree from 981 to 862. Typing the
+  # raw pointers that safe functions used to accept (a block per
+  # handle built from a pointer, mostly in the luna_jit_* helpers) took
+  # it to 908, the ceiling now. docs/unsafe-accounting.md has the count
+  # per crate and module
+  # and why each kind of site exists. Each justified unsafe addition
+  # needs an explicit ceiling bump to the new exact count. Never widen to
+  # a round number to silence drift.
   # ─────────────────────────────────────────────────────────────────
   unsafe-drift:
     name: unsafe-usage drift detection
@@ -261,11 +281,11 @@ jobs:
       - uses: actions/checkout@v7
       - name: count first-party unsafe sites
         run: |
-          count=$(grep -rE 'unsafe (\{|fn |impl |trait |extern )' \
-                  crates/luna-core/src crates/luna-jit/src | wc -l | tr -d ' ')
-          ceiling=490
+          count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
+                  crates | wc -l | tr -d ' ')
+          ceiling=908
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
-          echo "v1.1 snapshot was 461 — see docs/unsafe-accounting.md"
+          echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then
             echo "::error::unsafe count $count exceeds ceiling $ceiling"
             echo "Either justify the new unsafe (and bump the ceiling in ci.yml) or refactor."

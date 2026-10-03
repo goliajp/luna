@@ -70,6 +70,10 @@ mod smoke {
         module.finalize_definitions().expect("finalize");
 
         let fib_ptr = module.get_finalized_function(fib_id);
+        // SAFETY: `fib_id` was declared and defined above with the
+        // module's default signature `(i64) -> i64`, the host C calling
+        // convention, and `module` keeps the code mapped to the end of
+        // the test
         let fib_fn: extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(fib_ptr) };
 
         assert_eq!(fib_fn(0), 0);
@@ -89,7 +93,9 @@ mod s1 {
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
         let handle = try_compile_int_chunk(cl.proto, false, false)
             .expect("S1 lowerer should accept this chunk");
-        handle.call()
+        // SAFETY: the chunks here are integer arithmetic over locals: no
+        // parameters and no helper calls
+        unsafe { handle.call_with(&[]) }
     }
 
     fn interp_int(src: &str) -> i64 {
@@ -219,7 +225,9 @@ mod s2b {
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
         let handle = try_compile_int_chunk(cl.proto, false, false)
             .expect("S2b lowerer should accept this chunk");
-        handle.call()
+        // SAFETY: the chunks here are integer arithmetic and branches over
+        // locals: no parameters and no helper calls
+        unsafe { handle.call_with(&[]) }
     }
 
     fn interp_int(src: &str) -> i64 {
@@ -307,14 +315,17 @@ mod s2c_a {
     //! Tested by directly transmuting the raw entry ptr (the
     //! interpreter-side dispatch wire is tested separately).
 
-    use crate::jit_backend::{IntFn1, IntFn2, try_compile_int_chunk};
+    use crate::jit_backend::try_compile_int_chunk;
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
 
     /// Keep the `Vm` alive across the body so the GC doesn't reap the
     /// inner closure's Proto. Returning the `Gc<Proto>` past the Vm's
     /// scope is UB — and was the original bug in this test module.
-    fn with_inner<F: FnOnce(&luna_core::runtime::function::Proto)>(src: &str, f: F) {
+    fn with_inner<F: FnOnce(luna_core::runtime::Gc<luna_core::runtime::function::Proto>)>(
+        src: &str,
+        f: F,
+    ) {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile main");
         let r = vm.call_value(Value::Closure(cl), &[]).expect("run main");
@@ -322,26 +333,21 @@ mod s2c_a {
             Some(&Value::Closure(inner)) => inner,
             other => panic!("expected the chunk to return one closure, got {other:?}"),
         };
-        f(&inner.proto);
+        f(inner.proto);
         drop(vm); // explicit so the borrow checker sees the Vm outlives `f`.
     }
 
     #[test]
     fn add1_compiles_and_runs() {
         with_inner("local function f(n) return n + 1 end; return f", |proto| {
-            let handle = try_compile_int_chunk(
-                luna_core::runtime::Gc::from_ptr(proto as *const _ as *mut _),
-                false,
-                false,
-            )
-            .expect("S2c.A accepts num_params == 1");
+            let handle =
+                try_compile_int_chunk(proto, false, false).expect("S2c.A accepts num_params == 1");
             assert_eq!(handle.num_args(), 1);
             assert!(handle.returns_one());
-            let f: IntFn1 = unsafe { std::mem::transmute(handle.entry_raw()) };
-            assert_eq!(unsafe { f(41) }, 42);
-            assert_eq!(unsafe { f(0) }, 1);
-            assert_eq!(unsafe { f(-1) }, 0);
-            assert_eq!(handle.call_with(&[100]), 101);
+            for (n, want) in [(41, 42), (0, 1), (-1, 0), (100, 101)] {
+                // SAFETY: one integer parameter, and `n + 1` calls no helper
+                assert_eq!(unsafe { handle.call_with(&[n]) }, want);
+            }
         });
     }
 
@@ -350,16 +356,13 @@ mod s2c_a {
         with_inner(
             "local function f(a, b) return a * b + 1 end; return f",
             |proto| {
-                let handle = try_compile_int_chunk(
-                    luna_core::runtime::Gc::from_ptr(proto as *const _ as *mut _),
-                    false,
-                    false,
-                )
-                .expect("S2c.A accepts num_params == 2");
+                let handle = try_compile_int_chunk(proto, false, false)
+                    .expect("S2c.A accepts num_params == 2");
                 assert_eq!(handle.num_args(), 2);
-                let f: IntFn2 = unsafe { std::mem::transmute(handle.entry_raw()) };
-                assert_eq!(unsafe { f(3, 4) }, 13);
-                assert_eq!(handle.call_with(&[5, 6]), 31);
+                for (a, b, want) in [(3, 4, 13), (5, 6, 31)] {
+                    // SAFETY: two integer parameters, and the body calls no helper
+                    assert_eq!(unsafe { handle.call_with(&[a, b]) }, want);
+                }
             },
         );
     }
@@ -369,17 +372,13 @@ mod s2c_a {
         with_inner(
             "local function clip(n) if n < 0 then return 0 end; return n end; return clip",
             |proto| {
-                let handle = try_compile_int_chunk(
-                    luna_core::runtime::Gc::from_ptr(proto as *const _ as *mut _),
-                    false,
-                    false,
-                )
-                .expect("S2c.A accepts param + branch");
+                let handle = try_compile_int_chunk(proto, false, false)
+                    .expect("S2c.A accepts param + branch");
                 assert_eq!(handle.num_args(), 1);
-                let f: IntFn1 = unsafe { std::mem::transmute(handle.entry_raw()) };
-                assert_eq!(unsafe { f(5) }, 5);
-                assert_eq!(unsafe { f(-5) }, 0);
-                assert_eq!(unsafe { f(0) }, 0);
+                for (n, want) in [(5, 5), (-5, 0), (0, 0)] {
+                    // SAFETY: one integer parameter, and the body calls no helper
+                    assert_eq!(unsafe { handle.call_with(&[n]) }, want);
+                }
             },
         );
     }
@@ -390,12 +389,7 @@ mod s2c_a {
             "local function f(a, b, c, d, e) return a + b + c + d + e end; return f",
             |proto| {
                 assert!(
-                    try_compile_int_chunk(
-                        luna_core::runtime::Gc::from_ptr(proto as *const _ as *mut _),
-                        false,
-                        false,
-                    )
-                    .is_none(),
+                    try_compile_int_chunk(proto, false, false,).is_none(),
                     "5 params is above MAX_JIT_ARITY (4)"
                 );
             },

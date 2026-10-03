@@ -93,11 +93,9 @@ impl Vm {
     }
 
     /// Number of times the recorder captured a
-    /// [`crate::jit::trace_types::FieldIcSnapshot`] under
-    /// `LUNA_JIT_FIELD_IC=1`. Stays 0 on the env-default path. Used
-    /// by the opt-in fire test to verify the env gate
-    /// wiring round-trips end-to-end (env -> recorder -> snapshot
-    /// -> counter -> getter -> assertion).
+    /// [`crate::jit::trace_types::FieldIcSnapshot`] with the field IC
+    /// switch on ([`Self::set_field_ic_enabled`]). Stays 0 while it is
+    /// off.
     pub fn trace_field_ic_snapshot_count(&self) -> u64 {
         self.jit.counters.field_ic_snapshot_captured
     }

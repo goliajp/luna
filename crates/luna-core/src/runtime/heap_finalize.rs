@@ -17,7 +17,9 @@ impl Heap {
         while i > 0 {
             i -= 1;
             let h = self.finalize[i];
-            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+            // SAFETY: `finalize` holds headers of registered objects, and none is
+            // freed while listed (an unreachable one is marked below before any
+            // sweep); the header is only read here
             if unsafe { is_white((*h).flags) } {
                 // Two-pass cycle-finalize (PUC 5.3 gc.lua :502): when a
                 // finalizable table holds onto an unreachable coroutine, the
@@ -29,28 +31,36 @@ impl Heap {
                 // the table on the first sighting and only enqueuing it for
                 // `__gc` on the second.
                 let in_thread_cycle = self.defer_thread_cycle_finalize
-                    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+                    // SAFETY: `h` is a listed header, still allocated (see
+                    // above); only its tag byte is read
                     && unsafe { (*h).tag } == ObjTag::Table
                     && {
                         let t = h as *mut Table;
-                        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+                        // SAFETY: the tag says `h` heads a table, still
+                        // allocated (see above); the call only reads it
                         unsafe { (*t).refs_contain_unmarked_coro() }
                     };
-                // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+                // SAFETY: `h` is a listed header, still allocated (see above);
+                // only its flag byte is read
                 let already_deferred = unsafe { (*h).flags & DEFERRED != 0 };
                 if in_thread_cycle && !already_deferred {
-                    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+                    // SAFETY: `h` is the allocated header read above; only its
+                    // flag byte is written
                     unsafe { (*h).flags |= DEFERRED };
-                    m.header(h);
+                    // SAFETY: `h` is the allocated header read above
+                    unsafe { m.header(h) };
                     continue;
                 }
-                // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+                // SAFETY: `h` is the allocated header read above; only its flag
+                // byte is written
                 unsafe { (*h).flags = ((*h).flags & !(FIN | DEFERRED)) | FINALIZED };
                 self.tobefnz.push(h);
-                m.header(h);
+                // SAFETY: `h` is the allocated header read above
+                unsafe { m.header(h) };
                 self.finalize.swap_remove(i);
             } else {
-                // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+                // SAFETY: `h` is the allocated header read above; only its flag
+                // byte is written
                 unsafe { (*h).flags &= !DEFERRED };
             }
         }
@@ -66,7 +76,7 @@ impl Heap {
     /// on `tofinalize(o)` only, which mirrors checking the FIN bit.
     pub(crate) fn register_finalizable(&mut self, t: Gc<Table>) {
         let h = t.as_ptr() as *mut GcHeader;
-        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+        // SAFETY: `h` is the header of `t`, a table the caller holds a live handle to; only the flag byte is touched
         unsafe {
             if (*h).flags & FIN == 0 {
                 (*h).flags |= FIN;
@@ -81,7 +91,7 @@ impl Heap {
     /// behaviour together with weak tables.
     pub(crate) fn register_finalizable_userdata(&mut self, u: Gc<crate::runtime::Userdata>) {
         let h = u.as_ptr() as *mut GcHeader;
-        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+        // SAFETY: `h` is the header of `u`, a userdata the caller holds a live handle to; only the flag byte is touched
         unsafe {
             if (*h).flags & FIN == 0 {
                 (*h).flags |= FIN;
@@ -97,9 +107,11 @@ impl Heap {
         self.finalize
             .iter()
             .chain(self.tobefnz.iter())
-            // SAFETY: both lists hold GcHeader pointers of live objects registered for finalization (heap.rs:5-7); a finalizable object is not freed before its finalizer runs.
-            .filter(|&&h| unsafe { (*h).tag } == ObjTag::Userdata)
-            .map(|&h| Gc::from_ptr(h as *mut crate::runtime::Userdata))
+            // SAFETY: `finalize` and `tobefnz` hold headers of registered objects, and the sweep never frees a listed one: `separate_finalizables` marks every unreachable entry before it can be swept, and an entry leaves the lists only through `take_tobefnz`; the tag says which entries are userdata
+            .filter_map(|&h| unsafe {
+                ((*h).tag == ObjTag::Userdata)
+                    .then(|| Gc::from_ptr(h as *mut crate::runtime::Userdata))
+            })
             .collect()
     }
 
@@ -115,7 +127,7 @@ impl Heap {
         use crate::runtime::Value;
         std::mem::take(&mut self.tobefnz)
             .into_iter()
-            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+            // SAFETY: every `tobefnz` entry was marked by `separate_finalizables` (or `mark_all` re-marks it) and so is still allocated; it was registered as a table or a userdata, the two tags matched below, and the caller roots the returned handles until the finalizers have run
             .map(|h| unsafe {
                 (*h).flags &= !FINALIZED;
                 match (*h).tag {
@@ -134,7 +146,7 @@ impl Heap {
     /// every `__gc` before the heap is torn down.
     pub(crate) fn queue_all_finalizers(&mut self) {
         for h in std::mem::take(&mut self.finalize) {
-            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+            // SAFETY: `finalize` entries are registered objects the sweep has not freed (see `finalizable_userdata`); only the flag byte is written
             unsafe { (*h).flags = ((*h).flags & !FIN) | FINALIZED };
             self.tobefnz.push(h);
         }

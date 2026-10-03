@@ -244,6 +244,41 @@ pub fn compile_and_link(
     target_triple: Option<&str>,
     version: LuaVersion,
 ) -> Result<(), AotError> {
+    compile_and_link_with(
+        source_path,
+        out_path,
+        target_triple,
+        version,
+        AotOptions::from_env(),
+    )
+}
+
+/// Settings for [`compile_and_link_with`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AotOptions {
+    /// Print why each harvested trace was or was not linked in.
+    pub harvest_probe: bool,
+}
+
+impl AotOptions {
+    /// The settings [`compile_and_link`] uses: `harvest_probe` is on when
+    /// `LUNA_AOT_HARVEST_PROBE` is set.
+    pub fn from_env() -> Self {
+        Self {
+            harvest_probe: std::env::var_os("LUNA_AOT_HARVEST_PROBE").is_some(),
+        }
+    }
+}
+
+/// [`compile_and_link`] with explicit [`AotOptions`] instead of reading
+/// them from the environment.
+pub fn compile_and_link_with(
+    source_path: &Path,
+    out_path: &Path,
+    target_triple: Option<&str>,
+    version: LuaVersion,
+    options: AotOptions,
+) -> Result<(), AotError> {
     // Resolve the target: explicit triple if supplied, else host. Anything
     // we can't describe (object-file format, cc invocation, lib set)
     // surfaces as `UnsupportedTarget` here — no silent fallback to host.
@@ -294,7 +329,13 @@ pub fn compile_and_link(
     // we self-skip rather than panic if it ever shrinks).
     let traces_obj_path = {
         let path = workdir.join(format!("{stem}.luna_traces.o"));
-        match harvest_and_emit_aot_traces(&dump_bytes, version, &path, &target)? {
+        match harvest_and_emit_aot_traces(
+            &dump_bytes,
+            version,
+            &path,
+            &target,
+            options.harvest_probe,
+        )? {
             HarvestedTraces::None => None,
             HarvestedTraces::Some => Some(path),
         }

@@ -37,6 +37,8 @@ use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
+// SAFETY: the bytecode object defines both symbols as the bounds of its
+// section; they are declared as bytes and only their addresses are taken
 unsafe extern "C" {
     /// Linker-provided symbol marking the start of the embedded
     /// bytecode section. Resolves to the first byte of the dump bytes
@@ -60,11 +62,9 @@ unsafe extern "C" {
 /// in a build that doesn't include the bytecode object is an
 /// unresolved-symbol at link time, not a runtime failure.
 pub fn embedded_bytecode() -> &'static [u8] {
-    // SAFETY: the bracket symbols are linker-provided constants
-    // pointing at the start and end of the `.luna.bytecode` section.
-    // Building the slice from them is the standard
-    // `__start_<sec>` / `__stop_<sec>` pattern (also used by linkers
-    // for `__libc_*` and ELF `.init_array`).
+    // SAFETY: a binary that links this module links the bytecode object
+    // (# Safety), whose section the two symbols bracket, so
+    // `[start, end)` is that section: readable, and never written
     unsafe {
         let start = &BYTECODE_START as *const u8;
         let end = &BYTECODE_END as *const u8;

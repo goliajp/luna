@@ -124,10 +124,9 @@ impl Vm {
         match uv.state() {
             UpvalState::Open { slot, thread } => self.write_slot(slot, thread, v),
             UpvalState::Closed(_) => {
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                // SAFETY: `uv` is an upvalue of `cl`, a closure the caller holds (a debug.setupvalue argument); the `state()` copy has ended, so no reference into the cell is live, and the borrow covers one call
                 unsafe { uv.as_mut() }.set_closed(v);
-                self.heap
-                    .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, v);
+                self.heap.barrier_forward(uv, v);
             }
         }
     }

@@ -144,11 +144,10 @@ pub struct RecordedOp {
 /// raw payload. Guard miss falls through to the existing helper
 /// (scaffold-safe, no new deopt edges).
 ///
-/// Cached on the first call per process so the env-OFF path is a
-/// single relaxed atomic load (~1 ns), not a syscall. Both the
-/// recorder (in `luna-core`'s exec dispatch loop) and the lowerer
-/// (in `luna-jit`'s trace.rs emit) call this; sharing the cache
-/// guarantees they agree on a single env-read decision per process.
+/// Read once per process and cached. It is only the default of each new
+/// Vm's switch (`Vm::set_field_ic_enabled`): the recorder checks the
+/// Vm's switch, and the lowerer emits the cache wherever the record
+/// carries a snapshot.
 pub fn field_ic_enabled() -> bool {
     use std::sync::atomic::{AtomicU8, Ordering};
     // 0 = uninitialised, 1 = off, 2 = on. Sentinel encoding lets a
@@ -167,8 +166,8 @@ pub fn field_ic_enabled() -> bool {
 }
 
 /// Table-field IC snapshot captured by the recorder
-/// at the **first** eligible `Op::GetField` site in the trace, when
-/// `LUNA_JIT_FIELD_IC=1` is set.
+/// at the **first** eligible `Op::GetField` site in the trace, when the
+/// recording Vm has its field IC switch on.
 ///
 /// "Eligible" means the receiver `R[B]` is `Value::Table` with no
 /// metatable at recorder-fire time AND the key resolves to a
@@ -291,8 +290,8 @@ pub struct TraceRecord {
     pub downrec_close: Option<DownRecClose>,
     /// Table-field IC snapshot for the first
     /// eligible `Op::GetField` site in the trace. Populated by the
-    /// recorder under `LUNA_JIT_FIELD_IC=1`; `None` on the
-    /// env-default path and on traces where no eligible site fires.
+    /// recorder when the Vm's field IC switch is on; `None` when it is
+    /// off and on traces where no eligible site fires.
     pub field_ic_snapshot: Option<FieldIcSnapshot>,
     /// Per recorded op, the `raw` tag of the value it left in `R[A]` while
     /// it was recorded, or [`RESULT_TAG_UNKNOWN`] (an op that wrote no
