@@ -200,6 +200,13 @@ fn sweep_loads(
                 if !RegKind::unify(&mut reg_kinds[ins.a() as usize], src_kind) {
                     return None;
                 }
+                // a source with no kind of its own (a parameter only
+                // copied, as in `local f = p`) takes the destination's:
+                // the copy reads its bits as that kind, so the entry
+                // check must hold the argument to it
+                if src_kind == RegKind::Unset {
+                    reg_kinds[ins.b() as usize] = reg_kinds[ins.a() as usize];
+                }
                 let lwk = latest_writer_kind[ins.b() as usize];
                 latest_writer_kind[ins.a() as usize] = lwk;
                 maybe_table[ins.a() as usize] = maybe_table[ins.b() as usize];
