@@ -15,6 +15,8 @@ pub(crate) enum NativeKind {
     HostXpcall,
     /// `Vm::call_value_with_handler_in_c`: a level of the stack
     HostXpcallInC,
+    /// `Vm::call_value_in_c`: a level of the stack, no message handler
+    HostPcallInC,
     Pairs,
 }
 
@@ -23,7 +25,8 @@ impl NativeKind {
     pub(crate) fn of(f: crate::runtime::value::NativeFn) -> NativeKind {
         use crate::runtime::value::NativeFn;
         use crate::vm::builtins::{
-            nat_host_xpcall, nat_host_xpcall_in_c, nat_pairs, nat_pcall, nat_xpcall,
+            nat_host_pcall_in_c, nat_host_xpcall, nat_host_xpcall_in_c, nat_pairs, nat_pcall,
+            nat_xpcall,
         };
         if std::ptr::fn_addr_eq(f, nat_pcall as NativeFn) {
             NativeKind::Pcall
@@ -31,6 +34,8 @@ impl NativeKind {
             NativeKind::Xpcall
         } else if std::ptr::fn_addr_eq(f, nat_host_xpcall_in_c as NativeFn) {
             NativeKind::HostXpcallInC
+        } else if std::ptr::fn_addr_eq(f, nat_host_pcall_in_c as NativeFn) {
+            NativeKind::HostPcallInC
         } else if std::ptr::fn_addr_eq(f, nat_host_xpcall as NativeFn) {
             NativeKind::HostXpcall
         } else if std::ptr::fn_addr_eq(f, nat_pairs as NativeFn) {
@@ -125,14 +130,16 @@ impl Vm {
             // suspended), push a continuation frame and drive the call
             // through the interpreter loop (PUC lua_pcallk). A yield
             // inside it is preserved with the thread's saved frames.
-            NativeKind::Pcall => Some(self.begin_pcall(func_slot, nargs, nresults)),
+            NativeKind::Pcall | NativeKind::HostPcallInC => {
+                Some(self.begin_pcall(func_slot, nargs, nresults))
+            }
             // 5.1 `xpcall(f, err)` calls `f` with no arguments
             NativeKind::Xpcall => {
                 let forward = self.version > LuaVersion::Lua51;
-                Some(self.begin_xpcall(func_slot, nargs, nresults, forward))
+                Some(self.begin_xpcall(func_slot, nargs, nresults, forward, false))
             }
             NativeKind::HostXpcall | NativeKind::HostXpcallInC => {
-                Some(self.begin_xpcall(func_slot, nargs, nresults, true))
+                Some(self.begin_xpcall(func_slot, nargs, nresults, true, true))
             }
             // From 5.4 on, pairs(t) calls a __pairs metamethod yieldably
             // (PUC luaB_pairs uses lua_callk). 5.2/5.3 use a plain

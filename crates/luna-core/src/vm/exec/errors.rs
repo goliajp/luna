@@ -73,6 +73,13 @@ impl Vm {
         LuaError(Value::Str(self.heap.intern(msg.as_bytes())))
     }
 
+    /// PUC's LUA_ERRERR: the message handler itself failed, and the error
+    /// object becomes "error in error handling" (`luaD_seterrorobj`).
+    pub(crate) fn errerr(&mut self) -> Value {
+        self.errerr_raised += 1;
+        Value::Str(self.heap.intern(b"error in error handling"))
+    }
+
     /// A string a library built from pieces of any size: one longer than a
     /// string can hold raises, as the concatenation operator does.
     pub(crate) fn built_str(&mut self, bytes: &[u8]) -> Result<Value, LuaError> {

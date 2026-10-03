@@ -141,6 +141,14 @@ pub struct Vm {
     /// Pinned CString backing the pointer last returned by `lua_tostring`;
     /// valid until the next `lua_tostring` on the same Vm.
     pub capi_cstr_pin: Option<std::ffi::CString>,
+    /// Where the running C function's frame starts in `capi_stack`: its
+    /// index 1 is `capi_stack[capi_base]`. 0 outside any C function.
+    pub capi_base: usize,
+    /// How many C functions (`lua_pushcfunction`) are running.
+    pub capi_calls: u32,
+    /// An error a C API function raised inside a running C function; it
+    /// is thrown when that function returns, in place of its results.
+    pub capi_error: Option<crate::runtime::Value>,
     /// PUC 5.4+ warning system. Lua manual §6.1 `warn`: emitted messages
     /// concatenate across continuation calls until a non-`tocont` call
     /// flushes; the default warnf recognises `@on`/`@off` control messages
@@ -242,6 +250,10 @@ pub struct Vm {
     /// How many message-handler runs have started; lets a run tell whether
     /// the error it got back was already handled by a nested run.
     pub(crate) msgh_runs: u64,
+    /// How many times an error became LUA_ERRERR ("error in error
+    /// handling"); a host protected call compares it before and after to
+    /// report that status instead of LUA_ERRRUN.
+    pub(crate) errerr_raised: u64,
     /// The value the last `xpcall` handler produced for the error in
     /// flight, so the unwind that carries it to the `xpcall` does not
     /// run the handler again.
