@@ -53,7 +53,10 @@ pub(super) fn callk(api: &mut Api, nargs: c_int, nresults: c_int, k: Option<KFn>
         }
         None => None,
     };
+    let hooked = super::hooks::calling_from_hook(api);
+    api.vm.host_mark_hook_call(hooked);
     let r = api.vm.host_call(f, &args, spec);
+    api.vm.host_mark_hook_call(false);
     match r {
         Ok(vals) => {
             if spec.is_some() {
@@ -121,7 +124,10 @@ pub(super) fn pcallk(
         }
         None => None,
     };
+    let hooked = super::hooks::calling_from_hook(api);
+    api.vm.host_mark_hook_call(hooked);
     let r = api.vm.host_call(pf, &pargs, spec);
+    api.vm.host_mark_hook_call(false);
     let co = api.thread();
     let status = match r {
         Ok(vals) => {
@@ -182,6 +188,9 @@ pub(super) fn pcallk(
 pub(super) fn yieldk(api: &mut Api, nresults: c_int, k: Option<KFn>, ctx: isize) -> bool {
     if let Some(msg) = api.vm.host_yield_refusal() {
         api.raise_msg(msg);
+        return false;
+    }
+    if super::hooks::hook_yield(api) {
         return false;
     }
     api.st().pending_yield = Some(PendingYield {

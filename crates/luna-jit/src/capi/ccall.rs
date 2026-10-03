@@ -81,12 +81,17 @@ pub(super) struct PendingYield {
     pub(super) ctx: isize,
 }
 
-/// A thread's C hook (`lua_sethook`).
-#[derive(Clone, Copy, Default)]
+/// A thread's C hook (`lua_sethook`) and its debug-interface bookkeeping.
+#[derive(Default)]
 pub(super) struct CHook {
+    /// the hook `lua_sethook` installed, with its mask and count as given
     pub(super) func: Option<LuaHook>,
     pub(super) mask: c_int,
     pub(super) count: c_int,
+    /// the C hook running on this thread now
+    pub(super) running: Option<super::hooks::HookRun>,
+    /// the strings `lua_getinfo` and `lua_getlocal` handed out
+    pub(super) strs: super::debug::CStrings,
 }
 
 // SAFETY: the declarations match the definitions in `csrc/shim_core.c`;
