@@ -182,10 +182,10 @@ impl Lir {
         );
         if imm_ok {
             if let Some(c) = self.konst[v(y) as usize] {
-                return self.def(Op::BinImm(op, c), ty, v(x), NONE, NONE);
+                return self.def(Op::BinImm(op, c), ty, v(x), NONE, v(y));
             }
             if commutes && let Some(c) = self.konst[v(x) as usize] {
-                return self.def(Op::BinImm(op, c), ty, v(y), NONE, NONE);
+                return self.def(Op::BinImm(op, c), ty, v(y), NONE, v(x));
             }
         }
         self.def(Op::Bin(op), ty, v(x), v(y), NONE)

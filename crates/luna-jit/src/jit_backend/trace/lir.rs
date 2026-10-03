@@ -110,18 +110,22 @@ pub(crate) enum Op {
     Iconst(i64),
     Fconst(u64),
     Bin(BinOp),
+    /// `a op imm`; `c` is the constant's value when the lowerer passed
+    /// one (the Cranelift replay reuses it), else `NONE`.
     BinImm(BinOp, i64),
     Un(UnOp),
     Icmp(IntCC),
+    /// `a cc imm`; `c` as for `BinImm`.
     IcmpImm(IntCC, i64),
     Fcmp(FloatCC),
     /// `a ? b : c`
     Select,
-    /// `*(a + off)`, zero-extended to `ty`'s register.
+    /// `*(a + off)`, zero-extended to `ty`'s register. `c` is `1` when the
+    /// lowerer marked the access trusted (the replay keeps its flags).
     Load(i32),
-    /// `*(u8 *)(a + off)`
+    /// `*(u8 *)(a + off)`; `c` as for `Load`.
     Uload8(i32),
-    /// `*(b + off) = a`
+    /// `*(b + off) = a`; `c` as for `Load`.
     Store(i32),
     StackAddr(u32, i32),
     StackLoad(u32, i32),
