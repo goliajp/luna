@@ -13,36 +13,88 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
+env:
+  PERF_REF: f90669dfa50f24bc05d33e3091deb1bb0ef0b37b # v4.0.1
+
+# Required gate. It builds the redis_lua_shape bench of a pinned reference
+# commit (PERF_REF, normally the last release; bump it at each release) and
+# of HEAD, measures the pair cell by cell in alternating ref/head pairs on
+# several runners, and fails when a cell's pooled slowdown is over the
+# threshold in scripts/perf-gate-verdict.py. The ratio between the same two
+# binaries shifts by a few percent from one runner to the next, so the
+# number of measure jobs, not rounds per job, is what makes the gate
+# reliable; the threshold is derived for 7 jobs x 3 rounds. Bypass via
+# [perf-allow] in the commit message for intentional regressions.
 jobs:
-  perf-gate:
-    # Required gate, run as a same-runner comparison: hosted runners are
-    # heterogeneous (identical code measured 0.51x-1.09x against a fixed-ns
-    # baseline across runs), so the job builds the redis_lua_shape bench of
-    # a pinned reference commit (PERF_REF, normally the last release) and of
-    # HEAD, then scripts/perf-gate.sh measures them cell by cell in
-    # alternating ref/head pairs, pinned to one core, over several rounds.
-    # Bypass via [perf-allow] in the commit body for intentional
-    # regressions; bump PERF_REF at each release.
-    name: redis_lua_shape perf-gate
+  build:
+    name: build ${{ matrix.side }} bench
     runs-on: ubuntu-latest
-    env:
-      PERF_REF: f90669dfa50f24bc05d33e3091deb1bb0ef0b37b # v4.0.1
+    strategy:
+      matrix:
+        side: [ref, head]
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          fetch-depth: ${{ matrix.side == 'ref' && '0' || '1' }}
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build reference bench
+      - name: Build
         run: |
-          git worktree add /tmp/perfref "$PERF_REF"
-          cd /tmp/perfref
+          if [ "${{ matrix.side }}" = ref ]; then
+            git worktree add /tmp/perfref "$PERF_REF"
+            cd /tmp/perfref
+          fi
           bin=$(cargo bench -p luna-jit --bench redis_lua_shape --no-run --message-format=json \
             | jq -r 'select(.reason == "compiler-artifact" and .target.name == "redis_lua_shape") | .executable')
-          cp "$bin" /tmp/bench-ref
-      - name: Build HEAD bench
+          mkdir -p /tmp/bench
+          cp "$bin" /tmp/bench/${{ matrix.side }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bench-${{ matrix.side }}
+          path: /tmp/bench/${{ matrix.side }}
+          retention-days: 1
+          overwrite: true
+
+  measure:
+    name: measure ${{ matrix.job }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bench-*
+          path: /tmp/bench
+          merge-multiple: true
+      - name: Machine
+        run: lscpu | grep -E 'Model name' || true
+      - name: Measure
+        env:
+          PERF_ROUNDS: 3
         run: |
-          bin=$(cargo bench -p luna-jit --bench redis_lua_shape --no-run --message-format=json \
-            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "redis_lua_shape") | .executable')
-          cp "$bin" /tmp/bench-head
-      - name: perf-gate (interleaved same-runner comparison)
-        run: ./scripts/perf-gate.sh /tmp/bench-ref /tmp/bench-head
+          chmod +x /tmp/bench/ref /tmp/bench/head
+          ./scripts/perf-gate.sh measure /tmp/bench/ref /tmp/bench/head /tmp/rounds/job${{ matrix.job }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rounds-${{ matrix.job }}
+          path: /tmp/rounds
+          if-no-files-found: ignore
+          retention-days: 7
+          overwrite: true
+
+  verdict:
+    name: redis_lua_shape perf-gate
+    needs: measure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: rounds-*
+          path: /tmp/rounds
+          merge-multiple: true
+      - name: Verdict
+        run: ./scripts/perf-gate.sh verdict /tmp/rounds/job*

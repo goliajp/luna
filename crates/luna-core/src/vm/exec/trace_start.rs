@@ -22,6 +22,11 @@ impl Vm {
             || proto.trace_gave_up.get()
             || proto.traces.borrow().iter().any(|t| t.head_pc == target)
             || trace_head_abandoned(proto, target)
+            || trace_head_stuck(
+                proto,
+                target,
+                &self.stack[base as usize..(base + proto.max_stack as u32) as usize],
+            )
         {
             return false;
         }

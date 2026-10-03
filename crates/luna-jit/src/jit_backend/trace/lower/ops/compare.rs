@@ -1,14 +1,10 @@
 use super::*;
 
 /// Comparison with a constant.
-pub(super) fn emit_eqk_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
-    pl: &Plan<'_>,
-    oc: &OpCx<'_>,
-) -> Option<()> {
+pub(super) fn emit_eqk_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<()> {
     let Plan { head_proto, .. } = *pl;
     let OpCx { rop, off, ins, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::EqK => {
             // `R[A] == const[B]` — Int and Float consts both
@@ -60,13 +56,8 @@ pub(super) fn emit_eqk_op<M: Module>(
                     EqLowering::Unknown => return None,
                     _ => {
                         let lhs = lw.bcx.use_var(regs[ins.a() as usize]);
-                        let rhs = emit_str_key_arg(
-                            lw.module,
-                            &mut lw.bcx,
-                            k,
-                            pl.opts.aot,
-                            &mut lw.defined_aot_data,
-                        );
+                        let rhs =
+                            emit_str_key_arg(&mut lw.bcx, k, pl.opts.aot, &mut lw.defined_aot_data);
                         let int_cc = if ins.k() {
                             IntCC::Equal
                         } else {
@@ -107,16 +98,12 @@ pub(super) fn emit_eqk_op<M: Module>(
 }
 
 /// Truth tests.
-pub(super) fn emit_test_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
-    pl: &Plan<'_>,
-    oc: &OpCx<'_>,
-) -> Option<()> {
+pub(super) fn emit_test_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<()> {
     let OpHelpers { stack_tag_id, .. } = lw.h.op;
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::Test => {
             // `if (not R[A] == K) then pc++`.
@@ -154,7 +141,7 @@ pub(super) fn emit_test_op<M: Module>(
             } else {
                 // Runtime tag-based truthy guard.
                 let slot_arg = lw.bcx.ins().iconst(types::I64, ins.a() as i64);
-                let stack_tag_ref = lw.module.declare_func_in_func(stack_tag_id, lw.bcx.func);
+                let stack_tag_ref = lw.bcx.import_func(stack_tag_id);
                 let tag_call = lw.bcx.ins().call(stack_tag_ref, &[slot_arg]);
                 let tag = lw.bcx.inst_results(tag_call)[0];
                 let one = lw.bcx.ins().iconst(types::I64, 1);
@@ -216,7 +203,7 @@ pub(super) fn emit_test_op<M: Module>(
                 // Runtime guard. Same shape as Op::Test
                 // but the basis is `is_truthy` (not `!is_truthy`).
                 let slot_arg = lw.bcx.ins().iconst(types::I64, ins.b() as i64);
-                let stack_tag_ref = lw.module.declare_func_in_func(stack_tag_id, lw.bcx.func);
+                let stack_tag_ref = lw.bcx.import_func(stack_tag_id);
                 let tag_call = lw.bcx.ins().call(stack_tag_ref, &[slot_arg]);
                 let tag = lw.bcx.inst_results(tag_call)[0];
                 let one = lw.bcx.ins().iconst(types::I64, 1);
@@ -251,8 +238,8 @@ pub(super) fn emit_test_op<M: Module>(
 }
 
 /// The side exit of `EqK`, at `side_exit_pc`.
-pub(super) fn emit_eqk_side_exit<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_eqk_side_exit<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
     side_exit_pc: u32,
@@ -299,7 +286,6 @@ pub(super) fn emit_eqk_side_exit<M: Module>(
         let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds.clone();
         let mat_count = emit_materialize_live_sunk(
             &mut lw.bcx,
-            &mut lw.module,
             mat_sunk_id,
             &lw.escape,
             &lw.virt_vars,
@@ -325,14 +311,13 @@ pub(super) fn emit_eqk_side_exit<M: Module>(
         ));
         let n_arg = lw.bcx.ins().iconst(types::I64, chain_len);
         let ptr_arg = emit_chain_ptr_arg(
-            &mut lw.module,
             &mut lw.bcx,
             &chain_for_helper,
             chain_ptr,
             opts.aot,
             &mut lw.defined_aot_data,
         );
-        let mat_ref = lw.module.declare_func_in_func(materialize_id, lw.bcx.func);
+        let mat_ref = lw.bcx.import_func(materialize_id);
         let _ = lw.bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
         emit_store_back_and_return_site(
             &mut lw.bcx,
@@ -355,7 +340,6 @@ pub(super) fn emit_eqk_side_exit<M: Module>(
         let mut snapshot: Vec<RegKind> = lw.current_kinds[..max_stack].to_vec();
         let mat_count = emit_materialize_live_sunk(
             &mut lw.bcx,
-            &mut lw.module,
             mat_sunk_id,
             &lw.escape,
             &lw.virt_vars,
@@ -378,7 +362,6 @@ pub(super) fn emit_eqk_side_exit<M: Module>(
         // slots stay out of the dispatcher's reg_state restore.
         emit_tagged_exit(
             &mut lw.bcx,
-            &mut lw.module,
             suppress_admit_id,
             &lw.regs_full[..max_stack],
             &lw.stored,

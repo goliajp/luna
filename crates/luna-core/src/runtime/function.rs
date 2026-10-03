@@ -129,11 +129,10 @@ pub struct Proto {
     /// on the Proto, mirroring the `JitProtoState::Failed`
     /// invariant.
     pub trace_gave_up: std::cell::Cell<bool>,
-    /// Trace heads (pc) whose recordings failed to compile, with the
-    /// number of failures. The hot counters are not reset after a
-    /// recording, so without this every later call or back-edge would
-    /// record and compile the same failing trace again.
-    pub(crate) trace_compile_failures: crate::jit::send_compat::TRefLock<Vec<(u32, u8)>>,
+    /// Trace heads whose recordings failed to compile. The hot counters
+    /// are not reset after a recording, so without this every later call
+    /// or back-edge would record and compile the same failing trace again.
+    pub(crate) trace_compile_failures: crate::jit::send_compat::TRefLock<Vec<HeadFailures>>,
     /// Compiled trace cache for this Proto. A successful
     /// `compile_trace(record)` parks its `CompiledTrace` here;
     /// `Vm::run`'s trace dispatcher iterates this on each
@@ -426,3 +425,14 @@ pub struct NativeClosure {
 mod trace;
 #[path = "function_upvals.rs"]
 mod upvals;
+
+/// The failed recordings of one trace head.
+pub(crate) struct HeadFailures {
+    pub(crate) head_pc: u32,
+    /// Failures, weighted (see `vm::exec::trace_cache`).
+    pub(crate) n: u8,
+    /// When the last recording could never have been entered: the
+    /// registers that held, on entry, a value no trace is entered with.
+    /// While all of them still do, a new recording would end the same way.
+    pub(crate) stuck: Vec<u16>,
+}

@@ -125,21 +125,84 @@ impl Vm {
 /// later recording can see different register kinds or take a shorter path.
 pub(super) const MAX_TRACE_COMPILE_FAILURES: u8 = 3;
 
+/// Recordings of a head that could never be entered (a register the trace
+/// reads held a boolean on entry), before the head is no longer recorded.
+/// More than other failures: the head is not recorded again while those
+/// registers still hold such values, so each of these follows a change.
+pub(super) const MAX_TRACE_NEVER_ENTERED: u8 = 16;
+
+/// A head's failures are counted in a budget of this many units: a compile
+/// failure takes `BUDGET / MAX_TRACE_COMPILE_FAILURES`, a recording that
+/// could never be entered `BUDGET / MAX_TRACE_NEVER_ENTERED`.
+const BUDGET: u8 = 48;
+
 pub(super) fn note_trace_compile_failure(proto: Gc<crate::runtime::function::Proto>, head_pc: u32) {
+    note_head_failure(proto, head_pc, BUDGET / MAX_TRACE_COMPILE_FAILURES, None);
+}
+
+/// `entry_tags`: the recording's tags on entry.
+pub(super) fn note_trace_never_entered(
+    proto: Gc<crate::runtime::function::Proto>,
+    head_pc: u32,
+    entry_tags: &[u8],
+) {
+    let stuck = (0..entry_tags.len() as u16)
+        .filter(|&r| !crate::jit::trace::entry_tag_enterable(entry_tags[r as usize]))
+        .collect();
+    note_head_failure(
+        proto,
+        head_pc,
+        BUDGET / MAX_TRACE_NEVER_ENTERED,
+        Some(stuck),
+    );
+}
+
+fn note_head_failure(
+    proto: Gc<crate::runtime::function::Proto>,
+    head_pc: u32,
+    cost: u8,
+    stuck: Option<Vec<u16>>,
+) {
+    use crate::runtime::function::HeadFailures;
     let mut failures = proto.trace_compile_failures.borrow_mut();
-    let n = match failures.iter_mut().find(|(pc, _)| *pc == head_pc) {
-        Some((_, n)) => {
-            *n = n.saturating_add(1);
-            *n
-        }
+    let i = match failures.iter().position(|f| f.head_pc == head_pc) {
+        Some(i) => i,
         None => {
-            failures.push((head_pc, 1));
-            1
+            failures.push(HeadFailures {
+                head_pc,
+                n: 0,
+                stuck: Vec::new(),
+            });
+            failures.len() - 1
         }
     };
-    if head_pc == 0 && n >= MAX_TRACE_COMPILE_FAILURES {
+    let f = &mut failures[i];
+    f.n = f.n.saturating_add(cost);
+    f.stuck = stuck.unwrap_or_default();
+    if head_pc == 0 && f.n >= BUDGET {
         proto.trace_call_head_settled.set(true);
     }
+}
+
+/// Whether recording at `head_pc` of `proto`, with the frame's registers
+/// `regs`, would again give a trace that can never be entered.
+pub(super) fn trace_head_stuck(
+    proto: Gc<crate::runtime::function::Proto>,
+    head_pc: u32,
+    regs: &[Value],
+) -> bool {
+    proto
+        .trace_compile_failures
+        .borrow()
+        .iter()
+        .find(|f| f.head_pc == head_pc)
+        .is_some_and(|f| {
+            !f.stuck.is_empty()
+                && f.stuck.iter().all(|&r| {
+                    regs.get(r as usize)
+                        .is_some_and(|v| !crate::jit::trace::entry_tag_enterable(v.unpack().0))
+                })
+        })
 }
 
 /// Park `ct` on `proto.traces`, keeping `has_dispatchable_trace` in step
@@ -174,5 +237,5 @@ pub(super) fn trace_head_abandoned(
         .trace_compile_failures
         .borrow()
         .iter()
-        .any(|&(pc, n)| pc == head_pc && n >= MAX_TRACE_COMPILE_FAILURES)
+        .any(|f| f.head_pc == head_pc && f.n >= BUDGET)
 }

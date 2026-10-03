@@ -27,9 +27,8 @@ use super::*;
 /// inside the window).
 ///
 /// Returns the number of sites materialised at this emit point.
-pub(super) fn emit_materialize_live_sunk<M: Module>(
-    bcx: &mut FunctionBuilder<'_>,
-    module: &mut M,
+pub(super) fn emit_materialize_live_sunk<E: Emit>(
+    bcx: &mut E,
     mat_sunk_id: cranelift_module::FuncId,
     escape: &EscapeAnalysis,
     virt_vars: &[Option<Vec<Variable>>],
@@ -159,7 +158,7 @@ pub(super) fn emit_materialize_live_sunk<M: Module>(
                         "hash_keys must point at Str consts (validated by escape sweep)"
                     ),
                 };
-                let key_ptr_v = emit_str_key_arg(module, bcx, key_str, aot, defined_aot_data);
+                let key_ptr_v = emit_str_key_arg(bcx, key_str, aot, defined_aot_data);
                 bcx.ins()
                     .stack_store(types::I64, key_ptr_v, hash_keys_ss, (vi * 8) as i32);
             }
@@ -177,7 +176,7 @@ pub(super) fn emit_materialize_live_sunk<M: Module>(
         };
         let cap_val = bcx.ins().iconst(types::I64, cap as i64);
         let n_hash_val = bcx.ins().iconst(types::I64, n_hash as i64);
-        let mat_ref = module.declare_func_in_func(mat_sunk_id, bcx.func);
+        let mat_ref = bcx.import_func(mat_sunk_id);
         let call = bcx.ins().call(
             mat_ref,
             &[

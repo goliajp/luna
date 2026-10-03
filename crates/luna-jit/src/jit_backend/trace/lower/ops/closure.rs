@@ -1,8 +1,8 @@
 use super::*;
 
 /// Closures, `close` and upvalue reads.
-pub(super) fn emit_closure_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_closure_op<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
@@ -23,7 +23,7 @@ pub(super) fn emit_closure_op<M: Module>(
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::Closure => {
             // R[A] := closure(proto.protos[Bx]).
@@ -36,7 +36,7 @@ pub(super) fn emit_closure_op<M: Module>(
             // bounds. RegKind::Unset src → bail (no known tag).
             let bx = ins.bx() as usize;
             let inner = head_proto.protos[bx];
-            let spill_ref = lw.module.declare_func_in_func(spill_id, lw.bcx.func);
+            let spill_ref = lw.bcx.import_func(spill_id);
             for d in inner.upvals.iter() {
                 if !d.in_stack {
                     continue;
@@ -51,7 +51,7 @@ pub(super) fn emit_closure_op<M: Module>(
                 lw.bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
             }
             let bx_arg = lw.bcx.ins().iconst(types::I64, ins.bx() as i64);
-            let func_ref = lw.module.declare_func_in_func(op_closure_id, lw.bcx.func);
+            let func_ref = lw.bcx.import_func(op_closure_id);
             let call = lw.bcx.ins().call(func_ref, &[bx_arg]);
             let v = lw.bcx.inst_results(call)[0];
             lw.bcx.def_var(regs[ins.a() as usize], v);
@@ -78,7 +78,7 @@ pub(super) fn emit_closure_op<M: Module>(
             // first call), so a deopt that re-fires interp's
             // Op::Close → begin_close → close_from sees no work.
             let a_us = ins.a() as usize;
-            let spill_ref = lw.module.declare_func_in_func(spill_id, lw.bcx.func);
+            let spill_ref = lw.bcx.import_func(spill_id);
             for slot in a_us..max_stack {
                 let k = lw.current_kinds[off + slot];
                 let Some(tag_byte) = known_tag(k) else {
@@ -90,7 +90,7 @@ pub(super) fn emit_closure_op<M: Module>(
                 lw.bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
             }
             let a_arg = lw.bcx.ins().iconst(types::I64, ins.a() as i64);
-            let func_ref = lw.module.declare_func_in_func(op_close_id, lw.bcx.func);
+            let func_ref = lw.bcx.import_func(op_close_id);
             let call = lw.bcx.ins().call(func_ref, &[a_arg]);
             let status = lw.bcx.inst_results(call)[0];
             // 1: a `__close` handler would run; the interpreter
@@ -115,7 +115,7 @@ pub(super) fn emit_closure_op<M: Module>(
                 lw.bcx.use_var(cached_var)
             } else {
                 let idx_arg = lw.bcx.ins().iconst(types::I64, ins.b() as i64);
-                let func_ref = lw.module.declare_func_in_func(upval_get_id, lw.bcx.func);
+                let func_ref = lw.bcx.import_func(upval_get_id);
                 let call = lw.bcx.ins().call(func_ref, &[idx_arg]);
                 let new_v = lw.bcx.inst_results(call)[0];
                 let cache_var = lw.bcx.declare_var(types::I64);
@@ -168,8 +168,8 @@ pub(super) fn emit_closure_op<M: Module>(
 
 /// Upvalue `idx` read through the checked helper, typed `want`: the call
 /// made once per trace, at the first read, and guarded there.
-fn checked_upval_read<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+fn checked_upval_read<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
     idx: u32,
@@ -181,7 +181,6 @@ fn checked_upval_read<M: Module>(
     } = lw.h.rt;
     let OpCx { i, rop, .. } = *oc;
     let bcx = &mut lw.bcx;
-    let module = &mut lw.module;
     let checked = lw.upval_checked.entry(idx).or_insert_with(|| {
         let var = bcx.declare_var(types::I64);
         let ss = bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
@@ -192,7 +191,7 @@ fn checked_upval_read<M: Module>(
         let out = bcx.ins().stack_addr(types::I64, ss, 0);
         let idx_arg = bcx.ins().iconst(types::I64, i64::from(idx));
         let want_arg = bcx.ins().iconst(types::I64, i64::from(want));
-        let f = module.declare_func_in_func(upval_get_checked_id, bcx.func);
+        let f = bcx.import_func(upval_get_checked_id);
         let call = bcx.ins().call(f, &[idx_arg, want_arg, out]);
         let ok = bcx.inst_results(call)[0];
         (var, ss, ok, want)

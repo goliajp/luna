@@ -68,6 +68,9 @@ cranelift-frontend = "0.136"
 cranelift-native = "0.136"
 # object format of the module being lowered into, for data section names
 target-lexicon = "0.13"
+# page protection for the baseline trace tier's code (cranelift-jit already
+# depends on it)
+region = "3"
 
 # optional rustyline-powered REPL polish (tab completion
 # against Vm globals + Lua syntax highlighting + native

@@ -59,7 +59,7 @@ impl JITMemoryProvider for CodeMemory {
 }
 
 #[cfg(all(target_arch = "aarch64", target_vendor = "apple"))]
-unsafe fn sync_icache(start: usize, len: usize) {
+pub(crate) unsafe fn sync_icache(start: usize, len: usize) {
     unsafe extern "C" {
         fn sys_icache_invalidate(start: *mut std::ffi::c_void, len: usize);
     }
@@ -128,7 +128,7 @@ fn lines(start: usize, len: usize, line: usize) -> impl Iterator<Item = usize> {
     not(target_vendor = "apple"),
     not(target_os = "windows")
 ))]
-unsafe fn sync_icache(start: usize, len: usize) {
+pub(crate) unsafe fn sync_icache(start: usize, len: usize) {
     use std::arch::asm;
     let ctr: u64;
     // SAFETY: reading CTR_EL0 has no side effects; Linux lets EL0 read it
@@ -157,7 +157,7 @@ unsafe fn sync_icache(start: usize, len: usize) {
 // x86 keeps the instruction cache coherent with stores; windows is
 // handled by cranelift, which calls FlushInstructionCache there
 #[cfg(not(all(target_arch = "aarch64", not(target_os = "windows"))))]
-unsafe fn sync_icache(_start: usize, _len: usize) {}
+pub(crate) unsafe fn sync_icache(_start: usize, _len: usize) {}
 
 #[cfg(test)]
 mod tests {

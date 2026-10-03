@@ -4,8 +4,8 @@ use cranelift_codegen::ir::MemFlagsData;
 /// In the side-exit block of comparison `i`: take its other way when it
 /// has one the registers' kinds allow, jumping to `continue_blk` (the
 /// recorded way's next op) or the rejoin block; `false` to leave instead.
-pub(super) fn alt_taken<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn alt_taken<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     i: usize,
     continue_blk: Block,
@@ -72,7 +72,7 @@ pub(super) fn alt_taken<M: Module>(
 }
 
 /// Rejoin, at recorded op `i`, the other ways that skipped to it.
-pub(super) fn alt_join<M: Module>(lw: &mut Lower<'_, '_, M>, i: usize) {
+pub(super) fn alt_join<E: Emit>(lw: &mut Lower<E>, i: usize) {
     if let Some((blk, writes)) = lw.alt_joins.remove(&i) {
         lw.bcx.ins().jump(blk, &[]);
         lw.bcx.switch_to_block(blk);

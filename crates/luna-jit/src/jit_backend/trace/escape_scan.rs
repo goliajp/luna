@@ -56,7 +56,15 @@ pub(super) fn escape_analyze(
     head_proto: Gc<Proto>,
 ) -> EscapeAnalysis {
     let max_stack = head_proto.max_stack as usize;
-    let max_depth = (MAX_INLINE_DEPTH as usize) + 1;
+    // one bindings row per inline depth the record reaches
+    let max_depth = record
+        .ops
+        .iter()
+        .map(|r| r.inline_depth as usize)
+        .max()
+        .unwrap_or(0)
+        .min(MAX_INLINE_DEPTH as usize)
+        + 1;
     if max_stack == 0 {
         let upper0 = effective_end.min(record.ops.len());
         return EscapeAnalysis {
@@ -84,23 +92,26 @@ pub(super) fn escape_analyze(
         // registers no longer point to live data. Without this
         // clear, live_at_op snapshots would include stale sites
         // and emit_materialize would index wrong inline windows.
-        for d in (cur_depth + 1)..bindings.len() {
-            for slot in bindings[d].iter_mut() {
-                *slot = None;
-            }
-        }
-        // snapshot live sunk bindings BEFORE the op
-        // processes (each cmp emit uses live_at_op[cmp_idx] to
-        // materialise the right virt slots).
-        let mut live_snap: Vec<u32> = Vec::new();
-        for row in bindings.iter() {
-            for &slot in row.iter() {
-                if let Some(sid) = slot {
-                    live_snap.push(sid as u32);
+        // (nothing is bound before the first site)
+        if !sites.is_empty() {
+            for d in (cur_depth + 1)..bindings.len() {
+                for slot in bindings[d].iter_mut() {
+                    *slot = None;
                 }
             }
+            // snapshot live sunk bindings BEFORE the op
+            // processes (each cmp emit uses live_at_op[cmp_idx] to
+            // materialise the right virt slots).
+            let mut live_snap: Vec<u32> = Vec::new();
+            for row in bindings.iter() {
+                for &slot in row.iter() {
+                    if let Some(sid) = slot {
+                        live_snap.push(sid as u32);
+                    }
+                }
+            }
+            live_at_op[i] = live_snap;
         }
-        live_at_op[i] = live_snap;
 
         let rop = &record.ops[i];
         let depth = rop.inline_depth;

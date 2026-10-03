@@ -18,6 +18,27 @@ impl Vm {
         base_us: usize,
         entry_tags: &[u8],
     ) -> ExitSource {
+        let src = self.exit_source_of(cl, pc, ct, raw_ret, reg_state, base_us, entry_tags);
+        // a side trace runs one pass for each return through here, and the
+        // dispatcher never enters it: count the pass as its entry
+        if src.2
+            && let Some(c) = &src.0
+        {
+            self.count_towards_tier_up(c, cl.proto.call_hot_count.get());
+        }
+        src
+    }
+
+    fn exit_source_of(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        pc: u32,
+        ct: &CompiledTrace,
+        raw_ret: u64,
+        reg_state: &mut [i64],
+        base_us: usize,
+        entry_tags: &[u8],
+    ) -> ExitSource {
         let window_size = ct.window_size;
         let from_side_trace = (raw_ret >> 63) & 1 == 1;
         if from_side_trace {
@@ -84,14 +105,14 @@ impl Vm {
                         .traces
                         .borrow()
                         .iter()
-                        .find(|t| t.entry as *const () as *const u8 == fn_ptr)
+                        .find(|t| t.current_entry() as *const () as *const u8 == fn_ptr)
                         .cloned()
                 })
                 .flatten();
             if let Some(child) = child
                 && self.child_reads_stack_held_ok(base_us, entry_tags, &child.entry_tags)
             {
-                let cent = child.entry;
+                let cent = child.current_entry();
                 let child_raw_ret = {
                     // chunk_compiler.enter
                     // (side-trace entry).
