@@ -37,6 +37,40 @@ pub(super) fn emit_lt_float_int<E: Ins>(bcx: &mut E, f: Value, i: Value) -> Valu
     bcx.ins().select(in_range, lt, below)
 }
 
+/// `i <= f` exactly (lvm.c `LEintfloat`): `i <= floor(f)`, with a NaN
+/// `f` false and an `f` beyond the integer range deciding by its sign.
+pub(super) fn emit_le_int_float<E: Ins>(bcx: &mut E, i: Value, f: Value) -> Value {
+    let fl = bcx.ins().floor(f);
+    let fi = bcx.ins().fcvt_to_sint_sat(types::I64, fl);
+    let in_range = emit_f64_fits_i64(bcx, fl);
+    let le = bcx.ins().icmp(IntCC::SignedLessThanOrEqual, i, fi);
+    let zero = bcx.ins().f64const(0.0);
+    let above = bcx.ins().fcmp(FloatCC::GreaterThan, f, zero);
+    bcx.ins().select(in_range, le, above)
+}
+
+/// `f <= i` exactly (lvm.c `LEfloatint`): `ceil(f) <= i`, with a NaN
+/// `f` false and an `f` beyond the integer range deciding by its sign.
+pub(super) fn emit_le_float_int<E: Ins>(bcx: &mut E, f: Value, i: Value) -> Value {
+    let c = bcx.ins().ceil(f);
+    let ci = bcx.ins().fcvt_to_sint_sat(types::I64, c);
+    let in_range = emit_f64_fits_i64(bcx, c);
+    let le = bcx.ins().icmp(IntCC::SignedLessThanOrEqual, ci, i);
+    let zero = bcx.ins().f64const(0.0);
+    let below = bcx.ins().fcmp(FloatCC::LessThan, f, zero);
+    bcx.ins().select(in_range, le, below)
+}
+
+/// The float with bits `bits` as an integer, and whether it is exactly
+/// that integer (not NaN, -0.0, fractional or out of range).
+pub(super) fn float_exact_int<E: Ins>(bcx: &mut E, bits: Value) -> (Value, Value) {
+    let f = bcx.ins().bitcast(types::F64, MemFlagsData::new(), bits);
+    let i = bcx.ins().fcvt_to_sint_sat(types::I64, f);
+    let back = bcx.ins().fcvt_from_sint(types::F64, i);
+    let back_bits = bcx.ins().bitcast(types::I64, MemFlagsData::new(), back);
+    (i, bcx.ins().icmp(IntCC::Equal, back_bits, bits))
+}
+
 /// How a trace lowers `==` of two registers of the given kinds, neither
 /// of them Float (those take the fcmp path).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

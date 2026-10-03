@@ -7,40 +7,68 @@ pub(super) fn emit_loop_tail<E: Emit>(
     for_loop_idx: usize,
 ) -> Option<()> {
     let Plan { record, .. } = *pl;
-    // 5.4+ Int count form (validated above; pre53 bails).
-    //
-    //   if R[A+1] > 0:
-    //     R[A]     = R[A] + R[A+2]    (next loop var)
-    //     R[A+1]   = R[A+1] - 1       (decrement count)
-    //     R[A+3]   = R[A]              (visible loop var copy)
-    //     // continue → back-edge (body_loop) or return head_pc
-    //   else:
-    //     // exit → side-exit at forloop.pc + 1
-    //
     // ForLoop is only set at depth=0 (ForLoop@d>0 closes via
     // InlineAbort), so `regs_full[a]` directly addresses the
     // caller window — no offset.
     let rop = &record.ops[for_loop_idx];
     let a = rop.inst.a() as usize;
     match rop.inst.op() {
-        Op::ForLoop => emit_for_loop_tail(lw, pl, rop, a),
+        Op::ForLoop => emit_for_loop_tail(lw, pl, rop, a)?,
         Op::TForLoop => emit_tfor_loop_tail(lw, pl, for_loop_idx, rop, a)?,
         _ => unreachable!("for_loop_idx_opt only set for Op::ForLoop / Op::TForLoop"),
     }
     Some(())
 }
 
-/// `Op::ForLoop` (the 5.4+ integer count form).
+/// How a numeric `for` loop's state registers are laid out and stepped.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ForForm {
+    /// 5.4+ integer loop: R[A+1] is the unsigned count of iterations left.
+    IntCount,
+    /// 5.3 integer loop: R[A+1] is the limit, the index wraps on overflow.
+    IntLimit,
+    /// Float loop, every dialect: R[A+1] is the limit.
+    Float,
+}
+
+/// The form of the loop whose state registers have kinds `idx`, `lim`
+/// and `step` at its `ForLoop`, or `None` when the trace cannot step it.
+/// 5.1 / 5.2 hold integer state only after `debug.setlocal` (their
+/// `ForPrep` makes every loop a float loop), and stepping it in machine
+/// integers would skip the doubles' rounding: such a loop is left to the
+/// interpreter.
+pub(super) fn for_form(pre53: bool, float_only: bool, kinds: [RegKind; 3]) -> Option<ForForm> {
+    match kinds {
+        [RegKind::Float, RegKind::Float, RegKind::Float] => Some(ForForm::Float),
+        [RegKind::Int, RegKind::Int, RegKind::Int] if float_only => None,
+        [RegKind::Int, RegKind::Int, RegKind::Int] if pre53 => Some(ForForm::IntLimit),
+        [RegKind::Int, RegKind::Int, RegKind::Int] => Some(ForForm::IntCount),
+        _ => None,
+    }
+}
+
+/// `Op::ForLoop`, in the form its state registers' kinds select:
+///
+///   IntCount: continue while R[A+1] != 0; R[A] += R[A+2]; R[A+1] -= 1
+///   IntLimit / Float: next = R[A] + R[A+2];
+///     continue while (0 < step ? next <= limit : limit <= next);
+///     R[A] = next
+///
+/// On continue R[A+3] = R[A] and the trace goes back to the loop body;
+/// on exit it leaves at forloop.pc + 1 with the registers unchanged
+/// (PUC writes nothing when the loop ends).
 pub(super) fn emit_for_loop_tail<E: Emit>(
     lw: &mut Lower<E>,
     pl: &Plan<'_>,
     rop: &RecordedOp,
     a: usize,
-) {
+) -> Option<()> {
     let Plan {
         record,
         max_stack,
         do_internal_loop,
+        opts,
+        float_only,
         ..
     } = *pl;
     let Lower {
@@ -48,13 +76,47 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
         trace_fn_sig_ref,
         ..
     } = *lw;
+    let kinds = [
+        lw.current_kinds[a],
+        lw.current_kinds[a + 1],
+        lw.current_kinds[a + 2],
+    ];
+    let form = for_form(opts.pre53, float_only, kinds)?;
+    let cur = lw.bcx.use_var(lw.regs_full[a]);
+    let x = lw.bcx.use_var(lw.regs_full[a + 1]);
+    let step = lw.bcx.use_var(lw.regs_full[a + 2]);
+    let (cond, next) = match form {
+        ForForm::IntCount => {
+            let zero = lw.bcx.ins().iconst(types::I64, 0);
+            // the loop count is unsigned (PUC `lua_Unsigned`)
+            (lw.bcx.ins().icmp(IntCC::NotEqual, x, zero), None)
+        }
+        ForForm::IntLimit => {
+            let next = lw.bcx.ins().iadd(cur, step);
+            let up = lw.bcx.ins().icmp_imm_s(IntCC::SignedGreaterThan, step, 0);
+            let le = lw.bcx.ins().icmp(IntCC::SignedLessThanOrEqual, next, x);
+            let ge = lw.bcx.ins().icmp(IntCC::SignedGreaterThanOrEqual, next, x);
+            (lw.bcx.ins().select(up, le, ge), Some(next))
+        }
+        ForForm::Float => {
+            let f = |lw: &mut Lower<E>, v| lw.bcx.ins().bitcast(types::F64, MemFlagsData::new(), v);
+            let (cur_f, lim_f, step_f) = (f(lw, cur), f(lw, x), f(lw, step));
+            let next_f = lw.bcx.ins().fadd(cur_f, step_f);
+            let zero = lw.bcx.ins().f64const(0.0);
+            // a NaN anywhere fails both comparisons and ends the loop
+            let up = lw.bcx.ins().fcmp(FloatCC::LessThan, zero, step_f);
+            let le = lw.bcx.ins().fcmp(FloatCC::LessThanOrEqual, next_f, lim_f);
+            let ge = lw.bcx.ins().fcmp(FloatCC::LessThanOrEqual, lim_f, next_f);
+            let next = lw
+                .bcx
+                .ins()
+                .bitcast(types::I64, MemFlagsData::new(), next_f);
+            (lw.bcx.ins().select(up, le, ge), Some(next))
+        }
+    };
+
     // the caller window: see `emit_tail`
     let caller_regs: &[Variable] = &lw.regs_full[..max_stack];
-    let count = lw.bcx.use_var(lw.regs_full[a + 1]);
-    let zero = lw.bcx.ins().iconst(types::I64, 0);
-    // the loop count is unsigned (PUC `lua_Unsigned`)
-    let cond = lw.bcx.ins().icmp(IntCC::NotEqual, count, zero);
-
     let continue_blk = lw.bcx.create_block();
     let exit_blk = lw.bcx.create_block();
     lw.bcx.ins().brif(cond, continue_blk, &[], exit_blk, &[]);
@@ -74,16 +136,20 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
         encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
     );
 
-    // continue branch: do the increment + decrement + back-edge.
+    // continue branch: step the index and go back.
     lw.bcx.switch_to_block(continue_blk);
     lw.bcx.seal_block(continue_blk);
-    let cur = lw.bcx.use_var(lw.regs_full[a]);
-    let step = lw.bcx.use_var(lw.regs_full[a + 2]);
-    let next = lw.bcx.ins().iadd(cur, step);
+    let next = match next {
+        Some(next) => next,
+        None => {
+            let next = lw.bcx.ins().iadd(cur, step);
+            let one = lw.bcx.ins().iconst(types::I64, 1);
+            let count_new = lw.bcx.ins().isub(x, one);
+            lw.bcx.def_var(lw.regs_full[a + 1], count_new);
+            next
+        }
+    };
     lw.bcx.def_var(lw.regs_full[a], next);
-    let one = lw.bcx.ins().iconst(types::I64, 1);
-    let count_new = lw.bcx.ins().isub(count, one);
-    lw.bcx.def_var(lw.regs_full[a + 1], count_new);
     lw.bcx.def_var(lw.regs_full[a + 3], next);
     // ForLoop's continue branch jumps to the loop's
     // BODY START (= (rop.pc + 1) - bx per OP_FORLOOP's
@@ -103,9 +169,7 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
     // loop. Compute the body start explicitly.
     let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
     let mut tail_kinds = lw.current_kinds[..max_stack].to_vec();
-    for k in [a, a + 1, a + 3] {
-        tail_kinds[k] = RegKind::Int;
-    }
+    tail_kinds[a + 3] = kinds[0];
     if do_internal_loop
         && body_pc == record.head_pc
         && loop_kinds_match(&tail_kinds, &lw.head_kinds)
@@ -124,6 +188,7 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
             encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         );
     }
+    Some(())
 }
 
 /// `Op::TForLoop`, the generic-for back-edge.

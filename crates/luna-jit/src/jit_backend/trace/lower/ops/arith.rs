@@ -48,31 +48,31 @@ pub(super) fn emit_float_arith_op<E: Emit>(
                     .ok()?;
                 let pow_ref = lw.bcx.import_func(pow_id);
                 let call = lw.bcx.ins().call(pow_ref, &[lhs, rhs]);
-                let mut r = lw.bcx.inst_results(call)[0];
+                let r = lw.bcx.inst_results(call)[0];
+                let mut bits = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), r);
                 // 5.4+ `luai_numpow` squares by multiplying, which can
-                // differ from `pow` in the last bit
+                // differ from `pow` in the last bit (selected on the bits:
+                // the baseline code generator selects integers only)
                 if !opts.pre53 {
                     let two = lw.bcx.ins().f64const(2.0);
                     let is_two = lw.bcx.ins().fcmp(FloatCC::Equal, rhs, two);
                     let sq = lw.bcx.ins().fmul(lhs, lhs);
-                    r = lw.bcx.ins().select(is_two, sq, r);
+                    let sq = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), sq);
+                    bits = lw.bcx.ins().select(is_two, sq, bits);
                 }
-                def_var_f64(&mut lw.bcx, regs[ins.a() as usize], r);
+                lw.bcx.def_var(regs[ins.a() as usize], bits);
                 lw.current_kinds[off + ins.a() as usize] = RegKind::Float;
                 return Some(());
             }
-            // Float path when either operand is known-Float.
-            // Both must be Float — mixed Int+Float would
-            // semantically coerce to Float in Lua, but the
-            // trace's kind tracker bails to avoid the
-            // ambiguous emit.
-            let float_path = matches!(kb, RegKind::Float) || matches!(kc, RegKind::Float);
+            // Float path when either operand is a float: an integer
+            // operand converts to a float first (lvm.c `luai_num*` on
+            // `cast_num`), as in every dialect; `/` is always a float
+            // division
+            let float_path =
+                matches!(kb, RegKind::Float) || matches!(kc, RegKind::Float) || op == Op::Div;
             if float_path {
-                if !matches!(kb, RegKind::Float) || !matches!(kc, RegKind::Float) {
-                    return None;
-                }
-                let lhs = use_var_f64(&mut lw.bcx, regs, ins.b());
-                let rhs = use_var_f64(&mut lw.bcx, regs, ins.c());
+                let lhs = use_var_as_f64(&mut lw.bcx, regs, ins.b(), kb);
+                let rhs = use_var_as_f64(&mut lw.bcx, regs, ins.c(), kc);
                 let r = match op {
                     Op::Add => lw.bcx.ins().fadd(lhs, rhs),
                     Op::Sub => lw.bcx.ins().fsub(lhs, rhs),
@@ -83,11 +83,6 @@ pub(super) fn emit_float_arith_op<E: Emit>(
                 def_var_f64(&mut lw.bcx, regs[ins.a() as usize], r);
                 lw.current_kinds[off + ins.a() as usize] = RegKind::Float;
             } else {
-                // Op::Div on Int operands would still coerce
-                // to Float in Lua 5.4+. Bail to be safe.
-                if matches!(op, Op::Div) {
-                    return None;
-                }
                 let lhs = lw.bcx.use_var(regs[ins.b() as usize]);
                 let rhs = lw.bcx.use_var(regs[ins.c() as usize]);
                 let r = match op {
@@ -133,6 +128,14 @@ pub(super) fn emit_int_arith_op<E: Emit>(
             // raise; a string is coerced.
             let kb = oc.kind(&lw.current_kinds, ins.b());
             let kc = oc.kind(&lw.current_kinds, ins.c());
+            let number = |k| matches!(k, RegKind::Int | RegKind::Float);
+            if matches!(op, Op::IDiv | Op::Mod)
+                && number(kb)
+                && number(kc)
+                && (kb == RegKind::Float || kc == RegKind::Float)
+            {
+                return emit_float_divmod(lw, pl, oc, kb, kc);
+            }
             if !matches!(kb, RegKind::Int) || !matches!(kc, RegKind::Int) {
                 return None;
             }
@@ -222,5 +225,72 @@ pub(super) fn emit_int_arith_op<E: Emit>(
         }
         _ => unreachable!("routed by emit_op"),
     }
+    Some(())
+}
+
+/// Float `//` and `%` (an integer operand converted first): `//` floors
+/// the quotient; `%` is each dialect's `luai_nummod`, as the interpreter's
+/// `float_mod` does it: 5.1 / 5.2 `a - floor(a/b)*b`, 5.3 `fmod` corrected
+/// when `m*b < 0`, 5.4+ `fmod` corrected when the signs of `m` and `b`
+/// differ.
+fn emit_float_divmod<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    oc: &OpCx<'_>,
+    kb: RegKind,
+    kc: RegKind,
+) -> Option<()> {
+    let Plan {
+        opts, float_only, ..
+    } = *pl;
+    let OpCx { off, ins, op, .. } = *oc;
+    let regs: &[Variable] = oc.regs;
+    let a = use_var_as_f64(&mut lw.bcx, regs, ins.b(), kb);
+    let b = use_var_as_f64(&mut lw.bcx, regs, ins.c(), kc);
+    let r = if op == Op::IDiv {
+        let q = lw.bcx.ins().fdiv(a, b);
+        lw.bcx.ins().floor(q)
+    } else if float_only {
+        let q = lw.bcx.ins().fdiv(a, b);
+        let fl = lw.bcx.ins().floor(q);
+        let p = lw.bcx.ins().fmul(fl, b);
+        lw.bcx.ins().fsub(a, p)
+    } else {
+        let mut sig = lw.bcx.make_signature();
+        sig.params.push(AbiParam::new(types::F64));
+        sig.params.push(AbiParam::new(types::F64));
+        sig.returns.push(AbiParam::new(types::F64));
+        let id = lw
+            .bcx
+            .declare_function("fmod", Linkage::Import, &sig)
+            .ok()?;
+        let f = lw.bcx.import_func(id);
+        let call = lw.bcx.ins().call(f, &[a, b]);
+        let m = lw.bcx.inst_results(call)[0];
+        let zero = lw.bcx.ins().f64const(0.0);
+        let fix = if opts.pre53 {
+            let p = lw.bcx.ins().fmul(m, b);
+            lw.bcx.ins().fcmp(FloatCC::LessThan, p, zero)
+        } else {
+            let m_pos = lw.bcx.ins().fcmp(FloatCC::GreaterThan, m, zero);
+            let b_neg = lw.bcx.ins().fcmp(FloatCC::LessThan, b, zero);
+            let m_neg = lw.bcx.ins().fcmp(FloatCC::LessThan, m, zero);
+            let b_pos = lw.bcx.ins().fcmp(FloatCC::GreaterThan, b, zero);
+            let x = lw.bcx.ins().band(m_pos, b_neg);
+            let y = lw.bcx.ins().band(m_neg, b_pos);
+            lw.bcx.ins().bor(x, y)
+        };
+        // select on the bits: the baseline code generator selects
+        // integers only
+        let fixed = lw.bcx.ins().fadd(m, b);
+        let fixed = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), fixed);
+        let m = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), m);
+        let bits = lw.bcx.ins().select(fix, fixed, m);
+        lw.bcx.def_var(regs[ins.a() as usize], bits);
+        lw.current_kinds[off + ins.a() as usize] = RegKind::Float;
+        return Some(());
+    };
+    def_var_f64(&mut lw.bcx, regs[ins.a() as usize], r);
+    lw.current_kinds[off + ins.a() as usize] = RegKind::Float;
     Some(())
 }

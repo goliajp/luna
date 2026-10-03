@@ -347,11 +347,10 @@ impl Gen<'_, '_> {
         let saved = (self.in_loop, self.iters);
         self.in_loop = true;
         self.iters *= trips;
-        // before 5.4 the trace JIT records `while` loops, not numeric for
-        let kind = match (self.hot, self.wide_for) {
-            (true, false) if self.pick(4) != 0 => 2,
-            (true, true) if self.pick(2) == 0 => 0,
-            _ => self.pick(6),
+        let kind = if self.hot && self.pick(2) == 0 {
+            0
+        } else {
+            self.pick(6)
         };
         match kind {
             0 | 1 => self.numeric_for(id, trips),
@@ -409,6 +408,12 @@ impl Gen<'_, '_> {
             2 => format!("for {i} = 0, {}, 2 do", last * 2),
             3 => format!("for {i} = 0.5, {}, 0.5 do", trips as f64 * 0.5),
             4 if self.wide_for => format!("for {i} = math.maxinteger - {last}, math.maxinteger do"),
+            // 5.3 wraps past `math.maxinteger` and never ends by itself
+            4 if self.ints => format!(
+                "for {i} = math.maxinteger - {last}, math.maxinteger do if {i} < 0 then break end"
+            ),
+            // a float limit, which 5.3 floors for an integer loop
+            4 => format!("for {i} = 1, {trips}.75 do"),
             _ => format!("for {i} = 1, math.min({trips}, math.floor(tonumber(n1) or 0)) do"),
         };
         self.line(&head);

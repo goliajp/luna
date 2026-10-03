@@ -48,18 +48,17 @@ fn apply_tail_kinds_and_gates(
         return_idx_opt,
         ..
     } = *pl;
-    // Op::ForLoop at the tail writes R[A] (next loop var), R[A+1]
-    // (decremented count), and R[A+3] (visible loop var copy) —
-    // all Int per the 5.4+ count form. Op::TForLoop writes R[A+2]
-    // = R[A+4] on continue, of the key's kind, which the generic-for
-    // tail already left in `current_kinds`.
+    // Op::ForLoop at the tail writes R[A] (next loop var), R[A+3]
+    // (visible loop var copy) and, in the 5.4+ count form, R[A+1]
+    // (decremented count), each of R[A]'s kind: the tail only
+    // compiles when R[A..=A+2] share one number kind. Op::TForLoop
+    // writes R[A+2] = R[A+4] on continue, of the key's kind, which the
+    // generic-for tail already left in `current_kinds`.
     if let Some(for_loop_idx) = for_loop_idx_opt {
         let rop = &record.ops[for_loop_idx];
         let a = rop.inst.a() as usize;
         if rop.inst.op() == Op::ForLoop {
-            current_kinds[a] = RegKind::Int;
-            current_kinds[a + 1] = RegKind::Int;
-            current_kinds[a + 3] = RegKind::Int;
+            current_kinds[a + 3] = current_kinds[a];
         }
     }
     // Derive exit_tags from the kind tracker's final state. Slots

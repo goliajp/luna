@@ -247,7 +247,6 @@ pub(super) fn validate_trace_ends(
     record: &TraceRecord,
     head_proto: Gc<Proto>,
     max_stack: usize,
-    opts: CompileOptions,
     effective_end: usize,
     consumed_by_cmp: &[bool],
     call_idx_opt: Option<usize>,
@@ -290,13 +289,6 @@ pub(super) fn validate_trace_ends(
         }
     }
 
-    // Validate the trailing Op::ForLoop (if any). Step-6 only
-    // lowers the 5.4+ Int count form — pre-5.3 compares R[A+1]
-    // directly against `limit` and uses a different state slot
-    // layout, so traces from those dialects bail. The recorder
-    // is trusted that R[A..A+3] really do hold Ints at runtime;
-    // the dispatcher's all-Int marshal gate enforces that
-    // separately on the call boundary.
     // validate Op::Return0/Return1 at depth=0
     // (TraceEnd::Return). Same A bound rule as Call truncation
     // applies to Return1; Return0 has no A read.
@@ -323,26 +315,11 @@ pub(super) fn validate_trace_ends(
         let a = rop.inst.a() as usize;
         match rop.inst.op() {
             Op::ForLoop => {
-                if opts.pre53 {
-                    return None;
-                }
-                // ForLoop touches R[A], R[A+1] (count), R[A+2] (step),
-                // R[A+3] (visible loop var). All must fit in the frame.
+                // ForLoop touches R[A], R[A+1] (count or limit), R[A+2]
+                // (step), R[A+3] (visible loop var). All must fit in the
+                // frame. Which form steps them is decided from their
+                // kinds at the tail (`emit_for_loop_tail`).
                 if a + 3 >= max_stack {
-                    return None;
-                }
-                // Bail on Float ForLoop. Trace JIT's emit at line ~7233
-                // reads R[A+1] as Int count + tests `count > 0`. For
-                // Float ForLoop (5.4+ Float-counter form), R[A+1] is
-                // the LIMIT (Float bits), not a remaining-iteration
-                // count. The Int-semantics check would treat the float
-                // bits as a large positive integer (always > 0) and
-                // loop forever inside the trace. PUC's interp handles
-                // Float and Int ForLoop with separate semantics; the
-                // trace JIT only emits the Int path correctly.
-                if a < record.entry_tags.len()
-                    && record.entry_tags[a] == luna_core::runtime::value::raw::FLOAT
-                {
                     return None;
                 }
             }
