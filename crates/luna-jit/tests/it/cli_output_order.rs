@@ -33,10 +33,12 @@ const CASES: [(&str, &str); 8] = [
 const BUFFER_SIZED: [&str; 2] = ["d.lua", "f.lua"];
 
 fn expected(dialect: &str, name: &str) -> String {
+    // a Windows checkout may give the recording CRLF line endings
+    let all = EXPECTED.replace("\r\n", "\n");
     let head = format!("=== {dialect} {name}\n");
-    let start = EXPECTED.find(&head).unwrap_or_else(|| panic!("no {head}")) + head.len();
-    let len = EXPECTED[start..].find("\n=== end\n").expect("section end");
-    EXPECTED[start..start + len].to_string()
+    let start = all.find(&head).unwrap_or_else(|| panic!("no {head}")) + head.len();
+    let len = all[start..].find("\n=== end\n").expect("section end");
+    all[start..start + len].to_string()
 }
 
 /// Runs of 20 or more equal bytes as `<c*N>`, the program's path as `lua`.

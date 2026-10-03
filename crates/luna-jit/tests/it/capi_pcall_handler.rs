@@ -357,11 +357,12 @@ fn luna_output(version: c_int) -> String {
 /// PUC's lines for one dialect, without the case luna's C API cannot make:
 /// `c_raiser` needs `lua_error`, which it does not export.
 fn puc_output(dialect: &str) -> String {
-    let start = PUC.find(&format!("== {dialect}\n")).unwrap() + dialect.len() + 4;
-    let rest = &PUC[start..];
+    // a Windows checkout may give the recording CRLF line endings
+    let puc = PUC.replace("\r\n", "\n");
+    let start = puc.find(&format!("== {dialect}\n")).unwrap() + dialect.len() + 4;
+    let rest = &puc[start..];
     let section = &rest[..rest.find("\n== ").map_or(rest.len(), |i| i + 1)];
     section
-        .replace("\r\n", "\n")
         .lines()
         .filter(|l| !l.starts_with("c_raiser:"))
         .map(|l| format!("{l}\n"))
