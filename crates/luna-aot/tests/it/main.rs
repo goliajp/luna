@@ -19,6 +19,7 @@ mod aot_recursive_trace;
 mod aot_strkey_resolver;
 mod aot_trace_fires;
 mod aot_trace_gc_roots;
+mod aot_trace_loop_carried;
 mod aot_trace_lower_into_object;
 mod aot_windows_mingw_link;
 mod host_link;

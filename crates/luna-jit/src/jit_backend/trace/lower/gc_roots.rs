@@ -20,10 +20,15 @@ pub(super) fn emit_ssa_roots<E: Emit>(lw: &mut Lower<E>, i: usize, live_end: usi
             vals.push((lw.regs_full[r], tag));
         }
     }
-    let empty: &[u32] = &[];
+    let empty: &[LiveBinding] = &[];
     let live = lw.escape.live_at_op.get(i).map_or(empty, |v| v.as_slice());
-    for &sid in live {
-        let sid = sid as usize;
+    let mut seen: Vec<u32> = Vec::new();
+    for b in live {
+        if seen.contains(&b.site) {
+            continue;
+        }
+        seen.push(b.site);
+        let sid = b.site as usize;
         let sunk = lw.escape.sites.get(sid).map(|s| s.state) == Some(EscapeState::Sinkable);
         if let (true, Some(vars), Some(kinds)) = (
             sunk,

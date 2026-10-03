@@ -90,6 +90,7 @@ mod trace_jit_audit;
 mod trace_jit_semantics;
 mod trace_loadnil_whitelist;
 mod trace_loop_carried_kinds;
+mod trace_loop_carried_sunk;
 mod trace_loop_concat_edge_cases;
 mod trace_loop_coverage;
 mod trace_math_minmax_fold;
