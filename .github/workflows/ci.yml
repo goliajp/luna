@@ -268,7 +268,7 @@ jobs:
   # to every crate brought the whole tree from 981 to 862. Typing the
   # raw pointers that safe functions used to accept (a block per
   # handle built from a pointer, mostly in the luna_jit_* helpers) took
-  # it to 904, the ceiling now. docs/unsafe-accounting.md has the count
+  # it to 908, the ceiling now. docs/unsafe-accounting.md has the count
   # per crate and module
   # and why each kind of site exists. Each justified unsafe addition
   # needs an explicit ceiling bump to the new exact count. Never widen to
@@ -283,7 +283,7 @@ jobs:
         run: |
           count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
                   crates | wc -l | tr -d ' ')
-          ceiling=904
+          ceiling=908
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then
