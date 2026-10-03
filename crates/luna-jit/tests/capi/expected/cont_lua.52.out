@@ -1,0 +1,14 @@
+c_yield	true	4004000	4002000
+c_maybe_yield	1000	-2499500
+wrap first	42
+wrap second	a	b
+wrap dead	false	cannot resume dead coroutine
+c body	5
+c body ret	15
+c body dead	false	cannot resume dead coroutine
+c_yieldk	4501500
+c_callk	4501500
+c_pcallk	3858858	428
+status	true	1
+status	suspended	true	21
+status	dead	false	cannot resume dead coroutine

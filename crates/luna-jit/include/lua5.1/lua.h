@@ -78,6 +78,10 @@ typedef LUA_NUMBER lua_Number;
 /* type for integer functions */
 typedef LUA_INTEGER lua_Integer;
 
+/* PUC 5.1's lua.h does not declare its ident string, but its library
+   defines one; a host that declares it gets this dialect's text */
+#define lua_ident	luna_ident_51
+
 /* state manipulation */
 LUA_API lua_State *(luna_newstate_with) (int version, lua_Alloc f, void *ud,
                                          unsigned seed);

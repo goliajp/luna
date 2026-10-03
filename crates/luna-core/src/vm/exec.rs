@@ -75,6 +75,7 @@ mod trace_stats;
 mod trace_wire;
 mod unwind;
 use coro_resume::*;
+pub(crate) use hooks::HOOK_YIELD_SLOT;
 pub use hooks::{
     HOOK_MASK_CALL, HOOK_MASK_COUNT, HOOK_MASK_LINE, HOOK_MASK_RETURN, HookState, RustDebugHook,
     RustHookEvent,
