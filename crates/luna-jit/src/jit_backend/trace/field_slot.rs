@@ -15,6 +15,7 @@ fn mem_tag(r: u8) -> u8 {
         raw::FLOAT => tag::FLOAT,
         raw::STR => tag::STR,
         raw::TABLE => tag::TABLE,
+        raw::CLOSURE => tag::CLOSURE,
         _ => unreachable!("no slot access for raw tag {r}"),
     }
 }
@@ -119,4 +120,86 @@ pub(super) fn emit_slot_store<E: Emit>(bcx: &mut E, node: Value, val: Value, r: 
         .store(flags, tag, node, super::super::NODE_VAL_TAG_OFFSET as i32);
     bcx.ins()
         .store(flags, val, node, super::super::NODE_VAL_RAW_OFFSET as i32);
+}
+
+/// Branch to `absent` when table `t` has no node holding the interned
+/// string `key` (found by walking at most `hops` nodes of its chain, as
+/// `Table::get_str` does), to `unsure` otherwise (the key is there, or the
+/// chain is longer). Leaves the builder in no block; the caller seals both.
+pub(super) fn emit_str_key_absent<E: Emit>(
+    bcx: &mut E,
+    t: Value,
+    key: Value,
+    hops: usize,
+    absent: Block,
+    unsure: Block,
+) {
+    use luna_core::runtime::value::tag;
+    let flags = MemFlagsData::trusted();
+    let mask = bcx.ins().load(
+        types::I32,
+        flags,
+        t,
+        super::super::TABLE_NODE_MASK_OFFSET as i32,
+    );
+    let mask = bcx.ins().uextend(types::I64, mask);
+    // an empty hash part has the mask `u32::MAX`
+    let empty = bcx.ins().ushr_imm_u(mask, 31);
+    let probe = bcx.create_block();
+    bcx.ins().brif(empty, absent, &[], probe, &[]);
+    bcx.switch_to_block(probe);
+    bcx.seal_block(probe);
+    let nodes = bcx.ins().load(
+        types::I64,
+        flags,
+        t,
+        super::super::TABLE_NODES_PTR_OFFSET as i32,
+    );
+    let hash = bcx
+        .ins()
+        .load(types::I32, flags, key, super::super::STR_HASH_OFFSET as i32);
+    let hash = bcx.ins().uextend(types::I64, hash);
+    let mut idx = bcx.ins().band(hash, mask);
+    for _ in 0..hops {
+        let off = bcx
+            .ins()
+            .ishl_imm_u(idx, i64::from(super::super::SIZEOF_NODE.trailing_zeros()));
+        let node = bcx.ins().iadd(nodes, off);
+        let key_tag = bcx.ins().uload8(
+            types::I64,
+            flags,
+            node,
+            super::super::NODE_KEY_OFFSET as i32,
+        );
+        let key_raw = bcx.ins().load(
+            types::I64,
+            flags,
+            node,
+            super::super::NODE_KEY_RAW_OFFSET as i32,
+        );
+        let tag_ok = bcx
+            .ins()
+            .icmp_imm_u(IntCC::Equal, key_tag, i64::from(tag::STR));
+        let key_ok = bcx.ins().icmp(IntCC::Equal, key_raw, key);
+        let here = bcx.ins().band(tag_ok, key_ok);
+        let next_blk = bcx.create_block();
+        bcx.ins().brif(here, unsure, &[], next_blk, &[]);
+        bcx.switch_to_block(next_blk);
+        bcx.seal_block(next_blk);
+        let next = bcx.ins().load(
+            types::I32,
+            flags,
+            node,
+            super::super::NODE_NEXT_OFFSET as i32,
+        );
+        let next = bcx.ins().uextend(types::I64, next);
+        // the chain ends at -1
+        let end = bcx.ins().ushr_imm_u(next, 31);
+        let follow = bcx.create_block();
+        bcx.ins().brif(end, absent, &[], follow, &[]);
+        bcx.switch_to_block(follow);
+        bcx.seal_block(follow);
+        idx = next;
+    }
+    bcx.ins().jump(unsure, &[]);
 }

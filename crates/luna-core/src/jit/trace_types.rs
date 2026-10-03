@@ -12,6 +12,7 @@ use crate::runtime::function::Proto;
 use crate::vm::isa::Inst;
 
 mod compiled;
+mod compiled_aot;
 mod exit;
 mod record;
 mod side_exit;
@@ -115,10 +116,14 @@ pub struct CompileOptions {
 }
 
 /// Whether a register holding a value of `tag` (a `raw` tag) can enter a
-/// trace that reads it: only a tag whose payload stands for the value.
+/// trace that reads it: a tag whose payload stands for the value, or a
+/// boolean (the trace takes either value under `raw::FALSE`, with payload
+/// 0 or 1; see [`entry_tag_of`]).
 pub fn entry_tag_enterable(tag: u8) -> bool {
     use crate::runtime::value::raw;
-    const PAYLOAD_TAGS: u32 = 1 << raw::INT
+    const PAYLOAD_TAGS: u32 = 1 << raw::FALSE
+        | 1 << raw::TRUE
+        | 1 << raw::INT
         | 1 << raw::FLOAT
         | 1 << raw::TABLE
         | 1 << raw::CLOSURE
@@ -126,6 +131,14 @@ pub fn entry_tag_enterable(tag: u8) -> bool {
         | 1 << raw::STR
         | 1 << raw::NIL;
     PAYLOAD_TAGS >> tag & 1 != 0
+}
+
+/// The entry tag a trace is compiled for when the register held a value of
+/// raw tag `tag` while it was recorded: a boolean of either value is one
+/// entry type.
+pub fn entry_tag_of(tag: u8) -> u8 {
+    use crate::runtime::value::raw;
+    if tag == raw::TRUE { raw::FALSE } else { tag }
 }
 
 /// Default for [`CompileOptions::tier_up_at`].

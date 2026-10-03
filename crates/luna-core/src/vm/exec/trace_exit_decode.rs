@@ -245,8 +245,10 @@ impl Vm {
             // load where a `match` per slot was an indirect branch);
             // `Untouched` has none
             const UNTOUCHED: u8 = u8::MAX;
-            const RAW_OF: [u8; 7] = {
-                let mut m = [0; 7];
+            // a boolean's tag is FALSE plus its payload
+            const BOOL: u8 = u8::MAX - 1;
+            const RAW_OF: [u8; 8] = {
+                let mut m = [0; 8];
                 m[ExitTag::Untouched as usize] = UNTOUCHED;
                 m[ExitTag::Int as usize] = raw::INT;
                 m[ExitTag::Float as usize] = raw::FLOAT;
@@ -255,13 +257,16 @@ impl Vm {
                 // written nil (LoadNil): a nil whatever the entry tag
                 m[ExitTag::Nil as usize] = raw::NIL;
                 m[ExitTag::Str as usize] = raw::STR;
+                m[ExitTag::Bool as usize] = BOOL;
                 m
             };
             let frame = &mut self.stack[base_us..base_us + slot_count];
             let regs = &reg_state[..slot_count];
             for (i, &exit_tag) in exit_tags_for_pc.iter().enumerate() {
                 let mut tag = RAW_OF[exit_tag as usize];
-                if tag == UNTOUCHED {
+                if tag == BOOL {
+                    tag = raw::FALSE + (regs[i] & 1) as u8;
+                } else if tag == UNTOUCHED {
                     if i >= max_stack {
                         tag = raw::NIL;
                     } else {

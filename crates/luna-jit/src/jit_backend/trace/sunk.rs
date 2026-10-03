@@ -104,8 +104,7 @@ pub(super) fn emit_materialize_live_sunk<E: Emit>(
                 let v = bcx.use_var(vars[vi]);
                 bcx.ins()
                     .stack_store(types::I64, v, raws_ss, (vi * 8) as i32);
-                let tag = kind_to_raw_tag(kinds[vi]);
-                let k = bcx.ins().iconst(types::I8, tag as i64);
+                let k = sunk_tag(bcx, kinds[vi], v);
                 bcx.ins().stack_store(types::I64, k, kinds_ss, vi as i32);
             }
             (
@@ -147,8 +146,7 @@ pub(super) fn emit_materialize_live_sunk<E: Emit>(
                 let v = bcx.use_var(vars[slot]);
                 bcx.ins()
                     .stack_store(types::I64, v, hash_raws_ss, (vi * 8) as i32);
-                let tag = kind_to_raw_tag(kinds[slot]);
-                let k = bcx.ins().iconst(types::I8, tag as i64);
+                let k = sunk_tag(bcx, kinds[slot], v);
                 bcx.ins()
                     .stack_store(types::I64, k, hash_kinds_ss, vi as i32);
                 let const_idx = site.hash_keys[vi] as usize;
@@ -195,4 +193,14 @@ pub(super) fn emit_materialize_live_sunk<E: Emit>(
         count += 1;
     }
     count
+}
+
+/// The tag byte of a sunk slot of kind `k` holding `v` (nil for an untyped
+/// slot: see `kind_to_raw_tag`).
+fn sunk_tag<E: Ins>(bcx: &mut E, k: RegKind, v: Value) -> Value {
+    if k == RegKind::Bool {
+        let t = emit_kind_tag(bcx, k, v).expect("a boolean has a tag");
+        return bcx.ins().ireduce(types::I8, t);
+    }
+    bcx.ins().iconst(types::I8, i64::from(kind_to_raw_tag(k)))
 }
