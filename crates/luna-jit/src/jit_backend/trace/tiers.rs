@@ -92,6 +92,7 @@ pub(super) fn compile_trace_cranelift(
     module.finalize_definitions().ok()?;
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     let ptr = module.get_finalized_function(fn_id);
+    super::code_dump::dump("cranelift", record.head_pc, ptr);
     // SAFETY: the cranelift fn signature declared by `lower_trace_into`
     // (`(I64) -> I64`) matches `TraceFn`. The mmap backing the fn body
     // is owned by `module`, which we park on the per-`Vm` storage's
@@ -127,6 +128,7 @@ pub(crate) fn tier_up_trace(
     module.finalize_definitions().ok()?;
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     let ptr = module.get_finalized_function(fn_id);
+    super::code_dump::dump("tier-up", ct.head_pc, ptr);
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     cs.trace_handles.push(TraceHandle {
         _module: module.publish(),

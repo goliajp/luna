@@ -52,6 +52,7 @@ pub(crate) use emit::{ClifEmit, Emit, Ins};
 pub(crate) use lir::CodeArena;
 mod aot_data;
 mod block_params;
+mod code_dump;
 mod compile;
 mod tiers;
 pub(crate) use tiers::tier_up_trace;
