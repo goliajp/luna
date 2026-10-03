@@ -371,12 +371,5 @@ pub(super) fn undump(bytes: &[u8], heap: &mut Heap, version: LuaVersion) -> Resu
         return Err(Bad::Code("not a luna chunk body".to_string()));
     }
     let mut r = Reader::at(bytes, body + BODY_TAG.len());
-    let proto = r_proto(&mut r, heap, None, &mut Vec::new())?;
-    if r.pos() != bytes.len() {
-        return Err(Bad::Code(format!(
-            "{} trailing bytes",
-            bytes.len() - r.pos()
-        )));
-    }
-    Ok(proto)
+    r_proto(&mut r, heap, None, &mut Vec::new())
 }

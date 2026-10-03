@@ -87,9 +87,6 @@ pub(super) fn undump_puc_53(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, 
     // The main closure's upvalue count; its function repeats it.
     r.u8()?;
     let raw = read_proto(&mut r, heap, None)?;
-    if r.pos() != bytes.len() {
-        return Err(format!("{DIALECT} chunk: {} trailing bytes", bytes.len() - r.pos()).into());
-    }
     Ok(lower::build(heap, raw, &translate)?)
 }
 
