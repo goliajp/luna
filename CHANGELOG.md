@@ -299,7 +299,6 @@ optimization.
   pointers are 16 upper-case hex digits without `0x`. They used to be
   Rust's `0x...` everywhere. `string.format("%p")` of a NULL light
   userdata is `(null)`, as in PUC.
-
 - Wrong values from the trace JIT when a loop keeps a table it builds in
   an iteration (affects 1.3.0 through 4.0.1, on 5.4 and 5.5): after
   `last = t` or `prev = {n = i}` in a numeric `for`, the variable held
