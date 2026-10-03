@@ -234,6 +234,18 @@ Key properties:
   On other targets, and for the few instructions the baseline does not
   encode, traces go to Cranelift directly.
 
+- **Calls are inlined.** The recorder follows a call into the Lua
+  function it reaches, and the trace runs the callee's instructions in a
+  register window placed after the caller's, as the call would. The
+  inlined code is checked against the callee's prototype (or, for a
+  function calling itself, against the running closure), reads upvalues
+  through the callee's own closure, and keeps the prototypes it inlined
+  alive; an AOT binary loads them from slots its runtime fills after the
+  chunk is loaded. A side exit inside an inlined function rebuilds the
+  call frames before the interpreter resumes there. A call that wants
+  more than one result, passes a variable number of arguments or enters
+  a vararg function ends the trace instead.
+
 - **Side traces** (compiled paths from frequently-taken side exits)
   attach back into the parent trace's exit table at runtime. This keeps
   branchy code from re-entering the interpreter just because a less-common
