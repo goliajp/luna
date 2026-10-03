@@ -50,17 +50,23 @@ impl Vm {
     /// message handler is stashed in the continuation and the arguments are
     /// shifted down over the handler's slot so `f`'s args are contiguous.
     /// `forward` is false for 5.1's `xpcall`, which passes `f` none of them.
+    /// A host's protected call (`host`) takes any value as the handler, as
+    /// `lua_pcall` does: one that cannot be called fails only when an error
+    /// needs it.
     pub(super) fn begin_xpcall(
         &mut self,
         func_slot: u32,
         nargs: u32,
         nresults: i32,
         forward: bool,
+        host: bool,
     ) -> Result<bool, LuaError> {
-        self.with_native_running(func_slot, nargs, |vm| {
-            let a = crate::vm::argcheck::Args::new(func_slot, nargs);
-            crate::vm::builtins::xpcall_handler(vm, a).map(drop)
-        })?;
+        if !host {
+            self.with_native_running(func_slot, nargs, |vm| {
+                let a = crate::vm::argcheck::Args::new(func_slot, nargs);
+                crate::vm::builtins::xpcall_handler(vm, a).map(drop)
+            })?;
+        }
         if self.pcall_depth >= MAX_C_DEPTH {
             // raised inside pcall, a C function: no position
             return Err(self.plain_err("C stack overflow"));
