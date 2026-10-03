@@ -10,7 +10,13 @@
 
 use super::jit_program::Gen;
 
-const CTORS: [&str; 5] = ["{n = i}", "{i, i + 1}", "{n = i, i}", "{i, n = i, s = 'x' .. i}", "{}"];
+const CTORS: [&str; 5] = [
+    "{n = i}",
+    "{i, i + 1}",
+    "{n = i, i}",
+    "{i, n = i, s = 'x' .. i}",
+    "{}",
+];
 
 impl Gen<'_, '_> {
     /// `do local last ... local function ck(n) <loop> end print(ck(..)) end`
