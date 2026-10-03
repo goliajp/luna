@@ -129,6 +129,9 @@ pub(crate) trait Ins {
 /// What the lowerer needs from the module a trace is lowered into: the
 /// helpers it calls and, for luna-aot, the data objects string keys and
 /// cells live in.
+// the module methods keep the signatures of `cranelift_module::Module`,
+// errors included
+#[allow(clippy::result_large_err)]
 pub(crate) trait Emit: Ins {
     fn make_signature(&self) -> Signature;
     fn declare_function(

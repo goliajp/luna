@@ -4,7 +4,7 @@ use super::*;
 pub(super) fn emit_eqk_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<()> {
     let Plan { head_proto, .. } = *pl;
     let OpCx { rop, off, ins, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::EqK => {
             // `R[A] == const[B]` — Int and Float consts both
@@ -103,7 +103,7 @@ pub(super) fn emit_test_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::Test => {
             // `if (not R[A] == K) then pc++`.

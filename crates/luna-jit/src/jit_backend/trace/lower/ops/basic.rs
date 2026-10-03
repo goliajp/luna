@@ -8,7 +8,7 @@ pub(super) fn emit_basic_op<E: Emit>(
 ) -> Option<()> {
     let Plan { head_proto, .. } = *pl;
     let OpCx { off, ins, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::Jmp => {
             // Trailing back-edge (validated in the pre-emit

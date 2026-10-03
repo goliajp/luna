@@ -13,7 +13,7 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         // inline self-recursive Call: emit nothing.
         // The recorder's depth bump (next op at depth+1) drives the

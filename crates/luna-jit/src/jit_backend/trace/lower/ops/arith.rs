@@ -8,7 +8,7 @@ pub(super) fn emit_float_arith_op<E: Emit>(
 ) -> Option<()> {
     let Plan { opts, .. } = *pl;
     let OpCx { off, ins, op, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Pow => {
             let kb = oc.kind(&lw.current_kinds, ins.b());
@@ -120,7 +120,7 @@ pub(super) fn emit_int_arith_op<E: Emit>(
         op,
         ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         // 3-reg Int ops. The cases the machine instruction gets
         // wrong for Lua — a zero divisor (Lua raises), a shift count

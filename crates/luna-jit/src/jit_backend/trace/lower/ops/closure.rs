@@ -23,7 +23,7 @@ pub(super) fn emit_closure_op<E: Emit>(
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::Closure => {
             // R[A] := closure(proto.protos[Bx]).
