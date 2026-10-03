@@ -1,0 +1,25 @@
+== 5.1
+stack traceback:
+	[C]: in function 'rep'
+	argerr.lua:1: in function 'f'
+	argerr.lua:2: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'rep'
+	argerr.lua:1: in function 'f'
+	argerr.lua:2: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'string.rep'
+	argerr.lua:1: in local 'f'
+	argerr.lua:2: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'string.rep'
+	argerr.lua:1: in local 'f'
+	argerr.lua:2: in main chunk
+== 5.5
+stack traceback:
+	[C]: in method 'rep'
+	argerr.lua:1: in local 'f'
+	argerr.lua:2: in main chunk

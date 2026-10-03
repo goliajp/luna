@@ -77,9 +77,10 @@ fn call_with_handler_returns_the_results() {
     assert!(r.is_empty());
 }
 
-/// The handler runs where the error was raised, and the call is one C
-/// level below the called function: `debug.traceback` as the handler sees
-/// the raising function and ends with that level.
+/// The handler runs where the error was raised, and the call adds no level
+/// below the called function, as `lua_pcall` from a C host adds none:
+/// `debug.traceback` as the handler sees the raising function and ends with
+/// the main chunk (PUC 5.1.5 and 5.4.9 run from a C host print the same).
 #[test]
 fn call_with_handler_runs_the_handler_before_unwinding() {
     let src = "local function inner() error('boom') end\ninner()\n";
@@ -87,12 +88,12 @@ fn call_with_handler_runs_the_handler_before_unwinding() {
         (
             LuaVersion::Lua51,
             "t:1: boom\nstack traceback:\n\t[C]: in function 'error'\n\t\
-             t:1: in function 'inner'\n\tt:2: in main chunk\n\t[C]: ?",
+             t:1: in function 'inner'\n\tt:2: in main chunk",
         ),
         (
             LuaVersion::Lua54,
             "t:1: boom\nstack traceback:\n\t[C]: in function 'error'\n\t\
-             t:1: in local 'inner'\n\tt:2: in main chunk\n\t[C]: in ?",
+             t:1: in local 'inner'\n\tt:2: in main chunk",
         ),
     ];
     for (v, text) in expect {
@@ -105,6 +106,15 @@ fn call_with_handler_runs_the_handler_before_unwinding() {
         let tb = debug.get(Value::Str(vm.heap.intern(b"traceback")));
         let err = vm.call_value_with_handler(f, &[], tb).unwrap_err();
         assert_eq!(str_of(err.0), text, "{v:?}");
+        // made from inside a C function of the host's (lua.c's `pmain`),
+        // that function is the last level
+        let err = vm.call_value_with_handler_in_c(f, &[], tb).unwrap_err();
+        let bottom = if v == LuaVersion::Lua51 {
+            "\n\t[C]: ?"
+        } else {
+            "\n\t[C]: in ?"
+        };
+        assert_eq!(str_of(err.0), format!("{text}{bottom}"), "{v:?}");
     }
 }
 

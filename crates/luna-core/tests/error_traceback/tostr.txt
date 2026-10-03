@@ -1,0 +1,30 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	tostr.lua:1: in function <tostr.lua:1>
+	[C]: in function 'tostring'
+	tostr.lua:2: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	tostr.lua:1: in function <tostr.lua:1>
+	[C]: in function 'tostring'
+	tostr.lua:2: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	tostr.lua:1: in function <tostr.lua:1>
+	[C]: in function 'tostring'
+	tostr.lua:2: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	tostr.lua:1: in function <tostr.lua:1>
+	[C]: in function 'tostring'
+	tostr.lua:2: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	tostr.lua:1: in function <tostr.lua:1>
+	[C]: in global 'tostring'
+	tostr.lua:2: in main chunk

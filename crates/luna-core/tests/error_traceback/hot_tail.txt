@@ -1,0 +1,30 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	hot_tail.lua:1: in function <hot_tail.lua:1>
+	(tail call): ?
+	hot_tail.lua:4: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	hot_tail.lua:1: in function <hot_tail.lua:1>
+	(...tail calls...)
+	hot_tail.lua:4: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	hot_tail.lua:1: in function <hot_tail.lua:1>
+	(...tail calls...)
+	hot_tail.lua:4: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	hot_tail.lua:1: in function <hot_tail.lua:1>
+	(...tail calls...)
+	hot_tail.lua:4: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	hot_tail.lua:1: in function <hot_tail.lua:1>
+	(...tail calls...)
+	hot_tail.lua:4: in main chunk
