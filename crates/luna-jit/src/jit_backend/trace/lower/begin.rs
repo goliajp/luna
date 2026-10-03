@@ -192,6 +192,7 @@ pub(super) fn begin_body<E: Emit>(
         upval_check_done: Vec::new(),
         head_closure_var,
         known_int,
+        const_str: vec![false; window_size_us],
         alt_joins: std::collections::HashMap::new(),
         tier_count: None,
     }

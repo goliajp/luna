@@ -26,31 +26,54 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
         // innermost frame's pc is overwritten with the side-exit PC
         // at snapshot time.
         Op::Call => {
-            // The inlined body is the head proto's code run with the
-            // entry closure's upvalues, which is right only when the
-            // callee is that very closure. Anything else (another
-            // closure of the proto, a reassigned upvalue, another
-            // function) leaves here and the interpreter makes the call.
             let callee_reg = ins.a() as usize;
             if !matches!(lw.current_kinds[off + callee_reg], RegKind::Closure) {
                 checkpoint("bail:inline-callee-not-closure");
                 return None;
             }
-            let head_cl = match lw.head_closure_var {
-                Some(var) => lw.bcx.use_var(var),
-                None => {
-                    let func_ref = lw.bcx.import_func(head_closure_id);
-                    let call = lw.bcx.ins().call(func_ref, &[]);
-                    let v = lw.bcx.inst_results(call)[0];
-                    let var = lw.bcx.declare_var(types::I64);
-                    lw.bcx.def_var(var, v);
-                    lw.head_closure_var = Some(var);
-                    v
-                }
-            };
             let callee = lw.bcx.use_var(regs[callee_reg]);
-            let same = lw.bcx.ins().icmp(IntCC::Equal, callee, head_cl);
-            guard!(lw, pl, same, i, rop.pc);
+            // the function the recording went into: the next op's (a
+            // SelfLink close ends at the call into the head function)
+            let callee_proto = pl.record.ops.get(i + 1).map_or(pl.head_proto, |r| r.proto);
+            if std::ptr::eq(callee_proto.as_ptr(), pl.head_proto.as_ptr()) {
+                // The inlined body is the head proto's code run with the
+                // entry closure's upvalues, which is right only when the
+                // callee is that very closure. Anything else (another
+                // closure of the proto, a reassigned upvalue, another
+                // function) leaves here and the interpreter makes the call.
+                let head_cl = match lw.head_closure_var {
+                    Some(var) => lw.bcx.use_var(var),
+                    None => {
+                        let func_ref = lw.bcx.import_func(head_closure_id);
+                        let call = lw.bcx.ins().call(func_ref, &[]);
+                        let v = lw.bcx.inst_results(call)[0];
+                        let var = lw.bcx.declare_var(types::I64);
+                        lw.bcx.def_var(var, v);
+                        lw.head_closure_var = Some(var);
+                        v
+                    }
+                };
+                let same = lw.bcx.ins().icmp(IntCC::Equal, callee, head_cl);
+                guard!(lw, pl, same, i, rop.pc);
+            } else {
+                // another function: any closure of the recorded proto runs
+                // the inlined body, which reads upvalues through the frame's
+                // own closure (see `frame_closure`)
+                let proto = lw.bcx.ins().load(
+                    types::I64,
+                    cranelift_codegen::ir::MemFlagsData::trusted(),
+                    callee,
+                    std::mem::offset_of!(luna_core::runtime::LuaClosure, proto) as i32,
+                );
+                let want = emit_proto_arg(
+                    &mut lw.bcx,
+                    callee_proto,
+                    pl.opts.aot,
+                    &mut lw.defined_aot_data,
+                );
+                let same = lw.bcx.ins().icmp(IntCC::Equal, proto, want);
+                guard!(lw, pl, same, i, rop.pc);
+            }
             // SelfLink close: the LAST recorded op is the
             // Op::Call whose "next" op (the tripping deepest-depth
             // entry) was never captured. Skip the call_chain push
@@ -62,18 +85,33 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
             if self_link_idx_opt.is_some() && i + 1 == effective_end {
                 return Some(());
             }
-            // Next op is at depth+1 (recorder invariant for
-            // self-recursive entry); its op_offsets entry is the
-            // callee's base_offset.
+            // Next op is at depth+1 (recorder invariant for an inlined
+            // call); its op_offsets entry is the callee's base_offset.
             debug_assert!(
                 i + 1 < effective_end,
-                "self-rec Call must be followed by callee op in effective_end"
+                "inlined Call must be followed by callee op in effective_end"
             );
             let callee_base = pl.op_offsets[i + 1];
+            // a parameter the call passes no argument for starts nil
+            let nargs = ins.b() - 1;
+            for k in nargs..u32::from(callee_proto.num_params) {
+                let slot = (callee_base + k) as usize;
+                let z = lw.bcx.ins().iconst(types::I64, 0);
+                lw.bcx.def_var(lw.regs_full[slot], z);
+                lw.current_kinds[slot] = RegKind::Nil;
+                lw.known_int[slot] = None;
+                lw.const_str[slot] = false;
+            }
+            // the caller's result count (`C` - 1; `C` = 0 is let through
+            // only for a call the recording saw return one value)
+            let nresults = match ins.c() {
+                0 => 1,
+                c => c as i32 - 1,
+            };
             lw.call_chain.push(FrameMaterializeInfo {
                 base_offset: callee_base,
                 pc: rop.pc + 1,
-                nresults: 1,
+                nresults,
             });
         }
         // inline Return0: callee returns no values
@@ -84,11 +122,22 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
         // a single concrete trip so trust the recorded trace).
         // pop the matching call_chain frame.
         Op::Return0 => {
-            debug_assert!(
-                !lw.call_chain.is_empty(),
-                "Return0 at depth>0 has a matching frame"
-            );
-            lw.call_chain.pop();
+            let frame = lw
+                .call_chain
+                .pop()
+                .expect("Return0 at depth>0 has a matching frame");
+            // a caller that wants one value gets nil
+            if frame.nresults == 1 {
+                let call_a = pl.enclosing_call_a[i]
+                    .expect("Return0 at depth>0 has an enclosing Op::Call")
+                    as usize;
+                let dst = off - (call_a + 1) + call_a;
+                let z = lw.bcx.ins().iconst(types::I64, 0);
+                lw.bcx.def_var(lw.regs_full[dst], z);
+                lw.current_kinds[dst] = RegKind::Nil;
+                lw.known_int[dst] = None;
+                lw.const_str[dst] = false;
+            }
         }
         // inline Return1: copy callee's R[A]
         // into the caller's R[call_a]. `op_offsets` for the
@@ -105,19 +154,22 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
             let caller_off = off
                 .checked_sub(call_a + 1)
                 .expect("op_offsets invariant: callee window > caller window");
-            let src_var = lw.regs_full[off + a_callee];
-            let dst_var = lw.regs_full[caller_off + call_a];
-            let v = lw.bcx.use_var(src_var);
-            lw.bcx.def_var(dst_var, v);
-            // Propagate the kind so the caller's continuation
-            // sees the right type.
-            lw.current_kinds[caller_off + call_a] = lw.current_kinds[off + a_callee];
-            // pop matching call_chain frame.
-            debug_assert!(
-                !lw.call_chain.is_empty(),
-                "Return1 at depth>0 has a matching frame"
-            );
-            lw.call_chain.pop();
+            let frame = lw
+                .call_chain
+                .pop()
+                .expect("Return1 at depth>0 has a matching frame");
+            // a caller that wants no value drops it
+            if frame.nresults == 1 {
+                let src_var = lw.regs_full[off + a_callee];
+                let dst_var = lw.regs_full[caller_off + call_a];
+                let v = lw.bcx.use_var(src_var);
+                lw.bcx.def_var(dst_var, v);
+                // Propagate the kind so the caller's continuation
+                // sees the right type.
+                lw.current_kinds[caller_off + call_a] = lw.current_kinds[off + a_callee];
+                lw.known_int[caller_off + call_a] = lw.known_int[off + a_callee];
+                lw.const_str[caller_off + call_a] = lw.const_str[off + a_callee];
+            }
         }
         _ => unreachable!("routed by emit_op"),
     }

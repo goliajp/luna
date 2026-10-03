@@ -56,7 +56,7 @@ pub(super) fn eq_lowering(a: RegKind, b: RegKind) -> EqLowering {
     use RegKind::*;
     match (a, b) {
         (Unset | Unknown | StackHeld, _) | (_, Unset | Unknown | StackHeld) => EqLowering::Unknown,
-        (Int, Int) | (Nil, Nil) | (Closure, Closure) => EqLowering::Payload,
+        (Int, Int) | (Nil, Nil) | (Closure, Closure) | (Bool, Bool) => EqLowering::Payload,
         (Table, Table) | (Str, Str) => EqLowering::Identity(a),
         _ => EqLowering::Unequal,
     }

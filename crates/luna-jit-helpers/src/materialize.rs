@@ -1,6 +1,6 @@
 //! Frame materialization for inline side exits.
 
-use crate::{current_jit_closure, current_jit_vm};
+use crate::current_jit_vm;
 
 /// Runtime fire counter for the inline-chain reloc path. Every call to
 /// [`luna_jit_trace_materialize_frames`] from trace mcode (JIT-baked
@@ -30,34 +30,36 @@ pub fn trace_materialize_frames_fires() -> u64 {
 /// side-exit blocks.
 ///
 /// Invariants the caller (lowerer) enforces at compile time:
-/// - All inlined frames are the same `LuaClosure` (self-recursion
-///   only), so `current_jit_closure()` matches every frame's
-///   closure pointer.
-/// - The chain is non-vararg (`!cl.proto.is_vararg`) — helper does
+/// - `closures[i]` is the closure frame `i` runs: the value its caller
+///   called, which the trace checked is a Lua closure of the function it
+///   inlined there.
+/// - No inlined function is vararg — helper does
 ///   NOT reconstruct the vararg rotation that `push_frame` does.
-/// - Every inlined `Op::Call` has `C == 2` (one return value);
-///   `m.nresults` is therefore always 1. The helper writes whatever
-///   the metadata says, no validation.
+/// - Every inlined `Op::Call` wants at most one result; `m.nresults` is
+///   the count the caller asked for. The helper writes whatever the
+///   metadata says, no validation.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread
 /// opened with the running closure; `metas` points at `n` readable
 /// `FrameMaterializeInfo`s (the trace passes its own `frame_metas`, which
-/// live as long as its code).
+/// live as long as its code) and `closures` at `n` readable payloads of
+/// live Lua closures.
 // SAFETY: no other item in the link is named `luna_jit_trace_materialize_frames`: only this crate
 // defines `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
     n: u64,
     metas: *const luna_core::jit::trace::FrameMaterializeInfo,
+    closures: *const i64,
 ) -> i64 {
     // Count every entry to this helper from trace mcode.
     // Relaxed ordering: the counter is purely diagnostic; the read
     // side runs after process work has quiesced.
     TRACE_MATERIALIZE_FRAMES_FIRES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
-    // Vm lent to this call and JIT_CL that closure
-    let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
+    // Vm lent to this call
+    let vm = unsafe { current_jit_vm() };
     // Honour the existing deopt protocol: if any earlier helper in
     // this JIT entry parked a deopt, don't push frames — the
     // dispatcher will unwind via the deopt path.
@@ -71,13 +73,15 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
         // than panic from the JIT.
         None => return -1,
     };
-    let max_stack = cl.proto.max_stack as u32;
     for i in 0..n as usize {
-        // SAFETY: `i < n`, and `metas` points at `n` readable entries
-        // (# Safety)
-        let m = unsafe { *metas.add(i) };
+        // SAFETY: `i < n`, and `metas` and `closures` point at `n`
+        // readable entries (# Safety)
+        let (m, raw) = unsafe { (*metas.add(i), *closures.add(i)) };
+        // SAFETY: `raw` is the payload of a live Lua closure (# Safety)
+        let cl =
+            unsafe { luna_core::runtime::Gc::from_ptr(raw as *mut luna_core::runtime::LuaClosure) };
         let new_base = head_frame.base + m.base_offset;
-        vm.jit_ensure_stack((new_base + max_stack) as usize);
+        vm.jit_ensure_stack((new_base + cl.proto.max_stack as u32) as usize);
         vm.jit_push_inlined_frame(cl, new_base, m.pc, m.nresults);
     }
     0

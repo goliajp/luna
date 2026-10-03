@@ -43,6 +43,7 @@ pub(super) fn alt_taken<E: Emit>(
                 lw.bcx.def_var(lw.regs_full[a], v);
                 // a value of either way past the rejoin
                 lw.known_int[a] = None;
+                lw.const_str[a] = false;
             }
             lw.bcx.ins().jump(continue_blk, &[]);
             true
@@ -79,6 +80,7 @@ pub(super) fn alt_join<E: Emit>(lw: &mut Lower<E>, i: usize) {
         lw.bcx.seal_block(blk);
         for w in writes {
             lw.known_int[w as usize] = None;
+            lw.const_str[w as usize] = false;
         }
     }
 }

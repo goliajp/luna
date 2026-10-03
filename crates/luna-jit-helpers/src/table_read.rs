@@ -80,7 +80,8 @@ pub unsafe extern "C" fn luna_jit_op_get_tab_up(upval_idx: i64, key_ptr: i64) ->
 /// read's result from how the next ops use it (arithmetic → Int, indexing
 /// → Table, ...) and compiles the rest of the trace for that type. These
 /// variants return `1` and write the payload through `out` only when the
-/// value has tag `want_tag` and the table has no metatable (whose
+/// value has tag `want_tag` (`raw::FALSE`: a boolean of either value,
+/// written as 0 or 1) and the table has no metatable (whose
 /// `__index` the helper would bypass); otherwise they return `0` and the
 /// caller side-exits at the reading op, so the interpreter performs it.
 ///
@@ -91,12 +92,16 @@ pub(crate) unsafe fn checked_read(
     want_tag: i64,
     out: *mut i64,
 ) -> i64 {
-    let (tag, raw) = v.unpack();
-    if tag as i64 != want_tag {
-        return 0;
-    }
+    use luna_core::runtime::value::raw;
+    let (tag, payload) = v.unpack();
+    // `raw::FALSE` asks for a boolean of either value, as 0 or 1
+    let bits = match tag {
+        raw::FALSE | raw::TRUE if want_tag == i64::from(raw::FALSE) => i64::from(tag - raw::FALSE),
+        _ if tag as i64 == want_tag => raw_bits(payload),
+        _ => return 0,
+    };
     // SAFETY: `out` is writable, by the caller's contract
-    unsafe { *out = raw_bits(raw) };
+    unsafe { *out = bits };
     1
 }
 
@@ -312,4 +317,31 @@ pub unsafe extern "C" fn luna_jit_table_len_checked(t: i64) -> i64 {
         return -1;
     }
     g.len()
+}
+
+/// `SelfOp`'s method lookup `t[key]`: the table itself, then table-valued
+/// `__index` links; see `checked_read`. A function link fails, so the
+/// interpreter calls it.
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread;
+/// `t` is a live table, `key_ptr` an interned string, and `out` is valid
+/// for writing one `i64`.
+// SAFETY: no other item in the link is named `luna_jit_op_self_checked`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_op_self_checked(
+    t: i64,
+    key_ptr: i64,
+    want_tag: i64,
+    out: *mut i64,
+) -> i64 {
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent
+    // to this call; `t` is a live table and `key_ptr` an interned string
+    let (vm, g, key) = unsafe { (current_jit_vm(), table_arg(t), str_arg(key_ptr)) };
+    match vm.jit_index_str_tables(g, key) {
+        // SAFETY: `out` is writable (# Safety)
+        Some(v) => unsafe { checked_read(v, want_tag, out) },
+        None => 0,
+    }
 }

@@ -221,6 +221,12 @@ impl Vm {
             Some(CallFrame::Lua(f)) => (f.base as usize, f.closure.proto),
             _ => (base_us, cl.proto),
         };
+        // a side trace is cached on, and found through, the parent's proto:
+        // an exit inside a function of another proto the parent inlined
+        // starts none
+        if !resume_proto.ptr_eq(cl.proto) {
+            return;
+        }
         let resume_max_stack = resume_proto.max_stack as usize;
         let mut side_entry_tags: Vec<u8> = Vec::with_capacity(resume_max_stack);
         // Extend stack if cont_pc's frame window

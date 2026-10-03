@@ -2,7 +2,6 @@ use super::*;
 
 /// Comparison with a constant.
 pub(super) fn emit_eqk_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<()> {
-    let Plan { head_proto, .. } = *pl;
     let OpCx { rop, off, ins, .. } = *oc;
     let regs: &[Variable] = oc.regs;
     match oc.op {
@@ -14,7 +13,7 @@ pub(super) fn emit_eqk_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'
             // non-number is never equal.
             let bx = ins.b() as usize;
             let ka = k_op(&lw.current_kinds, off as u32 + ins.a());
-            let cond = match head_proto.consts[bx] {
+            let cond = match oc.rop.proto.consts[bx] {
                 luna_core::runtime::Value::Int(n) => {
                     if matches!(ka, RegKind::Float) {
                         return None;
@@ -66,7 +65,20 @@ pub(super) fn emit_eqk_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'
                         lw.bcx.ins().icmp(int_cc, lhs, rhs)
                     }
                 },
-                _ => unreachable!("pre-emit gates number and short string consts only"),
+                luna_core::runtime::Value::Bool(b) => match eq_lowering(ka, RegKind::Bool) {
+                    EqLowering::Unequal => lw.bcx.ins().iconst(types::I8, i64::from(!ins.k())),
+                    EqLowering::Unknown => return None,
+                    _ => {
+                        let lhs = lw.bcx.use_var(regs[ins.a() as usize]);
+                        let int_cc = if ins.k() {
+                            IntCC::Equal
+                        } else {
+                            IntCC::NotEqual
+                        };
+                        lw.bcx.ins().icmp_imm_u(int_cc, lhs, i64::from(b))
+                    }
+                },
+                _ => unreachable!("pre-emit gates number, boolean and short string consts only"),
             };
 
             let continue_blk = lw.bcx.create_block();
@@ -123,7 +135,7 @@ pub(super) fn emit_test_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
                 | RegKind::Closure
                 | RegKind::Str => Some(true),
                 RegKind::Nil => Some(false),
-                RegKind::Unset | RegKind::Unknown => None,
+                RegKind::Unset | RegKind::Unknown | RegKind::Bool => None,
                 // the trace reads it, so it is never held on the stack
                 RegKind::StackHeld => return None,
             };
@@ -139,13 +151,8 @@ pub(super) fn emit_test_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
                 // Test consumed; no IR. Match guaranteed at
                 // compile time.
             } else {
-                // Runtime tag-based truthy guard.
-                let slot_arg = lw.bcx.ins().iconst(types::I64, ins.a() as i64);
-                let stack_tag_ref = lw.bcx.import_func(stack_tag_id);
-                let tag_call = lw.bcx.ins().call(stack_tag_ref, &[slot_arg]);
-                let tag = lw.bcx.inst_results(tag_call)[0];
-                let one = lw.bcx.ins().iconst(types::I64, 1);
-                let is_truthy = lw.bcx.ins().icmp(IntCC::UnsignedGreaterThan, tag, one);
+                // Runtime truthy guard.
+                let is_truthy = runtime_truthy(lw, oc, ins.a(), a_kind, stack_tag_id)?;
                 // Op::Test: test_passed_runtime = !is_truthy == k_bit
                 let not_truthy = lw.bcx.ins().bxor_imm_u(is_truthy, 1);
                 let k_bit_const = lw.bcx.ins().iconst(types::I8, k_bit as i64);
@@ -183,7 +190,7 @@ pub(super) fn emit_test_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
                 | RegKind::Closure
                 | RegKind::Str => Some(true),
                 RegKind::Nil => Some(false),
-                RegKind::Unset | RegKind::Unknown => None,
+                RegKind::Unset | RegKind::Unknown | RegKind::Bool => None,
                 // the trace reads it, so it is never held on the stack
                 RegKind::StackHeld => return None,
             };
@@ -202,12 +209,7 @@ pub(super) fn emit_test_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
             } else {
                 // Runtime guard. Same shape as Op::Test
                 // but the basis is `is_truthy` (not `!is_truthy`).
-                let slot_arg = lw.bcx.ins().iconst(types::I64, ins.b() as i64);
-                let stack_tag_ref = lw.bcx.import_func(stack_tag_id);
-                let tag_call = lw.bcx.ins().call(stack_tag_ref, &[slot_arg]);
-                let tag = lw.bcx.inst_results(tag_call)[0];
-                let one = lw.bcx.ins().iconst(types::I64, 1);
-                let is_truthy = lw.bcx.ins().icmp(IntCC::UnsignedGreaterThan, tag, one);
+                let is_truthy = runtime_truthy(lw, oc, ins.b(), b_kind, stack_tag_id)?;
                 let k_bit_const = lw.bcx.ins().iconst(types::I8, k_bit as i64);
                 let test_passed_runtime = lw.bcx.ins().icmp(IntCC::Equal, is_truthy, k_bit_const);
                 let recorded_const = lw.bcx.ins().iconst(types::I8, recorded_passed as i64);
@@ -244,133 +246,32 @@ pub(super) fn emit_eqk_side_exit<E: Emit>(
     oc: &OpCx<'_>,
     side_exit_pc: u32,
 ) {
-    let Plan {
-        record,
-        head_proto,
-        max_stack,
-        opts,
-        window_size_us,
-        ..
-    } = *pl;
-    let Lower {
-        reg_state,
-        trace_fn_sig_ref,
-        ..
-    } = *lw;
-    let RuntimeHelpers {
-        suppress_admit_id,
-        materialize_id,
-        mat_sunk_id,
-        ..
-    } = lw.h.rt;
-    let OpCx { i, .. } = *oc;
-    if !lw.call_chain.is_empty() {
-        // Capture head's resume pc BEFORE the innermost
-        // override — `call_chain[0].pc` is the outermost
-        // self-rec Call's `pc + 1` (= trace head's
-        // post-Call resume).
-        let head_resume_pc = lw.call_chain[0].pc;
-        let mut snapshot: Vec<FrameMaterializeInfo> = lw.call_chain.clone();
-        if let Some(last) = snapshot.last_mut() {
-            last.pc = side_exit_pc;
+    guard_exit(lw, pl, side_exit_pc, oc.i);
+}
+
+/// Whether register `r` of op `oc`, of kind `kind`, holds a true value, as
+/// an `i8`: a boolean's payload, or the tag of a head-frame register the
+/// trace has not written (still on the stack). `None` for a value the
+/// trace computed without knowing its type.
+fn runtime_truthy<E: Emit>(
+    lw: &mut Lower<E>,
+    oc: &OpCx<'_>,
+    r: u32,
+    kind: RegKind,
+    stack_tag_id: FuncId,
+) -> Option<Value> {
+    match kind {
+        RegKind::Bool => {
+            let v = lw.bcx.use_var(oc.regs[r as usize]);
+            Some(lw.bcx.ins().icmp_imm_u(IntCC::NotEqual, v, 0))
         }
-        let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
-        let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
-        let chain_len = chain_rc.len() as i64;
-        let site_idx = lw.per_exit_inline_vec.len() as u32;
-        // materialise live Sinkable sites
-        // BEFORE the frame_materialize_frames helper
-        // pushes the inline frames. The window-sized
-        // snapshot updates in-place so per_exit_inline's
-        // kinds entry reflects materialised slots.
-        let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds.clone();
-        let mat_count = emit_materialize_live_sunk(
-            &mut lw.bcx,
-            mat_sunk_id,
-            &lw.escape,
-            &lw.virt_vars,
-            &lw.virt_kinds,
-            &lw.regs_full,
-            &pl.op_offsets,
-            i,
-            &mut kinds_snapshot,
-            head_proto,
-            opts.aot,
-            &mut lw.defined_aot_data,
-        );
-        lw.materialize_emit_count += mat_count;
-        let inline_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
-        let _inline_side_cell_addr_0 = (&*inline_side_box_0) as *const TCellPtr as i64;
-        let chain_for_helper = chain_rc.clone();
-        lw.per_exit_inline_vec.push((
-            side_exit_pc,
-            head_resume_pc,
-            kinds_snapshot,
-            chain_rc,
-            inline_side_box_0,
-        ));
-        let n_arg = lw.bcx.ins().iconst(types::I64, chain_len);
-        let ptr_arg = emit_chain_ptr_arg(
-            &mut lw.bcx,
-            &chain_for_helper,
-            chain_ptr,
-            opts.aot,
-            &mut lw.defined_aot_data,
-        );
-        let mat_ref = lw.bcx.import_func(materialize_id);
-        let _ = lw.bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
-        emit_store_back_and_return_site(
-            &mut lw.bcx,
-            &lw.regs_full[..window_size_us],
-            &lw.stored,
-            reg_state,
-            site_idx,
-            side_exit_pc,
-            lw.flush_ctx.as_ref(),
-            0i64,
-            trace_fn_sig_ref,
-        );
-    } else {
-        // materialise every live
-        // Sinkable site at this depth=0 cmp side-exit.
-        // The snapshot carries `RegKind::Table` for each
-        // materialised caller-window slot so the
-        // dispatcher unpacks the heap pointer correctly
-        // on deopt.
-        let mut snapshot: Vec<RegKind> = lw.current_kinds[..max_stack].to_vec();
-        let mat_count = emit_materialize_live_sunk(
-            &mut lw.bcx,
-            mat_sunk_id,
-            &lw.escape,
-            &lw.virt_vars,
-            &lw.virt_kinds,
-            &lw.regs_full,
-            &pl.op_offsets,
-            i,
-            &mut snapshot,
-            head_proto,
-            opts.aot,
-            &mut lw.defined_aot_data,
-        );
-        lw.materialize_emit_count += mat_count;
-        let tag_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
-        let _tag_side_cell_addr_0 = (&*tag_side_box_0) as *const TCellPtr as i64;
-        let tag_side_local_0 = lw.per_exit_kinds.len() as u32;
-        lw.per_exit_kinds
-            .push((side_exit_pc, snapshot, tag_side_box_0));
-        // store_back only writes caller window — depth>0 scratch
-        // slots stay out of the dispatcher's reg_state restore.
-        emit_tagged_exit(
-            &mut lw.bcx,
-            suppress_admit_id,
-            &lw.regs_full[..max_stack],
-            &lw.stored,
-            reg_state,
-            side_exit_pc,
-            record.head_pc,
-            tag_side_local_0,
-            lw.flush_ctx.as_ref(),
-            trace_fn_sig_ref,
-        );
+        RegKind::Unset | RegKind::Unknown if oc.off == 0 => {
+            let slot_arg = lw.bcx.ins().iconst(types::I64, i64::from(r));
+            let stack_tag_ref = lw.bcx.import_func(stack_tag_id);
+            let tag_call = lw.bcx.ins().call(stack_tag_ref, &[slot_arg]);
+            let tag = lw.bcx.inst_results(tag_call)[0];
+            Some(lw.bcx.ins().icmp_imm_u(IntCC::UnsignedGreaterThan, tag, 1))
+        }
+        _ => None,
     }
 }

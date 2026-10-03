@@ -5,7 +5,7 @@ use super::*;
 pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()> {
     let Plan {
         record,
-        max_stack,
+        frame_w,
         effective_end,
         active_accum,
         ..
@@ -31,7 +31,7 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
     let kvar = lw.bcx.declare_var(types::I64);
     // this op's register window (a copy, so the emit code can take `lw`
     // mutably while it reads it), plus `kvar` for a constant operand
-    let mut regs_w: Vec<Variable> = Vec::with_capacity(max_stack + 1);
+    let mut regs_w: Vec<Variable> = Vec::with_capacity(frame_w + 1);
     checkpoint("pre:main-emit-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
         // Commit the previous op's register writes to reg_state.
@@ -41,7 +41,7 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         // R[C] of a register-operand op, read before this op's own write
         // forgets it (`x = x % 7` divides by the old value)
         let rc_const = match vk {
-            Some(k) if rop.inst.c() as usize == max_stack => match k {
+            Some(k) if rop.inst.c() as usize == frame_w => match k {
                 VConst::Int(n) => Some(n),
                 VConst::Float(_) => None,
             },
@@ -55,6 +55,9 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
             if let Some(slot) = lw.known_int.get_mut(w as usize) {
                 *slot = None;
             }
+            if let Some(slot) = lw.const_str.get_mut(w as usize) {
+                *slot = false;
+            }
         }
         // `off` is the start of this op's register
         // window inside reg_state_buf. `regs` is shadowed to the
@@ -65,9 +68,9 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         // Vec with explicit `off + X` indexing.
         let off = pl.op_offsets[i] as usize;
         regs_w.clear();
-        regs_w.extend_from_slice(&lw.regs_full[off..off + max_stack]);
+        regs_w.extend_from_slice(&lw.regs_full[off..off + frame_w]);
         // a constant operand: its value in `kvar`, which `regs` gets as
-        // register `max_stack`
+        // register `frame_w`
         if let Some(k) = vk {
             let v = match k {
                 VConst::Int(n) => lw.bcx.ins().iconst(types::I64, n),
@@ -146,7 +149,7 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
             regs,
             ins: rop.inst,
             op: rop.inst.op(),
-            max_stack,
+            max_stack: frame_w,
         };
         if pl.folded_ops[i] {
             emit_fold(lw, pl, &oc)?;

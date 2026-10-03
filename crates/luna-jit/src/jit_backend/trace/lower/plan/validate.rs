@@ -71,10 +71,10 @@ fn validate_op(
     // capture op_id BEFORE per-op checks for
     // failure-phase narrowing.
     set_last_op_id(rop.inst.op() as u8);
-    if !std::ptr::eq(rop.proto.as_ptr(), head_proto.as_ptr()) {
-        checkpoint("bail:cmp-dirs-cross-proto-op");
-        return None;
-    }
+    // an inlined function's op reads its own constants, nested
+    // functions and upvalue descriptions
+    let _ = head_proto;
+    let head_proto = rop.proto;
     let op = rop.inst.op();
     // self-recursive Op::Call inside the inline
     // path emits no IR (the next op shifts to the callee window
@@ -164,6 +164,10 @@ fn validate_op(
         | Op::LoadI
         | Op::LoadF
         | Op::LoadNil
+        | Op::LoadFalse
+        | Op::LoadTrue
+        | Op::LFalseSkip
+        | Op::Not
         | Op::Close => validate_body_op(max_stack, rop, op, ins, a, b, c)?,
         Op::Closure
         | Op::LoadK
@@ -218,6 +222,19 @@ fn validate_op(
         | Op::SetList
         | Op::Len
         | Op::GetUpval => validate_table_op(head_proto, max_stack, op, ins, a, b, c)?,
+        Op::SelfOp => {
+            // a constant string key (the register form is the compiler's
+            // fallback for a constant past C's range)
+            let key_is_str = ins.k()
+                && matches!(
+                    head_proto.consts.get(c),
+                    Some(luna_core::runtime::Value::Str(_))
+                );
+            if !key_is_str || a + 1 >= max_stack || b >= max_stack {
+                checkpoint("bail:self-op-shape");
+                return None;
+            }
+        }
         _ => unreachable!("whitelist gated above"),
     }
     Some(())
@@ -243,7 +260,12 @@ pub(super) fn validate_trace_ends(
     // the loop, or the slot right before an Op::Call truncation —
     // the tail / side-exit emits the control transfer).
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
-        if matches!(rop.inst.op(), Op::Jmp) && !consumed_by_cmp[i] && i + 1 != effective_end {
+        if matches!(rop.inst.op(), Op::Jmp)
+            && !consumed_by_cmp[i]
+            && i + 1 != effective_end
+            && !jumps_to_next(rop, &record.ops[i + 1])
+        {
+            checkpoint("bail:body-jmp");
             return None;
         }
     }
@@ -336,4 +358,15 @@ pub(super) fn validate_trace_ends(
         }
     }
     Some(())
+}
+
+/// A forward `Jmp` (the end of an `if` branch skipping the `else`) that
+/// the recording followed to `next`: the trace goes on there, and the jump
+/// needs no code.
+fn jumps_to_next(jmp: &RecordedOp, next: &RecordedOp) -> bool {
+    let target = i64::from(jmp.pc) + 1 + i64::from(jmp.inst.sj());
+    jmp.inst.sj() >= 0
+        && next.inline_depth == jmp.inline_depth
+        && std::ptr::eq(next.proto.as_ptr(), jmp.proto.as_ptr())
+        && i64::from(next.pc) == target
 }
