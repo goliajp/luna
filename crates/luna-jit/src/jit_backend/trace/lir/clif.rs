@@ -339,6 +339,7 @@ pub(crate) fn define<M: Module>(lir: &Lir, module: &mut M) -> Option<FuncId> {
     // gives loop heads and merges a parameter for each variable read there,
     // and the loop carries all of them
     let mut preds = vec![0u32; lir.blocks.len()];
+    let mut sealed = vec![false; lir.blocks.len()];
     for &blk in &an.order {
         let (lo, hi) = an.block_at[blk as usize];
         for c in lo..hi {
@@ -353,8 +354,11 @@ pub(crate) fn define<M: Module>(lir: &Lir, module: &mut M) -> Option<FuncId> {
     for &blk in &an.order {
         let cb = r.blocks[blk as usize].expect("laid out");
         r.b.switch_to_block(cb);
-        if preds[blk as usize] == 0 {
+        // a block no branch reaches (the entry, or the hot exit of a
+        // `TierCount`, which the replay does not take) is sealed as it starts
+        if preds[blk as usize] == 0 && !sealed[blk as usize] {
             r.b.seal_block(cb);
+            sealed[blk as usize] = true;
         }
         let (lo, hi) = an.block_at[blk as usize];
         for c in lo..hi {
@@ -364,6 +368,7 @@ pub(crate) fn define<M: Module>(lir: &Lir, module: &mut M) -> Option<FuncId> {
                 preds[t as usize] -= 1;
                 if preds[t as usize] == 0 {
                     r.b.seal_block(r.blocks[t as usize].expect("laid out"));
+                    sealed[t as usize] = true;
                 }
             }
         }
