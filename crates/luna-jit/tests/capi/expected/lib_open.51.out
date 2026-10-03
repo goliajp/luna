@@ -1,0 +1,4 @@
+_G direct:
+  returned 2 (top 2): table=global table
+  _G globals: _G coroutine print loadfile unpack
+  _G loaded: _G coroutine
