@@ -1,0 +1,21 @@
+newmetatable new=1 top=1 type=table
+  __name: top=2 nil
+newmetatable again=0 top=1
+newmetatable taken: top=1 5
+checkudata	true	true
+checkudata plain	false	bad argument #1 to '?' (Point expected, got userdata)
+checkudata table	false	bad argument #1 to '?' (Point expected, got table)
+checkudata none	false	bad argument #1 to '?' (Point expected, got no value)
+getmetafield answer: top=2 <userdata> 42
+  result=1
+getmetafield missing=0 top=1
+getmetafield number=0 top=2
+callmeta: top=2 <userdata> [from __tostring]
+  result=1
+callmeta missing=0 top=1
+registry refs: 1 2 nil=-1 reuse=1 3 top=0
+  values: top=3 [three] [two] [four]
+table refs: 1 2 nil=-1 reuse=1 3 top=0
+  values: top=4 [three] [two] [four]
+gsub [a::b::c] [none] [] [] top=4
+top at end=0
