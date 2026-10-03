@@ -190,7 +190,13 @@ pipeline:
    │                                                          │
    └────────────────────────────────────────────────────────┘
             │
-            │ luna/src/jit_backend/trace.rs lowers to Cranelift IR
+            │ luna/src/jit_backend/trace.rs lowers through one builder
+            │ interface, first into the baseline tier's instruction list
+            ▼
+   Baseline code generator (x86-64, aarch64)
+            │
+            │ liveness + linear-scan registers + direct encoding;
+            │ once the loop is hot, the same instructions go to
             ▼
    Cranelift codegen
             │
@@ -218,7 +224,15 @@ Key properties:
 - **`CompiledTrace` lives in `luna-core`**. Its layout (`u32` counters,
   `Rc<[ExitTag]>` exit table, `unsafe extern "C" fn(*mut i64) -> i64`
   function pointer) is Cranelift-free; only the body of the function
-  pointer it owns comes from Cranelift.
+  pointer it owns comes from a code generator. A trace starts on the
+  baseline one, which compiles in tens of microseconds; after
+  `set_trace_tier_up_at` loop iterations (16384 by default, a quarter of
+  that once the trace's function has been called again: code that is
+  reused, not run once) the trace is compiled again with Cranelift from
+  the instructions the baseline code ran, with the same memory flags and
+  constants, and every entry point and linked exit moves to the new code.
+  On other targets, and for the few instructions the baseline does not
+  encode, traces go to Cranelift directly.
 
 - **Side traces** (compiled paths from frequently-taken side exits)
   attach back into the parent trace's exit table at runtime. This keeps
