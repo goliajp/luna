@@ -29,18 +29,40 @@ pub(super) fn emit_order_op<E: Emit>(
             let kb = oc.kind(&lw.current_kinds, ins.b());
             let float_path = matches!(ka, RegKind::Float) || matches!(kb, RegKind::Float);
             let cond = if float_path {
-                if !matches!(ka, RegKind::Float) || !matches!(kb, RegKind::Float) {
-                    return None;
-                }
-                let lhs = use_var_f64(&mut lw.bcx, regs, ins.a());
-                let rhs = use_var_f64(&mut lw.bcx, regs, ins.b());
-                let float_cc = match op {
-                    Op::Lt => FloatCC::LessThan,
-                    Op::Le => FloatCC::LessThanOrEqual,
-                    Op::Eq => FloatCC::Equal,
-                    _ => unreachable!("whitelist gated above"),
+                let c = match (ka, kb) {
+                    (RegKind::Float, RegKind::Float) => {
+                        let lhs = use_var_f64(&mut lw.bcx, regs, ins.a());
+                        let rhs = use_var_f64(&mut lw.bcx, regs, ins.b());
+                        let float_cc = match op {
+                            Op::Lt => FloatCC::LessThan,
+                            Op::Le => FloatCC::LessThanOrEqual,
+                            Op::Eq => FloatCC::Equal,
+                            _ => unreachable!("whitelist gated above"),
+                        };
+                        lw.bcx.ins().fcmp(float_cc, lhs, rhs)
+                    }
+                    // an integer against a float orders exactly (lvm.c
+                    // `LTintfloat` & co.); `==` of the two stays out
+                    (RegKind::Int, RegKind::Float) if op != Op::Eq => {
+                        let i = lw.bcx.use_var(regs[ins.a() as usize]);
+                        let f = use_var_f64(&mut lw.bcx, regs, ins.b());
+                        if op == Op::Lt {
+                            emit_lt_int_float(&mut lw.bcx, i, f)
+                        } else {
+                            emit_le_int_float(&mut lw.bcx, i, f)
+                        }
+                    }
+                    (RegKind::Float, RegKind::Int) if op != Op::Eq => {
+                        let f = use_var_f64(&mut lw.bcx, regs, ins.a());
+                        let i = lw.bcx.use_var(regs[ins.b() as usize]);
+                        if op == Op::Lt {
+                            emit_lt_float_int(&mut lw.bcx, f, i)
+                        } else {
+                            emit_le_float_int(&mut lw.bcx, f, i)
+                        }
+                    }
+                    _ => return None,
                 };
-                let c = lw.bcx.ins().fcmp(float_cc, lhs, rhs);
                 // negate the ordered compare rather than flip the
                 // condition: `not (a < b)` holds for NaN, `a >= b`
                 // does not, and the aarch64 backend lowers no
