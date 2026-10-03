@@ -216,6 +216,8 @@ fn forloop_continues_internal_loop_until_count_hits_zero() {
         internal_loop: true,
         pre53: false,
         aot: false,
+        tier: Default::default(),
+        tier_up_at: 0,
     };
     let ct = try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, opts).expect("compile");
 
@@ -298,6 +300,8 @@ fn forloop_pre53_bails() {
         internal_loop: false,
         pre53: true,
         aot: false,
+        tier: Default::default(),
+        tier_up_at: 0,
     };
     assert!(try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, opts).is_none());
 }

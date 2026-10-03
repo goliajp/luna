@@ -14,9 +14,8 @@ pub(super) struct StoreHelpers {
 /// string keys have their own helpers, which need not rebuild the key
 /// from a tag.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn emit_table_set<M: Module>(
-    bcx: &mut FunctionBuilder<'_>,
-    module: &mut M,
+pub(super) fn emit_table_set<E: Emit>(
+    bcx: &mut E,
     helpers: &StoreHelpers,
     t: Value,
     key: Value,
@@ -32,12 +31,12 @@ pub(super) fn emit_table_set<M: Module>(
             } else {
                 helpers.str_key
             };
-            let f = module.declare_func_in_func(id, bcx.func);
+            let f = bcx.import_func(id);
             bcx.ins().call(f, &[t, key, val, val_tag])
         }
         _ => {
             let key_tag = bcx.ins().iconst(types::I64, i64::from(kind_tag(key_kind)));
-            let f = module.declare_func_in_func(helpers.any_key, bcx.func);
+            let f = bcx.import_func(helpers.any_key);
             bcx.ins().call(f, &[t, key, key_tag, val, val_tag])
         }
     };
@@ -85,8 +84,8 @@ pub(super) struct FlushCtx {
 // `base_var_scaffold.rs`. `pub(crate)` so the test crate's
 // hook can dispatch through `try_compile_trace_with_options`.
 #[allow(dead_code)]
-pub(crate) fn current_base_addr(
-    bcx: &mut FunctionBuilder<'_>,
+pub(crate) fn current_base_addr<E: Emit>(
+    bcx: &mut E,
     base_var: Variable,
     op_offset_bytes: i32,
     slot: u32,
@@ -96,7 +95,7 @@ pub(crate) fn current_base_addr(
     (base_now, total_offset)
 }
 
-pub(super) fn emit_flush_buf(bcx: &mut FunctionBuilder<'_>, ctx: &FlushCtx, regs: &[Variable]) {
+pub(super) fn emit_flush_buf<E: Emit>(bcx: &mut E, ctx: &FlushCtx, regs: &[Variable]) {
     let buf_ptr = bcx.use_var(ctx.buf_var);
     let call_inst = bcx.ins().call(ctx.intern_ref, &[buf_ptr]);
     let str_ptr = bcx.inst_results(call_inst)[0];
@@ -113,13 +112,13 @@ pub(super) fn emit_flush_buf(bcx: &mut FunctionBuilder<'_>, ctx: &FlushCtx, regs
 /// `normal_return` closure. The caller must have ALREADY written the
 /// reg_state slots before calling this (the child reads them via its
 /// entry block).
-pub(super) fn emit_side_trace_or_return(
-    bcx: &mut FunctionBuilder<'_>,
+pub(super) fn emit_side_trace_or_return<E: Emit>(
+    bcx: &mut E,
     reg_state: Value,
     side_trace_cell_addr: i64,
     trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
     sentinel_code: u32,
-    normal_return: impl FnOnce(&mut FunctionBuilder<'_>),
+    normal_return: impl FnOnce(&mut E),
 ) {
     // `side_trace_cell_addr == 0` is the "no-gate"
     // sentinel: emit the normal return only, skipping the load +
@@ -168,8 +167,8 @@ pub(super) fn emit_side_trace_or_return(
     normal_return(bcx);
 }
 
-pub(super) fn emit_store_back_and_return_pc(
-    bcx: &mut FunctionBuilder<'_>,
+pub(super) fn emit_store_back_and_return_pc<E: Emit>(
+    bcx: &mut E,
     regs: &[Variable],
     stored: &[Option<Value>],
     reg_state: Value,
@@ -194,8 +193,8 @@ pub(super) fn emit_store_back_and_return_pc(
 
 /// [`emit_store_back_and_return_pc`] returning `ret`, an encoded exit
 /// (see `decode_exit_shape`), instead of a bare pc.
-pub(super) fn emit_store_back_and_return(
-    bcx: &mut FunctionBuilder<'_>,
+pub(super) fn emit_store_back_and_return<E: Emit>(
+    bcx: &mut E,
     regs: &[Variable],
     stored: &[Option<Value>],
     reg_state: Value,
@@ -234,9 +233,9 @@ pub(super) fn emit_store_back_and_return(
 /// `use_var` seen through aliases: past a merge the SSA builder can hand
 /// back a fresh alias of the value reg_state already holds, which would
 /// compare unequal to it and store every register again.
-pub(super) fn use_var_resolved(bcx: &mut FunctionBuilder<'_>, v: Variable) -> Value {
+pub(super) fn use_var_resolved<E: Emit>(bcx: &mut E, v: Variable) -> Value {
     let val = bcx.use_var(v);
-    bcx.func.dfg.resolve_aliases(val)
+    bcx.resolve_aliases(val)
 }
 
 /// Writes every register whose SSA value differs from what reg_state
@@ -246,8 +245,8 @@ pub(super) fn use_var_resolved(bcx: &mut FunctionBuilder<'_>, v: Variable) -> Va
 /// what the op it leaves from changed (usually nothing) instead of the
 /// whole window. That made every exit a block of stores, which is what
 /// the trace's compile time scaled with.
-pub(super) fn sync_reg_state(
-    bcx: &mut FunctionBuilder<'_>,
+pub(super) fn sync_reg_state<E: Emit>(
+    bcx: &mut E,
     regs: &[Variable],
     stored: &mut [Option<Value>],
     reg_state: Value,
@@ -268,9 +267,8 @@ pub(super) fn sync_reg_state(
 /// can carry different register kinds (see `decode_exit_shape`). An exit
 /// to the trace's own head has not run the head op, so it also stops the
 /// dispatcher from re-entering the trace before the interpreter has.
-pub(super) fn emit_tagged_exit<M: Module>(
-    bcx: &mut FunctionBuilder<'_>,
-    module: &mut M,
+pub(super) fn emit_tagged_exit<E: Emit>(
+    bcx: &mut E,
     suppress_admit_id: cranelift_module::FuncId,
     regs: &[Variable],
     stored: &[Option<Value>],
@@ -282,7 +280,7 @@ pub(super) fn emit_tagged_exit<M: Module>(
     trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
 ) {
     if pc == head_pc {
-        let r = module.declare_func_in_func(suppress_admit_id, bcx.func);
+        let r = bcx.import_func(suppress_admit_id);
         bcx.ins().call(r, &[]);
     }
     let ret = luna_core::jit::trace_types::EXIT_TAGS_INDEX_BIT
@@ -315,8 +313,8 @@ pub(crate) fn exit_pc(ret: i64) -> i64 {
 /// cont_pc shared across multiple inline cmps (fib has 4+ such
 /// sites colliding on pc=3) maps to the right entry's exit_tags
 /// and chain.
-pub(super) fn emit_store_back_and_return_site(
-    bcx: &mut FunctionBuilder<'_>,
+pub(super) fn emit_store_back_and_return_site<E: Emit>(
+    bcx: &mut E,
     regs: &[Variable],
     stored: &[Option<Value>],
     reg_state: Value,

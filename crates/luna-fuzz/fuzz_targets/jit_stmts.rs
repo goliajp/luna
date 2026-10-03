@@ -53,9 +53,14 @@ local function va(...)
 end
 "#;
 
+// addresses are masked before the sort: with a function or table key the
+// order would otherwise follow allocation addresses, which differ between
+// the jit and interpreter runs
 const DUMP: &str = r#"local function dump(tb)
   local ks = {}
-  for k, v in pairs(tb) do ks[#ks + 1] = type(k):sub(1, 1) .. tostring(k) .. "=" .. tostring(v) end
+  for k, v in pairs(tb) do
+    ks[#ks + 1] = (string.gsub(type(k):sub(1, 1) .. tostring(k) .. "=" .. tostring(v), "0x%x*", "ADDR"))
+  end
   table.sort(ks)
   return table.concat(ks, " ")
 end

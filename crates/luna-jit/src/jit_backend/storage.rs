@@ -29,6 +29,8 @@ pub(crate) struct CraneliftJitStorage {
     pub(crate) cache: std::collections::HashMap<u64, CacheEntry>,
     pub(crate) cache_handles: Vec<JitHandle>,
     pub(crate) trace_handles: Vec<TraceHandle>,
+    /// The baseline tier's trace code.
+    pub(crate) baseline_code: super::trace::CodeArena,
     /// The `Vm` that compiles through this storage.
     owner: Option<u64>,
     /// A second `Vm` compiled through it too: its code is never freed.
@@ -66,6 +68,8 @@ impl JitStorage for CraneliftJitStorage {
             // SAFETY: as above
             unsafe { h.free() }
         }
+        // SAFETY: as above
+        unsafe { self.baseline_code.free() }
     }
 }
 

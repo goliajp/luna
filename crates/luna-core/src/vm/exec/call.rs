@@ -104,16 +104,15 @@ impl Vm {
                             };
                             let max_stack = cl.proto.max_stack as usize;
                             let base_us = f.base as usize;
-                            let mut entry_tags = Vec::with_capacity(max_stack);
-                            for i in 0..max_stack {
-                                let (tag, _) = self.stack[base_us + i].unpack();
-                                entry_tags.push(tag);
+                            let regs = &self.stack[base_us..base_us + max_stack];
+                            if !trace_head_stuck(proto, 0, regs) {
+                                let entry_tags = regs.iter().map(|v| v.unpack().0).collect();
+                                self.jit.active_trace =
+                                    Some(Box::new(crate::jit::trace::TraceRecord::start(
+                                        cl.proto, 0, entry_tags, true,
+                                    )));
+                                self.jit.recording_frame_base = frame_idx;
                             }
-                            self.jit.active_trace =
-                                Some(Box::new(crate::jit::trace::TraceRecord::start(
-                                    cl.proto, 0, entry_tags, true,
-                                )));
-                            self.jit.recording_frame_base = frame_idx;
                         }
                     }
                     return Ok(true);
