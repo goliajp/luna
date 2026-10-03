@@ -1,0 +1,32 @@
+newmetatable new=1 top=1 type=table
+  __name: top=2 nil
+newmetatable again=0 top=1
+newmetatable taken: top=1 5
+testudata point=1 other=0 number=0 top=2
+checkudata	true	true
+checkudata plain	false	bad argument #1 to 'cu' (Point expected, got userdata)
+checkudata table	false	bad argument #1 to 'cu' (Point expected, got table)
+checkudata none	false	bad argument #1 to 'cu' (Point expected, got no value)
+getmetafield answer: top=2 <userdata> 42
+  result=1
+getmetafield missing=0 top=1
+getmetafield number=0 top=2
+callmeta: top=2 <userdata> [from __tostring]
+  result=1
+callmeta missing=0 top=1
+tolstring	12	1.5	-0	9.007199254741e+15	18	true
+tolstring	s	true	false	nil	3	true
+tolstring mm	from __tostring	15	true
+tolstring bad mm	true	1	1	true
+tolstring num mm	true	2	1	true
+tolstring table	table: 
+tolstring named	table
+tolstring name not string	table
+tolstring function	function
+len	3	4
+len mm	9
+len float mm	true	2
+len bad mm	false	object length is not a number
+len none	false	attempt to get length of a number value
+version	true	version ok
+version bad	false	version mismatch: app. needs 400, Lua core provides 502
