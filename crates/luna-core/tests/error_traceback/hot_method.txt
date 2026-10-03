@@ -1,0 +1,25 @@
+== 5.1
+stack traceback:
+	hot_method.lua:2: in function 'step'
+	hot_method.lua:3: in function 'run'
+	hot_method.lua:4: in main chunk
+== 5.2
+stack traceback:
+	hot_method.lua:2: in function 'step'
+	hot_method.lua:3: in function 'run'
+	hot_method.lua:4: in main chunk
+== 5.3
+stack traceback:
+	hot_method.lua:2: in method 'step'
+	hot_method.lua:3: in local 'run'
+	hot_method.lua:4: in main chunk
+== 5.4
+stack traceback:
+	hot_method.lua:2: in method 'step'
+	hot_method.lua:3: in local 'run'
+	hot_method.lua:4: in main chunk
+== 5.5
+stack traceback:
+	hot_method.lua:2: in method 'step'
+	hot_method.lua:3: in local 'run'
+	hot_method.lua:4: in main chunk

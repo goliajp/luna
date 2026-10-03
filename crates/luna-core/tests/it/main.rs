@@ -22,6 +22,7 @@ mod corrupt_register_state;
 mod diff_puc;
 mod double_dialect_int_arith;
 mod e2e_programs;
+mod error_traceback;
 mod eval_async;
 mod fenv_cells;
 mod gc_finalizer_edges;

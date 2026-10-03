@@ -1,0 +1,30 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	hot_upval.lua:2: in function 'check'
+	hot_upval.lua:3: in function 'run'
+	hot_upval.lua:4: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	hot_upval.lua:2: in function 'check'
+	hot_upval.lua:3: in function 'run'
+	hot_upval.lua:4: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	hot_upval.lua:2: in upvalue 'check'
+	hot_upval.lua:3: in local 'run'
+	hot_upval.lua:4: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	hot_upval.lua:2: in upvalue 'check'
+	hot_upval.lua:3: in local 'run'
+	hot_upval.lua:4: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	hot_upval.lua:2: in upvalue 'check'
+	hot_upval.lua:3: in local 'run'
+	hot_upval.lua:4: in main chunk

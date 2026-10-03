@@ -1,0 +1,25 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	pcall_rethrow.lua:3: in function 'outer'
+	pcall_rethrow.lua:4: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	pcall_rethrow.lua:3: in function 'outer'
+	pcall_rethrow.lua:4: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	pcall_rethrow.lua:3: in local 'outer'
+	pcall_rethrow.lua:4: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	pcall_rethrow.lua:3: in local 'outer'
+	pcall_rethrow.lua:4: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	pcall_rethrow.lua:3: in local 'outer'
+	pcall_rethrow.lua:4: in main chunk

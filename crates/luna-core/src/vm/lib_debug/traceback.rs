@@ -48,7 +48,7 @@ fn thread_traceback(vm: &mut Vm, co: Option<Gc<Coro>>, level: i64) -> Vec<u8> {
     if let Some(co) = co
         && let Some(lines) = co.error_levels.as_ref()
     {
-        return crate::vm::callstack::traceback_from_lines(vm.version(), lines, level);
+        return crate::vm::callstack::traceback_from_lines(vm.version(), lines, level, 0);
     }
     vm.traceback_lines(co, level)
 }
