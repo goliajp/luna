@@ -34,7 +34,7 @@ pub unsafe extern "C" fn luna_jit_str_buf_release(buf: i64) {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, and `buf`
     // is the box `luna_jit_str_buf_acquire` leaked, released once, so this takes back ownership
     let (vm, buf) = unsafe { (current_jit_vm(), Box::from_raw(buf as *mut Vec<u8>)) };
-    vm.jit_str_buf_release(*buf);
+    vm.jit_str_buf_release(buf);
 }
 
 /// Trace JIT helper:append a LuaStr's bytes to a
@@ -46,8 +46,9 @@ pub unsafe extern "C" fn luna_jit_str_buf_release(buf: i64) {
 /// passes only string registers.
 ///
 /// # Safety
-/// `buf` is 0 or came from `luna_jit_str_buf_acquire` and has not been released, and `str_ptr` is
-/// 0 or a live string.
+/// Called from compiled code inside an `enter_jit` window on this thread; `buf` is 0 or came from
+/// `luna_jit_str_buf_acquire` on the same Vm and has not been released, and `str_ptr` is 0 or a
+/// live string.
 // SAFETY: no other item in the link is named `luna_jit_str_buf_extend`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
@@ -55,10 +56,16 @@ pub unsafe extern "C" fn luna_jit_str_buf_extend(buf: i64, str_ptr: i64) -> i64 
     if buf == 0 || str_ptr == 0 {
         return -1;
     }
-    // SAFETY: `buf` is a live boxed buffer only this call uses, and `str_ptr` a live string
-    // (# Safety)
-    let (buf, s) = unsafe { (&mut *(buf as *mut Vec<u8>), str_arg(str_ptr)) };
-    buf.extend_from_slice(s.as_bytes());
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call; `buf` is a
+    // live boxed buffer only this call uses, and `str_ptr` a live string
+    let (vm, buf, s) = unsafe {
+        (
+            current_jit_vm(),
+            &mut *(buf as *mut Vec<u8>),
+            str_arg(str_ptr),
+        )
+    };
+    vm.jit_str_buf_extend(buf, s);
     0
 }
 
