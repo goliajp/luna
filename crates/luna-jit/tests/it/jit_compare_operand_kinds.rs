@@ -103,7 +103,7 @@ fn integer_zero_is_not_nil_in_a_while_loop() {
 fn integer_equal_to_a_table_address_is_not_the_table() {
     let src = r#"
         local t = {}
-        local addr = tonumber(tostring(t):match("0x(%x+)"), 16)
+        local addr = tonumber(tostring(t):match("(%x+)$"), 16)
         local function k(x, y) local r = 0 for i = 1, 20 do if x == y then r = r + 1 end end return r end
         local out = {}
         for _ = 1, 3 do out[#out + 1] = k(addr, t) .. "/" .. k(t, t) end
