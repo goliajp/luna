@@ -1,50 +1,86 @@
 #!/usr/bin/env python3
-"""Judge the rounds written by perf-gate.sh.
+"""Judge the rounds written by `perf-gate.sh measure`.
 
-Usage: perf-gate-verdict.py OUT GROUP ROUNDS THRESHOLD CELL...
+Usage: perf-gate-verdict.py [--threshold T] OUT...
 
-Reads OUT/{ref,head}/r<N>/GROUP/<cell>/new/sample.json. For each round the
-ratio is median(head ns/iter) / median(ref ns/iter); the median resists the
-outlier samples a shared runner produces. A cell fails when every round's
-ratio exceeds THRESHOLD, so one disturbed round cannot fail the gate while a
-real slowdown shows up in all of them.
+Each OUT is one measuring job: OUT/cells lists the judged cells and
+OUT/{ref,head}/r<N>/redis_lua_shape/<cell>/new/sample.json holds the rounds.
+
+A round's ratio is median(head ns/iter) / median(ref ns/iter). A job's
+ratio is the median of its rounds, which discards a round disturbed by the
+runner. The cell's estimate is the geometric mean of the job ratios: the
+ref/head ratio of the same two binaries differs between runners by a few
+percent, so the runners are the unit that has to be averaged. A cell fails
+when its estimate exceeds T.
+
+The default T = 1.0315 is derived for 7 jobs x 3 rounds from hosted-runner
+measurements: the job-to-job spread of a cell's ratio is taken as 0.021
+(worst seen) and the spread of a 3-round median within a job as 0.017
+(worst cell), giving a standard error of 0.0102 on ln(estimate). With that,
+an unchanged commit fails with probability <= 0.01 summed over 6 cells, and
+a 5% slowdown in any one cell fails with probability >= 0.95. The threshold
+only holds for that layout; change it together with the job and round
+counts in perf.yml.
 """
+import argparse
 import json
+import math
 import os
 import statistics
-import sys
 
-out, group, rounds, threshold = sys.argv[1], sys.argv[2], int(sys.argv[3]), float(sys.argv[4])
-cells = sys.argv[5:]
+GROUP = "redis_lua_shape"
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--threshold", type=float, default=1.0315)
+ap.add_argument("outs", nargs="+")
+args = ap.parse_args()
 
 
-def median_ns(side, r, cell):
-    path = os.path.join(out, side, f"r{r}", group, cell, "new", "sample.json")
+def rounds_of(out):
+    return sorted(
+        int(d[1:]) for d in os.listdir(os.path.join(out, "ref")) if d.startswith("r")
+    )
+
+
+def median_ns(out, side, r, cell):
+    path = os.path.join(out, side, f"r{r}", GROUP, cell, "new", "sample.json")
     with open(path) as f:
         s = json.load(f)
     return statistics.median(t / n for t, n in zip(s["times"], s["iters"]))
 
 
+cells = None
+for out in args.outs:
+    with open(os.path.join(out, "cells")) as f:
+        these = f.read().split()
+    if cells is not None and these != cells:
+        raise SystemExit(f"perf-gate: {out} measured {these}, expected {cells}")
+    cells = these
+
+jobs = [(out, rounds_of(out)) for out in args.outs]
 fail = False
-cols = " ".join(f"{'r' + str(r):>7}" for r in range(1, rounds + 1))
-print(f"perf-gate: {rounds} interleaved rounds, threshold={threshold:.3f}x (fails only if every round is over)")
-print(f"  {'cell':<22} {'ref_ns':>12} {'head_ns':>12} {cols} {'min':>7}  status")
+print(
+    f"perf-gate: {len(jobs)} jobs x {'/'.join(str(len(r)) for _, r in jobs)} rounds, "
+    f"fails when the geometric mean of the per-job median ratios exceeds {args.threshold:.4f}x"
+)
 for cell in cells:
-    ref = [median_ns("ref", r, cell) for r in range(1, rounds + 1)]
-    head = [median_ns("head", r, cell) for r in range(1, rounds + 1)]
-    ratios = [h / b for h, b in zip(head, ref)]
-    lo = min(ratios)
+    per_job = []
+    for out, rounds in jobs:
+        ratios = [
+            median_ns(out, "head", r, cell) / median_ns(out, "ref", r, cell) for r in rounds
+        ]
+        per_job.append(statistics.median(ratios))
+        print(f"  {cell:<22} {os.path.basename(out.rstrip('/')):<12} "
+              + " ".join(f"{x:.3f}" for x in ratios)
+              + f"  median {per_job[-1]:.3f}")
+    est = math.exp(statistics.fmean(math.log(x) for x in per_job))
     status = "OK"
-    if lo > threshold:
+    if est > args.threshold:
         status = "REGRESS"
         fail = True
-    per_round = " ".join(f"{x:>6.3f}x" for x in ratios)
-    print(
-        f"  {cell:<22} {statistics.median(ref):>12.0f} {statistics.median(head):>12.0f} "
-        f"{per_round} {lo:>6.3f}x  {status}"
-    )
+    print(f"  {cell:<22} estimate {est:.3f}x  {status}")
 
 if fail:
-    print("perf-gate: FAIL — a cell is over threshold in every round", file=sys.stderr)
-    sys.exit(1)
+    print("perf-gate: FAIL — a cell is slower than the threshold", flush=True)
+    raise SystemExit(1)
 print("perf-gate: PASS")
