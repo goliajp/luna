@@ -89,7 +89,11 @@ fn run_c_hook(vm: &mut Vm, cf: *const (), event: &[u8], line: Option<i64>) -> Re
     let line = if code == 2 { line.unwrap_or(-1) } else { -1 };
     ar.set_currentline(line as c_int);
     let level = vm.host_level_count(co);
-    ar.set_level_ref(level);
+    let raw = {
+        let mut api = Api { vm: &mut *vm, l };
+        super::debug::encode_ref(&mut api, l, level)
+    };
+    ar.set_level_ref(raw);
     let lua = matches!(
         vm.host_level(co, 0),
         Some(luna_core::vm::exec::host_c::HostLevel::Lua)

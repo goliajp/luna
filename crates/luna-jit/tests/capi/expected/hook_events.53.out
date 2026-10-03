@@ -1,0 +1,78 @@
+initial: hook=none mask=0 count=0
+call+return
+set: hook=hook mask=3 count=0
+  call main:[string "local function f(x)..."] ? cl=3
+  call Lua:[string "local function f(x)..."] t cl=4
+  tail Lua:[string "local function f(x)..."] ? cl=2
+  ret Lua:[string "local function f(x)..."] ? cl=2
+  call C:[C] cf cl=-1
+  ret C:[C] cf cl=-1
+  ret main:[string "local function f(x)..."] ? cl=7
+line
+  line @3 main:[string "local function f(x)..."] ? cl=3
+  line @4 main:[string "local function f(x)..."] ? cl=4
+  line @5 main:[string "local function f(x)..."] ? cl=5
+  line @4 Lua:[string "local function f(x)..."] t cl=4
+  line @2 Lua:[string "local function f(x)..."] ? cl=2
+  line @6 main:[string "local function f(x)..."] ? cl=6
+  line @7 main:[string "local function f(x)..."] ? cl=7
+  line @7 main:[string "local function f(x)..."] ? cl=7
+  line @7 main:[string "local function f(x)..."] ? cl=7
+count 5
+set: hook=bare mask=8 count=5
+  count line=-1
+  count line=-1
+  count line=-1
+  count line=-1
+count 0: hook=bare mask=8 count=0
+mask 0: hook=none mask=0 count=3
+func NULL: hook=none mask=0 count=3
+debug.sethook
+  lua hook	line	2
+  lua hook	line	3
+lua hook: hook=other mask=12 count=2
+c over lua: hook=bare mask=1 count=0
+  call line=-1
+  call line=-1
+  call line=-1
+  call line=-1
+external hook  call line=-1
+	c  call line=-1
+	0
+restored: hook=other mask=12 count=2
+  lua hook	line	1
+  lua hook	count	nil
+  lua hook	line	1
+  lua hook	count	nil
+  lua hook	line	1
+  lua hook	count	nil
+  lua hook	line	1
+  lua hook	count	nil
+  lua hook	line	1
+  lua hook	count	nil
+  lua hook	line	1
+function	l	2
+  lua hook	line	2
+  lua hook	count	nil
+  lua hook	line	2
+cleared	nil		0
+hook error
+  error 2: hook error
+  error 2: line
+hook calls Lua
+  error 2: [string "function inhook() local i = debug.getinfo(1, ..."]:1: line
+  error 2: [string "local function g() end g()"]:1: attempt to call a nil value
+coroutines
+co: hook=hook mask=6 count=0
+main: hook=none mask=0 count=0
+  ret C:[C] yield cl=-1
+  line @3 Lua:[string "CO = coroutine.create(function() local a = 1..."] ? cl=3
+  ret Lua:[string "CO = coroutine.create(function() local a = 1..."] ? cl=3
+resume	true
+external hook	rl	0
+  line line=1
+  line line=3
+  line line=1
+  line line=4
+  line line=2
+  line line=3

@@ -34,6 +34,61 @@ pub(super) fn level_of_ref(api: &Api, r: usize) -> Option<usize> {
     (r >= 1 && r <= n).then(|| n - r)
 }
 
+/// A level a `lua_Debug` points at from 5.2 on: the thread, as PUC's
+/// `i_ci` names a `CallInfo` of whichever thread `lua_getstack` was asked
+/// about, and the level reference on it.
+pub(super) struct LevelRef {
+    l: *mut LuaState,
+    r: usize,
+}
+
+/// The `LevelRef`s handed out for a thread, one per level reference, at
+/// addresses that stay put as long as the thread.
+#[derive(Default)]
+pub(super) struct LevelRefs(std::collections::HashMap<usize, Box<LevelRef>>);
+
+/// What `i_ci` holds for level reference `r` of `l`'s thread: 5.1's is an
+/// `int` relative to the thread its functions are given, as PUC's.
+pub(super) fn encode_ref(api: &mut Api, l: *mut LuaState, r: usize) -> usize {
+    if api.version() == LuaVersion::Lua51 {
+        return r;
+    }
+    // SAFETY: `l` is a live thread of the state; the borrow ends here
+    let refs = unsafe { &mut (*l).hook.refs };
+    let b = refs
+        .0
+        .entry(r)
+        .or_insert_with(|| Box::new(LevelRef { l, r }));
+    std::ptr::from_ref::<LevelRef>(b) as usize
+}
+
+/// The thread and level reference `i_ci` holds; `None` for 5.1's lost
+/// tail call.
+fn decode_ref(api: &Api, raw: usize) -> Option<(*mut LuaState, usize)> {
+    if api.version() == LuaVersion::Lua51 {
+        return Some((api.l, raw));
+    }
+    if raw == 0 {
+        return None;
+    }
+    // SAFETY: a nonzero `i_ci` of 5.2+ is the address of a `LevelRef` that
+    // `encode_ref` keeps with its thread (PUC's contract: `ar` was filled by
+    // `lua_getstack` or a hook while the thread lives)
+    let lr = unsafe { &*(raw as *const LevelRef) };
+    Some((lr.l, lr.r))
+}
+
+/// The level `ar` points at: its thread's API context and level index.
+fn target<'a>(api: &'a mut Api, d: DebugPtr) -> Option<(Api<'a>, usize, usize)> {
+    let (l, r) = decode_ref(api, d.level_ref())?;
+    let t = Api {
+        vm: &mut *api.vm,
+        l,
+    };
+    let i = level_of_ref(&t, r)?;
+    Some((t, i, r))
+}
+
 /// PUC `lua_getstack`: point `ar` at level `level` of the thread; 0 when
 /// it has no such level. 5.1 answers a negative level as a lost tail call.
 ///
@@ -47,7 +102,7 @@ pub(super) fn level_of_ref(api: &Api, r: usize) -> Option<usize> {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_getstack(L: *mut LuaState, level: c_int, ar: *mut c_void) -> c_int {
     // SAFETY: the caller's contract (# Safety)
-    let api = unsafe { Api::new(L) };
+    let mut api = unsafe { Api::new(L) };
     let d = debug_ptr(&api, ar);
     let Ok(level) = usize::try_from(level) else {
         if api.version() == LuaVersion::Lua51 {
@@ -60,7 +115,8 @@ pub unsafe extern "C" fn lua_getstack(L: *mut LuaState, level: c_int, ar: *mut c
     if level >= n {
         return 0;
     }
-    d.set_level_ref(n - level);
+    let raw = encode_ref(&mut api, L, n - level);
+    d.set_level_ref(raw);
     1
 }
 
@@ -128,9 +184,8 @@ pub unsafe extern "C" fn lua_getinfo(
         fix_c(&mut info);
         info
     } else {
-        let r = d.level_ref();
-        match level_of_ref(&api, r) {
-            Some(i) => level_info(&mut api, i, r),
+        match target(&mut api, d) {
+            Some((mut t, i, r)) => level_info(&mut t, i, r),
             None => api.vm.host_tail_info(),
         }
     };
@@ -181,8 +236,8 @@ enum Local {
     Level(usize),
 }
 
-fn find_local(api: &mut Api, ar: DebugPtr, n: c_int) -> Option<(Local, Vec<u8>)> {
-    let i = level_of_ref(api, ar.level_ref())?;
+/// Local `n` of level `i` of `api`'s thread.
+fn find_local(api: &mut Api, i: usize, n: c_int) -> Option<(Local, Vec<u8>)> {
     let co = api.thread();
     if let Some(HostLevel::C { func, func_slot }) = api.vm.host_level(co, i)
         && c_api_fn(func).is_some()
@@ -232,17 +287,22 @@ pub unsafe extern "C" fn lua_getlocal(
         };
     }
     let d = debug_ptr(&api, ar.cast_mut());
-    let Some((at, name)) = find_local(&mut api, d, n) else {
-        return std::ptr::null();
-    };
-    let v = match at {
-        Local::CSlot(s) => api.stack()[s],
-        Local::Level(i) => {
-            let co = api.thread();
-            api.vm
-                .host_local(co, i, i64::from(n))
-                .map_or(Value::Nil, |(_, v)| v)
-        }
+    let (v, name) = {
+        let Some((mut t, i, _)) = target(&mut api, d) else {
+            return std::ptr::null();
+        };
+        let Some((at, name)) = find_local(&mut t, i, n) else {
+            return std::ptr::null();
+        };
+        let v = match at {
+            Local::CSlot(s) => t.stack()[s],
+            Local::Level(i) => {
+                let co = t.thread();
+                t.vm.host_local(co, i, i64::from(n))
+                    .map_or(Value::Nil, |(_, v)| v)
+            }
+        };
+        (v, name)
     };
     api.push(v);
     c_name(&mut api, &name)
@@ -267,25 +327,28 @@ pub unsafe extern "C" fn lua_setlocal(
     let mut api = unsafe { Api::new(L) };
     let d = debug_ptr(&api, ar.cast_mut());
     let v = api.get_or_nil(-1);
-    let found = find_local(&mut api, d, n);
     let always_pop = api.version() <= LuaVersion::Lua52;
-    let Some((at, name)) = found else {
+    let found = target(&mut api, d).and_then(|(mut t, i, _)| {
+        let (at, name) = find_local(&mut t, i, n)?;
+        match at {
+            Local::CSlot(s) => {
+                t.stack_mut()[s] = v;
+                let co = t.thread();
+                t.vm.heap.barrier_back(co);
+            }
+            Local::Level(i) => {
+                let co = t.thread();
+                t.vm.host_set_local(co, i, i64::from(n), v);
+            }
+        }
+        Some(name)
+    });
+    let Some(name) = found else {
         if always_pop {
             api.pop();
         }
         return std::ptr::null();
     };
-    match at {
-        Local::CSlot(s) => {
-            api.stack_mut()[s] = v;
-            let co = api.thread();
-            api.vm.heap.barrier_back(co);
-        }
-        Local::Level(i) => {
-            let co = api.thread();
-            api.vm.host_set_local(co, i, i64::from(n), v);
-        }
-    }
     api.pop();
     c_name(&mut api, &name)
 }

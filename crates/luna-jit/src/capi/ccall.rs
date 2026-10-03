@@ -92,6 +92,8 @@ pub(super) struct CHook {
     pub(super) running: Option<super::hooks::HookRun>,
     /// the strings `lua_getinfo` and `lua_getlocal` handed out
     pub(super) strs: super::debug::CStrings,
+    /// the level references `lua_getstack` handed out for this thread
+    pub(super) refs: super::debug::LevelRefs,
 }
 
 // SAFETY: the declarations match the definitions in `csrc/shim_core.c`;

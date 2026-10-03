@@ -1,0 +1,15 @@
+F: 1:[a]=1 2:[b]=2
+setupvalue F 1 -> a (top +0)
+setupvalue F 3 -> (null) (top +1)
+F() = 12
+stripped: 1:[a]=<nil> 2:[b]=<nil>
+cclosure: 1:[]=u1 2:[]=2
+setupvalue C 1 ->  (top +0)
+setupvalue C 3 -> (null) (top +1)
+cfn() = u1new
+lightc:
+number:
+ids: fa==fb 0 fb==gb 1 fa==ha 1 fa null 0
+joined: g1==h1 1
+G() = 10
+c ids: 1==2 0 1==1 1 null 0
