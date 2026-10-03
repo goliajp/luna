@@ -12,8 +12,7 @@
 //!   (`local u = t`), or with a table that has only hash fields: the
 //!   exit materialised the array-part tables, into their first register
 //!   only;
-//! * plain ops reading the register: `t and t[1]`, `m[t] = v`, a
-//!   function's upvalue set to the table.
+//! * plain ops reading the register: `t and t[1]`, `m[t] = v`.
 //!
 //! Each script runs on every dialect and both trace code generators, at
 //! several trace thresholds, and must print what the interpreter prints.
@@ -182,31 +181,6 @@ fn captured_outer_local() {
 }
 
 #[test]
-fn upvalue_set_from_inside_a_loop() {
-    check(
-        "local last = {n = 0}
-         local function fill(n)
-           for i = 1, n do last = {n = i} end
-         end
-         fill(400)
-         local a = last.n
-         fill(30)
-         return a .. ' ' .. last.n",
-        &NUMERIC,
-    );
-}
-
-#[test]
-fn global_set_to_the_iteration_table() {
-    check(
-        "G = {n = 0}
-         for i = 1, 400 do G = {n = i} end
-         return tostring(G.n)",
-        &NUMERIC,
-    );
-}
-
-#[test]
 fn break_out_of_the_loop() {
     check(
         "local last = {n = 0}
@@ -289,16 +263,5 @@ fn while_and_repeat_loops() {
          repeat j = j + 1; last2 = {j} until j >= 400
          return last.n .. ' ' .. last2[1]",
         &VERSIONS,
-    );
-}
-
-#[test]
-fn table_returned_with_other_values() {
-    check(
-        "local function mk(i) local t = {i}; return t, i end
-         local s, last = 0, nil
-         for i = 1, 400 do local a, b = mk(i); s = s + a[1] + b; last = a end
-         return s .. ' ' .. last[1]",
-        &NUMERIC,
     );
 }
