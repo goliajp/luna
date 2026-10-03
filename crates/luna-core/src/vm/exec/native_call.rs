@@ -19,12 +19,16 @@ impl NativeKind {
     /// The kind of a synchronous native calling `f`.
     pub(crate) fn of(f: crate::runtime::value::NativeFn) -> NativeKind {
         use crate::runtime::value::NativeFn;
-        use crate::vm::builtins::{nat_host_xpcall, nat_pairs, nat_pcall, nat_xpcall};
+        use crate::vm::builtins::{
+            nat_host_xpcall, nat_host_xpcall_in_c, nat_pairs, nat_pcall, nat_xpcall,
+        };
         if std::ptr::fn_addr_eq(f, nat_pcall as NativeFn) {
             NativeKind::Pcall
         } else if std::ptr::fn_addr_eq(f, nat_xpcall as NativeFn) {
             NativeKind::Xpcall
-        } else if std::ptr::fn_addr_eq(f, nat_host_xpcall as NativeFn) {
+        } else if std::ptr::fn_addr_eq(f, nat_host_xpcall as NativeFn)
+            || std::ptr::fn_addr_eq(f, nat_host_xpcall_in_c as NativeFn)
+        {
             NativeKind::HostXpcall
         } else if std::ptr::fn_addr_eq(f, nat_pairs as NativeFn) {
             NativeKind::Pairs

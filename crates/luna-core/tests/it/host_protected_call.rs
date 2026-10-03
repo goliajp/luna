@@ -106,6 +106,15 @@ fn call_with_handler_runs_the_handler_before_unwinding() {
         let tb = debug.get(Value::Str(vm.heap.intern(b"traceback")));
         let err = vm.call_value_with_handler(f, &[], tb).unwrap_err();
         assert_eq!(str_of(err.0), text, "{v:?}");
+        // made from inside a C function of the host's (lua.c's `pmain`),
+        // that function is the last level
+        let err = vm.call_value_with_handler_in_c(f, &[], tb).unwrap_err();
+        let bottom = if v == LuaVersion::Lua51 {
+            "\n\t[C]: ?"
+        } else {
+            "\n\t[C]: in ?"
+        };
+        assert_eq!(str_of(err.0), format!("{text}{bottom}"), "{v:?}");
     }
 }
 
