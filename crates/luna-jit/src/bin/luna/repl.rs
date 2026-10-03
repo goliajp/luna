@@ -6,7 +6,6 @@
 use crate::{Interp, lua_tostring};
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
-use std::io::Write;
 
 /// `LUA_MAXINPUT`: the size of `lua.c`'s line buffer.
 const MAXINPUT: usize = 512;
@@ -42,11 +41,9 @@ impl Input {
     fn read(&mut self, interp: &mut Interp, prompt: &[u8]) -> Line {
         match self {
             Input::Stdin => {
-                let mut out = std::io::stdout().lock();
                 // unchecked, as lua.c's fputs / fflush
-                let _ = out.write_all(prompt);
-                let _ = out.flush();
-                drop(out);
+                luna_core::stdio::write_stdout(prompt);
+                let _ = luna_core::stdio::flush_stdout();
                 match interp.vm.read_stdin_line(MAXINPUT) {
                     Ok(Some(l)) => Line::Text(l),
                     // fgets gives NULL at the end of input and on an error
@@ -54,7 +51,12 @@ impl Input {
                 }
             }
             #[cfg(feature = "repl-line-editor")]
-            Input::Editor(ed) => ed.read(&mut interp.vm, prompt),
+            Input::Editor(ed) => {
+                // readline writes its prompt through stdout too: what that
+                // holds goes out before it
+                let _ = luna_core::stdio::flush_stdout();
+                ed.read(&mut interp.vm, prompt)
+            }
         }
     }
 
@@ -112,9 +114,8 @@ pub(crate) fn repl(interp: &mut Interp) -> bool {
     };
     input.finish();
     if ok {
-        let mut out = std::io::stdout().lock();
-        let _ = out.write_all(b"\n");
-        let _ = out.flush();
+        luna_core::stdio::write_stdout(b"\n");
+        let _ = luna_core::stdio::flush_stdout();
     }
     interp.progname = progname;
     ok
@@ -289,7 +290,8 @@ fn l_print(interp: &mut Interp, vals: Vec<Value>) {
     }
     let key = interp.str_value("print");
     let print = interp.vm.globals().get(key);
-    if let Err(e) = interp.vm.call_value(print, &vals) {
+    // from inside `pmain`, which a traceback taken in a `__tostring` shows
+    if let Err(e) = interp.vm.call_value_in_c(print, &vals) {
         // lua_pushfstring renders a NULL string as "(null)"
         let err = lua_tostring(&mut interp.vm, e.0).unwrap_or_else(|| b"(null)".to_vec());
         let mut msg = b"error calling 'print' (".to_vec();

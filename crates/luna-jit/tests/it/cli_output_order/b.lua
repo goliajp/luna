@@ -1,0 +1,7 @@
+io.write("x")
+print("y")
+io.stderr:write("E1\n")
+io.write("z\n")
+io.write("partial")
+io.stderr:write("E2\n")
+error("e")
