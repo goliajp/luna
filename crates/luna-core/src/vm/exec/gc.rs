@@ -101,6 +101,7 @@ impl Vm {
         // (gc.lua:544 suspended-coroutine collection).
         let live = (self.gc_top as usize).min(self.stack.len());
         roots.extend_from_slice(&self.stack[..live]);
+        roots.extend_from_slice(&self.jit.ssa_roots);
         for cf in &self.frames {
             match cf {
                 CallFrame::Lua(f) => roots.push(Value::Closure(f.closure)),

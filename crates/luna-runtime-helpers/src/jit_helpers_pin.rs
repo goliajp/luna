@@ -149,7 +149,7 @@ pub fn force_link_jit_helpers() -> usize {
             let _ = jb::luna_jit_upval_get(0);
             let _ = jb::luna_jit_op_close(0);
             jb::luna_jit_stack_update_raw(0, 0);
-            let _ = jb::luna_jit_op_concat(0, 0);
+            let _ = jb::luna_jit_op_concat(0, 0, 0);
             let _ = jb::luna_jit_str_buf_acquire();
             jb::luna_jit_str_buf_release(0);
             let _ = jb::luna_jit_str_buf_extend(0, 0);
@@ -160,6 +160,7 @@ pub fn force_link_jit_helpers() -> usize {
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
+                0,
             );
             let _ = jb::luna_jit_stack_load(0);
             let _ = jb::luna_jit_stack_tag(0);
