@@ -14,18 +14,23 @@ static void val(lua_State *L, int idx) {
   else printf("<%s>", lua_typename(L, t));
 }
 
+/* the locals of a level: a Lua function's named ones and varargs, every
+   slot of a C function */
 static void locals(lua_State *L, lua_State *T, int level) {
   lua_Debug ar;
   int n, top = lua_gettop(L);
   if (!lua_getstack(T, level, &ar)) { printf(" no level %d\n", level); return; }
+  lua_getinfo(T, "S", &ar);
   printf(" level %d:", level);
   for (n = -3; n <= 12; n++) {
     const char *name;
     if (n == 0) continue;
     name = lua_getlocal(T, &ar, n);
     if (name) {
-      printf(" %d:%s=", n, name);
-      val(T, -1);
+      if (*ar.what == 'C' || n < 0 || strstr(name, "temporary") == NULL) {
+        printf(" %d:%s=", n, name);
+        val(T, -1);
+      }
       lua_pop(T, 1);
     }
   }
@@ -109,16 +114,21 @@ static int coshow(lua_State *L) {
 
 static const char *script =
   "local show, set, cself, params, coshow = ...\n"
-  "local function f(a, b, ...)\n"
+  "local function f(a, b)\n"
   "  local x = 'xv'\n"
   "  do local inner = 1 end\n"
   "  show('f')\n"
   "  set(1, 'A') set(3, 'X') set(40, 'none')\n"
-  "  if select('#', ...) > 0 then set(-1, 'V') end\n"
-  "  return a, x, ...\n"
+  "  return a, x\n"
   "end\n"
-  "print(f(1, 2, 'va1', 'va2'))\n"
+  "print(f(1, 2))\n"
   "print(f(1))\n"
+  "local function vf(a, ...)\n"
+  "  show('vf')\n"
+  "  set(-1, 'V') set(-3, 'none')\n"
+  "  return ...\n"
+  "end\n"
+  "if _VERSION ~= 'Lua 5.1' then print(vf(1, 'va1', 'va2')) print(vf(1)) end\n"
   "local t = setmetatable({}, {__index = function(t, k) show('mm') end})\n"
   "local _ = t.k\n"
   "cself()\n"

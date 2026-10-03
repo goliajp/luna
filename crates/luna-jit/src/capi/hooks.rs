@@ -89,7 +89,10 @@ fn run_c_hook(vm: &mut Vm, cf: *const (), event: &[u8], line: Option<i64>) -> Re
     let line = if code == 2 { line.unwrap_or(-1) } else { -1 };
     ar.set_currentline(line as c_int);
     let level = vm.host_level_count(co);
-    let raw = {
+    // 5.1 tells nothing of the function a tail return leaves (`i_ci` 0)
+    let raw = if event == b"tail return" {
+        0
+    } else {
         let mut api = Api { vm: &mut *vm, l };
         super::debug::encode_ref(&mut api, l, level)
     };
