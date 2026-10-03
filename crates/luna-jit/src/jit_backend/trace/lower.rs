@@ -167,6 +167,19 @@ fn with_plan<R>(
         None => (record, Vec::new()),
     };
     let (plan, escape) = plan_trace(record, vconsts, head_proto, max_stack, opts, float_only)?;
+    // a root trace reading a register on entry that holds a value no trace
+    // is entered with (a boolean, a coroutine) could never run: it is not
+    // compiled, and leaves its head free for a later recording
+    let never_entered = record.side_trace_parent.is_none()
+        && record
+            .entry_tags
+            .iter()
+            .zip(&plan.head_live)
+            .any(|(&t, &live)| live && !luna_core::jit::trace::entry_tag_enterable(t));
+    if never_entered {
+        checkpoint("bail:entry-tag-never-entered");
+        return None;
+    }
     Some(f(&plan, escape))
 }
 

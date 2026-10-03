@@ -61,6 +61,7 @@ mod trace_concat_str_kind;
 mod trace_dispatch_gate;
 mod trace_dispatch_numeric_loops;
 mod trace_entry_live_in;
+mod trace_entry_never_entered;
 mod trace_escape_analysis_sweep;
 mod trace_exit_side_effects;
 mod trace_field_access_helpers;
