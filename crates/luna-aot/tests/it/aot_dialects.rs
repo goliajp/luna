@@ -28,6 +28,12 @@ const HOT_LOOP: &str =
 /// Build `script` for `version`, run it with the AOT probe on, and check
 /// its stdout and that at least one AOT trace was installed and fired.
 fn build_and_run(stem: &str, version: LuaVersion, script: &str, expected_stdout: &str) {
+    // a Windows host links through the MSVC driver, which CI's Windows
+    // runner does not have; aot-cross runs each dialect's PE under Wine
+    if cfg!(target_os = "windows") {
+        eprintln!("skipped: not supported on Windows");
+        return;
+    }
     if !have_on_path("cc") || !have_on_path("cargo") {
         eprintln!("skipped: cc / cargo not on PATH");
         return;
@@ -56,10 +62,6 @@ fn build_and_run(stem: &str, version: LuaVersion, script: &str, expected_stdout:
         "{version:?} binary printed the wrong output (stderr: {stderr})"
     );
 
-    // AOT traces are installed through a section walk Windows COFF lacks
-    if cfg!(target_os = "windows") {
-        return;
-    }
     let installed: usize = stderr
         .lines()
         .find_map(|l| l.split("aot_trace_install_count = ").nth(1))
