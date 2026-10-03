@@ -49,11 +49,13 @@ mod downrec_tail;
 mod exit;
 mod finish;
 mod fold;
+mod gc_roots;
 mod helpers;
 mod loop_tail;
 mod ops;
 mod plan;
 mod prologue;
+mod readonly;
 mod tail;
 use alt::*;
 use begin::*;
@@ -62,12 +64,14 @@ use downrec_tail::*;
 use exit::*;
 use finish::*;
 use fold::*;
+use gc_roots::*;
 pub(in crate::jit_backend::trace) use helpers::Helpers;
 use helpers::*;
 use loop_tail::*;
 use ops::*;
 use plan::*;
 use prologue::*;
+use readonly::*;
 use tail::*;
 
 /// The trace function under construction and everything the emit pass
@@ -82,6 +86,9 @@ struct Lower<E: Emit> {
     tforcall_tag_var: Variable,
     tforcall_val_tag_var: Variable,
     precheck: Option<Block>,
+    /// The block before the loop head that tests the tables
+    /// `ro_invariant` names (see `readonly`).
+    ro_precheck: Option<Block>,
     body_loop: Block,
     head_kinds: Vec<RegKind>,
     defined_aot_data: std::collections::HashSet<DataId>,
@@ -114,9 +121,19 @@ struct Lower<E: Emit> {
     upval_check_done: Vec<u32>,
     head_closure_var: Option<Variable>,
     known_int: Vec<Option<i64>>,
+    /// The registers holding a string constant loaded earlier in the same
+    /// pass: a table access by such a key may use the slot the recording
+    /// found it in.
+    const_str: Vec<bool>,
     /// Blocks the other way of a comparison jumps to, by the recorded op
     /// it rejoins at, with the registers the skipped ops write.
     alt_joins: std::collections::HashMap<usize, (Block, Vec<u32>)>,
+    /// The head-frame registers whose table is tested before the loop head
+    /// instead of at each store (see `readonly`).
+    ro_invariant: Vec<bool>,
+    /// The table values tested since the last op that may have run host
+    /// code.
+    ro_checked: Vec<Value>,
     /// The iteration count the back edge keeps for tiering up, and the
     /// count to leave at.
     tier_count: Option<(Box<TCellU32>, u32)>,
@@ -154,19 +171,28 @@ fn with_plan<R>(
     checkpoint("post:closed-check");
     let head_proto = record.head_proto;
     let max_stack = head_proto.max_stack as usize;
+    // every op sees a register window this wide: the largest frame among
+    // the functions the trace runs (the head's and any it inlined)
+    let frame_w = record
+        .ops
+        .iter()
+        .map(|r| r.proto.max_stack as usize)
+        .fold(max_stack, usize::max);
     // Every pass below reads register operands: a constant- or
     // immediate-operand op is lowered as its register form with the
-    // constant in virtual register `max_stack` (one past the op's frame,
+    // constant in virtual register `frame_w` (one past the widest frame,
     // never stored back), whose kind and value `vconsts` holds.
     let translated;
-    let (record, vconsts) = match split_const_operands(record, max_stack as u32) {
+    let (record, vconsts) = match split_const_operands(record, frame_w as u32) {
         Some((t, v)) => {
             translated = t;
             (&translated, v)
         }
         None => (record, Vec::new()),
     };
-    let (plan, escape) = plan_trace(record, vconsts, head_proto, max_stack, opts, float_only)?;
+    let (plan, escape) = plan_trace(
+        record, vconsts, head_proto, max_stack, frame_w, opts, float_only,
+    )?;
     // a root trace reading a register on entry that holds a value no trace
     // is entered with (a boolean, a coroutine) could never run: it is not
     // compiled, and leaves its head free for a later recording
@@ -220,7 +246,11 @@ fn lower_clif<M: Module>(
     let mut ctx = module.make_context();
     let mut fbc = FunctionBuilderContext::new();
     let b = FunctionBuilder::new(&mut ctx.func, &mut fbc);
-    let mut e = ClifEmit { b, m: module };
+    let mut e = ClifEmit {
+        b,
+        m: module,
+        relocs: Vec::new(),
+    };
     let h = declare_helpers(&mut e)?;
     let mut sig = e.make_signature();
     // Param 0 — reg_state ptr (caller-owned, lives across the call).
@@ -242,9 +272,14 @@ fn lower_clif<M: Module>(
     e.b.func.name = UserFuncName::user(0, fn_id.as_u32());
 
     let (e, emitted) = emit_trace(e, pl, h, escape, 0)?;
-    let ClifEmit { b: bcx, m: module } = e;
+    let ClifEmit {
+        b: bcx,
+        m: module,
+        relocs,
+    } = e;
     bcx.finalize(module.target_config());
     drop_unused_block_params(&mut ctx.func);
+    reloc::set_values(&relocs);
     // `LUNA_TRACE_IR_DUMP=1` dumps the cranelift IR of every
     // compiled trace fn to stderr. Categorization + density-reduction
     // tool for layer-6 attribution (per-call IR op count is the gap).
@@ -284,6 +319,8 @@ fn lower_clif<M: Module>(
             ctx.set_disasm(true);
         }
         module.define_function(fn_id, &mut ctx).ok()?;
+        super::code_dump::note_size(&ctx);
+        reloc::note_sites(&*module, &ctx);
         if want_asm_dump
             && let Some(cc) = ctx.compiled_code()
             && let Some(vcode) = cc.vcode.as_ref()
@@ -339,6 +376,7 @@ fn emit_trace<E: Emit>(
     }
     let lw = &mut lower;
     emit_fold_precheck(lw, pl);
+    emit_readonly_precheck(lw, pl);
     emit_body(lw, pl)?;
     let (downrec_link_for_compiled, downrec_multi_way_count_for_compiled) = emit_tail(lw, pl)?;
     let Lower {

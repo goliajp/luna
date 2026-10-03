@@ -35,5 +35,11 @@ jobs:
           # release); test the code that is about to ship instead
           ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
+      # the AOT tests build and run both Windows targets natively: MSVC
+      # (cl.exe / link.exe found in the Visual Studio install) and MinGW
+      # (the runner's C:\mingw64 gcc)
+      - name: rustup target add x86_64-pc-windows-gnu
+        if: runner.os == 'Windows'
+        run: rustup target add x86_64-pc-windows-gnu
       - name: cargo test --workspace --release
         run: cargo test --workspace --release --exclude llvm-jit-probe --exclude luna-jit-llvm -- --nocapture

@@ -11,7 +11,7 @@ impl TraceCompiler for CraneliftBackend {
         record: &TraceRecord,
         opts: CompileOptions,
     ) -> Option<CompiledTrace> {
-        trace::compile_trace_for_vm(storage, record, opts, false)
+        trace::compile_trace_for_vm(storage, record, opts, false, None)
     }
 
     fn try_compile_trace_for(
@@ -22,7 +22,7 @@ impl TraceCompiler for CraneliftBackend {
         version: luna_core::version::LuaVersion,
     ) -> Option<CompiledTrace> {
         let float_only = version <= luna_core::version::LuaVersion::Lua52;
-        trace::compile_trace_for_vm(storage, record, opts, float_only)
+        trace::compile_trace_for_vm(storage, record, opts, float_only, Some(version))
     }
 
     fn last_compile_checkpoint(&self) -> &'static str {
@@ -35,5 +35,13 @@ impl TraceCompiler for CraneliftBackend {
         ct: &CompiledTrace,
     ) -> Option<luna_core::jit::trace::TraceFn> {
         trace::tier_up_trace(storage, ct)
+    }
+
+    fn adopt_traces(
+        &self,
+        storage: &mut dyn luna_core::jit::JitStorage,
+        req: &luna_core::jit::trace::AdoptRequest<'_>,
+    ) -> Vec<luna_core::jit::trace::AdoptedTrace> {
+        trace::adopt_traces(storage, req)
     }
 }

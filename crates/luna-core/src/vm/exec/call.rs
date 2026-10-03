@@ -105,12 +105,16 @@ impl Vm {
                             let max_stack = cl.proto.max_stack as usize;
                             let base_us = f.base as usize;
                             let regs = &self.stack[base_us..base_us + max_stack];
-                            if !trace_head_stuck(proto, 0, regs) {
+                            if !trace_head_stuck(proto, 0, regs)
+                                && !self.trace_try_adopt(proto, 0, base_us, None, true)
+                            {
+                                let regs = &self.stack[base_us..base_us + max_stack];
                                 let entry_tags = regs.iter().map(|v| v.unpack().0).collect();
-                                self.jit.active_trace =
-                                    Some(Box::new(crate::jit::trace::TraceRecord::start(
-                                        cl.proto, 0, entry_tags, true,
-                                    )));
+                                let mut rec = crate::jit::trace::TraceRecord::start(
+                                    cl.proto, 0, entry_tags, true,
+                                );
+                                rec.settings = self.jit.recording_settings();
+                                self.jit.active_trace = Some(Box::new(rec));
                                 self.jit.recording_frame_base = frame_idx;
                             }
                         }
@@ -308,7 +312,7 @@ impl Vm {
                     let v = self.stack[(base - n_varargs + i) as usize];
                     // bounded by `n_varargs` (≤ MAXUPVAL territory), well
                     // below `MAX_ASIZE`
-                    let _ = tm.set_int(&mut self.heap, (i + 1) as i64, v);
+                    let _ = tm.set_int_raw(&mut self.heap, (i + 1) as i64, v);
                 }
                 let nk = Value::Str(self.heap.intern(b"n"));
                 tm.set(&mut self.heap, nk, Value::Int(n_varargs as i64))

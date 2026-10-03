@@ -212,8 +212,8 @@ pub fn embed_bytecode(
 //   3. Build `libluna_runtime_helpers.a` via `cargo build -p
 //      luna-runtime-helpers --release` (idempotent — cargo caches).
 //   4. Write a tiny C `main.c` that extern-decls the bracket symbols
-//      + extern-decls `luna_aot_run`, then calls
-//      `luna_aot_run(start, end - start)`. Compile via `cc -c`.
+//      + extern-decls `luna_aot_run_dialect`, then calls
+//      `luna_aot_run_dialect(start, end - start, dialect)`. Compile via `cc -c`.
 //   5. Link bytecode.o + main.o + libluna_runtime_helpers.a +
 //      platform libs (`-lpthread -ldl -lm -framework CoreFoundation`
 //      on Mac) into the final binary.
@@ -230,7 +230,8 @@ pub fn embed_bytecode(
 ///
 /// Differs from [`embed_bytecode`]:
 /// - Builds and links `luna-runtime-helpers` (staticlib carrying
-///   luna-core + a `luna_aot_run` C-ABI entry).
+///   luna-core + a `luna_aot_run_dialect` C-ABI entry, which runs the
+///   chunk on a `Vm` of `version`).
 /// - Produced binary actually **runs** the script — `print(...)` lands
 ///   on stdout, runtime errors print to stderr + exit 1, etc.
 ///
@@ -238,6 +239,11 @@ pub fn embed_bytecode(
 /// cross-compile builds a per-triple staticlib (`cargo build
 /// --target=<triple> -p luna-runtime-helpers`) and uses the matching
 /// cc driver.
+///
+/// For a Windows target, an `out_path` without an extension is written
+/// as `<out_path>.exe`. An MSVC target needs `cl.exe` + `link.exe`
+/// (found in the Visual Studio install on a Windows host, no Developer
+/// Command Prompt needed) or LLVM's `clang-cl` + `lld-link` on `PATH`.
 pub fn compile_and_link(
     source_path: &Path,
     out_path: &Path,
@@ -290,6 +296,17 @@ pub fn compile_and_link_with(
     // Parse + compile + dump: shared with `embed_bytecode`.
     let dump_bytes = compile_to_dump(source_path, version)?;
 
+    // MinGW's gcc names its output `<out>.exe` when `<out>` has no
+    // extension and link.exe does not; give every Windows target the
+    // suffix so the binary lands at one predictable path
+    let exe_path;
+    let out_path = if target.os == TargetOs::Windows && out_path.extension().is_none() {
+        exe_path = out_path.with_extension("exe");
+        exe_path.as_path()
+    } else {
+        out_path
+    };
+
     let workdir = out_path
         .parent()
         .map(Path::to_path_buf)
@@ -308,7 +325,7 @@ pub fn compile_and_link_with(
     // is target-independent (extern decls only); the `cc -c` invocation
     // routes through the target-aware cc driver so the .o has the right
     // ABI / object-format magic.
-    write_aot_cmain_object_for(&cmain_obj_path, &target)?;
+    write_aot_cmain_object_for(&cmain_obj_path, &target, version)?;
 
     // Offline trace recorder + AOT trace mcode emission. The warmup `Vm` always runs on the **host**
     // (we can't dispatch target mcode at warmup time), but the

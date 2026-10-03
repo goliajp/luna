@@ -1,0 +1,51 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	names.lua:2: in function <names.lua:2>
+	(tail call): ?
+	(tail call): ?
+	names.lua:5: in function 'loc'
+	names.lua:6: in function 'up'
+	names.lua:7: in function <names.lua:7>
+	(tail call): ?
+	names.lua:9: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	names.lua:2: in function <names.lua:2>
+	(...tail calls...)
+	names.lua:5: in function 'loc'
+	names.lua:6: in function 'up'
+	names.lua:7: in function <names.lua:7>
+	(...tail calls...)
+	names.lua:9: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	names.lua:2: in function <names.lua:2>
+	(...tail calls...)
+	names.lua:5: in upvalue 'loc'
+	names.lua:6: in upvalue 'up'
+	names.lua:7: in function <names.lua:7>
+	(...tail calls...)
+	names.lua:9: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	names.lua:2: in function <names.lua:2>
+	(...tail calls...)
+	names.lua:5: in upvalue 'loc'
+	names.lua:6: in upvalue 'up'
+	names.lua:7: in function <names.lua:7>
+	(...tail calls...)
+	names.lua:9: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	names.lua:2: in function <names.lua:2>
+	(...tail calls...)
+	names.lua:5: in upvalue 'loc'
+	names.lua:6: in upvalue 'up'
+	names.lua:7: in function <names.lua:7>
+	(...tail calls...)
+	names.lua:9: in main chunk

@@ -66,11 +66,11 @@ pub(super) fn emit_array_get_check<E: Emit>(
 /// raw tag `r` the collector does not trace (a collectable one needs the
 /// write barrier), keeping the `acount` / `aprefix` counts in step as
 /// `Table::note_atag_change` does: jump to `done` when stored, to `miss`
-/// when the store is the helper's (out of the array part; a nil slot of a
-/// table with a metatable, whose `__newindex` decides; a slot that extends
-/// the non-nil prefix past further filled slots, which the table scans
-/// for). Leaves the builder in no block; the caller seals `miss` and
-/// `done`.
+/// when the store is the helper's (out of the array part; a read-only
+/// table, which the helper refuses, when `test_readonly`; a nil slot of a table with a
+/// metatable, whose `__newindex` decides; a slot that extends the non-nil
+/// prefix past further filled slots, which the table scans for). Leaves
+/// the builder in no block; the caller seals `miss` and `done`.
 pub(super) fn emit_array_set<E: Emit>(
     bcx: &mut E,
     t: Value,
@@ -79,10 +79,14 @@ pub(super) fn emit_array_set<E: Emit>(
     r: u8,
     done: Block,
     miss: Block,
+    test_readonly: bool,
 ) {
     use luna_core::runtime::value::raw;
     debug_assert!(!raw::is_gc(r) && r != raw::NIL);
     let flags = MemFlagsData::trusted();
+    if test_readonly {
+        emit_writable_guard(bcx, t, miss);
+    }
     let idx = bcx.ins().iadd_imm_s(key, -1);
     let asize = load_asize(bcx, t);
     let in_bounds = bcx.ins().icmp(IntCC::UnsignedLessThan, idx, asize);
@@ -160,6 +164,33 @@ pub(super) fn emit_array_set<E: Emit>(
     bcx.ins().store(flags, tag, tag_addr, 0);
     bcx.ins().store(flags, val, val_addr, 0);
     bcx.ins().jump(done, &[]);
+}
+
+/// Branch to `miss` when table `t` is read-only (`Table::is_readonly`),
+/// whose stores the helper on `miss` refuses; continue in a new block
+/// otherwise: a byte load and a bit test of the table header's flag byte.
+/// Where a store needs the test at all is `lower::readonly`'s choice.
+pub(super) fn emit_writable_guard<E: Emit>(bcx: &mut E, t: Value, miss: Block) {
+    let ok_blk = bcx.create_block();
+    emit_writable_guard_to(bcx, t, miss, ok_blk);
+    bcx.switch_to_block(ok_blk);
+    bcx.seal_block(ok_blk);
+}
+
+/// Branch to `ro` when table `t` is read-only, to `ok` otherwise; leaves
+/// the builder in no block.
+pub(super) fn emit_writable_guard_to<E: Emit>(bcx: &mut E, t: Value, ro: Block, ok: Block) {
+    let byte = bcx.ins().uload8(
+        types::I64,
+        MemFlagsData::trusted(),
+        t,
+        super::super::TABLE_READONLY_BYTE_OFFSET,
+    );
+    let bit = bcx
+        .ins()
+        .band_imm_u(byte, super::super::TABLE_READONLY_BYTE_MASK);
+    let is_ro = bcx.ins().icmp_imm_u(IntCC::NotEqual, bit, 0);
+    bcx.ins().brif(is_ro, ro, &[], ok, &[]);
 }
 
 /// `#t` from the array part's counts: branch to `hit` with the length when

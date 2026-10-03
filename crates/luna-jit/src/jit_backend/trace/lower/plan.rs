@@ -30,6 +30,10 @@ pub(super) struct Plan<'r> {
     pub(super) record: &'r TraceRecord,
     pub(super) head_proto: Gc<Proto>,
     pub(super) max_stack: usize,
+    /// The width of every op's register window: the largest frame among
+    /// the functions the trace runs. Register `frame_w` is the virtual one
+    /// of a constant operand.
+    pub(super) frame_w: usize,
     pub(super) vconsts: Vec<Option<VConst>>,
     pub(super) opts: CompileOptions,
     pub(super) float_only: bool,
@@ -69,18 +73,18 @@ pub(super) fn plan_trace<'r>(
     vconsts: Vec<Option<VConst>>,
     head_proto: Gc<Proto>,
     max_stack: usize,
+    frame_w: usize,
     opts: CompileOptions,
     float_only: bool,
 ) -> Option<(Plan<'r>, EscapeAnalysis)> {
     let n = record.ops.len();
 
-    let (op_offsets, enclosing_call_a, window_size) = plan_frames(record, head_proto, max_stack)?;
+    let (op_offsets, enclosing_call_a, window_size) = plan_frames(record, head_proto, frame_w)?;
     let window_size_us = window_size as usize;
 
     side_trace_gate(record, &op_offsets)?;
-    validate_inline_calls(record, head_proto)?;
     let (folded_ops, math_folds) = scan_math_folds(record, n, head_proto, opts);
-    let end_idx_opt = find_trace_end(record, &folded_ops, head_proto, n)?;
+    let end_idx_opt = find_trace_end(record, &folded_ops, n)?;
     let effective_end = end_idx_opt.map(|(i, _)| i).unwrap_or(n);
     // escape analysis over the recorded body +
     // terminator. The pre-emit pass below demotes any Sinkable
@@ -93,6 +97,7 @@ pub(super) fn plan_trace<'r>(
         effective_end,
         end_idx_opt.map(|(_, k)| k),
         head_proto,
+        frame_w,
     );
     checkpoint("post:escape-analyze");
     // Keep the old names working for the per-tail paths below.
@@ -191,7 +196,7 @@ pub(super) fn plan_trace<'r>(
         record,
         &vconsts,
         head_proto,
-        max_stack,
+        frame_w,
         effective_end,
         &folded_ops,
     )?;
@@ -211,6 +216,7 @@ pub(super) fn plan_trace<'r>(
             record,
             head_proto,
             max_stack,
+            frame_w,
             vconsts,
             opts,
             float_only,
@@ -244,7 +250,7 @@ pub(super) fn plan_trace<'r>(
 fn plan_frames(
     record: &TraceRecord,
     head_proto: Gc<Proto>,
-    max_stack: usize,
+    frame_w: usize,
 ) -> Option<(Vec<u32>, Vec<Option<u8>>, u32)> {
     // recorder invariant: the first recorded op is at
     // depth 0 on `head_proto`. A record violating either would break
@@ -300,9 +306,9 @@ fn plan_frames(
     let (op_offsets, enclosing_call_a) = compute_op_offsets(record);
     let mut window_size: u32 = op_offsets
         .iter()
-        .map(|&off| off + max_stack as u32)
+        .map(|&off| off + frame_w as u32)
         .max()
-        .unwrap_or(max_stack as u32);
+        .unwrap_or(frame_w as u32);
     // SelfLink close needs `regs_full` to extend through the
     // would-be-next-depth's window so the snapshot-restore copy reads
     // from valid slots. Without this extension, compute_op_offsets
@@ -319,7 +325,7 @@ fn plan_frames(
         }
         if let Some(idx) = last_call_idx {
             let bump_off = op_offsets[idx] + record.ops[idx].inst.a() + 1;
-            let needed = bump_off + max_stack as u32;
+            let needed = bump_off + frame_w as u32;
             if needed > window_size {
                 window_size = needed;
             }

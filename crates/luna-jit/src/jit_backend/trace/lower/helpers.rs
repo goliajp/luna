@@ -33,6 +33,11 @@ pub(super) struct RuntimeHelpers {
     pub(super) len_checked_id: FuncId,
     pub(super) upval_get_id: FuncId,
     pub(super) upval_get_checked_id: FuncId,
+    /// `luna_jit_upval_of_checked(cl, idx, want, out)`: an upvalue of an
+    /// inlined function's closure
+    pub(super) upval_of_checked_id: FuncId,
+    /// `luna_jit_op_self_checked(t, key, want, out)`: a method lookup
+    pub(super) op_self_checked_id: FuncId,
     pub(super) head_closure_id: FuncId,
     pub(super) materialize_id: FuncId,
     pub(super) mat_sunk_id: FuncId,
@@ -165,7 +170,7 @@ fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
         .ok()?;
 
     // `fn luna_jit_op_tforcall(abs_offset, nvars,
-    // ctrl_out: *mut i64, key_out: *mut i64, val_out: *mut i64) -> i64`.
+    // ctrl_out: *mut i64, key_out: *mut i64, val_out: *mut i64, roots) -> i64`.
     // Batched: helper fills the three out pointers with raw bits
     // of R[A+2] / R[A+4] / R[A+5] and returns R[A+4]'s tag byte
     // (0..=11) on success, -1 on deopt. Emit reads the buffer via
@@ -177,6 +182,8 @@ fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
+    op_tforcall_sig.params.push(AbiParam::new(types::I64));
+    // the root list (`emit_ssa_roots`)
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
     op_tforcall_sig.returns.push(AbiParam::new(types::I64));
     let op_tforcall_id = bcx
@@ -204,11 +211,12 @@ fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
         .declare_function("luna_jit_stack_tag", Linkage::Import, &stack_tag_sig)
         .ok()?;
 
-    // `fn luna_jit_op_concat(a, n) -> i64`. Returns
+    // `fn luna_jit_op_concat(a, n, roots) -> i64`. Returns
     // 0 on success (result at vm.stack[base+a]) or -1 on deopt
     // (metamethod path, type error, length overflow,
     // pre-existing pending_err).
     let mut op_concat_sig = bcx.make_signature();
+    op_concat_sig.params.push(AbiParam::new(types::I64));
     op_concat_sig.params.push(AbiParam::new(types::I64));
     op_concat_sig.params.push(AbiParam::new(types::I64));
     op_concat_sig.returns.push(AbiParam::new(types::I64));
@@ -366,6 +374,8 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
     upval_get_sig.params.push(AbiParam::new(types::I64));
     upval_get_sig.returns.push(AbiParam::new(types::I64));
     let upval_get_checked_id = declare_i64_import(bcx, "luna_jit_upval_get_checked", 3)?;
+    let upval_of_checked_id = declare_i64_import(bcx, "luna_jit_upval_of_checked", 4)?;
+    let op_self_checked_id = declare_i64_import(bcx, "luna_jit_op_self_checked", 4)?;
     let upval_get_id = bcx
         .declare_function("luna_jit_upval_get", Linkage::Import, &upval_get_sig)
         .ok()?;
@@ -376,10 +386,12 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
         .ok()?;
 
     // `fn luna_jit_trace_materialize_frames(n: u64,
-    // metas: *const FrameMaterializeInfo) -> i64`. Called by the
+    // metas: *const FrameMaterializeInfo, closures: *const i64) -> i64`. Called by the
     // lowerer's cmp@d>0 emit.
     let mut materialize_sig = bcx.make_signature();
     materialize_sig.params.push(AbiParam::new(types::I64));
+    materialize_sig.params.push(AbiParam::new(types::I64));
+    // each frame's closure
     materialize_sig.params.push(AbiParam::new(types::I64));
     materialize_sig.returns.push(AbiParam::new(types::I64));
     let materialize_id = bcx
@@ -431,6 +443,8 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
         len_checked_id,
         upval_get_id,
         upval_get_checked_id,
+        upval_of_checked_id,
+        op_self_checked_id,
         head_closure_id,
         materialize_id,
         mat_sunk_id,

@@ -35,6 +35,28 @@ pub(crate) struct CraneliftJitStorage {
     owner: Option<u64>,
     /// A second `Vm` compiled through it too: its code is never freed.
     shared: bool,
+    /// The engine this Vm shares compiled code through, and the Vm's
+    /// dialect.
+    pub(crate) engine: Option<super::engine::Engine>,
+    pub(crate) version: Option<luna_core::version::LuaVersion>,
+    /// Functions of the method JIT installed from the engine.
+    pub(crate) chunks_adopted: u64,
+    /// The shared image of each trace compiled or installed here, by the
+    /// address of its first code.
+    pub(crate) images: std::collections::HashMap<usize, u64>,
+}
+
+impl CraneliftJitStorage {
+    pub(crate) fn with_engine(
+        engine: super::engine::Engine,
+        version: luna_core::version::LuaVersion,
+    ) -> CraneliftJitStorage {
+        CraneliftJitStorage {
+            engine: Some(engine),
+            version: Some(version),
+            ..CraneliftJitStorage::default()
+        }
+    }
 }
 
 impl JitStorage for CraneliftJitStorage {

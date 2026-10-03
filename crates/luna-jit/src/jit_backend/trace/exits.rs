@@ -23,7 +23,7 @@ pub(super) fn emit_table_set<E: Emit>(
     val: Value,
     val_kind: RegKind,
 ) -> Value {
-    let val_tag = bcx.ins().iconst(types::I64, i64::from(kind_tag(val_kind)));
+    let val_tag = emit_kind_tag(bcx, val_kind, val).expect("callers store typed values only");
     let call = match key_kind {
         RegKind::Int | RegKind::Str => {
             let id = if key_kind == RegKind::Int {
@@ -35,7 +35,7 @@ pub(super) fn emit_table_set<E: Emit>(
             bcx.ins().call(f, &[t, key, val, val_tag])
         }
         _ => {
-            let key_tag = bcx.ins().iconst(types::I64, i64::from(kind_tag(key_kind)));
+            let key_tag = emit_kind_tag(bcx, key_kind, key).expect("callers store typed keys only");
             let f = bcx.import_func(helpers.any_key);
             bcx.ins().call(f, &[t, key, key_tag, val, val_tag])
         }

@@ -184,8 +184,8 @@ pub(super) fn alloc_sunk_sites<E: Emit>(
     //
     // Note: looping traces (`opts.internal_loop = true`) that have
     // any cmp in body are already excluded by the sweep escape
-    // rule. ForLoop terminators escape via the terminator rule
-    // (TraceEnd::ForLoop → all live). So we don't need an explicit
+    // rule. A ForLoop terminator escapes the bindings it carries
+    // (below the loop's `A + 4`). So we don't need an explicit
     // `internal_loop` check here.
     const MAX_SUNK_CAP: u32 = 8;
     let return_a_for_sunk_check: Option<u32> = match end_idx_opt {
@@ -315,10 +315,12 @@ pub(super) fn start_accum<E: Emit>(
 
 /// Creates the loop head (and the math-fold precheck block, when the
 /// folds are checked once) and jumps there from the entry block.
-pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> (Option<Block>, Block) {
+pub(super) fn open_body_loop<E: Emit>(
+    bcx: &mut E,
+    pl: &Plan<'_>,
+) -> (Option<Block>, Option<Block>, Block) {
     let Plan {
         record,
-        head_proto,
         effective_end,
         ..
     } = *pl;
@@ -330,7 +332,7 @@ pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> (Option<Blo
     // checked once, in `precheck` before the loop head, rather than on
     // every iteration.
     let fold_check_once = !record.ops[..effective_end].iter().any(|rop| {
-        let key = |k: u32| match head_proto.consts.get(k as usize) {
+        let key = |k: u32| match rop.proto.consts.get(k as usize) {
             Some(luna_core::runtime::Value::Str(s)) => Some(s.as_bytes()),
             _ => None,
         };
@@ -350,11 +352,17 @@ pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> (Option<Blo
     });
     // Filled in below, once the exit bookkeeping exists.
     let precheck = (fold_check_once && !math_folds.is_empty()).then(|| bcx.create_block());
+    // the read-only tests before the loop head (see `readonly`)
+    let ro_precheck = record.ops[..effective_end]
+        .iter()
+        .any(|rop| matches!(rop.inst.op(), Op::SetField | Op::SetI | Op::SetTable))
+        .then(|| bcx.create_block());
 
     let body_loop = bcx.create_block();
-    bcx.ins().jump(precheck.unwrap_or(body_loop), &[]);
+    bcx.ins()
+        .jump(precheck.or(ro_precheck).unwrap_or(body_loop), &[]);
     // `body_loop` is entered after the precheck block is emitted (below):
     // reading a register there first would leave it half-built while
     // another block is emitted, which the builder rejects.
-    (precheck, body_loop)
+    (precheck, ro_precheck, body_loop)
 }

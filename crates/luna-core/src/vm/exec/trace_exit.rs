@@ -107,10 +107,17 @@ impl Vm {
             // exits: it would replace the side trace on the
             // parent's exit of that number, which resumes
             // elsewhere.
+            // An exit that has a side trace already (one taken over from
+            // another Vm comes with its side traces wired, and counts
+            // from zero) starts none.
             if v + 1 == crate::jit::trace::HOTEXIT_THRESHOLD
                 && !child_ran
                 && self.jit.active_trace.is_none()
                 && self.jit.trace_enabled
+                && ct
+                    .exit_side_trace_ptrs
+                    .get(exit_hit_idx)
+                    .is_none_or(|p| p.get().is_null())
             {
                 side_trace_should_start = true;
             }
@@ -221,6 +228,12 @@ impl Vm {
             Some(CallFrame::Lua(f)) => (f.base as usize, f.closure.proto),
             _ => (base_us, cl.proto),
         };
+        // a side trace is cached on, and found through, the parent's proto:
+        // an exit inside a function of another proto the parent inlined
+        // starts none
+        if !resume_proto.ptr_eq(cl.proto) {
+            return;
+        }
         let resume_max_stack = resume_proto.max_stack as usize;
         let mut side_entry_tags: Vec<u8> = Vec::with_capacity(resume_max_stack);
         // Extend stack if cont_pc's frame window
@@ -231,18 +244,24 @@ impl Vm {
             self.stack
                 .resize(resume_base + resume_max_stack, crate::runtime::Value::Nil);
         }
+        let parent = Some((head_pc_val, exit_hit_idx));
+        if self.trace_try_adopt(resume_proto, cont_pc, resume_base, parent, false) {
+            return;
+        }
         for i in 0..resume_max_stack {
             let (tag, _) = self.stack[resume_base + i].unpack();
             side_entry_tags.push(tag);
         }
-        self.jit.active_trace = Some(Box::new(crate::jit::trace::TraceRecord::start_side_trace(
+        let mut rec = crate::jit::trace::TraceRecord::start_side_trace(
             resume_proto,
             cont_pc,
             side_entry_tags,
             cl.proto,
             head_pc_val,
             exit_hit_idx,
-        )));
+        );
+        rec.settings = self.jit.recording_settings();
+        self.jit.active_trace = Some(Box::new(rec));
         self.jit.recording_frame_base = self.frames.len() - 1;
         self.jit.counters.side_trace_started += 1;
     }

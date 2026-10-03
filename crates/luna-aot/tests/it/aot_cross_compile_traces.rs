@@ -252,10 +252,7 @@ fn cross_compile_emits_trace_mcode_for_x86_64_apple_darwin() {
 #[test]
 fn cross_compile_emits_trace_mcode_for_linux_musl_x86_64() {
     if cfg!(target_os = "windows") {
-        eprintln!(
-            "skipped: AOT trace install requires bracket-symbol section convention \
-             unavailable on Windows COFF; cross-compile-to-linux path also driver-different"
-        );
+        eprintln!("skipped: a Windows host has no musl cross compiler");
         return;
     }
     if !have_on_path("cc") || !have_on_path("cargo") {

@@ -1,0 +1,25 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	pcallre.lua:2: in function 'again'
+	pcallre.lua:3: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	pcallre.lua:2: in function 'again'
+	pcallre.lua:3: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	pcallre.lua:2: in local 'again'
+	pcallre.lua:3: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	pcallre.lua:2: in local 'again'
+	pcallre.lua:3: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	pcallre.lua:2: in local 'again'
+	pcallre.lua:3: in main chunk

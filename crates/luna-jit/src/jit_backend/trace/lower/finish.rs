@@ -276,7 +276,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
             .enumerate()
             .map(|(i, &t)| match pl.head_live.get(i) {
                 Some(false) => ENTRY_TAG_ANY,
-                _ => t,
+                _ => luna_core::jit::trace::entry_tag_of(t),
             })
             .collect::<Vec<u8>>()
             .into(),

@@ -1,0 +1,35 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	hot_inline_deep.lua:1: in function 'd3'
+	hot_inline_deep.lua:2: in function 'd2'
+	hot_inline_deep.lua:3: in function 'd1'
+	hot_inline_deep.lua:5: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	hot_inline_deep.lua:1: in function 'd3'
+	hot_inline_deep.lua:2: in function 'd2'
+	hot_inline_deep.lua:3: in function 'd1'
+	hot_inline_deep.lua:5: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	hot_inline_deep.lua:1: in upvalue 'd3'
+	hot_inline_deep.lua:2: in upvalue 'd2'
+	hot_inline_deep.lua:3: in local 'd1'
+	hot_inline_deep.lua:5: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	hot_inline_deep.lua:1: in upvalue 'd3'
+	hot_inline_deep.lua:2: in upvalue 'd2'
+	hot_inline_deep.lua:3: in local 'd1'
+	hot_inline_deep.lua:5: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	hot_inline_deep.lua:1: in upvalue 'd3'
+	hot_inline_deep.lua:2: in upvalue 'd2'
+	hot_inline_deep.lua:3: in local 'd1'
+	hot_inline_deep.lua:5: in main chunk

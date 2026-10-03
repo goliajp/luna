@@ -3,10 +3,11 @@
 use crate::{current_jit_vm, str_arg, table_arg};
 
 /// Allocate an empty `Gc<Table>` on the active Vm's heap.
-/// Returns the Gc pointer pun'd to `i64`. The fresh table is rooted
-/// only through the Cranelift Variable the JIT writes it into; no
-/// `maybe_collect_garbage` runs inside the helper so the SSA-only
-/// rooting suffices for the duration of the JIT entry.
+/// Returns the Gc pointer pun'd to `i64`. Allocating never collects, but
+/// the fresh table lives only in a register of the compiled code until
+/// the code stores it somewhere the collector sees. Compiled code that
+/// later calls a helper which can collect (a trace's concat or
+/// generic-for call) passes such registers to it as roots.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread.
@@ -163,7 +164,9 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) {
     // SAFETY: `t` is a live table (# Safety); `g` is not dereferenced again
     // while `table` is in use, and `Table::set*` never runs the collector
     let table = unsafe { g.as_mut() };
-    let _ = table.set_int(&mut vm.heap, key, luna_core::runtime::Value::Int(val));
+    // the method JIT stores only into tables its call tested on entry or
+    // made itself (see `Vm::try_jit_call_op`)
+    let _ = table.set_int_unguarded(&mut vm.heap, key, luna_core::runtime::Value::Int(val));
 }
 
 /// Write an arbitrary `Value::pack(tag, raw_bits)` to
@@ -205,7 +208,10 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64,
         };
         (g.as_mut(), luna_core::runtime::Value::pack(tag as u8, raw))
     };
-    let _ = table.set_int(&mut vm.heap, key, v);
+    let r = table.set_int(&mut vm.heap, key, v);
+    if refused(vm, r) {
+        return;
+    }
     barrier_for(vm, g, luna_core::runtime::Value::Int(key), v);
 }
 
@@ -259,14 +265,18 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
             luna_core::runtime::Value::pack(val_tag as u8, raw),
         )
     };
-    let _ = table.set(&mut vm.heap, key, v);
+    let r = table.set(&mut vm.heap, key, v);
+    if refused(vm, r) {
+        return;
+    }
     barrier_for(vm, g, key, v);
 }
 
 /// The trace JIT's table stores, `t[key] = val`, with the value given as
 /// a `raw` tag and payload. They return `1` when stored. They store
 /// nothing and return `0` when the table has a metatable, whose
-/// `__newindex` the helper would bypass, or when the key cannot index a
+/// `__newindex` the helper would bypass, when it is read-only, or when the
+/// key cannot index a
 /// table (nil, NaN); the caller then side-exits at the storing op and
 /// the interpreter performs it. The trace goes no further than that op,
 /// so nothing it did before is repeated.
@@ -282,7 +292,8 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
     let vm = unsafe { current_jit_vm() };
     // SAFETY: `t` is a live table (# Safety)
     let g = unsafe { table_arg(t) };
-    if g.metatable().is_some() {
+    // a read-only table is left to the interpreter too, which raises
+    if g.metatable().is_some() || g.is_readonly() {
         vm.jit.counters.deopt += 1;
         return 0;
     }
@@ -298,12 +309,24 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
             g.as_mut(),
         )
     };
-    if table.set(&mut vm.heap, key, val).is_err() {
+    if table.set_unguarded(&mut vm.heap, key, val).is_err() {
         vm.jit.counters.deopt += 1;
         return 0;
     }
     barrier_for(vm, g, key, val);
     1
+}
+
+/// Whether `r`, a store's result, is a read-only table's refusal; if so,
+/// park a deopt request, as for a table with a metatable, so that the
+/// interpreter runs the call again and raises the error. For the helpers
+/// no compiler emits any more, which any caller may hand any table.
+fn refused(vm: &mut luna_core::vm::Vm, r: Result<(), luna_core::runtime::TableError>) -> bool {
+    if r == Err(luna_core::runtime::TableError::ReadOnly) {
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table is read-only"));
+        return true;
+    }
+    false
 }
 
 /// The write barrier for a store of `key` / `val` into `g`, as the
@@ -423,7 +446,8 @@ pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
     // SAFETY: `t` is a live table (# Safety); `g` is not dereferenced again
     // while `table` is in use, and `Table::set*` never runs the collector
     let table = unsafe { g.as_mut() };
-    let _ = table.set_int(&mut vm.heap, key, luna_core::runtime::Value::Nil);
+    let r = table.set_int(&mut vm.heap, key, luna_core::runtime::Value::Nil);
+    refused(vm, r);
 }
 
 /// Float-key, Float-value variant. luna 5.1 / 5.2 lower
@@ -456,7 +480,7 @@ pub unsafe extern "C" fn luna_jit_table_set_float_float(t: i64, key_bits: i64, v
     let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
     let v = luna_core::runtime::Value::Float(f64::from_bits(val_bits as u64));
     // a NaN key raises; the interpreter re-runs the call and reports it
-    if table.set(&mut vm.heap, k, v).is_err() {
+    if table.set_unguarded(&mut vm.heap, k, v).is_err() {
         vm.jit.pending_err = Some(vm.rt_err("JIT deopt: invalid table key"));
     }
 }

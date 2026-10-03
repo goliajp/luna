@@ -275,7 +275,7 @@ pub(super) fn t_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         let tm = unsafe { t.as_mut() };
         for i in 0..nargs {
             let v = vm.nat_arg(fs, nargs, i);
-            let _ = tm.set_int(&mut vm.heap, i as i64 + 1, v);
+            let _ = tm.set_int_raw(&mut vm.heap, i as i64 + 1, v);
         }
         let nk = Value::Str(vm.heap.intern(b"n"));
         tm.set(&mut vm.heap, nk, Value::Int(nargs as i64))

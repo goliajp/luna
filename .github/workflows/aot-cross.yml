@@ -1,13 +1,17 @@
 name: aot-cross
 
 # Cross-compile matrix expansion. Tier-1 targets (macOS aarch64,
-# Linux x86_64, Linux musl, Windows MinGW, Windows MSVC native-host
-# build, Mach-O cross) are covered elsewhere. This workflow adds
+# Linux x86_64, Linux musl, Mach-O cross, and Windows MSVC + MinGW
+# built and run natively on ci.yml's windows-latest leg) are covered
+# elsewhere. This workflow adds
 # tier-2 coverage:
 #
 # - RISC-V 64-bit (build-only — no actual run on real hardware)
 # - s390x (build-only — same)
 # - Wine MinGW PE actual-run on a Linux host (build + run)
+#
+# The Wine and Alpine jobs also build one tiny program per dialect
+# (5.1-5.5) and check that each binary reports its own dialect.
 #
 # Run conditions:
 # - Push to develop / master
@@ -180,6 +184,25 @@ jobs:
             *) echo "::error::hello.exe did not produce the expected output under wine"; exit 1 ;;
           esac
 
+      # a binary must run its script on a Vm of the dialect it was built
+      # for: one tiny program per dialect, checked by the _VERSION it prints
+      - name: one program per dialect under wine
+        env:
+          WINEDEBUG: "-all"
+        run: |
+          set -eu
+          for d in 5.1 5.2 5.3 5.4 5.5; do
+            echo 'print(_VERSION)' > /tmp/dialect.lua
+            cargo run -q -p luna-aot --release -- compile /tmp/dialect.lua \
+              --dialect "$d" --target x86_64-pc-windows-gnu --out "/tmp/dialect-$d.exe"
+            OUT=$("$WINE_BIN" "/tmp/dialect-$d.exe" 2>&1) || true
+            echo "$d: $OUT"
+            case "$OUT" in
+              *"Lua $d"*) ;;
+              *) echo "::error::dialect $d binary printed: $OUT"; exit 1 ;;
+            esac
+          done
+
   # ─────────────────────────────────────────────────────────────────
   # Alpine musl native E2E: in a real Alpine container (rather than
   # the GH runner's glibc), build + run a luna-aot binary against
@@ -230,3 +253,16 @@ jobs:
             *"hello from luna-aot on alpine musl"*) echo "E2E ok" ;;
             *) echo "unexpected output"; exit 1 ;;
           esac
+
+      - name: one program per dialect
+        run: |
+          set -eu
+          export LUNA_AOT_RUNTIME_HELPERS_STATICLIB="$PWD/target/x86_64-unknown-linux-musl/release/libluna_runtime_helpers.a"
+          for d in 5.1 5.2 5.3 5.4 5.5; do
+            echo 'print(_VERSION)' > /tmp/dialect.lua
+            ./target/x86_64-unknown-linux-musl/release/luna-aot compile /tmp/dialect.lua \
+              --dialect "$d" --out "/tmp/dialect-$d"
+            OUT=$("/tmp/dialect-$d")
+            echo "$d: $OUT"
+            [ "$OUT" = "Lua $d" ] || { echo "dialect $d binary printed: $OUT"; exit 1; }
+          done

@@ -249,8 +249,18 @@ impl Vm {
             // pointer as an Int payload). The interpreter runs this entry;
             // the trace stays for later ones. The payload of anything else
             // cannot stand for the value.
-            if tag != want || !crate::jit::trace::entry_tag_enterable(tag) {
+            use crate::runtime::value::raw;
+            if tag != want {
+                // a trace compiled for a boolean takes either value
+                if want != raw::FALSE || tag != raw::TRUE {
+                    return false;
+                }
+            } else if !crate::jit::trace::entry_tag_enterable(tag) {
                 return false;
+            }
+            if want == raw::FALSE {
+                // a boolean enters as payload 0 or 1
+                regs[i] = i64::from(tag - want);
             }
             tags[i] = tag;
         }

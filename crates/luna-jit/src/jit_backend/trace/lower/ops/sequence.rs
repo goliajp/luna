@@ -153,23 +153,24 @@ pub(super) fn emit_sequence_op<E: Emit>(
                 let k = lw.current_kinds[off + slot];
                 let slot_arg = lw.bcx.ins().iconst(types::I64, slot as i64);
                 let raw_arg = lw.bcx.use_var(regs[slot]);
-                let tag_byte_opt = match k {
+                let tag_opt = match k {
                     // an operand is read, so never held on the stack
                     RegKind::StackHeld => return None,
-                    k => known_tag(k),
+                    k => emit_kind_tag(&mut lw.bcx, k, raw_arg),
                 };
-                if let Some(tag_byte) = tag_byte_opt {
-                    let tag_arg = lw.bcx.ins().iconst(types::I64, tag_byte as i64);
+                if let Some(tag_arg) = tag_opt {
                     lw.bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
                 } else {
                     lw.bcx.ins().call(update_raw_ref, &[slot_arg, raw_arg]);
                 }
             }
-            // Call helper.
+            // the concat steps the collector: the operands are on the
+            // stack now and the registers below them go as roots
+            let roots = emit_ssa_roots(lw, i, off + a_us);
             let a_arg = lw.bcx.ins().iconst(types::I64, a_us as i64);
             let n_arg = lw.bcx.ins().iconst(types::I64, n_operands as i64);
             let func_ref = lw.bcx.import_func(op_concat_id);
-            let call_inst = lw.bcx.ins().call(func_ref, &[a_arg, n_arg]);
+            let call_inst = lw.bcx.ins().call(func_ref, &[a_arg, n_arg, roots]);
             let status = lw.bcx.inst_results(call_inst)[0];
             // -1: an error or `__concat`; the interpreter redoes the op
             let ok = lw.bcx.ins().icmp_imm_s(IntCC::Equal, status, 0);

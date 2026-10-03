@@ -141,3 +141,39 @@ pub unsafe extern "C" fn luna_jit_self_upval_check(idx: i64) -> i64 {
 pub unsafe extern "C" fn luna_jit_head_closure() -> i64 {
     JIT_CL.with(|c| c.get()) as i64
 }
+
+/// The trace JIT's typed read of upvalue `idx` of `cl`, a function the trace
+/// inlined; see `checked_read`. Also fails for an upvalue open at a
+/// register of the trace's own frames, whose value the trace may hold only
+/// in its registers.
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread;
+/// `cl` is a live Lua closure with more than `idx` upvalues, and `out` is
+/// valid for writing one `i64`.
+// SAFETY: no other item in the link is named `luna_jit_upval_of_checked`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_upval_of_checked(
+    cl: i64,
+    idx: i64,
+    want_tag: i64,
+    out: *mut i64,
+) -> i64 {
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent
+    // to this call; `cl` is a live Lua closure
+    let (vm, cl) = unsafe {
+        (
+            current_jit_vm(),
+            luna_core::runtime::Gc::from_ptr(cl as *mut luna_core::runtime::LuaClosure),
+        )
+    };
+    let Some(head) = vm.jit_last_lua_frame() else {
+        return 0;
+    };
+    match vm.jit_upval_below(cl, idx as u32, head.base) {
+        // SAFETY: `out` is writable (# Safety)
+        Some(v) => unsafe { checked_read(v, want_tag, out) },
+        None => 0,
+    }
+}
