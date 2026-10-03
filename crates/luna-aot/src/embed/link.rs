@@ -3,6 +3,8 @@
 use std::fs;
 use std::path::Path;
 
+use luna_core::version::LuaVersion;
+
 use object::write::{Object, Symbol, SymbolSection};
 use object::{SectionKind, SymbolKind, SymbolScope};
 
@@ -205,8 +207,13 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
 /// Target-aware variant of [`write_aot_cmain_object`]. Generates the
 /// same C source but invokes the target-specific cc driver so the
 /// produced `.o` has the right ABI.
-pub(super) fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), AotError> {
+pub(super) fn write_aot_cmain_object_for(
+    out: &Path,
+    target: &TargetSpec,
+    version: LuaVersion,
+) -> Result<(), AotError> {
     let placeholder = section_placeholders(target);
+    let dialect = dialect_code(version);
 
     let c_src = format!(
         r#"#include <stddef.h>
@@ -214,14 +221,14 @@ pub(super) fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Res
 
 extern uint8_t __luna_bytecode_start[];
 extern uint8_t __luna_bytecode_end[];
-extern int luna_aot_run(const uint8_t *bytecode, size_t len);
+extern int luna_aot_run_dialect(const uint8_t *bytecode, size_t len, uint32_t dialect);
 
 {placeholder}
 
 int main(int argc, char **argv) {{
     (void)argc; (void)argv;
     size_t len = (size_t)(__luna_bytecode_end - __luna_bytecode_start);
-    return luna_aot_run(__luna_bytecode_start, len);
+    return luna_aot_run_dialect(__luna_bytecode_start, len, {dialect});
 }}
 "#
     );
@@ -388,4 +395,19 @@ pub(super) fn link_aot_binary_for(
         )));
     }
     Ok(())
+}
+
+/// The number `luna_aot_run_dialect` in `luna-runtime-helpers` maps back to
+/// `version` (its `dialect_code`). The two crates do not depend on each
+/// other, so the table is written twice; the per-dialect end-to-end tests
+/// fail if they disagree.
+fn dialect_code(version: LuaVersion) -> u32 {
+    match version {
+        LuaVersion::Lua51 => 51,
+        LuaVersion::Lua52 => 52,
+        LuaVersion::Lua53 => 53,
+        LuaVersion::Lua54 => 54,
+        LuaVersion::Lua55 => 55,
+        LuaVersion::MacroLua => 254,
+    }
 }

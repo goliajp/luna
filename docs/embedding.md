@@ -840,7 +840,8 @@ releases). The public contract:
 - `luna_aot::{BYTECODE_START_SYMBOL, BYTECODE_END_SYMBOL,
   BYTECODE_SECTION_NAME}` (AOT ABI constants); `cli`,
   `embed` modules
-- `luna_runtime_helpers::{run_bytecode, force_link_*}`;
+- `luna_runtime_helpers::{run_bytecode, run_bytecode_as, dialect_code,
+  dialect_from_code, force_link_*}`;
   `aot_*_resolver` modules (AOT metadata ABI)
 
 ### Unstable / internal — may break in minor
