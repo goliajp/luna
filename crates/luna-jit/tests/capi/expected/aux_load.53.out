@@ -1,0 +1,39 @@
+loadbuffer: status=0 call=0: top=2 2
+loadbuffer syntax: status=3: top=2 [buf:1: unexpected symbol near <eof>]
+loadbuffer at name: status=0 call=2: top=2 [file.lua:1: e]
+loadbuffer plain name: status=0 call=0: top=1
+loadbuffer long name: status=3: top=2 [[string "a very long chunk name that will not fit in t..."]:1: unexpected symbol near '=']
+loadbuffer embedded zero: status=0 call=0: top=2 [a\0b]
+loadbuffer empty: status=0 call=0: top=1
+loadstring: status=0 call=0: top=2 [str]
+loadstring syntax: status=3: top=2 [[string "return +"]:1: unexpected symbol near '+']
+loadstring hash: status=3: top=2 [[string "#!shebang..."]:1: unexpected symbol near '#']
+loadbufferx t: status=0 call=0: top=2 2
+loadbufferx b: status=3: top=2 [attempt to load a text chunk (mode is 'b')]
+loadbufferx bt: status=0 call=0: top=2 2
+loadbuffer binary: status=0 call=0: top=4 [binary]
+loadbufferx binary as t: status=3: top=4 [attempt to load a binary chunk (mode is 't')]
+loadfile binary: status=0 call=0: top=4 [binary]
+loadfilex binary as t: status=3: top=4 [attempt to load a binary chunk (mode is 't')]
+loadfile shebang binary: status=0 call=0: top=4 [binary]
+loadfile: status=0 call=0: top=2 [file]
+loadfile error line: status=3: top=2 [aux_load_tmp.lua:2: ')' expected near <eof>]
+loadfile shebang: status=0 call=2: top=2 [aux_load_tmp.lua:2: line]
+loadfile shebang only: status=0 call=0: top=1
+loadfile bom: status=3: top=2 [aux_load_tmp.lua:1: <eof> expected]
+loadfile bom shebang: status=3: top=2 [aux_load_tmp.lua:2: unexpected symbol]
+loadfile half bom: status=3: top=2 [aux_load_tmp.lua:1: unexpected symbol near '<\92239>']
+loadfile empty: status=0 call=0: top=1
+loadfile syntax: status=3: top=2 [aux_load_tmp.lua:1: unexpected symbol near 'return']
+loadfilex b of text: status=3: top=2 [attempt to load a text chunk (mode is 'b')]
+loadfile missing: status=7 top=2 prefix=1
+loadfile dir: status=7 top=2 prefix=1 detail=1
+loadfile stdin: status=0 call=0: top=2 [from stdin]
+loadfile stdin again: status=0 call=0: top=2
+dofile: top=3 10 20
+  status=0
+dofile missing: status=1 top=2
+dostring: top=3 [done] 2
+dostring error: top=2 [[string "error('dostring error')"]:1: dostring error]
+  status=1
+end: top=1 [keep]

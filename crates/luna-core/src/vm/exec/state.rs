@@ -139,6 +139,10 @@ pub struct Vm {
     /// The C API's warning function (`lua_setwarnf`), which replaces the
     /// default one; see [`super::host_c`].
     pub(crate) host_warn: Option<super::host_c::HostWarn>,
+    /// The C API's functions without upvalues, one per C function pointer:
+    /// from 5.2 on PUC's light C functions are equal when their pointers
+    /// are. GC roots.
+    pub(crate) host_light: std::collections::HashMap<usize, Value>,
     /// PUC 5.4+ warning system. Lua manual §6.1 `warn`: emitted messages
     /// concatenate across continuation calls until a non-`tocont` call
     /// flushes; the default warnf recognises `@on`/`@off` control messages

@@ -464,5 +464,12 @@ pub(super) fn new_c_closure(api: &mut Api, f: LuaCFunction, n: usize) -> Value {
     upvals.push(env);
     upvals.extend(ups);
     let trampoline: luna_core::runtime::value::NativeFn = ccall::capi_trampoline;
+    // from 5.2 on a C function without upvalues is a light C function,
+    // equal to every other push of the same pointer
+    if n == 0 && api.version() >= LuaVersion::Lua52 {
+        return api.vm.host_light_fn(f as usize, |vm| {
+            vm.native_with(trampoline, upvals.into_boxed_slice())
+        });
+    }
     api.vm.native_with(trampoline, upvals.into_boxed_slice())
 }

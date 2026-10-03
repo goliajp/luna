@@ -131,7 +131,10 @@ int main(void) {
   run(L, "checkinteger nil", f_checkinteger, "return nil");
   run(L, "checkinteger none", f_checkinteger, NULL);
   run(L, "checkinteger table", f_checkinteger, "return {}");
+#if LUA_VERSION_NUM >= 503
+  /* up to 5.2 the conversion is the CPU's */
   run(L, "checkinteger huge", f_checkinteger, "return 2^63");
+#endif
   run(L, "checknumber 1.5", f_checknumber, "return 1.5");
   run(L, "checknumber ' 0x10 '", f_checknumber, "return ' 0x10 '");
   run(L, "checknumber 'z'", f_checknumber, "return 'z'");

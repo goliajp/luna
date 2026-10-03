@@ -1,0 +1,65 @@
+_G direct:
+  returned 2 (top 2): table=global table
+  _G globals: _G coroutine print loadfile unpack
+  _G loaded: _G coroutine
+table direct:
+  returned 1 (top 1): table=global
+  table globals: table
+  table loaded: table
+os direct:
+  returned 1 (top 1): table=global
+  os globals: os
+  os loaded: os
+string direct:
+  returned 1 (top 1): table=global
+  string globals: string
+  string loaded: string
+  string methods: 0 xxx
+math direct:
+  returned 1 (top 1): table=global
+  math globals: math
+  math loaded: math
+debug direct:
+  returned 1 (top 1): table=global
+  debug globals: debug
+  debug loaded: debug
+_G call: status=0 results=2
+  _G globals: _G coroutine print loadfile unpack
+  _G loaded: _G coroutine
+package call: status=0 results=1
+  package globals: package require module
+  package loaded: package
+table call: status=0 results=1
+  table globals: table
+  table loaded: table
+io call: status=0 results=1
+  io globals: io
+  io loaded: io
+os call: status=0 results=1
+  os globals: os
+  os loaded: os
+string call: status=0 results=1
+  string globals: string
+  string loaded: string
+math call: status=0 results=1
+  math globals: math
+  math loaded: math
+debug call: status=0 results=1
+  debug globals: debug
+  debug loaded: debug
+openlibs: top=1
+  openlibs globals: _G package coroutine table io os string math debug require module print loadfile unpack
+  openlibs loaded: _G package coroutine table io os string math debug
+  package.loaded is _LOADED	true
+  require string	true
+  preload	table
+  version	Lua 5.1
+openlibs twice: top=0
+openlib dotted: top=1
+error: [[string "print('  reg.sub.a', reg.sub.a())..."]:1: attempt to call global 'print' (a nil value)]
+register again: top=1
+register clash: status=2: top=1 [name conflict for module 'clash']
+register NULL: top=2 b=function
+findtable new=NULL top=2
+findtable clash=n.z top=1
+top at end=0
