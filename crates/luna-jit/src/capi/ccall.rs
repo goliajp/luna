@@ -81,12 +81,17 @@ pub(super) struct PendingYield {
     pub(super) ctx: isize,
 }
 
-/// A thread's C hook (`lua_sethook`).
-#[derive(Clone, Copy, Default)]
+/// A thread's C hook (`lua_sethook`) and its debug-interface bookkeeping.
+#[derive(Default)]
 pub(super) struct CHook {
+    /// the hook `lua_sethook` installed, with its mask and count as given
     pub(super) func: Option<LuaHook>,
     pub(super) mask: c_int,
     pub(super) count: c_int,
+    /// the C hook running on this thread now
+    pub(super) running: Option<super::hooks::HookRun>,
+    /// the strings `lua_getinfo` and `lua_getlocal` handed out
+    pub(super) strs: super::debug::CStrings,
 }
 
 // SAFETY: the declarations match the definitions in `csrc/shim_core.c`;
@@ -184,7 +189,25 @@ pub(super) fn pop_call(l: *mut LuaState, co: Gc<Coro>, token: usize) {
     let (base, outer) = (c.base, c.outer_base);
     s.calls.truncate(token);
     s.base = outer;
+    s.tbc.retain(|&i| i < base);
     cstack(co).truncate(base);
+}
+
+/// Close the to-be-closed slots of call `token`'s frame as it leaves,
+/// passing the error it leaves with (`None`: it returns); an error a
+/// `__close` raises replaces that.
+fn close_frame(
+    vm: &mut Vm,
+    l: *mut LuaState,
+    token: usize,
+    err: Option<Value>,
+) -> Result<(), LuaError> {
+    let base = st(l).calls[token].base;
+    if !st(l).tbc.last().is_some_and(|&i| i >= base) {
+        return Ok(());
+    }
+    let mut api = Api { vm, l };
+    super::tbc::close_with(&mut api, base, err)
 }
 
 /// The C function of call `token` came back from C with `status`: finish
@@ -227,17 +250,21 @@ fn leave(
             return Err(LuaError(s));
         }
         let results: Vec<Value> = cstack(co)[top - n..].to_vec();
+        let closed = close_frame(vm, l, token, None);
         pop_call(l, co, token);
         let _ = nresults;
+        closed?;
         return Ok(vm.nat_return(fs, &results));
     }
     let err = take_error(l);
+    let closed = close_frame(vm, l, token, Some(err));
     pop_call(l, co, token);
+    closed?;
     Err(LuaError(err))
 }
 
 /// The error object being thrown: the top of the thread that raised it.
-fn take_error(l: *mut LuaState) -> Value {
+pub(super) fn take_error(l: *mut LuaState) -> Value {
     // SAFETY: `l` is live, so is its global record
     let from = unsafe { std::mem::replace(&mut (*(*l).g).err_from, std::ptr::null_mut()) };
     let from = if from.is_null() { l } else { from };

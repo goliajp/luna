@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include "shim.h"
 
+/* the stack the panic function sees, per version (Rust side) */
+void luna_capi_panic_prepare(lua_State *L);
+
 /* call f(L) under a fresh boundary: LUA_OK and its result count in *nret,
    or the status an error or yield inside threw */
 LUNA_HIDDEN int luna_c_protect(lua_State *L, lua_CFunction f, int *nret) {
@@ -59,8 +62,11 @@ LUNA_HIDDEN void luna_throw(lua_State *L, int status) {
     g->errjmp->status = status;
     longjmp(g->errjmp->b, 1);
   }
-  if (g->panic != NULL)
-    g->panic(g->err_from != NULL ? g->err_from : L);
+  if (g->panic != NULL) {
+    lua_State *from = g->err_from != NULL ? g->err_from : L;
+    luna_capi_panic_prepare(from);
+    g->panic(from);
+  }
   if (g->version == 501)
     exit(EXIT_FAILURE);
   abort();
@@ -71,9 +77,8 @@ LUNA_HIDDEN int luna_c_default_panic(lua_State *L) {
   const char *msg;
   if (G(L)->version >= 504) {
     size_t len;
-    msg = luna_capi_tolstring(L, -1, &len);
-    if (msg == NULL || luna_capi_type(L, -1) != 4)
-      msg = "error object is not a string";
+    msg = luna_capi_type(L, -1) == 4 ? luna_capi_tolstring(L, -1, &len)
+                                     : "error object is not a string";
   } else {
     size_t len;
     msg = luna_capi_tolstring(L, -1, &len);

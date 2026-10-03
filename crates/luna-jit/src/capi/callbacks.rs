@@ -1,55 +1,10 @@
-//! State-wide functions: the libraries, a first loader, globals, version.
+//! State-wide functions: globals and the version.
 
 use super::*;
 
-/// Open every standard library of the state's dialect (PUC
-/// `luaL_openlibs`).
-///
-/// # Safety
-/// `L` is a live thread of an open state, and no other API call on it is
-/// running other than a C function it is calling into.
-// SAFETY: no other item in the link is named `luaL_openlibs`: the host does
-// not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaL_openlibs(L: *mut LuaState) {
-    // SAFETY: the caller's contract (# Safety)
-    let api = unsafe { Api::new(L) };
-    api.vm.open_all_libs();
-}
-
-/// Compile `src` and push the function, or push the message and return
-/// `LUA_ERRSYNTAX` (PUC `luaL_loadstring`). As in PUC, the source itself
-/// is the chunk name, so messages name the chunk `[string "..."]`.
-///
-/// # Safety
-/// As [`luaL_openlibs`]; `src` is null or a NUL-terminated string.
-// SAFETY: no other item in the link is named `luaL_loadstring`: the host
-// does not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luaL_loadstring(L: *mut LuaState, src: *const c_char) -> c_int {
-    // SAFETY: the caller's contract (# Safety)
-    let mut api = unsafe { Api::new(L) };
-    // SAFETY: `src` is null or NUL-terminated (# Safety)
-    let Some(b) = (unsafe { c_bytes(src) }) else {
-        return LUA_ERRSYNTAX;
-    };
-    match api.vm.load(b, b) {
-        Ok(cl) => {
-            api.push(Value::Closure(cl));
-            LUA_OK
-        }
-        Err(e) => {
-            let s = api.str(format!("{e}").as_bytes());
-            api.push(s);
-            LUA_ERRSYNTAX
-        }
-    }
-}
-
-/// PUC `lua_getglobal`: push the global `name` (through `_G`'s
-/// `__index`) and return its type.
+/// PUC `lua_getglobal`: push the global `name` (through the globals'
+/// `__index`) and return its type (5.3+). The globals are 5.1's
+/// `LUA_GLOBALSINDEX`, later the registry's `LUA_RIDX_GLOBALS` entry.
 ///
 /// # Safety
 /// `L` is a live thread of an open state, the innermost API call on it;
@@ -62,24 +17,14 @@ pub unsafe extern "C" fn luna_capi_lua_getglobal(L: *mut LuaState, name: *const 
     let mut api = unsafe { Api::new(L) };
     // SAFETY: `name` is a NUL-terminated string (PUC's contract)
     let key = api.str(unsafe { c_bytes(name) }.unwrap_or_default());
-    let g = Value::Table(api.thread_globals());
+    let g = tables::globals_value(&mut api);
     api.push(key);
-    match api.vm.index_with_mm(g, key) {
-        Ok(v) => {
-            api.pop();
-            api.push(v);
-            type_tag(v)
-        }
-        Err(e) => {
-            api.pop();
-            api.raise(e);
-            LUA_TNIL
-        }
-    }
+    tables::index_into_top(&mut api, g, key)
 }
 
 /// PUC `lua_setglobal`: pop the top value into the global `name`
-/// (through `_G`'s `__newindex`).
+/// (through the globals' `__newindex`); the globals as for
+/// [`luna_capi_lua_getglobal`].
 ///
 /// # Safety
 /// As [`luna_capi_lua_getglobal`].
@@ -91,14 +36,15 @@ pub unsafe extern "C" fn luna_capi_lua_setglobal(L: *mut LuaState, name: *const 
     let mut api = unsafe { Api::new(L) };
     // SAFETY: `name` is a NUL-terminated string (PUC's contract)
     let key = api.str(unsafe { c_bytes(name) }.unwrap_or_default());
-    let g = Value::Table(api.thread_globals());
+    let g = tables::globals_value(&mut api);
     let v = api.get_or_nil(-1);
     api.push(key);
-    let r = api.vm.set_index_with_mm(g, key, v);
-    api.pop();
-    api.pop();
-    if let Err(e) = r {
-        api.raise(e);
+    match api.vm.host_set_index(g, key, v) {
+        Ok(()) => {
+            api.pop();
+            api.pop();
+        }
+        Err(e) => api.raise(e),
     }
 }
 
@@ -127,7 +73,8 @@ pub unsafe extern "C" fn luna_capi_lua_register(
 /// headers get from `luna_version_52`.
 ///
 /// # Safety
-/// As [`luaL_openlibs`].
+/// `L` is a live thread of an open state, and no other API call on it is
+/// running other than a C function it is calling into.
 // SAFETY: no other item in the link is named `lua_version`: the host does
 // not link PUC's liblua next to this crate, which defines each `lua_*`
 // symbol once
@@ -142,7 +89,8 @@ pub unsafe extern "C" fn lua_version(L: *mut LuaState) -> f64 {
 /// the dialect; null `L` asks for the library's own, as in PUC.
 ///
 /// # Safety
-/// `L` is null or as for [`luaL_openlibs`].
+/// `L` is null or a live thread of an open state, and no other API call
+/// on it is running other than a C function it is calling into.
 // SAFETY: no other item in the link is named `luna_version_52`: PUC's liblua
 // has no such symbol and this crate defines it once
 #[unsafe(no_mangle)]
@@ -165,7 +113,8 @@ pub unsafe extern "C" fn luna_version_52(L: *mut LuaState) -> *const f64 {
 /// value that is not a table is left alone.
 ///
 /// # Safety
-/// As [`luaL_openlibs`].
+/// `L` is a live thread of an open state, and no other API call on it is
+/// running other than a C function it is calling into.
 // SAFETY: no other item in the link is named `lua_enablereadonlytable`: the
 // host does not link PUC's or Redis's liblua next to this crate, which
 // defines each `lua_*` symbol once
