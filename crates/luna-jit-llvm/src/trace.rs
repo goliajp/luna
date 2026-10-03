@@ -175,12 +175,11 @@ pub(crate) fn try_compile_trace(
     // Park the engine so the JIT mmap stays alive for the Vm's lifetime.
     storage.park_engine(pair);
 
-    // SAFETY: `entry_ptr` was produced by LLVM's JIT execution engine for a
-    // function with the `TraceFn` signature (`unsafe extern "C" fn(*mut i64)
-    // -> i64`). The engine (and thus the mcode page) is kept alive by
-    // `LlvmJitStorage::engines` for the duration of the Vm that owns the
-    // storage. The transmute merely labels the raw fn pointer with the
-    // correct type; the mcode behind it satisfies the calling convention.
+    // SAFETY: `entry_ptr` is the address of `luna_jit_llvm_entry`, which
+    // `compile_trace_fn` declares as `i64 (i64)` with the C calling
+    // convention, the ABI of `TraceFn` (`*mut i64` passes as an i64).
+    // The code stays mapped while `storage` holds the engine, and the
+    // trace is stored in the same Vm's trace cache as that storage.
     let entry: TraceFn = unsafe { std::mem::transmute(entry_ptr) };
 
     // Build CompiledTrace with MVP defaults for all fields we don't
@@ -234,10 +233,11 @@ fn compile_trace_fn(
     head_pc: u32,
 ) -> Option<(*const u8, EnginePair)> {
     let ctx_box: Box<Context> = Box::new(Context::create());
-    // SAFETY: same `Box::into_raw` + field-order drop discipline as the chunk
-    // JIT; see `codegen::compile_compute_chunk` for the full rationale.
-    // The `'static` is upheld by keeping `ctx_box` alive in the returned
-    // `EnginePair::context` field (drop order: engine first, context second).
+    // SAFETY: the `Context` lives in a box whose address does not change
+    // when the box moves. The module, builder and IR values made from
+    // `ctx` are locals declared after `ctx_box`, so they drop first on
+    // every early return; `finalize_module` moves the box into the
+    // `EnginePair`, which drops the engine before the context.
     let ctx: &'static Context = unsafe { &*(ctx_box.as_ref() as *const Context) };
 
     let module = ctx.create_module("luna_jit_llvm_trace");
@@ -268,7 +268,7 @@ fn compile_trace_fn(
     let regs = builder.build_alloca(regs_ty, "regs").ok()?;
 
     // `reg_state` is arg 0, passed as i64 (pointer-as-integer via the
-    // TraceFn ABI: `unsafe extern "C" fn(*mut i64) -> i64`).
+    // TraceFn ABI: an `extern "C" fn(*mut i64) -> i64`).
     let rs_arg = function.get_nth_param(0)?.into_int_value();
     let ptr_type = ctx.ptr_type(inkwell::AddressSpace::default());
     let rs_ptr = builder.build_int_to_ptr(rs_arg, ptr_type, "rs_ptr").ok()?;

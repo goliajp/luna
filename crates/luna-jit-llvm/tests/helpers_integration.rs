@@ -17,6 +17,8 @@ use luna_core::vm::isa::Op;
 use luna_jit::LuaVersion;
 use luna_jit_llvm::{LlvmBackend, LlvmJitStorage};
 
+mod support;
+
 /// Parametric chunk with `num_params = 1`. The inner proto
 /// for `id(n) return n end` is literally `[Return1 R0, Return0]`; the
 /// JIT entry signature widens to `extern "C" fn(i64) -> i64` and the
@@ -58,16 +60,16 @@ fn parametric_chunk_id_one_param_returns_arg() {
     assert_eq!(num_args, 1, "1K.F.6: num_args matches num_params");
     assert!(returns_one);
 
-    // SAFETY: entry was just produced by `LlvmBackend::try_compile`
-    // and the engine pair is held alive by `storage` for the
-    // duration of this function; the IR declared exactly
-    // `fn(i64) -> i64` so the C-ABI transmute is sound.
-    let entry_fn: unsafe extern "C" fn(i64) -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    let r = unsafe { entry_fn(42) };
-    assert_eq!(r, 42, "id(42) == 42");
-    let r = unsafe { entry_fn(-7) };
-    assert_eq!(r, -7, "id(-7) == -7 (signed i64)");
+    // SAFETY: `entry` is from the `try_compile` above, for a function of
+    // one parameter, and `storage` is still alive
+    let (r1, r2) = unsafe {
+        (
+            support::call_chunk(entry, &[42]),
+            support::call_chunk(entry, &[-7]),
+        )
+    };
+    assert_eq!(r1, 42, "id(42) == 42");
+    assert_eq!(r2, -7, "id(-7) == -7 (signed i64)");
 }
 
 /// `num_params = 3`. Returns the third positional arg.
@@ -94,12 +96,16 @@ fn parametric_chunk_pass_three_params_returns_third() {
         panic!("expected Compiled, got {:?}", debug_compile_result(result));
     };
     assert_eq!(num_args, 3);
-    let entry_fn: unsafe extern "C" fn(i64, i64, i64) -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    let r = unsafe { entry_fn(10, 20, 30) };
-    assert_eq!(r, 30);
-    let r = unsafe { entry_fn(-1, -2, -3) };
-    assert_eq!(r, -3);
+    // SAFETY: `entry` is from the `try_compile` above, for a function of
+    // three parameters, and `storage` is still alive
+    let (r1, r2) = unsafe {
+        (
+            support::call_chunk(entry, &[10, 20, 30]),
+            support::call_chunk(entry, &[-1, -2, -3]),
+        )
+    };
+    assert_eq!(r1, 30);
+    assert_eq!(r2, -3);
 }
 
 /// Self-recursive `Op::Call`. The chunk
@@ -168,14 +174,19 @@ fn self_recursive_call_base_case() {
     assert_eq!(num_args, 1);
     assert!(returns_one);
 
-    let entry_fn: unsafe extern "C" fn(i64) -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    // Base case: n=0 → n < 1 true → return n.
-    let r = unsafe { entry_fn(0) };
-    assert_eq!(r, 0, "rec(0) base-case returns 0");
-    // Edge: n=-5 → n < 1 true → return n.
-    let r = unsafe { entry_fn(-5) };
-    assert_eq!(r, -5, "rec(-5) base-case returns -5");
+    // SAFETY: `entry` is from the `try_compile` above, for a function of
+    // one parameter; `storage` is alive and the guard above is held for
+    // the upvalue check helper
+    let (r1, r2) = unsafe {
+        (
+            // Base case: n=0 → n < 1 true → return n.
+            support::call_chunk(entry, &[0]),
+            // Edge: n=-5 → n < 1 true → return n.
+            support::call_chunk(entry, &[-5]),
+        )
+    };
+    assert_eq!(r1, 0, "rec(0) base-case returns 0");
+    assert_eq!(r2, -5, "rec(-5) base-case returns -5");
 }
 
 /// `Op::GetUpval` ValueRead via `luna_jit_upval_get` helper.
@@ -247,9 +258,10 @@ fn getupval_value_read_via_helper() {
     assert_eq!(num_args, 0);
 
     let _guard = backend.enter(&mut vm as *mut _, Some(inner_cl));
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    let r = unsafe { entry_fn() };
+    // SAFETY: `entry` is from the `try_compile` above, for a function with
+    // no parameters; `storage` is alive and the guard above is held for
+    // `luna_jit_upval_get`
+    let r = unsafe { support::call_chunk(entry, &[]) };
     assert_eq!(r, 10, "luna_jit_upval_get returned the k=10 raw bits");
 }
 

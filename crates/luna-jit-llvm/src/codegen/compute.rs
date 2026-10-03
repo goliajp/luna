@@ -42,13 +42,12 @@ use luna_core::vm::isa::{Inst, Op};
 ///                          immediate or integer constant
 pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
     let ctx_box: Box<Context> = Box::new(Context::create());
-    // SAFETY: `ctx_box` is heap-allocated and never moved out of the
-    // `EnginePair` it lands in via `finalize_module`. The static
-    // lifetime is a localised lie — the inkwell `ExecutionEngine`
-    // borrows from the context via this `&'static Context`, and the
-    // EnginePair's field declaration order (engine first, context
-    // second) ensures Rust drops the engine *before* the context, so
-    // the borrow stays live for the engine's observable lifetime.
+    // SAFETY: the `Context` lives in a box whose address does not
+    // change when the box moves. Everything made from `ctx_static`
+    // here (module, builder, types, values) is a local declared after
+    // `ctx_box`, so it drops first on every early return; on success
+    // `finalize_module` moves the box into the `EnginePair` next to the
+    // engine, whose field order drops the engine before the context.
     let ctx_static: &'static Context = unsafe { &*(ctx_box.as_ref() as *const Context) };
 
     let module = ctx_static.create_module("luna_jit_llvm_compute");
@@ -89,24 +88,6 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
     // levels (currently OptimizationLevel::None).
     let regs = builder.build_alloca(regs_ty, "regs").ok()?;
 
-    // Populate `regs[0..num_params]` from the fn
-    // arg list. After this prologue the lowerer sees param 0..N-1 as
-    // ordinary live register sources, identical to a chunk that
-    // bound them with `LoadI` / `Move`.
-    {
-        let zero_i64 = i64_type.const_zero();
-        for i in 0..plan.num_params {
-            let off = i64_type.const_int(i as u64, false);
-            let slot = unsafe {
-                builder
-                    .build_in_bounds_gep(regs_ty, regs, &[zero_i64, off], "param_slot")
-                    .ok()?
-            };
-            let arg = function.get_nth_param(i)?.into_int_value();
-            builder.build_store(slot, arg).ok()?;
-        }
-    }
-
     let mut emitter = ComputeEmitter {
         ctx: ctx_static,
         builder: &builder,
@@ -116,6 +97,16 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         regs,
         helpers: &helpers,
     };
+
+    // Populate `regs[0..num_params]` from the fn
+    // arg list. After this prologue the lowerer sees param 0..N-1 as
+    // ordinary live register sources, identical to a chunk that
+    // bound them with `LoadI` / `Move`.
+    for i in 0..plan.num_params {
+        let slot = emitter.reg_slot_ptr(i, "param_slot")?;
+        let arg = function.get_nth_param(i)?.into_int_value();
+        builder.build_store(slot, arg).ok()?;
+    }
 
     // Self-recursive calls are direct calls to this code, right only
     // while the upvalue they go through still holds the running closure.

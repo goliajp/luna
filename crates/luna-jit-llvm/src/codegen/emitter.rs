@@ -74,10 +74,11 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
     pub(super) fn reg_slot_ptr(&self, idx: u32, name: &str) -> Option<PointerValue<'ctx>> {
         let zero = self.i64_type.const_zero();
         let off = self.i64_type.const_int(idx as u64, false);
-        // SAFETY: `[0, idx]` indexes into a `[regs_ty x i64]` alloca
-        // sized `plan.num_regs`. `ChunkPlan::from_proto` checked that
-        // the largest A in the recognised ops fits; the per-op
-        // emitters below all clamp to the alloca's bounds.
+        // SAFETY: `regs` is an alloca of `plan.num_regs` slots, and
+        // every `idx` passed here is below it: `ChunkPlan::from_proto`
+        // sets `num_regs` to at least `num_params` (the prologue's
+        // indices) and rejects a chunk whose reachable ops name a
+        // register at or past it (`flow::registers_in_bounds`)
         unsafe {
             self.builder
                 .build_in_bounds_gep(self.regs_ty, self.regs, &[zero, off], name)
