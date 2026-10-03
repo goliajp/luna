@@ -145,7 +145,8 @@ impl Heap {
     /// reachability (PUC separatetobefnz(g, 1) at state close), so the VM can run
     /// every `__gc` before the heap is torn down.
     pub(crate) fn queue_all_finalizers(&mut self) {
-        for h in std::mem::take(&mut self.finalize) {
+        // newest first, as `separate_finalizables` orders them
+        for h in std::mem::take(&mut self.finalize).into_iter().rev() {
             // SAFETY: `finalize` entries are registered objects the sweep has not freed (see `finalizable_userdata`); only the flag byte is written
             unsafe { (*h).flags = ((*h).flags & !FIN) | FINALIZED };
             self.tobefnz.push(h);

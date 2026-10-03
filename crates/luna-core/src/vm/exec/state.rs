@@ -247,6 +247,8 @@ pub struct Vm {
     /// handling"); a host protected call compares it before and after to
     /// report that status instead of LUA_ERRRUN.
     pub(crate) errerr_raised: u64,
+    /// finalizer errors a 5.2/5.3 full collection raised (`LUA_ERRGCMM`)
+    pub(crate) gcmm_raised: u64,
     /// The value the last `xpcall` handler produced for the error in
     /// flight, so the unwind that carries it to the `xpcall` does not
     /// run the handler again.

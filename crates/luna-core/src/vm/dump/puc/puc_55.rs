@@ -152,9 +152,6 @@ pub(super) fn undump_puc_55(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, 
         )
         .into());
     }
-    if r.pos() != bytes.len() {
-        return Err(format!("{DIALECT} chunk: {} trailing bytes", bytes.len() - r.pos()).into());
-    }
     Ok(lower::build(heap, raw, &translate)?)
 }
 

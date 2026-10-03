@@ -395,12 +395,23 @@ pub(super) fn pcall_outcome(
     let err = vals.get(1).copied().unwrap_or(Value::Nil);
     cstack(co).truncate(at);
     cstack(co).push(err);
-    let errerr = vm.host_errerr_count() != errerr_before
-        && matches!(err, Value::Str(s) if s.as_bytes() == b"error in error handling");
-    Some(match (errerr, vm.version()) {
-        (false, _) => LUA_ERRRUN,
-        (true, LuaVersion::Lua52 | LuaVersion::Lua53) => 6,
-        (true, _) => LUA_ERRERR,
+    let special = vm.host_errerr_count() != errerr_before;
+    let v52 = matches!(vm.version(), LuaVersion::Lua52 | LuaVersion::Lua53);
+    Some(match err {
+        Value::Str(s) if special && s.as_bytes() == b"error in error handling" => {
+            if v52 {
+                6
+            } else {
+                LUA_ERRERR
+            }
+        }
+        // 5.2/5.3 LUA_ERRGCMM: a finalizer failed in a full collection
+        Value::Str(s)
+            if special && v52 && s.as_bytes().starts_with(b"error in __gc metamethod (") =>
+        {
+            5
+        }
+        _ => LUA_ERRRUN,
     })
 }
 

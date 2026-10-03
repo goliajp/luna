@@ -103,6 +103,9 @@ fn read_chunk(
 ) -> Result<Vec<u8>, Failure> {
     let l = api.l;
     let mut src = Vec::new();
+    // 5.1 peeks at the first character and then reads it again, so a
+    // reader that signals the end at once is asked a second time
+    let mut peeked = api.version() != LuaVersion::Lua51;
     loop {
         let mut size = 0usize;
         let mut status = LUA_OK;
@@ -115,6 +118,10 @@ fn read_chunk(
             return Err((status, take_error(l)));
         }
         if p.is_null() || size == 0 {
+            if src.is_empty() && !peeked {
+                peeked = true;
+                continue;
+            }
             break;
         }
         let first = src.is_empty();
