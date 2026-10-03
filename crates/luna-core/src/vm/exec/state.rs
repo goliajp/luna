@@ -47,9 +47,10 @@ pub struct Vm {
     pub(super) globals: Gc<Table>,
     /// shared metatable for all strings (populated by the string lib)
     /// per-basic-type metatables (PUC luaT): indexed by `type_mt_slot`
-    /// (0 nil, 1 boolean, 2 number, 3 string, 4 function); tables carry their
+    /// (0 nil, 1 boolean, 2 number, 3 string, 4 function, 5 light userdata,
+    /// 6 thread); tables and full userdata carry their
     /// own. Settable via debug.setmetatable.
-    pub(super) type_mt: [Option<Gc<Table>>; 5],
+    pub(super) type_mt: [Option<Gc<Table>>; 7],
     /// pre-interned metamethod event names, indexed by `Mm`
     pub(super) mm_names: [Gc<crate::runtime::LuaStr>; MM_NAMES.len()],
     /// the parser's vectors, kept from one `load` to the next
@@ -267,6 +268,16 @@ pub struct Vm {
     /// so `debug.getinfo(1).namewhat` resolves to `"hook"` (PUC
     /// `CIST_HOOKED`). `run_hook` arms it before dispatching the hook.
     pub(super) pending_is_hook: bool,
+    /// The C API's dispatcher of C hook functions: a thread whose hook
+    /// function is a light userdata has a C hook (`lua_sethook`), which
+    /// this runs; see [`super::host_c`].
+    pub(crate) host_hook: Option<super::host_c::HostHookFn>,
+    /// A C line or count hook asked to yield (`lua_yield` inside a hook);
+    /// acted on once the hooks of the instruction have run.
+    pub(crate) hook_yield: bool,
+    /// The running thread resumed from a hook's yield (5.2+
+    /// `CIST_HOOKYIELD`): the next hook check does not call the hook again.
+    pub(crate) hook_resumed: bool,
     /// traceback of an error nothing in its thread catches, one line per
     /// stack level, taken where it was raised (see `raise_to_handler`): what
     /// the host gets from `take_error_traceback`, and what `debug.traceback`

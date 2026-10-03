@@ -1,0 +1,5 @@
+c_yield	true	4004000	4002000
+c_maybe_yield	1000	-2499500
+wrap first	42
+wrap second	a	b
+wrap dead	false	cannot resume dead coroutine

@@ -88,6 +88,7 @@ impl Vm {
         co: Gc<Coro>,
         args: Vec<Value>,
     ) -> Result<Vec<Value>, LuaError> {
+        self.host_before_resume(co);
         match co.status {
             CoroStatus::Suspended => {}
             CoroStatus::Dead => return Err(self.plain_err("cannot resume dead coroutine")),
@@ -157,7 +158,7 @@ impl Vm {
         let (outcome, status) = if let Some(death) = self.terminating.take() {
             // the coroutine closed itself: it dies now, cleanly or with the
             // error a `__close` handler raised.
-            match death {
+            let r = match death {
                 Some(e) => {
                     // SAFETY: `co` is still `self.current`, a root, and the coroutine's frames have all unwound; the borrow covers one field store
                     unsafe { co.as_mut() }.error_value = Some(e);
@@ -165,7 +166,9 @@ impl Vm {
                     (Err(LuaError(e)), CoroStatus::Dead)
                 }
                 None => (Ok(Vec::new()), CoroStatus::Dead),
-            }
+            };
+            self.host_thread_reset(co);
+            r
         } else {
             match self.yielding.take() {
                 Some((vals, fslot, nres)) => {
@@ -262,6 +265,14 @@ impl Vm {
             .and_then(CallFrame::lua)
             .map(|f| (f.base + f.closure.proto.max_stack as u32) as usize)
             .unwrap_or(0);
+        if fslot == HOOK_YIELD_SLOT {
+            // a hook yielded: the instruction it interrupted runs now
+            if self.stack.len() < frame_need {
+                self.stack.resize(frame_need, Value::Nil);
+            }
+            self.hook_resumed = self.version >= LuaVersion::Lua52;
+            return self.exec_with(1);
+        }
         let need = frame_need.max((fslot + n) as usize);
         if self.stack.len() < need {
             self.stack.resize(need, Value::Nil);
