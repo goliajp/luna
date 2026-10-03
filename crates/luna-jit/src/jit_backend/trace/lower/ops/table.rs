@@ -113,8 +113,20 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
             // the helper reads the key as an integer
             let key_is_int = matches!(k_op(&lw.current_kinds, off as u32 + ins.c()), RegKind::Int);
             let key_is_str = matches!(k_op(&lw.current_kinds, off as u32 + ins.c()), RegKind::Str);
+            // a float key equal to an integer reads that integer's slot
+            // (the 5.1 / 5.2 loop variable); any other float leaves the
+            // trace at the op
+            let key_is_float = matches!(
+                k_op(&lw.current_kinds, off as u32 + ins.c()),
+                RegKind::Float
+            );
             match getx_want(inferred) {
-                Some((kind, want)) if key_is_int && kind != RegKind::Bool => {
+                Some((kind, want)) if (key_is_int || key_is_float) && kind != RegKind::Bool => {
+                    let key = if key_is_float {
+                        float_key_index(&mut lw.bcx, key)
+                    } else {
+                        key
+                    };
                     let v = array_read(lw, pl, oc, t, key, want);
                     lw.bcx.def_var(regs[ins.a() as usize], v);
                     lw.current_kinds[off + ins.a() as usize] = kind;
@@ -267,11 +279,18 @@ pub(super) fn emit_table_set_op<E: Emit>(
                 let constant = lw.const_str[off + ins.b() as usize];
                 return store_str_key(lw, pl, oc, t, key, val, val_kind, constant);
             }
-            let stored_inline = if key_kind == RegKind::Int {
-                let test = store_tests_readonly(lw, off + ins.a() as usize, t);
-                array_write(&mut lw.bcx, t, key, val, val_kind, test)
-            } else {
-                None
+            let stored_inline = match key_kind {
+                RegKind::Int => {
+                    let test = store_tests_readonly(lw, off + ins.a() as usize, t);
+                    array_write(&mut lw.bcx, t, key, val, val_kind, test)
+                }
+                // the helper on a miss stores by the float key itself
+                RegKind::Float => {
+                    let index = float_key_index(&mut lw.bcx, key);
+                    let test = store_tests_readonly(lw, off + ins.a() as usize, t);
+                    array_write(&mut lw.bcx, t, index, val, val_kind, test)
+                }
+                _ => None,
             };
             let done = emit_table_set(&mut lw.bcx, &set_ids, t, key, key_kind, val, val_kind);
             guard!(lw, pl, done, i, rop.pc);

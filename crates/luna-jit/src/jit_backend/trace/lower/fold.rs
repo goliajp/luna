@@ -215,7 +215,7 @@ pub(super) fn emit_fold<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>
                 emit_minmax_fold(lw, pl, oc, fold)?;
             }
             FoldKind::StrSub if fold.call_idx == i => {
-                emit_str_sub_fold(lw, oc, fold)?;
+                emit_str_sub_fold(lw, pl, oc, fold)?;
             }
             FoldKind::Min2 | FoldKind::Max2 | FoldKind::StrSub => {
                 // Silent: this index is either `start_idx`
@@ -228,28 +228,43 @@ pub(super) fn emit_fold<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>
     Some(())
 }
 
-/// A `string.sub` fold at its call: on a string and integers the trace
-/// knows as such; anything else is not compiled.
+/// A `string.sub` fold at its call: on a string and numbers the trace
+/// knows as such; anything else is not compiled. A float position equal
+/// to an integer is that integer in every dialect; any other float (which
+/// 5.1 / 5.2 round and 5.3+ reject) leaves the trace at the fold's start,
+/// whose argument set-up only writes the call's registers.
 fn emit_str_sub_fold<E: Emit>(
     lw: &mut Lower<E>,
+    pl: &Plan<'_>,
     oc: &OpCx<'_>,
     fold: &TraceMathFold,
 ) -> Option<()> {
     let RuntimeHelpers { str_sub_id, .. } = lw.h.rt;
+    let Plan { record, .. } = *pl;
     let off = oc.off;
     let regs: &[Variable] = oc.regs;
     let kind = |r: u32| k_op(&lw.current_kinds, off as u32 + r);
     let a = fold.dst_reg;
+    let number = |k| matches!(k, RegKind::Int | RegKind::Float);
     if kind(a + 1) != RegKind::Str
-        || kind(a + 2) != RegKind::Int
-        || fold.nargs == 3 && kind(a + 3) != RegKind::Int
+        || !number(kind(a + 2))
+        || fold.nargs == 3 && !number(kind(a + 3))
     {
         return None;
     }
     let s = lw.bcx.use_var(regs[a as usize + 1]);
-    let from = lw.bcx.use_var(regs[a as usize + 2]);
+    let pos = |lw: &mut Lower<E>, r: u32| {
+        let v = lw.bcx.use_var(regs[r as usize]);
+        if k_op(&lw.current_kinds, off as u32 + r) != RegKind::Float {
+            return v;
+        }
+        let (n, exact) = float_exact_int(&mut lw.bcx, v);
+        guard!(lw, pl, exact, oc.i, record.ops[fold.start_idx].pc);
+        n
+    };
+    let from = pos(lw, a + 2);
     let to = if fold.nargs == 3 {
-        lw.bcx.use_var(regs[a as usize + 3])
+        pos(lw, a + 3)
     } else {
         lw.bcx.ins().iconst(types::I64, -1)
     };
@@ -342,8 +357,12 @@ pub(super) fn emit_minmax_fold<E: Emit>(
             FoldKind::Max2 => lw.bcx.ins().fcmp(FloatCC::LessThan, a1, a2),
             FoldKind::Libm1 | FoldKind::StrSub => unreachable!(),
         };
-        let r = lw.bcx.ins().select(second_wins, a2, a1);
-        def_var_f64(&mut lw.bcx, regs[fold.dst_reg as usize], r);
+        // select on the bits: the baseline code generator selects
+        // integers only
+        let b2 = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), a2);
+        let b1 = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), a1);
+        let r = lw.bcx.ins().select(second_wins, b2, b1);
+        lw.bcx.def_var(regs[fold.dst_reg as usize], r);
         lw.current_kinds[off + fold.dst_reg as usize] = RegKind::Float;
     } else {
         // Int / Int — both operands are i64

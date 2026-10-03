@@ -80,9 +80,11 @@ fn check(src: &str, traced: &[LuaVersion]) {
     );
 }
 
-/// The versions whose numeric `for` runs as a trace (the trace JIT
-/// compiles the loop-count form of 5.4 on).
-const NUMERIC: [LuaVersion; 2] = [LuaVersion::Lua54, LuaVersion::Lua55];
+/// The versions whose numeric `for` runs as a trace: every one (5.1 / 5.2
+/// step a float index, 5.3 an integer one against the limit, 5.4 on count
+/// down). The loop's control registers are `A..=A+3` in each, so the body's
+/// own locals start at `A + 4` everywhere.
+const NUMERIC: [LuaVersion; 5] = VERSIONS;
 
 #[test]
 fn chain_of_tables_through_an_outer_local() {

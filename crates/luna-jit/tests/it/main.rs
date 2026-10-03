@@ -98,6 +98,7 @@ mod trace_loop_concat_edge_cases;
 mod trace_loop_coverage;
 mod trace_math_minmax_fold;
 mod trace_move_alias_escape;
+mod trace_numeric_for_dialects;
 mod trace_overflow_head_given_up;
 mod trace_readonly_tables;
 mod trace_recorder_clean_close;

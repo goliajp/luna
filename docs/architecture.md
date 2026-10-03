@@ -246,6 +246,18 @@ Key properties:
   more than one result, passes a variable number of arguments or enters
   a vararg function ends the trace instead.
 
+- **Numeric `for` in every dialect.** A trace closing at a numeric
+  `for` steps the loop the way the dialect's interpreter does: 5.4 / 5.5
+  integer loops count down a precomputed iteration count; 5.3 integer
+  loops add the step and compare with the limit (wrapping past
+  `math.maxinteger`, as PUC 5.3 does); float loops, which are every loop
+  in 5.1 / 5.2, add the step and compare with the limit, the step's sign
+  choosing the comparison. A float loop index is used as an array key
+  when it equals an integer. In 5.1 / 5.2 the recorder still stops at
+  arithmetic whose operands are all integers the VM keeps for doubles
+  (`#t + #u`): the trace would compute it in machine integers, without
+  the rounding doubles need.
+
 - **Vms can share compiled code.** The Vms an embedder builds through
   one `luna_jit::Engine` hand the traces and method-JIT functions they
   compile to it. Where another of them would record a trace (or compile
