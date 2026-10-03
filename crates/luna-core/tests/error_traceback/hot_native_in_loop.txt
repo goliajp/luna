@@ -1,0 +1,20 @@
+== 5.1
+stack traceback:
+	[C]: in function 'format'
+	hot_native_in_loop.lua:2: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'format'
+	hot_native_in_loop.lua:2: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'string.format'
+	hot_native_in_loop.lua:2: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'string.format'
+	hot_native_in_loop.lua:2: in main chunk
+== 5.5
+stack traceback:
+	[C]: in field 'format'
+	hot_native_in_loop.lua:2: in main chunk
