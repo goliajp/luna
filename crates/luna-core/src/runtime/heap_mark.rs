@@ -58,15 +58,23 @@ impl Marker {
     /// Mark a value, returning true if it was newly marked (was white).
     pub(crate) fn value(&mut self, v: Value) -> bool {
         let h = match v {
-            Value::Str(s) => s.as_ptr() as *mut GcHeader,
-            Value::Table(t) => t.as_ptr() as *mut GcHeader,
-            Value::Closure(c) => c.as_ptr() as *mut GcHeader,
-            Value::Native(n) => n.as_ptr() as *mut GcHeader,
-            Value::Coro(c) => c.as_ptr() as *mut GcHeader,
-            Value::Userdata(u) => u.as_ptr() as *mut GcHeader,
+            Value::Str(s) => s.header(),
+            Value::Table(t) => t.header(),
+            Value::Closure(c) => c.header(),
+            Value::Native(n) => n.header(),
+            Value::Coro(c) => c.header(),
+            Value::Userdata(u) => u.header(),
             _ => return false,
         };
-        self.header(h)
+        // SAFETY: `h` is the header of the object `v` holds a handle to
+        unsafe { self.header(h) }
+    }
+
+    /// [`Self::header`] for an object the caller holds a handle to.
+    #[inline(always)]
+    pub(crate) fn mark<T: GcObject>(&mut self, g: Gc<T>) -> bool {
+        // SAFETY: a handle's object is allocated, and a `GcObject` starts with its header
+        unsafe { self.header(g.header()) }
     }
 
     /// Mark a bare header, returning true if it was newly marked (was white).
@@ -75,9 +83,12 @@ impl Marker {
     /// pops it, traces children, and stamps it BLACK. With `leaf_black` set
     /// an object without children (a string, a native function without
     /// upvalues) goes straight to BLACK instead.
+    ///
+    /// # Safety
+    /// `h` is the header of an object this heap allocated and has not freed.
     #[inline(always)]
-    pub(crate) fn header(&mut self, h: *mut GcHeader) -> bool {
-        // SAFETY: every caller passes the header of an allocated object: a root, an extra root, a queued finalizable, or a child read out of an object being traced; nothing is freed while marking, and only the flag byte is touched
+    pub(crate) unsafe fn header(&mut self, h: *mut GcHeader) -> bool {
+        // SAFETY: `h` heads an allocated object (the caller's contract), and nothing is freed while marking; only the flag byte is touched
         unsafe {
             let f = (*h).flags;
             if is_white(f) {

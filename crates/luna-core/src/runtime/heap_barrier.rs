@@ -9,9 +9,9 @@ impl Heap {
     /// step traces it. Mirrors PUC `luaC_barrier_`. No-op outside Propagate
     /// (parent is gray or white — the mutator never sees a BLACK object live
     /// outside an incremental cycle).
-    #[allow(clippy::not_unsafe_ptr_arg_deref)] // Internal GC barrier; caller (Gc<T>::write_*) guarantees ptr validity per SAFETY below.
-    pub fn barrier_forward(&mut self, parent: *mut GcHeader, child: Value) {
-        // SAFETY: callers pass the header of an object they hold a live handle to, and `child` holds a live handle as well; only flag bytes are read and written, no reference to either object is formed
+    pub fn barrier_forward<T: GcObject>(&mut self, parent: Gc<T>, child: Value) {
+        let parent = parent.header();
+        // SAFETY: `parent` and `child` are handles, so both objects are allocated and kept reachable by their holders; a `GcObject` starts with its header, and only flag bytes are read and written, no reference to either object is formed
         unsafe {
             if !is_black((*parent).flags) {
                 return;
@@ -43,9 +43,9 @@ impl Heap {
     /// Mirrors PUC `luaC_barrierback_`. One call covers any number of
     /// subsequent stores until the next propagate finishes — much cheaper for
     /// tables than per-child forward barriers. No-op outside Propagate.
-    #[allow(clippy::not_unsafe_ptr_arg_deref)] // Internal GC barrier; caller (Gc<T>::write_*) guarantees ptr validity per SAFETY below.
-    pub fn barrier_back(&mut self, parent: *mut GcHeader) {
-        // SAFETY: callers pass the header of an object they hold a live handle to; only its flag byte is read and written
+    pub fn barrier_back<T: GcObject>(&mut self, parent: Gc<T>) {
+        let parent = parent.header();
+        // SAFETY: `parent` is a handle, so its object is allocated and kept reachable by its holder; a `GcObject` starts with its header, and only the flag byte is read and written
         unsafe {
             let f = (*parent).flags;
             if !is_black(f) {

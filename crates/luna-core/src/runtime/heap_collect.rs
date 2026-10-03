@@ -11,7 +11,7 @@ impl Heap {
 
     /// Like `collect`, with additional bare-object roots (e.g. the VM's open
     /// upvalues, which are not first-class Values).
-    pub(crate) fn collect_ex(&mut self, roots: &[Value], extra: &[*mut GcHeader]) -> usize {
+    pub(crate) fn collect_ex(&mut self, roots: &[Value], extra: &[Gc<Upvalue>]) -> usize {
         // a full STW collection subsumes any in-flight incremental cycle:
         // drive it to completion (Propagate → atomic → Sweep → Pause) so `all`
         // holds the whole heap again with all marks cleared, then run a fresh
@@ -35,7 +35,7 @@ impl Heap {
     /// / finalizer resurrection / current-white flip). After return all
     /// reachable objects are BLACK and `current_white` has flipped, so the
     /// caller's sweep tests `other-white` for dead. Does NOT change `phase`.
-    pub(super) fn mark_all(&mut self, roots: &[Value], extra: &[*mut GcHeader]) {
+    pub(super) fn mark_all(&mut self, roots: &[Value], extra: &[Gc<Upvalue>]) {
         // The gray queue starts as any barrier-grayed objects carried over
         // (each demoted from BLACK by a write barrier and awaiting re-trace),
         // and its buffer goes back to `gray` afterwards, so a collection
@@ -51,13 +51,14 @@ impl Heap {
         for &r in roots {
             m.value(r);
         }
-        for &h in extra {
-            m.header(h);
+        for &uv in extra {
+            m.mark(uv);
         }
         // objects already queued for finalization but not yet run must stay
         // alive until the VM calls their `__gc` (they may be unreachable now).
         for &h in &self.tobefnz {
-            m.header(h);
+            // SAFETY: a queued finalizable stays allocated until its `__gc` has run (`take_tobefnz`)
+            unsafe { m.header(h) };
         }
         drain_marker(&mut m);
         // ephemeron convergence: a weak-key entry's value is reachable only if
@@ -261,7 +262,7 @@ impl Heap {
     /// Begin an incremental mark cycle: seed the persistent gray queue from
     /// roots + extra + tobefnz + any barrier-carried gray, install a fresh
     /// PropagateState, and enter `GcPhase::Propagate`. Precondition: `Pause`.
-    pub(crate) fn gc_start_propagate(&mut self, roots: &[Value], extra: &[*mut GcHeader]) {
+    pub(crate) fn gc_start_propagate(&mut self, roots: &[Value], extra: &[Gc<Upvalue>]) {
         debug_assert!(self.phase == GcPhase::Pause);
         self.phase = GcPhase::Propagate;
         self.propagate = Some(PropagateState {
@@ -274,11 +275,12 @@ impl Heap {
         for &r in roots {
             m.value(r);
         }
-        for &h in extra {
-            m.header(h);
+        for &uv in extra {
+            m.mark(uv);
         }
         for &h in &self.tobefnz {
-            m.header(h);
+            // SAFETY: a queued finalizable stays allocated until its `__gc` has run (`take_tobefnz`)
+            unsafe { m.header(h) };
         }
         self.stash_marker(m);
     }
@@ -286,14 +288,14 @@ impl Heap {
     /// Mark `roots` / `extra` again before the atomic step (PUC `atomic`
     /// re-marks the running thread): what the mutator stored in them since
     /// `gc_start_propagate` survives this cycle. Precondition: `Propagate`.
-    pub(crate) fn gc_remark(&mut self, roots: &[Value], extra: &[*mut GcHeader]) {
+    pub(crate) fn gc_remark(&mut self, roots: &[Value], extra: &[Gc<Upvalue>]) {
         debug_assert!(self.phase == GcPhase::Propagate);
         let mut m = self.loan_marker();
         for &r in roots {
             m.value(r);
         }
-        for &h in extra {
-            m.header(h);
+        for &uv in extra {
+            m.mark(uv);
         }
         self.stash_marker(m);
     }

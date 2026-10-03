@@ -120,7 +120,30 @@ unsafe fn current_jit_closure() -> luna_core::runtime::Gc<luna_core::runtime::Lu
         !p.is_null(),
         "luna_jit_upval_get called outside an upval-aware enter_jit scope"
     );
-    luna_core::runtime::Gc::from_ptr(p as *mut luna_core::runtime::LuaClosure)
+    // SAFETY: inside a window opened with `Some(closure)` JIT_CL holds that
+    // closure, which the dispatcher keeps alive until the window closes
+    unsafe { luna_core::runtime::Gc::from_ptr(p as *mut luna_core::runtime::LuaClosure) }
+}
+
+/// The table whose pointer compiled code passed as a register payload.
+///
+/// # Safety
+/// `p` is the pointer of a live table.
+#[inline(always)]
+unsafe fn table_arg(p: i64) -> luna_core::runtime::Gc<luna_core::runtime::Table> {
+    // SAFETY: the caller's contract
+    unsafe { luna_core::runtime::Gc::from_ptr(p as *mut luna_core::runtime::Table) }
+}
+
+/// The string whose pointer compiled code passed as a register payload or
+/// baked in as a constant.
+///
+/// # Safety
+/// `p` is the pointer of a live string.
+#[inline(always)]
+unsafe fn str_arg(p: i64) -> luna_core::runtime::Gc<luna_core::runtime::LuaStr> {
+    // SAFETY: the caller's contract
+    unsafe { luna_core::runtime::Gc::from_ptr(p as *mut luna_core::runtime::LuaStr) }
 }
 
 /// The payload word of `v` as compiled code keeps a register: the

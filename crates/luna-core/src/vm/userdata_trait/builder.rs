@@ -136,8 +136,7 @@ impl<'vm, T: LuaUserdata> MetatableBuilder<'vm, T> {
             // SAFETY: as above
             unsafe { mt.as_mut() }.set(&mut vm.heap, Value::Str(k), v)?;
         }
-        vm.heap
-            .barrier_back(mt.as_ptr() as *mut crate::runtime::heap::GcHeader);
+        vm.heap.barrier_back(mt);
 
         Ok(mt)
     }

@@ -32,21 +32,21 @@ impl Table {
         let avals = self.avals();
         for (i, &tag) in atags.iter().enumerate() {
             if tag == raw::CORO {
-                // SAFETY: raw union access — the tag byte at the same index in `atags` was previously confirmed to be `co` (closure/object pointer) so the `co` variant of `RawVal` holds the valid payload.
-                let p = unsafe { avals[i].co } as *mut crate::runtime::heap::GcHeader;
-                if !header_is_marked(p) {
+                // SAFETY: the tag at this index is CORO, so the `co` field of the payload is the pointer of a coroutine this live table holds
+                let co = unsafe { Gc::from_ptr_unchecked(avals[i].co) };
+                if !header_is_marked(co) {
                     return true;
                 }
             }
         }
         for n in self.nodes().iter() {
             if let Value::Coro(co) = n.key()
-                && !header_is_marked(co.as_ptr() as *mut crate::runtime::heap::GcHeader)
+                && !header_is_marked(co)
             {
                 return true;
             }
             if let Value::Coro(co) = n.val
-                && !header_is_marked(co.as_ptr() as *mut crate::runtime::heap::GcHeader)
+                && !header_is_marked(co)
             {
                 return true;
             }
