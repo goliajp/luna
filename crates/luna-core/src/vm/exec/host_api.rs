@@ -301,6 +301,12 @@ impl Vm {
             return Ok(vs);
         }
         let r = self.call_value_impl(f, args, true);
+        if let Err(e) = r
+            && self.public_call_depth == 1
+            && self.current.is_none()
+        {
+            self.raise_native_to_host(e.0);
+        }
         self.public_call_depth -= 1;
         r
     }

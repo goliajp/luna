@@ -178,8 +178,13 @@ impl Vm {
                     // untouched dead stack does (db.lua :848 family).
                     if drive.is_err() {
                         let levels = self.error_traceback.take().unwrap_or_default();
-                        let tb =
-                            crate::vm::callstack::traceback_from_lines(self.version, &levels, 0);
+                        let mut tb = b"stack traceback:".to_vec();
+                        tb.extend(crate::vm::callstack::traceback_from_lines(
+                            self.version,
+                            &levels,
+                            0,
+                            0,
+                        ));
                         // SAFETY: `co` is still `self.current`, a root, and its frames have unwound, so `m` is the only reference into it for these two stores
                         let m = unsafe { co.as_mut() };
                         m.error_traceback = Some(tb);

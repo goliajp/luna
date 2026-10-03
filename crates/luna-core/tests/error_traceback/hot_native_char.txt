@@ -1,0 +1,25 @@
+== 5.1
+stack traceback:
+	[C]: in function 'char'
+	hot_native_char.lua:1: in function 'enc'
+	hot_native_char.lua:3: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'char'
+	hot_native_char.lua:1: in function 'enc'
+	hot_native_char.lua:3: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'string.char'
+	hot_native_char.lua:1: in local 'enc'
+	hot_native_char.lua:3: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'string.char'
+	hot_native_char.lua:1: in local 'enc'
+	hot_native_char.lua:3: in main chunk
+== 5.5
+stack traceback:
+	[C]: in field 'char'
+	hot_native_char.lua:1: in local 'enc'
+	hot_native_char.lua:3: in main chunk
