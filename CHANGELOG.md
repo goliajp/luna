@@ -101,6 +101,18 @@ optimization.
 
 ### Changed
 
+- The trace JIT compiles numeric `for` loops in the 5.1, 5.2 and 5.3
+  dialects, which it used to leave to the interpreter, and float loops
+  (`for x = 0, 1, 0.1`) in every dialect. Each dialect steps the loop as
+  PUC does: 5.1 and 5.2 add the step to a float index and compare it with
+  the limit, the comparison chosen by the step's sign; 5.3 does the same
+  in integers, wrapping past `math.maxinteger`, or in floats. To keep
+  such loops in the trace, traces also lower arithmetic between an
+  integer and a float, `/` of two integers, float `//` and `%` (each
+  dialect's modulo), ordered comparisons between an integer and a float,
+  table reads and writes keyed by a float equal to an integer, and
+  `string.sub` with such positions.
+
 - A trace follows calls into other Lua functions and runs them inline:
   methods found through a metatable's `__index` table (`o:m()`), local,
   upvalue and global functions, nested such calls. The inlined code is
@@ -233,6 +245,22 @@ optimization.
   about 20 fewer machine instructions each.
 
 ### Fixed
+
+- With an instruction budget armed (`Vm::set_instr_budget`,
+  `with_instr_budget`), a loop compiled into a trace ran without using up
+  the budget, so `for i = 1, 1e9 do end` outran it once the trace JIT
+  compiled the loop. Traces are no longer entered while a budget is
+  armed.
+
+- Numeric `for` in 5.1 and 5.2 ran as an integer loop when both its
+  initial value and its step were integers the VM keeps (results of `#`,
+  `select('#', ...)`, string lengths), and then followed 5.3's rules: a
+  float limit was rounded down, so with a zero step an index of 1 and a
+  limit of 1.5 looped for ever instead of not at all, and a NaN limit with
+  a zero or negative step looped for ever instead of not at all. These
+  dialects have only doubles, and such a loop is now a float loop as on
+  PUC. In 5.3, a zero step with a NaN or `-math.huge` limit now starts
+  the index at 0, as PUC's `forlimit` does.
 
 - A binary built with `luna-aot compile --dialect 5.1` (or 5.2, 5.3, 5.4,
   `macrolua`) ran its script on a Lua 5.5 `Vm`. A 5.3 or 5.4 binary

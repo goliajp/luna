@@ -246,6 +246,18 @@ Key properties:
   more than one result, passes a variable number of arguments or enters
   a vararg function ends the trace instead.
 
+- **Numeric `for` in every dialect.** A trace closing at a numeric
+  `for` steps the loop the way the dialect's interpreter does: 5.4 / 5.5
+  integer loops count down a precomputed iteration count; 5.3 integer
+  loops add the step and compare with the limit (wrapping past
+  `math.maxinteger`, as PUC 5.3 does); float loops, which are every loop
+  in 5.1 / 5.2, add the step and compare with the limit, the step's sign
+  choosing the comparison. A float loop index is used as an array key
+  when it equals an integer. In 5.1 / 5.2 the recorder still stops at
+  arithmetic whose operands are all integers the VM keeps for doubles
+  (`#t + #u`): the trace would compute it in machine integers, without
+  the rounding doubles need.
+
 - **Side traces** (compiled paths from frequently-taken side exits)
   attach back into the parent trace's exit table at runtime. This keeps
   branchy code from re-entering the interpreter just because a less-common
