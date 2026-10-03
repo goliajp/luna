@@ -10,7 +10,7 @@ use crate::version::LuaVersion as V;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::arg_error;
 use crate::vm::error::LuaError;
-use crate::vm::exec::Vm;
+use crate::vm::exec::{Vm, c_fmod};
 
 mod minmax;
 mod random;
@@ -327,7 +327,7 @@ fn m_fmod(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     }
     let x = argcheck::check_number(vm, a, 0)?;
     let y = argcheck::check_number(vm, a, 1)?;
-    Ok(vm.nat_return(fs, &[Value::Float(x % y)]))
+    Ok(vm.nat_return(fs, &[Value::Float(c_fmod(x, y))]))
 }
 
 fn m_modf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
