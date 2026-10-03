@@ -4,7 +4,7 @@ use super::*;
 
 /// Refill the input buffer; `false` at end of file.
 pub(super) fn fill(u: Gc<Userdata>) -> std::io::Result<bool> {
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` is a file handle the caller holds (a native argument or the default stream), so it is rooted; `m` is the only reference into it while the OS read runs, which runs no Lua code
     let m = unsafe { u.as_mut() };
     let mut chunk = vec![0u8; READ_CHUNK];
     let n = match m.file_mut() {
@@ -27,7 +27,7 @@ pub(super) fn getc(u: Gc<Userdata>) -> std::io::Result<Option<u8>> {
     if u.read_pos >= u.read_buf.len() && !fill(u)? {
         return Ok(None);
     }
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` is held by the caller; `fill`'s borrow has ended, and `m` is the only reference into it until return
     let m = unsafe { u.as_mut() };
     let b = m.read_buf[m.read_pos];
     m.read_pos += 1;
@@ -36,7 +36,7 @@ pub(super) fn getc(u: Gc<Userdata>) -> std::io::Result<Option<u8>> {
 
 /// `ungetc` of any number of bytes: the next reads return `bytes` first.
 pub(super) fn unget(u: Gc<Userdata>, bytes: &[u8]) {
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` is held by the caller; `m` is the only reference into it until return, and `bytes` is the caller's buffer, not the stream's
     let m = unsafe { u.as_mut() };
     if m.read_pos >= bytes.len() && m.read_buf[m.read_pos - bytes.len()..m.read_pos] == *bytes {
         m.read_pos -= bytes.len();
@@ -57,7 +57,7 @@ pub(super) fn read_ahead(u: Gc<Userdata>) -> i64 {
 /// (a write, a seek): the OS position is that far past the logical one.
 fn unread_ahead(u: Gc<Userdata>) -> std::io::Result<()> {
     let ahead = read_ahead(u);
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` is held by the caller; `read_ahead` returned before `m` was taken, and `m` is the only reference into it until return
     let m = unsafe { u.as_mut() };
     if ahead > 0
         && let FileHandle::File(f) = m.file_mut()
@@ -71,7 +71,7 @@ fn unread_ahead(u: Gc<Userdata>) -> std::io::Result<()> {
 
 /// Write `bytes` straight to the OS handle.
 fn write_to(u: Gc<Userdata>, bytes: &[u8]) -> std::io::Result<()> {
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` is held by the caller; the borrow lives for the one match, which runs no Lua code and takes no other reference into `u`
     match unsafe { u.as_mut() }.file_mut() {
         FileHandle::File(f) => f.write_all(bytes),
         FileHandle::Stdout => std::io::stdout().write_all(bytes),
@@ -84,7 +84,7 @@ fn write_to(u: Gc<Userdata>, bytes: &[u8]) -> std::io::Result<()> {
 /// Drain the output buffer to the OS. The buffer is emptied either way: C
 /// stdio drops what it failed to write and reports the error.
 pub(super) fn drain_write_buf(u: Gc<Userdata>) -> std::io::Result<()> {
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` is held by the caller; the borrow ends once the buffer is taken out
     let buf = std::mem::take(&mut unsafe { u.as_mut() }.write_buf);
     if buf.is_empty() {
         return Ok(());
@@ -99,7 +99,7 @@ pub(super) fn put_bytes(u: Gc<Userdata>, bytes: &[u8]) -> std::io::Result<()> {
         return write_to(u, bytes);
     }
     unread_ahead(u)?;
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` is held by the caller; `unread_ahead`'s borrow has ended, and `m` is not used after a `write_to` call takes its own
     let m = unsafe { u.as_mut() };
     match m.buf_mode {
         BUF_NO => write_to(u, bytes),
@@ -127,7 +127,7 @@ pub(super) const BUF_NO: u8 = 2;
 
 pub(super) fn flush_stream(u: Gc<Userdata>) -> std::io::Result<()> {
     drain_write_buf(u)?;
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` is held by the caller; `drain_write_buf`'s borrow has ended, and this one lives for the one match
     match unsafe { u.as_mut() }.file_mut() {
         FileHandle::File(f) => f.flush(),
         FileHandle::Stdout => std::io::stdout().flush(),

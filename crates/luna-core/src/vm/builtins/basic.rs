@@ -158,7 +158,7 @@ pub(super) fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
     if !vm.get_mm(Value::Table(t), Mm::Metatable).is_nil() {
         return Err(raise_str(vm, "cannot change a protected metatable"));
     }
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `t` is the table argument, kept alive by its stack slot; the borrow covers one call, and `mt` is a separate handle
     unsafe { t.as_mut() }.set_metatable(mt);
     // setmetatable links a long-lived table to a long-lived mt; barrier_back
     // so the new mt gets traced even if t was already black.

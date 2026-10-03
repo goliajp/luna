@@ -99,8 +99,9 @@ impl Vm {
         if self.stack.len() <= idx {
             self.stack.resize(idx + 1, Value::Nil);
         }
-        // SAFETY: caller (trace JIT IR emit) provides matching
-        // `(tag, raw_bits)` — same shape produced by Value::unpack.
+        // SAFETY: the trace passes a register's tag with the payload it
+        // holds, the shape `Value::unpack` produces; the fn is safe to call,
+        // so nothing but that convention ties `raw_bits` to `tag`
         let v = unsafe {
             crate::runtime::Value::pack(tag, crate::runtime::value::RawVal { zero: raw_bits })
         };
@@ -125,7 +126,7 @@ impl Vm {
             return;
         }
         let (tag, _) = self.stack[idx].unpack();
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `tag` is the slot's current tag, and the trace passes the payload of a value of that type (it calls this only for a slot the interpreter last left holding the same kind of value); the fn is safe to call, so nothing but that convention ties `raw_bits` to `tag`
         self.stack[idx] = unsafe {
             crate::runtime::Value::pack(tag, crate::runtime::value::RawVal { zero: raw_bits })
         };
@@ -197,7 +198,10 @@ impl Vm {
         if buf.is_null() {
             return;
         }
-        // SAFETY: `ptr` round-trips through `Box::into_raw` set up earlier in this dispatch (or owned by a long-lived VM handle); ownership re-acquired here.
+        // SAFETY: by the contract in the doc above, `buf` came from
+        // `Box::into_raw` in `jit_str_buf_acquire` on this Vm and is released
+        // once, so this takes back sole ownership; the signature is safe and
+        // does not enforce that contract
         let mut owned = unsafe { Box::from_raw(buf) };
         owned.clear();
         if self.jit.str_buf_pool.len() < self.jit.str_buf_pool_cap {
@@ -222,10 +226,10 @@ impl Vm {
         if buf.is_null() || str_ptr == 0 {
             return -1;
         }
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `buf` is non-null and, by the contract in the doc above, came from `jit_str_buf_acquire` on this Vm and is not released yet, so it is a live boxed `Vec` that only this call uses; the signature is safe and does not enforce that contract
         let buf = unsafe { &mut *buf };
         let lua_str_ptr = str_ptr as *const crate::runtime::string::LuaStr;
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `str_ptr` is non-zero and is the raw payload of a string register of the running trace, so it points at a string that register keeps alive; nothing here checks that the register holds a string (the signature is safe)
         let bytes = unsafe { crate::runtime::string::bytes_of(lua_str_ptr) };
         buf.extend_from_slice(bytes);
         0
@@ -246,7 +250,7 @@ impl Vm {
         if buf.is_null() {
             return 0;
         }
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `buf` is non-null and, by the contract in the doc above, came from `jit_str_buf_acquire` on this Vm and is not released yet; the signature is safe and does not enforce that contract
         let buf = unsafe { &mut *buf };
         let bytes = std::mem::take(buf);
         // hard cap at 256KB
@@ -342,19 +346,19 @@ impl Vm {
         // raw bits of R[A+2] / R[A+4] / R[A+5] so the trace IR can
         // reload via cranelift `stack_load` instead of separate
         // `luna_jit_stack_load` helper calls.
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: every `RawVal` `unpack` returns has all 8 bytes initialised (`RawVal::NIL` for nil and booleans), so reading them as `zero` is defined
         let ctrl_raw = unsafe { self.stack[(abs + 2) as usize].unpack().1.zero };
         let (key_tag, key_rv) = self.stack[(abs + 4) as usize].unpack();
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `key_rv` came from `unpack`, whose payload has all 8 bytes initialised
         let key_raw = unsafe { key_rv.zero };
         let (val_tag, val_raw) = if (nvars as usize) >= 2 {
             let (tag, rv) = self.stack[(abs + 5) as usize].unpack();
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            // SAFETY: `rv` came from `unpack`, whose payload has all 8 bytes initialised
             (tag, unsafe { rv.zero })
         } else {
             (0, 0u64)
         };
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: the trace passes three 8-byte slots of its own stack frame, valid and unaliased for this call; the signature is safe, so nothing enforces that for other callers
         unsafe {
             ctrl_out.write(ctrl_raw as i64);
             key_out.write(key_raw as i64);
@@ -379,7 +383,7 @@ impl Vm {
         }
         let v = self.stack[idx];
         let (_, raw) = v.unpack();
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `raw` came from `unpack`, whose payload has all 8 bytes initialised
         unsafe { raw.zero as i64 }
     }
 

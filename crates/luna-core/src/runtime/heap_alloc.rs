@@ -19,7 +19,7 @@ impl Heap {
                 crate::runtime::gc_verify_probe::FREED
                     .with(|f| f.borrow_mut().remove(&(t as usize)));
             }
-            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+            // SAFETY: `t` came off `table_pool`, which holds only tables `free_obj` unlinked from every list and emptied of their interior allocations; the pool's pointer was the only one, and these writes restore the fields left behind
             unsafe {
                 // Reset to fresh-Table state. Box-owned slab/nodes/
                 // metatable were already cleared in `free_obj` before
@@ -40,7 +40,7 @@ impl Heap {
         // the Table is now at its final heap address; wire
         // `array_ptr` to point at the inline storage that lives inside
         // the boxed Table.
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `g` is the table linked just above; no other handle or reference to it exists yet
         unsafe { g.as_mut() }.init_array_ptr();
         g
     }
@@ -141,7 +141,7 @@ impl Heap {
         // address so `upvals_ptr` will be valid.
         fill(&mut boxed);
         let g = self.adopt(boxed);
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `g` is the closure `adopt` just returned; no other handle or reference to it exists yet
         unsafe { g.as_mut() }.init_upvals_ptr();
         g
     }

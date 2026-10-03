@@ -8,7 +8,7 @@ use super::*;
 /// close. `writable` gives it a user-space output buffer.
 pub(super) fn new_file(vm: &mut Vm, fh: FileHandle, writable: bool) -> Gc<Userdata> {
     let u = vm.heap.new_userdata(UserdataPayload::File(fh), writable);
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` was allocated on the line above and no other handle to it exists yet; the borrow covers one call
     unsafe { u.as_mut() }.set_metatable(vm.file_mt);
     vm.heap.register_finalizable_userdata(u);
     u
@@ -79,7 +79,7 @@ pub(super) fn close_stream(u: Gc<Userdata>) -> Closed {
         return Closed::Std;
     }
     let flushed = drain_write_buf(u);
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` is a file handle the caller holds (a native argument on the stack, a registered finalizable, or the io library's default stream); `drain_write_buf`'s borrow has ended, and `m` is the only reference into it until return
     let m = unsafe { u.as_mut() };
     // dropping the handle closes the descriptor; for a pipe the child then
     // sees EOF before we wait for it
