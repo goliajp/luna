@@ -202,17 +202,26 @@ jobs:
   # job above.
   # ─────────────────────────────────────────────────────────────────
   repl-line-editor:
-    name: luna-jit --features repl-line-editor build + clippy
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} luna-jit --features repl-line-editor
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: Swatinem/rust-cache@v2
       - name: cargo build -p luna-jit --features repl-line-editor
         run: cargo build -p luna-jit --features repl-line-editor
       - name: cargo clippy -p luna-jit --bin luna --features repl-line-editor -- -D warnings
         run: cargo clippy -p luna-jit --bin luna --features repl-line-editor -- -D warnings
+      # piped stdin takes lua.c's plain-line path; on Windows the REPL also
+      # runs on a pseudo console, where the line editor reads the lines
+      - name: cargo test -p luna-jit --features repl-line-editor --test it -- cli_repl
+        run: cargo test -p luna-jit --features repl-line-editor --test it -- cli_repl
 
   # ─────────────────────────────────────────────────────────────────
   # feature="send" matrix coverage. SendVm is the
