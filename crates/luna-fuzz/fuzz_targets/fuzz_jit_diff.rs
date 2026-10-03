@@ -2,8 +2,10 @@
 //!
 //! Generates programs meant to get hot (bounded loops, recursion,
 //! closures, metatables, NaN / inf / -0, integer overflow, varargs) whose
-//! operand types and metatables change while traces run, then runs each
-//! twice in-process: with the JIT on and hot thresholds lowered (the
+//! operand types and metatables change while traces run, or whose
+//! compiled loops are entered again with NaN or another type, or that
+//! collect garbage while a trace holds new tables, then runs each twice
+//! in-process: with the JIT on and hot thresholds lowered (the
 //! method and trace JIT together for half the inputs, each alone for a
 //! quarter), and with the JIT off. The captured `print` output and the
 //! error message, if any, must be identical.
@@ -43,6 +45,12 @@ mod jit_stmts;
 
 #[path = "jit_hot.rs"]
 mod jit_hot;
+
+#[path = "jit_reentry.rs"]
+mod jit_reentry;
+
+#[path = "jit_gc.rs"]
+mod jit_gc;
 
 struct Outcome {
     out: String,
