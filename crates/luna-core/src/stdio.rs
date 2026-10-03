@@ -35,7 +35,7 @@ pub(crate) fn c_mode() -> bool {
 }
 
 /// `fwrite(bytes, 1, n, stdout)`. Errors are dropped, as `print` drops
-/// them; `io.write` uses [`try_write_stdout`].
+/// them; `io.write` reports them.
 pub fn write_stdout(bytes: &[u8]) {
     let _ = try_write_stdout(bytes);
 }
