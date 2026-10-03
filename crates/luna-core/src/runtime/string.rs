@@ -53,6 +53,9 @@ pub mod jit_layout {
     /// Byte offset of the `bool` that is true exactly for interned
     /// (short) strings. Two distinct interned strings are unequal.
     pub const STR_SHORT_OFFSET: usize = std::mem::offset_of!(LuaStr, short);
+    /// Byte offset of the `u32` hash (a short string's is set when it is
+    /// interned): its main position in a hash part is `hash & node_mask`.
+    pub const STR_HASH_OFFSET: usize = std::mem::offset_of!(LuaStr, hash);
 }
 
 /// Inline-bytes access MUST go through a pointer carrying the provenance of

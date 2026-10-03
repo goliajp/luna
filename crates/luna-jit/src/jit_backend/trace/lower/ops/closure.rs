@@ -8,7 +8,6 @@ pub(super) fn emit_closure_op<E: Emit>(
 ) -> Option<()> {
     let Plan {
         record,
-        head_proto,
         max_stack,
         effective_end,
         ..
@@ -35,7 +34,7 @@ pub(super) fn emit_closure_op<E: Emit>(
             // inline_depth == 0 + every in_stack source reg in
             // bounds. RegKind::Unset src → bail (no known tag).
             let bx = ins.bx() as usize;
-            let inner = head_proto.protos[bx];
+            let inner = rop.proto.protos[bx];
             let spill_ref = lw.bcx.import_func(spill_id);
             for d in inner.upvals.iter() {
                 if !d.in_stack {
@@ -43,11 +42,10 @@ pub(super) fn emit_closure_op<E: Emit>(
                 }
                 let src_idx = d.index as usize;
                 let src_kind = lw.current_kinds[off + src_idx];
-                // an untyped source cannot be packed to a Value
-                let tag_byte = known_tag(src_kind)?;
-                let slot_arg = lw.bcx.ins().iconst(types::I64, d.index as i64);
-                let tag_arg = lw.bcx.ins().iconst(types::I64, tag_byte as i64);
                 let raw_arg = lw.bcx.use_var(regs[src_idx]);
+                // an untyped source cannot be packed to a Value
+                let tag_arg = emit_kind_tag(&mut lw.bcx, src_kind, raw_arg)?;
+                let slot_arg = lw.bcx.ins().iconst(types::I64, d.index as i64);
                 lw.bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
             }
             let bx_arg = lw.bcx.ins().iconst(types::I64, ins.bx() as i64);
@@ -81,12 +79,12 @@ pub(super) fn emit_closure_op<E: Emit>(
             let spill_ref = lw.bcx.import_func(spill_id);
             for slot in a_us..max_stack {
                 let k = lw.current_kinds[off + slot];
-                let Some(tag_byte) = known_tag(k) else {
+                if k.untyped() {
                     continue;
-                };
-                let slot_arg = lw.bcx.ins().iconst(types::I64, slot as i64);
-                let tag_arg = lw.bcx.ins().iconst(types::I64, tag_byte as i64);
+                }
                 let raw_arg = lw.bcx.use_var(regs[slot]);
+                let tag_arg = emit_kind_tag(&mut lw.bcx, k, raw_arg).expect("typed");
+                let slot_arg = lw.bcx.ins().iconst(types::I64, slot as i64);
                 lw.bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
             }
             let a_arg = lw.bcx.ins().iconst(types::I64, ins.a() as i64);
@@ -111,6 +109,9 @@ pub(super) fn emit_closure_op<E: Emit>(
             //
             // memoize per upval idx via `upval_cache`.
             let idx_b = ins.b();
+            if !std::ptr::eq(rop.proto.as_ptr(), pl.head_proto.as_ptr()) {
+                return emit_frame_upval_op(lw, pl, oc);
+            }
             let v = if let Some(&cached_var) = lw.upval_cache.get(&idx_b) {
                 lw.bcx.use_var(cached_var)
             } else {
@@ -208,4 +209,56 @@ fn checked_upval_read<E: Emit>(
         lw.bcx.def_var(var, v);
     }
     Some(lw.bcx.use_var(var))
+}
+
+/// `GetUpval` in a function of another proto the trace inlined: read
+/// through that frame's own closure, typed by the value the recording saw.
+fn emit_frame_upval_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<()> {
+    let OpCx { i, off, ins, .. } = *oc;
+    let Some(kind) = pl
+        .record
+        .result_tag(i)
+        .and_then(RegKind::from_entry_tag)
+        .filter(|k| !matches!(k, RegKind::Nil | RegKind::Bool))
+    else {
+        checkpoint("bail:inline-upval-untyped");
+        return None;
+    };
+    let v = frame_upval_read(lw, pl, oc, ins.b(), kind_tag(kind));
+    lw.bcx.def_var(oc.regs[ins.a() as usize], v);
+    lw.current_kinds[off + ins.a() as usize] = kind;
+    Some(())
+}
+
+/// Upvalue `idx` of the closure running the inlined frame of op `oc` (the
+/// value its caller called, one below the frame's window), checked to
+/// have raw tag `want`; the trace leaves at the op otherwise.
+pub(super) fn frame_upval_read<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    oc: &OpCx<'_>,
+    idx: u32,
+    want: u8,
+) -> Value {
+    let RuntimeHelpers {
+        upval_of_checked_id,
+        ..
+    } = lw.h.rt;
+    let OpCx { i, rop, off, .. } = *oc;
+    let cl = lw.bcx.use_var(lw.regs_full[off - 1]);
+    let idx_arg = lw.bcx.ins().iconst(types::I64, i64::from(idx));
+    let ss = lw
+        .bcx
+        .create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+            8,
+            3,
+        ));
+    let out = lw.bcx.ins().stack_addr(types::I64, ss, 0);
+    let want_arg = lw.bcx.ins().iconst(types::I64, i64::from(want));
+    let f = lw.bcx.import_func(upval_of_checked_id);
+    let call = lw.bcx.ins().call(f, &[cl, idx_arg, want_arg, out]);
+    let ok = lw.bcx.inst_results(call)[0];
+    guard!(lw, pl, ok, i, rop.pc);
+    lw.bcx.ins().stack_load(types::I64, types::I64, ss, 0)
 }

@@ -318,7 +318,6 @@ pub(super) fn start_accum<E: Emit>(
 pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> (Option<Block>, Block) {
     let Plan {
         record,
-        head_proto,
         effective_end,
         ..
     } = *pl;
@@ -330,7 +329,7 @@ pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> (Option<Blo
     // checked once, in `precheck` before the loop head, rather than on
     // every iteration.
     let fold_check_once = !record.ops[..effective_end].iter().any(|rop| {
-        let key = |k: u32| match head_proto.consts.get(k as usize) {
+        let key = |k: u32| match rop.proto.consts.get(k as usize) {
             Some(luna_core::runtime::Value::Str(s)) => Some(s.as_bytes()),
             _ => None,
         };

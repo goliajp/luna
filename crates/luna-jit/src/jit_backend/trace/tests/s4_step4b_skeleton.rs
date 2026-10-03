@@ -63,9 +63,16 @@ fn helper_with_no_lua_frame_returns_deopt() {
     let metas: [FrameMaterializeInfo; 0] = [];
     let r = {
         let _g = crate::jit_backend::enter_jit(&mut vm, Some(cl));
-        // SAFETY: the guard above installed the vm and the closure the
-        // helper reads, and `metas` holds the count it is given
-        unsafe { crate::jit_backend::luna_jit_trace_materialize_frames(0, metas.as_ptr()) }
+        let closures: [i64; 0] = [];
+        // SAFETY: the guard above installed the vm the helper reads, and
+        // `metas` / `closures` hold the count it is given
+        unsafe {
+            crate::jit_backend::luna_jit_trace_materialize_frames(
+                0,
+                metas.as_ptr(),
+                closures.as_ptr(),
+            )
+        }
     };
     assert_eq!(r, -1, "no live Lua frame → helper returns deopt sentinel");
 }
@@ -109,9 +116,16 @@ fn helper_pushes_one_inlined_frame_with_correct_metadata() {
     }];
     let r = {
         let _g = crate::jit_backend::enter_jit(&mut vm, Some(cl));
-        // SAFETY: the guard above installed the vm and the closure the
-        // helper reads, and `metas` holds the count it is given
-        unsafe { crate::jit_backend::luna_jit_trace_materialize_frames(1, metas.as_ptr()) }
+        let closures = [cl.as_ptr() as i64];
+        // SAFETY: the guard above installed the vm the helper reads, and
+        // `metas` / `closures` hold the count it is given (`cl` is live)
+        unsafe {
+            crate::jit_backend::luna_jit_trace_materialize_frames(
+                1,
+                metas.as_ptr(),
+                closures.as_ptr(),
+            )
+        }
     };
     assert_eq!(r, 0, "successful push returns 0");
     // The just-pushed frame has base = head.base + 5 = 1 + 5 = 6,
@@ -155,7 +169,7 @@ fn per_exit_metas_populated_for_cmp_at_depth_one() {
     rec.push(RecordedOp {
         proto: p,
         pc: 1,
-        inst: Inst::iabc(Op::Call, 0, 1, 2, false), // A=0, C=2 → nresults 1
+        inst: Inst::iabc(Op::Call, 0, 3, 2, false), // A=0, C=2 → nresults 1
         inline_depth: 0,
         var_count: None,
     });
@@ -196,12 +210,11 @@ fn per_exit_metas_populated_for_cmp_at_depth_one() {
     assert_eq!(m.nresults, 1);
 }
 
-/// Op::Call with C != 2 (i.e. nresults != 1) bails
-/// the whole trace — the Op::Return1 copy-back assumes one
-/// value, and the helper passes through whatever `nresults` the
-/// meta says without validating.
+/// Op::Call with C = 3 (two results) is not inlined: the
+/// Op::Return1 copy-back gives one value. The trace ends at the call,
+/// which the interpreter makes.
 #[test]
-fn self_recursive_call_with_multiple_returns_bails() {
+fn a_call_wanting_two_results_ends_the_trace() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let p = load_proto(&mut vm, WIDE_SRC);
     let mut rec = TraceRecord::start(
@@ -225,7 +238,11 @@ fn self_recursive_call_with_multiple_returns_bails() {
         var_count: None,
     });
     rec.closed = true;
-    assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
+    let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec);
+    assert!(
+        ct.is_none_or(|ct| ct.per_exit_inline.is_empty()),
+        "the call was inlined"
+    );
 }
 
 #[test]
@@ -253,9 +270,16 @@ fn helper_pushes_multiple_frames_in_order() {
     ];
     let r = {
         let _g = crate::jit_backend::enter_jit(&mut vm, Some(cl));
-        // SAFETY: the guard above installed the vm and the closure the
-        // helper reads, and `metas` holds the count it is given
-        unsafe { crate::jit_backend::luna_jit_trace_materialize_frames(3, metas.as_ptr()) }
+        let closures = [cl.as_ptr() as i64; 3];
+        // SAFETY: the guard above installed the vm the helper reads, and
+        // `metas` / `closures` hold the count it is given (`cl` is live)
+        unsafe {
+            crate::jit_backend::luna_jit_trace_materialize_frames(
+                3,
+                metas.as_ptr(),
+                closures.as_ptr(),
+            )
+        }
     };
     assert_eq!(r, 0);
     // Innermost frame should match metas[2].

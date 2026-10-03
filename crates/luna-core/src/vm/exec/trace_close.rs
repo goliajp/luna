@@ -227,7 +227,7 @@ impl Vm {
                 Some(mut ct) => {
                     self.tally_compiled_trace(&ct);
                     self.wire_side_trace(&mut ct, &closed_record, head_proto);
-                    cache_trace(head_proto, ct);
+                    cache_compiled_trace(head_proto, ct, &closed_record);
                     self.jit.counters.compiled += 1;
                 }
                 None => {

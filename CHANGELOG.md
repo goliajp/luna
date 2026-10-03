@@ -23,6 +23,12 @@ optimization.
 
 ### Breaking
 
+- `luna_core::jit::trace::ExitTag` has a `Bool` variant and `TraceRecord`
+  the `index_slots` and `index_key` fields; the frame-materialise helper
+  `luna_jit_trace_materialize_frames` takes a third argument, the
+  closure of each frame. Code that builds these types by hand or matches
+  `ExitTag` exhaustively has to name the new parts.
+
 - The syntax tree in `luna_core::frontend::ast` no longer allocates per
   node. Every list in it (a block's statements, call arguments,
   expression lists, assignment targets, declared names, parameters,
@@ -94,6 +100,22 @@ optimization.
   that) instead of dereferencing it.
 
 ### Changed
+
+- A trace follows calls into other Lua functions and runs them inline:
+  methods found through a metatable's `__index` table (`o:m()`), local,
+  upvalue and global functions, nested such calls. The inlined code is
+  checked against the callee's function prototype, so it keeps running
+  when the closures are made again (each run of a chunk that defines
+  methods); an exit inside an inlined function resumes the interpreter
+  there with the call frames rebuilt. A call is inlined when it wants at
+  most one result, passes a fixed number of arguments and calls a
+  function that is not vararg; any other call still ends the trace.
+  `redis_lua_shape`'s method_dispatch runs its whole loop in one trace.
+- Booleans are a trace entry type: a loop whose registers hold `true` or
+  `false` when it gets hot is compiled, and one trace serves both values,
+  the branches on them guarded. `not`, boolean constants and comparisons
+  with `true` / `false` stay in the trace, as does the jump over an
+  `else` branch the recording did not take.
 
 - The bytecode verifier rejects a `GETFIELD`, `SETFIELD` or `SELF` whose
   constant key is not a string. luna's compiler and its translation of
@@ -214,8 +236,10 @@ optimization.
 
 - A trace whose entry reads a register holding a boolean could never be
   entered, yet it was compiled and kept its loop or function head, so no
-  trace ever ran there. Such a recording is no longer compiled, and the
-  head is recorded again once those registers hold other values.
+  trace ever ran there. Booleans now enter traces (see Changed); a
+  recording that reads a value no trace is entered with (a coroutine, a
+  userdata) is no longer compiled, and the head is recorded again once
+  those registers hold other values.
 - A Vm with no JIT backend that ran `eval_async` before
   `install_jit_backend` kept the method JIT off afterwards: the future's
   temporary switch-off counted as the embedder's own choice.

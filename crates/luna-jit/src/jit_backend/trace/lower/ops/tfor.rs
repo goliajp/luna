@@ -55,12 +55,12 @@ pub(super) fn emit_tfor_call_op<E: Emit>(
             let spill_kinds = lw.current_kinds.clone();
             let spill_slot = |bcx: &mut E, slot: usize| {
                 let k = spill_kinds[off + slot];
-                let Some(tag_byte) = known_tag(k) else {
+                if k.untyped() {
                     return;
-                };
-                let slot_arg = bcx.ins().iconst(types::I64, slot as i64);
-                let tag_arg = bcx.ins().iconst(types::I64, tag_byte as i64);
+                }
                 let raw_arg = bcx.use_var(regs[slot]);
+                let tag_arg = emit_kind_tag(bcx, k, raw_arg).expect("typed");
+                let slot_arg = bcx.ins().iconst(types::I64, slot as i64);
                 bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
             };
             if !is_ipairs_trace {

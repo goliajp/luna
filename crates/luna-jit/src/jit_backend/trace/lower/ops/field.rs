@@ -8,7 +8,6 @@ pub(super) fn emit_get_field_op<E: Emit>(
 ) -> Option<()> {
     let Plan {
         record,
-        head_proto,
         opts,
         effective_end,
         ..
@@ -58,7 +57,7 @@ pub(super) fn emit_get_field_op<E: Emit>(
                 _ => return None,
             }
             let t = lw.bcx.use_var(regs[ins.b() as usize]);
-            let key_v = match head_proto.consts[ins.c() as usize] {
+            let key_v = match rop.proto.consts[ins.c() as usize] {
                 luna_core::runtime::Value::Str(s) => s,
                 _ => unreachable!("pre-emit gates Str const at K[C]"),
             };
@@ -85,7 +84,9 @@ pub(super) fn emit_get_field_op<E: Emit>(
                         let enum_tag = match k {
                             RegKind::Int => tag::INT,
                             RegKind::Float => tag::FLOAT,
-                            _ => tag::TABLE,
+                            RegKind::Table => tag::TABLE,
+                            // the IC hands back the payload as it is
+                            _ => return false,
                         };
                         enum_tag == s.cached_val_tag
                     })
@@ -93,7 +94,18 @@ pub(super) fn emit_get_field_op<E: Emit>(
 
             let v = if ic_active {
                 emit_field_ic_read(lw, pl, oc, t, key_arg, want)
-            } else if let (Some(slot), Some((_, w))) = (record.field_slot(i), want) {
+            } else if let (
+                Some(slot),
+                Some((
+                    RegKind::Int
+                    | RegKind::Float
+                    | RegKind::Table
+                    | RegKind::Str
+                    | RegKind::Closure,
+                    w,
+                )),
+            ) = (record.field_slot(i), want)
+            {
                 emit_field_slot_read(lw, pl, oc, t, key_arg, slot, w)
             } else if let Some((_, w)) = want {
                 checked_read!(lw, pl, get_field_checked_id, t, key_arg, w, rop.pc, i)
@@ -124,7 +136,7 @@ pub(super) fn emit_get_field_op<E: Emit>(
 /// trace leaves for the interpreter when the slot no longer holds it (see
 /// `array_read`).
 #[allow(clippy::too_many_arguments)]
-fn emit_field_slot_read<E: Emit>(
+pub(super) fn emit_field_slot_read<E: Emit>(
     lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
@@ -161,7 +173,6 @@ pub(super) fn emit_get_tab_up_op<E: Emit>(
 ) -> Option<()> {
     let Plan {
         record,
-        head_proto,
         opts,
         effective_end,
         ..
@@ -183,8 +194,11 @@ pub(super) fn emit_get_tab_up_op<E: Emit>(
             // the global env, not trace-internal alloc). Exit-tag
             // inference identical to GetField — peek next op via
             // `infer_getx_exit`.
+            if !std::ptr::eq(rop.proto.as_ptr(), pl.head_proto.as_ptr()) {
+                return emit_frame_get_tab_up(lw, pl, oc);
+            }
             let upval_idx_arg = lw.bcx.ins().iconst(types::I64, ins.b() as i64);
-            let key_v = match head_proto.consts[ins.c() as usize] {
+            let key_v = match rop.proto.consts[ins.c() as usize] {
                 luna_core::runtime::Value::Str(s) => s,
                 _ => unreachable!("pre-emit gates Str const at K[C]"),
             };
@@ -336,4 +350,31 @@ pub(super) fn emit_field_ic_read<E: Emit>(
     lw.bcx.switch_to_block(merge_blk);
     lw.bcx.seal_block(merge_blk);
     lw.bcx.block_params(merge_blk)[0]
+}
+
+/// `GetTabUp` (a global, through `_ENV`) in a function of another proto
+/// the trace inlined: the upvalue table read through that frame's closure,
+/// then the checked field read.
+fn emit_frame_get_tab_up<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<()> {
+    let OpHelpers {
+        get_field_checked_id,
+        ..
+    } = lw.h.op;
+    let OpCx {
+        i, rop, off, ins, ..
+    } = *oc;
+    let Some((kind, want)) = getx_want(infer_getx_exit(pl.record, i, pl.effective_end)) else {
+        checkpoint("bail:inline-get-tab-up-untyped");
+        return None;
+    };
+    let env = frame_upval_read(lw, pl, oc, ins.b(), luna_core::runtime::value::raw::TABLE);
+    let key_v = match rop.proto.consts[ins.c() as usize] {
+        luna_core::runtime::Value::Str(s) => s,
+        _ => unreachable!("pre-emit gates Str const at K[C]"),
+    };
+    let key_arg = emit_str_key_arg(&mut lw.bcx, key_v, pl.opts.aot, &mut lw.defined_aot_data);
+    let v = checked_read!(lw, pl, get_field_checked_id, env, key_arg, want, rop.pc, i);
+    lw.bcx.def_var(oc.regs[ins.a() as usize], v);
+    lw.current_kinds[off + ins.a() as usize] = kind;
+    Some(())
 }
