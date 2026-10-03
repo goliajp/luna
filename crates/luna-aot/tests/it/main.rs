@@ -15,6 +15,7 @@ mod aot_inlined_recursive;
 mod aot_int_chunk_lower_into_object;
 mod aot_link_and_run;
 mod aot_msvc_link;
+mod aot_nan_sign;
 mod aot_recursive_trace;
 mod aot_strkey_resolver;
 mod aot_trace_fires;
