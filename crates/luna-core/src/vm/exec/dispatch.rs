@@ -238,7 +238,8 @@ impl Vm {
             // Inline `top_frame_mut` for the hot path: top is guaranteed Lua
             // (cont frames drained above) so the and_then/Option layers are
             // dead weight.
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            // SAFETY: the running thread has a frame while it executes
+            // instructions
             let mut fr: *mut Frame = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
                 CallFrame::Lua(fmut) => {
                     fmut.pc = pc + 1;

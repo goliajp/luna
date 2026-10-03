@@ -63,6 +63,8 @@ fn helper_with_no_lua_frame_returns_deopt() {
     let metas: [FrameMaterializeInfo; 0] = [];
     let r = {
         let _g = crate::jit_backend::enter_jit(&mut vm, Some(cl));
+        // SAFETY: the guard above installed the vm and the closure the
+        // helper reads, and `metas` holds the count it is given
         unsafe { crate::jit_backend::luna_jit_trace_materialize_frames(0, metas.as_ptr()) }
     };
     assert_eq!(r, -1, "no live Lua frame → helper returns deopt sentinel");
@@ -107,6 +109,8 @@ fn helper_pushes_one_inlined_frame_with_correct_metadata() {
     }];
     let r = {
         let _g = crate::jit_backend::enter_jit(&mut vm, Some(cl));
+        // SAFETY: the guard above installed the vm and the closure the
+        // helper reads, and `metas` holds the count it is given
         unsafe { crate::jit_backend::luna_jit_trace_materialize_frames(1, metas.as_ptr()) }
     };
     assert_eq!(r, 0, "successful push returns 0");
@@ -249,6 +253,8 @@ fn helper_pushes_multiple_frames_in_order() {
     ];
     let r = {
         let _g = crate::jit_backend::enter_jit(&mut vm, Some(cl));
+        // SAFETY: the guard above installed the vm and the closure the
+        // helper reads, and `metas` holds the count it is given
         unsafe { crate::jit_backend::luna_jit_trace_materialize_frames(3, metas.as_ptr()) }
     };
     assert_eq!(r, 0);

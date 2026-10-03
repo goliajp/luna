@@ -210,8 +210,8 @@ impl Table {
     #[inline(always)]
     pub(crate) fn note_absent_mm(mt: Gc<Table>, bit: u32) {
         // SAFETY: a `Gc` handle points at a live object (see `Gc`); the
-        // runtime is single-threaded and no reference into `mt` is held
-        // across this write
+        // runtime is single-threaded, and no reference into `mt` is used
+        // after this write
         unsafe { mt.as_mut() }.hdr.aux |= bit;
     }
 

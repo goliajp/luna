@@ -84,6 +84,8 @@ impl crate::runtime::heap::Gc<LuaStr> {
 
 /// SAFETY: `p` must point to a live string allocation (with its tail).
 pub(crate) unsafe fn bytes_of<'a>(p: *const LuaStr) -> &'a [u8] {
+    // SAFETY: the caller's contract; the bytes follow the header in the
+    // same allocation, and `hdr.aux` holds their count
     unsafe { slice::from_raw_parts(p.add(1) as *const u8, (*p).hdr.aux as usize) }
 }
 
