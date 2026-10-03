@@ -26,29 +26,35 @@ use super::*;
 /// - `Op::GetI`: bound B with a key in `1..=array_cap` → sunk read,
 ///   else B escapes. `Op::GetField`: bound B with a key some earlier
 ///   `SetField` gave a slot → sunk read, else B escapes.
-///   `Op::GetTable` / `Op::Len`: bound B escapes. All unbind A.
+///   `Op::GetTable` / `Op::Len`: bound B (and GetTable's key C)
+///   escapes. All unbind A.
 /// - `Op::Move A=dst B=src`: A becomes an alias of src's site (or
-///   unbound); src stays bound and does not escape.
-/// - `Op::Call A=fn B=narg+1`: bound argument slots `A+1..A+B-1` and a
-///   bound A escape; A is unbound afterwards.
-/// - `Op::Return1 A=a`: a bound A escapes. `Op::Return0`: nothing.
-/// - Cmp ops (`Op::Lt/Le/Eq/EqK`): nothing escapes; the side-exit
-///   emit materializes live sites at depth 0, and pre-emit demotes
-///   sites when a cmp sits at depth > 0.
+///   unbound); src stays bound and does not escape. Exits materialise
+///   a site into every register bound to it.
+/// - `Op::Call A=fn B=narg+1`: bound argument slots `A..A+B-1` (up to
+///   the top for `B = 0`) escape; the result registers are unbound.
+/// - `Op::Return1 A=a`: a bound A escapes.
+/// - Cmp ops (`Op::Lt/Le/Eq/EqK`): bound operands escape (a table is
+///   compared by address); other live sites stay sunk and the side
+///   exit materializes them.
 /// - `Op::LoadNil`: unbinds `A..=A+B`. `Op::Close`: every live
 ///   binding escapes.
-/// - Other writer ops (arith / loads / GetUpval / GetTabUp / Concat /
-///   Closure / etc.): unbind A.
+/// - Every other op (arithmetic, Concat, Closure captures, SetUpval,
+///   SetTabUp, Test, TestSet, Not, Self, TForCall, Return, ...): a
+///   bound register it reads escapes, since a sunk table's register
+///   holds stale bits; the registers it writes are unbound.
 ///
 /// Terminator handling (the op at `effective_end`, if any):
 /// - `TraceEnd::Call`: every live binding escapes (the interpreter
 ///   resumes at the call with the whole frame live).
-/// - `TraceEnd::ForLoop`: nothing escapes; the loop exit resumes
-///   outside the body, where its locals are dead.
+/// - `TraceEnd::ForLoop`: bindings below `A + 4` escape (the enclosing
+///   scope's locals and the loop's control registers, live after the
+///   loop and in the next iteration); the body's own locals stay sunk.
 /// - `TraceEnd::InlineAbort` / `SelfLink` / `DownRec`: every live
 ///   binding escapes.
-/// - `TraceEnd::Return`: `Return1` only → R[A] escapes; `Return0` is
-///   a no-op.
+/// - `TraceEnd::Return`: the returned registers escape.
+/// - No terminator (the trace runs back to its head): every live
+///   binding escapes.
 pub(super) fn escape_analyze(
     record: &TraceRecord,
     effective_end: usize,
@@ -80,7 +86,7 @@ pub(super) fn escape_analyze(
     let mut sites: Vec<AllocSite> = Vec::new();
     let upper = effective_end.min(record.ops.len());
     let mut op_actions: Vec<Option<OpAction>> = vec![None; upper];
-    let mut live_at_op: Vec<Vec<u32>> = vec![Vec::new(); upper];
+    let mut live_at_op: Vec<Vec<LiveBinding>> = vec![Vec::new(); upper];
 
     for i in 0..upper {
         let cur_depth = record.ops[i].inline_depth as usize;
@@ -102,11 +108,14 @@ pub(super) fn escape_analyze(
             // snapshot live sunk bindings BEFORE the op
             // processes (each cmp emit uses live_at_op[cmp_idx] to
             // materialise the right virt slots).
-            let mut live_snap: Vec<u32> = Vec::new();
+            let mut live_snap: Vec<LiveBinding> = Vec::new();
             for row in bindings.iter() {
-                for &slot in row.iter() {
+                for (reg, &slot) in row.iter().enumerate() {
                     if let Some(sid) = slot {
-                        live_snap.push(sid as u32);
+                        live_snap.push(LiveBinding {
+                            site: sid as u32,
+                            reg: reg as u32,
+                        });
                     }
                 }
             }
@@ -236,12 +245,16 @@ fn sweep_op(
         Op::GetTable | Op::Len => {
             // GetTable: dynamic key — can't constant-fold. Len:
             // we know cap, but Len has no sunk emit. Either
-            // way, if B (source table) is bound, escape.
+            // way, if B (source table) is bound, escape. So does a
+            // bound key register of GetTable: it is read as a value.
             let b = ins.b();
-            if (b as usize) < max_stack
-                && let Some(sid) = lookup(bindings, depth, b)
-            {
-                mark_escape(sites, sid);
+            let keys: &[u32] = if op == Op::GetTable { &[b, ins.c()] } else { &[b] };
+            for &r in keys {
+                if (r as usize) < max_stack
+                    && let Some(sid) = lookup(bindings, depth, r)
+                {
+                    mark_escape(sites, sid);
+                }
             }
             unbind(bindings, depth, a);
         }
@@ -266,21 +279,25 @@ fn sweep_op(
             }
         }
         Op::Call => {
+            // `B = 0` passes everything up to the top as arguments, and
+            // `C = 0` leaves the results up to the top: neither range has
+            // a fixed end, so take every register from A up
             let b = ins.b();
-            if b > 0 {
-                for off in 1..b {
-                    let src = a.wrapping_add(off);
-                    if (src as usize) < max_stack
-                        && let Some(src_sid) = lookup(bindings, depth, src)
-                    {
-                        mark_escape(sites, src_sid);
-                    }
+            let c = ins.c();
+            let args_end = if b == 0 { max_stack as u32 } else { a.saturating_add(b) };
+            for src in a..args_end.min(max_stack as u32) {
+                if let Some(src_sid) = lookup(bindings, depth, src) {
+                    mark_escape(sites, src_sid);
                 }
             }
-            if let Some(fn_sid) = lookup(bindings, depth, a) {
-                mark_escape(sites, fn_sid);
+            let results_end = if c == 0 {
+                max_stack as u32
+            } else {
+                a.saturating_add(c.saturating_sub(1)).max(a + 1)
+            };
+            for r in a..results_end.min(max_stack as u32) {
+                unbind(bindings, depth, r);
             }
-            unbind(bindings, depth, a);
         }
         Op::Return1 => {
             if let Some(sid) = lookup(bindings, depth, a) {
@@ -313,16 +330,7 @@ fn sweep_op(
                 }
             }
         }
-        Op::Add | Op::Sub | Op::Mul | Op::Div | Op::IDiv | Op::Mod
-        | Op::Pow | Op::BAnd | Op::BOr | Op::BXor | Op::Shl | Op::Shr
-        | Op::Unm | Op::BNot
-        | Op::LoadI | Op::LoadF | Op::LoadK
-        | Op::GetUpval | Op::GetTabUp | Op::Concat
-        // Op::Closure writes a fresh LuaClosure
-        // pointer into R[A]; no NewTable site lives there.
-        // Op::GetField has its own arm above
-        // (escapes R[B] receiver); not in this catch-all.
-        | Op::Closure => {
+        Op::LoadI | Op::LoadF | Op::LoadK | Op::GetUpval | Op::GetTabUp => {
             unbind(bindings, depth, a);
         }
         Op::LoadNil => {
@@ -349,9 +357,10 @@ fn sweep_op(
             // matches the IR contract).
             escape_all_live(bindings, sites);
         }
-        Op::Jmp | Op::ForLoop | Op::Return => {}
-        _ => {
-            unbind(bindings, depth, a);
-        }
+        // every other op reads and writes registers through the plain
+        // path (arithmetic, Concat, Closure captures, SetUpval,
+        // SetTabUp, Test, TestSet, Not, Self, TForCall, multi-value
+        // Return, ...)
+        _ => sweep_plain_op(rop, depth, max_stack, bindings, sites),
     }
 }
