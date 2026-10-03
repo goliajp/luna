@@ -15,6 +15,9 @@ impl Vm {
     ///     accumulate, and flush to stderr + `warn_log` on the
     ///     non-continuation call.
     pub(crate) fn emit_warn(&mut self, msg: &[u8], to_cont: bool) {
+        if self.host_warn_piece(msg, to_cont) {
+            return;
+        }
         if self.warn_buf.is_empty()
             && !to_cont
             && let Some(b'@') = msg.first().copied()

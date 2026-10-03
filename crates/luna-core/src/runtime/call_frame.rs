@@ -155,6 +155,24 @@ pub enum ContKind {
         /// Per-iteration close state.
         CloseCont,
     ),
+    /// a C function's continuation (PUC `lua_callk`, `lua_pcallk`,
+    /// `lua_yieldk`): the C function sits at the frame's `func_slot` and has
+    /// been left by a yield. When the call it made returns, or the coroutine
+    /// it yielded is resumed, the C API runs the continuation with the values
+    /// from `results_at` on, and what the continuation returns are the C
+    /// function's results.
+    Host(HostCont),
+}
+
+/// Where a [`ContKind::Host`] continuation's values land, and which of the
+/// C API's records describes it.
+#[derive(Clone, Copy)]
+pub struct HostCont {
+    /// first stack slot of the called function's results, or of the values
+    /// a resume passes
+    pub results_at: u32,
+    /// the C API's own index for the continuation
+    pub token: u32,
 }
 
 /// Per-iteration state for a chain of `__close` handlers driven through the

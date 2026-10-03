@@ -3,8 +3,13 @@
 // process to themselves stay as files next to this directory
 
 mod base_var_scaffold;
-mod capi;
-mod capi_pcall_handler;
+mod capi_aux;
+mod capi_debug;
+mod capi_hosts;
+mod capi_load;
+mod capi_tables;
+mod capi_threads;
+mod capi_values;
 mod cli_common;
 mod cli_environment;
 mod cli_errors;

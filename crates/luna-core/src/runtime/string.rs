@@ -69,6 +69,13 @@ impl crate::runtime::heap::Gc<LuaStr> {
         unsafe { bytes_of(self.as_ptr()) }
     }
 
+    /// The bytes as a C string (PUC `getstr`): a NUL follows them in the
+    /// same allocation, so C can read the string up to its first NUL; the
+    /// pointer is valid while the string is alive.
+    pub fn as_c_ptr(&self) -> *const std::ffi::c_char {
+        self.as_bytes().as_ptr().cast()
+    }
+
     /// The hash field as it stands: a short string's hash, a long string's
     /// hash or, before [`Self::hash`] computed it, the heap seed.
     #[inline(always)]
@@ -128,9 +135,11 @@ pub(crate) fn lua_hash(bytes: &[u8], seed: u32) -> u32 {
 /// that builds a string from script-controlled pieces checks against it.
 pub(crate) const MAX_LEN: usize = u32::MAX as usize;
 
+// one byte more than the string for a terminating NUL, so the bytes can be
+// handed to C as a C string, as PUC's strings can
 fn layout(len: usize) -> Layout {
     Layout::new::<LuaStr>()
-        .extend(Layout::array::<u8>(len).expect("string size overflows layout"))
+        .extend(Layout::array::<u8>(len + 1).expect("string size overflows layout"))
         .expect("string size overflows layout")
         .0
         .pad_to_align()
@@ -138,7 +147,7 @@ fn layout(len: usize) -> Layout {
 
 fn alloc_str(bytes: &[u8], short: bool, hash: u32, hashed: bool) -> *mut LuaStr {
     let layout = layout(bytes.len());
-    // SAFETY: layout is built from the header size + trailing bytes length we just computed; deallocation will use the same layout in `Heap::sweep_strings`.
+    // SAFETY: layout is built from the header size + the trailing bytes and their NUL that we just computed, so the header, the bytes and the NUL written below are inside the allocation; deallocation will use the same layout in `Heap::sweep_strings`.
     unsafe {
         let p = alloc(layout) as *mut LuaStr;
         if p.is_null() {
@@ -154,6 +163,7 @@ fn alloc_str(bytes: &[u8], short: bool, hash: u32, hashed: bool) -> *mut LuaStr 
             short,
         });
         ptr::copy_nonoverlapping(bytes.as_ptr(), p.add(1) as *mut u8, bytes.len());
+        (p.add(1) as *mut u8).add(bytes.len()).write(0);
         p
     }
 }

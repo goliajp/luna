@@ -138,6 +138,10 @@ impl Vm {
         let resumer_msgh_running = self.msgh_running.take();
         // a coroutine that dies keeps its traceback for `debug.traceback(co)`
         let resumer_keeps_traceback = std::mem::replace(&mut self.keep_error_traceback, true);
+        // non-yieldable calls belong to the thread that made them (PUC's
+        // per-thread `nny`): a coroutine resumed from inside one, such as a
+        // host's `lua_pcall`, can still yield
+        let resumer_nny = std::mem::replace(&mut self.nny, 0);
 
         // drive it
         let drive = if co.started {
@@ -205,6 +209,7 @@ impl Vm {
         self.msgh_floor = resumer_msgh_floor;
         self.msgh_running = resumer_msgh_running;
         self.keep_error_traceback = resumer_keeps_traceback;
+        self.nny = resumer_nny;
         self.store_coro_ctx(co);
         // SAFETY: `co` is still `self.current`, a root; `store_coro_ctx`'s borrow has ended, and this one covers one field store
         unsafe { co.as_mut() }.status = status;
@@ -267,7 +272,15 @@ impl Vm {
         self.finish_results(fslot, n, nres);
         // the suspended `coroutine.yield` (a C call) now returns its resume
         // values: fire the matching "return" hook PUC defers until the resume.
-        self.hook_return(true, 1, n)?;
+        // A C function that yielded with a continuation returns only once
+        // its continuation has.
+        let host_cont = matches!(
+            self.frames.last(),
+            Some(CallFrame::Cont(nc)) if matches!(nc.kind, ContKind::Host(_))
+        );
+        if !host_cont {
+            self.hook_return(true, 1, n)?;
+        }
         self.exec_with(1)
     }
 

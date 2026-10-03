@@ -94,6 +94,10 @@ impl Vm {
             self.finish_results(nc.func_slot, total, nc.nresults);
             return Ok(None);
         }
+        if let ContKind::Host(hc) = nc.kind {
+            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            return self.finish_host_cont(nc, hc, entry_depth);
+        }
         frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
         self.pcall_depth -= 1;
         // f's results sit at nc.func_slot+1.. (f was called one slot

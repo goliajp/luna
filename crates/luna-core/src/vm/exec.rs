@@ -10,8 +10,8 @@ use crate::frontend::SyntaxError;
 use crate::jit::send_compat::TArc;
 use crate::numeric::{self, Num};
 use crate::runtime::{
-    AfterClose, CallFrame, CloseCont, ContKind, Coro, CoroStatus, Frame, Gc, Heap, LuaClosure,
-    MetaAction, MetaCont, NativeCont, Table, TableError, UpvalState, Upvalue, Value,
+    AfterClose, CallFrame, CloseCont, ContKind, Coro, CoroStatus, Frame, Gc, Heap, HostCont,
+    LuaClosure, MetaAction, MetaCont, NativeCont, Table, TableError, UpvalState, Upvalue, Value,
 };
 use crate::version::LuaVersion;
 use crate::vm::callstack::DbgKind;
@@ -41,6 +41,7 @@ use frames_sync::{frames_pop_known, frames_pop_sync, frames_push_sync};
 mod gc;
 mod hooks;
 mod host_api;
+pub mod host_c;
 mod index;
 mod index_fast;
 mod index_miss;
