@@ -1,0 +1,19 @@
+-- before any control message
+Lua warning: first
+-- on
+Lua warning: one piece
+Lua warning: a <interleaved>b c
+Lua warning: x@off
+-- @off as the end of a message
+Lua warning: @off
+-- @off after an empty piece
+Lua warning: @on continued
+Lua warning: from Lua 42
+Lua warning: error in __gc ([string "setmetatable({}, {__gc = function() error('in..."]:1: in gc)
+Lua warning: error in __gc (error object is not a string)
+Lua warning: error in __gc (error object is not a string)
+-- off
+-- on again after a dropped continuation
+Lua warning: shown
+Lua warning: back
+Lua warning: error in __gc ([string "setmetatable({}, {__gc = function() error('at..."]:1: at close)

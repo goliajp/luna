@@ -1,0 +1,11 @@
+lua_newstate: state, allocator used: yes
+getallocf gives the function: yes, the user data: yes
+getallocf with no ud: yes
+ran: 1000
+setallocf: yes
+after close, blocks still allocated: 0
+lua_newstate with a failing allocator: NULL
+luaL_newstate has an allocator: yes
+its blocks are usable: x
+freeing returns NULL: yes
+closed

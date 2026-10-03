@@ -1,0 +1,14 @@
+state 0
+closing
+  lua_gc in a finalizer at close: >= 0
+  finalize last
+  finalize failing
+  finalize first
+closed
+state 1
+closing
+  lua_gc in a finalizer at close: >= 0
+  finalize last
+  finalize failing
+  finalize first
+closed

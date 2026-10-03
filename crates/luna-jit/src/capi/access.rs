@@ -67,7 +67,7 @@ pub(super) fn to_number(api: &Api, v: Value) -> Option<Value> {
 /// instruction does it where C leaves it undefined (PUC ≤5.2
 /// `lua_number2integer` is a plain cast).
 fn c_cast_i64(f: f64) -> i64 {
-    let in_range = (-9.223_372_036_854_775_808e18..9.223_372_036_854_775_808e18).contains(&f);
+    let in_range = (i64::MIN as f64..-(i64::MIN as f64)).contains(&f);
     if in_range {
         return f as i64;
     }
@@ -88,8 +88,7 @@ pub(super) fn to_integer(api: &Api, v: Value) -> Option<i64> {
         Value::Int(i) => Some(i),
         Value::Float(f) if api.version() <= LuaVersion::Lua52 => Some(c_cast_i64(f)),
         Value::Float(f) => {
-            let in_range =
-                (-9.223_372_036_854_775_808e18..9.223_372_036_854_775_808e18).contains(&f);
+            let in_range = (i64::MIN as f64..-(i64::MIN as f64)).contains(&f);
             (f.floor() == f && in_range).then_some(f as i64)
         }
         _ => None,

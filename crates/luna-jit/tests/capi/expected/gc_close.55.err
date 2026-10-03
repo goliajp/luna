@@ -1,0 +1,2 @@
+Lua warning: error in __gc ([string "keep_failing = setmetatable({}, {__gc = funct..."]:1: fin error)
+Lua warning: error in __gc ([string "keep_failing = setmetatable({}, {__gc = funct..."]:1: fin error)

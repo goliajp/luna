@@ -117,6 +117,7 @@ impl Vm {
         if let Some(e) = self.closing_err {
             roots.push(e);
         }
+        roots.extend(self.host_light.values().copied());
         // Host roots — Lua-facade handles keep their referenced
         // values alive across calls/yields. Trace the whole vector;
         // unused slots (post-`unpin_all`) carry Value::Nil which the
