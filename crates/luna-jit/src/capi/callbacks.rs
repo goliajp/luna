@@ -2,8 +2,9 @@
 
 use super::*;
 
-/// PUC `lua_getglobal`: push the global `name` (through `_G`'s
-/// `__index`) and return its type.
+/// PUC `lua_getglobal`: push the global `name` (through the globals'
+/// `__index`) and return its type (5.3+). The globals are 5.1's
+/// `LUA_GLOBALSINDEX`, later the registry's `LUA_RIDX_GLOBALS` entry.
 ///
 /// # Safety
 /// `L` is a live thread of an open state, the innermost API call on it;
@@ -16,24 +17,14 @@ pub unsafe extern "C" fn luna_capi_lua_getglobal(L: *mut LuaState, name: *const 
     let mut api = unsafe { Api::new(L) };
     // SAFETY: `name` is a NUL-terminated string (PUC's contract)
     let key = api.str(unsafe { c_bytes(name) }.unwrap_or_default());
-    let g = Value::Table(api.thread_globals());
+    let g = tables::globals_value(&mut api);
     api.push(key);
-    match api.vm.index_with_mm(g, key) {
-        Ok(v) => {
-            api.pop();
-            api.push(v);
-            type_tag(v)
-        }
-        Err(e) => {
-            api.pop();
-            api.raise(e);
-            LUA_TNIL
-        }
-    }
+    tables::index_into_top(&mut api, g, key)
 }
 
 /// PUC `lua_setglobal`: pop the top value into the global `name`
-/// (through `_G`'s `__newindex`).
+/// (through the globals' `__newindex`); the globals as for
+/// [`luna_capi_lua_getglobal`].
 ///
 /// # Safety
 /// As [`luna_capi_lua_getglobal`].
@@ -45,14 +36,15 @@ pub unsafe extern "C" fn luna_capi_lua_setglobal(L: *mut LuaState, name: *const 
     let mut api = unsafe { Api::new(L) };
     // SAFETY: `name` is a NUL-terminated string (PUC's contract)
     let key = api.str(unsafe { c_bytes(name) }.unwrap_or_default());
-    let g = Value::Table(api.thread_globals());
+    let g = tables::globals_value(&mut api);
     let v = api.get_or_nil(-1);
     api.push(key);
-    let r = api.vm.set_index_with_mm(g, key, v);
-    api.pop();
-    api.pop();
-    if let Err(e) = r {
-        api.raise(e);
+    match api.vm.host_set_index(g, key, v) {
+        Ok(()) => {
+            api.pop();
+            api.pop();
+        }
+        Err(e) => api.raise(e),
     }
 }
 
