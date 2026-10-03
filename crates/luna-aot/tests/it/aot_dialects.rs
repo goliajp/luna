@@ -19,11 +19,9 @@ fn have_on_path(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
-// a `while` loop, not a numeric `for`: the trace JIT leaves a numeric `for`
-// of 5.1-5.3 to the interpreter (their loop semantics differ from 5.4's),
-// so such a loop would leave nothing for the binary to install
-const HOT_LOOP: &str =
-    "local s, i = 0, 0\nwhile i < 1000000 do i = i + 1 s = s + 1 end\nprint(s)\n";
+// a numeric `for`, whose stepping differs per dialect: 5.1 / 5.2 step a
+// float, 5.3 compares an integer index with the limit, 5.4 counts down
+const HOT_LOOP: &str = "local s = 0\nfor i = 1, 1000000 do s = s + 1 end\nprint(s)\n";
 
 /// Build `script` for `version`, run it with the AOT probe on, and check
 /// its stdout and that at least one AOT trace was installed and fired.
