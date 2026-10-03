@@ -115,10 +115,10 @@ pub unsafe extern "C" fn luna_aot_run(bytecode: *const u8, len: usize) -> i32 {
         std::hint::black_box(n);
     }
 
-    // SAFETY: caller contract — `bytecode` points at `len` valid bytes
-    // for the duration of this call. In the AOT-binary deploy shape
-    // these bytes live in the binary's `.rodata` and are immutable
-    // for the lifetime of the process.
+    // SAFETY: `bytecode` is non-null (checked above) and points at `len`
+    // bytes that stay readable and unchanged for this call (# Safety);
+    // the slice is only used by `run_inner`, which returns before this
+    // call does
     let bytecode_slice: &'static [u8] = unsafe { slice::from_raw_parts(bytecode, len) };
 
     let result = panic::catch_unwind(panic::AssertUnwindSafe(|| run_inner(bytecode_slice)));
@@ -242,10 +242,7 @@ fn run_inner(bytecode: &[u8]) -> i32 {
     // to runtime JIT.
     #[cfg(feature = "jit-helpers")]
     {
-        // SAFETY: closure is a live Gc<LuaClosure>; reading .proto is
-        // a NonNull pointer copy. The heap is single-threaded so no
-        // concurrent mutation is possible during this read.
-        let root_proto = unsafe { (*closure.as_ptr()).proto };
+        let root_proto = closure.proto;
         let installed = aot_trace_registry::install_all(&mut vm, root_proto);
         if std::env::var_os("LUNA_AOT_PROBE").is_some() {
             eprintln!("luna-runtime-helpers: aot_trace_install_count = {installed}");
