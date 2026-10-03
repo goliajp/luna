@@ -73,6 +73,23 @@ static inline void luna_check(lua_State *L) {
   }
 }
 
+/* a C wrapper of a Rust API function that may raise or yield: name is
+   the exported name, P the parameters, A the arguments */
+#define WRAP_V(name, P, A)                    \
+  void luna_capi_##name P;                    \
+  LUNA_HIDDEN void luna_c_##name P {          \
+    luna_capi_##name A;                       \
+    luna_check(L);                            \
+  }
+
+#define WRAP_R(R, name, P, A)                 \
+  R luna_capi_##name P;                       \
+  LUNA_HIDDEN R luna_c_##name P {             \
+    R r_ = luna_capi_##name A;                \
+    luna_check(L);                            \
+    return r_;                                \
+  }
+
 /* functions of the Rust side the C side calls */
 void luna_capi_raise_msg(lua_State *L, const char *msg);
 const char *luna_capi_pushlstring(lua_State *L, const char *s, size_t len);
