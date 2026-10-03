@@ -24,33 +24,15 @@ use std::task::{Context, Poll, Waker};
 /// fine for the demo because the async natives below always resolve
 /// immediately. Real embedders use tokio / async-std / a proper
 /// executor.
-fn block_on<F: Future>(mut fut: F) -> F::Output {
-    // SAFETY: `fut` is owned by this stack frame and not moved
-    // again — the pin is local.
-    let mut fut = unsafe { Pin::new_unchecked(&mut fut) };
-    let waker = noop_waker();
-    let mut cx = Context::from_waker(&waker);
+fn block_on<F: Future>(fut: F) -> F::Output {
+    let mut fut = std::pin::pin!(fut);
+    let mut cx = Context::from_waker(Waker::noop());
     loop {
         match fut.as_mut().poll(&mut cx) {
             Poll::Ready(v) => return v,
             Poll::Pending => {} // busy-loop; the demo's futures don't truly suspend
         }
     }
-}
-
-fn noop_waker() -> Waker {
-    use std::task::{RawWaker, RawWakerVTable};
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(
-        |_| RawWaker::new(std::ptr::null(), &VTABLE),
-        |_| {},
-        |_| {},
-        |_| {},
-    );
-    let raw = RawWaker::new(std::ptr::null(), &VTABLE);
-    // SAFETY: VTABLE is a `'static` and all four entries are no-ops
-    // returning either another raw or unit; the data pointer is null
-    // and never dereferenced.
-    unsafe { Waker::from_raw(raw) }
 }
 
 /// An async native function. Receives a `*mut Vm` (the type-erased
