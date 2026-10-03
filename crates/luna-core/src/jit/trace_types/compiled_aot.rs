@@ -113,9 +113,6 @@ impl CompiledTrace {
             // install), so the candidate count is always `0`.
             downrec_multi_way_count: 0,
             tier_up: None,
-            // the protos an AOT trace inlined are in the embedded chunk's
-            // tree, whose root closure the runner keeps on the stack
-            inlined_protos: Box::new([]),
         }
     }
 }

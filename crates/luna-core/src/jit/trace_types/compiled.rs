@@ -314,10 +314,6 @@ pub struct CompiledTrace {
     /// Set when a quicker code generator compiled this trace and a better
     /// one can take over once it is hot.
     pub tier_up: Option<Box<TierUp>>,
-    /// The functions of other prototypes the trace inlined. Its code checks
-    /// a callee against these protos by address, so the collector keeps
-    /// them alive while the trace lives (`Proto::trace` marks them).
-    pub inlined_protos: Box<[Gc<Proto>]>,
 }
 
 /// A trace on its way to the optimizing tier.

@@ -23,9 +23,8 @@ optimization.
 
 ### Breaking
 
-- `luna_core::jit::trace::ExitTag` has a `Bool` variant, `CompiledTrace`
-  an `inlined_protos` field and `TraceRecord` the `index_slots` and
-  `index_key` fields; the frame-materialise helper
+- `luna_core::jit::trace::ExitTag` has a `Bool` variant and `TraceRecord`
+  the `index_slots` and `index_key` fields; the frame-materialise helper
   `luna_jit_trace_materialize_frames` takes a third argument, the
   closure of each frame. Code that builds these types by hand or matches
   `ExitTag` exhaustively has to name the new parts.
