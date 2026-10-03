@@ -1,0 +1,51 @@
+getfield a: number n:1 top=2
+getfield zz: string s:mm:zz top=2
+gettable 1: string s:one top=2
+gettable 2.5: string s:f top=2
+gettable 2.0: string s:two top=2
+gettable false: string s:mm:false top=2
+rawget a: number n:1 top=2
+rawget zz: nil nil top=2
+rawget nil: nil nil top=2
+rawget nan: nil
+rawgeti 1: string s:one top=2
+rawgeti 3: nil nil top=2
+rawgeti -1: nil nil top=2
+chain m: string s:mid top=2
+chain deep: string s:C:deep top=2
+chain 42: string s:C:42 top=2
+string upper: function
+rawgetp 1: string s:p1 top=2
+rawgetp 2: nil nil top=2
+gettable p1: string s:p1 top=2
+createtable: table len=0 top=1
+createtable 4: string s:v top=2
+createtable two: top=2
+registry getfield: string s:regval top=1
+registry rawget: string s:regval top=1
+registry globals: table equal=1
+registry main thread: thread
+upvalue getfield: number n:10 top=1
+upvalue rawget: number n:10 top=1
+upvalue rawgeti: string s:u1 top=1
+upvalue gettable: string s:u2 top=1
+upvalue 2: number n:5 top=1
+upvalue 3 type: -1
+absent upvalue: status=2 s:attempt to index a nil value
+getglobal t: table top=1
+getglobal nosuch: nil nil top=1
+fromc	77
+getglobal via __index: string s:G:undefinedx top=1
+newviamm	N:5
+replaced globals only: string s:only here top=2
+replaced globals print: nil nil top=2
+replaced globals zset: string s:zv top=3
+restored globals zset: nil nil top=1
+gc key: string len=80
+index nil: status=2 s:attempt to index a nil value top=0
+index boolean: status=2 s:attempt to index a boolean value top=0
+index mm error: status=2 s:ixerr top=0
+index mm error pos: status=2 s:[string "terrpos = setmetatable({}, {__index = functio..."]:1: ixpos top=0
+index loop: status=2 s:loop in gettable top=0
+false	attempt to yield across a C-call boundary
+final top=0

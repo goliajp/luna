@@ -1,0 +1,18 @@
+state 0
+closing
+  failing close
+  close slot, error:	[string "failing_closer = setmetatable({}, {__close = ..."]:1: close error
+  lua_gc in a finalizer at close: -1
+  finalize last
+  finalize failing
+  finalize first
+closed
+state 1
+closing
+  failing close
+  close slot, error:	[string "failing_closer = setmetatable({}, {__close = ..."]:1: close error
+  lua_gc in a finalizer at close: -1
+  finalize last
+  finalize failing
+  finalize first
+closed

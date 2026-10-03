@@ -186,11 +186,13 @@ impl Vm {
     }
 
     /// `coroutine.isyieldable([co])`: whether `co` (default: the running
-    /// thread) can yield. The main thread never can; any other coroutine can
-    /// unless it is dead.
+    /// thread) can yield. The main thread never can; any other coroutine can,
+    /// a dead one included, as in PUC.
     pub(crate) fn is_yieldable(&self, co: Option<Gc<Coro>>) -> bool {
         match co {
-            Some(c) => !self.main_coro.is_some_and(|m| m.ptr_eq(c)) && c.status != CoroStatus::Dead,
+            // PUC's `yieldable` asks only whether the thread is inside a
+            // non-yieldable call, so a dead coroutine counts as yieldable
+            Some(c) => !self.main_coro.is_some_and(|m| m.ptr_eq(c)),
             // the running thread can yield only outside any non-yieldable C call
             None => self.current.is_some() && self.nny == 0,
         }

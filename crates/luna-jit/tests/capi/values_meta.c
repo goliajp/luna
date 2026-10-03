@@ -152,8 +152,9 @@ int main(void) {
   type_mt(L, "bool", "bool.x, (true).y");
   lua_pushlightuserdata(L, &light);
   type_mt(L, "light", "light.x");
-  lua_newthread(L);
-  type_mt(L, "thread", "thread.x, coroutine.create(print).y");
+  dostr(L, "co1 = coroutine.create(function() end)");
+  lua_getglobal(L, "co1");
+  type_mt(L, "thread", "thread.x, coroutine.create(function() end).y");
   dostr(L, "fn = function() end");
   lua_getglobal(L, "fn");
   type_mt(L, "fn", "fn.x, print.y");
@@ -223,7 +224,8 @@ int main(void) {
   lua_getglobal(L, "print");
   fenv(L, "library function");
   lua_pop(L, 1);
-  lua_newthread(L);
+  dostr(L, "co2 = coroutine.create(function() end)");
+  lua_getglobal(L, "co2");
   fenv(L, "thread");
   setfenv_mark(L, "thread", "th");
   fenv(L, "thread");
