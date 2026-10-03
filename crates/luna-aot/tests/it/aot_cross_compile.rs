@@ -14,8 +14,9 @@
 //!
 //! # Skip conditions
 //!
-//! - Windows host: this path is Unix-only — Windows builds need a
-//!   different driver path (link.exe / MSVC), out of scope here.
+//! - Windows host: the cross targets here need Unix cross compilers.
+//!   Both Windows targets are built and run on a Windows host by
+//!   `aot_msvc_link` and `aot_windows_mingw_link`.
 //! - Missing `cargo` on PATH (vanishingly rare under `cargo test`).
 //! - Missing rust-std for the requested triple: skipped per-target,
 //!   the test as a whole still reports `ok`. The skip message tells

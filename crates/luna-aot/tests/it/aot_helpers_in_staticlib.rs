@@ -25,8 +25,7 @@
 //!
 //! # Skip conditions
 //!
-//! - `nm` not on PATH (Windows runners without llvm-nm in their
-//!   toolchain — the AOT trace pipeline is Unix-floor anyway)
+//! - `nm` (`llvm-nm` for an MSVC host) not on PATH
 //! - `cargo` not on PATH (always present under `cargo test`)
 //! - Building the helpers staticlib failed for unrelated reasons
 //!   (rust-std missing for the host triple, etc.) — those surface
@@ -60,23 +59,15 @@ fn workspace_root() -> PathBuf {
 
 #[test]
 fn all_30_luna_jit_helpers_are_defined_in_staticlib() {
-    // Windows MSVC produces `luna_runtime_helpers.lib` (COFF archive,
-    // not `libluna_runtime_helpers.a` Mach-O/ELF archive) and inspects
-    // symbols via `dumpbin /symbols` not `nm`. The AOT trace pipeline
-    // is Unix-floor; Windows AOT goes through the MSVC linker path
-    // and the helper-presence smoke test is verified there at the
-    // `luna-aot compile` step's own LNK2019-rejection layer rather
-    // than at the staticlib `nm` layer. Skip cleanly on Windows MSVC
-    // — equivalent coverage exists at compile-and-link time.
-    if cfg!(target_env = "msvc") {
-        eprintln!(
-            "aot_helpers_in_staticlib: MSVC produces .lib not .a; \
-             helper-presence is verified at the linker layer, skipping"
-        );
-        return;
-    }
-    if !have_on_path("nm") {
-        eprintln!("aot_helpers_in_staticlib: `nm` not on PATH, skipping");
+    // an MSVC staticlib is a COFF archive, which GNU nm may not read;
+    // LLVM's nm reads every format
+    let nm_tool = if cfg!(target_env = "msvc") {
+        "llvm-nm"
+    } else {
+        "nm"
+    };
+    if !have_on_path(nm_tool) {
+        eprintln!("aot_helpers_in_staticlib: `{nm_tool}` not on PATH, skipping");
         return;
     }
     if !have_on_path("cargo") {
@@ -111,10 +102,14 @@ fn all_30_luna_jit_helpers_are_defined_in_staticlib() {
         String::from_utf8_lossy(&build.stderr),
     );
 
-    let staticlib = root
-        .join("target")
-        .join("release-aot-helpers")
-        .join("libluna_runtime_helpers.a");
+    let staticlib =
+        root.join("target")
+            .join("release-aot-helpers")
+            .join(if cfg!(target_env = "msvc") {
+                "luna_runtime_helpers.lib"
+            } else {
+                "libluna_runtime_helpers.a"
+            });
     assert!(
         staticlib.exists(),
         "expected staticlib at {} after cargo build (cargo path layout drifted?)",
@@ -125,11 +120,11 @@ fn all_30_luna_jit_helpers_are_defined_in_staticlib() {
     // `<addr> T _<sym>` for Mach-O (the `_` prefix is the platform
     // mangling for `extern "C"`). Both forms match the `_?luna_jit_`
     // grep below.
-    let nm = Command::new("nm")
+    let nm = Command::new(nm_tool)
         .arg(&staticlib)
         .output()
         .expect("spawn nm");
-    let stdout = String::from_utf8_lossy(&nm.stdout);
+    let stdout = String::from_utf8_lossy(&nm.stdout).replace("\r\n", "\n");
     // Tolerate non-zero exit when stdout still has content. Apple's
     // bundled llvm-nm (Xcode toolchain) is several LLVM versions behind
     // rustc's bitcode and emits per-member "Unknown attribute kind"

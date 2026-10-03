@@ -98,8 +98,7 @@ fn windows_gnu_binary_has_lt_meta_and_lt_skix_sections() {
         );
         return;
     }
-    let has_gcc =
-        have_on_path("x86_64-w64-mingw32-gcc") || (cfg!(windows) && have_on_path("gcc"));
+    let has_gcc = have_on_path("x86_64-w64-mingw32-gcc") || (cfg!(windows) && have_on_path("gcc"));
     if !has_gcc {
         eprintln!(
             "aot_windows_mingw_link: skip — x86_64-w64-mingw32-gcc not on PATH \
