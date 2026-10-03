@@ -41,8 +41,8 @@ impl Gen<'_, '_> {
             self.line("local last, prev, r = {n = 0}, {0}, nil");
         }
         self.line("local m, cnt2, src = {}, 0, {}");
-        // the loop: numeric for (traced from 5.3), while (every
-        // version) or ipairs (every version)
+        // the loop: numeric for, while or ipairs (each traced in every
+        // version)
         let close = match self.pick(3) {
             0 => {
                 self.line("for i = 1, n do");
