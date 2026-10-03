@@ -85,7 +85,8 @@ fn resume(api: &mut Api, nargs: c_int) -> (c_int, Option<c_int>) {
     let start = api
         .vm
         .host_restartable(co)
-        .then(|| api.get_or_nil(-1))
+        .then(|| api.get(-1))
+        .flatten()
         .map(|f| (f, args.clone()));
     let r = api.vm.host_resume(co, args);
     let v = api.version();

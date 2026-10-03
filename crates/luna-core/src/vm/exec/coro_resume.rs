@@ -202,7 +202,7 @@ impl Vm {
                         unsafe { co.as_mut() }.error_value = Some(e.0);
                         self.heap.barrier_back(co);
                     }
-                    (drive, CoroStatus::Dead)
+                    (self.host_returned(co, drive), CoroStatus::Dead)
                 }
             }
         };
