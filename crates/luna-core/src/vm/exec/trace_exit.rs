@@ -54,6 +54,11 @@ impl Vm {
         let from_side_trace = (raw_ret >> 63) & 1 == 1;
         let (child, decode_body, child_ran) =
             self.trace_exit_source(cl, pc, ct, raw_ret, &mut reg_state, base_us, &entry_tags);
+        // a side trace runs one pass for each return through here, and the
+        // dispatcher never enters it: count the pass as its entry
+        if child_ran && let Some(c) = &child {
+            self.count_towards_tier_up(c, cl.proto.call_hot_count.get());
+        }
         let shapes: &CompiledTrace = child.as_deref().unwrap_or(ct);
         let decode_inline = &shapes.per_exit_inline;
         let decode_hit_counts = &shapes.exit_hit_counts;
