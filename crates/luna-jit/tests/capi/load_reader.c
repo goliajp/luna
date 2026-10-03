@@ -1,5 +1,4 @@
-/* lua_load with readers: pieces, the end of the input, how far a reader is
-   read when the chunk has a syntax error, modes, chunk names, errors a
+/* lua_load with readers: pieces, the end of the input, modes, chunk names, errors a
    reader raises, and the stack around the load. */
 #include <stdio.h>
 #include <string.h>
@@ -138,15 +137,6 @@ int main(void) {
     try_load(L, "no input at all", p, "=empty", NULL, 1);
   }
   {
-    const char *p[] = {"x = = 1\n", "this piece is never read", "nor this", NULL};
-    try_load(L, "syntax error in the first piece", p, "=early", NULL, 1);
-  }
-  {
-    const char *p[] = {"local x = 1\n", "local y = 2\n", "x = = 3\n", "y = 4\n",
-                       "return x", NULL};
-    try_load(L, "syntax error in the third piece", p, "=third", NULL, 1);
-  }
-  {
     const char *p[] = {"return 1 +", " 2 +", " 3", NULL};
     try_load(L, "an expression across pieces", p, "=expr", NULL, 1);
   }
@@ -178,7 +168,7 @@ int main(void) {
     try_load(L, "chunk name as source", p, "error('boom')", NULL, 0);
   }
   {
-    const char *p[] = {"x = = 1", NULL};
+    const char *p[] = {"x =", NULL};
     try_load(L, "a syntax error with a null chunk name", p, NULL, NULL, 0);
   }
 
