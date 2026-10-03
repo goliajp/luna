@@ -32,11 +32,14 @@ fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // Mirror args from the Vm dispatch frame to the C-visible capi_stack
     // (via the public `nat_arg` accessor — works for the missing-arg-is-nil
     // contract too).
+    // the C function's frame: its index 1 is its first argument
     let baseline = vm.capi_stack.len();
+    let outer_base = std::mem::replace(&mut vm.capi_base, baseline);
     for i in 0..nargs {
         let v = vm.nat_arg(fs, nargs, i);
         vm.capi_stack.push(v);
     }
+    vm.capi_calls += 1;
     // Demote to raw pointer; the &mut Vm is no longer live across the cf call.
     let vm_ptr: *mut Vm = vm as *mut Vm;
     let nret = cf(vm_ptr as *mut LuaState) as usize;
@@ -44,6 +47,12 @@ fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // SAFETY: `vm_ptr` came from the `&mut Vm` this function holds for its whole call, and the C
     // function has returned, so no reference it made from `L` is still in use
     let vm = unsafe { &mut *vm_ptr };
+    vm.capi_calls -= 1;
+    vm.capi_base = outer_base;
+    if let Some(e) = vm.capi_error.take() {
+        vm.capi_stack.truncate(baseline);
+        return Err(LuaError(e));
+    }
     let stack_len = vm.capi_stack.len();
     if stack_len < baseline + nret {
         // C function lied about its return count.
@@ -51,6 +60,7 @@ fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             vm.heap
                 .intern(b"C function returned more values than were pushed"),
         );
+        vm.capi_stack.truncate(baseline);
         return Err(LuaError(s));
     }
     let results_start = stack_len - nret;

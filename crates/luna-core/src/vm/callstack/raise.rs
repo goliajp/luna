@@ -179,7 +179,7 @@ impl Vm {
         if self.version() <= LuaVersion::Lua52
             && !matches!(handler, Value::Closure(_) | Value::Native(_))
         {
-            return Value::Str(self.heap.intern(b"error in error handling"));
+            return self.errerr();
         }
         let capped = self.msgh_depth >= crate::vm::exec::MAX_C_DEPTH;
         let (arg, reenter) = if capped {
@@ -198,7 +198,7 @@ impl Vm {
             }
             Err(_) if capped => {
                 self.msgh_depth -= 1;
-                Value::Str(self.heap.intern(b"error in error handling"))
+                self.errerr()
             }
             // already the result of the handler run nested at that error
             Err(e) if self.msgh_runs != runs => {
