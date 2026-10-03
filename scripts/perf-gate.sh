@@ -2,84 +2,117 @@
 # Same-runner perf gate for the redis_lua_shape criterion bench.
 #
 # Usage:
-#   scripts/perf-gate.sh REF_BIN HEAD_BIN [THRESHOLD]
+#   scripts/perf-gate.sh measure REF_BIN HEAD_BIN OUT
+#   scripts/perf-gate.sh verdict OUT...
+#   scripts/perf-gate.sh REF_BIN HEAD_BIN          (measure into a temp dir, then verdict)
 #
 #   REF_BIN, HEAD_BIN: redis_lua_shape bench executables of the reference
 #     commit and of HEAD, as built by
 #     `cargo bench -p luna-jit --bench redis_lua_shape --no-run`
-#   THRESHOLD: allowed slowdown factor (default 1.05)
+#   OUT: one directory per measuring job; the verdict pools several of them
 #
 # Environment:
-#   PERF_ROUNDS  rounds of ref/head pairs per cell (default 3)
-#   PERF_CPU     core both binaries are pinned to when taskset exists (default 1)
-#   PERF_OUT     directory for criterion output (default: a fresh temp dir)
+#   PERF_ROUNDS     rounds of ref/head pairs per cell in one measure (default 3)
+#   PERF_CPU        core both binaries are pinned to when taskset exists (default 1)
+#   PERF_THRESHOLD  passed to the verdict, see perf-gate-verdict.py
 #
 # Hosted runners drift over minutes, so measuring all of ref and then all of
 # HEAD biases every cell the same way. Instead each cell is measured as an
-# adjacent ref/head pair, the pair order alternates between cells and rounds,
-# and a cell fails only when HEAD is slower than THRESHOLD in every round
-# (ratio of the median per-iteration sample times). A commit body containing
-# [perf-allow] skips the check.
+# adjacent ref/head pair and the pair order alternates between cells and
+# rounds. The ref/head ratio of the same two binaries also differs from one
+# runner to the next by a few percent, which more rounds on one runner cannot
+# average out; CI therefore runs `measure` on several runners and pools them
+# in one `verdict`. A HEAD commit message containing [perf-allow] skips the check.
 set -euo pipefail
 
-if [[ $# -lt 2 ]]; then
-    sed -n '2,23p' "$0" >&2
-    exit 2
-fi
-REF_BIN=$1
-HEAD_BIN=$2
-THRESHOLD=${3:-1.05}
-ROUNDS=${PERF_ROUNDS:-3}
-CPU=${PERF_CPU:-1}
-OUT=${PERF_OUT:-$(mktemp -d)}
 GROUP=redis_lua_shape
+here=$(dirname "$0")
 
-if git log -1 --pretty=%B 2>/dev/null | grep -qF '[perf-allow]'; then
-    echo "perf-gate: [perf-allow] tag found in commit body — skipping regression check" >&2
-    exit 0
-fi
+usage() {
+    sed -n '2,25p' "$0" >&2
+    exit 2
+}
 
-pin=()
-if command -v taskset >/dev/null; then
-    pin=(taskset -c "$CPU")
-fi
+perf_allowed() {
+    if git log -1 --pretty=%B 2>/dev/null | grep -qF '[perf-allow]'; then
+        echo "perf-gate: [perf-allow] tag found in the commit message — skipping regression check" >&2
+        return 0
+    fi
+    return 1
+}
 
 list_cells() {
     "$1" --bench --list --format terse | sed -n "s|^$GROUP/\(.*\): benchmark\$|\1|p"
 }
-ref_cells=$(list_cells "$REF_BIN")
-cells=()
-for cell in $(list_cells "$HEAD_BIN"); do
-    if grep -qxF "$cell" <<<"$ref_cells"; then
-        cells+=("$cell")
-    else
-        echo "perf-gate: $cell has no reference measurement (new cell), not judged"
+
+measure() {
+    local ref_bin=$1 head_bin=$2 out=$3
+    local rounds=${PERF_ROUNDS:-3} cpu=${PERF_CPU:-1}
+    local pin=()
+    if command -v taskset >/dev/null; then
+        pin=(taskset -c "$cpu")
     fi
-done
-if [[ ${#cells[@]} -eq 0 ]]; then
-    echo "perf-gate: no cells shared by the reference and HEAD" >&2
-    exit 1
-fi
 
-run() {
-    local side=$1 bin=$2 round=$3 cell=$4
-    echo "::group::round $round $side $cell"
-    CRITERION_HOME="$OUT/$side/r$round" ${pin[@]+"${pin[@]}"} "$bin" \
-        --bench --exact --noplot "$GROUP/$cell"
-    echo "::endgroup::"
-}
-
-for ((r = 1; r <= ROUNDS; r++)); do
-    for i in "${!cells[@]}"; do
-        cell=${cells[$i]}
-        if (((r + i) % 2 == 0)); then
-            run ref "$REF_BIN" "$r" "$cell"
-            run head "$HEAD_BIN" "$r" "$cell"
+    local ref_cells cells=() cell
+    ref_cells=$(list_cells "$ref_bin")
+    for cell in $(list_cells "$head_bin"); do
+        if grep -qxF "$cell" <<<"$ref_cells"; then
+            cells+=("$cell")
         else
-            run head "$HEAD_BIN" "$r" "$cell"
-            run ref "$REF_BIN" "$r" "$cell"
+            echo "perf-gate: $cell has no reference measurement (new cell), not judged"
         fi
     done
-done
+    if [[ ${#cells[@]} -eq 0 ]]; then
+        echo "perf-gate: no cells shared by the reference and HEAD" >&2
+        exit 1
+    fi
+    mkdir -p "$out"
+    printf '%s\n' "${cells[@]}" >"$out/cells"
 
-python3 "$(dirname "$0")/perf-gate-verdict.py" "$OUT" "$GROUP" "$ROUNDS" "$THRESHOLD" "${cells[@]}"
+    run() {
+        local side=$1 bin=$2 round=$3 cell=$4
+        echo "::group::round $round $side $cell"
+        CRITERION_HOME="$out/$side/r$round" ${pin[@]+"${pin[@]}"} "$bin" \
+            --bench --exact --noplot "$GROUP/$cell"
+        echo "::endgroup::"
+    }
+
+    local r i
+    for ((r = 1; r <= rounds; r++)); do
+        for i in "${!cells[@]}"; do
+            cell=${cells[$i]}
+            if (((r + i) % 2 == 0)); then
+                run ref "$ref_bin" "$r" "$cell"
+                run head "$head_bin" "$r" "$cell"
+            else
+                run head "$head_bin" "$r" "$cell"
+                run ref "$ref_bin" "$r" "$cell"
+            fi
+        done
+    done
+}
+
+verdict() {
+    python3 "$here/perf-gate-verdict.py" ${PERF_THRESHOLD:+--threshold "$PERF_THRESHOLD"} "$@"
+}
+
+case ${1:-} in
+measure)
+    [[ $# -eq 4 ]] || usage
+    perf_allowed && exit 0
+    measure "$2" "$3" "$4"
+    ;;
+verdict)
+    [[ $# -ge 2 ]] || usage
+    perf_allowed && exit 0
+    shift
+    verdict "$@"
+    ;;
+*)
+    [[ $# -eq 2 ]] || usage
+    perf_allowed && exit 0
+    out=$(mktemp -d)
+    measure "$1" "$2" "$out"
+    verdict "$out"
+    ;;
+esac
