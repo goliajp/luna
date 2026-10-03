@@ -315,3 +315,76 @@ pub(super) fn emit_chain_ptr_arg<E: Emit>(
     bcx.ins()
         .load(types::I64, MemFlagsData::trusted(), slot_addr, 0)
 }
+
+/// The pointer of `proto`, which an inlined call checks the callee's
+/// function against. JIT: the live pointer (the trace keeps the proto
+/// alive, see `CompiledTrace::inlined_protos`). AOT: a load through
+/// `__luna_aot_proto_slot_<hash>`, which the deploy side fills with the
+/// loaded chunk's proto of the same `Proto::stable_hash`; an index entry
+/// `[hash_addr, slot_addr]` in section `luna_proto_idx` (COFF `.lt_prix`)
+/// lets it find every slot.
+pub(super) fn emit_proto_arg<E: Emit>(
+    bcx: &mut E,
+    proto: luna_core::runtime::Gc<luna_core::runtime::function::Proto>,
+    aot: bool,
+    defined_aot_data: &mut std::collections::HashSet<DataId>,
+) -> Value {
+    if !aot {
+        return bcx.ins().iconst(types::I64, proto.as_ptr() as i64);
+    }
+    let hash = proto.stable_hash();
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    let slot_id = bcx
+        .declare_data(
+            &format!("__luna_aot_proto_slot_{hex}"),
+            Linkage::Export,
+            true,
+            false,
+        )
+        .expect("declare_data proto slot");
+    if defined_aot_data.insert(slot_id) {
+        let mut desc = DataDescription::new();
+        desc.define(Box::new([0u8; 8]));
+        let _ = bcx.define_data(slot_id, &desc);
+    }
+    let hash_id = bcx
+        .declare_data(
+            &format!("__luna_aot_proto_hash_{hex}"),
+            Linkage::Export,
+            false,
+            false,
+        )
+        .expect("declare_data proto hash");
+    if defined_aot_data.insert(hash_id) {
+        let mut desc = DataDescription::new();
+        desc.define(Box::new(hash));
+        let _ = bcx.define_data(hash_id, &desc);
+    }
+    let idx_id = bcx
+        .declare_data(
+            &format!("__luna_aot_proto_idx_{hex}"),
+            Linkage::Local,
+            false,
+            false,
+        )
+        .expect("declare_data proto idx");
+    if defined_aot_data.insert(idx_id) {
+        let mut desc = DataDescription::new();
+        desc.define(Box::new([0u8; 16]));
+        desc.set_custom_section(&aot_data_section(
+            &bcx.target_triple(),
+            "luna_proto_idx",
+            ".lt_prix",
+        ));
+        desc.set_align(8);
+        let hash_gv = bcx.declare_data_in_data(hash_id, &mut desc);
+        let slot_gv = bcx.declare_data_in_data(slot_id, &mut desc);
+        desc.write_data_addr(0, hash_gv, 0);
+        desc.write_data_addr(8, slot_gv, 0);
+        let _ = bcx.define_data(idx_id, &desc);
+    }
+    let slot_gv = bcx.declare_data_in_func(slot_id);
+    let slot_addr = bcx.symbol_value(types::I64, slot_gv);
+    bcx.ins()
+        .load(types::I64, MemFlagsData::trusted(), slot_addr, 0)
+}

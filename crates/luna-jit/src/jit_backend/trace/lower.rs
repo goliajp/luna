@@ -114,12 +114,19 @@ struct Lower<E: Emit> {
     upval_check_done: Vec<u32>,
     head_closure_var: Option<Variable>,
     known_int: Vec<Option<i64>>,
+    /// The registers holding a string constant loaded earlier in the same
+    /// pass: a table access by such a key may use the slot the recording
+    /// found it in.
+    const_str: Vec<bool>,
     /// Blocks the other way of a comparison jumps to, by the recorded op
     /// it rejoins at, with the registers the skipped ops write.
     alt_joins: std::collections::HashMap<usize, (Block, Vec<u32>)>,
     /// The iteration count the back edge keeps for tiering up, and the
     /// count to leave at.
     tier_count: Option<(Box<TCellU32>, u32)>,
+    /// The protos of other functions the trace inlined (its guards hold
+    /// their addresses).
+    inlined_protos: Vec<Gc<Proto>>,
 }
 
 /// `always_codegen = false` leaves the function undefined in `module`
@@ -154,19 +161,28 @@ fn with_plan<R>(
     checkpoint("post:closed-check");
     let head_proto = record.head_proto;
     let max_stack = head_proto.max_stack as usize;
+    // every op sees a register window this wide: the largest frame among
+    // the functions the trace runs (the head's and any it inlined)
+    let frame_w = record
+        .ops
+        .iter()
+        .map(|r| r.proto.max_stack as usize)
+        .fold(max_stack, usize::max);
     // Every pass below reads register operands: a constant- or
     // immediate-operand op is lowered as its register form with the
-    // constant in virtual register `max_stack` (one past the op's frame,
+    // constant in virtual register `frame_w` (one past the widest frame,
     // never stored back), whose kind and value `vconsts` holds.
     let translated;
-    let (record, vconsts) = match split_const_operands(record, max_stack as u32) {
+    let (record, vconsts) = match split_const_operands(record, frame_w as u32) {
         Some((t, v)) => {
             translated = t;
             (&translated, v)
         }
         None => (record, Vec::new()),
     };
-    let (plan, escape) = plan_trace(record, vconsts, head_proto, max_stack, opts, float_only)?;
+    let (plan, escape) = plan_trace(
+        record, vconsts, head_proto, max_stack, frame_w, opts, float_only,
+    )?;
     // a root trace reading a register on entry that holds a value no trace
     // is entered with (a boolean, a coroutine) could never run: it is not
     // compiled, and leaves its head free for a later recording
@@ -354,6 +370,7 @@ fn emit_trace<E: Emit>(
         escape,
         global_side_trace_box,
         tier_count,
+        inlined_protos,
         ..
     } = lower;
     Some((
@@ -372,6 +389,7 @@ fn emit_trace<E: Emit>(
             downrec_link_for_compiled,
             downrec_multi_way_count_for_compiled,
             tier_count,
+            inlined_protos,
         },
     ))
 }

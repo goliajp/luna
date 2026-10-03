@@ -76,7 +76,8 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
             // is checked against it, so a value of another type (or
             // a table with a metatable) leaves the trace here.
             let inferred = infer_getx_exit(record, i, effective_end);
-            if let Some((kind, want)) = getx_want(inferred) {
+            // a boolean is read only through a checked helper
+            if let Some((kind, want)) = getx_want(inferred).filter(|(k, _)| *k != RegKind::Bool) {
                 let v = array_read(lw, pl, oc, t, k_imm, want);
                 lw.bcx.def_var(regs[ins.a() as usize], v);
                 lw.current_kinds[off + ins.a() as usize] = kind;
@@ -113,14 +114,21 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
             let key_is_int = matches!(k_op(&lw.current_kinds, off as u32 + ins.c()), RegKind::Int);
             let key_is_str = matches!(k_op(&lw.current_kinds, off as u32 + ins.c()), RegKind::Str);
             match getx_want(inferred) {
-                Some((kind, want)) if key_is_int => {
+                Some((kind, want)) if key_is_int && kind != RegKind::Bool => {
                     let v = array_read(lw, pl, oc, t, key, want);
                     lw.bcx.def_var(regs[ins.a() as usize], v);
                     lw.current_kinds[off + ins.a() as usize] = kind;
                 }
                 // a string key reads as a field does
                 Some((kind, want)) if key_is_str => {
-                    let v = checked_read!(lw, pl, get_field_checked_id, t, key, want, oc.rop.pc, i);
+                    let constant = lw.const_str[off + ins.c() as usize];
+                    let slotted = constant && kind != RegKind::Bool;
+                    let v = match record.field_slot(i).filter(|_| slotted) {
+                        Some(slot) => emit_field_slot_read(lw, pl, oc, t, key, slot, want),
+                        None => {
+                            checked_read!(lw, pl, get_field_checked_id, t, key, want, oc.rop.pc, i)
+                        }
+                    };
                     lw.bcx.def_var(regs[ins.a() as usize], v);
                     lw.current_kinds[off + ins.a() as usize] = kind;
                 }
@@ -254,6 +262,10 @@ pub(super) fn emit_table_set_op<E: Emit>(
                 return None;
             }
             let val = lw.bcx.use_var(regs[ins.c() as usize]);
+            if key_kind == RegKind::Str {
+                let constant = lw.const_str[off + ins.b() as usize];
+                return store_str_key(lw, pl, oc, t, key, val, val_kind, constant);
+            }
             let stored_inline = if key_kind == RegKind::Int {
                 array_write(&mut lw.bcx, t, key, val, val_kind)
             } else {
@@ -274,13 +286,8 @@ pub(super) fn emit_set_field<E: Emit>(
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
-    let Plan {
-        head_proto, opts, ..
-    } = *pl;
-    let OpHelpers { set_ids, .. } = lw.h.op;
-    let OpCx {
-        i, rop, off, ins, ..
-    } = *oc;
+    let Plan { opts, .. } = *pl;
+    let OpCx { i, off, ins, .. } = *oc;
     let regs: &[Variable] = oc.regs;
     // sunk path: when escape sweep tagged
     // SetFieldSunkWrite, def_var the source register into
@@ -321,7 +328,7 @@ pub(super) fn emit_set_field<E: Emit>(
         _ => return None,
     }
     let t = lw.bcx.use_var(regs[ins.a() as usize]);
-    let key_v = match head_proto.consts[ins.b() as usize] {
+    let key_v = match oc.rop.proto.consts[ins.b() as usize] {
         luna_core::runtime::Value::Str(s) => s,
         _ => unreachable!("pre-emit gates Str const at K[B]"),
     };
@@ -332,11 +339,29 @@ pub(super) fn emit_set_field<E: Emit>(
         return None;
     }
     let val = lw.bcx.use_var(regs[ins.c() as usize]);
-    // a number overwriting a value already under the key goes
-    // straight into its slot; anything else through the helper
+    store_str_key(lw, pl, oc, t, key_arg, val, val_kind, true)
+}
+
+/// `t[key] = val` for an interned string `key`: a number overwriting a
+/// value already under a `constant` key goes straight into the hash slot
+/// the recording found it in; anything else through the checked helper.
+#[allow(clippy::too_many_arguments)]
+fn store_str_key<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    oc: &OpCx<'_>,
+    t: Value,
+    key_arg: Value,
+    val: Value,
+    val_kind: RegKind,
+    constant: bool,
+) -> Option<()> {
+    let OpHelpers { set_ids, .. } = lw.h.op;
+    let OpCx { i, rop, .. } = *oc;
     let slot = pl
         .record
         .field_slot(i)
+        .filter(|_| constant)
         .filter(|_| matches!(val_kind, RegKind::Int | RegKind::Float));
     let merge = slot.map(|slot| {
         let bcx = &mut lw.bcx;

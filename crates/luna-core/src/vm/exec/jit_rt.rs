@@ -375,4 +375,55 @@ impl Vm {
             }),
         );
     }
+
+    /// Upvalue `idx` of `cl`, for compiled code running a function a trace
+    /// inlined, whose head frame starts at `head_base`: `None` when the
+    /// upvalue is open at a slot of the running thread at or above
+    /// `head_base`, a register the trace may hold only in its own
+    /// registers while the stack has an older value.
+    pub fn jit_upval_below(
+        &self,
+        cl: Gc<LuaClosure>,
+        idx: u32,
+        head_base: u32,
+    ) -> Option<crate::runtime::Value> {
+        use crate::runtime::UpvalState;
+        match cl.upvals()[idx as usize].state() {
+            UpvalState::Open { slot, thread }
+                if slot >= head_base && self.is_current_thread(thread) =>
+            {
+                None
+            }
+            UpvalState::Open { slot, thread } => Some(self.read_slot(slot, thread)),
+            UpvalState::Closed(v) => Some(v),
+        }
+    }
+
+    /// `t[key]` through table-valued `__index` links (up to four, as the
+    /// interpreter's fast path follows), for compiled code: `None` when a
+    /// link is a function or the chain goes on, which the interpreter has
+    /// to run.
+    pub fn jit_index_str_tables(
+        &self,
+        t: Gc<Table>,
+        key: Gc<crate::runtime::string::LuaStr>,
+    ) -> Option<crate::runtime::Value> {
+        use crate::runtime::Value;
+        let mut cur = t;
+        for _ in 0..4 {
+            let v = cur.get_str(key);
+            if !v.is_nil() {
+                return Some(v);
+            }
+            let Some(mt) = cur.metatable() else {
+                return Some(Value::Nil);
+            };
+            match self.fast_tm(mt, Mm::Index) {
+                Value::Nil => return Some(Value::Nil),
+                Value::Table(next) => cur = next,
+                _ => return None,
+            }
+        }
+        None
+    }
 }

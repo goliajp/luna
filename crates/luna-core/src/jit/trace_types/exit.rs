@@ -36,6 +36,9 @@ pub enum ExitTag {
     /// of a Str constant, Move from a Str slot, or Concat result).
     /// Dispatcher repacks as `Value::Str(Gc::from_ptr(raw))`.
     Str,
+    /// Trace writes a boolean: payload 0 (false) or 1 (true); the
+    /// dispatcher repacks it with tag `raw::FALSE` plus the payload.
+    Bool,
 }
 
 /// Derive an [`ExitTag`] vector from a per-slot `RegKind` snapshot.
@@ -108,6 +111,8 @@ pub fn exit_tags_match_entry_tags(
             ExitTag::Closure => crate::runtime::value::raw::CLOSURE,
             ExitTag::Nil => crate::runtime::value::raw::NIL,
             ExitTag::Str => crate::runtime::value::raw::STR,
+            // a trace takes a boolean of either value under `raw::FALSE`
+            ExitTag::Bool => crate::runtime::value::raw::FALSE,
         };
         if child != expected {
             return false;

@@ -49,7 +49,7 @@ fn cmp_at_depth_one_no_longer_aborts_via_inline_abort() {
     rec.push(RecordedOp {
         proto: p,
         pc: 1,
-        inst: Inst::iabc(Op::Call, 0, 1, 2, false),
+        inst: Inst::iabc(Op::Call, 0, 3, 2, false),
         inline_depth: 0,
         var_count: None,
     });
