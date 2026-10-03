@@ -2,7 +2,8 @@
 //!
 //! An interval that spans a call only gets a callee-saved register (or the
 //! stack); the others prefer caller-saved ones. When no register is free, the
-//! interval ending last is spilled for its whole life.
+//! interval read and written least (counting loops, see `live`) is spilled
+//! for its whole life, the one ending last among equals.
 
 use super::live::Analysis;
 use super::*;
@@ -128,18 +129,19 @@ pub(crate) fn allocate(lir: &Lir, an: &Analysis, classes: [&Class; 2], al: &mut 
         let p = match got {
             Some(p) => p,
             None => {
-                // spill whichever ends last: a holder whose register this
-                // interval may take, or this one
+                // spill the cheapest: a holder whose register this interval
+                // may take, or this one
                 let allowed = if crosses {
                     callee[k]
                 } else {
                     callee[k] | caller[k]
                 };
+                let cost = |r: usize| (an.weight[r], std::cmp::Reverse(an.end[r]));
                 let victim = (0..64u8)
                     .filter(|&p| allowed & (1 << p) != 0 && holder[k][p as usize] != NONE)
-                    .max_by_key(|&p| an.end[holder[k][p as usize] as usize]);
+                    .min_by_key(|&p| cost(holder[k][p as usize] as usize));
                 match victim {
-                    Some(p) if an.end[holder[k][p as usize] as usize] > an.end[ri] => {
+                    Some(p) if cost(holder[k][p as usize] as usize) < cost(ri) => {
                         let o = holder[k][p as usize] as usize;
                         loc[o] = Loc::Stack(*spill_slots);
                         *spill_slots += 1;
@@ -159,6 +161,11 @@ pub(crate) fn allocate(lir: &Lir, an: &Analysis, classes: [&Class; 2], al: &mut 
         loc[ri] = Loc::Reg(p);
         if callee[k] & (1 << p) != 0 {
             callee_used[k] |= 1 << p;
+        }
+    }
+    for (d, &r) in an.alias.iter().enumerate() {
+        if r != NONE {
+            loc[d] = loc[r as usize];
         }
     }
 }

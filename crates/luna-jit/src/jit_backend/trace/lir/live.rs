@@ -29,6 +29,13 @@ pub(crate) struct Analysis {
     pub(crate) end: Vec<u32>,
     /// Per value: how many instructions read it.
     pub(crate) uses: Vec<u32>,
+    /// Per value: the variable it was read from when it can live in that
+    /// variable's home (nothing writes the variable while the value is
+    /// live), else `NONE`. Such a value gets no interval of its own.
+    pub(crate) alias: Vec<u32>,
+    /// Per vreg: its reads and writes, those inside loops counted
+    /// `LOOP_WEIGHT` times per loop around them (what spilling it costs).
+    pub(crate) weight: Vec<u32>,
     /// Positions of calls (the operand-read position `2k`), ascending.
     pub(crate) calls: Vec<u32>,
     /// Variables read anywhere: they start out zero, as with Cranelift,
@@ -40,7 +47,12 @@ pub(crate) struct Analysis {
     read: Vec<bool>,
     /// (loop head position, back edge position)
     loops: Vec<(u32, u32)>,
+    depth: Vec<i32>,
+    writes: Vec<Vec<u32>>,
 }
+
+/// How much more a read or write inside a loop counts than one outside.
+const LOOP_WEIGHT: u32 = 8;
 
 fn reset<T: Clone>(v: &mut Vec<T>, n: usize, x: T) {
     v.clear();
@@ -249,4 +261,89 @@ pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
         }
     }
     an.n_values = nv;
+    coalesce_var_reads(lir, an);
+    weigh(lir, an);
+}
+
+/// A value read from a variable that is not written while the value is
+/// live stays in the variable's home: the read is no copy, and the
+/// variable, now read wherever the value is, keeps a register more often.
+fn coalesce_var_reads(lir: &Lir, an: &mut Analysis) {
+    let nv = an.n_values as usize;
+    let Analysis {
+        code,
+        start,
+        end,
+        alias,
+        writes,
+        ..
+    } = an;
+    reset(alias, nv, NONE);
+    writes.iter_mut().for_each(Vec::clear);
+    writes.resize_with(lir.var_ty.len(), Vec::new);
+    for (k, &ii) in code.iter().enumerate() {
+        let i = &lir.insts[ii as usize];
+        if matches!(i.op, Op::VarWrite) {
+            writes[i.a as usize].push(2 * k as u32 + 1);
+        }
+    }
+    for (k, &ii) in code.iter().enumerate() {
+        let i = &lir.insts[ii as usize];
+        if !matches!(i.op, Op::VarRead) || start[i.dst as usize] == NONE {
+            continue;
+        }
+        let d = i.dst as usize;
+        let p = 2 * k as u32 + 1;
+        let w = &writes[i.a as usize];
+        // the first write after the read, in layout order: loops extended
+        // the value's interval over every write that can run while it lives
+        let next = w.partition_point(|&x| x <= p);
+        if w.get(next).is_some_and(|&x| x <= end[d]) {
+            continue;
+        }
+        let r = nv + i.a as usize;
+        end[r] = end[r].max(end[d]);
+        start[r] = start[r].min(start[d]);
+        start[d] = NONE;
+        alias[d] = r as u32;
+    }
+}
+
+/// Fills `an.weight` once the loops are known.
+fn weigh(lir: &Lir, an: &mut Analysis) {
+    let n_pos = 2 * an.code.len() + 2;
+    let Analysis {
+        code,
+        weight,
+        loops,
+        depth,
+        start,
+        alias,
+        ..
+    } = an;
+    reset(weight, start.len(), 0);
+    reset(depth, n_pos + 1, 0);
+    for &(h, e) in loops.iter() {
+        depth[h as usize] += 1;
+        depth[e as usize + 1] -= 1;
+    }
+    let mut d = 0;
+    for x in depth.iter_mut() {
+        d += *x;
+        *x = d;
+    }
+    for (k, &ii) in code.iter().enumerate() {
+        let p = 2 * k;
+        let w = LOOP_WEIGHT.saturating_pow(depth[p] as u32);
+        let inst = &lir.insts[ii as usize];
+        let mut add = |r: u32| {
+            let r = match alias.get(r as usize) {
+                Some(&a) if a != NONE => a,
+                _ => r,
+            };
+            weight[r as usize] = weight[r as usize].saturating_add(w);
+        };
+        for_uses(lir, inst, &mut add);
+        for_defs(lir, inst, &mut add);
+    }
 }
