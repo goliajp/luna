@@ -336,7 +336,9 @@ fn run_cont(
         Wait::Yield => {
             if cont.k.is_none() {
                 let fs = st(l).calls[token].func_slot;
+                let closed = close_frame(vm, l, token, None);
                 pop_call(l, co, token);
+                closed?;
                 return Ok(vm.nat_return(fs, &vals));
             }
             cstack(co).extend_from_slice(&vals);
