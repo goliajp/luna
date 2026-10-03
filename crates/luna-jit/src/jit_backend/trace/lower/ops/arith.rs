@@ -260,7 +260,10 @@ fn emit_float_divmod<E: Emit>(
         sig.params.push(AbiParam::new(types::F64));
         sig.params.push(AbiParam::new(types::F64));
         sig.returns.push(AbiParam::new(types::F64));
-        let id = lw.bcx.declare_function("fmod", Linkage::Import, &sig).ok()?;
+        let id = lw
+            .bcx
+            .declare_function("fmod", Linkage::Import, &sig)
+            .ok()?;
         let f = lw.bcx.import_func(id);
         let call = lw.bcx.ins().call(f, &[a, b]);
         let m = lw.bcx.inst_results(call)[0];

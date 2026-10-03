@@ -116,8 +116,10 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
             // a float key equal to an integer reads that integer's slot
             // (the 5.1 / 5.2 loop variable); any other float leaves the
             // trace at the op
-            let key_is_float =
-                matches!(k_op(&lw.current_kinds, off as u32 + ins.c()), RegKind::Float);
+            let key_is_float = matches!(
+                k_op(&lw.current_kinds, off as u32 + ins.c()),
+                RegKind::Float
+            );
             match getx_want(inferred) {
                 Some((kind, want)) if (key_is_int || key_is_float) && kind != RegKind::Bool => {
                     let key = if key_is_float {

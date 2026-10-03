@@ -246,7 +246,9 @@ fn emit_str_sub_fold<E: Emit>(
     let kind = |r: u32| k_op(&lw.current_kinds, off as u32 + r);
     let a = fold.dst_reg;
     let number = |k| matches!(k, RegKind::Int | RegKind::Float);
-    if kind(a + 1) != RegKind::Str || !number(kind(a + 2)) || fold.nargs == 3 && !number(kind(a + 3))
+    if kind(a + 1) != RegKind::Str
+        || !number(kind(a + 2))
+        || fold.nargs == 3 && !number(kind(a + 3))
     {
         return None;
     }

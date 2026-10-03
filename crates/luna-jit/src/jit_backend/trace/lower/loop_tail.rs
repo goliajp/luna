@@ -107,7 +107,10 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
             let up = lw.bcx.ins().fcmp(FloatCC::LessThan, zero, step_f);
             let le = lw.bcx.ins().fcmp(FloatCC::LessThanOrEqual, next_f, lim_f);
             let ge = lw.bcx.ins().fcmp(FloatCC::LessThanOrEqual, lim_f, next_f);
-            let next = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), next_f);
+            let next = lw
+                .bcx
+                .ins()
+                .bitcast(types::I64, MemFlagsData::new(), next_f);
             (lw.bcx.ins().select(up, le, ge), Some(next))
         }
     };
