@@ -120,12 +120,16 @@ included.
 `CC` and `LD` override the compiler and linker for either target. On a
 Windows target an `--out` path without an extension gets `.exe`.
 
-The two targets give the same program with different C runtimes: the
-MSVC binary links the Universal CRT and `vcruntime140.dll` (present on
-any current Windows; ship the Visual C++ Redistributable for older
-systems), the MinGW binary links `msvcrt.dll` plus the MinGW runtime
-built into it. AOT traces, the per-dialect `Vm` and the `.lt_*`
-sections the runtime reads behave the same on both.
+The two targets differ in what the binary needs at run time. Both use
+the Universal CRT that ships with Windows 10 and later (the
+`api-ms-win-crt-*` imports). The MSVC binary also imports
+`VCRUNTIME140.dll`, which comes with the Visual C++ Redistributable;
+install it, or ship it next to the binary, on a machine without Visual
+Studio. The MinGW binary built by a UCRT MinGW toolchain (MSYS2's
+`ucrt64`, GitHub's runners) needs nothing beyond Windows; one built by
+an older `msvcrt` toolchain imports `msvcrt.dll` instead. AOT traces,
+the per-dialect `Vm` and the `.lt_*` sections the runtime reads behave
+the same on both.
 
 Windows on ARM (`aarch64-pc-windows-msvc`) is not supported: Cranelift's
 PE/COFF writer lacks a relocation the AArch64 traces need.
