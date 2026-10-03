@@ -381,6 +381,7 @@ impl Vm {
     /// upvalue is open at a slot of the running thread at or above
     /// `head_base`, a register the trace may hold only in its own
     /// registers while the stack has an older value.
+    #[doc(hidden)]
     pub fn jit_upval_below(
         &self,
         cl: Gc<LuaClosure>,
@@ -403,6 +404,7 @@ impl Vm {
     /// interpreter's fast path follows), for compiled code: `None` when a
     /// link is a function or the chain goes on, which the interpreter has
     /// to run.
+    #[doc(hidden)]
     pub fn jit_index_str_tables(
         &self,
         t: Gc<Table>,
