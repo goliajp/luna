@@ -134,6 +134,8 @@ impl Gen<'_, '_> {
         self.line("end");
         self.hot_function();
         self.nums.clear();
+        self.anys.clear();
+        self.reentry_kernel();
         self.max_trips = 300;
     }
 
@@ -184,7 +186,7 @@ impl Gen<'_, '_> {
         if self.iters == 1 && self.user_calls && self.pick(3) == 0 {
             return self.loop_stmt();
         }
-        match self.pick(18) {
+        match self.pick(20) {
             0 => {
                 let (v, e) = (self.num_var_target(), self.num(0));
                 self.line(&format!("{v} = {e}"));
@@ -236,6 +238,8 @@ impl Gen<'_, '_> {
             15 => self.meta_stmt(),
             16 if self.user_calls => self.call_stmt(),
             17 if self.iters <= 64 => self.line("collectgarbage()"),
+            18 if self.user_calls && self.ind == 0 => self.reentry_calls(),
+            19 if self.user_calls && self.ind == 0 => self.gc_kernel(),
             _ => {
                 let e = self.num(1);
                 self.line(&format!("n1, x = va({e}, x)"));
