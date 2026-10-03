@@ -346,9 +346,10 @@ impl Gen<'_, '_> {
         let saved = (self.in_loop, self.iters);
         self.in_loop = true;
         self.iters *= trips;
-        let kind = match self.hot {
-            true if self.pick(2) == 0 => 0,
-            _ => self.pick(6),
+        let kind = if self.hot && self.pick(2) == 0 {
+            0
+        } else {
+            self.pick(6)
         };
         match kind {
             0 | 1 => self.numeric_for(id, trips),
