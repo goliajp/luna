@@ -237,10 +237,7 @@ impl Vm {
             // `unpack` returned it fully initialised
             regs[i] = unsafe { payload.zero as i64 };
             // a slot past the compile-time tags is checked like one read
-            let want = compile_entry_tags
-                .get(i)
-                .copied()
-                .unwrap_or(crate::jit::trace::entry_tag_of(tag));
+            let want = compile_entry_tags.get(i).copied().unwrap_or(tag);
             if want == ENTRY_TAG_ANY {
                 // not read before the trace writes it: any value enters,
                 // and an exit that has not written it leaves it as it is
@@ -252,12 +249,16 @@ impl Vm {
             // pointer as an Int payload). The interpreter runs this entry;
             // the trace stays for later ones. The payload of anything else
             // cannot stand for the value.
-            if crate::jit::trace::entry_tag_of(tag) != want
-                || !crate::jit::trace::entry_tag_enterable(tag)
-            {
+            use crate::runtime::value::raw;
+            if tag != want {
+                // a trace compiled for a boolean takes either value
+                if want != raw::FALSE || tag != raw::TRUE {
+                    return false;
+                }
+            } else if !crate::jit::trace::entry_tag_enterable(tag) {
                 return false;
             }
-            if want == crate::runtime::value::raw::FALSE {
+            if want == raw::FALSE {
                 // a boolean enters as payload 0 or 1
                 regs[i] = i64::from(tag - want);
             }
