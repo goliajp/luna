@@ -195,6 +195,5 @@ pub(super) fn begin_body<E: Emit>(
         const_str: vec![false; window_size_us],
         alt_joins: std::collections::HashMap::new(),
         tier_count: None,
-        inlined_protos: Vec::new(),
     }
 }

@@ -229,6 +229,22 @@ pub(super) fn cache_trace(
     proto.traces.borrow_mut().push(TArc::new(ct));
 }
 
+/// [`cache_trace`] for a trace compiled from `record`, keeping alive the
+/// prototypes of the other functions it inlined.
+pub(super) fn cache_compiled_trace(
+    proto: Gc<crate::runtime::function::Proto>,
+    ct: crate::jit::trace::CompiledTrace,
+    record: &crate::jit::trace::TraceRecord,
+) {
+    cache_trace(proto, ct);
+    let mut kept = proto.inlined_protos.borrow_mut();
+    for op in record.ops.iter().filter(|op| op.inline_depth > 0) {
+        if !op.proto.ptr_eq(proto) && !kept.iter().any(|p| p.ptr_eq(op.proto)) {
+            kept.push(op.proto);
+        }
+    }
+}
+
 pub(super) fn trace_head_abandoned(
     proto: Gc<crate::runtime::function::Proto>,
     head_pc: u32,

@@ -220,7 +220,6 @@ pub(crate) fn try_compile_trace(
         downrec_link: None,
         downrec_multi_way_count: 0,
         tier_up: None,
-        inlined_protos: Box::new([]),
     })
 }
 

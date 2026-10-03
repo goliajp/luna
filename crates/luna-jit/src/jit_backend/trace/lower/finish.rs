@@ -21,7 +21,6 @@ pub(super) struct Emitted {
     pub(super) downrec_link_for_compiled: Option<(u32, u32)>,
     pub(super) downrec_multi_way_count_for_compiled: u8,
     pub(super) tier_count: Option<(Box<TCellU32>, u32)>,
-    pub(super) inlined_protos: Vec<Gc<Proto>>,
 }
 
 /// The kinds the loop edge leaves and the dispatch gates that need the
@@ -162,7 +161,6 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         downrec_link_for_compiled,
         downrec_multi_way_count_for_compiled,
         tier_count,
-        inlined_protos,
     } = em;
     let (current_kinds, dispatchable, dispatch_off_reason) = apply_tail_kinds_and_gates(
         pl,
@@ -341,7 +339,6 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         downrec_multi_way_count: downrec_multi_way_count_for_compiled,
         tier_up: tier_count
             .map(|(count, at)| tier_up(count, at, record.head_proto.call_hot_count.get())),
-        inlined_protos: inlined_protos.into(),
     }
 }
 
