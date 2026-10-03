@@ -30,6 +30,9 @@ impl Vm {
         {
             return false;
         }
+        if self.trace_try_adopt(proto, target, base as usize, None, false) {
+            return true;
+        }
         self.trace_start_at_loop(cl, base, target, tfor);
         true
     }
@@ -54,6 +57,7 @@ impl Vm {
             entry_tags.push(tag);
         }
         let mut rec = crate::jit::trace::TraceRecord::start(cl.proto, target, entry_tags, false);
+        rec.settings = self.jit.recording_settings();
         if let Some(a) = tfor {
             // a native iterator's address lets the trace compiler
             // specialise `ipairs` into inline array reads

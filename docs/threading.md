@@ -170,6 +170,14 @@ The type system rejects this. The fix is one of Patterns 1-3.
 
 ---
 
+### Sharing compiled code between threads
+
+`luna_jit::Engine` is `Send + Sync`: give each worker thread a clone and
+build its VMs with `engine.new_vm(..)`. A trace or function one worker's
+VM compiles is installed by the others instead of being compiled again;
+each VM runs its own copy of the code (see
+[`embedding.md`](embedding.md#111-sharing-compiled-code-between-vms)).
+
 ## Platform notes
 
 ### wasm32

@@ -164,6 +164,28 @@ pub(crate) trait Emit: Ins {
     /// `at`, else to `cont`. Only the baseline tier counts: Cranelift IR
     /// just goes to `cont`.
     fn tier_count(&mut self, cell: i64, at: u32, hot: Block, cont: Block);
+    /// The address `live`, which means something only in the Vm the trace
+    /// is compiled for. The code another Vm installs gets that Vm's address
+    /// of the same `kind` written over it (see `super::image`).
+    fn reloc(&mut self, kind: RelocKind, live: i64) -> Value;
+}
+
+/// What a Vm-specific address in a trace's code stands for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RelocKind {
+    /// An interned string (a key or a constant of one of the trace's protos).
+    Str,
+    /// A function prototype an inlined call is checked against.
+    Proto,
+    /// The frame chain of inline side exit `n`.
+    Chain(u32),
+    /// The baseline tier's iteration count.
+    TierCell,
+}
+
+/// The name of the data symbol Cranelift code reads relocation `n` from.
+pub(crate) fn reloc_symbol(n: usize) -> String {
+    format!("__luna_reloc_{n}")
 }
 
 macro_rules! forward_ins {
@@ -246,6 +268,8 @@ impl Ins for FunctionBuilder<'_> {
 pub(crate) struct ClifEmit<'f, 'm, M: Module> {
     pub(crate) b: FunctionBuilder<'f>,
     pub(crate) m: &'m mut M,
+    /// The relocations, in symbol order (see [`Emit::reloc`]).
+    pub(crate) relocs: Vec<(RelocKind, i64)>,
 }
 
 #[rustfmt::skip]
@@ -297,5 +321,22 @@ impl<M: Module> Emit for ClifEmit<'_, '_, M> {
     }
     fn tier_count(&mut self, _cell: i64, _at: u32, _hot: Block, cont: Block) {
         self.b.ins().jump(cont, &[]);
+    }
+    fn reloc(&mut self, kind: RelocKind, live: i64) -> Value {
+        let n = match self.relocs.iter().position(|&r| r == (kind, live)) {
+            Some(n) => n,
+            None => {
+                self.relocs.push((kind, live));
+                self.relocs.len() - 1
+            }
+        };
+        let id = self
+            .m
+            .declare_data(&reloc_symbol(n), Linkage::Import, false, false)
+            .expect("declaring a relocation symbol");
+        let gv = self.m.declare_data_in_func(id, self.b.func);
+        self.b
+            .ins()
+            .symbol_value(cranelift_codegen::ir::types::I64, gv)
     }
 }

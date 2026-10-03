@@ -23,8 +23,31 @@ optimization.
 
 ### Breaking
 
+- `TableError` has a new variant, `ReadOnly`, which `Table::set` and
+  `Table::set_int` return for a read-only table; a `match` on
+  `TableError` needs an arm for it. `Table::try_set_existing` returns
+  `false` for a read-only table.
+
+- `Vm::take_error_traceback` returns PUC's text as a whole: it starts with
+  the `stack traceback:` line, and in 5.1 and 5.2 leaves out the middle of
+  a deep stack where `luaL_traceback` (5.1: `debug.traceback`), run by a
+  message handler at the error, leaves it out. It used to start with the
+  first level's newline and elide as if the stack had no handler on top.
+  The level lines themselves are unchanged and already listed C functions
+  (`[C]: in function 'error'`, `[C]: in function 'string.gsub'`); the
+  embedding guide now describes the format per dialect.
+  `Coro::error_traceback` also starts with `stack traceback:`.
+
+- `Vm::call_value_with_handler` is no longer a level of the stack: a
+  traceback taken in its handler ends with the function the host called,
+  as one taken under PUC's `lua_pcall` does, instead of with a
+  `[C]: in ?` line. The `luna` command line keeps that line: it calls
+  `Vm::call_value_with_handler_in_c` (hidden from the docs), the same call
+  made from inside a C function of the host's, as `lua.c`'s `docall` runs
+  inside `pmain`.
+
 - `luna_core::jit::trace::ExitTag` has a `Bool` variant and `TraceRecord`
-  the `index_slots` and `index_key` fields; the frame-materialise helper
+  the `index_slots`, `index_key` and `settings` fields; the frame-materialise helper
   `luna_jit_trace_materialize_frames` takes a third argument, the
   closure of each frame. Code that builds these types by hand or matches
   `ExitTag` exhaustively has to name the new parts.
@@ -262,6 +285,11 @@ optimization.
   PUC. In 5.3, a zero step with a NaN or `-math.huge` limit now starts
   the index at 0, as PUC's `forlimit` does.
 
+- An error raised by a native the host calls directly (`vm.call_value`
+  on `error` or another library function, with no Lua function between)
+  left no traceback for `take_error_traceback`; it now has one, whose only
+  level is that native.
+
 - A binary built with `luna-aot compile --dialect 5.1` (or 5.2, 5.3, 5.4,
   `macrolua`) ran its script on a Lua 5.5 `Vm`. A 5.3 or 5.4 binary
   stopped at startup with "PUC bytecode loading is disabled"; a 5.1 or
@@ -269,6 +297,12 @@ optimization.
   "Lua 5.5". The generated `main` now passes the dialect to
   the runtime entry, which creates the `Vm` for it. Affects every release
   with `--dialect`, 1.3.0 through 4.0.1.
+
+- The table-field inline cache of a trace compiled ahead of time compared
+  the cached node's key with the address the key had in the process that
+  compiled it, so it never hit; it now reads the key from the slot the
+  deploy side fills, like the trace's other string keys.
+
 - A trace whose entry reads a register holding a boolean could never be
   entered, yet it was compiled and kept its loop or function head, so no
   trace ever ran there. Booleans now enter traces (see Changed); a
@@ -308,12 +342,45 @@ optimization.
 
 ### Added
 
+- Read-only tables: `Vm::set_readonly(t: Gc<Table>, on: bool)` marks a
+  table read-only or writable again (Redis's `lua_enablereadonlytable`),
+  `Table::is_readonly` reads the mark, and the facade has
+  `LuaTable::set_readonly`. Every write to a read-only table raises
+  `Attempt to modify a readonly table` in every dialect, with or without
+  the JIT: assignments (with the position of the assignment), a
+  `__newindex` chain that reaches the table, `rawset`, `setmetatable`,
+  `debug.setmetatable`, the stores of `table.insert`, `table.remove`,
+  `table.sort` and `table.move`, and 5.1's `package.seeall` (these with
+  no position). A trace compiled before the table was marked leaves the
+  store to the interpreter, which raises. `Vm::set_global` refuses the
+  write too, and `Vm::table_error` turns a `TableError` from a raw
+  `Table::set` into the error the interpreter raises. Reads cost nothing
+  extra. An interpreter store tests one bit of the table header before it
+  writes, the bit its write barrier tests (set for a black table as well
+  as a read-only one), which costs one instruction per store; a trace
+  tests a table it keeps storing into once per run, and the method JIT
+  tests the tables a compiled function is given once per call. See the
+  embedding guide, section 5.1.
+- `luna_core::runtime::table::jit_layout::{TABLE_READONLY_BYTE_OFFSET,
+  TABLE_READONLY_BYTE_MASK}`: where the JIT's inline stores find the
+  read-only bit.
 - `luna_runtime_helpers::luna_aot_run_dialect`, the C entry an AOT
   binary's `main` now calls with the dialect the script was compiled
   for; `run_bytecode_as`, its Rust counterpart; `dialect_code` and
   `dialect_from_code` for the numbers it takes. `luna_aot_run` and
   `run_bytecode` keep running a 5.5 dump. `luna_aot::runtime_stub::aot_main_as`
   takes the dialect the same way.
+- `luna_jit::Engine`: VMs built through one engine (`engine.new_vm`,
+  `engine.new_minimal_vm`, `Lua::with_engine`) share the traces and
+  method-JIT functions they compile. A VM reaching code of the same
+  content installs the compiled code another VM produced instead of
+  recording and compiling it: a fresh VM running the token-bucket
+  benchmark compiles nothing. The engine is `Send + Sync`; code is shared
+  only between VMs of one dialect and the same trace settings, and each
+  VM copies what it installs into its own code memory. New:
+  `Vm::new_minimal_with_hash_seed`, `Heap::with_seed`, `Heap::seed`,
+  `Vm::trace_adopted_count`, `luna_jit::jit::chunk_adopted_count`.
+
 - `luna_aot::embed::compile_and_link_with` and `AotOptions`: the same
   build as `compile_and_link`, with the harvest diagnostics switched on by
   a field instead of the `LUNA_AOT_HARVEST_PROBE` environment variable

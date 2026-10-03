@@ -175,7 +175,11 @@ impl Vm {
         // accepts only Value::Table and passes the raw Gc ptr; an
         // Int-typed slot accepts only Value::Int. Any other shape
         // bails to the interpreter so the call's actual dynamics
-        // (metamethod dispatch / type-coerce) take over.
+        // (metamethod dispatch / type-coerce) take over. So does a
+        // read-only table: compiled code stores into the tables it is
+        // given without testing them, and nothing it runs can mark one
+        // (it calls no host code), so this one test per call covers all
+        // its stores.
         let mut args: [i64; crate::jit::MAX_JIT_ARITY as usize] =
             [0; crate::jit::MAX_JIT_ARITY as usize];
         // From 5.3 an integer is its own subtype: turned into a float for
@@ -188,7 +192,7 @@ impl Vm {
             let want_float = (arg_float_mask >> i) & 1 == 1;
             let want_table = (arg_table_mask >> i) & 1 == 1;
             args[i] = match (want_table, want_float, v) {
-                (true, _, Value::Table(t)) => t.as_ptr() as i64,
+                (true, _, Value::Table(t)) if !t.is_readonly() => t.as_ptr() as i64,
                 (false, false, Value::Int(x)) => x,
                 (false, true, Value::Float(f)) => f.to_bits() as i64,
                 (false, true, Value::Int(x)) if int_as_float => (x as f64).to_bits() as i64,

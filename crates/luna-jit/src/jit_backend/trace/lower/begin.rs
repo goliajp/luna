@@ -11,7 +11,7 @@ pub(super) fn begin_body<E: Emit>(
     defined_aot_data: std::collections::HashSet<DataId>,
     sunk: (Vec<Option<Vec<Variable>>>, Vec<Option<Vec<RegKind>>>, u32),
     flush_ctx: Option<FlushCtx>,
-    blocks: (Option<Block>, Block),
+    blocks: (Option<Block>, Option<Block>, Block),
 ) -> Lower<E> {
     let EntryRegs {
         reg_state,
@@ -22,7 +22,7 @@ pub(super) fn begin_body<E: Emit>(
         tforcall_val_tag_var,
     } = head;
     let (virt_vars, virt_kinds, sunk_alloc_seen) = sunk;
-    let (precheck, body_loop) = blocks;
+    let (precheck, ro_precheck, body_loop) = blocks;
     let Plan {
         record,
         max_stack,
@@ -160,6 +160,10 @@ pub(super) fn begin_body<E: Emit>(
     // (from LoadI / LoadK earlier in the same pass), so a `//`, `%` or shift
     // by a constant needs no runtime guard.
     let known_int: Vec<Option<i64>> = vec![None; window_size_us];
+    let ro_invariant = match ro_precheck {
+        Some(_) => readonly_invariants(pl, &current_kinds),
+        None => vec![false; window_size_us],
+    };
     Lower {
         bcx,
         h,
@@ -170,6 +174,7 @@ pub(super) fn begin_body<E: Emit>(
         tforcall_tag_var,
         tforcall_val_tag_var,
         precheck,
+        ro_precheck,
         body_loop,
         head_kinds,
         defined_aot_data,
@@ -195,5 +200,7 @@ pub(super) fn begin_body<E: Emit>(
         const_str: vec![false; window_size_us],
         alt_joins: std::collections::HashMap::new(),
         tier_count: None,
+        ro_invariant,
+        ro_checked: Vec::new(),
     }
 }
