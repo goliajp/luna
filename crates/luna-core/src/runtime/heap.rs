@@ -97,7 +97,7 @@ fn is_black(flags: u8) -> bool {
 /// can probe reachability without owning the bit constants. Equivalent to
 /// `isgray(o) || isblack(o)` in PUC.
 pub(crate) fn header_is_marked(h: *mut GcHeader) -> bool {
-    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+    // SAFETY: the caller (`Table::refs_contain_unmarked_coro`, during the atomic step) passes the header of a coroutine stored in a table being marked; it is not freed before the sweep, and only the flag byte is read
     unsafe { !is_white((*h).flags) }
 }
 
@@ -280,7 +280,7 @@ impl Heap {
 
     #[inline]
     fn link(&mut self, h: *mut GcHeader) {
-        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+        // SAFETY: `h` is the header of an object the caller just allocated (a fresh box or a recycled pool table) and has not linked anywhere yet, so this is the only pointer to it
         unsafe {
             (*h).next = self.all;
             // Born color depends on phase:
@@ -319,7 +319,7 @@ impl Drop for Heap {
     fn drop(&mut self) {
         // free everything regardless of reachability, including any list still
         // detached for an in-flight incremental sweep
-        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+        // SAFETY: the heap is being dropped, so nothing uses its objects any more; `all`, `sweep_cur` and `fixed` hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds `Box::into_raw` tables already unlinked from every list
         unsafe {
             for mut cur in [self.all, self.sweep_cur, self.fixed] {
                 while !cur.is_null() {

@@ -68,11 +68,11 @@ impl IntChunkCompiler for LlvmBackend {
         // `JIT_VM` / `JIT_CL` TLS slots stay single-source-of-truth
         // across backends. Same RAII semantics as Cranelift's path.
         //
-        // SAFETY: the dispatcher derived `vm` from a live `&mut Vm`;
-        // the JIT entry that runs under the returned guard reaches
-        // back into the Vm only through the TLS pointer installed
-        // here (helpers read it via `JIT_VM`). Vm is `?Send` /
-        // single-threaded; no aliasing concern within this entry.
+        // SAFETY: `IntChunkCompiler::enter` requires `vm` to be a live,
+        // exclusively borrowed Vm for the life of the guard; every
+        // caller (the chunk and trace dispatch paths in luna-core's
+        // `vm/exec`) passes a pointer made from its own `&mut Vm`,
+        // which outlives the guard it holds
         let vm_ref = unsafe { &mut *vm };
         luna_jit_helpers::enter_jit(vm_ref, cl)
     }

@@ -99,7 +99,7 @@ pub(super) fn ll_seeall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         Some(mt) => mt,
         None => {
             let mt = vm.heap.new_table();
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            // SAFETY: `t` is the table argument, kept alive by its stack slot; `mt` is a separate new table, and the borrow covers one call
             unsafe { t.as_mut() }.set_metatable(Some(mt));
             mt
         }

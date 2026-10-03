@@ -45,7 +45,7 @@ impl Vm {
         } else {
             match thread {
                 Some(co) => {
-                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                    // SAFETY: `co` is a thread the caller holds and not the running one, so the Vm holds no reference into its saved stack; the caller passes a slot inside it, and the borrow covers one store
                     unsafe { co.as_mut() }.stack[s] = v;
                     // co.stack is traced by Coro::trace; demote co back to
                     // gray so propagate re-traces this slot if it was
@@ -98,7 +98,7 @@ impl Vm {
         if self.c_depth >= MAX_C_DEPTH {
             return Err(self.rt_err("C stack overflow"));
         }
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `co` is the coroutine being closed, held by the caller (a native argument) and not the running thread (checked above); the borrow covers one `take`
         let death_err = unsafe { co.as_mut() }.error_value.take();
         // swap the caller's live context out (into a GC-rooted home) and the
         // coroutine's in, mirroring resume_coro, so the __close handlers run on
@@ -107,7 +107,7 @@ impl Vm {
         let rctx = self.take_ctx();
         match resumer {
             Some(r) => {
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                // SAFETY: `r` is `self.current`, the running coroutine and so a root; no reference into it is live here, and `m` ends before the barrier call
                 let m = unsafe { r.as_mut() };
                 m.stack = rctx.stack;
                 m.frames = rctx.frames;
@@ -141,7 +141,7 @@ impl Vm {
             }
         }
         {
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            // SAFETY: `co` is still held by the caller, and its context was swapped back out above (`take_ctx`), so `m` is the only reference into it while it is cleared
             let m = unsafe { co.as_mut() };
             m.status = CoroStatus::Dead;
             m.stack = Vec::new();

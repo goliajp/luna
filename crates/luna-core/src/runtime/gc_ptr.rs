@@ -49,8 +49,12 @@ impl<T> Gc<T> {
         self.ptr == other.ptr
     }
 
-    /// SAFETY: caller must ensure no other live reference to the object and
-    /// no collect() while the borrow is held (single-threaded runtime).
+    /// Exclusive borrow of the referent.
+    ///
+    /// # Safety
+    /// The object is still allocated (reachable from the roots, or not yet
+    /// past a collect), no other reference to it is live while the returned
+    /// borrow is, and no collect runs while the borrow is held.
     ///
     /// `#[doc(hidden)]` so the documented public surface needs no `unsafe`:
     /// embedders should not see this in rustdoc. The safe path for mutating
@@ -59,7 +63,7 @@ impl<T> Gc<T> {
     /// working — `#[doc(hidden)] pub` doesn't demote visibility, just docs.
     #[doc(hidden)]
     pub unsafe fn as_mut<'a>(self) -> &'a mut T {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `ptr` is non-null and points at an object of the heap that allocated it; the caller's contract above keeps that object unfreed and unaliased for as long as the returned borrow lives
         unsafe { &mut *self.ptr.as_ptr() }
     }
 }
@@ -67,7 +71,7 @@ impl<T> Gc<T> {
 impl<T> Deref for Gc<T> {
     type Target = T;
     fn deref(&self) -> &T {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `ptr` is non-null and points at an object its heap allocated; whoever holds a `Gc` keeps the object reachable (rooted or held by a reachable object) while using it, so no collect frees it during the borrow of `self`, and `as_mut` callers end their exclusive borrow before the next shared read
         unsafe { self.ptr.as_ref() }
     }
 }

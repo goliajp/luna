@@ -104,9 +104,9 @@ fn mvp_trace_compiles_and_runs_clean_tail() {
     let max_stack = proto.max_stack as usize;
     let mut reg_state = vec![0i64; max_stack];
 
-    // SAFETY: `ct.entry` was compiled from MVP IR matching the TraceFn
-    // ABI. `ct` holds an `EnginePair` (parked in `storage`) that keeps
-    // the mcode alive for at least the duration of this test.
+    // SAFETY: `ct.entry` comes from the `try_compile_trace` above, whose
+    // engine `storage` still owns, and `reg_state` has the `max_stack`
+    // slots the trace was compiled to read and write
     let returned: i64 = unsafe { (ct.entry)(reg_state.as_mut_ptr()) };
 
     assert_eq!(

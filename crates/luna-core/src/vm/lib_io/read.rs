@@ -211,7 +211,7 @@ fn read_all(vm: &mut Vm, u: Gc<Userdata>) -> std::io::Result<Value> {
     let mut buf = Vec::new();
     loop {
         buf.extend_from_slice(&u.read_buf[u.read_pos..]);
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `u` is a file handle the caller holds; the right-hand side is read before the borrow starts, and the borrow covers one field store
         unsafe { u.as_mut() }.read_pos = u.read_buf.len();
         if !fill(u)? {
             break;
@@ -256,7 +256,7 @@ fn read_count(vm: &mut Vm, u: Gc<Userdata>, n: i64) -> Result<std::io::Result<Va
         }
         let take = want.min(u.read_buf.len() - u.read_pos);
         buf.extend_from_slice(&u.read_buf[u.read_pos..u.read_pos + take]);
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `u` is a file handle the caller holds; the borrow covers one field store
         unsafe { u.as_mut() }.read_pos += take;
     }
     Ok(if buf.is_empty() {

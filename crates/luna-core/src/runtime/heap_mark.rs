@@ -34,7 +34,7 @@ pub(crate) struct Marker {
 /// stack). Shared by the root mark and the post-resurrection remark.
 pub(super) fn drain_marker(m: &mut Marker) {
     while let Some(h) = m.stack.pop() {
-        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+        // SAFETY: `h` was popped off the gray stack, which only `Marker::header` and `barrier_back` push to, with headers of allocated objects; nothing is freed while marking, and the tag names the type to trace it as
         unsafe {
             // PUC `propagatemark`: gray → black before scanning children, so a
             // child that points back at us (cycle) re-traces us as already
@@ -77,7 +77,7 @@ impl Marker {
     /// upvalues) goes straight to BLACK instead.
     #[inline(always)]
     pub(crate) fn header(&mut self, h: *mut GcHeader) -> bool {
-        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+        // SAFETY: every caller passes the header of an allocated object: a root, an extra root, a queued finalizable, or a child read out of an object being traced; nothing is freed while marking, and only the flag byte is touched
         unsafe {
             let f = (*h).flags;
             if is_white(f) {
@@ -107,6 +107,6 @@ pub(super) fn weak_key_alive(v: Value) -> bool {
         Value::Userdata(u) => u.as_ptr() as *mut GcHeader,
         _ => return true, // strings, numbers, booleans: never weak-collected
     };
-    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+    // SAFETY: `v` is a key of a weak table being marked; the sweep that could free its object has not run, and only the flag byte is read
     unsafe { !is_white((*h).flags) }
 }

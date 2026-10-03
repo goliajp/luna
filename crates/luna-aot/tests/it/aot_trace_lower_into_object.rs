@@ -91,16 +91,12 @@ fn load_wide_arity_proto(vm: &mut luna_core::vm::Vm) -> Gc<Proto> {
         .expect("eval");
     let key = vm.intern_str("add5");
     let g = vm.globals();
-    // SAFETY: `g` is the live globals `Gc<Table>`; nothing else holds
-    // a borrow into it for the duration of this read.
-    let v = unsafe { (*g.as_ptr()).get(luna_core::runtime::Value::Str(key)) };
+    let v = g.get(luna_core::runtime::Value::Str(key));
     let cl = match v {
         luna_core::runtime::Value::Closure(c) => c,
         other => panic!("expected closure for `add5`, got {other:?}"),
     };
-    // SAFETY: `cl` is a live `Gc<LuaClosure>` from the read above;
-    // nothing else borrows the closure for this field read.
-    let proto = unsafe { (*cl.as_ptr()).proto };
+    let proto = cl.proto;
     assert!(
         proto.max_stack >= 5,
         "fixture proto must have max_stack >= 5 for the 5-reg trace; got {}",

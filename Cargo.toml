@@ -145,6 +145,10 @@ codegen-units = 16
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(luna_aot_runtime_stub)"] }
 
 [workspace.lints.clippy]
+# Every unsafe block and unsafe impl carries a `// SAFETY:` note stating
+# the premise it relies on; CI's `-D warnings` turns a missing one into
+# an error. docs/unsafe-accounting.md lists the sites per crate.
+undocumented_unsafe_blocks = "warn"
 # Internal unsafe fn surface is large (~250 raw-ptr deref sites in GC +
 # JIT helpers) and SAFETY contracts live in `docs/unsafe-accounting.md`
 # as the source of truth (not per-fn `# Safety` doc paragraphs that drift).

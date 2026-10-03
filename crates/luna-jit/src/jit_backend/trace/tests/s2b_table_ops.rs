@@ -36,12 +36,15 @@ fn closed_record(proto: Gc<Proto>, head_pc: u32, ops: &[Inst]) -> TraceRecord {
 /// `luna_jit_*` helpers can reach `vm` via the `JIT_VM`
 /// thread-local.
 ///
-/// SAFETY: `state.len() >= proto.max_stack` is the caller's
-/// invariant — every helper that loads a table-typed slot
-/// dereferences the i64 pointer there, so it must be a real
-/// `Gc<Table>::as_ptr()` (or a `NewTable` op writes one).
-fn run_trace(vm: &mut Vm, ct: &CompiledTrace, state: &mut [i64]) -> i64 {
+/// # Safety
+/// `ct` was compiled into `vm`'s JIT storage, `state` has at least
+/// the head proto's `max_stack` slots, and every slot the trace
+/// reads as a table before writing it holds a live table's
+/// `Gc::as_ptr()`: the helpers dereference it.
+unsafe fn run_trace(vm: &mut Vm, ct: &CompiledTrace, state: &mut [i64]) -> i64 {
     let _guard = enter_jit(vm, None);
+    // SAFETY: the caller's contract; the guard above gives the helpers
+    // the Vm
     unsafe { (ct.entry)(state.as_mut_ptr()) }
 }
 
@@ -55,7 +58,10 @@ fn new_table_writes_non_null_table_ptr_into_dst() {
     let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
-    let r = run_trace(&mut vm, &ct, &mut state);
+    // SAFETY: `ct` was compiled into `vm`'s storage, `state` has the
+    // proto's `max_stack` slots, and the trace writes its table
+    // register (`NewTable`) before reading it
+    let r = unsafe { run_trace(&mut vm, &ct, &mut state) };
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
     assert!(
         state[0] != 0,
@@ -84,7 +90,10 @@ fn set_i_then_get_i_roundtrips_through_a_fresh_table() {
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[2] = 42; // value to write
-    let r = run_trace(&mut vm, &ct, &mut state);
+    // SAFETY: `ct` was compiled into `vm`'s storage, `state` has the
+    // proto's `max_stack` slots, and the trace writes its table
+    // register (`NewTable`) before reading it
+    let r = unsafe { run_trace(&mut vm, &ct, &mut state) };
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
     assert!(vm.jit.pending_err.is_none(), "no metatable → no deopt");
     assert_eq!(state[3], 42, "Get must see the value Set wrote");
@@ -114,7 +123,10 @@ fn len_reports_array_size_after_set_i_sequence() {
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[1] = 99;
-    let r = run_trace(&mut vm, &ct, &mut state);
+    // SAFETY: `ct` was compiled into `vm`'s storage, `state` has the
+    // proto's `max_stack` slots, and the trace writes its table
+    // register (`NewTable`) before reading it
+    let r = unsafe { run_trace(&mut vm, &ct, &mut state) };
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
     assert_eq!(state[2], 3, "Len must report array length 3");
 }
@@ -133,6 +145,8 @@ fn metatable_on_set_i_exits_at_the_store() {
     let plain = vm.heap.new_table();
     let t = vm.heap.new_table();
     let mt = vm.heap.new_table();
+    // SAFETY: `t` was allocated just above and nothing else refers to
+    // it; no collection runs before the trace
     unsafe { t.as_mut() }.set_metatable(Some(mt));
 
     // R[0][1] = R[1]; R[2][1] = R[1]
@@ -152,7 +166,11 @@ fn metatable_on_set_i_exits_at_the_store() {
     state[0] = plain.as_ptr() as i64;
     state[1] = 7;
     state[2] = t.as_ptr() as i64;
-    let r = run_trace(&mut vm, &ct, &mut state);
+    // SAFETY: `ct` was compiled into `vm`'s storage, `state` has the
+    // proto's `max_stack` slots, and each slot the trace reads as a
+    // table holds a table allocated above, unreachable to the
+    // collector but alive because nothing collects during the test
+    let r = unsafe { run_trace(&mut vm, &ct, &mut state) };
 
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 1);
     assert!(vm.jit.pending_err.is_none());
@@ -170,6 +188,8 @@ fn metatable_on_get_i_parks_pending_err() {
     let p = load_proto(&mut vm, WIDE_SRC);
     let t = vm.heap.new_table();
     let mt = vm.heap.new_table();
+    // SAFETY: `t` was allocated just above and nothing else refers to
+    // it; no collection runs before the trace
     unsafe { t.as_mut() }.set_metatable(Some(mt));
 
     // Trace: R[1] = R[0][1].
@@ -179,7 +199,11 @@ fn metatable_on_get_i_parks_pending_err() {
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[0] = t.as_ptr() as i64;
-    run_trace(&mut vm, &ct, &mut state);
+    // SAFETY: `ct` was compiled into `vm`'s storage, `state` has the
+    // proto's `max_stack` slots, and each slot the trace reads as a
+    // table holds a table allocated above, unreachable to the
+    // collector but alive because nothing collects during the test
+    unsafe { run_trace(&mut vm, &ct, &mut state) };
 
     assert!(vm.jit.pending_err.is_some(), "GetI deopt on metatable");
 }
@@ -191,6 +215,8 @@ fn metatable_on_len_exits_at_the_len() {
     let plain = vm.heap.new_table();
     let t = vm.heap.new_table();
     let mt = vm.heap.new_table();
+    // SAFETY: `t` was allocated just above and nothing else refers to
+    // it; no collection runs before the trace
     unsafe { t.as_mut() }.set_metatable(Some(mt));
 
     // R[0][1] = R[1]; R[3] = #R[2]
@@ -211,7 +237,11 @@ fn metatable_on_len_exits_at_the_len() {
     state[1] = 7;
     state[2] = t.as_ptr() as i64;
     state[3] = 42;
-    let r = run_trace(&mut vm, &ct, &mut state);
+    // SAFETY: `ct` was compiled into `vm`'s storage, `state` has the
+    // proto's `max_stack` slots, and each slot the trace reads as a
+    // table holds a table allocated above, unreachable to the
+    // collector but alive because nothing collects during the test
+    let r = unsafe { run_trace(&mut vm, &ct, &mut state) };
 
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 1);
     assert!(vm.jit.pending_err.is_none());

@@ -11,7 +11,7 @@ impl Heap {
     /// outside an incremental cycle).
     #[allow(clippy::not_unsafe_ptr_arg_deref)] // Internal GC barrier; caller (Gc<T>::write_*) guarantees ptr validity per SAFETY below.
     pub fn barrier_forward(&mut self, parent: *mut GcHeader, child: Value) {
-        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+        // SAFETY: callers pass the header of an object they hold a live handle to, and `child` holds a live handle as well; only flag bytes are read and written, no reference to either object is formed
         unsafe {
             if !is_black((*parent).flags) {
                 return;
@@ -45,7 +45,7 @@ impl Heap {
     /// tables than per-child forward barriers. No-op outside Propagate.
     #[allow(clippy::not_unsafe_ptr_arg_deref)] // Internal GC barrier; caller (Gc<T>::write_*) guarantees ptr validity per SAFETY below.
     pub fn barrier_back(&mut self, parent: *mut GcHeader) {
-        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+        // SAFETY: callers pass the header of an object they hold a live handle to; only its flag byte is read and written
         unsafe {
             let f = (*parent).flags;
             if !is_black(f) {

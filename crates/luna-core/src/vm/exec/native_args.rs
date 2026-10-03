@@ -9,11 +9,7 @@ impl Vm {
     /// the host C function pointer it stashed there at registration time.
     pub fn running_native_upvalue(&self, i: usize) -> Value {
         match self.running_natives.last() {
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            Some(a) => unsafe {
-                let upvals = &(*a.nc.as_ptr()).upvals;
-                upvals.get(i).copied().unwrap_or(Value::Nil)
-            },
+            Some(a) => a.nc.upvals.get(i).copied().unwrap_or(Value::Nil),
             None => Value::Nil,
         }
     }
@@ -45,7 +41,7 @@ impl Vm {
         let Value::Native(nc) = self.stack[func_slot as usize] else {
             unreachable!("native frame without native closure");
         };
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `nc` is the native running at `func_slot`, kept alive by that stack slot; no reference into it is live, and the borrow covers one store
         unsafe { nc.as_mut() }.upvals[i] = v;
         // NativeClosure.upvals is traced as part of its Trace; a long-lived
         // stateful iterator closure (e.g. string.gmatch) sees many writes —

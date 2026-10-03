@@ -66,16 +66,12 @@ fn load_nil_then_return0_compiles_and_runs() {
     assert!(!entry.is_null(), "LLVM should produce a non-null entry");
 
     // Invoke the JIT-compiled entry. The return-shape contract is
-    // `unsafe extern "C" fn() -> i64`; a Return0 chunk returns 0
+    // an `extern "C" fn() -> i64`; a Return0 chunk returns 0
     // (the dispatcher knows by `returns_one == false` to ignore it).
     //
-    // SAFETY: `entry` was just produced by inkwell's ExecutionEngine
-    // and the engine is `Box::leak`-pinned for the process lifetime
-    // (see `codegen::compile_constant_zero_chunk`). The IR declared
-    // exactly `fn() -> i64` so the C-ABI cast is sound.
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    let returned = unsafe { entry_fn() };
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
     assert_eq!(
         returned, 0,
         "Return0 chunk's JIT entry should return 0 (no value)",
@@ -120,10 +116,9 @@ fn three_op_dead_locals_chunk_compiles_and_runs() {
     };
     assert!(!entry.is_null());
 
-    // SAFETY: matches the LoadNil smoke's calling convention.
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    let returned = unsafe { entry_fn() };
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
     assert_eq!(returned, 0);
 }
 
@@ -218,10 +213,11 @@ fn dead_locals_load_true_then_return0() {
         panic!("dead-locals LoadTrue chunk must compile; got {result:?}");
     };
     assert!(!returns_one, "Return0 chunks report returns_one=false");
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
     // The chunk's `b = true` is dead at Return0; entry returns 0.
-    assert_eq!(unsafe { entry_fn() }, 0);
+    assert_eq!(returned, 0);
 }
 
 /// Dead-locals `local b = false`.
@@ -241,9 +237,10 @@ fn dead_locals_load_false_then_return0() {
     else {
         panic!("dead-locals LoadFalse chunk must compile");
     };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    assert_eq!(unsafe { entry_fn() }, 0);
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let returned = unsafe { crate::support::call_chunk(entry, &[]) };
+    assert_eq!(returned, 0);
 }
 
 /// `return true` is **out of scope** until the

@@ -85,11 +85,7 @@ impl LuaUserdata for Vec3 {
 
 fn extract_vec3(v: Value) -> Option<Vec3> {
     match v {
-        Value::Userdata(g) => {
-            // SAFETY: single-threaded heap, pointer is live.
-            let r = unsafe { &*g.as_ptr() };
-            r.downcast::<Vec3>().copied()
-        }
+        Value::Userdata(g) => g.downcast::<Vec3>().copied(),
         _ => None,
     }
 }

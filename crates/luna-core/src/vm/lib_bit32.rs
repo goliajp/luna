@@ -35,7 +35,7 @@ pub(crate) fn open_bit32(vm: &mut Vm) {
     for (name, f) in funcs {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `t` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
         unsafe { t.as_mut() }
             .set(&mut vm.heap, k, fv)
             .expect("valid key");
@@ -52,7 +52,7 @@ pub(crate) fn open_bit32(vm: &mut Vm) {
         && let Value::Table(loaded) = pkg.get(lk)
     {
         let k = Value::Str(vm.heap.intern(b"bit32"));
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `loaded` was just read from `package.loaded`, so it is alive; no reference into it is held across this call, and `set` does not collect
         unsafe { loaded.as_mut() }
             .set(&mut vm.heap, k, Value::Table(t))
             .expect("valid key");

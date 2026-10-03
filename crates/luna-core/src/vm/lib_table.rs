@@ -60,7 +60,7 @@ pub(crate) fn open_table(vm: &mut Vm) {
     for (name, f) in funcs {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `t` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
         unsafe { t.as_mut() }
             .set(&mut vm.heap, k, fv)
             .expect("valid key");
@@ -169,7 +169,7 @@ fn tab_geti(vm: &mut Vm, tv: Value, i: i64) -> Result<Value, LuaError> {
 fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value) -> Result<(), LuaError> {
     if vm.version() <= V::Lua52 {
         if let Value::Table(t) = tv {
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            // SAFETY: `t` is the table argument, kept alive by its stack slot; no reference into it is live across the `set`, which does not collect
             if unsafe { t.as_mut() }
                 .set(&mut vm.heap, Value::Int(i), v)
                 .is_err()

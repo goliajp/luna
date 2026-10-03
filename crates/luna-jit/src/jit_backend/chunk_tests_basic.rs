@@ -70,6 +70,10 @@ mod smoke {
         module.finalize_definitions().expect("finalize");
 
         let fib_ptr = module.get_finalized_function(fib_id);
+        // SAFETY: `fib_id` was declared and defined above with the
+        // module's default signature `(i64) -> i64`, the host C calling
+        // convention, and `module` keeps the code mapped to the end of
+        // the test
         let fib_fn: extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(fib_ptr) };
 
         assert_eq!(fib_fn(0), 0);
@@ -307,7 +311,7 @@ mod s2c_a {
     //! Tested by directly transmuting the raw entry ptr (the
     //! interpreter-side dispatch wire is tested separately).
 
-    use crate::jit_backend::{IntFn1, IntFn2, try_compile_int_chunk};
+    use crate::jit_backend::try_compile_int_chunk;
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
 
@@ -337,10 +341,9 @@ mod s2c_a {
             .expect("S2c.A accepts num_params == 1");
             assert_eq!(handle.num_args(), 1);
             assert!(handle.returns_one());
-            let f: IntFn1 = unsafe { std::mem::transmute(handle.entry_raw()) };
-            assert_eq!(unsafe { f(41) }, 42);
-            assert_eq!(unsafe { f(0) }, 1);
-            assert_eq!(unsafe { f(-1) }, 0);
+            assert_eq!(handle.call_with(&[41]), 42);
+            assert_eq!(handle.call_with(&[0]), 1);
+            assert_eq!(handle.call_with(&[-1]), 0);
             assert_eq!(handle.call_with(&[100]), 101);
         });
     }
@@ -357,8 +360,7 @@ mod s2c_a {
                 )
                 .expect("S2c.A accepts num_params == 2");
                 assert_eq!(handle.num_args(), 2);
-                let f: IntFn2 = unsafe { std::mem::transmute(handle.entry_raw()) };
-                assert_eq!(unsafe { f(3, 4) }, 13);
+                assert_eq!(handle.call_with(&[3, 4]), 13);
                 assert_eq!(handle.call_with(&[5, 6]), 31);
             },
         );
@@ -376,10 +378,9 @@ mod s2c_a {
                 )
                 .expect("S2c.A accepts param + branch");
                 assert_eq!(handle.num_args(), 1);
-                let f: IntFn1 = unsafe { std::mem::transmute(handle.entry_raw()) };
-                assert_eq!(unsafe { f(5) }, 5);
-                assert_eq!(unsafe { f(-5) }, 0);
-                assert_eq!(unsafe { f(0) }, 0);
+                assert_eq!(handle.call_with(&[5]), 5);
+                assert_eq!(handle.call_with(&[-5]), 0);
+                assert_eq!(handle.call_with(&[0]), 0);
             },
         );
     }
