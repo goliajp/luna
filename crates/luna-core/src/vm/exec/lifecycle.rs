@@ -81,6 +81,7 @@ impl Vm {
             host_warn: None,
             warn_state: WarnState::Off,
             warn_buf: Vec::new(),
+            warn_cont: false,
             warn_log: Vec::new(),
             instr_budget: None,
             bytecode_loading: true,

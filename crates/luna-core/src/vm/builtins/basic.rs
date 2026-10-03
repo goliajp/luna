@@ -252,7 +252,7 @@ pub(crate) fn nat_warn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     }
     let n = parts.len();
     for (i, p) in parts.iter().enumerate() {
-        vm.emit_warn(p.as_bytes(), i + 1 < n);
+        vm.emit_warn(p.as_bytes(), i + 1 < n)?;
     }
     Ok(vm.nat_return(fs, &[]))
 }
