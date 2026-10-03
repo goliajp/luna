@@ -67,30 +67,36 @@ macro_rules! fast_call_arms {
                 // for trace heads runs it here too, unless a recording or a
                 // trap wants every instruction at the loop head
                 if !WATCH || $vm.jit.active_trace.is_none() && !$vm.trap {
-                    // SAFETY: the called register is in the frame
-                    let t = unsafe { raw_tag(pf) };
-                    if t == tag::CLOSURE && !$trace_on {
-                        // SAFETY: a closure tag means a live closure
-                        let callee = unsafe {
-                            Gc::from_ptr_unchecked(raw_gc(pf) as *mut LuaClosure)
-                        };
+                    // SAFETY: the called register is in the frame, and a
+                    // closure or native tag means its payload points at a
+                    // live object of that type
+                    let (lua, native) = unsafe {
+                        match raw_tag(pf) {
+                            tag::CLOSURE if !$trace_on => (
+                                Some(Gc::from_ptr_unchecked(raw_gc(pf) as *mut LuaClosure)),
+                                None,
+                            ),
+                            tag::NATIVE => (
+                                None,
+                                Some(Gc::from_ptr_unchecked(
+                                    raw_gc(pf) as *mut crate::runtime::NativeClosure,
+                                )),
+                            ),
+                            _ => (None, None),
+                        }
+                    };
+                    if let Some(callee) = lua {
                         let n = nargs.unwrap_or_else(|| $vm.top - (abs + 1));
                         if let Some(nf) = $vm.push_lua_frame_fast(callee, abs, n, wanted) {
                             $fr = nf;
                             continue $frames;
                         }
-                    } else if t == tag::NATIVE {
-                        // SAFETY: a native tag means a live native closure
-                        let nc = unsafe {
-                            Gc::from_ptr_unchecked(
-                                raw_gc(pf) as *mut crate::runtime::NativeClosure
-                            )
-                        };
-                        if nc.kind == NativeKind::Plain {
-                            let n = nargs.unwrap_or_else(|| $vm.top - (abs + 1));
-                            $vm.call_native_plain(nc, abs, n, wanted)?;
-                            resume!()
-                        }
+                    } else if let Some(nc) = native
+                        && nc.kind == NativeKind::Plain
+                    {
+                        let n = nargs.unwrap_or_else(|| $vm.top - (abs + 1));
+                        $vm.call_native_plain(nc, abs, n, wanted)?;
+                        resume!()
                     }
                 }
                 $vm.begin_call(abs, nargs, wanted, false)?;

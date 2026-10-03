@@ -171,13 +171,12 @@ impl Vm {
         // was usually just written, and a whole-value read of it would wait
         // for that store to reach the cache
         // SAFETY: the caller's contract; a table tag means a live table
-        let mut on_table = unsafe { raw_tag(pt) } == tag::TABLE;
-        let mut mt = if on_table {
-            // SAFETY: as above
-            unsafe { (*(raw_gc(pt) as *const Table)).metatable() }
-        } else {
-            // SAFETY: the caller's contract
-            self.metatable_of(unsafe { *pt })
+        let (mut on_table, mut mt) = unsafe {
+            if raw_tag(pt) == tag::TABLE {
+                (true, (*(raw_gc(pt) as *const Table)).metatable())
+            } else {
+                (false, self.metatable_of(*pt))
+            }
         };
         // the slots are read in place and the value copied to its register
         // directly (see `table_get_into`)
@@ -241,8 +240,7 @@ impl Vm {
         match mt.str_slot_by_ptr(self.mm_names[mm as usize]) {
             Some(v) if !v.is_nil() => Some(v as *const Value),
             _ => {
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                unsafe { mt.as_mut() }.note_absent_mm(bit);
+                Table::note_absent_mm(mt, bit);
                 None
             }
         }

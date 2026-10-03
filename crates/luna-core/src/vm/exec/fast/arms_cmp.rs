@@ -31,8 +31,7 @@ macro_rules! fast_cmp_arms {
                     } {
                         // the recording sees the next instruction from
                         // the loop head
-                        // SAFETY: see `next!`
-                        unsafe { (*$fr).pc = $npc };
+                        store_pc!();
                         return Ok(FastExit::Reload);
                     }
                 }
@@ -103,20 +102,21 @@ macro_rules! fast_cmp_arms {
         macro_rules! op_test {
             () => {{
                 // the JMP that follows runs when the condition equals k
-                // SAFETY: a register of the running frame
-                let t = unsafe { raw_truthy($regs.add($inst.a() as usize)) };
+                let t = reg_truthy!($inst.a());
                 cond_jump!(t == $inst.k())
             }};
         }
         macro_rules! op_test_set {
             () => {{
                 let pb = $regs.wrapping_add($inst.b() as usize);
-                // SAFETY: a register of the running frame
-                let t = unsafe { raw_truthy(pb) } == $inst.k();
-                if t {
-                    // SAFETY: as above
-                    unsafe { Value::copy_whole($regs.add($inst.a() as usize), pb) };
-                }
+                // SAFETY: registers of the running frame
+                let t = unsafe {
+                    let t = raw_truthy(pb) == $inst.k();
+                    if t {
+                        Value::copy_whole($regs.add($inst.a() as usize), pb);
+                    }
+                    t
+                };
                 cond_jump!(t)
             }};
         }

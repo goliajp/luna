@@ -111,17 +111,24 @@ macro_rules! fast_arm_helper_macros {
                     $regs.wrapping_add($inst.a() as usize),
                     $regs.wrapping_add($inst.b() as usize),
                 );
-                // SAFETY: registers of the running frame
-                let (tl, tr) = unsafe { (raw_tag(pl), raw_tag(pr)) };
-                let res = if tl == tag::INT && tr == tag::INT {
-                    // SAFETY: two integers
-                    (unsafe { raw_int(pl) }) $d op (unsafe { raw_int(pr) })
-                } else {
-                    cold_path();
-                    if tl == tag::FLOAT && tr == tag::FLOAT {
-                        // SAFETY: two floats
-                        (unsafe { raw_flt(pl) }) $d op (unsafe { raw_flt(pr) })
+                // SAFETY: registers of the running frame, so initialised
+                // values; a payload is read as the type its tag names
+                let res = unsafe {
+                    let (tl, tr) = (raw_tag(pl), raw_tag(pr));
+                    if tl == tag::INT && tr == tag::INT {
+                        Some(raw_int(pl) $d op raw_int(pr))
                     } else {
+                        cold_path();
+                        if tl == tag::FLOAT && tr == tag::FLOAT {
+                            Some(raw_flt(pl) $d op raw_flt(pr))
+                        } else {
+                            None
+                        }
+                    }
+                };
+                let res = match res {
+                    Some(res) => res,
+                    None => {
                         // SAFETY: as above
                         let (l, r) = unsafe { (*pl, *pr) };
                         save!();
@@ -140,17 +147,25 @@ macro_rules! fast_arm_helper_macros {
             ($d op:tt, $d swap:expr, $d or_eq:expr) => {{
                 let px = $regs.wrapping_add($inst.a() as usize);
                 let im = $inst.sb();
-                // SAFETY: a register of the running frame
-                let t = unsafe { raw_tag(px) };
-                let res = if t == tag::INT {
-                    // SAFETY: an integer
-                    (unsafe { raw_int(px) }) $d op (im as i64)
-                } else {
-                    cold_path();
-                    if t == tag::FLOAT {
-                        // SAFETY: a float
-                        (unsafe { raw_flt(px) }) $d op (im as f64)
+                // SAFETY: a register of the running frame, so an
+                // initialised value; its payload is read as the type its
+                // tag names
+                let res = unsafe {
+                    let t = raw_tag(px);
+                    if t == tag::INT {
+                        Some(raw_int(px) $d op (im as i64))
                     } else {
+                        cold_path();
+                        if t == tag::FLOAT {
+                            Some(raw_flt(px) $d op (im as f64))
+                        } else {
+                            None
+                        }
+                    }
+                };
+                let res = match res {
+                    Some(res) => res,
+                    None => {
                         // SAFETY: as above
                         let x = unsafe { *px };
                         let imv = if $inst.c() != 0 {

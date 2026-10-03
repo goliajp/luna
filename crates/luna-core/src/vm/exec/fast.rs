@@ -140,10 +140,8 @@ impl Vm {
                     // the loop head looks at this pc first
                     return Ok(FastExit::Reload);
                 }
-                // SAFETY: as at the start
-                regs = unsafe { self.stack.as_mut_ptr().add(base as usize) };
-                // SAFETY: as for the fetch at the loop head
-                inst = unsafe { *code.add(npc as usize) };
+                regs = self.regs_at(base);
+                inst = fetch!(npc);
                 npc += 1;
             }
             switched = true;

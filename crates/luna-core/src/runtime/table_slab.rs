@@ -122,14 +122,20 @@ impl Table {
         unsafe { std::alloc::dealloc(ptr, Self::slab_layout(asize)) }
     }
 
+    /// Free the array part's slab, if it has one. The table must not read
+    /// its array part again before setting up a new one.
+    pub(super) fn free_array_slab(&mut self) {
+        if self.asize > INLINE_ASIZE {
+            // SAFETY: an array part larger than the inline storage lives in
+            // a slab from `alloc_slab(asize)`, owned by this table
+            unsafe { Self::free_slab(self.array_ptr, self.asize as usize) };
+        }
+    }
+
     /// Release the array part and leave an empty one on the inline storage
     /// (the pool recycles a freed table this way).
     pub(crate) fn drop_array_part(&mut self) {
-        if self.asize > INLINE_ASIZE {
-            // SAFETY: an array part larger than the inline storage lives in
-            // a slab from `alloc_slab(asize)`
-            unsafe { Self::free_slab(self.array_ptr, self.asize as usize) };
-        }
+        self.free_array_slab();
         self.asize = 0;
         self.acount = 0;
         self.aprefix = 0;

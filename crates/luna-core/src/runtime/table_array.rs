@@ -22,12 +22,14 @@ impl Table {
                 (t + 1, *(p.add(8) as *const RawVal))
             }
         };
-        // SAFETY: as for `aset`
-        let old = unsafe { *self.atags().get_unchecked(idx) };
-        unsafe {
+        // SAFETY: `idx < asize` by the caller's contract, and both slices
+        // are `asize` long
+        let old = unsafe {
+            let old = *self.atags().get_unchecked(idx);
             *self.atags_mut().get_unchecked_mut(idx) = t;
             *self.avals_mut().get_unchecked_mut(idx) = b;
-        }
+            old
+        };
         self.note_atag_change(idx, old, t);
     }
 
