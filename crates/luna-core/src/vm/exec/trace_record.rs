@@ -361,31 +361,24 @@ impl Vm {
             }
         }
         let slot = self.field_slot_of(cl, inst, base);
+        let index = match slot {
+            None => self.index_slots_of(cl, inst, base),
+            Some(_) => None,
+        };
+        let index_key = self.mm_names[Mm::Index as usize];
         let rec = self.jit.active_trace.as_mut().expect("recording");
         if !rec.push(op) {
             // recorder overflow (MAX_TRACE_LEN)
             self.abort_recording("trace-overflow");
-        } else if let (Some(slot), Some(s)) = (slot, rec.field_slots.last_mut()) {
-            *s = slot;
+        } else {
+            if let (Some(slot), Some(s)) = (slot, rec.field_slots.last_mut()) {
+                *s = slot;
+            }
+            if let (Some((m, k)), Some(s)) = (index, rec.index_slots.last_mut()) {
+                *s = u64::from(m) << 32 | u64::from(k);
+                rec.index_key = Some(index_key);
+            }
         }
-    }
-
-    /// For `GetField` / `SetField` / `Self`, the hash slot of the table
-    /// operand holding the constant string key, if the key is there.
-    fn field_slot_of(&self, cl: Gc<LuaClosure>, inst: Inst, base: u32) -> Option<u32> {
-        use crate::vm::isa::Op;
-        let (t, k) = match inst.op() {
-            Op::GetField | Op::SelfOp => (inst.b(), inst.c()),
-            Op::SetField => (inst.a(), inst.b()),
-            _ => return None,
-        };
-        let Value::Table(t) = *self.stack.get((base + t) as usize)? else {
-            return None;
-        };
-        let key @ Value::Str(_) = *cl.proto.consts.get(k as usize)? else {
-            return None;
-        };
-        t.find_node_idx(key).map(|i| i as u32)
     }
 
     /// Drop the recording, tallied under `cause`. Counted like a failed

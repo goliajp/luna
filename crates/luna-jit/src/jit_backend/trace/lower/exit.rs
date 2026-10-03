@@ -70,8 +70,9 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             opts.aot,
             &mut lw.defined_aot_data,
         );
+        let closures_arg = emit_frame_closures(lw, &chain_for_helper);
         let mat_ref = lw.bcx.import_func(materialize_id);
-        let _ = lw.bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
+        let _ = lw.bcx.ins().call(mat_ref, &[n_arg, ptr_arg, closures_arg]);
         emit_store_back_and_return_site(
             &mut lw.bcx,
             &lw.regs_full[..window_size_us],
@@ -116,4 +117,22 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             trace_fn_sig_ref,
         );
     }
+}
+
+/// The closure of each frame of `chain`, in a stack buffer for the
+/// frame-materialise helper: the value the caller called, in its R[A],
+/// one below the callee's window (the callee never writes below its base).
+fn emit_frame_closures<E: Emit>(lw: &mut Lower<E>, chain: &[FrameMaterializeInfo]) -> Value {
+    let ss = lw
+        .bcx
+        .create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+            8 * chain.len() as u32,
+            3,
+        ));
+    for (k, f) in chain.iter().enumerate() {
+        let cl = lw.bcx.use_var(lw.regs_full[f.base_offset as usize - 1]);
+        lw.bcx.ins().stack_store(types::I64, cl, ss, 8 * k as i32);
+    }
+    lw.bcx.ins().stack_addr(types::I64, ss, 0)
 }

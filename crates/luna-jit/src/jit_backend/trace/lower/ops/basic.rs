@@ -6,7 +6,7 @@ pub(super) fn emit_basic_op<E: Emit>(
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
-    let Plan { head_proto, .. } = *pl;
+    let _ = pl;
     let OpCx { off, ins, .. } = *oc;
     let regs: &[Variable] = oc.regs;
     match oc.op {
@@ -20,6 +20,7 @@ pub(super) fn emit_basic_op<E: Emit>(
             lw.bcx.def_var(regs[ins.a() as usize], src);
             lw.current_kinds[off + ins.a() as usize] =
                 k_op(&lw.current_kinds, off as u32 + ins.b());
+            lw.const_str[off + ins.a() as usize] = lw.const_str[off + ins.b() as usize];
         }
         Op::LoadI => {
             let imm = ins.sbx() as i64;
@@ -52,7 +53,7 @@ pub(super) fn emit_basic_op<E: Emit>(
         }
         Op::LoadK => {
             let bx = ins.bx() as usize;
-            let (v, k) = match head_proto.consts[bx] {
+            let (v, k) = match oc.rop.proto.consts[bx] {
                 luna_core::runtime::Value::Int(n) => {
                     lw.known_int[off + ins.a() as usize] = Some(n);
                     (lw.bcx.ins().iconst(types::I64, n), RegKind::Int)
@@ -62,14 +63,43 @@ pub(super) fn emit_basic_op<E: Emit>(
                     let bits = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), fv);
                     (bits, RegKind::Float)
                 }
-                luna_core::runtime::Value::Str(k) => (
-                    emit_str_key_arg(&mut lw.bcx, k, pl.opts.aot, &mut lw.defined_aot_data),
-                    RegKind::Str,
-                ),
+                luna_core::runtime::Value::Str(k) => {
+                    lw.const_str[off + ins.a() as usize] = true;
+                    (
+                        emit_str_key_arg(&mut lw.bcx, k, pl.opts.aot, &mut lw.defined_aot_data),
+                        RegKind::Str,
+                    )
+                }
                 _ => unreachable!("pre-emit gates number and string consts"),
             };
             lw.bcx.def_var(regs[ins.a() as usize], v);
             lw.current_kinds[off + ins.a() as usize] = k;
+        }
+        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip => {
+            let v = lw
+                .bcx
+                .ins()
+                .iconst(types::I64, i64::from(oc.op == Op::LoadTrue));
+            lw.bcx.def_var(regs[ins.a() as usize], v);
+            lw.current_kinds[off + ins.a() as usize] = RegKind::Bool;
+            lw.known_int[off + ins.a() as usize] = None;
+        }
+        Op::Not => {
+            let v = match k_op(&lw.current_kinds, off as u32 + ins.b()) {
+                RegKind::Bool => {
+                    let b = lw.bcx.use_var(regs[ins.b() as usize]);
+                    lw.bcx.ins().bxor_imm_u(b, 1)
+                }
+                RegKind::Nil => lw.bcx.ins().iconst(types::I64, 1),
+                k if k.untyped() => {
+                    checkpoint("bail:not-untyped");
+                    return None;
+                }
+                _ => lw.bcx.ins().iconst(types::I64, 0),
+            };
+            lw.bcx.def_var(regs[ins.a() as usize], v);
+            lw.current_kinds[off + ins.a() as usize] = RegKind::Bool;
+            lw.known_int[off + ins.a() as usize] = None;
         }
         _ => unreachable!("routed by emit_op"),
     }

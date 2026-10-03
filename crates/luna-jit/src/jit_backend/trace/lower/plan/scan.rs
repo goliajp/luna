@@ -1,76 +1,5 @@
 use super::*;
 
-pub(super) fn validate_inline_calls(record: &TraceRecord, head_proto: Gc<Proto>) -> Option<()> {
-    // per-inlined-frame metadata for the
-    // frame-mat helper. Walk record.ops; every self-recursive
-    // Op::Call (next op at depth+1 on the same proto) describes one
-    // callee frame the helper will push at side-exit time.
-    //
-    // Bail when:
-    //   - any self-recursive Call has C != 2 (i.e. nresults != 1) —
-    //     the Op::Return1 copy-back assumes one return value
-    //   - the head closure's proto is vararg — helper doesn't
-    //     reconstruct the vararg rotation that `push_frame` does
-    //
-    // frame-mat data is per-cmp-site: a single global
-    // indexed-by-depth array gives the wrong chain to sibling-Call
-    // branches and loops fib forever. Per-site `per_exit_metas` is built BELOW after
-    // `cmp_dirs` are populated — that pass needs the cmp direction
-    // to compute each site's side-exit PC.
-    //
-    // Pre-emit validation here: bail any self-recursive Call whose
-    // `C != 2` (nresults != 1) — the `Op::Return1` copy-back
-    // assumes one return value and the materialize helper bakes
-    // whatever the meta says without validating.
-    for (i, rop) in record.ops.iter().enumerate() {
-        if !matches!(rop.inst.op(), Op::Call) {
-            continue;
-        }
-        let depth = rop.inline_depth as usize;
-        let Some(next) = record.ops.get(i + 1) else {
-            continue;
-        };
-        if (next.inline_depth as usize) != depth + 1 {
-            continue;
-        }
-        if !std::ptr::eq(next.proto.as_ptr(), head_proto.as_ptr()) {
-            continue;
-        }
-        // accept Call C=2 (single ret)
-        // OR Call C=0 with var_count snapshot == 1 (multi-return
-        // form that happens to return exactly 1 value, e.g.
-        // binary_trees `make`'s `return {...}`). Both reduce to the
-        // same emit (single-value Return1 copy-back from callee to
-        // caller). For C=0 with var_count != 1, bail — multi-value
-        // copy-back is unsupported.
-        let c = rop.inst.c();
-        if c == 2 {
-            // OK, single return
-        } else if c == 0 && rop.var_count == Some(1) {
-            // OK, single return via variable form
-        } else {
-            checkpoint("bail:self-rec-Call-c-not-1");
-            return None;
-        }
-    }
-    checkpoint("post:self-rec-Call-validate");
-    // also bail if the head proto is vararg.
-    // The materialize helper builds frames with `n_varargs = 0`,
-    // which doesn't reconstruct the vararg-rotated layout that
-    // `push_frame` lays out for vararg functions. fib + simple
-    // self-recursion isn't vararg.
-    if head_proto.is_vararg {
-        for r in &record.ops {
-            if r.inline_depth > 0 {
-                checkpoint("bail:vararg-head-with-depth");
-                return None;
-            }
-        }
-    }
-    checkpoint("post:vararg-check");
-    Some(())
-}
-
 pub(super) fn scan_math_folds(
     record: &TraceRecord,
     n: usize,
@@ -145,7 +74,6 @@ pub(super) fn scan_math_folds(
 pub(super) fn find_trace_end(
     record: &TraceRecord,
     folded_ops: &[bool],
-    head_proto: Gc<Proto>,
     n: usize,
 ) -> Option<Option<(usize, TraceEnd)>> {
     // the terminator scan also accounts for
@@ -179,7 +107,7 @@ pub(super) fn find_trace_end(
     // DownRec tail arm can fire. The scan mirrors TraceEnd::Return /
     // Call's picker shape and falls back to `record.ops.len()` only
     // when no natural terminator is present.
-    let plain_end = plain_trace_end(record, folded_ops, head_proto);
+    let plain_end = plain_trace_end(record, folded_ops);
     let end_idx_opt: Option<(usize, TraceEnd)> = if let Some(dr) = record.downrec_close {
         let mut natural_end = record.ops.len();
         for (i, r) in record.ops.iter().enumerate() {

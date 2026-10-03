@@ -54,8 +54,9 @@ pub(super) fn escape_analyze(
     effective_end: usize,
     end_kind: Option<TraceEnd>,
     head_proto: Gc<Proto>,
+    frame_w: usize,
 ) -> EscapeAnalysis {
-    let max_stack = head_proto.max_stack as usize;
+    let max_stack = frame_w;
     // one bindings row per inline depth the record reaches
     let max_depth = record
         .ops
@@ -122,6 +123,28 @@ pub(super) fn escape_analyze(
         if (depth as usize) >= max_depth || (a as usize) >= max_stack {
             // The lowerer bails on OOB; skip silently here so the
             // sweep stays a side-effect-free analysis.
+            continue;
+        }
+        // a site's hash keys are constant indices of the head function: an
+        // op of another function neither creates a site nor reads one
+        if !std::ptr::eq(rop.proto.as_ptr(), head_proto.as_ptr()) {
+            let (reads, writes) = super::slots::rw_ranges(ins);
+            for &(lo, n) in &reads {
+                for r in lo..lo + n {
+                    if (r as usize) < max_stack
+                        && let Some(sid) = lookup(&bindings, depth, r)
+                    {
+                        mark_escape(&mut sites, sid);
+                    }
+                }
+            }
+            for &(lo, n) in &writes {
+                for r in lo..lo + n {
+                    if (r as usize) < max_stack {
+                        unbind(&mut bindings, depth, r);
+                    }
+                }
+            }
             continue;
         }
         sweep_op(
@@ -350,6 +373,20 @@ fn sweep_op(
             escape_all_live(bindings, sites);
         }
         Op::Jmp | Op::ForLoop | Op::Return => {}
+        Op::SelfOp => {
+            // the receiver is looked up (and its metatable read) and
+            // copied to R[A+1]
+            let b = ins.b();
+            if (b as usize) < max_stack
+                && let Some(sid) = lookup(bindings, depth, b)
+            {
+                mark_escape(sites, sid);
+            }
+            unbind(bindings, depth, a);
+            if ((a + 1) as usize) < max_stack {
+                unbind(bindings, depth, a + 1);
+            }
+        }
         _ => {
             unbind(bindings, depth, a);
         }

@@ -18,6 +18,10 @@ pub const TABLE_APREFIX_OFFSET: usize = std::mem::offset_of!(Table, aprefix);
 /// 8 bytes on.
 pub const NODE_KEY_OFFSET: usize = std::mem::offset_of!(Node, key_tag);
 
+/// Byte offset of the `i32` index of the next node in a chain (`-1` at its
+/// end) within `Node`.
+pub const NODE_NEXT_OFFSET: usize = std::mem::offset_of!(Node, next);
+
 /// Byte offset of `val: Value` within `Node` (= 16).
 pub const NODE_VAL_OFFSET: usize = std::mem::offset_of!(Node, val);
 

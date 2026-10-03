@@ -9,6 +9,7 @@ mod aot_helpers_in_staticlib;
 mod aot_iconst_reloc;
 mod aot_inline_chain_fire_measurement;
 mod aot_inline_side_exit_fire;
+mod aot_inlined_calls;
 mod aot_inlined_recursive;
 mod aot_int_chunk_lower_into_object;
 mod aot_link_and_run;
