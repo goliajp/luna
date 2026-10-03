@@ -29,7 +29,7 @@ const LUNA_STEPSIZE: i64 = 13;
 
 /// A pacing parameter a dialect lets Lua read or write.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Param {
+pub(crate) enum Param {
     Pause,
     StepMul,
     StepSize,
@@ -110,7 +110,7 @@ impl GcParams {
     /// Store `v` the way the dialect does: a C `int` on ≤5.3 (5.3 raising a
     /// step multiplier below 40), a `lu_byte` holding `v / 4` or `v` on 5.4,
     /// a floating-point byte on 5.5.
-    fn set(&mut self, param: Param, v: i32) {
+    pub(crate) fn set(&mut self, param: Param, v: i32) {
         use LuaVersion::*;
         let stored = match self.version {
             Lua51 | Lua52 => i64::from(v),
@@ -126,7 +126,7 @@ impl GcParams {
     }
 
     /// The value Lua reads back.
-    fn get(&self, param: Param) -> i64 {
+    pub(crate) fn get(&self, param: Param) -> i64 {
         let s = self.stored[Self::slot(param)];
         match self.version {
             LuaVersion::Lua54 | LuaVersion::MacroLua => match param {
@@ -319,7 +319,7 @@ fn options(v: LuaVersion) -> &'static [&'static str] {
 /// small one on ≤5.3 (`GCSTEPSIZE`; gc.lua's `dosteps(0) > 10` pins that it
 /// takes many of them to finish a cycle), and one of the `stepsize`
 /// parameter's size from 5.4 on, where stepsize 0 completes the cycle.
-fn step(vm: &mut Vm, n: i64) -> bool {
+pub(crate) fn step(vm: &mut Vm, n: i64) -> bool {
     if vm.gc_mode_is_generational() {
         vm.collect_garbage();
         return false;
@@ -357,21 +357,12 @@ fn set_param(vm: &mut Vm, a: Args, param: Param, ex: i32) -> Result<i64, LuaErro
 fn switch_mode(vm: &mut Vm, a: Args, opt: &'static str) -> Result<Vec<Value>, LuaError> {
     let v = vm.version();
     if v == LuaVersion::Lua54 || v == LuaVersion::MacroLua {
-        let params: &[Param] = if opt == "incremental" {
-            &[Param::Pause, Param::StepMul, Param::StepSize]
-        } else {
-            &[Param::MinorMul, Param::MajorMul]
-        };
-        let mut values = Vec::with_capacity(params.len());
-        for i in 0..params.len() as u32 {
+        let n = if opt == "incremental" { 3 } else { 2 };
+        let mut values = Vec::with_capacity(n);
+        for i in 0..n as u32 {
             values.push(argcheck::opt_integer(vm, a, 1 + i, 0)? as i32);
         }
-        for (&param, value) in params.iter().zip(values) {
-            if value != 0 {
-                vm.gc_params.set(param, value);
-            }
-        }
-        sync_pacing(vm);
+        set_mode_params(vm, opt, &values);
     }
     let prev = vm.gc_switch_mode(opt);
     Ok(vec![if v == LuaVersion::Lua52 {
@@ -380,6 +371,32 @@ fn switch_mode(vm: &mut Vm, a: Args, opt: &'static str) -> Result<Vec<Value>, Lu
         Value::Str(vm.heap.intern(prev.as_bytes()))
     }])
 }
+
+/// 5.4 `lua_gc(LUA_GCINC, pause, stepmul, stepsize)` and `(LUA_GCGEN,
+/// minormul, majormul)`: set each nonzero parameter given.
+pub(crate) fn set_mode_params(vm: &mut Vm, mode: &str, values: &[i32]) {
+    let params: &[Param] = if mode == "incremental" {
+        &[Param::Pause, Param::StepMul, Param::StepSize]
+    } else {
+        &[Param::MinorMul, Param::MajorMul]
+    };
+    for (&param, &value) in params.iter().zip(values) {
+        if value != 0 {
+            vm.gc_params.set(param, value);
+        }
+    }
+    sync_pacing(vm);
+}
+
+/// 5.5's parameters in `LUA_GCP*` order.
+pub(crate) const PARAM_ORDER: [Param; 6] = [
+    Param::MinorMul,
+    Param::MajorMinor,
+    Param::MinorMajor,
+    Param::Pause,
+    Param::StepMul,
+    Param::StepSize,
+];
 
 /// 5.5 `param`: read a parameter, or set it (a negative value leaves it
 /// unchanged) and return the previous value.
@@ -392,15 +409,7 @@ fn param(vm: &mut Vm, a: Args) -> Result<Value, LuaError> {
         "stepmul",
         "stepsize",
     ];
-    const MAP: [Param; 6] = [
-        Param::MinorMul,
-        Param::MajorMinor,
-        Param::MinorMajor,
-        Param::Pause,
-        Param::StepMul,
-        Param::StepSize,
-    ];
-    let which = MAP[argcheck::check_option(vm, a, 1, None, &NAMES)?];
+    let which = PARAM_ORDER[argcheck::check_option(vm, a, 1, None, &NAMES)?];
     let value = argcheck::opt_integer(vm, a, 2, -1)? as i32;
     let prev = vm.gc_params.get(which);
     if value >= 0 {
@@ -411,7 +420,7 @@ fn param(vm: &mut Vm, a: Args) -> Result<Value, LuaError> {
 }
 
 /// Carry the Lua-visible parameters over to luna's collector knobs.
-fn sync_pacing(vm: &mut Vm) {
+pub(crate) fn sync_pacing(vm: &mut Vm) {
     let p = &vm.gc_params;
     let pause = p.luna_scaled(Param::Pause, LUNA_PAUSE);
     let stepmul = p.luna_scaled(Param::StepMul, LUNA_STEPMUL);

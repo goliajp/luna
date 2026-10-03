@@ -220,7 +220,7 @@ fn leave(
 }
 
 /// The error object being thrown: the top of the thread that raised it.
-fn take_error(l: *mut LuaState) -> Value {
+pub(super) fn take_error(l: *mut LuaState) -> Value {
     // SAFETY: `l` is live, so is its global record
     let from = unsafe { std::mem::replace(&mut (*(*l).g).err_from, std::ptr::null_mut()) };
     let from = if from.is_null() { l } else { from };
