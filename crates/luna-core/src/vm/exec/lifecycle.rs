@@ -79,6 +79,7 @@ impl Vm {
             gc_finalizing: false,
             host_cont_hooks: None,
             host_warn: None,
+            host_light: std::collections::HashMap::new(),
             warn_state: WarnState::Off,
             warn_buf: Vec::new(),
             warn_cont: false,

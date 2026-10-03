@@ -119,6 +119,18 @@ impl Vm {
         })
     }
 
+    /// The function the C API made for the light C function `key`, made
+    /// with `make` the first time (5.2+'s functions without upvalues, which
+    /// PUC compares by their C pointer). It lives as long as the Vm.
+    pub fn host_light_fn(&mut self, key: usize, make: impl FnOnce(&mut Vm) -> Value) -> Value {
+        if let Some(&v) = self.host_light.get(&key) {
+            return v;
+        }
+        let v = make(self);
+        self.host_light.insert(key, v);
+        v
+    }
+
     /// The native running on top of the dispatch chain.
     pub fn host_running_native(&self) -> Option<Gc<crate::runtime::NativeClosure>> {
         self.running_natives.last().map(|a| a.nc)
