@@ -182,6 +182,13 @@ impl Heap {
                 }
             }
         }
+        // the chunk roots are weak: forget the dead ones before they are freed
+        self.chunk_roots.retain(|p| {
+            // SAFETY: a root still on the list was not freed by an earlier
+            // sweep (it was dropped from the list first); this cycle's sweep
+            // has not run, so the header is allocated
+            !unsafe { is_white((*(p.as_ptr() as *mut GcHeader)).flags) }
+        });
         // (6) clearbykeys — drop entries whose weak key did not survive
         // marking, across every weak table (PUC's `clearbykeys(ephemeron)
         // + clearbykeys(allweak)`). Pure key sweep — value-dead entries are

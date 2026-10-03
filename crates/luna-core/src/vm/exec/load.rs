@@ -90,6 +90,9 @@ impl Vm {
             self.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
             proto
         };
+        if self.heap.track_chunk_roots {
+            self.heap.chunk_roots.push(proto);
+        }
         // PUC `lua_load` (lapi.c) only seeds the loaded closure's first
         // upvalue with the globals table when the closure has *exactly* one
         // upvalue — that's the main-chunk `_ENV` case. A dumped non-main

@@ -50,7 +50,7 @@ pub(super) fn emit_str_key_arg<E: Emit>(
     defined_aot_data: &mut std::collections::HashSet<DataId>,
 ) -> Value {
     if !aot {
-        return bcx.ins().iconst(types::I64, key_v.as_ptr() as i64);
+        return bcx.reloc(RelocKind::Str, key_v.as_ptr() as i64);
     }
     let bytes = key_v.as_bytes();
     let hex = strkey_hex_label(bytes);
@@ -233,11 +233,12 @@ pub(super) fn emit_chain_ptr_arg<E: Emit>(
     bcx: &mut E,
     chain: &[FrameMaterializeInfo],
     chain_rc_first_ptr: i64,
+    site_idx: u32,
     aot: bool,
     defined_aot_data: &mut std::collections::HashSet<DataId>,
 ) -> Value {
     if !aot {
-        return bcx.ins().iconst(types::I64, chain_rc_first_ptr);
+        return bcx.reloc(RelocKind::Chain(site_idx), chain_rc_first_ptr);
     }
     // Pack the chain identically to the v3 wire format's chain_bytes:
     // three little-endian 32-bit fields per record. Drives both the
@@ -330,7 +331,7 @@ pub(super) fn emit_proto_arg<E: Emit>(
     defined_aot_data: &mut std::collections::HashSet<DataId>,
 ) -> Value {
     if !aot {
-        return bcx.ins().iconst(types::I64, proto.as_ptr() as i64);
+        return bcx.reloc(RelocKind::Proto, proto.as_ptr() as i64);
     }
     let hash = proto.stable_hash();
     let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();

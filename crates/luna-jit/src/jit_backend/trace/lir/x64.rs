@@ -30,6 +30,7 @@ pub(crate) struct X64 {
     /// (offset of a rel32 field, label, unused)
     fixups: Vec<(u32, u32, u8)>,
     words: Vec<u32>,
+    sites: Vec<crate::jit_backend::trace::reloc::Site>,
     saved: Vec<u8>,
     frame: u32,
 }
@@ -121,6 +122,17 @@ impl Masm for X64 {
             self.code.push(0xB8 | (d & 7));
             self.code.extend_from_slice(&v.to_le_bytes());
         }
+    }
+    fn mov_reloc(&mut self, d: u8, v: i64, n: u32) {
+        // movabs: REX.W, B8+r, then the eight bytes of the address
+        self.code.push(0x48 | (d >> 3));
+        self.code.push(0xB8 | (d & 7));
+        self.sites.push(crate::jit_backend::trace::reloc::Site {
+            at: self.code.len() as u32,
+            n,
+            form: crate::jit_backend::trace::reloc::Form::Abs8,
+        });
+        self.code.extend_from_slice(&v.to_le_bytes());
     }
     fn fmov(&mut self, d: u8, s: u8) {
         self.movaps(d, s);
@@ -453,15 +465,18 @@ impl Masm for X64 {
             words,
             mut labels,
             mut fixups,
+            mut sites,
         } = b;
         code.clear();
         labels.clear();
         fixups.clear();
+        sites.clear();
         X64 {
             code,
             labels,
             fixups,
             words,
+            sites,
             saved: Vec::new(),
             frame: 0,
         }
@@ -477,6 +492,7 @@ impl Masm for X64 {
             words: self.words,
             labels: self.labels,
             fixups: self.fixups,
+            sites: self.sites,
         }
     }
 }
