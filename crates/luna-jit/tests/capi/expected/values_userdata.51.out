@@ -1,0 +1,9 @@
+newuserdata: userdata len=16 same=1 top=1
+block kept: 1 aligned=1
+type	userdata	true
+newuserdata 0: userdata len=0
+uobj	ud:name	99
+uobj value: 41
+count grew	true
+count shrank	true
+final top=0

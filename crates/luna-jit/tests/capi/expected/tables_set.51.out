@@ -1,0 +1,43 @@
+settable: top=1
+setfield: top=1
+rawset: top=1
+rawseti: top=1
+k: s:v top=2
+f: n:12 top=2
+rk: true top=2
+1: s:one top=2
+2: s:two top=2
+3: nil top=2
+len: 2
+2 cleared: nil top=2
+log	new=5 1=9	5	6	7	8	9
+C __newindex: s:C:w top=2
+table __newindex own: nil top=2
+proxied.p	pvv
+upvalue stores: top=0
+up s: s:viaup top=2
+up k2: s:v2 top=2
+up 3: s:raw top=2
+registry rawseti: s:regv
+registry settable: s:rv
+globals	gv	gv2	gv3
+next arr: n:1 n:10 top=3
+next arr: n:2 n:20 top=3
+next arr: n:3 n:30 top=3
+next end: top=1
+mixed keys: n=7 1 2 2.5 boolean x y z top=1
+next empty: 0 top=2
+cleared while traversing: visited=28
+after clearing: next=0
+gc store: 52
+set nil: status=2 s:attempt to index a nil value top=0
+set number: status=2 s:attempt to index a number value top=0
+settable nil key: status=2 s:table index is nil top=0
+settable nan key: status=2 s:table index is NaN top=0
+rawset nil key: status=2 s:table index is nil top=0
+rawset nan key: status=2 s:table index is NaN top=0
+newindex mm error: status=2 s:nierr top=0
+newindex loop: status=2 s:loop in settable top=0
+next bad key: status=2 s:invalid key to 'next' top=0
+next big key: status=2 s:invalid key to 'next' top=0
+final top=0

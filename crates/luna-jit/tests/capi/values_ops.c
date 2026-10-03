@@ -79,6 +79,17 @@ static int unary(int op) {
 #endif
 }
 
+/* (op, a, b): print lua_arith on a and b (a alone when unary) and the
+   stack size it left */
+static int c_arith1(lua_State *L) {
+  int op = (int)lua_tointeger(L, 1);
+  if (unary(op)) lua_settop(L, 2);
+  lua_arith(L, op);
+  pv(L, -1);
+  printf(" top=%d\n", lua_gettop(L));
+  return 0;
+}
+
 /* every operation on the two values of expressions a and b */
 static void all_ops(lua_State *L, const char *a, const char *b) {
   int op;
@@ -95,17 +106,6 @@ static void all_ops(lua_State *L, const char *a, const char *b) {
       lua_pop(L, 1);
     }
   }
-}
-
-/* (op, a, b): print lua_arith on a and b (a alone when unary) and the
-   stack size it left */
-static int c_arith1(lua_State *L) {
-  int op = (int)lua_tointeger(L, 1);
-  if (unary(op)) lua_settop(L, 2);
-  lua_arith(L, op);
-  pv(L, -1);
-  printf(" top=%d\n", lua_gettop(L));
-  return 0;
 }
 
 static int e_arith_nil(lua_State *L) {
