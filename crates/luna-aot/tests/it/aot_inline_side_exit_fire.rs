@@ -35,13 +35,7 @@ use std::process::Command;
 use luna_aot::embed::compile_and_link;
 use luna_core::version::LuaVersion;
 
-fn have_on_path(bin: &str) -> bool {
-    Command::new(bin)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success() || o.status.code().is_some())
-        .unwrap_or(false)
-}
+use crate::host_link::host_can_link;
 
 fn run_with_env(path: &Path, env_key: &str, env_val: &str) -> (String, String, Option<i32>) {
     let output = Command::new(path)
@@ -57,15 +51,8 @@ fn run_with_env(path: &Path, env_key: &str, env_val: &str) -> (String, String, O
 
 #[test]
 fn aot_binary_fires_self_recursive_inline_cmp_trace() {
-    if cfg!(target_os = "windows") {
-        eprintln!(
-            "skipped: AOT trace install requires bracket-symbol section convention \
-             unavailable on Windows COFF"
-        );
-        return;
-    }
-    if !have_on_path("cc") || !have_on_path("cargo") {
-        eprintln!("skipped: cc / cargo not on PATH");
+    if !host_can_link() {
+        eprintln!("skipped: cargo / cc not on PATH");
         return;
     }
 

@@ -54,8 +54,13 @@ sudo apt install gcc-mingw-w64-x86-64                             # debian/ubunt
 brew install mingw-w64                                            # macOS
 luna-aot compile foo.lua --out foo.exe --target x86_64-pc-windows-gnu
 
-# windows x86_64 / MSVC, native on Windows (Developer Command Prompt for VS 2022):
-luna-aot compile foo.lua --out foo.exe --target x86_64-pc-windows-msvc
+# windows x86_64 / MSVC, native on Windows (any shell; cl.exe and link.exe
+# are found in the Visual Studio / Build Tools install):
+luna-aot compile foo.lua --out foo.exe
+
+# windows x86_64 / MinGW, native on Windows (MinGW-w64 gcc on PATH):
+rustup target add x86_64-pc-windows-gnu
+luna-aot compile foo.lua --out foo.exe --target x86_64-pc-windows-gnu
 # or from a Unix host with the LLVM toolchain + Windows SDK mirror
 # (clang-cl + lld-link via `brew install llvm` / `apt install clang lld`;
 # Windows SDK + UCRT libs via an `xwin`-style setup):
@@ -77,10 +82,11 @@ luna-aot compile foo.lua --out foo.musl --target x86_64-unknown-linux-musl
 | `x86_64-unknown-linux-gnu` | rustup add | `x86_64-linux-gnu-gcc` | `brew install x86_64-elf-gcc` | (host gcc) |
 | `x86_64-unknown-linux-musl` | rustup add | `x86_64-linux-musl-gcc` | `brew install FiloSottile/musl-cross/musl-cross` | `apt install musl-tools` |
 | `x86_64-pc-windows-gnu` | rustup add | `x86_64-w64-mingw32-gcc` | `brew install mingw-w64` | `apt install gcc-mingw-w64-x86-64` |
-| `x86_64-pc-windows-msvc` | rustup add | `clang-cl` + `lld-link` (LLVM) **or** `cl.exe` + `link.exe` (Visual Studio Build Tools 2022) | `brew install llvm` (provides both) | `apt install clang lld` (provides both) |
+| `x86_64-pc-windows-msvc` | rustup add | `cl.exe` + `link.exe` (Visual Studio or Build Tools, found without vcvars) on a Windows host; `clang-cl` + `lld-link` (LLVM) elsewhere | `brew install llvm` (provides both) | `apt install clang lld` (provides both) |
 
 Anything missing surfaces as a concrete error message naming the
-package; nothing is silently degraded.
+package; nothing is silently degraded. Supported Windows toolchains and
+how the two Windows targets differ: `docs/aot.md`, section 3.
 
 ## Why a separate crate
 

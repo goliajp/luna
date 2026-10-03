@@ -1,8 +1,9 @@
 name: aot-cross
 
 # Cross-compile matrix expansion. Tier-1 targets (macOS aarch64,
-# Linux x86_64, Linux musl, Windows MinGW, Windows MSVC native-host
-# build, Mach-O cross) are covered elsewhere. This workflow adds
+# Linux x86_64, Linux musl, Mach-O cross, and Windows MSVC + MinGW
+# built and run natively on ci.yml's windows-latest leg) are covered
+# elsewhere. This workflow adds
 # tier-2 coverage:
 #
 # - RISC-V 64-bit (build-only — no actual run on real hardware)

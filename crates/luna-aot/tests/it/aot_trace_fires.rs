@@ -30,9 +30,8 @@
 //!
 //! # Skip conditions
 //!
-//! - Windows: AOT trace install path is not implemented (COFF has no
-//!   bracket-symbol convention).
-//! - Missing `cc` or `cargo` on PATH: the AOT pipeline can't link.
+//! - Missing `cargo`, or off Windows `cc`, on PATH: the AOT pipeline
+//!   can't link.
 //! - Cross-compile-only environments: this test only exercises the
 //!   host triple.
 
@@ -43,13 +42,7 @@ use std::process::Command;
 use luna_aot::embed::compile_and_link;
 use luna_core::version::LuaVersion;
 
-fn have_on_path(bin: &str) -> bool {
-    Command::new(bin)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success() || o.status.code().is_some())
-        .unwrap_or(false)
-}
+use crate::host_link::host_can_link;
 
 fn run_with_env(path: &Path, env_key: &str, env_val: &str) -> (String, String, Option<i32>) {
     let output = Command::new(path)
@@ -65,15 +58,8 @@ fn run_with_env(path: &Path, env_key: &str, env_val: &str) -> (String, String, O
 
 #[test]
 fn aot_binary_fires_trace_mcode_on_hot_counted_loop() {
-    if cfg!(target_os = "windows") {
-        eprintln!(
-            "skipped: AOT trace install requires bracket-symbol section convention \
-             unavailable on Windows COFF"
-        );
-        return;
-    }
-    if !have_on_path("cc") || !have_on_path("cargo") {
-        eprintln!("skipped: cc / cargo not on PATH");
+    if !host_can_link() {
+        eprintln!("skipped: cargo / cc not on PATH");
         return;
     }
 
@@ -146,12 +132,8 @@ fn aot_binary_zero_traces_on_trivial_source_still_runs() {
     // cmain shim's `luna_trace_meta` placeholder keeps the bracket
     // symbols defined), and run it should print + exit cleanly
     // without any `aot_trace_fired` probe.
-    if cfg!(target_os = "windows") {
-        eprintln!("skipped: see other test");
-        return;
-    }
-    if !have_on_path("cc") || !have_on_path("cargo") {
-        eprintln!("skipped: cc / cargo not on PATH");
+    if !host_can_link() {
+        eprintln!("skipped: cargo / cc not on PATH");
         return;
     }
 

@@ -44,8 +44,16 @@ pub(super) fn host_triple() -> &'static str {
         "x86_64-unknown-linux-gnu"
     } else if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
         "aarch64-unknown-linux-gnu"
+    } else if cfg!(all(
+        target_arch = "x86_64",
+        target_os = "windows",
+        target_env = "gnu"
+    )) {
+        "x86_64-pc-windows-gnu"
     } else if cfg!(all(target_arch = "x86_64", target_os = "windows")) {
         "x86_64-pc-windows-msvc"
+    } else if cfg!(all(target_arch = "aarch64", target_os = "windows")) {
+        "aarch64-pc-windows-msvc"
     } else {
         "unknown"
     }
@@ -269,48 +277,6 @@ impl TargetSpec {
         self.os == TargetOs::Windows && self.libc == TargetLibc::Default
     }
 
-    /// Pick the MSVC-style C compiler driver. Returns `None` when none is on PATH (caller skips with a
-    /// clear error message). Resolution:
-    ///
-    /// 1. `$CC` env var wins (consistent with `cc_command`).
-    /// 2. `clang-cl` — cross-platform: macOS/Linux hosts get it via
-    ///    `brew install llvm` / `apt install clang`, accepts the same
-    ///    `__attribute__((section(...)))` syntax we emit for MinGW.
-    /// 3. `cl.exe` — Microsoft Build Tools, Windows-host only. Requires
-    ///    `vcvarsall.bat` to have set up INCLUDE / LIB env vars.
-    pub(super) fn msvc_cc_command(&self) -> Option<Command> {
-        if let Ok(cc) = std::env::var("CC") {
-            return Some(Command::new(cc));
-        }
-        for candidate in &["clang-cl", "cl.exe", "cl"] {
-            if which_on_path(candidate) {
-                return Some(Command::new(candidate));
-            }
-        }
-        None
-    }
-
-    /// Pick the MSVC-style PE/COFF linker driver. Returns `None` when none is on PATH. Resolution:
-    ///
-    /// 1. `$LD` env var wins (advanced override for embedders shipping a
-    ///    pinned linker).
-    /// 2. `lld-link` — LLVM's PE/COFF linker. Cross-platform: macOS gets
-    ///    it via `brew install llvm`, Linux via `apt install lld`. Works
-    ///    without a Windows host or vcvarsall setup.
-    /// 3. `link.exe` — Microsoft's linker. Windows-only; requires
-    ///    Developer Command Prompt (sets PATH + LIB env vars).
-    pub(super) fn msvc_link_command(&self) -> Option<Command> {
-        if let Ok(ld) = std::env::var("LD") {
-            return Some(Command::new(ld));
-        }
-        for candidate in &["lld-link", "link.exe", "link"] {
-            if which_on_path(candidate) {
-                return Some(Command::new(candidate));
-            }
-        }
-        None
-    }
-
     /// Pick the `cc` driver invocation for this target. Returns the
     /// command (already constructed with the driver name and any
     /// `-target` / `--target` flags) ready for the caller to add
@@ -323,7 +289,9 @@ impl TargetSpec {
     /// 2. For non-host targets we try the toolchain-named cross
     ///    compiler first (e.g. `aarch64-linux-gnu-gcc`,
     ///    `x86_64-w64-mingw32-gcc`, `x86_64-linux-musl-gcc`).
-    /// 3. Fall through to `cc -target <triple>` (works on macOS where
+    /// 3. A MinGW target on a Windows host of the same architecture
+    ///    uses the plain `gcc` that native MinGW installs ship.
+    /// 4. Fall through to `cc -target <triple>` (works on macOS where
     ///    Apple's clang is the system cc and supports cross-darwin
     ///    natively).
     ///
@@ -335,7 +303,13 @@ impl TargetSpec {
         }
 
         if self.is_host {
-            return Command::new("cc");
+            // a MinGW toolchain has `gcc` but no `cc`
+            let driver = if self.libc == TargetLibc::MinGw {
+                "gcc"
+            } else {
+                "cc"
+            };
+            return Command::new(driver);
         }
 
         // Non-host: try the named cross-cc first.
@@ -362,6 +336,9 @@ impl TargetSpec {
             if which_on_path(candidate) {
                 return Command::new(candidate);
             }
+        }
+        if cfg!(windows) && self.libc == TargetLibc::MinGw && self.arch == host_object_target().1 {
+            return Command::new("gcc");
         }
 
         // Apple cross-darwin: clang -target accepts e.g.
@@ -434,18 +411,19 @@ impl TargetSpec {
 
 /// Check whether `binary` resolves on `PATH`. Used by
 /// [`TargetSpec::cc_command`] to prefer a named cross-cc over the
-/// host `cc`.
-fn which_on_path(binary: &str) -> bool {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in path.split(if cfg!(windows) { ';' } else { ':' }) {
-            if dir.is_empty() {
-                continue;
-            }
-            let candidate = std::path::Path::new(dir).join(binary);
-            if candidate.exists() {
-                return true;
-            }
-        }
-    }
-    false
+/// host `cc`. On Windows a name without an extension also matches
+/// `<name>.exe`, as `Command` would spawn it.
+pub(super) fn which_on_path(binary: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .any(|dir| {
+            let candidate = dir.join(binary);
+            candidate.is_file()
+                || (cfg!(windows)
+                    && candidate.extension().is_none()
+                    && candidate.with_extension("exe").is_file())
+        })
 }
