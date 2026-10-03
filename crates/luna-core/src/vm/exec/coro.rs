@@ -11,7 +11,17 @@ impl Vm {
         // (PUC `lua_newthread`: the new state copies `g->mainthread`'s
         // `l_gt`). `Vm.globals` always reflects the live thread, so reading
         // it here picks the creator regardless of which coro is running.
-        self.heap.new_coro(body, self.globals)
+        let co = self.heap.new_coro(body, self.globals);
+        // a new thread inherits the creator's C hook (PUC `lua_newthread`); a
+        // Lua hook stays with its thread, as PUC's hook table keeps it
+        if matches!(self.hook.func, Some(Value::LightUserdata(_))) {
+            let mut h = self.hook;
+            h.rust_func = None;
+            h.count_left = h.count_base;
+            // SAFETY: `co` was just allocated and nothing else refers to it
+            unsafe { co.as_mut() }.hook = h;
+        }
+        co
     }
 
     /// Is `t` the thread whose context is currently live in the VM?
@@ -66,6 +76,15 @@ impl Vm {
     /// object has no stored status — it is "running" when nothing else runs,
     /// else "normal" (it resumed the active coroutine).
     pub(crate) fn effective_coro_status(&self, co: Gc<Coro>) -> CoroStatus {
+        // a thread the C API has seen counts as dead at its base level only
+        // while nothing is on its C stack to run
+        if self.host_restartable(co) {
+            return if co.host_stack.is_empty() {
+                CoroStatus::Dead
+            } else {
+                CoroStatus::Suspended
+            };
+        }
         if self.is_main_coro(co) {
             if self.current.is_none() {
                 CoroStatus::Running
@@ -154,6 +173,7 @@ impl Vm {
             m.error_traceback = None;
             m.error_levels = None;
         }
+        self.host_thread_reset(co);
         result.map(|()| death_err)
     }
 

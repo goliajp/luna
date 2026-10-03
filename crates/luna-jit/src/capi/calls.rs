@@ -3,7 +3,7 @@
 //! are reached through their C wrappers (`csrc/shim_wrap.c`), which throw
 //! what these report.
 
-use super::ccall::{Cont, KFn, PendingYield, Wait, pcall_outcome, push_results};
+use super::ccall::{Cont, KFn, LUNA_RECOVER, PendingYield, Wait, pcall_outcome, push_results};
 use super::*;
 use luna_core::vm::exec::host_c::HostContSpec;
 
@@ -20,9 +20,13 @@ fn cont_spec(api: &mut Api) -> Option<HostContSpec> {
     })
 }
 
-/// Record `cont` on the running C function; `false` with none running.
+/// Record `cont` on the running C function, if one is running; a
+/// continuation's context is what 5.2's `lua_getctx` reports from then on.
 fn set_cont(api: &mut Api, cont: Option<Cont>) {
     if let Some(c) = api.st().calls.last_mut() {
+        if let Some(k) = cont {
+            c.k_ctx = k.ctx;
+        }
         c.cont = cont;
     }
 }
@@ -40,7 +44,7 @@ pub(super) fn callk(api: &mut Api, nargs: c_int, nresults: c_int, k: Option<KFn>
             set_cont(
                 api,
                 Some(Cont {
-                    k,
+                    k: Some(k),
                     ctx,
                     wait: Wait::Call { nresults },
                 }),
@@ -49,7 +53,10 @@ pub(super) fn callk(api: &mut Api, nargs: c_int, nresults: c_int, k: Option<KFn>
         }
         None => None,
     };
+    let hooked = super::hooks::calling_from_hook(api);
+    api.vm.host_mark_hook_call(hooked);
     let r = api.vm.host_call(f, &args, spec);
+    api.vm.host_mark_hook_call(false);
     match r {
         Ok(vals) => {
             if spec.is_some() {
@@ -105,22 +112,58 @@ pub(super) fn pcallk(
                 at,
                 errerr_before,
             };
-            set_cont(api, Some(Cont { k, ctx, wait }));
+            set_cont(
+                api,
+                Some(Cont {
+                    k: Some(k),
+                    ctx,
+                    wait,
+                }),
+            );
             cont_spec(api)
         }
         None => None,
     };
+    let hooked = super::hooks::calling_from_hook(api);
+    api.vm.host_mark_hook_call(hooked);
     let r = api.vm.host_call(pf, &pargs, spec);
+    api.vm.host_mark_hook_call(false);
     let co = api.thread();
     let status = match r {
         Ok(vals) => {
-            if spec.is_some() {
-                set_cont(api, None);
+            let outcome = pcall_outcome(api.vm, co, vals, nresults, at, errerr_before);
+            match (outcome, k, spec) {
+                // in a coroutine the error leaves the C function and its
+                // continuation runs with it, as PUC's `lua_pcallk` recovers
+                // at the resume
+                (Some(status), Some(k), Some(_)) => {
+                    set_cont(
+                        api,
+                        Some(Cont {
+                            k: Some(k),
+                            ctx,
+                            wait: Wait::Recover { status },
+                        }),
+                    );
+                    api.vm.heap.barrier_back(co);
+                    api.g().raised = LUNA_RECOVER;
+                    return LUA_OK;
+                }
+                _ => {
+                    if spec.is_some() {
+                        set_cont(api, None);
+                    }
+                    outcome.unwrap_or(LUA_OK)
+                }
             }
-            pcall_outcome(api.vm, co, vals, nresults, at, errerr_before).unwrap_or(LUA_OK)
         }
         Err(_) if api.vm.host_yielding() => {
             api.g().raised = LUA_YIELD;
+            return LUA_OK;
+        }
+        // a coroutine closing itself goes on unwinding
+        Err(e) if api.vm.host_terminating() => {
+            api.raise(e);
             return LUA_OK;
         }
         // an error the protected call could not catch (the C stack was
@@ -145,6 +188,9 @@ pub(super) fn pcallk(
 pub(super) fn yieldk(api: &mut Api, nresults: c_int, k: Option<KFn>, ctx: isize) -> bool {
     if let Some(msg) = api.vm.host_yield_refusal() {
         api.raise_msg(msg);
+        return false;
+    }
+    if super::hooks::hook_yield(api) {
         return false;
     }
     api.st().pending_yield = Some(PendingYield {
@@ -376,7 +422,7 @@ pub unsafe extern "C" fn lua_getctx(L: *mut LuaState, ctx: *mut c_int) -> c_int 
     if c.k_status == LUA_OK {
         return LUA_OK;
     }
-    let (status, k) = (c.k_status, c.cont.map_or(0, |k| k.ctx));
+    let (status, k) = (c.k_status, c.k_ctx);
     if !ctx.is_null() {
         // SAFETY: `ctx` is non-null and writable (# Safety)
         unsafe { *ctx = k as c_int };

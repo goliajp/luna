@@ -20,7 +20,9 @@ mod load;
 mod threads;
 mod values;
 pub use block::HostBlock;
+pub use debug::{HostAr, HostHookFn, HostLevel};
 pub use load::HostChunkProgress;
+pub use values::{HOST_OP_BNOT, HOST_OP_UNM};
 
 /// The C API's side of a [`ContKind::Host`] continuation.
 #[derive(Clone, Copy)]
@@ -34,6 +36,11 @@ pub struct HostContHooks {
     /// Continuation `token` of `thread` will never run: an error left its C
     /// function.
     pub discard: fn(&mut Vm, Gc<Coro>, u32),
+    /// A thread the C API has seen is about to be resumed.
+    pub resuming: fn(&mut Vm, Gc<Coro>),
+    /// A thread the C API has seen was closed: its C frames and C stack
+    /// go.
+    pub reset: fn(&mut Vm, Gc<Coro>),
 }
 
 /// A warning function that replaces the default one (PUC `lua_setwarnf`):
