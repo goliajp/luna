@@ -146,6 +146,9 @@ pub struct Vm {
     /// keep the older raise semantics).
     pub(crate) warn_state: WarnState,
     pub(crate) warn_buf: Vec<u8>,
+    /// the default warning function is in the middle of a message (PUC
+    /// `warnfcont`)
+    pub(crate) warn_cont: bool,
     /// Embedding cooperative budget: a per-Vm tick counter that the run
     /// loop decrements once per dispatch turn. When it hits zero the loop
     /// raises a catchable "instruction budget exceeded" error so the embedder
