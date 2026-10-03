@@ -48,13 +48,13 @@ impl Vm {
             }
             // 5.1's base library registers itself as `_G`, then the
             // coroutine library, and returns both
-            let loaded = self.lib_loaded();
+            let loaded = self.host_loaded();
             self.lib_raw_set(loaded, key, Value::Table(g));
             let co = self.host_open_lib("coroutine")?;
             return Ok(vec![Value::Table(g), co[0]]);
         }
         let prev = g.get(key);
-        let loaded = self.lib_loaded();
+        let loaded = self.host_loaded();
         let entry = loaded.get(key);
         self.open_lib(opener(name));
         let fresh = g.get(key);
@@ -67,7 +67,7 @@ impl Vm {
         };
         let target = match (entry, prev) {
             (Value::Table(t), _) | (Value::Nil, Value::Table(t)) => {
-                self.lib_merge(fresh_t, t);
+                self.host_merge(fresh_t, t);
                 t
             }
             (_, Value::Nil) => {
@@ -88,7 +88,7 @@ impl Vm {
     }
 
     /// The registry's `_LOADED` table, made on first use.
-    fn lib_loaded(&mut self) -> Gc<Table> {
+    fn host_loaded(&mut self) -> Gc<Table> {
         let reg = self.host_registry();
         let k = Value::Str(self.heap.intern(b"_LOADED"));
         if let Value::Table(t) = reg.get(k) {
@@ -101,7 +101,7 @@ impl Vm {
 
     /// Copy every field of `from` into `to`, as 5.1's `luaL_register` fills
     /// a library table that already exists.
-    fn lib_merge(&mut self, from: Gc<Table>, to: Gc<Table>) {
+    fn host_merge(&mut self, from: Gc<Table>, to: Gc<Table>) {
         let mut k = Value::Nil;
         while let Ok(Some((nk, v))) = from.next(k) {
             self.lib_raw_set(to, nk, v);

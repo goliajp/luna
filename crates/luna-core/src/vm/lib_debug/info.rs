@@ -98,7 +98,7 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
 
 /// PUC `collectvalidlines`: the lines holding an instruction, as a set; nil
 /// for a C function.
-fn activelines(vm: &mut Vm, f: Value) -> Value {
+pub(crate) fn activelines(vm: &mut Vm, f: Value) -> Value {
     let Value::Closure(cl) = f else {
         return Value::Nil;
     };

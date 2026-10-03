@@ -94,7 +94,7 @@ fn getlocal_result(
 
 /// PUC `luaF_getlocalname(p, n, 0)`: the `n`-th local live at the first
 /// instruction — a parameter.
-fn param_name(cl: Gc<LuaClosure>, n: i64) -> Option<String> {
+pub(crate) fn param_name(cl: Gc<LuaClosure>, n: i64) -> Option<String> {
     let mut live: Vec<&crate::runtime::LocVar> = cl
         .proto
         .locvars
