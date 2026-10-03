@@ -61,8 +61,35 @@ pub fn cache_lookup_or_compile(
             )),
         };
     }
-    let entry = match try_compile_int_chunk(proto, pre53, float_only) {
-        Some(handle) => {
+    if let Some((entry, m)) = chunk_share::adopt(cs, &proto, pre53, float_only) {
+        cs.cache.insert(
+            key,
+            CacheEntry::Compiled {
+                entry,
+                num_args: m.num_args,
+                returns_one: m.returns_one,
+                arg_float_mask: m.arg_float_mask,
+                arg_table_mask: m.arg_table_mask,
+                ret_is_float: m.ret_is_float,
+                ret_is_table: m.ret_is_table,
+            },
+        );
+        return Some((
+            entry,
+            m.num_args,
+            m.returns_one,
+            m.arg_float_mask,
+            m.arg_table_mask,
+            m.ret_is_float,
+            m.ret_is_table,
+        ));
+    }
+    let capture = cs.engine.is_some();
+    let entry = match chunk_share::compile(proto, pre53, float_only, capture) {
+        Some((handle, image)) => {
+            if let Some(make) = image {
+                chunk_share::publish(cs, &proto, pre53, float_only, make);
+            }
             let raw = handle.entry_raw();
             let num_args = handle.num_args();
             let returns_one = handle.returns_one();
@@ -159,6 +186,17 @@ pub fn cache_entry_count(vm: &luna_core::vm::Vm) -> usize {
         .values()
         .filter(|e| matches!(e, CacheEntry::Compiled { .. }))
         .count()
+}
+
+/// Functions of the method JIT the Vm installed from its engine (see
+/// [`crate::Engine`]) instead of compiling them.
+pub fn chunk_adopted_count(vm: &luna_core::vm::Vm) -> u64 {
+    vm.jit
+        .storage
+        .as_ref()
+        .as_any()
+        .downcast_ref::<storage::CraneliftJitStorage>()
+        .map_or(0, |cs| cs.chunks_adopted)
 }
 
 /// Introspection (test-only): empty the Vm's JIT cache. Used

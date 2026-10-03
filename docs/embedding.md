@@ -801,6 +801,42 @@ For escape-hatch access to the underlying `Vm`:
 let vm: &mut Vm = lua.vm();
 ```
 
+### 11.1 Sharing compiled code between VMs
+
+An embedder that runs the same scripts in many VMs (a fresh VM per
+request, or one VM per worker thread) builds them through one
+`luna_jit::Engine`. A trace or function the JIT compiles in one of them
+is kept in the engine, and the others install it instead of compiling
+the same code again:
+
+```rust
+use luna_jit::{Engine, Lua};
+use luna_jit::version::LuaVersion;
+
+let engine = Engine::new(); // Clone + Send + Sync: share it between threads
+for request in requests {
+    let mut vm = engine.new_vm(LuaVersion::Lua54); // or engine.new_minimal_vm
+    vm.eval(&request.script)?;
+}
+let lua = Lua::with_engine(&engine, LuaVersion::Lua55);
+```
+
+- Code is shared only between VMs of the same dialect and the same
+  trace settings (`set_trace_tier`, `set_trace_tier_up_at`,
+  `set_field_ic_enabled`, `set_self_link_enabled`), and only for
+  functions whose bytecode, constants and upvalue descriptions are the
+  same; line numbers and chunk names do not matter.
+- Each VM copies the code it installs into its own code memory, so
+  dropping a VM frees its code whether or not it compiled it, and VMs on
+  different threads never run the same copy. The engine keeps about
+  64 MiB of shared code and data at most (`set_capacity_bytes`), dropping
+  the oldest first; `trace_count`, `function_count` and `bytes` report
+  what it holds.
+- The VMs of an engine hash strings with the engine's seed (random per
+  engine) rather than one of their own.
+- `vm.trace_adopted_count()` counts the traces a VM installed from its
+  engine, `luna_jit::jit::chunk_adopted_count(&vm)` the functions.
+
 ---
 
 ## 12. Threading model

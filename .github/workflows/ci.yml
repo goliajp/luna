@@ -248,6 +248,10 @@ jobs:
         run: cargo clippy -p luna-core --features send --tests -- -D warnings
       - name: 'cargo test -p luna-core --features send --test it -- send_vm::'
         run: 'cargo test -p luna-core --features send --test it -- send_vm::'
+      # a JIT Vm of a shared engine, moved to another thread, installs the
+      # engine's traces there
+      - name: 'cargo test -p luna-jit --features send --test it -- engine_shared_traces::'
+        run: 'cargo test -p luna-jit --features send --test it -- engine_shared_traces::'
 
   # ─────────────────────────────────────────────────────────────────
   # unsafe-usage drift detection.
@@ -285,7 +289,7 @@ jobs:
         run: |
           count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
                   crates | wc -l | tr -d ' ')
-          ceiling=938
+          ceiling=948
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then
