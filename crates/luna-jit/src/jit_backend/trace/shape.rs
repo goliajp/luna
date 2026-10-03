@@ -390,7 +390,7 @@ pub(super) fn is_whitelisted_op(op: Op) -> bool {
             // right-associative fold over `R[A..A+B-1]`, writing
             // the resulting string to R[A]. Trace emit spills the
             // operand window to vm.stack and calls
-            // `luna_jit_op_concat(A, B)` helper which runs
+            // `luna_jit_op_concat(A, B, roots)` helper which runs
             // concat_run + detects/deopts on the __concat
             // metamethod path. Helper-path equivalent to interp
             // (perf wash); the perf wins live in the buffered string
