@@ -212,6 +212,10 @@ optimization.
 
 ### Fixed
 
+- A trace whose entry reads a register holding a boolean could never be
+  entered, yet it was compiled and kept its loop or function head, so no
+  trace ever ran there. Such a recording is no longer compiled, and the
+  head is recorded again once those registers hold other values.
 - A Vm with no JIT backend that ran `eval_async` before
   `install_jit_backend` kept the method JIT off afterwards: the future's
   temporary switch-off counted as the embedder's own choice.
@@ -260,6 +264,16 @@ optimization.
   `luna_jit::jit_backend::trace::trace_codegen_count`: hidden from the
   documentation (`#[doc(hidden)]`); they exist for luna's own tests and
   are not part of the supported API.
+- A baseline code generator for traces on x86-64 and on aarch64 (except
+  Windows): a trace is first compiled from the same lowering into a
+  compact instruction list, given registers by one linear scan and
+  encoded directly, without Cranelift, which takes it over once its loop
+  has run 16384 iterations (4096 once the function it is in has been
+  called again). `Vm::set_trace_tier` / `Vm::trace_tier`
+  (`TraceTier::Auto`, the default, `Baseline` or `Optimizing`),
+  `Vm::set_trace_tier_up_at` and `Vm::trace_tiered_up_count` choose and
+  observe it per Vm; a new Vm starts from `LUNA_TRACE_TIER`
+  (`baseline`, `optimizing`, anything else is `auto`).
 - `Vm::set_field_ic_enabled` / `Vm::field_ic_enabled`: turn the trace
   JIT's table-field inline cache on or off for one Vm. A new Vm starts
   from `LUNA_JIT_FIELD_IC` as before.
