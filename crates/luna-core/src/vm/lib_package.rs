@@ -81,7 +81,7 @@ pub(crate) fn open_package(vm: &mut Vm) {
         vm.native_with(searcher_croot, Box::new([Value::Table(pkg)])),
     ];
     for (i, f) in fns.into_iter().enumerate() {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `searchers` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
         unsafe { searchers.as_mut() }
             .set(&mut vm.heap, Value::Int(i as i64 + 1), f)
             .expect("valid key");
@@ -152,7 +152,7 @@ impl Vm {
 
 fn raw_set(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) {
     let k = Value::Str(vm.heap.intern(k.as_bytes()));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `t` is a table the caller allocated or holds in a local, so it is alive; no reference into it is held across this call, and `set` does not collect
     unsafe { t.as_mut() }
         .set(&mut vm.heap, k, v)
         .expect("valid key");
@@ -161,7 +161,7 @@ fn raw_set(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) {
 /// A raw store into a table a script can reach and fill: a full hash
 /// part raises "table overflow" as any other store does.
 fn raw_set_checked(vm: &mut Vm, t: Gc<Table>, k: Value, v: Value) -> Result<(), LuaError> {
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `t` is a table the caller holds (the package table or one reached from it); no reference into it is live across the `set`, which does not collect
     if unsafe { t.as_mut() }.set(&mut vm.heap, k, v).is_err() {
         return Err(vm.rt_err("table overflow"));
     }

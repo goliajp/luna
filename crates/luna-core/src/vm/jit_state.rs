@@ -70,6 +70,12 @@ pub struct JitState {
     /// the catch has a known correctness problem, so it ships disabled.
     pub self_link_enabled: bool,
 
+    /// Whether the recorder captures a table-field inline cache
+    /// snapshot (see [`crate::jit::trace_types::field_ic_enabled`]).
+    /// Starts from `LUNA_JIT_FIELD_IC`; the lowering only emits the
+    /// cache for a trace whose record carries the snapshot.
+    pub(crate) field_ic_enabled: bool,
+
     /// The trace currently being recorded, or `None` if
     /// the dispatch loop is in normal interpretation mode.
     pub active_trace: Option<Box<crate::jit::trace::TraceRecord>>,
@@ -263,7 +269,7 @@ pub struct JitCounters {
     pub close_cause_counts: std::collections::HashMap<&'static str, u64>,
     /// Number of times the trace recorder captured
     /// a [`crate::jit::trace_types::FieldIcSnapshot`] for the first
-    /// eligible `Op::GetField` site under `LUNA_JIT_FIELD_IC=1`.
+    /// eligible `Op::GetField` site with the field IC switch on.
     /// Bumped exactly once per recording (the snapshot field is
     /// `Option<_>` so subsequent GetFields short-circuit). 0 on the
     /// env-default path.
@@ -356,6 +362,7 @@ impl JitState {
             tier_up_at: crate::jit::trace::TIER_UP_THRESHOLD,
             loop_hot: Box::new([0; LOOP_HOT_SLOTS]),
             self_link_enabled: false,
+            field_ic_enabled: crate::jit::trace_types::field_ic_enabled(),
             active_trace: None,
             recording_frame_base: 0,
             max_depth_seen: 0,

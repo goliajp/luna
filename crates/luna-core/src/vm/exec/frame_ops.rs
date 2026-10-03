@@ -49,17 +49,16 @@ impl Vm {
                 };
                 for i in 1..=n {
                     let v = self.r(base, a + i);
-                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                    if let Err(TableError::Overflow) =
-                        unsafe { t.as_mut() }.set_int(&mut self.heap, offset + i as i64, v)
-                    {
+                    // SAFETY: `t` is a live table (see `Gc`), and no
+                    // reference into it is held across the call
+                    let r = unsafe { t.as_mut() }.set_int(&mut self.heap, offset + i as i64, v);
+                    if let Err(TableError::Overflow) = r {
                         return Err(self.rt_err("table overflow"));
                     }
                 }
                 // one barrier_back covers every store this op did — PUC's
                 // `luaC_barrierback_` once-per-table optimisation
-                self.heap
-                    .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                self.heap.barrier_back(t);
                 // the element temps above the table are now consumed
                 self.maybe_collect_garbage(base + a + 1);
             }
@@ -137,7 +136,10 @@ impl Vm {
                 let n = n_varargs;
                 let t = self.heap.new_table();
                 {
-                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                    // SAFETY: `t` was allocated above and is held only by this
+                    // local; `tm` is the only reference into it, and the heap
+                    // calls made while it lives (`set_int`, `intern`, `set`)
+                    // do not collect
                     let tm = unsafe { t.as_mut() };
                     for i in 0..n {
                         let _ = tm.set_int(
@@ -146,16 +148,13 @@ impl Vm {
                             self.stack[(func_slot + 1 + i) as usize],
                         );
                     }
+                    let n_key = Value::Str(self.heap.intern(b"n"));
+                    tm.set(&mut self.heap, n_key, Value::Int(n as i64))
+                        .expect("'n' is a valid key");
                 }
-                let n_key = Value::Str(self.heap.intern(b"n"));
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                unsafe { t.as_mut() }
-                    .set(&mut self.heap, n_key, Value::Int(n as i64))
-                    .expect("'n' is a valid key");
                 // once-per-table barrier (mirror SETLIST): t is born BLACK
                 // during Propagate; the bulk inserts above don't barrier.
-                self.heap
-                    .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                self.heap.barrier_back(t);
                 self.stack[func_slot as usize] = Value::Table(t);
                 self.set_r(base, inst.a(), Value::Table(t));
             }
@@ -268,7 +267,8 @@ impl Vm {
     /// keeps the change to this one function.
     pub(crate) fn set_closure_env(&mut self, cl: Gc<LuaClosure>, idx: usize, env: Gc<Table>) {
         let uv = self.heap.new_upvalue(UpvalState::Closed(Value::Table(env)));
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `cl` is a live closure (see `Gc`), and no reference into
+        // it is held across this write
         unsafe { cl.as_mut() }.upvals_mut()[idx] = uv;
         // a cell born during propagation is black: its value needs the barrier
         self.barrier_forward_upvalue(uv, Value::Table(env));

@@ -54,6 +54,9 @@ fn lt_k1_returns_head_pc_when_cmp_matches() {
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[1] = 3; // 3 < 7 holds → matches K=true → continue
     state[2] = 7;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer compares and
+    // arithmetic call no helper
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     assert_eq!(
         crate::jit_backend::trace::exit_pc(r),
@@ -73,6 +76,9 @@ fn lt_k1_side_exits_when_cmp_inverts() {
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[1] = 9; // 9 < 7 false → mismatch with K=1 → side-exit
     state[2] = 7;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer compares and
+    // arithmetic call no helper
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     // Lua's `pc++` on cmp mismatch lands at cmp_pc + 2 = 12.
     assert_eq!(
@@ -100,12 +106,18 @@ fn lt_k0_inverts_continue_condition() {
     state[1] = 9;
     state[2] = 7;
     // Cmp result `9 < 7` is false; K=0; false == K=0 → continue.
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer compares and
+    // arithmetic call no helper
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 3);
 
     // Flip inputs so cmp result `3 < 7` is true; K=0; true != K → side-exit.
     state[1] = 3;
     state[2] = 7;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer compares and
+    // arithmetic call no helper
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     assert_eq!(
         crate::jit_backend::trace::exit_pc(r),
@@ -127,18 +139,20 @@ fn le_emits_signed_less_equal() {
     // Equal: 5 <= 5 holds → continue.
     state[1] = 5;
     state[2] = 5;
-    assert_eq!(
-        crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
-        0
-    );
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer compares and
+    // arithmetic call no helper
+    let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
+    assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
 
     // 5 <= 4 false → side-exit.
     state[1] = 5;
     state[2] = 4;
-    assert_eq!(
-        crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
-        2
-    );
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer compares and
+    // arithmetic call no helper
+    let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
+    assert_eq!(crate::jit_backend::trace::exit_pc(r), 2);
 }
 
 #[test]
@@ -153,17 +167,19 @@ fn eq_emits_int_equality() {
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[0] = 42;
     state[1] = 42;
-    assert_eq!(
-        crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
-        7
-    );
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer compares and
+    // arithmetic call no helper
+    let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
+    assert_eq!(crate::jit_backend::trace::exit_pc(r), 7);
 
     state[0] = 42;
     state[1] = 41;
-    assert_eq!(
-        crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
-        6
-    ); // cmp_pc(4) + 2
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer compares and
+    // arithmetic call no helper
+    let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
+    assert_eq!(crate::jit_backend::trace::exit_pc(r), 6); // cmp_pc(4) + 2
 }
 
 #[test]
@@ -201,16 +217,20 @@ fn arith_then_cmp_side_exit_stores_back_post_arith_value() {
     state[0] = 10;
     state[1] = 7;
     state[2] = 5;
-    assert_eq!(
-        crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
-        0
-    );
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer compares and
+    // arithmetic call no helper
+    let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
+    assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
     assert_eq!(state[0], 3);
 
     // R[0] = 10 - 1 = 9; 9 < 5 false → side-exit.
     state[0] = 10;
     state[1] = 1;
     state[2] = 5;
+    // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+    // proto's `max_stack` slots, and the trace's integer compares and
+    // arithmetic call no helper
     let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
     // cmp at index 1, pc=1; failing PC = pc+2 = 3.
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 3);
@@ -370,6 +390,9 @@ fn loop_pattern_alternates_continue_and_exit() {
     // because 2 < 5 = true, mismatch).
     let mut iters = 0;
     loop {
+        // SAFETY: `ct`'s code is owned by `vm`'s JIT storage, `state` has the
+        // proto's `max_stack` slots, and the trace's integer compares and
+        // arithmetic call no helper
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
         iters += 1;
         if r != 0 {

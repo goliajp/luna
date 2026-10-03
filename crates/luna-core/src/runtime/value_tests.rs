@@ -97,6 +97,8 @@ fn pack_roundtrip() {
     ];
     for v in cases {
         let (t, b) = v.unpack();
+        // SAFETY: `(t, b)` is the `unpack` of `v`, which holds no collectable object, so packing it
+        // back is valid
         assert!(unsafe { Value::pack(t, b) }.raw_eq(v));
     }
 }

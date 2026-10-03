@@ -15,7 +15,7 @@ pub(crate) fn open_coroutine(vm: &mut Vm) {
     let set = |vm: &mut Vm, name: &str, f: crate::runtime::value::NativeFn| {
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         let fv = vm.native(f);
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `t` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
         unsafe { t.as_mut() }
             .set(&mut vm.heap, k, fv)
             .expect("valid key");
@@ -32,7 +32,7 @@ pub(crate) fn open_coroutine(vm: &mut Vm) {
     ] {
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         let fv = vm.native_with(f, Box::new([in_wrap]));
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `t` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
         unsafe { t.as_mut() }
             .set(&mut vm.heap, k, fv)
             .expect("valid key");
@@ -136,7 +136,7 @@ fn mark_in_wrap(vm: &mut Vm, in_wrap: Gc<Table>, on: bool) -> Result<(), LuaErro
     let v = if on { Value::Bool(true) } else { Value::Nil };
     // the table is reachable through `debug.getupvalue`, so a script can
     // fill it; only adding a key can fail
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `in_wrap` is the table the running wrap/resume native carries as its upvalue, so the native keeps it alive; no reference into it is live across the `set`, which does not collect
     if unsafe { in_wrap.as_mut() }
         .set(&mut vm.heap, me, v)
         .is_err()

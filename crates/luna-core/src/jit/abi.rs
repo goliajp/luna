@@ -109,8 +109,10 @@ pub trait IntChunkCompiler {
     /// state on drop. For [`NullJitBackend`] this is a no-op
     /// (helpers never fire because nothing compiled).
     ///
-    /// SAFETY: the caller must ensure `vm` is a live, exclusively
-    /// borrowed `Vm` for the duration of the returned guard.
+    /// Implementations only record `vm`, never dereference it. The
+    /// helpers that compiled code calls dereference it, so whoever
+    /// runs compiled code under the guard (an `unsafe` call) answers
+    /// for `vm` being a live `Vm` nothing else uses meanwhile.
     fn enter(&self, vm: *mut crate::vm::Vm, cl: Option<Gc<LuaClosure>>) -> JitVmGuard;
 }
 

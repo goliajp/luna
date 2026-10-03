@@ -59,6 +59,39 @@ optimization.
   `mcode-disasm` feature with its unused `capstone` dependency. For line
   editing, build the `luna` binary with luna-jit's `repl-line-editor`
   feature.
+- Safe functions no longer accept raw pointers they would dereference.
+  `Heap::barrier_forward` and `Heap::barrier_back` take the parent as a
+  `Gc<T>` instead of a `*mut GcHeader`, and `UserdataMarker::mark` takes
+  a `Gc<T>` with `T: GcObject`. `GcObject` is a new sealed trait in
+  `luna_core::runtime` that every GC object type implements (`LuaStr`,
+  `Table`, `Proto`, `LuaClosure`, `Upvalue`, `NativeClosure`, `Coro`,
+  `Userdata`), so marking any handle the runtime gave you compiles
+  unchanged. Migration: pass the handle itself, `heap.barrier_back(t)`
+  instead of `heap.barrier_back(t.as_ptr() as *mut GcHeader)`.
+- `Gc::from_ptr` (hidden from the docs) is an `unsafe fn`: the pointer
+  must be a live object the heap manages. Migration: keep the `Gc` the
+  runtime handed out instead of rebuilding it from `as_ptr()`; where the
+  pointer really comes from elsewhere, call it in an `unsafe` block that
+  states why the object is alive.
+- `JitHandle::call` and `JitHandle::call_with` are removed. They called
+  the compiled code with whatever arguments they were given and without
+  the JIT window the code's helper calls need. Migration: call the
+  function through `Vm::call_value` (or the `Lua` facade), which runs
+  the compiled code when the arguments fit it and the interpreter
+  otherwise.
+- The JIT hooks on `Vm` that the `luna_jit_*` helpers call (hidden from
+  the docs) take checked types instead of raw words: `jit_spill_stack`
+  takes a `Value`; `jit_stack_update_raw` is replaced by
+  `jit_stack_slot_mut`, which returns the slot to write; the string
+  accumulator works on owned buffers (`jit_str_buf_acquire` returns a
+  `Box<Vec<u8>>`, which `jit_str_buf_release` takes back,
+  `jit_str_buf_intern` takes `&mut Vec<u8>`, and `jit_str_buf_extend`
+  takes the buffer and a `Gc<LuaStr>`); and
+  `jit_op_tforcall` writes its results through `&mut i64`. The C ABI
+  helpers keep their signatures. `JitVmRebindRestore::restore_fn` is a
+  plain `fn`, and an `IntChunkCompiler::enter` implementation now only
+  stores the Vm pointer it gets (luna-jit-helpers' `enter_jit_ptr` does
+  that) instead of dereferencing it.
 
 ### Changed
 
@@ -202,9 +235,20 @@ optimization.
   other than nil and false) now moves the result one hour back, as PUC
   5.1–5.5 on glibc do in UTC, which has no daylight saving time; the
   fields written back (5.3 and later) are those of the shifted time.
+- On Windows the machine code the JIT compiled for a `Vm` is now returned
+  to the system when the `Vm` drops, as on the other platforms. 3.2.1 kept
+  it there because Cranelift 0.124 allocated the pages with `VirtualAlloc`
+  and never released them; Cranelift 0.136, which 4.0.0 moved to, maps
+  them as a section that freeing unmaps. A Windows test checks that the
+  memory committed to the process stays flat while `Vm`s that compile
+  code are created and dropped.
 
 ### Added
 
+- `luna_aot::embed::compile_and_link_with` and `AotOptions`: the same
+  build as `compile_and_link`, with the harvest diagnostics switched on by
+  a field instead of the `LUNA_AOT_HARVEST_PROBE` environment variable
+  (`compile_and_link` still reads it).
 - `luna_core::runtime::table::jit_layout::{TABLE_ACOUNT_OFFSET,
   TABLE_APREFIX_OFFSET}`: offsets of the two array-part counters behind
   `#t`, which the method JIT's inline array stores keep up to date.
@@ -216,6 +260,9 @@ optimization.
   `luna_jit::jit_backend::trace::trace_codegen_count`: hidden from the
   documentation (`#[doc(hidden)]`); they exist for luna's own tests and
   are not part of the supported API.
+- `Vm::set_field_ic_enabled` / `Vm::field_ic_enabled`: turn the trace
+  JIT's table-field inline cache on or off for one Vm. A new Vm starts
+  from `LUNA_JIT_FIELD_IC` as before.
 
 ---
 

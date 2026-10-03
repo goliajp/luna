@@ -18,10 +18,7 @@ use cranelift_frontend::FunctionBuilderContext;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module};
 use luna_core::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
-use luna_core::jit::{
-    CompileResult, IntChunkCompiler, IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4, JitVmGuard,
-    MAX_JIT_ARITY, TraceCompiler,
-};
+use luna_core::jit::{CompileResult, IntChunkCompiler, JitVmGuard, MAX_JIT_ARITY, TraceCompiler};
 use luna_core::runtime::Value as LuaValue;
 use luna_core::runtime::function::Proto;
 use luna_core::runtime::{Gc, LuaStr};
@@ -390,21 +387,11 @@ impl IntChunkCompiler for CraneliftBackend {
         }
     }
 
-    #[allow(clippy::not_unsafe_ptr_arg_deref)] // Trait impl required by IntChunkCompiler; SAFETY documented below — caller is the dispatcher with a live `&mut Vm`.
     fn enter(
         &self,
         vm: *mut luna_core::vm::Vm,
         cl: Option<luna_core::runtime::Gc<luna_core::runtime::LuaClosure>>,
     ) -> JitVmGuard {
-        // SAFETY: the dispatcher derived `vm` from a live `&mut Vm`
-        // and the JIT entry that runs under this guard does not
-        // re-enter Rust against `Vm` except through the TLS pointer
-        // this call installs (helpers reach Vm via `JIT_VM`). Vm is
-        // `?Send` / single-threaded. The raw-ptr indirection here
-        // only sidesteps the lexical borrow conflict against
-        // `self.chunk_compiler`.
-        // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-        let vm_ref: &mut luna_core::vm::Vm = unsafe { &mut *vm };
-        enter_jit(vm_ref, cl)
+        luna_jit_helpers::enter_jit_ptr(vm, cl)
     }
 }

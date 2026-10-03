@@ -87,6 +87,7 @@
 // MinGW config drops the default lib.
 // ────────────────────────────────────────────────────────────────────
 
+// SAFETY: this is the signature `GetModuleHandleW` has in kernel32
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetModuleHandleW(lpModuleName: *const u16) -> *mut u8;
@@ -214,20 +215,18 @@ pub fn find_section(name: &[u8]) -> Option<(*const u8, usize)> {
     let mut needle = [0u8; 8];
     needle[..name.len()].copy_from_slice(name);
 
-    // SAFETY: `GetModuleHandleW(NULL)` is a documented stable API
-    // returning the calling process's image base. The returned
-    // HMODULE is the address of the loaded PE image (= DOS header).
-    // Returns NULL only under extreme system distress; on success
-    // points to readable mapped memory of at least one page.
+    // SAFETY: `GetModuleHandleW` with a null name takes no pointer to
+    // read and returns the base of the running executable's image, or
+    // null on failure (handled below)
     let image_base = unsafe { GetModuleHandleW(core::ptr::null()) };
     if image_base.is_null() {
         return None;
     }
 
-    // SAFETY: image_base is non-null and points at the start of a
-    // mapped PE image; the DOS header is always the first 64 bytes.
+    // SAFETY: `image_base` is non-null, so it is the start of the
+    // mapped image, whose first page holds the 64-byte DOS header;
     // `read_unaligned` because PE headers don't honour Rust's
-    // alignment requirements (`u16` fields at byte offsets 0/2/4/…).
+    // alignment requirements (`u16` fields at byte offsets 0/2/4/…)
     let dos: ImageDosHeader = unsafe { core::ptr::read_unaligned(image_base as *const _) };
     // `{ dos.e_magic }` (the brace form) forces a copy out of the
     // packed struct before read — Rust 1.78+ rejects implicit packed-
@@ -253,20 +252,20 @@ pub fn find_section(name: &[u8]) -> Option<(*const u8, usize)> {
     //
     // We skip the optional header entirely — its size is carried in
     // the file header.
-    // SAFETY: e_lfanew bounded to < 0x1000 above; image_base + 0x1000
-    // is within the loader-mapped region for any PE we've ever seen.
-    let nt_base = unsafe { image_base.offset(e_lfanew as isize) };
-    // SAFETY: read the 4-byte signature; bail if it's not "PE\0\0".
+    let nt_base = image_base.wrapping_offset(e_lfanew as isize);
+    // SAFETY: `e_lfanew < 0x1000` (checked above) and the loader maps
+    // the whole header region, which `e_lfanew` points into, so the four
+    // signature bytes at `nt_base` are readable
     let pe_sig: u32 = unsafe { core::ptr::read_unaligned(nt_base as *const u32) };
     if pe_sig != 0x0000_4550 {
         // 'P' | ('E' << 8). Not a PE NT-header signature — bail.
         return None;
     }
 
-    // SAFETY: file header sits at nt_base + 4. Total bytes read so far
-    // (e_lfanew + 4 + sizeof(ImageFileHeader)) = max ~4116, well within
-    // the loader-mapped image.
-    let file_hdr_ptr = unsafe { nt_base.add(4) } as *const ImageFileHeader;
+    let file_hdr_ptr = nt_base.wrapping_add(4) as *const ImageFileHeader;
+    // SAFETY: the file header follows the signature checked above, at
+    // most `0x1000 + 4 + 20` bytes into the image, inside the mapped
+    // header region
     let file_hdr: ImageFileHeader = unsafe { core::ptr::read_unaligned(file_hdr_ptr) };
     let n_sections = { file_hdr.number_of_sections } as usize;
     let opt_hdr_size = { file_hdr.size_of_optional_header } as usize;
@@ -284,16 +283,15 @@ pub fn find_section(name: &[u8]) -> Option<(*const u8, usize)> {
     }
 
     // Section table starts immediately after the optional header.
-    // SAFETY: cumulative offset = e_lfanew + 4 + 20 + opt_hdr_size +
-    // n_sections * 40 = at most 0x1000 + 4 + 20 + 4096 + 96*40 ≈ 9 KiB;
-    // within the loader-mapped headers region.
-    let section_table_base = unsafe {
-        (file_hdr_ptr as *const u8).add(core::mem::size_of::<ImageFileHeader>() + opt_hdr_size)
-    } as *const ImageSectionHeader;
+    let section_table_base = (file_hdr_ptr as *const u8)
+        .wrapping_add(core::mem::size_of::<ImageFileHeader>() + opt_hdr_size)
+        as *const ImageSectionHeader;
 
     for i in 0..n_sections {
-        // SAFETY: i < n_sections ≤ 96; each section header is 40
-        // bytes; total = within the headers region bounded above.
+        // SAFETY: `i < n_sections <= 96` and `opt_hdr_size <= 4096`
+        // (checked above), so header `i` ends at most
+        // `0x1000 + 24 + 4096 + 96 * 40` bytes into the image, inside the
+        // header region the loader maps
         let sec: ImageSectionHeader =
             unsafe { core::ptr::read_unaligned(section_table_base.add(i)) };
         // Compare names byte-for-byte (8-byte field, NUL-padded for
@@ -309,12 +307,10 @@ pub fn find_section(name: &[u8]) -> Option<(*const u8, usize)> {
             // any present section.
             return None;
         }
-        // SAFETY: vaddr is an RVA bounded by the linker's image size
-        // computation; image_base + vaddr is the run-time base of
-        // section data. The loader applied base relocations during
-        // `LoadLibrary`, so any pointers stored *inside* the section
-        // are already relocated to absolute addresses.
-        let section_base = unsafe { image_base.add(vaddr) } as *const u8;
+        // `vaddr` is the section's RVA: `image_base + vaddr` is where the
+        // loader mapped its data, with base relocations already applied
+        // to any pointers stored inside it
+        let section_base = image_base.wrapping_add(vaddr) as *const u8;
         return Some((section_base, vsize));
     }
     None

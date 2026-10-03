@@ -97,7 +97,7 @@ impl Vm {
                     // (side-trace entry).
                     let vm_ptr: *mut Vm = self;
                     let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
-                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                    // SAFETY: `cent` is the entry of a side trace compiled for this exit and found in `cl.proto.traces`, which keeps its code alive; `reg_state` is the register window the parent ran on, whose tags were just checked against what the child reads; the guard above pins this Vm and `cl` for the helpers the trace calls
                     unsafe { cent(reg_state.as_mut_ptr()) }
                 };
                 (Some(child), child_raw_ret as u64, true)

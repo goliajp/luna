@@ -109,11 +109,11 @@ pub(crate) fn open_base(vm: &mut Vm) {
         let weak_k = vm.heap.new_table();
         let mode_k = Value::Str(vm.heap.intern(b"__mode"));
         let mode_v = Value::Str(vm.heap.intern(b"k"));
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `weak_k` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
         unsafe { weak_k.as_mut() }
             .set(&mut vm.heap, mode_k, mode_v)
             .expect("valid key");
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `proxies` was allocated a few lines above and is held only by this local; the borrow covers one call
         unsafe { proxies.as_mut() }.set_metatable(Some(weak_k));
         let f = vm.native_with(nat_newproxy, Box::new([Value::Table(proxies)]));
         vm.set_global("newproxy", f).expect("stdlib registration");

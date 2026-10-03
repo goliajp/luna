@@ -94,7 +94,7 @@ impl Vec3 {
     #[lua_meta_method(Add)]
     fn lua_add(&self, vm: &mut Vm, (rhs,): (Value,)) -> Result<Value, LuaError> {
         let rhs = match rhs {
-            Value::Userdata(g) => unsafe { &*g.as_ptr() }
+            Value::Userdata(g) => g
                 .downcast::<Vec3>()
                 .copied()
                 .ok_or_else(|| vm.rt_err("__add expected Vec3"))?,

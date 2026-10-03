@@ -104,7 +104,7 @@ fn activelines(vm: &mut Vm, f: Value) -> Value {
     };
     let lines = vm.heap.new_table();
     for &ln in cl.proto.lines.iter() {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `lines` was allocated above and is held only by this local; each borrow lives for one `set`, which does not collect, and the loop reads `cl.proto`, a different object
         unsafe { lines.as_mut() }
             .set(&mut vm.heap, Value::Int(ln as i64), Value::Bool(true))
             .expect("valid line key");

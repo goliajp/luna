@@ -120,10 +120,9 @@ impl Vm {
     ) -> Result<(), LuaError> {
         let v = v.into_value(self);
         let k = Value::Str(self.heap.intern(name.as_bytes()));
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `self.globals` is a root of this Vm; the borrow lives for the one `set`, which touches only the heap and the table and does not collect, and `&mut self` rules out another reference into it
         unsafe { self.globals.as_mut() }.set(&mut self.heap, k, v)?;
-        self.heap
-            .barrier_back(self.globals.as_ptr() as *mut crate::runtime::heap::GcHeader);
+        self.heap.barrier_back(self.globals);
         Ok(())
     }
 
@@ -131,16 +130,14 @@ impl Vm {
     /// BLACK back to gray so the next propagate step re-traces its fields.
     /// No-op outside Propagate (parent is never BLACK at mutation time).
     pub(crate) fn barrier_back_table(&mut self, t: Gc<Table>) {
-        self.heap
-            .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+        self.heap.barrier_back(t);
     }
 
     /// Forward write barrier shorthand: a closed upvalue is a single-slot
     /// container — `barrier_forward` is cheaper than `barrier_back` here.
     /// No-op outside Propagate.
     pub(crate) fn barrier_forward_upvalue(&mut self, uv: Gc<Upvalue>, child: Value) {
-        self.heap
-            .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, child);
+        self.heap.barrier_forward(uv, child);
     }
 
     /// Register a MacroLua macro under `name`. Inert

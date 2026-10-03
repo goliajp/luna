@@ -162,7 +162,7 @@ impl Vm {
             }
         }
         let frames_len_now = self.frames.len();
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: the trace head's Lua frame is still on `frames` (an inline exit only pushed frames above it, and `pre_frames` counts it), so `frames` is not empty
         match unsafe { self.frames.last_mut().unwrap_unchecked() } {
             CallFrame::Lua(fmut) => {
                 if crate::jit::trace::v2c_probe_enabled() {

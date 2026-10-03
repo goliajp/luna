@@ -54,6 +54,20 @@ macro_rules! fast_arm_helper_macros {
                 resume_same!()
             }};
         }
+        // the rest of a `GetI` / `GetTabUp` read and of a table write,
+        // past the probe in their arm
+        macro_rules! index_op_miss {
+            () => {
+                // SAFETY: `fr`, `regs` and `kptr` are the running frame's
+                unsafe { $vm.index_op_miss($inst, $regs, $kptr, $fr) }
+            };
+        }
+        macro_rules! newindex_op_miss {
+            () => {
+                // SAFETY: `fr` is the running frame
+                unsafe { $vm.newindex_op_miss($inst, $fr) }
+            };
+        }
         // `R[A] := R[B][*pk]` for a key in a register or a constant
         macro_rules! get_arm {
             ($d pk:expr, $d probe:ident) => {{
@@ -84,7 +98,7 @@ macro_rules! fast_arm_helper_macros {
                     next!()
                 }
                 save!();
-                $vm.newindex_op_miss($inst, $fr)?;
+                newindex_op_miss!()?;
                 resume_same!()
             }};
         }
@@ -97,17 +111,24 @@ macro_rules! fast_arm_helper_macros {
                     $regs.wrapping_add($inst.a() as usize),
                     $regs.wrapping_add($inst.b() as usize),
                 );
-                // SAFETY: registers of the running frame
-                let (tl, tr) = unsafe { (raw_tag(pl), raw_tag(pr)) };
-                let res = if tl == tag::INT && tr == tag::INT {
-                    // SAFETY: two integers
-                    (unsafe { raw_int(pl) }) $d op (unsafe { raw_int(pr) })
-                } else {
-                    cold_path();
-                    if tl == tag::FLOAT && tr == tag::FLOAT {
-                        // SAFETY: two floats
-                        (unsafe { raw_flt(pl) }) $d op (unsafe { raw_flt(pr) })
+                // SAFETY: registers of the running frame, so initialised
+                // values; a payload is read as the type its tag names
+                let res = unsafe {
+                    let (tl, tr) = (raw_tag(pl), raw_tag(pr));
+                    if tl == tag::INT && tr == tag::INT {
+                        Some(raw_int(pl) $d op raw_int(pr))
                     } else {
+                        cold_path();
+                        if tl == tag::FLOAT && tr == tag::FLOAT {
+                            Some(raw_flt(pl) $d op raw_flt(pr))
+                        } else {
+                            None
+                        }
+                    }
+                };
+                let res = match res {
+                    Some(res) => res,
+                    None => {
                         // SAFETY: as above
                         let (l, r) = unsafe { (*pl, *pr) };
                         save!();
@@ -126,17 +147,25 @@ macro_rules! fast_arm_helper_macros {
             ($d op:tt, $d swap:expr, $d or_eq:expr) => {{
                 let px = $regs.wrapping_add($inst.a() as usize);
                 let im = $inst.sb();
-                // SAFETY: a register of the running frame
-                let t = unsafe { raw_tag(px) };
-                let res = if t == tag::INT {
-                    // SAFETY: an integer
-                    (unsafe { raw_int(px) }) $d op (im as i64)
-                } else {
-                    cold_path();
-                    if t == tag::FLOAT {
-                        // SAFETY: a float
-                        (unsafe { raw_flt(px) }) $d op (im as f64)
+                // SAFETY: a register of the running frame, so an
+                // initialised value; its payload is read as the type its
+                // tag names
+                let res = unsafe {
+                    let t = raw_tag(px);
+                    if t == tag::INT {
+                        Some(raw_int(px) $d op (im as i64))
                     } else {
+                        cold_path();
+                        if t == tag::FLOAT {
+                            Some(raw_flt(px) $d op (im as f64))
+                        } else {
+                            None
+                        }
+                    }
+                };
+                let res = match res {
+                    Some(res) => res,
+                    None => {
                         // SAFETY: as above
                         let x = unsafe { *px };
                         let imv = if $inst.c() != 0 {

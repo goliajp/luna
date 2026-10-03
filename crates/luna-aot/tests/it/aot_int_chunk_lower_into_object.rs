@@ -68,17 +68,12 @@ fn int_chunk_lowerer_emits_into_object_module() {
     // Resolve the `add` function's Proto from the globals table.
     let key = vm.intern_str("add");
     let g = vm.globals();
-    // SAFETY: `g` is a live `Gc<Table>` owned by the Vm; nothing else
-    // holds a borrow into the table for the duration of this read.
-    let add_val = unsafe { (*g.as_ptr()).get(luna_core::runtime::Value::Str(key)) };
+    let add_val = g.get(luna_core::runtime::Value::Str(key));
     let cl = match add_val {
         luna_core::runtime::Value::Closure(c) => c,
         other => panic!("expected closure for `add`, got {other:?}"),
     };
-    // SAFETY: `cl` is a live `Gc<LuaClosure>` returned from the live
-    // globals table read above; no other borrow into the closure
-    // exists for the duration of this field read.
-    let proto = unsafe { (*cl.as_ptr()).proto };
+    let proto = cl.proto;
 
     // Build an ObjectModule for the host triple. This is the deploy
     // shape — `finish() -> emit() -> Vec<u8>` produces an ELF / Mach-O

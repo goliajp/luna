@@ -77,26 +77,21 @@ impl JitHandle {
         unsafe { self._module.free() }
     }
 
-    /// Invoke the entry with zero args. Panics in debug if the
-    /// compiled Proto had `num_args > 0`.
-    #[inline]
-    pub fn call(&self) -> i64 {
-        debug_assert_eq!(
-            self.num_args, 0,
-            "JitHandle::call() is the zero-arg form; use call_with for higher arity"
-        );
-        // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-        let f: IntChunkFn = unsafe { std::mem::transmute(self.entry_raw) };
-        // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-        unsafe { f() }
-    }
-
-    /// Invoke the entry with a slice of i64 args. Length must match
-    /// `num_args`; the dispatcher picks the right `extern "C"` fn
-    /// shape and transmutes at the call site.
-    pub fn call_with(&self, args: &[i64]) -> i64 {
-        debug_assert_eq!(args.len(), self.num_args as usize);
-        // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    /// Invoke the entry directly, outside the dispatcher.
+    ///
+    /// # Safety
+    /// `args` are what the compiled chunk expects: one per parameter, an
+    /// integer or a float's bits as `arg_float_mask` says, or the pointer of
+    /// a live table where `arg_table_mask` says. The chunk calls no
+    /// `luna_jit_*` helper, since no `enter_jit` window is open.
+    #[cfg(test)]
+    pub(crate) unsafe fn call_with(&self, args: &[i64]) -> i64 {
+        use luna_core::jit::{IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4};
+        assert_eq!(args.len(), self.num_args as usize);
+        // SAFETY: `entry_raw` is the finalized entry of `_module`, which
+        // this handle owns, compiled with `num_args` i64 parameters, and
+        // each arm calls it as the function type of that arity; the
+        // arguments and the helper-free body are the caller's contract
         unsafe {
             match self.num_args {
                 0 => (std::mem::transmute::<*const u8, IntChunkFn>(self.entry_raw))(),

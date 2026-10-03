@@ -271,14 +271,14 @@ impl Vm {
                     // __newindex chain semantics are preserved by the
                     // identity (slot_nil ⇔ fire_newindex).
                     //
-                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the
-                    // heap is single-threaded and the pointer is live as
-                    // long as it is reachable from active roots (see
-                    // heap.rs:5-7). Mirrors the raw_set wrapper below.
+                    // SAFETY: `tb` is `cur`, the table operand or a table
+                    // reached through `__newindex`, held by the operand's
+                    // register or by the metatable it came from; the borrow
+                    // lives for the one `try_set_existing`, which touches only
+                    // the table and does not collect
                     if !std::mem::take(&mut skip) && unsafe { tb.as_mut() }.try_set_existing(key, v)
                     {
-                        self.heap
-                            .barrier_back(tb.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                        self.heap.barrier_back(tb);
                         return Ok(MmOut::Done(Value::Nil));
                     }
                     let mm = self.get_mm(cur, Mm::NewIndex);
@@ -314,11 +314,10 @@ impl Vm {
     }
 
     pub(crate) fn raw_set(&mut self, t: Gc<Table>, key: Value, v: Value) -> Result<(), LuaError> {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `t` is a table the caller holds (an operand of the running op or a native argument); the borrow lives for the one `set_inlined`, which touches only the heap and the table and does not collect
         match unsafe { t.as_mut() }.set_inlined(&mut self.heap, key, v) {
             Ok(()) => {
-                self.heap
-                    .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                self.heap.barrier_back(t);
                 Ok(())
             }
             Err(TableError::NilIndex) => Err(self.runerror("table index is nil")),

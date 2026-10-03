@@ -52,7 +52,7 @@ impl Upvalue {
             UpvalState::Open {
                 thread: Some(co), ..
             } => {
-                m.header(co.as_ptr() as *mut GcHeader);
+                m.mark(co);
             }
             UpvalState::Open { thread: None, .. } => {}
         }

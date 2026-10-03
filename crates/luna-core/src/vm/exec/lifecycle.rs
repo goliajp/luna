@@ -173,7 +173,7 @@ impl Vm {
     pub fn new_minimal(version: LuaVersion) -> Vm {
         let mut vm = Vm::new_inner(version);
         let mc = vm.heap.new_coro(Value::Nil, vm.globals);
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `mc` was allocated on the line above and is held only by this local; the borrow covers one field store
         unsafe { mc.as_mut() }.status = CoroStatus::Running;
         vm.main_coro = Some(mc);
         let (a, b) = vm.rng_auto_seed();

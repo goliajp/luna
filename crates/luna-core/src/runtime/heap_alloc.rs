@@ -19,7 +19,7 @@ impl Heap {
                 crate::runtime::gc_verify_probe::FREED
                     .with(|f| f.borrow_mut().remove(&(t as usize)));
             }
-            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+            // SAFETY: `t` came off `table_pool`, which holds only tables `free_obj` unlinked from every list and emptied of their interior allocations; the pool's pointer was the only one, and these writes restore the fields left behind
             unsafe {
                 // Reset to fresh-Table state. Box-owned slab/nodes/
                 // metatable were already cleared in `free_obj` before
@@ -34,15 +34,18 @@ impl Heap {
             Box::into_raw(Box::new(Table::new(GcHeader::new(ObjTag::Table))))
         };
         // Link + bytes accounting (same as adopt path).
-        self.link(p as *mut GcHeader);
+        // SAFETY: `p` is a fresh box or a pool table reset above, linked nowhere yet
+        unsafe { self.link(p as *mut GcHeader) };
         self.bytes += std::mem::size_of::<Table>();
-        let g = Gc::from_ptr(p);
         // the Table is now at its final heap address; wire
         // `array_ptr` to point at the inline storage that lives inside
         // the boxed Table.
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { g.as_mut() }.init_array_ptr();
-        g
+        // SAFETY: `p` is the table linked just above, which the heap now manages; no other handle or reference to it exists yet
+        unsafe {
+            let g = Gc::from_ptr(p);
+            g.as_mut().init_array_ptr();
+            g
+        }
     }
 
     /// Adopt an empty table and pre-allocate `asize`
@@ -141,7 +144,7 @@ impl Heap {
         // address so `upvals_ptr` will be valid.
         fill(&mut boxed);
         let g = self.adopt(boxed);
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `g` is the closure `adopt` just returned; no other handle or reference to it exists yet
         unsafe { g.as_mut() }.init_upvals_ptr();
         g
     }
@@ -249,7 +252,8 @@ impl Heap {
         if bytes.len() <= string::MAX_SHORT_LEN {
             let (p, is_new) = self.strings.intern(bytes, self.seed);
             if is_new {
-                self.link(p as *mut GcHeader);
+                // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
+                unsafe { self.link(p as *mut GcHeader) };
                 self.bytes += string::alloc_size(bytes.len());
             } else {
                 // PUC `luaS_new` resurrect guard (lstring.c).
@@ -274,12 +278,15 @@ impl Heap {
                     }
                 }
             }
-            Gc::from_ptr(p)
+            // SAFETY: `p` is an interned string the heap manages: new and linked above, or found in the table and kept from this cycle's sweep by the recoloring above
+            unsafe { Gc::from_ptr(p) }
         } else {
             let p = string::alloc_long(bytes, self.seed);
-            self.link(p as *mut GcHeader);
+            // SAFETY: `alloc_long` just allocated `p`, linked nowhere yet
+            unsafe { self.link(p as *mut GcHeader) };
             self.bytes += string::alloc_size(bytes.len());
-            Gc::from_ptr(p)
+            // SAFETY: `p` is the string linked just above
+            unsafe { Gc::from_ptr(p) }
         }
     }
 }

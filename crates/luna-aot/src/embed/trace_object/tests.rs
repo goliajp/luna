@@ -17,13 +17,11 @@ fn load_proto(vm: &mut luna_core::vm::Vm) -> Gc<Proto> {
         .expect("eval");
     let key = vm.intern_str("add5");
     let g = vm.globals();
-    // SAFETY: `g` is the live globals table and nothing else borrows it here
-    let v = unsafe { (*g.as_ptr()).get(Value::Str(key)) };
+    let v = g.get(Value::Str(key));
     let Value::Closure(cl) = v else {
         panic!("expected closure for `add5`, got {v:?}");
     };
-    // SAFETY: `cl` is a live closure read just above
-    unsafe { (*cl.as_ptr()).proto }
+    cl.proto
 }
 
 fn arith_record(proto: Gc<Proto>, closed: bool) -> TraceRecord {

@@ -252,7 +252,7 @@ pub(crate) fn declare_jit_helpers<'ctx>(
 /// Rust function address via `ExecutionEngine::add_global_mapping`.
 /// Without this step the JIT'd mcode would call undefined external
 /// symbols at run time (LLVM's default resolver tries `dlsym` first,
-/// and luna's `unsafe extern "C"` helpers are `#[unsafe(no_mangle)]`
+/// and luna's `extern "C"` helpers are `#[unsafe(no_mangle)]`
 /// so they ARE dlsym-able when luna is loaded as a `dylib`/`cdylib`
 /// — but the rlib link path strips them, exactly mirroring Cranelift's
 /// `JITBuilder::symbol` rationale in `build_jit_module_with_helpers`).

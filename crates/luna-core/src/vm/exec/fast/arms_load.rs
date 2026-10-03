@@ -88,8 +88,7 @@ macro_rules! fast_load_arms {
                 $vm.upval_set(cl!(), $inst.b(), v);
                 // the write may have gone through `self.stack`
                 let base = base!();
-                // SAFETY: as at the loop head
-                $regs = unsafe { $vm.stack.as_mut_ptr().add(base as usize) };
+                $regs = $vm.regs_at(base);
                 next!()
             }};
         }
@@ -103,7 +102,7 @@ macro_rules! fast_load_arms {
                     next!()
                 }
                 save!();
-                $vm.index_op_miss($inst, $regs, $kptr, $fr)?;
+                index_op_miss!()?;
                 resume_same!()
             }};
         }
@@ -121,7 +120,7 @@ macro_rules! fast_load_arms {
                     next!()
                 }
                 save!();
-                $vm.index_op_miss($inst, $regs, $kptr, $fr)?;
+                index_op_miss!()?;
                 resume_same!()
             }};
         }
@@ -135,7 +134,7 @@ macro_rules! fast_load_arms {
                     next!()
                 }
                 save!();
-                $vm.newindex_op_miss($inst, $fr)?;
+                newindex_op_miss!()?;
                 resume_same!()
             }};
         }
@@ -154,7 +153,7 @@ macro_rules! fast_load_arms {
                     next!()
                 }
                 save!();
-                $vm.newindex_op_miss($inst, $fr)?;
+                newindex_op_miss!()?;
                 resume_same!()
             }};
         }
@@ -162,11 +161,13 @@ macro_rules! fast_load_arms {
             () => {{
                 let pb = $regs.wrapping_add($inst.b() as usize);
                 let po = $regs.wrapping_add($inst.a() as usize + 1);
-                // SAFETY: registers of the running frame
-                unsafe { Value::copy_whole(po, pb) };
                 // SAFETY: registers and constants of the running frame;
-                // the object is read from its copy, `R[A]` is written last
-                if unsafe { Vm::self_probe($regs, $kptr, $inst) } {
+                // the probe reads the object from its copy in `R[A+1]` and
+                // writes `R[A]` last
+                if unsafe {
+                    Value::copy_whole(po, pb);
+                    Vm::self_probe($regs, $kptr, $inst)
+                } {
                     next!()
                 }
                 save!();

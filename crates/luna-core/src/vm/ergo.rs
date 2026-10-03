@@ -183,8 +183,7 @@ impl Vm {
         // SAFETY: g is a freshly allocated Gc<Userdata>; the heap is
         // single-threaded and the pointer is live.
         unsafe { g.as_mut() }.set_metatable(Some(mt));
-        self.heap
-            .barrier_back(g.as_ptr() as *mut crate::runtime::heap::GcHeader);
+        self.heap.barrier_back(g);
         // PUC contract: __gc is registered for finalization at
         // metatable-set time, not at later mutation of the metatable.
         self.check_finalizer_userdata(g);

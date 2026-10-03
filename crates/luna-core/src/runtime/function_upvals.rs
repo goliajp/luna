@@ -33,13 +33,13 @@ impl LuaClosure {
     /// storage when `upvals_len <= INLINE_UPVALS_N`, else by overflow.
     #[inline(always)]
     pub fn upvals(&self) -> &[Gc<Upvalue>] {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `upvals_base` is the inline array or the overflow box, and both hold `upvals_len` handles that the constructor wrote before the closure was adopted (`new_closure_inline` / `set_overflow`); the shared borrow of `self` keeps them from being written while the slice lives
         unsafe { std::slice::from_raw_parts(self.upvals_base(), self.upvals_len as usize) }
     }
 
     #[inline(always)]
     pub(crate) fn upvals_mut(&mut self) -> &mut [Gc<Upvalue>] {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: as in `upvals`: `upvals_len` initialised handles at `upvals_base`; `&mut self` makes this the only borrow of them
         unsafe { std::slice::from_raw_parts_mut(self.upvals_base(), self.upvals_len as usize) }
     }
 

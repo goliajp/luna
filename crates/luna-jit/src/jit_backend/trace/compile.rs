@@ -414,8 +414,6 @@ pub fn lower_trace_into_named_for<M: Module>(
 // any thread that calls into the dispatcher re-arms its own slot.
 // Mirror impl: `unsafe impl Send for JitHandle` at
 // `jit_backend/mod.rs` just after the `JitHandle` struct.
-//
-// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 unsafe impl Send for TraceHandle {}
 
 /// Placeholder `TraceFn` — installed in

@@ -41,7 +41,7 @@
 
 use std::any::TypeId;
 
-use crate::runtime::heap::{Gc, GcHeader};
+use crate::runtime::heap::Gc;
 use crate::runtime::table::Table;
 use crate::runtime::value::Value;
 use crate::vm::error::LuaError;
@@ -93,8 +93,8 @@ impl<'a> UserdataMarker<'a> {
     /// Mark a Gc-managed object as reachable. Returns `true` on the
     /// first visit (white → gray transition). Idempotent on later
     /// visits within the same cycle.
-    pub fn mark<T>(&mut self, g: Gc<T>) -> bool {
-        self.inner.header(g.as_ptr() as *mut GcHeader)
+    pub fn mark<T: crate::runtime::GcObject>(&mut self, g: Gc<T>) -> bool {
+        self.inner.mark(g)
     }
 
     /// Convenience: mark every Gc-managed object referenced by a

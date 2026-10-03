@@ -318,10 +318,11 @@ impl Vm {
         {
             self.trace_record_retf(inst, pc, depth_u8);
         }
+        let field_ic = self.jit.field_ic_enabled;
         let rec = self.jit.active_trace.as_mut().expect("recording");
         // Capture FieldIcSnapshot for the
-        // FIRST eligible Op::GetField site under env-gate
-        // LUNA_JIT_FIELD_IC=1. "Eligible" means:
+        // FIRST eligible Op::GetField site when the Vm's field IC
+        // switch is on. "Eligible" means:
         //   - R[B] is Value::Table with metatable.is_none()
         //   - K[C] is Value::Str
         //   - The string key actually occupies a hash slot
@@ -329,11 +330,10 @@ impl Vm {
         //     a probe sentinel).
         // Once captured, subsequent GetFields skip this
         // logic (rec.field_ic_snapshot.is_some() short-
-        // circuits). Env-OFF short-circuits on the cached
-        // atomic check inside field_ic_enabled().
-        if rec.field_ic_snapshot.is_none()
+        // circuits).
+        if field_ic
+            && rec.field_ic_snapshot.is_none()
             && matches!(inst.op(), crate::vm::isa::Op::GetField)
-            && crate::jit::trace_types::field_ic_enabled()
         {
             let b = inst.b();
             let c_idx = inst.c() as usize;

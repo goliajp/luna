@@ -4,6 +4,8 @@ use crate::runtime::heap::Heap;
 fn with_table(f: impl FnOnce(&mut Heap, &mut Table)) {
     let mut heap = Heap::new();
     let t = heap.new_table();
+    // SAFETY: `t` was just allocated and is held only by this local; the closure gets the only
+    // reference to it, and no caller collects while it runs
     f(&mut heap, unsafe { t.as_mut() });
 }
 

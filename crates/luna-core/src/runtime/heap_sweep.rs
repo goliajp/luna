@@ -11,7 +11,7 @@ impl Heap {
         // string table) never aliases a pointer into self
         let mut freed = 0;
         let new_white = self.current_white;
-        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+        // SAFETY: the detached list holds only objects this heap allocated and has not freed; `link` points at `head` or at the `next` field of a survivor, and a dead object is unlinked before `free_obj` and not touched after it
         unsafe {
             // PUC `sweeplist`: `link` is the field that points at `cur`, so
             // a survivor costs one store (its color) and only a freed object
@@ -50,7 +50,7 @@ impl Heap {
     pub(crate) fn gc_sweep_step(&mut self, budget: usize) -> bool {
         let mut n = 0;
         let new_white = self.current_white;
-        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+        // SAFETY: `sweep_cur` is the list detached at the atomic step and holds only objects this heap allocated and has not freed; `next` is read before `free_obj`, and a survivor is relinked onto `all` before the walk moves on
         unsafe {
             while n < budget && !self.sweep_cur.is_null() {
                 let cur = self.sweep_cur;
@@ -82,13 +82,19 @@ impl Heap {
         }
     }
 
+    /// Free the object behind `h` and take its bytes off the count. The
+    /// caller unlinks it (or drops the whole list) itself.
+    ///
+    /// # Safety
+    /// `h` heads a live object of this heap; the caller has read what it
+    /// needs from it (its `next` link) and nothing uses it afterwards.
     pub(super) unsafe fn free_obj(&mut self, h: *mut GcHeader) {
         #[cfg(feature = "gc-verify")]
         {
             self.recently_freed.insert(h as usize);
             crate::runtime::gc_verify_probe::FREED.with(|f| f.borrow_mut().insert(h as usize));
         }
-        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+        // SAFETY: the caller's contract: `h` heads an unlinked object of this heap that nothing uses afterwards; its tag names the type it was boxed as (`adopt`, `new_table`, `alloc_str`), so each arm frees it with the matching layout; a short string stays in the string table's chains until removed here
         unsafe {
             match (*h).tag {
                 ObjTag::Table => {

@@ -29,7 +29,7 @@ pub(crate) fn open_debug(vm: &mut Vm) {
     let set = |vm: &mut Vm, name: &str, f| {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `t` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
         unsafe { t.as_mut() }
             .set(&mut vm.heap, k, fv)
             .expect("valid key");
@@ -70,7 +70,7 @@ pub(crate) fn open_debug(vm: &mut Vm) {
         let lk = Value::Str(vm.heap.intern(b"loaded"));
         if let Value::Table(loaded) = pkg.get(lk) {
             let dk = Value::Str(vm.heap.intern(b"debug"));
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            // SAFETY: `loaded` was just read from `package.loaded`, so it is alive; no reference into it is held across this call, and `set` does not collect
             unsafe { loaded.as_mut() }
                 .set(&mut vm.heap, dk, Value::Table(t))
                 .expect("valid key");
@@ -81,7 +81,7 @@ pub(crate) fn open_debug(vm: &mut Vm) {
 
 fn set_field(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) {
     let key = Value::Str(vm.heap.intern(k.as_bytes()));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `t` is a table the caller allocated or holds in a local, so it is alive; no reference into it is held across this call, and `set` does not collect
     unsafe { t.as_mut() }
         .set(&mut vm.heap, key, v)
         .expect("valid key");
@@ -103,7 +103,7 @@ fn init_registry(vm: &mut Vm) {
     let mode_k = Value::Str(vm.heap.intern(b"k"));
     set_field(vm, mt, "__mode", mode_k);
     vm.barrier_back_table(mt);
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `hook_t` was allocated above and is held only by this local; the borrow covers one call
     unsafe { hook_t.as_mut() }.set_metatable(Some(mt));
     vm.barrier_back_table(hook_t);
     set_field(vm, reg, "_HOOKKEY", Value::Table(hook_t));
@@ -154,15 +154,14 @@ fn d_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     };
     match v {
         Value::Table(t) => {
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            // SAFETY: `t` is the first argument, kept alive by its stack slot; the borrow covers one call, and `m` is a separate handle, not a reference into `t`
             unsafe { t.as_mut() }.set_metatable(m);
             vm.barrier_back_table(t);
         }
         Value::Userdata(u) => {
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            // SAFETY: `u` is the first argument, kept alive by its stack slot; the borrow covers one call
             unsafe { u.as_mut() }.set_metatable(m);
-            vm.heap
-                .barrier_back(u.as_ptr() as *mut crate::runtime::heap::GcHeader);
+            vm.heap.barrier_back(u);
         }
         // every other type shares one metatable per basic type
         _ => vm.set_type_metatable(v, m),
@@ -221,10 +220,9 @@ fn d_setuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         // no user value slots: `lua_setiuservalue` fails
         return Ok(vm.nat_return(fs, &[Value::Nil]));
     }
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` came from a native argument, kept alive by its stack slot; the borrow covers one field store
     unsafe { u.as_mut() }.user_value = value;
-    vm.heap
-        .barrier_back(u.as_ptr() as *mut crate::runtime::heap::GcHeader);
+    vm.heap.barrier_back(u);
     Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
 }
 
@@ -320,10 +318,9 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             if vm.is_current_thread(Some(co)) {
                 vm.set_globals(env_t);
             } else {
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                // SAFETY: `co` is a native argument (kept alive by its stack slot) and not the running thread, so nothing in the Vm refers into its saved state; the borrow covers one field store
                 unsafe { co.as_mut() }.globals = env_t;
-                vm.heap
-                    .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                vm.heap.barrier_back(co);
             }
         }
         // luna keeps no environment on natives or userdata; PUC's change

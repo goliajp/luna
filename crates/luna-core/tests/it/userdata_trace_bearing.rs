@@ -130,9 +130,13 @@ fn trace_marks_only_listed_fields() {
     let mut vm = vm();
     let kept = vm.heap.new_table();
     let independent = vm.heap.new_table();
+    // SAFETY: `kept` was allocated above and is held by a local; nothing has collected since, and
+    // the borrow covers one call
     unsafe { kept.as_mut() }
         .set(&mut vm.heap, Value::Int(1), Value::Int(0xABCD))
         .unwrap();
+    // SAFETY: `independent` was allocated above and is held by a local; nothing has collected
+    // since, and the borrow covers one call
     unsafe { independent.as_mut() }
         .set(&mut vm.heap, Value::Int(1), Value::Int(0x1234))
         .unwrap();
@@ -176,6 +180,8 @@ fn vec_of_gc_table_all_survive() {
     let mut tables = Vec::new();
     for i in 0..16 {
         let t = vm.heap.new_table();
+        // SAFETY: `t` was allocated on the line above and nothing has collected since; the borrow
+        // covers one call
         unsafe { t.as_mut() }
             .set(&mut vm.heap, Value::Int(1), Value::Int(0x100 + i))
             .unwrap();
@@ -222,9 +228,13 @@ fn mark_value_visits_each_gc_value_in_bag() {
     let s = vm
         .heap
         .intern(b"this-is-a-long-non-interned-string-payload-1234567890");
+    // SAFETY: `t1` was allocated above and is held by a local; nothing has collected since, and the
+    // borrow covers one call
     unsafe { t1.as_mut() }
         .set(&mut vm.heap, Value::Int(1), Value::Int(0xAAAA))
         .unwrap();
+    // SAFETY: `t2` was allocated above and is held by a local; nothing has collected since, and the
+    // borrow covers one call
     unsafe { t2.as_mut() }
         .set(&mut vm.heap, Value::Int(1), Value::Int(0xBBBB))
         .unwrap();
@@ -285,6 +295,8 @@ fn cycle_survives_while_rooted_then_collects_after_drop() {
     let t = vm.heap.new_table();
     let ud = vm.create_userdata(Cache { entries: t });
     // Form the cycle: t[1] = ud.
+    // SAFETY: `t` was allocated above and nothing has collected since; no other reference into it
+    // is live, and the borrow covers one call
     unsafe { t.as_mut() }
         .set(&mut vm.heap, Value::Int(1), ud)
         .unwrap();

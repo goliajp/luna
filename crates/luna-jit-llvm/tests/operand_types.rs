@@ -13,6 +13,8 @@ use luna_core::vm::isa::{Inst, Op};
 use luna_jit::LuaVersion;
 use luna_jit_llvm::{LlvmBackend, LlvmJitStorage};
 
+mod support;
+
 fn eq_trace(tags: Vec<u8>) -> Option<luna_core::jit::trace_types::CompiledTrace> {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
     let proto = vm
@@ -63,8 +65,10 @@ fn chunk(src: &[u8]) -> (luna_jit::vm::Vm, LlvmJitStorage, CompileResult) {
 fn chunk_integer_zero_is_not_nil() {
     let (_vm, _storage, r) = chunk(b"local x = 0; if x == nil then return 1 else return 2 end");
     if let CompileResult::Compiled { entry, .. } = r {
-        let f: unsafe extern "C" fn() -> i64 = unsafe { std::mem::transmute(entry) };
-        assert_eq!(unsafe { f() }, 2, "0 == nil took the then-branch");
+        // SAFETY: `entry` is from `chunk`'s `try_compile`, for a chunk with
+        // no parameters, and `_storage` is still alive
+        let got = unsafe { support::call_chunk(entry, &[]) };
+        assert_eq!(got, 2, "0 == nil took the then-branch");
     }
 }
 
@@ -110,8 +114,10 @@ fn chunk_upvalue_of_another_type_deopts() {
         b"local k = 1.5; local function f() return k end; return f",
     );
     let _guard = LlvmBackend.enter(&mut vm as *mut _, Some(cl));
-    let f: unsafe extern "C" fn() -> i64 = unsafe { std::mem::transmute(entry) };
-    unsafe { f() };
+    // SAFETY: `entry` is from `inner`'s `try_compile`, for a function with
+    // no parameters; `storage` is alive and the guard above is held for
+    // the upvalue helper
+    unsafe { support::call_chunk(entry, &[]) };
     drop(_guard);
     assert!(
         vm.jit.pending_err.is_some(),
@@ -132,8 +138,10 @@ fn chunk_call_through_a_reassigned_upvalue_deopts() {
           return a",
     );
     let _guard = LlvmBackend.enter(&mut vm as *mut _, Some(cl));
-    let f: unsafe extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(entry) };
-    let r = unsafe { f(3) };
+    // SAFETY: `entry` is from `inner`'s `try_compile`, for a function of
+    // one parameter; `storage` is alive and the guard above is held for
+    // the upvalue and call helpers
+    let r = unsafe { support::call_chunk(entry, &[3]) };
     drop(_guard);
     assert!(
         vm.jit.pending_err.is_some(),
@@ -169,8 +177,9 @@ fn jit_matches_interpreter(src: &str, op: Op) -> i64 {
     else {
         panic!("{src}: did not compile ({:?})", proto.code)
     };
-    let f: unsafe extern "C" fn() -> i64 = unsafe { std::mem::transmute(entry) };
-    let got = unsafe { f() };
+    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
+    // parameters, and `storage` is still alive
+    let got = unsafe { support::call_chunk(entry, &[]) };
     assert_eq!(got, expected, "{src}: jit {got}, interpreter {expected}");
     got
 }
@@ -401,8 +410,9 @@ fn chunk_cache_key_covers_the_constants() {
         else {
             panic!("did not compile")
         };
-        let f: unsafe extern "C" fn() -> i64 = unsafe { std::mem::transmute(entry) };
-        unsafe { f() }
+        // SAFETY: `entry` is from the `try_compile` above, for a chunk with
+        // no parameters, and `storage` lives until the end of the test
+        unsafe { support::call_chunk(entry, &[]) }
     };
     assert_eq!(compile(b"local x = 5; return x + 100000"), 100005);
     assert_eq!(

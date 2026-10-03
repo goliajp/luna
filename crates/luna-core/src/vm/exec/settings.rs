@@ -114,6 +114,18 @@ impl Vm {
         self.jit.self_link_enabled
     }
 
+    /// Toggle the table-field inline cache for traces this Vm records
+    /// from now on. Defaults to the `LUNA_JIT_FIELD_IC` environment
+    /// variable (`1` or `true` turns it on).
+    pub fn set_field_ic_enabled(&mut self, enabled: bool) {
+        self.jit.field_ic_enabled = enabled;
+    }
+
+    /// Current state of the table-field inline cache.
+    pub fn field_ic_enabled(&self) -> bool {
+        self.jit.field_ic_enabled
+    }
+
     #[doc(hidden)]
     #[deprecated(since = "3.2.0", note = "renamed to `set_self_link_enabled`")]
     pub fn set_p16_self_link_enabled(&mut self, enabled: bool) {

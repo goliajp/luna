@@ -197,10 +197,9 @@ impl Vm {
                 break;
             }
             let v = self.stack[s as usize];
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            // SAFETY: `uv` is an entry of `open_upvals`, which the collector marks as extra roots, so it is alive; no reference into the cell is live, and the borrow covers one call
             unsafe { uv.as_mut() }.set_closed(v);
-            self.heap
-                .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, v);
+            self.heap.barrier_forward(uv, v);
             self.open_upvals.pop();
         }
     }
@@ -218,14 +217,13 @@ impl Vm {
         match uv.state() {
             UpvalState::Open { slot, thread } => self.write_slot(slot, thread, v),
             UpvalState::Closed(_) => {
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                // SAFETY: `uv` is an upvalue of `cl`, the running closure its frame keeps alive; the `state()` copy above has ended, so no reference into the cell is live, and the borrow covers one call
                 unsafe { uv.as_mut() }.set_closed(v);
                 // forward barrier: a closed upvalue is single-slot, so the
                 // forward variant is cheaper than barrier_back (PUC uses
                 // `luaC_barrier_` for upvalues; `luaC_barrierback_` for
                 // tables / threads).
-                self.heap
-                    .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, v);
+                self.heap.barrier_forward(uv, v);
             }
         }
     }
@@ -240,7 +238,6 @@ impl Vm {
         // PUC's vmfetch uses raw `R(A)` (`s2v(L->base + A)`) for the same
         // reason. The bounds check would re-validate this invariant on every
         // op — the dispatch hot path can't afford it.
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { *self.stack.get_unchecked((base + i) as usize) }
     }
 
@@ -264,7 +261,7 @@ impl Vm {
         // drained at dispatch loop head). Avoids the and_then/lua_mut Option
         // layers — bump_pc fires per Jmp / cond_skip miss, so the savings add
         // up over `fib_28`'s ~500k jumps.
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: this runs inside an op of the running Lua frame, which is the top of `frames` (the loop head drains continuation frames before dispatching), so `frames` is not empty
         match unsafe { self.frames.last_mut().unwrap_unchecked() } {
             CallFrame::Lua(f) => f.pc += 1,
             _ => unreachable!("Cont frame at bump_pc"),
@@ -273,7 +270,7 @@ impl Vm {
 
     #[inline(always)]
     pub(super) fn add_pc(&mut self, d: i32) {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: as in `bump_pc`: the running Lua frame is the top of `frames`, so it is not empty
         match unsafe { self.frames.last_mut().unwrap_unchecked() } {
             CallFrame::Lua(f) => f.pc = (f.pc as i64 + d as i64) as u32,
             _ => unreachable!("Cont frame at add_pc"),
