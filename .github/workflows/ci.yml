@@ -258,10 +258,14 @@ jobs:
   # someone adds an `unsafe { ... }` block to silence a borrow-check
   # error rather than fix the root cause.
   #
-  # Baseline: docs/unsafe-accounting.md records 461 sites at v1.1;
-  # the ceiling is 490. Each justified unsafe addition needs an
-  # explicit ceiling bump. Never widen to a round number to silence
-  # drift.
+  # The ceiling is the exact count. It was 490 through v1.3; the
+  # October 2026 interpreter performance work took the count to 613,
+  # and an audit of every site that work added (safe replacements,
+  # blocks sharing a premise folded into one) brought it to 575, the
+  # ceiling now. docs/unsafe-accounting.md has the count per module and
+  # why each kind of site exists. Each justified unsafe addition needs
+  # an explicit ceiling bump to the new exact count. Never widen to a
+  # round number to silence drift.
   # ─────────────────────────────────────────────────────────────────
   unsafe-drift:
     name: unsafe-usage drift detection
@@ -272,9 +276,9 @@ jobs:
         run: |
           count=$(grep -rE 'unsafe (\{|fn |impl |trait |extern )' \
                   crates/luna-core/src crates/luna-jit/src | wc -l | tr -d ' ')
-          ceiling=490
+          ceiling=575
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
-          echo "v1.1 snapshot was 461 — see docs/unsafe-accounting.md"
+          echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then
             echo "::error::unsafe count $count exceeds ceiling $ceiling"
             echo "Either justify the new unsafe (and bump the ceiling in ci.yml) or refactor."
