@@ -51,6 +51,15 @@ pub(super) enum FastExit {
 }
 
 impl Vm {
+    /// The register window of a frame at `base`. It is valid while
+    /// `self.stack` neither moves nor is written through a reference, and
+    /// `push_frame` sized the stack to `base + max_stack`, so every
+    /// register the frame's instructions name is inside it.
+    #[inline(always)]
+    fn regs_at(&mut self, base: u32) -> *mut Value {
+        self.stack.as_mut_ptr().wrapping_add(base as usize)
+    }
+
     /// Run instructions from `inst` (at `npc - 1`) until one needs the loop
     /// head. The frame's pc is `npc` on entry and is kept current. `WATCH`
     /// is false when `fx.stay` holds and `fx.heads` is empty: that loop then
@@ -103,11 +112,8 @@ impl Vm {
         }
         let mut code = cl!().code;
         let mut kptr = cl!().consts;
-        // the register window, valid while `self.stack` neither moves nor
-        // is written through a reference
-        // SAFETY: `push_frame` sized the stack to `base + max_stack`
         let base = base!();
-        let mut regs: *mut Value = unsafe { self.stack.as_mut_ptr().add(base as usize) };
+        let mut regs = self.regs_at(base);
         fast_step_macros!($, self, fr, regs, npc, inst, code, trace_on, stay, heads);
         // `'frames` starts over on whatever frame is on top after a call or
         // return; the first pass runs the frame the loop head handed over

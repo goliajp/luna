@@ -78,8 +78,7 @@ macro_rules! fast_loop_arms {
                     }
                     // the back-edge target is the body's first op
                     let target = ($pc as i32 + 1 - $inst.bx() as i32).max(0) as u32;
-                    // SAFETY: as for `Jmp`
-                    if $vm.jit.loop_hot_tick(unsafe { $code.add(target as usize) }) {
+                    if $vm.jit.loop_hot_tick($code.wrapping_add(target as usize)) {
                         save!();
                         slow |= $vm.trace_start_at_back_edge(cl!(), base!(), target, None);
                     }
@@ -109,8 +108,7 @@ macro_rules! fast_loop_arms {
                         }
                         // the body's first op, right after TForPrep
                         let target = ($pc as i32 + 1 - $inst.bx() as i32).max(0) as u32;
-                        // SAFETY: as for `Jmp`
-                        if $vm.jit.loop_hot_tick(unsafe { $code.add(target as usize) }) {
+                        if $vm.jit.loop_hot_tick($code.wrapping_add(target as usize)) {
                             save!();
                             $vm.trace_start_at_back_edge(cl!(), base!(), target, Some(a));
                         }
