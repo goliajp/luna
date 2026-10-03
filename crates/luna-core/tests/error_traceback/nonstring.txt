@@ -1,0 +1,25 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	nonstring.lua:1: in function 'f'
+	nonstring.lua:2: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	nonstring.lua:1: in function 'f'
+	nonstring.lua:2: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	nonstring.lua:1: in local 'f'
+	nonstring.lua:2: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	nonstring.lua:1: in local 'f'
+	nonstring.lua:2: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	nonstring.lua:1: in local 'f'
+	nonstring.lua:2: in main chunk

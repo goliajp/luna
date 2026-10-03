@@ -1,0 +1,24 @@
+== 5.1
+stack traceback:
+	[C]: in function 'error'
+	close54.lua:2: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	close54.lua:2: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	close54.lua:2: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	[string "local function closer() return setmetatable({..."]:1: in metamethod 'close'
+	[string "local function closer() return setmetatable({..."]:2: in local 'f'
+	close54.lua:7: in main chunk
+== 5.5
+stack traceback:
+	[C]: in global 'error'
+	[string "local function closer() return setmetatable({..."]:1: in metamethod 'close'
+	[string "local function closer() return setmetatable({..."]:2: in local 'f'
+	close54.lua:7: in main chunk

@@ -60,6 +60,9 @@ pub struct JitState {
     /// [`crate::jit::trace::CompileOptions::tier_up_at`] for this Vm's
     /// traces.
     pub tier_up_at: u32,
+    /// Ask the trace compiler for traces other Vms compiled before
+    /// recording one (see [`crate::vm::Vm::enable_trace_sharing`]).
+    pub(crate) share_traces: bool,
 
     /// Back-edge counts per loop head, indexed by a hash of the head's
     /// pc and its function's first line (LuaJIT's `hotcount`): each loop
@@ -200,6 +203,8 @@ pub struct JitCounters {
     pub inline_abort: u64,
     /// Count of closed traces the lowerer compiled.
     pub compiled: u64,
+    /// Traces installed from code another Vm compiled, without compiling.
+    pub adopted: u64,
     /// Count of closed traces the lowerer rejected.
     pub compile_failed: u64,
     /// Number of trace dispatch entries.
@@ -318,6 +323,13 @@ pub struct JitCounters {
     pub multi_way_guard_emitted: u64,
 }
 
+impl JitState {
+    /// [`crate::jit::trace::TraceRecord::settings`] for a recording now.
+    pub(crate) fn recording_settings(&self) -> u8 {
+        u8::from(self.field_ic_enabled) | (u8::from(self.self_link_enabled) << 1)
+    }
+}
+
 impl JitCounters {
     /// Bump the close-cause bucket for `reason`.
     /// Mirrors the existing per-site pattern (`aborted += 1`,
@@ -372,6 +384,7 @@ impl JitState {
             call_hot_threshold: crate::jit::trace::CALL_HOT_THRESHOLD,
             trace_tier: default_trace_tier(),
             tier_up_at: crate::jit::trace::TIER_UP_THRESHOLD,
+            share_traces: false,
             loop_hot: Box::new([0; LOOP_HOT_SLOTS]),
             self_link_enabled: false,
             field_ic_enabled: crate::jit::trace_types::field_ic_enabled(),

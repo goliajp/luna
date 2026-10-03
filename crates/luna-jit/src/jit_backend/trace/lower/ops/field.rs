@@ -307,8 +307,9 @@ pub(super) fn emit_field_ic_read<E: Emit>(
         node_addr,
         crate::jit_backend::NODE_KEY_RAW_OFFSET as i32,
     );
-    let key_imm = lw.bcx.ins().iconst(types::I64, snap.key_ptr_bits as i64);
-    let key_ok = lw.bcx.ins().icmp(IntCC::Equal, key_raw, key_imm);
+    // the recording took `key_ptr_bits` from this op's constant key, which
+    // `key_arg` holds
+    let key_ok = lw.bcx.ins().icmp(IntCC::Equal, key_raw, key_arg);
 
     let val_tag_i8 = lw.bcx.ins().load(
         types::I8,

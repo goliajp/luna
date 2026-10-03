@@ -288,7 +288,7 @@ pub(super) fn trace_helper(name: &str) -> Option<*const u8> {
         "luna_jit_str_buf_release" => crate::jit_backend::luna_jit_str_buf_release as *const u8,
         "luna_jit_str_buf_extend" => crate::jit_backend::luna_jit_str_buf_extend as *const u8,
         "luna_jit_str_buf_intern" => crate::jit_backend::luna_jit_str_buf_intern as *const u8,
-        _ => return None,
+        _ => return reloc::resolve_symbol(name),
     })
 }
 
@@ -327,13 +327,23 @@ pub fn try_compile_trace_for(
 /// code. Cranelift is most of a trace's compile time, and the cache
 /// entry alone keeps the head from being recorded again. `entry` keeps
 /// the placeholder, which nothing calls.
+///
+/// With `version` known, a Vm sharing its traces through an engine hands
+/// the trace to it (see `super::share`).
 pub(crate) fn compile_trace_for_vm(
     storage: &mut dyn luna_core::jit::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
     float_only: bool,
+    version: Option<luna_core::version::LuaVersion>,
 ) -> Option<CompiledTrace> {
-    compile_trace_jit(storage, record, opts, false, float_only)
+    let capture = version.is_some()
+        && crate::jit_backend::storage::from_storage(storage).is_ok_and(|cs| cs.engine.is_some());
+    let (ct, cap) = compile_trace_captured(storage, record, opts, false, float_only, capture)?;
+    if let (Some(version), Some(cap)) = (version, cap) {
+        share::publish(storage, record, &ct, opts, version, cap);
+    }
+    Some(ct)
 }
 
 /// backend-agnostic body of the trace

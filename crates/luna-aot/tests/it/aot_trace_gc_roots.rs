@@ -14,22 +14,12 @@ use std::process::Command;
 use luna_aot::embed::compile_and_link;
 use luna_core::version::LuaVersion;
 
-fn have_on_path(bin: &str) -> bool {
-    Command::new(bin)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success() || o.status.code().is_some())
-        .unwrap_or(false)
-}
+use crate::host_link::host_can_link;
 
 #[test]
 fn aot_trace_keeps_the_table_under_construction_across_concat() {
-    if cfg!(target_os = "windows") {
-        eprintln!("skipped: AOT trace install is not implemented on Windows COFF");
-        return;
-    }
-    if !have_on_path("cc") || !have_on_path("cargo") {
-        eprintln!("skipped: cc / cargo not on PATH");
+    if !host_can_link() {
+        eprintln!("skipped: cargo / cc not on PATH");
         return;
     }
     let td = tempfile::tempdir().expect("tempdir");

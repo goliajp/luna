@@ -1,0 +1,25 @@
+== 5.1
+stack traceback:
+	[C]: ?
+	[C]: in function 'gsub'
+	gsub_error.lua:1: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function 'error'
+	[C]: in function 'gsub'
+	gsub_error.lua:1: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'error'
+	[C]: in function 'string.gsub'
+	gsub_error.lua:1: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'error'
+	[C]: in function 'string.gsub'
+	gsub_error.lua:1: in main chunk
+== 5.5
+stack traceback:
+	[C]: in function 'error'
+	[C]: in field 'gsub'
+	gsub_error.lua:1: in main chunk

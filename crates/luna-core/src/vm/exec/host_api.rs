@@ -99,9 +99,10 @@ impl Vm {
     /// directly, an `Option<T>`, or a `Gc<Table>` / `Gc<LuaClosure>` /
     /// `Gc<NativeClosure>` handle.
     ///
-    /// Returns `Err(LuaError)` only if the globals table overflows
-    /// (extremely unlikely in practice — `MAX_ASIZE = 1 << 27`).
-    /// String interning + key construction cannot fail.
+    /// Returns `Err(LuaError)` if the globals table is read-only (see
+    /// [`Vm::set_readonly`]) or overflows (extremely unlikely in practice
+    /// — `MAX_ASIZE = 1 << 27`). String interning + key construction
+    /// cannot fail.
     ///
     /// ```
     /// # use luna_core::vm::Vm;
@@ -121,9 +122,48 @@ impl Vm {
         let v = v.into_value(self);
         let k = Value::Str(self.heap.intern(name.as_bytes()));
         // SAFETY: `self.globals` is a root of this Vm; the borrow lives for the one `set`, which touches only the heap and the table and does not collect, and `&mut self` rules out another reference into it
-        unsafe { self.globals.as_mut() }.set(&mut self.heap, k, v)?;
+        if let Err(e) = unsafe { self.globals.as_mut() }.set(&mut self.heap, k, v) {
+            return Err(self.table_error(e));
+        }
         self.heap.barrier_back(self.globals);
         Ok(())
+    }
+
+    /// Mark `t` read-only (`on = true`) or writable again (`on = false`),
+    /// as Redis's `lua_enablereadonlytable` does for the tables of its
+    /// scripting environment. While `t` is read-only every write to it
+    /// raises "Attempt to modify a readonly table", in every dialect and
+    /// with or without the JIT: assignments (`t.k = v`, `t[k] = v`, a
+    /// global assignment when `t` is the globals table, a `__newindex`
+    /// chain that reaches `t`), `rawset`, `setmetatable` and
+    /// `debug.setmetatable`, and the table library's stores
+    /// (`table.insert`, `table.remove`, `table.sort`, `table.move`'s
+    /// destination). [`Vm::set_global`] and [`Table::set`] refuse it too.
+    /// An assignment's error carries the position of the Lua code that
+    /// made it (`user_script:1: Attempt to modify a readonly table`); one
+    /// raised inside a library function carries none. Reads, including
+    /// `__index` lookups, cost nothing extra. A host that has to change a
+    /// read-only table unmarks it, writes, and marks it again.
+    ///
+    /// ```
+    /// # use luna_core::vm::Vm;
+    /// # use luna_core::version::LuaVersion;
+    /// let mut vm = Vm::sandbox(LuaVersion::Lua51).open_base().open_string().build();
+    /// let string_lib = match vm.eval("return string").unwrap()[0] {
+    ///     luna_core::runtime::Value::Table(t) => t,
+    ///     _ => unreachable!(),
+    /// };
+    /// vm.set_readonly(string_lib, true);
+    /// let e = vm.eval("string.foo = 1").unwrap_err();
+    /// assert!(vm.error_text(&e).ends_with("Attempt to modify a readonly table"));
+    /// vm.set_readonly(string_lib, false);
+    /// vm.eval("string.foo = 1").unwrap();
+    /// ```
+    pub fn set_readonly(&mut self, t: Gc<Table>, on: bool) {
+        // SAFETY: a `Gc` handle points at a live table (see `Gc`); the
+        // borrow lives for this one flag update, which reaches no other
+        // reference into the table
+        unsafe { t.as_mut() }.set_readonly(on);
     }
 
     /// Backward write barrier shorthand for native lib code: demote `t` from
@@ -234,24 +274,46 @@ impl Vm {
     }
 
     /// Call `f` with `args` in protected mode with the message handler
-    /// `msgh`: PUC `lua_pcall(L, nargs, LUA_MULTRET, msgh)` made from a C
-    /// function of the host's, as lua.c's `docall` does from `pmain`.
+    /// `msgh`: PUC `lua_pcall(L, nargs, LUA_MULTRET, msgh)` made by the host.
     ///
     /// `msgh` runs where the error was raised, before the stack unwinds, so
     /// it can take a traceback of the failing call ([`Vm::traceback`]); an
     /// error inside it calls it again with the new error, as in PUC. The
     /// returned error carries what the handler returned.
     ///
-    /// The call counts as one C level on the stack, the host function
-    /// making it: `debug.getinfo` finds it below `f`, and a traceback taken
-    /// inside ends with `[C]: in ?` (`[C]: ?` in 5.1).
+    /// Like `lua_pcall`, the call is not a level of the stack: a traceback
+    /// taken inside ends with `f`.
     pub fn call_value_with_handler(
         &mut self,
         f: Value,
         args: &[Value],
         msgh: Value,
     ) -> Result<Vec<Value>, LuaError> {
-        let level = self.native(crate::vm::builtins::nat_host_xpcall);
+        self.host_pcall(crate::vm::builtins::nat_host_xpcall, f, args, msgh)
+    }
+
+    /// [`Vm::call_value_with_handler`] made from inside a C function of the
+    /// host's, as lua.c's `docall` runs inside `pmain`: that function is one
+    /// C level below `f`, which `debug.getinfo` finds and a traceback ends
+    /// with (`[C]: in ?`, 5.1 `[C]: ?`).
+    #[doc(hidden)]
+    pub fn call_value_with_handler_in_c(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        msgh: Value,
+    ) -> Result<Vec<Value>, LuaError> {
+        self.host_pcall(crate::vm::builtins::nat_host_xpcall_in_c, f, args, msgh)
+    }
+
+    fn host_pcall(
+        &mut self,
+        level: crate::runtime::value::NativeFn,
+        f: Value,
+        args: &[Value],
+        msgh: Value,
+    ) -> Result<Vec<Value>, LuaError> {
+        let level = self.native(level);
         let mut call_args = Vec::with_capacity(args.len() + 2);
         call_args.push(f);
         call_args.push(msgh);
@@ -301,6 +363,12 @@ impl Vm {
             return Ok(vs);
         }
         let r = self.call_value_impl(f, args, true);
+        if let Err(e) = r
+            && self.public_call_depth == 1
+            && self.current.is_none()
+        {
+            self.raise_native_to_host(e.0);
+        }
         self.public_call_depth -= 1;
         r
     }

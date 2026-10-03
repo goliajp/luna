@@ -1,0 +1,25 @@
+== 5.1
+stack traceback:
+	hot_inline_nil.lua:1: in function 'c'
+	hot_inline_nil.lua:2: in function 'b'
+	hot_inline_nil.lua:4: in main chunk
+== 5.2
+stack traceback:
+	hot_inline_nil.lua:1: in function 'c'
+	hot_inline_nil.lua:2: in function 'b'
+	hot_inline_nil.lua:4: in main chunk
+== 5.3
+stack traceback:
+	hot_inline_nil.lua:1: in upvalue 'c'
+	hot_inline_nil.lua:2: in local 'b'
+	hot_inline_nil.lua:4: in main chunk
+== 5.4
+stack traceback:
+	hot_inline_nil.lua:1: in upvalue 'c'
+	hot_inline_nil.lua:2: in local 'b'
+	hot_inline_nil.lua:4: in main chunk
+== 5.5
+stack traceback:
+	hot_inline_nil.lua:1: in upvalue 'c'
+	hot_inline_nil.lua:2: in local 'b'
+	hot_inline_nil.lua:4: in main chunk

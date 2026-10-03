@@ -221,10 +221,18 @@ impl Vm {
 }
 
 /// `luaL_traceback`'s level lines, from `level`, over a snapshot taken by
-/// `level_lines`.
-pub(crate) fn traceback_from_lines(v: LuaVersion, lines: &[Vec<u8>], level: i64) -> Vec<u8> {
+/// `level_lines`, as if `hidden` more levels sat above the snapshot's level
+/// 0: a message handler that prints a traceback runs on top of the stack
+/// that raised, and 5.1 and 5.2 decide where to elide by absolute level
+/// number, so those levels shift the elision.
+pub(crate) fn traceback_from_lines(
+    v: LuaVersion,
+    lines: &[Vec<u8>],
+    level: i64,
+    hidden: i64,
+) -> Vec<u8> {
     let mut out = Vec::new();
-    for line in traceback_plan(v, lines.len() as i64, level) {
+    for line in traceback_plan(v, lines.len() as i64 + hidden, level + hidden) {
         match line {
             TbLine::Dots => out.extend_from_slice(b"\n\t..."),
             TbLine::Skip(n) => {
@@ -232,7 +240,7 @@ pub(crate) fn traceback_from_lines(v: LuaVersion, lines: &[Vec<u8>], level: i64)
             }
             // 5.1's lost tail call at a negative level
             TbLine::Level(l) if l < 0 => out.extend_from_slice(b"\n\t(tail call): ?"),
-            TbLine::Level(l) => out.extend_from_slice(&lines[l as usize]),
+            TbLine::Level(l) => out.extend_from_slice(&lines[(l - hidden) as usize]),
         }
     }
     out
