@@ -54,14 +54,17 @@ impl Vm {
             return Ok(vec![Value::Table(g), co[0]]);
         }
         let prev = g.get(key);
+        if self.version != LuaVersion::Lua51 {
+            self.open_lib(opener(name));
+            let fresh = g.get(key);
+            self.lib_raw_set(g, key, prev);
+            return Ok(vec![fresh]);
+        }
         let loaded = self.host_loaded();
         let entry = loaded.get(key);
         self.open_lib(opener(name));
         let fresh = g.get(key);
         self.lib_raw_set(g, key, prev);
-        if self.version != LuaVersion::Lua51 {
-            return Ok(vec![fresh]);
-        }
         let Value::Table(fresh_t) = fresh else {
             unreachable!("a library is a table");
         };

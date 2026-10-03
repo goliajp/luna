@@ -1,0 +1,161 @@
+host: top=1 [host\10stack traceback:]
+host no msg: top=1 [stack traceback:]
+traceback pushed 1
+msg
+stack traceback:
+	[string "print(tb('msg'))"]:1: in main chunk
+traceback pushed 1
+stack traceback:
+	[C]: in function 'tb'
+	[string "print(tb(nil, 0))"]:1: in main chunk
+traceback pushed 1
+in inner
+stack traceback:
+	[string "local function inner() return tb('in inner') ..."]:1: in function 'inner'
+	[string "local function inner() return tb('in inner') ..."]:2: in function 'outer'
+	[string "local function inner() return tb('in inner') ..."]:3: in main chunk
+traceback pushed 1
+field
+stack traceback:
+	[string "local t = {}..."]:2: in function 'field'
+	[string "local t = {}..."]:4: in main chunk
+traceback pushed 1
+method
+stack traceback:
+	[string "local t = {}..."]:3: in function 'method'
+	[string "local t = {}..."]:5: in main chunk
+traceback pushed 1
+global
+stack traceback:
+	[string "function glob() return tb('global') end..."]:1: in function 'glob'
+	[string "function glob() return tb('global') end..."]:2: in main chunk
+traceback pushed 1
+tail
+stack traceback:
+	[string "local function tail() return tb('tail') end..."]:1: in function <[string "local function tail() return tb('tail') end..."]:1>
+	(...tail calls...)
+	[string "local function tail() return tb('tail') end..."]:3: in main chunk
+traceback pushed 1
+deep
+stack traceback:
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	...
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:2: in main chunk
+traceback pushed 1
+edge
+stack traceback:
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:2: in main chunk
+traceback pushed 1
+edge
+stack traceback:
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:3: in main chunk
+traceback pushed 1
+edge
+stack traceback:
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	...
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:1: in function 'rec'
+	[string "local function rec(n) if n == 0 then return t..."]:4: in main chunk
+traceback pushed 1
+high level
+stack traceback:
+false	bad argument #1 to 'string.rep' (string expected, got no value)
+[string "print(select(2, xpcall(function() local x = n..."]:1: attempt to call local 'x' (a nil value)
+stack traceback:
+	[string "print(select(2, xpcall(function() local x = n..."]:1: in function <[string "print(select(2, xpcall(function() local x = n..."]:1>
+	[C]: in function 'xpcall'
+	[string "print(select(2, xpcall(function() local x = n..."]:1: in main chunk
+traceback pushed 1
+true
+traceback pushed 1
+error: [[string "print(table.concat({pcall(function() return s..."]:1: invalid value (boolean) at index 1 in table for 'concat']
+co
+stack traceback:
+	[C]: in function 'yield'
+	[string "local co = coroutine.create(function() local ..."]:1: in function 'y'
+	[string "local co = coroutine.create(function() local ..."]:1: in function <[string "local co = coroutine.create(function() local ..."]:1>
+handler: status=2
+[string "local function bad() error('boom') end bad()"]:1: boom
+stack traceback:
+	[C]: in function 'error'
+	[string "local function bad() error('boom') end bad()"]:1: in function 'bad'
+	[string "local function bad() error('boom') end bad()"]:1: in main chunk
+top at end=0
