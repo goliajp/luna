@@ -103,56 +103,83 @@ fn dropping_a_vm_frees_its_compiled_code() {
 }
 
 /// Bytes of the process's memory: `PrivateUsage` from
-/// `GetProcessMemoryInfo`, and every committed region of the address space
-/// (mapped views included) from `VirtualQuery`.
+/// `GetProcessMemoryInfo`; from `VirtualQuery`, every committed region of
+/// the address space and the mapped views among them.
 #[cfg(windows)]
-fn process_memory() -> (usize, usize) {
-    use windows_sys::Win32::System::Memory::{MEM_COMMIT, MEMORY_BASIC_INFORMATION, VirtualQuery};
-    use windows_sys::Win32::System::ProcessStatus::{
-        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
-    };
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+#[derive(Clone, Copy, Debug)]
+struct ProcessMemory {
+    private: isize,
+    committed: isize,
+    mapped: isize,
+}
 
-    let mut counters = PROCESS_MEMORY_COUNTERS_EX::default();
-    let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
-    // SAFETY: `counters` is a PROCESS_MEMORY_COUNTERS_EX of `size` bytes
-    let ok = unsafe {
-        K32GetProcessMemoryInfo(
-            GetCurrentProcess(),
-            (&raw mut counters).cast::<PROCESS_MEMORY_COUNTERS>(),
-            size,
-        )
-    };
-    assert_ne!(
-        ok,
-        0,
-        "GetProcessMemoryInfo: {}",
-        std::io::Error::last_os_error()
-    );
+#[cfg(windows)]
+impl ProcessMemory {
+    fn now() -> Self {
+        use windows_sys::Win32::System::Memory::{
+            MEM_COMMIT, MEM_MAPPED, MEMORY_BASIC_INFORMATION, VirtualQuery,
+        };
+        use windows_sys::Win32::System::ProcessStatus::{
+            K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+        };
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-    let mut committed = 0;
-    let mut addr = 0usize;
-    loop {
-        let mut region = MEMORY_BASIC_INFORMATION::default();
-        // SAFETY: VirtualQuery only reads the address space; it returns 0
-        // past the highest user address
-        let n = unsafe {
-            VirtualQuery(
-                addr as *const std::ffi::c_void,
-                &mut region,
-                std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+        let mut counters = PROCESS_MEMORY_COUNTERS_EX::default();
+        let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+        // SAFETY: `counters` is a PROCESS_MEMORY_COUNTERS_EX of `size` bytes
+        let ok = unsafe {
+            K32GetProcessMemoryInfo(
+                GetCurrentProcess(),
+                (&raw mut counters).cast::<PROCESS_MEMORY_COUNTERS>(),
+                size,
             )
         };
-        if n == 0 {
-            break;
+        assert_ne!(
+            ok,
+            0,
+            "GetProcessMemoryInfo: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let (mut committed, mut mapped) = (0, 0);
+        let mut addr = 0usize;
+        loop {
+            let mut region = MEMORY_BASIC_INFORMATION::default();
+            // SAFETY: VirtualQuery only reads the address space; it returns 0
+            // past the highest user address
+            let n = unsafe {
+                VirtualQuery(
+                    addr as *const std::ffi::c_void,
+                    &mut region,
+                    std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+                )
+            };
+            if n == 0 {
+                break;
+            }
+            if region.State == MEM_COMMIT {
+                committed += region.RegionSize;
+                if region.Type == MEM_MAPPED {
+                    mapped += region.RegionSize;
+                }
+            }
+            addr = region.BaseAddress as usize + region.RegionSize;
         }
-        if region.State == MEM_COMMIT {
-            committed += region.RegionSize;
+        assert!(committed > 0, "VirtualQuery found no committed memory");
+        ProcessMemory {
+            private: counters.PrivateUsage as isize,
+            committed: committed as isize,
+            mapped: mapped as isize,
         }
-        addr = region.BaseAddress as usize + region.RegionSize;
     }
-    assert!(committed > 0, "VirtualQuery found no committed memory");
-    (counters.PrivateUsage, committed)
+
+    fn growth_since(self, before: Self) -> Self {
+        ProcessMemory {
+            private: self.private - before.private,
+            committed: self.committed - before.committed,
+            mapped: self.mapped - before.mapped,
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -162,7 +189,7 @@ fn dropping_a_vm_returns_its_code_pages_to_windows() {
     for _ in 0..5 {
         one_vm();
     }
-    let (private_before, committed_before) = process_memory();
+    let before = ProcessMemory::now();
     let (mut chunks, mut dispatched) = (0, 0);
     const N: usize = 200;
     for _ in 0..N {
@@ -170,16 +197,15 @@ fn dropping_a_vm_returns_its_code_pages_to_windows() {
         chunks += c;
         dispatched += d;
     }
-    let (private_after, committed_after) = process_memory();
+    let grown = ProcessMemory::now().growth_since(before);
     assert!(chunks > 0, "the method JIT compiled nothing");
     assert!(dispatched > 0, "no trace was dispatched");
-    let private = private_after as isize - private_before as isize;
-    let committed = committed_after as isize - committed_before as isize;
-    eprintln!("after {N} Vms: PrivateUsage {private:+} bytes, committed {committed:+} bytes");
+    eprintln!("after {N} Vms the process grew by {grown:?} bytes");
     // each Vm commits at least a page of code, so a leak grows by N pages
-    const LIMIT: isize = 256 * 1024;
+    // (800 KiB). Cranelift maps the code as a section, which PrivateUsage
+    // does not count; the heap may keep a few hundred KiB it grew into
     assert!(
-        private < LIMIT && committed < LIMIT,
-        "PrivateUsage grew by {private} and committed memory by {committed} bytes after {N} Vms were dropped"
+        grown.mapped < 64 * 1024 && grown.committed < 1024 * 1024 && grown.private < 1024 * 1024,
+        "memory still committed after {N} Vms were dropped: {grown:?}"
     );
 }
