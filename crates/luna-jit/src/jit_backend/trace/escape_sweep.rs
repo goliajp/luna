@@ -34,6 +34,58 @@ pub(super) fn escape_all_live(bindings: &[Vec<Option<usize>>], sites: &mut [Allo
     }
 }
 
+/// An op without a sunk path. A sunk table lives only in its virtual
+/// slots, so the bits in a register bound to it are stale: an op that
+/// reads such a register sees the wrong value, and the table has to be
+/// a real one. The registers the op writes no longer hold the table.
+pub(super) fn sweep_plain_op(
+    rop: &RecordedOp,
+    depth: u8,
+    max_stack: usize,
+    bindings: &mut [Vec<Option<usize>>],
+    sites: &mut [AllocSite],
+) {
+    let ins = rop.inst;
+    let a = ins.a();
+    let (reads, writes) = super::slots::rw_ranges(ins);
+    let mut read = |r: u32| {
+        if (r as usize) < max_stack
+            && let Some(sid) = lookup(bindings, depth, r)
+        {
+            mark_escape(sites, sid);
+        }
+    };
+    for (lo, n) in reads {
+        (lo..lo + n).for_each(&mut read);
+    }
+    match ins.op() {
+        // a closure captures the registers of its in-stack upvalues
+        Op::Closure => {
+            if let Some(p) = rop.proto.protos.get(ins.bx() as usize) {
+                p.upvals
+                    .iter()
+                    .filter(|d| d.in_stack)
+                    .for_each(|d| read(u32::from(d.index)));
+            }
+        }
+        // the ipairs path reads the previous value
+        Op::TForCall => read(a + 5),
+        // a multi-value Return of an inlined callee hands R[A..] up
+        Op::Return if ins.b() == 0 => (a..max_stack as u32).for_each(&mut read),
+        _ => {}
+    }
+    for (lo, n) in writes {
+        (lo..lo + n).for_each(|r| unbind(bindings, depth, r));
+    }
+    match ins.op() {
+        // the ipairs path writes the control variable as well
+        Op::TForCall => unbind(bindings, depth, a + 2),
+        // a variable count of values from R[A] up
+        Op::Vararg | Op::GetVarg => (a..max_stack as u32).for_each(|r| unbind(bindings, depth, r)),
+        _ => {}
+    }
+}
+
 /// The table-building ops of `sweep_op`.
 pub(super) fn sweep_table_write(
     record: &TraceRecord,
@@ -183,11 +235,13 @@ pub(super) fn sweep_table_write(
             // emit as SetI sunk path). Otherwise the target site
             // escapes (helper path runs through real heap table).
             // Value source still escapes if bound (same as SetI).
-            let c = ins.c();
-            if (c as usize) < max_stack
-                && let Some(src_sid) = lookup(bindings, depth, c)
-            {
-                mark_escape(sites, src_sid);
+            // a bound key register is read as a value too
+            for r in [ins.b(), ins.c()] {
+                if (r as usize) < max_stack
+                    && let Some(src_sid) = lookup(bindings, depth, r)
+                {
+                    mark_escape(sites, src_sid);
+                }
             }
             if let Some(sid) = lookup(bindings, depth, a) {
                 let cap = sites[sid].array_cap;
@@ -233,29 +287,42 @@ pub(super) fn escape_at_end(
                 escape_all_live(bindings, sites);
             }
             TraceEnd::ForLoop => {
-                // DO NOT auto-escape on a ForLoop
-                // terminator. ForLoop's IR side-exit fires on
-                // loop exit; interp resumes OUTSIDE the loop,
-                // where any `local t = {...}` declared inside
-                // the body is out of scope (parser frees the
-                // register slot at loop end). The dispatcher's
-                // exit-tag override (Sinkable slot → Untouched)
-                // keeps the slot reading as its entry tag.
-                //
-                // A mid-body cmp side-exit would still need
-                // materialise (interp resumes IN the loop body
-                // at the side-exit PC, where `t` may still be
-                // accessed) — the cmp arm in the body sweep
-                // already escapes live bindings, and the
-                // pre-emit `body_has_cmp` gate is a defensive
-                // backstop.
+                // The terminator either leaves the loop, where the
+                // registers below the loop's own (`A`) are the
+                // enclosing scope's locals, or jumps back to the
+                // body's first op, where the next iteration reads
+                // them and the control registers `A..A+4`. A sunk
+                // table never reaches either: its registers hold
+                // stale bits, and the back-edge has no materialise
+                // path. So a table still bound there (`last = t`,
+                // `prev = {n = i}`) is a real one. Registers from
+                // `A + 4` up are the body's locals, out of scope at
+                // both places, and keep their tables sunk.
+                let row = depth as usize;
+                if row < bindings.len() {
+                    let limit = (a as usize).saturating_add(4).min(bindings[row].len());
+                    for &slot in &bindings[row][..limit] {
+                        if let Some(sid) = slot {
+                            mark_escape(sites, sid);
+                        }
+                    }
+                }
             }
             TraceEnd::Return => {
-                if matches!(op, Op::Return1)
-                    && in_range
-                    && let Some(sid) = lookup(bindings, depth, a)
-                {
-                    mark_escape(sites, sid);
+                // the returned values: R[A] for Return1, R[A..A+B-1)
+                // for Return (B = 0: up to the top)
+                let end = match op {
+                    Op::Return1 => a.saturating_add(1),
+                    Op::Return if term.inst.b() == 0 => max_stack as u32,
+                    Op::Return => a.saturating_add(term.inst.b().saturating_sub(1)),
+                    _ => a,
+                };
+                if in_range {
+                    for r in a..end.min(max_stack as u32) {
+                        if let Some(sid) = lookup(bindings, depth, r) {
+                            mark_escape(sites, sid);
+                        }
+                    }
                 }
             }
             TraceEnd::SelfLink(_) => {
@@ -277,5 +344,12 @@ pub(super) fn escape_at_end(
                 escape_all_live(bindings, sites);
             }
         }
+    } else if end_kind.is_none() {
+        // No terminator: the trace runs back to its head, either
+        // through the dispatcher or along its own back-edge. Which
+        // registers are still in scope there is not known (a while
+        // loop's locals have no `A` to split them by), so every table
+        // still bound is a real one.
+        escape_all_live(bindings, sites);
     }
 }
