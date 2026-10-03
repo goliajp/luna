@@ -113,7 +113,9 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
     // is 8 — `.lt_chai` mirrors `.lt_skix` / `.lt_meta`. Both names
     // must match the lowerer's section choice in
     // `emit_chain_ptr_arg` and the deploy resolver's bracket /
-    // section-walker needles.
+    // section-walker needles. `luna_proto_idx` / `.lt_prix` hold the
+    // proto slots of inlined calls (`emit_proto_arg`), placeheld the same
+    // way.
     match target.os {
         TargetOs::MacOs => {
             "__attribute__((used, section(\"__DATA,luna_strkey_idx\"), aligned(8)))\n\
@@ -121,7 +123,9 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
              __attribute__((used, section(\"__DATA,luna_trace_meta\"), aligned(8)))\n\
              static const char luna_trace_meta_placeholder[48] = {0};\n\
              __attribute__((used, section(\"__DATA,luna_inline_chnx\"), aligned(8)))\n\
-             static const char luna_inline_chnx_placeholder[16] = {0};\n"
+             static const char luna_inline_chnx_placeholder[16] = {0};\n\
+             __attribute__((used, section(\"__DATA,luna_proto_idx\"), aligned(8)))\n\
+             static const char luna_proto_idx_placeholder[16] = {0};\n"
         }
         TargetOs::Linux => {
             "__attribute__((used, section(\"luna_strkey_idx\"), aligned(8)))\n\
@@ -129,7 +133,9 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
              __attribute__((used, section(\"luna_trace_meta\"), aligned(8)))\n\
              static const char luna_trace_meta_placeholder[48] = {0};\n\
              __attribute__((used, section(\"luna_inline_chnx\"), aligned(8)))\n\
-             static const char luna_inline_chnx_placeholder[16] = {0};\n"
+             static const char luna_inline_chnx_placeholder[16] = {0};\n\
+             __attribute__((used, section(\"luna_proto_idx\"), aligned(8)))\n\
+             static const char luna_proto_idx_placeholder[16] = {0};\n"
         }
         // Windows COFF.
         //
@@ -178,7 +184,10 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
              static const char luna_trace_meta_placeholder[48] = {0};\n\
              #pragma section(\".lt_chai\", read)\n\
              __declspec(allocate(\".lt_chai\")) __declspec(align(8))\n\
-             static const char luna_inline_chnx_placeholder[16] = {0};\n"
+             static const char luna_inline_chnx_placeholder[16] = {0};\n\
+             #pragma section(\".lt_prix\", read)\n\
+             __declspec(allocate(\".lt_prix\")) __declspec(align(8))\n\
+             static const char luna_proto_idx_placeholder[16] = {0};\n"
         }
         TargetOs::Windows => {
             "__attribute__((used, section(\".lt_skix\"), aligned(8)))\n\
@@ -186,7 +195,9 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
              __attribute__((used, section(\".lt_meta\"), aligned(8)))\n\
              static const char luna_trace_meta_placeholder[48] = {0};\n\
              __attribute__((used, section(\".lt_chai\"), aligned(8)))\n\
-             static const char luna_inline_chnx_placeholder[16] = {0};\n"
+             static const char luna_inline_chnx_placeholder[16] = {0};\n\
+             __attribute__((used, section(\".lt_prix\"), aligned(8)))\n\
+             static const char luna_proto_idx_placeholder[16] = {0};\n"
         }
     }
 }

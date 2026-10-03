@@ -205,6 +205,10 @@ pub(crate) const TABLE_ASIZE_OFFSET: usize = std::mem::offset_of!(luna_core::run
 pub(crate) const TABLE_METATABLE_OFFSET: usize =
     std::mem::offset_of!(luna_core::runtime::Table, metatable);
 pub(crate) const STR_SHORT_OFFSET: usize = luna_core::runtime::string::jit_layout::STR_SHORT_OFFSET;
+/// A string's `u32` hash (see `field_slot::emit_str_key_absent`).
+pub(crate) const STR_HASH_OFFSET: usize = luna_core::runtime::string::jit_layout::STR_HASH_OFFSET;
+/// A node's `i32` link to the next node of its chain (`-1` at the end).
+pub(crate) const NODE_NEXT_OFFSET: usize = luna_core::runtime::table::jit_layout::NODE_NEXT_OFFSET;
 pub(crate) const TABLE_ACOUNT_OFFSET: i32 =
     luna_core::runtime::table::jit_layout::TABLE_ACOUNT_OFFSET as i32;
 pub(crate) const TABLE_APREFIX_OFFSET: i32 =

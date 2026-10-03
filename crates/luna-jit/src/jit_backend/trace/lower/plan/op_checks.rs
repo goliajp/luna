@@ -138,6 +138,18 @@ pub(super) fn validate_body_op(
                 }
             }
         }
+        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip => {
+            if a >= max_stack {
+                checkpoint("bail:cmp-dirs-body-other");
+                return None;
+            }
+        }
+        Op::Not => {
+            if a >= max_stack || b >= max_stack {
+                checkpoint("bail:cmp-dirs-body-other");
+                return None;
+            }
+        }
         Op::LoadNil => {
             // R[A..=A+B] := nil. Validate the full
             // range fits in window; emit pass writes iconst(0)
@@ -316,7 +328,9 @@ pub(super) fn validate_value_op(
             }
             // a short string is interned: equal ones are one object
             let comparable = match head_proto.consts[bx] {
-                luna_core::runtime::Value::Int(_) | luna_core::runtime::Value::Float(_) => true,
+                luna_core::runtime::Value::Int(_)
+                | luna_core::runtime::Value::Float(_)
+                | luna_core::runtime::Value::Bool(_) => true,
                 luna_core::runtime::Value::Str(k) => {
                     k.len() <= luna_core::runtime::string::MAX_SHORT_LEN
                 }

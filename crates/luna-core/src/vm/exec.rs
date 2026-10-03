@@ -67,6 +67,7 @@ mod trace_dispatch;
 mod trace_exit;
 mod trace_exit_decode;
 mod trace_record;
+mod trace_record_slots;
 mod trace_start;
 mod trace_stats;
 mod unwind;

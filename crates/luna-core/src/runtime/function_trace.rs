@@ -12,6 +12,13 @@ impl Proto {
             m.mark(p);
         }
         m.mark(self.source);
+        // a trace's code checks callees against the protos it inlined by
+        // address: one freed and reallocated would pass that check
+        for t in self.traces.borrow().iter() {
+            for &p in t.inlined_protos.iter() {
+                m.mark(p);
+            }
+        }
         // PUC `traverseproto`: the closure cache is a *weak* reference — if
         // the cached LClosure is unmarked at sweep time, clear the slot
         // instead of marking it. Queue self for the post-mark cleanup pass
