@@ -23,6 +23,7 @@
 //! reachable, and `#[doc(hidden)]` keeps it out of the public
 //! rustdoc surface.
 
+use crate::runtime::Value;
 use crate::vm::error::LuaError;
 
 /// JIT-specific Vm state. See module docs.
@@ -103,6 +104,12 @@ pub struct JitState {
     /// Reusable buffer for the trace JIT dispatcher's
     /// per-entry `reg_state`.
     pub reg_state_buf: Vec<i64>,
+
+    /// Values compiled code holds only in machine registers while it calls
+    /// a helper that can collect (a trace's concat or generic-for call). The
+    /// helper pushes them before the call and truncates back after it, so
+    /// nested entries stack; the collector treats them as roots.
+    pub ssa_roots: Vec<Value>,
 
     /// Pool of reusable per-trace string accumulator
     /// buffers.
@@ -374,6 +381,7 @@ impl JitState {
             counters: JitCounters::default(),
             pending_err: None,
             reg_state_buf: Vec::new(),
+            ssa_roots: Vec::new(),
             str_buf_pool: Vec::new(),
             str_buf_pool_cap: 4,
             entry_tags_buf: Vec::new(),
