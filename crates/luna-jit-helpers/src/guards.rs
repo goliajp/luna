@@ -1,6 +1,6 @@
 //! Deopt parking and guard checks.
 
-use crate::{current_jit_closure, current_jit_vm};
+use crate::{current_jit_closure, current_jit_vm, str_arg};
 
 /// 1 while no deopt is parked. A method-JIT chunk checks it after a
 /// self-recursive call: once the callee parked one, the caller's result
@@ -73,11 +73,13 @@ pub unsafe extern "C" fn luna_jit_math_fn_is_library(math_key: i64, name_key: i6
     let Value::Table(env) = vm.upval_get(cl, 0) else {
         return 0;
     };
-    let math_key = Gc::from_ptr(math_key as *mut LuaStr);
+    // SAFETY: `math_key` is an interned string (# Safety)
+    let math_key = unsafe { Gc::from_ptr(math_key as *mut LuaStr) };
     let Value::Table(math) = env.get(Value::Str(math_key)) else {
         return 0;
     };
-    let name_key = Gc::from_ptr(name_key as *mut LuaStr);
+    // SAFETY: `name_key` is an interned string (# Safety)
+    let name_key = unsafe { Gc::from_ptr(name_key as *mut LuaStr) };
     let Value::Native(f) = math.get(Value::Str(name_key)) else {
         return 0;
     };
@@ -99,8 +101,8 @@ pub unsafe extern "C" fn luna_jit_math_fn_is_library(math_key: i64, name_key: i6
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_str_sub(s: i64, i: i64, j: i64) -> i64 {
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
-    let vm = unsafe { current_jit_vm() };
-    let s = luna_core::runtime::Gc::from_ptr(s as *mut luna_core::runtime::LuaStr);
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, and `s` is
+    // a live string
+    let (vm, s) = unsafe { (current_jit_vm(), str_arg(s)) };
     luna_core::vm::lib_string::str_sub(vm, s, i, j).as_ptr() as i64
 }

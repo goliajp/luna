@@ -56,9 +56,10 @@ impl Vm {
                     let v = if ret_is_float {
                         Value::Float(f64::from_bits(r as u64))
                     } else if ret_is_table {
-                        Value::Table(crate::runtime::Gc::from_ptr(
-                            r as *mut crate::runtime::Table,
-                        ))
+                        // SAFETY: a chunk compiled with `ret_is_table` returns a table it was passed or allocated through a helper, which the heap manages; nothing collects before the caller stores the value
+                        Value::Table(unsafe {
+                            crate::runtime::Gc::from_ptr(r as *mut crate::runtime::Table)
+                        })
                     } else {
                         Value::Int(r)
                     };
@@ -229,9 +230,10 @@ impl Vm {
             let v = if ret_is_float {
                 Value::Float(f64::from_bits(r as u64))
             } else if ret_is_table {
-                Value::Table(crate::runtime::Gc::from_ptr(
-                    r as *mut crate::runtime::Table,
-                ))
+                // SAFETY: a chunk compiled with `ret_is_table` returns a table it was passed or allocated through a helper, which the heap manages; it is stored on the stack before anything can collect
+                Value::Table(unsafe {
+                    crate::runtime::Gc::from_ptr(r as *mut crate::runtime::Table)
+                })
             } else {
                 Value::Int(r)
             };

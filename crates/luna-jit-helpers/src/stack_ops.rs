@@ -28,7 +28,8 @@ pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
 /// that slot — the trace just needs to refresh the raw bits.
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread.
+/// Called from compiled code inside an `enter_jit` window on this thread; `raw_bits` is the
+/// payload of a value of the type the slot holds now.
 // SAFETY: no other item in the link is named `luna_jit_stack_update_raw`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
@@ -38,7 +39,14 @@ pub unsafe extern "C" fn luna_jit_stack_update_raw(slot_offset: i64, raw_bits: i
     if vm.jit.pending_err.is_some() {
         return;
     }
-    vm.jit_stack_update_raw(slot_offset as u32, raw_bits as u64);
+    if let Some(slot) = vm.jit_stack_slot_mut(slot_offset as u32) {
+        let (tag, _) = slot.unpack();
+        let raw = luna_core::runtime::value::RawVal {
+            zero: raw_bits as u64,
+        };
+        // SAFETY: `tag` is the slot's own tag and `raw_bits` a payload of that type (# Safety)
+        *slot = unsafe { luna_core::runtime::Value::pack(tag, raw) };
+    }
 }
 
 /// Trace JIT helper for `Op::Concat A B`.
@@ -93,9 +101,17 @@ pub unsafe extern "C" fn luna_jit_op_tforcall(
     key_out: *mut i64,
     val_out: *mut i64,
 ) -> i64 {
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
-    let vm = unsafe { current_jit_vm() };
-    vm.jit_op_tforcall(abs_offset as u32, nvars as i32, ctrl_out, key_out, val_out)
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, and the
+    // three out-pointers are each valid for one `i64` for the length of this call
+    let (vm, ctrl, key, val) = unsafe {
+        (
+            current_jit_vm(),
+            &mut *ctrl_out,
+            &mut *key_out,
+            &mut *val_out,
+        )
+    };
+    vm.jit_op_tforcall(abs_offset as u32, nvars as i32, ctrl, key, val)
 }
 
 /// Load the raw `i64` payload of `vm.stack[base + slot_offset]`
@@ -160,7 +176,12 @@ pub unsafe extern "C" fn luna_jit_spill_to_stack(slot_offset: i64, tag: i64, raw
     if vm.jit.pending_err.is_some() {
         return;
     }
-    vm.jit_spill_stack(slot_offset as u32, tag as u8, raw_bits as u64);
+    let raw = luna_core::runtime::value::RawVal {
+        zero: raw_bits as u64,
+    };
+    // SAFETY: `tag` and `raw_bits` are one value's tag and payload (# Safety)
+    let v = unsafe { luna_core::runtime::Value::pack(tag as u8, raw) };
+    vm.jit_spill_stack(slot_offset as u32, v);
 }
 
 /// Trace JIT helper for `Op::Closure A Bx`.

@@ -30,7 +30,7 @@ embedder follows the patterns in §2:
   is not a sandbox boundary: both luna's own dump format and PUC `.luac`
   loading are off by default in `Vm::sandbox(...)`.
 - **Unsound `unsafe` at the embedder surface.** Every public
-  `cargo doc`-visible API is safe Rust. The four `pub unsafe fn`
+  `cargo doc`-visible API is safe Rust. The five `pub unsafe fn`
   remnants are `#[doc(hidden)]` (see
   [`unsafe-accounting.md`](unsafe-accounting.md) §5).
 - **`__gc` finalizer misuse from Rust userdata.** Drop ordering for
@@ -188,9 +188,10 @@ to bound what the `open_os_io()` opt-in could reach.
 ## 5. Zero `unsafe` at the embedder surface
 
 Every type and function that `cargo doc` shows
-to a downstream crate is safe Rust. The four remaining
-`pub unsafe fn` (`Gc::<T>::as_mut`, `Value::as_closure_unchecked`,
-`Value::as_int_unchecked`, `Value::pack`) are `#[doc(hidden)]` —
+to a downstream crate is safe Rust. The five remaining
+`pub unsafe fn` (`Gc::<T>::from_ptr`, `Gc::<T>::as_mut`,
+`Value::as_closure_unchecked`, `Value::as_int_unchecked`, `Value::pack`)
+are `#[doc(hidden)]` —
 they exist for the JIT and capi paths, not for embedders.
 See [`unsafe-accounting.md`](unsafe-accounting.md) §5 for the
 exhaustive list.

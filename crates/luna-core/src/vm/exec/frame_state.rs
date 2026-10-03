@@ -199,8 +199,7 @@ impl Vm {
             let v = self.stack[s as usize];
             // SAFETY: `uv` is an entry of `open_upvals`, which the collector marks as extra roots, so it is alive; no reference into the cell is live, and the borrow covers one call
             unsafe { uv.as_mut() }.set_closed(v);
-            self.heap
-                .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, v);
+            self.heap.barrier_forward(uv, v);
             self.open_upvals.pop();
         }
     }
@@ -224,8 +223,7 @@ impl Vm {
                 // forward variant is cheaper than barrier_back (PUC uses
                 // `luaC_barrier_` for upvalues; `luaC_barrierback_` for
                 // tables / threads).
-                self.heap
-                    .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, v);
+                self.heap.barrier_forward(uv, v);
             }
         }
     }

@@ -317,8 +317,7 @@ impl Vm {
             }
             // once-per-table barrier mirrors SETLIST: t is born BLACK during
             // Propagate and the bulk `set_int`/`set` calls above don't barrier
-            self.heap
-                .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+            self.heap.barrier_back(t);
             self.stack[arg_slot] = Value::Table(t);
         }
         // PUC luaD_precall fires the "call" hook with the new frame current, so

@@ -161,7 +161,7 @@ impl Userdata {
 
     pub(crate) fn trace(&self, m: &mut Marker) {
         if let Some(mt) = self.metatable {
-            m.header(mt.as_ptr() as *mut GcHeader);
+            m.mark(mt);
         }
         m.value(self.user_value);
         // recurse into the host payload via the
