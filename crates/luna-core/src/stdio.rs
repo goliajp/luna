@@ -17,11 +17,41 @@
 //! longer than the buffer differently.
 
 use std::io::{IsTerminal, Write};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 static C_MODE: AtomicBool = AtomicBool::new(false);
 static STDOUT: Mutex<CFile> = Mutex::new(CFile::new());
+static HOST: OnceLock<HostStdout> = OnceLock::new();
+
+/// The C library's own `stdout`, as a C host linking luna's C API has it:
+/// the C API routes standard output there, so it interleaves with what the
+/// host writes with `printf` as PUC's output does.
+#[doc(hidden)]
+pub struct HostStdout {
+    /// `fwrite(bytes, 1, n, stdout)`; `false` on a short write
+    pub write: fn(&[u8]) -> bool,
+    /// `fflush(stdout)`; `false` on failure
+    pub flush: fn() -> bool,
+    /// `setvbuf(stdout, NULL, mode, BUFSIZ)`: `0` full, `1` line, `2` none
+    pub setvbuf: fn(u8),
+}
+
+/// From now on, write standard output through the C library's `stdout`
+/// (see [`HostStdout`]). Process-wide, like C's `stdout`; the first call
+/// wins.
+#[doc(hidden)]
+pub fn use_host_stdout(h: HostStdout) {
+    let _ = HOST.set(h);
+}
+
+fn host_result(ok: bool) -> std::io::Result<()> {
+    if ok {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
 
 /// From now on, buffer standard output as C stdio does (see the module
 /// documentation). Process-wide, like C's `stdout`.
@@ -31,7 +61,7 @@ pub fn use_c_stdout() {
 
 /// Whether [`use_c_stdout`] is in effect.
 pub(crate) fn c_mode() -> bool {
-    C_MODE.load(Ordering::Relaxed)
+    C_MODE.load(Ordering::Relaxed) || HOST.get().is_some()
 }
 
 /// `fwrite(bytes, 1, n, stdout)`. Errors are dropped, as `print` drops
@@ -42,6 +72,9 @@ pub fn write_stdout(bytes: &[u8]) {
 
 /// `fflush(stdout)`.
 pub fn flush_stdout() -> std::io::Result<()> {
+    if let Some(h) = HOST.get() {
+        return host_result((h.flush)());
+    }
     if c_mode() {
         lock().flush_buf()
     } else {
@@ -52,6 +85,11 @@ pub fn flush_stdout() -> std::io::Result<()> {
 /// `fwrite` of a whole `print` line followed by `fflush(stdout)` (5.2's
 /// `lua_writeline` on), under one lock.
 pub(crate) fn write_line_flushed(bytes: &[u8]) {
+    if let Some(h) = HOST.get() {
+        (h.write)(bytes);
+        (h.flush)();
+        return;
+    }
     if c_mode() {
         let mut f = lock();
         if f.allocated && f.buf.is_empty() && bytes.len() <= f.cap {
@@ -66,6 +104,9 @@ pub(crate) fn write_line_flushed(bytes: &[u8]) {
 }
 
 pub(crate) fn try_write_stdout(bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(h) = HOST.get() {
+        return host_result((h.write)(bytes));
+    }
     if c_mode() {
         lock().xsputn(bytes)
     } else {
@@ -75,6 +116,10 @@ pub(crate) fn try_write_stdout(bytes: &[u8]) -> std::io::Result<()> {
 
 /// `setvbuf(stdout, NULL, mode, size)`: `0` full, `1` line, `2` none.
 pub(crate) fn setvbuf_stdout(mode: u8) {
+    if let Some(h) = HOST.get() {
+        (h.setvbuf)(mode);
+        return;
+    }
     if c_mode() {
         lock().setvbuf(mode);
     }
@@ -83,6 +128,14 @@ pub(crate) fn setvbuf_stdout(mode: u8) {
 /// glibc refilling a line buffered or unbuffered input stream (stdin on a
 /// terminal) first writes out `stdout` if that is line buffered.
 pub(crate) fn before_stdin_read() {
+    if let Some(h) = HOST.get() {
+        // the host's C library flushes its line buffered stdout before it
+        // reads a terminal; luna reads stdin itself
+        if std::io::stdin().is_terminal() {
+            (h.flush)();
+        }
+        return;
+    }
     if c_mode() && std::io::stdin().is_terminal() {
         let mut f = lock();
         if f.allocated && f.line {

@@ -1,0 +1,293 @@
+//! States and threads: `lua_State`, the record shared by every thread of a
+//! state, and making and closing states.
+
+use super::ccall::{CCall, CHook, PendingYield};
+use super::*;
+
+/// PUC `lua_Alloc`.
+pub type LuaAlloc = unsafe extern "C" fn(
+    ud: *mut c_void,
+    ptr: *mut c_void,
+    osize: usize,
+    nsize: usize,
+) -> *mut c_void;
+
+/// What every thread of a state shares (PUC `global_State`). The first
+/// five fields are read and written by the C side (`struct luna_G` in
+/// `csrc/shim.h`), in this order.
+#[repr(C)]
+pub(crate) struct Global {
+    /// innermost error boundary (`struct luna_jmp *`), null outside any
+    pub(super) errjmp: *mut c_void,
+    /// a status a Rust API function asks its C caller to throw
+    pub(super) raised: c_int,
+    /// `LUA_VERSION_NUM` of the dialect
+    pub(super) version: c_int,
+    /// `lua_atpanic`'s function
+    pub(super) panic: Option<LuaCFunction>,
+    /// the thread whose stack top is the error being thrown
+    pub(super) err_from: *mut LuaState,
+    /// The Vm, through the pointer the innermost Rust caller of C handed
+    /// down: a call into C stores the pointer derived from its own
+    /// `&mut Vm` here and puts the previous one back after, so what C does
+    /// to the Vm goes through the reference the Rust code above it holds.
+    pub(super) vm: *mut Vm,
+    /// the Vm's allocation, freed by `lua_close`
+    vm_box: *mut Vm,
+    /// `lua_newstate`'s allocation function, which `lua_getallocf` returns
+    pub(super) alloc: Option<LuaAlloc>,
+    pub(super) alloc_ud: *mut c_void,
+    /// `lua_newstate`'s seed (5.5)
+    pub(super) seed: u32,
+}
+
+/// A thread as C sees it (PUC `lua_State`). The first field is read by the
+/// C side (`struct luna_L`).
+#[repr(C)]
+pub struct LuaState {
+    pub(super) g: *mut Global,
+    /// the thread's identity: a coroutine, or the main thread's object
+    pub(super) thread: Gc<Coro>,
+    /// where the running C function's values start in the thread's C
+    /// stack: its index 1
+    pub(super) base: usize,
+    /// the C functions running on this thread or waiting on a
+    /// continuation, innermost last
+    pub(super) calls: Vec<CCall>,
+    /// PUC `L->status`: `LUA_YIELD` while suspended, the error status a
+    /// resume ended with, else `LUA_OK`
+    pub(super) status: c_int,
+    /// a `lua_yield` made by the running C function, taken when it leaves
+    pub(super) pending_yield: Option<PendingYield>,
+    /// this thread's C hook (`lua_sethook`)
+    pub(super) hook: CHook,
+    /// C stack indices of its to-be-closed slots, ascending
+    pub(super) tbc: Vec<usize>,
+}
+
+/// PUC `LUA_EXTRASPACE`: raw memory just below the `lua_State` pointer,
+/// for the host (`lua_getextraspace`).
+const EXTRASPACE: usize = std::mem::size_of::<*mut c_void>();
+
+/// A `LuaState` with its extra space in front, as PUC's `LX`.
+#[repr(C)]
+struct ThreadBox {
+    extra: [u8; EXTRASPACE],
+    st: LuaState,
+}
+
+/// Owner of a thread's `ThreadBox`, kept in `Coro::host_state`: the box
+/// lives as long as the thread. Every access goes through the pointer the
+/// allocation returned.
+struct StateHandle(*mut ThreadBox);
+
+impl Drop for StateHandle {
+    fn drop(&mut self) {
+        // SAFETY: the pointer came from `Box::into_raw` in `new_thread_state`
+        // and only this handle frees it, once
+        drop(unsafe { Box::from_raw(self.0) });
+    }
+}
+
+/// The `LuaState` of `co` if C has asked for it before.
+fn existing(co: Gc<Coro>) -> Option<*mut LuaState> {
+    // SAFETY: `co` is a live thread the caller holds; the shared borrow
+    // reads one field and ends here
+    let c: &Coro = unsafe { &*co.as_ptr() };
+    let h = c.host_state.as_ref()?.downcast_ref::<StateHandle>()?;
+    // SAFETY: `h.0` is the live box the handle owns
+    Some(unsafe { &raw mut (*h.0).st })
+}
+
+/// Make the `LuaState` of `co`, with `extra` as its extra space.
+fn new_thread_state(g: *mut Global, co: Gc<Coro>, extra: [u8; EXTRASPACE]) -> *mut LuaState {
+    let b = Box::into_raw(Box::new(ThreadBox {
+        extra,
+        st: LuaState {
+            g,
+            thread: co,
+            base: 0,
+            calls: Vec::new(),
+            status: LUA_OK,
+            pending_yield: None,
+            hook: CHook::default(),
+            tbc: Vec::new(),
+        },
+    }));
+    // SAFETY: `co` is a live thread the caller holds and the Vm is not
+    // touching it now; the borrow covers one store
+    unsafe { co.as_mut() }.host_state = Some(Box::new(StateHandle(b)));
+    // SAFETY: `b` is the live box just made
+    unsafe { &raw mut (*b).st }
+}
+
+/// The `lua_State` of thread `co` of the state `vm` belongs to, made on
+/// first use with a copy of the main thread's extra space, as
+/// `lua_newthread` makes it.
+pub(super) fn state_of(vm: &Vm, co: Gc<Coro>) -> *mut LuaState {
+    if let Some(l) = existing(co) {
+        return l;
+    }
+    let main = existing(vm.host_main_thread()).expect("the C API made this state");
+    // SAFETY: `main` is the live main thread's state, and `ThreadBox` puts
+    // `st` right after the extra space
+    let (g, extra) = unsafe {
+        let b = main.cast::<u8>().sub(EXTRASPACE).cast::<ThreadBox>();
+        ((*main).g, (*b).extra)
+    };
+    new_thread_state(g, co, extra)
+}
+
+// SAFETY: the declarations match the definitions in `csrc/shim_core.c`;
+// each takes plain values and touches only the C library's stdout
+unsafe extern "C" {
+    safe fn luna_c_stdout_write(p: *const c_void, n: usize) -> c_int;
+    safe fn luna_c_stdout_flush() -> c_int;
+    safe fn luna_c_stdout_setvbuf(mode: c_int);
+}
+
+fn host_stdout_write(b: &[u8]) -> bool {
+    luna_c_stdout_write(b.as_ptr().cast(), b.len()) != 0
+}
+
+fn host_stdout_flush() -> bool {
+    luna_c_stdout_flush() != 0
+}
+
+fn host_stdout_setvbuf(mode: u8) {
+    luna_c_stdout_setvbuf(c_int::from(mode.min(2)));
+}
+
+/// A new state of dialect `v`, with luna's JIT and the C API's
+/// continuation hooks installed. From the first one on, luna's standard
+/// output goes through the C library's `stdout`, as PUC's does.
+fn new_state(v: LuaVersion, alloc: Option<LuaAlloc>, ud: *mut c_void, seed: u32) -> *mut LuaState {
+    luna_core::stdio::use_host_stdout(luna_core::stdio::HostStdout {
+        write: host_stdout_write,
+        flush: host_stdout_flush,
+        setvbuf: host_stdout_setvbuf,
+    });
+    let mut vm = Vm::new_minimal(v);
+    crate::install_default_jit(&mut vm);
+    vm.set_host_cont_hooks(ccall::CONT_HOOKS);
+    let vm = Box::into_raw(Box::new(vm));
+    let g = Box::into_raw(Box::new(Global {
+        errjmp: std::ptr::null_mut(),
+        raised: 0,
+        version: version_num(v),
+        panic: None,
+        err_from: std::ptr::null_mut(),
+        vm,
+        vm_box: vm,
+        alloc,
+        alloc_ud: ud,
+        seed,
+    }));
+    // SAFETY: `vm` was just allocated and nothing else refers to it yet
+    let vmr = unsafe { &mut *vm };
+    vmr.host_registry();
+    let main = vmr.host_main_thread();
+    new_thread_state(g, main, [0; EXTRASPACE])
+}
+
+/// The dialect whose `LUA_VERSION_NUM` is `n`.
+fn dialect(n: c_int) -> Option<LuaVersion> {
+    Some(match n {
+        501 => LuaVersion::Lua51,
+        502 => LuaVersion::Lua52,
+        503 => LuaVersion::Lua53,
+        504 => LuaVersion::Lua54,
+        505 => LuaVersion::Lua55,
+        _ => return None,
+    })
+}
+
+/// A 5.5 state with luaL_newstate's panic function (PUC `luaL_newstate`).
+/// A host compiled against luna's headers gets its own dialect: the
+/// headers make `luaL_newstate()` a call of `luna_newstate`.
+// SAFETY: no other item in the link is named `luaL_newstate`: the host does
+// not link PUC's liblua next to this crate, which defines each `lua_*`
+// symbol once
+#[unsafe(no_mangle)]
+pub extern "C" fn luaL_newstate() -> *mut LuaState {
+    luna_newstate(505)
+}
+
+/// `luaL_newstate` for the dialect whose `LUA_VERSION_NUM` is `version`
+/// (501 to 505); null for any other number.
+// SAFETY: no other item in the link is named `luna_newstate`: PUC's liblua
+// has no such symbol and this crate defines it once
+#[unsafe(no_mangle)]
+pub extern "C" fn luna_newstate(version: c_int) -> *mut LuaState {
+    let Some(v) = dialect(version) else {
+        return std::ptr::null_mut();
+    };
+    let l = new_state(v, None, std::ptr::null_mut(), 0);
+    // SAFETY: `l` is the main thread's state just made; `g` is its global
+    // record
+    unsafe { (*(*l).g).panic = Some(luna_c_default_panic) };
+    l
+}
+
+/// PUC `lua_newstate` for the dialect `version`: a state without a panic
+/// function. luna's collector does not allocate through `f`; it is kept
+/// for `lua_getallocf`.
+// SAFETY: no other item in the link is named `luna_newstate_with`: PUC's
+// liblua has no such symbol and this crate defines it once
+#[unsafe(no_mangle)]
+pub extern "C" fn luna_newstate_with(
+    version: c_int,
+    f: Option<LuaAlloc>,
+    ud: *mut c_void,
+    seed: u32,
+) -> *mut LuaState {
+    match dialect(version) {
+        Some(v) => new_state(v, f, ud, seed),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// PUC 5.5 `lua_newstate`.
+// SAFETY: no other item in the link is named `lua_newstate`: the host does
+// not link PUC's liblua next to this crate, which defines each `lua_*`
+// symbol once
+#[unsafe(no_mangle)]
+pub extern "C" fn lua_newstate(f: Option<LuaAlloc>, ud: *mut c_void, seed: u32) -> *mut LuaState {
+    luna_newstate_with(505, f, ud, seed)
+}
+
+/// Free the state and its Vm (PUC `lua_close`). A null pointer is a
+/// no-op; `L` may be any thread of the state.
+///
+/// # Safety
+/// `L` is null or a thread of a state that has not been closed, and no
+/// API call on the state is running.
+// SAFETY: no other item in the link is named `lua_close`: the host does not
+// link PUC's liblua next to this crate, which defines each `lua_*` symbol
+// once
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lua_close(L: *mut LuaState) {
+    if L.is_null() {
+        return;
+    }
+    // SAFETY: `L` is a live thread of an open state (# Safety), so its
+    // global record and Vm are live, and no call is using them
+    unsafe {
+        let g = (*L).g;
+        let vm = &mut *(*g).vm_box;
+        vm.host_close_state();
+        // the Vm owns every thread, and so every `LuaState`
+        drop(Box::from_raw((*g).vm_box));
+        drop(Box::from_raw(g));
+    }
+}
+
+// SAFETY: the declaration matches the definition in `csrc/shim_core.c`;
+// it is `safe` to name because it is only stored as a panic function,
+// which luna calls only with a live state. C sees `lua_State` as opaque
+// and reads only its leading fields, which `csrc/shim.h` declares
+#[allow(improper_ctypes)]
+unsafe extern "C" {
+    /// luaL_newstate's panic function.
+    safe fn luna_c_default_panic(L: *mut LuaState) -> c_int;
+}

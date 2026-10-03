@@ -97,7 +97,8 @@ fn set_str(vm: &mut Vm, t: Gc<Table>, k: &str, bytes: &[u8]) {
 /// db.lua :328 only checks `__mode == 'k'`; luna's sethook stores hook state
 /// directly in `Vm.hook`/`Coro.hook`, so the entry is shape-only.
 fn init_registry(vm: &mut Vm) {
-    let reg = vm.heap.new_table();
+    // the C API may have made the registry already
+    let reg = vm.host_registry();
     let hook_t = vm.heap.new_table();
     let mt = vm.heap.new_table();
     let mode_k = Value::Str(vm.heap.intern(b"k"));
@@ -111,7 +112,6 @@ fn init_registry(vm: &mut Vm) {
         set_field(vm, reg, "LUA_NOENV", Value::Bool(true));
     }
     vm.barrier_back_table(reg);
-    vm.registry = Some(reg);
 }
 
 /// PUC `getthread`: an optional leading thread argument, and the offset of

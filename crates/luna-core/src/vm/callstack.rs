@@ -136,11 +136,17 @@ impl<'a> ThreadStack<'a> {
                     }
                 }
                 CallFrame::Cont(nc) => {
-                    if matches!(
-                        nc.kind,
-                        ContKind::Pcall | ContKind::Xpcall { .. } | ContKind::Pairs
-                    ) && !is_host_call(stack[nc.func_slot as usize])
-                    {
+                    // a C function waiting on its continuation is a level
+                    // of its own once a yield has taken it off the running
+                    // natives; before that, the native is the level
+                    let level = match nc.kind {
+                        ContKind::Pcall | ContKind::Xpcall { .. } | ContKind::Pairs => {
+                            !is_host_call(stack[nc.func_slot as usize])
+                        }
+                        ContKind::Host(_) => !acts.iter().any(|a| a.func_slot == nc.func_slot),
+                        _ => false,
+                    };
+                    if level {
                         levels.push(DbgKind::C(CLevel::Cont(p - 1)));
                     }
                 }
@@ -227,7 +233,8 @@ impl<'a> ThreadStack<'a> {
 
 /// Is `f` the protected call `Vm::call_value_with_handler` makes?
 fn is_host_call(f: Value) -> bool {
-    matches!(f, Value::Native(nc) if nc.kind == crate::vm::exec::native_call::NativeKind::HostXpcall)
+    use crate::vm::exec::native_call::NativeKind;
+    matches!(f, Value::Native(nc) if matches!(nc.kind, NativeKind::HostXpcall | NativeKind::HostPcall))
 }
 
 /// The line of the instruction `f` is executing; -1 without line info.

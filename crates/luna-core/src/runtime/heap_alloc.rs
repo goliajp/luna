@@ -234,6 +234,8 @@ impl Heap {
             pcall_depth: 0,
             hook: crate::vm::exec::HookState::default(),
             globals,
+            host_stack: Vec::new(),
+            host_state: None,
         }))
     }
 

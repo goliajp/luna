@@ -32,8 +32,8 @@ pub mod value;
 
 pub use coroutine::{Coro, CoroStatus};
 pub use function::{
-    AfterClose, CallFrame, CloseCont, ContKind, DebugName, Frame, LocVar, LuaClosure, MetaAction,
-    MetaCont, NativeClosure, NativeCont, Proto, UpvalDesc, UpvalState, Upvalue,
+    AfterClose, CallFrame, CloseCont, ContKind, DebugName, Frame, HostCont, LocVar, LuaClosure,
+    MetaAction, MetaCont, NativeClosure, NativeCont, Proto, UpvalDesc, UpvalState, Upvalue,
 };
 pub use heap::ObjTag;
 pub use heap::{Gc, GcObject, Heap};

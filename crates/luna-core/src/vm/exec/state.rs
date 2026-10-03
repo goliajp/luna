@@ -68,7 +68,8 @@ pub struct Vm {
     /// (sort comparator, gsub replacement) cannot be continued across a yield,
     /// so it bumps this for its duration; `coroutine.yield` inside hits the
     /// C-call boundary and errors. Always 0 at a suspend point (a yield can
-    /// never cross such a call), so it needs no per-thread save/restore.
+    /// never cross such a call); a resume starts the coroutine at 0 and puts
+    /// the resumer's count back after.
     pub(super) nny: u32,
     /// Nonzero while an xpcall message handler is on the Rust stack. Used so a
     /// stack-overflow that surfaces *inside* the handler is reported as PUC's
@@ -131,24 +132,12 @@ pub struct Vm {
     /// `collectgarbage` gets a no-op (PUC's non-reentrancy: lua_gc returns -1 →
     /// `collectgarbage` yields fail).
     pub(super) gc_finalizing: bool,
-    /// C ABI scratch (`capi` module): the host-visible value stack that C
-    /// callers operate on via `lua_pushinteger` / `lua_tostring` / etc.
-    /// Kept here (instead of in a separate `LuaState` wrapper) so the
-    /// trampoline that bridges to a `LuaCFunction` can safely cast the
-    /// Vm pointer it already holds to the public `*mut LuaState` type
-    /// without any aliasing of `&mut Vm` against `&mut LuaState.vm`.
-    pub capi_stack: Vec<crate::runtime::Value>,
-    /// Pinned CString backing the pointer last returned by `lua_tostring`;
-    /// valid until the next `lua_tostring` on the same Vm.
-    pub capi_cstr_pin: Option<std::ffi::CString>,
-    /// Where the running C function's frame starts in `capi_stack`: its
-    /// index 1 is `capi_stack[capi_base]`. 0 outside any C function.
-    pub capi_base: usize,
-    /// How many C functions (`lua_pushcfunction`) are running.
-    pub capi_calls: u32,
-    /// An error a C API function raised inside a running C function; it
-    /// is thrown when that function returns, in place of its results.
-    pub capi_error: Option<crate::runtime::Value>,
+    /// What the C API runs for a C function's continuation
+    /// (`ContKind::Host`); see [`super::host_c`].
+    pub(crate) host_cont_hooks: Option<super::host_c::HostContHooks>,
+    /// The C API's warning function (`lua_setwarnf`), which replaces the
+    /// default one; see [`super::host_c`].
+    pub(crate) host_warn: Option<super::host_c::HostWarn>,
     /// PUC 5.4+ warning system. Lua manual §6.1 `warn`: emitted messages
     /// concatenate across continuation calls until a non-`tocont` call
     /// flushes; the default warnf recognises `@on`/`@off` control messages

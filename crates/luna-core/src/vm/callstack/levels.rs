@@ -32,8 +32,14 @@ impl Vm {
                 // thread, and nothing writes a non-running coroutine while
                 // `&self` is held, so the shared reference is not aliased
                 let c: &Coro = unsafe { &*co.as_ptr() };
+                // a C function that yielded with a continuation is the level
+                // itself (its `ContKind::Host` frame), not a `coroutine.yield`
+                let parked_in_c = matches!(
+                    c.frames.last(),
+                    Some(CallFrame::Cont(nc)) if matches!(nc.kind, ContKind::Host(_))
+                );
                 let yield_slot = match c.status {
-                    CoroStatus::Suspended => c.resume_at.map(|(fs, _)| fs),
+                    CoroStatus::Suspended if !parked_in_c => c.resume_at.map(|(fs, _)| fs),
                     _ => None,
                 };
                 // a normal coroutine is inside the natives that resumed
