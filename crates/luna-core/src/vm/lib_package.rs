@@ -34,22 +34,37 @@ const LUA_CPATH_DEFAULT: &[u8] = b"";
 const DLMSG: &[u8] = b"dynamic libraries not enabled; check your Lua installation";
 
 pub(crate) fn open_package(vm: &mut Vm) {
+    open_package_with(vm, true);
+}
+
+/// The package library as PUC's `luaopen_package` opens it: `package.loaded`
+/// keeps what it holds, without the libraries opened before.
+pub(crate) fn open_package_bare(vm: &mut Vm) {
+    open_package_with(vm, false);
+}
+
+fn open_package_with(vm: &mut Vm, list_opened: bool) {
     let v = vm.version();
     let pkg = vm.heap.new_table();
     let loaded = registry_table(vm, "_LOADED").expect("stdlib registration");
-    for name in [
-        "_G",
-        "package",
-        "coroutine",
-        "table",
-        "io",
-        "os",
-        "string",
-        "bit32",
-        "math",
-        "utf8",
-        "debug",
-    ] {
+    let names: &[&str] = if list_opened {
+        &[
+            "_G",
+            "package",
+            "coroutine",
+            "table",
+            "io",
+            "os",
+            "string",
+            "bit32",
+            "math",
+            "utf8",
+            "debug",
+        ]
+    } else {
+        &[]
+    };
+    for &name in names {
         let val = match name {
             "package" => Value::Table(pkg),
             _ => {

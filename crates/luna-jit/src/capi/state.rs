@@ -214,7 +214,8 @@ pub extern "C" fn luaL_newstate() -> *mut LuaState {
 }
 
 /// `luaL_newstate` for the dialect whose `LUA_VERSION_NUM` is `version`
-/// (501 to 505); null for any other number.
+/// (501 to 505); null for any other number. Its allocation function is
+/// `luaL_alloc`, as PUC's.
 // SAFETY: no other item in the link is named `luna_newstate`: PUC's liblua
 // has no such symbol and this crate defines it once
 #[unsafe(no_mangle)]
@@ -222,7 +223,11 @@ pub extern "C" fn luna_newstate(version: c_int) -> *mut LuaState {
     let Some(v) = dialect(version) else {
         return std::ptr::null_mut();
     };
-    let l = new_state(v, None, std::ptr::null_mut(), 0);
+    // SAFETY: the exported `luaL_alloc` jumps to the C function, which has
+    // `lua_Alloc`'s signature; its own Rust signature is only a name
+    let alloc =
+        unsafe { std::mem::transmute::<extern "C" fn(), LuaAlloc>(super::libs::luaL_alloc) };
+    let l = new_state(v, Some(alloc), std::ptr::null_mut(), 0);
     // SAFETY: `l` is the main thread's state just made; `g` is its global
     // record
     unsafe { (*(*l).g).panic = Some(luna_c_default_panic) };
