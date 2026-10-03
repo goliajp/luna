@@ -163,12 +163,19 @@ impl Vm {
     /// buffer is `clear`ed (capacity retained) so the next acquire
     /// gets a ready-to-extend Vec.
     #[doc(hidden)]
-    pub fn jit_str_buf_release(&mut self, mut buf: Vec<u8>) {
+    #[allow(clippy::boxed_local)] // the trace held the buffer boxed; it comes back that way
+    pub fn jit_str_buf_release(&mut self, mut buf: Box<Vec<u8>>) {
         buf.clear();
         if self.jit.str_buf_pool.len() < self.jit.str_buf_pool_cap {
-            self.jit.str_buf_pool.push(buf);
+            self.jit.str_buf_pool.push(*buf);
         }
         // Else: drop the buffer.
+    }
+
+    /// Append a piece's bytes to an accumulator buffer.
+    #[doc(hidden)]
+    pub fn jit_str_buf_extend(&mut self, buf: &mut Vec<u8>, piece: Gc<crate::runtime::LuaStr>) {
+        buf.extend_from_slice(piece.as_bytes());
     }
 
     /// Drain the accumulator buffer into a fresh

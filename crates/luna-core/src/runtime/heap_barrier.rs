@@ -9,9 +9,19 @@ impl Heap {
     /// step traces it. Mirrors PUC `luaC_barrier_`. No-op outside Propagate
     /// (parent is gray or white — the mutator never sees a BLACK object live
     /// outside an incremental cycle).
+    #[inline(always)]
     pub fn barrier_forward<T: GcObject>(&mut self, parent: Gc<T>, child: Value) {
-        let parent = parent.header();
-        // SAFETY: `parent` and `child` are handles, so both objects are allocated and kept reachable by their holders; a `GcObject` starts with its header, and only flag bytes are read and written, no reference to either object is formed
+        // SAFETY: `parent` is a handle, so its object is allocated, and a `GcObject` starts with its header
+        unsafe { self.barrier_forward_header(parent.header(), child) }
+    }
+
+    /// [`Self::barrier_forward`] on the parent's header. One body for every
+    /// object type, so callers inline only the call.
+    ///
+    /// # Safety
+    /// `parent` is the header of an allocated object.
+    unsafe fn barrier_forward_header(&mut self, parent: *mut GcHeader, child: Value) {
+        // SAFETY: `parent` heads an allocated object (the caller's contract) and `child` holds a live handle; only flag bytes are read and written, no reference to either object is formed
         unsafe {
             if !is_black((*parent).flags) {
                 return;
@@ -43,9 +53,19 @@ impl Heap {
     /// Mirrors PUC `luaC_barrierback_`. One call covers any number of
     /// subsequent stores until the next propagate finishes — much cheaper for
     /// tables than per-child forward barriers. No-op outside Propagate.
+    #[inline(always)]
     pub fn barrier_back<T: GcObject>(&mut self, parent: Gc<T>) {
-        let parent = parent.header();
-        // SAFETY: `parent` is a handle, so its object is allocated and kept reachable by its holder; a `GcObject` starts with its header, and only the flag byte is read and written
+        // SAFETY: `parent` is a handle, so its object is allocated, and a `GcObject` starts with its header
+        unsafe { self.barrier_back_header(parent.header()) }
+    }
+
+    /// [`Self::barrier_back`] on the parent's header, one body for every
+    /// object type.
+    ///
+    /// # Safety
+    /// `parent` is the header of an allocated object.
+    unsafe fn barrier_back_header(&mut self, parent: *mut GcHeader) {
+        // SAFETY: `parent` heads an allocated object (the caller's contract); only its flag byte is read and written
         unsafe {
             let f = (*parent).flags;
             if !is_black(f) {
