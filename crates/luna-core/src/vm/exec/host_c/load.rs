@@ -4,17 +4,6 @@
 use super::*;
 use crate::vm::lib_gc::{self, PARAM_ORDER, Param};
 
-/// What a `lua_load` reader has delivered so far amounts to.
-#[doc(hidden)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum HostChunkProgress {
-    /// PUC's parser or undumper would ask the reader for more
-    NeedsMore,
-    /// PUC would stop reading here: the chunk is complete, or it is
-    /// already known to be malformed
-    Done,
-}
-
 #[doc(hidden)]
 impl Vm {
     /// Make the running thread non-yieldable while a chunk is parsed (PUC
@@ -28,31 +17,16 @@ impl Vm {
         self.nny -= 1;
     }
 
-    /// Whether PUC would call a `lua_load` reader again after it delivered
-    /// `prefix` of a chunk. A text chunk is read to its end unless a syntax
-    /// error shows up first: PUC's lexer reads one character past a token
-    /// before the parser looks at it, so an error whose token ends where
-    /// `prefix` ends, or that is at the end of the input, is not known yet.
-    /// A binary chunk is read until the undumper has every byte it needs.
-    pub fn host_chunk_progress(&mut self, prefix: &[u8]) -> HostChunkProgress {
-        let more = if crate::vm::dump::is_binary_chunk(prefix) {
-            crate::vm::dump::truncated(
-                prefix,
-                &mut self.heap,
-                self.version,
-                self.puc_bytecode_loading,
-            )
-        } else {
-            match crate::frontend::parse(prefix, self.version) {
-                Ok(_) => true,
-                Err(e) => !error_is_settled(&e.msg, prefix),
-            }
-        };
-        if more {
-            HostChunkProgress::NeedsMore
-        } else {
-            HostChunkProgress::Done
-        }
+    /// Whether `prefix`, the start of a binary chunk a `lua_load` reader
+    /// delivered, already holds every byte PUC's undumper reads: PUC stops
+    /// calling the reader there.
+    pub fn host_binary_chunk_complete(&mut self, prefix: &[u8]) -> bool {
+        !crate::vm::dump::truncated(
+            prefix,
+            &mut self.heap,
+            self.version,
+            self.puc_bytecode_loading,
+        )
     }
 
     /// Compile or undump `src` as the chunk `chunkname` (PUC `f_parser`):
@@ -225,18 +199,3 @@ const GC_ISRUNNING: i32 = 103;
 const GC_GEN: i32 = 104;
 const GC_INC: i32 = 105;
 const GC_PARAM: i32 = 106;
-
-/// Whether the syntax error `msg` found in `prefix` stands whatever input
-/// follows: it is not at the end of the input, and its token does not end
-/// where `prefix` does.
-fn error_is_settled(msg: &[u8], prefix: &[u8]) -> bool {
-    if msg.windows(5).any(|w| w == b"<eof>") {
-        return false;
-    }
-    let Some(at) = msg.windows(6).rposition(|w| w == b"near '") else {
-        return true;
-    };
-    let tok = &msg[at + 6..];
-    let tok = tok.strip_suffix(b"'").unwrap_or(tok);
-    !prefix.ends_with(tok)
-}
