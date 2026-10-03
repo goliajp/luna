@@ -41,6 +41,7 @@ mod nan_matches_host_printf;
 mod native_call_bookkeeping;
 mod native_typed;
 mod os_time_isdst;
+mod pointer_text;
 mod proto_stable_hash;
 mod puc_51_undump;
 mod puc_52_undump;

@@ -4,13 +4,16 @@
 
 mod base_var_scaffold;
 mod capi;
+mod capi_pcall_handler;
 mod cli_common;
 mod cli_environment;
 mod cli_errors;
 mod cli_lua_init;
 mod cli_options;
+mod cli_output_order;
 mod cli_repl;
 mod cli_repl_edges;
+mod cli_repl_levels;
 #[cfg(all(windows, feature = "repl-line-editor"))]
 mod cli_repl_terminal;
 mod close_cause_counts;

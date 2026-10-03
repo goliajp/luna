@@ -1,0 +1,7 @@
+print("before")
+local co = coroutine.wrap(function() print("in co"); error("co err") end)
+local ok, e = pcall(co)
+io.stderr:write("caught ", tostring(e), "\n")
+print("after")
+local t = setmetatable({}, {__gc = function() print("gc at close") end})
+print(nil .. 1)

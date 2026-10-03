@@ -1,0 +1,6 @@
+x = io.write("w")
+print(1)
+error("x")
+x = io.write("p")
+x = io.stderr:write("E\n")
+=1
