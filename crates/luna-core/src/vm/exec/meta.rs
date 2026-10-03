@@ -53,8 +53,8 @@ pub(crate) enum Mm {
     Pairs,
 }
 
-// one absent bit per event in `Table::flags`
-const _: () = assert!(MM_NAMES.len() <= 32);
+// one absent bit per event in `Table::flags`, below the read-only bit
+const _: () = assert!(MM_NAMES.len() <= 31);
 
 pub(super) const MM_NAMES: [&str; 28] = [
     "__index",

@@ -178,6 +178,53 @@ ownership-clean. `.try_with(k, v)` is the fallible variant for
 embedders who want `Result` propagation on table overflow (extremely
 unlikely in practice — `MAX_ASIZE = 1<<27`).
 
+### 5.1 Read-only tables
+
+A host that reuses one `Vm` for many scripts (Redis's `EVAL` model) can
+stop a script from changing the environment the next script sees:
+
+```rust
+use luna_core::runtime::Value;
+
+let g = vm.globals();
+vm.set_readonly(g, true);
+for lib in ["string", "table", "math"] {
+    if let Value::Table(t) = vm.eval(&format!("return {lib}"))?[0] {
+        vm.set_readonly(t, true);
+    }
+}
+```
+
+`Vm::set_readonly(t, on)` marks a table read-only or writable again, as
+Redis's `lua_enablereadonlytable` does; `Table::is_readonly` reads the
+mark. While a table is read-only, every write to it raises
+`Attempt to modify a readonly table`, in every dialect and with or
+without the JIT:
+
+- assignments: `t.k = v`, `t[k] = v`, a global assignment when the table
+  is the globals table, and a `__newindex` chain that reaches the table
+  (its own `__newindex` is not called). The error carries the position
+  of the assignment: `user_script:1: Attempt to modify a readonly table`
+- `rawset`, `setmetatable`, `debug.setmetatable`, the stores of
+  `table.insert`, `table.remove`, `table.sort` and `table.move` (its
+  destination), and 5.1's `package.seeall`. These raise the message with
+  no position, as PUC does for an error raised inside a C function.
+  `table.sort` raises only when it would store, so an already sorted
+  array of up to three elements is left alone, as in Redis
+- the host side: `Vm::set_global`, `Table::set` and `Table::set_int`
+  return the error (`TableError::ReadOnly` from the `Table` methods; turn
+  it into the interpreter's error with `Vm::table_error`), and
+  `LuaTable::set` on the facade does too
+
+Reads, `__index` lookups and iteration are not affected and cost nothing
+extra; a write checks one bit in the table's header (the bit the write
+barrier checks), and compiled code checks a table it keeps writing to
+once per run. Only the table
+itself is protected: its metatable, and tables stored in it, stay
+writable unless they are marked too. To change a read-only table from
+the host, unmark it, write, and mark it again; the facade has
+`LuaTable::set_readonly` for the same purpose.
+
 ---
 
 ## 6. Native functions

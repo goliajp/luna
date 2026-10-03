@@ -211,7 +211,8 @@ pub(super) fn emit_table_set_op<E: Emit>(
                 return None;
             }
             let val = lw.bcx.use_var(regs[ins.c() as usize]);
-            let stored_inline = array_write(&mut lw.bcx, t, k_imm, val, val_kind);
+            let test = store_tests_readonly(lw, off + ins.a() as usize, t);
+            let stored_inline = array_write(&mut lw.bcx, t, k_imm, val, val_kind, test);
             let done = emit_table_set(&mut lw.bcx, &set_ids, t, k_imm, RegKind::Int, val, val_kind);
             guard!(lw, pl, done, i, rop.pc);
             array_write_join(&mut lw.bcx, stored_inline);
@@ -267,7 +268,8 @@ pub(super) fn emit_table_set_op<E: Emit>(
                 return store_str_key(lw, pl, oc, t, key, val, val_kind, constant);
             }
             let stored_inline = if key_kind == RegKind::Int {
-                array_write(&mut lw.bcx, t, key, val, val_kind)
+                let test = store_tests_readonly(lw, off + ins.a() as usize, t);
+                array_write(&mut lw.bcx, t, key, val, val_kind, test)
             } else {
                 None
             };
@@ -363,12 +365,16 @@ fn store_str_key<E: Emit>(
         .field_slot(i)
         .filter(|_| constant)
         .filter(|_| matches!(val_kind, RegKind::Int | RegKind::Float));
+    let test = slot.is_some() && store_tests_readonly(lw, oc.off + oc.ins.a() as usize, t);
     let merge = slot.map(|slot| {
         let bcx = &mut lw.bcx;
         let hit = bcx.create_block();
         bcx.append_block_param(hit, types::I64);
         let miss = bcx.create_block();
         let merge = bcx.create_block();
+        if test {
+            array_slot::emit_writable_guard(bcx, t, miss);
+        }
         field_slot::emit_field_slot_check(bcx, t, key_arg, slot, None, hit, miss);
         bcx.switch_to_block(hit);
         bcx.seal_block(hit);
