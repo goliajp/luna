@@ -123,20 +123,34 @@ pub(super) fn rw_ranges(inst: luna_core::vm::isa::Inst) -> ([(u32, u32); 3], [(u
 /// compute the slot indices an op WRITES in the
 /// caller's window, with the op's inline depth offset applied.
 /// Used by `compute_body_writes` and `compute_live_in_slots`.
-pub(super) fn op_writes_at_offset(rop: &RecordedOp, op_offset: u32) -> Vec<u32> {
-    let (_r, w) = op_reads_writes(rop.inst);
-    w.into_iter().map(|s| op_offset + s).collect()
+pub(super) fn op_writes_at_offset(rop: &RecordedOp, op_offset: u32) -> impl Iterator<Item = u32> {
+    let (_r, w) = rw_ranges(rop.inst);
+    w.into_iter()
+        .flat_map(move |(s, n)| op_offset + s..op_offset + s + n)
 }
 
-fn op_reads_at_offset(rop: &RecordedOp, op_offset: u32) -> Vec<u32> {
-    let (r, _w) = op_reads_writes(rop.inst);
+fn op_reads_at_offset(rop: &RecordedOp, op_offset: u32) -> impl Iterator<Item = u32> {
+    let (r, _w) = rw_ranges(rop.inst);
     // register `max_stack` is the lowerer's virtual constant register (see
     // `split_const_operands`), not a slot
     let frame = rop.proto.max_stack as u32;
     r.into_iter()
-        .filter(|&s| s < frame)
-        .map(|s| op_offset + s)
-        .collect()
+        .flat_map(|(s, n)| s..s + n)
+        .filter(move |&s| s < frame)
+        .map(move |s| op_offset + s)
+}
+
+/// Sets bit `k`, growing `set` as needed; whether it was clear.
+fn insert(set: &mut Vec<bool>, k: u32) -> bool {
+    let k = k as usize;
+    if k >= set.len() {
+        set.resize(k + 1, false);
+    }
+    !std::mem::replace(&mut set[k], true)
+}
+
+fn members(set: &[bool]) -> Vec<u32> {
+    (0..set.len() as u32).filter(|&k| set[k as usize]).collect()
 }
 
 /// compute the parent body's slot-write set. Walks
@@ -145,14 +159,14 @@ fn op_reads_at_offset(rop: &RecordedOp, op_offset: u32) -> Vec<u32> {
 /// Stored on `CompiledTrace.body_writes` so child side traces can
 /// intersect against it at compile time.
 pub fn compute_body_writes(record: &TraceRecord, op_offsets: &[u32]) -> Vec<u32> {
-    let mut s: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    let mut s = Vec::new();
     for (i, rop) in record.ops.iter().enumerate() {
         let off = op_offsets.get(i).copied().unwrap_or(0);
         for w in op_writes_at_offset(rop, off) {
-            s.insert(w);
+            insert(&mut s, w);
         }
     }
-    s.into_iter().collect()
+    members(&s)
 }
 
 /// compute the side trace's "live-in" slot set: slots
@@ -164,22 +178,22 @@ pub fn compute_body_writes(record: &TraceRecord, op_offsets: &[u32]) -> Vec<u32>
 /// iter would re-read parent's stale write — see the s12_step_b
 /// `Move R[1] = R[12]` bug).
 pub fn compute_live_in_slots(record: &TraceRecord, op_offsets: &[u32]) -> Vec<u32> {
-    let mut written: std::collections::HashSet<u32> = std::collections::HashSet::new();
-    let mut live_in: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    let mut written = Vec::new();
+    let mut live_in = Vec::new();
     for (i, rop) in record.ops.iter().enumerate() {
         let off = op_offsets.get(i).copied().unwrap_or(0);
         // Reads first — if a slot hasn't been written by a prior op,
         // it's live-in.
         for r in op_reads_at_offset(rop, off) {
-            if !written.contains(&r) {
-                live_in.insert(r);
+            if !written.get(r as usize).copied().unwrap_or(false) {
+                insert(&mut live_in, r);
             }
         }
         // Then mark writes (the op's writes happen "after" its reads
         // for purposes of subsequent ops).
         for w in op_writes_at_offset(rop, off) {
-            written.insert(w);
+            insert(&mut written, w);
         }
     }
-    live_in.into_iter().collect()
+    members(&live_in)
 }

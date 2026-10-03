@@ -86,6 +86,24 @@ impl Vm {
         self.jit.trace_enabled_chosen = true;
     }
 
+    /// Which code generator compiles this Vm's traces from now on.
+    pub fn set_trace_tier(&mut self, tier: crate::jit::trace::TraceTier) {
+        self.jit.trace_tier = tier;
+    }
+
+    /// See [`Self::set_trace_tier`].
+    pub fn trace_tier(&self) -> crate::jit::trace::TraceTier {
+        self.jit.trace_tier
+    }
+
+    /// With [`crate::jit::trace::TraceTier::Auto`]: the loop iterations
+    /// plus entries after which a trace compiled from now on moves to the
+    /// optimizing tier (`0`: never); a quarter of that once the function the
+    /// trace starts in has been called again since it was compiled.
+    pub fn set_trace_tier_up_at(&mut self, n: u32) {
+        self.jit.tier_up_at = n;
+    }
+
     /// Opt-in flag for the self-link cycle catch. See field
     /// docs for the correctness blocker. Default `false`.
     pub fn set_self_link_enabled(&mut self, enabled: bool) {

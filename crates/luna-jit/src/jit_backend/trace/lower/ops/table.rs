@@ -1,8 +1,8 @@
 use super::*;
 
 /// Table construction and integer-key reads.
-pub(super) fn emit_table_new_get_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_table_new_get_op<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
@@ -18,7 +18,7 @@ pub(super) fn emit_table_new_get_op<M: Module>(
     } = lw.h.op;
     let RuntimeHelpers { get_int_id, .. } = lw.h.rt;
     let OpCx { i, off, ins, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::NewTable => {
             // sunk path: skip the heap alloc helper.
@@ -33,7 +33,7 @@ pub(super) fn emit_table_new_get_op<M: Module>(
             {
                 return Some(());
             }
-            let func_ref = lw.module.declare_func_in_func(new_table_id, lw.bcx.func);
+            let func_ref = lw.bcx.import_func(new_table_id);
             let call = lw.bcx.ins().call(func_ref, &[]);
             let t = lw.bcx.inst_results(call)[0];
             lw.bcx.def_var(regs[ins.a() as usize], t);
@@ -81,7 +81,7 @@ pub(super) fn emit_table_new_get_op<M: Module>(
                 lw.bcx.def_var(regs[ins.a() as usize], v);
                 lw.current_kinds[off + ins.a() as usize] = kind;
             } else {
-                let func_ref = lw.module.declare_func_in_func(get_int_id, lw.bcx.func);
+                let func_ref = lw.bcx.import_func(get_int_id);
                 let call = lw.bcx.ins().call(func_ref, &[t, k_imm]);
                 let v = lw.bcx.inst_results(call)[0];
                 lw.bcx.def_var(regs[ins.a() as usize], v);
@@ -125,7 +125,7 @@ pub(super) fn emit_table_new_get_op<M: Module>(
                     lw.current_kinds[off + ins.a() as usize] = kind;
                 }
                 _ => {
-                    let func_ref = lw.module.declare_func_in_func(get_int_id, lw.bcx.func);
+                    let func_ref = lw.bcx.import_func(get_int_id);
                     let call = lw.bcx.ins().call(func_ref, &[t, key]);
                     let v = lw.bcx.inst_results(call)[0];
                     lw.bcx.def_var(regs[ins.a() as usize], v);
@@ -143,8 +143,8 @@ pub(super) fn emit_table_new_get_op<M: Module>(
 }
 
 /// Table stores.
-pub(super) fn emit_table_set_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_table_set_op<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
@@ -152,7 +152,7 @@ pub(super) fn emit_table_set_op<M: Module>(
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::SetField => {
             emit_set_field(lw, pl, oc)?;
@@ -204,16 +204,7 @@ pub(super) fn emit_table_set_op<M: Module>(
             }
             let val = lw.bcx.use_var(regs[ins.c() as usize]);
             let stored_inline = array_write(&mut lw.bcx, t, k_imm, val, val_kind);
-            let done = emit_table_set(
-                &mut lw.bcx,
-                &mut lw.module,
-                &set_ids,
-                t,
-                k_imm,
-                RegKind::Int,
-                val,
-                val_kind,
-            );
+            let done = emit_table_set(&mut lw.bcx, &set_ids, t, k_imm, RegKind::Int, val, val_kind);
             guard!(lw, pl, done, i, rop.pc);
             array_write_join(&mut lw.bcx, stored_inline);
         }
@@ -268,16 +259,7 @@ pub(super) fn emit_table_set_op<M: Module>(
             } else {
                 None
             };
-            let done = emit_table_set(
-                &mut lw.bcx,
-                &mut lw.module,
-                &set_ids,
-                t,
-                key,
-                key_kind,
-                val,
-                val_kind,
-            );
+            let done = emit_table_set(&mut lw.bcx, &set_ids, t, key, key_kind, val, val_kind);
             guard!(lw, pl, done, i, rop.pc);
             array_write_join(&mut lw.bcx, stored_inline);
         }
@@ -287,8 +269,8 @@ pub(super) fn emit_table_set_op<M: Module>(
 }
 
 /// `Op::SetField`: into a sunk table's slot, or through the checked store helper.
-pub(super) fn emit_set_field<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_set_field<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
@@ -299,7 +281,7 @@ pub(super) fn emit_set_field<M: Module>(
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     // sunk path: when escape sweep tagged
     // SetFieldSunkWrite, def_var the source register into
     // the matching virt slot (array_cap + hash_slot) +
@@ -343,13 +325,7 @@ pub(super) fn emit_set_field<M: Module>(
         luna_core::runtime::Value::Str(s) => s,
         _ => unreachable!("pre-emit gates Str const at K[B]"),
     };
-    let key_arg = emit_str_key_arg(
-        lw.module,
-        &mut lw.bcx,
-        key_v,
-        opts.aot,
-        &mut lw.defined_aot_data,
-    );
+    let key_arg = emit_str_key_arg(&mut lw.bcx, key_v, opts.aot, &mut lw.defined_aot_data);
     let val_kind = k_op(&lw.current_kinds, off as u32 + ins.c());
     // a value of unknown kind cannot be tagged for the table
     if val_kind.untyped() {
@@ -380,7 +356,6 @@ pub(super) fn emit_set_field<M: Module>(
     });
     let done = emit_table_set(
         &mut lw.bcx,
-        &mut lw.module,
         &set_ids,
         t,
         key_arg,

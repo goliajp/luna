@@ -43,9 +43,8 @@ pub(super) fn aot_data_section(
 /// Returns a `Value` holding the loaded `Gc<LuaStr>` pointer, suitable
 /// for passing as the `key_arg` parameter to `luna_jit_set_field` /
 /// `_get_field` / `_get_tab_up`.
-pub(super) fn emit_str_key_arg<M: Module>(
-    module: &mut M,
-    bcx: &mut FunctionBuilder<'_>,
+pub(super) fn emit_str_key_arg<E: Emit>(
+    bcx: &mut E,
     key_v: luna_core::runtime::Gc<luna_core::runtime::LuaStr>,
     aot: bool,
     defined_aot_data: &mut std::collections::HashSet<DataId>,
@@ -80,7 +79,7 @@ pub(super) fn emit_str_key_arg<M: Module>(
 
     // 8-byte writable slot — IR loads through it.
     let slot_name = format!("__luna_aot_strkey_slot_{hex}");
-    let slot_id = module
+    let slot_id = bcx
         .declare_data(&slot_name, Linkage::Export, true, false)
         .expect("declare_data slot");
     if defined_aot_data.insert(slot_id) {
@@ -89,14 +88,14 @@ pub(super) fn emit_str_key_arg<M: Module>(
         // `define_data` errors on redefinition — `insert` guards us.
         // Best-effort: ignore the error path (the only way `define`
         // fails here is duplicate-define, which our HashSet prevents).
-        let _ = module.define_data(slot_id, &desc);
+        let _ = bcx.define_data(slot_id, &desc);
     }
 
     // Bytes manifest — deploy-side resolver reads via the index
     // section. Layout: little-endian u64 length, then the raw bytes
     // (no NUL). Read-only, non-TLS.
     let bytes_name = format!("__luna_aot_strkey_bytes_{hex}");
-    let bytes_id = module
+    let bytes_id = bcx
         .declare_data(&bytes_name, Linkage::Export, false, false)
         .expect("declare_data bytes");
     if defined_aot_data.insert(bytes_id) {
@@ -105,7 +104,7 @@ pub(super) fn emit_str_key_arg<M: Module>(
         payload.extend_from_slice(bytes);
         let mut desc = DataDescription::new();
         desc.define(payload.into_boxed_slice());
-        let _ = module.define_data(bytes_id, &desc);
+        let _ = bcx.define_data(bytes_id, &desc);
     }
 
     // Index entry — one per unique strkey, 16 bytes of
@@ -126,7 +125,7 @@ pub(super) fn emit_str_key_arg<M: Module>(
     // the default rodata section would require an enumeration scheme
     // (per-`.o` registry table or `nm` parsing at startup).
     let idx_name = format!("__luna_aot_strkey_idx_{hex}");
-    let idx_id = module
+    let idx_id = bcx
         .declare_data(&idx_name, Linkage::Local, false, false)
         .expect("declare_data idx");
     if defined_aot_data.insert(idx_id) {
@@ -149,7 +148,7 @@ pub(super) fn emit_str_key_arg<M: Module>(
         // `luna-aot::embed::write_aot_cmain_object_for` and the
         // deploy-side `windows_section::find_section` needle).
         desc.set_custom_section(&aot_data_section(
-            module.isa().triple(),
+            &bcx.target_triple(),
             "luna_strkey_idx",
             ".lt_skix",
         ));
@@ -162,16 +161,16 @@ pub(super) fn emit_str_key_arg<M: Module>(
         desc.set_align(8);
         // Two pointer-sized relocations: linker fills 0..8 with the
         // resolved address of `bytes_id` and 8..16 with `slot_id`.
-        let bytes_gv = module.declare_data_in_data(bytes_id, &mut desc);
-        let slot_gv = module.declare_data_in_data(slot_id, &mut desc);
+        let bytes_gv = bcx.declare_data_in_data(bytes_id, &mut desc);
+        let slot_gv = bcx.declare_data_in_data(slot_id, &mut desc);
         desc.write_data_addr(0, bytes_gv, 0);
         desc.write_data_addr(8, slot_gv, 0);
-        let _ = module.define_data(idx_id, &desc);
+        let _ = bcx.define_data(idx_id, &desc);
     }
 
     // Emit the load through the slot.
-    let slot_gv = module.declare_data_in_func(slot_id, bcx.func);
-    let slot_addr = bcx.ins().symbol_value(types::I64, slot_gv);
+    let slot_gv = bcx.declare_data_in_func(slot_id);
+    let slot_addr = bcx.symbol_value(types::I64, slot_gv);
     bcx.ins()
         .load(types::I64, MemFlagsData::trusted(), slot_addr, 0)
 }
@@ -230,9 +229,8 @@ pub(super) fn strkey_hex_label(bytes: &[u8]) -> String {
 /// `<hex>` is FNV-1a-64 over the packed bytes (no count prefix in the
 /// hash input — only the records). Collision risk: ~1 in 2^64 over
 /// realistic trace populations.
-pub(super) fn emit_chain_ptr_arg<M: Module>(
-    module: &mut M,
-    bcx: &mut FunctionBuilder<'_>,
+pub(super) fn emit_chain_ptr_arg<E: Emit>(
+    bcx: &mut E,
     chain: &[FrameMaterializeInfo],
     chain_rc_first_ptr: i64,
     aot: bool,
@@ -256,20 +254,20 @@ pub(super) fn emit_chain_ptr_arg<M: Module>(
     // Writable 8-byte slot — IR loads through it. Zero at link time;
     // the deploy resolver populates with the rebuilt chain's pointer.
     let slot_name = format!("__luna_aot_inline_chain_slot_{hex}");
-    let slot_id = module
+    let slot_id = bcx
         .declare_data(&slot_name, Linkage::Export, true, false)
         .expect("declare_data inline chain slot");
     if defined_aot_data.insert(slot_id) {
         let mut desc = DataDescription::new();
         desc.define(Box::new([0u8; 8]));
-        let _ = module.define_data(slot_id, &desc);
+        let _ = bcx.define_data(slot_id, &desc);
     }
 
     // Bytes payload — `[u64 count, packed records]`, read-only. Count
     // prefix lets the resolver size its reconstruction without holding
     // an out-of-band length table.
     let bytes_name = format!("__luna_aot_inline_chain_bytes_{hex}");
-    let bytes_id = module
+    let bytes_id = bcx
         .declare_data(&bytes_name, Linkage::Export, false, false)
         .expect("declare_data inline chain bytes");
     if defined_aot_data.insert(bytes_id) {
@@ -278,7 +276,7 @@ pub(super) fn emit_chain_ptr_arg<M: Module>(
         payload.extend_from_slice(&packed);
         let mut desc = DataDescription::new();
         desc.define(payload.into_boxed_slice());
-        let _ = module.define_data(bytes_id, &desc);
+        let _ = bcx.define_data(bytes_id, &desc);
     }
 
     // Index entry — one per unique chain, 16 bytes of
@@ -287,7 +285,7 @@ pub(super) fn emit_chain_ptr_arg<M: Module>(
     // (Windows COFF, 8-byte short-name limit) section so the deploy
     // resolver brackets the whole-program range.
     let idx_name = format!("__luna_aot_inline_chain_idx_{hex}");
-    let idx_id = module
+    let idx_id = bcx
         .declare_data(&idx_name, Linkage::Local, false, false)
         .expect("declare_data inline chain idx");
     if defined_aot_data.insert(idx_id) {
@@ -299,21 +297,21 @@ pub(super) fn emit_chain_ptr_arg<M: Module>(
         // `.lt_chai`. Both names must match the deploy resolver's
         // bracket / section-walker needles.
         desc.set_custom_section(&aot_data_section(
-            module.isa().triple(),
+            &bcx.target_triple(),
             "luna_inline_chnx",
             ".lt_chai",
         ));
         desc.set_align(8);
-        let bytes_gv = module.declare_data_in_data(bytes_id, &mut desc);
-        let slot_gv = module.declare_data_in_data(slot_id, &mut desc);
+        let bytes_gv = bcx.declare_data_in_data(bytes_id, &mut desc);
+        let slot_gv = bcx.declare_data_in_data(slot_id, &mut desc);
         desc.write_data_addr(0, bytes_gv, 0);
         desc.write_data_addr(8, slot_gv, 0);
-        let _ = module.define_data(idx_id, &desc);
+        let _ = bcx.define_data(idx_id, &desc);
     }
 
     // Emit the load through the slot.
-    let slot_gv = module.declare_data_in_func(slot_id, bcx.func);
-    let slot_addr = bcx.ins().symbol_value(types::I64, slot_gv);
+    let slot_gv = bcx.declare_data_in_func(slot_id);
+    let slot_addr = bcx.symbol_value(types::I64, slot_gv);
     bcx.ins()
         .load(types::I64, MemFlagsData::trusted(), slot_addr, 0)
 }

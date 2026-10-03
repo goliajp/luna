@@ -53,6 +53,12 @@ pub struct JitState {
     pub trace_hot_threshold: u32,
     /// See [`Self::trace_hot_threshold`].
     pub call_hot_threshold: u32,
+    /// The code generator traces are compiled with; `LUNA_TRACE_TIER`
+    /// (`auto`, `baseline` or `optimizing`) sets the default.
+    pub trace_tier: crate::jit::trace::TraceTier,
+    /// [`crate::jit::trace::CompileOptions::tier_up_at`] for this Vm's
+    /// traces.
+    pub tier_up_at: u32,
 
     /// Back-edge counts per loop head, indexed by a hash of the head's
     /// pc and its function's first line (LuaJIT's `hotcount`): each loop
@@ -178,6 +184,8 @@ impl JitState {
 pub struct JitCounters {
     /// Number of traces that have closed cleanly.
     pub closed: u64,
+    /// Traces moved to the optimizing tier.
+    pub tiered_up: u64,
     /// Number of traces that have aborted.
     pub aborted: u64,
     /// Number of compiled traces that closed at a
@@ -355,6 +363,8 @@ impl JitState {
             trace_enabled_chosen: false,
             trace_hot_threshold: crate::jit::trace::TRACE_HOT_THRESHOLD,
             call_hot_threshold: crate::jit::trace::CALL_HOT_THRESHOLD,
+            trace_tier: default_trace_tier(),
+            tier_up_at: crate::jit::trace::TIER_UP_THRESHOLD,
             loop_hot: Box::new([0; LOOP_HOT_SLOTS]),
             self_link_enabled: false,
             field_ic_enabled: crate::jit::trace_types::field_ic_enabled(),
@@ -374,4 +384,14 @@ impl JitState {
             storage: Box::new(crate::jit::NullJitStorage),
         }
     }
+}
+
+fn default_trace_tier() -> crate::jit::trace::TraceTier {
+    use crate::jit::trace::TraceTier;
+    static TIER: std::sync::OnceLock<TraceTier> = std::sync::OnceLock::new();
+    *TIER.get_or_init(|| match std::env::var("LUNA_TRACE_TIER").as_deref() {
+        Ok("baseline") => TraceTier::Baseline,
+        Ok("optimizing") => TraceTier::Optimizing,
+        _ => TraceTier::Auto,
+    })
 }

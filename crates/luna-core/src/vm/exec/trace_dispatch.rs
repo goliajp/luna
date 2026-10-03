@@ -52,7 +52,7 @@ impl Vm {
         // of cloning. The outer `ct: Rc<CompiledTrace>` is held
         // across the entire dispatch block so the fields outlive
         // all consumers.
-        let entry_fn = ct.entry;
+        let entry_fn = self.trace_entry_counted(&ct, cl.proto.call_hot_count.get());
         let head_pc_val = ct.head_pc;
         let window_size = ct.window_size;
         let compile_entry_tags = &ct.entry_tags;
@@ -225,15 +225,6 @@ impl Vm {
         checked_only: bool,
     ) -> bool {
         use crate::jit::trace::ENTRY_TAG_ANY;
-        use crate::runtime::value::raw;
-        // the tags whose payload stands for the value
-        const PAYLOAD_TAGS: u32 = 1 << raw::INT
-            | 1 << raw::FLOAT
-            | 1 << raw::TABLE
-            | 1 << raw::CLOSURE
-            | 1 << raw::NATIVE
-            | 1 << raw::STR
-            | 1 << raw::NIL;
         let frame = &self.stack[base_us..base_us + max_stack];
         let regs = &mut reg_state[..max_stack];
         let tags = &mut entry_tags[..max_stack];
@@ -256,9 +247,9 @@ impl Vm {
             // The trace's IR is specialised to the compile-time entry
             // tags: on another, body ops would misread the raw bits (a Str
             // pointer as an Int payload). The interpreter runs this entry;
-            // the trace stays for later ones. The payload of anything but
-            // `PAYLOAD_TAGS` cannot stand for the value.
-            if tag != want || PAYLOAD_TAGS >> tag & 1 == 0 {
+            // the trace stays for later ones. The payload of anything else
+            // cannot stand for the value.
+            if tag != want || !crate::jit::trace::entry_tag_enterable(tag) {
                 return false;
             }
             tags[i] = tag;
@@ -373,4 +364,64 @@ fn downrec_close_exit(continuation_pc: i64, head_pc_val: u32) -> bool {
     from_side_trace
         && (crate::jit::trace_types::is_downrec_sentinel(sentinel_code)
             || (sentinel_code == global_deopt_code && raw_body == head_pc_val as u64))
+}
+
+impl Vm {
+    /// The entry to call for `ct`, counting the entry towards its move to
+    /// the optimizing tier and making that move when it is due. `calls`:
+    /// the head function's `call_hot_count` now.
+    fn trace_entry_counted(
+        &mut self,
+        ct: &crate::jit::trace::CompiledTrace,
+        calls: u32,
+    ) -> crate::jit::trace::TraceFn {
+        self.count_towards_tier_up(ct, calls);
+        ct.current_entry()
+    }
+
+    /// Counts an entry of `ct` towards its move to the optimizing tier and
+    /// makes the move when it is due. `calls`: the head function's
+    /// `call_hot_count` now.
+    pub(super) fn count_towards_tier_up(
+        &mut self,
+        ct: &crate::jit::trace::CompiledTrace,
+        calls: u32,
+    ) {
+        if let Some(t) = &ct.tier_up
+            && !t.tried.get()
+        {
+            let n = t.count.get().wrapping_add(1);
+            t.count.set(n);
+            let reused =
+                calls != t.calls_at && n >= t.at / crate::jit::trace::TIER_UP_REUSED_DIVISOR;
+            if n >= t.at || reused {
+                self.trace_tier_up(ct);
+            }
+        }
+    }
+
+    /// Hands a hot trace to the optimizing tier and points everything that
+    /// enters it at the new code.
+    #[cold]
+    fn trace_tier_up(&mut self, ct: &crate::jit::trace::CompiledTrace) {
+        let Some(t) = &ct.tier_up else { return };
+        t.tried.set(true);
+        let entry = {
+            let jit = &mut self.jit;
+            let storage: &mut dyn crate::jit::JitStorage = jit.storage.as_mut();
+            jit.trace_compiler.tier_up(storage, ct)
+        };
+        let Some(entry) = entry else { return };
+        let p = entry as *const () as *const u8;
+        t.optimized.set(p);
+        for cell in &t.parent_cells {
+            let c = cell.get() as *const crate::jit::send_compat::TCellPtr;
+            if !c.is_null() {
+                // SAFETY: the cell belongs to the parent trace, which stays
+                // in its proto's `traces` as long as this child can run
+                unsafe { (*c).set(p) };
+            }
+        }
+        self.jit.counters.tiered_up += 1;
+    }
 }

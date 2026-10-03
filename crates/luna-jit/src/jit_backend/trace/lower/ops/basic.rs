@@ -1,14 +1,14 @@
 use super::*;
 
 /// Jumps, moves and loads.
-pub(super) fn emit_basic_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_basic_op<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
     let Plan { head_proto, .. } = *pl;
     let OpCx { off, ins, .. } = *oc;
-    let regs: &[Variable] = &oc.regs;
+    let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::Jmp => {
             // Trailing back-edge (validated in the pre-emit
@@ -63,13 +63,7 @@ pub(super) fn emit_basic_op<M: Module>(
                     (bits, RegKind::Float)
                 }
                 luna_core::runtime::Value::Str(k) => (
-                    emit_str_key_arg(
-                        lw.module,
-                        &mut lw.bcx,
-                        k,
-                        pl.opts.aot,
-                        &mut lw.defined_aot_data,
-                    ),
+                    emit_str_key_arg(&mut lw.bcx, k, pl.opts.aot, &mut lw.defined_aot_data),
                     RegKind::Str,
                 ),
                 _ => unreachable!("pre-emit gates number and string consts"),

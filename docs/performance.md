@@ -97,6 +97,8 @@ For workload-shape-specific tuning, see
 | `vm.set_trace_jit_enabled(false)` | `true` (v1.3 TA3 default) | Disable to A/B trace JIT vs interpreter |
 | `vm.set_hot_threshold(n)` | (recorder constant) | Lower for hot-immediately workloads; raise for cold-data services |
 | `vm.set_max_trace_len(n)` | (recorder constant) | Raise for long unrolled loops; lower for diverse-shape recording |
+| `vm.set_trace_tier(tier)` | `TraceTier::Auto` (`LUNA_TRACE_TIER`) | `Auto` compiles a trace with the baseline code generator first and with Cranelift once it is hot; `Baseline` / `Optimizing` keep one of them |
+| `vm.set_trace_tier_up_at(n)` | 16384 | Loop iterations in baseline code before Cranelift recompiles the trace, a quarter of that once the trace's function is called again (`0`: never) |
 
 ## 3. The benchmark harnesses
 

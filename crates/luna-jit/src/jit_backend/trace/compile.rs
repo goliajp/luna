@@ -14,8 +14,8 @@ pub struct TraceHandle {
     // the outer struct. The wrapper is `repr(Rust)` newtype with
     // `Deref<Target = JITModule>` so any internal call site that
     // touched `handle._module.<method>` still resolves through Deref.
-    _module: crate::jit_backend::SendJitModule,
-    _entry_raw: *const u8,
+    pub(super) _module: crate::jit_backend::SendJitModule,
+    pub(super) _entry_raw: *const u8,
 }
 
 impl TraceHandle {
@@ -118,7 +118,7 @@ thread_local! {
     // entry block leaves the counter at its prior value.
     pub(crate) static BASE_VAR_SCAFFOLD_DECLARED: std::cell::Cell<u64> =
         const { std::cell::Cell::new(0) };
-    static TRACE_CODEGEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    pub(super) static TRACE_CODEGEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 pub(super) fn checkpoint(s: &'static str) {
@@ -156,8 +156,8 @@ pub fn base_var_scaffold_declared_count() -> u64 {
     BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.get())
 }
 
-/// Traces this thread has run through Cranelift and finalized into
-/// machine code for a Vm or via [`try_compile_trace_with_options`].
+/// Traces this thread has compiled into machine code (either tier) for
+/// a Vm or via [`try_compile_trace_with_options`].
 /// Diagnostic-only: it tells a trace cached with code from one a Vm
 /// cached without, because nothing could enter it.
 #[doc(hidden)]
@@ -332,47 +332,6 @@ pub(crate) fn compile_trace_for_vm(
     float_only: bool,
 ) -> Option<CompiledTrace> {
     compile_trace_jit(storage, record, opts, false, float_only)
-}
-
-/// `float_only`: the record's dialect is 5.1 / 5.2, where the math
-/// library converts its number arguments to floats and returns floats
-/// (`math.min(1, 2)` is the float `1`).
-pub(super) fn compile_trace_jit(
-    storage: &mut dyn luna_core::jit::JitStorage,
-    record: &TraceRecord,
-    opts: CompileOptions,
-    always_codegen: bool,
-    float_only: bool,
-) -> Option<CompiledTrace> {
-    let mut module =
-        crate::jit_backend::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
-    let (fn_id, mut compiled) =
-        lower_trace_into_inner(&mut *module, record, opts, None, always_codegen, float_only)?;
-    if !always_codegen && !trace_is_enterable(record, &compiled) {
-        return Some(compiled);
-    }
-    module.finalize_definitions().ok()?;
-    TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
-    let ptr = module.get_finalized_function(fn_id);
-    // SAFETY: the cranelift fn signature declared by `lower_trace_into`
-    // (`(I64) -> I64`) matches `TraceFn`. The mmap backing the fn body
-    // is owned by `module`, which we park on the per-`Vm` storage's
-    // `trace_handles` Vec immediately below.
-    let entry_fn: TraceFn = unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) };
-    compiled.entry = entry_fn;
-    // `from_storage` is `Result`-shaped. On
-    // `StorageMismatch` (Vm.jit.storage isn't a CraneliftJitStorage)
-    // skip parking the handle and return `None` — the freshly built
-    // `module` drops here and releases its mmap pages; the trace
-    // recorder sees `None` and gives up on this trace, falling back
-    // to interp dispatch. No SIGABRT across the C-ABI boundary.
-    let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
-    cs.trace_handles.push(TraceHandle {
-        // Wrap in `SendJitModule` sleeve.
-        _module: module.publish(),
-        _entry_raw: ptr,
-    });
-    Some(compiled)
 }
 
 /// backend-agnostic body of the trace
