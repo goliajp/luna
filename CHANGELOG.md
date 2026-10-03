@@ -23,6 +23,16 @@ optimization.
 
 ### Breaking
 
+- C API: `lua_setglobal` and `lua_getglobal` go through `_G`'s
+  `__newindex` and `__index` and raise their errors as PUC does, instead
+  of writing and reading `_G` raw and dropping the error. Writing a global
+  while `_G` is read-only now fails with "Attempt to modify a readonly
+  table". Inside a C function luna called, the error is thrown when that
+  function returns (its results are dropped), so the `lua_pcall` around
+  it returns `LUA_ERRRUN`; outside one it is unprotected, and like PUC
+  the process prints `PANIC: unprotected error in call to Lua API (...)`
+  and aborts.
+
 - `TableError` has a new variant, `ReadOnly`, which `Table::set` and
   `Table::set_int` return for a read-only table; a `match` on
   `TableError` needs an arm for it. `Table::try_set_existing` returns
@@ -257,6 +267,39 @@ optimization.
 
 ### Fixed
 
+- C API: `lua_pcall` calls its message handler (`msgh`, 5.1's
+  `errfunc`), which it used to ignore: the handler runs where the error
+  was raised, before the stack unwinds, its first result becomes the error
+  object, and when the handler itself fails the status is the dialect's
+  `LUA_ERRERR` (5 in 5.1, 5.4 and 5.5; 6 in 5.2 and 5.3) with "error in
+  error handling", as in PUC 5.1.5 to 5.5.1. A non-string error object is
+  no longer turned into a string.
+- C API: a C function called from Lua sees its own arguments at index 1
+  on; values the host left below the call (a message handler, say) used
+  to come first. The values on the C API stack are now kept alive by the
+  collector. `luaL_loadstring` names the chunk by its source
+  (`[string "..."]`), as PUC does, instead of `(load)`.
+- The REPL prints a chunk's results by calling `print` from inside a C
+  level, as `lua.c` does from `pmain`, so a `__tostring` that takes a
+  `debug.traceback` or walks `debug.getinfo` sees the same levels as
+  with PUC (`[C]: in ?` at the bottom).
+- The `luna` command buffers standard output as C stdio does under
+  glibc: line by line on a terminal, in blocks on a pipe or file, with
+  5.2 on flushing after each `print` and 5.1 not. A script's output and
+  its error messages (unbuffered, on standard error) now reach a shared
+  pipe, file or terminal in the same order as with PUC; in 5.1 a script
+  that printed and then failed showed its output before the error, PUC
+  after it. `io.stdout:setvbuf` changes that buffering, and
+  `io.stdout:seek()` writes out what is still buffered first, as `fseek` does.
+- Pointer texts follow the C library of the platform luna is built for,
+  as PUC's `%p` does: `tostring` of a table, function, thread or
+  userdata, `file (...)`, and `string.format("%p")`. A NULL light
+  userdata prints as `userdata: (nil)` with glibc (as on Redis),
+  `userdata: 0` with musl, `userdata: 0x0` on macOS, and Windows
+  pointers are 16 upper-case hex digits without `0x`. They used to be
+  Rust's `0x...` everywhere. `string.format("%p")` of a NULL light
+  userdata is `(null)`, as in PUC.
+
 - An error raised by a native the host calls directly (`vm.call_value`
   on `error` or another library function, with no Lua function between)
   left no traceback for `take_error_traceback`; it now has one, whose only
@@ -328,6 +371,13 @@ optimization.
   code are created and dropped.
 
 ### Added
+
+- C API: `luna_newstate(version)` makes a state for any dialect by its
+  `LUA_VERSION_NUM` (501 to 505); `LUA_ERRERR`; Redis's
+  `lua_enablereadonlytable(L, idx, enabled)`.
+- `luna_core::stdio`: `use_c_stdout` makes standard output behave as C
+  stdio's `stdout` (what the `luna` command does); `write_stdout` and
+  `flush_stdout` write and flush it either way.
 
 - Read-only tables: `Vm::set_readonly(t: Gc<Table>, on: bool)` marks a
   table read-only or writable again (Redis's `lua_enablereadonlytable`),
