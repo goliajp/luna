@@ -63,6 +63,13 @@ cranelift-object = "0.136"
 # from_str`) and survives any future cranelift-internal refactor.
 target-lexicon = "0.13"
 
+# On a Windows host, locates `cl.exe` / `link.exe` and the `INCLUDE` /
+# `LIB` / `PATH` they need from the Visual Studio installation, so a
+# build works from a plain shell without vcvars. The same lookup the
+# `cc` crate uses; no dependencies of its own.
+[target.'cfg(windows)'.dependencies]
+find-msvc-tools = "0.1"
+
 [dev-dependencies]
 tempfile = "3"
 # Read-side `object` features for tests that parse the produced binary:

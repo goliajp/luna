@@ -29,13 +29,7 @@ use std::process::Command;
 use luna_aot::embed::{AotOptions, compile_and_link_with};
 use luna_core::version::LuaVersion;
 
-fn have_on_path(bin: &str) -> bool {
-    Command::new(bin)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success() || o.status.code().is_some())
-        .unwrap_or(false)
-}
+use crate::host_link::host_can_link;
 
 fn run_with_env(path: &Path, env_key: &str, env_val: &str) -> (String, String, Option<i32>) {
     let output = Command::new(path)
@@ -50,12 +44,8 @@ fn run_with_env(path: &Path, env_key: &str, env_val: &str) -> (String, String, O
 }
 
 fn measure(label: &str, src: &[u8], expected_stdout: &str) {
-    if cfg!(target_os = "windows") {
-        eprintln!("[{label}] skipped: AOT trace install unavailable on Windows COFF");
-        return;
-    }
-    if !have_on_path("cc") || !have_on_path("cargo") {
-        eprintln!("[{label}] skipped: cc / cargo not on PATH");
+    if !host_can_link() {
+        eprintln!("[{label}] skipped: cargo / cc not on PATH");
         return;
     }
 

@@ -239,6 +239,11 @@ pub fn embed_bytecode(
 /// cross-compile builds a per-triple staticlib (`cargo build
 /// --target=<triple> -p luna-runtime-helpers`) and uses the matching
 /// cc driver.
+///
+/// For a Windows target, an `out_path` without an extension is written
+/// as `<out_path>.exe`. An MSVC target needs `cl.exe` + `link.exe`
+/// (found in the Visual Studio install on a Windows host, no Developer
+/// Command Prompt needed) or LLVM's `clang-cl` + `lld-link` on `PATH`.
 pub fn compile_and_link(
     source_path: &Path,
     out_path: &Path,
@@ -290,6 +295,17 @@ pub fn compile_and_link_with(
 
     // Parse + compile + dump: shared with `embed_bytecode`.
     let dump_bytes = compile_to_dump(source_path, version)?;
+
+    // MinGW's gcc names its output `<out>.exe` when `<out>` has no
+    // extension and link.exe does not; give every Windows target the
+    // suffix so the binary lands at one predictable path
+    let exe_path;
+    let out_path = if target.os == TargetOs::Windows && out_path.extension().is_none() {
+        exe_path = out_path.with_extension("exe");
+        exe_path.as_path()
+    } else {
+        out_path
+    };
 
     let workdir = out_path
         .parent()
