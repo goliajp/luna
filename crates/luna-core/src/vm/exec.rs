@@ -81,7 +81,7 @@ pub use hooks::{
 pub(crate) use meta::Mm;
 use meta::*;
 use num::*;
-pub(crate) use num::{ArithOp, arith_num, str_to_num};
+pub(crate) use num::{ArithOp, arith_num, c_fmod, str_to_num};
 pub(crate) use state::AsyncNativeCallCtx;
 pub use state::Vm;
 use trace_cache::*;
