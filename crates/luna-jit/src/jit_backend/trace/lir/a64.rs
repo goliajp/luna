@@ -22,6 +22,9 @@ pub(crate) struct A64 {
     /// (instruction index, label, kind: 0 = b, 1 = b.cond / cbz / cbnz)
     fixups: Vec<(u32, u32, u8)>,
     sites: Vec<crate::jit_backend::trace::reloc::Site>,
+    /// `ldr` (literal) instructions loading relocation `n`, by index: the
+    /// addresses go in a pool after the code
+    lits: Vec<(u32, u32, i64)>,
     saved: Vec<u8>,
     fsaved: Vec<u8>,
     locals: u32,
@@ -180,18 +183,10 @@ impl Masm for A64 {
         }
     }
     fn mov_reloc(&mut self, d: u8, v: i64, n: u32) {
-        self.sites.push(crate::jit_backend::trace::reloc::Site {
-            at: 4 * self.code.len() as u32,
-            n,
-            form: crate::jit_backend::trace::reloc::Form::MovzMovk,
-        });
-        let (d, u) = (u32::from(d), v as u64);
-        // movz, then movk for each further 16-bit piece
-        self.put(0xD280_0000 | (((u & 0xffff) as u32) << 5) | d);
-        for k in 1..4u32 {
-            let c = ((u >> (16 * k)) & 0xffff) as u32;
-            self.put(0xF280_0000 | (k << 21) | (c << 5) | d);
-        }
+        // ldr xd, <literal>: one load from the pool `finish` places after
+        // the code, where another Vm's address is written over this one
+        self.lits.push((self.code.len() as u32, n, v));
+        self.put(0x5800_0000 | u32::from(d));
     }
     fn fmov(&mut self, d: u8, s: u8) {
         if d != s {
@@ -438,6 +433,7 @@ impl Masm for A64 {
             labels,
             fixups,
             sites,
+            lits: Vec::new(),
             saved: Vec::new(),
             fsaved: Vec::new(),
             locals: 0,
@@ -454,6 +450,26 @@ impl Masm for A64 {
             } else {
                 *w |= ((delta as u32) & 0x7FFFF) << 5;
             }
+        }
+        if !self.lits.is_empty() && self.code.len() % 2 == 1 {
+            // nop: the pool's eight-byte words start eight-byte aligned
+            self.put(0xD503_201F);
+        }
+        let mut pool: Vec<(u32, u32)> = Vec::new();
+        for &(at, n, v) in &self.lits {
+            let lit = match pool.iter().find(|p| p.0 == n) {
+                Some(&(_, w)) => w,
+                None => {
+                    let w = self.code.len() as u32;
+                    self.code.push(v as u32);
+                    self.code.push((v as u64 >> 32) as u32);
+                    self.sites
+                        .push(crate::jit_backend::trace::reloc::Site { at: 4 * w, n });
+                    pool.push((n, w));
+                    w
+                }
+            };
+            self.code[at as usize] |= ((lit - at) & 0x7FFFF) << 5;
         }
         for w in &self.code {
             self.bytes.extend_from_slice(&w.to_le_bytes());
