@@ -120,7 +120,7 @@ impl Vm {
     ) -> Result<(), LuaError> {
         let v = v.into_value(self);
         let k = Value::Str(self.heap.intern(name.as_bytes()));
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `self.globals` is a root of this Vm; the borrow lives for the one `set`, which touches only the heap and the table and does not collect, and `&mut self` rules out another reference into it
         unsafe { self.globals.as_mut() }.set(&mut self.heap, k, v)?;
         self.heap
             .barrier_back(self.globals.as_ptr() as *mut crate::runtime::heap::GcHeader);

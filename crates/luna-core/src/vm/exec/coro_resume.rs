@@ -49,7 +49,7 @@ impl Vm {
 
     /// Move a coroutine's saved context into the live VM fields.
     pub(super) fn load_coro_ctx(&mut self, co: Gc<Coro>) {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `co` is the coroutine `resume_coro` is switching to (or its resumer `r`), which the caller holds and which is a root through `self.current` or a saved stack; `m` is the only reference into it until the function returns, and nothing here can collect
         let m = unsafe { co.as_mut() };
         self.stack = std::mem::take(&mut m.stack);
         self.frames = std::mem::take(&mut m.frames);
@@ -65,7 +65,7 @@ impl Vm {
     /// Save the live VM context back into a coroutine object.
     pub(super) fn store_coro_ctx(&mut self, co: Gc<Coro>) {
         let c = self.take_ctx();
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `co` is the coroutine `resume_coro` is switching away from, held by its caller; `take_ctx` above did not touch it, and `m` is the only reference into it until the barrier call, which takes only its address
         let m = unsafe { co.as_mut() };
         m.stack = c.stack;
         m.frames = c.frames;
@@ -103,7 +103,7 @@ impl Vm {
         let rctx = self.take_ctx();
         match resumer {
             Some(r) => {
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                // SAFETY: `r` is `self.current`, the running coroutine and so a root; no reference into it is live here, and `m` ends before the barrier call
                 let m = unsafe { r.as_mut() };
                 m.stack = rctx.stack;
                 m.frames = rctx.frames;
@@ -124,7 +124,7 @@ impl Vm {
         // swap the coroutine in
         self.load_coro_ctx(co);
         {
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            // SAFETY: `co` is the argument being resumed, held by the caller (a stack slot or native argument) and about to become `self.current`; `load_coro_ctx`'s borrow has ended, so `m` is the only one
             let m = unsafe { co.as_mut() };
             m.status = CoroStatus::Running;
             m.resumer = resumer;
@@ -146,7 +146,7 @@ impl Vm {
         let drive = if co.started {
             self.coro_continue(&args)
         } else {
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            // SAFETY: `co` is `self.current`, a root; the temporary borrow covers one field store and nothing else refers into the coroutine
             unsafe { co.as_mut() }.started = true;
             self.coro_first(co.body, &args)
         };
@@ -158,7 +158,7 @@ impl Vm {
             // error a `__close` handler raised.
             match death {
                 Some(e) => {
-                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                    // SAFETY: `co` is still `self.current`, a root, and the coroutine's frames have all unwound; the borrow covers one field store
                     unsafe { co.as_mut() }.error_value = Some(e);
                     self.heap
                         .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
@@ -169,7 +169,7 @@ impl Vm {
         } else {
             match self.yielding.take() {
                 Some((vals, fslot, nres)) => {
-                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                    // SAFETY: `co` is still `self.current`, a root; the borrow covers one field store
                     unsafe { co.as_mut() }.resume_at = Some((fslot, nres));
                     (Ok(vals), CoroStatus::Suspended)
                 }
@@ -184,13 +184,13 @@ impl Vm {
                         let levels = self.error_traceback.take().unwrap_or_default();
                         let tb =
                             crate::vm::callstack::traceback_from_lines(self.version, &levels, 0);
-                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                        // SAFETY: `co` is still `self.current`, a root, and its frames have unwound, so `m` is the only reference into it for these two stores
                         let m = unsafe { co.as_mut() };
                         m.error_traceback = Some(tb);
                         m.error_levels = Some(levels);
                     }
                     if let Err(e) = drive {
-                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                        // SAFETY: `co` is still `self.current`, a root; the borrow covers one field store
                         unsafe { co.as_mut() }.error_value = Some(e.0);
                         self.heap
                             .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
@@ -206,12 +206,12 @@ impl Vm {
         self.msgh_running = resumer_msgh_running;
         self.keep_error_traceback = resumer_keeps_traceback;
         self.store_coro_ctx(co);
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `co` is still `self.current`, a root; `store_coro_ctx`'s borrow has ended, and this one covers one field store
         unsafe { co.as_mut() }.status = status;
         match resumer {
             Some(r) => {
                 self.load_coro_ctx(r);
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                // SAFETY: `r` is the resumer, made `self.current` again on the next line and held by the caller's frames meanwhile; `load_coro_ctx`'s borrow has ended, and this one covers one field store
                 unsafe { r.as_mut() }.status = CoroStatus::Running;
                 self.current = Some(r);
             }

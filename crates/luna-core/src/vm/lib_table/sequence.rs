@@ -269,18 +269,18 @@ pub(crate) fn t_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
 pub(super) fn t_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let t = vm.heap.new_table();
     {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        // SAFETY: `t` was allocated above and is held only by this local;
+        // `tm` is the only reference into it, and the heap calls made while
+        // it lives (`set_int`, `intern`, `set`) do not collect
         let tm = unsafe { t.as_mut() };
         for i in 0..nargs {
             let v = vm.nat_arg(fs, nargs, i);
             let _ = tm.set_int(&mut vm.heap, i as i64 + 1, v);
         }
+        let nk = Value::Str(vm.heap.intern(b"n"));
+        tm.set(&mut vm.heap, nk, Value::Int(nargs as i64))
+            .expect("valid key");
     }
-    let nk = Value::Str(vm.heap.intern(b"n"));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { t.as_mut() }
-        .set(&mut vm.heap, nk, Value::Int(nargs as i64))
-        .expect("valid key");
     // SETLIST-style once-per-table barrier: t is born BLACK if we're mid-
     // Propagate, and the bulk inserts above are bare `set_int`/`set` that
     // don't barrier. PUC's `lua_seti`/`lua_setfield` in `tpack` do.
@@ -343,9 +343,10 @@ pub(super) fn t_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // `Table::internal_bytes()` so the round-trip is symmetric. 5.5
     // sort.lua:22 pins this round-trip (`memdiff > N * 4` after
     // `table.create(N)`).
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { t.as_mut() }.ensure_array(&mut vm.heap, n as usize);
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { t.as_mut() }.ensure_hash(&mut vm.heap, m as usize);
+    // SAFETY: `t` was allocated above and is held only by this local; `tm`
+    // is the only reference into it, and the two calls do not collect
+    let tm = unsafe { t.as_mut() };
+    tm.ensure_array(&mut vm.heap, n as usize);
+    tm.ensure_hash(&mut vm.heap, m as usize);
     Ok(vm.nat_return(fs, &[Value::Table(t)]))
 }

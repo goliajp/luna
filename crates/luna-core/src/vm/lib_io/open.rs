@@ -143,7 +143,7 @@ pub(super) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         pipe_file(child.stdin.take().expect("stdin was piped"))
     };
     let u = new_file(vm, FileHandle::File(file), !read);
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    // SAFETY: `u` was created by `new_file` just above and is held only by this local; the borrow covers one field store
     unsafe { u.as_mut() }.popen_child = Some(child);
     Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
 }

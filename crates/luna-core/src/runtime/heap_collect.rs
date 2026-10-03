@@ -68,7 +68,7 @@ impl Heap {
                 let mut changed = false;
                 let eph = m.ephemeron.clone();
                 for t in eph {
-                    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+                    // SAFETY: `t` is a table `Table::trace` pushed onto `m.ephemeron` this cycle, so it is marked; nothing is freed until the sweep after this mark, and the marker holds no other reference to the table
                     changed |= unsafe { (*t).converge_ephemeron(&weak_key_alive, &mut m) };
                 }
                 drain_marker(&mut m);
@@ -112,12 +112,12 @@ impl Heap {
                 Value::Userdata(u) => u.as_ptr() as *mut GcHeader,
                 _ => return false,
             };
-            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+            // SAFETY: `h` is the object of a value stored in a weak table being cleared; the sweep that frees unmarked objects has not run yet, so the header is still allocated (it is only read)
             unsafe { is_white((*h).flags) }
         };
         let mark_string = |v: Value| {
             if let Value::Str(s) = v {
-                // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+                // SAFETY: `s` is a string stored in a weak table being cleared; it is not freed before the sweep that follows, and only its flag byte is written
                 unsafe {
                     let h = s.as_ptr() as *mut GcHeader;
                     // strings are leaves: skip gray and go straight to black
@@ -130,7 +130,7 @@ impl Heap {
         // clearbyvalues(allweak, NULL)`). Keys are deferred to the
         // post-resurrection sweep below.
         for t in &m.weak {
-            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+            // SAFETY: `t` was pushed onto `m.weak` by `Table::trace` this cycle, so it is marked and stays allocated through this cycle's sweep; no other reference to the table is live while it is cleared
             unsafe {
                 let (_wk, wv) = (**t).weak_mode();
                 if wv {
@@ -156,7 +156,7 @@ impl Heap {
                 let mut changed = false;
                 let eph = m.ephemeron.clone();
                 for t in eph {
-                    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+                    // SAFETY: as in `mark_all`: `t` is a marked table from `m.ephemeron`, nothing is freed before the sweep, and the marker holds no other reference to it
                     changed |= unsafe { (*t).converge_ephemeron(&weak_key_alive, m) };
                 }
                 drain_marker(m);
@@ -171,7 +171,7 @@ impl Heap {
         // proto's cache would survive forever and its upvalues' `__gc`
         // finalisers would never run.
         for &p in &m.cached_protos {
-            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+            // SAFETY: `p` was pushed onto `m.cached_protos` by `Proto::trace` this cycle (it is marked); its cached closure, white or not, is not freed before this cycle's sweep
             unsafe {
                 if let Some(c) = (*p).cache.get() {
                     let h = c.as_ptr() as *mut GcHeader;
@@ -186,7 +186,7 @@ impl Heap {
         // + clearbykeys(allweak)`). Pure key sweep — value-dead entries are
         // either already nil from step (1) or wait for step (7).
         for t in &m.weak {
-            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+            // SAFETY: `t` is a marked weak table from `m.weak` (see step 1); nothing has been freed since it was pushed
             unsafe {
                 let (wk, _wv) = (**t).weak_mode();
                 if wk {
@@ -202,7 +202,7 @@ impl Heap {
         // past `origweak_n` get their first value-clear here.
         let weak_snapshot = std::mem::take(&mut m.weak);
         for t in &weak_snapshot[origweak_n..] {
-            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+            // SAFETY: `t` is a marked weak table from `m.weak` (see step 1); nothing has been freed since it was pushed
             unsafe {
                 let (_wk, wv) = (**t).weak_mode();
                 if wv {
@@ -309,7 +309,7 @@ impl Heap {
             let Some(h) = m.stack.pop() else {
                 break;
             };
-            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+            // SAFETY: `h` was popped off the gray stack, which only `Marker::header` and `barrier_back` push to, with headers of allocated objects; frees happen only in the sweep, never during propagate or between its steps
             unsafe {
                 (*h).flags = ((*h).flags & !WHITE_BITS) | BLACK;
                 match (*h).tag {
@@ -345,7 +345,7 @@ impl Heap {
                 let mut changed = false;
                 let eph = m.ephemeron.clone();
                 for t in eph {
-                    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
+                    // SAFETY: as in `mark_all`: `t` is a marked table from `m.ephemeron`, nothing is freed before the sweep, and the marker holds no other reference to it
                     changed |= unsafe { (*t).converge_ephemeron(&weak_key_alive, &mut m) };
                 }
                 drain_marker(&mut m);

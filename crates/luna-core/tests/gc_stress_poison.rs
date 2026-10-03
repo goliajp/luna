@@ -34,9 +34,14 @@ struct PoisonOnFree;
 // the block is still owned (before System::dealloc), which is legal.
 unsafe impl GlobalAlloc for PoisonOnFree {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: the caller's `GlobalAlloc::alloc` contract (a non-zero-size layout) is passed on
+        // to `System` unchanged
         unsafe { System.alloc(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: every block this allocator hands out comes from `System.alloc`, and the caller
+        // passes one it got for `layout`; it is writable for `layout.size()` bytes until
+        // `System.dealloc` frees it
         unsafe {
             std::ptr::write_bytes(ptr, 0xDD, layout.size());
             System.dealloc(ptr, layout)
