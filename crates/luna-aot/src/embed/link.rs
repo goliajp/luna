@@ -243,12 +243,12 @@ int main(int argc, char **argv) {{
     let mut cmd = if target.is_msvc() {
         let Some(mut cl) = target.msvc_cc_command() else {
             return Err(AotError::Link(format!(
-                "MSVC C compiler not on PATH for target {} — install one of: \
-                 (a) `clang-cl` via LLVM (`brew install llvm` on macOS; \
-                 `apt install clang` on Linux), or (b) Visual Studio Build \
-                 Tools 2022 (`cl.exe`, Windows host only — invoke luna-aot \
-                 from a Developer Command Prompt). Override with `CC=...` \
-                 to point at a custom driver.",
+                "no MSVC C compiler found for target {} — on a Windows host, \
+                 install Visual Studio or the Build Tools with the \"Desktop \
+                 development with C++\" workload (`cl.exe` is found without a \
+                 Developer Command Prompt); on any host, LLVM's `clang-cl` on \
+                 PATH also works. Override with `CC=...` to point at a custom \
+                 driver.",
                 target.triple
             )));
         };
@@ -263,6 +263,9 @@ int main(int argc, char **argv) {{
         cl.arg(format!("/Fo:{}", out.display()));
         // Suppress the cl.exe banner (clang-cl no-ops on this flag).
         cl.arg("/nologo");
+        // the dynamic CRT, as the Rust staticlib is built against it; cl's
+        // default static CRT (/MT) pulls libcmt.lib into the same link
+        cl.arg("/MD");
         // Cross-compile target: clang-cl accepts `--target=<triple>` to
         // override the default host. cl.exe rejects this; we only set it
         // for clang-cl by detecting the program name (heuristic — first

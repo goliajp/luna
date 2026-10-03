@@ -1,11 +1,57 @@
 //! Linking an AOT binary with an MSVC-style linker (`link.exe` / `lld-link`).
 
 use std::path::Path;
+use std::process::Command;
 
 use object::Architecture;
 
 use super::AotError;
-use super::target::TargetSpec;
+use super::target::{TargetSpec, which_on_path};
+
+impl TargetSpec {
+    /// The MSVC-style C compiler driver, or `None` when there is none.
+    ///
+    /// 1. `$CC` wins.
+    /// 2. On a Windows host, `cl.exe` from the newest Visual Studio /
+    ///    Build Tools install, with the `INCLUDE` / `LIB` / `PATH` it
+    ///    needs set on the command, so no Developer Command Prompt is
+    ///    needed (inside one, its environment is used as is).
+    /// 3. `clang-cl` on `PATH`: LLVM's driver, which also runs on a
+    ///    Unix host for a cross build.
+    pub(super) fn msvc_cc_command(&self) -> Option<Command> {
+        if let Some(cc) = std::env::var_os("CC") {
+            return Some(Command::new(cc));
+        }
+        visual_studio_tool(&self.triple, "cl.exe").or_else(|| path_tool("clang-cl"))
+    }
+
+    /// The MSVC-style PE/COFF linker, or `None` when there is none:
+    /// `$LD`, then `link.exe` from Visual Studio on a Windows host
+    /// (environment set up as for [`Self::msvc_cc_command`]), then
+    /// `lld-link` on `PATH`. A bare `link` on `PATH` is never taken:
+    /// on Unix and in Git for Windows' shell that is the coreutils
+    /// hard-link tool.
+    pub(super) fn msvc_link_command(&self) -> Option<Command> {
+        if let Some(ld) = std::env::var_os("LD") {
+            return Some(Command::new(ld));
+        }
+        visual_studio_tool(&self.triple, "link.exe").or_else(|| path_tool("lld-link"))
+    }
+}
+
+#[cfg(windows)]
+fn visual_studio_tool(triple: &str, tool: &str) -> Option<Command> {
+    find_msvc_tools::find(triple, tool)
+}
+
+#[cfg(not(windows))]
+fn visual_studio_tool(_triple: &str, _tool: &str) -> Option<Command> {
+    None
+}
+
+fn path_tool(name: &str) -> Option<Command> {
+    which_on_path(name).then(|| Command::new(name))
+}
 
 /// MSVC link path. Drives
 /// `lld-link` (cross-platform) or `link.exe` (Windows Build Tools)
@@ -28,14 +74,11 @@ use super::target::TargetSpec;
 /// `__imp___stdio_common_vsprintf` etc. that the UCRT headers emit when
 /// the host C runtime is the Universal CRT 14.0+).
 ///
-/// `link.exe` resolves system libs via the `LIB` environment variable
-/// (set by `vcvarsall.bat`). `lld-link` accepts `/LIBPATH:` flags;
-/// when neither LIB nor an explicit path is set, it falls back to
-/// system defaults which work on Windows hosts but fail on Unix
-/// hosts. This is fine because the staticlib build itself only
-/// succeeds when a Windows host or a complete cross-toolchain is
-/// present (otherwise we fail earlier in
-/// `build_runtime_helpers_staticlib`).
+/// `link.exe` resolves system libs through `LIB`, which
+/// [`TargetSpec::msvc_link_command`] sets from the Visual Studio install
+/// it found. `lld-link` on a Windows host finds the MSVC and Windows SDK
+/// libraries on its own; on a Unix host it needs them given through
+/// `LIB` (an `xwin`-style splat), or the link fails on `ucrt.lib`.
 pub(super) fn link_aot_binary_msvc(
     bytecode_obj: &Path,
     cmain_obj: &Path,
@@ -46,13 +89,12 @@ pub(super) fn link_aot_binary_msvc(
 ) -> Result<(), AotError> {
     let Some(mut cmd) = target.msvc_link_command() else {
         return Err(AotError::Link(format!(
-            "MSVC linker (lld-link / link.exe) not on PATH for target {} — \
-             install one of: (a) LLVM (`brew install llvm` on macOS; \
-             `apt install lld` on Linux) which ships `lld-link`, or \
-             (b) Visual Studio Build Tools 2022 (`link.exe`, Windows host \
-             only — invoke luna-aot from a Developer Command Prompt so \
-             `PATH` + `LIB` are set). Override with `LD=...` to point at \
-             a custom linker.",
+            "no MSVC linker found for target {} — on a Windows host, \
+             install Visual Studio or the Build Tools with the \"Desktop \
+             development with C++\" workload (`link.exe` is found without \
+             a Developer Command Prompt); on any host, LLVM's `lld-link` \
+             on PATH also works. Override with `LD=...` to point at a \
+             custom linker.",
             target.triple
         )));
     };
@@ -78,6 +120,9 @@ pub(super) fn link_aot_binary_msvc(
         }
     };
     cmd.arg(format!("/MACHINE:{machine}"));
+    // an incremental link pads sections for later patching, and the
+    // deploy walker reads `.lt_*` as packed arrays of entries
+    cmd.arg("/INCREMENTAL:NO");
     cmd.arg(format!("/OUT:{}", out_path.display()));
 
     // Object files first, then the staticlib. The MSVC linker is

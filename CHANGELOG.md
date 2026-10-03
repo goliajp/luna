@@ -289,7 +289,22 @@ optimization.
   on `error` or another library function, with no Lua function between)
   left no traceback for `take_error_traceback`; it now has one, whose only
   level is that native.
-
+- `luna-aot compile` on a Windows host with the MSVC Rust toolchain
+  failed with "MSVC C compiler not on PATH" unless it was started from a
+  Developer Command Prompt. It now finds `cl.exe` and `link.exe` in the
+  newest Visual Studio or Build Tools install and sets the `INCLUDE`,
+  `LIB` and `PATH` they need itself, as the `cc` crate does. Looking up
+  `clang-cl` and `lld-link` on `PATH` also missed the `.exe` names on
+  Windows, and the linker lookup could take a coreutils `link` (Git for
+  Windows, or `/usr/bin/link` on Unix) for the MSVC linker; a bare
+  `link` is no longer considered. A host build of luna-aot for MinGW
+  links with `gcc`, which MinGW ships, instead of `cc`; a MinGW target
+  on a Windows host falls back to `gcc` when
+  `x86_64-w64-mingw32-gcc` is not on `PATH`.
+- For a Windows target, `luna-aot compile` writes `<out>.exe` when the
+  output path has no extension, for MSVC as MinGW's gcc already did, and
+  compiles the C entry with `/MD` so it uses the same C runtime as the
+  Rust staticlib.
 - A binary built with `luna-aot compile --dialect 5.1` (or 5.2, 5.3, 5.4,
   `macrolua`) ran its script on a Lua 5.5 `Vm`. A 5.3 or 5.4 binary
   stopped at startup with "PUC bytecode loading is disabled"; a 5.1 or
