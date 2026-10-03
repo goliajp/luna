@@ -199,6 +199,8 @@ impl Value {
     #[inline(always)]
     pub unsafe fn as_int_unchecked(self) -> i64 {
         debug_assert_eq!(self.tag_byte(), tag::INT);
+        // SAFETY: the caller's contract: `self` is a `Value::Int`, whose
+        // payload is the `i64` at offset 8 (`#[repr(C, u8)]`)
         unsafe {
             let payload_ptr = (&self as *const Value as *const u8).add(8) as *const i64;
             *payload_ptr

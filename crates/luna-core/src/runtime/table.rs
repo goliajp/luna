@@ -163,6 +163,7 @@ pub struct Table {
 // lifetime. No thread-unsafety concern: tables are accessed only
 // through the Vm, single-threaded.
 unsafe impl Send for Table {}
+// SAFETY: as for `Send`
 unsafe impl Sync for Table {}
 
 // the sweep and the mark walk every table; keep it within a 96-byte
@@ -173,11 +174,7 @@ const _: () = assert!(std::mem::size_of::<Table>() == 88);
 impl Drop for Table {
     fn drop(&mut self) {
         drop(self.take_hash_part());
-        if self.asize > INLINE_ASIZE {
-            // SAFETY: an array part larger than the inline storage lives in
-            // a slab from `alloc_slab(asize)`, owned by this table
-            unsafe { Self::free_slab(self.array_ptr, self.asize as usize) };
-        }
+        self.free_array_slab();
     }
 }
 
@@ -208,10 +205,15 @@ impl Table {
         self.hdr.aux
     }
 
-    /// Record that the metamethod behind `bit` is absent.
+    /// Record that the metamethod behind `bit` is absent from `mt`. A
+    /// lookup that finds nothing records it while it holds no reference
+    /// into the table, so it takes the handle rather than `&mut self`.
     #[inline(always)]
-    pub(crate) fn note_absent_mm(&mut self, bit: u32) {
-        self.hdr.aux |= bit;
+    pub(crate) fn note_absent_mm(mt: Gc<Table>, bit: u32) {
+        // SAFETY: a `Gc` handle points at a live object (see `Gc`); the
+        // runtime is single-threaded, and no reference into `mt` is used
+        // after this write
+        unsafe { mt.as_mut() }.hdr.aux |= bit;
     }
 
     /// This table's metatable, if any.
@@ -266,16 +268,16 @@ impl Table {
     #[inline]
     pub(crate) fn aset(&mut self, idx: usize, v: Value) {
         let (t, b) = v.unpack();
-        // SAFETY: see `aget`. callers (`set_norm`, `set_int`) gate on
-        // `idx < self.asize()`. The two `*_mut` calls each take a
-        // distinct `&mut self` borrow whose lifetime ends at the
-        // statement boundary, so they don't overlap.
-        // SAFETY: as above, `idx < self.asize()`.
-        let old = unsafe { *self.atags().get_unchecked(idx) };
-        unsafe {
+        // SAFETY: callers (`set_norm`, `set_int`) gate on
+        // `idx < self.asize()`, and both slices are `asize` long. The two
+        // `*_mut` calls each take a distinct `&mut self` borrow whose
+        // lifetime ends at the statement boundary, so they don't overlap.
+        let old = unsafe {
+            let old = *self.atags().get_unchecked(idx);
             *self.atags_mut().get_unchecked_mut(idx) = t;
             *self.avals_mut().get_unchecked_mut(idx) = b;
-        }
+            old
+        };
         self.note_atag_change(idx, old, t);
     }
 }

@@ -77,9 +77,8 @@ impl Value {
     ///
     /// # Safety
     /// As for `pack`, and `dst` is writable.
-    #[doc(hidden)]
     #[inline(always)]
-    pub unsafe fn pack_into(dst: *mut Value, tag: u8, v: RawVal) {
+    pub(crate) unsafe fn pack_into(dst: *mut Value, tag: u8, v: RawVal) {
         debug_assert!(tag <= raw::LIGHTUSERDATA, "bad raw value tag");
         // SAFETY: the tag is a valid `Value` tag (the array tag, or one
         // less from `Int` up), and the payload is the one `unpack` took

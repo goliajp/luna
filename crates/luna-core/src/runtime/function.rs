@@ -394,6 +394,7 @@ pub struct LuaClosure {
 // owns (its own inline_storage or its overflow allocation). The closure is
 // heap-allocated and never moves post-adoption.
 unsafe impl Send for LuaClosure {}
+// SAFETY: as for `Send`
 unsafe impl Sync for LuaClosure {}
 
 /// A native (host) function with captured upvalues — the analogue of PUC C

@@ -262,8 +262,7 @@ impl Vm {
         }
         let v = mt.get_str(self.mm_names[mm as usize]);
         if v.is_nil() {
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            unsafe { mt.as_mut() }.note_absent_mm(bit);
+            Table::note_absent_mm(mt, bit);
         }
         v
     }

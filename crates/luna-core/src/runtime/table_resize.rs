@@ -119,10 +119,10 @@ impl Table {
                 old_slab = self.array_ptr;
             }
         } else if old_asize > 0 {
+            let avals_base = self.array_base() as *const RawVal;
             // SAFETY: `array_ptr` was set up by `Heap::new_table` or
             // an earlier `resize`; it covers `old_asize * 9` bytes
             // (avals + atags).
-            let avals_base = self.array_base() as *const RawVal;
             let atags_base = unsafe { self.array_base().add(old_asize * 8) as *const u8 };
             for i in 0..old_asize {
                 // SAFETY: `i < array_len` is enforced by the surrounding loop bound; `atags_base` / `avals_base` point into the table's parallel arrays allocated in lockstep by `init_array_ptr`.

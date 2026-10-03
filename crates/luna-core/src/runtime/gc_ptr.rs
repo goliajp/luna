@@ -32,8 +32,8 @@ impl<T> Gc<T> {
     /// `p` is not null.
     #[inline(always)]
     pub(crate) unsafe fn from_ptr_unchecked(p: *mut T) -> Gc<T> {
-        // SAFETY: the caller's contract
         Gc {
+            // SAFETY: the caller's contract
             ptr: unsafe { NonNull::new_unchecked(p) },
         }
     }

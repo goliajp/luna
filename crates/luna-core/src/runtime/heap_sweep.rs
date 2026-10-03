@@ -82,6 +82,12 @@ impl Heap {
         }
     }
 
+    /// Free the object behind `h` and take its bytes off the count. The
+    /// caller unlinks it (or drops the whole list) itself.
+    ///
+    /// # Safety
+    /// `h` heads a live object of this heap; the caller has read what it
+    /// needs from it (its `next` link) and nothing uses it afterwards.
     pub(super) unsafe fn free_obj(&mut self, h: *mut GcHeader) {
         #[cfg(feature = "gc-verify")]
         {
