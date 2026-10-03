@@ -67,6 +67,7 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             &mut lw.bcx,
             &chain_for_helper,
             chain_ptr,
+            site_idx,
             opts.aot,
             &mut lw.defined_aot_data,
         );

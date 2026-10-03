@@ -325,3 +325,68 @@ fn dropping_a_vm_unmaps_its_code_pages() {
         "{grown} bytes still mapped executable after {N} Vms were dropped"
     );
 }
+
+/// Runs `SRC` on a fresh Vm of `engine`; returns (traces it installed
+/// from the engine, traces dispatched).
+fn engine_vm(engine: &luna_jit::Engine) -> (u64, u64) {
+    let mut vm = engine.new_vm(luna_jit::LuaVersion::Lua54);
+    vm.jit.trace_hot_threshold = 2;
+    vm.jit.call_hot_threshold = 2;
+    vm.eval(SRC).expect("eval");
+    (vm.trace_adopted_count(), vm.trace_dispatched_count())
+}
+
+/// Vms that install an engine's traces copy the code into their own
+/// memory: dropping them frees it, and the engine holds the same bytes
+/// however many Vms took its traces.
+#[test]
+fn vms_of_an_engine_free_the_code_they_installed() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = luna_jit::Engine::new();
+    for _ in 0..5 {
+        engine_vm(&engine);
+    }
+    let (held, traces) = (engine.bytes(), engine.trace_count());
+    let before = LIVE.load(Ordering::Relaxed);
+    let (mut adopted, mut dispatched) = (0, 0);
+    const N: usize = 200;
+    for _ in 0..N {
+        let (a, d) = engine_vm(&engine);
+        adopted += a;
+        dispatched += d;
+    }
+    let grown = LIVE.load(Ordering::Relaxed) - before;
+    assert!(adopted >= N as u64, "the Vms installed {adopted} traces");
+    assert!(dispatched > 0, "no trace was dispatched");
+    assert_eq!(
+        (engine.bytes(), engine.trace_count()),
+        (held, traces),
+        "the engine grew"
+    );
+    assert!(
+        grown < 64 * 1024,
+        "{grown} bytes still live after {N} Vms were dropped"
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn vms_of_an_engine_unmap_the_code_they_installed() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = luna_jit::Engine::new();
+    for _ in 0..5 {
+        engine_vm(&engine);
+    }
+    let before = executable_bytes();
+    let mut adopted = 0;
+    const N: usize = 200;
+    for _ in 0..N {
+        adopted += engine_vm(&engine).0;
+    }
+    let grown = executable_bytes() as isize - before as isize;
+    assert!(adopted >= N as u64, "the Vms installed {adopted} traces");
+    assert!(
+        grown < 64 * 1024,
+        "{grown} bytes still mapped executable after {N} Vms were dropped"
+    );
+}

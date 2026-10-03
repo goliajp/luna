@@ -56,6 +56,11 @@ impl<M: Masm> Gen<'_, M> {
                 self.m.mov_imm(d, n);
                 self.commit(i.dst, d);
             }
+            Op::Reloc(n) => {
+                let d = self.dst(i.dst, 0);
+                self.m.mov_reloc(d, self.lir.relocs[n as usize].1, n);
+                self.commit(i.dst, d);
+            }
             Op::Fconst(b) => {
                 self.m.mov_imm(M::SCRATCH[0], b as i64);
                 let d = self.fdst(i.dst, 0);
@@ -159,7 +164,7 @@ impl<M: Masm> Gen<'_, M> {
                 self.jump(i.a, &args, next);
             }
             Op::Brif(n_then) => self.brif(&i, n_then, next),
-            Op::TierCount { cell, at } => self.tier_count(cell, at, i.b, i.c, next),
+            Op::TierCount { n, at } => self.tier_count(n, at, i.b, i.c, next),
             Op::Call | Op::CallIndirect => {
                 let lir = self.lir;
                 let (f, addr) = match i.op {

@@ -61,6 +61,7 @@ mod settings;
 mod slow_ops;
 mod state;
 mod strings;
+mod trace_adopt;
 mod trace_cache;
 mod trace_close;
 mod trace_dispatch;
@@ -70,6 +71,7 @@ mod trace_record;
 mod trace_record_slots;
 mod trace_start;
 mod trace_stats;
+mod trace_wire;
 mod unwind;
 use coro_resume::*;
 pub use hooks::{

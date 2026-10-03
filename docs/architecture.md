@@ -246,6 +246,24 @@ Key properties:
   more than one result, passes a variable number of arguments or enters
   a vararg function ends the trace instead.
 
+- **Vms can share compiled code.** The Vms an embedder builds through
+  one `luna_jit::Engine` hand the traces and method-JIT functions they
+  compile to it. Where another of them would record a trace (or compile
+  a function) for code of the same content, it installs the shared one
+  instead: it copies the machine code into its own code memory and writes
+  its own addresses over the few places that hold the first Vm's (string
+  keys and constants, the prototypes inlined calls are checked against,
+  the frame chains side exits rebuild, the baseline tier's iteration
+  count). The cache is keyed by a hash of the function's content and
+  confirmed by comparing the content byte for byte; the dialect and the
+  trace settings must match too. Functions an inlined call reaches are
+  found by content among the chunks the Vm loaded. Each Vm still owns
+  and frees the code it runs; the engine holds only bytes and the data
+  to rebuild a `CompiledTrace`, and is `Send + Sync`. The Vms of an
+  engine hash strings with the engine's seed, so that tables built the
+  same way place their keys in the same hash slots the shared traces
+  read.
+
 - **Side traces** (compiled paths from frequently-taken side exits)
   attach back into the parent trace's exit table at runtime. This keeps
   branchy code from re-entering the interpreter just because a less-common
@@ -372,6 +390,10 @@ Embedders wanting concurrency spawn one `Vm` per OS thread (or per
 single-thread Tokio worker) and exchange data through channels. Async
 embedders use `tokio::main(flavor = "current_thread")` or wrap the `Vm`
 in a `LocalSet` under a multi-thread runtime.
+
+Vms on different threads can share compiled code through one
+`luna_jit::Engine` (it is `Send + Sync`); each Vm still runs only its
+own copy of that code.
 
 Since v1.3 an opt-in `send` feature on `luna-core` and `luna-jit`
 adds `SendVm`, a wrapper that is `Send` and can move between threads

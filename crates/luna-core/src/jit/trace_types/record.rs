@@ -213,6 +213,11 @@ pub struct FieldIcSnapshot {
 pub struct TraceRecord {
     /// The PC the trace starts at (back-edge target).
     pub head_proto: Gc<Proto>,
+    /// The recording Vm's switches that shape what is recorded (bit 0:
+    /// field inline cache, bit 1: self-link): traces recorded under other
+    /// switches are not shared.
+    #[doc(hidden)]
+    pub settings: u8,
     /// Pc within `head_proto` where the trace begins (the back-edge target).
     pub head_pc: u32,
     /// Per-register `Value` tag (from `runtime::value::raw`) at
@@ -362,6 +367,7 @@ impl TraceRecord {
     ) -> Self {
         TraceRecord {
             head_proto: proto,
+            settings: 0,
             head_pc,
             entry_tags,
             ops: Vec::with_capacity(MAX_TRACE_LEN),
@@ -402,6 +408,7 @@ impl TraceRecord {
     ) -> Self {
         TraceRecord {
             head_proto: proto,
+            settings: 0,
             head_pc,
             entry_tags,
             ops: Vec::with_capacity(MAX_TRACE_LEN),

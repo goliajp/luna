@@ -33,15 +33,23 @@ pub(super) fn note_size(ctx: &cranelift_codegen::Context) {
 
 /// Write the function at `ptr`, the one [`note_size`] last measured.
 pub(super) fn dump(kind: &str, head_pc: u32, ptr: *const u8) {
-    let Some(dir) = dir() else { return };
+    if dir().is_none() {
+        return;
+    }
     let len = LAST_SIZE.with(|s| s.replace(0));
+    dump_len(kind, head_pc, ptr, len);
+}
+
+/// Write the `len` bytes of code at `ptr`.
+pub(super) fn dump_len(kind: &str, head_pc: u32, ptr: *const u8, len: usize) {
+    let Some(dir) = dir() else { return };
     if len == 0 {
         return;
     }
     static N: AtomicU32 = AtomicU32::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
-    // SAFETY: `ptr` is a function the module just finalized, `len` bytes of
-    // readable code, and nothing writes them while they are copied
+    // SAFETY: `ptr` is code just finalized or placed, `len` bytes of
+    // readable memory, and nothing writes them while they are copied
     let code = unsafe { std::slice::from_raw_parts(ptr, len) };
     let _ = std::fs::write(dir.join(format!("clif-{n}.bin")), code);
     let a = ptr as usize;
