@@ -88,6 +88,7 @@ impl Vm {
         co: Gc<Coro>,
         args: Vec<Value>,
     ) -> Result<Vec<Value>, LuaError> {
+        self.host_before_resume(co);
         match co.status {
             CoroStatus::Suspended => {}
             CoroStatus::Dead => return Err(self.plain_err("cannot resume dead coroutine")),
@@ -157,7 +158,7 @@ impl Vm {
         let (outcome, status) = if let Some(death) = self.terminating.take() {
             // the coroutine closed itself: it dies now, cleanly or with the
             // error a `__close` handler raised.
-            match death {
+            let r = match death {
                 Some(e) => {
                     // SAFETY: `co` is still `self.current`, a root, and the coroutine's frames have all unwound; the borrow covers one field store
                     unsafe { co.as_mut() }.error_value = Some(e);
@@ -165,7 +166,9 @@ impl Vm {
                     (Err(LuaError(e)), CoroStatus::Dead)
                 }
                 None => (Ok(Vec::new()), CoroStatus::Dead),
-            }
+            };
+            self.host_thread_reset(co);
+            r
         } else {
             match self.yielding.take() {
                 Some((vals, fslot, nres)) => {

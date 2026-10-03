@@ -33,6 +33,11 @@ pub struct HostContHooks {
     /// Continuation `token` of `thread` will never run: an error left its C
     /// function.
     pub discard: fn(&mut Vm, Gc<Coro>, u32),
+    /// A thread the C API has seen is about to be resumed.
+    pub resuming: fn(&mut Vm, Gc<Coro>),
+    /// A thread the C API has seen was closed: its C frames and C stack
+    /// go.
+    pub reset: fn(&mut Vm, Gc<Coro>),
 }
 
 /// A warning function that replaces the default one (PUC `lua_setwarnf`):
