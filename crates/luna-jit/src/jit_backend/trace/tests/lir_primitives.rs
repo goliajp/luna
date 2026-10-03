@@ -90,10 +90,10 @@ fn cranelift(case: &Case) -> (JITModule, *const u8) {
 fn baseline(case: &Case, arena: &mut CodeArena) -> (*const u8, JITModule, *const u8) {
     let mut l = Lir::new();
     build(&mut l, case);
-    let code = lir::assemble(&l, arena)
+    let (code, _) = lir::assemble(&l, arena, false)
         .unwrap_or_else(|why| panic!("{case:?}: the baseline tier refused it: {why}"));
     let mut module = build_trace_jit_module().expect("trace module");
-    let id = lir::define_clif(&l, &mut module).expect("replay");
+    let id = lir::define_clif(&l, &l.relocs, &mut module).expect("replay");
     module.finalize_definitions().expect("finalize");
     let f = module.get_finalized_function(id);
     (code, module, f)

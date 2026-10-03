@@ -24,7 +24,7 @@ optimization.
 ### Breaking
 
 - `luna_core::jit::trace::ExitTag` has a `Bool` variant and `TraceRecord`
-  the `index_slots` and `index_key` fields; the frame-materialise helper
+  the `index_slots`, `index_key` and `settings` fields; the frame-materialise helper
   `luna_jit_trace_materialize_frames` takes a third argument, the
   closure of each frame. Code that builds these types by hand or matches
   `ExitTag` exhaustively has to name the new parts.
@@ -234,6 +234,11 @@ optimization.
 
 ### Fixed
 
+- The table-field inline cache of a trace compiled ahead of time compared
+  the cached node's key with the address the key had in the process that
+  compiled it, so it never hit; it now reads the key from the slot the
+  deploy side fills, like the trace's other string keys.
+
 - A trace whose entry reads a register holding a boolean could never be
   entered, yet it was compiled and kept its loop or function head, so no
   trace ever ran there. Booleans now enter traces (see Changed); a
@@ -272,6 +277,17 @@ optimization.
   code are created and dropped.
 
 ### Added
+
+- `luna_jit::Engine`: VMs built through one engine (`engine.new_vm`,
+  `engine.new_minimal_vm`, `Lua::with_engine`) share the traces and
+  method-JIT functions they compile. A VM reaching code of the same
+  content installs the compiled code another VM produced instead of
+  recording and compiling it: a fresh VM running the token-bucket
+  benchmark compiles nothing. The engine is `Send + Sync`; code is shared
+  only between VMs of one dialect and the same trace settings, and each
+  VM copies what it installs into its own code memory. New:
+  `Vm::new_minimal_with_hash_seed`, `Heap::with_seed`, `Heap::seed`,
+  `Vm::trace_adopted_count`, `luna_jit::jit::chunk_adopted_count`.
 
 - `luna_aot::embed::compile_and_link_with` and `AotOptions`: the same
   build as `compile_and_link`, with the harvest diagnostics switched on by

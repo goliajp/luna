@@ -60,6 +60,12 @@ impl Lua {
         Lua(crate::new_minimal_with_jit(v))
     }
 
+    /// A VM of dialect `v` that shares compiled code with the other VMs
+    /// of `engine` (see [`crate::Engine`]).
+    pub fn with_engine(engine: &crate::Engine, v: LuaVersion) -> Lua {
+        Lua(engine.new_minimal_vm(v))
+    }
+
     /// Sandbox-mode builder — same as [`Vm::sandbox`] but doesn't
     /// install JIT by default. `.build_lua()` finalizes to a `Lua`
     /// wrapping the sandboxed `Vm`.
