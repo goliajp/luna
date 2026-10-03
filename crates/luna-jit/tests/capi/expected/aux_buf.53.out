@@ -1,0 +1,35 @@
+small init: rel top=0
+small added: rel top=0
+small addvalue: rel top=0
+small: top=1 len=8 head=abcd\0e42 tail=cd\0e42
+small: status=0: top=0
+big after 1: rel top=1
+big after 2: rel top=1
+big chars: rel top=1
+big addvalue: rel top=1
+big: top=1 len=301000 head=abcdefghijkl tail=yzabcd
+big: status=0: top=0
+bigvalue: rel top=1
+bigvalue: top=1 len=100010 head=head:abcdefg tail=d:tail
+bigvalue: status=0: top=0
+chars: top=1 len=100000 head=012345678901 tail=456789
+chars: status=0: top=0
+empty: top=1 len=0 head= tail=
+empty: status=0: top=0
+prep: rel top=1
+prep: top=1 len=100008 head=preparedqqqq tail=qqqqqq
+prep: status=0: top=0
+initsize small: rel top=0
+initsize small: top=1 len=10 head=0123456789 tail=456789
+initsize big: rel top=1
+initsize big: top=1 len=100000 head=wwwwwwwwwwww tail=wwwwww
+initsize: status=0: top=0
+error: status=2: top=1 [error with buffer]
+big after 1: rel top=1
+big after 2: rel top=1
+big chars: rel top=1
+big addvalue: rel top=1
+big: top=1 len=301000 head=abcdefghijkl tail=yzabcd
+host big: top=2
+collected
+top at end=0

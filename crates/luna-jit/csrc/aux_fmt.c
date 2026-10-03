@@ -87,7 +87,7 @@ LUNA_HIDDEN const char *luna_c_lua_pushvfstring(lua_State *L, const char *fmt,
           int l = snprintf(buff, sizeof(buff), "<\\%d>", (int)c);
           fb_add(&fb, buff, (size_t)l);
         }
-        else
+        else if (v != 501 || c != 0)
           fb_add(&fb, (const char *)&c, 1);
         break;
       }

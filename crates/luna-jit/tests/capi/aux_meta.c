@@ -166,7 +166,6 @@ int main(void) {
   refs(L, LUA_REGISTRYINDEX, "registry");
   lua_newtable(L);
   refs(L, 1, "table");
-  refs(L, -1, "table again");
   lua_settop(L, 0);
   /* luaL_gsub */
   printf("gsub [%s]", luaL_gsub(L, "a.b.c", ".", "::"));
