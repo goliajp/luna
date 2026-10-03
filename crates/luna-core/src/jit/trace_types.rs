@@ -114,6 +114,20 @@ pub struct CompileOptions {
     pub tier_up_at: u32,
 }
 
+/// Whether a register holding a value of `tag` (a `raw` tag) can enter a
+/// trace that reads it: only a tag whose payload stands for the value.
+pub fn entry_tag_enterable(tag: u8) -> bool {
+    use crate::runtime::value::raw;
+    const PAYLOAD_TAGS: u32 = 1 << raw::INT
+        | 1 << raw::FLOAT
+        | 1 << raw::TABLE
+        | 1 << raw::CLOSURE
+        | 1 << raw::NATIVE
+        | 1 << raw::STR
+        | 1 << raw::NIL;
+    PAYLOAD_TAGS >> tag & 1 != 0
+}
+
 /// Default for [`CompileOptions::tier_up_at`].
 pub const TIER_UP_THRESHOLD: u32 = 16384;
 

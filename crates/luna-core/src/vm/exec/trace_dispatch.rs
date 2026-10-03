@@ -225,15 +225,6 @@ impl Vm {
         checked_only: bool,
     ) -> bool {
         use crate::jit::trace::ENTRY_TAG_ANY;
-        use crate::runtime::value::raw;
-        // the tags whose payload stands for the value
-        const PAYLOAD_TAGS: u32 = 1 << raw::INT
-            | 1 << raw::FLOAT
-            | 1 << raw::TABLE
-            | 1 << raw::CLOSURE
-            | 1 << raw::NATIVE
-            | 1 << raw::STR
-            | 1 << raw::NIL;
         let frame = &self.stack[base_us..base_us + max_stack];
         let regs = &mut reg_state[..max_stack];
         let tags = &mut entry_tags[..max_stack];
@@ -256,9 +247,9 @@ impl Vm {
             // The trace's IR is specialised to the compile-time entry
             // tags: on another, body ops would misread the raw bits (a Str
             // pointer as an Int payload). The interpreter runs this entry;
-            // the trace stays for later ones. The payload of anything but
-            // `PAYLOAD_TAGS` cannot stand for the value.
-            if tag != want || PAYLOAD_TAGS >> tag & 1 == 0 {
+            // the trace stays for later ones. The payload of anything else
+            // cannot stand for the value.
+            if tag != want || !crate::jit::trace::entry_tag_enterable(tag) {
                 return false;
             }
             tags[i] = tag;

@@ -232,7 +232,17 @@ impl Vm {
                 }
                 None => {
                     self.jit.counters.compile_failed += 1;
-                    note_trace_compile_failure(head_proto, closed_record.head_pc);
+                    if self.jit.trace_compiler.last_compile_checkpoint()
+                        == "bail:entry-tag-never-entered"
+                    {
+                        note_trace_never_entered(
+                            head_proto,
+                            closed_record.head_pc,
+                            &closed_record.entry_tags,
+                        );
+                    } else {
+                        note_trace_compile_failure(head_proto, closed_record.head_pc);
+                    }
                     self.jit
                         .counters
                         .compile_failed_reasons
