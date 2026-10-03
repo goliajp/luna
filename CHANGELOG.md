@@ -285,6 +285,20 @@ optimization.
   PUC. In 5.3, a zero step with a NaN or `-math.huge` limit now starts
   the index at 0, as PUC's `forlimit` does.
 
+- Wrong values from the trace JIT when a loop keeps a table it builds in
+  an iteration (affects 1.3.0 through 4.0.1, on 5.4 and 5.5): after
+  `last = t` or `prev = {n = i}` in a numeric `for`, the variable held
+  the table of the iteration the trace was recorded on once the loop
+  ended (`last.n` was 66 instead of 400), and so did the next
+  iteration's read of it. A loop that left a trace early (`break`, a
+  failed guard) with a table holding only named fields live, or with a
+  table copied to a second local, gave that local a stale value too.
+  Such a table is now built for real: when a variable outside the loop
+  holds it at the end of the iteration, when an operation the trace
+  does not track reads it (`t and t[1]`, `m[t] = v`), and, at an early
+  exit, in every register that holds it. AOT binaries built from the
+  same traces had the same fault.
+
 - An error raised by a native the host calls directly (`vm.call_value`
   on `error` or another library function, with no Lua function between)
   left no traceback for `take_error_traceback`; it now has one, whose only

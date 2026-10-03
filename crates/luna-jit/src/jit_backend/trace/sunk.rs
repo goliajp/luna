@@ -1,30 +1,17 @@
 use super::*;
 
-/// at a cmp side-exit emit point, materialise every
-/// live Sinkable site at `inline_depth = 0`. For each site:
-/// stack-allocate two parallel buffers (`cap × i64` raws + `cap × u8`
-/// kind tags), fill from virt slot Variables + `virt_kinds`, call
-/// the materialise helper, and `def_var` the returned heap table
-/// bits into `regs_full[site.a]` so the subsequent `store_back`
-/// lands the heap pointer in `reg_state[site.a]`. Returns the
-/// per-exit-tags snapshot (with materialised slots overridden to
-/// `RegKind::Table`) plus the number of sites materialised at this
-/// emit point.
+/// At an exit emit point (a cmp side exit or a failed guard),
+/// materialise every live Sinkable site (depth 0 and inlined frames)
+/// into a heap table: stack buffers for the array part (`cap` payloads
+/// and tags) and the hash part (keys, payloads, tags) are filled from
+/// the site's virtual slots and handed to the materialise helper. The
+/// table is written into every register bound to the site at this op,
+/// and `kinds_snapshot` marks those registers `RegKind::Table` so the
+/// dispatcher's restore repacks them.
 ///
-/// `inline_depth > 0` sites are demoted in pre-emit (the `has_inline_cmp`
-/// gate), so this function only walks depth-0 sites. Inline sinking
-/// is a follow-up (would extend `regs_full[off + site.a]` indexing
-/// for the inlined frame's window).
-/// at a cmp side-exit emit point,
-/// materialise every live Sinkable site (depth=0 AND depth>0) into
-/// the heap and update `kinds_snapshot` so the dispatcher's restore
-/// path repacks `RegKind::Table` for each materialised slot.
-///
-/// `kinds_snapshot` is updated in-place for each materialised
-/// site's slot — caller passes either a `max_stack`-sized snapshot
-/// (depth=0 cmp arm; bounds check skips depth>0 sites by index)
-/// or a window-sized snapshot (depth>0 cmp arm; depth>0 sites land
-/// inside the window).
+/// `kinds_snapshot` is either `max_stack`-sized (depth-0 exit; the
+/// bounds check skips registers of inlined frames) or window-sized
+/// (an exit inside an inlined frame).
 ///
 /// Returns the number of sites materialised at this emit point.
 pub(super) fn emit_materialize_live_sunk<E: Emit>(
@@ -48,17 +35,19 @@ pub(super) fn emit_materialize_live_sunk<E: Emit>(
     defined_aot_data: &mut std::collections::HashSet<DataId>,
 ) -> u32 {
     let mut count: u32 = 0;
-    let empty: &[u32] = &[];
-    let live: &[u32] = escape
+    let empty: &[LiveBinding] = &[];
+    let live: &[LiveBinding] = escape
         .live_at_op
         .get(cmp_op_idx)
         .map(|v| v.as_slice())
         .unwrap_or(empty);
-    for &sid32 in live {
-        let sid = sid32 as usize;
-        if sid >= escape.sites.len() {
+    let mut done: Vec<u32> = Vec::new();
+    for b in live {
+        let sid = b.site as usize;
+        if done.contains(&b.site) || sid >= escape.sites.len() {
             continue;
         }
+        done.push(b.site);
         let site = &escape.sites[sid];
         if site.state != EscapeState::Sinkable {
             continue;
@@ -70,20 +59,20 @@ pub(super) fn emit_materialize_live_sunk<E: Emit>(
             continue;
         };
         let cap = site.array_cap as usize;
-        if cap == 0 {
-            continue;
-        }
-        // Site address in the trace's register window: caller-frame
-        // address = site.a; inline-frame address = op_offsets[site.op_idx] + site.a.
+        // Every register holding the table at this op, in the trace's
+        // register window: a `Move` copies only the stale bits of a sunk
+        // table, so each copy needs the materialised one. The bindings
+        // of a site all sit in its own frame (offset of its NewTable).
+        // Registers past `kinds_snapshot` belong to an inlined frame the
+        // depth-0 caller's snapshot does not cover.
         let off = op_offsets[site.op_idx] as usize;
-        let reg_idx = off + site.a as usize;
-        if reg_idx >= regs_full.len() {
-            continue;
-        }
-        // Skip depth>0 sites when caller's snapshot is caller-window
-        // only (max_stack sized) — the kind plumbing for those is
-        // out of scope for the depth=0 cmp arm.
-        if reg_idx >= kinds_snapshot.len() {
+        let regs: Vec<usize> = live
+            .iter()
+            .filter(|l| l.site == b.site)
+            .map(|l| off + l.reg as usize)
+            .filter(|&r| r < regs_full.len() && r < kinds_snapshot.len())
+            .collect();
+        if regs.is_empty() {
             continue;
         }
         let n_hash = site.hash_keys.len();
@@ -188,8 +177,10 @@ pub(super) fn emit_materialize_live_sunk<E: Emit>(
             ],
         );
         let table_bits = bcx.inst_results(call)[0];
-        bcx.def_var(regs_full[reg_idx], table_bits);
-        kinds_snapshot[reg_idx] = RegKind::Table;
+        for r in regs {
+            bcx.def_var(regs_full[r], table_bits);
+            kinds_snapshot[r] = RegKind::Table;
+        }
         count += 1;
     }
     count
