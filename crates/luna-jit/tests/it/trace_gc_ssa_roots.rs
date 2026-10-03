@@ -185,3 +185,22 @@ fn metamethod_under_a_native_iterator_keeps_a_loop_carried_table() {
          return ok",
     );
 }
+
+/// A function the trace inlined builds the table and returns it: it lives
+/// only in the caller's register while the concat after the call runs.
+#[test]
+fn concat_keeps_a_table_an_inlined_call_returned() {
+    check(
+        CHAIN,
+        "local function link(prev, n) local t = {n = n} t.prev = prev return t end
+         local last = {n = 0}
+         local names = 0
+         for i = 1, 400 do
+           last = link(last, i)
+           local name = 'node' .. i
+           names = names + #name
+         end
+         if names <= 0 then error('no names') end
+         return CHECK_CHAIN(last, 400)",
+    );
+}
