@@ -39,7 +39,7 @@ path = "src/bin/luna_trace_inspect.rs"
 # to assert RSS drift < 1% + GC pause p99 < 10ms.
 [[bin]]
 name = "luna-soak"
-path = "src/bin/luna_soak.rs"
+path = "src/bin/luna_soak/main.rs"
 
 [lints]
 workspace = true
