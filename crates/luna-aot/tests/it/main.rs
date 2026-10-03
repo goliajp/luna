@@ -21,4 +21,5 @@ mod aot_trace_fires;
 mod aot_trace_gc_roots;
 mod aot_trace_lower_into_object;
 mod aot_windows_mingw_link;
+mod host_link;
 mod scaffold_smoke;

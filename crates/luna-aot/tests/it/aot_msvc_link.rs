@@ -14,24 +14,20 @@
 //!
 //! # Skip conditions
 //!
-//! - Host = Windows: redundant with the host-MSVC build path; this
-//!   test specifically covers the **cross-compile from Unix host**
-//!   leg.
+//! On a Windows host none: luna-aot finds `cl.exe` / `link.exe` in the
+//! Visual Studio install, and the produced binary is also run. On a
+//! Unix host (the cross-compile leg):
+//!
 //! - `rustup` target `x86_64-pc-windows-msvc` not installed.
-//! - Neither `lld-link` nor `link.exe` on PATH (no MSVC linker
-//!   available).
-//! - Neither `clang-cl` nor `cl.exe` on PATH (no MSVC C compiler
-//!   available).
-//! - Staticlib build fails with a known cross-toolchain-incomplete
-//!   marker (matches the marker set in `aot_cross_compile`).
+//! - `clang-cl` or `lld-link` not on PATH.
+//! - The link fails on a known cross-toolchain-incomplete marker
+//!   (`lld-link` without the Windows SDK / UCRT libraries).
 //!
 //! # E2E run-on-target?
 //!
-//! No. We don't attempt to execute the produced binary — that
-//! requires a Windows host or wine with MSVC runtime support
-//! (unreliable). The file-format + section-table verification is
-//! load-bearing because the deploy-side section walker keys off
-//! exactly those two facts (PE magic + section names).
+//! On a Windows host only. The file-format + section-table check is
+//! load-bearing everywhere because the deploy-side section walker
+//! keys off exactly those two facts (PE magic + section names).
 
 use std::path::Path;
 use std::process::Command;
@@ -81,48 +77,29 @@ fn read_pe_section_names(path: &Path) -> Vec<String> {
 }
 
 #[test]
-fn cross_compile_windows_msvc_emits_lt_meta_and_lt_skix_sections() {
-    if cfg!(target_os = "windows") {
-        eprintln!(
-            "aot_msvc_link: skip — Windows host runs the native MSVC \
-             path which is exercised by the host-target test matrix; \
-             this test is for the Unix-host cross-compile leg."
-        );
-        return;
-    }
+fn windows_msvc_binary_has_lt_meta_and_lt_skix_sections() {
     if !have_on_path("cargo") {
         eprintln!("aot_msvc_link: skip — cargo missing");
         return;
     }
 
     let triple = "x86_64-pc-windows-msvc";
-    if !rustup_has_target(triple) {
-        eprintln!(
-            "aot_msvc_link: skip — target {triple} not installed \
-             (run `rustup target add {triple}` to enable)"
-        );
-        return;
-    }
-
-    let has_cc = have_on_path("clang-cl") || have_on_path("cl.exe") || have_on_path("cl");
-    if !has_cc {
-        eprintln!(
-            "aot_msvc_link: skip — no MSVC C compiler on PATH. \
-             Install one of: (a) LLVM (`brew install llvm` on macOS; \
-             `apt install clang` on Linux) for `clang-cl`, or \
-             (b) Visual Studio Build Tools 2022 (`cl.exe`) on Windows."
-        );
-        return;
-    }
-    let has_link = have_on_path("lld-link") || have_on_path("link.exe") || have_on_path("link");
-    if !has_link {
-        eprintln!(
-            "aot_msvc_link: skip — no MSVC linker on PATH. \
-             Install one of: (a) LLVM (`brew install llvm` on macOS; \
-             `apt install lld` on Linux) for `lld-link`, or \
-             (b) Visual Studio Build Tools 2022 (`link.exe`) on Windows."
-        );
-        return;
+    let native = cfg!(all(windows, target_env = "msvc", target_arch = "x86_64"));
+    if !native {
+        if !rustup_has_target(triple) {
+            eprintln!(
+                "aot_msvc_link: skip — target {triple} not installed \
+                 (run `rustup target add {triple}` to enable)"
+            );
+            return;
+        }
+        if !have_on_path("clang-cl") || !have_on_path("lld-link") {
+            eprintln!(
+                "aot_msvc_link: skip — clang-cl / lld-link not on PATH \
+                 (`brew install llvm` on macOS, `apt install clang lld` on Linux)"
+            );
+            return;
+        }
     }
 
     // Sanity: parse the triple and confirm we're on the MSVC route
@@ -151,6 +128,7 @@ fn cross_compile_windows_msvc_emits_lt_meta_and_lt_skix_sections() {
         Err(e) => Some(format!("{e}")),
     };
     if let Some(msg) = link_err {
+        assert!(!native, "aot_msvc_link: native MSVC build failed:\n{msg}");
         // Mirror the skip-marker pattern used by `aot_cross_compile`
         // / `aot_windows_mingw_link`: missing rust-std, missing cross-cc,
         // or missing system libs (LIB env var unset → lld-link can't
@@ -200,36 +178,20 @@ fn cross_compile_windows_msvc_emits_lt_meta_and_lt_skix_sections() {
         "expected section `.lt_skix` in linked MSVC PE; found sections: [{names_dbg}]"
     );
 
+    if native {
+        let output = Command::new(&out_path).output().expect("run the MSVC binary");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "500500\n",
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.status.code(), Some(0));
+    }
+
     eprintln!(
         "aot_msvc_link: MSVC PE section table verified — found {} sections, \
          including `.lt_meta` and `.lt_skix`",
         names.len()
     );
 }
-
-// ────────────────────────────────────────────────────────────────────
-// Manual verification recipe (when CI doesn't have MSVC tooling):
-//
-// 1. On a macOS host:
-//      $ brew install llvm
-//      $ rustup target add x86_64-pc-windows-msvc
-//      $ export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
-//      $ cargo test -p luna-aot --test it -- aot_msvc_link::
-//    Expected: test runs (no skip), passes.
-//    Note: lld-link on Unix needs `/LIBPATH:` flags pointing at the
-//    Windows SDK + UCRT lib directories. Without those it'll fail
-//    with "could not open ucrt.lib" — skipped as a known incomplete
-//    cross-toolchain. To run the full link a `xwin`-style setup is
-//    needed; the test self-skips cleanly.
-//
-// 2. On a Windows host (Developer Command Prompt for VS 2022):
-//      > rustup target add x86_64-pc-windows-msvc
-//      > cargo test -p luna-aot --test it -- aot_msvc_link::
-//    Expected: test runs, passes, exe present in tempdir during
-//    test lifetime.
-//
-// 3. Verify section names via dumpbin (Windows) or llvm-readobj:
-//      > dumpbin /HEADERS loop_aot_msvc.exe | findstr lt_
-//      $ llvm-readobj --sections loop_aot_msvc.exe | grep lt_
-//    Expected: `.lt_meta` and `.lt_skix` present.
-// ────────────────────────────────────────────────────────────────────
