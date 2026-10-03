@@ -345,7 +345,7 @@ impl Vm {
     /// From 5.2 on, library functions are PUC light C functions, which are
     /// not collectable: luna keeps them off the swept list and frees them
     /// with the Vm, so a weak table never drops one. 5.1 collects them.
-    fn open_lib(&mut self, open: fn(&mut Vm)) {
+    pub(crate) fn open_lib(&mut self, open: fn(&mut Vm)) {
         self.heap.fix_natives = self.version >= LuaVersion::Lua52;
         open(self);
         self.heap.fix_natives = false;
