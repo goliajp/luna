@@ -130,7 +130,6 @@ impl Masm for X64 {
         self.sites.push(crate::jit_backend::trace::reloc::Site {
             at: self.code.len() as u32,
             n,
-            form: crate::jit_backend::trace::reloc::Form::Abs8,
         });
         self.code.extend_from_slice(&v.to_le_bytes());
     }

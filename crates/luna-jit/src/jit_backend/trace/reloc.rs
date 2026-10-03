@@ -4,40 +4,20 @@
 
 use super::*;
 
-/// Where relocation `n` sits in a function's code.
+/// Where relocation `n` sits in a function's code: eight little-endian
+/// bytes holding the address (Cranelift's `Abs8`, the immediate of an
+/// x86-64 `movabs`, an AArch64 literal-pool entry).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Site {
-    /// Byte offset of the first byte the address is written in.
     pub(crate) at: u32,
     /// Index into the trace's relocation list.
     pub(crate) n: u32,
-    pub(crate) form: Form,
-}
-
-/// How an address is encoded at a [`Site`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Form {
-    /// Eight little-endian bytes (Cranelift's `Abs8`, x86-64 `movabs`).
-    Abs8,
-    /// AArch64 `movz` and three `movk`, one 16-bit piece each.
-    MovzMovk,
 }
 
 /// Writes `v` at `site` of `code`.
 pub(crate) fn patch(code: &mut [u8], site: Site, v: i64) {
     let at = site.at as usize;
-    match site.form {
-        Form::Abs8 => code[at..at + 8].copy_from_slice(&v.to_le_bytes()),
-        Form::MovzMovk => {
-            for k in 0..4 {
-                let p = at + 4 * k;
-                let w = u32::from_le_bytes(code[p..p + 4].try_into().expect("four bytes"));
-                let piece = ((v as u64 >> (16 * k)) & 0xffff) as u32;
-                let w = (w & !(0xffff << 5)) | (piece << 5);
-                code[p..p + 4].copy_from_slice(&w.to_le_bytes());
-            }
-        }
-    }
+    code[at..at + 8].copy_from_slice(&v.to_le_bytes());
 }
 
 /// Machine code taken from a compiled trace: what another Vm copies.
@@ -139,11 +119,7 @@ pub(crate) fn note_sites<M: Module>(module: &M, ctx: &cranelift_codegen::Context
                 .as_deref()
                 .and_then(|s| s.strip_prefix("__luna_reloc_"))
                 .and_then(|s| s.parse::<u32>().ok())?;
-            sites.push(Site {
-                at: r.offset,
-                n,
-                form: Form::Abs8,
-            });
+            sites.push(Site { at: r.offset, n });
         }
         Some((cc.code_buffer().len(), sites))
     });
