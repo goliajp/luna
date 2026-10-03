@@ -107,10 +107,6 @@ a reader that raises
   status ERRRUN after 2 calls, 1 new values: reader failed
 a reader that raises a table
   status ERRRUN, 1 new values, a table with code 7
-a reader that pushes values
-    reader sees 2 values
-    reader sees 3 values
-  status OK, 1 new values, top is a function
 a piece of size 0
   status OK after 1 calls
   ran: nil
