@@ -103,9 +103,7 @@ impl LuaTable {
         // frees it, and the `&mut Table` lives only for this `set`, which
         // reaches no other reference to `t`
         unsafe { t.as_mut() }.set(&mut lua.0.heap, k, v)?;
-        lua.0
-            .heap
-            .barrier_back(t.as_ptr() as *mut luna_core::runtime::heap::GcHeader);
+        lua.0.heap.barrier_back(t);
         Ok(())
     }
 

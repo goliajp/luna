@@ -1,7 +1,7 @@
 //! Marking what a prototype or a function refers to.
 
 use super::{LuaClosure, NativeClosure, Proto};
-use crate::runtime::heap::{GcHeader, Marker};
+use crate::runtime::heap::Marker;
 
 impl Proto {
     pub(crate) fn trace(&self, m: &mut Marker) {
@@ -9,9 +9,9 @@ impl Proto {
             m.value(k);
         }
         for &p in self.protos.iter() {
-            m.header(p.as_ptr() as *mut GcHeader);
+            m.mark(p);
         }
-        m.header(self.source.as_ptr() as *mut GcHeader);
+        m.mark(self.source);
         // PUC `traverseproto`: the closure cache is a *weak* reference — if
         // the cached LClosure is unmarked at sweep time, clear the slot
         // instead of marking it. Queue self for the post-mark cleanup pass
@@ -28,9 +28,9 @@ impl LuaClosure {
     // kept inline in the drain loop, which visits every closure
     #[inline(always)]
     pub(crate) fn trace(&self, m: &mut Marker) {
-        m.header(self.proto.as_ptr() as *mut GcHeader);
+        m.mark(self.proto);
         for &uv in self.upvals().iter() {
-            m.header(uv.as_ptr() as *mut GcHeader);
+            m.mark(uv);
         }
     }
 }

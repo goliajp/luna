@@ -34,15 +34,18 @@ impl Heap {
             Box::into_raw(Box::new(Table::new(GcHeader::new(ObjTag::Table))))
         };
         // Link + bytes accounting (same as adopt path).
-        self.link(p as *mut GcHeader);
+        // SAFETY: `p` is a fresh box or a pool table reset above, linked nowhere yet
+        unsafe { self.link(p as *mut GcHeader) };
         self.bytes += std::mem::size_of::<Table>();
-        let g = Gc::from_ptr(p);
         // the Table is now at its final heap address; wire
         // `array_ptr` to point at the inline storage that lives inside
         // the boxed Table.
-        // SAFETY: `g` is the table linked just above; no other handle or reference to it exists yet
-        unsafe { g.as_mut() }.init_array_ptr();
-        g
+        // SAFETY: `p` is the table linked just above, which the heap now manages; no other handle or reference to it exists yet
+        unsafe {
+            let g = Gc::from_ptr(p);
+            g.as_mut().init_array_ptr();
+            g
+        }
     }
 
     /// Adopt an empty table and pre-allocate `asize`
@@ -249,7 +252,8 @@ impl Heap {
         if bytes.len() <= string::MAX_SHORT_LEN {
             let (p, is_new) = self.strings.intern(bytes, self.seed);
             if is_new {
-                self.link(p as *mut GcHeader);
+                // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
+                unsafe { self.link(p as *mut GcHeader) };
                 self.bytes += string::alloc_size(bytes.len());
             } else {
                 // PUC `luaS_new` resurrect guard (lstring.c).
@@ -274,12 +278,15 @@ impl Heap {
                     }
                 }
             }
-            Gc::from_ptr(p)
+            // SAFETY: `p` is an interned string the heap manages: new and linked above, or found in the table and kept from this cycle's sweep by the recoloring above
+            unsafe { Gc::from_ptr(p) }
         } else {
             let p = string::alloc_long(bytes, self.seed);
-            self.link(p as *mut GcHeader);
+            // SAFETY: `alloc_long` just allocated `p`, linked nowhere yet
+            unsafe { self.link(p as *mut GcHeader) };
             self.bytes += string::alloc_size(bytes.len());
-            Gc::from_ptr(p)
+            // SAFETY: `p` is the string linked just above
+            unsafe { Gc::from_ptr(p) }
         }
     }
 }

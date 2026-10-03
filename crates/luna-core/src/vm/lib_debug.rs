@@ -161,8 +161,7 @@ fn d_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         Value::Userdata(u) => {
             // SAFETY: `u` is the first argument, kept alive by its stack slot; the borrow covers one call
             unsafe { u.as_mut() }.set_metatable(m);
-            vm.heap
-                .barrier_back(u.as_ptr() as *mut crate::runtime::heap::GcHeader);
+            vm.heap.barrier_back(u);
         }
         // every other type shares one metatable per basic type
         _ => vm.set_type_metatable(v, m),
@@ -223,8 +222,7 @@ fn d_setuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     }
     // SAFETY: `u` came from a native argument, kept alive by its stack slot; the borrow covers one field store
     unsafe { u.as_mut() }.user_value = value;
-    vm.heap
-        .barrier_back(u.as_ptr() as *mut crate::runtime::heap::GcHeader);
+    vm.heap.barrier_back(u);
     Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
 }
 
@@ -322,8 +320,7 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             } else {
                 // SAFETY: `co` is a native argument (kept alive by its stack slot) and not the running thread, so nothing in the Vm refers into its saved state; the borrow covers one field store
                 unsafe { co.as_mut() }.globals = env_t;
-                vm.heap
-                    .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                vm.heap.barrier_back(co);
             }
         }
         // luna keeps no environment on natives or userdata; PUC's change

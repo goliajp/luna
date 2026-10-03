@@ -94,7 +94,7 @@ impl Heap {
             self.recently_freed.insert(h as usize);
             crate::runtime::gc_verify_probe::FREED.with(|f| f.borrow_mut().insert(h as usize));
         }
-        // SAFETY: the caller's contract: `h` heads an unlinked object of this heap that nothing uses afterwards; its tag names the type it was boxed as (`adopt`, `new_table`, `alloc_str`), so each arm frees it with the matching layout
+        // SAFETY: the caller's contract: `h` heads an unlinked object of this heap that nothing uses afterwards; its tag names the type it was boxed as (`adopt`, `new_table`, `alloc_str`), so each arm frees it with the matching layout; a short string stays in the string table's chains until removed here
         unsafe {
             match (*h).tag {
                 ObjTag::Table => {

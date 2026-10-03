@@ -46,8 +46,7 @@ impl Vm {
         // NativeClosure.upvals is traced as part of its Trace; a long-lived
         // stateful iterator closure (e.g. string.gmatch) sees many writes —
         // barrier_back once-and-done is cheaper than per-child forward.
-        self.heap
-            .barrier_back(nc.as_ptr() as *mut crate::runtime::heap::GcHeader);
+        self.heap.barrier_back(nc);
     }
 
     /// Read the i-th positional argument inside a `NativeFn` body

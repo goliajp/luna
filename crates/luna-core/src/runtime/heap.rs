@@ -96,9 +96,9 @@ fn is_black(flags: u8) -> bool {
 /// `pub(crate)` so other runtime modules (e.g. `Table::refs_contain_unmarked_coro`)
 /// can probe reachability without owning the bit constants. Equivalent to
 /// `isgray(o) || isblack(o)` in PUC.
-pub(crate) fn header_is_marked(h: *mut GcHeader) -> bool {
-    // SAFETY: the caller (`Table::refs_contain_unmarked_coro`, during the atomic step) passes the header of a coroutine stored in a table being marked; it is not freed before the sweep, and only the flag byte is read
-    unsafe { !is_white((*h).flags) }
+pub(crate) fn header_is_marked<T: GcObject>(g: Gc<T>) -> bool {
+    // SAFETY: `g` is a handle, so its object is allocated (a collect frees only after marking ends), and a `GcObject` starts with its header; only the flag byte is read
+    unsafe { !is_white((*g.header()).flags) }
 }
 
 impl GcHeader {
@@ -123,7 +123,7 @@ impl GcHeader {
 
 #[path = "gc_ptr.rs"]
 mod gc_ptr;
-pub use gc_ptr::Gc;
+pub use gc_ptr::{Gc, GcObject};
 
 /// Incremental GC phase.
 ///   * `Pause`     — no cycle in progress; all objects current-white.
@@ -278,9 +278,15 @@ impl Heap {
         }
     }
 
+    /// Put a new object on the all-objects list with its born color.
+    ///
+    /// # Safety
+    /// `h` is the header of an object the caller just allocated (a fresh box
+    /// or a recycled pool table) and has not linked anywhere yet, so this is
+    /// the only pointer to it.
     #[inline]
-    fn link(&mut self, h: *mut GcHeader) {
-        // SAFETY: `h` is the header of an object the caller just allocated (a fresh box or a recycled pool table) and has not linked anywhere yet, so this is the only pointer to it
+    unsafe fn link(&mut self, h: *mut GcHeader) {
+        // SAFETY: the caller's contract
         unsafe {
             (*h).next = self.all;
             // Born color depends on phase:
@@ -305,13 +311,16 @@ impl Heap {
     }
 
     /// Take ownership of a boxed object and put it under GC management.
-    /// SAFETY-by-convention: `T` must be `repr(C)` with a `GcHeader` first
-    /// field whose tag matches `T` (enforced by the typed constructors).
-    pub(crate) fn adopt<T>(&mut self, obj: Box<T>) -> Gc<T> {
+    /// The header's tag must match `T`; the typed constructors set it.
+    pub(crate) fn adopt<T: GcObject>(&mut self, obj: Box<T>) -> Gc<T> {
         let p = Box::into_raw(obj);
-        self.link(p as *mut GcHeader);
+        // SAFETY: `p` is the box just leaked, linked nowhere yet, and a
+        // `GcObject` starts with its header; once linked the heap owns the
+        // object until a collect finds it unreachable
+        unsafe { self.link(p as *mut GcHeader) };
         self.bytes += std::mem::size_of::<T>();
-        Gc::from_ptr(p)
+        // SAFETY: as above
+        unsafe { Gc::from_ptr(p) }
     }
 }
 

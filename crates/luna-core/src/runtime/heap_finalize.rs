@@ -47,14 +47,16 @@ impl Heap {
                     // SAFETY: `h` is the allocated header read above; only its
                     // flag byte is written
                     unsafe { (*h).flags |= DEFERRED };
-                    m.header(h);
+                    // SAFETY: `h` is the allocated header read above
+                    unsafe { m.header(h) };
                     continue;
                 }
                 // SAFETY: `h` is the allocated header read above; only its flag
                 // byte is written
                 unsafe { (*h).flags = ((*h).flags & !(FIN | DEFERRED)) | FINALIZED };
                 self.tobefnz.push(h);
-                m.header(h);
+                // SAFETY: `h` is the allocated header read above
+                unsafe { m.header(h) };
                 self.finalize.swap_remove(i);
             } else {
                 // SAFETY: `h` is the allocated header read above; only its flag
@@ -105,9 +107,11 @@ impl Heap {
         self.finalize
             .iter()
             .chain(self.tobefnz.iter())
-            // SAFETY: `finalize` and `tobefnz` hold headers of registered objects, and the sweep never frees a listed one: `separate_finalizables` marks every unreachable entry before it can be swept, and an entry leaves the lists only through `take_tobefnz`
-            .filter(|&&h| unsafe { (*h).tag } == ObjTag::Userdata)
-            .map(|&h| Gc::from_ptr(h as *mut crate::runtime::Userdata))
+            // SAFETY: `finalize` and `tobefnz` hold headers of registered objects, and the sweep never frees a listed one: `separate_finalizables` marks every unreachable entry before it can be swept, and an entry leaves the lists only through `take_tobefnz`; the tag says which entries are userdata
+            .filter_map(|&h| unsafe {
+                ((*h).tag == ObjTag::Userdata)
+                    .then(|| Gc::from_ptr(h as *mut crate::runtime::Userdata))
+            })
             .collect()
     }
 
@@ -123,7 +127,7 @@ impl Heap {
         use crate::runtime::Value;
         std::mem::take(&mut self.tobefnz)
             .into_iter()
-            // SAFETY: every `tobefnz` entry was marked by `separate_finalizables` (or `mark_all` re-marks it) and so is still allocated; it was registered as a table or a userdata, the two tags matched below
+            // SAFETY: every `tobefnz` entry was marked by `separate_finalizables` (or `mark_all` re-marks it) and so is still allocated; it was registered as a table or a userdata, the two tags matched below, and the caller roots the returned handles until the finalizers have run
             .map(|h| unsafe {
                 (*h).flags &= !FINALIZED;
                 match (*h).tag {

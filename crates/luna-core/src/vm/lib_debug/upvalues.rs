@@ -150,7 +150,6 @@ pub(super) fn d_upvaluejoin(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lua
     // SAFETY: `f1` is a Lua closure argument kept alive by its stack slot, and `check_upval` bounded `n1` by its upvalue count; `uv` is a separate handle read out before the borrow, which covers one store
     unsafe { f1.as_mut() }.upvals_mut()[(n1 - 1) as usize] = uv;
     // f1's upvalue slice just changed; re-gray it so the collector re-traces
-    vm.heap
-        .barrier_back(f1.as_ptr() as *mut crate::runtime::heap::GcHeader);
+    vm.heap.barrier_back(f1);
     Ok(0)
 }
