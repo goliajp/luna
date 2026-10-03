@@ -103,7 +103,7 @@ pub(crate) struct ThreadStack<'a> {
 }
 
 impl<'a> ThreadStack<'a> {
-    fn new(
+    pub(crate) fn new(
         v51: bool,
         frames: &'a [CallFrame],
         stack: &'a [Value],
@@ -185,7 +185,7 @@ impl<'a> ThreadStack<'a> {
 
     /// The stack slot of the function at level `i`, which bounds the
     /// temporaries of the level below it (PUC `ci->next->func`).
-    fn func_slot(&self, i: usize) -> Option<u32> {
+    pub(crate) fn func_slot(&self, i: usize) -> Option<u32> {
         Some(match self.levels[i] {
             DbgKind::Lua(fi) => self.lua(fi).func_slot,
             DbgKind::Tail => return None,

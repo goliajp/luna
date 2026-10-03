@@ -31,13 +31,23 @@ pub(super) enum Wait {
     },
     /// the resume of the coroutine `lua_yieldk` suspended
     Yield,
+    /// nothing: the protected call `lua_pcallk` made in a coroutine failed
+    /// before any yield, and, as in PUC, the C function is left and its
+    /// continuation runs with this error status
+    Recover { status: c_int },
 }
+
+/// The status a C wrapper throws to leave a C function whose continuation
+/// runs at once (`Wait::Recover`).
+pub(super) const LUNA_RECOVER: c_int = -2;
 
 /// A continuation a C function left behind (`lua_callk`, `lua_pcallk`,
 /// `lua_yieldk`).
 #[derive(Clone, Copy)]
 pub(super) struct Cont {
-    pub(super) k: KFn,
+    /// `None` for a `lua_yield` without one: the resume's values are then
+    /// the C function's results
+    pub(super) k: Option<KFn>,
     pub(super) ctx: isize,
     pub(super) wait: Wait,
 }
@@ -58,6 +68,9 @@ pub(super) struct CCall {
     pub(super) cont: Option<Cont>,
     /// 5.2 `lua_getctx`: the status its continuation was called with
     pub(super) k_status: c_int,
+    /// 5.2 `lua_getctx`: the context the last `lua_callk`, `lua_pcallk` or
+    /// `lua_yieldk` with a continuation gave
+    pub(super) k_ctx: isize,
 }
 
 /// A `lua_yield` the running C function made, acted on when it leaves.
@@ -68,12 +81,17 @@ pub(super) struct PendingYield {
     pub(super) ctx: isize,
 }
 
-/// A thread's C hook (`lua_sethook`).
-#[derive(Clone, Copy, Default)]
+/// A thread's C hook (`lua_sethook`) and its debug-interface bookkeeping.
+#[derive(Default)]
 pub(super) struct CHook {
+    /// the hook `lua_sethook` installed, with its mask and count as given
     pub(super) func: Option<LuaHook>,
     pub(super) mask: c_int,
     pub(super) count: c_int,
+    /// the C hook running on this thread now
+    pub(super) running: Option<super::hooks::HookRun>,
+    /// the strings `lua_getinfo` and `lua_getlocal` handed out
+    pub(super) strs: super::debug::CStrings,
 }
 
 // SAFETY: the declarations match the definitions in `csrc/shim_core.c`;
@@ -108,7 +126,7 @@ pub(super) fn with_c<R>(vm: &mut Vm, l: *mut LuaState, f: impl FnOnce() -> R) ->
 }
 
 /// The C stack of `co`.
-fn cstack<'a>(co: Gc<Coro>) -> &'a mut Vec<Value> {
+pub(super) fn cstack<'a>(co: Gc<Coro>) -> &'a mut Vec<Value> {
     // SAFETY: the thread is live while its state is; the C stack is only
     // reached through short-lived borrows like this one, none of which
     // overlaps a call that could reach C
@@ -116,7 +134,7 @@ fn cstack<'a>(co: Gc<Coro>) -> &'a mut Vec<Value> {
 }
 
 /// The state record behind `l`.
-fn st<'a>(l: *mut LuaState) -> &'a mut LuaState {
+pub(super) fn st<'a>(l: *mut LuaState) -> &'a mut LuaState {
     // SAFETY: `l` is a live thread of the state; the borrows made through
     // this end before any call that could reach C
     unsafe { &mut *l }
@@ -150,6 +168,7 @@ pub(super) fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, L
         nc,
         cont: None,
         k_status: LUA_OK,
+        k_ctx: 0,
     });
     s.base = base;
     let token = s.calls.len() - 1;
@@ -162,7 +181,7 @@ pub(super) fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, L
 
 /// Take C call `token` and everything above it off the thread: its values
 /// leave the C stack and the frame below becomes the current one.
-fn pop_call(l: *mut LuaState, co: Gc<Coro>, token: usize) {
+pub(super) fn pop_call(l: *mut LuaState, co: Gc<Coro>, token: usize) {
     let s = st(l);
     let Some(c) = s.calls.get(token) else {
         return;
@@ -170,7 +189,25 @@ fn pop_call(l: *mut LuaState, co: Gc<Coro>, token: usize) {
     let (base, outer) = (c.base, c.outer_base);
     s.calls.truncate(token);
     s.base = outer;
+    s.tbc.retain(|&i| i < base);
     cstack(co).truncate(base);
+}
+
+/// Close the to-be-closed slots of call `token`'s frame as it leaves,
+/// passing the error it leaves with (`None`: it returns); an error a
+/// `__close` raises replaces that.
+fn close_frame(
+    vm: &mut Vm,
+    l: *mut LuaState,
+    token: usize,
+    err: Option<Value>,
+) -> Result<(), LuaError> {
+    let base = st(l).calls[token].base;
+    if !st(l).tbc.last().is_some_and(|&i| i >= base) {
+        return Ok(());
+    }
+    let mut api = Api { vm, l };
+    super::tbc::close_with(&mut api, base, err)
 }
 
 /// The C function of call `token` came back from C with `status`: finish
@@ -188,6 +225,9 @@ fn leave(
         let c = &st(l).calls[token];
         (c.func_slot, c.nresults)
     };
+    if status == LUNA_RECOVER {
+        return run_cont(vm, l, co, token, Vec::new());
+    }
     if status == LUA_OK || status == LUA_YIELD {
         if let Some(py) = st(l).pending_yield.take() {
             return yield_from_c(vm, l, co, token, py);
@@ -210,17 +250,21 @@ fn leave(
             return Err(LuaError(s));
         }
         let results: Vec<Value> = cstack(co)[top - n..].to_vec();
+        let closed = close_frame(vm, l, token, None);
         pop_call(l, co, token);
         let _ = nresults;
+        closed?;
         return Ok(vm.nat_return(fs, &results));
     }
     let err = take_error(l);
+    let closed = close_frame(vm, l, token, Some(err));
     pop_call(l, co, token);
+    closed?;
     Err(LuaError(err))
 }
 
 /// The error object being thrown: the top of the thread that raised it.
-fn take_error(l: *mut LuaState) -> Value {
+pub(super) fn take_error(l: *mut LuaState) -> Value {
     // SAFETY: `l` is live, so is its global record
     let from = unsafe { std::mem::replace(&mut (*(*l).g).err_from, std::ptr::null_mut()) };
     let from = if from.is_null() { l } else { from };
@@ -228,7 +272,9 @@ fn take_error(l: *mut LuaState) -> Value {
 }
 
 /// The C function of call `token` yielded `py.n` values: suspend the
-/// coroutine, keeping the call for its continuation if it has one.
+/// coroutine. Its call stays until the resume, which runs its continuation
+/// or, without one, returns the resume's values from it; until then its
+/// frame stays on the C stack below the yielded values, as PUC keeps it.
 fn yield_from_c(
     vm: &mut Vm,
     l: *mut LuaState,
@@ -243,20 +289,16 @@ fn yield_from_c(
     let n = usize::try_from(py.n).unwrap_or(0);
     let from = cstack(co).len().saturating_sub(n).max(base);
     let vals = cstack(co).split_off(from);
-    match py.k {
-        Some(k) => {
-            st(l).calls[token].cont = Some(Cont {
-                k,
-                ctx: py.ctx,
-                wait: Wait::Yield,
-            });
-            Err(vm.host_yield(fs, nresults, vals, Some(token as u32)))
-        }
-        None => {
-            pop_call(l, co, token);
-            Err(vm.host_yield(fs, nresults, vals, None))
-        }
+    let c = &mut st(l).calls[token];
+    c.cont = Some(Cont {
+        k: py.k,
+        ctx: py.ctx,
+        wait: Wait::Yield,
+    });
+    if py.k.is_some() {
+        c.k_ctx = py.ctx;
     }
+    Err(vm.host_yield(fs, nresults, vals, Some(token as u32)))
 }
 
 /// Run the continuation of call `token` of thread `co`: its frame comes
@@ -273,12 +315,30 @@ fn cont_resume(
     let token = token as usize;
     let s = st(l);
     s.calls.truncate(token + 1);
-    let c = &mut s.calls[token];
-    let cont = c.cont.take().expect("a continuation to run");
-    let base = c.base;
-    s.base = base;
+    s.base = s.calls[token].base;
+    run_cont(vm, l, co, token, vals)
+}
+
+/// Call the continuation call `token` waits on, with `vals` as what it
+/// waited for, and leave the C function with what the continuation does.
+fn run_cont(
+    vm: &mut Vm,
+    l: *mut LuaState,
+    co: Gc<Coro>,
+    token: usize,
+    vals: Vec<Value>,
+) -> Result<u32, LuaError> {
+    let cont = st(l).calls[token]
+        .cont
+        .take()
+        .expect("a continuation to run");
     let status = match cont.wait {
         Wait::Yield => {
+            if cont.k.is_none() {
+                let fs = st(l).calls[token].func_slot;
+                pop_call(l, co, token);
+                return Ok(vm.nat_return(fs, &vals));
+            }
             cstack(co).extend_from_slice(&vals);
             LUA_YIELD
         }
@@ -291,11 +351,12 @@ fn cont_resume(
             at,
             errerr_before,
         } => pcall_outcome(vm, co, vals, nresults, at, errerr_before).unwrap_or(LUA_YIELD),
+        Wait::Recover { status } => status,
     };
     vm.heap.barrier_back(co);
     st(l).calls[token].k_status = status;
     let mut nret: c_int = 0;
-    let ret = match cont.k {
+    let ret = match cont.k.expect("a continuation function") {
         // SAFETY: `l` is a live thread and `k` the continuation the host
         // gave `lua_callk`/`lua_pcallk`/`lua_yieldk`
         KFn::K53(k) => with_c(vm, l, || unsafe {
@@ -354,4 +415,6 @@ fn cont_discard(vm: &mut Vm, co: Gc<Coro>, token: u32) {
 pub(super) const CONT_HOOKS: HostContHooks = HostContHooks {
     resume: cont_resume,
     discard: cont_discard,
+    resuming: super::threads::thread_resuming,
+    reset: super::threads::thread_reset,
 };

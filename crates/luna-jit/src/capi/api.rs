@@ -85,13 +85,16 @@ impl<'a> Api<'a> {
         version_num(self.vm.version())
     }
 
-    /// The thread's C stack.
+    /// The thread's C stack. (The lint takes `Coro::stack`, the thread's Lua
+    /// stack, for the field meant.)
+    #[allow(clippy::misnamed_getters)]
     pub(super) fn stack(&self) -> &Vec<Value> {
         // SAFETY: the thread is live while its state is, and the C stack is
         // written only through `stack_mut`, never while this borrow lives
         unsafe { &(*self.thread().as_ptr()).host_stack }
     }
 
+    #[allow(clippy::misnamed_getters)]
     pub(super) fn stack_mut(&mut self) -> &mut Vec<Value> {
         // SAFETY: as `stack`; the exclusive borrow of `self` keeps any other
         // access to the C stack through this call out
