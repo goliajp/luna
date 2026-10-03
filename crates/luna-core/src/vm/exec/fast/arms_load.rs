@@ -102,7 +102,7 @@ macro_rules! fast_load_arms {
                     next!()
                 }
                 save!();
-                $vm.index_op_miss($inst, $regs, $kptr, $fr)?;
+                index_op_miss!()?;
                 resume_same!()
             }};
         }
@@ -120,7 +120,7 @@ macro_rules! fast_load_arms {
                     next!()
                 }
                 save!();
-                $vm.index_op_miss($inst, $regs, $kptr, $fr)?;
+                index_op_miss!()?;
                 resume_same!()
             }};
         }
@@ -134,7 +134,7 @@ macro_rules! fast_load_arms {
                     next!()
                 }
                 save!();
-                $vm.newindex_op_miss($inst, $fr)?;
+                newindex_op_miss!()?;
                 resume_same!()
             }};
         }
@@ -153,7 +153,7 @@ macro_rules! fast_load_arms {
                     next!()
                 }
                 save!();
-                $vm.newindex_op_miss($inst, $fr)?;
+                newindex_op_miss!()?;
                 resume_same!()
             }};
         }
