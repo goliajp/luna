@@ -1,0 +1,26 @@
+stop 0
+  running: 0
+restart 0
+  running: 1
+collect 0
+count is positive: yes
+countb is below 1024: yes
+a basic step returns 0 or 1: yes
+basic steps finish a cycle: yes
+steps of 100 finish a cycle: yes
+steps run while stopped: yes
+  still stopped: 1
+setpause: previous 200, then 100, then 150, then 1000
+setstepmul: previous 200, then 10, then 0, then 401
+setmajorinc: previous 200, then 50
+gen 0, inc 0, gen 0, inc 0
+isrunning after the switches: 1
+options the dialect does not have
+  option -1: -1
+  option 12: -1
+  option 13: -1
+lua_gc inside a finalizer
+  in a finalizer: count >= 0, collect 0
+  after: count is positive: yes
+a full collection with a failing finalizer
+  pcall status 5: error in __gc metamethod (gc fail)

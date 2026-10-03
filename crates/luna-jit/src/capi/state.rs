@@ -63,6 +63,10 @@ pub struct LuaState {
     pub(super) hook: CHook,
     /// C stack indices of its to-be-closed slots, ascending
     pub(super) tbc: Vec<usize>,
+    /// after a yield from Lua code that a resume from C reported: where
+    /// the yielded values start on the C stack, and the base to put back
+    /// when the thread is resumed
+    pub(super) parked: Option<(usize, usize)>,
 }
 
 /// PUC `LUA_EXTRASPACE`: raw memory just below the `lua_State` pointer,
@@ -112,6 +116,7 @@ fn new_thread_state(g: *mut Global, co: Gc<Coro>, extra: [u8; EXTRASPACE]) -> *m
             pending_yield: None,
             hook: CHook::default(),
             tbc: Vec::new(),
+            parked: None,
         },
     }));
     // SAFETY: `co` is a live thread the caller holds and the Vm is not
@@ -123,8 +128,9 @@ fn new_thread_state(g: *mut Global, co: Gc<Coro>, extra: [u8; EXTRASPACE]) -> *m
 
 /// The `lua_State` of thread `co` of the state `vm` belongs to, made on
 /// first use with a copy of the main thread's extra space, as
-/// `lua_newthread` makes it.
-pub(super) fn state_of(vm: &Vm, co: Gc<Coro>) -> *mut LuaState {
+/// `lua_newthread` makes it. A coroutine that has not started has its body
+/// on its stack, as `coroutine.create` leaves it in PUC.
+pub(super) fn state_of(vm: &mut Vm, co: Gc<Coro>) -> *mut LuaState {
     if let Some(l) = existing(co) {
         return l;
     }
@@ -135,7 +141,14 @@ pub(super) fn state_of(vm: &Vm, co: Gc<Coro>) -> *mut LuaState {
         let b = main.cast::<u8>().sub(EXTRASPACE).cast::<ThreadBox>();
         ((*main).g, (*b).extra)
     };
-    new_thread_state(g, co, extra)
+    let l = new_thread_state(g, co, extra);
+    if !co.started && !co.body.is_nil() {
+        // SAFETY: `co` is held by the caller and has not started, so no
+        // context is loaded from it; the borrow covers one push
+        unsafe { co.as_mut() }.host_stack.push(co.body);
+        vm.heap.barrier_back(co);
+    }
+    l
 }
 
 // SAFETY: the declarations match the definitions in `csrc/shim_core.c`;
@@ -159,9 +172,28 @@ fn host_stdout_setvbuf(mode: u8) {
 }
 
 /// A new state of dialect `v`, with luna's JIT and the C API's
-/// continuation hooks installed. From the first one on, luna's standard
+/// continuation hooks installed, or null when `alloc` cannot allocate the
+/// state's record: as PUC's `lua_newstate`, the state's main block comes
+/// from the host's allocation function and goes back to it on `lua_close`;
+/// luna's own objects do not. From the first state on, luna's standard
 /// output goes through the C library's `stdout`, as PUC's does.
-fn new_state(v: LuaVersion, alloc: Option<LuaAlloc>, ud: *mut c_void, seed: u32) -> *mut LuaState {
+fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: u32) -> *mut LuaState {
+    // PUC passes the kind of object as the old size of a new block: 5.1
+    // passes 0, later versions LUA_TTHREAD for the main block
+    let kind = if v == LuaVersion::Lua51 { 0 } else { 8 };
+    // SAFETY: `alloc` is the host's `lua_Alloc`, called as PUC calls it for
+    // a new block
+    let block = unsafe {
+        alloc(
+            ud,
+            std::ptr::null_mut(),
+            kind,
+            std::mem::size_of::<Global>(),
+        )
+    };
+    if block.is_null() {
+        return std::ptr::null_mut();
+    }
     luna_core::stdio::use_host_stdout(luna_core::stdio::HostStdout {
         write: host_stdout_write,
         flush: host_stdout_flush,
@@ -170,19 +202,25 @@ fn new_state(v: LuaVersion, alloc: Option<LuaAlloc>, ud: *mut c_void, seed: u32)
     let mut vm = Vm::new_minimal(v);
     crate::install_default_jit(&mut vm);
     vm.set_host_cont_hooks(ccall::CONT_HOOKS);
+    vm.host_gc_start_incremental();
     let vm = Box::into_raw(Box::new(vm));
-    let g = Box::into_raw(Box::new(Global {
-        errjmp: std::ptr::null_mut(),
-        raised: 0,
-        version: version_num(v),
-        panic: None,
-        err_from: std::ptr::null_mut(),
-        vm,
-        vm_box: vm,
-        alloc,
-        alloc_ud: ud,
-        seed,
-    }));
+    let g = block.cast::<Global>();
+    // SAFETY: `block` is a fresh allocation of `Global`'s size, aligned as
+    // `lua_Alloc` blocks are for any object, which nothing else uses
+    unsafe {
+        g.write(Global {
+            errjmp: std::ptr::null_mut(),
+            raised: 0,
+            version: version_num(v),
+            panic: None,
+            err_from: std::ptr::null_mut(),
+            vm,
+            vm_box: vm,
+            alloc: Some(alloc),
+            alloc_ud: ud,
+            seed,
+        })
+    };
     // SAFETY: `vm` was just allocated and nothing else refers to it yet
     let vmr = unsafe { &mut *vm };
     vmr.host_registry();
@@ -214,7 +252,8 @@ pub extern "C" fn luaL_newstate() -> *mut LuaState {
 }
 
 /// `luaL_newstate` for the dialect whose `LUA_VERSION_NUM` is `version`
-/// (501 to 505); null for any other number.
+/// (501 to 505); null for any other number. Its allocation function is
+/// `luaL_alloc`, as PUC's.
 // SAFETY: no other item in the link is named `luna_newstate`: PUC's liblua
 // has no such symbol and this crate defines it once
 #[unsafe(no_mangle)]
@@ -222,16 +261,27 @@ pub extern "C" fn luna_newstate(version: c_int) -> *mut LuaState {
     let Some(v) = dialect(version) else {
         return std::ptr::null_mut();
     };
-    let l = new_state(v, None, std::ptr::null_mut(), 0);
+    let l = new_state(v, luna_c_l_alloc, std::ptr::null_mut(), 0);
+    if l.is_null() {
+        return l;
+    }
     // SAFETY: `l` is the main thread's state just made; `g` is its global
-    // record
-    unsafe { (*(*l).g).panic = Some(luna_c_default_panic) };
+    // record, and nothing runs on the state yet
+    unsafe {
+        let g = (*l).g;
+        (*g).panic = Some(luna_c_default_panic);
+        // 5.4 starts with warnings off, 5.5 on
+        if v >= LuaVersion::Lua55 {
+            (*(*g).vm).host_warn_on();
+        }
+    }
     l
 }
 
 /// PUC `lua_newstate` for the dialect `version`: a state without a panic
-/// function. luna's collector does not allocate through `f`; it is kept
-/// for `lua_getallocf`.
+/// function or a warning function, null when `f` fails to allocate the
+/// state's record. `f` allocates that record only; luna's collector does
+/// not allocate through it.
 // SAFETY: no other item in the link is named `luna_newstate_with`: PUC's
 // liblua has no such symbol and this crate defines it once
 #[unsafe(no_mangle)]
@@ -241,10 +291,17 @@ pub extern "C" fn luna_newstate_with(
     ud: *mut c_void,
     seed: u32,
 ) -> *mut LuaState {
-    match dialect(version) {
-        Some(v) => new_state(v, f, ud, seed),
-        None => std::ptr::null_mut(),
+    let (Some(v), Some(f)) = (dialect(version), f) else {
+        return std::ptr::null_mut();
+    };
+    let l = new_state(v, f, ud, seed);
+    if !l.is_null() {
+        // SAFETY: `l` is the main thread's state just made, and nothing
+        // runs on the state yet
+        let vm = unsafe { &mut *(*(*l).g).vm };
+        vm.set_host_warn(Some(Box::new(|_, _, _| Ok(()))));
     }
+    l
 }
 
 /// PUC 5.5 `lua_newstate`.
@@ -256,8 +313,10 @@ pub extern "C" fn lua_newstate(f: Option<LuaAlloc>, ud: *mut c_void, seed: u32) 
     luna_newstate_with(505, f, ud, seed)
 }
 
-/// Free the state and its Vm (PUC `lua_close`). A null pointer is a
-/// no-op; `L` may be any thread of the state.
+/// Close the state (PUC `lua_close`): the main thread's to-be-closed
+/// slots are closed and every finalizer runs, their errors dropped, then
+/// the Vm is freed and the state's record goes back to the allocation
+/// function. A null pointer is a no-op; `L` may be any thread of the state.
 ///
 /// # Safety
 /// `L` is null or a thread of a state that has not been closed, and no
@@ -271,14 +330,23 @@ pub unsafe extern "C" fn lua_close(L: *mut LuaState) {
         return;
     }
     // SAFETY: `L` is a live thread of an open state (# Safety), so its
-    // global record and Vm are live, and no call is using them
+    // global record and Vm are live, and no call is using them: the Vm
+    // pointer is the Vm's own allocation
     unsafe {
         let g = (*L).g;
+        let vmr = &mut *(*g).vm_box;
+        let mt = vmr.host_main_thread();
+        let main = state_of(vmr, mt);
+        let mut api = Api::new(main);
+        let _ = super::tbc::close_with(&mut api, 0, None);
         let vm = &mut *(*g).vm_box;
         vm.host_close_state();
         // the Vm owns every thread, and so every `LuaState`
         drop(Box::from_raw((*g).vm_box));
-        drop(Box::from_raw(g));
+        let (alloc, ud) = ((*g).alloc, (*g).alloc_ud);
+        if let Some(f) = alloc {
+            f(ud, g.cast(), std::mem::size_of::<Global>(), 0);
+        }
     }
 }
 
@@ -290,4 +358,7 @@ pub unsafe extern "C" fn lua_close(L: *mut LuaState) {
 unsafe extern "C" {
     /// luaL_newstate's panic function.
     safe fn luna_c_default_panic(L: *mut LuaState) -> c_int;
+    /// luaL_newstate's allocation function (PUC `l_alloc`).
+    fn luna_c_l_alloc(ud: *mut c_void, ptr: *mut c_void, osize: usize, nsize: usize)
+    -> *mut c_void;
 }

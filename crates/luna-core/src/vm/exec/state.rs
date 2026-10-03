@@ -147,6 +147,9 @@ pub struct Vm {
     /// keep the older raise semantics).
     pub(crate) warn_state: WarnState,
     pub(crate) warn_buf: Vec<u8>,
+    /// the default warning function is in the middle of a message (PUC
+    /// `warnfcont`)
+    pub(crate) warn_cont: bool,
     /// Embedding cooperative budget: a per-Vm tick counter that the run
     /// loop decrements once per dispatch turn. When it hits zero the loop
     /// raises a catchable "instruction budget exceeded" error so the embedder
@@ -244,6 +247,8 @@ pub struct Vm {
     /// handling"); a host protected call compares it before and after to
     /// report that status instead of LUA_ERRRUN.
     pub(crate) errerr_raised: u64,
+    /// finalizer errors a 5.2/5.3 full collection raised (`LUA_ERRGCMM`)
+    pub(crate) gcmm_raised: u64,
     /// The value the last `xpcall` handler produced for the error in
     /// flight, so the unwind that carries it to the `xpcall` does not
     /// run the handler again.
@@ -265,6 +270,16 @@ pub struct Vm {
     /// so `debug.getinfo(1).namewhat` resolves to `"hook"` (PUC
     /// `CIST_HOOKED`). `run_hook` arms it before dispatching the hook.
     pub(super) pending_is_hook: bool,
+    /// The C API's dispatcher of C hook functions: a thread whose hook
+    /// function is a light userdata has a C hook (`lua_sethook`), which
+    /// this runs; see [`super::host_c`].
+    pub(crate) host_hook: Option<super::host_c::HostHookFn>,
+    /// A C line or count hook asked to yield (`lua_yield` inside a hook);
+    /// acted on once the hooks of the instruction have run.
+    pub(crate) hook_yield: bool,
+    /// The running thread resumed from a hook's yield (5.2+
+    /// `CIST_HOOKYIELD`): the next hook check does not call the hook again.
+    pub(crate) hook_resumed: bool,
     /// traceback of an error nothing in its thread catches, one line per
     /// stack level, taken where it was raised (see `raise_to_handler`): what
     /// the host gets from `take_error_traceback`, and what `debug.traceback`

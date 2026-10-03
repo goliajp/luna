@@ -78,12 +78,14 @@ impl Vm {
                     // up `_WARN` capture under the `if T then …` block to
                     // baseline on the same wrapped string.
                     if self.version >= LuaVersion::Lua54 {
-                        let inner = self.error_text(&e);
-                        let msg = format!("error in __gc metamethod ({inner})");
-                        self.emit_warn(msg.as_bytes(), false);
+                        self.warn_error("__gc", e.0);
                     } else if first_err.is_none() {
                         let wrapped = if self.version >= LuaVersion::Lua52 {
-                            let inner = self.error_text(&e);
+                            self.gcmm_raised += 1;
+                            let inner = match e.0 {
+                                Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+                                _ => "no message".to_string(),
+                            };
                             let msg = format!("error in __gc metamethod ({inner})");
                             let s = Value::Str(self.heap.intern(msg.as_bytes()));
                             LuaError(s)

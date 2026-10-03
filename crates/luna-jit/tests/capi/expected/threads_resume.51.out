@@ -1,0 +1,19 @@
+first: status=1 nres=2 lua_status=1 co: top=2 [3 y1]
+second: status=1 nres=1 lua_status=1 co: top=1 [20]
+third: status=0 nres=3 lua_status=0 co: top=3 [done zz 1]
+again: status=2 nres=5 lua_status=2 co: top=5 [done zz 1 attempt to call a number value attempt to call a number value]
+dead: status=2 nres=1 lua_status=2 co: top=1 [cannot resume non-suspended coroutine]
+below: status=0 nres=3 lua_status=0 co: top=3 [keep 5 r]
+empty: status=2 nres=2 lua_status=2 co: top=2 [attempt to call a nil value attempt to call a nil value]
+new body: status=2 nres=1 lua_status=2 co: top=1 [cannot resume non-suspended coroutine]
+yield: status=1 nres=1 lua_status=1 co: top=1 [1]
+error: status=2 lua_status=2 top=[boom]
+after error: status=2 lua_status=2 top=[cannot resume non-suspended coroutine]
+runtime error: status=2 lua_status=2 top=[[string "return function() local t = nil; return t.x..."]:1: attempt to index local 't' (a nil value)]
+table error: status=2 lua_status=2 top=table
+not a function: status=2 lua_status=2 top=[attempt to call a number value]
+resume self: status=2 frame: top=1 [cannot resume non-suspended coroutine]
+self	true	ok
+resume normal: status=2 top=[cannot resume non-suspended coroutine] lua_status=0
+normal	true	true
+c error: status=2 lua_status=2 top=[c error]

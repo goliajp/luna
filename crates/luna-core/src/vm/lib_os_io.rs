@@ -30,6 +30,13 @@ use system::*;
 use time::*;
 
 pub(crate) fn open_os_io(vm: &mut Vm) {
+    open_os(vm);
+    lib_io::open_io(vm);
+    open_file_loaders(vm);
+}
+
+/// The os library alone.
+pub(crate) fn open_os(vm: &mut Vm) {
     let os = vm.heap.new_table();
     for (name, f) in [
         ("clock", os_clock as crate::runtime::value::NativeFn),
@@ -55,9 +62,10 @@ pub(crate) fn open_os_io(vm: &mut Vm) {
     vm.set_global("os", Value::Table(os))
         .expect("stdlib registration");
     vm.barrier_back_table(os);
+}
 
-    lib_io::open_io(vm);
-
+/// The base functions that read files, `loadfile` and `dofile`.
+pub(crate) fn open_file_loaders(vm: &mut Vm) {
     let f = vm.native(nat_loadfile);
     vm.set_global("loadfile", f).expect("stdlib registration");
     let f = vm.native(nat_dofile);
