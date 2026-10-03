@@ -48,6 +48,7 @@ mod push;
 mod stack;
 mod state;
 mod tables;
+mod tables_set;
 mod tbc;
 mod threads;
 mod userdata;

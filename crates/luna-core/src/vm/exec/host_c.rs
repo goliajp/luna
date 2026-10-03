@@ -21,6 +21,8 @@ mod threads;
 mod values;
 pub use block::HostBlock;
 pub use debug::{HostAr, HostHookFn, HostLevel};
+pub use load::HostChunkProgress;
+pub use values::{HOST_OP_BNOT, HOST_OP_UNM};
 
 /// The C API's side of a [`ContKind::Host`] continuation.
 #[derive(Clone, Copy)]
@@ -34,11 +36,17 @@ pub struct HostContHooks {
     /// Continuation `token` of `thread` will never run: an error left its C
     /// function.
     pub discard: fn(&mut Vm, Gc<Coro>, u32),
+    /// A thread the C API has seen is about to be resumed.
+    pub resuming: fn(&mut Vm, Gc<Coro>),
+    /// A thread the C API has seen was closed: its C frames and C stack
+    /// go.
+    pub reset: fn(&mut Vm, Gc<Coro>),
 }
 
 /// A warning function that replaces the default one (PUC `lua_setwarnf`):
-/// called with each piece of a warning and whether more pieces follow.
-pub type HostWarn = Box<dyn FnMut(&[u8], bool)>;
+/// called with the Vm, each piece of a warning and whether more pieces
+/// follow. An error it raises leaves the call that warned.
+pub type HostWarn = Box<dyn FnMut(&mut Vm, &[u8], bool) -> Result<(), LuaError>>;
 
 /// The continuation a C function keeps while it calls a function or
 /// yields: see [`Vm::host_call`].
@@ -365,14 +373,19 @@ impl Vm {
     }
 
     /// Hand one piece of a warning to the C API's warning function, if it
-    /// installed one. `false` when the default one is to handle it.
-    pub(crate) fn host_warn_piece(&mut self, msg: &[u8], to_cont: bool) -> bool {
-        match self.host_warn.as_mut() {
-            Some(w) => {
-                w(msg, to_cont);
-                true
-            }
-            None => false,
+    /// installed one: `None` when the default one is to handle it. The
+    /// function may install another one while it runs (PUC's own warning
+    /// functions do); it is put back only when it did not.
+    pub(crate) fn host_warn_piece(
+        &mut self,
+        msg: &[u8],
+        to_cont: bool,
+    ) -> Option<Result<(), LuaError>> {
+        let mut w = self.host_warn.take()?;
+        let r = w(self, msg, to_cont);
+        if self.host_warn.is_none() {
+            self.host_warn = Some(w);
         }
+        Some(r)
     }
 }

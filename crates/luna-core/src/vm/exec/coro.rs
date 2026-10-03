@@ -76,6 +76,15 @@ impl Vm {
     /// object has no stored status — it is "running" when nothing else runs,
     /// else "normal" (it resumed the active coroutine).
     pub(crate) fn effective_coro_status(&self, co: Gc<Coro>) -> CoroStatus {
+        // a thread the C API has seen counts as dead at its base level only
+        // while nothing is on its C stack to run
+        if self.host_restartable(co) {
+            return if co.host_stack.is_empty() {
+                CoroStatus::Dead
+            } else {
+                CoroStatus::Suspended
+            };
+        }
         if self.is_main_coro(co) {
             if self.current.is_none() {
                 CoroStatus::Running
@@ -164,6 +173,7 @@ impl Vm {
             m.error_traceback = None;
             m.error_levels = None;
         }
+        self.host_thread_reset(co);
         result.map(|()| death_err)
     }
 

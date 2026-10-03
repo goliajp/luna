@@ -62,6 +62,9 @@ pub struct Userdata {
     /// on close. Unaffected by `__gc` paths that just drop the pipe — the
     /// process will be reaped by the kernel.
     pub(crate) popen_child: Option<std::process::Child>,
+    /// Bytes the payload owns outside this object that the heap counts
+    /// (the memory block of a C API userdata), given back when it is freed.
+    pub(crate) extra_bytes: usize,
 }
 
 /// A userdata's host-side payload. Beyond io file handles luna exposes:
@@ -146,6 +149,7 @@ impl Userdata {
             writable,
             buf_mode: 0,
             popen_child: None,
+            extra_bytes: 0,
         }
     }
 

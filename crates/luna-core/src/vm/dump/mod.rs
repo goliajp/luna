@@ -111,6 +111,20 @@ pub(crate) fn undump_named(
     })
 }
 
+/// Whether `bytes` is the start of a binary chunk that ends too early: a
+/// reader that delivered them would be asked for more.
+pub(crate) fn truncated(
+    bytes: &[u8],
+    heap: &mut Heap,
+    version: LuaVersion,
+    allow_puc: bool,
+) -> bool {
+    matches!(
+        undump_checked(bytes, heap, version, allow_puc),
+        Err(Refusal::Bad(error::Bad::Truncated))
+    )
+}
+
 /// A chunk refused by an embedder gate, or found malformed.
 enum Refusal {
     Gate(String),
