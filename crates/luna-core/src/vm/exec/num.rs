@@ -67,10 +67,10 @@ pub(super) fn type_mt_slot(v: Value) -> Option<usize> {
         Value::Int(_) | Value::Float(_) => Some(2),
         Value::Str(_) => Some(3),
         Value::Closure(_) | Value::Native(_) => Some(4),
-        // tables and full userdata carry their own metatable; threads and
-        // light userdata have none (PUC keeps a shared per-type mt slot for
-        // light, but luna doesn't expose it — no test gates on it yet).
-        Value::Table(_) | Value::Coro(_) | Value::Userdata(_) | Value::LightUserdata(_) => None,
+        Value::LightUserdata(_) => Some(5),
+        Value::Coro(_) => Some(6),
+        // tables and full userdata carry their own metatable
+        Value::Table(_) | Value::Userdata(_) => None,
     }
 }
 
