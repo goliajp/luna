@@ -1,0 +1,19 @@
+newuserdata: userdata len=16 same=1 top=1
+block kept: 1 aligned=1
+type	userdata	true
+newuserdata 0: userdata len=0
+uobj	ud:name	99
+uobj value: 41
+getuservalue: 0 nil top=2
+setuservalue: top=1
+getuservalue: 5 table top=2
+getuservalue: 0 nil top=2
+getuservalue: 3 n:12 top=2
+getuservalue: 4 s:s top=2
+debug.getuservalue	string
+debug.setuservalue	true
+set from Lua: s:fromlua
+after collect: s:survives
+count grew	true
+count shrank	true
+final top=0

@@ -1,0 +1,41 @@
+getmetatable plain table: 0 pushed=0
+getmetatable string: 1 pushed=1
+getmetatable number: 0 pushed=0
+getmetatable nil: 0 pushed=0
+getmetatable absent index: 0 top=1
+setmetatable table: 1 top=2
+metatable back: function
+tt	tbl:k
+raw metatable despite __metatable: s:locked
+setmetatable num: 1 top=1
+num	num:x	num:y
+getmetatable num: 1 pushed=1
+getmetatable cleared: 0 pushed=0
+setmetatable bool: 1 top=1
+bool	bool:x	bool:y
+getmetatable bool: 1 pushed=1
+getmetatable cleared: 0 pushed=0
+setmetatable light: 1 top=1
+light	light:x
+getmetatable light: 1 pushed=1
+getmetatable cleared: 0 pushed=0
+setmetatable thread: 1 top=1
+thread	thread:x	thread:y
+getmetatable thread: 1 pushed=1
+getmetatable cleared: 0 pushed=0
+setmetatable fn: 1 top=1
+fn	fn:x	fn:y
+getmetatable fn: 1 pushed=1
+getmetatable cleared: 0 pushed=0
+setmetatable nilv: 1 top=1
+nilv	nilv:x
+getmetatable nilv: 1 pushed=1
+getmetatable cleared: 0 pushed=0
+collect table with __gc
+gc table
+collect table with __gc added later
+collect userdata with __gc
+gc userdata
+collect userdata with __gc added later
+collect userdata whose metatable was removed
+final top=0
