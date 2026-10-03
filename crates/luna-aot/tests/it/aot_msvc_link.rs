@@ -128,7 +128,9 @@ fn windows_msvc_binary_has_lt_meta_and_lt_skix_sections() {
         Err(e) => Some(format!("{e}")),
     };
     if let Some(msg) = link_err {
-        assert!(!native, "aot_msvc_link: native MSVC build failed:\n{msg}");
+        if native {
+            panic!("aot_msvc_link: native MSVC build failed:\n{msg}");
+        }
         // Mirror the skip-marker pattern used by `aot_cross_compile`
         // / `aot_windows_mingw_link`: missing rust-std, missing cross-cc,
         // or missing system libs (LIB env var unset → lld-link can't
