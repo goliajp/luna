@@ -1,0 +1,30 @@
+cmp 1 2: eq=0 lt=1 top=2
+cmp 2 1: eq=0 lt=0 top=2
+cmp 1 1.0: eq=1 lt=0 top=2
+cmp 'a' 'b': eq=0 lt=1 top=2
+cmp 'b' 'a': eq=0 lt=0 top=2
+cmp 'a' 'a': eq=1 lt=0 top=2
+cmp A B: eq=1 lt=1 top=2
+cmp B A: eq=1 lt=0 top=2
+cmp A A: eq=1 lt=0 top=2
+cmp A P: eq=0 error s:attempt to compare two table values
+cmp {} {}: eq=0 error s:attempt to compare two table values
+cmp nil false: eq=0 error s:attempt to compare nil with boolean
+cmp 0/0 0/0: eq=0 lt=0 top=2
+cmp invalid: eq=0 lt=0 top=1
+lt mixed: status=2 s:attempt to compare number with string top=0
+lt mm error: status=2 s:lterr top=0
+concat a 1: s:a1 top=1
+concat x 2.5 y: s:x2.5y top=1
+concat 1 2: s:12 top=1
+concat a A b c: s:aM top=1
+concat A s: s:M top=1
+concat 1 1.0 -0.0: s:11-0 top=1
+concat 0: s: top=1
+concat 1: number : n:3 top=1
+concat keeps the rest: s:below s:pq top=2
+concat gc: n:103 top=1
+concat nil: status=2 s:attempt to concatenate a nil value top=0
+concat table: status=2 s:attempt to concatenate a table value top=0
+concat mm error: status=2 s:caterr top=0
+final top=0
