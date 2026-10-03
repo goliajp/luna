@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **936** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **944** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 199 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **5** | all `#[doc(hidden)]`, see §5 |
 | **`pub unsafe extern "C" fn`** | 77 | the `lua.h` C API (29), the `luna_jit_*` helpers compiled code calls (47, re-exported by `luna-jit`) and the AOT entry (1); see §5 |
@@ -39,7 +39,7 @@ quotes the pattern counts too.
 | `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `fast_arith.rs`) | 56 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch |
 | | `vm/exec/index_*` | 38 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
 | | `vm/exec` (other) | 64 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls |
-| | `runtime/heap*`, `gc_ptr.rs` | 70 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle |
+| | `runtime/heap*`, `gc_ptr.rs` | 71 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle |
 | | `runtime/table*` | 48 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
 | | `runtime` (other) | 36 | string headers and their trailing bytes, the value tag/payload encoding, closure upvalue storage |
 | | `vm/lib_*` | 44 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`) and the table writes that build each library |
@@ -48,7 +48,7 @@ quotes the pattern counts too.
 | | unit-test files under `src/` | 13 | tests that inspect raw layouts |
 | | `tests/` | 43 | integration tests: a poisoning global allocator, async wakers, userdata internals |
 | `luna-jit` | `capi*` | 69 | the `lua.h` C ABI: raw `lua_State` pointers and C strings across the boundary |
-| | `jit_backend` | 49 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points, `Send` for handles that own JIT modules or code pages |
+| | `jit_backend` | 56 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points, `Send` for handles that own JIT modules or code pages, copying compiled code out to share it between Vms |
 | | other | 2 | the CLI's `arg` table and the `lua_facade` table handle |
 | | unit-test files under `src/` | 47 | tests that call compiled code or the `extern "C"` helpers directly |
 | | `tests/`, `benches/`, `examples/` | 58 | the C API from Rust, a counting global allocator, the `send` overhead bench |
@@ -59,7 +59,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **924** | |
+| **Total** | | **944** | |
 
 ## 3. Pattern catalog
 
@@ -179,7 +179,7 @@ Two CI checks cover `unsafe`:
 - the `unsafe-drift` job in `.github/workflows/ci.yml` counts the sites
   in every `.rs` file under `crates/` on every push, `luna-jit-llvm`
   included although CI does not build it, and fails above the ceiling.
-  The ceiling is the exact count, **924**, with no headroom;
+  The ceiling is the exact count, **944**, with no headroom;
 - `clippy::undocumented_unsafe_blocks` is set in the workspace
   `[lints.clippy]` table, and the lint job runs clippy with
   `-D warnings`, so a block or `unsafe impl` without a `SAFETY:` note
@@ -252,7 +252,19 @@ and the frame-materialise helper turning each frame's closure payload
 back into a handle. In `luna-runtime-helpers` 5: the deploy-side walker
 of the prototype-slot section (its bracket symbols on ELF and Mach-O,
 the slice of index entries, the read of each 16-byte hash and the write
-of its slot). That is 936, the ceiling now.
+of its slot). That is 936.
+
+Sharing compiled code between the Vms of an engine added 8. In
+`luna-jit` 7: copying a compiled function's bytes out of the code
+memory that holds it (an `unsafe fn` and its block, plus its two
+callers when a trace and when the optimizing tier's code is shared),
+the same read for a method-JIT function, and the entries of code a Vm
+installed from the engine, one for a trace and one for the optimizing
+tier's code taken at tier-up (a pointer turned into a `TraceFn`). In
+`luna-core` 1: dropping the chunks the collector found dead from the
+list a Vm keeps to find inlined functions by content, which reads the
+header of each listed prototype before the sweep. That is 944, the
+ceiling now.
 
 ## 5. Public `unsafe` surface
 
@@ -299,7 +311,7 @@ wrapper in `luna-jit/benches/bench_send_overhead.rs`.
 
 ```sh
 grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' crates | wc -l
-# 924, the ceiling in ci.yml's unsafe-drift job
+# 944, the ceiling in ci.yml's unsafe-drift job
 cargo clippy --workspace --all-targets \
     --exclude llvm-jit-probe --exclude luna-jit-llvm -- -D warnings
 # no undocumented_unsafe_blocks warnings (the LLVM crates need
