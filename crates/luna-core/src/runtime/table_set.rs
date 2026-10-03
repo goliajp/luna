@@ -6,13 +6,44 @@ impl Table {
     /// Insert / update `(key, val)`. `heap` is used to credit any internal
     /// Box growth (rehash) to `heap.bytes` so the counter stays in sync with
     /// real memory; `free_obj` subtracts `internal_bytes()` on the way out.
+    /// A read-only table refuses the write with [`TableError::ReadOnly`].
     pub fn set(&mut self, heap: &mut Heap, key: Value, val: Value) -> Result<(), TableError> {
+        if self.is_readonly() {
+            return Err(TableError::ReadOnly);
+        }
         self.set_inlined(heap, key, val)
     }
 
-    /// [`Self::set`] for the interpreter's own write path. `set` itself is
-    /// left to the compiler's judgement: marking it `#[inline]` made the
-    /// JIT's table-store helpers ~10% slower on aarch64.
+    /// [`Self::set`] without the read-only test, for compiled code that
+    /// has made it already: the trace JIT's store helpers test it together
+    /// with the metatable, and the method JIT's only reach tables a call
+    /// tested on entry or made itself. Not part of the supported API.
+    #[doc(hidden)]
+    pub fn set_unguarded(
+        &mut self,
+        heap: &mut Heap,
+        key: Value,
+        val: Value,
+    ) -> Result<(), TableError> {
+        self.set_inlined(heap, key, val)
+    }
+
+    /// [`Self::set_int`] without the read-only test; see
+    /// [`Self::set_unguarded`].
+    #[doc(hidden)]
+    pub fn set_int_unguarded(
+        &mut self,
+        heap: &mut Heap,
+        i: i64,
+        val: Value,
+    ) -> Result<(), TableError> {
+        self.set_norm(heap, Value::Int(i), val)
+    }
+
+    /// [`Self::set`] for the interpreter's own write path, which has
+    /// checked [`Self::is_readonly`] itself. `set` is left to the
+    /// compiler's judgement: marking it `#[inline]` made the JIT's
+    /// table-store helpers ~10% slower on aarch64.
     #[inline]
     pub(crate) fn set_inlined(
         &mut self,
@@ -54,7 +85,7 @@ impl Table {
     /// `val`. Returns `false` when the key is absent, the slot holds nil,
     /// or the key normalisation rejects it — the caller is then expected
     /// to run the `__newindex` chain or fall back to `set` for the raw
-    /// insert.
+    /// insert — and when the table is read-only.
     ///
     /// Collapses the SetField hot path from two hash-chain walks
     /// (`get` + `set`) to one. The `__newindex` invariant ("fires iff
@@ -69,6 +100,14 @@ impl Table {
     /// wrapper).
     #[inline]
     pub fn try_set_existing(&mut self, key: Value, val: Value) -> bool {
+        !self.is_readonly() && self.set_existing_raw(key, val)
+    }
+
+    /// [`Self::try_set_existing`] for a caller that has checked
+    /// [`Self::is_readonly`] itself (the interpreter's stores test it with
+    /// the write barrier, `Heap::store_barrier`).
+    #[inline]
+    pub(crate) fn set_existing_raw(&mut self, key: Value, val: Value) -> bool {
         let k = match normalize_set_key(key) {
             Ok(k) => k,
             Err(_) => return false,
@@ -139,6 +178,22 @@ impl Table {
 
     /// Integer-keyed variant of [`Self::set`].
     pub fn set_int(&mut self, heap: &mut Heap, i: i64, val: Value) -> Result<(), TableError> {
+        if self.is_readonly() {
+            return Err(TableError::ReadOnly);
+        }
+        self.set_int_raw(heap, i, val)
+    }
+
+    /// [`Self::set_int`] for a table the caller knows is not read-only: one
+    /// it just made (a vararg or `table.pack` table), or one whose flag it
+    /// has tested.
+    #[inline]
+    pub(crate) fn set_int_raw(
+        &mut self,
+        heap: &mut Heap,
+        i: i64,
+        val: Value,
+    ) -> Result<(), TableError> {
         self.set_norm(heap, Value::Int(i), val)
     }
 
@@ -167,7 +222,11 @@ impl Table {
             if v.is_nil() {
                 self.clear_existing_slot(k);
             } else {
-                // may revive a tombstone: a metamethod can appear
+                // may revive a tombstone: a metamethod can appear. A
+                // read-only table never gets here (every write path tests
+                // the mark first), so clearing its mark with the rest of
+                // `aux` cannot happen
+                debug_assert!(!self.is_readonly());
                 self.hdr.aux = 0;
                 self.nodes_mut()[idx].val = v;
             }
@@ -185,6 +244,8 @@ impl Table {
         k: Value,
         v: Value,
     ) -> Result<(), TableError> {
+        // as in `set_norm`: never a read-only table
+        debug_assert!(!self.is_readonly());
         self.hdr.aux = 0;
         if self.nodes().is_empty() {
             self.rehash(heap, k)?;

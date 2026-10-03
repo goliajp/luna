@@ -48,10 +48,15 @@ pub struct GcHeader {
     ///   bit 1 WHITE1 — current-white-B (the unused white in any given cycle
     ///                  is the "other-white" / dead-white at sweep time)
     ///   bit 2 BLACK  — propagated; outgoing refs already traced
-    ///   bit 3 FIN    — registered for `__gc` (tracked in `finalize`)
+    ///   bit 3 SLOW   — set exactly when BLACK is set or the object is a
+    ///                  read-only table (`READONLY_AUX`): an in-place table
+    ///                  store tests this one bit (`plain_store`) and leaves
+    ///                  both cases to the slow path. Every colour change goes
+    ///                  through `with_slow`, which keeps it in step
     ///   bit 4 FINALIZED — already enqueued or finalized once this lifetime
     ///   bit 5 DEFERRED  — 5.3 cycle-finalize deferral marker (gc.lua :502)
     ///   bit 6 LEAF   — nothing to trace (a string, a native without upvalues)
+    ///   bit 7 FIN    — registered for `__gc` (tracked in `finalize`)
     /// Gray = no white bits, no BLACK; that is the in-stack state between the
     /// time a Marker visits an object and the time it traces it.
     flags: u8,
@@ -71,7 +76,7 @@ const WHITE_BITS: u8 = WHITE0 | WHITE1;
 const COLOR_BITS: u8 = WHITE_BITS | BLACK;
 
 /// registered for finalization (`__gc`): the object is tracked in `finalize`.
-const FIN: u8 = 8;
+const FIN: u8 = 128;
 /// finalization already scheduled/run: never finalize this object again (PUC
 /// FINALIZEDBIT). Set when it moves to `tobefnz`.
 const FINALIZED: u8 = 16;
@@ -82,6 +87,17 @@ const FINALIZED: u8 = 16;
 const DEFERRED: u8 = 32;
 /// the object has no children; fixed at creation
 const LEAF: u8 = 64;
+/// BLACK or a read-only table; see the flag layout on `GcHeader`
+const SLOW: u8 = 8;
+/// The `aux` bit of a table that marks it read-only (`Table::is_readonly`).
+/// A table's other `aux` bits are its absent-metamethod bits, one per event
+/// below this one; the JIT's inline stores test this bit in the byte of
+/// `aux` that holds it.
+pub(crate) const READONLY_AUX: u32 = 1 << 31;
+
+/// Byte offset of the `aux` word within `GcHeader`, for the JIT's
+/// read-only test.
+pub(crate) const AUX_OFFSET: usize = std::mem::offset_of!(GcHeader, aux);
 
 #[inline(always)]
 fn is_white(flags: u8) -> bool {
@@ -102,6 +118,52 @@ pub(crate) fn header_is_marked<T: GcObject>(g: Gc<T>) -> bool {
 }
 
 impl GcHeader {
+    /// Whether this is a read-only table (`Table::is_readonly`).
+    #[inline(always)]
+    pub(crate) fn readonly(&self) -> bool {
+        self.tag == ObjTag::Table && self.aux & READONLY_AUX != 0
+    }
+
+    /// Whether an in-place store may write into this object as it is:
+    /// neither black (a black table needs the write barrier) nor a
+    /// read-only table. One bit (SLOW) answers both, so the interpreter's
+    /// store fast paths pay one bit test for both; the stores it turns away
+    /// go to the slow path, which tells the two apart.
+    #[inline(always)]
+    pub(crate) fn plain_store(&self) -> bool {
+        self.flags & SLOW == 0
+    }
+
+    /// Mark or unmark a table read-only, keeping SLOW in step.
+    #[inline]
+    pub(crate) fn set_readonly(&mut self, on: bool) {
+        debug_assert!(self.tag == ObjTag::Table);
+        if on {
+            self.aux |= READONLY_AUX;
+        } else {
+            self.aux &= !READONLY_AUX;
+        }
+        self.flags = self.with_slow(self.flags);
+    }
+
+    /// Flag byte `f`, about to replace this header's, with SLOW set to
+    /// agree with its BLACK bit and the read-only mark. Every write of the
+    /// colour bits goes through here.
+    #[inline(always)]
+    pub(crate) fn with_slow(&self, f: u8) -> u8 {
+        if f & BLACK != 0 || self.readonly() {
+            f | SLOW
+        } else {
+            f & !SLOW
+        }
+    }
+
+    /// Whether SLOW agrees with BLACK and the read-only mark.
+    #[cfg(any(debug_assertions, feature = "gc-verify"))]
+    pub(crate) fn slow_consistent(&self) -> bool {
+        self.flags == self.with_slow(self.flags)
+    }
+
     pub(crate) fn new(tag: ObjTag) -> GcHeader {
         GcHeader {
             next: ptr::null_mut(),
@@ -322,7 +384,7 @@ impl Heap {
             } else {
                 self.current_white
             };
-            (*h).flags = ((*h).flags & !COLOR_BITS) | born;
+            (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | born);
         }
         self.all = h;
         self.live += 1;

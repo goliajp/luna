@@ -99,9 +99,10 @@ impl Vm {
     /// directly, an `Option<T>`, or a `Gc<Table>` / `Gc<LuaClosure>` /
     /// `Gc<NativeClosure>` handle.
     ///
-    /// Returns `Err(LuaError)` only if the globals table overflows
-    /// (extremely unlikely in practice — `MAX_ASIZE = 1 << 27`).
-    /// String interning + key construction cannot fail.
+    /// Returns `Err(LuaError)` if the globals table is read-only (see
+    /// [`Vm::set_readonly`]) or overflows (extremely unlikely in practice
+    /// — `MAX_ASIZE = 1 << 27`). String interning + key construction
+    /// cannot fail.
     ///
     /// ```
     /// # use luna_core::vm::Vm;
@@ -121,9 +122,48 @@ impl Vm {
         let v = v.into_value(self);
         let k = Value::Str(self.heap.intern(name.as_bytes()));
         // SAFETY: `self.globals` is a root of this Vm; the borrow lives for the one `set`, which touches only the heap and the table and does not collect, and `&mut self` rules out another reference into it
-        unsafe { self.globals.as_mut() }.set(&mut self.heap, k, v)?;
+        if let Err(e) = unsafe { self.globals.as_mut() }.set(&mut self.heap, k, v) {
+            return Err(self.table_error(e));
+        }
         self.heap.barrier_back(self.globals);
         Ok(())
+    }
+
+    /// Mark `t` read-only (`on = true`) or writable again (`on = false`),
+    /// as Redis's `lua_enablereadonlytable` does for the tables of its
+    /// scripting environment. While `t` is read-only every write to it
+    /// raises "Attempt to modify a readonly table", in every dialect and
+    /// with or without the JIT: assignments (`t.k = v`, `t[k] = v`, a
+    /// global assignment when `t` is the globals table, a `__newindex`
+    /// chain that reaches `t`), `rawset`, `setmetatable` and
+    /// `debug.setmetatable`, and the table library's stores
+    /// (`table.insert`, `table.remove`, `table.sort`, `table.move`'s
+    /// destination). [`Vm::set_global`] and [`Table::set`] refuse it too.
+    /// An assignment's error carries the position of the Lua code that
+    /// made it (`user_script:1: Attempt to modify a readonly table`); one
+    /// raised inside a library function carries none. Reads, including
+    /// `__index` lookups, cost nothing extra. A host that has to change a
+    /// read-only table unmarks it, writes, and marks it again.
+    ///
+    /// ```
+    /// # use luna_core::vm::Vm;
+    /// # use luna_core::version::LuaVersion;
+    /// let mut vm = Vm::sandbox(LuaVersion::Lua51).open_base().open_string().build();
+    /// let string_lib = match vm.eval("return string").unwrap()[0] {
+    ///     luna_core::runtime::Value::Table(t) => t,
+    ///     _ => unreachable!(),
+    /// };
+    /// vm.set_readonly(string_lib, true);
+    /// let e = vm.eval("string.foo = 1").unwrap_err();
+    /// assert!(vm.error_text(&e).ends_with("Attempt to modify a readonly table"));
+    /// vm.set_readonly(string_lib, false);
+    /// vm.eval("string.foo = 1").unwrap();
+    /// ```
+    pub fn set_readonly(&mut self, t: Gc<Table>, on: bool) {
+        // SAFETY: a `Gc` handle points at a live table (see `Gc`); the
+        // borrow lives for this one flag update, which reaches no other
+        // reference into the table
+        unsafe { t.as_mut() }.set_readonly(on);
     }
 
     /// Backward write barrier shorthand for native lib code: demote `t` from

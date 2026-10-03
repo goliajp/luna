@@ -218,6 +218,13 @@ pub(crate) const TABLE_ACOUNT_OFFSET: i32 =
     luna_core::runtime::table::jit_layout::TABLE_ACOUNT_OFFSET as i32;
 pub(crate) const TABLE_APREFIX_OFFSET: i32 =
     luna_core::runtime::table::jit_layout::TABLE_APREFIX_OFFSET as i32;
+/// The byte holding a table's read-only bit, and the bit: a trace's
+/// inline stores leave a read-only table to the store helper, which
+/// refuses it.
+pub(crate) const TABLE_READONLY_BYTE_OFFSET: i32 =
+    luna_core::runtime::table::jit_layout::TABLE_READONLY_BYTE_OFFSET as i32;
+pub(crate) const TABLE_READONLY_BYTE_MASK: i64 =
+    luna_core::runtime::table::jit_layout::TABLE_READONLY_BYTE_MASK as i64;
 
 /// table-field IC scaffold.
 ///

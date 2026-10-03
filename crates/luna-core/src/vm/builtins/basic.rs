@@ -122,8 +122,9 @@ pub(super) fn nat_rawset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let t = argcheck::check_table(vm, a, 0)?;
     let k = argcheck::check_any(vm, a, 1)?;
     let v = argcheck::check_any(vm, a, 2)?;
-    // a bad key is the VM's error (`luaH_set` → `luaG_runerror`), raised
-    // while rawset runs, so it carries no position
+    // a bad key or a read-only table is the VM's error (`luaH_set` /
+    // `lua_rawset` → `luaG_runerror`), raised while rawset runs, so it
+    // carries no position
     vm.raw_set(t, k, v)?;
     Ok(vm.nat_return(fs, &[Value::Table(t)]))
 }
@@ -158,6 +159,8 @@ pub(super) fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
     if !vm.get_mm(Value::Table(t), Mm::Metatable).is_nil() {
         return Err(raise_str(vm, "cannot change a protected metatable"));
     }
+    // Redis's `lua_setmetatable` refuses a read-only table
+    vm.refuse_readonly(t)?;
     // SAFETY: `t` is the table argument, kept alive by its stack slot; the borrow covers one call, and `mt` is a separate handle
     unsafe { t.as_mut() }.set_metatable(mt);
     // setmetatable links a long-lived table to a long-lived mt; barrier_back

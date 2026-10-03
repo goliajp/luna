@@ -122,7 +122,7 @@ impl Heap {
                 unsafe {
                     let h = s.as_ptr() as *mut GcHeader;
                     // strings are leaves: skip gray and go straight to black
-                    (*h).flags = ((*h).flags & !COLOR_BITS) | BLACK;
+                    (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | BLACK);
                 }
             }
         };
@@ -233,6 +233,8 @@ impl Heap {
         // string contents to identify the key.
         #[cfg(feature = "gc-verify")]
         self.verify_tricolor("atomic_tail");
+        #[cfg(any(debug_assertions, feature = "gc-verify"))]
+        self.verify_slow_bits("atomic_tail");
     }
 
     /// Borrow Heap's persistent propagate state as an ephemeral Marker.
@@ -320,7 +322,7 @@ impl Heap {
             };
             // SAFETY: `h` was popped off the gray stack, which only `Marker::header` and `barrier_back` push to, with headers of allocated objects; frees happen only in the sweep, never during propagate or between its steps
             unsafe {
-                (*h).flags = ((*h).flags & !WHITE_BITS) | BLACK;
+                (*h).flags = (*h).with_slow(((*h).flags & !WHITE_BITS) | BLACK);
                 match (*h).tag {
                     ObjTag::Str => {}
                     ObjTag::Table => (*(h as *mut Table)).trace(&mut m),

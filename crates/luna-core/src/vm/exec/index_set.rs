@@ -83,11 +83,11 @@ pub(super) unsafe fn table_raw_set_at(
 #[cold]
 #[inline(never)]
 fn table_raw_set_cold(tb: &mut Table, heap: &mut Heap, key: Value, v: Value) -> bool {
-    tb.set(heap, key, v).is_ok()
+    tb.set_inlined(heap, key, v).is_ok()
 }
 
 #[cold]
 #[inline(never)]
 fn table_set_existing_cold(tb: &mut Table, key: Value, v: Value) -> bool {
-    tb.try_set_existing(key, v)
+    tb.set_existing_raw(key, v)
 }

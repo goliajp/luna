@@ -40,9 +40,9 @@ impl Heap {
                 return;
             }
             if (*ch).tag == ObjTag::Str {
-                (*ch).flags = (cf & !COLOR_BITS) | BLACK;
+                (*ch).flags = (*ch).with_slow((cf & !COLOR_BITS) | BLACK);
             } else {
-                (*ch).flags = cf & !WHITE_BITS;
+                (*ch).flags = (*ch).with_slow(cf & !WHITE_BITS);
                 self.gray.push(ch);
             }
         }
@@ -59,6 +59,29 @@ impl Heap {
         unsafe { self.barrier_back_header(parent.header()) }
     }
 
+    /// The write barrier an in-place table store takes before it writes:
+    /// `true` when the store may go ahead (after sending a black table back
+    /// to gray, as [`Self::barrier_back`] does), `false`, having done
+    /// nothing, when the table is read-only. One bit test covers both
+    /// cases (`GcHeader::plain_store`).
+    #[inline(always)]
+    pub(crate) fn store_barrier(&mut self, t: Gc<crate::runtime::table::Table>) -> bool {
+        if t.hdr.plain_store() {
+            return true;
+        }
+        self.store_barrier_slow(t)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn store_barrier_slow(&mut self, t: Gc<crate::runtime::table::Table>) -> bool {
+        if t.is_readonly() {
+            return false;
+        }
+        self.barrier_back(t);
+        true
+    }
+
     /// [`Self::barrier_back`] on the parent's header, one body for every
     /// object type.
     ///
@@ -71,8 +94,33 @@ impl Heap {
             if !is_black(f) {
                 return;
             }
-            (*parent).flags = f & !COLOR_BITS;
+            (*parent).flags = (*parent).with_slow(f & !COLOR_BITS);
             self.gray.push(parent);
+        }
+    }
+
+    /// Every object's SLOW bit agrees with its BLACK bit and read-only mark
+    /// (`GcHeader::with_slow`), which every colour change keeps: a missed
+    /// one would let an interpreter store skip the write barrier or write
+    /// into a read-only table. Checked in debug builds after each atomic
+    /// step and at the end of each sweep and full collection.
+    #[cfg(any(debug_assertions, feature = "gc-verify"))]
+    pub(super) fn verify_slow_bits(&self, ctx: &str) {
+        let check = |h: *mut GcHeader| {
+            // SAFETY: `h` is on one of the heap's own lists, all of whose
+            // elements are live allocations; only the header is read
+            let (ok, flags) = unsafe { ((*h).slow_consistent(), (*h).flags) };
+            assert!(ok, "[slow-bit] {ctx}: object {h:p} flags {flags:#x}");
+        };
+        for mut cur in [self.all, self.sweep_cur, self.fixed] {
+            while !cur.is_null() {
+                check(cur);
+                // SAFETY: as above
+                cur = unsafe { (*cur).next };
+            }
+        }
+        for &h in self.finalize.iter().chain(&self.tobefnz) {
+            check(h);
         }
     }
 }
