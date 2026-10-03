@@ -21,8 +21,8 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **944** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
-| of which in tests, benches and examples | 199 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **946** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| of which in tests, benches and examples | 201 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **5** | all `#[doc(hidden)]`, see §5 |
 | **`pub unsafe extern "C" fn`** | 77 | the `lua.h` C API (29), the `luna_jit_*` helpers compiled code calls (47, re-exported by `luna-jit`) and the AOT entry (1); see §5 |
 | **`unsafe impl Send` / `Sync`** | 10 | see §5 |
@@ -50,7 +50,7 @@ quotes the pattern counts too.
 | `luna-jit` | `capi*` | 69 | the `lua.h` C ABI: raw `lua_State` pointers and C strings across the boundary |
 | | `jit_backend` | 56 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points, `Send` for handles that own JIT modules or code pages, copying compiled code out to share it between Vms |
 | | other | 2 | the CLI's `arg` table and the `lua_facade` table handle |
-| | unit-test files under `src/` | 47 | tests that call compiled code or the `extern "C"` helpers directly |
+| | unit-test files under `src/` | 49 | tests that call compiled code or the `extern "C"` helpers directly |
 | | `tests/`, `benches/`, `examples/` | 58 | the C API from Rust, a counting global allocator, the `send` overhead bench |
 | `luna-jit-helpers` | | 149 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
 | `luna-jit-llvm` | `src/` | 8 | LLVM execution engines and the register-file GEPs |
@@ -59,7 +59,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **944** | |
+| **Total** | | **946** | |
 
 ## 3. Pattern catalog
 
@@ -179,7 +179,7 @@ Two CI checks cover `unsafe`:
 - the `unsafe-drift` job in `.github/workflows/ci.yml` counts the sites
   in every `.rs` file under `crates/` on every push, `luna-jit-llvm`
   included although CI does not build it, and fails above the ceiling.
-  The ceiling is the exact count, **944**, with no headroom;
+  The ceiling is the exact count, **946**, with no headroom;
 - `clippy::undocumented_unsafe_blocks` is set in the workspace
   `[lints.clippy]` table, and the lint job runs clippy with
   `-D warnings`, so a block or `unsafe impl` without a `SAFETY:` note
@@ -263,8 +263,10 @@ installed from the engine, one for a trace and one for the optimizing
 tier's code taken at tier-up (a pointer turned into a `TraceFn`). In
 `luna-core` 1: dropping the chunks the collector found dead from the
 list a Vm keeps to find inlined functions by content, which reads the
-header of each listed prototype before the sweep. That is 944, the
-ceiling now.
+header of each listed prototype before the sweep. And 2 in a unit test
+that runs a trace's code before and after its addresses are rewritten
+(calling the code, and copying the Cranelift function out). That is
+946, the ceiling now.
 
 ## 5. Public `unsafe` surface
 
@@ -311,7 +313,7 @@ wrapper in `luna-jit/benches/bench_send_overhead.rs`.
 
 ```sh
 grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' crates | wc -l
-# 944, the ceiling in ci.yml's unsafe-drift job
+# 946, the ceiling in ci.yml's unsafe-drift job
 cargo clippy --workspace --all-targets \
     --exclude llvm-jit-probe --exclude luna-jit-llvm -- -D warnings
 # no undocumented_unsafe_blocks warnings (the LLVM crates need
