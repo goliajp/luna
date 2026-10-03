@@ -47,18 +47,23 @@ impl Vm {
                 } else {
                     inst.c() as i64
                 };
+                // one barrier covers every store this op does — PUC's
+                // `luaC_barrierback_` once-per-table optimisation; taken
+                // first, its flag test also refuses a read-only table
+                // (only one marked from outside between its constructor
+                // and this op, by a debug hook, can be)
+                if !self.heap.store_barrier(t) {
+                    return Err(self.table_error(TableError::ReadOnly));
+                }
                 for i in 1..=n {
                     let v = self.r(base, a + i);
                     // SAFETY: `t` is a live table (see `Gc`), and no
                     // reference into it is held across the call
-                    let r = unsafe { t.as_mut() }.set_int(&mut self.heap, offset + i as i64, v);
+                    let r = unsafe { t.as_mut() }.set_int_raw(&mut self.heap, offset + i as i64, v);
                     if let Err(TableError::Overflow) = r {
                         return Err(self.rt_err("table overflow"));
                     }
                 }
-                // one barrier_back covers every store this op did — PUC's
-                // `luaC_barrierback_` once-per-table optimisation
-                self.heap.barrier_back(t);
                 // the element temps above the table are now consumed
                 self.maybe_collect_garbage(base + a + 1);
             }
@@ -142,7 +147,7 @@ impl Vm {
                     // do not collect
                     let tm = unsafe { t.as_mut() };
                     for i in 0..n {
-                        let _ = tm.set_int(
+                        let _ = tm.set_int_raw(
                             &mut self.heap,
                             i as i64 + 1,
                             self.stack[(func_slot + 1 + i) as usize],

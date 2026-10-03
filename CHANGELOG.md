@@ -23,6 +23,11 @@ optimization.
 
 ### Breaking
 
+- `TableError` has a new variant, `ReadOnly`, which `Table::set` and
+  `Table::set_int` return for a read-only table; a `match` on
+  `TableError` needs an arm for it. `Table::try_set_existing` returns
+  `false` for a read-only table.
+
 - `luna_core::jit::trace::ExitTag` has a `Bool` variant and `TraceRecord`
   the `index_slots` and `index_key` fields; the frame-materialise helper
   `luna_jit_trace_materialize_frames` takes a third argument, the
@@ -280,6 +285,28 @@ optimization.
 
 ### Added
 
+- Read-only tables: `Vm::set_readonly(t: Gc<Table>, on: bool)` marks a
+  table read-only or writable again (Redis's `lua_enablereadonlytable`),
+  `Table::is_readonly` reads the mark, and the facade has
+  `LuaTable::set_readonly`. Every write to a read-only table raises
+  `Attempt to modify a readonly table` in every dialect, with or without
+  the JIT: assignments (with the position of the assignment), a
+  `__newindex` chain that reaches the table, `rawset`, `setmetatable`,
+  `debug.setmetatable`, the stores of `table.insert`, `table.remove`,
+  `table.sort` and `table.move`, and 5.1's `package.seeall` (these with
+  no position). A trace compiled before the table was marked leaves the
+  store to the interpreter, which raises. `Vm::set_global` refuses the
+  write too, and `Vm::table_error` turns a `TableError` from a raw
+  `Table::set` into the error the interpreter raises. Reads cost nothing
+  extra. An interpreter store tests one bit of the table header before it
+  writes, the bit its write barrier tests (set for a black table as well
+  as a read-only one), which costs one instruction per store; a trace
+  tests a table it keeps storing into once per run, and the method JIT
+  tests the tables a compiled function is given once per call. See the
+  embedding guide, section 5.1.
+- `luna_core::runtime::table::jit_layout::{TABLE_READONLY_BYTE_OFFSET,
+  TABLE_READONLY_BYTE_MASK}`: where the JIT's inline stores find the
+  read-only bit.
 - `luna_runtime_helpers::luna_aot_run_dialect`, the C entry an AOT
   binary's `main` now calls with the dialect the script was compiled
   for; `run_bytecode_as`, its Rust counterpart; `dialect_code` and

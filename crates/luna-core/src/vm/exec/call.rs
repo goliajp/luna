@@ -308,7 +308,7 @@ impl Vm {
                     let v = self.stack[(base - n_varargs + i) as usize];
                     // bounded by `n_varargs` (≤ MAXUPVAL territory), well
                     // below `MAX_ASIZE`
-                    let _ = tm.set_int(&mut self.heap, (i + 1) as i64, v);
+                    let _ = tm.set_int_raw(&mut self.heap, (i + 1) as i64, v);
                 }
                 let nk = Value::Str(self.heap.intern(b"n"));
                 tm.set(&mut self.heap, nk, Value::Int(n_varargs as i64))

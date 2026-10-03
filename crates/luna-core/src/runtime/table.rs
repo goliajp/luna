@@ -23,6 +23,9 @@ pub enum TableError {
     /// "table overflow" so a runaway `a[i] = i` loop walls within budget
     /// (5.5/5.4 heavy.lua's `toomanyidx` pcalls exactly this scenario).
     Overflow,
+    /// The table is read-only (see [`Table::is_readonly`]); nothing was
+    /// written. Raised back as "Attempt to modify a readonly table".
+    ReadOnly,
 }
 
 /// PUC `MAXASIZE` analogue: the highest power of two an array part may
@@ -96,7 +99,9 @@ pub struct Table {
     /// word holds the absent-metamethod bits (PUC `flags`): bit `1 << Mm`
     /// set means this table, used as a metatable, has no such field. Set
     /// by the lookup on a miss; cleared whenever a hash key gains a value
-    /// (`set_norm`, `insert_new`)
+    /// (`set_norm`, `insert_new`). Its top bit is the read-only mark
+    /// (`READONLY_AUX`); those clears never meet a read-only table, which
+    /// every write path refuses before it gets there
     pub(crate) hdr: GcHeader,
     /// Single backing pointer for the array part. Points to
     /// `inline_storage` (asize <= INLINE_ASIZE) or to an external slab
@@ -203,6 +208,23 @@ impl Table {
     #[inline(always)]
     pub(crate) fn absent_mm(&self) -> u32 {
         self.hdr.aux
+    }
+
+    /// Whether writes to this table are refused (Redis's
+    /// `lua_enablereadonlytable`): every assignment, `rawset`, the table
+    /// library's stores and `setmetatable` on it raise "Attempt to modify
+    /// a readonly table", and [`Table::set`] / [`Table::set_int`] return
+    /// [`TableError::ReadOnly`]. Reads are unaffected. Set it with
+    /// [`crate::vm::Vm::set_readonly`].
+    #[inline(always)]
+    pub fn is_readonly(&self) -> bool {
+        self.hdr.aux & crate::runtime::heap::READONLY_AUX != 0
+    }
+
+    /// Mark or unmark this table read-only (see [`Table::is_readonly`]).
+    #[inline]
+    pub(crate) fn set_readonly(&mut self, on: bool) {
+        self.hdr.set_readonly(on);
     }
 
     /// Record that the metamethod behind `bit` is absent from `mt`. A

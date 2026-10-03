@@ -270,7 +270,10 @@ jobs:
   # handle built from a pointer, mostly in the luna_jit_* helpers) took
   # it to 908; the baseline trace tier's code pages and entries took it
   # to 921; rooting the values a trace holds only in registers across
-  # helpers that can collect took it to 924, the ceiling now.
+  # helpers that can collect took it to 924; inlining calls into other
+  # prototypes took it to 936, running AOT binaries of other dialects to
+  # 938, read-only tables (the table flag, its debug check, a test) to
+  # 942, and the trace machine-code dump to 943, the ceiling now.
   # docs/unsafe-accounting.md has the count per crate and module
   # and why each kind of site exists. Each justified unsafe addition
   # needs an explicit ceiling bump to the new exact count. Never widen to
@@ -285,7 +288,7 @@ jobs:
         run: |
           count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
                   crates | wc -l | tr -d ' ')
-          ceiling=938
+          ceiling=943
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then

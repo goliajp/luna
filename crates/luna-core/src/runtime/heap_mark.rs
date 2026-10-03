@@ -39,7 +39,7 @@ pub(super) fn drain_marker(m: &mut Marker) {
             // PUC `propagatemark`: gray → black before scanning children, so a
             // child that points back at us (cycle) re-traces us as already
             // black and does not loop. White bits were cleared on push.
-            (*h).flags = ((*h).flags & !WHITE_BITS) | BLACK;
+            (*h).flags = (*h).with_slow(((*h).flags & !WHITE_BITS) | BLACK);
             match (*h).tag {
                 ObjTag::Str => {}
                 ObjTag::Table => (*(h as *mut Table)).trace(m),
@@ -93,9 +93,9 @@ impl Marker {
             let f = (*h).flags;
             if is_white(f) {
                 if f & self.leaf_black != 0 {
-                    (*h).flags = (f & !WHITE_BITS) | BLACK;
+                    (*h).flags = (*h).with_slow((f & !WHITE_BITS) | BLACK);
                 } else {
-                    (*h).flags = f & !WHITE_BITS;
+                    (*h).flags = (*h).with_slow(f & !WHITE_BITS);
                     self.stack.push(h);
                 }
                 true
