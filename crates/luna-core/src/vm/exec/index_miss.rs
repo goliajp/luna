@@ -143,7 +143,10 @@ impl Vm {
         {
             return self.raw_set(tb, key, v);
         }
-        let probed = cfg!(not(feature = "gc-verify")) && matches!(t, Value::Table(_));
+        // the fast path tried the existing key unless the table's flags
+        // sent it here (`plain_store`): a black table still has it to do
+        let probed = cfg!(not(feature = "gc-verify"))
+            && matches!(t, Value::Table(tb) if tb.hdr.plain_store());
         self.op_newindex_from(t, key, v, probed)
     }
 

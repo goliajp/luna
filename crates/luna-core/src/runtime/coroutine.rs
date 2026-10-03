@@ -42,10 +42,10 @@ pub struct Coro {
     /// the error object a coroutine died with (when it errored rather than
     /// returned); `coroutine.close` reports it once, then clears it
     pub error_value: Option<Value>,
-    /// snapshot of the traceback at the error point — captured before the
-    /// dying coroutine's frames are unwound, so `debug.traceback(co)` on a
-    /// dead-with-error coroutine still shows the error site (PUC's
-    /// `luaG_errormsg` flow plus a per-thread `errfunc` snapshot).
+    /// the traceback of the coroutine at the error that killed it, taken
+    /// before its frames were unwound: the text `debug.traceback(co)` returns
+    /// for it (`stack traceback:` and one `\n\t` line per level), as PUC
+    /// leaves a dead coroutine's stack in place
     pub error_traceback: Option<Vec<u8>>,
     /// the same snapshot one line per stack level, so `debug.traceback(co,
     /// msg, level)` can start at any level

@@ -34,7 +34,12 @@ pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     };
     let snapshot = frame.as_ref().map(Vec::len);
     vm.sort_scratch.push(frame.unwrap_or_default());
-    let s = Sorter { tv, comp, snapshot };
+    let s = Sorter {
+        tv,
+        comp,
+        snapshot,
+        stored: std::cell::Cell::new(false),
+    };
     let r = if ver <= V::Lua52 {
         s.auxsort_int(vm, 1, i64::from(n as i32))
     } else {
@@ -42,7 +47,12 @@ pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     };
     let frame = vm.sort_scratch.pop().expect("sort frame");
     r?;
-    if let Some(len) = snapshot {
+    // a run that stored nothing (an already sorted array of up to three)
+    // leaves the table as it was without writing to it, as PUC's does, so
+    // a read-only table raises only when PUC's sort would have stored
+    if let Some(len) = snapshot
+        && s.stored.get()
+    {
         for (i, v) in frame[..len].iter().enumerate() {
             tab_seti(vm, tv, i as i64 + 1, *v)?;
         }
@@ -88,6 +98,8 @@ struct Sorter {
     /// `Some(n)`: the elements were copied into the first `n` slots of the
     /// sort frame (see [`pure_snapshot`]) and are read and written there.
     snapshot: Option<usize>,
+    /// a store went to the snapshot: PUC would have written the table
+    stored: std::cell::Cell<bool>,
 }
 
 fn invalid_order(vm: &mut Vm) -> LuaError {
@@ -126,7 +138,10 @@ impl Sorter {
     fn seti(&self, vm: &mut Vm, i: i64) -> Result<(), LuaError> {
         let v = Self::at(vm, 1);
         match self.snapshot {
-            Some(_) => Self::stack(vm)[(i - 1) as usize] = v,
+            Some(_) => {
+                Self::stack(vm)[(i - 1) as usize] = v;
+                self.stored.set(true);
+            }
             None => tab_seti(vm, self.tv, i, v)?,
         }
         Self::pop(vm, 1);

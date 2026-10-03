@@ -29,7 +29,7 @@ impl Heap {
                     self.free_obj(cur);
                     freed += 1;
                 } else {
-                    (*cur).flags = (f & !COLOR_BITS) | new_white;
+                    (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);
                     link = ptr::addr_of_mut!((*cur).next);
                 }
             }
@@ -38,6 +38,8 @@ impl Heap {
         self.live -= freed;
         #[cfg(feature = "gc-verify")]
         self.verify_no_dangling("full_sweep");
+        #[cfg(any(debug_assertions, feature = "gc-verify"))]
+        self.verify_slow_bits("full_sweep");
         freed
     }
 
@@ -58,7 +60,7 @@ impl Heap {
                 let f = (*cur).flags;
                 let dead = is_white(f) && (f & new_white) == 0;
                 if !dead {
-                    (*cur).flags = (f & !COLOR_BITS) | new_white;
+                    (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);
                     (*cur).next = self.all;
                     self.all = cur;
                 } else {
@@ -76,6 +78,8 @@ impl Heap {
         self.verify_no_dangling("sweep_step");
         if self.sweep_cur.is_null() {
             self.phase = GcPhase::Pause;
+            #[cfg(any(debug_assertions, feature = "gc-verify"))]
+            self.verify_slow_bits("sweep_step");
             true
         } else {
             false

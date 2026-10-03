@@ -53,8 +53,10 @@ impl Interp {
     /// `lua.c`'s `docall`: call `f` with `args` under the message handler.
     pub(crate) fn docall(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, Value> {
         let msgh = self.vm.native(msghandler);
+        // lua.c makes the call from inside `pmain`, the C function the
+        // whole interpreter runs in: a traceback ends with that level
         self.vm
-            .call_value_with_handler(f, args, msgh)
+            .call_value_with_handler_in_c(f, args, msgh)
             .map_err(|e| e.0)
     }
 

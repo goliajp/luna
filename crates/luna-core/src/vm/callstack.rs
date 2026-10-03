@@ -9,7 +9,9 @@
 //! [`ThreadStack`] interleaves the two into PUC's order: a native entered at
 //! depth `d` sits above `frames[d - 1]` and below `frames[d]`. A metamethod
 //! or `__close` handler run by an instruction gets no C level between it
-//! and that instruction's function, as in PUC.
+//! and that instruction's function, as in PUC. Nor does a host's protected
+//! call (`Vm::call_value_with_handler`), which PUC's `lua_pcall` makes
+//! without a `CallInfo` of its own.
 
 use crate::runtime::function::{CallFrame, ContKind, Frame};
 use crate::runtime::{Gc, NativeClosure, Value};
@@ -117,7 +119,9 @@ impl<'a> ThreadStack<'a> {
         for p in (0..=frames.len()).rev() {
             while k > 0 && acts[k - 1].depth as usize == p {
                 k -= 1;
-                levels.push(DbgKind::C(CLevel::Native(k)));
+                if !is_host_call(Value::Native(acts[k].nc)) {
+                    levels.push(DbgKind::C(CLevel::Native(k)));
+                }
             }
             if p == 0 {
                 break;
@@ -135,7 +139,8 @@ impl<'a> ThreadStack<'a> {
                     if matches!(
                         nc.kind,
                         ContKind::Pcall | ContKind::Xpcall { .. } | ContKind::Pairs
-                    ) {
+                    ) && !is_host_call(stack[nc.func_slot as usize])
+                    {
                         levels.push(DbgKind::C(CLevel::Cont(p - 1)));
                     }
                 }
@@ -218,6 +223,11 @@ impl<'a> ThreadStack<'a> {
         let pc = (f.pc as usize).max(1) - 1;
         Some((pc, *f.closure.proto.code.get(pc)?))
     }
+}
+
+/// Is `f` the protected call `Vm::call_value_with_handler` makes?
+fn is_host_call(f: Value) -> bool {
+    matches!(f, Value::Native(nc) if nc.kind == crate::vm::exec::native_call::NativeKind::HostXpcall)
 }
 
 /// The line of the instruction `f` is executing; -1 without line info.

@@ -1,0 +1,15 @@
+== 5.1
+stack traceback:
+	callnil.lua:2: in main chunk
+== 5.2
+stack traceback:
+	callnil.lua:2: in main chunk
+== 5.3
+stack traceback:
+	callnil.lua:2: in main chunk
+== 5.4
+stack traceback:
+	callnil.lua:2: in main chunk
+== 5.5
+stack traceback:
+	callnil.lua:2: in main chunk

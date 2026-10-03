@@ -25,8 +25,8 @@ fn mem_tag(r: u8) -> u8 {
 /// and a value of raw tag `want` (any non-nil value when `want` is
 /// `None`); to `miss` otherwise. A non-nil value under the key means no
 /// `__index` or `__newindex` would be consulted, so the table's metatable
-/// does not matter. Leaves the builder in no block; the caller seals `hit`
-/// and `miss`.
+/// does not matter; a store tests that the table is not read-only first.
+/// Leaves the builder in no block; the caller seals `hit` and `miss`.
 pub(super) fn emit_field_slot_check<E: Emit>(
     bcx: &mut E,
     t: Value,
