@@ -179,7 +179,9 @@ fn windows_msvc_binary_has_lt_meta_and_lt_skix_sections() {
     );
 
     if native {
-        let output = Command::new(&out_path).output().expect("run the MSVC binary");
+        let output = Command::new(&out_path)
+            .output()
+            .expect("run the MSVC binary");
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
             "500500\n",

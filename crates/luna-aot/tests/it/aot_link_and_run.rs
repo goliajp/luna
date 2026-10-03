@@ -17,12 +17,11 @@
 //! reports it as `ok` either way, since cargo doesn't distinguish
 //! skipped-but-asserted-skipped from passed) when:
 //!
-//! - `cc` is not on `PATH`
+//! - `cc` is not on `PATH` (off Windows; on Windows luna-aot finds
+//!   the MSVC tools itself)
 //! - `cargo` is not on `PATH` (we shell out to build the staticlib;
 //!   in-tree test runs always satisfy this since `cargo test`
 //!   guarantees `cargo` is reachable)
-//! - Running on Windows (this path is Unix-only — the embed.rs
-//!   linker shim refuses Windows explicitly)
 //!
 //! The skip path keeps the test green on CI runners that strip
 //! their build tools post-Rust-install.

@@ -30,9 +30,8 @@
 //!
 //! # Skip conditions
 //!
-//! - Windows: AOT trace install path is not implemented (COFF has no
-//!   bracket-symbol convention).
-//! - Missing `cc` or `cargo` on PATH: the AOT pipeline can't link.
+//! - Missing `cargo`, or off Windows `cc`, on PATH: the AOT pipeline
+//!   can't link.
 //! - Cross-compile-only environments: this test only exercises the
 //!   host triple.
 
