@@ -54,6 +54,20 @@ macro_rules! fast_arm_helper_macros {
                 resume_same!()
             }};
         }
+        // the rest of a `GetI` / `GetTabUp` read and of a table write,
+        // past the probe in their arm
+        macro_rules! index_op_miss {
+            () => {
+                // SAFETY: `fr`, `regs` and `kptr` are the running frame's
+                unsafe { $vm.index_op_miss($inst, $regs, $kptr, $fr) }
+            };
+        }
+        macro_rules! newindex_op_miss {
+            () => {
+                // SAFETY: `fr` is the running frame
+                unsafe { $vm.newindex_op_miss($inst, $fr) }
+            };
+        }
         // `R[A] := R[B][*pk]` for a key in a register or a constant
         macro_rules! get_arm {
             ($d pk:expr, $d probe:ident) => {{
@@ -84,7 +98,7 @@ macro_rules! fast_arm_helper_macros {
                     next!()
                 }
                 save!();
-                $vm.newindex_op_miss($inst, $fr)?;
+                newindex_op_miss!()?;
                 resume_same!()
             }};
         }

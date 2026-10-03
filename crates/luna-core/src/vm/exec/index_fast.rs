@@ -281,18 +281,21 @@ impl Vm {
                 }
             }
         }
-        self.newindex_raw_at_cold(pt, pk, pv)
+        // SAFETY: the caller's contract
+        unsafe { self.newindex_raw_at_cold(pt, pk, pv) }
     }
 
+    /// # Safety
+    /// As for `newindex_raw_at`.
     #[cold]
     #[inline(never)]
-    fn newindex_raw_at_cold(
+    unsafe fn newindex_raw_at_cold(
         &mut self,
         pt: *const Value,
         pk: *const Value,
         pv: *const Value,
     ) -> bool {
-        // SAFETY: as for `newindex_raw_kstr_at`
+        // SAFETY: the caller's contract
         unsafe { self.newindex_raw_at(pt, pk, pv) }
     }
 
