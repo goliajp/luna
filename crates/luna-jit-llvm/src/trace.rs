@@ -328,6 +328,26 @@ fn compile_trace_fn(
                 // Lua floor-mod: sign of result matches divisor.
                 let lhs = rf.load(ins.b(), "mod_lhs")?;
                 let rhs = rf.load(ins.c(), "mod_rhs")?;
+                // a zero divisor leaves the trace at this op, which the
+                // interpreter then runs and raises on; at the head that
+                // exit would re-enter the trace for ever
+                if rop.pc == head_pc {
+                    return None;
+                }
+                let zero = i64_type.const_zero();
+                let is_zero = builder
+                    .build_int_compare(IntPredicate::EQ, rhs, zero, "mod_zero")
+                    .ok()?;
+                let zero_bb = ctx.append_basic_block(function, "mod_zero_exit");
+                let go_bb = ctx.append_basic_block(function, "mod_go");
+                builder
+                    .build_conditional_branch(is_zero, zero_bb, go_bb)
+                    .ok()?;
+                builder.position_at_end(zero_bb);
+                rf.store_back()?;
+                let exit_pc_val = i64_type.const_int(rop.pc as u64, false);
+                builder.build_return(Some(&exit_pc_val)).ok()?;
+                builder.position_at_end(go_bb);
                 let res = rf.floor_mod(lhs, rhs)?;
                 rf.store(ins.a(), res, "mod_dst")?;
             }
