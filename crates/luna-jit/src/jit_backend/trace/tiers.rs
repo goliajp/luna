@@ -31,14 +31,29 @@ pub(super) fn compile_trace_jit(
     always_codegen: bool,
     float_only: bool,
 ) -> Option<CompiledTrace> {
+    compile_trace_captured(storage, record, opts, always_codegen, float_only, false).map(|r| r.0)
+}
+
+/// [`compile_trace_jit`], also handing back the code when `capture` (for a
+/// Vm that shares its traces; see `super::share`).
+pub(super) fn compile_trace_captured(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    always_codegen: bool,
+    float_only: bool,
+    capture: bool,
+) -> Option<(CompiledTrace, Option<image::Captured>)> {
     if opts.tier != luna_core::jit::trace::TraceTier::Optimizing {
-        match compile_trace_baseline(storage, record, opts, always_codegen, float_only) {
+        match compile_trace_baseline(storage, record, opts, always_codegen, float_only, capture) {
             Ok(ct) => return ct,
             Err(why) => BASELINE_FALLBACK.with(|c| c.set((c.get().0 + 1, why))),
         }
     }
-    compile_trace_cranelift(storage, record, opts, always_codegen, float_only)
+    compile_trace_cranelift(storage, record, opts, always_codegen, float_only, capture)
 }
+
+type Compiled = Option<(CompiledTrace, Option<image::Captured>)>;
 
 /// The baseline tier: `Ok(None)` when the record cannot be lowered at all,
 /// `Err` when the baseline code generator cannot take it.
@@ -48,31 +63,51 @@ fn compile_trace_baseline(
     opts: CompileOptions,
     always_codegen: bool,
     float_only: bool,
-) -> Result<Option<CompiledTrace>, &'static str> {
+    capture: bool,
+) -> Result<Compiled, &'static str> {
     let Some((lir, mut compiled)) = lower_trace_lir(record, opts, float_only) else {
         return Ok(None);
     };
     if !always_codegen && !trace_is_enterable(record, &compiled) {
         lir.give();
-        return Ok(Some(compiled));
+        let cap = capture.then(|| image::Captured {
+            code: None,
+            relocs: Vec::new(),
+            lir: None,
+        });
+        return Ok(Some((compiled, cap)));
     }
     let Ok(cs) = crate::jit_backend::storage::from_storage(storage) else {
         lir.give();
         return Ok(None);
     };
-    let entry = lir::assemble(&lir, &mut cs.baseline_code);
-    if let Some(t) = &compiled.tier_up {
-        *t.source.borrow_mut() = Some(Box::new(lir.detach()));
+    let placed = lir::assemble(&lir, &mut cs.baseline_code, capture);
+    let shared_lir = compiled
+        .tier_up
+        .as_ref()
+        .map(|_| std::sync::Arc::new(lir.detach()));
+    if let (Some(t), Some(l)) = (&compiled.tier_up, &shared_lir) {
+        *t.source.borrow_mut() = Some(Box::new(share::TierSource {
+            lir: l.clone(),
+            relocs: lir.relocs.clone(),
+            image: None,
+        }));
     }
+    let relocs = lir.relocs.clone();
     lir.give();
-    let entry = entry?;
+    let (entry, code) = placed?;
     BASELINE_CODEGEN.with(|c| c.set(c.get() + 1));
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     // SAFETY: the code implements the `TraceFn` ABI (`extern "C"`, one
     // pointer argument, an i64 result); it stays mapped until the owning
     // Vm releases its code
     compiled.entry = unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) };
-    Ok(Some(compiled))
+    let cap = code.map(|c| image::Captured {
+        code: Some((image::Tier::Baseline, c)),
+        relocs,
+        lir: shared_lir,
+    });
+    Ok(Some((compiled, cap)))
 }
 
 pub(super) fn compile_trace_cranelift(
@@ -81,14 +116,21 @@ pub(super) fn compile_trace_cranelift(
     opts: CompileOptions,
     always_codegen: bool,
     float_only: bool,
-) -> Option<CompiledTrace> {
+    capture: bool,
+) -> Compiled {
     let mut module =
         crate::jit_backend::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
     let (fn_id, mut compiled) =
         lower_trace_into_inner(&mut *module, record, opts, None, always_codegen, float_only)?;
     if !always_codegen && !trace_is_enterable(record, &compiled) {
-        return Some(compiled);
+        let cap = capture.then(|| image::Captured {
+            code: None,
+            relocs: Vec::new(),
+            lir: None,
+        });
+        return Some((compiled, cap));
     }
+    let relocs = reloc::values();
     module.finalize_definitions().ok()?;
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     let ptr = module.get_finalized_function(fn_id);
@@ -98,6 +140,7 @@ pub(super) fn compile_trace_cranelift(
     // `trace_handles` Vec immediately below.
     let entry_fn: TraceFn = unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) };
     compiled.entry = entry_fn;
+    let sites = reloc::take_sites();
     // `from_storage` is `Result`-shaped. On
     // `StorageMismatch` (Vm.jit.storage isn't a CraneliftJitStorage)
     // skip parking the handle and return `None` — the freshly built
@@ -110,7 +153,19 @@ pub(super) fn compile_trace_cranelift(
         _module: module.publish(),
         _entry_raw: ptr,
     });
-    Some(compiled)
+    let cap = match sites {
+        Some((len, sites)) if capture => Some(image::Captured {
+            // SAFETY: `ptr..ptr + len` is the function just finalized, which
+            // the storage keeps mapped
+            code: Some((image::Tier::Optimizing, unsafe {
+                reloc::copy_code(ptr, len, sites)
+            })),
+            relocs,
+            lir: None,
+        }),
+        _ => None,
+    };
+    Some((compiled, cap))
 }
 
 /// Compiles a baseline trace again with Cranelift, from the instructions the
@@ -119,20 +174,5 @@ pub(crate) fn tier_up_trace(
     storage: &mut dyn luna_core::jit::JitStorage,
     ct: &CompiledTrace,
 ) -> Option<TraceFn> {
-    let source = ct.tier_up.as_ref()?.source.borrow_mut().take()?;
-    let lir = source.downcast::<lir::Lir>().ok()?;
-    let mut module =
-        crate::jit_backend::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
-    let fn_id = lir::define_clif(&lir, &mut *module)?;
-    module.finalize_definitions().ok()?;
-    TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
-    let ptr = module.get_finalized_function(fn_id);
-    let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
-    cs.trace_handles.push(TraceHandle {
-        _module: module.publish(),
-        _entry_raw: ptr,
-    });
-    // SAFETY: `define_clif` declares the `TraceFn` signature, `(i64) -> i64`
-    // in the platform calling convention, and `storage` now owns the module
-    Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) })
+    share::tier_up(storage, ct)
 }

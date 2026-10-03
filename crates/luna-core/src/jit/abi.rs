@@ -167,6 +167,21 @@ pub trait TraceCompiler {
         let _ = (storage, ct);
         None
     }
+
+    /// Installs, for the recording `req` describes, traces some `Vm`
+    /// sharing compiled code with this one already compiled for code of
+    /// the same content: the trace itself, then the side traces of it that
+    /// were compiled too, each after its parent. Empty when there are none;
+    /// the interpreter then records as usual.
+    #[doc(hidden)]
+    fn adopt_traces(
+        &self,
+        storage: &mut dyn crate::jit::JitStorage,
+        req: &crate::jit::trace::AdoptRequest<'_>,
+    ) -> Vec<crate::jit::trace::AdoptedTrace> {
+        let _ = (storage, req);
+        Vec::new()
+    }
 }
 
 /// No-op backend installed by [`crate::vm::Vm::new_minimal`] in

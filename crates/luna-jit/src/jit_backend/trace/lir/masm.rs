@@ -102,6 +102,8 @@ pub(crate) struct Bufs {
     pub(crate) labels: Vec<u32>,
     /// (code offset, label, kind)
     pub(crate) fixups: Vec<(u32, u32, u8)>,
+    /// Where the relocated addresses sit in `bytes`.
+    pub(crate) sites: Vec<crate::jit_backend::trace::reloc::Site>,
 }
 
 pub(crate) trait Masm {
@@ -133,6 +135,8 @@ pub(crate) trait Masm {
 
     fn mov(&mut self, d: u8, s: u8);
     fn mov_imm(&mut self, d: u8, v: i64);
+    /// `d = v` in a form of fixed length, noting it as relocation `n`.
+    fn mov_reloc(&mut self, d: u8, v: i64, n: u32);
     fn fmov(&mut self, d: u8, s: u8);
     fn bits_to_f(&mut self, d: u8, s: u8);
     fn bits_to_i(&mut self, d: u8, s: u8);

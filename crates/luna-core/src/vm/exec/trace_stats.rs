@@ -92,6 +92,13 @@ impl Vm {
         self.jit.counters.compiled
     }
 
+    /// Number of traces installed from code another Vm (or this one, for
+    /// an earlier load of the same code) compiled, instead of being
+    /// recorded and compiled here.
+    pub fn trace_adopted_count(&self) -> u64 {
+        self.jit.counters.adopted
+    }
+
     /// Number of times the recorder captured a
     /// [`crate::jit::trace_types::FieldIcSnapshot`] with the field IC
     /// switch on ([`Self::set_field_ic_enabled`]). Stays 0 while it is
