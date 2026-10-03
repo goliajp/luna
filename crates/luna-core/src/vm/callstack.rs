@@ -227,7 +227,9 @@ impl<'a> ThreadStack<'a> {
 
 /// Is `f` the protected call `Vm::call_value_with_handler` makes?
 fn is_host_call(f: Value) -> bool {
-    matches!(f, Value::Native(nc) if nc.kind == crate::vm::exec::native_call::NativeKind::HostXpcall)
+    use crate::runtime::value::NativeFn;
+    matches!(f, Value::Native(nc)
+        if std::ptr::fn_addr_eq(nc.f, crate::vm::builtins::nat_host_xpcall as NativeFn))
 }
 
 /// The line of the instruction `f` is executing; -1 without line info.

@@ -53,24 +53,11 @@ impl Interp {
     /// `lua.c`'s `docall`: call `f` with `args` under the message handler.
     pub(crate) fn docall(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, Value> {
         let msgh = self.vm.native(msghandler);
-        self.in_pmain(f, msgh, args).map_err(|e| e.0)
-    }
-
-    /// Call `f` from inside `lua.c`'s `pmain`, the C function everything
-    /// the interpreter runs is called from, so its level is the last one a
-    /// traceback lists; `msgh` is the message handler (`nil`: none).
-    pub(crate) fn in_pmain(
-        &mut self,
-        f: Value,
-        msgh: Value,
-        args: &[Value],
-    ) -> Result<Vec<Value>, LuaError> {
-        let pmain = self.vm.native(pmain);
-        let mut call_args = Vec::with_capacity(args.len() + 2);
-        call_args.push(f);
-        call_args.push(msgh);
-        call_args.extend_from_slice(args);
-        self.vm.call_value(pmain, &call_args)
+        // lua.c makes the call from inside `pmain`, the C function the
+        // whole interpreter runs in: a traceback ends with that level
+        self.vm
+            .call_value_with_handler_in_c(f, args, msgh)
+            .map_err(|e| e.0)
     }
 
     /// `dochunk`: run a loaded chunk, reporting a failure to load or run it.
@@ -285,20 +272,6 @@ pub(crate) fn lua_tostring(vm: &mut Vm, v: Value) -> Option<Vec<u8>> {
         Value::Int(_) | Value::Float(_) => Some(vm.error_display(&LuaError(v)).into_bytes()),
         _ => None,
     }
-}
-
-/// The level of `lua.c`'s `pmain`: calls its first argument with the rest,
-/// protected under the second when that is not nil.
-fn pmain(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let f = vm.nat_arg(fs, nargs, 0);
-    let msgh = vm.nat_arg(fs, nargs, 1);
-    let args: Vec<Value> = (2..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
-    let results = if msgh.is_nil() {
-        vm.call_value(f, &args)?
-    } else {
-        vm.call_value_with_handler(f, &args, msgh)?
-    };
-    Ok(vm.nat_return(fs, &results))
 }
 
 /// `lua.c`'s message handler of each dialect: the error message with a

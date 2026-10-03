@@ -36,8 +36,10 @@ optimization.
 - `Vm::call_value_with_handler` is no longer a level of the stack: a
   traceback taken in its handler ends with the function the host called,
   as one taken under PUC's `lua_pcall` does, instead of with a
-  `[C]: in ?` line. The `luna` command line keeps that line, now from a C
-  level of its own that stands for `lua.c`'s `pmain`.
+  `[C]: in ?` line. The `luna` command line keeps that line: it calls
+  `Vm::call_value_with_handler_in_c` (hidden from the docs), the same call
+  made from inside a C function of the host's, as `lua.c`'s `docall` runs
+  inside `pmain`.
 
 - `luna_core::jit::trace::ExitTag` has a `Bool` variant and `TraceRecord`
   the `index_slots` and `index_key` fields; the frame-materialise helper
