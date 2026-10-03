@@ -16,14 +16,10 @@ impl Vm {
         }
     }
 
-    /// Same as [`Self::check_finalizer`] for a userdata. PUC 5.1 attaches the
-    /// finalizer to the proxy produced by `newproxy(true)` once its metatable
-    /// gains `__gc`. gc.lua's "testing userdata" section sets `__gc` on the
-    /// metatable that `newproxy` returned, which then needs to flow through.
-    /// Kept available for the future 5.2+ `lua_setmetatable` path (which
-    /// would re-check at metatable-set time); luna's only userdata
-    /// finalizables today come via `newproxy`, which registers itself.
-    #[allow(dead_code)]
+    /// Same as [`Self::check_finalizer`] for a userdata (the C API's
+    /// `lua_setmetatable` from 5.2 on). PUC 5.1 instead marks every
+    /// userdata that gets a metatable and looks for `__gc` when it is
+    /// collected, as `newproxy` does.
     pub(crate) fn check_finalizer_userdata(&mut self, u: Gc<crate::runtime::Userdata>) {
         if !self.get_mm(Value::Userdata(u), Mm::Gc).is_nil() {
             self.heap.register_finalizable_userdata(u);

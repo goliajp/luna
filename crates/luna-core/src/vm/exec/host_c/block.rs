@@ -71,7 +71,15 @@ impl Vm {
             data: Box::new(block),
             trace_fn: Some(trace_block),
         };
-        self.heap.new_userdata(payload, true)
+        let u = self.heap.new_userdata(payload, true);
+        // the block and the user values count in the heap's size, as PUC's
+        // `luaS_newudata` counts them
+        let extra = size.saturating_add(nuv * std::mem::size_of::<Value>());
+        // SAFETY: `u` was allocated above and is held only by this local;
+        // the borrow covers one store
+        unsafe { u.as_mut() }.extra_bytes = extra;
+        self.heap.apply_bytes_delta(0, extra);
+        u
     }
 
     /// The C API block of userdata `u`, if the C API made it.
@@ -95,11 +103,12 @@ impl Vm {
     }
 
     /// User value `n` (from 1) of `u`; `None` when it has no such value.
-    /// A userdata the C API did not make has the one 5.2/5.3 slot.
+    /// A userdata the C API did not make has the one 5.2/5.3 slot, and none
+    /// from 5.4 on (PUC's library userdata are made with no user values).
     pub fn host_uservalue(&self, u: Gc<crate::runtime::Userdata>, n: usize) -> Option<Value> {
         match self.host_block(u) {
             Some(b) => b.uservalues.get(n.checked_sub(1)?).copied(),
-            None => (n == 1).then_some(u.user_value),
+            None => (n == 1 && self.version <= LuaVersion::Lua53).then_some(u.user_value),
         }
     }
 
@@ -122,7 +131,7 @@ impl Vm {
                 Some(b) => b.uservalues.get_mut(i).map(|slot| *slot = v).is_some(),
                 None => false,
             },
-            _ if i == 0 => {
+            _ if i == 0 && self.version <= LuaVersion::Lua53 => {
                 ud.user_value = v;
                 true
             }

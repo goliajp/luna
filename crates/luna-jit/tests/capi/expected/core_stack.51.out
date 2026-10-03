@@ -1,0 +1,40 @@
+top=0
+pushed: 1 2 3 4 5 6
+insert(2): 1 6 2 3 4 5
+remove(1): 6 2 3 4 5
+replace(3): 6 2 r 4 5
+settop(8): 6 2 r 4 5 <nil> <nil> <nil>
+settop(-3): 6 2 r 4 5 <nil>
+pop(2): 6 2 r 4
+pushvalue(-1): 6 2 r 4 4
+checkstack(10)=1 checkstack(1e7)=0
+type(100)=-1 typename=no value
+rawequal(1,1)=1 rawequal(1,100)=0
+light: type=userdata isuserdata=1 same=1
+thread is main=1 type=thread
+tothread is L=1
+topointer(nil)=1 topointer(thread)!=0: 1
+iscfunction=1 tocfunction=1
+upvalues: u1 u2 type3=-1
+args=1 first=arg
+call result=1
+upvalues: changed u2 type3=-1
+args=1 first=again
+print iscfunction=1
+registry type=table
+objlen(12.5)=4
+objlen converted: 12.5
+  [1] isnumber=1 tonumber=16/1 tointeger=16 isstring=1 toboolean=1
+  [2] isnumber=1 tonumber=3/1 tointeger=3 isstring=1 toboolean=1
+  [3] isnumber=1 tonumber=100/1 tointeger=100 isstring=1 toboolean=1
+  [4] isnumber=0 tonumber=0/0 tointeger=0 isstring=1 toboolean=1
+  [5] isnumber=1 tonumber=2.5/1 tointeger=2 isstring=1 toboolean=1
+  [6] isnumber=1 tonumber=-3/1 tointeger=-3 isstring=1 toboolean=1
+  [7] isnumber=1 tonumber=7/1 tointeger=7 isstring=1 toboolean=1
+  [8] isnumber=0 tonumber=0/0 tointeger=0 isstring=0 toboolean=0
+  [9] isnumber=0 tonumber=0/0 tointeger=0 isstring=0 toboolean=0
+tolstring(2.5)=2.5 len=3 type now=string
+tolstring(-3.0)=-3 len=2
+tolstring(nil)=NULL len=0
+embedded zero len=3 second=0
+closed

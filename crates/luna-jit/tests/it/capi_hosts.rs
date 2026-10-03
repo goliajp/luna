@@ -33,6 +33,43 @@ fn lib_dir() -> PathBuf {
         .to_path_buf()
 }
 
+/// Build the C API's shared library next to the test executable once per
+/// run: `cargo test` builds the crate as an rlib only.
+fn ensure_lib() -> Result<(), String> {
+    static BUILT: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    BUILT
+        .get_or_init(|| {
+            let lib = lib_dir();
+            let profile = match lib.file_name().and_then(|n| n.to_str()) {
+                Some("debug") => "dev".to_string(),
+                Some(p) => p.to_string(),
+                None => return Err("no profile directory".to_string()),
+            };
+            let target = env!("LUNA_BUILD_TARGET");
+            let mut target_dir = lib.parent().expect("target/<profile>").to_path_buf();
+            let cross = target_dir.file_name().and_then(|n| n.to_str()) == Some(target);
+            if cross {
+                target_dir.pop();
+            }
+            let mut cmd = Command::new(option_env!("CARGO").unwrap_or("cargo"));
+            cmd.args(["build", "--lib", "-p", "luna-jit", "--profile", &profile])
+                .arg("--manifest-path")
+                .arg(crate_dir().join("Cargo.toml"))
+                .arg("--target-dir")
+                .arg(&target_dir);
+            if cross {
+                cmd.args(["--target", target]);
+            }
+            let out = cmd.output().map_err(|e| format!("cargo: {e}"))?;
+            if out.status.success() {
+                Ok(())
+            } else {
+                Err(String::from_utf8_lossy(&out.stderr).into_owned())
+            }
+        })
+        .clone()
+}
+
 fn compiler() -> cc::Tool {
     let target = env!("LUNA_BUILD_TARGET");
     cc::Build::new()
@@ -54,9 +91,12 @@ fn build(name: &str, v: &str, inc: &str) -> Result<PathBuf, String> {
     let exe = out_dir.join(format!("{name}-{v}{}", std::env::consts::EXE_SUFFIX));
     let src = crate_dir().join("tests/capi").join(format!("{name}.c"));
     let include = crate_dir().join("include").join(inc);
+    ensure_lib()?;
     let mut cmd = tool.to_command();
     if tool.is_like_msvc() {
-        cmd.arg("/nologo").arg(format!("/I{}", include.display()));
+        cmd.arg("/nologo")
+            .arg("/w")
+            .arg(format!("/I{}", include.display()));
         cmd.arg(format!("/I{}", crate_dir().join("tests/capi").display()));
         for d in DEFINES {
             cmd.arg(format!("/D{d}"));
@@ -65,7 +105,7 @@ fn build(name: &str, v: &str, inc: &str) -> Result<PathBuf, String> {
         cmd.arg(format!("/Fo{}\\", out_dir.display()));
         cmd.arg("/link").arg(lib.join("luna_jit.dll.lib"));
     } else {
-        cmd.arg("-I").arg(&include);
+        cmd.arg("-w").arg("-I").arg(&include);
         cmd.arg("-I").arg(crate_dir().join("tests/capi"));
         for d in DEFINES {
             cmd.arg(format!("-D{d}"));
@@ -187,4 +227,9 @@ fn pcall_handler() {
 #[test]
 fn error_unwinding() {
     check("error_unwind");
+}
+
+#[test]
+fn core_stack() {
+    check("core_stack");
 }

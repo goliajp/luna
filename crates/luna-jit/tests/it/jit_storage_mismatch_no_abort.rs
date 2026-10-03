@@ -129,17 +129,16 @@ fn capi_zero_result_callback_no_sigabrt_post_fix() {
     extern "C" fn c_void(_: *mut LuaState) -> std::os::raw::c_int {
         0
     }
-    let name = CString::new("c_void").unwrap();
-    let src = CString::new("return select('#', c_void(1, 2, 3))").unwrap();
+    let src = CString::new("local c_void = ...; return select('#', c_void(1, 2, 3))").unwrap();
     // SAFETY: `l` comes from `luaL_newstate` and is used on this thread
-    // only, until `lua_close`; `name` and `src` outlive the calls
+    // only, until `lua_close`; `src` outlives the calls
     unsafe {
         let l = luaL_newstate();
         luaL_openlibs(l);
-        lua_register(l, name.as_ptr(), c_void);
         assert_eq!(luaL_loadstring(l, src.as_ptr()), LUA_OK);
+        lua_pushcclosure(l, c_void, 0);
         assert_eq!(
-            lua_pcall(l, 0, 1, 0),
+            lua_pcall(l, 1, 1, 0),
             LUA_OK,
             "pcall completes via interp; pre-fix this aborted with SIGABRT in luaL_newstate's mismatched storage path"
         );
