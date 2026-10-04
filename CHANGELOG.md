@@ -298,6 +298,15 @@ optimization.
 
 ### Fixed
 
+- A `math.max`, `math.min` or `string.sub` call compiled into a trace,
+  left by the trace while its arguments were being computed (an argument
+  that stopped being a number or a string), made the interpreter call
+  whatever the call's register held, raising "attempt to call field
+  'max' (a number value)" instead of the library's argument error. The
+  trace now leaves at the library lookup. Seen with numeric `for` loops in
+  5.1 and `ipairs` loops in 5.4 / 5.5. Introduced after 4.0.1; 4.0.1,
+  4.0.0 and 3.2.2 give the right error on the same programs.
+
 - A trace recording that an error left (a call raising inside `pcall`)
   was closed the next time the same function was entered, giving a trace
   that ran only up to the failing operation and returned to its start, so
