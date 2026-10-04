@@ -84,8 +84,7 @@ impl Vm {
     /// PUC's LUA_ERRMEM: an allocation was refused, and the error object is
     /// "not enough memory".
     pub(crate) fn mem_err(&mut self) -> LuaError {
-        self.mem_raised += 1;
-        self.plain_err("not enough memory")
+        LuaError(Value::Str(self.heap.mem_ctx().raise_oom()))
     }
 
     /// How many errors have taken a status of their own so far; see
@@ -95,7 +94,7 @@ impl Vm {
         SpecialErrors {
             errerr: self.errerr_raised,
             gcmm: self.gcmm_raised,
-            mem: self.mem_raised,
+            mem: self.heap.mem_ctx().oom_raised(),
         }
     }
 

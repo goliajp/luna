@@ -290,12 +290,13 @@ mod tests {
     #[test]
     fn short_strings_are_interned() {
         let mut heap = Heap::new();
+        let live0 = heap.live_objects();
         let a = heap.intern(b"hello");
         let b = heap.intern(b"hello");
         let c = heap.intern(b"world");
         assert!(a.ptr_eq(b));
         assert!(!a.ptr_eq(c));
-        assert_eq!(heap.live_objects(), 2);
+        assert_eq!(heap.live_objects(), live0 + 2);
         assert_eq!(a.as_bytes(), b"hello");
     }
 
