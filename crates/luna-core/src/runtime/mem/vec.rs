@@ -10,9 +10,9 @@ use super::ctx::{BlockKind, MemRef, Oom};
 /// A `Vec<T>` whose memory comes from a Vm's allocation context. Growing
 /// can fail ([`Oom`]); a failed growth leaves the vector as it was.
 pub struct LVec<T> {
-    ptr: NonNull<T>,
-    cap: usize,
-    len: usize,
+    pub(super) ptr: NonNull<T>,
+    pub(super) cap: usize,
+    pub(super) len: usize,
     mem: MemRef,
     _own: PhantomData<T>,
 }
@@ -136,7 +136,7 @@ impl<T> LVec<T> {
     /// keep only the room test, as with `Vec`.
     #[inline(never)]
     #[cold]
-    fn reserve_slow(&mut self, extra: usize) -> Result<(), Oom> {
+    pub(super) fn reserve_slow(&mut self, extra: usize) -> Result<(), Oom> {
         let need = self.len.checked_add(extra).ok_or(Oom(self.mem))?;
         self.grow_to(need.max(self.cap.saturating_mul(2)).max(4))
     }
@@ -343,7 +343,7 @@ impl<T: Clone> LVec<T> {
 
     /// Append clones of `v` up to length `n`.
     #[inline(always)]
-    fn fill_to(&mut self, n: usize, v: T) {
+    pub(super) fn fill_to(&mut self, n: usize, v: T) {
         debug_assert!(n <= self.cap);
         let mut len = self.len;
         while len < n {
@@ -402,77 +402,6 @@ impl<T> Drop for Drain<'_, T> {
     fn drop(&mut self) {
         for _ in self.by_ref() {}
     }
-}
-
-/// Growth that ends the process when the allocation fails, as the
-/// standard library's `Vec` does. For the places that cannot report a
-/// memory error yet.
-impl<T> LVec<T> {
-    /// [`LVec::push`], ending the process on failure.
-    #[inline(always)]
-    pub fn push_or_abort(&mut self, v: T) {
-        if self.len == self.cap {
-            self.reserve_slow_or_abort(1);
-        }
-        // SAFETY: `len < cap`, so the slot is inside the block and unused
-        unsafe { self.ptr.as_ptr().add(self.len).write(v) };
-        self.len += 1;
-    }
-
-    /// [`LVec::reserve_slow`], ending the process on failure.
-    #[inline(never)]
-    #[cold]
-    fn reserve_slow_or_abort(&mut self, extra: usize) {
-        if self.reserve_slow(extra).is_err() {
-            vec_oom::<T>(self.len.saturating_add(extra))
-        }
-    }
-
-    /// [`LVec::insert`], ending the process on failure.
-    pub fn insert_or_abort(&mut self, i: usize, v: T) {
-        if self.insert(i, v).is_err() {
-            vec_oom::<T>(self.len + 1)
-        }
-    }
-
-    /// [`LVec::reserve`], ending the process on failure.
-    #[inline(always)]
-    pub fn reserve_or_abort(&mut self, extra: usize) {
-        if self.cap - self.len < extra {
-            self.reserve_slow_or_abort(extra);
-        }
-    }
-}
-
-impl<T: Clone> LVec<T> {
-    /// [`LVec::resize`], ending the process on failure.
-    #[inline]
-    pub fn resize_or_abort(&mut self, n: usize, v: T) {
-        if n <= self.len {
-            self.truncate(n);
-            return;
-        }
-        self.reserve_or_abort(n - self.len);
-        self.fill_to(n, v);
-    }
-
-    /// [`LVec::from_slice`], ending the process on failure.
-    pub fn from_slice_or_abort(mem: MemRef, s: &[T]) -> LVec<T> {
-        LVec::from_slice(mem, s).unwrap_or_else(|_| vec_oom::<T>(s.len()))
-    }
-
-    /// [`LVec::extend_from_slice`], ending the process on failure.
-    pub fn extend_from_slice_or_abort(&mut self, s: &[T]) {
-        if self.extend_from_slice(s).is_err() {
-            vec_oom::<T>(self.len.saturating_add(s.len()))
-        }
-    }
-}
-
-#[cold]
-#[inline(never)]
-fn vec_oom<T>(n: usize) -> ! {
-    super::oom_abort(Layout::array::<T>(n).unwrap_or(Layout::new::<T>()))
 }
 
 impl<T> Deref for LVec<T> {

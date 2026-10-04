@@ -13,6 +13,7 @@ mod boxed;
 mod ctx;
 mod map;
 mod vec;
+mod vec_abort;
 
 pub use any::LAny;
 pub use boxed::{LBox, LSlice};
