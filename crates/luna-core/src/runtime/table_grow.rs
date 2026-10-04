@@ -55,12 +55,19 @@ impl Table {
         debug_assert!(old as u64 > INLINE_ASIZE && new_asize > old);
         let old_layout = Self::slab_layout(old);
         let new_layout = Self::slab_layout(new_asize);
-        // SAFETY: `array_ptr` is the slab `alloc_slab(old)` (or an earlier
-        // `grow_slab`) made with `old_layout`; the new size is non-zero
-        let p = unsafe { std::alloc::realloc(self.array_ptr, old_layout, new_layout.size()) };
-        if p.is_null() {
-            std::alloc::handle_alloc_error(new_layout);
-        }
+        // SAFETY: `array_ptr` is the slab `alloc_slab(mem, old)` (or an
+        // earlier `grow_slab`) made with `old_layout` from the heap's
+        // context; the new size is non-zero
+        let p = match unsafe {
+            heap.mem_ctx().realloc(
+                std::ptr::NonNull::new_unchecked(self.array_ptr),
+                old_layout,
+                new_layout.size(),
+            )
+        } {
+            Some(p) => p.as_ptr(),
+            None => crate::runtime::mem::oom_abort(new_layout),
+        };
         // SAFETY: the block holds `new_asize * 9` bytes and more; the old
         // tags sit at `old * 8`, the new ones go to `new_asize * 8` (the
         // ranges may overlap, hence `copy`), then the new value slots and

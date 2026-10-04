@@ -55,20 +55,26 @@ impl LuaClosure {
     }
 
     /// Hand a closure with more than `INLINE_UPVALS_N` upvalues its storage.
-    pub(crate) fn set_overflow(&mut self, upvals: Box<[Gc<Upvalue>]>) {
+    pub(crate) fn set_overflow(&mut self, upvals: crate::runtime::mem::LSlice<Gc<Upvalue>>) {
         debug_assert_eq!(upvals.len(), self.upvals_len as usize);
         debug_assert!(upvals.len() > INLINE_UPVALS_N);
-        self.upvals_ptr = Box::into_raw(upvals) as *mut Gc<Upvalue>;
+        self.upvals_ptr = upvals.into_raw_parts().as_ptr();
     }
-}
 
-impl Drop for LuaClosure {
-    fn drop(&mut self) {
+    /// Give back an overflow closure's storage (the heap frees closures
+    /// this way; they have no `Drop`).
+    pub(crate) fn free_overflow(&mut self, mem: crate::runtime::mem::MemRef) {
         let n = self.upvals_len as usize;
         if n > INLINE_UPVALS_N {
-            // SAFETY: an overflow closure's `upvals_ptr` came from
-            // `Box::into_raw` of a slice of `n` (`set_overflow`)
-            drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(self.upvals_ptr, n)) });
+            // SAFETY: an overflow closure's `upvals_ptr` is a block of `n`
+            // handles from `mem` (`set_overflow`); it is not used again
+            drop(unsafe {
+                crate::runtime::mem::LSlice::from_raw_parts(
+                    std::ptr::NonNull::new_unchecked(self.upvals_ptr),
+                    n,
+                    mem,
+                )
+            });
         }
     }
 }

@@ -1,6 +1,7 @@
 //! The array part's slab: allocation, release and the tag / payload views.
 
 use super::*;
+use crate::runtime::mem::BlockKind;
 
 impl Table {
     /// Set `array_ptr` to the inline storage's stable heap
@@ -100,42 +101,45 @@ impl Table {
             .expect("array part within MAX_ASIZE")
     }
 
-    /// Allocate a zeroed slab (avals = `RawVal::NIL` aka `0`; atags =
-    /// `raw::NIL` aka `0`) for `asize > INLINE_ASIZE` slots.
-    pub(super) fn alloc_slab(asize: usize) -> *mut u8 {
+    /// A zeroed slab (avals = `RawVal::NIL` aka `0`; atags = `raw::NIL`
+    /// aka `0`) for `asize > INLINE_ASIZE` slots, from `mem`.
+    pub(super) fn alloc_slab(mem: MemRef, asize: usize) -> *mut u8 {
         let layout = Self::slab_layout(asize);
-        // SAFETY: the layout is non-zero-sized (asize > INLINE_ASIZE > 0)
-        let p = unsafe { std::alloc::alloc_zeroed(layout) };
-        if p.is_null() {
-            std::alloc::handle_alloc_error(layout);
+        match mem.ctx().alloc_zeroed(layout, BlockKind::Other) {
+            Some(p) => p.as_ptr(),
+            None => crate::runtime::mem::oom_abort(layout),
         }
-        p
     }
 
-    /// Free the slab behind `ptr`, which `alloc_slab(asize)` returned.
+    /// Free the slab behind `ptr`, which `alloc_slab(mem, asize)` returned.
     ///
     /// # Safety
-    /// `ptr` came from `alloc_slab(asize)` with this same `asize` and is
-    /// not used afterwards.
-    pub(super) unsafe fn free_slab(ptr: *mut u8, asize: usize) {
-        // SAFETY: per the contract, same pointer and layout as the allocation
-        unsafe { std::alloc::dealloc(ptr, Self::slab_layout(asize)) }
+    /// `ptr` came from `alloc_slab(mem, asize)` with this same `mem` and
+    /// `asize` (or a `grow_slab` to it) and is not used afterwards.
+    pub(super) unsafe fn free_slab(mem: MemRef, ptr: *mut u8, asize: usize) {
+        // SAFETY: per the contract, same block and layout as the allocation
+        unsafe {
+            mem.ctx().free(
+                std::ptr::NonNull::new_unchecked(ptr),
+                Self::slab_layout(asize),
+            )
+        }
     }
 
     /// Free the array part's slab, if it has one. The table must not read
     /// its array part again before setting up a new one.
-    pub(super) fn free_array_slab(&mut self) {
+    pub(super) fn free_array_slab(&mut self, mem: MemRef) {
         if self.asize > INLINE_ASIZE {
             // SAFETY: an array part larger than the inline storage lives in
-            // a slab from `alloc_slab(asize)`, owned by this table
-            unsafe { Self::free_slab(self.array_ptr, self.asize as usize) };
+            // a slab from `alloc_slab(mem, asize)`, owned by this table
+            unsafe { Self::free_slab(mem, self.array_ptr, self.asize as usize) };
         }
     }
 
     /// Release the array part and leave an empty one on the inline storage
     /// (the pool recycles a freed table this way).
-    pub(crate) fn drop_array_part(&mut self) {
-        self.free_array_slab();
+    pub(crate) fn drop_array_part(&mut self, mem: MemRef) {
+        self.free_array_slab(mem);
         self.asize = 0;
         self.acount = 0;
         self.aprefix = 0;
