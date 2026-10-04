@@ -1,6 +1,7 @@
 //! Local declarations and name resolution (locals, upvalues, globals).
 
 use super::*;
+use crate::runtime::mem::Oom;
 
 impl<'a> Compiler<'a> {
     /// 5.5 global-declaration resolution: explicit declaration > innermost
@@ -15,8 +16,8 @@ impl<'a> Compiler<'a> {
         let mut any_decl = false;
         for lvl in self.levels.iter().rev() {
             for b in lvl.blocks.iter().rev() {
-                if let Some((_, ro)) = b.gdecls.iter().rev().find(|(n, _)| &**n == name) {
-                    return Ok(VarKind::Global { read_only: *ro });
+                if let Some(&(_, ro)) = b.gdecls.iter().rev().find(|&&(n, _)| n == name) {
+                    return Ok(VarKind::Global { read_only: ro });
                 }
                 if innermost_collective.is_none()
                     && let Some(ro) = b.collective
@@ -68,17 +69,17 @@ impl<'a> Compiler<'a> {
             vararg_virtual: false,
             start_pc,
             konst: None,
-        });
+        })?;
         self.l().avars.push(AVar {
             name: Some(name),
             reg: Some(reg),
             global: false,
-        });
+        })?;
         Ok(())
     }
 
     /// Declare a compile-time constant local (PUC `RDKCTC`).
-    pub(super) fn declare_ct_const(&mut self, name: &'a str, value: CtConst) {
+    pub(super) fn declare_ct_const(&mut self, name: &'a str, value: CtConst) -> Result<(), Oom> {
         let start_pc = self.lr().code.len() as u32;
         self.l().locals.push(LocalVar {
             name,
@@ -88,12 +89,12 @@ impl<'a> Compiler<'a> {
             vararg_virtual: false,
             start_pc,
             konst: Some(value),
-        });
+        })?;
         self.l().avars.push(AVar {
             name: Some(name),
             reg: None,
             global: false,
-        });
+        })
     }
 
     /// The compile-time constant `name` refers to here, if it does: the
@@ -122,26 +123,26 @@ impl<'a> Compiler<'a> {
 
     /// Materialise a compile-time constant as an expression of the
     /// function being compiled.
-    pub(super) fn ct_exp(&mut self, v: CtConst) -> Exp {
-        match v {
+    pub(super) fn ct_exp(&mut self, v: CtConst) -> Result<Exp, Oom> {
+        Ok(match v {
             CtConst::Nil => Exp::Nil,
             CtConst::Bool(true) => Exp::True,
             CtConst::Bool(false) => Exp::False,
             CtConst::Int(i) => Exp::Int(i),
             CtConst::Float(f) => Exp::Float(f),
-            CtConst::Str(s) => Exp::Const(self.sym_const(s)),
-        }
+            CtConst::Str(s) => Exp::Const(self.sym_const(s)?),
+        })
     }
 
     /// Append a `global` declaration marker to the active-variable sequence so
     /// a goto jumping over it lands "into its scope" (PUC's `new_varkind` +
     /// `nactvar++`). `name` is `None` for a `global *` collective marker.
-    pub(super) fn declare_global_marker(&mut self, name: Option<&'a str>) {
+    pub(super) fn declare_global_marker(&mut self, name: Option<&'a str>) -> Result<(), Oom> {
         self.l().avars.push(AVar {
             name,
             reg: None,
             global: true,
-        });
+        })
     }
 
     /// Register floor to CLOSE when discarding locals declared at/after the
@@ -210,7 +211,7 @@ impl<'a> Compiler<'a> {
                     index: reg as u8,
                     name: name.into(),
                     read_only,
-                });
+                })?;
                 Ok(VarKind::Upval(ui))
             }
             VarKind::Upval(pidx) => {
@@ -224,7 +225,7 @@ impl<'a> Compiler<'a> {
                     index: pidx as u8,
                     name: name.into(),
                     read_only,
-                });
+                })?;
                 Ok(VarKind::Upval(ui))
             }
         }

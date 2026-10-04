@@ -18,7 +18,7 @@ pub use any::LAny;
 pub use boxed::{LBox, LSlice};
 pub use ctx::{BlockKind, MemCtx, MemOwner, MemRef, MemoryLimit, MemoryPolicy, Oom, RawAllocFn};
 pub use map::{LMap, WordHasher, word_hash};
-pub use vec::LVec;
+pub use vec::{Drain, LVec};
 
 #[cfg(test)]
 mod tests;

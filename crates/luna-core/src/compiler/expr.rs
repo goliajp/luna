@@ -11,7 +11,7 @@ impl<'a> Compiler<'a> {
             Expr::False => Ok(Exp::False),
             Expr::Int(i) => Ok(Exp::Int(*i)),
             Expr::Float(f) => Ok(Exp::Float(*f)),
-            Expr::Str(s) => Ok(Exp::Const(self.sym_const(*s))),
+            Expr::Str(s) => Ok(Exp::Const(self.sym_const(*s)?)),
             Expr::Name(n) => {
                 self.last_line = n.line;
                 self.name_expr(self.nm(n))
@@ -47,14 +47,14 @@ impl<'a> Compiler<'a> {
     pub(super) fn name_expr(&mut self, name: &str) -> Result<Exp, SyntaxError> {
         match self.resolve_name(name)? {
             VarKind::Local(reg) => Ok(Exp::Reg(reg)),
-            VarKind::Const(v) => Ok(self.ct_exp(v)),
+            VarKind::Const(v) => Ok(self.ct_exp(v)?),
             VarKind::Upval(u) => Ok(Exp::Reloc(self.emit(Inst::iabc(
                 Op::GetUpval,
                 0,
                 u,
                 0,
                 false,
-            )))),
+            ))?)),
             VarKind::Global { .. } => {
                 // declaration check (5.5): undeclared names error under a
                 // strict regime; reads are fine for const globals
@@ -74,7 +74,7 @@ impl<'a> Compiler<'a> {
         self.levels.iter().rev().any(|lvl| {
             lvl.blocks
                 .iter()
-                .any(|b| b.gdecls.iter().any(|(n, _)| &**n == "_ENV"))
+                .any(|b| b.gdecls.iter().any(|&(n, _)| n == "_ENV"))
         })
     }
 
@@ -85,9 +85,9 @@ impl<'a> Compiler<'a> {
         let saved = self.lr().freereg;
         let e = self.global_access(name)?;
         let r = self.exp_to_anyreg(e)?;
-        let c = self.str_const(name.as_bytes());
+        let c = self.str_const(name.as_bytes())?;
         let bx = if c < MAX_BX { c + 1 } else { 0 };
-        self.emit(Inst::iabx(Op::ErrNNil, r, bx));
+        self.emit(Inst::iabx(Op::ErrNNil, r, bx))?;
         self.set_freereg(saved);
         Ok(())
     }
@@ -99,7 +99,7 @@ impl<'a> Compiler<'a> {
                 format!("_ENV is global when accessing variable '{name}'"),
             ));
         }
-        let c = self.str_const(name.as_bytes());
+        let c = self.str_const(name.as_bytes())?;
         match self.resolve_env()? {
             VarKind::Upval(u) if c <= 0xFF => Ok(Exp::Reloc(self.emit(Inst::iabc(
                 Op::GetTabUp,
@@ -107,29 +107,29 @@ impl<'a> Compiler<'a> {
                 u,
                 c,
                 true,
-            )))),
+            ))?)),
             VarKind::Local(r) if c <= 0xFF => Ok(Exp::Reloc(self.emit(Inst::iabc(
                 Op::GetField,
                 0,
                 r,
                 c,
                 true,
-            )))),
+            ))?)),
             env => {
                 // rare: huge constant index — go through registers
                 let er = self.reserve(2)?;
                 match env {
                     VarKind::Upval(u) => {
-                        self.emit(Inst::iabc(Op::GetUpval, er, u, 0, false));
+                        self.emit(Inst::iabc(Op::GetUpval, er, u, 0, false))?;
                     }
                     VarKind::Local(r) => {
-                        self.emit(Inst::iabc(Op::Move, er, r, 0, false));
+                        self.emit(Inst::iabc(Op::Move, er, r, 0, false))?;
                     }
                     VarKind::Global { .. } | VarKind::Const(_) => {
                         unreachable!("resolve_env gives a register or an upvalue")
                     }
                 }
-                self.load_const(er + 1, c);
+                self.load_const(er + 1, c)?;
                 self.set_freereg(er);
                 Ok(Exp::Reloc(self.emit(Inst::iabc(
                     Op::GetTable,
@@ -137,7 +137,7 @@ impl<'a> Compiler<'a> {
                     er,
                     er + 1,
                     false,
-                ))))
+                ))?))
             }
         }
     }
@@ -150,7 +150,7 @@ impl<'a> Compiler<'a> {
         }
         match self.resolve_name("_ENV")? {
             VarKind::Const(v) => {
-                let e = self.ct_exp(v);
+                let e = self.ct_exp(v)?;
                 Ok(VarKind::Local(self.exp_to_anyreg(e)?))
             }
             k => Ok(k),
@@ -162,7 +162,7 @@ impl<'a> Compiler<'a> {
             return Err(self.err(self.last_line, "cannot use '...' outside a vararg function"));
         }
         let base = self.reserve(1)?;
-        let pc = self.emit(Inst::iabc(Op::Vararg, base, 0, 2, false));
+        let pc = self.emit(Inst::iabc(Op::Vararg, base, 0, 2, false))?;
         Ok(Exp::Open { pc, base })
     }
 
@@ -179,7 +179,7 @@ impl<'a> Compiler<'a> {
                 let (nfixed, open) = self.args_onto_stack(self.ls(*args), base + 1)?;
                 self.last_line = line;
                 let b = if open { 0 } else { nfixed + 1 };
-                let pc = self.emit(Inst::iabc(Op::Call, base, b, 2, false));
+                let pc = self.emit(Inst::iabc(Op::Call, base, b, 2, false))?;
                 self.set_freereg(base + 1);
                 Ok(Exp::Open { pc, base })
             }
@@ -195,20 +195,20 @@ impl<'a> Compiler<'a> {
                 let o = self.exp_to_anyreg(oe)?;
                 self.set_freereg(base);
                 self.reserve(2)?;
-                let c = self.sym_const(method.sym);
+                let c = self.sym_const(method.sym)?;
                 self.last_line = line;
                 if c <= 0xFF {
-                    self.emit(Inst::iabc(Op::SelfOp, base, o, c, true));
+                    self.emit(Inst::iabc(Op::SelfOp, base, o, c, true))?;
                 } else if self.version >= LuaVersion::Lua55 {
                     // PUC 5.5 drops back to a plain GETTABLE when the SELF
                     // C-operand can't fit the constant — getobjname then
                     // classifies the call as "field". 5.5 errors.lua :328
                     // bakes the wording in (its comment literally says
                     // "cannot use 'self' opcode").
-                    self.emit(Inst::iabc(Op::Move, base + 1, o, 0, false));
+                    self.emit(Inst::iabc(Op::Move, base + 1, o, 0, false))?;
                     let kr = self.reserve(1)?;
-                    self.load_const(kr, c);
-                    self.emit(Inst::iabc(Op::GetTable, base, base + 1, kr, false));
+                    self.load_const(kr, c)?;
+                    self.emit(Inst::iabc(Op::GetTable, base, base + 1, kr, false))?;
                     self.set_freereg(base + 2);
                 } else {
                     // PUC 5.4 `luaK_exp2RK`: load the key into a register and
@@ -216,15 +216,15 @@ impl<'a> Compiler<'a> {
                     // the instruction so getobjname classifies the call as
                     // "method" — 5.4 errors.lua :303 exercises this path.
                     let kr = self.reserve(1)?;
-                    self.load_const(kr, c);
+                    self.load_const(kr, c)?;
                     self.set_freereg(base);
                     self.reserve(2)?;
-                    self.emit(Inst::iabc(Op::SelfOp, base, o, kr, false));
+                    self.emit(Inst::iabc(Op::SelfOp, base, o, kr, false))?;
                 }
                 let (nfixed, open) = self.args_onto_stack(self.ls(*args), base + 2)?;
                 self.last_line = line;
                 let b = if open { 0 } else { nfixed + 2 };
-                let pc = self.emit(Inst::iabc(Op::Call, base, b, 2, false));
+                let pc = self.emit(Inst::iabc(Op::Call, base, b, 2, false))?;
                 self.set_freereg(base + 1);
                 Ok(Exp::Open { pc, base })
             }
@@ -267,20 +267,20 @@ impl<'a> Compiler<'a> {
     pub(super) fn exp_to_reg(&mut self, e: Exp, reg: u32) -> Result<(), SyntaxError> {
         match e {
             Exp::Nil => {
-                self.emit(Inst::iabc(Op::LoadNil, reg, 0, 0, false));
+                self.emit(Inst::iabc(Op::LoadNil, reg, 0, 0, false))?;
             }
             Exp::True => {
-                self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
+                self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false))?;
             }
             Exp::False => {
-                self.emit(Inst::iabc(Op::LoadFalse, reg, 0, 0, false));
+                self.emit(Inst::iabc(Op::LoadFalse, reg, 0, 0, false))?;
             }
             Exp::Int(i) => {
                 if (-65535..=65535).contains(&i) {
-                    self.emit(Inst::iasbx(Op::LoadI, reg, i as i32));
+                    self.emit(Inst::iasbx(Op::LoadI, reg, i as i32))?;
                 } else {
-                    let c = self.const_idx(ConstKey::Int(i), Value::Int(i));
-                    self.load_const(reg, c);
+                    let c = self.const_idx(ConstKey::Int(i), Value::Int(i))?;
+                    self.load_const(reg, c)?;
                 }
             }
             Exp::Float(mut f) => {
@@ -291,25 +291,25 @@ impl<'a> Compiler<'a> {
                 // bit-compare so the LoadF fast path doesn't fold -0.0 to +0.0
                 // (`-0.0 == 0.0` but their bit patterns differ)
                 if (-65535..=65535).contains(&as_int) && (as_int as f64).to_bits() == f.to_bits() {
-                    self.emit(Inst::iasbx(Op::LoadF, reg, as_int));
+                    self.emit(Inst::iasbx(Op::LoadF, reg, as_int))?;
                 } else {
-                    let c = self.const_idx(ConstKey::Float(f.to_bits()), Value::Float(f));
-                    self.load_const(reg, c);
+                    let c = self.const_idx(ConstKey::Float(f.to_bits()), Value::Float(f))?;
+                    self.load_const(reg, c)?;
                 }
             }
-            Exp::Const(c) => self.load_const(reg, c),
+            Exp::Const(c) => self.load_const(reg, c)?,
             Exp::Reg(r) => {
                 if r != reg {
-                    self.emit(Inst::iabc(Op::Move, reg, r, 0, false));
+                    self.emit(Inst::iabc(Op::Move, reg, r, 0, false))?;
                 }
             }
             Exp::Reloc(pc) => self.patch_dest(pc, reg),
             Exp::Cmp { op, l, r, c } => {
-                self.emit(Inst::iabc(op, l, r, c, true));
-                self.emit(Inst::isj(Op::Jmp, 1));
-                self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
+                self.emit(Inst::iabc(op, l, r, c, true))?;
+                self.emit(Inst::isj(Op::Jmp, 1))?;
+                self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false))?;
                 let tpad = self.here();
-                self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
+                self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false))?;
                 // Jmp(1) above skips the LFalseSkip and lands on the LoadTrue
                 // pad — that pc is a jump destination.
                 self.mark_target(tpad);
@@ -317,7 +317,7 @@ impl<'a> Compiler<'a> {
             Exp::Open { pc, base } => {
                 self.patch_wanted(pc, 2);
                 if base != reg {
-                    self.emit(Inst::iabc(Op::Move, reg, base, 0, false));
+                    self.emit(Inst::iabc(Op::Move, reg, base, 0, false))?;
                 }
             }
         }

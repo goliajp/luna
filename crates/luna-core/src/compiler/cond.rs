@@ -22,7 +22,7 @@ pub(super) enum LastTest {
 impl Compiler<'_> {
     /// Compile a condition; the returned jumps are taken when it is FALSE.
     pub(super) fn cond_jump_false(&mut self, id: ExprId) -> Result<(Jumps, LastTest), SyntaxError> {
-        let mut jumps = Jumps::new();
+        let mut jumps = Jumps::new(self.heap.mem());
         let last = self.cond_jumps(id, false, &mut jumps)?;
         Ok((jumps, last))
     }
@@ -50,7 +50,7 @@ impl Compiler<'_> {
                     self.cond_leaf_or_tree(lhs, decides, out, line)?;
                     self.cond_jumps(rhs, jump_if, out)
                 } else {
-                    let mut past = Jumps::new();
+                    let mut past = Jumps::new(self.heap.mem());
                     self.cond_leaf_or_tree(lhs, decides, &mut past, line)?;
                     let last = self.cond_jumps(rhs, jump_if, out)?;
                     for pc in past.iter() {
@@ -113,7 +113,7 @@ impl Compiler<'_> {
     ) -> Result<LastTest, SyntaxError> {
         let last = match e {
             Exp::Cmp { op, l, r, c } => {
-                self.emit(Inst::iabc(op, l, r, c, jump_if));
+                self.emit(Inst::iabc(op, l, r, c, jump_if))?;
                 LastTest::Cmp
             }
             // PUC `luaK_goiftrue` / `luaK_goiffalse`: a constant whose truth
@@ -128,12 +128,12 @@ impl Compiler<'_> {
             }
             e => {
                 let r = self.exp_to_anyreg(e)?;
-                self.emit(Inst::iabc(Op::Test, r, 0, 0, jump_if));
+                self.emit(Inst::iabc(Op::Test, r, 0, 0, jump_if))?;
                 LastTest::Test
             }
         };
         self.set_freereg(saved);
-        out.push(self.emit_jump());
+        out.push(self.emit_jump()?)?;
         Ok(last)
     }
 }
