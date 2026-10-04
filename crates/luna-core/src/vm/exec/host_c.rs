@@ -40,6 +40,9 @@ pub struct HostContHooks {
     /// A thread the C API has seen was closed: its C frames and C stack
     /// go.
     pub reset: fn(&mut Vm, Gc<Coro>),
+    /// A thread was made (PUC `lua_newthread`, which `coroutine.create`
+    /// calls too): it takes its copy of the main thread's extra space now.
+    pub created: fn(&mut Vm, Gc<Coro>),
 }
 
 /// A warning function that replaces the default one (PUC `lua_setwarnf`):
@@ -263,12 +266,27 @@ impl Vm {
         self.native(f)
     }
 
-    /// How many errors have taken a status of their own: "error in error
-    /// handling" (PUC's `LUA_ERRERR`), and 5.2/5.3's finalizer error of a
-    /// full collection (`LUA_ERRGCMM`). A protected call compares it before
-    /// and after, and tells them apart by the message.
-    pub fn host_errerr_count(&self) -> u64 {
-        self.errerr_raised + self.gcmm_raised
+    /// Fire the return hook of the running C function now, while its own
+    /// stack still holds its arguments, what it pushed and its `n` results,
+    /// the first of them at transfer index `ftransfer` (PUC `rethook` runs
+    /// before the results move); its return then skips the hook.
+    pub fn host_c_return_hook(&mut self, ftransfer: u32, n: u32) -> Result<(), LuaError> {
+        let armed = |vm: &Vm| {
+            vm.hook.ret && !vm.in_hook && (vm.hook.func.is_some() || vm.hook.rust_func.is_some())
+        };
+        if !armed(self) {
+            return Ok(());
+        }
+        self.hook_return(true, ftransfer, n)?;
+        // a hook that turned itself off leaves nothing to skip
+        self.native_ret_hooked = armed(self);
+        Ok(())
+    }
+
+    /// The status `co` died with, when it died by an error and was not
+    /// closed since.
+    pub fn host_thread_error(&self, co: Gc<Coro>) -> Option<crate::runtime::ErrorStatus> {
+        (co.status == CoroStatus::Dead && co.error_value.is_some()).then_some(co.error_status)
     }
 
     /// Close `co` (PUC `lua_closethread`): run its pending `__close`

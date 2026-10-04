@@ -11,13 +11,19 @@ use crate::version::LuaVersion;
 
 mod escape;
 mod interning;
+mod source;
 mod strings;
 
-/// Streaming Lua lexer. Holds a borrowed reference to the source bytes and
-/// the current line counter; `next_token()` produces one [`TokenInfo`] at a
-/// time.
-pub struct Lexer<'s> {
-    src: &'s [u8],
+pub(crate) use source::{Feed, Stream};
+#[doc(hidden)]
+pub use source::{Source, Whole};
+
+/// Streaming Lua lexer. Holds the source bytes (borrowed whole, or read
+/// piece by piece) and the current line counter; `next_token()` produces
+/// one [`TokenInfo`] at a time.
+pub struct Lexer<'s, S: Source = Whole<'s>> {
+    src: S,
+    _whole: std::marker::PhantomData<&'s [u8]>,
     pos: usize,
     line: u32,
     version: LuaVersion,
@@ -49,27 +55,12 @@ pub(crate) enum Lexed {
 impl<'s> Lexer<'s> {
     /// Build a lexer over `src` for the given Lua dialect.
     pub fn new(src: &'s [u8], version: LuaVersion) -> Lexer<'s> {
-        Lexer {
-            src,
-            pos: 0,
-            line: 1,
-            version,
-            buf: Vec::new(),
-            names: None,
-            last_sym: Sym(0),
-            str_range: (0, 0),
-        }
+        Lexer::over(Whole(src), version)
     }
 
     /// Borrow the source bytes the lexer is iterating.
     pub fn src(&self) -> &'s [u8] {
-        self.src
-    }
-
-    /// The line the scanner is on (PUC `ls->linenumber`): the line where
-    /// the most recently read token ends. Syntax errors are reported here.
-    pub fn line(&self) -> u32 {
-        self.line
+        self.src.0
     }
 
     /// Strip a leading UTF-8 BOM and `#...` shebang line from a *file* chunk,
@@ -89,17 +80,54 @@ impl<'s> Lexer<'s> {
         }
         &src[p..]
     }
+}
 
+impl<'s, S: Source> Lexer<'s, S> {
+    /// A lexer over the bytes of `src`.
+    pub(crate) fn over(src: S, version: LuaVersion) -> Lexer<'s, S> {
+        Lexer {
+            src,
+            _whole: std::marker::PhantomData,
+            pos: 0,
+            line: 1,
+            version,
+            buf: Vec::new(),
+            names: None,
+            last_sym: Sym(0),
+            str_range: (0, 0),
+        }
+    }
+
+    /// The source bytes read so far.
+    pub(crate) fn bytes(&self) -> &[u8] {
+        self.src.bytes()
+    }
+
+    /// The line the scanner is on (PUC `ls->linenumber`): the line where
+    /// the most recently read token ends. Syntax errors are reported here.
+    pub fn line(&self) -> u32 {
+        self.line
+    }
+
+    #[inline(always)]
     fn cur(&self) -> Option<u8> {
-        self.src.get(self.pos).copied()
+        self.src.bytes().get(self.pos).copied()
     }
 
-    fn at(&self, off: usize) -> Option<u8> {
-        self.src.get(self.pos + off).copied()
+    fn at(&mut self, off: usize) -> Option<u8> {
+        while S::STREAMS && self.pos + off >= self.src.bytes().len() && self.src.more() {}
+        self.src.bytes().get(self.pos + off).copied()
     }
 
+    /// Move to the next byte. A stream reads its next piece as soon as the
+    /// scan moves past the last byte it has, as PUC's `next` (`zgetc`) does,
+    /// so the reader is called exactly when PUC calls it.
+    #[inline(always)]
     fn bump(&mut self) {
         self.pos += 1;
+        if S::STREAMS && self.pos == self.src.bytes().len() {
+            self.src.more();
+        }
     }
 
     fn save(&mut self, c: u8) {
@@ -178,7 +206,8 @@ impl<'s> Lexer<'s> {
                 b'\n' | b'\r' => self.newline(),
                 b' ' | b'\t' | 0x0B | 0x0C => self.bump(),
                 b'-' if self.at(1) == Some(b'-') => {
-                    self.pos += 2;
+                    self.bump();
+                    self.bump();
                     self.comment()?;
                 }
                 _ => {
@@ -299,7 +328,7 @@ impl<'s> Lexer<'s> {
         ) {
             self.bump();
         }
-        let text = &self.src[start..self.pos];
+        let text = &self.src.bytes()[start..self.pos];
         match text {
             b"and" => Token::And,
             b"break" => Token::Break,
@@ -390,7 +419,7 @@ impl<'s> Lexer<'s> {
             }
         }
         // the lex buffer of a numeral is its source text
-        let text = &self.src[start..self.pos];
+        let text = &self.src.bytes()[start..self.pos];
         let hex = text.len() > 1 && text[0] == b'0' && matches!(text[1], b'x' | b'X');
         let num = if hex {
             // 5.1 converts with C99 `strtod`, which reads hex floats too.

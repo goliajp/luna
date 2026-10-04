@@ -198,7 +198,11 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     }
     let total = n * (l + lsep) - lsep;
     if total > u128::from(MAX_STR) {
-        return Err(vm.plain_err("not enough memory"));
+        // 5.3's buffer reports a refused allocation as an ordinary error
+        if v == LuaVersion::Lua53 {
+            return Err(raise_str(vm, "not enough memory for buffer allocation"));
+        }
+        return Err(vm.mem_err());
     }
     let mut out = Vec::with_capacity(total as usize);
     for k in 0..n {

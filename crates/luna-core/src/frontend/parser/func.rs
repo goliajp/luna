@@ -51,7 +51,11 @@ impl<'s> Parser<'s> {
         } = self;
         if let Some(g) = gotos {
             for p in chunk.list(params) {
-                g.declare(lex.names().text(p.sym));
+                g.declare(lex.names().text(p.sym), VarKind::Local);
+            }
+            // 5.5's named `...` parameter is a read-only local
+            if let Vararg::Named(n) = &vararg {
+                g.declare(lex.names().text(n.sym), VarKind::Const);
             }
         }
         self.expect(Token::RParen, ")")?;

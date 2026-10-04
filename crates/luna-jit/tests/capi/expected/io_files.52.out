@@ -1,0 +1,41 @@
+"file" "file" nil
+"file:file (P)"
+54 2 54
+true true true
+true
+"closed file" "file (closed)"
+false "attempt to use a closed file"
+false "attempt to use a closed file"
+"line one"
+"line two\
+"
+12 3.5 -0.25
+""
+31 1000 0.5 -7 nan
+"" "\
+la" "st" "" nil nil nil
+false "bad argument #2 to '?' (invalid format)"
+false "bad argument #2 to '?' (invalid option)"
+0 "line"
+[line one][line two][12 3.5 -0.25][0x1F 1e3 .5 -7 nan][last]
+<8><8><12><18><4>
+"file" ""
+"line" " one"
+1
+true true
+"line one" nil
+false "standard input file is closed"
+"file:file (P)" true
+true
+false "standard output file is closed"
+"to default 1\
+"
+nil "no/such/dir/file: No such file or directory" 2
+false "cannot open file 'no/such/file' (No such file or directory)"
+false "bad argument #2 to 'io.open' (invalid mode)"
+false "cannot open file 'no/such/file' (No such file or directory)"
+nil "cannot close standard file"
+"file"
+"temp"
+63
+true true

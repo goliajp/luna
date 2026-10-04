@@ -1,0 +1,8 @@
+  create: extra=111
+  wrap: extra=111
+lua_newthread: extra=111
+seen from C later: extra=111
+  own: extra=5
+  main: extra=222
+  own: extra=5
+  inner: extra=333

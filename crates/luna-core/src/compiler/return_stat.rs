@@ -3,10 +3,41 @@
 use super::*;
 
 impl<'a> Compiler<'a> {
+    /// The register a `return` of no values names (PUC `luaK_ret`'s first
+    /// register, which a 5.4+ return hook reports through `ftransfer`):
+    /// the first one above the active locals from 5.4 on, 0 before.
+    fn return0_base(&self) -> u32 {
+        if self.version >= LuaVersion::Lua54 {
+            self.lr().freereg
+        } else {
+            0
+        }
+    }
+
+    /// The implicit `return` that ends a function, on line `line`, and the
+    /// end of its outermost block. 5.2+ return while the function's locals
+    /// are still active (PUC `close_func`: `luaK_ret`, then `leaveblock`),
+    /// so a return hook sees them; 5.1 removes them first. The block's
+    /// upvalues are closed by the return (see `mark_closing_returns`), not
+    /// by a CLOSE of the block.
+    pub(super) fn final_return(&mut self, line: u32) -> Result<(), SyntaxError> {
+        if self.version <= LuaVersion::Lua51 {
+            self.leave_block_with(false)?;
+            self.last_line = line;
+            self.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
+            return Ok(());
+        }
+        self.last_line = line;
+        let a = self.return0_base();
+        self.emit(Inst::iabc(Op::Return0, a, 0, 0, false));
+        self.leave_block_with(false)
+    }
+
     pub(super) fn return_stat(&mut self, exprs: &[ExprId]) -> Result<(), SyntaxError> {
         match exprs.len() {
             0 => {
-                self.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
+                let a = self.return0_base();
+                self.emit(Inst::iabc(Op::Return0, a, 0, 0, false));
             }
             1 => {
                 // tail call: `return f(...)` (not parenthesized), but NOT in

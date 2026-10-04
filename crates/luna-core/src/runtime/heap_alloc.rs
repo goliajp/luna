@@ -223,6 +223,7 @@ impl Heap {
             resumer: None,
             resume_at: None,
             error_value: None,
+            error_status: crate::runtime::coroutine::ErrorStatus::Run,
             error_traceback: None,
             error_levels: None,
             natives: 0..0,

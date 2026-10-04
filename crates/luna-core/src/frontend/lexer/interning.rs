@@ -18,7 +18,27 @@ impl<'s> Lexer<'s> {
             ..Lexer::new(src, version)
         }
     }
+}
 
+impl<'f> Lexer<'f, Stream<'f>> {
+    /// An interning lexer reading `src` piece by piece.
+    pub(crate) fn interning_stream(
+        src: Stream<'f>,
+        version: LuaVersion,
+        names: Names,
+        mut buf: Vec<u8>,
+    ) -> Lexer<'f, Stream<'f>> {
+        buf.clear();
+        let len = src.bytes().len();
+        Lexer {
+            names: Some(names.reuse(len)),
+            buf,
+            ..Lexer::over(src, version)
+        }
+    }
+}
+
+impl<S: Source> Lexer<'_, S> {
     /// The token buffer, for the next lexer to start with.
     pub(crate) fn take_buf(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.buf)
@@ -41,7 +61,7 @@ impl<'s> Lexer<'s> {
         TokenInfo {
             tok: t.tok.map(
                 |()| self.buf[from..to].to_vec(),
-                |()| String::from_utf8_lossy(t.span.slice(self.src)).into(),
+                |()| String::from_utf8_lossy(t.span.slice(self.src.bytes())).into(),
                 |()| Box::default(),
             ),
             span: t.span,

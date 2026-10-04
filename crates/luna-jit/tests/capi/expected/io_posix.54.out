@@ -1,0 +1,9 @@
+file	popen out	second
+
+true	exit	0
+nil	exit	3
+to cat
+true	exit	0
+false	bad argument #2 to 'io.popen' (invalid mode)
+line	a
+line	b

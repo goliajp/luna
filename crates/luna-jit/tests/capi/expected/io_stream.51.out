@@ -1,0 +1,8 @@
+stdout	stdin	stderr
+other
+false	[string "print(which(io.stdout), which(io.stdin), wh..."]:7: bad argument #1 to 'which' (FILE* expected, got number)
+from C from Lua
+stdout via io stdout via C
+table	false	false	true
+false	true
+after close: left open

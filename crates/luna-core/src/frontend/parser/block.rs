@@ -198,12 +198,19 @@ impl<'s> Parser<'s> {
             g.enter_block(false);
             Ok(())
         })?;
+        // 5.5: the control (first) variable of a loop is read-only
+        let v55 = self.version >= LuaVersion::Lua55;
         let Parser {
             gotos, lex, chunk, ..
         } = self;
         if let Some(g) = gotos {
-            for v in chunk.list(vars) {
-                g.declare(lex.names().text(v.sym));
+            for (i, v) in chunk.list(vars).iter().enumerate() {
+                let kind = if i == 0 && v55 {
+                    VarKind::Const
+                } else {
+                    VarKind::Local
+                };
+                g.declare(lex.names().text(v.sym), kind);
             }
         }
         let body = self.block()?;

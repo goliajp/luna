@@ -153,6 +153,33 @@ optimization.
 
 ### Changed
 
+- C API: the `io` library of a state made through the C API is C over the
+  C library's stdio, as PUC's is, for every dialect: file handles are
+  `luaL_Stream` userdata (5.1: a `FILE *`) with the registry's
+  `LUA_FILEHANDLE` metatable, so `luaL_checkudata(L, i, LUA_FILEHANDLE)`
+  accepts them and a stream a C library makes works with the io
+  functions. Files are buffered by the C library, and `io.popen` uses
+  `popen` (`_popen` on Windows). Rust-made `Vm`s and the `luna` command
+  are unchanged.
+- 5.1: every vararg function has the local `arg` after its fixed
+  parameters, as PUC 5.1 built with `LUA_COMPAT_VARARG` has. It holds the
+  table of extra arguments when the function does not use `...` (as
+  before) and is nil when it does, so inside such a function `arg` no
+  longer reaches a global `arg`, and the locals after it are numbered one
+  higher for `debug.getlocal`.
+- `load` with a reader function, and the C API's `lua_load`, parse a text
+  chunk as the reader hands it over: the reader is called only when the
+  parser moves past the end of what it has, as in PUC, so a syntax error
+  stops the reading and the number of reader calls is PUC's. A 5.4+
+  assignment to a `<const>` local is now reported by the parser, at the
+  `=` or `,` after the target (PUC's line), not by the compiler.
+- C API: `lua_dump` calls the writer once per block, in the order and
+  sizes the dialect's `ldump.c` writes them (5.3 and 5.4 skip empty
+  blocks, the others pass them), instead of once with the whole chunk.
+- `HostContHooks` (hidden, used only by the C API) has a new field,
+  `created`.
+
+
 - The trace JIT compiles numeric `for` loops in the 5.1, 5.2 and 5.3
   dialects, which it used to leave to the interpreter, and float loops
   (`for x = 0, 1, 0.1`) in every dialect. Each dialect steps the loop as
@@ -306,6 +333,36 @@ optimization.
   trace now leaves at the library lookup. Seen with numeric `for` loops in
   5.1 and `ipairs` loops in 5.4 / 5.5. Introduced after 4.0.1; 4.0.1,
   4.0.0 and 3.2.2 give the right error on the same programs.
+
+- C API: in the return hook of a C function, `lua_getlocal` reads the
+  function's whole stack as PUC leaves it there — its arguments, what it
+  pushed and its results on top — and `lua_getinfo(L, "r", ar)` gives
+  the results' place; the arguments used to be overwritten by the
+  results.
+- 5.1–5.3: the call hook of a tail call runs before the caller's frame is
+  replaced, as in PUC, so the hook sees the caller one level up with its
+  locals, and 5.1 names the called function.
+- 5.2+: a function's implicit final return (and 5.4+ a `return` with no
+  values) happens while its locals are still active, so a return hook
+  reads them with `debug.getlocal` / `lua_getlocal`, and 5.5's
+  `ftransfer` is the first register above them, as in PUC. A function's
+  outermost block no longer ends with a separate `CLOSE` before the
+  return.
+- C API: a thread that died by an error keeps the error's status:
+  `lua_resume` and `lua_status` report `LUA_ERRMEM` for a memory error,
+  `LUA_ERRERR` for an error in a message handler and 5.2/5.3's
+  `LUA_ERRGCMM` for a finalizer error, instead of always `LUA_ERRRUN`, and
+  a thread that finished reports `LUA_OK`; `lua_pcall` reports
+  `LUA_ERRMEM` as well. 5.3's `string.rep` of a string too large to make
+  raises "not enough memory for buffer allocation" as an ordinary error,
+  as 5.3's buffer does.
+- C API: `lua_closethread` (5.4 `lua_resetthread`) on the main thread
+  runs the `__close` of its to-be-closed slots, newest first, before
+  emptying the stack, and returns the status of an error one raises.
+- C API: a coroutine made by `coroutine.create` or `coroutine.wrap` gets
+  its copy of the main thread's extra space when it is made, as
+  `lua_newthread` gives it, not when C first sees the thread.
+
 
 - A trace recording that an error left (a call raising inside `pcall`)
   was closed the next time the same function was entered, giving a trace

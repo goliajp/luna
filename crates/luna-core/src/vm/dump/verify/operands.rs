@@ -172,7 +172,10 @@ impl Checker<'_> {
                 }
                 self.regs(pc, a, b)
             }
-            Op::Jmp | Op::Return0 | Op::ExtraArg => Ok(()),
+            Op::Jmp | Op::ExtraArg => Ok(()),
+            // the first register past the returning frame's locals: at most
+            // one past its last register
+            Op::Return0 => self.regs(pc, a, 0),
             Op::Eq | Op::Lt | Op::Le => {
                 self.reg(pc, a)?;
                 self.reg(pc, b)

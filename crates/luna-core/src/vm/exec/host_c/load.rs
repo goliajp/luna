@@ -46,6 +46,22 @@ impl Vm {
         }
     }
 
+    /// [`Vm::host_load_chunk`] for a text chunk a reader handed over
+    /// while it was parsed (see [`Vm::text_load`]).
+    pub fn host_load_parsed(
+        &mut self,
+        parsed: crate::vm::exec::ParsedText,
+        chunkname: &[u8],
+    ) -> Result<(Gc<LuaClosure>, usize), Value> {
+        match self.load_parsed(parsed, chunkname, None) {
+            Ok(cl) => {
+                let n = cl.proto.upvals.len();
+                Ok((cl, n))
+            }
+            Err(e) => Err(self.load_error_value(&e, chunkname)),
+        }
+    }
+
     /// Set the first upvalue of a function `lua_load` just made, which no
     /// other code holds yet, to `v` (PUC `lua_load`: the globals).
     pub fn host_set_first_upvalue(&mut self, cl: Gc<LuaClosure>, v: Value) {
@@ -61,19 +77,22 @@ impl Vm {
 
     /// The binary chunk `lua_dump` writes for `f`: PUC bytecode of the
     /// dialect, as `string.dump` writes it, or luna's own format for a
-    /// function the dialect's instruction set cannot hold; `None` for a
-    /// value that is not a Lua function.
-    pub fn host_dump(&self, f: Value, strip: bool) -> Option<Vec<u8>> {
+    /// function the dialect's instruction set cannot hold (as one block),
+    /// with the size of each block PUC's dumper writes on its own; `None`
+    /// for a value that is not a Lua function.
+    pub fn host_dump(&self, f: Value, strip: bool) -> Option<(Vec<u8>, Vec<usize>)> {
         let Value::Closure(cl) = f else {
             return None;
         };
         let v = self.version;
         if !v.is_macro_lua()
-            && let Ok(b) = crate::vm::dump::dump_puc(&cl.proto, strip, v)
+            && let Ok(b) = crate::vm::dump::dump_puc_blocks(&cl.proto, strip, v)
         {
             return Some(b);
         }
-        Some(crate::vm::dump::dump(&cl.proto, strip, v))
+        let b = crate::vm::dump::dump(&cl.proto, strip, v);
+        let n = b.len();
+        Some((b, vec![n]))
     }
 
     /// Start the collector in incremental mode, as a state made by

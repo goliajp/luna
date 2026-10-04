@@ -26,6 +26,12 @@ pub(super) fn thread_resuming(vm: &mut Vm, co: Gc<Coro>) {
     }
 }
 
+/// A thread was made: its state, with its copy of the main thread's extra
+/// space, is made with it.
+pub(super) fn thread_created(vm: &mut Vm, co: Gc<Coro>) {
+    state_of(vm, co);
+}
+
 /// A thread the C API has seen was closed: its C frames and C stack go.
 pub(super) fn thread_reset(vm: &mut Vm, co: Gc<Coro>) {
     let l = state_of(vm, co);
@@ -90,6 +96,10 @@ fn resume(api: &mut Api, nargs: c_int) -> (c_int, Option<c_int>) {
         .map(|f| (f, args.clone()));
     let r = api.vm.host_resume(co, args);
     let v = api.version();
+    let failed = api
+        .vm
+        .host_thread_error(co)
+        .map(|k| super::ccall::status_code(v, k));
     match r {
         Ok(vals) if co.status == CoroStatus::Suspended => {
             let lo = api.top();
@@ -131,7 +141,7 @@ fn resume(api: &mut Api, nargs: c_int) -> (c_int, Option<c_int>) {
             }
             api.push(e.0);
             api.push(e.0);
-            (LUA_ERRRUN, Some(api.gettop()))
+            (failed.unwrap_or(LUA_ERRRUN), Some(api.gettop()))
         }
     }
 }
@@ -238,7 +248,10 @@ pub unsafe extern "C" fn lua_status(L: *mut LuaState) -> c_int {
     }
     match co.status {
         CoroStatus::Suspended => LUA_YIELD,
-        CoroStatus::Dead => LUA_ERRRUN,
+        CoroStatus::Dead => api
+            .vm
+            .host_thread_error(co)
+            .map_or(LUA_OK, |k| super::ccall::status_code(api.version(), k)),
         CoroStatus::Running | CoroStatus::Normal => LUA_OK,
     }
 }
@@ -271,11 +284,23 @@ pub unsafe extern "C" fn lua_isyieldable(L: *mut LuaState) -> c_int {
 fn close(api: &mut Api) -> c_int {
     let co = api.thread();
     if api.vm.host_main_thread().ptr_eq(co) {
-        // the main thread has nothing to close outside a C function
-        if api.st().calls.is_empty() {
-            api.truncate(0);
+        // outside a C function the main thread's stack holds what the host
+        // pushed: its to-be-closed slots are closed, newest first, each
+        // getting the error the one before raised
+        if !api.st().calls.is_empty() {
+            return LUA_OK;
         }
-        return LUA_OK;
+        let before = api.vm.special_errors();
+        let r = super::tbc::close_with(api, 0, None);
+        api.truncate(0);
+        return match r {
+            Ok(()) => LUA_OK,
+            Err(LuaError(e)) => {
+                api.push(e);
+                let kind = api.vm.error_status(e, before);
+                super::ccall::status_code(api.version(), kind)
+            }
+        };
     }
     if api.vm.host_is_running(co) {
         let e = api.vm.host_close_running();

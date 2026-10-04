@@ -227,10 +227,7 @@ impl Vm {
         nargs: u32,
         is_tail: bool,
     ) -> Result<(), LuaError> {
-        if self.hook.call
-            && !self.in_hook
-            && (self.hook.func.is_some() || self.hook.rust_func.is_some())
-        {
+        if self.call_hook_armed() && !std::mem::take(&mut self.tail_hook_fired) {
             self.hook_ftransfer = 1;
             self.hook_ntransfer = nargs.min(u16::MAX as u32) as u16;
             // PUC 5.1 didn't distinguish tail-call events — every call,
@@ -245,6 +242,40 @@ impl Vm {
             };
             self.run_hook(event, None, from_native)?;
         }
+        Ok(())
+    }
+
+    /// A call hook would fire now.
+    pub(super) fn call_hook_armed(&self) -> bool {
+        self.hook.call
+            && !self.in_hook
+            && (self.hook.func.is_some() || self.hook.rust_func.is_some())
+    }
+
+    /// The call hook of a 5.1–5.3 tail call into Lua function `cl` at
+    /// `abs` with `nargs` arguments. PUC runs it from `luaD_precall`, with
+    /// the new frame above the caller's, before `OP_TAILCALL` moves it down:
+    /// the hook sees the caller as level 1. Push the frame there for the
+    /// hook, then take it off again; the collapsed frame does not fire it
+    /// a second time. 5.1 reports a plain call, 5.2 and 5.3 a tail call.
+    pub(super) fn tail_call_hook(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        abs: u32,
+        nargs: u32,
+    ) -> Result<(), LuaError> {
+        self.pending_tailcalls = u32::from(self.version >= LuaVersion::Lua52);
+        self.push_frame(cl, abs, nargs, -1, false)?;
+        frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+        // `push_frame` moved the extra arguments of a vararg function below
+        // its fixed ones; put them back for the frame the tail call builds
+        let nparams = u32::from(cl.proto.num_params);
+        if cl.proto.is_vararg && nargs > nparams {
+            let s = (abs + 1) as usize;
+            self.stack[s..s + nargs as usize].rotate_right(nparams as usize);
+        }
+        // a hook that turned itself off leaves nothing to skip
+        self.tail_hook_fired = self.call_hook_armed();
         Ok(())
     }
 

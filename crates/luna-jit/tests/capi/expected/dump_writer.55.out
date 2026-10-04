@@ -1,0 +1,12 @@
+empty: 4 1 1 6 1 4 1 4 1 8 1 8 1 1 1 1 1 1 1 1 8 1 1 1 1 1 1 1 1 1 2 1 1 1 1 5 0(null)
+  status 0, 37 calls, 76 bytes, top 1
+chunk: 4 1 1 6 1 4 1 4 1 8 1 8 1 1 1 1 1 1 1 1 72 1 1 1 2 1 8 1 1 1 1 1 1 1 1 1 1 1 3 24 1 1 1 1 1 1 1 106 1 6 1 1 1 2 1 1 1 1 2 1 1 1 18 1 1 1 2 1 1 1 2 1 1 1 1 1 1 1 2 1 1 1 1 5 0(null)
+  status 0, 85 calls, 352 bytes, top 1
+inner: 4 1 1 6 1 4 1 4 1 8 1 8 1 1 1 1 1 1 1 1 24 1 1 1 1 1 1 1 60 1 6 1 1 1 2 1 1 1 2 1 1 1 1 3 0(null)
+  status 0, 45 calls, 163 bytes, top 1
+chunk stripped: 4 1 1 6 1 4 1 4 1 8 1 8 1 1 1 1 1 1 1 1 72 1 1 1 2 1 8 1 1 1 1 1 1 1 1 1 1 1 3 24 1 1 1 1 1 1 1 1 1 0 1 1 1 1 1 1 0 1 1 1 0(null)
+  status 0, 61 calls, 190 bytes, top 1
+fails at call 3: 4 1 1
+  status 7, 3 calls, 6 bytes, top 1
+fails at call 1: 4
+  status 7, 1 calls, 4 bytes, top 1

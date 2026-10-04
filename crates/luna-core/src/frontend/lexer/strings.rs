@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl<'s> Lexer<'s> {
+impl<S: Source> Lexer<'_, S> {
     /// PUC `skip_sep` at a `[` or `]`: saves the bracket and any `=`s, and
     /// returns the level when the same bracket follows (a well-formed
     /// opener/closer), leaving that second bracket unconsumed.

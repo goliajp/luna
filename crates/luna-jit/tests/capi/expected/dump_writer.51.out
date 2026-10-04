@@ -1,0 +1,10 @@
+empty: 12 8 1 4 4 1 1 1 1 4 4 4 4 4 4 4 4
+  status 0, 17 calls, 65 bytes, top 1
+chunk: 12 8 106 4 4 1 1 1 1 4 68 4 1 8 2 1 8 4 8 4 4 1 1 1 1 4 20 4 4 4 20 4 8 2 4 4 4 8 2 4 68 4 8 2 4 4 8 2 4 4 8 2 4 4 8 2 4 4 4
+  status 0, 59 calls, 502 bytes, top 1
+inner: 12 8 60 4 4 1 1 1 1 4 20 4 4 4 20 4 8 2 4 4 8 2 4 4 4 8 3
+  status 0, 27 calls, 203 bytes, top 1
+fails at call 3: 12 8 106
+  status 7, 3 calls, 126 bytes, top 1
+fails at call 1: 12
+  status 7, 1 calls, 12 bytes, top 1

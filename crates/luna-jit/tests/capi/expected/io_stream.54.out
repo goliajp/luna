@@ -1,0 +1,13 @@
+stdout	stdin	stderr
+other
+false	[string "print(which(io.stdout), which(io.stdin), whic..."]:7: bad argument #1 to 'which' (FILE* expected, got number)
+from C from Lua
+stdout via io stdout via C
+file
+c stream
+my_close: 0
+true
+closed file
+my_close: 0
+closes: 2
+after close: left open

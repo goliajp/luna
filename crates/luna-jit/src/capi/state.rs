@@ -126,10 +126,11 @@ fn new_thread_state(g: *mut Global, co: Gc<Coro>, extra: [u8; EXTRASPACE]) -> *m
     unsafe { &raw mut (*b).st }
 }
 
-/// The `lua_State` of thread `co` of the state `vm` belongs to, made on
-/// first use with a copy of the main thread's extra space, as
-/// `lua_newthread` makes it. A coroutine that has not started has its body
-/// on its stack, as `coroutine.create` leaves it in PUC.
+/// The `lua_State` of thread `co` of the state `vm` belongs to, made when
+/// the thread is (see `thread_created`) with a copy of the main thread's
+/// extra space, as `lua_newthread` makes it. A coroutine that has not
+/// started has its body on its stack, as `coroutine.create` leaves it in
+/// PUC.
 pub(super) fn state_of(vm: &mut Vm, co: Gc<Coro>) -> *mut LuaState {
     if let Some(l) = existing(co) {
         return l;

@@ -65,38 +65,22 @@ impl<'a> Compiler<'a> {
                 self.declare_local(name, r, true)?;
             }
         }
-        // PUC 5.1's `LUA_COMPAT_VARARG` reserves the *name* `arg` as a hidden
-        // local at index numparams+1 in every vararg function. Whether the
-        // slot ends up populated as a table is a separate question that
-        // vararg.lua contradicts itself on (`:6` wants `arg` to be a table
-        // inside `function f(a, ...)` while `:13` wants `arg == nil` inside
-        // `function c12 (...)`); luna leaves the slot at its register-init
-        // value (nil) so the `arg == nil` half still passes — db.lua's
-        // `setlocal(2, 3, "pera") == "AAAA"` only depends on the *numbering*
-        // shifting by 1 to make AAAA land at local index 3, which the name
-        // reservation alone delivers.
-        // PUC 5.1 LUAI_COMPAT_VARARG: `(...)` functions get a hidden
-        // `arg` local UNLESS the body uses `...` directly (lparser.c
-        // singlevar: `simpleexp` clears VARARG_NEEDSARG on `TK_DOTS`).
-        // vararg.lua relies on this: `function f(a, ...) … arg.n …
-        // end` uses `arg` (no `...`) → auto-bound; `function c12 (...)
-        // local x = {...}` uses `...` → no auto-`arg` (assert(arg ==
-        // nil) sees the GLOBAL arg which was reset to nil at file
-        // top).
-        if self.version <= LuaVersion::Lua51
-            && matches!(body.vararg, ast::Vararg::Anonymous)
-            && !block_uses_vararg(self.ast, &body.block)
-        {
+        // PUC 5.1's `LUA_COMPAT_VARARG` declares a local `arg` after the
+        // fixed parameters of every `(...)` function. It holds a table of the
+        // extra arguments (`VARARG_NEEDSARG`) only when the body does not use
+        // `...` itself (lparser.c `simpleexp` clears the flag on `TK_DOTS`);
+        // otherwise it is nil, and it still hides a global `arg`.
+        if self.version <= LuaVersion::Lua51 && matches!(body.vararg, ast::Vararg::Anonymous) {
             let r = self.reserve(1)?;
             self.declare_local("arg", r, false)?;
-            self.l().has_compat_vararg_arg = true;
+            if !block_uses_vararg(self.ast, &body.block) {
+                self.l().has_compat_vararg_arg = true;
+            }
         }
         self.stat_block(&body.block)?;
-        self.leave_block()?;
         // PUC attributes the implicit final return to the closing `end` line, so
         // that line shows up in `debug.getinfo(...,"L").activelines`.
-        self.last_line = body.end_line;
-        self.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
+        self.final_return(body.end_line)?;
         let lvl = self.levels.pop().expect("function level");
         let proto = self.finish_level(lvl, line, body.end_line);
         let idx = self.lr().protos.len() as u32;

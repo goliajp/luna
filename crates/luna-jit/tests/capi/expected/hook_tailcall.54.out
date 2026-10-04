@@ -1,0 +1,7 @@
+call main:? line=0
+call Lua:top line=6 | up main:? cl=14 [ leaf=<function> mid=<function> top=<function> tail_c=<function> ]
+tail Lua:? line=2 | up main:? cl=14 [ leaf=<function> mid=<function> top=<function> tail_c=<function> ]
+tail Lua:? line=1 | up main:? cl=14 [ leaf=<function> mid=<function> top=<function> tail_c=<function> ]
+call Lua:tail_c line=10 | up main:? cl=15 [ leaf=<function> mid=<function> top=<function> tail_c=<function> ]
+call C:cfun line=-1 | up Lua:tail_c cl=12 [ v=2 c=c ]
+status 0
