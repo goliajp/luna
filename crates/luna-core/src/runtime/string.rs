@@ -6,7 +6,7 @@
 
 use std::alloc::Layout;
 
-use crate::runtime::mem::{BlockKind, MemRef};
+use crate::runtime::mem::{BlockKind, LVec, MemRef};
 use std::cell::Cell;
 use std::ptr;
 use std::slice;
@@ -188,16 +188,15 @@ pub(crate) unsafe fn free(p: *mut LuaStr, mem: MemRef) {
 
 /// Open hashing with per-string chains (PUC stringtable shape).
 pub(crate) struct StringTable {
-    buckets: Vec<*mut LuaStr>,
+    buckets: LVec<*mut LuaStr>,
     count: usize,
 }
 
 impl StringTable {
-    pub(crate) fn new() -> StringTable {
-        StringTable {
-            buckets: vec![ptr::null_mut(); 64],
-            count: 0,
-        }
+    pub(crate) fn new(mem: MemRef) -> StringTable {
+        let mut buckets = LVec::new(mem);
+        buckets.resize_or_abort(64, ptr::null_mut());
+        StringTable { buckets, count: 0 }
     }
 
     /// Find or create an interned short string. Returns `(ptr, newly_created)`.
@@ -233,9 +232,14 @@ impl StringTable {
     #[cold]
     #[inline(never)]
     fn grow(&mut self) {
-        let mut nb = vec![ptr::null_mut(); self.buckets.len() * 2];
+        // a table that cannot grow keeps working with longer chains, as
+        // PUC's `luaS_resize` leaves it when the reallocation fails
+        let mut nb = LVec::new(self.buckets.mem());
+        if nb.resize(self.buckets.len() * 2, ptr::null_mut()).is_err() {
+            return;
+        }
         let mask = nb.len() - 1;
-        for &head in &self.buckets {
+        for &head in self.buckets.iter() {
             let mut cur = head;
             while !cur.is_null() {
                 // SAFETY: the bucket chains hold only interned strings that are still allocated: `remove` unlinks a string before the sweep frees it
