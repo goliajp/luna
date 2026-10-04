@@ -192,13 +192,20 @@ process has made a C API state, luna writes standard output through the C
 library's `stdout`, so it interleaves with the host's own `printf` as
 PUC's output does.
 
+A C API state's `io` library (`luaopen_io`, and so `luaL_openlibs`) is C
+over the C library's stdio, as PUC's is: a file handle is a userdata
+whose block starts with a `luaL_Stream` (5.1: a `FILE *`) and whose
+metatable is the registry's `LUA_FILEHANDLE`, so C code gets the `FILE *`
+with `luaL_checkudata(L, i, LUA_FILEHANDLE)`, and a stream C makes with
+its own `closef` works with the io functions. Buffering, `popen`,
+`tmpfile` and the error texts are the C library's. A `Vm` made from Rust,
+and the `luna` command, keep luna's own io library.
+
 Differences from PUC:
 
 - luna's collector does not allocate through a `lua_Alloc`: the function
   given to `lua_newstate` allocates only the state's own record and is
   returned by `lua_getallocf`.
-- io file handles are not `luaL_Stream`s over a C `FILE*`:
-  `luaL_checkudata(L, i, LUA_FILEHANDLE)` does not accept them.
 - `lua_tocfunction` returns `NULL` for luna's own library functions,
   which are not C functions.
 - `lua_pushexternalstring` (5.5) copies the string and frees the external
