@@ -153,6 +153,14 @@ optimization.
 
 ### Changed
 
+- C API: the `io` library of a state made through the C API is C over the
+  C library's stdio, as PUC's is, for every dialect: file handles are
+  `luaL_Stream` userdata (5.1: a `FILE *`) with the registry's
+  `LUA_FILEHANDLE` metatable, so `luaL_checkudata(L, i, LUA_FILEHANDLE)`
+  accepts them and a stream a C library makes works with the io
+  functions. Files are buffered by the C library, and `io.popen` uses
+  `popen` (`_popen` on Windows). Rust-made `Vm`s and the `luna` command
+  are unchanged.
 - 5.1: every vararg function has the local `arg` after its fixed
   parameters, as PUC 5.1 built with `LUA_COMPAT_VARARG` has. It holds the
   table of extra arguments when the function does not use `...` (as

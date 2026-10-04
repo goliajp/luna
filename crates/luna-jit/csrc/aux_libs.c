@@ -29,13 +29,20 @@ static int openlib(lua_State *L, const char *name) {
 OPENER(luaopen_base, "_G")
 OPENER(luaopen_coroutine, "coroutine")
 OPENER(luaopen_table, "table")
-OPENER(luaopen_io, "io")
 OPENER(luaopen_os, "os")
 OPENER(luaopen_string, "string")
 OPENER(luaopen_bit32, "bit32")
 OPENER(luaopen_math, "math")
 OPENER(luaopen_utf8, "utf8")
 OPENER(luaopen_debug, "debug")
+
+int luna_io_open51(lua_State *L);
+int luna_io_open52(lua_State *L);
+
+/* io is C, over the C library's stdio (io_*.c) */
+LUNA_HIDDEN int luna_c_luaopen_io(lua_State *L) {
+  return VNUM(L) == 501 ? luna_io_open51(L) : luna_io_open52(L);
+}
 
 /* the finalizer of the table of loaded C libraries; luna loads none */
 static int gctm(lua_State *L) {

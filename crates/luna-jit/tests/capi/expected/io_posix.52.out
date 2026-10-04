@@ -1,0 +1,9 @@
+file	popen out	second
+
+true	exit	0
+nil	exit	3
+to cat
+true	exit	0
+true	nil	true: Invalid argument	22
+line	a
+line	b

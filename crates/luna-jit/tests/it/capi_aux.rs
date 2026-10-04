@@ -43,3 +43,20 @@ fn lib_open() {
 fn aux_posix() {
     check("aux_posix");
 }
+
+#[test]
+fn io_files() {
+    check("io_files");
+}
+
+#[test]
+fn io_stream() {
+    check("io_stream");
+}
+
+// popen runs a POSIX shell
+#[cfg(unix)]
+#[test]
+fn io_posix() {
+    check("io_posix");
+}
