@@ -133,7 +133,10 @@ pub(crate) fn parse_at_depth(
     version: LuaVersion,
     c_depth: u32,
 ) -> Result<Parsed, SyntaxError> {
-    parse_reusing(src, version, c_depth, ParseScratch::new(MemOwner::system()))
+    // held here too: the parser's own vectors, dropped before this returns
+    // on an error, must not outlive the context
+    let mem = MemOwner::system();
+    parse_reusing(src, version, c_depth, ParseScratch::new(mem.clone()))
 }
 
 /// [`parse_at_depth`] building the tree in the vectors of an earlier parse
@@ -199,7 +202,8 @@ pub fn parse_tokens(
     src: &[u8],
     version: LuaVersion,
 ) -> Result<Chunk, SyntaxError> {
-    parse_tokens_at_depth(tokens, src, version, 0, MemOwner::system()).map(|p| p.chunk)
+    let mem = MemOwner::system();
+    parse_tokens_at_depth(tokens, src, version, 0, mem.clone()).map(|p| p.chunk)
 }
 
 /// [`parse_tokens`] at a C depth (see [`parse_at_depth`]), building the
