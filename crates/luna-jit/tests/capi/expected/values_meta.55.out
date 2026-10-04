@@ -3,7 +3,7 @@ getmetatable string: 1 pushed=1
 getmetatable number: 0 pushed=0
 getmetatable nil: 0 pushed=0
 getmetatable absent index: 0 top=1
-setmetatable table: 1 top=2
+setmetatable table: 1 top=1
 metatable back: function
 tt	tbl:k
 raw metatable despite __metatable: s:locked

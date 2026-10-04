@@ -10,10 +10,10 @@ getiuservalue 3: 0 nil top=2
 getiuservalue 4: -1 nil top=2
 getiuservalue 0: -1 nil top=2
 getiuservalue -1: -1 nil top=2
-setiuservalue 2: 1 top=2
+setiuservalue 2: 1 top=1
 setiuservalue 3: 1
-setiuservalue 4: 0 top=2
-setiuservalue 0: 0 top=2
+setiuservalue 4: 0 top=1
+setiuservalue 0: 0 top=1
 getiuservalue 2: 4 s:two top=2
 getiuservalue 3: 3 n:3 top=2
 debug.getuservalue	survives	two	true
