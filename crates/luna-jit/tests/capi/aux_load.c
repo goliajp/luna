@@ -138,16 +138,12 @@ int main(void) {
            strncmp(msg, "cannot open no_such_file.lua", 28) == 0);
     lua_settop(L, 1);
   }
-#if !defined(_WIN32)
-  /* a directory opens but cannot be read */
+  /* a directory: POSIX opens it and fails to read it, Windows fails to
+     open it (aux_posix checks the reading error) */
   st = luaL_loadfile(L, ".");
-  {
-    const char *msg = lua_tostring(L, -1);
-    printf("loadfile dir: status=%d top=%d prefix=%d detail=%d\n", st, lua_gettop(L),
-           strncmp(msg, "cannot read .", 13) == 0, msg[13] == ':');
-    lua_settop(L, 1);
-  }
-#endif
+  printf("loadfile dir: status=%d top=%d prefix=%d\n", st, lua_gettop(L),
+         strncmp(lua_tostring(L, -1), "cannot ", 7) == 0);
+  lua_settop(L, 1);
   /* standard input */
   writefile(stdinname, "return 'from stdin'", 19);
   if (freopen(stdinname, "r", stdin) != NULL) {
