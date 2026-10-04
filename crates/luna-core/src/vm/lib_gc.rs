@@ -228,12 +228,8 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
             };
             vec![Value::Bool(step(vm, n))]
         }
-        "stop" => {
-            vm.heap.gc_set_stopped(true);
-            vec![Value::Int(0)]
-        }
-        "restart" => {
-            vm.heap.gc_set_stopped(false);
+        "stop" | "restart" => {
+            vm.heap.gc_set_stopped(opt == "stop");
             vec![Value::Int(0)]
         }
         // 5.2/5.3 stop the collector while a finalizer runs (GCTM clears
