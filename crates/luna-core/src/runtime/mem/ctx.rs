@@ -64,7 +64,8 @@ pub trait MemoryPolicy {
     /// a new block); `in_use` is what the Vm has allocated so far. Return
     /// false to make the allocation fail.
     fn allow(&mut self, old: usize, new: usize, kind: BlockKind, in_use: usize) -> bool;
-    /// `size` bytes were given back.
+    /// `size` bytes were given back (a block freed, or the part a block
+    /// shrank by).
     fn freed(&mut self, size: usize) {
         let _ = size;
     }
@@ -232,7 +233,11 @@ impl MemCtx {
                     return None;
                 }
                 // SAFETY: the caller's contract
-                NonNull::new(unsafe { std::alloc::realloc(p.as_ptr(), layout, new) })?
+                let q = NonNull::new(unsafe { std::alloc::realloc(p.as_ptr(), layout, new) })?;
+                if new < old {
+                    pol.borrow_mut().freed(old - new);
+                }
+                q
             }
         };
         self.total.set(self.total.get() - old + new);

@@ -36,6 +36,7 @@ jobs:
           - fuzz_vm_dispatch
           - fuzz_aot_meta
           - fuzz_gc
+          - fuzz_alloc_fail
           - fuzz_diff_puc
           - fuzz_dump_puc
           - fuzz_jit_diff
@@ -107,6 +108,7 @@ jobs:
           - fuzz_vm_dispatch
           - fuzz_aot_meta
           - fuzz_gc
+          - fuzz_alloc_fail
           - fuzz_diff_puc
           - fuzz_dump_puc
           - fuzz_jit_diff
