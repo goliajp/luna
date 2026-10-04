@@ -19,6 +19,28 @@ optimization.
 
 ---
 
+## [4.0.2] — 2026-10-04
+
+A memory-safety fix in the trace JIT. With the JIT on (the default for
+`luna_jit` VMs and the `luna` binary), a recursive function that called a
+value held in an upvalue could crash the process. Turning the JIT off
+(`--no-jit`) was not affected. No public API changes.
+
+### Fixed
+
+- A trace through a recursive function typed a value read from an
+  upvalue as a Lua function whenever the trace later called it, without
+  checking the value. When it was a table with a `__call` metamethod, or
+  a native function such as `math.abs`, and the trace left at that call,
+  the table or native was written back to the register as a Lua
+  function, and the interpreter then ran it as one: a segmentation fault
+  in release builds, a heap-buffer-overflow under AddressSanitizer. A
+  ten-line script triggered it with the default JIT settings in every
+  dialect, 5.1 through 5.5. The trace now checks that the value is a Lua
+  function where it reads it; when it is not, the trace leaves before
+  the read and the interpreter performs the read and the call. Versions
+  from 1.1.0 on may be affected; 2.18.0 through 4.0.1 are confirmed.
+
 ## [4.0.1] — 2026-10-01
 
 Two trace JIT fixes. With the JIT on (the default for `luna_jit` VMs and
