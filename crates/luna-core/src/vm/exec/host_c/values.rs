@@ -58,19 +58,8 @@ impl Vm {
 
     /// A new table with room for `narr` array items and `nrec` others
     /// (PUC `lua_createtable`).
-    pub fn host_new_table(&mut self, narr: usize, nrec: usize) -> Gc<Table> {
-        let t = self.heap.new_table();
-        // SAFETY: `t` was allocated above and is held only by this local;
-        // the borrows cover two resizes, which do not collect
-        unsafe {
-            if narr > 0 {
-                t.as_mut().ensure_array(&mut self.heap, narr);
-            }
-            if nrec > 0 {
-                t.as_mut().ensure_hash(&mut self.heap, nrec);
-            }
-        }
-        t
+    pub fn host_new_table(&mut self, narr: usize, nrec: usize) -> Result<Gc<Table>, LuaError> {
+        self.alloc_table_sized(narr, nrec)
     }
 
     /// The entry of `t` after key `k` (PUC `lua_next`); an absent key

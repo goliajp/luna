@@ -86,8 +86,11 @@ impl From<TableError> for LuaError {
     /// a `&mut Vm`. The classification is later refined when the error
     /// crosses a Vm boundary (caller can set
     /// [`Vm::set_error_kind`](crate::vm::Vm::set_error_kind) if needed).
-    fn from(_: TableError) -> LuaError {
-        LuaError(Value::Nil)
+    fn from(e: TableError) -> LuaError {
+        match e {
+            TableError::Memory(o) => o.into(),
+            _ => LuaError(Value::Nil),
+        }
     }
 }
 

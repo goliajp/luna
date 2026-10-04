@@ -185,7 +185,9 @@ pub unsafe extern "C" fn lua_createtable(L: *mut LuaState, narr: c_int, nrec: c_
     let mut api = unsafe { Api::new(L) };
     let narr = usize::try_from(narr).unwrap_or(0);
     let nrec = usize::try_from(nrec).unwrap_or(0);
-    let t = api.vm.host_new_table(narr, nrec);
+    let t = api.vm.host_new_table(narr, nrec).unwrap_or_else(|_| {
+        std::alloc::handle_alloc_error(std::alloc::Layout::new::<luna_core::runtime::Table>())
+    });
     api.push(Value::Table(t));
     api.vm.host_check_gc();
 }

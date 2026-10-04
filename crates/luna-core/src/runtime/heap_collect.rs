@@ -392,6 +392,10 @@ impl Heap {
             "gray queue not drained at atomic"
         );
         self.sweep_cur = std::mem::replace(&mut self.all, ptr::null_mut());
+        // the sweep moves survivors in front of anything allocated now, out
+        // of allocation order: until the next safe point every object counts
+        // as young
+        self.young = ptr::null_mut();
         self.phase = GcPhase::Sweep;
     }
 

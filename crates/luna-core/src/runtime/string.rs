@@ -6,7 +6,7 @@
 
 use std::alloc::Layout;
 
-use crate::runtime::mem::{BlockKind, LVec, MemRef};
+use crate::runtime::mem::{BlockKind, LVec, MemRef, Oom};
 use std::cell::Cell;
 use std::ptr;
 use std::slice;
@@ -147,11 +147,17 @@ fn layout(len: usize) -> Layout {
         .pad_to_align()
 }
 
-fn alloc_str(mem: MemRef, bytes: &[u8], short: bool, hash: u32, hashed: bool) -> *mut LuaStr {
+fn alloc_str(
+    mem: MemRef,
+    bytes: &[u8],
+    short: bool,
+    hash: u32,
+    hashed: bool,
+) -> Result<*mut LuaStr, Oom> {
     let layout = layout(bytes.len());
     let p = match mem.ctx().alloc(layout, BlockKind::Str) {
         Some(p) => p.as_ptr() as *mut LuaStr,
-        None => crate::runtime::mem::oom_abort(layout),
+        None => return Err(Oom(mem)),
     };
     // SAFETY: layout is built from the header size + the trailing bytes and their NUL that we just computed, so the header, the bytes and the NUL written below are inside the allocation; deallocation will use the same layout in `free`.
     unsafe {
@@ -166,11 +172,11 @@ fn alloc_str(mem: MemRef, bytes: &[u8], short: bool, hash: u32, hashed: bool) ->
         });
         ptr::copy_nonoverlapping(bytes.as_ptr(), p.add(1) as *mut u8, bytes.len());
         (p.add(1) as *mut u8).add(bytes.len()).write(0);
-        p
     }
+    Ok(p)
 }
 
-pub(crate) fn alloc_long(mem: MemRef, bytes: &[u8], seed: u32) -> *mut LuaStr {
+pub(crate) fn alloc_long(mem: MemRef, bytes: &[u8], seed: u32) -> Result<*mut LuaStr, Oom> {
     debug_assert!(bytes.len() > MAX_SHORT_LEN);
     alloc_str(mem, bytes, false, seed, false)
 }
@@ -201,7 +207,12 @@ impl StringTable {
 
     /// Find or create an interned short string. Returns `(ptr, newly_created)`.
     #[inline]
-    pub(crate) fn intern(&mut self, mem: MemRef, bytes: &[u8], seed: u32) -> (*mut LuaStr, bool) {
+    pub(crate) fn intern(
+        &mut self,
+        mem: MemRef,
+        bytes: &[u8],
+        seed: u32,
+    ) -> Result<(*mut LuaStr, bool), Oom> {
         debug_assert!(bytes.len() <= MAX_SHORT_LEN);
         let h = lua_hash(bytes, seed);
         let b = h as usize & (self.buckets.len() - 1);
@@ -210,7 +221,7 @@ impl StringTable {
         unsafe {
             while !cur.is_null() {
                 if (*cur).hdr.aux as usize == bytes.len() && bytes_of(cur) == bytes {
-                    return (cur, false);
+                    return Ok((cur, false));
                 }
                 cur = (*cur).hnext;
             }
@@ -219,14 +230,14 @@ impl StringTable {
             self.grow();
         }
         let b = h as usize & (self.buckets.len() - 1);
-        let p = alloc_str(mem, bytes, true, h, true);
+        let p = alloc_str(mem, bytes, true, h, true)?;
         // SAFETY: `p` was just returned by `alloc_str` and is not in any chain yet; nothing else points at it
         unsafe {
             (*p).hnext = self.buckets[b];
         }
         self.buckets[b] = p;
         self.count += 1;
-        (p, true)
+        Ok((p, true))
     }
 
     #[cold]

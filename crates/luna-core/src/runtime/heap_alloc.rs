@@ -1,7 +1,11 @@
-//! Object constructors and string interning.
+//! Object constructors. Each `try_` constructor fails with [`Oom`] when the
+//! allocation context refuses, leaving the heap as it was; the constructor
+//! of the same name without `try_` ends the process instead, as the
+//! standard library's containers do, for embedders that do not handle
+//! memory errors.
 
 use super::*;
-use crate::runtime::mem::{LSlice, LVec, oom_abort};
+use crate::runtime::mem::{LSlice, LVec, Oom, oom_abort};
 use std::alloc::Layout;
 
 impl Heap {
@@ -17,11 +21,10 @@ impl Heap {
 
     /// A block for one `T` from the allocation context.
     #[inline]
-    fn alloc_block<T: GcObject>(&self) -> *mut T {
-        let layout = Layout::new::<T>();
-        match self.mem().ctx().alloc(layout, T::KIND) {
-            Some(p) => p.cast::<T>().as_ptr(),
-            None => oom_abort(layout),
+    fn alloc_block<T: GcObject>(&self) -> Result<*mut T, Oom> {
+        match self.mem().ctx().alloc(Layout::new::<T>(), T::KIND) {
+            Some(p) => Ok(p.cast::<T>().as_ptr()),
+            None => Err(Oom(self.mem())),
         }
     }
 
@@ -42,9 +45,11 @@ impl Heap {
         }
     }
 
-    /// Put `obj` in a new block and under GC management.
-    pub(crate) fn adopt<T: GcObject>(&mut self, obj: T) -> Gc<T> {
-        let p = self.alloc_block::<T>();
+    /// Put `obj` in a new block and under GC management. On failure `obj`
+    /// is dropped.
+    #[inline]
+    pub(crate) fn try_adopt<T: GcObject>(&mut self, obj: T) -> Result<Gc<T>, Oom> {
+        let p = self.alloc_block::<T>()?;
         // SAFETY: `p` is a fresh block for one `T`, linked nowhere yet, and a
         // `GcObject` starts with its header; once linked the heap owns the
         // object until a collect finds it unreachable
@@ -54,11 +59,18 @@ impl Heap {
         }
         self.bytes += std::mem::size_of::<T>();
         // SAFETY: as above
-        unsafe { Gc::from_ptr(p) }
+        Ok(unsafe { Gc::from_ptr(p) })
     }
 
     /// Allocate and adopt a fresh empty [`Table`].
     pub fn new_table(&mut self) -> Gc<Table> {
+        self.try_new_table()
+            .unwrap_or_else(|_| oom_abort(Layout::new::<Table>()))
+    }
+
+    /// [`Heap::new_table`], failing when memory runs out.
+    #[inline]
+    pub fn try_new_table(&mut self) -> Result<Gc<Table>, Oom> {
         // table_pool fast path. When btrees-
         // style alloc bursts have left freed Tables in the pool, pop a
         // recycled one and reset its fields instead of mallocing fresh.
@@ -75,9 +87,6 @@ impl Heap {
             }
             // SAFETY: `t` came off `table_pool`, which holds only tables `free_obj` unlinked from every list and emptied of their interior allocations; the pool's pointer was the only one, and these writes restore the fields left behind
             unsafe {
-                // Reset to fresh-Table state. Box-owned slab/nodes/
-                // metatable were already cleared in `free_obj` before
-                // pool push, so we only reset stack-resident fields here.
                 (*t).hdr = GcHeader::new(ObjTag::Table);
                 (*t).inline_storage =
                     std::cell::UnsafeCell::new([0; crate::runtime::table::INLINE_U64S]);
@@ -85,53 +94,70 @@ impl Heap {
             }
             t
         } else {
-            let t = self.alloc_block::<Table>();
+            let t = self.alloc_block::<Table>()?;
             // SAFETY: `t` is a fresh block for one table
             unsafe { t.write(Table::new(GcHeader::new(ObjTag::Table))) };
             t
         };
-        // Link + bytes accounting (same as adopt path).
-        // SAFETY: `p` is a fresh box or a pool table reset above, linked nowhere yet
+        // SAFETY: `p` is a fresh block or a pool table reset above, linked nowhere yet
         unsafe { self.link(p as *mut GcHeader) };
         self.bytes += std::mem::size_of::<Table>();
-        // the Table is now at its final heap address; wire
-        // `array_ptr` to point at the inline storage that lives inside
-        // the boxed Table.
+        // the Table is now at its final heap address; wire `array_ptr` to
+        // point at the inline storage that lives inside it
         // SAFETY: `p` is the table linked just above, which the heap now manages; no other handle or reference to it exists yet
         unsafe {
             let g = Gc::from_ptr(p);
             g.as_mut().init_array_ptr();
-            g
+            Ok(g)
         }
     }
 
-    /// Adopt an empty table and pre-allocate `asize`
-    /// NIL slots in the array part. Equivalent to `new_table()`
-    /// followed by `set_int(N, Nil)` worth of `rehash`es, except
-    /// the array reaches its final size in one allocation rather
-    /// than O(log N) doubling rounds.
-    ///
-    /// `asize == 0` is identical to `new_table()`. Larger sizes
-    /// are clamped at the array part's hard ceiling
-    /// `MAX_ASIZE = 2^27`; requests beyond that fall back to the
-    /// empty table, which the interpreter would have grown
-    /// gracefully via rehash anyway.
+    /// Give the pooled tables' blocks back to the allocation context (an
+    /// emergency collection does, so they can serve other allocations).
+    pub(crate) fn release_pool(&mut self) {
+        for &ptr in self.table_pool.take().iter() {
+            // SAFETY: the pool holds unlinked tables whose interiors were
+            // freed when they were pooled; taking the pool made this the
+            // only pointer to each
+            unsafe { self.free_block(ptr.as_ptr()) };
+        }
+    }
+
+    /// Adopt an empty table and pre-allocate `asize` NIL slots in the array
+    /// part: the array reaches its final size in one allocation rather than
+    /// O(log N) doubling rounds. Sizes past the array part's hard ceiling
+    /// (`2^27`) give an empty table, which the interpreter grows as needed.
     pub fn new_table_sized(&mut self, asize: usize) -> Gc<Table> {
+        self.try_new_table_sized(asize)
+            .unwrap_or_else(|_| oom_abort(Layout::new::<Table>()))
+    }
+
+    /// [`Heap::new_table_sized`], failing when memory runs out.
+    pub fn try_new_table_sized(
+        &mut self,
+        asize: usize,
+    ) -> Result<Gc<Table>, crate::runtime::table::TableError> {
         const MAX_ASIZE_HINT: usize = 1 << 27;
-        let g = self.new_table();
+        let g = self.try_new_table()?;
         let clamped = asize.min(MAX_ASIZE_HINT);
         if clamped > 0 {
             // SAFETY: the freshly adopted table has no live borrow
             // anywhere else; we hold the only `Gc<Table>` handle.
-            unsafe { g.as_mut() }.resize(self, clamped, 0);
+            unsafe { g.as_mut() }.resize(self, clamped, 0)?;
         }
-        g
+        Ok(g)
     }
 
     /// Adopt a compiler-built prototype (its `hdr` must carry ObjTag::Proto).
     pub fn adopt_proto(&mut self, proto: Proto) -> Gc<Proto> {
+        self.try_adopt_proto(proto)
+            .unwrap_or_else(|_| oom_abort(Layout::new::<Proto>()))
+    }
+
+    /// [`Heap::adopt_proto`], failing when memory runs out.
+    pub fn try_adopt_proto(&mut self, proto: Proto) -> Result<Gc<Proto>, Oom> {
         debug_assert!(proto.hdr.tag == ObjTag::Proto);
-        self.adopt(proto)
+        self.try_adopt(proto)
     }
 
     /// Back-compat constructor for callers that already
@@ -151,37 +177,29 @@ impl Heap {
         proto: Gc<Proto>,
         upvals: &[Gc<Upvalue>],
     ) -> Gc<LuaClosure> {
-        use crate::runtime::function::INLINE_UPVALS_N;
-        let n = upvals.len();
-        let mem = self.mem();
-        self.adopt_closure_with(proto, n as u32, |c| {
-            if n <= INLINE_UPVALS_N {
-                for (i, &uv) in upvals.iter().enumerate() {
-                    // SAFETY: exclusive &mut c inside the constructor;
-                    // write through the cell so no direct borrow of
-                    // the inline array is formed (see the field doc).
-                    unsafe {
-                        (*c.inline_storage.get())[i] = std::mem::MaybeUninit::new(uv);
-                    }
-                }
-            } else {
-                let store = LSlice::from_slice(mem, upvals)
-                    .unwrap_or_else(|_| oom_abort(Layout::for_value(upvals)));
-                c.set_overflow(store);
-            }
-        })
+        self.try_new_closure(proto, upvals)
+            .unwrap_or_else(|_| oom_abort(Layout::new::<LuaClosure>()))
     }
 
-    pub(super) fn adopt_closure_with<F: FnOnce(&mut LuaClosure)>(
+    /// [`Heap::new_closure_inline`], failing when memory runs out.
+    #[inline]
+    pub fn try_new_closure(
         &mut self,
         proto: Gc<Proto>,
-        upvals_len: u32,
-        fill: F,
-    ) -> Gc<LuaClosure> {
-        let p = self.alloc_block::<LuaClosure>();
+        upvals: &[Gc<Upvalue>],
+    ) -> Result<Gc<LuaClosure>, Oom> {
+        use crate::runtime::function::INLINE_UPVALS_N;
+        let n = upvals.len();
+        let store = if n > INLINE_UPVALS_N {
+            Some(LSlice::from_slice(self.mem(), upvals)?)
+        } else {
+            None
+        };
+        let p = self.alloc_block::<LuaClosure>()?;
         // SAFETY: `p` is a fresh block for one closure, linked nowhere yet;
         // the storage is filled at its final address so `upvals_ptr` can
-        // point into it
+        // point into it, and the inline array is written through its cell
+        // (see the field doc)
         let g = unsafe {
             p.write(LuaClosure {
                 hdr: GcHeader::new(ObjTag::Closure),
@@ -189,20 +207,27 @@ impl Heap {
                 code: proto.code.as_ptr(),
                 consts: proto.consts.as_ptr(),
                 upvals_ptr: std::ptr::null_mut(),
-                upvals_len,
+                upvals_len: n as u32,
                 inline_storage: std::cell::UnsafeCell::new(
-                    [std::mem::MaybeUninit::<Gc<Upvalue>>::uninit();
-                        crate::runtime::function::INLINE_UPVALS_N],
+                    [std::mem::MaybeUninit::<Gc<Upvalue>>::uninit(); INLINE_UPVALS_N],
                 ),
             });
-            fill(&mut *p);
+            let c = &mut *p;
+            match store {
+                Some(s) => c.set_overflow(s),
+                None => {
+                    for (i, &uv) in upvals.iter().enumerate() {
+                        (*c.inline_storage.get())[i] = std::mem::MaybeUninit::new(uv);
+                    }
+                }
+            }
             self.link(p as *mut GcHeader);
             Gc::from_ptr(p)
         };
         self.bytes += std::mem::size_of::<LuaClosure>();
         // SAFETY: `g` is the closure linked just above; no other handle or reference to it exists yet
         unsafe { g.as_mut() }.init_upvals_ptr();
-        g
+        Ok(g)
     }
 
     /// The items of `v` in a block of exactly their number from the
@@ -213,98 +238,16 @@ impl Heap {
             .unwrap_or_else(|_| oom_abort(Layout::array::<T>(n).unwrap_or(Layout::new::<T>())))
     }
 
-    /// A native function's upvalues in a block from the context.
-    fn upvals_block(&self, upvals: &[Value]) -> LSlice<Value> {
-        LSlice::from_slice(self.mem(), upvals)
-            .unwrap_or_else(|_| oom_abort(Layout::for_value(upvals)))
-    }
-
-    /// Allocate a [`NativeClosure`] wrapping host function `f` with the
-    /// given captured upvalues.
-    pub fn new_native(
-        &mut self,
-        f: crate::runtime::value::NativeFn,
-        upvals: Box<[Value]>,
-    ) -> Gc<NativeClosure> {
-        self.new_native_from(f, &upvals)
-    }
-
-    /// [`Heap::new_native`] copying the upvalues from a slice.
-    pub fn new_native_from(
-        &mut self,
-        f: crate::runtime::value::NativeFn,
-        upvals: &[Value],
-    ) -> Gc<NativeClosure> {
-        let fix = self.fix_natives && upvals.is_empty();
-        let hdr = GcHeader::native(upvals);
-        let upvals = self.upvals_block(upvals);
-        let g = self.adopt(NativeClosure {
-            hdr,
-            f,
-            upvals,
-            is_async: false,
-            kind: crate::vm::exec::native_call::NativeKind::of(f),
-        });
-        if fix {
-            // SAFETY: `adopt` just linked `g` at the head of `all`
-            unsafe { self.fix_newest(g.as_ptr() as *mut GcHeader) };
-        }
-        g
-    }
-
-    /// PUC `luaC_fix`: move `h` from the head of `all` onto `fixed`, gray, so
-    /// marking, barriers and weak tables skip it and only the heap's drop
-    /// frees it.
-    ///
-    /// # Safety
-    /// `h` is the object at the head of `all`.
-    unsafe fn fix_newest(&mut self, h: *mut GcHeader) {
-        debug_assert!(self.all == h);
-        // SAFETY: the caller's contract: `h` is a live object, first on `all`
-        unsafe {
-            self.all = (*h).next;
-            (*h).next = self.fixed;
-            (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
-        }
-        self.fixed = h;
-    }
-
-    /// Make the fixed "not enough memory" string memory errors carry (PUC
-    /// `luaS_init` makes `memerrmsg` first thing and fixes it).
-    pub(super) fn make_memerr(&mut self) {
-        let s = self.intern(b"not enough memory");
-        // SAFETY: a new heap's first string was linked at the head of `all`
-        // by the intern just above
-        unsafe { self.fix_newest(s.as_ptr() as *mut GcHeader) };
-        self.mem_ctx().set_memerr(s);
-    }
-
-    /// Like [`Heap::new_native`] but tags the
-    /// closure with `is_async = true`. The dispatcher's native-call
-    /// path then transmutes `f` to `AsyncNativeFn` and routes through
-    /// the cooperative-yield path. The caller is responsible for
-    /// having transmuted the `AsyncNativeFn` pointer to `NativeFn`
-    /// shape (both are `fn` pointers of the same size); see
-    /// [`crate::vm::async_drive`] for the helper that does this.
-    pub fn new_async_native(
-        &mut self,
-        f: crate::runtime::value::NativeFn,
-        upvals: Box<[Value]>,
-    ) -> Gc<NativeClosure> {
-        let hdr = GcHeader::native(&upvals);
-        let upvals = self.upvals_block(&upvals);
-        self.adopt(NativeClosure {
-            hdr,
-            f,
-            upvals,
-            is_async: true,
-            kind: crate::vm::exec::native_call::NativeKind::Async,
-        })
-    }
-
     /// Allocate a fresh [`Upvalue`] cell in the given `state` (open / closed).
     pub fn new_upvalue(&mut self, state: UpvalState) -> Gc<Upvalue> {
-        self.adopt(Upvalue {
+        self.try_new_upvalue(state)
+            .unwrap_or_else(|_| oom_abort(Layout::new::<Upvalue>()))
+    }
+
+    /// [`Heap::new_upvalue`], failing when memory runs out.
+    #[inline]
+    pub fn try_new_upvalue(&mut self, state: UpvalState) -> Result<Gc<Upvalue>, Oom> {
+        self.try_adopt(Upvalue {
             hdr: GcHeader::new(ObjTag::Upvalue),
             state,
         })
@@ -318,7 +261,18 @@ impl Heap {
         body: Value,
         globals: Gc<crate::runtime::Table>,
     ) -> Gc<crate::runtime::Coro> {
-        self.adopt(crate::runtime::Coro {
+        self.try_new_coro(body, globals)
+            .unwrap_or_else(|_| oom_abort(Layout::new::<crate::runtime::Coro>()))
+    }
+
+    /// [`Heap::new_coro`], failing when memory runs out.
+    pub fn try_new_coro(
+        &mut self,
+        body: Value,
+        globals: Gc<crate::runtime::Table>,
+    ) -> Result<Gc<crate::runtime::Coro>, Oom> {
+        let mem = self.mem();
+        self.try_adopt(crate::runtime::Coro {
             hdr: GcHeader::new(ObjTag::Coro),
             status: crate::runtime::CoroStatus::Suspended,
             body,
@@ -330,15 +284,15 @@ impl Heap {
             error_traceback: None,
             error_levels: None,
             natives: 0..0,
-            stack: LVec::new(self.mem()),
-            frames: LVec::new(self.mem()),
-            open_upvals: LVec::new(self.mem()),
-            tbc: LVec::new(self.mem()),
+            stack: LVec::new(mem),
+            frames: LVec::new(mem),
+            open_upvals: LVec::new(mem),
+            tbc: LVec::new(mem),
             top: 0,
             pcall_depth: 0,
             hook: crate::vm::exec::HookState::default(),
             globals,
-            host_stack: LVec::new(self.mem()),
+            host_stack: LVec::new(mem),
             host_state: None,
         })
     }
@@ -346,54 +300,20 @@ impl Heap {
     /// Create a userdata (an io file handle — luna's only userdata) with no
     /// metatable yet; the io library installs the shared `FILE*` metatable.
     pub fn new_userdata(&mut self, payload: UserdataPayload, writable: bool) -> Gc<Userdata> {
-        self.adopt(Userdata::new(
+        self.try_new_userdata(payload, writable)
+            .unwrap_or_else(|_| oom_abort(Layout::new::<Userdata>()))
+    }
+
+    /// [`Heap::new_userdata`], failing when memory runs out.
+    pub fn try_new_userdata(
+        &mut self,
+        payload: UserdataPayload,
+        writable: bool,
+    ) -> Result<Gc<Userdata>, Oom> {
+        self.try_adopt(Userdata::new(
             GcHeader::new(ObjTag::Userdata),
             payload,
             writable,
         ))
-    }
-
-    /// Create (or find) a string. Short strings (≤ 40 bytes) are interned.
-    pub fn intern(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
-        if bytes.len() <= string::MAX_SHORT_LEN {
-            let (p, is_new) = self.strings.intern(self.mem.mem(), bytes, self.seed);
-            if is_new {
-                // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
-                unsafe { self.link(p as *mut GcHeader) };
-                self.bytes += string::alloc_size(bytes.len());
-            } else {
-                // PUC `luaS_new` resurrect guard (lstring.c).
-                // The bucket-chain is walked open-loop without consulting GC
-                // color; during incremental sweep an existing entry may be
-                // dead-white (in `sweep_cur`, scheduled for `free_obj`). If we
-                // hand its pointer back, the budget-paced sweep frees it out
-                // from under the mutator and the next bucket walk dereferences
-                // a libc-recycled slot — the symptom recorded in
-                // `0x800002a80000002d` deep in `StringTable::intern`).
-                //
-                // Flip the white bits to `current_white` so the upcoming sweep
-                // skips it (PUC `changewhite`). Black / not-white objects are
-                // already safe and untouched.
-                // SAFETY: `p` came from `StringTable::intern` and is a valid
-                // `LuaStr` header (its bucket chain is consistent under our
-                // single-threaded heap).
-                unsafe {
-                    let f = (*(p as *mut GcHeader)).flags;
-                    if is_white(f) && (f & self.current_white) == 0 {
-                        (*(p as *mut GcHeader)).flags = (*(p as *mut GcHeader))
-                            .with_slow((f & !WHITE_BITS) | self.current_white);
-                    }
-                }
-            }
-            // SAFETY: `p` is an interned string the heap manages: new and linked above, or found in the table and kept from this cycle's sweep by the recoloring above
-            unsafe { Gc::from_ptr(p) }
-        } else {
-            let p = string::alloc_long(self.mem.mem(), bytes, self.seed);
-            // SAFETY: `alloc_long` just allocated `p`, linked nowhere yet
-            unsafe { self.link(p as *mut GcHeader) };
-            self.bytes += string::alloc_size(bytes.len());
-            // SAFETY: `p` is the string linked just above
-            unsafe { Gc::from_ptr(p) }
-        }
     }
 }

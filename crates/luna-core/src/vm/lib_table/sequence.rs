@@ -337,16 +337,9 @@ pub(super) fn t_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     if m > (1 << 30) {
         return Err(vm.plain_err("table overflow"));
     }
-    let t = vm.heap.new_table();
-    // `ensure_array` / `ensure_hash` credit the box-size delta straight to
-    // `Heap.bytes` via `apply_bytes_delta`; `free_obj` later subtracts
-    // `Table::internal_bytes()` so the round-trip is symmetric. 5.5
-    // sort.lua:22 pins this round-trip (`memdiff > N * 4` after
-    // `table.create(N)`).
-    // SAFETY: `t` was allocated above and is held only by this local; `tm`
-    // is the only reference into it, and the two calls do not collect
-    let tm = unsafe { t.as_mut() };
-    tm.ensure_array(&mut vm.heap, n as usize);
-    tm.ensure_hash(&mut vm.heap, m as usize);
+    // the parts' sizes count in `Heap.bytes`, and `free_obj` takes them
+    // off again: 5.5 sort.lua:22 checks `memdiff > N * 4` after
+    // `table.create(N)`
+    let t = vm.alloc_table_sized(n as usize, m as usize)?;
     Ok(vm.nat_return(fs, &[Value::Table(t)]))
 }

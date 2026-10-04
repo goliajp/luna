@@ -42,6 +42,9 @@ impl Vm {
     /// O(SWEEP_DIVISOR) safe-points regardless of size.
     #[inline(always)]
     pub(crate) fn maybe_collect_garbage(&mut self, live_top: u32) {
+        // every live object is rooted here: what is allocated from now on
+        // is young until the next safe point
+        self.heap.safe_point();
         if !self.heap.gc_due() || self.gc_finalizing {
             return;
         }

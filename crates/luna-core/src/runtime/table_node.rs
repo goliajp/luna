@@ -1,7 +1,7 @@
 //! The hash-part entry of a table, and the string-key probes over it.
 
 use crate::runtime::heap::Gc;
-use crate::runtime::mem::{BlockKind, MemRef};
+use crate::runtime::mem::{BlockKind, MemRef, Oom};
 use crate::runtime::value::Value;
 
 /// A hash-part entry (PUC `Node`): the key is kept as its tag and its
@@ -186,20 +186,20 @@ impl super::Table {
     }
 
     /// A block of `len` empty nodes from `mem` (dangling for 0).
-    pub(super) fn alloc_nodes(mem: MemRef, len: usize) -> *mut Node {
+    pub(super) fn alloc_nodes(mem: MemRef, len: usize) -> Result<*mut Node, Oom> {
         if len == 0 {
-            return std::ptr::NonNull::dangling().as_ptr();
+            return Ok(std::ptr::NonNull::dangling().as_ptr());
         }
         let layout = std::alloc::Layout::array::<Node>(len).expect("hash part within MAX_ASIZE");
         let p = match mem.ctx().alloc(layout, BlockKind::Other) {
             Some(p) => p.cast::<Node>().as_ptr(),
-            None => crate::runtime::mem::oom_abort(layout),
+            None => return Err(Oom(mem)),
         };
         for i in 0..len {
             // SAFETY: the block holds `len` nodes
             unsafe { p.add(i).write(Node::EMPTY) };
         }
-        p
+        Ok(p)
     }
 
     /// Give back a block of `len` nodes from [`Table::alloc_nodes`].

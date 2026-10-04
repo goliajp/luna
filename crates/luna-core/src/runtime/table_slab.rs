@@ -1,7 +1,7 @@
 //! The array part's slab: allocation, release and the tag / payload views.
 
 use super::*;
-use crate::runtime::mem::BlockKind;
+use crate::runtime::mem::{BlockKind, Oom};
 
 impl Table {
     /// Set `array_ptr` to the inline storage's stable heap
@@ -103,11 +103,11 @@ impl Table {
 
     /// A zeroed slab (avals = `RawVal::NIL` aka `0`; atags = `raw::NIL`
     /// aka `0`) for `asize > INLINE_ASIZE` slots, from `mem`.
-    pub(super) fn alloc_slab(mem: MemRef, asize: usize) -> *mut u8 {
+    pub(super) fn alloc_slab(mem: MemRef, asize: usize) -> Result<*mut u8, Oom> {
         let layout = Self::slab_layout(asize);
         match mem.ctx().alloc_zeroed(layout, BlockKind::Other) {
-            Some(p) => p.as_ptr(),
-            None => crate::runtime::mem::oom_abort(layout),
+            Some(p) => Ok(p.as_ptr()),
+            None => Err(Oom(mem)),
         }
     }
 
