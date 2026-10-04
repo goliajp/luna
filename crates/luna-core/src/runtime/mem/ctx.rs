@@ -133,6 +133,22 @@ impl MemCtx {
         }
     }
 
+    /// [`MemCtx::alloc`] with the block's bytes zeroed.
+    #[inline]
+    pub(crate) fn alloc_zeroed(&self, layout: Layout, kind: BlockKind) -> Option<NonNull<u8>> {
+        debug_assert!(layout.size() != 0);
+        match &self.mode {
+            // SAFETY: the size is not 0
+            Mode::System => NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }),
+            _ => {
+                let p = self.alloc_slow(layout, kind)?;
+                // SAFETY: `p` is a fresh block of `layout.size()` bytes
+                unsafe { p.as_ptr().write_bytes(0, layout.size()) };
+                Some(p)
+            }
+        }
+    }
+
     #[inline(never)]
     fn alloc_slow(&self, layout: Layout, kind: BlockKind) -> Option<NonNull<u8>> {
         let size = layout.size();
