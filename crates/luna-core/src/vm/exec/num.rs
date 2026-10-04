@@ -36,13 +36,41 @@ pub(super) fn float_mod(version: LuaVersion, a: f64, b: f64) -> f64 {
     if version <= LuaVersion::Lua52 {
         return a - (a / b).floor() * b;
     }
-    let m = a % b;
+    let m = c_fmod(a, b);
     let fix = if version == LuaVersion::Lua53 {
         m * b < 0.0
     } else {
         (m > 0.0 && b < 0.0) || (m < 0.0 && b > 0.0)
     };
     if fix { m + b } else { m }
+}
+
+/// C `fmod` as PUC's own build computes it. Built by gcc for x86 Linux,
+/// PUC gets an inline x87 `fprem` loop, which differs from `%` only when
+/// both operands are NaN: it returns the one with the larger significand
+/// (quieted), and when the two differ only in sign, the positive one; `%`
+/// returns the first operand. That choice shows as `nan` / `-nan` in print.
+pub(crate) fn c_fmod(a: f64, b: f64) -> f64 {
+    if cfg!(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "x86")
+    )) && a.is_nan()
+        && b.is_nan()
+    {
+        const QUIET: u64 = 1 << 51;
+        const SIGNIFICAND: u64 = (1 << 52) - 1;
+        let (qa, qb) = (a.to_bits() | QUIET, b.to_bits() | QUIET);
+        let (sa, sb) = (qa & SIGNIFICAND, qb & SIGNIFICAND);
+        let bits = if sa == sb {
+            qa & qb
+        } else if sa > sb {
+            qa
+        } else {
+            qb
+        };
+        return f64::from_bits(bits);
+    }
+    a % b
 }
 
 /// A concatenable operand's byte form (string, or a number coerced to its

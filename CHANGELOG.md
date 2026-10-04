@@ -306,7 +306,12 @@ optimization.
   5.5, as in PUC.
 - `load` accepts bytes after a binary chunk, as PUC does.
 - When a state closes, finalizers run newest first, as in PUC.
-
+- On x86 Linux, float `%` (5.3 to 5.5) and `math.fmod` (every dialect)
+  with two NaN operands returned the first one, so `print` could show
+  `-nan` where PUC shows `nan` (affects 3.1.0 through 4.0.1). PUC built by
+  gcc there computes `fmod` with the x87 `fprem` instruction, which picks
+  the NaN with the larger significand, or the positive one when the two
+  differ only in sign; luna now picks the same one.
 - C API: `lua_pcall` calls its message handler (`msgh`, 5.1's
   `errfunc`), which it used to ignore: the handler runs where the error
   was raised, before the stack unwinds, its first result becomes the error
