@@ -79,14 +79,26 @@ impl Parser<'_> {
         Ok(self.push_expr(Expr::Table { fields, line }))
     }
 
-    /// Declare a declaration's names to the goto checker.
-    pub(super) fn declare_attrib_names(&mut self, names: List<AttribName>) {
+    /// Declare a declaration's names to the goto checker: locals, read-only
+    /// when they or the whole list (`collective`) have an attribute, or 5.5
+    /// globals.
+    pub(super) fn declare_attrib_names(
+        &mut self,
+        names: List<AttribName>,
+        collective: Option<Attrib>,
+        global: bool,
+    ) {
         let Parser {
             gotos, lex, chunk, ..
         } = self;
         if let Some(g) = gotos {
             for an in chunk.list(names) {
-                g.declare(lex.names().text(an.name.sym));
+                let kind = match an.attrib.or(collective) {
+                    _ if global => VarKind::Global,
+                    Some(_) => VarKind::Const,
+                    None => VarKind::Local,
+                };
+                g.declare(lex.names().text(an.name.sym), kind);
             }
         }
     }

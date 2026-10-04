@@ -21,9 +21,7 @@ static void hook(lua_State *L, lua_Debug *ar) {
   printf("%s %s %s", ev == LUA_HOOKCALL ? "call" : ev == LUA_HOOKRET ? "ret" : "tail",
          ar->what, ar->name ? ar->name : "?");
 #if LUA_VERSION_NUM >= 504
-  /* the register a main chunk returns from is the compiler's choice */
-  if (strcmp(ar->what, "main") == 0 && ev == LUA_HOOKRET) ar->ntransfer = 0, ar->ftransfer = 0;
-  else lua_getinfo(L, "r", ar);
+  lua_getinfo(L, "r", ar);
   printf(" ftr=%d ntr=%d [", (int)ar->ftransfer, (int)ar->ntransfer);
   for (i = ar->ftransfer; i < ar->ftransfer + ar->ntransfer; i++) {
     name = lua_getlocal(L, ar, i);

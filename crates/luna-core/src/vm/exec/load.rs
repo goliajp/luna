@@ -79,17 +79,64 @@ impl Vm {
             let source = name.unwrap_or_else(|| self.heap.intern(chunkname));
             let scratch = std::mem::take(&mut self.parse_scratch);
             let parsed = crate::frontend::parser::parse_reusing(src, self.version, depth, scratch)?;
-            let proto = crate::compiler::compile_parsed(
-                &parsed.chunk,
-                &parsed.end_lines,
-                self.version,
-                source,
-                &mut self.heap,
-                &mut self.compile_scratch,
-            )?;
-            self.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
-            proto
+            self.compile_text(parsed, source)?
         };
+        Ok(self.close_chunk(proto))
+    }
+
+    /// Compile a parsed chunk named `source`, keeping the parse's vectors
+    /// for the next load.
+    fn compile_text(
+        &mut self,
+        parsed: crate::frontend::parser::Parsed,
+        source: Gc<crate::runtime::LuaStr>,
+    ) -> Result<Gc<crate::runtime::Proto>, SyntaxError> {
+        let proto = crate::compiler::compile_parsed(
+            &parsed.chunk,
+            &parsed.end_lines,
+            self.version,
+            source,
+            &mut self.heap,
+            &mut self.compile_scratch,
+        )?;
+        self.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
+        Ok(proto)
+    }
+
+    /// Start loading a text chunk that a reader hands over piece by piece
+    /// (`lua_load`, `load` with a function): what the parse needs from the
+    /// vm, so that the reader can use the vm while the parse runs. `None`
+    /// for MacroLua, whose macro pass needs the whole source first.
+    #[doc(hidden)]
+    pub fn text_load(&mut self) -> Option<TextLoad> {
+        if self.version.is_macro_lua() {
+            return None;
+        }
+        Some(TextLoad {
+            version: self.version,
+            depth: self.c_depth + self.pcall_depth,
+            budget: self.loader_input_budget,
+            scratch: std::mem::take(&mut self.parse_scratch),
+        })
+    }
+
+    /// Compile what [`TextLoad::parse`] read as the chunk `chunkname` and
+    /// close it over the globals, as [`Vm::load`] does.
+    #[doc(hidden)]
+    pub fn load_parsed(
+        &mut self,
+        parsed: ParsedText,
+        chunkname: &[u8],
+        name: Option<Gc<crate::runtime::LuaStr>>,
+    ) -> Result<Gc<LuaClosure>, SyntaxError> {
+        let parsed = parsed.0?;
+        let source = name.unwrap_or_else(|| self.heap.intern(chunkname));
+        let proto = self.compile_text(parsed, source)?;
+        Ok(self.close_chunk(proto))
+    }
+
+    /// The closure of a loaded main function over the globals.
+    fn close_chunk(&mut self, proto: Gc<crate::runtime::Proto>) -> Gc<LuaClosure> {
         if self.heap.track_chunk_roots {
             self.heap.chunk_roots.push(proto);
         }
@@ -119,6 +166,56 @@ impl Vm {
                 ups.push(self.heap.new_upvalue(UpvalState::Closed(Value::Nil)));
             }
         }
-        Ok(self.heap.new_closure(proto, ups.into_boxed_slice()))
+        self.heap.new_closure(proto, ups.into_boxed_slice())
+    }
+}
+
+/// A text chunk being loaded from a reader (see [`Vm::text_load`]).
+#[doc(hidden)]
+pub struct TextLoad {
+    version: crate::version::LuaVersion,
+    depth: u32,
+    budget: usize,
+    scratch: crate::frontend::parser::ParseScratch,
+}
+
+/// The outcome of [`TextLoad::parse`], for [`Vm::load_parsed`].
+#[doc(hidden)]
+pub struct ParsedText(Result<crate::frontend::parser::Parsed, SyntaxError>);
+
+impl TextLoad {
+    /// Parse the chunk whose first piece is `first`, calling `feed` for
+    /// each further piece only when the parser moves past the end of what
+    /// it has; `feed` appends a piece and returns true, or returns false at
+    /// the end. Input past the loader's byte budget fails the load with
+    /// "not enough memory", as [`Vm::load`] does.
+    pub fn parse(self, first: Vec<u8>, feed: &mut dyn FnMut(&mut Vec<u8>) -> bool) -> ParsedText {
+        let oom = || SyntaxError {
+            line: 0,
+            msg: b"not enough memory".to_vec(),
+        };
+        let budget = self.budget;
+        if first.len() > budget {
+            return ParsedText(Err(oom()));
+        }
+        let mut over = false;
+        let mut capped = |buf: &mut Vec<u8>| {
+            let before = buf.len();
+            let more = feed(buf);
+            if buf.len() > budget {
+                buf.truncate(before);
+                over = true;
+                return false;
+            }
+            more
+        };
+        let r = crate::frontend::parser::parse_stream(
+            first,
+            &mut capped,
+            self.version,
+            self.depth,
+            self.scratch,
+        );
+        ParsedText(if over { Err(oom()) } else { r })
     }
 }

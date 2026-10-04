@@ -2,6 +2,7 @@
 //! position prefixes.
 
 use super::*;
+use crate::runtime::ErrorStatus;
 
 impl Vm {
     /// Take the traceback of the latest error that reached the host, and
@@ -78,6 +79,47 @@ impl Vm {
     pub(crate) fn errerr(&mut self) -> Value {
         self.errerr_raised += 1;
         Value::Str(self.heap.intern(b"error in error handling"))
+    }
+
+    /// PUC's LUA_ERRMEM: an allocation was refused, and the error object is
+    /// "not enough memory".
+    pub(crate) fn mem_err(&mut self) -> LuaError {
+        self.mem_raised += 1;
+        self.plain_err("not enough memory")
+    }
+
+    /// How many errors have taken a status of their own so far; see
+    /// [`Vm::error_status`].
+    #[doc(hidden)]
+    pub fn special_errors(&self) -> SpecialErrors {
+        SpecialErrors {
+            errerr: self.errerr_raised,
+            gcmm: self.gcmm_raised,
+            mem: self.mem_raised,
+        }
+    }
+
+    /// The status of error `e`, raised after `before` was taken: an error
+    /// the vm raised itself with a status of its own carries that status's
+    /// message, so a message the program raised with the same text, and no
+    /// such error raised meanwhile, stays `Run`.
+    #[doc(hidden)]
+    pub fn error_status(&self, e: Value, before: SpecialErrors) -> ErrorStatus {
+        let now = self.special_errors();
+        let Value::Str(s) = e else {
+            return ErrorStatus::Run;
+        };
+        let s = s.as_bytes();
+        let v52 = matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53);
+        if now.errerr != before.errerr && s == b"error in error handling" {
+            ErrorStatus::Err
+        } else if now.mem != before.mem && s == b"not enough memory" {
+            ErrorStatus::Mem
+        } else if v52 && now.gcmm != before.gcmm && s.starts_with(b"error in __gc metamethod (") {
+            ErrorStatus::Gcmm
+        } else {
+            ErrorStatus::Run
+        }
     }
 
     /// A string a library built from pieces of any size: one longer than a
@@ -413,4 +455,14 @@ impl Vm {
             String::from_utf8_lossy(&ar.short_src)
         ))
     }
+}
+
+/// Counts of the errors the vm raised with a status of their own (see
+/// [`Vm::special_errors`]).
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpecialErrors {
+    errerr: u64,
+    gcmm: u64,
+    mem: u64,
 }

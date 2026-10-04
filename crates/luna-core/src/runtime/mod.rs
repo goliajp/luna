@@ -30,7 +30,7 @@ mod upvalue;
 pub mod userdata;
 pub mod value;
 
-pub use coroutine::{Coro, CoroStatus};
+pub use coroutine::{Coro, CoroStatus, ErrorStatus};
 pub use function::{
     AfterClose, CallFrame, CloseCont, ContKind, DebugName, Frame, HostCont, LocVar, LuaClosure,
     MetaAction, MetaCont, NativeClosure, NativeCont, Proto, UpvalDesc, UpvalState, Upvalue,

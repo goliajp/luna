@@ -31,3 +31,18 @@ fn cont_pcallk() {
 fn cont_lua() {
     check("cont_lua")
 }
+
+#[test]
+fn threads_status() {
+    check("threads_status")
+}
+
+#[test]
+fn threads_mainclose() {
+    check("threads_mainclose")
+}
+
+#[test]
+fn threads_extra() {
+    check("threads_extra")
+}

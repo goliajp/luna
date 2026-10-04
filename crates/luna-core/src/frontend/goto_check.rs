@@ -15,6 +15,7 @@
 use crate::version::LuaVersion;
 
 mod records;
+pub(crate) use records::VarKind;
 use records::{Block, Goto, Label, Open};
 
 /// The dialect's goto bookkeeping (PUC `Dyndata` + `BlockCnt`).
@@ -23,6 +24,8 @@ pub(crate) struct GotoCheck {
     v55: bool,
     /// where each active variable's name starts in `names`
     actvar: Vec<usize>,
+    /// what each active variable is
+    kinds: Vec<VarKind>,
     /// the active variables' names back to back (they are needed only for an
     /// error message, so one buffer instead of an allocation per variable)
     names: String,
@@ -51,8 +54,9 @@ impl GotoCheck {
 
     /// A variable comes into scope (a local, or a 5.5 global declaration;
     /// `global *` is named "*").
-    pub(crate) fn declare(&mut self, name: &str) {
+    pub(crate) fn declare(&mut self, name: &str, kind: VarKind) {
         self.actvar.push(self.names.len());
+        self.kinds.push(kind);
         self.names.push_str(name);
     }
 
@@ -60,7 +64,26 @@ impl GotoCheck {
         if let Some(&end) = self.actvar.get(n) {
             self.names.truncate(end);
             self.actvar.truncate(n);
+            self.kinds.truncate(n);
         }
+    }
+
+    /// Whether `name` here is a read-only local, of this function or an
+    /// enclosing one, which an assignment may not target (PUC
+    /// `check_readonly`). A global declaration of the name, or a `global *`,
+    /// in between leaves the answer to the compiler.
+    pub(crate) fn is_const_local(&self, name: &str) -> bool {
+        for (i, &kind) in self.kinds.iter().enumerate().rev() {
+            let end = self.actvar.get(i + 1).copied().unwrap_or(self.names.len());
+            let n = &self.names[self.actvar[i]..end];
+            match kind {
+                VarKind::Global if n == name || n == "*" => return false,
+                VarKind::Global => {}
+                _ if n == name => return kind == VarKind::Const,
+                _ => {}
+            }
+        }
+        false
     }
 
     fn block(&self) -> &Block {

@@ -86,3 +86,13 @@ fn panic_newstate() {
 fn panic_close() {
     check("panic_close");
 }
+
+#[test]
+fn dump_writer() {
+    check("dump_writer")
+}
+
+#[test]
+fn load_stream() {
+    check("load_stream")
+}

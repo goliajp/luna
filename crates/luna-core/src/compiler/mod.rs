@@ -114,11 +114,9 @@ fn compile_main(
     c.levels.push(main);
     c.enter_block(false);
     c.stat_block(&ast.block)?;
-    c.leave_block()?;
     // the implicit final return belongs to the chunk's last line (PUC), so a
     // line hook / activelines see it there rather than on the last statement
-    c.last_line = ast.end_line;
-    c.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
+    c.final_return(ast.end_line)?;
     let lvl = c.levels.pop().expect("main level");
     let last_target = lvl.last_target;
     let proto = c.finish_level(lvl, 0, 0);

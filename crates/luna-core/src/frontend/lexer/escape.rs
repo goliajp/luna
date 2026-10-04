@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl Lexer<'_> {
+impl<S: Source> Lexer<'_, S> {
     /// Escape letters common to every dialect; `None` for anything else.
     pub(super) fn simple_escape(c: u8) -> Option<u8> {
         Some(match c {

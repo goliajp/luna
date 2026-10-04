@@ -3,7 +3,9 @@
 //! yielding), and running its continuation after a yield.
 
 use super::*;
+use luna_core::runtime::ErrorStatus;
 use luna_core::runtime::NativeClosure;
+use luna_core::vm::exec::SpecialErrors;
 use luna_core::vm::exec::host_c::HostContHooks;
 
 /// PUC `lua_Hook`.
@@ -27,7 +29,7 @@ pub(super) enum Wait {
     PCall {
         nresults: c_int,
         at: usize,
-        errerr_before: u64,
+        errerr_before: SpecialErrors,
     },
     /// the resume of the coroutine `lua_yieldk` suspended
     Yield,
@@ -252,7 +254,7 @@ fn leave(
             return Err(LuaError(s));
         }
         let results: Vec<Value> = cstack(co)[top - n..].to_vec();
-        let closed = close_frame(vm, l, token, None);
+        let closed = close_frame(vm, l, token, None).and_then(|()| return_hook(vm, co, base, n));
         pop_call(l, co, token);
         let _ = nresults;
         closed?;
@@ -263,6 +265,16 @@ fn leave(
     pop_call(l, co, token);
     closed?;
     Err(LuaError(err))
+}
+
+/// The return hook of the C function whose frame starts at C stack index
+/// `base`, run while its frame still holds everything it pushed, with its
+/// `n` results on top (PUC `rethook`).
+fn return_hook(vm: &mut Vm, co: Gc<Coro>, base: usize, n: usize) -> Result<(), LuaError> {
+    let top = cstack(co).len();
+    // transfer indices count from the function's own slot, below `base`
+    let first = (top - n - base + 1) as u32;
+    vm.host_c_return_hook(first, n as u32)
 }
 
 /// The error object being thrown: the top of the thread that raised it.
@@ -337,8 +349,13 @@ fn run_cont(
     let status = match cont.wait {
         Wait::Yield => {
             if cont.k.is_none() {
-                let fs = st(l).calls[token].func_slot;
-                let closed = close_frame(vm, l, token, None);
+                let (fs, base) = {
+                    let c = &st(l).calls[token];
+                    (c.func_slot, c.base)
+                };
+                cstack(co).extend_from_slice(&vals);
+                let closed = close_frame(vm, l, token, None)
+                    .and_then(|()| return_hook(vm, co, base, vals.len()));
                 pop_call(l, co, token);
                 closed?;
                 return Ok(vm.nat_return(fs, &vals));
@@ -388,7 +405,7 @@ pub(super) fn pcall_outcome(
     mut vals: Vec<Value>,
     nresults: c_int,
     at: usize,
-    errerr_before: u64,
+    errerr_before: SpecialErrors,
 ) -> Option<c_int> {
     let ok = vals.first().is_some_and(|v| v.truthy());
     if ok {
@@ -399,24 +416,21 @@ pub(super) fn pcall_outcome(
     let err = vals.get(1).copied().unwrap_or(Value::Nil);
     cstack(co).truncate(at);
     cstack(co).push(err);
-    let special = vm.host_errerr_count() != errerr_before;
-    let v52 = matches!(vm.version(), LuaVersion::Lua52 | LuaVersion::Lua53);
-    Some(match err {
-        Value::Str(s) if special && s.as_bytes() == b"error in error handling" => {
-            if v52 {
-                6
-            } else {
-                LUA_ERRERR
-            }
-        }
+    let kind = vm.error_status(err, errerr_before);
+    Some(status_code(vm.version(), kind))
+}
+
+/// The status code of the dialect for an error of status `kind`.
+pub(super) fn status_code(v: LuaVersion, kind: ErrorStatus) -> c_int {
+    let v52 = matches!(v, LuaVersion::Lua52 | LuaVersion::Lua53);
+    match kind {
+        ErrorStatus::Run => LUA_ERRRUN,
+        ErrorStatus::Mem => LUA_ERRMEM,
+        ErrorStatus::Err if v52 => 6,
+        ErrorStatus::Err => LUA_ERRERR,
         // 5.2/5.3 LUA_ERRGCMM: a finalizer failed in a full collection
-        Value::Str(s)
-            if special && v52 && s.as_bytes().starts_with(b"error in __gc metamethod (") =>
-        {
-            5
-        }
-        _ => LUA_ERRRUN,
-    })
+        ErrorStatus::Gcmm => 5,
+    }
 }
 
 /// An error left the C function of call `token`, whose continuation will
@@ -432,4 +446,5 @@ pub(super) const CONT_HOOKS: HostContHooks = HostContHooks {
     discard: cont_discard,
     resuming: super::threads::thread_resuming,
     reset: super::threads::thread_reset,
+    created: super::threads::thread_created,
 };

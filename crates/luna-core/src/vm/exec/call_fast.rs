@@ -250,6 +250,7 @@ impl Vm {
         if self.hook.ret
             && !self.in_hook
             && (self.hook.func.is_some() || self.hook.rust_func.is_some())
+            && !std::mem::take(&mut self.native_ret_hooked)
         {
             let res_dst = func_slot + nargs + 1;
             let need = (res_dst + nret) as usize;

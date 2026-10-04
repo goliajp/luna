@@ -3,6 +3,7 @@
 
 use super::ccall::{take_error, with_c};
 use super::*;
+use luna_core::runtime::LuaClosure;
 
 /// PUC `lua_Reader`.
 pub type LuaReader =
@@ -70,8 +71,7 @@ fn load(
         let t = Value::Table(api.vm.heap.new_table());
         api.push(t);
     }
-    let r =
-        read_chunk(api, reader, data, mode.as_deref()).and_then(|src| compile(api, &src, &name));
+    let r = read_and_compile(api, reader, data, mode.as_deref(), &name);
     if v >= LuaVersion::Lua52 {
         api.vm.host_nny_leave();
     }
@@ -91,55 +91,77 @@ fn load(
     }
 }
 
-/// Call `reader` until it signals the end, checking the kind of chunk
-/// against `mode` once its first byte is known. A binary chunk stops
-/// being read once its bytes are complete, as PUC's undumper stops; a text
-/// chunk is read to the end and parsed once, where PUC's parser stops at
-/// the first syntax error.
-fn read_chunk(
+/// Read the chunk from `reader` and compile it. The first piece tells a
+/// binary chunk from text and is checked against `mode`. A text chunk is
+/// parsed as it is read: the reader is called only when the parser moves
+/// past the end of what it has, as PUC's parser calls it, so a syntax error
+/// stops the reading. A binary chunk is read until its bytes are complete,
+/// where PUC's undumper stops.
+fn read_and_compile(
     api: &mut Api,
     reader: LuaReader,
     data: *mut c_void,
     mode: Option<&[u8]>,
-) -> Result<Vec<u8>, Failure> {
-    let l = api.l;
-    let mut src = Vec::new();
+    name: &[u8],
+) -> Result<Value, Failure> {
+    let mut first = Vec::new();
     // 5.1 peeks at the first character and then reads it again, so a
     // reader that signals the end at once is asked a second time
-    let mut peeked = api.version() != LuaVersion::Lua51;
-    loop {
-        let mut size = 0usize;
-        let mut status = LUA_OK;
-        // SAFETY: `l` is the live thread the load runs on and `reader` the
-        // host's reader; the boundary returns whatever it does
-        let p = with_c(api.vm, l, || unsafe {
-            luna_c_protect_reader(l, reader, data, &mut size, &mut status)
-        });
-        if status != LUA_OK {
-            return Err((status, take_error(l)));
-        }
-        if p.is_null() || size == 0 {
-            if src.is_empty() && !peeked {
-                peeked = true;
-                continue;
-            }
-            break;
-        }
-        let first = src.is_empty();
-        // SAFETY: a reader returns a block of `size` bytes that stays valid
-        // until it is called again
-        src.extend_from_slice(unsafe { std::slice::from_raw_parts(p.cast::<u8>(), size) });
-        if first {
-            check_mode(api, mode, src[0] == 0x1b)?;
-        }
-        if src[0] == 0x1b && api.vm.host_binary_chunk_complete(&src) {
-            return Ok(src);
-        }
+    if !read_piece(api, reader, data, &mut first)? && api.version() == LuaVersion::Lua51 {
+        read_piece(api, reader, data, &mut first)?;
     }
-    if src.is_empty() {
-        check_mode(api, mode, false)?;
+    let binary = first.first() == Some(&0x1b);
+    check_mode(api, mode, binary)?;
+    let text = api.vm.text_load().filter(|_| !binary);
+    let Some(text) = text else {
+        let mut src = first;
+        while !(binary && api.vm.host_binary_chunk_complete(&src))
+            && read_piece(api, reader, data, &mut src)?
+        {}
+        let r = api.vm.host_load_chunk(&src, name);
+        return finish(api, r);
+    };
+    let mut failed = None;
+    let parsed = text.parse(first, &mut |buf| match read_piece(api, reader, data, buf) {
+        Ok(more) => more,
+        Err(f) => {
+            failed = Some(f);
+            false
+        }
+    });
+    if let Some(f) = failed {
+        return Err(f);
     }
-    Ok(src)
+    let r = api.vm.host_load_parsed(parsed, name);
+    finish(api, r)
+}
+
+/// Call `reader` once and append the piece it returns to `buf`: false
+/// when it signals the end (no piece, or one of no bytes).
+fn read_piece(
+    api: &mut Api,
+    reader: LuaReader,
+    data: *mut c_void,
+    buf: &mut Vec<u8>,
+) -> Result<bool, Failure> {
+    let l = api.l;
+    let mut size = 0usize;
+    let mut status = LUA_OK;
+    // SAFETY: `l` is the live thread the load runs on and `reader` the
+    // host's reader; the boundary returns whatever it does
+    let p = with_c(api.vm, l, || unsafe {
+        luna_c_protect_reader(l, reader, data, &mut size, &mut status)
+    });
+    if status != LUA_OK {
+        return Err((status, take_error(l)));
+    }
+    if p.is_null() || size == 0 {
+        return Ok(false);
+    }
+    // SAFETY: a reader returns a block of `size` bytes that stays valid
+    // until it is called again
+    buf.extend_from_slice(unsafe { std::slice::from_raw_parts(p.cast::<u8>(), size) });
+    Ok(true)
 }
 
 /// PUC `checkmode`.
@@ -161,15 +183,12 @@ fn check_mode(api: &mut Api, mode: Option<&[u8]>, binary: bool) -> Result<(), Fa
     Err((LUA_ERRSYNTAX, api.str(&msg)))
 }
 
-/// Compile `src` and give its first upvalue the globals as PUC's
-/// `lua_load` does: 5.1 closes the chunk over the thread's globals, 5.2
-/// sets the only upvalue of a function with exactly one, 5.3 on the first
-/// of any, to the registry's `LUA_RIDX_GLOBALS`.
-fn compile(api: &mut Api, src: &[u8], name: &[u8]) -> Result<Value, Failure> {
-    let (cl, n) = api
-        .vm
-        .host_load_chunk(src, name)
-        .map_err(|e| (LUA_ERRSYNTAX, e))?;
+/// The function a load made, with its first upvalue set to the globals
+/// as PUC's `lua_load` sets it: 5.1 closes the chunk over the thread's
+/// globals, 5.2 sets the only upvalue of a function with exactly one, 5.3
+/// on the first of any, to the registry's `LUA_RIDX_GLOBALS`.
+fn finish(api: &mut Api, r: Result<(Gc<LuaClosure>, usize), Value>) -> Result<Value, Failure> {
+    let (cl, n) = r.map_err(|e| (LUA_ERRSYNTAX, e))?;
     let globals = match api.version() {
         LuaVersion::Lua51 => (n <= 1).then(|| Value::Table(api.thread_globals())),
         LuaVersion::Lua52 => (n == 1).then(|| api.vm.host_registry().get_int(2)),
@@ -222,12 +241,13 @@ pub unsafe extern "C" fn luna_load_51(
 }
 
 /// PUC `lua_dump`: hand the binary chunk of the Lua function on top of the
-/// stack to `writer`, and return the first nonzero status it returns, or
-/// 1 when the value is not a Lua function. 5.5 also signals the end with a
-/// call of no bytes. An error the writer raises leaves `lua_dump`.
+/// stack to `writer` one block at a time, as the dialect's `ldump.c` cuts
+/// it, until the writer returns nonzero; return that status, or 1 when the
+/// value is not a Lua function. 5.5 also signals the end with a call of no
+/// bytes. An error the writer raises leaves `lua_dump`.
 fn dump(api: &mut Api, writer: LuaWriter, data: *mut c_void, strip: bool) -> c_int {
     let f = api.get_or_nil(-1);
-    let Some(bytes) = api.vm.host_dump(f, strip) else {
+    let Some((bytes, blocks)) = api.vm.host_dump(f, strip) else {
         return 1;
     };
     let v55 = api.version() >= LuaVersion::Lua55;
@@ -237,7 +257,16 @@ fn dump(api: &mut Api, writer: LuaWriter, data: *mut c_void, strip: bool) -> c_i
         let t = Value::Table(api.vm.heap.new_table());
         api.push(t);
     }
-    let mut status = write(api, writer, bytes.as_ptr().cast(), bytes.len(), data);
+    let mut status = 0;
+    let mut at_byte = 0;
+    for n in blocks {
+        if status != 0 || api.raised() {
+            break;
+        }
+        let p = bytes[at_byte..].as_ptr().cast();
+        status = write(api, writer, p, n, data);
+        at_byte += n;
+    }
     if v55 && status == 0 && !api.raised() {
         status = write(api, writer, std::ptr::null(), 0, data);
     }

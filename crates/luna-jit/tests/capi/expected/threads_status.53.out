@@ -1,0 +1,13 @@
+runtime error: status=2 lua_status=2 top: boom
+  again: lua_status=2
+memory error: status=2 lua_status=2 top: [string "return function() local s = string.rep('x', 3..."]:1: not enough memory for buffer allocation
+  again: lua_status=2
+memory error caught inside: status=0 lua_status=0 top: not enough memory for buffer allocation
+  again: lua_status=0
+returned: status=0 lua_status=0 top: done
+  again: lua_status=0
+finalizer error: status=5 lua_status=5 top: error in __gc metamethod (in gc)
+  again: lua_status=5
+coroutine.resume	false	[string "local co = coroutine.create(function() return..."]:1: not enough memory for buffer allocation
+coroutine.status	dead
+pcall: status=2 [string "return string.rep('x', 3 * 2^29)"]:1: not enough memory for buffer allocation
