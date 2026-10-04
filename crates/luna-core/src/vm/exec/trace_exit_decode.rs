@@ -109,7 +109,12 @@ impl Vm {
                         .cloned()
                 })
                 .flatten();
+            // a side trace was recorded from the pc its exit resumed at; a
+            // plain-pc exit can return other pcs (a for loop's tail goes back
+            // to the body or leaves the loop), and the child only continues
+            // from its own
             if let Some(child) = child
+                && child.head_pc == tentative.cont_pc
                 && self.child_reads_stack_held_ok(base_us, entry_tags, &child.entry_tags)
             {
                 let cent = child.current_entry();
