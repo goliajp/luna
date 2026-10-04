@@ -285,6 +285,11 @@ impl Vm {
         Ok(())
     }
 
+    /// The running thread's hook is a C hook (`lua_sethook`).
+    pub(super) fn c_hook_installed(&self) -> bool {
+        self.host_hook.is_some() && matches!(self.hook.func, Some(Value::LightUserdata(_)))
+    }
+
     /// A count or line hook fires on the next instruction.
     #[inline]
     pub(super) fn hook_armed(&self) -> bool {
@@ -301,11 +306,6 @@ impl Vm {
         oldpc: u32,
     ) -> Result<(), LuaError> {
         let lines = &cl.proto.lines;
-        let cur_line = if lines.is_empty() {
-            None
-        } else {
-            Some(lines[(pc as usize).min(lines.len() - 1)] as i64)
-        };
         // count hook: fire every `count_base` instructions
         let mut counthook = false;
         if self.hook.count {
@@ -323,7 +323,9 @@ impl Vm {
         if counthook {
             // hooked function is the running Lua frame: its frame
             // is on the stack, so no synthetic C level is needed.
-            self.run_hook(b"count", cur_line, false)?;
+            // a count event carries no line (PUC `luaD_hook(L,
+            // LUA_HOOKCOUNT, -1)`): the Lua hook gets nil
+            self.run_hook(b"count", None, false)?;
         }
         // line hook: fire on a fresh frame, a backward jump (loop), or a
         // change of source line.

@@ -273,6 +273,11 @@ impl Vm {
             self.hook_resumed = self.version >= LuaVersion::Lua52;
             return self.exec_with(1);
         }
+        // the `coroutine.yield` returning, for a C hook's return event
+        let yielder = match self.stack.get(fslot as usize) {
+            Some(&Value::Native(nc)) if self.c_hook_installed() => Some(nc),
+            _ => None,
+        };
         let need = frame_need.max((fslot + n) as usize);
         if self.stack.len() < need {
             self.stack.resize(need, Value::Nil);
@@ -290,7 +295,21 @@ impl Vm {
             Some(CallFrame::Cont(nc)) if matches!(nc.kind, ContKind::Host(_))
         );
         if !host_cont {
-            self.hook_return(true, 1, n)?;
+            // the yield is a level of its own while its return hook runs
+            if let Some(nc) = yielder {
+                self.running_natives.push(crate::vm::callstack::NativeAct {
+                    nc,
+                    func_slot: fslot,
+                    nargs: 0,
+                    depth: self.frames.len() as u32,
+                    ccmt: 0,
+                });
+            }
+            let r = self.hook_return(true, 1, n);
+            if yielder.is_some() {
+                self.running_natives.pop();
+            }
+            r?;
         }
         self.exec_with(1)
     }
