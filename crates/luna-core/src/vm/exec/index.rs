@@ -328,8 +328,9 @@ impl Vm {
         if !self.heap.store_barrier(t) {
             return Err(self.readonly_error());
         }
-        // SAFETY: `t` is a table the caller holds (an operand of the running op or a native argument); the borrow lives for the one `set_inlined`, which touches only the heap and the table and does not collect
-        match unsafe { t.as_mut() }.set_inlined(&mut self.heap, key, v) {
+        // SAFETY: `t` is a table the caller holds (an operand of the running op or a native argument); each borrow lives for one `set_inlined`, which touches only the heap and the table and does not collect
+        let r = self.table_op(|vm| unsafe { t.as_mut() }.set_inlined(&mut vm.heap, key, v));
+        match r {
             Ok(()) => Ok(()),
             Err(e) => Err(self.table_error_cold(e)),
         }
