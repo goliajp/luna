@@ -67,6 +67,7 @@ mod trace_dispatch_numeric_loops;
 mod trace_entry_booleans;
 mod trace_entry_live_in;
 mod trace_error_traceback;
+mod trace_error_unwind;
 mod trace_escape_analysis_sweep;
 mod trace_exit_side_effects;
 mod trace_field_access_helpers;
