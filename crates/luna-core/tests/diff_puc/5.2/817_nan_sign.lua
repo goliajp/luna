@@ -54,7 +54,6 @@ add("loop mod", t[5000])
 local function f(a, b) return a / b end
 for i = 1, 5000 do t[i] = f(fz, fz) end
 add("call div", t[5000])
-if pcall(string.format, "%a", 1) then
-  r[#r + 1] = "a=" .. string.format("%a|%A|%+a", fz/fz, fz/fz, -(fz/fz))
-end
+-- no %a here: PUC 5.2 has it only when built with LUA_USE_AFORMAT (make
+-- linux, not make posix), while luna 5.2 always has it
 print(table.concat(r, "\n"))
