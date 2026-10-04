@@ -36,3 +36,10 @@ fn aux_trace() {
 fn lib_open() {
     check("lib_open");
 }
+
+// a signal in a wait status and reading a directory exist only on POSIX
+#[cfg(unix)]
+#[test]
+fn aux_posix() {
+    check("aux_posix");
+}

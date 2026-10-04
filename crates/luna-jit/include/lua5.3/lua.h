@@ -106,7 +106,14 @@ typedef void * (*lua_Alloc) (void *ud, void *ptr, size_t osize, size_t nsize);
 #endif
 
 /* RCS ident string */
-extern const char luna_ident_53[];
+/* data lives in the luna_jit library: a Windows host linking its DLL must
+   import it; define LUNA_STATIC when linking the static library */
+#if defined(_WIN32) && !defined(LUNA_STATIC)
+#define LUNA_DATA	extern __declspec(dllimport)
+#else
+#define LUNA_DATA	extern
+#endif
+LUNA_DATA const char luna_ident_53[];
 #define lua_ident	luna_ident_53
 
 /* state manipulation */

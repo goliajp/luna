@@ -1,6 +1,7 @@
 /* lua_pushfstring and lua_pushvfstring: every option of each version,
    unknown options, long results, and the stack they leave */
 #include <stdarg.h>
+#include <math.h>
 #include "aux_common.h"
 
 static const char *vf(lua_State *L, const char *fmt, ...) {
@@ -64,7 +65,7 @@ int main(void) {
   check(L, "f big", lua_pushfstring(L, "%f %f", 1e100, 123456789012.0));
   check(L, "f small", lua_pushfstring(L, "%f %f", 1e-10, 0.1));
   check(L, "f int-like", lua_pushfstring(L, "%f %f", 3.0, 1e15));
-  check(L, "f inf", lua_pushfstring(L, "%f %f", 1.0 / 0.0, -1.0 / 0.0));
+  check(L, "f inf", lua_pushfstring(L, "%f %f", HUGE_VAL, -HUGE_VAL));
 #if LUA_VERSION_NUM >= 503
   check(L, "I", lua_pushfstring(L, "%I %I", (LUAI_UACINT)0, (LUAI_UACINT)LUA_MININTEGER));
   check(L, "I max", lua_pushfstring(L, "%I", (LUAI_UACINT)LUA_MAXINTEGER));
