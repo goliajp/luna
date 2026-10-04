@@ -325,9 +325,9 @@ optimization.
 
 ### Fixed
 
-- A `math.max`, `math.min` or `string.sub` call compiled into a trace,
-  left by the trace while its arguments were being computed (an argument
-  that stopped being a number or a string), made the interpreter call
+- A `math.max` or `math.min` call compiled into a trace, left by the
+  trace while its arguments were being computed (an argument that
+  stopped being a number), made the interpreter call
   whatever the call's register held, raising "attempt to call field
   'max' (a number value)" instead of the library's argument error. The
   trace now leaves at the library lookup. Seen with numeric `for` loops in
