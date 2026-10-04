@@ -4,7 +4,9 @@
 //! strings hash lazily, seeded per-heap (hash-flooding defense for hostile
 //! script workloads (script host)).
 
-use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
+use std::alloc::Layout;
+
+use crate::runtime::mem::{BlockKind, MemRef};
 use std::cell::Cell;
 use std::ptr;
 use std::slice;
@@ -145,14 +147,14 @@ fn layout(len: usize) -> Layout {
         .pad_to_align()
 }
 
-fn alloc_str(bytes: &[u8], short: bool, hash: u32, hashed: bool) -> *mut LuaStr {
+fn alloc_str(mem: MemRef, bytes: &[u8], short: bool, hash: u32, hashed: bool) -> *mut LuaStr {
     let layout = layout(bytes.len());
-    // SAFETY: layout is built from the header size + the trailing bytes and their NUL that we just computed, so the header, the bytes and the NUL written below are inside the allocation; deallocation will use the same layout in `Heap::sweep_strings`.
+    let p = match mem.ctx().alloc(layout, BlockKind::Str) {
+        Some(p) => p.as_ptr() as *mut LuaStr,
+        None => crate::runtime::mem::oom_abort(layout),
+    };
+    // SAFETY: layout is built from the header size + the trailing bytes and their NUL that we just computed, so the header, the bytes and the NUL written below are inside the allocation; deallocation will use the same layout in `free`.
     unsafe {
-        let p = alloc(layout) as *mut LuaStr;
-        if p.is_null() {
-            handle_alloc_error(layout);
-        }
         let mut hdr = GcHeader::new(ObjTag::Str);
         hdr.aux = bytes.len() as u32;
         p.write(LuaStr {
@@ -168,19 +170,19 @@ fn alloc_str(bytes: &[u8], short: bool, hash: u32, hashed: bool) -> *mut LuaStr 
     }
 }
 
-pub(crate) fn alloc_long(bytes: &[u8], seed: u32) -> *mut LuaStr {
+pub(crate) fn alloc_long(mem: MemRef, bytes: &[u8], seed: u32) -> *mut LuaStr {
     debug_assert!(bytes.len() > MAX_SHORT_LEN);
-    alloc_str(bytes, false, seed, false)
+    alloc_str(mem, bytes, false, seed, false)
 }
 
-/// SAFETY: `p` must come from `alloc_str` and not be freed twice.
-pub(crate) unsafe fn free(p: *mut LuaStr) {
+/// SAFETY: `p` must come from `alloc_str` on `mem` and not be freed twice.
+pub(crate) unsafe fn free(p: *mut LuaStr, mem: MemRef) {
     // SAFETY: the caller's contract; the layout is the one `alloc_str`
     // used, recomputed from the byte count in `hdr.aux`
     unsafe {
         let l = layout((*p).hdr.aux as usize);
         ptr::drop_in_place(p);
-        dealloc(p as *mut u8, l);
+        mem.ctx().free(ptr::NonNull::new_unchecked(p as *mut u8), l);
     }
 }
 
@@ -200,7 +202,7 @@ impl StringTable {
 
     /// Find or create an interned short string. Returns `(ptr, newly_created)`.
     #[inline]
-    pub(crate) fn intern(&mut self, bytes: &[u8], seed: u32) -> (*mut LuaStr, bool) {
+    pub(crate) fn intern(&mut self, mem: MemRef, bytes: &[u8], seed: u32) -> (*mut LuaStr, bool) {
         debug_assert!(bytes.len() <= MAX_SHORT_LEN);
         let h = lua_hash(bytes, seed);
         let b = h as usize & (self.buckets.len() - 1);
@@ -218,7 +220,7 @@ impl StringTable {
             self.grow();
         }
         let b = h as usize & (self.buckets.len() - 1);
-        let p = alloc_str(bytes, true, h, true);
+        let p = alloc_str(mem, bytes, true, h, true);
         // SAFETY: `p` was just returned by `alloc_str` and is not in any chain yet; nothing else points at it
         unsafe {
             (*p).hnext = self.buckets[b];
