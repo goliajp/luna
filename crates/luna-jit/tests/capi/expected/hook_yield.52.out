@@ -1,0 +1,25 @@
+line yields
+  hook line line=2
+1	suspended	true	nil	1
+  hook line line=3
+  hook line line=4
+2	suspended	true	nil	1
+  hook line line=5
+3	dead	true	22	2
+count yields
+  hook count line=3
+1	suspended	true	nil
+  hook count line=3
+2	suspended	true	nil
+  hook count line=3
+3	suspended	true	nil
+4	dead	true	6
+wrap
+  hook line line=3
+  hook line line=4
+
+  hook line line=5
+done
+  error 2: [string "local w = coroutine.wrap(function()..."]:7: cannot resume dead coroutine
+main thread
+  error 2: [string "local a = 1"]:1: attempt to yield from outside a coroutine

@@ -140,6 +140,11 @@ impl<'a> Compiler<'a> {
                 self.declare_local(self.nm(name), reg, false)?;
                 let f = self.function_exp(body, false)?;
                 self.exp_to_reg(f, reg)?;
+                // debug information sees the variable once the closure is in it
+                let pc = self.lr().code.len() as u32;
+                if let Some(l) = self.l().locals.last_mut() {
+                    l.start_pc = pc;
+                }
                 self.set_freereg(reg + 1);
                 Ok(())
             }

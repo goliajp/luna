@@ -89,7 +89,14 @@ fn run_c_hook(vm: &mut Vm, cf: *const (), event: &[u8], line: Option<i64>) -> Re
     let line = if code == 2 { line.unwrap_or(-1) } else { -1 };
     ar.set_currentline(line as c_int);
     let level = vm.host_level_count(co);
-    ar.set_level_ref(level);
+    // 5.1 tells nothing of the function a tail return leaves (`i_ci` 0)
+    let raw = if event == b"tail return" {
+        0
+    } else {
+        let mut api = Api { vm: &mut *vm, l };
+        super::debug::encode_ref(&mut api, l, level)
+    };
+    ar.set_level_ref(raw);
     let lua = matches!(
         vm.host_level(co, 0),
         Some(luna_core::vm::exec::host_c::HostLevel::Lua)
@@ -145,6 +152,16 @@ pub(super) fn hook_yield(api: &mut Api) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether the running C code is a hook that interrupted a Lua function.
+pub(super) fn in_lua_hook(api: &mut Api) -> bool {
+    let s = api.st();
+    let depth = s.calls.len();
+    s.hook
+        .running
+        .as_ref()
+        .is_some_and(|h| h.depth == depth && h.lua)
 }
 
 /// Whether the C function calling into Lua now is a C hook, whose callee
@@ -278,8 +295,8 @@ pub unsafe extern "C" fn lua_gethook(L: *mut LuaState) -> Option<LuaHook> {
         return own_c_hook(&mut api, &state);
     }
     match state.func {
-        // SAFETY: a C hook's light userdata came from a `lua_Hook`
         Some(Value::LightUserdata(p)) => {
+            // SAFETY: a C hook's light userdata came from a `lua_Hook`
             Some(unsafe { std::mem::transmute::<*const (), LuaHook>(p) })
         }
         Some(_) => Some(hookf()),

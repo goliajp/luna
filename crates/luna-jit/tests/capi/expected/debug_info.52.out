@@ -1,0 +1,72 @@
+walk field
+ level 0:  [nSltu] st=1 what=C src==[C] short=[C] def=-1--1 line=-1 name=walk namewhat=[upvalue] nups=0 nparams=0 vararg=1 tail=0
+ level 1:  [nSltu] st=1 what=Lua src=@debug_info.lua short=debug_info.lua def=3-3 line=3 name=field namewhat=[field] nups=1 nparams=1 vararg=0 tail=0
+ level 2:  [nSltu] st=1 what=main src=@debug_info.lua short=debug_info.lua def=0-0 line=7 name=(null) namewhat=[] nups=1 nparams=0 vararg=1 tail=64
+ levels=3 top=0
+walk method
+ level 0:  [nSltu] st=1 what=C src==[C] short=[C] def=-1--1 line=-1 name=walk namewhat=[upvalue] nups=0 nparams=0 vararg=1 tail=0
+ level 1:  [nSltu] st=1 what=Lua src=@debug_info.lua short=debug_info.lua def=4-4 line=4 name=method namewhat=[method] nups=1 nparams=3 vararg=0 tail=0
+ level 2:  [nSltu] st=1 what=main src=@debug_info.lua short=debug_info.lua def=0-0 line=7 name=(null) namewhat=[] nups=1 nparams=0 vararg=1 tail=64
+ levels=3 top=0
+walk local
+ level 0:  [nSltu] st=1 what=C src==[C] short=[C] def=-1--1 line=-1 name=walk namewhat=[upvalue] nups=0 nparams=0 vararg=1 tail=0
+ level 1:  [nSltu] st=1 what=Lua src=@debug_info.lua short=debug_info.lua def=5-5 line=5 name=loc namewhat=[local] nups=1 nparams=0 vararg=1 tail=0
+ level 2:  [nSltu] st=1 what=main src=@debug_info.lua short=debug_info.lua def=0-0 line=7 name=(null) namewhat=[] nups=1 nparams=0 vararg=1 tail=64
+ levels=3 top=0
+walk global
+ level 0:  [nSltu] st=1 what=C src==[C] short=[C] def=-1--1 line=-1 name=walk namewhat=[upvalue] nups=0 nparams=0 vararg=1 tail=0
+ level 1:  [nSltu] st=1 what=Lua src=@debug_info.lua short=debug_info.lua def=6-6 line=6 name=glob namewhat=[global] nups=1 nparams=0 vararg=0 tail=0
+ level 2:  [nSltu] st=1 what=main src=@debug_info.lua short=debug_info.lua def=0-0 line=7 name=(null) namewhat=[] nups=1 nparams=0 vararg=1 tail=64
+ levels=3 top=0
+walk tail
+ level 0:  [nSltu] st=1 what=C src==[C] short=[C] def=-1--1 line=-1 name=walk namewhat=[upvalue] nups=0 nparams=0 vararg=1 tail=0
+ level 1:  [nSltu] st=1 what=Lua src=@debug_info.lua short=debug_info.lua def=8-8 line=8 name=(null) namewhat=[] nups=1 nparams=0 vararg=0 tail=64
+ level 2:  [nSltu] st=1 what=main src=@debug_info.lua short=debug_info.lua def=0-0 line=10 name=(null) namewhat=[] nups=1 nparams=0 vararg=1 tail=64
+ levels=3 top=0
+pushes level 0: +2 f=function L=nil
+pushes level 1: +2 f=function L=table
+  lines=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,18,19,20
+no level 5
+walk pcall
+ level 0:  [nSltu] st=1 what=C src==[C] short=[C] def=-1--1 line=-1 name=(null) namewhat=[] nups=0 nparams=0 vararg=1 tail=0
+ level 1:  [nSltu] st=1 what=C src==[C] short=[C] def=-1--1 line=-1 name=pcall namewhat=[global] nups=0 nparams=0 vararg=1 tail=0
+ level 2:  [nSltu] st=1 what=main src=@debug_info.lua short=debug_info.lua def=0-0 line=12 name=(null) namewhat=[] nups=1 nparams=0 vararg=1 tail=64
+ levels=3 top=0
+walk index
+ level 0:  [nSltu] st=1 what=C src==[C] short=[C] def=-1--1 line=-1 name=walk namewhat=[upvalue] nups=0 nparams=0 vararg=1 tail=0
+ level 1:  [nSltu] st=1 what=Lua src=@debug_info.lua short=debug_info.lua def=13-13 line=13 name=__index namewhat=[metamethod] nups=1 nparams=2 vararg=0 tail=0
+ level 2:  [nSltu] st=1 what=main src=@debug_info.lua short=debug_info.lua def=0-0 line=14 name=(null) namewhat=[] nups=1 nparams=0 vararg=1 tail=64
+ levels=3 top=0
+script: 0 ok
+ co level 0:  [nSltu] st=1 what=C src==[C] short=[C] def=-1--1 line=-1 name=yield namewhat=[field] nups=0 nparams=0 vararg=1 tail=0
+ co level 1:  [nSltu] st=1 what=Lua src=@debug_info.lua short=debug_info.lua def=16-16 line=16 name=inner namewhat=[local] nups=1 nparams=0 vararg=0 tail=0
+ co level 2:  [nSltu] st=1 what=Lua src=@debug_info.lua short=debug_info.lua def=15-18 line=17 name=(null) namewhat=[] nups=1 nparams=1 vararg=0 tail=0
+ co levels=3
+getstack(-1)=0
+getstack(100)=0
+invalid option: st=0 what=C
+option t: st=1
+option r: st=0
+no options: st=1
+fninfo nSlu: pop/push -1
+  [nSlu] st=1 what=C src==[C] short=[C] def=-1--1 line=-1 name=(null) namewhat=[] nups=0 nparams=0 vararg=1
+fninfo nSlu: pop/push -1
+  [nSlu] st=1 what=C src==[C] short=[C] def=-1--1 line=-1 name=(null) namewhat=[] nups=0 nparams=0 vararg=1
+fninfo nSlu: pop/push -1
+  [nSlu] st=1 what=Lua src==short short=short def=2-4 line=-1 name=(null) namewhat=[] nups=2 nparams=2 vararg=1
+fninfo SLf: pop/push 1
+  [SLf] st=1 what=Lua src==short short=short def=2-4
+fninfo S: pop/push -1
+  [S] st=1 what=main src=a chunk name that is qui short=[string "a chunk name that is quite long and goes on a..."] def=0-0
+fninfo S: pop/push -1
+  [S] st=1 what=main src=@a/very/long/file/name/t short=...file/name/that/goes/on/and/on/to/be/cut/at/the/front.lua def=0-0
+fninfo S: pop/push -1
+  [S] st=1 what=main src==an equals name that is  short=an equals name that is quite long and goes on and on and on def=0-0
+fninfo S: pop/push -1
+  [S] st=1 what=main src=two|lines short=[string "two..."] def=0-0
+rest: 0 ok
+fninfo Su: pop/push -1
+  [Su] st=1 what=C src==[C] short=[C] def=-1--1 nups=2 nparams=0 vararg=1
+fninfo u: pop/push -1
+  [u] st=1 nups=0 nparams=0 vararg=1
+cclosure: 0
