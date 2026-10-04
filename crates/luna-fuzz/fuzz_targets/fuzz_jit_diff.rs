@@ -57,6 +57,9 @@ mod jit_gc;
 #[path = "jit_carry.rs"]
 mod jit_carry;
 
+#[path = "jit_nested.rs"]
+mod jit_nested;
+
 struct Outcome {
     out: String,
     err: Option<String>,
