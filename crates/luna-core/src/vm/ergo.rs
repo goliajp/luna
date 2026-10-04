@@ -159,7 +159,7 @@ impl Vm {
         // `TypeId::of::<T>()` here, and `Userdata::trace` always reads
         // the adapter back through the same `Host` instance.
         fn trace_fn_for<T: crate::vm::LuaUserdata>(
-            any: &(dyn std::any::Any + 'static),
+            any: &crate::runtime::mem::LAny,
             m: &mut crate::vm::UserdataMarker<'_>,
         ) {
             let typed = any
@@ -169,7 +169,12 @@ impl Vm {
         }
         let payload = crate::runtime::userdata::UserdataPayload::Host {
             type_id: std::any::TypeId::of::<T>(),
-            data: Box::new(value),
+            data: crate::runtime::mem::LAny::new(
+                self.heap.mem(),
+                value,
+                crate::runtime::mem::BlockKind::Other,
+            )
+            .unwrap_or_else(|_| crate::runtime::mem::oom_abort(std::alloc::Layout::new::<T>())),
             trace_fn: Some(trace_fn_for::<T>),
         };
         let g = self.heap.new_userdata(payload, /* writable */ true);

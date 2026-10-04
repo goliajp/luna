@@ -2,13 +2,14 @@
 //! context, resume and yield.
 
 use super::*;
+use crate::runtime::mem::LVec;
 
 /// A thread's swapped-out execution context (PUC per-thread stack state).
 pub(super) struct SavedCtx {
-    pub(super) stack: Vec<Value>,
-    pub(super) frames: Vec<CallFrame>,
-    pub(super) open_upvals: Vec<(u32, Gc<Upvalue>)>,
-    pub(super) tbc: Vec<u32>,
+    pub(super) stack: LVec<Value>,
+    pub(super) frames: LVec<CallFrame>,
+    pub(super) open_upvals: LVec<(u32, Gc<Upvalue>)>,
+    pub(super) tbc: LVec<u32>,
     pub(super) top: u32,
     pub(super) pcall_depth: u32,
     pub(super) hook: HookState,
@@ -22,10 +23,10 @@ pub(super) struct SavedCtx {
 impl Vm {
     pub(super) fn take_ctx(&mut self) -> SavedCtx {
         let saved = SavedCtx {
-            stack: std::mem::take(&mut self.stack),
-            frames: std::mem::take(&mut self.frames),
-            open_upvals: std::mem::take(&mut self.open_upvals),
-            tbc: std::mem::take(&mut self.tbc),
+            stack: self.stack.take(),
+            frames: self.frames.take(),
+            open_upvals: self.open_upvals.take(),
+            tbc: self.tbc.take(),
             top: self.top,
             pcall_depth: self.pcall_depth,
             hook: self.hook,
@@ -51,10 +52,10 @@ impl Vm {
     pub(super) fn load_coro_ctx(&mut self, co: Gc<Coro>) {
         // SAFETY: `co` is the coroutine `resume_coro` is switching to (or its resumer `r`), which the caller holds and which is a root through `self.current` or a saved stack; `m` is the only reference into it until the function returns, and nothing here can collect
         let m = unsafe { co.as_mut() };
-        self.stack = std::mem::take(&mut m.stack);
-        self.frames = std::mem::take(&mut m.frames);
-        self.open_upvals = std::mem::take(&mut m.open_upvals);
-        self.tbc = std::mem::take(&mut m.tbc);
+        self.stack = m.stack.take();
+        self.frames = m.frames.take();
+        self.open_upvals = m.open_upvals.take();
+        self.tbc = m.tbc.take();
         self.top = m.top;
         self.frames_resync(); // sync shadow to coro's frames
         self.pcall_depth = m.pcall_depth;
@@ -195,10 +196,15 @@ impl Vm {
                             0,
                             0,
                         ));
+                        let mem = self.heap.mem();
+                        let mut kept = LVec::new(mem);
+                        for l in &levels {
+                            kept.push_or_abort(LVec::from_slice_or_abort(mem, l));
+                        }
                         // SAFETY: `co` is still `self.current`, a root, and its frames have unwound, so `m` is the only reference into it for these two stores
                         let m = unsafe { co.as_mut() };
-                        m.error_traceback = Some(tb);
-                        m.error_levels = Some(levels);
+                        m.error_traceback = Some(LVec::from_slice_or_abort(mem, &tb));
+                        m.error_levels = Some(kept);
                     }
                     if let Err(e) = drive {
                         let kind = self.error_status(e.0, special_before);
@@ -246,8 +252,8 @@ impl Vm {
         args: &[Value],
     ) -> Result<Vec<Value>, LuaError> {
         self.stack.clear();
-        self.stack.push(body);
-        self.stack.extend_from_slice(args);
+        self.stack.push_or_abort(body);
+        self.stack.extend_from_slice_or_abort(args);
         self.top = self.stack.len() as u32;
         match self.begin_call(0, Some(args.len() as u32), -1, true) {
             Ok(true) => self.exec_with(1),
@@ -274,7 +280,7 @@ impl Vm {
         if fslot == HOOK_YIELD_SLOT {
             // a hook yielded: the instruction it interrupted runs now
             if self.stack.len() < frame_need {
-                self.stack.resize(frame_need, Value::Nil);
+                self.stack.resize_or_abort(frame_need, Value::Nil);
             }
             self.hook_resumed = self.version >= LuaVersion::Lua52;
             return self.exec_with(1);
@@ -286,7 +292,7 @@ impl Vm {
         };
         let need = frame_need.max((fslot + n) as usize);
         if self.stack.len() < need {
-            self.stack.resize(need, Value::Nil);
+            self.stack.resize_or_abort(need, Value::Nil);
         }
         for (i, &v) in args.iter().enumerate() {
             self.stack[fslot as usize + i] = v;

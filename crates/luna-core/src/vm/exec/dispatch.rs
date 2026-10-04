@@ -76,7 +76,7 @@ impl Vm {
             let total = crate::vm::builtins::pairs_mm_results(self) as u32;
             let need = (nc.func_slot + total) as usize;
             if self.stack.len() < need {
-                self.stack.resize(need, Value::Nil);
+                self.stack.resize_or_abort(need, Value::Nil);
             }
             // the metamethod ran one slot above pairs's own
             let first = nc.func_slot + 1;

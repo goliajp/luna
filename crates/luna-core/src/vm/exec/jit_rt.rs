@@ -31,7 +31,7 @@ impl Vm {
     #[doc(hidden)]
     pub fn jit_ensure_stack(&mut self, need: usize) {
         if self.stack.len() < need {
-            self.stack.resize(need, Value::Nil);
+            self.stack.resize_or_abort(need, Value::Nil);
         }
     }
 
@@ -94,7 +94,7 @@ impl Vm {
         };
         let idx = (f.base as usize) + (slot_offset as usize);
         if self.stack.len() <= idx {
-            self.stack.resize(idx + 1, Value::Nil);
+            self.stack.resize_or_abort(idx + 1, Value::Nil);
         }
         self.stack[idx] = v;
     }
@@ -224,7 +224,7 @@ impl Vm {
         let abs = f.base + slot_offset;
         let need = (abs + 7) as usize;
         if self.stack.len() < need {
-            self.stack.resize(need, Value::Nil);
+            self.stack.resize_or_abort(need, Value::Nil);
         }
         // ipairs fast path
         let took_fast_path = if let Value::Native(n) = self.stack[abs as usize]

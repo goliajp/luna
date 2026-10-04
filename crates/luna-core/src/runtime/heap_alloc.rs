@@ -1,7 +1,7 @@
 //! Object constructors and string interning.
 
 use super::*;
-use crate::runtime::mem::{LSlice, oom_abort};
+use crate::runtime::mem::{LSlice, LVec, oom_abort};
 use std::alloc::Layout;
 
 impl Heap {
@@ -310,15 +310,15 @@ impl Heap {
             error_traceback: None,
             error_levels: None,
             natives: 0..0,
-            stack: Vec::new(),
-            frames: Vec::new(),
-            open_upvals: Vec::new(),
-            tbc: Vec::new(),
+            stack: LVec::new(self.mem()),
+            frames: LVec::new(self.mem()),
+            open_upvals: LVec::new(self.mem()),
+            tbc: LVec::new(self.mem()),
             top: 0,
             pcall_depth: 0,
             hook: crate::vm::exec::HookState::default(),
             globals,
-            host_stack: Vec::new(),
+            host_stack: LVec::new(self.mem()),
             host_state: None,
         })
     }

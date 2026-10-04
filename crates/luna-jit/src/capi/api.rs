@@ -88,14 +88,14 @@ impl<'a> Api<'a> {
     /// The thread's C stack. (The lint takes `Coro::stack`, the thread's Lua
     /// stack, for the field meant.)
     #[allow(clippy::misnamed_getters)]
-    pub(super) fn stack(&self) -> &Vec<Value> {
+    pub(super) fn stack(&self) -> &LVec<Value> {
         // SAFETY: the thread is live while its state is, and the C stack is
         // written only through `stack_mut`, never while this borrow lives
         unsafe { &(*self.thread().as_ptr()).host_stack }
     }
 
     #[allow(clippy::misnamed_getters)]
-    pub(super) fn stack_mut(&mut self) -> &mut Vec<Value> {
+    pub(super) fn stack_mut(&mut self) -> &mut LVec<Value> {
         // SAFETY: as `stack`; the exclusive borrow of `self` keeps any other
         // access to the C stack through this call out
         unsafe { &mut (*self.thread().as_ptr()).host_stack }
@@ -115,13 +115,13 @@ impl<'a> Api<'a> {
     }
 
     pub(super) fn push(&mut self, v: Value) {
-        self.stack_mut().push(v);
+        self.stack_mut().push_or_abort(v);
         let co = self.thread();
         self.vm.heap.barrier_back(co);
     }
 
     pub(super) fn push_all(&mut self, vs: &[Value]) {
-        self.stack_mut().extend_from_slice(vs);
+        self.stack_mut().extend_from_slice_or_abort(vs);
         let co = self.thread();
         self.vm.heap.barrier_back(co);
     }
@@ -138,7 +138,10 @@ impl<'a> Api<'a> {
     /// Pop the top `n` values, bottom first.
     pub(super) fn pop_n(&mut self, n: usize) -> Vec<Value> {
         let from = self.top().saturating_sub(n).max(self.base());
-        self.stack_mut().split_off(from)
+        let s = self.stack_mut();
+        let vals = s[from..].to_vec();
+        s.truncate(from);
+        vals
     }
 
     /// Drop the stack down to C stack index `to`.

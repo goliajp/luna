@@ -317,6 +317,62 @@ impl<T: Clone> LVec<T> {
     }
 }
 
+/// Growth that ends the process when the allocation fails, as the
+/// standard library's `Vec` does. For the places that cannot report a
+/// memory error yet.
+impl<T> LVec<T> {
+    /// [`LVec::push`], ending the process on failure.
+    #[inline(always)]
+    pub fn push_or_abort(&mut self, v: T) {
+        if self.push(v).is_err() {
+            vec_oom::<T>(self.len + 1)
+        }
+    }
+
+    /// [`LVec::insert`], ending the process on failure.
+    pub fn insert_or_abort(&mut self, i: usize, v: T) {
+        if self.insert(i, v).is_err() {
+            vec_oom::<T>(self.len + 1)
+        }
+    }
+
+    /// [`LVec::reserve`], ending the process on failure.
+    #[inline]
+    pub fn reserve_or_abort(&mut self, extra: usize) {
+        if self.reserve(extra).is_err() {
+            vec_oom::<T>(self.len.saturating_add(extra))
+        }
+    }
+}
+
+impl<T: Clone> LVec<T> {
+    /// [`LVec::resize`], ending the process on failure.
+    #[inline]
+    pub fn resize_or_abort(&mut self, n: usize, v: T) {
+        if self.resize(n, v).is_err() {
+            vec_oom::<T>(n)
+        }
+    }
+
+    /// [`LVec::from_slice`], ending the process on failure.
+    pub fn from_slice_or_abort(mem: MemRef, s: &[T]) -> LVec<T> {
+        LVec::from_slice(mem, s).unwrap_or_else(|_| vec_oom::<T>(s.len()))
+    }
+
+    /// [`LVec::extend_from_slice`], ending the process on failure.
+    pub fn extend_from_slice_or_abort(&mut self, s: &[T]) {
+        if self.extend_from_slice(s).is_err() {
+            vec_oom::<T>(self.len.saturating_add(s.len()))
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn vec_oom<T>(n: usize) -> ! {
+    super::oom_abort(Layout::array::<T>(n).unwrap_or(Layout::new::<T>()))
+}
+
 impl<T> Deref for LVec<T> {
     type Target = [T];
     #[inline(always)]
@@ -349,6 +405,12 @@ impl<T> Drop for LVec<T> {
 impl<T: std::fmt::Debug> std::fmt::Debug for LVec<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         (**self).fmt(f)
+    }
+}
+
+impl<T> AsRef<[T]> for LVec<T> {
+    fn as_ref(&self) -> &[T] {
+        self
     }
 }
 

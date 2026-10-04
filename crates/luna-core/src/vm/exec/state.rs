@@ -1,6 +1,7 @@
 //! The `Vm` struct and the per-call context it hands to async natives.
 
 use super::*;
+use crate::runtime::mem::LVec;
 
 /// A Lua virtual machine: one OS thread's worth of Lua state.
 ///
@@ -30,8 +31,8 @@ pub struct Vm {
     /// `Vm` methods (`load` / `call_value` / `set_global` / …) rather than
     /// the heap directly.
     pub heap: Heap,
-    pub(crate) stack: Vec<Value>,
-    pub(crate) frames: Vec<CallFrame>,
+    pub(crate) stack: LVec<Value>,
+    pub(crate) frames: LVec<CallFrame>,
     /// Shadow of `self.frames.len()`. Synced on every push/pop in the
     /// `frames_push_sync`/`frames_pop_sync` helpers (debug-asserted on
     /// use). Not consumed by readers yet; it is scaffolding for replacing
@@ -39,9 +40,9 @@ pub struct Vm {
     /// indexed by frames_top.
     pub(super) frames_top: u32,
     /// open upvalues, sorted ascending by stack slot
-    pub(super) open_upvals: Vec<(u32, Gc<Upvalue>)>,
+    pub(super) open_upvals: LVec<(u32, Gc<Upvalue>)>,
     /// to-be-closed slots, ascending
-    pub(super) tbc: Vec<u32>,
+    pub(super) tbc: LVec<u32>,
     /// logical stack top for multi-result sequences
     pub(crate) top: u32,
     pub(super) globals: Gc<Table>,
@@ -431,6 +432,10 @@ pub struct Vm {
     /// them may still be referenced by this Vm's functions, so they live
     /// as long as the Vm.
     pub(super) retired_jit_storage: Vec<Box<dyn crate::jit::JitStorage>>,
+    /// The allocation context the Vm's own containers (the stack and the
+    /// frame stack above) free through. Last, so it outlives them: the
+    /// heap, which owns it too, is the first field to be dropped.
+    pub(super) _mem: crate::runtime::mem::MemOwner,
 }
 
 /// Call-site context an in-flight async native
