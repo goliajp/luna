@@ -198,14 +198,12 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
     }
     let out: Vec<Value> = match opt {
         "collect" => {
-            if !vm.gc_is_finalizing() {
-                if v <= LuaVersion::Lua53 {
-                    // 5.1–5.3 propagate the first `__gc` error to the caller;
-                    // 5.4 warns and continues (gc.lua 5.1 :255, 5.2 :346, 5.3 :360).
-                    vm.collect_garbage_propagating()?;
-                } else {
-                    vm.collect_garbage();
-                }
+            // 5.1–5.3 propagate the first `__gc` error to the caller;
+            // 5.4 warns and continues (gc.lua 5.1 :255, 5.2 :346, 5.3 :360).
+            if !vm.gc_is_finalizing() && v <= LuaVersion::Lua53 {
+                vm.collect_garbage_propagating()?;
+            } else if !vm.gc_is_finalizing() {
+                vm.collect_garbage();
             }
             vec![Value::Int(0)]
         }
