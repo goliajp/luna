@@ -51,6 +51,8 @@ mod tables;
 mod tables_set;
 mod tbc;
 mod threads;
+#[cfg(test)]
+mod unit_tests;
 mod userdata;
 
 pub use access::*;
