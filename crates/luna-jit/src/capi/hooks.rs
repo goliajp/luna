@@ -154,6 +154,16 @@ pub(super) fn hook_yield(api: &mut Api) -> bool {
     }
 }
 
+/// Whether the running C code is a hook that interrupted a Lua function.
+pub(super) fn in_lua_hook(api: &mut Api) -> bool {
+    let s = api.st();
+    let depth = s.calls.len();
+    s.hook
+        .running
+        .as_ref()
+        .is_some_and(|h| h.depth == depth && h.lua)
+}
+
 /// Whether the C function calling into Lua now is a C hook, whose callee
 /// PUC names "hook" (5.3+).
 pub(super) fn calling_from_hook(api: &mut Api) -> bool {

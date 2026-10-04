@@ -64,7 +64,16 @@ int main(void) {
   printf("F() = %s\n", lua_tostring(L, -1));
   lua_settop(L, 0);
   lua_getglobal(L, "STRIPPED");
-  if (!lua_isnil(L, -1)) ups(L, "stripped");
+  if (!lua_isnil(L, -1)) {
+    /* only the names: loading gives the first upvalue the globals */
+    int n;
+    printf("stripped:");
+    for (n = 1; n <= 3; n++) {
+      const char *name = lua_getupvalue(L, -1, n);
+      if (name) { printf(" %d:[%s]", n, name); lua_pop(L, 1); }
+    }
+    printf("\n");
+  }
   lua_settop(L, 0);
   lua_pushstring(L, "u1");
   lua_pushinteger(L, 2);

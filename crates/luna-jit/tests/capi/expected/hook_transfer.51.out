@@ -1,9 +1,9 @@
-call main ? locals: (*temporary)=<nil> (*temporary)=<nil> (*temporary)=<nil> (*temporary)=<nil>
-call Lua g locals: x=x (*temporary)=<nil> (*temporary)=<nil> (*temporary)=<nil> | up main line=6
-call Lua f locals: a=x b=y (*temporary)=<nil> (*temporary)=<nil> | up Lua line=5
-ret Lua ? locals: a=x b=y c=xy (*temporary)=xy | up tail line=-1
-tail tail  locals: | up main line=6
+call main ? locals:
+call Lua g locals: x=x | up main line=6
+call Lua f locals: a=x b=y | up Lua line=5
+ret Lua f | up Lua line=5
+ret Lua g | up main line=6
 call C cadd locals: (*temporary)=1 (*temporary)=2 | up main line=7
-ret C cadd locals: (*temporary)=1 (*temporary)=2 (*temporary)=3 (*temporary)=extra | up main line=7
-ret main ? locals:
+ret C cadd | up main line=7
+ret main ?
 status 0

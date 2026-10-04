@@ -187,7 +187,13 @@ pub(super) fn pcallk(
 /// instead, and the C function must return its result.
 pub(super) fn yieldk(api: &mut Api, nresults: c_int, k: Option<KFn>, ctx: isize) -> bool {
     if let Some(msg) = api.vm.host_yield_refusal() {
-        api.raise_msg(msg);
+        // inside a hook the interrupted Lua function is where it happens
+        if super::hooks::in_lua_hook(api) {
+            let e = api.vm.rt_err(msg);
+            api.raise(e);
+        } else {
+            api.raise_msg(msg);
+        }
         return false;
     }
     if super::hooks::hook_yield(api) {
