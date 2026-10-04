@@ -78,6 +78,13 @@ bench = false
 # finalizer / collectgarbage paths, where use-after-free bugs have
 # historically lived.
 [[bin]]
+name = "fuzz_alloc_fail"
+path = "fuzz_targets/fuzz_alloc_fail.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "fuzz_gc"
 path = "fuzz_targets/fuzz_gc.rs"
 test = false
