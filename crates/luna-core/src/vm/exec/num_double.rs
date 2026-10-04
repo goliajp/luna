@@ -66,6 +66,6 @@ pub(crate) fn rem(a: i64, b: i64) -> Value {
         Value::Int(super::num::int_mod(a, b))
     } else {
         let (a, b) = (a as f64, b as f64);
-        Value::Float(a - (a / b).floor() * b)
+        Value::Float(crate::numeric::nummod_floor(a, b))
     }
 }

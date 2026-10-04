@@ -34,7 +34,7 @@ pub(super) fn as_num(v: Value, version: LuaVersion) -> Option<Num> {
 /// underflows to zero for tiny operands.
 pub(super) fn float_mod(version: LuaVersion, a: f64, b: f64) -> f64 {
     if version <= LuaVersion::Lua52 {
-        return a - (a / b).floor() * b;
+        return crate::numeric::nummod_floor(a, b);
     }
     let m = c_fmod(a, b);
     let fix = if version == LuaVersion::Lua53 {

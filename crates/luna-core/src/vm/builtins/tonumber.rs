@@ -21,7 +21,9 @@ pub(crate) fn nat_tonumber(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         }
         match str2number_base(s.as_bytes(), base as u32) {
             Some((neg, digits)) => {
-                let n = digits.fold(0.0f64, |n, d| n * base as f64 + d as f64);
+                let n = digits.fold(0.0f64, |n, d| {
+                    crate::numeric::c_mul_add(n, base as f64, d as f64)
+                });
                 Value::Float(if neg { -n } else { n })
             }
             None => Value::Nil,
