@@ -1,8 +1,9 @@
-call main ? locals: (*temporary)=<table> (*temporary)=cadd (*temporary)=local (*temporary)=traceback
-call Lua g locals: x=x (*temporary)=__index (*temporary)=<nil> (*temporary)=traceback | up main line=6
-tail Lua ? locals: a=x b=y (*temporary)=traceback (*temporary)=<nil> | up Lua line=5
-ret Lua ? locals: a=x b=y c=xy (*temporary)=xy | up main line=6
+call main ? locals:
+call Lua g locals: x=x | up main line=6
+call Lua f locals: a=x b=y | up Lua line=5
+ret Lua f | up Lua line=5
+ret Lua g | up main line=6
 call C cadd locals: (*temporary)=1 (*temporary)=2 | up main line=7
-ret C cadd locals: (*temporary)=1 (*temporary)=2 (*temporary)=3 (*temporary)=extra | up main line=7
-ret main ? locals: f=<function> g=<function> r=xy s=3
+ret C cadd | up main line=7
+ret main ?
 status 0

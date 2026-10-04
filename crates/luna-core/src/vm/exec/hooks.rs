@@ -285,6 +285,11 @@ impl Vm {
         Ok(())
     }
 
+    /// The running thread's hook is a C hook (`lua_sethook`).
+    pub(super) fn c_hook_installed(&self) -> bool {
+        self.host_hook.is_some() && matches!(self.hook.func, Some(Value::LightUserdata(_)))
+    }
+
     /// A count or line hook fires on the next instruction.
     #[inline]
     pub(super) fn hook_armed(&self) -> bool {
