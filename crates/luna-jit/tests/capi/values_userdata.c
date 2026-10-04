@@ -153,13 +153,22 @@ int main(void) {
   getiuv(L, 0);
   getiuv(L, -1);
   lua_pushstring(L, "two");
-  printf("setiuservalue 2: %d top=%d\n", lua_setiuservalue(L, -2, 2), lua_gettop(L));
+  {
+    int r_ = lua_setiuservalue(L, -2, 2);
+    printf("setiuservalue 2: %d top=%d\n", r_, lua_gettop(L));
+  }
   lua_pushinteger(L, 3);
   printf("setiuservalue 3: %d\n", lua_setiuservalue(L, -2, 3));
   lua_pushstring(L, "no");
-  printf("setiuservalue 4: %d top=%d\n", lua_setiuservalue(L, -2, 4), lua_gettop(L));
+  {
+    int r_ = lua_setiuservalue(L, -2, 4);
+    printf("setiuservalue 4: %d top=%d\n", r_, lua_gettop(L));
+  }
   lua_pushstring(L, "no");
-  printf("setiuservalue 0: %d top=%d\n", lua_setiuservalue(L, -2, 0), lua_gettop(L));
+  {
+    int r_ = lua_setiuservalue(L, -2, 0);
+    printf("setiuservalue 0: %d top=%d\n", r_, lua_gettop(L));
+  }
   getiuv(L, 2);
   getiuv(L, 3);
   lua_newtable(L);

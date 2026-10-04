@@ -166,11 +166,17 @@ int main(void) {
   lua_settop(L, 0);
   lua_newtable(L);
   printf("getsubtable new=%d", luaL_getsubtable(L, 1, "sub"));
-  printf(" again=%d top=%d\n", luaL_getsubtable(L, 1, "sub"), lua_gettop(L));
+  {
+    int r_ = luaL_getsubtable(L, 1, "sub");
+    printf(" again=%d top=%d\n", r_, lua_gettop(L));
+  }
   printf("  same=%d\n", lua_rawequal(L, 2, 3));
   lua_pushinteger(L, 5);
   lua_setfield(L, 1, "num");
-  printf("getsubtable over number=%d top=%d\n", luaL_getsubtable(L, 1, "num"), lua_gettop(L));
+  {
+    int r_ = luaL_getsubtable(L, 1, "num");
+    printf("getsubtable over number=%d top=%d\n", r_, lua_gettop(L));
+  }
   lua_settop(L, 0);
   /* luaL_setfuncs with upvalues */
   lua_newtable(L);
@@ -225,7 +231,10 @@ int main(void) {
   lua_pop(L, 1);
   lua_pushinteger(L, 1);
   lua_setfield(L, 1, "n");
-  printf("findtable clash=%s top=%d\n", luaL_findtable(L, 1, "n.z", 0), lua_gettop(L));
+  {
+    const char *r_ = luaL_findtable(L, 1, "n.z", 0);
+    printf("findtable clash=%s top=%d\n", r_, lua_gettop(L));
+  }
   lua_settop(L, 0);
 #endif
 #if LUA_VERSION_NUM == 502

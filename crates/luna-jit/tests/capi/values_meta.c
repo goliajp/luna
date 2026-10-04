@@ -125,12 +125,18 @@ int main(void) {
   lua_pushnil(L);
   getmt(L, "nil");
   lua_pushinteger(L, 1);
-  printf("getmetatable absent index: %d top=%d\n", lua_getmetatable(L, 7), lua_gettop(L));
+  {
+    int r_ = lua_getmetatable(L, 7);
+    printf("getmetatable absent index: %d top=%d\n", r_, lua_gettop(L));
+  }
   lua_pop(L, 1);
 
   lua_newtable(L);
   index_mt(L, "tbl");
-  printf("setmetatable table: %d top=%d\n", lua_setmetatable(L, -2), lua_gettop(L));
+  {
+    int r_ = lua_setmetatable(L, -2);
+    printf("setmetatable table: %d top=%d\n", r_, lua_gettop(L));
+  }
   lua_getmetatable(L, -1);
   lua_getfield(L, -1, "__index");
   printf("metatable back: %s\n", luaL_typename(L, -1));

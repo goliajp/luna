@@ -4,9 +4,9 @@ newmetatable again=0 top=1
 newmetatable taken: top=1 5
 testudata point=1 other=0 number=0 top=2
 checkudata	true	true
-checkudata plain	false	bad argument #1 to 'cu' (Point expected, got userdata)
-checkudata table	false	bad argument #1 to 'cu' (Point expected, got table)
-checkudata none	false	bad argument #1 to 'cu' (Point expected, got no value)
+checkudata plain	false	[string "local function try(...) return pcall(function..."]:1: bad argument #1 to 'cu' (Point expected, got userdata)
+checkudata table	false	[string "local function try(...) return pcall(function..."]:1: bad argument #1 to 'cu' (Point expected, got table)
+checkudata none	false	[string "local function try(...) return pcall(function..."]:1: bad argument #1 to 'cu' (Point expected, got no value)
 getmetafield answer: top=2 <userdata> 42
   result=1
 getmetafield missing=0 top=1

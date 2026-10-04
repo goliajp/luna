@@ -374,7 +374,10 @@ int main(void) {
   lua_pop(L, 1);
   lua_newtable(L);
   lua_pushnil(L);
-  printf("next empty: %d top=%d\n", lua_next(L, -2), lua_gettop(L));
+  {
+    int r_ = lua_next(L, -2);
+    printf("next empty: %d top=%d\n", r_, lua_gettop(L));
+  }
   lua_pop(L, 1);
 
   /* clearing fields, the visited one included, while traversing */

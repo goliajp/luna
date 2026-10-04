@@ -110,10 +110,13 @@ int main(void) {
   lua_newuserdata(L, 8);
   lua_setglobal(L, "plain");
   lua_register(L, "cu", f_checkudata);
-  dochunk(L, "print('checkudata', pcall(cu, pt))\n"
-             "print('checkudata plain', pcall(cu, plain))\n"
-             "print('checkudata table', pcall(cu, {}))\n"
-             "print('checkudata none', pcall(cu))");
+  /* called from a Lua function, so the name comes from the call (PUC 5.2
+     would otherwise search the globals in hash order, which varies) */
+  dochunk(L, "local function try(...) return pcall(function(...) return cu(...) end, ...) end\n"
+             "print('checkudata', try(pt))\n"
+             "print('checkudata plain', try(plain))\n"
+             "print('checkudata table', try({}))\n"
+             "print('checkudata none', try())");
   /* metafields */
   lua_getglobal(L, "pt");
   r = luaL_getmetafield(L, 1, "answer");
@@ -171,7 +174,10 @@ int main(void) {
   printf("gsub [%s]", luaL_gsub(L, "a.b.c", ".", "::"));
   printf(" [%s]", luaL_gsub(L, "none", "x", "y"));
   printf(" [%s]", luaL_gsub(L, "aaa", "a", ""));
-  printf(" [%s] top=%d\n", luaL_gsub(L, "", "a", "b"), lua_gettop(L));
+  {
+    const char *r_ = luaL_gsub(L, "", "a", "b");
+    printf(" [%s] top=%d\n", r_, lua_gettop(L));
+  }
   lua_settop(L, 0);
 #if LUA_VERSION_NUM >= 502
   /* file and process results */
