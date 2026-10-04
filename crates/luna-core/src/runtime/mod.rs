@@ -24,6 +24,7 @@ mod fnv;
 pub mod function;
 pub(crate) mod function_close;
 pub mod heap;
+pub mod mem;
 pub mod string;
 pub mod table;
 mod upvalue;
