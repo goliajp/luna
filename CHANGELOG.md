@@ -23,6 +23,25 @@ optimization.
 
 ### Breaking
 
+- C API: errors leave a C function at once, as in PUC. `lua_error`,
+  `luaL_error` and every API function that raises (`lua_gettable`,
+  `lua_call`, `luaL_checkinteger`, ...) jump back to the call that luna
+  made into the C function, so the code after them does not run. Before,
+  the C function ran on to its `return` and its results were dropped.
+  Building `luna-jit` now needs a C compiler (the C half of the C API is
+  compiled with the `cc` crate).
+- C API: `lua_version` returns the dialect's version as a `lua_Number`
+  (504.0), as PUC 5.4 does; it returned the `int` 505. 5.2 and 5.3
+  headers map it to `luna_version_52`, which returns a pointer as theirs
+  do. The C functions that may raise (`lua_error`, `lua_getglobal`,
+  `lua_setglobal`, `lua_settop`, `lua_register`, ...) are no longer Rust
+  functions in `luna_jit::capi`; `luna_jit::capi::LuaState` is a thread's
+  state instead of a wrapper around `Vm`.
+- `Vm` no longer has the fields `capi_stack` and `capi_cstr_pin`; each
+  thread keeps the C API's stack in `Coro::host_stack`. `ContKind` has a
+  `Host` variant (a C function's continuation), and `Coro` the fields
+  `host_stack` and `host_state`.
+
 - C API: `lua_setglobal` and `lua_getglobal` go through `_G`'s
   `__newindex` and `__index` and raise their errors as PUC does, instead
   of writing and reading `_G` raw and dropping the error. Writing a global
@@ -279,6 +298,15 @@ optimization.
 
 ### Fixed
 
+- A coroutine resumed from inside a call that cannot yield (a sort
+  comparator, a `gsub` replacement, a host's `lua_pcall`) can yield
+  again, as in PUC, where that restriction belongs to the thread that made
+  the call.
+- `coroutine.isyieldable(co)` is true for a dead coroutine in 5.4 and
+  5.5, as in PUC.
+- `load` accepts bytes after a binary chunk, as PUC does.
+- When a state closes, finalizers run newest first, as in PUC.
+
 - C API: `lua_pcall` calls its message handler (`msgh`, 5.1's
   `errfunc`), which it used to ignore: the handler runs where the error
   was raised, before the stack unwinds, its first result becomes the error
@@ -409,6 +437,21 @@ optimization.
   code are created and dropped.
 
 ### Added
+
+- The C API covers PUC's `lua.h`, `lauxlib.h` and `lualib.h` for all
+  five dialects: headers in `crates/luna-jit/include/lua5.1` to
+  `lua5.5`, with which a host built for one PUC version gets a state of
+  that dialect from `luaL_newstate`. Threads and `lua_resume`, yields and
+  continuations from C (`lua_yieldk`, `lua_callk`, `lua_pcallk`, 5.2's
+  `lua_getctx`), `lua_load` and `lua_dump` with readers and writers,
+  userdata with user values, metatables, `lua_arith` / `lua_compare` /
+  `lua_concat` / `lua_len` / `lua_next`, warnings, `lua_gc` with every
+  option of each version, the debug interface and C hooks, the whole
+  auxiliary library (`luaL_Buffer` in both layouts, references,
+  `luaL_traceback`, `luaL_requiref`, ...) and every `luaopen_*`. See
+  `docs/compatibility.md`.
+- A test that a binary built by `luna-aot` writes NaNs as the interpreter
+  does (`aot_nan_sign`, all five dialects).
 
 - C API: `luna_newstate(version)` makes a state for any dialect by its
   `LUA_VERSION_NUM` (501 to 505); `LUA_ERRERR`; Redis's

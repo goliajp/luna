@@ -141,7 +141,8 @@ int main(void) {
   lua_pushlightuserdata(L, &marker);
   printf("light: type=%s isuserdata=%d same=%d\n", luaL_typename(L, 1), lua_isuserdata(L, 1),
          lua_touserdata(L, 1) == (void *)&marker);
-  printf("thread is main=%d type=%s\n", lua_pushthread(L), luaL_typename(L, -1));
+  i = lua_pushthread(L);
+  printf("thread is main=%d type=%s\n", i, luaL_typename(L, -1));
   printf("tothread is L=%d\n", lua_tothread(L, -1) == L);
   printf("topointer(nil)=%d topointer(thread)!=0: %d\n", lua_topointer(L, 100) == NULL,
          lua_topointer(L, -1) != NULL);
