@@ -24,7 +24,7 @@ impl<'a> Compiler<'a> {
             narr.min(255),
             nhash.min(255),
             false,
-        ));
+        ))?;
         const FIELDS_PER_FLUSH: u32 = 50;
         let mut pending = 0u32;
         let mut flushed = 0u32;
@@ -67,13 +67,13 @@ impl<'a> Compiler<'a> {
                     let saved = self.lr().freereg;
                     let ve = self.expr(*v)?;
                     let vr = self.exp_to_anyreg(ve)?;
-                    let c = self.sym_const(name.sym);
+                    let c = self.sym_const(name.sym)?;
                     if c <= 0xFF {
-                        self.emit(Inst::iabc(Op::SetField, treg, c, vr, true));
+                        self.emit(Inst::iabc(Op::SetField, treg, c, vr, true))?;
                     } else {
                         let kr = self.reserve(1)?;
-                        self.load_const(kr, c);
-                        self.emit(Inst::iabc(Op::SetTable, treg, kr, vr, false));
+                        self.load_const(kr, c)?;
+                        self.emit(Inst::iabc(Op::SetTable, treg, kr, vr, false))?;
                     }
                     self.set_freereg(saved);
                 }
@@ -83,7 +83,7 @@ impl<'a> Compiler<'a> {
                     let kr = self.exp_to_anyreg(ke)?;
                     let ve = self.expr(*v)?;
                     let vr = self.exp_to_anyreg(ve)?;
-                    self.emit(Inst::iabc(Op::SetTable, treg, kr, vr, false));
+                    self.emit(Inst::iabc(Op::SetTable, treg, kr, vr, false))?;
                     self.set_freereg(saved);
                 }
             }
@@ -97,10 +97,10 @@ impl<'a> Compiler<'a> {
 
     pub(super) fn setlist(&mut self, treg: u32, n: u32, flushed: u32) -> Result<(), SyntaxError> {
         if flushed <= 0xFF {
-            self.emit(Inst::iabc(Op::SetList, treg, n, flushed, false));
+            self.emit(Inst::iabc(Op::SetList, treg, n, flushed, false))?;
         } else {
-            self.emit(Inst::iabc(Op::SetList, treg, n, 0, true));
-            self.emit(Inst::iax(Op::ExtraArg, flushed));
+            self.emit(Inst::iabc(Op::SetList, treg, n, 0, true))?;
+            self.emit(Inst::iax(Op::ExtraArg, flushed))?;
         }
         Ok(())
     }
@@ -108,10 +108,10 @@ impl<'a> Compiler<'a> {
     /// SETLIST with B=0: take items up to the runtime top.
     pub(super) fn setlist_open(&mut self, treg: u32, flushed: u32) -> Result<(), SyntaxError> {
         if flushed <= 0xFF {
-            self.emit(Inst::iabc(Op::SetList, treg, 0, flushed, false));
+            self.emit(Inst::iabc(Op::SetList, treg, 0, flushed, false))?;
         } else {
-            self.emit(Inst::iabc(Op::SetList, treg, 0, 0, true));
-            self.emit(Inst::iax(Op::ExtraArg, flushed));
+            self.emit(Inst::iabc(Op::SetList, treg, 0, 0, true))?;
+            self.emit(Inst::iax(Op::ExtraArg, flushed))?;
         }
         Ok(())
     }

@@ -48,7 +48,7 @@ impl Vm {
             type_mt: [None; 7],
             mm_names,
             parse_scratch: crate::frontend::parser::ParseScratch::new(mem_owner.clone()),
-            compile_scratch: Default::default(),
+            compile_scratch: crate::compiler::CompileScratch::new(mem),
             c_depth: 0,
             pcall_depth: 0,
             nny: 0,

@@ -2,6 +2,7 @@
 //! immediate-operand instruction forms, and comparisons.
 
 use super::*;
+use crate::runtime::mem::Oom;
 
 /// An operand encoded in its instruction rather than read from a register.
 #[derive(Clone, Copy)]
@@ -123,13 +124,13 @@ impl Compiler<'_> {
                     self.set_freereg(reg + 1);
                 }
                 l = Some(reg);
-            } else if let Some(form) = self.const_operand(op, &le, true, saved) {
+            } else if let Some(form) = self.const_operand(op, &le, true, saved)? {
                 in_inst = Some((form, true));
             }
         }
         if l.is_some()
             && !sub_zero
-            && let Some(form) = self.const_operand(op, &re, false, saved)
+            && let Some(form) = self.const_operand(op, &re, false, saved)?
         {
             in_inst = Some((form, false));
         }
@@ -179,19 +180,19 @@ impl Compiler<'_> {
         sub_zero: bool,
     ) -> Result<Exp, SyntaxError> {
         Ok(match op {
-            BinOp::Add => self.arith(Op::Add, l, r),
-            BinOp::Sub if sub_zero => Exp::Reloc(self.emit(Inst::iabc(Op::Add, 0, l, r, true))),
-            BinOp::Sub => self.arith(Op::Sub, l, r),
-            BinOp::Mul => self.arith(Op::Mul, l, r),
-            BinOp::Div => self.arith(Op::Div, l, r),
-            BinOp::IDiv => self.arith(Op::IDiv, l, r),
-            BinOp::Mod => self.arith(Op::Mod, l, r),
-            BinOp::Pow => self.arith(Op::Pow, l, r),
-            BinOp::BAnd => self.arith(Op::BAnd, l, r),
-            BinOp::BOr => self.arith(Op::BOr, l, r),
-            BinOp::BXor => self.arith(Op::BXor, l, r),
-            BinOp::Shl => self.arith(Op::Shl, l, r),
-            BinOp::Shr => self.arith(Op::Shr, l, r),
+            BinOp::Add => self.arith(Op::Add, l, r)?,
+            BinOp::Sub if sub_zero => Exp::Reloc(self.emit(Inst::iabc(Op::Add, 0, l, r, true))?),
+            BinOp::Sub => self.arith(Op::Sub, l, r)?,
+            BinOp::Mul => self.arith(Op::Mul, l, r)?,
+            BinOp::Div => self.arith(Op::Div, l, r)?,
+            BinOp::IDiv => self.arith(Op::IDiv, l, r)?,
+            BinOp::Mod => self.arith(Op::Mod, l, r)?,
+            BinOp::Pow => self.arith(Op::Pow, l, r)?,
+            BinOp::BAnd => self.arith(Op::BAnd, l, r)?,
+            BinOp::BOr => self.arith(Op::BOr, l, r)?,
+            BinOp::BXor => self.arith(Op::BXor, l, r)?,
+            BinOp::Shl => self.arith(Op::Shl, l, r)?,
+            BinOp::Shr => self.arith(Op::Shr, l, r)?,
             BinOp::Eq => Exp::Cmp {
                 op: Op::Eq,
                 l,
@@ -227,13 +228,14 @@ impl Compiler<'_> {
         })
     }
 
-    fn arith(&mut self, op: Op, l: u32, r: u32) -> Exp {
-        Exp::Reloc(self.emit(Inst::iabc(op, 0, l, r, false)))
+    fn arith(&mut self, op: Op, l: u32, r: u32) -> Result<Exp, Oom> {
+        Ok(Exp::Reloc(self.emit(Inst::iabc(op, 0, l, r, false))?))
     }
 
     /// The number `e` as a constant-table index that fits an instruction's
-    /// 8-bit field.
-    fn num_const(&mut self, e: &Exp) -> Option<u32> {
+    /// 8-bit field. A constant that cannot be added is none, with the
+    /// failure left in `oom`.
+    fn num_const(&mut self, e: &Exp, oom: &mut Option<Oom>) -> Option<u32> {
         let c = match *e {
             Exp::Int(i) => self.const_idx(ConstKey::Int(i), Value::Int(i)),
             Exp::Float(mut f) => {
@@ -244,14 +246,44 @@ impl Compiler<'_> {
             }
             _ => return None,
         };
-        (c <= MAX_C).then_some(c)
+        match c {
+            Ok(c) => (c <= MAX_C).then_some(c),
+            Err(o) => {
+                *oom = Some(o);
+                None
+            }
+        }
+    }
+
+    /// [`Compiler::const_operand_or`], with a failure to add a constant as
+    /// the error.
+    fn const_operand(
+        &mut self,
+        op: BinOp,
+        e: &Exp,
+        left: bool,
+        saved: u32,
+    ) -> Result<Option<Operand>, Oom> {
+        let mut oom = None;
+        let r = self.const_operand_or(op, e, left, saved, &mut oom);
+        match oom {
+            Some(o) => Err(o),
+            None => Ok(r),
+        }
     }
 
     /// How `e` goes into the instruction of `op` instead of a register
     /// (PUC `codearith` / `codebitwise` / `codeorder` / `codeeq`), if it does.
     /// `left`: `e` is the left operand. `saved` is the first free register
     /// once both operands are released.
-    fn const_operand(&mut self, op: BinOp, e: &Exp, left: bool, saved: u32) -> Option<Operand> {
+    fn const_operand_or(
+        &mut self,
+        op: BinOp,
+        e: &Exp,
+        left: bool,
+        saved: u32,
+        oom: &mut Option<Oom>,
+    ) -> Option<Operand> {
         // The instruction must leave the frame's last register unused: a
         // trace recording loads the operand there (`trace_record_push`). The
         // operand and result registers are at most `saved`.
@@ -273,19 +305,19 @@ impl Compiler<'_> {
         let form = match op {
             BinOp::Add => match imm {
                 Some((i, _)) => Operand::Arith(Op::AddI, enc(i)),
-                None => Operand::Arith(Op::AddK, self.num_const(e)?),
+                None => Operand::Arith(Op::AddK, self.num_const(e, oom)?),
             },
             BinOp::Sub if !left => match imm {
                 Some((i, _)) => Operand::Arith(Op::SubI, enc(i)),
-                None => Operand::Arith(Op::SubK, self.num_const(e)?),
+                None => Operand::Arith(Op::SubK, self.num_const(e, oom)?),
             },
-            BinOp::Mul => Operand::Arith(Op::MulK, self.num_const(e)?),
-            BinOp::Mod if !left => Operand::Arith(Op::ModK, self.num_const(e)?),
-            BinOp::Pow if !left => Operand::Arith(Op::PowK, self.num_const(e)?),
-            BinOp::Div if !left => Operand::Arith(Op::DivK, self.num_const(e)?),
-            BinOp::IDiv if !left => Operand::Arith(Op::IDivK, self.num_const(e)?),
+            BinOp::Mul => Operand::Arith(Op::MulK, self.num_const(e, oom)?),
+            BinOp::Mod if !left => Operand::Arith(Op::ModK, self.num_const(e, oom)?),
+            BinOp::Pow if !left => Operand::Arith(Op::PowK, self.num_const(e, oom)?),
+            BinOp::Div if !left => Operand::Arith(Op::DivK, self.num_const(e, oom)?),
+            BinOp::IDiv if !left => Operand::Arith(Op::IDivK, self.num_const(e, oom)?),
             BinOp::BAnd | BinOp::BOr | BinOp::BXor if matches!(e, Exp::Int(_)) => {
-                let k = self.num_const(e)?;
+                let k = self.num_const(e, oom)?;
                 Operand::Arith(
                     match op {
                         BinOp::BAnd => Op::BAndK,
@@ -300,7 +332,7 @@ impl Compiler<'_> {
             BinOp::Eq | BinOp::Ne => match (cmp_imm, e) {
                 (Some((i, f)), _) => Operand::Cmp(Op::EqI, enc(i), f as u32),
                 (None, &Exp::Const(c)) if c <= MAX_B => Operand::Cmp(Op::EqK, c, 0),
-                _ => Operand::Cmp(Op::EqK, self.num_const(e)?, 0),
+                _ => Operand::Cmp(Op::EqK, self.num_const(e, oom)?, 0),
             },
             BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 let (i, f) = cmp_imm?;
@@ -330,7 +362,7 @@ impl Compiler<'_> {
         flip: bool,
     ) -> Result<Exp, SyntaxError> {
         Ok(match form {
-            Operand::Arith(kop, c) => Exp::Reloc(self.emit(Inst::iabc(kop, 0, reg, c, flip))),
+            Operand::Arith(kop, c) => Exp::Reloc(self.emit(Inst::iabc(kop, 0, reg, c, flip))?),
             Operand::Cmp(cop, b, c) if op == BinOp::Ne => self.negate_cmp(cop, reg, b, c)?,
             Operand::Cmp(cop, b, c) => Exp::Cmp {
                 op: cop,
@@ -351,11 +383,11 @@ impl Compiler<'_> {
     ) -> Result<Exp, SyntaxError> {
         let reg = self.reserve(1)?;
         self.l().freereg -= 1;
-        self.emit(Inst::iabc(op, l, r, c, false));
-        self.emit(Inst::isj(Op::Jmp, 1));
-        self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
+        self.emit(Inst::iabc(op, l, r, c, false))?;
+        self.emit(Inst::isj(Op::Jmp, 1))?;
+        self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false))?;
         let tpad = self.here();
-        self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
+        self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false))?;
         // Jmp(1) lands on tpad — mark.
         self.mark_target(tpad);
         Ok(Exp::Reg(reg))

@@ -1,6 +1,7 @@
 //! `if`, `while`, `repeat` and both `for` loops.
 
 use super::*;
+use crate::runtime::mem::Oom;
 
 impl<'a> Compiler<'a> {
     pub(super) fn if_stat(
@@ -8,7 +9,7 @@ impl<'a> Compiler<'a> {
         arms: &[ast::IfArm],
         else_body: Option<&Block>,
     ) -> Result<(), SyntaxError> {
-        let mut end_jumps = Jumps::new();
+        let mut end_jumps = Jumps::new(self.heap.mem());
         for (
             i,
             ast::IfArm {
@@ -42,7 +43,7 @@ impl<'a> Compiler<'a> {
             self.block_scoped(body)?;
             let is_last = i == arms.len() - 1 && else_body.is_none();
             if !is_last {
-                end_jumps.push(self.emit_jump());
+                end_jumps.push(self.emit_jump()?)?;
             }
             for skip in skips.iter() {
                 self.patch_to_here(skip)?;
@@ -59,12 +60,13 @@ impl<'a> Compiler<'a> {
 
     /// A loop's per-iteration CLOSE of its body (from local `first` on). 5.4
     /// ends the body's scope before it (see [`Compiler::leave_block`]).
-    pub(super) fn close_body(&mut self, first: usize, floor: u32) {
+    pub(super) fn close_body(&mut self, first: usize, floor: u32) -> Result<(), Oom> {
         if self.version == LuaVersion::Lua54 {
             let here = self.here() as u32;
             self.l().blocks.last_mut().expect("loop block").body_end = Some((first, here));
         }
-        self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
+        self.emit(Inst::iabc(Op::Close, floor, 0, 0, false))?;
+        Ok(())
     }
 
     pub(super) fn while_stat(
@@ -75,12 +77,12 @@ impl<'a> Compiler<'a> {
     ) -> Result<(), SyntaxError> {
         let top = self.here();
         let (exits, _) = self.cond_jump_false(cond)?;
-        self.enter_block(true);
+        self.enter_block(true)?;
         self.stat_block(body)?;
         if self.block_captured() {
             let floor = self.block_floor();
             let first = self.l().blocks.last().expect("while block").first_local;
-            self.close_body(first, floor);
+            self.close_body(first, floor)?;
         }
         self.jump_back(top)?;
         self.l().blocks.last_mut().expect("while block").end_line = end_line;
@@ -93,7 +95,7 @@ impl<'a> Compiler<'a> {
 
     pub(super) fn repeat_stat(&mut self, body: &Block, cond: ExprId) -> Result<(), SyntaxError> {
         let top = self.here();
-        self.enter_block(true);
+        self.enter_block(true)?;
         self.stat_block_inner(body, true)?;
         // the condition's jumps are taken when it is false (loop again) and
         // the code falls through when it is true (exit), as for `while`. With
@@ -104,12 +106,12 @@ impl<'a> Compiler<'a> {
         let (again, _) = self.cond_jump_false(cond)?;
         if self.block_captured() {
             let floor = self.block_floor();
-            let exit = self.emit_jump();
+            let exit = self.emit_jump()?;
             for pc in again.iter() {
                 self.patch_to_here(pc)?;
             }
             let first = self.l().blocks.last().expect("repeat block").first_local;
-            self.close_body(first, floor);
+            self.close_body(first, floor)?;
             self.jump_back(top)?;
             self.patch_to_here(exit)?;
         } else {
@@ -150,21 +152,21 @@ impl<'a> Compiler<'a> {
             None => {
                 self.set_freereg(base + 2);
                 self.reserve(1)?;
-                self.emit(Inst::iasbx(Op::LoadI, base + 2, 1));
+                self.emit(Inst::iasbx(Op::LoadI, base + 2, 1))?;
             }
         }
         self.set_freereg(base + 3);
         let control_start = self.here() as u32;
-        self.enter_block(true);
+        self.enter_block(true)?;
         let var_reg = self.reserve(1)?;
         self.declare_local(var, var_reg, self.version >= LuaVersion::Lua55)?;
         let body_first = self.lr().locals.len();
         self.last_line = line;
-        let prep = self.emit(Inst::iabx(Op::ForPrep, base, 0));
+        let prep = self.emit(Inst::iabx(Op::ForPrep, base, 0))?;
         let body_top = self.here();
         self.stat_block(body)?;
         if self.block_captured() {
-            self.close_body(body_first, var_reg);
+            self.close_body(body_first, var_reg)?;
         }
         let loop_pc = self.here();
         let back = loop_pc - body_top + 1;
@@ -174,7 +176,7 @@ impl<'a> Compiler<'a> {
         // PUC attributes FORLOOP (the per-iteration back-edge) to the `for` line,
         // so each loop iteration re-fires a line event there.
         self.last_line = line;
-        self.emit(Inst::iabx(Op::ForLoop, base, back as u32));
+        self.emit(Inst::iabx(Op::ForLoop, base, back as u32))?;
         let skip = self.here() - prep - 1;
         if skip as u32 > MAX_BX {
             return Err(self.err(line, "control structure too long"));
@@ -197,7 +199,7 @@ impl<'a> Compiler<'a> {
             LuaVersion::Lua55 => &[("(for state)", 0), ("(for state)", 1)],
             _ => &[("(for state)", 0), ("(for state)", 1), ("(for state)", 2)],
         };
-        self.push_hidden_locals(base, hidden, control_start, post_loop as u32);
+        self.push_hidden_locals(base, hidden, control_start, post_loop as u32)?;
         self.set_freereg(base);
         Ok(())
     }
@@ -210,15 +212,16 @@ impl<'a> Compiler<'a> {
         hidden: &[(&str, u32)],
         start_pc: u32,
         end_pc: u32,
-    ) {
+    ) -> Result<(), Oom> {
         for &(name, off) in hidden {
             self.l().locvars.push(crate::runtime::LocVar {
                 name: name.into(),
                 reg: base + off,
                 start_pc,
                 end_pc,
-            });
+            })?;
         }
+        Ok(())
     }
 
     pub(super) fn generic_for(
@@ -242,12 +245,12 @@ impl<'a> Compiler<'a> {
             let base = self.explist_adjust(exprs, 3)?;
             self.set_freereg(base + 3);
             self.reserve(1)?;
-            self.emit(Inst::iabc(Op::LoadNil, base + 3, 0, 0, false));
+            self.emit(Inst::iabc(Op::LoadNil, base + 3, 0, 0, false))?;
             base
         };
         self.set_freereg(base + 4);
         let control_start = self.here() as u32;
-        self.enter_block(true);
+        self.enter_block(true)?;
         // the 4th control value is an implicit to-be-closed variable (5.4+);
         // a `return f()` in the body must not be a tail call, *and* a `goto`
         // leaving this block must close the iterator's closing value via a
@@ -269,11 +272,11 @@ impl<'a> Compiler<'a> {
             )?;
         }
         let body_first = self.lr().locals.len();
-        let prep = self.emit(Inst::iabx(Op::TForPrep, base, 0));
+        let prep = self.emit(Inst::iabx(Op::TForPrep, base, 0))?;
         let body_top = self.here();
         self.stat_block(body)?;
         if self.block_captured() {
-            self.close_body(body_first, vbase);
+            self.close_body(body_first, vbase)?;
         }
         let tforcall_pc = self.here();
         let skip = tforcall_pc - prep - 1;
@@ -289,12 +292,12 @@ impl<'a> Compiler<'a> {
         // (`for k,v in 3 do ...`) then raises on the EXPR's line, not the
         // `for` line (errors.lua :428/:429).
         self.last_line = expr_line;
-        self.emit(Inst::iabc(Op::TForCall, base, 0, nvars, false));
+        self.emit(Inst::iabc(Op::TForCall, base, 0, nvars, false))?;
         let back = self.here() - body_top + 1;
         if back as u32 > MAX_BX {
             return Err(self.err(line, "control structure too long"));
         }
-        self.emit(Inst::iabx(Op::TForLoop, base, back as u32));
+        self.emit(Inst::iabx(Op::TForLoop, base, back as u32))?;
         // TForLoop's back-edge lands at `body_top` (per-iteration restart).
         self.mark_target(body_top);
         // Override the body block's reg_floor to `base` so trampoline OP_Close
@@ -314,7 +317,7 @@ impl<'a> Compiler<'a> {
         {
             self.last_line = line;
         }
-        self.emit(Inst::iabc(Op::Close, base, 0, 0, false));
+        self.emit(Inst::iabc(Op::Close, base, 0, 0, false))?;
         // PUC forlist registers hidden control variables that
         // debug.getlocal lists; they live across the loop body. 5.1-5.3
         // have three, named after their roles. 5.4 names all four control
@@ -339,7 +342,7 @@ impl<'a> Compiler<'a> {
                 ("(for state)", 3),
             ],
         };
-        self.push_hidden_locals(base, hidden, control_start, end_pc);
+        self.push_hidden_locals(base, hidden, control_start, end_pc)?;
         self.set_freereg(base);
         Ok(())
     }

@@ -35,6 +35,7 @@ mod int_mod_idiv;
 mod io_popen_double_close;
 mod jit_default_off;
 mod library_edge_arguments;
+mod load_memory_errors;
 mod loop_trap;
 mod lua_error_structured;
 mod macro_lua;
