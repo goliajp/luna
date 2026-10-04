@@ -1,0 +1,47 @@
+newmetatable new=1 top=1 type=table
+  __name: top=2 [Point]
+newmetatable again=0 top=1
+newmetatable taken: top=1 5
+testudata point=1 other=0 number=0 top=2
+checkudata	true	true
+checkudata plain	false	[string "local function try(...) return pcall(function..."]:1: bad argument #1 to 'cu' (Point expected, got userdata)
+checkudata table	false	[string "local function try(...) return pcall(function..."]:1: bad argument #1 to 'cu' (Point expected, got table)
+checkudata none	false	[string "local function try(...) return pcall(function..."]:1: bad argument #1 to 'cu' (Point expected, got no value)
+getmetafield answer: top=2 <userdata> 42
+  result=3
+getmetafield missing=0 top=1
+getmetafield number=0 top=2
+callmeta: top=2 <userdata> [from __tostring]
+  result=1
+callmeta missing=0 top=1
+tolstring	12	1.5	-0.0	9007199254740992.0	18	true
+tolstring	s	true	false	nil	3	true
+tolstring mm	from __tostring	15	true
+tolstring bad mm	true	1	1	true
+tolstring num mm	true	2	1	true
+tolstring table	table: 
+tolstring named	Thing
+tolstring name not string	table
+tolstring function	function
+len	3	4
+len mm	9
+len float mm	true	2
+len bad mm	false	object length is not an integer
+len none	false	attempt to get length of a number value
+version	true	version ok
+version bad	false	version mismatch: app. needs 400.0, Lua core provides 505.0
+version size	false	core and library have incompatible numeric types
+tolstring -1: top=2 77 [77]
+registry refs: 4 5 nil=-1 reuse=4 6 top=0
+  values: top=3 [three] [two] [four]
+table refs: 2 3 nil=-1 reuse=2 4 top=0
+  values: top=4 [three] [two] [four]
+gsub [a::b::c] [none] [] [] top=4
+fileresult ok: top=1 true
+fileresult fail n=3 top=3 nil=1 errno=1
+fileresult no errno n=3 code=0
+execresult 0: top=3 true [exit] 0
+execresult 3: top=3 nil [exit] 3
+execresult signal: top=3 nil [signal] 9
+execresult -1 n=3 top=3 first=nil
+top at end=0

@@ -134,56 +134,98 @@ bytecode loading off, with instruction and memory budgets.
 
 ## C API surface
 
-`luna-jit` builds a `cdylib` / `staticlib` exposing a subset of the
-`lua.h` functions from `crates/luna-jit/src/capi.rs`. It is **not** a
-drop-in replacement for PUC's library: a host compiled against PUC's own
-`lua.h` does not link, because several of the names below are macros in
-those headers that expand to functions luna does not export
-(`lua_tostring` → `lua_tolstring`, `lua_pcall` → `lua_pcallk` in 5.2+,
-`lua_pushcfunction` → `lua_pushcclosure`, `lua_tointeger` →
-`lua_tointegerx`). Call the covered functions by these names directly.
+`luna-jit` builds a `cdylib` / `staticlib` with PUC's C API: every
+function and macro of `lua.h`, `lauxlib.h` and `lualib.h` of PUC 5.1.5,
+5.2.4, 5.3.6, 5.4.9 and 5.5.1. The headers are in
+`crates/luna-jit/include/lua5.1` to `lua5.5`; compile a host against the
+directory of the dialect it was written for and link `luna_jit`.
+`luaL_newstate()` and `lua_newstate(...)` in those headers make a state
+of that dialect (`luna_newstate(LUA_VERSION_NUM)`), and every function
+behaves as that version of PUC does: messages, stack effects, return
+values, the numbering of `lua_arith` / `lua_gc` options and the layout of
+`lua_Debug` and `luaL_Buffer`.
 
-Covered — `crates/luna-jit/tests/it/capi.rs` and
-`capi_pcall_handler.rs` are the conformance suite:
+Where a function's C signature differs between versions, the exported
+symbol of the PUC name has the 5.4/5.5 signature and the older headers
+map the name to a luna symbol:
 
-- `lua_State` lifecycle: `luaL_newstate` (5.5), `luna_newstate(501..505)`
-  (any dialect, by its `LUA_VERSION_NUM`), `luaL_openlibs`, `lua_close`,
-  `lua_version`
-- pushes: `lua_pushnil`, `lua_pushboolean`, `lua_pushinteger`,
-  `lua_pushnumber`, `lua_pushstring`, `lua_pushcfunction`,
-  `lua_pushvalue`
-- reads: `lua_isnil`, `lua_isnumber`, `lua_isinteger`, `lua_isstring`,
-  `lua_isboolean`, `lua_isfunction`, `lua_tointeger`, `lua_tonumber`,
-  `lua_toboolean`, `lua_tostring`, `lua_type`
-- stack: `lua_settop`, `lua_pop`, `lua_gettop`
-- globals: `lua_getglobal`, `lua_setglobal`, `lua_register`
-- calls: `lua_pcall`, with a message handler as in PUC: it runs before
-  the stack unwinds, its first result is the error object, and when it
-  fails itself the status is the dialect's `LUA_ERRERR` (5 in 5.1, 5.4
-  and 5.5; 6 in 5.2 and 5.3) with "error in error handling"
-- load: `luaL_loadstring` (the source is the chunk name, as in PUC)
-- Redis's `lua_enablereadonlytable(L, idx, enabled)`
+| PUC name | 5.1 | 5.2 | 5.3 |
+|---|---|---|---|
+| `lua_version` | — | `luna_version_52` | `luna_version_52` |
+| `lua_resume` | `luna_resume_51` | `luna_resume_52` | `luna_resume_52` |
+| `lua_gc` | `luna_gc_51` | `luna_gc_51` | `luna_gc_51` |
+| `lua_load` | `luna_load_51` | | |
+| `lua_dump` | `luna_dump_51` | `luna_dump_51` | |
+| `lua_callk`, `lua_pcallk`, `lua_yieldk` | — | `luna_callk_52`, `luna_pcallk_52`, `luna_yieldk_52` | |
+| `lua_rawgeti`, `lua_rawseti` | `luna_rawgeti_51`, `luna_rawseti_51` | same | |
+| `luaL_checkversion_` | — | `luna_checkversion_52` | |
+| `luaL_Buffer` functions | `luna_buffinit_51`, ... | | |
+| `lua_ident` | `luna_ident_51` | `luna_ident_52` | `luna_ident_53` |
 
-`lua_getglobal` and `lua_setglobal` go through `_G`'s `__index` and
-`__newindex`, as in PUC. An error they raise (from a metamethod, or a
-write to a read-only `_G`) is raised out of the C function that made the
-call, so the `lua_pcall` that called it returns it. PUC stops the C
-function at that point; luna cannot unwind through C frames, so the C
-function runs on to its `return` and its results are dropped in favour of
-the error. Raised outside any C function luna called, the error is
-unprotected: as with PUC's default panic function, the process prints
-`PANIC: unprotected error in call to Lua API (...)` and aborts.
+5.1 and 5.2 functions that later versions turned into macros stay
+exported (`lua_insert`, `lua_objlen`, `lua_equal`, `lua_cpcall`,
+`luaL_register`, `luaL_typerror`, ...). The exported functions — every
+function any of the five versions declares, plus `lua_ident`:
 
-Not covered — use the Rust API:
+- `lua.h` (122): `lua_absindex`, `lua_arith`, `lua_atpanic`, `lua_call`, `lua_callk`, `lua_checkstack`, `lua_close`, `lua_closeslot`, `lua_closethread`, `lua_compare`, `lua_concat`, `lua_copy`, `lua_cpcall`, `lua_createtable`, `lua_dump`, `lua_equal`, `lua_error`, `lua_gc`, `lua_getallocf`, `lua_getctx`, `lua_getfenv`, `lua_getfield`, `lua_getglobal`, `lua_gethook`, `lua_gethookcount`, `lua_gethookmask`, `lua_geti`, `lua_getinfo`, `lua_getiuservalue`, `lua_getlocal`, `lua_getmetatable`, `lua_getstack`, `lua_gettable`, `lua_gettop`, `lua_getupvalue`, `lua_getuservalue`, `lua_ident`, `lua_insert`, `lua_iscfunction`, `lua_isinteger`, `lua_isnumber`, `lua_isstring`, `lua_isuserdata`, `lua_isyieldable`, `lua_len`, `lua_lessthan`, `lua_load`, `lua_newstate`, `lua_newthread`, `lua_newuserdata`, `lua_newuserdatauv`, `lua_next`, `lua_numbertocstring`, `lua_objlen`, `lua_pcall`, `lua_pcallk`, `lua_pushboolean`, `lua_pushcclosure`, `lua_pushexternalstring`, `lua_pushfstring`, `lua_pushinteger`, `lua_pushlightuserdata`, `lua_pushlstring`, `lua_pushnil`, `lua_pushnumber`, `lua_pushstring`, `lua_pushthread`, `lua_pushunsigned`, `lua_pushvalue`, `lua_pushvfstring`, `lua_rawequal`, `lua_rawget`, `lua_rawgeti`, `lua_rawgetp`, `lua_rawlen`, `lua_rawset`, `lua_rawseti`, `lua_rawsetp`, `lua_remove`, `lua_replace`, `lua_resetthread`, `lua_resume`, `lua_rotate`, `lua_setallocf`, `lua_setcstacklimit`, `lua_setfenv`, `lua_setfield`, `lua_setglobal`, `lua_sethook`, `lua_seti`, `lua_setiuservalue`, `lua_setlevel`, `lua_setlocal`, `lua_setmetatable`, `lua_settable`, `lua_settop`, `lua_setupvalue`, `lua_setuservalue`, `lua_setwarnf`, `lua_status`, `lua_stringtonumber`, `lua_toboolean`, `lua_tocfunction`, `lua_toclose`, `lua_tointeger`, `lua_tointegerx`, `lua_tolstring`, `lua_tonumber`, `lua_tonumberx`, `lua_topointer`, `lua_tothread`, `lua_tounsignedx`, `lua_touserdata`, `lua_type`, `lua_typename`, `lua_upvalueid`, `lua_upvaluejoin`, `lua_version`, `lua_warning`, `lua_xmove`, `lua_yield`, `lua_yieldk`
+- `lauxlib.h` (57): `luaL_addgsub`, `luaL_addlstring`, `luaL_addstring`, `luaL_addvalue`, `luaL_alloc`, `luaL_argerror`, `luaL_buffinit`, `luaL_buffinitsize`, `luaL_callmeta`, `luaL_checkany`, `luaL_checkinteger`, `luaL_checklstring`, `luaL_checknumber`, `luaL_checkoption`, `luaL_checkstack`, `luaL_checktype`, `luaL_checkudata`, `luaL_checkunsigned`, `luaL_checkversion_`, `luaL_error`, `luaL_execresult`, `luaL_fileresult`, `luaL_findtable`, `luaL_getmetafield`, `luaL_getsubtable`, `luaL_gsub`, `luaL_len`, `luaL_loadbuffer`, `luaL_loadbufferx`, `luaL_loadfile`, `luaL_loadfilex`, `luaL_loadstring`, `luaL_makeseed`, `luaL_newmetatable`, `luaL_newstate`, `luaL_openlib`, `luaL_optinteger`, `luaL_optlstring`, `luaL_optnumber`, `luaL_optunsigned`, `luaL_prepbuffer`, `luaL_prepbuffsize`, `luaL_pushmodule`, `luaL_pushresult`, `luaL_pushresultsize`, `luaL_ref`, `luaL_register`, `luaL_requiref`, `luaL_setfuncs`, `luaL_setmetatable`, `luaL_testudata`, `luaL_tolstring`, `luaL_traceback`, `luaL_typeerror`, `luaL_typerror`, `luaL_unref`, `luaL_where`
+- `lualib.h` (13): `luaL_openlibs`, `luaL_openselectedlibs`, `luaopen_base`, `luaopen_bit32`, `luaopen_coroutine`, `luaopen_debug`, `luaopen_io`, `luaopen_math`, `luaopen_os`, `luaopen_package`, `luaopen_string`, `luaopen_table`, `luaopen_utf8`
+- luna's per-dialect symbols (24): `luna_addlstring_51`, `luna_addstring_51`, `luna_addvalue_51`, `luna_buffinit_51`, `luna_callk_52`, `luna_checkversion_52`, `luna_dump_51`, `luna_gc_51`, `luna_ident_51`, `luna_ident_52`, `luna_ident_53`, `luna_ident_54`, `luna_load_51`, `luna_newstate`, `luna_newstate_with`, `luna_pcallk_52`, `luna_prepbuffer_51`, `luna_pushresult_51`, `luna_rawgeti_51`, `luna_rawseti_51`, `luna_resume_51`, `luna_resume_52`, `luna_version_52`, `luna_yieldk_52`
 
-- userdata / lightuserdata / `lua_newuserdata`
-- continuations (`lua_callk`, `lua_pcallk`)
-- coroutines through the C API (`lua_resume`, `lua_yield`)
-- debug hooks
-- `luaopen_<lib>` C-symbol shims for individual libraries
+Every macro of the PUC headers is in luna's headers with the same
+definition. The C host programs in `crates/luna-jit/tests/capi/` call
+every function; each is built against PUC and against luna and the
+outputs are compared line by line for each dialect
+(`crates/luna-jit/tests/it/capi_*.rs`).
 
-The Rust `Vm` API is the primary embedding surface and is considerably
-richer than the C one — see [`embedding.md`](embedding.md).
+An error leaves a C function at once, as in PUC: `lua_error`,
+`luaL_error` and every API function that raises jump back (with
+`longjmp`, through C frames only) to the call luna made into the C
+function. Outside any protected call the panic function runs and the
+process ends as with PUC (5.1 `exit(EXIT_FAILURE)`, later `abort()`).
+Coroutines work from C: `lua_newthread`, `lua_resume`, `lua_yield`, and
+continuations (`lua_yieldk`, `lua_callk`, `lua_pcallk`, 5.2's
+`lua_getctx`), also across resumes made from Lua.
+
+Building `luna-jit` needs a C compiler: part of the C API is C. Once a
+process has made a C API state, luna writes standard output through the C
+library's `stdout`, so it interleaves with the host's own `printf` as
+PUC's output does.
+
+Differences from PUC:
+
+- luna's collector does not allocate through a `lua_Alloc`: the function
+  given to `lua_newstate` allocates only the state's own record and is
+  returned by `lua_getallocf`.
+- io file handles are not `luaL_Stream`s over a C `FILE*`:
+  `luaL_checkudata(L, i, LUA_FILEHANDLE)` does not accept them.
+- `lua_tocfunction` returns `NULL` for luna's own library functions,
+  which are not C functions.
+- `lua_pushexternalstring` (5.5) copies the string and frees the external
+  buffer at once instead of when the string is collected.
+- `lua_dump` calls the writer once with the whole chunk; PUC calls it
+  once per piece. `lua_load` reads a text chunk to its end before
+  parsing, so a reader is still called after a syntax error.
+- `lua_status` of a thread that died by an error is `LUA_ERRRUN` whatever
+  the error was; `lua_closethread` on the main thread only clears its
+  stack.
+- A coroutine made by Lua gets its `lua_State`, and the copy of the main
+  thread's extra space, when C first asks for it rather than at
+  `coroutine.create`.
+- 5.1 `lua_setfenv` stores an environment only for Lua functions with an
+  environment upvalue, threads and userdata made through the C API;
+  `lua_setlevel` does nothing.
+- A C hook may yield only from a line or count event.
+- In 5.2, `luaL_argerror` and `luaL_traceback` name a global function by
+  the globals' own keys before looking one level deeper; PUC's search
+  follows its table order, which depends on a per-run hash seed.
+- Calls that break the API's preconditions (a non-table where a table is
+  required, an unknown `lua_arith` operation) abort with a message where
+  PUC's behaviour is undefined.
+
+Redis's `lua_enablereadonlytable(L, idx, enabled)` is exported as well.
+The Rust `Vm` API remains the primary embedding surface — see
+[`embedding.md`](embedding.md).
 
 ## Bytecode
 

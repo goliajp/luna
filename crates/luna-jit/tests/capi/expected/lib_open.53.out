@@ -1,0 +1,99 @@
+_G direct:
+  returned 1 (top 1): table=global
+  _G globals: _G print loadfile
+  _G loaded: (no _LOADED)
+package direct:
+  returned 1 (top 1): table
+  package globals: require
+  package loaded:
+table direct:
+  returned 1 (top 1): table
+  table globals:
+  table loaded: (no _LOADED)
+io direct:
+  returned 1 (top 1): table
+  io globals:
+  io loaded: (no _LOADED)
+os direct:
+  returned 1 (top 1): table
+  os globals:
+  os loaded: (no _LOADED)
+string direct:
+  returned 1 (top 1): table
+  string globals:
+  string loaded: (no _LOADED)
+  string methods: 0 xxx
+math direct:
+  returned 1 (top 1): table
+  math globals:
+  math loaded: (no _LOADED)
+debug direct:
+  returned 1 (top 1): table
+  debug globals:
+  debug loaded: (no _LOADED)
+coroutine direct:
+  returned 1 (top 1): table
+  coroutine globals:
+  coroutine loaded: (no _LOADED)
+bit32 direct:
+  returned 1 (top 1): table
+  bit32 globals:
+  bit32 loaded: (no _LOADED)
+utf8 direct:
+  returned 1 (top 1): table
+  utf8 globals:
+  utf8 loaded: (no _LOADED)
+_G call: status=0 results=1
+  _G globals: _G print loadfile
+  _G loaded: (no _LOADED)
+package call: status=0 results=1
+  package globals: require
+  package loaded:
+table call: status=0 results=1
+  table globals:
+  table loaded: (no _LOADED)
+io call: status=0 results=1
+  io globals:
+  io loaded: (no _LOADED)
+os call: status=0 results=1
+  os globals:
+  os loaded: (no _LOADED)
+string call: status=0 results=1
+  string globals:
+  string loaded: (no _LOADED)
+math call: status=0 results=1
+  math globals:
+  math loaded: (no _LOADED)
+debug call: status=0 results=1
+  debug globals:
+  debug loaded: (no _LOADED)
+coroutine call: status=0 results=1
+  coroutine globals:
+  coroutine loaded: (no _LOADED)
+bit32 call: status=0 results=1
+  bit32 globals:
+  bit32 loaded: (no _LOADED)
+utf8 call: status=0 results=1
+  utf8 globals:
+  utf8 loaded: (no _LOADED)
+openlibs: top=1
+  openlibs globals: _G package coroutine table io os string bit32 math utf8 debug require print loadfile
+  openlibs loaded: _G package coroutine table io os string bit32 math utf8 debug
+  package.loaded is _LOADED	true
+  require string	true
+  preload	table
+  version	Lua 5.3
+openlibs twice: top=0
+requiref: top=1 <table>
+  requiref globals:
+  requiref loaded:
+  global is result: 1
+requiref again: top=1 opened=1
+requiref no global: top=2 global=nil
+getsubtable new=0 again=1 top=3
+  same=1
+getsubtable over number=0 top=4
+setfuncs: top=1
+error: [[string "print('  setfuncs', lib.a()) print('  setfunc..."]:1: attempt to call a nil value (global 'print')]
+newlib: top=2 b=function
+top at end=0

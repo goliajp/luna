@@ -1,0 +1,42 @@
+round trip of a chunk
+  dump status 0, header 1b Lua version 55
+  the last writer call marks the end: yes
+  the function is still on the stack: yes
+  load status 0 after 1 reader calls
+  call: sum 7
+pieces of 7 bytes
+  load status 0 after 24 reader calls (24 pieces)
+  call: sum 30
+pieces of 1 byte
+  load status 0 after 164 reader calls for 164 bytes
+trailing bytes after the chunk
+  load status 0 after 1 reader calls
+  call: sum 3
+a truncated chunk
+  load status 3 after 2 reader calls: trunc: bad binary format (truncated chunk)
+  only 3 bytes: status 3: trunc.luac: bad binary format (truncated chunk)
+modes
+  mode t: status 3 after 1 calls: attempt to load a binary chunk (mode is 't')
+  mode b: status 0
+a function with upvalues
+  dump status 0, header 1b Lua version 55
+  the last writer call marks the end: yes
+  load status 0
+  call error 2: [string "local n = 10 return function(x) n = n + x ret..."]:1: attempt to perform arithmetic on a table value (upvalue 'n')
+a chunk using globals
+  dump status 0, header 1b Lua version 55
+  the last writer call marks the end: yes
+  call: g=1
+  call: g=2
+errors in a dumped function
+  dump status 0, header 1b Lua version 55
+  the last writer call marks the end: yes
+  call error 2: src:2: boom plain
+stripped
+  dump status 0, header 1b Lua version 55
+  the last writer call marks the end: yes
+  call error 2: boom stripped
+a writer that fails
+  status 42 after 1 writer calls
+a writer that raises
+  pcall status 2: writer failed

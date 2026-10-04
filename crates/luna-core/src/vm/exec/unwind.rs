@@ -102,6 +102,13 @@ impl Vm {
             })
         {
             while self.frames.len() >= entry_depth {
+                if let Some(&CallFrame::Cont(NativeCont {
+                    kind: ContKind::Host(hc),
+                    ..
+                })) = self.frames.last()
+                {
+                    self.discard_host_cont(hc);
+                }
                 frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
             }
             return Unwound::Propagated(LuaError(err));
@@ -120,6 +127,19 @@ impl Vm {
                     self.stack.truncate(func_slot as usize);
                     self.top = mc.saved_top.min(func_slot);
                     self.tbc.retain(|&s| s < func_slot);
+                }
+                // a C function's continuation does not catch: the error leaves
+                // the C function, whose C API frame goes with it
+                CallFrame::Cont(NativeCont {
+                    kind: ContKind::Host(hc),
+                    func_slot,
+                    ..
+                }) => {
+                    frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+                    self.stack.truncate(func_slot as usize);
+                    self.top = func_slot;
+                    self.tbc.retain(|&s| s < func_slot);
+                    self.discard_host_cont(hc);
                 }
                 // a __pairs continuation does not catch either: an error inside
                 // the metamethod propagates past `pairs`.
@@ -235,8 +255,8 @@ impl Vm {
                     self.call_msgh(handler, err)
                 }
             }
-            ContKind::Meta(_) | ContKind::Pairs | ContKind::Close(_) => {
-                unreachable!("Meta/Pairs/Close cont handled above")
+            ContKind::Meta(_) | ContKind::Pairs | ContKind::Close(_) | ContKind::Host(_) => {
+                unreachable!("Meta/Pairs/Close/Host cont handled above")
             }
         };
         // PUC 5.5 `luaG_errormsg` substitutes "<no error object>"

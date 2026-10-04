@@ -1,0 +1,30 @@
+newuserdata: userdata len=16 same=1 top=1
+block kept: 1 aligned=1
+type	userdata	true
+newuserdata 0: userdata len=0
+uobj	ud:name	99
+uobj value: 41
+newuserdatauv: userdata len=8 top=1
+getiuservalue 1: 0 nil top=2
+getiuservalue 3: 0 nil top=2
+getiuservalue 4: -1 nil top=2
+getiuservalue 0: -1 nil top=2
+getiuservalue -1: -1 nil top=2
+setiuservalue 2: 1 top=1
+setiuservalue 3: 1
+setiuservalue 4: 0 top=1
+setiuservalue 0: 0 top=1
+getiuservalue 2: 4 s:two top=2
+getiuservalue 3: 3 n:3 top=2
+debug.getuservalue	survives	two	true
+debug.getuservalue out	1	nil
+debug.setuservalue	true	nil
+getiuservalue 3: 4 s:x top=2
+getiuservalue 1: -1 nil top=2
+setiuservalue none: 0
+getiuservalue 1: 0 nil top=2
+getiuservalue 2: -1 nil top=2
+file user values	1
+count grew	true
+count shrank	true
+final top=0

@@ -1,0 +1,49 @@
+line yields
+  hook line line=2
+1	suspended	true	nil	1
+  hook line line=2
+2	suspended	true	nil	1
+  hook line line=2
+3	suspended	true	nil	1
+  hook line line=2
+4	suspended	true	nil	1
+  hook line line=2
+5	suspended	true	nil	1
+  hook line line=2
+6	suspended	true	nil	1
+  hook line line=2
+7	suspended	true	nil	1
+  hook line line=2
+8	suspended	true	nil	1
+  hook line line=2
+9	suspended	true	nil	1
+  hook line line=2
+10	suspended	true	nil	1
+  hook line line=2
+11	suspended	true	nil	1
+  hook line line=2
+12	suspended	true	nil	1
+count yields
+  hook count line=3
+1	suspended	true	nil
+  hook count line=3
+2	suspended	true	nil
+  hook count line=3
+3	suspended	true	nil
+  hook count line=4
+4	suspended	true	nil
+5	dead	true	6
+wrap
+  hook line line=3
+  hook line line=4
+
+  hook line line=4
+
+  hook line line=4
+
+  hook line line=4
+
+  hook line line=4
+
+  hook line line=4
+

@@ -88,6 +88,7 @@ impl Vm {
         co: Gc<Coro>,
         args: Vec<Value>,
     ) -> Result<Vec<Value>, LuaError> {
+        self.host_before_resume(co);
         match co.status {
             CoroStatus::Suspended => {}
             CoroStatus::Dead => return Err(self.plain_err("cannot resume dead coroutine")),
@@ -138,6 +139,10 @@ impl Vm {
         let resumer_msgh_running = self.msgh_running.take();
         // a coroutine that dies keeps its traceback for `debug.traceback(co)`
         let resumer_keeps_traceback = std::mem::replace(&mut self.keep_error_traceback, true);
+        // non-yieldable calls belong to the thread that made them (PUC's
+        // per-thread `nny`): a coroutine resumed from inside one, such as a
+        // host's `lua_pcall`, can still yield
+        let resumer_nny = std::mem::replace(&mut self.nny, 0);
 
         // drive it
         let drive = if co.started {
@@ -153,7 +158,7 @@ impl Vm {
         let (outcome, status) = if let Some(death) = self.terminating.take() {
             // the coroutine closed itself: it dies now, cleanly or with the
             // error a `__close` handler raised.
-            match death {
+            let r = match death {
                 Some(e) => {
                     // SAFETY: `co` is still `self.current`, a root, and the coroutine's frames have all unwound; the borrow covers one field store
                     unsafe { co.as_mut() }.error_value = Some(e);
@@ -161,7 +166,9 @@ impl Vm {
                     (Err(LuaError(e)), CoroStatus::Dead)
                 }
                 None => (Ok(Vec::new()), CoroStatus::Dead),
-            }
+            };
+            self.host_thread_reset(co);
+            r
         } else {
             match self.yielding.take() {
                 Some((vals, fslot, nres)) => {
@@ -195,7 +202,7 @@ impl Vm {
                         unsafe { co.as_mut() }.error_value = Some(e.0);
                         self.heap.barrier_back(co);
                     }
-                    (drive, CoroStatus::Dead)
+                    (self.host_returned(co, drive), CoroStatus::Dead)
                 }
             }
         };
@@ -205,6 +212,7 @@ impl Vm {
         self.msgh_floor = resumer_msgh_floor;
         self.msgh_running = resumer_msgh_running;
         self.keep_error_traceback = resumer_keeps_traceback;
+        self.nny = resumer_nny;
         self.store_coro_ctx(co);
         // SAFETY: `co` is still `self.current`, a root; `store_coro_ctx`'s borrow has ended, and this one covers one field store
         unsafe { co.as_mut() }.status = status;
@@ -257,6 +265,19 @@ impl Vm {
             .and_then(CallFrame::lua)
             .map(|f| (f.base + f.closure.proto.max_stack as u32) as usize)
             .unwrap_or(0);
+        if fslot == HOOK_YIELD_SLOT {
+            // a hook yielded: the instruction it interrupted runs now
+            if self.stack.len() < frame_need {
+                self.stack.resize(frame_need, Value::Nil);
+            }
+            self.hook_resumed = self.version >= LuaVersion::Lua52;
+            return self.exec_with(1);
+        }
+        // the `coroutine.yield` returning, for a C hook's return event
+        let yielder = match self.stack.get(fslot as usize) {
+            Some(&Value::Native(nc)) if self.c_hook_installed() => Some(nc),
+            _ => None,
+        };
         let need = frame_need.max((fslot + n) as usize);
         if self.stack.len() < need {
             self.stack.resize(need, Value::Nil);
@@ -267,7 +288,29 @@ impl Vm {
         self.finish_results(fslot, n, nres);
         // the suspended `coroutine.yield` (a C call) now returns its resume
         // values: fire the matching "return" hook PUC defers until the resume.
-        self.hook_return(true, 1, n)?;
+        // A C function that yielded with a continuation returns only once
+        // its continuation has.
+        let host_cont = matches!(
+            self.frames.last(),
+            Some(CallFrame::Cont(nc)) if matches!(nc.kind, ContKind::Host(_))
+        );
+        if !host_cont {
+            // the yield is a level of its own while its return hook runs
+            if let Some(nc) = yielder {
+                self.running_natives.push(crate::vm::callstack::NativeAct {
+                    nc,
+                    func_slot: fslot,
+                    nargs: 0,
+                    depth: self.frames.len() as u32,
+                    ccmt: 0,
+                });
+            }
+            let r = self.hook_return(true, 1, n);
+            if yielder.is_some() {
+                self.running_natives.pop();
+            }
+            r?;
+        }
         self.exec_with(1)
     }
 

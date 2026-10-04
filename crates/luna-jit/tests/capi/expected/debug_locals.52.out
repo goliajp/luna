@@ -1,0 +1,56 @@
+show f
+ level 0: 1:(*temporary)=f 2:(*temporary)=c-own (top +0)
+ level 1: 1:a=1 2:b=2 3:x=xv (top +0)
+ level 2: -3:(*vararg)=<function> -2:(*vararg)=<function> -1:(*vararg)=<function> 1:show=<function> 2:set=<function> 3:cself=<function> 4:params=<function> 5:coshow=<function> 6:f=<function> (top +0)
+ no level 3
+setlocal 1 -> a (top -1)
+setlocal 3 -> x (top -1)
+setlocal 40 -> (null) (top -1)
+A	X
+show f
+ level 0: 1:(*temporary)=f 2:(*temporary)=c-own (top +0)
+ level 1: 1:a=1 2:b=<nil> 3:x=xv (top +0)
+ level 2: -3:(*vararg)=<function> -2:(*vararg)=<function> -1:(*vararg)=<function> 1:show=<function> 2:set=<function> 3:cself=<function> 4:params=<function> 5:coshow=<function> 6:f=<function> (top +0)
+ no level 3
+setlocal 1 -> a (top -1)
+setlocal 3 -> x (top -1)
+setlocal 40 -> (null) (top -1)
+A	X
+show vf
+ level 0: 1:(*temporary)=vf 2:(*temporary)=c-own (top +0)
+ level 1: -2:(*vararg)=va2 -1:(*vararg)=va1 1:a=1 (top +0)
+ level 2: -3:(*vararg)=<function> -2:(*vararg)=<function> -1:(*vararg)=<function> 1:show=<function> 2:set=<function> 3:cself=<function> 4:params=<function> 5:coshow=<function> 6:f=<function> 7:vf=<function> (top +0)
+ no level 3
+setlocal -1 -> (*vararg) (top -1)
+setlocal -3 -> (null) (top -1)
+V	va2
+show vf
+ level 0: 1:(*temporary)=vf 2:(*temporary)=c-own (top +0)
+ level 1: 1:a=1 (top +0)
+ level 2: -3:(*vararg)=<function> -2:(*vararg)=<function> -1:(*vararg)=<function> 1:show=<function> 2:set=<function> 3:cself=<function> 4:params=<function> 5:coshow=<function> 6:f=<function> 7:vf=<function> (top +0)
+ no level 3
+setlocal -1 -> (null) (top -1)
+setlocal -3 -> (null) (top -1)
+
+show mm
+ level 0: 1:(*temporary)=mm 2:(*temporary)=c-own (top +0)
+ level 1: 1:t=<table> 2:k=k (top +0)
+ level 2: -3:(*vararg)=<function> -2:(*vararg)=<function> -1:(*vararg)=<function> 1:show=<function> 2:set=<function> 3:cself=<function> 4:params=<function> 5:coshow=<function> 6:f=<function> 7:vf=<function> 8:t=<table> (top +0)
+ no level 3
+cself setlocal -> (*temporary) top=2 slot2=new
+cself getlocal 3 -> (null)
+cself getlocal 0 -> (null)
+params: 0=(null) 1=a 2=b 3=(null) 4=(null) (top +0)
+params: 0=(null) 1=(null) 2=(null) 3=(null) 4=(null) (top +0)
+params: 0=(null) 1=p 2=q 3=(null) 4=(null) (top +0)
+coroutine
+ level 0: (top +0)
+ level 1: 1:p=arg 2:q=arg! (top +0)
+ co setlocal -> p
+after yield	changed	arg!
+show pcall
+ level 0: 1:(*temporary)=pcall 2:(*temporary)=c-own (top +0)
+ level 1: 1:(*temporary)=<nil> (top +0)
+ level 2: -3:(*vararg)=<function> -2:(*vararg)=<function> -1:(*vararg)=<function> 1:show=<function> 2:set=<function> 3:cself=<function> 4:params=<function> 5:coshow=<function> 6:f=<function> 7:vf=<function> 8:t=<table> 9:_=<nil> 10:co=<thread> (top +0)
+ no level 3
+script: 0 ok

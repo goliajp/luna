@@ -1,0 +1,26 @@
+  raise_string: before
+raise_string: status=2 [string error]
+raise_table: status=2 table msg=inside
+raise_fmt: status=2 [formatted error 42 1.5]
+check_arg: status=2 [bad argument #1 to 'check_arg' (number expected, got string)]
+call_failing: status=2 [lua side]
+index_failing: status=2 [index mm]
+newindex_failing: status=2 [newindex mm]
+concat_failing: status=2 [attempt to concatenate a table value]
+arith_failing: status=2 [attempt to add a 'string' with a 'number']
+compare_failing: status=2 [lt mm]
+stack_left: status=2 [with 10 values pushed]
+  raise_string: before
+  catcher: pcall status=2 [string error] top=1
+catcher: status=0 [catcher done]
+outer: status=2 [[string "function inner_chain() raise_fmt() end"]:1: formatted error 42 1.5]
+lua pcall	false	formatted error 42 1.5
+lua pcall check	false	bad argument #1 to 'check_arg' (number expected, got table)
+  raise_string: before
+lua xpcall	false	error in error handling
+  raise_string: before
+coroutine	false	string error
+status	dead
+  __close got	after toclose
+close_on_error: status=2 [after toclose]
+top at end=0

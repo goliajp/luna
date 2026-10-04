@@ -1,0 +1,104 @@
+pieces of a valid chunk
+    reader call 1: "local a = "
+    reader call 2: "five * "
+    reader call 3: "2
+"
+    reader call 4: "return a + 1"
+    reader call 5: end
+  status OK, 5 reader calls, 1 new values
+  ran: 11
+one piece
+    reader call 1: "return 'one piece'"
+    reader call 2: end
+  status OK, 2 reader calls, 1 new values
+  ran: one piece
+no input at all
+    reader call 1: end
+  status OK, 1 reader calls, 1 new values
+  ran: nil
+an expression across pieces
+    reader call 1: "return 1 +"
+    reader call 2: " 2 +"
+    reader call 3: " 3"
+    reader call 4: end
+  status OK, 4 reader calls, 1 new values
+  ran: 6
+a name split between pieces
+    reader call 1: "local abc"
+    reader call 2: "def = 1 return abcdef"
+    reader call 3: end
+  status OK, 3 reader calls, 1 new values
+  ran: 1
+a number split between pieces
+    reader call 1: "return 0x"
+    reader call 2: "10"
+    reader call 3: end
+  status OK, 3 reader calls, 1 new values
+  ran: 16
+an unfinished string
+    reader call 1: "return 'unfinished"
+    reader call 2: " string"
+    reader call 3: end
+  status ERRSYNTAX, 3 reader calls, 1 new values
+  message: str:1: unfinished string near <eof>
+the input ends inside an expression
+    reader call 1: "return 1 +"
+    reader call 2: end
+  status ERRSYNTAX, 2 reader calls, 1 new values
+  message: eof:1: unexpected symbol near <eof>
+a null chunk name
+  status OK, 2 reader calls, 1 new values
+  ran: 5
+a null chunk name in a runtime error
+  status OK, 2 reader calls, 1 new values
+  run error: [string "?"]:1: boom
+chunk name =custom
+  status OK, 2 reader calls, 1 new values
+  run error: custom:1: boom
+chunk name @file.lua
+  status OK, 2 reader calls, 1 new values
+  run error: file.lua:1: boom
+chunk name as source
+  status OK, 2 reader calls, 1 new values
+  run error: [string "error('boom')"]:1: boom
+a syntax error with a null chunk name
+  status ERRSYNTAX, 2 reader calls, 1 new values
+  message: [string "?"]:1: unexpected symbol near <eof>
+mode t, text chunk
+    reader call 1: "return 'text'"
+    reader call 2: end
+  status OK, 2 reader calls, 1 new values
+  ran: text
+mode b, text chunk
+    reader call 1: "return 'text'"
+  status ERRSYNTAX, 1 reader calls, 1 new values
+  message: attempt to load a text chunk (mode is 'b')
+mode bt, text chunk
+  status OK, 2 reader calls, 1 new values
+  ran: text
+mode empty, text chunk
+  status ERRSYNTAX, 1 reader calls, 1 new values
+  message: attempt to load a text chunk (mode is '')
+mode xyz, text chunk
+  status ERRSYNTAX, 1 reader calls, 1 new values
+  message: attempt to load a text chunk (mode is 'xyz')
+mode b, empty chunk
+    reader call 1: end
+  status ERRSYNTAX, 1 reader calls, 1 new values
+  message: attempt to load a text chunk (mode is 'b')
+null mode, text chunk
+  status OK, 2 reader calls, 1 new values
+  ran: text
+a reader that raises
+  status ERRRUN after 2 calls, 1 new values: reader failed
+a reader that raises a table
+  status ERRRUN, 1 new values, a table with code 7
+a piece of size 0
+  status OK after 1 calls
+  ran: nil
+a reader that raises inside a C function
+  inside a C function: status ERRRUN after 2 calls: reader failed
+  pcall status OK
+the chunk's globals
+  status OK, 2 reader calls, 1 new values
+  ran: 6

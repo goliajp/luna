@@ -1,0 +1,9 @@
+call main ? ftr=0 ntr=0 [ ] locals:
+call Lua g ftr=1 ntr=1 [ x=x ] locals: x=x | up main line=6 ftr=0 ntr=0
+call Lua f ftr=1 ntr=2 [ a=x b=y ] locals: a=x b=y | up Lua line=5 ftr=0 ntr=0
+ret Lua f ftr=4 ntr=2 [ (temporary)=xy (temporary)=r2 ] | up Lua line=5 ftr=0 ntr=0
+ret Lua g ftr=2 ntr=1 [ r=xy ] | up main line=6 ftr=0 ntr=0
+call C cadd ftr=1 ntr=2 [ (C temporary)=1 (C temporary)=2 ] locals: (C temporary)=1 (C temporary)=2 | up main line=7 ftr=0 ntr=0
+ret C cadd ftr=3 ntr=2 [ (C temporary)=3 (C temporary)=extra ] | up main line=7 ftr=0 ntr=0
+ret main ? ftr=0 ntr=0 [ ]
+status 0

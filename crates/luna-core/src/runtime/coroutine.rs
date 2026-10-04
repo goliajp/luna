@@ -75,6 +75,15 @@ pub struct Coro {
     /// this — yielding `getfenv()` after the rewire must see the
     /// coroutine's own per-closure env, not the caller's).
     pub globals: Gc<Table>,
+    /// The thread's stack as the C API sees it (PUC `lua_State`'s stack):
+    /// what `lua_push*` pushes on this thread and where C functions running
+    /// on it find their arguments.
+    #[doc(hidden)]
+    pub host_stack: Vec<Value>,
+    /// The C API's `lua_State` for this thread, made the first time C asks
+    /// for one; it lives as long as the thread.
+    #[doc(hidden)]
+    pub host_state: Option<Box<dyn std::any::Any>>,
 }
 
 impl Coro {
@@ -108,5 +117,8 @@ impl Coro {
             m.value(h);
         }
         m.value(Value::Table(self.globals));
+        for &v in self.host_stack.iter() {
+            m.value(v);
+        }
     }
 }

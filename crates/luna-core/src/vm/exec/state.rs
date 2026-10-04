@@ -47,9 +47,10 @@ pub struct Vm {
     pub(super) globals: Gc<Table>,
     /// shared metatable for all strings (populated by the string lib)
     /// per-basic-type metatables (PUC luaT): indexed by `type_mt_slot`
-    /// (0 nil, 1 boolean, 2 number, 3 string, 4 function); tables carry their
+    /// (0 nil, 1 boolean, 2 number, 3 string, 4 function, 5 light userdata,
+    /// 6 thread); tables and full userdata carry their
     /// own. Settable via debug.setmetatable.
-    pub(super) type_mt: [Option<Gc<Table>>; 5],
+    pub(super) type_mt: [Option<Gc<Table>>; 7],
     /// pre-interned metamethod event names, indexed by `Mm`
     pub(super) mm_names: [Gc<crate::runtime::LuaStr>; MM_NAMES.len()],
     /// the parser's vectors, kept from one `load` to the next
@@ -68,7 +69,8 @@ pub struct Vm {
     /// (sort comparator, gsub replacement) cannot be continued across a yield,
     /// so it bumps this for its duration; `coroutine.yield` inside hits the
     /// C-call boundary and errors. Always 0 at a suspend point (a yield can
-    /// never cross such a call), so it needs no per-thread save/restore.
+    /// never cross such a call); a resume starts the coroutine at 0 and puts
+    /// the resumer's count back after.
     pub(super) nny: u32,
     /// Nonzero while an xpcall message handler is on the Rust stack. Used so a
     /// stack-overflow that surfaces *inside* the handler is reported as PUC's
@@ -131,24 +133,16 @@ pub struct Vm {
     /// `collectgarbage` gets a no-op (PUC's non-reentrancy: lua_gc returns -1 →
     /// `collectgarbage` yields fail).
     pub(super) gc_finalizing: bool,
-    /// C ABI scratch (`capi` module): the host-visible value stack that C
-    /// callers operate on via `lua_pushinteger` / `lua_tostring` / etc.
-    /// Kept here (instead of in a separate `LuaState` wrapper) so the
-    /// trampoline that bridges to a `LuaCFunction` can safely cast the
-    /// Vm pointer it already holds to the public `*mut LuaState` type
-    /// without any aliasing of `&mut Vm` against `&mut LuaState.vm`.
-    pub capi_stack: Vec<crate::runtime::Value>,
-    /// Pinned CString backing the pointer last returned by `lua_tostring`;
-    /// valid until the next `lua_tostring` on the same Vm.
-    pub capi_cstr_pin: Option<std::ffi::CString>,
-    /// Where the running C function's frame starts in `capi_stack`: its
-    /// index 1 is `capi_stack[capi_base]`. 0 outside any C function.
-    pub capi_base: usize,
-    /// How many C functions (`lua_pushcfunction`) are running.
-    pub capi_calls: u32,
-    /// An error a C API function raised inside a running C function; it
-    /// is thrown when that function returns, in place of its results.
-    pub capi_error: Option<crate::runtime::Value>,
+    /// What the C API runs for a C function's continuation
+    /// (`ContKind::Host`); see [`super::host_c`].
+    pub(crate) host_cont_hooks: Option<super::host_c::HostContHooks>,
+    /// The C API's warning function (`lua_setwarnf`), which replaces the
+    /// default one; see [`super::host_c`].
+    pub(crate) host_warn: Option<super::host_c::HostWarn>,
+    /// The C API's functions without upvalues, one per C function pointer:
+    /// from 5.2 on PUC's light C functions are equal when their pointers
+    /// are. GC roots.
+    pub(crate) host_light: std::collections::HashMap<usize, Value>,
     /// PUC 5.4+ warning system. Lua manual §6.1 `warn`: emitted messages
     /// concatenate across continuation calls until a non-`tocont` call
     /// flushes; the default warnf recognises `@on`/`@off` control messages
@@ -157,6 +151,9 @@ pub struct Vm {
     /// keep the older raise semantics).
     pub(crate) warn_state: WarnState,
     pub(crate) warn_buf: Vec<u8>,
+    /// the default warning function is in the middle of a message (PUC
+    /// `warnfcont`)
+    pub(crate) warn_cont: bool,
     /// Embedding cooperative budget: a per-Vm tick counter that the run
     /// loop decrements once per dispatch turn. When it hits zero the loop
     /// raises a catchable "instruction budget exceeded" error so the embedder
@@ -254,6 +251,8 @@ pub struct Vm {
     /// handling"); a host protected call compares it before and after to
     /// report that status instead of LUA_ERRRUN.
     pub(crate) errerr_raised: u64,
+    /// finalizer errors a 5.2/5.3 full collection raised (`LUA_ERRGCMM`)
+    pub(crate) gcmm_raised: u64,
     /// The value the last `xpcall` handler produced for the error in
     /// flight, so the unwind that carries it to the `xpcall` does not
     /// run the handler again.
@@ -275,6 +274,16 @@ pub struct Vm {
     /// so `debug.getinfo(1).namewhat` resolves to `"hook"` (PUC
     /// `CIST_HOOKED`). `run_hook` arms it before dispatching the hook.
     pub(super) pending_is_hook: bool,
+    /// The C API's dispatcher of C hook functions: a thread whose hook
+    /// function is a light userdata has a C hook (`lua_sethook`), which
+    /// this runs; see [`super::host_c`].
+    pub(crate) host_hook: Option<super::host_c::HostHookFn>,
+    /// A C line or count hook asked to yield (`lua_yield` inside a hook);
+    /// acted on once the hooks of the instruction have run.
+    pub(crate) hook_yield: bool,
+    /// The running thread resumed from a hook's yield (5.2+
+    /// `CIST_HOOKYIELD`): the next hook check does not call the hook again.
+    pub(crate) hook_resumed: bool,
     /// traceback of an error nothing in its thread catches, one line per
     /// stack level, taken where it was raised (see `raise_to_handler`): what
     /// the host gets from `take_error_traceback`, and what `debug.traceback`

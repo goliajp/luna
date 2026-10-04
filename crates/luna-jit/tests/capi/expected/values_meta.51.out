@@ -1,0 +1,60 @@
+getmetatable plain table: 0 pushed=0
+getmetatable string: 1 pushed=1
+getmetatable number: 0 pushed=0
+getmetatable nil: 0 pushed=0
+getmetatable absent index: 0 top=1
+setmetatable table: 1 top=1
+metatable back: function
+tt	tbl:k
+raw metatable despite __metatable: s:locked
+setmetatable num: 1 top=1
+num	num:x	num:y
+getmetatable num: 1 pushed=1
+getmetatable cleared: 0 pushed=0
+setmetatable bool: 1 top=1
+bool	bool:x	bool:y
+getmetatable bool: 1 pushed=1
+getmetatable cleared: 0 pushed=0
+setmetatable light: 1 top=1
+light	light:x
+getmetatable light: 1 pushed=1
+getmetatable cleared: 0 pushed=0
+setmetatable thread: 1 top=1
+thread	thread:x	thread:y
+getmetatable thread: 1 pushed=1
+getmetatable cleared: 0 pushed=0
+setmetatable fn: 1 top=1
+fn	fn:x	fn:y
+getmetatable fn: 1 pushed=1
+getmetatable cleared: 0 pushed=0
+setmetatable nilv: 1 top=1
+nilv	nilv:x
+getmetatable nilv: 1 pushed=1
+getmetatable cleared: 0 pushed=0
+collect table with __gc
+collect table with __gc added later
+collect userdata with __gc
+gc userdata
+collect userdata with __gc added later
+gc userdata late
+collect userdata whose metatable was removed
+getfenv lua function: table globals=1 mark=nil
+setfenv lua function: 1 top=1
+getfenv lua function: table globals=0 mark=s:lf
+lua function sees: s:lf
+getfenv lua function without globals: table globals=1 mark=nil
+getfenv C function: table globals=1 mark=nil
+setfenv C function: 1 top=1
+getfenv C function: table globals=0 mark=s:cf
+getfenv userdata made in it: table globals=0 mark=s:cf
+getfenv library function: table globals=1 mark=nil
+getfenv thread: table globals=1 mark=nil
+setfenv thread: 1 top=1
+getfenv thread: table globals=0 mark=s:th
+getfenv userdata: table globals=1 mark=nil
+setfenv userdata: 1 top=1
+getfenv userdata: table globals=0 mark=s:ud
+debug.getfenv	ud
+getfenv number: nil globals=0 mark=
+setfenv number: 0 top=1
+final top=0

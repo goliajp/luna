@@ -173,9 +173,12 @@ impl Vm {
             Value::Coro(co) => format!("thread: {}", c_pointer(co.as_ptr() as usize)).into_bytes(),
             // PUC names file handles `file (0x…)`; a bare userdata is
             // `userdata: 0x…`. The io library overrides this via __tostring.
-            Value::Userdata(u) => {
-                format!("userdata: {}", c_pointer(u.as_ptr() as usize)).into_bytes()
-            }
+            // a userdata the C API made is known to C by its block's address
+            Value::Userdata(u) => format!(
+                "userdata: {}",
+                c_pointer(self.host_userdata_ptr(u) as usize)
+            )
+            .into_bytes(),
             // PUC `lua_topointer`/tostring on light udata: "userdata: 0x…"
             // (the "light" qualifier only appears in `luaL_typeerror`).
             Value::LightUserdata(p) => format!("userdata: {}", c_pointer(p as usize)).into_bytes(),
