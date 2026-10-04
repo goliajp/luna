@@ -26,8 +26,15 @@ on:
 
 jobs:
   diff-puc:
-    name: luna-vs-PUC 5.5 byte-diff
-    runs-on: ubuntu-latest
+    name: luna-vs-PUC byte-diff (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # PUC's floating-point results depend on how the C compiler builds
+        # it for the architecture (x87 fprem inlined for fmod on x86,
+        # fused multiply-subtract on aarch64), so both are diffed
+        os: [ubuntu-latest, ubuntu-26.04-arm]
     timeout-minutes: 30
     env:
       RUST_BACKTRACE: full

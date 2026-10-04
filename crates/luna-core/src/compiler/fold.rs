@@ -183,7 +183,7 @@ fn fold_nums(op: BinOp, l: Num, r: Num, version: LuaVersion) -> Option<Num> {
         // a zero's sign is kept in the constant table, that is observable
         (BinOp::Mod, a, b) if one_type => {
             let (a, b) = (a.as_f64(), b.as_f64());
-            Float(a - (a / b).floor() * b)
+            Float(crate::numeric::nummod_floor(a, b))
         }
         (BinOp::Pow, a, b) if one_type => Float(a.as_f64().powf(b.as_f64())),
         (BinOp::Add, Int(a), Int(b)) => Int(a.wrapping_add(b)),
