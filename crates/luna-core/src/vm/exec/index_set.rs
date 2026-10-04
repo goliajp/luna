@@ -83,7 +83,13 @@ pub(super) unsafe fn table_raw_set_at(
 #[cold]
 #[inline(never)]
 fn table_raw_set_cold(tb: &mut Table, heap: &mut Heap, key: Value, v: Value) -> bool {
-    tb.set_inlined(heap, key, v).is_ok()
+    match tb.set_inlined(heap, key, v) {
+        Ok(()) => true,
+        Err(e) => {
+            heap.store_failed = matches!(e, crate::runtime::table::TableError::Memory(_));
+            false
+        }
+    }
 }
 
 #[cold]

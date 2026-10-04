@@ -197,15 +197,23 @@ impl Vm {
 
     #[doc(hidden)]
     pub fn find_or_create_upval(&mut self, slot: u32) -> Gc<Upvalue> {
+        self.try_find_or_create_upval(slot).unwrap_or_else(|_| {
+            crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Upvalue>())
+        })
+    }
+
+    /// [`Vm::find_or_create_upval`], raising a memory error when a new
+    /// upvalue cannot be made or listed.
+    pub(crate) fn try_find_or_create_upval(&mut self, slot: u32) -> Result<Gc<Upvalue>, LuaError> {
         match self.open_upvals.binary_search_by_key(&slot, |&(s, _)| s) {
-            Ok(i) => self.open_upvals[i].1,
+            Ok(i) => Ok(self.open_upvals[i].1),
             Err(i) => {
-                let uv = self.heap.new_upvalue(UpvalState::Open {
-                    slot,
-                    thread: self.current,
-                });
-                self.open_upvals.insert_or_abort(i, (slot, uv));
-                uv
+                let thread = self.current;
+                let uv = self
+                    .retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Open { slot, thread }))?;
+                // the new upvalue is young while it is not listed yet
+                self.retry_oom(|vm| vm.open_upvals.insert(i, (slot, uv)))?;
+                Ok(uv)
             }
         }
     }

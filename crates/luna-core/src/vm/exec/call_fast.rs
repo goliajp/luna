@@ -21,11 +21,14 @@ impl Vm {
         let p = cl.proto;
         let base = func_slot + 1;
         let need = base as usize + p.max_stack as usize;
+        // a frame stack with no room left is grown by `begin_call`, where
+        // running out of memory can be raised
         if self.jit.enabled
             || p.is_vararg
             || p.has_compat_vararg_arg
             || func_slot + 256 > MAX_LUA_STACK
             || self.stack.len() < need
+            || self.frames.len() == self.frames.capacity()
         {
             return None;
         }
@@ -183,8 +186,10 @@ impl Vm {
             }
             Err(payload) => {
                 let msg = panic_payload_str(&payload);
-                let s = Value::Str(self.heap.intern(format!("native panic: {msg}").as_bytes()));
-                Err(LuaError(s))
+                match self.fmt_str(format_args!("native panic: {msg}")) {
+                    Ok(s) => Err(LuaError(Value::Str(s))),
+                    Err(e) => Err(e),
+                }
             }
         };
         match result {
@@ -217,14 +222,13 @@ impl Vm {
         // the caller's registers sit below `func_slot`; the native's own
         // arguments stay rooted too (see `begin_call`)
         self.gc_top = func_slot + nargs + 1;
-        self.running_natives
-            .push_or_abort(crate::vm::callstack::NativeAct {
-                nc,
-                func_slot,
-                nargs,
-                depth: self.frames.len() as u32,
-                ccmt,
-            });
+        self.push_native(crate::vm::callstack::NativeAct {
+            nc,
+            func_slot,
+            nargs,
+            depth: self.frames.len() as u32,
+            ccmt,
+        })?;
         let nret = self.invoke_native(nc, func_slot, nargs)?;
         // the native may have armed a hook, whose return event it gets
         self.finish_native_call(func_slot, nargs, nret, nresults)
@@ -260,9 +264,7 @@ impl Vm {
         {
             let res_dst = func_slot + nargs + 1;
             let need = (res_dst + nret) as usize;
-            if self.stack.len() < need {
-                self.grow_stack_or_abort(need);
-            }
+            self.grow_stack(need)?;
             for i in (0..nret).rev() {
                 self.stack[(res_dst + i) as usize] = self.stack[(func_slot + i) as usize];
             }

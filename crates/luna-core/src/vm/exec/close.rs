@@ -15,11 +15,13 @@ impl Vm {
             // value", the name as `luaG_findlocal` gives it — the frame's
             // locvars at this pc, else "(temporary)".
             let f = self.top_frame();
-            let reg = slot - f.base;
-            let pc = (f.pc as usize).saturating_sub(1);
-            let name = crate::vm::objname::getlocalname(&f.closure.proto, reg, pc)
-                .unwrap_or("(temporary)");
-            return Err(self.rt_err(&format!("variable '{name}' got a non-closable value")));
+            let (proto, reg, pc) = (
+                f.closure.proto,
+                slot - f.base,
+                (f.pc as usize).saturating_sub(1),
+            );
+            let name = crate::vm::objname::getlocalname(&proto, reg, pc).unwrap_or("(temporary)");
+            return Err(self.rt_errf(format_args!("variable '{name}' got a non-closable value")));
         }
         // compiled code registers in register order and closes before it
         // registers a slot again; only a crafted chunk (`TBC R0; TBC R0`)
@@ -27,8 +29,8 @@ impl Vm {
         if self.tbc.last().is_some_and(|&s| s >= slot) {
             return Err(self.rt_err("'<close>' state corrupted"));
         }
-        self.tbc.push_or_abort(slot);
-        Ok(())
+        // the value is in its register, a root
+        self.retry_oom(|vm| vm.tbc.push(slot))
     }
 
     /// Close upvalues and run `__close` handlers for slots ≥ `from`
@@ -61,7 +63,7 @@ impl Vm {
                 // at OP_TBC (else we would have errored there) but has since
                 // been removed/replaced. Treat as a non-callable target.
                 let tn = self.obj_typename(v);
-                let e = self.rt_err(&format!(
+                let e = self.rt_errf(format_args!(
                     "attempt to call a {tn} value (metamethod 'close')"
                 ));
                 pending = Some(e.0);
@@ -154,7 +156,7 @@ impl Vm {
             let mm = self.get_mm(v, Mm::Close);
             if mm.is_nil() {
                 let tn = self.obj_typename(v);
-                let e = self.rt_err(&format!(
+                let e = self.rt_errf(format_args!(
                     "attempt to call a {tn} value (metamethod 'close')"
                 ));
                 pending = Some(e.0);
@@ -170,9 +172,7 @@ impl Vm {
             let error_close = pending.is_some();
             let call_slot = func_slot + error_close as u32;
             let need = (call_slot + 3) as usize;
-            if self.stack.len() < need {
-                self.grow_stack_or_abort(need);
-            }
+            self.grow_stack(need)?;
             if let Some(e) = pending {
                 self.stack[func_slot as usize] = e;
             }
@@ -203,20 +203,20 @@ impl Vm {
             let saved_tm = self
                 .pending_tm
                 .replace(crate::runtime::function::FrameTm::Close);
-            frames_push_sync(
-                &mut self.frames,
-                &mut self.frames_top,
-                &mut self.trap,
-                CallFrame::Cont(NativeCont {
-                    kind: ContKind::Close(CloseCont {
-                        from,
-                        has_pending: error_close,
-                        after,
-                    }),
-                    func_slot,
-                    nresults: 0,
+            let cf = CallFrame::Cont(NativeCont {
+                kind: ContKind::Close(CloseCont {
+                    from,
+                    has_pending: error_close,
+                    after,
                 }),
-            );
+                func_slot,
+                nresults: 0,
+            });
+            if let Err(e) = self.push_cf(cf) {
+                self.pending_tm = saved_tm;
+                self.closing_err = saved_err;
+                return Err(e);
+            }
             // PUC luaF_close runs a normal close *within* the closing
             // function's activation (debug parent = that function); during an
             // error unwind the function's frame is already gone and the

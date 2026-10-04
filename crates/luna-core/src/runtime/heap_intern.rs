@@ -56,6 +56,25 @@ impl Heap {
         }
     }
 
+    /// The interned string with `bytes`, if one has been made; never
+    /// allocates. A short name no string exists for is no table's key.
+    pub fn find_interned(&self, bytes: &[u8]) -> Option<Gc<LuaStr>> {
+        if bytes.len() > string::MAX_SHORT_LEN {
+            return None;
+        }
+        let p = self.strings.find(bytes, self.seed)?;
+        // SAFETY: `p` is a string in the intern table, so allocated; a
+        // dead-white one found mid-sweep is kept from this cycle's sweep by
+        // the recoloring `try_intern` does
+        unsafe {
+            let f = (*(p as *mut GcHeader)).flags;
+            if is_white(f) && (f & self.current_white) == 0 {
+                return None;
+            }
+            Some(Gc::from_ptr(p))
+        }
+    }
+
     /// Allocate a [`NativeClosure`] wrapping host function `f` with the
     /// given captured upvalues.
     pub fn new_native(

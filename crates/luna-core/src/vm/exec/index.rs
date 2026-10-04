@@ -336,6 +336,29 @@ impl Vm {
         }
     }
 
+    /// [`Vm::raw_set`] when a first attempt at the same store already ran
+    /// out of memory: the emergency collection, then one more attempt.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn raw_set_after_oom(
+        &mut self,
+        t: Gc<Table>,
+        key: Value,
+        v: Value,
+    ) -> Result<(), LuaError> {
+        if !self.emergency_collect() {
+            return Err(crate::runtime::mem::Oom(self.heap.mem()).into());
+        }
+        if !self.heap.store_barrier(t) {
+            return Err(self.readonly_error());
+        }
+        // SAFETY: `t` is a table the caller holds; the borrow lives for the one `set_inlined`, which does not collect
+        match unsafe { t.as_mut() }.set_inlined(&mut self.heap, key, v) {
+            Ok(()) => Ok(()),
+            Err(e) => Err(self.table_error_cold(e)),
+        }
+    }
+
     #[cold]
     #[inline(never)]
     fn table_error_cold(&mut self, e: TableError) -> LuaError {

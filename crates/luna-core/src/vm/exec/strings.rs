@@ -34,7 +34,8 @@ impl Vm {
                 }
                 let mut combined = a;
                 combined.extend_from_slice(&b);
-                Ok(Some(Value::Str(self.heap.intern(&combined))))
+                let s = self.retry_oom(|vm| vm.heap.try_intern(&combined))?;
+                Ok(Some(Value::Str(s)))
             }
             _ => Ok(None),
         }
@@ -81,12 +82,7 @@ impl Vm {
                         mm = self.get_mm(y, Mm::Concat);
                     }
                     if mm.is_nil() {
-                        let legacy = self.float_fmt();
-                        let bad = if concat_piece(x, legacy).is_none() {
-                            x
-                        } else {
-                            y
-                        };
+                        let bad = if !is_concat_piece(x) { x } else { y };
                         return Err(self.type_err("concatenate", bad));
                     }
                     // result lands at i-1, dropping y (top→i); resume continues.

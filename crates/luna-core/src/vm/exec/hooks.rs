@@ -170,7 +170,7 @@ impl Vm {
         }
         let saved_top = self.top;
         let saved_len = self.stack.len();
-        let name = Value::Str(self.heap.intern(event));
+        let name = self.str_value(event)?;
         let lv = line.map_or(Value::Nil, Value::Int);
         self.in_hook = true;
         // PUC `db_sethook`'s C trampoline `hookf` sits between the engine and

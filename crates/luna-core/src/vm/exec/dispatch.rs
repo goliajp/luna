@@ -75,9 +75,7 @@ impl Vm {
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
             let total = crate::vm::builtins::pairs_mm_results(self) as u32;
             let need = (nc.func_slot + total) as usize;
-            if self.stack.len() < need {
-                self.grow_stack_or_abort(need);
-            }
+            self.grow_stack(need)?;
             // the metamethod ran one slot above pairs's own
             let first = nc.func_slot + 1;
             let n = (self.top - first).min(total);

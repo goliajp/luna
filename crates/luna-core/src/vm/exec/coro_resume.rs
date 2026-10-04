@@ -196,15 +196,22 @@ impl Vm {
                             0,
                             0,
                         ));
+                        // without the memory for the copy the dead thread just
+                        // has no traceback to show
                         let mem = self.heap.mem();
-                        let mut kept = LVec::new(mem);
-                        for l in &levels {
-                            kept.push_or_abort(LVec::from_slice_or_abort(mem, l));
+                        let copy = || -> Result<_, crate::runtime::mem::Oom> {
+                            let mut kept = LVec::with_capacity(mem, levels.len())?;
+                            for l in &levels {
+                                kept.push(LVec::from_slice(mem, l)?)?;
+                            }
+                            Ok((LVec::from_slice(mem, &tb)?, kept))
+                        };
+                        if let Ok((tb, kept)) = copy() {
+                            // SAFETY: `co` is still `self.current`, a root, and its frames have unwound, so `m` is the only reference into it for these two stores
+                            let m = unsafe { co.as_mut() };
+                            m.error_traceback = Some(tb);
+                            m.error_levels = Some(kept);
                         }
-                        // SAFETY: `co` is still `self.current`, a root, and its frames have unwound, so `m` is the only reference into it for these two stores
-                        let m = unsafe { co.as_mut() };
-                        m.error_traceback = Some(LVec::from_slice_or_abort(mem, &tb));
-                        m.error_levels = Some(kept);
                     }
                     if let Err(e) = drive {
                         let kind = self.error_status(e.0, special_before);
@@ -252,8 +259,9 @@ impl Vm {
         args: &[Value],
     ) -> Result<Vec<Value>, LuaError> {
         self.stack.clear();
-        self.stack.push_or_abort(body);
-        self.stack.extend_from_slice_or_abort(args);
+        self.grow_stack(1 + args.len())?;
+        self.stack[0] = body;
+        self.stack[1..].copy_from_slice(args);
         self.top = self.stack.len() as u32;
         match self.begin_call(0, Some(args.len() as u32), -1, true) {
             Ok(true) => self.exec_with(1),
@@ -279,9 +287,7 @@ impl Vm {
             .unwrap_or(0);
         if fslot == HOOK_YIELD_SLOT {
             // a hook yielded: the instruction it interrupted runs now
-            if self.stack.len() < frame_need {
-                self.grow_stack_or_abort(frame_need);
-            }
+            self.grow_stack(frame_need)?;
             self.hook_resumed = self.version >= LuaVersion::Lua52;
             return self.exec_with(1);
         }
@@ -291,9 +297,7 @@ impl Vm {
             _ => None,
         };
         let need = frame_need.max((fslot + n) as usize);
-        if self.stack.len() < need {
-            self.grow_stack_or_abort(need);
-        }
+        self.grow_stack(need)?;
         for (i, &v) in args.iter().enumerate() {
             self.stack[fslot as usize + i] = v;
         }
@@ -309,14 +313,13 @@ impl Vm {
         if !host_cont {
             // the yield is a level of its own while its return hook runs
             if let Some(nc) = yielder {
-                self.running_natives
-                    .push_or_abort(crate::vm::callstack::NativeAct {
-                        nc,
-                        func_slot: fslot,
-                        nargs: 0,
-                        depth: self.frames.len() as u32,
-                        ccmt: 0,
-                    });
+                self.push_native(crate::vm::callstack::NativeAct {
+                    nc,
+                    func_slot: fslot,
+                    nargs: 0,
+                    depth: self.frames.len() as u32,
+                    ccmt: 0,
+                })?;
             }
             let r = self.hook_return(true, 1, n);
             if yielder.is_some() {

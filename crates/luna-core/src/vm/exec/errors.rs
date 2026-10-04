@@ -99,7 +99,10 @@ impl Vm {
     /// object becomes "error in error handling" (`luaD_seterrorobj`).
     pub(crate) fn errerr(&mut self) -> Value {
         self.errerr_raised += 1;
-        Value::Str(self.heap.intern(b"error in error handling"))
+        match self.alloc_str(b"error in error handling") {
+            Ok(s) => Value::Str(s),
+            Err(e) => e.0,
+        }
     }
 
     /// PUC's LUA_ERRMEM: an allocation was refused, and the error object is
@@ -148,7 +151,7 @@ impl Vm {
         if bytes.len() > crate::runtime::string::MAX_LEN {
             return Err(self.rt_err("string length overflow"));
         }
-        Ok(Value::Str(self.heap.intern(bytes)))
+        self.str_value(bytes)
     }
 
     pub(crate) fn type_err(&mut self, what: &str, v: Value) -> LuaError {

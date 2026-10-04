@@ -27,8 +27,7 @@ impl Vm {
         // generic Runtime error and retry / give up
         // accordingly.
         self.last_error_kind = crate::vm::error::LuaErrorKind::InstrBudget;
-        let s = Value::Str(self.heap.intern(b"instruction budget exceeded"));
-        LuaError(s)
+        self.plain_err("instruction budget exceeded")
     }
 
     #[cold]
@@ -71,8 +70,7 @@ impl Vm {
         self.collect_garbage();
         if self.heap.bytes() > cap {
             self.heap.mem_cap = None;
-            let s = Value::Str(self.heap.intern(b"memory cap exceeded"));
-            return Err(LuaError(s));
+            return Err(self.plain_err("memory cap exceeded"));
         }
         Ok(())
     }

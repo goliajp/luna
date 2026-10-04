@@ -86,9 +86,7 @@ impl Vm {
                                 Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
                                 _ => "no message".to_string(),
                             };
-                            let msg = format!("error in __gc metamethod ({inner})");
-                            let s = Value::Str(self.heap.intern(msg.as_bytes()));
-                            LuaError(s)
+                            self.plain_errf(format_args!("error in __gc metamethod ({inner})"))
                         } else {
                             e
                         };

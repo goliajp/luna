@@ -71,9 +71,9 @@ impl Vm {
                 // a sync `eval`/`call_value` path (would have no
                 // executor to drive the returned future).
                 if !self.async_mode {
-                    let s = Value::Str(self.heap.intern(b"async native called in sync context"));
+                    let e = self.plain_err("async native called in sync context");
                     self.last_error_kind = crate::vm::error::LuaErrorKind::Runtime;
-                    return Some(Err(LuaError(s)));
+                    return Some(Err(e));
                 }
                 // Same root-up bookkeeping as the sync path:
                 // pin args + result-count expectation so a
