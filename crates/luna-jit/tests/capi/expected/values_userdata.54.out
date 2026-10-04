@@ -25,6 +25,6 @@ setiuservalue none: 0
 getiuservalue 1: 0 nil top=2
 getiuservalue 2: -1 nil top=2
 file user values	1
-count grew	false
+count grew	true
 count shrank	true
 final top=0
