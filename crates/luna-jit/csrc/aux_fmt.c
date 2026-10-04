@@ -8,30 +8,42 @@
 #include <string.h>
 #include "auxlib.h"
 
-/* the result being built; starts in `space`, moves to the heap when it
-   outgrows it */
+/* the result being built; starts in `space`, moves to a block of the
+   state's allocation function when it outgrows it */
 struct fbuf {
+  lua_State *L;
   char *b;
   size_t n, size;
   char space[256];
 };
 
+static void fb_free(struct fbuf *fb) {
+  if (fb->b != fb->space) {
+    void *ud;
+    lua_Alloc allocf = lua_getallocf(fb->L, &ud);
+    allocf(ud, fb->b, fb->size, 0);
+  }
+}
+
 static void fb_add(struct fbuf *fb, const char *s, size_t l) {
   if (fb->size - fb->n < l) {
+    void *ud;
+    lua_Alloc allocf = lua_getallocf(fb->L, &ud);
     size_t nsize = (fb->size + l) * 2;
-    char *nb = (char *)malloc(nsize);
-    if (nb == NULL) abort();
+    char *nb = (char *)allocf(ud, NULL, 0, nsize);
+    if (nb == NULL) {
+      /* PUC raises the memory error from its allocation */
+      fb_free(fb);
+      luna_capi_raise_mem(fb->L);
+      luna_check(fb->L);
+    }
     memcpy(nb, fb->b, fb->n);
-    if (fb->b != fb->space) free(fb->b);
+    fb_free(fb);
     fb->b = nb;
     fb->size = nsize;
   }
   memcpy(fb->b + fb->n, s, l);
   fb->n += l;
-}
-
-static void fb_free(struct fbuf *fb) {
-  if (fb->b != fb->space) free(fb->b);
 }
 
 static void fb_num(struct fbuf *fb, lua_State *L, int isint, lua_Integer i, lua_Number n) {
@@ -68,6 +80,7 @@ LUNA_HIDDEN const char *luna_c_lua_pushvfstring(lua_State *L, const char *fmt,
   int v = VNUM(L);
   struct fbuf fb;
   const char *e;
+  fb.L = L;
   fb.b = fb.space;
   fb.n = 0;
   fb.size = sizeof(fb.space);
@@ -139,8 +152,13 @@ LUNA_HIDDEN const char *luna_c_lua_pushvfstring(lua_State *L, const char *fmt,
   }
   fb_add(&fb, fmt, strlen(fmt));
   {
-    const char *r = lua_pushlstring(L, fb.b, fb.n);
+    /* a block is freed before what the push raised is thrown */
+    const char *r;
+    if (fb.b == fb.space)
+      return lua_pushlstring(L, fb.b, fb.n);
+    r = luna_capi_lua_pushlstring(L, fb.b, fb.n);
     fb_free(&fb);
+    luna_check(L);
     return r;
   }
 }

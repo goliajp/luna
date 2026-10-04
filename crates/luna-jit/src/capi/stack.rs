@@ -65,7 +65,7 @@ pub(super) fn settop(api: &mut Api, idx: c_int) {
         api.truncate(new_top);
     } else {
         let n = new_top - top;
-        api.push_all(&vec![Value::Nil; n]);
+        api.push_all_in_room(&vec![Value::Nil; n]);
     }
 }
 
@@ -225,7 +225,8 @@ pub unsafe extern "C" fn lua_checkstack(L: *mut LuaState, n: c_int) -> c_int {
     } else {
         api.top()
     };
-    c_int::from(n <= max && used + n <= max)
+    // PUC grows the stack here (5.2 on report a failure to grow as 0)
+    c_int::from(n <= max && used + n <= max && api.reserve(n))
 }
 
 /// PUC `lua_xmove`: pop `n` values from `from` and push them on `to`, two
@@ -249,5 +250,5 @@ pub unsafe extern "C" fn lua_xmove(from: *mut LuaState, to: *mut LuaState, n: c_
     };
     // SAFETY: the caller's contract; the context for `from` is gone
     let mut api = unsafe { Api::new(to) };
-    api.push_all(&vals);
+    api.push_all_in_room(&vals);
 }

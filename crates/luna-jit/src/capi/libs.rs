@@ -4,6 +4,7 @@
 //! a library itself is made by luna-core, through `luna_capi_openlib`.
 
 use super::*;
+use luna_core::vm::exec::host_c::HostOpenError;
 
 c_exports! {
     luaopen_base => luna_c_luaopen_base,
@@ -48,13 +49,17 @@ pub unsafe extern "C" fn luna_capi_openlib(L: *mut LuaState, name: *const c_char
     let name = std::str::from_utf8(name).expect("a library name is ASCII");
     match api.vm.host_open_lib(name) {
         Ok(vals) => {
-            api.push_all(&vals);
+            or_raise!(api, api.push_all(&vals), 0);
             vals.len() as c_int
         }
-        Err(module) => {
-            let s = api.str(module.as_bytes());
+        Err(HostOpenError::Conflict(module)) => {
+            let s = or_raise!(api, api.str(module.as_bytes()), 0);
             api.push(s);
             -1
+        }
+        Err(HostOpenError::Error(e)) => {
+            api.raise(e);
+            0
         }
     }
 }

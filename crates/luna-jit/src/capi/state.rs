@@ -96,9 +96,19 @@ fn existing(co: Gc<Coro>) -> Option<*mut LuaState> {
     Some(unsafe { &raw mut (*b).st })
 }
 
+/// PUC `LUA_MINSTACK`: the free slots a thread's stack has when C gets it
+/// and when a C function starts, so that pushes within them need no memory.
+pub(super) const MINSTACK: usize = 20;
+
 /// Make the `LuaState` of `co`, with `extra` as its extra space, in a
-/// block of the state's allocation context that the thread keeps.
-fn new_thread_state(g: *mut Global, co: Gc<Coro>, extra: [u8; EXTRASPACE]) -> *mut LuaState {
+/// block of the state's allocation context that the thread keeps, and
+/// room for `MINSTACK` values on its C stack; `None` when the memory for
+/// them cannot be had.
+fn new_thread_state(
+    g: *mut Global,
+    co: Gc<Coro>,
+    extra: [u8; EXTRASPACE],
+) -> Option<*mut LuaState> {
     // SAFETY: `g` is the live global record of `co`'s state, whose Vm
     // pointer is live
     let mem = unsafe { (*(*g).vm).heap.mem() };
@@ -113,30 +123,45 @@ fn new_thread_state(g: *mut Global, co: Gc<Coro>, extra: [u8; EXTRASPACE]) -> *m
                 calls: LVec::new(mem),
                 status: LUA_OK,
                 pending_yield: None,
-                hook: CHook::default(),
+                hook: CHook {
+                    strs: super::debug::CStrings::new(mem),
+                    refs: super::debug::LevelRefs::new(mem),
+                    ..CHook::default()
+                },
                 tbc: LVec::new(mem),
                 parked: None,
             },
         },
         BlockKind::Thread,
     )
-    .unwrap_or_else(|_| std::alloc::handle_alloc_error(std::alloc::Layout::new::<ThreadBox>()));
+    .ok()?;
+    // SAFETY: `co` is a live thread the caller holds and the Vm is not
+    // touching it now; the borrow covers the reservation
+    unsafe { co.as_mut() }.host_stack.reserve(MINSTACK).ok()?;
     let p = b.as_ptr().cast::<ThreadBox>();
     // SAFETY: `co` is a live thread the caller holds and the Vm is not
     // touching it now; the borrow covers one store
     unsafe { co.as_mut() }.host_state = Some(b);
     // SAFETY: `p` is the live block just stored in the thread
-    unsafe { &raw mut (*p).st }
+    Some(unsafe { &raw mut (*p).st })
 }
 
 /// The `lua_State` of thread `co` of the state `vm` belongs to, made when
 /// the thread is (see `thread_created`) with a copy of the main thread's
 /// extra space, as `lua_newthread` makes it. A coroutine that has not
 /// started has its body on its stack, as `coroutine.create` leaves it in
-/// PUC.
+/// PUC. Making it can fail only when memory runs out; the process ends then
+/// (see [`try_state_of`]).
 pub(super) fn state_of(vm: &mut Vm, co: Gc<Coro>) -> *mut LuaState {
+    try_state_of(vm, co)
+        .unwrap_or_else(|| std::alloc::handle_alloc_error(std::alloc::Layout::new::<ThreadBox>()))
+}
+
+/// [`state_of`], `None` when the thread's state is not made yet and the
+/// memory for it cannot be had.
+pub(super) fn try_state_of(vm: &mut Vm, co: Gc<Coro>) -> Option<*mut LuaState> {
     if let Some(l) = existing(co) {
-        return l;
+        return Some(l);
     }
     let main = existing(vm.host_main_thread()).expect("the C API made this state");
     // SAFETY: `main` is the live main thread's state, and `ThreadBox` puts
@@ -145,14 +170,15 @@ pub(super) fn state_of(vm: &mut Vm, co: Gc<Coro>) -> *mut LuaState {
         let b = main.cast::<u8>().sub(EXTRASPACE).cast::<ThreadBox>();
         ((*main).g, (*b).extra)
     };
-    let l = new_thread_state(g, co, extra);
+    let l = new_thread_state(g, co, extra)?;
     if !co.started && !co.body.is_nil() {
         // SAFETY: `co` is held by the caller and has not started, so no
-        // context is loaded from it; the borrow covers one push
+        // context is loaded from it; the borrow covers one push, into the
+        // room `new_thread_state` reserved
         unsafe { co.as_mut() }.host_stack.push_or_abort(co.body);
         vm.heap.barrier_back(co);
     }
-    l
+    Some(l)
 }
 
 // SAFETY: the declarations match the definitions in `csrc/shim_core.c`;
@@ -221,7 +247,14 @@ fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: u32) -> *mut
     let mem = unsafe { MemOwner::raw(alloc, ud, v) };
     mem.ctx()
         .add_external(std::mem::size_of::<Global>() + std::mem::size_of::<Vm>());
-    let mut vm = Vm::new_minimal_with_mem(v, mem);
+    let Some(mut vm) = Vm::try_new_minimal_with_mem(v, mem) else {
+        // SAFETY: both blocks are live, of these sizes, and unused
+        unsafe {
+            alloc(ud, vm_block, std::mem::size_of::<Vm>(), 0);
+            alloc(ud, block, std::mem::size_of::<Global>(), 0);
+        }
+        return std::ptr::null_mut();
+    };
     crate::install_default_jit(&mut vm);
     vm.set_host_cont_hooks(ccall::CONT_HOOKS);
     vm.host_gc_start_incremental();
@@ -248,9 +281,25 @@ fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: u32) -> *mut
     };
     // SAFETY: `vm_ptr` was just written and nothing else refers to it yet
     let vmr = unsafe { &mut *vm_ptr };
-    vmr.host_registry();
     let main = vmr.host_main_thread();
-    new_thread_state(g, main, [0; EXTRASPACE])
+    let l = match vmr.host_make_registry() {
+        Ok(_) => new_thread_state(g, main, [0; EXTRASPACE]),
+        Err(_) => None,
+    };
+    match l {
+        Some(l) => l,
+        None => {
+            // SAFETY: nothing but this function has seen the state: the Vm
+            // is dropped, freeing every block it allocated, then the two
+            // blocks go back to the host's function
+            unsafe {
+                std::ptr::drop_in_place(vm_ptr);
+                alloc(ud, vm_block, std::mem::size_of::<Vm>(), 0);
+                alloc(ud, block, std::mem::size_of::<Global>(), 0);
+            }
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// The dialect whose `LUA_VERSION_NUM` is `n`.

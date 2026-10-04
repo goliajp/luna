@@ -28,6 +28,23 @@ use luna_core::vm::{LuaError, Vm};
 use std::ffi::{CStr, c_void};
 use std::os::raw::{c_char, c_int};
 
+/// The value of the `Result` `r`, or: raise its error from this API call
+/// and return `ret` (nothing when left out).
+macro_rules! or_raise {
+    ($api:expr, $r:expr, $ret:expr) => {
+        match $r {
+            Ok(v) => v,
+            Err(e) => {
+                $api.raise(e);
+                return $ret;
+            }
+        }
+    };
+    ($api:expr, $r:expr) => {
+        or_raise!($api, $r, ())
+    };
+}
+
 #[macro_use]
 mod exports;
 

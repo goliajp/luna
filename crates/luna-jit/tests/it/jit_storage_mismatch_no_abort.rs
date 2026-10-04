@@ -126,14 +126,15 @@ fn repeated_compile_under_mismatch_remains_stable() {
 fn capi_zero_result_callback_no_sigabrt_post_fix() {
     use luna_jit::capi::*;
     use std::ffi::CString;
-    // SAFETY: the C API defines both (in C, exported under these names) with
-    // these signatures; neither raises for a fresh state and a short chunk.
+    // SAFETY: the C API defines these (in C, exported under these names) with
+    // these signatures; none raises for a fresh state and a short chunk.
     // C sees `lua_State` as opaque
     #[allow(improper_ctypes)]
     unsafe extern "C" {
         fn luaL_openlibs(L: *mut LuaState);
         fn luaL_loadstring(L: *mut LuaState, s: *const std::os::raw::c_char)
         -> std::os::raw::c_int;
+        fn lua_pushcclosure(L: *mut LuaState, f: LuaCFunction, n: std::os::raw::c_int);
     }
     extern "C" fn c_void(_: *mut LuaState) -> std::os::raw::c_int {
         0

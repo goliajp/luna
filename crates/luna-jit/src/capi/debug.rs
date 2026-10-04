@@ -4,6 +4,7 @@
 use super::api::C_UPVALS;
 use super::*;
 use luna_core::runtime::NativeClosure;
+use luna_core::runtime::mem::{LBox, LVec, MemRef};
 use luna_core::vm::exec::host_c::{HostAr, HostLevel};
 
 mod ar;
@@ -43,23 +44,36 @@ pub(super) struct LevelRef {
 }
 
 /// The `LevelRef`s handed out for a thread, one per level reference, at
-/// addresses that stay put as long as the thread.
+/// addresses that stay put as long as the thread, in blocks of the state's
+/// allocation context. The default has no context and holds nothing (a
+/// thread's own is made with [`LevelRefs::new`]).
 #[derive(Default)]
-pub(super) struct LevelRefs(std::collections::HashMap<usize, Box<LevelRef>>);
+pub(super) struct LevelRefs(Option<LVec<LBox<LevelRef>>>);
+
+impl LevelRefs {
+    pub(super) fn new(mem: MemRef) -> LevelRefs {
+        LevelRefs(Some(LVec::new(mem)))
+    }
+}
 
 /// What `i_ci` holds for level reference `r` of `l`'s thread: 5.1's is an
 /// `int` relative to the thread its functions are given, as PUC's.
-pub(super) fn encode_ref(api: &mut Api, l: *mut LuaState, r: usize) -> usize {
+/// `None` when there is no memory to keep the reference (the functions
+/// handing one out cannot raise, and report no such level then).
+pub(super) fn encode_ref(api: &mut Api, l: *mut LuaState, r: usize) -> Option<usize> {
     if api.version() == LuaVersion::Lua51 {
-        return r;
+        return Some(r);
     }
     // SAFETY: `l` is a live thread of the state; the borrow ends here
-    let refs = unsafe { &mut (*l).hook.refs };
-    let b = refs
-        .0
-        .entry(r)
-        .or_insert_with(|| Box::new(LevelRef { l, r }));
-    std::ptr::from_ref::<LevelRef>(b) as usize
+    let refs = unsafe { &mut (*l).hook.refs }.0.as_mut()?;
+    if let Some(b) = refs.iter().find(|b| b.r == r) {
+        return Some(std::ptr::from_ref::<LevelRef>(b) as usize);
+    }
+    refs.reserve(1).ok()?;
+    let b = LBox::new(refs.mem(), LevelRef { l, r }).ok()?;
+    let p = std::ptr::from_ref::<LevelRef>(&b) as usize;
+    refs.push_or_abort(b);
+    Some(p)
 }
 
 /// The thread and level reference `i_ci` holds; `None` for 5.1's lost
@@ -115,7 +129,9 @@ pub unsafe extern "C" fn lua_getstack(L: *mut LuaState, level: c_int, ar: *mut c
     if level >= n {
         return 0;
     }
-    let raw = encode_ref(&mut api, L, n - level);
+    let Some(raw) = encode_ref(&mut api, L, n - level) else {
+        return 0;
+    };
     d.set_level_ref(raw);
     1
 }

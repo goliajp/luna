@@ -15,22 +15,37 @@ static void *newud(lua_State *L, size_t sz) {
   return VNUM(L) >= 504 ? lua_newuserdatauv(L, sz, 0) : lua_newuserdata(L, sz);
 }
 
+/* give the buffer's block back to the state's allocation function */
+static void iobuf_free(lua_State *L, IoBuf *b) {
+  if (b->p != NULL) {
+    void *ud;
+    lua_Alloc allocf = lua_getallocf(L, &ud);
+    allocf(ud, b->p, b->cap, 0);
+    b->p = NULL;
+  }
+}
+
+/* PUC reads into a luaL_Buffer, which grows through the state's
+   allocation function and raises what lauxlib's buffer raises */
+static void iobuf_nomem(lua_State *L, IoBuf *b) {
+  iobuf_free(L, b);
+  if (VNUM(L) == 503) luna_c_luaL_error(L, "not enough memory for buffer allocation");
+  lua_pushliteral(L, "not enough memory");
+  lua_error(L);
+}
+
 char *luna_io_reserve(lua_State *L, IoBuf *b, size_t extra) {
   if (b->cap - b->n < extra) {
     size_t cap = b->cap ? b->cap : 64;
+    void *ud;
+    lua_Alloc allocf = lua_getallocf(L, &ud);
     char *p;
     while (cap - b->n < extra) {
-      if (cap > ((size_t)-1) / 2) {
-        free(b->p);
-        luna_c_luaL_error(L, "not enough memory");
-      }
+      if (cap > ((size_t)-1) / 2) iobuf_nomem(L, b);
       cap *= 2;
     }
-    p = (char *)realloc(b->p, cap);
-    if (p == NULL) {
-      free(b->p);
-      luna_c_luaL_error(L, "not enough memory");
-    }
+    p = (char *)allocf(ud, b->p, b->p != NULL ? b->cap : 0, cap);
+    if (p == NULL) iobuf_nomem(L, b);
     b->p = p;
     b->cap = cap;
   }
@@ -38,15 +53,16 @@ char *luna_io_reserve(lua_State *L, IoBuf *b, size_t extra) {
 }
 
 void luna_io_push(lua_State *L, IoBuf *b) {
-  /* copy into Lua before freeing: the push may raise a memory error */
-  char *p = b->p;
-  b->p = NULL;
-  if (p == NULL) {
+  const char *r;
+  if (b->p == NULL) {
     lua_pushlstring(L, "", 0);
     return;
   }
-  lua_pushlstring(L, p, b->n);
-  free(p);
+  /* the block goes back before what the push raised is thrown */
+  r = luna_capi_lua_pushlstring(L, b->p, b->n);
+  iobuf_free(L, b);
+  (void)r;
+  luna_check(L);
 }
 
 #define tolstream(L) ((luaL_Stream *)luna_c_luaL_checkudata(L, 1, LUA_FILEHANDLE))

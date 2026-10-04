@@ -58,25 +58,41 @@ pub(super) fn int_value(v: LuaVersion, n: i64) -> Value {
     }
 }
 
-/// Push the bytes `s[..len]` as a string and return the string's own
-/// bytes (NUL-terminated); `s` may be null when `len` is 0.
+c_exports! {
+    lua_pushlstring => luna_c_lua_pushlstring,
+    lua_pushstring => luna_c_lua_pushstring,
+    lua_pushexternalstring => luna_c_lua_pushexternalstring,
+    lua_pushcclosure => luna_c_lua_pushcclosure,
+    lua_pushcfunction => luna_c_lua_pushcfunction,
+}
+
+/// Push `bytes` as a string and return the string's own bytes
+/// (NUL-terminated), or raise the memory error and return null.
 fn push_bytes(api: &mut Api, bytes: &[u8]) -> *const c_char {
-    let st = api.vm.heap.intern(bytes);
-    api.push(Value::Str(st));
-    st.as_c_ptr()
+    match api.vm.host_str(bytes) {
+        Ok(v @ Value::Str(st)) => {
+            api.push(v);
+            st.as_c_ptr()
+        }
+        Ok(_) => unreachable!("a string value"),
+        Err(e) => {
+            api.raise(e);
+            std::ptr::null()
+        }
+    }
 }
 
 /// PUC `lua_pushlstring`: push `len` bytes from `s` (embedded zeros
 /// included) and return the copy Lua keeps.
 ///
 /// # Safety
-/// As [`lua_pushnil`]; `s` points at `len` readable bytes, or is null with
-/// `len` 0.
-// SAFETY: no other item in the link is named `lua_pushlstring`: the host
-// does not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
+/// `L` is a live thread of an open state, the innermost API call on it;
+/// `s` points at `len` readable bytes, or is null with `len` 0; called by
+/// the C wrapper, which throws what this raises.
+// SAFETY: no other item in the link is named `luna_capi_lua_pushlstring`;
+// the C wrapper is its only caller
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lua_pushlstring(
+pub unsafe extern "C" fn luna_capi_lua_pushlstring(
     L: *mut LuaState,
     s: *const c_char,
     len: usize,
@@ -92,32 +108,19 @@ pub unsafe extern "C" fn lua_pushlstring(
     push_bytes(&mut api, bytes)
 }
 
-/// `lua_pushlstring` for the C side (`lua_pushfstring`).
-///
-/// # Safety
-/// As [`lua_pushlstring`].
-// SAFETY: no other item in the link is named `luna_capi_pushlstring`; the C
-// side is its only caller
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_capi_pushlstring(
-    L: *mut LuaState,
-    s: *const c_char,
-    len: usize,
-) -> *const c_char {
-    // SAFETY: the caller's contract (# Safety)
-    unsafe { lua_pushlstring(L, s, len) }
-}
-
 /// PUC `lua_pushstring`: push the NUL-terminated `s`, or nil for null;
 /// returns the copy Lua keeps (null for null).
 ///
 /// # Safety
-/// As [`lua_pushnil`]; `s` is null or a NUL-terminated string.
-// SAFETY: no other item in the link is named `lua_pushstring`: the host does
-// not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
+/// As [`luna_capi_lua_pushlstring`]; `s` is null or a NUL-terminated
+/// string.
+// SAFETY: no other item in the link is named `luna_capi_lua_pushstring`;
+// the C wrapper is its only caller
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lua_pushstring(L: *mut LuaState, s: *const c_char) -> *const c_char {
+pub unsafe extern "C" fn luna_capi_lua_pushstring(
+    L: *mut LuaState,
+    s: *const c_char,
+) -> *const c_char {
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
     // SAFETY: `s` is null or NUL-terminated (# Safety)
@@ -132,17 +135,18 @@ pub unsafe extern "C" fn lua_pushstring(L: *mut LuaState, s: *const c_char) -> *
 
 /// PUC 5.5 `lua_pushexternalstring`: push the `len` bytes at `s` (with a
 /// NUL at `s[len]`) as a string. luna copies them and gives the buffer
-/// back to `falloc` at once, instead of keeping it until the string dies.
+/// back to `falloc` at once, instead of keeping it until the string dies;
+/// when the copy cannot be made the buffer stays the caller's, as PUC
+/// leaves it when it raises.
 ///
 /// # Safety
-/// As [`lua_pushnil`]; `s` points at `len + 1` readable bytes; `falloc` is
-/// null or a function that frees `s` when called as `falloc(ud, s, len +
-/// 1, 0)`.
-// SAFETY: no other item in the link is named `lua_pushexternalstring`: the
-// host does not link PUC's liblua next to this crate, which defines each
-// `lua_*` symbol once
+/// As [`luna_capi_lua_pushlstring`]; `s` points at `len + 1` readable
+/// bytes; `falloc` is null or a function that frees `s` when called as
+/// `falloc(ud, s, len + 1, 0)`.
+// SAFETY: no other item in the link is named
+// `luna_capi_lua_pushexternalstring`; the C wrapper is its only caller
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lua_pushexternalstring(
+pub unsafe extern "C" fn luna_capi_lua_pushexternalstring(
     L: *mut LuaState,
     s: *const c_char,
     len: usize,
@@ -150,8 +154,10 @@ pub unsafe extern "C" fn lua_pushexternalstring(
     ud: *mut c_void,
 ) -> *const c_char {
     // SAFETY: the caller's contract (# Safety)
-    let p = unsafe { lua_pushlstring(L, s, len) };
-    if let Some(f) = falloc {
+    let p = unsafe { luna_capi_lua_pushlstring(L, s, len) };
+    if let Some(f) = falloc
+        && !p.is_null()
+    {
         // SAFETY: `falloc` frees `s` this way (# Safety), and luna keeps no
         // pointer to it
         unsafe { f(ud, s.cast_mut().cast(), len + 1, 0) };
@@ -207,30 +213,30 @@ pub unsafe extern "C" fn lua_pushthread(L: *mut LuaState) -> c_int {
 /// its upvalues (popped).
 ///
 /// # Safety
-/// As [`lua_pushnil`]; `f` is a C function.
-// SAFETY: no other item in the link is named `lua_pushcclosure`: the host
-// does not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
+/// As [`luna_capi_lua_pushlstring`]; `f` is a C function.
+// SAFETY: no other item in the link is named `luna_capi_lua_pushcclosure`;
+// the C wrapper is its only caller
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lua_pushcclosure(L: *mut LuaState, f: LuaCFunction, n: c_int) {
+pub unsafe extern "C" fn luna_capi_lua_pushcclosure(L: *mut LuaState, f: LuaCFunction, n: c_int) {
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
-    let c = calls::new_c_closure(&mut api, f, usize::try_from(n).unwrap_or(0));
-    api.push(c);
+    match new_c_closure(&mut api, f, usize::try_from(n).unwrap_or(0)) {
+        Ok(c) => api.push(c),
+        Err(e) => api.raise(e),
+    }
 }
 
 /// `lua_pushcclosure(L, f, 0)`: the headers make `lua_pushcfunction` the
 /// macro PUC has; this is for callers that bind it by name.
 ///
 /// # Safety
-/// As [`lua_pushcclosure`].
-// SAFETY: no other item in the link is named `lua_pushcfunction`: the host
-// does not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
+/// As [`luna_capi_lua_pushcclosure`].
+// SAFETY: no other item in the link is named `luna_capi_lua_pushcfunction`;
+// the C wrapper is its only caller
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lua_pushcfunction(L: *mut LuaState, f: LuaCFunction) {
+pub unsafe extern "C" fn luna_capi_lua_pushcfunction(L: *mut LuaState, f: LuaCFunction) {
     // SAFETY: the caller's contract (# Safety)
-    unsafe { lua_pushcclosure(L, f, 0) };
+    unsafe { luna_capi_lua_pushcclosure(L, f, 0) };
 }
 
 /// PUC 5.2 `lua_pushunsigned`: an unsigned 32-bit value as a number.
@@ -278,4 +284,37 @@ pub unsafe extern "C" fn luna_capi_num2str(
         *buff.add(len) = 0;
     }
     len
+}
+
+/// A C closure of `f` with `n` upvalues popped from the stack (PUC
+/// `lua_pushcclosure`), not yet pushed. In 5.1 it takes the environment
+/// of the running C function, or the thread's globals.
+pub(super) fn new_c_closure(api: &mut Api, f: LuaCFunction, n: usize) -> Result<Value, LuaError> {
+    // the upvalues stay on the stack until the function holds them, so an
+    // emergency collection while it is made keeps them
+    let top = api.top();
+    let from = top.saturating_sub(n).max(api.base());
+    let env = if api.version() == LuaVersion::Lua51 {
+        match api.running_c().map(|nc| nc.upvals[1]) {
+            Some(Value::Table(t)) => Value::Table(t),
+            _ => Value::Table(api.thread_globals()),
+        }
+    } else {
+        Value::Nil
+    };
+    let mut upvals = Vec::with_capacity(api::C_UPVALS + n);
+    upvals.push(Value::LightUserdata(f as *const ()));
+    upvals.push(env);
+    upvals.extend_from_slice(&api.stack()[from..top]);
+    let trampoline: luna_core::runtime::value::NativeFn = ccall::capi_trampoline;
+    // from 5.2 on a C function without upvalues is a light C function,
+    // equal to every other push of the same pointer
+    let c = if n == 0 && api.version() >= LuaVersion::Lua52 {
+        api.vm
+            .host_light_fn(f as usize, |vm| vm.host_new_native(trampoline, &upvals))?
+    } else {
+        api.vm.host_new_native(trampoline, &upvals)?
+    };
+    api.truncate(from);
+    Ok(c)
 }

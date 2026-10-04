@@ -46,6 +46,7 @@ macro_rules! c_exports {
             $(fn $target();)*
         }
         $(
+            #[doc = concat!("The C API's `", stringify!($name), "`, written in C.")]
             #[unsafe(naked)]
             // SAFETY: no other item in the link has this name: the host does
             // not link PUC's liblua next to this crate, which defines each
