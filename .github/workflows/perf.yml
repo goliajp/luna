@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:
-  PERF_REF: f90669dfa50f24bc05d33e3091deb1bb0ef0b37b # v4.0.1
+  PERF_REF: cd4ecfe3ee2ec4c58f8cc741bdf0463d1bf5d771 # v4.0.2
 
 # Required gate. It builds the redis_lua_shape bench of a pinned reference
 # commit (PERF_REF, normally the last release; bump it at each release) and
