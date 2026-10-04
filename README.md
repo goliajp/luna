@@ -16,6 +16,8 @@ let v = vm.eval("return 6 * 7")?;   // [Int(42)]
 
 ## Status
 
+**v4.0.2** (2026-10-04) fixes a JIT crash when a recursive function
+called a table with `__call`, or a native function, held in an upvalue.
 **v4.0.1** (2026-10-01) fixes hot loops that could compute a wrong
 value, or crash, when a variable changed type between iterations, and
 `math.min` / `math.max` returning integers in Lua 5.1 and 5.2 with the
