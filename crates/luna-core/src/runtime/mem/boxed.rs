@@ -47,24 +47,6 @@ impl<T> LBox<T> {
     pub fn mem(&self) -> MemRef {
         self.mem
     }
-
-    /// The block, no longer owned: [`LBox::from_raw`] takes it back.
-    pub fn into_raw(b: LBox<T>) -> NonNull<T> {
-        std::mem::ManuallyDrop::new(b).ptr
-    }
-
-    /// Take back a block [`LBox::into_raw`] gave out.
-    ///
-    /// # Safety
-    /// `ptr` came from `into_raw` of a box on `mem` and is owned by no one
-    /// else.
-    pub unsafe fn from_raw(ptr: NonNull<T>, mem: MemRef) -> LBox<T> {
-        LBox {
-            ptr,
-            mem,
-            _own: PhantomData,
-        }
-    }
 }
 
 impl<T> Deref for LBox<T> {

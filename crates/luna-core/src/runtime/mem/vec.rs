@@ -77,15 +77,6 @@ impl<T> LVec<T> {
         self.ptr.as_ptr()
     }
 
-    /// Set the length without touching the elements.
-    ///
-    /// # Safety
-    /// `n <= capacity()` and the first `n` elements are initialized.
-    #[inline(always)]
-    pub unsafe fn set_len(&mut self, n: usize) {
-        self.len = n;
-    }
-
     /// Take over a block of exactly `len` initialized elements; the
     /// vector is empty and has no block.
     ///
