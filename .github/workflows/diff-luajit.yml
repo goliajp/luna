@@ -83,4 +83,4 @@ jobs:
         working-directory: crates/luna-fuzz
         run: |
           cargo +nightly fuzz run --fuzz-dir . fuzz_diff_luajit \
-            -- -runs=100 -max_total_time=300
+            -- -runs=100 -max_total_time=300 -rss_limit_mb=4096
