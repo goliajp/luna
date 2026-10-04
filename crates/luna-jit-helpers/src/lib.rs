@@ -780,6 +780,20 @@ pub unsafe extern "C" fn luna_jit_upval_get(idx: i64) -> i64 {
     unsafe { raw.zero as i64 }
 }
 
+/// The trace JIT's typed read of upvalue `idx` of the running closure; see
+/// `checked_read`.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_upval_get_checked(idx: i64, want_tag: i64, out: *mut i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    // SAFETY: the trace dispatcher enters with `enter_jit(vm, Some(cl))`, which pins JIT_CL to the running closure.
+    let cl = unsafe { current_jit_closure() };
+    // SAFETY: `out` is a stack slot of the calling trace, valid for one i64 write.
+    unsafe { checked_read(vm.upval_get(cl, idx as u32), want_tag, out) }
+}
+
 /// The method JIT's read of a 5.1/5.2 upvalue that feeds arithmetic: the
 /// compiled code takes the payload as a float, the only number type of
 /// those dialects. Anything else — nil, a numeric string, a table with
