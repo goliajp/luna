@@ -166,6 +166,7 @@ impl Vm {
             },
             retired_jit_storage: Vec::new(),
             _mem: mem_owner,
+            state_complete: false,
         }
     }
 
@@ -233,6 +234,7 @@ impl Vm {
         vm.main_coro = Some(mc);
         let (a, b) = vm.rng_auto_seed();
         vm.rng_seed(a as u64, b as u64);
+        vm.state_complete = true;
         vm
     }
 

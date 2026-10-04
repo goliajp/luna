@@ -439,6 +439,9 @@ pub struct Vm {
     /// frame stack above) free through. Last, so it outlives them: the
     /// heap, which owns it too, is the first field to be dropped.
     pub(super) _mem: crate::runtime::mem::MemOwner,
+    /// construction finished (PUC `completestate`): an allocation that
+    /// fails may run an emergency collection from now on
+    pub(super) state_complete: bool,
 }
 
 /// Call-site context an in-flight async native

@@ -253,6 +253,9 @@ pub struct Heap {
     gray: crate::runtime::mem::LVec<*mut GcHeader>,
     /// gray objects are left off `gray` because it could not grow
     gray_overflow: bool,
+    /// the head of `all` at the last point where every live object was
+    /// rooted; objects before it on `all` are newer (see `mark_young`)
+    young: *mut GcHeader,
     /// Incremental traversal state. `Some` between `gc_start_propagate` and
     /// `gc_finish_atomic` (and inline within `mark_all`); `None` otherwise.
     propagate: Option<PropagateState>,
@@ -351,6 +354,7 @@ impl Heap {
             current_white: WHITE0,
             gray: crate::runtime::mem::LVec::new(mem.mem()),
             gray_overflow: false,
+            young: ptr::null_mut(),
             propagate: None,
             phase: GcPhase::Pause,
             sweep_cur: ptr::null_mut(),
@@ -368,7 +372,9 @@ impl Heap {
             recently_freed: std::collections::HashSet::new(),
             mem,
         };
-        h.make_memerr();
+        if h.make_memerr().is_err() {
+            oom_abort_heap();
+        }
         h
     }
 
@@ -445,6 +451,11 @@ impl Default for Heap {
     }
 }
 
+#[cold]
+fn oom_abort_heap() -> ! {
+    crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Heap>())
+}
+
 /// Hash seed from address entropy (ASLR) and clock, luaL_makeseed style.
 fn make_seed() -> u32 {
     let stack_var = 0u8;
@@ -467,6 +478,8 @@ mod barrier;
 mod collect;
 #[path = "heap_finalize.rs"]
 mod finalize;
+#[path = "heap_intern.rs"]
+mod intern;
 #[path = "heap_mark.rs"]
 mod mark;
 #[path = "heap_pace.rs"]

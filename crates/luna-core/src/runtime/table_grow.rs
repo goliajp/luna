@@ -37,19 +37,18 @@ impl Table {
         }
         #[cfg(test)]
         APPEND_REHASHES.with(|c| c.set(c.get() + 1));
-        if asize > INLINE_ASIZE {
-            self.grow_slab(heap, new_asize);
+        Some(if asize > INLINE_ASIZE {
+            self.grow_slab(heap, new_asize)
         } else {
-            self.resize(heap, new_asize, 0);
-        }
-        Some(Ok(()))
+            self.resize(heap, new_asize, 0)
+        })
     }
 
     /// Grow a slab-backed array part, its slots all non-nil and kept where
     /// they are, to `new_asize` with nil slots after them: the slab is
     /// reallocated (in place when the allocator can) and the tags move up
     /// to their new offset.
-    fn grow_slab(&mut self, heap: &mut Heap, new_asize: usize) {
+    fn grow_slab(&mut self, heap: &mut Heap, new_asize: usize) -> Result<(), TableError> {
         let before = self.internal_bytes();
         let old = self.asize as usize;
         debug_assert!(old as u64 > INLINE_ASIZE && new_asize > old);
@@ -66,7 +65,7 @@ impl Table {
             )
         } {
             Some(p) => p.as_ptr(),
-            None => crate::runtime::mem::oom_abort(new_layout),
+            None => return Err(TableError::Memory(crate::runtime::mem::Oom(heap.mem()))),
         };
         // SAFETY: the block holds `new_asize * 9` bytes and more; the old
         // tags sit at `old * 8`, the new ones go to `new_asize * 8` (the
@@ -83,5 +82,6 @@ impl Table {
         // part, as the full resize's catch-up scan finds
         self.aprefix = old as u32;
         heap.apply_bytes_delta(before, self.internal_bytes());
+        Ok(())
     }
 }

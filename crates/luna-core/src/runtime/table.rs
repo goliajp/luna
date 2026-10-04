@@ -27,6 +27,15 @@ pub enum TableError {
     /// The table is read-only (see [`Table::is_readonly`]); nothing was
     /// written. Raised back as "Attempt to modify a readonly table".
     ReadOnly,
+    /// The table needed to grow and the allocation failed; nothing was
+    /// written. Raised back as a memory error.
+    Memory(crate::runtime::mem::Oom),
+}
+
+impl From<crate::runtime::mem::Oom> for TableError {
+    fn from(o: crate::runtime::mem::Oom) -> TableError {
+        TableError::Memory(o)
+    }
 }
 
 /// PUC `MAXASIZE` analogue: the highest power of two an array part may

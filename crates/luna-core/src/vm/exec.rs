@@ -51,6 +51,7 @@ mod jit_rt;
 mod lifecycle;
 mod limits;
 mod load;
+mod mem;
 mod meta;
 mod names;
 mod native_args;

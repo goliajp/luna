@@ -366,12 +366,16 @@ impl Vm {
     /// (PUC `luaG_runerror`). For an embedder that wrote through
     /// [`Table::set`] and got a [`TableError`] back.
     pub fn table_error(&mut self, e: TableError) -> LuaError {
+        if let TableError::Memory(o) = e {
+            return o.into();
+        }
         self.runerror(match e {
             TableError::NilIndex => "table index is nil",
             TableError::NanIndex => "table index is NaN",
             TableError::Overflow => "table overflow",
             TableError::ReadOnly => "Attempt to modify a readonly table",
             TableError::InvalidNext => "invalid key to 'next'",
+            TableError::Memory(_) => unreachable!("handled above"),
         })
     }
 }
