@@ -60,18 +60,39 @@ impl Vm {
 
     #[doc(hidden)]
     pub fn rt_err(&mut self, msg: &str) -> LuaError {
-        let text = match self.position_prefix() {
-            Some(p) => format!("{p}{msg}"),
-            None => msg.to_string(),
-        };
-        LuaError(Value::Str(self.heap.intern(text.as_bytes())))
+        self.rt_errf(format_args!("{msg}"))
+    }
+
+    /// [`Vm::rt_err`] with a message to format.
+    pub(crate) fn rt_errf(&mut self, msg: std::fmt::Arguments<'_>) -> LuaError {
+        let prefix = self.position_prefix();
+        self.error_from(prefix.as_deref(), msg)
     }
 
     /// Error without the `chunk:line:` position prefix. PUC's
     /// `resume_error` (ldo.c) pushes its message as a bare literal,
     /// so `cannot resume dead coroutine` etc. must not be prefixed.
     pub(crate) fn plain_err(&mut self, msg: &str) -> LuaError {
-        LuaError(Value::Str(self.heap.intern(msg.as_bytes())))
+        self.plain_errf(format_args!("{msg}"))
+    }
+
+    /// [`Vm::plain_err`] with a message to format.
+    pub(crate) fn plain_errf(&mut self, msg: std::fmt::Arguments<'_>) -> LuaError {
+        self.error_from(None, msg)
+    }
+
+    /// An error whose object is `prefix` then `msg` as a string; a memory
+    /// error when that string cannot be made (PUC raises the memory error
+    /// in place of a message it cannot allocate).
+    fn error_from(&mut self, prefix: Option<&str>, msg: std::fmt::Arguments<'_>) -> LuaError {
+        let s = match prefix {
+            Some(p) => self.fmt_str(format_args!("{p}{msg}")),
+            None => self.fmt_str(msg),
+        };
+        match s {
+            Ok(s) => LuaError(Value::Str(s)),
+            Err(e) => e,
+        }
     }
 
     /// PUC's LUA_ERRERR: the message handler itself failed, and the error

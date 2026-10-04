@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::runtime::LuaStr;
-use crate::runtime::mem::Oom;
+use crate::runtime::mem::{LVec, Oom};
 use crate::runtime::table::TableError;
 
 impl Vm {
@@ -90,6 +90,18 @@ impl Vm {
         f(self).map_err(LuaError::from)
     }
 
+    /// Grow the running stack to at least `need` slots (new ones nil),
+    /// collecting in an emergency when memory runs out (PUC
+    /// `luaD_growstack`).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn grow_stack(&mut self, need: usize) -> Result<(), LuaError> {
+        if self.stack.len() >= need {
+            return Ok(());
+        }
+        self.retry_oom(|vm| vm.stack.resize(need, Value::Nil))
+    }
+
     /// A string with `bytes`, collecting in an emergency when memory runs
     /// out.
     #[inline]
@@ -101,6 +113,45 @@ impl Vm {
     #[inline]
     pub(crate) fn str_value(&mut self, bytes: &[u8]) -> Result<Value, LuaError> {
         self.alloc_str(bytes).map(Value::Str)
+    }
+
+    /// A string formatted from `args`, composed in a block of the
+    /// allocation context, collecting in an emergency when memory runs out.
+    pub(crate) fn fmt_str(
+        &mut self,
+        args: std::fmt::Arguments<'_>,
+    ) -> Result<Gc<LuaStr>, LuaError> {
+        if let Some(s) = args.as_str() {
+            return self.alloc_str(s.as_bytes());
+        }
+        let buf = self.fmt_bytes(args)?;
+        self.alloc_str(&buf)
+    }
+
+    /// The bytes formatted from `args`, in a block of the allocation
+    /// context.
+    pub(crate) fn fmt_bytes(
+        &mut self,
+        args: std::fmt::Arguments<'_>,
+    ) -> Result<LVec<u8>, LuaError> {
+        struct W<'a>(&'a mut LVec<u8>, Option<Oom>);
+        impl std::fmt::Write for W<'_> {
+            fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                self.0.extend_from_slice(s.as_bytes()).map_err(|o| {
+                    self.1 = Some(o);
+                    std::fmt::Error
+                })
+            }
+        }
+        let mut buf = LVec::new(self.heap.mem());
+        let mut w = W(&mut buf, None);
+        if std::fmt::write(&mut w, args).is_err() {
+            return Err(match w.1 {
+                Some(o) => o.into(),
+                None => self.plain_err("invalid format"),
+            });
+        }
+        Ok(buf)
     }
 
     /// An empty table, collecting in an emergency when memory runs out.
