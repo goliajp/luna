@@ -225,9 +225,9 @@ impl Vm {
 /// 0: a message handler that prints a traceback runs on top of the stack
 /// that raised, and 5.1 and 5.2 decide where to elide by absolute level
 /// number, so those levels shift the elision.
-pub(crate) fn traceback_from_lines(
+pub(crate) fn traceback_from_lines<L: AsRef<[u8]>>(
     v: LuaVersion,
-    lines: &[Vec<u8>],
+    lines: &[L],
     level: i64,
     hidden: i64,
 ) -> Vec<u8> {
@@ -240,7 +240,7 @@ pub(crate) fn traceback_from_lines(
             }
             // 5.1's lost tail call at a negative level
             TbLine::Level(l) if l < 0 => out.extend_from_slice(b"\n\t(tail call): ?"),
-            TbLine::Level(l) => out.extend_from_slice(&lines[(l - hidden) as usize]),
+            TbLine::Level(l) => out.extend_from_slice(lines[(l - hidden) as usize].as_ref()),
         }
     }
     out

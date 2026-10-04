@@ -130,7 +130,7 @@ pub(super) fn with_c<R>(vm: &mut Vm, l: *mut LuaState, f: impl FnOnce() -> R) ->
 }
 
 /// The C stack of `co`.
-pub(super) fn cstack<'a>(co: Gc<Coro>) -> &'a mut Vec<Value> {
+pub(super) fn cstack<'a>(co: Gc<Coro>) -> &'a mut LVec<Value> {
     // SAFETY: the thread is live while its state is; the C stack is only
     // reached through short-lived borrows like this one, none of which
     // overlaps a call that could reach C
@@ -161,10 +161,10 @@ pub(super) fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, L
     let l = state_of(vm, co);
     let args: Vec<Value> = (0..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
     let base = cstack(co).len();
-    cstack(co).extend_from_slice(&args);
+    cstack(co).extend_from_slice_or_abort(&args);
     vm.heap.barrier_back(co);
     let s = st(l);
-    s.calls.push(CCall {
+    s.calls.push_or_abort(CCall {
         base,
         outer_base: s.base,
         func_slot: fs,
@@ -302,7 +302,8 @@ fn yield_from_c(
     };
     let n = usize::try_from(py.n).unwrap_or(0);
     let from = cstack(co).len().saturating_sub(n).max(base);
-    let vals = cstack(co).split_off(from);
+    let vals = cstack(co)[from..].to_vec();
+    cstack(co).truncate(from);
     let c = &mut st(l).calls[token];
     c.cont = Some(Cont {
         k: py.k,
@@ -353,14 +354,14 @@ fn run_cont(
                     let c = &st(l).calls[token];
                     (c.func_slot, c.base)
                 };
-                cstack(co).extend_from_slice(&vals);
+                cstack(co).extend_from_slice_or_abort(&vals);
                 let closed = close_frame(vm, l, token, None)
                     .and_then(|()| return_hook(vm, co, base, vals.len()));
                 pop_call(l, co, token);
                 closed?;
                 return Ok(vm.nat_return(fs, &vals));
             }
-            cstack(co).extend_from_slice(&vals);
+            cstack(co).extend_from_slice_or_abort(&vals);
             LUA_YIELD
         }
         Wait::Call { nresults } => {
@@ -394,7 +395,7 @@ pub(super) fn push_results(co: Gc<Coro>, mut vals: Vec<Value>, nresults: c_int) 
     if nresults >= 0 {
         vals.resize(nresults as usize, Value::Nil);
     }
-    cstack(co).extend(vals);
+    cstack(co).extend_from_slice_or_abort(&vals);
 }
 
 /// What a protected call's `true, results...` or `false, error` leaves on
@@ -415,7 +416,7 @@ pub(super) fn pcall_outcome(
     }
     let err = vals.get(1).copied().unwrap_or(Value::Nil);
     cstack(co).truncate(at);
-    cstack(co).push(err);
+    cstack(co).push_or_abort(err);
     let kind = vm.error_status(err, errerr_before);
     Some(status_code(vm.version(), kind))
 }

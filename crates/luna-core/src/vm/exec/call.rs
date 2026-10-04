@@ -200,7 +200,7 @@ impl Vm {
                     let from = func_slot as usize;
                     let end = (func_slot + 1 + nargs).max(self.top) as usize;
                     if self.stack.len() <= end {
-                        self.stack.resize(end + 1, Value::Nil);
+                        self.stack.resize_or_abort(end + 1, Value::Nil);
                     }
                     self.stack.copy_within(from..end, from + 1);
                     self.stack[from] = mm;
@@ -255,7 +255,7 @@ impl Vm {
         let max = proto.max_stack as u32;
         let need = (base + max) as usize;
         if self.stack.len() < need {
-            self.stack.resize(need, Value::Nil);
+            self.stack.resize_or_abort(need, Value::Nil);
         }
         // Only missing parameters become nil (PUC `luaD_precall`): the code
         // writes the rest before reading it, the collector keeps it valid

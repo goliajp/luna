@@ -154,7 +154,7 @@ impl Vm {
     /// Nil the missing results `[from, to)`.
     pub(super) fn pad_results(&mut self, from: u32, to: u32) {
         if self.stack.len() < to as usize {
-            self.stack.resize(to as usize, Value::Nil);
+            self.stack.resize_or_abort(to as usize, Value::Nil);
         }
         self.stack[from as usize..to as usize].fill(Value::Nil);
     }
@@ -185,7 +185,7 @@ impl Vm {
                     slot,
                     thread: self.current,
                 });
-                self.open_upvals.insert(i, (slot, uv));
+                self.open_upvals.insert_or_abort(i, (slot, uv));
                 uv
             }
         }

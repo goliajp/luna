@@ -3,7 +3,7 @@
 
 use super::ccall::{CCall, CHook, PendingYield};
 use super::*;
-use luna_core::runtime::mem::MemOwner;
+use luna_core::runtime::mem::{BlockKind, LAny, MemOwner};
 
 /// PUC `lua_Alloc`.
 pub type LuaAlloc = unsafe extern "C" fn(
@@ -54,7 +54,7 @@ pub struct LuaState {
     pub(super) base: usize,
     /// the C functions running on this thread or waiting on a
     /// continuation, innermost last
-    pub(super) calls: Vec<CCall>,
+    pub(super) calls: LVec<CCall>,
     /// PUC `L->status`: `LUA_YIELD` while suspended, the error status a
     /// resume ended with, else `LUA_OK`
     pub(super) status: c_int,
@@ -63,7 +63,7 @@ pub struct LuaState {
     /// this thread's C hook (`lua_sethook`)
     pub(super) hook: CHook,
     /// C stack indices of its to-be-closed slots, ascending
-    pub(super) tbc: Vec<usize>,
+    pub(super) tbc: LVec<usize>,
     /// after a yield from Lua code that a resume from C reported: where
     /// the yielded values start on the C stack, and the base to put back
     /// when the thread is resumed
@@ -81,50 +81,52 @@ struct ThreadBox {
     st: LuaState,
 }
 
-/// Owner of a thread's `ThreadBox`, kept in `Coro::host_state`: the box
-/// lives as long as the thread. Every access goes through the pointer the
-/// allocation returned.
-struct StateHandle(*mut ThreadBox);
-
-impl Drop for StateHandle {
-    fn drop(&mut self) {
-        // SAFETY: the pointer came from `Box::into_raw` in `new_thread_state`
-        // and only this handle frees it, once
-        drop(unsafe { Box::from_raw(self.0) });
-    }
-}
-
 /// The `LuaState` of `co` if C has asked for it before.
 fn existing(co: Gc<Coro>) -> Option<*mut LuaState> {
     // SAFETY: `co` is a live thread the caller holds; the shared borrow
     // reads one field and ends here
     let c: &Coro = unsafe { &*co.as_ptr() };
-    let h = c.host_state.as_ref()?.downcast_ref::<StateHandle>()?;
-    // SAFETY: `h.0` is the live box the handle owns
-    Some(unsafe { &raw mut (*h.0).st })
+    let h = c.host_state.as_ref()?;
+    if !h.is::<ThreadBox>() {
+        return None;
+    }
+    let b = h.as_ptr().cast::<ThreadBox>();
+    // SAFETY: `b` is the live block holding the thread's `ThreadBox`, kept
+    // by the thread as long as it lives
+    Some(unsafe { &raw mut (*b).st })
 }
 
-/// Make the `LuaState` of `co`, with `extra` as its extra space.
+/// Make the `LuaState` of `co`, with `extra` as its extra space, in a
+/// block of the state's allocation context that the thread keeps.
 fn new_thread_state(g: *mut Global, co: Gc<Coro>, extra: [u8; EXTRASPACE]) -> *mut LuaState {
-    let b = Box::into_raw(Box::new(ThreadBox {
-        extra,
-        st: LuaState {
-            g,
-            thread: co,
-            base: 0,
-            calls: Vec::new(),
-            status: LUA_OK,
-            pending_yield: None,
-            hook: CHook::default(),
-            tbc: Vec::new(),
-            parked: None,
+    // SAFETY: `g` is the live global record of `co`'s state, whose Vm
+    // pointer is live
+    let mem = unsafe { (*(*g).vm).heap.mem() };
+    let b = LAny::new(
+        mem,
+        ThreadBox {
+            extra,
+            st: LuaState {
+                g,
+                thread: co,
+                base: 0,
+                calls: LVec::new(mem),
+                status: LUA_OK,
+                pending_yield: None,
+                hook: CHook::default(),
+                tbc: LVec::new(mem),
+                parked: None,
+            },
         },
-    }));
+        BlockKind::Thread,
+    )
+    .unwrap_or_else(|_| std::alloc::handle_alloc_error(std::alloc::Layout::new::<ThreadBox>()));
+    let p = b.as_ptr().cast::<ThreadBox>();
     // SAFETY: `co` is a live thread the caller holds and the Vm is not
     // touching it now; the borrow covers one store
-    unsafe { co.as_mut() }.host_state = Some(Box::new(StateHandle(b)));
-    // SAFETY: `b` is the live box just made
-    unsafe { &raw mut (*b).st }
+    unsafe { co.as_mut() }.host_state = Some(b);
+    // SAFETY: `p` is the live block just stored in the thread
+    unsafe { &raw mut (*p).st }
 }
 
 /// The `lua_State` of thread `co` of the state `vm` belongs to, made when
@@ -147,7 +149,7 @@ pub(super) fn state_of(vm: &mut Vm, co: Gc<Coro>) -> *mut LuaState {
     if !co.started && !co.body.is_nil() {
         // SAFETY: `co` is held by the caller and has not started, so no
         // context is loaded from it; the borrow covers one push
-        unsafe { co.as_mut() }.host_stack.push(co.body);
+        unsafe { co.as_mut() }.host_stack.push_or_abort(co.body);
         vm.heap.barrier_back(co);
     }
     l

@@ -16,8 +16,7 @@ use crate::runtime::value::Value;
 /// `fn` items are inherently `Send + Sync` and `Copy`, so this type
 /// imposes no auto-trait constraints on `Userdata`; `feature = "send"`
 /// layers atop without changing the signature.
-pub(crate) type HostTraceFn =
-    fn(&(dyn std::any::Any + 'static), &mut crate::vm::UserdataMarker<'_>);
+pub(crate) type HostTraceFn = fn(&crate::runtime::mem::LAny, &mut crate::vm::UserdataMarker<'_>);
 
 /// A Lua userdata object — a GC-managed handle wrapping a host-side payload
 /// (an io file handle, a `newproxy` identity token, or an embedder-supplied
@@ -85,9 +84,10 @@ pub enum UserdataPayload {
     Host {
         /// `TypeId` of the host value, used as the downcast key.
         type_id: std::any::TypeId,
-        /// Boxed host payload (the embedder owns the underlying data
-        /// semantically; luna treats it as opaque `Any`).
-        data: Box<dyn std::any::Any + 'static>,
+        /// The host payload in a block of the Vm's allocation context (the
+        /// embedder owns the underlying data semantically; luna treats it
+        /// as opaque `Any`).
+        data: crate::runtime::mem::LAny,
         /// Trace adapter for the concrete `T` keyed by `type_id`.
         /// Captured by [`crate::vm::Vm::create_userdata`] as a monomorphic
         /// `fn(&dyn Any, &mut UserdataMarker)` whose body downcasts the
@@ -179,7 +179,7 @@ impl Userdata {
         } = &self.payload
         {
             let mut um = crate::vm::UserdataMarker::__new_internal(m);
-            trace_fn(data.as_ref(), &mut um);
+            trace_fn(data, &mut um);
         }
     }
 

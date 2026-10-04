@@ -73,7 +73,7 @@ impl Vm {
     pub fn nat_return(&mut self, func_slot: u32, vals: &[Value]) -> u32 {
         let need = func_slot as usize + vals.len();
         if self.stack.len() < need {
-            self.stack.resize(need, Value::Nil);
+            self.stack.resize_or_abort(need, Value::Nil);
         }
         for (i, &v) in vals.iter().enumerate() {
             self.stack[func_slot as usize + i] = v;
