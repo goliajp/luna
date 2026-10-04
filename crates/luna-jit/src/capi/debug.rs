@@ -7,7 +7,7 @@ use luna_core::runtime::NativeClosure;
 use luna_core::vm::exec::host_c::{HostAr, HostLevel};
 
 mod ar;
-mod upvals;
+pub(super) mod upvals;
 
 pub(super) use ar::{ArBuf, CStrings, DebugPtr};
 
