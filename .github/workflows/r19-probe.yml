@@ -1,0 +1,63 @@
+name: r19-probe
+on:
+  push:
+    branches: [r19-probe]
+jobs:
+  dialects:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dialect: ["5.1", "5.2", "5.3", "5.4", "5.5"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - run: cargo install cargo-fuzz
+      - name: build
+        working-directory: crates/luna-fuzz
+        run: cargo +nightly fuzz build fuzz_jit_diff --fuzz-dir .
+      - name: fuzz 5 min
+        working-directory: crates/luna-fuzz
+        env:
+          LUNA_FUZZ_DIALECT: ${{ matrix.dialect }}
+          ASAN_OPTIONS: malloc_context_size=10
+        run: cargo +nightly fuzz run fuzz_jit_diff --fuzz-dir . -- -max_total_time=300
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: dialect-${{ matrix.dialect }}
+          path: crates/luna-fuzz/artifacts/fuzz_jit_diff/
+  segv:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [1, 2]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - run: cargo install cargo-fuzz
+      - name: build
+        working-directory: crates/luna-fuzz
+        run: cargo +nightly fuzz build fuzz_jit_diff --fuzz-dir .
+      - name: fuzz 40 min, 4 forked workers, keep going after crashes
+        working-directory: crates/luna-fuzz
+        shell: bash
+        env:
+          ASAN_OPTIONS: malloc_context_size=10
+        run: |
+          set +e
+          cargo +nightly fuzz run fuzz_jit_diff --fuzz-dir . -- -max_total_time=2400 -fork=4 -ignore_crashes=1 -ignore_timeouts=1 -ignore_ooms=1 > /tmp/f.log 2>&1
+          grep -E "ERROR: AddressSanitizer|deadly|JIT differs" /tmp/f.log | sort | uniq -c | head -20
+          ls artifacts/fuzz_jit_diff/ || true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: segv-${{ matrix.leg }}
+          path: |
+            crates/luna-fuzz/artifacts/fuzz_jit_diff/
+            /tmp/f.log
+          if-no-files-found: ignore
