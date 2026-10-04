@@ -115,13 +115,14 @@ impl Vm {
         let Value::Native(nc) = self.stack[func_slot as usize] else {
             unreachable!("pcall/xpcall dispatch sits on a native")
         };
-        self.running_natives.push(crate::vm::callstack::NativeAct {
-            nc,
-            func_slot,
-            nargs,
-            depth: self.frames.len() as u32,
-            ccmt: 0,
-        });
+        self.running_natives
+            .push_or_abort(crate::vm::callstack::NativeAct {
+                nc,
+                func_slot,
+                nargs,
+                depth: self.frames.len() as u32,
+                ccmt: 0,
+            });
         let r = check(self);
         self.running_natives.pop();
         r
