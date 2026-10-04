@@ -3447,6 +3447,10 @@ fn build_trace_jit_module() -> Option<JITModule> {
     // the closure at runtime.
     builder.symbol("luna_jit_upval_get", super::luna_jit_upval_get as *const u8);
     builder.symbol(
+        "luna_jit_upval_get_checked",
+        super::luna_jit_upval_get_checked as *const u8,
+    );
+    builder.symbol(
         "luna_jit_head_closure",
         super::luna_jit_head_closure as *const u8,
     );
@@ -5226,6 +5230,22 @@ fn lower_trace<M: Module>(
     upval_get_sig.returns.push(AbiParam::new(types::I64));
     let upval_get_id = module
         .declare_function("luna_jit_upval_get", Linkage::Import, &upval_get_sig)
+        .ok()?;
+    // `fn luna_jit_upval_get_checked(idx, want_tag, out: *mut i64) -> ok`:
+    // the read of an upvalue the trace types, checked against that type.
+    let mut upval_get_checked_sig = module.make_signature();
+    for _ in 0..3 {
+        upval_get_checked_sig.params.push(AbiParam::new(types::I64));
+    }
+    upval_get_checked_sig
+        .returns
+        .push(AbiParam::new(types::I64));
+    let upval_get_checked_id = module
+        .declare_function(
+            "luna_jit_upval_get_checked",
+            Linkage::Import,
+            &upval_get_checked_sig,
+        )
         .ok()?;
     let mut head_closure_sig = module.make_signature();
     head_closure_sig.returns.push(AbiParam::new(types::I64));
@@ -7783,19 +7803,6 @@ fn lower_trace<M: Module>(
                 //
                 // memoize per upval idx via `upval_cache`.
                 let idx_b = ins.b();
-                let v = if let Some(&cached_var) = upval_cache.get(&idx_b) {
-                    bcx.use_var(cached_var)
-                } else {
-                    let idx_arg = bcx.ins().iconst(types::I64, ins.b() as i64);
-                    let func_ref = module.declare_func_in_func(upval_get_id, bcx.func);
-                    let call = bcx.ins().call(func_ref, &[idx_arg]);
-                    let new_v = bcx.inst_results(call)[0];
-                    let cache_var = bcx.declare_var(types::I64);
-                    bcx.def_var(cache_var, new_v);
-                    upval_cache.insert(idx_b, cache_var);
-                    new_v
-                };
-                bcx.def_var(regs[ins.a() as usize], v);
                 // Look forward including the terminator (effective_end
                 // is the Op::Call's index when truncation applies).
                 let upper = effective_end.min(record.ops.len() - 1) + 1;
@@ -7804,6 +7811,41 @@ fn lower_trace<M: Module>(
                 } else {
                     None
                 };
+                // a call target is not always a Lua closure (a table with
+                // `__call`, a native): the read is checked, so an exit never
+                // restores some other object under the closure tag
+                let closure_use = matches!(inferred, Some(ExitTag::Closure));
+                let v = if let Some(&cached_var) = upval_cache.get(&idx_b) {
+                    bcx.use_var(cached_var)
+                } else {
+                    let idx_arg = bcx.ins().iconst(types::I64, ins.b() as i64);
+                    let new_v = if closure_use {
+                        let out_ss =
+                            bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                                8,
+                                3,
+                            ));
+                        let out_addr = bcx.ins().stack_addr(types::I64, out_ss, 0);
+                        let want = bcx
+                            .ins()
+                            .iconst(types::I64, luna_core::runtime::value::raw::CLOSURE as i64);
+                        let func_ref = module.declare_func_in_func(upval_get_checked_id, bcx.func);
+                        let call = bcx.ins().call(func_ref, &[idx_arg, want, out_addr]);
+                        let ok = bcx.inst_results(call)[0];
+                        guard!(ok, i, rop.pc);
+                        bcx.ins().stack_load(types::I64, types::I64, out_ss, 0)
+                    } else {
+                        let func_ref = module.declare_func_in_func(upval_get_id, bcx.func);
+                        let call = bcx.ins().call(func_ref, &[idx_arg]);
+                        bcx.inst_results(call)[0]
+                    };
+                    let cache_var = bcx.declare_var(types::I64);
+                    bcx.def_var(cache_var, new_v);
+                    upval_cache.insert(idx_b, cache_var);
+                    new_v
+                };
+                bcx.def_var(regs[ins.a() as usize], v);
                 match inferred {
                     Some(ExitTag::Closure) => {
                         current_kinds[off + ins.a() as usize] = RegKind::Closure;
