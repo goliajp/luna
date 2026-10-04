@@ -188,11 +188,11 @@ int main(void) {
 
   /* the block counts in the collector's total, and stops counting once
      it is collected */
-  dostr(L, "c0 = collectgarbage('count')");
+  dostr(L, "collectgarbage() collectgarbage() collectgarbage('stop') c0 = collectgarbage('count')");
   p = (unsigned char *)lua_newuserdata(L, 4 << 20);
   p[(4 << 20) - 1] = 1;
   lua_setglobal(L, "bigud");
-  dostr(L, "c1 = collectgarbage('count') print('count grew', c1 - c0 >= 4096)");
+  dostr(L, "c1 = collectgarbage('count') collectgarbage('restart') print('count grew', c1 - c0 >= 4096)");
   dostr(L, "bigud = nil collectgarbage() collectgarbage()"
            " print('count shrank', c1 - collectgarbage('count') >= 4096)");
 
