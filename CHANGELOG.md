@@ -325,6 +325,11 @@ optimization.
 
 ### Fixed
 
+- 5.4 and 5.5: `x - (C and nil or 0)` (also with `false`, or any
+  expression whose `and` ends in one of them) gave `-0.0` for `x = -0.0`
+  where PUC gives `0.0` (affects 3.1.0 through 4.0.2). PUC's code
+  generator reduces such an operand to the constant 0, so it runs
+  `x - 0` as `x + 0`; luna now does the same. `C` still runs.
 - A function whose loop held a shorter loop, called again and again,
   could run the outer loop's body fewer times than written, with no
   error. A trace started in the inner loop leaves through two exits that
