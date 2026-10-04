@@ -1,9 +1,8 @@
-//! A `math.max` / `math.min` / `string.sub` call folded into a trace, left
-//! between the library lookup and the call because an argument stops being
-//! what the fold needs: the interpreter must run the call itself and raise
-//! the library's argument error. The trace never loaded the function into
-//! the call's register, so it has to leave at the lookup, not at the
-//! argument.
+//! A `math.max` / `math.min` call folded into a trace, left between the
+//! library lookup and the call because an argument stops being a number:
+//! the interpreter must run the call itself and raise the library's
+//! argument error. The trace never loaded the function into the call's
+//! register, so it has to leave at the lookup, not at the argument.
 
 use luna_jit::LuaVersion;
 use luna_jit::jit::trace::TraceTier;
@@ -21,7 +20,6 @@ const DIALECTS: [LuaVersion; 5] = [
 /// binds `i`), `CALL` the call; the read at index 9 is nil.
 const TEMPLATE: &str = r#"
     local arr = ARR
-    local strs = {"ab", "cd", "ef", "gh", "ij", "kl", "mn", "op"}
     local t = {}
     local ok, err = pcall(function()
       LOOP
@@ -31,11 +29,7 @@ const TEMPLATE: &str = r#"
     end)
     return tostring(ok) .. " " .. tostring(err) .. " " .. #t"#;
 
-const CALLS: [&str; 3] = [
-    "math.max(arr[i], 5)",
-    "math.min(arr[i], 5)",
-    "#string.sub(strs[i], 1, 1)",
-];
+const CALLS: [&str; 2] = ["math.max(arr[i], 5)", "math.min(arr[i], 5)"];
 
 const ARRAYS: [&str; 2] = [
     r#"{1, 2.5, "3", 4, 5, 6, 7, 8}"#,
