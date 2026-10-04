@@ -22,12 +22,12 @@ workspace = true
 [dependencies]
 # The backend implements the luna-core `IntChunkCompiler`
 # / `TraceCompiler` / `JitStorage` traits over LLVM-emitted mcode.
-luna-core = { path = "../luna-core", version = "= 4.0.1" }
+luna-core = { path = "../luna-core", version = "= 4.0.2" }
 
 # Shared `luna_jit_*` runtime helpers + `JIT_VM`
 # TLS shared with luna-jit (Cranelift). Both backends register the
 # same symbol table with their respective JIT execution engines.
-luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 4.0.1" }
+luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 4.0.2" }
 
 # LLVM 18.1.x via inkwell 0.10. Same feature flag as `llvm-jit-probe`
 # (`llvm18-1`); requires `LLVM_SYS_181_PREFIX` env var pointing at an

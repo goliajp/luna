@@ -65,7 +65,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "4.0.1"
+version = "4.0.2"
 edition = "2024"
 # the floor set by the cranelift crates luna-jit and luna-aot depend on
 rust-version = "1.96"
