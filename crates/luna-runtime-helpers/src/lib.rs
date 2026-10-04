@@ -261,7 +261,10 @@ fn run_inner(bytecode: &[u8], version: LuaVersion) -> i32 {
     // the `luna_jit_*_field` helpers.
     #[cfg(feature = "jit-helpers")]
     {
-        let resolved = aot_strkey_resolver::resolve_all(&mut vm);
+        let Some(resolved) = aot_strkey_resolver::resolve_all(&mut vm) else {
+            eprintln!("luna-runtime-helpers: not enough memory");
+            return 1;
+        };
         if std::env::var_os("LUNA_AOT_PROBE").is_some() {
             eprintln!("luna-runtime-helpers: aot_strkey_resolved = {resolved}");
         }

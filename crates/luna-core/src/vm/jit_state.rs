@@ -115,8 +115,9 @@ pub struct JitState {
     pub ssa_roots: Vec<Value>,
 
     /// Pool of reusable per-trace string accumulator
-    /// buffers.
-    pub str_buf_pool: Vec<Vec<u8>>,
+    /// buffers. Their bytes grow with the string a loop builds, so they
+    /// live in the Vm's allocation context.
+    pub str_buf_pool: Vec<crate::runtime::mem::LVec<u8>>,
 
     /// Cap on the buffer pool size.
     pub str_buf_pool_cap: usize,

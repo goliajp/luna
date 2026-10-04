@@ -176,3 +176,35 @@ pub(super) fn jmp_target(pc: usize, inst: Inst) -> usize {
 pub(super) fn a_kind(k: &[RegKind], idx: u32) -> RegKind {
     k.get(idx as usize).copied().unwrap_or(RegKind::Int)
 }
+
+/// Leave the compiled call when `v`, a helper's result, is 0: the helper
+/// could not allocate (or store) and the interpreter runs the call. With
+/// `park`, a deopt is parked here; otherwise the helper parked it.
+pub(super) fn emit_bail_if_zero<M: Module>(
+    module: &mut M,
+    bcx: &mut FunctionBuilder<'_>,
+    v: Value,
+    park: bool,
+) -> Option<()> {
+    let ok_blk = bcx.create_block();
+    let bail_blk = bcx.create_block();
+    bcx.ins().brif(v, ok_blk, &[], bail_blk, &[]);
+    bcx.switch_to_block(bail_blk);
+    bcx.seal_block(bail_blk);
+    if park {
+        let park_id = module
+            .declare_function(
+                "luna_jit_park_deopt",
+                Linkage::Import,
+                &module.make_signature(),
+            )
+            .ok()?;
+        let park_ref = module.declare_func_in_func(park_id, bcx.func);
+        bcx.ins().call(park_ref, &[]);
+    }
+    let zero = bcx.ins().iconst(types::I64, 0);
+    bcx.ins().return_(&[zero]);
+    bcx.switch_to_block(ok_blk);
+    bcx.seal_block(ok_blk);
+    Some(())
+}

@@ -17,7 +17,9 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
         ..
     } = lw.h.op;
     let RuntimeHelpers { get_int_id, .. } = lw.h.rt;
-    let OpCx { i, off, ins, .. } = *oc;
+    let OpCx {
+        i, off, ins, rop, ..
+    } = *oc;
     let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::NewTable => {
@@ -36,6 +38,10 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
             let func_ref = lw.bcx.import_func(new_table_id);
             let call = lw.bcx.ins().call(func_ref, &[]);
             let t = lw.bcx.inst_results(call)[0];
+            // 0: the allocation failed (or a deopt is parked); the
+            // interpreter makes the table, collecting in an emergency
+            let ok = lw.bcx.ins().icmp_imm_s(IntCC::NotEqual, t, 0);
+            guard!(lw, pl, ok, i, rop.pc);
             lw.bcx.def_var(regs[ins.a() as usize], t);
             lw.current_kinds[off + ins.a() as usize] = RegKind::Table;
         }

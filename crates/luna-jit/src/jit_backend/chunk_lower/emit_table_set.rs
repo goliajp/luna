@@ -64,6 +64,9 @@ pub(super) fn emit_new_table<M: Module>(
                 let call_inst = bcx.ins().call(r, &[]);
                 bcx.inst_results(call_inst)[0]
             };
+            // 0: the table could not be allocated; the interpreter runs
+            // the call
+            emit_bail_if_zero(module, bcx, g, true)?;
             aligned_def(bcx, regs, reg_kinds, ins.a() as usize, g);
             current_kinds[ins.a() as usize] = RegKind::Table;
             current_is_nil[ins.a() as usize] = false;
@@ -175,11 +178,14 @@ pub(super) fn emit_set_table<M: Module>(
                 sig.params.push(AbiParam::new(types::I64));
                 sig.params.push(AbiParam::new(types::I64));
                 sig.params.push(AbiParam::new(types::I64));
+                sig.returns.push(AbiParam::new(types::I64));
                 let id = module
                     .declare_function("luna_jit_table_set_int", Linkage::Import, &sig)
                     .ok()?;
                 let r = module.declare_func_in_func(id, bcx.func);
-                let _ = bcx.ins().call(r, &[t, key, val]);
+                let call = bcx.ins().call(r, &[t, key, val]);
+                let stored = bcx.inst_results(call)[0];
+                emit_bail_if_zero(module, bcx, stored, false)?;
                 bcx.ins().jump(merge_blk, &[]);
 
                 bcx.switch_to_block(merge_blk);
@@ -197,11 +203,14 @@ pub(super) fn emit_set_table<M: Module>(
                 sig.params.push(AbiParam::new(types::I64));
                 sig.params.push(AbiParam::new(types::I64));
                 sig.params.push(AbiParam::new(types::I64));
+                sig.returns.push(AbiParam::new(types::I64));
                 let id = module
                     .declare_function("luna_jit_table_set_float_float", Linkage::Import, &sig)
                     .ok()?;
                 let r = module.declare_func_in_func(id, bcx.func);
-                let _ = bcx.ins().call(r, &[t, key_i, val_i]);
+                let call = bcx.ins().call(r, &[t, key_i, val_i]);
+                let stored = bcx.inst_results(call)[0];
+                emit_bail_if_zero(module, bcx, stored, false)?;
             }
         }
         _ => unreachable!("dispatched by op"),
@@ -372,6 +381,7 @@ pub(super) fn emit_set_list<M: Module>(
             for _ in 0..4 {
                 sig.params.push(AbiParam::new(types::I64));
             }
+            sig.returns.push(AbiParam::new(types::I64));
             let id = module
                 .declare_function("luna_jit_table_set_raw", Linkage::Import, &sig)
                 .ok()?;
@@ -379,7 +389,9 @@ pub(super) fn emit_set_list<M: Module>(
             for (i, &(tag, bits)) in elems.iter().enumerate() {
                 let key = bcx.ins().iconst(types::I64, i as i64 + 1);
                 let tag_v = bcx.ins().iconst(types::I64, tag);
-                let _ = bcx.ins().call(r, &[t, key, bits, tag_v]);
+                let call = bcx.ins().call(r, &[t, key, bits, tag_v]);
+                let stored = bcx.inst_results(call)[0];
+                emit_bail_if_zero(module, bcx, stored, false)?;
             }
             bcx.ins().jump(merge_blk, &[]);
 
