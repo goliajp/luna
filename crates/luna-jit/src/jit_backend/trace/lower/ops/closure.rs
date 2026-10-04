@@ -145,8 +145,17 @@ pub(super) fn emit_closure_op<E: Emit>(
                     _ => None,
                 }
             }));
+            // a call target is not always a Lua closure (a table with
+            // `__call`, a native): the register is typed Closure only when
+            // the recording saw one, and the read is checked, so an exit
+            // never restores some other object under the closure tag
+            let seen_closure =
+                record.result_tag(i) == Some(luna_core::runtime::value::raw::CLOSURE);
             match inferred {
-                Some(ExitTag::Closure) => {
+                Some(ExitTag::Closure) if seen_closure => {
+                    let want = luna_core::runtime::value::raw::CLOSURE;
+                    let v = checked_upval_read(lw, pl, oc, idx_b, want)?;
+                    lw.bcx.def_var(regs[ins.a() as usize], v);
                     lw.current_kinds[off + ins.a() as usize] = RegKind::Closure;
                 }
                 _ if let Some((kind, want)) = seen => {
