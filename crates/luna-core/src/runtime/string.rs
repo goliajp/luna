@@ -199,10 +199,10 @@ pub(crate) struct StringTable {
 }
 
 impl StringTable {
-    pub(crate) fn new(mem: MemRef) -> StringTable {
+    pub(crate) fn new(mem: MemRef) -> Result<StringTable, Oom> {
         let mut buckets = LVec::new(mem);
-        buckets.resize_or_abort(64, ptr::null_mut());
-        StringTable { buckets, count: 0 }
+        buckets.resize(64, ptr::null_mut())?;
+        Ok(StringTable { buckets, count: 0 })
     }
 
     /// Find or create an interned short string. Returns `(ptr, newly_created)`.

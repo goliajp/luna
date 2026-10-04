@@ -21,7 +21,7 @@ impl Vm {
     /// Build the raw `Vm` struct without main coroutine / RNG seed / library
     /// setup. Private helper shared by `Vm::new` and `Vm::new_minimal`; the
     /// caller is responsible for the rest of the bring-up.
-    pub(super) fn new_inner(version: LuaVersion, heap: Heap) -> Vm {
+    pub(super) fn new_inner(version: LuaVersion, heap: Heap) -> Option<Vm> {
         let mut heap = heap;
         // PUC 5.1 had no ephemeron pass — `__mode='k'` tables marked their
         // values strongly. gc.lua's "weak tables" section relies on that.
@@ -31,12 +31,16 @@ impl Vm {
         // coroutine reference cycle (gc.lua :502); 5.4+ rewrote the GC and
         // finalize in a single cycle (5.4/5.5 gc.lua :544 assert exactly one).
         heap.defer_thread_cycle_finalize = version == LuaVersion::Lua53;
-        let globals = heap.new_table();
-        let mm_names = std::array::from_fn(|i| heap.intern(MM_NAMES[i].as_bytes()));
+        let globals = heap.try_new_table().ok()?;
+        let mut names = [None; MM_NAMES.len()];
+        for (slot, name) in names.iter_mut().zip(MM_NAMES) {
+            *slot = Some(heap.try_intern(name.as_bytes()).ok()?);
+        }
+        let mm_names = names.map(|n| n.expect("every name was made above"));
 
         let mem = heap.mem();
         let mem_owner = heap.mem_owner();
-        Vm {
+        Some(Vm {
             heap,
             stack: LVec::new(mem),
             frames: LVec::new(mem),
@@ -167,7 +171,7 @@ impl Vm {
             retired_jit_storage: Vec::new(),
             _mem: mem_owner,
             state_complete: false,
-        }
+        })
     }
 
     /// Build a fully-loaded Vm — the default for embedders that want PUC's
@@ -204,6 +208,17 @@ impl Vm {
         Vm::new_minimal_on(version, Heap::new_on(mem))
     }
 
+    /// [`Vm::new_minimal_with_mem`], or `None` when the allocation context
+    /// cannot give the Vm the memory it starts with (PUC `lua_newstate`
+    /// returns NULL then); what was allocated is freed.
+    pub fn try_new_minimal_with_mem(
+        version: LuaVersion,
+        mem: crate::runtime::mem::MemOwner,
+    ) -> Option<Vm> {
+        let heap = Heap::try_with_mem(mem, crate::runtime::heap::fresh_seed())?;
+        Vm::try_new_minimal_on(version, heap)
+    }
+
     /// [`Vm::new`] whose memory comes from `mem` (see
     /// [`Vm::new_minimal_with_mem`]).
     pub fn new_with_mem(version: LuaVersion, mem: crate::runtime::mem::MemOwner) -> Vm {
@@ -227,15 +242,20 @@ impl Vm {
     }
 
     fn new_minimal_on(version: LuaVersion, heap: Heap) -> Vm {
-        let mut vm = Vm::new_inner(version, heap);
-        let mc = vm.heap.new_coro(Value::Nil, vm.globals);
+        Vm::try_new_minimal_on(version, heap)
+            .unwrap_or_else(|| crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Vm>()))
+    }
+
+    fn try_new_minimal_on(version: LuaVersion, heap: Heap) -> Option<Vm> {
+        let mut vm = Vm::new_inner(version, heap)?;
+        let mc = vm.heap.try_new_coro(Value::Nil, vm.globals).ok()?;
         // SAFETY: `mc` was allocated on the line above and is held only by this local; the borrow covers one field store
         unsafe { mc.as_mut() }.status = CoroStatus::Running;
         vm.main_coro = Some(mc);
         let (a, b) = vm.rng_auto_seed();
         vm.rng_seed(a as u64, b as u64);
         vm.state_complete = true;
-        vm
+        Some(vm)
     }
 
     /// Install a caller-supplied JIT backend. The
