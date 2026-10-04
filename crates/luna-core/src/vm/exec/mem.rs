@@ -95,12 +95,17 @@ impl Vm {
     /// Grow the running stack to at least `need` slots (new ones nil),
     /// collecting in an emergency when memory runs out (PUC
     /// `luaD_growstack`).
-    #[cold]
-    #[inline(never)]
+    #[inline(always)]
     pub(crate) fn grow_stack(&mut self, need: usize) -> Result<(), LuaError> {
         if self.stack.len() >= need {
             return Ok(());
         }
+        self.grow_stack_slow(need)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn grow_stack_slow(&mut self, need: usize) -> Result<(), LuaError> {
         self.retry_oom(|vm| vm.stack.resize(need, Value::Nil))
     }
 
