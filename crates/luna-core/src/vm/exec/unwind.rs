@@ -78,6 +78,17 @@ impl Vm {
         // error point was at the stack limit (cause: the next `call_value_impl`
         // picks `func_slot = stack.len()` which would otherwise re-overflow).
         let saved_len = self.stack.len();
+        // An error leaving a recording ends that path: what was recorded
+        // is not a loop. Closing it later, when the head is reached again
+        // through a fresh call, would make a trace that skips the rest of
+        // the body and returns to its head for ever. Counted as a failure
+        // of that head, so the same doomed recording is not started again
+        // and again.
+        if let Some(rec) = self.jit.active_trace.take() {
+            self.jit.counters.aborted += 1;
+            self.jit.counters.bump_close_cause("error-unwind");
+            note_trace_compile_failure(rec.head_proto, rec.head_pc);
+        }
         err = self.raise_to_handler(err);
         // An error that no protected call inside the running coroutine will
         // catch kills it without unwinding: PUC's `lua_resume` leaves the
