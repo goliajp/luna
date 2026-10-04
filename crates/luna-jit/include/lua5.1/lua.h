@@ -80,6 +80,14 @@ typedef LUA_INTEGER lua_Integer;
 
 /* PUC 5.1's lua.h does not declare its ident string, but its library
    defines one; a host that declares it gets this dialect's text */
+/* data lives in the luna_jit library: a Windows host linking its DLL must
+   import it; define LUNA_STATIC when linking the static library */
+#if defined(_WIN32) && !defined(LUNA_STATIC)
+#define LUNA_DATA	extern __declspec(dllimport)
+#else
+#define LUNA_DATA	extern
+#endif
+LUNA_DATA const char luna_ident_51[];
 #define lua_ident	luna_ident_51
 
 /* state manipulation */

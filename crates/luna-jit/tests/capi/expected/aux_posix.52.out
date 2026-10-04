@@ -1,0 +1,2 @@
+loadfile dir: status=7 read=1 detail=1
+execresult signal: top=3 nil [signal] 9

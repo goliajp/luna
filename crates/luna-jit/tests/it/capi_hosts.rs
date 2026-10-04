@@ -135,8 +135,9 @@ fn build(name: &str, v: &str, inc: &str) -> Result<PathBuf, String> {
 /// How a process ended, as the recordings write it.
 fn status_text(st: std::process::ExitStatus) -> String {
     match st.code() {
-        // Windows' abort() exits with 3
-        Some(3) if cfg!(windows) => "abort".to_string(),
+        // Windows' abort() exits with 3, or with STATUS_STACK_BUFFER_OVERRUN
+        // (0xC0000409) when the C runtime ends the process with __fastfail
+        Some(3 | -1_073_740_791) if cfg!(windows) => "abort".to_string(),
         Some(c) => c.to_string(),
         None => "abort".to_string(),
     }

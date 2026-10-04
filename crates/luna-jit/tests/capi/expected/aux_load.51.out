@@ -21,7 +21,7 @@ loadfile half bom: status=3: top=2 [aux_load_tmp.lua:1: unexpected symbol near '
 loadfile empty: status=0 call=0: top=1
 loadfile syntax: status=3: top=2 [aux_load_tmp.lua:1: unexpected symbol near 'return']
 loadfile missing: status=6 top=2 prefix=1
-loadfile dir: status=6 top=2 prefix=1 detail=1
+loadfile dir: status=6 top=2 prefix=1
 loadfile stdin: status=0 call=0: top=2 [from stdin]
 loadfile stdin again: status=0 call=0: top=2
 dofile: top=3 10 20
