@@ -1,6 +1,7 @@
 //! Read formats and the readers for lines, counts and the whole file.
 
 use super::*;
+use crate::runtime::mem::LVec;
 
 /// Outcome of `g_read`: the values (the last one nil when a format failed),
 /// or the I/O error that ends a read (`ferror`).
@@ -8,6 +9,33 @@ pub(super) enum ReadOut {
     Values(Vec<Value>),
     Error(std::io::Error),
 }
+
+/// Why a read format stopped: an I/O error (`ferror`, a soft failure), or a
+/// Lua error such as a buffer the allocation context refused.
+enum RdErr {
+    Io(std::io::Error),
+    Lua(LuaError),
+}
+
+impl From<std::io::Error> for RdErr {
+    fn from(e: std::io::Error) -> RdErr {
+        RdErr::Io(e)
+    }
+}
+
+impl From<LuaError> for RdErr {
+    fn from(e: LuaError) -> RdErr {
+        RdErr::Lua(e)
+    }
+}
+
+impl From<crate::runtime::mem::Oom> for RdErr {
+    fn from(o: crate::runtime::mem::Oom) -> RdErr {
+        RdErr::Lua(o.into())
+    }
+}
+
+type Rd = Result<Value, RdErr>;
 
 /// One read format, parsed.
 enum Fmt {
@@ -68,14 +96,15 @@ pub(super) fn g_read(
     if fmts.is_empty() {
         return Ok(match read_line(vm, u, false) {
             Ok(v) => ReadOut::Values(vec![v]),
-            Err(e) => ReadOut::Error(e),
+            Err(RdErr::Io(e)) => ReadOut::Error(e),
+            Err(RdErr::Lua(e)) => return Err(e),
         });
     }
     let mut out = Vec::with_capacity(fmts.len());
     for (i, &f) in fmts.iter().enumerate() {
         let fmt = parse_format(vm, f, argno0 + i as u32)?;
         let r = match fmt {
-            Fmt::Count(n) => read_count(vm, u, n)?,
+            Fmt::Count(n) => read_count(vm, u, n),
             Fmt::Number => read_number(vm, u),
             Fmt::Line { keep_nl } => read_line(vm, u, keep_nl),
             Fmt::All => read_all(vm, u),
@@ -88,15 +117,16 @@ pub(super) fn g_read(
                     break;
                 }
             }
-            Err(e) => return Ok(ReadOut::Error(e)),
+            Err(RdErr::Io(e)) => return Ok(ReadOut::Error(e)),
+            Err(RdErr::Lua(e)) => return Err(e),
         }
     }
     Ok(ReadOut::Values(out))
 }
 
-fn push_read(vm: &mut Vm, fs: u32, r: ReadOut) -> u32 {
+fn push_read(vm: &mut Vm, fs: u32, r: ReadOut) -> Result<u32, LuaError> {
     match r {
-        ReadOut::Values(vals) => vm.nat_return(fs, &vals),
+        ReadOut::Values(vals) => vm.nat_ret(fs, &vals),
         ReadOut::Error(e) => file_fail(vm, fs, None, &e),
     }
 }
@@ -105,14 +135,14 @@ pub(super) fn io_read(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     let u = get_io_file(vm, Io::Input)?;
     let fmts: Vec<Value> = (0..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
     let r = g_read(vm, u, &fmts, 1)?;
-    Ok(push_read(vm, fs, r))
+    push_read(vm, fs, r)
 }
 
 pub(super) fn f_read(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = check_open(vm, Args::new(fs, nargs), 0)?;
     let fmts: Vec<Value> = (1..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
     let r = g_read(vm, u, &fmts, 2)?;
-    Ok(push_read(vm, fs, r))
+    push_read(vm, fs, r)
 }
 
 /// `BUFSIZ`, the size of the chunks ≤5.2 read a line in (`LUAL_BUFFERSIZE`).
@@ -137,21 +167,21 @@ const BUFSIZ: usize = 8192;
 
 /// `read_line`: up to and excluding (`keep_nl`: including) the newline; nil
 /// when nothing at all was read.
-fn read_line(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Result<Value> {
+fn read_line(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> Rd {
     if vm.version() <= LuaVersion::Lua52 {
         return read_line_fgets(vm, u, keep_nl);
     }
-    let mut buf = Vec::new();
+    let mut buf = LVec::new(vm.heap.mem());
     let mut got_nl = false;
     while let Some(c) = getc(u)? {
         if c == b'\n' {
             got_nl = true;
             if keep_nl {
-                buf.push(c);
+                buf.push(c)?;
             }
             break;
         }
-        buf.push(c);
+        buf.push(c)?;
     }
     if got_nl || !buf.is_empty() {
         read_str(vm, &buf)
@@ -163,8 +193,8 @@ fn read_line(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Result<Val
 /// ≤5.2's `read_line` reads with `fgets` and measures each chunk with
 /// `strlen`: a NUL cuts the chunk short there, and a newline after it is
 /// lost, so the line runs on into the next.
-fn read_line_fgets(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Result<Value> {
-    let mut out = Vec::new();
+fn read_line_fgets(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> Rd {
+    let mut out = LVec::new(vm.heap.mem());
     loop {
         let mut chunk = Vec::new();
         while chunk.len() < BUFSIZ - 1 {
@@ -188,10 +218,10 @@ fn read_line_fgets(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Resu
         // strlen: up to the first NUL, the whole chunk when there is none
         let len = chunk.iter().position(|&b| b == 0).unwrap_or(chunk.len());
         if len == 0 || chunk[len - 1] != b'\n' {
-            out.extend_from_slice(&chunk[..len]);
+            out.extend_from_slice(&chunk[..len])?;
         } else {
             let end = if keep_nl { len } else { len - 1 };
-            out.extend_from_slice(&chunk[..end]);
+            out.extend_from_slice(&chunk[..end])?;
             return read_str(vm, &out);
         }
     }
@@ -199,18 +229,18 @@ fn read_line_fgets(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Resu
 
 /// A string read from a file. One longer than a string can hold is an
 /// allocation failure, which PUC's buffer would meet first.
-fn read_str(vm: &mut Vm, bytes: &[u8]) -> std::io::Result<Value> {
+fn read_str(vm: &mut Vm, bytes: &[u8]) -> Rd {
     if bytes.len() > crate::runtime::string::MAX_LEN {
-        return Err(posix_error(ENOMEM));
+        return Err(posix_error(ENOMEM).into());
     }
-    Ok(Value::Str(vm.heap.intern(bytes)))
+    Ok(vm.str_value(bytes)?)
 }
 
 /// `read_all`: never fails (an empty string at end of file).
-fn read_all(vm: &mut Vm, u: Gc<Userdata>) -> std::io::Result<Value> {
-    let mut buf = Vec::new();
+fn read_all(vm: &mut Vm, u: Gc<Userdata>) -> Rd {
+    let mut buf = LVec::new(vm.heap.mem());
     loop {
-        buf.extend_from_slice(&u.read_buf[u.read_pos..]);
+        buf.extend_from_slice(&u.read_buf[u.read_pos..])?;
         // SAFETY: `u` is a file handle the caller holds; the right-hand side is read before the borrow starts, and the borrow covers one field store
         unsafe { u.as_mut() }.read_pos = u.read_buf.len();
         if !fill(u)? {
@@ -225,15 +255,15 @@ const UNALLOCATABLE: u64 = 1 << 47;
 
 /// A byte-count format: `0` tests for end of file; `n` reads up to `n`
 /// bytes (nil when none were left). A negative count is a huge `size_t`.
-fn read_count(vm: &mut Vm, u: Gc<Userdata>, n: i64) -> Result<std::io::Result<Value>, LuaError> {
+fn read_count(vm: &mut Vm, u: Gc<Userdata>, n: i64) -> Rd {
     let size = n as u64;
     if size == 0 {
-        return Ok(test_eof(vm, u));
+        return test_eof(vm, u);
     }
     // 5.1 reads in chunks, so any size works; 5.2+ size one buffer for the
     // whole request, which the allocator refuses for absurd sizes
     if size >= UNALLOCATABLE && vm.version() >= LuaVersion::Lua52 {
-        return Err(match vm.version() {
+        return Err(RdErr::Lua(match vm.version() {
             LuaVersion::Lua52 if size > u64::MAX - 64 => {
                 vm.plain_err("memory allocation error: block too big")
             }
@@ -241,45 +271,45 @@ fn read_count(vm: &mut Vm, u: Gc<Userdata>, n: i64) -> Result<std::io::Result<Va
             LuaVersion::Lua55 if size >= i64::MAX as u64 => {
                 raise_str(vm, "resulting string too large")
             }
-            _ => vm.plain_err("not enough memory"),
-        });
+            _ => vm.mem_err(),
+        }));
     }
-    let mut buf = Vec::new();
+    let mut buf = LVec::new(vm.heap.mem());
     while (buf.len() as u64) < size {
         let want = (size - buf.len() as u64) as usize;
         if u.read_pos >= u.read_buf.len() {
             match fill(u) {
                 Ok(true) => {}
                 Ok(false) => break,
-                Err(e) => return Ok(Err(e)),
+                Err(e) => return Err(e.into()),
             }
         }
         let take = want.min(u.read_buf.len() - u.read_pos);
-        buf.extend_from_slice(&u.read_buf[u.read_pos..u.read_pos + take]);
+        buf.extend_from_slice(&u.read_buf[u.read_pos..u.read_pos + take])?;
         // SAFETY: `u` is a file handle the caller holds; the borrow covers one field store
         unsafe { u.as_mut() }.read_pos += take;
     }
-    Ok(if buf.is_empty() {
+    if buf.is_empty() {
         Ok(Value::Nil)
     } else {
         read_str(vm, &buf)
-    })
+    }
 }
 
 /// `test_eof`: "" if a byte is left, nil at end of file.
-fn test_eof(vm: &mut Vm, u: Gc<Userdata>) -> std::io::Result<Value> {
+fn test_eof(vm: &mut Vm, u: Gc<Userdata>) -> Rd {
     Ok(match getc(u)? {
         Some(c) => {
             unget(u, &[c]);
-            Value::Str(vm.heap.intern(b""))
+            vm.str_value(b"")?
         }
         None => Value::Nil,
     })
 }
 
-fn read_number(vm: &mut Vm, u: Gc<Userdata>) -> std::io::Result<Value> {
+fn read_number(vm: &mut Vm, u: Gc<Userdata>) -> Rd {
     if vm.version() <= LuaVersion::Lua52 {
-        return scan_double(u);
+        return Ok(scan_double(u)?);
     }
     let buf = read_numeral(u)?;
     Ok(match numeric::str2num(&buf, true, true) {

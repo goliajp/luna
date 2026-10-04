@@ -194,7 +194,7 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
     // fail. ≤5.3 answer normally; luna's collector is not reentrant, so a
     // collection requested there does not run.
     if vm.gc_is_finalizing() && v >= LuaVersion::Lua54 {
-        return Ok(vm.nat_return(fs, &[Value::Nil]));
+        return vm.nat_ret(fs, &[Value::Nil]);
     }
     let out: Vec<Value> = match opt {
         "collect" => {
@@ -248,7 +248,7 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
         "param" => vec![param(vm, a)?],
         _ => unreachable!("check_option returned an index into options()"),
     };
-    Ok(vm.nat_return(fs, &out))
+    vm.nat_ret(fs, &out)
 }
 
 fn options(v: LuaVersion) -> &'static [&'static str] {
@@ -368,7 +368,7 @@ fn switch_mode(vm: &mut Vm, a: Args, opt: &'static str) -> Result<Vec<Value>, Lu
     Ok(vec![if v == LuaVersion::Lua52 {
         Value::Int(0)
     } else {
-        Value::Str(vm.heap.intern(prev.as_bytes()))
+        vm.str_value(prev.as_bytes())?
     }])
 }
 

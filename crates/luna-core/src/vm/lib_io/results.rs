@@ -59,30 +59,33 @@ pub(crate) fn strerror(e: &std::io::Error) -> String {
 }
 
 /// `luaL_fileresult` for a failure: `(nil, "[fname: ]strerror", errno)`.
-pub(crate) fn file_fail(vm: &mut Vm, fs: u32, fname: Option<&[u8]>, e: &std::io::Error) -> u32 {
-    let vals = file_fail_values(vm, fname, e);
-    vm.nat_return(fs, &vals)
+pub(crate) fn file_fail(
+    vm: &mut Vm,
+    fs: u32,
+    fname: Option<&[u8]>,
+    e: &std::io::Error,
+) -> Result<u32, LuaError> {
+    let vals = file_fail_values(vm, fname, e)?;
+    vm.nat_ret(fs, &vals)
 }
 
 pub(super) fn file_fail_values(
     vm: &mut Vm,
     fname: Option<&[u8]>,
     e: &std::io::Error,
-) -> [Value; 3] {
-    let mut msg = Vec::new();
-    if let Some(n) = fname {
-        msg.extend_from_slice(c_str(n));
-        msg.extend_from_slice(b": ");
-    }
-    msg.extend_from_slice(strerror(e).as_bytes());
+) -> Result<[Value; 3], LuaError> {
+    let text = strerror(e);
+    let m = match fname {
+        Some(n) => vm.concat_str(&[c_str(n), b": ", text.as_bytes()])?,
+        None => vm.str_value(text.as_bytes())?,
+    };
     let code = errno(e).map_or(0, i64::from);
-    let m = Value::Str(vm.heap.intern(&msg));
-    [Value::Nil, m, Value::Int(code)]
+    Ok([Value::Nil, m, Value::Int(code)])
 }
 
 /// `luaL_fileresult` for success.
-pub(super) fn file_ok(vm: &mut Vm, fs: u32) -> u32 {
-    vm.nat_return(fs, &[Value::Bool(true)])
+pub(super) fn file_ok(vm: &mut Vm, fs: u32) -> Result<u32, LuaError> {
+    vm.nat_ret(fs, &[Value::Bool(true)])
 }
 
 /// `luaL_execresult` on a waited-for child (5.2+): `(true|nil, "exit"|
@@ -92,7 +95,7 @@ pub(crate) fn exec_result(
     vm: &mut Vm,
     fs: u32,
     status: std::io::Result<std::process::ExitStatus>,
-) -> u32 {
+) -> Result<u32, LuaError> {
     let status = match status {
         Ok(s) => s,
         Err(e) => return file_fail(vm, fs, None, &e),
@@ -103,8 +106,8 @@ pub(crate) fn exec_result(
     } else {
         Value::Nil
     };
-    let w = Value::Str(vm.heap.intern(what.as_bytes()));
-    vm.nat_return(fs, &[ok, w, Value::Int(code as i64)])
+    let w = vm.str_value(what.as_bytes())?;
+    vm.nat_ret(fs, &[ok, w, Value::Int(code as i64)])
 }
 
 /// `l_inspectstat`: `WIFEXITED` → ("exit", status), `WIFSIGNALED` →

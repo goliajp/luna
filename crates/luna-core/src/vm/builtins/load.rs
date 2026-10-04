@@ -69,9 +69,9 @@ fn next_piece(vm: &mut Vm, reader: Value) -> Result<Option<Vec<u8>>, Value> {
         Some(&v) => match argcheck::to_str_bytes(vm, v) {
             Some(b) if b.is_empty() => Ok(None),
             Some(b) => Ok(Some(b)),
-            None => Err(Value::Str(
-                vm.heap.intern(b"reader function must return a string"),
-            )),
+            None => Err(vm
+                .str_value(b"reader function must return a string")
+                .unwrap_or_else(|e| e.0)),
         },
     }
 }
@@ -87,7 +87,7 @@ fn load_reader(
     name: &[u8],
     mode: Option<&[u8]>,
 ) -> Result<u32, LuaError> {
-    let fail = |vm: &mut Vm, msg: Value| Ok(vm.nat_return(a.fs, &[Value::Nil, msg]));
+    let fail = |vm: &mut Vm, msg: Value| vm.nat_ret(a.fs, &[Value::Nil, msg]);
     let mut first = match next_piece(vm, reader) {
         Ok(p) => p,
         Err(msg) => return fail(vm, msg),
@@ -107,21 +107,26 @@ fn load_reader(
     let Some(text) = text else {
         // the undumper (and MacroLua's macro pass) take the whole chunk
         let budget = vm.loader_input_budget();
-        let mut buf = first;
+        let mut buf = crate::runtime::mem::LVec::from_slice(vm.heap.mem(), &first)?;
         loop {
             match next_piece(vm, reader) {
                 Ok(Some(p)) if p.len() > budget.saturating_sub(buf.len()) => {
-                    let m = Value::Str(vm.heap.intern(b"not enough memory"));
+                    let m = vm.mem_err().0;
                     return fail(vm, m);
                 }
-                Ok(Some(p)) => buf.extend_from_slice(&p),
+                Ok(Some(p)) => {
+                    if let Err(o) = buf.extend_from_slice(&p) {
+                        let m = LuaError::from(o).0;
+                        return fail(vm, m);
+                    }
+                }
                 Ok(None) => break,
                 Err(msg) => return fail(vm, msg),
             }
         }
         return load_chunk(vm, a, &buf, ChunkName::Bytes(name), mode);
     };
-    if let Some(m) = mode_refusal(vm, mode, false) {
+    if let Some(m) = mode_refusal(vm, mode, false)? {
         return fail(vm, m);
     }
     let mut failed = None;
@@ -145,19 +150,24 @@ fn load_reader(
 
 /// PUC `checkmode`: the message `load` returns when `mode` does not allow
 /// a binary or text chunk.
-fn mode_refusal(vm: &mut Vm, mode: Option<&[u8]>, binary: bool) -> Option<Value> {
+fn mode_refusal(vm: &mut Vm, mode: Option<&[u8]>, binary: bool) -> Result<Option<Value>, LuaError> {
     // `strchr`: the mode is a C string, so it ends at the first NUL.
-    let mode = mode.map(|m| &m[..m.iter().position(|&c| c == 0).unwrap_or(m.len())])?;
+    let Some(mode) = mode.map(|m| &m[..m.iter().position(|&c| c == 0).unwrap_or(m.len())]) else {
+        return Ok(None);
+    };
     let kind = if binary { b'b' } else { b't' };
     if mode.contains(&kind) {
-        return None;
+        return Ok(None);
     }
-    let msg = format!(
-        "attempt to load a {} chunk (mode is '{}')",
-        if binary { "binary" } else { "text" },
-        String::from_utf8_lossy(mode)
-    );
-    Some(Value::Str(vm.heap.intern(msg.as_bytes())))
+    let what: &[u8] = if binary { b"binary" } else { b"text" };
+    let msg = vm.concat_str(&[
+        b"attempt to load a ",
+        what,
+        b" chunk (mode is '",
+        mode,
+        b"')",
+    ])?;
+    Ok(Some(msg))
 }
 
 /// Compile `src` as chunk `name` and return `load`'s results: the function,
@@ -176,8 +186,8 @@ fn load_chunk(
         ChunkName::Str(s) => (s.as_bytes(), Some(*s)),
     };
     let binary = crate::vm::dump::is_binary_chunk(src);
-    if let Some(m) = mode_refusal(vm, mode, binary) {
-        return Ok(vm.nat_return(a.fs, &[Value::Nil, m]));
+    if let Some(m) = mode_refusal(vm, mode, binary)? {
+        return vm.nat_ret(a.fs, &[Value::Nil, m]);
     }
     let r = vm.load_named(src, name, name_str);
     loaded(vm, a, r, name)
@@ -198,11 +208,11 @@ fn loaded(
             // ignores the env.
             if vm.version() >= LuaVersion::Lua52 && !a.is_none(3) && !cl.upvals().is_empty() {
                 let env = a.get(vm, 3);
-                let uv = vm.heap.new_upvalue(crate::runtime::UpvalState::Closed(env));
+                let uv = vm.lib_closed_upvalue(env)?;
                 // SAFETY: `cl` is the closure the load just built, held only by this local, and `new_upvalue` does not collect; the borrow covers one slot store, inside the bounds checked by `upvals().is_empty()`
                 unsafe { cl.as_mut() }.upvals_mut()[0] = uv;
             }
-            Ok(vm.nat_return(a.fs, &[Value::Closure(cl)]))
+            vm.nat_ret(a.fs, &[Value::Closure(cl)])
         }
         Err(e) => {
             // PUC formats the syntax error's source prefix via `luaO_chunkid`
@@ -212,7 +222,7 @@ fn loaded(
             // byte from the source) — splice it in as-is so 5.1 errors.lua
             // can pattern-match `near '\xff'` etc.
             let m = vm.load_error_value(&e, name);
-            Ok(vm.nat_return(a.fs, &[Value::Nil, m]))
+            vm.nat_ret(a.fs, &[Value::Nil, m])
         }
     }
 }

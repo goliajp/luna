@@ -9,7 +9,7 @@ pub(super) fn nat_assert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     if v.truthy() {
         // assert returns all its arguments
         let vals: Vec<Value> = (0..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
-        return Ok(vm.nat_return(fs, &vals));
+        return vm.nat_ret(fs, &vals);
     }
     match vm.version() {
         // 5.1 checks for a condition first; 5.2 does not, so a bare
@@ -71,7 +71,7 @@ pub(super) fn nat_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         .map(String::into_bytes)
         .unwrap_or_default();
     out.extend_from_slice(&text);
-    Err(LuaError(Value::Str(vm.heap.intern(&out))))
+    Err(LuaError(vm.str_value(&out)?))
 }
 
 /// Raise a string-ish error with the caller's position prefix (PUC level 1).
@@ -81,15 +81,11 @@ pub(super) fn nat_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
 fn raise(vm: &mut Vm, msg: Value) -> LuaError {
     match msg {
         Value::Str(s) => {
-            let text = match vm.position_prefix_at_level(1) {
-                Some(p) => {
-                    let mut t = p.into_bytes();
-                    t.extend_from_slice(s.as_bytes());
-                    t
-                }
-                None => s.as_bytes().to_vec(),
-            };
-            LuaError(Value::Str(vm.heap.intern(&text)))
+            let p = vm.position_prefix_at_level(1).unwrap_or_default();
+            match vm.concat_str(&[p.as_bytes(), s.as_bytes()]) {
+                Ok(v) => LuaError(v),
+                Err(e) => e,
+            }
         }
         v => LuaError(v),
     }
@@ -101,8 +97,10 @@ pub(crate) fn raise_str(vm: &mut Vm, msg: &str) -> LuaError {
 
 /// `luaL_error` with a message that need not be UTF-8.
 pub(crate) fn raise_bytes(vm: &mut Vm, msg: &[u8]) -> LuaError {
-    let s = Value::Str(vm.heap.intern(msg));
-    raise(vm, s)
+    match vm.str_value(msg) {
+        Ok(s) => raise(vm, s),
+        Err(e) => e,
+    }
 }
 
 /// PUC `luaL_argerror`: "bad argument #n to 'name' (extra)".

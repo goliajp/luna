@@ -7,11 +7,11 @@ use super::*;
 pub(super) fn find_table(vm: &mut Vm, name: &[u8]) -> Result<Option<Gc<Table>>, LuaError> {
     let mut t = vm.globals();
     for part in name.split(|&b| b == b'.') {
-        let k = Value::Str(vm.heap.intern(part));
+        let k = vm.str_value(part)?;
         t = match t.get(k) {
             Value::Table(next) => next,
             Value::Nil => {
-                let next = vm.heap.new_table();
+                let next = vm.alloc_table()?;
                 raw_set_checked(vm, t, k, Value::Table(next))?;
                 next
             }
@@ -42,16 +42,16 @@ pub(super) fn ll_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         }
     };
     let mv = Value::Table(module);
-    let nk = str_value(vm, b"_NAME");
+    let nk = str_value(vm, b"_NAME")?;
     if vm.index_value(mv, nk)?.is_nil() {
         // modinit: _M, _NAME, and _PACKAGE (the name up to its last dot)
-        let mk = str_value(vm, b"_M");
+        let mk = str_value(vm, b"_M")?;
         vm.newindex_value(mv, mk, mv)?;
-        let nv = str_value(vm, &name);
+        let nv = str_value(vm, &name)?;
         vm.newindex_value(mv, nk, nv)?;
         let cut = name.iter().rposition(|&b| b == b'.').map_or(0, |i| i + 1);
-        let pk = str_value(vm, b"_PACKAGE");
-        let pv = str_value(vm, &name[..cut]);
+        let pk = str_value(vm, b"_PACKAGE")?;
+        let pv = str_value(vm, &name[..cut])?;
         vm.newindex_value(mv, pk, pv)?;
     }
     set_caller_env(vm, module)?;
@@ -64,9 +64,9 @@ pub(super) fn ll_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         vm.call_value(opt, &[mv])?;
     }
     if v == LuaVersion::Lua51 {
-        return Ok(vm.nat_return(fs, &[]));
+        return vm.nat_ret(fs, &[]);
     }
-    Ok(vm.nat_return(fs, &[mv]))
+    vm.nat_ret(fs, &[mv])
 }
 
 /// Make `env` (the module table) the environment of the Lua function that
@@ -99,14 +99,14 @@ pub(super) fn ll_seeall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         Some(mt) => mt,
         None => {
             vm.refuse_readonly(t)?;
-            let mt = vm.heap.new_table();
+            let mt = vm.alloc_table()?;
             // SAFETY: `t` is the table argument, kept alive by its stack slot; `mt` is a separate new table, and the borrow covers one call
             unsafe { t.as_mut() }.set_metatable(Some(mt));
             mt
         }
     };
     let g = Value::Table(vm.globals());
-    let k = Value::Str(vm.heap.intern(b"__index"));
+    let k = vm.str_value(b"__index")?;
     raw_set_checked(vm, mt, k, g)?;
-    Ok(vm.nat_return(fs, &[]))
+    vm.nat_ret(fs, &[])
 }

@@ -65,10 +65,10 @@ pub(super) fn d_getlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             _ => None,
         };
         let r = match name {
-            Some(nm) => Value::Str(vm.heap.intern(nm.as_bytes())),
+            Some(nm) => vm.str_value(nm.as_bytes())?,
             None => Value::Nil,
         };
-        return Ok(vm.nat_return(fs, &[r]));
+        return vm.nat_ret(fs, &[r]);
     }
     let level = check_int(vm, a, arg)?;
     let level = stack_level(vm, co, level, arg + 1)?;
@@ -85,10 +85,10 @@ fn getlocal_result(
     match find_local(vm, co, level, n) {
         Some((name, at)) => {
             let val = read_local(vm, co, at);
-            let nm = Value::Str(vm.heap.intern(name.as_bytes()));
-            Ok(vm.nat_return(fs, &[nm, val]))
+            let nm = vm.str_value(name.as_bytes())?;
+            vm.nat_ret(fs, &[nm, val])
         }
-        None => Ok(vm.nat_return(fs, &[Value::Nil])),
+        None => vm.nat_ret(fs, &[Value::Nil]),
     }
 }
 
@@ -133,8 +133,8 @@ pub(super) fn d_setlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         None => None,
     };
     let r = match name {
-        Some(nm) => Value::Str(vm.heap.intern(nm.as_bytes())),
+        Some(nm) => vm.str_value(nm.as_bytes())?,
         None => Value::Nil,
     };
-    Ok(vm.nat_return(fs, &[r]))
+    vm.nat_ret(fs, &[r])
 }

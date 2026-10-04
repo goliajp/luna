@@ -22,8 +22,13 @@ use sort::t_sort;
 type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 
 pub(crate) fn open_table(vm: &mut Vm) {
+    crate::vm::lib_mem::opened(try_open_table(vm));
+}
+
+/// [`open_table`], failing when memory runs out.
+pub(crate) fn try_open_table(vm: &mut Vm) -> Result<(), LuaError> {
     let ver = vm.version();
-    let t = vm.heap.new_table();
+    let t = vm.alloc_table()?;
     // Ordering note: the enum runs Lua51 < Lua52 < Lua53 < Lua54 <
     // MacroLua < Lua55, so MacroLua (a 5.4 base) inherits exactly the 5.4
     // surface from these comparisons.
@@ -58,15 +63,11 @@ pub(crate) fn open_table(vm: &mut Vm) {
         ]);
     }
     for (name, f) in funcs {
-        let fv = vm.native(f);
-        let k = Value::Str(vm.heap.intern(name.as_bytes()));
-        // SAFETY: `t` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
-        unsafe { t.as_mut() }
-            .set(&mut vm.heap, k, fv)
-            .expect("valid key");
+        let fv = vm.lib_native(f)?;
+        let k = vm.str_value(name.as_bytes())?;
+        vm.lib_set_value(t, k, fv)?;
     }
-    vm.set_global("table", Value::Table(t))
-        .expect("stdlib registration");
+    vm.lib_set_global("table", Value::Table(t))?;
     // once-per-table barrier so a post-init `Vm::open_table` call (the embed
     // API can re-open libraries mid-Propagate) demotes `t` back to gray —
     // no-op when phase != Propagate, where t was born current_white.
@@ -74,10 +75,11 @@ pub(crate) fn open_table(vm: &mut Vm) {
     // LUA_COMPAT_UNPACK (default in 5.2): `_G.unpack = table.unpack`, the
     // same function value.
     if ver == V::Lua52 {
-        let k = Value::Str(vm.heap.intern(b"unpack"));
+        let k = vm.str_value(b"unpack")?;
         let f = t.get(k);
-        vm.set_global("unpack", f).expect("stdlib registration");
+        vm.lib_set_global("unpack", f)?;
     }
+    Ok(())
 }
 
 /// PUC `ltablib.c` argument-check flags (5.3+).
@@ -170,10 +172,12 @@ fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value) -> Result<(), LuaError> {
     if vm.version() <= V::Lua52 {
         if let Value::Table(t) = tv {
             // SAFETY: `t` is the table argument, kept alive by its stack slot; no reference into it is live across the `set`, which does not collect
-            match unsafe { t.as_mut() }.set(&mut vm.heap, Value::Int(i), v) {
+            match vm.table_op(|vm| unsafe { t.as_mut() }.set(&mut vm.heap, Value::Int(i), v)) {
                 Ok(()) => {}
                 // lua_rawseti in Redis refuses a read-only table
-                Err(e @ TableError::ReadOnly) => return Err(vm.table_error(e)),
+                Err(e @ (TableError::ReadOnly | TableError::Memory(_))) => {
+                    return Err(vm.table_error(e));
+                }
                 Err(_) => return Err(vm.rt_err("table overflow")),
             }
             vm.barrier_back_table(t);

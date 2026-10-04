@@ -48,8 +48,9 @@ impl Vm {
         if !continues {
             self.errored_natives.clear();
         }
-        self.errored_natives
-            .push_or_abort(ErroredNative { act, err });
+        // a record that cannot be kept only leaves the native out of the
+        // error's traceback
+        let _ = self.errored_natives.push(ErroredNative { act, err });
     }
 
     /// An error a native raised when the host called it directly (no Lua
@@ -109,6 +110,8 @@ impl Vm {
         let raised_by = self.take_errored_natives(err);
         let base = self.running_natives.len();
         for e in raised_by.iter().rev() {
+            // these were popped from `running_natives` just before, whose
+            // block kept their room
             self.running_natives.push_or_abort(e.act);
         }
         let catcher = self.nearest_catcher();
@@ -130,7 +133,7 @@ impl Vm {
         // 5.5 `luaG_errormsg` names a nil error object after any handler
         // ran; an error reaching the host keeps it for lua.c's handler
         let out = if out.is_nil() && self.version() >= LuaVersion::Lua55 && !to_host {
-            Value::Str(self.heap.intern(b"<no error object>"))
+            self.str_value(b"<no error object>").unwrap_or_else(|e| e.0)
         } else {
             out
         };
@@ -156,7 +159,7 @@ impl Vm {
         chunkname: &[u8],
     ) -> Value {
         let id = crate::vm::callstack::syntax_chunk_id(self.version(), chunkname);
-        let msg = Value::Str(self.heap.intern(&e.render(&id)));
+        let msg = self.str_value(&e.render(&id)).unwrap_or_else(|e| e.0);
         let stack_overflow = e.line == 0 && e.msg == b"C stack overflow";
         if self.version() < LuaVersion::Lua54 || !stack_overflow {
             return msg;
@@ -185,7 +188,10 @@ impl Vm {
         }
         let capped = self.msgh_depth >= crate::vm::exec::MAX_C_DEPTH;
         let (arg, reenter) = if capped {
-            (Value::Str(self.heap.intern(b"C stack overflow")), None)
+            (
+                self.str_value(b"C stack overflow").unwrap_or_else(|e| e.0),
+                None,
+            )
         } else {
             (err, Some(handler))
         };

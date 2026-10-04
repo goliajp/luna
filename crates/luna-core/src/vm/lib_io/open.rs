@@ -72,10 +72,10 @@ pub(super) fn io_open(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     }
     match open_file(&name, &mode) {
         Ok((f, writable)) => {
-            let u = new_file(vm, FileHandle::File(f), writable);
-            Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
+            let u = new_file(vm, FileHandle::File(f), writable)?;
+            vm.nat_ret(fs, &[Value::Userdata(u)])
         }
-        Err(e) => Ok(file_fail(vm, fs, Some(&name), &e)),
+        Err(e) => file_fail(vm, fs, Some(&name), &e),
     }
 }
 
@@ -92,14 +92,14 @@ pub(super) fn io_tmpfile(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaEr
         .open(&path)
     {
         Ok(f) => f,
-        Err(e) => return Ok(file_fail(vm, fs, None, &e)),
+        Err(e) => return file_fail(vm, fs, None, &e),
     };
     // tmpfile(3) leaves no name behind; the open handle keeps the file.
     if let Err(e) = std::fs::remove_file(&path) {
-        return Ok(file_fail(vm, fs, None, &e));
+        return file_fail(vm, fs, None, &e);
     }
-    let u = new_file(vm, FileHandle::File(file), true);
-    Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
+    let u = new_file(vm, FileHandle::File(file), true)?;
+    vm.nat_ret(fs, &[Value::Userdata(u)])
 }
 
 /// `io.popen(prog [, mode])`: a `/bin/sh -c prog` child with its stdout
@@ -121,7 +121,7 @@ pub(super) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         _ if vm.version() >= LuaVersion::Lua53 => return Err(arg_error(vm, 2, "invalid mode")),
         _ => {
             let e = posix_error(EINVAL);
-            return Ok(file_fail(vm, fs, Some(&prog), &e));
+            return file_fail(vm, fs, Some(&prog), &e);
         }
     };
     // `l_popen` flushes every output stream first (`fflush(NULL)`), so the
@@ -135,17 +135,17 @@ pub(super) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return Ok(file_fail(vm, fs, Some(&prog), &e)),
+        Err(e) => return file_fail(vm, fs, Some(&prog), &e),
     };
     let file = if read {
         pipe_file(child.stdout.take().expect("stdout was piped"))
     } else {
         pipe_file(child.stdin.take().expect("stdin was piped"))
     };
-    let u = new_file(vm, FileHandle::File(file), !read);
+    let u = new_file(vm, FileHandle::File(file), !read)?;
     // SAFETY: `u` was created by `new_file` just above and is held only by this local; the borrow covers one field store
     unsafe { u.as_mut() }.popen_child = Some(child);
-    Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
+    vm.nat_ret(fs, &[Value::Userdata(u)])
 }
 
 /// A child's pipe end as a plain file, so reads and writes share one path.
@@ -244,7 +244,7 @@ fn g_iofile(vm: &mut Vm, fs: u32, nargs: u32, which: Io) -> Result<u32, LuaError
         }
     }
     let cur = default_file(vm, which);
-    Ok(vm.nat_return(fs, &[Value::Userdata(cur)]))
+    vm.nat_ret(fs, &[Value::Userdata(cur)])
 }
 
 /// `opencheck` (5.2+) / 5.1's `fileerror`: open or raise.
@@ -254,7 +254,7 @@ pub(super) fn open_checked(
     mode: &[u8],
 ) -> Result<Gc<Userdata>, LuaError> {
     match open_file(name, mode) {
-        Ok((f, writable)) => Ok(new_file(vm, FileHandle::File(f), writable)),
+        Ok((f, writable)) => Ok(new_file(vm, FileHandle::File(f), writable)?),
         Err(e) => {
             let n = String::from_utf8_lossy(c_str(name)).into_owned();
             let err = strerror(&e);

@@ -17,14 +17,20 @@ use patterns::{s_find, s_gmatch, s_gsub, s_match};
 type NativeFn = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 
 pub(crate) fn open_string(vm: &mut Vm) {
-    let t = vm.heap.new_table();
+    crate::vm::lib_mem::opened(try_open_string(vm));
+}
+
+/// [`open_string`], failing when memory runs out.
+pub(crate) fn try_open_string(vm: &mut Vm) -> Result<(), LuaError> {
+    let t = vm.alloc_table()?;
     let v = vm.version();
-    let set = |vm: &mut Vm, t: Gc<crate::runtime::Table>, name: &str, fv: Value| {
-        let k = Value::Str(vm.heap.intern(name.as_bytes()));
-        // SAFETY: `t` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
-        unsafe { t.as_mut() }
-            .set(&mut vm.heap, k, fv)
-            .expect("valid key");
+    let set = |vm: &mut Vm,
+               t: Gc<crate::runtime::Table>,
+               name: &str,
+               fv: Value|
+     -> Result<(), LuaError> {
+        let k = vm.str_value(name.as_bytes())?;
+        vm.lib_set_value(t, k, fv)
     };
     let mut fns: Vec<(&str, NativeFn)> = vec![
         ("len", s_len),
@@ -47,21 +53,20 @@ pub(crate) fn open_string(vm: &mut Vm) {
         fns.push(("packsize", crate::vm::lib_strpack::s_packsize));
     }
     for (name, f) in fns {
-        let fv = vm.native(f);
-        set(vm, t, name, fv);
+        let fv = vm.lib_native(f)?;
+        set(vm, t, name, fv)?;
     }
     // 5.1's LUA_COMPAT_GFIND keeps `gfind` as the very same function as
     // `gmatch`; the suite identity-tests them.
-    let gmatch_v = vm.native(s_gmatch);
-    set(vm, t, "gmatch", gmatch_v);
+    let gmatch_v = vm.lib_native(s_gmatch)?;
+    set(vm, t, "gmatch", gmatch_v)?;
     if v == LuaVersion::Lua51 {
-        set(vm, t, "gfind", gmatch_v);
+        set(vm, t, "gfind", gmatch_v)?;
     }
-    vm.set_global("string", Value::Table(t))
-        .expect("stdlib registration");
+    vm.lib_set_global("string", Value::Table(t))?;
     vm.barrier_back_table(t);
-    let mt = vm.heap.new_table();
-    set(vm, mt, "__index", Value::Table(t));
+    let mt = vm.alloc_table()?;
+    set(vm, mt, "__index", Value::Table(t))?;
     if v >= LuaVersion::Lua54 {
         let arith: [(&str, NativeFn); 8] = [
             ("__add", mm_add),
@@ -74,12 +79,13 @@ pub(crate) fn open_string(vm: &mut Vm) {
             ("__unm", mm_unm),
         ];
         for (name, f) in arith {
-            let fv = vm.native(f);
-            set(vm, mt, name, fv);
+            let fv = vm.lib_native(f)?;
+            set(vm, mt, name, fv)?;
         }
     }
     vm.barrier_back_table(mt);
     vm.set_string_metatable(Some(mt));
+    Ok(())
 }
 
 /// PUC ≤5.3 `posrelat`: a negative position counts from the end, and one
@@ -97,7 +103,7 @@ fn posrelat(pos: i64, len: usize) -> i64 {
 
 fn s_len(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
-    Ok(vm.nat_return(fs, &[Value::Int(s.len() as i64)]))
+    vm.nat_ret(fs, &[Value::Int(s.len() as i64)])
 }
 
 fn s_sub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -105,13 +111,26 @@ fn s_sub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let s = argcheck::check_string(vm, a, 0)?;
     let i = argcheck::check_integer(vm, a, 1)?;
     let j = argcheck::opt_integer(vm, a, 2, -1)?;
-    let r = Value::Str(str_sub(vm, s, i, j));
-    Ok(vm.nat_return(fs, &[r]))
+    let r = Value::Str(try_str_sub(vm, s, i, j)?);
+    vm.nat_ret(fs, &[r])
 }
 
 /// `string.sub(s, i, j)` past its argument checks.
 #[doc(hidden)]
 pub fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Gc<LuaStr> {
+    match try_str_sub(vm, s, i, j) {
+        Ok(r) => r,
+        Err(_) => crate::runtime::mem::oom_abort(std::alloc::Layout::new::<LuaStr>()),
+    }
+}
+
+/// [`str_sub`], raising a memory error when the string cannot be made.
+pub(crate) fn try_str_sub(
+    vm: &mut Vm,
+    s: Gc<LuaStr>,
+    i: i64,
+    j: i64,
+) -> Result<Gc<LuaStr>, LuaError> {
     let l = s.len();
     let start = posrelat(i, l).max(1);
     let end = posrelat(j, l).min(l as i64);
@@ -120,7 +139,7 @@ pub fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Gc<LuaStr> {
     } else {
         b""
     };
-    vm.heap.intern(bytes)
+    vm.alloc_str(bytes)
 }
 
 /// The library function `string.<name>` that the trace JIT may run as a
@@ -135,24 +154,29 @@ pub fn inlinable_native(name: &[u8]) -> Option<crate::runtime::value::NativeFn> 
 
 fn s_upper(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
-    let out = s.as_bytes().to_ascii_uppercase();
-    let r = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[r]))
+    let mut out = vm.new_buf();
+    vm.buf_push(&mut out, s.as_bytes())?;
+    out.make_ascii_uppercase();
+    let r = vm.str_value(&out)?;
+    vm.nat_ret(fs, &[r])
 }
 
 fn s_lower(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
-    let out = s.as_bytes().to_ascii_lowercase();
-    let r = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[r]))
+    let mut out = vm.new_buf();
+    vm.buf_push(&mut out, s.as_bytes())?;
+    out.make_ascii_lowercase();
+    let r = vm.str_value(&out)?;
+    vm.nat_ret(fs, &[r])
 }
 
 fn s_reverse(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
-    let mut out = s.as_bytes().to_vec();
+    let mut out = vm.new_buf();
+    vm.buf_push(&mut out, s.as_bytes())?;
     out.reverse();
-    let r = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[r]))
+    let r = vm.str_value(&out)?;
+    vm.nat_ret(fs, &[r])
 }
 
 /// The longest string the library builds (1 GiB). Past each dialect's own
@@ -179,8 +203,8 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // the result is empty for any count when both pieces are; PUC before
     // 5.5 spins `n` times producing it
     if n <= 0 || l + lsep == 0 {
-        let r = Value::Str(vm.heap.intern(b""));
-        return Ok(vm.nat_return(fs, &[r]));
+        let r = vm.str_value(b"")?;
+        return vm.nat_ret(fs, &[r]);
     }
     let n = n as u128;
     // each dialect's own "too large" test; 5.1 has none
@@ -204,17 +228,18 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
         return Err(vm.mem_err());
     }
-    let mut out = Vec::with_capacity(total as usize);
+    let mut out = vm.new_buf();
+    vm.buf_reserve(&mut out, total as usize)?;
     for k in 0..n {
-        out.extend_from_slice(s.as_bytes());
+        vm.buf_push(&mut out, s.as_bytes())?;
         if let Some(sep) = sep
             && k + 1 < n
         {
-            out.extend_from_slice(sep.as_bytes());
+            vm.buf_push(&mut out, sep.as_bytes())?;
         }
     }
-    let r = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[r]))
+    let r = vm.str_value(&out)?;
+    vm.nat_ret(fs, &[r])
 }
 
 fn s_byte(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -229,17 +254,18 @@ fn s_byte(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     }
     let bytes = &s.as_bytes()[(posi - 1) as usize..pose as usize];
     if let [b] = bytes {
-        return Ok(vm.nat_return(fs, &[Value::Int(i64::from(*b))]));
+        return vm.nat_ret(fs, &[Value::Int(i64::from(*b))]);
     }
     argcheck::check_stack(vm, a, bytes.len() as i64, "string slice too long")?;
-    let vals: Vec<Value> = bytes.iter().map(|&b| Value::Int(i64::from(b))).collect();
-    Ok(vm.nat_return(fs, &vals))
+    let n = bytes.len();
+    vm.nat_ret_iter(fs, n, bytes.iter().map(|&b| Value::Int(i64::from(b))))
 }
 
 fn s_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
-    let mut out = Vec::with_capacity(nargs as usize);
+    let mut out = vm.new_buf();
+    vm.buf_reserve(&mut out, nargs as usize)?;
     for i in 0..nargs {
         let c = if v <= LuaVersion::Lua52 {
             i64::from(argcheck::check_int(vm, a, i)?)
@@ -254,10 +280,10 @@ fn s_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             };
             return Err(arg_error(vm, i + 1, msg));
         }
-        out.push(c as u8);
+        vm.buf_push(&mut out, &[c as u8])?;
     }
-    let r = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[r]))
+    let r = vm.str_value(&out)?;
+    vm.nat_ret(fs, &[r])
 }
 
 fn s_dump(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -284,6 +310,6 @@ fn s_dump(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         crate::vm::dump::dump_puc(&cl.proto, strip, v)
             .map_err(|_| raise_str(vm, "unable to dump given function"))?
     };
-    let r = Value::Str(vm.heap.intern(&bytes));
-    Ok(vm.nat_return(fs, &[r]))
+    let r = vm.str_value(&bytes)?;
+    vm.nat_ret(fs, &[r])
 }

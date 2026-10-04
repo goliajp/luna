@@ -3,10 +3,11 @@
 
 use super::posrelat;
 use crate::pattern::{self, CapValue, Flavor, MatchState, PatError};
+use crate::runtime::mem::LVec;
 use crate::runtime::{Gc, LuaStr, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
-use crate::vm::builtins::{arg_error, raise_str};
+use crate::vm::builtins::{arg_error, raise_bytes, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
@@ -30,10 +31,10 @@ fn pat_err(vm: &mut Vm, e: PatError) -> LuaError {
     raise_str(vm, &e.0)
 }
 
-fn cap_value(vm: &mut Vm, src: &[u8], c: CapValue) -> Value {
+fn cap_value(vm: &mut Vm, src: &[u8], c: CapValue) -> Result<Value, LuaError> {
     match c {
-        CapValue::Span(a, b) => Value::Str(vm.heap.intern(&src[a..b])),
-        CapValue::Pos(p) => Value::Int(p as i64 + 1),
+        CapValue::Span(a, b) => vm.str_value(&src[a..b]),
+        CapValue::Pos(p) => Ok(Value::Int(p as i64 + 1)),
     }
 }
 
@@ -55,7 +56,7 @@ fn push_captures(
     };
     for i in 0..n {
         let c = ms.get_capture(i, s, e).map_err(|err| pat_err(vm, err))?;
-        out.push(cap_value(vm, src, c));
+        out.push(cap_value(vm, src, c)?);
     }
     Ok(())
 }
@@ -77,21 +78,21 @@ fn find_aux(vm: &mut Vm, fs: u32, nargs: u32, find: bool) -> Result<u32, LuaErro
         // 5.1 clamps a start past the end instead of failing
         (init - 1).clamp(0, ls as i64) as usize
     } else if init > ls as i64 + 1 {
-        return Ok(vm.nat_return(fs, &[Value::Nil]));
+        return vm.nat_ret(fs, &[Value::Nil]);
     } else {
         (init.max(1) - 1) as usize
     };
     if find && (a.get(vm, 3).truthy() || no_specials(v, pat)) {
-        return Ok(match pattern::plain_find(src, pat, init) {
+        return match pattern::plain_find(src, pat, init) {
             Some(at) => {
                 let r = [
                     Value::Int(at as i64 + 1),
                     Value::Int((at + pat.len()) as i64),
                 ];
-                vm.nat_return(fs, &r)
+                vm.nat_ret(fs, &r)
             }
-            None => vm.nat_return(fs, &[Value::Nil]),
-        });
+            None => vm.nat_ret(fs, &[Value::Nil]),
+        };
     }
     let pat = pattern_bytes(v, pat);
     let (anchor, body) = pattern::anchor_split(pat);
@@ -105,10 +106,10 @@ fn find_aux(vm: &mut Vm, fs: u32, nargs: u32, find: bool) -> Result<u32, LuaErro
                 out.push(Value::Int(e as i64));
             }
             push_captures(vm, &ms, src, s1, e, !find, &mut out)?;
-            return Ok(vm.nat_return(fs, &out));
+            return vm.nat_ret(fs, &out);
         }
         if anchor || s1 >= ls {
-            return Ok(vm.nat_return(fs, &[Value::Nil]));
+            return vm.nat_ret(fs, &[Value::Nil]);
         }
         s1 += 1;
     }
@@ -151,7 +152,7 @@ fn gmatch_iter(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
             vm.nat_set_upval(fs, 3, Value::Int(e as i64));
             let mut out = Vec::new();
             push_captures(vm, &ms, src, from, e, true, &mut out)?;
-            return Ok(vm.nat_return(fs, &out));
+            return vm.nat_ret(fs, &out);
         }
         from += 1;
     }
@@ -170,19 +171,29 @@ pub(super) fn s_gmatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     } else {
         0
     };
-    let it = vm.native_with(
+    let it = vm.lib_native_with(
         gmatch_iter,
-        Box::new([
+        &[
             Value::Str(s),
             Value::Str(p),
             Value::Int(init),
             Value::Int(-1),
-        ]),
-    );
-    Ok(vm.nat_return(fs, &[it]))
+        ],
+    )?;
+    vm.nat_ret(fs, &[it])
 }
 
 pub(super) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    // a frame of `sort_scratch`, a GC root, for the replacement in hand
+    let mut frame = LVec::new(vm.heap.mem());
+    frame.push(Value::Nil)?;
+    vm.sort_scratch.push(frame)?;
+    let r = gsub(vm, fs, nargs);
+    vm.sort_scratch.pop();
+    r
+}
+
+fn gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
     let s = argcheck::check_string(vm, a, 0)?;
@@ -220,7 +231,7 @@ pub(super) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     let src = s.as_bytes();
     let (anchor, body) = pattern::anchor_split(pattern_bytes(v, p.as_bytes()));
     let mut ms = MatchState::new(src, body, flavor(v));
-    let mut out: Vec<u8> = Vec::new();
+    let mut out = vm.new_buf();
     let mut pos = 0usize;
     let mut n: i128 = 0;
     let mut last: Option<usize> = None;
@@ -241,7 +252,7 @@ pub(super) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         match m {
             Some(e) if v >= LuaVersion::Lua53 || e > pos => pos = e,
             _ if pos < src.len() => {
-                out.push(src[pos]);
+                vm.buf_push(&mut out, &[src[pos]])?;
                 pos += 1;
             }
             _ => break,
@@ -254,10 +265,10 @@ pub(super) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     let res = if v >= LuaVersion::Lua54 && !changed {
         Value::Str(s)
     } else {
-        out.extend_from_slice(&src[pos..]);
-        vm.built_str(&out)?
+        vm.buf_push(&mut out, &src[pos..])?;
+        vm.lib_built_str(&out)?
     };
-    Ok(vm.nat_return(fs, &[res, Value::Int(n as i64)]))
+    vm.nat_ret(fs, &[res, Value::Int(n as i64)])
 }
 
 /// PUC `add_value`: append the replacement for the match `[s, e)`; false
@@ -271,7 +282,7 @@ fn add_value(
     e: usize,
     repl: Value,
     template: Option<Gc<LuaStr>>,
-    out: &mut Vec<u8>,
+    out: &mut LVec<u8>,
 ) -> Result<bool, LuaError> {
     if let Some(t) = template {
         add_s(vm, ms, src, s, e, t.as_bytes(), out)?;
@@ -280,7 +291,7 @@ fn add_value(
     let r = match repl {
         Value::Table(_) => {
             let k = ms.get_capture(0, s, e).map_err(|err| pat_err(vm, err))?;
-            let k = cap_value(vm, src, k);
+            let k = cap_value(vm, src, k)?;
             vm.index_value(repl, k)?
         }
         f => {
@@ -293,24 +304,30 @@ fn add_value(
                 .unwrap_or(Value::Nil)
         }
     };
+    // the value may be held by nothing else now; the scratch frame keeps it
+    // rooted while it is copied (a 5.2 buffer collects when it cannot grow)
+    vm.sort_scratch.last_mut().expect("gsub frame")[0] = r;
     match r {
         Value::Nil | Value::Bool(false) => {
-            out.extend_from_slice(&src[s..e]);
+            vm.buf_push(out, &src[s..e])?;
             Ok(false)
         }
         Value::Str(x) => {
-            out.extend_from_slice(x.as_bytes());
+            vm.buf_push(out, x.as_bytes())?;
             Ok(true)
         }
         n @ (Value::Int(_) | Value::Float(_)) => {
             let b = vm.tostring_basic(n);
-            out.extend_from_slice(&b);
+            vm.buf_push(out, &b)?;
             Ok(true)
         }
-        other => Err(raise_str(
-            vm,
-            &format!("invalid replacement value (a {})", other.type_name()),
-        )),
+        other => {
+            let tn = other.type_name();
+            Err(raise_bytes(
+                vm,
+                &[b"invalid replacement value (a ", tn.as_bytes(), b")"].concat(),
+            ))
+        }
     }
 }
 
@@ -323,7 +340,7 @@ fn add_s(
     s: usize,
     e: usize,
     t: &[u8],
-    out: &mut Vec<u8>,
+    out: &mut LVec<u8>,
 ) -> Result<(), LuaError> {
     let lenient = vm.version() == LuaVersion::Lua51;
     let mut i = 0;
@@ -331,25 +348,29 @@ fn add_s(
         let c = t[i];
         i += 1;
         if c != b'%' {
-            out.push(c);
+            vm.buf_push(out, &[c])?;
             continue;
         }
         // the template's terminating zero follows a final '%'
         let d = t.get(i).copied().unwrap_or(0);
         i += 1;
         match d {
-            b'0' => out.extend_from_slice(&src[s..e]),
+            b'0' => vm.buf_push(out, &src[s..e])?,
             b'1'..=b'9' => {
                 let c = ms
                     .get_capture((d - b'1') as usize, s, e)
                     .map_err(|err| pat_err(vm, err))?;
                 match c {
-                    CapValue::Span(a, b) => out.extend_from_slice(&src[a..b]),
-                    CapValue::Pos(p) => out.extend_from_slice((p + 1).to_string().as_bytes()),
+                    CapValue::Span(a, b) => vm.buf_push(out, &src[a..b])?,
+                    CapValue::Pos(p) => {
+                        let mut d = Vec::new();
+                        crate::vm::cfmt::signed(&mut d, &Default::default(), p as i64 + 1);
+                        vm.buf_push(out, &d)?
+                    }
                 }
             }
-            b'%' => out.push(b'%'),
-            d if lenient => out.push(d),
+            b'%' => vm.buf_push(out, b"%")?,
+            d if lenient => vm.buf_push(out, &[d])?,
             _ => return Err(raise_str(vm, "invalid use of '%' in replacement string")),
         }
     }
