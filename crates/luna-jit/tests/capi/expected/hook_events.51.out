@@ -2,11 +2,11 @@ initial: hook=none mask=0 count=0
 call+return
 set: hook=hook mask=3 count=0
   call main:[string "local function f(x)..."] ? cl=3
-  call Lua:[string "local function f(x)..."] ? cl=4
-  call Lua:[string "local function f(x)..."] ? cl=2
+  call Lua:[string "local function f(x)..."] t cl=4
+  call Lua:[string "local function f(x)..."] f cl=2
   ret Lua:[string "local function f(x)..."] ? cl=2
   tail tail:(tail call)  cl=-1
-  call C:[C] ? cl=-1
+  call C:[C] cf cl=-1
   ret C:[C] cf cl=-1
   ret main:[string "local function f(x)..."] ? cl=7
 line

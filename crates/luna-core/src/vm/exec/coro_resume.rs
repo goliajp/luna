@@ -98,6 +98,7 @@ impl Vm {
             return Err(self.plain_err("C stack overflow"));
         }
         self.c_depth += 1;
+        let special_before = self.special_errors();
         let resumer = self.current;
         // save the resumer's live context away
         let rctx = self.take_ctx();
@@ -160,8 +161,10 @@ impl Vm {
             // error a `__close` handler raised.
             let r = match death {
                 Some(e) => {
-                    // SAFETY: `co` is still `self.current`, a root, and the coroutine's frames have all unwound; the borrow covers one field store
-                    unsafe { co.as_mut() }.error_value = Some(e);
+                    // SAFETY: `co` is still `self.current`, a root, and the coroutine's frames have all unwound; the borrow covers two field stores
+                    let m = unsafe { co.as_mut() };
+                    m.error_value = Some(e);
+                    m.error_status = crate::runtime::ErrorStatus::Run;
                     self.heap.barrier_back(co);
                     (Err(LuaError(e)), CoroStatus::Dead)
                 }
@@ -198,8 +201,11 @@ impl Vm {
                         m.error_levels = Some(levels);
                     }
                     if let Err(e) = drive {
-                        // SAFETY: `co` is still `self.current`, a root; the borrow covers one field store
-                        unsafe { co.as_mut() }.error_value = Some(e.0);
+                        let kind = self.error_status(e.0, special_before);
+                        // SAFETY: `co` is still `self.current`, a root; the borrow covers two field stores
+                        let m = unsafe { co.as_mut() };
+                        m.error_value = Some(e.0);
+                        m.error_status = kind;
                         self.heap.barrier_back(co);
                     }
                     (self.host_returned(co, drive), CoroStatus::Dead)

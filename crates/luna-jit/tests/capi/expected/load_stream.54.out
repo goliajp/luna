@@ -1,0 +1,17 @@
+whole program: status 0, 4 of 4 pieces read, 5 calls
+error in the first piece: status 3, 1 of 3 pieces read, 1 calls: s:1: unexpected symbol near '='
+error token ends a piece: status 3, 2 of 3 pieces read, 2 calls: s:1: unexpected symbol near ')'
+error token ends a piece, newline next: status 3, 2 of 3 pieces read, 2 calls: s:1: unexpected symbol near ')'
+numeral runs into the next piece: status 3, 2 of 3 pieces read, 2 calls: s:1: malformed number near '1abc'
+keyword split: status 0, 3 of 3 pieces read, 4 calls
+unfinished string: status 3, 3 of 4 pieces read, 3 calls: s:1: unfinished string near ''abcdef'
+long comment across pieces: status 0, 4 of 4 pieces read, 4 calls
+long string unfinished: status 3, 4 of 4 pieces read, 5 calls: s:1: unfinished long string (starting at line 1) near <eof>
+minus at a piece end: status 0, 3 of 3 pieces read, 4 calls
+break outside a loop: status 3, 3 of 3 pieces read, 4 calls: s:3: break outside loop at line 1
+missing end: status 3, 3 of 3 pieces read, 4 calls: s:4: 'end' expected (to close 'if' at line 1) near <eof>
+empty pieces mid way: status 0, 2 of 3 pieces read, 2 calls
+assign to const: status 3, 1 of 3 pieces read, 1 calls: s:1: attempt to assign to const variable 'x'
+goto without a label: status 3, 3 of 3 pieces read, 4 calls: s:3: no visible label 'nowhere' for <goto> at line 1
+bytewise program: status 0, 135 of 135 pieces read, 136 calls
+bytewise error: status 3, 18 of 30 pieces read, 18 calls: s:1: unexpected symbol near ','

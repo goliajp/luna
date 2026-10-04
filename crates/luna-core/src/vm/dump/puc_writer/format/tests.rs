@@ -6,6 +6,9 @@ fn w() -> W {
         out: Vec::new(),
         strip: false,
         saved: HashMap::new(),
+        pieces: Vec::new(),
+        mark: 0,
+        zero: true,
     }
 }
 

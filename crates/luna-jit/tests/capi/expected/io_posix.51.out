@@ -1,0 +1,9 @@
+file	popen out	second
+
+true
+true
+to cat
+true
+true	nil	true: Invalid argument	22
+line	a
+line	b

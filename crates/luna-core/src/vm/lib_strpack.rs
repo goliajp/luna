@@ -91,7 +91,7 @@ fn float_bytes(out: &mut Vec<u8>, mut b: Vec<u8>, islittle: bool) {
 /// Grow the result by `n` bytes, or fail as the allocator would.
 fn reserve(vm: &mut Vm, out: &[u8], n: u64) -> Result<(), LuaError> {
     if n > MAX_STR - (out.len() as u64).min(MAX_STR) {
-        return Err(vm.plain_err("not enough memory"));
+        return Err(vm.mem_err());
     }
     Ok(())
 }

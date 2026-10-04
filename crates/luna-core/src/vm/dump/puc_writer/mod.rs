@@ -82,6 +82,15 @@ struct Out {
 /// Serialise `proto` as a chunk of the PUC version `version` names;
 /// `strip` drops debug information as PUC's `strip` does.
 pub(crate) fn dump(proto: &Proto, strip: bool, version: LuaVersion) -> Result<Vec<u8>, String> {
+    dump_blocks(proto, strip, version).map(|(bytes, _)| bytes)
+}
+
+/// [`dump`], with the size of each block PUC's dumper writes separately.
+pub(crate) fn dump_blocks(
+    proto: &Proto,
+    strip: bool,
+    version: LuaVersion,
+) -> Result<(Vec<u8>, Vec<usize>), String> {
     let d = match version {
         LuaVersion::Lua51 => Dialect::V51,
         LuaVersion::Lua52 => Dialect::V52,
@@ -236,10 +245,10 @@ fn vararg_byte(p: &Proto, d: Dialect, vatab: bool) -> u8 {
         return 0;
     }
     match d {
-        // VARARG_ISVARARG, plus VARARG_HASARG | VARARG_NEEDSARG for the
-        // implicit `arg` table
+        // VARARG_ISVARARG | VARARG_HASARG for the `arg` local, plus
+        // VARARG_NEEDSARG when it holds the extra arguments
         Dialect::V51 if p.has_compat_vararg_arg => 7,
-        Dialect::V51 => 2,
+        Dialect::V51 => 3,
         // PF_VATAB or PF_VAHID
         Dialect::V55 if vatab => 2,
         _ => 1,

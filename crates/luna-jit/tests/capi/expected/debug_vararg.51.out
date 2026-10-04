@@ -1,0 +1,9 @@
+uses_dots: 1:a=1 2:arg=<nil> 3:n=2
+uses_dots	nil	2
+no_dots: 1:a=1 2:arg=<table n=2> 3:x=x
+no_dots	table
+only_dots: 1:arg=<nil>
+only_dots	a	b
+outer: 1:arg=<table n=2> 2:inner=<function>
+dots in a nested function	table
+status 0 

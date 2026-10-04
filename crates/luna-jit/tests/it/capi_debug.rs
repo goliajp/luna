@@ -31,3 +31,18 @@ fn hook_yield() {
 fn hook_transfer() {
     check("hook_transfer")
 }
+
+#[test]
+fn hook_returns() {
+    check("hook_returns")
+}
+
+#[test]
+fn hook_tailcall() {
+    check("hook_tailcall")
+}
+
+#[test]
+fn debug_vararg() {
+    check("debug_vararg")
+}

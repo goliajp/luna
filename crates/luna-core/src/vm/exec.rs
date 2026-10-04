@@ -75,11 +75,13 @@ mod trace_stats;
 mod trace_wire;
 mod unwind;
 use coro_resume::*;
+pub use errors::SpecialErrors;
 pub(crate) use hooks::HOOK_YIELD_SLOT;
 pub use hooks::{
     HOOK_MASK_CALL, HOOK_MASK_COUNT, HOOK_MASK_LINE, HOOK_MASK_RETURN, HookState, RustDebugHook,
     RustHookEvent,
 };
+pub use load::{ParsedText, TextLoad};
 pub(crate) use meta::Mm;
 use meta::*;
 use num::*;

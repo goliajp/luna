@@ -140,8 +140,10 @@ impl Vm {
         // foo needs level 1 to resolve to foo, not to the
         // thread's globals fallback that happens when no Lua
         // frame is on the stack.
-        let lua_target = matches!(func, Value::Closure(_));
-        if lua_target {
+        if let Value::Closure(cl) = func {
+            if self.version <= LuaVersion::Lua53 && self.call_hook_armed() {
+                self.tail_call_hook(cl, abs, nargs)?;
+            }
             self.close_slots(fr.base, None)?;
             for i in 0..=nargs {
                 self.stack[(fr.func_slot + i) as usize] = self.stack[(abs + i) as usize];
@@ -172,9 +174,10 @@ impl Vm {
             self.pending_tailcalls = fr.tailcalls.saturating_add(1);
             self.pending_ccmt = fr.ccmt;
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-            if !self.begin_call(fr.func_slot, Some(nargs), fr.nresults, false)?
-                && self.frames.len() < entry_depth
-            {
+            let called = self.begin_call(fr.func_slot, Some(nargs), fr.nresults, false);
+            // an error before the frame was pushed leaves the flag unread
+            self.tail_hook_fired = false;
+            if !called? && self.frames.len() < entry_depth {
                 // a native completed what was this function's result
                 return Ok(Some(self.take_results(fr.func_slot)));
             }
@@ -200,7 +203,7 @@ impl Vm {
         entry_depth: usize,
     ) -> Result<Option<Vec<Value>>, LuaError> {
         let (abs_a, nret) = match inst.op() {
-            Op::Return0 => (base, 0),
+            Op::Return0 => (base + inst.a(), 0),
             Op::Return1 => (base + inst.a(), 1),
             _ => {
                 let abs_a = base + inst.a();

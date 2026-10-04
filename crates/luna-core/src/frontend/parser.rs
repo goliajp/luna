@@ -4,8 +4,8 @@
 
 use crate::frontend::ast::*;
 use crate::frontend::error::SyntaxError;
-use crate::frontend::goto_check::GotoCheck;
-use crate::frontend::lexer::{Lexed, Lexer};
+use crate::frontend::goto_check::{GotoCheck, VarKind};
+use crate::frontend::lexer::{Lexed, Lexer, Source, Stream};
 use crate::frontend::names::{Names, Sym};
 use crate::frontend::span::Span;
 use crate::frontend::token::{LexTok, Near, Tok, Token, TokenInfo, near_text};
@@ -154,6 +154,35 @@ pub(crate) fn parse_reusing(
         version,
         c_depth,
         src.len(),
+        (chunk, end_lines, stacks),
+    )
+}
+
+/// [`parse_reusing`] over a source read piece by piece: `first` is the
+/// piece already read, and `feed` appends the next one or returns false at
+/// the end. The parser asks for a piece only when the scan moves past the
+/// bytes it has, as PUC's does, so it stops reading at a syntax error.
+pub(crate) fn parse_stream<'f>(
+    first: Vec<u8>,
+    feed: &'f mut crate::frontend::lexer::Feed<'f>,
+    version: LuaVersion,
+    c_depth: u32,
+    scratch: ParseScratch,
+) -> Result<Parsed, SyntaxError> {
+    let ParseScratch {
+        mut chunk,
+        end_lines,
+        lex_buf,
+        stacks,
+    } = scratch;
+    let names = std::mem::take(&mut chunk.names);
+    let len = first.len();
+    let lex = Lexer::interning_stream(Stream::new(first, feed), version, names, lex_buf);
+    parse_from_source(
+        TokenSource::Stream(lex),
+        version,
+        c_depth,
+        len,
         (chunk, end_lines, stacks),
     )
 }

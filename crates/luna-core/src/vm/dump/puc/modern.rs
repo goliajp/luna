@@ -363,7 +363,10 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                 lw.emit(enc_abc(Op::TailCall, a, i.b(), 0, false)?);
             }
             Kind::Return => lw.ret(i.a(), i.b())?,
-            Kind::Return0 => lw.emit(enc_abc(Op::Return0, 0, 0, 0, false)?),
+            Kind::Return0 => {
+                let a = lw.r(i.a())?;
+                lw.emit(enc_abc(Op::Return0, a, 0, 0, false)?);
+            }
             Kind::Return1 => {
                 let a = lw.r(i.a())?;
                 lw.emit(enc_abc(Op::Return1, a, 0, 0, false)?);
