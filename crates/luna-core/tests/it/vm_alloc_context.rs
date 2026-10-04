@@ -33,7 +33,7 @@ unsafe extern "C" fn counting(
             // SAFETY: `p` is a live block of `os` bytes this function made
             // with alignment 16
             unsafe { std::alloc::dealloc(p.cast(), Layout::from_size_align(os, 16).unwrap()) };
-            s.live.set(s.live.get() - os);
+            s.live.set(s.live.get().wrapping_sub(os));
         }
         return std::ptr::null_mut();
     }
@@ -48,7 +48,7 @@ unsafe extern "C" fn counting(
         unsafe { std::alloc::realloc(p.cast(), Layout::from_size_align(os, 16).unwrap(), ns) }
     };
     assert!(!q.is_null());
-    s.live.set(s.live.get() - old + ns);
+    s.live.set(s.live.get().wrapping_sub(old).wrapping_add(ns));
     q.cast()
 }
 
