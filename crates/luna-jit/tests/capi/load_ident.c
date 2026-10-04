@@ -3,7 +3,8 @@
 #include <stdio.h>
 #include "lua.h"
 
-#if LUA_VERSION_NUM == 501
+/* luna's 5.1 lua.h declares it (with the DLL import Windows needs) */
+#if LUA_VERSION_NUM == 501 && !defined(LUNA_DATA)
 extern const char lua_ident[];
 #endif
 
