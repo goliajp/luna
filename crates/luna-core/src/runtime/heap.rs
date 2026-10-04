@@ -341,11 +341,18 @@ impl Heap {
 
     /// A heap whose memory comes from `mem`, hashing strings with `seed`.
     pub fn with_mem(mem: crate::runtime::mem::MemOwner, seed: u32) -> Heap {
+        Heap::try_with_mem(mem, seed).unwrap_or_else(|| oom_abort_heap())
+    }
+
+    /// [`Heap::with_mem`], or `None` when the allocation context cannot
+    /// give the heap its first blocks.
+    pub fn try_with_mem(mem: crate::runtime::mem::MemOwner, seed: u32) -> Option<Heap> {
+        let strings = StringTable::new(mem.mem()).ok()?;
         let mut h = Heap {
             all: ptr::null_mut(),
             fixed: ptr::null_mut(),
             fix_natives: false,
-            strings: StringTable::new(mem.mem()),
+            strings,
             seed,
             live: 0,
             bytes: 0,
@@ -372,10 +379,8 @@ impl Heap {
             recently_freed: std::collections::HashSet::new(),
             mem,
         };
-        if h.make_memerr().is_err() {
-            oom_abort_heap();
-        }
-        h
+        h.make_memerr().ok()?;
+        Some(h)
     }
 
     /// The handle the heap's containers allocate through.
@@ -451,25 +456,6 @@ impl Default for Heap {
     }
 }
 
-#[cold]
-fn oom_abort_heap() -> ! {
-    crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Heap>())
-}
-
-/// Hash seed from address entropy (ASLR) and clock, luaL_makeseed style.
-fn make_seed() -> u32 {
-    let stack_var = 0u8;
-    let mut h = &stack_var as *const u8 as u64;
-    h ^= (make_seed as *const () as u64) << 16;
-    if let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        h ^= (d.subsec_nanos() as u64) << 32 ^ d.as_secs();
-    }
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    h ^= h >> 33;
-    h as u32
-}
-
 #[path = "heap_alloc.rs"]
 mod alloc;
 #[path = "heap_barrier.rs"]
@@ -480,6 +466,8 @@ mod collect;
 mod finalize;
 #[path = "heap_intern.rs"]
 mod intern;
+pub(crate) use self::intern::fresh_seed;
+use self::intern::{make_seed, oom_abort_heap};
 #[path = "heap_mark.rs"]
 mod mark;
 #[path = "heap_pace.rs"]
