@@ -3,7 +3,11 @@
 use crate::{current_jit_vm, str_arg, table_arg};
 
 /// Allocate an empty `Gc<Table>` on the active Vm's heap.
-/// Returns the Gc pointer pun'd to `i64`. Allocating never collects, but
+/// Returns the Gc pointer pun'd to `i64`, or 0 when the allocation fails
+/// (or an earlier helper parked a deopt): compiled code then leaves at the
+/// `NewTable` (a trace exits there, a method-JIT call parks a deopt), and
+/// the interpreter allocates, collecting in an emergency as compiled code
+/// may not. Allocating never collects, but
 /// the fresh table lives only in a register of the compiled code until
 /// the code stores it somewhere the collector sees. Compiled code that
 /// later calls a helper which can collect (a trace's concat or
@@ -25,8 +29,10 @@ pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
     if vm.jit.pending_err.is_some() {
         return 0;
     }
-    let g = vm.heap.new_table();
-    g.as_ptr() as i64
+    match vm.heap.try_new_table() {
+        Ok(g) => g.as_ptr() as i64,
+        Err(_) => 0,
+    }
 }
 
 /// `Heap::new_table_sized(n)` variant. JIT emit reaches
@@ -49,8 +55,10 @@ pub unsafe extern "C" fn luna_jit_new_table_sized(asize: i64) -> i64 {
         return 0;
     }
     let n = if asize > 0 { asize as usize } else { 0 };
-    let g = vm.heap.new_table_sized(n);
-    g.as_ptr() as i64
+    match vm.heap.try_new_table_sized(n) {
+        Ok(g) => g.as_ptr() as i64,
+        Err(_) => 0,
+    }
 }
 
 /// Materialize a Sinkable site's virtual array slots into
@@ -91,7 +99,13 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
     }
     let cap_u = if cap > 0 { cap as usize } else { 0 };
     let n_hash_u = if n_hash > 0 { n_hash as usize } else { 0 };
-    let g = vm.heap.new_table_sized(cap_u);
+    // a table that cannot be made here, at an exit, parks a deopt: the
+    // dispatcher drops the trace's registers and the interpreter runs the
+    // loop again from the trace head
+    let Ok(g) = vm.heap.try_new_table_sized(cap_u) else {
+        vm.jit_park_oom();
+        return 0;
+    };
     // SAFETY: `g` was allocated just above and nothing else refers to it
     // yet; `Table::set` never runs the collector
     let table = unsafe { g.as_mut() };
@@ -106,7 +120,10 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
             };
             luna_core::runtime::Value::pack(*kinds_ptr.add(i), raw)
         };
-        let _ = table.set_int(&mut vm.heap, (i + 1) as i64, v);
+        if table.set_int(&mut vm.heap, (i + 1) as i64, v).is_err() {
+            vm.jit_park_oom();
+            return 0;
+        }
     }
     // Hash slots. Each entry is a
     // (key_ptr: *const LuaStr, raw_bits, kind_byte) triple from
@@ -127,29 +144,30 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
             )
         };
         let key = luna_core::runtime::Value::Str(key);
-        let _ = table.set(&mut vm.heap, key, v);
+        if table.set(&mut vm.heap, key, v).is_err() {
+            vm.jit_park_oom();
+            return 0;
+        }
     }
     g.as_ptr() as i64
 }
 
 /// `t[key] = val` where `t` is a Table Gc (i64 pun), `key`
 /// is an Int and `val` is an Int. Wraps `Table::set_int(&mut Heap,
-/// i64, Value)`. Returns nothing (errors swallowed — luna's
-/// `set_int` only returns `Err` on table-size pathology that the
-/// interpreter would also surface; JIT'd workloads bounded by N=10k
-/// don't reach it). Future caller-visible error reporting would
-/// route through a deopt return path.
+/// i64, Value)`. Returns 1 when stored, 0 when it parked a deopt (a
+/// metatable, or a table that could not grow); the method JIT's code
+/// then returns at once and the interpreter runs the call.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table.
 // SAFETY: no other item in the link is named `luna_jit_table_set_int`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) {
+pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     if vm.jit.pending_err.is_some() {
-        return;
+        return 0;
     }
     // SAFETY: `t` is a live table (# Safety)
     let g = unsafe { table_arg(t) };
@@ -159,14 +177,15 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) {
     // interpreter so __newindex / raw-set semantics are honoured.
     if g.metatable().is_some() {
         vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
-        return;
+        return 0;
     }
     // SAFETY: `t` is a live table (# Safety); `g` is not dereferenced again
     // while `table` is in use, and `Table::set*` never runs the collector
     let table = unsafe { g.as_mut() };
     // the method JIT stores only into tables its call tested on entry or
     // made itself (see `Vm::try_jit_call_op`)
-    let _ = table.set_int_unguarded(&mut vm.heap, key, luna_core::runtime::Value::Int(val));
+    let r = table.set_int_unguarded(&mut vm.heap, key, luna_core::runtime::Value::Int(val));
+    stored(vm, r)
 }
 
 /// Write an arbitrary `Value::pack(tag, raw_bits)` to
@@ -187,17 +206,17 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) {
 // SAFETY: no other item in the link is named `luna_jit_table_set_raw`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64, tag: i64) {
+pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64, tag: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     if vm.jit.pending_err.is_some() {
-        return;
+        return 0;
     }
     // SAFETY: `t` is a live table (# Safety)
     let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
         vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
-        return;
+        return 0;
     }
     // SAFETY: `t` is a live table and (`tag`, `raw_bits`) one value's tag
     // and payload (# Safety); `g` is not dereferenced again while `table`
@@ -210,9 +229,10 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64,
     };
     let r = table.set_int(&mut vm.heap, key, v);
     if refused(vm, r) {
-        return;
+        return 0;
     }
     barrier_for(vm, g, luna_core::runtime::Value::Int(key), v);
+    1
 }
 
 /// Write `Value::pack(tag, raw)` to `t[key_ptr_as_str]`.
@@ -317,16 +337,30 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
     1
 }
 
-/// Whether `r`, a store's result, is a read-only table's refusal; if so,
-/// park a deopt request, as for a table with a metatable, so that the
-/// interpreter runs the call again and raises the error. For the helpers
-/// no compiler emits any more, which any caller may hand any table.
+/// Whether `r`, a store's result, is a read-only table's refusal or a
+/// table that could not grow; if so, park a deopt request, as for a table
+/// with a metatable, so that the interpreter runs the call again and
+/// raises the error or makes the table grow. For the method JIT's stores
+/// and the helpers no compiler emits any more, which any caller may hand
+/// any table.
 fn refused(vm: &mut luna_core::vm::Vm, r: Result<(), luna_core::runtime::TableError>) -> bool {
-    if r == Err(luna_core::runtime::TableError::ReadOnly) {
-        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table is read-only"));
-        return true;
+    match r {
+        Err(luna_core::runtime::TableError::ReadOnly) => {
+            vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table is read-only"));
+            true
+        }
+        Err(luna_core::runtime::TableError::Memory(_)) => {
+            vm.jit_park_oom();
+            true
+        }
+        _ => false,
     }
-    false
+}
+
+/// [`refused`] as the status the method JIT's stores return: 1 stored,
+/// 0 parked.
+fn stored(vm: &mut luna_core::vm::Vm, r: Result<(), luna_core::runtime::TableError>) -> i64 {
+    i64::from(!refused(vm, r))
 }
 
 /// The write barrier for a store of `key` / `val` into `g`, as the
@@ -462,25 +496,38 @@ pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
 // SAFETY: no other item in the link is named `luna_jit_table_set_float_float`: only this crate
 // defines `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_table_set_float_float(t: i64, key_bits: i64, val_bits: i64) {
+pub unsafe extern "C" fn luna_jit_table_set_float_float(
+    t: i64,
+    key_bits: i64,
+    val_bits: i64,
+) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     if vm.jit.pending_err.is_some() {
-        return;
+        return 0;
     }
     // SAFETY: `t` is a live table (# Safety)
     let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
         vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
-        return;
+        return 0;
     }
     // SAFETY: `t` is a live table (# Safety); `g` is not dereferenced again
     // while `table` is in use, and `Table::set*` never runs the collector
     let table = unsafe { g.as_mut() };
     let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
     let v = luna_core::runtime::Value::Float(f64::from_bits(val_bits as u64));
-    // a NaN key raises; the interpreter re-runs the call and reports it
-    if table.set_unguarded(&mut vm.heap, k, v).is_err() {
-        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: invalid table key"));
+    // a NaN key raises, and a table that cannot grow grows there: the
+    // interpreter re-runs the call
+    match table.set_unguarded(&mut vm.heap, k, v) {
+        Ok(()) => 1,
+        Err(luna_core::runtime::TableError::Memory(_)) => {
+            vm.jit_park_oom();
+            0
+        }
+        Err(_) => {
+            vm.jit.pending_err = Some(vm.rt_err("JIT deopt: invalid table key"));
+            0
+        }
     }
 }

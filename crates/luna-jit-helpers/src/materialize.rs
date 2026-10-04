@@ -81,8 +81,14 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
         let cl =
             unsafe { luna_core::runtime::Gc::from_ptr(raw as *mut luna_core::runtime::LuaClosure) };
         let new_base = head_frame.base + m.base_offset;
-        vm.jit_ensure_stack((new_base + cl.proto.max_stack as u32) as usize);
-        vm.jit_push_inlined_frame(cl, new_base, m.pc, m.nresults);
+        // frames that cannot be made park a deopt: the dispatcher pops the
+        // ones pushed and the interpreter runs the loop again
+        if !vm.jit_ensure_stack((new_base + cl.proto.max_stack as u32) as usize)
+            || !vm.jit_push_inlined_frame(cl, new_base, m.pc, m.nresults)
+        {
+            vm.jit_park_oom();
+            return -1;
+        }
     }
     0
 }

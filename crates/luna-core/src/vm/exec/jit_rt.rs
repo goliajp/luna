@@ -28,10 +28,22 @@ impl Vm {
     /// `[0..need)`. Extends with Nil if shorter. Called by the
     /// frame-materialization helper before pushing an inlined frame
     /// whose register window may exceed the current stack length.
+    /// `false` when the stack cannot grow: the caller parks a deopt.
     #[doc(hidden)]
-    pub fn jit_ensure_stack(&mut self, need: usize) {
-        if self.stack.len() < need {
-            self.grow_stack_or_abort(need);
+    pub fn jit_ensure_stack(&mut self, need: usize) -> bool {
+        self.stack.len() >= need || self.stack.resize(need, Value::Nil).is_ok()
+    }
+
+    /// Park a deopt for an allocation compiled code could not make: the
+    /// dispatcher drops what the compiled code computed and the
+    /// interpreter runs the code again, allocating through its own path
+    /// (which may collect in an emergency, as compiled code may not: it
+    /// can hold new objects only in machine registers). The parked value
+    /// is never raised, so it allocates nothing.
+    #[doc(hidden)]
+    pub fn jit_park_oom(&mut self) {
+        if self.jit.pending_err.is_none() {
+            self.jit.pending_err = Some(LuaError(Value::Nil));
         }
     }
 
@@ -93,8 +105,9 @@ impl Vm {
             return;
         };
         let idx = (f.base as usize) + (slot_offset as usize);
-        if self.stack.len() <= idx {
-            self.grow_stack_or_abort(idx + 1);
+        if !self.jit_ensure_stack(idx + 1) {
+            self.jit_park_oom();
+            return;
         }
         self.stack[idx] = v;
     }
@@ -149,51 +162,64 @@ impl Vm {
         0
     }
 
-    /// Pop a reusable `Vec<u8>` from the JIT accumulator buffer
-    /// pool, or allocate one when the pool is empty. The trace keeps
-    /// it (as the boxed pointer the helper leaks) in a stack slot
-    /// through the loop and appends each piece to it.
+    /// Pop a reusable buffer from the JIT accumulator buffer pool, or
+    /// make an empty one when the pool is empty. The trace keeps it (as
+    /// the boxed pointer the helper leaks) in a stack slot through the
+    /// loop and appends each piece to it.
     #[doc(hidden)]
-    pub fn jit_str_buf_acquire(&mut self) -> Box<Vec<u8>> {
-        Box::new(self.jit.str_buf_pool.pop().unwrap_or_default())
+    pub fn jit_str_buf_acquire(&mut self) -> Box<crate::runtime::mem::LVec<u8>> {
+        let buf = self.jit.str_buf_pool.pop();
+        Box::new(buf.unwrap_or_else(|| crate::runtime::mem::LVec::new(self.heap.mem())))
     }
 
     /// Return a previously-acquired buffer to the
     /// pool, dropping any excess past `jit_str_buf_pool_cap`. The
     /// buffer is `clear`ed (capacity retained) so the next acquire
-    /// gets a ready-to-extend Vec.
+    /// gets a ready-to-extend buffer.
     #[doc(hidden)]
     #[allow(clippy::boxed_local)] // the trace held the buffer boxed; it comes back that way
-    pub fn jit_str_buf_release(&mut self, mut buf: Box<Vec<u8>>) {
+    pub fn jit_str_buf_release(&mut self, mut buf: Box<crate::runtime::mem::LVec<u8>>) {
         buf.clear();
         if self.jit.str_buf_pool.len() < self.jit.str_buf_pool_cap {
-            self.jit.str_buf_pool.push(*buf);
+            self.jit.str_buf_pool.push(buf.take());
         }
-        // Else: drop the buffer.
     }
 
-    /// Append a piece's bytes to an accumulator buffer.
+    /// Append a piece's bytes to an accumulator buffer; `false`, the
+    /// buffer as it was, when it cannot grow.
     #[doc(hidden)]
-    pub fn jit_str_buf_extend(&mut self, buf: &mut Vec<u8>, piece: Gc<crate::runtime::LuaStr>) {
-        buf.extend_from_slice(piece.as_bytes());
+    pub fn jit_str_buf_extend(
+        &mut self,
+        buf: &mut crate::runtime::mem::LVec<u8>,
+        piece: Gc<crate::runtime::LuaStr>,
+    ) -> bool {
+        buf.extend_from_slice(piece.as_bytes()).is_ok()
     }
 
-    /// Drain the accumulator buffer into a fresh
-    /// `LuaStr` via `heap.intern`, returning the raw ptr bits for
-    /// the trace to write into the accumulator slot.
+    /// Drain the accumulator buffer into a fresh string, returning its raw
+    /// pointer bits for the trace to write into the accumulator slot. The
+    /// buffer is left empty, its capacity kept, ready for release.
     ///
-    /// Returns the LuaStr ptr as i64 on success, 0 on overflow
-    /// (the hard cap; the trace deopts). The buffer is left
-    /// CLEAR (drained) ready for release.
+    /// Returns 0 when the string is past the hard cap or cannot be
+    /// allocated; a deopt is parked then, so the dispatcher drops the
+    /// trace's registers (the 0 among them) and the interpreter runs the
+    /// loop again.
     #[doc(hidden)]
-    pub fn jit_str_buf_intern(&mut self, buf: &mut Vec<u8>) -> i64 {
-        let bytes = std::mem::take(buf);
+    pub fn jit_str_buf_intern(&mut self, buf: &mut crate::runtime::mem::LVec<u8>) -> i64 {
         // hard cap at 256KB
-        if bytes.len() > 256 * 1024 {
-            return 0;
+        let r = if buf.len() > 256 * 1024 {
+            None
+        } else {
+            self.heap.try_intern(buf).ok()
+        };
+        buf.clear();
+        match r {
+            Some(gc) => gc.as_ptr() as i64,
+            None => {
+                self.jit_park_oom();
+                0
+            }
         }
-        let gc = self.heap.intern(&bytes);
-        gc.as_ptr() as i64
     }
 
     /// Trace JIT helper for `Op::TForCall A 0 C`.
@@ -223,8 +249,8 @@ impl Vm {
         };
         let abs = f.base + slot_offset;
         let need = (abs + 7) as usize;
-        if self.stack.len() < need {
-            self.grow_stack_or_abort(need);
+        if !self.jit_ensure_stack(need) {
+            return -1;
         }
         // ipairs fast path
         let took_fast_path = if let Value::Native(n) = self.stack[abs as usize]
@@ -344,6 +370,7 @@ impl Vm {
     /// because the lowerer bails Op::Call C != 2), and the caller
     /// has already called `jit_ensure_stack` to cover
     /// `[0..base + cl.proto.max_stack)`.
+    /// `false`, pushing nothing, when the frame stack cannot grow.
     #[doc(hidden)]
     pub fn jit_push_inlined_frame(
         &mut self,
@@ -351,7 +378,11 @@ impl Vm {
         base: u32,
         pc: u32,
         nresults: i32,
-    ) {
+    ) -> bool {
+        // room first, so the push below never has to allocate
+        if self.frames.reserve(1).is_err() {
+            return false;
+        }
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
@@ -374,6 +405,7 @@ impl Vm {
                 ccmt: 0,
             }),
         );
+        true
     }
 
     /// Upvalue `idx` of `cl`, for compiled code running a function a trace

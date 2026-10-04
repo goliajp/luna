@@ -219,8 +219,8 @@ pub unsafe extern "C" fn luna_jit_spill_to_stack(slot_offset: i64, tag: i64, raw
 /// a stale entry-tag value.
 ///
 /// Returns the raw `Gc<LuaClosure>` ptr as i64 (Value::Closure's
-/// payload). On error (`pending_err` already set) returns 0
-/// sentinel so the dispatcher deopts.
+/// payload), or 0 when `pending_err` is already set or an allocation
+/// fails: the trace exits at the `Closure` and the interpreter makes it.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread opened with the running
@@ -297,7 +297,11 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
             UpvalState::Open { slot, thread } => vm.read_slot(slot, thread),
             UpvalState::Closed(v) => v,
         };
-        ups[i] = vm.heap.new_upvalue(UpvalState::Closed(cur));
+        // 0: the trace exits at the `Closure` and the interpreter makes it
+        match vm.heap.try_new_upvalue(UpvalState::Closed(cur)) {
+            Ok(uv) => ups[i] = uv,
+            Err(_) => return 0,
+        }
     }
     let nc = vm.closure_from_proto(inner, ups);
     payload_bits(luna_core::runtime::Value::Closure(nc))

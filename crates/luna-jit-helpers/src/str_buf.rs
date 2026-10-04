@@ -1,9 +1,10 @@
 //! The trace JIT's string accumulator buffers (`s = s .. v` loops).
 
 use crate::{current_jit_vm, str_arg};
+use luna_core::runtime::mem::LVec;
 
 /// Trace JIT helper:acquire a fresh accumulator
-/// buffer from the Vm's pool. Returns a `*mut Vec<u8>` boxed-leaked
+/// buffer from the Vm's pool. Returns a `*mut LVec<u8>` boxed-leaked
 /// pointer that the trace fn keeps in a stack slot through the loop.
 ///
 /// # Safety
@@ -33,7 +34,7 @@ pub unsafe extern "C" fn luna_jit_str_buf_release(buf: i64) {
     }
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, and `buf`
     // is the box `luna_jit_str_buf_acquire` leaked, released once, so this takes back ownership
-    let (vm, buf) = unsafe { (current_jit_vm(), Box::from_raw(buf as *mut Vec<u8>)) };
+    let (vm, buf) = unsafe { (current_jit_vm(), Box::from_raw(buf as *mut LVec<u8>)) };
     vm.jit_str_buf_release(buf);
 }
 
@@ -41,9 +42,10 @@ pub unsafe extern "C" fn luna_jit_str_buf_release(buf: i64) {
 /// previously-acquired accumulator buffer. The trace IR calls this
 /// at each loop iter inside the `s = s .. v` idiom.
 ///
-/// Returns 0 on success, -1 when `buf` or `str_ptr` is 0 (deopt to
-/// interp). Nothing here checks that `str_ptr` is a string: the trace
-/// passes only string registers.
+/// Returns 0 on success, -1 when `buf` or `str_ptr` is 0 or the buffer
+/// cannot grow (the trace exits at the concatenation and the interpreter
+/// performs it). Nothing here checks that `str_ptr` is a string: the
+/// trace passes only string registers.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread; `buf` is 0 or came from
@@ -61,20 +63,20 @@ pub unsafe extern "C" fn luna_jit_str_buf_extend(buf: i64, str_ptr: i64) -> i64 
     let (vm, buf, s) = unsafe {
         (
             current_jit_vm(),
-            &mut *(buf as *mut Vec<u8>),
+            &mut *(buf as *mut LVec<u8>),
             str_arg(str_ptr),
         )
     };
-    vm.jit_str_buf_extend(buf, s);
-    0
+    if vm.jit_str_buf_extend(buf, s) { 0 } else { -1 }
 }
 
 /// Trace JIT helper:drain the accumulator buffer
 /// into a fresh `LuaStr` via `heap.intern`, returning the raw ptr
 /// bits for the trace to write into the accumulator slot.
 ///
-/// Returns the LuaStr ptr as i64 on success, 0 on overflow (the v2
-/// hard cap = 256KB; trace deopts).
+/// Returns the LuaStr ptr as i64 on success, 0 past the 256KB hard cap or
+/// when the string cannot be allocated: a deopt is parked then, and the
+/// dispatcher drops the trace's registers.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread; `buf` came from
@@ -88,6 +90,6 @@ pub unsafe extern "C" fn luna_jit_str_buf_intern(buf: i64) -> i64 {
     }
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, and `buf`
     // is a live boxed buffer only this call uses
-    let (vm, buf) = unsafe { (current_jit_vm(), &mut *(buf as *mut Vec<u8>)) };
+    let (vm, buf) = unsafe { (current_jit_vm(), &mut *(buf as *mut LVec<u8>)) };
     vm.jit_str_buf_intern(buf)
 }

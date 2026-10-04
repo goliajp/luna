@@ -52,6 +52,10 @@ pub(super) fn emit_closure_op<E: Emit>(
             let func_ref = lw.bcx.import_func(op_closure_id);
             let call = lw.bcx.ins().call(func_ref, &[bx_arg]);
             let v = lw.bcx.inst_results(call)[0];
+            // 0: an allocation failed (or a deopt is parked); the
+            // interpreter makes the closure
+            let ok = lw.bcx.ins().icmp_imm_s(IntCC::NotEqual, v, 0);
+            guard!(lw, pl, ok, i, rop.pc);
             lw.bcx.def_var(regs[ins.a() as usize], v);
             lw.current_kinds[off + ins.a() as usize] = RegKind::Closure;
             lw.closure_seen += 1;
