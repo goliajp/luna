@@ -325,6 +325,18 @@ optimization.
 
 ### Fixed
 
+- A function whose loop held a shorter loop, called again and again,
+  could run the outer loop's body fewer times than written, with no
+  error. A trace started in the inner loop leaves through two exits that
+  resume at a plain pc: back into the outer body, or out of the outer
+  loop. A side trace recorded from one of them was then run on the
+  other as well, so the frame resumed where that side trace was recorded
+  and the rest of the outer body was skipped. `for i = 1, 3 do local w =
+  0 while w < 1 do w = w + 1 n = n + 1 end end` in a function called
+  2000 times left `n` at 2218 instead of 6000 in 5.1. A side trace now
+  runs only on an exit that resumes where it was recorded. All dialects;
+  introduced after 4.0.1, which gives the right counts.
+
 - A `math.max` or `math.min` call compiled into a trace, left by the
   trace while its arguments were being computed (an argument that
   stopped being a number), made the interpreter call
