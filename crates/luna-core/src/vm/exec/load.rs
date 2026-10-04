@@ -2,6 +2,7 @@
 //! the globals table.
 
 use super::*;
+use crate::runtime::mem::{LVec, Oom};
 
 impl Vm {
     /// Parse + compile a chunk and close it over the globals table.
@@ -63,8 +64,13 @@ impl Vm {
             raw.pop();
             let expanded = self.macro_registry.expand(raw)?;
             let depth = self.c_depth + self.pcall_depth;
-            let parsed =
-                crate::frontend::parser::parse_tokens_at_depth(expanded, src, self.version, depth)?;
+            let parsed = crate::frontend::parser::parse_tokens_at_depth(
+                expanded,
+                src,
+                self.version,
+                depth,
+                self.heap.mem_owner(),
+            )?;
             crate::compiler::compile_parsed(
                 &parsed.chunk,
                 &parsed.end_lines,
@@ -77,7 +83,7 @@ impl Vm {
             // PUC's `nCcalls` counts protected calls as well
             let depth = self.c_depth + self.pcall_depth;
             let source = name.unwrap_or_else(|| self.heap.intern(chunkname));
-            let scratch = std::mem::take(&mut self.parse_scratch);
+            let scratch = self.parse_scratch.take();
             let parsed = crate::frontend::parser::parse_reusing(src, self.version, depth, scratch)?;
             self.compile_text(parsed, source)?
         };
@@ -116,7 +122,7 @@ impl Vm {
             version: self.version,
             depth: self.c_depth + self.pcall_depth,
             budget: self.loader_input_budget,
-            scratch: std::mem::take(&mut self.parse_scratch),
+            scratch: self.parse_scratch.take(),
         })
     }
 
@@ -198,19 +204,27 @@ impl TextLoad {
         if first.len() > budget {
             return ParsedText(Err(oom()));
         }
+        // the source read so far lives in the vm's memory; each piece comes
+        // through a buffer of its own first, as the reader hands it over
+        let mut whole = LVec::new(self.scratch.mem());
+        if let Err(e) = whole.extend_from_slice(&first) {
+            return ParsedText(Err(e.into()));
+        }
+        drop(first);
         let mut over = false;
-        let mut capped = |buf: &mut Vec<u8>| {
-            let before = buf.len();
-            let more = feed(buf);
-            if buf.len() > budget {
-                buf.truncate(before);
+        let mut piece = Vec::new();
+        let mut capped = |buf: &mut LVec<u8>| -> Result<bool, Oom> {
+            piece.clear();
+            let more = feed(&mut piece);
+            if buf.len() + piece.len() > budget {
                 over = true;
-                return false;
+                return Ok(false);
             }
-            more
+            buf.extend_from_slice(&piece)?;
+            Ok(more)
         };
         let r = crate::frontend::parser::parse_stream(
-            first,
+            whole,
             &mut capped,
             self.version,
             self.depth,

@@ -9,14 +9,11 @@ impl<'s> Lexer<'s> {
         src: &'s [u8],
         version: LuaVersion,
         names: Names,
-        mut buf: Vec<u8>,
-    ) -> Lexer<'s> {
-        buf.clear();
-        Lexer {
-            names: Some(names.reuse(src.len())),
-            buf,
-            ..Lexer::new(src, version)
-        }
+        buf: LVec<u8>,
+    ) -> Result<Lexer<'s>, Oom> {
+        let mut lex = Lexer::with_buf(Whole(src), version, buf, None);
+        lex.names = Some(names.reuse(src.len())?);
+        Ok(lex)
     }
 }
 
@@ -26,22 +23,24 @@ impl<'f> Lexer<'f, Stream<'f>> {
         src: Stream<'f>,
         version: LuaVersion,
         names: Names,
-        mut buf: Vec<u8>,
-    ) -> Lexer<'f, Stream<'f>> {
-        buf.clear();
+        buf: LVec<u8>,
+    ) -> Result<Lexer<'f, Stream<'f>>, Oom> {
         let len = src.bytes().len();
-        Lexer {
-            names: Some(names.reuse(len)),
-            buf,
-            ..Lexer::over(src, version)
-        }
+        let mut lex = Lexer::with_buf(src, version, buf, None);
+        lex.names = Some(names.reuse(len)?);
+        Ok(lex)
     }
 }
 
 impl<S: Source> Lexer<'_, S> {
     /// The token buffer, for the next lexer to start with.
-    pub(crate) fn take_buf(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.buf)
+    pub(crate) fn take_buf(&mut self) -> LVec<u8> {
+        self.buf.take()
+    }
+
+    /// Why the source stopped reading, when it ran out of memory.
+    pub(crate) fn source_out_of_memory(&self) -> Option<Oom> {
+        self.src.out_of_memory()
     }
 
     /// The identifiers an interning lexer has read so far.
@@ -51,7 +50,9 @@ impl<S: Source> Lexer<'_, S> {
 
     /// The identifiers an interning lexer has read.
     pub(crate) fn take_names(&mut self) -> Names {
-        self.names.take().unwrap_or_default()
+        self.names
+            .take()
+            .unwrap_or_else(|| Names::new(self.buf.mem()))
     }
 
     /// The public form of a token just lexed by this (non-interning) lexer:
@@ -71,11 +72,11 @@ impl<S: Source> Lexer<'_, S> {
 
     /// The string token of `buf[from..to]`, interned when this lexer
     /// interns (see [`Lexer::last_sym`]).
-    pub(super) fn str_token(&mut self, from: usize, to: usize) -> Tok {
+    pub(super) fn str_token(&mut self, from: usize, to: usize) -> Result<Tok, Oom> {
         match &mut self.names {
-            Some(names) => self.last_sym = names.intern(&self.buf[from..to]),
+            Some(names) => self.last_sym = names.intern(&self.buf[from..to])?,
             None => self.str_range = (from, to),
         }
-        Token::Str(())
+        Ok(Token::Str(()))
     }
 }

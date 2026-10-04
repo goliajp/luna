@@ -49,26 +49,30 @@ pub(crate) enum VarKind {
 impl GotoCheck {
     /// The checker for dialects with goto (5.2+), in the vectors of an
     /// earlier one when given.
-    pub(crate) fn new(version: LuaVersion, old: Option<GotoCheck>) -> Option<GotoCheck> {
+    pub(crate) fn new(
+        version: LuaVersion,
+        old: Option<GotoCheck>,
+        mem: MemRef,
+    ) -> Result<Option<GotoCheck>, Oom> {
         if !version.has_goto() {
-            return None;
+            return Ok(None);
         }
         let mut g = old.unwrap_or_else(|| GotoCheck {
             v54: false,
             v55: false,
-            actvar: Vec::new(),
-            kinds: Vec::new(),
-            names: String::new(),
-            labels: Vec::new(),
-            pending: Vec::new(),
-            blocks: Vec::new(),
-            funcs: Vec::new(),
-            open: Vec::new(),
+            actvar: LVec::new(mem),
+            kinds: LVec::new(mem),
+            names: LVec::new(mem),
+            labels: LVec::new(mem),
+            pending: LVec::new(mem),
+            blocks: LVec::new(mem),
+            funcs: LVec::new(mem),
+            open: LVec::new(mem),
         });
         g.clear();
         g.v54 = version >= LuaVersion::Lua54;
         g.v55 = version >= LuaVersion::Lua55;
-        Some(g)
+        Ok(Some(g))
     }
 
     /// Forget everything, keeping the vectors.

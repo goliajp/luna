@@ -249,6 +249,24 @@ impl<T> LVec<T> {
         std::mem::replace(self, LVec::new(self.mem))
     }
 
+    /// This vector emptied, as a vector of another element type with the
+    /// same layout keeping the block (so a vector of borrowed records can
+    /// be kept across borrows of different lifetimes); a vector of another
+    /// layout gives its block back.
+    pub fn recycle<U>(mut self) -> LVec<U> {
+        self.clear();
+        let same = std::mem::size_of::<T>() == std::mem::size_of::<U>()
+            && std::mem::align_of::<T>() == std::mem::align_of::<U>()
+            && !Self::ZST;
+        let mut v = LVec::new(self.mem);
+        if same && self.cap != 0 {
+            let me = std::mem::ManuallyDrop::new(self);
+            v.ptr = me.ptr.cast();
+            v.cap = me.cap;
+        }
+        v
+    }
+
     /// The elements as a boxed slice, giving back the spare capacity.
     #[inline]
     pub fn into_slice(mut self) -> super::LSlice<T> {

@@ -4,11 +4,12 @@
 
 use crate::frontend::ast::*;
 use crate::frontend::error::SyntaxError;
-use crate::frontend::goto_check::{GotoCheck, VarKind};
+use crate::frontend::goto_check::{GotoCheck, GotoErr, VarKind};
 use crate::frontend::lexer::{Lexed, Lexer, Source, Stream};
 use crate::frontend::names::{Names, Sym};
 use crate::frontend::span::Span;
 use crate::frontend::token::{LexTok, Near, Tok, Token, TokenInfo, near_text};
+use crate::runtime::mem::{LVec, MemOwner};
 use crate::version::LuaVersion;
 
 mod block;
@@ -104,6 +105,8 @@ fn un_op_of(tok: &Tok) -> Option<UnOp> {
 /// the raw token stream. The Vm's `eval` path runs the expander
 /// transparently for MacroLua; direct callers feed expanded tokens via
 /// [`parse_tokens`].
+///
+/// The tree's vectors come from the system allocator.
 pub fn parse(src: &[u8], version: LuaVersion) -> Result<Chunk, SyntaxError> {
     parse_at_depth(src, version, 0).map(|p| p.chunk)
 }
@@ -114,9 +117,9 @@ pub(crate) struct Parsed {
     /// the line of the closing `end` of each `while` / `for` statement, by
     /// `StatId` (0 for other statements): PUC attributes the code it emits
     /// after reading that `end` to its line
-    pub(crate) end_lines: Vec<u32>,
+    pub(crate) end_lines: LVec<u32>,
     /// the lexer's token buffer, kept for the next load
-    pub(crate) lex_buf: Vec<u8>,
+    pub(crate) lex_buf: LVec<u8>,
     /// the parser's list stacks, kept for the next load
     pub(crate) stacks: ListStacks,
 }
@@ -130,7 +133,7 @@ pub(crate) fn parse_at_depth(
     version: LuaVersion,
     c_depth: u32,
 ) -> Result<Parsed, SyntaxError> {
-    parse_reusing(src, version, c_depth, ParseScratch::default())
+    parse_reusing(src, version, c_depth, ParseScratch::new(MemOwner::system()))
 }
 
 /// [`parse_at_depth`] building the tree in the vectors of an earlier parse
@@ -147,8 +150,8 @@ pub(crate) fn parse_reusing(
         lex_buf,
         stacks,
     } = scratch;
-    let names = std::mem::take(&mut chunk.names);
-    let lex = Lexer::interning(src, version, names, lex_buf);
+    let names = chunk.names.take();
+    let lex = Lexer::interning(src, version, names, lex_buf)?;
     parse_from_source(
         TokenSource::Lexer(lex),
         version,
@@ -163,7 +166,7 @@ pub(crate) fn parse_reusing(
 /// the end. The parser asks for a piece only when the scan moves past the
 /// bytes it has, as PUC's does, so it stops reading at a syntax error.
 pub(crate) fn parse_stream<'f>(
-    first: Vec<u8>,
+    first: LVec<u8>,
     feed: &'f mut crate::frontend::lexer::Feed<'f>,
     version: LuaVersion,
     c_depth: u32,
@@ -175,9 +178,9 @@ pub(crate) fn parse_stream<'f>(
         lex_buf,
         stacks,
     } = scratch;
-    let names = std::mem::take(&mut chunk.names);
+    let names = chunk.names.take();
     let len = first.len();
-    let lex = Lexer::interning_stream(Stream::new(first, feed), version, names, lex_buf);
+    let lex = Lexer::interning_stream(Stream::new(first, feed), version, names, lex_buf)?;
     parse_from_source(
         TokenSource::Stream(lex),
         version,
@@ -196,27 +199,36 @@ pub fn parse_tokens(
     src: &[u8],
     version: LuaVersion,
 ) -> Result<Chunk, SyntaxError> {
-    parse_tokens_at_depth(tokens, src, version, 0).map(|p| p.chunk)
+    parse_tokens_at_depth(tokens, src, version, 0, MemOwner::system()).map(|p| p.chunk)
 }
 
-/// [`parse_tokens`] at a C depth (see [`parse_at_depth`]).
+/// [`parse_tokens`] at a C depth (see [`parse_at_depth`]), building the
+/// tree in vectors from `mem`.
 pub(crate) fn parse_tokens_at_depth(
     tokens: Vec<TokenInfo>,
     src: &[u8],
     version: LuaVersion,
     c_depth: u32,
+    mem: MemOwner,
 ) -> Result<Parsed, SyntaxError> {
+    let names = Names::with_capacity(mem.mem(), src.len())?;
+    let ParseScratch {
+        chunk,
+        end_lines,
+        stacks,
+        ..
+    } = ParseScratch::new(mem);
     parse_from_source(
         TokenSource::PreExpanded {
             tokens,
             cursor: 0,
             src,
-            names: Names::with_capacity(src.len()),
+            names,
         },
         version,
         c_depth,
         src.len(),
-        Default::default(),
+        (chunk, end_lines, stacks),
     )
 }
 
@@ -225,62 +237,20 @@ fn parse_from_source<'s>(
     version: LuaVersion,
     c_depth: u32,
     src_len: usize,
-    vecs: (Chunk, Vec<u32>, ListStacks),
+    vecs: (Chunk, LVec<u32>, ListStacks),
 ) -> Result<Parsed, SyntaxError> {
-    let (mut chunk, mut end_lines, mut stacks) = vecs;
-    let mut func_local_count = std::mem::take(&mut stacks.func_local_count);
-    func_local_count.clear();
-    // the main chunk is the bottom-most function context (line 0 → main)
-    func_local_count.push((0, 0, 0));
-    let mut funcs = std::mem::take(&mut stacks.funcs);
-    funcs.clear();
-    funcs.push(FnFlow {
-        vararg: true,
-        loops: 0,
-    });
-    let gotos = GotoCheck::new(version, stacks.gotos.take());
-    let cur = lex.next_token()?;
-    // typical source has an expression node per dozen bytes or so and a
-    // statement per few dozen; starting near that skips most regrowth
-    let (n_exprs, n_stats) = (src_len / 16, src_len / 64);
-    chunk.exprs.reserve(n_exprs);
-    chunk.stats.reserve(n_stats);
-    chunk.stat_lines.reserve(n_stats);
-    end_lines.reserve(n_stats);
-    let mut p = Parser {
-        lex,
-        tok: cur.info,
-        tok_char: cur.char,
-        tok_sym: cur.sym,
-        peeked: None,
-        prev_line: 1,
-        chunk,
-        stk: stacks,
-        end_lines,
-        depth: c_depth,
-        version,
-        func_local_count,
-        funcs,
-        gotos,
-        last_line: 1,
-        upval_chain_51: if version <= LuaVersion::Lua51 {
-            vec![FnUvSlot {
-                line_defined: 0,
-                ..Default::default()
-            }]
-        } else {
-            Vec::new()
-        },
+    let cur = match lex.next_token() {
+        Ok(cur) => cur,
+        Err(e) => return Err(lex.out_of_memory().map_or(e, SyntaxError::from)),
     };
-    if let Some(g) = p.gotos.as_mut() {
-        g.enter_function();
+    let mut p = Parser::new(lex, cur, version, c_depth, vecs)?;
+    let r = p.main(src_len);
+    // a reader whose pieces could not be kept ended the input early:
+    // whatever the parse made of it, the load failed for lack of memory
+    if let Some(o) = p.lex.out_of_memory() {
+        return Err(o.into());
     }
-    let block = p.block()?;
-    if p.tok.tok != Token::Eof {
-        return Err(p.error_expected("<eof>"));
-    }
-    p.close_function()?;
-    let end_line = p.prev_line;
+    let (block, end_line) = r?;
     let mut chunk = p.chunk;
     chunk.names = p.lex.take_names();
     let mut stacks = p.stk;
@@ -297,6 +267,74 @@ fn parse_from_source<'s>(
     })
 }
 
+impl<'s> Parser<'s> {
+    /// A parser at the first token `cur` of `lex`, building the tree in
+    /// `vecs` (emptied).
+    fn new(
+        lex: TokenSource<'s>,
+        cur: Cur,
+        version: LuaVersion,
+        c_depth: u32,
+        vecs: (Chunk, LVec<u32>, ListStacks),
+    ) -> Result<Parser<'s>, SyntaxError> {
+        let (chunk, end_lines, mut stacks) = vecs;
+        let mem = chunk.mem_owner().mem();
+        let mut func_local_count = stacks.func_local_count.take();
+        func_local_count.clear();
+        // the main chunk is the bottom-most function context (line 0 → main)
+        func_local_count.push((0, 0, 0))?;
+        let mut funcs = stacks.funcs.take();
+        funcs.clear();
+        funcs.push(FnFlow {
+            vararg: true,
+            loops: 0,
+        })?;
+        let gotos = GotoCheck::new(version, stacks.gotos.take(), mem)?;
+        let mut upval_chain_51 = LVec::new(mem);
+        if version <= LuaVersion::Lua51 {
+            upval_chain_51.push(FnUvSlot::new(mem, 0))?;
+        }
+        Ok(Parser {
+            lex,
+            tok: cur.info,
+            tok_char: cur.char,
+            tok_sym: cur.sym,
+            peeked: None,
+            prev_line: 1,
+            chunk,
+            stk: stacks,
+            end_lines,
+            depth: c_depth,
+            version,
+            func_local_count,
+            funcs,
+            gotos,
+            last_line: 1,
+            upval_chain_51,
+        })
+    }
+
+    /// The main chunk: its block and the line of its end.
+    fn main(&mut self, src_len: usize) -> Result<(Block, u32), SyntaxError> {
+        // typical source has an expression node per dozen bytes or so and a
+        // statement per few dozen; starting near that skips most regrowth
+        let (n_exprs, n_stats) = (src_len / 16, src_len / 64);
+        self.chunk.exprs.reserve(n_exprs)?;
+        self.chunk.stats.reserve(n_stats)?;
+        self.chunk.stat_lines.reserve(n_stats)?;
+        self.end_lines.reserve(n_stats)?;
+        if let Some(g) = self.gotos.as_mut() {
+            g.enter_function()?;
+        }
+        let block = self.block()?;
+        if self.tok.tok != Token::Eof {
+            return Err(self.error_expected("<eof>"));
+        }
+        self.close_function()?;
+        Ok((block, self.prev_line))
+    }
+}
+
 struct Parser<'s> {
     lex: TokenSource<'s>,
     tok: LexTok,
@@ -307,7 +345,7 @@ struct Parser<'s> {
     peeked: Option<Cur>,
     /// Per open function (main chunk first): what `...` and `break` are
     /// checked against while parsing, as PUC does.
-    funcs: Vec<FnFlow>,
+    funcs: LVec<FnFlow>,
     /// Gotos (and 5.2-5.4 `break`) are resolved while parsing; see
     /// [`GotoCheck`].
     gotos: Option<GotoCheck>,
@@ -321,7 +359,7 @@ struct Parser<'s> {
     /// lists being collected, before they are moved into `chunk`
     stk: ListStacks,
     /// see [`Parsed::end_lines`]
-    end_lines: Vec<u32>,
+    end_lines: LVec<u32>,
     depth: u32,
     version: LuaVersion,
     /// One entry per function context (main chunk + nested functions): the
@@ -331,7 +369,7 @@ struct Parser<'s> {
     /// list is parsed). Pushed by
     /// `func_body`, popped on exit. Without parse-time tracking, errors.lua
     /// :775 would race a later structural error (a missing `end`) and lose.
-    func_local_count: Vec<(u32, u32, u32)>,
+    func_local_count: LVec<(u32, u32, u32)>,
     /// Parse-time upvalue accounting for PUC 5.1 (errors.lua :238). PUC 5.1's
     /// `singlevaraux` resolves each identifier as it parses and stops at
     /// `MAXUPVAL=60`; luna defers name resolution to the compiler so a stack
@@ -342,7 +380,7 @@ struct Parser<'s> {
     /// function's defining line on the error. Only populated for 5.1 — 5.2+
     /// goes through `_ENV` (which would itself be an upvalue) and 5.5
     /// tolerates a wider cap.
-    upval_chain_51: Vec<FnUvSlot>,
+    upval_chain_51: LVec<FnUvSlot>,
 }
 
 pub(crate) struct FnFlow {

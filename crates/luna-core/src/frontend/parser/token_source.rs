@@ -2,6 +2,7 @@
 //! vector.
 
 use super::*;
+use crate::runtime::mem::{LVec, Oom};
 
 /// Token feed for the recursive-descent parser. Either a live [`Lexer`]
 /// (the default `parse(src, version)` path) or a pre-materialized token
@@ -65,8 +66,8 @@ impl<'s> TokenSource<'s> {
                     let t = &tokens[*cursor];
                     *cursor += 1;
                     let sym = match &t.tok {
-                        Token::Name(text) => names.intern(text.as_bytes()),
-                        Token::Str(bytes) => names.intern(bytes),
+                        Token::Name(text) => names.intern(text.as_bytes())?,
+                        Token::Str(bytes) => names.intern(bytes)?,
                         _ => Sym(0),
                     };
                     Ok(Cur {
@@ -95,15 +96,24 @@ impl<'s> TokenSource<'s> {
         match self {
             TokenSource::Lexer(l) => l.take_names(),
             TokenSource::Stream(l) => l.take_names(),
-            TokenSource::PreExpanded { names, .. } => std::mem::take(names),
+            TokenSource::PreExpanded { names, .. } => names.take(),
         }
     }
 
-    pub(super) fn take_buf(&mut self) -> Vec<u8> {
+    pub(super) fn take_buf(&mut self) -> LVec<u8> {
         match self {
             TokenSource::Lexer(l) => l.take_buf(),
             TokenSource::Stream(l) => l.take_buf(),
-            TokenSource::PreExpanded { .. } => Vec::new(),
+            TokenSource::PreExpanded { names, .. } => LVec::new(names.mem()),
+        }
+    }
+
+    /// Why a streamed source stopped reading, when it ran out of memory: the
+    /// parse then fails with a memory error whatever it found.
+    pub(super) fn out_of_memory(&self) -> Option<Oom> {
+        match self {
+            TokenSource::Stream(l) => l.source_out_of_memory(),
+            _ => None,
         }
     }
 

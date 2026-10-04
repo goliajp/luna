@@ -3,12 +3,22 @@
 //! trips while the parser is inside the offending function.
 
 use super::*;
+use crate::runtime::mem::{LMap, LVec, MemRef, Oom};
 
-#[derive(Default)]
 pub(super) struct FnUvSlot {
-    pub(super) locals: Vec<Sym>,
-    pub(super) upvalues: std::collections::HashSet<Sym>,
+    pub(super) locals: LVec<Sym>,
+    pub(super) upvalues: LMap<Sym, ()>,
     pub(super) line_defined: u32,
+}
+
+impl FnUvSlot {
+    pub(super) fn new(mem: MemRef, line_defined: u32) -> FnUvSlot {
+        FnUvSlot {
+            locals: LVec::new(mem),
+            upvalues: LMap::new(mem),
+            line_defined,
+        }
+    }
 }
 
 impl Parser<'_> {
@@ -16,14 +26,15 @@ impl Parser<'_> {
         !self.upval_chain_51.is_empty()
     }
 
-    pub(super) fn add_local_51(&mut self, name: Sym) {
+    pub(super) fn add_local_51(&mut self, name: Sym) -> Result<(), Oom> {
         if self.track_uv_51() {
             self.upval_chain_51
                 .last_mut()
                 .expect("fn ctx")
                 .locals
-                .push(name);
+                .push(name)?;
         }
+        Ok(())
     }
 
     pub(super) fn snap_locals_51(&self) -> usize {
@@ -44,13 +55,12 @@ impl Parser<'_> {
         }
     }
 
-    pub(super) fn enter_fn_51(&mut self, line_defined: u32) {
+    pub(super) fn enter_fn_51(&mut self, line_defined: u32) -> Result<(), Oom> {
         if self.track_uv_51() {
-            self.upval_chain_51.push(FnUvSlot {
-                line_defined,
-                ..Default::default()
-            });
+            let mem = self.upval_chain_51.mem();
+            self.upval_chain_51.push(FnUvSlot::new(mem, line_defined))?;
         }
+        Ok(())
     }
 
     pub(super) fn leave_fn_51(&mut self) {
@@ -84,7 +94,7 @@ impl Parser<'_> {
             return Ok(());
         }
         for k in (owner_idx + 1)..n {
-            let inserted = self.upval_chain_51[k].upvalues.insert(name);
+            let inserted = self.upval_chain_51[k].upvalues.insert(name, ())?.is_none();
             if inserted && self.upval_chain_51[k].upvalues.len() > MAXUPVAL {
                 let line_defined = self.upval_chain_51[k].line_defined;
                 let where_ = if k == 0 {
