@@ -379,6 +379,12 @@ impl MemOwner {
     }
 }
 
+impl std::fmt::Debug for MemOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("MemOwner").field(&self.0.0).finish()
+    }
+}
+
 impl Clone for MemOwner {
     fn clone(&self) -> MemOwner {
         let c = self.0.ctx();

@@ -1,6 +1,7 @@
 //! Token plumbing: advancing, expecting, error construction and nesting depth.
 
 use super::*;
+use crate::runtime::mem::Oom;
 
 impl<'s> Parser<'s> {
     pub(super) fn advance(&mut self) -> Result<LexTok, SyntaxError> {
@@ -126,13 +127,18 @@ impl<'s> Parser<'s> {
     }
 
     /// Declare variables of one kind to the goto checker.
-    pub(super) fn declare(&mut self, syms: impl IntoIterator<Item = Sym>, kind: VarKind) {
+    pub(super) fn declare(
+        &mut self,
+        syms: impl IntoIterator<Item = Sym>,
+        kind: VarKind,
+    ) -> Result<(), Oom> {
         let Parser { gotos, lex, .. } = self;
         if let Some(g) = gotos {
             for s in syms {
-                g.declare(lex.names().text(s), kind);
+                g.declare(lex.names().text(s), kind)?;
             }
         }
+        Ok(())
     }
 
     pub(super) fn enter(&mut self) -> Result<(), SyntaxError> {
@@ -180,22 +186,21 @@ impl<'s> Parser<'s> {
         self.depth -= 1;
     }
 
-    pub(super) fn push_expr(&mut self, e: Expr) -> ExprId {
-        self.chunk.exprs.push(e);
-        ExprId((self.chunk.exprs.len() - 1) as u32)
+    pub(super) fn push_expr(&mut self, e: Expr) -> Result<ExprId, Oom> {
+        self.chunk.exprs.push(e)?;
+        Ok(ExprId((self.chunk.exprs.len() - 1) as u32))
     }
 
-    pub(super) fn push_stat(&mut self, s: Stat) -> StatId {
-        self.chunk.stats.push(s);
-        StatId((self.chunk.stats.len() - 1) as u32)
+    pub(super) fn push_stat(&mut self, s: Stat) -> Result<StatId, Oom> {
+        self.chunk.stats.push(s)?;
+        Ok(StatId((self.chunk.stats.len() - 1) as u32))
     }
 
     /// Push a statement that ended with the `end` just read.
-    pub(super) fn push_ended_stat(&mut self, s: Stat) -> StatId {
-        let id = self.push_stat(s);
-        let idx = id.0 as usize;
-        self.end_lines.resize(idx + 1, 0);
-        self.end_lines[idx] = self.prev_line;
-        id
+    pub(super) fn push_ended_stat(&mut self, s: Stat) -> Result<StatId, Oom> {
+        self.end_lines.resize(self.chunk.stats.len() + 1, 0)?;
+        let id = self.push_stat(s)?;
+        self.end_lines[id.0 as usize] = self.prev_line;
+        Ok(id)
     }
 }

@@ -15,7 +15,7 @@ impl<'s> Parser<'s> {
             cond,
             then_line,
             body,
-        });
+        })?;
         while self.tok.tok == Token::Elseif {
             self.advance()?;
             let cond = self.expr()?;
@@ -26,16 +26,16 @@ impl<'s> Parser<'s> {
                 cond,
                 then_line,
                 body,
-            });
+            })?;
         }
-        let arms = finish(&mut self.chunk, &mut self.stk.arms, mark);
+        let arms = finish(&mut self.chunk, &mut self.stk.arms, mark)?;
         let else_body = if self.accept(Token::Else)? {
             Some(self.block()?)
         } else {
             None
         };
         self.expect_match(Token::End, "end", "if", line)?;
-        Ok(self.push_stat(Stat::If { arms, else_body }))
+        Ok(self.push_stat(Stat::If { arms, else_body })?)
     }
 
     pub(super) fn while_stat(&mut self) -> Result<StatId, SyntaxError> {
@@ -45,7 +45,7 @@ impl<'s> Parser<'s> {
         self.expect(Token::Do, "do")?;
         let body = self.loop_block(List::EMPTY)?;
         self.expect_match(Token::End, "end", "while", line)?;
-        Ok(self.push_ended_stat(Stat::While { cond, body }))
+        Ok(self.push_ended_stat(Stat::While { cond, body })?)
     }
 
     pub(super) fn repeat_stat(&mut self) -> Result<StatId, SyntaxError> {
@@ -54,7 +54,7 @@ impl<'s> Parser<'s> {
         let body = self.loop_block(List::EMPTY)?;
         self.expect_match(Token::Until, "until", "repeat", line)?;
         let cond = self.expr()?;
-        Ok(self.push_stat(Stat::Repeat { body, cond }))
+        Ok(self.push_stat(Stat::Repeat { body, cond })?)
     }
 
     pub(super) fn for_stat(&mut self) -> Result<StatId, SyntaxError> {
@@ -73,8 +73,8 @@ impl<'s> Parser<'s> {
                     None
                 };
                 self.expect(Token::Do, "do")?;
-                self.add_local_51(first.sym);
-                let var = self.chunk.push_list(&[first]);
+                self.add_local_51(first.sym)?;
+                let var = self.chunk.push_list(&[first])?;
                 let body = self.loop_block(var)?;
                 self.expect_match(Token::End, "end", "for", line)?;
                 Ok(self.push_ended_stat(Stat::NumericFor {
@@ -83,22 +83,22 @@ impl<'s> Parser<'s> {
                     limit,
                     step,
                     body,
-                }))
+                })?)
             }
             Token::Comma | Token::In => {
                 let mark = self.stk.names.len();
-                self.stk.names.push(first);
+                self.stk.names.push(first)?;
                 while self.accept(Token::Comma)? {
                     let n = self.expect_name()?;
-                    self.stk.names.push(n);
+                    self.stk.names.push(n)?;
                 }
-                let vars = finish(&mut self.chunk, &mut self.stk.names, mark);
+                let vars = finish(&mut self.chunk, &mut self.stk.names, mark)?;
                 self.expect(Token::In, "in")?;
                 let expr_line = self.tok.line;
                 let exprs = self.exprlist()?;
                 self.expect(Token::Do, "do")?;
                 for i in vars.range() {
-                    self.add_local_51(self.chunk.name_lists[i].sym);
+                    self.add_local_51(self.chunk.name_lists[i].sym)?;
                 }
                 let body = self.loop_block(vars)?;
                 self.expect_match(Token::End, "end", "for", line)?;
@@ -107,7 +107,7 @@ impl<'s> Parser<'s> {
                     exprs,
                     body,
                     expr_line,
-                }))
+                })?)
             }
             _ => Err(self.error("'=' or 'in' expected")),
         }
@@ -120,9 +120,9 @@ impl<'s> Parser<'s> {
         let mark = self.stk.names.len();
         while self.accept(Token::Dot)? {
             let n = self.expect_name()?;
-            self.stk.names.push(n);
+            self.stk.names.push(n)?;
         }
-        let path = finish(&mut self.chunk, &mut self.stk.names, mark);
+        let path = finish(&mut self.chunk, &mut self.stk.names, mark)?;
         let method = if self.accept(Token::Colon)? {
             Some(self.expect_name()?)
         } else {
@@ -132,7 +132,7 @@ impl<'s> Parser<'s> {
         Ok(self.push_stat(Stat::Function {
             name: FuncName { base, path, method },
             body,
-        }))
+        })?)
     }
 
     pub(super) fn attrib(&mut self) -> Result<Option<Attrib>, SyntaxError> {
@@ -168,12 +168,12 @@ impl<'s> Parser<'s> {
             let name = self.expect_name()?;
             self.new_local()?;
             let attrib = self.attrib()?;
-            self.stk.attribs.push(AttribName { name, attrib });
+            self.stk.attribs.push(AttribName { name, attrib })?;
             if !self.accept(Token::Comma)? {
                 break;
             }
         }
-        let names = finish(&mut self.chunk, &mut self.stk.attribs, mark);
+        let names = finish(&mut self.chunk, &mut self.stk.attribs, mark)?;
         let exprs = if self.accept(Token::Assign)? {
             self.exprlist()?
         } else {
@@ -191,22 +191,22 @@ impl<'s> Parser<'s> {
             // the body is parsed (PUC `localfunc`'s pre-declare); count it.
             self.new_local()?;
             self.activate_locals()?;
-            self.add_local_51(name.sym);
-            self.declare([name.sym], VarKind::Local);
+            self.add_local_51(name.sym)?;
+            self.declare([name.sym], VarKind::Local)?;
             let body = self.func_body(line)?;
-            return Ok(self.push_stat(Stat::LocalFunction { name, body }));
+            return Ok(self.push_stat(Stat::LocalFunction { name, body })?);
         }
         let (collective, names, exprs) = self.attnamelist()?;
         self.activate_locals()?;
-        self.declare_attrib_names(names, collective, false);
+        self.declare_attrib_names(names, collective, false)?;
         for i in names.range() {
-            self.add_local_51(self.chunk.attrib_name_lists[i].name.sym);
+            self.add_local_51(self.chunk.attrib_name_lists[i].name.sym)?;
         }
         Ok(self.push_stat(Stat::Local {
             collective,
             names,
             exprs,
-        }))
+        })?)
     }
 
     pub(super) fn global_stat(&mut self) -> Result<StatId, SyntaxError> {
@@ -214,41 +214,38 @@ impl<'s> Parser<'s> {
         if self.accept(Token::Function)? {
             let line = self.prev_line;
             let name = self.expect_name()?;
-            self.declare([name.sym], VarKind::Global);
+            self.declare([name.sym], VarKind::Global)?;
             let body = self.func_body(line)?;
-            return Ok(self.push_stat(Stat::GlobalFunction { name, body }));
+            return Ok(self.push_stat(Stat::GlobalFunction { name, body })?);
         }
         // `global [attrib] '*'`
         let leading = self.attrib()?;
         if self.accept(Token::Star)? {
-            self.goto_step(|g| {
-                g.declare("*", VarKind::Global);
-                Ok(())
-            })?;
-            return Ok(self.push_stat(Stat::GlobalAll { attrib: leading }));
+            self.goto_step(|g| Ok(g.declare("*", VarKind::Global)?))?;
+            return Ok(self.push_stat(Stat::GlobalAll { attrib: leading })?);
         }
         let mark = self.stk.attribs.len();
         loop {
             let name = self.expect_name()?;
             let attrib = self.attrib()?;
-            self.stk.attribs.push(AttribName { name, attrib });
+            self.stk.attribs.push(AttribName { name, attrib })?;
             if !self.accept(Token::Comma)? {
                 break;
             }
         }
-        let names = finish(&mut self.chunk, &mut self.stk.attribs, mark);
+        let names = finish(&mut self.chunk, &mut self.stk.attribs, mark)?;
         let exprs = if self.accept(Token::Assign)? {
             self.exprlist()?
         } else {
             List::EMPTY
         };
         // the declared names come into scope after their initializers
-        self.declare_attrib_names(names, leading, true);
+        self.declare_attrib_names(names, leading, true)?;
         Ok(self.push_stat(Stat::Global {
             collective: leading,
             names,
             exprs,
-        }))
+        })?)
     }
 
     pub(super) fn expr_stat(&mut self) -> Result<StatId, SyntaxError> {
@@ -269,12 +266,12 @@ impl<'s> Parser<'s> {
             if !is_call {
                 return Err(self.error("syntax error"));
             }
-            return Ok(self.push_stat(Stat::Call(first)));
+            return Ok(self.push_stat(Stat::Call(first))?);
         }
         // PUC `assignment`/`restassign` check each target as soon as it is
         // parsed, so the near-token is the one following that target.
         let mark = self.stk.exprs.len();
-        self.stk.exprs.push(first);
+        self.stk.exprs.push(first)?;
         let mut entered = 0;
         loop {
             let last = *self.stk.exprs.last().expect("one target");
@@ -307,7 +304,7 @@ impl<'s> Parser<'s> {
             // entering a level that stays entered until the statement ends.
             let nvars = (self.stk.exprs.len() - mark) as u32;
             let t = self.suffixed_expr()?;
-            self.stk.exprs.push(t);
+            self.stk.exprs.push(t)?;
             match self.version {
                 LuaVersion::Lua51 => {
                     let limit = MAX_DEPTH.saturating_sub(self.depth);
@@ -329,10 +326,10 @@ impl<'s> Parser<'s> {
                 }
             }
         }
-        let targets = finish(&mut self.chunk, &mut self.stk.exprs, mark);
+        let targets = finish(&mut self.chunk, &mut self.stk.exprs, mark)?;
         self.expect(Token::Assign, "=")?;
         let exprs = self.exprlist()?;
         self.depth -= entered;
-        Ok(self.push_stat(Stat::Assign { targets, exprs }))
+        Ok(self.push_stat(Stat::Assign { targets, exprs })?)
     }
 }
