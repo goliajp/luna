@@ -30,32 +30,20 @@ func NULL: hook=none mask=0 count=3
 debug.sethook
   lua hook	line	2
   lua hook	line	3
-lua hook: hook=other mask=12 count=2
+lua hook: hook=other mask=4 count=0
 c over lua: hook=bare mask=1 count=0
   call line=-1
   call line=-1
   call line=-1
   call line=-1
-external hook  call line=-1
-	c  call line=-1
-	0
-restored: hook=other mask=12 count=2
+  call line=-1
+  call line=-1
+external hook c 0
+restored: hook=other mask=4 count=0
   lua hook	line	1
-  lua hook	count	nil
-  lua hook	line	1
-  lua hook	count	nil
-  lua hook	line	1
-  lua hook	count	nil
-  lua hook	line	1
-  lua hook	count	nil
-  lua hook	line	1
-  lua hook	count	nil
-  lua hook	line	1
-function	l	2
+function	l	0
   lua hook	line	2
-  lua hook	count	nil
-  lua hook	line	2
-cleared	function: 0x55ef77327230		0
+cleared	function
 hook error
   error 2: hook error
   error 2: line

@@ -2,7 +2,7 @@ F: 1:[a]=1 2:[b]=2
 setupvalue F 1 -> a (top +0)
 setupvalue F 3 -> (null) (top +1)
 F() = 12
-stripped: 1:[(no name)]=<table> 2:[(no name)]=<nil>
+stripped: 1:[(no name)] 2:[(no name)]
 cclosure: 1:[]=u1 2:[]=2
 setupvalue C 1 ->  (top +0)
 setupvalue C 3 -> (null) (top +1)
