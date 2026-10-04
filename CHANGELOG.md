@@ -298,6 +298,12 @@ optimization.
 
 ### Fixed
 
+- A trace recording that an error left (a call raising inside `pcall`)
+  was closed the next time the same function was entered, giving a trace
+  that ran only up to the failing operation and returned to its start, so
+  the program looped for ever with the trace JIT on. The recording is now
+  dropped when an error unwinds through it. Introduced after 4.0.1;
+  4.0.1, 4.0.0, 3.2.2 and 3.0.0 do not hang on the same program.
 - A coroutine resumed from inside a call that cannot yield (a sort
   comparator, a `gsub` replacement, a host's `lua_pcall`) can yield
   again, as in PUC, where that restriction belongs to the thread that made
