@@ -77,9 +77,11 @@ impl Vm {
         }
     }
 
+    /// The rest of [`Vm::retry_oom`] once `f` has failed with `o`: an
+    /// emergency collection and one more run, or the memory error.
     #[cold]
     #[inline(never)]
-    fn retry_oom_slow<T>(
+    pub(crate) fn retry_oom_slow<T>(
         &mut self,
         o: Oom,
         mut f: impl FnMut(&mut Vm) -> Result<T, Oom>,
@@ -100,6 +102,20 @@ impl Vm {
             return Ok(());
         }
         self.retry_oom(|vm| vm.stack.resize(need, Value::Nil))
+    }
+
+    /// Enter native `act` on the running-natives chain, collecting in an
+    /// emergency when the chain cannot grow. Its closure and arguments are
+    /// on the stack, so the collection keeps them.
+    #[inline(always)]
+    pub(crate) fn push_native(
+        &mut self,
+        act: crate::vm::callstack::NativeAct,
+    ) -> Result<(), LuaError> {
+        match self.running_natives.push(act) {
+            Ok(()) => Ok(()),
+            Err(o) => self.retry_oom_slow(o, |vm| vm.running_natives.push(act)),
+        }
     }
 
     /// A string with `bytes`, collecting in an emergency when memory runs

@@ -253,6 +253,10 @@ pub struct Heap {
     gray: crate::runtime::mem::LVec<*mut GcHeader>,
     /// gray objects are left off `gray` because it could not grow
     gray_overflow: bool,
+    /// a raw table store the interpreter's fast path tried could not grow
+    /// the table: the slow path it falls back to counts that as the first
+    /// attempt (see `Vm::newindex_miss`)
+    pub(crate) store_failed: bool,
     /// the head of `all` at the last point where every live object was
     /// rooted; objects before it on `all` are newer (see `mark_young`)
     young: *mut GcHeader,
@@ -362,6 +366,7 @@ impl Heap {
             gray: crate::runtime::mem::LVec::new(mem.mem()),
             gray_overflow: false,
             young: ptr::null_mut(),
+            store_failed: false,
             propagate: None,
             phase: GcPhase::Pause,
             sweep_cur: ptr::null_mut(),

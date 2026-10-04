@@ -280,7 +280,10 @@ impl Vm {
         // `doit("error()") == nil`).
         let result =
             if matches!(result, Value::Nil) && self.version >= crate::version::LuaVersion::Lua55 {
-                Value::Str(self.heap.intern(b"<no error object>"))
+                match self.alloc_str(b"<no error object>") {
+                    Ok(s) => Value::Str(s),
+                    Err(e) => e.0,
+                }
             } else {
                 result
             };
@@ -288,8 +291,11 @@ impl Vm {
         // traceback was for that error and is no longer in flight.
         self.error_traceback = None;
         let fs = nc.func_slot as usize;
-        if self.stack.len() < fs + 2 {
-            self.grow_stack_or_abort(fs + 2);
+        // the catcher's own window already holds these slots unless the
+        // stack shrank under it; with no memory to regrow it the memory
+        // error goes on past this catcher
+        if let Err(e) = self.grow_stack(fs + 2) {
+            return Unwound::Propagated(e);
         }
         self.stack[fs] = Value::Bool(false);
         self.stack[fs + 1] = result;
@@ -326,7 +332,9 @@ impl Vm {
             .map(|c| (c.base + c.closure.proto.max_stack as u32) as usize + 256)
             .unwrap_or(saved_len);
         if self.stack.len() < restore {
-            self.grow_stack_or_abort(restore);
+            if let Err(e) = self.grow_stack(restore) {
+                return Unwound::Propagated(e);
+            }
         } else if self.stack.len() > restore {
             self.stack.truncate(restore);
         }

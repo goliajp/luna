@@ -140,16 +140,16 @@ impl Vm {
                     // Popped after the matching return hook fires — even on
                     // error, the pop must happen, so the body is bracketed
                     // through a scope guard.
-                    self.running_natives
-                        .push_or_abort(crate::vm::callstack::NativeAct {
-                            nc,
-                            func_slot,
-                            nargs,
-                            depth: self.frames.len() as u32,
-                            // a tail call resolved its `__call` chain before
-                            // calling here and passed the count in tail_ccmt
-                            ccmt: tail_ccmt + chain as u8,
-                        });
+                    let act = crate::vm::callstack::NativeAct {
+                        nc,
+                        func_slot,
+                        nargs,
+                        depth: self.frames.len() as u32,
+                        // a tail call resolved its `__call` chain before
+                        // calling here and passed the count in tail_ccmt
+                        ccmt: tail_ccmt + chain as u8,
+                    };
+                    self.push_native(act)?;
                     // PUC C-call discipline: entering a C function sets
                     // L->top to func + 1 + nargs, so a collect triggered
                     // INSIDE the native (explicit `collectgarbage()`, or
@@ -220,9 +220,7 @@ impl Vm {
         // move all of them and grow it on every hop
         let from = func_slot as usize;
         let end = (func_slot + 1 + nargs).max(self.top) as usize;
-        if self.stack.len() <= end {
-            self.grow_stack_or_abort(end + 1);
-        }
+        self.grow_stack(end + 1)?;
         self.stack.copy_within(from..end, from + 1);
         self.stack[from] = mm;
         if self.top > func_slot {
@@ -272,9 +270,7 @@ impl Vm {
         let base = func_slot + 1 + n_varargs;
         let max = proto.max_stack as u32;
         let need = (base + max) as usize;
-        if self.stack.len() < need {
-            self.grow_stack_or_abort(need);
-        }
+        self.grow_stack(need)?;
         // Only missing parameters become nil (PUC `luaD_precall`): the code
         // writes the rest before reading it, the collector keeps it valid
         // (`clear_dead_stack`) and a trace checks only what it reads first.
@@ -294,48 +290,38 @@ impl Vm {
                 .get_unchecked_mut((base + kept) as usize..end)
                 .fill(Value::Nil)
         };
-        frames_push_sync(
-            &mut self.frames,
-            &mut self.frames_top,
-            &mut self.trap,
-            CallFrame::Lua(Frame {
-                closure: cl,
-                base,
-                pc: 0,
-                func_slot,
-                nresults,
-                hook_oldpc: u32::MAX,
-                from_c,
-                n_varargs,
-                // single-shot consume: `close_slots` sets pending_tm before each
-                // handler call; the next Lua frame born is that handler's.
-                tm: self.pending_tm.take(),
-                // `run_hook` sets `pending_is_hook` before dispatching the user
-                // hook so its frame reports `namewhat = "hook"` via getinfo.
-                is_hook: std::mem::take(&mut self.pending_is_hook),
-                tailcalls: std::mem::take(&mut self.pending_tailcalls),
-                ccmt: std::mem::take(&mut self.pending_ccmt),
-            }),
-        );
+        let cf = CallFrame::Lua(Frame {
+            closure: cl,
+            base,
+            pc: 0,
+            func_slot,
+            nresults,
+            hook_oldpc: u32::MAX,
+            from_c,
+            n_varargs,
+            // single-shot consume: `close_slots` sets pending_tm before each
+            // handler call; the next Lua frame born is that handler's.
+            tm: self.pending_tm.take(),
+            // `run_hook` sets `pending_is_hook` before dispatching the user
+            // hook so its frame reports `namewhat = "hook"` via getinfo.
+            is_hook: std::mem::take(&mut self.pending_is_hook),
+            tailcalls: std::mem::take(&mut self.pending_tailcalls),
+            ccmt: std::mem::take(&mut self.pending_ccmt),
+        });
+        self.push_cf(cf)?;
         // PUC 5.1 `LUAI_COMPAT_VARARG`: the hidden `arg` local (the slot at
         // `base + nparams`) gets `{ n = n_varargs, e1, e2, … }` from the extras
         // just below `base` (5.1 db.lua :279 reads `arg.n` from a line hook).
         if proto.has_compat_vararg_arg {
             let arg_slot = (base + nparams) as usize;
-            let t = self.heap.new_table();
-            {
-                // SAFETY: `t` was allocated above and is held only by this local; `tm` is the only reference into it, and the heap calls made while it lives (`set_int`, `intern`, `set`) do not collect
-                let tm = unsafe { t.as_mut() };
-                for i in 0..n_varargs {
-                    let v = self.stack[(base - n_varargs + i) as usize];
-                    // bounded by `n_varargs` (≤ MAXUPVAL territory), well
-                    // below `MAX_ASIZE`
-                    let _ = tm.set_int_raw(&mut self.heap, (i + 1) as i64, v);
-                }
-                let nk = Value::Str(self.heap.intern(b"n"));
-                tm.set(&mut self.heap, nk, Value::Int(n_varargs as i64))
-                    .expect("'n' key");
+            // young until stored in its slot below
+            let t = self.alloc_table_sized(n_varargs as usize, 1)?;
+            for i in 0..n_varargs {
+                let v = self.stack[(base - n_varargs + i) as usize];
+                self.raw_set(t, Value::Int((i + 1) as i64), v)?;
             }
+            let nk = self.str_value(b"n")?;
+            self.raw_set(t, nk, Value::Int(n_varargs as i64))?;
             // once-per-table barrier mirrors SETLIST: t is born BLACK during
             // Propagate and the bulk `set_int`/`set` calls above don't barrier
             self.heap.barrier_back(t);

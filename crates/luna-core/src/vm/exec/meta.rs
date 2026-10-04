@@ -146,19 +146,18 @@ impl Vm {
     ) -> Result<(), LuaError> {
         let saved_top = self.top;
         let cont_slot = self.stack.len() as u32;
-        self.stack.push_or_abort(func);
-        self.stack.extend_from_slice_or_abort(args);
+        // `func` and `args` are the operands of the running instruction,
+        // still in their registers
+        self.grow_stack(cont_slot as usize + 1 + args.len())?;
+        self.stack[cont_slot as usize] = func;
+        self.stack[cont_slot as usize + 1..].copy_from_slice(args);
         self.top = self.stack.len() as u32;
-        frames_push_sync(
-            &mut self.frames,
-            &mut self.frames_top,
-            &mut self.trap,
-            CallFrame::Cont(NativeCont {
-                kind: ContKind::Meta(MetaCont { action, saved_top }),
-                func_slot: cont_slot,
-                nresults: 1,
-            }),
-        );
+        let cf = CallFrame::Cont(NativeCont {
+            kind: ContKind::Meta(MetaCont { action, saved_top }),
+            func_slot: cont_slot,
+            nresults: 1,
+        });
+        self.push_cf(cf)?;
         let saved_tm = self
             .pending_tm
             .replace(crate::runtime::function::FrameTm::Meta);

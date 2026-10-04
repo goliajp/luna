@@ -28,17 +28,13 @@ impl Vm {
             // raised inside pcall, a C function: no position
             return Err(self.plain_err("C stack overflow"));
         }
+        let cf = CallFrame::Cont(NativeCont {
+            kind: ContKind::Pcall,
+            func_slot,
+            nresults,
+        });
+        self.push_cf(cf)?;
         self.pcall_depth += 1;
-        frames_push_sync(
-            &mut self.frames,
-            &mut self.frames_top,
-            &mut self.trap,
-            CallFrame::Cont(NativeCont {
-                kind: ContKind::Pcall,
-                func_slot,
-                nresults,
-            }),
-        );
         // call f (slot func_slot+1) with the remaining args, asking for all
         // results; a yield or error inside propagates with the continuation kept
         // on the stack (caught by `unwind` / preserved across a yield).
@@ -71,10 +67,17 @@ impl Vm {
             // raised inside pcall, a C function: no position
             return Err(self.plain_err("C stack overflow"));
         }
-        self.pcall_depth += 1;
-        // layout: [xpcall@func_slot, f@+1, msgh@+2, a1@+3, ...]. Stash msgh and
-        // close its gap so f's args become [f@+1, a1@+2, ...].
+        // layout: [xpcall@func_slot, f@+1, msgh@+2, a1@+3, ...]. Stash msgh in
+        // the continuation (a root) before its slot is reused below
         let handler = self.stack[(func_slot + 2) as usize];
+        let cf = CallFrame::Cont(NativeCont {
+            kind: ContKind::Xpcall { handler },
+            func_slot,
+            nresults,
+        });
+        self.push_cf(cf)?;
+        self.pcall_depth += 1;
+        // close the handler's gap so f's args become [f@+1, a1@+2, ...].
         // 5.1: `xpcall (f, err)` takes exactly two parameters — extra
         // arguments are NOT forwarded to `f` (5.2 added forwarding;
         // 5.1 calls f with zero args).
@@ -83,16 +86,6 @@ impl Vm {
             self.stack[(func_slot + 2 + i) as usize] = self.stack[(func_slot + 3 + i) as usize];
         }
         self.top = func_slot + 2 + nfargs;
-        frames_push_sync(
-            &mut self.frames,
-            &mut self.frames_top,
-            &mut self.trap,
-            CallFrame::Cont(NativeCont {
-                kind: ContKind::Xpcall { handler },
-                func_slot,
-                nresults,
-            }),
-        );
         self.begin_call(func_slot + 1, Some(nfargs), -1, true)?;
         Ok(true)
     }
@@ -115,14 +108,14 @@ impl Vm {
         let Value::Native(nc) = self.stack[func_slot as usize] else {
             unreachable!("pcall/xpcall dispatch sits on a native")
         };
-        self.running_natives
-            .push_or_abort(crate::vm::callstack::NativeAct {
-                nc,
-                func_slot,
-                nargs,
-                depth: self.frames.len() as u32,
-                ccmt: 0,
-            });
+        let act = crate::vm::callstack::NativeAct {
+            nc,
+            func_slot,
+            nargs,
+            depth: self.frames.len() as u32,
+            ccmt: 0,
+        };
+        self.push_native(act)?;
         let r = check(self);
         self.running_natives.pop();
         r
@@ -135,22 +128,16 @@ impl Vm {
         // `pairs` keeps its slot so the debug interface can report it as the
         // C function running below the metamethod. Call mm(t) wanting 4.
         let need = (func_slot + 3) as usize;
-        if self.stack.len() < need {
-            self.grow_stack_or_abort(need);
-        }
+        self.grow_stack(need)?;
         self.stack[(func_slot + 2) as usize] = arg;
         self.stack[(func_slot + 1) as usize] = mm;
         self.top = func_slot + 3;
-        frames_push_sync(
-            &mut self.frames,
-            &mut self.frames_top,
-            &mut self.trap,
-            CallFrame::Cont(NativeCont {
-                kind: ContKind::Pairs,
-                func_slot,
-                nresults,
-            }),
-        );
+        let cf = CallFrame::Cont(NativeCont {
+            kind: ContKind::Pairs,
+            func_slot,
+            nresults,
+        });
+        self.push_cf(cf)?;
         let want = crate::vm::builtins::pairs_mm_results(self) as i32;
         self.begin_call(func_slot + 1, Some(1), want, true)?;
         Ok(true)

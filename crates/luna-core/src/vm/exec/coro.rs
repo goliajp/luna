@@ -7,11 +7,19 @@ impl Vm {
     // ---- coroutines ----
 
     pub(crate) fn new_coro(&mut self, body: Value) -> Gc<Coro> {
+        self.try_new_coro(body)
+            .unwrap_or_else(|_| crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Coro>()))
+    }
+
+    /// [`Vm::new_coro`], raising a memory error when the thread cannot be
+    /// made. `body` is held by the caller (an argument on the stack).
+    pub(crate) fn try_new_coro(&mut self, body: Value) -> Result<Gc<Coro>, LuaError> {
         // The new coroutine inherits the creating thread's current globals
         // (PUC `lua_newthread`: the new state copies `g->mainthread`'s
         // `l_gt`). `Vm.globals` always reflects the live thread, so reading
         // it here picks the creator regardless of which coro is running.
-        let co = self.heap.new_coro(body, self.globals);
+        let globals = self.globals;
+        let co = self.retry_oom(|vm| vm.heap.try_new_coro(body, globals))?;
         // a new thread inherits the creator's C hook (PUC `lua_newthread`); a
         // Lua hook stays with its thread, as PUC's hook table keeps it
         if matches!(self.hook.func, Some(Value::LightUserdata(_))) {
@@ -24,7 +32,7 @@ impl Vm {
         if let Some(h) = self.host_cont_hooks {
             (h.created)(self, co);
         }
-        co
+        Ok(co)
     }
 
     /// Is `t` the thread whose context is currently live in the VM?

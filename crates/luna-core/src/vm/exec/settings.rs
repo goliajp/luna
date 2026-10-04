@@ -37,12 +37,14 @@ impl Vm {
             let _ = err.write_all(b"Lua warning: ");
         }
         let _ = err.write_all(msg);
-        self.warn_buf.extend_from_slice_or_abort(msg);
+        // the log is kept for test harnesses; a piece that finds no
+        // memory is left out of it
+        let _ = self.warn_buf.extend_from_slice(msg);
         self.warn_cont = to_cont;
         if !to_cont {
             let _ = err.write_all(b"\n");
             let line = self.warn_buf.take();
-            self.warn_log.push_or_abort(line);
+            let _ = self.warn_log.push(line);
         }
         Ok(())
     }

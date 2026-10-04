@@ -86,6 +86,12 @@ pub(super) fn concat_piece(v: Value, float_fmt: numeric::FloatFmt) -> Option<Vec
     }
 }
 
+/// Whether `v` takes part in a concatenation as it is (a string or a
+/// number).
+pub(super) fn is_concat_piece(v: Value) -> bool {
+    matches!(v, Value::Str(_) | Value::Int(_) | Value::Float(_))
+}
+
 /// Index into the per-basic-type metatable table for a non-table value
 /// (None for tables, which carry their own metatable).
 pub(super) fn type_mt_slot(v: Value) -> Option<usize> {

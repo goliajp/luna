@@ -59,12 +59,13 @@ impl Vm {
         &mut self,
         target: crate::runtime::value::NativeFn,
     ) -> Option<String> {
-        let pkg_k = Value::Str(self.heap.intern(b"package"));
+        // names no string exists for are no table's keys
+        let pkg_k = Value::Str(self.heap.find_interned(b"package")?);
         let pkg = match self.globals().get(pkg_k) {
             Value::Table(t) => t,
             _ => return None,
         };
-        let loaded_k = Value::Str(self.heap.intern(b"loaded"));
+        let loaded_k = Value::Str(self.heap.find_interned(b"loaded")?);
         let loaded = match pkg.get(loaded_k) {
             Value::Table(t) => t,
             _ => return None,

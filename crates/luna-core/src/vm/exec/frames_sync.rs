@@ -23,10 +23,24 @@ pub(super) fn frames_push_sync(
     trap: &mut bool,
     cf: CallFrame,
 ) {
+    if try_frames_push_sync(frames, frames_top, trap, cf).is_err() {
+        crate::runtime::mem::oom_abort(std::alloc::Layout::new::<CallFrame>());
+    }
+}
+
+/// [`frames_push_sync`], failing (with nothing pushed) when the frame
+/// stack cannot grow.
+#[inline(always)]
+pub(super) fn try_frames_push_sync(
+    frames: &mut LVec<CallFrame>,
+    frames_top: &mut u32,
+    trap: &mut bool,
+    cf: CallFrame,
+) -> Result<(), crate::runtime::mem::Oom> {
+    frames.push(cf)?;
     if matches!(cf, CallFrame::Cont(_)) {
         *trap = true;
     }
-    frames.push_or_abort(cf);
     // Shadow maintenance is debug-only: release builds skip the
     // increment + assertion entirely. While nothing reads the shadow,
     // its purpose is to VERIFY the assumed invariant
@@ -43,6 +57,27 @@ pub(super) fn frames_push_sync(
     }
     #[cfg(not(debug_assertions))]
     let _ = frames_top;
+    Ok(())
+}
+
+impl Vm {
+    /// Push `cf` on the running thread's frame stack, collecting in an
+    /// emergency when the stack cannot grow (PUC `luaE_extendCI`).
+    #[inline(always)]
+    pub(super) fn push_cf(&mut self, cf: CallFrame) -> Result<(), LuaError> {
+        match try_frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf) {
+            Ok(()) => Ok(()),
+            Err(_) => self.push_cf_slow(cf),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn push_cf_slow(&mut self, cf: CallFrame) -> Result<(), LuaError> {
+        self.retry_oom(|vm| {
+            try_frames_push_sync(&mut vm.frames, &mut vm.frames_top, &mut vm.trap, cf)
+        })
+    }
 }
 
 #[inline(always)]

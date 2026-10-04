@@ -22,7 +22,7 @@ impl Vm {
                 self.set_r(base, inst.a(), v);
             }
             Op::NewTable => {
-                let t = self.heap.new_table();
+                let t = self.alloc_table()?;
                 self.set_r(base, inst.a(), Value::Table(t));
                 self.maybe_collect_garbage(base + inst.a() + 1);
             }
@@ -59,9 +59,13 @@ impl Vm {
                     let v = self.r(base, a + i);
                     // SAFETY: `t` is a live table (see `Gc`), and no
                     // reference into it is held across the call
-                    let r = unsafe { t.as_mut() }.set_int_raw(&mut self.heap, offset + i as i64, v);
-                    if let Err(TableError::Overflow) = r {
-                        return Err(self.rt_err("table overflow"));
+                    let r = self.table_op(|vm| {
+                        unsafe { t.as_mut() }.set_int_raw(&mut vm.heap, offset + i as i64, v)
+                    });
+                    match r {
+                        Err(TableError::Overflow) => return Err(self.rt_err("table overflow")),
+                        Err(e @ TableError::Memory(_)) => return Err(self.table_error(e)),
+                        _ => {}
                     }
                 }
                 // the element temps above the table are now consumed
@@ -85,7 +89,7 @@ impl Vm {
                 self.register_tbc(base + inst.a() + 3)?;
                 self.add_pc(inst.bx() as i32);
             }
-            Op::Closure => self.op_closure(inst, cl, base),
+            Op::Closure => self.op_closure(inst, cl, base)?,
             Op::Vararg => {
                 let abs_a = base + inst.a();
                 let wanted = inst.c() as i32 - 1;
@@ -98,7 +102,7 @@ impl Vm {
                 };
                 let n = match vt {
                     Some(t) => {
-                        let n_key = Value::Str(self.heap.intern(b"n"));
+                        let n_key = self.str_value(b"n")?;
                         // PUC getnumargs: a named vararg `t.n` set out of the
                         // integer range [0, INT_MAX/2] is rejected here
                         match t.get(n_key) {
@@ -116,9 +120,7 @@ impl Vm {
                     return Err(self.rt_err("stack overflow"));
                 }
                 let need = (abs_a + count) as usize;
-                if self.stack.len() < need {
-                    self.grow_stack_or_abort(need);
-                }
+                self.grow_stack(need)?;
                 for i in 0..count {
                     let v = if i >= n {
                         Value::Nil
@@ -139,24 +141,15 @@ impl Vm {
                 // escapes / is `_ENV`. It is kept BOTH in func_slot (so `...`
                 // sees later writes) and in the local register R[A].
                 let n = n_varargs;
-                let t = self.heap.new_table();
-                {
-                    // SAFETY: `t` was allocated above and is held only by this
-                    // local; `tm` is the only reference into it, and the heap
-                    // calls made while it lives (`set_int`, `intern`, `set`)
-                    // do not collect
-                    let tm = unsafe { t.as_mut() };
-                    for i in 0..n {
-                        let _ = tm.set_int_raw(
-                            &mut self.heap,
-                            i as i64 + 1,
-                            self.stack[(func_slot + 1 + i) as usize],
-                        );
-                    }
-                    let n_key = Value::Str(self.heap.intern(b"n"));
-                    tm.set(&mut self.heap, n_key, Value::Int(n as i64))
-                        .expect("'n' is a valid key");
+                // the table is young until it is stored below, so an
+                // emergency collection keeps it
+                let t = self.alloc_table_sized(n as usize, 1)?;
+                for i in 0..n {
+                    let v = self.stack[(func_slot + 1 + i) as usize];
+                    self.raw_set(t, Value::Int(i as i64 + 1), v)?;
                 }
+                let n_key = self.str_value(b"n")?;
+                self.raw_set(t, n_key, Value::Int(n as i64))?;
                 // once-per-table barrier (mirror SETLIST): t is born BLACK
                 // during Propagate; the bulk inserts above don't barrier.
                 self.heap.barrier_back(t);
@@ -169,7 +162,7 @@ impl Vm {
     }
 
     /// OP_CLOSURE: a new closure over the proto's upvalue descriptors.
-    fn op_closure(&mut self, inst: Inst, cl: Gc<LuaClosure>, base: u32) {
+    fn op_closure(&mut self, inst: Inst, cl: Gc<LuaClosure>, base: u32) -> Result<(), LuaError> {
         let proto = cl.proto.protos[inst.bx() as usize];
         let n_ups = proto.upvals.len();
         // Build upvals on the stack for small
@@ -181,21 +174,22 @@ impl Vm {
         use crate::runtime::function::INLINE_UPVALS_N;
         let mut stack_buf: [std::mem::MaybeUninit<Gc<crate::runtime::function::Upvalue>>;
             INLINE_UPVALS_N] = [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
-        let mut heap_buf: Vec<Gc<crate::runtime::function::Upvalue>> = Vec::new();
+        let mut heap_buf = crate::runtime::mem::LVec::new(self.heap.mem());
         let use_inline = n_ups <= INLINE_UPVALS_N;
         if !use_inline {
-            heap_buf.reserve_exact(n_ups);
+            heap_buf.reserve_exact(n_ups)?;
         }
         for (i, d) in proto.upvals.iter().enumerate() {
+            // a new upvalue goes on the open list, a root
             let uv = if d.in_stack {
-                self.find_or_create_upval(base + d.index as u32)
+                self.try_find_or_create_upval(base + d.index as u32)?
             } else {
                 cl.upvals()[d.index as usize]
             };
             if use_inline {
                 stack_buf[i] = std::mem::MaybeUninit::new(uv);
             } else {
-                heap_buf.push(uv);
+                heap_buf.push(uv)?;
             }
         }
         // Tiny shim around the two paths so the 5.1 _ENV
@@ -229,12 +223,14 @@ impl Vm {
             let i = proto.env_upval_idx as usize;
             if let UpvalState::Open { slot, thread } = ups[i].state() {
                 let cur = self.read_slot(slot, thread);
-                ups[i] = self.heap.new_upvalue(UpvalState::Closed(cur));
+                // young until the closure holds it
+                ups[i] = self.retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Closed(cur)))?;
             }
         }
-        let nc = self.closure_from_proto(proto, ups);
+        let nc = self.try_closure_from_proto(proto, ups)?;
         self.set_r(base, inst.a(), Value::Closure(nc));
         self.maybe_collect_garbage(base + inst.a() + 1);
+        Ok(())
     }
 
     /// A closure of `proto` over `ups`. PUC 5.2 / 5.3 `getcached`: the
@@ -248,6 +244,19 @@ impl Vm {
         proto: Gc<crate::runtime::function::Proto>,
         ups: &[Gc<crate::runtime::function::Upvalue>],
     ) -> Gc<LuaClosure> {
+        self.try_closure_from_proto(proto, ups).unwrap_or_else(|_| {
+            crate::runtime::mem::oom_abort(std::alloc::Layout::new::<LuaClosure>())
+        })
+    }
+
+    /// [`Vm::closure_from_proto`], raising a memory error when the closure
+    /// cannot be made. The upvalues are held by the caller (on the open
+    /// list, or young), so an emergency collection keeps them.
+    pub(crate) fn try_closure_from_proto(
+        &mut self,
+        proto: Gc<crate::runtime::function::Proto>,
+        ups: &[Gc<crate::runtime::function::Upvalue>],
+    ) -> Result<Gc<LuaClosure>, LuaError> {
         let cached = self.version().has_closure_cache();
         if let Some(c) = proto.cache.get().filter(|c| {
             cached
@@ -257,13 +266,13 @@ impl Vm {
                     .zip(ups)
                     .all(|(a, b)| a.as_ptr() == b.as_ptr())
         }) {
-            return c;
+            return Ok(c);
         }
-        let n = self.heap.new_closure_inline(proto, ups);
+        let n = self.retry_oom(|vm| vm.heap.try_new_closure(proto, ups))?;
         if cached {
             proto.cache.set(Some(n));
         }
-        n
+        Ok(n)
     }
 
     /// 5.1 `setfenv` on a Lua function: give `cl` a new `_ENV` cell (slot
@@ -271,11 +280,28 @@ impl Vm {
     /// closures share their creator's cell, and replacing it here is what
     /// keeps the change to this one function.
     pub(crate) fn set_closure_env(&mut self, cl: Gc<LuaClosure>, idx: usize, env: Gc<Table>) {
-        let uv = self.heap.new_upvalue(UpvalState::Closed(Value::Table(env)));
+        if self.try_set_closure_env(cl, idx, env).is_err() {
+            crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Upvalue>());
+        }
+    }
+
+    /// [`Vm::set_closure_env`], raising a memory error when the new cell
+    /// cannot be made.
+    pub(crate) fn try_set_closure_env(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        idx: usize,
+        env: Gc<Table>,
+    ) -> Result<(), LuaError> {
+        let uv = self.retry_oom(|vm| {
+            vm.heap
+                .try_new_upvalue(UpvalState::Closed(Value::Table(env)))
+        })?;
         // SAFETY: `cl` is a live closure (see `Gc`), and no reference into
         // it is held across this write
         unsafe { cl.as_mut() }.upvals_mut()[idx] = uv;
         // a cell born during propagation is black: its value needs the barrier
         self.barrier_forward_upvalue(uv, Value::Table(env));
+        Ok(())
     }
 }

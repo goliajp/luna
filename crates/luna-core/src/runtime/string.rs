@@ -154,7 +154,19 @@ fn alloc_str(
     hash: u32,
     hashed: bool,
 ) -> Result<*mut LuaStr, Oom> {
-    let layout = layout(bytes.len());
+    alloc_str_of(mem, &[bytes], short, hash, hashed)
+}
+
+/// [`alloc_str`] for the bytes of `parts` one after the other.
+fn alloc_str_of(
+    mem: MemRef,
+    parts: &[&[u8]],
+    short: bool,
+    hash: u32,
+    hashed: bool,
+) -> Result<*mut LuaStr, Oom> {
+    let len: usize = parts.iter().map(|p| p.len()).sum();
+    let layout = layout(len);
     let p = match mem.ctx().alloc(layout, BlockKind::Str) {
         Some(p) => p.as_ptr() as *mut LuaStr,
         None => return Err(Oom(mem)),
@@ -162,7 +174,7 @@ fn alloc_str(
     // SAFETY: layout is built from the header size + the trailing bytes and their NUL that we just computed, so the header, the bytes and the NUL written below are inside the allocation; deallocation will use the same layout in `free`.
     unsafe {
         let mut hdr = GcHeader::new(ObjTag::Str);
-        hdr.aux = bytes.len() as u32;
+        hdr.aux = len as u32;
         p.write(LuaStr {
             hdr,
             hnext: ptr::null_mut(),
@@ -170,8 +182,12 @@ fn alloc_str(
             hashed: Cell::new(hashed),
             short,
         });
-        ptr::copy_nonoverlapping(bytes.as_ptr(), p.add(1) as *mut u8, bytes.len());
-        (p.add(1) as *mut u8).add(bytes.len()).write(0);
+        let mut dst = p.add(1) as *mut u8;
+        for part in parts {
+            ptr::copy_nonoverlapping(part.as_ptr(), dst, part.len());
+            dst = dst.add(part.len());
+        }
+        dst.write(0);
     }
     Ok(p)
 }
@@ -238,6 +254,23 @@ impl StringTable {
         self.buckets[b] = p;
         self.count += 1;
         Ok((p, true))
+    }
+
+    /// The interned string with `bytes` (at most `MAX_SHORT_LEN` long), if
+    /// any.
+    pub(crate) fn find(&self, bytes: &[u8], seed: u32) -> Option<*mut LuaStr> {
+        let h = lua_hash(bytes, seed);
+        let mut cur = self.buckets[h as usize & (self.buckets.len() - 1)];
+        // SAFETY: the bucket chains hold only interned strings that are still allocated
+        unsafe {
+            while !cur.is_null() {
+                if (*cur).hdr.aux as usize == bytes.len() && bytes_of(cur) == bytes {
+                    return Some(cur);
+                }
+                cur = (*cur).hnext;
+            }
+        }
+        None
     }
 
     #[cold]
