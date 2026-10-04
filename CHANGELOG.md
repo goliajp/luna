@@ -312,6 +312,12 @@ optimization.
   gcc there computes `fmod` with the x87 `fprem` instruction, which picks
   the NaN with the larger significand, or the positive one when the two
   differ only in sign; luna now picks the same one.
+- On aarch64 Linux and macOS, 5.1 and 5.2 float `%` (`a - floor(a/b)*b`)
+  and 5.2 `tonumber` with a base rounded twice, where PUC, which the C
+  compiler builds there with a fused multiply-add, rounds once: in a
+  sample of random float operands three results in four differed in the
+  last digits or more, and a NaN result could have the other sign (affects 3.1.0 through
+  4.0.1). Constant folding of `%` in those dialects follows the same rule.
 - C API: `lua_pcall` calls its message handler (`msgh`, 5.1's
   `errfunc`), which it used to ignore: the handler runs where the error
   was raised, before the stack unwinds, its first result becomes the error
