@@ -54,6 +54,16 @@ pub(super) enum Bad {
     Constant,
     /// A body the reader or the verifier refuses, with luna's detail.
     Code(String),
+    /// The allocation context refused memory for the loaded functions.
+    Memory,
+}
+
+/// A failed allocation while undumping: `lua_load`'s memory error.
+impl From<crate::runtime::mem::Oom> for Bad {
+    fn from(o: crate::runtime::mem::Oom) -> Bad {
+        o.0.ctx().raise_oom();
+        Bad::Memory
+    }
 }
 
 impl From<String> for Bad {
@@ -71,6 +81,9 @@ impl From<&str> for Bad {
 impl Bad {
     /// The message after `lundump.c`'s `<name>: `, in `version`'s wording.
     pub(super) fn render(&self, version: LuaVersion) -> String {
+        if *self == Bad::Memory {
+            return "not enough memory".to_string();
+        }
         let framed = match version {
             LuaVersion::Lua51 => format!("{} in precompiled chunk", self.why_51()),
             LuaVersion::Lua52 => format!("{} precompiled chunk", self.why_52()),
@@ -106,6 +119,7 @@ impl Bad {
             Bad::Size(_) | Bad::NumFormat(_) => "incompatible".to_string(),
             Bad::Corrupted | Bad::IntOverflow | Bad::Constant => "corrupted".to_string(),
             Bad::Code(_) => "corrupted".to_string(),
+            Bad::Memory => "not enough memory".to_string(),
         }
     }
 
@@ -120,6 +134,7 @@ impl Bad {
             Bad::NumFormat(_) => "endianness mismatch in".to_string(),
             Bad::Corrupted | Bad::IntOverflow | Bad::Constant => "corrupted".to_string(),
             Bad::Code(_) => "corrupted".to_string(),
+            Bad::Memory => "not enough memory".to_string(),
         }
     }
 
@@ -151,6 +166,7 @@ impl Bad {
             Bad::IntOverflow => "integer overflow".to_string(),
             Bad::Constant => "invalid constant".to_string(),
             Bad::Code(d) => d.clone(),
+            Bad::Memory => "not enough memory".to_string(),
             Bad::Size(_) | Bad::NumFormat(_) => unreachable!("worded per dialect"),
         }
     }

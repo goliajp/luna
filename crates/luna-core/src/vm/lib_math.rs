@@ -20,14 +20,16 @@ use random::{m_random, m_randomseed};
 type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 
 pub(crate) fn open_math(vm: &mut Vm) {
+    crate::vm::lib_mem::opened(try_open_math(vm));
+}
+
+/// [`open_math`], failing when memory runs out.
+pub(crate) fn try_open_math(vm: &mut Vm) -> Result<(), LuaError> {
     let ver = vm.version();
-    let t = vm.heap.new_table();
-    let set = |vm: &mut Vm, name: &str, v: Value| {
-        let k = Value::Str(vm.heap.intern(name.as_bytes()));
-        // SAFETY: `t` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
-        unsafe { t.as_mut() }
-            .set(&mut vm.heap, k, v)
-            .expect("valid key");
+    let t = vm.alloc_table()?;
+    let set = |vm: &mut Vm, name: &str, v: Value| -> Result<(), LuaError> {
+        let k = vm.str_value(name.as_bytes())?;
+        vm.lib_set_value(t, k, v)
     };
     let mut funcs: Vec<(&str, Native)> = vec![
         ("abs", m_abs),
@@ -75,8 +77,8 @@ pub(crate) fn open_math(vm: &mut Vm) {
         funcs.push(("atan2", m_atan2));
     }
     for (name, f) in funcs {
-        let fv = vm.native(f);
-        set(vm, name, fv);
+        let fv = vm.lib_native(f)?;
+        set(vm, name, fv)?;
     }
     // Aliases are the same function value, so `math.atan2 == math.atan`
     // holds: 5.3/5.4 register `atan2` as `math_atan`, and 5.1's
@@ -87,19 +89,19 @@ pub(crate) fn open_math(vm: &mut Vm) {
         _ => None,
     };
     if let Some((name, of)) = alias {
-        let k = Value::Str(vm.heap.intern(of.as_bytes()));
+        let k = vm.str_value(of.as_bytes())?;
         let fv = t.get(k);
-        set(vm, name, fv);
+        set(vm, name, fv)?;
     }
-    set(vm, "pi", Value::Float(std::f64::consts::PI));
-    set(vm, "huge", Value::Float(f64::INFINITY));
+    set(vm, "pi", Value::Float(std::f64::consts::PI))?;
+    set(vm, "huge", Value::Float(f64::INFINITY))?;
     if ver >= V::Lua53 {
-        set(vm, "maxinteger", Value::Int(i64::MAX));
-        set(vm, "mininteger", Value::Int(i64::MIN));
+        set(vm, "maxinteger", Value::Int(i64::MAX))?;
+        set(vm, "mininteger", Value::Int(i64::MIN))?;
     }
-    vm.set_global("math", Value::Table(t))
-        .expect("stdlib registration");
+    vm.lib_set_global("math", Value::Table(t))?;
     vm.barrier_back_table(t);
+    Ok(())
 }
 
 /// The native registered as `math.<name>`, for the functions a JIT may
@@ -143,7 +145,7 @@ fn m_abs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         Value::Int(i) => Value::Int(i.wrapping_abs()),
         _ => Value::Float(argcheck::check_number(vm, a, 0)?.abs()),
     };
-    Ok(vm.nat_return(fs, &[v]))
+    vm.nat_ret(fs, &[v])
 }
 
 /// `math.floor` / `math.ceil`: 5.3+ returns an integer when the result fits;
@@ -161,7 +163,7 @@ fn round_with(vm: &mut Vm, fs: u32, nargs: u32, op: fn(f64) -> f64) -> Result<u3
             }
         }
     };
-    Ok(vm.nat_return(fs, &[v]))
+    vm.nat_ret(fs, &[v])
 }
 
 fn m_floor(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -178,7 +180,7 @@ macro_rules! float_fn {
             let x = argcheck::check_number(vm, Args::new(fs, nargs), 0)?;
             #[allow(clippy::redundant_closure_call)]
             let v = Value::Float(($op)(x));
-            Ok(vm.nat_return(fs, &[v]))
+            vm.nat_ret(fs, &[v])
         }
     };
 }
@@ -204,7 +206,7 @@ fn m_deg(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     } else {
         x * (180.0 / std::f64::consts::PI)
     };
-    Ok(vm.nat_return(fs, &[Value::Float(r)]))
+    vm.nat_ret(fs, &[Value::Float(r)])
 }
 
 float_fn!(m_rad, |x: f64| x * (std::f64::consts::PI / 180.0));
@@ -253,7 +255,7 @@ fn ldexp(mut m: f64, mut e: i64) -> f64 {
 fn m_frexp(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let x = argcheck::check_number(vm, Args::new(fs, nargs), 0)?;
     let (m, e) = frexp(x);
-    Ok(vm.nat_return(fs, &[Value::Float(m), Value::Int(e)]))
+    vm.nat_ret(fs, &[Value::Float(m), Value::Int(e)])
 }
 
 fn m_ldexp(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -261,7 +263,7 @@ fn m_ldexp(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let m = argcheck::check_number(vm, a, 0)?;
     // The exponent is a C `int` in every version.
     let e = argcheck::check_int(vm, a, 1)?;
-    Ok(vm.nat_return(fs, &[Value::Float(ldexp(m, e.into()))]))
+    vm.nat_ret(fs, &[Value::Float(ldexp(m, e.into()))])
 }
 
 fn m_atan(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -273,21 +275,21 @@ fn m_atan(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     } else {
         y.atan2(argcheck::opt_number(vm, a, 1, 1.0)?)
     };
-    Ok(vm.nat_return(fs, &[Value::Float(r)]))
+    vm.nat_ret(fs, &[Value::Float(r)])
 }
 
 fn m_atan2(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let y = argcheck::check_number(vm, a, 0)?;
     let x = argcheck::check_number(vm, a, 1)?;
-    Ok(vm.nat_return(fs, &[Value::Float(y.atan2(x))]))
+    vm.nat_ret(fs, &[Value::Float(y.atan2(x))])
 }
 
 fn m_pow(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let x = argcheck::check_number(vm, a, 0)?;
     let y = argcheck::check_number(vm, a, 1)?;
-    Ok(vm.nat_return(fs, &[Value::Float(x.powf(y))]))
+    vm.nat_ret(fs, &[Value::Float(x.powf(y))])
 }
 
 fn m_log(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -308,7 +310,7 @@ fn m_log(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             x.ln() / base.ln()
         }
     };
-    Ok(vm.nat_return(fs, &[Value::Float(r)]))
+    vm.nat_ret(fs, &[Value::Float(r)])
 }
 
 fn m_fmod(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -323,11 +325,11 @@ fn m_fmod(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             -1 => 0,
             _ => x % d,
         };
-        return Ok(vm.nat_return(fs, &[Value::Int(v)]));
+        return vm.nat_ret(fs, &[Value::Int(v)]);
     }
     let x = argcheck::check_number(vm, a, 0)?;
     let y = argcheck::check_number(vm, a, 1)?;
-    Ok(vm.nat_return(fs, &[Value::Float(c_fmod(x, y))]))
+    vm.nat_ret(fs, &[Value::Float(c_fmod(x, y))])
 }
 
 fn m_modf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -343,15 +345,15 @@ fn m_modf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             x - ip
         };
         let fp = if fp == 0.0 { 0.0f64.copysign(x) } else { fp };
-        return Ok(vm.nat_return(fs, &[Value::Float(ip), Value::Float(fp)]));
+        return vm.nat_ret(fs, &[Value::Float(ip), Value::Float(fp)]);
     }
     if let Value::Int(i) = a.get(vm, 0) {
-        return Ok(vm.nat_return(fs, &[Value::Int(i), Value::Float(0.0)]));
+        return vm.nat_ret(fs, &[Value::Int(i), Value::Float(0.0)]);
     }
     let n = argcheck::check_number(vm, a, 0)?;
     let ip = if n < 0.0 { n.ceil() } else { n.floor() };
     let fp = if n == ip { 0.0 } else { n - ip };
-    Ok(vm.nat_return(fs, &[push_numint(ip), Value::Float(fp)]))
+    vm.nat_ret(fs, &[push_numint(ip), Value::Float(fp)])
 }
 
 fn m_tointeger(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -369,24 +371,24 @@ fn m_tointeger(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             Value::Nil
         }
     };
-    Ok(vm.nat_return(fs, &[v]))
+    vm.nat_ret(fs, &[v])
 }
 
 fn m_type(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = match argcheck::check_any(vm, a, 0)? {
-        Value::Int(_) => Value::Str(vm.heap.intern(b"integer")),
-        Value::Float(_) => Value::Str(vm.heap.intern(b"float")),
+        Value::Int(_) => vm.str_value(b"integer")?,
+        Value::Float(_) => vm.str_value(b"float")?,
         _ => Value::Nil,
     };
-    Ok(vm.nat_return(fs, &[v]))
+    vm.nat_ret(fs, &[v])
 }
 
 fn m_ult(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let x = argcheck::check_integer(vm, a, 0)?;
     let y = argcheck::check_integer(vm, a, 1)?;
-    Ok(vm.nat_return(fs, &[Value::Bool((x as u64) < (y as u64))]))
+    vm.nat_ret(fs, &[Value::Bool((x as u64) < (y as u64))])
 }
 
 fn m_max(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

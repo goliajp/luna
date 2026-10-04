@@ -45,6 +45,7 @@ pub mod lib_debug;
 pub(crate) mod lib_gc;
 pub(crate) mod lib_io;
 pub mod lib_math;
+pub(crate) mod lib_mem;
 pub mod lib_os_io;
 pub(crate) mod lib_package;
 pub(crate) mod lib_strformat;

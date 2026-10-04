@@ -11,41 +11,41 @@ use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
 pub(crate) fn open_coroutine(vm: &mut Vm) {
-    let t = vm.heap.new_table();
-    let set = |vm: &mut Vm, name: &str, f: crate::runtime::value::NativeFn| {
-        let k = Value::Str(vm.heap.intern(name.as_bytes()));
-        let fv = vm.native(f);
-        // SAFETY: `t` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
-        unsafe { t.as_mut() }
-            .set(&mut vm.heap, k, fv)
-            .expect("valid key");
-    };
-    set(vm, "create", co_create);
-    set(vm, "yield", co_yield);
-    set(vm, "status", co_status);
-    set(vm, "running", co_running);
+    crate::vm::lib_mem::opened(try_open_coroutine(vm));
+}
+
+/// [`open_coroutine`], failing when memory runs out.
+pub(crate) fn try_open_coroutine(vm: &mut Vm) -> Result<(), LuaError> {
+    let t = vm.alloc_table()?;
+    let set =
+        |vm: &mut Vm, name: &str, f: crate::runtime::value::NativeFn| -> Result<(), LuaError> {
+            let k = vm.str_value(name.as_bytes())?;
+            let fv = vm.lib_native(f)?;
+            vm.lib_set_value(t, k, fv)
+        };
+    set(vm, "create", co_create)?;
+    set(vm, "yield", co_yield)?;
+    set(vm, "status", co_status)?;
+    set(vm, "running", co_running)?;
     // the threads now inside a wrapped call, which `resume_refusal` needs
-    let in_wrap = Value::Table(vm.heap.new_table());
+    let in_wrap = Value::Table(vm.alloc_table()?);
     for (name, f) in [
         ("resume", co_resume as crate::runtime::value::NativeFn),
         ("wrap", co_wrap),
     ] {
-        let k = Value::Str(vm.heap.intern(name.as_bytes()));
-        let fv = vm.native_with(f, Box::new([in_wrap]));
-        // SAFETY: `t` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
-        unsafe { t.as_mut() }
-            .set(&mut vm.heap, k, fv)
-            .expect("valid key");
+        let k = vm.str_value(name.as_bytes())?;
+        let fv = vm.lib_native_with(f, &[in_wrap])?;
+        vm.lib_set_value(t, k, fv)?;
     }
     if vm.version() >= LuaVersion::Lua53 {
-        set(vm, "isyieldable", co_isyieldable);
+        set(vm, "isyieldable", co_isyieldable)?;
     }
     if vm.version() >= LuaVersion::Lua54 {
-        set(vm, "close", co_close);
+        set(vm, "close", co_close)?;
     }
-    vm.set_global("coroutine", Value::Table(t))
-        .expect("stdlib registration");
+    vm.lib_set_global("coroutine", Value::Table(t))?;
     vm.barrier_back_table(t);
+    Ok(())
 }
 
 /// Collect a native call's `nargs` arguments into an owned vector.
@@ -70,7 +70,7 @@ fn check_body(vm: &mut Vm, a: Args) -> Result<Value, LuaError> {
 fn co_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let body = check_body(vm, Args::new(fs, nargs))?;
     let co = vm.new_coro(body);
-    Ok(vm.nat_return(fs, &[Value::Coro(co)]))
+    vm.nat_ret(fs, &[Value::Coro(co)])
 }
 
 /// The thread argument (lcorolib `getco`): an argcheck without the offending
@@ -137,9 +137,9 @@ fn mark_in_wrap(vm: &mut Vm, in_wrap: Gc<Table>, on: bool) -> Result<(), LuaErro
     // the table is reachable through `debug.getupvalue`, so a script can
     // fill it; only adding a key can fail
     // SAFETY: `in_wrap` is the table the running wrap/resume native carries as its upvalue, so the native keeps it alive; no reference into it is live across the `set`, which does not collect
-    match unsafe { in_wrap.as_mut() }.set(&mut vm.heap, me, v) {
+    match vm.table_op(|vm| unsafe { in_wrap.as_mut() }.set(&mut vm.heap, me, v)) {
         Ok(()) => {}
-        Err(e @ TableError::ReadOnly) => return Err(vm.table_error(e)),
+        Err(e @ (TableError::ReadOnly | TableError::Memory(_))) => return Err(vm.table_error(e)),
         Err(_) => return Err(vm.rt_err("table overflow")),
     }
     vm.barrier_back_table(in_wrap);
@@ -150,8 +150,8 @@ fn co_resume(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let co = check_co(vm, Args::new(fs, nargs))?;
     let in_wrap = upval_table(vm, fs, 0);
     if let Some(msg) = resume_refusal(vm, co, false, in_wrap) {
-        let m = Value::Str(vm.heap.intern(msg.as_bytes()));
-        return Ok(vm.nat_return(fs, &[Value::Bool(false), m]));
+        let m = vm.str_value(msg.as_bytes())?;
+        return vm.nat_ret(fs, &[Value::Bool(false), m]);
     }
     let args: Vec<Value> = (1..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
     match vm.resume_coro(co, args) {
@@ -165,17 +165,17 @@ fn co_resume(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             // table of `lim - 10` … `lim + 1` entries and asserts every
             // resume fails.
             if (vals.len() as i64) + 1 > vm.stack_room() {
-                let msg = vm.heap.intern(b"too many results to resume");
-                return Ok(vm.nat_return(fs, &[Value::Bool(false), Value::Str(msg)]));
+                let msg = vm.alloc_str(b"too many results to resume")?;
+                return vm.nat_ret(fs, &[Value::Bool(false), Value::Str(msg)]);
             }
             let mut out = Vec::with_capacity(vals.len() + 1);
             out.push(Value::Bool(true));
             out.append(&mut vals);
-            Ok(vm.nat_return(fs, &out))
+            vm.nat_ret(fs, &out)
         }
         Err(e) => {
             let e = death_value(vm, e.0);
-            Ok(vm.nat_return(fs, &[Value::Bool(false), e]))
+            vm.nat_ret(fs, &[Value::Bool(false), e])
         }
     }
 }
@@ -185,7 +185,7 @@ fn co_resume(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// its placeholder text before the error leaves the thread.
 fn death_value(vm: &mut Vm, e: Value) -> Value {
     if e.is_nil() && vm.version() >= LuaVersion::Lua55 {
-        return Value::Str(vm.heap.intern(b"<no error object>"));
+        return vm.str_value(b"<no error object>").unwrap_or_else(|e| e.0);
     }
     e
 }
@@ -203,8 +203,8 @@ fn co_yield(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 fn co_status(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let co = check_co(vm, Args::new(fs, nargs))?;
     let s = vm.coro_status_str(co);
-    let v = Value::Str(vm.heap.intern(s.as_bytes()));
-    Ok(vm.nat_return(fs, &[v]))
+    let v = vm.str_value(s.as_bytes())?;
+    vm.nat_ret(fs, &[v])
 }
 
 fn co_running(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
@@ -214,9 +214,9 @@ fn co_running(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     // handle and the is-main flag.
     if vm.version() <= LuaVersion::Lua51 {
         let v = if is_main { Value::Nil } else { thread };
-        return Ok(vm.nat_return(fs, &[v]));
+        return vm.nat_ret(fs, &[v]);
     }
-    Ok(vm.nat_return(fs, &[thread, Value::Bool(is_main)]))
+    vm.nat_ret(fs, &[thread, Value::Bool(is_main)])
 }
 
 fn co_isyieldable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -228,7 +228,7 @@ fn co_isyieldable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         None
     };
     let y = vm.is_yieldable(co);
-    Ok(vm.nat_return(fs, &[Value::Bool(y)]))
+    vm.nat_ret(fs, &[Value::Bool(y)])
 }
 
 /// The function returned by `coroutine.wrap`: upvalue [0] holds the coroutine;
@@ -239,14 +239,14 @@ fn co_wrapped(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     };
     let in_wrap = upval_table(vm, fs, 1);
     let err = match resume_refusal(vm, co, nargs == 0, in_wrap) {
-        Some(msg) => Value::Str(vm.heap.intern(msg.as_bytes())),
+        Some(msg) => vm.str_value(msg.as_bytes())?,
         None => {
             let args = collect_args(vm, fs, nargs);
             mark_in_wrap(vm, in_wrap, true)?;
             let r = vm.resume_coro(co, args);
             mark_in_wrap(vm, in_wrap, false)?;
             match r {
-                Ok(vals) => return Ok(vm.nat_return(fs, &vals)),
+                Ok(vals) => return vm.nat_ret(fs, &vals),
                 // 5.4+ close a coroutine that died by error before
                 // re-raising, so its pending `__close` handlers run (and one
                 // of them may replace the error)
@@ -266,24 +266,29 @@ fn co_wrapped(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// position of whoever called the wrapped function. ≤5.2 test `lua_isstring`,
 /// so a number error is converted and prefixed too; 5.3+ only strings.
 fn wrap_where(vm: &mut Vm, err: Value) -> Value {
-    let text = match err {
-        Value::Str(s) => s.as_bytes().to_vec(),
+    let num;
+    let held;
+    let text: &[u8] = match err {
+        Value::Str(s) => {
+            held = s;
+            held.as_bytes()
+        }
         Value::Int(_) | Value::Float(_) if vm.version() <= LuaVersion::Lua52 => {
-            crate::vm::argcheck::to_str_bytes(vm, err).expect("a number converts")
+            num = crate::vm::argcheck::to_str_bytes(vm, err).expect("a number converts");
+            &num
         }
         _ => return err,
     };
-    let mut out = vm.position_prefix().unwrap_or_default().into_bytes();
-    out.extend_from_slice(&text);
-    Value::Str(vm.heap.intern(&out))
+    let p = vm.position_prefix().unwrap_or_default();
+    vm.concat_str(&[p.as_bytes(), text]).unwrap_or_else(|e| e.0)
 }
 
 fn co_wrap(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let body = check_body(vm, Args::new(fs, nargs))?;
     let co = vm.new_coro(body);
     let in_wrap = vm.nat_upval(fs, 0);
-    let f = vm.native_with(co_wrapped, Box::new([Value::Coro(co), in_wrap]));
-    Ok(vm.nat_return(fs, &[f]))
+    let f = vm.lib_native_with(co_wrapped, &[Value::Coro(co), in_wrap])?;
+    vm.nat_ret(fs, &[f])
 }
 
 fn co_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -310,12 +315,12 @@ fn co_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             // died with an error, or a __close handler raised: report (false, e)
             Ok(Some(e)) => {
                 let e = death_value(vm, e);
-                Ok(vm.nat_return(fs, &[Value::Bool(false), e]))
+                vm.nat_ret(fs, &[Value::Bool(false), e])
             }
-            Ok(None) => Ok(vm.nat_return(fs, &[Value::Bool(true)])),
+            Ok(None) => vm.nat_ret(fs, &[Value::Bool(true)]),
             Err(e) => {
                 let e = death_value(vm, e.0);
-                Ok(vm.nat_return(fs, &[Value::Bool(false), e]))
+                vm.nat_ret(fs, &[Value::Bool(false), e])
             }
         },
         CoroStatus::Normal => Err(raise_str(vm, "cannot close a normal coroutine")),

@@ -6,12 +6,16 @@ use super::*;
 /// a metatable with `__gc`, this registers it for finalization, so a file
 /// nobody closed is still flushed and closed when collected or at state
 /// close. `writable` gives it a user-space output buffer.
-pub(super) fn new_file(vm: &mut Vm, fh: FileHandle, writable: bool) -> Gc<Userdata> {
-    let u = vm.heap.new_userdata(UserdataPayload::File(fh), writable);
+pub(super) fn new_file(
+    vm: &mut Vm,
+    fh: FileHandle,
+    writable: bool,
+) -> Result<Gc<Userdata>, LuaError> {
+    let u = vm.lib_userdata(UserdataPayload::File(fh), writable)?;
     // SAFETY: `u` was allocated on the line above and no other handle to it exists yet; the borrow covers one call
     unsafe { u.as_mut() }.set_metatable(vm.file_mt);
     vm.heap.register_finalizable_userdata(u);
-    u
+    Ok(u)
 }
 
 /// `luaL_testudata(L, i, LUA_FILEHANDLE)`: a userdata whose metatable is the
@@ -93,11 +97,11 @@ pub(super) fn close_stream(u: Gc<Userdata>) -> Closed {
     Closed::File(flushed)
 }
 
-fn push_closed(vm: &mut Vm, fs: u32, c: Closed) -> u32 {
+fn push_closed(vm: &mut Vm, fs: u32, c: Closed) -> Result<u32, LuaError> {
     match c {
         Closed::Std => {
-            let m = Value::Str(vm.heap.intern(b"cannot close standard file"));
-            vm.nat_return(fs, &[Value::Nil, m])
+            let m = vm.str_value(b"cannot close standard file")?;
+            vm.nat_ret(fs, &[Value::Nil, m])
         }
         Closed::File(Ok(())) => file_ok(vm, fs),
         Closed::File(Err(e)) => file_fail(vm, fs, None, &e),
@@ -125,7 +129,7 @@ pub(super) fn io_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         check_open(vm, Args::new(fs, nargs), 0)?
     };
     let c = close_stream(u);
-    Ok(push_closed(vm, fs, c))
+    push_closed(vm, fs, c)
 }
 
 /// 5.1's method `close` is `io_close` with an environment lacking the
@@ -140,7 +144,7 @@ pub(super) fn f_close_51(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
 pub(super) fn f_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = check_open(vm, Args::new(fs, nargs), 0)?;
     let c = close_stream(u);
-    Ok(push_closed(vm, fs, c))
+    push_closed(vm, fs, c)
 }
 
 /// `__gc` (and 5.4's `__close`): close an open handle, ignoring the outcome.
@@ -149,7 +153,7 @@ pub(super) fn f_gc(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     if !u.file().is_closed() {
         let _ = close_stream(u); // PUC's f_gc drops aux_close's results
     }
-    Ok(vm.nat_return(fs, &[]))
+    vm.nat_ret(fs, &[])
 }
 
 pub(super) fn f_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -159,16 +163,16 @@ pub(super) fn f_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     } else {
         format!("file ({})", crate::vm::cfmt::c_pointer(u.as_ptr() as usize))
     };
-    let v = Value::Str(vm.heap.intern(s.as_bytes()));
-    Ok(vm.nat_return(fs, &[v]))
+    let v = vm.str_value(s.as_bytes())?;
+    vm.nat_ret(fs, &[v])
 }
 
 pub(super) fn io_type(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let v = argcheck::check_any(vm, Args::new(fs, nargs), 0)?;
     let r = match test_file(vm, v) {
         None => Value::Nil,
-        Some(u) if u.file().is_closed() => Value::Str(vm.heap.intern(b"closed file")),
-        Some(_) => Value::Str(vm.heap.intern(b"file")),
+        Some(u) if u.file().is_closed() => vm.str_value(b"closed file")?,
+        Some(_) => vm.str_value(b"file")?,
     };
-    Ok(vm.nat_return(fs, &[r]))
+    vm.nat_ret(fs, &[r])
 }

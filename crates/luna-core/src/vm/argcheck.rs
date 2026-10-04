@@ -225,7 +225,7 @@ pub(crate) fn check_string(
     }
     match to_str_bytes(vm, v) {
         Some(b) if !a.is_none(i) => {
-            let s = vm.heap.intern(&b);
+            let s = vm.alloc_str(&b)?;
             vm.nat_set_arg(a.fs, i, Value::Str(s));
             Ok(s)
         }

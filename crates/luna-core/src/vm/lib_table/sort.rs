@@ -30,12 +30,12 @@ pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     // of `sort_scratch` is that stack, traced by `gc_roots`, so a
     // `collectgarbage()` inside the comparator cannot free them.
     let frame = match comp {
-        None => pure_snapshot(vm, tv, n),
+        None => pure_snapshot(vm, tv, n)?,
         Some(_) => None,
     };
     let snapshot = frame.as_ref().map(|f| f.len());
     let frame = frame.unwrap_or_else(|| LVec::new(vm.heap.mem()));
-    vm.sort_scratch.push_or_abort(frame);
+    vm.sort_scratch.push(frame)?;
     let s = Sorter {
         tv,
         comp,
@@ -68,13 +68,16 @@ pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
 /// or `__newindex` (every slot is present), so running the same
 /// algorithm over a copy and storing the result gives the same table as
 /// sorting in place, without a table access per step.
-fn pure_snapshot(vm: &Vm, tv: Value, n: i64) -> Option<LVec<Value>> {
+fn pure_snapshot(vm: &Vm, tv: Value, n: i64) -> Result<Option<LVec<Value>>, LuaError> {
     let Value::Table(t) = tv else {
-        return None;
+        return Ok(None);
     };
     // `n` may come from `__len`; only a real sequence fills the vector
     let mut out = LVec::new(vm.heap.mem());
-    out.reserve_or_abort(usize::try_from(n.min(t.len())).ok()?);
+    let Ok(room) = usize::try_from(n.min(t.len())) else {
+        return Ok(None);
+    };
+    out.reserve(room)?;
     let mut strings = None;
     for i in 1..=n {
         let v = t.get(Value::Int(i));
@@ -82,14 +85,14 @@ fn pure_snapshot(vm: &Vm, tv: Value, n: i64) -> Option<LVec<Value>> {
             Value::Int(_) => false,
             Value::Float(f) if !f.is_nan() => false,
             Value::Str(_) => true,
-            _ => return None,
+            _ => return Ok(None),
         };
         if *strings.get_or_insert(is_str) != is_str {
-            return None;
+            return Ok(None);
         }
-        out.push_or_abort(v);
+        out.push(v)?;
     }
-    Some(out)
+    Ok(Some(out))
 }
 
 /// PUC's quicksort (`auxsort`), translated with its stack discipline: `geti`
@@ -124,8 +127,9 @@ impl Sorter {
         st.truncate(st.len() - n);
     }
 
-    fn push(vm: &mut Vm, v: Value) {
-        Self::stack(vm).push_or_abort(v);
+    fn push(vm: &mut Vm, v: Value) -> Result<(), LuaError> {
+        Self::stack(vm).push(v)?;
+        Ok(())
     }
 
     fn geti(&self, vm: &mut Vm, i: i64) -> Result<(), LuaError> {
@@ -133,7 +137,7 @@ impl Sorter {
             Some(_) => Self::stack(vm)[(i - 1) as usize],
             None => tab_geti(vm, self.tv, i)?,
         };
-        Self::push(vm, v);
+        Self::push(vm, v)?;
         Ok(())
     }
 
@@ -212,7 +216,7 @@ impl Sorter {
             }
             self.geti(vm, i)?;
             let pivot = Self::at(vm, 1);
-            Self::push(vm, pivot);
+            Self::push(vm, pivot)?;
             self.geti(vm, u - 1)?;
             self.set2(vm, i, u - 1)?;
             i = l;
@@ -340,7 +344,7 @@ impl Sorter {
             }
             self.geti(vm, p.into())?;
             let pivot = Self::at(vm, 1);
-            Self::push(vm, pivot);
+            Self::push(vm, pivot)?;
             self.geti(vm, (up - 1).into())?;
             self.set2(vm, p.into(), (up - 1).into())?;
             p = self.partition(vm, lo, up)?;

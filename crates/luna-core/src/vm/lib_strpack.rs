@@ -4,6 +4,7 @@
 //! endianness / alignment control.
 
 use crate::runtime::Value;
+use crate::runtime::mem::LVec;
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
@@ -28,8 +29,16 @@ const NATIVE_LITTLE: bool = true;
 const NATIVE_MAXALIGN: u64 = 8;
 
 /// Pack `n` into `size` bytes, sign-extending past eight bytes when `neg`.
-fn pack_int(out: &mut Vec<u8>, n: u64, islittle: bool, size: usize, neg: bool) {
+fn pack_int(
+    vm: &mut Vm,
+    out: &mut LVec<u8>,
+    n: u64,
+    islittle: bool,
+    size: usize,
+    neg: bool,
+) -> Result<(), LuaError> {
     let at = out.len();
+    vm.buf_reserve(out, size)?;
     for i in 0..size {
         let b = if i < SZINT as usize {
             (n >> (8 * i)) as u8
@@ -38,11 +47,12 @@ fn pack_int(out: &mut Vec<u8>, n: u64, islittle: bool, size: usize, neg: bool) {
         } else {
             0
         };
-        out.push(b);
+        vm.buf_push(out, &[b])?;
     }
     if !islittle {
         out[at..].reverse();
     }
+    Ok(())
 }
 
 /// Unpack a `size`-byte integer from `bytes[..size]`, sign-extending or
@@ -81,11 +91,23 @@ fn unpack_int(
     Ok(res as i64)
 }
 
-fn float_bytes(out: &mut Vec<u8>, mut b: Vec<u8>, islittle: bool) {
+fn float_bytes(
+    vm: &mut Vm,
+    out: &mut LVec<u8>,
+    b: &mut [u8],
+    islittle: bool,
+) -> Result<(), LuaError> {
     if !islittle {
         b.reverse();
     }
-    out.extend_from_slice(&b);
+    vm.buf_push(out, b)
+}
+
+/// Append `n` zero bytes.
+fn zeros(vm: &mut Vm, out: &mut LVec<u8>, n: usize) -> Result<(), LuaError> {
+    vm.buf_reserve(out, n)?;
+    out.resize(out.len() + n, 0)?;
+    Ok(())
 }
 
 /// Grow the result by `n` bytes, or fail as the allocator would.
@@ -108,7 +130,7 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     let fmt = format_arg(vm, a)?;
     let v55 = vm.version() >= LuaVersion::Lua55;
     let mut h = Header::new();
-    let mut out: Vec<u8> = Vec::new();
+    let mut out = vm.new_buf();
     let mut totalsize: u64 = 0;
     // 1-based index of the last argument consumed
     let mut arg: u32 = 1;
@@ -119,7 +141,7 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
             return Err(arg_error(vm, arg, "result too long"));
         }
         totalsize += ntoalign + size;
-        out.resize(out.len() + ntoalign as usize, 0);
+        zeros(vm, &mut out, ntoalign as usize)?;
         arg += 1;
         let i = arg - 1;
         // str_pack pushes a nil mark above its arguments, so the first
@@ -140,22 +162,22 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
                         return Err(arg_error(vm, arg, "integer overflow"));
                     }
                 }
-                pack_int(&mut out, n as u64, h.islittle, size as usize, n < 0);
+                pack_int(vm, &mut out, n as u64, h.islittle, size as usize, n < 0)?;
             }
             KOption::Uint => {
                 let n = argcheck::check_integer(vm, a, i)?;
                 if size < SZINT && (n as u64) >= (1u64 << (size * 8)) {
                     return Err(arg_error(vm, arg, "unsigned overflow"));
                 }
-                pack_int(&mut out, n as u64, h.islittle, size as usize, false);
+                pack_int(vm, &mut out, n as u64, h.islittle, size as usize, false)?;
             }
             KOption::Float => {
                 let x = argcheck::check_number(vm, a, i)? as f32;
-                float_bytes(&mut out, x.to_le_bytes().to_vec(), h.islittle);
+                float_bytes(vm, &mut out, &mut x.to_le_bytes(), h.islittle)?;
             }
             KOption::Number => {
                 let x = argcheck::check_number(vm, a, i)?;
-                float_bytes(&mut out, x.to_le_bytes().to_vec(), h.islittle);
+                float_bytes(vm, &mut out, &mut x.to_le_bytes(), h.islittle)?;
             }
             KOption::Char => {
                 let s = argcheck::check_string(vm, a, i)?;
@@ -164,8 +186,8 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
                     return Err(arg_error(vm, arg, "string longer than given size"));
                 }
                 reserve(vm, &out, size)?;
-                out.extend_from_slice(s.as_bytes());
-                out.resize(out.len() + (size - len) as usize, 0);
+                vm.buf_push(&mut out, s.as_bytes())?;
+                zeros(vm, &mut out, (size - len) as usize)?;
             }
             KOption::Str => {
                 let s = argcheck::check_string(vm, a, i)?;
@@ -178,8 +200,8 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
                     ));
                 }
                 reserve(vm, &out, size + len)?;
-                pack_int(&mut out, len, h.islittle, size as usize, false);
-                out.extend_from_slice(s.as_bytes());
+                pack_int(vm, &mut out, len, h.islittle, size as usize, false)?;
+                vm.buf_push(&mut out, s.as_bytes())?;
                 totalsize += len;
             }
             KOption::Zstr => {
@@ -188,19 +210,19 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
                     return Err(arg_error(vm, arg, "string contains zeros"));
                 }
                 reserve(vm, &out, s.len() as u64 + 1)?;
-                out.extend_from_slice(s.as_bytes());
-                out.push(0);
+                vm.buf_push(&mut out, s.as_bytes())?;
+                vm.buf_push(&mut out, &[0])?;
                 totalsize += s.len() as u64 + 1;
             }
             KOption::Padding => {
-                out.push(0);
+                vm.buf_push(&mut out, &[0])?;
                 arg -= 1;
             }
             KOption::PadAlign | KOption::Nop => arg -= 1,
         }
     }
-    let r = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[r]))
+    let r = vm.str_value(&out)?;
+    vm.nat_ret(fs, &[r])
 }
 
 pub(crate) fn s_packsize(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -226,7 +248,7 @@ pub(crate) fn s_packsize(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             return Err(arg_error(vm, 1, "variable-length format"));
         }
     }
-    Ok(vm.nat_return(fs, &[Value::Int(totalsize as i64)]))
+    vm.nat_ret(fs, &[Value::Int(totalsize as i64)])
 }
 
 pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -256,7 +278,7 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     }
     let mut pos = rel as u64 - 1;
     let mut h = Header::new();
-    let mut results: Vec<Value> = Vec::new();
+    let mut results = LVec::new(vm.heap.mem());
     let mut fp = 0usize;
     while fp < fmt.len() {
         let (opt, size, ntoalign) = getdetails(vm, &mut h, pos, &fmt, &mut fp)?;
@@ -275,25 +297,25 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
                     size as usize,
                     opt == KOption::Int,
                 )?;
-                results.push(Value::Int(n));
+                results.push(Value::Int(n))?;
             }
             KOption::Float => {
                 let mut b: [u8; 4] = data[p..p + 4].try_into().expect("4 bytes");
                 if !h.islittle {
                     b.reverse();
                 }
-                results.push(Value::Float(f64::from(f32::from_le_bytes(b))));
+                results.push(Value::Float(f64::from(f32::from_le_bytes(b))))?;
             }
             KOption::Number => {
                 let mut b: [u8; 8] = data[p..p + 8].try_into().expect("8 bytes");
                 if !h.islittle {
                     b.reverse();
                 }
-                results.push(Value::Float(f64::from_le_bytes(b)));
+                results.push(Value::Float(f64::from_le_bytes(b)))?;
             }
             KOption::Char => {
-                let s = vm.heap.intern(&data[p..p + size as usize]);
-                results.push(Value::Str(s));
+                let s = vm.alloc_str(&data[p..p + size as usize])?;
+                results.push(Value::Str(s))?;
             }
             KOption::Str => {
                 let len = unpack_int(vm, &data[p..], h.islittle, size as usize, false)? as u64;
@@ -306,8 +328,8 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
                     return Err(arg_error(vm, 2, "data string too short"));
                 }
                 let st = p + size as usize;
-                let s = vm.heap.intern(&data[st..st + len as usize]);
-                results.push(Value::Str(s));
+                let s = vm.alloc_str(&data[st..st + len as usize])?;
+                results.push(Value::Str(s))?;
                 pos += len;
             }
             KOption::Zstr => {
@@ -318,14 +340,14 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
                     return Err(arg_error(vm, 2, "unfinished string for format 'z'"));
                 }
                 let len = len.unwrap_or(data.len() - p);
-                let s = vm.heap.intern(&data[p..p + len]);
-                results.push(Value::Str(s));
+                let s = vm.alloc_str(&data[p..p + len])?;
+                results.push(Value::Str(s))?;
                 pos += len as u64 + 1;
             }
             KOption::Padding | KOption::PadAlign | KOption::Nop => {}
         }
         pos += size;
     }
-    results.push(Value::Int((pos + 1) as i64));
-    Ok(vm.nat_return(fs, &results))
+    results.push(Value::Int((pos + 1) as i64))?;
+    vm.nat_ret(fs, &results)
 }

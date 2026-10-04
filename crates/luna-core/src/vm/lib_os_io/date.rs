@@ -5,9 +5,10 @@ use super::*;
 pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
-    let fmt = match argcheck::opt_string(vm, a, 0)? {
-        Some(s) => s.as_bytes().to_vec(),
-        None => b"%c".to_vec(),
+    let fmt_arg = argcheck::opt_string(vm, a, 0)?;
+    let fmt: &[u8] = match &fmt_arg {
+        Some(s) => s.as_bytes(),
+        None => b"%c",
     };
     let t = if a.is_none_or_nil(vm, 1) {
         now()
@@ -16,14 +17,14 @@ pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     };
     // ≤5.2 walk the format as a C string; 5.3 honours its full length
     let fmt: &[u8] = if v <= LuaVersion::Lua52 {
-        lib_io::c_str(&fmt)
+        lib_io::c_str(fmt)
     } else {
-        &fmt
+        fmt
     };
     let fmt = fmt.strip_prefix(b"!").unwrap_or(fmt);
     let Some(tm) = gmtime(t) else {
         return match v {
-            LuaVersion::Lua51 | LuaVersion::Lua52 => Ok(vm.nat_return(fs, &[Value::Nil])),
+            LuaVersion::Lua51 | LuaVersion::Lua52 => vm.nat_ret(fs, &[Value::Nil]),
             LuaVersion::Lua53 => Err(raise_str(
                 vm,
                 "time result cannot be represented in this installation",
@@ -35,15 +36,17 @@ pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
         };
     };
     if lib_io::c_str(fmt) == b"*t" {
-        let table = vm.heap.new_table();
+        let table = vm.alloc_table()?;
         setallfields(vm, table, &tm)?;
-        return Ok(vm.nat_return(fs, &[Value::Table(table)]));
+        return vm.nat_ret(fs, &[Value::Table(table)]);
     }
-    let mut out = Vec::new();
+    let mut out = vm.new_buf();
+    // one conversion's text, short whatever the format
+    let mut item = Vec::new();
     let mut i = 0;
     while i < fmt.len() {
         if fmt[i] != b'%' {
-            out.push(fmt[i]);
+            vm.buf_push(&mut out, &fmt[i..=i])?;
             i += 1;
             continue;
         }
@@ -52,7 +55,7 @@ pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             Some(n) => n,
             None if v == LuaVersion::Lua51 => {
                 // 5.1 passes a lone trailing '%' through
-                out.push(b'%');
+                vm.buf_push(&mut out, b"%")?;
                 break;
             }
             None => {
@@ -61,11 +64,13 @@ pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
                 return Err(arg_error(vm, 1, &msg));
             }
         };
-        strftime(&rest[..len], &tm, &mut out);
+        item.clear();
+        strftime(&rest[..len], &tm, &mut item);
+        vm.buf_push(&mut out, &item)?;
         i += 1 + len;
     }
-    let r = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[r]))
+    let r = vm.str_value(&out)?;
+    vm.nat_ret(fs, &[r])
 }
 
 /// How many bytes of `rest` (what follows a '%') form a conversion, or

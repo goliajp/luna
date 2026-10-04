@@ -19,20 +19,26 @@ fn check_line_formats(vm: &mut Vm, n: u32) -> Result<(), LuaError> {
 
 /// `aux_lines`: an iterator over `u` with upvalues [file, toclose, fmt...].
 /// 5.1's iterator takes no formats.
-fn make_lines(vm: &mut Vm, u: Gc<Userdata>, toclose: bool, fmts: &[Value]) -> Value {
-    let mut up = vec![Value::Userdata(u), Value::Bool(toclose)];
+fn make_lines(
+    vm: &mut Vm,
+    u: Gc<Userdata>,
+    toclose: bool,
+    fmts: &[Value],
+) -> Result<Value, LuaError> {
+    let mut up = crate::runtime::mem::LVec::new(vm.heap.mem());
+    up.extend_from_slice(&[Value::Userdata(u), Value::Bool(toclose)])?;
     if vm.version() >= LuaVersion::Lua52 {
-        up.extend_from_slice(fmts);
+        up.extend_from_slice(fmts)?;
     }
-    vm.native_with(io_readline, up.into_boxed_slice())
+    vm.lib_native_with(io_readline, &up)
 }
 
 pub(super) fn f_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = check_open(vm, Args::new(fs, nargs), 0)?;
     check_line_formats(vm, nargs.saturating_sub(1))?;
     let fmts: Vec<Value> = (1..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
-    let it = make_lines(vm, u, false, &fmts);
-    Ok(vm.nat_return(fs, &[it]))
+    let it = make_lines(vm, u, false, &fmts)?;
+    vm.nat_ret(fs, &[it])
 }
 
 pub(super) fn io_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -53,12 +59,12 @@ pub(super) fn io_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let nfmt = nargs.saturating_sub(1);
     check_line_formats(vm, nfmt)?;
     let fmts: Vec<Value> = (1..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
-    let it = make_lines(vm, u, toclose, &fmts);
+    let it = make_lines(vm, u, toclose, &fmts)?;
     // 5.4+ return the file as the generic for's closing value
     if toclose && vm.version() >= LuaVersion::Lua54 {
-        return Ok(vm.nat_return(fs, &[it, Value::Nil, Value::Nil, Value::Userdata(u)]));
+        return vm.nat_ret(fs, &[it, Value::Nil, Value::Nil, Value::Userdata(u)]);
     }
-    Ok(vm.nat_return(fs, &[it]))
+    vm.nat_ret(fs, &[it])
 }
 
 /// `io_readline`: one step of a line iterator.
@@ -80,10 +86,10 @@ fn io_readline(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     // ≤5.2 continue on a non-nil first value, 5.3+ on a true one; the only
     // false-ish value a read produces is nil, so the tests agree
     if !vals[0].is_nil() {
-        return Ok(vm.nat_return(fs, &vals));
+        return vm.nat_ret(fs, &vals);
     }
     if let Value::Bool(true) = vm.nat_upval(fs, 1) {
         let _ = close_stream(u); // aux_close's results are dropped here too
     }
-    Ok(vm.nat_return(fs, &[]))
+    vm.nat_ret(fs, &[])
 }

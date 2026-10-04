@@ -52,7 +52,7 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let (ar, activelines) = match level {
         None => {
             let ar = vm.function_ar(subject);
-            let lines = activelines(vm, subject);
+            let lines = try_activelines(vm, subject)?;
             (ar, lines)
         }
         Some(level) => {
@@ -69,20 +69,20 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
             match found {
                 None => {
                     drop(ts);
-                    return Ok(vm.nat_return(fs, &[Value::Nil]));
+                    return vm.nat_ret(fs, &[Value::Nil]);
                 }
                 Some(None) | Some(Some((_, DbgKind::Tail))) => {
                     // PUC 5.1 `auxgetinfo` returns before looking at the
                     // options of a lost tail call
                     drop(ts);
                     let ar = crate::vm::callstack::tail_ar();
-                    let t = info_table(vm, &options, &ar, Value::Nil);
-                    return Ok(vm.nat_return(fs, &[Value::Table(t)]));
+                    let t = info_table(vm, &options, &ar, Value::Nil)?;
+                    return vm.nat_ret(fs, &[Value::Table(t)]);
                 }
                 Some(Some((i, _))) => {
                     let ar = vm.level_ar(&ts, i);
                     drop(ts);
-                    let lines = activelines(vm, ar.func);
+                    let lines = try_activelines(vm, ar.func)?;
                     (ar, lines)
                 }
             }
@@ -92,31 +92,41 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     if options.iter().any(|c| !allowed.contains(c)) {
         return Err(arg_error(vm, arg + 2, "invalid option"));
     }
-    let t = info_table(vm, &options, &ar, activelines);
-    Ok(vm.nat_return(fs, &[Value::Table(t)]))
+    let t = info_table(vm, &options, &ar, activelines)?;
+    vm.nat_ret(fs, &[Value::Table(t)])
 }
 
 /// PUC `collectvalidlines`: the lines holding an instruction, as a set; nil
 /// for a C function.
 pub(crate) fn activelines(vm: &mut Vm, f: Value) -> Value {
+    match try_activelines(vm, f) {
+        Ok(v) => v,
+        Err(_) => crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Table>()),
+    }
+}
+
+/// [`activelines`], raising a memory error when the set cannot be made.
+pub(crate) fn try_activelines(vm: &mut Vm, f: Value) -> Result<Value, LuaError> {
     let Value::Closure(cl) = f else {
-        return Value::Nil;
+        return Ok(Value::Nil);
     };
-    let lines = vm.heap.new_table();
+    let lines = vm.alloc_table()?;
     for &ln in cl.proto.lines.iter() {
-        // SAFETY: `lines` was allocated above and is held only by this local; each borrow lives for one `set`, which does not collect, and the loop reads `cl.proto`, a different object
-        unsafe { lines.as_mut() }
-            .set(&mut vm.heap, Value::Int(ln as i64), Value::Bool(true))
-            .expect("valid line key");
+        vm.lib_set_value(lines, Value::Int(ln as i64), Value::Bool(true))?;
     }
     vm.barrier_back_table(lines);
-    Value::Table(lines)
+    Ok(Value::Table(lines))
 }
 
 /// `db_getinfo`'s result table: the fields of each requested option.
-fn info_table(vm: &mut Vm, options: &[u8], ar: &Ar, activelines: Value) -> Gc<Table> {
+fn info_table(
+    vm: &mut Vm,
+    options: &[u8],
+    ar: &Ar,
+    activelines: Value,
+) -> Result<Gc<Table>, LuaError> {
     let v = vm.version();
-    let t = vm.heap.new_table();
+    let t = vm.alloc_table()?;
     let has = |c: u8| options.contains(&c);
     if has(b'S') {
         // ≤5.3 push the source as a C string (up to a NUL); 5.4+ keep its
@@ -126,49 +136,49 @@ fn info_table(vm: &mut Vm, options: &[u8], ar: &Ar, activelines: Value) -> Gc<Ta
         } else {
             &ar.source[..]
         };
-        set_str(vm, t, "source", source);
-        set_str(vm, t, "short_src", cstr(&ar.short_src));
-        set_field(vm, t, "linedefined", Value::Int(ar.linedefined));
-        set_field(vm, t, "lastlinedefined", Value::Int(ar.lastlinedefined));
-        set_str(vm, t, "what", ar.what.as_bytes());
+        set_str(vm, t, "source", source)?;
+        set_str(vm, t, "short_src", cstr(&ar.short_src))?;
+        set_field(vm, t, "linedefined", Value::Int(ar.linedefined))?;
+        set_field(vm, t, "lastlinedefined", Value::Int(ar.lastlinedefined))?;
+        set_str(vm, t, "what", ar.what.as_bytes())?;
     }
     if has(b'l') {
-        set_field(vm, t, "currentline", Value::Int(ar.currentline));
+        set_field(vm, t, "currentline", Value::Int(ar.currentline))?;
     }
     if has(b'u') {
-        set_field(vm, t, "nups", Value::Int(ar.nups));
+        set_field(vm, t, "nups", Value::Int(ar.nups))?;
         if v >= LuaVersion::Lua52 {
-            set_field(vm, t, "nparams", Value::Int(ar.nparams));
-            set_field(vm, t, "isvararg", Value::Bool(ar.isvararg));
+            set_field(vm, t, "nparams", Value::Int(ar.nparams))?;
+            set_field(vm, t, "isvararg", Value::Bool(ar.isvararg))?;
         }
     }
     if has(b'n') {
         match &ar.name {
             Some((what, name)) => {
-                set_str(vm, t, "name", name.as_bytes());
-                set_str(vm, t, "namewhat", what.as_bytes());
+                set_str(vm, t, "name", name.as_bytes())?;
+                set_str(vm, t, "namewhat", what.as_bytes())?;
             }
-            None => set_str(vm, t, "namewhat", b""),
+            None => set_str(vm, t, "namewhat", b"")?,
         }
     }
     if has(b'r') {
-        set_field(vm, t, "ftransfer", Value::Int(ar.ftransfer));
-        set_field(vm, t, "ntransfer", Value::Int(ar.ntransfer));
+        set_field(vm, t, "ftransfer", Value::Int(ar.ftransfer))?;
+        set_field(vm, t, "ntransfer", Value::Int(ar.ntransfer))?;
     }
     if has(b't') {
-        set_field(vm, t, "istailcall", Value::Bool(ar.istailcall));
+        set_field(vm, t, "istailcall", Value::Bool(ar.istailcall))?;
         if v >= LuaVersion::Lua55 {
-            set_field(vm, t, "extraargs", Value::Int(ar.extraargs));
+            set_field(vm, t, "extraargs", Value::Int(ar.extraargs))?;
         }
     }
     if has(b'L') {
-        set_field(vm, t, "activelines", activelines);
+        set_field(vm, t, "activelines", activelines)?;
     }
     if has(b'f') {
-        set_field(vm, t, "func", ar.func);
+        set_field(vm, t, "func", ar.func)?;
     }
     vm.barrier_back_table(t);
-    t
+    Ok(t)
 }
 
 fn cstr(b: &[u8]) -> &[u8] {

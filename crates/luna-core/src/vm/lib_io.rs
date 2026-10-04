@@ -60,8 +60,13 @@ const LUAL_BUFFERSIZE: i64 = 1024;
 const READ_CHUNK: usize = 4096;
 
 pub(crate) fn open_io(vm: &mut Vm) {
+    crate::vm::lib_mem::opened(try_open_io(vm));
+}
+
+/// [`open_io`], failing when memory runs out.
+pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();
-    let io = vm.heap.new_table();
+    let io = vm.alloc_table()?;
     for (name, f) in [
         ("close", io_close as crate::runtime::value::NativeFn),
         ("flush", io_flush),
@@ -75,7 +80,7 @@ pub(crate) fn open_io(vm: &mut Vm) {
         ("type", io_type),
         ("write", io_write),
     ] {
-        put_native(vm, io, name, f);
+        put_native(vm, io, name, f)?;
     }
     // The method `close`: 5.1 and 5.2 register `io_close` itself (5.1 with an
     // environment that has no default output, so a missing argument checks
@@ -97,26 +102,26 @@ pub(crate) fn open_io(vm: &mut Vm) {
     // ≤5.3 keep the methods in the metatable itself (`__index = mt`); 5.4
     // moved them to a table of their own and added `__close`. `__name` comes
     // from `luaL_newmetatable`, which only sets it from 5.3 on.
-    let mt = vm.heap.new_table();
+    let mt = vm.alloc_table()?;
     let index = if v >= LuaVersion::Lua54 {
-        vm.heap.new_table()
+        vm.alloc_table()?
     } else {
         mt
     };
     for (name, f) in methods {
-        put_native(vm, index, name, f);
+        put_native(vm, index, name, f)?;
     }
-    put(vm, mt, "__index", Value::Table(index));
-    put_native(vm, mt, "__gc", f_gc);
-    put_native(vm, mt, "__tostring", f_tostring);
+    put(vm, mt, "__index", Value::Table(index))?;
+    put_native(vm, mt, "__gc", f_gc)?;
+    put_native(vm, mt, "__tostring", f_tostring)?;
     if v >= LuaVersion::Lua53 {
-        let n = Value::Str(vm.heap.intern(b"FILE*"));
-        put(vm, mt, "__name", n);
+        let n = vm.str_value(b"FILE*")?;
+        put(vm, mt, "__name", n)?;
     }
     if v >= LuaVersion::Lua54 {
         // a to-be-closed file already shut by the user must not re-error,
         // hence the __gc body rather than f_close
-        put_native(vm, mt, "__close", f_gc);
+        put_native(vm, mt, "__close", f_gc)?;
     }
     vm.barrier_back_table(index);
     vm.barrier_back_table(mt);
@@ -128,8 +133,8 @@ pub(crate) fn open_io(vm: &mut Vm) {
         ("stderr", FileHandle::Stderr),
     ] {
         let writable = !matches!(fh, FileHandle::Stdin);
-        let h = new_file(vm, fh, writable);
-        put(vm, io, name, Value::Userdata(h));
+        let h = new_file(vm, fh, writable)?;
+        put(vm, io, name, Value::Userdata(h))?;
         match name {
             "stdin" => {
                 vm.io_input = Some(h);
@@ -139,9 +144,9 @@ pub(crate) fn open_io(vm: &mut Vm) {
             _ => {}
         }
     }
-    vm.set_global("io", Value::Table(io))
-        .expect("stdlib registration");
+    vm.lib_set_global("io", Value::Table(io))?;
     vm.barrier_back_table(io);
+    Ok(())
 }
 
 impl Vm {
@@ -182,15 +187,19 @@ impl Vm {
     }
 }
 
-fn put(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) {
-    let k = Value::Str(vm.heap.intern(k.as_bytes()));
-    // SAFETY: `t` is a table the caller allocated or holds in a local, so it is alive; no reference into it is held across this call, and `set` does not collect
-    unsafe { t.as_mut() }
-        .set(&mut vm.heap, k, v)
-        .expect("valid key");
+fn put(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) -> Result<(), LuaError> {
+    let k = vm.str_value(k.as_bytes())?;
+    vm.lib_set_value(t, k, v)?;
+    Ok(())
 }
 
-fn put_native(vm: &mut Vm, t: Gc<Table>, k: &str, f: crate::runtime::value::NativeFn) {
-    let fv = vm.native(f);
-    put(vm, t, k, fv);
+fn put_native(
+    vm: &mut Vm,
+    t: Gc<Table>,
+    k: &str,
+    f: crate::runtime::value::NativeFn,
+) -> Result<(), LuaError> {
+    let fv = vm.lib_native(f)?;
+    put(vm, t, k, fv)?;
+    Ok(())
 }

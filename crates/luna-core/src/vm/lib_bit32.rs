@@ -17,7 +17,12 @@ use crate::vm::exec::Vm;
 type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 
 pub(crate) fn open_bit32(vm: &mut Vm) {
-    let t = vm.heap.new_table();
+    crate::vm::lib_mem::opened(try_open_bit32(vm));
+}
+
+/// [`open_bit32`], failing when memory runs out.
+pub(crate) fn try_open_bit32(vm: &mut Vm) -> Result<(), LuaError> {
+    let t = vm.alloc_table()?;
     let funcs: [(&str, Native); 12] = [
         ("band", b_and),
         ("bor", b_or),
@@ -33,31 +38,25 @@ pub(crate) fn open_bit32(vm: &mut Vm) {
         ("replace", b_replace),
     ];
     for (name, f) in funcs {
-        let fv = vm.native(f);
-        let k = Value::Str(vm.heap.intern(name.as_bytes()));
-        // SAFETY: `t` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
-        unsafe { t.as_mut() }
-            .set(&mut vm.heap, k, fv)
-            .expect("valid key");
+        let fv = vm.lib_native(f)?;
+        let k = vm.str_value(name.as_bytes())?;
+        vm.lib_set_value(t, k, fv)?;
     }
-    vm.set_global("bit32", Value::Table(t))
-        .expect("stdlib registration");
+    vm.lib_set_global("bit32", Value::Table(t))?;
     vm.barrier_back_table(t);
     // `luaL_requiref` also records the module in `package.loaded`, which is
     // what `require "bit32"` and error messages naming `bit32.band` look up.
     // bit32 opens after the package library, so it registers itself.
-    let pk = Value::Str(vm.heap.intern(b"package"));
-    let lk = Value::Str(vm.heap.intern(b"loaded"));
+    let pk = vm.str_value(b"package")?;
+    let lk = vm.str_value(b"loaded")?;
     if let Value::Table(pkg) = vm.globals().get(pk)
         && let Value::Table(loaded) = pkg.get(lk)
     {
-        let k = Value::Str(vm.heap.intern(b"bit32"));
-        // SAFETY: `loaded` was just read from `package.loaded`, so it is alive; no reference into it is held across this call, and `set` does not collect
-        unsafe { loaded.as_mut() }
-            .set(&mut vm.heap, k, Value::Table(t))
-            .expect("valid key");
+        let k = vm.str_value(b"bit32")?;
+        vm.lib_set_value(loaded, k, Value::Table(t))?;
         vm.barrier_back_table(loaded);
     }
+    Ok(())
 }
 
 const ALLONES: u64 = 0xFFFF_FFFF;
@@ -82,7 +81,7 @@ fn int_arg(vm: &mut Vm, a: Args, i: u32) -> Result<i64, LuaError> {
 }
 
 fn push(vm: &mut Vm, fs: u32, r: u64) -> Result<u32, LuaError> {
-    Ok(vm.nat_return(fs, &[Value::Int(r as i64)]))
+    vm.nat_ret(fs, &[Value::Int(r as i64)])
 }
 
 fn andaux(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u64, LuaError> {
@@ -101,7 +100,7 @@ fn b_and(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn b_test(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let r = andaux(vm, fs, nargs)?;
-    Ok(vm.nat_return(fs, &[Value::Bool(r != 0)]))
+    vm.nat_ret(fs, &[Value::Bool(r != 0)])
 }
 
 fn fold(vm: &mut Vm, fs: u32, nargs: u32, op: fn(u64, u64) -> u64) -> Result<u32, LuaError> {

@@ -45,7 +45,7 @@ fn string_arith(
                 Num::Float(f) => Value::Float(-f),
             },
         };
-        return Ok(vm.nat_return(fs, &[r]));
+        return vm.nat_ret(fs, &[r]);
     }
     let mm = if matches!(y, Value::Str(_)) {
         Value::Nil
@@ -66,7 +66,7 @@ fn string_arith(
         .first()
         .copied()
         .unwrap_or(Value::Nil);
-    Ok(vm.nat_return(fs, &[r]))
+    vm.nat_ret(fs, &[r])
 }
 
 pub(super) fn mm_add(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

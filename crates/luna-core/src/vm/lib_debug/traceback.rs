@@ -26,7 +26,7 @@ pub(super) fn d_traceback(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     if msg.is_none() && !a.is_none_or_nil(vm, arg) {
         // a message that is not a string is returned untouched
         let m = a.get(vm, arg);
-        return Ok(vm.nat_return(fs, &[m]));
+        return vm.nat_ret(fs, &[m]);
     }
     let level = opt_integer(vm, a, arg + 1, default_level)? as i32 as i64;
     let mut out = match msg {
@@ -38,8 +38,8 @@ pub(super) fn d_traceback(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     };
     out.extend_from_slice(b"stack traceback:");
     out.extend(thread_traceback(vm, co, level));
-    let s = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[s]))
+    let s = vm.str_value(&out)?;
+    vm.nat_ret(fs, &[s])
 }
 
 /// The level lines of `co`'s traceback; a coroutine killed by an error
@@ -82,7 +82,7 @@ fn traceback_51(
         if crate::vm::argcheck::to_str_bytes(vm, msg).is_none() {
             // `return 1` hands back whatever is on top
             let top = *stack.last().expect("non-empty");
-            return Ok(vm.nat_return(fs, &[top]));
+            return vm.nat_ret(fs, &[top]);
         }
         // `lua_concat` works from the top down, so the rightmost bad part is
         // the one reported; the C function has no position to add
@@ -101,6 +101,6 @@ fn traceback_51(
     }
     out.extend_from_slice(b"stack traceback:");
     out.extend(thread_traceback(vm, co, level));
-    let s = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[s]))
+    let s = vm.str_value(&out)?;
+    vm.nat_ret(fs, &[s])
 }

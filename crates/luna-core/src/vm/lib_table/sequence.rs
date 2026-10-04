@@ -1,6 +1,7 @@
 //! Sequence functions: insert, remove, concat, unpack, pack, move and create.
 
 use super::{TAB_R, TAB_RW, TAB_W, aux_getn, checktab, obj_len, tab_geti, tab_seti};
+use crate::runtime::mem::LVec;
 use crate::runtime::{Gc, LuaStr, Value};
 use crate::version::LuaVersion as V;
 use crate::vm::argcheck::{self, Args};
@@ -110,7 +111,7 @@ pub(super) fn t_remove(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         pos += 1;
     }
     tab_seti(vm, tv, pos, Value::Nil)?;
-    Ok(vm.nat_return(fs, &[removed]))
+    vm.nat_ret(fs, &[removed])
 }
 
 /// The separator `concat` appends: the argument string itself (rooted by
@@ -162,39 +163,40 @@ pub(super) fn t_concat(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         let last = argcheck::opt_integer(vm, a, 3, n)?;
         (tv, sep, i, last)
     };
-    let mut out: Vec<u8> = Vec::new();
+    let mut out = vm.new_buf();
     // PUC appends `[i, last)` each followed by the separator, then `last`
     // on its own, so `last == maxinteger` never overflows the counter.
     let mut k = i;
     while k < last {
         concat_field(vm, tv, k, &mut out)?;
-        out.extend_from_slice(sep.bytes());
+        vm.buf_push(&mut out, sep.bytes())?;
         k += 1;
     }
     if k == last {
         concat_field(vm, tv, last, &mut out)?;
     }
-    let s = vm.built_str(&out)?;
-    Ok(vm.nat_return(fs, &[s]))
+    let s = vm.lib_built_str(&out)?;
+    vm.nat_ret(fs, &[s])
 }
 
-fn concat_field(vm: &mut Vm, tv: Value, k: i64, out: &mut Vec<u8>) -> Result<(), LuaError> {
+fn concat_field(vm: &mut Vm, tv: Value, k: i64, out: &mut LVec<u8>) -> Result<(), LuaError> {
     match tab_geti(vm, tv, k)? {
-        Value::Str(s) => out.extend_from_slice(s.as_bytes()),
+        Value::Str(s) => vm.buf_push(out, s.as_bytes())?,
         Value::Int(x) => {
             let mut buf = [0u8; 20];
-            out.extend_from_slice(crate::numeric::write_i64_dec(x, &mut buf))
+            vm.buf_push(out, crate::numeric::write_i64_dec(x, &mut buf))?
         }
         v @ Value::Float(_) => {
-            out.extend_from_slice(&argcheck::to_str_bytes(vm, v).expect("a number converts"))
+            let b = argcheck::to_str_bytes(vm, v).expect("a number converts");
+            vm.buf_push(out, &b)?
         }
         // `luaL_typename`: the base type name, never `__name`.
         v => {
-            let msg = format!(
+            let msg = vm.fmt_bytes(format_args!(
                 "invalid value ({}) at index {k} in table for 'concat'",
                 v.type_name()
-            );
-            return Err(raise_str(vm, &msg));
+            ))?;
+            return Err(crate::vm::builtins::raise_bytes(vm, &msg));
         }
     }
     Ok(())
@@ -258,34 +260,42 @@ pub(crate) fn t_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     if !fits {
         return Err(raise_str(vm, "too many results to unpack"));
     }
-    let mut vals: Vec<Value> = Vec::with_capacity(count as usize);
+    // the values go to slots above the arguments as they are read (a nested
+    // `__index` call runs above them, and the table stays rooted in its
+    // argument slot), then move down to the results
+    let count = count as usize;
+    let base = (fs + 1 + nargs) as usize;
+    vm.grow_stack(base + count)?;
+    let mut slot = base;
     for k in i..e {
-        vals.push(tab_geti(vm, tv, k)?);
+        let v = tab_geti(vm, tv, k)?;
+        vm.stack[slot] = v;
+        slot += 1;
     }
-    vals.push(tab_geti(vm, tv, e)?);
-    Ok(vm.nat_return(fs, &vals))
+    let v = tab_geti(vm, tv, e)?;
+    vm.stack[slot] = v;
+    vm.stack.copy_within(base..base + count, fs as usize);
+    Ok(count as u32)
 }
 
 pub(super) fn t_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let t = vm.heap.new_table();
-    {
+    let t = vm.alloc_table_sized(nargs as usize, 1)?;
+    for i in 0..nargs {
+        let v = vm.nat_arg(fs, nargs, i);
         // SAFETY: `t` was allocated above and is held only by this local;
-        // `tm` is the only reference into it, and the heap calls made while
-        // it lives (`set_int`, `intern`, `set`) do not collect
-        let tm = unsafe { t.as_mut() };
-        for i in 0..nargs {
-            let v = vm.nat_arg(fs, nargs, i);
-            let _ = tm.set_int_raw(&mut vm.heap, i as i64 + 1, v);
+        // each borrow lives for one store, which does not collect
+        let r = vm.table_op(|vm| unsafe { t.as_mut() }.set_int_raw(&mut vm.heap, i as i64 + 1, v));
+        if let Err(e) = r {
+            return Err(vm.table_error(e));
         }
-        let nk = Value::Str(vm.heap.intern(b"n"));
-        tm.set(&mut vm.heap, nk, Value::Int(nargs as i64))
-            .expect("valid key");
     }
+    let nk = vm.str_value(b"n")?;
+    vm.lib_set_value(t, nk, Value::Int(nargs as i64))?;
     // SETLIST-style once-per-table barrier: t is born BLACK if we're mid-
     // Propagate, and the bulk inserts above are bare `set_int`/`set` that
     // don't barrier. PUC's `lua_seti`/`lua_setfield` in `tpack` do.
     vm.barrier_back_table(t);
-    Ok(vm.nat_return(fs, &[Value::Table(t)]))
+    vm.nat_ret(fs, &[Value::Table(t)])
 }
 
 pub(super) fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -318,7 +328,7 @@ pub(super) fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
             }
         }
     }
-    Ok(vm.nat_return(fs, &[a2]))
+    vm.nat_ret(fs, &[a2])
 }
 
 pub(super) fn t_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -341,5 +351,5 @@ pub(super) fn t_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // off again: 5.5 sort.lua:22 checks `memdiff > N * 4` after
     // `table.create(N)`
     let t = vm.alloc_table_sized(n as usize, m as usize)?;
-    Ok(vm.nat_return(fs, &[Value::Table(t)]))
+    vm.nat_ret(fs, &[Value::Table(t)])
 }

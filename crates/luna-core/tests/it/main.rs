@@ -76,3 +76,4 @@ mod userdata_trace_bearing;
 mod userdata_trait;
 mod vm;
 mod vm_alloc_context;
+mod vm_alloc_fail;

@@ -4,6 +4,7 @@
 //! The items themselves are rendered by [`crate::vm::cfmt`].
 
 use crate::runtime::Value;
+use crate::runtime::mem::LVec;
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_bytes, raise_str};
@@ -23,19 +24,20 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let f = argcheck::check_string(vm, a, 0)?;
     let fmt = f.as_bytes();
     let v = vm.version();
-    let mut out = Vec::with_capacity(fmt.len());
+    let mut out = vm.new_buf();
+    vm.buf_reserve(&mut out, fmt.len())?;
     let mut arg = 0u32;
     let mut i = 0;
     while i < fmt.len() {
         let c = fmt[i];
         i += 1;
         if c != b'%' {
-            out.push(c);
+            vm.buf_push(&mut out, &[c])?;
             continue;
         }
         // a '%' at the very end pairs with the string's terminating zero
         if fmt.get(i) == Some(&b'%') {
-            out.push(b'%');
+            vm.buf_push(&mut out, b"%")?;
             i += 1;
             continue;
         }
@@ -49,8 +51,8 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             item51(vm, a, arg, fmt, i, &mut out)?
         };
     }
-    let s = vm.built_str(&out)?;
-    Ok(vm.nat_return(fs, &[s]))
+    let s = vm.lib_built_str(&out)?;
+    vm.nat_ret(fs, &[s])
 }
 
 fn byte_at(fmt: &[u8], i: usize) -> u8 {
@@ -98,10 +100,13 @@ fn item51(
     arg: u32,
     fmt: &[u8],
     start: usize,
-    out: &mut Vec<u8>,
+    out: &mut LVec<u8>,
 ) -> Result<usize, LuaError> {
     let v = vm.version();
     let p = scanformat(vm, fmt, start)?;
+    // a numeric item is short and goes through `item`; strings go straight
+    // to `out`
+    let mut item = Vec::new();
     let conv = byte_at(fmt, p);
     let body = &fmt[start..p.min(fmt.len())];
     let sp = Spec::parse(body);
@@ -112,13 +117,12 @@ fn item51(
                 LuaVersion::Lua52 => argcheck::check_int(vm, a, arg)?,
                 _ => argcheck::check_integer(vm, a, arg)? as i32,
             };
-            let mark = out.len();
-            cfmt::char(out, &sp, c as u8);
+            cfmt::char(&mut item, &sp, c as u8);
             // 5.1 copies the item with strlen, so a zero byte ends it
             if v == LuaVersion::Lua51
-                && let Some(z) = out[mark..].iter().position(|&b| b == 0)
+                && let Some(z) = item.iter().position(|&b| b == 0)
             {
-                out.truncate(mark + z);
+                item.truncate(z);
             }
         }
         b'd' | b'i' => {
@@ -137,7 +141,7 @@ fn item51(
                 }
                 _ => argcheck::check_integer(vm, a, arg)?,
             };
-            cfmt::signed(out, &sp, n);
+            cfmt::signed(&mut item, &sp, n);
         }
         b'o' | b'u' | b'x' | b'X' => {
             let n = match v {
@@ -155,20 +159,20 @@ fn item51(
                 }
                 _ => argcheck::check_integer(vm, a, arg)? as u64,
             };
-            cfmt::unsigned(out, &sp, conv, n);
+            cfmt::unsigned(&mut item, &sp, conv, n);
         }
         b'a' | b'A' if v >= LuaVersion::Lua52 => {
             let x = argcheck::check_number(vm, a, arg)?;
-            cfmt::float(out, &sp, conv, x);
+            cfmt::float(&mut item, &sp, conv, x);
         }
         b'e' | b'E' | b'f' | b'g' | b'G' => {
             let x = argcheck::check_number(vm, a, arg)?;
-            cfmt::float(out, &sp, conv, x);
+            cfmt::float(&mut item, &sp, conv, x);
         }
         b'q' => match v {
             LuaVersion::Lua51 | LuaVersion::Lua52 => {
                 let s = argcheck::check_string(vm, a, arg)?;
-                addquoted(v, s.as_bytes(), out);
+                addquoted(vm, s.as_bytes(), out)?;
             }
             _ => addliteral(vm, a, arg, out)?,
         },
@@ -180,15 +184,15 @@ fn item51(
             };
             let has_prec = body.contains(&b'.');
             if v >= LuaVersion::Lua53 && body.is_empty() {
-                out.extend_from_slice(&s);
+                vm.buf_push(out, &s)?;
             } else {
                 if v >= LuaVersion::Lua53 && s.contains(&0) {
                     return Err(arg_error(vm, arg + 1, "string contains zeros"));
                 }
                 if !has_prec && s.len() >= 100 {
-                    out.extend_from_slice(&s);
+                    vm.buf_push(out, &s)?;
                 } else {
-                    cfmt::cstr(out, &sp, &s);
+                    cfmt::cstr(&mut item, &sp, &s);
                 }
             }
         }
@@ -206,6 +210,7 @@ fn item51(
             return Err(raise_bytes(vm, &msg));
         }
     }
+    vm.buf_push(out, &item)?;
     Ok(p + 1)
 }
 
@@ -254,8 +259,9 @@ fn item54(
     arg: u32,
     fmt: &[u8],
     start: usize,
-    out: &mut Vec<u8>,
+    out: &mut LVec<u8>,
 ) -> Result<usize, LuaError> {
+    let mut item = Vec::new();
     // getformat: flags, width and precision bytes ('0' counted as a flag),
     // then the conversion
     let mut p = start;
@@ -275,7 +281,7 @@ fn item54(
         b'c' => {
             checkformat(vm, &form, b"-", false)?;
             let c = argcheck::check_integer(vm, a, arg)? as i32;
-            cfmt::char(out, &sp, c as u8);
+            cfmt::char(&mut item, &sp, c as u8);
         }
         b'd' | b'i' | b'u' | b'o' | b'x' | b'X' => {
             let n = argcheck::check_integer(vm, a, arg)?;
@@ -286,27 +292,27 @@ fn item54(
             };
             checkformat(vm, &form, flags, true)?;
             if let b'd' | b'i' = conv {
-                cfmt::signed(out, &sp, n);
+                cfmt::signed(&mut item, &sp, n);
             } else {
-                cfmt::unsigned(out, &sp, conv, n as u64);
+                cfmt::unsigned(&mut item, &sp, conv, n as u64);
             }
         }
         b'a' | b'A' => {
             checkformat(vm, &form, b"-+#0 ", true)?;
             let x = argcheck::check_number(vm, a, arg)?;
-            cfmt::float(out, &sp, conv, x);
+            cfmt::float(&mut item, &sp, conv, x);
         }
         b'f' | b'e' | b'E' | b'g' | b'G' => {
             let x = argcheck::check_number(vm, a, arg)?;
             checkformat(vm, &form, b"-+#0 ", true)?;
-            cfmt::float(out, &sp, conv, x);
+            cfmt::float(&mut item, &sp, conv, x);
         }
         b'p' => {
             let ptr = topointer(a.get(vm, arg));
             checkformat(vm, &form, b"-", false)?;
             match ptr {
-                Some(ptr) => cfmt::pointer(out, &sp, ptr),
-                None => cfmt::cstr(out, &sp, b"(null)"),
+                Some(ptr) => cfmt::pointer(&mut item, &sp, ptr),
+                None => cfmt::cstr(&mut item, &sp, b"(null)"),
             }
         }
         b'q' => {
@@ -318,16 +324,16 @@ fn item54(
         b's' => {
             let s = vm.tostring_value(a.get(vm, arg))?;
             if form.len() == 2 {
-                out.extend_from_slice(&s);
+                vm.buf_push(out, &s)?;
             } else {
                 if s.contains(&0) {
                     return Err(arg_error(vm, arg + 1, "string contains zeros"));
                 }
                 checkformat(vm, &form, b"-", true)?;
                 if !form.contains(&b'.') && s.len() >= 100 {
-                    out.extend_from_slice(&s);
+                    vm.buf_push(out, &s)?;
                 } else {
-                    cfmt::cstr(out, &sp, &s);
+                    cfmt::cstr(&mut item, &sp, &s);
                 }
             }
         }
@@ -340,6 +346,7 @@ fn item54(
             return Err(raise_bytes(vm, &msg));
         }
     }
+    vm.buf_push(out, &item)?;
     Ok(p + 1)
 }
 
@@ -362,46 +369,53 @@ fn topointer(v: Value) -> Option<usize> {
 /// `addquoted`: a string as a Lua literal. 5.1 escapes only the bytes that
 /// would break the literal; later versions write every control byte in
 /// decimal, padded to three digits when a digit follows.
-fn addquoted(v: LuaVersion, s: &[u8], out: &mut Vec<u8>) {
-    out.push(b'"');
+fn addquoted(vm: &mut Vm, s: &[u8], out: &mut LVec<u8>) -> Result<(), LuaError> {
+    let v = vm.version();
+    vm.buf_reserve(out, s.len() + 2)?;
+    vm.buf_push(out, b"\"")?;
     for (i, &c) in s.iter().enumerate() {
         match c {
-            b'"' | b'\\' | b'\n' => {
-                out.push(b'\\');
-                out.push(c);
-            }
-            b'\r' if v == LuaVersion::Lua51 => out.extend_from_slice(b"\\r"),
-            0 if v == LuaVersion::Lua51 => out.extend_from_slice(b"\\000"),
+            b'"' | b'\\' | b'\n' => vm.buf_push(out, &[b'\\', c])?,
+            b'\r' if v == LuaVersion::Lua51 => vm.buf_push(out, b"\\r")?,
+            0 if v == LuaVersion::Lua51 => vm.buf_push(out, b"\\000")?,
             c if v >= LuaVersion::Lua52 && c.is_ascii_control() => {
-                if s.get(i + 1).is_some_and(u8::is_ascii_digit) {
-                    out.extend_from_slice(format!("\\{c:03}").as_bytes());
+                // a decimal escape, three digits when a digit follows
+                let wide = s.get(i + 1).is_some_and(u8::is_ascii_digit);
+                let d = [b'\\', b'0' + c / 100, b'0' + c / 10 % 10, b'0' + c % 10];
+                let from = if wide || c >= 100 {
+                    1
+                } else if c >= 10 {
+                    2
                 } else {
-                    out.extend_from_slice(format!("\\{c}").as_bytes());
-                }
+                    3
+                };
+                vm.buf_push(out, &[d[0]])?;
+                vm.buf_push(out, &d[from..])?;
             }
-            c => out.push(c),
+            c => vm.buf_push(out, &[c])?,
         }
     }
-    out.push(b'"');
+    vm.buf_push(out, b"\"")
 }
 
 /// 5.3+ `addliteral`: any value that has a literal form.
-fn addliteral(vm: &mut Vm, a: Args, arg: u32, out: &mut Vec<u8>) -> Result<(), LuaError> {
+fn addliteral(vm: &mut Vm, a: Args, arg: u32, out: &mut LVec<u8>) -> Result<(), LuaError> {
+    let mut item = Vec::new();
     match a.get(vm, arg) {
-        Value::Str(s) => addquoted(vm.version(), s.as_bytes(), out),
+        Value::Str(s) => return addquoted(vm, s.as_bytes(), out),
         Value::Int(n) if n == i64::MIN => {
             // "-9223372036854775808" would read back as a float
-            out.extend_from_slice(format!("0x{:x}", n as u64).as_bytes());
+            item.extend_from_slice(b"0x8000000000000000");
         }
-        Value::Int(n) => out.extend_from_slice(n.to_string().as_bytes()),
-        Value::Float(x) => quotefloat(vm.version(), x, out),
+        Value::Int(n) => cfmt::signed(&mut item, &Spec::default(), n),
+        Value::Float(x) => quotefloat(vm.version(), x, &mut item),
         v @ (Value::Nil | Value::Bool(_)) => {
             let s = vm.tostring_value(v)?;
-            out.extend_from_slice(&s);
+            item.extend_from_slice(&s);
         }
         _ => return Err(arg_error(vm, arg + 1, "value has no literal form")),
     }
-    Ok(())
+    vm.buf_push(out, &item)
 }
 
 /// A float as a hexadecimal numeral; 5.4 spells the values `%a` cannot

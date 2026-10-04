@@ -141,16 +141,16 @@ pub(super) fn ll_searchpath(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lua
         c_str(&sep),
         c_str(&dirsep),
     );
-    Ok(match r {
+    match r {
         Ok(file) => {
-            let f = Value::Str(vm.heap.intern(&file));
-            vm.nat_return(fs, &[f])
+            let f = vm.str_value(&file)?;
+            vm.nat_ret(fs, &[f])
         }
         Err(msg) => {
-            let m = Value::Str(vm.heap.intern(&msg));
-            vm.nat_return(fs, &[Value::Nil, m])
+            let m = vm.str_value(&msg)?;
+            vm.nat_ret(fs, &[Value::Nil, m])
         }
-    })
+    }
 }
 
 /// `findfile`: search `package[pname]` (which must be a string) for `name`.
@@ -160,7 +160,7 @@ pub(super) fn find_file(
     name: &[u8],
     pname: &str,
 ) -> Result<Result<Vec<u8>, Vec<u8>>, LuaError> {
-    let k = Value::Str(vm.heap.intern(pname.as_bytes()));
+    let k = vm.str_value(pname.as_bytes())?;
     let path = vm.index_value(Value::Table(pkg), k)?;
     let Some(path) = argcheck::to_str_bytes(vm, path) else {
         return Err(raise_str(

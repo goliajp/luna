@@ -4,6 +4,7 @@
 //! points past U+10FFFF are accepted.
 
 use crate::runtime::Value;
+use crate::runtime::mem::LVec;
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
@@ -11,17 +12,19 @@ use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
 pub(crate) fn open_utf8(vm: &mut Vm) {
+    crate::vm::lib_mem::opened(try_open_utf8(vm));
+}
+
+/// [`open_utf8`], failing when memory runs out.
+pub(crate) fn try_open_utf8(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();
     if v < LuaVersion::Lua53 {
-        return;
+        return Ok(());
     }
-    let t = vm.heap.new_table();
-    let set = |vm: &mut Vm, name: &str, fv: Value| {
-        let k = Value::Str(vm.heap.intern(name.as_bytes()));
-        // SAFETY: `t` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
-        unsafe { t.as_mut() }
-            .set(&mut vm.heap, k, fv)
-            .expect("valid key");
+    let t = vm.alloc_table()?;
+    let set = |vm: &mut Vm, name: &str, fv: Value| -> Result<(), LuaError> {
+        let k = vm.str_value(name.as_bytes())?;
+        vm.lib_set_value(t, k, fv)
     };
     let fns: [(&str, fn(&mut Vm, u32, u32) -> Result<u32, LuaError>); 5] = [
         ("char", u_char),
@@ -31,19 +34,19 @@ pub(crate) fn open_utf8(vm: &mut Vm) {
         ("codes", u_codes),
     ];
     for (name, f) in fns {
-        let fv = vm.native(f);
-        set(vm, name, fv);
+        let fv = vm.lib_native(f)?;
+        set(vm, name, fv)?;
     }
     let pattern: &[u8] = if v == LuaVersion::Lua53 {
         b"[\x00-\x7F\xC2-\xF4][\x80-\xBF]*"
     } else {
         b"[\x00-\x7F\xC2-\xFD][\x80-\xBF]*"
     };
-    let p = Value::Str(vm.heap.intern(pattern));
-    set(vm, "charpattern", p);
-    vm.set_global("utf8", Value::Table(t))
-        .expect("stdlib registration");
+    let p = vm.str_value(pattern)?;
+    set(vm, "charpattern", p)?;
+    vm.lib_set_global("utf8", Value::Table(t))?;
     vm.barrier_back_table(t);
+    Ok(())
 }
 
 const MAX_UNICODE: u32 = 0x10_FFFF;
@@ -105,10 +108,9 @@ fn decode(v: LuaVersion, s: &[u8], i: usize, strict: bool) -> Option<(u32, usize
 }
 
 /// `luaO_utf8esc`.
-fn encode(out: &mut Vec<u8>, mut x: u32) {
+fn encode(vm: &mut Vm, out: &mut LVec<u8>, mut x: u32) -> Result<(), LuaError> {
     if x < 0x80 {
-        out.push(x as u8);
-        return;
+        return vm.buf_push(out, &[x as u8]);
     }
     let mut cont = [0u8; 6];
     let mut n = 0;
@@ -122,8 +124,12 @@ fn encode(out: &mut Vec<u8>, mut x: u32) {
             break;
         }
     }
-    out.push(((!mfb << 1) | x) as u8);
-    out.extend(cont[..n].iter().rev());
+    let mut seq = [0u8; 7];
+    seq[0] = ((!mfb << 1) | x) as u8;
+    for (k, &c) in cont[..n].iter().rev().enumerate() {
+        seq[k + 1] = c;
+    }
+    vm.buf_push(out, &seq[..=n])
 }
 
 fn u_posrelat(pos: i64, len: usize) -> i64 {
@@ -144,7 +150,7 @@ fn bounds(v: LuaVersion, old: &'static str, new: &'static str) -> &'static str {
 fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
-    let mut out = Vec::new();
+    let mut out = vm.new_buf();
     for i in 0..nargs {
         let code = argcheck::check_integer(vm, a, i)?;
         let ok = if v == LuaVersion::Lua53 {
@@ -155,10 +161,10 @@ fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         if !ok {
             return Err(arg_error(vm, i + 1, "value out of range"));
         }
-        encode(&mut out, code as u32);
+        encode(vm, &mut out, code as u32)?;
     }
-    let s = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[s]))
+    let s = vm.str_value(&out)?;
+    vm.nat_ret(fs, &[s])
 }
 
 fn u_codepoint(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -180,16 +186,16 @@ fn u_codepoint(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     }
     argcheck::check_stack(vm, a, pose - posi + 1, "string slice too long")?;
     let bytes = s.as_bytes();
-    let mut out = Vec::new();
+    let mut out = LVec::new(vm.heap.mem());
     let mut i = (posi - 1) as usize;
     while i < pose as usize {
         let Some((code, next)) = decode(v, bytes, i, !lax) else {
             return Err(raise_str(vm, "invalid UTF-8 code"));
         };
-        out.push(Value::Int(i64::from(code)));
+        out.push(Value::Int(i64::from(code)))?;
         i = next;
     }
-    Ok(vm.nat_return(fs, &out))
+    vm.nat_ret(fs, &out)
 }
 
 fn u_len(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -225,10 +231,10 @@ fn u_len(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                 i = next as i64;
                 n += 1;
             }
-            None => return Ok(vm.nat_return(fs, &[Value::Nil, Value::Int(i + 1)])),
+            None => return vm.nat_ret(fs, &[Value::Nil, Value::Int(i + 1)]),
         }
     }
-    Ok(vm.nat_return(fs, &[Value::Int(n)]))
+    vm.nat_ret(fs, &[Value::Int(n)])
 }
 
 fn u_offset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -279,11 +285,11 @@ fn u_offset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
     }
     if n != 0 {
-        return Ok(vm.nat_return(fs, &[Value::Nil]));
+        return vm.nat_ret(fs, &[Value::Nil]);
     }
     let start = Value::Int(posi + 1);
     if v < LuaVersion::Lua55 {
-        return Ok(vm.nat_return(fs, &[start]));
+        return vm.nat_ret(fs, &[start]);
     }
     // 5.5 also returns where the character ends
     if at(bytes, posi as usize) & 0x80 != 0 {
@@ -294,7 +300,7 @@ fn u_offset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             posi += 1;
         }
     }
-    Ok(vm.nat_return(fs, &[start, Value::Int(posi + 1)]))
+    vm.nat_ret(fs, &[start, Value::Int(posi + 1)])
 }
 
 /// The `utf8.codes` iterator; upvalue [strict].
@@ -344,7 +350,7 @@ fn codes_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     }
     match decode(v, bytes, n as usize, strict) {
         Some((code, next)) if !is_cont(at(bytes, next)) => {
-            Ok(vm.nat_return(fs, &[Value::Int(n as i64 + 1), Value::Int(i64::from(code))]))
+            vm.nat_ret(fs, &[Value::Int(n as i64 + 1), Value::Int(i64::from(code))])
         }
         _ => Err(raise_str(vm, "invalid UTF-8 code")),
     }
@@ -358,6 +364,6 @@ fn u_codes(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     if v >= LuaVersion::Lua54 && is_cont(at(s.as_bytes(), 0)) {
         return Err(arg_error(vm, 1, "invalid UTF-8 code"));
     }
-    let it = vm.native_with(codes_iter, Box::new([Value::Bool(!lax)]));
-    Ok(vm.nat_return(fs, &[it, Value::Str(s), Value::Int(0)]))
+    let it = vm.lib_native_with(codes_iter, &[Value::Bool(!lax)])?;
+    vm.nat_ret(fs, &[it, Value::Str(s), Value::Int(0)])
 }

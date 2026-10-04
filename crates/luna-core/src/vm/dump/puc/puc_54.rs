@@ -196,7 +196,7 @@ fn read_const(r: &mut Reader, heap: &mut Heap) -> Result<Value, Bad> {
         3 => Value::Int(i64::from_le_bytes(r.take(8)?.try_into().expect("8 bytes"))),
         19 => Value::Float(f64::from_le_bytes(r.take(8)?.try_into().expect("8 bytes"))),
         4 | 20 => match read_string(r)? {
-            Some(s) => Value::Str(heap.intern(s)),
+            Some(s) => Value::Str(heap.try_intern(s)?),
             None => return Err(format!("{DIALECT} chunk: NULL string constant").into()),
         },
         _ => return Err(Bad::Constant),
@@ -214,9 +214,9 @@ fn read_proto(
     // A nested function's source is dumped as NULL when it equals its
     // parent's; a stripped main chunk has none at all.
     let source = match (read_string(r)?, parent_source) {
-        (Some(s), _) => heap.intern(s),
+        (Some(s), _) => heap.try_intern(s)?,
         (None, Some(p)) => p,
-        (None, None) => heap.intern(b"=?"),
+        (None, None) => heap.try_intern(b"=?")?,
     };
     let line_defined = read_int(r)?;
     let last_line_defined = read_int(r)?;
