@@ -413,5 +413,36 @@ fn scale_f64(mut f: f64, mut e: i64) -> f64 {
     f * exp2(e)
 }
 
+/// `x * y + z` as C code computes it where PUC is built: compilers for
+/// aarch64 (gcc on Linux, clang on macOS) contract it into one fused
+/// multiply-add, with a single rounding; elsewhere it rounds twice.
+pub(crate) fn c_mul_add(x: f64, y: f64, z: f64) -> f64 {
+    if cfg!(all(target_arch = "aarch64", not(target_os = "windows"))) {
+        x.mul_add(y, z)
+    } else {
+        x * y + z
+    }
+}
+
+/// 5.1/5.2 `luai_nummod`, `a - floor(a/b)*b`, contracted like
+/// [`c_mul_add`]. The fused instruction takes a NaN from the addend `a`
+/// first, then from the negated quotient, so a NaN can come out with the
+/// opposite sign to the two-step result. That order is spelled out here
+/// rather than left to which multiplicand the backend puts first.
+pub(crate) fn nummod_floor(a: f64, b: f64) -> f64 {
+    let q = (a / b).floor();
+    if !cfg!(all(target_arch = "aarch64", not(target_os = "windows"))) {
+        return a - q * b;
+    }
+    if a.is_nan() {
+        // quieted, as the instruction returns it
+        return a + 0.0;
+    }
+    if q.is_nan() {
+        return -q;
+    }
+    (-q).mul_add(b, a)
+}
+
 #[cfg(test)]
 mod tests;
