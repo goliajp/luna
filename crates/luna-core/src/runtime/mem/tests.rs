@@ -30,7 +30,7 @@ unsafe extern "C" fn test_alloc(
             // SAFETY: `p` is a live block of `os` bytes this function made
             // with alignment 8
             unsafe { std::alloc::dealloc(p.cast(), Layout::from_size_align(os, 8).unwrap()) };
-            s.live.set(s.live.get() - os);
+            s.live.set(s.live.get().wrapping_sub(os));
         }
         return std::ptr::null_mut();
     }
@@ -50,7 +50,7 @@ unsafe extern "C" fn test_alloc(
         unsafe { std::alloc::realloc(p.cast(), Layout::from_size_align(os, 8).unwrap(), ns) }
     };
     if !q.is_null() {
-        s.live.set(s.live.get() - old + ns);
+        s.live.set(s.live.get().wrapping_sub(old).wrapping_add(ns));
     }
     q.cast()
 }
