@@ -250,7 +250,9 @@ pub struct Heap {
     /// the time the marker first reached them and the next propagate step.
     /// Lives outside `propagate` so barriers can push without going through
     /// the Option; `gc_step_propagate` and `gc_finish_atomic` drain it.
-    gray: Vec<*mut GcHeader>,
+    gray: crate::runtime::mem::LVec<*mut GcHeader>,
+    /// gray objects are left off `gray` because it could not grow
+    gray_overflow: bool,
     /// Incremental traversal state. `Some` between `gc_start_propagate` and
     /// `gc_finish_atomic` (and inline within `mark_all`); `None` otherwise.
     propagate: Option<PropagateState>,
@@ -263,10 +265,10 @@ pub struct Heap {
     gc_stopped: bool,
     /// objects registered for finalization (a live `__gc` metamethod was set);
     /// parallel-tracked — ownership stays on `all` (PUC `finobj`).
-    finalize: Vec<*mut GcHeader>,
+    finalize: crate::runtime::mem::LVec<*mut GcHeader>,
     /// dead finalizables resurrected this cycle, awaiting their `__gc` call by
     /// the VM (PUC `tobefnz`). Drained via `take_tobefnz`.
-    tobefnz: Vec<*mut GcHeader>,
+    tobefnz: crate::runtime::mem::LVec<*mut GcHeader>,
     /// PUC 5.1 has no ephemeron pass: a `__mode='k'` table marks its values
     /// strongly during traversal, so entries like `a[t]=t` (key and value the
     /// same fresh object) survive even with nothing else referencing `t`.
@@ -296,7 +298,7 @@ pub struct Heap {
     /// pointer here instead of dropping; new_table pops + resets fields.
     /// Cap at 4096 entries to avoid unbounded growth (worst-case: 4096
     /// × sizeof(Table) ≈ 460 KB resident memory in idle pool).
-    table_pool: Vec<std::ptr::NonNull<crate::runtime::table::Table>>,
+    table_pool: crate::runtime::mem::LVec<std::ptr::NonNull<crate::runtime::table::Table>>,
     /// `gc-verify` — headers freed since the last collect
     /// began. O(1) read-time dangling probes (`Vm::op_index`) test
     /// membership here; cleared when the next mark starts. Only exact
@@ -340,27 +342,28 @@ impl Heap {
             all: ptr::null_mut(),
             fixed: ptr::null_mut(),
             fix_natives: false,
-            strings: StringTable::new(),
+            strings: StringTable::new(mem.mem()),
             seed,
             live: 0,
             bytes: 0,
             next_gc: GC_MIN_THRESHOLD,
             gc_limit: GC_MIN_THRESHOLD,
             current_white: WHITE0,
-            gray: Vec::new(),
+            gray: crate::runtime::mem::LVec::new(mem.mem()),
+            gray_overflow: false,
             propagate: None,
             phase: GcPhase::Pause,
             sweep_cur: ptr::null_mut(),
             gc_stopped: false,
-            finalize: Vec::new(),
-            tobefnz: Vec::new(),
+            finalize: crate::runtime::mem::LVec::new(mem.mem()),
+            tobefnz: crate::runtime::mem::LVec::new(mem.mem()),
             no_ephemeron: false,
             signed_zero_keys: false,
             defer_thread_cycle_finalize: false,
             chunk_roots: Vec::new(),
             track_chunk_roots: false,
             mem_cap: None,
-            table_pool: Vec::new(),
+            table_pool: crate::runtime::mem::LVec::new(mem.mem()),
             #[cfg(feature = "gc-verify")]
             recently_freed: std::collections::HashSet::new(),
             mem,
@@ -427,7 +430,7 @@ impl Drop for Heap {
             }
             // the pooled tables' interiors were freed when they were
             // recycled; only their blocks are left
-            for ptr in std::mem::take(&mut self.table_pool) {
+            for &ptr in self.table_pool.take().iter() {
                 self.free_block(ptr.as_ptr());
             }
         }
