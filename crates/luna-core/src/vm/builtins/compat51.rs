@@ -46,7 +46,7 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
 /// no integer subtype yet; luna mirrors the rounding). Replaced in 5.2+ by
 /// `collectgarbage("count")`. gc.lua 5.1 :88 uses it as a loop guard.
 pub(super) fn nat_gcinfo(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
-    let kb = (vm.heap.bytes() as f64 / 1024.0).floor() as i64;
+    let kb = (vm.gc_count_bytes() as f64 / 1024.0).floor() as i64;
     Ok(vm.nat_return(fs, &[Value::Int(kb)]))
 }
 

@@ -124,39 +124,39 @@ impl Heap {
                         // pool owns it until reuse or Heap::Drop.
                         self.table_pool.push(std::ptr::NonNull::new_unchecked(t));
                     } else {
-                        drop(Box::from_raw(t));
+                        self.free_block(t);
                     }
                 }
                 ObjTag::Proto => {
                     self.bytes = self.bytes.saturating_sub(std::mem::size_of::<Proto>());
-                    drop(Box::from_raw(h as *mut Proto));
+                    self.free_block(h as *mut Proto);
                 }
                 ObjTag::Closure => {
                     self.bytes = self.bytes.saturating_sub(std::mem::size_of::<LuaClosure>());
-                    drop(Box::from_raw(h as *mut LuaClosure));
+                    self.free_block(h as *mut LuaClosure);
                 }
                 ObjTag::Upvalue => {
                     self.bytes = self.bytes.saturating_sub(std::mem::size_of::<Upvalue>());
-                    drop(Box::from_raw(h as *mut Upvalue));
+                    self.free_block(h as *mut Upvalue);
                 }
                 ObjTag::Native => {
                     self.bytes = self
                         .bytes
                         .saturating_sub(std::mem::size_of::<NativeClosure>());
-                    drop(Box::from_raw(h as *mut NativeClosure));
+                    self.free_block(h as *mut NativeClosure);
                 }
                 ObjTag::Coro => {
                     self.bytes = self
                         .bytes
                         .saturating_sub(std::mem::size_of::<crate::runtime::Coro>());
-                    drop(Box::from_raw(h as *mut crate::runtime::Coro));
+                    self.free_block(h as *mut crate::runtime::Coro);
                 }
                 ObjTag::Userdata => {
                     let extra = (*(h as *mut Userdata)).extra_bytes;
                     self.bytes = self
                         .bytes
                         .saturating_sub(std::mem::size_of::<Userdata>() + extra);
-                    drop(Box::from_raw(h as *mut Userdata));
+                    self.free_block(h as *mut Userdata);
                 }
                 ObjTag::Str => {
                     let s = h as *mut LuaStr;
@@ -164,7 +164,7 @@ impl Heap {
                     if (*s).is_short() {
                         self.strings.remove(s);
                     }
-                    string::free(s);
+                    string::free(s, self.mem());
                 }
             }
         }

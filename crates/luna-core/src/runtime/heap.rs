@@ -410,26 +410,13 @@ impl Heap {
         self.all = h;
         self.live += 1;
     }
-
-    /// Take ownership of a boxed object and put it under GC management.
-    /// The header's tag must match `T`; the typed constructors set it.
-    pub(crate) fn adopt<T: GcObject>(&mut self, obj: Box<T>) -> Gc<T> {
-        let p = Box::into_raw(obj);
-        // SAFETY: `p` is the box just leaked, linked nowhere yet, and a
-        // `GcObject` starts with its header; once linked the heap owns the
-        // object until a collect finds it unreachable
-        unsafe { self.link(p as *mut GcHeader) };
-        self.bytes += std::mem::size_of::<T>();
-        // SAFETY: as above
-        unsafe { Gc::from_ptr(p) }
-    }
 }
 
 impl Drop for Heap {
     fn drop(&mut self) {
         // free everything regardless of reachability, including any list still
         // detached for an in-flight incremental sweep
-        // SAFETY: the heap is being dropped, so nothing uses its objects any more; `all`, `sweep_cur` and `fixed` hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds `Box::into_raw` tables already unlinked from every list
+        // SAFETY: the heap is being dropped, so nothing uses its objects any more; `all`, `sweep_cur` and `fixed` hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds tables from `alloc_block` already unlinked from every list
         unsafe {
             for mut cur in [self.all, self.sweep_cur, self.fixed] {
                 while !cur.is_null() {
@@ -438,15 +425,10 @@ impl Drop for Heap {
                     cur = next;
                 }
             }
-            // release the table_pool's
-            // dangling Box<Table> ptrs. Each was Box::into_raw'd into
-            // the pool (via free_obj recycle path); without this, the
-            // Tables would leak. The pool's Tables had their interior
-            // Box-owned fields (slab/nodes/metatable) already cleared
-            // when they were recycled, so dropping the Table now only
-            // releases the Table struct itself.
-            for ptr in self.table_pool.drain(..) {
-                drop(Box::from_raw(ptr.as_ptr()));
+            // the pooled tables' interiors were freed when they were
+            // recycled; only their blocks are left
+            for ptr in std::mem::take(&mut self.table_pool) {
+                self.free_block(ptr.as_ptr());
             }
         }
     }
