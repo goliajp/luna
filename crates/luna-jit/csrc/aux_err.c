@@ -3,7 +3,7 @@
  * type errors, and reading lua_Debug in each dialect's layout.
  */
 #include <string.h>
-#include "aux.h"
+#include "auxlib.h"
 
 /* lua_Debug of 5.1, 5.2/5.3, 5.4 and 5.5 */
 struct dbg51 {

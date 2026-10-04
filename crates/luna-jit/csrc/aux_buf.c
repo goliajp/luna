@@ -8,7 +8,7 @@
  */
 #include <stdint.h>
 #include <string.h>
-#include "aux.h"
+#include "auxlib.h"
 
 /* 5.2 on; `init` starts at the same offset in every version's layout */
 typedef struct luaL_Buffer {

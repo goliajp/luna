@@ -3,7 +3,7 @@
  * luaL_argerror share.
  */
 #include <string.h>
-#include "aux.h"
+#include "auxlib.h"
 
 /* search the table on top for the value at objidx, two levels deep;
    pushes "name" or "lib.name" and returns 1 when found */
