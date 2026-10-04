@@ -87,3 +87,51 @@ fn early_side_exit_with_later_getupval_restores_safely() {
     // The KEY assertion here is "no panic" — the
     // result above being correct proves the run completed safely.
 }
+
+/// An upvalue called as a function need not be a Lua closure. A trace of
+/// a recursive function calling a table with `__call` (or a native) through
+/// an upvalue must not restore that value under the closure tag when it
+/// exits at the call; the interpreter would then run the table as a closure.
+#[test]
+fn upvalue_call_target_that_is_not_a_closure_keeps_its_type() {
+    let cases = [
+        "local hits = 0
+         local MT = {}
+         MT.__call = function(_, y) hits = hits + 1 return (tonumber(y) or 0) + 1 end
+         local M = setmetatable({}, MT)
+         local function rec(r, acc)
+           if r <= 0 then return acc end
+           return rec(r - 1, acc) + ((M(0.5)) + 92)
+         end
+         for i = 1, 40 do rec(1, 0) end
+         return hits",
+        "local f = math.abs
+         local hits = 0
+         local function rec(r, acc)
+           if r <= 0 then return acc end
+           return rec(r - 1, acc) + ((f(-1.5)) + 92)
+         end
+         for i = 1, 40 do rec(1, 0) hits = hits + 1 end
+         return hits",
+    ];
+    for v in [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        for src in cases {
+            let mut vm = luna_jit::new_with_jit(v);
+            vm.jit.trace_hot_threshold = 7;
+            vm.jit.call_hot_threshold = 7;
+            let r = vm.eval(src).unwrap();
+            let hits = match r[0] {
+                luna_jit::runtime::Value::Int(i) => i as f64,
+                luna_jit::runtime::Value::Float(f) => f,
+                ref o => panic!("{v:?}: not a number: {o:?}"),
+            };
+            assert_eq!(hits, 40.0, "{v:?}");
+        }
+    }
+}
