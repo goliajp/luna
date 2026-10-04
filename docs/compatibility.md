@@ -219,6 +219,11 @@ Differences from PUC:
 - In 5.2, `luaL_argerror` and `luaL_traceback` name a global function by
   the globals' own keys before looking one level deeper; PUC's search
   follows its table order, which depends on a per-run hash seed.
+- `lua_ident` is data in the library: a Windows host linking the DLL needs
+  the declaration from luna's `lua.h`, which imports it (define
+  `LUNA_STATIC` when linking the static library). A 5.1 host that declares
+  `lua_ident` itself, as PUC 5.1's header does not, links on other systems
+  but not against the Windows DLL.
 - Calls that break the API's preconditions (a non-table where a table is
   required, an unknown `lua_arith` operation) abort with a message where
   PUC's behaviour is undefined.
