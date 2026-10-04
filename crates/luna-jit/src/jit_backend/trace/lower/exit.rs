@@ -26,7 +26,15 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
         mat_sunk_id,
         ..
     } = lw.h.rt;
-    let side_exit_pc: u32 = pc;
+    // inside a split fold (`math.min` / `math.max` / `string.sub`) the
+    // function slot was never written: the interpreter must redo the
+    // fold from its GetTabUp, and the argument set-up between only
+    // writes the call's registers, so running it again is harmless
+    let side_exit_pc: u32 = pl
+        .math_folds
+        .iter()
+        .find(|f| f.kind.split() && f.start_idx + 1 < i && i < f.call_idx)
+        .map_or(pc, |f| record.ops[f.start_idx].pc);
     if !lw.call_chain.is_empty() {
         let head_resume_pc = lw.call_chain[0].pc;
         let mut snapshot: Vec<FrameMaterializeInfo> = lw.call_chain.clone();
