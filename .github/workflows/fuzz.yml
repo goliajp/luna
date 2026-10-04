@@ -78,7 +78,7 @@ jobs:
         working-directory: crates/luna-fuzz
         env:
           ASAN_OPTIONS: malloc_context_size=10
-        run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=300
+        run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=300 -rss_limit_mb=4096
       - name: upload artifacts on crash
         if: failure()
         uses: actions/upload-artifact@v7
@@ -160,7 +160,12 @@ jobs:
           # hundreds of MB. Ten frames still locate the allocation; replay
           # a saved input locally for full stacks.
           ASAN_OPTIONS: malloc_context_size=10
-        run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=$((MINUTES * 60))
+        # 4096 MB rather than libFuzzer's default 2048: under ASan the
+        # jit_diff target's peak sits close to 1.2 GB with the 256 MB
+        # quarantine, which left too little room under the default.
+        # libFuzzer starts purging the allocator once the peak passes half
+        # of this limit.
+        run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=$((MINUTES * 60)) -rss_limit_mb=4096
       - name: upload artifacts on crash
         if: failure()
         uses: actions/upload-artifact@v7
