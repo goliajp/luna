@@ -141,7 +141,7 @@ pub unsafe extern "C" fn luna_capi_concat(L: *mut LuaState, n: c_int) {
     let mut api = unsafe { Api::new(L) };
     match n {
         0 => {
-            let s = api.str(b"");
+            let s = or_raise!(api, api.str(b""));
             api.push(s);
         }
         1 => {}

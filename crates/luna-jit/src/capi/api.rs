@@ -114,16 +114,40 @@ impl<'a> Api<'a> {
         (self.top() - self.base()) as c_int
     }
 
+    /// Push `v` into the room the stack keeps for pushes (`MINSTACK` when
+    /// C gets the thread or a C function starts, more after
+    /// `lua_checkstack`): as in PUC, a push needs no memory, and pushing
+    /// past that room is the host's error (the process ends when the
+    /// memory for it cannot be had).
     pub(super) fn push(&mut self, v: Value) {
         self.stack_mut().push_or_abort(v);
         let co = self.thread();
         self.vm.heap.barrier_back(co);
     }
 
-    pub(super) fn push_all(&mut self, vs: &[Value]) {
+    /// Push `vs`, values that may be held by nothing else (results taken
+    /// off a Lua stack): no emergency collection runs, and a memory error
+    /// comes back when the stack cannot grow for them.
+    pub(super) fn push_all(&mut self, vs: &[Value]) -> Result<(), LuaError> {
+        self.stack_mut().extend_from_slice(vs)?;
+        let co = self.thread();
+        self.vm.heap.barrier_back(co);
+        Ok(())
+    }
+
+    /// Push `vs` into the room the stack keeps for pushes, as [`Api::push`]
+    /// does: pushing past it is the host's error.
+    pub(super) fn push_all_in_room(&mut self, vs: &[Value]) {
         self.stack_mut().extend_from_slice_or_abort(vs);
         let co = self.thread();
         self.vm.heap.barrier_back(co);
+    }
+
+    /// Make room for `n` more values on the stack, collecting in an
+    /// emergency when memory runs out; `false` when there is none.
+    pub(super) fn reserve(&mut self, n: usize) -> bool {
+        let co = self.thread();
+        self.vm.host_reserve_cstack(co, n)
     }
 
     /// Pop the top value; nil on an empty frame.
@@ -285,8 +309,11 @@ impl<'a> Api<'a> {
     /// Raise a runtime error with message `msg`, with no position (PUC
     /// `luaG_runerror` from inside a C function).
     pub(super) fn raise_msg(&mut self, msg: &str) {
-        let s = Value::Str(self.vm.heap.intern(msg.as_bytes()));
-        self.raise(LuaError(s));
+        let e = match self.vm.host_str(msg.as_bytes()) {
+            Ok(s) => LuaError(s),
+            Err(e) => e,
+        };
+        self.raise(e);
     }
 
     /// Whether this call raised.
@@ -294,8 +321,24 @@ impl<'a> Api<'a> {
         self.g().raised != 0
     }
 
-    /// Intern `bytes` as a string value.
-    pub(super) fn str(&mut self, bytes: &[u8]) -> Value {
-        Value::Str(self.vm.heap.intern(bytes))
+    /// Push the message `msg` for a call that returns status `status`; when
+    /// the message cannot be made, the memory error goes there instead and
+    /// the status is `LUA_ERRMEM`.
+    pub(super) fn push_status(&mut self, msg: &[u8], status: c_int) -> c_int {
+        match self.str(msg) {
+            Ok(m) => {
+                self.push(m);
+                status
+            }
+            Err(e) => {
+                self.push(e.0);
+                LUA_ERRMEM
+            }
+        }
+    }
+
+    /// `bytes` as a string value; a memory error when it cannot be made.
+    pub(super) fn str(&mut self, bytes: &[u8]) -> Result<Value, LuaError> {
+        self.vm.host_str(bytes)
     }
 }

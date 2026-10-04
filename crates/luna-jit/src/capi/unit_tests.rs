@@ -27,7 +27,7 @@ const DIALECTS: [c_int; 5] = [501, 502, 503, 504, 505];
 unsafe fn text(l: *mut LuaState, idx: c_int) -> String {
     // SAFETY: the caller's contract; a non-null result is NUL-terminated
     unsafe {
-        let p = lua_tolstring(l, idx, std::ptr::null_mut());
+        let p = luna_capi_lua_tolstring(l, idx, std::ptr::null_mut());
         assert!(!p.is_null(), "a string at {idx}");
         CStr::from_ptr(p).to_string_lossy().into_owned()
     }
@@ -131,7 +131,7 @@ fn stack_push_and_access() {
         unsafe {
             lua_pushinteger(l, 7);
             lua_pushnumber(l, 2.5);
-            lua_pushstring(l, c"12".as_ptr());
+            luna_capi_lua_pushstring(l, c"12".as_ptr());
             lua_pushboolean(l, 1);
             lua_pushnil(l);
             assert_eq!(lua_gettop(l), 5);
@@ -150,13 +150,13 @@ fn stack_push_and_access() {
             assert_eq!(lua_rawequal(l, 2, 3), 1);
             assert_eq!(lua_checkstack(l, 100), 1);
             luna_capi_lua_settop(l, 0);
-            lua_pushlstring(l, b"a\0b".as_ptr().cast(), 3);
+            luna_capi_lua_pushlstring(l, b"a\0b".as_ptr().cast(), 3);
             let mut len = 0;
-            lua_tolstring(l, -1, &mut len);
+            luna_capi_lua_tolstring(l, -1, &mut len);
             assert_eq!(len, 3);
             assert_eq!(lua_stringtonumber(l, c"0x10".as_ptr()), 5);
             assert_eq!(lua_tointegerx(l, -1, std::ptr::null_mut()), 16);
-            lua_pushcclosure(l, c_double, 0);
+            luna_capi_lua_pushcclosure(l, c_double, 0);
             assert_eq!(lua_iscfunction(l, -1), 1);
             assert!(lua_tocfunction(l, -1).is_some());
             assert_eq!(lua_pushthread(l), 1);
@@ -172,10 +172,10 @@ fn tables_metatables_and_globals() {
         // SAFETY: `l` is live for the whole closure
         unsafe {
             luaL_openlibs_for_test(l);
-            lua_createtable(l, 2, 2);
+            luna_capi_lua_createtable(l, 2, 2);
             lua_pushinteger(l, 10);
             luna_capi_lua_setfield(l, 1, c"x".as_ptr());
-            lua_pushstring(l, c"x".as_ptr());
+            luna_capi_lua_pushstring(l, c"x".as_ptr());
             luna_capi_lua_gettable(l, 1);
             assert_eq!(lua_tointegerx(l, -1, std::ptr::null_mut()), 10);
             luna_capi_lua_settop(l, 1);
@@ -196,7 +196,7 @@ fn tables_metatables_and_globals() {
             luna_capi_lua_rawset(l, 1);
             assert!(take_raise(l), "a nil key raises");
             luna_capi_lua_settop(l, 1);
-            lua_createtable(l, 0, 0);
+            luna_capi_lua_createtable(l, 0, 0);
             luna_capi_lua_setmetatable(l, 1);
             assert_eq!(lua_getmetatable(l, 1), 1);
             luna_capi_lua_settop(l, 1);
@@ -232,14 +232,14 @@ fn operators_and_userdata() {
                 lua_pushinteger(l, 1);
                 assert_eq!(luna_capi_lua_compare(l, -1, -2, 1), 1);
             }
-            lua_pushstring(l, c"a".as_ptr());
-            lua_pushstring(l, c"b".as_ptr());
+            luna_capi_lua_pushstring(l, c"a".as_ptr());
+            luna_capi_lua_pushstring(l, c"b".as_ptr());
             luna_capi_concat(l, 2);
             assert_eq!(text(l, -1), "ab");
             luna_capi_lua_len(l, -1);
             assert_eq!(lua_tointegerx(l, -1, std::ptr::null_mut()), 2);
             luna_capi_lua_settop(l, 0);
-            let p = lua_newuserdatauv(l, 16, 2);
+            let p = luna_capi_lua_newuserdatauv(l, 16, 2);
             assert!(!p.is_null());
             assert_eq!(lua_touserdata(l, 1), p);
             assert_eq!(lua_rawlen(l, 1), 16);
@@ -259,7 +259,7 @@ fn calls_errors_and_threads() {
         // SAFETY: `l` is live for the whole closure
         unsafe {
             luaL_openlibs_for_test(l);
-            lua_pushcclosure(l, c_double, 0);
+            luna_capi_lua_pushcclosure(l, c_double, 0);
             luna_capi_lua_setglobal(l, c"double".as_ptr());
             assert_eq!(run(l, c"return double(21)"), LUA_OK);
             assert_eq!(lua_tointegerx(l, -1, std::ptr::null_mut()), 42);
@@ -274,7 +274,7 @@ fn calls_errors_and_threads() {
                 ),
                 LUA_OK
             );
-            let co = lua_newthread(l);
+            let co = luna_capi_lua_newthread(l);
             lua_pushvalue(l, 1);
             lua_xmove(l, co, 1);
             lua_pushinteger(co, 1);

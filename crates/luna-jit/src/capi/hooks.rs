@@ -94,7 +94,8 @@ fn run_c_hook(vm: &mut Vm, cf: *const (), event: &[u8], line: Option<i64>) -> Re
         0
     } else {
         let mut api = Api { vm: &mut *vm, l };
-        super::debug::encode_ref(&mut api, l, level)
+        // no memory to keep the reference: the hook sees no level
+        super::debug::encode_ref(&mut api, l, level).unwrap_or(0)
     };
     ar.set_level_ref(raw);
     let lua = matches!(
@@ -174,19 +175,21 @@ pub(super) fn calling_from_hook(api: &mut Api) -> bool {
 
 /// The registry's table of the Lua hooks C hooks displaced, by thread
 /// (PUC's `HOOKKEY` table).
-fn hook_table(vm: &mut Vm) -> Gc<luna_core::runtime::Table> {
+fn hook_table(vm: &mut Vm) -> Result<Gc<luna_core::runtime::Table>, LuaError> {
     let reg = vm.host_registry();
-    let key = Value::Str(vm.heap.intern(b"_HOOKKEY"));
+    let key = vm.host_str(b"_HOOKKEY")?;
     if let Value::Table(t) = reg.get(key) {
-        return t;
+        return Ok(t);
     }
-    let t = vm.heap.new_table();
-    // SAFETY: `reg` is the registry, a root; the borrow covers one store of
-    // a string key, which does not collect
-    let r = unsafe { reg.as_mut() }.set(&mut vm.heap, key, Value::Table(t));
-    debug_assert!(r.is_ok(), "a string key");
-    vm.heap.barrier_back(reg);
-    t
+    let t = vm.host_new_table(0, 0)?;
+    vm.host_raw_set(reg, key, Value::Table(t))?;
+    Ok(t)
+}
+
+/// The entry of thread `thread` in the hook table; nil when there is none
+/// or the table cannot be made (no Lua hook was displaced then).
+fn hook_table_get(vm: &mut Vm, thread: Value) -> Value {
+    hook_table(vm).map_or(Value::Nil, |t| t.get(thread))
 }
 
 fn is_lua_hook(f: Option<Value>) -> bool {
@@ -227,21 +230,19 @@ pub unsafe extern "C" fn lua_sethook(
             if is_lua_hook(old.func) {
                 old.func
             } else {
-                let t = hook_table(api.vm);
-                match t.get(thread) {
+                match hook_table_get(api.vm, thread) {
                     v @ (Value::Closure(_) | Value::Native(_)) => Some(v),
                     _ => Some(Value::LightUserdata(f as *const ())),
                 }
             }
         }
         Some(f) => {
-            if let Some(lua) = old.func.filter(|_| is_lua_hook(old.func)) {
-                let t = hook_table(api.vm);
-                // SAFETY: the hook table is reachable from the registry, a
-                // root; the borrow covers one store, which does not collect
-                let r = unsafe { t.as_mut() }.set(&mut api.vm.heap, thread, lua);
-                debug_assert!(r.is_ok(), "a thread key");
-                api.vm.heap.barrier_back(t);
+            // when memory runs out the displaced Lua hook is not kept: the
+            // function cannot raise
+            if let Some(lua) = old.func.filter(|_| is_lua_hook(old.func))
+                && let Ok(t) = hook_table(api.vm)
+            {
+                let _ = api.vm.host_raw_set(t, thread, lua);
             }
             Some(Value::LightUserdata(f as *const ()))
         }
@@ -367,7 +368,7 @@ pub unsafe extern "C" fn luna_capi_hookf(L: *mut LuaState, ar: *mut c_void) {
     let state = api.vm.host_hook_state(co);
     let f = match state.func {
         f @ Some(Value::Closure(_) | Value::Native(_)) => f,
-        _ => match hook_table(api.vm).get(Value::Coro(co)) {
+        _ => match hook_table_get(api.vm, Value::Coro(co)) {
             f @ (Value::Closure(_) | Value::Native(_)) => Some(f),
             _ => None,
         },
@@ -386,7 +387,7 @@ pub unsafe extern "C" fn luna_capi_hookf(L: *mut LuaState, ar: *mut c_void) {
     ];
     let event = usize::try_from(d.event()).ok().and_then(|e| names.get(e));
     let Some(event) = event else { return };
-    let name = api.str(event);
+    let name = or_raise!(api, api.str(event));
     let line = d.currentline();
     let line = if line >= 0 {
         Value::Int(i64::from(line))

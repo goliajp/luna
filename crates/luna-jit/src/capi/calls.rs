@@ -31,14 +31,28 @@ fn set_cont(api: &mut Api, cont: Option<Cont>) {
     }
 }
 
+/// The function below the top `n` values, its C stack index, and the
+/// values. They stay on the stack while the call runs, as PUC keeps them in
+/// the callee's frame, so they stay rooted; the results replace them.
+fn call_operands(api: &mut Api, n: usize) -> (usize, Value, Vec<Value>) {
+    let base = api.base();
+    let top = api.top();
+    let from = top.saturating_sub(n).max(base);
+    let args = api.stack()[from..top].to_vec();
+    if from > base {
+        (from - 1, api.stack()[from - 1], args)
+    } else {
+        (from, Value::Nil, args)
+    }
+}
+
 /// PUC `lua_callk`: call the function below the top `nargs` values,
 /// leaving `nresults` results (-1: all). With `k` and a thread that can
 /// yield, a yield inside the call leaves the C function; the resume runs
 /// `k` once the call returns.
 pub(super) fn callk(api: &mut Api, nargs: c_int, nresults: c_int, k: Option<KFn>, ctx: isize) {
     let n = usize::try_from(nargs).unwrap_or(0);
-    let args = api.pop_n(n);
-    let f = api.pop();
+    let (at, f, args) = call_operands(api, n);
     let spec = match k {
         Some(k) => {
             set_cont(
@@ -46,7 +60,7 @@ pub(super) fn callk(api: &mut Api, nargs: c_int, nresults: c_int, k: Option<KFn>
                 Some(Cont {
                     k: Some(k),
                     ctx,
-                    wait: Wait::Call { nresults },
+                    wait: Wait::Call { nresults, at },
                 }),
             );
             cont_spec(api)
@@ -62,9 +76,10 @@ pub(super) fn callk(api: &mut Api, nargs: c_int, nresults: c_int, k: Option<KFn>
             if spec.is_some() {
                 set_cont(api, None);
             }
-            push_results(api.thread(), vals, nresults);
             let co = api.thread();
-            api.vm.heap.barrier_back(co);
+            if let Err(e) = push_results(api.vm, co, at, vals, nresults) {
+                api.raise(e);
+            }
         }
         Err(_) if api.vm.host_yielding() => api.g().raised = LUA_YIELD,
         Err(e) => {
@@ -89,16 +104,10 @@ pub(super) fn pcallk(
 ) -> c_int {
     let n = usize::try_from(nargs).unwrap_or(0);
     if api.top() - api.base() < n + 1 {
-        let s = api.str(b"not enough values on stack");
-        api.push(s);
-        return LUA_ERRRUN;
+        return api.push_status(b"not enough values on stack", LUA_ERRRUN);
     }
-    // the handler's index is resolved before the function and arguments
-    // are popped
     let handler = (msgh != 0).then(|| api.get_or_nil(msgh));
-    let args = api.pop_n(n);
-    let f = api.pop();
-    let at = api.top();
+    let (at, f, args) = call_operands(api, n);
     let mut pargs = Vec::with_capacity(n + 2);
     pargs.push(f);
     pargs.extend(handler);
@@ -346,7 +355,13 @@ pub unsafe extern "C" fn lua_cpcall(
 ) -> c_int {
     // SAFETY: the caller's contract
     let mut api = unsafe { Api::new(L) };
-    let f = new_c_closure(&mut api, func, 0);
+    let f = match super::push::new_c_closure(&mut api, func, 0) {
+        Ok(f) => f,
+        Err(e) => {
+            api.push(e.0);
+            return LUA_ERRMEM;
+        }
+    };
     api.push(f);
     api.push(Value::LightUserdata(ud.cast_const().cast()));
     pcallk(&mut api, 1, 0, 0, None, 0)
@@ -450,32 +465,4 @@ pub unsafe extern "C" fn luna_capi_error_prepare(L: *mut LuaState) {
         api.push(Value::Nil);
     }
     api.g().err_from = L;
-}
-
-/// A C closure of `f` with `n` upvalues popped from the stack (PUC
-/// `lua_pushcclosure`), not yet pushed. In 5.1 it takes the environment
-/// of the running C function, or the thread's globals.
-pub(super) fn new_c_closure(api: &mut Api, f: LuaCFunction, n: usize) -> Value {
-    let ups = api.pop_n(n);
-    let env = if api.version() == LuaVersion::Lua51 {
-        match api.running_c().map(|nc| nc.upvals[1]) {
-            Some(Value::Table(t)) => Value::Table(t),
-            _ => Value::Table(api.thread_globals()),
-        }
-    } else {
-        Value::Nil
-    };
-    let mut upvals = Vec::with_capacity(api::C_UPVALS + n);
-    upvals.push(Value::LightUserdata(f as *const ()));
-    upvals.push(env);
-    upvals.extend(ups);
-    let trampoline: luna_core::runtime::value::NativeFn = ccall::capi_trampoline;
-    // from 5.2 on a C function without upvalues is a light C function,
-    // equal to every other push of the same pointer
-    if n == 0 && api.version() >= LuaVersion::Lua52 {
-        return api.vm.host_light_fn(f as usize, |vm| {
-            vm.native_with(trampoline, upvals.into_boxed_slice())
-        });
-    }
-    api.vm.native_with(trampoline, upvals.into_boxed_slice())
 }

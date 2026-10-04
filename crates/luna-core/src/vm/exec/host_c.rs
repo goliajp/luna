@@ -13,6 +13,7 @@
 use super::*;
 use crate::vm::callstack::NativeAct;
 
+mod alloc;
 mod block;
 mod debug;
 mod libs;
@@ -21,6 +22,8 @@ mod threads;
 mod values;
 pub use block::HostBlock;
 pub use debug::{HostAr, HostHookFn, HostLevel};
+pub use libs::HostOpenError;
+pub use load::HostLoadError;
 pub use values::{HOST_OP_BNOT, HOST_OP_UNM};
 
 /// The C API's side of a [`ContKind::Host`] continuation.
@@ -94,8 +97,18 @@ impl Vm {
 
     /// A new thread with no function yet (PUC `lua_newthread`): the first
     /// resume takes the function from the thread's C stack.
-    pub fn host_new_thread(&mut self) -> Gc<Coro> {
-        self.new_coro(Value::Nil)
+    pub fn host_new_thread(&mut self) -> Result<Gc<Coro>, LuaError> {
+        let globals = self.globals;
+        let co = self.retry_oom(|vm| vm.heap.try_new_coro(Value::Nil, globals))?;
+        // a new thread inherits the creator's C hook, as `new_coro` gives it
+        if matches!(self.hook.func, Some(Value::LightUserdata(_))) {
+            let mut h = self.hook;
+            h.rust_func = None;
+            h.count_left = h.count_base;
+            // SAFETY: `co` was just allocated and nothing else refers to it
+            unsafe { co.as_mut() }.hook = h;
+        }
+        Ok(co)
     }
 
     /// Set the function a thread made by [`Vm::host_new_thread`] runs.
@@ -125,13 +138,17 @@ impl Vm {
     /// The function the C API made for the light C function `key`, made
     /// with `make` the first time (5.2+'s functions without upvalues, which
     /// PUC compares by their C pointer). It lives as long as the Vm.
-    pub fn host_light_fn(&mut self, key: usize, make: impl FnOnce(&mut Vm) -> Value) -> Value {
+    pub fn host_light_fn(
+        &mut self,
+        key: usize,
+        make: impl FnOnce(&mut Vm) -> Result<Value, LuaError>,
+    ) -> Result<Value, LuaError> {
         if let Some(&v) = self.host_light.get(&key) {
-            return v;
+            return Ok(v);
         }
-        let v = make(self);
+        let v = make(self)?;
         self.host_light.insert(key, v);
-        v
+        Ok(v)
     }
 
     /// The native running on top of the dispatch chain.
@@ -332,13 +349,13 @@ impl Vm {
         let Value::Native(ncl) = self.stack[nc.func_slot as usize] else {
             unreachable!("a C continuation's slot holds its C function")
         };
-        self.running_natives.push_or_abort(NativeAct {
+        self.running_natives.push(NativeAct {
             nc: ncl,
             func_slot: nc.func_slot,
             nargs: 0,
             depth: self.frames.len() as u32,
             ccmt: 0,
-        });
+        })?;
         self.native_nresults = nc.nresults;
         let thread = self.host_thread();
         match (hooks.resume)(self, thread, hc.token, nc.func_slot, vals) {
@@ -376,14 +393,27 @@ impl Vm {
         self.close_state();
     }
 
-    /// PUC's registry (`LUA_REGISTRYINDEX`), made on first use with the
-    /// entries `lua_newstate` puts in it: from 5.2 on the main thread and
-    /// the globals (5.5 also `false` at index 1, which `luaL_ref` uses).
+    /// PUC's registry (`LUA_REGISTRYINDEX`). A C API state makes it with
+    /// the state ([`Vm::host_make_registry`]); a Vm that did not is given
+    /// one here, ending the process if that cannot be allocated.
     pub fn host_registry(&mut self) -> Gc<Table> {
-        if let Some(r) = self.registry {
-            return r;
+        match self.registry {
+            Some(r) => r,
+            None => self.host_make_registry().unwrap_or_else(|_| {
+                crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Table>())
+            }),
         }
-        let reg = self.heap.new_table();
+    }
+
+    /// Make the registry (PUC `init_registry`), which a C API state has
+    /// from the start, with the entries `lua_newstate` puts in it: from 5.2
+    /// on the main thread and the globals (5.5 also `false` at index 1,
+    /// which `luaL_ref` uses); a memory error when it cannot be made.
+    pub fn host_make_registry(&mut self) -> Result<Gc<Table>, LuaError> {
+        if let Some(r) = self.registry {
+            return Ok(r);
+        }
+        let reg = self.alloc_table_sized(3, 0)?;
         self.registry = Some(reg);
         let main = Value::Coro(self.host_main_thread());
         let globals = Value::Table(self.globals);
@@ -394,13 +424,13 @@ impl Vm {
         };
         for &(k, v) in entries {
             // SAFETY: `reg` was allocated above and is rooted through
-            // `self.registry`; the borrow covers one store, which does not
-            // collect
+            // `self.registry`; the borrow covers one store into the array
+            // part made above, which does not collect
             let r = unsafe { reg.as_mut() }.set_int_raw(&mut self.heap, k, v);
-            debug_assert!(r.is_ok(), "a small integer key");
+            debug_assert!(r.is_ok(), "a slot of the array part");
         }
         self.heap.barrier_back(reg);
-        reg
+        Ok(reg)
     }
 
     /// Hand one piece of a warning to the C API's warning function, if it

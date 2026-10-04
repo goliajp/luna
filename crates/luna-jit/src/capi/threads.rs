@@ -29,7 +29,8 @@ pub(super) fn thread_resuming(vm: &mut Vm, co: Gc<Coro>) {
 /// A thread was made: its state, with its copy of the main thread's extra
 /// space, is made with it.
 pub(super) fn thread_created(vm: &mut Vm, co: Gc<Coro>) {
-    state_of(vm, co);
+    // when memory runs out the state is made later, when C first asks
+    let _ = super::state::try_state_of(vm, co);
 }
 
 /// A thread the C API has seen was closed: its C frames and C stack go.
@@ -80,9 +81,7 @@ fn resume(api: &mut Api, nargs: c_int) -> (c_int, Option<c_int>) {
         } else {
             api.pop_n(n);
         }
-        let m = api.str(msg.as_bytes());
-        api.push(m);
-        return (LUA_ERRRUN, None);
+        return (api.push_status(msg.as_bytes(), LUA_ERRRUN), None);
     }
     let co = api.thread();
     let args = api.pop_n(n);
@@ -104,7 +103,7 @@ fn resume(api: &mut Api, nargs: c_int) -> (c_int, Option<c_int>) {
         Ok(vals) if co.status == CoroStatus::Suspended => {
             let lo = api.top();
             let nres = vals.len() as c_int;
-            api.push_all(&vals);
+            api.push_all_in_room(&vals);
             let s = api.st();
             let c_frame = s
                 .calls
@@ -131,13 +130,13 @@ fn resume(api: &mut Api, nargs: c_int) -> (c_int, Option<c_int>) {
             (LUA_YIELD, Some(nres))
         }
         Ok(vals) => {
-            api.push_all(&vals);
+            api.push_all_in_room(&vals);
             (LUA_OK, Some(api.gettop()))
         }
         Err(e) => {
             if let Some((f, args)) = start {
                 api.push(f);
-                api.push_all(&args);
+                api.push_all_in_room(&args);
             }
             api.push(e.0);
             api.push(e.0);
@@ -202,21 +201,24 @@ pub unsafe extern "C" fn luna_resume_51(L: *mut LuaState, nargs: c_int) -> c_int
     resume(&mut api, nargs).0
 }
 
+c_exports! {
+    lua_newthread => luna_c_lua_newthread,
+}
+
 /// PUC `lua_newthread`: push a new thread and return its `lua_State`. It
 /// shares `L`'s globals (5.1) and C hook, and its extra space starts as a
 /// copy of the main thread's.
 ///
 /// # Safety
-/// `L` is a live thread of an open state, and no API call on it is running
-/// other than a C function it is calling into.
-// SAFETY: no other item in the link is named `lua_newthread`: the host
-// does not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
+/// `L` is a live thread of an open state, the innermost API call on it;
+/// called by the C wrapper, which throws what this raises.
+// SAFETY: no other item in the link is named `luna_capi_lua_newthread`; the
+// C wrapper is its only caller
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lua_newthread(L: *mut LuaState) -> *mut LuaState {
+pub unsafe extern "C" fn luna_capi_lua_newthread(L: *mut LuaState) -> *mut LuaState {
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
-    let co = api.vm.host_new_thread();
+    let co = or_raise!(api, api.vm.host_new_thread(), std::ptr::null_mut());
     api.push(Value::Coro(co));
     let globals = api.thread_globals();
     api.vm.host_set_thread_globals(co, globals);
@@ -224,7 +226,16 @@ pub unsafe extern "C" fn lua_newthread(L: *mut LuaState) -> *mut LuaState {
         let h = &api.st().hook;
         (h.func, h.mask, h.count)
     };
-    let l1 = state_of(api.vm, co);
+    // the thread is on the stack, so an emergency collection keeps it
+    let mut l1 = super::state::try_state_of(api.vm, co);
+    if l1.is_none() && api.vm.host_emergency_collect() {
+        l1 = super::state::try_state_of(api.vm, co);
+    }
+    let Some(l1) = l1 else {
+        let e = api.vm.host_mem_error();
+        api.raise(e);
+        return std::ptr::null_mut();
+    };
     let h1 = &mut st(l1).hook;
     (h1.func, h1.mask, h1.count) = (func, mask, count);
     l1

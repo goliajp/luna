@@ -9,11 +9,17 @@ const MAX_UV: c_int = i16::MAX as c_int;
 /// 5.1 `LUA_ENVIRONINDEX`.
 const ENVIRONINDEX_51: c_int = -10001;
 
+c_exports! {
+    lua_newuserdatauv => luna_c_lua_newuserdatauv,
+    lua_newuserdata => luna_c_lua_newuserdata,
+}
+
 /// Push a new userdata of `size` zeroed bytes with `nuv` nil user values;
 /// its block. In 5.1 the one user value is its environment: the running C
-/// function's, or the thread's globals outside any.
+/// function's, or the thread's globals outside any. A memory error is
+/// raised (and null returned) when it cannot be made.
 fn new_userdata(api: &mut Api, size: usize, nuv: usize) -> *mut c_void {
-    let u = api.vm.host_new_block(size, nuv);
+    let u = or_raise!(api, api.vm.host_new_block(size, nuv), std::ptr::null_mut());
     if api.version() == LuaVersion::Lua51 {
         let env = api.get_or_nil(ENVIRONINDEX_51);
         api.vm.host_set_uservalue(u, 1, env);
@@ -27,14 +33,13 @@ fn new_userdata(api: &mut Api, size: usize, nuv: usize) -> *mut c_void {
 /// zeroed bytes with `nuv` user values, all nil, and return its block.
 ///
 /// # Safety
-/// `L` is a live thread of an open state, and no other API call on it is
-/// running other than a C function it is calling into; `nuv` is in
-/// `0..SHRT_MAX`.
-// SAFETY: no other item in the link is named `lua_newuserdatauv`: the host
-// does not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
+/// `L` is a live thread of an open state, the innermost API call on it;
+/// `nuv` is in `0..SHRT_MAX`; called by the C wrapper, which throws what
+/// this raises.
+// SAFETY: no other item in the link is named `luna_capi_lua_newuserdatauv`;
+// the C wrapper is its only caller
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lua_newuserdatauv(
+pub unsafe extern "C" fn luna_capi_lua_newuserdatauv(
     L: *mut LuaState,
     size: usize,
     nuv: c_int,
@@ -53,12 +58,11 @@ pub unsafe extern "C" fn lua_newuserdatauv(
 /// `size` zeroed bytes and return its block.
 ///
 /// # Safety
-/// As [`lua_newuserdatauv`].
-// SAFETY: no other item in the link is named `lua_newuserdata`: the host
-// does not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
+/// As [`luna_capi_lua_newuserdatauv`].
+// SAFETY: no other item in the link is named `luna_capi_lua_newuserdata`;
+// the C wrapper is its only caller
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lua_newuserdata(L: *mut LuaState, size: usize) -> *mut c_void {
+pub unsafe extern "C" fn luna_capi_lua_newuserdata(L: *mut LuaState, size: usize) -> *mut c_void {
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
     new_userdata(&mut api, size, 1)

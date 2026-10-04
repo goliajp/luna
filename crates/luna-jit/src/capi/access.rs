@@ -288,38 +288,32 @@ pub unsafe extern "C" fn lua_toboolean(L: *mut LuaState, idx: c_int) -> c_int {
     c_int::from(api.get(idx).is_some_and(|v| v.truthy()))
 }
 
-/// `lua_tolstring`'s work: a number at `idx` is converted in place.
-pub(super) fn tolstring(api: &mut Api, idx: c_int) -> Option<(*const c_char, usize)> {
-    let s = match api.get(idx)? {
-        Value::Str(s) => s,
-        v @ (Value::Int(_) | Value::Float(_)) => {
+/// `lua_tolstring`'s work: a number at `idx` is converted in place; a
+/// memory error when the string cannot be made.
+pub(super) fn tolstring(
+    api: &mut Api,
+    idx: c_int,
+) -> Result<Option<(*const c_char, usize)>, LuaError> {
+    let s = match api.get(idx) {
+        Some(Value::Str(s)) => s,
+        Some(v @ (Value::Int(_) | Value::Float(_))) => {
             let text = api.vm.host_basic_text(v);
-            let s = api.vm.heap.intern(&text);
+            let Value::Str(s) = api.vm.host_str(&text)? else {
+                unreachable!("a string value");
+            };
             api.set(idx, Value::Str(s));
             s
         }
-        _ => return None,
+        _ => return Ok(None),
     };
-    Some((s.as_c_ptr(), s.len()))
+    Ok(Some((s.as_c_ptr(), s.len())))
 }
 
-/// PUC `lua_tolstring`: the string at `idx` (a number there becomes one),
-/// valid while the value stays on the stack; null for other values.
+/// Write the length of `r` to `len` (unless null) and return its pointer.
 ///
 /// # Safety
-/// As [`lua_type`]; `len` is null or writable.
-// SAFETY: no other item in the link is named `lua_tolstring`: the host does
-// not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lua_tolstring(
-    L: *mut LuaState,
-    idx: c_int,
-    len: *mut usize,
-) -> *const c_char {
-    // SAFETY: the caller's contract (# Safety)
-    let mut api = unsafe { Api::new(L) };
-    let r = tolstring(&mut api, idx);
+/// `len` is null or writable.
+unsafe fn out_len(r: Option<(*const c_char, usize)>, len: *mut usize) -> *const c_char {
     if !len.is_null() {
         // SAFETY: `len` is non-null and writable (# Safety)
         unsafe { *len = r.map_or(0, |(_, n)| n) };
@@ -327,10 +321,44 @@ pub unsafe extern "C" fn lua_tolstring(
     r.map_or(std::ptr::null(), |(p, _)| p)
 }
 
-/// `lua_tolstring` for the C side.
+c_exports! {
+    lua_tolstring => luna_c_lua_tolstring,
+    lua_tostring => luna_c_lua_tostring,
+}
+
+/// PUC `lua_tolstring`: the string at `idx` (a number there becomes one),
+/// valid while the value stays on the stack; null for other values.
 ///
 /// # Safety
-/// As [`lua_tolstring`].
+/// `L` is a live thread of an open state, the innermost API call on it;
+/// `len` is null or writable; called by the C wrapper, which throws what
+/// this raises.
+// SAFETY: no other item in the link is named `luna_capi_lua_tolstring`; the
+// C wrapper is its only caller
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_capi_lua_tolstring(
+    L: *mut LuaState,
+    idx: c_int,
+    len: *mut usize,
+) -> *const c_char {
+    // SAFETY: the caller's contract (# Safety)
+    let mut api = unsafe { Api::new(L) };
+    let r = match tolstring(&mut api, idx) {
+        Ok(r) => r,
+        Err(e) => {
+            api.raise(e);
+            None
+        }
+    };
+    // SAFETY: `len` is null or writable (# Safety)
+    unsafe { out_len(r, len) }
+}
+
+/// `lua_tolstring` for the C side's panic function, which runs outside any
+/// error boundary: a string that cannot be made gives null.
+///
+/// # Safety
+/// `L` is a live thread of an open state; `len` is null or writable.
 // SAFETY: no other item in the link is named `luna_capi_tolstring`; the C
 // side is its only caller
 #[unsafe(no_mangle)]
@@ -340,19 +368,21 @@ pub unsafe extern "C" fn luna_capi_tolstring(
     len: *mut usize,
 ) -> *const c_char {
     // SAFETY: the caller's contract (# Safety)
-    unsafe { lua_tolstring(L, idx, len) }
+    let mut api = unsafe { Api::new(L) };
+    let r = tolstring(&mut api, idx).unwrap_or(None);
+    // SAFETY: `len` is null or writable (# Safety)
+    unsafe { out_len(r, len) }
 }
 
 /// `lua_tolstring(L, idx, NULL)`: the headers make `lua_tostring` the macro
 /// PUC has; this is for callers that bind it by name.
 ///
 /// # Safety
-/// As [`lua_type`].
-// SAFETY: no other item in the link is named `lua_tostring`: the host does
-// not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
+/// As [`luna_capi_lua_tolstring`].
+// SAFETY: no other item in the link is named `luna_capi_lua_tostring`; the C
+// wrapper is its only caller
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lua_tostring(L: *mut LuaState, idx: c_int) -> *const c_char {
+pub unsafe extern "C" fn luna_capi_lua_tostring(L: *mut LuaState, idx: c_int) -> *const c_char {
     // SAFETY: the caller's contract (# Safety)
-    unsafe { lua_tolstring(L, idx, std::ptr::null_mut()) }
+    unsafe { luna_capi_lua_tolstring(L, idx, std::ptr::null_mut()) }
 }

@@ -4,6 +4,7 @@
 use super::ccall::{take_error, with_c};
 use super::*;
 use luna_core::runtime::LuaClosure;
+use luna_core::vm::exec::host_c::HostLoadError;
 
 /// PUC `lua_Reader`.
 pub type LuaReader =
@@ -67,11 +68,17 @@ fn load(
     }
     // 5.5's parser anchors its work in a table on the stack, under what
     // the reader may push
-    if v >= LuaVersion::Lua55 {
-        let t = Value::Table(api.vm.heap.new_table());
-        api.push(t);
-    }
-    let r = read_and_compile(api, reader, data, mode.as_deref(), &name);
+    let r = if v >= LuaVersion::Lua55 {
+        match api.vm.host_new_table(0, 0) {
+            Ok(t) => {
+                api.push(Value::Table(t));
+                read_and_compile(api, reader, data, mode.as_deref(), &name)
+            }
+            Err(e) => Err((LUA_ERRMEM, e.0)),
+        }
+    } else {
+        read_and_compile(api, reader, data, mode.as_deref(), &name)
+    };
     if v >= LuaVersion::Lua52 {
         api.vm.host_nny_leave();
     }
@@ -180,7 +187,10 @@ fn check_mode(api: &mut Api, mode: Option<&[u8]>, binary: bool) -> Result<(), Fa
     let mut msg = format!("attempt to load a {kind} chunk (mode is '").into_bytes();
     msg.extend_from_slice(mode);
     msg.extend_from_slice(b"')");
-    Err((LUA_ERRSYNTAX, api.str(&msg)))
+    Err(match api.str(&msg) {
+        Ok(m) => (LUA_ERRSYNTAX, m),
+        Err(e) => (LUA_ERRMEM, e.0),
+    })
 }
 
 /// The function a load made, with its first upvalue set to the globals
@@ -189,17 +199,21 @@ fn check_mode(api: &mut Api, mode: Option<&[u8]>, binary: bool) -> Result<(), Fa
 /// on the first of any, to the registry's `LUA_RIDX_GLOBALS`.
 fn finish(
     api: &mut Api,
-    r: Result<(Gc<LuaClosure>, usize), (Value, bool)>,
+    r: Result<(Gc<LuaClosure>, usize), HostLoadError>,
 ) -> Result<Value, Failure> {
-    // a load that ran out of memory fails with PUC's memory error
-    let (cl, n) = r.map_err(|(e, mem)| (if mem { LUA_ERRMEM } else { LUA_ERRSYNTAX }, e))?;
+    let (cl, n) = r.map_err(|e| match e {
+        HostLoadError::Memory(v) => (LUA_ERRMEM, v),
+        HostLoadError::Syntax(v) => (LUA_ERRSYNTAX, v),
+    })?;
     let globals = match api.version() {
         LuaVersion::Lua51 => (n <= 1).then(|| Value::Table(api.thread_globals())),
         LuaVersion::Lua52 => (n == 1).then(|| api.vm.host_registry().get_int(2)),
         _ => (n >= 1).then(|| api.vm.host_registry().get_int(2)),
     };
     if let Some(g) = globals {
-        api.vm.host_set_first_upvalue(cl, g);
+        api.vm
+            .host_set_first_upvalue(cl, g)
+            .map_err(|e| (LUA_ERRMEM, e.0))?;
     }
     Ok(Value::Closure(cl))
 }
@@ -258,8 +272,8 @@ fn dump(api: &mut Api, writer: LuaWriter, data: *mut c_void, strip: bool) -> c_i
     let at = api.top();
     if v55 {
         // 5.5's dump keeps a table of the strings it wrote on the stack
-        let t = Value::Table(api.vm.heap.new_table());
-        api.push(t);
+        let t = or_raise!(api, api.vm.host_new_table(0, 0), 0);
+        api.push(Value::Table(t));
     }
     let mut status = 0;
     let mut at_byte = 0;

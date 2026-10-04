@@ -186,6 +186,22 @@ pub unsafe extern "C" fn lua_getallocf(L: *mut LuaState, ud: *mut *mut c_void) -
     }
 }
 
+/// Raise the memory error from the C side, which throws it next: a
+/// buffer the C side grows through the allocation function could not grow.
+///
+/// # Safety
+/// `L` is a live thread of an open state, the innermost API call on it;
+/// called by C code that throws what this raises.
+// SAFETY: no other item in the link is named `luna_capi_raise_mem`; the C
+// side is its only caller
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_capi_raise_mem(L: *mut LuaState) {
+    // SAFETY: the caller's contract (# Safety)
+    let mut api = unsafe { Api::new(L) };
+    let e = api.vm.host_mem_error();
+    api.raise_status(e, LUA_ERRMEM);
+}
+
 /// PUC `lua_setallocf`: every block of the state is resized and freed
 /// through `f` from now on, and new blocks come from it.
 ///

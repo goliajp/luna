@@ -4,6 +4,16 @@
 use super::*;
 use crate::vm::lib_gc::{self, PARAM_ORDER, Param};
 
+/// Why a C API load failed: a memory error (`LUA_ERRMEM`) or another one
+/// (`LUA_ERRSYNTAX`), with the error object.
+#[doc(hidden)]
+pub enum HostLoadError {
+    /// the memory error
+    Memory(Value),
+    /// a syntax or binary chunk error
+    Syntax(Value),
+}
+
 #[doc(hidden)]
 impl Vm {
     /// Make the running thread non-yieldable while a chunk is parsed (PUC
@@ -31,18 +41,32 @@ impl Vm {
 
     /// Compile or undump `src` as the chunk `chunkname` (PUC `f_parser`):
     /// the function and the number of upvalues its prototype declares, or
-    /// the error message and whether it is a memory error (`LUA_ERRMEM`).
+    /// the error.
     pub fn host_load_chunk(
         &mut self,
         src: &[u8],
         chunkname: &[u8],
-    ) -> Result<(Gc<LuaClosure>, usize), (Value, bool)> {
+    ) -> Result<(Gc<LuaClosure>, usize), HostLoadError> {
         match self.load(src, chunkname) {
             Ok(cl) => {
                 let n = cl.proto.upvals.len();
                 Ok((cl, n))
             }
-            Err(e) => Err((self.load_error_value(&e, chunkname), e.is_memory())),
+            Err(e) => Err(self.host_load_error(&e, chunkname)),
+        }
+    }
+
+    /// The error a load of `chunkname` failed with: the memory error, or
+    /// the message of any other.
+    fn host_load_error(
+        &mut self,
+        e: &crate::frontend::error::SyntaxError,
+        chunkname: &[u8],
+    ) -> HostLoadError {
+        if e.is_memory() {
+            HostLoadError::Memory(self.mem_err().0)
+        } else {
+            HostLoadError::Syntax(self.load_error_value(e, chunkname))
         }
     }
 
@@ -52,27 +76,30 @@ impl Vm {
         &mut self,
         parsed: crate::vm::exec::ParsedText,
         chunkname: &[u8],
-    ) -> Result<(Gc<LuaClosure>, usize), (Value, bool)> {
+    ) -> Result<(Gc<LuaClosure>, usize), HostLoadError> {
         match self.load_parsed(parsed, chunkname, None) {
             Ok(cl) => {
                 let n = cl.proto.upvals.len();
                 Ok((cl, n))
             }
-            Err(e) => Err((self.load_error_value(&e, chunkname), e.is_memory())),
+            Err(e) => Err(self.host_load_error(&e, chunkname)),
         }
     }
 
     /// Set the first upvalue of a function `lua_load` just made, which no
     /// other code holds yet, to `v` (PUC `lua_load`: the globals).
-    pub fn host_set_first_upvalue(&mut self, cl: Gc<LuaClosure>, v: Value) {
-        let uv = self.heap.new_upvalue(UpvalState::Closed(v));
+    /// A memory error when the upvalue cannot be made.
+    pub fn host_set_first_upvalue(&mut self, cl: Gc<LuaClosure>, v: Value) -> Result<(), LuaError> {
+        // `cl`, new since the last safe point, is kept by an emergency
+        // collection, and `v` (the globals) is a root
+        let uv = self.retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Closed(v)))?;
         // SAFETY: `cl` was made by the load that is finishing and only the
-        // caller holds it; `new_upvalue` does not collect. The borrow covers
-        // one store
+        // caller holds it; the borrow covers one store
         if let Some(slot) = unsafe { cl.as_mut() }.upvals_mut().first_mut() {
             *slot = uv;
         }
         self.heap.barrier_back(cl);
+        Ok(())
     }
 
     /// The binary chunk `lua_dump` writes for `f`: PUC bytecode of the

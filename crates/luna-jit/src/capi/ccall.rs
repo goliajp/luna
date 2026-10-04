@@ -22,8 +22,9 @@ pub(super) enum KFn {
 /// What a continuation waits for.
 #[derive(Clone, Copy)]
 pub(super) enum Wait {
-    /// the call `lua_callk` made, wanting `nresults`
-    Call { nresults: c_int },
+    /// the call `lua_callk` made, wanting `nresults`; its function was at
+    /// C stack index `at`, where the results go
+    Call { nresults: c_int, at: usize },
     /// the protected call `lua_pcallk` made: its results go on the stack
     /// from `at`, an error replaces everything from `at` on
     PCall {
@@ -158,12 +159,32 @@ pub(super) fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, L
     let cf: LuaCFunction = unsafe { std::mem::transmute::<*const (), LuaCFunction>(p) };
     let nc = vm.host_running_native().expect("the trampoline is running");
     let co = vm.host_thread();
-    let l = state_of(vm, co);
-    let args: Vec<Value> = (0..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
+    // a thread whose state could not be made when it was created gets it
+    // now; that failing is a memory error of the call
+    let mut l = super::state::try_state_of(vm, co);
+    if l.is_none() && vm.host_emergency_collect() {
+        l = super::state::try_state_of(vm, co);
+    }
+    let Some(l) = l else {
+        return Err(vm.host_mem_error());
+    };
     let base = cstack(co).len();
-    cstack(co).extend_from_slice_or_abort(&args);
+    // the arguments and PUC's `LUA_MINSTACK` free slots (the arguments are
+    // still on the Lua stack, so an emergency collection keeps them)
+    let room = nargs as usize + super::state::MINSTACK;
+    if !vm.host_reserve_cstack(co, room) {
+        return Err(vm.host_mem_error());
+    }
+    for i in 0..nargs {
+        let a = vm.nat_arg(fs, nargs, i);
+        cstack(co).push_or_abort(a);
+    }
     vm.heap.barrier_back(co);
     let s = st(l);
+    if s.calls.reserve(1).is_err() {
+        cstack(co).truncate(base);
+        return Err(vm.host_mem_error());
+    }
     s.calls.push_or_abort(CCall {
         base,
         outer_base: s.base,
@@ -247,18 +268,21 @@ fn leave(
         let top = cstack(co).len();
         if n > top - base {
             pop_call(l, co, token);
-            let s = Value::Str(
-                vm.heap
-                    .intern(b"C function returned more values than were pushed"),
-            );
-            return Err(LuaError(s));
+            let e = match vm.host_str(b"C function returned more values than were pushed") {
+                Ok(s) => LuaError(s),
+                Err(e) => e,
+            };
+            return Err(e);
         }
         let results: Vec<Value> = cstack(co)[top - n..].to_vec();
-        let closed = close_frame(vm, l, token, None).and_then(|()| return_hook(vm, co, base, n));
+        // the results go to the Lua stack while the C frame still holds
+        // them, so an emergency collection there keeps them
+        let r = close_frame(vm, l, token, None)
+            .and_then(|()| return_hook(vm, co, base, n))
+            .and_then(|()| vm.nat_ret(fs, &results));
         pop_call(l, co, token);
         let _ = nresults;
-        closed?;
-        return Ok(vm.nat_return(fs, &results));
+        return r;
     }
     let err = take_error(l);
     let closed = close_frame(vm, l, token, Some(err));
@@ -354,18 +378,27 @@ fn run_cont(
                     let c = &st(l).calls[token];
                     (c.func_slot, c.base)
                 };
-                cstack(co).extend_from_slice_or_abort(&vals);
-                let closed = close_frame(vm, l, token, None)
-                    .and_then(|()| return_hook(vm, co, base, vals.len()));
+                // the resume's values may be held by nothing else: no
+                // emergency collection runs while they go on the C stack
+                if let Err(o) = cstack(co).extend_from_slice(&vals) {
+                    pop_call(l, co, token);
+                    return Err(o.into());
+                }
+                vm.heap.barrier_back(co);
+                let r = close_frame(vm, l, token, None)
+                    .and_then(|()| return_hook(vm, co, base, vals.len()))
+                    .and_then(|()| vm.nat_ret(fs, &vals));
                 pop_call(l, co, token);
-                closed?;
-                return Ok(vm.nat_return(fs, &vals));
+                return r;
             }
-            cstack(co).extend_from_slice_or_abort(&vals);
+            if let Err(o) = cstack(co).extend_from_slice(&vals) {
+                pop_call(l, co, token);
+                return Err(o.into());
+            }
             LUA_YIELD
         }
-        Wait::Call { nresults } => {
-            push_results(co, vals, nresults);
+        Wait::Call { nresults, at } => {
+            push_results(vm, co, at, vals, nresults)?;
             LUA_YIELD
         }
         Wait::PCall {
@@ -390,12 +423,24 @@ fn run_cont(
     leave(vm, l, co, token, ret, nret)
 }
 
-/// Put a call's results on the stack, adjusted to `nresults` (-1: all).
-pub(super) fn push_results(co: Gc<Coro>, mut vals: Vec<Value>, nresults: c_int) {
+/// Put a call's results on the stack from index `at`, where its function
+/// was, adjusted to `nresults` (-1: all). The results may be held by
+/// nothing else, so no emergency collection runs: a memory error comes
+/// back when the stack cannot grow for them.
+pub(super) fn push_results(
+    vm: &mut Vm,
+    co: Gc<Coro>,
+    at: usize,
+    mut vals: Vec<Value>,
+    nresults: c_int,
+) -> Result<(), LuaError> {
     if nresults >= 0 {
         vals.resize(nresults as usize, Value::Nil);
     }
-    cstack(co).extend_from_slice_or_abort(&vals);
+    cstack(co).truncate(at);
+    cstack(co).extend_from_slice(&vals)?;
+    vm.heap.barrier_back(co);
+    Ok(())
 }
 
 /// What a protected call's `true, results...` or `false, error` leaves on
@@ -411,8 +456,12 @@ pub(super) fn pcall_outcome(
     let ok = vals.first().is_some_and(|v| v.truthy());
     if ok {
         vals.remove(0);
-        push_results(co, vals, nresults);
-        return None;
+        let Err(e) = push_results(vm, co, at, vals, nresults) else {
+            return None;
+        };
+        cstack(co).truncate(at);
+        cstack(co).push_or_abort(e.0);
+        return Some(LUA_ERRMEM);
     }
     let err = vals.get(1).copied().unwrap_or(Value::Nil);
     cstack(co).truncate(at);
