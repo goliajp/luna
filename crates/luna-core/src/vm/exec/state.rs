@@ -246,8 +246,6 @@ pub struct Vm {
     pub(crate) errerr_raised: u64,
     /// finalizer errors a 5.2/5.3 full collection raised (`LUA_ERRGCMM`)
     pub(crate) gcmm_raised: u64,
-    /// memory errors raised (`LUA_ERRMEM`)
-    pub(crate) mem_raised: u64,
     /// The C API's dispatcher of C hook functions: a thread whose hook
     /// function is a light userdata has a C hook (`lua_sethook`), which
     /// this runs; see [`super::host_c`].

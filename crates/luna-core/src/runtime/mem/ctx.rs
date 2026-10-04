@@ -98,6 +98,12 @@ pub struct MemCtx {
     /// bytes allocated and not freed, kept outside `Mode::System`
     total: Cell<usize>,
     owners: Cell<usize>,
+    /// the fixed "not enough memory" string a memory error carries (PUC
+    /// `memerrmsg`); null until the heap has made it
+    memerr: Cell<*mut crate::runtime::LuaStr>,
+    /// memory errors raised so far, for telling a memory error from a
+    /// program's error with the same text
+    oom_raised: Cell<u64>,
 }
 
 /// A handle to a [`MemCtx`], kept by each container to free and grow its
@@ -279,6 +285,30 @@ impl MemCtx {
         self.total.set(self.total.get() + n);
     }
 
+    /// Set the string memory errors carry; the heap fixes it so it is never
+    /// collected.
+    pub(crate) fn set_memerr(&self, s: crate::runtime::Gc<crate::runtime::LuaStr>) {
+        self.memerr.set(s.as_ptr());
+    }
+
+    /// A memory error is being raised: count it and give its message.
+    pub(crate) fn raise_oom(&self) -> crate::runtime::Gc<crate::runtime::LuaStr> {
+        self.oom_raised.set(self.oom_raised.get() + 1);
+        let p = self.memerr.get();
+        assert!(
+            !p.is_null(),
+            "the heap makes its memory error message first"
+        );
+        // SAFETY: `memerr` is a string the heap made and fixed, which lives
+        // as long as the heap and so as long as this context's owners
+        unsafe { crate::runtime::Gc::from_ptr(p) }
+    }
+
+    /// Memory errors raised so far.
+    pub(crate) fn oom_raised(&self) -> u64 {
+        self.oom_raised.get()
+    }
+
     /// The host function and its `ud`, when the context has one.
     pub fn raw_alloc(&self) -> Option<(RawAllocFn, *mut c_void)> {
         self.raw.get()
@@ -310,6 +340,8 @@ impl MemOwner {
             codes: kind_codes(v),
             total: Cell::new(0),
             owners: Cell::new(1),
+            memerr: Cell::new(std::ptr::null_mut()),
+            oom_raised: Cell::new(0),
         });
         MemOwner(MemRef(NonNull::from(Box::leak(ctx))))
     }

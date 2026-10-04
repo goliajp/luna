@@ -338,7 +338,7 @@ impl Heap {
 
     /// A heap whose memory comes from `mem`, hashing strings with `seed`.
     pub fn with_mem(mem: crate::runtime::mem::MemOwner, seed: u32) -> Heap {
-        Heap {
+        let mut h = Heap {
             all: ptr::null_mut(),
             fixed: ptr::null_mut(),
             fix_natives: false,
@@ -367,7 +367,9 @@ impl Heap {
             #[cfg(feature = "gc-verify")]
             recently_freed: std::collections::HashSet::new(),
             mem,
-        }
+        };
+        h.make_memerr();
+        h
     }
 
     /// The handle the heap's containers allocate through.
