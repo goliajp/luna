@@ -1,7 +1,9 @@
 /* the io library: opening, writing and reading files in every format,
    lines, seek, setvbuf, default files, closing, the errors of each, and
    what io.type and tostring say. Files whose offsets are printed are
-   binary, which Windows does not translate */
+   binary, which Windows does not translate. 5.1 hands an invalid mode to
+   fopen, whose answer is the C library's (Microsoft's aborts), so it is
+   not tried there */
 #include <stdio.h>
 #include "lua.h"
 #include "lauxlib.h"
@@ -69,7 +71,7 @@ static const char *script =
   "show(io.open(name .. '2'):read('*a'))\n"
   "show(io.open('no/such/dir/file'))\n"
   "show(pcall(io.lines, 'no/such/file'))\n"
-  "show(pcall(io.open, name, 'rw'))\n"
+  "if _VERSION ~= 'Lua 5.1' then show(pcall(io.open, name, 'rw')) end\n"
   "show(pcall(io.input, 'no/such/file'))\n"
   "show(io.stdout:close())\n"
   "show(io.type(io.stdout))\n"

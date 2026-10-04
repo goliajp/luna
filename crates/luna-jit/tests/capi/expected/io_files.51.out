@@ -29,7 +29,6 @@ false "standard output file is closed"
 "
 nil "no/such/dir/file: No such file or directory" 2
 false "bad argument #1 to '?' (no/such/file: No such file or directory)"
-true "file:file (P)"
 false "bad argument #1 to '?' (no/such/file: No such file or directory)"
 nil "cannot close standard file"
 "file"
