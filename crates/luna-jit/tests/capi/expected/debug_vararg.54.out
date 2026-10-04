@@ -1,0 +1,9 @@
+uses_dots: 1:a=1 2:n=2
+uses_dots	global	2
+no_dots: 1:a=1 2:x=x
+no_dots	string
+only_dots:
+only_dots	a	b
+outer: 1:inner=<function>
+dots in a nested function	string
+status 0 

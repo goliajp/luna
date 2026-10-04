@@ -29,6 +29,12 @@ impl<'a> Compiler<'a> {
     }
 
     pub(super) fn leave_block(&mut self) -> Result<(), SyntaxError> {
+        self.leave_block_with(true)
+    }
+
+    /// End the innermost block; `close` is false for a function's outermost
+    /// block after its final return, which closes the upvalues itself.
+    pub(super) fn leave_block_with(&mut self, close: bool) -> Result<(), SyntaxError> {
         let b = self.l().blocks.pop().expect("block underflow");
         let captured = self.lr().locals[b.first_local..].iter().any(|l| l.captured);
         // Where the block's CLOSE falls against its locals' `end_pc` is
@@ -64,7 +70,7 @@ impl<'a> Compiler<'a> {
                 self.patch_to_here(pc)?;
             }
         }
-        if captured || b.has_tbc || break_close {
+        if close && (captured || b.has_tbc || break_close) {
             self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
         }
         // record debug LocVar entries for the locals leaving scope here

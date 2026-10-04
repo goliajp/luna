@@ -9,10 +9,9 @@ impl W {
 
     fn str51(&mut self, s: Option<&[u8]>) {
         match s {
-            None => self.out.extend_from_slice(&0u64.to_le_bytes()),
+            None => self.bytes(&0u64.to_le_bytes()),
             Some(s) => {
-                self.out
-                    .extend_from_slice(&(s.len() as u64 + 1).to_le_bytes());
+                self.bytes(&(s.len() as u64 + 1).to_le_bytes());
                 self.out.extend_from_slice(s);
                 self.byte(0);
             }
@@ -30,7 +29,7 @@ impl W {
                 }
                 Value::Float(f) => {
                     self.byte(3);
-                    self.out.extend_from_slice(&f.to_le_bytes());
+                    self.bytes(&f.to_le_bytes());
                 }
                 Value::Str(s) => {
                     self.byte(4);
@@ -45,9 +44,7 @@ impl W {
     fn locals51(&mut self, p: &Out) {
         let n = self.debug_len(&p.lines);
         self.int(n as u32);
-        for &l in &p.lines[..n] {
-            self.int(l);
-        }
+        self.ints(&p.lines[..n]);
         let n = self.debug_len(&p.locvars);
         self.int(n as u32);
         for (name, start, end) in &p.locvars[..n] {
@@ -114,9 +111,9 @@ impl W {
             self.byte(size as u8);
         } else {
             self.byte(0xFF);
-            self.out.extend_from_slice(&size.to_le_bytes());
+            self.bytes(&size.to_le_bytes());
         }
-        self.out.extend_from_slice(s);
+        self.bytes(s);
     }
 
     pub(super) fn f53(&mut self, p: &Out, parent: Option<&[u8]>) {
@@ -138,11 +135,11 @@ impl W {
                 }
                 Value::Float(f) => {
                     self.byte(3);
-                    self.out.extend_from_slice(&f.to_le_bytes());
+                    self.bytes(&f.to_le_bytes());
                 }
                 Value::Int(i) => {
                     self.byte(19);
-                    self.out.extend_from_slice(&i.to_le_bytes());
+                    self.bytes(&i.to_le_bytes());
                 }
                 Value::Str(s) => {
                     self.byte(if s.len() <= 40 { 4 } else { 20 });
@@ -162,9 +159,7 @@ impl W {
         }
         let n = self.debug_len(&p.lines);
         self.int(n as u32);
-        for &l in &p.lines[..n] {
-            self.int(l);
-        }
+        self.ints(&p.lines[..n]);
         let n = self.debug_len(&p.locvars);
         self.int(n as u32);
         for (name, start, end) in &p.locvars[..n] {

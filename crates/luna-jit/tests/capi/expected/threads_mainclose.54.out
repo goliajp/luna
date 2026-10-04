@@ -1,0 +1,9 @@
+before: top=4 [1 <table> between <table>]
+__close second	nil
+__close first	nil
+close: 0 lua_status=0 after: top=0 []
+__close raises	nil
+__close ok	close raises failed
+close with error: 2 after: top=1 [close raises failed]
+close empty: 0 after: top=0 []
+still usable	2

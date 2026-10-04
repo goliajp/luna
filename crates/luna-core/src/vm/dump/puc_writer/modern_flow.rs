@@ -210,7 +210,7 @@ impl M<'_, '_> {
 
     pub(super) fn ret(&mut self, l: L) -> Res<()> {
         let (a, b) = match l.op {
-            Op::Return0 => (0, 1),
+            Op::Return0 => (self.asm.r(l.a)?, 1),
             Op::Return1 => (self.asm.r(l.a)?, 2),
             _ => (self.asm.run(l.a, l.b.saturating_sub(1).max(1))?, l.b),
         };

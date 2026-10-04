@@ -17,11 +17,6 @@ static void hook(lua_State *L, lua_Debug *ar) {
   if (!lua_getinfo(L, "nSl", ar)) printf("getinfo failed\n");
   printf("  %s", evname[ev]);
   if (ev == LUA_HOOKLINE) printf(" @%d", ar->currentline);
-  /* 5.1 names a tail-called function before its caller's level goes;
-     luna's 5.1 call hook runs after that, so the name is left out there */
-#if LUA_VERSION_NUM == 501
-  if (ev == LUA_HOOKCALL) ar->name = NULL;
-#endif
   printf(" %s:%s %s cl=%d\n", ar->what, ar->short_src, ar->name ? ar->name : "?", ar->currentline);
 }
 

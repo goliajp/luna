@@ -203,15 +203,11 @@ Differences from PUC:
   which are not C functions.
 - `lua_pushexternalstring` (5.5) copies the string and frees the external
   buffer at once instead of when the string is collected.
-- `lua_dump` calls the writer once with the whole chunk; PUC calls it
-  once per piece. `lua_load` reads a text chunk to its end before
-  parsing, so a reader is still called after a syntax error.
-- `lua_status` of a thread that died by an error is `LUA_ERRRUN` whatever
-  the error was; `lua_closethread` on the main thread only clears its
-  stack.
-- A coroutine made by Lua gets its `lua_State`, and the copy of the main
-  thread's extra space, when C first asks for it rather than at
-  `coroutine.create`.
+- `lua_dump` calls the writer once per block, as PUC's dumper of the
+  dialect does; the sizes of the blocks that hold code, constants and
+  line information follow the code luna's compiler made, which is not
+  always the same as PUC's (for example, PUC keeps `2^53` as an
+  expression where luna folds it).
 - 5.1 `lua_setfenv` stores an environment only for Lua functions with an
   environment upvalue, threads and userdata made through the C API;
   `lua_setlevel` does nothing.

@@ -125,12 +125,12 @@ impl<'s> Parser<'s> {
         self.lex.names().text(s)
     }
 
-    /// Declare locals to the goto checker.
-    pub(super) fn declare(&mut self, syms: impl IntoIterator<Item = Sym>) {
+    /// Declare variables of one kind to the goto checker.
+    pub(super) fn declare(&mut self, syms: impl IntoIterator<Item = Sym>, kind: VarKind) {
         let Parser { gotos, lex, .. } = self;
         if let Some(g) = gotos {
             for s in syms {
-                g.declare(lex.names().text(s));
+                g.declare(lex.names().text(s), kind);
             }
         }
     }

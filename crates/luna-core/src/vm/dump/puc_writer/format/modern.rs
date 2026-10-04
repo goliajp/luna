@@ -19,7 +19,7 @@ impl W {
             }
         }
         buf[9] |= 0x80;
-        self.out.extend_from_slice(&buf[10 - n..]);
+        self.bytes(&buf[10 - n..]);
     }
 
     fn str54(&mut self, s: Option<&[u8]>) {
@@ -27,7 +27,7 @@ impl W {
             None => self.var54(0),
             Some(s) => {
                 self.var54(s.len() as u64 + 1);
-                self.out.extend_from_slice(s);
+                self.bytes(s);
             }
         }
     }
@@ -60,16 +60,17 @@ impl W {
         for v in &p.consts {
             self.const_tag(v);
             match *v {
-                Value::Int(i) => self.out.extend_from_slice(&i.to_le_bytes()),
-                Value::Float(f) => self.out.extend_from_slice(&f.to_le_bytes()),
+                Value::Int(i) => self.bytes(&i.to_le_bytes()),
+                Value::Float(f) => self.bytes(&f.to_le_bytes()),
                 Value::Str(s) => self.str54(Some(s.as_bytes())),
                 _ => {}
             }
         }
         self.var54(p.upvals.len() as u64);
         for u in &p.upvals {
-            self.out
-                .extend_from_slice(&[u.in_stack as u8, u.index, u.kind]);
+            self.byte(u.in_stack as u8);
+            self.byte(u.index);
+            self.byte(u.kind);
         }
         self.var54(p.protos.len() as u64);
         for c in &p.protos {
@@ -77,7 +78,7 @@ impl W {
         }
         let (deltas, abs) = self.line_info(p);
         self.var54(deltas.len() as u64);
-        self.out.extend_from_slice(&deltas);
+        self.bytes(&deltas);
         self.var54(abs.len() as u64);
         for &(pc, line) in &abs {
             self.var54(pc as u64);
@@ -109,13 +110,18 @@ impl W {
             buf[10 - n] = (x & 0x7F) as u8 | 0x80;
             x >>= 7;
         }
-        self.out.extend_from_slice(&buf[10 - n..]);
+        self.bytes(&buf[10 - n..]);
     }
 
+    /// Zeros up to a multiple of 4 bytes, as one block when any are needed.
     fn align4(&mut self) {
-        while !self.out.len().is_multiple_of(4) {
-            self.byte(0);
+        if self.out.len().is_multiple_of(4) {
+            return;
         }
+        while !self.out.len().is_multiple_of(4) {
+            self.out.push(0);
+        }
+        self.cut();
     }
 
     pub(super) fn str55(&mut self, s: Option<&[u8]>) {
@@ -149,15 +155,16 @@ impl W {
             match *v {
                 // zig-zag: 2x for x >= 0, -2x - 1 below
                 Value::Int(i) => self.var55(((i << 1) ^ (i >> 63)) as u64),
-                Value::Float(f) => self.out.extend_from_slice(&f.to_le_bytes()),
+                Value::Float(f) => self.bytes(&f.to_le_bytes()),
                 Value::Str(s) => self.str55(Some(s.as_bytes())),
                 _ => {}
             }
         }
         self.var55(p.upvals.len() as u64);
         for u in &p.upvals {
-            self.out
-                .extend_from_slice(&[u.in_stack as u8, u.index, u.kind]);
+            self.byte(u.in_stack as u8);
+            self.byte(u.index);
+            self.byte(u.kind);
         }
         self.var55(p.protos.len() as u64);
         for c in &p.protos {
@@ -167,14 +174,12 @@ impl W {
         self.str55(source);
         let (deltas, abs) = self.line_info(p);
         self.var55(deltas.len() as u64);
-        self.out.extend_from_slice(&deltas);
+        self.bytes(&deltas);
         self.var55(abs.len() as u64);
         if !abs.is_empty() {
             self.align4();
-            for &(pc, line) in &abs {
-                self.int(pc);
-                self.int(line);
-            }
+            let pairs: Vec<u32> = abs.iter().flat_map(|&(pc, line)| [pc, line]).collect();
+            self.ints(&pairs);
         }
         let n = self.debug_len(&p.locvars);
         self.var55(n as u64);

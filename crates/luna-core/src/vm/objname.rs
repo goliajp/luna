@@ -281,7 +281,9 @@ pub(crate) fn instr_event(v: LuaVersion, op: Op) -> Option<&'static str> {
         Op::Shl if v >= LuaVersion::Lua53 => "shl",
         Op::Shr if v >= LuaVersion::Lua53 => "shr",
         Op::BNot if v >= LuaVersion::Lua53 => "bnot",
-        Op::Close | Op::Return if v >= LuaVersion::Lua54 => "close",
+        // luna keeps `Return0`/`Return1` (with `k`) where PUC's
+        // `luaK_finish` makes them `OP_RETURN` to close what is open
+        Op::Close | Op::Return | Op::Return0 | Op::Return1 if v >= LuaVersion::Lua54 => "close",
         _ => return None,
     })
 }

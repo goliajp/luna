@@ -1,0 +1,10 @@
+ret Lua f [ 1:x=p 2:y=q 3:z=pq ]
+ret C cadd [ 1:(*temporary)=3 2:(*temporary)=4 3:(*temporary)=temp 4:(*temporary)=7 5:(*temporary)=extra ]
+ret C cnone [ 1:(*temporary)=5 2:(*temporary)=6 3:(*temporary)=left ]
+ret C cself [ 1:(*temporary)=me ]
+ret C type [ 1:(*temporary)=pq 2:(*temporary)=string ]
+ret C rawequal [ 1:(*temporary)=1 2:(*temporary)=two 3:(*temporary)=false ]
+ret C select [ 1:(*temporary)=# 2:(*temporary)=2 3:(*temporary)=3 4:(*temporary)=2 ]
+ret Lua g [ 1:p=1 2:n=2 ]
+ret main ? [ 1:a=1 2:b=two 3:f=<function> 4:g=<function> 5:r1=pq 6:r2=7 7:r3=extra 8:r4=me 9:r5=string 10:r6=false ]
+status 0

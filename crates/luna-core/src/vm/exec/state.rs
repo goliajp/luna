@@ -253,6 +253,14 @@ pub struct Vm {
     pub(crate) errerr_raised: u64,
     /// finalizer errors a 5.2/5.3 full collection raised (`LUA_ERRGCMM`)
     pub(crate) gcmm_raised: u64,
+    /// memory errors raised (`LUA_ERRMEM`)
+    pub(crate) mem_raised: u64,
+    /// the running native fired its own return hook (a C function of the C
+    /// API, whose values live on its C stack): its return skips the hook
+    pub(crate) native_ret_hooked: bool,
+    /// the call hook of the Lua function a 5.1–5.3 tail call is entering
+    /// already ran, before the caller's frame went (see `tail_call_hook`)
+    pub(crate) tail_hook_fired: bool,
     /// The value the last `xpcall` handler produced for the error in
     /// flight, so the unwind that carries it to the `xpcall` does not
     /// run the handler again.

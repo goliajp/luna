@@ -104,7 +104,7 @@ pub(super) fn pcallk(
     pargs.extend(handler);
     pargs.extend(args);
     let pf = api.vm.host_protected_fn(handler.is_some());
-    let errerr_before = api.vm.host_errerr_count();
+    let errerr_before = api.vm.special_errors();
     let spec = match k {
         Some(k) => {
             let wait = Wait::PCall {

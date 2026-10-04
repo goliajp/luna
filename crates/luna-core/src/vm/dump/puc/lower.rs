@@ -410,7 +410,7 @@ impl Lowering {
         let b = self.byte(b, "RETURN B")?;
         let a = self.run(a, b.saturating_sub(1).max(1))?;
         self.emit(match b {
-            1 => enc_abc(Op::Return0, 0, 0, 0, false)?,
+            1 => enc_abc(Op::Return0, a, 0, 0, false)?,
             2 => enc_abc(Op::Return1, a, 0, 0, false)?,
             _ => enc_abc(Op::Return, a, b, 0, false)?,
         });

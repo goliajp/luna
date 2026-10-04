@@ -47,6 +47,16 @@ pub(crate) fn dump_puc(proto: &Proto, strip: bool, version: LuaVersion) -> Resul
     puc_writer::dump(proto, strip, version)
 }
 
+/// [`dump_puc`], with the size of each block the dialect's `ldump.c`
+/// hands its writer separately.
+pub(crate) fn dump_puc_blocks(
+    proto: &Proto,
+    strip: bool,
+    version: LuaVersion,
+) -> Result<(Vec<u8>, Vec<usize>), String> {
+    puc_writer::dump_blocks(proto, strip, version)
+}
+
 /// True when `bytes` is a binary chunk (luna or PUC) — only the escape
 /// byte is needed to disambiguate from source. Matches PUC's
 /// `lua_load`-side "starts with `\x1b`?" check.

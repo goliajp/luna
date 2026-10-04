@@ -1,0 +1,13 @@
+runtime error: status=2 lua_status=2 top: boom
+  again: lua_status=2
+memory error: status=4 lua_status=4 top: not enough memory
+  again: lua_status=4
+memory error caught inside: status=0 lua_status=0 top: not enough memory
+  again: lua_status=0
+returned: status=0 lua_status=0 top: done
+  again: lua_status=0
+finalizer error: status=5 lua_status=5 top: error in __gc metamethod (in gc)
+  again: lua_status=5
+coroutine.resume	false	not enough memory
+coroutine.status	dead
+pcall: status=4 not enough memory

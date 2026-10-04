@@ -192,13 +192,13 @@ impl<'s> Parser<'s> {
             self.new_local()?;
             self.activate_locals()?;
             self.add_local_51(name.sym);
-            self.declare([name.sym]);
+            self.declare([name.sym], VarKind::Local);
             let body = self.func_body(line)?;
             return Ok(self.push_stat(Stat::LocalFunction { name, body }));
         }
         let (collective, names, exprs) = self.attnamelist()?;
         self.activate_locals()?;
-        self.declare_attrib_names(names);
+        self.declare_attrib_names(names, collective, false);
         for i in names.range() {
             self.add_local_51(self.chunk.attrib_name_lists[i].name.sym);
         }
@@ -214,7 +214,7 @@ impl<'s> Parser<'s> {
         if self.accept(Token::Function)? {
             let line = self.prev_line;
             let name = self.expect_name()?;
-            self.declare([name.sym]);
+            self.declare([name.sym], VarKind::Global);
             let body = self.func_body(line)?;
             return Ok(self.push_stat(Stat::GlobalFunction { name, body }));
         }
@@ -222,7 +222,7 @@ impl<'s> Parser<'s> {
         let leading = self.attrib()?;
         if self.accept(Token::Star)? {
             self.goto_step(|g| {
-                g.declare("*");
+                g.declare("*", VarKind::Global);
                 Ok(())
             })?;
             return Ok(self.push_stat(Stat::GlobalAll { attrib: leading }));
@@ -243,7 +243,7 @@ impl<'s> Parser<'s> {
             List::EMPTY
         };
         // the declared names come into scope after their initializers
-        self.declare_attrib_names(names);
+        self.declare_attrib_names(names, leading, true);
         Ok(self.push_stat(Stat::Global {
             collective: leading,
             names,
@@ -283,6 +283,19 @@ impl<'s> Parser<'s> {
                 Expr::Name(_) | Expr::Index { .. }
             ) {
                 return Err(self.error("syntax error"));
+            }
+            // PUC `restassign` checks each target as it reaches the ',' or
+            // '=' after it
+            if let Expr::Name(n) = self.chunk.exprs[last.0 as usize]
+                && self
+                    .gotos
+                    .as_ref()
+                    .is_some_and(|g| g.is_const_local(self.lex.names().text(n.sym)))
+            {
+                let text = self.text(n.sym).to_owned();
+                return Err(
+                    self.plain_error(format!("attempt to assign to const variable '{text}'"))
+                );
             }
             if !self.accept(Token::Comma)? {
                 break;

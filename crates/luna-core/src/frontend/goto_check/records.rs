@@ -34,6 +34,18 @@ pub(super) struct Open {
     pub(super) entry: Option<usize>,
 }
 
+/// What an active variable is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VarKind {
+    /// a local that can be assigned
+    Local,
+    /// a read-only local (`<const>`, `<close>`, 5.5's loop control variables
+    /// and named `...` parameter)
+    Const,
+    /// a 5.5 global declaration, or `global *`
+    Global,
+}
+
 impl GotoCheck {
     /// The checker for dialects with goto (5.2+), in the vectors of an
     /// earlier one when given.
@@ -45,6 +57,7 @@ impl GotoCheck {
             v54: false,
             v55: false,
             actvar: Vec::new(),
+            kinds: Vec::new(),
             names: String::new(),
             labels: Vec::new(),
             pending: Vec::new(),
@@ -61,6 +74,7 @@ impl GotoCheck {
     /// Forget everything, keeping the vectors.
     fn clear(&mut self) {
         self.actvar.clear();
+        self.kinds.clear();
         self.names.clear();
         self.labels.clear();
         self.pending.clear();

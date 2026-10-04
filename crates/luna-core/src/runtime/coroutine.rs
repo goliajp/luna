@@ -22,6 +22,21 @@ pub enum CoroStatus {
     Dead,
 }
 
+/// How a thread that died by an error failed, which the C API reports as
+/// its status (PUC keeps the error status in `L->status`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ErrorStatus {
+    /// any other error (`LUA_ERRRUN`)
+    #[default]
+    Run,
+    /// a memory error (`LUA_ERRMEM`)
+    Mem,
+    /// a message handler failed (`LUA_ERRERR`)
+    Err,
+    /// a finalizer failed in a 5.2/5.3 collection (`LUA_ERRGCMM`)
+    Gcmm,
+}
+
 /// A Lua coroutine (`thread`) — one independent execution context plus its
 /// saved value/frame stacks and resume linkage.
 #[repr(C)]
@@ -42,6 +57,8 @@ pub struct Coro {
     /// the error object a coroutine died with (when it errored rather than
     /// returned); `coroutine.close` reports it once, then clears it
     pub error_value: Option<Value>,
+    /// the status of the error it died with
+    pub error_status: ErrorStatus,
     /// the traceback of the coroutine at the error that killed it, taken
     /// before its frames were unwound: the text `debug.traceback(co)` returns
     /// for it (`stack traceback:` and one `\n\t` line per level), as PUC

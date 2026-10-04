@@ -21,6 +21,9 @@ impl Vm {
             // SAFETY: `co` was just allocated and nothing else refers to it
             unsafe { co.as_mut() }.hook = h;
         }
+        if let Some(h) = self.host_cont_hooks {
+            (h.created)(self, co);
+        }
         co
     }
 
