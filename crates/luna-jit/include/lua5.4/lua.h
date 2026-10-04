@@ -116,7 +116,14 @@ typedef void (*lua_Hook) (lua_State *L, lua_Debug *ar);
 #endif
 
 /* RCS ident string */
-extern const char luna_ident_54[];
+/* data lives in the luna_jit library: a Windows host linking its DLL must
+   import it; define LUNA_STATIC when linking the static library */
+#if defined(_WIN32) && !defined(LUNA_STATIC)
+#define LUNA_DATA	extern __declspec(dllimport)
+#else
+#define LUNA_DATA	extern
+#endif
+LUNA_DATA const char luna_ident_54[];
 #define lua_ident	luna_ident_54
 
 /* state manipulation */

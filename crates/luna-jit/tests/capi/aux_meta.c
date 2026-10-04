@@ -197,16 +197,16 @@ int main(void) {
   r = luaL_execresult(L, 0);
   show_from(L, "execresult 0", 1);
   lua_settop(L, 0);
-#if !defined(_WIN32)
+  /* exit code 3 as the C library's system() reports it (a POSIX wait
+     status, a plain code on Windows); signals are in aux_posix */
   errno = 0;
+#if defined(_WIN32)
+  r = luaL_execresult(L, 3);
+#else
   r = luaL_execresult(L, 3 << 8);
+#endif
   show_from(L, "execresult 3", 1);
   lua_settop(L, 0);
-  errno = 0;
-  r = luaL_execresult(L, 9);
-  show_from(L, "execresult signal", 1);
-  lua_settop(L, 0);
-#endif
   errno = 0;
   r = luaL_execresult(L, -1);
   printf("execresult -1 n=%d top=%d first=%s\n", r, lua_gettop(L), luaL_typename(L, 1));
