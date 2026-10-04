@@ -53,17 +53,17 @@ pub struct Vm {
     pub(super) parse_scratch: crate::frontend::parser::ParseScratch,
     /// the compiler's vectors, kept from one load to the next
     pub(super) compile_scratch: crate::compiler::CompileScratch,
-    pub(crate) warn_buf: Vec<u8>,
+    pub(crate) warn_buf: LVec<u8>,
     /// In-process log of fully-emitted warnings (each entry = one flushed
     /// message, sans the "Lua warning: " prefix and trailing newline). Lets
     /// tests assert what was warned without scraping stderr.
-    pub(crate) warn_log: Vec<Vec<u8>>,
+    pub(crate) warn_log: LVec<LVec<u8>>,
     /// Name of the C native that just propagated an error (captured before
     /// the native is popped from `running_natives`). Lets a dying coroutine
     /// preserve `[C]: in function '<name>'` at the top of its traceback
     /// snapshot — PUC walks `luaG_funcnamefrompc` over a still-live ci, but
     /// luna's native frames are off-stack so we stash the name explicitly.
-    pub(crate) errored_natives: Vec<crate::vm::callstack::ErroredNative>,
+    pub(crate) errored_natives: LVec<crate::vm::callstack::ErroredNative>,
     /// stack of native (`Value::Native`) closures currently running on the
     /// Rust call stack. `begin_call` pushes the closure before invoking
     /// `nc.f` and pops on return. Used by `arg_error` to detect a *nested*
@@ -73,7 +73,7 @@ pub struct Vm {
     /// Each entry also records where the native sits on the value and
     /// frame stacks, so the debug interface can place it among the Lua
     /// activations as PUC's CallInfo chain would (see `callstack`).
-    pub(crate) running_natives: Vec<crate::vm::callstack::NativeAct>,
+    pub(crate) running_natives: LVec<crate::vm::callstack::NativeAct>,
     /// JIT sidecar. Always present (never `Option`); inert
     /// when `chunk_compiler` / `trace_compiler` are
     /// [`crate::jit::NullJitBackend`]. See [`crate::vm::jit_state`].
@@ -89,11 +89,11 @@ pub struct Vm {
     /// indices into this vector so the underlying `Gc<T>` stays alive
     /// across `eval` calls / yield boundaries. Freed slots are recycled
     /// through `host_roots_free`.
-    pub(crate) host_roots: Vec<crate::vm::host_roots::HostRootSlot>,
+    pub(crate) host_roots: LVec<crate::vm::host_roots::HostRootSlot>,
     /// Recycled-slot index pool. `pin_host` pops the
     /// back if non-empty, else extends `host_roots`. Generation
     /// overflow at `u32::MAX` retires the slot (NOT pushed here).
-    pub(crate) host_roots_free: Vec<u32>,
+    pub(crate) host_roots_free: LVec<u32>,
 
     /// GC-rooted scratch stack for `table.sort` (and any other
     /// builtin that needs a Rust-side `Vec<Value>` to outlive a user
@@ -103,7 +103,7 @@ pub struct Vm {
     /// here. Nested sorts push a new buffer on entry, pop on exit
     /// (sort.lua's `load(..)(); collectgarbage()` compare callback
     /// regression).
-    pub(crate) sort_scratch: Vec<Vec<Value>>,
+    pub(crate) sort_scratch: LVec<LVec<Value>>,
     /// Storages [`Vm::install_jit_storage`] replaced: code compiled into
     /// them may still be referenced by this Vm's functions, so they live
     /// as long as the Vm.
