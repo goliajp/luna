@@ -23,6 +23,10 @@ path = "src/bin/luna.rs"
 [lints]
 workspace = true
 
+[build-dependencies]
+# compiles the C half of the C API (`csrc/`)
+cc = "1"
+
 [dependencies]
 # pure-interp + JIT trait surface lives here. `version = "= 4.0.1"`
 # pins the matching luna-core release for `cargo publish` lookups when the
@@ -115,6 +119,9 @@ send = ["luna-core/send"]
 # public CPU pin API); Linux CI variance gate: ~1-2% via `taskset -c 1`.
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+# finds the C compiler the C API tests build their C hosts with (MSVC
+# included)
+cc = "1"
 
 # the Windows-only tests read the process's memory counters and drive the
 # REPL through a pseudo console

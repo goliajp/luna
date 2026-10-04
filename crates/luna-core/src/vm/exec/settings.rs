@@ -4,37 +4,70 @@
 use super::*;
 
 impl Vm {
-    /// PUC 5.4+ default warnf: emit one piece of a warning message. `to_cont`
-    /// = true indicates more pieces follow (concatenated until the first
-    /// `to_cont = false` call flushes the whole line). Mirrors
-    /// `lauxlib.c::warnfon` + `warnfcont` + `checkcontrol`:
-    ///   * If the buffer is fresh, `to_cont` is false, and the message is
-    ///     `@<word>`, treat as a control message — only `@on` / `@off` are
-    ///     recognised; any other `@…` is silently ignored.
-    ///   * Otherwise, while the state is `Off`, drop the piece; while `On`,
-    ///     accumulate, and flush to stderr + `warn_log` on the
-    ///     non-continuation call.
-    pub(crate) fn emit_warn(&mut self, msg: &[u8], to_cont: bool) {
-        if self.warn_buf.is_empty()
-            && !to_cont
-            && let Some(b'@') = msg.first().copied()
-        {
+    /// PUC 5.4+ warnf: emit one piece of a warning message, `to_cont` when
+    /// more pieces follow. The C API's warning function gets it when one
+    /// is installed (an error it raises comes back); otherwise the default
+    /// one of `lauxlib.c` handles it, a state machine of `warnfoff`,
+    /// `warnfon` and `warnfcont`:
+    ///   * a piece that starts a message, is the whole message and reads
+    ///     `@<word>` is a control message: `@on` / `@off` switch, any other
+    ///     is ignored;
+    ///   * while off, every other piece is dropped;
+    ///   * while on, a message's pieces go to stderr as they come, after
+    ///     `Lua warning: ` and followed by a newline at its last piece; the
+    ///     whole message also goes to `warn_log`.
+    pub(crate) fn emit_warn(&mut self, msg: &[u8], to_cont: bool) -> Result<(), LuaError> {
+        if let Some(r) = self.host_warn_piece(msg, to_cont) {
+            return r;
+        }
+        if !self.warn_cont && !to_cont && msg.first() == Some(&b'@') {
             match &msg[1..] {
                 b"on" => self.warn_state = WarnState::On,
                 b"off" => self.warn_state = WarnState::Off,
-                _ => {} // unknown control — silently ignored (PUC checkcontrol)
+                _ => {}
             }
-            return;
+            return Ok(());
         }
         if self.warn_state == WarnState::Off {
-            // drop continuation pieces too — PUC `warnfoff` is the trampoline
-            return;
+            return Ok(());
         }
+        use std::io::Write;
+        let mut err = std::io::stderr().lock();
+        if !self.warn_cont {
+            let _ = err.write_all(b"Lua warning: ");
+        }
+        let _ = err.write_all(msg);
         self.warn_buf.extend_from_slice(msg);
+        self.warn_cont = to_cont;
         if !to_cont {
+            let _ = err.write_all(b"\n");
             let line = std::mem::take(&mut self.warn_buf);
-            eprintln!("Lua warning: {}", String::from_utf8_lossy(&line));
             self.warn_log.push(line);
+        }
+        Ok(())
+    }
+
+    /// PUC `luaE_warnerror`: warn `error in <place> (<message>)` in five
+    /// pieces, `error object is not a string` standing for an error object
+    /// that is not a string. The collector warns this way from a finalizer
+    /// loop that has no caller to hand an error of the warning function to,
+    /// so such an error ends the warning and is dropped.
+    pub(crate) fn warn_error(&mut self, place: &str, err: Value) {
+        let msg = match err {
+            Value::Str(s) => s.as_bytes().to_vec(),
+            _ => b"error object is not a string".to_vec(),
+        };
+        let pieces: [(&[u8], bool); 5] = [
+            (b"error in ", true),
+            (place.as_bytes(), true),
+            (b" (", true),
+            (&msg, true),
+            (b")", false),
+        ];
+        for (piece, to_cont) in pieces {
+            if self.emit_warn(piece, to_cont).is_err() {
+                return;
+            }
         }
     }
 

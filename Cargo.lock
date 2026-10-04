@@ -1013,6 +1013,7 @@ dependencies = [
 name = "luna-jit"
 version = "4.0.1"
 dependencies = [
+ "cc",
  "cranelift",
  "cranelift-codegen",
  "cranelift-frontend",

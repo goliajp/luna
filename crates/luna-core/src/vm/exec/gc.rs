@@ -117,9 +117,7 @@ impl Vm {
         if let Some(e) = self.closing_err {
             roots.push(e);
         }
-        // the C API's value stack and the error a C API call raised
-        roots.extend_from_slice(&self.capi_stack);
-        roots.extend(self.capi_error);
+        roots.extend(self.host_light.values().copied());
         // Host roots — Lua-facade handles keep their referenced
         // values alive across calls/yields. Trace the whole vector;
         // unused slots (post-`unpin_all`) carry Value::Nil which the

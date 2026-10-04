@@ -17,6 +17,14 @@ pub(crate) fn nat_host_pcall_in_c(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u3
     pcall_native(vm, fs, nargs, std::hint::black_box(1))
 }
 
+/// A host's protected call with no message handler (the C API's
+/// `lua_pcallk` with no `msgh`), which, like `nat_host_xpcall`, is not a
+/// level of the stack. Natives are told apart by address, so the body must
+/// not be one the compiler can fold into `nat_pcall`'s.
+pub(crate) fn nat_host_pcall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    pcall_native(vm, fs, nargs, std::hint::black_box(2) - 1)
+}
+
 /// `first`: where the arguments for the protected function start.
 fn pcall_native(vm: &mut Vm, fs: u32, nargs: u32, first: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);

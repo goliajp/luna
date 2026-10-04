@@ -176,9 +176,11 @@ status follow the selected dialect's `lua.c`; see
 
 ## Linking from C
 
-`luna-jit` builds a `cdylib` / `staticlib` exposing a `lua.h`-compatible
-subset (`crates/luna-jit/src/capi.rs`), for C and C++ hosts that want a
-drop-in replacement for PUC.
+`luna-jit` builds a `cdylib` / `staticlib` with PUC's whole C API
+(`lua.h`, `lauxlib.h`, `lualib.h`) for each dialect, with headers in
+`crates/luna-jit/include/lua5.1` to `lua5.5`, for C and C++ hosts that
+want a drop-in replacement for PUC. Differences are listed in
+[`docs/compatibility.md`](docs/compatibility.md#c-api-surface).
 
 ## Build
 

@@ -38,9 +38,11 @@ pub(super) fn d_gethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     // `lua_sethook` drops a hook whose mask is empty; 5.1/5.2 still report
     // the function the hook table recorded for the thread
     let armed = state.call || state.ret || state.line || state.count;
+    // a C hook (`lua_sethook`) keeps its function as a light userdata
+    let external = matches!(state.func, None | Some(Value::LightUserdata(_)));
     let hook = match state.func {
+        _ if armed && external => Value::Str(vm.heap.intern(b"external hook")),
         Some(h) if armed => h,
-        None if armed => Value::Str(vm.heap.intern(b"external hook")),
         _ if v >= LuaVersion::Lua54 => return Ok(vm.nat_return(fs, &[Value::Nil])),
         Some(h) if v <= LuaVersion::Lua52 => h,
         _ => Value::Nil,

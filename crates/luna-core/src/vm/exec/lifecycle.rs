@@ -42,7 +42,7 @@ impl Vm {
             tbc: Vec::new(),
             top: 0,
             globals,
-            type_mt: [None; 5],
+            type_mt: [None; 7],
             mm_names,
             parse_scratch: Default::default(),
             compile_scratch: Default::default(),
@@ -77,13 +77,12 @@ impl Vm {
             gc_stepsize: 13,
             gc_params: crate::vm::lib_gc::GcParams::new(version),
             gc_finalizing: false,
-            capi_stack: Vec::new(),
-            capi_cstr_pin: None,
-            capi_base: 0,
-            capi_calls: 0,
-            capi_error: None,
+            host_cont_hooks: None,
+            host_warn: None,
+            host_light: std::collections::HashMap::new(),
             warn_state: WarnState::Off,
             warn_buf: Vec::new(),
+            warn_cont: false,
             warn_log: Vec::new(),
             instr_budget: None,
             bytecode_loading: true,
@@ -105,12 +104,16 @@ impl Vm {
             msgh_running: None,
             msgh_runs: 0,
             errerr_raised: 0,
+            gcmm_raised: 0,
             msgh_applied: None,
             keep_error_traceback: true,
             hook_ftransfer: 0,
             hook_ntransfer: 0,
             pending_tm: None,
             pending_is_hook: false,
+            host_hook: None,
+            hook_yield: false,
+            hook_resumed: false,
             error_traceback: None,
             public_call_depth: 0,
             running_natives: Vec::new(),
@@ -348,7 +351,7 @@ impl Vm {
     /// From 5.2 on, library functions are PUC light C functions, which are
     /// not collectable: luna keeps them off the swept list and frees them
     /// with the Vm, so a weak table never drops one. 5.1 collects them.
-    fn open_lib(&mut self, open: fn(&mut Vm)) {
+    pub(crate) fn open_lib(&mut self, open: fn(&mut Vm)) {
         self.heap.fix_natives = self.version >= LuaVersion::Lua52;
         open(self);
         self.heap.fix_natives = false;

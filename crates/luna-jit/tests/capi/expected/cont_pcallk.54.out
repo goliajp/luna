@@ -1,0 +1,41 @@
+LUA_ERRRUN=2 LUA_ERRERR=5
+-- yield then return
+resume 1: status=1 nres=2 lua_status=1 co: top=2 [y arg]
+k_pcall: status=1 ctx=9 frame: top=3 [base ok 2]
+resume 2: status=0 nres=4 lua_status=0 co: top=4 [base ok 2 1]
+-- yield then error
+resume 1: status=1 nres=1 lua_status=1 co: top=1 [y]
+k_pcall: status=2 ctx=9 frame: top=2 [base late]
+resume 2: status=0 nres=3 lua_status=0 co: top=3 [base late 2]
+-- yield then error with handler
+resume 1: status=1 nres=1 lua_status=1 co: top=1 [y]
+k_pcall: status=2 ctx=9 frame: top=3 [base <function> handled: [string "return function(a) coroutine.yield('y'); erro..."]:1: late]
+resume 2: status=0 nres=4 lua_status=0 co: top=4 [base <function> handled: [string "return function(a) coroutine.yield('y'); erro..."]:1: late 2]
+-- yield then table error with handler
+resume 1: status=1 nres=1 lua_status=1 co: top=1 [y]
+k_pcall: status=2 ctx=9 frame: top=3 [base <function> handled: table]
+resume 2: status=0 nres=4 lua_status=0 co: top=4 [base <function> handled: table 2]
+-- error without yield
+k_pcall: status=2 ctx=9 frame: top=2 [base early]
+resume 1: status=0 nres=3 lua_status=0 co: top=3 [base early 2]
+-- error without yield with handler
+k_pcall: status=2 ctx=9 frame: top=3 [base <function> handled: early]
+resume 1: status=0 nres=4 lua_status=0 co: top=4 [base <function> handled: early 2]
+-- two yields then error
+resume 1: status=1 nres=1 lua_status=1 co: top=1 [1]
+resume 2: status=1 nres=1 lua_status=1 co: top=1 [2]
+k_pcall: status=2 ctx=9 frame: top=2 [base third]
+resume 3: status=0 nres=3 lua_status=0 co: top=3 [base third 2]
+-- handler fails after yield
+resume 1: status=1 nres=1 lua_status=1 co: top=1 [y]
+k_pcall: status=5 ctx=9 frame: top=3 [base <function> error in error handling]
+resume 2: status=0 nres=4 lua_status=0 co: top=4 [base <function> error in error handling 5]
+-- handler fails without yield
+k_pcall: status=5 ctx=9 frame: top=3 [base <function> error in error handling]
+resume 1: status=0 nres=4 lua_status=0 co: top=4 [base <function> error in error handling 5]
+-- nested
+nested 1: status=1 nres=1 lua_status=1 co: top=1 [outer]
+k_outer: status=2 ctx=1 frame: top=1 [outer error]
+nested 2: status=1 nres=1 lua_status=1 co: top=1 [inner]
+k_inner: status=2 ctx=2 frame: top=2 [outer error inner error]
+nested 3: status=0 nres=2 lua_status=0 co: top=2 [outer error inner error]

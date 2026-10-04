@@ -260,6 +260,10 @@ impl Vm {
     /// register, any metamethod-bearing opcode yields "(metamethod 'event')".
     pub(super) fn call_target_varinfo(&self, bad: Value) -> String {
         use crate::vm::isa::Op;
+        // a hook's call (PUC `funcnamefromcall` on a `CIST_HOOKED` caller)
+        if self.pending_is_hook && self.version >= LuaVersion::Lua54 {
+            return " (hook '?')".to_string();
+        }
         if self.native_on_top() {
             return String::new();
         }

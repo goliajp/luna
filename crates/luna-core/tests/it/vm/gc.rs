@@ -167,7 +167,7 @@ fn gc_finalizers() {
 #[test]
 fn warn_on_gc_error_5_4_plus() {
     // PUC 5.4+ `__gc` errors are routed through warn ("warn then continue"),
-    // wrapped in `error in __gc metamethod (msg)`. No re-raise; the
+    // wrapped in `error in __gc (msg)` (`luaE_warnerror`). No re-raise; the
     // collectgarbage call succeeds.
     let mut vm = Vm::new(LuaVersion::Lua55);
     vm.eval(
@@ -184,7 +184,7 @@ fn warn_on_gc_error_5_4_plus() {
     );
     let line = String::from_utf8_lossy(&log[0]);
     assert!(
-        line.contains("error in __gc metamethod") && line.contains("@bang@"),
+        line.starts_with("error in __gc (") && line.contains("@bang@"),
         "warn line should mention both the wrapper and the inner error: {line}"
     );
 }

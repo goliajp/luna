@@ -17,6 +17,9 @@ pub(crate) enum NativeKind {
     HostXpcallInC,
     /// `Vm::call_value_in_c`: a level of the stack, no message handler
     HostPcallInC,
+    /// the C API's `lua_pcallk` without a message handler: not a level of
+    /// the stack
+    HostPcall,
     Pairs,
 }
 
@@ -25,8 +28,8 @@ impl NativeKind {
     pub(crate) fn of(f: crate::runtime::value::NativeFn) -> NativeKind {
         use crate::runtime::value::NativeFn;
         use crate::vm::builtins::{
-            nat_host_pcall_in_c, nat_host_xpcall, nat_host_xpcall_in_c, nat_pairs, nat_pcall,
-            nat_xpcall,
+            nat_host_pcall, nat_host_pcall_in_c, nat_host_xpcall, nat_host_xpcall_in_c, nat_pairs,
+            nat_pcall, nat_xpcall,
         };
         if std::ptr::fn_addr_eq(f, nat_pcall as NativeFn) {
             NativeKind::Pcall
@@ -36,6 +39,8 @@ impl NativeKind {
             NativeKind::HostXpcallInC
         } else if std::ptr::fn_addr_eq(f, nat_host_pcall_in_c as NativeFn) {
             NativeKind::HostPcallInC
+        } else if std::ptr::fn_addr_eq(f, nat_host_pcall as NativeFn) {
+            NativeKind::HostPcall
         } else if std::ptr::fn_addr_eq(f, nat_host_xpcall as NativeFn) {
             NativeKind::HostXpcall
         } else if std::ptr::fn_addr_eq(f, nat_pairs as NativeFn) {
@@ -130,7 +135,7 @@ impl Vm {
             // suspended), push a continuation frame and drive the call
             // through the interpreter loop (PUC lua_pcallk). A yield
             // inside it is preserved with the thread's saved frames.
-            NativeKind::Pcall | NativeKind::HostPcallInC => {
+            NativeKind::Pcall | NativeKind::HostPcallInC | NativeKind::HostPcall => {
                 Some(self.begin_pcall(func_slot, nargs, nresults))
             }
             // 5.1 `xpcall(f, err)` calls `f` with no arguments

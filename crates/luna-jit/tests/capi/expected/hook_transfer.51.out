@@ -1,0 +1,9 @@
+call main ? locals:
+call Lua g locals: x=x | up main line=6
+call Lua f locals: a=x b=y | up Lua line=5
+ret Lua f | up Lua line=5
+ret Lua g | up main line=6
+call C cadd locals: (*temporary)=1 (*temporary)=2 | up main line=7
+ret C cadd | up main line=7
+ret main ?
+status 0

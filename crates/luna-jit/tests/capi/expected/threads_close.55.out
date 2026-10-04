@@ -1,0 +1,25 @@
+fresh with values: close=0 lua_status=0 co: top=0 []
+yield: status=1 nres=1 lua_status=1 co: top=1 [y]
+__close	suspended	nil
+suspended: close=0 lua_status=0 co: top=0 []
+reuse: status=0 nres=2 lua_status=0 co: top=2 [reused 5]
+yield: status=1 nres=1 lua_status=1 co: top=1 [y]
+error: status=2 nres=2 lua_status=2 co: top=2 [dies dies]
+__close	dead	dies
+dead: close=2 lua_status=0 co: top=1 [dies]
+again: close=0 lua_status=0 co: top=0 []
+yield: status=1 nres=0 lua_status=1 co: top=0 []
+close errors: close=2 lua_status=0 co: top=1 [in close]
+c yield: status=1 nres=1 lua_status=1 co: top=2 [junk from C]
+in C: close=0 lua_status=0 co: top=0 []
+c yieldk: status=1 nres=1 lua_status=1 co: top=1 [from C k]
+in C with k: close=0 lua_status=0 co: top=0 []
+reuse after C: status=1 nres=1 lua_status=1 co: top=2 [junk from C]
+yield: status=1 nres=1 lua_status=1 co: top=1 [y]
+__close	lua close	nil
+coroutine.close	true	dead
+after Lua close: top=0 []
+resume closed: status=2 nres=-1 lua_status=0 co: top=1 [cannot resume dead coroutine]
+closing self
+__close self	nil
+close self: status=0 nres=0 lua_status=0 co: top=0 []

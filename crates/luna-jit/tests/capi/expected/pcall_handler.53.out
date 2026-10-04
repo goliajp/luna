@@ -1,0 +1,32 @@
+LUA_ERRRUN=2 LUA_ERRERR=6
+returns: status=2 top=2 type=string value=[H:boom]
+returns_table: status=2 top=2 type=table
+returns_nothing: status=2 top=2 type=nil
+returns_two: status=2 top=2 type=string value=[a]
+nonstring_err: status=2 top=2 type=string value=[table]
+nil_err: status=2 top=2 type=string value=[nil]
+runtime_err: status=2 top=2 type=string value=[H:[string "return function() local t = nil; return t.x e..."]:1: attempt to index a nil value (local 't')]
+args: status=2 top=2 type=string value=[H:3]
+always_errors: status=6 top=2 type=string value=[error in error handling]
+errors_once: status=2 top=2 type=string value=[H2:again]
+runtime_err_in_handler: status=6 top=2 type=string value=[error in error handling]
+traceback: status=2 top=2 type=string value=[[string "return function() error('boom') end"]:1: boom
+stack traceback:
+	[C]: in function 'error'
+	[string "return function() error('boom') end"]:1: in function <[string "return function() error('boom') end"]:1>]
+no_error: status=0 top=2 type=number value=[7]
+handler_number: status=6 top=2 type=string value=[error in error handling]
+c_handler: status=2 top=2 type=string value=[C:boom]
+c_raiser: status=2 top=2 type=string value=[H:craise]
+negative_index: status=2 top=2 type=string value=[neg:x5]
+handler_below: status=2 top=3 [99] [deep:y]
+no_handler: status=2 top=1 type=string value=[boom]
+no_handler_nil: status=2 top=1 type=nil
+nested: status=0 inner=2 [inner:deep]
+inner_errerr_then_plain: status=2 top=2 type=string value=[H:plain|error in error handling]
+returns_errerr_text: status=2 top=2 type=string value=[error in error handling]
+getglobal_mm: status=0 top=1 type=string value=[idx:missing]
+setglobal_mm: status=0 top=1 type=string value=[v!]
+getglobal_error: status=2 top=1 type=string value=[[string "setmetatable(_G, {__index = function(t, k) if..."]:1: no global bad]
+setglobal_error: status=2 top=1 type=string value=[cannot set bad]
+setglobal_error_handler: status=2 top=2 type=string value=[H:cannot set bad]
