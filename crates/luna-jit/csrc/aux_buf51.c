@@ -5,7 +5,7 @@
  * luna_*_51, as the layout differs from later versions'.
  */
 #include <string.h>
-#include "aux.h"
+#include "auxlib.h"
 
 #define BUFFERSIZE BUFSIZ
 #define LIMIT (LUA_MINSTACK / 2)

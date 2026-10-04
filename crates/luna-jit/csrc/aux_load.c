@@ -8,7 +8,7 @@
  */
 #include <errno.h>
 #include <string.h>
-#include "aux.h"
+#include "auxlib.h"
 
 #define SIGNATURE0 '\033'
 

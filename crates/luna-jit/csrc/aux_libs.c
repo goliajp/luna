@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "aux.h"
+#include "auxlib.h"
 
 /* the Rust side: open library `name` into L's stack; returns how many
    values it pushed, or -1 after pushing the name of the module whose

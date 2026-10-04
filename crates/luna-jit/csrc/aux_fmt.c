@@ -6,7 +6,7 @@
  */
 #include <stdlib.h>
 #include <string.h>
-#include "aux.h"
+#include "auxlib.h"
 
 /* the result being built; starts in `space`, moves to the heap when it
    outgrows it */
