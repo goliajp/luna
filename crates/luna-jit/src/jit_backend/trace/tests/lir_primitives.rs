@@ -238,7 +238,7 @@ fn integer_arithmetic_wraps_like_cranelift() {
         .filter(|&[x, y, ..]| y != 0 && !(x == i64::MIN && y == -1))
         .collect();
     check(&Case::Int(Sdiv, types::I64), &divisible);
-    check(&Case::Int(Udiv, types::I64), &divisible);
+    check(&Case::Int(Umulhi, types::I64), &int_pairs());
 }
 
 #[test]
