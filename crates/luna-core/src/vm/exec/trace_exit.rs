@@ -11,7 +11,6 @@ impl Vm {
     pub(super) fn trace_exit_restore(
         &mut self,
         cl: Gc<LuaClosure>,
-        pc: u32,
         base: u32,
         ct: &CompiledTrace,
         continuation_pc: i64,
@@ -52,8 +51,19 @@ impl Vm {
         // 63 is set we re-fetch the child's via the
         // sentinel-keyed cache.
         let from_side_trace = (raw_ret >> 63) & 1 == 1;
-        let (child, decode_body, child_ran) =
-            self.trace_exit_source(cl, pc, ct, raw_ret, &mut reg_state, base_us, &entry_tags);
+        let src = self.trace_exit_source(cl, ct, raw_ret, &mut reg_state, base_us, &entry_tags);
+        if src.ran && src.off > 0 {
+            self.trace_exit_restore_inner(
+                cl, base_us, ct, raw_ret, src, pre_frames, reg_state, entry_tags,
+            );
+            return;
+        }
+        let ExitSource {
+            child,
+            body: decode_body,
+            ran: child_ran,
+            ..
+        } = src;
         let shapes: &CompiledTrace = child.as_deref().unwrap_or(ct);
         let decode_inline = &shapes.per_exit_inline;
         let decode_hit_counts = &shapes.exit_hit_counts;
@@ -123,11 +133,9 @@ impl Vm {
             }
         }
         self.trace_restore_slots(
-            cl,
             base_us,
             max_stack,
-            decode_body,
-            cont_pc,
+            keep_tfor_vars(&cl.proto, decode_body, cont_pc, 0),
             using_global_exit_tags,
             global_tag_res_kind,
             exit_tags_for_pc,
@@ -198,12 +206,9 @@ impl Vm {
         // recorder. The recorder's first push fires
         // on the next interp iteration at cont_pc.
         //
-        // `head_proto` for the side trace = cl.proto
-        // (trace JIT only inlines self-recursive
-        // calls today, so cont_pc always lands in
-        // the same proto as the parent). Frame base
-        // is the resume frame (top of `self.frames`
-        // — inline-pushed frames moved this).
+        // The side trace starts in the resume frame (top of
+        // `self.frames`: an exit inside an inlined function rebuilt
+        // its frames), which need not run the parent's function.
         if side_trace_should_start {
             self.trace_start_side(cl, base_us, cont_pc, head_pc_val, exit_hit_idx);
         }
@@ -228,12 +233,6 @@ impl Vm {
             Some(CallFrame::Lua(f)) => (f.base as usize, f.closure.proto),
             _ => (base_us, cl.proto),
         };
-        // a side trace is cached on, and found through, the parent's proto:
-        // an exit inside a function of another proto the parent inlined
-        // starts none
-        if !resume_proto.ptr_eq(cl.proto) {
-            return;
-        }
         let resume_max_stack = resume_proto.max_stack as usize;
         let mut side_entry_tags: Vec<u8> = Vec::with_capacity(resume_max_stack);
         // Extend stack if cont_pc's frame window
@@ -244,7 +243,7 @@ impl Vm {
             self.stack
                 .resize(resume_base + resume_max_stack, crate::runtime::Value::Nil);
         }
-        let parent = Some((head_pc_val, exit_hit_idx));
+        let parent = Some((cl.proto, head_pc_val, exit_hit_idx));
         if self.trace_try_adopt(resume_proto, cont_pc, resume_base, parent, false) {
             return;
         }

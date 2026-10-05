@@ -15,10 +15,10 @@ fn load_proto(vm: &mut Vm, src: &[u8]) -> Gc<Proto> {
 
 #[test]
 fn frame_materialize_info_layout_is_stable() {
-    // 12-byte layout on every supported target — 4 + 4 + 4. If
+    // 16-byte layout on every supported target — 4 + 4 + 4 + 4. If
     // padding ever sneaks in here the IR's pointer-arithmetic
     // load would read garbage.
-    assert_eq!(std::mem::size_of::<FrameMaterializeInfo>(), 12);
+    assert_eq!(std::mem::size_of::<FrameMaterializeInfo>(), 16);
     assert_eq!(std::mem::align_of::<FrameMaterializeInfo>(), 4);
 }
 
@@ -92,7 +92,9 @@ fn helper_pushes_one_inlined_frame_with_correct_metadata() {
     let cl = vm.load(WIDE_SRC, b"=t").expect("compile");
     // Push a synthetic head frame so `jit_last_lua_frame` returns Some.
     vm.jit_ensure_stack(64);
-    vm.jit_push_inlined_frame(cl, /*base*/ 1, /*pc*/ 7, /*nresults*/ 1);
+    vm.jit_push_inlined_frame(
+        cl, /*base*/ 1, /*pc*/ 7, /*nresults*/ 1, /*n_varargs*/ 0,
+    );
     let frames_before = {
         // borrow vm just to count — use the accessor via guard
         // scope below to compose without lifetime pain.
@@ -113,6 +115,7 @@ fn helper_pushes_one_inlined_frame_with_correct_metadata() {
         base_offset: 5,
         pc: 11,
         nresults: 1,
+        n_varargs: 0,
     }];
     let r = {
         let _g = crate::jit_backend::enter_jit(&mut vm, Some(cl));
@@ -250,22 +253,25 @@ fn helper_pushes_multiple_frames_in_order() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let cl = vm.load(WIDE_SRC, b"=t").expect("compile");
     vm.jit_ensure_stack(64);
-    vm.jit_push_inlined_frame(cl, 1, 0, 1);
+    vm.jit_push_inlined_frame(cl, 1, 0, 1, 0);
     let metas = [
         FrameMaterializeInfo {
             base_offset: 3,
             pc: 7,
             nresults: 1,
+            n_varargs: 0,
         },
         FrameMaterializeInfo {
             base_offset: 8,
             pc: 7,
             nresults: 1,
+            n_varargs: 0,
         },
         FrameMaterializeInfo {
             base_offset: 13,
             pc: 9,
             nresults: 1,
+            n_varargs: 0,
         },
     ];
     let r = {

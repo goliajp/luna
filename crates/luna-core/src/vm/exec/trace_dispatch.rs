@@ -158,6 +158,9 @@ impl Vm {
                 unsafe { entry_fn(reg_state.as_mut_ptr()) }
             };
             self.jit.counters.dispatched += 1;
+            if ct.inline_kinds != 0 {
+                self.count_inline_kinds(ct.inline_kinds);
+            }
 
             if self.jit.pending_err.is_some() {
                 self.jit.pending_err = None;
@@ -189,7 +192,6 @@ impl Vm {
             } else {
                 self.trace_exit_restore(
                     cl,
-                    pc,
                     base,
                     &ct,
                     continuation_pc,
@@ -377,6 +379,21 @@ fn downrec_close_exit(continuation_pc: i64, head_pc_val: u32) -> bool {
 }
 
 impl Vm {
+    #[cold]
+    fn count_inline_kinds(&mut self, kinds: u8) {
+        for (b, n) in self
+            .jit
+            .counters
+            .inline_kind_dispatched
+            .iter_mut()
+            .enumerate()
+        {
+            if kinds & (1 << b) != 0 {
+                *n += 1;
+            }
+        }
+    }
+
     /// The entry to call for `ct`, counting the entry towards its move to
     /// the optimizing tier and making that move when it is due. `calls`:
     /// the head function's `call_hot_count` now.

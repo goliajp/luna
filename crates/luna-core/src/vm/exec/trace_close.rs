@@ -215,19 +215,18 @@ impl Vm {
             };
             // Route through trace_compiler; split-borrow JitState
             // so the trait method can take `&mut dyn JitStorage`.
-            let result = {
-                let version = self.version();
-                let jit = &mut self.jit;
-                jit.storage.claim(self.jit_owner_id);
-                let storage: &mut dyn crate::jit::JitStorage = jit.storage.as_mut();
-                jit.trace_compiler
-                    .try_compile_trace_for(storage, &closed_record, opts, version)
-            };
+            let version = self.version();
+            let (result, cut) = self.compile_or_cut(&closed_record, opts, version);
             match result {
                 Some(mut ct) => {
                     self.tally_compiled_trace(&ct);
-                    self.wire_side_trace(&mut ct, closed_record.side_trace_parent, head_proto);
-                    cache_compiled_trace(head_proto, ct, &closed_record);
+                    let wired = self.wire_side_trace(&mut ct, closed_record.side_trace_parent);
+                    let ct = cache_compiled_trace(
+                        head_proto,
+                        ct,
+                        cut.as_ref().unwrap_or(&closed_record),
+                    );
+                    hold_side_trace(wired, ct);
                     self.jit.counters.compiled += 1;
                 }
                 None => {
@@ -250,6 +249,49 @@ impl Vm {
                 }
             }
         }
+    }
+
+    /// Compiles `record`. When that fails at an op inside a function the
+    /// recording followed a call into, compiles the recording up to that
+    /// call instead (the trace then ends at the call, as it would had the
+    /// call not been inlined); the second value is that shorter recording.
+    fn compile_or_cut(
+        &mut self,
+        record: &crate::jit::trace::TraceRecord,
+        opts: crate::jit::trace::CompileOptions,
+        version: LuaVersion,
+    ) -> (
+        Option<CompiledTrace>,
+        Option<crate::jit::trace::TraceRecord>,
+    ) {
+        let jit = &mut self.jit;
+        let first =
+            jit.trace_compiler
+                .try_compile_trace_for(jit.storage.as_mut(), record, opts, version);
+        if first.is_some() || record.self_link_kind.is_some() || record.downrec_close.is_some() {
+            return (first, None);
+        }
+        let Some(at) = jit.trace_compiler.last_compile_op() else {
+            return (None, None);
+        };
+        // the call that entered the frame the failing op ran in
+        let Some(call) = record.ops.get(..=at).and_then(|ops| {
+            ops.iter()
+                .rposition(|op| op.inline_depth == 0)
+                .filter(|&c| {
+                    ops[at].inline_depth > 0 && ops[c].inst.op() == crate::vm::isa::Op::Call
+                })
+        }) else {
+            return (None, None);
+        };
+        let shorter = record.truncated(call + 1);
+        let second =
+            jit.trace_compiler
+                .try_compile_trace_for(jit.storage.as_mut(), &shorter, opts, version);
+        if second.is_some() {
+            jit.counters.inline_cut += 1;
+        }
+        (second, Some(shorter))
     }
 
     /// The counters a compiled trace contributes to.

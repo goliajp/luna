@@ -241,14 +241,15 @@ pub(super) fn emit_chain_ptr_arg<E: Emit>(
         return bcx.reloc(RelocKind::Chain(site_idx), chain_rc_first_ptr);
     }
     // Pack the chain identically to the v3 wire format's chain_bytes:
-    // three little-endian 32-bit fields per record. Drives both the
+    // four little-endian 32-bit fields per record. Drives both the
     // FNV hash (so identical chains share symbols across traces) and
     // the read-only bytes payload the resolver consumes.
-    let mut packed: Vec<u8> = Vec::with_capacity(chain.len() * 12);
+    let mut packed: Vec<u8> = Vec::with_capacity(chain.len() * 16);
     for fm in chain {
         packed.extend_from_slice(&fm.base_offset.to_le_bytes());
         packed.extend_from_slice(&fm.pc.to_le_bytes());
         packed.extend_from_slice(&fm.nresults.to_le_bytes());
+        packed.extend_from_slice(&fm.n_varargs.to_le_bytes());
     }
     let hex = strkey_hex_label(&packed);
 

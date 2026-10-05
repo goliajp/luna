@@ -3,7 +3,7 @@
 //! Builds `libluna_runtime_helpers.a` via the same pipeline the AOT
 //! `compile_and_link` flow uses (`cargo build -p luna-runtime-helpers
 //! --profile=release-aot-helpers`), then shells out to `nm` and
-//! asserts all 45 `luna_jit_*` Cranelift trace-mcode helpers are
+//! asserts all 47 `luna_jit_*` Cranelift trace-mcode helpers are
 //! present as defined-text (`T`) symbols.
 //!
 //! # Why this exists
@@ -148,7 +148,7 @@ fn all_30_luna_jit_helpers_are_defined_in_staticlib() {
     // `crates/luna-jit/src/jit_backend/mod.rs`. If another helper lands
     // upstream, grow this list AND the pin array AND the
     // `force_link_jit_helpers_reports_every_helper` test in luna-runtime-helpers.
-    let expected: [&str; 45] = [
+    let expected: [&str; 47] = [
         "luna_jit_new_table",
         "luna_jit_new_table_sized",
         "luna_jit_materialize_sunk_table",
@@ -174,6 +174,8 @@ fn all_30_luna_jit_helpers_are_defined_in_staticlib() {
         "luna_jit_stack_tag",
         "luna_jit_spill_to_stack",
         "luna_jit_op_closure",
+        "luna_jit_op_closure_in",
+        "luna_jit_set_top",
         "luna_jit_trace_materialize_frames",
         "luna_jit_table_len",
         "luna_jit_table_get_int_checked",
@@ -211,7 +213,7 @@ fn all_30_luna_jit_helpers_are_defined_in_staticlib() {
 
     assert!(
         missing.is_empty(),
-        "staticlib `{}` is missing {} of 45 helper text symbols: {:?}\n\
+        "staticlib `{}` is missing {} of 47 helper text symbols: {:?}\n\
          nm output (filtered for luna_jit_*):\n{}",
         staticlib.display(),
         missing.len(),

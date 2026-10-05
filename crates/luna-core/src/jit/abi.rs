@@ -155,6 +155,15 @@ pub trait TraceCompiler {
     /// the recorder bucket failures by phase).
     fn last_compile_checkpoint(&self) -> &'static str;
 
+    /// The index in the recording of the op the last failed compile on
+    /// this thread stopped at, when it got to one. The interpreter cuts a
+    /// recording that failed inside a function it inlined back to the
+    /// call into that function, and compiles it again.
+    #[doc(hidden)]
+    fn last_compile_op(&self) -> Option<usize> {
+        None
+    }
+
     /// Compiles `ct`, whose code came from a quicker, less optimizing code
     /// generator, again from what [`crate::jit::trace::TierUp::source`]
     /// holds; the new entry behaves exactly like the old one. `None` when

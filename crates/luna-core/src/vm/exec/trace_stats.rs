@@ -167,6 +167,29 @@ impl Vm {
         self.jit.counters.side_trace_shape_mismatch
     }
 
+    /// Dispatches of traces that hold inlined code of kind `kind` (one of
+    /// the `INLINE_*` bits of [`crate::jit::trace::CompiledTrace::inline_kinds`]).
+    pub fn trace_inline_kind_dispatched_count(&self, kind: u8) -> u64 {
+        self.jit.counters.inline_kind_dispatched[kind.trailing_zeros() as usize & 3]
+    }
+
+    /// Recordings compiled only up to a call they had followed into a
+    /// function the trace could not hold (the trace ends at that call).
+    pub fn trace_inline_cut_count(&self) -> u64 {
+        self.jit.counters.inline_cut
+    }
+
+    /// Runs of a side trace from its parent trace's exit.
+    pub fn trace_side_trace_run_count(&self) -> u64 {
+        self.jit.counters.side_trace_runs
+    }
+
+    /// Runs of a side trace from an exit inside a function its parent
+    /// trace inlined (the side trace starts in that function's frame).
+    pub fn trace_side_trace_inlined_run_count(&self) -> u64 {
+        self.jit.counters.side_trace_runs_inlined
+    }
+
     /// Sum of NewTable sites the pre-emit escape sweep
     /// classified as `crate::jit::trace::EscapeState::Sinkable`
     /// across every successfully compiled trace on this Vm. The

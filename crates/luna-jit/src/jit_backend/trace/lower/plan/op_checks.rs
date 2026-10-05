@@ -160,17 +160,10 @@ pub(super) fn validate_body_op(
             }
         }
         Op::Close => {
-            // close open upvals at slot ≥ A.
-            // Limited to inline_depth=0 (helper reads vm.stack
-            // via the trace-head frame's base; inline frames aren't
-            // pushed). Bounds check on A.
+            // close open upvals at slot ≥ A of the op's frame (the
+            // helper counts slots from the head frame, inlined frames
+            // included)
             if a >= max_stack {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            if rop.inline_depth > 0 {
                 {
                     checkpoint("bail:cmp-dirs-body-other");
                     return None;
@@ -209,22 +202,11 @@ pub(super) fn validate_value_op(
             // spill (emit writes vm.stack[base + d.index] from
             // regs[d.index] before calling op_closure helper).
             //
-            // Restrictions:
-            // - depth = 0 only: spill writes vm.stack via the
-            //   trace-head frame's `base`; inline frames (depth>0)
-            //   aren't pushed during trace IR execution, so a
-            //   spill at depth>0 would target wrong slots.
-            // - Source slot must have a known RegKind (not Unset):
-            //   spill needs a tag to pack the i64 payload back to
-            //   a Value. Unset would mean trace never wrote the
-            //   slot AND entry_tags didn't snapshot it.
+            // The spill and the helper address the frame's slots from
+            // the head frame, inlined frames included. A source slot
+            // needs a known kind (the emit gives up otherwise): the
+            // spill packs its payload with that tag.
             if a >= max_stack {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            if rop.inline_depth > 0 {
                 {
                     checkpoint("bail:cmp-dirs-body-other");
                     return None;

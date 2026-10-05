@@ -94,6 +94,7 @@ mod trace_inline_calls;
 mod trace_inline_cmp_frame_materialize;
 mod trace_inline_cmp_materialize;
 mod trace_inline_depth_tracking;
+mod trace_inline_more;
 mod trace_inline_sunk_emit;
 mod trace_inner_loop_head;
 mod trace_ipairs_helper_fast_path;

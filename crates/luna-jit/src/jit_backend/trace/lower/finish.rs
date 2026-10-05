@@ -298,6 +298,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         // it as child side traces compile for this trace's hot
         // exits.
         side_trace_cache: TRefLock::new(std::collections::HashMap::new()),
+        side_children: TRefLock::new(std::collections::HashMap::new()),
         has_any_side_wired: TCellBool::new(false),
         per_exit_inline,
         // diagnostic only; counts Sinkable sites from the
@@ -319,10 +320,11 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         materialize_emit_count,
         // count of Op::Closure ops the trace lowered.
         closure_seen,
+        inline_kinds: inline_kinds(pl),
         // compute body_writes for the smart side-trace
         // gate. Uses op_offsets (already computed above) to apply
         // inline-depth offsets per op.
-        body_writes: compute_body_writes(record, &pl.op_offsets).into(),
+        body_writes: body_writes(pl).into(),
         // populated by the `downrec_idx_opt` arm
         // above into `downrec_link_for_compiled`. When the arm
         // emitted a stitch sentinel + caller-pc guard, this carries
@@ -354,4 +356,39 @@ fn tier_up(count: Box<TCellU32>, at: u32, calls_at: u32) -> Box<TierUp> {
         parent_cells: [TCellPtr::null(), TCellPtr::null()],
         source: TRefLock::new(None),
     })
+}
+
+/// The registers the trace's ops write, the values inlined functions
+/// return and vararg expansions included, sorted.
+fn body_writes(pl: &Plan<'_>) -> Vec<u32> {
+    let mut w = compute_body_writes(pl.record, &pl.op_offsets);
+    for &(first, n) in &pl.inline_writes {
+        w.extend(first..first + n);
+    }
+    w.sort_unstable();
+    w.dedup();
+    w
+}
+
+/// The kinds of inlined code the trace holds (`INLINE_*`).
+fn inline_kinds(pl: &Plan<'_>) -> u8 {
+    let mut k = 0;
+    for (i, rop) in pl.record.ops[..pl.effective_end].iter().enumerate() {
+        if let Some(c) = pl.inline_calls[i] {
+            let callee = pl.record.ops[i + 1].proto;
+            if callee.is_vararg {
+                k |= INLINE_VARARG_CALLEE;
+            }
+            if !(0..=1).contains(&c.nresults) {
+                k |= INLINE_MULTI_RESULTS;
+            }
+            if rop.inst.b() == 0 {
+                k |= INLINE_VAR_ARGS;
+            }
+        }
+        if rop.inline_depth > 0 && rop.inst.op() == Op::Closure {
+            k |= INLINE_CLOSURE;
+        }
+    }
+    k
 }

@@ -77,6 +77,7 @@ pub(super) fn plain_trace_end(
     folded_ops: &[bool],
 ) -> Option<(usize, TraceEnd)> {
     let mut found: Option<(usize, TraceEnd)> = None;
+    let (calls, _) = inline_calls(record);
     for (i, r) in record.ops.iter().enumerate() {
         if folded_ops[i] {
             continue;
@@ -88,7 +89,7 @@ pub(super) fn plain_trace_end(
         }
         match r.inst.op() {
             Op::Call => {
-                if call_inlinable(record, i) {
+                if call_inlinable(record, &calls, i) {
                     // Continue walking — Op::Call emits nothing in
                     // the inline path and op_offsets handles the
                     // window shift for the callee's subsequent ops.
@@ -136,36 +137,29 @@ pub(super) fn plain_trace_end(
 }
 
 /// Whether the `Op::Call` at `i` is lowered inline: the recorder followed
-/// it into a Lua function (the next op is one level deeper) and the inline
-/// path can hold the call without a real frame, and the frame-materialise
-/// helper rebuild one at an exit inside the callee:
-///   - the caller wants 0 or 1 results (`C` = 1 or 2, or `C` = 0 when the
-///     callee returned exactly one value while recording): the callee's
-///     `Return0` / `Return1` writes the caller's R[A] or not
-///   - the argument count is fixed (`B` > 0): a missing parameter is
-///     written nil by the call, a surplus argument is not seen
-///   - the callee is not vararg: its frame would first move the arguments
-///     above the fixed parameters, which neither the inline path nor the
-///     helper does
+/// it into a Lua function (the next op is one level deeper) and
+/// [`inline_calls`] could lay out the callee's frame: the argument count
+/// is fixed or the recording fixes the stack top it comes from, the callee
+/// returns a count the recording fixes, and it does not need the
+/// arguments as a table. A vararg callee's extra arguments move below its
+/// registers as `push_frame` moves them, in the trace's registers and in
+/// the frames the frame-materialise helper rebuilds at an exit.
 ///
 /// Any other call ends the trace there, as a call the trace leaves to the
 /// interpreter.
-pub(super) fn call_inlinable(record: &TraceRecord, i: usize) -> bool {
-    let rop = &record.ops[i];
-    let depth = rop.inline_depth as usize;
-    let Some(next) = record.ops.get(i + 1) else {
-        return false;
-    };
-    let c = rop.inst.c();
-    next.inline_depth as usize == depth + 1
+pub(super) fn call_inlinable(record: &TraceRecord, calls: &[Option<InlineCall>], i: usize) -> bool {
+    let depth = record.ops[i].inline_depth as usize;
+    calls.get(i).copied().flatten().is_some()
+        && record
+            .ops
+            .get(i + 1)
+            .is_some_and(|next| next.inline_depth as usize == depth + 1)
         && depth < MAX_INLINE_DEPTH as usize
-        && (c == 1 || c == 2 || (c == 0 && rop.var_count == Some(1)))
-        && rop.inst.b() != 0
-        && !next.proto.is_vararg
 }
 
 pub(super) fn compute_op_offsets(record: &TraceRecord) -> (Vec<u32>, Vec<Option<u8>>) {
     let n = record.ops.len();
+    let (calls, _) = inline_calls(record);
     let mut offsets = Vec::with_capacity(n);
     let mut enclosing_call_a = Vec::with_capacity(n);
     // `offset_stack[d]` = the register-window offset for depth d.
@@ -191,7 +185,9 @@ pub(super) fn compute_op_offsets(record: &TraceRecord) -> (Vec<u32>, Vec<Option<
             );
             let caller_offset = offset_stack[offset_stack.len() - 1];
             let caller_a = caller.inst.a();
-            let new_offset = caller_offset + caller_a + 1;
+            // a vararg callee's extra arguments sit below its registers
+            let extras = calls[caller_idx].map_or(0, |c| c.n_varargs);
+            let new_offset = caller_offset + caller_a + 1 + extras;
             offset_stack.push(new_offset);
             // Lua register indices fit in u8 by VM design; this
             // cast is lossless for any valid bytecode.
