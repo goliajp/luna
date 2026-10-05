@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1357** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1364** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 224 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **7** | six `#[doc(hidden)]`, and `MemOwner::raw`, see §5 |
 | **`pub unsafe extern "C" fn`** | 197 | the C API (143), the `luna_jit_*` helpers compiled code calls (48, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
@@ -38,10 +38,10 @@ quotes the pattern counts too.
 |---|---|---:|---|
 | `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `fast_arith.rs`) | 56 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch |
 | | `vm/exec/index_*` | 38 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
-| | `vm/exec` (other) | 81 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
+| | `vm/exec` (other) | 80 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
 | | `runtime/heap*`, `gc_ptr.rs` | 77 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle, the debug check of the slow-store bit |
 | | `runtime/table*` | 48 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
-| | `runtime/mem` | 46 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the vector's and boxed slice's initialised prefix |
+| | `runtime/mem` | 54 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the vector's and boxed slice's initialised prefix |
 | | `runtime` (other) | 36 | string headers and their trailing bytes, the value tag/payload encoding, closure upvalue storage |
 | | `vm/lib_*` | 44 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`) and the table writes that build each library |
 | | `vm` (other) | 48 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
@@ -61,7 +61,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1357** | |
+| **Total** | | **1364** | |
 
 ## 3. Pattern catalog
 
@@ -192,8 +192,8 @@ Every block a Vm allocates comes from its allocation context
 (`runtime/mem`), so that a host's `lua_Alloc` or a `MemoryPolicy` sees it
 and a refused allocation becomes an error instead of the end of the
 process. Stable Rust's `Vec` and `Box` cannot take an allocator, so the
-module has its own: `LVec`, `LSlice` and `LBox` own a block and its
-length, and free it through the handle they keep. The premises: a block
+module has its own: `LVec`, `LSlice`, `LBox` and the type-erased `LAny`
+own a block and its length, and free it through the handle they keep. The premises: a block
 is freed once, with the layout (or, for a host function, the size) it was
 allocated with, by the context that allocated it, which its owners keep
 alive past every container; a container's first `len` slots are
