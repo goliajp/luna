@@ -6,6 +6,7 @@
 use crate::runtime::Upvalue;
 use crate::runtime::function::{CallFrame, ContKind};
 use crate::runtime::heap::{Gc, GcHeader, Marker};
+use crate::runtime::mem::LVec;
 use crate::runtime::table::Table;
 use crate::runtime::value::Value;
 
@@ -63,22 +64,22 @@ pub struct Coro {
     /// before its frames were unwound: the text `debug.traceback(co)` returns
     /// for it (`stack traceback:` and one `\n\t` line per level), as PUC
     /// leaves a dead coroutine's stack in place
-    pub error_traceback: Option<Vec<u8>>,
+    pub error_traceback: Option<LVec<u8>>,
     /// the same snapshot one line per stack level, so `debug.traceback(co,
     /// msg, level)` can start at any level
-    pub(crate) error_levels: Option<Vec<Vec<u8>>>,
+    pub(crate) error_levels: Option<LVec<LVec<u8>>>,
     /// while it waits on a coroutine it resumed (status normal): its own
     /// running natives, as indices into the Vm's `running_natives`
     pub(crate) natives: std::ops::Range<usize>,
     // ---- saved execution context (valid while suspended/normal) ----
     /// Saved value stack.
-    pub stack: Vec<Value>,
+    pub stack: LVec<Value>,
     /// Saved frame stack (Lua frames + native continuations).
-    pub frames: Vec<CallFrame>,
+    pub frames: LVec<CallFrame>,
     /// Open-upvalue list — `(stack slot, upvalue cell)` pairs.
-    pub open_upvals: Vec<(u32, Gc<Upvalue>)>,
+    pub open_upvals: LVec<(u32, Gc<Upvalue>)>,
     /// Stack indices of registered `<close>` slots (5.4+).
-    pub tbc: Vec<u32>,
+    pub tbc: LVec<u32>,
     /// Saved stack top.
     pub top: u32,
     /// live pcall/xpcall continuation count (PUC nCcalls portion); see Vm
@@ -96,11 +97,11 @@ pub struct Coro {
     /// what `lua_push*` pushes on this thread and where C functions running
     /// on it find their arguments.
     #[doc(hidden)]
-    pub host_stack: Vec<Value>,
+    pub host_stack: LVec<Value>,
     /// The C API's `lua_State` for this thread, made the first time C asks
     /// for one; it lives as long as the thread.
     #[doc(hidden)]
-    pub host_state: Option<Box<dyn std::any::Any>>,
+    pub host_state: Option<crate::runtime::mem::LAny>,
 }
 
 impl Coro {

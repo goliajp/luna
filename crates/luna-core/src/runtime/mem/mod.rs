@@ -8,10 +8,12 @@
 //! carries a [`MemRef`] to free and grow its block, and every growth can
 //! fail with [`Oom`], leaving the container unchanged.
 
+mod any;
 mod boxed;
 mod ctx;
 mod vec;
 
+pub use any::LAny;
 pub use boxed::{LBox, LSlice};
 pub use ctx::{BlockKind, MemCtx, MemOwner, MemRef, MemoryLimit, MemoryPolicy, Oom, RawAllocFn};
 pub use vec::LVec;
