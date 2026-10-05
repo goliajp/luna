@@ -145,15 +145,6 @@ impl Vm {
         }
     }
 
-    /// A string a library built from pieces of any size: one longer than a
-    /// string can hold raises, as the concatenation operator does.
-    pub(crate) fn built_str(&mut self, bytes: &[u8]) -> Result<Value, LuaError> {
-        if bytes.len() > crate::runtime::string::MAX_LEN {
-            return Err(self.rt_err("string length overflow"));
-        }
-        self.str_value(bytes)
-    }
-
     pub(crate) fn type_err(&mut self, what: &str, v: Value) -> LuaError {
         let extra = self.subject_varinfo(v);
         let tn = self.obj_typename(v);
