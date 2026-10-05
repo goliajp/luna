@@ -121,7 +121,14 @@ sign, `+` / space flags and width as for numbers, and upper case under
 that made it, as in PUC: the hardware's (x86 makes 0/0, `inf - inf` and
 `math.sqrt(-1)` negative, aarch64 positive), unary minus flips it and
 `math.abs` clears it; luna folds no constant expression whose result is a
-NaN. Pointers (`tostring` of a table, function, thread or userdata,
+NaN. When both operands of `+` or `*` are NaNs, which
+one PUC returns is decided by how the C compiler built that PUC binary
+(on x86, gcc puts one operand in the instruction's destination register,
+and the hardware returns that one): PUC 5.3 and 5.5 return the second
+for `+`, 5.4 the first, and 5.3 to 5.5 the second for `*`, while
+aarch64 builds return the first. luna returns the first; this is the
+one NaN sign luna does not match, since it follows no rule PUC itself
+keeps from one version or build to the next. Pointers (`tostring` of a table, function, thread or userdata,
 `file (...)`, `string.format("%p")`) are written as the platform's C
 library writes `%p`: a NULL light userdata is `userdata: (nil)` with
 glibc, `userdata: 0` with musl, `userdata: 0x0` on macOS, and Windows
