@@ -280,7 +280,7 @@ impl Vm {
         if fslot == HOOK_YIELD_SLOT {
             // a hook yielded: the instruction it interrupted runs now
             if self.stack.len() < frame_need {
-                self.stack.resize_or_abort(frame_need, Value::Nil);
+                self.grow_stack_or_abort(frame_need);
             }
             self.hook_resumed = self.version >= LuaVersion::Lua52;
             return self.exec_with(1);
@@ -292,7 +292,7 @@ impl Vm {
         };
         let need = frame_need.max((fslot + n) as usize);
         if self.stack.len() < need {
-            self.stack.resize_or_abort(need, Value::Nil);
+            self.grow_stack_or_abort(need);
         }
         for (i, &v) in args.iter().enumerate() {
             self.stack[fslot as usize + i] = v;

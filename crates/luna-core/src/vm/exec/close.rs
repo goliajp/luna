@@ -171,7 +171,7 @@ impl Vm {
             let call_slot = func_slot + error_close as u32;
             let need = (call_slot + 3) as usize;
             if self.stack.len() < need {
-                self.stack.resize_or_abort(need, Value::Nil);
+                self.grow_stack_or_abort(need);
             }
             if let Some(e) = pending {
                 self.stack[func_slot as usize] = e;
