@@ -57,7 +57,7 @@ fn relocated_code_holds_the_new_addresses() {
 
     // the optimizing tier's code, compiled from the same instructions
     let mut module = build_trace_jit_module().expect("trace module");
-    let id = lir::define_clif(&l, &l.relocs, &mut module).expect("replay");
+    let id = lir::define_clif(&l, &l.relocs, &mut module, false).expect("replay");
     module.finalize_definitions().expect("finalize");
     let f = module.get_finalized_function(id);
     assert_eq!(run(f), want(A));

@@ -95,20 +95,26 @@ fn submit(job: Job) -> Option<()> {
             .spawn(move || {
                 for job in rx {
                     let c = compile(&job.source.lir, &job.source.relocs);
-                    *job.done.lock().expect("the compile thread never panics holding a lock") = Some(c);
+                    *job.done
+                        .lock()
+                        .expect("the compile thread never panics holding a lock") = Some(c);
                 }
             })
             .expect("starting the LLVM compile thread");
         Mutex::new(tx)
     });
-    q.lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .send(job)
-        .ok()
+    q.lock().unwrap_or_else(|e| e.into_inner()).send(job).ok()
 }
 
 /// [`super::share::tier_up`] for the LLVM backend: the baseline trace `ct`
-/// compiled again by LLVM, on the compile thread when `background`.
+/// compiled again by LLVM.
+///
+/// With `background`, the first call compiles the trace with Cranelift at
+/// once, as the Cranelift backend would, and hands it to LLVM on the
+/// compile thread; Cranelift's code counts iterations like the baseline
+/// tier's, so the Vm asks again every tier-up count and installs LLVM's
+/// code once it is ready. Without, LLVM compiles it before the trace runs
+/// on.
 pub(crate) fn tier_up_llvm(
     storage: &mut dyn luna_core::jit::JitStorage,
     ct: &CompiledTrace,
@@ -118,7 +124,10 @@ pub(crate) fn tier_up_llvm(
     let source = t.source.borrow_mut().take()?;
     let source = match source.downcast::<Pending>() {
         Ok(p) => {
-            let done = p.0.lock().expect("the compile thread never panics holding a lock").take();
+            let done =
+                p.0.lock()
+                    .expect("the compile thread never panics holding a lock")
+                    .take();
             let Some(c) = done else {
                 *t.source.borrow_mut() = Some(p);
                 return None;
@@ -135,10 +144,15 @@ pub(crate) fn tier_up_llvm(
         return Some(entry);
     }
     let done = Arc::new(Mutex::new(None));
+    let job = Box::new(share::TierSource {
+        lir: source.lir.clone(),
+        relocs: source.relocs.clone(),
+        image: None,
+    });
     submit(Job {
-        source,
+        source: job,
         done: done.clone(),
     })?;
     *t.source.borrow_mut() = Some(Box::new(Pending(done)));
-    None
+    share::clif_tier_up(storage, &source, ct.head_pc, true)
 }

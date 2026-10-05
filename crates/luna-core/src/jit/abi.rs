@@ -160,10 +160,12 @@ pub trait TraceCompiler {
     /// holds; the new entry behaves exactly like the old one. `None` when
     /// the backend has no better code for it.
     ///
-    /// A backend that compiles in the background returns `None` and puts
-    /// something back in `source` while the code is not ready: the Vm then
-    /// asks again after another [`crate::jit::trace::TierUp::at`] loop
-    /// iterations and entries.
+    /// A backend that compiles better code in the background leaves
+    /// something in `source` (returning `None`, or quicker code meanwhile):
+    /// the Vm then asks again after another
+    /// [`crate::jit::trace::TierUp::at`] loop iterations and entries, which
+    /// code it returned meanwhile must count as the baseline tier's does,
+    /// and switches to each entry it returns.
     fn tier_up(
         &self,
         storage: &mut dyn crate::jit::JitStorage,
