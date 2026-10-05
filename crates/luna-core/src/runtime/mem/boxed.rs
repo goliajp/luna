@@ -161,6 +161,7 @@ impl<T> LSlice<T> {
 
 impl<T: Clone> LSlice<T> {
     /// A slice on `mem` holding clones of `s`.
+    #[inline]
     pub fn from_slice(mem: MemRef, s: &[T]) -> Result<LSlice<T>, Oom> {
         Ok(LVec::from_slice(mem, s)?.into_slice())
     }
