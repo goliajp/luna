@@ -21,6 +21,7 @@ mod control;
 mod ctconst;
 mod emit;
 mod expr;
+mod expr_names;
 mod expr_ops;
 mod fold;
 mod level;
