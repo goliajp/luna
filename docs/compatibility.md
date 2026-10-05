@@ -228,9 +228,19 @@ and the `luna` command, keep luna's own io library.
 
 Differences from PUC:
 
-- luna's collector does not allocate through a `lua_Alloc`: the function
-  given to `lua_newstate` allocates only the state's own record and is
-  returned by `lua_getallocf`.
+- Every block of a state comes from the function given to `lua_newstate`
+  (the objects, the memory inside them, the stacks, the parser's and the
+  compiler's work, the state's own records), called with PUC's contract:
+  a new block's old size is its object type (5.1: 0), and `lua_setallocf`
+  moves later calls to the new function. When it returns NULL the
+  operation raises `LUA_ERRMEM` with "not enough memory", after an
+  emergency collection and one more try where PUC makes one (5.2 while
+  the collector runs, 5.3 on); `lua_newstate` returns NULL. How many
+  blocks luna asks for, and of what sizes, differs from PUC, so a
+  function that refuses the Nth allocation fails at a different place.
+  Not from it: the memory of the JIT compiler and the code it makes (shared
+  between Vms by an `Engine`), the C library's stdio buffers, and short
+  Rust strings used for a moment while an error message is put together.
 - `lua_tocfunction` returns `NULL` for luna's own library functions,
   which are not C functions.
 - `lua_pushexternalstring` (5.5) copies the string and frees the external
