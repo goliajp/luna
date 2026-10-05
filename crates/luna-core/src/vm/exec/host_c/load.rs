@@ -152,8 +152,8 @@ impl Vm {
                 }
                 0
             }
-            3 => (self.heap.bytes() >> 10) as i32,
-            4 => (self.heap.bytes() & 0x3ff) as i32,
+            3 => (self.gc_count_bytes() >> 10) as i32,
+            4 => (self.gc_count_bytes() & 0x3ff) as i32,
             5 => {
                 // 5.5 takes a `size_t`; one that does not fit a signed
                 // count is a basic step

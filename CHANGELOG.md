@@ -337,6 +337,11 @@ optimization.
 
 ### Fixed
 
+- 5.4 and 5.5: `x - (C and nil or 0)` (also with `false`, or any
+  expression whose `and` ends in one of them) gave `-0.0` for `x = -0.0`
+  where PUC gives `0.0` (affects 3.1.0 through 4.0.2). PUC's code
+  generator reduces such an operand to the constant 0, so it runs
+  `x - 0` as `x + 0`; luna now does the same. `C` still runs.
 - A function whose loop held a shorter loop, called again and again,
   could run the outer loop's body fewer times than written, with no
   error. A trace started in the inner loop leaves through two exits that
@@ -548,6 +553,22 @@ optimization.
 
 - `luna_jit::install_llvm_backend` (with `--features llvm-jit`) installs
   the LLVM backend on a `Vm` regardless of `LUNA_JIT_BACKEND`.
+
+- `luna_core::runtime::mem`: the allocation context a `Vm` takes its memory
+  from (`MemOwner`, `MemCtx`), with containers that allocate through it and
+  report a failed allocation instead of ending the process (`LVec`,
+  `LSlice`, `LBox`). A context uses the system allocator (the default), a
+  host allocation function with PUC's `lua_Alloc` contract
+  (`MemOwner::raw`, `unsafe`), or a safe `MemoryPolicy` that sees and may
+  refuse every allocation (`MemOwner::policy`; `MemoryLimit` caps the bytes
+  in use). `Vm::new_with_mem` / `Vm::new_minimal_with_mem` build a Vm on
+  one; `Vm::memory_in_use` reports what a host function or policy has seen.
+- C API: every object of a state (strings, tables, functions, userdata,
+  threads, prototypes, upvalues) is allocated through `lua_newstate`'s
+  allocation function, with PUC's object type as the old size of a new
+  block; `lua_setallocf` moves later allocations and frees to the new
+  function; `lua_gc(LUA_GCCOUNT/LUA_GCCOUNTB)` and `collectgarbage("count")`
+  report the bytes the function has handed out.
 
 - The C API covers PUC's `lua.h`, `lauxlib.h` and `lualib.h` for all
   five dialects: headers in `crates/luna-jit/include/lua5.1` to
