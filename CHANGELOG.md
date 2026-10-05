@@ -81,6 +81,10 @@ optimization.
   closure of each frame. Code that builds these types by hand or matches
   `ExitTag` exhaustively has to name the new parts.
 
+- `TraceRecord` has a new field, `for_step_up`: whether the step of the
+  numeric `for` loop that closes the trace was positive while it was
+  recorded. Code that builds a `TraceRecord` by hand has to set it.
+
 - The syntax tree in `luna_core::frontend::ast` no longer allocates per
   node. Every list in it (a block's statements, call arguments,
   expression lists, assignment targets, declared names, parameters,
@@ -191,6 +195,17 @@ optimization.
   dialect's modulo), ordered comparisons between an integer and a float,
   table reads and writes keyed by a float equal to an integer, and
   `string.sub` with such positions.
+
+- 5.3: a trace checks the step sign of an integer `for` loop once, before
+  the loop, instead of choosing the comparison with the limit on every
+  iteration; a loop entered with a step of the other sign leaves the
+  trace at its head.
+
+- 5.1 and 5.2: traces add and subtract two of the integers the VM keeps
+  for doubles (`#t + #u`), which used to stop the recording. The trace
+  keeps the exact result while it is within 2^53 of zero, where it is
+  the double the operation gives, and otherwise leaves for the
+  interpreter, which rounds as the doubles do.
 
 - A trace follows calls into other Lua functions and runs them inline:
   methods found through a metatable's `__index` table (`o:m()`), local,
@@ -324,6 +339,15 @@ optimization.
   about 20 fewer machine instructions each.
 
 ### Fixed
+
+- 5.3–5.5: the compiler folds constant `^`, `//`, `%`, bitwise operations
+  and `~` as PUC's parser does (`2^53` is a constant, not a `POW` at run
+  time), and leaves a negated float zero (`-0.0`) to run time as PUC
+  does, so `string.dump` writes the same code and constants as PUC for
+  them.
+
+- `string.dump` of a main chunk describes its `_ENV` upvalue as PUC does
+  (in the stack, index 0).
 
 - A function whose loop held a shorter loop, called again and again,
   could run the outer loop's body fewer times than written, with no
