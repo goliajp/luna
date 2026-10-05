@@ -21,49 +21,24 @@ pub(super) fn emit_new_table<M: Module>(
     } = st;
     match ins.op() {
         Op::NewTable => {
-            // `R[A] = {}` lowers to a call into the
-            // `luna_jit_new_table` Rust helper. The helper reads
-            // the active Vm pointer from the thread-local set by
-            // `enter_jit`. Result is the `Gc<Table>` pointer
-            // pun'd to I64, written into R[A].
-            //
-            // when the scan recorded a presize hint
-            // (the NewTable opens a counted `for i = 1, N`
-            // window), reach for the `_sized` variant with N
-            // as an i64 const arg. Skips the O(log N) rehash
-            // chain that would otherwise dominate the loop.
-            //
-            // also honour `NewTable.B` as a presize
-            // hint: luna's frontend emits `NewTable A B=N` for
-            // `{a, b, c, ...}` literals (the SetList that
-            // follows fills exactly N entries). Either source —
-            // the scanned window or NewTable.B — feeds the sized
-            // helper; the explicit window wins on overlap.
-            let presize = presize_for_newtable.get(&pc).copied().or_else(|| {
-                let b = ins.b();
-                if b > 0 { Some(b as i64) } else { None }
-            });
-            let g = if let Some(n) = presize {
-                let mut sig = module.make_signature();
-                sig.params.push(AbiParam::new(types::I64));
-                sig.returns.push(AbiParam::new(types::I64));
-                let id = module
-                    .declare_function("luna_jit_new_table_sized", Linkage::Import, &sig)
-                    .ok()?;
-                let r = module.declare_func_in_func(id, bcx.func);
-                let n_v = bcx.ins().iconst(types::I64, n);
-                let call_inst = bcx.ins().call(r, &[n_v]);
-                bcx.inst_results(call_inst)[0]
-            } else {
-                let mut sig = module.make_signature();
-                sig.returns.push(AbiParam::new(types::I64));
-                let id = module
-                    .declare_function("luna_jit_new_table", Linkage::Import, &sig)
-                    .ok()?;
-                let r = module.declare_func_in_func(id, bcx.func);
-                let call_inst = bcx.ins().call(r, &[]);
-                bcx.inst_results(call_inst)[0]
-            };
+            // `R[A] = {...}` calls `luna_jit_new_table_sized` with the
+            // NewTable's operands, which size the table as the interpreter
+            // does; a counted `for i = 1, N` fill right after (see
+            // `presize_hints`) passes the size it ends at instead
+            let ops = presize_for_newtable
+                .get(&pc)
+                .copied()
+                .unwrap_or_else(|| crate::jit_backend::pack_table_ops(ins));
+            let mut sig = module.make_signature();
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            let id = module
+                .declare_function("luna_jit_new_table_sized", Linkage::Import, &sig)
+                .ok()?;
+            let r = module.declare_func_in_func(id, bcx.func);
+            let ops_v = bcx.ins().iconst(types::I64, ops);
+            let call_inst = bcx.ins().call(r, &[ops_v]);
+            let g = bcx.inst_results(call_inst)[0];
             aligned_def(bcx, regs, reg_kinds, ins.a() as usize, g);
             current_kinds[ins.a() as usize] = RegKind::Table;
             current_is_nil[ins.a() as usize] = false;
@@ -135,10 +110,8 @@ pub(super) fn emit_set_table<M: Module>(
                 );
                 let one = bcx.ins().iconst(types::I64, 1);
                 let key_minus_1 = bcx.ins().isub(key, one);
-                // `(key - 1) as u64 < asize` handles both
-                // `key >= 1` (else underflow → > any len) and
-                // `key <= asize` in one unsigned compare.
-                let in_range = bcx.ins().icmp(IntCC::UnsignedLessThan, key_minus_1, asize);
+                // `(key - 1) as u64 < len` unsigned also rejects `key < 1`
+                let in_range = emit_array_in_range(bcx, t, key_minus_1);
 
                 let fast_blk = bcx.create_block();
                 let slow_blk = bcx.create_block();
@@ -308,6 +281,9 @@ pub(super) fn emit_set_list<M: Module>(
                 };
                 elems.push((tag, bits));
             }
+            // the array part first grows to exactly `b` slots when it is
+            // smaller (the open form's call result is not counted in the
+            // NewTable's size), as the interpreter's SetList does
             let asize = bcx.ins().load(
                 types::I64,
                 MemFlagsData::trusted(),
@@ -315,9 +291,29 @@ pub(super) fn emit_set_list<M: Module>(
                 TABLE_ASIZE_OFFSET as i32,
             );
             let b_v = bcx.ins().iconst(types::I64, b as i64);
-            let fits = bcx
-                .ins()
-                .icmp(IntCC::UnsignedGreaterThanOrEqual, asize, b_v);
+            let short = bcx.ins().icmp(IntCC::UnsignedLessThan, asize, b_v);
+            let grow_blk = bcx.create_block();
+            let sized_blk = bcx.create_block();
+            bcx.ins().brif(short, grow_blk, &[], sized_blk, &[]);
+            bcx.switch_to_block(grow_blk);
+            bcx.seal_block(grow_blk);
+            let mut grow_sig = module.make_signature();
+            grow_sig.params.push(AbiParam::new(types::I64));
+            grow_sig.params.push(AbiParam::new(types::I64));
+            let grow_id = module
+                .declare_function("luna_jit_table_reserve_list", Linkage::Import, &grow_sig)
+                .ok()?;
+            let grow_ref = module.declare_func_in_func(grow_id, bcx.func);
+            bcx.ins().call(grow_ref, &[t, b_v]);
+            bcx.ins().jump(sized_blk, &[]);
+            bcx.switch_to_block(sized_blk);
+            bcx.seal_block(sized_blk);
+            let asize = bcx.ins().load(
+                types::I64,
+                MemFlagsData::trusted(),
+                t,
+                TABLE_ASIZE_OFFSET as i32,
+            );
             // the inline stores fill an all-nil array part (a fresh
             // constructor table) with non-nil values, so afterwards
             // `acount` and `aprefix` are both `b`; anything else takes
@@ -327,7 +323,11 @@ pub(super) fn emit_set_list<M: Module>(
                     bcx.ins()
                         .load(types::I32, MemFlagsData::trusted(), t, TABLE_ACOUNT_OFFSET);
                 let empty = bcx.ins().icmp_imm_u(IntCC::Equal, acount, 0);
-                bcx.ins().band(fits, empty)
+                // a growth that failed parked an error and left it short
+                let room = bcx
+                    .ins()
+                    .icmp(IntCC::UnsignedGreaterThanOrEqual, asize, b_v);
+                bcx.ins().band(room, empty)
             } else {
                 bcx.ins().iconst(types::I8, 0)
             };

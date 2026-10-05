@@ -23,6 +23,10 @@ optimization.
 
 ### Breaking
 
+- Chunks in luna's own binary format (PUC header followed by the
+  `LunaV1` body) no longer load: a table constructor's op now carries
+  its size hints, and the body tag is `LunaV2`. Dump the source again
+  with this version. PUC bytecode loads as before.
 - C API: errors leave a C function at once, as in PUC. `lua_error`,
   `luaL_error` and every API function that raises (`lua_gettable`,
   `lua_call`, `luaL_checkinteger`, ...) jump back to the call that luna
@@ -80,6 +84,10 @@ optimization.
   `luna_jit_trace_materialize_frames` takes a third argument, the
   closure of each frame. Code that builds these types by hand or matches
   `ExitTag` exhaustively has to name the new parts.
+
+- `TraceRecord` has a new field, `for_step_up`: whether the step of the
+  numeric `for` loop that closes the trace was positive while it was
+  recorded. Code that builds a `TraceRecord` by hand has to set it.
 
 - The syntax tree in `luna_core::frontend::ast` no longer allocates per
   node. Every list in it (a block's statements, call arguments,
@@ -153,6 +161,15 @@ optimization.
 
 ### Changed
 
+- On Windows the `luna` command reads and writes as `lua.exe` does, through
+  the MSVC C library's text mode: its standard output, standard error and
+  standard input, and files opened without `b`, write `\n` as `\r\n` and
+  read `\r\n` as `\n`; a Ctrl+Z ends the input, and `seek` reports what
+  that library's `ftell` does. `Vm::set_crt_text_mode` turns the same on
+  for the files of any `Vm` (off by default, on every platform), and
+  `luna_core::stdio::write_stderr` writes to standard error as the `luna`
+  command does. 5.1 and 5.2 read lines on Windows in 512-byte pieces, the
+  MSVC `BUFSIZ`, as PUC does there.
 - The LLVM backend (`--features llvm-jit`, `LUNA_JIT_BACKEND=llvm`)
   compiles traces with the same trace lowering as the Cranelift backend:
   traces start in the baseline tier and LLVM compiles them again once
@@ -203,6 +220,17 @@ optimization.
   dialect's modulo), ordered comparisons between an integer and a float,
   table reads and writes keyed by a float equal to an integer, and
   `string.sub` with such positions.
+
+- 5.3: a trace checks the step sign of an integer `for` loop once, before
+  the loop, instead of choosing the comparison with the limit on every
+  iteration; a loop entered with a step of the other sign leaves the
+  trace at its head.
+
+- 5.1 and 5.2: traces add and subtract two of the integers the VM keeps
+  for doubles (`#t + #u`), which used to stop the recording. The trace
+  keeps the exact result while it is within 2^53 of zero, where it is
+  the double the operation gives, and otherwise leaves for the
+  interpreter, which rounds as the doubles do.
 
 - A trace follows calls into other Lua functions and runs them inline:
   methods found through a metatable's `__index` table (`o:m()`), local,
@@ -337,6 +365,43 @@ optimization.
 
 ### Fixed
 
+- `#t` on a table with holes could return a different border than PUC.
+  `{f(6), f(7), g(), f(8)}` (with `g` returning nothing) has borders 2
+  and 4: PUC 5.5.1 returns 2, luna returned 4. Each dialect now sizes a
+  table as its PUC does — the constructor's size hints, a list store
+  growing the array to its last index, `table.pack` and vararg tables
+  sized to their count, the rehash sizing of each version (5.5's
+  differs), the placement of number and boolean keys in the hash part,
+  5.1 to 5.3 adding a key assigned `nil` — and searches for the border as
+  its PUC does: 5.1 to 5.3 by binary search, 5.4 from its length limit
+  (which `#t` lowers and indexing past it raises), 5.5 from its length
+  hint. The trace and method JITs and AOT code give the same answers.
+  5.1 also hashes strings as PUC 5.1, which sizes tables with string
+  keys the same way. All released versions, 4.0.2 included, are
+  affected.
+- In a table constructor, a call or `...` that is the last list item but
+  is followed by keyed fields (`{f(), x = 1}`) now gives one value, as in
+  PUC; it gave all of its values. All released versions, 4.0.2
+  included, are affected.
+
+- 5.3–5.5: the compiler folds constant `^`, `//`, `%`, bitwise operations
+  and `~` as PUC's parser does (`2^53` is a constant, not a `POW` at run
+  time), and leaves a negated float zero (`-0.0`) to run time as PUC
+  does, so `string.dump` writes the same code and constants as PUC for
+  them.
+
+- `string.dump` of a main chunk describes its `_ENV` upvalue as PUC does
+  (in the stack, index 0).
+
+- A loop calling `math.fmod` was compiled into a trace that never ran:
+  reading the function `math.fmod` was a value the trace could not type,
+  so the trace was marked not enterable. Traces now compute `math.fmod`
+  in place, as the library does: two integers (5.3+) give C's truncating
+  remainder, -1 gives 0 and 0 leaves the trace for the interpreter to
+  raise its error; otherwise the result is the interpreter's `fmod`
+  (`luna_jit_fmod`), so two NaN operands give the NaN the interpreter
+  gives.
+
 - A loop trace that ran a whole pass and returned to its head through
   its own tail could put back the registers that pass wrote as they were
   before it: the return was matched by its pc to a guard that also
@@ -359,7 +424,6 @@ optimization.
   nil is treated as nil where it is read. All dialects, default settings;
   3.2.2, 4.0.1 and 4.0.2 have it.
 
-||||||| 0bf74190
 - 5.4 and 5.5: `x - (C and nil or 0)` (also with `false`, or any
   expression whose `and` ends in one of them) gave `-0.0` for `x = -0.0`
   where PUC gives `0.0` (affects 3.1.0 through 4.0.2). PUC's code

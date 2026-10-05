@@ -15,6 +15,10 @@
 //! `_IO_default_xsputn`). Other C libraries flush at the same points (a
 //! newline on a terminal, `fflush`, a full buffer) but may split a write
 //! longer than the buffer differently.
+//!
+//! On Windows [`use_c_stdout`] also puts standard output, standard error
+//! and standard input in the MSVC C library's text mode, as `lua.exe` has
+//! them: `\n` is written as `\r\n`, and `\r\n` read as `\n`.
 
 use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,6 +63,25 @@ pub fn use_c_stdout() {
     C_MODE.store(true, Ordering::Relaxed);
 }
 
+/// Whether the standard streams are in the MSVC C library's text mode.
+pub(crate) fn text_mode() -> bool {
+    cfg!(windows) && C_MODE.load(Ordering::Relaxed)
+}
+
+fn text(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    if text_mode() {
+        crate::vm::lib_io::to_crlf(bytes)
+    } else {
+        std::borrow::Cow::Borrowed(bytes)
+    }
+}
+
+/// `fwrite(bytes, 1, n, stderr)`, in text mode where standard output is
+/// (see [`use_c_stdout`]).
+pub fn write_stderr(bytes: &[u8]) -> std::io::Result<()> {
+    std::io::stderr().write_all(&text(bytes))
+}
+
 /// Whether [`use_c_stdout`] is in effect.
 pub(crate) fn c_mode() -> bool {
     C_MODE.load(Ordering::Relaxed) || HOST.get().is_some()
@@ -91,6 +114,7 @@ pub(crate) fn write_line_flushed(bytes: &[u8]) {
         return;
     }
     if c_mode() {
+        let bytes = &*text(bytes);
         let mut f = lock();
         if f.allocated && f.buf.is_empty() && bytes.len() <= f.cap {
             // what copying it into the empty buffer and flushing writes
@@ -108,7 +132,7 @@ pub(crate) fn try_write_stdout(bytes: &[u8]) -> std::io::Result<()> {
         return host_result((h.write)(bytes));
     }
     if c_mode() {
-        lock().xsputn(bytes)
+        lock().xsputn(&text(bytes))
     } else {
         std::io::stdout().write_all(bytes)
     }

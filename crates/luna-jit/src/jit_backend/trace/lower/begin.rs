@@ -11,7 +11,7 @@ pub(super) fn begin_body<E: Emit>(
     defined_aot_data: std::collections::HashSet<DataId>,
     sunk: (Vec<Option<Vec<Variable>>>, Vec<Option<Vec<RegKind>>>, u32),
     flush_ctx: Option<FlushCtx>,
-    blocks: (Option<Block>, Option<Block>, Block),
+    blocks: (Option<Block>, Option<Block>, Option<Block>, Block),
 ) -> Lower<E> {
     let EntryRegs {
         reg_state,
@@ -22,7 +22,7 @@ pub(super) fn begin_body<E: Emit>(
         tforcall_val_tag_var,
     } = head;
     let (virt_vars, virt_kinds, sunk_alloc_seen) = sunk;
-    let (precheck, ro_precheck, body_loop) = blocks;
+    let (precheck, ro_precheck, step_precheck, body_loop) = blocks;
     let Plan {
         record,
         max_stack,
@@ -175,6 +175,7 @@ pub(super) fn begin_body<E: Emit>(
         tforcall_val_tag_var,
         precheck,
         ro_precheck,
+        step_precheck,
         body_loop,
         head_kinds,
         defined_aot_data,
