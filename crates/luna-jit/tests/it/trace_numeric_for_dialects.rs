@@ -195,7 +195,10 @@ return function()
     return s
 end
 "#;
-    assert_traced(&[LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Lua53], src);
+    assert_traced(
+        &[LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Lua53],
+        src,
+    );
 }
 
 #[test]

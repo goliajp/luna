@@ -141,7 +141,9 @@ pub(super) fn emit_readonly_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) 
     lw.bcx.switch_to_block(block);
     lw.bcx.seal_block(block);
     if !lw.ro_invariant.contains(&true) {
-        lw.bcx.ins().jump(lw.step_precheck.unwrap_or(body_loop), &[]);
+        lw.bcx
+            .ins()
+            .jump(lw.step_precheck.unwrap_or(body_loop), &[]);
         return;
     }
     let entry_stored: Vec<Option<Value>> = lw
@@ -160,7 +162,9 @@ pub(super) fn emit_readonly_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) 
         lw.bcx.switch_to_block(ok_blk);
         lw.bcx.seal_block(ok_blk);
     }
-    lw.bcx.ins().jump(lw.step_precheck.unwrap_or(body_loop), &[]);
+    lw.bcx
+        .ins()
+        .jump(lw.step_precheck.unwrap_or(body_loop), &[]);
     lw.bcx.switch_to_block(exit_blk);
     lw.bcx.seal_block(exit_blk);
     let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
