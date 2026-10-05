@@ -117,10 +117,19 @@ impl Vm {
         &mut self,
         act: crate::vm::callstack::NativeAct,
     ) -> Result<(), LuaError> {
-        match self.running_natives.push(act) {
-            Ok(()) => Ok(()),
-            Err(o) => self.retry_oom_slow(o, |vm| vm.running_natives.push(act)),
+        if self.running_natives.len() == self.running_natives.capacity() {
+            return self.push_native_slow(act);
         }
+        self.running_natives.push_or_abort(act);
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn push_native_slow(&mut self, act: crate::vm::callstack::NativeAct) -> Result<(), LuaError> {
+        self.retry_oom(|vm| vm.running_natives.reserve(1))?;
+        self.running_natives.push_or_abort(act);
+        Ok(())
     }
 
     /// A string with `bytes`, collecting in an emergency when memory runs

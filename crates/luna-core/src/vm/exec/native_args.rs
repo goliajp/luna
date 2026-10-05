@@ -79,7 +79,7 @@ impl Vm {
 
     /// [`Vm::nat_return`], raising a memory error when the stack cannot
     /// grow to hold the results.
-    #[inline]
+    #[inline(always)]
     pub fn nat_ret(&mut self, func_slot: u32, vals: &[Value]) -> Result<u32, LuaError> {
         let need = func_slot as usize + vals.len();
         if self.stack.len() < need {

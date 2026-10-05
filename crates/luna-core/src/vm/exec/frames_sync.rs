@@ -65,18 +65,20 @@ impl Vm {
     /// emergency when the stack cannot grow (PUC `luaE_extendCI`).
     #[inline(always)]
     pub(super) fn push_cf(&mut self, cf: CallFrame) -> Result<(), LuaError> {
-        match try_frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf) {
-            Ok(()) => Ok(()),
-            Err(_) => self.push_cf_slow(cf),
+        // the room test first, so the common path keeps nothing across a call
+        if self.frames.len() == self.frames.capacity() {
+            return self.push_cf_slow(cf);
         }
+        frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf);
+        Ok(())
     }
 
     #[cold]
     #[inline(never)]
     fn push_cf_slow(&mut self, cf: CallFrame) -> Result<(), LuaError> {
-        self.retry_oom(|vm| {
-            try_frames_push_sync(&mut vm.frames, &mut vm.frames_top, &mut vm.trap, cf)
-        })
+        self.retry_oom(|vm| vm.frames.reserve(1))?;
+        frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf);
+        Ok(())
     }
 }
 
