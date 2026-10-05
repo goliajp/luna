@@ -261,13 +261,17 @@ pub(crate) fn declare_jit_helpers<'ctx>(
 /// so they ARE dlsym-able when luna is loaded as a `dylib`/`cdylib`
 /// — but the rlib link path strips them, exactly mirroring Cranelift's
 /// `JITBuilder::symbol` rationale in `build_jit_module_with_helpers`).
+///
+/// Looks the declarations up in `module` by name: the optimizer deletes
+/// the ones nothing calls, so handles kept from before it ran may point at
+/// freed functions.
 pub(super) fn bind_helper_symbols<'ctx>(
     engine: &inkwell::execution_engine::ExecutionEngine<'ctx>,
-    helpers: &HashMap<&'static str, FunctionValue<'ctx>>,
+    module: &Module<'ctx>,
 ) {
     for (name, addr, _n_args, _returns_i64) in helper_registry() {
-        if let Some(fn_val) = helpers.get(name) {
-            engine.add_global_mapping(fn_val, addr);
+        if let Some(fn_val) = module.get_function(name) {
+            engine.add_global_mapping(&fn_val, addr);
         }
     }
 }

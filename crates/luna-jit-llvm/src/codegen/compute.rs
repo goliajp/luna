@@ -213,7 +213,7 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         return None;
     }
 
-    finalize_module(ctx_box, module, Some(&helpers))
+    finalize_module(ctx_box, module, true)
 }
 
 /// Lower a comparison and the `Jmp` it consumes into one `condbr`.
