@@ -91,6 +91,17 @@ pub unsafe extern "C" fn luna_jit_math_fn_is_library(math_key: i64, name_key: i6
     i64::from(lib.is_some_and(|lib| std::ptr::fn_addr_eq(f.f, lib)))
 }
 
+/// Float `fmod` for a compiled `%`: the interpreter's, which follows the C
+/// `fmod` PUC is built with where the binary runs (on x86 Linux an x87
+/// `fprem` loop, which picks another NaN than glibc's `fmod` when both
+/// operands are NaN).
+// SAFETY: no other item in the link is named `luna_jit_fmod`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub extern "C" fn luna_jit_fmod(a: f64, b: f64) -> f64 {
+    luna_core::numeric::c_fmod(a, b)
+}
+
 /// `string.sub(s, i, j)` for the trace JIT, which checked that the call is
 /// the library function and its arguments a string and two integers (`j`
 /// -1 when the call gave none). Returns the result string.

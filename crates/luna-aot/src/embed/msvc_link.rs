@@ -1,42 +1,146 @@
 //! Linking an AOT binary with an MSVC-style linker (`link.exe` / `lld-link`).
 
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;
 
 use object::Architecture;
 
 use super::AotError;
+use super::msvc_sysroot::MsvcSysroot;
 use super::target::{TargetSpec, which_on_path};
 
 impl TargetSpec {
     /// The MSVC-style C compiler driver, or `None` when there is none.
     ///
     /// 1. `$CC` wins.
-    /// 2. On a Windows host, `cl.exe` from the newest Visual Studio /
+    /// 2. With `LUNA_AOT_MSVC_SYSROOT` set, `clang-cl` on `PATH` with that
+    ///    sysroot's headers; Visual Studio is not looked for.
+    /// 3. On a Windows host, `cl.exe` from the newest Visual Studio /
     ///    Build Tools install, with the `INCLUDE` / `LIB` / `PATH` it
     ///    needs set on the command, so no Developer Command Prompt is
     ///    needed (inside one, its environment is used as is).
-    /// 3. `clang-cl` on `PATH`: LLVM's driver, which also runs on a
-    ///    Unix host for a cross build.
-    pub(super) fn msvc_cc_command(&self) -> Option<Command> {
+    /// 4. `clang-cl` on `PATH`, with the headers of the sysroot `cargo
+    ///    xwin` keeps in its cache when there is one.
+    pub(super) fn msvc_cc_command(&self) -> Result<Option<Command>, AotError> {
         if let Some(cc) = std::env::var_os("CC") {
-            return Some(Command::new(cc));
+            return Ok(Some(Command::new(cc)));
         }
-        visual_studio_tool(&self.triple, "cl.exe").or_else(|| path_tool("clang-cl"))
+        Ok(self.msvc_tools()?.map(|tools| tools.cc))
     }
 
     /// The MSVC-style PE/COFF linker, or `None` when there is none:
-    /// `$LD`, then `link.exe` from Visual Studio on a Windows host
-    /// (environment set up as for [`Self::msvc_cc_command`]), then
-    /// `lld-link` on `PATH`. A bare `link` on `PATH` is never taken:
-    /// on Unix and in Git for Windows' shell that is the coreutils
-    /// hard-link tool.
-    pub(super) fn msvc_link_command(&self) -> Option<Command> {
+    /// `$LD`, then the same choice as [`Self::msvc_cc_command`] with
+    /// `link.exe` and `lld-link` in place of the compilers. A bare `link`
+    /// on `PATH` is never taken: on Unix and in Git for Windows' shell
+    /// that is the coreutils hard-link tool.
+    pub(super) fn msvc_link_command(&self) -> Result<Option<Command>, AotError> {
         if let Some(ld) = std::env::var_os("LD") {
-            return Some(Command::new(ld));
+            return Ok(Some(Command::new(ld)));
         }
-        visual_studio_tool(&self.triple, "link.exe").or_else(|| path_tool("lld-link"))
+        Ok(self.msvc_tools()?.map(|tools| tools.link))
     }
+
+    fn msvc_tools(&self) -> Result<Option<MsvcTools>, AotError> {
+        let explicit = MsvcSysroot::explicit()?;
+        if explicit.is_none()
+            && let (Some(cc), Some(link)) = (
+                visual_studio_tool(&self.triple, "cl.exe"),
+                visual_studio_tool(&self.triple, "link.exe"),
+            )
+        {
+            return Ok(Some(MsvcTools {
+                cc,
+                link,
+                sysroot: None,
+            }));
+        }
+        if !which_on_path("clang-cl") || !which_on_path("lld-link") {
+            return Ok(None);
+        }
+        let sysroot = explicit.or_else(MsvcSysroot::cargo_xwin_cache);
+        let mut cc = Command::new("clang-cl");
+        let mut link = Command::new("lld-link");
+        if let Some(s) = &sysroot {
+            cc.args(s.cc_args());
+            link.args(s.link_args(self.arch));
+        }
+        Ok(Some(MsvcTools { cc, link, sysroot }))
+    }
+
+    /// Environment for the cargo build of the runtime-helpers staticlib
+    /// when luna-aot links with LLVM's tools and a sysroot: the `cc` crate
+    /// in luna-jit's build script gets `clang-cl` and the sysroot's headers
+    /// (it finds `llvm-lib` next to `clang-cl` itself), and rustc, which
+    /// links luna-jit's `cdylib` on the way, gets `lld-link` and the
+    /// sysroot's libraries. Empty otherwise; a variable the user already
+    /// set is left alone.
+    pub(super) fn staticlib_build_env(&self) -> Result<Vec<(String, OsString)>, AotError> {
+        if !self.is_msvc() || std::env::var_os("CC").is_some() {
+            return Ok(Vec::new());
+        }
+        let Some(MsvcTools {
+            sysroot: Some(sysroot),
+            ..
+        }) = self.msvc_tools()?
+        else {
+            return Ok(Vec::new());
+        };
+        let key = self.triple.replace('-', "_");
+        let cflags = space_joined(
+            std::iter::once(OsString::from(format!("--target={}", self.triple)))
+                .chain(sysroot.cc_args()),
+        )?;
+        let rustflags = space_joined(sysroot.link_args(self.arch).into_iter().map(|a| {
+            let mut f = OsString::from("-Clink-arg=");
+            f.push(a);
+            f
+        }))?;
+        let upper = key.to_uppercase();
+        let mut env = Vec::new();
+        for (name, value) in [
+            (format!("CC_{key}"), OsString::from("clang-cl")),
+            (format!("CFLAGS_{key}"), cflags),
+            (
+                format!("CARGO_TARGET_{upper}_LINKER"),
+                OsString::from("lld-link"),
+            ),
+            (format!("CARGO_TARGET_{upper}_RUSTFLAGS"), rustflags),
+        ] {
+            if std::env::var_os(&name).is_none() {
+                env.push((name, value));
+            }
+        }
+        Ok(env)
+    }
+}
+
+/// `args` as one space-separated flags variable, which is how both `cc`'s
+/// `CFLAGS_<target>` and cargo's `CARGO_TARGET_<T>_RUSTFLAGS` are split.
+fn space_joined(args: impl Iterator<Item = OsString>) -> Result<OsString, AotError> {
+    let mut out = OsString::new();
+    for arg in args {
+        if arg.to_string_lossy().contains(char::is_whitespace) {
+            return Err(AotError::Link(format!(
+                "`{}` contains whitespace, which a flags environment variable \
+                 cannot carry; move the MSVC sysroot to a path without spaces",
+                arg.to_string_lossy()
+            )));
+        }
+        if !out.is_empty() {
+            out.push(" ");
+        }
+        out.push(arg);
+    }
+    Ok(out)
+}
+
+/// The compiler and linker luna-aot drives for an MSVC target.
+struct MsvcTools {
+    cc: Command,
+    link: Command,
+    /// Set when the tools are LLVM's and a sysroot supplies the CRT and SDK.
+    sysroot: Option<MsvcSysroot>,
 }
 
 #[cfg(windows)]
@@ -47,10 +151,6 @@ fn visual_studio_tool(triple: &str, tool: &str) -> Option<Command> {
 #[cfg(not(windows))]
 fn visual_studio_tool(_triple: &str, _tool: &str) -> Option<Command> {
     None
-}
-
-fn path_tool(name: &str) -> Option<Command> {
-    which_on_path(name).then(|| Command::new(name))
 }
 
 /// MSVC link path. Drives
@@ -76,9 +176,9 @@ fn path_tool(name: &str) -> Option<Command> {
 ///
 /// `link.exe` resolves system libs through `LIB`, which
 /// [`TargetSpec::msvc_link_command`] sets from the Visual Studio install
-/// it found. `lld-link` on a Windows host finds the MSVC and Windows SDK
-/// libraries on its own; on a Unix host it needs them given through
-/// `LIB` (an `xwin`-style splat), or the link fails on `ucrt.lib`.
+/// it found. `lld-link` gets the library directories of the sysroot
+/// [`TargetSpec::msvc_link_command`] found; without one it reads `LIB`, and
+/// on a Windows host also finds an installed MSVC and Windows SDK itself.
 pub(super) fn link_aot_binary_msvc(
     bytecode_obj: &Path,
     cmain_obj: &Path,
@@ -87,14 +187,15 @@ pub(super) fn link_aot_binary_msvc(
     out_path: &Path,
     target: &TargetSpec,
 ) -> Result<(), AotError> {
-    let Some(mut cmd) = target.msvc_link_command() else {
+    let Some(mut cmd) = target.msvc_link_command()? else {
         return Err(AotError::Link(format!(
             "no MSVC linker found for target {} — on a Windows host, \
              install Visual Studio or the Build Tools with the \"Desktop \
              development with C++\" workload (`link.exe` is found without \
-             a Developer Command Prompt); on any host, LLVM's `lld-link` \
-             on PATH also works. Override with `LD=...` to point at a \
-             custom linker.",
+             a Developer Command Prompt); on any host, LLVM's `clang-cl` and \
+             `lld-link` on PATH with an `xwin splat` sysroot named by \
+             LUNA_AOT_MSVC_SYSROOT (or left in cargo-xwin's cache) also \
+             work. Override with `LD=...` to point at a custom linker.",
             target.triple
         )));
     };
