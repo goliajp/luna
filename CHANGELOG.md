@@ -337,11 +337,36 @@ optimization.
 
 ### Fixed
 
+- 5.4 and 5.5: `local x <const> = X and nil or K` (or with `false`) made
+  `x` a variable; PUC makes it the compile-time constant K, after running
+  X, so `x` has no `debug.getlocal` entry and an inner function using it
+  has no upvalue for it (affects 3.1.0 through 4.0.2). luna now does the
+  same.
+- A function compiled by the method JIT returned a local that only a
+  branch assigns (`local r ... if i == 5 then r = i end ... return r`) as
+  the number 0 when the branch had not run, instead of nil, and
+  arithmetic on it went on with 0 instead of raising. The compiler took
+  the branch's write as done on every path. Now a local some path leaves
+  nil is treated as nil where it is read. All dialects, default settings;
+  3.2.2, 4.0.1 and 4.0.2 have it.
+
+||||||| 0bf74190
 - 5.4 and 5.5: `x - (C and nil or 0)` (also with `false`, or any
   expression whose `and` ends in one of them) gave `-0.0` for `x = -0.0`
   where PUC gives `0.0` (affects 3.1.0 through 4.0.2). PUC's code
   generator reduces such an operand to the constant 0, so it runs
   `x - 0` as `x + 0`; luna now does the same. `C` still runs.
+- On x86 Linux, a float `%` with two NaN operands in a compiled trace
+  (runtime JIT and luna-aot) returned the NaN glibc's `fmod` picks
+  instead of the one the interpreter and PUC pick (the larger
+  significand, as gcc's inline x87 `fprem`), so `print` could show `nan`
+  where PUC shows `-nan`. Compiled code now calls the interpreter's
+  `fmod` through a new runtime helper, `luna_jit_fmod`.
+- luna-aot with `clang-cl`: the C entry was compiled with `/Fo:<path>`,
+  which clang-cl reads as an output path starting with `:`, and clang-cl
+  dropped the empty `.lt_skix` / `.lt_chai` /
+  `.lt_prix` sections that cl.exe keeps. A cross build to
+  `x86_64-pc-windows-msvc` from Linux or macOS could not link before.
 - A function whose loop held a shorter loop, called again and again,
   could run the outer loop's body fewer times than written, with no
   error. A trace started in the inner loop leaves through two exits that
@@ -569,7 +594,12 @@ optimization.
   block; `lua_setallocf` moves later allocations and frees to the new
   function; `lua_gc(LUA_GCCOUNT/LUA_GCCOUNTB)` and `collectgarbage("count")`
   report the bytes the function has handed out.
-
+- luna-aot links `x86_64-pc-windows-msvc` without Visual Studio, on
+  Linux, macOS or Windows: `clang-cl` and `lld-link` from LLVM with the
+  MSVC C runtime and Windows SDK from `xwin splat`, named by
+  `LUNA_AOT_MSVC_SYSROOT` or found in `cargo xwin`'s cache directory.
+  The runtime staticlib's cargo build gets the same compiler, linker and
+  sysroot. See docs/aot.md §3.
 - The C API covers PUC's `lua.h`, `lauxlib.h` and `lualib.h` for all
   five dialects: headers in `crates/luna-jit/include/lua5.1` to
   `lua5.5`, with which a host built for one PUC version gets a state of

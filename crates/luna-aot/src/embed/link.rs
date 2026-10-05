@@ -177,18 +177,24 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
             // characteristics (R = readable). The 8-byte alignment
             // matches the MinGW arm so the deploy walker's pointer
             // arithmetic over the section is identical across
-            // toolchains.
-            "#pragma section(\".lt_skix\", read)\n\
-             __declspec(allocate(\".lt_skix\")) __declspec(align(8))\n\
+            // toolchains. cl.exe keeps an unreferenced static it places
+            // with `allocate`; clang-cl drops it unless marked `used`.
+            "#ifdef __clang__\n\
+             #define LUNA_KEEP __attribute__((used))\n\
+             #else\n\
+             #define LUNA_KEEP\n\
+             #endif\n\
+             #pragma section(\".lt_skix\", read)\n\
+             __declspec(allocate(\".lt_skix\")) __declspec(align(8)) LUNA_KEEP\n\
              static const char luna_strkey_idx_placeholder[16] = {0};\n\
              #pragma section(\".lt_meta\", read)\n\
-             __declspec(allocate(\".lt_meta\")) __declspec(align(8))\n\
+             __declspec(allocate(\".lt_meta\")) __declspec(align(8)) LUNA_KEEP\n\
              static const char luna_trace_meta_placeholder[48] = {0};\n\
              #pragma section(\".lt_chai\", read)\n\
-             __declspec(allocate(\".lt_chai\")) __declspec(align(8))\n\
+             __declspec(allocate(\".lt_chai\")) __declspec(align(8)) LUNA_KEEP\n\
              static const char luna_inline_chnx_placeholder[16] = {0};\n\
              #pragma section(\".lt_prix\", read)\n\
-             __declspec(allocate(\".lt_prix\")) __declspec(align(8))\n\
+             __declspec(allocate(\".lt_prix\")) __declspec(align(8)) LUNA_KEEP\n\
              static const char luna_proto_idx_placeholder[16] = {0};\n"
         }
         TargetOs::Windows => {
@@ -241,40 +247,34 @@ int main(int argc, char **argv) {{
     // `/Fo:` vs gcc-style `-c` + `-o`). All other targets keep the
     // existing gcc-style cc driver path.
     let mut cmd = if target.is_msvc() {
-        let Some(mut cl) = target.msvc_cc_command() else {
+        let Some(mut cl) = target.msvc_cc_command()? else {
             return Err(AotError::Link(format!(
                 "no MSVC C compiler found for target {} — on a Windows host, \
                  install Visual Studio or the Build Tools with the \"Desktop \
                  development with C++\" workload (`cl.exe` is found without a \
-                 Developer Command Prompt); on any host, LLVM's `clang-cl` on \
-                 PATH also works. Override with `CC=...` to point at a custom \
-                 driver.",
+                 Developer Command Prompt); on any host, LLVM's `clang-cl` and \
+                 `lld-link` on PATH with an `xwin splat` sysroot named by \
+                 LUNA_AOT_MSVC_SYSROOT (or left in cargo-xwin's cache) also \
+                 work. Override with `CC=...` to point at a custom driver.",
                 target.triple
             )));
         };
-        // `clang-cl` / `cl.exe`: `/c` compile-only, `/Fo:<obj>` output.
-        // Some Linux distros' clang-cl wrappers also accept gcc-style
-        // flags, but the MSVC shape works on every supported driver.
+        // `clang-cl` / `cl.exe`: `/c` compile-only, `/Fo<obj>` output (one
+        // token, so a path with spaces survives; clang-cl takes no `/Fo:`)
         cl.arg("/c");
-        cl.arg(&c_path);
-        // `/Fo:` and the output path are a single token when no space —
-        // we use the safe two-arg form via `arg(format!("/Fo:{}", ..))`
-        // which avoids whitespace-in-path issues.
-        cl.arg(format!("/Fo:{}", out.display()));
-        // Suppress the cl.exe banner (clang-cl no-ops on this flag).
+        cl.arg(format!("/Fo{}", out.display()));
         cl.arg("/nologo");
         // the dynamic CRT, as the Rust staticlib is built against it; cl's
         // default static CRT (/MT) pulls libcmt.lib into the same link
         cl.arg("/MD");
-        // Cross-compile target: clang-cl accepts `--target=<triple>` to
-        // override the default host. cl.exe rejects this; we only set it
-        // for clang-cl by detecting the program name (heuristic — first
-        // arg defaulted via `Command::new`). The simplest robust path
-        // is to always set it when not on a Windows host, since cl.exe
-        // can't realistically run there anyway. Skipping for now: cmd
-        // here is `clang-cl` only when reachable on a Unix host.
-        if !cfg!(target_os = "windows") {
+        if cfg!(windows) {
+            cl.arg(&c_path);
+        } else {
+            // only clang-cl runs off Windows. `--` ends its options: an
+            // absolute Unix path such as `/Users/...` would otherwise
+            // parse as the `/U` option
             cl.arg(format!("--target={}", target.triple));
+            cl.arg("--").arg(&c_path);
         }
         cl
     } else {
