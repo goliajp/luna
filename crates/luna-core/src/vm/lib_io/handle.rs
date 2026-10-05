@@ -57,7 +57,9 @@ pub(crate) fn flush_all(vm: &mut Vm) {
             let _ = drain_write_buf(u);
         }
     }
-    let _ = crate::stdio::flush_stdout(); // same: fflush(NULL) reports nothing
+    // same: fflush(NULL) reports nothing
+    let _ = crate::stdio::flush_stdout();
+    let _ = crate::stdio::flush_stderr();
 }
 
 // ---- closing ----
@@ -78,7 +80,11 @@ pub(super) fn close_stream(u: Gc<Userdata>) -> Closed {
     if u.file().is_std() {
         return Closed::Std;
     }
-    let flushed = drain_write_buf(u);
+    let flushed = if u.crt.is_some() {
+        crt::fclose(u)
+    } else {
+        drain_write_buf(u)
+    };
     // SAFETY: `u` is a file handle the caller holds (a native argument on the stack, a registered finalizable, or the io library's default stream); `drain_write_buf`'s borrow has ended, and `m` is the only reference into it until return
     let m = unsafe { u.as_mut() };
     // dropping the handle closes the descriptor; for a pipe the child then
