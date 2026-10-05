@@ -177,6 +177,28 @@ end
 }
 
 #[test]
+fn step_sign_changes_between_entries() {
+    // 5.3 checks the step's sign once, before the loop: a loop recorded
+    // with one sign is entered with the other and with zero
+    let src = r#"
+return function()
+    local s = 0
+    for k = 1, 60 do
+        local st = k % 3 == 0 and -2 or (k % 3 == 1 and 3 or 0)
+        local n = 0
+        for i = 50, (st > 0 and 200 or -100), st do
+            s = s + i
+            n = n + 1
+            if n > 70 then break end
+        end
+    end
+    return s
+end
+"#;
+    assert_traced(&[LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Lua53], src);
+}
+
+#[test]
 fn loop_variable_changed_in_the_body() {
     let src = r#"
 return function()

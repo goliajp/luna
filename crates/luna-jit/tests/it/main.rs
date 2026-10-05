@@ -69,6 +69,7 @@ mod trace_concat_helper;
 mod trace_concat_str_kind;
 mod trace_dispatch_gate;
 mod trace_dispatch_numeric_loops;
+mod trace_double_int_add;
 mod trace_entry_booleans;
 mod trace_entry_live_in;
 mod trace_error_traceback;
