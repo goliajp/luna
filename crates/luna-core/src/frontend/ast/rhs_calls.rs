@@ -79,6 +79,9 @@ pub fn walk_rhs_for_calls(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
 }
 
 fn walk_with(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
+    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+        return RhsCallScan::UserOrUnknown;
+    }
     use RhsCallScan::*;
     match chunk.expr(eid) {
         // Leaves — no calls.

@@ -80,6 +80,9 @@ fn stat_uses_vararg(chunk: &Chunk, stat: &Stat) -> bool {
 }
 
 fn expr_uses_vararg(chunk: &Chunk, eid: ExprId) -> bool {
+    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+        return true;
+    }
     match chunk.expr(eid) {
         Expr::Vararg => true,
         // Stop at function literals — their `...` is scoped to them.

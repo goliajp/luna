@@ -181,7 +181,8 @@ impl Vm {
         {
             return self.errerr();
         }
-        let capped = self.msgh_depth >= crate::vm::exec::MAX_C_DEPTH;
+        let capped = self.msgh_depth >= crate::vm::exec::MAX_C_DEPTH
+            || crate::native_stack::is_low(crate::native_stack::RESERVE);
         let (arg, reenter) = if capped {
             (Value::Str(self.heap.intern(b"C stack overflow")), None)
         } else {

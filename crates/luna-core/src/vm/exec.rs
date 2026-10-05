@@ -8,6 +8,7 @@
 
 use crate::frontend::SyntaxError;
 use crate::jit::send_compat::TArc;
+use crate::native_stack;
 use crate::numeric::{self, Num};
 use crate::runtime::{
     AfterClose, CallFrame, CloseCont, ContKind, Coro, CoroStatus, Frame, Gc, Heap, HostCont,
@@ -99,6 +100,8 @@ const MAX_TAG_LOOP: u32 = 2000;
 const MAX_CCMT: u32 = 200;
 /// PUC LUAI_MAXCCALLS analogue: native↔Lua nesting bound.
 pub(crate) const MAX_C_DEPTH: u32 = 200;
+/// PUC 5.1 `LUAI_MAXCALLS`: nested Lua calls a 5.1 thread may make.
+const MAX_CALLS_51: u32 = 20000;
 /// Stack an xpcall handler may use past `MAX_LUA_STACK` while handling a
 /// stack overflow: PUC's 200 extra `ERRORSTACKSIZE` slots, plus the frame
 /// reserve (256) the overflowing call was refused, so the handler's first

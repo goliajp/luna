@@ -409,11 +409,25 @@ and numeric-string arguments, every library's surface in each dialect,
 `collectgarbage`, call-stack levels, tracebacks, and language-level error
 messages. What still differs does so on purpose:
 
-- **Metamethod recursion depth.** PUC counts a metamethod call against its
-  200-level C-call limit, so a `__index` function recursing about 200
-  deep raises "C stack overflow". luna does not count metamethod calls;
-  such recursion is bounded by the Lua stack (one million slots) and
-  raises "stack overflow" there. It never crashes the process.
+- **Native stack.** Like PUC, luna counts metamethod calls, library
+  callbacks (`table.sort`, `string.gsub`, `load` readers, `__tostring`),
+  coroutine resumes, protected calls and C API calls against a 200-level
+  C-call limit and raises "C stack overflow" past it. On top of that it
+  compares the native stack pointer with the running thread's stack
+  bounds, so on a thread with a small stack (an embedder's 256 KB worker,
+  say) the same error comes after fewer levels instead of a crash. The
+  bounds are read from the OS on Linux, Android, macOS and the other
+  Apple targets, and Windows; elsewhere, or when the embedder runs luna
+  on a stack of its own, only the count applies. Code the method JIT
+  compiled calls itself on the native stack; when that stack runs low
+  the interpreter makes the remaining calls, so deep recursion ends
+  where PUC's Lua stack limit ends it.
+- **Very long operator chains.** PUC's parser emits code as it reads a
+  left-associative chain (`1 + 1 + ... + 1`, `a.b.b...`, `f()()...`),
+  so its length is unbounded. luna builds a syntax tree first and its
+  compiler walks it recursively, so a chain long enough to exhaust the
+  native stack fails to load with the dialect's nesting error ("C stack
+  overflow" from 5.4 on) instead.
 - **`pcall` nesting depth.** Both stop with "C stack overflow", but the
   depth at which they do depends on how many C levels the host has
   already used (PUC's standalone interpreter spends about three before

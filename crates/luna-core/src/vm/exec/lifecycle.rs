@@ -54,6 +54,11 @@ impl Vm {
             rng: [0; 4],
             started: std::time::Instant::now(),
             version,
+            frame_cap: if version == LuaVersion::Lua51 {
+                MAX_CALLS_51
+            } else {
+                u32::MAX
+            },
             closing_err: None,
             current: None,
             main_ctx: None,

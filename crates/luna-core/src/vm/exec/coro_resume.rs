@@ -94,7 +94,7 @@ impl Vm {
             CoroStatus::Dead => return Err(self.plain_err("cannot resume dead coroutine")),
             _ => return Err(self.plain_err("cannot resume non-suspended coroutine")),
         }
-        if self.c_depth >= MAX_C_DEPTH {
+        if self.c_depth >= MAX_C_DEPTH || native_stack::is_low(native_stack::RESERVE) {
             return Err(self.plain_err("C stack overflow"));
         }
         self.c_depth += 1;

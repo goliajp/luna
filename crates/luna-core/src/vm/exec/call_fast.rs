@@ -25,6 +25,7 @@ impl Vm {
             || p.is_vararg
             || p.has_compat_vararg_arg
             || func_slot + 256 > MAX_LUA_STACK
+            || self.frames.len() >= self.frame_cap as usize
             || self.stack.len() < need
         {
             return None;

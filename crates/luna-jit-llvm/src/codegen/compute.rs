@@ -96,6 +96,16 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         regs_ty,
         regs,
         helpers: &helpers,
+        self_call_desc: luna_jit_helpers::self_call_desc(
+            plan.num_params,
+            0,
+            0,
+            if plan.returns_one {
+                luna_jit_helpers::SELF_CALL_RET_INT
+            } else {
+                luna_jit_helpers::SELF_CALL_RET_NONE
+            },
+        ),
     };
 
     // Populate `regs[0..num_params]` from the fn

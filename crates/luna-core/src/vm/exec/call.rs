@@ -40,6 +40,9 @@ impl Vm {
                     // run the cached native fn in-place.
                     if self.try_jit_call_op(cl, func_slot, nargs, nresults) {
                         self.pending_tailcalls = tailcalls;
+                        if let Some(e) = self.jit.pending_raise.take() {
+                            return Err(e);
+                        }
                         return Ok(false);
                     }
                     self.pending_tailcalls = tailcalls;
@@ -228,6 +231,17 @@ impl Vm {
         nresults: i32,
         from_c: bool,
     ) -> Result<(), LuaError> {
+        if self.frames.len() >= self.frame_cap as usize {
+            // PUC 5.1 `luaD_growCI`: past LUAI_MAXCALLS the call raises
+            // "stack overflow"; a handler running on it may go on until
+            // the next growth, which is "error in error handling"
+            if self.msgh_depth == 0 {
+                return Err(self.rt_err("stack overflow"));
+            }
+            if self.frames.len() >= 2 * self.frame_cap as usize {
+                return Err(LuaError(self.errerr()));
+            }
+        }
         if func_slot + 256 > MAX_LUA_STACK {
             // PUC `luaD_growstack`: the overflow raises "stack overflow" and
             // leaves ERRORSTACKSIZE's extra slots for the xpcall handler that

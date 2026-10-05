@@ -35,6 +35,9 @@ impl Compiler<'_> {
         jump_if: bool,
         out: &mut Jumps,
     ) -> Result<LastTest, SyntaxError> {
+        if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+            return Err(self.too_deep());
+        }
         match *self.ast.expr(id) {
             Expr::BinOp {
                 op: op @ (BinOp::And | BinOp::Or),

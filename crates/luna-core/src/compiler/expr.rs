@@ -4,6 +4,9 @@ use super::*;
 
 impl<'a> Compiler<'a> {
     pub(super) fn expr(&mut self, id: ExprId) -> Result<Exp, SyntaxError> {
+        if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+            return Err(self.too_deep());
+        }
         let ast = self.ast;
         match ast.expr(id) {
             Expr::Nil => Ok(Exp::Nil),

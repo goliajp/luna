@@ -59,10 +59,12 @@ pub struct Vm {
     pub(super) compile_scratch: crate::compiler::CompileScratch,
     /// native↔Lua nesting depth (PUC C-stack guard analogue)
     pub(super) c_depth: u32,
-    /// number of live pcall/xpcall continuation frames on the running thread
-    /// (PUC counts these against nCcalls). Bounds protected-call recursion the
-    /// way `c_depth` bounds call_value recursion. Per-thread: saved/restored
-    /// with the coroutine context, since continuations survive a yield.
+    /// number of live pcall/xpcall, metamethod, `__pairs` and `__close`
+    /// continuation frames on the running thread: PUC makes each of those
+    /// calls through the C stack and counts it against nCcalls. Bounds that
+    /// nesting the way `c_depth` bounds call_value recursion. Per-thread:
+    /// saved/restored with the coroutine context, since continuations
+    /// survive a yield.
     pub(super) pcall_depth: u32,
     /// number of non-yieldable C calls in flight on the running thread (PUC's
     /// `L->nny`). A library callback that runs via synchronous Rust recursion
@@ -91,6 +93,10 @@ pub struct Vm {
     /// VM creation time (os.clock)
     pub(super) started: std::time::Instant,
     pub(super) version: LuaVersion,
+    /// Lua frames a thread may hold before a call raises "stack
+    /// overflow": PUC 5.1's `LUAI_MAXCALLS`; no count in later dialects,
+    /// whose limit is the stack size
+    pub(super) frame_cap: u32,
     /// error object being threaded through a chain of __close handlers; a GC
     /// root for the duration (a handler may trigger collection)
     pub(super) closing_err: Option<Value>,

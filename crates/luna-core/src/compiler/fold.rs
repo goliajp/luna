@@ -45,6 +45,9 @@ pub(super) fn numeral(
     version: LuaVersion,
     zeros: &mut Vec<f64>,
 ) -> Option<Num> {
+    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+        return None;
+    }
     let v51 = version == LuaVersion::Lua51;
     match ast.expr(id) {
         Expr::Int(i) => Some(Num::Int(*i)),
@@ -111,6 +114,9 @@ enum Lit {
 }
 
 fn literal(ast: &Chunk, id: ExprId) -> Option<Lit> {
+    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+        return None;
+    }
     Some(match ast.expr(id) {
         Expr::Nil | Expr::False => Lit::Falsy,
         Expr::True | Expr::Str(_) => Lit::Truthy(None),
@@ -132,6 +138,9 @@ fn literal(ast: &Chunk, id: ExprId) -> Option<Lit> {
 /// `nil`, `false`, or `C and` one of them where `C` is a literal or an
 /// equality test of two literals.
 fn always_falsy(ast: &Chunk, id: ExprId, zeros: &mut Vec<f64>) -> bool {
+    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+        return false;
+    }
     match ast.expr(id) {
         Expr::Paren(inner) => always_falsy(ast, *inner, zeros),
         Expr::BinOp {
@@ -147,6 +156,9 @@ fn always_falsy(ast: &Chunk, id: ExprId, zeros: &mut Vec<f64>) -> bool {
 /// A literal, or an equality test of two whose zeros (left first) go on
 /// `zeros`: PUC compiles the test's operands as constants.
 fn fixed_condition(ast: &Chunk, id: ExprId, zeros: &mut Vec<f64>) -> bool {
+    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+        return false;
+    }
     match ast.expr(id) {
         Expr::Paren(inner) => fixed_condition(ast, *inner, zeros),
         Expr::BinOp {

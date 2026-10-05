@@ -215,6 +215,8 @@ mod upval;
 pub use upval::*;
 mod guards;
 pub use guards::*;
+mod recursion;
+pub use recursion::*;
 mod stack_ops;
 pub use stack_ops::*;
 mod materialize;

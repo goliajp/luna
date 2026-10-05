@@ -98,6 +98,9 @@ impl Compiler<'_> {
     /// one position where a bare reference to the vararg is allowed to stay
     /// virtual.
     fn expr_forces(&self, e: ExprId, name: &str, is_index_obj: bool) -> bool {
+        if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+            return true;
+        }
         use ast::Expr::*;
         match self.ast.expr(e) {
             Name(n) => self.nm(n) == name && !is_index_obj,
@@ -199,6 +202,9 @@ impl Compiler<'_> {
     }
 
     fn mentions_expr(&self, e: ExprId, name: &str) -> bool {
+        if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+            return true;
+        }
         use ast::Expr::*;
         match self.ast.expr(e) {
             Name(n) => self.nm(n) == name,
