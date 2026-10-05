@@ -337,6 +337,15 @@ optimization.
 
 ### Fixed
 
+- A loop trace that ran a whole pass and returned to its head through
+  its own tail could put back the registers that pass wrote as they were
+  before it: the return was matched by its pc to a guard that also
+  leaves at the head, and restored with that guard's register kinds.
+  `if i == 5 then r = u end` inside a `while` left `r` nil after the
+  loop, with no error. Such a return now restores with the tail's own
+  kinds. Seen after 4.0.2: 4.0.2, 4.0.1 and 3.2.2 give the right result
+  on the same program.
+
 - 5.4 and 5.5: `local x <const> = X and nil or K` (or with `false`) made
   `x` a variable; PUC makes it the compile-time constant K, after running
   X, so `x` has no `debug.getlocal` entry and an inner function using it
