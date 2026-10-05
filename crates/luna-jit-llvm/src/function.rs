@@ -102,7 +102,7 @@ pub(crate) fn optimize(ctx: &Context, module: &Module<'_>) -> Result<(), &'stati
 
 /// `LUNA_TRACE_IR_DUMP=1` / `LUNA_TRACE_ASM_DUMP=1`, as for the Cranelift
 /// tiers: the IR after optimization, and the machine code as assembly.
-fn dump(module: &Module<'_>) {
+pub(crate) fn dump(module: &Module<'_>) {
     let on = |k| std::env::var_os(k).is_some_and(|v| v == "1");
     if on("LUNA_TRACE_IR_DUMP") {
         eprintln!(

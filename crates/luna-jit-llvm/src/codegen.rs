@@ -253,6 +253,7 @@ pub(crate) fn finalize_module<'ctx>(
     helpers: Option<&HashMap<&'static str, FunctionValue<'ctx>>>,
 ) -> Option<(*const u8, EnginePair)> {
     crate::function::optimize(&ctx_box, &module).ok()?;
+    crate::function::dump(&module);
     finalize_bound(ctx_box, module, OptimizationLevel::Default, helpers)
 }
 
