@@ -93,7 +93,8 @@ pub struct LlvmJitStorage {
 /// order matters: `engine` must be dropped before `context` — Rust
 /// drops struct fields in declaration order, so engine first is the
 /// safe layout.
-pub(crate) struct EnginePair {
+#[doc(hidden)]
+pub struct EnginePair {
     // SAFETY: the `'static` here is a lie that the constructor
     // upholds by allocating `Context` on the heap before producing
     // the `ExecutionEngine` and never moving / dropping `Context`
@@ -102,9 +103,9 @@ pub(crate) struct EnginePair {
     // are only read structurally by `Drop`; neither is exposed to
     // the trait surface.
     #[allow(dead_code)]
-    pub engine: ExecutionEngine<'static>,
+    pub(crate) engine: ExecutionEngine<'static>,
     #[allow(dead_code)]
-    pub context: Box<Context>,
+    pub(crate) context: Box<Context>,
 }
 
 impl LlvmJitStorage {
@@ -130,12 +131,12 @@ impl LlvmJitStorage {
         self.cache.insert(key, entry);
     }
 
-    /// Park a trace `EnginePair` so the JIT mmap
-    /// stays alive for the Vm's lifetime. Unlike [`Self::insert`] there
-    /// is no cache-key association — the `TraceFn` pointer embedded in
-    /// `CompiledTrace::entry` is the caller's handle; storage just owns
-    /// the lifetime.
-    pub(crate) fn park_engine(&mut self, pair: EnginePair) {
+    /// Park an `EnginePair` from [`crate::compile_function`] so its code
+    /// stays mapped for the Vm's lifetime. Unlike [`Self::insert`] there
+    /// is no cache-key association: the caller keeps the entry pointer;
+    /// storage just owns the lifetime.
+    #[doc(hidden)]
+    pub fn park_engine(&mut self, pair: EnginePair) {
         self.engines.push(pair);
     }
 }

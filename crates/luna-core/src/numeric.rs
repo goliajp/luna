@@ -444,5 +444,13 @@ pub(crate) fn nummod_floor(a: f64, b: f64) -> f64 {
     (-q).mul_add(b, a)
 }
 
+/// C `fmod` as PUC's own build computes it on this platform, as the
+/// interpreter's float `%` and `math.fmod` use it. Compiled traces reach
+/// it through luna-jit's `luna_jit_fmod`.
+#[doc(hidden)]
+pub fn c_fmod(a: f64, b: f64) -> f64 {
+    crate::vm::exec::c_fmod(a, b)
+}
+
 #[cfg(test)]
 mod tests;

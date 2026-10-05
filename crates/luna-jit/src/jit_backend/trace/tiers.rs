@@ -50,6 +50,17 @@ pub(super) fn compile_trace_captured(
             Err(why) => BASELINE_FALLBACK.with(|c| c.set((c.get().0 + 1, why))),
         }
     }
+    #[cfg(feature = "llvm-jit")]
+    if super::llvm_tier::is_llvm(storage) {
+        return super::llvm_tier::compile_trace_llvm(
+            storage,
+            record,
+            opts,
+            always_codegen,
+            float_only,
+        )
+        .map(|ct| (ct, None));
+    }
     compile_trace_cranelift(storage, record, opts, always_codegen, float_only, capture)
 }
 
@@ -175,5 +186,9 @@ pub(crate) fn tier_up_trace(
     storage: &mut dyn luna_core::jit::JitStorage,
     ct: &CompiledTrace,
 ) -> Option<TraceFn> {
+    #[cfg(feature = "llvm-jit")]
+    if super::llvm_tier::is_llvm(storage) {
+        return super::llvm_tier::tier_up_llvm(storage, ct);
+    }
     share::tier_up(storage, ct)
 }

@@ -1021,6 +1021,7 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "criterion",
+ "inkwell",
  "luna-core",
  "luna-jit-derive",
  "luna-jit-helpers",

@@ -45,6 +45,46 @@ pub(super) fn reachable(code: &[Inst], consumed_jmp: &[bool]) -> Vec<bool> {
     reachable
 }
 
+/// Whether a `Return` is reachable from PC 0 without passing a
+/// self-recursive call. A compiled self call recurses on the native stack,
+/// past the interpreter's depth limit: a function with no such path (no
+/// base case, `local function f() return f() + 1 end`) would overflow the
+/// process stack instead of raising Lua's "stack overflow".
+pub(super) fn has_base_case(
+    code: &[Inst],
+    consumed_jmp: &[bool],
+    self_call_pcs: &[bool],
+    tail_call_pcs: &[bool],
+) -> bool {
+    let n = code.len();
+    let mut seen = vec![false; n];
+    let mut worklist = vec![0usize];
+    while let Some(pc) = worklist.pop() {
+        if pc >= n || seen[pc] {
+            continue;
+        }
+        seen[pc] = true;
+        if self_call_pcs[pc] || tail_call_pcs[pc] {
+            continue;
+        }
+        let ins = code[pc];
+        match ins.op() {
+            Op::Return0 | Op::Return1 => return true,
+            Op::TailCall => {}
+            Op::Jmp if consumed_jmp[pc] => {}
+            Op::Jmp => worklist.push(jmp_target(pc, ins)),
+            op if is_compare(op) => {
+                worklist.push(pc + 2);
+                if let Some(jmp) = code.get(pc + 1) {
+                    worklist.push(jmp_target(pc + 1, *jmp));
+                }
+            }
+            _ => worklist.push(pc + 1),
+        }
+    }
+    false
+}
+
 /// Pass 3: returns_one analysis. Every reachable Return* must
 /// agree on shape (Return0 or Return1) so the dispatcher
 /// contract has a single answer. Op::TailCall is treated as

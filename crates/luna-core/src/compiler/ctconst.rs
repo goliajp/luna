@@ -34,6 +34,46 @@ pub(super) fn ct_value(
     id: ExprId,
     named: &mut dyn FnMut(&Name) -> Option<CtConst>,
 ) -> Option<CtConst> {
+    value(ast, id, named, false)
+}
+
+/// [`ct_value`] for an operand that is compiled in full anyway, so code
+/// that runs before a constant result is no reason to give it up. Then
+/// `X and nil or K` is K whatever X is: PUC compiles X and points its jumps
+/// at the `or`, which is left with the constant K and no jumps.
+pub(super) fn ct_operand(
+    ast: &Chunk,
+    id: ExprId,
+    named: &mut dyn FnMut(&Name) -> Option<CtConst>,
+) -> Option<CtConst> {
+    value(ast, id, named, true)
+}
+
+/// `X and F` with F always falsy: the value is F, and X only adds jumps.
+fn falsy_and(ast: &Chunk, id: ExprId, named: &mut dyn FnMut(&Name) -> Option<CtConst>) -> bool {
+    match ast.expr(id) {
+        Expr::Paren(inner) => falsy_and(ast, *inner, named),
+        Expr::BinOp {
+            op: BinOp::And,
+            rhs,
+            ..
+        } => {
+            falsy_and(ast, *rhs, named)
+                || value(ast, *rhs, named, true).is_some_and(|v| !v.truthy())
+        }
+        _ => false,
+    }
+}
+
+fn value(
+    ast: &Chunk,
+    id: ExprId,
+    named: &mut dyn FnMut(&Name) -> Option<CtConst>,
+    compiled: bool,
+) -> Option<CtConst> {
+    let ct_value = |ast: &Chunk, id: ExprId, named: &mut dyn FnMut(&Name) -> Option<CtConst>| {
+        value(ast, id, named, compiled)
+    };
     match ast.expr(id) {
         Expr::Nil => Some(CtConst::Nil),
         Expr::True => Some(CtConst::Bool(true)),
@@ -53,6 +93,12 @@ pub(super) fn ct_value(
                 UnOp::Len => None,
             }
         }
+        Expr::BinOp {
+            op: BinOp::Or,
+            lhs,
+            rhs,
+            ..
+        } if compiled && falsy_and(ast, *lhs, named) => ct_value(ast, *rhs, named),
         Expr::BinOp { op, lhs, rhs, .. } => {
             let l = ct_value(ast, *lhs, named)?;
             let arith = match op {

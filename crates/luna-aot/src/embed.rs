@@ -44,6 +44,7 @@ use luna_core::vm::dump;
 mod harvest;
 mod link;
 mod msvc_link;
+mod msvc_sysroot;
 mod scaffold;
 mod staticlib;
 mod target;
@@ -365,7 +366,8 @@ pub fn compile_and_link_with(
     // The `release-aot-helpers` profile (workspace `Cargo.toml`) has
     // `lto = "off"` so the 39 `luna_jit_*` Cranelift trace-mcode
     // helpers survive the rlib → staticlib bundling step.
-    let staticlib = build_runtime_helpers_staticlib(target.triple_for_cargo())?;
+    let staticlib =
+        build_runtime_helpers_staticlib(target.triple_for_cargo(), &target.staticlib_build_env()?)?;
 
     // Final link via the target's cc driver. Order matters on
     // some toolchains: bytecode + main first (they reference symbols
