@@ -13,6 +13,7 @@ mod helpers;
 mod kind_flow;
 mod kinds;
 mod kinds_ops;
+mod nil_flow;
 mod scan;
 mod scan_ops;
 mod table_flow;
@@ -88,7 +89,7 @@ pub fn lower_int_chunk_into<M: Module>(
     let presize_for_newtable = checks::presize_hints(c, &scan);
     checks::check_fold_blocks(&scan)?;
     let any_self_call = checks::check_self_call_base_case(c, &scan)?;
-    let (reg_kinds, ret_kind) = kinds::sweep_kinds(c, &scan)?;
+    let (reg_kinds, ret_kind) = kinds::sweep_kinds(c, &scan, &cfg)?;
     // After convergence: derive per-arg kinds + the ret_is_float flag
     // for the cache slot. An arg that's still Unset (param read by
     // nothing) is treated as Int so the dispatcher's masking is

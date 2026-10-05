@@ -35,7 +35,11 @@ pub(super) struct KindSweep {
 }
 
 /// Returns the registers' kinds and the return kind.
-pub(super) fn sweep_kinds(c: ChunkIn<'_>, scan: &ChunkScan) -> Option<(Vec<RegKind>, RegKind)> {
+pub(super) fn sweep_kinds(
+    c: ChunkIn<'_>,
+    scan: &ChunkScan,
+    cfg: &ChunkCfg,
+) -> Option<(Vec<RegKind>, RegKind)> {
     let ChunkIn {
         code,
         n,
@@ -49,6 +53,7 @@ pub(super) fn sweep_kinds(c: ChunkIn<'_>, scan: &ChunkScan) -> Option<(Vec<RegKi
     // forward-only with a fixpoint loop because a self-recursive Call
     // result kind depends on the Proto's own return kind (carried via
     // `ret_kind`); successive passes propagate the resolved kind.
+    let may_nil = nil_flow::may_nil_by_pc(c, cfg);
     let mut st = KindSweep {
         reg_kinds: vec![RegKind::Unset; max_stack],
         ret_kind: RegKind::Unset,
@@ -78,6 +83,12 @@ pub(super) fn sweep_kinds(c: ChunkIn<'_>, scan: &ChunkScan) -> Option<(Vec<RegKi
         let mut pc = 0;
         while pc < n {
             let ins = code[pc];
+            // the walk is in pc order, so a write it passed (one branch's)
+            // has not happened on every path: take the per-path state where
+            // some path reaches the op
+            if let Some(m) = &may_nil[pc] {
+                st.is_nil_writer[..m.len()].copy_from_slice(m);
+            }
             match ins.op() {
                 Op::LoadI | Op::LoadF | Op::LoadK | Op::LoadNil | Op::Move => {
                     sweep_loads(&mut st, c, scan, pc, ins)?
