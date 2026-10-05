@@ -293,12 +293,21 @@ impl<T: Clone> LVec<T> {
             self.truncate(n);
             return Ok(());
         }
+        self.grow_with(n, v)
+    }
+
+    /// The growing half of [`LVec::resize`], out of line: callers on hot
+    /// paths keep only the length test.
+    #[inline(never)]
+    fn grow_with(&mut self, n: usize, v: T) -> Result<(), Oom> {
         self.reserve(n - self.len)?;
-        while self.len < n {
+        let mut len = self.len;
+        while len < n {
             // SAFETY: room for `n` elements was reserved above
-            unsafe { self.ptr.as_ptr().add(self.len).write(v.clone()) };
-            self.len += 1;
+            unsafe { self.ptr.as_ptr().add(len).write(v.clone()) };
+            len += 1;
         }
+        self.len = len;
         Ok(())
     }
 
