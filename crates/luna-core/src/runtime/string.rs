@@ -147,7 +147,6 @@ fn layout(len: usize) -> Layout {
         .pad_to_align()
 }
 
-#[inline(always)]
 fn alloc_str(mem: MemRef, bytes: &[u8], short: bool, hash: u32, hashed: bool) -> *mut LuaStr {
     let layout = layout(bytes.len());
     let p = match mem.ctx().alloc(layout, BlockKind::Str) {
