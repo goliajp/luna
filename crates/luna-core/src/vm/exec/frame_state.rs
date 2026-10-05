@@ -151,16 +151,6 @@ impl Vm {
         self.top = new_top;
     }
 
-    /// Grow the stack to `need` nil slots (`need` > its length), ending
-    /// the process when the allocation fails. Out of line, and on the Vm
-    /// rather than the vector, so the hot callers keep only the length test
-    /// and never take the stack's address.
-    #[cold]
-    #[inline(never)]
-    pub(crate) fn grow_stack_or_abort(&mut self, need: usize) {
-        self.stack.resize_or_abort(need, Value::Nil);
-    }
-
     /// Nil the missing results `[from, to)`.
     pub(super) fn pad_results(&mut self, from: u32, to: u32) {
         if self.stack.len() < to as usize {
