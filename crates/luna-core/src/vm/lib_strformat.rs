@@ -25,14 +25,20 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let fmt = f.as_bytes();
     let v = vm.version();
     let mut out = vm.new_buf();
-    vm.buf_reserve(&mut out, fmt.len())?;
+    vm.buf_reserve(&mut out, fmt.len() + cfmt::ITEM_MAX)?;
     let mut arg = 0u32;
     let mut i = 0;
     while i < fmt.len() {
         let c = fmt[i];
         i += 1;
         if c != b'%' {
-            vm.buf_push(&mut out, &[c])?;
+            // the run of plain bytes up to the next '%', in one copy
+            let end = fmt[i..]
+                .iter()
+                .position(|&b| b == b'%')
+                .map_or(fmt.len(), |k| i + k);
+            vm.buf_push(&mut out, &fmt[i - 1..end])?;
+            i = end;
             continue;
         }
         // a '%' at the very end pairs with the string's terminating zero
@@ -104,9 +110,8 @@ fn item51(
 ) -> Result<usize, LuaError> {
     let v = vm.version();
     let p = scanformat(vm, fmt, start)?;
-    // a numeric item is short and goes through `item`; strings go straight
-    // to `out`
-    let mut item = Vec::new();
+    // every conversion but a long `%s` and `%q` fits in this
+    vm.buf_reserve(out, cfmt::ITEM_MAX)?;
     let conv = byte_at(fmt, p);
     let body = &fmt[start..p.min(fmt.len())];
     let sp = Spec::parse(body);
@@ -117,12 +122,13 @@ fn item51(
                 LuaVersion::Lua52 => argcheck::check_int(vm, a, arg)?,
                 _ => argcheck::check_integer(vm, a, arg)? as i32,
             };
-            cfmt::char(&mut item, &sp, c as u8);
+            let mark = out.len();
+            cfmt::char(out, &sp, c as u8);
             // 5.1 copies the item with strlen, so a zero byte ends it
             if v == LuaVersion::Lua51
-                && let Some(z) = item.iter().position(|&b| b == 0)
+                && let Some(z) = out[mark..].iter().position(|&b| b == 0)
             {
-                item.truncate(z);
+                out.truncate(mark + z);
             }
         }
         b'd' | b'i' => {
@@ -141,7 +147,7 @@ fn item51(
                 }
                 _ => argcheck::check_integer(vm, a, arg)?,
             };
-            cfmt::signed(&mut item, &sp, n);
+            cfmt::signed(out, &sp, n);
         }
         b'o' | b'u' | b'x' | b'X' => {
             let n = match v {
@@ -159,15 +165,15 @@ fn item51(
                 }
                 _ => argcheck::check_integer(vm, a, arg)? as u64,
             };
-            cfmt::unsigned(&mut item, &sp, conv, n);
+            cfmt::unsigned(out, &sp, conv, n);
         }
         b'a' | b'A' if v >= LuaVersion::Lua52 => {
             let x = argcheck::check_number(vm, a, arg)?;
-            cfmt::float(&mut item, &sp, conv, x);
+            cfmt::float(out, &sp, conv, x);
         }
         b'e' | b'E' | b'f' | b'g' | b'G' => {
             let x = argcheck::check_number(vm, a, arg)?;
-            cfmt::float(&mut item, &sp, conv, x);
+            cfmt::float(out, &sp, conv, x);
         }
         b'q' => match v {
             LuaVersion::Lua51 | LuaVersion::Lua52 => {
@@ -192,7 +198,7 @@ fn item51(
                 if !has_prec && s.len() >= 100 {
                     vm.buf_push(out, &s)?;
                 } else {
-                    cfmt::cstr(&mut item, &sp, &s);
+                    cfmt::cstr(out, &sp, &s);
                 }
             }
         }
@@ -210,7 +216,6 @@ fn item51(
             return Err(raise_bytes(vm, &msg));
         }
     }
-    vm.buf_push(out, &item)?;
     Ok(p + 1)
 }
 
@@ -261,7 +266,8 @@ fn item54(
     start: usize,
     out: &mut LVec<u8>,
 ) -> Result<usize, LuaError> {
-    let mut item = Vec::new();
+    // every conversion but a long `%s` and `%q` fits in this
+    vm.buf_reserve(out, cfmt::ITEM_MAX)?;
     // getformat: flags, width and precision bytes ('0' counted as a flag),
     // then the conversion
     let mut p = start;
@@ -281,7 +287,7 @@ fn item54(
         b'c' => {
             checkformat(vm, &form, b"-", false)?;
             let c = argcheck::check_integer(vm, a, arg)? as i32;
-            cfmt::char(&mut item, &sp, c as u8);
+            cfmt::char(out, &sp, c as u8);
         }
         b'd' | b'i' | b'u' | b'o' | b'x' | b'X' => {
             let n = argcheck::check_integer(vm, a, arg)?;
@@ -292,27 +298,27 @@ fn item54(
             };
             checkformat(vm, &form, flags, true)?;
             if let b'd' | b'i' = conv {
-                cfmt::signed(&mut item, &sp, n);
+                cfmt::signed(out, &sp, n);
             } else {
-                cfmt::unsigned(&mut item, &sp, conv, n as u64);
+                cfmt::unsigned(out, &sp, conv, n as u64);
             }
         }
         b'a' | b'A' => {
             checkformat(vm, &form, b"-+#0 ", true)?;
             let x = argcheck::check_number(vm, a, arg)?;
-            cfmt::float(&mut item, &sp, conv, x);
+            cfmt::float(out, &sp, conv, x);
         }
         b'f' | b'e' | b'E' | b'g' | b'G' => {
             let x = argcheck::check_number(vm, a, arg)?;
             checkformat(vm, &form, b"-+#0 ", true)?;
-            cfmt::float(&mut item, &sp, conv, x);
+            cfmt::float(out, &sp, conv, x);
         }
         b'p' => {
             let ptr = topointer(a.get(vm, arg));
             checkformat(vm, &form, b"-", false)?;
             match ptr {
-                Some(ptr) => cfmt::pointer(&mut item, &sp, ptr),
-                None => cfmt::cstr(&mut item, &sp, b"(null)"),
+                Some(ptr) => cfmt::pointer(out, &sp, ptr),
+                None => cfmt::cstr(out, &sp, b"(null)"),
             }
         }
         b'q' => {
@@ -333,7 +339,7 @@ fn item54(
                 if !form.contains(&b'.') && s.len() >= 100 {
                     vm.buf_push(out, &s)?;
                 } else {
-                    cfmt::cstr(&mut item, &sp, &s);
+                    cfmt::cstr(out, &sp, &s);
                 }
             }
         }
@@ -346,7 +352,6 @@ fn item54(
             return Err(raise_bytes(vm, &msg));
         }
     }
-    vm.buf_push(out, &item)?;
     Ok(p + 1)
 }
 
@@ -407,7 +412,7 @@ fn addliteral(vm: &mut Vm, a: Args, arg: u32, out: &mut LVec<u8>) -> Result<(), 
             // "-9223372036854775808" would read back as a float
             item.extend_from_slice(b"0x8000000000000000");
         }
-        Value::Int(n) => cfmt::signed(&mut item, &Spec::default(), n),
+        Value::Int(n) => cfmt::signed(out, &Spec::default(), n),
         Value::Float(x) => quotefloat(vm.version(), x, &mut item),
         v @ (Value::Nil | Value::Bool(_)) => {
             let s = vm.tostring_value(v)?;
