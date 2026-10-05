@@ -82,6 +82,58 @@ jobs:
         run: cargo test --doc --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
 
   # ─────────────────────────────────────────────────────────────────
+  # A Windows host with LLVM but without Visual Studio's C++ tools. The
+  # tests are built first, while Visual Studio is visible (rustc links
+  # them with link.exe); then VC\Tools\MSVC is renamed, which takes
+  # cl.exe, link.exe and the MSVC libraries away from luna-aot's Visual
+  # Studio lookup and from lld-link. luna-aot falls back to clang-cl +
+  # lld-link on PATH and finds the CRT and SDK in cargo-xwin's cache
+  # directory, where `xwin splat` puts them.
+  # ─────────────────────────────────────────────────────────────────
+  windows-llvm-only:
+    name: windows-latest AOT with LLVM only
+    runs-on: windows-latest
+    env:
+      CARGO_PROFILE_RELEASE_LTO: "false"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: rustup target add x86_64-pc-windows-gnu
+        run: rustup target add x86_64-pc-windows-gnu
+      - name: build the AOT tests while Visual Studio is visible
+        run: cargo test -p luna-aot --release --test it --no-run
+      - uses: actions/cache@v6
+        id: xwin-cache
+        with:
+          path: ~\AppData\Local\cargo-xwin\xwin
+          key: xwin-0.10.0-splat-x86_64-windows-v1
+      - name: xwin splat into cargo-xwin's cache directory
+        if: steps.xwin-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP"
+          gh release download 0.10.0 -R Jake-Shadle/xwin --pattern 'xwin-0.10.0-x86_64-pc-windows-msvc.tar.gz'
+          echo "96e83665ef5c1406aabd0be603a8d08e67e604f36fda630b6807ee948a614e26  xwin-0.10.0-x86_64-pc-windows-msvc.tar.gz" | sha256sum -c -
+          tar -xzf xwin-0.10.0-x86_64-pc-windows-msvc.tar.gz
+          # xwin moves files from its download cache into place, so both
+          # must be on the same drive
+          ./xwin-0.10.0-x86_64-pc-windows-msvc/xwin.exe --accept-license \
+            --cache-dir "$LOCALAPPDATA/xwin-download" splat --output "$LOCALAPPDATA/cargo-xwin/xwin"
+      - name: hide the MSVC tools and libraries
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Rename-Item "$vs\VC\Tools\MSVC" "MSVC.hidden"
+          if (Test-Path "$vs\VC\Tools\MSVC") { throw "VC\Tools\MSVC is still there" }
+          if (Get-Command cl.exe -ErrorAction SilentlyContinue) { throw "cl.exe is still on PATH" }
+          Get-Command clang-cl.exe, lld-link.exe, llvm-lib.exe | Format-Table Name, Source
+      - name: cargo test -p luna-aot (LLVM only)
+        run: cargo test -p luna-aot --release --test it -- --nocapture
+
+  # ─────────────────────────────────────────────────────────────────
   # wasm32 build of luna-core only (luna pulls Cranelift, which has
   # no wasm32 target). Proves the 0-dep core also satisfies the
   # wasm portability contract documented in docs/architecture.md.

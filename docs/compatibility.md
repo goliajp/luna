@@ -113,8 +113,11 @@ Numbers are rendered the way PUC renders them, including the one place
 where PUC's output depends on the platform: a NaN is spelled by the C
 library's `printf`, so luna follows the platform it runs on — `nan` on
 macOS; `-nan` for a negative NaN (which is what 0/0 gives on x86) and
-`+nan` / ` nan` under those `string.format` flags on Linux; `-nan(ind)`
-for that default NaN on Windows. The NaN's sign comes from the operation
+`+nan` / ` nan` under those `string.format` flags on Linux. On Windows
+the Universal CRT also names the kind: `-nan(ind)` for exactly the default
+NaN, `nan(snan)` for a signalling one, `nan` for any other, each with its
+sign, `+` / space flags and width as for numbers, and upper case under
+`%G` / `%E`. The NaN's sign comes from the operation
 that made it, as in PUC: the hardware's (x86 makes 0/0, `inf - inf` and
 `math.sqrt(-1)` negative, aarch64 positive), unary minus flips it and
 `math.abs` clears it; luna folds no constant expression whose result is a
@@ -123,6 +126,21 @@ NaN. Pointers (`tostring` of a table, function, thread or userdata,
 library writes `%p`: a NULL light userdata is `userdata: (nil)` with
 glibc, `userdata: 0` with musl, `userdata: 0x0` on macOS, and Windows
 writes 16 upper-case hex digits without `0x`.
+
+Float `%` and `math.fmod` with NaN operands return the NaN the platform's
+C `fmod` picks: on x86 Linux the larger significand, as the x87 `fprem`
+loop gcc inlines for PUC; on Windows the second operand whenever it is a
+NaN, as the Universal CRT does (a signalling NaN comes back unquieted).
+The 5.1 / 5.2 `%` (`a - floor(a/b)*b`) is fused into one multiply-add on
+aarch64 Linux and macOS and not fused elsewhere, as the C compilers build
+PUC there (MSVC on x64 does not fuse it, with or without `/arch:AVX2`).
+These rules hold in the interpreter, in compiled traces and in luna-aot
+binaries; on Windows they were checked against PUC 5.1–5.5 built with MSVC (`tostring`,
+`string.format`, `%`, `math.fmod`, with the JIT on and off).
+
+One difference remains on Windows: PUC's `print` ends each line with
+`\r\n`, because the C library's stdout is in text mode; luna's ends it
+with `\n`.
 
 `io` and `os` share a single opener because they share a threat model:
 either the host is giving the script filesystem and process access or it
