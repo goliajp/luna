@@ -226,7 +226,7 @@ impl Vm {
             return self.call_noyield(f, args);
         };
         let results_at = self.stack.len() as u32;
-        self.push_host_cont(spec, results_at);
+        self.push_host_cont(spec, results_at)?;
         let r = self.call_value(f, args);
         if r.is_err() && self.yielding.is_some() {
             return r;
@@ -255,7 +255,9 @@ impl Vm {
                     nresults,
                     token,
                 };
-                self.push_host_cont(spec, at);
+                if let Err(e) = self.push_host_cont(spec, at) {
+                    return e;
+                }
                 self.yielding = Some((vals, at, -1));
             }
             None => self.yielding = Some((vals, func_slot, nresults)),
@@ -312,20 +314,15 @@ impl Vm {
         self.close_coro(co)
     }
 
-    fn push_host_cont(&mut self, spec: HostContSpec, results_at: u32) {
-        frames_push_sync(
-            &mut self.frames,
-            &mut self.frames_top,
-            &mut self.trap,
-            CallFrame::Cont(NativeCont {
-                kind: ContKind::Host(HostCont {
-                    results_at,
-                    token: spec.token,
-                }),
-                func_slot: spec.func_slot,
-                nresults: spec.nresults,
+    fn push_host_cont(&mut self, spec: HostContSpec, results_at: u32) -> Result<(), LuaError> {
+        self.push_cf(CallFrame::Cont(NativeCont {
+            kind: ContKind::Host(HostCont {
+                results_at,
+                token: spec.token,
             }),
-        );
+            func_slot: spec.func_slot,
+            nresults: spec.nresults,
+        }))
     }
 
     /// A [`ContKind::Host`] frame came to the top (already popped): its call

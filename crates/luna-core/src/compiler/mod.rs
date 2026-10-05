@@ -59,7 +59,7 @@ pub fn compile_chunk(
     heap: &mut Heap,
 ) -> Result<Gc<Proto>, SyntaxError> {
     let mut scratch = CompileScratch::new(heap.mem());
-    let source = heap.intern(source_name);
+    let source = heap.try_intern(source_name)?;
     compile_parsed(ast, &[], version, source, heap, &mut scratch)
 }
 
@@ -138,7 +138,7 @@ pub fn compile_chunk_with_last_target(
     heap: &mut Heap,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
     let mut scratch = CompileScratch::new(heap.mem());
-    let source = heap.intern(source_name);
+    let source = heap.try_intern(source_name)?;
     compile_main(ast, &[], version, source, heap, &mut scratch)
 }
 
@@ -369,7 +369,9 @@ impl<'a> Compiler<'a> {
     fn finish_level(&mut self, lvl: Level<'a>, line: u32, last_line: u32) -> Gc<Proto> {
         let (proto, bufs) = lvl.into_proto(self.source, line, last_line, self.heap);
         self.pool.push_or_abort(bufs);
-        self.heap.adopt_proto(proto)
+        self.heap
+            .try_adopt_proto(proto)
+            .unwrap_or_else(|o| o.fail())
     }
 
     /// The `end` line the parser recorded for statement `sid`.
