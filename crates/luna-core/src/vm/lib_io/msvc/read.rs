@@ -169,14 +169,13 @@ impl CrtFile {
             if os.seek(SeekFrom::Start(lowio as u64)).is_err() {
                 return -1;
             }
-            bytes_read = if bytes_read <= SMALL_BUFSIZ as i64
-                && self.has(BUF_CRT)
-                && !self.has(BUF_SETVBUF)
-            {
-                SMALL_BUFSIZ as i64
-            } else {
-                self.bufsiz as i64
-            };
+            bytes_read =
+                if bytes_read <= SMALL_BUFSIZ as i64 && self.has(BUF_CRT) && !self.has(BUF_SETVBUF)
+                {
+                    SMALL_BUFSIZ as i64
+                } else {
+                    self.bufsiz as i64
+                };
             if self.io.crlf {
                 bytes_read += 1;
             }

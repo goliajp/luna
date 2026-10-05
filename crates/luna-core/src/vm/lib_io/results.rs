@@ -67,7 +67,12 @@ impl std::fmt::Display for PosixErrno {
             "Directory not empty",
             "Illegal byte sequence",
         ];
-        f.write_str(usize::try_from(self.0).ok().and_then(|i| TEXT.get(i)).unwrap_or(&"Unknown error"))
+        f.write_str(
+            usize::try_from(self.0)
+                .ok()
+                .and_then(|i| TEXT.get(i))
+                .unwrap_or(&"Unknown error"),
+        )
     }
 }
 
@@ -115,8 +120,13 @@ pub(super) fn file_fail_values(
         msg.extend_from_slice(c_str(n));
         msg.extend_from_slice(b": ");
     }
-    msg.extend_from_slice(strerror(e).as_bytes());
     let code = errno(e).map_or(0, i64::from);
+    if errno(e) == Some(0) && vm.version() >= LuaVersion::Lua54 {
+        // 5.4's luaL_fileresult for an errno of 0
+        msg.extend_from_slice(b"(no extra info)");
+    } else {
+        msg.extend_from_slice(strerror(e).as_bytes());
+    }
     let m = Value::Str(vm.heap.intern(&msg));
     [Value::Nil, m, Value::Int(code)]
 }

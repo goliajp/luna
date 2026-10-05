@@ -20,7 +20,11 @@ const CASES: [(&str, &[&str], &[&str]); 3] = [
         &["-e", "\"for l in io.lines() do io.write('[', l, ']') end\""],
         &["ab\x1acd\r", "ef\r", "\x1a\r"],
     ),
-    ("repl", &["-i"], &["print(1)\x1a2\r", "print(3)\r", "\x1a\r"]),
+    (
+        "repl",
+        &["-i"],
+        &["print(1)\x1a2\r", "print(3)\r", "\x1a\r"],
+    ),
 ];
 
 /// What the console shows after the case ran, and the exit status.

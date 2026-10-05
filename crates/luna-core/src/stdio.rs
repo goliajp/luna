@@ -89,6 +89,12 @@ pub fn flush_stderr() -> std::io::Result<()> {
     std::io::stderr().flush()
 }
 
+/// `fseek` + `ftell` on the MSVC C library's `stdout` or `stderr`: the
+/// position, or the `errno` of a failed `fseek`.
+pub(crate) fn seek_crt(which: Std, op: u8, offset: i64) -> Result<i64, i32> {
+    crt::seek(which, op, offset)
+}
+
 /// `setvbuf` on the MSVC C library's `stdout` or `stderr` (`mode`: 0 full,
 /// 1 line, 2 none).
 pub(crate) fn setvbuf_crt(which: Std, mode: u8, size: usize) {
@@ -100,12 +106,20 @@ fn dup_stdout() -> Option<std::fs::File> {
     #[cfg(unix)]
     {
         use std::os::fd::AsFd;
-        std::io::stdout().as_fd().try_clone_to_owned().ok().map(Into::into)
+        std::io::stdout()
+            .as_fd()
+            .try_clone_to_owned()
+            .ok()
+            .map(Into::into)
     }
     #[cfg(windows)]
     {
         use std::os::windows::io::AsHandle;
-        std::io::stdout().as_handle().try_clone_to_owned().ok().map(Into::into)
+        std::io::stdout()
+            .as_handle()
+            .try_clone_to_owned()
+            .ok()
+            .map(Into::into)
     }
     #[cfg(not(any(unix, windows)))]
     None
@@ -116,12 +130,20 @@ fn dup_stderr() -> Option<std::fs::File> {
     #[cfg(unix)]
     {
         use std::os::fd::AsFd;
-        std::io::stderr().as_fd().try_clone_to_owned().ok().map(Into::into)
+        std::io::stderr()
+            .as_fd()
+            .try_clone_to_owned()
+            .ok()
+            .map(Into::into)
     }
     #[cfg(windows)]
     {
         use std::os::windows::io::AsHandle;
-        std::io::stderr().as_handle().try_clone_to_owned().ok().map(Into::into)
+        std::io::stderr()
+            .as_handle()
+            .try_clone_to_owned()
+            .ok()
+            .map(Into::into)
     }
     #[cfg(not(any(unix, windows)))]
     None

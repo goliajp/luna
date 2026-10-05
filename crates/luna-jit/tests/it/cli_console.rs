@@ -101,7 +101,9 @@ impl Console {
             );
         }
 
-        let mut cmdline: Vec<u16> = format!("\"{}\"", program.display()).encode_utf16().collect();
+        let mut cmdline: Vec<u16> = format!("\"{}\"", program.display())
+            .encode_utf16()
+            .collect();
         for a in args {
             cmdline.extend(format!(" {a}").encode_utf16());
         }
@@ -280,4 +282,3 @@ pub(crate) fn strip_escapes(s: &str) -> String {
     }
     out
 }
-

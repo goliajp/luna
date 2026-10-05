@@ -65,6 +65,10 @@ impl Handle {
         }
     }
 
+    pub(crate) fn is_dev(&self) -> bool {
+        self.dev
+    }
+
     /// `_read` into `dst`: the number of bytes it gives, 0 at end of file,
     /// -1 on an error.
     pub(crate) fn read(&mut self, os: &mut dyn Os, dst: &mut [u8]) -> i64 {
