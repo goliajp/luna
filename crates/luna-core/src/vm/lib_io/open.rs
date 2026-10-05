@@ -63,9 +63,14 @@ fn text_mode_for(vm: &Vm, mode: &[u8]) -> bool {
 fn open_file(name: &[u8], mode: &[u8], text: bool) -> std::io::Result<(std::fs::File, bool)> {
     let mode = c_str(mode);
     let (o, writable) = fopen_options(mode).ok_or_else(|| posix_error(EINVAL))?;
-    let mut f = o.open(os_path(name))?;
-    if text && mode.contains(&b'+') {
-        text_mode::drop_final_ctrl_z(&mut f)?;
+    let f = o.open(os_path(name))?;
+    if text && mode.contains(&b'+') && f.metadata()?.len() > 0 {
+        // through a handle of its own: an append handle may not shorten
+        let mut g = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(os_path(name))?;
+        text_mode::drop_final_ctrl_z(&mut g)?;
     }
     Ok((f, writable))
 }

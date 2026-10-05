@@ -318,7 +318,6 @@ pub(super) fn drop_final_ctrl_z(f: &mut std::fs::File) -> std::io::Result<()> {
             f.set_len(len - 1)?;
         }
     }
-    f.seek(SeekFrom::Start(0))?;
     Ok(())
 }
 
