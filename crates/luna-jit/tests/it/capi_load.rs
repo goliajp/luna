@@ -38,6 +38,21 @@ fn alloc_count() {
 }
 
 #[test]
+fn alloc_fail() {
+    check("alloc_fail");
+}
+
+#[test]
+fn alloc_once() {
+    check("alloc_once");
+}
+
+#[test]
+fn alloc_limit() {
+    check("alloc_limit");
+}
+
+#[test]
 fn warn_default() {
     check("warn_default");
 }

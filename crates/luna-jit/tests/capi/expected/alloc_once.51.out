@@ -1,0 +1,2 @@
+one refusal: [LUA_ERRMEM not enough memory] [LUA_ERRRUN [string "local t = {}..."]:4: not enough memory] [ok 60 a!b? 60 1000]
+every block freed after lua_close: yes
