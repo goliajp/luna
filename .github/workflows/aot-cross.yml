@@ -255,7 +255,8 @@ jobs:
             cargo run -q -p luna-aot --release -- compile /tmp/p.lua \
               --dialect "$d" --target x86_64-pc-windows-msvc --out "/tmp/p-$d.exe" > /dev/null
             file "/tmp/p-$d.exe" | grep -q 'PE32+' || { echo "::error::$d: not a PE32+ binary"; exit 1; }
-            OUT=$(wine "/tmp/p-$d.exe" 2>&1 | tr -d '\r') || true
+            # wine's own messages go to stderr; the program's output is stdout
+            OUT=$(wine "/tmp/p-$d.exe" 2> /dev/null | tr -d '\r') || true
             echo "$d: $OUT"
             [ "$OUT" = "$(printf 'Lua %s\t300000' "$d")" ] || { echo "::error::dialect $d binary printed: $OUT"; exit 1; }
           done

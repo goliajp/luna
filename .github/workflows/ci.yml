@@ -84,12 +84,13 @@ jobs:
   # ─────────────────────────────────────────────────────────────────
   # A Windows host with LLVM but without Visual Studio's C++ tools. The
   # tests are built first, while Visual Studio is visible (rustc links
-  # them with link.exe); then VC\Tools\MSVC is renamed, which takes
-  # cl.exe, link.exe and the MSVC libraries away from luna-aot's Visual
-  # Studio lookup and from lld-link. luna-aot falls back to clang-cl +
+  # them with link.exe). Then the installer's instance records are moved
+  # away: find-msvc-tools (luna-aot's Visual Studio lookup), vswhere and
+  # lld-link all find an installation through them, and the files of
+  # VC\Tools\MSVC cannot be renamed while the build's processes hold
+  # them. cl.exe is not on PATH either. luna-aot falls back to clang-cl +
   # lld-link on PATH and finds the CRT and SDK in cargo-xwin's cache
   # directory, where `xwin splat` puts them.
-  # ─────────────────────────────────────────────────────────────────
   windows-llvm-only:
     name: windows-latest AOT with LLVM only
     runs-on: windows-latest
@@ -102,6 +103,18 @@ jobs:
         run: rustup target add x86_64-pc-windows-gnu
       - name: build the AOT tests while Visual Studio is visible
         run: cargo test -p luna-aot --release --test it --no-run
+      - name: with Visual Studio, luna-aot links with link.exe
+        shell: pwsh
+        run: |
+          'print("aot")' | Set-Content hello.lua
+          cargo run -q -p luna-aot --release -- compile hello.lua --out vs.exe | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "luna-aot failed" }
+          $out = & .\vs.exe
+          if ($out -ne "aot") { throw "vs.exe printed $out" }
+          # link.exe writes a "Rich" record into the DOS stub, lld-link does not
+          $stub = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes("vs.exe")[0..1023])
+          if ($stub.Contains("Rich") -ne $true) { throw "vs.exe: Rich record present = $($stub.Contains('Rich'))" }
+          "vs.exe: Rich record present = $($stub.Contains('Rich'))"
       - uses: actions/cache@v6
         id: xwin-cache
         with:
@@ -122,14 +135,27 @@ jobs:
           # must be on the same drive
           ./xwin-0.10.0-x86_64-pc-windows-msvc/xwin.exe --accept-license \
             --cache-dir "$LOCALAPPDATA/xwin-download" splat --output "$LOCALAPPDATA/cargo-xwin/xwin"
-      - name: hide the MSVC tools and libraries
+      - name: hide the Visual Studio installation
         shell: pwsh
         run: |
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          Rename-Item "$vs\VC\Tools\MSVC" "MSVC.hidden"
-          if (Test-Path "$vs\VC\Tools\MSVC") { throw "VC\Tools\MSVC is still there" }
-          if (Get-Command cl.exe -ErrorAction SilentlyContinue) { throw "cl.exe is still on PATH" }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          Rename-Item "$env:ProgramData\Microsoft\VisualStudio\Packages\_Instances" "_Instances.hidden"
+          $found = & $vswhere -all -prerelease -products * -property installationPath
+          if ($found) { throw "vswhere still finds $found" }
+          if (Get-Command cl.exe -ErrorAction SilentlyContinue) { throw "cl.exe is on PATH" }
           Get-Command clang-cl.exe, lld-link.exe, llvm-lib.exe | Format-Table Name, Source
+      - name: without it, luna-aot links with lld-link
+        shell: pwsh
+        run: |
+          'print("aot")' | Set-Content hello.lua
+          cargo run -q -p luna-aot --release -- compile hello.lua --out llvm.exe | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "luna-aot failed" }
+          $out = & .\llvm.exe
+          if ($out -ne "aot") { throw "llvm.exe printed $out" }
+          # link.exe writes a "Rich" record into the DOS stub, lld-link does not
+          $stub = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes("llvm.exe")[0..1023])
+          if ($stub.Contains("Rich") -ne $false) { throw "llvm.exe: Rich record present = $($stub.Contains('Rich'))" }
+          "llvm.exe: Rich record present = $($stub.Contains('Rich'))"
       - name: cargo test -p luna-aot (LLVM only)
         run: cargo test -p luna-aot --release --test it -- --nocapture
 
