@@ -249,6 +249,22 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
         vm.jit.trace_hot_threshold = n;
         vm.jit.call_hot_threshold = n;
     }
+    // Test knob, also left out of --help: with the LLVM backend, how long a
+    // hot trace runs Cranelift's code before LLVM compiles it (0: LLVM at
+    // once, before the trace runs on)
+    #[cfg(feature = "llvm-jit")]
+    if !opts.no_jit
+        && std::env::var("LUNA_JIT_BACKEND").as_deref() == Ok("llvm")
+        && let Some(ms) = std::env::var("LUNA_LLVM_AFTER_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+    {
+        let llvm_after = (ms > 0).then(|| std::time::Duration::from_millis(ms));
+        luna_jit::install_llvm_backend_with(
+            &mut vm,
+            luna_jit::jit_backend::LlvmBackend { llvm_after },
+        );
+    }
     // Test knob, also left out of --help: move a trace to the optimizing
     // tier after N loop iterations and entries (0: never)
     if let Some(n) = std::env::var("LUNA_TIER_UP_AT")

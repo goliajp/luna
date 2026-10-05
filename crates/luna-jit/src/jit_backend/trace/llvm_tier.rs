@@ -80,6 +80,12 @@ pub(super) fn compile_trace_llvm(
 /// holds meanwhile.
 struct Pending(Arc<Mutex<Option<Compiled>>>);
 
+/// A trace running Cranelift's code, not yet handed to LLVM: since when.
+struct Waiting {
+    source: Box<share::TierSource>,
+    since: std::time::Instant,
+}
+
 struct Job {
     source: Box<share::TierSource>,
     done: Arc<Mutex<Option<Compiled>>>,
@@ -135,25 +141,23 @@ pub(crate) fn quiesce() {
 /// [`super::share::tier_up`] for the LLVM backend: the baseline trace `ct`
 /// compiled again by LLVM.
 ///
-/// With `background`, the first call compiles the trace with Cranelift at
-/// once, as the Cranelift backend would, and hands it to LLVM on the
-/// compile thread; Cranelift's code counts iterations like the baseline
-/// tier's, so the Vm asks again every tier-up count and installs LLVM's
-/// code once it is ready. Without, LLVM compiles it before the trace runs
-/// on.
+/// With `delay`, the first call compiles the trace with Cranelift at once,
+/// as the Cranelift backend would; Cranelift's code counts iterations like
+/// the baseline tier's, so the Vm keeps asking every tier-up count. Once
+/// the trace has kept running that code for `delay`, LLVM compiles it on
+/// the compile thread, and the Vm installs LLVM's code when it is ready. A
+/// trace that stops being hot within `delay` never costs an LLVM compile.
+/// Without, LLVM compiles the trace before it runs on.
 pub(crate) fn tier_up_llvm(
     storage: &mut dyn luna_core::jit::JitStorage,
     ct: &CompiledTrace,
-    background: bool,
+    delay: Option<std::time::Duration>,
 ) -> Option<TraceFn> {
     let t = ct.tier_up.as_ref()?;
     let source = t.source.borrow_mut().take()?;
     let source = match source.downcast::<Pending>() {
         Ok(p) => {
-            let done =
-                p.0.lock()
-                    .expect("the compile thread never panics holding a lock")
-                    .take();
+            let done = p.0.lock().expect(POISON).take();
             let Some(c) = done else {
                 *t.source.borrow_mut() = Some(p);
                 return None;
@@ -162,23 +166,39 @@ pub(crate) fn tier_up_llvm(
             super::code_dump::dump("tier-up-llvm", ct.head_pc, entry as *const u8);
             return Some(entry);
         }
+        Err(s) => s,
+    };
+    let source = match source.downcast::<Waiting>() {
+        Ok(w) if delay.is_some_and(|d| w.since.elapsed() < d) => {
+            *t.source.borrow_mut() = Some(w);
+            return None;
+        }
+        Ok(w) => {
+            let done = Arc::new(Mutex::new(None));
+            submit(Job {
+                source: w.source,
+                done: done.clone(),
+            })?;
+            *t.source.borrow_mut() = Some(Box::new(Pending(done)));
+            return None;
+        }
         Err(s) => s.downcast::<share::TierSource>().ok()?,
     };
-    if !background {
+    let Some(_) = delay else {
         let entry = install(storage, compile(&source.lir, &source.relocs))?;
         super::code_dump::dump("tier-up-llvm", ct.head_pc, entry as *const u8);
         return Some(entry);
-    }
-    let done = Arc::new(Mutex::new(None));
-    let job = Box::new(share::TierSource {
-        lir: source.lir.clone(),
-        relocs: source.relocs.clone(),
-        image: None,
-    });
-    submit(Job {
-        source: job,
-        done: done.clone(),
-    })?;
-    *t.source.borrow_mut() = Some(Box::new(Pending(done)));
-    share::clif_tier_up(storage, &source, ct.head_pc, true)
+    };
+    let entry = share::clif_tier_up(storage, &source, ct.head_pc, true);
+    let lir = source.lir.clone();
+    let relocs = source.relocs.clone();
+    *t.source.borrow_mut() = Some(Box::new(Waiting {
+        source: Box::new(share::TierSource {
+            lir,
+            relocs,
+            image: None,
+        }),
+        since: std::time::Instant::now(),
+    }));
+    entry
 }
