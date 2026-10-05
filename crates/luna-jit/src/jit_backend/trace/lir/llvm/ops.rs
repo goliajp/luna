@@ -55,14 +55,7 @@ impl<'c> Gen<'c, '_> {
     fn bin(&self, op: BinOp, x: BasicValueEnum<'c>, y: BasicValueEnum<'c>) -> R<BasicValueEnum<'c>> {
         let bb = self.b;
         if let (BasicValueEnum::FloatValue(x), BasicValueEnum::FloatValue(y)) = (x, y) {
-            return Ok(match op {
-                BinOp::Fadd => b(bb.build_float_add(x, y, ""))?,
-                BinOp::Fsub => b(bb.build_float_sub(x, y, ""))?,
-                BinOp::Fmul => b(bb.build_float_mul(x, y, ""))?,
-                BinOp::Fdiv => b(bb.build_float_div(x, y, ""))?,
-                _ => return Err("llvm:float-operands"),
-            }
-            .into());
+            return self.float_bin(op, x, y);
         }
         let (x, y) = (x.into_int_value(), y.into_int_value());
         Ok(match op {
@@ -110,6 +103,32 @@ impl<'c> Gen<'c, '_> {
             }
         }
         .into())
+    }
+
+    /// `x op y` as the machine computes it. Plain LLVM float operations
+    /// fold on constants to a NaN of LLVM's choosing (positive), where
+    /// x86 makes a negative one, and Lua prints the sign. LLVM folds a
+    /// constrained operation that raises invalid only when exceptions are
+    /// not strict.
+    fn float_bin(&self, op: BinOp, x: FloatValue<'c>, y: FloatValue<'c>) -> R<BasicValueEnum<'c>> {
+        let name = match op {
+            BinOp::Fadd => "llvm.experimental.constrained.fadd",
+            BinOp::Fsub => "llvm.experimental.constrained.fsub",
+            BinOp::Fmul => "llvm.experimental.constrained.fmul",
+            BinOp::Fdiv => "llvm.experimental.constrained.fdiv",
+            _ => return Err("llvm:float-operands"),
+        };
+        let f = self.intrinsic(name, &[x.get_type().into()])?;
+        let round = self.ctx.metadata_string("round.tonearest");
+        let except = self.ctx.metadata_string("fpexcept.strict");
+        let call = b(self
+            .b
+            .build_call(f, &[x.into(), y.into(), round.into(), except.into()], ""))?;
+        call.add_attribute(inkwell::attributes::AttributeLoc::Function, self.strictfp());
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v),
+            _ => Err("llvm:intrinsic"),
+        }
     }
 
     fn float_call(&self, name: &str, x: FloatValue<'c>) -> R<BasicValueEnum<'c>> {

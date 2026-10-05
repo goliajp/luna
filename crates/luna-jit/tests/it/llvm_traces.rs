@@ -52,6 +52,16 @@ const SCRIPTS: &[(&str, &str)] = &[
          return n",
     ),
     (
+        // LLVM must not fold `0 / 0` to a NaN of another sign than the
+        // machine's division makes (Lua prints the sign)
+        "nan_from_known_operands",
+        "local t = {}
+         for i = 1, 5000 do t[i] = (i - i) / (i - i) end
+         local a = tostring(t[5000])
+         for i = 1, 5000 do t[i] = -((i - i) / (i - i)) end
+         return a .. ' ' .. tostring(t[5000])",
+    ),
+    (
         "strings_and_collection",
         "collectgarbage('setpause', 0)
          local parts = {}

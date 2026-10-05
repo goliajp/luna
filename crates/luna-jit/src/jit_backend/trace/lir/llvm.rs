@@ -75,6 +75,13 @@ impl<'c, 'a> Gen<'c, 'a> {
             i64t.fn_type(&[i64t.into()], false),
             None,
         );
+        // the function's float operations are the constrained ones (see
+        // `float_bin`)
+        let strictfp = inkwell::attributes::Attribute::get_named_enum_kind_id("strictfp");
+        f.add_attribute(
+            inkwell::attributes::AttributeLoc::Function,
+            ctx.create_enum_attribute(strictfp, 0),
+        );
         Ok(Gen {
             ctx,
             module,
@@ -252,6 +259,11 @@ impl<'c, 'a> Gen<'c, 'a> {
         }
         let o = self.ctx.i64_type().const_int(off as i64 as u64, true);
         b(self.b.build_int_add(base, o, ""))
+    }
+
+    pub(super) fn strictfp(&self) -> inkwell::attributes::Attribute {
+        let k = inkwell::attributes::Attribute::get_named_enum_kind_id("strictfp");
+        self.ctx.create_enum_attribute(k, 0)
     }
 
     /// The intrinsic `name` overloaded on `tys`.
