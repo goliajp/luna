@@ -91,6 +91,10 @@ mod getupval_roles;
 mod math_fold;
 mod send_jit_module;
 mod trace_backend;
+#[cfg(feature = "llvm-jit")]
+mod llvm_backend;
+#[cfg(feature = "llvm-jit")]
+pub use llvm_backend::LlvmBackend;
 use getupval_roles::determine_getupval_roles;
 use math_fold::try_match_math_fold;
 #[allow(unused_imports)]
