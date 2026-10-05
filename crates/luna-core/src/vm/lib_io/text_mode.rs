@@ -279,12 +279,13 @@ pub(super) fn ftell(u: Gc<Userdata>) -> std::io::Result<i64> {
 
 /// `fseek` (`op`: 0 set, 1 cur, 2 end), then `ftell`, as `file:seek` does.
 pub(super) fn fseek(u: Gc<Userdata>, op: usize, offset: i64) -> std::io::Result<u64> {
+    // what is buffered for output counts in `ftell` as written
+    drain_write_buf(u)?;
     let (mut target, mut op) = (offset, op);
     if op == 1 {
         target = target.saturating_add(ftell(u)?);
         op = 0;
     }
-    drain_write_buf(u)?;
     // SAFETY: `u` is held by the caller; `drain_write_buf`'s borrow has ended, and `m` is the only reference into it until `state` is read
     let m = unsafe { u.as_mut() };
     m.read_buf = Vec::new();
