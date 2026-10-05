@@ -58,35 +58,32 @@ impl From<Oom> for GotoErr {
 }
 
 impl GotoCheck {
-    pub(crate) fn enter_function(&mut self) -> Result<(), Oom> {
-        self.funcs.push(self.blocks.len())?;
+    pub(crate) fn enter_function(&mut self) {
+        self.funcs.push_or_abort(self.blocks.len());
         self.enter_block(false)
     }
 
-    pub(crate) fn enter_block(&mut self, is_loop: bool) -> Result<(), Oom> {
-        self.blocks.push(Block {
+    pub(crate) fn enter_block(&mut self, is_loop: bool) {
+        self.blocks.push_or_abort(Block {
             nactvar: self.actvar.len(),
             first_label: self.labels.len(),
             first_goto: self.pending.len(),
             is_loop,
-        })
+        });
     }
 
     /// A variable comes into scope (a local, or a 5.5 global declaration;
     /// `global *` is named "*").
-    pub(crate) fn declare(&mut self, name: &str, kind: VarKind) -> Result<(), Oom> {
-        // room first, so a failure leaves the three in step
-        self.actvar.reserve(1)?;
-        self.kinds.reserve(1)?;
-        self.names.extend_from_slice(name.as_bytes())?;
-        self.actvar.push(self.names.len() - name.len())?;
-        self.kinds.push(kind)
+    pub(crate) fn declare(&mut self, name: &str, kind: VarKind) {
+        self.actvar.push_or_abort(self.names.len());
+        self.kinds.push_or_abort(kind);
+        self.names.extend_from_slice_or_abort(name.as_bytes());
     }
 
     /// The name of active variable `i`.
-    fn var_name(&self, i: usize) -> &str {
+    fn var_name(&self, i: usize) -> &[u8] {
         let end = self.actvar.get(i + 1).copied().unwrap_or(self.names.len());
-        std::str::from_utf8(&self.names[self.actvar[i]..end]).unwrap_or("")
+        &self.names[self.actvar[i]..end]
     }
 
     fn truncate_actvar(&mut self, n: usize) {
@@ -102,10 +99,11 @@ impl GotoCheck {
     /// `check_readonly`). A global declaration of the name, or a `global *`,
     /// in between leaves the answer to the compiler.
     pub(crate) fn is_const_local(&self, name: &str) -> bool {
+        let name = name.as_bytes();
         for (i, &kind) in self.kinds.iter().enumerate().rev() {
             let n = self.var_name(i);
             match kind {
-                VarKind::Global if n == name || n == "*" => return false,
+                VarKind::Global if n == name || n == b"*" => return false,
                 VarKind::Global => {}
                 _ if n == name => return kind == VarKind::Const,
                 _ => {}
@@ -125,7 +123,7 @@ impl GotoCheck {
             "<goto {}> at line {} jumps into the scope of {kind}'{}'",
             g.name,
             g.line,
-            self.var_name(g.nactvar)
+            String::from_utf8_lossy(self.var_name(g.nactvar))
         )
     }
 
@@ -173,11 +171,11 @@ impl GotoCheck {
         if self.v54 && !self.v55 && name != "break" && self.find_label_54(name).is_some() {
             return Ok(()); // backward jump, resolved on the spot
         }
-        self.pending.push(Goto {
+        self.pending.push_or_abort(Goto {
             name: name.into(),
             line,
             nactvar: self.actvar.len(),
-        })?;
+        });
         if !self.v54 {
             let g = self.pending.len() - 1;
             self.find_label_53(g)?;
@@ -194,18 +192,18 @@ impl GotoCheck {
             if let Some(prev) = self.labels[first..].iter().find(|l| &*l.name == name) {
                 return Err(format!("label '{name}' already defined on line {}", prev.line).into());
             }
-            self.labels.push(Label {
+            self.labels.push_or_abort(Label {
                 name: name.into(),
                 line,
                 nactvar: self.actvar.len(),
-            })?;
+            });
             entry = Some(self.labels.len() - 1);
         }
-        self.open.push(Open {
+        self.open.push_or_abort(Open {
             name: name.into(),
             line,
             entry,
-        })?;
+        });
         Ok(())
     }
 
@@ -237,11 +235,11 @@ impl GotoCheck {
                         )
                         .into());
                     }
-                    self.labels.push(Label {
+                    self.labels.push_or_abort(Label {
                         name: open.name,
                         line: open.line,
                         nactvar,
-                    })?;
+                    });
                     self.labels.len() - 1
                 }
             };
@@ -266,11 +264,11 @@ impl GotoCheck {
             self.truncate_actvar(nactvar);
         }
         if is_loop && !self.v55 {
-            self.labels.push(Label {
+            self.labels.push_or_abort(Label {
                 name: "break".into(),
                 line: 0,
                 nactvar: self.actvar.len(),
-            })?;
+            });
             self.find_gotos(self.labels.len() - 1)?;
         }
         if self.v55 {

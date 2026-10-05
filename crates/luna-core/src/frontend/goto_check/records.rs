@@ -53,9 +53,9 @@ impl GotoCheck {
         version: LuaVersion,
         old: Option<GotoCheck>,
         mem: MemRef,
-    ) -> Result<Option<GotoCheck>, Oom> {
+    ) -> Option<GotoCheck> {
         if !version.has_goto() {
-            return Ok(None);
+            return None;
         }
         let mut g = old.unwrap_or_else(|| GotoCheck {
             v54: false,
@@ -72,7 +72,7 @@ impl GotoCheck {
         g.clear();
         g.v54 = version >= LuaVersion::Lua54;
         g.v55 = version >= LuaVersion::Lua55;
-        Ok(Some(g))
+        Some(g)
     }
 
     /// Forget everything, keeping the vectors.

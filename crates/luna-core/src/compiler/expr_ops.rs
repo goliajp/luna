@@ -33,7 +33,7 @@ impl<'a> Compiler<'a> {
         let r = self.exp_to_anyreg(folded)?;
         self.set_freereg(saved);
         self.last_line = line;
-        Ok(Exp::Reloc(self.emit(Inst::iabc(opcode, 0, r, 0, false))?))
+        Ok(Exp::Reloc(self.emit(Inst::iabc(opcode, 0, r, 0, false))))
     }
 
     pub(super) fn and_or(
@@ -57,8 +57,8 @@ impl<'a> Compiler<'a> {
         if let Exp::Cmp { op: cop, l, r, c } = le {
             let is_and = matches!(op, BinOp::And);
             // For AND, Jmp on cond==false (k=false). For OR, Jmp on cond==true (k=true).
-            self.emit(Inst::iabc(cop, l, r, c, !is_and))?;
-            let jmp_lhs = self.emit_jump()?;
+            self.emit(Inst::iabc(cop, l, r, c, !is_and));
+            let jmp_lhs = self.emit_jump();
             self.set_freereg(base);
             let re = self.expr(rhs)?;
             // RHS shapes that leak freereg += 1 (nested and/or, function call,
@@ -80,12 +80,12 @@ impl<'a> Compiler<'a> {
                     r: y_r,
                     c: y_c,
                 } => {
-                    self.emit(Inst::iabc(y_op, y_l, y_r, y_c, true))?;
-                    self.emit(Inst::isj(Op::Jmp, 1))?;
+                    self.emit(Inst::iabc(y_op, y_l, y_r, y_c, true));
+                    self.emit(Inst::isj(Op::Jmp, 1));
                     let fpad = self.here();
-                    self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false))?;
+                    self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
                     let tpad = self.here();
-                    self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false))?;
+                    self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
                     // Jmp(1) skips LFalseSkip → tpad; LHS short-circuit will
                     // also patch into one of these pads below.
                     self.mark_target(tpad);
@@ -98,11 +98,11 @@ impl<'a> Compiler<'a> {
                     // LHS short-circuit lands on the matching constant.
                     self.set_freereg(reg);
                     self.exp_to_reg(re, reg)?;
-                    let jmp_over = self.emit_jump()?;
+                    let jmp_over = self.emit_jump();
                     let fpad = self.here();
-                    self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false))?;
+                    self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
                     let tpad = self.here();
-                    self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false))?;
+                    self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
                     self.patch_to_here(jmp_over)?;
                     // LHS short-circuit patches into fpad or tpad below.
                     self.mark_target(fpad);
@@ -122,8 +122,8 @@ impl<'a> Compiler<'a> {
         let reg = self.exp_to_nextreg(le)?;
         debug_assert_eq!(reg, base);
         let k = op == BinOp::Or;
-        self.emit(Inst::iabc(Op::Test, reg, 0, 0, k))?;
-        let jmp = self.emit_jump()?;
+        self.emit(Inst::iabc(Op::Test, reg, 0, 0, k));
+        let jmp = self.emit_jump();
         self.set_freereg(reg);
         let re = self.expr(rhs)?;
         self.set_freereg(reg);
@@ -149,7 +149,7 @@ impl<'a> Compiler<'a> {
         //
         // Collect the right-associative chain's operands left-to-right.
         let mut operands: LVec<ExprId> = LVec::new(self.heap.mem());
-        operands.push(lhs)?;
+        operands.push_or_abort(lhs);
         let mut cur = rhs;
         loop {
             match self.ast.expr(cur) {
@@ -159,11 +159,11 @@ impl<'a> Compiler<'a> {
                     rhs: r,
                     ..
                 } => {
-                    operands.push(*l)?;
+                    operands.push_or_abort(*l);
                     cur = *r;
                 }
                 _ => {
-                    operands.push(cur)?;
+                    operands.push_or_abort(cur);
                     break;
                 }
             }
@@ -185,13 +185,13 @@ impl<'a> Compiler<'a> {
             if !is_last && nargs == 254 {
                 self.set_freereg(base);
                 self.last_line = line;
-                self.emit(Inst::iabc(Op::Concat, base, nargs, 0, false))?;
+                self.emit(Inst::iabc(Op::Concat, base, nargs, 0, false));
                 nargs = 1;
             }
         }
         self.set_freereg(base);
         self.last_line = line;
-        self.emit(Inst::iabc(Op::Concat, base, nargs, 0, false))?;
+        self.emit(Inst::iabc(Op::Concat, base, nargs, 0, false));
         Ok(Exp::Reg(base))
     }
 
@@ -221,7 +221,7 @@ impl<'a> Compiler<'a> {
             let saved = self.lr().freereg;
             let ke = self.expr(key)?;
             let k = self.exp_to_anyreg(ke)?;
-            let e = Exp::Reloc(self.emit(Inst::iabc(Op::VargIdx, 0, 0, k, false))?);
+            let e = Exp::Reloc(self.emit(Inst::iabc(Op::VargIdx, 0, 0, k, false)));
             self.set_freereg(saved);
             return Ok(e);
         }
@@ -230,23 +230,23 @@ impl<'a> Compiler<'a> {
         let o = self.exp_to_anyreg(oe)?;
         let e = match ast.expr(key) {
             Expr::Str(s) if self.sb(*s).len() <= 255 => {
-                let c = self.sym_const(*s)?;
+                let c = self.sym_const(*s);
                 if c <= 0xFF {
-                    Exp::Reloc(self.emit(Inst::iabc(Op::GetField, 0, o, c, true))?)
+                    Exp::Reloc(self.emit(Inst::iabc(Op::GetField, 0, o, c, true)))
                 } else {
                     let ke = Exp::Const(c);
                     let k = self.exp_to_nextreg(ke)?;
-                    Exp::Reloc(self.emit(Inst::iabc(Op::GetTable, 0, o, k, false))?)
+                    Exp::Reloc(self.emit(Inst::iabc(Op::GetTable, 0, o, k, false)))
                 }
             }
             Expr::Int(i) if (0..=255).contains(i) => {
                 let c = *i as u32;
-                Exp::Reloc(self.emit(Inst::iabc(Op::GetI, 0, o, c, false))?)
+                Exp::Reloc(self.emit(Inst::iabc(Op::GetI, 0, o, c, false)))
             }
             _ => {
                 let ke = self.expr(key)?;
                 let k = self.exp_to_anyreg(ke)?;
-                Exp::Reloc(self.emit(Inst::iabc(Op::GetTable, 0, o, k, false))?)
+                Exp::Reloc(self.emit(Inst::iabc(Op::GetTable, 0, o, k, false)))
             }
         };
         self.set_freereg(saved);

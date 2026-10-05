@@ -1,7 +1,6 @@
 //! Blocks, the statement dispatcher, and block-ending statements.
 
 use super::*;
-use crate::runtime::mem::Oom;
 
 impl<'s> Parser<'s> {
     pub(super) fn block_follow(&self) -> bool {
@@ -19,7 +18,10 @@ impl<'s> Parser<'s> {
         // short blocks; without this the cap fires spuriously).
         let local_snapshot = self.func_local_count.last().expect("func ctx").0;
         let locals_51_snap = self.snap_locals_51();
-        self.goto_step(|g| Ok(g.enter_block(false)?))?;
+        self.goto_step(|g| {
+            g.enter_block(false);
+            Ok(())
+        })?;
         let mark = self.stk.stats.len();
         loop {
             // labels wait for the no-op statements that follow them
@@ -37,19 +39,19 @@ impl<'s> Parser<'s> {
             }
             if self.tok.tok == Token::Return {
                 let s = self.return_stat()?;
-                self.stk.stats.push(s)?;
+                self.stk.stats.push_or_abort(s);
                 break;
             }
             if self.tok.tok == Token::Break && self.version.break_is_last_statement() {
                 let line = self.tok.line;
                 self.break_stat()?;
-                let s = self.push_stat(Stat::Break { line })?;
-                self.stk.stats.push(s)?;
+                let s = self.push_stat(Stat::Break { line });
+                self.stk.stats.push_or_abort(s);
                 self.accept(Token::Semi)?;
                 break;
             }
             if let Some(s) = self.statement()? {
-                self.stk.stats.push(s)?;
+                self.stk.stats.push_or_abort(s);
             }
             if !self.version.has_empty_statement() {
                 // 5.1: ';' is a separator after a statement, not a statement
@@ -61,7 +63,7 @@ impl<'s> Parser<'s> {
         self.func_local_count.last_mut().expect("func ctx").0 = local_snapshot;
         self.restore_locals_51(locals_51_snap);
         Ok(Block {
-            stats: finish(&mut self.chunk, &mut self.stk.stats, mark)?,
+            stats: finish(&mut self.chunk, &mut self.stk.stats, mark),
         })
     }
 
@@ -74,7 +76,7 @@ impl<'s> Parser<'s> {
             self.exprlist()?
         };
         self.accept(Token::Semi)?;
-        Ok(self.push_stat(Stat::Return { exprs, line })?)
+        Ok(self.push_stat(Stat::Return { exprs, line }))
     }
 
     pub(super) fn statement(&mut self) -> Result<Option<StatId>, SyntaxError> {
@@ -98,7 +100,7 @@ impl<'s> Parser<'s> {
             )
         {
             let stat = self.global_stat()?;
-            self.set_stat_line(stat, start_line)?;
+            self.set_stat_line(stat, start_line);
             return Ok(Some(stat));
         }
         let stat = match self.tok.tok {
@@ -116,7 +118,7 @@ impl<'s> Parser<'s> {
                 self.advance()?;
                 let body = self.block()?;
                 self.expect_match(Token::End, "end", "do", line)?;
-                Some(self.push_stat(Stat::Do(body))?)
+                Some(self.push_stat(Stat::Do(body)))
             }
             Token::For => Some(self.for_stat()?),
             Token::Repeat => Some(self.repeat_stat()?),
@@ -128,12 +130,12 @@ impl<'s> Parser<'s> {
                 let text = self.text(name.sym).to_owned();
                 self.goto_step(|g| g.label_before_close(&text, start_line))?;
                 self.expect(Token::DColon, "::")?;
-                Some(self.push_stat(Stat::Label(name))?)
+                Some(self.push_stat(Stat::Label(name)))
             }
             Token::Break => {
                 let line = self.tok.line;
                 self.break_stat()?;
-                Some(self.push_stat(Stat::Break { line })?)
+                Some(self.push_stat(Stat::Break { line }))
             }
             Token::Goto => {
                 // 5.4 reads the goto's line after skipping the keyword, 5.5
@@ -148,23 +150,22 @@ impl<'s> Parser<'s> {
                 let name = self.expect_name()?;
                 let text = self.text(name.sym).to_owned();
                 self.goto_step(|g| g.goto_stat(&text, line))?;
-                Some(self.push_stat(Stat::Goto(name))?)
+                Some(self.push_stat(Stat::Goto(name)))
             }
             _ => Some(self.expr_stat()?),
         };
         if let Some(sid) = stat {
-            self.set_stat_line(sid, start_line)?;
+            self.set_stat_line(sid, start_line);
         }
         Ok(stat)
     }
 
-    pub(super) fn set_stat_line(&mut self, sid: StatId, line: u32) -> Result<(), Oom> {
+    pub(super) fn set_stat_line(&mut self, sid: StatId, line: u32) {
         let idx = sid.0 as usize;
         if self.chunk.stat_lines.len() <= idx {
-            self.chunk.stat_lines.resize(idx + 1, 0)?;
+            self.chunk.stat_lines.resize_or_abort(idx + 1, 0);
         }
         self.chunk.stat_lines[idx] = line;
-        Ok(())
     }
 
     /// Consume `break`, checking it the way the dialect does: 5.1 and 5.5
@@ -193,8 +194,9 @@ impl<'s> Parser<'s> {
     pub(super) fn loop_block(&mut self, vars: List<Name>) -> Result<Block, SyntaxError> {
         self.funcs.last_mut().expect("func ctx").loops += 1;
         self.goto_step(|g| {
-            g.enter_block(true)?;
-            Ok(g.enter_block(false)?)
+            g.enter_block(true);
+            g.enter_block(false);
+            Ok(())
         })?;
         // 5.5: the control (first) variable of a loop is read-only
         let v55 = self.version >= LuaVersion::Lua55;
@@ -208,7 +210,7 @@ impl<'s> Parser<'s> {
                 } else {
                     VarKind::Local
                 };
-                g.declare(lex.names().text(v.sym), kind)?;
+                g.declare(lex.names().text(v.sym), kind);
             }
         }
         let body = self.block()?;

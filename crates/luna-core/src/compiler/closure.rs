@@ -14,7 +14,7 @@ impl<'a> Compiler<'a> {
             return Err(self.err(line, "too many parameters"));
         }
         let is_vararg = !matches!(body.vararg, ast::Vararg::None);
-        let mut level = self.new_level(nparams as u8, is_vararg, line)?;
+        let mut level = self.new_level(nparams as u8, is_vararg, line);
         // PUC 5.5 `parlist`: emit a hidden `(vararg table)` locvar only for
         // an explicit anonymous `(...)` (Named goes through a real local;
         // main chunks set is_vararg implicitly with no pseudo). 5.4 and
@@ -30,15 +30,15 @@ impl<'a> Compiler<'a> {
         // upvalue 0 too), so it inherits the creator's upvalue 0. 5.2+ keeps
         // the lazy-capture model.
         if self.version == LuaVersion::Lua51 {
-            level.upvals.push(UpvalDesc {
+            level.upvals.push_or_abort(UpvalDesc {
                 in_stack: false,
                 index: 0,
                 name: "_ENV".into(),
                 read_only: false,
-            })?;
+            });
         }
-        self.levels.push(level)?;
-        self.enter_block(false)?;
+        self.levels.push_or_abort(level);
+        self.enter_block(false);
         if is_method {
             self.declare_local("self", 0, false)?;
         }
@@ -61,7 +61,7 @@ impl<'a> Compiler<'a> {
                     .expect("just declared")
                     .vararg_virtual = true;
             } else {
-                self.emit(Inst::iabc(Op::GetVarg, r, 0, 0, false))?;
+                self.emit(Inst::iabc(Op::GetVarg, r, 0, 0, false));
                 self.declare_local(name, r, true)?;
             }
         }
@@ -82,16 +82,16 @@ impl<'a> Compiler<'a> {
         // that line shows up in `debug.getinfo(...,"L").activelines`.
         self.final_return(body.end_line)?;
         let lvl = self.levels.pop().expect("function level");
-        let proto = self.finish_level(lvl, line, body.end_line)?;
+        let proto = self.finish_level(lvl, line, body.end_line);
         let idx = self.lr().protos.len() as u32;
         if idx > MAX_BX {
             return Err(self.err(line, "too many nested functions"));
         }
-        self.l().protos.push(proto)?;
+        self.l().protos.push_or_abort(proto);
         // PUC emits OP_CLOSURE with the line of the just-consumed `end` token
         // (luaK_code uses ls->lastline), so the closure-creation line event lands
         // on the function's last line, not its `function` keyword.
         self.last_line = body.end_line;
-        Ok(Exp::Reloc(self.emit(Inst::iabx(Op::Closure, 0, idx))?))
+        Ok(Exp::Reloc(self.emit(Inst::iabx(Op::Closure, 0, idx))))
     }
 }

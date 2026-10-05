@@ -31,7 +31,7 @@ impl<'a> Compiler<'a> {
         let mut plans: SmallList<LhsPlan, 4> = SmallList::new(self.heap.mem());
         for &t in targets {
             match self.ast.expr(t) {
-                Expr::Name(_) => plans.push(LhsPlan::Name(t))?,
+                Expr::Name(_) => plans.push(LhsPlan::Name(t)),
                 Expr::Index { obj, key } => {
                     let (obj, key) = (*obj, *key);
                     let oe = self.expr(obj)?;
@@ -57,12 +57,12 @@ impl<'a> Compiler<'a> {
                     // gets pinned to a fresh register too.
                     let key_kind = match ast.expr(key) {
                         Expr::Str(s) if self.sb(*s).len() <= 255 => {
-                            let c = self.sym_const(*s)?;
+                            let c = self.sym_const(*s);
                             if c <= 0xFF {
                                 SetKey::Field(c)
                             } else {
                                 let kr = self.reserve(1)?;
-                                self.load_const(kr, c)?;
+                                self.load_const(kr, c);
                                 SetKey::Reg(kr)
                             }
                         }
@@ -83,7 +83,7 @@ impl<'a> Compiler<'a> {
                     plans.push(LhsPlan::Indexed {
                         obj: o_pinned,
                         key: key_kind,
-                    })?;
+                    });
                 }
                 _ => unreachable!("parser validates assignment targets"),
             }
@@ -120,13 +120,13 @@ impl<'a> Compiler<'a> {
                 LhsPlan::Name(t) => self.assign_to(t, vreg)?,
                 LhsPlan::Indexed { obj, key } => match key {
                     SetKey::Field(c) => {
-                        self.emit(Inst::iabc(Op::SetField, obj, c, vreg, true))?;
+                        self.emit(Inst::iabc(Op::SetField, obj, c, vreg, true));
                     }
                     SetKey::Int(c) => {
-                        self.emit(Inst::iabc(Op::SetI, obj, c, vreg, false))?;
+                        self.emit(Inst::iabc(Op::SetI, obj, c, vreg, false));
                     }
                     SetKey::Reg(k) => {
-                        self.emit(Inst::iabc(Op::SetTable, obj, k, vreg, false))?;
+                        self.emit(Inst::iabc(Op::SetTable, obj, k, vreg, false));
                     }
                 },
             }
@@ -189,7 +189,7 @@ impl<'a> Compiler<'a> {
                     if let Some(prev_pc) = self.assign_name_can_retarget_reloc(vreg) {
                         self.patch_dest(prev_pc, reg);
                     } else {
-                        self.emit(Inst::iabc(Op::Move, reg, vreg, 0, false))?;
+                        self.emit(Inst::iabc(Op::Move, reg, vreg, 0, false));
                     }
                 }
                 Ok(())
@@ -201,7 +201,7 @@ impl<'a> Compiler<'a> {
                         format!("attempt to assign to const variable '{text}'"),
                     ));
                 }
-                self.emit(Inst::iabc(Op::SetUpval, vreg, u, 0, false))?;
+                self.emit(Inst::iabc(Op::SetUpval, vreg, u, 0, false));
                 Ok(())
             }
             VarKind::Global { .. } => {
@@ -226,14 +226,14 @@ impl<'a> Compiler<'a> {
                 format!("_ENV is global when accessing variable '{text}'"),
             ));
         }
-        let c = self.str_const(text.as_bytes())?;
+        let c = self.str_const(text.as_bytes());
         match self.resolve_env()? {
             VarKind::Upval(u) if c <= 0xFF => {
-                self.emit(Inst::iabc(Op::SetTabUp, u, c, vreg, true))?;
+                self.emit(Inst::iabc(Op::SetTabUp, u, c, vreg, true));
                 Ok(())
             }
             VarKind::Local(r) if c <= 0xFF => {
-                self.emit(Inst::iabc(Op::SetField, r, c, vreg, true))?;
+                self.emit(Inst::iabc(Op::SetField, r, c, vreg, true));
                 Ok(())
             }
             env => {
@@ -241,17 +241,17 @@ impl<'a> Compiler<'a> {
                 let er = self.reserve(2)?;
                 match env {
                     VarKind::Upval(u) => {
-                        self.emit(Inst::iabc(Op::GetUpval, er, u, 0, false))?;
+                        self.emit(Inst::iabc(Op::GetUpval, er, u, 0, false));
                     }
                     VarKind::Local(r) => {
-                        self.emit(Inst::iabc(Op::Move, er, r, 0, false))?;
+                        self.emit(Inst::iabc(Op::Move, er, r, 0, false));
                     }
                     VarKind::Global { .. } | VarKind::Const(_) => {
                         unreachable!("resolve_env gives a register or an upvalue")
                     }
                 }
-                self.load_const(er + 1, c)?;
-                self.emit(Inst::iabc(Op::SetTable, er, er + 1, vreg, false))?;
+                self.load_const(er + 1, c);
+                self.emit(Inst::iabc(Op::SetTable, er, er + 1, vreg, false));
                 self.set_freereg(saved);
                 Ok(())
             }
@@ -269,23 +269,23 @@ impl<'a> Compiler<'a> {
                 let o = self.exp_to_anyreg(oe)?;
                 match ast.expr(key) {
                     Expr::Str(s) if self.sb(*s).len() <= 255 => {
-                        let c = self.sym_const(*s)?;
+                        let c = self.sym_const(*s);
                         if c <= 0xFF {
-                            self.emit(Inst::iabc(Op::SetField, o, c, vreg, true))?;
+                            self.emit(Inst::iabc(Op::SetField, o, c, vreg, true));
                         } else {
                             let kr = self.reserve(1)?;
-                            self.load_const(kr, c)?;
-                            self.emit(Inst::iabc(Op::SetTable, o, kr, vreg, false))?;
+                            self.load_const(kr, c);
+                            self.emit(Inst::iabc(Op::SetTable, o, kr, vreg, false));
                         }
                     }
                     Expr::Int(i) if (0..=255).contains(i) => {
                         let c = *i as u32;
-                        self.emit(Inst::iabc(Op::SetI, o, c, vreg, false))?;
+                        self.emit(Inst::iabc(Op::SetI, o, c, vreg, false));
                     }
                     _ => {
                         let ke = self.expr(key)?;
                         let k = self.exp_to_anyreg(ke)?;
-                        self.emit(Inst::iabc(Op::SetTable, o, k, vreg, false))?;
+                        self.emit(Inst::iabc(Op::SetTable, o, k, vreg, false));
                     }
                 }
                 self.set_freereg(saved);

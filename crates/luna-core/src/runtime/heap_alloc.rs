@@ -206,15 +206,6 @@ impl Heap {
     }
 
     /// The items of `v` in a block of exactly their number from the
-    /// context, or the failure to allocate it.
-    pub(crate) fn try_block_of<T>(
-        &self,
-        v: impl ExactSizeIterator<Item = T>,
-    ) -> Result<LSlice<T>, crate::runtime::mem::Oom> {
-        LSlice::collect_exact(self.mem(), v)
-    }
-
-    /// The items of `v` in a block of exactly their number from the
     /// context.
     pub(crate) fn block_of<T>(&self, v: impl ExactSizeIterator<Item = T>) -> LSlice<T> {
         let n = v.len();

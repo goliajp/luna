@@ -1,16 +1,16 @@
 //! Blocks, labels and `goto`.
 
 use super::*;
-use crate::runtime::mem::{LVec, Oom};
+use crate::runtime::mem::LVec;
 
 impl<'a> Compiler<'a> {
-    pub(super) fn enter_block(&mut self, is_loop: bool) -> Result<(), Oom> {
+    pub(super) fn enter_block(&mut self, is_loop: bool) {
         let floor = self.lr().freereg;
         let first = self.lr().locals.len();
         let first_avar = self.lr().avars.len();
         let start_pc = self.lr().code.len();
         let mem = self.heap.mem();
-        self.l().blocks.push(BlockCx {
+        self.l().blocks.push_or_abort(BlockCx {
             first_local: first,
             first_avar,
             reg_floor: floor,
@@ -27,7 +27,7 @@ impl<'a> Compiler<'a> {
             tbc_scope: false,
             body_end: None,
             end_line: None,
-        })
+        });
     }
 
     pub(super) fn leave_block(&mut self) -> Result<(), SyntaxError> {
@@ -73,7 +73,7 @@ impl<'a> Compiler<'a> {
             }
         }
         if close && (captured || b.has_tbc || break_close) {
-            self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false))?;
+            self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
         }
         // record debug LocVar entries for the locals leaving scope here
         let end_pc = if v54 {
@@ -97,7 +97,7 @@ impl<'a> Compiler<'a> {
                     _ => end_pc,
                 },
             };
-            lvl.locvars.push(rec)?;
+            lvl.locvars.push_or_abort(rec);
         }
         self.l().locals.truncate(b.first_local);
         self.l().avars.truncate(b.first_avar);
@@ -118,15 +118,15 @@ impl<'a> Compiler<'a> {
                 let mut names: LVec<&'a str> = LVec::new(self.heap.mem());
                 for g in gotos.iter() {
                     if !names.contains(&g.name) {
-                        names.push(g.name)?;
+                        names.push_or_abort(g.name);
                     }
                 }
-                let skip = self.emit_jump()?;
-                let mut routed = LVec::with_capacity(self.heap.mem(), names.len())?;
+                let skip = self.emit_jump();
+                let mut routed = LVec::with_capacity_or_abort(self.heap.mem(), names.len());
                 for &name in names.iter() {
                     let tramp = self.here();
-                    self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false))?;
-                    let new_jmp = self.emit_jump()?;
+                    self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
+                    let new_jmp = self.emit_jump();
                     for g in gotos.iter().filter(|g| g.name == name) {
                         let off = tramp as i64 - g.jmp_pc as i64 - 1;
                         if off.unsigned_abs() > MAX_SJ as u64 {
@@ -142,12 +142,12 @@ impl<'a> Compiler<'a> {
                         .find(|g| g.name == name)
                         .map(|g| g.line)
                         .expect("goto exists");
-                    routed.push(GotoRef {
+                    routed.push_or_abort(GotoRef {
                         name,
                         jmp_pc: new_jmp,
                         line,
                         nactive: b.first_avar,
-                    })?;
+                    });
                 }
                 self.patch_to_here(skip)?;
                 gotos = routed;
@@ -166,7 +166,7 @@ impl<'a> Compiler<'a> {
             // goto (PUC `luaK_patchclose`), the resolution routes through a
             // CLOSE-and-jump trampoline so those upvalues are properly closed
             // — goto.lua 5.4 :203's foo() backward `goto l1` exercises this.
-            let mut unresolved = LVec::with_capacity(self.heap.mem(), gotos.len())?;
+            let mut unresolved = LVec::with_capacity_or_abort(self.heap.mem(), gotos.len());
             for &g in gotos.iter() {
                 let target = self.lr().blocks.last().and_then(|p| {
                     p.labels
@@ -180,16 +180,16 @@ impl<'a> Compiler<'a> {
                         let needs_close = g.nactive > label_nactive
                             && self.reg_floor_from_avar(label_nactive).is_some();
                         let dest = if needs_close {
-                            let skip = self.emit_jump()?;
+                            let skip = self.emit_jump();
                             let tramp = self.here();
                             if let Some(floor) = self.reg_floor_from_avar(label_nactive) {
-                                self.emit(Inst::iabc(Op::Close, floor, 0, 0, false))?;
+                                self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
                             }
                             let to_label = pc as i64 - self.here() as i64 - 1;
                             if to_label.unsigned_abs() > MAX_SJ as u64 {
                                 return Err(self.err(g.line, "control structure too long"));
                             }
-                            self.emit(Inst::isj(Op::Jmp, to_label as i32))?;
+                            self.emit(Inst::isj(Op::Jmp, to_label as i32));
                             self.patch_to_here(skip)?;
                             tramp as i64
                         } else {
@@ -204,16 +204,16 @@ impl<'a> Compiler<'a> {
                         // pc — both are jump destinations.
                         self.mark_target(dest as usize);
                     }
-                    None => unresolved.push(g)?,
+                    None => unresolved.push_or_abort(g),
                 }
             }
             match self.l().blocks.last_mut() {
                 Some(parent) => {
                     for &g in unresolved.iter() {
-                        parent.gotos.push(GotoRef {
+                        parent.gotos.push_or_abort(GotoRef {
                             nactive: g.nactive.min(cap),
                             ..g
-                        })?;
+                        });
                     }
                 }
                 None if !unresolved.is_empty() => {
@@ -279,7 +279,7 @@ impl<'a> Compiler<'a> {
         let first_avar = b.first_avar;
         // match pending gotos of this block
         let pending = self.l().blocks.last_mut().expect("no block").gotos.take();
-        let mut kept = LVec::with_capacity(self.heap.mem(), pending.len())?;
+        let mut kept = LVec::with_capacity_or_abort(self.heap.mem(), pending.len());
         for &g in pending.iter() {
             if g.name == name {
                 if nactive > g.nactive {
@@ -312,17 +312,17 @@ impl<'a> Compiler<'a> {
                 }
                 self.l().code[g.jmp_pc].set_sj(off as i32);
             } else {
-                kept.push(g)?;
+                kept.push_or_abort(g);
             }
         }
         let blk = self.l().blocks.last_mut().expect("no block");
         blk.gotos = kept;
-        blk.labels.push(LabelDef {
+        blk.labels.push_or_abort(LabelDef {
             name,
             pc: here,
             line,
             nactive: nactive.max(first_avar),
-        })?;
+        });
         // every defined label is a jump destination: pending gotos just got
         // patched to land at `here`, AND backward gotos resolved by
         // `goto_stat` lookup against this label will jump here too.
@@ -351,24 +351,24 @@ impl<'a> Compiler<'a> {
         if let Some((pc, nactive)) = found {
             // jumping back discards locals declared after the label
             if let Some(floor) = self.reg_floor_from_avar(nactive) {
-                self.emit(Inst::iabc(Op::Close, floor, 0, 0, false))?;
+                self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
             }
             self.jump_back(pc)?;
             return Ok(());
         }
-        let jmp = self.emit_jump()?;
+        let jmp = self.emit_jump();
         let nactive = self.lr().avars.len();
         self.l()
             .blocks
             .last_mut()
             .expect("no block")
             .gotos
-            .push(GotoRef {
+            .push_or_abort(GotoRef {
                 name,
                 jmp_pc: jmp,
                 line,
                 nactive,
-            })?;
+            });
         Ok(())
     }
 }

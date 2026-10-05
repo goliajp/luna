@@ -2,7 +2,7 @@
 //! entries, and allocating a vector for each costs more than the rest of
 //! their handling.
 
-use crate::runtime::mem::{LVec, MemRef, Oom};
+use crate::runtime::mem::{LVec, MemRef};
 
 /// A list of `T` whose first `N` items are stored in place.
 pub(super) struct SmallList<T: Copy, const N: usize> {
@@ -20,14 +20,13 @@ impl<T: Copy, const N: usize> SmallList<T, N> {
         }
     }
 
-    pub(super) fn push(&mut self, v: T) -> Result<(), Oom> {
+    pub(super) fn push(&mut self, v: T) {
         if self.len < N {
             self.head[self.len] = Some(v);
         } else {
-            self.rest.push(v)?;
+            self.rest.push_or_abort(v);
         }
         self.len += 1;
-        Ok(())
     }
 
     pub(super) fn len(&self) -> usize {
@@ -62,7 +61,7 @@ mod tests {
         let o = MemOwner::system();
         let mut l: SmallList<u32, 2> = SmallList::new(o.mem());
         for i in 0..5 {
-            l.push(i * 10).unwrap();
+            l.push(i * 10);
         }
         assert_eq!(l.len(), 5);
         assert_eq!(l.iter().collect::<Vec<_>>(), vec![0, 10, 20, 30, 40]);

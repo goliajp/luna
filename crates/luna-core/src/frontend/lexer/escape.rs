@@ -24,18 +24,18 @@ impl<S: Source> Lexer<'_, S> {
         match self.cur() {
             None => {}
             Some(b'\n' | b'\r') => {
-                self.save(b'\n')?;
+                self.save(b'\n');
                 self.newline();
             }
             Some(c) if c.is_ascii_digit() => {
-                let v = self.dec_digits(|_, _| Ok(()))?;
+                let v = self.dec_digits(|_, _| {});
                 if v > 255 {
                     return Err(self.buf_error("escape sequence too large"));
                 }
-                self.save(v as u8)?;
+                self.save(v as u8);
             }
             Some(c) => {
-                self.save(Self::simple_escape(c).unwrap_or(c))?;
+                self.save(Self::simple_escape(c).unwrap_or(c));
                 self.bump();
             }
         }
@@ -43,20 +43,17 @@ impl<S: Source> Lexer<'_, S> {
     }
 
     /// Read up to three decimal digits, reporting each to `seen`.
-    pub(super) fn dec_digits(
-        &mut self,
-        mut seen: impl FnMut(&mut Self, u8) -> Result<(), Oom>,
-    ) -> Result<u32, Oom> {
+    pub(super) fn dec_digits(&mut self, mut seen: impl FnMut(&mut Self, u8)) -> u32 {
         let mut v = 0;
         for _ in 0..3 {
             let Some(d @ b'0'..=b'9') = self.cur() else {
                 break;
             };
             v = v * 10 + (d - b'0') as u32;
-            seen(self, d)?;
+            seen(self, d);
             self.bump();
         }
-        Ok(v)
+        v
     }
 
     /// 5.2 `escerror`: the buffer is replaced by `\` plus the escape's bytes.
@@ -74,7 +71,7 @@ impl<S: Source> Lexer<'_, S> {
             return Ok(());
         };
         if let Some(e) = Self::simple_escape(c) {
-            self.save(e)?;
+            self.save(e);
             self.bump();
             return Ok(());
         }
@@ -95,14 +92,14 @@ impl<S: Source> Lexer<'_, S> {
                     v = v * 16 + h;
                 }
                 self.bump();
-                self.save(v as u8)?;
+                self.save(v as u8);
             }
             b'\n' | b'\r' => {
                 self.newline();
-                self.save(b'\n')?;
+                self.save(b'\n');
             }
             b'\\' | b'"' | b'\'' => {
-                self.save(c)?;
+                self.save(c);
                 self.bump();
             }
             b'z' => {
@@ -114,12 +111,11 @@ impl<S: Source> Lexer<'_, S> {
                 let v = self.dec_digits(|_, d| {
                     seen[n] = d;
                     n += 1;
-                    Ok(())
-                })?;
+                });
                 if v > 255 {
                     return Err(self.esc_error_52(&seen[..n], "decimal escape too large"));
                 }
-                self.save(v as u8)?;
+                self.save(v as u8);
             }
             _ => return Err(self.esc_error_52(&[c], "invalid escape sequence")),
         }
@@ -144,14 +140,14 @@ impl<S: Source> Lexer<'_, S> {
             return Ok(());
         }
         if self.cur().is_some() {
-            self.save_next()?;
+            self.save_next();
         }
         Err(self.buf_error(msg))
     }
 
     /// 5.3+ `gethexa`: save the byte before, then demand a hex digit.
     pub(super) fn get_hexa(&mut self) -> Result<u32, SyntaxError> {
-        self.save_next()?;
+        self.save_next();
         let d = self.cur().and_then(hex_digit);
         self.esc_check(d.is_some(), "hexadecimal digit expected")?;
         Ok(d.expect("checked above"))
@@ -162,7 +158,7 @@ impl<S: Source> Lexer<'_, S> {
     }
 
     pub(super) fn escape_53(&mut self) -> Result<(), SyntaxError> {
-        self.save_next()?;
+        self.save_next();
         let Some(c) = self.cur() else {
             return Ok(());
         };
@@ -175,7 +171,7 @@ impl<S: Source> Lexer<'_, S> {
             }
             b'u' => {
                 let v = self.utf8_escape()?;
-                push_utf8(&mut self.buf, v)?;
+                push_utf8(&mut self.buf, v);
                 return Ok(());
             }
             b'\n' | b'\r' => {
@@ -201,10 +197,9 @@ impl<S: Source> Lexer<'_, S> {
                     self.esc_check(c.is_ascii_digit(), "invalid escape sequence")?;
                     let mut n = 0;
                     let v = self.dec_digits(|lx, d| {
-                        lx.save(d)?;
+                        lx.save(d);
                         n += 1;
-                        Ok(())
-                    })?;
+                    });
                     self.esc_check(v <= 255, "decimal escape too large")?;
                     self.drop_saved(n);
                     v as u8
@@ -212,7 +207,7 @@ impl<S: Source> Lexer<'_, S> {
             },
         };
         self.drop_saved(1);
-        self.save(byte)?;
+        self.save(byte);
         Ok(())
     }
 
@@ -221,11 +216,11 @@ impl<S: Source> Lexer<'_, S> {
     /// digit; 5.4 widened it to 2^31 and checks before shifting.
     pub(super) fn utf8_escape(&mut self) -> Result<u32, SyntaxError> {
         let mut saved = 4;
-        self.save_next()?;
+        self.save_next();
         self.esc_check(self.cur() == Some(b'{'), "missing '{'")?;
         let mut r = self.get_hexa()?;
         loop {
-            self.save_next()?;
+            self.save_next();
             let Some(d) = self.cur().and_then(hex_digit) else {
                 break;
             };
@@ -248,9 +243,9 @@ impl<S: Source> Lexer<'_, S> {
 }
 
 /// Extended UTF-8 (up to 6 bytes, values to 2^31-1), as luaO_utf8esc.
-fn push_utf8(out: &mut LVec<u8>, mut x: u32) -> Result<(), Oom> {
+fn push_utf8(out: &mut LVec<u8>, mut x: u32) {
     if x < 0x80 {
-        return out.push(x as u8);
+        return out.push_or_abort(x as u8);
     }
     let mut cont = [0u8; 6];
     let mut n = 0;
@@ -264,10 +259,9 @@ fn push_utf8(out: &mut LVec<u8>, mut x: u32) -> Result<(), Oom> {
             break;
         }
     }
-    out.reserve(n + 1)?;
-    out.push(((!mfb << 1) | x) as u8)?;
+    out.reserve_or_abort(n + 1);
+    out.push_or_abort(((!mfb << 1) | x) as u8);
     for &b in cont[..n].iter().rev() {
-        out.push(b)?;
+        out.push_or_abort(b);
     }
-    Ok(())
 }

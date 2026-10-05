@@ -4,19 +4,15 @@ use super::*;
 use crate::runtime::mem::word_hash;
 
 impl<'a> Compiler<'a> {
-    pub(super) fn emit(&mut self, i: Inst) -> Result<usize, Oom> {
+    pub(super) fn emit(&mut self, i: Inst) -> usize {
         let line = self.force_line.unwrap_or(self.last_line);
         let l = self.l();
-        l.code.push(i)?;
-        // the two stay the same length
-        if let Err(e) = l.lines.push(line) {
-            l.code.pop();
-            return Err(e);
-        }
-        Ok(l.code.len() - 1)
+        l.code.push_or_abort(i);
+        l.lines.push_or_abort(line);
+        l.code.len() - 1
     }
 
-    pub(super) fn emit_jump(&mut self) -> Result<usize, Oom> {
+    pub(super) fn emit_jump(&mut self) -> usize {
         self.emit(Inst::isj(Op::Jmp, 0))
     }
 
@@ -74,7 +70,7 @@ impl<'a> Compiler<'a> {
         if off.unsigned_abs() > self.jump_cap() {
             return Err(self.err(self.last_line, "control structure too long"));
         }
-        self.emit(Inst::isj(Op::Jmp, off as i32))?;
+        self.emit(Inst::isj(Op::Jmp, off as i32));
         // The back-edge lands at `target`, which was captured upstream
         // (typically `let top = self.here()` before a loop header). Mark it
         // so a future peephole pass sees that pc as occupied.
@@ -241,19 +237,19 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    pub(super) fn str_const(&mut self, bytes: &[u8]) -> Result<u32, Oom> {
-        let s = self.intern_str(bytes)?;
+    pub(super) fn str_const(&mut self, bytes: &[u8]) -> u32 {
+        let s = self.intern_str(bytes);
         self.const_idx(ConstKey::Str(s.as_ptr()), Value::Str(s))
     }
 
     /// The constant of the tree's string (or name) `s`: each entry of the
     /// chunk's names is interned on the heap once per load.
-    pub(super) fn sym_const(&mut self, s: ast::Sym) -> Result<u32, Oom> {
+    pub(super) fn sym_const(&mut self, s: ast::Sym) -> u32 {
         let i = s.0 as usize;
         let g = match self.sym_strs[i] {
             Some(g) => g,
             None => {
-                let g = self.intern_str(self.sb(s))?;
+                let g = self.intern_str(self.sb(s));
                 self.sym_strs[i] = Some(g);
                 g
             }
@@ -261,35 +257,36 @@ impl<'a> Compiler<'a> {
         self.const_idx(ConstKey::Str(g.as_ptr()), Value::Str(g))
     }
 
-    pub(super) fn intern_str(&mut self, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
+    pub(super) fn intern_str(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
         // intern the literal once per chunk so identical constants share an
         // object; heap.intern already dedups short strings, the cache only
         // has to hold long ones
         if bytes.len() <= crate::runtime::string::MAX_SHORT_LEN {
-            Ok(self.heap.intern(bytes))
+            self.heap.intern(bytes)
         } else {
             self.long_str(bytes)
         }
     }
 
-    pub(super) fn long_str(&mut self, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
+    pub(super) fn long_str(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
         let h = word_hash(bytes);
         if let Some(s) = self.str_cache.find_with(h, |k| k.as_bytes() == bytes) {
-            return Ok(s);
+            return s;
         }
         let s = self.heap.intern(bytes);
-        self.str_cache.insert_hashed(h, s, s)?;
-        Ok(s)
+        self.str_cache
+            .insert_hashed(h, s, s)
+            .unwrap_or_else(|o| o.fail());
+        s
     }
 
-    pub(super) fn load_const(&mut self, reg: u32, c: u32) -> Result<(), Oom> {
+    pub(super) fn load_const(&mut self, reg: u32, c: u32) {
         if c <= MAX_BX {
-            self.emit(Inst::iabx(Op::LoadK, reg, c))?;
+            self.emit(Inst::iabx(Op::LoadK, reg, c));
         } else {
-            self.emit(Inst::iabx(Op::LoadKx, reg, 0))?;
-            self.emit(Inst::iax(Op::ExtraArg, c))?;
+            self.emit(Inst::iabx(Op::LoadKx, reg, 0));
+            self.emit(Inst::iax(Op::ExtraArg, c));
         }
-        Ok(())
     }
 
     /// Rewrite the wanted-results field (C) of an open CALL/VARARG.

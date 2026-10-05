@@ -148,17 +148,16 @@ impl<'s, S: Source> Lexer<'s, S> {
         }
     }
 
-    fn save(&mut self, c: u8) -> Result<(), Oom> {
-        self.buf.push(c)
+    fn save(&mut self, c: u8) {
+        self.buf.push_or_abort(c);
     }
 
     /// Save the current byte and advance (PUC `save_and_next`).
-    fn save_next(&mut self) -> Result<(), Oom> {
+    fn save_next(&mut self) {
         if let Some(c) = self.cur() {
-            self.buf.push(c)?;
+            self.buf.push_or_abort(c);
         }
         self.bump();
-        Ok(())
     }
 
     /// Consume `\n`, `\r`, `\n\r` or `\r\n` as a single line break.
@@ -247,7 +246,7 @@ impl<'s, S: Source> Lexer<'s, S> {
 
     fn comment(&mut self) -> Result<(), SyntaxError> {
         if self.cur() == Some(b'[') {
-            let sep = self.skip_sep()?;
+            let sep = self.skip_sep();
             self.buf.clear();
             if let Some(level) = sep {
                 self.long_string(level, true)?;
@@ -266,10 +265,10 @@ impl<'s, S: Source> Lexer<'s, S> {
     fn token(&mut self, c: u8) -> Result<Result<Tok, u8>, SyntaxError> {
         let v = self.version;
         let tok = match c {
-            b'A'..=b'Z' | b'a'..=b'z' | b'_' => self.name_or_keyword()?,
+            b'A'..=b'Z' | b'a'..=b'z' | b'_' => self.name_or_keyword(),
             b'0'..=b'9' => self.number(self.pos)?,
             b'"' | b'\'' => self.string(c)?,
-            b'[' => match self.skip_sep()? {
+            b'[' => match self.skip_sep() {
                 Some(level) => self.long_string(level, false)?,
                 None if self.buf.len() == 1 => Token::LBracket,
                 None => return Err(self.buf_error("invalid long string delimiter")),
@@ -339,7 +338,7 @@ impl<'s, S: Source> Lexer<'s, S> {
         Ok(Ok(tok))
     }
 
-    fn name_or_keyword(&mut self) -> Result<Tok, Oom> {
+    fn name_or_keyword(&mut self) -> Tok {
         let start = self.pos;
         while matches!(
             self.cur(),
@@ -348,7 +347,7 @@ impl<'s, S: Source> Lexer<'s, S> {
             self.bump();
         }
         let text = &self.src.bytes()[start..self.pos];
-        Ok(match text {
+        match text {
             b"and" => Token::And,
             b"break" => Token::Break,
             b"do" => Token::Do,
@@ -377,11 +376,11 @@ impl<'s, S: Source> Lexer<'s, S> {
             b"while" => Token::While,
             _ => {
                 if let Some(names) = &mut self.names {
-                    self.last_sym = names.intern(text)?;
+                    self.last_sym = names.intern(text);
                 }
                 Token::Name(())
             }
-        })
+        }
     }
 
     /// PUC `read_numeral` over the numeral starting at `start` (a leading
@@ -454,7 +453,7 @@ impl<'s, S: Source> Lexer<'s, S> {
             Some(Num::Float(f)) => Ok(Token::Float(f)),
             None => {
                 self.buf.clear();
-                self.buf.extend_from_slice(text)?;
+                self.buf.extend_from_slice_or_abort(text);
                 Err(self.buf_error("malformed number"))
             }
         }

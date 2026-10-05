@@ -176,6 +176,11 @@ impl Vm {
         use std::panic::{AssertUnwindSafe, catch_unwind};
         let result = match catch_unwind(AssertUnwindSafe(|| (nc.f)(self, func_slot, nargs))) {
             Ok(r) => r,
+            // a load's memory failure belongs to that load, never to a
+            // native it may sit under
+            Err(payload) if crate::runtime::mem::is_load_oom(&*payload) => {
+                std::panic::resume_unwind(payload)
+            }
             Err(payload) => {
                 let msg = panic_payload_str(&payload);
                 let s = Value::Str(self.heap.intern(format!("native panic: {msg}").as_bytes()));

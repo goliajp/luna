@@ -1,7 +1,6 @@
 //! Local declarations and name resolution (locals, upvalues, globals).
 
 use super::*;
-use crate::runtime::mem::Oom;
 
 impl<'a> Compiler<'a> {
     /// 5.5 global-declaration resolution: explicit declaration > innermost
@@ -61,7 +60,7 @@ impl<'a> Compiler<'a> {
             return Err(self.limit_err("local variables", MAX_LOCALS));
         }
         let start_pc = self.lr().code.len() as u32;
-        self.l().locals.push(LocalVar {
+        self.l().locals.push_or_abort(LocalVar {
             name,
             reg,
             read_only,
@@ -69,19 +68,19 @@ impl<'a> Compiler<'a> {
             vararg_virtual: false,
             start_pc,
             konst: None,
-        })?;
-        self.l().avars.push(AVar {
+        });
+        self.l().avars.push_or_abort(AVar {
             name: Some(name),
             reg: Some(reg),
             global: false,
-        })?;
+        });
         Ok(())
     }
 
     /// Declare a compile-time constant local (PUC `RDKCTC`).
-    pub(super) fn declare_ct_const(&mut self, name: &'a str, value: CtConst) -> Result<(), Oom> {
+    pub(super) fn declare_ct_const(&mut self, name: &'a str, value: CtConst) {
         let start_pc = self.lr().code.len() as u32;
-        self.l().locals.push(LocalVar {
+        self.l().locals.push_or_abort(LocalVar {
             name,
             reg: u32::MAX,
             read_only: true,
@@ -89,12 +88,12 @@ impl<'a> Compiler<'a> {
             vararg_virtual: false,
             start_pc,
             konst: Some(value),
-        })?;
-        self.l().avars.push(AVar {
+        });
+        self.l().avars.push_or_abort(AVar {
             name: Some(name),
             reg: None,
             global: false,
-        })
+        });
     }
 
     /// The compile-time constant `name` refers to here, if it does: the
@@ -123,26 +122,26 @@ impl<'a> Compiler<'a> {
 
     /// Materialise a compile-time constant as an expression of the
     /// function being compiled.
-    pub(super) fn ct_exp(&mut self, v: CtConst) -> Result<Exp, Oom> {
-        Ok(match v {
+    pub(super) fn ct_exp(&mut self, v: CtConst) -> Exp {
+        match v {
             CtConst::Nil => Exp::Nil,
             CtConst::Bool(true) => Exp::True,
             CtConst::Bool(false) => Exp::False,
             CtConst::Int(i) => Exp::Int(i),
             CtConst::Float(f) => Exp::Float(f),
-            CtConst::Str(s) => Exp::Const(self.sym_const(s)?),
-        })
+            CtConst::Str(s) => Exp::Const(self.sym_const(s)),
+        }
     }
 
     /// Append a `global` declaration marker to the active-variable sequence so
     /// a goto jumping over it lands "into its scope" (PUC's `new_varkind` +
     /// `nactvar++`). `name` is `None` for a `global *` collective marker.
-    pub(super) fn declare_global_marker(&mut self, name: Option<&'a str>) -> Result<(), Oom> {
-        self.l().avars.push(AVar {
+    pub(super) fn declare_global_marker(&mut self, name: Option<&'a str>) {
+        self.l().avars.push_or_abort(AVar {
             name,
             reg: None,
             global: true,
-        })
+        });
     }
 
     /// Register floor to CLOSE when discarding locals declared at/after the
@@ -206,12 +205,12 @@ impl<'a> Compiler<'a> {
                 if self.counted_upvals(li) >= max_upvals(self.version) {
                     return Err(self.limit_err_at(li, "upvalues", max_upvals(self.version)));
                 }
-                self.levels[li].upvals.push(UpvalDesc {
+                self.levels[li].upvals.push_or_abort(UpvalDesc {
                     in_stack: true,
                     index: reg as u8,
                     name: name.into(),
                     read_only,
-                })?;
+                });
                 Ok(VarKind::Upval(ui))
             }
             VarKind::Upval(pidx) => {
@@ -220,12 +219,12 @@ impl<'a> Compiler<'a> {
                 if self.counted_upvals(li) >= max_upvals(self.version) {
                     return Err(self.limit_err_at(li, "upvalues", max_upvals(self.version)));
                 }
-                self.levels[li].upvals.push(UpvalDesc {
+                self.levels[li].upvals.push_or_abort(UpvalDesc {
                     in_stack: false,
                     index: pidx as u8,
                     name: name.into(),
                     read_only,
-                })?;
+                });
                 Ok(VarKind::Upval(ui))
             }
         }
