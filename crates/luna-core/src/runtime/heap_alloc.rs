@@ -1,7 +1,7 @@
 //! Object constructors and string interning.
 
 use super::*;
-use crate::runtime::mem::oom_abort;
+use crate::runtime::mem::{LSlice, LVec, oom_abort};
 use std::alloc::Layout;
 
 impl Heap {
@@ -135,27 +135,17 @@ impl Heap {
     }
 
     /// Back-compat constructor for callers that already
-    /// built a `Box<[Gc<Upvalue>]>`. Internally re-routes through
-    /// `new_closure_inline` so small-upval cases also pick the
-    /// inline path (the input Box is freed after the copy).
+    /// built a `Box<[Gc<Upvalue>]>`: [`Heap::new_closure_inline`] copies
+    /// the handles, and the box is freed after.
     pub fn new_closure(&mut self, proto: Gc<Proto>, upvals: Box<[Gc<Upvalue>]>) -> Gc<LuaClosure> {
-        use crate::runtime::function::INLINE_UPVALS_N;
-        let n = upvals.len();
-        if n <= INLINE_UPVALS_N {
-            let g = self.new_closure_inline(proto, &upvals);
-            drop(upvals);
-            g
-        } else {
-            // large closure: the input Box becomes its storage, no copy
-            self.adopt_closure_with(proto, n as u32, |c| c.set_overflow(upvals))
-        }
+        self.new_closure_inline(proto, &upvals)
     }
 
     /// Hot-path constructor for the `Op::Closure` handler.
     /// Takes a slice (typically backed by a stack array) so the caller
     /// doesn't allocate a Vec/Box just to hand it over. Upvals are
     /// copied into `inline_storage` for small closures, or into a
-    /// freshly-allocated `Box<[..]>` for the rare overflow case.
+    /// block from the allocation context for the rare overflow case.
     pub fn new_closure_inline(
         &mut self,
         proto: Gc<Proto>,
@@ -163,6 +153,7 @@ impl Heap {
     ) -> Gc<LuaClosure> {
         use crate::runtime::function::INLINE_UPVALS_N;
         let n = upvals.len();
+        let mem = self.mem();
         self.adopt_closure_with(proto, n as u32, |c| {
             if n <= INLINE_UPVALS_N {
                 for (i, &uv) in upvals.iter().enumerate() {
@@ -174,7 +165,9 @@ impl Heap {
                     }
                 }
             } else {
-                c.set_overflow(upvals.to_vec().into_boxed_slice());
+                let store = LSlice::from_slice(mem, upvals)
+                    .unwrap_or_else(|_| oom_abort(Layout::for_value(upvals)));
+                c.set_overflow(store);
             }
         })
     }
@@ -212,6 +205,20 @@ impl Heap {
         g
     }
 
+    /// The items of `v` in a block of exactly their number from the
+    /// context.
+    pub(crate) fn block_of<T>(&self, v: impl ExactSizeIterator<Item = T>) -> LSlice<T> {
+        let n = v.len();
+        LSlice::collect_exact(self.mem(), v)
+            .unwrap_or_else(|_| oom_abort(Layout::array::<T>(n).unwrap_or(Layout::new::<T>())))
+    }
+
+    /// A native function's upvalues in a block from the context.
+    fn upvals_block(&self, upvals: &[Value]) -> LSlice<Value> {
+        LSlice::from_slice(self.mem(), upvals)
+            .unwrap_or_else(|_| oom_abort(Layout::for_value(upvals)))
+    }
+
     /// Allocate a [`NativeClosure`] wrapping host function `f` with the
     /// given captured upvalues.
     pub fn new_native(
@@ -219,9 +226,20 @@ impl Heap {
         f: crate::runtime::value::NativeFn,
         upvals: Box<[Value]>,
     ) -> Gc<NativeClosure> {
+        self.new_native_from(f, &upvals)
+    }
+
+    /// [`Heap::new_native`] copying the upvalues from a slice.
+    pub fn new_native_from(
+        &mut self,
+        f: crate::runtime::value::NativeFn,
+        upvals: &[Value],
+    ) -> Gc<NativeClosure> {
         let fix = self.fix_natives && upvals.is_empty();
+        let hdr = GcHeader::native(upvals);
+        let upvals = self.upvals_block(upvals);
         let g = self.adopt(NativeClosure {
-            hdr: GcHeader::native(&upvals),
+            hdr,
             f,
             upvals,
             is_async: false,
@@ -253,8 +271,10 @@ impl Heap {
         f: crate::runtime::value::NativeFn,
         upvals: Box<[Value]>,
     ) -> Gc<NativeClosure> {
+        let hdr = GcHeader::native(&upvals);
+        let upvals = self.upvals_block(&upvals);
         self.adopt(NativeClosure {
-            hdr: GcHeader::native(&upvals),
+            hdr,
             f,
             upvals,
             is_async: true,
@@ -290,15 +310,15 @@ impl Heap {
             error_traceback: None,
             error_levels: None,
             natives: 0..0,
-            stack: Vec::new(),
-            frames: Vec::new(),
-            open_upvals: Vec::new(),
-            tbc: Vec::new(),
+            stack: LVec::new(self.mem()),
+            frames: LVec::new(self.mem()),
+            open_upvals: LVec::new(self.mem()),
+            tbc: LVec::new(self.mem()),
             top: 0,
             pcall_depth: 0,
             hook: crate::vm::exec::HookState::default(),
             globals,
-            host_stack: Vec::new(),
+            host_stack: LVec::new(self.mem()),
             host_state: None,
         })
     }

@@ -451,8 +451,8 @@ impl Vm {
         }
         self.c_depth += 1;
         let func_slot = self.stack.len() as u32;
-        self.stack.push(f);
-        self.stack.extend_from_slice(args);
+        self.stack.push_or_abort(f);
+        self.stack.extend_from_slice_or_abort(args);
         self.top = self.stack.len() as u32;
         let r = self.call_at(func_slot, args.len() as u32, from_c);
         self.c_depth -= 1;

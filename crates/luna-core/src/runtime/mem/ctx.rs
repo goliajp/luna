@@ -123,13 +123,29 @@ impl MemRef {
 impl MemCtx {
     /// A new block of `layout` for `kind`, or `None` when the allocation
     /// fails. `layout.size()` is not 0.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn alloc(&self, layout: Layout, kind: BlockKind) -> Option<NonNull<u8>> {
         debug_assert!(layout.size() != 0);
         match &self.mode {
             // SAFETY: the size is not 0
             Mode::System => NonNull::new(unsafe { std::alloc::alloc(layout) }),
             _ => self.alloc_slow(layout, kind),
+        }
+    }
+
+    /// [`MemCtx::alloc`] with the block's bytes zeroed.
+    #[inline(always)]
+    pub(crate) fn alloc_zeroed(&self, layout: Layout, kind: BlockKind) -> Option<NonNull<u8>> {
+        debug_assert!(layout.size() != 0);
+        match &self.mode {
+            // SAFETY: the size is not 0
+            Mode::System => NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }),
+            _ => {
+                let p = self.alloc_slow(layout, kind)?;
+                // SAFETY: `p` is a fresh block of `layout.size()` bytes
+                unsafe { p.as_ptr().write_bytes(0, layout.size()) };
+                Some(p)
+            }
         }
     }
 
@@ -162,7 +178,7 @@ impl MemCtx {
     /// # Safety
     /// `p` was allocated by this context with `layout` and is not freed;
     /// `new` is not 0.
-    #[inline]
+    #[inline(always)]
     pub(crate) unsafe fn realloc(
         &self,
         p: NonNull<u8>,
@@ -211,7 +227,7 @@ impl MemCtx {
     ///
     /// # Safety
     /// `p` was allocated by this context with `layout` and is not freed.
-    #[inline]
+    #[inline(always)]
     pub(crate) unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {
         match &self.mode {
             // SAFETY: the caller's contract
