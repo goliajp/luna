@@ -263,7 +263,7 @@ impl Vm {
         let max = proto.max_stack as u32;
         let need = (base + max) as usize;
         if self.stack.len() < need || self.frames.len() == self.frames.capacity() {
-            return self.push_frame_grow(cl, func_slot, nargs, nresults, from_c, need);
+            self.frame_room(need)?;
         }
         // 5.5 vararg layout (PUC luaT_adjustvarargs): the extra args stay on the
         // stack just below the new `base`, so a named vararg can be indexed
@@ -345,25 +345,16 @@ impl Vm {
         Ok(())
     }
 
-    /// [`Vm::push_frame`] when the stack must grow to `need` slots or the
-    /// frame stack is full: make the room, collecting in an emergency when
-    /// memory runs out, then push. Out of line and last, so the common path
-    /// keeps nothing alive across a call.
+    /// Room for a new Lua frame: `need` stack slots and one more frame,
+    /// collecting in an emergency when memory runs out. Out of line, and
+    /// taking nothing the caller has to build first.
     #[cold]
     #[inline(never)]
-    fn push_frame_grow(
-        &mut self,
-        cl: Gc<LuaClosure>,
-        func_slot: u32,
-        nargs: u32,
-        nresults: i32,
-        from_c: bool,
-        need: usize,
-    ) -> Result<(), LuaError> {
+    fn frame_room(&mut self, need: usize) -> Result<(), LuaError> {
         self.grow_stack(need)?;
         if self.frames.len() == self.frames.capacity() {
             self.retry_oom(|vm| vm.frames.reserve(1))?;
         }
-        self.push_frame(cl, func_slot, nargs, nresults, from_c)
+        Ok(())
     }
 }
