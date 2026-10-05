@@ -164,6 +164,7 @@ fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         encode(vm, &mut out, code as u32)?;
     }
     let s = vm.str_value(&out)?;
+    vm.recycle_buf(out);
     vm.nat_ret(fs, &[s])
 }
 

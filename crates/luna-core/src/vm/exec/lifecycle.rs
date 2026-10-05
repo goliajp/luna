@@ -169,6 +169,7 @@ impl Vm {
                 NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             },
             retired_jit_storage: Vec::new(),
+            buf_spare: LVec::new(mem),
             _mem: mem_owner,
             state_complete: false,
         })
