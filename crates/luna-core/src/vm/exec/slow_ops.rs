@@ -51,7 +51,7 @@ impl Vm {
                 let abs = base + inst.a();
                 let need = (abs + 7) as usize;
                 if self.stack.len() < need {
-                    self.stack.resize_or_abort(need, Value::Nil);
+                    self.grow_stack_or_abort(need);
                 }
                 self.stack[(abs + 4) as usize] = self.stack[abs as usize];
                 self.stack[(abs + 5) as usize] = self.stack[(abs + 1) as usize];
@@ -117,7 +117,7 @@ impl Vm {
             }
             let end = (abs + 1 + nargs) as usize;
             if self.stack.len() < end + 1 {
-                self.stack.resize_or_abort(end + 1, Value::Nil);
+                self.grow_stack_or_abort(end + 1);
             }
             for i in (0..=nargs).rev() {
                 self.stack[(abs + 1 + i) as usize] = self.stack[(abs + i) as usize];

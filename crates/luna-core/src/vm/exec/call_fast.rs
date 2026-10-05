@@ -255,7 +255,7 @@ impl Vm {
             let res_dst = func_slot + nargs + 1;
             let need = (res_dst + nret) as usize;
             if self.stack.len() < need {
-                self.stack.resize_or_abort(need, Value::Nil);
+                self.grow_stack_or_abort(need);
             }
             for i in (0..nret).rev() {
                 self.stack[(res_dst + i) as usize] = self.stack[(func_slot + i) as usize];
