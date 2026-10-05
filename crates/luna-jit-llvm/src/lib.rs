@@ -1,8 +1,10 @@
 //! LLVM 18 + inkwell 0.10 alternative JIT backend for luna.
 //!
-//! `LlvmBackend` implements `IntChunkCompiler` + `TraceCompiler`.
-//! Shapes the LLVM codegen does not handle return `Skipped` / `None`
-//! so the dispatcher falls through to the interpreter.
+//! `LlvmBackend` implements `IntChunkCompiler` (the method JIT); shapes
+//! the LLVM codegen does not handle return `Skipped` so the dispatcher
+//! falls through to the interpreter. Traces are lowered by luna-jit's
+//! trace lowerer, shared with the Cranelift backend, and compiled through
+//! [`compile_function`]; `LlvmBackend` on its own compiles no traces.
 //!
 //! ## How luna selects this backend
 //!
@@ -33,16 +35,18 @@ use luna_core::runtime::{Gc, LuaClosure, function::Proto};
 use luna_core::vm::Vm;
 
 mod codegen;
+mod function;
 mod operands;
 mod storage;
-mod trace;
 mod upval_roles;
 
-pub use storage::LlvmJitStorage;
+pub use function::{ENTRY, compile_function};
+pub use storage::{EnginePair, LlvmJitStorage};
 
 /// LLVM-backed JIT backend zero-sized type. Implements
-/// `IntChunkCompiler` + `TraceCompiler`; shapes the codegen does not
-/// handle return `Skipped` / `None`.
+/// `IntChunkCompiler`; shapes the codegen does not handle return
+/// `Skipped`. Its `TraceCompiler` compiles nothing: luna-jit's
+/// `LUNA_JIT_BACKEND=llvm` backend compiles traces with LLVM.
 #[derive(Default, Clone, Copy)]
 pub struct LlvmBackend;
 
@@ -73,18 +77,14 @@ impl IntChunkCompiler for LlvmBackend {
 impl TraceCompiler for LlvmBackend {
     fn try_compile_trace(
         &self,
-        storage: &mut dyn JitStorage,
-        record: &TraceRecord,
-        opts: CompileOptions,
+        _storage: &mut dyn JitStorage,
+        _record: &TraceRecord,
+        _opts: CompileOptions,
     ) -> Option<CompiledTrace> {
-        // Delegate to the LLVM trace lowerer.
-        // Down-cast `dyn JitStorage` to the concrete `LlvmJitStorage` so
-        // `trace::try_compile_trace` can park the engine pair.
-        let llvm_storage = storage.as_any_mut().downcast_mut::<LlvmJitStorage>()?;
-        trace::try_compile_trace(llvm_storage, record, opts)
+        None
     }
 
     fn last_compile_checkpoint(&self) -> &'static str {
-        "llvm-1k-g"
+        "llvm:traces-need-luna-jit"
     }
 }

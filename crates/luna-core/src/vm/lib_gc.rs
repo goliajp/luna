@@ -210,7 +210,7 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
             vec![Value::Int(0)]
         }
         "count" => {
-            let bytes = vm.heap.bytes();
+            let bytes = vm.gc_count_bytes();
             let kb = Value::Float(bytes as f64 / 1024.0);
             if v == LuaVersion::Lua52 {
                 // 5.2 alone also returns LUA_GCCOUNTB (gc.lua 5.2 :139 asserts

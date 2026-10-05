@@ -1,8 +1,62 @@
 //! Object constructors and string interning.
 
 use super::*;
+use crate::runtime::mem::oom_abort;
+use std::alloc::Layout;
 
 impl Heap {
+    /// A heap whose memory comes from `mem`, with a seed of its own.
+    pub fn new_on(mem: crate::runtime::mem::MemOwner) -> Heap {
+        Heap::with_mem(mem, make_seed())
+    }
+
+    /// The allocation context.
+    pub fn mem_ctx(&self) -> &crate::runtime::mem::MemCtx {
+        self.mem().ctx()
+    }
+
+    /// A block for one `T` from the allocation context.
+    #[inline]
+    fn alloc_block<T: GcObject>(&self) -> *mut T {
+        let layout = Layout::new::<T>();
+        match self.mem().ctx().alloc(layout, T::KIND) {
+            Some(p) => p.cast::<T>().as_ptr(),
+            None => oom_abort(layout),
+        }
+    }
+
+    /// Drop the object `p` points at and give its block back.
+    ///
+    /// # Safety
+    /// `p` is an object this heap allocated with [`Heap::alloc_block`],
+    /// unlinked, which nothing uses afterwards.
+    pub(super) unsafe fn free_block<T: GcObject>(&self, p: *mut T) {
+        // SAFETY: the caller's contract: the object is initialized and its
+        // block of this layout came from this heap's context
+        unsafe {
+            ptr::drop_in_place(p);
+            self.mem().ctx().free(
+                std::ptr::NonNull::new_unchecked(p.cast()),
+                Layout::new::<T>(),
+            );
+        }
+    }
+
+    /// Put `obj` in a new block and under GC management.
+    pub(crate) fn adopt<T: GcObject>(&mut self, obj: T) -> Gc<T> {
+        let p = self.alloc_block::<T>();
+        // SAFETY: `p` is a fresh block for one `T`, linked nowhere yet, and a
+        // `GcObject` starts with its header; once linked the heap owns the
+        // object until a collect finds it unreachable
+        unsafe {
+            p.write(obj);
+            self.link(p as *mut GcHeader);
+        }
+        self.bytes += std::mem::size_of::<T>();
+        // SAFETY: as above
+        unsafe { Gc::from_ptr(p) }
+    }
+
     /// Allocate and adopt a fresh empty [`Table`].
     pub fn new_table(&mut self) -> Gc<Table> {
         // table_pool fast path. When btrees-
@@ -31,7 +85,10 @@ impl Heap {
             }
             t
         } else {
-            Box::into_raw(Box::new(Table::new(GcHeader::new(ObjTag::Table))))
+            let t = self.alloc_block::<Table>();
+            // SAFETY: `t` is a fresh block for one table
+            unsafe { t.write(Table::new(GcHeader::new(ObjTag::Table))) };
+            t
         };
         // Link + bytes accounting (same as adopt path).
         // SAFETY: `p` is a fresh box or a pool table reset above, linked nowhere yet
@@ -74,7 +131,7 @@ impl Heap {
     /// Adopt a compiler-built prototype (its `hdr` must carry ObjTag::Proto).
     pub fn adopt_proto(&mut self, proto: Proto) -> Gc<Proto> {
         debug_assert!(proto.hdr.tag == ObjTag::Proto);
-        self.adopt(Box::new(proto))
+        self.adopt(proto)
     }
 
     /// Back-compat constructor for callers that already
@@ -128,23 +185,29 @@ impl Heap {
         upvals_len: u32,
         fill: F,
     ) -> Gc<LuaClosure> {
-        let mut boxed = Box::new(LuaClosure {
-            hdr: GcHeader::new(ObjTag::Closure),
-            proto,
-            code: proto.code.as_ptr(),
-            consts: proto.consts.as_ptr(),
-            upvals_ptr: std::ptr::null_mut(),
-            upvals_len,
-            inline_storage: std::cell::UnsafeCell::new(
-                [std::mem::MaybeUninit::<Gc<Upvalue>>::uninit();
-                    crate::runtime::function::INLINE_UPVALS_N],
-            ),
-        });
-        // Box is heap-stable now — populate storage at the final
-        // address so `upvals_ptr` will be valid.
-        fill(&mut boxed);
-        let g = self.adopt(boxed);
-        // SAFETY: `g` is the closure `adopt` just returned; no other handle or reference to it exists yet
+        let p = self.alloc_block::<LuaClosure>();
+        // SAFETY: `p` is a fresh block for one closure, linked nowhere yet;
+        // the storage is filled at its final address so `upvals_ptr` can
+        // point into it
+        let g = unsafe {
+            p.write(LuaClosure {
+                hdr: GcHeader::new(ObjTag::Closure),
+                proto,
+                code: proto.code.as_ptr(),
+                consts: proto.consts.as_ptr(),
+                upvals_ptr: std::ptr::null_mut(),
+                upvals_len,
+                inline_storage: std::cell::UnsafeCell::new(
+                    [std::mem::MaybeUninit::<Gc<Upvalue>>::uninit();
+                        crate::runtime::function::INLINE_UPVALS_N],
+                ),
+            });
+            fill(&mut *p);
+            self.link(p as *mut GcHeader);
+            Gc::from_ptr(p)
+        };
+        self.bytes += std::mem::size_of::<LuaClosure>();
+        // SAFETY: `g` is the closure linked just above; no other handle or reference to it exists yet
         unsafe { g.as_mut() }.init_upvals_ptr();
         g
     }
@@ -157,13 +220,13 @@ impl Heap {
         upvals: Box<[Value]>,
     ) -> Gc<NativeClosure> {
         let fix = self.fix_natives && upvals.is_empty();
-        let g = self.adopt(Box::new(NativeClosure {
+        let g = self.adopt(NativeClosure {
             hdr: GcHeader::native(&upvals),
             f,
             upvals,
             is_async: false,
             kind: crate::vm::exec::native_call::NativeKind::of(f),
-        }));
+        });
         if fix {
             // SAFETY: `adopt` just linked `g` at the head of `all`. PUC `luaC_fix`:
             // onto `fixed`, gray, so marking, barriers and weak tables skip it
@@ -190,21 +253,21 @@ impl Heap {
         f: crate::runtime::value::NativeFn,
         upvals: Box<[Value]>,
     ) -> Gc<NativeClosure> {
-        self.adopt(Box::new(NativeClosure {
+        self.adopt(NativeClosure {
             hdr: GcHeader::native(&upvals),
             f,
             upvals,
             is_async: true,
             kind: crate::vm::exec::native_call::NativeKind::Async,
-        }))
+        })
     }
 
     /// Allocate a fresh [`Upvalue`] cell in the given `state` (open / closed).
     pub fn new_upvalue(&mut self, state: UpvalState) -> Gc<Upvalue> {
-        self.adopt(Box::new(Upvalue {
+        self.adopt(Upvalue {
             hdr: GcHeader::new(ObjTag::Upvalue),
             state,
-        }))
+        })
     }
 
     /// Create a fresh suspended coroutine wrapping `body`. The new thread
@@ -215,7 +278,7 @@ impl Heap {
         body: Value,
         globals: Gc<crate::runtime::Table>,
     ) -> Gc<crate::runtime::Coro> {
-        self.adopt(Box::new(crate::runtime::Coro {
+        self.adopt(crate::runtime::Coro {
             hdr: GcHeader::new(ObjTag::Coro),
             status: crate::runtime::CoroStatus::Suspended,
             body,
@@ -237,23 +300,23 @@ impl Heap {
             globals,
             host_stack: Vec::new(),
             host_state: None,
-        }))
+        })
     }
 
     /// Create a userdata (an io file handle — luna's only userdata) with no
     /// metatable yet; the io library installs the shared `FILE*` metatable.
     pub fn new_userdata(&mut self, payload: UserdataPayload, writable: bool) -> Gc<Userdata> {
-        self.adopt(Box::new(Userdata::new(
+        self.adopt(Userdata::new(
             GcHeader::new(ObjTag::Userdata),
             payload,
             writable,
-        )))
+        ))
     }
 
     /// Create (or find) a string. Short strings (≤ 40 bytes) are interned.
     pub fn intern(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
         if bytes.len() <= string::MAX_SHORT_LEN {
-            let (p, is_new) = self.strings.intern(bytes, self.seed);
+            let (p, is_new) = self.strings.intern(self.mem.mem(), bytes, self.seed);
             if is_new {
                 // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
                 unsafe { self.link(p as *mut GcHeader) };
@@ -285,7 +348,7 @@ impl Heap {
             // SAFETY: `p` is an interned string the heap manages: new and linked above, or found in the table and kept from this cycle's sweep by the recoloring above
             unsafe { Gc::from_ptr(p) }
         } else {
-            let p = string::alloc_long(bytes, self.seed);
+            let p = string::alloc_long(self.mem.mem(), bytes, self.seed);
             // SAFETY: `alloc_long` just allocated `p`, linked nowhere yet
             unsafe { self.link(p as *mut GcHeader) };
             self.bytes += string::alloc_size(bytes.len());

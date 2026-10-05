@@ -59,7 +59,7 @@ end
 const DUMP: &str = r#"local function dump(tb)
   local ks = {}
   for k, v in pairs(tb) do
-    ks[#ks + 1] = (string.gsub(type(k):sub(1, 1) .. tostring(k) .. "=" .. tostring(v), "0x%x*", "ADDR"))
+    ks[#ks + 1] = (string.gsub(type(k):sub(1, 1) .. tostring(k) .. "=" .. tostring(v), "0[xX]%x+", "ADDR"):gsub("%x%x+[xX]0", "ADDR"))
   end
   table.sort(ks)
   return table.concat(ks, " ")

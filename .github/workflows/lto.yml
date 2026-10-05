@@ -14,7 +14,10 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+  # develop moves faster than an lto run finishes; cancelling there meant no
+  # head ever got a result, so only feature branches cancel. A newer pending
+  # run still replaces an older pending one.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/develop' }}
 
 jobs:
   native:

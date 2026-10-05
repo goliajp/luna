@@ -12,6 +12,8 @@ const BLOCK_ALIGN: usize = 16;
 /// The raw memory and user values of a userdata made by the C API.
 pub struct HostBlock {
     mem: *mut u8,
+    /// the allocation context the block came from
+    ctx: crate::runtime::mem::MemRef,
     size: usize,
     /// The user values (`lua_getiuservalue`); one in 5.2 and 5.3, as many
     /// as the host asked for from 5.4 on.
@@ -36,9 +38,14 @@ impl HostBlock {
 
 impl Drop for HostBlock {
     fn drop(&mut self) {
-        // SAFETY: `mem` came from `alloc_zeroed` with this layout in
-        // `host_new_block`, and only this drop frees it
-        unsafe { std::alloc::dealloc(self.mem, Self::layout(self.size)) };
+        // SAFETY: `mem` came from `ctx` with this layout in `host_new_block`,
+        // and only this drop frees it
+        unsafe {
+            self.ctx.ctx().free(
+                std::ptr::NonNull::new_unchecked(self.mem),
+                Self::layout(self.size),
+            )
+        };
     }
 }
 
@@ -56,13 +63,19 @@ impl Vm {
     /// values and no metatable.
     pub fn host_new_block(&mut self, size: usize, nuv: usize) -> Gc<crate::runtime::Userdata> {
         let layout = HostBlock::layout(size);
-        // SAFETY: the layout has a non-zero size
-        let mem = unsafe { std::alloc::alloc_zeroed(layout) };
-        if mem.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
+        let ctx = self.heap.mem();
+        let mem = match ctx
+            .ctx()
+            .alloc(layout, crate::runtime::mem::BlockKind::Other)
+        {
+            Some(p) => p.as_ptr(),
+            None => std::alloc::handle_alloc_error(layout),
+        };
+        // SAFETY: `mem` is a fresh block of `layout.size()` bytes
+        unsafe { mem.write_bytes(0, layout.size()) };
         let block = HostBlock {
             mem,
+            ctx,
             size,
             uservalues: vec![Value::Nil; nuv],
         };
