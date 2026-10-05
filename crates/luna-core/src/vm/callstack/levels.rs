@@ -365,7 +365,12 @@ impl Vm {
 
     /// Write stack slot `slot` of thread `co` (`None`: the running one), as
     /// `lua_setlocal` does.
-    pub(crate) fn write_thread_slot(&mut self, co: Option<Gc<Coro>>, slot: usize, v: Value) {
+    pub(crate) fn write_thread_slot(
+        &mut self,
+        co: Option<Gc<Coro>>,
+        slot: usize,
+        v: Value,
+    ) -> Result<(), crate::runtime::mem::Oom> {
         let stack = match co {
             Some(co) if !self.is_current_thread(Some(co)) => {
                 // the coroutine's saved stack is traced through `co`; re-gray it
@@ -376,9 +381,10 @@ impl Vm {
             _ => &mut self.stack,
         };
         if stack.len() <= slot {
-            stack.resize_or_abort(slot + 1, Value::Nil);
+            stack.resize(slot + 1, Value::Nil)?;
         }
         stack[slot] = v;
+        Ok(())
     }
 
     /// PUC `pushglobalfuncname`: the name `f` is reachable by, two tables
