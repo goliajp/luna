@@ -19,7 +19,6 @@ use luna_jit::VmExt; // brings install_default_jit / install_null_jit dotted-met
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::{LuaError, Vm};
-use std::io::Write;
 
 #[path = "luna/args.rs"]
 mod args;
@@ -185,7 +184,7 @@ use interp::{Interp, lua_tostring, show};
 fn print_version(v: LuaVersion) {
     let line = format!("luna {} ({})", env!("CARGO_PKG_VERSION"), dialect_name(v));
     if v == LuaVersion::Lua51 {
-        eprintln!("{line}");
+        let _ = luna_core::stdio::write_stderr(format!("{line}\n").as_bytes());
     } else {
         // lua_writestring + lua_writeline, which flushes
         luna_core::stdio::write_stdout(format!("{line}\n").as_bytes());
@@ -239,6 +238,9 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
     if let Some(n) = opts.budget {
         vm.set_instr_budget(Some(n));
     }
+    // lua.exe opens files through the MSVC C library, in text mode unless
+    // the mode has a `b`
+    vm.set_crt_text_mode(cfg!(windows));
     // Test knob, deliberately left out of --help: record traces after N
     // back-edges / calls instead of 64, so that short programs (the
     // differential corpora) run through the trace JIT.
