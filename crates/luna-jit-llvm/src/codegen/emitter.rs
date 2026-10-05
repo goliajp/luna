@@ -414,10 +414,13 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         builder.position_at_end(slow_bb);
         let slow_fn = self.helpers.get("luna_jit_self_call_slow").copied()?;
         let desc = self.i64_type.const_int(self.self_call_desc as u64, false);
+        let uncounted = self
+            .i64_type
+            .const_int(luna_jit_helpers::SELF_CALL_UNCOUNTED as u64, false);
         let mut slow_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
-            vec![zero.into(), desc.into()];
+            vec![zero.into(), desc.into(), uncounted.into()];
         slow_args.extend_from_slice(args);
-        slow_args.resize(6, zero.into());
+        slow_args.resize(7, zero.into());
         let slow = int_of(
             builder
                 .build_call(slow_fn, &slow_args, &format!("{name}_interp"))

@@ -18,7 +18,7 @@ mod scan;
 mod scan_ops;
 mod table_flow;
 use cfg::ChunkCfg;
-use emit::{EmitFacts, EmitState, SelfCalls};
+use emit::{EmitFacts, EmitState, SelfCallParams, SelfCalls};
 use entry::*;
 use helpers::*;
 use kinds::KindSweep;
@@ -89,6 +89,12 @@ pub fn lower_int_chunk_into<M: Module>(
     let presize_for_newtable = checks::presize_hints(c, &scan);
     checks::check_fold_blocks(&scan)?;
     let any_self_call = checks::check_self_call_base_case(c, &scan)?;
+    // self calls keep the stack limit in the pinned register: without one
+    // (an AOT object module, another target) they are left to the
+    // interpreter
+    if any_self_call && !module.isa().flags().enable_pinned_reg() {
+        return None;
+    }
     let (reg_kinds, ret_kind) = kinds::sweep_kinds(c, &scan, &cfg)?;
     // After convergence: derive per-arg kinds + the ret_is_float flag
     // for the cache slot. An arg that's still Unset (param read by

@@ -322,9 +322,12 @@ impl Vm {
         }
         let stopped = self.heap.gc_is_stopped();
         self.heap.gc_set_stopped(true);
+        // the method JIT would hand this very call straight back
+        let jit = std::mem::replace(&mut self.jit.enabled, false);
         self.nny += 1;
         let r = self.call_value_impl(Value::Closure(cl), args, true);
         self.nny -= 1;
+        self.jit.enabled = jit;
         self.heap.gc_set_stopped(stopped);
         self.frame_cap = cap;
         r

@@ -422,10 +422,16 @@ and numeric-string arguments, every library's surface in each dialect,
 `collectgarbage`, call-stack levels, tracebacks, and language-level error
 messages. What still differs does so on purpose:
 
-- **Native stack.** Like PUC, luna counts metamethod calls, library
-  callbacks (`table.sort`, `string.gsub`, `load` readers, `__tostring`),
-  coroutine resumes, protected calls and C API calls against a 200-level
-  C-call limit and raises "C stack overflow" past it. On top of that it
+- **Metamethod recursion depth.** PUC counts a metamethod call against its
+  200-level C-call limit, so a `__index` function recursing about 200
+  deep raises "C stack overflow". luna does not count metamethod calls;
+  such recursion is bounded by the Lua stack (one million slots) and
+  raises "stack overflow" there. It never crashes the process.
+- **Native stack.** Like PUC, luna counts library callbacks
+  (`table.sort`, `string.gsub`, `load` readers, `__tostring`), coroutine
+  resumes, protected calls, message handlers and C API calls against a
+  200-level C-call limit and raises "C stack overflow" past it. On top
+  of that it
   compares the native stack pointer with the running thread's stack
   bounds, so on a thread with a small stack (an embedder's 256 KB worker,
   say) the same error comes after fewer levels instead of a crash. The

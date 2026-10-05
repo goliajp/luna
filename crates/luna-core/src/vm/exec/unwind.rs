@@ -120,7 +120,7 @@ impl Vm {
                 {
                     self.discard_host_cont(hc);
                 }
-                self.pop_frame();
+                frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
             }
             return Unwound::Propagated(LuaError(err));
         }
@@ -135,7 +135,6 @@ impl Vm {
                     ..
                 }) => {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-                    self.pcall_depth -= 1;
                     self.stack.truncate(func_slot as usize);
                     self.top = mc.saved_top.min(func_slot);
                     self.tbc.retain(|&s| s < func_slot);
@@ -161,7 +160,6 @@ impl Vm {
                     ..
                 }) => {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-                    self.pcall_depth -= 1;
                     self.stack.truncate(func_slot as usize);
                     self.top = func_slot;
                     self.tbc.retain(|&s| s < func_slot);
@@ -183,7 +181,6 @@ impl Vm {
                     ..
                 }) => {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-                    self.pcall_depth -= 1;
                     self.stack.truncate(func_slot as usize);
                     self.top = func_slot;
                     self.tbc.retain(|&s| s < func_slot);

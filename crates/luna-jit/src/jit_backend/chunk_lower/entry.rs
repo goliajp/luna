@@ -6,8 +6,8 @@ pub(super) struct EntryChecks {
     pub(super) self_upval: Option<u32>,
     /// `("math", name)` key pairs of the folded `math.<name>` calls.
     pub(super) math_fns: Vec<(Gc<LuaStr>, Gc<LuaStr>)>,
-    /// The body calls itself, and takes its [`SelfCalls`] context.
-    pub(super) self_calls: bool,
+    /// The body calls itself, taking these [`SelfCalls`] parameters.
+    pub(super) self_calls: Option<SelfCallParams>,
 }
 
 /// Defines the entry that runs `checks` before calling the chunk body
@@ -81,7 +81,8 @@ pub(super) fn define_checked_entry<M: Module>(
         bcx.switch_to_block(next);
     }
     let mut args = args;
-    if checks.self_calls {
+    let mut saved_pinned = None;
+    if let Some(extra) = checks.self_calls {
         let fill_id = module
             .declare_function("luna_jit_enter_ctx", Linkage::Import, &{
                 let mut s = module.make_signature();
@@ -95,11 +96,23 @@ pub(super) fn define_checked_entry<M: Module>(
             bcx.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, bytes, 3));
         let ctx_addr = bcx.ins().stack_addr(types::I64, slot, 0);
         bcx.ins().call(fill_ref, &[ctx_addr]);
-        args.push(ctx_addr);
+        let limit = bcx.ins().stack_load(types::I64, types::I64, slot, 0);
+        // the caller's value of the register, which the ABI makes ours to keep
+        saved_pinned = Some(bcx.ins().get_pinned_reg(types::I64));
+        bcx.ins().set_pinned_reg(limit);
+        if extra.count {
+            args.push(bcx.ins().stack_load(types::I64, types::I64, slot, 16));
+        }
+        if extra.ctx {
+            args.push(ctx_addr);
+        }
     }
     let body_ref = module.declare_func_in_func(body_id, bcx.func);
     let call = bcx.ins().call(body_ref, &args);
     let r = bcx.inst_results(call)[0];
+    if let Some(saved) = saved_pinned {
+        bcx.ins().set_pinned_reg(saved);
+    }
     bcx.ins().return_(&[r]);
 
     bcx.switch_to_block(bail);

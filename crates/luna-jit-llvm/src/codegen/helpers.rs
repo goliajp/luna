@@ -149,7 +149,7 @@ fn helper_registry() -> Vec<(&'static str, usize, u32, bool)> {
         (
             "luna_jit_self_call_slow",
             luna_jit_self_call_slow as *const () as usize,
-            6,
+            7,
             true,
         ),
         (
