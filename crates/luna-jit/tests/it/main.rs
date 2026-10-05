@@ -114,6 +114,7 @@ mod trace_move_alias_escape;
 mod trace_numeric_for_dialects;
 mod trace_overflow_head_given_up;
 mod trace_plain_exit_side_trace;
+mod trace_plain_return_tags;
 mod trace_readonly_tables;
 mod trace_recorder_clean_close;
 mod trace_recording_smoke;
