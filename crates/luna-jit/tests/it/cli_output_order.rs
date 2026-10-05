@@ -12,11 +12,21 @@
 //! Cases whose output fills a buffer depend on the buffer size, which
 //! glibc takes from the descriptor; they and the terminal runs are checked
 //! on Linux only.
+//!
+//! On Windows `lua.exe` writes through the MSVC C library instead (4096-byte
+//! buffers, `"line"` meaning full buffering, text mode), and
+//! `expected-windows.txt` was recorded from PUC 5.1.5 to 5.5.0 built with
+//! MSVC on windows-latest, the same way; a carriage return is written
+//! `<CR>` there. Every case is checked on Windows.
 
-use crate::cli_common::{DIALECTS, as_on_this_platform, luna, workdir};
+use crate::cli_common::{DIALECTS, luna, workdir};
 use std::process::{Command, Stdio};
 
-const EXPECTED: &str = include_str!("cli_output_order/expected.txt");
+const EXPECTED: &str = if cfg!(windows) {
+    include_str!("cli_output_order/expected-windows.txt")
+} else {
+    include_str!("cli_output_order/expected.txt")
+};
 
 const CASES: [(&str, &str); 8] = [
     ("a.lua", include_str!("cli_output_order/a.lua")),
@@ -38,22 +48,17 @@ fn expected(dialect: &str, name: &str) -> String {
     let head = format!("=== {dialect} {name}\n");
     let start = all.find(&head).unwrap_or_else(|| panic!("no {head}")) + head.len();
     let len = all[start..].find("\n=== end\n").expect("section end");
-    let section = &all[start..start + len];
-    // the program's output, then the `status N` line the test adds
-    let cut = section
-        .trim_end_matches('\n')
-        .rfind('\n')
-        .map_or(0, |i| i + 1);
-    format!(
-        "{}{}",
-        as_on_this_platform(&section[..cut]),
-        &section[cut..]
-    )
+    all[start..start + len].to_string()
 }
 
 /// Runs of 20 or more equal bytes as `<c*N>`, the program's path as `lua`.
 fn normalize(out: &[u8]) -> String {
     let text = String::from_utf8_lossy(out).replace(luna().to_str().unwrap(), "lua");
+    let text = if cfg!(windows) {
+        text.replace('\r', "<CR>")
+    } else {
+        text
+    };
     let chars: Vec<char> = text.chars().collect();
     let mut s = String::new();
     let mut i = 0;
@@ -133,7 +138,7 @@ fn script_output_and_errors_interleave_as_in_puc() {
     let dir = workdir(&CASES);
     let mut failed = Vec::new();
     for (name, _) in CASES {
-        if !cfg!(target_os = "linux") && BUFFER_SIZED.contains(&name) {
+        if !cfg!(any(target_os = "linux", windows)) && BUFFER_SIZED.contains(&name) {
             continue;
         }
         let script = name.to_string();

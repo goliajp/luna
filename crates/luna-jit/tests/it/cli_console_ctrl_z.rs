@@ -40,15 +40,53 @@ fn run(program: &std::path::Path, prefix: &[&str], args: &[&str], keys: &[&str])
     (console.screen(), code)
 }
 
+/// What PUC 5.1.5 to 5.5.0 built with MSVC showed for each case, as the
+/// console renders it (`^Z` is the console's echo of Ctrl+Z, `\u{2426}` its
+/// glyph for the byte in output); the REPL's version line is left out.
+fn puc_screen(dialect: &str, case: &str) -> String {
+    let near = match dialect {
+        "5.1" => "'char(26)'",
+        "5.2" => "char(26)",
+        _ => "'<\\26>'",
+    };
+    let quoted = if dialect == "5.1" {
+        "ab\u{2426}ef"
+    } else {
+        "ab\\26ef"
+    };
+    match case {
+        "read-all" => format!("ab^Zcd\r\nef\r\n^Z\r\n\"{quoted}\\\r\n\""),
+        "lines" => "ab^Zcd\r\nef\r\n[ab\u{2426}ef]^Z\r\n".to_string(),
+        _ => format!(
+            "> print(1)^Z2\r\nprint(3)\r\nstdin:1: unexpected symbol near {near}\r\n> ^Z\r\n\r\n"
+        ),
+    }
+}
+
 #[test]
 fn ctrl_z_on_a_console() {
-    let Some(exe) = std::env::var_os("LUNA_CONSOLE_PROBE_EXE") else {
+    if let Some(exe) = std::env::var_os("LUNA_CONSOLE_PROBE_EXE") {
+        let prefix = std::env::var("LUNA_CONSOLE_PROBE_ARGS").unwrap_or_default();
+        let prefix: Vec<&str> = prefix.split_whitespace().collect();
+        for (name, args, keys) in CASES {
+            let (screen, code) = run(std::path::Path::new(&exe), &prefix, args, keys);
+            println!("CASE {name} exit {code}\n{screen:?}\nEND");
+        }
         return;
-    };
-    let prefix = std::env::var("LUNA_CONSOLE_PROBE_ARGS").unwrap_or_default();
-    let prefix: Vec<&str> = prefix.split_whitespace().collect();
-    for (name, args, keys) in CASES {
-        let (screen, code) = run(std::path::Path::new(&exe), &prefix, args, keys);
-        println!("CASE {name} exit {code}\n{screen:?}\nEND");
+    }
+    for d in crate::cli_common::DIALECTS {
+        let lua = format!("--lua={d}");
+        for (name, args, keys) in CASES {
+            let (screen, code) = run(&crate::cli_common::luna(), &[&lua], args, keys);
+            let screen = if name == "repl" {
+                screen
+                    .split_once("\r\n")
+                    .map_or(screen.clone(), |(_, rest)| rest.to_string())
+            } else {
+                screen
+            };
+            assert_eq!(code, 0, "--lua={d} {name}");
+            assert_eq!(screen, puc_screen(d, name), "--lua={d} {name}");
+        }
     }
 }
