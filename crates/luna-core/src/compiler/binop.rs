@@ -143,7 +143,11 @@ impl Compiler<'_> {
                 if in_inst.is_some() {
                     (r, 0)
                 } else {
-                    // the left numeral has no in-instruction form here
+                    // the left numeral has no in-instruction form here: it
+                    // goes above the right operand, which it must not clobber
+                    if r >= saved {
+                        self.set_freereg(r + 1);
+                    }
                     let saved_line = self.force_line.replace(line);
                     let l = self.exp_to_anyreg(le)?;
                     self.force_line = saved_line;
