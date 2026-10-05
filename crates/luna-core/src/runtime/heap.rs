@@ -310,6 +310,9 @@ pub struct Heap {
     /// allocation can briefly push `bytes` past `n`, but the embedder gets
     /// control back at the next safe point — host policy.
     pub(crate) mem_cap: Option<usize>,
+    /// Where the heap's memory comes from. Last, so the context outlives
+    /// whatever the other fields free through it.
+    mem: crate::runtime::mem::MemOwner,
 }
 
 /// Initial auto-GC threshold and floor (PUC GCSTEPSIZE-ish pacing).
@@ -328,6 +331,11 @@ impl Heap {
 
     /// [`Heap::new`] hashing strings with `seed`.
     pub fn with_seed(seed: u32) -> Heap {
+        Heap::with_mem(crate::runtime::mem::MemOwner::system(), seed)
+    }
+
+    /// A heap whose memory comes from `mem`, hashing strings with `seed`.
+    pub fn with_mem(mem: crate::runtime::mem::MemOwner, seed: u32) -> Heap {
         Heap {
             all: ptr::null_mut(),
             fixed: ptr::null_mut(),
@@ -355,7 +363,20 @@ impl Heap {
             table_pool: Vec::new(),
             #[cfg(feature = "gc-verify")]
             recently_freed: std::collections::HashSet::new(),
+            mem,
         }
+    }
+
+    /// The handle the heap's containers allocate through.
+    #[inline(always)]
+    pub fn mem(&self) -> crate::runtime::mem::MemRef {
+        self.mem.mem()
+    }
+
+    /// An owner of the heap's allocation context, for holders that must
+    /// keep it alive as long as they do (the Vm's own containers).
+    pub fn mem_owner(&self) -> crate::runtime::mem::MemOwner {
+        self.mem.clone()
     }
 
     /// Put a new object on the all-objects list with its born color.
