@@ -262,7 +262,7 @@ fn emit_float_divmod<E: Emit>(
         sig.returns.push(AbiParam::new(types::F64));
         let id = lw
             .bcx
-            .declare_function("fmod", Linkage::Import, &sig)
+            .declare_function("luna_jit_fmod", Linkage::Import, &sig)
             .ok()?;
         let f = lw.bcx.import_func(id);
         let call = lw.bcx.ins().call(f, &[a, b]);

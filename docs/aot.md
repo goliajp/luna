@@ -112,10 +112,50 @@ included.
 | Target | Host | C compiler + linker | Setup |
 |---|---|---|---|
 | `x86_64-pc-windows-msvc` (default on a Windows host with the MSVC Rust toolchain) | Windows | `cl.exe` + `link.exe` | Visual Studio 2017 or newer, or its Build Tools, with the "Desktop development with C++" workload. luna-aot finds the newest install and sets `INCLUDE` / `LIB` / `PATH` itself, so a plain `cmd` or PowerShell works; inside a Developer Command Prompt its environment is used as is |
-| `x86_64-pc-windows-msvc` | Windows, no Visual Studio C++ tools | `clang-cl` + `lld-link` from LLVM on `PATH` | They still need the Windows SDK and the MSVC libraries |
-| `x86_64-pc-windows-msvc` | macOS / Linux | `clang-cl` + `lld-link` | `brew install llvm` / `apt install clang lld`, plus the Windows SDK and CRT libraries given through `LIB` (an `xwin` download); CI checks the PE layout of this leg, not a run |
+| `x86_64-pc-windows-msvc` | Windows, no Visual Studio C++ tools | `clang-cl` + `lld-link` from LLVM on `PATH` | The MSVC CRT and Windows SDK libraries from `xwin splat`, found as described below. CI runs the AOT tests this way on `windows-latest` with Visual Studio hidden (vswhere, luna-aot and lld-link find no installation) |
+| `x86_64-pc-windows-msvc` | macOS / Linux | `clang-cl` + `lld-link` (and `llvm-lib`) | `brew install llvm lld` / `apt install clang lld llvm`, `rustup target add x86_64-pc-windows-msvc`, and the libraries from `xwin splat`, found as described below. CI builds on Linux and runs the binaries under Wine, and builds on macOS and runs them on Windows |
 | `x86_64-pc-windows-gnu` | Windows | MinGW `x86_64-w64-mingw32-gcc`, or its plain `gcc` | `rustup target add x86_64-pc-windows-gnu` and a MinGW-w64 toolchain on `PATH` (MSYS2, or the one on GitHub's runners) |
 | `x86_64-pc-windows-gnu` | macOS / Linux | `x86_64-w64-mingw32-gcc` | `brew install mingw-w64` / `apt install gcc-mingw-w64-x86-64` |
+
+#### The MSVC libraries without Visual Studio
+
+Without Visual Studio, the MSVC target needs the MSVC C runtime and the
+Windows SDK from somewhere. [`xwin`](https://github.com/Jake-Shadle/xwin)
+downloads them from Microsoft's servers (accepting Microsoft's license)
+and writes them into one directory:
+
+```sh
+xwin --accept-license splat --output ~/xwin
+LUNA_AOT_MSVC_SYSROOT=~/xwin luna-aot compile foo.lua --target x86_64-pc-windows-msvc --out foo.exe
+```
+
+luna-aot picks the MSVC tools in this order, the way it looks for Visual
+Studio on a Windows host:
+
+1. `CC` / `LD`, used as given.
+2. `LUNA_AOT_MSVC_SYSROOT` set: `clang-cl` and `lld-link` from `PATH`,
+   with the headers and libraries of that directory. Visual Studio is not
+   looked for, so this also forces LLVM's tools on a Windows host that
+   has Visual Studio. The directory may hold either `xwin splat` layout,
+   the default one (`crt/`, `sdk/`) or `--use-winsysroot-style`
+   (`VC/Tools/MSVC`, `Windows Kits/10`); a directory with neither is an
+   error.
+3. On a Windows host, `cl.exe` and `link.exe` from Visual Studio.
+4. `clang-cl` and `lld-link` from `PATH`, with the directory
+   [`cargo xwin`](https://github.com/rust-cross/cargo-xwin) keeps in its
+   cache when it exists (`~/.cache/cargo-xwin/xwin` on Linux,
+   `~/Library/Caches/cargo-xwin/xwin` on macOS,
+   `%LOCALAPPDATA%\cargo-xwin\xwin` on Windows), so a machine that has
+   built with `cargo xwin` needs no setting. Without such a directory
+   `lld-link` reads `LIB`, and on Windows finds an installed SDK itself.
+
+When the tools are LLVM's and a sysroot was found, the cargo build of
+the runtime staticlib gets the same setup: `CC_<target>=clang-cl` and the
+sysroot's headers in `CFLAGS_<target>` for the C part of `luna-jit`, and
+`CARGO_TARGET_<TARGET>_LINKER=lld-link` with the sysroot's library
+directories for the `luna-jit` DLL that cargo links on the way. A
+variable you set yourself is left alone. These variables split on
+spaces, so the sysroot path must not contain any.
 
 `CC` and `LD` override the compiler and linker for either target. On a
 Windows target an `--out` path without an extension gets `.exe`.
