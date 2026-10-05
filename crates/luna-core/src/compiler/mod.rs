@@ -32,7 +32,7 @@ mod stat;
 mod table_ctor;
 mod vararg_scan;
 use const_map::{ConstKey, ConstMap};
-use ctconst::{CtConst, ct_value};
+use ctconst::{CtConst, ct_operand, ct_value};
 use fold::{fold_arith, is_logical, numeral};
 pub(crate) use level::CompileScratch;
 use level::{Level, LevelBufs};
