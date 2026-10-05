@@ -77,6 +77,17 @@ pub(super) fn flush(which: Std) -> std::io::Result<()> {
     result(with(which, |f, os| f.fflush(os)))
 }
 
+/// `fseek` then `ftell`; the `errno` of a failed `fseek`.
+pub(super) fn seek(which: Std, op: u8, offset: i64) -> Result<i64, i32> {
+    with(which, |f, os| {
+        if f.fseek(os, offset, op) {
+            Ok(f.ftell(os))
+        } else {
+            Err(crate::vm::lib_io::msvc::errno())
+        }
+    })
+}
+
 /// `setvbuf(stream, NULL, mode, size)`
 pub(super) fn setvbuf(which: Std, mode: u8, size: usize) {
     with(which, |f, os| f.setvbuf(os, mode, size));

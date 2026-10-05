@@ -105,6 +105,14 @@ fn seek_stream(u: Gc<Userdata>, op: usize, offset: i64) -> std::io::Result<i64> 
     if u.crt.is_some() && matches!(u.file(), FileHandle::File(_)) {
         return crt::seek(u, op, offset);
     }
+    if crate::stdio::text_mode() && matches!(u.file(), FileHandle::Stdout | FileHandle::Stderr) {
+        let which = if matches!(u.file(), FileHandle::Stderr) {
+            msvc::Std::Err
+        } else {
+            msvc::Std::Out
+        };
+        return crate::stdio::seek_crt(which, op as u8, offset).map_err(crt_error);
+    }
     drain_write_buf(u)?;
     if matches!(u.file(), FileHandle::Stdout) {
         // liolib always calls `fseek`, which writes out what stdout

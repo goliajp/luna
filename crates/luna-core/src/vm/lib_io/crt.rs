@@ -5,11 +5,14 @@
 use super::msvc::{CrtFile, Os};
 use super::*;
 
-/// Standard input under a `FILE`.
-struct StdinOs;
+/// Standard input under a `FILE`; `true` when it is a console.
+struct StdinOs(bool);
 
 impl Os for StdinOs {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.0 {
+            return read_console(buf);
+        }
         std::io::stdin().read(buf)
     }
     fn write_all(&mut self, _buf: &[u8]) -> std::io::Result<()> {
@@ -23,6 +26,46 @@ impl Os for StdinOs {
     }
 }
 
+/// `ReadFile` on a console: a line typed in the console's code page, and
+/// nothing for a line that starts with Ctrl+Z (std reads a console through
+/// `ReadConsoleW`, which treats Ctrl+Z its own way).
+#[cfg(windows)]
+fn read_console(buf: &mut [u8]) -> std::io::Result<usize> {
+    use std::os::windows::io::AsRawHandle;
+    #[link(name = "kernel32")]
+    // SAFETY: the declaration matches `ReadFile` in kernel32
+    unsafe extern "system" {
+        fn ReadFile(
+            file: *mut std::ffi::c_void,
+            buffer: *mut u8,
+            to_read: u32,
+            read: *mut u32,
+            overlapped: *mut std::ffi::c_void,
+        ) -> i32;
+    }
+    let mut n = 0u32;
+    let len = buf.len().min(u32::MAX as usize) as u32;
+    // SAFETY: `buf` is writable for `len` bytes and `n` for one u32; the handle is this process's standard input, and no OVERLAPPED is passed for a synchronous read
+    let ok = unsafe {
+        ReadFile(
+            std::io::stdin().as_raw_handle(),
+            buf.as_mut_ptr(),
+            len,
+            &mut n,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(n as usize)
+}
+
+#[cfg(not(windows))]
+fn read_console(buf: &mut [u8]) -> std::io::Result<usize> {
+    std::io::stdin().read(buf)
+}
+
 /// Run `f` on the stream's `FILE` and its OS file.
 pub(super) fn with<R>(u: Gc<Userdata>, f: impl FnOnce(&mut CrtFile, &mut dyn Os) -> R) -> R {
     // SAFETY: `u` is a file handle the caller holds; the borrow covers the one call, which runs no Lua code and takes no other reference into `u`
@@ -30,7 +73,10 @@ pub(super) fn with<R>(u: Gc<Userdata>, f: impl FnOnce(&mut CrtFile, &mut dyn Os)
     let crt = m.crt.as_deref_mut().expect("a CRT stream");
     match &mut m.payload {
         UserdataPayload::File(FileHandle::File(file)) => f(crt, file),
-        UserdataPayload::File(FileHandle::Stdin) => f(crt, &mut StdinOs),
+        UserdataPayload::File(FileHandle::Stdin) => {
+            let dev = crt.is_console();
+            f(crt, &mut StdinOs(dev))
+        }
         _ => unreachable!("only files and standard input carry a FILE"),
     }
 }

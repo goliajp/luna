@@ -7,7 +7,6 @@
 //! what a script sees (positions, failures, the bytes a file ends up with,
 //! the order of output) is what `lua.exe` gives, quirks included.
 
-
 mod lowio;
 mod read;
 pub(crate) mod scan;
@@ -82,7 +81,7 @@ impl CrtFile {
         } else {
             WRITE
         };
-        CrtFile {
+        let mut f = CrtFile {
             flags,
             base: Vec::new(),
             ptr: 0,
@@ -91,7 +90,9 @@ impl CrtFile {
             io: lowio::Handle::new(text, pipe, false),
             std: Std::No,
             tty: false,
-        }
+        };
+        f.io.append = mode.first() == Some(&b'a');
+        f
     }
 
     /// `stdin`, `stdout` or `stderr`, in text mode.
@@ -119,6 +120,15 @@ impl CrtFile {
 
     fn has_big_buffer(&self) -> bool {
         self.has(BUF_CRT | BUF_USER)
+    }
+
+    /// Whether the stream reads a console (`FDEV`).
+    pub(crate) fn is_console(&self) -> bool {
+        self.io.is_dev()
+    }
+
+    pub(crate) fn feof(&self) -> bool {
+        self.has(EOF)
     }
 
     pub(crate) fn ferror(&self) -> bool {
