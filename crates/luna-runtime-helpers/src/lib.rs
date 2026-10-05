@@ -392,7 +392,7 @@ pub fn run_bytecode_as(bytecode: &[u8], version: LuaVersion) -> i32 {
 //
 // Verified post-build:
 //   `nm target/release/libluna_runtime_helpers.a | grep " T _luna_jit_" | wc -l`
-//   reports 44 (one per helper).
+//   reports 45 (one per helper).
 // Re-export the helpers at the crate root. This pulls them into our
 // `pub` surface so rustc treats them as kept symbols. The
 // `extern "C"` + `#[no_mangle]` on the upstream definitions means
@@ -403,20 +403,20 @@ pub fn run_bytecode_as(bytecode: &[u8], version: LuaVersion) -> i32 {
 // bundling step is forced to pull in the defining cgus.
 #[cfg(feature = "jit-helpers")]
 pub use luna_jit::jit_backend::{
-    luna_jit_head_closure, luna_jit_materialize_sunk_table, luna_jit_math_fn_is_library,
-    luna_jit_new_table, luna_jit_new_table_sized, luna_jit_op_close, luna_jit_op_closure,
-    luna_jit_op_concat, luna_jit_op_get_tab_up, luna_jit_op_get_tab_up_checked,
-    luna_jit_op_self_checked, luna_jit_op_tforcall, luna_jit_park_deopt, luna_jit_self_upval_check,
-    luna_jit_spill_to_stack, luna_jit_stack_load, luna_jit_stack_tag, luna_jit_stack_update_raw,
-    luna_jit_str_buf_acquire, luna_jit_str_buf_extend, luna_jit_str_buf_intern,
-    luna_jit_str_buf_release, luna_jit_str_sub, luna_jit_suppress_trace_admit,
-    luna_jit_table_get_field, luna_jit_table_get_field_checked, luna_jit_table_get_float,
-    luna_jit_table_get_int, luna_jit_table_get_int_checked, luna_jit_table_len,
-    luna_jit_table_len_checked, luna_jit_table_set_checked, luna_jit_table_set_field,
-    luna_jit_table_set_field_checked, luna_jit_table_set_float_float, luna_jit_table_set_int,
-    luna_jit_table_set_int_checked, luna_jit_table_set_nil, luna_jit_table_set_raw,
-    luna_jit_trace_materialize_frames, luna_jit_upval_get, luna_jit_upval_get_checked,
-    luna_jit_upval_get_float, luna_jit_upval_of_checked,
+    luna_jit_fmod, luna_jit_head_closure, luna_jit_materialize_sunk_table,
+    luna_jit_math_fn_is_library, luna_jit_new_table, luna_jit_new_table_sized, luna_jit_op_close,
+    luna_jit_op_closure, luna_jit_op_concat, luna_jit_op_get_tab_up,
+    luna_jit_op_get_tab_up_checked, luna_jit_op_self_checked, luna_jit_op_tforcall,
+    luna_jit_park_deopt, luna_jit_self_upval_check, luna_jit_spill_to_stack, luna_jit_stack_load,
+    luna_jit_stack_tag, luna_jit_stack_update_raw, luna_jit_str_buf_acquire,
+    luna_jit_str_buf_extend, luna_jit_str_buf_intern, luna_jit_str_buf_release, luna_jit_str_sub,
+    luna_jit_suppress_trace_admit, luna_jit_table_get_field, luna_jit_table_get_field_checked,
+    luna_jit_table_get_float, luna_jit_table_get_int, luna_jit_table_get_int_checked,
+    luna_jit_table_len, luna_jit_table_len_checked, luna_jit_table_set_checked,
+    luna_jit_table_set_field, luna_jit_table_set_field_checked, luna_jit_table_set_float_float,
+    luna_jit_table_set_int, luna_jit_table_set_int_checked, luna_jit_table_set_nil,
+    luna_jit_table_set_raw, luna_jit_trace_materialize_frames, luna_jit_upval_get,
+    luna_jit_upval_get_checked, luna_jit_upval_get_float, luna_jit_upval_of_checked,
 };
 
 #[cfg(feature = "jit-helpers")]

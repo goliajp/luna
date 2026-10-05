@@ -23,6 +23,8 @@ use std::io::Write;
 
 #[path = "luna/args.rs"]
 mod args;
+#[path = "luna/counters.rs"]
+mod counters;
 #[path = "luna/interp.rs"]
 mod interp;
 #[cfg(feature = "repl-line-editor")]
@@ -341,6 +343,7 @@ fn main() {
     if opts.profile {
         print_profile(&interp.vm);
     }
+    counters::append(&interp.vm);
     // lua.c closes the state before it exits, which finalizes open files
     // and so writes out what they still buffer
     drop(interp);

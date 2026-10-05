@@ -153,6 +153,18 @@ optimization.
 
 ### Changed
 
+- The LLVM backend (`--features llvm-jit`, `LUNA_JIT_BACKEND=llvm`)
+  compiles traces with the same trace lowering as the Cranelift backend:
+  traces start in the baseline tier and LLVM compiles them again once
+  they are hot (with `LUNA_TRACE_TIER=optimizing`, every trace), at
+  `default<O2>` for the host CPU. It now compiles and runs the same
+  traces as the Cranelift backend, inlined calls, side traces and
+  tables included; before, it compiled only loops of integer
+  arithmetic and comparisons. `luna_jit_llvm::LlvmBackend` on its own
+  is the method JIT only: its `TraceCompiler` compiles no trace, and
+  luna-jit's backend compiles them through
+  `luna_jit_llvm::compile_function`.
+
 - C API: the `io` library of a state made through the C API is C over the
   C library's stdio, as PUC's is, for every dialect: file handles are
   `luaL_Stream` userdata (5.1: a `FILE *`) with the registry's
@@ -325,6 +337,45 @@ optimization.
 
 ### Fixed
 
+- A loop trace that ran a whole pass and returned to its head through
+  its own tail could put back the registers that pass wrote as they were
+  before it: the return was matched by its pc to a guard that also
+  leaves at the head, and restored with that guard's register kinds.
+  `if i == 5 then r = u end` inside a `while` left `r` nil after the
+  loop, with no error. Such a return now restores with the tail's own
+  kinds. Seen after 4.0.2: 4.0.2, 4.0.1 and 3.2.2 give the right result
+  on the same program.
+
+- 5.4 and 5.5: `local x <const> = X and nil or K` (or with `false`) made
+  `x` a variable; PUC makes it the compile-time constant K, after running
+  X, so `x` has no `debug.getlocal` entry and an inner function using it
+  has no upvalue for it (affects 3.1.0 through 4.0.2). luna now does the
+  same.
+- A function compiled by the method JIT returned a local that only a
+  branch assigns (`local r ... if i == 5 then r = i end ... return r`) as
+  the number 0 when the branch had not run, instead of nil, and
+  arithmetic on it went on with 0 instead of raising. The compiler took
+  the branch's write as done on every path. Now a local some path leaves
+  nil is treated as nil where it is read. All dialects, default settings;
+  3.2.2, 4.0.1 and 4.0.2 have it.
+
+||||||| 0bf74190
+- 5.4 and 5.5: `x - (C and nil or 0)` (also with `false`, or any
+  expression whose `and` ends in one of them) gave `-0.0` for `x = -0.0`
+  where PUC gives `0.0` (affects 3.1.0 through 4.0.2). PUC's code
+  generator reduces such an operand to the constant 0, so it runs
+  `x - 0` as `x + 0`; luna now does the same. `C` still runs.
+- On x86 Linux, a float `%` with two NaN operands in a compiled trace
+  (runtime JIT and luna-aot) returned the NaN glibc's `fmod` picks
+  instead of the one the interpreter and PUC pick (the larger
+  significand, as gcc's inline x87 `fprem`), so `print` could show `nan`
+  where PUC shows `-nan`. Compiled code now calls the interpreter's
+  `fmod` through a new runtime helper, `luna_jit_fmod`.
+- luna-aot with `clang-cl`: the C entry was compiled with `/Fo:<path>`,
+  which clang-cl reads as an output path starting with `:`, and clang-cl
+  dropped the empty `.lt_skix` / `.lt_chai` /
+  `.lt_prix` sections that cl.exe keeps. A cross build to
+  `x86_64-pc-windows-msvc` from Linux or macOS could not link before.
 - A function whose loop held a shorter loop, called again and again,
   could run the outer loop's body fewer times than written, with no
   error. A trace started in the inner loop leaves through two exits that
@@ -534,6 +585,9 @@ optimization.
 
 ### Added
 
+- `luna_jit::install_llvm_backend` (with `--features llvm-jit`) installs
+  the LLVM backend on a `Vm` regardless of `LUNA_JIT_BACKEND`.
+
 - `luna_core::runtime::mem`: the allocation context a `Vm` takes its memory
   from (`MemOwner`, `MemCtx`), with containers that allocate through it and
   report a failed allocation instead of ending the process (`LVec`,
@@ -553,7 +607,12 @@ optimization.
   tables' array and hash parts, prototypes' code, constants and debug
   records, closures' and native functions' upvalues, coroutine stacks and
   frames, the C API's per-thread `lua_State` and its userdata blocks.
-
+- luna-aot links `x86_64-pc-windows-msvc` without Visual Studio, on
+  Linux, macOS or Windows: `clang-cl` and `lld-link` from LLVM with the
+  MSVC C runtime and Windows SDK from `xwin splat`, named by
+  `LUNA_AOT_MSVC_SYSROOT` or found in `cargo xwin`'s cache directory.
+  The runtime staticlib's cargo build gets the same compiler, linker and
+  sysroot. See docs/aot.md §3.
 - The C API covers PUC's `lua.h`, `lauxlib.h` and `lualib.h` for all
   five dialects: headers in `crates/luna-jit/include/lua5.1` to
   `lua5.5`, with which a host built for one PUC version gets a state of

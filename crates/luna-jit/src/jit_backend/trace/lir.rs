@@ -12,6 +12,8 @@ mod clif;
 mod code;
 mod dump;
 mod live;
+#[cfg(feature = "llvm-jit")]
+mod llvm;
 mod masm;
 mod pmove;
 mod record;
@@ -23,6 +25,8 @@ mod x64;
 
 pub(crate) use clif::define as define_clif;
 pub(crate) use code::{CodeArena, assemble};
+#[cfg(feature = "llvm-jit")]
+pub(crate) use llvm::compile as compile_llvm;
 
 /// No value / no block.
 pub(crate) const NONE: u32 = u32::MAX;
