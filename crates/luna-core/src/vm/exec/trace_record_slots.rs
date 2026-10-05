@@ -1,7 +1,6 @@
 //! What the recorder notes about an op besides the op itself: the hash
-//! slots a table access found its key in, the step sign of the loop that
-//! ends the trace, and whether 5.1 / 5.2 arithmetic is left to the
-//! interpreter.
+//! slots a table access found its key in and the step sign of the loop
+//! that ends the trace.
 
 use super::*;
 
@@ -80,21 +79,5 @@ impl Vm {
             Value::Int(s) => Some(s > 0),
             _ => None,
         };
-    }
-
-    /// True when `inst` is arithmetic on integers only (every operand,
-    /// register or constant, is an integer) that the trace cannot do as
-    /// the doubles do. `+` and `-` it can: it keeps the exact result while
-    /// that is a double's value and leaves the trace otherwise.
-    pub(super) fn int_arith(&self, proto: &crate::runtime::Proto, inst: Inst, base: u32) -> bool {
-        use crate::vm::isa::Op;
-        let is_int = |r: u32| matches!(self.stack[(base + r) as usize], Value::Int(_));
-        let k_int = |k: u32| matches!(proto.consts.get(k as usize), Some(Value::Int(_)));
-        match inst.op() {
-            Op::Mul | Op::Mod => is_int(inst.b()) && is_int(inst.c()),
-            Op::Unm => is_int(inst.b()),
-            Op::MulK | Op::ModK => is_int(inst.b()) && k_int(inst.c()),
-            _ => false,
-        }
     }
 }
