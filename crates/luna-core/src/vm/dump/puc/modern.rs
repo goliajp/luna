@@ -17,8 +17,9 @@
 //!   the source literal was one; `GTI` / `GEI` swap operands.
 //! - **`RK(C)` stores and `SELF`**: a constant value goes through a scratch
 //!   register (luna reads store values from registers only).
-//! - **`NEWTABLE`** always carries an `EXTRAARG`, which luna's `NewTable`
-//!   (it ignores size hints) does not consume, so both become one op.
+//! - **`NEWTABLE`** always carries an `EXTRAARG`; luna's `NewTable` holds
+//!   the hash size as is and the array size cut at 255, so both become one
+//!   op.
 //! - **`VARARGPREP`**: luna adjusts varargs at call time; in 5.5 it also
 //!   sets the vararg parameter's register — a table (`PF_VATAB`, becomes
 //!   `GetVarg`) or nil (`LoadNil`).
@@ -305,11 +306,23 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                 store(&mut lw, raw, k, i)?
             }
             Kind::NewTable => {
-                if follower(Kind::ExtraArg).is_none() {
+                let Some(extra) = follower(Kind::ExtraArg) else {
                     return Err(lw.err("NEWTABLE without its EXTRAARG"));
-                }
+                };
                 let a = lw.r(i.a())?;
-                lw.emit(enc_abc(Op::NewTable, a, 0, 0, false)?);
+                let (b, c, bits) = if d.v55 {
+                    (i.vb(), i.vc(), 10)
+                } else {
+                    (i.b(), i.c(), 8)
+                };
+                // luna's `C` holds sizes up to 255 (see `new_table_operands`)
+                let asize = u64::from(c)
+                    + if i.k() {
+                        u64::from(extra.ax()) << bits
+                    } else {
+                        0
+                    };
+                lw.emit(enc_abc(Op::NewTable, a, b, asize.min(0xFF) as u32, false)?);
                 pc += 1;
             }
             // R[A+1] := R[B]; R[A] := R[B][RK(C)] (5.5: always K[C])

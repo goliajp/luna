@@ -4,7 +4,7 @@
 //! which `debug.traceback` and `debug.getinfo` find. Recorded from the
 //! stock PUC 5.1.5 to 5.5.1 interpreters as `lua -i` reading this stdin.
 
-use crate::cli_common::{run, workdir};
+use crate::cli_common::{as_on_this_platform, run, workdir};
 
 const STDIN: &str = r#"mt = {__tostring = function() return debug.traceback("tb", 1) end}
 t = setmetatable({}, mt)
@@ -37,8 +37,12 @@ fn tostring_in_printed_results_sees_pmain() {
         // 5.2 names a library function by whichever of its names it meets
         // first in hash order ('tostring' or '_G.tostring')
         let got = out.stdout.replace("'_G.", "'");
-        assert_eq!(got, stdout, "stdout, --lua={d}");
-        assert_eq!(out.stderr, stderr, "stderr, --lua={d}");
+        assert_eq!(got, as_on_this_platform(&stdout), "stdout, --lua={d}");
+        assert_eq!(
+            out.stderr,
+            as_on_this_platform(&stderr),
+            "stderr, --lua={d}"
+        );
         assert_eq!(out.status, 0);
     }
     std::fs::remove_dir_all(&dir).expect("remove the work dir");

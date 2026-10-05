@@ -27,6 +27,11 @@ impl Vm {
         // values strongly. gc.lua's "weak tables" section relies on that.
         heap.no_ephemeron = version <= LuaVersion::Lua51;
         heap.signed_zero_keys = version <= LuaVersion::Lua52;
+        heap.table_dialect = crate::runtime::table::Dialect::of(version);
+        // strings made before this would sit in the string table by the
+        // other hash
+        debug_assert!(heap.strings_is_empty());
+        heap.hash51 = version == LuaVersion::Lua51;
         // PUC 5.3 needs two GC cycles to finalize a table caught in a
         // coroutine reference cycle (gc.lua :502); 5.4+ rewrote the GC and
         // finalize in a single cycle (5.4/5.5 gc.lua :544 assert exactly one).
@@ -97,6 +102,7 @@ impl Vm {
             io_output: None,
             io_stdin: None,
             ignore_env: false,
+            crt_text: false,
             hook: HookState::default(),
             in_hook: false,
             trap: true,

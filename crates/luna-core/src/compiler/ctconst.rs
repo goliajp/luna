@@ -7,6 +7,7 @@
 
 use super::{Chunk, Expr, Name};
 use crate::frontend::ast::{BinOp, ExprId, Sym, UnOp};
+use crate::numeric::Num;
 use crate::runtime::value::f2i_exact;
 
 /// The value of a compile-time constant.
@@ -87,8 +88,8 @@ fn value(
             match op {
                 // `codenot` turns a constant operand into a boolean
                 UnOp::Not => Some(CtConst::Bool(!v.truthy())),
-                UnOp::Neg => fold(Arith::Unm, &v, &CtConst::Int(0)),
-                UnOp::BNot => fold(Arith::BNot, &v, &CtConst::Int(0)),
+                UnOp::Neg => fold(Arith::Unm, &v, &CtConst::Int(0), false),
+                UnOp::BNot => fold(Arith::BNot, &v, &CtConst::Int(0), false),
                 UnOp::Len => None,
             }
         }
@@ -117,29 +118,17 @@ fn value(
                         ct_value(ast, *rhs, named)
                     };
                 }
-                BinOp::Add => Arith::Add,
-                BinOp::Sub => Arith::Sub,
-                BinOp::Mul => Arith::Mul,
-                BinOp::Div => Arith::Div,
-                BinOp::IDiv => Arith::IDiv,
-                BinOp::Mod => Arith::Mod,
-                BinOp::Pow => Arith::Pow,
-                BinOp::BAnd => Arith::BAnd,
-                BinOp::BOr => Arith::BOr,
-                BinOp::BXor => Arith::BXor,
-                BinOp::Shl => Arith::Shl,
-                BinOp::Shr => Arith::Shr,
-                _ => return None,
+                op => Arith::of(*op)?,
             };
             let r = ct_value(ast, *rhs, named)?;
-            fold(arith, &l, &r)
+            fold(arith, &l, &r, false)
         }
         _ => None,
     }
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Arith {
+pub(super) enum Arith {
     Add,
     Sub,
     Mul,
@@ -156,10 +145,47 @@ enum Arith {
     BNot,
 }
 
+impl Arith {
+    /// The arithmetic or bitwise operation `op` is, if any.
+    pub(super) fn of(op: BinOp) -> Option<Arith> {
+        Some(match op {
+            BinOp::Add => Arith::Add,
+            BinOp::Sub => Arith::Sub,
+            BinOp::Mul => Arith::Mul,
+            BinOp::Div => Arith::Div,
+            BinOp::IDiv => Arith::IDiv,
+            BinOp::Mod => Arith::Mod,
+            BinOp::Pow => Arith::Pow,
+            BinOp::BAnd => Arith::BAnd,
+            BinOp::BOr => Arith::BOr,
+            BinOp::BXor => Arith::BXor,
+            BinOp::Shl => Arith::Shl,
+            BinOp::Shr => Arith::Shr,
+            _ => return None,
+        })
+    }
+}
+
+/// PUC 5.3+ `constfolding` of two numbers (the second is `0` for the
+/// unary operations); `v53` selects 5.3's `luai_numpow` and float `%`.
+pub(super) fn fold_numbers(op: Arith, a: Num, b: Num, v53: bool) -> Option<Num> {
+    let ct = |n: Num| match n {
+        Num::Int(i) => CtConst::Int(i),
+        Num::Float(f) => CtConst::Float(f),
+    };
+    match fold(op, &ct(a), &ct(b), v53)? {
+        CtConst::Int(i) => Some(Num::Int(i)),
+        CtConst::Float(f) => Some(Num::Float(f)),
+        _ => None,
+    }
+}
+
 /// PUC `constfolding`: numbers only; no bitwise operation on a value
 /// without an integer representation, no division or modulo by zero; a
 /// float result that is NaN or zero is left unfolded (so `-0.0` survives).
-fn fold(op: Arith, a: &CtConst, b: &CtConst) -> Option<CtConst> {
+/// `v53`: 5.3's `pow` (5.4 squares by multiplying) and float `%` (5.3
+/// corrects `fmod` when `m*b < 0`, 5.4 when the signs differ).
+fn fold(op: Arith, a: &CtConst, b: &CtConst, v53: bool) -> Option<CtConst> {
     let num = |v: &CtConst| match v {
         CtConst::Int(i) => Some((Some(*i), *i as f64)),
         CtConst::Float(f) => Some((None, *f)),
@@ -203,16 +229,17 @@ fn fold(op: Arith, a: &CtConst, b: &CtConst) -> Option<CtConst> {
                     Arith::Sub => af - bf,
                     Arith::Mul => af * bf,
                     Arith::Div => af / bf,
-                    Arith::Pow if bf == 2.0 => af * af,
+                    Arith::Pow if bf == 2.0 && !v53 => af * af,
                     Arith::Pow => af.powf(bf),
                     Arith::IDiv => (af / bf).floor(),
                     Arith::Mod => {
                         let m = af % bf;
-                        if (m > 0.0 && bf < 0.0) || (m < 0.0 && bf > 0.0) {
-                            m + bf
+                        let fix = if v53 {
+                            m * bf < 0.0
                         } else {
-                            m
-                        }
+                            (m > 0.0 && bf < 0.0) || (m < 0.0 && bf > 0.0)
+                        };
+                        if fix { m + bf } else { m }
                     }
                     _ => -af,
                 };

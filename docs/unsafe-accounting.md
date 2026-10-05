@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1362** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1374** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 224 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **7** | six `#[doc(hidden)]`, and `MemOwner::raw`, see §5 |
 | **`pub unsafe extern "C" fn`** | 197 | the C API (143), the `luna_jit_*` helpers compiled code calls (48, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
@@ -43,7 +43,7 @@ quotes the pattern counts too.
 | | `runtime/table*` | 48 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
 | | `runtime/mem` | 55 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the vector's and boxed slice's initialised prefix |
 | | `runtime` (other) | 36 | string headers and their trailing bytes, the value tag/payload encoding, closure upvalue storage |
-| | `vm/lib_*` | 43 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`) and the table writes that build each library |
+| | `vm/lib_*` | 51 | `Gc` handle mutation in the standard library (io handles, among them the MSVC text mode stream state and buffer, `table`, `debug`) and the table writes that build each library |
 | | `vm` (other) | 48 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
 | | `stdio.rs` | 1 | C-style standard output writing descriptor 1 without closing it |
 | | `jit`, `frontend` | 11 | trace metadata handed to the backend; interned-name text |
@@ -54,14 +54,14 @@ quotes the pattern counts too.
 | | other | 2 | the CLI's `arg` table and the `lua_facade` table handle |
 | | unit-test files under `src/` | 70 | tests that call compiled code or the `extern "C"` helpers directly |
 | | `tests/`, `benches/`, `examples/` | 43 | a C API state driven from Rust, a counting global allocator, the `send` overhead bench |
-| `luna-jit-helpers` | | 149 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
+| `luna-jit-helpers` | | 152 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
 | `luna-jit-llvm` | `src/` | 5 | LLVM execution engines (one per compiled method or trace) and the register-file GEPs |
 | | `tests/` | 34 | calling LLVM-compiled chunks |
 | `luna-runtime-helpers` | | 45 | the AOT binary's C entries, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor |
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1362** | |
+| **Total** | | **1374** | |
 
 ## 3. Pattern catalog
 
@@ -333,6 +333,13 @@ programs compiled against PUC and luna; one site came back in
 `jit_storage_mismatch_no_abort.rs`, which declares two C API functions
 written in C. That is 1269. Unit tests that drive the C API's Rust half from Rust (`capi/unit_tests.rs`) added 21. That is 1290, the ceiling now.
 
+Sizing tables as each PUC version does, so that `#t` finds the same
+border, added 4. In `luna-core` 1: `Heap::new_table_presized`, which
+sizes the table it just made through its handle. In `luna-jit-helpers`
+3: `luna_jit_table_reserve_list`, the `extern "C"` helper that grows a
+constructor table's array part before compiled code stores its list
+items, with a block for the Vm and one for the table. That is 1374.
+
 ## 5. Public `unsafe` surface
 
 ### `pub unsafe fn` (7, six of them `#[doc(hidden)]`)
@@ -350,12 +357,12 @@ written in C. That is 1269. Unit tests that drive the C API's Rust half from Rus
 None of these but `MemOwner::raw` appears in the `cargo doc` view of the
 API; using the API does not need any of them.
 
-### `pub unsafe extern "C" fn` (197)
+### `pub unsafe extern "C" fn` (198)
 
 | Location | Count | Why |
 |---|---:|---|
 | `luna-jit/src/capi*` | 143 | the C API, called from C with raw `lua_State` pointers (the functions written in C are reached through naked jumps, which are not `unsafe fn`s) |
-| `luna-jit-helpers/src/*` | 48 | the `luna_jit_*` helpers compiled code calls (§3.5); each has a `# Safety` section |
+| `luna-jit-helpers/src/*` | 49 | the `luna_jit_*` helpers compiled code calls (§3.5); each has a `# Safety` section |
 | `luna-runtime-helpers/src/*` | 4 | `luna_aot_run_dialect`, the AOT binary's entry, called by the generated C `main` with the dialect the script was compiled for; `luna_aot_run`, the same entry for 5.5 |
 
 ### `unsafe impl Send` / `Sync` (10)

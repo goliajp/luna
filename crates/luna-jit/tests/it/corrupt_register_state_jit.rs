@@ -75,7 +75,8 @@ fn method_jit_setlist_without_presize() {
         };
         // luna's own format holds luna's instruction words
         let mut bytes = luna_jit::vm::dump::dump(&g.proto, false, v);
-        let old = Inst::iabc(Op::NewTable, 0, 3, 0, false).0.to_le_bytes();
+        // 5.4 / 5.5 operands: no hash part, an array part of 3
+        let old = Inst::iabc(Op::NewTable, 0, 0, 3, false).0.to_le_bytes();
         let new = Inst::iabc(Op::NewTable, 0, 0, 0, false).0.to_le_bytes();
         let at: Vec<usize> = (0..bytes.len() - 3)
             .filter(|&i| bytes[i..i + 4] == old)

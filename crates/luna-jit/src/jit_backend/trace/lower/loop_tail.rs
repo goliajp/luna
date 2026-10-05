@@ -91,6 +91,15 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
             // the loop count is unsigned (PUC `lua_Unsigned`)
             (lw.bcx.ins().icmp(IntCC::NotEqual, x, zero), None)
         }
+        // the step's sign was checked before the loop head
+        ForForm::IntLimit if pl.step_guard.is_some_and(|(r, _)| r == a + 2) => {
+            let next = lw.bcx.ins().iadd(cur, step);
+            let cc = match pl.step_guard {
+                Some((_, true)) => IntCC::SignedLessThanOrEqual,
+                _ => IntCC::SignedGreaterThanOrEqual,
+            };
+            (lw.bcx.ins().icmp(cc, next, x), Some(next))
+        }
         ForForm::IntLimit => {
             let next = lw.bcx.ins().iadd(cur, step);
             let up = lw.bcx.ins().icmp_imm_s(IntCC::SignedGreaterThan, step, 0);
