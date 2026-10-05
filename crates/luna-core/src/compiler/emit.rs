@@ -7,11 +7,12 @@ impl<'a> Compiler<'a> {
     pub(super) fn emit(&mut self, i: Inst) -> Result<usize, Oom> {
         let line = self.force_line.unwrap_or(self.last_line);
         let l = self.l();
-        // room in both first, so they stay the same length
-        l.code.reserve(1)?;
-        l.lines.reserve(1)?;
         l.code.push(i)?;
-        l.lines.push(line)?;
+        // the two stay the same length
+        if let Err(e) = l.lines.push(line) {
+            l.code.pop();
+            return Err(e);
+        }
         Ok(l.code.len() - 1)
     }
 
