@@ -52,7 +52,7 @@ fn helper_registry() -> Vec<(&'static str, usize, u32, bool)> {
         (
             "luna_jit_materialize_sunk_table",
             luna_jit_materialize_sunk_table as *const () as usize,
-            7,
+            8,
             true,
         ),
         (
