@@ -1,7 +1,6 @@
 //! `lua.c`'s option parsing of each dialect and its usage message.
 
 use luna_jit::version::LuaVersion;
-use std::io::Write;
 
 /// What `lua.c`'s `collectargs` found in the options.
 #[derive(Default)]
@@ -124,6 +123,6 @@ pub(super) fn print_usage(v: LuaVersion, progname: &str, badoption: &str) {
             }
         });
     }
-    let mut err = std::io::stderr().lock();
-    let _ = err.write_all(out.as_bytes()); // nowhere left to report a failed write
+    // nowhere left to report a failed write
+    let _ = luna_core::stdio::write_stderr(out.as_bytes());
 }
