@@ -112,9 +112,7 @@ fn run(backend: Backend, tier: TraceTier, tier_up_at: Option<u32>, src: &str) ->
         // depend on how fast the compile thread is
         Backend::Llvm => luna_jit::install_llvm_backend_with(
             &mut vm,
-            luna_jit::jit_backend::LlvmBackend {
-                background_tier_up: false,
-            },
+            luna_jit::jit_backend::LlvmBackend { llvm_after: None },
         ),
     }
     vm.set_trace_tier(tier);
@@ -183,9 +181,9 @@ fn tier_up_reaches_llvm() {
     }
 }
 
-/// By default a hot trace is compiled by LLVM on the compile thread while
-/// its baseline code keeps running, and the Vm installs the LLVM code once
-/// it is ready.
+/// By default a hot trace moves to Cranelift's code, then, once it has run
+/// that for a while, is compiled by LLVM on the compile thread, and the Vm
+/// installs the LLVM code once it is ready.
 #[test]
 fn background_tier_up_installs_llvm_code() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);

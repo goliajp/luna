@@ -10,19 +10,23 @@ use luna_core::jit::{CompileResult, IntChunkCompiler, JitStorage, JitVmGuard, Tr
 /// (`LUNA_TRACE_TIER=optimizing`: every trace).
 #[derive(Clone, Copy, Debug)]
 pub struct LlvmBackend {
-    /// Compile hot baseline traces on a thread of their own while the
-    /// baseline code keeps running (the default); `false` compiles them
-    /// when they become hot, before the trace runs on.
-    pub background_tier_up: bool,
+    /// How long a hot trace runs Cranelift's code before LLVM compiles it
+    /// on a thread of its own (the Vm then switches to LLVM's code when it
+    /// is ready); `None` compiles hot traces with LLVM at once, before they
+    /// run on.
+    pub llvm_after: Option<std::time::Duration>,
 }
 
 impl Default for LlvmBackend {
     fn default() -> LlvmBackend {
         LlvmBackend {
-            background_tier_up: true,
+            llvm_after: Some(LLVM_AFTER),
         }
     }
 }
+
+/// [`LlvmBackend::llvm_after`]'s default.
+pub const LLVM_AFTER: std::time::Duration = std::time::Duration::from_millis(20);
 
 impl IntChunkCompiler for LlvmBackend {
     fn try_compile(
@@ -76,6 +80,6 @@ impl TraceCompiler for LlvmBackend {
     }
 
     fn tier_up(&self, storage: &mut dyn JitStorage, ct: &CompiledTrace) -> Option<TraceFn> {
-        super::trace::tier_up_llvm(storage, ct, self.background_tier_up)
+        super::trace::tier_up_llvm(storage, ct, self.llvm_after)
     }
 }
