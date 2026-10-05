@@ -21,9 +21,9 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1290** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
-| of which in tests, benches and examples | 211 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
-| **`pub unsafe fn` in the public API** | **5** | all `#[doc(hidden)]`, see §5 |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1343** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| of which in tests, benches and examples | 218 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
+| **`pub unsafe fn` in the public API** | **7** | six `#[doc(hidden)]`, and `MemOwner::raw`, see §5 |
 | **`pub unsafe extern "C" fn`** | 197 | the C API (143), the `luna_jit_*` helpers compiled code calls (48, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
 | **`unsafe impl Send` / `Sync`** | 10 | see §5 |
 
@@ -41,12 +41,13 @@ quotes the pattern counts too.
 | | `vm/exec` (other) | 81 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
 | | `runtime/heap*`, `gc_ptr.rs` | 73 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle, the debug check of the slow-store bit |
 | | `runtime/table*` | 48 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
+| | `runtime/mem` | 46 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the vector's and boxed slice's initialised prefix |
 | | `runtime` (other) | 36 | string headers and their trailing bytes, the value tag/payload encoding, closure upvalue storage |
 | | `vm/lib_*` | 44 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`) and the table writes that build each library |
 | | `vm` (other) | 48 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
 | | `stdio.rs` | 1 | C-style standard output writing descriptor 1 without closing it |
 | | `jit`, `frontend` | 11 | trace metadata handed to the backend; interned-name text |
-| | unit-test files under `src/` | 13 | tests that inspect raw layouts |
+| | unit-test files under `src/` | 20 | tests that inspect raw layouts; a test `lua_Alloc` |
 | | `tests/` | 47 | integration tests: a poisoning global allocator, async wakers, userdata internals, a raw write into a read-only table, the host C library's `%p` |
 | `luna-jit` | `capi*` | 376 | the C API: raw `lua_State` pointers, C strings, `lua_Debug` and `luaL_Buffer` structs and C function pointers across the boundary (§3.7) |
 | | `jit_backend` | 57 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points, `Send` for handles that own JIT modules or code pages, copying compiled code out to share it between Vms, the debug dump of a trace's machine code |
@@ -60,7 +61,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1290** | |
+| **Total** | | **1343** | |
 
 ## 3. Pattern catalog
 
@@ -184,6 +185,20 @@ they turn the section into a slice of index entries once and keep the
 `unsafe` to the reads of each entry's payload and the write of its
 slot. The PE walk computes addresses with wrapping arithmetic and reads
 only header bytes inside the first pages the loader maps.
+
+### 3.8 The allocation context and its containers
+
+Every block a Vm allocates comes from its allocation context
+(`runtime/mem`), so that a host's `lua_Alloc` or a `MemoryPolicy` sees it
+and a refused allocation becomes an error instead of the end of the
+process. Stable Rust's `Vec` and `Box` cannot take an allocator, so the
+module has its own: `LVec`, `LSlice` and `LBox` own a block and its
+length, and free it through the handle they keep. The premises: a block
+is freed once, with the layout (or, for a host function, the size) it was
+allocated with, by the context that allocated it, which its owners keep
+alive past every container; a container's first `len` slots are
+initialised; a host function follows PUC's `lua_Alloc` contract, which the
+`unsafe` constructor `MemOwner::raw` makes its caller vouch for.
 
 ## 4. CI enforcement
 
@@ -318,7 +333,7 @@ written in C. That is 1269. Unit tests that drive the C API's Rust half from Rus
 
 ## 5. Public `unsafe` surface
 
-### `pub unsafe fn` (5, all `#[doc(hidden)]`)
+### `pub unsafe fn` (7, six of them `#[doc(hidden)]`)
 
 | Location | Function | Why |
 |---|---|---|
@@ -327,8 +342,11 @@ written in C. That is 1269. Unit tests that drive the C API's Rust half from Rus
 | `runtime/value.rs` | `Value::as_closure_unchecked` | JIT hot path; skips the tag match. Safe alternative: match `Value::Closure(_)`. |
 | `runtime/value.rs` | `Value::as_int_unchecked` | Same shape. |
 | `runtime/value_raw.rs` | `Value::pack` | Low-level constructor from the array-part encoding, used by the JIT and the C API. |
+| `runtime/mem/ctx.rs` | `MemCtx::set_raw_alloc` | `lua_setallocf`: the C API swaps the host function, which must accept the previous one's blocks. |
+| `runtime/mem/ctx.rs` | `MemOwner::raw` | A host that supplies a `lua_Alloc`-style function vouches for it; the safe way to watch or limit a Vm's memory is `MemOwner::policy`. |
 
-None of these appears in the `cargo doc` view of the API.
+None of these but `MemOwner::raw` appears in the `cargo doc` view of the
+API; using the API does not need any of them.
 
 ### `pub unsafe extern "C" fn` (197)
 
