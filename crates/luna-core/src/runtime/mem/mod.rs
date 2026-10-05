@@ -18,3 +18,10 @@ pub use vec::LVec;
 
 #[cfg(test)]
 mod tests;
+
+/// End the process for an allocation of `layout` that failed, as the
+/// standard library's containers do.
+#[cold]
+pub(crate) fn oom_abort(layout: std::alloc::Layout) -> ! {
+    std::alloc::handle_alloc_error(layout)
+}

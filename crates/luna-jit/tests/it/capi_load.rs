@@ -33,6 +33,11 @@ fn gc_alloc() {
 }
 
 #[test]
+fn alloc_count() {
+    check("alloc_count");
+}
+
+#[test]
 fn warn_default() {
     check("warn_default");
 }

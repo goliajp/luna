@@ -192,6 +192,36 @@ impl Vm {
         Vm::new_minimal_on(version, Heap::with_seed(seed))
     }
 
+    /// [`Vm::new_minimal`] whose memory comes from `mem`: the system
+    /// allocator watched by a [`crate::runtime::mem::MemoryPolicy`]
+    /// ([`crate::runtime::mem::MemOwner::policy`]), or a host allocation
+    /// function ([`crate::runtime::mem::MemOwner::raw`]).
+    pub fn new_minimal_with_mem(version: LuaVersion, mem: crate::runtime::mem::MemOwner) -> Vm {
+        Vm::new_minimal_on(version, Heap::new_on(mem))
+    }
+
+    /// [`Vm::new`] whose memory comes from `mem` (see
+    /// [`Vm::new_minimal_with_mem`]).
+    pub fn new_with_mem(version: LuaVersion, mem: crate::runtime::mem::MemOwner) -> Vm {
+        let mut vm = Vm::new_minimal_with_mem(version, mem);
+        vm.open_all_libs();
+        vm
+    }
+
+    /// Bytes the Vm has allocated and not freed, as its allocation
+    /// context counts them: `None` on the system allocator, which is not
+    /// counted.
+    pub fn memory_in_use(&self) -> Option<usize> {
+        self.heap.mem().ctx().in_use()
+    }
+
+    /// What `collectgarbage("count")` and `lua_gc(LUA_GCCOUNT)` report:
+    /// the allocation context's count when it keeps one, else the
+    /// collector's own estimate.
+    pub(crate) fn gc_count_bytes(&self) -> usize {
+        self.memory_in_use().unwrap_or(self.heap.bytes())
+    }
+
     fn new_minimal_on(version: LuaVersion, heap: Heap) -> Vm {
         let mut vm = Vm::new_inner(version, heap);
         let mc = vm.heap.new_coro(Value::Nil, vm.globals);

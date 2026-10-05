@@ -3,6 +3,7 @@
 
 use super::ccall::{CCall, CHook, PendingYield};
 use super::*;
+use luna_core::runtime::mem::MemOwner;
 
 /// PUC `lua_Alloc`.
 pub type LuaAlloc = unsafe extern "C" fn(
@@ -32,7 +33,7 @@ pub(crate) struct Global {
     /// `&mut Vm` here and puts the previous one back after, so what C does
     /// to the Vm goes through the reference the Rust code above it holds.
     pub(super) vm: *mut Vm,
-    /// the Vm's allocation, freed by `lua_close`
+    /// the Vm's block from the allocation function, freed by `lua_close`
     vm_box: *mut Vm,
     /// `lua_newstate`'s allocation function, which `lua_getallocf` returns
     pub(super) alloc: Option<LuaAlloc>,
@@ -172,12 +173,17 @@ fn host_stdout_setvbuf(mode: u8) {
     luna_c_stdout_setvbuf(c_int::from(mode.min(2)));
 }
 
+// `lua_Alloc` blocks are aligned for any C object, which is all the
+// alignment these records need
+const _: () = assert!(std::mem::align_of::<Vm>() <= 8 && std::mem::align_of::<Global>() <= 8);
+
 /// A new state of dialect `v`, with luna's JIT and the C API's
 /// continuation hooks installed, or null when `alloc` cannot allocate the
-/// state's record: as PUC's `lua_newstate`, the state's main block comes
-/// from the host's allocation function and goes back to it on `lua_close`;
-/// luna's own objects do not. From the first state on, luna's standard
-/// output goes through the C library's `stdout`, as PUC's does.
+/// state's record: as PUC's `lua_newstate`, every block of the state comes
+/// from the host's allocation function and goes back to it, the state's
+/// record and the Vm's own block on `lua_close`. From the first state on,
+/// luna's standard output goes through the C library's `stdout`, as PUC's
+/// does.
 fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: u32) -> *mut LuaState {
     // PUC passes the kind of object as the old size of a new block: 5.1
     // passes 0, later versions LUA_TTHREAD for the main block
@@ -195,16 +201,32 @@ fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: u32) -> *mut
     if block.is_null() {
         return std::ptr::null_mut();
     }
+    // SAFETY: as above, for the Vm's block, which is not an object
+    let vm_block = unsafe { alloc(ud, std::ptr::null_mut(), 0, std::mem::size_of::<Vm>()) };
+    if vm_block.is_null() {
+        // SAFETY: `block` is the live block just allocated, of this size
+        unsafe { alloc(ud, block, std::mem::size_of::<Global>(), 0) };
+        return std::ptr::null_mut();
+    }
     luna_core::stdio::use_host_stdout(luna_core::stdio::HostStdout {
         write: host_stdout_write,
         flush: host_stdout_flush,
         setvbuf: host_stdout_setvbuf,
     });
-    let mut vm = Vm::new_minimal(v);
+    // SAFETY: `alloc` follows the `lua_Alloc` contract (the host's promise
+    // to `lua_newstate`), and the Vm, which owns the context, is dropped
+    // by `lua_close` before the host may stop accepting calls
+    let mem = unsafe { MemOwner::raw(alloc, ud, v) };
+    mem.ctx()
+        .add_external(std::mem::size_of::<Global>() + std::mem::size_of::<Vm>());
+    let mut vm = Vm::new_minimal_with_mem(v, mem);
     crate::install_default_jit(&mut vm);
     vm.set_host_cont_hooks(ccall::CONT_HOOKS);
     vm.host_gc_start_incremental();
-    let vm = Box::into_raw(Box::new(vm));
+    let vm_ptr = vm_block.cast::<Vm>();
+    // SAFETY: `vm_block` is a fresh block of the Vm's size, aligned as
+    // `lua_Alloc` blocks are for any object, which nothing else uses
+    unsafe { vm_ptr.write(vm) };
     let g = block.cast::<Global>();
     // SAFETY: `block` is a fresh allocation of `Global`'s size, aligned as
     // `lua_Alloc` blocks are for any object, which nothing else uses
@@ -215,15 +237,15 @@ fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: u32) -> *mut
             version: version_num(v),
             panic: None,
             err_from: std::ptr::null_mut(),
-            vm,
-            vm_box: vm,
+            vm: vm_ptr,
+            vm_box: vm_ptr,
             alloc: Some(alloc),
             alloc_ud: ud,
             seed,
         })
     };
-    // SAFETY: `vm` was just allocated and nothing else refers to it yet
-    let vmr = unsafe { &mut *vm };
+    // SAFETY: `vm_ptr` was just written and nothing else refers to it yet
+    let vmr = unsafe { &mut *vm_ptr };
     vmr.host_registry();
     let main = vmr.host_main_thread();
     new_thread_state(g, main, [0; EXTRASPACE])
@@ -343,9 +365,10 @@ pub unsafe extern "C" fn lua_close(L: *mut LuaState) {
         let vm = &mut *(*g).vm_box;
         vm.host_close_state();
         // the Vm owns every thread, and so every `LuaState`
-        drop(Box::from_raw((*g).vm_box));
+        std::ptr::drop_in_place((*g).vm_box);
         let (alloc, ud) = ((*g).alloc, (*g).alloc_ud);
         if let Some(f) = alloc {
+            f(ud, (*g).vm_box.cast(), std::mem::size_of::<Vm>(), 0);
             f(ud, g.cast(), std::mem::size_of::<Global>(), 0);
         }
     }

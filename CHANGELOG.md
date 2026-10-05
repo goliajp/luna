@@ -534,6 +534,22 @@ optimization.
 
 ### Added
 
+- `luna_core::runtime::mem`: the allocation context a `Vm` takes its memory
+  from (`MemOwner`, `MemCtx`), with containers that allocate through it and
+  report a failed allocation instead of ending the process (`LVec`,
+  `LSlice`, `LBox`). A context uses the system allocator (the default), a
+  host allocation function with PUC's `lua_Alloc` contract
+  (`MemOwner::raw`, `unsafe`), or a safe `MemoryPolicy` that sees and may
+  refuse every allocation (`MemOwner::policy`; `MemoryLimit` caps the bytes
+  in use). `Vm::new_with_mem` / `Vm::new_minimal_with_mem` build a Vm on
+  one; `Vm::memory_in_use` reports what a host function or policy has seen.
+- C API: every object of a state (strings, tables, functions, userdata,
+  threads, prototypes, upvalues) is allocated through `lua_newstate`'s
+  allocation function, with PUC's object type as the old size of a new
+  block; `lua_setallocf` moves later allocations and frees to the new
+  function; `lua_gc(LUA_GCCOUNT/LUA_GCCOUNTB)` and `collectgarbage("count")`
+  report the bytes the function has handed out.
+
 - The C API covers PUC's `lua.h`, `lauxlib.h` and `lualib.h` for all
   five dialects: headers in `crates/luna-jit/include/lua5.1` to
   `lua5.5`, with which a host built for one PUC version gets a state of
