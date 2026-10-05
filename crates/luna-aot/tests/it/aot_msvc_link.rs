@@ -15,8 +15,10 @@
 //! # Skip conditions
 //!
 //! On a Windows host none: luna-aot finds `cl.exe` / `link.exe` in the
-//! Visual Studio install, and the produced binary is also run. On a
-//! Unix host (the cross-compile leg):
+//! Visual Studio install (or LLVM's tools and a sysroot), and the produced
+//! binary is also run. On a Unix host none either when
+//! `LUNA_AOT_MSVC_SYSROOT` is set: then the cross build must link.
+//! Otherwise (the cross-compile leg without a sysroot):
 //!
 //! - `rustup` target `x86_64-pc-windows-msvc` not installed.
 //! - `clang-cl` or `lld-link` not on PATH.
@@ -94,6 +96,10 @@ fn windows_msvc_binary_has_lt_meta_and_lt_skix_sections() {
             return;
         }
         if !have_on_path("clang-cl") || !have_on_path("lld-link") {
+            assert!(
+                std::env::var_os("LUNA_AOT_MSVC_SYSROOT").is_none(),
+                "LUNA_AOT_MSVC_SYSROOT is set but clang-cl / lld-link are not on PATH"
+            );
             eprintln!(
                 "aot_msvc_link: skip — clang-cl / lld-link not on PATH \
                  (`brew install llvm` on macOS, `apt install clang lld` on Linux)"
@@ -130,6 +136,9 @@ fn windows_msvc_binary_has_lt_meta_and_lt_skix_sections() {
     if let Some(msg) = link_err {
         if native {
             panic!("aot_msvc_link: native MSVC build failed:\n{msg}");
+        }
+        if std::env::var_os("LUNA_AOT_MSVC_SYSROOT").is_some() {
+            panic!("aot_msvc_link: cross build with LUNA_AOT_MSVC_SYSROOT set failed:\n{msg}");
         }
         // Mirror the skip-marker pattern used by `aot_cross_compile`
         // / `aot_windows_mingw_link`: missing rust-std, missing cross-cc,
