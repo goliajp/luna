@@ -390,7 +390,7 @@ fn moved_by_count(pl: &Plan<'_>, escape: &EscapeAnalysis) -> Vec<u32> {
     {
         let ins = rop.inst;
         let by_count = match ins.op() {
-            Op::Call => ins.b() == 0 && pl.inline_calls[i].is_some(),
+            Op::Call => ins.b() == 0 && pl.inline_calls.get(i).is_some_and(Option::is_some),
             Op::Return => rop.inline_depth > 0 && ins.b() == 0,
             Op::Vararg => true,
             _ => false,
