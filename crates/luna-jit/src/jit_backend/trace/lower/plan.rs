@@ -90,15 +90,15 @@ pub(super) fn plan_trace<'r>(
     let n = record.ops.len();
     set_last_op(usize::MAX, 255);
 
-    let (op_offsets, window_size) = plan_frames(record, head_proto, frame_w)?;
-    let window_size_us = window_size as usize;
     let (inline_calls, frame_tops) = inline_calls(record);
+    let (op_offsets, window_size) = plan_frames(record, head_proto, frame_w, &inline_calls)?;
+    let window_size_us = window_size as usize;
     let frame_func = frame_funcs(record, &op_offsets);
     let inline_writes = inline_writes(record, &op_offsets, &inline_calls, &frame_tops, &frame_func);
 
     side_trace_gate(record, &op_offsets)?;
     let (folded_ops, math_folds) = scan_math_folds(record, n, head_proto, opts);
-    let end_idx_opt = find_trace_end(record, &folded_ops, n)?;
+    let end_idx_opt = find_trace_end(record, &folded_ops, n, &inline_calls)?;
     let effective_end = end_idx_opt.map(|(i, _)| i).unwrap_or(n);
     // escape analysis over the recorded body +
     // terminator. The pre-emit pass below demotes any Sinkable
@@ -265,6 +265,7 @@ fn plan_frames(
     record: &TraceRecord,
     head_proto: Gc<Proto>,
     frame_w: usize,
+    calls: &[Option<InlineCall>],
 ) -> Option<(Vec<u32>, u32)> {
     // recorder invariant: the first recorded op is at
     // depth 0 on `head_proto`. A record violating either would break
@@ -317,7 +318,7 @@ fn plan_frames(
         return None;
     }
     checkpoint("post:depth-invariant");
-    let (op_offsets, _) = compute_op_offsets(record);
+    let (op_offsets, _) = compute_op_offsets_with(record, calls);
     let mut window_size: u32 = op_offsets
         .iter()
         .map(|&off| off + frame_w as u32)
