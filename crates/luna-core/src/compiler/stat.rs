@@ -324,14 +324,22 @@ impl<'a> Compiler<'a> {
         // variable (5.4+)
         let last_const =
             names.last().and_then(|an| an.attrib.or(collective)) == Some(ast::Attrib::Const);
-        let ct = if self.version >= LuaVersion::Lua54 && last_const && exprs.len() == n as usize {
-            let ast = self.ast;
-            ct_value(ast, exprs[exprs.len() - 1], &mut |name| {
-                self.ct_const_named(self.nm(name))
-            })
-        } else {
-            None
+        let eligible = self.version >= LuaVersion::Lua54 && last_const && exprs.len() == n as usize;
+        let ast = self.ast;
+        let last_expr = exprs[exprs.len().saturating_sub(1)..].first().copied();
+        let ct = match last_expr {
+            Some(e) if eligible => ct_value(ast, e, &mut |name| self.ct_const_named(self.nm(name))),
+            _ => None,
         };
+        // PUC also takes `X and nil or K` as the constant K, once it has
+        // compiled X: the initialiser still runs for X, x is not a variable
+        let run_last = match last_expr {
+            Some(e) if eligible && ct.is_none() => {
+                ct_operand(ast, e, &mut |name| self.ct_const_named(self.nm(name)))
+            }
+            _ => None,
+        };
+        let ct = ct.or(run_last.clone());
         let all_names = names;
         let (names, vals) = match ct {
             Some(_) => (&names[..names.len() - 1], &exprs[..exprs.len() - 1]),
@@ -339,6 +347,12 @@ impl<'a> Compiler<'a> {
         };
         let n = names.len() as u32;
         let base = self.explist_adjust(vals, n)?;
+        if let (Some(_), Some(e)) = (&run_last, last_expr) {
+            self.set_freereg(base + n);
+            let v = self.expr(e)?;
+            self.exp_to_nextreg(v)?;
+            self.set_freereg(base + n);
+        }
         let mut tbc: Option<u32> = None;
         for (i, an) in names.iter().enumerate() {
             let reg = base + i as u32;

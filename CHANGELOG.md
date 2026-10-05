@@ -325,6 +325,11 @@ optimization.
 
 ### Fixed
 
+- 5.4 and 5.5: `local x <const> = X and nil or K` (or with `false`) made
+  `x` a variable; PUC makes it the compile-time constant K, after running
+  X, so `x` has no `debug.getlocal` entry and an inner function using it
+  has no upvalue for it (affects 3.1.0 through 4.0.2). luna now does the
+  same.
 - 5.4 and 5.5: `x - (C and nil or 0)` (also with `false`, or any
   expression whose `and` ends in one of them) gave `-0.0` for `x = -0.0`
   where PUC gives `0.0` (affects 3.1.0 through 4.0.2). PUC's code
