@@ -253,10 +253,10 @@ int main(int argc, char **argv) {{
                 target.triple
             )));
         };
-        // `clang-cl` / `cl.exe`: `/c` compile-only, `/Fo:<obj>` output
-        // (one token, so a path with spaces survives).
+        // `clang-cl` / `cl.exe`: `/c` compile-only, `/Fo<obj>` output (one
+        // token, so a path with spaces survives; clang-cl takes no `/Fo:`)
         cl.arg("/c");
-        cl.arg(format!("/Fo:{}", out.display()));
+        cl.arg(format!("/Fo{}", out.display()));
         cl.arg("/nologo");
         // the dynamic CRT, as the Rust staticlib is built against it; cl's
         // default static CRT (/MT) pulls libcmt.lib into the same link

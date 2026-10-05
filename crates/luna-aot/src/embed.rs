@@ -367,7 +367,7 @@ pub fn compile_and_link_with(
     // `lto = "off"` so the 39 `luna_jit_*` Cranelift trace-mcode
     // helpers survive the rlib → staticlib bundling step.
     let staticlib =
-        build_runtime_helpers_staticlib(target.triple_for_cargo(), &target.staticlib_cc_env()?)?;
+        build_runtime_helpers_staticlib(target.triple_for_cargo(), &target.staticlib_build_env()?)?;
 
     // Final link via the target's cc driver. Order matters on
     // some toolchains: bytecode + main first (they reference symbols
