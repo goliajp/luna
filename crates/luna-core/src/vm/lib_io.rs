@@ -25,6 +25,7 @@ mod open;
 mod read;
 mod results;
 mod stream;
+mod text_mode;
 mod write;
 pub(crate) use handle::flush_all;
 use handle::*;
@@ -42,6 +43,7 @@ pub(crate) use results::os_path;
 pub(crate) use results::strerror;
 use results::*;
 use stream::*;
+pub(crate) use text_mode::{to_crlf, translate_all};
 use write::*;
 
 /// `EINVAL` / `EBADF` / `ESPIPE`: the errno values stdio reports for the
@@ -49,7 +51,6 @@ use write::*;
 const EINVAL: i32 = 22;
 const ENOMEM: i32 = 12;
 const EBADF: i32 = 9;
-#[cfg(not(unix))]
 const ESPIPE: i32 = 29;
 
 /// `LUAL_BUFFERSIZE` for `setvbuf`'s default size; luna's buffers do not
@@ -128,7 +129,11 @@ pub(crate) fn open_io(vm: &mut Vm) {
         ("stderr", FileHandle::Stderr),
     ] {
         let writable = !matches!(fh, FileHandle::Stdin);
+        let stdin = !writable;
         let h = new_file(vm, fh, writable);
+        if stdin && crate::stdio::text_mode() {
+            text_mode::set_text(h);
+        }
         put(vm, io, name, Value::Userdata(h));
         match name {
             "stdin" => {

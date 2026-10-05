@@ -97,6 +97,7 @@ impl Vm {
             io_output: None,
             io_stdin: None,
             ignore_env: false,
+            crt_text: false,
             hook: HookState::default(),
             in_hook: false,
             trap: true,

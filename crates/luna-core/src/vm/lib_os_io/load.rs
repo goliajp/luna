@@ -28,6 +28,17 @@ pub(crate) fn load_path(
     // `errfile`: the name shown is the chunk name without its '@' / '='.
     let shown = String::from_utf8_lossy(&chunkname[1..]).into_owned();
     let src = match read {
+        // `luaL_loadfilex` reads a text chunk through a stream in text mode
+        Ok(src)
+            if !crate::vm::dump::is_binary_chunk(&src)
+                && (if name.is_some() {
+                    vm.crt_text
+                } else {
+                    crate::stdio::text_mode()
+                }) =>
+        {
+            crate::vm::lib_io::translate_all(&src)
+        }
         Ok(src) => src,
         Err(e) => {
             let msg = format!("cannot open {shown}: {}", os_error_text(&e));
