@@ -42,6 +42,8 @@ mod jit_storage_mismatch_no_abort;
 mod jit_trait_boundary;
 mod jit_vm_scoped_rebind;
 #[cfg(feature = "llvm-jit")]
+mod llvm_method_jit_recursion;
+#[cfg(feature = "llvm-jit")]
 mod llvm_traces;
 mod lua_facade;
 mod materialize_frames_counter;
