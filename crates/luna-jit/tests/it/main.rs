@@ -41,6 +41,8 @@ mod jit_off_switch;
 mod jit_storage_mismatch_no_abort;
 mod jit_trait_boundary;
 mod jit_vm_scoped_rebind;
+#[cfg(feature = "llvm-jit")]
+mod llvm_traces;
 mod lua_facade;
 mod materialize_frames_counter;
 mod math_fold_semantics;

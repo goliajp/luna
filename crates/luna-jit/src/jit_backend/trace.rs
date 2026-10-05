@@ -49,6 +49,10 @@ mod accum;
 mod emit;
 pub(crate) mod image;
 mod lir;
+#[cfg(feature = "llvm-jit")]
+mod llvm_tier;
+#[cfg(feature = "llvm-jit")]
+pub use llvm_tier::llvm_codegen_count;
 pub(crate) mod reloc;
 mod share;
 pub(crate) use emit::{ClifEmit, Emit, Ins, RelocKind, reloc_symbol};
