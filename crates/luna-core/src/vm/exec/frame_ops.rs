@@ -278,15 +278,8 @@ impl Vm {
     /// 5.1 `setfenv` on a Lua function: give `cl` a new `_ENV` cell (slot
     /// `idx`) holding `env`. A 5.1 env cell is never written in place —
     /// closures share their creator's cell, and replacing it here is what
-    /// keeps the change to this one function.
-    pub(crate) fn set_closure_env(&mut self, cl: Gc<LuaClosure>, idx: usize, env: Gc<Table>) {
-        if self.try_set_closure_env(cl, idx, env).is_err() {
-            crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Upvalue>());
-        }
-    }
-
-    /// [`Vm::set_closure_env`], raising a memory error when the new cell
-    /// cannot be made.
+    /// keeps the change to this one function. Raises a memory error when
+    /// the new cell cannot be made.
     pub(crate) fn try_set_closure_env(
         &mut self,
         cl: Gc<LuaClosure>,

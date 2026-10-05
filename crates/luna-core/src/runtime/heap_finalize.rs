@@ -72,20 +72,23 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads an allocated table or userdata the caller holds.
-    unsafe fn register(&mut self, h: *mut GcHeader) {
+    unsafe fn register(&mut self, h: *mut GcHeader) -> Result<(), crate::runtime::mem::Oom> {
         let room = self.finalize.len() + 1 + self.tobefnz.len();
         if self.tobefnz.capacity() < room {
-            self.tobefnz.reserve_or_abort(room - self.tobefnz.len());
+            self.tobefnz.reserve(room - self.tobefnz.len())?;
         }
-        self.finalize.push_or_abort(h);
+        self.finalize.push(h)?;
         // SAFETY: the caller's contract; only the flag byte is written
         unsafe { (*h).flags |= FIN };
+        Ok(())
     }
 
     /// Put `h` on `tobefnz`, whose room `register` keeps.
     fn queue_to_finalize(&mut self, h: *mut GcHeader) {
         debug_assert!(self.tobefnz.len() < self.tobefnz.capacity());
-        self.tobefnz.push_or_abort(h);
+        // `register` keeps the room, so this never grows the queue
+        let pushed = self.tobefnz.push(h);
+        debug_assert!(pushed.is_ok());
     }
 
     /// Register a table for finalization (a live `__gc` metamethod was just set
@@ -96,28 +99,33 @@ impl Heap {
     /// previously finalized object (FINALIZED bit set then reset by
     /// `take_tobefnz`) can re-register. PUC's `luaC_checkfinalizer` is gated
     /// on `tofinalize(o)` only, which mirrors checking the FIN bit.
-    pub(crate) fn register_finalizable(&mut self, t: Gc<Table>) {
+    pub(crate) fn register_finalizable(&mut self, t: Gc<Table>) -> Result<(), crate::runtime::mem::Oom> {
         let h = t.as_ptr() as *mut GcHeader;
         // SAFETY: `h` is the header of `t`, a table the caller holds a live handle to; only the flag byte is touched
         unsafe {
             if (*h).flags & FIN == 0 {
-                self.register(h);
+                return self.register(h);
             }
         }
+        Ok(())
     }
 
     /// Register a userdata for finalization. PUC 5.1 `newproxy(true)` plus a
     /// metatable carrying `__gc` lets a Lua script attach a finalizer to a
     /// proxy object — gc.lua's "testing userdata" section binds this
     /// behaviour together with weak tables.
-    pub(crate) fn register_finalizable_userdata(&mut self, u: Gc<crate::runtime::Userdata>) {
+    pub(crate) fn register_finalizable_userdata(
+        &mut self,
+        u: Gc<crate::runtime::Userdata>,
+    ) -> Result<(), crate::runtime::mem::Oom> {
         let h = u.as_ptr() as *mut GcHeader;
         // SAFETY: `h` is the header of `u`, a userdata the caller holds a live handle to; only the flag byte is touched
         unsafe {
             if (*h).flags & FIN == 0 {
-                self.register(h);
+                return self.register(h);
             }
         }
+        Ok(())
     }
 
     /// Every userdata still awaiting finalization, registered or already

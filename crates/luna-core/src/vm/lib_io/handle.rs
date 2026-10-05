@@ -14,7 +14,7 @@ pub(super) fn new_file(
     let u = vm.lib_userdata(UserdataPayload::File(fh), writable)?;
     // SAFETY: `u` was allocated on the line above and no other handle to it exists yet; the borrow covers one call
     unsafe { u.as_mut() }.set_metatable(vm.file_mt);
-    vm.heap.register_finalizable_userdata(u);
+    vm.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;
     Ok(u)
 }
 

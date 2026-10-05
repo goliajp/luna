@@ -195,7 +195,7 @@ pub(super) fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
     vm.barrier_back_table(t);
     // register for finalization if the new metatable carries `__gc` (PUC marks
     // the object finalizable at setmetatable time)
-    vm.check_finalizer(t);
+    vm.check_finalizer(t)?;
     vm.nat_ret(fs, &[Value::Table(t)])
 }
 

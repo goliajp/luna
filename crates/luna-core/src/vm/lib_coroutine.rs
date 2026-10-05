@@ -69,7 +69,7 @@ fn check_body(vm: &mut Vm, a: Args) -> Result<Value, LuaError> {
 
 fn co_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let body = check_body(vm, Args::new(fs, nargs))?;
-    let co = vm.new_coro(body);
+    let co = vm.try_new_coro(body)?;
     vm.nat_ret(fs, &[Value::Coro(co)])
 }
 
@@ -285,7 +285,7 @@ fn wrap_where(vm: &mut Vm, err: Value) -> Value {
 
 fn co_wrap(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let body = check_body(vm, Args::new(fs, nargs))?;
-    let co = vm.new_coro(body);
+    let co = vm.try_new_coro(body)?;
     let in_wrap = vm.nat_upval(fs, 0);
     let f = vm.lib_native_with(co_wrapped, &[Value::Coro(co), in_wrap])?;
     vm.nat_ret(fs, &[f])
