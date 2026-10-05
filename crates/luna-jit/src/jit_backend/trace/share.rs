@@ -263,23 +263,35 @@ pub(crate) fn tier_up(
 ) -> Option<TraceFn> {
     let source = ct.tier_up.as_ref()?.source.borrow_mut().take()?;
     let src = source.downcast::<TierSource>().ok()?;
+    clif_tier_up(storage, &src, ct.head_pc, false)
+}
+
+/// Cranelift's code for the trace `src` holds; with `count`, the code
+/// counts iterations and leaves at the tier-up count, for a tier after
+/// Cranelift's (see `super::llvm_tier`).
+pub(crate) fn clif_tier_up(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    src: &TierSource,
+    head_pc: u32,
+    count: bool,
+) -> Option<TraceFn> {
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     if let Some(code) = src.image.as_ref().and_then(|i| i.optimized.get()) {
         let vals: Vec<i64> = src.relocs.iter().map(|r| r.1).collect();
         let bytes = code.relocated(&vals);
         let entry = cs.baseline_code.place(&bytes).ok()?;
-        super::code_dump::dump_len("tier-up-image", ct.head_pc, entry, bytes.len());
+        super::code_dump::dump_len("tier-up-image", head_pc, entry, bytes.len());
         // SAFETY: as in `install`: the optimizing tier's code for this
         // trace, with this Vm's addresses written in
         return Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) });
     }
     let mut module =
         crate::jit_backend::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
-    let fn_id = lir::define_clif(&src.lir, &src.relocs, &mut *module)?;
+    let fn_id = lir::define_clif(&src.lir, &src.relocs, &mut *module, count)?;
     module.finalize_definitions().ok()?;
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     let ptr = module.get_finalized_function(fn_id);
-    super::code_dump::dump("tier-up", ct.head_pc, ptr);
+    super::code_dump::dump("tier-up", head_pc, ptr);
     let sites = reloc::take_sites();
     cs.trace_handles.push(TraceHandle {
         _module: module.publish(),

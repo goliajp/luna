@@ -26,7 +26,17 @@ fn matches_division_for_every_63_bit_dividend() {
     // a fixed xorshift sequence of dividends besides the edges
     let mut x = 0x9e37_79b9_7f4a_7c15u64;
     for &d in &ds {
-        for n in [0, 1, d - 1, d, d + 1, top, top - 1, top / d * d, top / d * d - 1] {
+        for n in [
+            0,
+            1,
+            d - 1,
+            d,
+            d + 1,
+            top,
+            top - 1,
+            top / d * d,
+            top / d * d - 1,
+        ] {
             check(d, n.min(top));
         }
         for _ in 0..200 {

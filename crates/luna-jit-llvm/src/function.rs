@@ -52,7 +52,8 @@ thread_local! {
 fn host() -> Option<Host> {
     // registering the targets is global: once, whichever thread is first
     static NATIVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*NATIVE.get_or_init(|| Target::initialize_native(&InitializationConfig::default()).is_ok()) {
+    if !*NATIVE.get_or_init(|| Target::initialize_native(&InitializationConfig::default()).is_ok())
+    {
         return None;
     }
     let triple = TargetMachine::get_default_triple();
