@@ -85,7 +85,12 @@ struct Job {
     done: Arc<Mutex<Option<Compiled>>>,
 }
 
-/// The compile thread, started by the first background tier-up.
+/// Jobs submitted and not finished yet; the compile thread signals the
+/// condition variable when the count drops.
+static IN_FLIGHT: (Mutex<usize>, std::sync::Condvar) = (Mutex::new(0), std::sync::Condvar::new());
+
+/// The compile thread, started by the first background tier-up. A job whose
+/// trace is gone (nothing holds its result any more) is dropped unrun.
 fn submit(job: Job) -> Option<()> {
     static QUEUE: std::sync::OnceLock<Mutex<mpsc::Sender<Job>>> = std::sync::OnceLock::new();
     let q = QUEUE.get_or_init(|| {
@@ -94,16 +99,37 @@ fn submit(job: Job) -> Option<()> {
             .name("luna-llvm-tier".into())
             .spawn(move || {
                 for job in rx {
-                    let c = compile(&job.source.lir, &job.source.relocs);
-                    *job.done
-                        .lock()
-                        .expect("the compile thread never panics holding a lock") = Some(c);
+                    if Arc::strong_count(&job.done) > 1 {
+                        let c = compile(&job.source.lir, &job.source.relocs);
+                        *job.done.lock().expect(POISON) = Some(c);
+                    }
+                    drop(job);
+                    *IN_FLIGHT.0.lock().expect(POISON) -= 1;
+                    IN_FLIGHT.1.notify_all();
                 }
             })
             .expect("starting the LLVM compile thread");
         Mutex::new(tx)
     });
-    q.lock().unwrap_or_else(|e| e.into_inner()).send(job).ok()
+    *IN_FLIGHT.0.lock().expect(POISON) += 1;
+    let sent = q.lock().expect(POISON).send(job);
+    if sent.is_err() {
+        *IN_FLIGHT.0.lock().expect(POISON) -= 1;
+    }
+    sent.ok()
+}
+
+const POISON: &str = "the compile thread never panics holding a lock";
+
+/// Waits until the compile thread has nothing left to do. A Vm of the LLVM
+/// backend calls this as it goes away: LLVM must not be running on the
+/// compile thread when the process exits and LLVM's global state is torn
+/// down, and its jobs' traces are gone by then, so the queue drains fast.
+pub(crate) fn quiesce() {
+    let mut n = IN_FLIGHT.0.lock().expect(POISON);
+    while *n > 0 {
+        n = IN_FLIGHT.1.wait(n).expect(POISON);
+    }
 }
 
 /// [`super::share::tier_up`] for the LLVM backend: the baseline trace `ct`
