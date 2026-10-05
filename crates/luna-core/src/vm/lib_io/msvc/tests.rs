@@ -62,16 +62,15 @@ fn text_mode_translates_both_ways() {
     assert_eq!(translate_all(b"a\r\nb\x1ac"), b"a\nb");
 }
 
-/// A write after a read that stopped short of the end fails, and the
-/// stream keeps the error until `clearerr`.
+/// A write after a read that stopped short of the end writes nothing (and
+/// sets no error) until a seek.
 #[test]
 fn write_after_read_fails_until_a_seek() {
     let mut os = mem(b"aa\nbb\n");
     let mut f = CrtFile::open(b"r+", false, false);
     assert_eq!(f.getc(&mut os), Some(b'a'));
     assert_eq!(f.fwrite(&mut os, b"X"), 0);
-    assert!(f.ferror());
-    f.clearerr();
+    assert!(!f.ferror());
     assert!(f.fseek(&mut os, 0, 1));
     assert_eq!(f.fwrite(&mut os, b"X"), 1);
 }
