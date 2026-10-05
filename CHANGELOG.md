@@ -81,6 +81,10 @@ optimization.
   closure of each frame. Code that builds these types by hand or matches
   `ExitTag` exhaustively has to name the new parts.
 
+- `TraceRecord` has a new field, `for_step_up`: whether the step of the
+  numeric `for` loop that closes the trace was positive while it was
+  recorded. Code that builds a `TraceRecord` by hand has to set it.
+
 - The syntax tree in `luna_core::frontend::ast` no longer allocates per
   node. Every list in it (a block's statements, call arguments,
   expression lists, assignment targets, declared names, parameters,
@@ -153,6 +157,15 @@ optimization.
 
 ### Changed
 
+- On Windows the `luna` command reads and writes as `lua.exe` does, through
+  the MSVC C library's text mode: its standard output, standard error and
+  standard input, and files opened without `b`, write `\n` as `\r\n` and
+  read `\r\n` as `\n`; a Ctrl+Z ends the input, and `seek` reports what
+  that library's `ftell` does. `Vm::set_crt_text_mode` turns the same on
+  for the files of any `Vm` (off by default, on every platform), and
+  `luna_core::stdio::write_stderr` writes to standard error as the `luna`
+  command does. 5.1 and 5.2 read lines on Windows in 512-byte pieces, the
+  MSVC `BUFSIZ`, as PUC does there.
 - The LLVM backend (`--features llvm-jit`, `LUNA_JIT_BACKEND=llvm`)
   compiles traces with the same trace lowering as the Cranelift backend:
   traces start in the baseline tier and LLVM compiles them again once
@@ -203,6 +216,17 @@ optimization.
   dialect's modulo), ordered comparisons between an integer and a float,
   table reads and writes keyed by a float equal to an integer, and
   `string.sub` with such positions.
+
+- 5.3: a trace checks the step sign of an integer `for` loop once, before
+  the loop, instead of choosing the comparison with the limit on every
+  iteration; a loop entered with a step of the other sign leaves the
+  trace at its head.
+
+- 5.1 and 5.2: traces add and subtract two of the integers the VM keeps
+  for doubles (`#t + #u`), which used to stop the recording. The trace
+  keeps the exact result while it is within 2^53 of zero, where it is
+  the double the operation gives, and otherwise leaves for the
+  interpreter, which rounds as the doubles do.
 
 - A trace follows calls into other Lua functions and runs them inline:
   methods found through a metatable's `__index` table (`o:m()`), local,
@@ -359,6 +383,26 @@ optimization.
   that a resume refused to start. Affects every released version up to
   4.0.2.
 
+||||||| 13c401da
+
+- 5.3–5.5: the compiler folds constant `^`, `//`, `%`, bitwise operations
+  and `~` as PUC's parser does (`2^53` is a constant, not a `POW` at run
+  time), and leaves a negated float zero (`-0.0`) to run time as PUC
+  does, so `string.dump` writes the same code and constants as PUC for
+  them.
+
+- `string.dump` of a main chunk describes its `_ENV` upvalue as PUC does
+  (in the stack, index 0).
+
+- A loop calling `math.fmod` was compiled into a trace that never ran:
+  reading the function `math.fmod` was a value the trace could not type,
+  so the trace was marked not enterable. Traces now compute `math.fmod`
+  in place, as the library does: two integers (5.3+) give C's truncating
+  remainder, -1 gives 0 and 0 leaves the trace for the interpreter to
+  raise its error; otherwise the result is the interpreter's `fmod`
+  (`luna_jit_fmod`), so two NaN operands give the NaN the interpreter
+  gives.
+
 - A loop trace that ran a whole pass and returned to its head through
   its own tail could put back the registers that pass wrote as they were
   before it: the return was matched by its pc to a guard that also
@@ -381,7 +425,6 @@ optimization.
   nil is treated as nil where it is read. All dialects, default settings;
   3.2.2, 4.0.1 and 4.0.2 have it.
 
-||||||| 0bf74190
 - 5.4 and 5.5: `x - (C and nil or 0)` (also with `false`, or any
   expression whose `and` ends in one of them) gave `-0.0` for `x = -0.0`
   where PUC gives `0.0` (affects 3.1.0 through 4.0.2). PUC's code
@@ -625,6 +668,10 @@ optimization.
   block; `lua_setallocf` moves later allocations and frees to the new
   function; `lua_gc(LUA_GCCOUNT/LUA_GCCOUNTB)` and `collectgarbage("count")`
   report the bytes the function has handed out.
+- The memory inside objects comes from the Vm's allocation context too:
+  tables' array and hash parts, prototypes' code, constants and debug
+  records, closures' and native functions' upvalues, coroutine stacks and
+  frames, the C API's per-thread `lua_State` and its userdata blocks.
 - luna-aot links `x86_64-pc-windows-msvc` without Visual Studio, on
   Linux, macOS or Windows: `clang-cl` and `lld-link` from LLVM with the
   MSVC C runtime and Windows SDK from `xwin splat`, named by

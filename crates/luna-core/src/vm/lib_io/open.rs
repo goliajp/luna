@@ -55,9 +55,33 @@ fn mode_ok(v: LuaVersion, mode: &[u8]) -> bool {
     }
 }
 
-fn open_file(name: &[u8], mode: &[u8]) -> std::io::Result<(std::fs::File, bool)> {
-    let (o, writable) = fopen_options(c_str(mode)).ok_or_else(|| posix_error(EINVAL))?;
-    Ok((o.open(os_path(name))?, writable))
+/// Whether `vm` opens a file with `mode` in the MSVC C library's text mode.
+fn text_mode_for(vm: &Vm, mode: &[u8]) -> bool {
+    vm.crt_text && !c_str(mode).contains(&b'b')
+}
+
+fn open_file(name: &[u8], mode: &[u8], text: bool) -> std::io::Result<(std::fs::File, bool)> {
+    let mode = c_str(mode);
+    let (o, writable) = fopen_options(mode).ok_or_else(|| posix_error(EINVAL))?;
+    let f = o.open(os_path(name))?;
+    if text && mode.contains(&b'+') && f.metadata()?.len() > 0 {
+        // through a handle of its own: an append handle may not shorten
+        let mut g = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(os_path(name))?;
+        text_mode::drop_final_ctrl_z(&mut g)?;
+    }
+    Ok((f, writable))
+}
+
+/// The handle for a file `open_file` opened.
+fn opened(vm: &mut Vm, f: std::fs::File, writable: bool, text: bool) -> Gc<Userdata> {
+    let u = new_file(vm, FileHandle::File(f), writable);
+    if text {
+        text_mode::set_text(u);
+    }
+    u
 }
 
 pub(super) fn io_open(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -70,9 +94,10 @@ pub(super) fn io_open(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     if vm.version() >= LuaVersion::Lua52 && !mode_ok(vm.version(), &mode) {
         return Err(arg_error(vm, 2, "invalid mode"));
     }
-    match open_file(&name, &mode) {
+    let text = text_mode_for(vm, &mode);
+    match open_file(&name, &mode, text) {
         Ok((f, writable)) => {
-            let u = new_file(vm, FileHandle::File(f), writable);
+            let u = opened(vm, f, writable, text);
             Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
         }
         Err(e) => Ok(file_fail(vm, fs, Some(&name), &e)),
@@ -142,8 +167,9 @@ pub(super) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     } else {
         pipe_file(child.stdin.take().expect("stdin was piped"))
     };
-    let u = new_file(vm, FileHandle::File(file), !read);
-    // SAFETY: `u` was created by `new_file` just above and is held only by this local; the borrow covers one field store
+    let text = text_mode_for(vm, &mode);
+    let u = opened(vm, file, !read, text);
+    // SAFETY: `u` was created by `opened` just above and is held only by this local; the borrow covers one field store
     unsafe { u.as_mut() }.popen_child = Some(child);
     Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
 }
@@ -253,8 +279,9 @@ pub(super) fn open_checked(
     name: &[u8],
     mode: &[u8],
 ) -> Result<Gc<Userdata>, LuaError> {
-    match open_file(name, mode) {
-        Ok((f, writable)) => Ok(new_file(vm, FileHandle::File(f), writable)),
+    let text = text_mode_for(vm, mode);
+    match open_file(name, mode, text) {
+        Ok((f, writable)) => Ok(opened(vm, f, writable, text)),
         Err(e) => {
             let n = String::from_utf8_lossy(c_str(name)).into_owned();
             let err = strerror(&e);

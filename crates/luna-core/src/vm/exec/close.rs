@@ -27,7 +27,7 @@ impl Vm {
         if self.tbc.last().is_some_and(|&s| s >= slot) {
             return Err(self.rt_err("'<close>' state corrupted"));
         }
-        self.tbc.push(slot);
+        self.tbc.push_or_abort(slot);
         Ok(())
     }
 
@@ -176,7 +176,7 @@ impl Vm {
             let call_slot = func_slot + error_close as u32;
             let need = (call_slot + 3) as usize;
             if self.stack.len() < need {
-                self.stack.resize(need, Value::Nil);
+                self.grow_stack_or_abort(need);
             }
             if let Some(e) = pending {
                 self.stack[func_slot as usize] = e;

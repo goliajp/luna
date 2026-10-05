@@ -8,7 +8,10 @@ impl Vm {
     /// `Some(values)` when the cached native fn is callable for a
     /// zero-arg call. (Non-zero-arg dispatch is handled by
     /// `try_jit_call_op` from inside `begin_call`.)
-    pub(super) fn try_jit_call(&mut self, cl: Gc<LuaClosure>) -> Option<Vec<Value>> {
+    pub(super) fn try_jit_call(
+        &mut self,
+        cl: Gc<LuaClosure>,
+    ) -> Option<Result<Vec<Value>, LuaError>> {
         use crate::runtime::function::JitProtoState;
         if !self.jit.enabled || native_stack::is_low(native_stack::JIT_RESERVE) {
             return None;
@@ -47,9 +50,8 @@ impl Vm {
                 // SAFETY: `f` is the compiled chunk's entry, transmuted above from the entry pointer the backend returned for this proto with this signature; the guard above pins this Vm and `cl` for the helpers the code calls
                 let r = unsafe { f() };
                 drop(_jit_vm_guard);
-                // the caller raises it
-                if self.jit.pending_raise.is_some() {
-                    return Some(Vec::new());
+                if let Some(e) = self.jit.pending_raise.take() {
+                    return Some(Err(e));
                 }
                 // A JIT helper may have detected a metatable
                 // on a table operand and parked a deopt request here.
@@ -59,7 +61,7 @@ impl Vm {
                 if self.jit.pending_err.take().is_some() {
                     return None;
                 }
-                Some(if returns_one {
+                Some(Ok(if returns_one {
                     let v = if ret_is_float {
                         Value::Float(f64::from_bits(r as u64))
                     } else if ret_is_table {
@@ -73,7 +75,7 @@ impl Vm {
                     vec![v]
                 } else {
                     Vec::new()
-                })
+                }))
             }
             // Non-zero-arg Compiled state: call_value's empty-args
             // fast path can't drive it. Op::Call handles those.
@@ -263,5 +265,68 @@ impl Vm {
             self.finish_results(func_slot, 0, wanted);
         }
         true
+    }
+
+    /// Lua calls the running thread may still make before one raises
+    /// "stack overflow" for its depth (5.1's `LUAI_MAXCALLS`), not counting
+    /// `native` calls compiled code made on the native stack; `i64::MAX`
+    /// in dialects without that limit.
+    #[doc(hidden)]
+    pub fn jit_call_budget(&self, native: i64) -> i64 {
+        if self.frame_cap == u32::MAX {
+            return i64::MAX;
+        }
+        i64::from(self.frame_cap) - self.frames.len() as i64 - native
+    }
+
+    /// "stack overflow" raised for a self call of compiled `cl` past
+    /// [`Vm::jit_call_budget`], positioned, as the interpreter would raise
+    /// it, at that call in `cl`.
+    #[doc(hidden)]
+    pub fn jit_depth_error(
+        &mut self,
+        cl: crate::runtime::Gc<crate::runtime::LuaClosure>,
+    ) -> LuaError {
+        let proto = cl.proto;
+        let call = proto
+            .code
+            .iter()
+            .position(|i| i.op() == crate::vm::isa::Op::Call);
+        let prefix = self.prefix_at(proto, call.map_or(0, |pc| pc + 1));
+        LuaError(Value::Str(
+            self.heap
+                .intern(format!("{prefix}stack overflow").as_bytes()),
+        ))
+    }
+
+    /// Run a call that compiled code makes but cannot run natively, in the
+    /// interpreter: a self-recursive call when the native stack is low.
+    /// `budget`, when given, is how many more calls the interpreter may
+    /// nest ([`Vm::jit_call_budget`] less the compiled code's own). Like a
+    /// library callback it cannot yield. The compiled frames below may
+    /// hold the only reference to a table they made, in a native register
+    /// no collection can see, so none runs until the call is done (the
+    /// code of such a function calls nothing but itself).
+    #[doc(hidden)]
+    pub fn jit_call_interpreted(
+        &mut self,
+        cl: crate::runtime::Gc<crate::runtime::LuaClosure>,
+        args: &[Value],
+        budget: Option<i64>,
+    ) -> Result<Vec<Value>, LuaError> {
+        let cap = self.frame_cap;
+        if let Some(b) = budget
+            && cap != u32::MAX
+        {
+            self.frame_cap = (self.frames.len() as i64 + b).clamp(0, i64::from(cap)) as u32;
+        }
+        let stopped = self.heap.gc_is_stopped();
+        self.heap.gc_set_stopped(true);
+        self.nny += 1;
+        let r = self.call_value_impl(Value::Closure(cl), args, true);
+        self.nny -= 1;
+        self.heap.gc_set_stopped(stopped);
+        self.frame_cap = cap;
+        r
     }
 }

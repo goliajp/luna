@@ -292,7 +292,7 @@ impl Vm {
         self.error_traceback = None;
         let fs = nc.func_slot as usize;
         if self.stack.len() < fs + 2 {
-            self.stack.resize(fs + 2, Value::Nil);
+            self.grow_stack_or_abort(fs + 2);
         }
         self.stack[fs] = Value::Bool(false);
         self.stack[fs + 1] = result;
@@ -329,7 +329,7 @@ impl Vm {
             .map(|c| (c.base + c.closure.proto.max_stack as u32) as usize + 256)
             .unwrap_or(saved_len);
         if self.stack.len() < restore {
-            self.stack.resize(restore, Value::Nil);
+            self.grow_stack_or_abort(restore);
         } else if self.stack.len() > restore {
             self.stack.truncate(restore);
         }

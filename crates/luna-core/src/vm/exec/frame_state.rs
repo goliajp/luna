@@ -151,11 +151,30 @@ impl Vm {
         self.top = new_top;
     }
 
+    /// Grow the stack to `need` nil slots (`need` > its length), ending
+    /// the process when the allocation fails. Out of line, and on the Vm
+    /// rather than the vector, so the hot callers keep only the length test
+    /// and never take the stack's address.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn grow_stack_or_abort(&mut self, need: usize) {
+        self.stack.resize_or_abort(need, Value::Nil);
+    }
+
     /// Nil the missing results `[from, to)`.
     pub(super) fn pad_results(&mut self, from: u32, to: u32) {
         if self.stack.len() < to as usize {
-            self.stack.resize(to as usize, Value::Nil);
+            return self.pad_results_grow(from, to);
         }
+        self.stack[from as usize..to as usize].fill(Value::Nil);
+    }
+
+    /// [`Vm::pad_results`] when the stack must grow first; out of line and
+    /// last, so the common path keeps nothing alive across a call.
+    #[cold]
+    #[inline(never)]
+    fn pad_results_grow(&mut self, from: u32, to: u32) {
+        self.stack.resize_or_abort(to as usize, Value::Nil);
         self.stack[from as usize..to as usize].fill(Value::Nil);
     }
 
@@ -185,7 +204,7 @@ impl Vm {
                     slot,
                     thread: self.current,
                 });
-                self.open_upvals.insert(i, (slot, uv));
+                self.open_upvals.insert_or_abort(i, (slot, uv));
                 uv
             }
         }

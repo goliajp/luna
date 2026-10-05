@@ -102,6 +102,9 @@ pub(super) fn f_seek(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
 
 /// `fseek` + `ftell`: flush pending output, give back read-ahead, move.
 fn seek_stream(u: Gc<Userdata>, op: usize, offset: i64) -> std::io::Result<u64> {
+    if u.text.is_some() && matches!(u.file(), FileHandle::File(_)) {
+        return text_mode::fseek(u, op, offset);
+    }
     drain_write_buf(u)?;
     if matches!(u.file(), FileHandle::Stdout) {
         // liolib always calls `fseek`, which writes out what stdout
