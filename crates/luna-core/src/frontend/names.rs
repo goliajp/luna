@@ -4,7 +4,7 @@
 //! numbers and the compiler compares them. The bytes live back to back in
 //! one buffer owned by the chunk.
 
-use crate::runtime::mem::{LVec, MemRef, Oom};
+use crate::runtime::mem::{LVec, MemRef};
 
 /// An interned identifier or string literal: an index into [`Names`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, PartialOrd, Ord)]
@@ -52,13 +52,13 @@ impl Names {
     }
 
     /// An empty set sized for a chunk of `src_len` source bytes, on `mem`.
-    pub fn with_capacity(mem: MemRef, src_len: usize) -> Result<Names, Oom> {
+    pub fn with_capacity(mem: MemRef, src_len: usize) -> Names {
         Names::new(mem).reuse(src_len)
     }
 
     /// These buffers emptied for a chunk of `src_len` bytes, keeping what
     /// they have allocated.
-    pub(crate) fn reuse(mut self, src_len: usize) -> Result<Names, Oom> {
+    pub(crate) fn reuse(mut self, src_len: usize) -> Names {
         // about one distinct identifier per 32 source bytes
         let n = (src_len / 32).max(8);
         let len = (2 * n).next_power_of_two();
@@ -66,11 +66,11 @@ impl Names {
         self.ends.clear();
         self.table.clear();
         self.hashed = 0;
-        self.text.reserve(n * 6)?;
-        self.ends.reserve(n + 1)?;
-        self.ends.push(0)?;
-        self.table.resize(len, 0)?;
-        Ok(self)
+        self.text.reserve_or_abort(n * 6);
+        self.ends.reserve_or_abort(n + 1);
+        self.ends.push_or_abort(0);
+        self.table.resize_or_abort(len, 0);
+        self
     }
 
     /// The handle the set allocates through.
@@ -94,9 +94,9 @@ impl Names {
     }
 
     /// The number of `s`, giving it one when it is new.
-    pub fn intern(&mut self, s: &[u8]) -> Result<Sym, Oom> {
+    pub fn intern(&mut self, s: &[u8]) -> Sym {
         if self.ends.is_empty() {
-            *self = Names::new(self.text.mem()).reuse(0)?;
+            *self = Names::new(self.text.mem()).reuse(0);
         }
         if s.len() > MAX_HASHED_LEN {
             return self.append(s);
@@ -109,27 +109,24 @@ impl Names {
                 e => {
                     let sym = Sym(e - 1);
                     if self.bytes(sym) == s {
-                        return Ok(sym);
+                        return sym;
                     }
                 }
             }
             i = (i + 1) & mask;
         }
-        // make room first, so a failure leaves the set as it was
-        if (self.hashed as usize + 1) * 2 > self.table.len() {
-            self.grow()?;
-            return self.intern(s);
-        }
-        let sym = self.append(s)?;
+        let sym = self.append(s);
         self.table[i] = sym.0 + 1;
         self.hashed += 1;
-        Ok(sym)
+        if self.hashed as usize * 2 > self.table.len() {
+            self.grow();
+        }
+        sym
     }
 
-    fn append(&mut self, s: &[u8]) -> Result<Sym, Oom> {
+    fn append(&mut self, s: &[u8]) -> Sym {
         let sym = Sym(self.ends.len() as u32 - 1);
-        self.ends.reserve(1)?;
-        self.text.extend_from_slice(s)?;
+        self.text.extend_from_slice_or_abort(s);
         assert!(
             self.text.len() < NOT_TEXT as usize,
             "names of a chunk past 2 GiB"
@@ -139,14 +136,14 @@ impl Names {
         } else {
             NOT_TEXT
         };
-        self.ends.push(self.text.len() as u32 | flag)?;
-        Ok(sym)
+        self.ends.push_or_abort(self.text.len() as u32 | flag);
+        sym
     }
 
-    fn grow(&mut self) -> Result<(), Oom> {
+    fn grow(&mut self) {
         let len = self.table.len() * 2;
-        let mut table = LVec::with_capacity(self.table.mem(), len)?;
-        table.resize(len, 0)?;
+        let mut table = LVec::with_capacity_or_abort(self.table.mem(), len);
+        table.resize_or_abort(len, 0);
         for s in 0..self.ends.len() as u32 - 1 {
             let b = self.bytes(Sym(s));
             if b.len() > MAX_HASHED_LEN {
@@ -159,7 +156,6 @@ impl Names {
             table[i] = s + 1;
         }
         self.table = table;
-        Ok(())
     }
 
     /// The bytes of an entry.
@@ -198,33 +194,30 @@ mod tests {
     #[test]
     fn same_text_same_number() {
         let o = MemOwner::system();
-        let mut n = Names::with_capacity(o.mem(), 0).unwrap();
+        let mut n = Names::with_capacity(o.mem(), 0);
         let words: Vec<String> = (0..200).map(|i| format!("v{}", i % 70)).collect();
-        let syms: Vec<Sym> = words
-            .iter()
-            .map(|w| n.intern(w.as_bytes()).unwrap())
-            .collect();
+        let syms: Vec<Sym> = words.iter().map(|w| n.intern(w.as_bytes())).collect();
         for (w, s) in words.iter().zip(&syms) {
             assert_eq!(n.text(*s), w);
-            assert_eq!(n.intern(w.as_bytes()).unwrap(), *s);
+            assert_eq!(n.intern(w.as_bytes()), *s);
         }
         assert_eq!(n.len(), 70);
-        assert_ne!(n.intern(b"a").unwrap(), n.intern(b"b").unwrap());
-        let e = n.intern(b"").unwrap();
+        assert_ne!(n.intern(b"a"), n.intern(b"b"));
+        let e = n.intern(b"");
         assert_eq!(n.text(e), "");
     }
 
     #[test]
     fn long_literals_are_kept_apart() {
         let o = MemOwner::system();
-        let mut n = Names::with_capacity(o.mem(), 0).unwrap();
+        let mut n = Names::with_capacity(o.mem(), 0);
         let long = vec![b'x'; 100];
-        let a = n.intern(&long).unwrap();
-        let b = n.intern(&long).unwrap();
+        let a = n.intern(&long);
+        let b = n.intern(&long);
         assert_ne!(a, b);
         assert_eq!(n.bytes(a), &long[..]);
         assert_eq!(n.bytes(b), &long[..]);
-        let bin = n.intern(b"\xff\x00").unwrap();
+        let bin = n.intern(b"\xff\x00");
         assert_eq!(n.bytes(bin), b"\xff\x00");
         assert_eq!(n.text(bin), "");
     }

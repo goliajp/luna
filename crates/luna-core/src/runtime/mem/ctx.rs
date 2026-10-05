@@ -115,6 +115,16 @@ pub struct MemRef(NonNull<MemCtx>);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Oom(pub(crate) MemRef);
 
+impl Oom {
+    /// Give up where no memory error can be returned: see
+    /// `oom_abort`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn fail(self) -> ! {
+        super::oom_abort(std::alloc::Layout::new::<u8>())
+    }
+}
+
 impl MemRef {
     /// The context.
     #[inline(always)]

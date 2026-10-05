@@ -24,12 +24,12 @@ impl<'a> Compiler<'a> {
         if self.version <= LuaVersion::Lua51 {
             self.leave_block_with(false)?;
             self.last_line = line;
-            self.emit(Inst::iabc(Op::Return0, 0, 0, 0, false))?;
+            self.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
             return Ok(());
         }
         self.last_line = line;
         let a = self.return0_base();
-        self.emit(Inst::iabc(Op::Return0, a, 0, 0, false))?;
+        self.emit(Inst::iabc(Op::Return0, a, 0, 0, false));
         self.leave_block_with(false)
     }
 
@@ -37,7 +37,7 @@ impl<'a> Compiler<'a> {
         match exprs.len() {
             0 => {
                 let a = self.return0_base();
-                self.emit(Inst::iabc(Op::Return0, a, 0, 0, false))?;
+                self.emit(Inst::iabc(Op::Return0, a, 0, 0, false));
             }
             1 => {
                 // tail call: `return f(...)` (not parenthesized), but NOT in
@@ -60,7 +60,7 @@ impl<'a> Compiler<'a> {
                         // suppressed tail call: ordinary call returning all
                         // results, so __close handlers can run on RETURN
                         self.patch_wanted(pc, 0);
-                        self.emit(Inst::iabc(Op::Return, base, 0, 0, false))?;
+                        self.emit(Inst::iabc(Op::Return, base, 0, 0, false));
                     } else {
                         let call = self.l().code[pc];
                         self.l().code[pc] = Inst::iabc(Op::TailCall, call.a(), call.b(), 0, false);
@@ -74,7 +74,7 @@ impl<'a> Compiler<'a> {
                         // the run loop needs an explicit Return to forward the
                         // results — the Lua-target path pops the frame and so
                         // never reaches this op.
-                        self.emit(Inst::iabc(Op::Return, base, 0, 0, false))?;
+                        self.emit(Inst::iabc(Op::Return, base, 0, 0, false));
                     }
                     self.set_freereg(base);
                     return Ok(());
@@ -86,7 +86,7 @@ impl<'a> Compiler<'a> {
                         unreachable!()
                     };
                     self.patch_wanted(pc, 0);
-                    self.emit(Inst::iabc(Op::Return, base, 0, 0, false))?;
+                    self.emit(Inst::iabc(Op::Return, base, 0, 0, false));
                     self.set_freereg(base);
                     return Ok(());
                 }
@@ -94,7 +94,7 @@ impl<'a> Compiler<'a> {
                 let saved = self.lr().freereg;
                 let r = self.exp_to_anyreg(e)?;
                 self.set_freereg(saved);
-                self.emit(Inst::iabc(Op::Return1, r, 0, 0, false))?;
+                self.emit(Inst::iabc(Op::Return1, r, 0, 0, false));
             }
             n if n > 254 => {
                 // `OP_RETURN`'s B field is a byte (`b = nret + 1`): at most
@@ -128,7 +128,7 @@ impl<'a> Compiler<'a> {
                     debug_assert_eq!(got, dst);
                 }
                 let b = if open { 0 } else { n as u32 + 1 };
-                self.emit(Inst::iabc(Op::Return, base, b, 0, false))?;
+                self.emit(Inst::iabc(Op::Return, base, b, 0, false));
                 self.set_freereg(base);
             }
         }

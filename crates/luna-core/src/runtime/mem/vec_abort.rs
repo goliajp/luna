@@ -1,5 +1,6 @@
-//! `LVec` growth that ends the process when the allocation fails, for the
-//! places that cannot report a memory error yet.
+//! `LVec` growth with no memory error to return: inside a load it unwinds
+//! to the load's entry, elsewhere it ends the process (see
+//! `oom_abort`).
 
 use std::alloc::Layout;
 
@@ -10,6 +11,22 @@ use super::vec::LVec;
 /// standard library's `Vec` does. For the places that cannot report a
 /// memory error yet.
 impl<T> LVec<T> {
+    /// [`LVec::with_capacity`], ending the process on failure.
+    #[inline]
+    pub fn with_capacity_or_abort(mem: MemRef, n: usize) -> LVec<T> {
+        let mut v = LVec::new(mem);
+        v.reserve_exact_or_abort(n);
+        v
+    }
+
+    /// [`LVec::reserve_exact`], ending the process on failure.
+    #[inline]
+    pub fn reserve_exact_or_abort(&mut self, extra: usize) {
+        if self.reserve_exact(extra).is_err() {
+            vec_oom::<T>(self.len.saturating_add(extra))
+        }
+    }
+
     /// [`LVec::push`], ending the process on failure.
     #[inline(always)]
     pub fn push_or_abort(&mut self, v: T) {

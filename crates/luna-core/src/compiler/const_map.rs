@@ -2,7 +2,7 @@
 
 use super::Compiler;
 use crate::runtime::Value;
-use crate::runtime::mem::{LMap, Oom};
+use crate::runtime::mem::LMap;
 use crate::runtime::string::LuaStr;
 
 pub(super) type ConstMap = LMap<ConstKey, u32>;
@@ -19,17 +19,14 @@ pub(super) enum ConstKey {
 impl Compiler<'_> {
     /// The index of constant `v` (keyed `key`) in the running function,
     /// added when new.
-    pub(super) fn const_idx(&mut self, key: ConstKey, v: Value) -> Result<u32, Oom> {
+    pub(super) fn const_idx(&mut self, key: ConstKey, v: Value) -> u32 {
         let l = self.l();
         if let Some(i) = l.const_map.get(&key) {
-            return Ok(i);
+            return i;
         }
         let i = l.consts.len() as u32;
-        // the map entry first: a failed push leaves no entry for a missing
-        // constant
-        l.consts.reserve(1)?;
-        l.const_map.insert(key, i)?;
-        l.consts.push(v)?;
-        Ok(i)
+        l.consts.push_or_abort(v);
+        l.const_map.insert_or_abort(key, i);
+        i
     }
 }

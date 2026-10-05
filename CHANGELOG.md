@@ -614,6 +614,11 @@ optimization.
   parser and the compiler build while loading a chunk. A load that runs out
   of memory fails with "not enough memory"; the C API's `lua_load` returns
   `LUA_ERRMEM` for it.
+  The parser and the compiler do not check each allocation: one that fails
+  unwinds to the load, which drops what it built (giving every block back)
+  and returns the memory error. This needs `panic = "unwind"`; built with
+  `panic = "abort"` (the default for `wasm32` targets) a load that runs out
+  of memory ends the process, as a standard library container would.
 - luna-aot links `x86_64-pc-windows-msvc` without Visual Studio, on
   Linux, macOS or Windows: `clang-cl` and `lld-link` from LLVM with the
   MSVC C runtime and Windows SDK from `xwin splat`, named by

@@ -5,8 +5,8 @@ use super::*;
 impl<'s> Parser<'s> {
     pub(super) fn func_body(&mut self, line: u32) -> Result<FuncBody, SyntaxError> {
         self.expect(Token::LParen, "(")?;
-        self.func_local_count.push((0, line, 0))?;
-        self.enter_fn_51(line)?;
+        self.func_local_count.push_or_abort((0, line, 0));
+        self.enter_fn_51(line);
         let mark = self.stk.names.len();
         let mut vararg = Vararg::None;
         if self.tok.tok != Token::RParen {
@@ -23,15 +23,15 @@ impl<'s> Parser<'s> {
                         };
                         if let Vararg::Named(ref n) = vararg {
                             self.new_local()?;
-                            self.add_local_51(n.sym)?;
+                            self.add_local_51(n.sym);
                         }
                         break;
                     }
                     Token::Name(_) => {
                         let p = self.expect_name()?;
                         self.new_local()?;
-                        self.add_local_51(p.sym)?;
-                        self.stk.names.push(p)?;
+                        self.add_local_51(p.sym);
+                        self.stk.names.push_or_abort(p);
                     }
                     _ => return Err(self.error("<name> or '...' expected")),
                 }
@@ -41,25 +41,28 @@ impl<'s> Parser<'s> {
             }
         }
         self.activate_locals()?;
-        self.goto_step(|g| Ok(g.enter_function()?))?;
-        let params = finish(&mut self.chunk, &mut self.stk.names, mark)?;
+        self.goto_step(|g| {
+            g.enter_function();
+            Ok(())
+        })?;
+        let params = finish(&mut self.chunk, &mut self.stk.names, mark);
         let Parser {
             gotos, lex, chunk, ..
         } = self;
         if let Some(g) = gotos {
             for p in chunk.list(params) {
-                g.declare(lex.names().text(p.sym), VarKind::Local)?;
+                g.declare(lex.names().text(p.sym), VarKind::Local);
             }
             // 5.5's named `...` parameter is a read-only local
             if let Vararg::Named(n) = &vararg {
-                g.declare(lex.names().text(n.sym), VarKind::Const)?;
+                g.declare(lex.names().text(n.sym), VarKind::Const);
             }
         }
         self.expect(Token::RParen, ")")?;
-        self.funcs.push(FnFlow {
+        self.funcs.push_or_abort(FnFlow {
             vararg: !matches!(vararg, Vararg::None),
             loops: 0,
-        })?;
+        });
         let block = self.block()?;
         let end_line = self.tok.line; // the `end` token's line, before consuming
         self.expect_match(Token::End, "end", "function", line)?;

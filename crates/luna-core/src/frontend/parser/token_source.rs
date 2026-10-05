@@ -66,8 +66,8 @@ impl<'s> TokenSource<'s> {
                     let t = &tokens[*cursor];
                     *cursor += 1;
                     let sym = match &t.tok {
-                        Token::Name(text) => names.intern(text.as_bytes())?,
-                        Token::Str(bytes) => names.intern(bytes)?,
+                        Token::Name(text) => names.intern(text.as_bytes()),
+                        Token::Str(bytes) => names.intern(bytes),
                         _ => Sym(0),
                     };
                     Ok(Cur {

@@ -1,7 +1,7 @@
 //! The parsed chunk: the node arenas, the list vectors and the names.
 
 use super::*;
-use crate::runtime::mem::{LVec, MemOwner, Oom};
+use crate::runtime::mem::{LVec, MemOwner};
 
 /// A parsed chunk: the top-level block plus the node arenas, the list
 /// vectors the nodes' [`List`]s point into, and the chunk's names.
@@ -111,10 +111,10 @@ impl Chunk {
     }
 
     /// Store `items` as a new list.
-    pub fn push_list<T: ListItem>(&mut self, items: &[T]) -> Result<List<T>, Oom> {
+    pub fn push_list<T: ListItem>(&mut self, items: &[T]) -> List<T> {
         let v = T::items_mut(self);
         let start = v.len() as u32;
-        v.extend_from_slice(items)?;
-        Ok(List::new(start, items.len() as u32))
+        v.extend_from_slice_or_abort(items);
+        List::new(start, items.len() as u32)
     }
 }

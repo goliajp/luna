@@ -44,7 +44,7 @@ use crate::frontend::ast::{
 use crate::frontend::error::SyntaxError;
 use crate::numeric::Num;
 use crate::runtime::heap::{GcHeader, ObjTag};
-use crate::runtime::mem::{LMap, LVec, Oom};
+use crate::runtime::mem::{LMap, LVec};
 use crate::runtime::{Gc, Heap, LuaStr, Proto, UpvalDesc, Value};
 use crate::version::LuaVersion;
 use crate::vm::isa::{Inst, MAX_B, MAX_BX, MAX_C, MAX_SC, MAX_SJ, MIN_SC, OFFSET_SC, Op};
@@ -103,23 +103,23 @@ fn compile_main(
         str_cache: LMap::new(mem),
     };
     c.sym_strs.clear();
-    c.sym_strs.resize(ast.names.len(), None)?;
-    let mut main = c.new_level(0, true, 0)?;
-    main.upvals.push(UpvalDesc {
+    c.sym_strs.resize_or_abort(ast.names.len(), None);
+    let mut main = c.new_level(0, true, 0);
+    main.upvals.push_or_abort(UpvalDesc {
         in_stack: false,
         index: 0,
         name: "_ENV".into(),
         read_only: false,
-    })?;
-    c.levels.push(main)?;
-    c.enter_block(false)?;
+    });
+    c.levels.push_or_abort(main);
+    c.enter_block(false);
     c.stat_block(&ast.block)?;
     // the implicit final return belongs to the chunk's last line (PUC), so a
     // line hook / activelines see it there rather than on the last statement
     c.final_return(ast.end_line)?;
     let lvl = c.levels.pop().expect("main level");
     let last_target = lvl.last_target;
-    let proto = c.finish_level(lvl, 0, 0)?;
+    let proto = c.finish_level(lvl, 0, 0);
     scratch.levels = c.pool;
     scratch.sym_strs = c.sym_strs;
     scratch.open = c.levels.recycle();
@@ -357,26 +357,19 @@ impl<'a> Compiler<'a> {
     }
 
     /// A level for a new function, in kept vectors when there are some.
-    fn new_level(&mut self, num_params: u8, is_vararg: bool, line: u32) -> Result<Level<'a>, Oom> {
+    fn new_level(&mut self, num_params: u8, is_vararg: bool, line: u32) -> Level<'a> {
         let bufs = match self.pool.pop() {
             Some(b) => b,
-            None => LevelBufs::new(self.heap.mem())?,
+            None => LevelBufs::new(self.heap.mem()),
         };
-        Ok(Level::new(num_params, is_vararg, line, bufs))
+        Level::new(num_params, is_vararg, line, bufs)
     }
 
     /// The finished function `lvl` on the heap; its vectors are kept.
-    fn finish_level(
-        &mut self,
-        lvl: Level<'a>,
-        line: u32,
-        last_line: u32,
-    ) -> Result<Gc<Proto>, Oom> {
-        // room in the pool first, so the vectors are kept whatever happens
-        self.pool.reserve(1)?;
-        let (proto, bufs) = lvl.into_proto(self.source, line, last_line, self.heap)?;
-        self.pool.push(bufs)?;
-        Ok(self.heap.adopt_proto(proto))
+    fn finish_level(&mut self, lvl: Level<'a>, line: u32, last_line: u32) -> Gc<Proto> {
+        let (proto, bufs) = lvl.into_proto(self.source, line, last_line, self.heap);
+        self.pool.push_or_abort(bufs);
+        self.heap.adopt_proto(proto)
     }
 
     /// The `end` line the parser recorded for statement `sid`.

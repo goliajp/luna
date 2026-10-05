@@ -113,7 +113,7 @@ impl Compiler<'_> {
     ) -> Result<LastTest, SyntaxError> {
         let last = match e {
             Exp::Cmp { op, l, r, c } => {
-                self.emit(Inst::iabc(op, l, r, c, jump_if))?;
+                self.emit(Inst::iabc(op, l, r, c, jump_if));
                 LastTest::Cmp
             }
             // PUC `luaK_goiftrue` / `luaK_goiffalse`: a constant whose truth
@@ -128,12 +128,12 @@ impl Compiler<'_> {
             }
             e => {
                 let r = self.exp_to_anyreg(e)?;
-                self.emit(Inst::iabc(Op::Test, r, 0, 0, jump_if))?;
+                self.emit(Inst::iabc(Op::Test, r, 0, 0, jump_if));
                 LastTest::Test
             }
         };
         self.set_freereg(saved);
-        out.push(self.emit_jump()?)?;
+        out.push(self.emit_jump());
         Ok(last)
     }
 }

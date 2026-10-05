@@ -152,6 +152,12 @@ impl<K: Copy + Eq + Hash, V: Copy> LMap<K, V> {
         self.find_with(word_hash(k), |x| x == k)
     }
 
+    /// [`LMap::insert`] with no memory error to return: see
+    /// `oom_abort`.
+    pub fn insert_or_abort(&mut self, k: K, v: V) -> Option<V> {
+        self.insert(k, v).unwrap_or_else(|o| o.fail())
+    }
+
     /// Set `k` to `v`, returning the value it replaced.
     pub fn insert(&mut self, k: K, v: V) -> Result<Option<V>, Oom> {
         let h = word_hash(&k);

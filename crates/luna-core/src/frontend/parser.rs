@@ -154,7 +154,7 @@ pub(crate) fn parse_reusing(
         stacks,
     } = scratch;
     let names = chunk.names.take();
-    let lex = Lexer::interning(src, version, names, lex_buf)?;
+    let lex = Lexer::interning(src, version, names, lex_buf);
     parse_from_source(
         TokenSource::Lexer(lex),
         version,
@@ -183,7 +183,7 @@ pub(crate) fn parse_stream<'f>(
     } = scratch;
     let names = chunk.names.take();
     let len = first.len();
-    let lex = Lexer::interning_stream(Stream::new(first, feed), version, names, lex_buf)?;
+    let lex = Lexer::interning_stream(Stream::new(first, feed), version, names, lex_buf);
     parse_from_source(
         TokenSource::Stream(lex),
         version,
@@ -215,7 +215,7 @@ pub(crate) fn parse_tokens_at_depth(
     c_depth: u32,
     mem: MemOwner,
 ) -> Result<Parsed, SyntaxError> {
-    let names = Names::with_capacity(mem.mem(), src.len())?;
+    let names = Names::with_capacity(mem.mem(), src.len());
     let ParseScratch {
         chunk,
         end_lines,
@@ -286,17 +286,17 @@ impl<'s> Parser<'s> {
         let mut func_local_count = stacks.func_local_count.take();
         func_local_count.clear();
         // the main chunk is the bottom-most function context (line 0 → main)
-        func_local_count.push((0, 0, 0))?;
+        func_local_count.push_or_abort((0, 0, 0));
         let mut funcs = stacks.funcs.take();
         funcs.clear();
-        funcs.push(FnFlow {
+        funcs.push_or_abort(FnFlow {
             vararg: true,
             loops: 0,
-        })?;
-        let gotos = GotoCheck::new(version, stacks.gotos.take(), mem)?;
+        });
+        let gotos = GotoCheck::new(version, stacks.gotos.take(), mem);
         let mut upval_chain_51 = LVec::new(mem);
         if version <= LuaVersion::Lua51 {
-            upval_chain_51.push(FnUvSlot::new(mem, 0))?;
+            upval_chain_51.push_or_abort(FnUvSlot::new(mem, 0));
         }
         Ok(Parser {
             lex,
@@ -323,12 +323,12 @@ impl<'s> Parser<'s> {
         // typical source has an expression node per dozen bytes or so and a
         // statement per few dozen; starting near that skips most regrowth
         let (n_exprs, n_stats) = (src_len / 16, src_len / 64);
-        self.chunk.exprs.reserve(n_exprs)?;
-        self.chunk.stats.reserve(n_stats)?;
-        self.chunk.stat_lines.reserve(n_stats)?;
-        self.end_lines.reserve(n_stats)?;
+        self.chunk.exprs.reserve_or_abort(n_exprs);
+        self.chunk.stats.reserve_or_abort(n_stats);
+        self.chunk.stat_lines.reserve_or_abort(n_stats);
+        self.end_lines.reserve_or_abort(n_stats);
         if let Some(g) = self.gotos.as_mut() {
-            g.enter_function()?;
+            g.enter_function();
         }
         let block = self.block()?;
         if self.tok.tok != Token::Eof {

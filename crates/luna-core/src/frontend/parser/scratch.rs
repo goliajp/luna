@@ -1,7 +1,7 @@
 //! The parser's vectors, kept by a VM between loads.
 
 use super::*;
-use crate::runtime::mem::{LVec, MemOwner, MemRef, Oom};
+use crate::runtime::mem::{LVec, MemOwner, MemRef};
 
 /// Lists being collected while their items are parsed. Lists nest (a
 /// call's arguments hold calls), so each kind of item gathers on a stack
@@ -36,17 +36,13 @@ impl ListStacks {
 }
 
 /// The items gathered on `stack` since `mark`, moved to `chunk` as a list.
-pub(super) fn finish<T: ListItem>(
-    chunk: &mut Chunk,
-    stack: &mut LVec<T>,
-    mark: usize,
-) -> Result<List<T>, Oom> {
+pub(super) fn finish<T: ListItem>(chunk: &mut Chunk, stack: &mut LVec<T>, mark: usize) -> List<T> {
     if stack.len() == mark {
-        return Ok(List::EMPTY);
+        return List::EMPTY;
     }
-    let l = chunk.push_list(&stack[mark..])?;
+    let l = chunk.push_list(&stack[mark..]);
     stack.truncate(mark);
-    Ok(l)
+    l
 }
 
 /// The vectors a parse builds its tree in, kept by a VM from one load to

@@ -2,7 +2,7 @@
 //! functions and loads.
 
 use super::*;
-use crate::runtime::mem::{LVec, MemRef, Oom};
+use crate::runtime::mem::{LVec, MemRef};
 
 pub(super) struct Level<'a> {
     pub(super) code: LVec<Inst>,
@@ -89,7 +89,7 @@ impl<'a> Level<'a> {
         line_defined: u32,
         last_line_defined: u32,
         heap: &Heap,
-    ) -> Result<(Proto, LevelBufs), Oom> {
+    ) -> (Proto, LevelBufs) {
         crate::runtime::function_close::mark_closing_returns(&mut self.code, &self.protos);
         let env_upval_idx = self
             .upvals
@@ -99,20 +99,20 @@ impl<'a> Level<'a> {
             .map_or(u8::MAX, |i| i as u8);
         let proto = Proto {
             hdr: GcHeader::new(ObjTag::Proto),
-            code: heap.try_block_of(self.code.drain_all())?,
-            consts: heap.try_block_of(self.consts.drain_all())?,
-            protos: heap.try_block_of(self.protos.drain_all())?,
-            upvals: heap.try_block_of(self.upvals.drain_all())?,
+            code: heap.block_of(self.code.drain_all()),
+            consts: heap.block_of(self.consts.drain_all()),
+            protos: heap.block_of(self.protos.drain_all()),
+            upvals: heap.block_of(self.upvals.drain_all()),
             num_params: self.num_params,
             is_vararg: self.is_vararg,
             has_vararg_table_pseudo: self.has_vararg_table_pseudo,
             has_compat_vararg_arg: self.has_compat_vararg_arg,
             max_stack: self.max_stack as u8,
-            lines: heap.try_block_of(self.lines.drain_all())?,
+            lines: heap.block_of(self.lines.drain_all()),
             source,
             line_defined,
             last_line_defined,
-            locvars: heap.try_block_of(self.locvars.drain_all())?,
+            locvars: heap.block_of(self.locvars.drain_all()),
             cache: std::cell::Cell::new(None),
             jit: std::cell::Cell::new(crate::runtime::function::JitProtoState::Untried),
             env_upval_idx,
@@ -144,7 +144,7 @@ impl<'a> Level<'a> {
             protos: self.protos,
             locvars: self.locvars,
         };
-        Ok((proto, bufs))
+        (proto, bufs)
     }
 }
 
@@ -166,19 +166,19 @@ pub(crate) struct LevelBufs {
 
 impl LevelBufs {
     /// Vectors sized for a small function, past most of the regrowth steps.
-    pub(super) fn new(mem: MemRef) -> Result<LevelBufs, Oom> {
-        Ok(LevelBufs {
-            code: LVec::with_capacity(mem, 32)?,
-            lines: LVec::with_capacity(mem, 32)?,
-            consts: LVec::with_capacity(mem, 8)?,
+    pub(super) fn new(mem: MemRef) -> LevelBufs {
+        LevelBufs {
+            code: LVec::with_capacity_or_abort(mem, 32),
+            lines: LVec::with_capacity_or_abort(mem, 32),
+            consts: LVec::with_capacity_or_abort(mem, 8),
             const_map: ConstMap::new(mem),
-            locals: LVec::with_capacity(mem, 8)?,
-            avars: LVec::with_capacity(mem, 8)?,
-            blocks: LVec::with_capacity(mem, 4)?,
+            locals: LVec::with_capacity_or_abort(mem, 8),
+            avars: LVec::with_capacity_or_abort(mem, 8),
+            blocks: LVec::with_capacity_or_abort(mem, 4),
             upvals: LVec::new(mem),
             protos: LVec::new(mem),
             locvars: LVec::new(mem),
-        })
+        }
     }
 }
 

@@ -130,3 +130,94 @@ fn a_load_counts_what_the_parser_and_compiler_hold() {
         src.len()
     );
 }
+
+/// Refuses exactly the `n`th growth (of any kind of block) after it is
+/// armed, and keeps the bytes in use from what it allowed and was given
+/// back.
+#[derive(Default)]
+struct Nth {
+    left: Cell<Option<usize>>,
+    refused: Cell<bool>,
+    live: Cell<isize>,
+}
+
+struct RefuseNth(Rc<Nth>);
+
+impl MemoryPolicy for RefuseNth {
+    fn allow(&mut self, old: usize, new: usize, _kind: BlockKind, _in_use: usize) -> bool {
+        let k = &*self.0;
+        if let Some(n) = k.left.get() {
+            if n == 0 {
+                k.left.set(None);
+                k.refused.set(true);
+                return false;
+            }
+            k.left.set(Some(n - 1));
+        }
+        k.live.set(k.live.get() + new as isize - old as isize);
+        true
+    }
+    fn freed(&mut self, size: usize) {
+        self.0.live.set(self.0.live.get() - size as isize);
+    }
+}
+
+/// Every allocation of a load, the first, the second and so on, refused in
+/// turn: each time the load fails with the memory error and leaves nothing
+/// behind, and the vm goes on loading and running chunks. When the vm is
+/// gone every block has been given back.
+#[test]
+fn a_load_refused_at_each_allocation_in_turn_leaks_nothing() {
+    for v in [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        let nth = Rc::new(Nth::default());
+        let mut vm = Vm::new_with_mem(v, MemOwner::policy(Box::new(RefuseNth(nth.clone()))));
+        let src = source(v);
+        let run = |vm: &mut Vm| {
+            let cl = vm.load(src.as_bytes(), b"=chunk").unwrap();
+            let r = vm.call_value(Value::Closure(cl), &[]).unwrap();
+            assert!(matches!(r[0], Value::Str(_)), "{v:?}");
+        };
+        run(&mut vm);
+        vm.collect_garbage();
+        let base = nth.live.get();
+        let mut n = 0;
+        loop {
+            nth.refused.set(false);
+            nth.left.set(Some(n));
+            let r = vm.load(src.as_bytes(), b"=chunk");
+            nth.left.set(None);
+            if !nth.refused.get() {
+                assert!(r.is_ok(), "{v:?} n={n}");
+                break;
+            }
+            let e = r
+                .err()
+                .unwrap_or_else(|| panic!("{v:?} n={n}: a refused load succeeded"));
+            assert!(
+                e.is_memory(),
+                "{v:?} n={n}: {:?}",
+                String::from_utf8_lossy(&e.msg)
+            );
+            assert_eq!(e.msg, b"not enough memory", "{v:?} n={n}");
+            vm.collect_garbage();
+            assert!(
+                nth.live.get() <= base,
+                "{v:?} n={n}: {} bytes in use after the failed load, {base} before",
+                nth.live.get()
+            );
+            run(&mut vm);
+            vm.collect_garbage();
+            n += 1;
+            assert!(n < 200_000, "{v:?}: the load never succeeds");
+        }
+        assert!(n > 100, "{v:?}: only {n} allocations in a load");
+        drop(vm);
+        assert_eq!(nth.live.get(), 0, "{v:?}: blocks left after the vm is gone");
+    }
+}

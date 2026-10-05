@@ -13,7 +13,7 @@ impl<'s> Parser<'s> {
             let line = self.tok.line;
             self.advance()?;
             let operand = self.sub_expr(UNARY_PRIORITY)?;
-            self.push_expr(Expr::UnOp { op, operand, line })?
+            self.push_expr(Expr::UnOp { op, operand, line })
         } else {
             self.simple_expr()?
         };
@@ -30,7 +30,7 @@ impl<'s> Parser<'s> {
                 lhs: left,
                 rhs,
                 line,
-            })?;
+            });
         }
         self.leave();
         Ok(left)
@@ -82,7 +82,7 @@ impl<'s> Parser<'s> {
             }
             _ => return self.suffixed_expr(),
         };
-        Ok(self.push_expr(e)?)
+        Ok(self.push_expr(e))
     }
 
     pub(super) fn primary_expr(&mut self) -> Result<ExprId, SyntaxError> {
@@ -90,14 +90,14 @@ impl<'s> Parser<'s> {
             Token::Name(_) => {
                 let name = self.expect_name()?;
                 self.ident_lookup_51(name.sym)?;
-                Ok(self.push_expr(Expr::Name(name))?)
+                Ok(self.push_expr(Expr::Name(name)))
             }
             Token::LParen => {
                 let line = self.tok.line;
                 self.advance()?;
                 let inner = self.expr()?;
                 self.expect_match(Token::RParen, ")", "(", line)?;
-                Ok(self.push_expr(Expr::Paren(inner))?)
+                Ok(self.push_expr(Expr::Paren(inner)))
             }
             _ => Err(self.error("unexpected symbol")),
         }
@@ -125,14 +125,14 @@ impl<'s> Parser<'s> {
                 Token::Dot => {
                     self.advance()?;
                     let name = self.expect_name()?;
-                    let key = self.push_expr(Expr::Str(name.sym))?;
-                    e = self.push_expr(Expr::Index { obj: e, key })?;
+                    let key = self.push_expr(Expr::Str(name.sym));
+                    e = self.push_expr(Expr::Index { obj: e, key });
                 }
                 Token::LBracket => {
                     self.advance()?;
                     let key = self.expr()?;
                     self.expect(Token::RBracket, "]")?;
-                    e = self.push_expr(Expr::Index { obj: e, key })?;
+                    e = self.push_expr(Expr::Index { obj: e, key });
                 }
                 Token::Colon => {
                     self.advance()?;
@@ -148,7 +148,7 @@ impl<'s> Parser<'s> {
                         method,
                         args,
                         line,
-                    })?;
+                    });
                 }
                 Token::LParen | Token::Str(_) | Token::LBrace => {
                     let line = if self.version <= LuaVersion::Lua53 {
@@ -161,7 +161,7 @@ impl<'s> Parser<'s> {
                         func: e,
                         args,
                         line,
-                    })?;
+                    });
                 }
                 _ => break,
             }

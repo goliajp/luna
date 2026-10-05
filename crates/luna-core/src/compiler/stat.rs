@@ -1,7 +1,7 @@
 //! Statement dispatch and declarations (`local`, `global`, `function`).
 
 use super::*;
-use crate::runtime::mem::{LVec, Oom};
+use crate::runtime::mem::LVec;
 
 impl<'a> Compiler<'a> {
     pub(super) fn stat_block(&mut self, b: &Block) -> Result<(), SyntaxError> {
@@ -37,7 +37,7 @@ impl<'a> Compiler<'a> {
     }
 
     pub(super) fn block_scoped(&mut self, b: &Block) -> Result<(), SyntaxError> {
-        self.enter_block(false)?;
+        self.enter_block(false);
         self.stat_block(b)?;
         self.leave_block()
     }
@@ -100,9 +100,9 @@ impl<'a> Compiler<'a> {
                 // 5.4 jumps to the loop's end and closes there (PUC's
                 // "break" label); the others close on the spot
                 if self.version != LuaVersion::Lua54 {
-                    self.emit(Inst::iabc(Op::Close, loop_floor, 0, 0, false))?;
+                    self.emit(Inst::iabc(Op::Close, loop_floor, 0, 0, false));
                 }
-                let jmp = self.emit_jump()?;
+                let jmp = self.emit_jump();
                 let level = self.lr().locals.len();
                 let lp = self
                     .l()
@@ -111,8 +111,8 @@ impl<'a> Compiler<'a> {
                     .rev()
                     .find(|b| b.is_loop)
                     .expect("loop block");
-                lp.breaks.push(jmp)?;
-                lp.break_levels.push(level)?;
+                lp.breaks.push_or_abort(jmp);
+                lp.break_levels.push_or_abort(level);
                 Ok(())
             }
             Stat::Return { exprs, line } => {
@@ -158,8 +158,8 @@ impl<'a> Compiler<'a> {
                     .last_mut()
                     .expect("no block")
                     .gdecls
-                    .push((text, false))?;
-                self.declare_global_marker(Some(text))?;
+                    .push_or_abort((text, false));
+                self.declare_global_marker(Some(text));
                 let saved = self.lr().freereg;
                 let f = self.function_exp(body, false)?;
                 let r = self.exp_to_anyreg(f)?;
@@ -192,7 +192,7 @@ impl<'a> Compiler<'a> {
                 let ro = attrib == Some(ast::Attrib::Const);
                 self.l().blocks.last_mut().expect("no block").collective = Some(ro);
                 // a `global *` marker participates in goto-scope checks ('*')
-                self.declare_global_marker(None)?;
+                self.declare_global_marker(None);
                 Ok(())
             }
             Stat::Goto(n) => self.goto_stat(self.nm(n), n.line),
@@ -214,7 +214,7 @@ impl<'a> Compiler<'a> {
                 return Err(self.err(an.name.line, "global variables cannot be to-be-closed"));
             }
         }
-        let declare = |c: &mut Self| -> Result<(), Oom> {
+        let declare = |c: &mut Self| {
             let text = &c.ast.names;
             for an in names {
                 let ro = an.attrib.or(collective) == Some(ast::Attrib::Const);
@@ -223,13 +223,12 @@ impl<'a> Compiler<'a> {
                     .last_mut()
                     .expect("no block")
                     .gdecls
-                    .push((text.text(an.name.sym), ro))?;
-                c.declare_global_marker(Some(text.text(an.name.sym)))?;
+                    .push_or_abort((text.text(an.name.sym), ro));
+                c.declare_global_marker(Some(text.text(an.name.sym)));
             }
-            Ok(())
         };
         if exprs.is_empty() {
-            declare(self)?;
+            declare(self);
             return Ok(());
         }
         // With an initializer the globals enter scope only AFTER the RHS is
@@ -237,7 +236,7 @@ impl<'a> Compiler<'a> {
         // reads the enclosing `a`, not the global being defined.
         let saved = self.lr().freereg;
         let base = self.explist_adjust(exprs, names.len() as u32)?;
-        declare(self)?;
+        declare(self);
         // defining write: each target must not already exist (OP_ERRNNIL).
         for (i, an) in names.iter().enumerate() {
             self.emit_global_redef_check(self.nm(&an.name))?;
@@ -274,34 +273,34 @@ impl<'a> Compiler<'a> {
             let mut holder = self.exp_to_anyreg(be)?;
             let mut fields: LVec<&str> = LVec::new(self.heap.mem());
             for n in self.ls(name.path) {
-                fields.push(self.nm(n))?;
+                fields.push_or_abort(self.nm(n));
             }
             if let Some(m) = &name.method {
-                fields.push(self.nm(m))?;
+                fields.push_or_abort(self.nm(m));
             }
             for f_name in &fields[..fields.len() - 1] {
-                let c = self.str_const(f_name.as_bytes())?;
+                let c = self.str_const(f_name.as_bytes());
                 if c <= 0xFF {
-                    let pc = self.emit(Inst::iabc(Op::GetField, 0, holder, c, true))?;
+                    let pc = self.emit(Inst::iabc(Op::GetField, 0, holder, c, true));
                     let dst = self.reserve(1)?;
                     self.patch_dest(pc, dst);
                     holder = dst;
                 } else {
                     let kr = self.reserve(1)?;
-                    self.load_const(kr, c)?;
-                    let pc = self.emit(Inst::iabc(Op::GetTable, 0, holder, kr, false))?;
+                    self.load_const(kr, c);
+                    let pc = self.emit(Inst::iabc(Op::GetTable, 0, holder, kr, false));
                     self.patch_dest(pc, kr); // reuse the key register
                     holder = kr;
                 }
             }
             let last = &fields[fields.len() - 1];
-            let c = self.str_const(last.as_bytes())?;
+            let c = self.str_const(last.as_bytes());
             if c <= 0xFF {
-                self.emit(Inst::iabc(Op::SetField, holder, c, freg, true))?;
+                self.emit(Inst::iabc(Op::SetField, holder, c, freg, true));
             } else {
                 let kr = self.reserve(1)?;
-                self.load_const(kr, c)?;
-                self.emit(Inst::iabc(Op::SetTable, holder, kr, freg, false))?;
+                self.load_const(kr, c);
+                self.emit(Inst::iabc(Op::SetTable, holder, kr, freg, false));
             }
             Ok(())
         })();
@@ -375,10 +374,10 @@ impl<'a> Compiler<'a> {
             self.declare_local(self.nm(&an.name), reg, read_only)?;
         }
         if let (Some(v), Some(last)) = (ct, all_names.last()) {
-            self.declare_ct_const(self.nm(&last.name), v)?;
+            self.declare_ct_const(self.nm(&last.name), v);
         }
         if let Some(reg) = tbc {
-            self.emit(Inst::iabc(Op::Tbc, reg, 0, 0, false))?;
+            self.emit(Inst::iabc(Op::Tbc, reg, 0, 0, false));
             let b = self.l().blocks.last_mut().expect("no block");
             b.has_tbc = true;
             b.tbc_scope = true;
@@ -416,7 +415,7 @@ impl<'a> Compiler<'a> {
                 // an uninitialized declaration.
                 let skip = self.version == LuaVersion::Lua51 && self.lr().code.is_empty();
                 if !skip {
-                    self.emit(Inst::iabc(Op::LoadNil, base, want - 1, 0, false))?;
+                    self.emit(Inst::iabc(Op::LoadNil, base, want - 1, 0, false));
                 }
             }
             return Ok(base);
@@ -443,7 +442,7 @@ impl<'a> Compiler<'a> {
         }
         if n < want {
             let first = self.reserve(want - n)?;
-            self.emit(Inst::iabc(Op::LoadNil, first, want - n - 1, 0, false))?;
+            self.emit(Inst::iabc(Op::LoadNil, first, want - n - 1, 0, false));
         }
         self.set_freereg(base + want);
         Ok(base)

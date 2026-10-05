@@ -10,10 +10,10 @@ impl<'s> Lexer<'s> {
         version: LuaVersion,
         names: Names,
         buf: LVec<u8>,
-    ) -> Result<Lexer<'s>, Oom> {
+    ) -> Lexer<'s> {
         let mut lex = Lexer::with_buf(Whole(src), version, buf, None);
-        lex.names = Some(names.reuse(src.len())?);
-        Ok(lex)
+        lex.names = Some(names.reuse(src.len()));
+        lex
     }
 }
 
@@ -24,11 +24,11 @@ impl<'f> Lexer<'f, Stream<'f>> {
         version: LuaVersion,
         names: Names,
         buf: LVec<u8>,
-    ) -> Result<Lexer<'f, Stream<'f>>, Oom> {
+    ) -> Lexer<'f, Stream<'f>> {
         let len = src.bytes().len();
         let mut lex = Lexer::with_buf(src, version, buf, None);
-        lex.names = Some(names.reuse(len)?);
-        Ok(lex)
+        lex.names = Some(names.reuse(len));
+        lex
     }
 }
 
@@ -72,11 +72,11 @@ impl<S: Source> Lexer<'_, S> {
 
     /// The string token of `buf[from..to]`, interned when this lexer
     /// interns (see [`Lexer::last_sym`]).
-    pub(super) fn str_token(&mut self, from: usize, to: usize) -> Result<Tok, Oom> {
+    pub(super) fn str_token(&mut self, from: usize, to: usize) -> Tok {
         match &mut self.names {
-            Some(names) => self.last_sym = names.intern(&self.buf[from..to])?,
+            Some(names) => self.last_sym = names.intern(&self.buf[from..to]),
             None => self.str_range = (from, to),
         }
-        Ok(Token::Str(()))
+        Token::Str(())
     }
 }
