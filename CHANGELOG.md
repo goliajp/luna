@@ -549,6 +549,10 @@ optimization.
   block; `lua_setallocf` moves later allocations and frees to the new
   function; `lua_gc(LUA_GCCOUNT/LUA_GCCOUNTB)` and `collectgarbage("count")`
   report the bytes the function has handed out.
+- The memory inside objects comes from the Vm's allocation context too:
+  tables' array and hash parts, prototypes' code, constants and debug
+  records, closures' and native functions' upvalues, coroutine stacks and
+  frames, the C API's per-thread `lua_State` and its userdata blocks.
 
 - The C API covers PUC's `lua.h`, `lauxlib.h` and `lualib.h` for all
   five dialects: headers in `crates/luna-jit/include/lua5.1` to
