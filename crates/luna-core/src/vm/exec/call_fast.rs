@@ -53,6 +53,14 @@ impl Vm {
                 ccmt: std::mem::take(&mut self.pending_ccmt),
             }),
         );
+        // taken before the writes below, which would make the compiler load
+        // the frame stack again
+        // SAFETY: a Lua frame was just pushed
+        let frame: *mut Frame = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
+            CallFrame::Lua(f) => f,
+            // SAFETY: see above
+            CallFrame::Cont(_) => unsafe { std::hint::unreachable_unchecked() },
+        };
         // as `push_frame`: missing parameters are nil, and 5.1 clears the
         // whole window
         let kept = nargs.min(p.num_params as u32);
@@ -68,12 +76,7 @@ impl Vm {
                 .get_unchecked_mut((base + kept) as usize..end)
                 .fill(Value::Nil);
         }
-        // SAFETY: a Lua frame was just pushed
-        match unsafe { self.frames.last_mut().unwrap_unchecked() } {
-            CallFrame::Lua(f) => Some(f),
-            // SAFETY: see above
-            CallFrame::Cont(_) => unsafe { std::hint::unreachable_unchecked() },
-        }
+        Some(frame)
     }
 }
 
