@@ -81,6 +81,10 @@ optimization.
   closure of each frame. Code that builds these types by hand or matches
   `ExitTag` exhaustively has to name the new parts.
 
+- `TraceRecord` has a new field, `for_step_up`: whether the step of the
+  numeric `for` loop that closes the trace was positive while it was
+  recorded. Code that builds a `TraceRecord` by hand has to set it.
+
 - The syntax tree in `luna_core::frontend::ast` no longer allocates per
   node. Every list in it (a block's statements, call arguments,
   expression lists, assignment targets, declared names, parameters,
@@ -212,6 +216,17 @@ optimization.
   dialect's modulo), ordered comparisons between an integer and a float,
   table reads and writes keyed by a float equal to an integer, and
   `string.sub` with such positions.
+
+- 5.3: a trace checks the step sign of an integer `for` loop once, before
+  the loop, instead of choosing the comparison with the limit on every
+  iteration; a loop entered with a step of the other sign leaves the
+  trace at its head.
+
+- 5.1 and 5.2: traces add and subtract two of the integers the VM keeps
+  for doubles (`#t + #u`), which used to stop the recording. The trace
+  keeps the exact result while it is within 2^53 of zero, where it is
+  the double the operation gives, and otherwise leaves for the
+  interpreter, which rounds as the doubles do.
 
 - A trace follows calls into other Lua functions and runs them inline:
   methods found through a metatable's `__index` table (`o:m()`), local,
@@ -346,6 +361,24 @@ optimization.
 
 ### Fixed
 
+- 5.3–5.5: the compiler folds constant `^`, `//`, `%`, bitwise operations
+  and `~` as PUC's parser does (`2^53` is a constant, not a `POW` at run
+  time), and leaves a negated float zero (`-0.0`) to run time as PUC
+  does, so `string.dump` writes the same code and constants as PUC for
+  them.
+
+- `string.dump` of a main chunk describes its `_ENV` upvalue as PUC does
+  (in the stack, index 0).
+
+- A loop calling `math.fmod` was compiled into a trace that never ran:
+  reading the function `math.fmod` was a value the trace could not type,
+  so the trace was marked not enterable. Traces now compute `math.fmod`
+  in place, as the library does: two integers (5.3+) give C's truncating
+  remainder, -1 gives 0 and 0 leaves the trace for the interpreter to
+  raise its error; otherwise the result is the interpreter's `fmod`
+  (`luna_jit_fmod`), so two NaN operands give the NaN the interpreter
+  gives.
+
 - A loop trace that ran a whole pass and returned to its head through
   its own tail could put back the registers that pass wrote as they were
   before it: the return was matched by its pc to a guard that also
@@ -368,7 +401,6 @@ optimization.
   nil is treated as nil where it is read. All dialects, default settings;
   3.2.2, 4.0.1 and 4.0.2 have it.
 
-||||||| 0bf74190
 - 5.4 and 5.5: `x - (C and nil or 0)` (also with `false`, or any
   expression whose `and` ends in one of them) gave `-0.0` for `x = -0.0`
   where PUC gives `0.0` (affects 3.1.0 through 4.0.2). PUC's code
