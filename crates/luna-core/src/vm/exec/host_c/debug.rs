@@ -205,7 +205,7 @@ impl Vm {
                 unsafe { &mut co.as_mut().stack }
             };
             if stack.len() <= slot {
-                stack.resize(slot + 1, Value::Nil);
+                stack.resize_or_abort(slot + 1, Value::Nil);
             }
             stack[slot] = v;
         }

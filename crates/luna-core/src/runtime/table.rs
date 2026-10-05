@@ -7,6 +7,7 @@
 //! luaH_rehash/computesizes.
 
 use crate::runtime::heap::{Gc, GcHeader, Heap};
+use crate::runtime::mem::MemRef;
 use crate::runtime::value::{RawVal, Value, f2i_exact, raw};
 
 /// Errors that table mutation can raise back to the interpreter.
@@ -176,10 +177,13 @@ unsafe impl Sync for Table {}
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<Table>() == 88);
 
-impl Drop for Table {
-    fn drop(&mut self) {
-        drop(self.take_hash_part());
-        self.free_array_slab();
+impl Table {
+    /// Give back the array and hash parts' blocks. Tables have no `Drop`:
+    /// their parts come from the heap's allocation context, which the heap
+    /// passes in when it frees a table.
+    pub(crate) fn free_parts(&mut self, mem: MemRef) {
+        self.drop_hash_part(mem);
+        self.drop_array_part(mem);
     }
 }
 

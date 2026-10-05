@@ -241,7 +241,7 @@ impl Vm {
         // only covered the trace's writeback).
         if self.stack.len() < resume_base + resume_max_stack {
             self.stack
-                .resize(resume_base + resume_max_stack, crate::runtime::Value::Nil);
+                .resize_or_abort(resume_base + resume_max_stack, crate::runtime::Value::Nil);
         }
         let parent = Some((cl.proto, head_pc_val, exit_hit_idx));
         if self.trace_try_adopt(resume_proto, cont_pc, resume_base, parent, false) {

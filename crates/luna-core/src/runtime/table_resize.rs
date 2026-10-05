@@ -97,50 +97,48 @@ impl Table {
     /// adopted empty table to pre-allocate the array part, sparing
     /// the table-fill loop from O(log N) intermediate `rehash`es.
     pub(crate) fn resize(&mut self, heap: &mut Heap, new_asize: usize, hash_entries: usize) {
+        let mem = heap.mem();
         let before = self.internal_bytes();
-        // snapshot the old array entries before we
-        // re-install the backing. The active buffer can be inline OR
-        // slab; `array_ptr` already points to whichever it is, so
-        // walking via raw offsets works the same for either case.
+        let hsize = if hash_entries == 0 {
+            0
+        } else {
+            hash_entries.next_power_of_two()
+        };
+        // both new parts are allocated before the table changes, so a
+        // failed allocation leaves it as it was
+        let new_slab = if new_asize > INLINE_ASIZE as usize {
+            Self::alloc_slab(mem, new_asize)
+        } else {
+            std::ptr::null_mut()
+        };
+        let new_nodes = Self::alloc_nodes(mem, hsize);
+        // the old array part: its slab stays allocated until its entries
+        // are moved over; inline entries are copied out first, since the
+        // inline storage may become the new backing
         let old_asize = self.asize as usize;
-        let old_array = self.array_ptr;
+        let mut old_inline = [0u64; INLINE_U64S];
+        let old_slab = if old_asize as u64 > INLINE_ASIZE {
+            self.array_ptr
+        } else {
+            // SAFETY: exclusive &mut self; the inline bytes are read through the cell
+            old_inline = unsafe { *self.inline_storage.get() };
+            std::ptr::null_mut()
+        };
+        let old_src: *const u8 = if old_slab.is_null() {
+            old_inline.as_ptr() as *const u8
+        } else {
+            old_slab
+        };
         // growing keeps every array entry at its index, so the old backing
         // is copied as is (PUC `luaH_resize` reallocates in place);
         // shrinking re-inserts entry by entry below
         let grow = new_asize >= old_asize && old_asize > 0;
-        let mut old_pairs: Vec<(u8, RawVal)> = Vec::with_capacity(if grow { 0 } else { old_asize });
-        let mut old_slab: *mut u8 = std::ptr::null_mut();
-        let mut old_inline = [0u64; INLINE_U64S];
-        if grow {
-            if old_asize as u64 <= INLINE_ASIZE {
-                // SAFETY: exclusive &mut self; the inline bytes are read through the cell
-                old_inline = unsafe { *self.inline_storage.get() };
-            } else {
-                old_slab = self.array_ptr;
-            }
-        } else if old_asize > 0 {
-            let avals_base = self.array_base() as *const RawVal;
-            // SAFETY: `array_ptr` was set up by `Heap::new_table` or
-            // an earlier `resize`; it covers `old_asize * 9` bytes
-            // (avals + atags).
-            let atags_base = unsafe { self.array_base().add(old_asize * 8) as *const u8 };
-            for i in 0..old_asize {
-                // SAFETY: `i < array_len` is enforced by the surrounding loop bound; `atags_base` / `avals_base` point into the table's parallel arrays allocated in lockstep by `init_array_ptr`.
-                let tag = unsafe { *atags_base.add(i) };
-                // SAFETY: `i < array_len` is enforced by the surrounding loop bound; `atags_base` / `avals_base` point into the table's parallel arrays allocated in lockstep by `init_array_ptr`.
-                let val = unsafe { *avals_base.add(i) };
-                old_pairs.push((tag, val));
-            }
-        }
-        let old_nodes = self.take_hash_part();
+        let (old_nodes, old_nodes_len) = self.take_hash_part();
 
-        // Install the new array backing first, then update `array_ptr`
-        // (before potentially dropping the old slab via the assignment
-        // below) so the JIT never observes a stale pointer.
+        // Install the new array backing before anything reads it, so the JIT
+        // never observes a stale pointer.
         self.asize = new_asize as u64;
-        if new_asize <= INLINE_ASIZE as usize {
-            // Inline path — zero the inline buffer; drop any prior
-            // external slab.
+        if new_slab.is_null() {
             // SAFETY: exclusive &mut self; write through the cell to
             // stay on the raw-pointer access path (no &mut borrow of
             // the array contents is ever formed).
@@ -149,20 +147,9 @@ impl Table {
             }
             self.array_ptr = self.inline_storage.get() as *mut u8;
         } else {
-            self.array_ptr = Self::alloc_slab(new_asize);
+            self.array_ptr = new_slab;
         }
-        if !grow && old_asize as u64 > INLINE_ASIZE {
-            // shrinking or rebuilding: the old entries were copied out above
-            // SAFETY: the old array part lived in a slab of `old_asize`
-            unsafe { Self::free_slab(old_array, old_asize) };
-        }
-
-        let hsize = if hash_entries == 0 {
-            0
-        } else {
-            hash_entries.next_power_of_two()
-        };
-        self.set_hash_part(vec![Node::EMPTY; hsize].into_boxed_slice());
+        self.set_hash_part(new_nodes, hsize);
         self.lastfree = hsize as u32;
         // PUC `g->GCtotalbytes` analogue: credit (or debit) the box-size
         // delta so `Heap.bytes` reflects this table's actual internal
@@ -170,25 +157,16 @@ impl Table {
         let after = self.internal_bytes();
         heap.apply_bytes_delta(before, after);
         if grow {
-            let src: *const u8 = if old_asize as u64 <= INLINE_ASIZE {
-                old_inline.as_ptr() as *const u8
-            } else {
-                old_slab as *const u8
-            };
             // SAFETY: both backings use the `[avals: n×8][atags: n]` layout;
             // the new one holds `new_asize >= old_asize` zero (nil) slots
             unsafe {
                 let dst = self.array_base();
-                std::ptr::copy_nonoverlapping(src, dst, old_asize * 8);
+                std::ptr::copy_nonoverlapping(old_src, dst, old_asize * 8);
                 std::ptr::copy_nonoverlapping(
-                    src.add(old_asize * 8),
+                    old_src.add(old_asize * 8),
                     dst.add(new_asize * 8),
                     old_asize,
                 );
-            }
-            if !old_slab.is_null() {
-                // SAFETY: the old array part lived in a slab of `old_asize`
-                unsafe { Self::free_slab(old_slab, old_asize) };
             }
             // growing appends nil slots, so the count stays; the prefix
             // may lag behind the run (a refill scans only 64 slots ahead,
@@ -207,18 +185,32 @@ impl Table {
             }
         } else {
             self.recount_array();
-        }
-        // Re-insert old array entries via the public set_norm path
-        // (which handles rehashing if the new array shrinks below the
-        // entry count).
-        for (i, (tag, val)) in old_pairs.into_iter().enumerate() {
-            if tag != raw::NIL {
-                // SAFETY: `tag` and the raw value come from this table's parallel `atags` / `avals` arrays, which the table writers always keep in sync — the tag byte matches the raw payload's discriminator (see `runtime::value` `raw` module).
-                let v = unsafe { Value::pack(tag, val) };
+            // Re-insert old array entries via the set_norm path; the new
+            // parts were sized to hold them, so this allocates nothing
+            let avals = old_src as *const RawVal;
+            for i in 0..old_asize {
+                // SAFETY: `i < old_asize`, inside the old backing (the inline
+                // copy or the old slab, still allocated), whose tag and value
+                // arrays the table writers keep in step, so the tag names the
+                // value's type
+                let v = unsafe {
+                    let tag = *old_src.add(old_asize * 8 + i);
+                    if tag == raw::NIL {
+                        continue;
+                    }
+                    Value::pack(tag, *avals.add(i))
+                };
                 let _ = self.set_norm(heap, Value::Int(i as i64 + 1), v);
             }
         }
-        for n in old_nodes.iter() {
+        if !old_slab.is_null() {
+            // SAFETY: the old array part lived in a slab of `old_asize` from
+            // this context, and its entries have been moved over
+            unsafe { Self::free_slab(mem, old_slab, old_asize) };
+        }
+        for i in 0..old_nodes_len {
+            // SAFETY: `i` is inside the old hash part, still allocated
+            let n = unsafe { *old_nodes.add(i) };
             if !n.val.is_nil() {
                 let _ = self.set_norm(heap, n.key(), n.val);
                 if n.neg_zero {
@@ -226,6 +218,9 @@ impl Table {
                 }
             }
         }
+        // SAFETY: the old hash part came from `alloc_nodes(mem, len)` and its
+        // entries have been moved over
+        unsafe { Self::free_nodes(mem, old_nodes, old_nodes_len) };
     }
 
     /// Preallocate the array part (table.create); existing contents are

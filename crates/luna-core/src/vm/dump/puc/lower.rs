@@ -123,10 +123,10 @@ pub(super) fn build(
         .map_or(u8::MAX, |i| i as u8);
     Ok(heap.adopt_proto(Proto {
         hdr: GcHeader::new(ObjTag::Proto),
-        code: lowered.code.into_boxed_slice(),
-        consts: raw.consts.into_boxed_slice(),
-        protos: protos.into_boxed_slice(),
-        upvals: raw.upvals.into_boxed_slice(),
+        code: heap.block_of(lowered.code.into_iter()),
+        consts: heap.block_of(raw.consts.into_iter()),
+        protos: heap.block_of(protos.into_iter()),
+        upvals: heap.block_of(raw.upvals.into_iter()),
         num_params: raw.num_params,
         is_vararg: raw.is_vararg,
         // A PUC 5.5 chunk lists its `(vararg table)` local in `locvars` with
@@ -134,11 +134,11 @@ pub(super) fn build(
         has_vararg_table_pseudo: false,
         has_compat_vararg_arg: raw.has_compat_vararg_arg,
         max_stack: lowered.max_stack,
-        lines: lowered.lines.into_boxed_slice(),
+        lines: heap.block_of(lowered.lines.into_iter()),
         source: raw.source,
         line_defined: raw.line_defined,
         last_line_defined: raw.last_line_defined,
-        locvars: lowered.locvars.into_boxed_slice(),
+        locvars: heap.block_of(lowered.locvars.into_iter()),
         cache: std::cell::Cell::new(None),
         jit: std::cell::Cell::new(JitProtoState::Untried),
         env_upval_idx,

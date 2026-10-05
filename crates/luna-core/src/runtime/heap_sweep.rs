@@ -116,14 +116,15 @@ impl Heap {
                     if self.table_pool.len() < TABLE_POOL_CAP {
                         // Free interior heap allocations now; an empty Box is
                         // dangling, so reassigning is just a pointer move.
-                        (*t).drop_array_part();
-                        (*t).drop_hash_part();
+                        (*t).drop_array_part(self.mem());
+                        (*t).drop_hash_part(self.mem());
                         (*t).metatable = None;
                         // Stash the raw pointer for future reuse.
                         // SAFETY: t is non-null (came from a live Gc<Table>);
                         // pool owns it until reuse or Heap::Drop.
                         self.table_pool.push(std::ptr::NonNull::new_unchecked(t));
                     } else {
+                        (*t).free_parts(self.mem());
                         self.free_block(t);
                     }
                 }
@@ -133,6 +134,7 @@ impl Heap {
                 }
                 ObjTag::Closure => {
                     self.bytes = self.bytes.saturating_sub(std::mem::size_of::<LuaClosure>());
+                    (*(h as *mut LuaClosure)).free_overflow(self.mem());
                     self.free_block(h as *mut LuaClosure);
                 }
                 ObjTag::Upvalue => {
