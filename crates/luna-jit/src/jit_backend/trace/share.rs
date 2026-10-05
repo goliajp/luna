@@ -263,17 +263,14 @@ pub(crate) fn tier_up(
 ) -> Option<TraceFn> {
     let source = ct.tier_up.as_ref()?.source.borrow_mut().take()?;
     let src = source.downcast::<TierSource>().ok()?;
-    clif_tier_up(storage, &src, ct.head_pc, false)
+    clif_tier_up(storage, &src, ct.head_pc)
 }
 
-/// Cranelift's code for the trace `src` holds; with `count`, the code
-/// counts iterations and leaves at the tier-up count, for a tier after
-/// Cranelift's (see `super::llvm_tier`).
+/// Cranelift's code for the trace `src` holds.
 pub(crate) fn clif_tier_up(
     storage: &mut dyn luna_core::jit::JitStorage,
     src: &TierSource,
     head_pc: u32,
-    count: bool,
 ) -> Option<TraceFn> {
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     if let Some(code) = src.image.as_ref().and_then(|i| i.optimized.get()) {
@@ -287,7 +284,7 @@ pub(crate) fn clif_tier_up(
     }
     let mut module =
         crate::jit_backend::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
-    let fn_id = lir::define_clif(&src.lir, &src.relocs, &mut *module, count)?;
+    let fn_id = lir::define_clif(&src.lir, &src.relocs, &mut *module)?;
     module.finalize_definitions().ok()?;
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     let ptr = module.get_finalized_function(fn_id);

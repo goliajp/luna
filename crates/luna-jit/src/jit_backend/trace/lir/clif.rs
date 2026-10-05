@@ -43,8 +43,6 @@ struct Replay<'a, 'f> {
     call_conv: CallConv,
     /// The data symbol each relocation is read from.
     reloc_gv: Vec<cranelift_codegen::ir::GlobalValue>,
-    /// Whether the code counts iterations like the baseline tier's.
-    count: bool,
 }
 
 impl Replay<'_, '_> {
@@ -231,25 +229,7 @@ impl Replay<'_, '_> {
                 let o0 = self.v(i.a);
                 self.b.ins().brif(o0, tb, &ta, eb, &ea);
             }
-            Op::TierCount { n, at } if self.count => {
-                let cell = self
-                    .b
-                    .ins()
-                    .symbol_value(types::I64, self.reloc_gv[n as usize]);
-                let c = self
-                    .b
-                    .ins()
-                    .load(types::I32, MemFlagsData::trusted(), cell, 0);
-                let c = self.b.ins().iadd_imm_u(c, 1);
-                self.b.ins().store(MemFlagsData::trusted(), c, cell, 0);
-                let hot = self.b.ins().icmp_imm_u(IntCC::Equal, c, i64::from(at));
-                let (h, k) = (
-                    self.blocks[i.b as usize].expect("reachable"),
-                    self.blocks[i.c as usize].expect("reachable"),
-                );
-                self.b.ins().brif(hot, h, &[], k, &[]);
-            }
-            // otherwise only the baseline tier counts iterations
+            // only the baseline tier counts iterations
             Op::TierCount { .. } => {
                 let cont = self.blocks[i.c as usize].expect("reachable");
                 self.b.ins().jump(cont, &[]);
@@ -296,26 +276,24 @@ fn flags(trusted: u32) -> MemFlagsData {
     }
 }
 
-/// The blocks the replay of `i` branches to (of a `TierCount` only the
-/// continuation, unless the code counts).
-fn targets(i: &Inst, count: bool) -> [Option<u32>; 2] {
+/// The blocks the replay of `i` branches to (only the continuation of a
+/// `TierCount`, which Cranelift code does not count).
+fn targets(i: &Inst) -> [Option<u32>; 2] {
     match i.op {
         Op::Jump => [Some(i.a), None],
         Op::Brif(_) => [Some(i.b), Some(i.c)],
-        Op::TierCount { .. } => [Some(i.c), count.then_some(i.b)],
+        Op::TierCount { .. } => [Some(i.c), None],
         _ => [None, None],
     }
 }
 
 /// Defines the trace function in `module` from `lir`.
 /// `relocs`: the addresses the relocations stand for in the Vm the code is
-/// for. `count`: the code counts loop iterations as the baseline tier's
-/// does and leaves at the same count, for a tier after this one.
+/// for.
 pub(crate) fn define<M: Module>(
     lir: &Lir,
     relocs: &[(super::super::RelocKind, i64)],
     module: &mut M,
-    count: bool,
 ) -> Option<FuncId> {
     let mut an = live::Analysis::default();
     live::analyze(lir, &mut an);
@@ -383,7 +361,6 @@ pub(crate) fn define<M: Module>(
         slots,
         call_conv,
         reloc_gv,
-        count,
     };
     // each block is sealed once its last predecessor branches to it: with
     // every block left open until the end, Cranelift's SSA construction
@@ -394,7 +371,7 @@ pub(crate) fn define<M: Module>(
     for &blk in &an.order {
         let (lo, hi) = an.block_at[blk as usize];
         for c in lo..hi {
-            for t in targets(&lir.insts[an.code[c as usize] as usize], count)
+            for t in targets(&lir.insts[an.code[c as usize] as usize])
                 .into_iter()
                 .flatten()
             {
@@ -406,7 +383,7 @@ pub(crate) fn define<M: Module>(
         let cb = r.blocks[blk as usize].expect("laid out");
         r.b.switch_to_block(cb);
         // a block no branch reaches (the entry, or the hot exit of a
-        // `TierCount` when the replay does not count) is sealed as it starts
+        // `TierCount`, which the replay does not take) is sealed as it starts
         if preds[blk as usize] == 0 && !sealed[blk as usize] {
             r.b.seal_block(cb);
             sealed[blk as usize] = true;
@@ -415,7 +392,7 @@ pub(crate) fn define<M: Module>(
         for c in lo..hi {
             let i = lir.insts[an.code[c as usize] as usize];
             r.inst(&i);
-            for t in targets(&i, count).into_iter().flatten() {
+            for t in targets(&i).into_iter().flatten() {
                 preds[t as usize] -= 1;
                 if preds[t as usize] == 0 {
                     r.b.seal_block(r.blocks[t as usize].expect("laid out"));

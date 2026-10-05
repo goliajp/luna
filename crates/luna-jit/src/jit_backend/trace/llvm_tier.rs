@@ -142,11 +142,12 @@ pub(crate) fn quiesce() {
 /// compiled again by LLVM.
 ///
 /// With `delay`, the first call compiles the trace with Cranelift at once,
-/// as the Cranelift backend would; Cranelift's code counts iterations like
-/// the baseline tier's, so the Vm keeps asking every tier-up count. Once
-/// the trace has kept running that code for `delay`, LLVM compiles it on
-/// the compile thread, and the Vm installs LLVM's code when it is ready. A
-/// trace that stops being hot within `delay` never costs an LLVM compile.
+/// as the Cranelift backend would, and the Vm asks again at each entry of
+/// the trace. Once the trace has kept being entered for `delay`, LLVM
+/// compiles it on the compile thread, and the Vm switches to LLVM's code at
+/// the first entry after it is ready. A trace that stops being hot within
+/// `delay` never costs an LLVM compile; a loop that runs on in one entry
+/// keeps Cranelift's code until it is entered again.
 /// Without, LLVM compiles the trace before it runs on.
 pub(crate) fn tier_up_llvm(
     storage: &mut dyn luna_core::jit::JitStorage,
@@ -189,7 +190,7 @@ pub(crate) fn tier_up_llvm(
         super::code_dump::dump("tier-up-llvm", ct.head_pc, entry as *const u8);
         return Some(entry);
     };
-    let entry = share::clif_tier_up(storage, &source, ct.head_pc, true);
+    let entry = share::clif_tier_up(storage, &source, ct.head_pc);
     let lir = source.lir.clone();
     let relocs = source.relocs.clone();
     *t.source.borrow_mut() = Some(Box::new(Waiting {
