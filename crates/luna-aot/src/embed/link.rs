@@ -177,18 +177,24 @@ fn section_placeholders(target: &TargetSpec) -> &'static str {
             // characteristics (R = readable). The 8-byte alignment
             // matches the MinGW arm so the deploy walker's pointer
             // arithmetic over the section is identical across
-            // toolchains.
-            "#pragma section(\".lt_skix\", read)\n\
-             __declspec(allocate(\".lt_skix\")) __declspec(align(8))\n\
+            // toolchains. cl.exe keeps an unreferenced static it places
+            // with `allocate`; clang-cl drops it unless marked `used`.
+            "#ifdef __clang__\n\
+             #define LUNA_KEEP __attribute__((used))\n\
+             #else\n\
+             #define LUNA_KEEP\n\
+             #endif\n\
+             #pragma section(\".lt_skix\", read)\n\
+             __declspec(allocate(\".lt_skix\")) __declspec(align(8)) LUNA_KEEP\n\
              static const char luna_strkey_idx_placeholder[16] = {0};\n\
              #pragma section(\".lt_meta\", read)\n\
-             __declspec(allocate(\".lt_meta\")) __declspec(align(8))\n\
+             __declspec(allocate(\".lt_meta\")) __declspec(align(8)) LUNA_KEEP\n\
              static const char luna_trace_meta_placeholder[48] = {0};\n\
              #pragma section(\".lt_chai\", read)\n\
-             __declspec(allocate(\".lt_chai\")) __declspec(align(8))\n\
+             __declspec(allocate(\".lt_chai\")) __declspec(align(8)) LUNA_KEEP\n\
              static const char luna_inline_chnx_placeholder[16] = {0};\n\
              #pragma section(\".lt_prix\", read)\n\
-             __declspec(allocate(\".lt_prix\")) __declspec(align(8))\n\
+             __declspec(allocate(\".lt_prix\")) __declspec(align(8)) LUNA_KEEP\n\
              static const char luna_proto_idx_placeholder[16] = {0};\n"
         }
         TargetOs::Windows => {
