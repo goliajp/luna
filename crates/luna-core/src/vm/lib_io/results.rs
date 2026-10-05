@@ -16,30 +16,71 @@ pub(super) fn posix_error(code: i32) -> std::io::Error {
     }
 }
 
-#[cfg(windows)]
+/// An errno spelled as the MSVC C runtime's `strerror` spells it.
 #[derive(Debug)]
 struct PosixErrno(i32);
 
-#[cfg(windows)]
 impl std::fmt::Display for PosixErrno {
-    // the MSVC C runtime's strerror texts for the codes luna raises
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self.0 {
-            EBADF => "Bad file descriptor",
-            ENOMEM => "Not enough space",
-            EINVAL => "Invalid argument",
-            ESPIPE => "Invalid seek",
-            _ => "Unknown error",
-        })
+        const TEXT: [&str; 43] = [
+            "No error",
+            "Operation not permitted",
+            "No such file or directory",
+            "No such process",
+            "Interrupted function call",
+            "Input/output error",
+            "No such device or address",
+            "Arg list too long",
+            "Exec format error",
+            "Bad file descriptor",
+            "No child processes",
+            "Resource temporarily unavailable",
+            "Not enough space",
+            "Permission denied",
+            "Bad address",
+            "Unknown error",
+            "Resource device",
+            "File exists",
+            "Improper link",
+            "No such device",
+            "Not a directory",
+            "Is a directory",
+            "Invalid argument",
+            "Too many open files in system",
+            "Too many open files",
+            "Inappropriate I/O control operation",
+            "Unknown error",
+            "File too large",
+            "No space left on device",
+            "Invalid seek",
+            "Read-only file system",
+            "Too many links",
+            "Broken pipe",
+            "Domain error",
+            "Result too large",
+            "Unknown error",
+            "Resource deadlock avoided",
+            "Unknown error",
+            "Filename too long",
+            "No locks available",
+            "Function not implemented",
+            "Directory not empty",
+            "Illegal byte sequence",
+        ];
+        f.write_str(usize::try_from(self.0).ok().and_then(|i| TEXT.get(i)).unwrap_or(&"Unknown error"))
     }
 }
 
-#[cfg(windows)]
 impl std::error::Error for PosixErrno {}
+
+/// The error a C call of the MSVC C library leaves in `errno`, with that
+/// library's text, on every platform (for the streams of `Userdata::crt`).
+pub(super) fn crt_error(code: i32) -> std::io::Error {
+    std::io::Error::other(PosixErrno(code))
+}
 
 /// The errno of an error, as `luaL_fileresult` returns it.
 fn errno(e: &std::io::Error) -> Option<i32> {
-    #[cfg(windows)]
     if let Some(p) = e.get_ref().and_then(|r| r.downcast_ref::<PosixErrno>()) {
         return Some(p.0);
     }
