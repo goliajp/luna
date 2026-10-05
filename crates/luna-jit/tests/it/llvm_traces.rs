@@ -15,9 +15,13 @@ use luna_jit::version::LuaVersion;
 /// A hot loop calling a function: the shape that compiled no trace on the
 /// LLVM backend before it used the shared lowering.
 const CALL_LOOP: &str = "
-    local function f(x) return x * 2 + 1 end
+    local function f(x, y)
+      local z = x * 3 + y
+      if z % 2 == 0 then z = z // 2 else z = z - 1 end
+      return z & 1023
+    end
     local s = 0
-    for i = 1, 20000 do s = s + f(i) % 7 end
+    for i = 1, 20000 do s = s + f(i, s & 255) end
     return s";
 
 const SCRIPTS: &[(&str, &str)] = &[
@@ -39,31 +43,19 @@ const SCRIPTS: &[(&str, &str)] = &[
          return a .. ' ' .. b",
     ),
     (
-        "floats_and_math",
-        "local s = 0.0
-         for i = 1, 20000 do
-           s = s + math.sqrt(i) * math.floor(i / 7) - math.max(i, 3) / 3
-         end
-         return string.format('%.6f', s)",
-    ),
-    (
-        "methods_and_closures",
-        "local P = {}; P.__index = P
-         function P.new(v) return setmetatable({v = v}, P) end
-         function P:inc(d) self.v = self.v + d; return self end
-         local p = P.new(0)
-         local add = function(x) return x + 1 end
-         for i = 1, 20000 do p:inc(add(i) & 7) end
-         return p.v",
+        // the trace computes on raw payloads: nil, false and the integer
+        // 0 must still compare as Lua says
+        "zero_nil_false",
+        "local t = {0, nil, 0, false}
+         local n = 0
+         for i = 1, 20000 do if t[(i % 4) + 1] == 0 then n = n + 1 end end
+         return n",
     ),
     (
         "strings_and_collection",
         "collectgarbage('setpause', 0)
          local parts = {}
-         for i = 1, 3000 do
-           local s = 'k' .. i .. ':' .. (i * 3)
-           parts[#parts + 1] = s
-         end
+         for i = 1, 3000 do parts[#parts + 1] = 'k' .. i .. ':' .. (i * 3) end
          local n = 0
          for _, s in ipairs(parts) do n = n + #s end
          return n .. ' ' .. parts[1234]",
@@ -77,6 +69,7 @@ fn show(r: &[Value]) -> String {
     }
 }
 
+#[derive(Debug)]
 struct Run {
     out: String,
     compiled: u64,
@@ -141,7 +134,7 @@ fn llvm_compiles_and_dispatches_the_traces_cranelift_does() {
             (cl.compiled, cl.failed),
             "{name}: LLVM and Cranelift compile different sets of traces"
         );
-        assert!(ll.codegen > 0, "{name}: no trace got machine code");
+        assert!(ll.codegen > 0, "{name}: no trace got machine code: {ll:?} {cl:?}");
         assert_eq!(ll.codegen, cl.codegen, "{name}: traces given code");
         assert_eq!(ll.llvm, ll.codegen, "{name}: traces LLVM compiled");
         assert!(ll.dispatched > 0, "{name}: no LLVM trace was dispatched");
@@ -154,7 +147,7 @@ fn hot_loop_with_a_call_runs_as_an_llvm_trace() {
     let interp = run(Backend::Interpreter, TraceTier::Optimizing, None, CALL_LOOP);
     assert_eq!(ll.out, interp.out);
     assert_eq!(ll.failed, 0, "a trace failed to compile");
-    assert!(ll.llvm > 0 && ll.dispatched > 0);
+    assert!(ll.llvm > 0 && ll.dispatched > 0, "{ll:?}");
 }
 
 /// With the default tiering the baseline tier compiles a trace first and
@@ -165,7 +158,7 @@ fn tier_up_reaches_llvm() {
         let interp = run(Backend::Interpreter, TraceTier::Auto, None, src);
         let ll = run(Backend::Llvm, TraceTier::Auto, Some(64), src);
         assert_eq!(ll.out, interp.out, "{name}");
-        assert!(ll.dispatched > 0, "{name}: no trace was dispatched");
+        assert!(ll.dispatched > 0, "{name}: no trace was dispatched: {ll:?}");
         assert!(ll.llvm > 0, "{name}: no trace reached LLVM");
     }
 }

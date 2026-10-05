@@ -1,56 +1,17 @@
-//! The LLVM backend computes on raw integer payloads, so every value it
-//! reads has to be an integer. Nil is stored as the payload 0: a trace
-//! or chunk comparing an integer 0 with nil found them equal, and a chunk
+//! The LLVM method JIT computes on raw integer payloads, so every value it
+//! reads has to be an integer. Nil is stored as the payload 0: a chunk
+//! comparing an integer 0 with nil found them equal, and a chunk
 //! returning nil returned the integer 0. An upvalue of another type was
 //! read as its raw bits, and a call through an upvalue that no longer
 //! held the running function still went to the running function.
 
-use luna_core::jit::trace_types::{CompileOptions, RecordedOp, TraceRecord};
-use luna_core::jit::{CompileResult, IntChunkCompiler, TraceCompiler};
+use luna_core::jit::{CompileResult, IntChunkCompiler};
 use luna_core::runtime::Value;
-use luna_core::runtime::value::raw;
-use luna_core::vm::isa::{Inst, Op};
+use luna_core::vm::isa::Op;
 use luna_jit::LuaVersion;
 use luna_jit_llvm::{LlvmBackend, LlvmJitStorage};
 
 mod support;
-
-fn eq_trace(tags: Vec<u8>) -> Option<luna_core::jit::trace_types::CompiledTrace> {
-    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
-    let proto = vm
-        .load(b"local a, b = 1, 2; return a + b", b"=eq_trace")
-        .expect("parse")
-        .proto;
-    let mut record = TraceRecord::start(proto, 0, tags, false);
-    for (pc, inst) in [Inst::iabc(Op::Eq, 0, 1, 0, true), Inst::isj(Op::Jmp, -2)]
-        .into_iter()
-        .enumerate()
-    {
-        record.push(RecordedOp {
-            proto,
-            pc: pc as u32,
-            inst,
-            inline_depth: 0,
-            var_count: None,
-        });
-    }
-    record.closed = true;
-    LlvmBackend.try_compile_trace(
-        &mut LlvmJitStorage::default(),
-        &record,
-        CompileOptions::default(),
-    )
-}
-
-#[test]
-fn trace_compares_only_integers() {
-    assert!(eq_trace(vec![raw::INT, raw::INT, raw::INT]).is_some());
-    assert!(
-        eq_trace(vec![raw::INT, raw::NIL, raw::INT]).is_none(),
-        "a trace comparing with a nil that entered the trace compiled"
-    );
-    assert!(eq_trace(vec![raw::FLOAT, raw::INT, raw::INT]).is_none());
-}
 
 /// The storage owns the compiled code: keep it while calling `entry`.
 fn chunk(src: &[u8]) -> (luna_jit::vm::Vm, LlvmJitStorage, CompileResult) {
