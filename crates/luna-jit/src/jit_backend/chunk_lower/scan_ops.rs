@@ -301,16 +301,13 @@ pub(super) fn scan_tables(s: &mut ChunkScan, c: ChunkIn<'_>, pc: usize, ins: Ins
     } = s;
     match ins.op() {
         Op::NewTable => {
-            // empty-table form. luna's frontend emits
-            // NewTable a=A b=0 c=0 for `{}`.
-            // Also accept `b > 0` (array presize for
-            // `{...}` literals); the emit-side calls
-            // `luna_jit_new_table_sized(b)`. `c > 0` (hash part
-            // presize) still bails — none of our headline cells
-            // use hash literals, and the per-slot lowering would
-            // need a separate dispatch for `nodes`.
-            if ins.c() != 0 {
-                return None;
+            // a table with no hash part (`{}` or a list literal); one
+            // whose constructor sizes a hash part still bails — none of
+            // our headline cells use hash literals, and the per-slot
+            // lowering would need a separate dispatch for `nodes`
+            match luna_core::runtime::table::new_table_sizes(ins.b(), ins.c(), ins.k()) {
+                Some((_, 0)) => {}
+                _ => return None,
             }
             let a = ins.a() as usize;
             if let Some(slot) = self_upval.get_mut(a) {

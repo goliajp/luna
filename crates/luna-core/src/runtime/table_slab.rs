@@ -141,6 +141,7 @@ impl Table {
     pub(crate) fn drop_array_part(&mut self, mem: MemRef) {
         self.free_array_slab(mem);
         self.asize = 0;
+        self.reset_hints();
         self.acount = 0;
         self.aprefix = 0;
         self.array_ptr = self.inline_storage.get() as *mut u8;
