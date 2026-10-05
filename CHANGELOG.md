@@ -153,6 +153,18 @@ optimization.
 
 ### Changed
 
+- The LLVM backend (`--features llvm-jit`, `LUNA_JIT_BACKEND=llvm`)
+  compiles traces with the same trace lowering as the Cranelift backend:
+  traces start in the baseline tier and LLVM compiles them again once
+  they are hot (with `LUNA_TRACE_TIER=optimizing`, every trace), at
+  `default<O2>` for the host CPU. It now compiles and runs the same
+  traces as the Cranelift backend, inlined calls, side traces and
+  tables included; before, it compiled only loops of integer
+  arithmetic and comparisons. `luna_jit_llvm::LlvmBackend` on its own
+  is the method JIT only: its `TraceCompiler` compiles no trace, and
+  luna-jit's backend compiles them through
+  `luna_jit_llvm::compile_function`.
+
 - C API: the `io` library of a state made through the C API is C over the
   C library's stdio, as PUC's is, for every dialect: file handles are
   `luaL_Stream` userdata (5.1: a `FILE *`) with the registry's
@@ -533,6 +545,9 @@ optimization.
   code are created and dropped.
 
 ### Added
+
+- `luna_jit::install_llvm_backend` (with `--features llvm-jit`) installs
+  the LLVM backend on a `Vm` regardless of `LUNA_JIT_BACKEND`.
 
 - The C API covers PUC's `lua.h`, `lauxlib.h` and `lualib.h` for all
   five dialects: headers in `crates/luna-jit/include/lua5.1` to

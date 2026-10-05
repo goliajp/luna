@@ -131,7 +131,7 @@ pub fn new_with_jit(version: version::LuaVersion) -> vm::Vm {
 /// | Value | Behaviour |
 /// |---|---|
 /// | unset / `cranelift` | Cranelift (default). |
-/// | `llvm` (with `--features llvm-jit`) | LLVM 18 backend. |
+/// | `llvm` (with `--features llvm-jit`) | LLVM 18 backend (see `install_llvm_backend`). |
 /// | `llvm` (feature OFF) | `panic!` with a rebuild hint. |
 /// | any other value | `panic!` listing the accepted values. |
 ///
