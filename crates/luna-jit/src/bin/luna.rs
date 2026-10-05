@@ -249,6 +249,14 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
         vm.jit.trace_hot_threshold = n;
         vm.jit.call_hot_threshold = n;
     }
+    // Test knob, also left out of --help: move a trace to the optimizing
+    // tier after N loop iterations and entries (0: never)
+    if let Some(n) = std::env::var("LUNA_TIER_UP_AT")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        vm.set_trace_tier_up_at(n);
+    }
     vm
 }
 
