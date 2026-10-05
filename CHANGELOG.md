@@ -153,6 +153,15 @@ optimization.
 
 ### Changed
 
+- On Windows the `luna` command reads and writes as `lua.exe` does, through
+  the MSVC C library's text mode: its standard output, standard error and
+  standard input, and files opened without `b`, write `\n` as `\r\n` and
+  read `\r\n` as `\n`; a Ctrl+Z ends the input, and `seek` reports what
+  that library's `ftell` does. `Vm::set_crt_text_mode` turns the same on
+  for the files of any `Vm` (off by default, on every platform), and
+  `luna_core::stdio::write_stderr` writes to standard error as the `luna`
+  command does. 5.1 and 5.2 read lines on Windows in 512-byte pieces, the
+  MSVC `BUFSIZ`, as PUC does there.
 - The LLVM backend (`--features llvm-jit`, `LUNA_JIT_BACKEND=llvm`)
   compiles traces with the same trace lowering as the Cranelift backend:
   traces start in the baseline tier and LLVM compiles them again once
