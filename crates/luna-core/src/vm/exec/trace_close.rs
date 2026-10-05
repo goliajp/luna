@@ -212,6 +212,7 @@ impl Vm {
                 aot: false,
                 tier: self.jit.trace_tier,
                 tier_up_at: self.jit.tier_up_at,
+                dialect: Some(self.version()),
             };
             // Route through trace_compiler; split-borrow JitState
             // so the trait method can take `&mut dyn JitStorage`.
