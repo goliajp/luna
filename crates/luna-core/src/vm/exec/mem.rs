@@ -118,18 +118,18 @@ impl Vm {
         act: crate::vm::callstack::NativeAct,
     ) -> Result<(), LuaError> {
         if self.running_natives.len() == self.running_natives.capacity() {
-            return self.push_native_slow(act);
+            self.native_room()?;
         }
         self.running_natives.push_or_abort(act);
         Ok(())
     }
 
+    /// Room for one more running native; out of line, and taking nothing
+    /// the caller has to build first.
     #[cold]
     #[inline(never)]
-    fn push_native_slow(&mut self, act: crate::vm::callstack::NativeAct) -> Result<(), LuaError> {
-        self.retry_oom(|vm| vm.running_natives.reserve(1))?;
-        self.running_natives.push_or_abort(act);
-        Ok(())
+    fn native_room(&mut self) -> Result<(), LuaError> {
+        self.retry_oom(|vm| vm.running_natives.reserve(1))
     }
 
     /// A string with `bytes`, collecting in an emergency when memory runs
