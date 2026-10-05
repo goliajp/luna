@@ -1,5 +1,6 @@
 //! Building the `luna-runtime-helpers` staticlib an AOT binary links against.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -34,6 +35,7 @@ use super::AotError;
 /// are sub-second.
 pub(super) fn build_runtime_helpers_staticlib(
     target_triple: Option<&str>,
+    build_env: &[(String, OsString)],
 ) -> Result<PathBuf, AotError> {
     if target_triple.is_none() {
         // Honour the override only for host builds — for cross we
@@ -123,7 +125,8 @@ pub(super) fn build_runtime_helpers_staticlib(
         // (e.g. coverage instrumentation from the parent test build).
         // Acceptable since the staticlib build is deterministic
         // independent of the parent crate's profile.
-        .env_remove("RUSTFLAGS");
+        .env_remove("RUSTFLAGS")
+        .envs(build_env.iter().map(|(k, v)| (k, v)));
     if let Some(t) = target_triple {
         cmd.arg("--target").arg(t);
     }
