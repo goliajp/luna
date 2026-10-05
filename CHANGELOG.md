@@ -325,6 +325,14 @@ optimization.
 
 ### Fixed
 
+- A function compiled by the method JIT returned a local that only a
+  branch assigns (`local r ... if i == 5 then r = i end ... return r`) as
+  the number 0 when the branch had not run, instead of nil, and
+  arithmetic on it went on with 0 instead of raising. The compiler took
+  the branch's write as done on every path. Now a local some path leaves
+  nil is treated as nil where it is read. All dialects, default settings;
+  3.2.2, 4.0.1 and 4.0.2 have it.
+
 - 5.4 and 5.5: `x - (C and nil or 0)` (also with `false`, or any
   expression whose `and` ends in one of them) gave `-0.0` for `x = -0.0`
   where PUC gives `0.0` (affects 3.1.0 through 4.0.2). PUC's code
