@@ -59,7 +59,6 @@ const LUAL_BUFFERSIZE: i64 = 1024;
 /// Bytes pulled from the OS per refill of a handle's input buffer.
 const READ_CHUNK: usize = 4096;
 
-
 /// [`open_io`], failing when memory runs out.
 pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();

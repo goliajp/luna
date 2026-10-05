@@ -25,7 +25,19 @@ impl Vm {
         chunkname: &[u8],
         name: Option<Gc<crate::runtime::LuaStr>>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
-        self.guarded_load(|vm| vm.load_named_inner(src, chunkname, name))
+        // the parser and the compiler cannot collect (what they made so far
+        // is held only by them), so a load that ran out of memory is run
+        // once more after an emergency collection, as PUC's allocations
+        // inside the parser retry; the source is all in `src`
+        match self.guarded_load(|vm| vm.load_named_inner(src, chunkname, name)) {
+            Err(e) if e.is_memory() && src.len() <= self.loader_input_budget => {
+                if !self.emergency_collect() {
+                    return Err(e);
+                }
+                self.guarded_load(|vm| vm.load_named_inner(src, chunkname, name))
+            }
+            r => r,
+        }
     }
 
     fn load_named_inner(
@@ -59,7 +71,10 @@ impl Vm {
             crate::vm::dump::undump_named(src, &mut self.heap, self.version, allow_puc, chunkname)
                 .map_err(SyntaxError::unpositioned)?
         } else if self.version.is_macro_lua() {
-            let source = name.unwrap_or_else(|| self.heap.intern(chunkname));
+            let source = match name {
+                Some(n) => n,
+                None => self.heap.try_intern(chunkname)?,
+            };
             // MacroLua dialect: drain the lexer into a
             // token vec, run the macro expander pre-pass against the
             // per-Vm registry, then hand the rewritten stream to
@@ -91,12 +106,15 @@ impl Vm {
         } else {
             // PUC's `nCcalls` counts protected calls as well
             let depth = self.c_depth + self.pcall_depth;
-            let source = name.unwrap_or_else(|| self.heap.intern(chunkname));
+            let source = match name {
+                Some(n) => n,
+                None => self.heap.try_intern(chunkname)?,
+            };
             let scratch = self.parse_scratch.take();
             let parsed = crate::frontend::parser::parse_reusing(src, self.version, depth, scratch)?;
             self.compile_text(parsed, source)?
         };
-        Ok(self.close_chunk(proto))
+        self.close_chunk(proto)
     }
 
     /// Compile a parsed chunk named `source`, keeping the parse's vectors
@@ -172,14 +190,22 @@ impl Vm {
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         let parsed = parsed.0?;
         self.guarded_load(|vm| {
-            let source = name.unwrap_or_else(|| vm.heap.intern(chunkname));
+            let source = match name {
+                Some(n) => n,
+                None => vm.heap.try_intern(chunkname)?,
+            };
             let proto = vm.compile_text(parsed, source)?;
-            Ok(vm.close_chunk(proto))
+            vm.close_chunk(proto)
         })
     }
 
     /// The closure of a loaded main function over the globals.
-    fn close_chunk(&mut self, proto: Gc<crate::runtime::Proto>) -> Gc<LuaClosure> {
+    fn close_chunk(
+        &mut self,
+        proto: Gc<crate::runtime::Proto>,
+    ) -> Result<Gc<LuaClosure>, SyntaxError> {
+        // the new prototype is held only here until the closure holds it, so
+        // these allocations fail without an emergency collection
         if self.heap.track_chunk_roots {
             self.heap.chunk_roots.push(proto);
         }
@@ -188,28 +214,20 @@ impl Vm {
         // upvalue — that's the main-chunk `_ENV` case. A dumped non-main
         // function with two-or-more upvalues keeps every cell at nil; the
         // host must use `debug.setupvalue` to wire them up. 5.2 calls.lua
-        // :293's `assert(x() == nil)` pins this contract.
+        // :293's `assert(x() == nil)` pins this contract. A synthetic main
+        // chunk with no declared upvalues still gets one cell, so the host can
+        // probe it via `debug.upvalueid`.
         let n = proto.upvals.len();
-        let mut ups: Vec<Gc<Upvalue>> = Vec::with_capacity(n.max(1));
-        if n == 0 {
-            // synthetic main chunk has no declared upvalues, but the engine
-            // still expects at least one cell so the host can probe via
-            // `debug.upvalueid` etc. Match the historical luna shape.
-            ups.push(
-                self.heap
-                    .new_upvalue(UpvalState::Closed(Value::Table(self.globals))),
-            );
-        } else if n == 1 {
-            ups.push(
-                self.heap
-                    .new_upvalue(UpvalState::Closed(Value::Table(self.globals))),
-            );
+        let first = if n <= 1 {
+            Value::Table(self.globals)
         } else {
-            for _ in 0..n {
-                ups.push(self.heap.new_upvalue(UpvalState::Closed(Value::Nil)));
-            }
+            Value::Nil
+        };
+        let mut ups = crate::runtime::mem::LVec::with_capacity(self.heap.mem(), n.max(1))?;
+        for _ in 0..n.max(1) {
+            ups.push(self.heap.try_new_upvalue(UpvalState::Closed(first))?)?;
         }
-        self.heap.new_closure(proto, ups.into_boxed_slice())
+        Ok(self.heap.try_new_closure(proto, &ups)?)
     }
 }
 

@@ -237,20 +237,8 @@ impl Vm {
     /// Proto remembers its last closure and reuses it when every upvalue is
     /// the same Upvalue object, so `function() return outer end` built twice
     /// compares equal while a per-iteration loop variable defeats it. 5.1
-    /// and 5.4+ always build a new one.
-    #[doc(hidden)]
-    pub fn closure_from_proto(
-        &mut self,
-        proto: Gc<crate::runtime::function::Proto>,
-        ups: &[Gc<crate::runtime::function::Upvalue>],
-    ) -> Gc<LuaClosure> {
-        self.try_closure_from_proto(proto, ups).unwrap_or_else(|_| {
-            crate::runtime::mem::oom_abort(std::alloc::Layout::new::<LuaClosure>())
-        })
-    }
-
-    /// [`Vm::closure_from_proto`], raising a memory error when the closure
-    /// cannot be made. The upvalues are held by the caller (on the open
+    /// and 5.4+ always build a new one. A memory error when the closure
+    /// cannot be made; the upvalues are held by the caller (on the open
     /// list, or young), so an emergency collection keeps them.
     pub(crate) fn try_closure_from_proto(
         &mut self,

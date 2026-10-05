@@ -254,10 +254,10 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     // array up to INLINE_UPVALS_N like the interp does, else heap.
     let mut stack_buf: [std::mem::MaybeUninit<luna_core::runtime::Gc<Upvalue>>; INLINE_UPVALS_N] =
         [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
-    let mut heap_buf: Vec<luna_core::runtime::Gc<Upvalue>> = Vec::new();
+    let mut heap_buf = luna_core::runtime::mem::LVec::new(vm.heap.mem());
     let use_inline = n_ups <= INLINE_UPVALS_N;
-    if !use_inline {
-        heap_buf.reserve_exact(n_ups);
+    if !use_inline && heap_buf.reserve_exact(n_ups).is_err() {
+        return 0;
     }
     for (i, d) in inner.upvals.iter().enumerate() {
         let uv = if d.in_stack {
@@ -265,14 +265,18 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
             // upval at vm.stack[base + d.index]. The trace IR
             // emitted a spill before this call, so the slot holds
             // the right value at capture time.
-            vm.find_or_create_upval(base + d.index as u32)
+            // 0: the trace exits at the `Closure` and the interpreter makes it
+            match vm.jit_find_or_create_upval(base + d.index as u32) {
+                Some(uv) => uv,
+                None => return 0,
+            }
         } else {
             cl.upvals()[d.index as usize]
         };
         if use_inline {
             stack_buf[i] = std::mem::MaybeUninit::new(uv);
-        } else {
-            heap_buf.push(uv);
+        } else if heap_buf.push(uv).is_err() {
+            return 0;
         }
     }
     let ups: &mut [luna_core::runtime::Gc<Upvalue>] = if use_inline {
@@ -303,6 +307,8 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
             Err(_) => return 0,
         }
     }
-    let nc = vm.closure_from_proto(inner, ups);
+    let Some(nc) = vm.jit_closure_from_proto(inner, ups) else {
+        return 0;
+    };
     payload_bits(luna_core::runtime::Value::Closure(nc))
 }

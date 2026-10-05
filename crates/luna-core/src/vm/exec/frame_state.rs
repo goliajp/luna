@@ -195,15 +195,8 @@ impl Vm {
 
     // ---- open upvalues ----
 
-    #[doc(hidden)]
-    pub fn find_or_create_upval(&mut self, slot: u32) -> Gc<Upvalue> {
-        self.try_find_or_create_upval(slot).unwrap_or_else(|_| {
-            crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Upvalue>())
-        })
-    }
-
-    /// [`Vm::find_or_create_upval`], raising a memory error when a new
-    /// upvalue cannot be made or listed.
+    /// The open upvalue of stack slot `slot`, made and listed when there
+    /// is none; a memory error when it cannot be.
     pub(crate) fn try_find_or_create_upval(&mut self, slot: u32) -> Result<Gc<Upvalue>, LuaError> {
         match self.open_upvals.binary_search_by_key(&slot, |&(s, _)| s) {
             Ok(i) => Ok(self.open_upvals[i].1),

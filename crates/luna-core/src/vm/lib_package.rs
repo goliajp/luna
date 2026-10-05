@@ -37,7 +37,6 @@ pub(crate) fn open_package(vm: &mut Vm) {
     crate::vm::lib_mem::opened(open_package_with(vm, true));
 }
 
-
 /// [`open_package_bare`], raising a memory error.
 pub(crate) fn try_open_package_bare(vm: &mut Vm) -> Result<(), LuaError> {
     open_package_with(vm, false)

@@ -99,7 +99,10 @@ impl Heap {
     /// previously finalized object (FINALIZED bit set then reset by
     /// `take_tobefnz`) can re-register. PUC's `luaC_checkfinalizer` is gated
     /// on `tofinalize(o)` only, which mirrors checking the FIN bit.
-    pub(crate) fn register_finalizable(&mut self, t: Gc<Table>) -> Result<(), crate::runtime::mem::Oom> {
+    pub(crate) fn register_finalizable(
+        &mut self,
+        t: Gc<Table>,
+    ) -> Result<(), crate::runtime::mem::Oom> {
         let h = t.as_ptr() as *mut GcHeader;
         // SAFETY: `h` is the header of `t`, a table the caller holds a live handle to; only the flag byte is touched
         unsafe {
