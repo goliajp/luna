@@ -13,12 +13,15 @@ impl<T> LVec<T> {
     /// [`LVec::push`], ending the process on failure.
     #[inline(always)]
     pub fn push_or_abort(&mut self, v: T) {
-        if self.len == self.cap {
+        // the length is read once: the write below goes through a raw
+        // pointer, after which it would have to be loaded again
+        let len = self.len;
+        if len == self.cap {
             self.reserve_slow_or_abort(1);
         }
         // SAFETY: `len < cap`, so the slot is inside the block and unused
-        unsafe { self.ptr.as_ptr().add(self.len).write(v) };
-        self.len += 1;
+        unsafe { self.ptr.as_ptr().add(len).write(v) };
+        self.len = len + 1;
     }
 
     /// [`LVec::reserve_slow`], ending the process on failure.
