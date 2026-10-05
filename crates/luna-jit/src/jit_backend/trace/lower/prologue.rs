@@ -320,7 +320,7 @@ pub(super) fn start_accum<E: Emit>(
 pub(super) fn open_body_loop<E: Emit>(
     bcx: &mut E,
     pl: &Plan<'_>,
-) -> (Option<Block>, Option<Block>, Block) {
+) -> (Option<Block>, Option<Block>, Option<Block>, Block) {
     let Plan {
         record,
         effective_end,
@@ -360,13 +360,21 @@ pub(super) fn open_body_loop<E: Emit>(
         .any(|rop| matches!(rop.inst.op(), Op::SetField | Op::SetI | Op::SetTable))
         .then(|| bcx.create_block());
 
+    // the step sign of a 5.3 integer loop (see `step_guard`)
+    let step_precheck = pl.step_guard.is_some().then(|| bcx.create_block());
+
     let body_loop = bcx.create_block();
-    bcx.ins()
-        .jump(precheck.or(ro_precheck).unwrap_or(body_loop), &[]);
+    bcx.ins().jump(
+        precheck
+            .or(ro_precheck)
+            .or(step_precheck)
+            .unwrap_or(body_loop),
+        &[],
+    );
     // `body_loop` is entered after the precheck block is emitted (below):
     // reading a register there first would leave it half-built while
     // another block is emitted, which the builder rejects.
-    (precheck, ro_precheck, body_loop)
+    (precheck, ro_precheck, step_precheck, body_loop)
 }
 
 /// The sites live at an op that moves a count of values the escape sweep

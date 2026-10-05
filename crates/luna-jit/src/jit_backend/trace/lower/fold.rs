@@ -83,7 +83,8 @@ pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
             lw.bcx.switch_to_block(ok_blk);
             lw.bcx.seal_block(ok_blk);
         }
-        lw.bcx.ins().jump(lw.ro_precheck.unwrap_or(body_loop), &[]);
+        let next = lw.ro_precheck.or(lw.step_precheck).unwrap_or(body_loop);
+        lw.bcx.ins().jump(next, &[]);
     }
 }
 
@@ -217,7 +218,10 @@ pub(super) fn emit_fold<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>
             FoldKind::StrSub if fold.call_idx == i => {
                 emit_str_sub_fold(lw, pl, oc, fold)?;
             }
-            FoldKind::Min2 | FoldKind::Max2 | FoldKind::StrSub => {
+            FoldKind::Fmod2 if fold.call_idx == i => {
+                emit_fmod_fold(lw, pl, oc, fold)?;
+            }
+            FoldKind::Min2 | FoldKind::Max2 | FoldKind::StrSub | FoldKind::Fmod2 => {
                 // Silent: this index is either `start_idx`
                 // (GetTabUp) or `start_idx + 1` (GetField).
                 // The Call's emit will fire at `call_idx`
@@ -335,7 +339,7 @@ pub(super) fn emit_minmax_fold<E: Emit>(
                 (FoldKind::Max2, _) => emit_lt_float_int(&mut lw.bcx, f1, a2),
                 (FoldKind::Min2, RegKind::Int) => emit_lt_float_int(&mut lw.bcx, f2, a1),
                 (FoldKind::Min2, _) => emit_lt_int_float(&mut lw.bcx, a2, f1),
-                (FoldKind::Libm1 | FoldKind::StrSub, _) => unreachable!(),
+                (FoldKind::Libm1 | FoldKind::StrSub | FoldKind::Fmod2, _) => unreachable!(),
             };
             let first_wins = lw.bcx.ins().bxor_imm_u(second_wins, 1);
             guard!(lw, pl, first_wins, i, record.ops[fold.start_idx].pc);
@@ -355,7 +359,7 @@ pub(super) fn emit_minmax_fold<E: Emit>(
         let second_wins = match fold.kind {
             FoldKind::Min2 => lw.bcx.ins().fcmp(FloatCC::LessThan, a2, a1),
             FoldKind::Max2 => lw.bcx.ins().fcmp(FloatCC::LessThan, a1, a2),
-            FoldKind::Libm1 | FoldKind::StrSub => unreachable!(),
+            FoldKind::Libm1 | FoldKind::StrSub | FoldKind::Fmod2 => unreachable!(),
         };
         // select on the bits: the baseline code generator selects
         // integers only
@@ -374,7 +378,7 @@ pub(super) fn emit_minmax_fold<E: Emit>(
         let r = match fold.kind {
             FoldKind::Min2 => lw.bcx.ins().smin(a1, a2),
             FoldKind::Max2 => lw.bcx.ins().smax(a1, a2),
-            FoldKind::Libm1 | FoldKind::StrSub => unreachable!(),
+            FoldKind::Libm1 | FoldKind::StrSub | FoldKind::Fmod2 => unreachable!(),
         };
         lw.bcx.def_var(regs[fold.dst_reg as usize], r);
         lw.current_kinds[off + fold.dst_reg as usize] = RegKind::Int;

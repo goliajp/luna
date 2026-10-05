@@ -1,0 +1,46 @@
+w raw	x\13\10y\13\13\10z\13\13\13\10w\13v\13\10\13\13\10end
+wb raw	x\10y\13\10z\13\13\10w\13v\10\13\10end
+a raw	x\13\10y\13\13\10z\13\13\13\10w\13v\13\10\13\13\10endapp\13\10
+ab raw	x\10y\13\10z\13\13\10w\13v\10\13\10endapp\10
+w+ read	1\102\10
+w+ seek end	6
+w+ raw	1\13\102\13\10
+r	*a	x\10y\10z\13\10w\13v\10\10endapp\10
+r	*l	x|y|z\13|w\13v||endapp
+r	count	x@nil|nil@22|nil@22|nil@22|nil@22|nil@22
+r	io.lines	x|y|z\13|w\13v||endapp
+r	f:lines	x|y|z\13|w\13v||endapp
+r	seek 3	\10z\13\10w\13v\10\10endapp\10
+r	pos after 2 lines	3
+rb	*a	x\10y\13\10z\13\13\10w\13v\10\13\10endapp\10
+rb	*l	x|y\13|z\13\13|w\13v|\13|endapp
+rb	count	x@1|\10y@3|\13\10z@6|\13\13\10w@10|\13v\10\13\10@15|endapp@21
+rb	io.lines	x|y|z\13|w\13v||endapp
+rb	f:lines	x|y\13|z\13\13|w\13v|\13|endapp
+rb	seek 3	\13\10z\13\13\10w\13v\10\13\10endapp\10
+rb	pos after 2 lines	5
+r	*n	12	3.5	-7	\10
+rb	*n	12	3.5	-7	\13\10
+r	ctrl-z *a	ab
+r	ctrl-z *l	ab	nil	nil
+rb	ctrl-z *a	ab\26cd\13\10ef
+rb	ctrl-z *l	ab\26cd\13	ef	nil
+a after ctrl-z raw	ab\26cd\13\10efmore\13\10
+a+ after trailing ctrl-z raw	abc\13\10
+r	trailing cr	abc\13
+boundary	511	514	aa\10b\10	511	b
+boundary	512	515	aa\10b\10	512	b
+boundary	4095	4098	aa\10b\10	4095	b
+boundary	4096	4099	aa\10b\10	4096	b
+boundary	8191	8194	aa\10b\10	8191	b
+boundary	8192	8195	aa\10b\10	8192	b
+r+ l	aa
+r+ raw	aa\13\10X\13\10\10
+tmpfile	t\10	2
+io.output raw	o1\13\10
+io.input	x
+ftell	lf	5000@5226|c@5229|bc\10@5233|abc\10abc\10ab@112|abc@117|11883@12000|700 lines@3500|ab@12000
+ftell	crlf	5000@6250|abc@6255|abc@6258|abc\10abc\10ab@112|c@115|11908@15000|700 lines@3500|ab@15000
+a after trailing ctrl-z raw	ab\26c\13\10
+popen r	hi\10
+loadfile	a\10b	x\10y

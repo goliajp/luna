@@ -31,16 +31,15 @@ impl Vm {
         if self.warn_state == WarnState::Off {
             return Ok(());
         }
-        use std::io::Write;
-        let mut err = std::io::stderr().lock();
+        let err = crate::stdio::write_stderr;
         if !self.warn_cont {
-            let _ = err.write_all(b"Lua warning: ");
+            let _ = err(b"Lua warning: ");
         }
-        let _ = err.write_all(msg);
+        let _ = err(msg);
         self.warn_buf.extend_from_slice(msg);
         self.warn_cont = to_cont;
         if !to_cont {
-            let _ = err.write_all(b"\n");
+            let _ = err(b"\n");
             let line = std::mem::take(&mut self.warn_buf);
             self.warn_log.push(line);
         }
@@ -211,6 +210,18 @@ impl Vm {
     /// Current PUC bytecode-loading gate state.
     pub fn puc_bytecode_loading(&self) -> bool {
         self.puc_bytecode_loading
+    }
+
+    /// Open files as PUC built with MSVC does: a file opened without `b`
+    /// (by `io.open`, `io.lines`, `io.input`, `io.output`, `io.popen`, and
+    /// the source `loadfile`, `dofile` and `require` read) is in the C
+    /// library's text mode, so `\r\n` reads as `\n`, a Ctrl+Z ends the
+    /// input, `\n` is written as `\r\n`, and `seek` reports the positions
+    /// that library's `ftell` gives. Default `false`, on every platform; the
+    /// `luna` command sets it on Windows, as `lua.exe` behaves there. Files
+    /// already open keep their mode.
+    pub fn set_crt_text_mode(&mut self, on: bool) {
+        self.crt_text = on;
     }
 
     /// Default loader input budget — 256 MiB.

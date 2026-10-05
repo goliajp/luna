@@ -315,6 +315,12 @@ pub struct TraceRecord {
     pub index_slots: Vec<u64>,
     /// The interned `"__index"`, set when an op has `index_slots`.
     pub index_key: Option<Gc<crate::runtime::string::LuaStr>>,
+    /// For the first numeric `for` loop's `ForLoop` at depth 0 (the one
+    /// that ends the trace), when its step was an integer while it was
+    /// recorded: whether that step was positive. The
+    /// lowerer of a 5.3 integer loop checks the sign once before the loop
+    /// instead of choosing the comparison on every iteration.
+    pub for_step_up: Option<bool>,
 }
 
 /// [`TraceRecord::index_slots`] for an op with none.
@@ -384,6 +390,7 @@ impl TraceRecord {
             field_slots: Vec::with_capacity(MAX_TRACE_LEN),
             index_slots: Vec::with_capacity(MAX_TRACE_LEN),
             index_key: None,
+            for_step_up: None,
         }
     }
 
@@ -425,6 +432,7 @@ impl TraceRecord {
             field_slots: Vec::with_capacity(MAX_TRACE_LEN),
             index_slots: Vec::with_capacity(MAX_TRACE_LEN),
             index_key: None,
+            for_step_up: None,
         }
     }
 
