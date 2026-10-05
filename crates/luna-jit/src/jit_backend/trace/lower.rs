@@ -56,6 +56,7 @@ mod ops;
 mod plan;
 mod prologue;
 mod readonly;
+mod step_guard;
 mod tail;
 use alt::*;
 use begin::*;
@@ -72,6 +73,7 @@ use ops::*;
 use plan::*;
 use prologue::*;
 use readonly::*;
+use step_guard::*;
 use tail::*;
 
 /// The trace function under construction and everything the emit pass
@@ -89,6 +91,8 @@ struct Lower<E: Emit> {
     /// The block before the loop head that tests the tables
     /// `ro_invariant` names (see `readonly`).
     ro_precheck: Option<Block>,
+    /// The block before the loop head that checks a 5.3 loop's step sign.
+    step_precheck: Option<Block>,
     body_loop: Block,
     head_kinds: Vec<RegKind>,
     defined_aot_data: std::collections::HashSet<DataId>,
@@ -377,6 +381,7 @@ fn emit_trace<E: Emit>(
     let lw = &mut lower;
     emit_fold_precheck(lw, pl);
     emit_readonly_precheck(lw, pl);
+    emit_step_precheck(lw, pl);
     emit_body(lw, pl)?;
     let (downrec_link_for_compiled, downrec_multi_way_count_for_compiled) = emit_tail(lw, pl)?;
     let Lower {

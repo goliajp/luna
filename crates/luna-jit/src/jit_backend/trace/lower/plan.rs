@@ -60,6 +60,9 @@ pub(super) struct Plan<'r> {
     /// leave each register the kind the recorded way leaves, so in 5.1 /
     /// 5.2 no integer reaches arithmetic the recorder did not check.
     pub(super) alt_paths: Vec<Option<alt_path::AltPath>>,
+    /// The step register of a 5.3 integer loop and its recorded sign, when
+    /// the trace checks the sign once (see `step_guard`).
+    pub(super) step_guard: Option<(usize, bool)>,
 }
 
 /// The constant held by the virtual register of op `i`, if it has one.
@@ -197,6 +200,14 @@ pub(super) fn plan_trace<'r>(
         effective_end,
         &folded_ops,
     )?;
+    let step_guard = plan_step_guard(
+        record,
+        &op_offsets,
+        &head_live,
+        &alt_paths,
+        for_loop_idx_opt,
+        opts.pre53 && !float_only,
+    );
     validate_trace_ends(
         record,
         head_proto,
@@ -236,6 +247,7 @@ pub(super) fn plan_trace<'r>(
             consumed_by_cmp,
             cmp_dirs,
             alt_paths,
+            step_guard,
         },
         escape,
     ))

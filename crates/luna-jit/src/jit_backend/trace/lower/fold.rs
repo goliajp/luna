@@ -83,7 +83,8 @@ pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
             lw.bcx.switch_to_block(ok_blk);
             lw.bcx.seal_block(ok_blk);
         }
-        lw.bcx.ins().jump(lw.ro_precheck.unwrap_or(body_loop), &[]);
+        let next = lw.ro_precheck.or(lw.step_precheck).unwrap_or(body_loop);
+        lw.bcx.ins().jump(next, &[]);
     }
 }
 
