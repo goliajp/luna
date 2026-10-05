@@ -4,13 +4,14 @@
 local calls = 0
 local function f() calls = calls + 1 return true end
 local function g() calls = calls + 10 return false end
+-- the harness prepends locals of its own, named with a leading _
 local function locals()
   local names = {}
   local i = 1
   while true do
     local name = debug.getlocal(2, i)
     if not name then break end
-    if name:sub(1, 1) ~= "(" then names[#names + 1] = name end
+    if not name:find("^[(_]") then names[#names + 1] = name end
     i = i + 1
   end
   return table.concat(names, ",")
