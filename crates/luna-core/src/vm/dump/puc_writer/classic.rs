@@ -137,6 +137,7 @@ impl C<'_, '_> {
                 let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
                 self.emit(self.abc(Kind::Move, a, b, 0))?;
             }
+            Op::LoadI | Op::LoadF | Op::LoadK if self.folded_load(l) => {}
             Op::LoadI | Op::LoadF => {
                 let v = if l.op == Op::LoadI {
                     self.num(l.sbx as i64)
@@ -245,8 +246,9 @@ impl C<'_, '_> {
             | Op::BXor
             | Op::Shl
             | Op::Shr => {
-                let a = self.asm.r(l.a)?;
-                let (b, c) = (self.operand(l.b)?, self.operand(l.c)?);
+                // the right operand's constant first, as PUC's `codearith`
+                let (a, c) = (self.asm.r(l.a)?, self.operand(l.c)?);
+                let b = self.operand(l.b)?;
                 self.emit(self.abc(Kind::Arith(l.op), a, b, c))?;
             }
             op if op.arith_const_op().is_some() => self.arith_const(l)?,

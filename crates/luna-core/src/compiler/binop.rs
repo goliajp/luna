@@ -54,25 +54,10 @@ impl Compiler<'_> {
             Exp::Float(f) if f == 0.0 && self.version == LuaVersion::Lua51 => Some(f),
             _ => None,
         };
-        // A numeral on the left of a commutative operator or of a comparison
-        // stays out of a register until the right operand is known: it may
-        // become the instruction's own operand (PUC `luaK_infix`).
-        let left_numeral = deferred.is_none()
-            && matches!(le, Exp::Int(_) | Exp::Float(_))
-            && matches!(
-                op,
-                BinOp::Add
-                    | BinOp::Mul
-                    | BinOp::BAnd
-                    | BinOp::BOr
-                    | BinOp::BXor
-                    | BinOp::Eq
-                    | BinOp::Ne
-                    | BinOp::Lt
-                    | BinOp::Le
-                    | BinOp::Gt
-                    | BinOp::Ge
-            );
+        // A numeral on the left stays out of a register until the right
+        // operand is known: it may become the instruction's own operand, and
+        // otherwise it is loaded after the right one (PUC `luaK_infix`).
+        let left_numeral = deferred.is_none() && matches!(le, Exp::Int(_) | Exp::Float(_));
         let mut l = if left_numeral {
             None
         } else {
@@ -103,33 +88,57 @@ impl Compiler<'_> {
         };
         let re = self.expr(rhs)?;
         // The operand that goes into the instruction instead of a register,
-        // and the side it was written on. Two numerals the fold left alone
-        // (`1 // 0`): the left one takes a register after all.
+        // and the side it was written on.
         let mut in_inst: Option<(Operand, bool)> = None;
+        let mut right_reg = None;
         if l.is_none() {
             if matches!(re, Exp::Int(_) | Exp::Float(_) | Exp::Const(_)) {
+                // Two numerals the fold left alone (`7.5 // 0`), as PUC's
+                // `codearith` takes them: 5.4+ moves the left one of `+`, `*`
+                // (and an integer of a bitwise operator) to the right; the
+                // right one becomes the operand, its constant first, and the
+                // left one a register; with no such form the right one takes
+                // its register first.
+                let swap = self.version >= LuaVersion::Lua54
+                    && (matches!(op, BinOp::Add | BinOp::Mul)
+                        || matches!(op, BinOp::BAnd | BinOp::BOr | BinOp::BXor)
+                            && matches!(le, Exp::Int(_)));
                 let saved_line = self.force_line.replace(line);
-                let reg = self.exp_to_anyreg(le)?;
-                self.force_line = saved_line;
-                if reg >= saved {
-                    self.set_freereg(reg + 1);
+                if swap && let Some(form) = self.const_operand(op, &le, true, saved) {
+                    in_inst = Some((form, true));
+                    right_reg = Some(self.exp_to_anyreg(re)?);
+                } else if !sub_zero && let Some(form) = self.const_operand(op, &re, false, saved) {
+                    in_inst = Some((form, false));
+                    l = Some(self.exp_to_anyreg(le)?);
+                } else {
+                    let r = self.exp_to_anyreg(re)?;
+                    if r >= saved {
+                        self.set_freereg(r + 1);
+                    }
+                    right_reg = Some(r);
+                    l = Some(self.exp_to_anyreg(le)?);
                 }
-                l = Some(reg);
+                self.force_line = saved_line;
             } else if let Some(form) = self.const_operand(op, &le, true, saved) {
                 in_inst = Some((form, true));
             }
         }
         if l.is_some()
+            && right_reg.is_none()
+            && in_inst.is_none()
             && !sub_zero
             && let Some(form) = self.const_operand(op, &re, false, saved)
         {
             in_inst = Some((form, false));
         }
         // the register operand(s)
-        let (l, r) = match (l, in_inst) {
-            (Some(l), Some(_)) => (l, 0),
-            (Some(l), None) => (l, self.exp_to_anyreg(re)?),
-            (None, _) => {
+        let (l, r) = match (l, in_inst, right_reg) {
+            // swapped: the register is the right operand's
+            (_, Some((_, true)), Some(r)) => (r, 0),
+            (Some(l), None, Some(r)) => (l, r),
+            (Some(l), Some(_), _) => (l, 0),
+            (Some(l), None, None) => (l, self.exp_to_anyreg(re)?),
+            (None, _, _) => {
                 let r = self.exp_to_anyreg(re)?;
                 if in_inst.is_some() {
                     (r, 0)
