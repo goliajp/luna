@@ -80,7 +80,10 @@ fn check(body: &str, want: &str) {
         for (name, tier, at) in TIERS {
             let mut vm = traced(v, tier, at);
             assert_eq!(results(&mut vm, &src), expect, "{v:?} {name}");
-            assert!(vm.trace_dispatched_count() > 0, "{v:?} {name}: no trace ran");
+            assert!(
+                vm.trace_dispatched_count() > 0,
+                "{v:?} {name}: no trace ran"
+            );
         }
         assert_eq!(
             results(&mut method_jit(v), &src),

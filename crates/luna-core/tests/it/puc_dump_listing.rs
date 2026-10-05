@@ -72,7 +72,11 @@ fn luna_dump(version: LuaVersion, src: &Path) -> Vec<u8> {
     let name = format!("@{}", src.display());
     let f = vm.load(&source, name.as_bytes()).expect("luna compiles it");
     let dump = vm.eval("return string.dump").expect("string.dump")[0];
-    match vm.call_value(dump, &[Value::Closure(f)]).expect("dump").first() {
+    match vm
+        .call_value(dump, &[Value::Closure(f)])
+        .expect("dump")
+        .first()
+    {
         Some(Value::Str(s)) => s.as_bytes().to_vec(),
         other => panic!("string.dump returned {other:?}"),
     }

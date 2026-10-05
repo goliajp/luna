@@ -48,7 +48,8 @@ pub(super) fn emit_step_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     let RuntimeHelpers {
         suppress_admit_id, ..
     } = lw.h.rt;
-    let (reg_state, trace_fn_sig_ref, body_loop) = (lw.reg_state, lw.trace_fn_sig_ref, lw.body_loop);
+    let (reg_state, trace_fn_sig_ref, body_loop) =
+        (lw.reg_state, lw.trace_fn_sig_ref, lw.body_loop);
     lw.bcx.switch_to_block(block);
     lw.bcx.seal_block(block);
     let entry_stored: Vec<Option<Value>> = lw
@@ -98,7 +99,10 @@ mod tests {
     fn record(ops: &[Inst], up: Option<bool>) -> TraceRecord {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua53);
         let proto = vm
-            .load(b"local a,b,c,d,e,f = 0,0,0,0,0,0; return a+b+c+d+e+f", b"=t")
+            .load(
+                b"local a,b,c,d,e,f = 0,0,0,0,0,0; return a+b+c+d+e+f",
+                b"=t",
+            )
             .expect("compile")
             .proto;
         let tags = vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize];
@@ -120,15 +124,28 @@ mod tests {
     fn guard(rec: &TraceRecord, pre53_int: bool) -> Option<(usize, bool)> {
         let n = rec.ops.len();
         let live = vec![true; rec.head_proto.max_stack as usize];
-        plan_step_guard(rec, &vec![0; n], &live, &vec![None; n], Some(n - 1), pre53_int)
+        plan_step_guard(
+            rec,
+            &vec![0; n],
+            &live,
+            &vec![None; n],
+            Some(n - 1),
+            pre53_int,
+        )
     }
 
     #[test]
     fn a_recorded_sign_is_checked_once() {
         let body = Inst::iabc(Op::Add, 5, 5, 4, false);
         let tail = Inst::iabx(Op::ForLoop, 0, 2);
-        assert_eq!(guard(&record(&[body, tail], Some(true)), true), Some((2, true)));
-        assert_eq!(guard(&record(&[body, tail], Some(false)), true), Some((2, false)));
+        assert_eq!(
+            guard(&record(&[body, tail], Some(true)), true),
+            Some((2, true))
+        );
+        assert_eq!(
+            guard(&record(&[body, tail], Some(false)), true),
+            Some((2, false))
+        );
     }
 
     #[test]
