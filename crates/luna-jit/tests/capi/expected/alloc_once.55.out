@@ -1,0 +1,2 @@
+one refusal: [ok 60 a!b? 60 1000]
+every block freed after lua_close: yes
