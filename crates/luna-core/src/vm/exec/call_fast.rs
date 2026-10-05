@@ -32,21 +32,8 @@ impl Vm {
         {
             return None;
         }
-        // as `push_frame`: missing parameters are nil, and 5.1 clears the
-        // whole window
-        let kept = nargs.min(p.num_params as u32);
-        let end = if self.version == LuaVersion::Lua51 {
-            need
-        } else {
-            base as usize + p.num_params as usize
-        };
-        // SAFETY: `need <= stack.len()` was checked above and `base + kept
-        // <= end <= need` (the verifier keeps `num_params <= max_stack`)
-        unsafe {
-            self.stack
-                .get_unchecked_mut((base + kept) as usize..end)
-                .fill(Value::Nil);
-        }
+        // the push comes right after the room test, before any write
+        // through the stack could make the compiler test again
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
@@ -66,6 +53,21 @@ impl Vm {
                 ccmt: std::mem::take(&mut self.pending_ccmt),
             }),
         );
+        // as `push_frame`: missing parameters are nil, and 5.1 clears the
+        // whole window
+        let kept = nargs.min(p.num_params as u32);
+        let end = if self.version == LuaVersion::Lua51 {
+            need
+        } else {
+            base as usize + p.num_params as usize
+        };
+        // SAFETY: `need <= stack.len()` was checked above and `base + kept
+        // <= end <= need` (the verifier keeps `num_params <= max_stack`)
+        unsafe {
+            self.stack
+                .get_unchecked_mut((base + kept) as usize..end)
+                .fill(Value::Nil);
+        }
         // SAFETY: a Lua frame was just pushed
         match unsafe { self.frames.last_mut().unwrap_unchecked() } {
             CallFrame::Lua(f) => Some(f),
