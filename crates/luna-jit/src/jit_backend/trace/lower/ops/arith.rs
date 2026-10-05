@@ -83,12 +83,12 @@ pub(super) fn emit_float_arith_op<E: Emit>(
                 def_var_f64(&mut lw.bcx, regs[ins.a() as usize], r);
                 lw.current_kinds[off + ins.a() as usize] = RegKind::Float;
             } else if pl.float_only {
-                // 5.1 / 5.2 integers stand for doubles (see `emit_double_add`);
-                // the recorder lets only `+` and `-` of two of them through
-                if !matches!(op, Op::Add | Op::Sub) {
-                    return None;
+                // 5.1 / 5.2 integers stand for doubles (see `arith_double`)
+                match op {
+                    Op::Add | Op::Sub => emit_double_add(lw, pl, oc),
+                    Op::Mul => emit_double_mul(lw, pl, oc),
+                    _ => return None,
                 }
-                emit_double_add(lw, pl, oc);
             } else {
                 let lhs = lw.bcx.use_var(regs[ins.b() as usize]);
                 let rhs = lw.bcx.use_var(regs[ins.c() as usize]);
@@ -135,6 +135,13 @@ pub(super) fn emit_int_arith_op<E: Emit>(
             // raise; a string is coerced.
             let kb = oc.kind(&lw.current_kinds, ins.b());
             let kc = oc.kind(&lw.current_kinds, ins.c());
+            if pl.float_only && kb == RegKind::Int && kc == RegKind::Int {
+                // 5.1 / 5.2 have no `//` or bitwise operators
+                return match op {
+                    Op::Mod => emit_double_mod(lw, pl, oc),
+                    _ => None,
+                };
+            }
             let number = |k| matches!(k, RegKind::Int | RegKind::Float);
             if matches!(op, Op::IDiv | Op::Mod)
                 && number(kb)
@@ -208,6 +215,13 @@ pub(super) fn emit_int_arith_op<E: Emit>(
         }
         Op::Unm | Op::BNot => {
             let kb = k_op(&lw.current_kinds, off as u32 + ins.b());
+            if pl.float_only && kb == RegKind::Int {
+                if op != Op::Unm {
+                    return None;
+                }
+                emit_double_neg(lw, pl, oc);
+                return Some(());
+            }
             if !matches!(kb, RegKind::Int)
                 && !(matches!(op, Op::Unm) && matches!(kb, RegKind::Float))
             {
