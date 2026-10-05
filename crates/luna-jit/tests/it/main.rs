@@ -76,6 +76,7 @@ mod trace_error_unwind;
 mod trace_escape_analysis_sweep;
 mod trace_exit_side_effects;
 mod trace_field_access_helpers;
+mod trace_float_mod_nan;
 mod trace_gc_barrier;
 mod trace_gc_ssa_roots;
 mod trace_generic_for_emit;
