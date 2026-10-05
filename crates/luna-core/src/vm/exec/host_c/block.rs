@@ -64,7 +64,10 @@ impl Vm {
     pub fn host_new_block(&mut self, size: usize, nuv: usize) -> Gc<crate::runtime::Userdata> {
         let layout = HostBlock::layout(size);
         let ctx = self.heap.mem();
-        let mem = match ctx.ctx().alloc(layout, crate::runtime::mem::BlockKind::Other) {
+        let mem = match ctx
+            .ctx()
+            .alloc(layout, crate::runtime::mem::BlockKind::Other)
+        {
             Some(p) => p.as_ptr(),
             None => std::alloc::handle_alloc_error(layout),
         };
