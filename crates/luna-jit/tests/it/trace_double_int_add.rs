@@ -211,11 +211,12 @@ fn modulo_of_integers() {
 
 #[test]
 fn modulo_by_zero_and_past_two_to_the_53() {
-    // 2^54 % 3 is 1, but `a - floor(a/b)*b` in doubles rounds the product
-    // and gives 0
+    // 2^54 % 4 is exact whichever way `a - floor(a/b)*b` is rounded (gcc
+    // fuses the multiply and subtract on aarch64, so a remainder that needs
+    // rounding differs between machines, in PUC as in luna)
     check(
         "local r1, r2
-         for i = 1, 300 do r1 = one % z r2 = (p53 + p53) % #'xxx' end
+         for i = 1, 300 do r1 = one % z r2 = (p53 + p53) % #'xxxx' end
          return tostring(r1 ~= r1) .. ' ' .. string.format('%.0f', r2)",
         "true 0",
     );
