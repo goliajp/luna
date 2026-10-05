@@ -265,6 +265,27 @@ impl Vm {
         if self.stack.len() < need || self.frames.len() == self.frames.capacity() {
             self.frame_room(need)?;
         }
+        // the frame stack has room: tested just above, and pushed before any
+        // write through the stack could make the compiler test again
+        let cf = CallFrame::Lua(Frame {
+            closure: cl,
+            base,
+            pc: 0,
+            func_slot,
+            nresults,
+            hook_oldpc: u32::MAX,
+            from_c,
+            n_varargs,
+            // single-shot consume: `close_slots` sets pending_tm before each
+            // handler call; the next Lua frame born is that handler's.
+            tm: self.pending_tm.take(),
+            // `run_hook` sets `pending_is_hook` before dispatching the user
+            // hook so its frame reports `namewhat = "hook"` via getinfo.
+            is_hook: std::mem::take(&mut self.pending_is_hook),
+            tailcalls: std::mem::take(&mut self.pending_tailcalls),
+            ccmt: std::mem::take(&mut self.pending_ccmt),
+        });
+        frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf);
         // 5.5 vararg layout (PUC luaT_adjustvarargs): the extra args stay on the
         // stack just below the new `base`, so a named vararg can be indexed
         // virtually without allocating a table. Rotate `[p1..pn][e1..em]` to
@@ -292,26 +313,6 @@ impl Vm {
                 .get_unchecked_mut((base + kept) as usize..end)
                 .fill(Value::Nil)
         };
-        let cf = CallFrame::Lua(Frame {
-            closure: cl,
-            base,
-            pc: 0,
-            func_slot,
-            nresults,
-            hook_oldpc: u32::MAX,
-            from_c,
-            n_varargs,
-            // single-shot consume: `close_slots` sets pending_tm before each
-            // handler call; the next Lua frame born is that handler's.
-            tm: self.pending_tm.take(),
-            // `run_hook` sets `pending_is_hook` before dispatching the user
-            // hook so its frame reports `namewhat = "hook"` via getinfo.
-            is_hook: std::mem::take(&mut self.pending_is_hook),
-            tailcalls: std::mem::take(&mut self.pending_tailcalls),
-            ccmt: std::mem::take(&mut self.pending_ccmt),
-        });
-        // the frame stack has room: tested above
-        frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf);
         // PUC 5.1 `LUAI_COMPAT_VARARG`: the hidden `arg` local (the slot at
         // `base + nparams`) gets `{ n = n_varargs, e1, e2, … }` from the extras
         // just below `base` (5.1 db.lua :279 reads `arg.n` from a line hook).
