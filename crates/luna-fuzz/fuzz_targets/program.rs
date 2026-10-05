@@ -124,7 +124,7 @@ pub(crate) struct Program {
     prints: Vec<Expr>,
 }
 
-fn render_expr(buf: &mut String, e: &Expr, depth: u32) {
+fn render_expr(buf: &mut String, e: &Expr, depth: u32, st: Style) {
     assert!(depth <= MAX_DEPTH + 1, "generated expression deeper than render prints");
     match e {
         Expr::Int(i) => write!(buf, "({i})").unwrap(),
@@ -133,26 +133,32 @@ fn render_expr(buf: &mut String, e: &Expr, depth: u32) {
         Expr::True => buf.push_str("true"),
         Expr::False => buf.push_str("false"),
         Expr::Var(v) => buf.push_str(v.name()),
-        Expr::Add(l, r) => bin(buf, "+", l, r, depth),
-        Expr::Sub(l, r) => bin(buf, "-", l, r, depth),
-        Expr::Mul(l, r) => bin(buf, "*", l, r, depth),
+        Expr::Add(l, r) => match st.add.helper("add") {
+            Some(f) => call(buf, &f, l, r, depth, st),
+            None => bin(buf, "+", l, r, depth, st),
+        },
+        Expr::Sub(l, r) => bin(buf, "-", l, r, depth, st),
+        Expr::Mul(l, r) => match st.mul.helper("mul") {
+            Some(f) => call(buf, &f, l, r, depth, st),
+            None => bin(buf, "*", l, r, depth, st),
+        },
         Expr::Mod(l, r) => {
             // Guard divisor != 0 to avoid luna-vs-PUC error-message
             // wording drift.
             buf.push('(');
-            render_expr(buf, l, depth + 1);
+            render_expr(buf, l, depth + 1, st);
             buf.push_str(" % ((");
-            render_expr(buf, r, depth + 1);
+            render_expr(buf, r, depth + 1, st);
             buf.push_str(") ~= 0 and (");
-            render_expr(buf, r, depth + 1);
+            render_expr(buf, r, depth + 1, st);
             buf.push_str(") or 1))");
         }
-        Expr::Lt(l, r) => bin(buf, "<", l, r, depth),
+        Expr::Lt(l, r) => bin(buf, "<", l, r, depth, st),
         Expr::StringConcat(l, r) => {
             buf.push_str("(tostring(");
-            render_expr(buf, l, depth + 1);
+            render_expr(buf, l, depth + 1, st);
             buf.push_str(") .. tostring(");
-            render_expr(buf, r, depth + 1);
+            render_expr(buf, r, depth + 1, st);
             buf.push_str("))");
         }
         Expr::StringFormat(e) => {
@@ -160,14 +166,14 @@ fn render_expr(buf: &mut String, e: &Expr, depth: u32) {
             // integer string. PUC + luna agree on this contract;
             // any divergence is a real luna bug.
             buf.push_str("string.format('%d', math.floor(tonumber(");
-            render_expr(buf, e, depth + 1);
+            render_expr(buf, e, depth + 1, st);
             buf.push_str(") or 0))");
         }
         Expr::TableGet(e) => {
             // Key derived via tostring so any Value type works;
             // missing keys yield nil identically in both engines.
             buf.push_str("(t[tostring(");
-            render_expr(buf, e, depth + 1);
+            render_expr(buf, e, depth + 1, st);
             buf.push_str(")])");
         }
         Expr::TableSet(l, r) => {
@@ -176,9 +182,9 @@ fn render_expr(buf: &mut String, e: &Expr, depth: u32) {
             // deletes the key — both engines agree, no need to
             // guard.
             buf.push_str("((function() local k = tostring(");
-            render_expr(buf, l, depth + 1);
+            render_expr(buf, l, depth + 1, st);
             buf.push_str(") local v = ");
-            render_expr(buf, r, depth + 1);
+            render_expr(buf, r, depth + 1, st);
             buf.push_str(" t[k] = v return v end)())");
         }
         Expr::Pow(l, r) => {
@@ -186,31 +192,93 @@ fn render_expr(buf: &mut String, e: &Expr, depth: u32) {
             // negative or fractional R doesn't yield complex /
             // NaN with cross-engine formatting drift.
             buf.push_str("((");
-            render_expr(buf, l, depth + 1);
+            render_expr(buf, l, depth + 1, st);
             buf.push_str(") ^ ((");
-            render_expr(buf, r, depth + 1);
+            render_expr(buf, r, depth + 1, st);
             buf.push_str(") % 4))");
         }
     }
 }
 
-fn bin(buf: &mut String, op: &str, l: &Expr, r: &Expr, depth: u32) {
+fn bin(buf: &mut String, op: &str, l: &Expr, r: &Expr, depth: u32, st: Style) {
     buf.push('(');
-    render_expr(buf, l, depth + 1);
+    render_expr(buf, l, depth + 1, st);
     write!(buf, " {} ", op).unwrap();
-    render_expr(buf, r, depth + 1);
+    render_expr(buf, r, depth + 1, st);
     buf.push(')');
 }
 
+fn call(buf: &mut String, f: &str, l: &Expr, r: &Expr, depth: u32, st: Style) {
+    write!(buf, "{f}(").unwrap();
+    render_expr(buf, l, depth + 1, st);
+    buf.push_str(", ");
+    render_expr(buf, r, depth + 1, st);
+    buf.push(')');
+}
+
+/// Which operand a `+` or `*` of two NaNs returns. PUC's choice is not
+/// Lua's: x86 `addsd` / `mulsd` return the NaN in the destination
+/// register, and gcc picks which operand goes there separately for each
+/// PUC version (5.3 and 5.5 add and 5.3-5.5 multiply return the second).
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum NanPick {
+    /// the operator as written
+    Native,
+    First,
+    Second,
+}
+
+impl NanPick {
+    fn helper(self, op: &str) -> Option<String> {
+        match self {
+            NanPick::Native => None,
+            NanPick::First => Some(format!("__{op}_first")),
+            NanPick::Second => Some(format!("__{op}_second")),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Style {
+    add: NanPick,
+    mul: NanPick,
+}
+
+/// The helpers `render_with` calls: the operation itself, except that two
+/// NaN operands give the one the name says.
+const NAN_PICK_HELPERS: &str = "\
+local function __add_first(x, y) local r = x + y if x ~= x and y ~= y then return x end return r end
+local function __add_second(x, y) local r = x + y if x ~= x and y ~= y then return y end return r end
+local function __mul_first(x, y) local r = x * y if x ~= x and y ~= y then return x end return r end
+local function __mul_second(x, y) local r = x * y if x ~= x and y ~= y then return y end return r end
+";
+
 pub(crate) fn render(p: &Program) -> String {
+    render_with(p, NanPick::Native, NanPick::Native)
+}
+
+/// `render`, with `+` and `*` written as calls that fix which NaN they
+/// return when both operands are NaNs (`Native` keeps the operator).
+pub(crate) fn render_with(p: &Program, add: NanPick, mul: NanPick) -> String {
+    let st = Style { add, mul };
+    let mut buf = String::new();
+    if add != NanPick::Native || mul != NanPick::Native {
+        buf.push_str(NAN_PICK_HELPERS);
+    }
     // `t` injected for the TableGet / TableSet variants.
-    let mut buf = String::from("local a, b, c = 1, 2, 3\nlocal t = {}\n");
+    buf.push_str("local a, b, c = 1, 2, 3\nlocal t = {}\n");
     for e in p.prints.iter().take(16) {
         buf.push_str("print(");
         buf.reserve(MAX_EXPR_LEN);
         let start = buf.len();
-        render_expr(&mut buf, e, 0);
-        assert!(buf.len() - start <= MAX_EXPR_LEN, "MAX_EXPR_LEN too small");
+        render_expr(&mut buf, e, 0, st);
+        // the helper calls are longer than the operators they replace
+        assert!(
+            st.add != NanPick::Native
+                || st.mul != NanPick::Native
+                || buf.len() - start <= MAX_EXPR_LEN,
+            "MAX_EXPR_LEN too small"
+        );
         buf.push_str(")\n");
     }
     buf

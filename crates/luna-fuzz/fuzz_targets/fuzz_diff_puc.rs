@@ -30,7 +30,7 @@ use luna_core::vm::Vm;
 #[path = "program.rs"]
 mod program;
 
-use program::{Program, dialect, normalize, render};
+use program::{NanPick, Program, dialect, normalize, render, render_with};
 
 fn run_puc(source: &str) -> Option<String> {
     let out = program::run_puc(source.as_bytes())?;
@@ -73,9 +73,43 @@ fuzz_target!(|p: Program| {
     };
     let puc_n = normalize(&puc);
     let luna_n = normalize(&luna);
-    if puc_n != luna_n {
+    if puc_n != luna_n && !nan_pair_explains(&p, &puc_n, &luna_n) {
         panic!(
             "diff_puc: luna ≠ PUC\n=== source ===\n{source}\n=== PUC ===\n{puc_n}\n=== luna ===\n{luna_n}"
         );
     }
 });
+
+/// Whether every line where luna and PUC differ differs only in a NaN's
+/// sign, and luna prints PUC's line once `+` and `*` of two NaNs are made
+/// to return the first or the second operand. Which one PUC returns comes
+/// from how gcc compiled that PUC version, not from Lua (see NanPick), so
+/// such a line is not a luna bug. A NaN whose sign is wrong for any other
+/// reason stays wrong under every choice and is still reported.
+fn nan_pair_explains(p: &Program, puc: &str, luna: &str) -> bool {
+    let unsigned = |s: &str| s.replace("-nan", "nan");
+    let (puc_lines, luna_lines): (Vec<&str>, Vec<&str>) = (puc.lines().collect(), luna.lines().collect());
+    if puc_lines.len() != luna_lines.len() {
+        return false;
+    }
+    let differing: Vec<usize> = (0..puc_lines.len())
+        .filter(|&i| puc_lines[i] != luna_lines[i])
+        .collect();
+    if differing
+        .iter()
+        .any(|&i| unsigned(puc_lines[i]) != unsigned(luna_lines[i]))
+    {
+        return false;
+    }
+    let picks = [NanPick::First, NanPick::Second];
+    let variants: Vec<String> = picks
+        .iter()
+        .flat_map(|&add| picks.iter().map(move |&mul| (add, mul)))
+        .filter_map(|(add, mul)| run_luna(&render_with(p, add, mul)).map(|out| normalize(&out)))
+        .collect();
+    differing.iter().all(|&i| {
+        variants
+            .iter()
+            .any(|v| v.lines().nth(i) == Some(puc_lines[i]))
+    })
+}
