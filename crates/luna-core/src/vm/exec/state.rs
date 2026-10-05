@@ -376,6 +376,8 @@ pub struct Vm {
     pub(crate) puc_bytecode_loading: bool,
     /// lua.c's `-E`: libraries opened from now on ignore the environment
     pub(crate) ignore_env: bool,
+    /// files opened without `b` behave as in the MSVC C library's text mode
+    pub(crate) crt_text: bool,
     /// true while the hook itself runs, so its own execution fires no events
     /// (PUC clears the mask for the duration)
     pub(crate) in_hook: bool,

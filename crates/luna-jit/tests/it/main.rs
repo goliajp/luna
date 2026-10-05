@@ -21,6 +21,7 @@ mod cli_repl_edges;
 mod cli_repl_levels;
 #[cfg(all(windows, feature = "repl-line-editor"))]
 mod cli_repl_terminal;
+mod cli_text_mode;
 mod close_cause_counts;
 mod corrupt_register_state_jit;
 mod downrec_close_recording;
