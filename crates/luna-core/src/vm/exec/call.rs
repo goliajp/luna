@@ -258,19 +258,21 @@ impl Vm {
         }
         let proto = cl.proto;
         let nparams = proto.num_params as u32;
+        let n_varargs = nargs.saturating_sub(nparams) * u32::from(proto.is_vararg);
+        let base = func_slot + 1 + n_varargs;
+        let max = proto.max_stack as u32;
+        let need = (base + max) as usize;
+        if self.stack.len() < need || self.frames.len() == self.frames.capacity() {
+            return self.push_frame_grow(cl, func_slot, nargs, nresults, from_c, need);
+        }
         // 5.5 vararg layout (PUC luaT_adjustvarargs): the extra args stay on the
         // stack just below the new `base`, so a named vararg can be indexed
         // virtually without allocating a table. Rotate `[p1..pn][e1..em]` to
         // `[e1..em][p1..pn]` so the fixed params land at the new base.
-        let n_varargs = nargs.saturating_sub(nparams) * u32::from(proto.is_vararg);
         if n_varargs > 0 {
             let s = (func_slot + 1) as usize;
             self.stack[s..s + nargs as usize].rotate_left(nparams as usize);
         }
-        let base = func_slot + 1 + n_varargs;
-        let max = proto.max_stack as u32;
-        let need = (base + max) as usize;
-        self.grow_stack(need)?;
         // Only missing parameters become nil (PUC `luaD_precall`): the code
         // writes the rest before reading it, the collector keeps it valid
         // (`clear_dead_stack`) and a trace checks only what it reads first.
@@ -283,7 +285,7 @@ impl Vm {
             nparams
         };
         let end = (base + window) as usize;
-        // SAFETY: `need <= stack.len()` (resized above) and `base + kept <=
+        // SAFETY: `need <= stack.len()` (tested above) and `base + kept <=
         // end <= need` since `kept <= nparams <= max_stack`.
         unsafe {
             self.stack
@@ -308,7 +310,8 @@ impl Vm {
             tailcalls: std::mem::take(&mut self.pending_tailcalls),
             ccmt: std::mem::take(&mut self.pending_ccmt),
         });
-        self.push_cf(cf)?;
+        // the frame stack has room: tested above
+        frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf);
         // PUC 5.1 `LUAI_COMPAT_VARARG`: the hidden `arg` local (the slot at
         // `base + nparams`) gets `{ n = n_varargs, e1, e2, … }` from the extras
         // just below `base` (5.1 db.lua :279 reads `arg.n` from a line hook).
@@ -340,5 +343,27 @@ impl Vm {
             .is_some_and(|f| f.tailcalls > 0);
         self.hook_call_with(false, nparams, is_tail)?;
         Ok(())
+    }
+
+    /// [`Vm::push_frame`] when the stack must grow to `need` slots or the
+    /// frame stack is full: make the room, collecting in an emergency when
+    /// memory runs out, then push. Out of line and last, so the common path
+    /// keeps nothing alive across a call.
+    #[cold]
+    #[inline(never)]
+    fn push_frame_grow(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        func_slot: u32,
+        nargs: u32,
+        nresults: i32,
+        from_c: bool,
+        need: usize,
+    ) -> Result<(), LuaError> {
+        self.grow_stack(need)?;
+        if self.frames.len() == self.frames.capacity() {
+            self.retry_oom(|vm| vm.frames.reserve(1))?;
+        }
+        self.push_frame(cl, func_slot, nargs, nresults, from_c)
     }
 }
