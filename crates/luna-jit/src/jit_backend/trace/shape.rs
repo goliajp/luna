@@ -75,9 +75,9 @@ pub(crate) fn verify_depth_invariant(items: &[(u8, bool)]) -> bool {
 pub(super) fn plain_trace_end(
     record: &TraceRecord,
     folded_ops: &[bool],
+    calls: &[Option<InlineCall>],
 ) -> Option<(usize, TraceEnd)> {
     let mut found: Option<(usize, TraceEnd)> = None;
-    let (calls, _) = inline_calls(record);
     for (i, r) in record.ops.iter().enumerate() {
         if folded_ops[i] {
             continue;
@@ -89,7 +89,7 @@ pub(super) fn plain_trace_end(
         }
         match r.inst.op() {
             Op::Call => {
-                if call_inlinable(record, &calls, i) {
+                if call_inlinable(record, calls, i) {
                     // Continue walking — Op::Call emits nothing in
                     // the inline path and op_offsets handles the
                     // window shift for the callee's subsequent ops.
@@ -157,9 +157,17 @@ pub(super) fn call_inlinable(record: &TraceRecord, calls: &[Option<InlineCall>],
         && depth < MAX_INLINE_DEPTH as usize
 }
 
+#[cfg(test)]
 pub(super) fn compute_op_offsets(record: &TraceRecord) -> (Vec<u32>, Vec<Option<u8>>) {
+    compute_op_offsets_with(record, &inline_calls(record).0)
+}
+
+/// [`compute_op_offsets`] given the record's [`inline_calls`].
+pub(super) fn compute_op_offsets_with(
+    record: &TraceRecord,
+    calls: &[Option<InlineCall>],
+) -> (Vec<u32>, Vec<Option<u8>>) {
     let n = record.ops.len();
-    let (calls, _) = inline_calls(record);
     let mut offsets = Vec::with_capacity(n);
     let mut enclosing_call_a = Vec::with_capacity(n);
     // `offset_stack[d]` = the register-window offset for depth d.
