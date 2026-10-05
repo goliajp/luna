@@ -35,6 +35,7 @@ impl<T> LVec<T> {
     }
 
     /// An empty vector with room for `n`.
+    #[inline]
     pub fn with_capacity(mem: MemRef, n: usize) -> Result<LVec<T>, Oom> {
         let mut v = LVec::new(mem);
         v.reserve_exact(n)?;
@@ -249,6 +250,7 @@ impl<T> LVec<T> {
     }
 
     /// The elements as a boxed slice, giving back the spare capacity.
+    #[inline]
     pub fn into_slice(mut self) -> super::LSlice<T> {
         self.shrink_to_fit();
         let me = std::mem::ManuallyDrop::new(self);
@@ -284,6 +286,7 @@ impl<T> LVec<T> {
 
 impl<T: Clone> LVec<T> {
     /// Append clones of `s`.
+    #[inline]
     pub fn extend_from_slice(&mut self, s: &[T]) -> Result<(), Oom> {
         self.reserve(s.len())?;
         for v in s {
@@ -327,6 +330,7 @@ impl<T: Clone> LVec<T> {
     }
 
     /// A vector on `mem` holding clones of `s`.
+    #[inline]
     pub fn from_slice(mem: MemRef, s: &[T]) -> Result<LVec<T>, Oom> {
         let mut v = LVec::with_capacity(mem, s.len())?;
         v.extend_from_slice(s)?;
