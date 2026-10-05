@@ -337,6 +337,10 @@ optimization.
 
 ### Fixed
 
+- The side-trace gate read a `Jmp`'s offset from the `sBx` field instead
+  of `sJ`, so it took a backward jump of fewer than 256 instructions for
+  no jump and let a side trace that loops and writes to tables compile.
+
 - A loop trace that ran a whole pass and returned to its head through
   its own tail could put back the registers that pass wrote as they were
   before it: the return was matched by its pc to a guard that also

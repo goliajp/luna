@@ -351,7 +351,7 @@ fn side_trace_gate(record: &TraceRecord, op_offsets: &[u32]) -> Option<()> {
         // Check 1: any back-edge op? (ForLoop / TForLoop / Jmp -bx)
         let has_back_edge = record.ops.iter().any(|op| match op.inst.op() {
             luna_core::vm::isa::Op::ForLoop | luna_core::vm::isa::Op::TForLoop => true,
-            luna_core::vm::isa::Op::Jmp => op.inst.sbx() < 0,
+            luna_core::vm::isa::Op::Jmp => op.inst.sj() < 0,
             _ => false,
         });
         if has_back_edge {
