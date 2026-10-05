@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1362** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1370** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 224 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **7** | six `#[doc(hidden)]`, and `MemOwner::raw`, see §5 |
 | **`pub unsafe extern "C" fn`** | 197 | the C API (143), the `luna_jit_*` helpers compiled code calls (48, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
@@ -39,9 +39,9 @@ quotes the pattern counts too.
 | `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `fast_arith.rs`) | 56 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch |
 | | `vm/exec/index_*` | 38 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
 | | `vm/exec` (other) | 83 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
-| | `runtime/heap*`, `gc_ptr.rs` | 77 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle, the debug check of the slow-store bit |
+| | `runtime/heap*`, `gc_ptr.rs` | 83 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle, the debug check of the slow-store bit |
 | | `runtime/table*` | 48 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
-| | `runtime/mem` | 55 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the vector's and boxed slice's initialised prefix |
+| | `runtime/mem` | 57 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the vector's and boxed slice's initialised prefix |
 | | `runtime` (other) | 36 | string headers and their trailing bytes, the value tag/payload encoding, closure upvalue storage |
 | | `vm/lib_*` | 43 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`) and the table writes that build each library |
 | | `vm` (other) | 48 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
@@ -61,7 +61,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1362** | |
+| **Total** | | **1370** | |
 
 ## 3. Pattern catalog
 
