@@ -79,29 +79,34 @@ impl<T> Gc<T> {
 /// A type the GC allocates: `#[repr(C)]` with its [`GcHeader`] as the first
 /// field, so a pointer to the object is a pointer to its header. Sealed: only
 /// the runtime's own object types implement it.
-pub trait GcObject: sealed::Sealed {}
+pub trait GcObject: sealed::Sealed {
+    /// What the object's block is, for the allocation context.
+    const KIND: crate::runtime::mem::BlockKind;
+}
 
 mod sealed {
     pub trait Sealed {}
 }
 
 macro_rules! gc_objects {
-    ($($t:ty),* $(,)?) => {$(
+    ($($t:ty => $k:ident),* $(,)?) => {$(
         impl sealed::Sealed for $t {}
-        impl GcObject for $t {}
+        impl GcObject for $t {
+            const KIND: crate::runtime::mem::BlockKind = crate::runtime::mem::BlockKind::$k;
+        }
         const _: () = assert!(std::mem::offset_of!($t, hdr) == 0);
     )*};
 }
 
 gc_objects!(
-    crate::runtime::LuaStr,
-    crate::runtime::Table,
-    crate::runtime::Proto,
-    crate::runtime::LuaClosure,
-    crate::runtime::function::Upvalue,
-    crate::runtime::NativeClosure,
-    crate::runtime::Coro,
-    crate::runtime::Userdata,
+    crate::runtime::LuaStr => Str,
+    crate::runtime::Table => Table,
+    crate::runtime::Proto => Proto,
+    crate::runtime::LuaClosure => LuaFn,
+    crate::runtime::function::Upvalue => Upvalue,
+    crate::runtime::NativeClosure => NativeFn,
+    crate::runtime::Coro => Thread,
+    crate::runtime::Userdata => Userdata,
 );
 
 impl<T: GcObject> Gc<T> {
