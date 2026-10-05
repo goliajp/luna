@@ -147,18 +147,9 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     // `binary_trees`'s `{nil, nil}` leaf stores actual Nil values
     // instead of misinterpreting the 0 bits as `Int(0)`.
     let current_is_nil: Vec<bool> = vec![false; max_stack];
-    let self_calls = any_self_call.then(|| {
-        use luna_jit_helpers::*;
-        let ret = match (scan.sees_return1, ret_kind) {
-            (false, _) => SELF_CALL_RET_NONE,
-            (true, RegKind::Float) => SELF_CALL_RET_FLOAT,
-            (true, RegKind::Table) => SELF_CALL_RET_TABLE,
-            (true, _) => SELF_CALL_RET_INT,
-        };
-        SelfCalls {
-            ctx: bcx.block_params(entry)[num_params],
-            desc: self_call_desc(num_params as u32, arg_float_mask, arg_table_mask, ret),
-        }
+    let self_calls = any_self_call.then(|| SelfCalls {
+        ctx: bcx.block_params(entry)[num_params],
+        desc: self_call_desc((arg_float_mask, arg_table_mask), num_params, scan, ret_kind),
     });
 
     let f = EmitFacts {
@@ -332,4 +323,16 @@ fn define_entry<M: Module>(
         fn_id
     };
     Some(entry_id)
+}
+
+/// `luna_jit_helpers::self_call_desc` of a chunk's self calls.
+fn self_call_desc(masks: (u8, u8), num_params: usize, scan: &ChunkScan, ret_kind: RegKind) -> i64 {
+    use luna_jit_helpers::*;
+    let ret = match (scan.sees_return1, ret_kind) {
+        (false, _) => SELF_CALL_RET_NONE,
+        (true, RegKind::Float) => SELF_CALL_RET_FLOAT,
+        (true, RegKind::Table) => SELF_CALL_RET_TABLE,
+        (true, _) => SELF_CALL_RET_INT,
+    };
+    luna_jit_helpers::self_call_desc(num_params as u32, masks.0, masks.1, ret)
 }

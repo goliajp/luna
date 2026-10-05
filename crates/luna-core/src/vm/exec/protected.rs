@@ -136,7 +136,7 @@ impl Vm {
         // C function running below the metamethod. Call mm(t) wanting 4.
         let need = (func_slot + 3) as usize;
         if self.stack.len() < need {
-            self.stack.resize(need, Value::Nil);
+            self.grow_stack_or_abort(need);
         }
         self.stack[(func_slot + 2) as usize] = arg;
         self.stack[(func_slot + 1) as usize] = mm;

@@ -1,6 +1,7 @@
 //! Constant folding and literal tests over the AST.
 
 use super::Exp;
+use super::ctconst::{Arith, fold_numbers};
 use super::{Chunk, Expr};
 use crate::frontend::ast::{BinOp, ExprId, UnOp};
 use crate::numeric::Num;
@@ -54,13 +55,10 @@ pub(super) fn numeral(
         Expr::Float(f) => Some(Num::Float(*f)),
         Expr::Paren(inner) => numeral(ast, *inner, version, zeros),
         Expr::UnOp {
-            op: UnOp::Neg,
+            op: op @ (UnOp::Neg | UnOp::BNot),
             operand,
             ..
-        } => match numeral(ast, *operand, version, zeros)? {
-            Num::Int(i) => Some(Num::Int(i.wrapping_neg())),
-            Num::Float(f) => Some(Num::Float(-f)),
-        },
+        } => fold_unary(*op, numeral(ast, *operand, version, zeros)?, version),
         Expr::BinOp {
             op: BinOp::Or,
             lhs,
@@ -183,21 +181,42 @@ fn fixed_condition(ast: &Chunk, id: ExprId, zeros: &mut Vec<f64>) -> bool {
     }
 }
 
+/// `-n` or `~n` as PUC's parser folds it: 5.1 / 5.2 negate any number
+/// (they have no `~`); 5.3+ fold through `constfolding`, which leaves a
+/// float zero (`-0.0`) and a float without an integer value under `~` be.
+pub(super) fn fold_unary(op: UnOp, n: Num, version: LuaVersion) -> Option<Num> {
+    if version >= LuaVersion::Lua53 {
+        let op = if op == UnOp::Neg {
+            Arith::Unm
+        } else {
+            Arith::BNot
+        };
+        return fold_numbers(op, n, Num::Int(0), version == LuaVersion::Lua53);
+    }
+    match (op, n) {
+        (UnOp::Neg, Num::Int(i)) => Some(Num::Int(i.wrapping_neg())),
+        (UnOp::Neg, Num::Float(f)) => Some(Num::Float(-f)),
+        _ => None,
+    }
+}
+
 fn fold_nums(op: BinOp, l: Num, r: Num, version: LuaVersion) -> Option<Num> {
     use Num::*;
-    // PUC leaves a division or modulo by zero to run time
+    if version >= LuaVersion::Lua53 {
+        return fold_numbers(Arith::of(op)?, l, r, version == LuaVersion::Lua53);
+    }
+    // 5.1 / 5.2: PUC leaves a division or modulo by zero to run time
     if matches!(op, BinOp::Div | BinOp::Mod) && r.as_f64() == 0.0 {
         return None;
     }
-    let one_type = version <= LuaVersion::Lua52;
     let v = match (op, l, r) {
-        // 5.1/5.2 fold `%` and `^` as well (luai_nummod, luai_numpow); where
-        // a zero's sign is kept in the constant table, that is observable
-        (BinOp::Mod, a, b) if one_type => {
+        // they fold `%` and `^` as well (luai_nummod, luai_numpow); where a
+        // zero's sign is kept in the constant table, that is observable
+        (BinOp::Mod, a, b) => {
             let (a, b) = (a.as_f64(), b.as_f64());
             Float(crate::numeric::nummod_floor(a, b))
         }
-        (BinOp::Pow, a, b) if one_type => Float(a.as_f64().powf(b.as_f64())),
+        (BinOp::Pow, a, b) => Float(a.as_f64().powf(b.as_f64())),
         (BinOp::Add, Int(a), Int(b)) => Int(a.wrapping_add(b)),
         (BinOp::Sub, Int(a), Int(b)) => Int(a.wrapping_sub(b)),
         (BinOp::Mul, Int(a), Int(b)) => Int(a.wrapping_mul(b)),
@@ -207,11 +226,9 @@ fn fold_nums(op: BinOp, l: Num, r: Num, version: LuaVersion) -> Option<Num> {
         (BinOp::Div, a, b) => Float(a.as_f64() / b.as_f64()),
         _ => return None,
     };
-    // PUC `constfolding` leaves a NaN unfolded, and from 5.3 a float zero
-    // too: its sign can depend on how the operation is compiled (5.4's
-    // `-0.0 - 0` runs as `-0.0 + 0`).
+    // PUC `constfolding` leaves a NaN unfolded
     if let Float(f) = v
-        && (f.is_nan() || (f == 0.0 && version >= LuaVersion::Lua53))
+        && f.is_nan()
     {
         return None;
     }

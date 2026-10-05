@@ -2,6 +2,7 @@
 //! backend, and tearing the state down.
 
 use super::*;
+use crate::runtime::mem::LVec;
 
 impl Vm {
     /// `lua_close` from inside a running script (`os.exit(code, true)`):
@@ -33,13 +34,15 @@ impl Vm {
         let globals = heap.new_table();
         let mm_names = std::array::from_fn(|i| heap.intern(MM_NAMES[i].as_bytes()));
 
+        let mem = heap.mem();
+        let mem_owner = heap.mem_owner();
         Vm {
             heap,
-            stack: Vec::new(),
-            frames: Vec::new(),
+            stack: LVec::new(mem),
+            frames: LVec::new(mem),
             frames_top: 0,
-            open_upvals: Vec::new(),
-            tbc: Vec::new(),
+            open_upvals: LVec::new(mem),
+            tbc: LVec::new(mem),
             top: 0,
             globals,
             type_mt: [None; 7],
@@ -99,6 +102,7 @@ impl Vm {
             io_output: None,
             io_stdin: None,
             ignore_env: false,
+            crt_text: false,
             hook: HookState::default(),
             in_hook: false,
             trap: true,
@@ -168,6 +172,7 @@ impl Vm {
                 NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             },
             retired_jit_storage: Vec::new(),
+            _mem: mem_owner,
         }
     }
 

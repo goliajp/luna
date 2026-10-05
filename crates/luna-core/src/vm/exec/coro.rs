@@ -165,10 +165,10 @@ impl Vm {
             // SAFETY: `co` is still held by the caller, and its context was swapped back out above (`take_ctx`), so `m` is the only reference into it while it is cleared
             let m = unsafe { co.as_mut() };
             m.status = CoroStatus::Dead;
-            m.stack = Vec::new();
-            m.frames = Vec::new();
-            m.open_upvals = Vec::new();
-            m.tbc = Vec::new();
+            m.stack.take();
+            m.frames.take();
+            m.open_upvals.take();
+            m.tbc.take();
             m.top = 0;
             m.pcall_depth = 0;
             m.resume_at = None;

@@ -169,8 +169,8 @@ impl Vm {
         self.enter_c_level(true)?;
         let saved_top = self.top;
         let cont_slot = self.stack.len() as u32;
-        self.stack.push(func);
-        self.stack.extend_from_slice(args);
+        self.stack.push_or_abort(func);
+        self.stack.extend_from_slice_or_abort(args);
         self.top = self.stack.len() as u32;
         frames_push_sync(
             &mut self.frames,

@@ -197,7 +197,18 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
     }
     locvars.sort_by_key(|v| (v.0, v.1));
 
-    let own: Vec<(bool, u8)> = p.upvals.iter().map(|u| (u.in_stack, u.index)).collect();
+    // PUC's `mainfunc` describes a main chunk's `_ENV` as register 0 of the
+    // (absent) enclosing function: in the stack, index 0
+    let main = caps.is_none() && p.line_defined == 0;
+    let own: Vec<(bool, u8)> = p
+        .upvals
+        .iter()
+        .enumerate()
+        .map(|(k, u)| match k {
+            0 if main && &*u.name == "_ENV" => (true, 0),
+            _ => (u.in_stack, u.index),
+        })
+        .collect();
     let caps = caps.unwrap_or(own);
     let skip_env = usize::from(d == Dialect::V51);
     let upvals = p

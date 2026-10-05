@@ -117,7 +117,7 @@ impl Vm {
                 }
                 let need = (abs_a + count) as usize;
                 if self.stack.len() < need {
-                    self.stack.resize(need, Value::Nil);
+                    self.grow_stack_or_abort(need);
                 }
                 for i in 0..count {
                     let v = if i >= n {

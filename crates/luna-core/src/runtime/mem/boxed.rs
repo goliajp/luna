@@ -126,6 +126,12 @@ impl<T> LSlice<T> {
         self.mem
     }
 
+    /// The block, no longer owned: [`LSlice::from_raw_parts`] with the
+    /// same length and handle takes it back.
+    pub(crate) fn into_raw_parts(self) -> NonNull<T> {
+        std::mem::ManuallyDrop::new(self).ptr
+    }
+
     /// Back into a vector (length and capacity both `len`).
     pub fn into_vec(self) -> LVec<T> {
         let me = std::mem::ManuallyDrop::new(self);
@@ -139,8 +145,23 @@ impl<T> LSlice<T> {
     }
 }
 
+impl<T> LSlice<T> {
+    /// The items of `it` in a block of exactly their number.
+    pub fn collect_exact(
+        mem: MemRef,
+        it: impl ExactSizeIterator<Item = T>,
+    ) -> Result<LSlice<T>, Oom> {
+        let mut v = LVec::with_capacity(mem, it.len())?;
+        for x in it {
+            v.push(x)?;
+        }
+        Ok(v.into_slice())
+    }
+}
+
 impl<T: Clone> LSlice<T> {
     /// A slice on `mem` holding clones of `s`.
+    #[inline]
     pub fn from_slice(mem: MemRef, s: &[T]) -> Result<LSlice<T>, Oom> {
         Ok(LVec::from_slice(mem, s)?.into_slice())
     }

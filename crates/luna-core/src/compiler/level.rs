@@ -86,6 +86,7 @@ impl<'a> Level<'a> {
         source: Gc<LuaStr>,
         line_defined: u32,
         last_line_defined: u32,
+        heap: &Heap,
     ) -> (Proto, LevelBufs) {
         crate::runtime::function_close::mark_closing_returns(&mut self.code, &self.protos);
         let env_upval_idx = self
@@ -96,20 +97,20 @@ impl<'a> Level<'a> {
             .map_or(u8::MAX, |i| i as u8);
         let proto = Proto {
             hdr: GcHeader::new(ObjTag::Proto),
-            code: self.code.drain(..).collect(),
-            consts: self.consts.drain(..).collect(),
-            protos: self.protos.drain(..).collect(),
-            upvals: self.upvals.drain(..).collect(),
+            code: heap.block_of(self.code.drain(..)),
+            consts: heap.block_of(self.consts.drain(..)),
+            protos: heap.block_of(self.protos.drain(..)),
+            upvals: heap.block_of(self.upvals.drain(..)),
             num_params: self.num_params,
             is_vararg: self.is_vararg,
             has_vararg_table_pseudo: self.has_vararg_table_pseudo,
             has_compat_vararg_arg: self.has_compat_vararg_arg,
             max_stack: self.max_stack as u8,
-            lines: self.lines.drain(..).collect(),
+            lines: heap.block_of(self.lines.drain(..)),
             source,
             line_defined,
             last_line_defined,
-            locvars: self.locvars.drain(..).collect(),
+            locvars: heap.block_of(self.locvars.drain(..)),
             cache: std::cell::Cell::new(None),
             jit: std::cell::Cell::new(crate::runtime::function::JitProtoState::Untried),
             env_upval_idx,

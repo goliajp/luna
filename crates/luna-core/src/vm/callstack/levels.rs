@@ -376,7 +376,7 @@ impl Vm {
             _ => &mut self.stack,
         };
         if stack.len() <= slot {
-            stack.resize(slot + 1, Value::Nil);
+            stack.resize_or_abort(slot + 1, Value::Nil);
         }
         stack[slot] = v;
     }

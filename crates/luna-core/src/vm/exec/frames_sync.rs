@@ -1,6 +1,7 @@
 //! Pushing and popping frames with the bookkeeping that goes with it.
 
 use super::*;
+use crate::runtime::mem::LVec;
 
 // Split-borrow free fn helpers for frames push/pop with shadow counter
 // `frames_top: u32`. Free fns (not Vm methods) so callers can pass
@@ -17,7 +18,7 @@ use super::*;
 // leaves one on top.
 #[inline(always)]
 pub(super) fn frames_push_sync(
-    frames: &mut Vec<CallFrame>,
+    frames: &mut LVec<CallFrame>,
     frames_top: &mut u32,
     trap: &mut bool,
     cf: CallFrame,
@@ -25,7 +26,7 @@ pub(super) fn frames_push_sync(
     if matches!(cf, CallFrame::Cont(_)) {
         *trap = true;
     }
-    frames.push(cf);
+    frames.push_or_abort(cf);
     // Shadow maintenance is debug-only: release builds skip the
     // increment + assertion entirely. While nothing reads the shadow,
     // its purpose is to VERIFY the assumed invariant
@@ -46,7 +47,7 @@ pub(super) fn frames_push_sync(
 
 #[inline(always)]
 pub(super) fn frames_pop_sync(
-    frames: &mut Vec<CallFrame>,
+    frames: &mut LVec<CallFrame>,
     frames_top: &mut u32,
     trap: &mut bool,
 ) -> Option<CallFrame> {
@@ -74,7 +75,7 @@ pub(super) fn frames_pop_sync(
 /// and whether it is a continuation: `frames.len() >= 2`.
 #[inline(always)]
 pub(super) fn frames_pop_known(
-    frames: &mut Vec<CallFrame>,
+    frames: &mut LVec<CallFrame>,
     frames_top: &mut u32,
     trap: &mut bool,
     cont_below: bool,
