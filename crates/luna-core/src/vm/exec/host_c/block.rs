@@ -3,6 +3,7 @@
 //! user values.
 
 use super::*;
+use crate::runtime::mem::{BlockKind, LAny, LVec, oom_abort};
 use crate::runtime::userdata::UserdataPayload;
 use std::alloc::Layout;
 
@@ -12,12 +13,10 @@ const BLOCK_ALIGN: usize = 16;
 /// The raw memory and user values of a userdata made by the C API.
 pub struct HostBlock {
     mem: *mut u8,
-    /// the allocation context the block came from
-    ctx: crate::runtime::mem::MemRef,
     size: usize,
     /// The user values (`lua_getiuservalue`); one in 5.2 and 5.3, as many
     /// as the host asked for from 5.4 on.
-    pub uservalues: Vec<Value>,
+    pub uservalues: LVec<Value>,
 }
 
 impl HostBlock {
@@ -38,10 +37,10 @@ impl HostBlock {
 
 impl Drop for HostBlock {
     fn drop(&mut self) {
-        // SAFETY: `mem` came from `ctx` with this layout in `host_new_block`,
-        // and only this drop frees it
+        // SAFETY: `mem` came from the context `uservalues` allocates through,
+        // with this layout, in `host_new_block`, and only this drop frees it
         unsafe {
-            self.ctx.ctx().free(
+            self.uservalues.mem().ctx().free(
                 std::ptr::NonNull::new_unchecked(self.mem),
                 Self::layout(self.size),
             )
@@ -49,7 +48,7 @@ impl Drop for HostBlock {
     }
 }
 
-fn trace_block(any: &(dyn std::any::Any + 'static), m: &mut crate::vm::UserdataMarker<'_>) {
+fn trace_block(any: &crate::runtime::mem::LAny, m: &mut crate::vm::UserdataMarker<'_>) {
     if let Some(b) = any.downcast_ref::<HostBlock>() {
         for &v in &b.uservalues {
             m.mark_value(v);
@@ -63,25 +62,22 @@ impl Vm {
     /// values and no metatable.
     pub fn host_new_block(&mut self, size: usize, nuv: usize) -> Gc<crate::runtime::Userdata> {
         let layout = HostBlock::layout(size);
-        let ctx = self.heap.mem();
-        let mem = match ctx
-            .ctx()
-            .alloc(layout, crate::runtime::mem::BlockKind::Other)
-        {
+        let ctx = self.heap.mem_ctx();
+        let mem = match ctx.alloc_zeroed(layout, BlockKind::Other) {
             Some(p) => p.as_ptr(),
-            None => std::alloc::handle_alloc_error(layout),
+            None => oom_abort(layout),
         };
-        // SAFETY: `mem` is a fresh block of `layout.size()` bytes
-        unsafe { mem.write_bytes(0, layout.size()) };
+        let mut uservalues = LVec::new(self.heap.mem());
+        uservalues.resize_or_abort(nuv, Value::Nil);
         let block = HostBlock {
             mem,
-            ctx,
             size,
-            uservalues: vec![Value::Nil; nuv],
+            uservalues,
         };
         let payload = UserdataPayload::Host {
             type_id: std::any::TypeId::of::<HostBlock>(),
-            data: Box::new(block),
+            data: LAny::new(self.heap.mem(), block, BlockKind::Other)
+                .unwrap_or_else(|_| oom_abort(std::alloc::Layout::new::<HostBlock>())),
             trace_fn: Some(trace_block),
         };
         let u = self.heap.new_userdata(payload, true);

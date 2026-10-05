@@ -603,6 +603,10 @@ optimization.
   block; `lua_setallocf` moves later allocations and frees to the new
   function; `lua_gc(LUA_GCCOUNT/LUA_GCCOUNTB)` and `collectgarbage("count")`
   report the bytes the function has handed out.
+- The memory inside objects comes from the Vm's allocation context too:
+  tables' array and hash parts, prototypes' code, constants and debug
+  records, closures' and native functions' upvalues, coroutine stacks and
+  frames, the C API's per-thread `lua_State` and its userdata blocks.
 - luna-aot links `x86_64-pc-windows-msvc` without Visual Studio, on
   Linux, macOS or Windows: `clang-cl` and `lld-link` from LLVM with the
   MSVC C runtime and Windows SDK from `xwin splat`, named by

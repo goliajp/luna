@@ -67,10 +67,10 @@ impl Vm {
         m.resume_at = None;
         m.error_traceback = None;
         m.error_levels = None;
-        m.stack = Vec::new();
-        m.frames = Vec::new();
-        m.open_upvals = Vec::new();
-        m.tbc = Vec::new();
+        m.stack.take();
+        m.frames.take();
+        m.open_upvals.take();
+        m.tbc.take();
         m.top = 0;
         m.pcall_depth = 0;
         self.heap.barrier_back(co);
@@ -103,7 +103,7 @@ impl Vm {
         }
         // SAFETY: `co` is the coroutine that just returned, held by the
         // caller; its C frames are gone and no reference into it is live
-        let mut all = std::mem::take(&mut unsafe { co.as_mut() }.host_stack);
+        let mut all = unsafe { co.as_mut() }.host_stack.take().to_vec();
         all.extend(vals);
         Ok(all)
     }

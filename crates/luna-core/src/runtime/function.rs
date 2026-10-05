@@ -2,6 +2,7 @@
 
 use crate::runtime::fnv::FnvHash128;
 use crate::runtime::heap::{Gc, GcHeader};
+use crate::runtime::mem::LSlice;
 use crate::runtime::string::LuaStr;
 use crate::runtime::value::Value;
 use crate::vm::isa::Inst;
@@ -28,13 +29,13 @@ pub const TRACE_HEADS_CAP: usize = 4;
 pub struct Proto {
     pub(crate) hdr: GcHeader,
     /// Bytecode instructions, in execution order.
-    pub code: Box<[Inst]>,
+    pub code: LSlice<Inst>,
     /// Constant table referenced by `LoadK` / `*K` opcodes.
-    pub consts: Box<[Value]>,
+    pub consts: LSlice<Value>,
     /// Nested prototypes referenced by `Closure`.
-    pub protos: Box<[Gc<Proto>]>,
+    pub protos: LSlice<Gc<Proto>>,
     /// Upvalue descriptors (one per upvalue this function captures).
-    pub upvals: Box<[UpvalDesc]>,
+    pub upvals: LSlice<UpvalDesc>,
     /// Fixed parameter count.
     pub num_params: u8,
     /// Whether the function accepts `...`.
@@ -53,7 +54,7 @@ pub struct Proto {
     /// registers needed by a frame of this function
     pub max_stack: u8,
     /// line of each instruction (same length as `code`)
-    pub lines: Box<[u32]>,
+    pub lines: LSlice<u32>,
     /// chunk name, for error messages
     pub source: Gc<LuaStr>,
     /// Source line where the function was defined.
@@ -62,7 +63,7 @@ pub struct Proto {
     /// main chunk
     pub last_line_defined: u32,
     /// local-variable debug records (name + live pc range)
-    pub locvars: Box<[LocVar]>,
+    pub locvars: LSlice<LocVar>,
     /// PUC 5.2 / 5.3 closure cache (`Proto.cache`): the last LClosure built from
     /// this Proto. When OP_CLOSURE fires, the VM compares each candidate
     /// upvalue to the cached closure's same-slot upvalue (`getcached`); on a
@@ -412,7 +413,7 @@ pub struct NativeClosure {
     /// The host function pointer this closure dispatches to.
     pub f: crate::runtime::value::NativeFn,
     /// Captured upvalues, visible inside `f` via the Vm's call API.
-    pub upvals: Box<[Value]>,
+    pub upvals: crate::runtime::mem::LSlice<Value>,
     /// Marker bit for async natives. When `true`,
     /// `f` is actually an `crate::vm::async_drive::AsyncNativeFn`
     /// (same pointer width, transmuted at the call site) returning a
