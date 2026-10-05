@@ -30,6 +30,9 @@ fn method_isa() -> Option<cranelift_codegen::isa::OwnedTargetIsa> {
         flag_builder.set("use_colocated_libcalls", "false").ok();
         flag_builder.set("is_pic", "false").ok();
         flag_builder.set("opt_level", "speed").ok();
+        // the stack limit of self-recursive chunks lives in the pinned
+        // register (see `SelfCalls`)
+        flag_builder.set("enable_pinned_reg", "true").ok();
         // Release builds leave the IR verifier out, as the trace JIT does
         // (see `build_trace_jit_module`).
         if !cfg!(debug_assertions) {

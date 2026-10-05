@@ -160,11 +160,6 @@ impl Vm {
                 pending = Some(e.0);
                 continue;
             }
-            // failing to call the handler is the handler's error
-            if let Err(e) = self.enter_c_level(true) {
-                pending = Some(e.0);
-                continue;
-            }
             // A real handler: stage [mm, v, (err?)] above the current top,
             // record the close iteration state in a Cont::Close, and let the
             // interpreter dispatch the handler. On return the run() head

@@ -363,15 +363,13 @@ optimization.
 
 - Unbounded nesting no longer crashes the process with a native stack
   overflow; it raises the Lua error PUC raises, which `pcall` catches.
-  Nesting that runs on the native stack (metamethods, `__close`,
-  `__pairs`, library callbacks such as `table.sort`'s comparator,
-  `string.gsub`'s replacement and `load`'s reader, `tostring`'s
-  `__tostring`, coroutine resumes, message handlers, C API calls, the
-  parser) is counted against PUC's 200-level C-call limit and also
-  checked against the running thread's real stack bounds, so it fails
-  with "C stack overflow" on an embedder thread with a 256 KB or 2 MB
-  stack too. Metamethod, `__close` and `__pairs` calls now count against
-  that limit, as in PUC (they were bounded only by the Lua stack). A
+  Nesting that runs on the native stack (library callbacks such as
+  `table.sort`'s comparator, `string.gsub`'s replacement and `load`'s
+  reader, `tostring`'s `__tostring`, coroutine resumes, message handlers,
+  C API calls, the parser) is counted against PUC's 200-level C-call
+  limit as before and now also checked against the running thread's
+  real stack bounds, so it fails with "C stack overflow" on an embedder
+  thread with a 256 KB or 2 MB stack too. A
   function the method JIT compiled calls itself natively only while
   stack is left, then lets the interpreter make the remaining calls, so
   deep recursion ends with "stack overflow" at the Lua stack limit, or
@@ -380,8 +378,11 @@ optimization.
   (`1 + 1 + ... + 1`) that luna's compiler cannot walk with the stack
   left fails to load with the dialect's nesting error instead of
   crashing. `coroutine.wrap` in 5.4 and 5.5 no longer closes a coroutine
-  that a resume refused to start. Affects every released version up to
-  4.0.2.
+  that a resume refused to start. Seen in 4.0.2: a `table.sort`
+  comparator, `string.gsub` replacement, `__tostring` or coroutine
+  resume recursing without end on a 256 KB thread, a compiled function
+  recursing without end on any thread, and a 200000-term sum on the main
+  thread all crashed it.
 
 ||||||| 13c401da
 

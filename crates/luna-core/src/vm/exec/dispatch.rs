@@ -41,7 +41,6 @@ impl Vm {
         // instruction (PUC luaV_finishOp) and resume the running frame.
         if let ContKind::Meta(mc) = nc.kind {
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-            self.pcall_depth -= 1;
             let result = if self.top > nc.func_slot {
                 self.stack[nc.func_slot as usize]
             } else {
@@ -61,7 +60,6 @@ impl Vm {
         // drive_close hands the results up to exec_with directly.
         if let ContKind::Close(cc) = nc.kind {
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-            self.pcall_depth -= 1;
             let pending = cc.has_pending.then(|| self.stack[nc.func_slot as usize]);
             self.top = nc.func_slot;
             if let Some(vals) = self.drive_close(cc.from, pending, cc.after, entry_depth)? {
@@ -75,7 +73,6 @@ impl Vm {
         // called, and hand them to pairs's caller.
         if let ContKind::Pairs = nc.kind {
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-            self.pcall_depth -= 1;
             let total = crate::vm::builtins::pairs_mm_results(self) as u32;
             let need = (nc.func_slot + total) as usize;
             if self.stack.len() < need {

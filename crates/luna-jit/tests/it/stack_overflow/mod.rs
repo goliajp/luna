@@ -5,7 +5,11 @@
 //! all five dialects, with the interpreter alone, the method JIT, the
 //! trace JIT and, when built in, the LLVM backend. The expected results
 //! are what PUC 5.1.5 / 5.2.4 / 5.3.6 / 5.4.9 / 5.5.1 return for the same
-//! scripts; positions are written as `@` (the chunk names differ).
+//! scripts; positions are written as `@` (the chunk names differ). One
+//! deliberate difference (docs/compatibility.md): luna does not count
+//! metamethod, `__pairs` and `__close` calls against the C-call limit, so
+//! recursion through them ends at the Lua stack limit with "stack
+//! overflow" where PUC says "C stack overflow".
 
 mod cli;
 mod threads;
@@ -42,49 +46,58 @@ pub const CASES: &[Case] = &[
         name: "index_metamethod",
         dialects: ALL,
         script: "local t t = setmetatable({}, {__index = function(t, k) return t[k] end}) local ok, e = pcall(function() return t.x end) return tostring(ok) .. '|' .. norm(e)",
-        expect: |_| "false|@ C stack overflow",
+        expect: |_| "false|@ stack overflow",
     },
     Case {
         name: "newindex_metamethod",
         dialects: ALL,
         script: "local t t = setmetatable({}, {__newindex = function(t, k, v) t[k] = v end}) local ok, e = pcall(function() t.x = 1 end) return tostring(ok) .. '|' .. norm(e)",
-        expect: |_| "false|@ C stack overflow",
+        expect: |_| "false|@ stack overflow",
     },
     Case {
         name: "eq_metamethod",
         dialects: ALL,
         script: "local mt = {} mt.__eq = function(a, b) return a == b end local a, b = setmetatable({}, mt), setmetatable({}, mt) local ok, e = pcall(function() return a == b end) return tostring(ok) .. '|' .. norm(e)",
-        expect: |_| "false|@ C stack overflow",
+        expect: |_| "false|@ stack overflow",
     },
     Case {
         name: "lt_le_metamethods",
         dialects: ALL,
         script: "local mt = {} mt.__lt = function(a, b) return a < b end mt.__le = function(a, b) return a <= b end local a, b = setmetatable({}, mt), setmetatable({}, mt) local ok1, e1 = pcall(function() return a < b end) local ok2, e2 = pcall(function() return a <= b end) return tostring(ok1) .. '|' .. norm(e1) .. '|' .. tostring(ok2) .. '|' .. norm(e2)",
-        expect: |_| "false|@ C stack overflow|false|@ C stack overflow",
+        expect: |_| "false|@ stack overflow|false|@ stack overflow",
     },
     Case {
         name: "arith_concat_unm_metamethods",
         dialects: ALL,
         script: "local mt = {} mt.__add = function(a, b) return a + b end mt.__concat = function(a, b) return a .. b end mt.__unm = function(a) return -a end local a = setmetatable({}, mt) local r = {} for _, f in ipairs({function() return a + 1 end, function() return a .. 'x' end, function() return -a end}) do local ok, e = pcall(f) r[#r + 1] = tostring(ok) .. '|' .. norm(e) end return table.concat(r, '|')",
-        expect: |_| "false|@ C stack overflow|false|@ C stack overflow|false|@ C stack overflow",
+        expect: |_| "false|@ stack overflow|false|@ stack overflow|false|@ stack overflow",
     },
     Case {
         name: "len_metamethod",
         dialects: (52, 55),
         script: "local mt = {} mt.__len = function(a) return #a end local a = setmetatable({}, mt) local ok, e = pcall(function() return #a end) return tostring(ok) .. '|' .. norm(e)",
-        expect: |_| "false|@ C stack overflow",
+        expect: |_| "false|@ stack overflow",
     },
     Case {
         name: "close_metamethod",
         dialects: (54, 55),
-        script: "local function f() local x <close> = setmetatable({}, {__close = function() f() end}) end local ok, e = pcall(f) return tostring(ok) .. '|' .. norm(e)",
-        expect: |_| "false|@ C stack overflow",
+        script: "local function f() local x <close> = setmetatable({}, {__close = function() f() end}) end local ok, e = pcall(f) return tostring(ok) .. '|' .. (norm(e):gsub('^@ ', ''))",
+        // whether the error carries a position depends on the frame the Lua
+        // stack ran out in, which differs between the CLI and `eval`
+        expect: |_| "false|stack overflow",
     },
     Case {
         name: "pairs_metamethod",
         dialects: (52, 55),
         script: "local t t = setmetatable({}, {__pairs = function(t) return pairs(t) end}) local ok, e = pcall(function() for k in pairs(t) do end end) return tostring(ok) .. '|' .. norm(e)",
-        expect: |_| "false|C stack overflow",
+        expect: |v| {
+            // 5.2 and 5.3 call `__pairs` from `pairs` as a C function call
+            if v <= 53 {
+                "false|C stack overflow"
+            } else {
+                "false|stack overflow"
+            }
+        },
     },
     Case {
         name: "tostring_metamethod",

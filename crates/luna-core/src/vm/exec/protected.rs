@@ -128,7 +128,6 @@ impl Vm {
     }
 
     pub(super) fn begin_pairs(&mut self, func_slot: u32, nresults: i32) -> Result<bool, LuaError> {
-        self.enter_c_level(false)?;
         let arg = self.stack[(func_slot + 1) as usize];
         let mm = self.get_mm(arg, Mm::Pairs);
         // layout becomes [pairs@func_slot, mm@func_slot+1, t@func_slot+2]:

@@ -32,6 +32,10 @@ pub const SELF_CALL_RET_TABLE: i64 = 3;
 /// failed call sets, and the calls left.
 pub const SELF_CTX_WORDS: usize = 3;
 
+/// The `left` [`luna_jit_self_call_slow`] gets from code that does not
+/// count its calls: the budget is then the thread's own.
+pub const SELF_CALL_UNCOUNTED: i64 = i64::MIN;
+
 thread_local! {
     /// native self-calls the LLVM tier's code has open on this thread
     static NATIVE_DEPTH: Cell<i64> = const { Cell::new(0) };
@@ -105,13 +109,18 @@ pub extern "C" fn luna_jit_self_leave() {
 /// Make the running closure's self-recursive call that compiled code could
 /// not make natively, with the arguments `a0..` described by `desc`
 /// ([`self_call_desc`]), and return its result as compiled code holds it.
-/// `ctx` is the Cranelift tier's context, or null from the LLVM tier.
+/// `ctx` is the Cranelift tier's context, or null where the code does not
+/// check its failure flag; `left` the calls the code had left, or
+/// [`SELF_CALL_UNCOUNTED`].
 /// With no calls left in the budget the call raises "stack overflow";
 /// otherwise the interpreter makes it. When the call fails, the error is
 /// left in `vm.jit.pending_raise` for the dispatcher to raise; when its
 /// result is not of the kind the compiled code expects, a deopt is parked.
 /// Either way the context's failure flag is set (the LLVM tier checks
-/// `luna_jit_no_deopt_parked`), and the compiled callers return at once.
+/// `luna_jit_no_deopt_parked`): callers whose going on could be seen
+/// return at once, the others finish with dummy results that the
+/// dispatcher drops, and every self call they still make lands here and
+/// returns at once.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread
@@ -124,6 +133,7 @@ pub extern "C" fn luna_jit_self_leave() {
 pub unsafe extern "C" fn luna_jit_self_call_slow(
     ctx: *mut i64,
     desc: i64,
+    left: i64,
     a0: i64,
     a1: i64,
     a2: i64,
@@ -132,11 +142,18 @@ pub unsafe extern "C" fn luna_jit_self_call_slow(
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
-    let budget = if ctx.is_null() {
+    // a call below already failed: the callers are only unwinding
+    if vm.jit.pending_raise.is_some() || vm.jit.pending_err.is_some() {
+        if !ctx.is_null() {
+            // SAFETY: a non-null `ctx` points to SELF_CTX_WORDS writable words (# Safety)
+            unsafe { *ctx.add(1) = 1 };
+        }
+        return 0;
+    }
+    let budget = if left == SELF_CALL_UNCOUNTED {
         vm.jit_call_budget(NATIVE_DEPTH.with(Cell::get))
     } else {
-        // SAFETY: a non-null `ctx` points to SELF_CTX_WORDS words (# Safety)
-        unsafe { *ctx.add(2) }
+        left
     };
     let nargs = (desc & 0xff) as usize;
     let float_mask = (desc >> 8) & 0xff;
