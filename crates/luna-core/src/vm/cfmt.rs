@@ -9,6 +9,43 @@
 //! One libc bug is not reproduced: its `%.Na` rounds a half by the parity
 //! of the digit after the rounding position; here it rounds half to even.
 
+use crate::runtime::mem::LVec;
+
+/// The most bytes one item can take: a `%99.99f` of the largest double is
+/// 309 integer digits, a point and 99 fraction digits, with a sign.
+pub(crate) const ITEM_MAX: usize = 512;
+
+/// Where the conversions write. The library's buffer has room for
+/// [`ITEM_MAX`] more bytes reserved before each item, so writing to it does
+/// not allocate.
+pub(crate) trait Out {
+    fn put(&mut self, b: &[u8]);
+    fn fill(&mut self, c: u8, n: usize);
+}
+
+impl Out for Vec<u8> {
+    fn put(&mut self, b: &[u8]) {
+        self.extend_from_slice(b);
+    }
+    fn fill(&mut self, c: u8, n: usize) {
+        self.extend(std::iter::repeat_n(c, n));
+    }
+}
+
+impl Out for LVec<u8> {
+    #[inline]
+    fn put(&mut self, b: &[u8]) {
+        debug_assert!(self.capacity() - self.len() >= b.len());
+        self.extend_from_slice_or_abort(b);
+    }
+    #[inline]
+    fn fill(&mut self, c: u8, n: usize) {
+        debug_assert!(self.capacity() - self.len() >= n);
+        let len = self.len();
+        self.resize_or_abort(len + n, c);
+    }
+}
+
 /// A parsed conversion specification (flags, width, precision).
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Spec {
@@ -73,26 +110,27 @@ impl Spec {
 
 /// Lay out `prefix` (sign, `0x`) and `body` in the field width: spaces on
 /// the left, spaces on the right with `-`, or zeros between the two.
-fn pad(out: &mut Vec<u8>, sp: &Spec, zeros: bool, prefix: &[u8], body: &[u8]) {
+fn pad<O: Out + ?Sized>(out: &mut O, sp: &Spec, zeros: bool, prefix: &[u8], body: &[u8]) {
     let len = prefix.len() + body.len();
     let fill = sp.width.saturating_sub(len);
+    debug_assert!(len + fill <= ITEM_MAX);
     if sp.minus {
-        out.extend_from_slice(prefix);
-        out.extend_from_slice(body);
-        out.extend(std::iter::repeat_n(b' ', fill));
+        out.put(prefix);
+        out.put(body);
+        out.fill(b' ', fill);
     } else if zeros {
-        out.extend_from_slice(prefix);
-        out.extend(std::iter::repeat_n(b'0', fill));
-        out.extend_from_slice(body);
+        out.put(prefix);
+        out.fill(b'0', fill);
+        out.put(body);
     } else {
-        out.extend(std::iter::repeat_n(b' ', fill));
-        out.extend_from_slice(prefix);
-        out.extend_from_slice(body);
+        out.fill(b' ', fill);
+        out.put(prefix);
+        out.put(body);
     }
 }
 
 /// `%d` / `%i`.
-pub(crate) fn signed(out: &mut Vec<u8>, sp: &Spec, v: i64) {
+pub(crate) fn signed<O: Out + ?Sized>(out: &mut O, sp: &Spec, v: i64) {
     let mut buf = [0u8; DIGITS_CAP];
     let start = int_digits(&mut buf, v.unsigned_abs(), 10, false, sp.prec);
     pad(
@@ -105,7 +143,7 @@ pub(crate) fn signed(out: &mut Vec<u8>, sp: &Spec, v: i64) {
 }
 
 /// `%u`, `%o`, `%x`, `%X` on the bits of `v`.
-pub(crate) fn unsigned(out: &mut Vec<u8>, sp: &Spec, conv: u8, v: u64) {
+pub(crate) fn unsigned<O: Out + ?Sized>(out: &mut O, sp: &Spec, conv: u8, v: u64) {
     let base = match conv {
         b'o' => 8,
         b'x' | b'X' => 16,
@@ -163,12 +201,12 @@ fn int_digits(
 }
 
 /// `%c`.
-pub(crate) fn char(out: &mut Vec<u8>, sp: &Spec, c: u8) {
+pub(crate) fn char<O: Out + ?Sized>(out: &mut O, sp: &Spec, c: u8) {
     pad(out, sp, sp.zero, b"", &[c]);
 }
 
 /// `%s` on a C string: stops at the first zero byte; precision truncates.
-pub(crate) fn cstr(out: &mut Vec<u8>, sp: &Spec, s: &[u8]) {
+pub(crate) fn cstr<O: Out + ?Sized>(out: &mut O, sp: &Spec, s: &[u8]) {
     let s = &s[..s.iter().position(|&b| b == 0).unwrap_or(s.len())];
     let s = match sp.prec {
         Some(p) if p < s.len() => &s[..p],
@@ -178,7 +216,7 @@ pub(crate) fn cstr(out: &mut Vec<u8>, sp: &Spec, s: &[u8]) {
 }
 
 /// `%e %E %f %F %g %G %a %A`.
-pub(crate) fn float(out: &mut Vec<u8>, sp: &Spec, conv: u8, x: f64) {
+pub(crate) fn float<O: Out + ?Sized>(out: &mut O, sp: &Spec, conv: u8, x: f64) {
     let upper = conv.is_ascii_uppercase();
     if x.is_nan() {
         let (negative, body) = crate::numeric::nan_spelling(x);
@@ -336,7 +374,7 @@ fn hex(x: f64, prec: Option<usize>, hash: bool, upper: bool) -> (&'static [u8], 
 }
 
 /// `%p`: the libc's pointer rendering.
-pub(crate) fn pointer(out: &mut Vec<u8>, sp: &Spec, p: usize) {
+pub(crate) fn pointer<O: Out + ?Sized>(out: &mut O, sp: &Spec, p: usize) {
     pad(out, sp, false, b"", c_pointer(p).as_bytes());
 }
 
