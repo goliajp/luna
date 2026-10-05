@@ -82,6 +82,94 @@ jobs:
         run: cargo test --doc --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
 
   # ─────────────────────────────────────────────────────────────────
+  # A Windows host with LLVM but without Visual Studio's C++ tools.
+  # Visual Studio is hidden by moving the installer's instance records
+  # away: find-msvc-tools (luna-aot's lookup, and the cc crate's), vswhere
+  # and lld-link all find an installation through them, and cl.exe is not
+  # on PATH. (VC\Tools\MSVC itself cannot be renamed on the runner: it
+  # is in use.) The MSVC CRT and Windows SDK come from `xwin splat` into
+  # cargo-xwin's cache directory. Cargo is set up for that machine as its
+  # user would set it up (lld-link and LIB for rustc, clang-cl for cc);
+  # luna-aot gets nothing: it falls back to clang-cl + lld-link on PATH
+  # and finds the sysroot itself. A binary linked by link.exe carries a
+  # "Rich" record, one linked by lld-link does not; the job checks both.
+  # ─────────────────────────────────────────────────────────────────
+  windows-llvm-only:
+    name: windows-latest AOT with LLVM only
+    runs-on: windows-latest
+    env:
+      CARGO_PROFILE_RELEASE_LTO: "false"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: rustup target add x86_64-pc-windows-gnu
+        run: rustup target add x86_64-pc-windows-gnu
+      - name: with Visual Studio, luna-aot links with link.exe
+        shell: pwsh
+        run: |
+          'print("aot")' | Set-Content hello.lua
+          cargo run -q -p luna-aot --release -- compile hello.lua --out vs.exe | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "luna-aot failed" }
+          $out = & .\vs.exe
+          if ($out -ne "aot") { throw "vs.exe printed $out" }
+          # link.exe writes a "Rich" record into the DOS stub, lld-link does not
+          $rich = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes("vs.exe")[0..1023]).Contains("Rich")
+          "vs.exe: Rich record present = $rich"
+          if ($rich -ne $true) { throw "unexpected linker for vs.exe" }
+      - uses: actions/cache@v6
+        id: xwin-cache
+        with:
+          path: ~\AppData\Local\cargo-xwin\xwin
+          key: xwin-0.10.0-splat-x86_64-windows-v1
+      - name: xwin splat into cargo-xwin's cache directory
+        if: steps.xwin-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP"
+          gh release download 0.10.0 -R Jake-Shadle/xwin --pattern 'xwin-0.10.0-x86_64-pc-windows-msvc.tar.gz'
+          echo "96e83665ef5c1406aabd0be603a8d08e67e604f36fda630b6807ee948a614e26  xwin-0.10.0-x86_64-pc-windows-msvc.tar.gz" | sha256sum -c -
+          tar -xzf xwin-0.10.0-x86_64-pc-windows-msvc.tar.gz
+          # xwin moves files from its download cache into place, so both
+          # must be on the same drive
+          ./xwin-0.10.0-x86_64-pc-windows-msvc/xwin.exe --accept-license \
+            --cache-dir "$LOCALAPPDATA/xwin-download" splat --output "$LOCALAPPDATA/cargo-xwin/xwin"
+      - name: hide Visual Studio and set cargo up for LLVM
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          Rename-Item "$env:ProgramData\Microsoft\VisualStudio\Packages\_Instances" "_Instances.hidden"
+          $found = & $vswhere -all -prerelease -products * -property installationPath
+          if ($found) { throw "vswhere still finds $found" }
+          if (Get-Command cl.exe -ErrorAction SilentlyContinue) { throw "cl.exe is on PATH" }
+          Get-Command clang-cl.exe, lld-link.exe | Format-Table Name, Source
+          $x = "$env:LOCALAPPDATA\cargo-xwin\xwin"
+          # LIB, not RUSTFLAGS: lld-link reads it for every link, including
+          # the build scripts of a `--target x86_64-pc-windows-gnu` build
+          $libs = "crt\lib\x86_64", "sdk\lib\um\x86_64", "sdk\lib\ucrt\x86_64" | ForEach-Object { "$x\$_" }
+          $incs = "crt\include", "sdk\include\ucrt", "sdk\include\um", "sdk\include\shared" | ForEach-Object { "/imsvc$x\$_" }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=lld-link" >> $env:GITHUB_ENV
+          "LIB=$($libs -join ';')" >> $env:GITHUB_ENV
+          "CC_x86_64_pc_windows_msvc=clang-cl" >> $env:GITHUB_ENV
+          "CFLAGS_x86_64_pc_windows_msvc=$($incs -join ' ')" >> $env:GITHUB_ENV
+      - name: without it, luna-aot links with lld-link
+        shell: pwsh
+        run: |
+          'print("aot")' | Set-Content hello.lua
+          cargo run -q -p luna-aot --release -- compile hello.lua --out llvm.exe | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "luna-aot failed" }
+          $out = & .\llvm.exe
+          if ($out -ne "aot") { throw "llvm.exe printed $out" }
+          # link.exe writes a "Rich" record into the DOS stub, lld-link does not
+          $rich = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes("llvm.exe")[0..1023]).Contains("Rich")
+          "llvm.exe: Rich record present = $rich"
+          if ($rich -ne $false) { throw "unexpected linker for llvm.exe" }
+      - name: cargo test -p luna-aot (LLVM only)
+        run: cargo test -p luna-aot --release --test it -- --nocapture
+
+  # ─────────────────────────────────────────────────────────────────
   # wasm32 build of luna-core only (luna pulls Cranelift, which has
   # no wasm32 target). Proves the 0-dep core also satisfies the
   # wasm portability contract documented in docs/architecture.md.
@@ -302,7 +390,7 @@ jobs:
         run: |
           count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
                   crates | wc -l | tr -d ' ')
-          ceiling=1365
+          ceiling=1362
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then

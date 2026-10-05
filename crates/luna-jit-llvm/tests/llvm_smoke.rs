@@ -37,3 +37,5 @@ mod fib_shape;
 mod mod_guards;
 #[path = "llvm_smoke/moves_and_jumps.rs"]
 mod moves_and_jumps;
+#[path = "llvm_smoke/recursion.rs"]
+mod recursion;

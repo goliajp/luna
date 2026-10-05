@@ -9,8 +9,10 @@ name: aot-cross
 # - RISC-V 64-bit (build-only — no actual run on real hardware)
 # - s390x (build-only — same)
 # - Wine MinGW PE actual-run on a Linux host (build + run)
+# - MSVC PE from a Linux host with clang-cl + lld-link and an xwin
+#   sysroot, run under Wine; and from a macOS host, run on Windows
 #
-# The Wine and Alpine jobs also build one tiny program per dialect
+# The Wine, MSVC and Alpine jobs also build one tiny program per dialect
 # (5.1-5.5) and check that each binary reports its own dialect.
 #
 # Run conditions:
@@ -201,6 +203,130 @@ jobs:
               *"Lua $d"*) ;;
               *) echo "::error::dialect $d binary printed: $OUT"; exit 1 ;;
             esac
+          done
+
+  # ─────────────────────────────────────────────────────────────────
+  # MSVC PE without Visual Studio: clang-cl + lld-link with the MSVC CRT
+  # and Windows SDK from `xwin splat`, built on a Linux host and run
+  # under Wine (which has its own vcruntime140 and ucrtbase).
+  # ─────────────────────────────────────────────────────────────────
+  wine-msvc-pe-run:
+    name: Wine MSVC PE actual-run (xwin)
+    runs-on: ubuntu-latest
+    env:
+      LUNA_AOT_MSVC_SYSROOT: /home/runner/xwin
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: install LLVM tools + Wine
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends wine lld-18 llvm-18 > /dev/null
+          # clang-cl, lld-link and llvm-lib carry no version suffix here
+          echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
+      - uses: actions/cache@v6
+        id: xwin-cache
+        with:
+          path: /home/runner/xwin
+          key: xwin-0.10.0-splat-x86_64-v1
+      - name: xwin splat
+        if: steps.xwin-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release download 0.10.0 -R Jake-Shadle/xwin \
+            --pattern 'xwin-0.10.0-x86_64-unknown-linux-musl.tar.gz' -D /tmp
+          echo "d870eb4b2f390878af6da1ccd3cf321d22fcb72720984853b4be732ae597fc88  /tmp/xwin-0.10.0-x86_64-unknown-linux-musl.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/xwin-0.10.0-x86_64-unknown-linux-musl.tar.gz -C /tmp
+          /tmp/xwin-0.10.0-x86_64-unknown-linux-musl/xwin --accept-license splat --output "$LUNA_AOT_MSVC_SYSROOT"
+
+      # the hot loop runs as an AOT trace; its `%` goes through luna_jit_fmod
+      - name: one program per dialect under wine
+        env:
+          WINEDEBUG: "-all"
+        run: |
+          set -eu
+          printf 'local s = 0\nfor i = 1, 100000 do s = s + i %% 7 end\nprint(_VERSION, s)\n' > /tmp/p.lua
+          for d in 5.1 5.2 5.3 5.4 5.5; do
+            cargo run -q -p luna-aot --release -- compile /tmp/p.lua \
+              --dialect "$d" --target x86_64-pc-windows-msvc --out "/tmp/p-$d.exe" > /dev/null
+            file "/tmp/p-$d.exe" | grep -q 'PE32+' || { echo "::error::$d: not a PE32+ binary"; exit 1; }
+            # wine's own messages go to stderr; the program's output is stdout
+            OUT=$(wine "/tmp/p-$d.exe" 2> /dev/null | tr -d '\r') || true
+            echo "$d: $OUT"
+            [ "$OUT" = "$(printf 'Lua %s\t300000' "$d")" ] || { echo "::error::dialect $d binary printed: $OUT"; exit 1; }
+          done
+
+      # with LUNA_AOT_MSVC_SYSROOT set the test must link instead of skipping
+      - name: aot_msvc_link with the sysroot
+        run: cargo test -p luna-aot --release --test it -- --nocapture aot_msvc_link
+
+  # ─────────────────────────────────────────────────────────────────
+  # The same from a macOS host, with Homebrew's LLVM and the sysroot in
+  # the directory `cargo xwin` caches it in, which luna-aot finds
+  # without LUNA_AOT_MSVC_SYSROOT. The binaries run on a Windows runner.
+  # ─────────────────────────────────────────────────────────────────
+  macos-msvc-pe-build:
+    name: MSVC PE built on macOS (xwin)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: install LLVM tools
+        run: |
+          set -eu
+          brew install llvm lld > /dev/null
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v6
+        id: xwin-cache
+        with:
+          path: ~/Library/Caches/cargo-xwin/xwin
+          key: xwin-0.10.0-splat-x86_64-macos-v1
+      - name: xwin splat into cargo-xwin's cache directory
+        if: steps.xwin-cache.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          # no macOS release binary of xwin
+          cargo install xwin --version 0.10.0 --locked
+          xwin --accept-license splat --output "$HOME/Library/Caches/cargo-xwin/xwin"
+      - name: one program per dialect
+        run: |
+          set -eu
+          printf 'local s = 0\nfor i = 1, 100000 do s = s + i %% 7 end\nprint(_VERSION, s)\n' > /tmp/p.lua
+          mkdir -p out
+          for d in 5.1 5.2 5.3 5.4 5.5; do
+            cargo run -q -p luna-aot --release -- compile /tmp/p.lua \
+              --dialect "$d" --target x86_64-pc-windows-msvc --out "out/p-$d.exe" > /dev/null
+          done
+          file out/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-msvc-exes
+          path: out/
+
+  macos-msvc-pe-run:
+    name: MSVC PE built on macOS, run on Windows
+    needs: macos-msvc-pe-build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos-msvc-exes
+          path: out
+      - shell: bash
+        run: |
+          set -eu
+          for d in 5.1 5.2 5.3 5.4 5.5; do
+            OUT=$("out/p-$d.exe" | tr -d '\r')
+            echo "$d: $OUT"
+            [ "$OUT" = "$(printf 'Lua %s\t300000' "$d")" ] || { echo "::error::dialect $d binary printed: $OUT"; exit 1; }
           done
 
   # ─────────────────────────────────────────────────────────────────

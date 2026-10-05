@@ -1,4 +1,4 @@
-//! The `luna_jit_*` helper table shared by the chunk and trace lowerers.
+//! The `luna_jit_*` helper table the chunk lowerer calls.
 
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
@@ -232,7 +232,6 @@ fn helper_registry() -> Vec<(&'static str, usize, u32, bool)> {
 /// `Module::get_function` per call. Pairs with [`bind_helper_symbols`]
 /// which fires after `create_jit_execution_engine` to wire the IR
 /// declarations to their actual Rust function addresses.
-/// Also used by the trace JIT (`trace.rs`).
 pub(crate) fn declare_jit_helpers<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
@@ -262,7 +261,6 @@ pub(crate) fn declare_jit_helpers<'ctx>(
 /// so they ARE dlsym-able when luna is loaded as a `dylib`/`cdylib`
 /// — but the rlib link path strips them, exactly mirroring Cranelift's
 /// `JITBuilder::symbol` rationale in `build_jit_module_with_helpers`).
-/// Also used by the trace JIT (`trace.rs`).
 pub(super) fn bind_helper_symbols<'ctx>(
     engine: &inkwell::execution_engine::ExecutionEngine<'ctx>,
     helpers: &HashMap<&'static str, FunctionValue<'ctx>>,
