@@ -58,6 +58,9 @@ luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 4.0.2" }
 # required even for an optional dep when the parent crate is
 # `publish = true`.
 luna-jit-llvm = { path = "../luna-jit-llvm", version = "= 4.0.2", optional = true }
+# The LLVM backend's trace tier builds LLVM IR from the shared trace
+# lowering here; same version and LLVM feature as luna-jit-llvm.
+inkwell = { version = "0.10", features = ["llvm18-1"], optional = true }
 
 # JIT backend. cranelift is the mainstream Rust codegen for embedded
 # JITs (wasmtime, cg_clif, etc.). aarch64 + x86-64 from day one,
@@ -102,7 +105,7 @@ repl-line-editor = ["dep:rustyline"]
 # Local dev requires `LLVM_SYS_181_PREFIX` pointing at an LLVM 18.1.x
 # install (e.g. `brew install llvm@18` →
 # `/opt/homebrew/opt/llvm@18`). There is no CI matrix gate for it yet.
-llvm-jit = ["dep:luna-jit-llvm"]
+llvm-jit = ["dep:luna-jit-llvm", "dep:inkwell"]
 
 # forward the `send` feature to luna-core so embedders
 # pulling `luna-jit --features send` automatically get
