@@ -323,7 +323,7 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                     "'setfenv' cannot change environment of given object",
                 ));
             };
-            vm.set_closure_env(cl, env_idx, env_t);
+            vm.try_set_closure_env(cl, env_idx, env_t)?;
         }
         Value::Coro(co) => {
             // the running thread's globals are the Vm's; a suspended one

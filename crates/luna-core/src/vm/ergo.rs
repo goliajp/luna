@@ -191,7 +191,9 @@ impl Vm {
         self.heap.barrier_back(g);
         // PUC contract: __gc is registered for finalization at
         // metatable-set time, not at later mutation of the metatable.
-        self.check_finalizer_userdata(g);
+        if self.check_finalizer_userdata(g).is_err() {
+            crate::runtime::mem::oom_abort(std::alloc::Layout::new::<T>());
+        }
         Value::Userdata(g)
     }
 

@@ -414,6 +414,17 @@ impl Vm {
         open(self);
         self.heap.fix_natives = false;
     }
+
+    /// [`Vm::open_lib`] with an opener that raises a memory error.
+    pub(crate) fn try_open_lib(
+        &mut self,
+        open: fn(&mut Vm) -> Result<(), LuaError>,
+    ) -> Result<(), LuaError> {
+        self.heap.fix_natives = self.version >= LuaVersion::Lua52;
+        let r = open(self);
+        self.heap.fix_natives = false;
+        r
+    }
 }
 
 impl Drop for Vm {

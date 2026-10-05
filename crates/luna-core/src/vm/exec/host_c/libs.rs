@@ -14,19 +14,19 @@ use crate::vm::{
 
 /// The opener of library `name` (its global name; `_G` for the base
 /// library).
-fn opener(name: &str) -> fn(&mut Vm) {
+fn opener(name: &str) -> fn(&mut Vm) -> Result<(), LuaError> {
     match name {
-        "_G" => builtins::open_base,
-        "package" => lib_package::open_package_bare,
-        "coroutine" => lib_coroutine::open_coroutine,
-        "table" => lib_table::open_table,
-        "io" => lib_io::open_io,
-        "os" => lib_os_io::open_os,
-        "string" => lib_string::open_string,
-        "bit32" => lib_bit32::open_bit32,
-        "math" => lib_math::open_math,
-        "utf8" => lib_utf8::open_utf8,
-        "debug" => lib_debug::open_debug,
+        "_G" => builtins::try_open_base,
+        "package" => lib_package::try_open_package_bare,
+        "coroutine" => lib_coroutine::try_open_coroutine,
+        "table" => lib_table::try_open_table,
+        "io" => lib_io::try_open_io,
+        "os" => lib_os_io::try_open_os,
+        "string" => lib_string::try_open_string,
+        "bit32" => lib_bit32::try_open_bit32,
+        "math" => lib_math::try_open_math,
+        "utf8" => lib_utf8::try_open_utf8,
+        "debug" => lib_debug::try_open_debug,
         _ => unreachable!("the C API names a standard library"),
     }
 }
@@ -55,8 +55,8 @@ impl Vm {
         let g = self.globals;
         let key = self.str_value(name.as_bytes())?;
         if name == "_G" {
-            self.open_lib(builtins::open_base);
-            self.open_lib(lib_os_io::open_file_loaders);
+            self.try_open_lib(builtins::try_open_base)?;
+            self.try_open_lib(lib_os_io::try_open_file_loaders)?;
             if self.version != LuaVersion::Lua51 {
                 return Ok(vec![Value::Table(g)]);
             }
@@ -69,14 +69,14 @@ impl Vm {
         }
         let prev = g.get(key);
         if self.version != LuaVersion::Lua51 {
-            self.open_lib(opener(name));
+            self.try_open_lib(opener(name))?;
             let fresh = g.get(key);
             self.lib_raw_set(g, key, prev)?;
             return Ok(vec![fresh]);
         }
         let loaded = self.host_loaded()?;
         let entry = loaded.get(key);
-        self.open_lib(opener(name));
+        self.try_open_lib(opener(name))?;
         let fresh = g.get(key);
         self.lib_raw_set(g, key, prev)?;
         let Value::Table(fresh_t) = fresh else {

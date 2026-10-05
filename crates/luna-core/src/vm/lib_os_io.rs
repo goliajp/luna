@@ -40,10 +40,6 @@ pub(crate) fn try_open_os_io(vm: &mut Vm) -> Result<(), LuaError> {
     try_open_file_loaders(vm)
 }
 
-/// The os library alone.
-pub(crate) fn open_os(vm: &mut Vm) {
-    crate::vm::lib_mem::opened(try_open_os(vm));
-}
 
 /// [`open_os`], failing when memory runs out.
 pub(crate) fn try_open_os(vm: &mut Vm) -> Result<(), LuaError> {
@@ -74,10 +70,6 @@ pub(crate) fn try_open_os(vm: &mut Vm) -> Result<(), LuaError> {
     Ok(())
 }
 
-/// The base functions that read files, `loadfile` and `dofile`.
-pub(crate) fn open_file_loaders(vm: &mut Vm) {
-    crate::vm::lib_mem::opened(try_open_file_loaders(vm));
-}
 
 /// [`open_file_loaders`], failing when memory runs out.
 pub(crate) fn try_open_file_loaders(vm: &mut Vm) -> Result<(), LuaError> {

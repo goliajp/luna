@@ -79,7 +79,7 @@ pub(super) fn set_caller_env(vm: &mut Vm, env: Gc<Table>) -> Result<(), LuaError
     };
     if vm.version() == LuaVersion::Lua51 {
         if let Some(i) = cl.proto.upvals.iter().position(|d| &*d.name == "_ENV") {
-            vm.set_closure_env(cl, i, env);
+            vm.try_set_closure_env(cl, i, env)?;
         }
     } else if !cl.upvals().is_empty() {
         vm.upvalue_set_value(cl, 0, Value::Table(env));

@@ -35,7 +35,7 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         // GC time, so adding `__gc` to a shared metatable *after* the
         // proxy was made still works). 5.2+ moved the check to
         // setmetatable time; that's gated by version when needed.
-        vm.heap.register_finalizable_userdata(u);
+        vm.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;
     }
     vm.nat_ret(fs, &[Value::Userdata(u)])
 }
@@ -127,7 +127,7 @@ pub(super) fn nat_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     };
     let env_idx = env_upvalue(cl)
         .ok_or_else(|| raise_str(vm, "'setfenv' cannot change environment of given object"))?;
-    vm.set_closure_env(cl, env_idx, env);
+    vm.try_set_closure_env(cl, env_idx, env)?;
     vm.nat_ret(fs, &[Value::Closure(cl)])
 }
 
