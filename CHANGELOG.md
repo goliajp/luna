@@ -222,11 +222,13 @@ optimization.
   iteration; a loop entered with a step of the other sign leaves the
   trace at its head.
 
-- 5.1 and 5.2: traces add and subtract two of the integers the VM keeps
-  for doubles (`#t + #u`), which used to stop the recording. The trace
-  keeps the exact result while it is within 2^53 of zero, where it is
-  the double the operation gives, and otherwise leaves for the
-  interpreter, which rounds as the doubles do.
+- 5.1 and 5.2: traces add, subtract, multiply, take the modulo of and
+  negate the integers the VM keeps for doubles (`#t + #u`, `#t * 2`,
+  `i % #t`, `-#t`), which used to stop the recording. The trace keeps the
+  exact result while it is within 2^53 of zero, where it is the double
+  the operation gives, and otherwise leaves for the interpreter, which
+  rounds as the doubles do and gives -0 for a zero product with a
+  negative factor or a negated zero, and nan for a modulo by zero.
 
 - A trace follows calls into other Lua functions and runs them inline:
   methods found through a metatable's `__index` table (`o:m()`), local,
@@ -369,6 +371,16 @@ optimization.
 
 - `string.dump` of a main chunk describes its `_ENV` upvalue as PUC does
   (in the stack, index 0).
+
+- `string.dump` writes the code PUC's compiler makes for operations on
+  constants it cannot fold: in 5.1–5.3 both constants are the
+  instruction's operands, with no load into a register (`1/0`, `3 - 3.0`,
+  `5 % math.huge`); in 5.4 and 5.5 the right constant enters the constant
+  table first and a constant on the left of `+` or `*` moves to the right
+  (`7.5 // 0`, `2 * 0.0`); a constant on the left of any operator is
+  loaded after the right operand is computed. 5.2 folds an operation on
+  two constants that gives nan (`(-2)^0.5`), as PUC 5.2 does, and 5.1–5.3
+  list constants in the order PUC's code generator adds them.
 
 - A loop calling `math.fmod` was compiled into a trace that never ran:
   reading the function `math.fmod` was a value the trace could not type,
