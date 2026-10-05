@@ -173,15 +173,16 @@ pub struct DecodedExit<'a> {
 /// and restores through `per_exit_tags[i]`: several exits can resume at
 /// the same pc with different register kinds (and one at `head_pc`, where
 /// the clean tail returns too), so the pc alone does not identify the
-/// snapshot. A bare `cont_pc` is looked up by pc, then falls back to the
-/// global tags.
+/// snapshot. A bare `cont_pc` is a return through the trace's own tail and
+/// restores through the global tags, even when an exit resumes at that pc
+/// as well.
 ///
 /// Layout reminder (from `CompiledTrace::exit_hit_counts`):
 /// - `[0..inline.len())` — inline cmp@d>0 sites, indexed by
 ///   `site_id - 1` (1-based encoding lets `site_id == 0` mean
 ///   "non-inline").
-/// - `[inline.len()..inline.len() + tags.len())` — per_exit_tags
-///   in find-by-cont_pc order.
+/// - `[inline.len()..inline.len() + tags.len())` — per_exit_tags,
+///   by the index the exit returns.
 /// - Last slot — global / clean-tail fallback.
 pub fn decode_exit_shape<'a>(
     raw_ret: u64,
@@ -224,25 +225,12 @@ pub fn decode_exit_shape<'a>(
             using_global_exit_tags: false,
         }
     } else {
-        match per_exit_tags
-            .iter()
-            .enumerate()
-            .find(|(_, (pc, _))| *pc == cont_pc)
-        {
-            Some((i, (_, tags))) => DecodedExit {
-                cont_pc,
-                site_id: 0,
-                exit_hit_idx: inline_n + i,
-                exit_tags_for_pc: tags,
-                using_global_exit_tags: false,
-            },
-            None => DecodedExit {
-                cont_pc,
-                site_id: 0,
-                exit_hit_idx: inline_n + per_exit_tags.len(),
-                exit_tags_for_pc: exit_tags,
-                using_global_exit_tags: true,
-            },
+        DecodedExit {
+            cont_pc,
+            site_id: 0,
+            exit_hit_idx: inline_n + per_exit_tags.len(),
+            exit_tags_for_pc: exit_tags,
+            using_global_exit_tags: true,
         }
     }
 }
