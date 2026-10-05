@@ -68,12 +68,14 @@ impl TargetSpec {
         Ok(Some(MsvcTools { cc, link, sysroot }))
     }
 
-    /// Environment for the cargo build of the runtime-helpers staticlib,
-    /// whose build script compiles C through the `cc` crate: when luna-aot
-    /// links with LLVM's tools, `cc` gets `clang-cl` and the same headers
-    /// (it finds `llvm-lib` next to `clang-cl` itself). Empty otherwise,
-    /// and for each variable the user already set.
-    pub(super) fn staticlib_cc_env(&self) -> Result<Vec<(String, OsString)>, AotError> {
+    /// Environment for the cargo build of the runtime-helpers staticlib
+    /// when luna-aot links with LLVM's tools and a sysroot: the `cc` crate
+    /// in luna-jit's build script gets `clang-cl` and the sysroot's headers
+    /// (it finds `llvm-lib` next to `clang-cl` itself), and rustc, which
+    /// links luna-jit's `cdylib` on the way, gets `lld-link` and the
+    /// sysroot's libraries. Empty otherwise; a variable the user already
+    /// set is left alone.
+    pub(super) fn staticlib_build_env(&self) -> Result<Vec<(String, OsString)>, AotError> {
         if !self.is_msvc() || std::env::var_os("CC").is_some() {
             return Ok(Vec::new());
         }
@@ -85,23 +87,25 @@ impl TargetSpec {
             return Ok(Vec::new());
         };
         let key = self.triple.replace('-', "_");
-        let mut flags = OsString::from(format!("--target={}", self.triple));
-        for arg in sysroot.cc_args() {
-            if arg.to_string_lossy().contains(char::is_whitespace) {
-                return Err(AotError::Link(format!(
-                    "the MSVC sysroot path in `{}` contains whitespace, which \
-                     the `cc` crate's CFLAGS cannot carry; move the sysroot to \
-                     a path without spaces",
-                    arg.to_string_lossy()
-                )));
-            }
-            flags.push(" ");
-            flags.push(arg);
-        }
+        let cflags = space_joined(
+            std::iter::once(OsString::from(format!("--target={}", self.triple)))
+                .chain(sysroot.cc_args()),
+        )?;
+        let rustflags = space_joined(sysroot.link_args(self.arch).into_iter().map(|a| {
+            let mut f = OsString::from("-Clink-arg=");
+            f.push(a);
+            f
+        }))?;
+        let upper = key.to_uppercase();
         let mut env = Vec::new();
         for (name, value) in [
             (format!("CC_{key}"), OsString::from("clang-cl")),
-            (format!("CFLAGS_{key}"), flags),
+            (format!("CFLAGS_{key}"), cflags),
+            (
+                format!("CARGO_TARGET_{upper}_LINKER"),
+                OsString::from("lld-link"),
+            ),
+            (format!("CARGO_TARGET_{upper}_RUSTFLAGS"), rustflags),
         ] {
             if std::env::var_os(&name).is_none() {
                 env.push((name, value));
@@ -109,6 +113,26 @@ impl TargetSpec {
         }
         Ok(env)
     }
+}
+
+/// `args` as one space-separated flags variable, which is how both `cc`'s
+/// `CFLAGS_<target>` and cargo's `CARGO_TARGET_<T>_RUSTFLAGS` are split.
+fn space_joined(args: impl Iterator<Item = OsString>) -> Result<OsString, AotError> {
+    let mut out = OsString::new();
+    for arg in args {
+        if arg.to_string_lossy().contains(char::is_whitespace) {
+            return Err(AotError::Link(format!(
+                "`{}` contains whitespace, which a flags environment variable \
+                 cannot carry; move the MSVC sysroot to a path without spaces",
+                arg.to_string_lossy()
+            )));
+        }
+        if !out.is_empty() {
+            out.push(" ");
+        }
+        out.push(arg);
+    }
+    Ok(out)
 }
 
 /// The compiler and linker luna-aot drives for an MSVC target.
