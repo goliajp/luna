@@ -122,6 +122,7 @@ pub fn inlinable_native(name: &[u8]) -> Option<crate::runtime::value::NativeFn> 
         b"ceil" => m_ceil,
         b"max" => m_max,
         b"min" => m_min,
+        b"fmod" => m_fmod,
         _ => return None,
     };
     Some(f)

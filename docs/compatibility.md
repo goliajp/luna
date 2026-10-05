@@ -250,7 +250,8 @@ Differences from PUC:
 - `lua_dump` calls the writer once per block, as PUC's dumper of the
   dialect does; the sizes of the blocks that hold code, constants and
   line information follow the code luna's compiler made, which is not
-  always the same as PUC's (for example, the code for `2^53` differs).
+  always the same as PUC's (for example, an operation on two numbers that
+  the parser leaves unfolded, such as `7.5 // 0`).
 - 5.1 `lua_setfenv` stores an environment only for Lua functions with an
   environment upvalue, threads and userdata made through the C API;
   `lua_setlevel` does nothing.
