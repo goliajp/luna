@@ -93,7 +93,14 @@ enum Backend {
     Llvm,
 }
 
+/// `body` as a function run a few times: a loop is entered as a trace the
+/// next time it starts after its trace was compiled.
+fn repeated(body: &str) -> String {
+    format!("local function run() {body} end\nlocal r\nfor _ = 1, 4 do r = run() end\nreturn r")
+}
+
 fn run(backend: Backend, tier: TraceTier, tier_up_at: Option<u32>, src: &str) -> Run {
+    let src = &repeated(src);
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     match backend {
         Backend::Interpreter => vm.install_null_jit(),
