@@ -18,7 +18,7 @@ mod scan;
 mod scan_ops;
 mod table_flow;
 use cfg::ChunkCfg;
-use emit::{EmitFacts, EmitState};
+use emit::{EmitFacts, EmitState, SelfCalls};
 use entry::*;
 use helpers::*;
 use kinds::KindSweep;

@@ -104,6 +104,12 @@ pub struct JitState {
     /// Written from `luna::jit_backend::*` Cranelift helpers.
     pub pending_err: Option<LuaError>,
 
+    /// An error raised by a call that compiled code handed to the
+    /// interpreter (a self-recursive call made with too little native
+    /// stack left): unlike `pending_err` it is the call's outcome, raised
+    /// where the compiled code was entered, not a reason to run it again.
+    pub pending_raise: Option<LuaError>,
+
     /// Reusable buffer for the trace JIT dispatcher's
     /// per-entry `reg_state`.
     pub reg_state_buf: Vec<i64>,
@@ -393,6 +399,7 @@ impl JitState {
             max_depth_seen: 0,
             counters: JitCounters::default(),
             pending_err: None,
+            pending_raise: None,
             reg_state_buf: Vec::new(),
             ssa_roots: Vec::new(),
             str_buf_pool: Vec::new(),

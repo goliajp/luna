@@ -211,6 +211,7 @@ pub(super) fn emit_self_call<M: Module>(
         ret_kind,
         regs,
         fn_id,
+        self_calls,
         ..
     } = f;
     let ChunkScan { self_call_pcs, .. } = scan;
@@ -241,9 +242,8 @@ pub(super) fn emit_self_call<M: Module>(
                 };
                 arg_vals.push(v_i64);
             }
-            let self_ref = module.declare_func_in_func(fn_id, bcx.func);
-            let call_inst = bcx.ins().call(self_ref, &arg_vals);
-            let result_i64 = bcx.inst_results(call_inst)[0];
+            let sc = self_calls?;
+            let result_i64 = emit_guarded_self_call(module, bcx, fn_id, sc, arg_vals)?;
             // Self-call result is `ret_kind`; bitcast back to
             // F64 if Float. Pre-write `current_kinds[a]` would
             // be stale here.
@@ -263,4 +263,73 @@ pub(super) fn emit_self_call<M: Module>(
         _ => unreachable!("dispatched by op"),
     }
     Some(())
+}
+
+/// The self call proper: natively while the stack pointer is above the
+/// limit in the body's context, else through `luna_jit_self_call_slow`;
+/// then back to the caller at once if that call (here or deeper) failed.
+fn emit_guarded_self_call<M: Module>(
+    module: &mut M,
+    bcx: &mut FunctionBuilder<'_>,
+    fn_id: FuncId,
+    sc: SelfCalls,
+    mut arg_vals: Vec<Value>,
+) -> Option<Value> {
+    let fast = bcx.create_block();
+    let slow = bcx.create_block();
+    let merge = bcx.create_block();
+    let abort = bcx.create_block();
+    let cont = bcx.create_block();
+    bcx.append_block_param(merge, types::I64);
+    let sp = bcx.ins().get_stack_pointer(types::I64);
+    let flags = MemFlagsData::trusted();
+    let limit = bcx.ins().load(types::I64, flags, sc.ctx, 0);
+    let left = bcx.ins().load(types::I64, flags, sc.ctx, 16);
+    let low = bcx.ins().icmp(IntCC::UnsignedLessThan, sp, limit);
+    let spent = bcx.ins().icmp_imm_s(IntCC::SignedLessThanOrEqual, left, 0);
+    let go_slow = bcx.ins().bor(low, spent);
+    bcx.ins().brif(go_slow, slow, &[], fast, &[]);
+
+    bcx.switch_to_block(fast);
+    let fewer = bcx.ins().iadd_imm_s(left, -1);
+    bcx.ins().store(flags, fewer, sc.ctx, 16);
+    let self_ref = module.declare_func_in_func(fn_id, bcx.func);
+    let mut native_args = arg_vals.clone();
+    native_args.push(sc.ctx);
+    let call = bcx.ins().call(self_ref, &native_args);
+    let r = bcx.inst_results(call)[0];
+    bcx.ins().store(flags, left, sc.ctx, 16);
+    bcx.ins().jump(merge, &[BlockArg::Value(r)]);
+
+    bcx.switch_to_block(slow);
+    let mut sig = module.make_signature();
+    for _ in 0..6 {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    let id = module
+        .declare_function("luna_jit_self_call_slow", Linkage::Import, &sig)
+        .ok()?;
+    let helper = module.declare_func_in_func(id, bcx.func);
+    let desc = bcx.ins().iconst(types::I64, sc.desc);
+    arg_vals.resize_with(4, || bcx.ins().iconst(types::I64, 0));
+    let mut helper_args = vec![sc.ctx, desc];
+    helper_args.extend(arg_vals);
+    let call = bcx.ins().call(helper, &helper_args);
+    let r = bcx.inst_results(call)[0];
+    bcx.ins().jump(merge, &[BlockArg::Value(r)]);
+
+    bcx.switch_to_block(merge);
+    let r = bcx.block_params(merge)[0];
+    let failed = bcx
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), sc.ctx, 8);
+    bcx.ins().brif(failed, abort, &[], cont, &[]);
+
+    bcx.switch_to_block(abort);
+    let zero = bcx.ins().iconst(types::I64, 0);
+    bcx.ins().return_(&[zero]);
+
+    bcx.switch_to_block(cont);
+    Some(r)
 }

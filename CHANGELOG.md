@@ -337,6 +337,28 @@ optimization.
 
 ### Fixed
 
+- Unbounded nesting no longer crashes the process with a native stack
+  overflow; it raises the Lua error PUC raises, which `pcall` catches.
+  Nesting that runs on the native stack (metamethods, `__close`,
+  `__pairs`, library callbacks such as `table.sort`'s comparator,
+  `string.gsub`'s replacement and `load`'s reader, `tostring`'s
+  `__tostring`, coroutine resumes, message handlers, C API calls, the
+  parser) is counted against PUC's 200-level C-call limit and also
+  checked against the running thread's real stack bounds, so it fails
+  with "C stack overflow" on an embedder thread with a 256 KB or 2 MB
+  stack too. Metamethod, `__close` and `__pairs` calls now count against
+  that limit, as in PUC (they were bounded only by the Lua stack). A
+  function the method JIT compiled calls itself natively only while
+  stack is left, then lets the interpreter make the remaining calls, so
+  deep recursion ends with "stack overflow" at the Lua stack limit, or
+  completes, as in PUC. 5.1 limits nested Lua calls to `LUAI_MAXCALLS`
+  (20000) like PUC 5.1. A very long left-associative expression
+  (`1 + 1 + ... + 1`) that luna's compiler cannot walk with the stack
+  left fails to load with the dialect's nesting error instead of
+  crashing. `coroutine.wrap` in 5.4 and 5.5 no longer closes a coroutine
+  that a resume refused to start. Affects every released version up to
+  4.0.2.
+
 - A loop trace that ran a whole pass and returned to its head through
   its own tail could put back the registers that pass wrote as they were
   before it: the return was matched by its pc to a guard that also

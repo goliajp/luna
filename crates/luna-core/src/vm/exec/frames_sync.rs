@@ -125,3 +125,27 @@ impl Vm {
         }
     }
 }
+
+/// A metamethod, `__pairs` or `__close` continuation: one C level in PUC,
+/// counted in `pcall_depth` while it is on the frame stack.
+#[inline]
+pub(super) fn is_c_level_cont(f: &CallFrame) -> bool {
+    matches!(
+        f,
+        CallFrame::Cont(NativeCont {
+            kind: ContKind::Meta(_) | ContKind::Pairs | ContKind::Close(_),
+            ..
+        })
+    )
+}
+
+impl Vm {
+    /// Pop the top frame, giving back the C level a continuation held.
+    pub(super) fn pop_frame(&mut self) {
+        if let Some(f) = frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap)
+            && is_c_level_cont(&f)
+        {
+            self.pcall_depth -= 1;
+        }
+    }
+}

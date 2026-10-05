@@ -25,6 +25,21 @@ pub(super) struct EmitFacts<'a> {
     pub(super) regs: &'a [Variable],
     pub(super) pc_to_block: &'a [Option<Block>],
     pub(super) fn_id: FuncId,
+    /// set when the chunk calls itself: see [`SelfCalls`]
+    pub(super) self_calls: Option<SelfCalls>,
+}
+
+/// A self-recursive chunk's body takes one more parameter, the address
+/// of three words in its entry's frame (`luna_jit_enter_ctx`): the stack
+/// limit below which a self call goes through `luna_jit_self_call_slow`,
+/// a flag that call sets when it failed, on which every compiled caller
+/// returns at once, and the calls left before the dialect's depth limit,
+/// which also sends a call there when it runs out.
+#[derive(Clone, Copy)]
+pub(super) struct SelfCalls {
+    pub(super) ctx: Value,
+    /// `luna_jit_helpers::self_call_desc` of the call
+    pub(super) desc: i64,
 }
 
 /// What every op's emit updates.
@@ -64,6 +79,9 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     let pc_to_bb = &cfg.pc_to_bb;
     let mut sig = module.make_signature();
     for _ in 0..num_params {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    if any_self_call {
         sig.params.push(AbiParam::new(types::I64));
     }
     sig.returns.push(AbiParam::new(types::I64));
@@ -129,6 +147,19 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     // `binary_trees`'s `{nil, nil}` leaf stores actual Nil values
     // instead of misinterpreting the 0 bits as `Int(0)`.
     let current_is_nil: Vec<bool> = vec![false; max_stack];
+    let self_calls = any_self_call.then(|| {
+        use luna_jit_helpers::*;
+        let ret = match (scan.sees_return1, ret_kind) {
+            (false, _) => SELF_CALL_RET_NONE,
+            (true, RegKind::Float) => SELF_CALL_RET_FLOAT,
+            (true, RegKind::Table) => SELF_CALL_RET_TABLE,
+            (true, _) => SELF_CALL_RET_INT,
+        };
+        SelfCalls {
+            ctx: bcx.block_params(entry)[num_params],
+            desc: self_call_desc(num_params as u32, arg_float_mask, arg_table_mask, ret),
+        }
+    });
 
     let f = EmitFacts {
         c,
@@ -139,6 +170,7 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
         regs: &regs,
         pc_to_block: &pc_to_block,
         fn_id,
+        self_calls,
     };
     let mut st = EmitState {
         current_kinds,
@@ -292,8 +324,9 @@ fn define_entry<M: Module>(
     let checks = EntryChecks {
         self_upval: self_upval_idx.filter(|_| any_self_call),
         math_fns,
+        self_calls: any_self_call,
     };
-    let entry_id = if checks.self_upval.is_some() || !checks.math_fns.is_empty() {
+    let entry_id = if any_self_call || !checks.math_fns.is_empty() {
         define_checked_entry(module, ctx, fn_id, &checks, num_params)?
     } else {
         fn_id

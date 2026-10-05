@@ -410,14 +410,23 @@ impl Vm {
         // mmap'd native code. The lookup is one Cell::get + one match —
         // the slow path (compile attempt on first reach) is paid once per
         // Proto.
-        if args.is_empty()
+        let jitted = if args.is_empty()
             && let Value::Closure(cl) = f
-            && let Some(vs) = self.try_jit_call(cl)
         {
-            self.public_call_depth -= 1;
-            return Ok(vs);
-        }
-        let r = self.call_value_impl(f, args, true);
+            self.try_jit_call(cl)
+        } else {
+            None
+        };
+        let r = match jitted {
+            Some(vs) => match self.jit.pending_raise.take() {
+                None => {
+                    self.public_call_depth -= 1;
+                    return Ok(vs);
+                }
+                Some(e) => Err(e),
+            },
+            None => self.call_value_impl(f, args, true),
+        };
         if let Err(e) = r
             && self.public_call_depth == 1
             && self.current.is_none()
@@ -438,14 +447,16 @@ impl Vm {
         args: &[Value],
         from_c: bool,
     ) -> Result<Vec<Value>, LuaError> {
-        if self.c_depth >= MAX_C_DEPTH {
+        if self.c_depth >= MAX_C_DEPTH || native_stack::is_low(native_stack::RESERVE) {
             // PUC `luaE_checkcstack`: at the limit the call fails; an xpcall
             // handler running on the error gets a tenth more room before its
             // own failure is "error in error handling"
             if self.msgh_depth == 0 {
                 return Err(self.runerror("C stack overflow"));
             }
-            if self.c_depth >= MAX_C_DEPTH / 10 * 11 {
+            if self.c_depth >= MAX_C_DEPTH / 10 * 11
+                || native_stack::is_low(native_stack::HANDLER_RESERVE)
+            {
                 return Err(LuaError(self.errerr()));
             }
         }
@@ -474,6 +485,69 @@ impl Vm {
             self.stack.truncate(func_slot as usize);
             self.top = func_slot;
         }
+        r
+    }
+
+    /// Lua calls the running thread may still make before one raises
+    /// "stack overflow" for its depth (5.1's `LUAI_MAXCALLS`), not counting
+    /// `native` calls compiled code made on the native stack; `i64::MAX`
+    /// in dialects without that limit.
+    #[doc(hidden)]
+    pub fn jit_call_budget(&self, native: i64) -> i64 {
+        if self.frame_cap == u32::MAX {
+            return i64::MAX;
+        }
+        i64::from(self.frame_cap) - self.frames.len() as i64 - native
+    }
+
+    /// "stack overflow" raised for a self call of compiled `cl` past
+    /// [`Vm::jit_call_budget`], positioned, as the interpreter would raise
+    /// it, at that call in `cl`.
+    #[doc(hidden)]
+    pub fn jit_depth_error(
+        &mut self,
+        cl: crate::runtime::Gc<crate::runtime::LuaClosure>,
+    ) -> LuaError {
+        let proto = cl.proto;
+        let call = proto
+            .code
+            .iter()
+            .position(|i| i.op() == crate::vm::isa::Op::Call);
+        let prefix = self.prefix_at(proto, call.map_or(0, |pc| pc + 1));
+        LuaError(Value::Str(
+            self.heap
+                .intern(format!("{prefix}stack overflow").as_bytes()),
+        ))
+    }
+
+    /// Run a call that compiled code makes but cannot run natively, in the
+    /// interpreter: a self-recursive call when the native stack is low.
+    /// `budget`, when given, is how many more calls the interpreter may
+    /// nest ([`Vm::jit_call_budget`] less the compiled code's own). Like a
+    /// library callback it cannot yield. The compiled frames below may
+    /// hold the only reference to a table they made, in a native register
+    /// no collection can see, so none runs until the call is done (the
+    /// code of such a function calls nothing but itself).
+    #[doc(hidden)]
+    pub fn jit_call_interpreted(
+        &mut self,
+        cl: crate::runtime::Gc<crate::runtime::LuaClosure>,
+        args: &[Value],
+        budget: Option<i64>,
+    ) -> Result<Vec<Value>, LuaError> {
+        let cap = self.frame_cap;
+        if let Some(b) = budget
+            && cap != u32::MAX
+        {
+            self.frame_cap = (self.frames.len() as i64 + b).clamp(0, i64::from(cap)) as u32;
+        }
+        let stopped = self.heap.gc_is_stopped();
+        self.heap.gc_set_stopped(true);
+        self.nny += 1;
+        let r = self.call_value_impl(Value::Closure(cl), args, true);
+        self.nny -= 1;
+        self.heap.gc_set_stopped(stopped);
+        self.frame_cap = cap;
         r
     }
 

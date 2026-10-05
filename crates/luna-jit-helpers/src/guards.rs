@@ -2,9 +2,10 @@
 
 use crate::{current_jit_closure, current_jit_vm, str_arg};
 
-/// 1 while no deopt is parked. A method-JIT chunk checks it after a
-/// self-recursive call: once the callee parked one, the caller's result
-/// is thrown away and it returns at once instead of computing on.
+/// 1 while no deopt is parked and no error is waiting to be raised. A
+/// method-JIT chunk checks it after a self-recursive call: once the callee
+/// parked one, the caller's result is thrown away and it returns at once
+/// instead of computing on.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread.
@@ -14,7 +15,7 @@ use crate::{current_jit_closure, current_jit_vm, str_arg};
 pub unsafe extern "C" fn luna_jit_no_deopt_parked() -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    i64::from(vm.jit.pending_err.is_none())
+    i64::from(vm.jit.pending_err.is_none() && vm.jit.pending_raise.is_none())
 }
 
 /// A trace side exit that resumes at the trace's own head: the op there

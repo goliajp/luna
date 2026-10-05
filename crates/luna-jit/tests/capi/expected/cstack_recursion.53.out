@@ -1,0 +1,4 @@
+c_to_lua: status 2, nested yes, C stack overflow
+c_self: status 2, nested yes, C stack overflow
+c_pcall: status 2, nested yes, C stack overflow
+after: 42

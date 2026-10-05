@@ -6,6 +6,8 @@ pub(super) struct EntryChecks {
     pub(super) self_upval: Option<u32>,
     /// `("math", name)` key pairs of the folded `math.<name>` calls.
     pub(super) math_fns: Vec<(Gc<LuaStr>, Gc<LuaStr>)>,
+    /// The body calls itself, and takes its [`SelfCalls`] context.
+    pub(super) self_calls: bool,
 }
 
 /// Defines the entry that runs `checks` before calling the chunk body
@@ -77,6 +79,23 @@ pub(super) fn define_checked_entry<M: Module>(
         let next = bcx.create_block();
         bcx.ins().brif(ok, next, &[], bail, &[]);
         bcx.switch_to_block(next);
+    }
+    let mut args = args;
+    if checks.self_calls {
+        let fill_id = module
+            .declare_function("luna_jit_enter_ctx", Linkage::Import, &{
+                let mut s = module.make_signature();
+                s.params.push(AbiParam::new(types::I64));
+                s
+            })
+            .ok()?;
+        let fill_ref = module.declare_func_in_func(fill_id, bcx.func);
+        let bytes = 8 * luna_jit_helpers::SELF_CTX_WORDS as u32;
+        let slot =
+            bcx.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, bytes, 3));
+        let ctx_addr = bcx.ins().stack_addr(types::I64, slot, 0);
+        bcx.ins().call(fill_ref, &[ctx_addr]);
+        args.push(ctx_addr);
     }
     let body_ref = module.declare_func_in_func(body_id, bcx.func);
     let call = bcx.ins().call(body_ref, &args);

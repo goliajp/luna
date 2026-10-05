@@ -139,6 +139,9 @@ impl<'a> Compiler<'a> {
     /// in source order, so they precede the RHS's (PUC restassign ordering). Only
     /// the lvalue prefix (`Name`, and the object/key of an `Index`) is walked.
     pub(super) fn preresolve_target_upvals(&mut self, id: ExprId) -> Result<(), SyntaxError> {
+        if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+            return Err(self.too_deep());
+        }
         let ast = self.ast;
         match ast.expr(id) {
             Expr::Name(n) => {

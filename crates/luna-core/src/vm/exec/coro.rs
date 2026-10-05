@@ -116,7 +116,7 @@ impl Vm {
         // The calling handler's `call_value` has already pushed `c_depth` to the
         // cap, so here it reads as full first — report PUC's "C stack overflow"
         // before the next handler call would surface the plainer "stack overflow".
-        if self.c_depth >= MAX_C_DEPTH {
+        if self.c_depth >= MAX_C_DEPTH || native_stack::is_low(native_stack::RESERVE) {
             return Err(self.rt_err("C stack overflow"));
         }
         // SAFETY: `co` is the coroutine being closed, held by the caller (a native argument) and not the running thread (checked above); the borrow covers one `take`

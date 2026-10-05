@@ -10,11 +10,14 @@ impl Vm {
     /// `try_jit_call_op` from inside `begin_call`.)
     pub(super) fn try_jit_call(&mut self, cl: Gc<LuaClosure>) -> Option<Vec<Value>> {
         use crate::runtime::function::JitProtoState;
-        if !self.jit.enabled {
+        if !self.jit.enabled || native_stack::is_low(native_stack::JIT_RESERVE) {
             return None;
         }
         let proto = cl.proto;
         if let JitProtoState::Untried = proto.jit.get() {
+            if native_stack::is_low(native_stack::COMPILE_RESERVE) {
+                return Default::default();
+            }
             self.populate_jit_cache(proto);
         }
         match proto.jit.get() {
@@ -44,6 +47,10 @@ impl Vm {
                 // SAFETY: `f` is the compiled chunk's entry, transmuted above from the entry pointer the backend returned for this proto with this signature; the guard above pins this Vm and `cl` for the helpers the code calls
                 let r = unsafe { f() };
                 drop(_jit_vm_guard);
+                // the caller raises it
+                if self.jit.pending_raise.is_some() {
+                    return Some(Vec::new());
+                }
                 // A JIT helper may have detected a metatable
                 // on a table operand and parked a deopt request here.
                 // Discard the sentinel value and return None so the caller
@@ -142,7 +149,9 @@ impl Vm {
         wanted: i32,
     ) -> bool {
         use crate::runtime::function::JitProtoState;
-        if !self.jit.enabled {
+        // compiled self-recursion runs on the native stack: with little of
+        // it left the interpreter makes the call instead
+        if !self.jit.enabled || native_stack::is_low(native_stack::JIT_RESERVE) {
             return false;
         }
         // Any active debug hook means the interpreter has to run the
@@ -152,6 +161,9 @@ impl Vm {
         }
         let proto = cl.proto;
         if let JitProtoState::Untried = proto.jit.get() {
+            if native_stack::is_low(native_stack::COMPILE_RESERVE) {
+                return Default::default();
+            }
             self.populate_jit_cache(proto);
         }
         let JitProtoState::Compiled {
@@ -221,6 +233,10 @@ impl Vm {
             }
         };
         drop(_jit_vm_guard);
+        // the caller raises it
+        if self.jit.pending_raise.is_some() {
+            return true;
+        }
         // See matching path in `try_jit_call`. A helper
         // flagged a metatable on a table operand; bail to the interpreter
         // so `push_frame` runs the call from scratch.

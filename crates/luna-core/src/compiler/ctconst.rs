@@ -50,6 +50,9 @@ pub(super) fn ct_operand(
 
 /// `X and F` with F always falsy: the value is F, and X only adds jumps.
 fn falsy_and(ast: &Chunk, id: ExprId, named: &mut dyn FnMut(&Name) -> Option<CtConst>) -> bool {
+    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+        return false;
+    }
     match ast.expr(id) {
         Expr::Paren(inner) => falsy_and(ast, *inner, named),
         Expr::BinOp {
@@ -70,6 +73,9 @@ fn value(
     named: &mut dyn FnMut(&Name) -> Option<CtConst>,
     compiled: bool,
 ) -> Option<CtConst> {
+    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+        return None;
+    }
     let ct_value = |ast: &Chunk, id: ExprId, named: &mut dyn FnMut(&Name) -> Option<CtConst>| {
         value(ast, id, named, compiled)
     };

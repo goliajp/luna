@@ -128,6 +128,28 @@ impl Vm {
         })
     }
 
+    /// Count a metamethod, `__pairs` or `__close` call as PUC counts the C
+    /// call it makes (`luaE_checkcstack`): at the limit it fails with "C
+    /// stack overflow", positioned when Lua code made it; a message handler
+    /// running on that error gets a tenth more before "error in error
+    /// handling". The caller pushes the continuation that holds the level.
+    pub(super) fn enter_c_level(&mut self, positioned: bool) -> Result<(), LuaError> {
+        if self.pcall_depth >= MAX_C_DEPTH {
+            if self.msgh_depth == 0 {
+                return Err(if positioned {
+                    self.runerror("C stack overflow")
+                } else {
+                    self.plain_err("C stack overflow")
+                });
+            }
+            if self.pcall_depth >= MAX_C_DEPTH / 10 * 11 {
+                return Err(LuaError(self.errerr()));
+            }
+        }
+        self.pcall_depth += 1;
+        Ok(())
+    }
+
     /// Begin a *yieldable* metamethod call from a VM instruction: `func(args…)`
     /// driven through the interpreter loop with a `Meta` continuation, so a
     /// `coroutine.yield` inside the metamethod suspends and resumes cleanly.
@@ -144,6 +166,7 @@ impl Vm {
         args: &[Value],
         action: MetaAction,
     ) -> Result<(), LuaError> {
+        self.enter_c_level(true)?;
         let saved_top = self.top;
         let cont_slot = self.stack.len() as u32;
         self.stack.push(func);
