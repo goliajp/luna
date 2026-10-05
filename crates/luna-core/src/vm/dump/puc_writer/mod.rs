@@ -131,6 +131,11 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
         frame = frame.max(np + 1);
     }
     let mut asm = Asm::new(p, d.name(), windows, frame);
+    // 5.1 / 5.2 have one number type: the constants the encoder adds meet
+    // luna's as the floats these become
+    if d <= Dialect::V52 {
+        asm.consts = consts_for(d, std::mem::take(&mut asm.consts))?;
+    }
     let mut child_caps: modern::Caps = vec![None; p.protos.len()];
     let vatab = d == Dialect::V55
         && p.is_vararg

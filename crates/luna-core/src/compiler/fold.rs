@@ -214,9 +214,10 @@ fn fold_nums(op: BinOp, l: Num, r: Num, version: LuaVersion) -> Option<Num> {
         (BinOp::Div, a, b) => Float(a.as_f64() / b.as_f64()),
         _ => return None,
     };
-    // PUC `constfolding` leaves a NaN unfolded
+    // 5.1's `constfolding` leaves a NaN unfolded; 5.2's folds it
     if let Float(f) = v
         && f.is_nan()
+        && version == LuaVersion::Lua51
     {
         return None;
     }

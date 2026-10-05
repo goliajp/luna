@@ -165,6 +165,7 @@ impl<'a> Compiler<'a> {
             }
             Exp::Int(i) => {
                 if (-65535..=65535).contains(&i) {
+                    self.number_const_before_54(ConstKey::Int(i), Value::Int(i));
                     self.emit(Inst::iasbx(Op::LoadI, reg, i as i32));
                 } else {
                     let c = self.const_idx(ConstKey::Int(i), Value::Int(i));
@@ -179,6 +180,7 @@ impl<'a> Compiler<'a> {
                 // bit-compare so the LoadF fast path doesn't fold -0.0 to +0.0
                 // (`-0.0 == 0.0` but their bit patterns differ)
                 if (-65535..=65535).contains(&as_int) && (as_int as f64).to_bits() == f.to_bits() {
+                    self.number_const_before_54(ConstKey::Float(f.to_bits()), Value::Float(f));
                     self.emit(Inst::iasbx(Op::LoadF, reg, as_int));
                 } else {
                     let c = self.const_idx(ConstKey::Float(f.to_bits()), Value::Float(f));
@@ -226,6 +228,15 @@ impl<'a> Compiler<'a> {
                 Ok(base)
             }
             e => self.exp_to_nextreg(e),
+        }
+    }
+
+    /// Before 5.4 every number is loaded from the constant table (there is
+    /// no `LOADI` / `LOADF`): the constant enters the table where PUC's
+    /// code generator adds it, so a dump lists constants in PUC's order.
+    fn number_const_before_54(&mut self, key: ConstKey, v: Value) {
+        if self.version < LuaVersion::Lua54 {
+            self.const_idx(key, v);
         }
     }
 

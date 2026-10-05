@@ -5,7 +5,7 @@
 //!
 //! Each case is a table constructor holding a constant expression, which
 //! PUC's parser folds to a number (`2^53`, `7 // 2`, `~5.0`) or leaves to
-//! run time (`-0.0`, `~5.5`). A case a dialect cannot parse is skipped
+//! run time (`-0.0`, `7.5 // 0`, `5 % math.huge`). A case a dialect cannot parse is skipped
 //! for it. Needs `PUC_LUAC_51` … `PUC_LUAC_55`; a dialect without one is
 //! skipped with a notice, or fails under `LUNA_DIFF_PUC_REQUIRE_ALL=1`.
 
@@ -25,9 +25,11 @@ const DIALECTS: &[(LuaVersion, &str)] = &[
 ];
 
 /// The constant expressions, separated by ", ".
-const EXPRS: &str = "2^53, 2^2, 2^0.5, 3^-1, 0^0, 2^1024, -(2^53), 7//2, 7.0//2, -7//2, 3//1.0, \
-    -(1//1), 7%3, -7%3, 7%-3, 7.5%2, -7.5%2, 0%5, -(7%3), 3&5, 3|5, 3~5, 1<<4, 1<<64, 1<<-1, \
-    256>>4, -1>>1, 3.0&5, 2^53|0, ~5, ~5.0, ~5.5, -0.0, -(0.0), - -0.0, -0, 1.5+1.5, math.pi*2";
+const EXPRS: &str = "2^53, 2^2, 2^0.5, (-2)^0.5, 3^-1, 0^0, 7//2, 7.0//2, -7//2, 7//0, 7.5//0, \
+    1//-0.0, 7%3, -7%3, 7%-3, 7.5%2, -7.5%2, 5%0, 5.0%0, 5%math.huge, 0%5, 0.0%5, -0.0%5, 3&5, \
+    3|5, 3~5, 1<<4, 1<<64, 1<<-1, 256>>4, -1>>1, 3.0&5, 3.5&5, 2^53|0, \"3\"&5, ~5, ~5.0, ~5.5, \
+    -0.0, -(0.0), - -0.0, -0, -(2^53), -(1//1), 0.0*-1, 1/0, -1/0, 0/0, 2^1024, 1e308*10, \
+    5.0//0.0, -(7%3), 1.5+1.5, 3-3.0, 2*0.0, 3//1.0, math.pi*2";
 
 /// A constructor mixing registers, constants and a folded power.
 const TABLE: &str = "local a, b = ...\nlocal t = {a, b, 'k', 1.5, 2^53, true}\nreturn t\n";
