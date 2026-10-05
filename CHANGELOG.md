@@ -30,8 +30,8 @@ optimization.
   (the side traces wired to its exits) and `inline_kinds`;
   `side_trace_cache` maps a sentinel to an exit index.
   `AdoptRequest::side_parent` and `AdoptedTrace::side_parent` carry the
-  parent's prototype. `TraceCompiler` has the hidden method
-  `last_compile_op`, and `TraceRecord` the hidden method `truncated`.
+  parent's prototype. `TraceCompiler` has the hidden methods
+  `failure_known` and `publish_failure`.
 
 - C API: errors leave a C function at once, as in PUC. `lua_error`,
   `luaL_error` and every API function that raises (`lua_gettable`,
@@ -611,6 +611,10 @@ optimization.
 - Side traces start at hot exits inside functions a trace inlined.
   `Vm::trace_side_trace_run_count` and
   `Vm::trace_side_trace_inlined_run_count` count their runs.
+- The Vms of one `Engine` share the trace recordings that failed to
+  compile: a recording another Vm already failed to compile (same code,
+  start, entry tags and path) is not compiled again
+  (`Vm::trace_shared_failures_known`, `Vm::trace_shared_failures_counted`).
 
 - `luna_jit::install_llvm_backend` (with `--features llvm-jit`) installs
   the LLVM backend on a `Vm` regardless of `LUNA_JIT_BACKEND`.

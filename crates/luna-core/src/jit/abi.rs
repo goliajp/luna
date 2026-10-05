@@ -191,6 +191,35 @@ pub trait TraceCompiler {
         let _ = (storage, req);
         Vec::new()
     }
+
+    /// How many recordings like `record` (the content of its code, how it
+    /// started, its entry tags and the path it took) failed to compile
+    /// with `opts` in the other `Vm`s sharing compiled code with this one:
+    /// compiling it would fail again. 0 when none did.
+    #[doc(hidden)]
+    fn failure_known(
+        &self,
+        storage: &mut dyn crate::jit::JitStorage,
+        record: &TraceRecord,
+        opts: CompileOptions,
+        version: crate::version::LuaVersion,
+    ) -> u32 {
+        let _ = (storage, record, opts, version);
+        0
+    }
+
+    /// `record` failed to compile with `opts`: tells the `Vm`s sharing
+    /// compiled code with this one.
+    #[doc(hidden)]
+    fn publish_failure(
+        &self,
+        storage: &mut dyn crate::jit::JitStorage,
+        record: &TraceRecord,
+        opts: CompileOptions,
+        version: crate::version::LuaVersion,
+    ) {
+        let _ = (storage, record, opts, version);
+    }
 }
 
 /// No-op backend installed by [`crate::vm::Vm::new_minimal`] in

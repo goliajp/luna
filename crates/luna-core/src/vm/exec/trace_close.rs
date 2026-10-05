@@ -216,6 +216,31 @@ impl Vm {
             // Route through trace_compiler; split-borrow JitState
             // so the trait method can take `&mut dyn JitStorage`.
             let version = self.version();
+            let share = self.jit.share_traces;
+            let jit = &mut self.jit;
+            jit.storage.claim(self.jit_owner_id);
+            // Other Vms compiled a recording like this one (same code,
+            // start, entry tags and path) and failed: it is not compiled,
+            // and their failures count as this Vm's, so the head is given
+            // up as it was there instead of being recorded again
+            let known = if share {
+                jit.trace_compiler.failure_known(
+                    jit.storage.as_mut(),
+                    &closed_record,
+                    opts,
+                    version,
+                )
+            } else {
+                0
+            };
+            if known > 0 {
+                jit.counters.shared_failures_known += 1;
+                jit.counters.shared_failures_counted += u64::from(known);
+                for _ in 0..known.min(u32::from(u8::MAX)) {
+                    note_trace_compile_failure(head_proto, closed_record.head_pc);
+                }
+                return;
+            }
             let (result, cut) = self.compile_or_cut(&closed_record, opts, version);
             match result {
                 Some(mut ct) => {
@@ -231,6 +256,15 @@ impl Vm {
                 }
                 None => {
                     self.jit.counters.compile_failed += 1;
+                    if share {
+                        let jit = &mut self.jit;
+                        jit.trace_compiler.publish_failure(
+                            jit.storage.as_mut(),
+                            &closed_record,
+                            opts,
+                            version,
+                        );
+                    }
                     if self.jit.trace_compiler.last_compile_checkpoint()
                         == "bail:entry-tag-never-entered"
                     {

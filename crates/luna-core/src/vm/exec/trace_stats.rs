@@ -173,6 +173,19 @@ impl Vm {
         self.jit.counters.inline_kind_dispatched[kind.trailing_zeros() as usize & 3]
     }
 
+    /// Recordings this Vm did not compile because other Vms sharing its
+    /// engine failed to compile one like it (same code, start, entry tags
+    /// and path).
+    pub fn trace_shared_failures_known(&self) -> u64 {
+        self.jit.counters.shared_failures_known
+    }
+
+    /// The failures of other Vms sharing this Vm's engine counted as this
+    /// Vm's (see [`Self::trace_shared_failures_known`]).
+    pub fn trace_shared_failures_counted(&self) -> u64 {
+        self.jit.counters.shared_failures_counted
+    }
+
     /// Recordings compiled only up to a call they had followed into a
     /// function the trace could not hold (the trace ends at that call).
     pub fn trace_inline_cut_count(&self) -> u64 {
