@@ -6,6 +6,7 @@ mod aot_alpine_smoke;
 mod aot_cross_compile;
 mod aot_cross_compile_traces;
 mod aot_dialects;
+mod aot_fmod_nan;
 mod aot_helpers_in_staticlib;
 mod aot_iconst_reloc;
 mod aot_inline_chain_fire_measurement;
