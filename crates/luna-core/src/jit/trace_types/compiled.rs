@@ -155,29 +155,15 @@ pub struct CompiledTrace {
     /// per_exit_inline.len() + per_exit_tags.len()` (the
     /// `exit_hit_counts` layout's last slot).
     pub global_side_trace_ptr: Box<TCellPtr>,
-    /// When a child side trace compiles for any
-    /// of this trace's hot exits, the close handler inserts
-    /// `(child.head_pc, child_traces_idx)` here. The
-    /// dispatcher uses this for an O(1) lookup of the side trace's
-    /// own [`CompiledTrace`] when the sentinel bit on `raw_ret`
-    /// flags a side-trace return — so
-    /// [`decode_exit_shape`] can be called with the SIDE TRACE's
-    /// `per_exit_inline` / `per_exit_tags` / `exit_tags` instead
-    /// of the parent's.
-    ///
-    /// Value is an **index** into `head_proto.traces` (the same
-    /// proto this `CompiledTrace` lives in — trace JIT only fires
-    /// side traces from self-recursive parents today, so child +
-    /// parent share `head_proto`). Storing an index instead of a
-    /// raw pointer dodges the `Vec<CompiledTrace>` realloc-
-    /// invalidation pitfall: `proto.traces.push` doesn't reorder,
-    /// only appends, so an index assigned at compile time stays
-    /// valid for the trace's lifetime.
-    ///
-    /// `RefCell<HashMap<u32, u32>>` because the close handler
-    /// holds only `&CompiledTrace` (the parent's traces borrow is
-    /// immutable while we're walking it to find the parent_ct).
+    /// The exit index (as `exit_hit_counts`) of each side trace wired to
+    /// this trace, by the sentinel code the IR would OR into a side
+    /// trace's return (bits 56..=62). Read with [`Self::side_children`].
     pub side_trace_cache: TRefLock<std::collections::HashMap<u32, u32>>,
+    /// The side traces wired to this trace's exits, by exit index. Held
+    /// here rather than looked up on a proto: a side trace started at an
+    /// exit inside a function the trace inlined is cached on that
+    /// function's proto.
+    pub side_children: TRefLock<std::collections::HashMap<u32, TArc<CompiledTrace>>>,
     /// Fast-path short-circuit hint for the
     /// dispatcher's tentative-decode + cell-load + check path. Set
     /// to `true` by the close handler when ANY of this trace's
@@ -244,6 +230,9 @@ pub struct CompiledTrace {
     /// the length-gate skip below treats `closure_seen > 0` the
     /// same as `sunk_alloc_seen > 0` (don't gate short traces).
     pub closure_seen: u32,
+    /// Which kinds of inlined code the trace holds (`INLINE_*` bits),
+    /// for the counters a dispatch of it bumps.
+    pub inline_kinds: u8,
     /// Sorted unique list of slot indices that ANY
     /// op in this trace's body WRITES (post `inline_depth` offset).
     /// Computed at compile via `compute_body_writes`; consumed
@@ -383,3 +372,12 @@ pub enum CompileOutcome {
     /// rare in practice — usually a programmer error in the lowerer.
     BackendError,
 }
+
+/// [`CompiledTrace::inline_kinds`]: a call into a vararg function.
+pub const INLINE_VARARG_CALLEE: u8 = 1;
+/// A call that wants more than one value, or all of them.
+pub const INLINE_MULTI_RESULTS: u8 = 1 << 1;
+/// A call that passes a variable number of arguments.
+pub const INLINE_VAR_ARGS: u8 = 1 << 2;
+/// A closure made in a frame of an inlined function.
+pub const INLINE_CLOSURE: u8 = 1 << 3;

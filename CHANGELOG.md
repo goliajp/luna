@@ -23,6 +23,16 @@ optimization.
 
 ### Breaking
 
+- `FrameMaterializeInfo` has a new field, `n_varargs` (the extra
+  arguments of a vararg function a trace inlined), and is 16 bytes;
+  `Vm::jit_push_inlined_frame` takes it as a fifth argument. AOT trace
+  metadata is version 4. `CompiledTrace` has the fields `side_children`
+  (the side traces wired to its exits) and `inline_kinds`;
+  `side_trace_cache` maps a sentinel to an exit index.
+  `AdoptRequest::side_parent` and `AdoptedTrace::side_parent` carry the
+  parent's prototype. `TraceCompiler` has the hidden method
+  `last_compile_op`, and `TraceRecord` the hidden method `truncated`.
+
 - C API: errors leave a C function at once, as in PUC. `lua_error`,
   `luaL_error` and every API function that raises (`lua_gettable`,
   `lua_call`, `luaL_checkinteger`, ...) jump back to the call that luna
@@ -337,6 +347,10 @@ optimization.
 
 ### Fixed
 
+- A trace leaving inside a function it inlined two or more calls deep
+  rebuilt the middle frames with their callers' resume pcs, so such a
+  frame went on at the wrong instruction once the inner call returned
+  (`return h(x) + 1` lost the `+ 1`). Exits one call deep were right.
 - The side-trace gate read a `Jmp`'s offset from the `sBx` field instead
   of `sJ`, so it took a backward jump of fewer than 256 instructions for
   no jump and let a side trace that loops and writes to tables compile.
@@ -363,7 +377,6 @@ optimization.
   nil is treated as nil where it is read. All dialects, default settings;
   3.2.2, 4.0.1 and 4.0.2 have it.
 
-||||||| 0bf74190
 - 5.4 and 5.5: `x - (C and nil or 0)` (also with `false`, or any
   expression whose `and` ends in one of them) gave `-0.0` for `x = -0.0`
   where PUC gives `0.0` (affects 3.1.0 through 4.0.2). PUC's code
@@ -588,6 +601,16 @@ optimization.
   code are created and dropped.
 
 ### Added
+
+- Traces inline calls into vararg functions, calls that want several
+  results or all of them, and calls that pass a variable number of
+  arguments, and create closures inside inlined functions; the baseline
+  and Cranelift tiers and AOT binaries all do.
+  `Vm::trace_inline_kind_dispatched_count` counts the dispatches of
+  traces holding each kind.
+- Side traces start at hot exits inside functions a trace inlined.
+  `Vm::trace_side_trace_run_count` and
+  `Vm::trace_side_trace_inlined_run_count` count their runs.
 
 - `luna_jit::install_llvm_backend` (with `--features llvm-jit`) installs
   the LLVM backend on a `Vm` regardless of `LUNA_JIT_BACKEND`.

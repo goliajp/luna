@@ -219,6 +219,8 @@ mod stack_ops;
 pub use stack_ops::*;
 mod materialize;
 pub use materialize::*;
+mod inlined;
+pub use inlined::*;
 
 mod str_buf;
 pub use str_buf::*;

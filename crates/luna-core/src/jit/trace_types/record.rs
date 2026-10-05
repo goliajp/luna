@@ -428,6 +428,21 @@ impl TraceRecord {
         }
     }
 
+    /// The recording up to op `n` (exclusive): the ops after it, and what
+    /// was noted about them, dropped.
+    #[doc(hidden)]
+    pub fn truncated(&self, n: usize) -> TraceRecord {
+        let mut r = self.clone();
+        r.ops.truncate(n);
+        r.result_tags.truncate(n);
+        r.field_slots.truncate(n);
+        r.index_slots.truncate(n);
+        if r.field_ic_snapshot.is_some_and(|s| s.op_idx as usize >= n) {
+            r.field_ic_snapshot = None;
+        }
+        r
+    }
+
     /// Append an op. Returns `false` when the trace is full and
     /// recording should abort.
     pub fn push(&mut self, op: RecordedOp) -> bool {

@@ -10,6 +10,7 @@ pub(super) fn validate_ops(
     max_stack: usize,
     effective_end: usize,
     folded_ops: &[bool],
+    frame_tops: &[Option<u32>],
 ) -> Option<(Vec<bool>, Vec<Option<CmpDir>>)> {
     // Pre-emit verification. Any op outside the whitelist contract
     // bails so the trace becomes a no-op (the recorder counts it
@@ -27,6 +28,21 @@ pub(super) fn validate_ops(
     let mut cmp_dirs: Vec<Option<CmpDir>> = vec![None; effective_end];
     checkpoint("pre:cmp-dirs-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
+        // a list store of the values a call just returned: the recording
+        // fixes their count (`inline_calls`), which the store takes from
+        // the recorded `var_count`
+        if rop.inst.op() == Op::SetList && rop.inst.b() == 0 && !folded_ops[i] {
+            set_last_op(i, rop.inst.op() as u8);
+            let a = rop.inst.a();
+            let fixed = frame_tops[i]
+                .and_then(|t| t.checked_sub(a + 1))
+                .filter(|&n| Some(n) == rop.var_count && (a + n) as usize <= max_stack);
+            if fixed.is_none() || rop.inst.k() {
+                checkpoint("bail:setlist-count-not-fixed");
+                return None;
+            }
+            continue;
+        }
         validate_op(
             record,
             vconsts,
@@ -70,7 +86,7 @@ fn validate_op(
     // a same-proto inline body op the lowerer can handle.
     // capture op_id BEFORE per-op checks for
     // failure-phase narrowing.
-    set_last_op_id(rop.inst.op() as u8);
+    set_last_op(i, rop.inst.op() as u8);
     // an inlined function's op reads its own constants, nested
     // functions and upvalue descriptions
     let _ = head_proto;
@@ -90,10 +106,32 @@ fn validate_op(
     // the inline path's unwind ops. They're not in the
     // whitelist (it only covers depth=0 ops with no return
     // semantics); admit them when depth>0.
-    if rop.inline_depth > 0 && matches!(op, Op::Return0 | Op::Return1) {
-        // Bound the A operand for Return1 — Return0 has no A read.
-        if matches!(op, Op::Return1) && (rop.inst.a() as usize) >= max_stack {
+    if rop.inline_depth > 0 && matches!(op, Op::Return0 | Op::Return1 | Op::Return) {
+        // the values returned sit in the frame (`inline_calls` fixed the
+        // count of a `Return`)
+        let n = match op {
+            Op::Return0 => 0,
+            Op::Return1 => 1,
+            _ if rop.inst.b() > 0 => rop.inst.b() - 1,
+            _ => 1,
+        };
+        if (rop.inst.a() + n) as usize > max_stack {
             checkpoint("bail:cmp-dirs-Return1-a-oob");
+            return None;
+        }
+        return Some(());
+    }
+    // a vararg expansion in a vararg function the trace inlined: the extra
+    // arguments sit below the frame's registers, as many as the call
+    // passed (the head frame's are on the stack, which the trace does not
+    // read)
+    if matches!(op, Op::Vararg) {
+        let fits = rop.inline_depth > 0 && rop.proto.is_vararg && {
+            let n = rop.inst.c().saturating_sub(1);
+            (rop.inst.a() + n) as usize <= max_stack
+        };
+        if !fits {
+            checkpoint("bail:vararg-outside-inlined-frame");
             return None;
         }
         return Some(());

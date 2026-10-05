@@ -29,6 +29,10 @@ impl TraceCompiler for CraneliftBackend {
         trace::last_compile_checkpoint()
     }
 
+    fn last_compile_op(&self) -> Option<usize> {
+        trace::last_op_index()
+    }
+
     fn tier_up(
         &self,
         storage: &mut dyn luna_core::jit::JitStorage,

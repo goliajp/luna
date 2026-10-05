@@ -229,20 +229,14 @@ pub unsafe extern "C" fn luna_jit_spill_to_stack(slot_offset: i64, tag: i64, raw
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
-    use luna_core::runtime::function::{INLINE_UPVALS_N, UpvalState, Upvalue};
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
     if vm.jit.pending_err.is_some() {
         return 0;
     }
-    let inner = cl.proto.protos[proto_idx as usize];
-    let n_ups = inner.upvals.len();
-    // Determine the caller frame's base for in_stack captures. The
-    // helper runs MID-trace, before any frame writeback — the trace
-    // head's frame is the topmost Lua frame here (the lowerer restricts
-    // Op::Closure emit to inline_depth=0 only, so no deeper frame
-    // exists).
+    // the trace head's frame is the topmost Lua frame while the trace runs
+    // (inlined frames are not pushed)
     let base = match vm.jit_last_lua_frame() {
         Some(f) => f.base,
         None => {
@@ -250,6 +244,24 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
             return 0;
         }
     };
+    new_closure(vm, cl, proto_idx as usize, base)
+}
+
+/// `cl.proto.protos[idx]` as a new closure of a frame of `cl` whose
+/// registers start at stack slot `base`: in-stack upvalues are opened on
+/// that frame's slots (the trace spilled their values first), the others
+/// taken from `cl`; 5.1 gives the closure its own `_ENV` cell and 5.2 /
+/// 5.3 reuse the proto's cached closure, as the interpreter does. Returns
+/// the closure's payload.
+pub(crate) fn new_closure(
+    vm: &mut luna_core::vm::Vm,
+    cl: luna_core::runtime::Gc<luna_core::runtime::LuaClosure>,
+    idx: usize,
+    base: u32,
+) -> i64 {
+    use luna_core::runtime::function::{INLINE_UPVALS_N, UpvalState, Upvalue};
+    let inner = cl.proto.protos[idx];
+    let n_ups = inner.upvals.len();
     // Build the upval slice — small (0..2 typical) so use a stack
     // array up to INLINE_UPVALS_N like the interp does, else heap.
     let mut stack_buf: [std::mem::MaybeUninit<luna_core::runtime::Gc<Upvalue>>; INLINE_UPVALS_N] =

@@ -214,14 +214,14 @@ pub struct HotExitInfo {
 ///
 /// `repr(C)` because the trace's IR loads the array via raw pointer
 /// arithmetic; Rust's default `repr` doesn't guarantee field order.
-/// All-`Copy` fields with no padding inside each field — 12 bytes
-/// per entry on amd64.
+/// Four 32-bit fields, no padding: 16 bytes per entry.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct FrameMaterializeInfo {
     /// Stack offset (relative to the trace head's `frame.base`) of
     /// the callee's first register slot. The new frame's `base` is
-    /// `head_frame.base + base_offset`; its `func_slot` is one below.
+    /// `head_frame.base + base_offset`; its `func_slot` is
+    /// `n_varargs + 1` below.
     pub base_offset: u32,
     /// PC to write on the freshly-pushed frame. For inner frames
     /// (not the innermost) this is the caller's Call.pc + 1 so the
@@ -232,8 +232,38 @@ pub struct FrameMaterializeInfo {
     /// innermost).
     pub pc: u32,
     /// PUC `nresults`: how many return values the caller expects
-    /// from this call (encoded as `Op::Call`'s C - 1). The
-    /// pre-emit pass bails if any inlined Call has nresults != 1
-    /// (Op::Return1 copy-back assumes one value).
+    /// from this call (`Op::Call`'s C - 1; -1 for all of them).
     pub nresults: i32,
+    /// The extra arguments of a vararg callee, which sit between the
+    /// function slot and `base_offset` (as `push_frame` leaves them).
+    pub n_varargs: u32,
+}
+
+impl CompiledTrace {
+    /// The register tags exit `exit_idx` (laid out as `exit_hit_counts`)
+    /// leaves, over the whole window from the trace's head frame.
+    #[doc(hidden)]
+    pub fn exit_tags_of(&self, exit_idx: usize) -> &[ExitTag] {
+        let inline_n = self.per_exit_inline.len();
+        let tags_n = self.per_exit_tags.len();
+        if exit_idx < inline_n {
+            &self.per_exit_inline[exit_idx].exit_tags
+        } else if exit_idx < inline_n + tags_n {
+            &self.per_exit_tags[exit_idx - inline_n].1
+        } else {
+            &self.exit_tags
+        }
+    }
+
+    /// Where the frame exit `exit_idx` resumes in starts, in registers from
+    /// the trace's head frame: the base of the innermost frame an exit
+    /// inside an inlined function rebuilds, 0 for an exit in the head frame.
+    /// A side trace started at that exit runs on the registers from there.
+    #[doc(hidden)]
+    pub fn exit_frame_offset(&self, exit_idx: usize) -> usize {
+        self.per_exit_inline
+            .get(exit_idx)
+            .and_then(|e| e.chain.last())
+            .map_or(0, |f| f.base_offset as usize)
+    }
 }

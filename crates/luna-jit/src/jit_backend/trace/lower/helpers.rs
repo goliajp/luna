@@ -10,6 +10,11 @@ pub(super) struct OpHelpers {
     pub(super) get_field_checked_id: FuncId,
     pub(super) get_tab_up_checked_id: FuncId,
     pub(super) op_closure_id: FuncId,
+    /// `luna_jit_op_closure_in(cl, idx, frame_off) -> closure`: a closure
+    /// made in a frame of an inlined function
+    pub(super) op_closure_in_id: FuncId,
+    /// `luna_jit_set_top(rel)`: the stack top a variable count leaves
+    pub(super) set_top_id: FuncId,
     pub(super) spill_id: FuncId,
     pub(super) op_close_id: FuncId,
     pub(super) op_tforcall_id: FuncId,
@@ -224,6 +229,12 @@ fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
         .declare_function("luna_jit_op_concat", Linkage::Import, &op_concat_sig)
         .ok()?;
 
+    let op_closure_in_id = declare_i64_import(bcx, "luna_jit_op_closure_in", 3)?;
+    let mut set_top_sig = bcx.make_signature();
+    set_top_sig.params.push(AbiParam::new(types::I64));
+    let set_top_id = bcx
+        .declare_function("luna_jit_set_top", Linkage::Import, &set_top_sig)
+        .ok()?;
     Some(OpHelpers {
         new_table_id,
         set_ids,
@@ -232,6 +243,8 @@ fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
         get_field_checked_id,
         get_tab_up_checked_id,
         op_closure_id,
+        op_closure_in_id,
+        set_top_id,
         spill_id,
         op_close_id,
         op_tforcall_id,
