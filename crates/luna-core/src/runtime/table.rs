@@ -35,6 +35,32 @@ pub enum TableError {
 /// effective ceiling). Beyond this `rehash` returns `TableError::Overflow`.
 pub(crate) const MAX_ASIZE: usize = 1 << 27;
 
+/// The PUC version whose table rules a table follows: how its parts are
+/// sized, where a number key goes in the hash part, and which border `#t`
+/// returns when there are several. Kept in the table's header byte.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[repr(u8)]
+pub(crate) enum Dialect {
+    L51 = 1,
+    L52,
+    L53,
+    L54,
+    L55,
+}
+
+impl Dialect {
+    pub(crate) fn of(v: crate::version::LuaVersion) -> Dialect {
+        use crate::version::LuaVersion as V;
+        match v {
+            V::Lua51 => Dialect::L51,
+            V::Lua52 => Dialect::L52,
+            V::Lua53 => Dialect::L53,
+            V::Lua54 | V::MacroLua => Dialect::L54,
+            V::Lua55 => Dialect::L55,
+        }
+    }
+}
+
 /// JIT layout constants for table-field IC.
 ///
 /// luna-jit's trace lowerer needs to emit direct loads against
@@ -61,12 +87,22 @@ pub mod jit_layout;
 
 #[path = "table_array.rs"]
 mod array;
+#[path = "table_ctor.rs"]
+mod ctor;
+pub use ctor::new_table_sizes;
+pub(crate) use ctor::{int2fb, new_table_operands};
 #[path = "table_get.rs"]
 mod get;
 #[path = "table_grow.rs"]
 mod grow;
+#[path = "table_hash.rs"]
+mod hash;
+#[path = "table_len.rs"]
+mod len;
 #[path = "table_node.rs"]
 mod node;
+#[path = "table_rehash55.rs"]
+mod rehash55;
 #[path = "table_resize.rs"]
 mod resize;
 #[path = "table_set.rs"]
@@ -144,6 +180,16 @@ pub struct Table {
     /// lag behind the real run (that only disables the `#t` shortcut)
     /// but never exceeds it.
     pub(crate) aprefix: u32,
+    /// The array part's length as integer indexing sees it (PUC 5.4
+    /// `alimit`): `asize`, except in a 5.4 table, where `#t` may lower it
+    /// to a border in the upper half of a power-of-two array part and an
+    /// index between it and `asize` raises it again. Compiled code of a
+    /// 5.4 state bounds its inline array accesses by it, so those indices
+    /// reach `get_int` / `set_norm`, which raise it.
+    pub(crate) alimit: std::cell::Cell<u32>,
+    /// 5.5's length hint (PUC `lenhint`): where `#t` starts looking. Set
+    /// to half the array part by a resize and to the border `#t` returned.
+    pub(crate) lenhint: std::cell::Cell<u32>,
     /// Inline backing used when `asize <= INLINE_ASIZE`.
     /// Same layout as the slab: avals at low addresses (`asize * 8`
     /// bytes from offset 0), atags at the trailing `asize` bytes.
@@ -175,7 +221,7 @@ unsafe impl Sync for Table {}
 // the sweep and the mark walk every table; keep it within a 96-byte
 // allocation (PUC 5.4 `Table` is 56)
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(std::mem::size_of::<Table>() == 88);
+const _: () = assert!(std::mem::size_of::<Table>() == 96);
 
 impl Table {
     /// Give back the array and hash parts' blocks. Tables have no `Drop`:
@@ -205,6 +251,21 @@ impl Table {
             acount: 0,
             metatable: None,
             aprefix: 0,
+            alimit: std::cell::Cell::new(0),
+            lenhint: std::cell::Cell::new(0),
+        }
+    }
+
+    /// The dialect whose table rules this table follows (`Heap::new_table`
+    /// sets it; a bare table made without a heap follows 5.5).
+    #[inline(always)]
+    pub(crate) fn dialect(&self) -> Dialect {
+        match self.hdr.sub {
+            1 => Dialect::L51,
+            2 => Dialect::L52,
+            3 => Dialect::L53,
+            4 => Dialect::L54,
+            _ => Dialect::L55,
         }
     }
 
@@ -330,7 +391,7 @@ fn hash_key(k: Value) -> u64 {
     match k {
         Value::Int(i) => i as u64, // identity mod size (PUC hashint)
         Value::Float(f) => mix64(f.to_bits()),
-        Value::Bool(b) => b as u64 + 1,
+        Value::Bool(b) => b as u64,
         Value::Str(s) => s.hash() as u64,
         Value::Table(t) => mix64(t.as_ptr() as u64),
         Value::Closure(c) => mix64(c.as_ptr() as u64),

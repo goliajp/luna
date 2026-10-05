@@ -35,6 +35,7 @@ impl Vm {
             aot: false,
             tier: self.jit.trace_tier,
             tier_up_at: self.jit.tier_up_at,
+            dialect: Some(version),
         };
         let settings = self.jit.recording_settings();
         let adopted = {
