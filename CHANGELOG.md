@@ -361,6 +361,15 @@ optimization.
 - `string.dump` of a main chunk describes its `_ENV` upvalue as PUC does
   (in the stack, index 0).
 
+- A loop calling `math.fmod` was compiled into a trace that never ran:
+  reading the function `math.fmod` was a value the trace could not type,
+  so the trace was marked not enterable. Traces now compute `math.fmod`
+  in place, as the library does: two integers (5.3+) give C's truncating
+  remainder, -1 gives 0 and 0 leaves the trace for the interpreter to
+  raise its error; otherwise the result is the interpreter's `fmod`
+  (`luna_jit_fmod`), so two NaN operands give the NaN the interpreter
+  gives.
+
 - 5.4 and 5.5: `local x <const> = X and nil or K` (or with `false`) made
   `x` a variable; PUC makes it the compile-time constant K, after running
   X, so `x` has no `debug.getlocal` entry and an inner function using it
