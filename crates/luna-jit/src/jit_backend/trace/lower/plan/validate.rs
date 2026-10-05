@@ -34,7 +34,10 @@ pub(super) fn validate_ops(
         if rop.inst.op() == Op::SetList && rop.inst.b() == 0 && !folded_ops[i] {
             set_last_op(i, rop.inst.op() as u8);
             let a = rop.inst.a();
-            let fixed = frame_tops[i]
+            let fixed = frame_tops
+                .get(i)
+                .copied()
+                .flatten()
                 .and_then(|t| t.checked_sub(a + 1))
                 .filter(|&n| Some(n) == rop.var_count && (a + n) as usize <= max_stack);
             if fixed.is_none() || rop.inst.k() {

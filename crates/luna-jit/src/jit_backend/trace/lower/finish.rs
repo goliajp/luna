@@ -374,7 +374,7 @@ fn body_writes(pl: &Plan<'_>) -> Vec<u32> {
 fn inline_kinds(pl: &Plan<'_>) -> u8 {
     let mut k = 0;
     for (i, rop) in pl.record.ops[..pl.effective_end].iter().enumerate() {
-        if let Some(c) = pl.inline_calls[i] {
+        if let Some(c) = pl.inline_calls.get(i).copied().flatten() {
             let callee = pl.record.ops[i + 1].proto;
             if callee.is_vararg {
                 k |= INLINE_VARARG_CALLEE;

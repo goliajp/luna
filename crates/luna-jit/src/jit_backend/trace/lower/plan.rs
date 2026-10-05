@@ -93,11 +93,23 @@ pub(super) fn plan_trace<'r>(
     let n = record.ops.len();
     set_last_op(usize::MAX, 255);
 
-    let (inline_calls, frame_tops) = inline_calls(record);
+    // a trace that inlines no call needs none of the inline-frame plan
+    // (the vectors stay empty; their readers take a missing entry as none)
+    let inlines = record.ops.iter().any(|r| r.inline_depth > 0);
+    let (inline_calls, frame_tops) = if inlines {
+        inline_calls(record)
+    } else {
+        (Vec::new(), Vec::new())
+    };
     let (op_offsets, window_size) = plan_frames(record, head_proto, frame_w, &inline_calls)?;
     let window_size_us = window_size as usize;
-    let frame_func = frame_funcs(record, &op_offsets);
-    let inline_writes = inline_writes(record, &op_offsets, &inline_calls, &frame_tops, &frame_func);
+    let (frame_func, inline_writes) = if inlines {
+        let funcs = frame_funcs(record, &op_offsets);
+        let writes = inline_writes(record, &op_offsets, &inline_calls, &frame_tops, &funcs);
+        (funcs, writes)
+    } else {
+        (Vec::new(), Vec::new())
+    };
 
     side_trace_gate(record, &op_offsets)?;
     let (folded_ops, math_folds) = scan_math_folds(record, n, head_proto, opts);
