@@ -20,6 +20,7 @@ mod asm;
 mod classic;
 mod classic_const;
 mod classic_flow;
+mod classic_ops;
 mod format;
 mod modern;
 mod modern_const;
