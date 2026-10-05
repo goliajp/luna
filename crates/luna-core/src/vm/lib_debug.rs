@@ -244,10 +244,10 @@ fn d_setuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// prompting on stderr, until end of input or a line that is exactly
 /// `cont`; run each as a protected chunk and print its error.
 fn d_debug(vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<u32, LuaError> {
-    use std::io::{BufRead, Write};
+    use std::io::BufRead;
     loop {
-        eprint!("lua_debug> ");
-        let _ = std::io::stderr().flush(); // stderr is unbuffered; nothing to report
+        // stderr is unbuffered; nothing to report
+        let _ = crate::stdio::write_stderr(b"lua_debug> ");
         let mut line = Vec::new();
         let mut stdin = std::io::stdin().lock();
         while line.len() < 249 {
@@ -263,11 +263,15 @@ fn d_debug(vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<u32, LuaError> {
             }
         }
         drop(stdin);
+        if crate::stdio::text_mode() && line.ends_with(b"\r\n") {
+            line.remove(line.len() - 2);
+        }
         if line.is_empty() || line == b"cont\n" {
             return Ok(0);
         }
-        if let Err(msg) = run_debug_command(vm, &line) {
-            eprintln!("{}", String::from_utf8_lossy(&msg));
+        if let Err(mut msg) = run_debug_command(vm, &line) {
+            msg.push(b'\n');
+            let _ = crate::stdio::write_stderr(&msg);
         }
     }
 }

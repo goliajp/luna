@@ -278,7 +278,9 @@ fn checklocal(line: &[u8]) {
         .count()..];
     // strchr(" \t", c) also finds the string's terminating NUL
     if rest.starts_with(b"local") && matches!(rest.get(5), None | Some(b' ' | b'\t')) {
-        eprintln!("warning: locals do not survive across lines in interactive mode");
+        let _ = luna_core::stdio::write_stderr(
+            b"warning: locals do not survive across lines in interactive mode\n",
+        );
     }
 }
 
