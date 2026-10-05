@@ -21,6 +21,7 @@
 //! surface reads like `lua.h`.
 #![allow(non_snake_case)]
 
+use luna_core::runtime::mem::LVec;
 use luna_core::runtime::{Coro, Gc, Value};
 use luna_core::version::LuaVersion;
 use luna_core::vm::{LuaError, Vm};

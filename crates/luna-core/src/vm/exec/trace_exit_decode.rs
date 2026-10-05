@@ -188,7 +188,7 @@ impl Vm {
         // pushed frames' R[0..max_stack) windows.
         if self.stack.len() < base_us + slot_count {
             self.stack
-                .resize(base_us + slot_count, crate::runtime::Value::Nil);
+                .resize_or_abort(base_us + slot_count, crate::runtime::Value::Nil);
         }
         // Fast-path restore loop. When
         // we landed on the global `exit_tags`,

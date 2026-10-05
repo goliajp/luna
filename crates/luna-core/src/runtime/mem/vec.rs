@@ -35,6 +35,7 @@ impl<T> LVec<T> {
     }
 
     /// An empty vector with room for `n`.
+    #[inline]
     pub fn with_capacity(mem: MemRef, n: usize) -> Result<LVec<T>, Oom> {
         let mut v = LVec::new(mem);
         v.reserve_exact(n)?;
@@ -123,11 +124,19 @@ impl<T> LVec<T> {
     }
 
     /// Room for at least `extra` more elements, growing geometrically.
-    #[inline]
+    #[inline(always)]
     pub fn reserve(&mut self, extra: usize) -> Result<(), Oom> {
         if self.cap - self.len >= extra {
             return Ok(());
         }
+        self.reserve_slow(extra)
+    }
+
+    /// The growing half of [`LVec::reserve`], out of line so the callers
+    /// keep only the room test, as with `Vec`.
+    #[inline(never)]
+    #[cold]
+    fn reserve_slow(&mut self, extra: usize) -> Result<(), Oom> {
         let need = self.len.checked_add(extra).ok_or(Oom(self.mem))?;
         self.grow_to(need.max(self.cap.saturating_mul(2)).max(4))
     }
@@ -145,7 +154,7 @@ impl<T> LVec<T> {
     #[inline(always)]
     pub fn push(&mut self, v: T) -> Result<(), Oom> {
         if self.len == self.cap {
-            self.reserve(1)?;
+            self.reserve_slow(1)?;
         }
         // SAFETY: `len < cap`, so the slot is inside the block and unused
         unsafe { self.ptr.as_ptr().add(self.len).write(v) };
@@ -241,6 +250,7 @@ impl<T> LVec<T> {
     }
 
     /// The elements as a boxed slice, giving back the spare capacity.
+    #[inline]
     pub fn into_slice(mut self) -> super::LSlice<T> {
         self.shrink_to_fit();
         let me = std::mem::ManuallyDrop::new(self);
@@ -276,6 +286,7 @@ impl<T> LVec<T> {
 
 impl<T: Clone> LVec<T> {
     /// Append clones of `s`.
+    #[inline]
     pub fn extend_from_slice(&mut self, s: &[T]) -> Result<(), Oom> {
         self.reserve(s.len())?;
         for v in s {
@@ -294,12 +305,21 @@ impl<T: Clone> LVec<T> {
             return Ok(());
         }
         self.reserve(n - self.len)?;
-        while self.len < n {
-            // SAFETY: room for `n` elements was reserved above
-            unsafe { self.ptr.as_ptr().add(self.len).write(v.clone()) };
-            self.len += 1;
-        }
+        self.fill_to(n, v);
         Ok(())
+    }
+
+    /// Append clones of `v` up to length `n`.
+    #[inline(always)]
+    fn fill_to(&mut self, n: usize, v: T) {
+        debug_assert!(n <= self.cap);
+        let mut len = self.len;
+        while len < n {
+            // SAFETY: the callers reserved room for `n` elements
+            unsafe { self.ptr.as_ptr().add(len).write(v.clone()) };
+            len += 1;
+        }
+        self.len = len;
     }
 
     /// A copy on the same context.
@@ -310,11 +330,83 @@ impl<T: Clone> LVec<T> {
     }
 
     /// A vector on `mem` holding clones of `s`.
+    #[inline]
     pub fn from_slice(mem: MemRef, s: &[T]) -> Result<LVec<T>, Oom> {
         let mut v = LVec::with_capacity(mem, s.len())?;
         v.extend_from_slice(s)?;
         Ok(v)
     }
+}
+
+/// Growth that ends the process when the allocation fails, as the
+/// standard library's `Vec` does. For the places that cannot report a
+/// memory error yet.
+impl<T> LVec<T> {
+    /// [`LVec::push`], ending the process on failure.
+    #[inline(always)]
+    pub fn push_or_abort(&mut self, v: T) {
+        if self.len == self.cap {
+            self.reserve_slow_or_abort(1);
+        }
+        // SAFETY: `len < cap`, so the slot is inside the block and unused
+        unsafe { self.ptr.as_ptr().add(self.len).write(v) };
+        self.len += 1;
+    }
+
+    /// [`LVec::reserve_slow`], ending the process on failure.
+    #[inline(never)]
+    #[cold]
+    fn reserve_slow_or_abort(&mut self, extra: usize) {
+        if self.reserve_slow(extra).is_err() {
+            vec_oom::<T>(self.len.saturating_add(extra))
+        }
+    }
+
+    /// [`LVec::insert`], ending the process on failure.
+    pub fn insert_or_abort(&mut self, i: usize, v: T) {
+        if self.insert(i, v).is_err() {
+            vec_oom::<T>(self.len + 1)
+        }
+    }
+
+    /// [`LVec::reserve`], ending the process on failure.
+    #[inline(always)]
+    pub fn reserve_or_abort(&mut self, extra: usize) {
+        if self.cap - self.len < extra {
+            self.reserve_slow_or_abort(extra);
+        }
+    }
+}
+
+impl<T: Clone> LVec<T> {
+    /// [`LVec::resize`], ending the process on failure.
+    #[inline]
+    pub fn resize_or_abort(&mut self, n: usize, v: T) {
+        if n <= self.len {
+            self.truncate(n);
+            return;
+        }
+        self.reserve_or_abort(n - self.len);
+        self.fill_to(n, v);
+    }
+
+    /// [`LVec::from_slice`], ending the process on failure.
+    pub fn from_slice_or_abort(mem: MemRef, s: &[T]) -> LVec<T> {
+        LVec::from_slice(mem, s).unwrap_or_else(|_| vec_oom::<T>(s.len()))
+    }
+
+    /// [`LVec::extend_from_slice`], ending the process on failure.
+    pub fn extend_from_slice_or_abort(&mut self, s: &[T]) {
+        if self.extend_from_slice(s).is_err() {
+            vec_oom::<T>(self.len.saturating_add(s.len()))
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn vec_oom<T>(n: usize) -> ! {
+    super::oom_abort(Layout::array::<T>(n).unwrap_or(Layout::new::<T>()))
 }
 
 impl<T> Deref for LVec<T> {
@@ -349,6 +441,12 @@ impl<T> Drop for LVec<T> {
 impl<T: std::fmt::Debug> std::fmt::Debug for LVec<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         (**self).fmt(f)
+    }
+}
+
+impl<T> AsRef<[T]> for LVec<T> {
+    fn as_ref(&self) -> &[T] {
+        self
     }
 }
 
