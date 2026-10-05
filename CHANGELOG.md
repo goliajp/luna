@@ -607,6 +607,13 @@ optimization.
   tables' array and hash parts, prototypes' code, constants and debug
   records, closures' and native functions' upvalues, coroutine stacks and
   frames, the C API's per-thread `lua_State` and its userdata blocks.
+- And so does the rest of what a Vm keeps: the string table, the
+  collector's gray stack and finalizer queues (a gray stack that cannot
+  grow is made up for by walking the object list, so a collection never
+  fails), the stacks of running natives and host roots, and everything the
+  parser and the compiler build while loading a chunk. A load that runs out
+  of memory fails with "not enough memory"; the C API's `lua_load` returns
+  `LUA_ERRMEM` for it.
 - luna-aot links `x86_64-pc-windows-msvc` without Visual Studio, on
   Linux, macOS or Windows: `clang-cl` and `lld-link` from LLVM with the
   MSVC C runtime and Windows SDK from `xwin splat`, named by
