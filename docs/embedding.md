@@ -108,6 +108,32 @@ covering each opt-in.
 Bytecode loading is **off** by default in the builder. Enable it
 with `.allow_bytecode_loading()` only for fully trusted input.
 
+### 3.1 Limiting and watching a Vm's memory
+
+Every allocation a `Vm` makes goes through its allocation context
+(`luna_core::runtime::mem`). Give it a `MemoryPolicy` to see each
+allocation and refuse it: a refused allocation is a Lua memory error
+("not enough memory", which `pcall` catches) instead of the end of the
+process, and a collection is tried first, as PUC does.
+
+```rust
+use luna_core::runtime::mem::{MemOwner, MemoryLimit};
+use luna_core::version::LuaVersion;
+use luna_core::vm::Vm;
+
+let mut vm = Vm::new_with_mem(LuaVersion::Lua54, MemOwner::policy(Box::new(MemoryLimit(8 << 20))));
+let r = vm.eval("local t = {} for i = 1, 1e9 do t[i] = i end");
+assert!(r.is_err());                  // not enough memory
+println!("{:?}", vm.memory_in_use());  // bytes the Vm holds now
+```
+
+A host that supplies the memory itself passes a `lua_Alloc`-style
+function to the `unsafe` `MemOwner::raw`. Without either, a `Vm` uses
+the system allocator, counts nothing, and pays nothing for the context.
+The constructors that do not start with `try_` (`Vm::new`,
+`Heap::new_table`, `Vm::create_userdata`, ...) end the process when
+memory runs out, as the standard library's containers do.
+
 ---
 
 ## 4. Setting globals
