@@ -295,6 +295,15 @@ Key properties:
   after the exit has rebuilt the frames, then writes back the parent's
   registers below the frame and the side trace's above.
 
+- **Failed compiles are shared too.** A Vm of an engine whose recording
+  fails to compile hands the failure to the engine with its fingerprint:
+  the head's code by content, how the recording started, the entry tags
+  and the path it took. Another Vm whose recording has the same
+  fingerprint does not compile it and counts the first Vm's failures as
+  its own, so it gives the head up after one recording instead of
+  recording and failing as often; a recording with another fingerprint
+  compiles as usual.
+
 - **JIT can be disabled per `Vm`**: `vm.set_jit_enabled(false)` or
   installing `NullJitBackend` (default if you `cargo add luna-core`
   without the `luna` wrapper) makes every dispatch take the interpreter

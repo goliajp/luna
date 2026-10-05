@@ -55,6 +55,7 @@ mod llvm_tier;
 pub use llvm_tier::llvm_codegen_count;
 pub(crate) mod reloc;
 mod share;
+pub(crate) mod share_failures;
 pub(crate) use emit::{ClifEmit, Emit, Ins, RelocKind, reloc_symbol};
 pub(crate) use lir::CodeArena;
 mod aot_data;
