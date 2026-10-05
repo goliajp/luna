@@ -250,9 +250,9 @@ impl Vm {
             let regs = &reg_state[..slot_count];
             for (i, &exit_tag) in exit_tags_for_pc.iter().enumerate() {
                 let mut tag = RAW_OF[exit_tag as usize];
-                if tag == BOOL {
-                    tag = raw::FALSE + (regs[i] & 1) as u8;
-                } else if tag == UNTOUCHED {
+                // `Untouched` first: a trace leaves most slots unwritten,
+                // and a written boolean is rare
+                if tag == UNTOUCHED {
                     if i >= max_stack {
                         tag = raw::NIL;
                     } else {
@@ -269,6 +269,8 @@ impl Vm {
                             continue;
                         }
                     }
+                } else if tag == BOOL {
+                    tag = raw::FALSE + (regs[i] & 1) as u8;
                 }
                 if keep_tfor.contains(&i) {
                     continue;
