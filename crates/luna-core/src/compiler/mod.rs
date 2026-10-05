@@ -13,6 +13,7 @@ use std::collections::HashMap;
 mod assign;
 mod assign_gate;
 mod binop;
+mod binop_const;
 mod closure;
 mod cond;
 mod const_map;
