@@ -26,135 +26,16 @@ use crate::runtime::mem::LVec;
 /// A future `feature = "send"` will gate an
 /// opt-in `Arc<RwLock<T>>` mode with a hard ≤8% perf regression
 /// budget.
+// fixed field order: the interpreter's hot paths are tuned to this layout
+// (stack, frames and the call counters near the front), and letting the
+// compiler reorder it after an unrelated field change costs instructions
+// on every call
+#[repr(C)]
 pub struct Vm {
     /// The GC heap owned by this VM. Embedders normally interact via the
     /// `Vm` methods (`load` / `call_value` / `set_global` / …) rather than
     /// the heap directly.
     pub heap: Heap,
-    pub(crate) stack: LVec<Value>,
-    pub(crate) frames: LVec<CallFrame>,
-    /// Shadow of `self.frames.len()`. Synced on every push/pop in the
-    /// `frames_push_sync`/`frames_pop_sync` helpers (debug-asserted on
-    /// use). Not consumed by readers yet; it is scaffolding for replacing
-    /// `frames: Vec<CallFrame>` with a flat `[CallFrame; MAX_FRAMES]`
-    /// indexed by frames_top.
-    pub(super) frames_top: u32,
-    /// open upvalues, sorted ascending by stack slot
-    pub(super) open_upvals: LVec<(u32, Gc<Upvalue>)>,
-    /// to-be-closed slots, ascending
-    pub(super) tbc: LVec<u32>,
-    /// logical stack top for multi-result sequences
-    pub(crate) top: u32,
-    pub(super) globals: Gc<Table>,
-    /// shared metatable for all strings (populated by the string lib)
-    /// per-basic-type metatables (PUC luaT): indexed by `type_mt_slot`
-    /// (0 nil, 1 boolean, 2 number, 3 string, 4 function, 5 light userdata,
-    /// 6 thread); tables and full userdata carry their
-    /// own. Settable via debug.setmetatable.
-    pub(super) type_mt: [Option<Gc<Table>>; 7],
-    /// pre-interned metamethod event names, indexed by `Mm`
-    pub(super) mm_names: [Gc<crate::runtime::LuaStr>; MM_NAMES.len()],
-    /// the parser's vectors, kept from one `load` to the next
-    pub(super) parse_scratch: crate::frontend::parser::ParseScratch,
-    /// the compiler's vectors, kept from one load to the next
-    pub(super) compile_scratch: crate::compiler::CompileScratch,
-    /// native↔Lua nesting depth (PUC C-stack guard analogue)
-    pub(super) c_depth: u32,
-    /// number of live pcall/xpcall continuation frames on the running thread
-    /// (PUC counts these against nCcalls). Bounds protected-call recursion the
-    /// way `c_depth` bounds call_value recursion. Per-thread: saved/restored
-    /// with the coroutine context, since continuations survive a yield.
-    pub(super) pcall_depth: u32,
-    /// number of non-yieldable C calls in flight on the running thread (PUC's
-    /// `L->nny`). A library callback that runs via synchronous Rust recursion
-    /// (sort comparator, gsub replacement) cannot be continued across a yield,
-    /// so it bumps this for its duration; `coroutine.yield` inside hits the
-    /// C-call boundary and errors. Always 0 at a suspend point (a yield can
-    /// never cross such a call); a resume starts the coroutine at 0 and puts
-    /// the resumer's count back after.
-    pub(super) nny: u32,
-    /// Nonzero while an xpcall message handler is on the Rust stack. Used so a
-    /// stack-overflow that surfaces *inside* the handler is reported as PUC's
-    /// "error in error handling" (LUA_ERRERR + `luaD_seterrorobj`), not the
-    /// plain "stack overflow" — errors.lua :606's `checkerr("error handling",
-    /// loop)` then matches. PUC tracks this via the soft-cap window
-    /// `nCcalls >= MAXCCALLS/10*11`; luna's c_depth is strict, so we mark the
-    /// scope explicitly.
-    pub(crate) msgh_depth: u32,
-    /// set by a coroutine closing itself (`coroutine.close()` on the running
-    /// thread): the to-be-closed handlers have already run; the thread must now
-    /// terminate. `Some(None)` is a clean close, `Some(Some(e))` a handler
-    /// raised `e`. Checked by `exec_with`/`resume_coro` to propagate (not
-    /// unwind, so a protecting pcall cannot catch it) the termination.
-    pub(super) terminating: Option<Option<Value>>,
-    /// xoshiro256** state (math.random)
-    pub(super) rng: [u64; 4],
-    /// VM creation time (os.clock)
-    pub(super) started: std::time::Instant,
-    pub(super) version: LuaVersion,
-    /// error object being threaded through a chain of __close handlers; a GC
-    /// root for the duration (a handler may trigger collection)
-    pub(super) closing_err: Option<Value>,
-    /// the coroutine whose context is currently live in the fields above;
-    /// `None` while the main thread runs
-    pub(crate) current: Option<Gc<crate::runtime::Coro>>,
-    /// the main thread's saved execution context while a coroutine runs
-    pub(super) main_ctx: Option<SavedCtx>,
-    /// set by `coroutine.yield` to suspend the running coroutine: the yielded
-    /// values plus the slot/result-count needed to finish the yielding call on
-    /// the next resume. Checked by `exec` to propagate (not unwind) on yield.
-    pub(super) yielding: Option<(Vec<Value>, u32, i32)>,
-    /// results expected by the in-flight native call (so `yield` knows how many
-    /// values its call site wants when it suspends)
-    pub(super) native_nresults: i32,
-    /// identity object for the main thread, returned by `coroutine.running`
-    /// (the main thread's context lives in the VM fields / `main_ctx`, not here)
-    pub(super) main_coro: Option<Gc<Coro>>,
-    /// `collectgarbage` mode name ("incremental"/"generational"). The collector
-    /// itself is still stop-the-world mark-sweep; this tracks the mode so mode
-    /// switches report the previous one, as PUC does.
-    pub(super) gc_mode: &'static str,
-    /// the live-register boundary of the running thread for GC rooting (PUC's
-    /// `L->top`): set precisely at each GC safe point so freed temporary
-    /// registers above it are not rooted. Without this the collector roots the
-    /// whole stack window, pinning weak-table values stranded in stale temps
-    /// (e.g. closure.lua's `while x[1]` GC-detection loop).
-    pub(crate) gc_top: u32,
-    /// `collectgarbage("param", name [,value])` pacing parameters. The collector
-    /// is still stop-the-world, so these are stored/returned for API fidelity
-    /// (PUC round-trips them via `setparam`/`getparam`). Defaults mirror PUC's
-    /// `LUAI_GC*` knobs: pause=200, stepmul=100, stepsize=13.
-    pub(super) gc_pause: i64,
-    pub(super) gc_stepmul: i64,
-    pub(super) gc_stepsize: i64,
-    /// `collectgarbage`'s parameters as the dialect stores them; they set
-    /// the three knobs above through `set_gc_pacing`.
-    pub(crate) gc_params: crate::vm::lib_gc::GcParams,
-    /// true while `__gc` finalizers are being run, so a finalizer that calls
-    /// `collectgarbage` gets a no-op (PUC's non-reentrancy: lua_gc returns -1 →
-    /// `collectgarbage` yields fail).
-    pub(super) gc_finalizing: bool,
-    /// What the C API runs for a C function's continuation
-    /// (`ContKind::Host`); see [`super::host_c`].
-    pub(crate) host_cont_hooks: Option<super::host_c::HostContHooks>,
-    /// The C API's warning function (`lua_setwarnf`), which replaces the
-    /// default one; see [`super::host_c`].
-    pub(crate) host_warn: Option<super::host_c::HostWarn>,
-    /// The C API's functions without upvalues, one per C function pointer:
-    /// from 5.2 on PUC's light C functions are equal when their pointers
-    /// are. GC roots.
-    pub(crate) host_light: std::collections::HashMap<usize, Value>,
-    /// PUC 5.4+ warning system. Lua manual §6.1 `warn`: emitted messages
-    /// concatenate across continuation calls until a non-`tocont` call
-    /// flushes; the default warnf recognises `@on`/`@off` control messages
-    /// and starts disabled. luna's `emit_warn` mirrors the default warnf
-    /// behaviour and 5.4+ `__gc` errors are routed through it (5.1–5.3
-    /// keep the older raise semantics).
-    pub(crate) warn_state: WarnState,
-    pub(crate) warn_buf: Vec<u8>,
-    /// the default warning function is in the middle of a message (PUC
-    /// `warnfcont`)
-    pub(crate) warn_cont: bool,
     /// Embedding cooperative budget: a per-Vm tick counter that the run
     /// loop decrements once per dispatch turn. When it hits zero the loop
     /// raises a catchable "instruction budget exceeded" error so the embedder
@@ -162,147 +43,27 @@ pub struct Vm {
     /// frame budgets). `None` = unbounded; reset on each call via
     /// `set_instr_budget`.
     pub(crate) instr_budget: Option<i64>,
-    // JIT-specific state lives in the `JitState` sidecar; see `self.jit`
-    // below and `crate::vm::jit_state` for field docs.
-    /// Bytecode-loading gate. Default `true`. Sandbox embedders should
-    /// call `set_bytecode_loading(false)` so `load`/`loadstring` reject
-    /// precompiled chunks (which bypass the parser's depth / opcode
-    /// limits). When `false`, the loader rejects any source whose first
-    /// byte is the bytecode signature `\27` ("`\27Lua`").
-    pub(crate) bytecode_loading: bool,
-    /// PUC bytecode-loading gate. Default `false` — PUC `.luac` files are
-    /// a strictly larger trust surface than luna's own dump format
-    /// (third-party toolchain bugs, malformed chunks, unknown opcode
-    /// shapes). When `true`, the loader routes `\x1bLua\x{51..55}` inputs
-    /// through the per-dialect PUC translators in `crate::vm::dump::puc`.
-    /// Embedder toggles via `set_puc_bytecode_loading`.
-    pub(crate) puc_bytecode_loading: bool,
-    /// Byte budget for source fed into `load` / `loadstring` / `Vm::load`.
-    /// Default [`Vm::DEFAULT_LOADER_INPUT_BUDGET`] (256 MiB). When the
-    /// accumulated reader output (`load(f, ...)`) or a one-shot `&[u8]`
-    /// source exceeds this, the loader returns the PUC-shaped
-    /// `not enough memory` error before the host allocator is asked to
-    /// hold the next chunk. Defends against `heavy.lua::loadrep`-style
-    /// 7 GB+ feeder loops that would otherwise SIGSEGV when `Vec::push`
-    /// crosses `isize::MAX` or the host runs out of RAM.
-    /// Embedders that genuinely need to load > 256 MiB sources widen the
-    /// cap via [`Vm::set_loader_input_budget`].
-    pub(crate) loader_input_budget: usize,
+    pub(crate) stack: LVec<Value>,
+    pub(crate) frames: LVec<CallFrame>,
+    /// open upvalues, sorted ascending by stack slot
+    pub(super) open_upvals: LVec<(u32, Gc<Upvalue>)>,
+    /// to-be-closed slots, ascending
+    pub(super) tbc: LVec<u32>,
+    /// the parser's vectors, kept from one `load` to the next
+    pub(super) parse_scratch: crate::frontend::parser::ParseScratch,
+    /// the compiler's vectors, kept from one load to the next
+    pub(super) compile_scratch: crate::compiler::CompileScratch,
+    pub(crate) warn_buf: Vec<u8>,
     /// In-process log of fully-emitted warnings (each entry = one flushed
     /// message, sans the "Lua warning: " prefix and trailing newline). Lets
     /// tests assert what was warned without scraping stderr.
     pub(crate) warn_log: Vec<Vec<u8>>,
-    /// PUC's `LUA_REGISTRYINDEX` table — a single Lua table the debug library
-    /// exposes via `debug.getregistry`. Used to hold `_HOOKKEY` (the weak-key
-    /// table PUC's `db_sethook` keys per-thread hooks under). luna stores hook
-    /// state directly in `Vm.hook`/`Coro.hook`, so the entry is largely a
-    /// shape stub for db.lua :328; if other registry-keyed APIs land later
-    /// they can share this table.
-    pub(crate) registry: Option<Gc<Table>>,
-    /// the shared `FILE*` metatable for io file handles (PUC's LUA_FILEHANDLE
-    /// registry entry); attached to every file userdata the io library makes
-    pub(crate) file_mt: Option<Gc<Table>>,
-    /// io library default input/output streams (PUC registry IO_INPUT/IO_OUTPUT)
-    pub(crate) io_input: Option<Gc<crate::runtime::Userdata>>,
-    pub(crate) io_output: Option<Gc<crate::runtime::Userdata>>,
-    /// `io.stdin` as the io library made it, whatever the script later does
-    /// to the `io` table: the stream a host's line reads share
-    pub(crate) io_stdin: Option<Gc<crate::runtime::Userdata>>,
-    /// lua.c's `-E`: libraries opened from now on ignore the environment
-    pub(crate) ignore_env: bool,
-    /// the running thread's debug hook state (`debug.sethook`); per-thread,
-    /// swapped with the execution context on a coroutine resume/yield
-    pub(crate) hook: HookState,
-    /// true while the hook itself runs, so its own execution fires no events
-    /// (PUC clears the mask for the duration)
-    pub(crate) in_hook: bool,
-    /// PUC `trap`: the dispatch loop head has work beyond fetching the next
-    /// instruction — an instruction budget, a memory cap or an armed hook.
-    /// The loop head clears it when it finds none of them; whatever may
-    /// create one sets it (set spuriously, it costs one slow iteration).
-    pub(crate) trap: bool,
-    /// arms the next Lua frame's `tailcalls` count (PUC `ci->u.l.tailcalls`),
-    /// consumed by `push_frame`. `OP_TailCall` sets it to the caller's
-    /// own tailcalls + 1 before begin_call so deeply tail-recursive chains
-    /// accumulate the count instead of capping at 1.
-    pub(crate) pending_tailcalls: u32,
-    /// arms the next Lua frame's `ccmt` (its `__call` chain length), consumed
-    /// by `push_frame`. `OP_TailCall` sets it to the reused activation's
-    /// count; `begin_call` otherwise sets the chain it just resolved.
-    pub(super) pending_ccmt: u8,
     /// Name of the C native that just propagated an error (captured before
     /// the native is popped from `running_natives`). Lets a dying coroutine
     /// preserve `[C]: in function '<name>'` at the top of its traceback
     /// snapshot — PUC walks `luaG_funcnamefrompc` over a still-live ci, but
     /// luna's native frames are off-stack so we stash the name explicitly.
     pub(crate) errored_natives: Vec<crate::vm::callstack::ErroredNative>,
-    /// Frames below this index are out of reach of the error handler of
-    /// an `xpcall` (PUC `L->errfunc`): a protected call made from Rust — a
-    /// finalizer, the handler itself — starts a fresh `errfunc` scope.
-    pub(crate) msgh_floor: usize,
-    /// The message handler that is running, if any. PUC's `luaG_errormsg`
-    /// calls the handler with `L->errfunc` still set, so an error inside
-    /// the handler (and not caught within it) calls the handler again, at
-    /// the point of that error. Per thread, like `L->errfunc`.
-    pub(crate) msgh_running: Option<Value>,
-    /// How many message-handler runs have started; lets a run tell whether
-    /// the error it got back was already handled by a nested run.
-    pub(crate) msgh_runs: u64,
-    /// How many times an error became LUA_ERRERR ("error in error
-    /// handling"); a host protected call compares it before and after to
-    /// report that status instead of LUA_ERRRUN.
-    pub(crate) errerr_raised: u64,
-    /// finalizer errors a 5.2/5.3 full collection raised (`LUA_ERRGCMM`)
-    pub(crate) gcmm_raised: u64,
-    /// memory errors raised (`LUA_ERRMEM`)
-    pub(crate) mem_raised: u64,
-    /// the running native fired its own return hook (a C function of the C
-    /// API, whose values live on its C stack): its return skips the hook
-    pub(crate) native_ret_hooked: bool,
-    /// the call hook of the Lua function a 5.1–5.3 tail call is entering
-    /// already ran, before the caller's frame went (see `tail_call_hook`)
-    pub(crate) tail_hook_fired: bool,
-    /// The value the last `xpcall` handler produced for the error in
-    /// flight, so the unwind that carries it to the `xpcall` does not
-    /// run the handler again.
-    pub(crate) msgh_applied: Option<Value>,
-    /// Whether an error nothing catches should keep its traceback: not
-    /// inside a protected call made from Rust, which discards it.
-    pub(crate) keep_error_traceback: bool,
-    /// PUC `CallInfo.u2.transferinfo`: index of the first transferred value
-    /// (relative to the activation's func slot) and the number transferred.
-    /// Set just before firing a call/return hook, read by `getinfo("r")`.
-    pub(crate) hook_ftransfer: u16,
-    pub(crate) hook_ntransfer: u16,
-    /// metamethod event tag (e.g. "close") to attach to the next Lua frame
-    /// pushed by `push_frame`; `close_slots` sets this before calling a
-    /// `__close` handler so `debug.traceback` names it "metamethod 'close'"
-    /// (PUC `CallInfo.u.l.tm`). Single-shot: `push_frame` consumes it.
-    pub(super) pending_tm: Option<crate::runtime::function::FrameTm>,
-    /// `true` when the next `push_frame` is the user hook function itself,
-    /// so `debug.getinfo(1).namewhat` resolves to `"hook"` (PUC
-    /// `CIST_HOOKED`). `run_hook` arms it before dispatching the hook.
-    pub(super) pending_is_hook: bool,
-    /// The C API's dispatcher of C hook functions: a thread whose hook
-    /// function is a light userdata has a C hook (`lua_sethook`), which
-    /// this runs; see [`super::host_c`].
-    pub(crate) host_hook: Option<super::host_c::HostHookFn>,
-    /// A C line or count hook asked to yield (`lua_yield` inside a hook);
-    /// acted on once the hooks of the instruction have run.
-    pub(crate) hook_yield: bool,
-    /// The running thread resumed from a hook's yield (5.2+
-    /// `CIST_HOOKYIELD`): the next hook check does not call the hook again.
-    pub(crate) hook_resumed: bool,
-    /// traceback of an error nothing in its thread catches, one line per
-    /// stack level, taken where it was raised (see `raise_to_handler`): what
-    /// the host gets from `take_error_traceback`, and what `debug.traceback`
-    /// shows of the coroutine it kills. Cleared on a catch and at host-level
-    /// `call_value` entry (`public_call_depth == 0`).
-    pub(crate) error_traceback: Option<Vec<Vec<u8>>>,
-    /// nesting depth of public `call_value` entries (host vs. internal). The
-    /// outermost entry (depth 0) resets per-error state (`error_traceback`);
-    /// internal calls (e.g. xpcall msgh, sort callback) preserve it.
-    pub(super) public_call_depth: u32,
     /// stack of native (`Value::Native`) closures currently running on the
     /// Rust call stack. `begin_call` pushes the closure before invoking
     /// `nc.f` and pops on return. Used by `arg_error` to detect a *nested*
@@ -313,9 +74,6 @@ pub struct Vm {
     /// frame stacks, so the debug interface can place it among the Lua
     /// activations as PUC's CallInfo chain would (see `callstack`).
     pub(crate) running_natives: Vec<crate::vm::callstack::NativeAct>,
-    /// Index into `running_natives` where the running thread's own natives
-    /// begin; the ones below belong to the threads that resumed it.
-    pub(crate) natives_base: usize,
     /// JIT sidecar. Always present (never `Option`); inert
     /// when `chunk_compiler` / `trace_compiler` are
     /// [`crate::jit::NullJitBackend`]. See [`crate::vm::jit_state`].
@@ -346,6 +104,64 @@ pub struct Vm {
     /// (sort.lua's `load(..)(); collectgarbage()` compare callback
     /// regression).
     pub(crate) sort_scratch: Vec<Vec<Value>>,
+    /// Storages [`Vm::install_jit_storage`] replaced: code compiled into
+    /// them may still be referenced by this Vm's functions, so they live
+    /// as long as the Vm.
+    pub(super) retired_jit_storage: Vec<Box<dyn crate::jit::JitStorage>>,
+    /// the main thread's saved execution context while a coroutine runs
+    pub(super) main_ctx: Option<SavedCtx>,
+    /// set by `coroutine.yield` to suspend the running coroutine: the yielded
+    /// values plus the slot/result-count needed to finish the yielding call on
+    /// the next resume. Checked by `exec` to propagate (not unwind) on yield.
+    pub(super) yielding: Option<(Vec<Value>, u32, i32)>,
+    /// traceback of an error nothing in its thread catches, one line per
+    /// stack level, taken where it was raised (see `raise_to_handler`): what
+    /// the host gets from `take_error_traceback`, and what `debug.traceback`
+    /// shows of the coroutine it kills. Cleared on a catch and at host-level
+    /// `call_value` entry (`public_call_depth == 0`).
+    pub(crate) error_traceback: Option<Vec<Vec<u8>>>,
+
+    /// `(source_name, line)` of the most recent error. Set by the
+    /// dispatcher / lexer / parser; cleared when a new call_value
+    /// enters cleanly.
+    pub(crate) last_error_source: Option<(String, u32)>,
+    /// VM creation time (os.clock)
+    pub(super) started: std::time::Instant,
+    /// the running thread's debug hook state (`debug.sethook`); per-thread,
+    /// swapped with the execution context on a coroutine resume/yield
+    pub(crate) hook: HookState,
+    /// `collectgarbage`'s parameters as the dialect stores them; they set
+    /// the three knobs above through `set_gc_pacing`.
+    pub(crate) gc_params: crate::vm::lib_gc::GcParams,
+    /// error object being threaded through a chain of __close handlers; a GC
+    /// root for the duration (a handler may trigger collection)
+    pub(super) closing_err: Option<Value>,
+    /// The message handler that is running, if any. PUC's `luaG_errormsg`
+    /// calls the handler with `L->errfunc` still set, so an error inside
+    /// the handler (and not caught within it) calls the handler again, at
+    /// the point of that error. Per thread, like `L->errfunc`.
+    pub(crate) msgh_running: Option<Value>,
+    /// The value the last `xpcall` handler produced for the error in
+    /// flight, so the unwind that carries it to the `xpcall` does not
+    /// run the handler again.
+    pub(crate) msgh_applied: Option<Value>,
+    /// set by a coroutine closing itself (`coroutine.close()` on the running
+    /// thread): the to-be-closed handlers have already run; the thread must now
+    /// terminate. `Some(None)` is a clean close, `Some(Some(e))` a handler
+    /// raised `e`. Checked by `exec_with`/`resume_coro` to propagate (not
+    /// unwind, so a protecting pcall cannot catch it) the termination.
+    pub(super) terminating: Option<Option<Value>>,
+    pub(super) globals: Gc<Table>,
+    /// pre-interned metamethod event names, indexed by `Mm`
+    pub(super) mm_names: [Gc<crate::runtime::LuaStr>; MM_NAMES.len()],
+    /// `collectgarbage` mode name ("incremental"/"generational"). The collector
+    /// itself is still stop-the-world mark-sweep; this tracks the mode so mode
+    /// switches report the previous one, as PUC does.
+    pub(super) gc_mode: &'static str,
+    /// The C API's functions without upvalues, one per C function pointer:
+    /// from 5.2 on PUC's light C functions are equal when their pointers
+    /// are. GC roots.
+    pub(crate) host_light: std::collections::HashMap<usize, Value>,
 
     /// MacroLua compile-time macro registry.
     /// Pre-populated with built-in macros (`@quote` / `@unquote` /
@@ -363,27 +179,82 @@ pub struct Vm {
     /// `Gc<Table>` stays live for the rest of the Vm's lifetime.
     pub(crate) userdata_metatables:
         std::collections::HashMap<std::any::TypeId, Gc<crate::runtime::table::Table>>,
-
-    /// Classification of the most recent error raised on this Vm.
-    /// Embedders read via [`Vm::error_kind`]; the dispatcher sets it
-    /// at well-known sites (syntax errors, instr-budget trips, native
-    /// callback errors, type errors).
-    pub(crate) last_error_kind: crate::vm::error::LuaErrorKind,
-
-    /// `(source_name, line)` of the most recent error. Set by the
-    /// dispatcher / lexer / parser; cleared when a new call_value
-    /// enters cleanly.
-    pub(crate) last_error_source: Option<(String, u32)>,
-
-    /// When `true`, `instr_budget` exhaustion in
-    /// the dispatcher hot loop yields cooperatively (sets
-    /// [`Vm::host_yield_pending`] + returns a sentinel `Err` walked up
-    /// to `EvalFuture::poll`) instead of returning a real
-    /// "instruction budget exceeded" error. Set by [`Vm::eval_async`]
-    /// for the duration of the future; restored to `false` on
-    /// `Poll::Ready`. The sync `Vm::eval` / `Vm::call_value` paths
-    /// leave it `false` so budget exhaustion stays a real error there.
-    pub(crate) async_mode: bool,
+    /// shared metatable for all strings (populated by the string lib)
+    /// per-basic-type metatables (PUC luaT): indexed by `type_mt_slot`
+    /// (0 nil, 1 boolean, 2 number, 3 string, 4 function, 5 light userdata,
+    /// 6 thread); tables and full userdata carry their
+    /// own. Settable via debug.setmetatable.
+    pub(super) type_mt: [Option<Gc<Table>>; 7],
+    /// xoshiro256** state (math.random)
+    pub(super) rng: [u64; 4],
+    /// the coroutine whose context is currently live in the fields above;
+    /// `None` while the main thread runs
+    pub(crate) current: Option<Gc<crate::runtime::Coro>>,
+    /// identity object for the main thread, returned by `coroutine.running`
+    /// (the main thread's context lives in the VM fields / `main_ctx`, not here)
+    pub(super) main_coro: Option<Gc<Coro>>,
+    /// `collectgarbage("param", name [,value])` pacing parameters. The collector
+    /// is still stop-the-world, so these are stored/returned for API fidelity
+    /// (PUC round-trips them via `setparam`/`getparam`). Defaults mirror PUC's
+    /// `LUAI_GC*` knobs: pause=200, stepmul=100, stepsize=13.
+    pub(super) gc_pause: i64,
+    pub(super) gc_stepmul: i64,
+    pub(super) gc_stepsize: i64,
+    /// What the C API runs for a C function's continuation
+    /// (`ContKind::Host`); see [`super::host_c`].
+    pub(crate) host_cont_hooks: Option<super::host_c::HostContHooks>,
+    /// The C API's warning function (`lua_setwarnf`), which replaces the
+    /// default one; see [`super::host_c`].
+    pub(crate) host_warn: Option<super::host_c::HostWarn>,
+    /// Byte budget for source fed into `load` / `loadstring` / `Vm::load`.
+    /// Default [`Vm::DEFAULT_LOADER_INPUT_BUDGET`] (256 MiB). When the
+    /// accumulated reader output (`load(f, ...)`) or a one-shot `&[u8]`
+    /// source exceeds this, the loader returns the PUC-shaped
+    /// `not enough memory` error before the host allocator is asked to
+    /// hold the next chunk. Defends against `heavy.lua::loadrep`-style
+    /// 7 GB+ feeder loops that would otherwise SIGSEGV when `Vec::push`
+    /// crosses `isize::MAX` or the host runs out of RAM.
+    /// Embedders that genuinely need to load > 256 MiB sources widen the
+    /// cap via [`Vm::set_loader_input_budget`].
+    pub(crate) loader_input_budget: usize,
+    /// PUC's `LUA_REGISTRYINDEX` table — a single Lua table the debug library
+    /// exposes via `debug.getregistry`. Used to hold `_HOOKKEY` (the weak-key
+    /// table PUC's `db_sethook` keys per-thread hooks under). luna stores hook
+    /// state directly in `Vm.hook`/`Coro.hook`, so the entry is largely a
+    /// shape stub for db.lua :328; if other registry-keyed APIs land later
+    /// they can share this table.
+    pub(crate) registry: Option<Gc<Table>>,
+    /// the shared `FILE*` metatable for io file handles (PUC's LUA_FILEHANDLE
+    /// registry entry); attached to every file userdata the io library makes
+    pub(crate) file_mt: Option<Gc<Table>>,
+    /// io library default input/output streams (PUC registry IO_INPUT/IO_OUTPUT)
+    pub(crate) io_input: Option<Gc<crate::runtime::Userdata>>,
+    pub(crate) io_output: Option<Gc<crate::runtime::Userdata>>,
+    /// `io.stdin` as the io library made it, whatever the script later does
+    /// to the `io` table: the stream a host's line reads share
+    pub(crate) io_stdin: Option<Gc<crate::runtime::Userdata>>,
+    /// Frames below this index are out of reach of the error handler of
+    /// an `xpcall` (PUC `L->errfunc`): a protected call made from Rust — a
+    /// finalizer, the handler itself — starts a fresh `errfunc` scope.
+    pub(crate) msgh_floor: usize,
+    /// How many message-handler runs have started; lets a run tell whether
+    /// the error it got back was already handled by a nested run.
+    pub(crate) msgh_runs: u64,
+    /// How many times an error became LUA_ERRERR ("error in error
+    /// handling"); a host protected call compares it before and after to
+    /// report that status instead of LUA_ERRRUN.
+    pub(crate) errerr_raised: u64,
+    /// finalizer errors a 5.2/5.3 full collection raised (`LUA_ERRGCMM`)
+    pub(crate) gcmm_raised: u64,
+    /// memory errors raised (`LUA_ERRMEM`)
+    pub(crate) mem_raised: u64,
+    /// The C API's dispatcher of C hook functions: a thread whose hook
+    /// function is a light userdata has a C hook (`lua_sethook`), which
+    /// this runs; see [`super::host_c`].
+    pub(crate) host_hook: Option<super::host_c::HostHookFn>,
+    /// Index into `running_natives` where the running thread's own natives
+    /// begin; the ones below belong to the threads that resumed it.
+    pub(crate) natives_base: usize,
 
     /// Host waker cloned by `EvalFuture::poll` before driving a slice.
     /// The dispatcher itself does not call it (the future's poll loop
@@ -397,14 +268,6 @@ pub struct Vm {
     /// [`Vm::set_async_slice`].
     pub(crate) async_slice_size: i64,
 
-    /// Set by the dispatcher when an async-mode
-    /// budget exhaustion fires; checked by `exec_with` (so the
-    /// sentinel propagates without `unwind` running, mirroring
-    /// `yielding.is_some()`) and by `call_value_impl` (so the call
-    /// frames survive for the next poll). Cleared by `drive_one`
-    /// after translating it to `DispatchOutcome::BudgetExhausted`.
-    pub(crate) host_yield_pending: bool,
-
     /// Set by the dispatcher's native-call path
     /// when an async-marked [`NativeClosure`] is invoked under
     /// `async_mode`. The Vm pauses the dispatcher (same sentinel-Err
@@ -417,6 +280,10 @@ pub struct Vm {
     pub(crate) pending_async_native_fut:
         Option<std::pin::Pin<Box<dyn std::future::Future<Output = Result<u32, LuaError>>>>>,
 
+    /// Identifies this Vm to the JIT storages it compiles through
+    /// ([`crate::jit::JitStorage::claim`]).
+    pub(super) jit_owner_id: u64,
+
     /// Companion to `pending_async_native_fut`:
     /// the `(func_slot, nargs, nresults, gc_top)` quad needed to
     /// commit the future's eventual `Ok(nret)` back into the calling
@@ -424,14 +291,152 @@ pub struct Vm {
     /// consumed by [`Vm::commit_async_native_result`] after the
     /// future resolves.
     pub(crate) pending_async_native_ctx: Option<AsyncNativeCallCtx>,
+    /// Shadow of `self.frames.len()`. Synced on every push/pop in the
+    /// `frames_push_sync`/`frames_pop_sync` helpers (debug-asserted on
+    /// use). Not consumed by readers yet; it is scaffolding for replacing
+    /// `frames: Vec<CallFrame>` with a flat `[CallFrame; MAX_FRAMES]`
+    /// indexed by frames_top.
+    pub(super) frames_top: u32,
+    /// logical stack top for multi-result sequences
+    pub(crate) top: u32,
+    /// native↔Lua nesting depth (PUC C-stack guard analogue)
+    pub(super) c_depth: u32,
+    /// number of live pcall/xpcall continuation frames on the running thread
+    /// (PUC counts these against nCcalls). Bounds protected-call recursion the
+    /// way `c_depth` bounds call_value recursion. Per-thread: saved/restored
+    /// with the coroutine context, since continuations survive a yield.
+    pub(super) pcall_depth: u32,
+    /// number of non-yieldable C calls in flight on the running thread (PUC's
+    /// `L->nny`). A library callback that runs via synchronous Rust recursion
+    /// (sort comparator, gsub replacement) cannot be continued across a yield,
+    /// so it bumps this for its duration; `coroutine.yield` inside hits the
+    /// C-call boundary and errors. Always 0 at a suspend point (a yield can
+    /// never cross such a call); a resume starts the coroutine at 0 and puts
+    /// the resumer's count back after.
+    pub(super) nny: u32,
+    /// Nonzero while an xpcall message handler is on the Rust stack. Used so a
+    /// stack-overflow that surfaces *inside* the handler is reported as PUC's
+    /// "error in error handling" (LUA_ERRERR + `luaD_seterrorobj`), not the
+    /// plain "stack overflow" — errors.lua :606's `checkerr("error handling",
+    /// loop)` then matches. PUC tracks this via the soft-cap window
+    /// `nCcalls >= MAXCCALLS/10*11`; luna's c_depth is strict, so we mark the
+    /// scope explicitly.
+    pub(crate) msgh_depth: u32,
+    /// results expected by the in-flight native call (so `yield` knows how many
+    /// values its call site wants when it suspends)
+    pub(super) native_nresults: i32,
+    /// the live-register boundary of the running thread for GC rooting (PUC's
+    /// `L->top`): set precisely at each GC safe point so freed temporary
+    /// registers above it are not rooted. Without this the collector roots the
+    /// whole stack window, pinning weak-table values stranded in stale temps
+    /// (e.g. closure.lua's `while x[1]` GC-detection loop).
+    pub(crate) gc_top: u32,
+    /// arms the next Lua frame's `tailcalls` count (PUC `ci->u.l.tailcalls`),
+    /// consumed by `push_frame`. `OP_TailCall` sets it to the caller's
+    /// own tailcalls + 1 before begin_call so deeply tail-recursive chains
+    /// accumulate the count instead of capping at 1.
+    pub(crate) pending_tailcalls: u32,
+    /// nesting depth of public `call_value` entries (host vs. internal). The
+    /// outermost entry (depth 0) resets per-error state (`error_traceback`);
+    /// internal calls (e.g. xpcall msgh, sort callback) preserve it.
+    pub(super) public_call_depth: u32,
+    /// PUC `CallInfo.u2.transferinfo`: index of the first transferred value
+    /// (relative to the activation's func slot) and the number transferred.
+    /// Set just before firing a call/return hook, read by `getinfo("r")`.
+    pub(crate) hook_ftransfer: u16,
+    pub(crate) hook_ntransfer: u16,
+    /// true while `__gc` finalizers are being run, so a finalizer that calls
+    /// `collectgarbage` gets a no-op (PUC's non-reentrancy: lua_gc returns -1 →
+    /// `collectgarbage` yields fail).
+    pub(super) gc_finalizing: bool,
+    /// PUC 5.4+ warning system. Lua manual §6.1 `warn`: emitted messages
+    /// concatenate across continuation calls until a non-`tocont` call
+    /// flushes; the default warnf recognises `@on`/`@off` control messages
+    /// and starts disabled. luna's `emit_warn` mirrors the default warnf
+    /// behaviour and 5.4+ `__gc` errors are routed through it (5.1–5.3
+    /// keep the older raise semantics).
+    pub(crate) warn_state: WarnState,
+    /// the default warning function is in the middle of a message (PUC
+    /// `warnfcont`)
+    pub(crate) warn_cont: bool,
+    // JIT-specific state lives in the `JitState` sidecar; see `self.jit`
+    // below and `crate::vm::jit_state` for field docs.
+    /// Bytecode-loading gate. Default `true`. Sandbox embedders should
+    /// call `set_bytecode_loading(false)` so `load`/`loadstring` reject
+    /// precompiled chunks (which bypass the parser's depth / opcode
+    /// limits). When `false`, the loader rejects any source whose first
+    /// byte is the bytecode signature `\27` ("`\27Lua`").
+    pub(crate) bytecode_loading: bool,
+    /// PUC bytecode-loading gate. Default `false` — PUC `.luac` files are
+    /// a strictly larger trust surface than luna's own dump format
+    /// (third-party toolchain bugs, malformed chunks, unknown opcode
+    /// shapes). When `true`, the loader routes `\x1bLua\x{51..55}` inputs
+    /// through the per-dialect PUC translators in `crate::vm::dump::puc`.
+    /// Embedder toggles via `set_puc_bytecode_loading`.
+    pub(crate) puc_bytecode_loading: bool,
+    /// lua.c's `-E`: libraries opened from now on ignore the environment
+    pub(crate) ignore_env: bool,
+    /// true while the hook itself runs, so its own execution fires no events
+    /// (PUC clears the mask for the duration)
+    pub(crate) in_hook: bool,
+    /// PUC `trap`: the dispatch loop head has work beyond fetching the next
+    /// instruction — an instruction budget, a memory cap or an armed hook.
+    /// The loop head clears it when it finds none of them; whatever may
+    /// create one sets it (set spuriously, it costs one slow iteration).
+    pub(crate) trap: bool,
+    /// the running native fired its own return hook (a C function of the C
+    /// API, whose values live on its C stack): its return skips the hook
+    pub(crate) native_ret_hooked: bool,
+    /// the call hook of the Lua function a 5.1–5.3 tail call is entering
+    /// already ran, before the caller's frame went (see `tail_call_hook`)
+    pub(crate) tail_hook_fired: bool,
+    /// Whether an error nothing catches should keep its traceback: not
+    /// inside a protected call made from Rust, which discards it.
+    pub(crate) keep_error_traceback: bool,
+    /// `true` when the next `push_frame` is the user hook function itself,
+    /// so `debug.getinfo(1).namewhat` resolves to `"hook"` (PUC
+    /// `CIST_HOOKED`). `run_hook` arms it before dispatching the hook.
+    pub(super) pending_is_hook: bool,
+    /// A C line or count hook asked to yield (`lua_yield` inside a hook);
+    /// acted on once the hooks of the instruction have run.
+    pub(crate) hook_yield: bool,
+    /// The running thread resumed from a hook's yield (5.2+
+    /// `CIST_HOOKYIELD`): the next hook check does not call the hook again.
+    pub(crate) hook_resumed: bool,
 
-    /// Identifies this Vm to the JIT storages it compiles through
-    /// ([`crate::jit::JitStorage::claim`]).
-    pub(super) jit_owner_id: u64,
-    /// Storages [`Vm::install_jit_storage`] replaced: code compiled into
-    /// them may still be referenced by this Vm's functions, so they live
-    /// as long as the Vm.
-    pub(super) retired_jit_storage: Vec<Box<dyn crate::jit::JitStorage>>,
+    /// When `true`, `instr_budget` exhaustion in
+    /// the dispatcher hot loop yields cooperatively (sets
+    /// [`Vm::host_yield_pending`] + returns a sentinel `Err` walked up
+    /// to `EvalFuture::poll`) instead of returning a real
+    /// "instruction budget exceeded" error. Set by [`Vm::eval_async`]
+    /// for the duration of the future; restored to `false` on
+    /// `Poll::Ready`. The sync `Vm::eval` / `Vm::call_value` paths
+    /// leave it `false` so budget exhaustion stays a real error there.
+    pub(crate) async_mode: bool,
+
+    /// Set by the dispatcher when an async-mode
+    /// budget exhaustion fires; checked by `exec_with` (so the
+    /// sentinel propagates without `unwind` running, mirroring
+    /// `yielding.is_some()`) and by `call_value_impl` (so the call
+    /// frames survive for the next poll). Cleared by `drive_one`
+    /// after translating it to `DispatchOutcome::BudgetExhausted`.
+    pub(crate) host_yield_pending: bool,
+    /// metamethod event tag (e.g. "close") to attach to the next Lua frame
+    /// pushed by `push_frame`; `close_slots` sets this before calling a
+    /// `__close` handler so `debug.traceback` names it "metamethod 'close'"
+    /// (PUC `CallInfo.u.l.tm`). Single-shot: `push_frame` consumes it.
+    pub(super) pending_tm: Option<crate::runtime::function::FrameTm>,
+    pub(super) version: LuaVersion,
+
+    /// Classification of the most recent error raised on this Vm.
+    /// Embedders read via [`Vm::error_kind`]; the dispatcher sets it
+    /// at well-known sites (syntax errors, instr-budget trips, native
+    /// callback errors, type errors).
+    pub(crate) last_error_kind: crate::vm::error::LuaErrorKind,
+    /// arms the next Lua frame's `ccmt` (its `__call` chain length), consumed
+    /// by `push_frame`. `OP_TailCall` sets it to the reused activation's
+    /// count; `begin_call` otherwise sets the chain it just resolved.
+    pub(super) pending_ccmt: u8,
     /// The allocation context the Vm's own containers (the stack and the
     /// frame stack above) free through. Last, so it outlives them: the
     /// heap, which owns it too, is the first field to be dropped.
