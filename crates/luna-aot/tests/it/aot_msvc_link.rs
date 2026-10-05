@@ -184,10 +184,12 @@ fn windows_msvc_binary_has_lt_meta_and_lt_skix_sections() {
         names.iter().any(|n| n == ".lt_meta"),
         "expected section `.lt_meta` in linked MSVC PE; found sections: [{names_dbg}]"
     );
-    assert!(
-        names.iter().any(|n| n == ".lt_skix"),
-        "expected section `.lt_skix` in linked MSVC PE; found sections: [{names_dbg}]"
-    );
+    for want in [".lt_skix", ".lt_chai", ".lt_prix"] {
+        assert!(
+            names.iter().any(|n| n == want),
+            "expected section `{want}` in linked MSVC PE; found sections: [{names_dbg}]"
+        );
+    }
 
     if native {
         let output = Command::new(&out_path)
