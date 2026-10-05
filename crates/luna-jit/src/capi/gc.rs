@@ -166,8 +166,7 @@ pub unsafe extern "C" fn lua_atpanic(
 }
 
 /// PUC `lua_getallocf`: the allocation function and, through `ud` when it
-/// is not null, its user data. luna's collector does not allocate through
-/// it; the state's record does.
+/// is not null, its user data.
 ///
 /// # Safety
 /// `L` is a live thread of an open state; `ud` is null or writable.
@@ -187,8 +186,8 @@ pub unsafe extern "C" fn lua_getallocf(L: *mut LuaState, ud: *mut *mut c_void) -
     }
 }
 
-/// PUC `lua_setallocf`: the state's record goes back to `f` on
-/// `lua_close`.
+/// PUC `lua_setallocf`: every block of the state is resized and freed
+/// through `f` from now on, and new blocks come from it.
 ///
 /// # Safety
 /// `L` is a live thread of an open state; `f` can free what the previous
@@ -198,11 +197,15 @@ pub unsafe extern "C" fn lua_getallocf(L: *mut LuaState, ud: *mut *mut c_void) -
 // symbol once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_setallocf(L: *mut LuaState, f: Option<LuaAlloc>, ud: *mut c_void) {
-    // SAFETY: `L` is live (# Safety), so is its global record
+    // SAFETY: `L` is live (# Safety), so are its global record and Vm; `f`
+    // accepts the blocks of the previous function (# Safety)
     unsafe {
         let g = (*L).g;
         (*g).alloc = f;
         (*g).alloc_ud = ud;
+        if let Some(f) = f {
+            (*(*g).vm).heap.mem_ctx().set_raw_alloc(f, ud);
+        }
     }
 }
 

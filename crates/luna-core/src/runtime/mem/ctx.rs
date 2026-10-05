@@ -256,6 +256,13 @@ impl MemCtx {
         }
     }
 
+    /// Count `n` more bytes the host allocated through the same function
+    /// on the Vm's behalf (the C API's state records), so the count
+    /// covers them as PUC's does.
+    pub fn add_external(&self, n: usize) {
+        self.total.set(self.total.get() + n);
+    }
+
     /// The host function and its `ud`, when the context has one.
     pub fn raw_alloc(&self) -> Option<(RawAllocFn, *mut c_void)> {
         self.raw.get()
