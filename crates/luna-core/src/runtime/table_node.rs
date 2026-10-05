@@ -1,6 +1,7 @@
 //! The hash-part entry of a table, and the string-key probes over it.
 
 use crate::runtime::heap::Gc;
+use crate::runtime::mem::{BlockKind, MemRef};
 use crate::runtime::value::Value;
 
 /// A hash-part entry (PUC `Node`): the key is kept as its tag and its
@@ -165,28 +166,64 @@ impl super::Table {
         }
     }
 
-    /// Install `nodes` (empty or a power-of-two length) as the hash part.
-    /// The previous one must have been taken already.
-    pub(super) fn set_hash_part(&mut self, nodes: Box<[Node]>) {
-        debug_assert!(nodes.len().is_power_of_two() || nodes.is_empty());
-        self.node_mask = (nodes.len() as u32).wrapping_sub(1);
-        self.nodes = Box::into_raw(nodes) as *mut Node;
+    /// Install `nodes`, a block of `len` nodes (0 or a power of two) from
+    /// [`Table::alloc_nodes`], as the hash part. The previous one must
+    /// have been taken already.
+    pub(super) fn set_hash_part(&mut self, nodes: *mut Node, len: usize) {
+        debug_assert!(len.is_power_of_two() || len == 0);
+        self.node_mask = (len as u32).wrapping_sub(1);
+        self.nodes = nodes;
     }
 
-    /// Take the hash part out, leaving an empty one.
-    pub(super) fn take_hash_part(&mut self) -> Box<[Node]> {
+    /// Take the hash part out, leaving an empty one: its block and length,
+    /// for [`Table::free_nodes`].
+    pub(super) fn take_hash_part(&mut self) -> (*mut Node, usize) {
         let len = self.node_mask.wrapping_add(1) as usize;
-        let p = std::ptr::slice_from_raw_parts_mut(self.nodes, len);
+        let p = self.nodes;
         self.nodes = std::ptr::NonNull::dangling().as_ptr();
         self.node_mask = u32::MAX;
-        // SAFETY: `nodes` came from `Box::into_raw` of a slice of `len`
-        // (or is dangling with `len` 0, which is how an empty boxed slice
-        // is represented); it is not used again
-        unsafe { Box::from_raw(p) }
+        (p, len)
     }
 
-    /// Give the hash part back (a pooled table's reset).
-    pub(crate) fn drop_hash_part(&mut self) {
-        drop(self.take_hash_part());
+    /// A block of `len` empty nodes from `mem` (dangling for 0).
+    pub(super) fn alloc_nodes(mem: MemRef, len: usize) -> *mut Node {
+        if len == 0 {
+            return std::ptr::NonNull::dangling().as_ptr();
+        }
+        let layout = std::alloc::Layout::array::<Node>(len).expect("hash part within MAX_ASIZE");
+        let p = match mem.ctx().alloc(layout, BlockKind::Other) {
+            Some(p) => p.cast::<Node>().as_ptr(),
+            None => crate::runtime::mem::oom_abort(layout),
+        };
+        for i in 0..len {
+            // SAFETY: the block holds `len` nodes
+            unsafe { p.add(i).write(Node::EMPTY) };
+        }
+        p
+    }
+
+    /// Give back a block of `len` nodes from [`Table::alloc_nodes`].
+    ///
+    /// # Safety
+    /// `p` and `len` came from `alloc_nodes(mem, len)` (or
+    /// `take_hash_part` of a part made by it) and `p` is not used again.
+    pub(super) unsafe fn free_nodes(mem: MemRef, p: *mut Node, len: usize) {
+        if len != 0 {
+            let layout = std::alloc::Layout::array::<Node>(len).expect("an allocated part");
+            // SAFETY: the caller's contract
+            unsafe {
+                mem.ctx()
+                    .free(std::ptr::NonNull::new_unchecked(p.cast()), layout)
+            };
+        }
+    }
+
+    /// Give the hash part back (freeing a table, or a pooled table's
+    /// reset).
+    pub(crate) fn drop_hash_part(&mut self, mem: MemRef) {
+        let (p, len) = self.take_hash_part();
+        // SAFETY: the part came from `alloc_nodes(mem, len)` and was just
+        // taken out of the table
+        unsafe { Self::free_nodes(mem, p, len) };
     }
 }
