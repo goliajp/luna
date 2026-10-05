@@ -108,7 +108,14 @@ fn run(backend: Backend, tier: TraceTier, tier_up_at: Option<u32>, src: &str) ->
     match backend {
         Backend::Interpreter => vm.install_null_jit(),
         Backend::Cranelift => vm.install_default_jit(),
-        Backend::Llvm => luna_jit::install_llvm_backend(&mut vm),
+        // tier-ups compiled before the trace runs on, so the counts do not
+        // depend on how fast the compile thread is
+        Backend::Llvm => luna_jit::install_llvm_backend_with(
+            &mut vm,
+            luna_jit::jit_backend::LlvmBackend {
+                background_tier_up: false,
+            },
+        ),
     }
     vm.set_trace_tier(tier);
     if let Some(n) = tier_up_at {
@@ -174,4 +181,35 @@ fn tier_up_reaches_llvm() {
         assert!(ll.dispatched > 0, "{name}: no trace was dispatched: {ll:?}");
         assert!(ll.llvm > 0, "{name}: no trace reached LLVM");
     }
+}
+
+/// By default a hot trace is compiled by LLVM on the compile thread while
+/// its baseline code keeps running, and the Vm installs the LLVM code once
+/// it is ready.
+#[test]
+fn background_tier_up_installs_llvm_code() {
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    luna_jit::install_llvm_backend(&mut vm);
+    vm.set_trace_tier(TraceTier::Auto);
+    vm.set_trace_tier_up_at(64);
+    vm.eval(
+        "function RUN()
+           local s = 0
+           for i = 1, 20000 do s = s + (i * 3) % 7 end
+           return s
+         end",
+    )
+    .expect("defines RUN");
+    let before = luna_jit::jit_backend::trace::llvm_codegen_count();
+    let started = std::time::Instant::now();
+    while luna_jit::jit_backend::trace::llvm_codegen_count() == before {
+        let r = vm.eval("return RUN()").expect("runs");
+        assert_eq!(show(&r), "Some(Int(60000))");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "the LLVM code was never installed"
+        );
+    }
+    let r = vm.eval("return RUN()").expect("runs on LLVM code");
+    assert_eq!(show(&r), "Some(Int(60000))");
 }

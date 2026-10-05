@@ -237,7 +237,8 @@ fn compile_constant_zero_chunk() -> Option<(*const u8, EnginePair)> {
     finalize_module(ctx_box, module, None)
 }
 
-/// Shared module-finalisation tail. JIT-compiles `module` under the
+/// Shared module-finalisation tail. Optimizes `module` (see
+/// [`crate::function::optimize`]), JIT-compiles it under the
 /// (heap-pinned) `ctx_box`, resolves the entry symbol, and bundles
 /// both into an [`EnginePair`] for storage.
 ///
@@ -251,7 +252,8 @@ pub(crate) fn finalize_module<'ctx>(
     module: Module<'ctx>,
     helpers: Option<&HashMap<&'static str, FunctionValue<'ctx>>>,
 ) -> Option<(*const u8, EnginePair)> {
-    finalize_bound(ctx_box, module, OptimizationLevel::None, helpers)
+    crate::function::optimize(&ctx_box, &module).ok()?;
+    finalize_bound(ctx_box, module, OptimizationLevel::Default, helpers)
 }
 
 /// [`finalize_module`] for a module that calls helpers by address, with

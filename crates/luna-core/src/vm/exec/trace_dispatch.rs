@@ -421,7 +421,14 @@ impl Vm {
             let storage: &mut dyn crate::jit::JitStorage = jit.storage.as_mut();
             jit.trace_compiler.tier_up(storage, ct)
         };
-        let Some(entry) = entry else { return };
+        let Some(entry) = entry else {
+            // still compiling: ask again once the count reaches `at` anew
+            if t.source.borrow().is_some() {
+                t.count.set(0);
+                t.tried.set(false);
+            }
+            return;
+        };
         let p = entry as *const () as *const u8;
         t.optimized.set(p);
         for cell in &t.parent_cells {
