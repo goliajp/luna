@@ -121,9 +121,7 @@ impl<'a> ChunkPlan<'a> {
             track_self_recursion(proto, code, &is_upval_value_read)?;
 
         let self_calls = self_call_pcs.iter().chain(&tail_call_pcs).any(|&c| c);
-        if self_calls
-            && !flow::has_base_case(code, &consumed_jmp, &self_call_pcs, &tail_call_pcs)
-        {
+        if self_calls && !flow::has_base_case(code, &consumed_jmp, &self_call_pcs, &tail_call_pcs) {
             return None;
         }
         let reachable = flow::reachable(code, &consumed_jmp);

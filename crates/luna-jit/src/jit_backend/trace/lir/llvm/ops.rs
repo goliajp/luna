@@ -52,7 +52,12 @@ impl<'c> Gen<'c, '_> {
     }
 
     /// `x op y`; `y` may be narrower or wider than `x` only for shifts.
-    fn bin(&self, op: BinOp, x: BasicValueEnum<'c>, y: BasicValueEnum<'c>) -> R<BasicValueEnum<'c>> {
+    fn bin(
+        &self,
+        op: BinOp,
+        x: BasicValueEnum<'c>,
+        y: BasicValueEnum<'c>,
+    ) -> R<BasicValueEnum<'c>> {
         let bb = self.b;
         if let (BasicValueEnum::FloatValue(x), BasicValueEnum::FloatValue(y)) = (x, y) {
             return self.float_bin(op, x, y);
@@ -150,23 +155,21 @@ impl<'c> Gen<'c, '_> {
             UnOp::Floor => self.float_call("llvm.floor", x.into_float_value())?,
             UnOp::Ceil => self.float_call("llvm.ceil", x.into_float_value())?,
             UnOp::Uextend | UnOp::Ireduce if from == i.ty => x,
-            UnOp::Uextend => b(bb.build_int_z_extend(x.into_int_value(), self.ity(i.ty), ""))?.into(),
-            UnOp::Ireduce => b(bb.build_int_truncate(x.into_int_value(), self.ity(i.ty), ""))?.into(),
+            UnOp::Uextend => {
+                b(bb.build_int_z_extend(x.into_int_value(), self.ity(i.ty), ""))?.into()
+            }
+            UnOp::Ireduce => {
+                b(bb.build_int_truncate(x.into_int_value(), self.ity(i.ty), ""))?.into()
+            }
             UnOp::Bitcast if from == i.ty => x,
             UnOp::Bitcast => b(bb.build_bit_cast(x, self.ty(i.ty), ""))?,
-            UnOp::FcvtFromSint => b(bb.build_signed_int_to_float(
-                x.into_int_value(),
-                self.ctx.f64_type(),
-                "",
-            ))?
-            .into(),
+            UnOp::FcvtFromSint => {
+                b(bb.build_signed_int_to_float(x.into_int_value(), self.ctx.f64_type(), ""))?.into()
+            }
             // the lowerer range-checks the operand first
-            UnOp::FcvtToSint => b(bb.build_float_to_signed_int(
-                x.into_float_value(),
-                self.ity(i.ty),
-                "",
-            ))?
-            .into(),
+            UnOp::FcvtToSint => {
+                b(bb.build_float_to_signed_int(x.into_float_value(), self.ity(i.ty), ""))?.into()
+            }
             UnOp::FcvtToSintSat => {
                 let f = self.intrinsic(
                     "llvm.fptosi.sat",

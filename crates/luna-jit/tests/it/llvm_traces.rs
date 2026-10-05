@@ -144,7 +144,10 @@ fn llvm_compiles_and_dispatches_the_traces_cranelift_does() {
             (cl.compiled, cl.failed),
             "{name}: LLVM and Cranelift compile different sets of traces"
         );
-        assert!(ll.codegen > 0, "{name}: no trace got machine code: {ll:?} {cl:?}");
+        assert!(
+            ll.codegen > 0,
+            "{name}: no trace got machine code: {ll:?} {cl:?}"
+        );
         assert_eq!(ll.codegen, cl.codegen, "{name}: traces given code");
         assert_eq!(ll.llvm, ll.codegen, "{name}: traces LLVM compiled");
         assert!(ll.dispatched > 0, "{name}: no LLVM trace was dispatched");

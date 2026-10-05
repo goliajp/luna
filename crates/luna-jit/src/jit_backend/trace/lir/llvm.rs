@@ -154,8 +154,7 @@ impl<'c, 'a> Gen<'c, 'a> {
             let ty = self.ctx.i8_type().array_type(size);
             let slot = b(self.b.build_alloca(ty, ""))?;
             let inst = slot.as_instruction().ok_or("llvm:builder")?;
-            inst.set_alignment(1 << align)
-                .map_err(|_| "llvm:builder")?;
+            inst.set_alignment(1 << align).map_err(|_| "llvm:builder")?;
             self.slots.push(slot);
         }
         let first = self.blocks[0].ok_or("llvm:no-entry-block")?;
@@ -215,8 +214,11 @@ impl<'c, 'a> Gen<'c, 'a> {
             }
             _ => (&lir.sigs[i.b as usize], self.iv(i.a)),
         };
-        let params: Vec<BasicMetadataTypeEnum> =
-            lir.params(callee).iter().map(|&t| self.ty(t).into()).collect();
+        let params: Vec<BasicMetadataTypeEnum> = lir
+            .params(callee)
+            .iter()
+            .map(|&t| self.ty(t).into())
+            .collect();
         let fty = match callee.ret {
             Some(t) => self.ty(t).fn_type(&params, false),
             None => self.ctx.void_type().fn_type(&params, false),
@@ -224,8 +226,7 @@ impl<'c, 'a> Gen<'c, 'a> {
         let ptr = b(self
             .b
             .build_int_to_ptr(target, self.ctx.ptr_type(Default::default()), ""))?;
-        let args: Vec<BasicMetadataValueEnum> =
-            self.args(i).into_iter().map(Into::into).collect();
+        let args: Vec<BasicMetadataValueEnum> = self.args(i).into_iter().map(Into::into).collect();
         let call = b(self.b.build_indirect_call(fty, ptr, &args, ""))?;
         if i.dst != NONE {
             match call.try_as_basic_value() {
