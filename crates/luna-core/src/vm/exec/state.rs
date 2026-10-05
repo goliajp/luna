@@ -438,6 +438,8 @@ pub struct Vm {
     /// The allocation context the Vm's own containers (the stack and the
     /// frame stack above) free through. Last, so it outlives them: the
     /// heap, which owns it too, is the first field to be dropped.
+    /// a library string buffer kept from one call to the next
+    pub(crate) buf_spare: LVec<u8>,
     pub(super) _mem: crate::runtime::mem::MemOwner,
     /// construction finished (PUC `completestate`): an allocation that
     /// fails may run an emergency collection from now on

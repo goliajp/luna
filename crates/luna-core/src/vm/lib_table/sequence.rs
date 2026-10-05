@@ -176,6 +176,7 @@ pub(super) fn t_concat(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         concat_field(vm, tv, last, &mut out)?;
     }
     let s = vm.lib_built_str(&out)?;
+    vm.recycle_buf(out);
     vm.nat_ret(fs, &[s])
 }
 

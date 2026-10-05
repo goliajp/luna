@@ -158,6 +158,7 @@ fn s_upper(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     vm.buf_push(&mut out, s.as_bytes())?;
     out.make_ascii_uppercase();
     let r = vm.str_value(&out)?;
+    vm.recycle_buf(out);
     vm.nat_ret(fs, &[r])
 }
 
@@ -167,6 +168,7 @@ fn s_lower(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     vm.buf_push(&mut out, s.as_bytes())?;
     out.make_ascii_lowercase();
     let r = vm.str_value(&out)?;
+    vm.recycle_buf(out);
     vm.nat_ret(fs, &[r])
 }
 
@@ -176,6 +178,7 @@ fn s_reverse(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     vm.buf_push(&mut out, s.as_bytes())?;
     out.reverse();
     let r = vm.str_value(&out)?;
+    vm.recycle_buf(out);
     vm.nat_ret(fs, &[r])
 }
 
@@ -239,6 +242,7 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
     }
     let r = vm.str_value(&out)?;
+    vm.recycle_buf(out);
     vm.nat_ret(fs, &[r])
 }
 
@@ -283,6 +287,7 @@ fn s_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         vm.buf_push(&mut out, &[c as u8])?;
     }
     let r = vm.str_value(&out)?;
+    vm.recycle_buf(out);
     vm.nat_ret(fs, &[r])
 }
 

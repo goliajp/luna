@@ -58,6 +58,7 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         };
     }
     let s = vm.lib_built_str(&out)?;
+    vm.recycle_buf(out);
     vm.nat_ret(fs, &[s])
 }
 

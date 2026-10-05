@@ -70,6 +70,7 @@ pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
         i += 1 + len;
     }
     let r = vm.str_value(&out)?;
+    vm.recycle_buf(out);
     vm.nat_ret(fs, &[r])
 }
 

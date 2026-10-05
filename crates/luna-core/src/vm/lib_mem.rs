@@ -117,9 +117,21 @@ impl Vm {
         self.str_value(bytes)
     }
 
-    /// An empty string buffer for a library function.
-    pub(crate) fn new_buf(&self) -> LVec<u8> {
-        LVec::new(self.heap.mem())
+    /// An empty string buffer for a library function: the one the last
+    /// call gave back, when there is one.
+    #[inline]
+    pub(crate) fn new_buf(&mut self) -> LVec<u8> {
+        let mem = self.heap.mem();
+        std::mem::replace(&mut self.buf_spare, LVec::new(mem))
+    }
+
+    /// Keep `buf` for the next [`Vm::new_buf`], unless it has grown large.
+    #[inline]
+    pub(crate) fn recycle_buf(&mut self, mut buf: LVec<u8>) {
+        if buf.capacity() <= 4096 && buf.capacity() >= self.buf_spare.capacity() {
+            buf.clear();
+            self.buf_spare = buf;
+        }
     }
 
     /// `t[name] = v` with a raw store, as a library fills its tables.
