@@ -241,40 +241,34 @@ int main(int argc, char **argv) {{
     // `/Fo:` vs gcc-style `-c` + `-o`). All other targets keep the
     // existing gcc-style cc driver path.
     let mut cmd = if target.is_msvc() {
-        let Some(mut cl) = target.msvc_cc_command() else {
+        let Some(mut cl) = target.msvc_cc_command()? else {
             return Err(AotError::Link(format!(
                 "no MSVC C compiler found for target {} — on a Windows host, \
                  install Visual Studio or the Build Tools with the \"Desktop \
                  development with C++\" workload (`cl.exe` is found without a \
-                 Developer Command Prompt); on any host, LLVM's `clang-cl` on \
-                 PATH also works. Override with `CC=...` to point at a custom \
-                 driver.",
+                 Developer Command Prompt); on any host, LLVM's `clang-cl` and \
+                 `lld-link` on PATH with an `xwin splat` sysroot named by \
+                 LUNA_AOT_MSVC_SYSROOT (or left in cargo-xwin's cache) also \
+                 work. Override with `CC=...` to point at a custom driver.",
                 target.triple
             )));
         };
-        // `clang-cl` / `cl.exe`: `/c` compile-only, `/Fo:<obj>` output.
-        // Some Linux distros' clang-cl wrappers also accept gcc-style
-        // flags, but the MSVC shape works on every supported driver.
+        // `clang-cl` / `cl.exe`: `/c` compile-only, `/Fo:<obj>` output
+        // (one token, so a path with spaces survives).
         cl.arg("/c");
-        cl.arg(&c_path);
-        // `/Fo:` and the output path are a single token when no space —
-        // we use the safe two-arg form via `arg(format!("/Fo:{}", ..))`
-        // which avoids whitespace-in-path issues.
         cl.arg(format!("/Fo:{}", out.display()));
-        // Suppress the cl.exe banner (clang-cl no-ops on this flag).
         cl.arg("/nologo");
         // the dynamic CRT, as the Rust staticlib is built against it; cl's
         // default static CRT (/MT) pulls libcmt.lib into the same link
         cl.arg("/MD");
-        // Cross-compile target: clang-cl accepts `--target=<triple>` to
-        // override the default host. cl.exe rejects this; we only set it
-        // for clang-cl by detecting the program name (heuristic — first
-        // arg defaulted via `Command::new`). The simplest robust path
-        // is to always set it when not on a Windows host, since cl.exe
-        // can't realistically run there anyway. Skipping for now: cmd
-        // here is `clang-cl` only when reachable on a Unix host.
-        if !cfg!(target_os = "windows") {
+        if cfg!(windows) {
+            cl.arg(&c_path);
+        } else {
+            // only clang-cl runs off Windows. `--` ends its options: an
+            // absolute Unix path such as `/Users/...` would otherwise
+            // parse as the `/U` option
             cl.arg(format!("--target={}", target.triple));
+            cl.arg("--").arg(&c_path);
         }
         cl
     } else {
