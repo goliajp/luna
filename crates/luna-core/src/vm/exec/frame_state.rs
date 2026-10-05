@@ -164,8 +164,17 @@ impl Vm {
     /// Nil the missing results `[from, to)`.
     pub(super) fn pad_results(&mut self, from: u32, to: u32) {
         if self.stack.len() < to as usize {
-            self.grow_stack_or_abort(to as usize);
+            return self.pad_results_grow(from, to);
         }
+        self.stack[from as usize..to as usize].fill(Value::Nil);
+    }
+
+    /// [`Vm::pad_results`] when the stack must grow first; out of line and
+    /// last, so the common path keeps nothing alive across a call.
+    #[cold]
+    #[inline(never)]
+    fn pad_results_grow(&mut self, from: u32, to: u32) {
+        self.stack.resize_or_abort(to as usize, Value::Nil);
         self.stack[from as usize..to as usize].fill(Value::Nil);
     }
 
