@@ -216,13 +216,21 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
         }
         vm
     } else {
-        let mut vm = if opts.no_jit {
-            let mut vm = luna_jit::vm::Vm::new_minimal(opts.version);
-            vm.install_null_jit();
-            vm
-        } else {
-            luna_jit::new_minimal_with_jit(opts.version)
+        // Test knob, deliberately left out of --help: hash strings with a
+        // fixed seed, so that two runs, and two builds, do the same work
+        // (instruction counts otherwise vary with the random seed).
+        let seed = std::env::var("LUNA_HASH_SEED")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok());
+        let mut vm = match seed {
+            Some(s) => luna_jit::vm::Vm::new_minimal_with_hash_seed(opts.version, s),
+            None => luna_jit::vm::Vm::new_minimal(opts.version),
         };
+        if opts.no_jit {
+            vm.install_null_jit();
+        } else {
+            luna_jit::install_default_jit(&mut vm);
+        }
         // lua.c sets it before it opens the libraries
         vm.set_ignore_env(ignore_env);
         vm.open_all_libs();
