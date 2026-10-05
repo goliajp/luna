@@ -95,9 +95,9 @@ mod tests {
     use luna_core::vm::isa::Inst;
 
     /// A closed record of `ops` (pcs from 0) with every register an
-    /// integer on entry and the step sign `up`.
-    fn record(ops: &[Inst], up: Option<bool>) -> TraceRecord {
-        let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua53);
+    /// integer on entry and the step sign `up`, over a proto of `vm` (which
+    /// must outlive the record: it owns the proto).
+    fn record(vm: &mut luna_core::vm::Vm, ops: &[Inst], up: Option<bool>) -> TraceRecord {
         let proto = vm
             .load(
                 b"local a,b,c,d,e,f = 0,0,0,0,0,0; return a+b+c+d+e+f",
@@ -136,30 +136,36 @@ mod tests {
 
     #[test]
     fn a_recorded_sign_is_checked_once() {
+        let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua53);
         let body = Inst::iabc(Op::Add, 5, 5, 4, false);
         let tail = Inst::iabx(Op::ForLoop, 0, 2);
         assert_eq!(
-            guard(&record(&[body, tail], Some(true)), true),
+            guard(&record(&mut vm, &[body, tail], Some(true)), true),
             Some((2, true))
         );
         assert_eq!(
-            guard(&record(&[body, tail], Some(false)), true),
+            guard(&record(&mut vm, &[body, tail], Some(false)), true),
             Some((2, false))
         );
     }
 
     #[test]
     fn no_check_outside_5_3_integer_loops_or_without_a_sign() {
+        let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua53);
         let tail = Inst::iabx(Op::ForLoop, 0, 1);
-        assert_eq!(guard(&record(&[tail], Some(true)), false), None);
-        assert_eq!(guard(&record(&[tail], None), true), None);
+        assert_eq!(guard(&record(&mut vm, &[tail], Some(true)), false), None);
+        assert_eq!(guard(&record(&mut vm, &[tail], None), true), None);
     }
 
     #[test]
     fn no_check_when_the_trace_writes_the_step() {
+        let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua53);
         // only `debug.setlocal` reaches the step register in real code
         let write = Inst::iabc(Op::Move, 2, 5, 0, false);
         let tail = Inst::iabx(Op::ForLoop, 0, 2);
-        assert_eq!(guard(&record(&[write, tail], Some(true)), true), None);
+        assert_eq!(
+            guard(&record(&mut vm, &[write, tail], Some(true)), true),
+            None
+        );
     }
 }
