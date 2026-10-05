@@ -131,7 +131,7 @@ pub fn new_with_jit(version: version::LuaVersion) -> vm::Vm {
 /// | Value | Behaviour |
 /// |---|---|
 /// | unset / `cranelift` | Cranelift (default). |
-/// | `llvm` (with `--features llvm-jit`) | LLVM 18 backend. |
+/// | `llvm` (with `--features llvm-jit`) | LLVM 18 backend (see `install_llvm_backend`). |
 /// | `llvm` (feature OFF) | `panic!` with a rebuild hint. |
 /// | any other value | `panic!` listing the accepted values. |
 ///
@@ -161,13 +161,18 @@ fn install_cranelift_jit(vm: &mut vm::Vm) {
     vm.install_jit_storage(jit_backend::storage::CraneliftJitStorage::default());
 }
 
-/// Concrete LLVM backend installer. Only
-/// compiled when `luna-jit` is built with `--features llvm-jit`.
-/// Selected at runtime via `LUNA_JIT_BACKEND=llvm`.
 #[cfg(feature = "llvm-jit")]
 fn install_llvm_jit(vm: &mut vm::Vm) {
-    vm.install_jit_backend(luna_jit_llvm::LlvmBackend, luna_jit_llvm::LlvmBackend);
-    vm.install_jit_storage(luna_jit_llvm::LlvmJitStorage::default());
+    install_llvm_backend(vm);
+}
+
+/// Installs the LLVM backend on `vm`, whatever `LUNA_JIT_BACKEND` says:
+/// LLVM's method JIT, and traces compiled by the baseline tier and then,
+/// once hot, by LLVM. Only with `--features llvm-jit`.
+#[cfg(feature = "llvm-jit")]
+pub fn install_llvm_backend(vm: &mut vm::Vm) {
+    vm.install_jit_backend(jit_backend::LlvmBackend, jit_backend::LlvmBackend);
+    vm.install_jit_storage(jit_backend::storage::CraneliftJitStorage::with_llvm());
 }
 
 /// `LUNA_JIT_BACKEND=llvm` was requested but

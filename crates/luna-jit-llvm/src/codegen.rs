@@ -246,15 +246,31 @@ fn compile_constant_zero_chunk() -> Option<(*const u8, EnginePair)> {
 /// Rust function address via `add_global_mapping`. The dead-locals
 /// path passes `None` because its IR makes no
 /// helper calls and skipping the map keeps that fast-path tight.
-/// Also used by the trace JIT (`trace.rs`).
 pub(crate) fn finalize_module<'ctx>(
     ctx_box: Box<Context>,
     module: Module<'ctx>,
     helpers: Option<&HashMap<&'static str, FunctionValue<'ctx>>>,
 ) -> Option<(*const u8, EnginePair)> {
-    let engine = module
-        .create_jit_execution_engine(OptimizationLevel::None)
-        .ok()?;
+    finalize_bound(ctx_box, module, OptimizationLevel::None, helpers)
+}
+
+/// [`finalize_module`] for a module that calls helpers by address, with
+/// the code generator at `level`.
+pub(crate) fn finalize_with(
+    ctx_box: Box<Context>,
+    module: Module<'_>,
+    level: OptimizationLevel,
+) -> Option<(*const u8, EnginePair)> {
+    finalize_bound(ctx_box, module, level, None)
+}
+
+fn finalize_bound<'ctx>(
+    ctx_box: Box<Context>,
+    module: Module<'ctx>,
+    level: OptimizationLevel,
+    helpers: Option<&HashMap<&'static str, FunctionValue<'ctx>>>,
+) -> Option<(*const u8, EnginePair)> {
+    let engine = module.create_jit_execution_engine(level).ok()?;
     if let Some(map) = helpers {
         bind_helper_symbols(&engine, map);
     }
