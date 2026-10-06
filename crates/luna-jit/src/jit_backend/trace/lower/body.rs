@@ -155,6 +155,8 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
             emit_fold(lw, pl, &oc)?;
             continue;
         }
+        // the op a failed emit stopped at, for diagnostics
+        set_last_op(oc.i, oc.op as u8);
         emit_op(lw, pl, &oc)?;
         readonly_after_op(lw, oc.op);
     }
