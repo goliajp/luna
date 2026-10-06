@@ -24,36 +24,40 @@ impl Table {
     /// counterpart would be meaningless. Of several borders it returns the
     /// one the table's PUC version returns, given the same history.
     #[allow(clippy::len_without_is_empty)]
+    #[inline]
     pub fn len(&self) -> i64 {
+        // a leading run and nothing after it: its end is the only border,
+        // the one every version's search finds; 5.4's search moves
+        // `alimit` as `alimit_after_dense_len` says and 5.5's keeps it as
+        // the hint (with `aprefix` unknown the test fails and the search
+        // runs)
+        let p = self.aprefix;
+        if self.acount == p && (p as usize) < self.asize() {
+            match self.dialect() {
+                Dialect::L54 => {
+                    let l = self.alimit.get();
+                    if l != p {
+                        self.alimit
+                            .set(alimit_after_dense_len(l, p, self.asize as u32));
+                    }
+                }
+                Dialect::L55 => self.lenhint.set(p),
+                _ => {}
+            }
+            return p as i64;
+        }
+        self.len_search()
+    }
+
+    /// `#t` when the array part is not a leading run alone: the version's
+    /// own search. Kept out of line so that the common case above stays
+    /// small.
+    #[inline(never)]
+    fn len_search(&self) -> i64 {
         match self.dialect() {
-            Dialect::L54 => {
-                // a leading run and nothing after it: its end is the only
-                // border, which 5.4's search returns, moving `alimit` as
-                // `alimit_after_dense_len` says (with `aprefix` unknown the
-                // test fails and the search runs)
-                let p = self.aprefix;
-                if self.acount == p && (p as usize) < self.asize() {
-                    let l = alimit_after_dense_len(self.alimit.get(), p, self.asize as u32);
-                    self.alimit.set(l);
-                    return p as i64;
-                }
-                self.len_54()
-            }
-            Dialect::L55 => {
-                // a leading run and nothing after it: its end is the only
-                // border, the one 5.5's search finds and keeps as the hint
-                if self.acount == self.aprefix && (self.aprefix as usize) < self.asize() {
-                    self.lenhint.set(self.aprefix);
-                    return self.aprefix as i64;
-                }
-                self.len_55()
-            }
-            d => {
-                if self.acount == self.aprefix && (self.aprefix as usize) < self.asize() {
-                    return self.aprefix as i64;
-                }
-                self.len_51(d)
-            }
+            Dialect::L54 => self.len_54(),
+            Dialect::L55 => self.len_55(),
+            d => self.len_51(d),
         }
     }
 
