@@ -195,9 +195,10 @@ pub(super) fn emit_ipairs_tfor_call<E: Emit>(
         TableRules::of(pl.opts.dialect),
         TableRules::V54 | TableRules::Any
     ) {
+        let len_flags = lw.bcx.len_state_flags();
         let alimit = lw.bcx.ins().load(
             types::I32,
-            cranelift_codegen::ir::MemFlagsData::trusted(),
+            len_flags,
             t_raw,
             crate::jit_backend::TABLE_ALIMIT_OFFSET,
         );

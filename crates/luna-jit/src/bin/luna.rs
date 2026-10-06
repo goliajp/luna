@@ -218,6 +218,14 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
         // Test knob, deliberately left out of --help: hash strings with a
         // fixed seed, so that two runs, and two builds, do the same work
         // (instruction counts otherwise vary with the random seed).
+        // Another: take 5.5's `#t` random steps from a fixed seed, to
+        // compare with a PUC 5.5 built with that seed.
+        if let Some(s) = std::env::var("LUNA_LEN_SEED")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+        {
+            luna_jit::runtime::table::set_len_search_seed(Some(s));
+        }
         let seed = std::env::var("LUNA_HASH_SEED")
             .ok()
             .and_then(|s| s.parse::<u32>().ok());

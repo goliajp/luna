@@ -168,6 +168,25 @@ pub(crate) trait Emit: Ins {
     /// is compiled for. The code another Vm installs gets that Vm's address
     /// of the same `kind` written over it (see `super::image`).
     fn reloc(&mut self, kind: RelocKind, live: i64) -> Value;
+    /// Flags for a table's length state (`alimit`, the 5.5 length hint):
+    /// in Cranelift IR a memory region of their own, so storing to them
+    /// does not make the code load the table's other fields again.
+    fn len_state_flags(&mut self) -> cranelift_codegen::ir::MemFlagsData;
+}
+
+/// The alias region of a table's length state (see
+/// [`Emit::len_state_flags`]) in `func`.
+pub(crate) fn len_state_flags_in(
+    func: &mut cranelift_codegen::ir::Function,
+) -> cranelift_codegen::ir::MemFlagsData {
+    let region = func
+        .dfg
+        .alias_regions
+        .insert(cranelift_codegen::ir::AliasRegionData {
+            user_id: 0x4c454e,
+            description: "table length state".into(),
+        });
+    cranelift_codegen::ir::MemFlagsData::trusted().with_alias_region(Some(region))
 }
 
 /// What a Vm-specific address in a trace's code stands for.
@@ -278,6 +297,9 @@ impl<M: Module> Ins for ClifEmit<'_, '_, M> {
 }
 
 impl<M: Module> Emit for ClifEmit<'_, '_, M> {
+    fn len_state_flags(&mut self) -> cranelift_codegen::ir::MemFlagsData {
+        len_state_flags_in(self.b.func)
+    }
     fn make_signature(&self) -> Signature {
         self.m.make_signature()
     }
