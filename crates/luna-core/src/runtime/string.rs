@@ -123,8 +123,10 @@ pub(crate) unsafe fn hash_of(p: *const LuaStr) -> u32 {
 
 /// PUC luaS_hash (all bytes, no step — post-5.3 flooding fix).
 pub(crate) fn lua_hash(bytes: &[u8], seed: u32) -> u32 {
+    // PUC 5.4 / 5.5 `luaS_hash`: from the last byte to the first, so that
+    // with the same seed a string hashes, and a table places it, as there
     let mut h = seed ^ bytes.len() as u32;
-    for &b in bytes {
+    for &b in bytes.iter().rev() {
         h ^= h
             .wrapping_shl(5)
             .wrapping_add(h.wrapping_shr(2))
