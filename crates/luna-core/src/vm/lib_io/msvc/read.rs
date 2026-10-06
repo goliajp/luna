@@ -3,6 +3,7 @@
 
 use std::io::SeekFrom;
 
+use super::wide::{newline_bytes, trail_bytes};
 use super::*;
 
 impl CrtFile {
@@ -134,10 +135,14 @@ impl CrtFile {
         if !self.has_big_buffer() {
             return lowio - self.cnt;
         }
+        let mode = self.io.mode;
         let mut offset = self.ptr as i64;
         if self.has(WRITE | READ) {
+            if mode == TextMode::Utf8 && self.io.utf8_translations {
+                return self.ftell_utf8(os, lowio);
+            }
             if self.io.text {
-                offset += count_lf(&self.base[..self.ptr]);
+                offset += newline_bytes(&self.base[..self.ptr], mode);
             }
         } else if !self.has(UPDATE) {
             set_errno(EINVAL);
@@ -149,21 +154,61 @@ impl CrtFile {
         if self.has(READ) {
             return self.ftell_read(os, lowio, offset);
         }
+        if mode == TextMode::Utf8 {
+            offset /= 2;
+        }
         lowio + offset
     }
 
+    /// `common_ftell_translated_utf8_nolock`: the position of the code unit
+    /// the buffer is at, found by walking the file's bytes from where the
+    /// last read began.
+    fn ftell_utf8(&mut self, os: &mut dyn Os, lowio: i64) -> i64 {
+        if self.cnt == 0 {
+            return lowio;
+        }
+        let units = self.ptr as i64 / 2;
+        let start = self.io.startpos;
+        if start < 0 || os.seek(SeekFrom::Start(start as u64)).ok() != Some(start as u64) {
+            return -1;
+        }
+        let mut raw = vec![0u8; INTERNAL_BUFSIZ];
+        let Ok(got) = os.read(&mut raw) else {
+            return -1;
+        };
+        if os.seek(SeekFrom::Start(lowio as u64)).is_err() || units > got as i64 {
+            return -1;
+        }
+        let (mut it, mut i) = (0, 0);
+        while i != units && it < got {
+            if raw[it] == b'\r' {
+                if it + 1 < got && raw[it + 1] == b'\n' {
+                    it += 1;
+                }
+            } else {
+                it += trail_bytes(raw[it]);
+            }
+            i += 1;
+            it += 1;
+        }
+        start + it as i64
+    }
+
     pub(super) fn ftell_read(&mut self, os: &mut dyn Os, lowio: i64, offset: i64) -> i64 {
+        let mode = self.io.mode;
+        let factor = if mode == TextMode::Utf8 { 2 } else { 1 };
+        let unit = if mode == TextMode::Ansi { 1 } else { 2 };
         if self.cnt == 0 {
             return lowio;
         }
         let mut bytes_read = self.cnt + self.ptr as i64;
         if !self.io.text {
-            return lowio - bytes_read + offset;
+            return lowio - bytes_read / factor + offset / factor;
         }
         if os.seek(SeekFrom::End(0)).map(|p| p as i64).ok() == Some(lowio) {
-            bytes_read += count_lf(&self.base[..bytes_read as usize]);
+            bytes_read += newline_bytes(&self.base[..bytes_read as usize], mode);
             if self.has(CTRLZ) {
-                bytes_read += 1;
+                bytes_read += unit;
             }
         } else {
             if os.seek(SeekFrom::Start(lowio as u64)).is_err() {
@@ -177,10 +222,10 @@ impl CrtFile {
                     self.bufsiz as i64
                 };
             if self.io.crlf {
-                bytes_read += 1;
+                bytes_read += unit;
             }
         }
-        lowio - bytes_read + offset
+        lowio - bytes_read / factor + offset / factor
     }
 
     /// A seek within the buffer of a binary stream opened for reading only.

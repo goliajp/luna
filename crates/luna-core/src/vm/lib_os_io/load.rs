@@ -16,9 +16,10 @@ pub(crate) fn load_path(
             let mut chunkname = vec![b'@'];
             chunkname.extend_from_slice(n);
             let read = match crate::vm::lib_io::open_file(vm.crt_text, n, b"r") {
-                Ok((mut f, _)) => {
+                Ok(mut o) => {
                     let mut buf = Vec::new();
-                    f.read_to_end(&mut buf)
+                    o.file
+                        .read_to_end(&mut buf)
                         .map(|_| buf)
                         .map_err(|e| ("read", e))
                 }

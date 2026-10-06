@@ -19,6 +19,7 @@ mod compiler_move_elision;
 mod compiler_stress_limits;
 mod coroutine_debug_hook;
 mod corrupt_register_state;
+mod crt_ccs;
 mod crt_text_mode;
 mod diff_puc;
 mod double_dialect_int_arith;

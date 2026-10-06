@@ -19,9 +19,16 @@ fn g_write(vm: &mut Vm, fs: u32, u: Gc<Userdata>, args: Args, first: u32) -> Res
     let mut total: i64 = 0;
     let mut failure: Option<std::io::Error> = None;
     for i in first..args.n {
+        let number = |vm: &Vm, n| {
+            // written with `fprintf`
+            if u.crt.is_some() {
+                crt::ansi_only(u);
+            }
+            number_text(vm, n)
+        };
         let bytes = match args.get(vm, i) {
-            Value::Int(x) => number_text(vm, Num::Int(x)),
-            Value::Float(f) => number_text(vm, Num::Float(f)),
+            Value::Int(x) => number(vm, Num::Int(x)),
+            Value::Float(f) => number(vm, Num::Float(f)),
             _ => argcheck::check_string(vm, args, i)?.as_bytes().to_vec(),
         };
         // ≤5.4 stop writing after a failure but still check the remaining
