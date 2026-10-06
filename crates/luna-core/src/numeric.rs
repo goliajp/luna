@@ -5,7 +5,6 @@
 //! module stays dialect-agnostic.
 
 mod format;
-pub use crate::cerrno::HexConv;
 pub use format::*;
 
 /// Result of parsing a Lua numeric literal — either an integer or a float
@@ -116,13 +115,11 @@ pub fn dec_literal(text: &[u8], int_ok: bool, neg: bool) -> Option<Num> {
         }
     }
     let x = s.parse::<f64>().ok()?;
-    crate::cerrno::after_strtod_decimal(s, x);
     Some(Num::Float(x))
 }
 
-/// Hex numeral after the `0x` prefix (no sign, no surrounding space);
-/// `conv` says which C conversion PUC runs, for the `errno` it leaves.
-pub fn hex_literal(text: &[u8], int_ok: bool, float_ok: bool, conv: HexConv) -> Option<Num> {
+/// Hex numeral after the `0x` prefix (no sign, no surrounding space).
+pub fn hex_literal(text: &[u8], int_ok: bool, float_ok: bool) -> Option<Num> {
     let mut i = 0;
     while i < text.len() && hex_digit(text[i]).is_some() {
         i += 1;
@@ -190,12 +187,20 @@ pub fn hex_literal(text: &[u8], int_ok: bool, float_ok: bool, conv: HexConv) -> 
     if !float_ok {
         return None;
     }
+    let (x, _, _) = hex_float(&text[..int_end], &text[frac], pexp);
+    Some(Num::Float(x))
+}
+
+/// The value of the hex float numeral with integer digits `int`, fraction
+/// digits `frac` and binary exponent `pexp`, correctly rounded; whether its
+/// digits are not all zeros, and whether the value is exact.
+pub(crate) fn hex_float(int: &[u8], frac: &[u8], pexp: i64) -> (f64, bool, bool) {
     // value = mant * 2^(4*exp4 + pexp); digits beyond 64 mantissa bits fold
     // into the exponent (integer part) or the sticky bit (fraction part)
     let mut mant: u64 = 0;
     let mut sticky = false;
     let mut exp4: i64 = 0;
-    for &c in &text[..int_end] {
+    for &c in int {
         let d = hex_digit(c).unwrap() as u64;
         if mant >> 60 == 0 {
             mant = mant * 16 + d;
@@ -204,7 +209,7 @@ pub fn hex_literal(text: &[u8], int_ok: bool, float_ok: bool, conv: HexConv) -> 
             exp4 += 1;
         }
     }
-    for &c in &text[frac] {
+    for &c in frac {
         let d = hex_digit(c).unwrap() as u64;
         if mant >> 60 == 0 {
             mant = mant * 16 + d;
@@ -219,13 +224,21 @@ pub fn hex_literal(text: &[u8], int_ok: bool, float_ok: bool, conv: HexConv) -> 
         let e = exp4 * 4 + pexp + tz;
         64 - (mant >> tz).leading_zeros() as i64 <= 53 && e >= -1074 && x.is_finite()
     };
-    crate::cerrno::after_hex(conv, x, mant != 0 || sticky, exact);
-    Some(Num::Float(x))
+    (x, mant != 0 || sticky, exact)
 }
 
 /// luaO_str2num: optional surrounding whitespace and sign, decimal or hex.
 /// Used by VM string→number coercion and `tonumber`.
 pub fn str2num(s: &[u8], int_ok: bool, hex_float_ok: bool) -> Option<Num> {
+    use crate::cerrno::conv::{Dialect, number};
+    number(
+        s,
+        if int_ok {
+            Dialect::Later
+        } else {
+            Dialect::Lua52
+        },
+    );
     let is_space = |c: &&u8| matches!(**c, b' ' | b'\t' | b'\n' | 0x0B | 0x0C | b'\r');
     let mut s = s;
     while s.first().filter(is_space).is_some() {
@@ -246,9 +259,7 @@ pub fn str2num(s: &[u8], int_ok: bool, hex_float_ok: bool) -> Option<Num> {
         _ => false,
     };
     let n = if s.len() > 2 && s[0] == b'0' && matches!(s[1], b'x' | b'X') {
-        // 5.2 (no integers) has its own reader; 5.3 and later, the platform's
-        let conv = if int_ok { HexConv::LATER } else { HexConv::Own };
-        hex_literal(&s[2..], int_ok, hex_float_ok, conv)?
+        hex_literal(&s[2..], int_ok, hex_float_ok)?
     } else {
         dec_literal(s, int_ok, neg)?
     };
@@ -262,6 +273,7 @@ pub fn str2num(s: &[u8], int_ok: bool, hex_float_ok: bool) -> Option<Num> {
 /// end there. (5.1's retry with `strtoul` when `strtod` stops at an `x`
 /// can never finish the string, so it is not modelled.)
 pub fn strtod_str(s: &[u8]) -> Option<f64> {
+    crate::cerrno::conv::number(s, crate::cerrno::conv::Dialect::Lua51);
     let is_space = |c: u8| matches!(c, b' ' | b'\t' | b'\n' | 0x0B | 0x0C | b'\r');
     let s = &s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())];
     let mut i = 0;
@@ -346,7 +358,6 @@ fn dec_prefix(s: &[u8]) -> Option<(f64, usize)> {
     }
     let text = str::from_utf8(&s[..i]).expect("ascii numeral");
     let x = text.parse::<f64>().ok()?;
-    crate::cerrno::after_strtod_decimal(text, x);
     Some((x, i))
 }
 
@@ -383,7 +394,7 @@ fn hex_prefix(s: &[u8]) -> Option<(f64, usize)> {
             i = e;
         }
     }
-    hex_literal(&s[..i], false, true, HexConv::Strtod).map(|n| (n.as_f64(), i))
+    hex_literal(&s[..i], false, true).map(|n| (n.as_f64(), i))
 }
 
 /// Round a 64-bit mantissa (+sticky) to f64 and scale by 2^exp.

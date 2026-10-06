@@ -52,7 +52,7 @@ pub(super) fn wide(name: &[u8]) -> Vec<u16> {
     path.as_os_str().encode_wide().chain([0]).collect()
 }
 
-/// `CreateFileW` with an inheritable handle unless `inherit` is false.
+/// `CreateFileW`, the handle inheritable when `inherit` is true.
 pub(super) fn create_file(
     path: &[u16],
     access: u32,

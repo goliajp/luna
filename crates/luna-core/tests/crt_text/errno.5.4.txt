@@ -151,3 +151,5 @@
 149	0	0	local x = string.dump and string.dump(function() end)	
 150	0	0	local f = io.open('t.txt', 'w') f:close() f = io.open('t.txt', 'w+') f:close()	
 151	0	0	local f = io.open('t.txt', 'w') f:write('x') f:close() f = io.open('t.txt', 'r+') f:close()	
+152	0	0	local f = io.open('t.txt', 'w') f:close() f = io.open('t.txt', 'r+b') f:close()	
+153	0	0	local f = io.open('t.txt', 'w') f:write('x\26') f:close() f = io.open('t.txt', 'a+') f:close()	

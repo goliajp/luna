@@ -80,8 +80,50 @@ pub(super) fn os_rename(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     })
 }
 
+/// `os.tmpname` on Windows: the Universal CRT's `tmpnam`, which creates
+/// nothing. Its names are `s<process id>.<n>` in the temporary directory,
+/// both numbers in base 36, `n` counting up through the process; it skips
+/// names that exist, and the check of the free one leaves ENOENT.
+#[cfg(windows)]
+pub(super) fn os_tmpname(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
+    static NEXT: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+    fn base36(mut n: u64) -> String {
+        let mut d = Vec::new();
+        loop {
+            d.push(b"0123456789abcdefghijklmnopqrstuvwxyz"[(n % 36) as usize]);
+            n /= 36;
+            if n == 0 {
+                break;
+            }
+        }
+        d.reverse();
+        String::from_utf8(d).expect("ASCII digits")
+    }
+    let mut dir = std::env::temp_dir().display().to_string();
+    if !dir.ends_with('\\') {
+        dir.push('\\');
+    }
+    // `L_tmpnam` less the room the name needs
+    if dir.len() > 260 - 22 {
+        return Err(raise_str(vm, "unable to generate a unique filename"));
+    }
+    let mut next = NEXT.lock().unwrap_or_else(|e| e.into_inner());
+    let pid = base36(u64::from(std::process::id()));
+    let name = loop {
+        let name = format!("{dir}s{pid}.{}", base36(*next));
+        *next += 1;
+        if std::fs::metadata(&name).is_err() {
+            break name;
+        }
+    };
+    crate::cerrno::set(2);
+    let s = Value::Str(vm.heap.intern(name.as_bytes()));
+    Ok(vm.nat_return(fs, &[s]))
+}
+
 /// `os.tmpname`: POSIX builds use `mkstemp("/tmp/lua_XXXXXX")`, which
 /// creates the file it names.
+#[cfg(not(windows))]
 pub(super) fn os_tmpname(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     use std::hash::{BuildHasher, Hasher};
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";

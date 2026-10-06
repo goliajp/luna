@@ -199,6 +199,34 @@ optimization.
   `luna_core::stdio::write_stderr` writes to standard error as the `luna`
   command does. 5.1 and 5.2 read lines on Windows in 512-byte pieces, the
   MSVC `BUFSIZ`, as PUC does there.
+- The C library's `errno` is kept as PUC's process would have it, and a
+  failure that sets none reports what an earlier call left there, as it
+  does in PUC 5.1–5.3 on Windows (a `write` right after a `read`): a
+  number that converts out of range (in `tonumber`, in arithmetic, in the
+  lexer, in a constant `^` or `%` the parser folds), a math function out
+  of its domain or range, `^` and a float `%` (also in compiled traces,
+  compiled functions and luna-aot binaries), a failed open, remove or
+  rename, and `os.time` beyond the C library's range each update it, by
+  the rules of the Universal CRT on Windows and of glibc elsewhere; 5.4
+  and 5.5 clear it where PUC does. `luna_core::cerrno` holds the value.
+- On Windows a failed `io.open`, `os.remove`, `os.rename`, `loadfile` or
+  `io.lines` reports the C library's message and number (`No such file or
+  directory`, 2) instead of the system's (`The system cannot find the path
+  specified.`, 3). Files are opened, removed and renamed through the
+  system calls of that library: `os.rename` does not replace an existing
+  file and `os.remove` does not remove a directory, as in `lua.exe`;
+  `os.tmpname` names a file without creating it; `os.time` fails beyond
+  the year 3000 and before 1970; 5.1's `tonumber(s, base)` clamps to the
+  32-bit `unsigned long`.
+- With `Vm::set_crt_text_mode` (the `luna` command on Windows), `io.open`
+  in 5.1 reads its mode as the MSVC C library's `fopen` does: a `ccs=`
+  selects that library's UTF-8, UTF-16LE or `UNICODE` text mode, with the
+  byte order mark read or written as the file opens, and a mode it calls
+  invalid ends the process with status 0xC0000409, as do line, number and
+  `read(0)` reads of such a file; a `seek` after an odd number of bytes in
+  a Unicode mode ends it with 0xC0000005. In every dialect, opening an
+  empty file in a text mode with `+` leaves EINVAL in `errno`.
+- `loadfile` of a file that opens but cannot be read says `cannot read`.
 - The LLVM backend (`--features llvm-jit`, `LUNA_JIT_BACKEND=llvm`)
   compiles traces with the same trace lowering as the Cranelift backend:
   traces start in the baseline tier, move to Cranelift's code once hot,

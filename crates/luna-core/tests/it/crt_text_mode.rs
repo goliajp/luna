@@ -60,6 +60,9 @@ fn run_script(v: LuaVersion, tag: &str, script: &str) -> String {
         },
         Err(e) => panic!("{v:?}: {}", vm.error_text(&e)),
     };
+    // the files the script left open close with the Vm; Windows removes no
+    // open file
+    drop(vm);
     std::fs::remove_dir_all(&dir).expect("remove the work dir");
     out
 }
