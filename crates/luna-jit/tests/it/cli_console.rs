@@ -218,6 +218,26 @@ impl Console {
         }
     }
 
+    /// The output once the console has gone quiet: what it shows after
+    /// nothing new has arrived for a while (the program has exited; its
+    /// last output is still crossing the console's pipe).
+    pub(crate) fn settled_screen(&self) -> String {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut last = self.output.lock().unwrap().len();
+        let mut quiet_since = Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_millis(50));
+            let now = self.output.lock().unwrap().len();
+            if now != last {
+                last = now;
+                quiet_since = Instant::now();
+            } else if quiet_since.elapsed() >= Duration::from_millis(500) {
+                return self.screen();
+            }
+            assert!(Instant::now() < deadline, "the console keeps writing");
+        }
+    }
+
     pub(crate) fn exit_code(&self) -> u32 {
         // SAFETY: the process handle is open
         let waited = unsafe { WaitForSingleObject(self.process, 60_000) };

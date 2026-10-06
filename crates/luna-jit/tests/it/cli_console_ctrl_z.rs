@@ -8,36 +8,50 @@
 
 use crate::cli_console::Console;
 
-/// (name, arguments, lines typed)
-const CASES: [(&str, &[&str], &[&str]); 3] = [
+/// (name, arguments, lines typed): each line is typed once the console
+/// shows the text before it, so that what the program writes and what the
+/// console echoes land in the same order on every run (the REPL's prompt
+/// `> ` must be complete before its line is typed, or the echo splits it).
+const CASES: [(&str, &[&str], &[(&str, &str)]); 3] = [
     (
         "read-all",
         &["-e", "\"io.write(('%q'):format(io.read('*a')))\""],
-        &["ab\x1acd\r", "ef\r", "\x1a\r"],
+        &[("", "ab\x1acd\r"), ("ab^Zcd", "ef\r"), ("ef", "\x1a\r")],
     ),
     (
         "lines",
         &["-e", "\"for l in io.lines() do io.write('[', l, ']') end\""],
-        &["ab\x1acd\r", "ef\r", "\x1a\r"],
+        &[("", "ab\x1acd\r"), ("ab^Zcd", "ef\r"), ("ef", "\x1a\r")],
     ),
     (
         "repl",
         &["-i"],
-        &["print(1)\x1a2\r", "print(3)\r", "\x1a\r"],
+        &[
+            ("> ", "print(1)\x1a2\r"),
+            ("print(1)^Z2", "print(3)\r"),
+            ("> ", "\x1a\r"),
+        ],
     ),
 ];
 
 /// What the console shows after the case ran, and the exit status.
-fn run(program: &std::path::Path, prefix: &[&str], args: &[&str], keys: &[&str]) -> (String, u32) {
+fn run(
+    program: &std::path::Path,
+    prefix: &[&str],
+    args: &[&str],
+    keys: &[(&str, &str)],
+) -> (String, u32) {
     let all: Vec<&str> = prefix.iter().chain(args).copied().collect();
     let console = Console::spawn_program(program, &all);
-    for k in keys {
-        std::thread::sleep(std::time::Duration::from_millis(300));
+    let mut at = 0;
+    for (after, k) in keys {
+        if !after.is_empty() {
+            at = console.wait_for(after, at);
+        }
         console.type_keys(k);
     }
     let code = console.exit_code();
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    (console.screen(), code)
+    (console.settled_screen(), code)
 }
 
 /// What PUC 5.1.5 to 5.5.0 built with MSVC showed for each case, as the
