@@ -93,6 +93,10 @@ impl JitStorage for CraneliftJitStorage {
     }
 
     unsafe fn release_code(&mut self, vm: u64) {
+        #[cfg(feature = "llvm-jit")]
+        if self.llvm.is_some() {
+            super::trace::llvm_quiesce();
+        }
         if self.shared || self.owner != Some(vm) {
             return;
         }
