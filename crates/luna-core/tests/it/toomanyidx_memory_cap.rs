@@ -27,17 +27,16 @@
 //! reachable via the captured `a`), and raise the catchable
 //! `"memory cap exceeded"` Lua error.
 //!
-//! `crates/luna-core/tests/official_run.rs` arms a 1 GiB cap when
-//! running heavy.lua so the same `toomanyidx` body trips the cap
-//! rather than the table's `MAX_ASIZE` ceiling — same outcome (PUC
-//! "the loop eventually errors out"), tighter resource budget. This
-//! test pins the embedder-side knob the harness leans on.
+//! Once exceeded the cap stays exceeded until the host re-arms it, so
+//! the `pcall` catches the error but the chunk gets no further: the
+//! call fails with the cap error and the host decides what runs next.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
+use luna_core::vm::error::LuaErrorKind;
 
-/// Pin 1 — a `t[i] = i` grow loop under `pcall` bails with a catchable
+/// Pin 1 — a `t[i] = i` grow loop under `pcall` bails with the
 /// `"memory cap exceeded"` error when the embedder armed the soft cap,
 /// instead of running the host allocator to exhaustion.
 #[test]
@@ -49,7 +48,7 @@ fn toomanyidx_pcall_trips_memory_cap_cleanly() {
     // body runs many full doublings (exercising the same `rehash`
     // path heavy.lua hits in production).
     vm.set_memory_cap(Some(baseline + 4 * 1024 * 1024));
-    let v = vm
+    let err = vm
         .eval(
             "local a = {} \
              local ok, err = pcall(function () \
@@ -57,50 +56,37 @@ fn toomanyidx_pcall_trips_memory_cap_cleanly() {
              end) \
              return ok, err",
         )
-        .expect("pcall completes; cap fires inside the pcall body");
-    assert_eq!(v.len(), 2);
-    assert!(
-        matches!(v[0], Value::Bool(false)),
-        "pcall should catch the cap error, got {:?}",
-        v[0]
-    );
-    match v[1] {
-        Value::Str(s) => assert!(
-            s.as_bytes().windows(15).any(|w| w == b"memory cap exce"),
-            "msg should mention the cap; got {:?}",
-            String::from_utf8_lossy(s.as_bytes())
-        ),
-        v => panic!("expected error string, got {v:?}"),
-    }
+        .expect_err("the cap fires inside the pcall body and again after it");
+    let msg = vm.error_text(&err);
+    assert!(msg.contains("memory cap exceeded"), "{msg}");
+    assert_eq!(vm.error_kind(), LuaErrorKind::MemoryCap);
 }
 
 /// Pin 2 — once the cap has fired, it disarms (fire-once contract). A
 /// follow-up statement runs without further pressure, mirroring
 /// heavy.lua's tail `print "OK"` after `toomanyidx` returns.
 #[test]
-fn memory_cap_disarms_after_firing_inside_pcall() {
+fn memory_cap_stays_exceeded_until_rearmed() {
     let mut vm = Vm::new(LuaVersion::Lua55);
     let baseline = vm.memory_used();
     vm.set_memory_cap(Some(baseline + 4 * 1024 * 1024));
-    let v = vm
+    let err = vm
         .eval(
             "local a = {} \
-             local ok, err = pcall(function () \
-               for i = 1, 1000000000 do a[i] = i end \
-             end) \
+             pcall(function () for i = 1, 1000000000 do a[i] = i end end) \
              a = nil \
-             local b = {} \
-             for i = 1, 1000 do b[i] = i end \
-             return ok, #b",
+             collectgarbage() \
+             return 1",
         )
-        .expect("post-trip statements run without re-arming");
-    assert_eq!(v.len(), 2);
-    assert!(matches!(v[0], Value::Bool(false)));
-    assert!(
-        matches!(v[1], Value::Int(1000)),
-        "post-trip allocs should proceed; got {:?}",
-        v[1]
-    );
+        .expect_err("the statements after the pcall raise the cap error again");
+    assert!(vm.error_text(&err).contains("memory cap exceeded"));
+    // the host clears the exceeded state; the table is gone, so the next
+    // request fits again
+    vm.set_memory_cap(Some(baseline + 4 * 1024 * 1024));
+    let v = vm
+        .eval("local b = {} for i = 1, 1000 do b[i] = i end return #b")
+        .expect("post-trip allocs run once the host re-armed the cap");
+    assert!(matches!(v[0], Value::Int(1000)), "got {:?}", v[0]);
 }
 
 /// Pin 3 — embedder contract: `set_memory_cap(None)` removes the cap so

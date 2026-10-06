@@ -1,39 +1,29 @@
 //! Embedding controls: instruction budget, memory cap, minimal VMs and native panics.
 
 use super::*;
+use luna_core::vm::error::LuaErrorKind;
 
 #[test]
 fn embedding_instr_budget_interrupts_infinite_loop() {
-    // A small budget catches a runaway loop. pcall captures the
-    // raised "instruction budget exceeded" so the embedder gets control
-    // back instead of the whole VM call propagating the error out.
+    // A small budget catches a runaway loop. pcall catches the raised
+    // "instruction budget exceeded", but the budget stays exhausted, so
+    // the `return` after the pcall raises it again: the embedder gets
+    // control back, the script does not.
     let mut vm = Vm::new(LuaVersion::Lua55);
     vm.set_instr_budget(Some(5_000));
-    let result = vm.eval(
-        "local ok, err = pcall(function () \
-           while true do end \
-         end) \
-         return ok, err",
-    );
-    let v = result.expect("pcall itself must succeed");
-    assert_eq!(v.len(), 2);
-    assert!(
-        matches!(v[0], Value::Bool(false)),
-        "pcall should have caught the budget error, got {:?}",
-        v[0]
-    );
-    match v[1] {
-        Value::Str(s) => assert!(
-            s.as_bytes()
-                .windows(20)
-                .any(|w| w == b"instruction budget e"),
-            "error msg should mention the budget: {:?}",
-            String::from_utf8_lossy(s.as_bytes())
-        ),
-        v => panic!("expected error string, got {v:?}"),
-    }
-    // After tripping, the budget disarms so the embedder can resume.
-    assert_eq!(vm.instr_budget_remaining(), None);
+    let err = vm
+        .eval(
+            "local ok, err = pcall(function () \
+               while true do end \
+             end) \
+             return ok, err",
+        )
+        .expect_err("the budget error reaches the host");
+    let msg = vm.error_text(&err);
+    assert!(msg.contains("instruction budget exceeded"), "{msg}");
+    assert_eq!(vm.error_kind(), LuaErrorKind::InstrBudget);
+    // exhausted until the embedder arms a new budget
+    assert_eq!(vm.instr_budget_remaining(), Some(0));
 }
 
 #[test]
@@ -112,7 +102,7 @@ fn embedding_memory_cap_catches_runaway_alloc() {
     let mut vm = Vm::new(LuaVersion::Lua55);
     let baseline = vm.memory_used();
     vm.set_memory_cap(Some(baseline + 64 * 1024)); // small headroom
-    let v = vm
+    let err = vm
         .eval(
             "local outer = {} \
              local ok, err = pcall(function () \
@@ -121,21 +111,10 @@ fn embedding_memory_cap_catches_runaway_alloc() {
              end) \
              return ok, err",
         )
-        .expect("pcall succeeds even when the inner alloc trips the cap");
-    assert_eq!(v.len(), 2);
-    assert!(
-        matches!(v[0], Value::Bool(false)),
-        "pcall should catch the cap error, got {:?}",
-        v[0]
-    );
-    match v[1] {
-        Value::Str(s) => assert!(
-            s.as_bytes().windows(15).any(|w| w == b"memory cap exce"),
-            "msg should mention the cap: {:?}",
-            String::from_utf8_lossy(s.as_bytes())
-        ),
-        v => panic!("expected error string, got {v:?}"),
-    }
+        .expect_err("the cap error reaches the host after the pcall caught it");
+    let msg = vm.error_text(&err);
+    assert!(msg.contains("memory cap exceeded"), "{msg}");
+    assert_eq!(vm.error_kind(), LuaErrorKind::MemoryCap);
 }
 
 #[test]
@@ -161,9 +140,13 @@ fn embedding_kevy_shape_short_script_per_request() {
     let err = vm.eval("while true do end").expect_err("budget must trip");
     let msg = vm.error_text(&err);
     assert!(msg.contains("instruction budget"), "got: {msg}");
-    // After the trip the budget disarmed — important so a paranoid host
-    // doesn't have to reset before EVERY eval.
-    assert_eq!(vm.instr_budget_remaining(), None);
+    // After the trip the budget stays exhausted: a request the host did
+    // not re-arm for raises at its first instruction.
+    assert_eq!(vm.instr_budget_remaining(), Some(0));
+    let err = vm
+        .eval("return 1")
+        .expect_err("no new budget, no instruction");
+    assert!(vm.error_text(&err).contains("instruction budget"));
 
     // (3) Re-arm and run again — Vm state survived the budget trip cleanly.
     vm.set_instr_budget(Some(10_000));
