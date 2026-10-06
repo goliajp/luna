@@ -128,6 +128,7 @@ impl Vm {
             warn_cont: false,
             warn_log: LVec::new(mem),
             instr_budget: None,
+            limited: false,
             bytecode_loading: true,
             puc_bytecode_loading: false,
             loader_input_budget: Vm::DEFAULT_LOADER_INPUT_BUDGET,

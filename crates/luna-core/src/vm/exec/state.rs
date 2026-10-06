@@ -40,9 +40,14 @@ pub struct Vm {
     /// loop decrements once per dispatch turn. When it hits zero the loop
     /// raises a catchable "instruction budget exceeded" error so the embedder
     /// can yield control back to its caller (short-script eval, game
-    /// frame budgets). `None` = unbounded; reset on each call via
-    /// `set_instr_budget`.
+    /// frame budgets). `None` = unbounded; `Some(0)` once it ran out,
+    /// which stays until the host calls `set_instr_budget` again (see
+    /// `limits.rs`).
     pub(crate) instr_budget: Option<i64>,
+    /// `instr_budget` or the heap's `mem_cap` is armed: compiled code,
+    /// which checks neither, is not entered. Kept in step by
+    /// `sync_limited`.
+    pub(crate) limited: bool,
     pub(crate) stack: LVec<Value>,
     /// the counters every call checks, together so a call touches one
     /// cache line for them

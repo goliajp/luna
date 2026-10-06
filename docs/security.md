@@ -109,13 +109,19 @@ let mut lua = Lua::sandbox(LuaVersion::Lua54)
 let r: i64 = lua.eval("return 1 + 2").unwrap();
 ```
 
-The instruction budget is consumed per dispatch turn and resets on
-each new `call_value` / `eval` entry. Compiled code does not consume
-it: while a budget is armed no trace is entered, and the method JIT
-has to be turned off with `Vm::set_jit_enabled(false)`; the memory cap is fire-once
-and disarms itself after raising, so re-arm before reusing the Vm
-across requests. See `Vm::set_instr_budget` and `Vm::set_memory_cap`
-rustdoc for the precise semantics.
+The instruction budget is consumed per dispatch turn. Once it runs
+out, or the memory cap is exceeded, the limit stays at zero until the
+host arms a new one: every further instruction raises the same error
+again, so a script cannot catch it with `pcall` and carry on, and
+neither an `xpcall` handler, a `__close` or `__gc` handler, a
+metamethod, a library callback (a sort comparator, a `gsub`
+replacement) nor a coroutine gets to run more than one instruction.
+`Vm::error_kind()` stays `InstrBudget` / `MemoryCap`. Compiled code
+consumes neither limit, so while one is armed no trace and no
+method-JIT function is entered; the JIT need not be switched off. Arm
+the limits before each request when reusing a Vm. See
+`Vm::set_instr_budget` and `Vm::set_memory_cap` rustdoc for the precise
+semantics and [`embedding.md`](embedding.md) §3 for the host side.
 
 ---
 
