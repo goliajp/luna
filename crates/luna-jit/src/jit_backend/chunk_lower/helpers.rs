@@ -176,3 +176,51 @@ pub(super) fn jmp_target(pc: usize, inst: Inst) -> usize {
 pub(super) fn a_kind(k: &[RegKind], idx: u32) -> RegKind {
     k.get(idx as usize).copied().unwrap_or(RegKind::Int)
 }
+
+/// Whether array index `key_minus_1` falls in `t`'s array part, as an
+/// `i8`: below `alimit`, or below the array size, which then raises
+/// `alimit` to the key (a 5.4 table after `#t` lowered it), as
+/// `Table::array_index` does.
+pub(super) fn emit_array_in_range(
+    bcx: &mut FunctionBuilder<'_>,
+    t: Value,
+    key_minus_1: Value,
+) -> Value {
+    let flags = MemFlagsData::trusted();
+    let alimit = bcx.ins().load(types::I32, flags, t, TABLE_ALIMIT_OFFSET);
+    let alimit = bcx.ins().uextend(types::I64, alimit);
+    let in_limit = bcx.ins().icmp(IntCC::UnsignedLessThan, key_minus_1, alimit);
+    let past_blk = bcx.create_block();
+    let raise_blk = bcx.create_block();
+    let merge_blk = bcx.create_block();
+    bcx.append_block_param(merge_blk, types::I8);
+    bcx.ins().brif(
+        in_limit,
+        merge_blk,
+        &[BlockArg::Value(in_limit)],
+        past_blk,
+        &[],
+    );
+    bcx.switch_to_block(past_blk);
+    bcx.seal_block(past_blk);
+    let asize = bcx
+        .ins()
+        .load(types::I64, flags, t, TABLE_ASIZE_OFFSET as i32);
+    let in_array = bcx.ins().icmp(IntCC::UnsignedLessThan, key_minus_1, asize);
+    bcx.ins().brif(
+        in_array,
+        raise_blk,
+        &[],
+        merge_blk,
+        &[BlockArg::Value(in_array)],
+    );
+    bcx.switch_to_block(raise_blk);
+    bcx.seal_block(raise_blk);
+    let key = bcx.ins().iadd_imm_u(key_minus_1, 1);
+    let key32 = bcx.ins().ireduce(types::I32, key);
+    bcx.ins().store(flags, key32, t, TABLE_ALIMIT_OFFSET);
+    bcx.ins().jump(merge_blk, &[BlockArg::Value(in_array)]);
+    bcx.switch_to_block(merge_blk);
+    bcx.seal_block(merge_blk);
+    bcx.block_params(merge_blk)[0]
+}
