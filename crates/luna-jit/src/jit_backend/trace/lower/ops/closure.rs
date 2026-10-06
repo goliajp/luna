@@ -8,14 +8,12 @@ pub(super) fn emit_closure_op<E: Emit>(
 ) -> Option<()> {
     let Plan {
         record,
-        max_stack,
         effective_end,
         ..
     } = *pl;
     let OpHelpers {
         op_closure_id,
         spill_id,
-        op_close_id,
         ..
     } = lw.h.op;
     let RuntimeHelpers { upval_get_id, .. } = lw.h.rt;
@@ -25,14 +23,11 @@ pub(super) fn emit_closure_op<E: Emit>(
     let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::Closure => {
-            // R[A] := closure(proto.protos[Bx]).
-            // Emit per-in_stack-upval spill followed by a
-            // single op_closure helper call. Spill writes
-            // vm.stack[base + d.index] = Value::pack(tag, raw)
-            // so the helper's find_or_create_upval captures a
-            // live slot. Restrictions enforced in pre-emit:
-            // inline_depth == 0 + every in_stack source reg in
-            // bounds. RegKind::Unset src → bail (no known tag).
+            // R[A] := closure(proto.protos[Bx]). The in-stack upvalues'
+            // sources go to the stack first, where the helper opens the
+            // upvalues on the frame's slots. In the head frame the helper
+            // takes the head closure; in an inlined frame, that frame's own
+            // closure and where its registers start.
             let bx = ins.bx() as usize;
             let inner = rop.proto.protos[bx];
             let spill_ref = lw.bcx.import_func(spill_id);
@@ -45,12 +40,19 @@ pub(super) fn emit_closure_op<E: Emit>(
                 let raw_arg = lw.bcx.use_var(regs[src_idx]);
                 // an untyped source cannot be packed to a Value
                 let tag_arg = emit_kind_tag(&mut lw.bcx, src_kind, raw_arg)?;
-                let slot_arg = lw.bcx.ins().iconst(types::I64, d.index as i64);
+                let slot_arg = lw.bcx.ins().iconst(types::I64, (off + src_idx) as i64);
                 lw.bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
             }
             let bx_arg = lw.bcx.ins().iconst(types::I64, ins.bx() as i64);
-            let func_ref = lw.bcx.import_func(op_closure_id);
-            let call = lw.bcx.ins().call(func_ref, &[bx_arg]);
+            let call = if rop.inline_depth == 0 {
+                let func_ref = lw.bcx.import_func(op_closure_id);
+                lw.bcx.ins().call(func_ref, &[bx_arg])
+            } else {
+                let cl = lw.bcx.use_var(lw.regs_full[pl.frame_func[i] as usize]);
+                let off_arg = lw.bcx.ins().iconst(types::I64, off as i64);
+                let func_ref = lw.bcx.import_func(lw.h.op.op_closure_in_id);
+                lw.bcx.ins().call(func_ref, &[cl, bx_arg, off_arg])
+            };
             let v = lw.bcx.inst_results(call)[0];
             lw.bcx.def_var(regs[ins.a() as usize], v);
             lw.current_kinds[off + ins.a() as usize] = RegKind::Closure;
@@ -75,26 +77,7 @@ pub(super) fn emit_closure_op<E: Emit>(
             // close_from is idempotent (open_upvals are popped on
             // first call), so a deopt that re-fires interp's
             // Op::Close → begin_close → close_from sees no work.
-            let a_us = ins.a() as usize;
-            let spill_ref = lw.bcx.import_func(spill_id);
-            for slot in a_us..max_stack {
-                let k = lw.current_kinds[off + slot];
-                if k.untyped() {
-                    continue;
-                }
-                let raw_arg = lw.bcx.use_var(regs[slot]);
-                let tag_arg = emit_kind_tag(&mut lw.bcx, k, raw_arg).expect("typed");
-                let slot_arg = lw.bcx.ins().iconst(types::I64, slot as i64);
-                lw.bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
-            }
-            let a_arg = lw.bcx.ins().iconst(types::I64, ins.a() as i64);
-            let func_ref = lw.bcx.import_func(op_close_id);
-            let call = lw.bcx.ins().call(func_ref, &[a_arg]);
-            let status = lw.bcx.inst_results(call)[0];
-            // 1: a `__close` handler would run; the interpreter
-            // redoes the op and runs it
-            let ok = lw.bcx.ins().icmp_imm_s(IntCC::Equal, status, 0);
-            guard!(lw, pl, ok, i, rop.pc);
+            close_from(lw, pl, oc, ins.a() as usize)?;
         }
         Op::GetUpval => {
             // R[A] := UpVal[B]. The helper reads JIT_CL's
@@ -253,8 +236,8 @@ pub(super) fn frame_upval_read<E: Emit>(
         upval_of_checked_id,
         ..
     } = lw.h.rt;
-    let OpCx { i, rop, off, .. } = *oc;
-    let cl = lw.bcx.use_var(lw.regs_full[off - 1]);
+    let OpCx { i, rop, .. } = *oc;
+    let cl = lw.bcx.use_var(lw.regs_full[pl.frame_func[i] as usize]);
     let idx_arg = lw.bcx.ins().iconst(types::I64, i64::from(idx));
     let ss = lw
         .bcx
@@ -270,4 +253,39 @@ pub(super) fn frame_upval_read<E: Emit>(
     let ok = lw.bcx.inst_results(call)[0];
     guard!(lw, pl, ok, i, rop.pc);
     lw.bcx.ins().stack_load(types::I64, types::I64, ss, 0)
+}
+
+/// `close` from register `a` of the frame of op `oc` on: its registers
+/// the trace holds a kind for go to the stack first (the helper seals each
+/// upvalue with the stack's value), then the helper closes the upvalues at
+/// those slots. A `__close` handler to run leaves the trace at the op, for
+/// the interpreter to run it.
+fn close_from<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>, a: usize) -> Option<()> {
+    let OpCx { i, rop, off, .. } = *oc;
+    let spill_ref = lw.bcx.import_func(lw.h.op.spill_id);
+    for slot in a..rop.proto.max_stack as usize {
+        let k = lw.current_kinds[off + slot];
+        if k.untyped() {
+            continue;
+        }
+        let raw_arg = lw.bcx.use_var(lw.regs_full[off + slot]);
+        let tag_arg = emit_kind_tag(&mut lw.bcx, k, raw_arg).expect("typed");
+        let slot_arg = lw.bcx.ins().iconst(types::I64, (off + slot) as i64);
+        lw.bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
+    }
+    let a_arg = lw.bcx.ins().iconst(types::I64, (off + a) as i64);
+    let func_ref = lw.bcx.import_func(lw.h.op.op_close_id);
+    let call = lw.bcx.ins().call(func_ref, &[a_arg]);
+    let status = lw.bcx.inst_results(call)[0];
+    // 1: a `__close` handler would run; the interpreter redoes the op and
+    // runs it
+    let ok = lw.bcx.ins().icmp_imm_s(IntCC::Equal, status, 0);
+    guard!(lw, pl, ok, i, rop.pc);
+    Some(())
+}
+
+/// The return of an inlined function that closes its frame's upvalues
+/// (a closure it made captured one of its locals).
+pub(super) fn close_frame<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<()> {
+    close_from(lw, pl, oc, 0)
 }

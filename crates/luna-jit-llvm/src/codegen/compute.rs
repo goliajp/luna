@@ -83,9 +83,8 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
     builder.position_at_end(entry_bb);
 
     // Allocate the chunk's register file in the entry BB. All other
-    // BBs read/write via the same alloca pointer; LLVM mem2reg /
-    // SROA will promote scalar slots out of memory at higher opt
-    // levels (currently OptimizationLevel::None).
+    // BBs read/write via the same alloca pointer; LLVM's mem2reg /
+    // SROA promote the scalar slots out of memory.
     let regs = builder.build_alloca(regs_ty, "regs").ok()?;
 
     let mut emitter = ComputeEmitter {
@@ -224,7 +223,7 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         return None;
     }
 
-    finalize_module(ctx_box, module, Some(&helpers))
+    finalize_module(ctx_box, module, true)
 }
 
 /// Lower a comparison and the `Jmp` it consumes into one `condbr`.

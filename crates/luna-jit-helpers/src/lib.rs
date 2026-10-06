@@ -207,6 +207,8 @@ unsafe fn push_ssa_roots(vm: &mut luna_core::vm::Vm, roots: i64) -> usize {
 // target 64-bit hosts
 const _: () = assert!(std::mem::size_of::<*const ()>() == 8);
 
+mod table_new;
+pub use table_new::*;
 mod table_write;
 pub use table_write::*;
 mod table_read;
@@ -221,6 +223,8 @@ mod stack_ops;
 pub use stack_ops::*;
 mod materialize;
 pub use materialize::*;
+mod inlined;
+pub use inlined::*;
 
 mod str_buf;
 pub use str_buf::*;

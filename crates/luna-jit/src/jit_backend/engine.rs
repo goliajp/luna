@@ -2,6 +2,7 @@
 
 use super::chunk_share::{ChunkImage, ChunkKey};
 use super::trace::image::{Settings, TraceImage};
+use super::trace::share_failures::Failure;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -54,6 +55,8 @@ pub(crate) struct TraceCache {
     pub(crate) children: HashMap<u64, Vec<Arc<TraceImage>>>,
     /// The method JIT's functions.
     pub(crate) chunks: HashMap<ChunkKey, Vec<Arc<ChunkImage>>>,
+    /// Recordings that failed to compile, by their head.
+    pub(crate) failures: HashMap<HeadKey, Vec<Failure>>,
     /// Images in the order they came, for dropping the oldest.
     order: VecDeque<Held>,
     bytes: usize,
@@ -65,6 +68,8 @@ pub(crate) struct TraceCache {
 enum Held {
     Trace(HeadKey, u64),
     Chunk(ChunkKey, u64),
+    /// The failures of one head, all of them.
+    Failures(HeadKey),
 }
 
 /// [`Engine::set_capacity_bytes`] until set.
@@ -78,6 +83,25 @@ impl TraceCache {
         }
         self.order.push_back(Held::Trace(key, img.id));
         self.by_head.entry(key).or_default().push(img);
+        self.evict();
+    }
+
+    /// Keeps `f`, or counts it once more when the same failure is here;
+    /// a head keeps at most `cap` different failures.
+    pub(crate) fn insert_failure(&mut self, key: HeadKey, f: Failure, cap: usize) {
+        let list = self.failures.entry(key).or_default();
+        if let Some(g) = list.iter_mut().find(|g| g.same(&f)) {
+            g.again();
+            return;
+        }
+        if list.len() >= cap {
+            return;
+        }
+        if list.is_empty() {
+            self.order.push_back(Held::Failures(key));
+        }
+        self.bytes += f.size();
+        list.push(f);
         self.evict();
     }
 
@@ -100,6 +124,12 @@ impl TraceCache {
                         if list.is_empty() {
                             self.chunks.remove(&key);
                         }
+                    }
+                    continue;
+                }
+                Some(Held::Failures(key)) => {
+                    if let Some(list) = self.failures.remove(&key) {
+                        self.bytes -= list.iter().map(Failure::size).sum::<usize>();
                     }
                     continue;
                 }
@@ -158,6 +188,7 @@ impl Engine {
                 by_head: HashMap::new(),
                 children: HashMap::new(),
                 chunks: HashMap::new(),
+                failures: HashMap::new(),
                 order: VecDeque::new(),
                 bytes: 0,
                 capacity: DEFAULT_CAPACITY,

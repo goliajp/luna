@@ -82,7 +82,7 @@ impl Replay<'_, '_> {
             BinOp::Sub => ins.isub(x, y),
             BinOp::Mul => ins.imul(x, y),
             BinOp::Sdiv => ins.sdiv(x, y),
-            BinOp::Udiv => ins.udiv(x, y),
+            BinOp::Umulhi => ins.umulhi(x, y),
             BinOp::Smin => ins.smin(x, y),
             BinOp::Smax => ins.smax(x, y),
             BinOp::And => ins.band(x, y),

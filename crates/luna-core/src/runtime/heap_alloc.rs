@@ -100,7 +100,11 @@ impl Heap {
         // SAFETY: `p` is the table linked just above, which the heap now manages; no other handle or reference to it exists yet
         unsafe {
             let g = Gc::from_ptr(p);
-            g.as_mut().init_array_ptr();
+            let t = g.as_mut();
+            t.init_array_ptr();
+            t.hdr.sub = self.table_dialect as u8;
+            t.alimit.set(0);
+            t.lenhint.set(0);
             g
         }
     }
@@ -126,6 +130,20 @@ impl Heap {
             unsafe { g.as_mut() }.resize(self, clamped, 0);
         }
         g
+    }
+
+    /// A table sized by `NewTable`'s operands, as the interpreter makes
+    /// it (see `table::new_table_sizes`); `None` for sizes past a table's
+    /// limit. Public for the JIT crates.
+    #[doc(hidden)]
+    pub fn new_table_presized(&mut self, b: u32, c: u32, k: bool) -> Option<Gc<Table>> {
+        let (asize, hsize) = crate::runtime::table::new_table_sizes(b, c, k)?;
+        let g = self.new_table();
+        if asize != 0 || hsize != 0 {
+            // SAFETY: the table was made just above; this is its only handle
+            unsafe { g.as_mut() }.resize(self, asize, hsize);
+        }
+        Some(g)
     }
 
     /// Adopt a compiler-built prototype (its `hdr` must carry ObjTag::Proto).
@@ -333,10 +351,21 @@ impl Heap {
         ))
     }
 
+    /// Recolour the dead-white `h` to the current white, out of line: the
+    /// hot path of [`Self::intern`] only tests the colour, and inlined, this
+    /// cold store made it keep `self` on the stack.
+    #[cold]
+    #[inline(never)]
+    fn resurrect(&self, h: &mut GcHeader) {
+        h.flags = h.with_slow((h.flags & !WHITE_BITS) | self.current_white);
+    }
+
     /// Create (or find) a string. Short strings (≤ 40 bytes) are interned.
     pub fn intern(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
         if bytes.len() <= string::MAX_SHORT_LEN {
-            let (p, is_new) = self.strings.intern(self.mem.mem(), bytes, self.seed);
+            let (p, is_new) = self
+                .strings
+                .intern(self.mem.mem(), bytes, self.seed, self.hash51);
             if is_new {
                 // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
                 unsafe { self.link(p as *mut GcHeader) };
@@ -360,15 +389,14 @@ impl Heap {
                 unsafe {
                     let f = (*(p as *mut GcHeader)).flags;
                     if is_white(f) && (f & self.current_white) == 0 {
-                        (*(p as *mut GcHeader)).flags = (*(p as *mut GcHeader))
-                            .with_slow((f & !WHITE_BITS) | self.current_white);
+                        self.resurrect(&mut *(p as *mut GcHeader));
                     }
                 }
             }
             // SAFETY: `p` is an interned string the heap manages: new and linked above, or found in the table and kept from this cycle's sweep by the recoloring above
             unsafe { Gc::from_ptr(p) }
         } else {
-            let p = string::alloc_long(self.mem.mem(), bytes, self.seed);
+            let p = string::alloc_long(self.mem.mem(), bytes, self.seed, self.hash51);
             // SAFETY: `alloc_long` just allocated `p`, linked nowhere yet
             unsafe { self.link(p as *mut GcHeader) };
             self.bytes += string::alloc_size(bytes.len());

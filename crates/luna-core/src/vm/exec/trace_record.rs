@@ -235,16 +235,6 @@ impl Vm {
         base: u32,
         cur_depth: usize,
     ) {
-        if self.version <= LuaVersion::Lua52 && self.int_arith(&cl.proto, inst, base) {
-            // 5.1/5.2 integers stand for doubles; apart from `+` and `-`
-            // (see `int_arith`) the trace lowering does integer arithmetic
-            // in machine integers, without the rounding and the -0 those
-            // need. With one float operand the operation is a float one (an
-            // integer kept for a double converts to it exactly), which the
-            // trace does as the doubles do
-            self.abort_recording("int-arith-on-doubles");
-            return;
-        }
         let rec = self.jit.active_trace.as_mut().expect("recording");
         // Depth-aware push at the
         // current `cur_depth`. The `depth_cap_hit` /

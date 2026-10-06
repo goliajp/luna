@@ -242,9 +242,18 @@ Key properties:
   through the callee's own closure, and keeps the prototypes it inlined
   alive; an AOT binary loads them from slots its runtime fills after the
   chunk is loaded. A side exit inside an inlined function rebuilds the
-  call frames before the interpreter resumes there. A call that wants
-  more than one result, passes a variable number of arguments or enters
-  a vararg function ends the trace instead.
+  call frames before the interpreter resumes there. A call may want any
+  number of results (or all of them), pass a variable number of
+  arguments when the recording fixes the stack top they end at (the
+  results of a call just before, or `...`), and enter a vararg function:
+  its extra arguments move below its registers as the interpreter's call
+  moves them, in the trace's registers and in the frames an exit rebuilds.
+  Where the interpreter would read the stack top after a call that
+  returned all its values, the trace sets it. A function the trace
+  inlines may create closures: they take that frame's own upvalues, and
+  its locals as the function's return closes them. Calls whose callee
+  needs its arguments as a table (5.1's `arg`, 5.5's named vararg table)
+  end the trace.
 
 - **Numeric `for` in every dialect.** A trace closing at a numeric
   `for` steps the loop the way the dialect's interpreter does: 5.4 / 5.5
@@ -279,7 +288,21 @@ Key properties:
 - **Side traces** (compiled paths from frequently-taken side exits)
   attach back into the parent trace's exit table at runtime. This keeps
   branchy code from re-entering the interpreter just because a less-common
-  branch is taken occasionally.
+  branch is taken occasionally. A side trace from an exit inside a
+  function the parent inlined starts in that function's frame: it is
+  cached on that function's prototype, the parent holds it by exit, and
+  the dispatcher runs it on the parent's registers from that frame on,
+  after the exit has rebuilt the frames, then writes back the parent's
+  registers below the frame and the side trace's above.
+
+- **Failed compiles are shared too.** A Vm of an engine whose recording
+  fails to compile hands the failure to the engine with its fingerprint:
+  the head's code by content, how the recording started, the entry tags
+  and the path it took. Another Vm whose recording has the same
+  fingerprint does not compile it and counts the first Vm's failures as
+  its own, so it gives the head up after one recording instead of
+  recording and failing as often; a recording with another fingerprint
+  compiles as usual.
 
 - **JIT can be disabled per `Vm`**: `vm.set_jit_enabled(false)` or
   installing `NullJitBackend` (default if you `cargo add luna-core`

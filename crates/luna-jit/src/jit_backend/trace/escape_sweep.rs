@@ -108,8 +108,7 @@ pub(super) fn sweep_table_write(
             // SetField/GetField. For mixed (b > 0, c > 0) the
             // array part sunk-emits; hash slots accumulate via
             // SetField scan.
-            let cap = ins.b();
-            let _c_hash = ins.c();
+            let sizes = luna_core::runtime::table::new_table_sizes(ins.b(), ins.c(), ins.k());
             unbind(bindings, depth, a);
             let sid = sites.len();
             sites.push(AllocSite {
@@ -117,9 +116,15 @@ pub(super) fn sweep_table_write(
                 pc: rop.pc,
                 a,
                 inline_depth: depth,
-                array_cap: cap,
+                array_cap: sizes.map_or(0, |(asize, _)| asize as u32),
+                table_ops: crate::jit_backend::pack_table_ops(ins),
                 hash_keys: Vec::new(),
-                state: EscapeState::Sinkable,
+                // sizes past a table's limit: the helper raises the error
+                state: if sizes.is_some() {
+                    EscapeState::Sinkable
+                } else {
+                    EscapeState::Escaped
+                },
             });
             bindings[depth as usize][a as usize] = Some(sid);
             // tag this op so emit can take the sunk

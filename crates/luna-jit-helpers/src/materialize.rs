@@ -33,11 +33,11 @@ pub fn trace_materialize_frames_fires() -> u64 {
 /// - `closures[i]` is the closure frame `i` runs: the value its caller
 ///   called, which the trace checked is a Lua closure of the function it
 ///   inlined there.
-/// - No inlined function is vararg — helper does
-///   NOT reconstruct the vararg rotation that `push_frame` does.
-/// - Every inlined `Op::Call` wants at most one result; `m.nresults` is
-///   the count the caller asked for. The helper writes whatever the
-///   metadata says, no validation.
+/// - The trace left a vararg callee's extra arguments just below its
+///   base and its fixed parameters from the base on, as `push_frame`
+///   rotates them; `m.n_varargs` counts the extras.
+/// - `m.nresults` is the count the caller asked for (-1 for all). The
+///   helper writes whatever the metadata says, no validation.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread
@@ -82,7 +82,7 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
             unsafe { luna_core::runtime::Gc::from_ptr(raw as *mut luna_core::runtime::LuaClosure) };
         let new_base = head_frame.base + m.base_offset;
         vm.jit_ensure_stack((new_base + cl.proto.max_stack as u32) as usize);
-        vm.jit_push_inlined_frame(cl, new_base, m.pc, m.nresults);
+        vm.jit_push_inlined_frame(cl, new_base, m.pc, m.nresults, m.n_varargs);
     }
     0
 }
