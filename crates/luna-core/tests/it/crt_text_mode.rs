@@ -14,7 +14,25 @@ const SCRIPT: &str = include_str!("../crt_text/files.lua");
 const PUC_51: &str = include_str!("../crt_text/files.5.1.txt");
 const PUC: &str = include_str!("../crt_text/files.txt");
 
+/// `crt_text/more.lua`: `setvbuf` sizes and the positions after them, what
+/// a failed number read leaves (5.1 and 5.2 read with the library's
+/// `fscanf`), `ungetc` at the start of a buffer, and a write right after a
+/// read, which the library refuses and which leaves stale buffer bytes in
+/// the file. Runs of NUL bytes are written `<\0*N>` on both sides.
+const MORE: &str = include_str!("../crt_text/more.lua");
+const MORE_PUC: [&str; 5] = [
+    include_str!("../crt_text/more.5.1.txt"),
+    include_str!("../crt_text/more.5.2.txt"),
+    include_str!("../crt_text/more.5.3.txt"),
+    include_str!("../crt_text/more.5.4.txt"),
+    include_str!("../crt_text/more.5.5.txt"),
+];
+
 fn run(v: LuaVersion, tag: &str) -> String {
+    run_script(v, tag, SCRIPT)
+}
+
+fn run_script(v: LuaVersion, tag: &str, script: &str) -> String {
     let dir = std::env::temp_dir().join(format!("luna-crt-text-{}-{tag}", std::process::id()));
     if dir.exists() {
         std::fs::remove_dir_all(&dir).expect("remove a stale work dir");
@@ -29,7 +47,7 @@ fn run(v: LuaVersion, tag: &str) -> String {
            for i = 1, select('#', ...) do t[i] = tostring((select(i, ...))) end
            OUT[#OUT + 1] = table.concat(t, '\\t')
          end
-         do {SCRIPT}
+         do {script}
          end
          return table.concat(OUT, '\\n') .. '\\n'"
     );
@@ -58,6 +76,51 @@ fn files_read_and_write_as_in_puc_built_with_msvc() {
         // a Windows checkout may give the recording CRLF line endings
         let want = want.replace("\r\n", "\n");
         let got = run(v, tag);
+        for (i, (g, w)) in got.lines().zip(want.lines()).enumerate() {
+            assert_eq!(g, w, "{v:?}, line {}", i + 1);
+        }
+        assert_eq!(
+            got.lines().count(),
+            want.lines().count(),
+            "{v:?}: line count"
+        );
+    }
+}
+
+fn compress_nuls(s: &str) -> String {
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(i) = rest.find("\\0") {
+        out.push_str(&rest[..i]);
+        let mut n = 0;
+        let mut r = &rest[i..];
+        while let Some(t) = r.strip_prefix("\\0") {
+            n += 1;
+            r = t;
+        }
+        if n >= 8 {
+            out.push_str(&format!("<\\0*{n}>"));
+        } else {
+            out.push_str(&"\\0".repeat(n));
+        }
+        rest = r;
+    }
+    out.push_str(rest);
+    out
+}
+
+#[test]
+fn more_stream_behaviour_as_in_puc_built_with_msvc() {
+    let dialects = [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ];
+    for (v, want) in dialects.into_iter().zip(MORE_PUC) {
+        let want = want.replace("\r\n", "\n");
+        let got = compress_nuls(&run_script(v, &format!("more{v:?}"), MORE));
         for (i, (g, w)) in got.lines().zip(want.lines()).enumerate() {
             assert_eq!(g, w, "{v:?}, line {}", i + 1);
         }

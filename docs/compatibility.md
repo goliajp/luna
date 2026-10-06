@@ -145,21 +145,36 @@ These rules hold in the interpreter, in compiled traces and in luna-aot
 binaries; on Windows they were checked against PUC 5.1–5.5 built with MSVC (`tostring`,
 `string.format`, `%`, `math.fmod`, with the JIT on and off).
 
-On Windows `lua.exe` reads and writes through the MSVC C library in text
-mode, and the `luna` command does the same: standard output, standard
-error and standard input, and every file opened without `b` (`io.open`,
-`io.lines`, `io.input`, `io.output`, `io.popen`, and the source files
-`loadfile`, `dofile` and `require` read). `\n` is written as `\r\n`;
-`\r\n` reads as `\n`; a Ctrl+Z ends the input; opening a file with `+`
-drops a Ctrl+Z at its end; and `seek` reports the position that library's
-`ftell` computes, which for a file whose lines end in a bare `\n` is not
-the true one (it can come out negative, and then `seek` fails). Files
-opened with `b`, `io.tmpfile()`, and everything on other platforms are
-not translated. An embedding host gets this only by calling
-`Vm::set_crt_text_mode(true)`; standard output, standard error and
-standard input are put in text mode by `luna_core::stdio::use_c_stdout`,
-which a host normally does not call. The `luna` command's output was
-compared byte for byte with PUC 5.1–5.5 built with MSVC.
+On Windows `lua.exe` reads and writes through the MSVC C library, and the
+`luna` command does the same: luna keeps that library's `FILE` (its buffer,
+flags and rules) for every file it opens and for standard input, output
+and error. So, as in `lua.exe`:
+
+- files opened without `b`, and the standard streams, are in text mode:
+  `\n` is written as `\r\n`, `\r\n` reads as `\n`, a Ctrl+Z ends the
+  input (on a console it ends only the line it is in, and one at the start
+  of a line is the end of input), and opening a file with `+` drops a
+  Ctrl+Z at its end; `io.tmpfile()` and files opened with `b` are binary;
+- `seek` reports the position that library's `ftell` computes from its
+  buffer, which for a text file whose lines end in a bare `\n` is not the
+  true one (it can come out negative, and then `seek` fails); `setvbuf`
+  sizes the buffer (`"line"` is full buffering, `"no"` a two-byte buffer),
+  and a size below 2 ends the process at once with status 0xC0000409;
+- a `write` right after a `read` that stopped short of the end of the
+  file fails, and a `read` right after a `write` reads whatever the shared
+  buffer held, until a `seek` or `flush` in between; `ungetc` at the start
+  of a buffer that still holds bytes drops the byte;
+- 5.1 and 5.2 read a number with that library's `fscanf("%lf")`, which
+  takes `1e+` of `1e+x` and then fails;
+- standard output to a pipe or file is buffered in 4096-byte blocks, and
+  on a console written out after every call; standard error is written
+  out after every call; so the two interleave as they do with `lua.exe`.
+
+An embedding host gets the files' behaviour only by calling
+`Vm::set_crt_text_mode(true)`, and the standard streams' only through
+`luna_core::stdio::use_c_stdout` on Windows, which a host normally does
+not call; on other platforms nothing changes. The `luna` command's output
+was compared byte for byte with PUC 5.1–5.5 built with MSVC.
 
 `io` and `os` share a single opener because they share a threat model:
 either the host is giving the script filesystem and process access or it
