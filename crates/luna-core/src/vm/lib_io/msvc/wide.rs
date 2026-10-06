@@ -52,13 +52,10 @@ pub(crate) fn newline_bytes(bytes: &[u8], mode: TextMode) -> i64 {
     if mode == TextMode::Ansi {
         return bytes.iter().filter(|&&b| b == b'\n').count() as i64;
     }
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         access_violation();
     }
-    let n = bytes
-        .chunks_exact(2)
-        .filter(|u| u16::from_le_bytes([u[0], u[1]]) == LF)
-        .count();
+    let n = units(bytes).into_iter().filter(|&u| u == LF).count();
     2 * n as i64
 }
 
@@ -68,22 +65,21 @@ pub(crate) fn access_violation() -> ! {
 }
 
 fn units(bytes: &[u8]) -> Vec<u16> {
-    bytes
-        .chunks_exact(2)
-        .map(|u| u16::from_le_bytes([u[0], u[1]]))
-        .collect()
+    let (pairs, _) = bytes.as_chunks::<2>();
+    pairs.iter().map(|&u| u16::from_le_bytes(u)).collect()
 }
 
 fn put_units(dst: &mut [u8], units: &[u16]) {
-    for (d, u) in dst.chunks_exact_mut(2).zip(units) {
-        d.copy_from_slice(&u.to_le_bytes());
+    let (pairs, _) = dst.as_chunks_mut::<2>();
+    for (d, u) in pairs.iter_mut().zip(units) {
+        *d = u.to_le_bytes();
     }
 }
 
 impl Handle {
     /// `_read` in UTF-16LE mode.
     pub(super) fn read_utf16(&mut self, os: &mut dyn Os, dst: &mut [u8]) -> i64 {
-        if dst.len() % 2 != 0 {
+        if !dst.len().is_multiple_of(2) {
             super::super::crt::invalid_parameter();
         }
         let have = match os.read(dst) {
@@ -162,7 +158,7 @@ impl Handle {
     /// to the last whole character, as UTF-16 (`MultiByteToWideChar`, which
     /// puts U+FFFD for what is not UTF-8).
     pub(super) fn read_utf8(&mut self, os: &mut dyn Os, dst: &mut [u8]) -> i64 {
-        if dst.len() % 2 != 0 {
+        if !dst.len().is_multiple_of(2) {
             super::super::crt::invalid_parameter();
         }
         let mut raw = vec![0u8; (dst.len() / 2).max(4)];

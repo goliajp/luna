@@ -179,7 +179,7 @@ impl Handle {
         if data.is_empty() {
             return 0;
         }
-        if self.mode != TextMode::Ansi && data.len() % 2 != 0 {
+        if self.mode != TextMode::Ansi && !data.len().is_multiple_of(2) {
             super::super::crt::invalid_parameter();
         }
         match self.mode {
