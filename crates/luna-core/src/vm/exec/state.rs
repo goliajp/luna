@@ -306,10 +306,6 @@ pub struct Vm {
     /// way `c_depth` bounds call_value recursion. Per-thread: saved/restored
     /// with the coroutine context, since continuations survive a yield.
     pub(super) pcall_depth: u32,
-    /// Lua frames a thread may hold before a call raises "stack
-    /// overflow": PUC 5.1's `LUAI_MAXCALLS`; no count in later dialects,
-    /// whose limit is the stack size
-    pub(super) frame_cap: u32,
     /// number of non-yieldable C calls in flight on the running thread (PUC's
     /// `L->nny`). A library callback that runs via synchronous Rust recursion
     /// (sort comparator, gsub replacement) cannot be continued across a yield,
@@ -447,6 +443,10 @@ pub struct Vm {
     /// frame stack above) free through. Last, so it outlives them: the
     /// heap, which owns it too, is the first field to be dropped.
     pub(super) _mem: crate::runtime::mem::MemOwner,
+    /// Lua frames a thread may hold before a call raises "stack
+    /// overflow": PUC 5.1's `LUAI_MAXCALLS`; no count in later dialects,
+    /// whose limit is the stack size
+    pub(super) frame_cap: u32,
 }
 
 /// Call-site context an in-flight async native

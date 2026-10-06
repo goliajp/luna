@@ -105,6 +105,9 @@ mod os {
     }
 
     pub(super) fn stack_low() -> Option<usize> {
+        if let Some(low) = super::main_thread_low() {
+            return Some(low);
+        }
         let mut attr = Attr([0; 128]);
         let mut addr: *mut c_void = std::ptr::null_mut();
         let mut size = 0usize;
@@ -120,6 +123,46 @@ mod os {
             (r == 0).then_some(addr as usize)
         }
     }
+}
+
+/// The main thread's stack on glibc: its top (`__libc_stack_end`) less the
+/// stack size limit. `pthread_getattr_np` would read `/proc/self/maps`
+/// for it, allocating and freeing a stream buffer on the C heap, which
+/// moves where everything allocated after it lands; in a benchmark that
+/// alone made the interpreter's call loop 9% slower.
+#[cfg(all(any(target_os = "linux", target_os = "android"), target_env = "gnu"))]
+fn main_thread_low() -> Option<usize> {
+    use std::ffi::c_void;
+    const RLIMIT_STACK: i32 = 3;
+    unsafe extern "C" {
+        static __libc_stack_end: *const c_void;
+        fn getpid() -> i32;
+        fn gettid() -> i32;
+        fn getrlimit(resource: i32, rlim: *mut [u64; 2]) -> i32;
+    }
+    let mut rlim = [0u64; 2];
+    // SAFETY: the C library's own process and thread ids, its record of
+    // where the main thread's stack starts (set before `main` runs), and
+    // the stack size limit written to a local of `struct rlimit`'s layout
+    let (main, top, r) = unsafe {
+        (
+            gettid() == getpid(),
+            __libc_stack_end as usize,
+            getrlimit(RLIMIT_STACK, &mut rlim),
+        )
+    };
+    if !main || r != 0 || rlim[0] == u64::MAX {
+        return None;
+    }
+    top.checked_sub(rlim[0] as usize)
+}
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    not(target_env = "gnu")
+))]
+fn main_thread_low() -> Option<usize> {
+    None
 }
 
 #[cfg(target_vendor = "apple")]

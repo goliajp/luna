@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1386** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1388** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 224 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **7** | six `#[doc(hidden)]`, and `MemOwner::raw`, see §5 |
 | **`pub unsafe extern "C" fn`** | 197 | the C API (143), the `luna_jit_*` helpers compiled code calls (48, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
@@ -46,7 +46,7 @@ quotes the pattern counts too.
 | | `vm/lib_*` | 51 | `Gc` handle mutation in the standard library (io handles, among them the MSVC text mode stream state and buffer, `table`, `debug`) and the table writes that build each library |
 | | `vm` (other) | 48 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
 | | `stdio.rs` | 1 | C-style standard output writing descriptor 1 without closing it |
-| | `native_stack.rs` | 6 | reading the running thread's stack bounds from the OS (`pthread_getattr_np`, `pthread_get_stackaddr_np`, `GetCurrentThreadStackLimits`) |
+| | `native_stack.rs` | 8 | reading the running thread's stack bounds from the OS (`pthread_getattr_np`, `pthread_get_stackaddr_np`, `GetCurrentThreadStackLimits`, and on glibc's main thread `__libc_stack_end` and `getrlimit`) |
 | | `jit`, `frontend` | 11 | trace metadata handed to the backend; interned-name text |
 | | unit-test files under `src/` | 20 | tests that inspect raw layouts; a test `lua_Alloc` |
 | | `tests/` | 53 | integration tests: a poisoning global allocator, async wakers, userdata internals, a raw write into a read-only table, the host C library's `%p`, a counting `lua_Alloc` |
@@ -62,7 +62,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1386** | |
+| **Total** | | **1388** | |
 
 ## 3. Pattern catalog
 
@@ -335,13 +335,15 @@ programs compiled against PUC and luna; one site came back in
 written in C. That is 1269. Unit tests that drive the C API's Rust half from Rust (`capi/unit_tests.rs`) added 21. That is 1290.
 
 Raising "stack overflow" instead of overflowing the native stack added
-16 to 1370: `native_stack.rs` in luna-core 6 (one foreign block and one
+18 to 1370: `native_stack.rs` in luna-core 8 (one foreign block and one
 call for each of Linux / Android, the Apple targets and Windows, reading
-the thread's stack bounds), and `recursion.rs` in luna-jit-helpers 10
+the thread's stack bounds, and one more of each for glibc's main thread,
+whose bounds are read without the stream `pthread_getattr_np` opens),
+and `recursion.rs` in luna-jit-helpers 10
 (the helpers that fill a compiled function's self-call context, count
 the LLVM tier's native self calls, and make a self call in the
 interpreter when the native stack or the call budget runs out). That is
-1386, the ceiling now.
+1388, the ceiling now.
 
 ## 5. Public `unsafe` surface
 

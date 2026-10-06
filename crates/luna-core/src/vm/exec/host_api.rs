@@ -411,11 +411,11 @@ impl Vm {
         // mmap'd native code. The lookup is one Cell::get + one match —
         // the slow path (compile attempt on first reach) is paid once per
         // Proto.
-        let jitted = match f {
+        let r = match f {
             Value::Closure(cl) if args.is_empty() => self.try_jit_call(cl),
             _ => None,
         };
-        let r = match jitted {
+        let r = match r {
             Some(Ok(vs)) => {
                 self.public_call_depth -= 1;
                 return Ok(vs);
@@ -443,10 +443,10 @@ impl Vm {
         args: &[Value],
         from_c: bool,
     ) -> Result<Vec<Value>, LuaError> {
-        if self.c_depth >= MAX_C_DEPTH || is_low(RESERVE) {
-            // PUC `luaE_checkcstack`: at the limit the call fails; an xpcall
-            // handler running on the error gets a tenth more room before its
-            // own failure is "error in error handling"
+        if self.c_depth >= MAX_C_DEPTH || (self.c_depth > 0 && is_low(RESERVE)) {
+            // PUC `luaE_checkcstack` (a first level is no nesting: unchecked):
+            // at the limit the call fails; an xpcall handler running on the
+            // error gets a tenth more before "error in error handling"
             if self.msgh_depth == 0 {
                 return Err(self.runerror("C stack overflow"));
             }

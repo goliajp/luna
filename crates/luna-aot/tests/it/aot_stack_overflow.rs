@@ -25,7 +25,7 @@ local s = 0
 for i = 1, 2000 do s = s + d(20) end
 print(s)
 print(norm(select(2, pcall(d, -1))))
-print(norm(select(2, load("return " .. string.rep("1 + ", 200000) .. "1"))))
+print(norm(select(2, (loadstring or load)("return " .. string.rep("1 + ", 200000) .. "1"))))
 local n = 0
 for i = 1, 1000000 do n = n + 1 end
 print(n)
