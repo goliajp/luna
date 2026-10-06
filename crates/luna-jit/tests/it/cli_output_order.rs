@@ -53,7 +53,12 @@ fn expected(dialect: &str, name: &str) -> String {
 
 /// Runs of 20 or more equal bytes as `<c*N>`, the program's path as `lua`.
 fn normalize(out: &[u8]) -> String {
-    let text = String::from_utf8_lossy(out).replace(luna().to_str().unwrap(), "lua");
+    let mut text = String::from_utf8_lossy(out).replace(luna().to_str().unwrap(), "lua");
+    for d in DIALECTS {
+        if let Some(exe) = probe_exe(d) {
+            text = text.replace(&exe, "lua");
+        }
+    }
     let text = if cfg!(windows) {
         text.replace('\r', "<CR>")
     } else {
@@ -77,11 +82,25 @@ fn normalize(out: &[u8]) -> String {
     s
 }
 
+/// `LUNA_ORDER_PROBE_EXE`, with `{d}` standing for the dialect: run that
+/// program instead and print what it gives, which is how the Windows
+/// recording was made (through these very pipes and files).
+fn probe_exe(dialect: &str) -> Option<String> {
+    std::env::var("LUNA_ORDER_PROBE_EXE")
+        .ok()
+        .map(|p| p.replace("{d}", dialect))
+}
+
 fn command(dialect: &str, dir: &std::path::Path, script: &str) -> Command {
-    let mut cmd = Command::new(luna());
-    cmd.arg(format!("--lua={dialect}"))
-        .arg(script)
-        .current_dir(dir);
+    let mut cmd = match probe_exe(dialect) {
+        Some(exe) => Command::new(exe),
+        None => {
+            let mut c = Command::new(luna());
+            c.arg(format!("--lua={dialect}"));
+            c
+        }
+    };
+    cmd.arg(script).current_dir(dir);
     for (k, _) in std::env::vars_os() {
         if k.to_string_lossy().starts_with("LUA_") {
             cmd.env_remove(k);
@@ -155,6 +174,10 @@ fn script_output_and_errors_interleave_as_in_puc() {
             #[cfg(target_os = "linux")]
             runs.push(("pty", on_terminal(d, &dir, &script)));
             for (mode, got) in runs {
+                if probe_exe(d).is_some() {
+                    println!("=== {d} {case}.{mode}\n{got}\n=== end");
+                    continue;
+                }
                 let want = expected(d, &format!("{case}.{mode}"));
                 if got != want {
                     failed.push(format!(
