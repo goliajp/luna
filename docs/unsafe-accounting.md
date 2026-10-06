@@ -21,10 +21,10 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1375** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1379** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 224 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **7** | six `#[doc(hidden)]`, and `MemOwner::raw`, see §5 |
-| **`pub unsafe extern "C" fn`** | 199 | the C API (143), the `luna_jit_*` helpers compiled code calls (50, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
+| **`pub unsafe extern "C" fn`** | 200 | the C API (143), the `luna_jit_*` helpers compiled code calls (51, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
 | **`unsafe impl Send` / `Sync`** | 10 | see §5 |
 
 A "site" is a line matching `unsafe (\{|fn |impl |trait |extern )`,
@@ -54,14 +54,14 @@ quotes the pattern counts too.
 | | other | 2 | the CLI's `arg` table and the `lua_facade` table handle |
 | | unit-test files under `src/` | 70 | tests that call compiled code or the `extern "C"` helpers directly |
 | | `tests/`, `benches/`, `examples/` | 43 | a C API state driven from Rust, a counting global allocator, the `send` overhead bench |
-| `luna-jit-helpers` | | 154 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
+| `luna-jit-helpers` | | 157 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
 | `luna-jit-llvm` | `src/` | 5 | LLVM execution engines (one per compiled method or trace) and the register-file GEPs |
 | | `tests/` | 34 | calling LLVM-compiled chunks |
 | `luna-runtime-helpers` | | 45 | the AOT binary's C entries, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor |
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1375** | |
+| **Total** | | **1379** | |
 
 ## 3. Pattern catalog
 
@@ -333,13 +333,20 @@ programs compiled against PUC and luna; one site came back in
 `jit_storage_mismatch_no_abort.rs`, which declares two C API functions
 written in C. That is 1269. Unit tests that drive the C API's Rust half from Rust (`capi/unit_tests.rs`) added 21. That is 1290.
 
+Sizing tables as each PUC version does, so that `#t` finds the same
+border, added 4. In `luna-core` 1: `Heap::new_table_presized`, which
+sizes the table it just made through its handle. In `luna-jit-helpers`
+3: `luna_jit_table_reserve_list`, the `extern "C"` helper that grows a
+constructor table's array part before compiled code stores its list
+items, with a block for the Vm and one for the table. That is 1374.
+
 Traces inlining vararg callees and making closures in inlined frames
 added two helpers (`luna_jit_op_closure_in`, `luna_jit_set_top`, in
 `luna-jit-helpers/src/inlined.rs`): each is a `pub unsafe extern "C" fn`,
 and the bodies take the current Vm (two blocks) and the inlined frame's
 closure from its payload (one), +5; a side trace started inside an
 inlined frame is entered at an offset into the parent's registers, which
-replaced the old entry call one for one. With the other work on develop that is 1375, the ceiling now.
+replaced the old entry call one for one. That is 1379, the ceiling now.
 
 ## 5. Public `unsafe` surface
 
@@ -358,12 +365,12 @@ replaced the old entry call one for one. With the other work on develop that is 
 None of these but `MemOwner::raw` appears in the `cargo doc` view of the
 API; using the API does not need any of them.
 
-### `pub unsafe extern "C" fn` (199)
+### `pub unsafe extern "C" fn` (200)
 
 | Location | Count | Why |
 |---|---:|---|
 | `luna-jit/src/capi*` | 143 | the C API, called from C with raw `lua_State` pointers (the functions written in C are reached through naked jumps, which are not `unsafe fn`s) |
-| `luna-jit-helpers/src/*` | 50 | the `luna_jit_*` helpers compiled code calls (§3.5); each has a `# Safety` section |
+| `luna-jit-helpers/src/*` | 51 | the `luna_jit_*` helpers compiled code calls (§3.5); each has a `# Safety` section |
 | `luna-runtime-helpers/src/*` | 4 | `luna_aot_run_dialect`, the AOT binary's entry, called by the generated C `main` with the dialect the script was compiled for; `luna_aot_run`, the same entry for 5.5 |
 
 ### `unsafe impl Send` / `Sync` (10)

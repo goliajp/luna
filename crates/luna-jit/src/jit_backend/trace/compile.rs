@@ -254,7 +254,10 @@ pub(super) fn trace_isa() -> Option<cranelift_codegen::isa::OwnedTargetIsa> {
 /// The address of a Rust helper trace code calls.
 pub(super) fn trace_helper(name: &str) -> Option<*const u8> {
     Some(match name {
-        "luna_jit_new_table" => crate::jit_backend::luna_jit_new_table as *const u8,
+        "luna_jit_new_table_sized" => crate::jit_backend::luna_jit_new_table_sized as *const u8,
+        "luna_jit_table_reserve_list" => {
+            crate::jit_backend::luna_jit_table_reserve_list as *const u8
+        }
         "luna_jit_table_set_int_checked" => {
             crate::jit_backend::luna_jit_table_set_int_checked as *const u8
         }

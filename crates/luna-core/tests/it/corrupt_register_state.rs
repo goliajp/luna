@@ -163,7 +163,7 @@ fn crafted_chunk_setlist_on_a_number() {
     let bytes = patched(
         &mut vm,
         "function() local t = {1, 2, 3} return t end",
-        Inst::iabc(Op::NewTable, 0, 3, 0, false),
+        Inst::iabc(Op::NewTable, 0, 0, 3, false),
         Inst::iasbx(Op::LoadI, 0, 7),
     );
     let msg = run_chunk(&mut vm, &bytes);

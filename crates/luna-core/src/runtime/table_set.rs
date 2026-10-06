@@ -113,12 +113,10 @@ impl Table {
             Err(_) => return false,
         };
         if let Value::Int(i) = k
-            && i >= 1
-            && (i as u64) <= self.asize() as u64
+            && let Some(idx) = self.array_index(i)
         {
-            let idx = i as usize - 1;
-            // SAFETY: `idx < self.asize()` is guarded by the conditional
-            // above, mirroring the bound on `aget`/`aset`.
+            // SAFETY: `array_index` returns only indices below `asize`,
+            // mirroring the bound on `aget`/`aset`.
             let tag = unsafe { *self.atags().get_unchecked(idx) };
             if tag != raw::NIL {
                 // Nil-val on a live slot must follow the same tombstone
@@ -165,10 +163,9 @@ impl Table {
     /// `(key, nil)` zombies.
     pub(super) fn clear_existing_slot(&mut self, k: Value) {
         if let Value::Int(i) = k
-            && i >= 1
-            && (i as u64) <= self.asize() as u64
+            && let Some(idx) = self.array_index(i)
         {
-            self.aset(i as usize - 1, Value::Nil);
+            self.aset(idx, Value::Nil);
             return;
         }
         if let Some(idx) = self.find_node(k) {
@@ -215,16 +212,9 @@ impl Table {
     #[inline(always)]
     fn set_norm_inlined(&mut self, heap: &mut Heap, k: Value, v: Value) -> Result<(), TableError> {
         if let Value::Int(i) = k
-            && i >= 1
-            && (i as u64) <= self.asize() as u64
+            && let Some(idx) = self.array_index(i)
         {
-            // Live array slot + Nil write goes through the shared
-            // tombstone routine (see `clear_existing_slot`).
-            if v.is_nil() {
-                self.clear_existing_slot(k);
-            } else {
-                self.aset(i as usize - 1, v);
-            }
+            self.aset(idx, v);
             return Ok(());
         }
         if let Some(idx) = self.find_node(k) {
@@ -241,8 +231,11 @@ impl Table {
             }
             return Ok(());
         }
-        if v.is_nil() {
-            return Ok(()); // absent key set to nil: nothing to record
+        // an absent key set to nil: 5.4 and 5.5 record nothing; 5.1–5.3
+        // `luaH_set` add the key with no value, which can fill the hash
+        // part and rehash, as later sizes depend on
+        if v.is_nil() && self.dialect() >= Dialect::L54 {
+            return Ok(());
         }
         self.insert_new(heap, k, v)
     }
@@ -261,28 +254,18 @@ impl Table {
             return self.set_norm(heap, k, v);
         }
         let mp = self.main_position(k);
-        // A truly empty slot (key=Nil, !dead_key) is free for direct placement.
-        // A dead-key slot still belongs to some chain (its `next` points to a
-        // live entry the chain reaches), so we treat it as occupied here and
-        // route the new key through the collision path below — that preserves
-        // the back-links into this slot from other nodes' `next` fields.
-        if self.nodes()[mp].is_free() {
-            self.nodes_mut()[mp] = Node::new(k, v, NONE);
+        // a main position holding no value is taken over as PUC
+        // `luaH_newkey` does: a free node, or one whose key was removed or
+        // swept, which keeps its `next` so the chain through it stays whole
+        if self.nodes()[mp].val.is_nil() {
+            let next = self.nodes()[mp].next;
+            self.nodes_mut()[mp] = Node::new(k, v, next);
             return Ok(());
         }
         let Some(free) = self.free_pos() else {
             self.rehash(heap, k)?;
             return self.set_norm(heap, k, v);
         };
-        // Dead-key slot: it carries no live key, so by definition nobody else
-        // counts it as "their main position owner". We give it directly to
-        // the new key but preserve `next` so the chain it sits inside still
-        // reaches its downstream entries.
-        if self.nodes()[mp].dead_key {
-            let preserved_next = self.nodes()[mp].next;
-            self.nodes_mut()[mp] = Node::new(k, v, preserved_next);
-            return Ok(());
-        }
         let other_mp = self.main_position(self.nodes()[mp].key());
         if other_mp != mp {
             // colliding node is out of its main position: relocate it to the

@@ -22,7 +22,9 @@ impl Vm {
                 self.set_r(base, inst.a(), v);
             }
             Op::NewTable => {
-                let t = self.heap.new_table();
+                let Some(t) = self.heap.new_table_presized(inst.b(), inst.c(), inst.k()) else {
+                    return Err(self.rt_err("table overflow"));
+                };
                 self.set_r(base, inst.a(), Value::Table(t));
                 self.maybe_collect_garbage(base + inst.a() + 1);
             }
@@ -55,14 +57,17 @@ impl Vm {
                 if !self.heap.store_barrier(t) {
                     return Err(self.table_error(TableError::ReadOnly));
                 }
-                for i in 1..=n {
-                    let v = self.r(base, a + i);
-                    // SAFETY: `t` is a live table (see `Gc`), and no
-                    // reference into it is held across the call
-                    let r = unsafe { t.as_mut() }.set_int_raw(&mut self.heap, offset + i as i64, v);
-                    if let Err(TableError::Overflow) = r {
-                        return Err(self.rt_err("table overflow"));
-                    }
+                // SAFETY: `t` is a live table (see `Gc`), and no reference
+                // into it is held across these calls
+                let tb = unsafe { t.as_mut() };
+                if tb
+                    .reserve_list(&mut self.heap, offset as u64 + u64::from(n))
+                    .is_err()
+                {
+                    return Err(self.rt_err("table overflow"));
+                }
+                for i in 0..n {
+                    tb.set_list_slot(offset as usize + i as usize, self.r(base, a + 1 + i));
                 }
                 // the element temps above the table are now consumed
                 self.maybe_collect_garbage(base + a + 1);
@@ -146,12 +151,10 @@ impl Vm {
                     // calls made while it lives (`set_int`, `intern`, `set`)
                     // do not collect
                     let tm = unsafe { t.as_mut() };
+                    // PUC `createvarargtab`: an array part of exactly `n`
+                    tm.resize(&mut self.heap, n as usize, 1);
                     for i in 0..n {
-                        let _ = tm.set_int_raw(
-                            &mut self.heap,
-                            i as i64 + 1,
-                            self.stack[(func_slot + 1 + i) as usize],
-                        );
+                        tm.set_list_slot(i as usize, self.stack[(func_slot + 1 + i) as usize]);
                     }
                     let n_key = Value::Str(self.heap.intern(b"n"));
                     tm.set(&mut self.heap, n_key, Value::Int(n as i64))
