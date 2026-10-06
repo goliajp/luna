@@ -13,7 +13,7 @@ impl Vm {
         cl: Gc<LuaClosure>,
     ) -> Option<Result<Vec<Value>, LuaError>> {
         use crate::runtime::function::JitProtoState;
-        if !self.jit.enabled || native_stack::is_low(native_stack::JIT_RESERVE) {
+        if !self.jit.enabled {
             return None;
         }
         let proto = cl.proto;
@@ -151,9 +151,9 @@ impl Vm {
         wanted: i32,
     ) -> bool {
         use crate::runtime::function::JitProtoState;
-        // compiled self-recursion runs on the native stack: with little of
-        // it left the interpreter makes the call instead
-        if !self.jit.enabled || native_stack::is_low(native_stack::JIT_RESERVE) {
+        // (compiled self-recursion checks the native stack itself, before
+        // its first self call)
+        if !self.jit.enabled {
             return false;
         }
         // Any active debug hook means the interpreter has to run the
