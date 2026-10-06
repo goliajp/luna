@@ -53,8 +53,11 @@ mod lir;
 mod llvm_tier;
 #[cfg(feature = "llvm-jit")]
 pub use llvm_tier::llvm_codegen_count;
+#[cfg(feature = "llvm-jit")]
+pub(crate) use llvm_tier::{quiesce as llvm_quiesce, tier_up_llvm};
 pub(crate) mod reloc;
 mod share;
+pub(crate) mod share_failures;
 pub(crate) use emit::{ClifEmit, Emit, Ins, RelocKind, reloc_symbol};
 pub(crate) use lir::CodeArena;
 mod aot_data;
@@ -70,6 +73,7 @@ mod escape;
 mod escape_scan;
 mod escape_sweep;
 mod exits;
+mod inline_frames;
 mod lower;
 mod shape;
 mod sunk;
@@ -82,6 +86,7 @@ pub use escape::*;
 use escape_scan::*;
 use escape_sweep::*;
 use exits::*;
+use inline_frames::*;
 use lower::*;
 use shape::*;
 use sunk::*;

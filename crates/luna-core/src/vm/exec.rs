@@ -69,6 +69,7 @@ mod trace_close;
 mod trace_dispatch;
 mod trace_exit;
 mod trace_exit_decode;
+mod trace_exit_inner;
 mod trace_record;
 mod trace_record_slots;
 mod trace_start;
@@ -90,6 +91,8 @@ pub(crate) use num::{ArithOp, arith_num, c_fmod, str_to_num};
 pub(crate) use state::AsyncNativeCallCtx;
 pub use state::Vm;
 use trace_cache::*;
+use trace_exit_decode::{ExitSource, keep_tfor_vars};
+use trace_wire::hold_side_trace;
 use unwind::*;
 
 /// PUC MAXTAGLOOP (5.3+): bound on `__index`/`__newindex` chains.

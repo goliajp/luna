@@ -188,7 +188,24 @@ pub(super) fn emit_ipairs_tfor_call<E: Emit>(
         t_raw,
         crate::jit_backend::TABLE_ASIZE_OFFSET as i32,
     );
-    let in_range = lw.bcx.ins().icmp(IntCC::UnsignedLessThan, key_m1, asize);
+    // a table that may be 5.4's is bounded by `alimit`: an index past it
+    // goes to the helper, which raises it (see `Table::array_index`)
+    use crate::jit_backend::trace::array_slot::TableRules;
+    let bound = if matches!(
+        TableRules::of(pl.opts.dialect),
+        TableRules::V54 | TableRules::Any
+    ) {
+        let alimit = lw.bcx.ins().load(
+            types::I32,
+            cranelift_codegen::ir::MemFlagsData::trusted(),
+            t_raw,
+            crate::jit_backend::TABLE_ALIMIT_OFFSET,
+        );
+        lw.bcx.ins().uextend(types::I64, alimit)
+    } else {
+        asize
+    };
+    let in_range = lw.bcx.ins().icmp(IntCC::UnsignedLessThan, key_m1, bound);
     let metatable = lw.bcx.ins().load(
         types::I64,
         cranelift_codegen::ir::MemFlagsData::trusted(),

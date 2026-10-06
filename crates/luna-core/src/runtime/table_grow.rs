@@ -79,6 +79,7 @@ impl Table {
         }
         self.array_ptr = p;
         self.asize = new_asize as u64;
+        self.reset_hints();
         // every old slot holds a value: the run of them is the whole old
         // part, as the full resize's catch-up scan finds
         self.aprefix = old as u32;

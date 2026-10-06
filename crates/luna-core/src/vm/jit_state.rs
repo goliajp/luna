@@ -227,6 +227,23 @@ pub struct JitCounters {
     /// Count of side traces that compiled but
     /// failed the shape-match gate.
     pub side_trace_shape_mismatch: u64,
+    /// Dispatches of traces holding each kind of inlined code, by the bit
+    /// of [`crate::jit::trace::CompiledTrace::inline_kinds`].
+    pub inline_kind_dispatched: [u64; 4],
+    /// Recordings not compiled because other Vms sharing compiled code
+    /// failed to compile one like it.
+    pub shared_failures_known: u64,
+    /// The failures of other Vms counted as this one's at those
+    /// recordings.
+    pub shared_failures_counted: u64,
+    /// Recordings compiled only up to a call they had followed into a
+    /// function the trace could not hold.
+    pub inline_cut: u64,
+    /// Runs of a side trace from its parent's exit.
+    pub side_trace_runs: u64,
+    /// Of `side_trace_runs`, those from an exit inside a function the
+    /// parent inlined.
+    pub side_trace_runs_inlined: u64,
     /// Tally of NewTable sites flagged Sinkable.
     pub sinkable_seen: u64,
     /// Cumulative count of `BufferState::Bufferable`

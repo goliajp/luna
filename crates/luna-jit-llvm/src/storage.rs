@@ -108,6 +108,14 @@ pub struct EnginePair {
     pub(crate) context: Box<Context>,
 }
 
+// SAFETY: a pair is built on one thread (luna-jit's LLVM compile thread,
+// or the Vm's) and handed whole to the Vm that runs its code. The engine's
+// reference-counted handle has no other owner once `finalize_bound`
+// returns (the module that held a second one is dropped there), and the
+// context is used by nothing but this engine, so moving both together to
+// another thread leaves no shared state behind.
+unsafe impl Send for EnginePair {}
+
 impl LlvmJitStorage {
     /// Drop every cached entry + ExecutionEngine. Tests use this to
     /// force a fresh compile between cases.

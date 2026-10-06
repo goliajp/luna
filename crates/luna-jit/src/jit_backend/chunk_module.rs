@@ -54,6 +54,7 @@ fn method_helper(name: &str) -> Option<*const u8> {
         "luna_jit_table_set_int" => luna_jit_table_set_int as *const u8,
         "luna_jit_table_set_float_float" => luna_jit_table_set_float_float as *const u8,
         "luna_jit_table_set_raw" => luna_jit_table_set_raw as *const u8,
+        "luna_jit_table_reserve_list" => luna_jit_table_reserve_list as *const u8,
         "luna_jit_table_get_int" => luna_jit_table_get_int as *const u8,
         "luna_jit_table_get_float" => luna_jit_table_get_float as *const u8,
         "luna_jit_table_len" => luna_jit_table_len as *const u8,

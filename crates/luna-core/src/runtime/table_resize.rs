@@ -7,6 +7,9 @@ impl Table {
         if let Some(r) = self.rehash_append(heap, pending) {
             return r;
         }
+        if self.dialect() == Dialect::L55 {
+            return self.rehash_55(heap, pending);
+        }
         let mut nums = [0usize; 65];
         let mut int_keys = 0usize;
         let mut total = 1; // the pending key
@@ -138,6 +141,7 @@ impl Table {
         // Install the new array backing before anything reads it, so the JIT
         // never observes a stale pointer.
         self.asize = new_asize as u64;
+        self.reset_hints();
         if new_slab.is_null() {
             // SAFETY: exclusive &mut self; write through the cell to
             // stay on the raw-pointer access path (no &mut borrow of
@@ -208,7 +212,12 @@ impl Table {
             // this context, and its entries have been moved over
             unsafe { Self::free_slab(mem, old_slab, old_asize) };
         }
-        for i in 0..old_nodes_len {
+        // 5.1–5.3 put the old nodes back last to first, 5.4 / 5.5 first to
+        // last; the order decides which keys collide, and so when the
+        // table next rehashes
+        let backwards = self.dialect() <= Dialect::L53;
+        for j in 0..old_nodes_len {
+            let i = if backwards { old_nodes_len - 1 - j } else { j };
             // SAFETY: `i` is inside the old hash part, still allocated
             let n = unsafe { *old_nodes.add(i) };
             if !n.val.is_nil() {

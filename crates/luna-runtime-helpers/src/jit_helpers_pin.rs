@@ -18,20 +18,21 @@ unsafe impl Sync for PinnedFn {}
 /// static alive in the final object — which transitively pins each
 /// `luna_jit_*` symbol the static references.
 ///
-/// The number of entries (45) must match the number of
+/// The number of entries (48) must match the number of
 /// `pub unsafe extern "C" fn luna_jit_*` in
 /// `crates/luna-jit/src/jit_backend/mod.rs`. If luna-jit ever
-/// adds a 46th helper, this array must grow in lock-step
+/// adds a 47th helper, this array must grow in lock-step
 /// or AOT trace `.o`s referencing the new symbol will fail to
 /// link with `undefined reference to luna_jit_<new>`.
 #[used]
 #[unsafe(no_mangle)]
-static LUNA_AOT_HELPER_PIN: [PinnedFn; 45] = [
+static LUNA_AOT_HELPER_PIN: [PinnedFn; 48] = [
     PinnedFn(jb::luna_jit_new_table as AnyFn),
     PinnedFn(jb::luna_jit_new_table_sized as AnyFn),
     PinnedFn(jb::luna_jit_materialize_sunk_table as AnyFn),
     PinnedFn(jb::luna_jit_table_set_int as AnyFn),
     PinnedFn(jb::luna_jit_table_set_raw as AnyFn),
+    PinnedFn(jb::luna_jit_table_reserve_list as AnyFn),
     PinnedFn(jb::luna_jit_table_set_field as AnyFn),
     PinnedFn(jb::luna_jit_table_get_field as AnyFn),
     PinnedFn(jb::luna_jit_op_get_tab_up as AnyFn),
@@ -52,6 +53,8 @@ static LUNA_AOT_HELPER_PIN: [PinnedFn; 45] = [
     PinnedFn(jb::luna_jit_stack_tag as AnyFn),
     PinnedFn(jb::luna_jit_spill_to_stack as AnyFn),
     PinnedFn(jb::luna_jit_op_closure as AnyFn),
+    PinnedFn(jb::luna_jit_op_closure_in as AnyFn),
+    PinnedFn(jb::luna_jit_set_top as AnyFn),
     PinnedFn(jb::luna_jit_trace_materialize_frames as AnyFn),
     PinnedFn(jb::luna_jit_table_len as AnyFn),
     PinnedFn(jb::luna_jit_table_get_int_checked as AnyFn),
@@ -131,7 +134,9 @@ pub fn force_link_jit_helpers() -> usize {
         unsafe {
             let _ = jb::luna_jit_new_table();
             let _ = jb::luna_jit_new_table_sized(0);
+            jb::luna_jit_table_reserve_list(0, 0);
             let _ = jb::luna_jit_materialize_sunk_table(
+                0,
                 0,
                 std::ptr::null(),
                 std::ptr::null(),
@@ -169,6 +174,8 @@ pub fn force_link_jit_helpers() -> usize {
             let _ = jb::luna_jit_stack_tag(0);
             jb::luna_jit_spill_to_stack(0, 0, 0);
             let _ = jb::luna_jit_op_closure(0);
+            let _ = jb::luna_jit_op_closure_in(0, 0, 0);
+            jb::luna_jit_set_top(0);
             let _ = jb::luna_jit_trace_materialize_frames(0, std::ptr::null(), std::ptr::null());
             let _ = jb::luna_jit_table_len(0);
             let _ = jb::luna_jit_table_get_int_checked(0, 0, 0, std::ptr::null_mut());
