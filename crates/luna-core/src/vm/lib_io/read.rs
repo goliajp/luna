@@ -61,10 +61,28 @@ pub(super) fn g_read(
     fmts: &[Value],
     argno0: u32,
 ) -> Result<ReadOut, LuaError> {
-    // stdio needs a flush between writing and reading the same stream
+    if u.crt.is_some() {
+        crt::begin_read(vm, u);
+        let r = g_read_formats(vm, u, fmts, argno0)?;
+        return Ok(if crt::ferror(u) {
+            ReadOut::Error(crt::error())
+        } else {
+            r
+        });
+    }
+    // glibc's stdio flushes between writing and reading the same stream
     if let Err(e) = drain_write_buf(u) {
         return Ok(ReadOut::Error(e));
     }
+    g_read_formats(vm, u, fmts, argno0)
+}
+
+fn g_read_formats(
+    vm: &mut Vm,
+    u: Gc<Userdata>,
+    fmts: &[Value],
+    argno0: u32,
+) -> Result<ReadOut, LuaError> {
     if fmts.is_empty() {
         return Ok(match read_line(vm, u, false) {
             Ok(v) => ReadOut::Values(vec![v]),
@@ -211,8 +229,8 @@ fn read_str(vm: &mut Vm, bytes: &[u8]) -> std::io::Result<Value> {
 
 /// `read_all`: never fails (an empty string at end of file).
 fn read_all(vm: &mut Vm, u: Gc<Userdata>) -> std::io::Result<Value> {
-    if u.text.is_some() {
-        let buf = read_all_text(vm.version(), u)?;
+    if u.crt.is_some() {
+        let buf = read_all_crt(vm.version(), u);
         return read_str(vm, &buf);
     }
     let mut buf = Vec::new();
@@ -228,7 +246,7 @@ fn read_all(vm: &mut Vm, u: Gc<Userdata>) -> std::io::Result<Value> {
 }
 
 /// `LUAL_BUFFERSIZE` of PUC built for 64-bit Windows.
-fn lual_buffersize(v: LuaVersion) -> usize {
+pub(super) fn lual_buffersize(v: LuaVersion) -> usize {
     match v {
         LuaVersion::Lua51 | LuaVersion::Lua52 => 512,
         LuaVersion::Lua53 => 8192,
@@ -236,20 +254,21 @@ fn lual_buffersize(v: LuaVersion) -> usize {
     }
 }
 
-/// Each dialect's `read_all` over a text mode stream, whose `fread` calls
-/// decide what stays in the stream buffer (and so what `seek` reports).
-fn read_all_text(v: LuaVersion, u: Gc<Userdata>) -> std::io::Result<Vec<u8>> {
+/// Each dialect's `read_all` over the C library's `FILE`, whose `fread`
+/// calls decide what stays in the stream buffer (and so what `seek`
+/// reports).
+fn read_all_crt(v: LuaVersion, u: Gc<Userdata>) -> Vec<u8> {
     if v == LuaVersion::Lua51 {
         return read_chars_51(u, usize::MAX);
     }
     let mut rlen = lual_buffersize(v);
     let mut out = Vec::new();
     loop {
-        let got = text_mode::fread(u, rlen)?;
+        let got = crt::fread(u, rlen);
         let short = got.len() < rlen;
         out.extend_from_slice(&got);
         if short {
-            return Ok(out);
+            return out;
         }
         // 5.2 doubles its buffer on every round
         if v == LuaVersion::Lua52 {
@@ -259,17 +278,17 @@ fn read_all_text(v: LuaVersion, u: Gc<Userdata>) -> std::io::Result<Vec<u8>> {
 }
 
 /// 5.1's `read_chars`: `fread` in `LUAL_BUFFERSIZE` chunks.
-fn read_chars_51(u: Gc<Userdata>, mut n: usize) -> std::io::Result<Vec<u8>> {
+fn read_chars_51(u: Gc<Userdata>, mut n: usize) -> Vec<u8> {
     let mut rlen = lual_buffersize(LuaVersion::Lua51);
     let mut out = Vec::new();
     loop {
         rlen = rlen.min(n);
-        let got = text_mode::fread(u, rlen)?;
+        let got = crt::fread(u, rlen);
         n -= got.len();
         let full = got.len() == rlen;
         out.extend_from_slice(&got);
         if n == 0 || !full {
-            return Ok(out);
+            return out;
         }
     }
 }
@@ -298,16 +317,16 @@ fn read_count(vm: &mut Vm, u: Gc<Userdata>, n: i64) -> Result<std::io::Result<Va
             _ => vm.plain_err("not enough memory"),
         });
     }
-    if u.text.is_some() {
+    if u.crt.is_some() {
         let got = if vm.version() == LuaVersion::Lua51 {
             read_chars_51(u, size.min(usize::MAX as u64) as usize)
         } else {
-            text_mode::fread(u, size as usize)
+            crt::fread(u, size as usize)
         };
-        return Ok(match got {
-            Ok(b) if b.is_empty() => Ok(Value::Nil),
-            Ok(b) => read_str(vm, &b),
-            Err(e) => Err(e),
+        return Ok(if got.is_empty() {
+            Ok(Value::Nil)
+        } else {
+            read_str(vm, &got)
         });
     }
     let mut buf = Vec::new();

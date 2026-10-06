@@ -264,17 +264,37 @@ impl Heap {
             kind: crate::vm::exec::native_call::NativeKind::of(f),
         });
         if fix {
-            // SAFETY: `adopt` just linked `g` at the head of `all`. PUC `luaC_fix`:
-            // onto `fixed`, gray, so marking, barriers and weak tables skip it
-            unsafe {
-                let h = g.as_ptr() as *mut GcHeader;
-                self.all = (*h).next;
-                (*h).next = self.fixed;
-                (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
-                self.fixed = h;
-            }
+            // SAFETY: `adopt` just linked `g` at the head of `all`
+            unsafe { self.fix_newest(g.as_ptr() as *mut GcHeader) };
         }
         g
+    }
+
+    /// PUC `luaC_fix`: move `h` from the head of `all` onto `fixed`, gray, so
+    /// marking, barriers and weak tables skip it and only the heap's drop
+    /// frees it.
+    ///
+    /// # Safety
+    /// `h` is the object at the head of `all`.
+    unsafe fn fix_newest(&mut self, h: *mut GcHeader) {
+        debug_assert!(self.all == h);
+        // SAFETY: the caller's contract: `h` is a live object, first on `all`
+        unsafe {
+            self.all = (*h).next;
+            (*h).next = self.fixed;
+            (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
+        }
+        self.fixed = h;
+    }
+
+    /// Make the fixed "not enough memory" string memory errors carry (PUC
+    /// `luaS_init` makes `memerrmsg` first thing and fixes it).
+    pub(super) fn make_memerr(&mut self) {
+        let s = self.intern(b"not enough memory");
+        // SAFETY: a new heap's first string was linked at the head of `all`
+        // by the intern just above
+        unsafe { self.fix_newest(s.as_ptr() as *mut GcHeader) };
+        self.mem_ctx().set_memerr(s);
     }
 
     /// Like [`Heap::new_native`] but tags the
@@ -351,6 +371,15 @@ impl Heap {
         ))
     }
 
+    /// Recolour the dead-white `h` to the current white, out of line: the
+    /// hot path of [`Self::intern`] only tests the colour, and inlined, this
+    /// cold store made it keep `self` on the stack.
+    #[cold]
+    #[inline(never)]
+    fn resurrect(&self, h: &mut GcHeader) {
+        h.flags = h.with_slow((h.flags & !WHITE_BITS) | self.current_white);
+    }
+
     /// Create (or find) a string. Short strings (≤ 40 bytes) are interned.
     pub fn intern(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
         if bytes.len() <= string::MAX_SHORT_LEN {
@@ -380,8 +409,7 @@ impl Heap {
                 unsafe {
                     let f = (*(p as *mut GcHeader)).flags;
                     if is_white(f) && (f & self.current_white) == 0 {
-                        (*(p as *mut GcHeader)).flags = (*(p as *mut GcHeader))
-                            .with_slow((f & !WHITE_BITS) | self.current_white);
+                        self.resurrect(&mut *(p as *mut GcHeader));
                     }
                 }
             }

@@ -95,7 +95,7 @@ mod send_jit_module;
 mod trace_backend;
 use getupval_roles::determine_getupval_roles;
 #[cfg(feature = "llvm-jit")]
-pub use llvm_backend::LlvmBackend;
+pub use llvm_backend::{LLVM_AFTER, LlvmBackend};
 use math_fold::try_match_math_fold;
 #[allow(unused_imports)]
 pub use send_jit_module::SendJitModule;

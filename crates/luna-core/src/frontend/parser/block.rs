@@ -39,19 +39,19 @@ impl<'s> Parser<'s> {
             }
             if self.tok.tok == Token::Return {
                 let s = self.return_stat()?;
-                self.stk.stats.push(s);
+                self.stk.stats.push_or_abort(s);
                 break;
             }
             if self.tok.tok == Token::Break && self.version.break_is_last_statement() {
                 let line = self.tok.line;
                 self.break_stat()?;
                 let s = self.push_stat(Stat::Break { line });
-                self.stk.stats.push(s);
+                self.stk.stats.push_or_abort(s);
                 self.accept(Token::Semi)?;
                 break;
             }
             if let Some(s) = self.statement()? {
-                self.stk.stats.push(s);
+                self.stk.stats.push_or_abort(s);
             }
             if !self.version.has_empty_statement() {
                 // 5.1: ';' is a separator after a statement, not a statement
@@ -163,7 +163,7 @@ impl<'s> Parser<'s> {
     pub(super) fn set_stat_line(&mut self, sid: StatId, line: u32) {
         let idx = sid.0 as usize;
         if self.chunk.stat_lines.len() <= idx {
-            self.chunk.stat_lines.resize(idx + 1, 0);
+            self.chunk.stat_lines.resize_or_abort(idx + 1, 0);
         }
         self.chunk.stat_lines[idx] = line;
     }
@@ -236,14 +236,17 @@ impl<'s> Parser<'s> {
     /// which 5.5 reports at the line of the last token consumed.
     pub(super) fn goto_step(
         &mut self,
-        step: impl FnOnce(&mut GotoCheck) -> Result<(), String>,
+        step: impl FnOnce(&mut GotoCheck) -> Result<(), GotoErr>,
     ) -> Result<(), SyntaxError> {
         match self.gotos.as_mut().map(step) {
-            Some(Err(msg)) if self.version >= LuaVersion::Lua55 => Err(SyntaxError {
-                line: self.last_line,
-                msg: msg.into_bytes(),
-            }),
-            Some(Err(msg)) => Err(self.plain_error(msg)),
+            Some(Err(GotoErr::Mem(o))) => Err(o.into()),
+            Some(Err(GotoErr::Text(msg))) if self.version >= LuaVersion::Lua55 => {
+                Err(SyntaxError {
+                    line: self.last_line,
+                    msg: msg.into_bytes(),
+                })
+            }
+            Some(Err(GotoErr::Text(msg))) => Err(self.plain_error(msg)),
             _ => Ok(()),
         }
     }

@@ -259,6 +259,30 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
         vm.jit.trace_hot_threshold = n;
         vm.jit.call_hot_threshold = n;
     }
+    // Test knob, also left out of --help: with the LLVM backend, how long a
+    // hot trace runs Cranelift's code before LLVM compiles it (0: LLVM at
+    // once, before the trace runs on)
+    #[cfg(feature = "llvm-jit")]
+    if !opts.no_jit
+        && std::env::var("LUNA_JIT_BACKEND").as_deref() == Ok("llvm")
+        && let Some(ms) = std::env::var("LUNA_LLVM_AFTER_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+    {
+        let llvm_after = (ms > 0).then(|| std::time::Duration::from_millis(ms));
+        luna_jit::install_llvm_backend_with(
+            &mut vm,
+            luna_jit::jit_backend::LlvmBackend { llvm_after },
+        );
+    }
+    // Test knob, also left out of --help: move a trace to the optimizing
+    // tier after N loop iterations and entries (0: never)
+    if let Some(n) = std::env::var("LUNA_TIER_UP_AT")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        vm.set_trace_tier_up_at(n);
+    }
     vm
 }
 
@@ -357,7 +381,8 @@ fn main() {
     // lua.c closes the state before it exits, which finalizes open files
     // and so writes out what they still buffer
     drop(interp);
-    // C's exit flushes stdout
+    // C's exit flushes stdout (and stderr, if setvbuf buffered it)
     let _ = luna_core::stdio::flush_stdout();
+    let _ = luna_core::stdio::flush_stderr();
     std::process::exit(if ok { 0 } else { 1 });
 }

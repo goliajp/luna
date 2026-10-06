@@ -215,22 +215,21 @@ impl Masm for X64 {
                 mov(self, d, a);
                 self.op(&[], wide, &[0xD3], ext, Rm::Reg(d), false);
             }
-            Alu::Sdiv | Alu::Udiv => {
+            Alu::Sdiv | Alu::Umulhi => {
                 self.mov(RAX, a);
+                // sign-extend rax into rdx for idiv; mul overwrites rdx
                 if op == Alu::Sdiv {
                     if wide {
                         self.code.push(0x48);
                     }
                     self.code.push(0x99);
-                } else {
-                    self.op(&[], false, &[0x31], RDX, Rm::Reg(RDX), false);
                 }
-                let ext = if op == Alu::Sdiv { 7 } else { 6 };
+                let (ext, r) = if op == Alu::Sdiv { (7, RAX) } else { (4, RDX) };
                 self.op(&[], wide, &[0xF7], ext, Rm::Reg(b), false);
                 if wide {
-                    self.mov(d, RAX);
+                    self.mov(d, r);
                 } else {
-                    self.mov32(d, RAX);
+                    self.mov32(d, r);
                 }
             }
         }
@@ -273,7 +272,7 @@ impl Masm for X64 {
                 self.op(&[], wide, &[0x69], d, Rm::Reg(a), false);
                 self.imm32(v);
             }
-            Alu::Sdiv | Alu::Udiv => return false,
+            Alu::Sdiv | Alu::Umulhi => return false,
         }
         true
     }

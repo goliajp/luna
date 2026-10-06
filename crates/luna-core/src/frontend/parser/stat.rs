@@ -11,7 +11,7 @@ impl<'s> Parser<'s> {
         let then_line = self.tok.line;
         self.expect(Token::Then, "then")?;
         let body = self.block()?;
-        self.stk.arms.push(IfArm {
+        self.stk.arms.push_or_abort(IfArm {
             cond,
             then_line,
             body,
@@ -22,7 +22,7 @@ impl<'s> Parser<'s> {
             let then_line = self.tok.line;
             self.expect(Token::Then, "then")?;
             let body = self.block()?;
-            self.stk.arms.push(IfArm {
+            self.stk.arms.push_or_abort(IfArm {
                 cond,
                 then_line,
                 body,
@@ -87,10 +87,10 @@ impl<'s> Parser<'s> {
             }
             Token::Comma | Token::In => {
                 let mark = self.stk.names.len();
-                self.stk.names.push(first);
+                self.stk.names.push_or_abort(first);
                 while self.accept(Token::Comma)? {
                     let n = self.expect_name()?;
-                    self.stk.names.push(n);
+                    self.stk.names.push_or_abort(n);
                 }
                 let vars = finish(&mut self.chunk, &mut self.stk.names, mark);
                 self.expect(Token::In, "in")?;
@@ -120,7 +120,7 @@ impl<'s> Parser<'s> {
         let mark = self.stk.names.len();
         while self.accept(Token::Dot)? {
             let n = self.expect_name()?;
-            self.stk.names.push(n);
+            self.stk.names.push_or_abort(n);
         }
         let path = finish(&mut self.chunk, &mut self.stk.names, mark);
         let method = if self.accept(Token::Colon)? {
@@ -168,7 +168,7 @@ impl<'s> Parser<'s> {
             let name = self.expect_name()?;
             self.new_local()?;
             let attrib = self.attrib()?;
-            self.stk.attribs.push(AttribName { name, attrib });
+            self.stk.attribs.push_or_abort(AttribName { name, attrib });
             if !self.accept(Token::Comma)? {
                 break;
             }
@@ -231,7 +231,7 @@ impl<'s> Parser<'s> {
         loop {
             let name = self.expect_name()?;
             let attrib = self.attrib()?;
-            self.stk.attribs.push(AttribName { name, attrib });
+            self.stk.attribs.push_or_abort(AttribName { name, attrib });
             if !self.accept(Token::Comma)? {
                 break;
             }
@@ -274,7 +274,7 @@ impl<'s> Parser<'s> {
         // PUC `assignment`/`restassign` check each target as soon as it is
         // parsed, so the near-token is the one following that target.
         let mark = self.stk.exprs.len();
-        self.stk.exprs.push(first);
+        self.stk.exprs.push_or_abort(first);
         let mut entered = 0;
         loop {
             let last = *self.stk.exprs.last().expect("one target");
@@ -307,7 +307,7 @@ impl<'s> Parser<'s> {
             // entering a level that stays entered until the statement ends.
             let nvars = (self.stk.exprs.len() - mark) as u32;
             let t = self.suffixed_expr()?;
-            self.stk.exprs.push(t);
+            self.stk.exprs.push_or_abort(t);
             match self.version {
                 LuaVersion::Lua51 => {
                     let limit = MAX_DEPTH.saturating_sub(self.depth);

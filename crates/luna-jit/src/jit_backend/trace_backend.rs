@@ -29,6 +29,10 @@ impl TraceCompiler for CraneliftBackend {
         trace::last_compile_checkpoint()
     }
 
+    fn last_compile_op(&self) -> Option<usize> {
+        trace::last_op_index()
+    }
+
     fn tier_up(
         &self,
         storage: &mut dyn luna_core::jit::JitStorage,
@@ -43,5 +47,25 @@ impl TraceCompiler for CraneliftBackend {
         req: &luna_core::jit::trace::AdoptRequest<'_>,
     ) -> Vec<luna_core::jit::trace::AdoptedTrace> {
         trace::adopt_traces(storage, req)
+    }
+
+    fn failure_known(
+        &self,
+        storage: &mut dyn luna_core::jit::JitStorage,
+        record: &TraceRecord,
+        opts: CompileOptions,
+        version: luna_core::version::LuaVersion,
+    ) -> u32 {
+        trace::share_failures::failure_known(storage, record, opts, version)
+    }
+
+    fn publish_failure(
+        &self,
+        storage: &mut dyn luna_core::jit::JitStorage,
+        record: &TraceRecord,
+        opts: CompileOptions,
+        version: luna_core::version::LuaVersion,
+    ) {
+        trace::share_failures::publish_failure(storage, record, opts, version)
     }
 }

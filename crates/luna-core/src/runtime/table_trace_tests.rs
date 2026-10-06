@@ -42,6 +42,8 @@ fn with_mode(heap: &mut Heap, t: Gc<Table>, mode: &[u8]) {
 #[test]
 fn strong_table_marks_every_collectable_slot() {
     let mut heap = Heap::new();
+    // the fixed "not enough memory" string is never collected
+    let base = heap.live_objects();
     let globals = heap.new_table();
     let t = heap.new_table_sized(8);
     // array part: every kind, a light userdata, a number
@@ -64,7 +66,7 @@ fn strong_table_marks_every_collectable_slot() {
     assert_eq!(heap.collect(&[Value::Table(t), Value::Table(globals)]), 0);
     assert_eq!(heap.live_objects(), live);
     // the coroutines keep `globals`; without them nothing survives
-    assert_eq!(heap.collect(&[]), live);
+    assert_eq!(heap.collect(&[]), live - base);
 }
 
 #[test]
@@ -141,6 +143,8 @@ fn ephemeron_table_marks_values_of_live_keys_only() {
 #[test]
 fn native_upvalues_are_marked_through_a_table() {
     let mut heap = Heap::new();
+    // the fixed "not enough memory" string is never collected
+    let base = heap.live_objects();
     let t = heap.new_table();
     let up = heap.new_table();
     let s = heap.intern(b"an upvalue string long enough not to be interned at all");
@@ -151,5 +155,5 @@ fn native_upvalues_are_marked_through_a_table() {
     let live = heap.live_objects();
     assert_eq!(heap.collect(&[Value::Table(t)]), 0);
     assert_eq!(heap.live_objects(), live);
-    assert_eq!(heap.collect(&[]), live);
+    assert_eq!(heap.collect(&[]), live - base);
 }
