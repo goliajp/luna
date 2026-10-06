@@ -273,8 +273,10 @@ impl Heap {
     }
 
     /// Whether no string has been interned yet.
-    pub(crate) fn strings_is_empty(&self) -> bool {
-        self.strings.is_empty()
+    /// Hash the interned strings again with `seed` and the dialect's
+    /// function.
+    pub(crate) fn rehash_strings(&mut self, seed: u32) {
+        self.strings.rehash(seed, self.hash51);
     }
 
     /// The seed strings are hashed with.

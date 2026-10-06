@@ -28,10 +28,11 @@ impl Vm {
         heap.no_ephemeron = version <= LuaVersion::Lua51;
         heap.signed_zero_keys = version <= LuaVersion::Lua52;
         heap.table_dialect = crate::runtime::table::Dialect::of(version);
-        // strings made before this would sit in the string table by the
-        // other hash
-        debug_assert!(heap.strings_is_empty());
+        // the strings the heap made before it knew the dialect (its fixed
+        // memory error message) move to the dialect's hash
         heap.hash51 = version == LuaVersion::Lua51;
+        let seed = heap.seed();
+        heap.rehash_strings(seed);
         // PUC 5.3 needs two GC cycles to finalize a table caught in a
         // coroutine reference cycle (gc.lua :502); 5.4+ rewrote the GC and
         // finalize in a single cycle (5.4/5.5 gc.lua :544 assert exactly one).

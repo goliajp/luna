@@ -224,10 +224,6 @@ impl StringTable {
         StringTable { buckets, count: 0 }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.count == 0
-    }
-
     /// Find or create an interned short string. Returns `(ptr, newly_created)`.
     #[inline]
     pub(crate) fn intern(
@@ -292,6 +288,43 @@ impl StringTable {
             }
         }
         self.buckets = nb;
+    }
+
+    /// Hash every interned string again, by PUC 5.1's function when `h51`
+    /// and the seeded one otherwise, and chain it in its new bucket: for
+    /// the few strings a heap makes before its dialect is known.
+    pub(crate) fn rehash(&mut self, seed: u32, h51: bool) {
+        let mut all = ptr::null_mut::<LuaStr>();
+        for head in self.buckets.iter_mut() {
+            let mut cur = std::mem::replace(head, ptr::null_mut());
+            while !cur.is_null() {
+                // SAFETY: the bucket chains hold only interned strings that are still allocated (see `grow`)
+                unsafe {
+                    let next = (*cur).hnext;
+                    (*cur).hnext = all;
+                    all = cur;
+                    cur = next;
+                }
+            }
+        }
+        let mask = self.buckets.len() - 1;
+        while !all.is_null() {
+            // SAFETY: as above; each string is moved from `all` to one chain
+            unsafe {
+                let next = (*all).hnext;
+                let b = bytes_of(all);
+                let h = if h51 {
+                    lua_hash_51(b)
+                } else {
+                    lua_hash(b, seed)
+                };
+                (*all).hash.set(h);
+                let i = h as usize & mask;
+                (*all).hnext = self.buckets[i];
+                self.buckets[i] = all;
+                all = next;
+            }
+        }
     }
 
     /// Unlink a dying interned string (called from sweep).
