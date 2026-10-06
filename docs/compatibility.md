@@ -145,9 +145,21 @@ These rules hold in the interpreter, in compiled traces and in luna-aot
 binaries; on Windows they were checked against PUC 5.1–5.5 built with MSVC (`tostring`,
 `string.format`, `%`, `math.fmod`, with the JIT on and off).
 
-One difference remains on Windows: PUC's `print` ends each line with
-`\r\n`, because the C library's stdout is in text mode; luna's ends it
-with `\n`.
+On Windows `lua.exe` reads and writes through the MSVC C library in text
+mode, and the `luna` command does the same: standard output, standard
+error and standard input, and every file opened without `b` (`io.open`,
+`io.lines`, `io.input`, `io.output`, `io.popen`, and the source files
+`loadfile`, `dofile` and `require` read). `\n` is written as `\r\n`;
+`\r\n` reads as `\n`; a Ctrl+Z ends the input; opening a file with `+`
+drops a Ctrl+Z at its end; and `seek` reports the position that library's
+`ftell` computes, which for a file whose lines end in a bare `\n` is not
+the true one (it can come out negative, and then `seek` fails). Files
+opened with `b`, `io.tmpfile()`, and everything on other platforms are
+not translated. An embedding host gets this only by calling
+`Vm::set_crt_text_mode(true)`; standard output, standard error and
+standard input are put in text mode by `luna_core::stdio::use_c_stdout`,
+which a host normally does not call. The `luna` command's output was
+compared byte for byte with PUC 5.1–5.5 built with MSVC.
 
 `io` and `os` share a single opener because they share a threat model:
 either the host is giving the script filesystem and process access or it
@@ -237,8 +249,10 @@ Differences from PUC:
   buffer at once instead of when the string is collected.
 - `lua_dump` calls the writer once per block, as PUC's dumper of the
   dialect does; the sizes of the blocks that hold code, constants and
-  line information follow the code luna's compiler made, which is not
-  always the same as PUC's (for example, the code for `2^53` differs).
+  line information follow the code luna's compiler made. It is PUC's code
+  for the constant expressions checked against `luac -l` (folded and
+  unfolded arithmetic on numerals, in every dialect), but it is not the
+  same as PUC's for every program.
 - 5.1 `lua_setfenv` stores an environment only for Lua functions with an
   environment upvalue, threads and userdata made through the C API;
   `lua_setlevel` does nothing.
@@ -287,7 +301,7 @@ produces. MacroLua has no PUC format; its `string.dump` writes luna's own.
 ### luna's own dumps
 
 `luna_core::vm::dump::dump` (used by `luna-aot`) writes luna's own binary
-format: the running dialect's PUC header, then a `"\x00LunaV1\x00"`
+format: the running dialect's PUC header, then a `"\x00LunaV2\x00"`
 sentinel and a body in luna's 65-op instruction set. It loads back into
 luna, not into PUC.
 
@@ -429,9 +443,17 @@ messages. What still differs does so on purpose:
   cycle. luna's collector is its own, so this follows luna's progress,
   not PUC's. Everything else about `collectgarbage` — options per
   dialect, return shapes, how parameters read back — matches.
+- **`#t` on a table with holes** returns the border the dialect's PUC
+  returns, given the same construction history (constructors, stores,
+  removals, `table.insert` / `table.remove`, and in 5.4 the indexing that
+  moves its length hint). Where PUC's own answer changes from run to run,
+  luna's is one of PUC's answers: PUC 5.5 searches the hash part with
+  random steps drawn from a per-state seed (luna draws them from the
+  table's address), and from 5.2 on a
+  table holding strings, tables or functions as keys is sized by hashes
+  PUC seeds per run.
 - **Implementation-internal values** that the manual leaves open or that
-  expose the compiler: `#t` on a table with holes may pick a different
-  border; `debug.getlocal` past the declared locals reads temporaries
+  expose the compiler: `debug.getlocal` past the declared locals reads temporaries
   whose contents depend on register allocation; a C function's
   return-hook `ftransfer` depends on its own stack use.
 - **Compile-time limit errors have no `near` token** ("too many

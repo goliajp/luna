@@ -105,6 +105,10 @@ thread_local! {
         const { std::cell::Cell::new("not-entered") };
     pub(crate) static LAST_OP_ID: std::cell::Cell<u8> =
         const { std::cell::Cell::new(255) };
+    /// The index in the recording of the op `LAST_OP_ID` names
+    /// (`usize::MAX`: none yet).
+    pub(crate) static LAST_OP_IDX: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(usize::MAX) };
     // counter bumped exactly once per
     // `lower_trace_into_named` invocation that successfully declares
     // the depth-relative `base_var` scaffold. Used by the regression
@@ -127,6 +131,19 @@ pub(super) fn checkpoint(s: &'static str) {
 
 pub(super) fn set_last_op_id(id: u8) {
     LAST_OP_ID.with(|c| c.set(id));
+}
+
+/// The lowerer is at op `idx` of the recording, of opcode `id`.
+pub(super) fn set_last_op(idx: usize, id: u8) {
+    set_last_op_id(id);
+    LAST_OP_IDX.with(|c| c.set(idx));
+}
+
+/// The index in the recording of the op the lowerer last checked or
+/// emitted on this thread, if it got to one since [`plan_trace`] began.
+#[doc(hidden)]
+pub fn last_op_index() -> Option<usize> {
+    Some(LAST_OP_IDX.with(|c| c.get())).filter(|&i| i != usize::MAX)
 }
 
 /// Name of the lowerer checkpoint most recently reached on this thread.
@@ -237,7 +254,10 @@ pub(super) fn trace_isa() -> Option<cranelift_codegen::isa::OwnedTargetIsa> {
 /// The address of a Rust helper trace code calls.
 pub(super) fn trace_helper(name: &str) -> Option<*const u8> {
     Some(match name {
-        "luna_jit_new_table" => crate::jit_backend::luna_jit_new_table as *const u8,
+        "luna_jit_new_table_sized" => crate::jit_backend::luna_jit_new_table_sized as *const u8,
+        "luna_jit_table_reserve_list" => {
+            crate::jit_backend::luna_jit_table_reserve_list as *const u8
+        }
         "luna_jit_table_set_int_checked" => {
             crate::jit_backend::luna_jit_table_set_int_checked as *const u8
         }
@@ -278,6 +298,8 @@ pub(super) fn trace_helper(name: &str) -> Option<*const u8> {
             crate::jit_backend::luna_jit_materialize_sunk_table as *const u8
         }
         "luna_jit_op_closure" => crate::jit_backend::luna_jit_op_closure as *const u8,
+        "luna_jit_op_closure_in" => crate::jit_backend::luna_jit_op_closure_in as *const u8,
+        "luna_jit_set_top" => crate::jit_backend::luna_jit_set_top as *const u8,
         "luna_jit_spill_to_stack" => crate::jit_backend::luna_jit_spill_to_stack as *const u8,
         "luna_jit_op_close" => crate::jit_backend::luna_jit_op_close as *const u8,
         "luna_jit_op_tforcall" => crate::jit_backend::luna_jit_op_tforcall as *const u8,

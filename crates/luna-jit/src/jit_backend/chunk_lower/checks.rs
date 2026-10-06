@@ -28,7 +28,7 @@ pub(super) fn presize_hints(
     // matches; arbitrary loop bodies after ForPrep don't affect the
     // pattern (we only inspect the four ops between NewTable and
     // ForPrep, inclusive).
-    for &(prep_pc, _, step_imm) in for_loops {
+    for &(prep_pc, loop_pc, step_imm) in for_loops {
         if step_imm != 1 || prep_pc < 4 {
             continue;
         }
@@ -77,9 +77,53 @@ pub(super) fn presize_hints(
         if limit_val <= 0 || limit_val > (1 << 27) {
             continue;
         }
-        presize_for_newtable.insert(nt_pc, limit_val);
+        if !fills_every_slot(proto, &code[prep_pc + 1..loop_pc], nt.a(), fp.a() + 3) {
+            continue;
+        }
+        // filling `1..=N` in order leaves a table PUC sized by doubling:
+        // an array part of the next power of two, no hash part. Sizing it
+        // so at once is the same table, and nothing in the body sees the
+        // difference on the way
+        presize_for_newtable.insert(
+            nt_pc,
+            pow2_array_ops((limit_val as u64).next_power_of_two()),
+        );
     }
     presize_for_newtable
+}
+
+/// Packed `NewTable` operands (see `pack_table_ops`) for an array part of
+/// `n`, a power of two, and no hash part: the 5.1–5.3 floating point byte
+/// form, which holds any power of two exactly.
+fn pow2_array_ops(n: u64) -> i64 {
+    debug_assert!(n.is_power_of_two());
+    let m = n.trailing_zeros() as i64;
+    let fb = if n < 8 { n as i64 } else { (m - 2) << 3 };
+    fb | 1 << 16
+}
+
+/// Whether a loop body only stores a non-nil value at `t[ivar]`: either
+/// `t[i] = i`, or `t[i] = k` with `k` a number loaded just before. Nothing
+/// else runs, so the body cannot fail or look at `t` part way through.
+fn fills_every_slot(proto: Gc<Proto>, body: &[Inst], t: u32, ivar: u32) -> bool {
+    let store = |i: &Inst, v: u32| {
+        i.op() == Op::SetTable && i.a() == t && i.b() == ivar && i.c() == v && !i.k()
+    };
+    match body {
+        [st] => store(st, ivar),
+        [ld, st] if ld.a() != t && ld.a() != ivar => {
+            let number = match ld.op() {
+                Op::LoadI | Op::LoadF => true,
+                Op::LoadK => matches!(
+                    proto.consts.get(ld.bx() as usize),
+                    Some(LuaValue::Int(_) | LuaValue::Float(_))
+                ),
+                _ => false,
+            };
+            number && store(st, ld.a())
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn check_fold_blocks(scan: &ChunkScan) -> Option<()> {

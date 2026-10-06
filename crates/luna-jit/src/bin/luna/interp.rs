@@ -25,8 +25,8 @@ impl Interp {
         let msg = msg.split(|&b| b == 0).next().unwrap_or_default();
         line.extend_from_slice(msg);
         line.push(b'\n');
-        let mut err = std::io::stderr().lock();
-        let _ = err.write_all(&line); // nowhere left to report a failed write
+        // nowhere left to report a failed write
+        let _ = luna_core::stdio::write_stderr(&line);
     }
 
     /// `lua.c`'s `report` of each dialect, for a chunk that failed with

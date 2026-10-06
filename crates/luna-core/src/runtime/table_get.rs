@@ -23,11 +23,27 @@ impl Table {
         }
     }
 
+    /// The array slot of integer key `i`, if the array part has one. An
+    /// index past `alimit` (only a 5.4 table's can be) raises it, as PUC
+    /// 5.4 `luaH_getint` does.
+    #[inline(always)]
+    pub(crate) fn array_index(&self, i: i64) -> Option<usize> {
+        let idx = (i as u64).wrapping_sub(1);
+        if idx < u64::from(self.alimit.get()) {
+            return Some(idx as usize);
+        }
+        if idx < self.asize {
+            self.alimit.set(i as u32);
+            return Some(idx as usize);
+        }
+        None
+    }
+
     /// Integer-keyed variant of [`Self::get`].
     #[inline]
     pub fn get_int(&self, i: i64) -> Value {
-        if i >= 1 && (i as u64) <= self.asize() as u64 {
-            return self.aget(i as usize - 1);
+        if let Some(idx) = self.array_index(i) {
+            return self.aget(idx);
         }
         self.get_hash(Value::Int(i))
     }
@@ -140,11 +156,5 @@ impl Table {
             }
             idx = n.next as usize;
         }
-    }
-
-    #[inline]
-    pub(super) fn main_position(&self, k: Value) -> usize {
-        debug_assert!(!self.nodes().is_empty());
-        hash_key(k) as usize & (self.nodes().len() - 1)
     }
 }

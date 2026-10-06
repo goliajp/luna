@@ -133,6 +133,25 @@ pub(crate) fn lua_hash(bytes: &[u8], seed: u32) -> u32 {
     h
 }
 
+/// PUC 5.1 `luaS_newlstr`'s hash: seeded with the length, not per run, and
+/// on a long string only every `len / 32 + 1`-th byte from the end. 5.1
+/// places string keys by it, so a 5.1 state uses it to place them as PUC
+/// does.
+pub(crate) fn lua_hash_51(bytes: &[u8]) -> u32 {
+    let l = bytes.len();
+    let mut h = l as u32;
+    let step = (l >> 5) + 1;
+    let mut l1 = l;
+    while l1 >= step {
+        h ^= h
+            .wrapping_shl(5)
+            .wrapping_add(h >> 2)
+            .wrapping_add(u32::from(bytes[l1 - 1]));
+        l1 -= step;
+    }
+    h
+}
+
 /// Longest string a `LuaStr` can describe (its length is a `u32`). Code
 /// that builds a string from script-controlled pieces checks against it.
 pub(crate) const MAX_LEN: usize = u32::MAX as usize;
@@ -170,9 +189,15 @@ fn alloc_str(mem: MemRef, bytes: &[u8], short: bool, hash: u32, hashed: bool) ->
     }
 }
 
-pub(crate) fn alloc_long(mem: MemRef, bytes: &[u8], seed: u32) -> *mut LuaStr {
+/// A long string: hashed when first used as a key, or at once with PUC
+/// 5.1's hash (`h51`).
+pub(crate) fn alloc_long(mem: MemRef, bytes: &[u8], seed: u32, h51: bool) -> *mut LuaStr {
     debug_assert!(bytes.len() > MAX_SHORT_LEN);
-    alloc_str(mem, bytes, false, seed, false)
+    if h51 {
+        alloc_str(mem, bytes, false, lua_hash_51(bytes), true)
+    } else {
+        alloc_str(mem, bytes, false, seed, false)
+    }
 }
 
 /// SAFETY: `p` must come from `alloc_str` on `mem` and not be freed twice.
@@ -199,11 +224,25 @@ impl StringTable {
         StringTable { buckets, count: 0 }
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
     /// Find or create an interned short string. Returns `(ptr, newly_created)`.
     #[inline]
-    pub(crate) fn intern(&mut self, mem: MemRef, bytes: &[u8], seed: u32) -> (*mut LuaStr, bool) {
+    pub(crate) fn intern(
+        &mut self,
+        mem: MemRef,
+        bytes: &[u8],
+        seed: u32,
+        h51: bool,
+    ) -> (*mut LuaStr, bool) {
         debug_assert!(bytes.len() <= MAX_SHORT_LEN);
-        let h = lua_hash(bytes, seed);
+        let h = if h51 {
+            lua_hash_51(bytes)
+        } else {
+            lua_hash(bytes, seed)
+        };
         let b = h as usize & (self.buckets.len() - 1);
         let mut cur = self.buckets[b];
         // SAFETY: `self.as_ptr()` is the start of this `LuaStr`'s header which was allocated with the trailing bytes / hash fields in the same allocation by `StringTable::intern`.

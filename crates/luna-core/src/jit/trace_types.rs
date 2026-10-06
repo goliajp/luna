@@ -16,11 +16,13 @@ mod compiled;
 mod compiled_aot;
 mod exit;
 mod record;
+mod self_link;
 mod side_exit;
 pub use adopt::*;
 pub use compiled::*;
 pub use exit::*;
 pub use record::*;
+pub use self_link::*;
 pub use side_exit::*;
 
 /// Back-edge visit count after which a PC is promoted to a trace
@@ -115,6 +117,11 @@ pub struct CompileOptions {
     /// which the trace is compiled again by the optimizing tier (`0`:
     /// never).
     pub tier_up_at: u32,
+    /// The dialect of the Vm the trace runs in, when known: inline table
+    /// code then follows only that dialect's length rules (5.4 keeps a
+    /// length limit array indexing can move, 5.5 a length hint). `None`
+    /// compiles code that serves every dialect.
+    pub dialect: Option<crate::version::LuaVersion>,
 }
 
 /// Whether a register holding a value of `tag` (a `raw` tag) can enter a
@@ -122,18 +129,23 @@ pub struct CompileOptions {
 /// boolean (the trace takes either value under `raw::FALSE`, with payload
 /// 0 or 1; see [`entry_tag_of`]).
 pub fn entry_tag_enterable(tag: u8) -> bool {
+    (PLAIN_ENTRY_TAGS | 1 << crate::runtime::value::raw::FALSE) >> tag & 1 != 0
+}
+
+/// The tags [`entry_tag_enterable`] admits but `raw::FALSE`, a boolean's
+/// entry type: a register of one of these enters a trace compiled for its
+/// own tag with its payload as it is.
+pub(crate) const PLAIN_ENTRY_TAGS: u32 = {
     use crate::runtime::value::raw;
-    const PAYLOAD_TAGS: u32 = 1 << raw::FALSE
-        | 1 << raw::TRUE
+    1 << raw::TRUE
         | 1 << raw::INT
         | 1 << raw::FLOAT
         | 1 << raw::TABLE
         | 1 << raw::CLOSURE
         | 1 << raw::NATIVE
         | 1 << raw::STR
-        | 1 << raw::NIL;
-    PAYLOAD_TAGS >> tag & 1 != 0
-}
+        | 1 << raw::NIL
+};
 
 /// The entry tag a trace is compiled for when the register held a value of
 /// raw tag `tag` while it was recorded: a boolean of either value is one

@@ -136,8 +136,8 @@ impl Ins for Lir {
     fn sdiv(&mut self, x: Value, y: Value) -> Value {
         self.bin(BinOp::Sdiv, x, y)
     }
-    fn udiv(&mut self, x: Value, y: Value) -> Value {
-        self.bin(BinOp::Udiv, x, y)
+    fn umulhi(&mut self, x: Value, y: Value) -> Value {
+        self.bin(BinOp::Umulhi, x, y)
     }
     fn ineg(&mut self, x: Value) -> Value {
         let t = self.ty_of_value(x);

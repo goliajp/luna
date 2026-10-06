@@ -86,9 +86,8 @@ pub(crate) fn adopt(
         return Vec::new();
     };
     let parent_id = match req.side_parent {
-        Some((pc, _)) => {
-            let parent = req
-                .proto
+        Some((parent_proto, pc, _)) => {
+            let parent = parent_proto
                 .traces
                 .borrow()
                 .iter()
@@ -116,7 +115,7 @@ pub(crate) fn adopt(
                 img.protos[0] == head
                     && entry_tags_admit(&img.meta.entry_tags, req.entry_tags)
                     && img.side_parent.map(|(pc, exit, id)| (pc, exit, Some(id)))
-                        == req.side_parent.map(|(pc, exit)| (pc, exit, parent_id))
+                        == req.side_parent.map(|(_, pc, exit)| (pc, exit, parent_id))
             })
         }) else {
             return Vec::new();
@@ -125,7 +124,10 @@ pub(crate) fn adopt(
         let mut i = 0;
         while i < todo.len() {
             if let Some(kids) = cache.children.get(&todo[i].id) {
-                todo.extend(kids.iter().cloned());
+                // a side trace of an exit inside a function the parent
+                // inlined starts in that function: it is taken over when
+                // that exit becomes hot here
+                todo.extend(kids.iter().filter(|k| k.protos[0] == head).cloned());
             }
             i += 1;
         }
@@ -143,7 +145,7 @@ pub(crate) fn adopt(
         {
             continue;
         }
-        if let Some(a) = install(cs, req, img) {
+        if let Some(a) = install(cs, req, img, i == 0) {
             installed.push(img.id);
             out.push(a);
         } else if i == 0 {
@@ -155,11 +157,13 @@ pub(crate) fn adopt(
 
 /// `img` as a trace of this Vm: its code copied into this Vm's code memory
 /// with this Vm's addresses written in. `None` when a function it inlined
-/// is not loaded here.
+/// is not loaded here. `img_is_asked`: `img` is the trace `req` asks for,
+/// not a side trace that comes with it.
 fn install(
     cs: &mut CraneliftJitStorage,
     req: &AdoptRequest<'_>,
     img: &Arc<TraceImage>,
+    img_is_asked: bool,
 ) -> Option<AdoptedTrace> {
     let mut protos = vec![req.proto];
     for c in &img.protos[1..] {
@@ -201,7 +205,13 @@ fn install(
     }
     Some(AdoptedTrace {
         trace: ct,
-        side_parent: img.side_parent.map(|(pc, exit, _)| (pc, exit)),
+        side_parent: match (img.side_parent, req.side_parent) {
+            (None, _) => None,
+            // the side trace asked for: its parent is the one asked about
+            (Some(_), Some(p)) if img_is_asked => Some(p),
+            // one that comes with its parent starts in the same function
+            (Some((pc, exit, _)), _) => Some((req.proto, pc, exit)),
+        },
         inlined: protos[1..].to_vec(),
     })
 }
@@ -263,12 +273,21 @@ pub(crate) fn tier_up(
 ) -> Option<TraceFn> {
     let source = ct.tier_up.as_ref()?.source.borrow_mut().take()?;
     let src = source.downcast::<TierSource>().ok()?;
+    clif_tier_up(storage, &src, ct.head_pc)
+}
+
+/// Cranelift's code for the trace `src` holds.
+pub(crate) fn clif_tier_up(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    src: &TierSource,
+    head_pc: u32,
+) -> Option<TraceFn> {
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     if let Some(code) = src.image.as_ref().and_then(|i| i.optimized.get()) {
         let vals: Vec<i64> = src.relocs.iter().map(|r| r.1).collect();
         let bytes = code.relocated(&vals);
         let entry = cs.baseline_code.place(&bytes).ok()?;
-        super::code_dump::dump_len("tier-up-image", ct.head_pc, entry, bytes.len());
+        super::code_dump::dump_len("tier-up-image", head_pc, entry, bytes.len());
         // SAFETY: as in `install`: the optimizing tier's code for this
         // trace, with this Vm's addresses written in
         return Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) });
@@ -279,7 +298,7 @@ pub(crate) fn tier_up(
     module.finalize_definitions().ok()?;
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     let ptr = module.get_finalized_function(fn_id);
-    super::code_dump::dump("tier-up", ct.head_pc, ptr);
+    super::code_dump::dump("tier-up", head_pc, ptr);
     let sites = reloc::take_sites();
     cs.trace_handles.push(TraceHandle {
         _module: module.publish(),

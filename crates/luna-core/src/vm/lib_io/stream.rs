@@ -4,6 +4,9 @@ use super::*;
 
 /// Refill the input buffer; `false` at end of file.
 pub(super) fn fill(u: Gc<Userdata>) -> std::io::Result<bool> {
+    if u.text.is_some() {
+        return text_mode::refill(u);
+    }
     // SAFETY: `u` is a file handle the caller holds (a native argument or the default stream), so it is rooted; `m` is the only reference into it while the OS read runs, which runs no Lua code
     let m = unsafe { u.as_mut() };
     let mut chunk = vec![0u8; READ_CHUNK];
@@ -59,6 +62,11 @@ pub(super) fn read_ahead(u: Gc<Userdata>) -> i64 {
 /// Give back read-ahead before the position is used for something else
 /// (a write, a seek): the OS position is that far past the logical one.
 fn unread_ahead(u: Gc<Userdata>) -> std::io::Result<()> {
+    if u.text.is_some() && !u.read_buf.is_empty() && matches!(u.file(), FileHandle::File(_)) {
+        // the buffer is translated: move to where `ftell` says the stream is
+        text_mode::fseek(u, 1, 0)?;
+        return Ok(());
+    }
     let ahead = read_ahead(u);
     // SAFETY: `u` is held by the caller; `read_ahead` returned before `m` was taken, and `m` is the only reference into it until return
     let m = unsafe { u.as_mut() };
@@ -72,13 +80,15 @@ fn unread_ahead(u: Gc<Userdata>) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Write `bytes` straight to the OS handle.
+/// Write `bytes` straight to the OS handle (`\n` as `\r\n` in text mode).
 fn write_to(u: Gc<Userdata>, bytes: &[u8]) -> std::io::Result<()> {
+    let text = u.text.is_some();
     // SAFETY: `u` is held by the caller; the borrow lives for the one match, which runs no Lua code and takes no other reference into `u`
     match unsafe { u.as_mut() }.file_mut() {
+        FileHandle::File(f) if text => f.write_all(&text_mode::to_crlf(bytes)),
         FileHandle::File(f) => f.write_all(bytes),
         FileHandle::Stdout => crate::stdio::try_write_stdout(bytes),
-        FileHandle::Stderr => std::io::stderr().write_all(bytes),
+        FileHandle::Stderr => crate::stdio::write_stderr(bytes),
         FileHandle::Stdin => Err(posix_error(EBADF)),
         FileHandle::Closed => unreachable!("writes check the stream is open"),
     }
