@@ -1,10 +1,11 @@
-//! `+` and `-` of two 5.1 / 5.2 integers in a trace. Those dialects have
+//! Arithmetic on two 5.1 / 5.2 integers in a trace. Those dialects have
 //! only doubles; an integer the VM keeps (`#t`, a string length) stands for
-//! the double of its value, so a sum must be the exact one rounded once,
-//! as PUC's double arithmetic gives it. The trace keeps the exact sum while
-//! it is within ±2^53 and leaves for the interpreter past that; each
-//! program must give the interpreter's result on every trace tier and the
-//! method JIT, and its loop must run in a trace.
+//! the double of its value, so `+ - * %` and negation must give what the
+//! doubles give: the exact result rounded once, -0 where IEEE gives it, and
+//! nan for a modulo by zero. The trace keeps exact results within ±2^53 and
+//! leaves for the interpreter otherwise; each program must give the
+//! interpreter's result on every trace tier and the method JIT, and its
+//! loop must run in a trace.
 
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::runtime::Value;
@@ -163,5 +164,70 @@ fn sum_of_large_integers_rounds_to_even() {
          for i = 1, 300 do s = p62 + three end
          return string.format('%.0f %s', s, tostring(s == p62))",
         "4611686018427387904 true",
+    );
+}
+
+#[test]
+fn product_of_lengths() {
+    check(
+        "local t, u, s = {1, 2, 3}, {1, 2}, z
+         for i = 1, 500 do s = s + #t * #u end
+         return string.format('%.0f', s)",
+        "3000",
+    );
+}
+
+#[test]
+fn product_past_two_to_the_53_rounds() {
+    // 2^53 * 3 + 1 is not a double: the products round, and 2^62 * 2^62
+    // is far past any integer
+    check(
+        "local three, s, q = #'xxx'
+         for i = 1, 300 do s = (p53 + one) * three q = p62 * p62 end
+         return string.format('%.0f %.0f', s, q)",
+        "27021597764222976 21267647932558653966460912964485513216",
+    );
+}
+
+#[test]
+fn zero_times_a_negative_is_negative_zero() {
+    check(
+        "local m, r = z - one
+         for i = 1, 300 do r = z * m end
+         return tostring(1 / r)",
+        "-inf",
+    );
+}
+
+#[test]
+fn modulo_of_integers() {
+    check(
+        "local n, i, s, k = #string.rep('x', 300), z, z, #'xxxxxxx'
+         while i < n do s = s + i % k + (z - i) % k + i % (z - k) i = i + one end
+         return string.format('%.0f', s)",
+        "897",
+    );
+}
+
+#[test]
+fn modulo_by_zero_and_past_two_to_the_53() {
+    // 2^54 % 4 is exact whichever way `a - floor(a/b)*b` is rounded (gcc
+    // fuses the multiply and subtract on aarch64, so a remainder that needs
+    // rounding differs between machines, in PUC as in luna)
+    check(
+        "local r1, r2
+         for i = 1, 300 do r1 = one % z r2 = (p53 + p53) % #'xxxx' end
+         return tostring(r1 ~= r1) .. ' ' .. string.format('%.0f', r2)",
+        "true 0",
+    );
+}
+
+#[test]
+fn negation() {
+    check(
+        "local t, s, r = {1, 2, 3}, z
+         for i = 1, 300 do s = s + -#t r = -z end
+         return string.format('%.0f', s) .. ' ' .. tostring(1 / r)",
+        "-900 -inf",
     );
 }
