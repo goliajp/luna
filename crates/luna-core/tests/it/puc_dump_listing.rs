@@ -46,6 +46,14 @@ const DEDUP: &[&str] = &[
     "local a, b = ...\nreturn a .. '\\0\\0\\0\\0\\0\\0\\0\\0', b * 0.0, a * 0.0\n",
     "local a, b, c = ...\nreturn a + 2^53, b + 9007199254740994, c + 2^53, a + 2^60, b + 2^60\n",
     "local a, b = ...\nreturn a + 1e300, b + 1e300, a + 0.5, b + 0.5, a + 5, b + 5\n",
+    "local a, b, c, d = 100000, 100000.0, 5, 5.0\nreturn a, b, c, d, 100000.0, 100000\n",
+    "local a, b, c, d = 0.0, -0.0, 0, -0\nreturn a, b, c, d, -0.0, 0.0\n",
+    "local a, b = 0/0, -(0/0)\nreturn a, b, (-2)^0.5, (-2)^0.5\n",
+    "local x = ...\nreturn x == 0.0, x == -0.0, x == 0, x < 1e300, x < 1e300\n",
+    "local s = 'a long string, past the forty bytes PUC keeps short'\n\
+     return s, 'a long string, past the forty bytes PUC keeps short', 'k', 'k'\n",
+    "local t = {}\nt[1], t[1.0], t[2^53], t[2^53 + 1.0], t['1'] = 1, 2, 3, 4, 5\nreturn t\n",
+    "local a = 9007199254740993\nreturn a, 9007199254740992.0, 2^63, -2^63, 1e15, 1e15 + 0.5\n",
 ];
 
 /// A constructor mixing registers, constants and a folded power.
