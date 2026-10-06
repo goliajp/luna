@@ -72,7 +72,7 @@ pub(super) fn undump(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, Bad> {
     check_header(bytes)?;
     let mut r = Reader::at(bytes, HEADER.len());
     let raw = read_proto(&mut r, heap)?;
-    Ok(lower::build(heap, raw, &translate)?)
+    lower::build(heap, raw, &translate)
 }
 
 fn translate(raw: &mut RawProto) -> Result<Lowered, String> {

@@ -221,3 +221,79 @@ fn a_load_refused_at_each_allocation_in_turn_leaks_nothing() {
         assert_eq!(nth.live.get(), 0, "{v:?}: blocks left after the vm is gone");
     }
 }
+
+/// `load` with a reader function that allocates, refused at each
+/// allocation in turn: whether the refusal lands in the reader's Lua code,
+/// in the parser or around them, the outcome is the memory error ("not
+/// enough memory", returned by `load` or raised), never the end of the
+/// process, and the vm goes on working.
+#[test]
+fn a_reader_refused_at_each_allocation_in_turn_gives_the_memory_error() {
+    for v in [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        let nth = Rc::new(Nth::default());
+        let mut vm = Vm::new_with_mem(v, MemOwner::policy(Box::new(RefuseNth(nth.clone()))));
+        let chunk = vm
+            .load(
+                b"local parts = {}\n\
+                  for i = 1, 40 do parts[i] = 'local x' .. i .. ' = {' .. i .. '}\\n' end\n\
+                  parts[41] = 'return x40[1]'\n\
+                  local i = 0\n\
+                  local f, e = load(function()\n\
+                    i = i + 1\n\
+                    local p = parts[i]\n\
+                    if p then return p .. string.rep(' ', i % 3) end\n\
+                  end)\n\
+                  if f then return f() end\n\
+                  return nil, e\n",
+                b"=reader",
+            )
+            .unwrap();
+        let mut n = 0;
+        let mut memory_errors = 0;
+        loop {
+            nth.refused.set(false);
+            nth.left.set(Some(n));
+            let r = vm.call_value(Value::Closure(chunk), &[]);
+            nth.left.set(None);
+            let refused = nth.refused.get();
+            match r {
+                Ok(vals)
+                    if matches!(vals.first(), Some(Value::Int(40)))
+                        || matches!(vals.first(), Some(Value::Float(x)) if *x == 40.0) =>
+                {
+                    if !refused {
+                        break;
+                    }
+                }
+                Ok(vals) => {
+                    let Some(Value::Str(m)) = vals.get(1) else {
+                        panic!("{v:?} n={n}: load gave {vals:?}");
+                    };
+                    assert_eq!(m.as_bytes(), b"not enough memory", "{v:?} n={n}");
+                    memory_errors += 1;
+                }
+                Err(e) => {
+                    let Value::Str(m) = e.0 else {
+                        panic!("{v:?} n={n}: error {:?}", e.0)
+                    };
+                    assert_eq!(m.as_bytes(), b"not enough memory", "{v:?} n={n}");
+                    memory_errors += 1;
+                }
+            }
+            assert!(refused, "{v:?} n={n}: failed with nothing refused");
+            vm.collect_garbage();
+            n += 1;
+            assert!(n < 200_000, "{v:?}: never succeeds");
+        }
+        assert!(
+            memory_errors > 50,
+            "{v:?}: only {memory_errors} memory errors"
+        );
+    }
+}

@@ -185,7 +185,7 @@ fn raw_set_checked(vm: &mut Vm, t: Gc<Table>, k: Value, v: Value) -> Result<(), 
 /// makes it) the table is simply not reachable from there.
 fn registry_table(vm: &mut Vm, name: &str) -> Result<Gc<Table>, LuaError> {
     let Some(reg) = vm.registry else {
-        return Ok(vm.alloc_table()?);
+        return vm.alloc_table();
     };
     let k = vm.str_value(name.as_bytes())?;
     if let Value::Table(t) = reg.get(k) {
