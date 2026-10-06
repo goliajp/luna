@@ -2,22 +2,23 @@
 //! functions and loads.
 
 use super::*;
+use crate::runtime::mem::{LVec, MemRef};
 
 pub(super) struct Level<'a> {
-    pub(super) code: Vec<Inst>,
-    pub(super) lines: Vec<u32>,
-    pub(super) consts: Vec<Value>,
+    pub(super) code: LVec<Inst>,
+    pub(super) lines: LVec<u32>,
+    pub(super) consts: LVec<Value>,
     pub(super) const_map: ConstMap,
-    pub(super) locals: Vec<LocalVar<'a>>,
+    pub(super) locals: LVec<LocalVar<'a>>,
     /// ordered active-variable sequence (locals + global decls) for goto scope
-    pub(super) avars: Vec<AVar<'a>>,
-    pub(super) blocks: Vec<BlockCx>,
+    pub(super) avars: LVec<AVar<'a>>,
+    pub(super) blocks: LVec<BlockCx<'a>>,
     pub(super) freereg: u32,
     pub(super) max_stack: u32,
-    pub(super) upvals: Vec<UpvalDesc>,
-    pub(super) protos: Vec<Gc<Proto>>,
+    pub(super) upvals: LVec<UpvalDesc>,
+    pub(super) protos: LVec<Gc<Proto>>,
     /// completed local-variable debug records (flushed on scope exit)
-    pub(super) locvars: Vec<crate::runtime::LocVar>,
+    pub(super) locvars: LVec<crate::runtime::LocVar>,
     pub(super) num_params: u8,
     pub(super) is_vararg: bool,
     /// Mirrors PUC `(vararg table)` locvar emission: true only for an explicit
@@ -61,9 +62,9 @@ impl<'a> Level<'a> {
             lines: bufs.lines,
             consts: bufs.consts,
             const_map: bufs.const_map,
-            locals: relabel(bufs.locals),
-            avars: relabel(bufs.avars),
-            blocks: bufs.blocks,
+            locals: bufs.locals.recycle(),
+            avars: bufs.avars.recycle(),
+            blocks: bufs.blocks.recycle(),
             freereg: num_params as u32,
             max_stack: (num_params as u32).max(2),
             upvals: bufs.upvals,
@@ -97,20 +98,20 @@ impl<'a> Level<'a> {
             .map_or(u8::MAX, |i| i as u8);
         let proto = Proto {
             hdr: GcHeader::new(ObjTag::Proto),
-            code: heap.block_of(self.code.drain(..)),
-            consts: heap.block_of(self.consts.drain(..)),
-            protos: heap.block_of(self.protos.drain(..)),
-            upvals: heap.block_of(self.upvals.drain(..)),
+            code: heap.block_of(self.code.drain_all()),
+            consts: heap.block_of(self.consts.drain_all()),
+            protos: heap.block_of(self.protos.drain_all()),
+            upvals: heap.block_of(self.upvals.drain_all()),
             num_params: self.num_params,
             is_vararg: self.is_vararg,
             has_vararg_table_pseudo: self.has_vararg_table_pseudo,
             has_compat_vararg_arg: self.has_compat_vararg_arg,
             max_stack: self.max_stack as u8,
-            lines: heap.block_of(self.lines.drain(..)),
+            lines: heap.block_of(self.lines.drain_all()),
             source,
             line_defined,
             last_line_defined,
-            locvars: heap.block_of(self.locvars.drain(..)),
+            locvars: heap.block_of(self.locvars.drain_all()),
             cache: std::cell::Cell::new(None),
             jit: std::cell::Cell::new(crate::runtime::function::JitProtoState::Untried),
             env_upval_idx,
@@ -135,9 +136,9 @@ impl<'a> Level<'a> {
             lines: self.lines,
             consts: self.consts,
             const_map: self.const_map,
-            locals: relabel(self.locals),
-            avars: relabel(self.avars),
-            blocks: self.blocks,
+            locals: self.locals.recycle(),
+            avars: self.avars.recycle(),
+            blocks: self.blocks.recycle(),
             upvals: self.upvals,
             protos: self.protos,
             locvars: self.locvars,
@@ -150,50 +151,52 @@ impl<'a> Level<'a> {
 /// (and one load) to the next so that compiling one allocates only the
 /// finished function's arrays.
 pub(crate) struct LevelBufs {
-    code: Vec<Inst>,
-    lines: Vec<u32>,
-    consts: Vec<Value>,
+    code: LVec<Inst>,
+    lines: LVec<u32>,
+    consts: LVec<Value>,
     const_map: ConstMap,
-    locals: Vec<LocalVar<'static>>,
-    avars: Vec<AVar<'static>>,
-    blocks: Vec<BlockCx>,
-    upvals: Vec<UpvalDesc>,
-    protos: Vec<Gc<Proto>>,
-    locvars: Vec<crate::runtime::LocVar>,
+    locals: LVec<LocalVar<'static>>,
+    avars: LVec<AVar<'static>>,
+    blocks: LVec<BlockCx<'static>>,
+    upvals: LVec<UpvalDesc>,
+    protos: LVec<Gc<Proto>>,
+    locvars: LVec<crate::runtime::LocVar>,
 }
 
-impl Default for LevelBufs {
-    fn default() -> LevelBufs {
-        // sized for a small function, past most of the regrowth steps
+impl LevelBufs {
+    /// Vectors sized for a small function, past most of the regrowth steps.
+    pub(super) fn new(mem: MemRef) -> LevelBufs {
         LevelBufs {
-            code: Vec::with_capacity(32),
-            lines: Vec::with_capacity(32),
-            consts: Vec::with_capacity(8),
-            const_map: ConstMap::with_capacity_and_hasher(8, Default::default()),
-            locals: Vec::with_capacity(8),
-            avars: Vec::with_capacity(8),
-            blocks: Vec::with_capacity(4),
-            upvals: Vec::new(),
-            protos: Vec::new(),
-            locvars: Vec::new(),
+            code: LVec::with_capacity_or_abort(mem, 32),
+            lines: LVec::with_capacity_or_abort(mem, 32),
+            consts: LVec::with_capacity_or_abort(mem, 8),
+            const_map: ConstMap::new(mem),
+            locals: LVec::with_capacity_or_abort(mem, 8),
+            avars: LVec::with_capacity_or_abort(mem, 8),
+            blocks: LVec::with_capacity_or_abort(mem, 4),
+            upvals: LVec::new(mem),
+            protos: LVec::new(mem),
+            locvars: LVec::new(mem),
         }
     }
 }
 
-/// The empty vector `v` as a vector of the same type under another
-/// lifetime, keeping its allocation (the element types have one layout,
-/// so collecting reuses the buffer).
-pub(super) fn relabel<T, U>(mut v: Vec<T>) -> Vec<U> {
-    v.clear();
-    v.into_iter().map(|_| unreachable!()).collect()
-}
-
 /// What the compiler keeps between loads: the vectors of finished
 /// functions ([`LevelBufs`]), one per nesting level reached so far.
-#[derive(Default)]
 pub(crate) struct CompileScratch {
-    pub(super) levels: Vec<LevelBufs>,
+    pub(super) levels: LVec<LevelBufs>,
     /// the stack of functions being compiled, empty
-    pub(super) open: Vec<Level<'static>>,
-    pub(super) sym_strs: Vec<Option<Gc<LuaStr>>>,
+    pub(super) open: LVec<Level<'static>>,
+    pub(super) sym_strs: LVec<Option<Gc<LuaStr>>>,
+}
+
+impl CompileScratch {
+    /// Empty vectors on `mem`, nothing allocated.
+    pub(crate) fn new(mem: MemRef) -> CompileScratch {
+        CompileScratch {
+            levels: LVec::new(mem),
+            open: LVec::new(mem),
+            sym_strs: LVec::new(mem),
+        }
+    }
 }

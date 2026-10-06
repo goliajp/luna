@@ -234,6 +234,9 @@ impl Lir {
 }
 
 impl Emit for Lir {
+    fn len_state_flags(&mut self) -> cranelift_codegen::ir::MemFlagsData {
+        cranelift_codegen::ir::MemFlagsData::trusted()
+    }
     fn make_signature(&self) -> Signature {
         Signature::new(CallConv::SystemV)
     }

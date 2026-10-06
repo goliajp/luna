@@ -22,7 +22,7 @@ pub(super) enum LastTest {
 impl Compiler<'_> {
     /// Compile a condition; the returned jumps are taken when it is FALSE.
     pub(super) fn cond_jump_false(&mut self, id: ExprId) -> Result<(Jumps, LastTest), SyntaxError> {
-        let mut jumps = Jumps::new();
+        let mut jumps = Jumps::new(self.heap.mem());
         let last = self.cond_jumps(id, false, &mut jumps)?;
         Ok((jumps, last))
     }
@@ -53,7 +53,7 @@ impl Compiler<'_> {
                     self.cond_leaf_or_tree(lhs, decides, out, line)?;
                     self.cond_jumps(rhs, jump_if, out)
                 } else {
-                    let mut past = Jumps::new();
+                    let mut past = Jumps::new(self.heap.mem());
                     self.cond_leaf_or_tree(lhs, decides, &mut past, line)?;
                     let last = self.cond_jumps(rhs, jump_if, out)?;
                     for pc in past.iter() {

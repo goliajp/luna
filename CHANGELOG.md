@@ -171,6 +171,25 @@ optimization.
 
 ### Changed
 
+- Strings hash as PUC 5.4 and 5.5 hash them, from the last byte to the
+  first, so that with the same seed a table lays out its string keys —
+  and `pairs` visits them — as PUC does. The order a table with string
+  keys is visited in therefore differs from earlier versions.
+- A trace answers 5.4's `#t` from the table's length limit inline, and
+  reads `t[k]` for a string `k` it did not see at recording time by
+  walking the key's chain inline before calling the runtime.
+
+- On Windows the `luna` command keeps the MSVC C library's `FILE` for each
+  file and standard stream, so that what PUC built with MSVC does with
+  them, `luna` does too: `setvbuf` sizes and the positions `seek` then
+  reports, a `write` right after a `read` failing and a `read` right after
+  a `write` returning the stale buffer, `ungetc` at the start of a buffer
+  dropping the byte, 5.1 and 5.2 reading numbers with that library's
+  `fscanf`, standard output buffered in 4096-byte blocks on a pipe or file
+  and written after every call on a console (so stdout and stderr
+  interleave as with `lua.exe`), a Ctrl+Z typed on a console ending only
+  its line, and `setvbuf` with a size below 2 ending the process with
+  status 0xC0000409. Files opened with `b` follow the library too.
 - On Windows the `luna` command reads and writes as `lua.exe` does, through
   the MSVC C library's text mode: its standard output, standard error and
   standard input, and files opened without `b`, write `\n` as `\r\n` and
@@ -760,6 +779,18 @@ optimization.
   tables' array and hash parts, prototypes' code, constants and debug
   records, closures' and native functions' upvalues, coroutine stacks and
   frames, the C API's per-thread `lua_State` and its userdata blocks.
+- And so does the rest of what a Vm keeps: the string table, the
+  collector's gray stack and finalizer queues (a gray stack that cannot
+  grow is made up for by walking the object list, so a collection never
+  fails), the stacks of running natives and host roots, and everything the
+  parser and the compiler build while loading a chunk. A load that runs out
+  of memory fails with "not enough memory"; the C API's `lua_load` returns
+  `LUA_ERRMEM` for it.
+  The parser and the compiler do not check each allocation: one that fails
+  unwinds to the load, which drops what it built (giving every block back)
+  and returns the memory error. This needs `panic = "unwind"`; built with
+  `panic = "abort"` (the default for `wasm32` targets) a load that runs out
+  of memory ends the process, as a standard library container would.
 - luna-aot links `x86_64-pc-windows-msvc` without Visual Studio, on
   Linux, macOS or Windows: `clang-cl` and `lld-link` from LLVM with the
   MSVC C runtime and Windows SDK from `xwin splat`, named by

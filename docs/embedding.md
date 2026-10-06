@@ -763,8 +763,18 @@ CLI (`crates/luna-jit/src/bin/luna.rs`) is built on these.
 | `InstrBudget` | `set_instr_budget` exhausted |
 | `MemoryCap` | `set_memory_cap` exceeded |
 | `Native` | a native callback returned `Err(LuaError)` |
-| `OutOfMemory` | allocation failed |
+| `OutOfMemory` | allocation failed (see below for loading) |
 | `Type` | type mismatch at an arithmetic boundary |
+
+A load (`Vm::load`, `load`, `lua_load`) that runs out of memory fails
+with the memory error "not enough memory" (`LUA_ERRMEM` in the C API)
+and leaves the Vm usable. The parser and compiler reach that error by
+unwinding to the load, so it depends on the crate being built with
+`panic = "unwind"`, Rust's default on native targets. With
+`panic = "abort"`, which `wasm32` targets use by default, a load that
+runs out of memory ends the process (a trap on wasm), exactly as an
+allocation failure in a standard library `Vec` does. Out-of-memory at
+run time is reported as an error under both settings.
 
 `LuaError` implements `std::fmt::Display` and `std::error::Error`,
 so it composes with `?` and the `anyhow` / `thiserror` ecosystem.

@@ -1,6 +1,7 @@
 //! Blocks, labels and `goto`.
 
 use super::*;
+use crate::runtime::mem::LVec;
 
 impl<'a> Compiler<'a> {
     pub(super) fn enter_block(&mut self, is_loop: bool) {
@@ -8,18 +9,19 @@ impl<'a> Compiler<'a> {
         let first = self.lr().locals.len();
         let first_avar = self.lr().avars.len();
         let start_pc = self.lr().code.len();
-        self.l().blocks.push(BlockCx {
+        let mem = self.heap.mem();
+        self.l().blocks.push_or_abort(BlockCx {
             first_local: first,
             first_avar,
             reg_floor: floor,
             is_loop,
-            breaks: Vec::new(),
-            break_levels: Vec::new(),
+            breaks: LVec::new(mem),
+            break_levels: LVec::new(mem),
             break_close: false,
             start_pc,
-            labels: Vec::new(),
-            gotos: Vec::new(),
-            gdecls: Vec::new(),
+            labels: LVec::new(mem),
+            gotos: LVec::new(mem),
+            gdecls: LVec::new(mem),
             collective: None,
             has_tbc: false,
             tbc_scope: false,
@@ -80,26 +82,28 @@ impl<'a> Compiler<'a> {
             self.lr().code.len() as u32
         };
         let first_local = b.first_local;
-        let leaving: Vec<crate::runtime::LocVar> = self.lr().locals[first_local..]
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| l.konst.is_none())
-            .map(|(i, l)| crate::runtime::LocVar {
+        let lvl = self.l();
+        for i in first_local..lvl.locals.len() {
+            let l = &lvl.locals[i];
+            if l.konst.is_some() {
+                continue;
+            }
+            let rec = crate::runtime::LocVar {
                 name: l.name.into(),
                 reg: l.reg,
                 start_pc: l.start_pc,
                 end_pc: match b.body_end {
-                    Some((first, pc)) if first_local + i >= first => pc,
+                    Some((first, pc)) if i >= first => pc,
                     _ => end_pc,
                 },
-            })
-            .collect();
-        self.l().locvars.extend(leaving);
+            };
+            lvl.locvars.push_or_abort(rec);
+        }
         self.l().locals.truncate(b.first_local);
         self.l().avars.truncate(b.first_avar);
         self.set_freereg(b.reg_floor);
         if !v54 {
-            for pc in b.breaks {
+            for &pc in b.breaks.iter() {
                 self.patch_to_here(pc)?;
             }
         }
@@ -111,15 +115,15 @@ impl<'a> Compiler<'a> {
             let mut gotos = b.gotos;
             if captured || b.has_tbc {
                 // each distinct label name gets its own close trampoline
-                let mut names: Vec<Box<str>> = Vec::new();
-                for g in &gotos {
+                let mut names: LVec<&'a str> = LVec::new(self.heap.mem());
+                for g in gotos.iter() {
                     if !names.contains(&g.name) {
-                        names.push(g.name.clone());
+                        names.push_or_abort(g.name);
                     }
                 }
                 let skip = self.emit_jump();
-                let mut routed = Vec::with_capacity(names.len());
-                for name in names {
+                let mut routed = LVec::with_capacity_or_abort(self.heap.mem(), names.len());
+                for &name in names.iter() {
                     let tramp = self.here();
                     self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
                     let new_jmp = self.emit_jump();
@@ -138,7 +142,7 @@ impl<'a> Compiler<'a> {
                         .find(|g| g.name == name)
                         .map(|g| g.line)
                         .expect("goto exists");
-                    routed.push(GotoRef {
+                    routed.push_or_abort(GotoRef {
                         name,
                         jmp_pc: new_jmp,
                         line,
@@ -162,8 +166,8 @@ impl<'a> Compiler<'a> {
             // goto (PUC `luaK_patchclose`), the resolution routes through a
             // CLOSE-and-jump trampoline so those upvalues are properly closed
             // — goto.lua 5.4 :203's foo() backward `goto l1` exercises this.
-            let mut unresolved = Vec::with_capacity(gotos.len());
-            for g in gotos {
+            let mut unresolved = LVec::with_capacity_or_abort(self.heap.mem(), gotos.len());
+            for &g in gotos.iter() {
                 let target = self.lr().blocks.last().and_then(|p| {
                     p.labels
                         .iter()
@@ -200,14 +204,16 @@ impl<'a> Compiler<'a> {
                         // pc — both are jump destinations.
                         self.mark_target(dest as usize);
                     }
-                    None => unresolved.push(g),
+                    None => unresolved.push_or_abort(g),
                 }
             }
             match self.l().blocks.last_mut() {
                 Some(parent) => {
-                    for mut g in unresolved {
-                        g.nactive = g.nactive.min(cap);
-                        parent.gotos.push(g);
+                    for &g in unresolved.iter() {
+                        parent.gotos.push_or_abort(GotoRef {
+                            nactive: g.nactive.min(cap),
+                            ..g
+                        });
                     }
                 }
                 None if !unresolved.is_empty() => {
@@ -229,7 +235,7 @@ impl<'a> Compiler<'a> {
     /// Define a label here; match pending forward gotos.
     pub(super) fn define_label(
         &mut self,
-        name: &str,
+        name: &'a str,
         line: u32,
         trailing: bool,
     ) -> Result<(), SyntaxError> {
@@ -253,14 +259,14 @@ impl<'a> Compiler<'a> {
             self.lr()
                 .blocks
                 .last()
-                .and_then(|b| b.labels.iter().find(|l| &*l.name == name))
+                .and_then(|b| b.labels.iter().find(|l| l.name == name))
                 .map(|l| l.line)
         } else {
             self.lr()
                 .blocks
                 .iter()
                 .flat_map(|b| b.labels.iter())
-                .find(|l| &*l.name == name)
+                .find(|l| l.name == name)
                 .map(|l| l.line)
         };
         if let Some(prev_line) = dup {
@@ -272,10 +278,10 @@ impl<'a> Compiler<'a> {
         let b = self.lr().blocks.last().expect("no block");
         let first_avar = b.first_avar;
         // match pending gotos of this block
-        let mut pending = std::mem::take(&mut self.l().blocks.last_mut().expect("no block").gotos);
-        let mut kept = Vec::new();
-        for g in pending.drain(..) {
-            if &*g.name == name {
+        let pending = self.l().blocks.last_mut().expect("no block").gotos.take();
+        let mut kept = LVec::with_capacity_or_abort(self.heap.mem(), pending.len());
+        for &g in pending.iter() {
+            if g.name == name {
                 if nactive > g.nactive {
                     // the goto jumps into the scope of the declaration sitting
                     // at its active-var boundary; a `global *` marker has no
@@ -306,13 +312,13 @@ impl<'a> Compiler<'a> {
                 }
                 self.l().code[g.jmp_pc].set_sj(off as i32);
             } else {
-                kept.push(g);
+                kept.push_or_abort(g);
             }
         }
         let blk = self.l().blocks.last_mut().expect("no block");
         blk.gotos = kept;
-        blk.labels.push(LabelDef {
-            name: name.into(),
+        blk.labels.push_or_abort(LabelDef {
+            name,
             pc: here,
             line,
             nactive: nactive.max(first_avar),
@@ -326,7 +332,7 @@ impl<'a> Compiler<'a> {
 
     /// Compile `goto name`: backward jump if a label is visible, else a
     /// pending forward reference in the current block.
-    pub(super) fn goto_stat(&mut self, name: &str, line: u32) -> Result<(), SyntaxError> {
+    pub(super) fn goto_stat(&mut self, name: &'a str, line: u32) -> Result<(), SyntaxError> {
         self.last_line = line;
         // PUC's `gotostat` scans only the *current* block for an
         // already-defined backward label; unresolved gotos enter the pending
@@ -340,7 +346,7 @@ impl<'a> Compiler<'a> {
             .lr()
             .blocks
             .last()
-            .and_then(|b| b.labels.iter().rev().find(|l| &*l.name == name))
+            .and_then(|b| b.labels.iter().rev().find(|l| l.name == name))
             .map(|l| (l.pc, l.nactive));
         if let Some((pc, nactive)) = found {
             // jumping back discards locals declared after the label
@@ -357,8 +363,8 @@ impl<'a> Compiler<'a> {
             .last_mut()
             .expect("no block")
             .gotos
-            .push(GotoRef {
-                name: name.into(),
+            .push_or_abort(GotoRef {
+                name,
                 jmp_pc: jmp,
                 line,
                 nactive,
