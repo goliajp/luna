@@ -57,7 +57,7 @@ impl Table {
             }
             key => normalize_set_key(key)?,
         };
-        self.set_norm(heap, k, val)
+        self.set_norm_inlined(heap, k, val)
     }
 
     /// `t[-0] = val` under 5.1/5.2: the key is 0, and a key that is new
@@ -202,6 +202,15 @@ impl Table {
         k: Value,
         v: Value,
     ) -> Result<(), TableError> {
+        self.set_norm_inlined(heap, k, v)
+    }
+
+    /// [`Self::set_norm`], always inlined, for the interpreter's stores
+    /// (`set_inlined`). Left to the compiler, the body goes out of line once
+    /// `set_norm` has a few callers, which puts a call on every `rawset` and
+    /// every swap of `table.sort`.
+    #[inline(always)]
+    fn set_norm_inlined(&mut self, heap: &mut Heap, k: Value, v: Value) -> Result<(), TableError> {
         if let Value::Int(i) = k
             && let Some(idx) = self.array_index(i)
         {

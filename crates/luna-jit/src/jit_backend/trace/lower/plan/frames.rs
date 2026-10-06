@@ -1,12 +1,13 @@
 use super::*;
 
-/// The record's frame shape: per-op register-window offsets, the
-/// enclosing call's A per op, and the window size.
+/// The record's frame shape: per-op register-window offsets and the
+/// window size.
 pub(super) fn plan_frames(
     record: &TraceRecord,
     head_proto: Gc<Proto>,
     frame_w: usize,
-) -> Option<(Vec<u32>, Vec<Option<u8>>, u32)> {
+    calls: &[Option<InlineCall>],
+) -> Option<(Vec<u32>, u32)> {
     // recorder invariant: the first recorded op is at
     // depth 0 on `head_proto`. A record violating either would break
     // `compute_op_offsets`' depth-bump arithmetic; bail cleanly here
@@ -58,7 +59,7 @@ pub(super) fn plan_frames(
         return None;
     }
     checkpoint("post:depth-invariant");
-    let (op_offsets, enclosing_call_a) = compute_op_offsets(record);
+    let (op_offsets, _) = compute_op_offsets_with(record, calls);
     let mut window_size: u32 = op_offsets
         .iter()
         .map(|&off| off + frame_w as u32)
@@ -86,7 +87,7 @@ pub(super) fn plan_frames(
             }
         }
     }
-    Some((op_offsets, enclosing_call_a, window_size))
+    Some((op_offsets, window_size))
 }
 
 pub(super) fn side_trace_gate(record: &TraceRecord, op_offsets: &[u32]) -> Option<()> {
@@ -106,11 +107,11 @@ pub(super) fn side_trace_gate(record: &TraceRecord, op_offsets: &[u32]) -> Optio
     // call branches that re-compute their inputs each iter) can
     // compile and
     // amortize the parent's hot-exit dispatch cost.
-    if let Some((parent_proto, parent_head_pc, _)) = record.side_trace_parent {
+    if let Some((parent_proto, parent_head_pc, parent_exit)) = record.side_trace_parent {
         // Check 1: any back-edge op? (ForLoop / TForLoop / Jmp -bx)
         let has_back_edge = record.ops.iter().any(|op| match op.inst.op() {
             luna_core::vm::isa::Op::ForLoop | luna_core::vm::isa::Op::TForLoop => true,
-            luna_core::vm::isa::Op::Jmp => op.inst.sbx() < 0,
+            luna_core::vm::isa::Op::Jmp => op.inst.sj() < 0,
             _ => false,
         });
         if has_back_edge {
@@ -153,12 +154,20 @@ pub(super) fn side_trace_gate(record: &TraceRecord, op_offsets: &[u32]) -> Optio
             // parent-written slot each iter).
             let child_live_in = compute_live_in_slots(record, op_offsets);
             if !child_live_in.is_empty() {
+                // the child's register `r` is the parent's `off + r` (the
+                // frame the parent's exit resumes in)
                 let parent_writes_opt = {
                     let traces = parent_proto.traces.borrow();
                     traces
                         .iter()
                         .find(|t| t.head_pc == parent_head_pc)
-                        .map(|pct| pct.body_writes.clone())
+                        .map(|pct| {
+                            let off = pct.exit_frame_offset(parent_exit) as u32;
+                            pct.body_writes
+                                .iter()
+                                .filter_map(|&w| w.checked_sub(off))
+                                .collect::<Vec<u32>>()
+                        })
                 };
                 if let Some(parent_writes) = parent_writes_opt {
                     let mut i = 0;

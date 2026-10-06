@@ -351,6 +351,15 @@ impl Heap {
         ))
     }
 
+    /// Recolour the dead-white `h` to the current white, out of line: the
+    /// hot path of [`Self::intern`] only tests the colour, and inlined, this
+    /// cold store made it keep `self` on the stack.
+    #[cold]
+    #[inline(never)]
+    fn resurrect(&self, h: &mut GcHeader) {
+        h.flags = h.with_slow((h.flags & !WHITE_BITS) | self.current_white);
+    }
+
     /// Create (or find) a string. Short strings (≤ 40 bytes) are interned.
     pub fn intern(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
         if bytes.len() <= string::MAX_SHORT_LEN {
@@ -380,8 +389,7 @@ impl Heap {
                 unsafe {
                     let f = (*(p as *mut GcHeader)).flags;
                     if is_white(f) && (f & self.current_white) == 0 {
-                        (*(p as *mut GcHeader)).flags = (*(p as *mut GcHeader))
-                            .with_slow((f & !WHITE_BITS) | self.current_white);
+                        self.resurrect(&mut *(p as *mut GcHeader));
                     }
                 }
             }

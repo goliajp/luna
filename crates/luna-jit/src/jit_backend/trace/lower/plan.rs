@@ -40,7 +40,16 @@ pub(super) struct Plan<'r> {
     pub(super) opts: CompileOptions,
     pub(super) float_only: bool,
     pub(super) op_offsets: Vec<u32>,
-    pub(super) enclosing_call_a: Vec<Option<u8>>,
+    /// The frame of each call the trace inlines (see [`inline_calls`]).
+    pub(super) inline_calls: Vec<Option<InlineCall>>,
+    /// The stack top of each op's frame before it runs, where the
+    /// recording fixes it.
+    pub(super) frame_tops: Vec<Option<u32>>,
+    /// The register holding the closure each op's frame runs.
+    pub(super) frame_func: Vec<u32>,
+    /// The registers each op writes past what its instruction names (see
+    /// [`inline_writes`]).
+    pub(super) inline_writes: Vec<(u32, u32)>,
     pub(super) window_size: u32,
     pub(super) window_size_us: usize,
     pub(super) folded_ops: Vec<bool>,
@@ -84,13 +93,29 @@ pub(super) fn plan_trace<'r>(
     float_only: bool,
 ) -> Option<(Plan<'r>, EscapeAnalysis)> {
     let n = record.ops.len();
+    set_last_op(usize::MAX, 255);
 
-    let (op_offsets, enclosing_call_a, window_size) = plan_frames(record, head_proto, frame_w)?;
+    // a trace that inlines no call needs none of the inline-frame plan
+    // (the vectors stay empty; their readers take a missing entry as none)
+    let inlines = record.ops.iter().any(|r| r.inline_depth > 0);
+    let (inline_calls, frame_tops) = if inlines {
+        inline_calls(record)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let (op_offsets, window_size) = plan_frames(record, head_proto, frame_w, &inline_calls)?;
     let window_size_us = window_size as usize;
+    let (frame_func, inline_writes) = if inlines {
+        let funcs = frame_funcs(record, &op_offsets);
+        let writes = inline_writes(record, &op_offsets, &inline_calls, &frame_tops, &funcs);
+        (funcs, writes)
+    } else {
+        (Vec::new(), Vec::new())
+    };
 
     side_trace_gate(record, &op_offsets)?;
     let (folded_ops, math_folds) = scan_math_folds(record, n, head_proto, opts);
-    let end_idx_opt = find_trace_end(record, &folded_ops, n)?;
+    let end_idx_opt = find_trace_end(record, &folded_ops, n, &inline_calls)?;
     let effective_end = end_idx_opt.map(|(i, _)| i).unwrap_or(n);
     // escape analysis over the recorded body +
     // terminator. The pre-emit pass below demotes any Sinkable
@@ -169,6 +194,7 @@ pub(super) fn plan_trace<'r>(
     let mut head_live = entry_live(
         record,
         &op_offsets,
+        &inline_writes,
         effective_end,
         max_stack,
         do_internal_loop,
@@ -201,6 +227,7 @@ pub(super) fn plan_trace<'r>(
         frame_w,
         effective_end,
         &folded_ops,
+        &frame_tops,
     )?;
     let step_guard = plan_step_guard(
         record,
@@ -230,7 +257,10 @@ pub(super) fn plan_trace<'r>(
             opts,
             float_only,
             op_offsets,
-            enclosing_call_a,
+            inline_calls,
+            frame_tops,
+            frame_func,
+            inline_writes,
             window_size,
             window_size_us,
             folded_ops,
