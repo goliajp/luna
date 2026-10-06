@@ -116,7 +116,7 @@ stack traceback:<CR>
 	[C]: in function 'error'<CR>
 	f.lua:6: in main chunk<CR>
 	[C]: ?<CR>
-nil	Invalid argument	22<CR>
+1712<CR>
 status 1
 
 === end
@@ -292,7 +292,7 @@ status 1
 
 === end
 === 5.2 f.pipe
-<w*4096>|E|<w*904><v*7288>|F|<v*1712>nil	Invalid argument	22<CR>
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>1712<CR>
 lua: f.lua:6: end<CR>
 stack traceback:<CR>
 	[C]: in function 'error'<CR>
@@ -475,7 +475,7 @@ status 1
 
 === end
 === 5.3 f.pipe
-<w*4096>|E|<w*904><v*7288>|F|<v*1712>nil	Invalid argument	22<CR>
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>1712<CR>
 lua: f.lua:6: end<CR>
 stack traceback:<CR>
 	[C]: in function 'error'<CR>
@@ -658,7 +658,7 @@ status 1
 
 === end
 === 5.4 f.pipe
-<w*4096>|E|<w*904><v*7288>|F|<v*1712>nil	Invalid argument	22<CR>
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>1712<CR>
 lua: f.lua:6: end<CR>
 stack traceback:<CR>
 	[C]: in function 'error'<CR>
@@ -841,7 +841,7 @@ status 1
 
 === end
 === 5.5 f.pipe
-<w*4096>|E|<w*904><v*7288>|F|<v*1712>nil	Invalid argument	22<CR>
+<w*4096>|E|<w*904><v*7288>|F|<v*1712>1712<CR>
 lua: f.lua:6: end<CR>
 stack traceback:<CR>
 	[C]: in global 'error'<CR>
