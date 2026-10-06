@@ -443,7 +443,7 @@ fn len_54_shortcut_matches_the_search() {
                 for (k, o) in out.iter_mut().enumerate() {
                     with_table(|heap, t| {
                         t.hdr.sub = Dialect::L54 as u8;
-                        t.resize(heap, a, 0);
+                        t.resize(heap, a, 0).unwrap();
                         for i in 1..=p {
                             let _ = t.set_int(heap, i as i64, Value::Int(1));
                         }
