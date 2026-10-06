@@ -71,6 +71,15 @@ impl crate::runtime::heap::Gc<LuaStr> {
         unsafe { bytes_of(self.as_ptr()) }
     }
 
+    /// [`Self::as_bytes`] with a lifetime of the caller's choosing.
+    ///
+    /// # Safety
+    /// The string stays allocated (rooted) for as long as the slice is used.
+    pub(crate) unsafe fn as_bytes_unbounded<'a>(self) -> &'a [u8] {
+        // SAFETY: as in `as_bytes`; the caller keeps the string alive
+        unsafe { bytes_of(self.as_ptr()) }
+    }
+
     /// The bytes as a C string (PUC `getstr`): a NUL follows them in the
     /// same allocation, so C can read the string up to its first NUL; the
     /// pointer is valid while the string is alive.
@@ -190,6 +199,17 @@ fn alloc_str_of(
         dst.write(0);
     }
     Ok(p)
+}
+
+/// A long string of `a` then `b` (together longer than `MAX_SHORT_LEN`).
+pub(crate) fn alloc_long_pair(
+    mem: MemRef,
+    a: &[u8],
+    b: &[u8],
+    seed: u32,
+) -> Result<*mut LuaStr, Oom> {
+    debug_assert!(a.len() + b.len() > MAX_SHORT_LEN);
+    alloc_str_of(mem, &[a, b], false, seed, false)
 }
 
 pub(crate) fn alloc_long(mem: MemRef, bytes: &[u8], seed: u32) -> Result<*mut LuaStr, Oom> {

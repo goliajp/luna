@@ -454,3 +454,30 @@ pub fn c_fmod(a: f64, b: f64) -> f64 {
 
 #[cfg(test)]
 mod tests;
+
+/// A number's text, held on the stack where a caller needs it as bytes
+/// for a moment (a concatenation operand).
+pub(crate) struct NumText {
+    buf: [u8; 64],
+    len: usize,
+}
+
+impl Default for NumText {
+    fn default() -> NumText {
+        NumText {
+            buf: [0; 64],
+            len: 0,
+        }
+    }
+}
+
+impl NumText {
+    /// Keep `s` (a number's rendering, which is shorter than the buffer)
+    /// and give its bytes.
+    pub(crate) fn set(&mut self, s: &str) -> &[u8] {
+        let n = s.len().min(self.buf.len());
+        self.buf[..n].copy_from_slice(&s.as_bytes()[..n]);
+        self.len = n;
+        &self.buf[..n]
+    }
+}

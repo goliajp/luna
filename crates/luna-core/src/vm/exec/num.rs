@@ -86,6 +86,23 @@ pub(super) fn concat_piece(v: Value, float_fmt: numeric::FloatFmt) -> Option<Vec
     }
 }
 
+/// The bytes `v` contributes to a concatenation: a string's own, or a
+/// number's text kept in `text`; `None` for any other value.
+pub(super) fn concat_piece_into(
+    v: Value,
+    float_fmt: numeric::FloatFmt,
+    text: &mut numeric::NumText,
+) -> Option<&[u8]> {
+    match v {
+        // SAFETY: the string is an operand of the running instruction, in a
+        // register, so it outlives the borrow
+        Value::Str(s) => Some(unsafe { s.as_bytes_unbounded() }),
+        Value::Int(x) => Some(text.set(&numeric::num_to_string(Num::Int(x)))),
+        Value::Float(x) => Some(text.set(&numeric::num_to_string_for(Num::Float(x), float_fmt))),
+        _ => None,
+    }
+}
+
 /// Whether `v` takes part in a concatenation as it is (a string or a
 /// number).
 pub(super) fn is_concat_piece(v: Value) -> bool {

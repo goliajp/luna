@@ -56,6 +56,24 @@ impl Heap {
         }
     }
 
+    /// The string of `a` then `b` (a concatenation), without a buffer to
+    /// put them together in first.
+    pub(crate) fn try_intern_pair(&mut self, a: &[u8], b: &[u8]) -> Result<Gc<LuaStr>, Oom> {
+        let n = a.len() + b.len();
+        if n <= string::MAX_SHORT_LEN {
+            let mut buf = [0u8; string::MAX_SHORT_LEN];
+            buf[..a.len()].copy_from_slice(a);
+            buf[a.len()..n].copy_from_slice(b);
+            return self.try_intern(&buf[..n]);
+        }
+        let p = string::alloc_long_pair(self.mem.mem(), a, b, self.seed)?;
+        // SAFETY: `alloc_long_pair` just allocated `p`, linked nowhere yet
+        unsafe { self.link(p as *mut GcHeader) };
+        self.bytes += string::alloc_size(n);
+        // SAFETY: `p` is the string linked just above
+        Ok(unsafe { Gc::from_ptr(p) })
+    }
+
     /// The interned string with `bytes`, if one has been made; never
     /// allocates. A short name no string exists for is no table's key.
     pub fn find_interned(&self, bytes: &[u8]) -> Option<Gc<LuaStr>> {
