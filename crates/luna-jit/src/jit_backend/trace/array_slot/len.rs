@@ -69,13 +69,19 @@ pub(in super::super) fn emit_len_check<E: Emit>(
 fn emit_len_check_54<E: Emit>(bcx: &mut E, t: Value, hit: Block, miss: Block) {
     use luna_core::runtime::value::raw;
     let flags = MemFlagsData::trusted();
+    // one compare and branch each: `band` chains of the conditions cost
+    // more than the branches, which all go one way in a loop
     let mt = bcx.ins().load(
         types::I64,
         flags,
         t,
         super::super::super::TABLE_METATABLE_OFFSET as i32,
     );
-    let no_mt = bcx.ins().icmp_imm_u(IntCC::Equal, mt, 0);
+    let has_mt = bcx.ins().icmp_imm_u(IntCC::NotEqual, mt, 0);
+    let limit_blk = bcx.create_block();
+    bcx.ins().brif(has_mt, miss, &[], limit_blk, &[]);
+    bcx.switch_to_block(limit_blk);
+    bcx.seal_block(limit_blk);
     let l = load_alimit(bcx, t);
     let asize = load_asize(bcx, t);
     // `0 < l < a`, unsigned: `l - 1 < a - 1`; `l` 0 below a non-empty
@@ -86,43 +92,42 @@ fn emit_len_check_54<E: Emit>(bcx: &mut E, t: Value, hit: Block, miss: Block) {
     let inner_blk = bcx.create_block();
     let full_blk = bcx.create_block();
     let dense_blk = bcx.create_block();
-    let go = bcx.ins().band(no_mt, below);
     let other_blk = bcx.create_block();
-    bcx.ins().brif(go, inner_blk, &[], other_blk, &[]);
+    bcx.ins().brif(below, inner_blk, &[], other_blk, &[]);
     bcx.switch_to_block(other_blk);
     bcx.seal_block(other_blk);
     let at_full = bcx.ins().icmp(IntCC::Equal, l, asize);
-    let go_full = bcx.ins().band(no_mt, at_full);
-    bcx.ins().brif(go_full, full_blk, &[], miss, &[]);
+    bcx.ins().brif(at_full, full_blk, &[], miss, &[]);
 
     // `0 < l < a`: t[l] present and t[l + 1] nil
     bcx.switch_to_block(inner_blk);
     bcx.seal_block(inner_blk);
     let (_, atags) = array_part(bcx, t, asize);
-    let tag_at = bcx.ins().iadd(atags, l);
+    // the address of t[l]'s tag; t[l + 1]'s follows it
+    let tag_at = bcx.ins().iadd(atags, lm1);
     let ok = if cfg!(target_endian = "little") && raw::NIL == 0 {
         // both tags in one load, t[l]'s in the low byte: a set low byte
         // and a clear high one is 1..=255
         let pair = bcx
             .ins()
-            .load(types::I16, MemFlagsData::new().with_notrap(), tag_at, -1);
+            .load(types::I16, MemFlagsData::new().with_notrap(), tag_at, 0);
         let pair = bcx.ins().uextend(types::I64, pair);
         let pm1 = bcx.ins().iadd_imm_s(pair, -1);
         bcx.ins().icmp_imm_u(IntCC::UnsignedLessThan, pm1, 255)
     } else {
-        let next_tag = bcx.ins().uload8(types::I64, flags, tag_at, 0);
+        let this_tag = bcx.ins().uload8(types::I64, flags, tag_at, 0);
+        let this_set = bcx
+            .ins()
+            .icmp_imm_u(IntCC::NotEqual, this_tag, i64::from(raw::NIL));
+        let next_tag = bcx.ins().uload8(types::I64, flags, tag_at, 1);
         let next_nil = bcx
             .ins()
             .icmp_imm_u(IntCC::Equal, next_tag, i64::from(raw::NIL));
-        let prev_tag = bcx.ins().uload8(types::I64, flags, tag_at, -1);
-        let prev_set = bcx
-            .ins()
-            .icmp_imm_u(IntCC::NotEqual, prev_tag, i64::from(raw::NIL));
-        bcx.ins().band(prev_set, next_nil)
+        bcx.ins().band(this_set, next_nil)
     };
     bcx.ins().brif(ok, hit, &[l.into()], dense_blk, &[]);
 
-    // `l == a`: t[a] present (or a 0) and no hash part
+    // `l == a`: no hash part, and t[a] present (or a 0)
     bcx.switch_to_block(full_blk);
     bcx.seal_block(full_blk);
     let mask = bcx.ins().load(
@@ -131,19 +136,25 @@ fn emit_len_check_54<E: Emit>(bcx: &mut E, t: Value, hit: Block, miss: Block) {
         t,
         super::super::super::TABLE_NODE_MASK_OFFSET as i32,
     );
-    let no_hash = bcx
+    let has_hash = bcx
         .ins()
-        .icmp_imm_u(IntCC::Equal, mask, i64::from(u32::MAX));
+        .icmp_imm_u(IntCC::NotEqual, mask, i64::from(u32::MAX));
+    let last_blk = bcx.create_block();
+    let tag_blk = bcx.create_block();
+    bcx.ins().brif(has_hash, miss, &[], last_blk, &[]);
+    bcx.switch_to_block(last_blk);
+    bcx.seal_block(last_blk);
     let l_zero = bcx.ins().icmp_imm_u(IntCC::Equal, l, 0);
+    bcx.ins().brif(l_zero, hit, &[l.into()], tag_blk, &[]);
+    bcx.switch_to_block(tag_blk);
+    bcx.seal_block(tag_blk);
     let (_, atags) = array_part(bcx, t, asize);
-    let last = bcx.ins().iadd(atags, l);
-    let last_tag = bcx.ins().uload8(types::I64, flags, last, -1);
+    let last = bcx.ins().iadd(atags, lm1);
+    let last_tag = bcx.ins().uload8(types::I64, flags, last, 0);
     let last_set = bcx
         .ins()
         .icmp_imm_u(IntCC::NotEqual, last_tag, i64::from(raw::NIL));
-    let present = bcx.ins().select(l_zero, l_zero, last_set);
-    let ok = bcx.ins().band(present, no_hash);
-    bcx.ins().brif(ok, hit, &[l.into()], miss, &[]);
+    bcx.ins().brif(last_set, hit, &[l.into()], miss, &[]);
 
     // a leading run of p < a values and nothing after it
     bcx.switch_to_block(dense_blk);

@@ -246,7 +246,10 @@ impl StringTable {
         // SAFETY: `self.as_ptr()` is the start of this `LuaStr`'s header which was allocated with the trailing bytes / hash fields in the same allocation by `StringTable::intern`.
         unsafe {
             while !cur.is_null() {
-                if (*cur).hdr.aux as usize == bytes.len() && bytes_of(cur) == bytes {
+                // the hash first: it is in the header already loaded for
+                // `hnext`, and keeps the byte compare to the string sought
+                // (`bytes_of` compares lengths before bytes)
+                if (*cur).hash.get() == h && bytes_of(cur) == bytes {
                     return (cur, false);
                 }
                 cur = (*cur).hnext;
