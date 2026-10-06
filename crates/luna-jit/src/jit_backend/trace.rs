@@ -58,7 +58,7 @@ pub(crate) use llvm_tier::{quiesce as llvm_quiesce, tier_up_llvm};
 pub(crate) mod reloc;
 mod share;
 pub(crate) mod share_failures;
-pub(crate) use emit::{ClifEmit, Emit, Ins, RelocKind, reloc_symbol};
+pub(crate) use emit::{ClifEmit, Emit, Ins, RelocKind, len_state_flags_in, reloc_symbol};
 pub(crate) use lir::CodeArena;
 mod aot_data;
 mod block_params;

@@ -123,8 +123,10 @@ pub(crate) unsafe fn hash_of(p: *const LuaStr) -> u32 {
 
 /// PUC luaS_hash (all bytes, no step — post-5.3 flooding fix).
 pub(crate) fn lua_hash(bytes: &[u8], seed: u32) -> u32 {
+    // PUC 5.4 / 5.5 `luaS_hash`: from the last byte to the first, so that
+    // with the same seed a string hashes, and a table places it, as there
     let mut h = seed ^ bytes.len() as u32;
-    for &b in bytes {
+    for &b in bytes.iter().rev() {
         h ^= h
             .wrapping_shl(5)
             .wrapping_add(h.wrapping_shr(2))
@@ -244,7 +246,10 @@ impl StringTable {
         // SAFETY: `self.as_ptr()` is the start of this `LuaStr`'s header which was allocated with the trailing bytes / hash fields in the same allocation by `StringTable::intern`.
         unsafe {
             while !cur.is_null() {
-                if (*cur).hdr.aux as usize == bytes.len() && bytes_of(cur) == bytes {
+                // the hash first: it is in the header already loaded for
+                // `hnext`, and keeps the byte compare to the string sought
+                // (`bytes_of` compares lengths before bytes)
+                if (*cur).hash.get() == h && bytes_of(cur) == bytes {
                     return (cur, false);
                 }
                 cur = (*cur).hnext;
