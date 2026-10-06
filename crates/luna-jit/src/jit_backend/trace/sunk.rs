@@ -161,12 +161,14 @@ pub(super) fn emit_materialize_live_sunk<E: Emit>(
                 bcx.ins().iconst(types::I64, 0),
             )
         };
+        let ops_val = bcx.ins().iconst(types::I64, site.table_ops);
         let cap_val = bcx.ins().iconst(types::I64, cap as i64);
         let n_hash_val = bcx.ins().iconst(types::I64, n_hash as i64);
         let mat_ref = bcx.import_func(mat_sunk_id);
         let call = bcx.ins().call(
             mat_ref,
             &[
+                ops_val,
                 cap_val,
                 raws_addr,
                 kinds_addr,

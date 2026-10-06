@@ -19,7 +19,8 @@ pub(super) fn array_read<E: Emit>(
     let miss = lw.bcx.create_block();
     let merge = lw.bcx.create_block();
     lw.bcx.append_block_param(merge, types::I64);
-    array_slot::emit_array_get_check(&mut lw.bcx, t, key, want, hit, miss);
+    let rules = array_slot::TableRules::of(pl.opts.dialect);
+    array_slot::emit_array_get_check(&mut lw.bcx, rules, t, key, want, hit, miss);
     lw.bcx.switch_to_block(hit);
     lw.bcx.seal_block(hit);
     let addr = lw.bcx.block_params(hit)[0];
@@ -43,6 +44,7 @@ pub(super) fn array_read<E: Emit>(
 /// the returned block.
 pub(super) fn array_write<E: Emit>(
     bcx: &mut E,
+    rules: array_slot::TableRules,
     t: Value,
     key: Value,
     val: Value,
@@ -54,7 +56,17 @@ pub(super) fn array_write<E: Emit>(
     }
     let done = bcx.create_block();
     let miss = bcx.create_block();
-    array_slot::emit_array_set(bcx, t, key, val, kind_tag(kind), done, miss, test_readonly);
+    array_slot::emit_array_set(
+        bcx,
+        rules,
+        t,
+        key,
+        val,
+        kind_tag(kind),
+        done,
+        miss,
+        test_readonly,
+    );
     bcx.switch_to_block(miss);
     bcx.seal_block(miss);
     Some(done)

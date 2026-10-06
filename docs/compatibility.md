@@ -301,7 +301,7 @@ produces. MacroLua has no PUC format; its `string.dump` writes luna's own.
 ### luna's own dumps
 
 `luna_core::vm::dump::dump` (used by `luna-aot`) writes luna's own binary
-format: the running dialect's PUC header, then a `"\x00LunaV1\x00"`
+format: the running dialect's PUC header, then a `"\x00LunaV2\x00"`
 sentinel and a body in luna's 65-op instruction set. It loads back into
 luna, not into PUC.
 
@@ -443,9 +443,17 @@ messages. What still differs does so on purpose:
   cycle. luna's collector is its own, so this follows luna's progress,
   not PUC's. Everything else about `collectgarbage` — options per
   dialect, return shapes, how parameters read back — matches.
+- **`#t` on a table with holes** returns the border the dialect's PUC
+  returns, given the same construction history (constructors, stores,
+  removals, `table.insert` / `table.remove`, and in 5.4 the indexing that
+  moves its length hint). Where PUC's own answer changes from run to run,
+  luna's is one of PUC's answers: PUC 5.5 searches the hash part with
+  random steps drawn from a per-state seed (luna draws them from the
+  table's address), and from 5.2 on a
+  table holding strings, tables or functions as keys is sized by hashes
+  PUC seeds per run.
 - **Implementation-internal values** that the manual leaves open or that
-  expose the compiler: `#t` on a table with holes may pick a different
-  border; `debug.getlocal` past the declared locals reads temporaries
+  expose the compiler: `debug.getlocal` past the declared locals reads temporaries
   whose contents depend on register allocation; a C function's
   return-hook `ftransfer` depends on its own stack use.
 - **Compile-time limit errors have no `near` token** ("too many

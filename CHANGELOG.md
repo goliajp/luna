@@ -23,6 +23,10 @@ optimization.
 
 ### Breaking
 
+- Chunks in luna's own binary format (PUC header followed by the
+  `LunaV1` body) no longer load: a table constructor's op now carries
+  its size hints, and the body tag is `LunaV2`. Dump the source again
+  with this version. PUC bytecode loads as before.
 - C API: errors leave a C function at once, as in PUC. `lua_error`,
   `luaL_error` and every API function that raises (`lua_gettable`,
   `lua_call`, `luaL_checkinteger`, ...) jump back to the call that luna
@@ -362,6 +366,25 @@ optimization.
   about 20 fewer machine instructions each.
 
 ### Fixed
+
+- `#t` on a table with holes could return a different border than PUC.
+  `{f(6), f(7), g(), f(8)}` (with `g` returning nothing) has borders 2
+  and 4: PUC 5.5.1 returns 2, luna returned 4. Each dialect now sizes a
+  table as its PUC does — the constructor's size hints, a list store
+  growing the array to its last index, `table.pack` and vararg tables
+  sized to their count, the rehash sizing of each version (5.5's
+  differs), the placement of number and boolean keys in the hash part,
+  5.1 to 5.3 adding a key assigned `nil` — and searches for the border as
+  its PUC does: 5.1 to 5.3 by binary search, 5.4 from its length limit
+  (which `#t` lowers and indexing past it raises), 5.5 from its length
+  hint. The trace and method JITs and AOT code give the same answers.
+  5.1 also hashes strings as PUC 5.1, which sizes tables with string
+  keys the same way. All released versions, 4.0.2 included, are
+  affected.
+- In a table constructor, a call or `...` that is the last list item but
+  is followed by keyed fields (`{f(), x = 1}`) now gives one value, as in
+  PUC; it gave all of its values. All released versions, 4.0.2
+  included, are affected.
 
 - 5.3–5.5: the compiler folds constant `^`, `//`, `%`, bitwise operations
   and `~` as PUC's parser does (`2^53` is a constant, not a `POW` at run

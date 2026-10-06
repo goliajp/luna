@@ -34,7 +34,11 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
                 return Some(());
             }
             let func_ref = lw.bcx.import_func(new_table_id);
-            let call = lw.bcx.ins().call(func_ref, &[]);
+            let ops = lw
+                .bcx
+                .ins()
+                .iconst(types::I64, crate::jit_backend::pack_table_ops(ins));
+            let call = lw.bcx.ins().call(func_ref, &[ops]);
             let t = lw.bcx.inst_results(call)[0];
             lw.bcx.def_var(regs[ins.a() as usize], t);
             lw.current_kinds[off + ins.a() as usize] = RegKind::Table;
@@ -224,7 +228,15 @@ pub(super) fn emit_table_set_op<E: Emit>(
             }
             let val = lw.bcx.use_var(regs[ins.c() as usize]);
             let test = store_tests_readonly(lw, off + ins.a() as usize, t);
-            let stored_inline = array_write(&mut lw.bcx, t, k_imm, val, val_kind, test);
+            let stored_inline = array_write(
+                &mut lw.bcx,
+                array_slot::TableRules::of(pl.opts.dialect),
+                t,
+                k_imm,
+                val,
+                val_kind,
+                test,
+            );
             let done = emit_table_set(&mut lw.bcx, &set_ids, t, k_imm, RegKind::Int, val, val_kind);
             guard!(lw, pl, done, i, rop.pc);
             array_write_join(&mut lw.bcx, stored_inline);
@@ -282,13 +294,29 @@ pub(super) fn emit_table_set_op<E: Emit>(
             let stored_inline = match key_kind {
                 RegKind::Int => {
                     let test = store_tests_readonly(lw, off + ins.a() as usize, t);
-                    array_write(&mut lw.bcx, t, key, val, val_kind, test)
+                    array_write(
+                        &mut lw.bcx,
+                        array_slot::TableRules::of(pl.opts.dialect),
+                        t,
+                        key,
+                        val,
+                        val_kind,
+                        test,
+                    )
                 }
                 // the helper on a miss stores by the float key itself
                 RegKind::Float => {
                     let index = float_key_index(&mut lw.bcx, key);
                     let test = store_tests_readonly(lw, off + ins.a() as usize, t);
-                    array_write(&mut lw.bcx, t, index, val, val_kind, test)
+                    array_write(
+                        &mut lw.bcx,
+                        array_slot::TableRules::of(pl.opts.dialect),
+                        t,
+                        index,
+                        val,
+                        val_kind,
+                        test,
+                    )
                 }
                 _ => None,
             };
