@@ -107,3 +107,29 @@ fn scanf_takes_what_msvc_takes() {
         assert_eq!(f.fread(&mut os, 100), rest, "{input:?}");
     }
 }
+
+/// Numbers for `fscanf("%lf")`, with the bits MSVC's `sscanf` gave for
+/// each on windows-latest (`tests/crt_text/hexscan.c`): 25 chosen
+/// hexadecimal edge cases and 4000 random ones (long mantissas, ties,
+/// subnormals, overflow, and the library's slip at the smallest normal),
+/// then 14 decimal edge cases and 3000 random ones.
+#[test]
+fn numbers_convert_as_msvc_converts_them() {
+    let data = include_str!("../../../../tests/crt_text/hexscan-msvc.txt");
+    let mut checked = 0;
+    for line in data.lines() {
+        let mut parts = line.split('\t');
+        let (input, n, bits) = (
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+        );
+        assert_eq!(n, "1", "{input}");
+        let mut os = mem(input.as_bytes());
+        let mut f = CrtFile::open(b"r", false, false);
+        let got = scan::scan_double(&mut f, &mut os).expect(input);
+        assert_eq!(format!("{:016x}", got.to_bits()), bits, "{input}");
+        checked += 1;
+    }
+    assert_eq!(checked, 7039);
+}
