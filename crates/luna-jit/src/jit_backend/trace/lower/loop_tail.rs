@@ -213,19 +213,7 @@ pub(super) fn emit_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         body_loop,
         ..
     } = *lw;
-    // keep the head's promise (`head_stored`): a register the body was not
-    // expected to write but did is stored back
-    for idx in 0..lw.regs_full.len() {
-        if let Some(hv) = lw.head_stored[idx] {
-            let v = use_var_resolved(&mut lw.bcx, lw.regs_full[idx]);
-            if v != hv && lw.stored[idx] != Some(v) {
-                lw.bcx
-                    .ins()
-                    .store(MemFlagsData::new(), v, reg_state, (idx as i32) * 8);
-                lw.stored[idx] = Some(v);
-            }
-        }
-    }
+    sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
     let Some((cell, at)) = &lw.tier_count else {
         lw.bcx.ins().jump(body_loop, &[]);
         return;

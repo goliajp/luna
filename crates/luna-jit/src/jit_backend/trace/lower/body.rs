@@ -22,26 +22,11 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
     lw.bcx.switch_to_block(body_loop);
     // Intentionally NOT sealed: the tail's clean-close back-edge
     // adds a second predecessor below.
-    // A register the body writes is written back only where something
-    // reads reg_state (an exit, or an op that is not `pure_op`), not each
-    // iteration; any other register holds at the head what reg_state
-    // holds, which the back edge keeps true (`emit_back_edge`).
-    let mut written = vec![false; lw.regs_full.len()];
-    for w in compute_body_writes(record, &pl.op_offsets) {
-        if let Some(x) = written.get_mut(w as usize) {
-            *x = true;
-        }
-    }
-    for (idx, x) in written.iter_mut().enumerate() {
-        // inline frames' windows: written by the calls the trace inlines
-        *x |= idx >= pl.max_stack;
-    }
-    for (idx, &v) in lw.regs_full.iter().enumerate() {
-        let val = use_var_resolved(&mut lw.bcx, v);
-        let promise = (!written[idx]).then_some(val);
-        lw.stored.push(promise);
-        lw.head_stored.push(promise);
-    }
+    lw.stored.extend(
+        lw.regs_full
+            .iter()
+            .map(|&v| Some(use_var_resolved(&mut lw.bcx, v))),
+    );
     // the virtual register of a constant-operand op (see `vconsts`)
     let kvar = lw.bcx.declare_var(types::I64);
     // this op's register window (a copy, so the emit code can take `lw`
