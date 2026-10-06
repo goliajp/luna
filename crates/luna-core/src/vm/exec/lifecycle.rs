@@ -28,10 +28,11 @@ impl Vm {
         heap.no_ephemeron = version <= LuaVersion::Lua51;
         heap.signed_zero_keys = version <= LuaVersion::Lua52;
         heap.table_dialect = crate::runtime::table::Dialect::of(version);
-        // strings made before this would sit in the string table by the
-        // other hash
-        debug_assert!(heap.strings_is_empty());
+        // the strings the heap made before it knew the dialect (its fixed
+        // memory error message) move to the dialect's hash
         heap.hash51 = version == LuaVersion::Lua51;
+        let seed = heap.seed();
+        heap.rehash_strings(seed);
         // PUC 5.3 needs two GC cycles to finalize a table caught in a
         // coroutine reference cycle (gc.lua :502); 5.4+ rewrote the GC and
         // finalize in a single cycle (5.4/5.5 gc.lua :544 assert exactly one).
@@ -52,8 +53,8 @@ impl Vm {
             globals,
             type_mt: [None; 7],
             mm_names,
-            parse_scratch: Default::default(),
-            compile_scratch: Default::default(),
+            parse_scratch: crate::frontend::parser::ParseScratch::new(mem_owner.clone()),
+            compile_scratch: crate::compiler::CompileScratch::new(mem),
             c_depth: 0,
             pcall_depth: 0,
             nny: 0,
@@ -89,9 +90,9 @@ impl Vm {
             host_warn: None,
             host_light: std::collections::HashMap::new(),
             warn_state: WarnState::Off,
-            warn_buf: Vec::new(),
+            warn_buf: LVec::new(mem),
             warn_cont: false,
-            warn_log: Vec::new(),
+            warn_log: LVec::new(mem),
             instr_budget: None,
             bytecode_loading: true,
             puc_bytecode_loading: false,
@@ -108,13 +109,12 @@ impl Vm {
             trap: true,
             pending_tailcalls: 0,
             pending_ccmt: 0,
-            errored_natives: Vec::new(),
+            errored_natives: LVec::new(mem),
             msgh_floor: 0,
             msgh_running: None,
             msgh_runs: 0,
             errerr_raised: 0,
             gcmm_raised: 0,
-            mem_raised: 0,
             native_ret_hooked: false,
             tail_hook_fired: false,
             msgh_applied: None,
@@ -128,7 +128,7 @@ impl Vm {
             hook_resumed: false,
             error_traceback: None,
             public_call_depth: 0,
-            running_natives: Vec::new(),
+            running_natives: LVec::new(mem),
             natives_base: 0,
             // JIT-specific state lives in the `JitState`
             // sidecar. The `luna` crate's `Vm::new_minimal_with_jit` /
@@ -136,7 +136,7 @@ impl Vm {
             // `CraneliftBackend` for callers that want JIT acceleration.
             jit: crate::vm::jit_state::JitState::with_null_backend(),
             // host roots ticket pool for the `Lua` facade
-            host_roots: Vec::new(),
+            host_roots: LVec::new(mem),
             // MacroLua registry. Pre-populated with
             // built-ins (`@quote` / `@unquote` / `@if` / `@gensym`)
             // when this Vm is constructed under `LuaVersion::MacroLua`.
@@ -145,8 +145,8 @@ impl Vm {
             } else {
                 crate::frontend::macro_expander::MacroRegistry::new()
             },
-            host_roots_free: Vec::new(),
-            sort_scratch: Vec::new(),
+            host_roots_free: LVec::new(mem),
+            sort_scratch: LVec::new(mem),
             // LuaUserdata trait sugar's per-Vm
             // metatable cache. Populated lazily by register_userdata.
             userdata_metatables: std::collections::HashMap::new(),

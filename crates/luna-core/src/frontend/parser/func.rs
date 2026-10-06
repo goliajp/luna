@@ -5,7 +5,7 @@ use super::*;
 impl<'s> Parser<'s> {
     pub(super) fn func_body(&mut self, line: u32) -> Result<FuncBody, SyntaxError> {
         self.expect(Token::LParen, "(")?;
-        self.func_local_count.push((0, line, 0));
+        self.func_local_count.push_or_abort((0, line, 0));
         self.enter_fn_51(line);
         let mark = self.stk.names.len();
         let mut vararg = Vararg::None;
@@ -31,7 +31,7 @@ impl<'s> Parser<'s> {
                         let p = self.expect_name()?;
                         self.new_local()?;
                         self.add_local_51(p.sym);
-                        self.stk.names.push(p);
+                        self.stk.names.push_or_abort(p);
                     }
                     _ => return Err(self.error("<name> or '...' expected")),
                 }
@@ -59,7 +59,7 @@ impl<'s> Parser<'s> {
             }
         }
         self.expect(Token::RParen, ")")?;
-        self.funcs.push(FnFlow {
+        self.funcs.push_or_abort(FnFlow {
             vararg: !matches!(vararg, Vararg::None),
             loops: 0,
         });

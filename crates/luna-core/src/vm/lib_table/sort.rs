@@ -3,6 +3,7 @@
 
 use super::{TAB_RW, aux_getn, tab_geti, tab_seti};
 use crate::runtime::Value;
+use crate::runtime::mem::LVec;
 use crate::version::LuaVersion as V;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
@@ -29,11 +30,12 @@ pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     // of `sort_scratch` is that stack, traced by `gc_roots`, so a
     // `collectgarbage()` inside the comparator cannot free them.
     let frame = match comp {
-        None => pure_snapshot(tv, n),
+        None => pure_snapshot(vm, tv, n),
         Some(_) => None,
     };
-    let snapshot = frame.as_ref().map(Vec::len);
-    vm.sort_scratch.push(frame.unwrap_or_default());
+    let snapshot = frame.as_ref().map(|f| f.len());
+    let frame = frame.unwrap_or_else(|| LVec::new(vm.heap.mem()));
+    vm.sort_scratch.push_or_abort(frame);
     let s = Sorter {
         tv,
         comp,
@@ -66,12 +68,13 @@ pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
 /// or `__newindex` (every slot is present), so running the same
 /// algorithm over a copy and storing the result gives the same table as
 /// sorting in place, without a table access per step.
-fn pure_snapshot(tv: Value, n: i64) -> Option<Vec<Value>> {
+fn pure_snapshot(vm: &Vm, tv: Value, n: i64) -> Option<LVec<Value>> {
     let Value::Table(t) = tv else {
         return None;
     };
     // `n` may come from `__len`; only a real sequence fills the vector
-    let mut out = Vec::with_capacity(usize::try_from(n.min(t.len())).ok()?);
+    let mut out = LVec::new(vm.heap.mem());
+    out.reserve_or_abort(usize::try_from(n.min(t.len())).ok()?);
     let mut strings = None;
     for i in 1..=n {
         let v = t.get(Value::Int(i));
@@ -84,7 +87,7 @@ fn pure_snapshot(tv: Value, n: i64) -> Option<Vec<Value>> {
         if *strings.get_or_insert(is_str) != is_str {
             return None;
         }
-        out.push(v);
+        out.push_or_abort(v);
     }
     Some(out)
 }
@@ -107,7 +110,7 @@ fn invalid_order(vm: &mut Vm) -> LuaError {
 }
 
 impl Sorter {
-    fn stack(vm: &mut Vm) -> &mut Vec<Value> {
+    fn stack(vm: &mut Vm) -> &mut LVec<Value> {
         vm.sort_scratch.last_mut().expect("sort frame")
     }
 
@@ -122,7 +125,7 @@ impl Sorter {
     }
 
     fn push(vm: &mut Vm, v: Value) {
-        Self::stack(vm).push(v);
+        Self::stack(vm).push_or_abort(v);
     }
 
     fn geti(&self, vm: &mut Vm, i: i64) -> Result<(), LuaError> {
