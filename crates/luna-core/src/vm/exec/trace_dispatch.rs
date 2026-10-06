@@ -463,6 +463,16 @@ impl Vm {
             let storage: &mut dyn crate::jit::JitStorage = jit.storage.as_mut();
             jit.trace_compiler.tier_up(storage, ct)
         };
+        // a backend still compiling better code keeps something in
+        // `source`: ask again at the next entry when the trace runs the
+        // optimizing tier's code, which does not count iterations, else once
+        // the baseline code's count reaches `at` anew
+        if t.source.borrow().is_some() {
+            let counting = entry.is_none() && t.optimized.get().is_null();
+            t.count
+                .set(if counting { 0 } else { t.at.saturating_sub(1) });
+            t.tried.set(false);
+        }
         let Some(entry) = entry else { return };
         let p = entry as *const () as *const u8;
         t.optimized.set(p);
