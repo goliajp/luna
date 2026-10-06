@@ -77,9 +77,53 @@ fn value(
     if crate::native_stack::is_low(crate::native_stack::RESERVE) {
         return None;
     }
-    let ct_value = |ast: &Chunk, id: ExprId, named: &mut dyn FnMut(&Name) -> Option<CtConst>| {
-        value(ast, id, named, compiled)
+    // the left spine of binary operators, outermost first: a long chain
+    // is folded without recursion
+    let mut ops: Vec<(BinOp, ExprId)> = Vec::new();
+    let mut cur = id;
+    let mut v = loop {
+        match ast.expr(cur) {
+            // `X or K` with X compiled in full and always false: K, whatever
+            // X is
+            Expr::BinOp {
+                op: BinOp::Or,
+                lhs,
+                rhs,
+                ..
+            } if compiled && falsy_and(ast, *lhs, named) => {
+                break value(ast, *rhs, named, compiled)?;
+            }
+            Expr::BinOp { op, lhs, rhs, .. } => {
+                ops.push((*op, *rhs));
+                cur = *lhs;
+            }
+            _ => break value_leaf(ast, cur, named, compiled)?,
+        }
     };
+    for (op, rhs) in ops.into_iter().rev() {
+        v = match op {
+            // a constant left operand that decides the outcome emits no
+            // jump, leaving the right operand as the result
+            BinOp::And if v.truthy() => value(ast, rhs, named, compiled)?,
+            BinOp::Or if !v.truthy() => value(ast, rhs, named, compiled)?,
+            BinOp::And | BinOp::Or => return None,
+            op => {
+                let arith = Arith::of(op)?;
+                let r = value(ast, rhs, named, compiled)?;
+                fold(arith, &v, &r, false)?
+            }
+        };
+    }
+    Some(v)
+}
+
+/// [`value`] of an expression that is not a binary operator.
+fn value_leaf(
+    ast: &Chunk,
+    id: ExprId,
+    named: &mut dyn FnMut(&Name) -> Option<CtConst>,
+    compiled: bool,
+) -> Option<CtConst> {
     match ast.expr(id) {
         Expr::Nil => Some(CtConst::Nil),
         Expr::True => Some(CtConst::Bool(true)),
@@ -88,9 +132,9 @@ fn value(
         Expr::Float(f) => Some(CtConst::Float(*f)),
         Expr::Str(s) => Some(CtConst::Str(*s)),
         Expr::Name(n) => named(n),
-        Expr::Paren(inner) => ct_value(ast, *inner, named),
+        Expr::Paren(inner) => value(ast, *inner, named, compiled),
         Expr::UnOp { op, operand, .. } => {
-            let v = ct_value(ast, *operand, named)?;
+            let v = value(ast, *operand, named, compiled)?;
             match op {
                 // `codenot` turns a constant operand into a boolean
                 UnOp::Not => Some(CtConst::Bool(!v.truthy())),
@@ -98,36 +142,6 @@ fn value(
                 UnOp::BNot => fold(Arith::BNot, &v, &CtConst::Int(0), false),
                 UnOp::Len => None,
             }
-        }
-        Expr::BinOp {
-            op: BinOp::Or,
-            lhs,
-            rhs,
-            ..
-        } if compiled && falsy_and(ast, *lhs, named) => ct_value(ast, *rhs, named),
-        Expr::BinOp { op, lhs, rhs, .. } => {
-            let l = ct_value(ast, *lhs, named)?;
-            let arith = match op {
-                // a constant left operand that decides the outcome emits no
-                // jump, leaving the right operand as the result
-                BinOp::And => {
-                    return if l.truthy() {
-                        ct_value(ast, *rhs, named)
-                    } else {
-                        None
-                    };
-                }
-                BinOp::Or => {
-                    return if l.truthy() {
-                        None
-                    } else {
-                        ct_value(ast, *rhs, named)
-                    };
-                }
-                op => Arith::of(*op)?,
-            };
-            let r = ct_value(ast, *rhs, named)?;
-            fold(arith, &l, &r, false)
         }
         _ => None,
     }

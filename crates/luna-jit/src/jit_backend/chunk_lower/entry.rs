@@ -6,13 +6,28 @@ pub(super) struct EntryChecks {
     pub(super) self_upval: Option<u32>,
     /// `("math", name)` key pairs of the folded `math.<name>` calls.
     pub(super) math_fns: Vec<(Gc<LuaStr>, Gc<LuaStr>)>,
-    /// The body calls itself, taking these [`SelfCalls`] parameters.
-    pub(super) self_calls: Option<SelfCallParams>,
+    /// The body calls itself: it runs as a ring of copies behind a stub
+    /// (see [`SelfCalls`]).
+    pub(super) ring: Option<RingSpec>,
+}
+
+/// How a self-recursive chunk's ring is built and checked.
+#[derive(Clone, Copy)]
+pub(super) struct RingSpec {
+    /// `luna_jit_helpers::self_call_desc` of the self calls
+    pub(super) desc: i64,
+    /// the dialect counts calls against a depth limit (5.1, and 5.2,
+    /// whose budget is unbounded, compiled alike)
+    pub(super) counted: bool,
+    /// copies of the body in the ring: levels between two checks
+    pub(super) copies: u32,
 }
 
 /// Defines the entry that runs `checks` before calling the chunk body
 /// `body_id`: when one fails it returns at once with a deopt parked, and
-/// the dispatcher runs the call in the interpreter.
+/// the dispatcher runs the call in the interpreter. A self-recursive body
+/// is called through its stub, with the stub's context filled and its
+/// address in the pinned register.
 pub(super) fn define_checked_entry<M: Module>(
     module: &mut M,
     ctx: &mut cranelift_codegen::Context,
@@ -20,6 +35,10 @@ pub(super) fn define_checked_entry<M: Module>(
     checks: &EntryChecks,
     num_params: usize,
 ) -> Option<FuncId> {
+    let callee = match checks.ring {
+        Some(ring) => define_stub(module, ctx, body_id, num_params, ring)?,
+        None => body_id,
+    };
     let mut sig = module.make_signature();
     for _ in 0..num_params {
         sig.params.push(AbiParam::new(types::I64));
@@ -80,9 +99,8 @@ pub(super) fn define_checked_entry<M: Module>(
         bcx.ins().brif(ok, next, &[], bail, &[]);
         bcx.switch_to_block(next);
     }
-    let mut args = args;
     let mut saved_pinned = None;
-    if let Some(extra) = checks.self_calls {
+    if checks.ring.is_some() {
         let fill_id = module
             .declare_function("luna_jit_enter_ctx", Linkage::Import, &{
                 let mut s = module.make_signature();
@@ -96,19 +114,12 @@ pub(super) fn define_checked_entry<M: Module>(
             bcx.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, bytes, 3));
         let ctx_addr = bcx.ins().stack_addr(types::I64, slot, 0);
         bcx.ins().call(fill_ref, &[ctx_addr]);
-        let limit = bcx.ins().stack_load(types::I64, types::I64, slot, 0);
         // the caller's value of the register, which the ABI makes ours to keep
         saved_pinned = Some(bcx.ins().get_pinned_reg(types::I64));
-        bcx.ins().set_pinned_reg(limit);
-        if extra.count {
-            args.push(bcx.ins().stack_load(types::I64, types::I64, slot, 16));
-        }
-        if extra.ctx {
-            args.push(ctx_addr);
-        }
+        bcx.ins().set_pinned_reg(ctx_addr);
     }
-    let body_ref = module.declare_func_in_func(body_id, bcx.func);
-    let call = bcx.ins().call(body_ref, &args);
+    let callee_ref = module.declare_func_in_func(callee, bcx.func);
+    let call = bcx.ins().call(callee_ref, &args);
     let r = bcx.inst_results(call)[0];
     if let Some(saved) = saved_pinned {
         bcx.ins().set_pinned_reg(saved);
@@ -129,4 +140,96 @@ pub(super) fn define_checked_entry<M: Module>(
     chunk_share::note(module, ctx, entry_id);
     module.clear_context(ctx);
     Some(entry_id)
+}
+
+/// Defines the stub the last copy of a self-recursive body calls (and the
+/// entry calls first): with the native stack below the limit in its
+/// context, or fewer calls left than the ring has copies, it has
+/// `luna_jit_self_call_slow` make the call in the interpreter; otherwise
+/// it takes the ring's calls out of the budget and calls the first copy.
+fn define_stub<M: Module>(
+    module: &mut M,
+    ctx: &mut cranelift_codegen::Context,
+    body_id: FuncId,
+    num_params: usize,
+    ring: RingSpec,
+) -> Option<FuncId> {
+    let mut sig = module.make_signature();
+    for _ in 0..num_params {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    let stub_id = module
+        .declare_function("luna_jit_chunk_stub", Linkage::Local, &sig)
+        .ok()?;
+    let mut slow_sig = module.make_signature();
+    for _ in 0..7 {
+        slow_sig.params.push(AbiParam::new(types::I64));
+    }
+    slow_sig.returns.push(AbiParam::new(types::I64));
+    let slow_id = module
+        .declare_function("luna_jit_self_call_slow", Linkage::Import, &slow_sig)
+        .ok()?;
+
+    ctx.func.signature = sig;
+    ctx.func.name = UserFuncName::user(0, stub_id.as_u32());
+    let mut fbc = FunctionBuilderContext::new();
+    let mut bcx = FunctionBuilder::new(&mut ctx.func, &mut fbc);
+    let entry = bcx.create_block();
+    let fast = bcx.create_block();
+    let slow = bcx.create_block();
+    bcx.append_block_params_for_function_params(entry);
+    bcx.switch_to_block(entry);
+    let args: Vec<Value> = bcx.block_params(entry).to_vec();
+    let flags = MemFlagsData::trusted();
+    let ctx_addr = bcx.ins().get_pinned_reg(types::I64);
+    let limit = bcx.ins().load(types::I64, flags, ctx_addr, 0);
+    let sp = bcx.ins().get_stack_pointer(types::I64);
+    let mut go_slow = bcx.ins().icmp(IntCC::UnsignedLessThan, sp, limit);
+    let copies = i64::from(ring.copies);
+    let left = ring
+        .counted
+        .then(|| bcx.ins().load(types::I64, flags, ctx_addr, 16));
+    if let Some(left) = left {
+        let spent = bcx
+            .ins()
+            .icmp_imm_s(IntCC::SignedLessThanOrEqual, left, copies);
+        go_slow = bcx.ins().bor(go_slow, spent);
+    }
+    bcx.ins().brif(go_slow, slow, &[], fast, &[]);
+
+    bcx.switch_to_block(fast);
+    if let Some(left) = left {
+        let fewer = bcx.ins().iadd_imm_s(left, -copies);
+        bcx.ins().store(flags, fewer, ctx_addr, 16);
+    }
+    let body_ref = module.declare_func_in_func(body_id, bcx.func);
+    let call = bcx.ins().call(body_ref, &args);
+    let r = bcx.inst_results(call)[0];
+    if let Some(left) = left {
+        bcx.ins().store(flags, left, ctx_addr, 16);
+    }
+    bcx.ins().return_(&[r]);
+
+    bcx.switch_to_block(slow);
+    let slow_ref = module.declare_func_in_func(slow_id, bcx.func);
+    let desc = bcx.ins().iconst(types::I64, ring.desc);
+    let left = left.unwrap_or_else(|| {
+        bcx.ins()
+            .iconst(types::I64, luna_jit_helpers::SELF_CALL_UNCOUNTED)
+    });
+    let mut slow_args = vec![ctx_addr, desc, left];
+    slow_args.extend_from_slice(&args);
+    slow_args.resize_with(7, || bcx.ins().iconst(types::I64, 0));
+    let call = bcx.ins().call(slow_ref, &slow_args);
+    let r = bcx.inst_results(call)[0];
+    bcx.ins().return_(&[r]);
+
+    bcx.seal_all_blocks();
+    bcx.finalize(module.target_config());
+    module.define_function(stub_id, ctx).ok()?;
+    chunk_share::note(module, ctx, stub_id);
+    module.clear_context(ctx);
+    chunk_share::note_ring(body_id, stub_id, ring.copies);
+    Some(stub_id)
 }

@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1404** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1406** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 224 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **7** | six `#[doc(hidden)]`, and `MemOwner::raw`, see §5 |
 | **`pub unsafe extern "C" fn`** | 200 | the C API (143), the `luna_jit_*` helpers compiled code calls (51, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
@@ -51,18 +51,18 @@ quotes the pattern counts too.
 | | unit-test files under `src/` | 20 | tests that inspect raw layouts; a test `lua_Alloc` |
 | | `tests/` | 53 | integration tests: a poisoning global allocator, async wakers, userdata internals, a raw write into a read-only table, the host C library's `%p`, a counting `lua_Alloc` |
 | `luna-jit` | `capi*` | 382 | the C API: raw `lua_State` pointers, C strings, `lua_Debug` and `luaL_Buffer` structs and C function pointers across the boundary (§3.7) |
-| | `jit_backend` | 58 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points (the LLVM backend's trace entries among them), `Send` for handles that own JIT modules or code pages, copying compiled code out to share it between Vms, the debug dump of a trace's machine code |
+| | `jit_backend` | 59 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points (the LLVM backend's trace entries among them), `Send` for handles that own JIT modules or code pages, copying compiled code out to share it between Vms, the debug dump of a trace's machine code |
 | | other | 2 | the CLI's `arg` table and the `lua_facade` table handle |
 | | unit-test files under `src/` | 70 | tests that call compiled code or the `extern "C"` helpers directly |
 | | `tests/`, `benches/`, `examples/` | 43 | a C API state driven from Rust, a counting global allocator, the `send` overhead bench |
-| `luna-jit-helpers` | | 167 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
+| `luna-jit-helpers` | | 168 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
 | `luna-jit-llvm` | `src/` | 6 | LLVM execution engines (one per compiled method or trace), `Send` for an engine compiled on the background compile thread, and the register-file GEPs |
 | | `tests/` | 34 | calling LLVM-compiled chunks |
 | `luna-runtime-helpers` | | 45 | the AOT binary's C entries, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor |
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1404** | |
+| **Total** | | **1406** | |
 
 ## 3. Pattern catalog
 
@@ -356,14 +356,16 @@ takes the declaration and the call. The handle-state code it replaced had
 8, so the count went down by 4, to 1376.
 
 Raising "stack overflow" instead of overflowing the native stack added
-18 to the 1386 the table above reached: `native_stack.rs` in luna-core 8 (one foreign block and one call for
+20 to the 1386 the table above reached: `native_stack.rs` in luna-core 8 (one foreign block and one call for
 each of Linux / Android, the Apple targets and Windows, reading the
 thread's stack bounds, and one more of each for glibc's main thread,
 whose bounds are read without the stream `pthread_getattr_np` opens),
-and `recursion.rs` in luna-jit-helpers 10 (the helpers that fill a
+`recursion.rs` in luna-jit-helpers 11 (the helpers that fill a
 compiled function's self-call context, count the LLVM tier's native self
 calls, and make a self call in the interpreter when the native stack or
-the call budget runs out). That is 1404, the ceiling now.
+the call budget runs out), and `jit_handle.rs` in luna-jit 1 (freeing
+the code arena that holds a self-recursive function's ring of body
+copies). That is 1406, the ceiling now.
 
 ## 5. Public `unsafe` surface
 

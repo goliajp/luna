@@ -84,9 +84,27 @@ fn method_helper(name: &str) -> Option<*const u8> {
 /// in a [`JitHandle`] that owns the module for the entry's lifetime.
 pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) -> Option<JitHandle> {
     let mut module = send_jit_module::UnpublishedModule::new(build_jit_module_with_helpers()?);
-    let (fn_id, meta) = lower_int_chunk_into(&mut *module, proto, pre53, float_only)?;
+    chunk_share::begin_capture();
+    let lowered = lower_int_chunk_into(&mut *module, proto, pre53, float_only);
+    let Some((fn_id, meta)) = lowered else {
+        chunk_share::drop_capture();
+        return None;
+    };
     module.finalize_definitions().ok()?;
     chunk_share::count_codegen();
+    // a self-recursive chunk runs from the ring laid out in code memory of
+    // its own (none without a movable layout); any other from the module,
+    // its layout kept for sharing
+    let (layout, is_ring) = chunk_share::end_capture(&module, fn_id);
+    let mut ring = None;
+    let ptr = if is_ring {
+        let mut arena = trace::CodeArena::default();
+        let p = chunk_share::place_layout(layout.as_ref()?, &proto, &mut arena)?;
+        ring = Some(arena);
+        p
+    } else {
+        module.get_finalized_function(fn_id)
+    };
 
     // `LUNA_JIT_TRACE=1` prints one line per
     // successful JIT compile with the Proto's source location +
@@ -116,11 +134,12 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
         );
     }
 
-    let ptr = module.get_finalized_function(fn_id);
     Some(JitHandle {
         // wrap with the `SendJitModule` sleeve
         _module: module.publish(),
         entry_raw: ptr,
+        ring,
+        layout,
         num_args: meta.num_args,
         returns_one: meta.returns_one,
         arg_float_mask: meta.arg_float_mask,

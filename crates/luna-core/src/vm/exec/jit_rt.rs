@@ -140,7 +140,7 @@ impl Vm {
         // a Lua frame). The trace can't continue past it; unwind +
         // deopt so interp redoes Op::Concat in the slow path.
         while self.frames.len() > pre_frames {
-            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            self.pop_frame();
         }
         if result.is_err() || post_frames > pre_frames {
             self.jit.counters.deopt += 1;

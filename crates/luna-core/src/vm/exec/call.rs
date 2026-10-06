@@ -125,6 +125,8 @@ impl Vm {
                     return Ok(true);
                 }
                 Value::Native(nc) => {
+                    // a C function gets `LUA_MINSTACK` slots (PUC `luaD_precall`)
+                    self.check_lua_stack(func_slot + 1 + nargs, 20, false)?;
                     if nc.kind != NativeKind::Plain
                         && let Some(r) = self.begin_special_native(nc, func_slot, nargs, nresults)
                     {
@@ -249,33 +251,46 @@ impl Vm {
         nresults: i32,
         from_c: bool,
     ) -> Result<(), LuaError> {
-        if self.frames.len() == self.frames.capacity() {
+        if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
             self.grow_frames()?;
         }
-        if func_slot + 256 > MAX_LUA_STACK {
-            // PUC `luaD_growstack`: the overflow raises "stack overflow" and
-            // leaves ERRORSTACKSIZE's extra slots for the xpcall handler that
-            // runs on it; overflowing those is LUA_ERRERR, "error in error
-            // handling" (errors.lua :606, cstack.lua :29).
-            if self.msgh_depth == 0 {
-                return Err(self.rt_err("stack overflow"));
-            }
-            if func_slot + 256 > MAX_LUA_STACK + ERROR_STACK_EXTRA {
-                return Err(LuaError(self.errerr()));
-            }
-        }
         let proto = cl.proto;
+        self.check_lua_stack(
+            func_slot + 1 + nargs,
+            proto.max_stack as u32,
+            proto.is_vararg,
+        )?;
         let nparams = proto.num_params as u32;
         // 5.5 vararg layout (PUC luaT_adjustvarargs): the extra args stay on the
         // stack just below the new `base`, so a named vararg can be indexed
         // virtually without allocating a table. Rotate `[p1..pn][e1..em]` to
         // `[e1..em][p1..pn]` so the fixed params land at the new base.
         let n_varargs = nargs.saturating_sub(nparams) * u32::from(proto.is_vararg);
-        if n_varargs > 0 {
+        // a vararg frame sits where PUC puts it, so a recursion through
+        // vararg functions takes the same stack: above the arguments, where
+        // 5.1 to 5.3 copy the fixed parameters (`adjust_varargs`) and 5.4 on
+        // the function too (`luaT_adjustvarargs`); the extras stay just
+        // below the base, the slots they came from are dead
+        let gap = if proto.is_vararg {
+            nparams + u32::from(self.version >= LuaVersion::Lua54)
+        } else {
+            0
+        };
+        let base = func_slot + 1 + n_varargs + gap;
+        if proto.is_vararg && nargs > 0 {
             let s = (func_slot + 1) as usize;
-            self.stack[s..s + nargs as usize].rotate_left(nparams as usize);
+            let kept = nargs.min(nparams) as usize;
+            let end = (base + kept as u32) as usize;
+            if self.stack.len() < end {
+                self.grow_stack_or_abort(end);
+            }
+            self.stack.copy_within(s..s + kept, base as usize);
+            if n_varargs > 0 {
+                let from = s + nparams as usize;
+                let to = (base - n_varargs) as usize;
+                self.stack.copy_within(from..from + n_varargs as usize, to);
+            }
         }
-        let base = func_slot + 1 + n_varargs;
         let max = proto.max_stack as u32;
         let need = (base + max) as usize;
         if self.stack.len() < need {
@@ -363,32 +378,92 @@ impl Vm {
         Ok(())
     }
 
+    /// Room for `need` slots above `top` on the thread's stack (PUC
+    /// `luaD_checkstack` at a call, `top` being `L->top` there), else the
+    /// error PUC raises. `vararg`: a vararg function is called, which 5.4
+    /// on checks one slot more for, as its frame moves up past the
+    /// function and the arguments (`luaT_adjustvarargs`); the fast path
+    /// counts that slot for every call and the slow one takes it back.
+    #[inline(always)]
+    pub(super) fn check_lua_stack(
+        &mut self,
+        top: u32,
+        need: u32,
+        vararg: bool,
+    ) -> Result<(), LuaError> {
+        // under the lowest dialect's limit by a slot to spare, no exact
+        // count is needed (the constant keeps the fast path free of loads)
+        if top + need < STACK_LIMIT_FLOOR {
+            return Ok(());
+        }
+        let need = need + u32::from(vararg && self.version >= LuaVersion::Lua54);
+        if top + need <= self.g.lua_stack_limit {
+            return Ok(());
+        }
+        self.lua_stack_overflow(top, need)
+    }
+
+    /// PUC `luaD_growstack` past the limit: the first overflow raises
+    /// "stack overflow" and opens `STACK_ERR_SPACE` more slots for the
+    /// message handler that runs on it; a call that does not fit those
+    /// either is "error in error handling" (errors.lua :606, cstack.lua
+    /// :29). The space closes when a protected call catches the error.
+    #[cold]
+    #[inline(never)]
+    fn lua_stack_overflow(&mut self, top: u32, need: u32) -> Result<(), LuaError> {
+        if !self.stack_extra {
+            self.stack_extra = true;
+            self.overflow_top = Some(top);
+            return Err(self.rt_err("stack overflow"));
+        }
+        if top + need >= self.g.lua_stack_limit + STACK_ERR_SPACE {
+            return Err(LuaError(self.errerr()));
+        }
+        Ok(())
+    }
+
     /// Room for one more frame. 5.1 checks its call limit here, as PUC
-    /// 5.1's `luaD_growCI` does when the CallInfo array is full: the array
-    /// grows no further than `LUAI_MAXCALLS`, and a call past it raises
-    /// "stack overflow"; a message handler running on that error may nest
-    /// as deep again, and past that it is "error in error handling".
+    /// 5.1's `luaD_growCI` does when its `CallInfo` array is full: an array
+    /// already past `LUAI_MAXCALLS` (grown for a message handler) is "error
+    /// in error handling"; otherwise it doubles, and when that takes it
+    /// past the limit the call raises "stack overflow". The frame array's
+    /// capacity plays the `CallInfo` array's size; calls compiled code made
+    /// natively (`frames_native`) count as frames too.
     #[cold]
     #[inline(never)]
     fn grow_frames(&mut self) -> Result<(), LuaError> {
-        let len = self.frames.len();
-        if self.frame_cap == u32::MAX {
-            self.frames.reserve_or_abort(1);
-            return Ok(());
+        if self.g.frame_size > self.frame_cap {
+            return Err(LuaError(self.errerr()));
         }
-        let cap = self.frame_cap as usize;
-        let limit = if self.msgh_depth == 0 { cap } else { 2 * cap };
-        if len >= limit {
-            return Err(if self.msgh_depth == 0 {
-                self.rt_err("stack overflow")
-            } else {
-                LuaError(self.errerr())
-            });
-        }
-        let extra = (2 * len).clamp(8, limit) - len;
-        if self.frames.reserve_exact(extra).is_err() {
-            self.frames.reserve_or_abort(extra);
+        self.g.frame_size *= 2;
+        if self.g.frame_size > self.frame_cap {
+            return Err(self.rt_err("stack overflow"));
         }
         Ok(())
+    }
+
+    /// The frames PUC 5.1 has in its `CallInfo` array for the running
+    /// thread: the Lua frames and the protected calls on the frame stack,
+    /// the native functions running on the Rust stack, and the calls
+    /// compiled code made natively.
+    pub(super) fn frames_in_use(&self) -> u32 {
+        let natives = (self.running_natives.len() - self.natives_base) as u32;
+        // a coroutine's array starts with its base frame; the main thread's
+        // is the host's call, with the host's own frames below it
+        let base = if self.current.is_some() {
+            1
+        } else {
+            self.g.host_frames
+        };
+        self.frames.len() as u32 + natives + self.g.frames_native - self.g.meta_conts + base
+    }
+
+    /// PUC 5.1 `restore_stack_limit`, after a protected call caught an
+    /// error: a frame array grown past the limit for a message handler goes
+    /// back to the limit, unless the frames still in use come near it.
+    pub(super) fn restore_frame_limit(&mut self) {
+        if self.g.frame_size > self.frame_cap && self.frames_in_use() + 1 < self.frame_cap {
+            self.g.frame_size = self.frame_cap;
+        }
     }
 }

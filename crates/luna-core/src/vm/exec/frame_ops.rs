@@ -96,7 +96,7 @@ impl Vm {
                 let wanted = inst.c() as i32 - 1;
                 // A materialized named vararg lives in func_slot (its writes
                 // must be visible to `...`); otherwise spread the extra args
-                // straight off the stack at func_slot+1 .. +n_varargs.
+                // straight off the stack, where they sit just below `base`.
                 let vt = match self.stack[func_slot as usize] {
                     Value::Table(t) => Some(t),
                     _ => None,
@@ -117,9 +117,7 @@ impl Vm {
                 // a named vararg's `n` can be set to anything up to
                 // INT_MAX/2; PUC's `luaD_checkstack` refuses what the
                 // stack cannot hold
-                if abs_a + count > MAX_LUA_STACK {
-                    return Err(self.rt_err("stack overflow"));
-                }
+                self.check_lua_stack(abs_a, count, false)?;
                 let need = (abs_a + count) as usize;
                 if self.stack.len() < need {
                     self.grow_stack_or_abort(need);
@@ -130,7 +128,7 @@ impl Vm {
                     } else if let Some(t) = vt {
                         t.get_int(i as i64 + 1)
                     } else {
-                        self.stack[(func_slot + 1 + i) as usize]
+                        self.stack[(base - n_varargs + i) as usize]
                     };
                     self.stack[(abs_a + i) as usize] = v;
                 }
@@ -154,7 +152,7 @@ impl Vm {
                     // PUC `createvarargtab`: an array part of exactly `n`
                     tm.resize(&mut self.heap, n as usize, 1);
                     for i in 0..n {
-                        tm.set_list_slot(i as usize, self.stack[(func_slot + 1 + i) as usize]);
+                        tm.set_list_slot(i as usize, self.stack[(base - n_varargs + i) as usize]);
                     }
                     let n_key = Value::Str(self.heap.intern(b"n"));
                     tm.set(&mut self.heap, n_key, Value::Int(n as i64))

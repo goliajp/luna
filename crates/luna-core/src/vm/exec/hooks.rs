@@ -185,7 +185,7 @@ impl Vm {
         // carries `is_hook = true` so `getinfo(1).namewhat` reports "hook"
         // (PUC `CIST_HOOKED`).
         self.pending_is_hook = true;
-        let r = self.call_value_impl(hook, &[name, lv], from_native);
+        let r = self.call_value_impl(hook, &[name, lv], from_native, None);
         self.pending_is_hook = false;
         self.in_hook = false;
         self.trap = true;

@@ -421,7 +421,7 @@ impl Vm {
                 return Ok(vs);
             }
             Some(Err(e)) => Err(e),
-            None => self.call_value_impl(f, args, true),
+            None => self.call_value_impl(f, args, true, None),
         };
         if let Err(e) = r
             && self.public_call_depth == 1
@@ -437,30 +437,49 @@ impl Vm {
     /// handler runs *within* the closing Lua frame's activation (PUC luaF_close
     /// invokes it inside that ci), so it is called with `from_c = false`: its
     /// debug parent is the closing function, not a synthetic C level.
-    pub(super) fn call_value_impl(
+    /// `at`: the slot to call at, PUC's `L->top` where a message handler
+    /// runs (see `raise_top`); the slots above it belong to the frame
+    /// that raised, dead past that top as PUC's are. Else the stack's end.
+    pub(crate) fn call_value_impl(
         &mut self,
         f: Value,
         args: &[Value],
         from_c: bool,
+        at: Option<u32>,
     ) -> Result<Vec<Value>, LuaError> {
-        if self.c_depth >= MAX_C_DEPTH || (self.c_depth > 0 && is_low(RESERVE)) {
-            // PUC `luaE_checkcstack` (a first level is no nesting: unchecked):
-            // at the limit the call fails; an xpcall handler running on the
-            // error gets a tenth more before "error in error handling"
+        // the native stack too (a first level is no nesting: unchecked);
+        // a message handler running on the error gets half the reserve
+        if self.g.nccalls > 0 && is_low(RESERVE) {
             if self.msgh_depth == 0 {
                 return Err(self.runerror("C stack overflow"));
             }
-            if self.c_depth >= MAX_C_DEPTH / 10 * 11 || is_low(HANDLER_RESERVE) {
+            if is_low(HANDLER_RESERVE) {
                 return Err(LuaError(self.errerr()));
             }
         }
-        self.c_depth += 1;
-        let func_slot = self.stack.len() as u32;
-        self.stack.push_or_abort(f);
-        self.stack.extend_from_slice_or_abort(args);
-        self.top = self.stack.len() as u32;
+        self.check_c_level(true)?;
+        self.g.nccalls += 1;
+        let len = self.stack.len();
+        let func_slot = match at {
+            None => {
+                self.stack.push_or_abort(f);
+                self.stack.extend_from_slice_or_abort(args);
+                self.top = self.stack.len() as u32;
+                len as u32
+            }
+            Some(slot) => {
+                self.place_call(slot, f, args);
+                self.top = self.stack.len().max(slot as usize + 1 + args.len()) as u32;
+                slot
+            }
+        };
         let r = self.call_at(func_slot, args.len() as u32, from_c);
-        self.c_depth -= 1;
+        self.g.nccalls -= 1;
+        // a call placed inside a frame's window gives the window back: the
+        // frames below run on when the error is caught
+        if at.is_some() && self.stack.len() < len {
+            self.grow_stack_or_abort(len);
+        }
         if r.is_err()
             && self.yielding.is_none()
             && self.terminating.is_none()
@@ -479,22 +498,6 @@ impl Vm {
             self.stack.truncate(func_slot as usize);
             self.top = func_slot;
         }
-        r
-    }
-
-    /// Invoke `f` with the running thread marked non-yieldable for the duration
-    /// (PUC `luaD_callnoyield`): a `coroutine.yield` inside `f` hits the C-call
-    /// boundary and errors instead of suspending. Used by library callbacks
-    /// (sort comparator, gsub replacement) that run via synchronous Rust
-    /// recursion and so could not be re-entered after a yield.
-    pub(crate) fn call_noyield(
-        &mut self,
-        f: Value,
-        args: &[Value],
-    ) -> Result<Vec<Value>, LuaError> {
-        self.nny += 1;
-        let r = self.call_value(f, args);
-        self.nny -= 1;
         r
     }
 }

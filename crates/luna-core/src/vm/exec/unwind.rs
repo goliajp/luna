@@ -106,7 +106,7 @@ impl Vm {
                 matches!(
                     f,
                     CallFrame::Cont(NativeCont {
-                        kind: ContKind::Pcall | ContKind::Xpcall { .. } | ContKind::Close(_),
+                        kind: ContKind::Pcall { .. } | ContKind::Xpcall { .. } | ContKind::Close(_),
                         ..
                     })
                 )
@@ -120,7 +120,7 @@ impl Vm {
                 {
                     self.discard_host_cont(hc);
                 }
-                frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+                self.pop_frame();
             }
             return Unwound::Propagated(LuaError(err));
         }
@@ -135,6 +135,7 @@ impl Vm {
                     ..
                 }) => {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+                    self.cont_popped(true, true);
                     self.stack.truncate(func_slot as usize);
                     self.top = mc.saved_top.min(func_slot);
                     self.tbc.retain(|&s| s < func_slot);
@@ -160,6 +161,7 @@ impl Vm {
                     ..
                 }) => {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+                    self.cont_popped(true, true);
                     self.stack.truncate(func_slot as usize);
                     self.top = func_slot;
                     self.tbc.retain(|&s| s < func_slot);
@@ -181,6 +183,7 @@ impl Vm {
                     ..
                 }) => {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+                    self.cont_popped(true, true);
                     self.stack.truncate(func_slot as usize);
                     self.top = func_slot;
                     self.tbc.retain(|&s| s < func_slot);
@@ -250,16 +253,21 @@ impl Vm {
         entry_depth: usize,
     ) -> Unwound {
         frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-        self.pcall_depth -= 1;
+        self.cont_popped(false, nc.kind.is_level());
+        // the error is caught: 5.1's frame array, grown past its limit for
+        // the handler, shrinks back (PUC `restore_stack_limit`)
+        self.c_overflow_err = None;
+        self.overflow_top = None;
+        self.restore_frame_limit();
         let result = match nc.kind {
-            ContKind::Pcall => {
+            ContKind::Pcall { .. } => {
                 self.msgh_applied = None;
                 err
             }
             // the handler ran where the error was raised (see
             // `raise_to_handler`); one raised past the handler's
             // reach (by the unwind itself) meets it here
-            ContKind::Xpcall { handler } => {
+            ContKind::Xpcall { handler, .. } => {
                 if self.msgh_applied.take().is_some_and(|v| v.raw_eq(err)) {
                     err
                 } else {
@@ -318,17 +326,28 @@ impl Vm {
         // `saved_len` is *below* the window (a prior
         // `ResumeUnwind` truncated). Using the window directly
         // covers both.
+        // every frame below keeps its window, and the results just placed
+        // (PUC `luaD_shrinkstack` keeps the stack in use by any frame and
+        // up to `L->top`); protected calls nested above a frame's window
+        // have their results there
         let restore = self
             .frames
             .iter()
-            .rev()
-            .find_map(CallFrame::lua)
-            .map(|c| (c.base + c.closure.proto.max_stack as u32) as usize + 256)
-            .unwrap_or(saved_len);
+            .filter_map(CallFrame::lua)
+            .map(|c| (c.base + c.closure.proto.max_stack as u32) as usize)
+            .max()
+            .unwrap_or(saved_len)
+            .max(self.top as usize);
         if self.stack.len() < restore {
             self.grow_stack_or_abort(restore);
         } else if self.stack.len() > restore {
             self.stack.truncate(restore);
+        }
+        // the error space closes once the frames in use fit under the
+        // limit again (PUC `luaD_shrinkstack` leaves a thread that is still
+        // handling its overflow alone)
+        if restore <= self.g.lua_stack_limit as usize {
+            self.stack_extra = false;
         }
         // Clear slots vacated by the popped
         // frames the unwind walked over. finish_results

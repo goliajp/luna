@@ -11,7 +11,10 @@ pub(super) struct SavedCtx {
     pub(super) open_upvals: LVec<(u32, Gc<Upvalue>)>,
     pub(super) tbc: LVec<u32>,
     pub(super) top: u32,
-    pub(super) pcall_depth: u32,
+    pub(super) meta_conts: u32,
+    pub(super) stale_frames: u32,
+    pub(super) stack_extra: bool,
+    pub(super) frame_size: u32,
     pub(super) hook: HookState,
     /// PUC `L->l_gt` — the thread's own globals table. Carried alongside
     /// the rest of the suspended state so each thread can keep its own
@@ -28,7 +31,10 @@ impl Vm {
             open_upvals: self.open_upvals.take(),
             tbc: self.tbc.take(),
             top: self.top,
-            pcall_depth: self.pcall_depth,
+            meta_conts: self.g.meta_conts,
+            stale_frames: self.g.stale_frames,
+            stack_extra: self.stack_extra,
+            frame_size: self.g.frame_size,
             hook: self.hook,
             globals: self.globals,
         };
@@ -42,7 +48,10 @@ impl Vm {
         self.open_upvals = c.open_upvals;
         self.tbc = c.tbc;
         self.top = c.top;
-        self.pcall_depth = c.pcall_depth;
+        self.g.meta_conts = c.meta_conts;
+        self.g.stale_frames = c.stale_frames;
+        self.stack_extra = c.stack_extra;
+        self.g.frame_size = c.frame_size;
         self.hook = c.hook;
         self.globals = c.globals;
         self.frames_resync(); // sync shadow to new Vec
@@ -57,8 +66,17 @@ impl Vm {
         self.open_upvals = m.open_upvals.take();
         self.tbc = m.tbc.take();
         self.top = m.top;
+        self.stack_extra = m.stack_extra;
+        // a thread's 5.1 frame array starts at the basic size (PUC
+        // `lua_newthread`: `stack_init`)
+        self.g.frame_size = match m.frame_size {
+            0 if self.version == LuaVersion::Lua51 => BASIC_FRAME_SIZE_51,
+            0 => u32::MAX,
+            n => n,
+        };
         self.frames_resync(); // sync shadow to coro's frames
-        self.pcall_depth = m.pcall_depth;
+        self.g.meta_conts = m.meta_conts;
+        self.g.stale_frames = m.stale_frames;
         self.hook = m.hook;
         self.globals = m.globals;
     }
@@ -73,7 +91,10 @@ impl Vm {
         m.open_upvals = c.open_upvals;
         m.tbc = c.tbc;
         m.top = c.top;
-        m.pcall_depth = c.pcall_depth;
+        m.meta_conts = c.meta_conts;
+        m.stale_frames = c.stale_frames;
+        m.stack_extra = c.stack_extra;
+        m.frame_size = c.frame_size;
         m.hook = c.hook;
         m.globals = c.globals;
         // bulk-overwrite of every collectable field traced by Coro::trace:
@@ -95,10 +116,15 @@ impl Vm {
             CoroStatus::Dead => return Err(self.plain_err("cannot resume dead coroutine")),
             _ => return Err(self.plain_err("cannot resume non-suspended coroutine")),
         }
-        if self.c_depth >= MAX_C_DEPTH || native_stack::is_low(native_stack::RESERVE) {
+        // PUC `lua_resume` refuses when the resumer's count has reached the
+        // limit (5.1), or would with the resume (5.2 on)
+        let reached = self.g.nccalls + u32::from(self.version >= LuaVersion::Lua52);
+        if reached >= MAX_C_DEPTH || native_stack::is_low(native_stack::RESERVE) {
             return Err(self.plain_err("C stack overflow"));
         }
-        self.c_depth += 1;
+        // the coroutine runs from the resumer's count, plus the resume
+        let nccalls = self.g.nccalls;
+        self.g.nccalls += 1;
         let special_before = self.special_errors();
         let resumer = self.current;
         // save the resumer's live context away
@@ -112,7 +138,10 @@ impl Vm {
                 m.open_upvals = rctx.open_upvals;
                 m.tbc = rctx.tbc;
                 m.top = rctx.top;
-                m.pcall_depth = rctx.pcall_depth;
+                m.meta_conts = rctx.meta_conts;
+                m.stale_frames = rctx.stale_frames;
+                m.stack_extra = rctx.stack_extra;
+                m.frame_size = rctx.frame_size;
                 m.globals = rctx.globals;
                 m.status = CoroStatus::Normal;
                 m.natives = self.natives_base..self.running_natives.len();
@@ -122,8 +151,9 @@ impl Vm {
             }
             None => self.main_ctx = Some(rctx),
         }
-        // swap the coroutine in
         self.load_coro_ctx(co);
+        // the continuations it was suspended in hold no level now
+        self.g.stale_frames = self.frames.len() as u32;
         {
             // SAFETY: `co` is the argument being resumed, held by the caller (a stack slot or native argument) and about to become `self.current`; `load_coro_ctx`'s borrow has ended, so `m` is the only one
             let m = unsafe { co.as_mut() };
@@ -241,7 +271,7 @@ impl Vm {
                 self.current = None;
             }
         }
-        self.c_depth -= 1;
+        self.g.nccalls = nccalls;
         outcome
     }
 

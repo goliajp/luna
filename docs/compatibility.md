@@ -438,16 +438,12 @@ and numeric-string arguments, every library's surface in each dialect,
 `collectgarbage`, call-stack levels, tracebacks, and language-level error
 messages. What still differs does so on purpose:
 
-- **Metamethod recursion depth.** PUC counts a metamethod call against its
-  200-level C-call limit, so a `__index` function recursing about 200
-  deep raises "C stack overflow". luna does not count metamethod calls;
-  such recursion is bounded by the Lua stack (one million slots) and
-  raises "stack overflow" there. It never crashes the process.
-- **Native stack.** Like PUC, luna counts library callbacks
-  (`table.sort`, `string.gsub`, `load` readers, `__tostring`), coroutine
-  resumes, protected calls, message handlers and C API calls against a
-  200-level C-call limit and raises "C stack overflow" past it. On top
-  of that it
+- **Native stack.** Like PUC, luna counts metamethod calls (`__index`,
+  `__eq`, `__close`, `__pairs` and the rest; `__call` runs as a Lua
+  call), library callbacks (`table.sort`, `string.gsub`, `load` readers,
+  `__tostring`), coroutine resumes, protected calls, message handlers
+  and C API calls against a 200-level C-call limit and raises "C stack
+  overflow" past it, at the depth PUC does. On top of that it
   compares the native stack pointer with the running thread's stack
   bounds, so on a thread with a small stack (an embedder's 256 KB worker,
   say) the same error comes after fewer levels instead of a crash. The
@@ -457,16 +453,10 @@ messages. What still differs does so on purpose:
   compiled calls itself on the native stack; when that stack runs low
   the interpreter makes the remaining calls, so deep recursion ends
   where PUC's Lua stack limit ends it.
-- **Very long operator chains.** PUC's parser emits code as it reads a
-  left-associative chain (`1 + 1 + ... + 1`, `a.b.b...`, `f()()...`),
-  so its length is unbounded. luna builds a syntax tree first and its
-  compiler walks it recursively, so a chain long enough to exhaust the
-  native stack fails to load with the dialect's nesting error ("C stack
-  overflow" from 5.4 on) instead.
-- **`pcall` nesting depth.** Both stop with "C stack overflow", but the
-  depth at which they do depends on how many C levels the host has
-  already used (PUC's standalone interpreter spends about three before
-  the script runs), so the exact count differs.
+- **Very long `and` / `or` chains.** PUC 5.1 to 5.3 patch every jump of
+  such a chain to its end, so a chain of about 65000 operands fails to
+  compile with "control structure too long"; luna's jumps are short and
+  the chain compiles. From 5.4 on both compile it.
 - **Local time.** luna-core links no C library timezone code:
   `os.date` without a leading `!` formats UTC, and `os.time`'s valid
   range is computed rather than taken from the host's `mktime`.

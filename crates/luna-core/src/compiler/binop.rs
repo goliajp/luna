@@ -4,7 +4,19 @@
 use super::binop_const::Operand;
 use super::*;
 
+/// What [`Compiler::binop_open`] set up before the left operand: the free
+/// register and the forced line to put back.
+#[derive(Clone, Copy)]
+pub(super) struct BinOpOpen {
+    saved: u32,
+    saved_force: Option<u32>,
+}
+
 impl Compiler<'_> {
+    /// A binary operation other than `and`, `or` and `..`, which have
+    /// their own shapes. [`Compiler::expr`] compiles a chain of them without
+    /// recursion by calling [`Self::binop_open`] and [`Self::binop_close`]
+    /// itself.
     pub(super) fn binop(
         &mut self,
         op: BinOp,
@@ -17,6 +29,23 @@ impl Compiler<'_> {
             BinOp::Concat => return self.concat(lhs, rhs, line),
             _ => {}
         }
+        let (open, le) = self.binop_open(op, lhs, line)?;
+        let le = match le {
+            Some(le) => le,
+            None => self.expr(lhs)?,
+        };
+        self.binop_close(op, le, rhs, line, open)
+    }
+
+    /// Before the left operand of `op` is compiled: the value it has
+    /// without being compiled, when it has one.
+    pub(super) fn binop_open(
+        &mut self,
+        op: BinOp,
+        lhs: ExprId,
+        line: u32,
+    ) -> Result<(BinOpOpen, Option<Exp>), SyntaxError> {
+        debug_assert!(!matches!(op, BinOp::And | BinOp::Or | BinOp::Concat));
         let saved = self.lr().freereg;
         // PUC's `infix` discharges the left operand *after* consuming the
         // operator token (luaK_indexed → luaK_exp2anyreg called from infix),
@@ -28,19 +57,33 @@ impl Compiler<'_> {
         // before parsing the rhs (which discharges at its own last-token
         // line, matching PUC).
         let saved_force = self.force_line.replace(line);
+        let open = BinOpOpen { saved, saved_force };
         // a 5.1 left operand whose logic folds away (see `numeral`)
+        if self.version != LuaVersion::Lua51 || !is_logical(self.ast, lhs) {
+            return Ok((open, None));
+        }
         let mut zeros = Vec::new();
-        let le = match numeral(self.ast, lhs, self.version, &mut zeros) {
-            Some(n) if self.version == LuaVersion::Lua51 && is_logical(self.ast, lhs) => {
-                self.note_zeros(&zeros);
-                match n {
-                    Num::Int(i) => Exp::Int(i),
-                    Num::Float(f) => Exp::Float(f),
-                }
+        let le = numeral(self.ast, lhs, self.version, &mut zeros).map(|n| {
+            self.note_zeros(&zeros);
+            match n {
+                Num::Int(i) => Exp::Int(i),
+                Num::Float(f) => Exp::Float(f),
             }
-            _ => self.expr(lhs)?,
-        };
-        zeros.clear();
+        });
+        Ok((open, le))
+    }
+
+    /// The rest of `op`, its left operand compiled to `le`.
+    pub(super) fn binop_close(
+        &mut self,
+        op: BinOp,
+        le: Exp,
+        rhs: ExprId,
+        line: u32,
+        open: BinOpOpen,
+    ) -> Result<Exp, SyntaxError> {
+        let BinOpOpen { saved, saved_force } = open;
+        let mut zeros = Vec::new();
         if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros) {
             self.note_zeros(&zeros);
             self.force_line = saved_force;

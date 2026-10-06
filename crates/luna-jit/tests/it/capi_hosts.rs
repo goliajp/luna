@@ -239,3 +239,8 @@ fn core_stack() {
 fn c_stack_recursion() {
     check("cstack_recursion");
 }
+
+#[test]
+fn stack_depth() {
+    check("stack_depth");
+}

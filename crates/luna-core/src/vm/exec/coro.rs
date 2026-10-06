@@ -113,12 +113,13 @@ impl Vm {
         }
         // A chain of coroutines whose `__close` handlers each close the previous
         // one recurses on the C stack (PUC `luaD_callnoyield` in `lua_closethread`).
-        // The calling handler's `call_value` has already pushed `c_depth` to the
+        // The calling handler's `call_value` has already pushed `nccalls` to the
         // cap, so here it reads as full first — report PUC's "C stack overflow"
         // before the next handler call would surface the plainer "stack overflow".
-        if self.c_depth >= MAX_C_DEPTH || native_stack::is_low(native_stack::RESERVE) {
+        if self.g.nccalls >= MAX_C_DEPTH || native_stack::is_low(native_stack::RESERVE) {
             return Err(self.rt_err("C stack overflow"));
         }
+        let nccalls = self.g.nccalls;
         // SAFETY: `co` is the coroutine being closed, held by the caller (a native argument) and not the running thread (checked above); the borrow covers one `take`
         let death_err = unsafe { co.as_mut() }.error_value.take();
         // swap the caller's live context out (into a GC-rooted home) and the
@@ -135,11 +136,15 @@ impl Vm {
                 m.open_upvals = rctx.open_upvals;
                 m.tbc = rctx.tbc;
                 m.top = rctx.top;
-                m.pcall_depth = rctx.pcall_depth;
+                m.meta_conts = rctx.meta_conts;
+                m.stale_frames = rctx.stale_frames;
+                m.stack_extra = rctx.stack_extra;
+                m.frame_size = rctx.frame_size;
             }
             None => self.main_ctx = Some(rctx),
         }
         self.load_coro_ctx(co);
+        self.g.stale_frames = self.frames.len() as u32;
         self.current = Some(co);
         // PUC `luaE_resetthread` closes with no message handler, whatever
         // xpcall the coroutine was suspended in
@@ -161,6 +166,7 @@ impl Vm {
                 self.current = None;
             }
         }
+        self.g.nccalls = nccalls;
         {
             // SAFETY: `co` is still held by the caller, and its context was swapped back out above (`take_ctx`), so `m` is the only reference into it while it is cleared
             let m = unsafe { co.as_mut() };
@@ -170,7 +176,10 @@ impl Vm {
             m.open_upvals.take();
             m.tbc.take();
             m.top = 0;
-            m.pcall_depth = 0;
+            m.meta_conts = 0;
+            m.stale_frames = 0;
+            m.stack_extra = false;
+            m.frame_size = 0;
             m.resume_at = None;
             m.error_value = None;
             m.error_traceback = None;
@@ -227,7 +236,9 @@ impl Vm {
                             }))
                 }
             });
-            if self.current.is_none() || self.nny > 0 || self.pcall_depth > 0 || inside_call {
+            // 5.1 cannot yield across a pcall or a metamethod call either
+            let in_cont = self.frames.iter().any(|f| matches!(f, CallFrame::Cont(_)));
+            if self.current.is_none() || self.nny > 0 || in_cont || inside_call {
                 return Some("attempt to yield across metamethod/C-call boundary");
             }
             return None;

@@ -50,6 +50,30 @@ pub(super) fn numeral(
         return None;
     }
     let v51 = version == LuaVersion::Lua51;
+    // the left spine of arithmetic operators, outermost first: a long
+    // chain (`1 + 1 + ... + 1`) is folded without recursion
+    let mut ops: Vec<(BinOp, ExprId)> = Vec::new();
+    let mut cur = id;
+    while let Expr::BinOp { op, lhs, rhs, .. } = *ast.expr(cur) {
+        if v51 && matches!(op, BinOp::And | BinOp::Or) {
+            break;
+        }
+        ops.push((op, rhs));
+        cur = lhs;
+    }
+    let mut z = Vec::new();
+    let mut n = numeral_leaf(ast, cur, version, &mut z)?;
+    for (op, rhs) in ops.into_iter().rev() {
+        let r = numeral(ast, rhs, version, &mut z)?;
+        n = fold_nums(op, n, r, version)?;
+    }
+    zeros.extend(z);
+    Some(n)
+}
+
+/// [`numeral`] of an expression that is not an arithmetic operator.
+fn numeral_leaf(ast: &Chunk, id: ExprId, version: LuaVersion, zeros: &mut Vec<f64>) -> Option<Num> {
+    let v51 = version == LuaVersion::Lua51;
     match ast.expr(id) {
         Expr::Int(i) => Some(Num::Int(*i)),
         Expr::Float(f) => Some(Num::Float(*f)),
@@ -83,14 +107,6 @@ pub(super) fn numeral(
                 return None;
             }
             numeral(ast, *rhs, version, zeros)
-        }
-        Expr::BinOp { op, lhs, rhs, .. } => {
-            let mut z = Vec::new();
-            let l = numeral(ast, *lhs, version, &mut z)?;
-            let r = numeral(ast, *rhs, version, &mut z)?;
-            let v = fold_nums(*op, l, r, version)?;
-            zeros.extend(z);
-            Some(v)
         }
         _ => None,
     }

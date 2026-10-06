@@ -2,16 +2,17 @@
 //! the dialect's call-depth limit (5.1's `LUAI_MAXCALLS`) is reached.
 //!
 //! A compiled self-recursive call is a native call, so deep recursion uses
-//! native stack and makes no interpreter frame. Before such a call the
-//! compiled code checks the stack pointer against a limit and its
-//! remaining call budget; when either runs out, [`luna_jit_self_call_slow`]
+//! native stack and makes no interpreter frame. The compiled code checks
+//! the stack pointer against a limit and its remaining call budget once
+//! every so many levels; when either runs out, [`luna_jit_self_call_slow`]
 //! makes the call instead: in the interpreter, which goes on to any depth
 //! the Lua stack allows and fails with Lua's own "stack overflow", or, with
 //! no budget left, by raising that error itself.
 //!
-//! The Cranelift tier keeps limit and budget in a context its entry fills
-//! ([`luna_jit_enter_ctx`]); the LLVM tier asks [`luna_jit_self_enter`]
-//! before each call and reports its return to [`luna_jit_self_leave`].
+//! The Cranelift tier keeps limit, failure flag and budget in a context its
+//! entry fills ([`luna_jit_enter_ctx`]) and whose address it holds in the
+//! pinned register; the LLVM tier asks [`luna_jit_self_enter`] before each
+//! call and reports its return to [`luna_jit_self_leave`].
 
 use std::cell::Cell;
 
@@ -29,8 +30,9 @@ pub const SELF_CALL_RET_FLOAT: i64 = 2;
 pub const SELF_CALL_RET_TABLE: i64 = 3;
 
 /// Words of a Cranelift self-call context: the stack limit, the flag a
-/// failed call sets, and the calls left.
-pub const SELF_CTX_WORDS: usize = 3;
+/// failed call sets, the calls left, and the calls the budget started
+/// with.
+pub const SELF_CTX_WORDS: usize = 4;
 
 /// The `left` [`luna_jit_self_call_slow`] gets from code that does not
 /// count its calls: the budget is then the thread's own.
@@ -71,6 +73,7 @@ pub unsafe extern "C" fn luna_jit_enter_ctx(ctx: *mut i64) {
         *ctx = luna_core::native_stack::jit_limit() as i64;
         *ctx.add(1) = 0;
         *ctx.add(2) = budget;
+        *ctx.add(3) = budget;
     }
 }
 
@@ -109,9 +112,8 @@ pub extern "C" fn luna_jit_self_leave() {
 /// Make the running closure's self-recursive call that compiled code could
 /// not make natively, with the arguments `a0..` described by `desc`
 /// ([`self_call_desc`]), and return its result as compiled code holds it.
-/// `ctx` is the Cranelift tier's context, or null where the code does not
-/// check its failure flag; `left` the calls the code had left, or
-/// [`SELF_CALL_UNCOUNTED`].
+/// `ctx` is the Cranelift tier's context, or null from the LLVM tier;
+/// `left` the calls the code had left, or [`SELF_CALL_UNCOUNTED`].
 /// With no calls left in the budget the call raises "stack overflow";
 /// otherwise the interpreter makes it. When the call fails, the error is
 /// left in `vm.jit.pending_raise` for the dispatcher to raise; when its
@@ -175,7 +177,13 @@ pub unsafe extern "C" fn luna_jit_self_call_slow(
     let result = if budget <= 0 {
         Err(vm.jit_depth_error(cl))
     } else {
-        vm.jit_call_interpreted(cl, &args[..nargs])
+        // the compiled calls below count against 5.1's call limit
+        let native = (left != SELF_CALL_UNCOUNTED && !ctx.is_null()).then(|| {
+            // SAFETY: a non-null `ctx` points to SELF_CTX_WORDS words (# Safety)
+            let initial = unsafe { *ctx.add(3) };
+            (initial - left).clamp(0, i64::from(u32::MAX)) as u32
+        });
+        vm.jit_call_interpreted(cl, &args[..nargs], native)
     };
     let out = match result {
         Ok(vals) => {
