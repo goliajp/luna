@@ -8,8 +8,10 @@
 //! older dialect may have to extend (its `LOADK` replaces luna's
 //! immediates).
 
+use crate::compiler::const_map::{ConstMap, add_const};
 use crate::runtime::Value;
 use crate::runtime::function::Proto;
+use crate::version::LuaVersion;
 use crate::vm::isa::{Inst, Op};
 
 pub(super) type Res<T> = Result<T, String>;
@@ -59,6 +61,8 @@ pub(super) struct Asm<'p> {
     first: Vec<Option<u32>>,
     fixups: Vec<Fixup>,
     pub consts: Vec<Value>,
+    /// the dialect and its scanner table over `consts` (see `const_map`)
+    pub kmap: (LuaVersion, ConstMap),
     /// luna pcs some jump, loop edge or skip lands on
     targets: Vec<bool>,
     pc: usize,
@@ -96,6 +100,7 @@ impl<'p> Asm<'p> {
             first: vec![None; p.code.len()],
             fixups: Vec::new(),
             consts: p.consts.to_vec(),
+            kmap: (LuaVersion::Lua54, ConstMap::default()),
             targets: jump_targets(p),
             pc: 0,
             line: 0,
@@ -212,20 +217,10 @@ impl<'p> Asm<'p> {
         Ok(())
     }
 
-    /// Index of constant `v`, appended when the table lacks it.
+    /// Index of constant `v`, appended where PUC's code generator would.
     pub(super) fn konst(&mut self, v: Value) -> u32 {
-        let same = |k: &Value| match (k, &v) {
-            (Value::Int(a), Value::Int(b)) => a == b,
-            (Value::Float(a), Value::Float(b)) => a.to_bits() == b.to_bits(),
-            _ => false,
-        };
-        match self.consts.iter().position(same) {
-            Some(i) => i as u32,
-            None => {
-                self.consts.push(v);
-                self.consts.len() as u32 - 1
-            }
-        }
+        let (ver, map) = &mut self.kmap;
+        add_const(*ver, &mut self.consts, map, v)
     }
 
     /// Constant `k` when it is a string PUC 5.3+ interns (the fast field

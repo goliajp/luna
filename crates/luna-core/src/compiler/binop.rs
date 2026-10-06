@@ -104,10 +104,10 @@ impl Compiler<'_> {
                         || matches!(op, BinOp::BAnd | BinOp::BOr | BinOp::BXor)
                             && matches!(le, Exp::Int(_)));
                 let saved_line = self.force_line.replace(line);
-                if swap && let Some(form) = self.const_operand(op, &le, true, saved) {
+                if swap && let Some(form) = self.const_operand(op, &le, true) {
                     in_inst = Some((form, true));
                     right_reg = Some(self.exp_to_anyreg(re)?);
-                } else if !sub_zero && let Some(form) = self.const_operand(op, &re, false, saved) {
+                } else if !sub_zero && let Some(form) = self.const_operand(op, &re, false) {
                     in_inst = Some((form, false));
                     l = Some(self.exp_to_anyreg(le)?);
                 } else {
@@ -119,7 +119,7 @@ impl Compiler<'_> {
                     l = Some(self.exp_to_anyreg(le)?);
                 }
                 self.force_line = saved_line;
-            } else if let Some(form) = self.const_operand(op, &le, true, saved) {
+            } else if let Some(form) = self.const_operand(op, &le, true) {
                 in_inst = Some((form, true));
             }
         }
@@ -127,7 +127,7 @@ impl Compiler<'_> {
             && right_reg.is_none()
             && in_inst.is_none()
             && !sub_zero
-            && let Some(form) = self.const_operand(op, &re, false, saved)
+            && let Some(form) = self.const_operand(op, &re, false)
         {
             in_inst = Some((form, false));
         }

@@ -238,7 +238,7 @@ impl<'a> Compiler<'a> {
 
     pub(super) fn str_const(&mut self, bytes: &[u8]) -> u32 {
         let s = self.intern_str(bytes);
-        self.const_idx(ConstKey::Str(s.as_ptr()), Value::Str(s))
+        self.const_idx(Value::Str(s))
     }
 
     /// The constant of the tree's string (or name) `s`: each entry of the
@@ -253,7 +253,7 @@ impl<'a> Compiler<'a> {
                 g
             }
         };
-        self.const_idx(ConstKey::Str(g.as_ptr()), Value::Str(g))
+        self.const_idx(Value::Str(g))
     }
 
     pub(super) fn intern_str(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
