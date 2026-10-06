@@ -63,12 +63,21 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
     let param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
         (0..plan.num_params).map(|_| i64_type.into()).collect();
     let fn_type = i64_type.fn_type(&param_types, false);
-    let function = module.add_function("luna_jit_llvm_entry", fn_type, None);
+    // the body, which self-recursive calls enter directly, and the entry
+    // the dispatcher calls, which checks once what the body relies on
+    let function = module.add_function(
+        "luna_jit_llvm_body",
+        fn_type,
+        Some(inkwell::module::Linkage::Private),
+    );
+    function.set_call_conventions(FASTCC);
+    let entry = module.add_function("luna_jit_llvm_entry", fn_type, None);
 
     // Declare every `luna_jit_*` helper as an
     // external IR function. Used by Op::GetUpval / Op::Call emit
     // below; the dead-locals path skips this step.
     let helpers = declare_jit_helpers(ctx_static, &module);
+    emit_entry(ctx_static, &builder, plan, entry, function, &helpers)?;
 
     // Pre-create one LLVM BB per source BB. The PC-keyed map gives
     // O(1) lookup for branch targets.
@@ -95,6 +104,7 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         regs_ty,
         regs,
         helpers: &helpers,
+        may_park: may_park(plan),
     };
 
     // Populate `regs[0..num_params]` from the fn
@@ -105,14 +115,6 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         let slot = emitter.reg_slot_ptr(i, "param_slot")?;
         let arg = function.get_nth_param(i)?.into_int_value();
         builder.build_store(slot, arg).ok()?;
-    }
-
-    // Self-recursive calls are direct calls to this code, right only
-    // while the upvalue they go through still holds the running closure.
-    if let Some(idx) = plan.self_upval_idx {
-        let check = helpers.get("luna_jit_self_upval_check").copied()?;
-        let idx_arg = i64_type.const_int(u64::from(idx), false);
-        emitter.return_unless(check, &[idx_arg.into()], "self")?;
     }
 
     // Walk PCs; switch BB on bb_starts boundaries; terminators
@@ -214,6 +216,71 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
     }
 
     finalize_module(ctx_box, module, true)
+}
+
+/// LLVM's `fastcc` calling convention, for the body's calls to itself.
+const FASTCC: u32 = 8;
+
+/// The entry the dispatcher calls: checks that the upvalue the body's
+/// self-recursive calls go through still holds the running closure (they
+/// are direct calls to the body, right only while it does; nothing the
+/// body runs can reassign it), then runs the body.
+fn emit_entry<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    plan: &ChunkPlan,
+    entry: inkwell::values::FunctionValue<'ctx>,
+    body: inkwell::values::FunctionValue<'ctx>,
+    helpers: &std::collections::HashMap<&'static str, inkwell::values::FunctionValue<'ctx>>,
+) -> Option<()> {
+    let i64_type = ctx.i64_type();
+    let start = ctx.append_basic_block(entry, "entry");
+    builder.position_at_end(start);
+    if let Some(idx) = plan.self_upval_idx {
+        let check = helpers.get("luna_jit_self_upval_check").copied()?;
+        let idx_arg = i64_type.const_int(u64::from(idx), false);
+        let ok = builder
+            .build_call(check, &[idx_arg.into()], "self_check")
+            .ok()?;
+        let ok = match ok.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
+            inkwell::values::ValueKind::Instruction(_) => return None,
+        };
+        let zero = i64_type.const_zero();
+        let is_ok = builder
+            .build_int_compare(inkwell::IntPredicate::NE, ok, zero, "self_ok")
+            .ok()?;
+        let go = ctx.append_basic_block(entry, "self_go");
+        let deopt = ctx.append_basic_block(entry, "self_deopt");
+        builder.build_conditional_branch(is_ok, go, deopt).ok()?;
+        builder.position_at_end(deopt);
+        builder.build_return(Some(&zero)).ok()?;
+        builder.position_at_end(go);
+    }
+    let args: Vec<inkwell::values::BasicMetadataValueEnum> =
+        entry.get_param_iter().map(Into::into).collect();
+    let call = builder.build_call(body, &args, "body").ok()?;
+    call.set_call_convention(FASTCC);
+    let v = match call.try_as_basic_value() {
+        inkwell::values::ValueKind::Basic(v) => v,
+        inkwell::values::ValueKind::Instruction(_) => return None,
+    };
+    builder.build_return(Some(&v)).ok()?;
+    Some(())
+}
+
+/// Whether the body can park a deopt (`luna_jit_park_deopt`, or a check
+/// helper that parks one): a self-recursive call must then look after it
+/// returns whether the callee parked one.
+fn may_park(plan: &ChunkPlan) -> bool {
+    plan.code.iter().enumerate().any(|(pc, ins)| {
+        plan.reachable[pc]
+            && match ins.op() {
+                Op::GetUpval => plan.is_upval_value_read[pc],
+                Op::Mod => true,
+                _ => false,
+            }
+    })
 }
 
 /// Lower a comparison and the `Jmp` it consumes into one `condbr`.

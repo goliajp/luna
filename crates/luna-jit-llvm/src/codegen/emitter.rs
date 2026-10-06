@@ -31,6 +31,8 @@ pub(super) struct ComputeEmitter<'ctx, 'a> {
     /// `helpers["luna_jit_upval_get"]`; future ops widen the call sites
     /// without per-op registration boilerplate.
     pub(super) helpers: &'a HashMap<&'static str, FunctionValue<'ctx>>,
+    /// The body can park a deopt (see `compute::may_park`).
+    pub(super) may_park: bool,
 }
 
 impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
@@ -336,14 +338,17 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         let call_inst = builder
             .build_call(self.function, &arg_vals, "self_call")
             .ok()?;
+        call_inst.set_call_convention(self.function.get_call_conventions());
         let v = match call_inst.try_as_basic_value() {
             inkwell::values::ValueKind::Basic(bv) => bv.into_int_value(),
             inkwell::values::ValueKind::Instruction(_) => return None,
         };
         let slot = self.reg_slot_ptr(a, "call_dst")?;
         builder.build_store(slot, v).ok()?;
-        let parked = self.helpers.get("luna_jit_no_deopt_parked").copied()?;
-        self.return_unless(parked, &[], "call")?;
+        if self.may_park {
+            let parked = self.helpers.get("luna_jit_no_deopt_parked").copied()?;
+            self.return_unless(parked, &[], "call")?;
+        }
         Some(())
     }
 
@@ -362,6 +367,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         let call_inst = builder
             .build_call(self.function, &arg_vals, "tail_call")
             .ok()?;
+        call_inst.set_call_convention(self.function.get_call_conventions());
         let v = match call_inst.try_as_basic_value() {
             inkwell::values::ValueKind::Basic(bv) => bv.into_int_value(),
             inkwell::values::ValueKind::Instruction(_) => return None,
