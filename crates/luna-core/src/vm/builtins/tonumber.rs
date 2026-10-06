@@ -180,7 +180,7 @@ fn strtoul(s: &[u8], base: u32) -> Option<u64> {
         match n
             .checked_mul(base as u64)
             .and_then(|n| n.checked_add(d as u64))
-            .filter(|&n| n <= ULONG_MAX)
+            .filter(|&n| u128::from(n) <= u128::from(ULONG_MAX))
         {
             Some(v) => n = v,
             None => overflow = true,
