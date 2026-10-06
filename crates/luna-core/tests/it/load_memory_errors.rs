@@ -184,6 +184,12 @@ fn a_load_refused_at_each_allocation_in_turn_leaks_nothing() {
             assert!(matches!(r[0], Value::Str(_)), "{v:?}");
         };
         run(&mut vm);
+        // one refused load first: the collector's work lists keep the room
+        // an emergency collection grew them to, which is not a leak
+        nth.left.set(Some(0));
+        let _ = vm.load(src.as_bytes(), b"=chunk");
+        nth.left.set(None);
+        run(&mut vm);
         vm.collect_garbage();
         let base = nth.live.get();
         let mut n = 0;
@@ -260,6 +266,9 @@ fn a_reader_refused_at_each_allocation_in_turn_gives_the_memory_error() {
                   return nil, e\n",
                 b"=reader",
             )
+            .unwrap();
+        // the collections below must not free it
+        vm.set_global("reader_chunk", Value::Closure(chunk))
             .unwrap();
         let mut n = 0;
         let mut memory_errors = 0;
