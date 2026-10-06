@@ -1,4 +1,5 @@
-//! Expression dispatch, names, calls, and discharging an `Exp` into registers.
+//! Expression dispatch, calls, and discharging an `Exp` into registers
+//! (names are in `expr_names`).
 
 use super::*;
 
@@ -41,119 +42,6 @@ impl<'a> Compiler<'a> {
             Expr::Vararg => self.vararg_expr(),
             Expr::Call { .. } | Expr::MethodCall { .. } => self.call_expr(id),
             Expr::Function(body) => self.function_exp(body, false),
-        }
-    }
-
-    pub(super) fn name_expr(&mut self, name: &str) -> Result<Exp, SyntaxError> {
-        match self.resolve_name(name)? {
-            VarKind::Local(reg) => Ok(Exp::Reg(reg)),
-            VarKind::Const(v) => Ok(self.ct_exp(v)),
-            VarKind::Upval(u) => Ok(Exp::Reloc(self.emit(Inst::iabc(
-                Op::GetUpval,
-                0,
-                u,
-                0,
-                false,
-            )))),
-            VarKind::Global { .. } => {
-                // declaration check (5.5): undeclared names error under a
-                // strict regime; reads are fine for const globals
-                let line = self.last_line;
-                self.resolve_global_kind(name, line)?;
-                self.global_access(name)
-            }
-        }
-    }
-
-    /// `_ENV[name]` with `_ENV` resolved through the scope chain (it can be
-    /// shadowed by a local or captured as an upvalue).
-    /// True when `_ENV` itself has been pulled into a `global` declaration: any
-    /// global access then needs `_ENV._ENV`, which is itself global — an error
-    /// (PUC's `buildglobal` rejects a VGLOBAL environment).
-    pub(super) fn env_is_global(&self) -> bool {
-        self.levels.iter().rev().any(|lvl| {
-            lvl.blocks
-                .iter()
-                .any(|b| b.gdecls.iter().any(|&(n, _)| n == "_ENV"))
-        })
-    }
-
-    /// Emit the runtime "already defined" guard for a defining `global` write:
-    /// reads the current value of the global and errors (OP_ERRNNIL) if it is
-    /// not nil. Only `global x = ...` and `global function x` use this.
-    pub(super) fn emit_global_redef_check(&mut self, name: &str) -> Result<(), SyntaxError> {
-        let saved = self.lr().freereg;
-        let e = self.global_access(name)?;
-        let r = self.exp_to_anyreg(e)?;
-        let c = self.str_const(name.as_bytes());
-        let bx = if c < MAX_BX { c + 1 } else { 0 };
-        self.emit(Inst::iabx(Op::ErrNNil, r, bx));
-        self.set_freereg(saved);
-        Ok(())
-    }
-
-    pub(super) fn global_access(&mut self, name: &str) -> Result<Exp, SyntaxError> {
-        if self.env_is_global() {
-            return Err(self.err(
-                self.last_line,
-                format!("_ENV is global when accessing variable '{name}'"),
-            ));
-        }
-        let c = self.str_const(name.as_bytes());
-        match self.resolve_env()? {
-            VarKind::Upval(u) if c <= 0xFF => Ok(Exp::Reloc(self.emit(Inst::iabc(
-                Op::GetTabUp,
-                0,
-                u,
-                c,
-                true,
-            )))),
-            VarKind::Local(r) if c <= 0xFF => Ok(Exp::Reloc(self.emit(Inst::iabc(
-                Op::GetField,
-                0,
-                r,
-                c,
-                true,
-            )))),
-            env => {
-                // rare: huge constant index — go through registers
-                let er = self.reserve(2)?;
-                match env {
-                    VarKind::Upval(u) => {
-                        self.emit(Inst::iabc(Op::GetUpval, er, u, 0, false));
-                    }
-                    VarKind::Local(r) => {
-                        self.emit(Inst::iabc(Op::Move, er, r, 0, false));
-                    }
-                    VarKind::Global { .. } | VarKind::Const(_) => {
-                        unreachable!("resolve_env gives a register or an upvalue")
-                    }
-                }
-                self.load_const(er + 1, c);
-                self.set_freereg(er);
-                Ok(Exp::Reloc(self.emit(Inst::iabc(
-                    Op::GetTable,
-                    0,
-                    er,
-                    er + 1,
-                    false,
-                ))))
-            }
-        }
-    }
-
-    /// `_ENV` as the table a global access indexes. A compile-time constant
-    /// `_ENV` is loaded into a register first (PUC `luaK_exp2anyregup`).
-    pub(super) fn resolve_env(&mut self) -> Result<VarKind, SyntaxError> {
-        if self.version == LuaVersion::Lua51 {
-            return Ok(VarKind::Upval(0));
-        }
-        match self.resolve_name("_ENV")? {
-            VarKind::Const(v) => {
-                let e = self.ct_exp(v);
-                Ok(VarKind::Local(self.exp_to_anyreg(e)?))
-            }
-            k => Ok(k),
         }
     }
 
@@ -277,6 +165,7 @@ impl<'a> Compiler<'a> {
             }
             Exp::Int(i) => {
                 if (-65535..=65535).contains(&i) {
+                    self.number_const_before_54(ConstKey::Int(i), Value::Int(i));
                     self.emit(Inst::iasbx(Op::LoadI, reg, i as i32));
                 } else {
                     let c = self.const_idx(ConstKey::Int(i), Value::Int(i));
@@ -291,6 +180,7 @@ impl<'a> Compiler<'a> {
                 // bit-compare so the LoadF fast path doesn't fold -0.0 to +0.0
                 // (`-0.0 == 0.0` but their bit patterns differ)
                 if (-65535..=65535).contains(&as_int) && (as_int as f64).to_bits() == f.to_bits() {
+                    self.number_const_before_54(ConstKey::Float(f.to_bits()), Value::Float(f));
                     self.emit(Inst::iasbx(Op::LoadF, reg, as_int));
                 } else {
                     let c = self.const_idx(ConstKey::Float(f.to_bits()), Value::Float(f));
@@ -338,6 +228,15 @@ impl<'a> Compiler<'a> {
                 Ok(base)
             }
             e => self.exp_to_nextreg(e),
+        }
+    }
+
+    /// Before 5.4 every number is loaded from the constant table (there is
+    /// no `LOADI` / `LOADF`): the constant enters the table where PUC's
+    /// code generator adds it, so a dump lists constants in PUC's order.
+    fn number_const_before_54(&mut self, key: ConstKey, v: Value) {
+        if self.version < LuaVersion::Lua54 {
+            self.const_idx(key, v);
         }
     }
 

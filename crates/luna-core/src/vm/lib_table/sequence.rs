@@ -273,9 +273,11 @@ pub(super) fn t_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         // `tm` is the only reference into it, and the heap calls made while
         // it lives (`set_int`, `intern`, `set`) do not collect
         let tm = unsafe { t.as_mut() };
+        // `lua_createtable(L, n, 1)`: the arguments, nil ones included, fill
+        // an array part of exactly their count
+        tm.resize(&mut vm.heap, nargs as usize, 1);
         for i in 0..nargs {
-            let v = vm.nat_arg(fs, nargs, i);
-            let _ = tm.set_int_raw(&mut vm.heap, i as i64 + 1, v);
+            tm.set_list_slot(i as usize, vm.nat_arg(fs, nargs, i));
         }
         let nk = Value::Str(vm.heap.intern(b"n"));
         tm.set(&mut vm.heap, nk, Value::Int(nargs as i64))

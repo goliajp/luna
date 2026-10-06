@@ -155,10 +155,26 @@ pub trait TraceCompiler {
     /// the recorder bucket failures by phase).
     fn last_compile_checkpoint(&self) -> &'static str;
 
+    /// The index in the recording of the op the last failed compile on
+    /// this thread stopped at, when it got to one. The interpreter cuts a
+    /// recording that failed inside a function it inlined back to the
+    /// call into that function, and compiles it again.
+    #[doc(hidden)]
+    fn last_compile_op(&self) -> Option<usize> {
+        None
+    }
+
     /// Compiles `ct`, whose code came from a quicker, less optimizing code
     /// generator, again from what [`crate::jit::trace::TierUp::source`]
     /// holds; the new entry behaves exactly like the old one. `None` when
     /// the backend has no better code for it.
+    ///
+    /// A backend that compiles better code in the background leaves
+    /// something in `source` (returning `None`, or quicker code meanwhile):
+    /// the Vm then asks again at the next entry of the trace once it runs
+    /// code this returned, else after another
+    /// [`crate::jit::trace::TierUp::at`] loop iterations and entries of the
+    /// baseline code, and switches to each entry this returns.
     fn tier_up(
         &self,
         storage: &mut dyn crate::jit::JitStorage,
@@ -181,6 +197,35 @@ pub trait TraceCompiler {
     ) -> Vec<crate::jit::trace::AdoptedTrace> {
         let _ = (storage, req);
         Vec::new()
+    }
+
+    /// How many recordings like `record` (the content of its code, how it
+    /// started, its entry tags and the path it took) failed to compile
+    /// with `opts` in the other `Vm`s sharing compiled code with this one:
+    /// compiling it would fail again. 0 when none did.
+    #[doc(hidden)]
+    fn failure_known(
+        &self,
+        storage: &mut dyn crate::jit::JitStorage,
+        record: &TraceRecord,
+        opts: CompileOptions,
+        version: crate::version::LuaVersion,
+    ) -> u32 {
+        let _ = (storage, record, opts, version);
+        0
+    }
+
+    /// `record` failed to compile with `opts`: tells the `Vm`s sharing
+    /// compiled code with this one.
+    #[doc(hidden)]
+    fn publish_failure(
+        &self,
+        storage: &mut dyn crate::jit::JitStorage,
+        record: &TraceRecord,
+        opts: CompileOptions,
+        version: crate::version::LuaVersion,
+    ) {
+        let _ = (storage, record, opts, version);
     }
 }
 

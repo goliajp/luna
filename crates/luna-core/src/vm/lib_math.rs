@@ -12,8 +12,10 @@ use crate::vm::builtins::arg_error;
 use crate::vm::error::LuaError;
 use crate::vm::exec::{Vm, c_fmod};
 
+mod frexp;
 mod minmax;
 mod random;
+use frexp::{frexp, ldexp};
 use minmax::minmax;
 use random::{m_random, m_randomseed};
 
@@ -122,6 +124,7 @@ pub fn inlinable_native(name: &[u8]) -> Option<crate::runtime::value::NativeFn> 
         b"ceil" => m_ceil,
         b"max" => m_max,
         b"min" => m_min,
+        b"fmod" => m_fmod,
         _ => return None,
     };
     Some(f)
@@ -208,47 +211,6 @@ fn m_deg(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 }
 
 float_fn!(m_rad, |x: f64| x * (std::f64::consts::PI / 180.0));
-
-/// frexp: x = m * 2^e with 0.5 <= |m| < 1 (or m == x for 0/inf/nan).
-fn frexp(x: f64) -> (f64, i64) {
-    if x == 0.0 || x.is_nan() || x.is_infinite() {
-        return (x, 0);
-    }
-    let bits = x.to_bits();
-    let exp_field = ((bits >> 52) & 0x7FF) as i64;
-    if exp_field == 0 {
-        // subnormal: normalize by scaling up, then adjust the exponent back
-        let (m, e) = frexp(x * f64::from_bits(0x435u64 << 52)); // x * 2^54
-        return (m, e - 54);
-    }
-    // force the stored exponent to represent 2^-1 so the mantissa lands in
-    // [0.5, 1); the true exponent is then exp_field - 1022
-    let m_bits = (bits & !(0x7FFu64 << 52)) | (1022u64 << 52);
-    (f64::from_bits(m_bits), exp_field - 1022)
-}
-
-/// ldexp: m * 2^e, scaling in chunks so a large |e| can't overflow a single
-/// power-of-two multiply.
-fn ldexp(mut m: f64, mut e: i64) -> f64 {
-    if m == 0.0 || m.is_nan() || m.is_infinite() {
-        return m;
-    }
-    while e > 1023 {
-        m *= f64::from_bits(0x7FEu64 << 52); // 2^1023
-        e -= 1023;
-        if m == 0.0 || m.is_infinite() {
-            return m;
-        }
-    }
-    while e < -1022 {
-        m *= f64::from_bits(0x001u64 << 52); // 2^-1022
-        e += 1022;
-        if m == 0.0 || m.is_infinite() {
-            return m;
-        }
-    }
-    m * f64::from_bits(((e + 1023) as u64) << 52)
-}
 
 fn m_frexp(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let x = argcheck::check_number(vm, Args::new(fs, nargs), 0)?;

@@ -14,21 +14,25 @@ impl<'a> Compiler<'a> {
         let e = self.expr(operand)?;
         let saved = self.lr().freereg;
         let (opcode, folded) = match op {
-            UnOp::Neg => match e {
-                Exp::Int(i) => return Ok(Exp::Int(i.wrapping_neg())),
-                Exp::Float(f) => return Ok(Exp::Float(-f)),
-                e => (Op::Unm, e),
-            },
+            UnOp::Neg | UnOp::BNot => {
+                let n = match e {
+                    Exp::Int(i) => Some(Num::Int(i)),
+                    Exp::Float(f) => Some(Num::Float(f)),
+                    _ => None,
+                };
+                match n.and_then(|n| fold::fold_unary(op, n, self.version)) {
+                    Some(Num::Int(i)) => return Ok(Exp::Int(i)),
+                    Some(Num::Float(f)) => return Ok(Exp::Float(f)),
+                    None if op == UnOp::Neg => (Op::Unm, e),
+                    None => (Op::BNot, e),
+                }
+            }
             UnOp::Not => match e {
                 Exp::Nil | Exp::False => return Ok(Exp::True),
                 Exp::True | Exp::Int(_) | Exp::Float(_) | Exp::Const(_) => return Ok(Exp::False),
                 e => (Op::Not, e),
             },
             UnOp::Len => (Op::Len, e),
-            UnOp::BNot => match e {
-                Exp::Int(i) => return Ok(Exp::Int(!i)),
-                e => (Op::BNot, e),
-            },
         };
         let r = self.exp_to_anyreg(folded)?;
         self.set_freereg(saved);

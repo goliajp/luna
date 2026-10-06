@@ -18,13 +18,10 @@ impl<'a> Compiler<'a> {
                 _ => nhash += 1,
             }
         }
-        self.emit(Inst::iabc(
-            Op::NewTable,
-            treg,
-            narr.min(255),
-            nhash.min(255),
-            false,
-        ));
+        // the size operands are set at the end, once it is known whether
+        // the last field is an item left open (PUC `luaK_settablesize`)
+        let new_pc = self.emit(Inst::iabc(Op::NewTable, treg, 0, 0, false));
+        let mut open_last = false;
         const FIELDS_PER_FLUSH: u32 = 50;
         let mut pending = 0u32;
         let mut flushed = 0u32;
@@ -33,6 +30,9 @@ impl<'a> Compiler<'a> {
             .filter(|f| matches!(f, TableField::Item(_)))
             .count();
         let mut item_idx = 0usize;
+        // only the constructor's very last field keeps a call or `...`
+        // open; an item followed by keyed fields is cut to one value
+        let last_is_item = matches!(fields.last(), Some(TableField::Item(_)));
         for f in fields {
             match f {
                 TableField::Item(v) => {
@@ -45,11 +45,13 @@ impl<'a> Compiler<'a> {
                     let e = self.expr(*v)?;
                     // last positional item: calls/varargs stay open
                     if item_idx == n_items
+                        && last_is_item
                         && let Exp::Open { pc, base } = e
                     {
                         debug_assert_eq!(base, dst);
                         self.patch_wanted(pc, 0);
                         self.setlist_open(treg, flushed)?;
+                        open_last = true;
                         pending = 0;
                         continue;
                     }
@@ -91,6 +93,9 @@ impl<'a> Compiler<'a> {
         if pending > 0 {
             self.setlist(treg, pending, flushed)?;
         }
+        let (b, c, k) =
+            crate::runtime::table::new_table_operands(self.version, narr - open_last as u32, nhash);
+        self.l().code[new_pc] = Inst::iabc(Op::NewTable, treg, b, c, k);
         self.set_freereg(treg + 1);
         Ok(Exp::Reg(treg))
     }

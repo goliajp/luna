@@ -192,6 +192,7 @@ fn setfield_trace_aot_emits_strkey_data_symbols() {
         aot: true,
         tier: Default::default(),
         tier_up_at: 0,
+        dialect: None,
     };
 
     // The lowerer's `dispatchable` analysis may reject this 1-op

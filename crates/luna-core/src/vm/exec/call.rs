@@ -326,11 +326,12 @@ impl Vm {
             {
                 // SAFETY: `t` was allocated above and is held only by this local; `tm` is the only reference into it, and the heap calls made while it lives (`set_int`, `intern`, `set`) do not collect
                 let tm = unsafe { t.as_mut() };
+                // `luaH_new(L, nvar, 1)`: an array part of exactly the
+                // extras' count (bounded by the stack, well below
+                // `MAX_ASIZE`), nil ones included
+                tm.resize(&mut self.heap, n_varargs as usize, 1);
                 for i in 0..n_varargs {
-                    let v = self.stack[(base - n_varargs + i) as usize];
-                    // bounded by `n_varargs` (≤ MAXUPVAL territory), well
-                    // below `MAX_ASIZE`
-                    let _ = tm.set_int_raw(&mut self.heap, (i + 1) as i64, v);
+                    tm.set_list_slot(i as usize, self.stack[(base - n_varargs + i) as usize]);
                 }
                 let nk = Value::Str(self.heap.intern(b"n"));
                 tm.set(&mut self.heap, nk, Value::Int(n_varargs as i64))
