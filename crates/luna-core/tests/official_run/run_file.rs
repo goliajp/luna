@@ -6,7 +6,6 @@ use super::byte_diff::{
     run_official_on_puc,
 };
 use super::*;
-use luna_core::runtime::mem::{MemOwner, MemoryLimit};
 
 /// Lua snippet prepended to every PUC chunk. **MUST be newline-free** so
 /// reported source-line numbers (used by `error("…", level)` and the
@@ -78,13 +77,13 @@ pub(super) fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     // `BYTE_DIFF_ALLOWLIST` for the reason per file.
     let byte_diff_enabled = std::env::var_os("LUNA_OFFICIAL_BYTE_DIFF").is_some()
         && !byte_diff_should_skip(version, name);
-    let src = wrap_source(body, skip_wrapper, byte_diff_enabled);
+    let src = heavy_driver(wrap_source(body, skip_wrapper, byte_diff_enabled), name);
     let label = name.to_string();
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .stack_size(16 << 20)
         .spawn(move || {
-            let mut vm = vm_for(version, &label);
+            let mut vm = Vm::new(version);
             configure_vm(&mut vm, &label);
             let r = run_chunk(&mut vm, &src, &label, version);
             // Read counters back from globals. If the chunk error'd
@@ -164,6 +163,29 @@ fn read_chunk(name: &str, version: LuaVersion) -> Result<Vec<u8>, String> {
 
 /// Prepend the assert-counter preamble and, when enabled, the byte-diff
 /// capture around the body.
+const STRESS_CAP: usize = 1 << 30;
+
+fn rearm_cap(vm: &mut Vm, _slot: u32, _nargs: u32) -> Result<u32, luna_core::vm::LuaError> {
+    vm.set_memory_cap(Some(STRESS_CAP));
+    Ok(0)
+}
+
+/// heavy.lua catches the memory failure its stress loops run into with
+/// `pcall` and goes on; under PUC the allocator serves the next request,
+/// under luna the memory cap that stands in for it stays exceeded until
+/// the host re-arms it (see `configure_vm`), so its `pcall` re-arms the
+/// cap on return.
+fn heavy_driver(src: Vec<u8>, name: &str) -> Vec<u8> {
+    if name != "heavy.lua" {
+        return src;
+    }
+    const PCALL_REARMS: &[u8] = b"do local pcall0 = pcall pcall = function (...) local r = table.pack(pcall0(...)) __luna_rearm_cap() return table.unpack(r, 1, r.n) end end ";
+    let mut s = Vec::with_capacity(PCALL_REARMS.len() + src.len());
+    s.extend_from_slice(PCALL_REARMS);
+    s.extend_from_slice(&src);
+    s
+}
+
 fn wrap_source(body: Vec<u8>, skip_wrapper: bool, byte_diff_enabled: bool) -> Vec<u8> {
     if skip_wrapper {
         body
@@ -203,33 +225,44 @@ fn wrap_source(body: Vec<u8>, skip_wrapper: bool, byte_diff_enabled: bool) -> Ve
 }
 
 /// The `_U` / `_port` / `_soft` / `_noposix` globals the file runs under.
-/// The four stress files PUC's outer driver gates behind a host
-/// wall-clock budget run on a 1 GiB memory limit. heavy.lua's
-/// `toomanyidx` fills `a[i] = i` until the array part reaches `MAX_ASIZE
-/// = 1 << 27` (~134 M slots × 9 B ≈ 1.2 GB), and on a 7 GB GitHub
-/// Actions runner the peak of the final doubling (old slab + new slab +
-/// the temporary pairs) walked the host allocator off a cliff before the
-/// `TableError::Overflow` check could fire. With the limit the growth
-/// fails as it does under PUC's test allocator, with the "not enough
-/// memory" error heavy.lua's `pcall` expects, and the rest of the chunk
-/// runs. (A memory cap would not do: once exceeded it stays exceeded
-/// until the host re-arms it, which the chunk cannot.) For
-/// verybig / memerr / sort the limit is pure headroom — none of them
-/// push live bytes anywhere near 1 GiB (verybig has `_soft=true` set
-/// below, memerr early-returns when `T` is nil, sort's working set is
-/// ~50k Values ≈ 1.2 MB).
-fn vm_for(version: LuaVersion, label: &str) -> Vm {
+/// Memory cap and the `_U` / `_port` / `_soft` / `_noposix` globals the
+/// file runs under.
+fn configure_vm(vm: &mut Vm, label: &str) {
+    // Runtime memory cap for the four stress files PUC's outer driver
+    // gates behind a host wall-clock budget. heavy.lua's `toomanyidx`
+    // fills `a[i] = i` until the array part reaches `MAX_ASIZE = 1 <<
+    // 27` (~134 M slots × 9 B ≈ 1.2 GB) at which point `rehash`
+    // returns `TableError::Overflow`. On a 7 GB GitHub Actions ubuntu
+    // runner the *peak* during the final doubling (old slab + new
+    // slab + temporary `old_pairs` Vec ≈ 2.4 GB + assorted Rust /
+    // cargo overhead) walked the host allocator off a cliff and
+    // SIGSEGV'd before the Overflow check could fire. Arming the soft
+    // cap at 1 GiB lets the run loop notice between dispatch turns,
+    // run a full collect (which can't reclaim the growing `a` — it's
+    // reachable), and raise the "memory cap exceeded" Lua error that
+    // heavy.lua's `pcall(function () ... end)` catches, standing in
+    // for the "not enough memory" PUC's test allocator raises there (a
+    // memory limit on the allocation context cannot stand in yet: a
+    // refused table slab still aborts). Once exceeded the cap stays
+    // exceeded until the host re-arms it, where PUC's allocator just
+    // works again after the failed request, so heavy.lua's `pcall` is
+    // wrapped to re-arm the cap when it returns (`heavy_driver`). For
+    // verybig/memerr/sort the cap is pure headroom — none of them push
+    // net live bytes anywhere near 1 GiB (verybig has `_soft=true` set
+    // below, memerr early-returns when `T` is nil, sort's working set
+    // is ~50k Values ≈ 1.2 MB) — but pinning it here is
+    // defense-in-depth against future additions to the same stress
+    // family.
     if matches!(
         label,
         "heavy.lua" | "verybig.lua" | "memerr.lua" | "sort.lua"
     ) {
-        let mem = MemOwner::policy(Box::new(MemoryLimit(1usize << 30)));
-        return Vm::new_with_mem(version, mem);
+        vm.set_memory_cap(Some(STRESS_CAP));
     }
-    Vm::new(version)
-}
-
-fn configure_vm(vm: &mut Vm, label: &str) {
+    if label == "heavy.lua" {
+        let n = vm.heap.new_native(rearm_cap, Box::new([]));
+        vm.set_global("__luna_rearm_cap", Value::Native(n)).unwrap();
+    }
     vm.set_global("_U", Value::Bool(true)).unwrap();
     // attrib.lua's lines 79-356 exercise dynamic C-library loading
     // (`package.loadlib`) which luna does not ship; `_port=true` is the
