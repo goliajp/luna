@@ -221,3 +221,69 @@ fn a_load_refused_at_each_allocation_in_turn_leaks_nothing() {
         assert_eq!(nth.live.get(), 0, "{v:?}: blocks left after the vm is gone");
     }
 }
+
+std::thread_local! {
+    static NATIVE_NTH: std::cell::RefCell<Option<(Rc<Nth>, usize)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// A native that loads a chunk with the `n`th allocation of the load
+/// refused, `n` taken from its argument: "ok", or the memory error's text.
+fn load_refused_nth(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_core::vm::LuaError> {
+    let n = match vm.nat_arg(fs, nargs, 0) {
+        Value::Int(n) => n as usize,
+        Value::Float(n) => n as usize,
+        v => panic!("load_nth({v:?})"),
+    };
+    let nth = NATIVE_NTH.with(|c| c.borrow().as_ref().unwrap().0.clone());
+    let src = source(vm.version());
+    nth.refused.set(false);
+    nth.left.set(Some(n));
+    let r = vm.load(src.as_bytes(), b"=inner");
+    nth.left.set(None);
+    let refused = nth.refused.get();
+    let text: &[u8] = match r {
+        Ok(_) if refused => b"refused but loaded",
+        Ok(_) => b"ok",
+        Err(e) if e.is_memory() => b"not enough memory",
+        Err(_) => b"other error",
+    };
+    let s = vm.heap.intern(text);
+    Ok(vm.nat_return(fs, &[Value::Str(s)]))
+}
+
+/// A native called from a running Lua loop loads a chunk whose allocations
+/// are refused one after another: each time the load inside the native
+/// fails with the memory error, which neither the native call nor the loop
+/// turns into anything else.
+#[test]
+fn a_load_inside_a_native_called_from_a_loop_gives_the_memory_error() {
+    for v in [LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Lua55] {
+        let nth = Rc::new(Nth::default());
+        NATIVE_NTH.with(|c| *c.borrow_mut() = Some((nth.clone(), 0)));
+        let mut vm = Vm::new_with_mem(v, MemOwner::policy(Box::new(RefuseNth(nth.clone()))));
+        let f = vm.native(load_refused_nth);
+        vm.set_global("load_nth", f).unwrap();
+        let cl = vm
+            .load(
+                b"local mem, ok = 0, 0\n\
+                  for n = 0, 100000 do\n\
+                    local r = load_nth(n)\n\
+                    if r == 'ok' then ok = 1 break end\n\
+                    assert(r == 'not enough memory', r)\n\
+                    mem = mem + 1\n\
+                  end\n\
+                  return mem, ok\n",
+                b"=loop",
+            )
+            .unwrap();
+        let r = vm.call_value(Value::Closure(cl), &[]).unwrap();
+        let num = |x: Value| match x {
+            Value::Int(i) => i,
+            Value::Float(f) => f as i64,
+            _ => panic!("{v:?}: {r:?}"),
+        };
+        let (mem, ok) = (num(r[0]), num(r[1]));
+        assert_eq!(ok, 1, "{v:?}: the load never succeeded");
+        assert!(mem > 100, "{v:?}: only {mem} memory errors");
+    }
+}
