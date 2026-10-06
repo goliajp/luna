@@ -120,11 +120,9 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
         sig.params.push(AbiParam::new(types::I64));
     }
     let extra = SelfCallParams::of(c);
-    if any_self_call {
-        for _ in 0..extra.len() {
-            sig.params.push(AbiParam::new(types::I64));
-        }
-    }
+    let extra_params = if any_self_call { extra.len() } else { 0 };
+    sig.params
+        .extend((0..extra_params).map(|_| AbiParam::new(types::I64)));
     sig.returns.push(AbiParam::new(types::I64));
     let fn_id = module
         .declare_function("luna_jit_chunk", Linkage::Local, &sig)
@@ -189,14 +187,8 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     // instead of misinterpreting the 0 bits as `Int(0)`.
     let current_is_nil: Vec<bool> = vec![false; max_stack];
     let self_calls = any_self_call.then(|| {
-        let params = bcx.block_params(entry).to_vec();
-        let mut rest = params[num_params..].iter().copied();
-        SelfCalls {
-            left: if extra.count { rest.next() } else { None },
-            ctx: if extra.ctx { rest.next() } else { None },
-            desc: self_call_desc((arg_float_mask, arg_table_mask), num_params, scan, ret_kind),
-            own: std::array::from_fn(|i| params[..num_params].get(i).copied()),
-        }
+        let desc = self_call_desc((arg_float_mask, arg_table_mask), num_params, scan, ret_kind);
+        self_calls_of(&bcx, entry, extra, num_params, desc)
     });
 
     let f = EmitFacts {
@@ -396,4 +388,22 @@ fn may_show_dummy_results(c: ChunkIn<'_>) -> bool {
         Op::Jmp => jmp_target(pc, ins) <= pc,
         _ => false,
     })
+}
+
+/// The body's [`SelfCalls`], from its entry block's parameters.
+fn self_calls_of(
+    bcx: &FunctionBuilder<'_>,
+    entry: Block,
+    extra: SelfCallParams,
+    num_params: usize,
+    desc: i64,
+) -> SelfCalls {
+    let params = bcx.block_params(entry);
+    let mut rest = params[num_params..].iter().copied();
+    SelfCalls {
+        left: if extra.count { rest.next() } else { None },
+        ctx: if extra.ctx { rest.next() } else { None },
+        desc,
+        own: std::array::from_fn(|i| params[..num_params].get(i).copied()),
+    }
 }
