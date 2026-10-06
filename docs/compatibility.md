@@ -170,6 +170,12 @@ and error. So, as in `lua.exe`:
   on a console written out after every call; standard error is written
   out after every call; so the two interleave as they do with `lua.exe`.
 
+- files are opened, removed and renamed through the Win32 calls that
+  library makes: a file that is open cannot be removed or renamed (the
+  library shares it for reading and writing only), `os.rename` does not
+  replace an existing file, `os.remove` does not remove a directory, and
+  `os.tmpname` names a file without creating it; unlike the library, luna
+  does not let child processes inherit the handles;
 - 5.1 passes its `io.open` mode to that library's `fopen` as it is, so a
   `ccs=UTF-8`, `ccs=UTF-16LE` or `ccs=UNICODE` in it opens the file in
   the library's Unicode text mode (UTF-16 code units in the stream, with
