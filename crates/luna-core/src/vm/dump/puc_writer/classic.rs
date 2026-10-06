@@ -19,7 +19,7 @@
 //!   pseudo-instruction per captured variable;
 //! - `SETLIST` counts blocks of 50 fields from 1.
 
-use super::asm::{Asm, L, Res, array_hint};
+use super::asm::{Asm, L, Res};
 use super::classic_ops::op51;
 use super::modern::Caps;
 use crate::runtime::Value;
@@ -38,16 +38,6 @@ pub(super) struct Frame {
 pub(super) const FIELDS_PER_FLUSH: u64 = 50;
 pub(super) const RK_BIT: u32 = 256;
 const MAX_BX: u32 = (1 << 18) - 1;
-
-/// `luaO_int2fb`: the "floating point byte" of a table size hint.
-fn int2fb(mut x: u32) -> u32 {
-    let mut e = 0;
-    while x >= 16 {
-        x = x.div_ceil(2);
-        e += 1;
-    }
-    if x < 8 { x } else { ((e + 1) << 3) | (x - 8) }
-}
 
 pub(super) struct C<'a, 'p> {
     pub asm: &'a mut Asm<'p>,
@@ -224,9 +214,17 @@ impl C<'_, '_> {
                 self.emit(self.abc(Kind::SetTable, a, key, c))?;
             }
             Op::NewTable => {
+                // a NewTable of a 5.4 / 5.5 chunk holds its sizes plainly
                 let a = self.asm.r(l.a)?;
-                let narr = array_hint(self.asm.p, self.asm.pc(), l.a, l.b);
-                self.emit(self.abc(Kind::NewTable, a, int2fb(narr), int2fb(l.c)))?;
+                let (b, c) = if l.k {
+                    (l.b, l.c)
+                } else {
+                    let (asize, hsize) = crate::runtime::table::new_table_sizes(l.b, l.c, false)
+                        .ok_or_else(|| self.asm.err("NewTable sizes past a table's limit"))?;
+                    use crate::runtime::table::int2fb;
+                    (int2fb(asize as u32), int2fb(hsize as u32))
+                };
+                self.emit(self.abc(Kind::NewTable, a, b, c))?;
             }
             Op::SelfOp => {
                 let (a, b) = (self.asm.run(l.a, 2)?, self.asm.r(l.b)?);

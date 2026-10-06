@@ -117,6 +117,11 @@ pub struct CompileOptions {
     /// which the trace is compiled again by the optimizing tier (`0`:
     /// never).
     pub tier_up_at: u32,
+    /// The dialect of the Vm the trace runs in, when known: inline table
+    /// code then follows only that dialect's length rules (5.4 keeps a
+    /// length limit array indexing can move, 5.5 a length hint). `None`
+    /// compiles code that serves every dialect.
+    pub dialect: Option<crate::version::LuaVersion>,
 }
 
 /// Whether a register holding a value of `tag` (a `raw` tag) can enter a

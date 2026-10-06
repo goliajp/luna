@@ -65,6 +65,7 @@ mod sort_lua_asan_repro;
 mod stack_window_gc;
 mod string_pattern_matching;
 mod syntax;
+mod table_border;
 mod table_builder;
 mod table_grow_lagging_prefix;
 mod table_newindex_fast_path;

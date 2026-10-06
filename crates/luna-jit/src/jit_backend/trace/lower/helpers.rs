@@ -16,6 +16,7 @@ pub(super) struct OpHelpers {
     pub(super) stack_load_id: FuncId,
     pub(super) stack_tag_id: FuncId,
     pub(super) op_concat_id: FuncId,
+    pub(super) reserve_list_id: FuncId,
 }
 
 /// `luna_jit_*` helpers for string buffers, upvalues, math folds and side exits.
@@ -68,10 +69,12 @@ fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
     // Helper signatures — declared up front so emit can look them
     // up without re-declaring per call site. Unused declarations
     // get tree-shaken at optimization.
+    // `fn luna_jit_new_table_sized(ops) -> table`, sized by NewTable's operands
     let mut new_table_sig = bcx.make_signature();
+    new_table_sig.params.push(AbiParam::new(types::I64));
     new_table_sig.returns.push(AbiParam::new(types::I64));
     let new_table_id = bcx
-        .declare_function("luna_jit_new_table", Linkage::Import, &new_table_sig)
+        .declare_function("luna_jit_new_table_sized", Linkage::Import, &new_table_sig)
         .ok()?;
 
     // `fn luna_jit_table_set_{int,field}_checked(t, key, val_raw, val_tag)
@@ -224,7 +227,16 @@ fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
         .declare_function("luna_jit_op_concat", Linkage::Import, &op_concat_sig)
         .ok()?;
 
+    // `fn luna_jit_table_reserve_list(t, last)`: a SetList's array growth
+    let mut reserve_sig = bcx.make_signature();
+    reserve_sig.params.push(AbiParam::new(types::I64));
+    reserve_sig.params.push(AbiParam::new(types::I64));
+    let reserve_list_id = bcx
+        .declare_function("luna_jit_table_reserve_list", Linkage::Import, &reserve_sig)
+        .ok()?;
+
     Some(OpHelpers {
+        reserve_list_id,
         new_table_id,
         set_ids,
         get_field_id,
@@ -414,6 +426,7 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
     //   cap, arr_raws, arr_kinds, n_hash, hash_keys, hash_raws, hash_kinds
     // Returns: heap table raw payload (i64 Gc<Table> ptr).
     let mut mat_sunk_sig = bcx.make_signature();
+    mat_sunk_sig.params.push(AbiParam::new(types::I64));
     mat_sunk_sig.params.push(AbiParam::new(types::I64));
     mat_sunk_sig.params.push(AbiParam::new(types::I64));
     mat_sunk_sig.params.push(AbiParam::new(types::I64));

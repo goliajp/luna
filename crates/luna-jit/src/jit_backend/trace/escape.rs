@@ -22,9 +22,12 @@ pub struct AllocSite {
     pub a: u32,
     /// Inline depth at the time of the NewTable (0 = trace head).
     pub inline_depth: u8,
-    /// Array capacity decoded from NewTable.B (`B = 0` for hash-only
-    /// sites gives array_cap = 0).
+    /// The array part's size the NewTable gives the table (0 for a
+    /// hash-only site).
     pub array_cap: u32,
+    /// The NewTable's operands packed for `luna_jit_new_table_sized` (`B`,
+    /// `C << 8`, `k << 16`); a materialised site is sized by them.
+    pub table_ops: i64,
     /// unique string-key const indices touched by
     /// `Op::SetField` / `Op::GetField` on this site (in scan order).
     /// `virt_vars` indices [array_cap .. array_cap + hash_keys.len())
