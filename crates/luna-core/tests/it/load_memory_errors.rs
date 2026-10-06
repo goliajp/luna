@@ -196,15 +196,22 @@ fn a_load_refused_at_each_allocation_in_turn_leaks_nothing() {
                 assert!(r.is_ok(), "{v:?} n={n}");
                 break;
             }
-            let e = r
-                .err()
-                .unwrap_or_else(|| panic!("{v:?} n={n}: a refused load succeeded"));
-            assert!(
-                e.is_memory(),
-                "{v:?} n={n}: {:?}",
-                String::from_utf8_lossy(&e.msg)
-            );
-            assert_eq!(e.msg, b"not enough memory", "{v:?} n={n}");
+            // from 5.2 on the load collects in an emergency and runs once
+            // more, which the single refusal lets through
+            match r {
+                Ok(_) => assert!(
+                    v != LuaVersion::Lua51,
+                    "{v:?} n={n}: a refused load succeeded"
+                ),
+                Err(e) => {
+                    assert!(
+                        e.is_memory(),
+                        "{v:?} n={n}: {:?}",
+                        String::from_utf8_lossy(&e.msg)
+                    );
+                    assert_eq!(e.msg, b"not enough memory", "{v:?} n={n}");
+                }
+            }
             vm.collect_garbage();
             assert!(
                 nth.live.get() <= base,
