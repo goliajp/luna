@@ -1,5 +1,6 @@
-//! Where a recorded table access found its key: the hash slots the
-//! lowerer reads and writes directly.
+//! What the recorder notes about an op besides the op itself: the hash
+//! slots a table access found its key in and the step sign of the loop
+//! that ends the trace.
 
 use super::*;
 
@@ -56,5 +57,27 @@ impl Vm {
         };
         let k = link.find_node_idx(key)?;
         Some((m as u32, k as u32))
+    }
+
+    /// Notes the step sign of the first depth-0 `ForLoop`, the one that
+    /// ends the trace, when its step is an integer.
+    pub(super) fn note_for_step(&mut self, inst: Inst, base: u32, cur_depth: usize) {
+        use crate::vm::isa::Op;
+        if inst.op() != Op::ForLoop || cur_depth != 0 {
+            return;
+        }
+        let step = self.stack[(base + inst.a() + 2) as usize];
+        let rec = self.jit.active_trace.as_mut().expect("recording");
+        if rec
+            .ops
+            .iter()
+            .any(|r| r.inline_depth == 0 && r.inst.op() == Op::ForLoop)
+        {
+            return;
+        }
+        rec.for_step_up = match step {
+            Value::Int(s) => Some(s > 0),
+            _ => None,
+        };
     }
 }

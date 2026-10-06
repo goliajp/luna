@@ -124,8 +124,10 @@ pub const AOT_META_MAGIC: u32 = 0xAA77_0001;
 /// [`decode_meta_blob`]'s `bytes.len() > cur` predicate at each
 /// tail boundary. v2 readers on a v3 blob would mis-parse the v3
 /// tail as garbage; we bump `AOT_META_VERSION` so older readers
-/// hard-reject instead of silently mis-installing.
-pub const AOT_META_VERSION: u32 = 3;
+/// hard-reject instead of silently mis-installing. Version 4 keeps the
+/// v3 layout with 16-byte chain records (`FrameMaterializeInfo` gained
+/// `n_varargs`).
+pub const AOT_META_VERSION: u32 = 4;
 
 /// Fixed-size header at the top of every meta blob. All ints are
 /// little-endian.
@@ -268,7 +270,7 @@ impl PerExitInlineEntry {
     /// Byte size of one `FrameMaterializeInfo` on the wire. Asserted
     /// at compile time via [`FRAME_MATERIALIZE_INFO_WIRE_SIZE_CHECK`]
     /// against the live struct so layout drift fails the build.
-    pub const FRAME_MATERIALIZE_INFO_SIZE: usize = 12;
+    pub const FRAME_MATERIALIZE_INFO_SIZE: usize = 16;
 
     /// Construct a `PerExitInlineEntry` from a live
     /// [`crate::jit::trace_types::InlineSideExit`]. The chain is
@@ -278,7 +280,7 @@ impl PerExitInlineEntry {
     ///
     /// # Safety
     ///
-    /// `FrameMaterializeInfo` is `#[repr(C)]` with three 32-bit
+    /// `FrameMaterializeInfo` is `#[repr(C)]` with four 32-bit
     /// fields and no padding; the byte-level transmute below is
     /// sound per the wire-size assertion at module top.
     pub fn from_inline_side_exit(src: &crate::jit::trace_types::InlineSideExit) -> Self {
@@ -289,6 +291,7 @@ impl PerExitInlineEntry {
             chain_bytes.extend_from_slice(&fm.base_offset.to_le_bytes());
             chain_bytes.extend_from_slice(&fm.pc.to_le_bytes());
             chain_bytes.extend_from_slice(&fm.nresults.to_le_bytes());
+            chain_bytes.extend_from_slice(&fm.n_varargs.to_le_bytes());
         }
         PerExitInlineEntry {
             cont_pc: src.cont_pc,
@@ -316,10 +319,13 @@ impl PerExitInlineEntry {
             let pc = u32::from_le_bytes(self.chain_bytes[off + 4..off + 8].try_into().unwrap());
             let nresults =
                 i32::from_le_bytes(self.chain_bytes[off + 8..off + 12].try_into().unwrap());
+            let n_varargs =
+                u32::from_le_bytes(self.chain_bytes[off + 12..off + 16].try_into().unwrap());
             out.push(FrameMaterializeInfo {
                 base_offset,
                 pc,
                 nresults,
+                n_varargs,
             });
         }
         Some(out)

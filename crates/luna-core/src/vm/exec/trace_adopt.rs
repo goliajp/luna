@@ -13,7 +13,7 @@ impl Vm {
         proto: Gc<crate::runtime::function::Proto>,
         head_pc: u32,
         base: usize,
-        side_parent: Option<(u32, usize)>,
+        side_parent: Option<(Gc<crate::runtime::function::Proto>, u32, usize)>,
         call_triggered: bool,
     ) -> bool {
         if !self.jit.share_traces {
@@ -35,6 +35,7 @@ impl Vm {
             aot: false,
             tier: self.jit.trace_tier,
             tier_up_at: self.jit.tier_up_at,
+            dialect: Some(version),
         };
         let settings = self.jit.recording_settings();
         let adopted = {
@@ -60,9 +61,9 @@ impl Vm {
         for a in adopted {
             let mut ct = a.trace;
             self.tally_compiled_trace(&ct);
-            let parent = a.side_parent.map(|(pc, exit)| (proto, pc, exit));
-            self.wire_side_trace(&mut ct, parent, proto);
-            cache_trace(proto, ct);
+            let wired = self.wire_side_trace(&mut ct, a.side_parent);
+            let ct = cache_trace(proto, ct);
+            hold_side_trace(wired, ct);
             keep_inlined(proto, a.inlined);
             self.jit.counters.adopted += 1;
         }

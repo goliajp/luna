@@ -241,26 +241,16 @@ fn rehash_redistributes_into_array() {
     });
 }
 
-/// `len` without the `acount` / `aprefix` shortcut: the search every
-/// shortcut answer must equal.
+/// `len` without the `acount` / `aprefix` shortcut: the search of the
+/// table's dialect, which every shortcut answer must equal. Taken after
+/// `len`, so a 5.5 table's search starts from the hint `len` left, which
+/// is the border itself.
 fn len_by_search(t: &Table) -> i64 {
-    let asize = t.asize();
-    let atags = t.atags();
-    if asize > 0 && atags[asize - 1] == raw::NIL {
-        let (mut lo, mut hi) = (0usize, asize);
-        while hi - lo > 1 {
-            let m = lo + (hi - lo) / 2;
-            if atags[m - 1] == raw::NIL {
-                hi = m;
-            } else {
-                lo = m;
-            }
-        }
-        return lo as i64;
+    match t.dialect() {
+        Dialect::L55 => t.len_55(),
+        Dialect::L54 => t.len_54(),
+        d => t.len_51(d),
     }
-    // array full or absent: the shortcut needs `aprefix < asize`, so
-    // `len` searches here too
-    t.len()
 }
 
 fn check_counts(t: &Table) {
@@ -272,7 +262,8 @@ fn check_counts(t: &Table) {
         .unwrap_or(atags.len()) as u32;
     assert_eq!(t.acount, count);
     assert!(t.aprefix <= run, "aprefix {} past the run {run}", t.aprefix);
-    assert_eq!(t.len(), len_by_search(t));
+    let n = t.len();
+    assert_eq!(n, len_by_search(t));
 }
 
 // the prefix may lag behind the run (a refill scans only 64 slots
@@ -433,4 +424,36 @@ fn appending_past_a_full_array_matches_the_full_rehash() {
         &append(3),
         &append(20),
     ]);
+}
+
+// 5.4's dense-array `#t` shortcut moves `alimit` exactly as the full
+// search does, for every reachable `alimit` (in `(a/2, a]` for a
+// power-of-two array part, the size itself otherwise)
+#[test]
+fn len_54_shortcut_matches_the_search() {
+    for a in 1..=40usize {
+        for p in 0..a {
+            let lims: Vec<u32> = if a.is_power_of_two() {
+                (a as u32 / 2 + 1..=a as u32).collect()
+            } else {
+                vec![a as u32]
+            };
+            for l in lims {
+                let mut out = [(0i64, 0u32); 2];
+                for (k, o) in out.iter_mut().enumerate() {
+                    with_table(|heap, t| {
+                        t.hdr.sub = Dialect::L54 as u8;
+                        t.resize(heap, a, 0);
+                        for i in 1..=p {
+                            let _ = t.set_int(heap, i as i64, Value::Int(1));
+                        }
+                        t.alimit.set(l);
+                        let n = if k == 0 { t.len() } else { t.len_54() };
+                        *o = (n, t.alimit.get());
+                    });
+                }
+                assert_eq!(out[0], out[1], "a {a} p {p} alimit {l}");
+            }
+        }
+    }
 }

@@ -280,15 +280,22 @@ pub(crate) fn t_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
 }
 
 pub(super) fn t_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let t = vm.alloc_table_sized(nargs as usize, 1)?;
+    // `lua_createtable(L, n, 1)`: the arguments, nil ones included, fill an
+    // array part of exactly their count; the table is young until it is
+    // returned, so an emergency collection keeps it
+    let t = vm.alloc_table()?;
+    let r = vm.table_op(|vm| {
+        // SAFETY: `t` was allocated above and is held only by this local;
+        // the borrow covers the one resize
+        unsafe { t.as_mut() }.resize(&mut vm.heap, nargs as usize, 1)
+    });
+    if let Err(e) = r {
+        return Err(vm.table_error(e));
+    }
     for i in 0..nargs {
         let v = vm.nat_arg(fs, nargs, i);
-        // SAFETY: `t` was allocated above and is held only by this local;
-        // each borrow lives for one store, which does not collect
-        let r = vm.table_op(|vm| unsafe { t.as_mut() }.set_int_raw(&mut vm.heap, i as i64 + 1, v));
-        if let Err(e) = r {
-            return Err(vm.table_error(e));
-        }
+        // SAFETY: as above, for this one store
+        unsafe { t.as_mut() }.set_list_slot(i as usize, v);
     }
     let nk = vm.str_value(b"n")?;
     vm.lib_set_value(t, nk, Value::Int(nargs as i64))?;

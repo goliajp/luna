@@ -47,6 +47,17 @@ pub struct Output {
     pub status: i32,
 }
 
+/// What PUC built with MSVC writes for `text` (recorded from a run on
+/// Linux): its standard streams are in the C library's text mode on
+/// Windows, so each `\n` goes out as `\r\n`.
+pub fn as_on_this_platform(text: &str) -> String {
+    if cfg!(windows) {
+        text.replace('\n', "\r\n")
+    } else {
+        text.to_string()
+    }
+}
+
 pub fn luna() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_luna"))
 }
@@ -142,8 +153,16 @@ impl Case {
         for e in expects {
             for d in e.dialects {
                 let out = self.run(d);
-                assert_eq!(out.stderr, e.stderr, "stderr, --lua={d}");
-                assert_eq!(out.stdout, e.stdout, "stdout, --lua={d}");
+                assert_eq!(
+                    out.stderr,
+                    as_on_this_platform(e.stderr),
+                    "stderr, --lua={d}"
+                );
+                assert_eq!(
+                    out.stdout,
+                    as_on_this_platform(e.stdout),
+                    "stdout, --lua={d}"
+                );
                 assert_eq!(out.status, e.status, "exit status, --lua={d}");
             }
         }

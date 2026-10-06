@@ -318,11 +318,20 @@ impl Vm {
         // just below `base` (5.1 db.lua :279 reads `arg.n` from a line hook).
         if proto.has_compat_vararg_arg {
             let arg_slot = (base + nparams) as usize;
-            // young until stored in its slot below
-            let t = self.alloc_table_sized(n_varargs as usize, 1)?;
+            // young until stored in its slot below; `luaH_new(L, nvar, 1)`:
+            // an array part of exactly the extras' count (bounded by the
+            // stack, well below `MAX_ASIZE`), nil ones included
+            let t = self.alloc_table()?;
+            self.table_op(|vm| {
+                // SAFETY: `t` was allocated above and is held only by this
+                // local; the borrow covers the resize, which does not collect
+                unsafe { t.as_mut() }.resize(&mut vm.heap, n_varargs as usize, 1)
+            })?;
             for i in 0..n_varargs {
                 let v = self.stack[(base - n_varargs + i) as usize];
-                self.raw_set(t, Value::Int((i + 1) as i64), v)?;
+                // SAFETY: `t` was allocated above and is held only by this
+                // local; the reference lives for this one store
+                unsafe { t.as_mut() }.set_list_slot(i as usize, v);
             }
             let nk = self.str_value(b"n")?;
             self.raw_set(t, nk, Value::Int(n_varargs as i64))?;

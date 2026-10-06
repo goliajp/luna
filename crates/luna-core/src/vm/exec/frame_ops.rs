@@ -22,7 +22,24 @@ impl Vm {
                 self.set_r(base, inst.a(), v);
             }
             Op::NewTable => {
+                let Some((asize, hsize)) =
+                    crate::runtime::table::new_table_sizes(inst.b(), inst.c(), inst.k())
+                else {
+                    return Err(self.rt_err("table overflow"));
+                };
                 let t = self.alloc_table()?;
+                if asize != 0 || hsize != 0 {
+                    // the table is young until it is stored below, so an
+                    // emergency collection keeps it
+                    let r = self.table_op(|vm| {
+                        // SAFETY: `t` was made just above; this is its only
+                        // reference, for the one resize
+                        unsafe { t.as_mut() }.resize(&mut vm.heap, asize, hsize)
+                    });
+                    if let Err(e) = r {
+                        return Err(self.table_error(e));
+                    }
+                }
                 self.set_r(base, inst.a(), Value::Table(t));
                 self.maybe_collect_garbage(base + inst.a() + 1);
             }
@@ -55,18 +72,22 @@ impl Vm {
                 if !self.heap.store_barrier(t) {
                     return Err(self.table_error(TableError::ReadOnly));
                 }
-                for i in 1..=n {
-                    let v = self.r(base, a + i);
-                    let r = self.table_op(|vm| {
-                        // SAFETY: `t` is a live table (see `Gc`), and no
-                        // reference into it is held across the call
-                        unsafe { t.as_mut() }.set_int_raw(&mut vm.heap, offset + i as i64, v)
-                    });
-                    match r {
-                        Err(TableError::Overflow) => return Err(self.rt_err("table overflow")),
-                        Err(e @ TableError::Memory(_)) => return Err(self.table_error(e)),
-                        _ => {}
-                    }
+                let last = offset as u64 + u64::from(n);
+                let r = self.table_op(|vm| {
+                    // SAFETY: `t` is a live table (see `Gc`), and no
+                    // reference into it is held across the call
+                    unsafe { t.as_mut() }.reserve_list(&mut vm.heap, last)
+                });
+                match r {
+                    Err(TableError::Overflow) => return Err(self.rt_err("table overflow")),
+                    Err(e) => return Err(self.table_error(e)),
+                    Ok(()) => {}
+                }
+                // SAFETY: `t` is a live table (see `Gc`), and no reference
+                // into it is held across these stores
+                let tb = unsafe { t.as_mut() };
+                for i in 0..n {
+                    tb.set_list_slot(offset as usize + i as usize, self.r(base, a + 1 + i));
                 }
                 // the element temps above the table are now consumed
                 self.maybe_collect_garbage(base + a + 1);
@@ -142,11 +163,21 @@ impl Vm {
                 // sees later writes) and in the local register R[A].
                 let n = n_varargs;
                 // the table is young until it is stored below, so an
-                // emergency collection keeps it
-                let t = self.alloc_table_sized(n as usize, 1)?;
+                // emergency collection keeps it; PUC `createvarargtab`: an
+                // array part of exactly `n`
+                let t = self.alloc_table()?;
+                let r = self.table_op(|vm| {
+                    // SAFETY: `t` was made just above; this is its only
+                    // reference, for the one resize
+                    unsafe { t.as_mut() }.resize(&mut vm.heap, n as usize, 1)
+                });
+                if let Err(e) = r {
+                    return Err(self.table_error(e));
+                }
                 for i in 0..n {
                     let v = self.stack[(func_slot + 1 + i) as usize];
-                    self.raw_set(t, Value::Int(i as i64 + 1), v)?;
+                    // SAFETY: as above, for this one store
+                    unsafe { t.as_mut() }.set_list_slot(i as usize, v);
                 }
                 let n_key = self.str_value(b"n")?;
                 self.raw_set(t, n_key, Value::Int(n as i64))?;

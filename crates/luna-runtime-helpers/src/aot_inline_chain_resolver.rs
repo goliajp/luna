@@ -26,7 +26,7 @@
 //     work, but a future change to `FrameMaterializeInfo` layout would
 //     silently misinterpret stale bytes. Going through an explicit
 //     `Vec → Rc<[...]>` conversion lets us validate `chain_bytes.len()
-//     % 12 == 0` (via the same `PerExitInlineEntry::FRAME_MATERIALIZE
+//     % 16 == 0` (via the same `PerExitInlineEntry::FRAME_MATERIALIZE
 //     _INFO_SIZE` constant the v3 wire format uses) and surface
 //     corruption with a probe message rather than dispatching into
 //     garbage.
@@ -42,7 +42,7 @@ use luna_core::jit::trace_types::FrameMaterializeInfo;
 /// Wire-size of one `FrameMaterializeInfo` record on disk and in
 /// the bytes section payload. Asserted at compile time in
 /// `luna_core::jit::aot_meta::FRAME_MATERIALIZE_INFO_WIRE_SIZE_CHECK`.
-const FRAME_MATERIALIZE_INFO_SIZE: usize = 12;
+const FRAME_MATERIALIZE_INFO_SIZE: usize = 16;
 
 /// Index entry layout — must match the cranelift-emit shape in
 /// `crates/luna-jit/src/jit_backend/trace.rs::emit_chain_ptr_arg`:
@@ -52,7 +52,7 @@ const FRAME_MATERIALIZE_INFO_SIZE: usize = 12;
 struct IndexEntry {
     /// Address of the `__luna_aot_inline_chain_bytes_<hex>` symbol:
     /// `[u64 count | packed_records...]` payload, read-only. The
-    /// records are tightly packed 12-byte
+    /// records are tightly packed 16-byte
     /// `(base_offset, pc, nresults)` triples.
     bytes_ptr: *const u8,
     /// Address of the `__luna_aot_inline_chain_slot_<hex>` symbol:
@@ -151,7 +151,7 @@ pub fn resolve_all() -> usize {
 /// path and the Windows PE-header-located section path.
 ///
 /// Each entry's `bytes_ptr` points at `[u64 count, records...]`;
-/// we decode the count, validate `count * 12` doesn't overflow,
+/// we decode the count, validate `count * 16` doesn't overflow,
 /// parse `count` `FrameMaterializeInfo` triples, materialise them
 /// as an `Rc<[FrameMaterializeInfo]>`, leak ownership via
 /// `core::mem::forget(rc.clone())` (the inner buffer stays alive
@@ -206,10 +206,12 @@ unsafe fn walk_index_bytes(base: *const u8, len_bytes: usize) -> usize {
             let base_offset = u32::from_le_bytes(raw[off..off + 4].try_into().unwrap());
             let pc = u32::from_le_bytes(raw[off + 4..off + 8].try_into().unwrap());
             let nresults = i32::from_le_bytes(raw[off + 8..off + 12].try_into().unwrap());
+            let n_varargs = u32::from_le_bytes(raw[off + 12..off + 16].try_into().unwrap());
             vec.push(FrameMaterializeInfo {
                 base_offset,
                 pc,
                 nresults,
+                n_varargs,
             });
         }
         let rc: luna_core::jit::send_compat::TArc<[FrameMaterializeInfo]> = vec.into();
