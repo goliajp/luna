@@ -217,6 +217,7 @@ impl Vm {
         // `instr_budget` was set to `None` by the hot loop on
         // exhaustion. Reload it for this slice.
         self.instr_budget = Some(self.async_slice_size);
+        self.sync_limited();
 
         let raw = match bootstrap {
             Some(closure_val) => {

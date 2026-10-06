@@ -108,6 +108,35 @@ covering each opt-in.
 Bytecode loading is **off** by default in the builder. Enable it
 with `.allow_bytecode_loading()` only for fully trusted input.
 
+### Exhausted limits stay exhausted
+
+When the instruction budget runs out or the memory cap is exceeded the
+call fails with `"instruction budget exceeded"` / `"memory cap
+exceeded"` (`vm.error_kind()` is `InstrBudget` / `MemoryCap`), and the
+limit stays at zero: until the host calls `set_instr_budget` /
+`set_memory_cap` again, every instruction raises the same error — the
+script after a `pcall` that caught it, an `xpcall` handler, a `__close`
+or `__gc` handler, a metamethod, a library callback, a coroutine — so
+the script cannot catch the error and keep running, and the finalizers
+run when the Vm is dropped cannot either. This is the Redis
+`SCRIPT KILL` model: a request that ran out of budget is over, and the
+host decides what runs next.
+
+```rust
+vm.set_instr_budget(Some(100_000));
+let err = vm.eval("pcall(function() while true do end end) while true do end")
+    .unwrap_err();                       // the loop after pcall never ran
+assert_eq!(vm.error_kind(), LuaErrorKind::InstrBudget);
+assert_eq!(vm.instr_budget_remaining(), Some(0));
+
+vm.set_instr_budget(Some(100_000));     // the next request starts afresh
+let r: Vec<Value> = vm.eval("return 1 + 2").unwrap();
+```
+
+While a budget or a cap is armed no compiled code runs: loops the JIT
+would compile stay in the interpreter, where they are counted, so the
+JIT does not need to be disabled for sandboxed scripts.
+
 ---
 
 ## 4. Setting globals

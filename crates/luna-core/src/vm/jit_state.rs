@@ -32,10 +32,9 @@ pub struct JitState {
     /// Master JIT switch. Off until a real backend is installed
     /// ([`crate::vm::Vm::install_jit_backend`]), which turns it on unless
     /// the embedder already chose a value with `Vm::set_jit_enabled`.
-    /// Sandbox embedders that rely on `instr_budget` for DoS
-    /// containment **must** call `Vm::set_jit_enabled(false)` —
-    /// JIT'd counted-for loops compile to native Cranelift IR
-    /// that does not tick the budget.
+    /// Compiled code does not tick `instr_budget`, so while a budget or
+    /// a memory cap is armed none is entered (`Vm::limited`), whatever
+    /// this says.
     pub enabled: bool,
 
     /// Trace JIT subswitch. Same default and install rule as
