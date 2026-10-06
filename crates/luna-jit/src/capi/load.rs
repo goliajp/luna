@@ -187,8 +187,12 @@ fn check_mode(api: &mut Api, mode: Option<&[u8]>, binary: bool) -> Result<(), Fa
 /// as PUC's `lua_load` sets it: 5.1 closes the chunk over the thread's
 /// globals, 5.2 sets the only upvalue of a function with exactly one, 5.3
 /// on the first of any, to the registry's `LUA_RIDX_GLOBALS`.
-fn finish(api: &mut Api, r: Result<(Gc<LuaClosure>, usize), Value>) -> Result<Value, Failure> {
-    let (cl, n) = r.map_err(|e| (LUA_ERRSYNTAX, e))?;
+fn finish(
+    api: &mut Api,
+    r: Result<(Gc<LuaClosure>, usize), (Value, bool)>,
+) -> Result<Value, Failure> {
+    // a load that ran out of memory fails with PUC's memory error
+    let (cl, n) = r.map_err(|(e, mem)| (if mem { LUA_ERRMEM } else { LUA_ERRSYNTAX }, e))?;
     let globals = match api.version() {
         LuaVersion::Lua51 => (n <= 1).then(|| Value::Table(api.thread_globals())),
         LuaVersion::Lua52 => (n == 1).then(|| api.vm.host_registry().get_int(2)),

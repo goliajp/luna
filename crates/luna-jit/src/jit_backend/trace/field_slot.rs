@@ -46,10 +46,14 @@ pub(super) fn emit_field_slot_check<E: Emit>(
         t,
         super::super::TABLE_NODE_MASK_OFFSET as i32,
     );
-    let len = bcx.ins().iadd_imm_u(mask, 1);
-    let in_bounds = bcx
-        .ins()
-        .icmp_imm_u(IntCC::UnsignedGreaterThan, len, i64::from(slot));
+    let in_bounds = if slot == 0 {
+        bcx.ins()
+            .icmp_imm_u(IntCC::NotEqual, mask, i64::from(u32::MAX))
+    } else {
+        let len = bcx.ins().iadd_imm_u(mask, 1);
+        bcx.ins()
+            .icmp_imm_u(IntCC::UnsignedGreaterThan, len, i64::from(slot))
+    };
     let node_blk = bcx.create_block();
     bcx.ins().brif(in_bounds, node_blk, &[], miss, &[]);
     bcx.switch_to_block(node_blk);
@@ -81,10 +85,14 @@ pub(super) fn emit_field_slot_check<E: Emit>(
         node,
         super::super::NODE_VAL_TAG_OFFSET as i32,
     );
+    // one compare and branch each: combined with `band` the three
+    // compares could not be fused into their branch without an optimizer
+    let key_ok = bcx.ins().icmp(IntCC::Equal, key_raw, key);
+    branch_or_miss(bcx, key_ok, miss);
     let tag_ok = bcx
         .ins()
         .icmp_imm_u(IntCC::Equal, key_tag, i64::from(tag::STR));
-    let key_ok = bcx.ins().icmp(IntCC::Equal, key_raw, key);
+    branch_or_miss(bcx, tag_ok, miss);
     let val_ok = match want {
         Some(w) => bcx
             .ins()
@@ -93,9 +101,15 @@ pub(super) fn emit_field_slot_check<E: Emit>(
             .ins()
             .icmp_imm_u(IntCC::NotEqual, val_tag, i64::from(tag::NIL)),
     };
-    let ok = bcx.ins().band(tag_ok, key_ok);
-    let ok = bcx.ins().band(ok, val_ok);
-    bcx.ins().brif(ok, hit, &[node.into()], miss, &[]);
+    bcx.ins().brif(val_ok, hit, &[node.into()], miss, &[]);
+}
+
+/// Goes on in a new block when `ok`, else to `miss`.
+fn branch_or_miss<E: Emit>(bcx: &mut E, ok: Value, miss: Block) {
+    let next = bcx.create_block();
+    bcx.ins().brif(ok, next, &[], miss, &[]);
+    bcx.switch_to_block(next);
+    bcx.seal_block(next);
 }
 
 /// Load the value payload of the node at `node` (from

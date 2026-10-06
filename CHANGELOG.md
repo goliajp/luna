@@ -23,6 +23,16 @@ optimization.
 
 ### Breaking
 
+- `FrameMaterializeInfo` has a new field, `n_varargs` (the extra
+  arguments of a vararg function a trace inlined), and is 16 bytes;
+  `Vm::jit_push_inlined_frame` takes it as a fifth argument. AOT trace
+  metadata is version 4. `CompiledTrace` has the fields `side_children`
+  (the side traces wired to its exits) and `inline_kinds`;
+  `side_trace_cache` maps a sentinel to an exit index.
+  `AdoptRequest::side_parent` and `AdoptedTrace::side_parent` carry the
+  parent's prototype. `TraceCompiler` has the hidden methods
+  `failure_known` and `publish_failure`.
+
 - Chunks in luna's own binary format (PUC header followed by the
   `LunaV1` body) no longer load: a table constructor's op now carries
   its size hints, and the body tag is `LunaV2`. Dump the source again
@@ -161,6 +171,17 @@ optimization.
 
 ### Changed
 
+- On Windows the `luna` command keeps the MSVC C library's `FILE` for each
+  file and standard stream, so that what PUC built with MSVC does with
+  them, `luna` does too: `setvbuf` sizes and the positions `seek` then
+  reports, a `write` right after a `read` failing and a `read` right after
+  a `write` returning the stale buffer, `ungetc` at the start of a buffer
+  dropping the byte, 5.1 and 5.2 reading numbers with that library's
+  `fscanf`, standard output buffered in 4096-byte blocks on a pipe or file
+  and written after every call on a console (so stdout and stderr
+  interleave as with `lua.exe`), a Ctrl+Z typed on a console ending only
+  its line, and `setvbuf` with a size below 2 ending the process with
+  status 0xC0000409. Files opened with `b` follow the library too.
 - On Windows the `luna` command reads and writes as `lua.exe` does, through
   the MSVC C library's text mode: its standard output, standard error and
   standard input, and files opened without `b`, write `\n` as `\r\n` and
@@ -172,15 +193,33 @@ optimization.
   MSVC `BUFSIZ`, as PUC does there.
 - The LLVM backend (`--features llvm-jit`, `LUNA_JIT_BACKEND=llvm`)
   compiles traces with the same trace lowering as the Cranelift backend:
-  traces start in the baseline tier and LLVM compiles them again once
-  they are hot (with `LUNA_TRACE_TIER=optimizing`, every trace), at
-  `default<O2>` for the host CPU. It now compiles and runs the same
+  traces start in the baseline tier, move to Cranelift's code once hot,
+  and are compiled by LLVM (`default<O2>`, for the host CPU) on a thread
+  of their own once they have stayed hot for 20 ms; the Vm switches to
+  LLVM's code at the next entry of the trace after it is ready (with
+  `LUNA_TRACE_TIER=optimizing`, LLVM compiles every trace at once). A
+  program that runs for less than that pays nothing for LLVM, so the
+  backend starts as fast as the Cranelift one. It now compiles and runs the same
   traces as the Cranelift backend, inlined calls, side traces and
   tables included; before, it compiled only loops of integer
   arithmetic and comparisons. `luna_jit_llvm::LlvmBackend` on its own
   is the method JIT only: its `TraceCompiler` compiles no trace, and
   luna-jit's backend compiles them through
   `luna_jit_llvm::compile_function`.
+- The LLVM backend's method JIT runs LLVM's `default<O2>` pipeline for the
+  host CPU too (it compiled unoptimized code), and every LLVM compile
+  reuses one target machine per thread.
+- Compiled traces divide by a constant (`x // 7`, `x % 7`) with a
+  multiply instead of a division instruction, in every tier: the
+  baseline and Cranelift tiers compile without an optimizer that would
+  do it, and a 64-bit division takes tens of cycles (`s = s + i % 7` over
+  3 million iterations: 5x faster). A table field read or written at the
+  slot it was recorded in is checked with one compare-and-branch per
+  condition (about 15% off a loop of `t.x = t.x + 1` in the Cranelift
+  tier).
+- `TraceCompiler::tier_up`: a backend that leaves something in
+  `TierUp::source` is asked again, at the next entry of the trace once it
+  runs code the backend returned, else after another `at` iterations.
 
 - C API: the `io` library of a state made through the C API is C over the
   C library's stdio, as PUC's is, for every dialect: file handles are
@@ -226,11 +265,13 @@ optimization.
   iteration; a loop entered with a step of the other sign leaves the
   trace at its head.
 
-- 5.1 and 5.2: traces add and subtract two of the integers the VM keeps
-  for doubles (`#t + #u`), which used to stop the recording. The trace
-  keeps the exact result while it is within 2^53 of zero, where it is
-  the double the operation gives, and otherwise leaves for the
-  interpreter, which rounds as the doubles do.
+- 5.1 and 5.2: traces add, subtract, multiply, take the modulo of and
+  negate the integers the VM keeps for doubles (`#t + #u`, `#t * 2`,
+  `i % #t`, `-#t`), which used to stop the recording. The trace keeps the
+  exact result while it is within 2^53 of zero, where it is the double
+  the operation gives, and otherwise leaves for the interpreter, which
+  rounds as the doubles do and gives -0 for a zero product with a
+  negative factor or a negated zero, and nan for a modulo by zero.
 
 - A trace follows calls into other Lua functions and runs them inline:
   methods found through a metatable's `__index` table (`o:m()`), local,
@@ -365,6 +406,14 @@ optimization.
 
 ### Fixed
 
+- A trace leaving inside a function it inlined two or more calls deep
+  rebuilt the middle frames with their callers' resume pcs, so such a
+  frame went on at the wrong instruction once the inner call returned
+  (`return h(x) + 1` lost the `+ 1`). Exits one call deep were right.
+- The side-trace gate read a `Jmp`'s offset from the `sBx` field instead
+  of `sJ`, so it took a backward jump of fewer than 256 instructions for
+  no jump and let a side trace that loops and writes to tables compile.
+
 - `#t` on a table with holes could return a different border than PUC.
   `{f(6), f(7), g(), f(8)}` (with `g` returning nothing) has borders 2
   and 4: PUC 5.5.1 returns 2, luna returned 4. Each dialect now sizes a
@@ -392,6 +441,16 @@ optimization.
 
 - `string.dump` of a main chunk describes its `_ENV` upvalue as PUC does
   (in the stack, index 0).
+
+- `string.dump` writes the code PUC's compiler makes for operations on
+  constants it cannot fold: in 5.1–5.3 both constants are the
+  instruction's operands, with no load into a register (`1/0`, `3 - 3.0`,
+  `5 % math.huge`); in 5.4 and 5.5 the right constant enters the constant
+  table first and a constant on the left of `+` or `*` moves to the right
+  (`7.5 // 0`, `2 * 0.0`); a constant on the left of any operator is
+  loaded after the right operand is computed. 5.2 folds an operation on
+  two constants that gives nan (`(-2)^0.5`), as PUC 5.2 does, and 5.1–5.3
+  list constants in the order PUC's code generator adds them.
 
 - A loop calling `math.fmod` was compiled into a trace that never ran:
   reading the function `math.fmod` was a value the trace could not type,
@@ -649,6 +708,24 @@ optimization.
 
 ### Added
 
+- Traces inline calls into vararg functions, calls that want several
+  results or all of them, and calls that pass a variable number of
+  arguments, and create closures inside inlined functions; the baseline
+  and Cranelift tiers and AOT binaries all do.
+  `Vm::trace_inline_kind_dispatched_count` counts the dispatches of
+  traces holding each kind.
+- Side traces start at hot exits inside functions a trace inlined.
+  `Vm::trace_side_trace_run_count` and
+  `Vm::trace_side_trace_inlined_run_count` count their runs.
+- The Vms of one `Engine` share the trace recordings that failed to
+  compile: a recording another Vm already failed to compile (same code,
+  start, entry tags and path) is not compiled again
+  (`Vm::trace_shared_failures_known`, `Vm::trace_shared_failures_counted`).
+
+- `luna_jit::install_llvm_backend_with` and `jit_backend::LlvmBackend`'s
+  `llvm_after` (default `jit_backend::LLVM_AFTER`, 20 ms; `None`: LLVM
+  compiles hot traces at once). `LUNA_TRACE_IR_DUMP=1` /
+  `LUNA_TRACE_ASM_DUMP=1` also print what the LLVM backend compiles.
 - `luna_jit::install_llvm_backend` (with `--features llvm-jit`) installs
   the LLVM backend on a `Vm` regardless of `LUNA_JIT_BACKEND`.
 
@@ -671,6 +748,18 @@ optimization.
   tables' array and hash parts, prototypes' code, constants and debug
   records, closures' and native functions' upvalues, coroutine stacks and
   frames, the C API's per-thread `lua_State` and its userdata blocks.
+- And so does the rest of what a Vm keeps: the string table, the
+  collector's gray stack and finalizer queues (a gray stack that cannot
+  grow is made up for by walking the object list, so a collection never
+  fails), the stacks of running natives and host roots, and everything the
+  parser and the compiler build while loading a chunk. A load that runs out
+  of memory fails with "not enough memory"; the C API's `lua_load` returns
+  `LUA_ERRMEM` for it.
+  The parser and the compiler do not check each allocation: one that fails
+  unwinds to the load, which drops what it built (giving every block back)
+  and returns the memory error. This needs `panic = "unwind"`; built with
+  `panic = "abort"` (the default for `wasm32` targets) a load that runs out
+  of memory ends the process, as a standard library container would.
 - luna-aot links `x86_64-pc-windows-msvc` without Visual Studio, on
   Linux, macOS or Windows: `clang-cl` and `lld-link` from LLVM with the
   MSVC C runtime and Windows SDK from `xwin splat`, named by

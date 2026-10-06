@@ -1,6 +1,7 @@
 //! Unary operators, `and` / `or`, concatenation and indexing.
 
 use super::*;
+use crate::runtime::mem::LVec;
 
 impl<'a> Compiler<'a> {
     pub(super) fn unop(
@@ -151,7 +152,8 @@ impl<'a> Compiler<'a> {
         // run-side pre-sum can short-circuit the whole expression.
         //
         // Collect the right-associative chain's operands left-to-right.
-        let mut operands: Vec<ExprId> = vec![lhs];
+        let mut operands: LVec<ExprId> = LVec::new(self.heap.mem());
+        operands.push_or_abort(lhs);
         let mut cur = rhs;
         loop {
             match self.ast.expr(cur) {
@@ -161,11 +163,11 @@ impl<'a> Compiler<'a> {
                     rhs: r,
                     ..
                 } => {
-                    operands.push(*l);
+                    operands.push_or_abort(*l);
                     cur = *r;
                 }
                 _ => {
-                    operands.push(cur);
+                    operands.push_or_abort(cur);
                     break;
                 }
             }

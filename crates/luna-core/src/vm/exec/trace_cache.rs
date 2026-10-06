@@ -210,7 +210,7 @@ pub(super) fn trace_head_stuck(
 pub(super) fn cache_trace(
     proto: Gc<crate::runtime::function::Proto>,
     ct: crate::jit::trace::CompiledTrace,
-) {
+) -> TArc<crate::jit::trace::CompiledTrace> {
     if ct.dispatchable || ct.downrec_link.is_some() {
         proto.has_dispatchable_trace.set(true);
         use crate::runtime::function::{TRACE_HEADS_CAP, TRACE_HEADS_MANY, TRACE_HEADS_NONE};
@@ -226,7 +226,9 @@ pub(super) fn cache_trace(
     if ct.head_pc == 0 {
         proto.trace_call_head_settled.set(true);
     }
-    proto.traces.borrow_mut().push(TArc::new(ct));
+    let ct = TArc::new(ct);
+    proto.traces.borrow_mut().push(ct.clone());
+    ct
 }
 
 /// [`cache_trace`] for a trace compiled from `record`, keeping alive the
@@ -235,8 +237,8 @@ pub(super) fn cache_compiled_trace(
     proto: Gc<crate::runtime::function::Proto>,
     ct: crate::jit::trace::CompiledTrace,
     record: &crate::jit::trace::TraceRecord,
-) {
-    cache_trace(proto, ct);
+) -> TArc<crate::jit::trace::CompiledTrace> {
+    let ct = cache_trace(proto, ct);
     keep_inlined(
         proto,
         record
@@ -245,6 +247,7 @@ pub(super) fn cache_compiled_trace(
             .filter(|op| op.inline_depth > 0)
             .map(|op| op.proto),
     );
+    ct
 }
 
 /// Keeps the prototypes in `inlined` alive while `proto` lives: a trace

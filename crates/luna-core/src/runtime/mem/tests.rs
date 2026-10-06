@@ -238,3 +238,57 @@ fn retain_take_and_swap_remove() {
     r.resize(1, 0).unwrap();
     assert_eq!(&r[..], &[7]);
 }
+
+#[test]
+fn map_inserts_finds_and_replaces() {
+    let s = Seen::default();
+    let o = raw_owner(&s, LuaVersion::Lua54);
+    let mut m: LMap<u64, u32> = LMap::new(o.mem());
+    assert_eq!(m.get(&1), None);
+    for i in 0..500u64 {
+        assert_eq!(m.insert(i * 7, i as u32).unwrap(), None);
+    }
+    assert_eq!(m.len(), 500);
+    for i in 0..500u64 {
+        assert_eq!(m.get(&(i * 7)), Some(i as u32));
+    }
+    assert_eq!(m.insert(14, 99).unwrap(), Some(2));
+    assert_eq!(m.get(&14), Some(99));
+    assert_eq!(m.get(&15), None);
+    assert_eq!(m.iter().count(), 500);
+    m.clear();
+    assert!(m.is_empty() && m.get(&14).is_none());
+    drop(m);
+    assert_eq!(s.live.get(), 0);
+}
+
+#[test]
+fn map_with_caller_hash_and_failed_growth() {
+    let s = Seen::default();
+    let o = raw_owner(&s, LuaVersion::Lua54);
+    let mut m: LMap<u32, u32> = LMap::new(o.mem());
+    let words: [&[u8]; 3] = [b"alpha", b"beta", b"gamma"];
+    for (i, w) in words.iter().enumerate() {
+        m.insert_hashed(word_hash(*w), i as u32, 10 + i as u32)
+            .unwrap();
+    }
+    for (i, w) in words.iter().enumerate() {
+        let found = m.find_with(word_hash(*w), |&k| words[k as usize] == *w);
+        assert_eq!(found, Some(10 + i as u32));
+    }
+    let n = m.len();
+    s.budget.set(Some(0));
+    let mut i = 100;
+    let err = loop {
+        match m.insert(i, i) {
+            Ok(_) => i += 1,
+            Err(e) => break e,
+        }
+    };
+    assert_eq!(err, Oom(o.mem()));
+    assert_eq!(m.get(&i), None);
+    assert_eq!(m.len(), n + (i - 100) as usize);
+    s.budget.set(None);
+    m.insert(i, i).unwrap();
+    assert_eq!(m.get(&i), Some(i));
+}

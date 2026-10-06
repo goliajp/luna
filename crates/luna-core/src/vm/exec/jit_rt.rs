@@ -335,14 +335,24 @@ impl Vm {
         self.stack[idx].unpack().0
     }
 
-    /// Push a Lua frame onto the call stack with
-    /// JIT-known metadata. Used by `luna_jit_trace_materialize_frames`
-    /// at trace side-exits to recreate the inlined call activations
-    /// the lowerer compiled past. The contract (enforced by the
-    /// lowerer's pre-emit pass): `cl.proto` is non-vararg,
-    /// `nresults` is the caller's expected count (today always 1
-    /// because the lowerer bails Op::Call C != 2), and the caller
-    /// has already called `jit_ensure_stack` to cover
+    /// Set the stack top to register `rel` of the running trace's head
+    /// frame: where the interpreter would leave it after a call that
+    /// returned every value, or a vararg expansion, for an op that reads
+    /// it (a call or return of a variable count) and an exit before that
+    /// op.
+    #[doc(hidden)]
+    pub fn jit_set_top(&mut self, rel: u32) {
+        if let Some(f) = self.jit_last_lua_frame() {
+            self.top = f.base + rel;
+        }
+    }
+
+    /// Push a Lua frame onto the call stack with JIT-known metadata, for
+    /// `luna_jit_trace_materialize_frames` at a trace exit inside a
+    /// function the trace inlined. `nresults` is the caller's wanted count
+    /// (-1 for all); a vararg `cl` has `n_varargs` extra arguments just
+    /// below `base`, the function one below them, as `push_frame` leaves
+    /// them. The caller has already called `jit_ensure_stack` to cover
     /// `[0..base + cl.proto.max_stack)`.
     #[doc(hidden)]
     pub fn jit_push_inlined_frame(
@@ -351,6 +361,7 @@ impl Vm {
         base: u32,
         pc: u32,
         nresults: i32,
+        n_varargs: u32,
     ) {
         frames_push_sync(
             &mut self.frames,
@@ -360,11 +371,8 @@ impl Vm {
                 closure: cl,
                 base,
                 pc,
-                // Lua call ABI: callee R[0] sits at caller R[A+1], so
-                // callee.base = caller.base + A + 1; func_slot is
-                // caller.base + A = callee.base - 1.
-                func_slot: base - 1,
-                n_varargs: 0,
+                func_slot: base - 1 - n_varargs,
+                n_varargs,
                 nresults,
                 hook_oldpc: u32::MAX,
                 from_c: false,

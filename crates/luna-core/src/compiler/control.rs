@@ -8,7 +8,7 @@ impl<'a> Compiler<'a> {
         arms: &[ast::IfArm],
         else_body: Option<&Block>,
     ) -> Result<(), SyntaxError> {
-        let mut end_jumps = Jumps::new();
+        let mut end_jumps = Jumps::new(self.heap.mem());
         for (
             i,
             ast::IfArm {
@@ -212,7 +212,7 @@ impl<'a> Compiler<'a> {
         end_pc: u32,
     ) {
         for &(name, off) in hidden {
-            self.l().locvars.push(crate::runtime::LocVar {
+            self.l().locvars.push_or_abort(crate::runtime::LocVar {
                 name: name.into(),
                 reg: base + off,
                 start_pc,

@@ -1,10 +1,12 @@
 use super::*;
 
 mod cmp_table_checks;
+mod frames;
 mod op_checks;
 mod scan;
 mod validate;
 use cmp_table_checks::*;
+use frames::*;
 use op_checks::*;
 use scan::*;
 use validate::*;
@@ -38,7 +40,16 @@ pub(super) struct Plan<'r> {
     pub(super) opts: CompileOptions,
     pub(super) float_only: bool,
     pub(super) op_offsets: Vec<u32>,
-    pub(super) enclosing_call_a: Vec<Option<u8>>,
+    /// The frame of each call the trace inlines (see [`inline_calls`]).
+    pub(super) inline_calls: Vec<Option<InlineCall>>,
+    /// The stack top of each op's frame before it runs, where the
+    /// recording fixes it.
+    pub(super) frame_tops: Vec<Option<u32>>,
+    /// The register holding the closure each op's frame runs.
+    pub(super) frame_func: Vec<u32>,
+    /// The registers each op writes past what its instruction names (see
+    /// [`inline_writes`]).
+    pub(super) inline_writes: Vec<(u32, u32)>,
     pub(super) window_size: u32,
     pub(super) window_size_us: usize,
     pub(super) folded_ops: Vec<bool>,
@@ -82,13 +93,29 @@ pub(super) fn plan_trace<'r>(
     float_only: bool,
 ) -> Option<(Plan<'r>, EscapeAnalysis)> {
     let n = record.ops.len();
+    set_last_op(usize::MAX, 255);
 
-    let (op_offsets, enclosing_call_a, window_size) = plan_frames(record, head_proto, frame_w)?;
+    // a trace that inlines no call needs none of the inline-frame plan
+    // (the vectors stay empty; their readers take a missing entry as none)
+    let inlines = record.ops.iter().any(|r| r.inline_depth > 0);
+    let (inline_calls, frame_tops) = if inlines {
+        inline_calls(record)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let (op_offsets, window_size) = plan_frames(record, head_proto, frame_w, &inline_calls)?;
     let window_size_us = window_size as usize;
+    let (frame_func, inline_writes) = if inlines {
+        let funcs = frame_funcs(record, &op_offsets);
+        let writes = inline_writes(record, &op_offsets, &inline_calls, &frame_tops, &funcs);
+        (funcs, writes)
+    } else {
+        (Vec::new(), Vec::new())
+    };
 
     side_trace_gate(record, &op_offsets)?;
     let (folded_ops, math_folds) = scan_math_folds(record, n, head_proto, opts);
-    let end_idx_opt = find_trace_end(record, &folded_ops, n)?;
+    let end_idx_opt = find_trace_end(record, &folded_ops, n, &inline_calls)?;
     let effective_end = end_idx_opt.map(|(i, _)| i).unwrap_or(n);
     // escape analysis over the recorded body +
     // terminator. The pre-emit pass below demotes any Sinkable
@@ -167,6 +194,7 @@ pub(super) fn plan_trace<'r>(
     let mut head_live = entry_live(
         record,
         &op_offsets,
+        &inline_writes,
         effective_end,
         max_stack,
         do_internal_loop,
@@ -199,6 +227,7 @@ pub(super) fn plan_trace<'r>(
         frame_w,
         effective_end,
         &folded_ops,
+        &frame_tops,
     )?;
     let step_guard = plan_step_guard(
         record,
@@ -228,7 +257,10 @@ pub(super) fn plan_trace<'r>(
             opts,
             float_only,
             op_offsets,
-            enclosing_call_a,
+            inline_calls,
+            frame_tops,
+            frame_func,
+            inline_writes,
             window_size,
             window_size_us,
             folded_ops,
@@ -251,193 +283,4 @@ pub(super) fn plan_trace<'r>(
         },
         escape,
     ))
-}
-
-/// The record's frame shape: per-op register-window offsets, the
-/// enclosing call's A per op, and the window size.
-fn plan_frames(
-    record: &TraceRecord,
-    head_proto: Gc<Proto>,
-    frame_w: usize,
-) -> Option<(Vec<u32>, Vec<Option<u8>>, u32)> {
-    // recorder invariant: the first recorded op is at
-    // depth 0 on `head_proto`. A record violating either would break
-    // `compute_op_offsets`' depth-bump arithmetic; bail cleanly here
-    // rather than panic deeper in.
-    if let Some(first) = record.ops.first()
-        && (first.inline_depth != 0 || !std::ptr::eq(first.proto.as_ptr(), head_proto.as_ptr()))
-    {
-        checkpoint("bail:first-op-shape");
-        return None;
-    }
-    checkpoint("post:first-op-check");
-
-    // The smart side-trace gate sits BELOW `compute_op_offsets` so
-    // it can reuse the verified op_offsets (calling
-    // compute_op_offsets early can panic if the depth invariant
-    // fails — verify_depth_invariant runs first).
-
-    // per-op register-window offsets across inlined
-    // self-recursive frames. `op_offsets[i]` is the start of op i's
-    // register window inside reg_state_buf; `enclosing_call_a[i]` is
-    // the matching caller `Op::Call`'s A field (None at depth 0).
-    // `window_size` is the largest `off + max_stack` across all ops —
-    // sized so even the deepest inlined frame fits. The dispatcher
-    // (vm/exec.rs) reads `window_size` off `CompiledTrace` to size
-    // its reg_state buffer; only [0..max_stack) is marshalled in
-    // from the interp stack, [max_stack..window_size) is zero-init
-    // and filled by the trace's own GetUpval / arith.
-    // consolidated depth invariant check. Bails if
-    // any of:
-    //   - first op not at depth 0 (already checked above against
-    //     head_proto, but kept here for the pure-function test)
-    //   - any consecutive ops jump > 1 depth (e.g. Op::Close
-    //     pushing both a Cont::Close frame AND a handler's Lua
-    //     frame — recorder sees 0 → 2, IR has no intermediate)
-    //   - a depth bump is not preceded by an Op::Call (recorder
-    //     contract: only Op::Call can push a new frame)
-    //   - any op exceeds MAX_INLINE_DEPTH (the lowerer caps its
-    //     window_size on this)
-    // The check is pulled into `verify_depth_invariant` (lib
-    // unit tested over synthetic depth/Op-is-Call sequences;
-    // doesn't need a real `Gc<Proto>`).
-    let depth_items: Vec<(u8, bool)> = record
-        .ops
-        .iter()
-        .map(|r| (r.inline_depth, matches!(r.inst.op(), Op::Call)))
-        .collect();
-    if !verify_depth_invariant(&depth_items) {
-        checkpoint("bail:depth-invariant");
-        return None;
-    }
-    checkpoint("post:depth-invariant");
-    let (op_offsets, enclosing_call_a) = compute_op_offsets(record);
-    let mut window_size: u32 = op_offsets
-        .iter()
-        .map(|&off| off + frame_w as u32)
-        .max()
-        .unwrap_or(frame_w as u32);
-    // SelfLink close needs `regs_full` to extend through the
-    // would-be-next-depth's window so the snapshot-restore copy reads
-    // from valid slots. Without this extension, compute_op_offsets
-    // only covers the deepest CAPTURED depth (the recorder closed
-    // BEFORE pushing the tripping depth's frame), and bump-target
-    // reads would go OOB. Extend by one max_stack window past the
-    // last Op::Call's bump destination.
-    if record.self_link_kind.is_some() {
-        let mut last_call_idx: Option<usize> = None;
-        for (i, rop) in record.ops.iter().enumerate() {
-            if matches!(rop.inst.op(), Op::Call) {
-                last_call_idx = Some(i);
-            }
-        }
-        if let Some(idx) = last_call_idx {
-            let bump_off = op_offsets[idx] + record.ops[idx].inst.a() + 1;
-            let needed = bump_off + frame_w as u32;
-            if needed > window_size {
-                window_size = needed;
-            }
-        }
-    }
-    Some((op_offsets, enclosing_call_a, window_size))
-}
-
-fn side_trace_gate(record: &TraceRecord, op_offsets: &[u32]) -> Option<()> {
-    // SMART side-trace gate. Compute the child's read-before-write live-
-    // in slot set (slots READ without first being WRITTEN within
-    // child's body — values carried in from the parent's exit
-    // reg_state). Intersect with the parent's body_writes (slots
-    // the parent's recorded body writes — values that go STALE
-    // across child's internal-loop iters because parent doesn't
-    // re-run those writes mid-side-trace). Non-empty intersection
-    // = the s12_step_b class of bug; bail compile. Empty = side
-    // trace is self-contained w.r.t. parent's writes — safe to
-    // internal-loop OR forward-only — allow either.
-    //
-    // More permissive than banning ALL back-edge ops in side
-    // traces: self-contained back-edge side traces (e.g. recursive
-    // call branches that re-compute their inputs each iter) can
-    // compile and
-    // amortize the parent's hot-exit dispatch cost.
-    if let Some((parent_proto, parent_head_pc, _)) = record.side_trace_parent {
-        // Check 1: any back-edge op? (ForLoop / TForLoop / Jmp -bx)
-        let has_back_edge = record.ops.iter().any(|op| match op.inst.op() {
-            luna_core::vm::isa::Op::ForLoop | luna_core::vm::isa::Op::TForLoop => true,
-            luna_core::vm::isa::Op::Jmp => op.inst.sbx() < 0,
-            _ => false,
-        });
-        if has_back_edge {
-            // Back-edge means the trace's IR will internal-loop OR
-            // re-execute body ops. Two correctness requirements:
-            //
-            //   (a) child must not READ a slot the parent's body
-            //       writes without first writing it itself (the
-            //       s12_step_b stale-register bug).
-            //   (b) child must not contain side-effect-producing
-            //       ops (Call / TForCall / SetTable / SetI /
-            //       SetField / SetUpval / SetTabUp / Closure /
-            //       Close / Tbc) — these advance shared heap /
-            //       iterator state that interp re-observes after
-            //       the side trace returns, causing double-effect
-            //       (the s12_step_d TForCall-double-advance bug).
-            let has_impure = record.ops.iter().any(|op| {
-                use luna_core::vm::isa::Op;
-                matches!(
-                    op.inst.op(),
-                    Op::Call
-                        | Op::TailCall
-                        | Op::TForCall
-                        | Op::SetTable
-                        | Op::SetI
-                        | Op::SetField
-                        | Op::SetUpval
-                        | Op::SetTabUp
-                        | Op::Closure
-                        | Op::Close
-                        | Op::Tbc
-                )
-            });
-            if has_impure {
-                checkpoint("bail:side-trace-back-edge-with-impure");
-                return None;
-            }
-            // Pure back-edge trace: still check live-in vs parent
-            // writes (Add/Move loops can still re-read a stale
-            // parent-written slot each iter).
-            let child_live_in = compute_live_in_slots(record, op_offsets);
-            if !child_live_in.is_empty() {
-                let parent_writes_opt = {
-                    let traces = parent_proto.traces.borrow();
-                    traces
-                        .iter()
-                        .find(|t| t.head_pc == parent_head_pc)
-                        .map(|pct| pct.body_writes.clone())
-                };
-                if let Some(parent_writes) = parent_writes_opt {
-                    let mut i = 0;
-                    let mut j = 0;
-                    let pw = &parent_writes[..];
-                    let cl_li = &child_live_in[..];
-                    while i < pw.len() && j < cl_li.len() {
-                        match pw[i].cmp(&cl_li[j]) {
-                            std::cmp::Ordering::Equal => {
-                                checkpoint("bail:side-trace-live-in-overlap");
-                                return None;
-                            }
-                            std::cmp::Ordering::Less => i += 1,
-                            std::cmp::Ordering::Greater => j += 1,
-                        }
-                    }
-                } else {
-                    checkpoint("bail:side-trace-parent-ct-missing");
-                    return None;
-                }
-            }
-            // All back-edge checks passed; trace is allowed.
-        }
-        // No back-edge: forward-only is always safe (single-iter
-        // execution; no internal-loop semantics to break).
-    }
-    checkpoint("post:side-trace-v2e-smart-gate");
-    Some(())
 }

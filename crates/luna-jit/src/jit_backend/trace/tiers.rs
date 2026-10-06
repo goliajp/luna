@@ -186,9 +186,5 @@ pub(crate) fn tier_up_trace(
     storage: &mut dyn luna_core::jit::JitStorage,
     ct: &CompiledTrace,
 ) -> Option<TraceFn> {
-    #[cfg(feature = "llvm-jit")]
-    if super::llvm_tier::is_llvm(storage) {
-        return super::llvm_tier::tier_up_llvm(storage, ct);
-    }
     share::tier_up(storage, ct)
 }

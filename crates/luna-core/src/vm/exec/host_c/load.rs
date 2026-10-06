@@ -31,18 +31,18 @@ impl Vm {
 
     /// Compile or undump `src` as the chunk `chunkname` (PUC `f_parser`):
     /// the function and the number of upvalues its prototype declares, or
-    /// the error message.
+    /// the error message and whether it is a memory error (`LUA_ERRMEM`).
     pub fn host_load_chunk(
         &mut self,
         src: &[u8],
         chunkname: &[u8],
-    ) -> Result<(Gc<LuaClosure>, usize), Value> {
+    ) -> Result<(Gc<LuaClosure>, usize), (Value, bool)> {
         match self.load(src, chunkname) {
             Ok(cl) => {
                 let n = cl.proto.upvals.len();
                 Ok((cl, n))
             }
-            Err(e) => Err(self.load_error_value(&e, chunkname)),
+            Err(e) => Err((self.load_error_value(&e, chunkname), e.is_memory())),
         }
     }
 
@@ -52,13 +52,13 @@ impl Vm {
         &mut self,
         parsed: crate::vm::exec::ParsedText,
         chunkname: &[u8],
-    ) -> Result<(Gc<LuaClosure>, usize), Value> {
+    ) -> Result<(Gc<LuaClosure>, usize), (Value, bool)> {
         match self.load_parsed(parsed, chunkname, None) {
             Ok(cl) => {
                 let n = cl.proto.upvals.len();
                 Ok((cl, n))
             }
-            Err(e) => Err(self.load_error_value(&e, chunkname)),
+            Err(e) => Err((self.load_error_value(&e, chunkname), e.is_memory())),
         }
     }
 

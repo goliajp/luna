@@ -13,9 +13,10 @@ pub struct AdoptRequest<'a> {
     pub head_pc: u32,
     /// The raw tags of the frame's registers now.
     pub entry_tags: &'a [u8],
-    /// For a side trace: the head pc of the trace whose exit became hot,
-    /// and that exit's index (as [`TraceRecord::side_trace_parent`]).
-    pub side_parent: Option<(u32, usize)>,
+    /// For a side trace: the head function and pc of the trace whose exit
+    /// became hot, and that exit's index (as
+    /// [`TraceRecord::side_trace_parent`]).
+    pub side_parent: Option<(Gc<Proto>, u32, usize)>,
     /// Recording would start at a call, rather than at a loop.
     pub call_triggered: bool,
     /// As [`TraceRecord::settings`] for a recording now.
@@ -36,7 +37,7 @@ pub struct AdoptedTrace {
     /// As the backend would return it right after compiling it.
     pub trace: CompiledTrace,
     /// For a side trace: as [`AdoptRequest::side_parent`].
-    pub side_parent: Option<(u32, usize)>,
+    pub side_parent: Option<(Gc<Proto>, u32, usize)>,
     /// The functions other than the head's that the trace inlined.
     pub inlined: Vec<Gc<Proto>>,
 }
