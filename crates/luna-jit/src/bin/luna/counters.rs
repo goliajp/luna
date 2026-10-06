@@ -17,7 +17,7 @@ pub(crate) fn append(vm: &Vm) {
     #[cfg(not(feature = "llvm-jit"))]
     let llvm = 0;
     let mut line = format!(
-        "closed={} compiled={} failed={} dispatched={} side_compiled={} codegen={} baseline={} llvm={}",
+        "closed={} compiled={} failed={} dispatched={} side_compiled={} codegen={} baseline={} llvm={} tiered_up={}",
         c.closed,
         c.compiled,
         c.compile_failed,
@@ -26,6 +26,7 @@ pub(crate) fn append(vm: &Vm) {
         jt,
         luna_jit::jit_backend::trace::baseline_codegen_count(),
         llvm,
+        c.tiered_up,
     );
     for r in &c.compile_failed_reasons {
         line.push_str(" why=");

@@ -172,15 +172,33 @@ optimization.
   MSVC `BUFSIZ`, as PUC does there.
 - The LLVM backend (`--features llvm-jit`, `LUNA_JIT_BACKEND=llvm`)
   compiles traces with the same trace lowering as the Cranelift backend:
-  traces start in the baseline tier and LLVM compiles them again once
-  they are hot (with `LUNA_TRACE_TIER=optimizing`, every trace), at
-  `default<O2>` for the host CPU. It now compiles and runs the same
+  traces start in the baseline tier, move to Cranelift's code once hot,
+  and are compiled by LLVM (`default<O2>`, for the host CPU) on a thread
+  of their own once they have stayed hot for 20 ms; the Vm switches to
+  LLVM's code at the next entry of the trace after it is ready (with
+  `LUNA_TRACE_TIER=optimizing`, LLVM compiles every trace at once). A
+  program that runs for less than that pays nothing for LLVM, so the
+  backend starts as fast as the Cranelift one. It now compiles and runs the same
   traces as the Cranelift backend, inlined calls, side traces and
   tables included; before, it compiled only loops of integer
   arithmetic and comparisons. `luna_jit_llvm::LlvmBackend` on its own
   is the method JIT only: its `TraceCompiler` compiles no trace, and
   luna-jit's backend compiles them through
   `luna_jit_llvm::compile_function`.
+- The LLVM backend's method JIT runs LLVM's `default<O2>` pipeline for the
+  host CPU too (it compiled unoptimized code), and every LLVM compile
+  reuses one target machine per thread.
+- Compiled traces divide by a constant (`x // 7`, `x % 7`) with a
+  multiply instead of a division instruction, in every tier: the
+  baseline and Cranelift tiers compile without an optimizer that would
+  do it, and a 64-bit division takes tens of cycles (`s = s + i % 7` over
+  3 million iterations: 5x faster). A table field read or written at the
+  slot it was recorded in is checked with one compare-and-branch per
+  condition (about 15% off a loop of `t.x = t.x + 1` in the Cranelift
+  tier).
+- `TraceCompiler::tier_up`: a backend that leaves something in
+  `TierUp::source` is asked again, at the next entry of the trace once it
+  runs code the backend returned, else after another `at` iterations.
 
 - C API: the `io` library of a state made through the C API is C over the
   C library's stdio, as PUC's is, for every dialect: file handles are
@@ -649,6 +667,10 @@ optimization.
 
 ### Added
 
+- `luna_jit::install_llvm_backend_with` and `jit_backend::LlvmBackend`'s
+  `llvm_after` (default `jit_backend::LLVM_AFTER`, 20 ms; `None`: LLVM
+  compiles hot traces at once). `LUNA_TRACE_IR_DUMP=1` /
+  `LUNA_TRACE_ASM_DUMP=1` also print what the LLVM backend compiles.
 - `luna_jit::install_llvm_backend` (with `--features llvm-jit`) installs
   the LLVM backend on a `Vm` regardless of `LUNA_JIT_BACKEND`.
 
