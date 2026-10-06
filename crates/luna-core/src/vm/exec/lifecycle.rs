@@ -128,6 +128,7 @@ impl Vm {
             warn_cont: false,
             warn_log: LVec::new(mem),
             instr_budget: None,
+            limited: false,
             bytecode_loading: true,
             puc_bytecode_loading: false,
             loader_input_budget: Vm::DEFAULT_LOADER_INPUT_BUDGET,
@@ -300,7 +301,7 @@ impl Vm {
         self.jit.chunk_compiler = Box::new(chunk);
         self.jit.trace_compiler = Box::new(trace);
         if !self.jit.enabled_chosen {
-            self.jit.enabled = true;
+            self.set_jit_flag(true);
         }
         if !self.jit.trace_enabled_chosen {
             self.jit.trace_enabled = true;
