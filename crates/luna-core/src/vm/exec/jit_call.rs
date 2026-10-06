@@ -301,8 +301,8 @@ impl Vm {
 
     /// Run a call that compiled code makes but cannot run natively, in the
     /// interpreter: a self-recursive call when the native stack is low.
-    /// `budget`, when given, is how many more calls the interpreter may
-    /// nest ([`Vm::jit_call_budget`] less the compiled code's own). Like a
+    /// The interpreter's own frames count against 5.1's call limit from
+    /// here on; the compiled calls below are not among them. Like a
     /// library callback it cannot yield. The compiled frames below may
     /// hold the only reference to a table they made, in a native register
     /// no collection can see, so none runs until the call is done (the
@@ -312,14 +312,7 @@ impl Vm {
         &mut self,
         cl: crate::runtime::Gc<crate::runtime::LuaClosure>,
         args: &[Value],
-        budget: Option<i64>,
     ) -> Result<Vec<Value>, LuaError> {
-        let cap = self.frame_cap;
-        if let Some(b) = budget
-            && cap != u32::MAX
-        {
-            self.frame_cap = (self.frames.len() as i64 + b).clamp(0, i64::from(cap)) as u32;
-        }
         let stopped = self.heap.gc_is_stopped();
         self.heap.gc_set_stopped(true);
         // the method JIT would hand this very call straight back
@@ -329,7 +322,6 @@ impl Vm {
         self.nny -= 1;
         self.jit.enabled = jit;
         self.heap.gc_set_stopped(stopped);
-        self.frame_cap = cap;
         r
     }
 }

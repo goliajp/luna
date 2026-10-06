@@ -248,16 +248,8 @@ impl Vm {
         nresults: i32,
         from_c: bool,
     ) -> Result<(), LuaError> {
-        if self.frames.len() >= self.frame_cap as usize {
-            // PUC 5.1 `luaD_growCI`: past LUAI_MAXCALLS the call raises
-            // "stack overflow"; a handler running on it may go on until
-            // the next growth, which is "error in error handling"
-            if self.msgh_depth == 0 {
-                return Err(self.rt_err("stack overflow"));
-            }
-            if self.frames.len() >= 2 * self.frame_cap as usize {
-                return Err(LuaError(self.errerr()));
-            }
+        if self.frames.len() == self.frames.capacity() {
+            self.grow_frames()?;
         }
         if func_slot + 256 > MAX_LUA_STACK {
             // PUC `luaD_growstack`: the overflow raises "stack overflow" and
@@ -366,6 +358,35 @@ impl Vm {
             .and_then(|f| f.lua())
             .is_some_and(|f| f.tailcalls > 0);
         self.hook_call_with(false, nparams, is_tail)?;
+        Ok(())
+    }
+
+    /// Room for one more frame. 5.1 checks its call limit here, as PUC
+    /// 5.1's `luaD_growCI` does when the CallInfo array is full: the array
+    /// grows no further than `LUAI_MAXCALLS`, and a call past it raises
+    /// "stack overflow"; a message handler running on that error may nest
+    /// as deep again, and past that it is "error in error handling".
+    #[cold]
+    #[inline(never)]
+    fn grow_frames(&mut self) -> Result<(), LuaError> {
+        let len = self.frames.len();
+        if self.frame_cap == u32::MAX {
+            self.frames.reserve_or_abort(1);
+            return Ok(());
+        }
+        let cap = self.frame_cap as usize;
+        let limit = if self.msgh_depth == 0 { cap } else { 2 * cap };
+        if len >= limit {
+            return Err(if self.msgh_depth == 0 {
+                self.rt_err("stack overflow")
+            } else {
+                LuaError(self.errerr())
+            });
+        }
+        let extra = (2 * len).clamp(8, limit) - len;
+        if self.frames.reserve_exact(extra).is_err() {
+            self.frames.reserve_or_abort(extra);
+        }
         Ok(())
     }
 }

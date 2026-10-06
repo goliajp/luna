@@ -175,12 +175,7 @@ pub unsafe extern "C" fn luna_jit_self_call_slow(
     let result = if budget <= 0 {
         Err(vm.jit_depth_error(cl))
     } else {
-        // the budget now caps the interpreter's frames, so the LLVM tier's
-        // open calls are not counted a second time inside the call
-        let depth = NATIVE_DEPTH.with(|d| d.replace(0));
-        let r = vm.jit_call_interpreted(cl, &args[..nargs], Some(budget));
-        NATIVE_DEPTH.with(|d| d.set(depth));
-        r
+        vm.jit_call_interpreted(cl, &args[..nargs])
     };
     let out = match result {
         Ok(vals) => {
