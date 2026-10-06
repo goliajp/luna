@@ -32,13 +32,11 @@ pub struct JitState {
     /// Master JIT switch. Off until a real backend is installed
     /// ([`crate::vm::Vm::install_jit_backend`]), which turns it on unless
     /// the embedder already chose a value with `Vm::set_jit_enabled`.
-    /// Compiled code does not tick `instr_budget`, so while a budget or
-    /// a memory cap is armed none is entered (`Vm::limited`), whatever
-    /// this says.
+    /// An armed instruction budget or memory cap keeps compiled code out
+    /// whatever this says (`Vm::limited`).
     pub enabled: bool,
-    /// `enabled` and no instruction budget or memory cap armed: what the
-    /// call paths test before entering compiled code. Written only by
-    /// `Vm::set_jit_flag` and `Vm::sync_limited`.
+    /// `enabled` with no limit armed: what the call paths test before
+    /// entering compiled code. Written by `set_jit_flag` / `sync_limited`.
     pub(crate) gate: bool,
 
     /// Trace JIT subswitch. Same default and install rule as
@@ -147,14 +145,14 @@ pub struct JitState {
     /// admit; each admit decrements; when it would reach a negative
     /// value the dispatcher refuses entry and force-deopts via
     /// [`Self::suppress_downrec_admit_once`]. Reset to
-    /// [`JitState::STITCH_DEPTH_DEFAULT`] each natural deopt or
-    /// when the suppress flag fires (so a subsequent interp tick
-    /// past `head_pc` re-arms the budget). Default = the constant.
+    /// [`JitState::STITCH_DEPTH_DEFAULT`] each natural deopt or when the
+    /// suppress flag fires (so a subsequent interp tick past `head_pc`
+    /// re-arms the budget). Default = the constant.
     pub stitch_depth_remaining: u32,
 
-    /// One-shot suppression flag for the
-    /// dispatcher's trace admit. Set when a trace hands control back
-    /// at its own `head_pc` without having run the op there: the
+    /// One-shot suppression flag for the dispatcher's trace admit. Set
+    /// when a trace hands control back at its own `head_pc` without
+    /// having run the op there: the
     /// dispatcher when it force-deopts a downrec entry (guard miss OR
     /// cycle-budget exhausted), and a trace side exit taken before the
     /// head op (through `luna_jit_suppress_trace_admit`). The NEXT
@@ -186,12 +184,10 @@ impl JitState {
     /// way a downrec trace HITs is when `saved_pc` from the parent
     /// frame matches one of the recorded `caller_pc` candidates;
     /// each natural admit corresponds to ONE Lua call chain pop, so
-    /// the budget can safely grow to cover ~all consecutive HITs
-    /// expected in a hot loop without infinite-loop risk. `32` lets
-    /// 31 HITs accumulate before a forced-deopt resets the budget;
-    /// fib(3) hot loop's per-outer-iter pattern shows 1 HIT every
-    /// 5 admits, so `32` covers ~32 outer iters before any
-    /// false-classify pressure.
+    /// the budget can safely grow to cover ~all consecutive HITs expected
+    /// in a hot loop without infinite-loop risk. `32` lets 31 HITs
+    /// accumulate before a forced-deopt resets the budget; fib(3)'s hot
+    /// loop shows 1 HIT every 5 admits, so `32` covers ~32 outer iters.
     pub const STITCH_DEPTH_DEFAULT: u32 = 32;
 }
 
