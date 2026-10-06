@@ -178,7 +178,10 @@ fn pcall_rearms(vm: &mut Vm, func_slot: u32, nargs: u32) -> Result<u32, LuaError
         .map(|i| vm.nat_arg(func_slot, nargs, i))
         .collect();
     let r = vm.call_value(f, &args);
-    vm.set_memory_cap(Some(STRESS_CAP));
+    // what the failed call left reachable stays (heavy.lua's `toomanyidx`
+    // keeps its >1 GiB table); like PUC's allocator, refuse only further
+    // growth
+    vm.set_memory_cap(Some(STRESS_CAP.max(vm.memory_used() + (64 << 20))));
     match r {
         Ok(mut vals) => {
             vals.insert(0, Value::Bool(true));
