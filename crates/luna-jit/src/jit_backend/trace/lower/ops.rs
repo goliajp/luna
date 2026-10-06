@@ -1,6 +1,8 @@
 use super::*;
 
 mod arith;
+mod arith_divmod;
+mod arith_double;
 mod array;
 mod basic;
 mod call;
@@ -13,6 +15,8 @@ mod sequence;
 mod table;
 mod tfor;
 use arith::*;
+use arith_divmod::*;
+use arith_double::*;
 use array::*;
 use basic::*;
 use call::*;

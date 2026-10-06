@@ -83,12 +83,12 @@ pub(super) fn emit_float_arith_op<E: Emit>(
                 def_var_f64(&mut lw.bcx, regs[ins.a() as usize], r);
                 lw.current_kinds[off + ins.a() as usize] = RegKind::Float;
             } else if pl.float_only {
-                // 5.1 / 5.2 integers stand for doubles (see `emit_double_add`);
-                // the recorder lets only `+` and `-` of two of them through
-                if !matches!(op, Op::Add | Op::Sub) {
-                    return None;
+                // 5.1 / 5.2 integers stand for doubles (see `arith_double`)
+                match op {
+                    Op::Add | Op::Sub => emit_double_add(lw, pl, oc),
+                    Op::Mul => emit_double_mul(lw, pl, oc),
+                    _ => return None,
                 }
-                emit_double_add(lw, pl, oc);
             } else {
                 let lhs = lw.bcx.use_var(regs[ins.b() as usize]);
                 let rhs = lw.bcx.use_var(regs[ins.c() as usize]);
@@ -105,52 +105,6 @@ pub(super) fn emit_float_arith_op<E: Emit>(
         _ => unreachable!("routed by emit_op"),
     }
     Some(())
-}
-
-/// `+` / `-` of two 5.1 / 5.2 integers, which stand for doubles: the
-/// doubles' result is the exact one rounded once. Every such integer is a
-/// double's exact value, so while the exact result is within ±2^53 it is
-/// that double and stays an integer, as the interpreter keeps it
-/// (`num_double::add`). A result past 2^53, which may round, or a machine
-/// overflow leaves the trace at the op for the interpreter to do.
-fn emit_double_add<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) {
-    const EXACT: i64 = 1 << 53;
-    let OpCx {
-        i, rop, off, ins, ..
-    } = *oc;
-    let regs: &[Variable] = oc.regs;
-    let lhs = lw.bcx.use_var(regs[ins.b() as usize]);
-    let rhs = lw.bcx.use_var(regs[ins.c() as usize]);
-    let (r, overflow) = if oc.op == Op::Add {
-        let r = lw.bcx.ins().iadd(lhs, rhs);
-        // the operands share a sign that the result lacks
-        let x = lw.bcx.ins().bxor(lhs, r);
-        let y = lw.bcx.ins().bxor(rhs, r);
-        (r, lw.bcx.ins().band(x, y))
-    } else {
-        let r = lw.bcx.ins().isub(lhs, rhs);
-        // the operands' signs differ and the result's is not the left one's
-        let x = lw.bcx.ins().bxor(lhs, rhs);
-        let y = lw.bcx.ins().bxor(lhs, r);
-        (r, lw.bcx.ins().band(x, y))
-    };
-    let overflow = lw.bcx.ins().icmp_imm_s(IntCC::SignedLessThan, overflow, 0);
-    let shifted = lw.bcx.ins().iadd_imm_s(r, EXACT);
-    let outside = lw
-        .bcx
-        .ins()
-        .icmp_imm_u(IntCC::UnsignedGreaterThan, shifted, 2 * EXACT);
-    let leave = lw.bcx.ins().bor(overflow, outside);
-    let cont_blk = lw.bcx.create_block();
-    let exit_blk = lw.bcx.create_block();
-    lw.bcx.ins().brif(leave, exit_blk, &[], cont_blk, &[]);
-    lw.bcx.switch_to_block(exit_blk);
-    lw.bcx.seal_block(exit_blk);
-    guard_exit(lw, pl, rop.pc, i);
-    lw.bcx.switch_to_block(cont_blk);
-    lw.bcx.seal_block(cont_blk);
-    lw.bcx.def_var(regs[ins.a() as usize], r);
-    lw.current_kinds[off + ins.a() as usize] = RegKind::Int;
 }
 
 /// Integer-division, modulo, bitwise ops and the unary ops.
@@ -181,6 +135,13 @@ pub(super) fn emit_int_arith_op<E: Emit>(
             // raise; a string is coerced.
             let kb = oc.kind(&lw.current_kinds, ins.b());
             let kc = oc.kind(&lw.current_kinds, ins.c());
+            if pl.float_only && kb == RegKind::Int && kc == RegKind::Int {
+                // 5.1 / 5.2 have no `//` or bitwise operators
+                return match op {
+                    Op::Mod => emit_double_mod(lw, pl, oc),
+                    _ => None,
+                };
+            }
             let number = |k| matches!(k, RegKind::Int | RegKind::Float);
             if matches!(op, Op::IDiv | Op::Mod)
                 && number(kb)
@@ -254,6 +215,13 @@ pub(super) fn emit_int_arith_op<E: Emit>(
         }
         Op::Unm | Op::BNot => {
             let kb = k_op(&lw.current_kinds, off as u32 + ins.b());
+            if pl.float_only && kb == RegKind::Int {
+                if op != Op::Unm {
+                    return None;
+                }
+                emit_double_neg(lw, pl, oc);
+                return Some(());
+            }
             if !matches!(kb, RegKind::Int)
                 && !(matches!(op, Op::Unm) && matches!(kb, RegKind::Float))
             {
@@ -278,72 +246,5 @@ pub(super) fn emit_int_arith_op<E: Emit>(
         }
         _ => unreachable!("routed by emit_op"),
     }
-    Some(())
-}
-
-/// Float `//` and `%` (an integer operand converted first): `//` floors
-/// the quotient; `%` is each dialect's `luai_nummod`, as the interpreter's
-/// `float_mod` does it: 5.1 / 5.2 `a - floor(a/b)*b`, 5.3 `fmod` corrected
-/// when `m*b < 0`, 5.4+ `fmod` corrected when the signs of `m` and `b`
-/// differ.
-fn emit_float_divmod<E: Emit>(
-    lw: &mut Lower<E>,
-    pl: &Plan<'_>,
-    oc: &OpCx<'_>,
-    kb: RegKind,
-    kc: RegKind,
-) -> Option<()> {
-    let Plan {
-        opts, float_only, ..
-    } = *pl;
-    let OpCx { off, ins, op, .. } = *oc;
-    let regs: &[Variable] = oc.regs;
-    let a = use_var_as_f64(&mut lw.bcx, regs, ins.b(), kb);
-    let b = use_var_as_f64(&mut lw.bcx, regs, ins.c(), kc);
-    let r = if op == Op::IDiv {
-        let q = lw.bcx.ins().fdiv(a, b);
-        lw.bcx.ins().floor(q)
-    } else if float_only {
-        let q = lw.bcx.ins().fdiv(a, b);
-        let fl = lw.bcx.ins().floor(q);
-        let p = lw.bcx.ins().fmul(fl, b);
-        lw.bcx.ins().fsub(a, p)
-    } else {
-        let mut sig = lw.bcx.make_signature();
-        sig.params.push(AbiParam::new(types::F64));
-        sig.params.push(AbiParam::new(types::F64));
-        sig.returns.push(AbiParam::new(types::F64));
-        let id = lw
-            .bcx
-            .declare_function("luna_jit_fmod", Linkage::Import, &sig)
-            .ok()?;
-        let f = lw.bcx.import_func(id);
-        let call = lw.bcx.ins().call(f, &[a, b]);
-        let m = lw.bcx.inst_results(call)[0];
-        let zero = lw.bcx.ins().f64const(0.0);
-        let fix = if opts.pre53 {
-            let p = lw.bcx.ins().fmul(m, b);
-            lw.bcx.ins().fcmp(FloatCC::LessThan, p, zero)
-        } else {
-            let m_pos = lw.bcx.ins().fcmp(FloatCC::GreaterThan, m, zero);
-            let b_neg = lw.bcx.ins().fcmp(FloatCC::LessThan, b, zero);
-            let m_neg = lw.bcx.ins().fcmp(FloatCC::LessThan, m, zero);
-            let b_pos = lw.bcx.ins().fcmp(FloatCC::GreaterThan, b, zero);
-            let x = lw.bcx.ins().band(m_pos, b_neg);
-            let y = lw.bcx.ins().band(m_neg, b_pos);
-            lw.bcx.ins().bor(x, y)
-        };
-        // select on the bits: the baseline code generator selects
-        // integers only
-        let fixed = lw.bcx.ins().fadd(m, b);
-        let fixed = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), fixed);
-        let m = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), m);
-        let bits = lw.bcx.ins().select(fix, fixed, m);
-        lw.bcx.def_var(regs[ins.a() as usize], bits);
-        lw.current_kinds[off + ins.a() as usize] = RegKind::Float;
-        return Some(());
-    };
-    def_var_f64(&mut lw.bcx, regs[ins.a() as usize], r);
-    lw.current_kinds[off + ins.a() as usize] = RegKind::Float;
     Some(())
 }
