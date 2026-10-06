@@ -171,6 +171,14 @@ optimization.
 
 ### Changed
 
+- Strings hash as PUC 5.4 and 5.5 hash them, from the last byte to the
+  first, so that with the same seed a table lays out its string keys —
+  and `pairs` visits them — as PUC does. The order a table with string
+  keys is visited in therefore differs from earlier versions.
+- A trace answers 5.4's `#t` from the table's length limit inline, and
+  reads `t[k]` for a string `k` it did not see at recording time by
+  walking the key's chain inline before calling the runtime.
+
 - On Windows the `luna` command keeps the MSVC C library's `FILE` for each
   file and standard stream, so that what PUC built with MSVC does with
   them, `luna` does too: `setvbuf` sizes and the positions `seek` then
