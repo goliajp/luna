@@ -171,6 +171,17 @@ optimization.
 
 ### Changed
 
+- On Windows the `luna` command keeps the MSVC C library's `FILE` for each
+  file and standard stream, so that what PUC built with MSVC does with
+  them, `luna` does too: `setvbuf` sizes and the positions `seek` then
+  reports, a `write` right after a `read` failing and a `read` right after
+  a `write` returning the stale buffer, `ungetc` at the start of a buffer
+  dropping the byte, 5.1 and 5.2 reading numbers with that library's
+  `fscanf`, standard output buffered in 4096-byte blocks on a pipe or file
+  and written after every call on a console (so stdout and stderr
+  interleave as with `lua.exe`), a Ctrl+Z typed on a console ending only
+  its line, and `setvbuf` with a size below 2 ending the process with
+  status 0xC0000409. Files opened with `b` follow the library too.
 - On Windows the `luna` command reads and writes as `lua.exe` does, through
   the MSVC C library's text mode: its standard output, standard error and
   standard input, and files opened without `b`, write `\n` as `\r\n` and
