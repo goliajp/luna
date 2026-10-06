@@ -6,6 +6,7 @@ use super::byte_diff::{
     run_official_on_puc,
 };
 use super::*;
+use luna_core::runtime::mem::{MemOwner, MemoryLimit};
 
 /// Lua snippet prepended to every PUC chunk. **MUST be newline-free** so
 /// reported source-line numbers (used by `error("…", level)` and the
@@ -83,7 +84,7 @@ pub(super) fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     std::thread::Builder::new()
         .stack_size(16 << 20)
         .spawn(move || {
-            let mut vm = Vm::new(version);
+            let mut vm = vm_for(version, &label);
             configure_vm(&mut vm, &label);
             let r = run_chunk(&mut vm, &src, &label, version);
             // Read counters back from globals. If the chunk error'd
@@ -201,36 +202,34 @@ fn wrap_source(body: Vec<u8>, skip_wrapper: bool, byte_diff_enabled: bool) -> Ve
     }
 }
 
-/// Memory cap and the `_U` / `_port` / `_soft` / `_noposix` globals the
-/// file runs under.
-fn configure_vm(vm: &mut Vm, label: &str) {
-    // Runtime memory cap for the four stress files PUC's outer driver
-    // gates behind a host wall-clock budget. heavy.lua's `toomanyidx`
-    // fills `a[i] = i` until the array part reaches `MAX_ASIZE = 1 <<
-    // 27` (~134 M slots × 9 B ≈ 1.2 GB) at which point `rehash`
-    // returns `TableError::Overflow`. On a 7 GB GitHub Actions ubuntu
-    // runner the *peak* during the final doubling (old slab + new
-    // slab + temporary `old_pairs` Vec ≈ 2.4 GB + assorted Rust /
-    // cargo overhead) walked the host allocator off a cliff and
-    // SIGSEGV'd before the Overflow check could fire. Arming the soft
-    // cap at 1 GiB lets the run loop notice between dispatch turns,
-    // run a full collect (which can't reclaim the growing `a` — it's
-    // reachable), and raise a catchable `"memory cap exceeded"` Lua
-    // error. heavy.lua's `pcall(function () ... end)` catches it and
-    // the rest of the chunk (`print "OK"`) runs to completion. Cap
-    // is fire-once + disarms after firing, so the post-pcall tail
-    // sees no further pressure. For verybig/memerr/sort the cap is
-    // pure headroom — none of them push net live bytes anywhere near
-    // 1 GiB (verybig has `_soft=true` set below, memerr early-returns
-    // when `T` is nil, sort's working set is ~50k Values ≈ 1.2 MB) —
-    // but pinning it here is defense-in-depth against future
-    // additions to the same stress family.
+/// The `_U` / `_port` / `_soft` / `_noposix` globals the file runs under.
+/// The four stress files PUC's outer driver gates behind a host
+/// wall-clock budget run on a 1 GiB memory limit. heavy.lua's
+/// `toomanyidx` fills `a[i] = i` until the array part reaches `MAX_ASIZE
+/// = 1 << 27` (~134 M slots × 9 B ≈ 1.2 GB), and on a 7 GB GitHub
+/// Actions runner the peak of the final doubling (old slab + new slab +
+/// the temporary pairs) walked the host allocator off a cliff before the
+/// `TableError::Overflow` check could fire. With the limit the growth
+/// fails as it does under PUC's test allocator, with the "not enough
+/// memory" error heavy.lua's `pcall` expects, and the rest of the chunk
+/// runs. (A memory cap would not do: once exceeded it stays exceeded
+/// until the host re-arms it, which the chunk cannot.) For
+/// verybig / memerr / sort the limit is pure headroom — none of them
+/// push live bytes anywhere near 1 GiB (verybig has `_soft=true` set
+/// below, memerr early-returns when `T` is nil, sort's working set is
+/// ~50k Values ≈ 1.2 MB).
+fn vm_for(version: LuaVersion, label: &str) -> Vm {
     if matches!(
         label,
         "heavy.lua" | "verybig.lua" | "memerr.lua" | "sort.lua"
     ) {
-        vm.set_memory_cap(Some(1usize << 30));
+        let mem = MemOwner::policy(Box::new(MemoryLimit(1usize << 30)));
+        return Vm::new_with_mem(version, mem);
     }
+    Vm::new(version)
+}
+
+fn configure_vm(vm: &mut Vm, label: &str) {
     vm.set_global("_U", Value::Bool(true)).unwrap();
     // attrib.lua's lines 79-356 exercise dynamic C-library loading
     // (`package.loadlib`) which luna does not ship; `_port=true` is the
