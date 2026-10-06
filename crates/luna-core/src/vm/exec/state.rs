@@ -45,8 +45,8 @@ pub struct Vm {
     /// `limits.rs`).
     pub(crate) instr_budget: Option<i64>,
     /// `instr_budget` or the heap's `mem_cap` is armed: compiled code,
-    /// which checks neither, is not entered. Kept in step by
-    /// `sync_limited`.
+    /// which checks neither, is not entered (`jit.gate` is off and traces
+    /// are not admitted). Kept in step by `sync_limited`.
     pub(crate) limited: bool,
     pub(crate) stack: LVec<Value>,
     /// the counters every call checks, together so a call touches one

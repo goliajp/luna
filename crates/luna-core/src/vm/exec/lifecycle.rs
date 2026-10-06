@@ -301,7 +301,7 @@ impl Vm {
         self.jit.chunk_compiler = Box::new(chunk);
         self.jit.trace_compiler = Box::new(trace);
         if !self.jit.enabled_chosen {
-            self.jit.enabled = true;
+            self.set_jit_flag(true);
         }
         if !self.jit.trace_enabled_chosen {
             self.jit.trace_enabled = true;

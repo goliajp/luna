@@ -13,7 +13,7 @@ impl Vm {
         cl: Gc<LuaClosure>,
     ) -> Option<Result<Vec<Value>, LuaError>> {
         use crate::runtime::function::JitProtoState;
-        if !self.jit.enabled {
+        if !self.jit.gate {
             return None;
         }
         let proto = cl.proto;
@@ -32,7 +32,7 @@ impl Vm {
                 arg_table_mask: _,
                 ret_is_float,
                 ret_is_table,
-            } if !self.limited => {
+            } => {
                 // SAFETY: the source `*const u8` is a JIT-compiled function entry pointer produced by Cranelift with the target `fn`-pointer signature (IntChunkFn / IntFnN); the JitVmGuard above keeps the JIT_VM TLS slot live across the call.
                 let f: crate::jit::IntChunkFn = unsafe { std::mem::transmute(entry) };
                 // Install the active Vm + closure
@@ -142,9 +142,9 @@ impl Vm {
     /// `nargs`, the host wanted-count `wanted` is honoured by
     /// `finish_results`. Also bails when a debug hook is armed —
     /// JIT'd code does not fire line / call / return hooks, so any
-    /// active hook makes the interpreter the source of truth — and while
-    /// an instruction budget or a memory cap is armed, which compiled code
-    /// does not check either.
+    /// active hook makes the interpreter the source of truth. An armed
+    /// instruction budget or memory cap, which compiled code does not check
+    /// either, keeps `jit.gate` off.
     pub(super) fn try_jit_call_op(
         &mut self,
         cl: Gc<LuaClosure>,
@@ -155,7 +155,7 @@ impl Vm {
         use crate::runtime::function::JitProtoState;
         // (compiled self-recursion checks the native stack itself, before
         // its first self call)
-        if !self.jit.enabled {
+        if !self.jit.gate {
             return false;
         }
         // Any active debug hook means the interpreter has to run the
@@ -182,7 +182,7 @@ impl Vm {
         else {
             return false;
         };
-        if num_args as u32 != nargs || self.limited {
+        if num_args as u32 != nargs {
             return false;
         }
         // Pack args into i64 bit-patterns per the per-slot expected
@@ -338,11 +338,12 @@ impl Vm {
         let stopped = self.heap.gc_is_stopped();
         self.heap.gc_set_stopped(true);
         // the method JIT would hand this very call straight back
-        let jit = std::mem::replace(&mut self.jit.enabled, false);
+        let jit = self.jit.enabled;
+        self.set_jit_flag(false);
         self.nny += 1;
         let r = self.call_value_impl(Value::Closure(cl), args, true, None);
         self.nny -= 1;
-        self.jit.enabled = jit;
+        self.set_jit_flag(jit);
         self.heap.gc_set_stopped(stopped);
         self.g.frames_native = native_before;
         r

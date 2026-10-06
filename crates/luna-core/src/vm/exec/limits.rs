@@ -19,6 +19,15 @@ impl Vm {
     #[inline]
     pub(crate) fn sync_limited(&mut self) {
         self.limited = self.instr_budget.is_some() || self.heap.mem_cap.is_some();
+        self.jit.gate = self.jit.enabled && !self.limited;
+    }
+
+    /// Switch the method JIT; the only writer of `jit.enabled`, so that
+    /// `jit.gate` follows it.
+    #[inline]
+    pub(crate) fn set_jit_flag(&mut self, enabled: bool) {
+        self.jit.enabled = enabled;
+        self.jit.gate = enabled && !self.limited;
     }
 
     #[cold]

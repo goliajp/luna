@@ -36,6 +36,10 @@ pub struct JitState {
     /// a memory cap is armed none is entered (`Vm::limited`), whatever
     /// this says.
     pub enabled: bool,
+    /// `enabled` and no instruction budget or memory cap armed: what the
+    /// call paths test before entering compiled code. Written only by
+    /// `Vm::set_jit_flag` and `Vm::sync_limited`.
+    pub(crate) gate: bool,
 
     /// Trace JIT subswitch. Same default and install rule as
     /// [`Self::enabled`].
@@ -399,6 +403,7 @@ impl JitState {
     pub fn with_null_backend() -> JitState {
         JitState {
             enabled: false,
+            gate: false,
             trace_enabled: false,
             enabled_chosen: false,
             trace_enabled_chosen: false,
