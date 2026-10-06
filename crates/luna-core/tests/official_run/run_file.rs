@@ -6,6 +6,7 @@ use super::byte_diff::{
     run_official_on_puc,
 };
 use super::*;
+use luna_core::vm::LuaError;
 
 /// Lua snippet prepended to every PUC chunk. **MUST be newline-free** so
 /// reported source-line numbers (used by `error("…", level)` and the
@@ -77,7 +78,7 @@ pub(super) fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     // `BYTE_DIFF_ALLOWLIST` for the reason per file.
     let byte_diff_enabled = std::env::var_os("LUNA_OFFICIAL_BYTE_DIFF").is_some()
         && !byte_diff_should_skip(version, name);
-    let src = heavy_driver(wrap_source(body, skip_wrapper, byte_diff_enabled), name);
+    let src = wrap_source(body, skip_wrapper, byte_diff_enabled);
     let label = name.to_string();
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
@@ -165,25 +166,26 @@ fn read_chunk(name: &str, version: LuaVersion) -> Result<Vec<u8>, String> {
 /// capture around the body.
 const STRESS_CAP: usize = 1 << 30;
 
-fn rearm_cap(vm: &mut Vm, _slot: u32, _nargs: u32) -> Result<u32, luna_core::vm::LuaError> {
+/// heavy.lua's `pcall` for the runner: `pcall` that re-arms the stress
+/// cap once the call is over. heavy.lua catches the memory failure its
+/// stress loops run into and goes on; under PUC the allocator serves the
+/// next request, under luna the cap that stands in for it stays exceeded
+/// until the host re-arms it (see `configure_vm`), and no Lua instruction
+/// may run in between, so the re-arm happens in the native itself.
+fn pcall_rearms(vm: &mut Vm, func_slot: u32, nargs: u32) -> Result<u32, LuaError> {
+    let f = vm.nat_arg(func_slot, nargs, 0);
+    let args: Vec<Value> = (1..nargs)
+        .map(|i| vm.nat_arg(func_slot, nargs, i))
+        .collect();
+    let r = vm.call_value(f, &args);
     vm.set_memory_cap(Some(STRESS_CAP));
-    Ok(0)
-}
-
-/// heavy.lua catches the memory failure its stress loops run into with
-/// `pcall` and goes on; under PUC the allocator serves the next request,
-/// under luna the memory cap that stands in for it stays exceeded until
-/// the host re-arms it (see `configure_vm`), so its `pcall` re-arms the
-/// cap on return.
-fn heavy_driver(src: Vec<u8>, name: &str) -> Vec<u8> {
-    if name != "heavy.lua" {
-        return src;
+    match r {
+        Ok(mut vals) => {
+            vals.insert(0, Value::Bool(true));
+            Ok(vm.nat_return(func_slot, &vals))
+        }
+        Err(e) => Ok(vm.nat_return(func_slot, &[Value::Bool(false), e.0])),
     }
-    const PCALL_REARMS: &[u8] = b"do local pcall0 = pcall pcall = function (...) local r = table.pack(pcall0(...)) __luna_rearm_cap() return table.unpack(r, 1, r.n) end end ";
-    let mut s = Vec::with_capacity(PCALL_REARMS.len() + src.len());
-    s.extend_from_slice(PCALL_REARMS);
-    s.extend_from_slice(&src);
-    s
 }
 
 fn wrap_source(body: Vec<u8>, skip_wrapper: bool, byte_diff_enabled: bool) -> Vec<u8> {
@@ -245,8 +247,8 @@ fn configure_vm(vm: &mut Vm, label: &str) {
     // memory limit on the allocation context cannot stand in yet: a
     // refused table slab still aborts). Once exceeded the cap stays
     // exceeded until the host re-arms it, where PUC's allocator just
-    // works again after the failed request, so heavy.lua's `pcall` is
-    // wrapped to re-arm the cap when it returns (`heavy_driver`). For
+    // works again after the failed request, so heavy.lua gets a `pcall`
+    // that re-arms the cap when the call is over (`pcall_rearms`). For
     // verybig/memerr/sort the cap is pure headroom — none of them push
     // net live bytes anywhere near 1 GiB (verybig has `_soft=true` set
     // below, memerr early-returns when `T` is nil, sort's working set
@@ -260,8 +262,8 @@ fn configure_vm(vm: &mut Vm, label: &str) {
         vm.set_memory_cap(Some(STRESS_CAP));
     }
     if label == "heavy.lua" {
-        let n = vm.heap.new_native(rearm_cap, Box::new([]));
-        vm.set_global("__luna_rearm_cap", Value::Native(n)).unwrap();
+        let n = vm.heap.new_native(pcall_rearms, Box::new([]));
+        vm.set_global("pcall", Value::Native(n)).unwrap();
     }
     vm.set_global("_U", Value::Bool(true)).unwrap();
     // attrib.lua's lines 79-356 exercise dynamic C-library loading
