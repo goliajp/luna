@@ -22,23 +22,27 @@ impl Vm {
                 return Err(self.rt_err("string length overflow"));
             }
         }
-        match (concat_piece(l, legacy), concat_piece(r, legacy)) {
-            (Some(a), Some(b)) => {
-                // PUC `MAX_SIZE` for Lua strings is `INT_MAX`; an attempt to
-                // concat past it raises "string length overflow"
-                // (5.5 heavy.lua `teststring` doubles `a..a..…` until it hits
-                // exactly this wall).
-                let new_len = a.len().checked_add(b.len());
-                if new_len.is_none() || new_len.unwrap() > max_str {
-                    return Err(self.rt_err("string length overflow"));
-                }
-                let mut combined = a;
-                combined.extend_from_slice(&b);
-                let s = self.retry_oom(|vm| vm.heap.try_intern(&combined))?;
-                Ok(Some(Value::Str(s)))
-            }
-            _ => Ok(None),
+        // a number operand is rendered on the stack; a string is used where
+        // it is (both operands sit in registers, roots for the emergency
+        // collection)
+        let mut na = numeric::NumText::default();
+        let mut nb = numeric::NumText::default();
+        let (Some(a), Some(b)) = (
+            concat_piece_into(l, legacy, &mut na),
+            concat_piece_into(r, legacy, &mut nb),
+        ) else {
+            return Ok(None);
+        };
+        // PUC `MAX_SIZE` for Lua strings is `INT_MAX`; an attempt to
+        // concat past it raises "string length overflow"
+        // (5.5 heavy.lua `teststring` doubles `a..a..…` until it hits
+        // exactly this wall).
+        let new_len = a.len().checked_add(b.len());
+        if new_len.is_none() || new_len.unwrap() > max_str {
+            return Err(self.rt_err("string length overflow"));
         }
+        let s = self.retry_oom(|vm| vm.heap.try_intern_pair(a, b))?;
+        Ok(Some(Value::Str(s)))
     }
 
     /// Fold the concat operands occupying `[base_a .. self.top)` right-to-left
