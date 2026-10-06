@@ -1,6 +1,6 @@
 //! The control-flow half of the 5.4/5.5 encoder (see [`super::modern`]).
 
-use super::asm::{Dist, L, Res, array_hint, setlist_offset};
+use super::asm::{Dist, L, Res, setlist_offset};
 use super::modern::{Caps, M};
 use crate::vm::dump::puc::modern::Kind;
 use crate::vm::isa::Op;
@@ -144,11 +144,18 @@ impl M<'_, '_> {
 
     pub(super) fn new_table(&mut self, l: L) -> Res<()> {
         let a = self.asm.r(l.a)?;
-        let narr = array_hint(self.asm.p, self.asm.pc(), l.a, l.b);
-        let hash = if l.c == 0 {
-            0
+        // a NewTable of a 5.1–5.3 chunk holds its sizes the classic way
+        let (narr, hash) = if l.k {
+            let (asize, hsize) = crate::runtime::table::new_table_sizes(l.b, l.c, true)
+                .ok_or_else(|| self.asm.err("NewTable sizes past a table's limit"))?;
+            let code = if hsize == 0 {
+                0
+            } else {
+                hsize.next_power_of_two().trailing_zeros() + 1
+            };
+            (asize.min(0xFF) as u32, code)
         } else {
-            32 - (l.c - 1).leading_zeros() + 1
+            (l.c, l.b)
         };
         let size = if self.f.v55 { 1024 } else { 256 };
         let (rc, extra) = (narr % size, narr / size);

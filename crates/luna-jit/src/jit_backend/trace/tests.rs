@@ -1,5 +1,6 @@
 use super::*;
 
+mod div_magic;
 mod drop_unused_block_params_tests;
 mod lir_primitives;
 mod reloc_patch;

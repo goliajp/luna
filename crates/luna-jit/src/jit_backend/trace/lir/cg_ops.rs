@@ -32,7 +32,7 @@ fn alu_of(op: BinOp) -> Alu {
         BinOp::Ushr => Alu::Lshr,
         BinOp::Sshr => Alu::Ashr,
         BinOp::Sdiv => Alu::Sdiv,
-        BinOp::Udiv => Alu::Udiv,
+        BinOp::Umulhi => Alu::Umulhi,
         BinOp::Smin | BinOp::Smax | BinOp::Fadd | BinOp::Fsub | BinOp::Fmul | BinOp::Fdiv => {
             unreachable!("not a single ALU instruction")
         }

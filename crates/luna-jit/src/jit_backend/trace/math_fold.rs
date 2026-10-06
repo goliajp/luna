@@ -41,6 +41,8 @@ pub(super) enum FoldKind {
     /// `string.sub(s, i [, j])`, a split window like `Min2`, run as a
     /// direct helper call
     StrSub,
+    /// two-argument `math.fmod`, a split window like `Min2`
+    Fmod2,
 }
 
 impl FoldKind {
@@ -270,17 +272,13 @@ pub(super) fn try_match_trace_math_fold(
     // `head_proto` at depth 0. We do NOT constrain the shape of
     // the arg-prep ops — they execute normally and leave the call
     // args at `R[a+1]` / `R[a+2]` by the standard Lua Call ABI.
-    let kind = match fname_bytes {
-        b"min" => FoldKind::Min2,
-        b"max" => FoldKind::Max2,
+    let (kind, diag_name) = match fname_bytes {
+        b"min" => (FoldKind::Min2, "min"),
+        b"max" => (FoldKind::Max2, "max"),
+        b"fmod" => (FoldKind::Fmod2, "fmod"),
         _ => return None,
     };
     let (call_idx, _) = split_window(record, i, head_proto, a, &[3])?;
-    let diag_name = if matches!(kind, FoldKind::Min2) {
-        "min"
-    } else {
-        "max"
-    };
     Some(TraceMathFold {
         start_idx: i,
         fn_name: diag_name,

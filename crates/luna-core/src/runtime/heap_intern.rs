@@ -12,11 +12,22 @@ impl Heap {
         })
     }
 
+    /// Recolour the dead-white `h` to the current white, out of line: the
+    /// hot path of [`Self::try_intern`] only tests the colour, and inlined,
+    /// this cold store made it keep `self` on the stack.
+    #[cold]
+    #[inline(never)]
+    fn resurrect(&self, h: &mut GcHeader) {
+        h.flags = h.with_slow((h.flags & !WHITE_BITS) | self.current_white);
+    }
+
     /// [`Heap::intern`], failing when memory runs out.
     #[inline]
     pub fn try_intern(&mut self, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
         if bytes.len() <= string::MAX_SHORT_LEN {
-            let (p, is_new) = self.strings.intern(self.mem.mem(), bytes, self.seed)?;
+            let (p, is_new) = self
+                .strings
+                .intern(self.mem.mem(), bytes, self.seed, self.hash51)?;
             if is_new {
                 // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
                 unsafe { self.link(p as *mut GcHeader) };
@@ -39,15 +50,14 @@ impl Heap {
                 unsafe {
                     let f = (*(p as *mut GcHeader)).flags;
                     if is_white(f) && (f & self.current_white) == 0 {
-                        (*(p as *mut GcHeader)).flags = (*(p as *mut GcHeader))
-                            .with_slow((f & !WHITE_BITS) | self.current_white);
+                        self.resurrect(&mut *(p as *mut GcHeader));
                     }
                 }
             }
             // SAFETY: `p` is an interned string the heap manages: new and linked above, or found in the table and kept from this cycle's sweep by the recoloring above
             Ok(unsafe { Gc::from_ptr(p) })
         } else {
-            let p = string::alloc_long(self.mem.mem(), bytes, self.seed)?;
+            let p = string::alloc_long(self.mem.mem(), bytes, self.seed, self.hash51)?;
             // SAFETY: `alloc_long` just allocated `p`, linked nowhere yet
             unsafe { self.link(p as *mut GcHeader) };
             self.bytes += string::alloc_size(bytes.len());
@@ -66,7 +76,7 @@ impl Heap {
             buf[a.len()..n].copy_from_slice(b);
             return self.try_intern(&buf[..n]);
         }
-        let p = string::alloc_long_pair(self.mem.mem(), a, b, self.seed)?;
+        let p = string::alloc_long_pair(self.mem.mem(), a, b, self.seed, self.hash51)?;
         // SAFETY: `alloc_long_pair` just allocated `p`, linked nowhere yet
         unsafe { self.link(p as *mut GcHeader) };
         self.bytes += string::alloc_size(n);
@@ -80,7 +90,7 @@ impl Heap {
         if bytes.len() > string::MAX_SHORT_LEN {
             return None;
         }
-        let p = self.strings.find(bytes, self.seed)?;
+        let p = self.strings.find(bytes, self.seed, self.hash51)?;
         // SAFETY: `p` is a string in the intern table, so allocated; a
         // dead-white one found mid-sweep is kept from this cycle's sweep by
         // the recoloring `try_intern` does

@@ -155,7 +155,10 @@ pub(super) fn f_read(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     target_os = "dragonfly"
 ))]
 const BUFSIZ: usize = 1024;
+#[cfg(windows)]
+const BUFSIZ: usize = 512;
 #[cfg(not(any(
+    windows,
     target_os = "macos",
     target_os = "ios",
     target_os = "freebsd",
@@ -238,6 +241,10 @@ fn read_str(vm: &mut Vm, bytes: &[u8]) -> Rd {
 
 /// `read_all`: never fails (an empty string at end of file).
 fn read_all(vm: &mut Vm, u: Gc<Userdata>) -> Rd {
+    if u.text.is_some() {
+        let buf = read_all_text(vm.version(), u)?;
+        return read_str(vm, &buf);
+    }
     let mut buf = LVec::new(vm.heap.mem());
     loop {
         buf.extend_from_slice(&u.read_buf[u.read_pos..])?;
@@ -248,6 +255,53 @@ fn read_all(vm: &mut Vm, u: Gc<Userdata>) -> Rd {
         }
     }
     read_str(vm, &buf)
+}
+
+/// `LUAL_BUFFERSIZE` of PUC built for 64-bit Windows.
+fn lual_buffersize(v: LuaVersion) -> usize {
+    match v {
+        LuaVersion::Lua51 | LuaVersion::Lua52 => 512,
+        LuaVersion::Lua53 => 8192,
+        _ => 1024,
+    }
+}
+
+/// Each dialect's `read_all` over a text mode stream, whose `fread` calls
+/// decide what stays in the stream buffer (and so what `seek` reports).
+fn read_all_text(v: LuaVersion, u: Gc<Userdata>) -> std::io::Result<Vec<u8>> {
+    if v == LuaVersion::Lua51 {
+        return read_chars_51(u, usize::MAX);
+    }
+    let mut rlen = lual_buffersize(v);
+    let mut out = Vec::new();
+    loop {
+        let got = text_mode::fread(u, rlen)?;
+        let short = got.len() < rlen;
+        out.extend_from_slice(&got);
+        if short {
+            return Ok(out);
+        }
+        // 5.2 doubles its buffer on every round
+        if v == LuaVersion::Lua52 {
+            rlen *= 2;
+        }
+    }
+}
+
+/// 5.1's `read_chars`: `fread` in `LUAL_BUFFERSIZE` chunks.
+fn read_chars_51(u: Gc<Userdata>, mut n: usize) -> std::io::Result<Vec<u8>> {
+    let mut rlen = lual_buffersize(LuaVersion::Lua51);
+    let mut out = Vec::new();
+    loop {
+        rlen = rlen.min(n);
+        let got = text_mode::fread(u, rlen)?;
+        n -= got.len();
+        let full = got.len() == rlen;
+        out.extend_from_slice(&got);
+        if n == 0 || !full {
+            return Ok(out);
+        }
+    }
 }
 
 /// Sizes no allocator grants; PUC's buffer for them fails before reading.
@@ -273,6 +327,17 @@ fn read_count(vm: &mut Vm, u: Gc<Userdata>, n: i64) -> Rd {
             }
             _ => vm.mem_err(),
         }));
+    }
+    if u.text.is_some() {
+        let got = if vm.version() == LuaVersion::Lua51 {
+            read_chars_51(u, size.min(usize::MAX as u64) as usize)
+        } else {
+            text_mode::fread(u, size as usize)
+        }?;
+        if got.is_empty() {
+            return Ok(Value::Nil);
+        }
+        return read_str(vm, &got);
     }
     let mut buf = LVec::new(vm.heap.mem());
     while (buf.len() as u64) < size {

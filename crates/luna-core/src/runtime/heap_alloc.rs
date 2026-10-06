@@ -107,7 +107,11 @@ impl Heap {
         // SAFETY: `p` is the table linked just above, which the heap now manages; no other handle or reference to it exists yet
         unsafe {
             let g = Gc::from_ptr(p);
-            g.as_mut().init_array_ptr();
+            let t = g.as_mut();
+            t.init_array_ptr();
+            t.hdr.sub = self.table_dialect as u8;
+            t.alimit.set(0);
+            t.lenhint.set(0);
             Ok(g)
         }
     }
@@ -146,6 +150,34 @@ impl Heap {
             unsafe { g.as_mut() }.resize(self, clamped, 0)?;
         }
         Ok(g)
+    }
+
+    /// A table sized by `NewTable`'s operands, as the interpreter makes
+    /// it (see `table::new_table_sizes`); `None` for sizes past a table's
+    /// limit. Public for the JIT crates.
+    #[doc(hidden)]
+    pub fn new_table_presized(&mut self, b: u32, c: u32, k: bool) -> Option<Gc<Table>> {
+        self.try_new_table_presized(b, c, k)
+            .unwrap_or_else(|_| oom_abort(Layout::new::<Table>()))
+    }
+
+    /// [`Heap::new_table_presized`], failing when memory runs out.
+    #[doc(hidden)]
+    pub fn try_new_table_presized(
+        &mut self,
+        b: u32,
+        c: u32,
+        k: bool,
+    ) -> Result<Option<Gc<Table>>, crate::runtime::table::TableError> {
+        let Some((asize, hsize)) = crate::runtime::table::new_table_sizes(b, c, k) else {
+            return Ok(None);
+        };
+        let g = self.try_new_table()?;
+        if asize != 0 || hsize != 0 {
+            // SAFETY: the table was made just above; this is its only handle
+            unsafe { g.as_mut() }.resize(self, asize, hsize)?;
+        }
+        Ok(Some(g))
     }
 
     /// Adopt a compiler-built prototype (its `hdr` must carry ObjTag::Proto).

@@ -95,6 +95,7 @@ impl CompiledTrace {
             tags_side_trace_ptrs,
             global_side_trace_ptr: Box::new(TCellPtr::null()),
             side_trace_cache: TRefLock::new(std::collections::HashMap::new()),
+            side_children: TRefLock::new(std::collections::HashMap::new()),
             has_any_side_wired: TCellBool::new(false),
             is_inline_abort_close: false,
             dispatch_off_reason: None,
@@ -103,6 +104,7 @@ impl CompiledTrace {
             sunk_alloc_seen: 0,
             materialize_emit_count: 0,
             closure_seen: 0,
+            inline_kinds: 0,
             body_writes: Box::new([]),
             // AOT-install path never triggers a
             // down-recursion stitch (no recorder fires on the

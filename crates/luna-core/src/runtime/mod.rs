@@ -40,5 +40,6 @@ pub use heap::ObjTag;
 pub use heap::{Gc, GcObject, Heap};
 pub use string::LuaStr;
 pub use table::{Table, TableError};
+pub(crate) use userdata::TextState;
 pub use userdata::{FileHandle, Userdata, UserdataPayload};
 pub use value::Value;

@@ -171,7 +171,13 @@ fn install_llvm_jit(vm: &mut vm::Vm) {
 /// once hot, by LLVM. Only with `--features llvm-jit`.
 #[cfg(feature = "llvm-jit")]
 pub fn install_llvm_backend(vm: &mut vm::Vm) {
-    vm.install_jit_backend(jit_backend::LlvmBackend, jit_backend::LlvmBackend);
+    install_llvm_backend_with(vm, jit_backend::LlvmBackend::default());
+}
+
+/// [`install_llvm_backend`] with `backend`'s settings.
+#[cfg(feature = "llvm-jit")]
+pub fn install_llvm_backend_with(vm: &mut vm::Vm, backend: jit_backend::LlvmBackend) {
+    vm.install_jit_backend(backend, backend);
     vm.install_jit_storage(jit_backend::storage::CraneliftJitStorage::with_llvm());
 }
 

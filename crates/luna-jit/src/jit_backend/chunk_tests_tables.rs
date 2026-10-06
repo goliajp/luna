@@ -259,10 +259,9 @@ mod s5c_b {
                 LuaVersion::Lua55,
                 "local t = {} for i = 1, 10, 2 do t[i] = i end return #t",
             ),
-            // Indices 1, 3, 5, 7, 9 → t[1..9] filled at odd slots
-            // only. `#t` returns the largest border, which here is
-            // 1 (t[2] is nil so border is 1).
-            1,
+            // Indices 1, 3, 5, 7, 9: every odd slot is a border; PUC
+            // 5.5.1 returns 3 for this history
+            3,
         );
     }
 

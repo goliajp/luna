@@ -48,7 +48,7 @@ static void dump(lua_State *L, const char *title, const char *src, int strip, in
 
 static const char *chunk =
   "local a, b = ...\n"
-  "local t = {a, b, 'k', 1.5, true}\n"
+  "local t = {a, b, 'k', 1.5, 2^53, true}\n"
   "local function f(x) return x + #t end\n"
   "return f(a) .. b\n";
 

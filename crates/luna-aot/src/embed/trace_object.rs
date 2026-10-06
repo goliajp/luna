@@ -82,6 +82,7 @@ pub(super) fn lower_and_encode_meta(
             aot: true,
             tier: Default::default(),
             tier_up_at: 0,
+            dialect: Some(version),
         };
         // Re-lower this record into the ObjectModule under a unique
         // exported name. Any bail here = the record was lowerable at

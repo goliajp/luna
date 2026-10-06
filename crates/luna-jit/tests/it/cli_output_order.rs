@@ -13,7 +13,7 @@
 //! glibc takes from the descriptor; they and the terminal runs are checked
 //! on Linux only.
 
-use crate::cli_common::{DIALECTS, luna, workdir};
+use crate::cli_common::{DIALECTS, as_on_this_platform, luna, workdir};
 use std::process::{Command, Stdio};
 
 const EXPECTED: &str = include_str!("cli_output_order/expected.txt");
@@ -38,7 +38,17 @@ fn expected(dialect: &str, name: &str) -> String {
     let head = format!("=== {dialect} {name}\n");
     let start = all.find(&head).unwrap_or_else(|| panic!("no {head}")) + head.len();
     let len = all[start..].find("\n=== end\n").expect("section end");
-    all[start..start + len].to_string()
+    let section = &all[start..start + len];
+    // the program's output, then the `status N` line the test adds
+    let cut = section
+        .trim_end_matches('\n')
+        .rfind('\n')
+        .map_or(0, |i| i + 1);
+    format!(
+        "{}{}",
+        as_on_this_platform(&section[..cut]),
+        &section[cut..]
+    )
 }
 
 /// Runs of 20 or more equal bytes as `<c*N>`, the program's path as `lua`.

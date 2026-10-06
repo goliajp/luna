@@ -215,10 +215,10 @@ pub(super) fn translate(
                 let a = lw.r(i.a)?;
                 lw.set_table_rk(a, i.b, i.c)?;
             }
-            // luna's NewTable ignores its size hints.
+            // the two floating point byte sizes, as luna's NewTable holds them
             Kind::NewTable => {
                 let a = lw.r(i.a)?;
-                lw.emit(enc_abc(Op::NewTable, a, 0, 0, false)?);
+                lw.emit(enc_abc(Op::NewTable, a, i.b, i.c, true)?);
             }
             Kind::SelfOp => lw.self_rk(i.a, i.b, i.c)?,
             Kind::Arith(op) => {

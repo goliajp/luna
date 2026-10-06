@@ -64,7 +64,8 @@ pub(crate) enum Alu {
     Lshr,
     Ashr,
     Sdiv,
-    Udiv,
+    /// High half of the unsigned product (64-bit operands only).
+    Umulhi,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

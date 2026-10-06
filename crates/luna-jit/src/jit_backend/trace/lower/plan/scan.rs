@@ -75,6 +75,7 @@ pub(super) fn find_trace_end(
     record: &TraceRecord,
     folded_ops: &[bool],
     n: usize,
+    calls: &[Option<InlineCall>],
 ) -> Option<Option<(usize, TraceEnd)>> {
     // the terminator scan also accounts for
     // inline self-recursion. Self-recursive Op::Call (next op is at
@@ -107,7 +108,7 @@ pub(super) fn find_trace_end(
     // DownRec tail arm can fire. The scan mirrors TraceEnd::Return /
     // Call's picker shape and falls back to `record.ops.len()` only
     // when no natural terminator is present.
-    let plain_end = plain_trace_end(record, folded_ops);
+    let plain_end = plain_trace_end(record, folded_ops, calls);
     let end_idx_opt: Option<(usize, TraceEnd)> = if let Some(dr) = record.downrec_close {
         let mut natural_end = record.ops.len();
         for (i, r) in record.ops.iter().enumerate() {

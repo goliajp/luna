@@ -322,15 +322,35 @@ fn return_stat_caps_at_254_results() {
 
 #[test]
 fn length_border_on_sparse_power_of_two_keys() {
-    // a table whose keys are powers of two (1,2,4,...,2^62) all live in the
-    // hash part; the length operator must report a small border quickly, not
-    // the huge one (PUC unbound_search's linear fallback), else `for i=1,#t`
-    // would loop ~2^62 times.
-    check_int(
-        "local t = {} for i = 62, 0, -1 do t[2^i] = true end \
-         local n = #t return (n == 2 or n == 4) and n or -1",
-        2,
-    );
+    // keys 1, 2, 4, ..., 2^62, all in the hash part: 5.1-5.3's doubling
+    // search overflows and falls back to counting up from 1 (PUC
+    // `unbound_search`), so it finds the small border 2; 5.4 keeps
+    // doubling up to the largest integer and finds 2^62; 5.5 adds random
+    // bits while it doubles, so (as 5.5's nextvar.lua requires of this
+    // "attack on table length") it stops at a small border
+    let src = "local t = {} for i = 62, 0, -1 do t[2^i] = true end \
+               local n = #t return n, t[n] ~= nil and t[n + 1] == nil";
+    for (v, want) in [
+        (LuaVersion::Lua51, Some(2)),
+        (LuaVersion::Lua53, Some(2)),
+        (LuaVersion::Lua54, Some(1 << 62)),
+        (LuaVersion::Lua55, None),
+    ] {
+        let r = Vm::new(v).eval(src).expect("runs");
+        let n = match r.first() {
+            Some(&Value::Int(n)) => n,
+            Some(&Value::Float(f)) => f as i64,
+            other => panic!("{v:?}: {other:?}"),
+        };
+        assert!(
+            matches!(r.get(1), Some(Value::Bool(true))),
+            "{v:?}: {n} is not a border"
+        );
+        match want {
+            Some(w) => assert_eq!(n, w, "{v:?}"),
+            None => assert!(n < 1 << 32, "{v:?}: {n}"),
+        }
+    }
     // collectgarbage mode switches report the previous mode
     check_str(
         "collectgarbage('incremental') \

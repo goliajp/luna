@@ -218,6 +218,7 @@ fn forloop_continues_internal_loop_until_count_hits_zero() {
         aot: false,
         tier: Default::default(),
         tier_up_at: 0,
+        dialect: None,
     };
     let ct = try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, opts).expect("compile");
 
@@ -302,6 +303,7 @@ fn forloop_pre53_compiles_the_limit_form() {
         aot: false,
         tier: Default::default(),
         tier_up_at: 0,
+        dialect: None,
     };
     assert!(try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, opts).is_some());
 }

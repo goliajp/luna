@@ -38,8 +38,7 @@ pub(super) unsafe fn table_set_existing_at(
             }
             tag::INT => {
                 let i = raw_int(pk);
-                if i >= 1 && i as u64 <= tb.asize {
-                    let idx = i as usize - 1;
+                if let Some(idx) = tb.array_index(i) {
                     if *tb.atags().get_unchecked(idx) == crate::runtime::value::raw::NIL {
                         return false;
                     }
@@ -69,12 +68,11 @@ pub(super) unsafe fn table_raw_set_at(
 ) -> bool {
     // SAFETY: the caller's contract; the payload is read after the tag
     unsafe {
-        if raw_tag(pk) == tag::INT {
-            let i = raw_int(pk);
-            if i >= 1 && i as u64 <= tb.asize {
-                tb.aset_at(i as usize - 1, pv);
-                return true;
-            }
+        if raw_tag(pk) == tag::INT
+            && let Some(idx) = tb.array_index(raw_int(pk))
+        {
+            tb.aset_at(idx, pv);
+            return true;
         }
         table_raw_set_cold(tb, heap, *pk, *pv)
     }

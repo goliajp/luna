@@ -9,6 +9,7 @@ pub(super) fn emit_sequence_op<E: Emit>(
     let Plan { record, .. } = *pl;
     let OpHelpers {
         set_ids,
+        reserve_list_id,
         spill_id,
         stack_load_id,
         op_concat_id,
@@ -81,6 +82,11 @@ pub(super) fn emit_sequence_op<E: Emit>(
                 _ => return None,
             }
             let t = lw.bcx.use_var(regs[a]);
+            // the array part first grows to the last index, as the
+            // interpreter's SetList does; the stores then land in it
+            let last = lw.bcx.ins().iconst(types::I64, c_off + effective_b as i64);
+            let reserve = lw.bcx.import_func(reserve_list_id);
+            lw.bcx.ins().call(reserve, &[t, last]);
             for ii in 1..=effective_b {
                 let key = lw.bcx.ins().iconst(types::I64, c_off + ii as i64);
                 let src_kind = k_op(&lw.current_kinds, (off + a + ii) as u32);
@@ -115,7 +121,8 @@ pub(super) fn emit_sequence_op<E: Emit>(
             let miss = lw.bcx.create_block();
             let merge = lw.bcx.create_block();
             lw.bcx.append_block_param(merge, types::I64);
-            array_slot::emit_len_check(&mut lw.bcx, t, hit, miss);
+            let rules = array_slot::TableRules::of(pl.opts.dialect);
+            array_slot::emit_len_check(&mut lw.bcx, rules, t, hit, miss);
             lw.bcx.switch_to_block(hit);
             lw.bcx.seal_block(hit);
             let fast = lw.bcx.block_params(hit)[0];

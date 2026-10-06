@@ -1,6 +1,8 @@
 use super::*;
 
 mod arith;
+mod arith_divmod;
+mod arith_double;
 mod array;
 mod basic;
 mod call;
@@ -13,6 +15,8 @@ mod sequence;
 mod table;
 mod tfor;
 use arith::*;
+use arith_divmod::*;
+use arith_double::*;
 use array::*;
 use basic::*;
 use call::*;
@@ -84,7 +88,7 @@ pub(super) fn emit_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) 
         Op::GetTabUp => emit_get_tab_up_op(lw, pl, oc),
         Op::SetList | Op::Len | Op::Concat => emit_sequence_op(lw, pl, oc),
         Op::Closure | Op::Close | Op::GetUpval => emit_closure_op(lw, pl, oc),
-        Op::Call | Op::Return0 | Op::Return1 => emit_call_op(lw, pl, oc),
+        Op::Call | Op::Return0 | Op::Return1 | Op::Return | Op::Vararg => emit_call_op(lw, pl, oc),
         Op::TForCall => emit_tfor_call_op(lw, pl, oc),
         // generic-for prep is the leading pc-bump
         // before body_top. Recorder enters at body_top, so this

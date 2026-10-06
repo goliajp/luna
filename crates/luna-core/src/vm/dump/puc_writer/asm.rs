@@ -343,20 +343,6 @@ pub(super) fn setlist_offset(asm: &Asm, l: L) -> Res<u64> {
     }
 }
 
-/// The array-size hint PUC's parser gives a constructor: luna counts an
-/// open last item (a call or `...` stored by a `SetList` with `B = 0`),
-/// PUC does not.
-pub(super) fn array_hint(p: &Proto, pc: usize, reg: u32, narr: u32) -> u32 {
-    for i in &p.code[pc + 1..] {
-        match i.op() {
-            Op::NewTable if i.a() == reg => break,
-            Op::SetList if i.a() == reg && i.b() == 0 => return narr.saturating_sub(1),
-            _ => {}
-        }
-    }
-    narr
-}
-
 /// Loop windows of `p`: each generic `for` (and, with `numeric`, each
 /// numeric one) from its prep to its loop op, with loop variables that sit
 /// one register lower in PUC than in luna from luna register `A + pivot`.

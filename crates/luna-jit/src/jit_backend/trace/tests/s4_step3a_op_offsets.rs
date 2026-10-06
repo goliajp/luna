@@ -61,7 +61,9 @@ fn single_call_bumps_then_drops_offset() {
         p,
         vec![
             (Inst::iabc(Op::Move, 0, 0, 0, false), 0),
-            (Inst::iabc(Op::Call, 3, 2, 2, false), 0), // A=3
+            // no argument: the callee (this vararg chunk) has no extra
+            // arguments below its registers
+            (Inst::iabc(Op::Call, 3, 1, 2, false), 0), // A=3
             (Inst::iabc(Op::LoadI, 0, 0, 128, false), 1), // callee R[0]
             (Inst::iabc(Op::Return1, 0, 0, 0, false), 1),
             (Inst::iabc(Op::Move, 4, 3, 0, false), 0), // back to depth 0

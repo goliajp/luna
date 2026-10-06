@@ -70,7 +70,16 @@ impl<'c> Gen<'c, '_> {
             // the lowerer only divides by a divisor it has checked (or by a
             // constant other than 0 and -1)
             BinOp::Sdiv => b(bb.build_int_signed_div(x, y, ""))?,
-            BinOp::Udiv => b(bb.build_int_unsigned_div(x, y, ""))?,
+            BinOp::Umulhi => {
+                let t = x.get_type();
+                let wide = self.ctx.i128_type();
+                let xw = b(bb.build_int_z_extend(x, wide, ""))?;
+                let yw = b(bb.build_int_z_extend(y, wide, ""))?;
+                let p = b(bb.build_int_mul(xw, yw, ""))?;
+                let sh = wide.const_int(u64::from(t.get_bit_width()), false);
+                let hi = b(bb.build_right_shift(p, sh, false, ""))?;
+                b(bb.build_int_truncate(hi, t, ""))?
+            }
             BinOp::Smin | BinOp::Smax => {
                 let name = if op == BinOp::Smin {
                     "llvm.smin"

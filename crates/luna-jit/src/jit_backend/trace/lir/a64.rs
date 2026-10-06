@@ -236,7 +236,7 @@ impl Masm for A64 {
             Alu::Xor => 0x4A00_0000,
             Alu::Mul => 0x1B00_0000 | (XZR << 10),
             Alu::Sdiv => 0x1AC0_0C00,
-            Alu::Udiv => 0x1AC0_0800,
+            Alu::Umulhi => 0x9BC0_7C00,
             Alu::Shl => 0x1AC0_2000,
             Alu::Lshr => 0x1AC0_2400,
             Alu::Ashr => 0x1AC0_2800,
@@ -289,7 +289,7 @@ impl Masm for A64 {
                 self.put(sf | opc | n | (immr << 16) | (imms << 10) | (a << 5) | d);
                 true
             }
-            Alu::Mul | Alu::Sdiv | Alu::Udiv => false,
+            Alu::Mul | Alu::Sdiv | Alu::Umulhi => false,
         }
     }
     fn neg(&mut self, wide: bool, d: u8, a: u8) {

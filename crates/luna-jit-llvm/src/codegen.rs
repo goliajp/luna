@@ -45,11 +45,9 @@ use crate::storage::{CachedEntry, EnginePair, LlvmJitStorage};
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::values::FunctionValue;
 use luna_core::jit::{CompileResult, JitStorage};
 use luna_core::runtime::{Gc, Value, function::Proto};
 use luna_core::vm::isa::{Inst, Op};
-use std::collections::HashMap;
 use std::hash::Hasher;
 
 mod compute;
@@ -234,24 +232,26 @@ fn compile_constant_zero_chunk() -> Option<(*const u8, EnginePair)> {
     let zero = i64_type.const_int(0, false);
     builder.build_return(Some(&zero)).ok()?;
 
-    finalize_module(ctx_box, module, None)
+    finalize_module(ctx_box, module, false)
 }
 
-/// Shared module-finalisation tail. JIT-compiles `module` under the
+/// Shared module-finalisation tail. Optimizes `module` (see
+/// [`crate::function::optimize`]), JIT-compiles it under the
 /// (heap-pinned) `ctx_box`, resolves the entry symbol, and bundles
 /// both into an [`EnginePair`] for storage.
 ///
-/// `helpers` is `Some(map)` for paths that may invoke `luna_jit_*`
-/// helpers (the compute path) — every entry gets bound to its real
-/// Rust function address via `add_global_mapping`. The dead-locals
-/// path passes `None` because its IR makes no
-/// helper calls and skipping the map keeps that fast-path tight.
+/// `helpers` is `true` for paths that may invoke `luna_jit_*` helpers
+/// (the compute path): every one the module still declares gets bound to
+/// its Rust function address via `add_global_mapping`. The dead-locals
+/// path makes no helper calls.
 pub(crate) fn finalize_module<'ctx>(
     ctx_box: Box<Context>,
     module: Module<'ctx>,
-    helpers: Option<&HashMap<&'static str, FunctionValue<'ctx>>>,
+    helpers: bool,
 ) -> Option<(*const u8, EnginePair)> {
-    finalize_bound(ctx_box, module, OptimizationLevel::None, helpers)
+    crate::function::optimize(&ctx_box, &module).ok()?;
+    crate::function::dump(&module);
+    finalize_bound(ctx_box, module, OptimizationLevel::Default, helpers)
 }
 
 /// [`finalize_module`] for a module that calls helpers by address, with
@@ -261,18 +261,18 @@ pub(crate) fn finalize_with(
     module: Module<'_>,
     level: OptimizationLevel,
 ) -> Option<(*const u8, EnginePair)> {
-    finalize_bound(ctx_box, module, level, None)
+    finalize_bound(ctx_box, module, level, false)
 }
 
 fn finalize_bound<'ctx>(
     ctx_box: Box<Context>,
     module: Module<'ctx>,
     level: OptimizationLevel,
-    helpers: Option<&HashMap<&'static str, FunctionValue<'ctx>>>,
+    helpers: bool,
 ) -> Option<(*const u8, EnginePair)> {
     let engine = module.create_jit_execution_engine(level).ok()?;
-    if let Some(map) = helpers {
-        bind_helper_symbols(&engine, map);
+    if helpers {
+        bind_helper_symbols(&engine, &module);
     }
     let entry_ptr = engine.get_function_address("luna_jit_llvm_entry").ok()? as *const u8;
     // SAFETY: only the lifetime changes. `'ctx` is the lifetime of the

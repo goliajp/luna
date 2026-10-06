@@ -44,14 +44,8 @@ pub(super) fn emit_get_i<M: Module>(
             };
             let key_imm = ins.c() as i64;
 
-            let asize = bcx.ins().load(
-                types::I64,
-                MemFlagsData::trusted(),
-                t,
-                TABLE_ASIZE_OFFSET as i32,
-            );
             let key_minus_1 = bcx.ins().iconst(types::I64, key_imm - 1);
-            let in_range = bcx.ins().icmp(IntCC::UnsignedLessThan, key_minus_1, asize);
+            let in_range = emit_array_in_range(bcx, t, key_minus_1);
             let metatable = bcx.ins().load(
                 types::I64,
                 MemFlagsData::trusted(),
@@ -144,15 +138,9 @@ pub(super) fn emit_get_table<M: Module>(
                 (key_raw, always)
             };
 
-            let asize = bcx.ins().load(
-                types::I64,
-                MemFlagsData::trusted(),
-                t,
-                TABLE_ASIZE_OFFSET as i32,
-            );
             let one = bcx.ins().iconst(types::I64, 1);
             let key_minus_1 = bcx.ins().isub(key_i64, one);
-            let in_range = bcx.ins().icmp(IntCC::UnsignedLessThan, key_minus_1, asize);
+            let in_range = emit_array_in_range(bcx, t, key_minus_1);
             let metatable = bcx.ins().load(
                 types::I64,
                 MemFlagsData::trusted(),

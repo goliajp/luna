@@ -64,6 +64,30 @@ pub struct Userdata {
     /// Bytes the payload owns outside this object that the heap counts
     /// (the memory block of a C API userdata), given back when it is freed.
     pub(crate) extra_bytes: usize,
+    /// Set for a file in the MSVC C library's text mode (see
+    /// [`crate::vm::Vm::set_crt_text_mode`]).
+    pub(crate) text: Option<TextState>,
+}
+
+/// What the MSVC C library keeps for a stream in text mode, beyond the
+/// buffer: `read_buf` then holds translated bytes, as its `FILE` buffer does.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct TextState {
+    /// The handle's `FCRLF`: the last read from the OS began with a `\n`.
+    pub(crate) crlf: bool,
+    /// The handle's `FEOFLAG`: a Ctrl+Z was read; reads give end of file
+    /// until the next seek.
+    pub(crate) eof_flag: bool,
+    /// The stream's `_IOCTRLZ`: a refill met the Ctrl+Z.
+    pub(crate) ctrl_z: bool,
+    /// The stream has its buffer (`_base`), which the first refill sets up.
+    pub(crate) has_buffer: bool,
+    /// After a seek on a read-only stream the next refill asks for
+    /// `_SMALL_BUFSIZ` bytes instead of the full buffer.
+    pub(crate) small: bool,
+    /// A byte read past a `\r` at the end of a read from a pipe, which the
+    /// next read returns first (the handle's pipe lookahead).
+    pub(crate) lookahead: Option<u8>,
 }
 
 /// A userdata's host-side payload. Beyond io file handles luna exposes:
@@ -150,6 +174,7 @@ impl Userdata {
             buf_mode: 0,
             popen_child: None,
             extra_bytes: 0,
+            text: None,
         }
     }
 

@@ -48,9 +48,7 @@ unsafe fn table_get_into(tb: &Table, pk: *const Value, dst: *mut Value) -> bool 
                 }
             }
             tag::INT => {
-                let i = raw_int(pk);
-                if i >= 1 && i as u64 <= tb.asize {
-                    let idx = i as usize - 1;
+                if let Some(idx) = tb.array_index(raw_int(pk)) {
                     let t = *tb.atags().get_unchecked(idx);
                     if !plain && t == crate::runtime::value::raw::NIL {
                         return false;
