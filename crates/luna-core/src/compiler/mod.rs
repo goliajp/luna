@@ -92,6 +92,20 @@ fn compile_main(
     heap: &mut Heap,
     scratch: &mut CompileScratch,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
+    crate::cerrno::begin_folds();
+    let r = compile_main_body(ast, end_lines, version, source, heap, scratch);
+    crate::cerrno::end_folds();
+    r
+}
+
+fn compile_main_body(
+    ast: &Chunk,
+    end_lines: &[u32],
+    version: LuaVersion,
+    source: Gc<LuaStr>,
+    heap: &mut Heap,
+    scratch: &mut CompileScratch,
+) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
     let mem = heap.mem();
     let mut c = Compiler {
         ast,

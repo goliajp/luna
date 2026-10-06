@@ -42,6 +42,7 @@ mod jit_compare_operand_kinds;
 mod jit_core_semantics;
 mod jit_dialect_audit;
 mod jit_double_dialect_int_arith;
+mod jit_errno;
 mod jit_float_compare_nan;
 mod jit_off_switch;
 mod jit_storage_mismatch_no_abort;

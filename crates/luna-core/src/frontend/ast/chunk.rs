@@ -39,6 +39,9 @@ pub struct Chunk {
     pub field_lists: LVec<TableField>,
     /// Items of every `List<IfArm>`.
     pub arm_lists: LVec<IfArm>,
+    /// For each `^` and `%`, in the order they were made: the id of the
+    /// right operand and how many times `errno` had been set by then.
+    pub fold_marks: LVec<(u32, u64)>,
     /// the allocation context the vectors come from
     mem: MemOwner,
 }
@@ -66,6 +69,7 @@ impl Chunk {
             attrib_name_lists: LVec::new(m),
             field_lists: LVec::new(m),
             arm_lists: LVec::new(m),
+            fold_marks: LVec::new(m),
             mem,
         }
     }
@@ -108,6 +112,13 @@ impl Chunk {
     /// The bytes of a string literal (or of any entry of [`Chunk::names`]).
     pub fn str(&self, s: Sym) -> &[u8] {
         self.names.bytes(s)
+    }
+
+    /// How many times `errno` had been set when the operation with right
+    /// operand `rhs` was made (see [`Chunk::fold_marks`]).
+    pub fn fold_stamp(&self, rhs: ExprId) -> Option<u64> {
+        let i = self.fold_marks.binary_search_by_key(&rhs.0, |m| m.0).ok()?;
+        Some(self.fold_marks[i].1)
     }
 
     /// Store `items` as a new list.

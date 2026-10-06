@@ -35,17 +35,13 @@ const SMALL_BUFSIZ: usize = 512;
 const EINVAL: i32 = 22;
 const EBADF: i32 = 9;
 
-thread_local! {
-    static ERRNO: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
-}
-
-/// The C library's `errno` as the emulated calls leave it.
+/// The C library's `errno` (see [`crate::cerrno`]).
 pub(crate) fn errno() -> i32 {
-    ERRNO.with(|e| e.get())
+    crate::cerrno::get()
 }
 
 pub(crate) fn set_errno(v: i32) {
-    ERRNO.with(|e| e.set(v));
+    crate::cerrno::set(v);
 }
 
 /// What a standard stream is, for the library's temporary buffering.

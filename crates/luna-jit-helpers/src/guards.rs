@@ -100,7 +100,37 @@ pub unsafe extern "C" fn luna_jit_math_fn_is_library(math_key: i64, name_key: i6
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub extern "C" fn luna_jit_fmod(a: f64, b: f64) -> f64 {
-    luna_core::numeric::c_fmod(a, b)
+    luna_core::cerrno::fmod(a, b)
+}
+
+/// A one-argument C math function for a compiled `math.<fn>(x)`, `f` its
+/// number in `MathFn::ALL`, leaving `errno` as the C function does.
+// SAFETY: no other item in the link is named `luna_jit_math1`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub extern "C" fn luna_jit_math1(x: f64, f: i64) -> f64 {
+    luna_core::cerrno::math1(luna_core::cerrno::MathFn::ALL[f as usize], x)
+}
+
+/// C `pow` for a compiled `^` of 5.1 to 5.3, leaving `errno` as it does.
+// SAFETY: no other item in the link is named `luna_jit_pow`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub extern "C" fn luna_jit_pow(a: f64, b: f64) -> f64 {
+    luna_core::cerrno::pow(a, b)
+}
+
+/// A compiled `^` of 5.4 and later (`luai_numpow`): `a*a` when `b` is 2,
+/// else C `pow`, leaving `errno` as it does.
+// SAFETY: no other item in the link is named `luna_jit_numpow`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub extern "C" fn luna_jit_numpow(a: f64, b: f64) -> f64 {
+    if b == 2.0 {
+        a * a
+    } else {
+        luna_core::cerrno::pow(a, b)
+    }
 }
 
 /// `string.sub(s, i, j)` for the trace JIT, which checked that the call is

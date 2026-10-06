@@ -442,7 +442,12 @@ impl<'s, S: Source> Lexer<'s, S> {
         let num = if hex {
             // 5.1 converts with C99 `strtod`, which reads hex floats too.
             let float_ok = v <= LuaVersion::Lua51 || v.has_hex_float();
-            numeric::hex_literal(&text[2..], v.has_integers(), float_ok)
+            let conv = match v {
+                LuaVersion::Lua51 => crate::cerrno::HexConv::Strtod,
+                LuaVersion::Lua52 => crate::cerrno::HexConv::Own,
+                _ => crate::cerrno::HexConv::LATER,
+            };
+            numeric::hex_literal(&text[2..], v.has_integers(), float_ok, conv)
         } else {
             // a numeric literal carries no sign (unary minus is a separate
             // operator), so the magnitude 2^63 stays a float here

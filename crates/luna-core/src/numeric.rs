@@ -5,6 +5,7 @@
 //! module stays dialect-agnostic.
 
 mod format;
+pub use crate::cerrno::HexConv;
 pub use format::*;
 
 /// Result of parsing a Lua numeric literal — either an integer or a float
@@ -114,11 +115,14 @@ pub fn dec_literal(text: &[u8], int_ok: bool, neg: bool) -> Option<Num> {
             return Some(Num::Int(a as i64));
         }
     }
-    s.parse::<f64>().ok().map(Num::Float)
+    let x = s.parse::<f64>().ok()?;
+    crate::cerrno::after_strtod_decimal(s, x);
+    Some(Num::Float(x))
 }
 
-/// Hex numeral after the `0x` prefix (no sign, no surrounding space).
-pub fn hex_literal(text: &[u8], int_ok: bool, float_ok: bool) -> Option<Num> {
+/// Hex numeral after the `0x` prefix (no sign, no surrounding space);
+/// `conv` says which C conversion PUC runs, for the `errno` it leaves.
+pub fn hex_literal(text: &[u8], int_ok: bool, float_ok: bool, conv: HexConv) -> Option<Num> {
     let mut i = 0;
     while i < text.len() && hex_digit(text[i]).is_some() {
         i += 1;
@@ -209,7 +213,14 @@ pub fn hex_literal(text: &[u8], int_ok: bool, float_ok: bool) -> Option<Num> {
             sticky |= d != 0;
         }
     }
-    Some(Num::Float(compose_f64(mant, sticky, exp4 * 4 + pexp)))
+    let x = compose_f64(mant, sticky, exp4 * 4 + pexp);
+    let exact = !sticky && mant != 0 && {
+        let tz = mant.trailing_zeros() as i64;
+        let e = exp4 * 4 + pexp + tz;
+        64 - (mant >> tz).leading_zeros() as i64 <= 53 && e >= -1074 && x.is_finite()
+    };
+    crate::cerrno::after_hex(conv, x, mant != 0 || sticky, exact);
+    Some(Num::Float(x))
 }
 
 /// luaO_str2num: optional surrounding whitespace and sign, decimal or hex.
@@ -235,7 +246,9 @@ pub fn str2num(s: &[u8], int_ok: bool, hex_float_ok: bool) -> Option<Num> {
         _ => false,
     };
     let n = if s.len() > 2 && s[0] == b'0' && matches!(s[1], b'x' | b'X') {
-        hex_literal(&s[2..], int_ok, hex_float_ok)?
+        // 5.2 (no integers) has its own reader; 5.3 and later, the platform's
+        let conv = if int_ok { HexConv::LATER } else { HexConv::Own };
+        hex_literal(&s[2..], int_ok, hex_float_ok, conv)?
     } else {
         dec_literal(s, int_ok, neg)?
     };
@@ -332,7 +345,9 @@ fn dec_prefix(s: &[u8]) -> Option<(f64, usize)> {
         }
     }
     let text = str::from_utf8(&s[..i]).expect("ascii numeral");
-    Some((text.parse::<f64>().ok()?, i))
+    let x = text.parse::<f64>().ok()?;
+    crate::cerrno::after_strtod_decimal(text, x);
+    Some((x, i))
 }
 
 /// The longest hex float numeral after `0x` at the start of `s`, and its
@@ -368,7 +383,7 @@ fn hex_prefix(s: &[u8]) -> Option<(f64, usize)> {
             i = e;
         }
     }
-    hex_literal(&s[..i], false, true).map(|n| (n.as_f64(), i))
+    hex_literal(&s[..i], false, true, HexConv::Strtod).map(|n| (n.as_f64(), i))
 }
 
 /// Round a 64-bit mantissa (+sticky) to f64 and scale by 2^exp.

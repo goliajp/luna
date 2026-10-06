@@ -137,12 +137,23 @@ pub(super) fn emit_fold<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>
             FoldKind::Libm1 if fold.start_idx == i => {
                 // Declare libm fn fresh per fold (cranelift
                 // dedups by name in the same module).
+                // a function that can set `errno` goes through luna's,
+                // which keeps the value PUC's process would have
+                let errno_fn = crate::jit_backend::math_fold::errno_math_fn(fold.fn_name);
                 let mut libm_sig = lw.bcx.make_signature();
                 libm_sig.params.push(AbiParam::new(types::F64));
+                if errno_fn.is_some() {
+                    libm_sig.params.push(AbiParam::new(types::I64));
+                }
                 libm_sig.returns.push(AbiParam::new(types::F64));
+                let name = if errno_fn.is_some() {
+                    "luna_jit_math1"
+                } else {
+                    fold.fn_name
+                };
                 let libm_id = lw
                     .bcx
-                    .declare_function(fold.fn_name, Linkage::Import, &libm_sig)
+                    .declare_function(name, Linkage::Import, &libm_sig)
                     .ok()?;
                 let libm_ref = lw.bcx.import_func(libm_id);
                 // Libm1 always has a Reg arg_src — coerce
@@ -201,6 +212,9 @@ pub(super) fn emit_fold<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>
                     let atan2_ref = lw.bcx.import_func(atan2_id);
                     let one = lw.bcx.ins().f64const(1.0);
                     lw.bcx.ins().call(atan2_ref, &[arg_f64, one])
+                } else if let Some(f) = errno_fn {
+                    let f = lw.bcx.ins().iconst(types::I64, f);
+                    lw.bcx.ins().call(libm_ref, &[arg_f64, f])
                 } else {
                     lw.bcx.ins().call(libm_ref, &[arg_f64])
                 };

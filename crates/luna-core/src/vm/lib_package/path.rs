@@ -78,7 +78,14 @@ pub(super) fn replace(src: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
 
 /// `readable`: whether `fopen(name, "r")` succeeds.
 pub(super) fn readable(name: &[u8]) -> bool {
-    std::fs::File::open(os_path(name)).is_ok()
+    match crate::vm::lib_io::fopen::os_open(name, &crate::vm::lib_io::fopen::Spec::READ) {
+        Ok(_) => true,
+        Err(e) => {
+            // the failed `fopen` leaves its errno
+            crate::vm::lib_io::note_failure(&e);
+            false
+        }
+    }
 }
 
 /// `searchpath`: the first readable file among `path`'s templates with

@@ -75,7 +75,10 @@ fn io_readline(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     let vals = match g_read(vm, u, &fmts, 2)? {
         ReadOut::Values(v) => v,
         // the read's error message is raised
-        ReadOut::Error(e) => return Err(raise_str(vm, &strerror(&e))),
+        ReadOut::Error(e) => {
+            note_failure(&e);
+            return Err(raise_str(vm, &strerror(&e)));
+        }
     };
     // ≤5.2 continue on a non-nil first value, 5.3+ on a true one; the only
     // false-ish value a read produces is nil, so the tests agree

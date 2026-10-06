@@ -26,11 +26,31 @@ fn os_bytes(s: &std::ffi::OsStr) -> Vec<u8> {
 }
 
 /// C `remove`: `rmdir` for a directory, `unlink` otherwise.
-fn remove_path(p: &std::path::Path) -> std::io::Result<()> {
-    if std::fs::symlink_metadata(p)?.is_dir() {
+#[cfg(not(windows))]
+fn remove_path(name: &[u8]) -> std::io::Result<()> {
+    let p = lib_io::os_path(name);
+    if std::fs::symlink_metadata(&p)?.is_dir() {
         std::fs::remove_dir(p)
     } else {
         std::fs::remove_file(p)
+    }
+}
+
+/// The Universal CRT's `remove`, which removes files only.
+#[cfg(windows)]
+fn remove_path(name: &[u8]) -> std::io::Result<()> {
+    lib_io::winfs::remove(name)
+}
+
+/// C `rename`; the Universal CRT's does not replace an existing file.
+fn rename_path(from: &[u8], to: &[u8]) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        lib_io::winfs::rename(from, to)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(lib_io::os_path(from), lib_io::os_path(to))
     }
 }
 
@@ -38,7 +58,8 @@ pub(super) fn os_remove(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let name = argcheck::check_string(vm, Args::new(fs, nargs), 0)?
         .as_bytes()
         .to_vec();
-    Ok(match remove_path(&lib_io::os_path(&name)) {
+    lib_io::reset_errno(vm);
+    Ok(match remove_path(&name) {
         Ok(()) => vm.nat_return(fs, &[Value::Bool(true)]),
         Err(e) => lib_io::file_fail(vm, fs, Some(&name), &e),
     })
@@ -48,16 +69,15 @@ pub(super) fn os_rename(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let a = Args::new(fs, nargs);
     let from = argcheck::check_string(vm, a, 0)?.as_bytes().to_vec();
     let to = argcheck::check_string(vm, a, 1)?.as_bytes().to_vec();
-    Ok(
-        match std::fs::rename(lib_io::os_path(&from), lib_io::os_path(&to)) {
-            Ok(()) => vm.nat_return(fs, &[Value::Bool(true)]),
-            // 5.1 names the source file in the message; 5.2+ name nothing
-            Err(e) => {
-                let fname = (vm.version() == LuaVersion::Lua51).then_some(from.as_slice());
-                lib_io::file_fail(vm, fs, fname, &e)
-            }
-        },
-    )
+    lib_io::reset_errno(vm);
+    Ok(match rename_path(&from, &to) {
+        Ok(()) => vm.nat_return(fs, &[Value::Bool(true)]),
+        // 5.1 names the source file in the message; 5.2+ name nothing
+        Err(e) => {
+            let fname = (vm.version() == LuaVersion::Lua51).then_some(from.as_slice());
+            lib_io::file_fail(vm, fs, fname, &e)
+        }
+    })
 }
 
 /// `os.tmpname`: POSIX builds use `mkstemp("/tmp/lua_XXXXXX")`, which
@@ -109,6 +129,7 @@ pub(super) fn os_tmpname(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaEr
 pub(super) fn os_execute(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let cmd = argcheck::opt_string(vm, Args::new(fs, nargs), 0)?.map(|s| s.as_bytes().to_vec());
     let v = vm.version();
+    lib_io::reset_errno(vm);
     let Some(cmd) = cmd else {
         // system(NULL): whether a shell exists
         return Ok(if v == LuaVersion::Lua51 {
