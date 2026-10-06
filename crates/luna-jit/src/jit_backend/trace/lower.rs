@@ -114,10 +114,6 @@ struct Lower<E: Emit> {
     materialize_emit_count: u32,
     closure_seen: u32,
     stored: Vec<Option<Value>>,
-    /// Per register: the value reg_state holds for it at the loop head
-    /// whichever way the head is reached (`None`: no such promise; the
-    /// body may write the register and the back edge does not store it).
-    head_stored: Vec<Option<Value>>,
     current_kinds: Vec<RegKind>,
     dispatchable: bool,
     dispatch_off_reason: Option<&'static str>,

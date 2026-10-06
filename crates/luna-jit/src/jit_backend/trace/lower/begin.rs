@@ -187,7 +187,6 @@ pub(super) fn begin_body<E: Emit>(
         materialize_emit_count,
         closure_seen,
         stored,
-        head_stored: Vec::new(),
         current_kinds,
         dispatchable,
         dispatch_off_reason,
