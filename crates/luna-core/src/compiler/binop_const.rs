@@ -17,12 +17,12 @@ impl Compiler<'_> {
     /// 8-bit field.
     pub(super) fn num_const(&mut self, e: &Exp) -> Option<u32> {
         let c = match *e {
-            Exp::Int(i) => self.const_idx(ConstKey::Int(i), Value::Int(i)),
+            Exp::Int(i) => self.const_idx(Value::Int(i)),
             Exp::Float(mut f) => {
                 if f == 0.0 && self.version == LuaVersion::Lua51 {
                     f = *self.l().zero_51.get_or_insert(f);
                 }
-                self.const_idx(ConstKey::Float(f.to_bits()), Value::Float(f))
+                self.const_idx(Value::Float(f))
             }
             _ => return None,
         };
@@ -31,21 +31,8 @@ impl Compiler<'_> {
 
     /// How `e` goes into the instruction of `op` instead of a register
     /// (PUC `codearith` / `codebitwise` / `codeorder` / `codeeq`), if it does.
-    /// `left`: `e` is the left operand. `saved` is the first free register
-    /// once both operands are released.
-    pub(super) fn const_operand(
-        &mut self,
-        op: BinOp,
-        e: &Exp,
-        left: bool,
-        saved: u32,
-    ) -> Option<Operand> {
-        // The instruction must leave the frame's last register unused: a
-        // trace recording loads the operand there (`trace_record_push`). The
-        // operand and result registers are at most `saved`.
-        if saved + 2 > max_regs(self.version) {
-            return None;
-        }
+    /// `left`: `e` is the left operand.
+    pub(super) fn const_operand(&mut self, op: BinOp, e: &Exp, left: bool) -> Option<Operand> {
         let imm = match *e {
             Exp::Int(i) if (MIN_SC as i64..=MAX_SC as i64).contains(&i) => Some((i as i32, false)),
             _ => None,
@@ -103,8 +90,20 @@ impl Compiler<'_> {
             }
             _ => return None,
         };
-        let lvl = self.l();
-        lvl.max_stack = lvl.max_stack.max(saved + 2);
+        // an immediate is a constant of the dialects before 5.4: it enters
+        // the table here, where PUC's code generator adds it
+        let immediate = matches!(
+            form,
+            Operand::Arith(Op::AddI | Op::SubI | Op::ShlI | Op::ShrI, _)
+                | Operand::Cmp(Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI, ..)
+        );
+        if immediate {
+            match *e {
+                Exp::Int(i) => self.number_const_before_54(Value::Int(i)),
+                Exp::Float(f) => self.number_const_before_54(Value::Float(f)),
+                _ => {}
+            }
+        }
         Some(form)
     }
 

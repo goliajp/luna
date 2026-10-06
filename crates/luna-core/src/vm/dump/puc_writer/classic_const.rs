@@ -10,6 +10,7 @@
 
 use super::asm::{L, Res};
 use super::classic::{C, RK_BIT};
+use crate::compiler::const_map::peek_const;
 use crate::runtime::Value;
 use crate::vm::dump::puc::classic::Kind;
 use crate::vm::isa::{OFFSET_SC, Op};
@@ -86,13 +87,8 @@ impl C<'_, '_> {
                     Op::LoadI => self.num(l.sbx as i64),
                     _ => Value::Float(l.sbx as f64),
                 };
-                let same = |k: &Value| match (k, &v) {
-                    (Value::Int(a), Value::Int(b)) => a == b,
-                    (Value::Float(a), Value::Float(b)) => a.to_bits() == b.to_bits(),
-                    _ => false,
-                };
-                let consts = &self.asm.consts;
-                consts.iter().position(same).unwrap_or(consts.len())
+                let (ver, map) = &self.asm.kmap;
+                peek_const(*ver, &self.asm.consts, map, &v) as usize
             }
         };
         if k >= RK_BIT as usize {

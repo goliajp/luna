@@ -32,6 +32,22 @@ const EXPRS: &str = "2^53, 2^2, 2^0.5, (-2)^0.5, 3^-1, 0^0, 7//2, 7.0//2, -7//2,
     5.0//0.0, -(7%3), 1.5+1.5, 3-3.0, 2*0.0, 3//1.0, math.pi*2, 7-(1 ..\"9\"), \
     0xffffffff>>(1 ..\"9\"), 10|(1 ..\"9\"), 2^(1 ..\"9\")";
 
+/// Chunks whose constants PUC's code generator shares or keeps apart by
+/// dialect: an integer and the float of its value, -0.0 and 0.0, nan
+/// (folded by 5.2 only), short and long strings, a string whose eight bytes
+/// are those of 0.0, and floats past 2^53 whose keys meet integers.
+const DEDUP: &[&str] = &[
+    "local a, b, c, d = ...\nreturn a + 100000, b + 100000.0, c * 100000, d * 100000.0, a - 5, b - 5.0\n",
+    "local a, b, c = ...\nreturn a * 0.0, b * -0.0, c * 0.0, a + 0, b - 0.0, c / -0.0\n",
+    "local a, b = ...\nreturn a + (-2)^0.5, b + (-2)^0.5, a * 0/0\n",
+    "local a, b = ...\nreturn a .. 'k', b .. 'k', a .. 'kk', \
+     a .. 'a long string, past the forty bytes PUC keeps short', \
+     b .. 'a long string, past the forty bytes PUC keeps short'\n",
+    "local a, b = ...\nreturn a .. '\\0\\0\\0\\0\\0\\0\\0\\0', b * 0.0, a * 0.0\n",
+    "local a, b, c = ...\nreturn a + 2^53, b + 9007199254740994, c + 2^53, a + 2^60, b + 2^60\n",
+    "local a, b = ...\nreturn a + 1e300, b + 1e300, a + 0.5, b + 0.5, a + 5, b + 5\n",
+];
+
 /// A constructor mixing registers, constants and a folded power.
 const TABLE: &str = "local a, b = ...\nlocal t = {a, b, 'k', 1.5, 2^53, true}\nreturn t\n";
 
@@ -121,7 +137,8 @@ fn constant_expressions_compile_as_puc_compiles_them() {
         let cases = EXPRS
             .split(", ")
             .map(|e| format!("local x = {{{e}, 1}}\nreturn x\n"))
-            .chain([TABLE.to_string()]);
+            .chain([TABLE.to_string()])
+            .chain(DEDUP.iter().map(|s| s.to_string()));
         failed.extend(cases.filter_map(|src| compare(version, &luac, &src)));
     }
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
