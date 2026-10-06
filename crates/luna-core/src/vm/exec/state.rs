@@ -36,17 +36,13 @@ pub struct Vm {
     /// `Vm` methods (`load` / `call_value` / `set_global` / …) rather than
     /// the heap directly.
     pub heap: Heap,
-    /// Embedding cooperative budget: a per-Vm tick counter that the run
-    /// loop decrements once per dispatch turn. When it hits zero the loop
-    /// raises a catchable "instruction budget exceeded" error so the embedder
-    /// can yield control back to its caller (short-script eval, game
-    /// frame budgets). `None` = unbounded; `Some(0)` once it ran out,
-    /// which stays until the host calls `set_instr_budget` again (see
-    /// `limits.rs`).
+    /// Embedding cooperative budget: a per-Vm tick counter the run loop
+    /// decrements once per dispatch turn; at zero it raises "instruction
+    /// budget exceeded". `None` = unbounded; `Some(0)` once it ran out,
+    /// until the host calls `set_instr_budget` again (see `limits.rs`).
     pub(crate) instr_budget: Option<i64>,
-    /// `instr_budget` or the heap's `mem_cap` is armed: compiled code,
-    /// which checks neither, is not entered (`jit.gate` is off and traces
-    /// are not admitted). Kept in step by `sync_limited`.
+    /// `instr_budget` or the heap's `mem_cap` is armed, so no compiled code
+    /// is entered (`jit.gate` off, no trace admitted); see `sync_limited`
     pub(crate) limited: bool,
     pub(crate) stack: LVec<Value>,
     /// the counters every call checks, together so a call touches one
@@ -418,12 +414,11 @@ pub struct Vm {
     /// leave it `false` so budget exhaustion stays a real error there.
     pub(crate) async_mode: bool,
 
-    /// Set by the dispatcher when an async-mode
-    /// budget exhaustion fires; checked by `exec_with` (so the
-    /// sentinel propagates without `unwind` running, mirroring
-    /// `yielding.is_some()`) and by `call_value_impl` (so the call
-    /// frames survive for the next poll). Cleared by `drive_one`
-    /// after translating it to `DispatchOutcome::BudgetExhausted`.
+    /// Set by the dispatcher when an async-mode budget exhaustion fires;
+    /// checked by `exec_with` (so the sentinel propagates without `unwind`
+    /// running, mirroring `yielding.is_some()`) and by `call_value_impl`
+    /// (so the call frames survive for the next poll). Cleared by
+    /// `drive_one` after translating it to `DispatchOutcome::BudgetExhausted`.
     pub(crate) host_yield_pending: bool,
     /// metamethod event tag (e.g. "close") to attach to the next Lua frame
     /// pushed by `push_frame`; `close_slots` sets this before calling a
