@@ -16,11 +16,13 @@ mod compiled;
 mod compiled_aot;
 mod exit;
 mod record;
+mod self_link;
 mod side_exit;
 pub use adopt::*;
 pub use compiled::*;
 pub use exit::*;
 pub use record::*;
+pub use self_link::*;
 pub use side_exit::*;
 
 /// Back-edge visit count after which a PC is promoted to a trace

@@ -20,6 +20,7 @@
 //! - `SETLIST` counts blocks of 50 fields from 1.
 
 use super::asm::{Asm, L, Res};
+use super::classic_ops::op51;
 use super::modern::Caps;
 use crate::runtime::Value;
 use crate::vm::dump::puc::classic::Kind;
@@ -37,47 +38,6 @@ pub(super) struct Frame {
 pub(super) const FIELDS_PER_FLUSH: u64 = 50;
 pub(super) const RK_BIT: u32 = 256;
 const MAX_BX: u32 = (1 << 18) - 1;
-
-/// 5.1 opcode of `k`, for the kinds 5.1 shares with 5.2.
-fn op51(k: Kind) -> Option<u8> {
-    Some(match k {
-        Kind::Move => p51::OP_MOVE,
-        Kind::LoadK => p51::OP_LOADK,
-        Kind::LoadBool => p51::OP_LOADBOOL,
-        Kind::LoadNil => p51::OP_LOADNIL,
-        Kind::GetUpval => p51::OP_GETUPVAL,
-        Kind::GetTable => p51::OP_GETTABLE,
-        Kind::SetUpval => p51::OP_SETUPVAL,
-        Kind::SetTable => p51::OP_SETTABLE,
-        Kind::NewTable => p51::OP_NEWTABLE,
-        Kind::SelfOp => p51::OP_SELF,
-        Kind::Arith(Op::Add) => p51::OP_ADD,
-        Kind::Arith(Op::Sub) => p51::OP_SUB,
-        Kind::Arith(Op::Mul) => p51::OP_MUL,
-        Kind::Arith(Op::Div) => p51::OP_DIV,
-        Kind::Arith(Op::Mod) => p51::OP_MOD,
-        Kind::Arith(Op::Pow) => p51::OP_POW,
-        Kind::Unary(Op::Unm) => p51::OP_UNM,
-        Kind::Unary(Op::Not) => p51::OP_NOT,
-        Kind::Unary(Op::Len) => p51::OP_LEN,
-        Kind::Concat => p51::OP_CONCAT,
-        Kind::Jmp => p51::OP_JMP,
-        Kind::Eq => p51::OP_EQ,
-        Kind::Lt => p51::OP_LT,
-        Kind::Le => p51::OP_LE,
-        Kind::Test => p51::OP_TEST,
-        Kind::TestSet => p51::OP_TESTSET,
-        Kind::Call => p51::OP_CALL,
-        Kind::TailCall => p51::OP_TAILCALL,
-        Kind::Return => p51::OP_RETURN,
-        Kind::ForLoop => p51::OP_FORLOOP,
-        Kind::ForPrep => p51::OP_FORPREP,
-        Kind::SetList => p51::OP_SETLIST,
-        Kind::Closure => p51::OP_CLOSURE,
-        Kind::Vararg => p51::OP_VARARG,
-        _ => return None,
-    })
-}
 
 pub(super) struct C<'a, 'p> {
     pub asm: &'a mut Asm<'p>,
@@ -167,6 +127,7 @@ impl C<'_, '_> {
                 let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
                 self.emit(self.abc(Kind::Move, a, b, 0))?;
             }
+            Op::LoadI | Op::LoadF | Op::LoadK if self.folded_load(l) => {}
             Op::LoadI | Op::LoadF => {
                 let v = if l.op == Op::LoadI {
                     self.num(l.sbx as i64)
@@ -283,8 +244,9 @@ impl C<'_, '_> {
             | Op::BXor
             | Op::Shl
             | Op::Shr => {
-                let a = self.asm.r(l.a)?;
-                let (b, c) = (self.operand(l.b)?, self.operand(l.c)?);
+                // the right operand's constant first, as PUC's `codearith`
+                let (a, c) = (self.asm.r(l.a)?, self.operand(l.c)?);
+                let b = self.operand(l.b)?;
                 self.emit(self.abc(Kind::Arith(l.op), a, b, c))?;
             }
             op if op.arith_const_op().is_some() => self.arith_const(l)?,
