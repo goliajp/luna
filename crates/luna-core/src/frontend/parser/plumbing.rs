@@ -181,12 +181,12 @@ impl<'s> Parser<'s> {
     }
 
     pub(super) fn push_expr(&mut self, e: Expr) -> ExprId {
-        self.chunk.exprs.push(e);
+        self.chunk.exprs.push_or_abort(e);
         ExprId((self.chunk.exprs.len() - 1) as u32)
     }
 
     pub(super) fn push_stat(&mut self, s: Stat) -> StatId {
-        self.chunk.stats.push(s);
+        self.chunk.stats.push_or_abort(s);
         StatId((self.chunk.stats.len() - 1) as u32)
     }
 
@@ -194,7 +194,7 @@ impl<'s> Parser<'s> {
     pub(super) fn push_ended_stat(&mut self, s: Stat) -> StatId {
         let id = self.push_stat(s);
         let idx = id.0 as usize;
-        self.end_lines.resize(idx + 1, 0);
+        self.end_lines.resize_or_abort(idx + 1, 0);
         self.end_lines[idx] = self.prev_line;
         id
     }

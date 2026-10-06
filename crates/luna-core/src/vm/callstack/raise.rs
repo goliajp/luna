@@ -3,6 +3,7 @@
 
 use crate::runtime::Value;
 use crate::runtime::function::{CallFrame, ContKind};
+use crate::runtime::mem::LVec;
 use crate::version::LuaVersion;
 use crate::vm::exec::Vm;
 
@@ -47,7 +48,8 @@ impl Vm {
         if !continues {
             self.errored_natives.clear();
         }
-        self.errored_natives.push(ErroredNative { act, err });
+        self.errored_natives
+            .push_or_abort(ErroredNative { act, err });
     }
 
     /// An error a native raised when the host called it directly (no Lua
@@ -66,8 +68,8 @@ impl Vm {
 
     /// The natives recorded for `err` that were running at the top of the
     /// stack, innermost first.
-    fn take_errored_natives(&mut self, err: Value) -> Vec<ErroredNative> {
-        let mut list = std::mem::take(&mut self.errored_natives);
+    fn take_errored_natives(&mut self, err: Value) -> LVec<ErroredNative> {
+        let mut list = self.errored_natives.take();
         let depth = self.frames.len() as u32;
         if !list
             .iter()
@@ -107,7 +109,7 @@ impl Vm {
         let raised_by = self.take_errored_natives(err);
         let base = self.running_natives.len();
         for e in raised_by.iter().rev() {
-            self.running_natives.push(e.act);
+            self.running_natives.push_or_abort(e.act);
         }
         let catcher = self.nearest_catcher();
         let to_host = catcher.is_none() && self.current.is_none() && self.keep_error_traceback;
@@ -240,7 +242,7 @@ impl Vm {
         let floor = std::mem::replace(&mut self.msgh_floor, self.frames.len());
         let applied = self.msgh_applied.take();
         let traceback = self.error_traceback.take();
-        let natives = std::mem::take(&mut self.errored_natives);
+        let natives = self.errored_natives.take();
         let keep = std::mem::replace(&mut self.keep_error_traceback, false);
         let r = self.call_value(f, args);
         self.keep_error_traceback = keep;

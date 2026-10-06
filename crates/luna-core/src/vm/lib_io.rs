@@ -18,18 +18,20 @@ use crate::vm::builtins::{arg_error, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
+mod crt;
 mod handle;
 mod lines;
+pub(crate) mod msvc;
 mod numeral;
 mod open;
 mod read;
 mod results;
 mod stream;
-mod text_mode;
 mod write;
 pub(crate) use handle::flush_all;
 use handle::*;
 use lines::*;
+pub(crate) use msvc::translate_all;
 use numeral::*;
 #[cfg(any(unix, windows))]
 pub(crate) use open::shell_command;
@@ -43,7 +45,6 @@ pub(crate) use results::os_path;
 pub(crate) use results::strerror;
 use results::*;
 use stream::*;
-pub(crate) use text_mode::{to_crlf, translate_all};
 use write::*;
 
 /// `EINVAL` / `EBADF` / `ESPIPE`: the errno values stdio reports for the
@@ -132,7 +133,9 @@ pub(crate) fn open_io(vm: &mut Vm) {
         let stdin = !writable;
         let h = new_file(vm, fh, writable);
         if stdin && crate::stdio::text_mode() {
-            text_mode::set_text(h);
+            use std::io::IsTerminal;
+            let tty = std::io::stdin().is_terminal();
+            crt::attach(h, msvc::CrtFile::standard(msvc::Std::No, tty));
         }
         put(vm, io, name, Value::Userdata(h));
         match name {
@@ -147,6 +150,23 @@ pub(crate) fn open_io(vm: &mut Vm) {
     vm.set_global("io", Value::Table(io))
         .expect("stdlib registration");
     vm.barrier_back_table(io);
+}
+
+/// What `luaL_loadfile(L, NULL)` reads from the MSVC C library's `stdin`
+/// (`getF`: `fread` of `LUAL_BUFFERSIZE` until end of file); `None` when
+/// standard input has no `FILE`.
+pub(crate) fn read_stdin_chunk(vm: &Vm) -> Option<Vec<u8>> {
+    let u = vm.io_stdin?;
+    u.crt.as_ref()?;
+    let size = read::lual_buffersize(vm.version());
+    let mut src = Vec::new();
+    while !crt::with(u, |f, _| f.feof()) {
+        src.extend_from_slice(&crt::fread(u, size));
+        if crt::ferror(u) {
+            break;
+        }
+    }
+    Some(src)
 }
 
 impl Vm {

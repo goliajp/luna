@@ -5,6 +5,9 @@
 use super::*;
 use cranelift_codegen::ir::{Block, MemFlagsData};
 
+mod len;
+pub(super) use len::emit_len_check;
+
 const ACOUNT: i32 = super::super::TABLE_ACOUNT_OFFSET;
 const APREFIX: i32 = super::super::TABLE_APREFIX_OFFSET;
 const ALIMIT: i32 = super::super::TABLE_ALIMIT_OFFSET;
@@ -53,9 +56,8 @@ fn array_part<E: Emit>(bcx: &mut E, t: Value, asize: Value) -> (Value, Value) {
 /// The table's `alimit`: its array size, except in a 5.4 table after `#t`
 /// lowered it (see `emit_array_bound`).
 fn load_alimit<E: Emit>(bcx: &mut E, t: Value) -> Value {
-    let l = bcx
-        .ins()
-        .load(types::I32, MemFlagsData::trusted(), t, ALIMIT);
+    let len_flags = bcx.len_state_flags();
+    let l = bcx.ins().load(types::I32, len_flags, t, ALIMIT);
     bcx.ins().uextend(types::I64, l)
 }
 
@@ -95,7 +97,8 @@ fn emit_array_bound<E: Emit>(
     bcx.seal_block(raise_blk);
     let key = bcx.ins().iadd_imm_u(idx, 1);
     let key32 = bcx.ins().ireduce(types::I32, key);
-    bcx.ins().store(MemFlagsData::trusted(), key32, t, ALIMIT);
+    let len_flags = bcx.len_state_flags();
+    bcx.ins().store(len_flags, key32, t, ALIMIT);
     bcx.ins().jump(slot, &[]);
     bcx.seal_block(slot);
     None
@@ -168,7 +171,14 @@ pub(super) fn emit_array_set<E: Emit>(
     }
     let idx = bcx.ins().iadd_imm_s(key, -1);
     let slot_blk = bcx.create_block();
-    let known = emit_array_bound(bcx, rules, t, idx, slot_blk, miss);
+    // a 5.4 table's store is bounded by the array size here and raises
+    // `alimit` further down, where the slot's old tag has split the paths
+    let bound_rules = if rules == TableRules::V54 {
+        TableRules::Pre54
+    } else {
+        rules
+    };
+    let known = emit_array_bound(bcx, bound_rules, t, idx, slot_blk, miss);
 
     bcx.switch_to_block(slot_blk);
     let asize = known.unwrap_or_else(|| load_asize(bcx, t));
@@ -180,7 +190,25 @@ pub(super) fn emit_array_set<E: Emit>(
     let was_nil = bcx.ins().icmp_imm_u(IntCC::Equal, old, i64::from(raw::NIL));
     let store_blk = bcx.create_block();
     let fill_blk = bcx.create_block();
-    bcx.ins().brif(was_nil, fill_blk, &[], store_blk, &[]);
+    if rules == TableRules::V54 {
+        // overwriting a value: past `alimit` (rare) raises it to the key
+        let over_blk = bcx.create_block();
+        bcx.ins().brif(was_nil, fill_blk, &[], over_blk, &[]);
+        bcx.switch_to_block(over_blk);
+        bcx.seal_block(over_blk);
+        let l = load_alimit(bcx, t);
+        let in_limit = bcx.ins().icmp(IntCC::UnsignedLessThan, idx, l);
+        let raise_blk = bcx.create_block();
+        bcx.ins().brif(in_limit, store_blk, &[], raise_blk, &[]);
+        bcx.switch_to_block(raise_blk);
+        bcx.seal_block(raise_blk);
+        let key32 = bcx.ins().ireduce(types::I32, key);
+        let len_flags = bcx.len_state_flags();
+        bcx.ins().store(len_flags, key32, t, ALIMIT);
+        bcx.ins().jump(store_blk, &[]);
+    } else {
+        bcx.ins().brif(was_nil, fill_blk, &[], store_blk, &[]);
+    }
 
     // a nil slot gains a value: only without a metatable
     bcx.switch_to_block(fill_blk);
@@ -199,6 +227,31 @@ pub(super) fn emit_array_set<E: Emit>(
     bcx.seal_block(count_blk);
     let acount = bcx.ins().load(types::I32, flags, t, ACOUNT);
     let acount = bcx.ins().iadd_imm_u(acount, 1);
+    if rules == TableRules::V54 {
+        // 5.4's `#t` works from `alimit`: the leading run is left unknown
+        // rather than kept here (see `Table::aprefix`)
+        bcx.ins().store(flags, acount, t, ACOUNT);
+        let unknown = bcx.ins().iconst(
+            types::I32,
+            i64::from(luna_core::runtime::table::jit_layout::TABLE_APREFIX_UNKNOWN),
+        );
+        bcx.ins().store(flags, unknown, t, APREFIX);
+        // `alimit` rises to the key when below it; both fit in 32 bits,
+        // so the signed max of the widened values is the unsigned one
+        let l = load_alimit(bcx, t);
+        let raised = bcx.ins().smax(l, key);
+        let raised = bcx.ins().ireduce(types::I32, raised);
+        let len_flags = bcx.len_state_flags();
+        bcx.ins().store(len_flags, raised, t, ALIMIT);
+        bcx.ins().jump(store_blk, &[]);
+        bcx.switch_to_block(store_blk);
+        bcx.seal_block(store_blk);
+        let tag = bcx.ins().iconst(types::I8, i64::from(r));
+        bcx.ins().store(flags, tag, tag_addr, 0);
+        bcx.ins().store(flags, val, val_addr, 0);
+        bcx.ins().jump(done, &[]);
+        return;
+    }
     let aprefix = bcx.ins().load(types::I32, flags, t, APREFIX);
     let aprefix = bcx.ins().uextend(types::I64, aprefix);
     let at_prefix = bcx.ins().icmp(IntCC::Equal, idx, aprefix);
@@ -268,111 +321,4 @@ pub(super) fn emit_writable_guard_to<E: Emit>(bcx: &mut E, t: Value, ro: Block, 
         .band_imm_u(byte, super::super::TABLE_READONLY_BYTE_MASK);
     let is_ro = bcx.ins().icmp_imm_u(IntCC::NotEqual, bit, 0);
     bcx.ins().brif(is_ro, ro, &[], ok, &[]);
-}
-
-/// `#t` from the array part's counts: branch to `hit` with the length when
-/// the table has no metatable and its non-nil slots are exactly a prefix
-/// shorter than the array part (`Table::len`'s first case), to `miss`
-/// otherwise. That search leaves state behind in two dialects, kept here
-/// as `Table::len` keeps it: 5.5 sets its length hint to the result, and
-/// 5.4 may move `alimit` to it.
-pub(super) fn emit_len_check<E: Emit>(
-    bcx: &mut E,
-    rules: TableRules,
-    t: Value,
-    hit: Block,
-    miss: Block,
-) {
-    let flags = MemFlagsData::trusted();
-    let mt = bcx.ins().load(
-        types::I64,
-        flags,
-        t,
-        super::super::TABLE_METATABLE_OFFSET as i32,
-    );
-    let no_mt = bcx.ins().icmp_imm_u(IntCC::Equal, mt, 0);
-    let acount = bcx.ins().load(types::I32, flags, t, ACOUNT);
-    let aprefix32 = bcx.ins().load(types::I32, flags, t, APREFIX);
-    let dense = bcx.ins().icmp(IntCC::Equal, acount, aprefix32);
-    let aprefix = bcx.ins().uextend(types::I64, aprefix32);
-    let asize = load_asize(bcx, t);
-    let short = bcx.ins().icmp(IntCC::UnsignedLessThan, aprefix, asize);
-    let ok = bcx.ins().band(no_mt, dense);
-    let ok = bcx.ins().band(ok, short);
-    if rules == TableRules::Pre54 {
-        bcx.ins().brif(ok, hit, &[aprefix.into()], miss, &[]);
-        return;
-    }
-    if rules == TableRules::V54 {
-        // `alimit` already at the result (a table grown by `t[#t + 1]`
-        // stores is so) stays there; anything else is worked out
-        let state_blk = bcx.create_block();
-        let check_blk = bcx.create_block();
-        bcx.ins().brif(ok, check_blk, &[], miss, &[]);
-        bcx.switch_to_block(check_blk);
-        bcx.seal_block(check_blk);
-        let l = bcx.ins().load(types::I32, flags, t, ALIMIT);
-        let same = bcx.ins().icmp(IntCC::Equal, l, aprefix32);
-        bcx.ins().brif(same, hit, &[aprefix.into()], state_blk, &[]);
-        bcx.switch_to_block(state_blk);
-        bcx.seal_block(state_blk);
-        emit_alimit_after_len(bcx, rules, t, aprefix32, asize);
-        bcx.ins().jump(hit, &[aprefix.into()]);
-        return;
-    }
-    let state_blk = bcx.create_block();
-    bcx.ins().brif(ok, state_blk, &[], miss, &[]);
-    bcx.switch_to_block(state_blk);
-    bcx.seal_block(state_blk);
-    if rules == TableRules::Any {
-        emit_alimit_after_len(bcx, rules, t, aprefix32, asize);
-    }
-    bcx.ins().store(flags, aprefix32, t, LENHINT);
-    bcx.ins().jump(hit, &[aprefix.into()]);
-}
-
-/// Where 5.4's `#t` leaves `alimit` (`l`) when the array part holds exactly
-/// a leading run of `p` values, `p` below the size `a` (`Table::len`): at
-/// `p` when `l < p`; when `l > p`, at `p` if `a` is a power of two and
-/// either `l - 1 == p` with `p` not a power of two, or `l - 1 != p` with
-/// `p` past half of `a`; else where it was. With `TableRules::Any` only a
-/// 5.4 table's moves.
-fn emit_alimit_after_len<E: Emit>(
-    bcx: &mut E,
-    rules: TableRules,
-    t: Value,
-    p: Value,
-    asize: Value,
-) {
-    let flags = MemFlagsData::trusted();
-    let l = bcx.ins().load(types::I32, flags, t, ALIMIT);
-    let a = bcx.ins().ireduce(types::I32, asize);
-    let lt = bcx.ins().icmp(IntCC::UnsignedLessThan, l, p);
-    let gt = bcx.ins().icmp(IntCC::UnsignedGreaterThan, l, p);
-    // PUC `ispow2`: `x & (x - 1) == 0`
-    let am1 = bcx.ins().iadd_imm_s(a, -1);
-    let a_and = bcx.ins().band(a, am1);
-    let pow2a = bcx.ins().icmp_imm_u(IntCC::Equal, a_and, 0);
-    let lm1 = bcx.ins().iadd_imm_s(l, -1);
-    let adjacent = bcx.ins().icmp(IntCC::Equal, lm1, p);
-    let pm1 = bcx.ins().iadd_imm_s(p, -1);
-    let p_and = bcx.ins().band(p, pm1);
-    let not_pow2p = bcx.ins().icmp_imm_u(IntCC::NotEqual, p_and, 0);
-    let half = bcx.ins().ushr_imm_u(a, 1);
-    let past_half = bcx.ins().icmp(IntCC::UnsignedGreaterThan, p, half);
-    let inner = bcx.ins().select(adjacent, not_pow2p, past_half);
-    let lowered = bcx.ins().band(gt, pow2a);
-    let lowered = bcx.ins().band(lowered, inner);
-    let mut moved = bcx.ins().bor(lt, lowered);
-    if rules == TableRules::Any {
-        let dialect = bcx.ins().uload8(types::I64, flags, t, DIALECT);
-        let is_54 = bcx.ins().icmp_imm_u(
-            IntCC::Equal,
-            dialect,
-            i64::from(luna_core::runtime::table::jit_layout::TABLE_DIALECT_54),
-        );
-        moved = bcx.ins().band(moved, is_54);
-    }
-    let new_l = bcx.ins().select(moved, p, l);
-    bcx.ins().store(flags, new_l, t, ALIMIT);
 }

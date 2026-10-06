@@ -35,6 +35,10 @@ pub enum TableError {
 /// effective ceiling). Beyond this `rehash` returns `TableError::Overflow`.
 pub(crate) const MAX_ASIZE: usize = 1 << 27;
 
+/// `aprefix` when nothing is known about the leading run (see `aprefix`);
+/// the next resize counts it again.
+pub(crate) const APREFIX_UNKNOWN: u32 = u32::MAX;
+
 /// The PUC version whose table rules a table follows: how its parts are
 /// sized, where a number key goes in the hash part, and which border `#t`
 /// returns when there are several. Kept in the table's header byte.
@@ -91,6 +95,7 @@ mod array;
 mod ctor;
 pub use ctor::new_table_sizes;
 pub(crate) use ctor::{int2fb, new_table_operands};
+pub use len::set_len_search_seed;
 #[path = "table_get.rs"]
 mod get;
 #[path = "table_grow.rs"]
@@ -176,7 +181,9 @@ pub struct Table {
     /// `clear_weak` and `resize`; the method JIT's inline array stores
     /// keep it too.
     pub(crate) acount: u32,
-    /// A length whose leading slots `[0, aprefix)` are all non-nil; it may
+    /// A length whose leading slots `[0, aprefix)` are all non-nil, or
+    /// [`APREFIX_UNKNOWN`] after compiled code for a 5.4 state filled a
+    /// slot without keeping it (5.4's `#t` works from `alimit` instead); it may
     /// lag behind the real run (that only disables the `#t` shortcut)
     /// but never exceeds it.
     pub(crate) aprefix: u32,

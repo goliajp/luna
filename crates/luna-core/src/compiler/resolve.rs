@@ -15,8 +15,8 @@ impl<'a> Compiler<'a> {
         let mut any_decl = false;
         for lvl in self.levels.iter().rev() {
             for b in lvl.blocks.iter().rev() {
-                if let Some((_, ro)) = b.gdecls.iter().rev().find(|(n, _)| &**n == name) {
-                    return Ok(VarKind::Global { read_only: *ro });
+                if let Some(&(_, ro)) = b.gdecls.iter().rev().find(|&&(n, _)| n == name) {
+                    return Ok(VarKind::Global { read_only: ro });
                 }
                 if innermost_collective.is_none()
                     && let Some(ro) = b.collective
@@ -60,7 +60,7 @@ impl<'a> Compiler<'a> {
             return Err(self.limit_err("local variables", MAX_LOCALS));
         }
         let start_pc = self.lr().code.len() as u32;
-        self.l().locals.push(LocalVar {
+        self.l().locals.push_or_abort(LocalVar {
             name,
             reg,
             read_only,
@@ -69,7 +69,7 @@ impl<'a> Compiler<'a> {
             start_pc,
             konst: None,
         });
-        self.l().avars.push(AVar {
+        self.l().avars.push_or_abort(AVar {
             name: Some(name),
             reg: Some(reg),
             global: false,
@@ -80,7 +80,7 @@ impl<'a> Compiler<'a> {
     /// Declare a compile-time constant local (PUC `RDKCTC`).
     pub(super) fn declare_ct_const(&mut self, name: &'a str, value: CtConst) {
         let start_pc = self.lr().code.len() as u32;
-        self.l().locals.push(LocalVar {
+        self.l().locals.push_or_abort(LocalVar {
             name,
             reg: u32::MAX,
             read_only: true,
@@ -89,7 +89,7 @@ impl<'a> Compiler<'a> {
             start_pc,
             konst: Some(value),
         });
-        self.l().avars.push(AVar {
+        self.l().avars.push_or_abort(AVar {
             name: Some(name),
             reg: None,
             global: false,
@@ -137,7 +137,7 @@ impl<'a> Compiler<'a> {
     /// a goto jumping over it lands "into its scope" (PUC's `new_varkind` +
     /// `nactvar++`). `name` is `None` for a `global *` collective marker.
     pub(super) fn declare_global_marker(&mut self, name: Option<&'a str>) {
-        self.l().avars.push(AVar {
+        self.l().avars.push_or_abort(AVar {
             name,
             reg: None,
             global: true,
@@ -205,7 +205,7 @@ impl<'a> Compiler<'a> {
                 if self.counted_upvals(li) >= max_upvals(self.version) {
                     return Err(self.limit_err_at(li, "upvalues", max_upvals(self.version)));
                 }
-                self.levels[li].upvals.push(UpvalDesc {
+                self.levels[li].upvals.push_or_abort(UpvalDesc {
                     in_stack: true,
                     index: reg as u8,
                     name: name.into(),
@@ -219,7 +219,7 @@ impl<'a> Compiler<'a> {
                 if self.counted_upvals(li) >= max_upvals(self.version) {
                     return Err(self.limit_err_at(li, "upvalues", max_upvals(self.version)));
                 }
-                self.levels[li].upvals.push(UpvalDesc {
+                self.levels[li].upvals.push_or_abort(UpvalDesc {
                     in_stack: false,
                     index: pidx as u8,
                     name: name.into(),

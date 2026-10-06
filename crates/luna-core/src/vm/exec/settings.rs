@@ -36,12 +36,12 @@ impl Vm {
             let _ = err(b"Lua warning: ");
         }
         let _ = err(msg);
-        self.warn_buf.extend_from_slice(msg);
+        self.warn_buf.extend_from_slice_or_abort(msg);
         self.warn_cont = to_cont;
         if !to_cont {
             let _ = err(b"\n");
-            let line = std::mem::take(&mut self.warn_buf);
-            self.warn_log.push(line);
+            let line = self.warn_buf.take();
+            self.warn_log.push_or_abort(line);
         }
         Ok(())
     }
@@ -74,7 +74,8 @@ impl Vm {
     /// `"Lua warning: "` prefix and newline). For test harnesses that want to
     /// assert on warn output without scraping stderr.
     pub fn warn_log_take(&mut self) -> Vec<Vec<u8>> {
-        std::mem::take(&mut self.warn_log)
+        let log = self.warn_log.take();
+        log.iter().map(|l| l.to_vec()).collect()
     }
 
     /// Arm the cooperative instruction budget. The run loop

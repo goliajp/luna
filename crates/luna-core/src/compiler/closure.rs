@@ -30,14 +30,14 @@ impl<'a> Compiler<'a> {
         // upvalue 0 too), so it inherits the creator's upvalue 0. 5.2+ keeps
         // the lazy-capture model.
         if self.version == LuaVersion::Lua51 {
-            level.upvals.push(UpvalDesc {
+            level.upvals.push_or_abort(UpvalDesc {
                 in_stack: false,
                 index: 0,
                 name: "_ENV".into(),
                 read_only: false,
             });
         }
-        self.levels.push(level);
+        self.levels.push_or_abort(level);
         self.enter_block(false);
         if is_method {
             self.declare_local("self", 0, false)?;
@@ -87,7 +87,7 @@ impl<'a> Compiler<'a> {
         if idx > MAX_BX {
             return Err(self.err(line, "too many nested functions"));
         }
-        self.l().protos.push(proto);
+        self.l().protos.push_or_abort(proto);
         // PUC emits OP_CLOSURE with the line of the just-consumed `end` token
         // (luaK_code uses ls->lastline), so the closure-creation line event lands
         // on the function's last line, not its `function` keyword.

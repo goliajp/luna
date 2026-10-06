@@ -28,7 +28,7 @@ impl<'a> Compiler<'a> {
         // PUC's `check_conflict` only snapshots locals that actually clash;
         // we copy unconditionally — costs one extra MOVE per Index LHS, much
         // simpler than tracking pairwise conflicts and never wrong.
-        let mut plans: SmallList<LhsPlan, 4> = SmallList::new();
+        let mut plans: SmallList<LhsPlan, 4> = SmallList::new(self.heap.mem());
         for &t in targets {
             match self.ast.expr(t) {
                 Expr::Name(_) => plans.push(LhsPlan::Name(t)),

@@ -19,7 +19,27 @@ pub struct SyntaxError {
     pub msg: Vec<u8>,
 }
 
+/// A failed allocation while loading: PUC's `lua_load` returns a memory
+/// error with the unpositioned "not enough memory".
+impl From<crate::runtime::mem::Oom> for SyntaxError {
+    #[cold]
+    fn from(o: crate::runtime::mem::Oom) -> SyntaxError {
+        o.0.ctx().raise_oom();
+        SyntaxError::memory()
+    }
+}
+
 impl SyntaxError {
+    /// The memory error (`LUA_ERRMEM`) a load raises.
+    pub fn memory() -> SyntaxError {
+        SyntaxError::unpositioned(&b"not enough memory"[..])
+    }
+
+    /// Whether this is the memory error a load raises.
+    pub fn is_memory(&self) -> bool {
+        self.line == 0 && self.msg == b"not enough memory"
+    }
+
     /// Build a `SyntaxError` at the given line with the given message bytes.
     pub fn new(line: u32, msg: impl Into<Vec<u8>>) -> Self {
         SyntaxError {
