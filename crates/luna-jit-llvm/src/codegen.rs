@@ -60,6 +60,7 @@ use compute::compile_compute_chunk;
 use helpers::bind_helper_symbols;
 pub(crate) use helpers::declare_jit_helpers;
 use plan::ChunkPlan;
+pub(crate) use plan::ChunkSource;
 
 /// Try to lower `proto` to native code
 /// via LLVM. Returns `None` when the body falls outside the recognised
@@ -81,33 +82,33 @@ pub(crate) fn try_compile_int_chunk(
     proto: Gc<Proto>,
     pre53: bool,
 ) -> Option<CompileResult> {
-    // Path 1: dead-locals fast path. Restricted to
-    // zero-param chunks because its `extern "C" fn() -> i64` emit
-    // signature doesn't accept positional args.
-    if proto.num_params == 0 && is_dead_locals_then_return0(&proto.code) {
-        return Some(via_cache(storage, &proto, pre53, 0, false, &|| {
-            compile_constant_zero_chunk()
-        }));
-    }
+    let src = ChunkSource::of(&proto);
+    let shape = shape_of(&src)?;
+    Some(via_cache(storage, &proto, pre53, shape.0, shape.1, &|| {
+        compile_source(&src)
+    }))
+}
 
-    // Path 2: compute path. Scans for the cumulative whitelist + the
-    // chunk's effective return shape, then lowers op-by-op into a
-    // reg-array entry. Parametric chunks land as
-    // `extern "C" fn(i64, …, i64) -> i64` with arg-load shims in the
-    // entry BB.
-    if let Some(plan) = ChunkPlan::from_proto(&proto) {
-        let num_params = plan.num_params as u8;
-        return Some(via_cache(
-            storage,
-            &proto,
-            pre53,
-            num_params,
-            plan.returns_one,
-            &|| compile_compute_chunk(&plan),
-        ));
+/// The `(num_args, returns_one)` the compiled `src` would have, or `None`
+/// when the method JIT does not take it.
+pub(crate) fn shape_of(src: &ChunkSource) -> Option<(u8, bool)> {
+    // Path 1: dead-locals fast path. Restricted to zero-param chunks
+    // because its `extern "C" fn() -> i64` signature takes no args.
+    if src.num_params == 0 && is_dead_locals_then_return0(&src.code) {
+        return Some((0, false));
     }
+    // Path 2: compute path; parametric chunks land as
+    // `extern "C" fn(i64, …, i64) -> i64`.
+    let plan = ChunkPlan::from_source(src)?;
+    Some((plan.num_params as u8, plan.returns_one))
+}
 
-    None
+/// Compiles `src` (see [`shape_of`]); runs on any thread.
+pub(crate) fn compile_source(src: &ChunkSource) -> Option<(*const u8, EnginePair)> {
+    if src.num_params == 0 && is_dead_locals_then_return0(&src.code) {
+        return compile_constant_zero_chunk();
+    }
+    compile_compute_chunk(&ChunkPlan::from_source(src)?)
 }
 
 /// Shared cache+compile wrapper. Looks up the proto in the storage

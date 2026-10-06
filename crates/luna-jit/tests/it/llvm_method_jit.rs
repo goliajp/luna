@@ -6,9 +6,26 @@
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 
+/// `src`'s result with LLVM's code at once, and with LLVM's code after
+/// Cranelift's (the default), which must agree.
 fn eval(src: &str) -> Vec<Value> {
+    let run = |llvm_after| {
+        let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+        luna_jit::install_llvm_backend_with(
+            &mut vm,
+            luna_jit::jit_backend::LlvmBackend { llvm_after },
+        );
+        let r = vm.eval(src).unwrap_or_else(|e| panic!("{e}"));
+        text(&r)
+    };
+    let now = run(None);
+    assert_eq!(run(Some(luna_jit::jit_backend::LLVM_AFTER)), now);
+    assert_eq!(run(Some(std::time::Duration::ZERO)), now);
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
-    luna_jit::install_llvm_backend(&mut vm);
+    luna_jit::install_llvm_backend_with(
+        &mut vm,
+        luna_jit::jit_backend::LlvmBackend { llvm_after: None },
+    );
     vm.eval(src).unwrap_or_else(|e| panic!("{e}"))
 }
 

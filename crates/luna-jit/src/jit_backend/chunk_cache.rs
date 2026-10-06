@@ -230,7 +230,7 @@ pub fn cache_clear(vm: &mut luna_core::vm::Vm) {
 /// compiles to a different shape in Lua 5.3 (pre-decrement + jmp
 /// form) vs Lua 5.4/5.5 (count form). Mixing them in one cache
 /// slot would either crash or compute the wrong sum.
-fn proto_cache_key(proto: &Proto, pre53: bool, float_only: bool) -> u64 {
+pub(super) fn proto_cache_key(proto: &Proto, pre53: bool, float_only: bool) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for inst in proto.code.iter() {

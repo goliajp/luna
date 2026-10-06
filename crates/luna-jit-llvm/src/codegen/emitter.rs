@@ -3,7 +3,6 @@
 use crate::operands::{Operand, int_arith, is_arith};
 use inkwell::context::Context;
 use inkwell::values::{FunctionValue, PointerValue};
-use luna_core::runtime::Value;
 use luna_core::vm::isa::{Inst, Op};
 use std::collections::HashMap;
 
@@ -124,7 +123,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
     /// produces a non-int value into a reg (LoadNil → 0, LoadI/Move →
     /// ints, arithmetic → int) and a constant operand is admitted only
     /// when it is an integer.
-    pub(super) fn emit_arith(&self, ins: Inst, consts: &[Value]) -> Option<()> {
+    pub(super) fn emit_arith(&self, ins: Inst, consts: &[Option<i64>]) -> Option<()> {
         let (op, lhs, rhs_operand) = int_arith(ins, consts)?;
         let lhs = self.operand_value(lhs, "arith_lhs")?;
         let rhs = self.operand_value(rhs_operand, "arith_rhs")?;
@@ -242,7 +241,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         )
     }
 
-    pub(super) fn emit_op(&mut self, ins: Inst, consts: &[Value]) -> Option<()> {
+    pub(super) fn emit_op(&mut self, ins: Inst, consts: &[Option<i64>]) -> Option<()> {
         match ins.op() {
             Op::LoadI => {
                 let a = ins.a();

@@ -9,7 +9,7 @@
 //! `TraceCompiler::tier_up`).
 
 use super::*;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex};
 
 thread_local! {
     static LLVM_CODEGEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -86,58 +86,6 @@ struct Waiting {
     since: std::time::Instant,
 }
 
-struct Job {
-    source: Box<share::TierSource>,
-    done: Arc<Mutex<Option<Compiled>>>,
-}
-
-/// Jobs submitted and not finished yet; the compile thread signals the
-/// condition variable when the count drops.
-static IN_FLIGHT: (Mutex<usize>, std::sync::Condvar) = (Mutex::new(0), std::sync::Condvar::new());
-
-/// The compile thread, started by the first background tier-up. A job whose
-/// trace is gone (nothing holds its result any more) is dropped unrun.
-fn submit(job: Job) -> Option<()> {
-    static QUEUE: std::sync::OnceLock<Mutex<mpsc::Sender<Job>>> = std::sync::OnceLock::new();
-    let q = QUEUE.get_or_init(|| {
-        let (tx, rx) = mpsc::channel::<Job>();
-        std::thread::Builder::new()
-            .name("luna-llvm-tier".into())
-            .spawn(move || {
-                for job in rx {
-                    if Arc::strong_count(&job.done) > 1 {
-                        let c = compile(&job.source.lir, &job.source.relocs);
-                        *job.done.lock().expect(POISON) = Some(c);
-                    }
-                    drop(job);
-                    *IN_FLIGHT.0.lock().expect(POISON) -= 1;
-                    IN_FLIGHT.1.notify_all();
-                }
-            })
-            .expect("starting the LLVM compile thread");
-        Mutex::new(tx)
-    });
-    *IN_FLIGHT.0.lock().expect(POISON) += 1;
-    let sent = q.lock().expect(POISON).send(job);
-    if sent.is_err() {
-        *IN_FLIGHT.0.lock().expect(POISON) -= 1;
-    }
-    sent.ok()
-}
-
-const POISON: &str = "the compile thread never panics holding a lock";
-
-/// Waits until the compile thread has nothing left to do. A Vm of the LLVM
-/// backend calls this as it goes away: LLVM must not be running on the
-/// compile thread when the process exits and LLVM's global state is torn
-/// down, and its jobs' traces are gone by then, so the queue drains fast.
-pub(crate) fn quiesce() {
-    let mut n = IN_FLIGHT.0.lock().expect(POISON);
-    while *n > 0 {
-        n = IN_FLIGHT.1.wait(n).expect(POISON);
-    }
-}
-
 /// [`super::share::tier_up`] for the LLVM backend: the baseline trace `ct`
 /// compiled again by LLVM.
 ///
@@ -158,7 +106,10 @@ pub(crate) fn tier_up_llvm(
     let source = t.source.borrow_mut().take()?;
     let source = match source.downcast::<Pending>() {
         Ok(p) => {
-            let done = p.0.lock().expect(POISON).take();
+            let done =
+                p.0.lock()
+                    .expect("a job never panics holding its result")
+                    .take();
             let Some(c) = done else {
                 *t.source.borrow_mut() = Some(p);
                 return None;
@@ -176,10 +127,19 @@ pub(crate) fn tier_up_llvm(
         }
         Ok(w) => {
             let done = Arc::new(Mutex::new(None));
-            submit(Job {
-                source: w.source,
-                done: done.clone(),
-            })?;
+            let slot = done.clone();
+            let src = w.source;
+            let ticket = crate::jit_backend::llvm_thread::submit(
+                Box::new(move || {
+                    let c = compile(&src.lir, &src.relocs);
+                    *slot.lock().expect("a job never panics holding its result") = Some(c);
+                }),
+                std::time::Instant::now(),
+            );
+            crate::jit_backend::storage::from_storage(storage)
+                .ok()?
+                .llvm_tickets
+                .push(ticket);
             *t.source.borrow_mut() = Some(Box::new(Pending(done)));
             return None;
         }
