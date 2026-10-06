@@ -135,7 +135,7 @@ pub(super) fn undump(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, Bad> {
     // The main closure's upvalue count; its function repeats it.
     r.u8()?;
     let raw = read_proto(&mut r, heap, None)?;
-    Ok(lower::build(heap, raw, &translate)?)
+    lower::build(heap, raw, &translate)
 }
 
 fn translate(raw: &mut RawProto) -> Result<Lowered, String> {

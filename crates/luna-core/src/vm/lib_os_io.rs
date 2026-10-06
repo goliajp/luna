@@ -62,7 +62,7 @@ pub(crate) fn try_open_os(vm: &mut Vm) -> Result<(), LuaError> {
     // sets: strings, so a script reading them through `debug.getupvalue`
     // cannot change them
     let c = vm.str_value(b"C")?;
-    let sl = vm.lib_native_with(os_setlocale, &vec![c; LC_COUNT])?;
+    let sl = vm.lib_native_with(os_setlocale, &[c; LC_COUNT])?;
     set_field(vm, os, "setlocale", sl)?;
     vm.lib_set_global("os", Value::Table(os))?;
     vm.barrier_back_table(os);

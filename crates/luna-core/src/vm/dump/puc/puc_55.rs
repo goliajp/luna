@@ -152,7 +152,7 @@ pub(super) fn undump_puc_55(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, 
         )
         .into());
     }
-    Ok(lower::build(heap, raw, &translate)?)
+    lower::build(heap, raw, &translate)
 }
 
 fn translate(raw: &mut RawProto) -> Result<Lowered, String> {

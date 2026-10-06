@@ -57,9 +57,9 @@ impl Vm {
                 }
                 for i in 1..=n {
                     let v = self.r(base, a + i);
-                    // SAFETY: `t` is a live table (see `Gc`), and no
-                    // reference into it is held across the call
                     let r = self.table_op(|vm| {
+                        // SAFETY: `t` is a live table (see `Gc`), and no
+                        // reference into it is held across the call
                         unsafe { t.as_mut() }.set_int_raw(&mut vm.heap, offset + i as i64, v)
                     });
                     match r {

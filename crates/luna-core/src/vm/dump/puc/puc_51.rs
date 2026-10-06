@@ -121,7 +121,7 @@ pub(in crate::vm::dump) fn undump(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Pr
     check_header(bytes)?;
     let mut r = Reader::at(bytes, HEADER.len());
     let raw = read_proto(&mut r, heap, None)?;
-    Ok(lower::build(heap, raw, &translate)?)
+    lower::build(heap, raw, &translate)
 }
 
 fn check_header(bytes: &[u8]) -> Result<(), Bad> {
