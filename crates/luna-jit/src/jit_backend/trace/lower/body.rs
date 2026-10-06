@@ -22,11 +22,26 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
     lw.bcx.switch_to_block(body_loop);
     // Intentionally NOT sealed: the tail's clean-close back-edge
     // adds a second predecessor below.
-    lw.stored.extend(
-        lw.regs_full
-            .iter()
-            .map(|&v| Some(use_var_resolved(&mut lw.bcx, v))),
-    );
+    // A register the body writes is written back only where something
+    // reads reg_state (an exit, or an op that is not `pure_op`), not each
+    // iteration; any other register holds at the head what reg_state
+    // holds, which the back edge keeps true (`emit_back_edge`).
+    let mut written = vec![false; lw.regs_full.len()];
+    for w in compute_body_writes(record, &pl.op_offsets) {
+        if let Some(x) = written.get_mut(w as usize) {
+            *x = true;
+        }
+    }
+    for (idx, x) in written.iter_mut().enumerate() {
+        // inline frames' windows: written by the calls the trace inlines
+        *x |= idx >= pl.max_stack;
+    }
+    for (idx, &v) in lw.regs_full.iter().enumerate() {
+        let val = use_var_resolved(&mut lw.bcx, v);
+        let promise = (!written[idx]).then_some(val);
+        lw.stored.push(promise);
+        lw.head_stored.push(promise);
+    }
     // the virtual register of a constant-operand op (see `vconsts`)
     let kvar = lw.bcx.declare_var(types::I64);
     // this op's register window (a copy, so the emit code can take `lw`
@@ -34,8 +49,12 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
     let mut regs_w: Vec<Variable> = Vec::with_capacity(frame_w + 1);
     checkpoint("pre:main-emit-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
-        // Commit the previous op's register writes to reg_state.
-        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+        // Commit the earlier ops' register writes to reg_state where this
+        // op may read it, and where it can take another way that rejoins
+        // later (both ways then hold the same reg_state)
+        if !pure_op(rop.inst.op()) || pl.alt_paths.get(i).is_some_and(|a| a.is_some()) {
+            sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+        }
         alt_join(lw, i);
         let vk = vconst(i);
         // R[C] of a register-operand op, read before this op's own write
@@ -158,8 +177,70 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         emit_op(lw, pl, &oc)?;
         readonly_after_op(lw, oc.op);
     }
-    sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+    // the tails that call helpers reading reg_state; the others store
+    // what they leave with
+    let generic_for = pl
+        .for_loop_idx_opt
+        .is_some_and(|k| record.ops[k].inst.op() == Op::TForLoop);
+    if generic_for || pl.downrec_idx_opt.is_some() || pl.self_link_idx_opt.is_some() {
+        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+    }
     alt_join(lw, effective_end);
     debug_assert!(lw.alt_joins.is_empty(), "every skip joins a recorded op");
     Some(())
+}
+
+/// Ops whose lowering neither calls a helper that reads reg_state or the
+/// Lua stack nor lets the collector run: arithmetic, comparisons, moves,
+/// loads of constants and the numeric `for` step. Their guards leave
+/// through exits, which store what they leave with.
+fn pure_op(op: Op) -> bool {
+    matches!(
+        op,
+        Op::Move
+            | Op::LoadI
+            | Op::LoadF
+            | Op::LoadK
+            | Op::LoadNil
+            | Op::LoadFalse
+            | Op::LoadTrue
+            | Op::Add
+            | Op::Sub
+            | Op::Mul
+            | Op::Div
+            | Op::IDiv
+            | Op::Mod
+            | Op::AddI
+            | Op::AddK
+            | Op::SubK
+            | Op::MulK
+            | Op::DivK
+            | Op::IDivK
+            | Op::ModK
+            | Op::Unm
+            | Op::BAnd
+            | Op::BOr
+            | Op::BXor
+            | Op::Shl
+            | Op::Shr
+            | Op::BAndK
+            | Op::BOrK
+            | Op::BXorK
+            | Op::ShrI
+            | Op::ShlI
+            | Op::BNot
+            | Op::Not
+            | Op::Lt
+            | Op::Le
+            | Op::Eq
+            | Op::LtI
+            | Op::LeI
+            | Op::GtI
+            | Op::GeI
+            | Op::EqI
+            | Op::EqK
+            | Op::Test
+            | Op::Jmp
+            | Op::ForLoop
+    )
 }
