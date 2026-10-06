@@ -24,7 +24,7 @@ pub(super) fn fold_arith(
         _ => return None,
     };
     let r = numeral(ast, rhs, version, zeros)?;
-    Some(match fold_nums(op, l, r, version)? {
+    Some(match fold_nums(op, l, (ast, rhs, r), version)? {
         Num::Int(i) => Exp::Int(i),
         Num::Float(f) => Exp::Float(f),
     })
@@ -65,7 +65,7 @@ pub(super) fn numeral(
     let mut n = numeral_leaf(ast, cur, version, &mut z)?;
     for (op, rhs) in ops.into_iter().rev() {
         let r = numeral(ast, rhs, version, &mut z)?;
-        n = fold_nums(op, n, r, version)?;
+        n = fold_nums(op, n, (ast, rhs, r), version)?;
     }
     zeros.extend(z);
     Some(n)
@@ -216,8 +216,15 @@ pub(super) fn fold_unary(op: UnOp, n: Num, version: LuaVersion) -> Option<Num> {
     }
 }
 
-fn fold_nums(op: BinOp, l: Num, r: Num, version: LuaVersion) -> Option<Num> {
+/// `l op r`, where `r` is the value of node `rhs` of `ast`.
+fn fold_nums(
+    op: BinOp,
+    l: Num,
+    (ast, rhs, r): (&Chunk, ExprId, Num),
+    version: LuaVersion,
+) -> Option<Num> {
     use Num::*;
+    note_fold(ast, op, l, (rhs, r), version);
     if version >= LuaVersion::Lua53 {
         return fold_numbers(Arith::of(op)?, l, r, version == LuaVersion::Lua53);
     }
@@ -250,4 +257,38 @@ fn fold_nums(op: BinOp, l: Num, r: Num, version: LuaVersion) -> Option<Num> {
         return None;
     }
     Some(v)
+}
+
+/// Note what PUC's fold of `l op r` leaves in `errno`, `r` being the value
+/// of node `rhs`.
+pub(super) fn note_fold(
+    ast: &Chunk,
+    op: BinOp,
+    l: Num,
+    (rhs, r): (ExprId, Num),
+    version: LuaVersion,
+) {
+    if let Some(stamp) = ast.fold_stamp(rhs) {
+        crate::cerrno::fold_effect(rhs.0, stamp, fold_errno(op, l, r, version));
+    }
+}
+
+/// What PUC's fold of `l op r` leaves in `errno`: its parser calls C `pow`
+/// for `^` (5.4 squares instead when `r` is 2), and from 5.3 `fmod` for a
+/// float `%` by nonzero, before it decides whether to keep the result.
+fn fold_errno(op: BinOp, l: Num, r: Num, version: LuaVersion) -> Option<i32> {
+    use crate::cerrno::{Lib, fmod_errno, pow_errno};
+    let (a, b) = (l.as_f64(), r.as_f64());
+    match op {
+        BinOp::Pow if version >= LuaVersion::Lua54 && b == 2.0 => None,
+        BinOp::Pow => pow_errno(Lib::HOST, a, b, a.powf(b)),
+        BinOp::Mod
+            if version >= LuaVersion::Lua53
+                && b != 0.0
+                && !matches!((l, r), (Num::Int(_), Num::Int(_))) =>
+        {
+            fmod_errno(a, b)
+        }
+        _ => None,
+    }
 }

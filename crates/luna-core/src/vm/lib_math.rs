@@ -3,6 +3,7 @@
 //! `luaL_checkint`; 5.3+ keeps integers integral (`pushnumint`). The RNG is
 //! xoshiro256** (PUC 5.4+'s algorithm), state per VM.
 
+use crate::cerrno::{self, MathFn};
 use crate::numeric::Num;
 use crate::runtime::Value;
 use crate::runtime::value::f2i_exact;
@@ -10,7 +11,7 @@ use crate::version::LuaVersion as V;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::arg_error;
 use crate::vm::error::LuaError;
-use crate::vm::exec::{Vm, c_fmod};
+use crate::vm::exec::Vm;
 
 mod frexp;
 mod minmax;
@@ -186,17 +187,17 @@ macro_rules! float_fn {
     };
 }
 
-float_fn!(m_sqrt, f64::sqrt);
-float_fn!(m_sin, f64::sin);
-float_fn!(m_cos, f64::cos);
-float_fn!(m_tan, f64::tan);
-float_fn!(m_asin, f64::asin);
-float_fn!(m_acos, f64::acos);
-float_fn!(m_exp, f64::exp);
-float_fn!(m_cosh, f64::cosh);
-float_fn!(m_sinh, f64::sinh);
+float_fn!(m_sqrt, |x| cerrno::math1(MathFn::Sqrt, x));
+float_fn!(m_sin, |x| cerrno::math1(MathFn::Sin, x));
+float_fn!(m_cos, |x| cerrno::math1(MathFn::Cos, x));
+float_fn!(m_tan, |x| cerrno::math1(MathFn::Tan, x));
+float_fn!(m_asin, |x| cerrno::math1(MathFn::Asin, x));
+float_fn!(m_acos, |x| cerrno::math1(MathFn::Acos, x));
+float_fn!(m_exp, |x| cerrno::math1(MathFn::Exp, x));
+float_fn!(m_cosh, |x| cerrno::math1(MathFn::Cosh, x));
+float_fn!(m_sinh, |x| cerrno::math1(MathFn::Sinh, x));
 float_fn!(m_tanh, f64::tanh);
-float_fn!(m_log10, f64::log10);
+float_fn!(m_log10, |x| cerrno::math1(MathFn::Log10, x));
 
 fn m_deg(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let x = argcheck::check_number(vm, Args::new(fs, nargs), 0)?;
@@ -223,7 +224,8 @@ fn m_ldexp(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let m = argcheck::check_number(vm, a, 0)?;
     // The exponent is a C `int` in every version.
     let e = argcheck::check_int(vm, a, 1)?;
-    Ok(vm.nat_return(fs, &[Value::Float(ldexp(m, e.into()))]))
+    let r = cerrno::ldexp_applied(m, ldexp(m, e.into()));
+    Ok(vm.nat_return(fs, &[Value::Float(r)]))
 }
 
 fn m_atan(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -249,7 +251,7 @@ fn m_pow(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let x = argcheck::check_number(vm, a, 0)?;
     let y = argcheck::check_number(vm, a, 1)?;
-    Ok(vm.nat_return(fs, &[Value::Float(x.powf(y))]))
+    Ok(vm.nat_return(fs, &[Value::Float(cerrno::pow(x, y))]))
 }
 
 fn m_log(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -258,16 +260,19 @@ fn m_log(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let ver = vm.version();
     // 5.1 `log` takes no base; 5.2 added it with a log10 special case and
     // 5.3 a log2 one, each exact where the quotient would not be.
+    let log = |x| cerrno::math1(MathFn::Log, x);
     let r = if ver == V::Lua51 || a.is_none_or_nil(vm, 1) {
-        x.ln()
+        log(x)
     } else {
         let base = argcheck::check_number(vm, a, 1)?;
         if base == 2.0 && ver >= V::Lua53 {
-            x.log2()
+            cerrno::math1(MathFn::Log2, x)
         } else if base == 10.0 {
-            x.log10()
+            cerrno::math1(MathFn::Log10, x)
         } else {
-            x.ln() / base.ln()
+            // both calls leave their effect, the left one first
+            let lx = log(x);
+            lx / log(base)
         }
     };
     Ok(vm.nat_return(fs, &[Value::Float(r)]))
@@ -289,7 +294,7 @@ fn m_fmod(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     }
     let x = argcheck::check_number(vm, a, 0)?;
     let y = argcheck::check_number(vm, a, 1)?;
-    Ok(vm.nat_return(fs, &[Value::Float(c_fmod(x, y))]))
+    Ok(vm.nat_return(fs, &[Value::Float(cerrno::fmod(x, y))]))
 }
 
 fn m_modf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

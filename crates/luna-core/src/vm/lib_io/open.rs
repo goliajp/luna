@@ -2,43 +2,6 @@
 
 use super::*;
 
-/// How `fopen` opens a mode; `None` when the mode is not one `fopen`
-/// accepts (EINVAL).
-fn fopen_options(mode: &[u8]) -> Option<(std::fs::OpenOptions, bool)> {
-    let mut o = std::fs::OpenOptions::new();
-    let first = *mode.first()?;
-    let rest = &mode[1..];
-    let plus = rest.contains(&b'+');
-    // macOS fopen honours 'x' (O_EXCL) and ignores the other extra letters
-    let excl = rest.contains(&b'x');
-    let writable = match first {
-        b'r' => {
-            o.read(true).write(plus);
-            plus
-        }
-        b'w' => {
-            o.write(true).read(plus).truncate(true);
-            if excl {
-                o.create_new(true);
-            } else {
-                o.create(true);
-            }
-            true
-        }
-        b'a' => {
-            o.append(true).read(plus);
-            if excl {
-                o.create_new(true);
-            } else {
-                o.create(true);
-            }
-            true
-        }
-        _ => return None,
-    };
-    Some((o, writable))
-}
-
 /// `l_checkmode`: 5.2 accepts `[rwa]%+?b?`, 5.3+ `[rwa]%+?b*`; 5.1 checks
 /// nothing and lets `fopen` decide.
 fn mode_ok(v: LuaVersion, mode: &[u8]) -> bool {
@@ -55,11 +18,6 @@ fn mode_ok(v: LuaVersion, mode: &[u8]) -> bool {
     }
 }
 
-/// Whether `vm` opens a file with `mode` in the MSVC C library's text mode.
-fn text_mode_for(vm: &Vm, mode: &[u8]) -> bool {
-    vm.crt_text && !c_str(mode).contains(&b'b')
-}
-
 /// The handle for a file opened with `mode`, with the C library's `FILE`
 /// when the Vm opens files as PUC built with MSVC does.
 fn opened(vm: &mut Vm, f: std::fs::File, writable: bool, mode: &[u8], pipe: bool) -> Gc<Userdata> {
@@ -71,19 +29,43 @@ fn opened(vm: &mut Vm, f: std::fs::File, writable: bool, mode: &[u8], pipe: bool
     }
     u
 }
-fn open_file(name: &[u8], mode: &[u8], text: bool) -> std::io::Result<(std::fs::File, bool)> {
+/// `fopen(name, mode)`: the file and whether it can be written. A Vm that
+/// opens files as PUC built with MSVC does reads the mode as that C library
+/// does, and ends the process where it would.
+pub(crate) fn open_file(
+    crt: bool,
+    name: &[u8],
+    mode: &[u8],
+) -> std::io::Result<(std::fs::File, bool)> {
     let mode = c_str(mode);
-    let (o, writable) = fopen_options(mode).ok_or_else(|| posix_error(EINVAL))?;
-    let f = o.open(os_path(name))?;
-    if text && mode.contains(&b'+') && f.metadata()?.len() > 0 {
-        // through a handle of its own: an append handle may not shorten
-        let mut g = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(os_path(name))?;
-        msvc::drop_final_ctrl_z(&mut g)?;
+    let spec = if crt {
+        if mode.is_empty() {
+            crt::invalid_parameter();
+        }
+        // checked ahead of the mode, without ending the process
+        if c_str(name).is_empty() {
+            return Err(posix_error(EINVAL));
+        }
+        fopen::ucrt_mode(mode).unwrap_or_else(|| crt::invalid_parameter())
+    } else {
+        fopen::libc_mode(mode).ok_or_else(|| posix_error(EINVAL))?
+    };
+    let f = fopen::os_open(name, &spec)?;
+    if crt && !spec.binary && spec.update && f.metadata()?.is_file() {
+        // `truncate_ctrl_z_if_present`: its seek to the last byte of an
+        // empty file fails, which leaves EINVAL in `errno`
+        if f.metadata()?.len() == 0 {
+            crate::cerrno::set(EINVAL);
+        } else {
+            // through a handle of its own: an append handle may not shorten
+            let mut g = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(os_path(name))?;
+            msvc::drop_final_ctrl_z(&mut g)?;
+        }
     }
-    Ok((f, writable))
+    Ok((f, spec.writable()))
 }
 
 pub(super) fn io_open(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -96,8 +78,8 @@ pub(super) fn io_open(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     if vm.version() >= LuaVersion::Lua52 && !mode_ok(vm.version(), &mode) {
         return Err(arg_error(vm, 2, "invalid mode"));
     }
-    let text = text_mode_for(vm, &mode);
-    match open_file(&name, &mode, text) {
+    reset_errno(vm);
+    match open_file(vm.crt_text, &name, &mode) {
         Ok((f, writable)) => {
             let u = opened(vm, f, writable, &mode, false);
             Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
@@ -109,6 +91,7 @@ pub(super) fn io_open(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
 pub(super) fn io_tmpfile(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static CTR: AtomicU64 = AtomicU64::new(0);
+    reset_errno(vm);
     let n = CTR.fetch_add(1, Ordering::Relaxed);
     let mut path = std::env::temp_dir();
     path.push(format!("lua_tmp_{}_{n}", std::process::id()));
@@ -152,6 +135,7 @@ pub(super) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             return Ok(file_fail(vm, fs, Some(&prog), &e));
         }
     };
+    reset_errno(vm);
     // `l_popen` flushes every output stream first (`fflush(NULL)`), so the
     // child sees what the parent wrote before it.
     flush_all(vm);
@@ -281,10 +265,10 @@ pub(super) fn open_checked(
     name: &[u8],
     mode: &[u8],
 ) -> Result<Gc<Userdata>, LuaError> {
-    let text = text_mode_for(vm, mode);
-    match open_file(name, mode, text) {
+    match open_file(vm.crt_text, name, mode) {
         Ok((f, writable)) => Ok(opened(vm, f, writable, mode, false)),
         Err(e) => {
+            note_failure(&e);
             let n = String::from_utf8_lossy(c_str(name)).into_owned();
             let err = strerror(&e);
             Err(if vm.version() == LuaVersion::Lua51 {

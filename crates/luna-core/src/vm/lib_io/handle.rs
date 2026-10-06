@@ -118,6 +118,14 @@ fn push_closed(vm: &mut Vm, fs: u32, c: Closed) -> u32 {
     }
 }
 
+/// `io_fclose` and `io_pclose` begin with `errno = 0` (5.4+); closing a
+/// standard file (`io_noclose`) does not.
+fn close_reset(vm: &Vm, u: Gc<Userdata>) {
+    if matches!(u.file(), FileHandle::File(_)) {
+        reset_errno(vm);
+    }
+}
+
 /// `io.close([file])`, also the 5.2 method: no argument means the default
 /// output.
 pub(super) fn io_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -130,6 +138,7 @@ pub(super) fn io_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     } else {
         check_open(vm, Args::new(fs, nargs), 0)?
     };
+    close_reset(vm, u);
     let c = close_stream(u);
     Ok(push_closed(vm, fs, c))
 }
@@ -145,6 +154,7 @@ pub(super) fn f_close_51(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
 
 pub(super) fn f_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = check_open(vm, Args::new(fs, nargs), 0)?;
+    close_reset(vm, u);
     let c = close_stream(u);
     Ok(push_closed(vm, fs, c))
 }
@@ -153,6 +163,7 @@ pub(super) fn f_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
 pub(super) fn f_gc(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = check_stream(vm, Args::new(fs, nargs), 0)?;
     if !u.file().is_closed() {
+        close_reset(vm, u);
         let _ = close_stream(u); // PUC's f_gc drops aux_close's results
     }
     Ok(vm.nat_return(fs, &[]))

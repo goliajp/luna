@@ -84,15 +84,15 @@ fn number_printing() {
 fn hex_float_rounding() {
     // > 53 significant bits forces rounding; Rust's u64→f64 conversion is
     // correctly rounded and serves as the reference
-    let Some(Num::Float(f)) = hex_literal(b"1FFFFFFFFFFFFF8.0p0", true, true) else {
+    let Some(Num::Float(f)) = hex_literal(b"1FFFFFFFFFFFFF8.0p0", true, true, HexConv::Own) else {
         panic!()
     };
     assert_eq!(f, 0x1FFFFFFFFFFFFF8u64 as f64);
-    let Some(Num::Float(g)) = hex_literal(b"1.8p1", true, true) else {
+    let Some(Num::Float(g)) = hex_literal(b"1.8p1", true, true, HexConv::Own) else {
         panic!()
     };
     assert_eq!(g, 3.0);
-    let Some(Num::Float(h)) = hex_literal(b"0.8", true, true) else {
+    let Some(Num::Float(h)) = hex_literal(b"0.8", true, true, HexConv::Own) else {
         panic!()
     };
     assert_eq!(h, 0.5);

@@ -141,12 +141,9 @@ pub(super) fn seek(u: Gc<Userdata>, op: usize, offset: i64) -> std::io::Result<i
     })
 }
 
-/// `clearerr`, and (5.4+) `errno = 0`, at the start of a read.
-pub(super) fn begin_read(vm: &Vm, u: Gc<Userdata>) {
+/// `clearerr` at the start of a read.
+pub(super) fn begin_read(u: Gc<Userdata>) {
     with(u, |f, _| f.clearerr());
-    if vm.version() >= LuaVersion::Lua54 {
-        super::msvc::set_errno(0);
-    }
 }
 
 /// `ferror` after the formats of a read.
