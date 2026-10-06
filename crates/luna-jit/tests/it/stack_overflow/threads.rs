@@ -81,10 +81,12 @@ fn check(name: &str) {
 
 #[test]
 fn every_case_has_a_test() {
+    // by line, so a checkout with CRLF line endings reads the same
     let src = include_str!("threads.rs");
     for c in CASES {
         assert!(
-            src.contains(&format!("\n    {}\n", c.name)),
+            src.lines()
+                .any(|l| l.trim_end() == format!("    {}", c.name)),
             "no test for {}",
             c.name
         );
