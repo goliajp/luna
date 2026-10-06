@@ -170,6 +170,24 @@ and error. So, as in `lua.exe`:
   on a console written out after every call; standard error is written
   out after every call; so the two interleave as they do with `lua.exe`.
 
+- 5.1 passes its `io.open` mode to that library's `fopen` as it is, so a
+  `ccs=UTF-8`, `ccs=UTF-16LE` or `ccs=UNICODE` in it opens the file in
+  the library's Unicode text mode (UTF-16 code units in the stream, with
+  a byte order mark), and a mode the library calls invalid ends the
+  process with status 0xC0000409.
+
+The C library's `errno` is part of what a script can see: in PUC 5.1–5.3
+on Windows a failure that sets none (a `write` right after a `read`)
+reports whatever an earlier C call left there. luna keeps that value for
+every dialect and platform and updates it where PUC's C calls would, by
+the rules of the Universal CRT on Windows and of glibc elsewhere: number
+conversions out of range, math functions out of their domain or range,
+`^` and float `%` (in the interpreter, in compiled code and in constants
+the parser folds, in the order PUC's parser folds them), failed opens,
+removes and renames, and `os.time` beyond the library's range; 5.4 and
+5.5 clear it where PUC does. On Windows a failure reports the C library's
+message and number, not the system's.
+
 An embedding host gets the files' behaviour only by calling
 `Vm::set_crt_text_mode(true)`, and the standard streams' only through
 `luna_core::stdio::use_c_stdout` on Windows, which a host normally does

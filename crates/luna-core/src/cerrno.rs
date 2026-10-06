@@ -13,6 +13,7 @@
 
 use std::cell::Cell;
 
+pub mod conv;
 mod ucrt;
 pub use ucrt::errno_of_win32;
 
@@ -157,16 +158,6 @@ impl HexConv {
     } else {
         HexConv::Strtod
     };
-}
-
-/// Apply what converting a hexadecimal numeral to `x` leaves; `nonzero`
-/// and `exact` as for [`strtod_errno`].
-pub fn after_hex(conv: HexConv, x: f64, nonzero: bool, exact: bool) {
-    apply(match conv {
-        HexConv::Strtod => strtod_errno(Lib::HOST, x, nonzero, exact),
-        HexConv::Own if nonzero => ldexp_errno(Lib::HOST, 1.0, x),
-        HexConv::Own => None,
-    });
 }
 
 /// What `ldexp(m, e)` leaves for a finite nonzero `m` and result `x`.

@@ -98,3 +98,44 @@ fn win32_codes_map_as_the_ucrt_maps_them() {
     assert_eq!((m(188), m(202)), (8, 8));
     assert_eq!((m(14), m(123), m(203), m(5000), m(0)), (22, 22, 22, 22, 22));
 }
+
+#[test]
+fn conversions_leave_what_the_c_calls_leave() {
+    use super::conv::{Dialect, number};
+    let after = |s: &str, d| {
+        super::set(0);
+        number(s.as_bytes(), d);
+        super::get()
+    };
+    for d in [Dialect::Lua51, Dialect::Lua52, Dialect::Later] {
+        assert_eq!(after("1e999", d), ERANGE, "{d:?}");
+        // converted before the trailing junk is seen
+        assert_eq!(after(" -1e999z", d), ERANGE, "{d:?}");
+        assert_eq!(after("1.5", d), 0, "{d:?}");
+        assert_eq!(after("inf", d), 0, "{d:?}");
+    }
+    // 5.2 sends anything with an x to its own reader, which wants `0x`
+    assert_eq!(after("1e999x", Dialect::Lua52), 0);
+    assert_eq!(after("0x1p2000z", Dialect::Lua52), ERANGE);
+    // that reader overflows its double before `ldexp`, which then sets nothing
+    let long = format!("0x{}p0", "f".repeat(300));
+    assert_eq!(after(&long, Dialect::Lua52), 0);
+    // 5.1's strtod reads hex too
+    assert_eq!(after(&long, Dialect::Lua51), ERANGE);
+    // integers convert without strtod
+    assert_eq!(after(&format!("0x{}", "f".repeat(300)), Dialect::Later), 0);
+    assert_eq!(
+        after(&format!("1{}", "0".repeat(400)), Dialect::Later),
+        ERANGE
+    );
+    assert_eq!(after("1e999n", Dialect::Later), 0);
+    assert_eq!(after("1.0e999n", Dialect::Later), ERANGE);
+    // the hexadecimal conversion of 5.3 and later: strtod, or on Windows
+    // Lua's reader
+    let windows = cfg!(windows);
+    assert_eq!(
+        after("1e999x", Dialect::Later),
+        if windows { 0 } else { ERANGE }
+    );
+    assert_eq!(after(&long, Dialect::Later), ERANGE);
+}

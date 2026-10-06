@@ -20,7 +20,7 @@ pub(crate) struct Spec {
     pub(crate) binary: bool,
     /// `D` (`_O_TEMPORARY`): the file goes when it is closed
     pub(crate) temporary: bool,
-    /// `N` (`_O_NOINHERIT`)
+    /// `N` (`_O_NOINHERIT`); luna's handles are never inherited
     pub(crate) no_inherit: bool,
     /// the encoding a `ccs=` names
     pub(crate) ccs: Option<Ccs>,
@@ -229,7 +229,11 @@ pub(crate) fn os_open(name: &[u8], spec: &Spec) -> std::io::Result<std::fs::File
         share |= FILE_SHARE_DELETE;
     }
     let path = wide(name);
-    let open = |access| create_file(&path, access, share, !spec.no_inherit, create, flags);
+    // The library makes the handle inheritable unless the mode has `N`;
+    // luna never does, as std does not: a child process another thread of
+    // the host starts would hold the file open, and Windows then neither
+    // removes nor renames it.
+    let open = |access| create_file(&path, access, share, false, create, flags);
     match open(access) {
         Err(_) if access & GENERIC_READ != 0 && spec.write && !spec.update => {
             open(access & !GENERIC_READ)

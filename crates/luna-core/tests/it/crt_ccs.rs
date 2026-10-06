@@ -46,6 +46,7 @@ fn ccs_case_child() {
         },
         Err(e) => panic!("case {case}: {}", vm.error_text(&e)),
     };
+    drop(vm);
     let _ = std::fs::remove_dir_all(&dir);
     println!("{OUT_MARK}{out}");
 }

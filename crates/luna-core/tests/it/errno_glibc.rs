@@ -50,6 +50,7 @@ fn failures_report_errno_as_puc_on_glibc() {
             },
             Err(e) => panic!("{v:?}: {}", vm.error_text(&e)),
         };
+        drop(vm);
         std::fs::remove_dir_all(&dir).expect("remove the work dir");
         for (i, (g, w)) in got.lines().zip(want.lines()).enumerate() {
             assert_eq!(g, w, "{v:?}, line {}", i + 1);
