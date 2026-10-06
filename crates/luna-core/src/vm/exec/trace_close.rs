@@ -181,7 +181,7 @@ impl Vm {
             .borrow()
             .iter()
             .any(|t| t.head_pc == head_pc_val);
-        if !already_cached {
+        if !already_cached && !native_stack::is_low(native_stack::COMPILE_RESERVE) {
             // Internal-loop = true: the trace runs in
             // a native loop until a cmp side-exits, so
             // the dispatcher's per-entry marshal cost

@@ -8,6 +8,7 @@
 
 use crate::frontend::SyntaxError;
 use crate::jit::send_compat::TArc;
+use crate::native_stack;
 use crate::numeric::{self, Num};
 use crate::runtime::{
     AfterClose, CallFrame, CloseCont, ContKind, Coro, CoroStatus, Frame, Gc, Heap, HostCont,
@@ -100,17 +101,48 @@ const MAX_TAG_LOOP: u32 = 2000;
 /// is more than any reasonable program needs and matches PUC 5.4/5.5; a
 /// bound of `15` is tight enough to fire on calls.lua :194 (N=20).
 const MAX_CCMT: u32 = 200;
-/// PUC LUAI_MAXCCALLS analogue: native↔Lua nesting bound.
+/// PUC `LUAI_MAXCCALLS`: the C level a call may not run at. luna counts
+/// what PUC's `nCcalls` counts: calls made from native code (`c_depth`)
+/// and the calls the interpreter makes through a continuation frame, which
+/// PUC makes through its C stack (`pcall_depth`: pcall / xpcall,
+/// metamethods, `__pairs`, `__close`).
 pub(crate) const MAX_C_DEPTH: u32 = 200;
+/// The level at which a call made while a message handler runs fails with
+/// "error in error handling": PUC 5.4's `luaE_checkcstack`
+/// (`LUAI_MAXCCALLS / 10 * 11`) and 5.1–5.3's `luaD_call`
+/// (`LUAI_MAXCCALLS + LUAI_MAXCCALLS >> 3`).
+const ERRERR_C_DEPTH: u32 = 220;
+const ERRERR_C_DEPTH_PRE54: u32 = 225;
+/// PUC 5.1 `LUAI_MAXCALLS`: nested Lua calls a 5.1 thread may make.
+const MAX_CALLS_51: u32 = 20000;
 /// Stack an xpcall handler may use past `MAX_LUA_STACK` while handling a
 /// stack overflow: PUC's 200 extra `ERRORSTACKSIZE` slots, plus the frame
-/// reserve (256) the overflowing call was refused, so the handler's first
-/// frame fits where that one did not.
-const ERROR_STACK_EXTRA: u32 = 200 + 256;
-/// luna's engine-level VM stack cap (used by call-site overflow checks).
-/// Slightly larger than PUC's `LUAI_MAXSTACK` so engine internals have a
-/// little headroom above any single library push.
-const MAX_LUA_STACK: u32 = 1 << 20;
+/// reserve the overflowing call was refused, so the handler's first frame
+/// fits where that one did not (PUC `ERRORSTACKSIZE - LUAI_MAXSTACK`).
+const STACK_ERR_SPACE: u32 = 200;
+/// Where a thread's stack ends for a call needing `n` slots at top `t`
+/// (both counted from the first function, as luna's slots are; PUC's
+/// slot 0 holds no function, so its `L->top - L->stack` is one more):
+/// the call fails when `t + n` passes it. PUC 5.4 and 5.5 fail when
+/// `L->top - L->stack + n > LUAI_MAXSTACK`, 5.2 and 5.3 when that sum
+/// plus `EXTRA_STACK` (5) does. 5.1 has no stack limit: its 20000-frame
+/// `LUAI_MAXCALLS` ends a recursion first (`MAX_CALLS_51`), and the cap
+/// here only bounds memory.
+/// PUC 5.1's `BASIC_CI_SIZE`: the frames a thread's `CallInfo` array
+/// holds at first.
+const BASIC_FRAME_SIZE_51: u32 = 8;
+
+/// The lowest `lua_stack_limit` of any dialect: below it a call needs no
+/// exact check.
+const STACK_LIMIT_FLOOR: u32 = 1_000_000 - 5 - 1;
+
+fn lua_stack_limit(version: LuaVersion) -> u32 {
+    match version {
+        LuaVersion::Lua51 => (1 << 20) - 1,
+        LuaVersion::Lua52 | LuaVersion::Lua53 => 1_000_000 - 5 - 1,
+        _ => 1_000_000 - 1,
+    }
+}
 /// PUC `LUAI_MAXSTACK` (`luaconf.h`): the cap library code consults via
 /// `lua_checkstack` to refuse multi-value pushes (`table.unpack` returning
 /// N values, `string.pack` results, etc.). 5.3 coroutine.lua :530 pins

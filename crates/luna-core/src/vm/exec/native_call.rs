@@ -3,6 +3,7 @@
 //! one a closure is was fixed when it was created ([`NativeKind`]).
 
 use super::*;
+use crate::vm::exec::protected::ProtectedBy;
 
 /// See [`crate::runtime::NativeClosure::kind`].
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -135,16 +136,37 @@ impl Vm {
             // suspended), push a continuation frame and drive the call
             // through the interpreter loop (PUC lua_pcallk). A yield
             // inside it is preserved with the thread's saved frames.
-            NativeKind::Pcall | NativeKind::HostPcallInC | NativeKind::HostPcall => {
-                Some(self.begin_pcall(func_slot, nargs, nresults))
+            NativeKind::Pcall => {
+                Some(self.begin_pcall(func_slot, nargs, nresults, ProtectedBy::Lua))
+            }
+            NativeKind::HostPcallInC => {
+                Some(self.begin_pcall(func_slot, nargs, nresults, ProtectedBy::HostInC))
+            }
+            NativeKind::HostPcall => {
+                Some(self.begin_pcall(func_slot, nargs, nresults, ProtectedBy::Host))
             }
             // 5.1 `xpcall(f, err)` calls `f` with no arguments
             NativeKind::Xpcall => {
                 let forward = self.version > LuaVersion::Lua51;
-                Some(self.begin_xpcall(func_slot, nargs, nresults, forward, false))
+                Some(self.begin_xpcall(
+                    func_slot,
+                    nargs,
+                    nresults,
+                    forward,
+                    false,
+                    ProtectedBy::Lua,
+                ))
             }
-            NativeKind::HostXpcall | NativeKind::HostXpcallInC => {
-                Some(self.begin_xpcall(func_slot, nargs, nresults, true, true))
+            NativeKind::HostXpcallInC => Some(self.begin_xpcall(
+                func_slot,
+                nargs,
+                nresults,
+                true,
+                true,
+                ProtectedBy::HostInC,
+            )),
+            NativeKind::HostXpcall => {
+                Some(self.begin_xpcall(func_slot, nargs, nresults, true, true, ProtectedBy::Host))
             }
             // From 5.4 on, pairs(t) calls a __pairs metamethod yieldably
             // (PUC luaB_pairs uses lua_callk). 5.2/5.3 use a plain

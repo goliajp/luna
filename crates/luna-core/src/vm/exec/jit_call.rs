@@ -8,13 +8,19 @@ impl Vm {
     /// `Some(values)` when the cached native fn is callable for a
     /// zero-arg call. (Non-zero-arg dispatch is handled by
     /// `try_jit_call_op` from inside `begin_call`.)
-    pub(super) fn try_jit_call(&mut self, cl: Gc<LuaClosure>) -> Option<Vec<Value>> {
+    pub(super) fn try_jit_call(
+        &mut self,
+        cl: Gc<LuaClosure>,
+    ) -> Option<Result<Vec<Value>, LuaError>> {
         use crate::runtime::function::JitProtoState;
         if !self.jit.enabled {
             return None;
         }
         let proto = cl.proto;
         if let JitProtoState::Untried = proto.jit.get() {
+            if native_stack::is_low(native_stack::COMPILE_RESERVE) {
+                return Default::default();
+            }
             self.populate_jit_cache(proto);
         }
         match proto.jit.get() {
@@ -44,6 +50,9 @@ impl Vm {
                 // SAFETY: `f` is the compiled chunk's entry, transmuted above from the entry pointer the backend returned for this proto with this signature; the guard above pins this Vm and `cl` for the helpers the code calls
                 let r = unsafe { f() };
                 drop(_jit_vm_guard);
+                if let Some(e) = self.jit.pending_raise.take() {
+                    return Some(Err(e));
+                }
                 // A JIT helper may have detected a metatable
                 // on a table operand and parked a deopt request here.
                 // Discard the sentinel value and return None so the caller
@@ -52,7 +61,7 @@ impl Vm {
                 if self.jit.pending_err.take().is_some() {
                     return None;
                 }
-                Some(if returns_one {
+                Some(Ok(if returns_one {
                     let v = if ret_is_float {
                         Value::Float(f64::from_bits(r as u64))
                     } else if ret_is_table {
@@ -66,7 +75,7 @@ impl Vm {
                     vec![v]
                 } else {
                     Vec::new()
-                })
+                }))
             }
             // Non-zero-arg Compiled state: call_value's empty-args
             // fast path can't drive it. Op::Call handles those.
@@ -142,6 +151,8 @@ impl Vm {
         wanted: i32,
     ) -> bool {
         use crate::runtime::function::JitProtoState;
+        // (compiled self-recursion checks the native stack itself, before
+        // its first self call)
         if !self.jit.enabled {
             return false;
         }
@@ -152,6 +163,9 @@ impl Vm {
         }
         let proto = cl.proto;
         if let JitProtoState::Untried = proto.jit.get() {
+            if native_stack::is_low(native_stack::COMPILE_RESERVE) {
+                return Default::default();
+            }
             self.populate_jit_cache(proto);
         }
         let JitProtoState::Compiled {
@@ -221,6 +235,10 @@ impl Vm {
             }
         };
         drop(_jit_vm_guard);
+        // the caller raises it
+        if self.jit.pending_raise.is_some() {
+            return true;
+        }
         // See matching path in `try_jit_call`. A helper
         // flagged a metatable on a table operand; bail to the interpreter
         // so `push_frame` runs the call from scratch.
@@ -247,5 +265,84 @@ impl Vm {
             self.finish_results(func_slot, 0, wanted);
         }
         true
+    }
+
+    /// Lua calls the running thread may still make before one raises
+    /// "stack overflow" for its depth (5.1's `LUAI_MAXCALLS`), not counting
+    /// `native` calls compiled code made on the native stack; `i64::MAX`
+    /// in dialects without that limit.
+    #[doc(hidden)]
+    pub fn jit_call_budget(&self, native: i64) -> i64 {
+        if self.frame_cap == u32::MAX {
+            return i64::MAX;
+        }
+        // the array doubles until a doubling would pass the limit
+        let mut size = self.g.frame_size;
+        while size * 2 <= self.frame_cap {
+            size *= 2;
+        }
+        i64::from(size) - i64::from(self.frames_in_use()) - native
+    }
+
+    /// "stack overflow" raised for a self call of compiled `cl` past
+    /// [`Vm::jit_call_budget`], positioned, as the interpreter would raise
+    /// it, at that call in `cl`.
+    #[doc(hidden)]
+    pub fn jit_depth_error(
+        &mut self,
+        cl: crate::runtime::Gc<crate::runtime::LuaClosure>,
+    ) -> LuaError {
+        let proto = cl.proto;
+        let call = proto
+            .code
+            .iter()
+            .position(|i| i.op() == crate::vm::isa::Op::Call);
+        let prefix = self.prefix_at(proto, call.map_or(0, |pc| pc + 1));
+        LuaError(Value::Str(
+            self.heap
+                .intern(format!("{prefix}stack overflow").as_bytes()),
+        ))
+    }
+
+    /// Run a call that compiled code makes but cannot run natively, in the
+    /// interpreter: a self-recursive call when the native stack is low.
+    /// `native`, when given, is how many calls the compiled code below made
+    /// on the native stack: they took no interpreter frame but count
+    /// against 5.1's call limit, so the frame array is sized as PUC's
+    /// `CallInfo` array would be with them in it. Like a library callback
+    /// it cannot yield. The compiled frames below may
+    /// hold the only reference to a table they made, in a native register
+    /// no collection can see, so none runs until the call is done (the
+    /// code of such a function calls nothing but itself).
+    #[doc(hidden)]
+    pub fn jit_call_interpreted(
+        &mut self,
+        cl: crate::runtime::Gc<crate::runtime::LuaClosure>,
+        args: &[Value],
+        native: Option<u32>,
+    ) -> Result<Vec<Value>, LuaError> {
+        let native_before = self.g.frames_native;
+        if let Some(n) = native
+            && self.frame_cap != u32::MAX
+        {
+            self.g.frames_native += n;
+            // the array as PUC would have it: doubled whenever it filled,
+            // the native frames included (`grow_frames`); the budget kept
+            // the doubling under the limit
+            while self.frames_in_use() > self.g.frame_size {
+                self.g.frame_size *= 2;
+            }
+        }
+        let stopped = self.heap.gc_is_stopped();
+        self.heap.gc_set_stopped(true);
+        // the method JIT would hand this very call straight back
+        let jit = std::mem::replace(&mut self.jit.enabled, false);
+        self.nny += 1;
+        let r = self.call_value_impl(Value::Closure(cl), args, true, None);
+        self.nny -= 1;
+        self.jit.enabled = jit;
+        self.heap.gc_set_stopped(stopped);
+        self.g.frames_native = native_before;
+        r
     }
 }

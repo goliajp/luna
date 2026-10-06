@@ -125,7 +125,7 @@ impl<'a> Compiler<'a> {
                     self.last_line = *line;
                 }
                 let base = self.lr().freereg;
-                let ce = self.call_expr(e)?;
+                let ce = self.expr(e)?;
                 let Exp::Open { pc, .. } = ce else {
                     unreachable!()
                 };

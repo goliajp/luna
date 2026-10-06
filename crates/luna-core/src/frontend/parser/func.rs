@@ -100,6 +100,14 @@ impl<'s> Parser<'s> {
         Ok(())
     }
 
+    /// [`Self::new_local`] `n` times.
+    pub(super) fn new_locals(&mut self, n: u32) -> Result<(), SyntaxError> {
+        for _ in 0..n {
+            self.new_local()?;
+        }
+        Ok(())
+    }
+
     /// PUC `adjustlocalvars`: the pending locals come into scope. 5.5 checks
     /// the cap here instead of at declaration.
     pub(super) fn activate_locals(&mut self) -> Result<(), SyntaxError> {

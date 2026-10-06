@@ -140,9 +140,12 @@ impl<'a> ThreadStack<'a> {
                     // of its own once a yield has taken it off the running
                     // natives; before that, the native is the level
                     let level = match nc.kind {
-                        ContKind::Pcall | ContKind::Xpcall { .. } | ContKind::Pairs => {
-                            !is_host_call(stack[nc.func_slot as usize])
+                        // a host's `lua_pcall` is no level: its callee sits
+                        // on the slot (`callee_shift`)
+                        ContKind::Pcall { level, .. } | ContKind::Xpcall { level, .. } => {
+                            level && !is_host_call(stack[nc.func_slot as usize])
                         }
+                        ContKind::Pairs => !is_host_call(stack[nc.func_slot as usize]),
                         ContKind::Host(_) => !acts.iter().any(|a| a.func_slot == nc.func_slot),
                         _ => false,
                     };

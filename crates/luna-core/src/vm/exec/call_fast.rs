@@ -24,7 +24,8 @@ impl Vm {
         if self.jit.enabled
             || p.is_vararg
             || p.has_compat_vararg_arg
-            || func_slot + 256 > MAX_LUA_STACK
+            || base + nargs + p.max_stack as u32 + 1 > STACK_LIMIT_FLOOR
+            || self.g.frame_size != u32::MAX
             || self.stack.len() < need
         {
             return None;
@@ -211,6 +212,8 @@ impl Vm {
         nargs: u32,
         nresults: i32,
     ) -> Result<(), LuaError> {
+        // a C function gets `LUA_MINSTACK` slots (PUC `luaD_precall`)
+        self.check_lua_stack(func_slot + 1 + nargs, 20, false)?;
         self.pending_tailcalls = 0;
         let ccmt = std::mem::take(&mut self.pending_ccmt);
         self.native_nresults = nresults;

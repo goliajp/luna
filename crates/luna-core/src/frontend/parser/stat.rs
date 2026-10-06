@@ -64,6 +64,15 @@ impl<'s> Parser<'s> {
         match self.tok.tok {
             Token::Assign => {
                 self.advance()?;
+                // the loop's hidden control locals count against the
+                // local limit from the header on (PUC `fornum`): three up
+                // to 5.4, two from 5.5
+                let hidden = if self.version >= LuaVersion::Lua55 {
+                    2
+                } else {
+                    3
+                };
+                self.new_locals(hidden + 1)?;
                 let start = self.expr()?;
                 self.expect(Token::Comma, ",")?;
                 let limit = self.expr()?;
@@ -93,6 +102,15 @@ impl<'s> Parser<'s> {
                     self.stk.names.push_or_abort(n);
                 }
                 let vars = finish(&mut self.chunk, &mut self.stk.names, mark);
+                // PUC `forlist`: three hidden locals (generator, state,
+                // control), four in 5.4 (plus the closing value), three
+                // again in 5.5
+                let hidden = if self.version == LuaVersion::Lua54 {
+                    4
+                } else {
+                    3
+                };
+                self.new_locals(hidden + vars.range().len() as u32)?;
                 self.expect(Token::In, "in")?;
                 let expr_line = self.tok.line;
                 let exprs = self.exprlist()?;

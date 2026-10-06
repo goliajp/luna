@@ -144,7 +144,7 @@ impl<'s> Parser<'s> {
         } else {
             MAX_DEPTH
         };
-        if self.depth > limit {
+        if self.depth > limit || crate::native_stack::is_low(crate::native_stack::RESERVE) {
             return Err(self.levels_error());
         }
         Ok(())

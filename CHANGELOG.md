@@ -414,6 +414,42 @@ optimization.
 
 ### Fixed
 
+- Unbounded nesting no longer crashes the process with a native stack
+  overflow; it raises the Lua error PUC raises, which `pcall` catches.
+  Nesting that runs on the native stack (metamethods, library callbacks
+  such as `table.sort`'s comparator, `string.gsub`'s replacement and
+  `load`'s reader, `tostring`'s `__tostring`, coroutine resumes,
+  protected calls, message handlers, C API calls, the parser) is counted
+  against PUC's 200-level C-call limit, failing at the depth PUC fails
+  at in each dialect, and is also checked against the running thread's
+  real stack bounds, so it fails with "C stack overflow" on an embedder
+  thread with a 256 KB or 2 MB stack too. Metamethod calls were not
+  counted before, and a coroutine now starts from its resumer's count,
+  as `lua_resume` does. A function the method JIT compiled calls itself
+  natively only while stack is left, then lets the interpreter make the
+  remaining calls, so deep recursion ends with "stack overflow" at the
+  Lua stack limit, or completes, as in PUC. The Lua stack limit is
+  PUC's: 1,000,000 slots from 5.2 on, checked as `luaD_growstack`
+  checks it, with 200 more for the message handler of the overflow and
+  "error in error handling" past those; 5.1's is `LUAI_MAXCALLS` (20000)
+  frames, doubling its frame array from 8 as PUC does. Frames sit where
+  PUC puts them (vararg frames above the arguments, the function a
+  protected call calls where `pcall` / `xpcall` put it, the message
+  handler at the raising frame's top, the standalone interpreter's
+  chunk under a `pmain` frame), so a recursion ends at the same depth in
+  every dialect. "error in error handling" no longer runs the message
+  handler again. The compiler walks a left-associative chain (`1 + 1 +
+  ... + 1`, `a.b.b...`, `f()()...`) without recursion, so a chain of any
+  length compiles, as in PUC; nested syntax too deep for the parser
+  fails with the dialect's nesting error at PUC's depth (from 5.2 on a
+  level per statement); a `for` loop's hidden control variables count
+  against the 200 locals. `coroutine.wrap` in 5.4 and 5.5 no longer closes a coroutine
+  that a resume refused to start. Seen in 4.0.2: a `table.sort`
+  comparator, `string.gsub` replacement, `__tostring` or coroutine
+  resume recursing without end on a 256 KB thread, a compiled function
+  recursing without end on any thread, and a 200000-term sum on the main
+  thread all crashed it.
+
 - A trace leaving inside a function it inlined two or more calls deep
   rebuilt the middle frames with their callers' resume pcs, so such a
   frame went on at the wrong instruction once the inner call returned

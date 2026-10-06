@@ -367,6 +367,25 @@ impl<'a> Compiler<'a> {
         self.levels.last().expect("no level")
     }
 
+    /// An expression nested deeper than the native stack left can compile
+    /// (a long left-associative chain such as `1 + 1 + ... + 1`), reported
+    /// in the words the dialect's parser uses at its nesting limit.
+    fn too_deep(&self) -> SyntaxError {
+        match self.version {
+            LuaVersion::Lua51 => self.err(self.last_line, "chunk has too many syntax levels"),
+            LuaVersion::Lua52 | LuaVersion::Lua53 => {
+                let where_ = if self.levels.len() == 1 {
+                    "main function".to_string()
+                } else {
+                    format!("function at line {}", self.lr().line_defined)
+                };
+                let msg = format!("too many C levels (limit is 200) in {where_}");
+                self.err(self.last_line, msg)
+            }
+            _ => SyntaxError::unpositioned("C stack overflow"),
+        }
+    }
+
     fn err(&self, line: u32, msg: impl Into<String>) -> SyntaxError {
         SyntaxError {
             line,
