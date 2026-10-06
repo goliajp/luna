@@ -6,6 +6,10 @@ use super::*;
 /// longest prefix that is a valid floating-point numeral and pushes back
 /// every byte after it; with no valid prefix, it pushes everything back.
 pub(super) fn scan_double(u: Gc<Userdata>) -> std::io::Result<Value> {
+    if u.crt.is_some() {
+        let d = crt::with(u, msvc::scan::scan_double);
+        return Ok(d.map_or(Value::Nil, Value::Float));
+    }
     let mut c = getc(u)?;
     while matches!(c, Some(b) if is_c_space(b)) {
         c = getc(u)?;

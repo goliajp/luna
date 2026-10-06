@@ -1,0 +1,138 @@
+setvbuf	lf	no	nil	r	true	a@1|bc@4|600@604|abc@608|592@1200
+setvbuf	lf	no	nil	rb	true	a@1|bc@4|600@604|abc@608|592@1200
+setvbuf	lf	full	100	r	true	a@1|bc@5|600@605|bc@609|591@1200
+setvbuf	lf	full	100	rb	true	a@1|bc@4|600@604|abc@608|592@1200
+setvbuf	lf	full	5000	r	true	a@nil,Invalid argument,22|nil@1200|0@1200|nil@1200|0@1200
+setvbuf	lf	full	5000	rb	true	a@1|bc@4|600@604|abc@608|592@1200
+setvbuf	lf	line	30	r	true	a@1|bc@5|600@605|bc@609|591@1200
+setvbuf	lf	line	30	rb	true	a@1|bc@4|600@604|abc@608|592@1200
+setvbuf	lf	full	7	r	true	a@1|bc@5|600@605|bc@609|591@1200
+setvbuf	lf	full	7	rb	true	a@1|bc@4|600@604|abc@608|592@1200
+setvbuf	lf	full	nil	r	true	a@1|bc@5|600@755|@645|555@1200
+setvbuf	lf	full	nil	rb	true	a@1|bc@4|600@604|abc@608|592@1200
+setvbuf	lf	full	513	r	true	a@1|bc@5|600@627|@628|572@1200
+setvbuf	lf	full	513	rb	true	a@1|bc@4|600@604|abc@608|592@1200
+setvbuf	crlf	no	nil	r	true	a@1|bc@5|600@755|abc@760|592@1500
+setvbuf	crlf	no	nil	rb	true	a@1|bc\13@5|600@605|abc\13@610|890@1500
+setvbuf	crlf	full	100	r	true	a@1|bc@5|600@755|abc@760|592@1500
+setvbuf	crlf	full	100	rb	true	a@1|bc\13@5|600@605|abc\13@610|890@1500
+setvbuf	crlf	full	5000	r	true	a@1|bc@5|600@755|abc@760|592@1500
+setvbuf	crlf	full	5000	rb	true	a@1|bc\13@5|600@605|abc\13@610|890@1500
+setvbuf	crlf	line	30	r	true	a@1|bc@5|600@755|abc@760|592@1500
+setvbuf	crlf	line	30	rb	true	a@1|bc\13@5|600@605|abc\13@610|890@1500
+setvbuf	crlf	full	7	r	true	a@1|bc@5|600@755|abc@760|592@1500
+setvbuf	crlf	full	7	rb	true	a@1|bc\13@5|600@605|abc\13@610|890@1500
+setvbuf	crlf	full	nil	r	true	a@1|bc@5|600@755|abc@760|592@1500
+setvbuf	crlf	full	nil	rb	true	a@1|bc\13@5|600@605|abc\13@610|890@1500
+setvbuf	crlf	full	513	r	true	a@1|bc@5|600@755|abc@760|592@1500
+setvbuf	crlf	full	513	rb	true	a@1|bc\13@5|600@605|abc\13@610|890@1500
+setvbuf write	no	nil	w	3|6|9|189	189
+setvbuf write	no	nil	wb	2|4|6|126	126
+setvbuf write	full	100	w	3|6|9|189	189
+setvbuf write	full	100	wb	2|4|6|126	126
+setvbuf write	line	30	w	3|6|9|189	189
+setvbuf write	line	30	wb	2|4|6|126	126
+number	1e+x	r	nil,nil,nil	x
+number2	1e+x	r	nil,nil	x
+number	1e+x	rb	nil,nil,nil	x
+number2	1e+x	rb	nil,nil	x
+number	0x1p	r	nil,nil,nil	
+number2	0x1p	r	nil,nil	
+number	0x1p	rb	nil,nil,nil	
+number2	0x1p	rb	nil,nil	
+number	  12abc	r	12,nil,nil	abc
+number2	  12abc	r	12,nil	abc
+number	  12abc	rb	12,nil,nil	abc
+number2	  12abc	rb	12,nil	abc
+number	1..2	r	1.0,nil,nil	.2
+number2	1..2	r	1.0,0.2	
+number	1..2	rb	1.0,nil,nil	.2
+number2	1..2	rb	1.0,0.2	
+number	-.e1	r	nil,nil,nil	e1
+number2	-.e1	r	nil,nil	e1
+number	-.e1	rb	nil,nil,nil	e1
+number2	-.e1	rb	nil,nil	e1
+number	0x	r	nil,nil,nil	
+number2	0x	r	nil,nil	
+number	0x	rb	nil,nil,nil	
+number2	0x	rb	nil,nil	
+number	inf	r	nil,nil,nil	inf
+number2	inf	r	nil,nil	inf
+number	inf	rb	nil,nil,nil	inf
+number2	inf	rb	nil,nil	inf
+number	nan	r	nil,nil,nil	nan
+number2	nan	r	nil,nil	nan
+number	nan	rb	nil,nil,nil	nan
+number2	nan	rb	nil,nil	nan
+number	1e	r	nil,nil,nil	
+number2	1e	r	nil,nil	
+number	1e	rb	nil,nil,nil	
+number2	1e	rb	nil,nil	
+number	12	r	12,nil,nil	
+number2	12	r	12,nil	
+number	12	rb	12,nil,nil	
+number2	12	rb	12,nil	
+number	.5	r	0.5,nil,nil	
+number2	.5	r	0.5,nil	
+number	.5	rb	0.5,nil,nil	
+number2	.5	rb	0.5,nil	
+number	- 3	r	nil,nil,nil	 3
+number2	- 3	r	nil,nil	 3
+number	- 3	rb	nil,nil,nil	 3
+number2	- 3	rb	nil,nil	 3
+number	0x1P-2z	r	0.25,nil,nil	z
+number2	0x1P-2z	r	0.25,nil	z
+number	0x1P-2z	rb	0.25,nil,nil	z
+number2	0x1P-2z	rb	0.25,nil	z
+number	1e+	r	nil,nil,nil	
+number2	1e+	r	nil,nil	
+number	1e+	rb	nil,nil,nil	
+number2	1e+	rb	nil,nil	
+number	--1	r	nil,nil,nil	-1
+number2	--1	r	nil,nil	-1
+number	--1	rb	nil,nil,nil	-1
+number2	--1	rb	nil,nil	-1
+number	0xg	r	nil,nil,nil	g
+number2	0xg	r	nil,nil	g
+number	0xg	rb	nil,nil,nil	g
+number2	0xg	rb	nil,nil	g
+number	12345678901234567890	r	1.2345678901234567e+19,nil,nil	
+number2	12345678901234567890	r	1.2345678901234567e+19,nil	
+number	12345678901234567890	rb	1.2345678901234567e+19,nil,nil	
+number2	12345678901234567890	rb	1.2345678901234567e+19,nil	
+number	1.5e	r	nil,nil,nil	
+number2	1.5e	r	nil,nil	
+number	1.5e	rb	nil,nil,nil	
+number2	1.5e	rb	nil,nil	
+number	+.	r	nil,nil,nil	
+number2	+.	r	nil,nil	
+number	+.	rb	nil,nil,nil	
+number2	+.	rb	nil,nil	
+number	0x.8	r	0.5,nil,nil	
+number2	0x.8	r	0.5,nil	
+number	0x.8	rb	0.5,nil,nil	
+number2	0x.8	rb	0.5,nil	
+number	\10\107\13\10	r	7,nil,nil	\10
+number2	\10\107\13\10	r	7,nil	
+number	\10\107\13\10	rb	7,nil,nil	\13\10
+number2	\10\107\13\10	rb	7,nil	
+read0	r	a|b|\10|c|d|nilnil|nilnil|nilnil
+read0	rb	a|b|\13|\10|c|d|nilnil|nilnil
+rw	r+	aa|nil,(no extra info),0,0|true|bb|5|file|nil|file	aa\10bbY\13\10\13\10bb\13\10cc\13\10<\0*4087>Z\13\10
+rw eof	r+	aa\10bb\10	file	aa\10bb\10E\13\10
+rw	r+b	aa|nil,(no extra info),0,0|true|bb|6|file|nil|file	aa\10bb\10Y\10\10bb\10cc\10<\0*4087>Z\10
+rw eof	r+b	aa\10bb\10	file	aa\10bb\10E\10
+rw	a+	aa|nil,(no extra info),0,0|true|bb|5|file|nil|file	aa\10bb\10cc\10Y\13\10\13\10bb\13\10cc\13\10<\0*4087>Z\13\10
+rw eof	a+	aa\10bb\10	file	aa\10bb\10E\13\10
+rw	a+b	aa|nil,(no extra info),0,0|true|bb|6|file|nil|file	aa\10bb\10cc\10Y\10\10bb\10cc\10<\0*4087>Z\10
+rw eof	a+b	aa\10bb\10	file	aa\10bb\10E\10
+rw	w+	aa|nil,(no extra info),0,0|true|bb|8|file|nil|file	aa\13\10bb\13\10Y\13\10\13\10bb\13\10cc\13\10c\13\13\10<\0*4084>Z\13\10
+rw eof	w+	aa\10bb\10	file	aa\13\10bb\13\10E\13\10
+rw	w+b	aa|nil,(no extra info),0,0|true|bb|6|file|nil|file	aa\10bb\10Y\10\10bb\10cc\10<\0*4087>Z\10
+rw eof	w+b	aa\10bb\10	file	aa\10bb\10E\10
+unget	full	4	r	:12@2|:34@5|:56@8|:78@11|:9@13|nil:nil@13|
+unget	full	4	rb	:12@2|:34@5|:56@8|:78@11|:9@13|nil:nil@13|
+unget	full	2	r	:12@2|:34@5|:56@8|:78@11|:9@13|nil:nil@13|
+unget	full	2	rb	:12@2|:34@5|:56@8|:78@11|:9@13|nil:nil@13|
+unget	no	nil	r	:12@2|:34@5|:56@8|:78@11|:9@13|nil:nil@13|
+unget	no	nil	rb	:12@2|:34@5|:56@8|:78@11|:9@13|nil:nil@13|

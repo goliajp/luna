@@ -4,9 +4,6 @@ use super::*;
 
 /// Refill the input buffer; `false` at end of file.
 pub(super) fn fill(u: Gc<Userdata>) -> std::io::Result<bool> {
-    if u.text.is_some() {
-        return text_mode::refill(u);
-    }
     // SAFETY: `u` is a file handle the caller holds (a native argument or the default stream), so it is rooted; `m` is the only reference into it while the OS read runs, which runs no Lua code
     let m = unsafe { u.as_mut() };
     let mut chunk = vec![0u8; READ_CHUNK];
@@ -30,6 +27,9 @@ pub(super) fn fill(u: Gc<Userdata>) -> std::io::Result<bool> {
 
 /// `getc`.
 pub(super) fn getc(u: Gc<Userdata>) -> std::io::Result<Option<u8>> {
+    if u.crt.is_some() {
+        return Ok(crt::getc(u));
+    }
     if u.read_pos >= u.read_buf.len() && !fill(u)? {
         return Ok(None);
     }
@@ -42,6 +42,9 @@ pub(super) fn getc(u: Gc<Userdata>) -> std::io::Result<Option<u8>> {
 
 /// `ungetc` of any number of bytes: the next reads return `bytes` first.
 pub(super) fn unget(u: Gc<Userdata>, bytes: &[u8]) {
+    if u.crt.is_some() {
+        return crt::unget(u, bytes);
+    }
     // SAFETY: `u` is held by the caller; `m` is the only reference into it until return, and `bytes` is the caller's buffer, not the stream's
     let m = unsafe { u.as_mut() };
     if m.read_pos >= bytes.len() && m.read_buf[m.read_pos - bytes.len()..m.read_pos] == *bytes {
@@ -62,11 +65,6 @@ pub(super) fn read_ahead(u: Gc<Userdata>) -> i64 {
 /// Give back read-ahead before the position is used for something else
 /// (a write, a seek): the OS position is that far past the logical one.
 fn unread_ahead(u: Gc<Userdata>) -> std::io::Result<()> {
-    if u.text.is_some() && !u.read_buf.is_empty() && matches!(u.file(), FileHandle::File(_)) {
-        // the buffer is translated: move to where `ftell` says the stream is
-        text_mode::fseek(u, 1, 0)?;
-        return Ok(());
-    }
     let ahead = read_ahead(u);
     // SAFETY: `u` is held by the caller; `read_ahead` returned before `m` was taken, and `m` is the only reference into it until return
     let m = unsafe { u.as_mut() };
@@ -80,12 +78,10 @@ fn unread_ahead(u: Gc<Userdata>) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Write `bytes` straight to the OS handle (`\n` as `\r\n` in text mode).
+/// Write `bytes` straight to the OS handle.
 fn write_to(u: Gc<Userdata>, bytes: &[u8]) -> std::io::Result<()> {
-    let text = u.text.is_some();
     // SAFETY: `u` is held by the caller; the borrow lives for the one match, which runs no Lua code and takes no other reference into `u`
     match unsafe { u.as_mut() }.file_mut() {
-        FileHandle::File(f) if text => f.write_all(&text_mode::to_crlf(bytes)),
         FileHandle::File(f) => f.write_all(bytes),
         FileHandle::Stdout => crate::stdio::try_write_stdout(bytes),
         FileHandle::Stderr => crate::stdio::write_stderr(bytes),
@@ -97,6 +93,9 @@ fn write_to(u: Gc<Userdata>, bytes: &[u8]) -> std::io::Result<()> {
 /// Drain the output buffer to the OS. The buffer is emptied either way: C
 /// stdio drops what it failed to write and reports the error.
 pub(super) fn drain_write_buf(u: Gc<Userdata>) -> std::io::Result<()> {
+    if u.crt.is_some() {
+        return crt::fflush(u);
+    }
     // SAFETY: `u` is held by the caller; the borrow ends once the buffer is taken out
     let buf = std::mem::take(&mut unsafe { u.as_mut() }.write_buf);
     if buf.is_empty() {
@@ -107,6 +106,9 @@ pub(super) fn drain_write_buf(u: Gc<Userdata>) -> std::io::Result<()> {
 
 /// Put `bytes` on the stream through its buffering mode.
 pub(super) fn put_bytes(u: Gc<Userdata>, bytes: &[u8]) -> std::io::Result<()> {
+    if u.crt.is_some() {
+        return crt::fwrite(u, bytes);
+    }
     if !matches!(u.file(), FileHandle::File(_)) || !u.writable {
         // standard streams are buffered by std; a read-only file fails here
         return write_to(u, bytes);
@@ -139,6 +141,9 @@ pub(super) const BUF_LINE: u8 = 1;
 pub(super) const BUF_NO: u8 = 2;
 
 pub(super) fn flush_stream(u: Gc<Userdata>) -> std::io::Result<()> {
+    if u.crt.is_some() {
+        return crt::fflush(u);
+    }
     drain_write_buf(u)?;
     // SAFETY: `u` is held by the caller; `drain_write_buf`'s borrow has ended, and this one lives for the one match
     match unsafe { u.as_mut() }.file_mut() {
