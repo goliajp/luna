@@ -36,13 +36,7 @@ impl IntChunkCompiler for LlvmBackend {
         pre53: bool,
         float_only: bool,
     ) -> CompileResult {
-        let Some(llvm) = super::storage::from_storage(storage)
-            .ok()
-            .and_then(|cs| cs.llvm.as_mut())
-        else {
-            return CompileResult::Skipped;
-        };
-        luna_jit_llvm::LlvmBackend.try_compile(llvm, proto, pre53, float_only)
+        super::llvm_chunk::try_compile(storage, proto, pre53, float_only, self.llvm_after)
     }
 
     fn enter(

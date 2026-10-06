@@ -5,7 +5,7 @@ use super::*;
 /// runtime JIT entry [`try_compile_int_chunk`] and tests; the AOT
 /// pipeline (luna-aot) builds an `ObjectModule` instead and feeds it
 /// to the same [`lower_int_chunk_into`] generic body.
-fn build_jit_module_with_helpers() -> Option<JITModule> {
+pub(super) fn build_jit_module_with_helpers() -> Option<JITModule> {
     let mut builder =
         JITBuilder::with_isa(method_isa()?, cranelift_module::default_libcall_names());
     builder.memory_provider(Box::new(code_memory::CodeMemory::new()));

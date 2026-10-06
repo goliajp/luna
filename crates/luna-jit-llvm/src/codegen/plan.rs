@@ -4,6 +4,38 @@ use super::flow;
 use crate::operands::{int_arith, int_compare, is_arith, is_compare};
 use crate::upval_roles::determine_getupval_roles;
 use luna_core::runtime::{Value, function::Proto};
+
+/// What the method JIT reads of a function, copied out of its `Proto` so
+/// that another thread can compile it: the code, the integer constants
+/// (the `K` forms fold them into the code; any other constant is `None`)
+/// and the frame sizes.
+#[derive(Clone)]
+pub(crate) struct ChunkSource {
+    pub(crate) code: Vec<Inst>,
+    pub(crate) ints: Vec<Option<i64>>,
+    pub(crate) num_params: u8,
+    pub(crate) max_stack: u8,
+    pub(crate) n_upvals: usize,
+}
+
+impl ChunkSource {
+    pub(crate) fn of(proto: &Proto) -> ChunkSource {
+        ChunkSource {
+            code: proto.code.to_vec(),
+            ints: proto
+                .consts
+                .iter()
+                .map(|c| match c {
+                    Value::Int(i) => Some(*i),
+                    _ => None,
+                })
+                .collect(),
+            num_params: proto.num_params,
+            max_stack: proto.max_stack,
+            n_upvals: proto.upvals.len(),
+        }
+    }
+}
 use luna_core::vm::isa::{Inst, Op};
 
 // Compute-path whitelist notes (consumption itself happens inside
@@ -40,7 +72,7 @@ pub(super) struct ChunkPlan<'a> {
     /// skipped entirely.
     pub(super) code: &'a [Inst],
     /// The constant table the `K` forms read.
-    pub(super) consts: &'a [Value],
+    pub(super) consts: &'a [Option<i64>],
     /// Number of i64 register slots to alloca on entry.
     pub(super) num_regs: u32,
     /// Number of positional i64 args the JIT entry
@@ -92,9 +124,9 @@ pub(super) struct ChunkPlan<'a> {
 }
 
 impl<'a> ChunkPlan<'a> {
-    pub(super) fn from_proto(proto: &'a Proto) -> Option<Self> {
+    pub(super) fn from_source(proto: &'a ChunkSource) -> Option<Self> {
         let code: &'a [Inst] = &proto.code;
-        let consts: &'a [Value] = &proto.consts;
+        let consts: &'a [Option<i64>] = &proto.ints;
         let n = code.len();
         if n == 0 {
             return None;
@@ -164,7 +196,7 @@ impl<'a> ChunkPlan<'a> {
 /// roles, classified in a subsequent pass) and `Op::Call`
 /// restricted to self-recursive shapes (validated in the
 /// self_upval tracking pass below).
-fn whitelist(proto: &Proto, code: &[Inst], consts: &[Value]) -> Option<Vec<bool>> {
+fn whitelist(proto: &ChunkSource, code: &[Inst], consts: &[Option<i64>]) -> Option<Vec<bool>> {
     let n = code.len();
     let mut consumed_jmp = vec![false; n];
     for (pc, ins) in code.iter().enumerate() {
@@ -183,7 +215,7 @@ fn whitelist(proto: &Proto, code: &[Inst], consts: &[Value]) -> Option<Vec<bool>
                 // value-read classification + Float-tag concerns
                 // are handled by the later
                 // `determine_getupval_roles` + tracking pass.
-                if (ins.b() as usize) >= proto.upvals.len() {
+                if (ins.b() as usize) >= proto.n_upvals {
                     return None;
                 }
             }
@@ -229,12 +261,12 @@ fn whitelist(proto: &Proto, code: &[Inst], consts: &[Value]) -> Option<Vec<bool>
 /// upval slot — subsequent SelfMarker GetUpvals must read the
 /// same slot, else bail. Mirrors Cranelift's S2c.C tracker.
 fn track_self_recursion(
-    proto: &Proto,
+    proto: &ChunkSource,
     code: &[Inst],
     is_upval_value_read: &[bool],
 ) -> Option<(Vec<bool>, Vec<bool>, Option<u32>)> {
     let n = code.len();
-    let allows_self_recursion = !proto.upvals.is_empty() && proto.upvals.len() <= 4;
+    let allows_self_recursion = proto.n_upvals > 0 && proto.n_upvals <= 4;
     let mut self_upval_idx: Option<u32> = None;
     let max_stack = (proto.max_stack as usize).max(proto.num_params as usize);
     let mut self_upval: Vec<bool> = vec![false; max_stack];

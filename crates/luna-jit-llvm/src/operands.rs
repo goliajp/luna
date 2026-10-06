@@ -7,7 +7,6 @@
 //! `LoadF` / `LoadK` that used to precede the register form.
 
 use inkwell::IntPredicate;
-use luna_core::runtime::Value;
 use luna_core::vm::isa::{Inst, Op};
 
 /// One operand of an integer op.
@@ -56,17 +55,14 @@ pub(crate) fn operand_regs(ins: Inst) -> Vec<u32> {
     }
 }
 
-fn int_const(consts: &[Value], idx: u32) -> Option<i64> {
-    match consts.get(idx as usize)? {
-        Value::Int(i) => Some(*i),
-        _ => None,
-    }
+fn int_const(consts: &[Option<i64>], idx: u32) -> Option<i64> {
+    consts.get(idx as usize).copied().flatten()
 }
 
 /// The register-form operator and the two operands of an arithmetic
 /// instruction, `None` when the instruction is not one the path lowers.
 /// The result does not depend on `k` (the constant written on the left).
-pub(crate) fn int_arith(ins: Inst, consts: &[Value]) -> Option<(Op, Operand, Operand)> {
+pub(crate) fn int_arith(ins: Inst, consts: &[Option<i64>]) -> Option<(Op, Operand, Operand)> {
     let lhs = Operand::Reg(ins.b());
     match ins.op() {
         Op::Add | Op::Sub | Op::Mul | Op::Mod => Some((ins.op(), lhs, Operand::Reg(ins.c()))),
@@ -92,7 +88,7 @@ pub(crate) fn int_arith(ins: Inst, consts: &[Value]) -> Option<(Op, Operand, Ope
 /// The predicate and right operand of a comparison instruction (the left
 /// operand is `R[A]`), `None` when the instruction is not one the path
 /// lowers: a float immediate (`C != 0`) or a non-integer constant.
-pub(crate) fn int_compare(ins: Inst, consts: &[Value]) -> Option<(IntPredicate, Operand)> {
+pub(crate) fn int_compare(ins: Inst, consts: &[Option<i64>]) -> Option<(IntPredicate, Operand)> {
     let imm = Operand::Imm(i64::from(ins.sb()));
     match ins.op() {
         Op::Lt => Some((IntPredicate::SLT, Operand::Reg(ins.b()))),
@@ -120,7 +116,7 @@ mod tests {
 
     #[test]
     fn immediate_forms_carry_the_signed_field() {
-        let consts = [Value::Int(100_000), Value::Float(1.5), Value::Nil];
+        let consts = [Some(100_000), None, None];
         assert_eq!(
             int_arith(Inst::iabc(Op::AddI, 1, 0, enc(-3), false), &consts),
             Some((Op::Add, Operand::Reg(0), Operand::Imm(-3)))
@@ -170,7 +166,7 @@ mod tests {
 
     #[test]
     fn mod_by_a_constant_zero_is_refused() {
-        let consts = [Value::Int(0), Value::Int(-3)];
+        let consts = [Some(0), Some(-3)];
         assert_eq!(
             int_arith(Inst::iabc(Op::ModK, 1, 0, 0, false), &consts),
             None
