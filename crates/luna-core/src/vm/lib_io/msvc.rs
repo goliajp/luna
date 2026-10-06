@@ -10,9 +10,11 @@
 mod lowio;
 mod read;
 pub(crate) mod scan;
+mod wide;
 mod write;
 
 pub(crate) use lowio::{Os, drop_final_ctrl_z, translate_all};
+pub(crate) use wide::TextMode;
 
 const READ: u32 = 0x1;
 const WRITE: u32 = 0x2;
@@ -68,11 +70,11 @@ pub(crate) struct CrtFile {
 }
 
 impl CrtFile {
-    /// What `fopen` with `mode` makes, in text mode unless `text` is false.
-    pub(crate) fn open(mode: &[u8], text: bool, pipe: bool) -> CrtFile {
-        let flags = if mode.contains(&b'+') {
+    /// What `fopen` with a mode the library took as `spec` makes.
+    pub(crate) fn open(spec: &super::fopen::Spec, pipe: bool) -> CrtFile {
+        let flags = if spec.update {
             UPDATE
-        } else if mode.first() == Some(&b'r') {
+        } else if spec.read {
             READ
         } else {
             WRITE
@@ -83,11 +85,11 @@ impl CrtFile {
             ptr: 0,
             cnt: 0,
             bufsiz: 0,
-            io: lowio::Handle::new(text, pipe, false),
+            io: lowio::Handle::new(!spec.binary, pipe, false),
             std: Std::No,
             tty: false,
         };
-        f.io.append = mode.first() == Some(&b'a');
+        f.io.append = spec.append;
         f
     }
 
@@ -230,10 +232,6 @@ impl CrtFile {
         self.cnt = 0;
         true
     }
-}
-
-fn count_lf(bytes: &[u8]) -> i64 {
-    bytes.iter().filter(|&&b| b == b'\n').count() as i64
 }
 
 #[cfg(test)]

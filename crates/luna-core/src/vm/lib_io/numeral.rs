@@ -7,6 +7,7 @@ use super::*;
 /// every byte after it; with no valid prefix, it pushes everything back.
 pub(super) fn scan_double(u: Gc<Userdata>) -> std::io::Result<Value> {
     if u.crt.is_some() {
+        crt::ansi_only(u);
         let d = crt::with(u, msvc::scan::scan_double);
         return Ok(d.map_or(Value::Nil, Value::Float));
     }

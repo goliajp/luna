@@ -3,6 +3,8 @@
 //! on Windows through the `CreateFileW` call that library makes, so that a
 //! failure has its error.
 
+use super::msvc::TextMode;
+
 /// What a mode asks of `fopen`.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(crate) struct Spec {
@@ -175,7 +177,8 @@ pub(crate) fn ucrt_mode(mode: &[u8]) -> Option<Spec> {
 #[cfg(not(windows))]
 pub(crate) fn os_open(name: &[u8], spec: &Spec) -> std::io::Result<std::fs::File> {
     let mut o = std::fs::OpenOptions::new();
-    o.read(spec.read || spec.update);
+    // an appending stream in a Unicode mode reads its byte order mark
+    o.read(spec.read || spec.update || (spec.append && spec.ccs.is_some()));
     if spec.append {
         o.append(true);
     } else {
@@ -233,6 +236,61 @@ pub(crate) fn os_open(name: &[u8], spec: &Spec) -> std::io::Result<std::fs::File
         }
         r => r,
     }
+}
+
+/// `configure_text_mode` of `_wsopen_nolock`, for a file opened in text
+/// mode: the mode a `ccs=` selects, from the file's byte order mark when it
+/// is read from an existing file, with the mark written when the file
+/// starts empty. A UTF-16 big-endian mark is EINVAL.
+pub(crate) fn text_mode(f: &mut std::fs::File, spec: &Spec) -> std::io::Result<TextMode> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let Some(ccs) = spec.ccs else {
+        return Ok(TextMode::Ansi);
+    };
+    let mut mode = match ccs {
+        Ccs::Utf8 => TextMode::Utf8,
+        Ccs::Utf16le => TextMode::Utf16le,
+        // UTF-16 only when the file is made anew for writing alone
+        Ccs::Unicode if spec.write && spec.truncate && !spec.update => TextMode::Utf16le,
+        Ccs::Unicode => TextMode::Ansi,
+    };
+    if !f.metadata()?.is_file() {
+        return Ok(mode);
+    }
+    // an appending stream in a Unicode mode is opened for reading as well
+    let reads = spec.read || spec.update || spec.append;
+    let (check_bom, write_bom) = if !spec.writable() {
+        (true, false)
+    } else if spec.truncate || spec.excl {
+        (false, true)
+    } else if f.seek(SeekFrom::End(0))? != 0 {
+        f.seek(SeekFrom::Start(0))?;
+        (reads, false)
+    } else {
+        (false, true)
+    };
+    if check_bom {
+        let mut bom = [0u8; 3];
+        let n = f.read(&mut bom)?;
+        if n == 3 && bom == [0xEF, 0xBB, 0xBF] {
+            mode = TextMode::Utf8;
+        } else if n >= 2 && bom[..2] == [0xFE, 0xFF] {
+            return Err(super::posix_error(super::EINVAL));
+        } else if n >= 2 && bom[..2] == [0xFF, 0xFE] {
+            f.seek(SeekFrom::Start(2))?;
+            mode = TextMode::Utf16le;
+        } else {
+            f.seek(SeekFrom::Start(0))?;
+        }
+    }
+    if write_bom {
+        match mode {
+            TextMode::Utf16le => f.write_all(&[0xFF, 0xFE])?,
+            TextMode::Utf8 => f.write_all(&[0xEF, 0xBB, 0xBF])?,
+            TextMode::Ansi => {}
+        }
+    }
+    Ok(mode)
 }
 
 #[cfg(test)]
