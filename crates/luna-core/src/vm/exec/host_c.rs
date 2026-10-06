@@ -332,7 +332,7 @@ impl Vm {
         let Value::Native(ncl) = self.stack[nc.func_slot as usize] else {
             unreachable!("a C continuation's slot holds its C function")
         };
-        self.running_natives.push(NativeAct {
+        self.running_natives.push_or_abort(NativeAct {
             nc: ncl,
             func_slot: nc.func_slot,
             nargs: 0,

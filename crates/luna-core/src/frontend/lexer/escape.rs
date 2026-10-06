@@ -59,8 +59,9 @@ impl<S: Source> Lexer<'_, S> {
     /// 5.2 `escerror`: the buffer is replaced by `\` plus the escape's bytes.
     pub(super) fn esc_error_52(&mut self, bytes: &[u8], msg: &str) -> SyntaxError {
         self.buf.clear();
-        self.buf.push(b'\\');
-        self.buf.extend_from_slice(bytes);
+        if self.buf.push(b'\\').is_err() || self.buf.extend_from_slice(bytes).is_err() {
+            return SyntaxError::from(Oom(self.buf.mem()));
+        }
         self.buf_error(msg)
     }
 
@@ -76,16 +77,17 @@ impl<S: Source> Lexer<'_, S> {
         }
         match c {
             b'x' => {
-                let mut seen = vec![b'x'];
+                let (mut seen, mut n) = ([b'x', 0, 0], 1);
                 let mut v = 0;
                 for _ in 0..2 {
                     self.bump();
                     let d = self.cur();
                     if let Some(d) = d {
-                        seen.push(d);
+                        seen[n] = d;
+                        n += 1;
                     }
                     let Some(h) = d.and_then(hex_digit) else {
-                        return Err(self.esc_error_52(&seen, "hexadecimal digit expected"));
+                        return Err(self.esc_error_52(&seen[..n], "hexadecimal digit expected"));
                     };
                     v = v * 16 + h;
                 }
@@ -105,10 +107,13 @@ impl<S: Source> Lexer<'_, S> {
                 self.skip_spaces();
             }
             b'0'..=b'9' => {
-                let mut seen = Vec::new();
-                let v = self.dec_digits(|_, d| seen.push(d));
+                let (mut seen, mut n) = ([0u8; 3], 0);
+                let v = self.dec_digits(|_, d| {
+                    seen[n] = d;
+                    n += 1;
+                });
                 if v > 255 {
-                    return Err(self.esc_error_52(&seen, "decimal escape too large"));
+                    return Err(self.esc_error_52(&seen[..n], "decimal escape too large"));
                 }
                 self.save(v as u8);
             }
@@ -238,10 +243,9 @@ impl<S: Source> Lexer<'_, S> {
 }
 
 /// Extended UTF-8 (up to 6 bytes, values to 2^31-1), as luaO_utf8esc.
-fn push_utf8(out: &mut Vec<u8>, mut x: u32) {
+fn push_utf8(out: &mut LVec<u8>, mut x: u32) {
     if x < 0x80 {
-        out.push(x as u8);
-        return;
+        return out.push_or_abort(x as u8);
     }
     let mut cont = [0u8; 6];
     let mut n = 0;
@@ -255,6 +259,9 @@ fn push_utf8(out: &mut Vec<u8>, mut x: u32) {
             break;
         }
     }
-    out.push(((!mfb << 1) | x) as u8);
-    out.extend(cont[..n].iter().rev());
+    out.reserve_or_abort(n + 1);
+    out.push_or_abort(((!mfb << 1) | x) as u8);
+    for &b in cont[..n].iter().rev() {
+        out.push_or_abort(b);
+    }
 }

@@ -121,7 +121,7 @@ impl Vm {
             // Generation starts at 0 for a freshly allocated slot;
             // `unpin` bumps to 1 before pushing to the free list,
             // and the next `pin_host` into that slot bumps to 2.
-            self.host_roots.push(HostRootSlot {
+            self.host_roots.push_or_abort(HostRootSlot {
                 value: v,
                 generation: 0,
             });
@@ -185,7 +185,7 @@ impl Vm {
             return Ok(());
         }
         slot.generation += 1;
-        self.host_roots_free.push(t.idx);
+        self.host_roots_free.push_or_abort(t.idx);
         Ok(())
     }
 
@@ -217,7 +217,7 @@ impl Vm {
                 continue;
             }
             slot.generation += 1;
-            self.host_roots_free.push(i as u32);
+            self.host_roots_free.push_or_abort(i as u32);
         }
     }
 }

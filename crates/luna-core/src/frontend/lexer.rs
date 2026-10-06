@@ -7,6 +7,7 @@ use crate::frontend::names::{Names, Sym};
 use crate::frontend::span::Span;
 use crate::frontend::token::{LexTok, Near, Tok, Token, TokenInfo, near_text};
 use crate::numeric::{self, Num, hex_digit};
+use crate::runtime::mem::{LVec, MemOwner, Oom};
 use crate::version::LuaVersion;
 
 mod escape;
@@ -31,7 +32,10 @@ pub struct Lexer<'s, S: Source = Whole<'s>> {
     /// quote it as the near-token, so it is kept in the exact shape each
     /// dialect's scanner leaves it in (escapes half-decoded, delimiters
     /// kept, and so on).
-    buf: Vec<u8>,
+    buf: LVec<u8>,
+    /// the context `buf` allocates through, when the lexer made its own
+    /// (a lexer made without a Vm); after `buf`, which frees through it
+    _mem: Option<MemOwner>,
     /// set for the load path: identifiers and string literals are interned
     /// here and handed out as `last_sym` with an empty `Token::Name` /
     /// `Token::Str`
@@ -85,13 +89,27 @@ impl<'s> Lexer<'s> {
 impl<'s, S: Source> Lexer<'s, S> {
     /// A lexer over the bytes of `src`.
     pub(crate) fn over(src: S, version: LuaVersion) -> Lexer<'s, S> {
+        let mem = MemOwner::system();
+        Lexer::with_buf(src, version, LVec::new(mem.mem()), Some(mem))
+    }
+
+    /// A lexer over `src` saving tokens in `buf`, which allocates through
+    /// `mem` or a context the caller keeps alive past the lexer.
+    pub(crate) fn with_buf(
+        src: S,
+        version: LuaVersion,
+        mut buf: LVec<u8>,
+        mem: Option<MemOwner>,
+    ) -> Lexer<'s, S> {
+        buf.clear();
         Lexer {
             src,
             _whole: std::marker::PhantomData,
             pos: 0,
             line: 1,
             version,
-            buf: Vec::new(),
+            buf,
+            _mem: mem,
             names: None,
             last_sym: Sym(0),
             str_range: (0, 0),
@@ -131,13 +149,13 @@ impl<'s, S: Source> Lexer<'s, S> {
     }
 
     fn save(&mut self, c: u8) {
-        self.buf.push(c);
+        self.buf.push_or_abort(c);
     }
 
     /// Save the current byte and advance (PUC `save_and_next`).
     fn save_next(&mut self) {
         if let Some(c) = self.cur() {
-            self.buf.push(c);
+            self.buf.push_or_abort(c);
         }
         self.bump();
     }
@@ -434,7 +452,8 @@ impl<'s, S: Source> Lexer<'s, S> {
             Some(Num::Int(i)) => Ok(Token::Int(i)),
             Some(Num::Float(f)) => Ok(Token::Float(f)),
             None => {
-                self.buf = text.to_vec();
+                self.buf.clear();
+                self.buf.extend_from_slice_or_abort(text);
                 Err(self.buf_error("malformed number"))
             }
         }
