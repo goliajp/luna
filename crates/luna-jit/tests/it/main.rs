@@ -11,6 +11,10 @@ mod capi_tables;
 mod capi_threads;
 mod capi_values;
 mod cli_common;
+#[cfg(windows)]
+mod cli_console;
+#[cfg(windows)]
+mod cli_console_ctrl_z;
 mod cli_environment;
 mod cli_errors;
 mod cli_lua_init;

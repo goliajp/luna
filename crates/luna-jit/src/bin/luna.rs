@@ -373,7 +373,8 @@ fn main() {
     // lua.c closes the state before it exits, which finalizes open files
     // and so writes out what they still buffer
     drop(interp);
-    // C's exit flushes stdout
+    // C's exit flushes stdout (and stderr, if setvbuf buffered it)
     let _ = luna_core::stdio::flush_stdout();
+    let _ = luna_core::stdio::flush_stderr();
     std::process::exit(if ok { 0 } else { 1 });
 }
