@@ -83,47 +83,42 @@ fn expr_uses_vararg(chunk: &Chunk, eid: ExprId) -> bool {
     if crate::native_stack::is_low(crate::native_stack::RESERVE) {
         return true;
     }
-    match chunk.expr(eid) {
-        Expr::Vararg => true,
-        // Stop at function literals — their `...` is scoped to them.
-        Expr::Function(_) => false,
-        Expr::Index { obj, key } => expr_uses_vararg(chunk, *obj) || expr_uses_vararg(chunk, *key),
-        Expr::Call { func, args, .. } => {
-            expr_uses_vararg(chunk, *func)
-                || chunk
-                    .list(*args)
-                    .iter()
-                    .any(|&a| expr_uses_vararg(chunk, a))
+    // every expression to look at; no recursion, so a long chain is no
+    // deeper
+    let mut todo: Vec<ExprId> = vec![eid];
+    while let Some(e) = todo.pop() {
+        match chunk.expr(e) {
+            Expr::Vararg => return true,
+            // Stop at function literals — their `...` is scoped to them.
+            Expr::Function(_) => {}
+            Expr::Index { obj, key } => todo.extend([*obj, *key]),
+            Expr::Call { func, args, .. } => {
+                todo.push(*func);
+                todo.extend_from_slice(chunk.list(*args));
+            }
+            Expr::MethodCall { obj, args, .. } => {
+                todo.push(*obj);
+                todo.extend_from_slice(chunk.list(*args));
+            }
+            Expr::Table { fields, .. } => {
+                for f in chunk.list(*fields) {
+                    match f {
+                        TableField::Item(e) | TableField::Named(_, e) => todo.push(*e),
+                        TableField::Keyed(k, v) => todo.extend([*k, *v]),
+                    }
+                }
+            }
+            Expr::BinOp { lhs, rhs, .. } => todo.extend([*lhs, *rhs]),
+            Expr::UnOp { operand, .. } => todo.push(*operand),
+            Expr::Paren(inner) => todo.push(*inner),
+            Expr::Nil
+            | Expr::True
+            | Expr::False
+            | Expr::Int(_)
+            | Expr::Float(_)
+            | Expr::Str(_)
+            | Expr::Name(_) => {}
         }
-        Expr::MethodCall { obj, args, .. } => {
-            expr_uses_vararg(chunk, *obj)
-                || chunk
-                    .list(*args)
-                    .iter()
-                    .any(|&a| expr_uses_vararg(chunk, a))
-        }
-        Expr::Table { fields, .. } => chunk
-            .list(*fields)
-            .iter()
-            .any(|f| table_field_uses_vararg(chunk, f)),
-        Expr::BinOp { lhs, rhs, .. } => {
-            expr_uses_vararg(chunk, *lhs) || expr_uses_vararg(chunk, *rhs)
-        }
-        Expr::UnOp { operand, .. } => expr_uses_vararg(chunk, *operand),
-        Expr::Paren(inner) => expr_uses_vararg(chunk, *inner),
-        Expr::Nil
-        | Expr::True
-        | Expr::False
-        | Expr::Int(_)
-        | Expr::Float(_)
-        | Expr::Str(_)
-        | Expr::Name(_) => false,
     }
-}
-
-fn table_field_uses_vararg(chunk: &Chunk, f: &TableField) -> bool {
-    match f {
-        TableField::Item(e) | TableField::Named(_, e) => expr_uses_vararg(chunk, *e),
-        TableField::Keyed(k, v) => expr_uses_vararg(chunk, *k) || expr_uses_vararg(chunk, *v),
-    }
+    false
 }

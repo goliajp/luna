@@ -11,7 +11,7 @@ use cranelift_codegen::binemit::Reloc;
 use std::sync::Arc;
 
 /// What a relocation in a chunk's code refers to.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Target {
     /// Another of the chunk's functions.
     Local(u32),
@@ -29,10 +29,34 @@ struct Rel {
 }
 
 #[derive(Clone, Debug)]
-struct Func {
+pub(crate) struct Func {
     id: u32,
     bytes: Box<[u8]>,
     rels: Box<[Rel]>,
+}
+
+/// A self-recursive chunk's ring (see `chunk_lower::SelfCalls`): the
+/// body to lay out `copies` times, each copy's self calls pointing at the
+/// next and the last copy's at the stub, whose call goes to the first.
+#[derive(Clone, Copy, Debug)]
+struct Ring {
+    body: u32,
+    stub: u32,
+    copies: u32,
+}
+
+/// Ids of a ring's copies in the laid-out function list.
+const RING_ID: u32 = 1 << 30;
+
+/// The functions of a compiled chunk as they are laid out in code memory,
+/// with the entry's id: what a Vm runs, and what it hands to the engine
+/// to share.
+#[derive(Clone)]
+pub(crate) struct Layout {
+    funcs: Box<[Func]>,
+    entry: u32,
+    /// the string constant each `Target::Const` relocation holds
+    strs: Box<[i64]>,
 }
 
 /// The settings a function was compiled under: shared only between Vms
@@ -62,6 +86,7 @@ struct Capture {
     /// The string each relocation holds.
     strs: Vec<i64>,
     funcs: Vec<(u32, usize, Vec<Rel>)>,
+    ring: Option<Ring>,
     /// Something in the code would not survive a move to another address.
     unshareable: bool,
 }
@@ -79,6 +104,98 @@ pub fn chunk_codegen_count() -> u64 {
 
 pub(crate) fn count_codegen() {
     CHUNK_CODEGEN.with(|c| c.set(c.get() + 1));
+}
+
+/// Starts capturing the code of the chunk about to be compiled.
+pub(crate) fn begin_capture() {
+    CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::default()));
+}
+
+/// The functions `body` and `stub` of the chunk being compiled form a
+/// ring of `copies` (see [`Ring`]).
+pub(crate) fn note_ring(body: FuncId, stub: FuncId, copies: u32) {
+    CAPTURE.with(|c| {
+        if let Some(cap) = c.borrow_mut().as_mut() {
+            cap.ring = Some(Ring {
+                body: body.as_u32(),
+                stub: stub.as_u32(),
+                copies,
+            });
+        }
+    });
+}
+
+/// Drops the capture `begin_capture` started: the chunk was not compiled.
+pub(crate) fn drop_capture() {
+    CAPTURE.with(|c| *c.borrow_mut() = None);
+}
+
+/// Ends the capture `begin_capture` started, once `module` has finalized
+/// the chunk whose entry is `entry_id`: the chunk's functions as laid out
+/// for running and sharing (`None` when the code cannot be moved), and
+/// whether the chunk is a ring. A ring's copies are made here; a chunk
+/// without one is laid out as compiled.
+pub(crate) fn end_capture(module: &JITModule, entry_id: FuncId) -> (Option<Layout>, bool) {
+    let Some(cap) = CAPTURE.with(|c| c.borrow_mut().take()) else {
+        return (None, false);
+    };
+    let is_ring = cap.ring.is_some();
+    (layout_of(module, cap, entry_id), is_ring)
+}
+
+fn layout_of(module: &JITModule, cap: Capture, entry_id: FuncId) -> Option<Layout> {
+    if cap.unshareable {
+        return None;
+    }
+    let mut funcs: Vec<Func> = cap
+        .funcs
+        .iter()
+        .map(|(id, len, rels)| {
+            let p = module.get_finalized_function(FuncId::from_u32(*id));
+            // SAFETY: `p..p + len` is the function the module finalized,
+            // mapped while the module lives
+            let bytes = unsafe { std::slice::from_raw_parts(p, *len) };
+            Func {
+                id: *id,
+                bytes: bytes.into(),
+                rels: rels.clone().into(),
+            }
+        })
+        .collect();
+    if let Some(ring) = cap.ring {
+        let body = funcs.iter().position(|f| f.id == ring.body)?;
+        let body = funcs.remove(body);
+        for f in &mut funcs {
+            if f.id == ring.stub {
+                retarget(f, ring.body, RING_ID);
+            }
+        }
+        for i in 0..ring.copies {
+            let mut copy = body.clone();
+            copy.id = RING_ID + i;
+            let next = if i + 1 == ring.copies {
+                ring.stub
+            } else {
+                RING_ID + i + 1
+            };
+            retarget(&mut copy, ring.body, next);
+            funcs.push(copy);
+        }
+    }
+    Some(Layout {
+        funcs: funcs.into(),
+        entry: entry_id.as_u32(),
+        strs: cap.strs.into(),
+    })
+}
+
+/// Points `f`'s calls of the function `from` at `to`.
+fn retarget(f: &mut Func, from: u32, to: u32) {
+    for r in f.rels.iter_mut() {
+        if r.target == Target::Local(from) {
+            r.target = Target::Local(to);
+        }
+    }
 }
 
 /// The address of `key`, a string constant of the function being compiled:
@@ -181,93 +298,73 @@ pub(crate) fn note<M: Module>(module: &M, ctx: &cranelift_codegen::Context, id: 
     });
 }
 
-/// Compiles `proto` with the method JIT, capturing its code for sharing
-/// when `capture`.
+/// Compiles `proto` with the method JIT; with `share`, also the image
+/// another Vm of the engine can adopt.
 pub(crate) fn compile(
     proto: Gc<Proto>,
     pre53: bool,
     float_only: bool,
-    capture: bool,
+    share: bool,
 ) -> Option<(JitHandle, Option<Box<dyn FnOnce(u64) -> ChunkImage>>)> {
-    if capture {
-        CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::default()));
-    }
-    let handle = try_compile_int_chunk(proto, pre53, float_only);
-    let cap = CAPTURE.with(|c| c.borrow_mut().take());
-    let handle = handle?;
-    let cap = cap.filter(|c| !c.unshareable);
-    let image = cap.and_then(|cap| {
-        // the chunk's entry is the function defined last (its checked
-        // entry, or the body when it needs none)
-        let entry = cap.funcs.last()?.0;
-        let funcs: Vec<Func> = cap
-            .funcs
-            .iter()
-            .map(|(id, len, rels)| {
-                let p = handle
-                    ._module
-                    .get_finalized_function(cranelift_module::FuncId::from_u32(*id));
-                // SAFETY: `p..p + len` is the function the handle's module
-                // finalized, mapped while the handle lives
-                let bytes = unsafe { std::slice::from_raw_parts(p, *len) };
-                Some(Func {
-                    id: *id,
-                    bytes: bytes.into(),
-                    rels: rels.clone().into(),
-                })
-            })
-            .collect::<Option<_>>()?;
-        // each string by its index among the function's constants
-        let k_of = |n: u32| {
-            let live = *cap.strs.get(n as usize)?;
-            proto
+    let handle = try_compile_int_chunk(proto, pre53, float_only)?;
+    let image = share
+        .then(|| handle.layout.clone())
+        .flatten()
+        .and_then(|layout| {
+            // each string by its index among the function's constants
+            let k_of = |n: u32| {
+                let live = *layout.strs.get(n as usize)?;
+                proto
                 .consts
                 .iter()
                 .position(
                     |c| matches!(c, luna_core::runtime::Value::Str(s) if s.as_ptr() as i64 == live),
                 )
                 .map(|k| k as u32)
-        };
-        let funcs: Vec<Func> = funcs
-            .into_iter()
-            .map(|mut f| {
-                let mut rels = f.rels.to_vec();
-                for r in &mut rels {
-                    if let Target::Const(n) = r.target {
-                        r.target = Target::Const(k_of(n)?);
+            };
+            let funcs: Vec<Func> = layout
+                .funcs
+                .iter()
+                .map(|f| {
+                    let mut f = f.clone();
+                    let mut rels = f.rels.to_vec();
+                    for r in &mut rels {
+                        if let Target::Const(n) = r.target {
+                            r.target = Target::Const(k_of(n)?);
+                        }
                     }
+                    f.rels = rels.into();
+                    Some(f)
+                })
+                .collect::<Option<_>>()?;
+            let entry = layout.entry;
+            let meta = ChunkMeta {
+                num_args: handle.num_args,
+                returns_one: handle.returns_one,
+                arg_float_mask: handle.arg_float_mask,
+                arg_table_mask: handle.arg_table_mask,
+                ret_is_float: handle.ret_is_float,
+                ret_is_table: handle.ret_is_table,
+            };
+            let content = Content::of(&proto);
+            let f: Box<dyn FnOnce(u64) -> ChunkImage> = Box::new(move |id| {
+                let size = std::mem::size_of::<ChunkImage>()
+                    + content.bytes.len()
+                    + funcs
+                        .iter()
+                        .map(|f| f.bytes.len() + 32 * f.rels.len())
+                        .sum::<usize>();
+                ChunkImage {
+                    id,
+                    content,
+                    funcs: funcs.into(),
+                    entry,
+                    meta,
+                    size,
                 }
-                f.rels = rels.into();
-                Some(f)
-            })
-            .collect::<Option<_>>()?;
-        let meta = ChunkMeta {
-            num_args: handle.num_args,
-            returns_one: handle.returns_one,
-            arg_float_mask: handle.arg_float_mask,
-            arg_table_mask: handle.arg_table_mask,
-            ret_is_float: handle.ret_is_float,
-            ret_is_table: handle.ret_is_table,
-        };
-        let content = Content::of(&proto);
-        let f: Box<dyn FnOnce(u64) -> ChunkImage> = Box::new(move |id| {
-            let size = std::mem::size_of::<ChunkImage>()
-                + content.bytes.len()
-                + funcs
-                    .iter()
-                    .map(|f| f.bytes.len() + 32 * f.rels.len())
-                    .sum::<usize>();
-            ChunkImage {
-                id,
-                content,
-                funcs: funcs.into(),
-                entry,
-                meta,
-                size,
-            }
+            });
+            Some(f)
         });
-        Some(f)
-    });
     Some((handle, image))
 }
 
@@ -320,28 +417,39 @@ pub(crate) fn adopt(
             .find(|i| i.content == content)?
             .clone()
     };
-    let r = install(&img, proto, &mut cs.baseline_code)?;
+    let base = place_funcs(&img.funcs, img.entry, proto, &mut cs.baseline_code)?;
     cs.chunks_adopted += 1;
-    Some(r)
+    Some((base, img.meta))
+}
+
+/// A chunk's own layout placed in `arena` for the Vm that compiled it:
+/// the address of its entry.
+pub(crate) fn place_layout(
+    layout: &Layout,
+    proto: &Proto,
+    arena: &mut super::trace::CodeArena,
+) -> Option<*const u8> {
+    place_funcs(&layout.funcs, layout.entry, proto, arena)
 }
 
 /// `img`'s code for `proto` of this Vm, placed in `arena`: its functions
 /// laid out one after another, calls between them pointed at their new
 /// places, and the string constants this Vm's. `None` when `proto` is not
 /// of `img`'s content or the code cannot be placed.
-fn install(
-    img: &Arc<ChunkImage>,
+fn place_funcs(
+    funcs: &[Func],
+    entry: u32,
     proto: &Proto,
     arena: &mut super::trace::CodeArena,
-) -> Option<(*const u8, ChunkMeta)> {
-    let mut at = Vec::with_capacity(img.funcs.len());
+) -> Option<*const u8> {
+    let mut at = Vec::with_capacity(funcs.len());
     let mut code: Vec<u8> = Vec::new();
-    for f in img.funcs.iter() {
+    for f in funcs.iter() {
         code.resize(code.len().next_multiple_of(16), 0);
         at.push(code.len());
         code.extend_from_slice(&f.bytes);
     }
-    for (k, f) in img.funcs.iter().enumerate() {
+    for (k, f) in funcs.iter().enumerate() {
         for r in f.rels.iter() {
             let p = at[k] + r.at as usize;
             match r.target {
@@ -352,7 +460,7 @@ fn install(
                     _ => return None,
                 },
                 Target::Local(id) => {
-                    let t = img.funcs.iter().position(|g| g.id == id)?;
+                    let t = funcs.iter().position(|g| g.id == id)?;
                     let d = at[t] as i64 + r.addend - p as i64;
                     match r.kind {
                         Reloc::X86CallPCRel4 | Reloc::X86PCRel4 => {
@@ -371,6 +479,6 @@ fn install(
         }
     }
     let base = arena.place(&code).ok()?;
-    let e = img.funcs.iter().position(|f| f.id == img.entry)?;
-    Some((base.wrapping_add(at[e]), img.meta))
+    let e = funcs.iter().position(|f| f.id == entry)?;
+    Some(base.wrapping_add(at[e]))
 }

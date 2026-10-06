@@ -276,7 +276,12 @@ impl Vm {
         if self.frame_cap == u32::MAX {
             return i64::MAX;
         }
-        i64::from(self.frame_cap) - self.frames.len() as i64 - native
+        // the array doubles until a doubling would pass the limit
+        let mut size = self.g.frame_size;
+        while size * 2 <= self.frame_cap {
+            size *= 2;
+        }
+        i64::from(size) - i64::from(self.frames_in_use()) - native
     }
 
     /// "stack overflow" raised for a self call of compiled `cl` past
@@ -301,9 +306,11 @@ impl Vm {
 
     /// Run a call that compiled code makes but cannot run natively, in the
     /// interpreter: a self-recursive call when the native stack is low.
-    /// The interpreter's own frames count against 5.1's call limit from
-    /// here on; the compiled calls below are not among them. Like a
-    /// library callback it cannot yield. The compiled frames below may
+    /// `native`, when given, is how many calls the compiled code below made
+    /// on the native stack: they took no interpreter frame but count
+    /// against 5.1's call limit, so the frame array is sized as PUC's
+    /// `CallInfo` array would be with them in it. Like a library callback
+    /// it cannot yield. The compiled frames below may
     /// hold the only reference to a table they made, in a native register
     /// no collection can see, so none runs until the call is done (the
     /// code of such a function calls nothing but itself).
@@ -312,16 +319,30 @@ impl Vm {
         &mut self,
         cl: crate::runtime::Gc<crate::runtime::LuaClosure>,
         args: &[Value],
+        native: Option<u32>,
     ) -> Result<Vec<Value>, LuaError> {
+        let native_before = self.g.frames_native;
+        if let Some(n) = native
+            && self.frame_cap != u32::MAX
+        {
+            self.g.frames_native += n;
+            // the array as PUC would have it: doubled whenever it filled,
+            // the native frames included (`grow_frames`); the budget kept
+            // the doubling under the limit
+            while self.frames_in_use() > self.g.frame_size {
+                self.g.frame_size *= 2;
+            }
+        }
         let stopped = self.heap.gc_is_stopped();
         self.heap.gc_set_stopped(true);
         // the method JIT would hand this very call straight back
         let jit = std::mem::replace(&mut self.jit.enabled, false);
         self.nny += 1;
-        let r = self.call_value_impl(Value::Closure(cl), args, true);
+        let r = self.call_value_impl(Value::Closure(cl), args, true, None);
         self.nny -= 1;
         self.jit.enabled = jit;
         self.heap.gc_set_stopped(stopped);
+        self.g.frames_native = native_before;
         r
     }
 }

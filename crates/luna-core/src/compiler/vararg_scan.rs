@@ -102,44 +102,62 @@ impl Compiler<'_> {
             return true;
         }
         use ast::Expr::*;
-        match self.ast.expr(e) {
-            Name(n) => self.nm(n) == name && !is_index_obj,
-            Index { obj, key } => {
-                self.expr_forces(*obj, name, true) || self.expr_forces(*key, name, false)
+        // every expression to look at, with whether it is the object of a
+        // read index; no recursion, so a long chain is no deeper
+        let mut todo: Vec<(ExprId, bool)> = vec![(e, is_index_obj)];
+        while let Some((e, is_index_obj)) = todo.pop() {
+            let forces = match self.ast.expr(e) {
+                Name(n) => self.nm(n) == name && !is_index_obj,
+                Index { obj, key } => {
+                    todo.push((*obj, true));
+                    todo.push((*key, false));
+                    false
+                }
+                Call { func, args, .. } => {
+                    todo.push((*func, false));
+                    todo.extend(self.ls(*args).iter().map(|&a| (a, false)));
+                    false
+                }
+                MethodCall { obj, args, .. } => {
+                    todo.push((*obj, false));
+                    todo.extend(self.ls(*args).iter().map(|&a| (a, false)));
+                    false
+                }
+                BinOp { lhs, rhs, .. } => {
+                    todo.push((*lhs, false));
+                    todo.push((*rhs, false));
+                    false
+                }
+                UnOp { operand, .. } => {
+                    todo.push((*operand, false));
+                    false
+                }
+                Paren(inner) => {
+                    todo.push((*inner, false));
+                    false
+                }
+                Table { fields, .. } => {
+                    for f in self.ls(*fields) {
+                        match f {
+                            ast::TableField::Item(e) | ast::TableField::Named(_, e) => {
+                                todo.push((*e, false));
+                            }
+                            ast::TableField::Keyed(k, v) => {
+                                todo.push((*k, false));
+                                todo.push((*v, false));
+                            }
+                        }
+                    }
+                    false
+                }
+                Function(body) => self.mentions_block(&body.block, name),
+                Nil | True | False | Vararg | Int(_) | Float(_) | Str(_) => false,
+            };
+            if forces {
+                return true;
             }
-            Call { func, args, .. } => {
-                self.expr_forces(*func, name, false)
-                    || self
-                        .ls(*args)
-                        .iter()
-                        .any(|&a| self.expr_forces(a, name, false))
-            }
-            MethodCall { obj, args, .. } => {
-                self.expr_forces(*obj, name, false)
-                    || self
-                        .ls(*args)
-                        .iter()
-                        .any(|&a| self.expr_forces(a, name, false))
-            }
-            BinOp { lhs, rhs, .. } => {
-                self.expr_forces(*lhs, name, false) || self.expr_forces(*rhs, name, false)
-            }
-            UnOp { operand, .. } => self.expr_forces(*operand, name, false),
-            Paren(inner) => self.expr_forces(*inner, name, false),
-            Table { fields, .. } => self.ls(*fields).iter().any(|f| self.field_forces(f, name)),
-            Function(body) => self.mentions_block(&body.block, name),
-            Nil | True | False | Vararg | Int(_) | Float(_) | Str(_) => false,
         }
-    }
-
-    fn field_forces(&self, f: &TableField, name: &str) -> bool {
-        match f {
-            ast::TableField::Item(e) => self.expr_forces(*e, name, false),
-            ast::TableField::Named(_, e) => self.expr_forces(*e, name, false),
-            ast::TableField::Keyed(k, v) => {
-                self.expr_forces(*k, name, false) || self.expr_forces(*v, name, false)
-            }
-        }
+        false
     }
 
     /// Whether `name` appears *anywhere* inside a (nested) block — any mention
@@ -206,31 +224,54 @@ impl Compiler<'_> {
             return true;
         }
         use ast::Expr::*;
-        match self.ast.expr(e) {
-            Name(n) => self.nm(n) == name,
-            Index { obj, key } => self.mentions_expr(*obj, name) || self.mentions_expr(*key, name),
-            Call { func, args, .. } => {
-                self.mentions_expr(*func, name)
-                    || self.ls(*args).iter().any(|&a| self.mentions_expr(a, name))
-            }
-            MethodCall { obj, args, .. } => {
-                self.mentions_expr(*obj, name)
-                    || self.ls(*args).iter().any(|&a| self.mentions_expr(a, name))
-            }
-            BinOp { lhs, rhs, .. } => {
-                self.mentions_expr(*lhs, name) || self.mentions_expr(*rhs, name)
-            }
-            UnOp { operand, .. } => self.mentions_expr(*operand, name),
-            Paren(inner) => self.mentions_expr(*inner, name),
-            Table { fields, .. } => self.ls(*fields).iter().any(|f| match f {
-                ast::TableField::Item(e) => self.mentions_expr(*e, name),
-                ast::TableField::Named(_, e) => self.mentions_expr(*e, name),
-                ast::TableField::Keyed(k, v) => {
-                    self.mentions_expr(*k, name) || self.mentions_expr(*v, name)
+        let mut todo: Vec<ExprId> = vec![e];
+        while let Some(e) = todo.pop() {
+            let mentions = match self.ast.expr(e) {
+                Name(n) => self.nm(n) == name,
+                Index { obj, key } => {
+                    todo.extend([*obj, *key]);
+                    false
                 }
-            }),
-            Function(body) => self.mentions_block(&body.block, name),
-            Nil | True | False | Vararg | Int(_) | Float(_) | Str(_) => false,
+                Call { func, args, .. } => {
+                    todo.push(*func);
+                    todo.extend_from_slice(self.ls(*args));
+                    false
+                }
+                MethodCall { obj, args, .. } => {
+                    todo.push(*obj);
+                    todo.extend_from_slice(self.ls(*args));
+                    false
+                }
+                BinOp { lhs, rhs, .. } => {
+                    todo.extend([*lhs, *rhs]);
+                    false
+                }
+                UnOp { operand, .. } => {
+                    todo.push(*operand);
+                    false
+                }
+                Paren(inner) => {
+                    todo.push(*inner);
+                    false
+                }
+                Table { fields, .. } => {
+                    for f in self.ls(*fields) {
+                        match f {
+                            ast::TableField::Item(e) | ast::TableField::Named(_, e) => {
+                                todo.push(*e);
+                            }
+                            ast::TableField::Keyed(k, v) => todo.extend([*k, *v]),
+                        }
+                    }
+                    false
+                }
+                Function(body) => self.mentions_block(&body.block, name),
+                Nil | True | False | Vararg | Int(_) | Float(_) | Str(_) => false,
+            };
+            if mentions {
+                return true;
+            }
         }
+        false
     }
 }

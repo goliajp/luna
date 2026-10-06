@@ -1,9 +1,7 @@
 //! An AOT binary meets unbounded nesting the way PUC does: the error its
 //! C-call or Lua-stack limit raises, caught by pcall, never a crash, in
 //! every dialect, with the binary's compiled traces installed and running.
-//! A 200000-term sum loaded at run time is too deep for luna's compiler
-//! (docs/compatibility.md): it fails to load with the nesting error of the
-//! dialect where PUC compiles it.
+//! A 200000-term sum loaded at run time compiles, as in PUC.
 
 use std::fs;
 use std::process::Command;
@@ -14,8 +12,8 @@ use luna_core::version::LuaVersion;
 use crate::host_link::host_can_link;
 
 const SCRIPT: &str = r#"local function norm(e) return ((tostring(e):gsub("^.*:%d+: ", "@ "))) end
-local t t = setmetatable({}, {__tostring = function(t) return tostring(t) end})
-print(norm(select(2, pcall(tostring, t))))
+local t t = setmetatable({}, {__index = function(t, k) return t[k] end})
+print(norm(select(2, pcall(function() return t.x end))))
 local function f() return f() + 1 end
 print(norm(select(2, pcall(f))))
 local function g() return (string.gsub("x", "x", function() return g() end)) end
@@ -25,23 +23,14 @@ local s = 0
 for i = 1, 2000 do s = s + d(20) end
 print(s)
 print(norm(select(2, pcall(d, -1))))
-print(norm(select(2, (loadstring or load)("return " .. string.rep("1 + ", 200000) .. "1"))))
+print((loadstring or load)("return " .. string.rep("1 + ", 200000) .. "1")())
 local n = 0
 for i = 1, 1000000 do n = n + 1 end
 print(n)
 "#;
 
-fn expected(version: LuaVersion) -> String {
-    let too_deep = match version {
-        LuaVersion::Lua51 => "@ chunk has too many syntax levels",
-        LuaVersion::Lua52 | LuaVersion::Lua53 => {
-            "@ too many C levels (limit is 200) in main function"
-        }
-        _ => "C stack overflow",
-    };
-    format!(
-        "C stack overflow\n@ stack overflow\nC stack overflow\n40000\n@ stack overflow\n{too_deep}\n1000000\n"
-    )
+fn expected(_version: LuaVersion) -> String {
+    "@ C stack overflow\n@ stack overflow\nC stack overflow\n40000\n@ stack overflow\n200001\n1000000\n".to_string()
 }
 
 fn run(stem: &str, version: LuaVersion) {

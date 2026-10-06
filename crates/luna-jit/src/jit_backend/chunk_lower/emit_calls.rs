@@ -218,7 +218,6 @@ pub(super) fn emit_self_call<M: Module>(
     let EmitState {
         current_kinds,
         current_is_nil,
-        self_call_slow,
         ..
     } = st;
     match ins.op() {
@@ -244,8 +243,12 @@ pub(super) fn emit_self_call<M: Module>(
                 arg_vals.push(v_i64);
             }
             let sc = self_calls?;
-            let result_i64 =
-                emit_guarded_self_call(module, bcx, self_call_slow, fn_id, sc, arg_vals)?;
+            let self_ref = module.declare_func_in_func(fn_id, bcx.func);
+            let call = bcx.ins().call(self_ref, &arg_vals);
+            let result_i64 = bcx.inst_results(call)[0];
+            if sc.check_failure {
+                return_if_failed(bcx);
+            }
             // Self-call result is `ret_kind`; bitcast back to
             // F64 if Float. Pre-write `current_kinds[a]` would
             // be stale here.
@@ -267,110 +270,16 @@ pub(super) fn emit_self_call<M: Module>(
     Some(())
 }
 
-/// The self call: a direct native call passing the parameters on (one
-/// call fewer when counted). The first one of a block checks the stack
-/// pointer against the limit in the pinned register and whether the
-/// callee would have a call left; failing either, a chunk without a
-/// context returns what `luna_jit_self_call_slow` makes of this whole call,
-/// and one with a context has it make the self call instead, then returns
-/// at once if that call or one below it failed.
-fn emit_guarded_self_call<M: Module>(
-    module: &mut M,
-    bcx: &mut FunctionBuilder<'_>,
-    self_call_slow: &mut Option<Value>,
-    fn_id: FuncId,
-    sc: SelfCalls,
-    args: Vec<Value>,
-) -> Option<Value> {
-    let go_slow = match *self_call_slow {
-        Some(v) => v,
-        None => {
-            let sp = bcx.ins().get_stack_pointer(types::I64);
-            let limit = bcx.ins().get_pinned_reg(types::I64);
-            let mut v = bcx.ins().icmp(IntCC::UnsignedLessThan, sp, limit);
-            if let Some(left) = sc.left {
-                let spent = bcx.ins().icmp_imm_s(IntCC::SignedLessThanOrEqual, left, 1);
-                v = bcx.ins().bor(v, spent);
-            }
-            *self_call_slow = Some(v);
-            if sc.ctx.is_none() {
-                // run this whole call in the interpreter instead
-                let redo = bcx.create_block();
-                let go_on = bcx.create_block();
-                bcx.ins().brif(v, redo, &[], go_on, &[]);
-                bcx.switch_to_block(redo);
-                let own: Vec<Value> = sc.own.iter().flatten().copied().collect();
-                let r = call_slow(module, bcx, sc, sc.left, &own)?;
-                bcx.ins().return_(&[r]);
-                bcx.switch_to_block(go_on);
-            }
-            v
-        }
-    };
-    let callee_left = sc.left.map(|left| bcx.ins().iadd_imm_s(left, -1));
-    let mut native_args = args.clone();
-    native_args.extend(callee_left);
-    native_args.extend(sc.ctx);
-    let self_ref = module.declare_func_in_func(fn_id, bcx.func);
-    let Some(ctx) = sc.ctx else {
-        let call = bcx.ins().call(self_ref, &native_args);
-        return Some(bcx.inst_results(call)[0]);
-    };
-    let fast = bcx.create_block();
-    let slow = bcx.create_block();
-    let merge = bcx.create_block();
-    bcx.append_block_param(merge, types::I64);
-    bcx.ins().brif(go_slow, slow, &[], fast, &[]);
-
-    bcx.switch_to_block(fast);
-    let call = bcx.ins().call(self_ref, &native_args);
-    let r = bcx.inst_results(call)[0];
-    bcx.ins().jump(merge, &[BlockArg::Value(r)]);
-
-    bcx.switch_to_block(slow);
-    let r = call_slow(module, bcx, sc, callee_left, &args)?;
-    bcx.ins().jump(merge, &[BlockArg::Value(r)]);
-
-    bcx.switch_to_block(merge);
-    let r = bcx.block_params(merge)[0];
+/// Return at once when the failure flag in the stub's context (the pinned
+/// register) is set: a self call this one made, or one below it, failed.
+fn return_if_failed(bcx: &mut FunctionBuilder<'_>) {
     let abort = bcx.create_block();
     let cont = bcx.create_block();
+    let ctx = bcx.ins().get_pinned_reg(types::I64);
     let failed = bcx.ins().load(types::I64, MemFlagsData::trusted(), ctx, 8);
     bcx.ins().brif(failed, abort, &[], cont, &[]);
     bcx.switch_to_block(abort);
     let zero = bcx.ins().iconst(types::I64, 0);
     bcx.ins().return_(&[zero]);
     bcx.switch_to_block(cont);
-    Some(r)
-}
-
-/// `luna_jit_self_call_slow(ctx, desc, left, args...)`: the call with
-/// `args` made by the interpreter, `left` calls deep at most.
-fn call_slow<M: Module>(
-    module: &mut M,
-    bcx: &mut FunctionBuilder<'_>,
-    sc: SelfCalls,
-    left: Option<Value>,
-    args: &[Value],
-) -> Option<Value> {
-    let mut sig = module.make_signature();
-    for _ in 0..7 {
-        sig.params.push(AbiParam::new(types::I64));
-    }
-    sig.returns.push(AbiParam::new(types::I64));
-    let id = module
-        .declare_function("luna_jit_self_call_slow", Linkage::Import, &sig)
-        .ok()?;
-    let helper = module.declare_func_in_func(id, bcx.func);
-    let ctx = sc.ctx.unwrap_or_else(|| bcx.ins().iconst(types::I64, 0));
-    let desc = bcx.ins().iconst(types::I64, sc.desc);
-    let left = left.unwrap_or_else(|| {
-        bcx.ins()
-            .iconst(types::I64, luna_jit_helpers::SELF_CALL_UNCOUNTED)
-    });
-    let mut helper_args = vec![ctx, desc, left];
-    helper_args.extend_from_slice(args);
-    helper_args.resize_with(7, || bcx.ins().iconst(types::I64, 0));
-    let call = bcx.ins().call(helper, &helper_args);
-    Some(bcx.inst_results(call)[0])
 }

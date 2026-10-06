@@ -44,6 +44,9 @@ pub struct Vm {
     /// `set_instr_budget`.
     pub(crate) instr_budget: Option<i64>,
     pub(crate) stack: LVec<Value>,
+    /// the counters every call checks, together so a call touches one
+    /// cache line for them
+    pub(crate) g: CallGuards,
     pub(crate) frames: LVec<CallFrame>,
     /// open upvalues, sorted ascending by stack slot
     pub(super) open_upvals: LVec<(u32, Gc<Upvalue>)>,
@@ -244,6 +247,9 @@ pub struct Vm {
     /// handling"); a host protected call compares it before and after to
     /// report that status instead of LUA_ERRRUN.
     pub(crate) errerr_raised: u64,
+    /// the "error in error handling" just raised, until it reaches the
+    /// unwinder: PUC's `luaD_throw(LUA_ERRERR)` runs no message handler
+    pub(crate) errerr_in_flight: Option<Value>,
     /// finalizer errors a 5.2/5.3 full collection raised (`LUA_ERRGCMM`)
     pub(crate) gcmm_raised: u64,
     /// The C API's dispatcher of C hook functions: a thread whose hook
@@ -297,13 +303,6 @@ pub struct Vm {
     pub(super) frames_top: u32,
     /// logical stack top for multi-result sequences
     pub(crate) top: u32,
-    /// native↔Lua nesting depth (PUC C-stack guard analogue)
-    pub(super) c_depth: u32,
-    /// number of live pcall/xpcall continuation frames on the running thread
-    /// (PUC counts these against nCcalls). Bounds protected-call recursion the
-    /// way `c_depth` bounds call_value recursion. Per-thread: saved/restored
-    /// with the coroutine context, since continuations survive a yield.
-    pub(super) pcall_depth: u32,
     /// number of non-yieldable C calls in flight on the running thread (PUC's
     /// `L->nny`). A library callback that runs via synchronous Rust recursion
     /// (sort comparator, gsub replacement) cannot be continued across a yield,
@@ -443,8 +442,22 @@ pub struct Vm {
     pub(super) _mem: crate::runtime::mem::MemOwner,
     /// Lua frames a thread may hold before a call raises "stack
     /// overflow": PUC 5.1's `LUAI_MAXCALLS`; no count in later dialects,
-    /// whose limit is the stack size
+    /// whose limit is the stack size. The frame array is grown as PUC
+    /// 5.1 grows its `CallInfo` array (see `grow_frames`).
     pub(super) frame_cap: u32,
+    /// where the call that overflowed the Lua stack had its top (PUC's
+    /// `L->top` when `luaD_growstack` raised): the message handler runs
+    /// from there
+    pub(crate) overflow_top: Option<u32>,
+    /// the "C stack overflow" a call was last refused with: PUC's refused
+    /// call keeps its level while its error is in flight, which lets the
+    /// message handler run on it one level above the limit
+    pub(crate) c_overflow_err: Option<Value>,
+    /// the running thread's stack has overflowed and is using the error
+    /// space (PUC's stack grown to `ERRORSTACKSIZE`), until a protected
+    /// call catches the error; a call that does not fit it is "error in
+    /// error handling". Per-thread, saved with the coroutine context.
+    pub(super) stack_extra: bool,
 }
 
 /// Call-site context an in-flight async native
@@ -470,4 +483,40 @@ pub(crate) struct AsyncNativeCallCtx {
     /// post-resume one.
     #[allow(dead_code)]
     pub gc_top: u32,
+}
+
+/// The counters every call checks and keeps (see each field's note):
+/// together so a call touches one cache line for all of them.
+#[repr(C)]
+pub(crate) struct CallGuards {
+    /// PUC `nCcalls`: the C levels in flight on the running thread (see
+    /// `MAX_C_DEPTH`): calls native code made into Lua, the pcall /
+    /// xpcall, metamethod, `__pairs` and `__close` continuations above the
+    /// thread's last resume, the resumes below it, and the levels refused
+    /// calls hold while their message handlers run. A resume starts the
+    /// coroutine from the resumer's count (`lua_resume`), so a thread's
+    /// count is not saved with it.
+    pub(crate) nccalls: u32,
+    /// frames the running thread had when it was last resumed: PUC's
+    /// `lua_resume` starts the thread from the resumer's count, so the
+    /// continuations below hold no level and popping them gives none
+    /// back. Per-thread, saved with the coroutine context.
+    pub(crate) stale_frames: u32,
+    /// the size of PUC 5.1's `CallInfo` array: doubled when the frames in
+    /// use (`Vm::frames_in_use`) fill it, which is where its limit is
+    /// checked (`grow_frames`). Per-thread. `u32::MAX` in later dialects.
+    pub(crate) frame_size: u32,
+    /// `lua_stack_limit` of the dialect
+    pub(crate) lua_stack_limit: u32,
+    /// calls compiled code made on the native stack below the running
+    /// interpreter frames, which take no frame but count against 5.1's
+    /// call limit
+    pub(crate) frames_native: u32,
+    /// frames the host holds below the main thread's (`host_entry_layout`)
+    pub(crate) host_frames: u32,
+    /// metamethod, `__pairs` and `__close` continuation frames on the
+    /// running thread: no frame of PUC's (its metamethod call makes one
+    /// frame, the callee's), so not counted in `frames_in_use`.
+    /// Per-thread, saved with the coroutine context.
+    pub(crate) meta_conts: u32,
 }

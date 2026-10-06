@@ -78,7 +78,9 @@ impl Vm {
     /// object becomes "error in error handling" (`luaD_seterrorobj`).
     pub(crate) fn errerr(&mut self) -> Value {
         self.errerr_raised += 1;
-        Value::Str(self.heap.intern(b"error in error handling"))
+        let v = Value::Str(self.heap.intern(b"error in error handling"));
+        self.errerr_in_flight = Some(v);
+        v
     }
 
     /// PUC's LUA_ERRMEM: an allocation was refused, and the error object is

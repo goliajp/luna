@@ -29,52 +29,21 @@ pub(super) struct EmitFacts<'a> {
     pub(super) self_calls: Option<SelfCalls>,
 }
 
-/// A self-recursive chunk's entry puts the stack limit in the pinned
-/// register, where its body's every call reads it at no cost to the
-/// calls themselves. The body takes more parameters, after its own: for
-/// 5.1 and 5.2 (`float_only`; only 5.1 has a depth limit) the calls left;
-/// and where going on after a failed self call could be seen (a table
-/// write) or might not end (a backward jump) the address of the entry's
-/// context (`luna_jit_enter_ctx`), whose failure flag
-/// `luna_jit_self_call_slow` sets, so that every caller returns at once.
-/// Elsewhere the callers finish with dummy results that the dispatcher
-/// drops. Before the first self call of each block (the stack pointer
-/// does not move within the body, so once is enough) the body checks the
-/// stack pointer against the limit and whether the callee would have a
-/// call left; failing either, `luna_jit_self_call_slow` makes the call, or,
-/// in a chunk with no context, the whole of this call again.
+/// A self-recursive chunk's self calls are direct native calls to its
+/// body, which is laid out as a ring of copies, each calling the next and
+/// the last calling a stub (`entry::define_stub`) that checks the native
+/// stack and the dialect's call budget once per lap before calling the
+/// first copy again; the calls themselves cost nothing. The entry fills
+/// the stub's context (`luna_jit_enter_ctx`) and keeps its address in the
+/// pinned register. Where going on after a failed self call could be seen
+/// (a table write) or might not end (a backward jump), the body reads the
+/// context's failure flag after each self call and returns at once when
+/// it is set; elsewhere the callers finish with dummy results that the
+/// dispatcher drops.
 #[derive(Clone, Copy)]
 pub(super) struct SelfCalls {
-    /// the calls left, when counted
-    pub(super) left: Option<Value>,
-    /// the context, when the failure flag is checked
-    pub(super) ctx: Option<Value>,
-    /// `luna_jit_helpers::self_call_desc` of the calls
-    pub(super) desc: i64,
-    /// the body's own raw parameters, for running this whole call in the
-    /// interpreter instead (a chunk without a context: nothing it did so
-    /// far can be seen, so doing it again is not either)
-    pub(super) own: [Option<Value>; 4],
-}
-
-/// Which of the [`SelfCalls`] parameters a chunk's body takes.
-#[derive(Clone, Copy)]
-pub(super) struct SelfCallParams {
-    pub(super) count: bool,
-    pub(super) ctx: bool,
-}
-
-impl SelfCallParams {
-    pub(super) fn of(c: ChunkIn<'_>) -> Self {
-        SelfCallParams {
-            count: c.float_only,
-            ctx: may_show_dummy_results(c),
-        }
-    }
-
-    pub(super) fn len(self) -> usize {
-        usize::from(self.count) + usize::from(self.ctx)
-    }
+    /// read the failure flag after each self call
+    pub(super) check_failure: bool,
 }
 
 /// What every op's emit updates.
@@ -82,9 +51,6 @@ pub(super) struct EmitState {
     pub(super) current_kinds: Vec<RegKind>,
     pub(super) current_is_nil: Vec<bool>,
     pub(super) terminated: bool,
-    /// whether a self call in this block must go through
-    /// `luna_jit_self_call_slow`, once the block's first one has checked
-    pub(super) self_call_slow: Option<Value>,
 }
 
 /// Emits the chunk body, then its checked entry when it needs one, and
@@ -119,10 +85,6 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     for _ in 0..num_params {
         sig.params.push(AbiParam::new(types::I64));
     }
-    let extra = SelfCallParams::of(c);
-    let extra_params = if any_self_call { extra.len() } else { 0 };
-    sig.params
-        .extend((0..extra_params).map(|_| AbiParam::new(types::I64)));
     sig.returns.push(AbiParam::new(types::I64));
     let fn_id = module
         .declare_function("luna_jit_chunk", Linkage::Local, &sig)
@@ -186,9 +148,8 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     // `binary_trees`'s `{nil, nil}` leaf stores actual Nil values
     // instead of misinterpreting the 0 bits as `Int(0)`.
     let current_is_nil: Vec<bool> = vec![false; max_stack];
-    let self_calls = any_self_call.then(|| {
-        let desc = self_call_desc((arg_float_mask, arg_table_mask), num_params, scan, ret_kind);
-        self_calls_of(&bcx, entry, extra, num_params, desc)
+    let self_calls = any_self_call.then(|| SelfCalls {
+        check_failure: may_show_dummy_results(c),
     });
 
     let f = EmitFacts {
@@ -206,7 +167,6 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
         current_kinds,
         current_is_nil,
         terminated: false,
-        self_call_slow: None,
     };
     let mut current_block = entry;
     let mut pc = 0;
@@ -222,7 +182,6 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
             bcx.switch_to_block(next_blk);
             current_block = next_blk;
             st.terminated = false;
-            st.self_call_slow = None;
             // reset emit-side `current_kinds` to
             // the per-BB dataflow result so an alternate-path
             // writer's kind doesn't leak forward. The linear writer
@@ -280,10 +239,22 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
 
     module.define_function(fn_id, &mut ctx).ok()?;
     chunk_share::note(module, &ctx, fn_id);
+    let ring = any_self_call.then(|| RingSpec {
+        desc: self_call_desc((arg_float_mask, arg_table_mask), num_params, scan, ret_kind),
+        counted: c.float_only,
+        copies: ring_copies(ctx.compiled_code().map_or(0, |cc| cc.code_buffer().len())),
+    });
     module.clear_context(&mut ctx);
 
-    let extra = any_self_call.then_some(extra);
-    define_entry(module, &mut ctx, fn_id, scan, extra, num_params)
+    define_entry(module, &mut ctx, fn_id, scan, ring, num_params)
+}
+
+/// Copies of a body of `len` bytes in its ring: as many as keep the ring
+/// under 48 KB of code, up to 32. Their frames together stay far below
+/// the stack the stub keeps free (`native_stack::JIT_RESERVE` less what
+/// raising an error needs): a frame holds at most the 255 registers.
+fn ring_copies(len: usize) -> u32 {
+    (48 * 1024 / len.max(1)).clamp(2, 32) as u32
 }
 
 fn declare_regs(
@@ -331,10 +302,10 @@ fn define_entry<M: Module>(
     ctx: &mut cranelift_codegen::Context,
     fn_id: FuncId,
     scan: &ChunkScan,
-    self_calls: Option<SelfCallParams>,
+    ring: Option<RingSpec>,
     num_params: usize,
 ) -> Option<FuncId> {
-    let any_self_call = self_calls.is_some();
+    let any_self_call = ring.is_some();
     let ChunkScan {
         self_upval_idx,
         math_folds,
@@ -358,7 +329,7 @@ fn define_entry<M: Module>(
     let checks = EntryChecks {
         self_upval: self_upval_idx.filter(|_| any_self_call),
         math_fns,
-        self_calls,
+        ring,
     };
     let entry_id = if any_self_call || !checks.math_fns.is_empty() {
         define_checked_entry(module, ctx, fn_id, &checks, num_params)?
@@ -388,22 +359,4 @@ fn may_show_dummy_results(c: ChunkIn<'_>) -> bool {
         Op::Jmp => jmp_target(pc, ins) <= pc,
         _ => false,
     })
-}
-
-/// The body's [`SelfCalls`], from its entry block's parameters.
-fn self_calls_of(
-    bcx: &FunctionBuilder<'_>,
-    entry: Block,
-    extra: SelfCallParams,
-    num_params: usize,
-    desc: i64,
-) -> SelfCalls {
-    let params = bcx.block_params(entry);
-    let mut rest = params[num_params..].iter().copied();
-    SelfCalls {
-        left: if extra.count { rest.next() } else { None },
-        ctx: if extra.ctx { rest.next() } else { None },
-        desc,
-        own: std::array::from_fn(|i| params[..num_params].get(i).copied()),
-    }
 }

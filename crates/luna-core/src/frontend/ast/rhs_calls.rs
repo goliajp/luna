@@ -79,75 +79,65 @@ pub fn walk_rhs_for_calls(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
 }
 
 fn walk_with(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
-    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
-        return RhsCallScan::UserOrUnknown;
-    }
     use RhsCallScan::*;
-    match chunk.expr(eid) {
-        // Leaves — no calls.
-        Expr::Nil
-        | Expr::True
-        | Expr::False
-        | Expr::Vararg
-        | Expr::Int(_)
-        | Expr::Float(_)
-        | Expr::Str(_)
-        | Expr::Name(_) => None,
-
-        // Function literals don't *invoke* their body during RHS eval; the
-        // value flowing out is the closure itself. (The closure may capture
-        // upvalues but the capture happens at the `Closure` op, after the
-        // snapshot site, and the captured local is rebound via the upvalue
-        // *only* if the closure is later called — which the gate handles
-        // by inspecting RHS Call ops, not Function literals.)
-        Expr::Function(_) => None,
-
-        Expr::Index { obj, key } => walk_with(chunk, *obj).join(walk_with(chunk, *key)),
-        Expr::Paren(inner) => walk_with(chunk, *inner),
-        Expr::UnOp { operand, .. } => walk_with(chunk, *operand),
-        Expr::BinOp { lhs, rhs, .. } => walk_with(chunk, *lhs).join(walk_with(chunk, *rhs)),
-        Expr::Table { fields, .. } => {
-            let mut acc = None;
-            for f in chunk.list(*fields) {
-                let part = match f {
-                    TableField::Item(e) | TableField::Named(_, e) => walk_with(chunk, *e),
-                    TableField::Keyed(k, v) => walk_with(chunk, *k).join(walk_with(chunk, *v)),
-                };
-                acc = acc.join(part);
-                if acc == UserOrUnknown {
-                    return acc;
+    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+        return UserOrUnknown;
+    }
+    let mut acc = None;
+    // every expression to look at; no recursion, so a long chain is no
+    // deeper
+    let mut todo: Vec<ExprId> = vec![eid];
+    while let Some(e) = todo.pop() {
+        match chunk.expr(e) {
+            // Leaves — no calls.
+            Expr::Nil
+            | Expr::True
+            | Expr::False
+            | Expr::Vararg
+            | Expr::Int(_)
+            | Expr::Float(_)
+            | Expr::Str(_)
+            | Expr::Name(_) => {}
+            // Function literals don't *invoke* their body during RHS eval; the
+            // value flowing out is the closure itself. (The closure may capture
+            // upvalues but the capture happens at the `Closure` op, after the
+            // snapshot site, and the captured local is rebound via the upvalue
+            // *only* if the closure is later called — which the gate handles
+            // by inspecting RHS Call ops, not Function literals.)
+            Expr::Function(_) => {}
+            Expr::Index { obj, key } => todo.extend([*obj, *key]),
+            Expr::Paren(inner) => todo.push(*inner),
+            Expr::UnOp { operand, .. } => todo.push(*operand),
+            Expr::BinOp { lhs, rhs, .. } => todo.extend([*lhs, *rhs]),
+            Expr::Table { fields, .. } => {
+                for f in chunk.list(*fields) {
+                    match f {
+                        TableField::Item(e) | TableField::Named(_, e) => todo.push(*e),
+                        TableField::Keyed(k, v) => todo.extend([*k, *v]),
+                    }
                 }
             }
-            acc
-        }
-
-        Expr::Call { func, args, .. } => {
-            let here = classify_callee(chunk, *func);
-            let mut acc = here;
-            for &a in chunk.list(*args) {
-                acc = acc.join(walk_with(chunk, a));
-                if acc == UserOrUnknown {
-                    return acc;
-                }
+            // the callee is classified in place, not walked
+            Expr::Call { func, args, .. } => {
+                acc = acc.join(classify_callee(chunk, *func));
+                todo.extend_from_slice(chunk.list(*args));
             }
-            acc
-        }
-        Expr::MethodCall { obj, args, .. } => {
             // `obj:method(args)` is morally `obj.method(obj, args)`. Even if
             // `obj` is a known-pure stdlib root the *method dispatch* itself
             // may hit a __index path, so MethodCall is unconditionally
             // UserOrUnknown for the gate. Conservative; can be relaxed
             // later if obj is a literal stdlib lookup.
-            let mut acc = UserOrUnknown;
-            // Still walk for diagnostics / future relaxation, but the result
-            // can only go up from UserOrUnknown.
-            acc = acc.join(walk_with(chunk, *obj));
-            for &a in chunk.list(*args) {
-                acc = acc.join(walk_with(chunk, a));
+            Expr::MethodCall { obj, args, .. } => {
+                acc = UserOrUnknown;
+                todo.push(*obj);
+                todo.extend_from_slice(chunk.list(*args));
             }
-            acc
+        }
+        if acc == UserOrUnknown {
+            return acc;
         }
     }
+    acc
 }
 
 /// Classifies the callee of a `Call` node in isolation (does NOT recurse

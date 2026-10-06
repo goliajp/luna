@@ -323,6 +323,10 @@ impl Vm {
     ) -> Result<Option<Vec<Value>>, LuaError> {
         let at = hc.results_at as usize;
         let top = (self.top as usize).max(at);
+        // `top` may run ahead of the stack's length
+        if self.stack.len() < top {
+            self.grow_stack_or_abort(top);
+        }
         let vals = self.stack[at..top].to_vec();
         self.stack.truncate(at);
         self.top = hc.results_at;
