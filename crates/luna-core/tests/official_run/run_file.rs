@@ -6,6 +6,7 @@ use super::byte_diff::{
     run_official_on_puc,
 };
 use super::*;
+use luna_core::vm::LuaError;
 
 /// Lua snippet prepended to every PUC chunk. **MUST be newline-free** so
 /// reported source-line numbers (used by `error("…", level)` and the
@@ -163,6 +164,33 @@ fn read_chunk(name: &str, version: LuaVersion) -> Result<Vec<u8>, String> {
 
 /// Prepend the assert-counter preamble and, when enabled, the byte-diff
 /// capture around the body.
+const STRESS_CAP: usize = 1 << 30;
+
+/// heavy.lua's `pcall` for the runner: `pcall` that re-arms the stress
+/// cap once the call is over. heavy.lua catches the memory failure its
+/// stress loops run into and goes on; under PUC the allocator serves the
+/// next request, under luna the cap that stands in for it stays exceeded
+/// until the host re-arms it (see `configure_vm`), and no Lua instruction
+/// may run in between, so the re-arm happens in the native itself.
+fn pcall_rearms(vm: &mut Vm, func_slot: u32, nargs: u32) -> Result<u32, LuaError> {
+    let f = vm.nat_arg(func_slot, nargs, 0);
+    let args: Vec<Value> = (1..nargs)
+        .map(|i| vm.nat_arg(func_slot, nargs, i))
+        .collect();
+    let r = vm.call_value(f, &args);
+    // what the failed call left reachable stays (heavy.lua's `toomanyidx`
+    // keeps its >1 GiB table); like PUC's allocator, refuse only further
+    // growth
+    vm.set_memory_cap(Some(STRESS_CAP.max(vm.memory_used() + (64 << 20))));
+    match r {
+        Ok(mut vals) => {
+            vals.insert(0, Value::Bool(true));
+            Ok(vm.nat_return(func_slot, &vals))
+        }
+        Err(e) => Ok(vm.nat_return(func_slot, &[Value::Bool(false), e.0])),
+    }
+}
+
 fn wrap_source(body: Vec<u8>, skip_wrapper: bool, byte_diff_enabled: bool) -> Vec<u8> {
     if skip_wrapper {
         body
@@ -201,6 +229,7 @@ fn wrap_source(body: Vec<u8>, skip_wrapper: bool, byte_diff_enabled: bool) -> Ve
     }
 }
 
+/// The `_U` / `_port` / `_soft` / `_noposix` globals the file runs under.
 /// Memory cap and the `_U` / `_port` / `_soft` / `_noposix` globals the
 /// file runs under.
 fn configure_vm(vm: &mut Vm, label: &str) {
@@ -215,21 +244,29 @@ fn configure_vm(vm: &mut Vm, label: &str) {
     // SIGSEGV'd before the Overflow check could fire. Arming the soft
     // cap at 1 GiB lets the run loop notice between dispatch turns,
     // run a full collect (which can't reclaim the growing `a` — it's
-    // reachable), and raise a catchable `"memory cap exceeded"` Lua
-    // error. heavy.lua's `pcall(function () ... end)` catches it and
-    // the rest of the chunk (`print "OK"`) runs to completion. Cap
-    // is fire-once + disarms after firing, so the post-pcall tail
-    // sees no further pressure. For verybig/memerr/sort the cap is
-    // pure headroom — none of them push net live bytes anywhere near
-    // 1 GiB (verybig has `_soft=true` set below, memerr early-returns
-    // when `T` is nil, sort's working set is ~50k Values ≈ 1.2 MB) —
-    // but pinning it here is defense-in-depth against future
-    // additions to the same stress family.
+    // reachable), and raise the "memory cap exceeded" Lua error that
+    // heavy.lua's `pcall(function () ... end)` catches, standing in
+    // for the "not enough memory" PUC's test allocator raises there (a
+    // memory limit on the allocation context cannot stand in yet: a
+    // refused table slab still aborts). Once exceeded the cap stays
+    // exceeded until the host re-arms it, where PUC's allocator just
+    // works again after the failed request, so heavy.lua gets a `pcall`
+    // that re-arms the cap when the call is over (`pcall_rearms`). For
+    // verybig/memerr/sort the cap is pure headroom — none of them push
+    // net live bytes anywhere near 1 GiB (verybig has `_soft=true` set
+    // below, memerr early-returns when `T` is nil, sort's working set
+    // is ~50k Values ≈ 1.2 MB) — but pinning it here is
+    // defense-in-depth against future additions to the same stress
+    // family.
     if matches!(
         label,
         "heavy.lua" | "verybig.lua" | "memerr.lua" | "sort.lua"
     ) {
-        vm.set_memory_cap(Some(1usize << 30));
+        vm.set_memory_cap(Some(STRESS_CAP));
+    }
+    if label == "heavy.lua" {
+        let n = vm.heap.new_native(pcall_rearms, Box::new([]));
+        vm.set_global("pcall", Value::Native(n)).unwrap();
     }
     vm.set_global("_U", Value::Bool(true)).unwrap();
     // attrib.lua's lines 79-356 exercise dynamic C-library loading

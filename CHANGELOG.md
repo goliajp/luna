@@ -414,6 +414,21 @@ optimization.
 
 ### Fixed
 
+- An exhausted instruction budget or memory cap now stays exhausted
+  until the host arms a new one with `Vm::set_instr_budget` /
+  `Vm::set_memory_cap`: every further instruction raises the same
+  error again, inside `pcall` callers, `xpcall` handlers, `__close`
+  and `__gc` handlers, metamethods, library callbacks and coroutines
+  alike, and `Vm::error_kind()` stays `InstrBudget` / `MemoryCap`
+  (which the cap did not set before). Before, the limit cleared itself
+  when it fired, so `pcall(function() while true do end end) while
+  true do end` ran forever once the inner loop had used the budget
+  up, a handler or finalizer could run unmetered, and a script's `__gc`
+  ran unbounded when the Vm was dropped. Every release from 1.1.0 to
+  4.0.2 is affected. `Vm::instr_budget_remaining()` reports `Some(0)`
+  once exhausted. While a budget or a cap is armed the method JIT is
+  no longer entered either (traces already were not), so the JIT does
+  not need to be switched off for sandboxed scripts.
 - Unbounded nesting no longer crashes the process with a native stack
   overflow; it raises the Lua error PUC raises, which `pcall` catches.
   Nesting that runs on the native stack (metamethods, library callbacks
