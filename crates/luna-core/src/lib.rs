@@ -87,6 +87,8 @@
 pub mod compiler;
 pub mod frontend;
 pub mod jit;
+#[doc(hidden)]
+pub mod native_stack;
 pub mod numeric;
 pub mod pattern;
 pub mod runtime;

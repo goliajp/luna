@@ -168,6 +168,12 @@ pub struct JitState {
     /// collections. Accessed via downcast
     /// from the `CraneliftBackend` trait impls.
     pub storage: Box<dyn crate::jit::JitStorage>,
+
+    /// An error raised by a call that compiled code handed to the
+    /// interpreter (a self-recursive call made with too little native
+    /// stack left): unlike `pending_err` it is the call's outcome, raised
+    /// where the compiled code was entered, not a reason to run it again.
+    pub pending_raise: Option<LuaError>,
 }
 
 impl JitState {
@@ -410,6 +416,7 @@ impl JitState {
             max_depth_seen: 0,
             counters: JitCounters::default(),
             pending_err: None,
+            pending_raise: None,
             reg_state_buf: Vec::new(),
             ssa_roots: Vec::new(),
             str_buf_pool: Vec::new(),

@@ -234,3 +234,13 @@ fn error_unwinding() {
 fn core_stack() {
     check("core_stack");
 }
+
+#[test]
+fn c_stack_recursion() {
+    check("cstack_recursion");
+}
+
+#[test]
+fn stack_depth() {
+    check("stack_depth");
+}

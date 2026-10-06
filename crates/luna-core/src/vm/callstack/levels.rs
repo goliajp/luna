@@ -254,7 +254,7 @@ impl Vm {
                     if k > f.n_varargs as u64 {
                         return None;
                     }
-                    let slot = (f.func_slot as u64 + k) as usize;
+                    let slot = (u64::from(f.base - f.n_varargs) + k - 1) as usize;
                     let name = self.vararg_locvar_name().to_string();
                     return Some((name, LocalSlot::Stack(slot)));
                 }
@@ -348,11 +348,11 @@ impl Vm {
             unreachable!("continuation level")
         };
         match nc.kind {
-            ContKind::Pcall if v == LuaVersion::Lua51 => vec![],
-            ContKind::Pcall if v == LuaVersion::Lua52 => vec![Value::Nil],
-            ContKind::Pcall => vec![Value::Bool(true)],
-            ContKind::Xpcall { handler } if v <= LuaVersion::Lua52 => vec![handler],
-            ContKind::Xpcall { handler } => {
+            ContKind::Pcall { .. } if v == LuaVersion::Lua51 => vec![],
+            ContKind::Pcall { .. } if v == LuaVersion::Lua52 => vec![Value::Nil],
+            ContKind::Pcall { .. } => vec![Value::Bool(true)],
+            ContKind::Xpcall { handler, .. } if v <= LuaVersion::Lua52 => vec![handler],
+            ContKind::Xpcall { handler, .. } => {
                 vec![
                     ts.stack[(nc.func_slot + 1) as usize],
                     handler,

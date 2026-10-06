@@ -11,7 +11,13 @@ impl<'s> Parser<'s> {
     }
 
     pub(super) fn block(&mut self) -> Result<Block, SyntaxError> {
-        self.enter()?;
+        // 5.1 counts a nesting level per block (`chunk`), 5.2 on per
+        // statement (`statement`): a chain of `do` blocks is one level
+        // deeper in 5.1 than from 5.2 on
+        let per_block = self.version == LuaVersion::Lua51;
+        if per_block {
+            self.enter()?;
+        }
         // PUC `leaveblock` restores `nactvar` to the count at block entry, so
         // a block's locals fall out of scope when it ends. Snapshot the count
         // here so the limit check tracks ACTIVE locals (locals.lua opens many
@@ -37,9 +43,15 @@ impl<'s> Parser<'s> {
             if self.block_follow() {
                 break;
             }
+            if !per_block {
+                self.enter()?;
+            }
             if self.tok.tok == Token::Return {
                 let s = self.return_stat()?;
                 self.stk.stats.push_or_abort(s);
+                if !per_block {
+                    self.leave();
+                }
                 break;
             }
             if self.tok.tok == Token::Break && self.version.break_is_last_statement() {
@@ -48,10 +60,16 @@ impl<'s> Parser<'s> {
                 let s = self.push_stat(Stat::Break { line });
                 self.stk.stats.push_or_abort(s);
                 self.accept(Token::Semi)?;
+                if !per_block {
+                    self.leave();
+                }
                 break;
             }
             if let Some(s) = self.statement()? {
                 self.stk.stats.push_or_abort(s);
+            }
+            if !per_block {
+                self.leave();
             }
             if !self.version.has_empty_statement() {
                 // 5.1: ';' is a separator after a statement, not a statement
@@ -59,7 +77,9 @@ impl<'s> Parser<'s> {
             }
         }
         self.goto_step(GotoCheck::leave_block)?;
-        self.leave();
+        if per_block {
+            self.leave();
+        }
         self.func_local_count.last_mut().expect("func ctx").0 = local_snapshot;
         self.restore_locals_51(locals_51_snap);
         Ok(Block {
@@ -80,12 +100,7 @@ impl<'s> Parser<'s> {
     }
 
     pub(super) fn statement(&mut self) -> Result<Option<StatId>, SyntaxError> {
-        // PUC's `statement` does not bump `nCcalls` itself — the surrounding
-        // `block` does, and nested forms (do/while/if/function/...) each
-        // recurse through `block` again. Counting both would double the cost
-        // per `do … end` nesting; errors.lua's `testrep("do ", "", " end")`
-        // expects 190 levels to compile and 201 to fail at the same wall as
-        // the other shapes.
+        // the nesting level is counted in `block` (see there)
         let start_line = self.tok.line;
         // 5.5 `global` is a contextual keyword: a declaration only when it
         // leads a statement and the next token starts one (name / '*' /
@@ -213,7 +228,12 @@ impl<'s> Parser<'s> {
                 g.declare(lex.names().text(v.sym), kind);
             }
         }
+        // the loop's locals, hidden ones included, are in scope for the
+        // body (PUC `forbody`) and out of it after
+        let active = self.func_local_count.last().expect("func ctx").0;
+        self.activate_locals()?;
         let body = self.block()?;
+        self.func_local_count.last_mut().expect("func ctx").0 = active;
         self.goto_step(|g| {
             g.leave_block()?;
             g.leave_block()

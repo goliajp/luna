@@ -109,7 +109,7 @@ impl Vm {
                     m.value(Value::Closure(f.closure));
                 }
                 CallFrame::Cont(NativeCont {
-                    kind: ContKind::Xpcall { handler },
+                    kind: ContKind::Xpcall { handler, .. },
                     ..
                 }) => {
                     m.value(*handler);
@@ -194,7 +194,7 @@ impl Vm {
                         m.value(Value::Closure(f.closure));
                     }
                     CallFrame::Cont(NativeCont {
-                        kind: ContKind::Xpcall { handler },
+                        kind: ContKind::Xpcall { handler, .. },
                         ..
                     }) => {
                         m.value(*handler);

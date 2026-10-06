@@ -16,6 +16,11 @@ use super::*;
 pub struct JitHandle {
     pub(super) _module: SendJitModule,
     pub(super) entry_raw: *const u8,
+    /// a self-recursive chunk's ring of body copies, where `entry_raw`
+    /// then points (see `chunk_lower::SelfCalls`)
+    pub(super) ring: Option<super::trace::CodeArena>,
+    /// the chunk's functions as laid out, for sharing between Vms
+    pub(super) layout: Option<super::chunk_share::Layout>,
     /// Number of i64 args the entry expects (0..=MAX_JIT_ARITY).
     /// Picks the right `extern "C"` fn-type to transmute to at the
     /// call site.
@@ -72,7 +77,11 @@ impl JitHandle {
     /// # Safety
     ///
     /// The entry point is not running and will not be called again.
-    pub(crate) unsafe fn free(self) {
+    pub(crate) unsafe fn free(mut self) {
+        if let Some(mut ring) = self.ring.take() {
+            // SAFETY: forwarded from the caller
+            unsafe { ring.free() }
+        }
         // SAFETY: forwarded from the caller
         unsafe { self._module.free() }
     }

@@ -27,7 +27,6 @@ pub(super) struct Level<'a> {
     /// PUC 5.1 LUAI_COMPAT_VARARG: the hidden `arg` table local was reserved.
     /// The runtime populates it on entry; see Proto::has_compat_vararg_arg.
     pub(super) has_compat_vararg_arg: bool,
-    #[allow(dead_code)]
     pub(super) line_defined: u32,
     /// PUC `fs->lasttarget` equivalent: the highest pc that is the destination
     /// of any patched jump (forward jump landing here, backward jump-back to a

@@ -78,7 +78,9 @@ impl Vm {
     /// object becomes "error in error handling" (`luaD_seterrorobj`).
     pub(crate) fn errerr(&mut self) -> Value {
         self.errerr_raised += 1;
-        Value::Str(self.heap.intern(b"error in error handling"))
+        let v = Value::Str(self.heap.intern(b"error in error handling"));
+        self.errerr_in_flight = Some(v);
+        v
     }
 
     /// PUC's LUA_ERRMEM: an allocation was refused, and the error object is
@@ -406,17 +408,25 @@ impl Vm {
             }) => self.frames.iter().rev().nth(1)?.lua()?,
             CallFrame::Cont(_) => return None,
         };
-        let proto = f.closure.proto;
+        Some(self.prefix_at(f.closure.proto, f.pc as usize))
+    }
+
+    /// `"short_src:line: "` of the instruction before `pc` in `proto`.
+    pub(super) fn prefix_at(
+        &self,
+        proto: Gc<crate::runtime::function::Proto>,
+        pc: usize,
+    ) -> String {
         // a stripped chunk: no source in luna's own format, no line info in
         // PUC's (whose loader names the missing source "=?")
         if proto.source.as_bytes().is_empty() || proto.lines.is_empty() {
-            return Some(self.stripped_prefix());
+            return self.stripped_prefix();
         }
-        let line = proto.lines[(f.pc as usize).saturating_sub(1).min(proto.lines.len() - 1)];
+        let line = proto.lines[pc.saturating_sub(1).min(proto.lines.len() - 1)];
         let raw = proto.source.as_bytes();
         let display = crate::vm::lib_debug::chunk_id(self.version, raw);
         let src = String::from_utf8_lossy(&display).into_owned();
-        Some(format!("{src}:{line}: "))
+        format!("{src}:{line}: ")
     }
 
     /// PUC `luaG_addinfo` prefix for a stripped chunk. 5.5 substitutes "=?"

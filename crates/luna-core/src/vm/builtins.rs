@@ -144,8 +144,9 @@ use basic::{
     nat_setmetatable, nat_tostring, nat_type, nat_warn,
 };
 use compat51::{nat_gcinfo, nat_getfenv, nat_newproxy, nat_setfenv};
+use errors::nat_assert;
+pub(crate) use errors::nat_error;
 pub(crate) use errors::{arg_error, raise_bytes, raise_str};
-use errors::{nat_assert, nat_error};
 pub use iter::ipairs_iter;
 use iter::{nat_ipairs, nat_next};
 pub(crate) use iter::{nat_pairs, pairs_mm_results};

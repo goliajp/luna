@@ -46,6 +46,33 @@ pub(super) fn numeral(
     version: LuaVersion,
     zeros: &mut Vec<f64>,
 ) -> Option<Num> {
+    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+        return None;
+    }
+    let v51 = version == LuaVersion::Lua51;
+    // the left spine of arithmetic operators, outermost first: a long
+    // chain (`1 + 1 + ... + 1`) is folded without recursion
+    let mut ops: Vec<(BinOp, ExprId)> = Vec::new();
+    let mut cur = id;
+    while let Expr::BinOp { op, lhs, rhs, .. } = *ast.expr(cur) {
+        if v51 && matches!(op, BinOp::And | BinOp::Or) {
+            break;
+        }
+        ops.push((op, rhs));
+        cur = lhs;
+    }
+    let mut z = Vec::new();
+    let mut n = numeral_leaf(ast, cur, version, &mut z)?;
+    for (op, rhs) in ops.into_iter().rev() {
+        let r = numeral(ast, rhs, version, &mut z)?;
+        n = fold_nums(op, n, r, version)?;
+    }
+    zeros.extend(z);
+    Some(n)
+}
+
+/// [`numeral`] of an expression that is not an arithmetic operator.
+fn numeral_leaf(ast: &Chunk, id: ExprId, version: LuaVersion, zeros: &mut Vec<f64>) -> Option<Num> {
     let v51 = version == LuaVersion::Lua51;
     match ast.expr(id) {
         Expr::Int(i) => Some(Num::Int(*i)),
@@ -81,14 +108,6 @@ pub(super) fn numeral(
             }
             numeral(ast, *rhs, version, zeros)
         }
-        Expr::BinOp { op, lhs, rhs, .. } => {
-            let mut z = Vec::new();
-            let l = numeral(ast, *lhs, version, &mut z)?;
-            let r = numeral(ast, *rhs, version, &mut z)?;
-            let v = fold_nums(*op, l, r, version)?;
-            zeros.extend(z);
-            Some(v)
-        }
         _ => None,
     }
 }
@@ -109,6 +128,9 @@ enum Lit {
 }
 
 fn literal(ast: &Chunk, id: ExprId) -> Option<Lit> {
+    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+        return None;
+    }
     Some(match ast.expr(id) {
         Expr::Nil | Expr::False => Lit::Falsy,
         Expr::True | Expr::Str(_) => Lit::Truthy(None),
@@ -130,6 +152,9 @@ fn literal(ast: &Chunk, id: ExprId) -> Option<Lit> {
 /// `nil`, `false`, or `C and` one of them where `C` is a literal or an
 /// equality test of two literals.
 fn always_falsy(ast: &Chunk, id: ExprId, zeros: &mut Vec<f64>) -> bool {
+    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+        return false;
+    }
     match ast.expr(id) {
         Expr::Paren(inner) => always_falsy(ast, *inner, zeros),
         Expr::BinOp {
@@ -145,6 +170,9 @@ fn always_falsy(ast: &Chunk, id: ExprId, zeros: &mut Vec<f64>) -> bool {
 /// A literal, or an equality test of two whose zeros (left first) go on
 /// `zeros`: PUC compiles the test's operands as constants.
 fn fixed_condition(ast: &Chunk, id: ExprId, zeros: &mut Vec<f64>) -> bool {
+    if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+        return false;
+    }
     match ast.expr(id) {
         Expr::Paren(inner) => fixed_condition(ast, *inner, zeros),
         Expr::BinOp {
