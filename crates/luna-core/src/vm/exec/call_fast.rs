@@ -21,7 +21,7 @@ impl Vm {
         let p = cl.proto;
         let base = func_slot + 1;
         let need = base as usize + p.max_stack as usize;
-        if self.jit.enabled
+        if self.jit.gate
             || p.is_vararg
             || p.has_compat_vararg_arg
             || base + nargs + p.max_stack as u32 + 1 > STACK_LIMIT_FLOOR

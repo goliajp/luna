@@ -111,7 +111,7 @@ impl Vm {
     /// memory cap keeps compiled code out on its own (see
     /// [`Self::set_instr_budget`]).
     pub fn set_jit_enabled(&mut self, enabled: bool) {
-        self.jit.enabled = enabled;
+        self.set_jit_flag(enabled);
         self.jit.enabled_chosen = true;
     }
 
