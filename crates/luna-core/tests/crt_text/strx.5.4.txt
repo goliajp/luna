@@ -1,0 +1,20 @@
+123456789x              	nil	0	error	0
+11111111111111111111x   	nil	0	error	0
+1e999x                  	nil	0	error	0
+10x                     	nil	0	error	0
+0x                      	nil	0	error	0
+0xg                     	nil	0	error	0
+0x10                    	16	0	16	0
+0x10x                   	nil	0	error	0
+1x1                     	nil	0	error	0
+12345678x               	nil	0	error	0
+1234567890x             	nil	0	error	0
+99999999999999999999x   	nil	0	error	0
+  1x                    	nil	0	error	0
+1 x                     	nil	0	error	0
+1.5x                    	nil	0	error	0
+1e5x                    	nil	0	error	0
+0X1P4                   	16.0	0	16.0	0
+1X                      	nil	0	error	0
+-10x                    	nil	0	error	0
+0xffffffffffffffffffx   	nil	0	error	0

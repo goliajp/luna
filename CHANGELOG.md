@@ -227,6 +227,20 @@ optimization.
   a Unicode mode ends it with 0xC0000005. In every dialect, opening an
   empty file in a text mode with `+` leaves EINVAL in `errno`.
 - `loadfile` of a file that opens but cannot be read says `cannot read`.
+- On Windows the `luna` command takes file names, its command line and
+  environment variables through the ANSI code page, as `lua.exe`'s narrow
+  C functions do: a name given as UTF-8 bytes reaches the system as the
+  code page reads those bytes, and `arg`, `os.getenv` and `os.tmpname`
+  give the code page's bytes (`?` for a character it has none for).
+  `Vm::set_global_bytes` sets a global whose name is not UTF-8.
+- On Windows `seek` on standard input goes to the system as for any
+  file, so a file redirected in can be sought and read again, as with
+  `lua.exe`; it reported `Invalid seek` before.
+- A UTF-8 stream of 5.1's `ccs=` reads bytes that are not UTF-8 as
+  `MultiByteToWideChar` does (one U+FFFD for a lead byte with the
+  continuation bytes it took, one for every other byte).
+- 5.1's retry of a numeral with `strtoul` leaves ERANGE in `errno` when
+  the value overflows (`unsigned long` has 32 bits on Windows).
 - The LLVM backend (`--features llvm-jit`, `LUNA_JIT_BACKEND=llvm`)
   compiles traces with the same trace lowering as the Cranelift backend:
   traces start in the baseline tier, move to Cranelift's code once hot,

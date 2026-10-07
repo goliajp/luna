@@ -228,7 +228,7 @@ pub(crate) fn os_open(name: &[u8], spec: &Spec) -> std::io::Result<std::fs::File
         access |= DELETE;
         share |= FILE_SHARE_DELETE;
     }
-    let path = wide(name);
+    let path = wide(name)?;
     // The library makes the handle inheritable unless the mode has `N`;
     // luna never does, as std does not: a child process another thread of
     // the host starts would hold the file open, and Windows then neither

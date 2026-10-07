@@ -1,0 +1,106 @@
+1	read cont *a a\0\253\255b\0@3|@3|@3|@3
+exit 1 00000000
+2	read cont 2 a\0@1|\253\255@2|b\0@3|nil@3
+exit 2 00000000
+3	read cont 4 a\0\253\255@2|b\0@3|nil@3|nil@3
+exit 3 00000000
+4	read trunc2 *a a\0\253\255b\0@3|@3|@3|@3
+exit 4 00000000
+5	read trunc2 2 a\0@1|\253\255@2|b\0@3|nil@3
+exit 5 00000000
+6	read trunc2 4 a\0\253\255@2|b\0@3|nil@3|nil@3
+exit 6 00000000
+7	read trunc2end *a nil,Invalid argument,22@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2
+exit 7 00000000
+8	read trunc2end 2 a\0@nil,Invalid argument,22|nil,Invalid argument,22@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2
+exit 8 00000000
+9	read trunc2end 4 a\0b\0@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2
+exit 9 00000000
+10	read trunc3 *a a\0\253\255b\0@4|@4|@4|@4
+exit 10 00000000
+11	read trunc3 2 a\0@1|\253\255@4|nil@4|nil@4
+exit 11 00000000
+12	read trunc3 4 a\0\253\255@4|nil@4|nil@4|nil@4
+exit 12 00000000
+13	read trunc3end *a nil,Invalid argument,22@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2
+exit 13 00000000
+14	read trunc3end 2 a\0@nil,Invalid argument,22|nil,Invalid argument,22@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2
+exit 14 00000000
+15	read trunc3end 4 a\0b\0@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2
+exit 15 00000000
+16	read trunc4end *a nil,Invalid argument,22@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2
+exit 16 00000000
+17	read trunc4end 2 a\0@nil,Invalid argument,22|nil,Invalid argument,22@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2
+exit 17 00000000
+18	read trunc4end 4 a\0b\0@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2|nil,Invalid argument,22@2
+exit 18 00000000
+19	read overlong *a a\0\253\255\253\255b\0@4|@4|@4|@4
+exit 19 00000000
+20	read overlong 2 a\0@1|\253\255@2|\253\255@3|b\0@4
+exit 20 00000000
+21	read overlong 4 a\0\253\255@2|\253\255b\0@4|nil@4|nil@4
+exit 21 00000000
+22	read surrogate *a a\0\253\255\253\255b\0@5|@5|@5|@5
+exit 22 00000000
+23	read surrogate 2 a\0@1|\253\255@4|b\0@5|nil@5
+exit 23 00000000
+24	read surrogate 4 a\0\253\255@4|b\0@5|nil@5|nil@5
+exit 24 00000000
+25	read ff *a a\0\253\255b\0@3|@3|@3|@3
+exit 25 00000000
+26	read ff 2 a\0@1|\253\255@2|b\0@3|nil@3
+exit 26 00000000
+27	read ff 4 a\0\253\255@2|b\0@3|nil@3|nil@3
+exit 27 00000000
+28	read beyond *a a\0\253\255\253\255\253\255b\0@6|@6|@6|@6
+exit 28 00000000
+29	read beyond 2 a\0@1|\253\255@5|b\0@6|nil@6
+exit 29 00000000
+30	read beyond 4 a\0\253\255@5|b\0@6|nil@6|nil@6
+exit 30 00000000
+31	read leadlead *a a\0\253\255\233\0b\0@5|@5|@5|@5
+exit 31 00000000
+32	read leadlead 2 a\0@1|\253\255@3|\253\255@4|b\0@5
+exit 32 00000000
+33	read leadlead 4 a\0\253\255@3|\253\255b\0@5|nil@5|nil@5
+exit 33 00000000
+34	read contafter *a a\0\233\0\253\255b\0@5|@5|@5|@5
+exit 34 00000000
+35	read contafter 2 a\0@1|\233\0@3|\253\255@4|b\0@5
+exit 35 00000000
+36	read contafter 4 a\0\233\0@3|\253\255b\0@5|nil@5|nil@5
+exit 36 00000000
+37	read many *a nil,Illegal byte sequence,42@4|@4|@4|@4
+exit 37 00000000
+38	read many 2 nil,Illegal byte sequence,42@4|nil@4|nil@4|nil@4
+exit 38 00000000
+39	read many 4 nil,Illegal byte sequence,42@4|nil@4|nil@4|nil@4
+exit 39 00000000
+40	read nul *a a\0\0\0b\0@3|@3|@3|@3
+exit 40 00000000
+41	read nul 2 a\0@1|\0\0@2|b\0@3|nil@3
+exit 41 00000000
+42	read nul 4 a\0\0\0@2|b\0@3|nil@3|nil@3
+exit 42 00000000
+43	read long *a nil,Invalid argument,22@6000|nil,Invalid argument,22@6000|nil,Invalid argument,22@6000|nil,Invalid argument,22@6000
+exit 43 00000000
+44	read long 2 \233\0@2|\233\0@4|\233\0@6|\233\0@8
+exit 44 00000000
+45	read long 4 \233\0\233\0@4|\233\0\233\0@8|\233\0\233\0@12|\233\0\233\0@16
+exit 45 00000000
+46	write high true 4 \239\187\191\239\191\189
+exit 46 00000000
+47	write highA true 5 \239\187\191\239\191\189a
+exit 47 00000000
+48	write low true 4 \239\187\191\239\191\189
+exit 48 00000000
+49	write lowhigh true 5 \239\187\191\239\191\189\239\191\189
+exit 49 00000000
+50	write pair true 5 \239\187\191\240\159\152\128
+exit 50 00000000
+51	write fffd true 4 \239\187\191\239\191\189
+exit 51 00000000
+52	write nl true 6 \239\187\191\13\13\10
+exit 52 00000000
+53	write mixed true 6 \239\187\191a\239\191\189b
+exit 53 00000000

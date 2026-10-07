@@ -13,17 +13,7 @@ pub(super) fn os_getenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     Ok(vm.nat_return(fs, &[v]))
 }
 
-fn os_bytes(s: &std::ffi::OsStr) -> Vec<u8> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        s.as_bytes().to_vec()
-    }
-    #[cfg(not(unix))]
-    {
-        s.to_string_lossy().into_owned().into_bytes()
-    }
-}
+use lib_io::os_bytes;
 
 /// C `remove`: `rmdir` for a directory, `unlink` otherwise.
 #[cfg(not(windows))]
