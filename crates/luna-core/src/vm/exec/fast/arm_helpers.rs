@@ -86,12 +86,22 @@ macro_rules! fast_arm_helper_macros {
                 resume_same!()
             }};
         }
-        // `R[A][*pk] := R[C]` for a key in a register or a constant
+        // the value a table write stores: `K[C]` with `k` set, else `R[C]`
+        macro_rules! store_value {
+            () => {
+                if $inst.k() {
+                    $kptr.wrapping_add($inst.c() as usize)
+                } else {
+                    $regs.wrapping_add($inst.c() as usize)
+                }
+            };
+        }
+        // `R[A][*pk] := R[C]/K[C]` for a key in a register or a constant
         macro_rules! set_arm {
             ($d pk:expr, $d probe:ident) => {{
                 let pt = $regs.wrapping_add($inst.a() as usize);
                 let pk: *const Value = $d pk;
-                let pv = $regs.wrapping_add($inst.c() as usize);
+                let pv = store_value!();
                 // SAFETY: registers and a constant of the running frame;
                 // the value is read where it is (see `Value::copy_raw`)
                 if unsafe { $vm.$d probe(pt, pk, pv) } {

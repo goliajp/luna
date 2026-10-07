@@ -32,6 +32,67 @@ const EXPRS: &str = "2^53, 2^2, 2^0.5, (-2)^0.5, 3^-1, 0^0, 7//2, 7.0//2, -7//2,
     5.0//0.0, -(7%3), 1.5+1.5, 3-3.0, 2*0.0, 3//1.0, math.pi*2, 7-(1 ..\"9\"), \
     0xffffffff>>(1 ..\"9\"), 10|(1 ..\"9\"), 2^(1 ..\"9\")";
 
+/// Chunks whose constants PUC's code generator shares or keeps apart by
+/// dialect: an integer and the float of its value, -0.0 and 0.0, nan
+/// (folded by 5.2 only), short and long strings, a string whose eight bytes
+/// are those of 0.0, and floats past 2^53 whose keys meet integers.
+const DEDUP: &[&str] = &[
+    "local a, b, c, d = ...\nreturn a + 100000, b + 100000.0, c * 100000, d * 100000.0, a - 5, b - 5.0\n",
+    "local a, b, c = ...\nreturn a * 0.0, b * -0.0, c * 0.0, a + 0, b - 0.0, c / -0.0\n",
+    "local a, b = ...\nreturn a + (-2)^0.5, b + (-2)^0.5, a * 0/0\n",
+    "local a, b = ...\nreturn a .. 'k', b .. 'k', a .. 'kk', \
+     a .. 'a long string, past the forty bytes PUC keeps short', \
+     b .. 'a long string, past the forty bytes PUC keeps short'\n",
+    "local a, b = ...\nreturn a .. '\\0\\0\\0\\0\\0\\0\\0\\0', b * 0.0, a * 0.0\n",
+    "local a, b, c = ...\nreturn a + 2^53, b + 9007199254740994, c + 2^53, a + 2^60, b + 2^60\n",
+    "local a, b = ...\nreturn a + 1e300, b + 1e300, a + 0.5, b + 0.5, a + 5, b + 5\n",
+    "local a, b, c, d = 100000, 100000.0, 5, 5.0\nreturn a, b, c, d, 100000.0, 100000\n",
+    "local a, b, c, d = 0.0, -0.0, 0, -0\nreturn a, b, c, d, -0.0, 0.0\n",
+    "local a, b = 0/0, -(0/0)\nreturn a, b, (-2)^0.5, (-2)^0.5\n",
+    "local x = ...\nreturn x == 0.0, x == -0.0, x == 0, x < 1e300, x < 1e300\n",
+    "local s = 'a long string, past the forty bytes PUC keeps short'\n\
+     return s, 'a long string, past the forty bytes PUC keeps short', 'k', 'k'\n",
+    "local t = {}\nt[1], t[1.0], t[2^53], t[2^53 + 1.0], t['1'] = 1, 2, 3, 4, 5\nreturn t\n",
+    "local a = 9007199254740993\nreturn a, 9007199254740992.0, 2^63, -2^63, 1e15, 1e15 + 0.5\n",
+];
+
+/// Assignments: fields, globals, indexings, upvalues, several targets at
+/// once, values that are constants, and function statements.
+const STORES: &[&str] = &[
+    "local t, u = {}, {}\nt.x, t.y, u[1], u[2] = 1, 'k', true, nil\nx, y = t, 2.5\nreturn t, u\n",
+    "local t, n = {}, 0\nlocal function f(v)\n  t.a = v\n  t[v] = 1\n  t[1] = false\n  \
+     n = n + 1\n  t = nil\n  g = 'k'\nend\nreturn f\n",
+    "local a, i, j = {}, 1, 2\ni, a[i], a, j, a[j], a[i+j] = j, i, i, nil, j, i\nreturn a\n",
+    "local a = {}\nlocal function f()\n  a.x, a = 1, 2\n  a, a.y = 3, 4\nend\nreturn f\n",
+    "local t = {}\nlocal a, b\na, t.x, b = 1\nt.y, a = 1, 2, 3\na, b = f()\nt[a], t.z = g()\n\
+     a, b = b, a\nreturn t\n",
+    "local t = {a = {}}\nlocal f\nfunction f() end\nfunction t.a.b() end\nfunction t.a:c() end\n\
+     function g() end\nfunction h.i.j() end\nreturn t\n",
+    "local t, k = {}, ...\nt[1.5] = k\nt[-1] = 2\nt[300] = 1e300\nt[true] = 'v'\nt[k] = 0.5\n\
+     t['a long string, past the forty bytes PUC keeps short'] = 1\n\
+     local v = t[1.5] or t[300] or t[-1] or t[true] or t[k]\nreturn v\n",
+    "local a = ...\nreturn {x = 1, [2] = 'k', [a] = true, [1.5] = a, ['y'] = nil, z = a + 1, a}\n",
+    "local f, g = nil, {}\nf = function() return g end\ng.h = function() end\nreturn f\n",
+    "local t = {}\nreturn function(k) t.x = k; t[1] = k; return t.x, t[1], t[k], t[2.5] end\n",
+    "local a, b = ...\na = b + 1\nb = a.x\na.y = -b\nreturn a, b\n",
+    "global x, y = 1, 2\nglobal function gf() end\nreturn x\n",
+    "local t = {}\nreturn function(k)\n  t[k], k = 1, 2\n  t[true] = t[k]\n  t[-1], t[2^53] = t[0.5], t['k']\n\
+     t[k + 1] = t[k] or t[1] or t[2]\nend\n",
+];
+
+/// A chunk with more constants than an `RK` operand reaches, then stores
+/// whose values and keys are constants.
+fn many_constants() -> String {
+    let mut s = String::from("local t = {");
+    for i in 0..300 {
+        s.push_str(&format!("{i}.25, "));
+    }
+    s.push_str(
+        "}\nt.a = 1.75\nt[2.5] = true\nt[7] = 'k'\ng = 3.5\nreturn t[2.5], t[300.5], g, h\n",
+    );
+    s
+}
+
 /// A constructor mixing registers, constants and a folded power.
 const TABLE: &str = "local a, b = ...\nlocal t = {a, b, 'k', 1.5, 2^53, true}\nreturn t\n";
 
@@ -75,11 +136,15 @@ fn luna_dump(version: LuaVersion, src: &Path) -> Vec<u8> {
     let name = format!("@{}", src.display());
     let f = vm.load(&source, name.as_bytes()).expect("luna compiles it");
     let dump = vm.eval("return string.dump").expect("string.dump")[0];
-    match vm
-        .call_value(dump, &[Value::Closure(f)])
-        .expect("dump")
-        .first()
-    {
+    let out = match vm.call_value(dump, &[Value::Closure(f)]) {
+        Ok(out) => out,
+        Err(e) => panic!(
+            "{version:?} dump of {:?}: {}",
+            String::from_utf8_lossy(&source),
+            vm.error_text(&e)
+        ),
+    };
+    match out.first() {
         Some(Value::Str(s)) => s.as_bytes().to_vec(),
         other => panic!("string.dump returned {other:?}"),
     }
@@ -121,7 +186,10 @@ fn constant_expressions_compile_as_puc_compiles_them() {
         let cases = EXPRS
             .split(", ")
             .map(|e| format!("local x = {{{e}, 1}}\nreturn x\n"))
-            .chain([TABLE.to_string()]);
+            .chain([TABLE.to_string()])
+            .chain(DEDUP.iter().map(|s| s.to_string()))
+            .chain(STORES.iter().map(|s| s.to_string()))
+            .chain([many_constants()]);
         failed.extend(cases.filter_map(|src| compare(version, &luac, &src)));
     }
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));

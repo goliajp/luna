@@ -49,7 +49,13 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
         let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
         let chain_len = chain_rc.len() as i64;
         let site_idx = lw.per_exit_inline_vec.len() as u32;
-        let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds.clone();
+        let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds[..window_size_us].to_vec();
+        // the slots the op's virtual registers stand in keep their kinds
+        for &(slot, kind) in &lw.virt_held {
+            if let Some(k) = kinds_snapshot.get_mut(slot) {
+                *k = kind;
+            }
+        }
         let mat_count = emit_materialize_live_sunk(
             &mut lw.bcx,
             mat_sunk_id,

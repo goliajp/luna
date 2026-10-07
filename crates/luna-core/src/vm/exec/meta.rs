@@ -108,8 +108,12 @@ pub(super) fn mm_event_name(op: crate::vm::isa::Op) -> Option<&'static str> {
         Op::BNot => "bnot",
         Op::Concat => "concat",
         Op::Len => "len",
-        Op::GetField | Op::GetTable | Op::GetI | Op::SelfOp => "index",
-        Op::SetField | Op::SetTable | Op::SetI => "newindex",
+        Op::GetField | Op::GetTable | Op::GetTableK | Op::GetTabUpR | Op::GetI | Op::SelfOp => {
+            "index"
+        }
+        Op::SetField | Op::SetTable | Op::SetTableK | Op::SetTabUpR | Op::SetTabUpK | Op::SetI => {
+            "newindex"
+        }
         Op::Eq | Op::EqK => "eq",
         Op::Lt => "lt",
         Op::Le => "le",

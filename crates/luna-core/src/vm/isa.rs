@@ -42,7 +42,8 @@ pub enum Op {
     GetI,
     /// `R[A] := R[B][K[C]:string]` field read with constant key.
     GetField,
-    /// `Upvalues[A][K[B]:string] := R[C]/K[C]`.
+    /// `Upvalues[A][K[B]:string] := R[C]/K[C]`. In every table write `k`
+    /// set means the stored value is the constant `K[C]` (as in PUC 5.4).
     SetTabUp,
     /// `R[A][R[B]] := R[C]/K[C]`.
     SetTable,
@@ -193,6 +194,21 @@ pub enum Op {
     GtI,
     /// `if ((R[A] >= sB) ~= k) then pc++`; `C` as for `EqI`.
     GeI,
+    /// `R[A] := R[B][K[C]]` for a constant key of any type: before 5.4 a
+    /// `GETTABLE` key is an `RK` operand, so a number key takes no register.
+    GetTableK,
+    /// `R[A][K[B]] := R[C]/K[C]` for a constant key of any type (before
+    /// 5.4 a `SETTABLE` key is an `RK` operand).
+    SetTableK,
+    /// `R[A] := Up[B][K[C]]` with `k` set, else `R[A] := Up[B][R[C]]`: a
+    /// 5.2 / 5.3 `GETTABUP` whose key is not a string constant.
+    GetTabUpR,
+    /// `Up[A][R[B]] := R[C]/K[C]`: a 5.2 / 5.3 `SETTABUP` with its key in a
+    /// register.
+    SetTabUpR,
+    /// `Up[A][K[B]] := R[C]/K[C]`: a 5.2 / 5.3 `SETTABUP` whose key is a
+    /// constant of any type.
+    SetTabUpK,
 }
 
 impl Op {
@@ -236,7 +252,7 @@ impl Op {
 }
 
 /// Total number of opcodes defined in [`Op`].
-pub const NUM_OPS: usize = Op::GeI as usize + 1;
+pub const NUM_OPS: usize = Op::SetTabUpK as usize + 1;
 
 mod inst;
 pub use inst::*;

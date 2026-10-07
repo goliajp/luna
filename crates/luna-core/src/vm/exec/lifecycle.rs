@@ -96,6 +96,7 @@ impl Vm {
             },
             c_overflow_err: None,
             overflow_top: None,
+            varinfo_pushed: false,
             stack_extra: false,
             closing_err: None,
             current: None,

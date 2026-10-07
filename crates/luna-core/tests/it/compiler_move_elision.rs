@@ -1,22 +1,7 @@
-//! Reloc-landing and RHS-materialization peephole regression tests.
-//!
-//! Reloc-landing peephole: when `assign_name` is about to emit a
-//! `Move local_reg, vreg` for a local target, the just-emitted op at
-//! `here() - 1` is inspected. If it is one of the closed set of
-//! retargetable producers (arith / Get* / Unm / Len / Not / BNot /
-//! GetUpval) whose A field equals `vreg` AND the pc is NOT a jump
-//! destination, the A field is patched to `local_reg` directly via
-//! `patch_dest` and the Move is skipped. Mirrors PUC `discharge2reg`.
-//!
-//! RHS-materialization elision: when `assign_stat`'s `explist_adjust` call ends with a
-//! trivial `Move base, src` materialization (an `Exp::Reg(src)` RHS
-//! discharged into a fresh temp) AND the single-store gate holds
-//! (targets.len() == exprs.len() == 1), the Move is popped and `src`
-//! is forwarded to the store as the value register, skipping the
-//! materialization Move.
-//!
-//! Both peepholes are gated on `no_jump_lands_here`: a jump landing at the
-//! modified instruction is fine, one landing after it keeps the Move.
+//! An assignment whose value count matches its targets stores the last
+//! value straight into the last target (PUC `restassign` then
+//! `luaK_storevar`): an instruction whose destination is still open writes
+//! the local directly, and a value already in a register is moved once.
 //!
 //! Each test compiles a focused snippet, inspects the main proto's
 //! bytecode for the expected shape, and cross-checks observable
@@ -235,13 +220,12 @@ fn retarget_closure_is_not_retargeted_to_preserve_gc_live_top() {
     let code = compile_main(src);
     let closures: Vec<&Inst> = code.iter().filter(|i| i.op() == Op::Closure).collect();
     assert_eq!(closures.len(), 2, "two Closure ops expected");
-    // In each `name = function ... end` assign_stat the Closure must land
-    // on a temp (A >= 2), and a Move(name, temp) must follow.
+    // 5.2+ put a closure in the next free register at once (PUC
+    // `codeclosure`): it lands on a temp (A >= 2) and is moved.
     for c in &closures {
         assert!(
             c.a() >= 2,
-            "Closure in `name = function...` assign_stat must write to a temp, \
-             NOT retarget to the local (got A={})",
+            "Closure in `name = function...` must write to a temp (got A={})",
             c.a()
         );
     }

@@ -433,7 +433,14 @@ fn emit_frame_get_tab_up<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_
         checkpoint("bail:inline-get-tab-up-untyped");
         return None;
     };
-    let env = frame_upval_read(lw, pl, oc, ins.b(), luna_core::runtime::value::raw::TABLE);
+    let env = frame_upval_read(
+        lw,
+        pl,
+        oc.i,
+        oc.rop,
+        ins.b(),
+        luna_core::runtime::value::raw::TABLE,
+    );
     let key_v = match rop.proto.consts[ins.c() as usize] {
         luna_core::runtime::Value::Str(s) => s,
         _ => unreachable!("pre-emit gates Str const at K[C]"),

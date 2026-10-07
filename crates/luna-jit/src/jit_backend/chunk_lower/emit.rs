@@ -118,8 +118,8 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     // gets a Cranelift type chosen from `reg_kinds[i]` (Int → I64,
     // Float → F64). Unset registers default to I64 — they're unreachable
     // in well-formed Lua but we still need a valid SSA shape.
-    // two more registers: the constant operands' scratch (`split_const_operands`)
-    let max_stack = (proto.max_stack as usize).max(num_params) + 2;
+    // the scratch registers of `split_const_operands`
+    let max_stack = (proto.max_stack as usize).max(num_params) + const_operands::SCRATCH_REGS;
     let regs = declare_regs(&mut bcx, c, reg_kinds, entry, max_stack);
     // emit-side per-PC kind tracker. Initialized from
     // the per-arg masks (Float bit → Float, Table bit → Table, else

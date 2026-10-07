@@ -33,10 +33,10 @@ pub(super) struct Plan<'r> {
     pub(super) head_proto: Gc<Proto>,
     pub(super) max_stack: usize,
     /// The width of every op's register window: the largest frame among
-    /// the functions the trace runs. Register `frame_w` is the virtual one
-    /// of a constant operand.
+    /// the functions the trace runs. Registers `frame_w` up are the virtual
+    /// ones of a constant operand or an upvalue table (see `vconsts`).
     pub(super) frame_w: usize,
-    pub(super) vconsts: Vec<Option<VConst>>,
+    pub(super) vconsts: Vec<VRegs>,
     pub(super) opts: CompileOptions,
     pub(super) float_only: bool,
     pub(super) op_offsets: Vec<u32>,
@@ -76,16 +76,11 @@ pub(super) struct Plan<'r> {
     pub(super) step_guard: Option<(usize, bool)>,
 }
 
-/// The constant held by the virtual register of op `i`, if it has one.
-pub(super) fn vconst_at(vconsts: &[Option<VConst>], i: usize) -> Option<VConst> {
-    vconsts.get(i).copied().flatten()
-}
-
 /// The pre-emit passes. `None` when the trace cannot be compiled; the
 /// escape analysis comes back separately because emit demotes sites.
 pub(super) fn plan_trace<'r>(
     record: &'r TraceRecord,
-    vconsts: Vec<Option<VConst>>,
+    vconsts: Vec<VRegs>,
     head_proto: Gc<Proto>,
     max_stack: usize,
     frame_w: usize,

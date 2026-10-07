@@ -90,72 +90,6 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// Whether the instruction at `here() - 1` may take the place of a Move
-    /// that would otherwise be emitted at `here()`: every path that would
-    /// reach the Move then runs that instruction last. `false` when nothing
-    /// has been emitted yet, or when a jump lands at `here()` (such a path
-    /// skips the instruction and needs the Move).
-    ///
-    /// A jump landing at `here() - 1` itself is fine (PUC `discharge2reg`
-    /// rewrites the A field without looking at `fs->lasttarget`): the paths
-    /// arriving there run the rewritten instruction like the fall-through
-    /// path does, and the temporary register it wrote is read only by the
-    /// Move being dropped.
-    ///
-    /// Consumed by the Reloc-landing peephole at `assign_name` and the
-    /// RHS materialization elision at `assign_stat`.
-    pub(super) fn no_jump_lands_here(&self) -> bool {
-        let here = self.here();
-        if here == 0 {
-            return false;
-        }
-        match self.lr().last_target {
-            None => true,
-            Some(t) => t < here,
-        }
-    }
-
-    /// Reloc-landing peephole gate. Returns `Some(prev_pc)` when the
-    /// instruction at `here() - 1` is a retargetable producer whose A field
-    /// equals `vreg` AND no jump lands right after it. The caller can
-    /// then `patch_dest(prev_pc, local_reg)` to retarget the A field
-    /// directly and skip the otherwise-required `Move local_reg, vreg`.
-    ///
-    /// The "retargetable producer" set is the closed list of ops produced
-    /// by paths that yield `Exp::Reloc(pc)`: arith / bitwise / unop / Len /
-    /// Get{Field,I,Table,TabUp}. Concat / SelfOp / Move are NOT in the set
-    /// (Concat reads A as operand base, SelfOp writes A+1 too, Move's A is
-    /// a sink). LoadK / LoadI / LoadF / LoadNil are excluded because they
-    /// are already discharged to their final register by `exp_to_reg` —
-    /// no Reloc landing happens through assign_name for them.
-    ///
-    pub(super) fn assign_name_can_retarget_reloc(&self, vreg: u32) -> Option<usize> {
-        if !self.no_jump_lands_here() {
-            return None;
-        }
-        let prev_pc = self.here() - 1;
-        let prev = self.lr().code[prev_pc];
-        if !is_retargetable_op(prev.op()) {
-            return None;
-        }
-        if prev.a() != vreg {
-            return None;
-        }
-        // The value may sit in a local's own register (`assign_stat` stores
-        // `b = a` from `a` directly): the instruction before is then the
-        // statement that last assigned `a`, and retargeting it would drop
-        // that assignment.
-        if self
-            .lr()
-            .locals
-            .iter()
-            .any(|v| v.konst.is_none() && v.reg == vreg)
-        {
-            return None;
-        }
-        Some(prev_pc)
-    }
-
     /// PUC `errorlimit`: render the "too many … (limit is …) in <where>"
     /// message a per-function-cap check raises. `where` is "main function"
     /// for the chunk's top-level proto and "function at line N" for every
@@ -239,7 +173,7 @@ impl<'a> Compiler<'a> {
 
     pub(super) fn str_const(&mut self, bytes: &[u8]) -> u32 {
         let s = self.intern_str(bytes);
-        self.const_idx(ConstKey::Str(s.as_ptr()), Value::Str(s))
+        self.const_idx(Value::Str(s))
     }
 
     /// The constant of the tree's string (or name) `s`: each entry of the
@@ -254,7 +188,7 @@ impl<'a> Compiler<'a> {
                 g
             }
         };
-        self.const_idx(ConstKey::Str(g.as_ptr()), Value::Str(g))
+        self.const_idx(Value::Str(g))
     }
 
     pub(super) fn intern_str(&mut self, bytes: &[u8]) -> Gc<LuaStr> {

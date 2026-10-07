@@ -58,6 +58,21 @@ impl Compiler<'_> {
                 format!("_ENV is global when accessing variable '{name}'"),
             ));
         }
+        if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
+            let t = match self.resolve_env()? {
+                VarKind::Upval(u) => TabRef::Up(u),
+                VarKind::Local(r) => TabRef::Reg(r),
+                VarKind::Global { .. } | VarKind::Const(_) => {
+                    unreachable!("resolve_env gives a register or an upvalue")
+                }
+            };
+            let c = self.str_const(name.as_bytes());
+            let saved = self.lr().freereg;
+            let (t, k) = self.indexed(t, Exp::Const(c))?;
+            let e = self.index_get(t, k);
+            self.set_freereg(saved);
+            return Ok(e);
+        }
         let c = self.str_const(name.as_bytes());
         match self.resolve_env()? {
             VarKind::Upval(u) if c <= 0xFF => Ok(Exp::Reloc(self.emit(Inst::iabc(
