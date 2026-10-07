@@ -61,8 +61,9 @@ pub(super) fn g_read(
     fmts: &[Value],
     argno0: u32,
 ) -> Result<ReadOut, LuaError> {
+    reset_errno(vm);
     if u.crt.is_some() {
-        crt::begin_read(vm, u);
+        crt::begin_read(u);
         let r = g_read_formats(vm, u, fmts, argno0)?;
         return Ok(if crt::ferror(u) {
             ReadOut::Error(crt::error())

@@ -86,6 +86,10 @@ pub(super) fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
         .spawn(move || {
             let mut vm = Vm::new(version);
             configure_vm(&mut vm, &label);
+            // compared with PUC built with MSVC, whose files luna then keeps
+            if windows::recording(version, &label).is_some() {
+                vm.set_crt_text_mode(true);
+            }
             let r = run_chunk(&mut vm, &src, &label, version);
             // Read counters back from globals. If the chunk error'd
             // before the preamble ran (e.g. compile failure) both stay at
@@ -300,7 +304,7 @@ fn configure_vm(vm: &mut Vm, label: &str) {
     // The earlier and later blocks (i/o behaviour, date/time, loadfile)
     // still run. 5.2 / 5.3 use `_noposix` (not `_port`) for the same
     // popen/`os.execute` block, so set both for cross-dialect coverage.
-    if label == "files.lua" {
+    if label == "files.lua" || label == "files_win.lua" {
         vm.set_global("_port", Value::Bool(true)).unwrap();
         vm.set_global("_noposix", Value::Bool(true)).unwrap();
     }

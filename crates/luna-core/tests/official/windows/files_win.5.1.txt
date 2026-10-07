@@ -1,0 +1,6 @@
+C:\puc\lua-5.1.5\src\lua.exe: files_win.lua:245: assertion failed!
+stack traceback:
+	[C]: in function 'assert'
+	files_win.lua:245: in main chunk
+	[C]: ?
+exit 00000001

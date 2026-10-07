@@ -4,6 +4,7 @@
 
 use std::io::SeekFrom;
 
+use super::wide::TextMode;
 use super::{EINVAL, set_errno};
 
 const CR: u8 = b'\r';
@@ -50,6 +51,15 @@ pub(crate) struct Handle {
     pub(crate) append: bool,
     /// the pipe lookahead byte
     lookahead: Option<u8>,
+    /// `_textmode`: ANSI, or a Unicode mode a `ccs=` chose
+    pub(crate) mode: TextMode,
+    /// `_tm_unicode`: opened with `ccs=UNICODE`
+    pub(crate) unicode: bool,
+    /// `_startpos`: where the last UTF-8 read began
+    pub(crate) startpos: i64,
+    /// `_utf8translations`: the last UTF-8 read gave fewer code units than
+    /// it read bytes
+    pub(crate) utf8_translations: bool,
 }
 
 impl Handle {
@@ -62,6 +72,10 @@ impl Handle {
             dev,
             append: false,
             lookahead: None,
+            mode: TextMode::Ansi,
+            unicode: false,
+            startpos: 0,
+            utf8_translations: false,
         }
     }
 
@@ -74,6 +88,11 @@ impl Handle {
     pub(crate) fn read(&mut self, os: &mut dyn Os, dst: &mut [u8]) -> i64 {
         if dst.is_empty() || self.eof_flag {
             return 0;
+        }
+        match self.mode {
+            TextMode::Utf8 => return self.read_utf8(os, dst),
+            TextMode::Utf16le => return self.read_utf16(os, dst),
+            TextMode::Ansi => {}
         }
         let mut have = 0;
         if (self.pipe || self.dev)
@@ -94,7 +113,7 @@ impl Handle {
     }
 
     /// `translate_text_mode_nolock` over `buf[..count]`, in place.
-    fn translate(&mut self, os: &mut dyn Os, buf: &mut [u8], count: usize) -> usize {
+    pub(super) fn translate(&mut self, os: &mut dyn Os, buf: &mut [u8], count: usize) -> usize {
         self.crlf = buf[0] == LF;
         let (mut src, mut out) = (0, 0);
         while src < count {
@@ -157,6 +176,17 @@ impl Handle {
 
     /// `_write` of `data`: the number of its bytes written, -1 on failure.
     pub(crate) fn write(&mut self, os: &mut dyn Os, data: &[u8]) -> i64 {
+        if data.is_empty() {
+            return 0;
+        }
+        if self.mode != TextMode::Ansi && !data.len().is_multiple_of(2) {
+            super::super::crt::invalid_parameter();
+        }
+        match self.mode {
+            TextMode::Utf8 => return self.write_utf8(os, data),
+            TextMode::Utf16le => return self.write_utf16(os, data),
+            TextMode::Ansi => {}
+        }
         let r = if self.text && data.contains(&LF) {
             let mut out = Vec::with_capacity(data.len() + data.len() / 8);
             for &b in data {

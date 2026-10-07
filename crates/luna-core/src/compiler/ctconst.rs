@@ -9,6 +9,7 @@ use super::{Chunk, Expr, Name};
 use crate::frontend::ast::{BinOp, ExprId, Sym, UnOp};
 use crate::numeric::Num;
 use crate::runtime::value::f2i_exact;
+use crate::version::LuaVersion;
 
 /// The value of a compile-time constant.
 #[derive(Clone, Debug)]
@@ -24,6 +25,14 @@ pub(super) enum CtConst {
 impl CtConst {
     fn truthy(&self) -> bool {
         !matches!(self, CtConst::Nil | CtConst::Bool(false))
+    }
+
+    fn num(&self) -> Option<Num> {
+        match *self {
+            CtConst::Int(i) => Some(Num::Int(i)),
+            CtConst::Float(f) => Some(Num::Float(f)),
+            _ => None,
+        }
     }
 }
 
@@ -110,6 +119,9 @@ fn value(
             op => {
                 let arith = Arith::of(op)?;
                 let r = value(ast, rhs, named, compiled)?;
+                if let (Some(a), Some(b)) = (v.num(), r.num()) {
+                    super::fold::note_fold(ast, op, a, (rhs, b), LuaVersion::Lua54);
+                }
                 fold(arith, &v, &r, false)?
             }
         };

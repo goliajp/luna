@@ -102,13 +102,22 @@ pub(super) fn emit_math_fold<M: Module>(
                 // 5.3+ `atan(y)` is `atan2(y, 1)` (lmathlib.c), which
                 // libm rounds differently from `atan(y)`.
                 let atan2 = fold.fn_name == "atan" && !float_only;
+                // a function that can set `errno` goes through luna's, which
+                // keeps the value PUC's process would have
+                let errno_fn = super::math_fold::errno_math_fn(fold.fn_name);
                 let mut libm_sig = module.make_signature();
                 libm_sig.params.push(AbiParam::new(types::F64));
                 if atan2 {
                     libm_sig.params.push(AbiParam::new(types::F64));
+                } else if errno_fn.is_some() {
+                    libm_sig.params.push(AbiParam::new(types::I64));
                 }
                 libm_sig.returns.push(AbiParam::new(types::F64));
-                let name = if atan2 { "atan2" } else { fold.fn_name };
+                let name = match errno_fn {
+                    _ if atan2 => "atan2",
+                    Some(_) => "luna_jit_math1",
+                    None => fold.fn_name,
+                };
                 let libm_id = module
                     .declare_function(name, Linkage::Import, &libm_sig)
                     .ok()?;
@@ -116,6 +125,9 @@ pub(super) fn emit_math_fold<M: Module>(
                 let call_inst = if atan2 {
                     let one = bcx.ins().f64const(1.0);
                     bcx.ins().call(libm_ref, &[arg_f64, one])
+                } else if let Some(f) = errno_fn {
+                    let f = bcx.ins().iconst(types::I64, f);
+                    bcx.ins().call(libm_ref, &[arg_f64, f])
                 } else {
                     bcx.ins().call(libm_ref, &[arg_f64])
                 };

@@ -103,6 +103,7 @@ impl ParseScratch {
         chunk.attrib_name_lists.clear();
         chunk.field_lists.clear();
         chunk.arm_lists.clear();
+        chunk.fold_marks.clear();
         end_lines.clear();
         ParseScratch {
             chunk,

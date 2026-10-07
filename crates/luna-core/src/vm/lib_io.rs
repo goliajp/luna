@@ -19,6 +19,7 @@ use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
 mod crt;
+pub(crate) mod fopen;
 mod handle;
 mod lines;
 pub(crate) mod msvc;
@@ -27,12 +28,15 @@ mod open;
 mod read;
 mod results;
 mod stream;
+#[cfg(windows)]
+pub(crate) mod winfs;
 mod write;
 pub(crate) use handle::flush_all;
 use handle::*;
 use lines::*;
 pub(crate) use msvc::translate_all;
 use numeral::*;
+pub(crate) use open::open_file;
 #[cfg(any(unix, windows))]
 pub(crate) use open::shell_command;
 use open::*;
@@ -41,7 +45,9 @@ pub(crate) use results::c_str;
 #[cfg(any(unix, windows))]
 pub(crate) use results::exec_result;
 pub(crate) use results::file_fail;
+pub(crate) use results::note_failure;
 pub(crate) use results::os_path;
+pub(crate) use results::reset_errno;
 pub(crate) use results::strerror;
 use results::*;
 use stream::*;
