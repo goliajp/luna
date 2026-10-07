@@ -302,14 +302,18 @@ impl Vm {
         // 5.1 clears the whole window as PUC 5.1 does (its compiler drops a
         // leading `local x` LoadNil on that promise).
         let kept = nargs.saturating_sub(n_varargs).min(nparams);
+        // 5.5's `luaT_adjustvarargs` sets the vararg parameter, the
+        // register after the fixed ones, to nil
         let window = if self.version == LuaVersion::Lua51 {
             max
+        } else if self.version == LuaVersion::Lua55 && proto.is_vararg {
+            (nparams + 1).min(max)
         } else {
             nparams
         };
         let end = (base + window) as usize;
         // SAFETY: `need <= stack.len()` (resized above) and `base + kept <=
-        // end <= need` since `kept <= nparams <= max_stack`.
+        // end <= need` since `kept <= nparams <= window <= max_stack`.
         unsafe {
             self.stack
                 .get_unchecked_mut((base + kept) as usize..end)
