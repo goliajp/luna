@@ -46,6 +46,7 @@ pub(crate) use results::c_str;
 pub(crate) use results::exec_result;
 pub(crate) use results::file_fail;
 pub(crate) use results::note_failure;
+pub use results::os_bytes;
 pub(crate) use results::os_path;
 pub(crate) use results::reset_errno;
 pub(crate) use results::strerror;
@@ -58,6 +59,7 @@ use write::*;
 const EINVAL: i32 = 22;
 const ENOMEM: i32 = 12;
 const EBADF: i32 = 9;
+#[cfg(not(unix))]
 const ESPIPE: i32 = 29;
 
 /// `LUAL_BUFFERSIZE` for `setvbuf`'s default size; luna's buffers do not

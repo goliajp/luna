@@ -217,9 +217,9 @@ pub(crate) fn shell_command(cmd: &[u8]) -> std::process::Command {
     }
     #[cfg(windows)]
     {
+        // `system` hands the command over through the ANSI code page
         let mut c = std::process::Command::new("cmd");
-        c.arg("/C")
-            .arg(String::from_utf8_lossy(c_str(cmd)).into_owned());
+        c.arg("/C").arg(os_path(cmd));
         c
     }
 }

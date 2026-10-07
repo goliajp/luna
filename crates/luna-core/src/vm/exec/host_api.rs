@@ -120,8 +120,19 @@ impl Vm {
         name: &str,
         v: V,
     ) -> Result<(), LuaError> {
+        self.set_global_bytes(name.as_bytes(), v)
+    }
+
+    /// [`Vm::set_global`] for a name that is not UTF-8: Lua strings are
+    /// bytes, and a program's command line or environment may hand over
+    /// any.
+    pub fn set_global_bytes<V: crate::vm::IntoValue>(
+        &mut self,
+        name: &[u8],
+        v: V,
+    ) -> Result<(), LuaError> {
         let v = v.into_value(self);
-        let k = Value::Str(self.heap.intern(name.as_bytes()));
+        let k = Value::Str(self.heap.intern(name));
         // SAFETY: `self.globals` is a root of this Vm; the borrow lives for the one `set`, which touches only the heap and the table and does not collect, and `&mut self` rules out another reference into it
         if let Err(e) = unsafe { self.globals.as_mut() }.set(&mut self.heap, k, v) {
             return Err(self.table_error(e));

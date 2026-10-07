@@ -48,17 +48,7 @@ pub(super) fn env_path(v: LuaVersion, noenv: bool, var: &str, dft: &[u8]) -> Vec
     out
 }
 
-pub(super) fn os_bytes(s: &std::ffi::OsStr) -> Vec<u8> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        s.as_bytes().to_vec()
-    }
-    #[cfg(not(unix))]
-    {
-        s.to_string_lossy().into_owned().into_bytes()
-    }
-}
+pub(super) use crate::vm::lib_io::os_bytes;
 
 /// `luaL_gsub`: replace every `from` in `src` with `to`.
 pub(super) fn replace(src: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
