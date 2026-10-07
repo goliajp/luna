@@ -60,6 +60,7 @@ impl Vm {
 
     #[doc(hidden)]
     pub fn rt_err(&mut self, msg: &str) -> LuaError {
+        self.varinfo_pushed = false;
         let text = match self.position_prefix() {
             Some(p) => format!("{p}{msg}"),
             None => msg.to_string(),
@@ -136,7 +137,15 @@ impl Vm {
         let extra = self.subject_varinfo(v);
         let tn = self.obj_typename(v);
         let msg = self.compose_type_err(what, &tn, &extra);
-        self.runerror(&msg)
+        self.runerror_named(&msg, &extra)
+    }
+
+    /// [`Self::runerror`] for a message that names an operand with `extra`
+    /// (see `varinfo_pushed`).
+    fn runerror_named(&mut self, msg: &str, extra: &str) -> LuaError {
+        let e = self.runerror(msg);
+        self.varinfo_pushed = self.version() >= LuaVersion::Lua53 && !extra.is_empty();
+        e
     }
 
     /// Assemble a `luaG_typeerror` / `luaG_callerror` message in the dialect's
@@ -294,7 +303,7 @@ impl Vm {
         let extra = self.call_target_varinfo(v);
         let tn = self.obj_typename(v);
         let msg = self.compose_type_err("call", &tn, &extra);
-        self.runerror(&msg)
+        self.runerror_named(&msg, &extra)
     }
 
     /// Name the offending call target. A metamethod dispatch pushes a `Cont`
@@ -352,7 +361,10 @@ impl Vm {
     /// current arithmetic instruction when it can be recovered from bytecode.
     pub(super) fn no_int_rep_err(&mut self) -> LuaError {
         let extra = self.bad_operand_varinfo();
-        self.runerror(&format!("number{extra} has no integer representation"))
+        self.runerror_named(
+            &format!("number{extra} has no integer representation"),
+            &extra,
+        )
     }
 
     /// Inspect the current frame's faulting instruction: find the register

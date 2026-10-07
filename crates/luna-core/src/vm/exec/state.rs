@@ -449,6 +449,10 @@ pub struct Vm {
     /// `L->top` when `luaD_growstack` raised): the message handler runs
     /// from there
     pub(crate) overflow_top: Option<u32>,
+    /// the last runtime error a Lua frame raised named its operand, which
+    /// 5.3+'s `varinfo` pushes on the stack before the message: the message
+    /// handler runs one slot higher
+    pub(crate) varinfo_pushed: bool,
     /// the "C stack overflow" a call was last refused with: PUC's refused
     /// call keeps its level while its error is in flight, which lets the
     /// message handler run on it one level above the limit
