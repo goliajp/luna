@@ -38,3 +38,23 @@ nul	stderr set0	0
 nul	stdin setvbuf no	true
 nul	stdin set0 after setvbuf	0
 nul	stdin read1 after setvbuf	nil
+pipe	stdin set0	0
+pipe	stdin cur	0
+pipe	stdin end	18
+pipe	stdin set0 again	0
+pipe	stdin read1	l
+pipe	stdin cur after read	1
+pipe	stdin set0 after read	0
+pipe	stdin read1 again	nil
+pipe	stdin set 1	1
+pipe	stdin readall	0
+pipe	stdin cur at end	1
+pipe	stdin set -1	nil,Invalid argument,22
+pipe	stdout cur	5
+pipe	stdout set0	0
+pipe	stdout end	5
+pipe	stderr cur	5
+pipe	stderr set0	0
+pipe	stdin setvbuf no	true
+pipe	stdin set0 after setvbuf	0
+pipe	stdin read1 after setvbuf	nil
