@@ -4,12 +4,10 @@ use super::*;
 
 impl Vm {
     /// Push the frame of a Lua function called from the fast loop (PUC
-    /// `luaD_precall` for a Lua function) when the frame is all the call
-    /// needs: no method JIT to try, a function with fixed parameters and
-    /// the stack already big enough. The caller runs with no hook and no
-    /// trace JIT, so neither has anything to see. The new frame, which the
-    /// caller then runs; `None`, having done nothing, leaves the call to
-    /// `begin_call`.
+    /// `luaD_precall`) when that is all the call needs: no method JIT to
+    /// try, fixed parameters, the stack big enough; the caller runs with no
+    /// hook and no trace JIT. The new frame, or `None`, having done nothing,
+    /// to leave the call to `begin_call`.
     #[inline(always)]
     pub(super) fn push_lua_frame_fast(
         &mut self,
@@ -113,10 +111,9 @@ impl Vm {
         {
             return Returned::No;
         }
-        // popping the top frame leaves this one in place. The caller is
-        // reached through a raw element pointer: indexing `frames` mutably
-        // reborrows the whole slice, the running frame too, which the fast
-        // loop still writes its pc through when this returns `No`
+        // popping the top frame leaves this one in place. Indexing `frames`
+        // mutably would reborrow the whole slice, the running frame too,
+        // which the fast loop still writes its pc through on `No`
         // SAFETY: `n >= 2`, so slot `n - 2` holds a frame
         let caller_slot = unsafe { &mut *self.frames.as_mut_ptr().add(n - 2) };
         let caller: Option<*mut Frame> = match caller_slot {
@@ -166,12 +163,9 @@ impl Vm {
 impl Vm {
     /// Run the native on top of `running_natives`, popping it on an error.
     /// A Rust panic in the native surfaces as a Lua error rather than
-    /// unwinding through the VM into the embedder. The VM's state may still
-    /// be inconsistent after a panic (half-pushed args, dangling GC
-    /// references), so an embedder that catches this class of error should
-    /// drop and re-create the Vm — but that beats tearing the host process
-    /// down. `AssertUnwindSafe` is sound because the caller is the dispatch
-    /// loop and any half-done state is fenced behind the `Err` returned.
+    /// unwinding into the embedder, which should then drop the Vm: its
+    /// state may be inconsistent. `AssertUnwindSafe` is sound because any
+    /// half-done state is fenced behind the `Err` returned.
     #[inline(always)]
     pub(super) fn invoke_native(
         &mut self,
@@ -195,9 +189,9 @@ impl Vm {
         };
         match result {
             Ok(n) => {
-                // a yield starts only where it can unwind to a continuation
-                // (`call_value` refuses one below it), so a native never
-                // returns over one
+                // a native runs Lua through `call_value`, which raises
+                // `nny` so `yield_barrier` refuses a yield below it, or
+                // through `call_value_k`, whose yield it passes on as `Err`
                 debug_assert!(self.yielding.is_none(), "a native returned over a yield");
                 Ok(n)
             }
