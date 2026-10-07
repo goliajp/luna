@@ -14,13 +14,13 @@ mod order;
 mod sequence;
 mod table;
 mod tfor;
+mod upval;
 use arith::*;
 use arith_divmod::*;
 use arith_double::*;
 use array::*;
 use basic::*;
 use call::*;
-pub(super) use closure::upval_table_read;
 use closure::*;
 use compare::*;
 use field::*;
@@ -29,6 +29,8 @@ use order::*;
 use sequence::*;
 use table::*;
 use tfor::*;
+pub(super) use upval::upval_table_read;
+use upval::*;
 
 /// One recorded op as the emit pass sees it: its index, its register
 /// window (`off`, and `regs` with the constant operand's virtual

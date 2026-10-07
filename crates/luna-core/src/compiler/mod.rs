@@ -23,6 +23,7 @@ mod expr;
 mod expr_names;
 mod expr_ops;
 mod fold;
+mod generic_for;
 mod level;
 mod limits;
 mod lvalue;
