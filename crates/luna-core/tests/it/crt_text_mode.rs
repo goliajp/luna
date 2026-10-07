@@ -203,3 +203,38 @@ fn errno_is_left_as_in_puc_built_with_msvc() {
         );
     }
 }
+
+/// `crt_text/strx.lua`: what 5.1's retry of a numeral with `strtoul` leaves
+/// in `errno` (an overflow of the 32-bit `unsigned long`), read as the
+/// errno test reads it, against PUC 5.1.5 to 5.5.0 built with MSVC.
+#[cfg(windows)]
+#[test]
+fn strtoul_retry_leaves_errno_as_in_puc_built_with_msvc() {
+    const SCRIPT: &str = include_str!("../crt_text/strx.lua");
+    const PUC: [&str; 5] = [
+        include_str!("../crt_text/strx.5.1.txt"),
+        include_str!("../crt_text/strx.5.2.txt"),
+        include_str!("../crt_text/strx.5.3.txt"),
+        include_str!("../crt_text/strx.5.4.txt"),
+        include_str!("../crt_text/strx.5.5.txt"),
+    ];
+    let dialects = [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ];
+    for (v, want) in dialects.into_iter().zip(PUC) {
+        let want = want.replace("\r\n", "\n");
+        let got = run_script(v, &format!("strx{v:?}"), SCRIPT);
+        for (i, (g, w)) in got.lines().zip(want.lines()).enumerate() {
+            assert_eq!(g, w, "{v:?}, line {}", i + 1);
+        }
+        assert_eq!(
+            got.lines().count(),
+            want.lines().count(),
+            "{v:?}: line count"
+        );
+    }
+}
