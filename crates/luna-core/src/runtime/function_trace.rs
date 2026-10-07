@@ -4,7 +4,10 @@ use super::{LuaClosure, NativeClosure, Proto};
 use crate::runtime::heap::Marker;
 
 impl Proto {
-    pub(crate) fn trace(&self, m: &mut Marker) {
+    /// `this` is the pointer the marker reached the prototype through, `self`
+    /// reborrowed; the post-mark pass clears the cache through it
+    pub(crate) fn trace(&self, this: *mut Proto, m: &mut Marker) {
+        debug_assert!(std::ptr::eq(this, self));
         for &k in self.consts.iter() {
             m.value(k);
         }
@@ -24,7 +27,7 @@ impl Proto {
         // becomes collectable (gc.lua's `__gc` finalisers inside `do ... end`
         // blocks rely on this).
         if self.cache.get().is_some() {
-            m.cached_protos.push(self as *const Proto as *mut Proto);
+            m.cached_protos.push(this);
         }
     }
 }

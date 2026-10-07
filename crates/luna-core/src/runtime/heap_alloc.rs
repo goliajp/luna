@@ -1,7 +1,9 @@
 //! Object constructors and string interning.
 
 use super::*;
+use crate::runtime::Builtin;
 use crate::runtime::mem::{LSlice, LVec, oom_abort};
+use crate::runtime::value::NativeFn;
 use std::alloc::Layout;
 
 impl Heap {
@@ -237,21 +239,22 @@ impl Heap {
             .unwrap_or_else(|_| oom_abort(Layout::for_value(upvals)))
     }
 
-    /// Allocate a [`NativeClosure`] wrapping host function `f` with the
-    /// given captured upvalues.
-    pub fn new_native(
-        &mut self,
-        f: crate::runtime::value::NativeFn,
-        upvals: Box<[Value]>,
-    ) -> Gc<NativeClosure> {
-        self.new_native_from(f, &upvals)
+    /// A [`NativeClosure`] calling host function `f` over `upvals`.
+    pub fn new_native(&mut self, f: NativeFn, upvals: Box<[Value]>) -> Gc<NativeClosure> {
+        self.new_builtin(f, &upvals, Builtin::None)
     }
 
     /// [`Heap::new_native`] copying the upvalues from a slice.
-    pub fn new_native_from(
+    pub fn new_native_from(&mut self, f: NativeFn, upvals: &[Value]) -> Gc<NativeClosure> {
+        self.new_builtin(f, upvals, Builtin::None)
+    }
+
+    /// A native that is the library function `builtin`.
+    pub(crate) fn new_builtin(
         &mut self,
-        f: crate::runtime::value::NativeFn,
+        f: NativeFn,
         upvals: &[Value],
+        builtin: Builtin,
     ) -> Gc<NativeClosure> {
         let fix = self.fix_natives && upvals.is_empty();
         let hdr = GcHeader::native(upvals);
@@ -261,7 +264,8 @@ impl Heap {
             f,
             upvals,
             is_async: false,
-            kind: crate::vm::exec::native_call::NativeKind::of(f),
+            kind: crate::vm::exec::native_call::NativeKind::of(builtin),
+            builtin,
         });
         if fix {
             // SAFETY: `adopt` just linked `g` at the head of `all`
@@ -297,13 +301,8 @@ impl Heap {
         self.mem_ctx().set_memerr(s);
     }
 
-    /// Like [`Heap::new_native`] but tags the
-    /// closure with `is_async = true`. The dispatcher's native-call
-    /// path then transmutes `f` to `AsyncNativeFn` and routes through
-    /// the cooperative-yield path. The caller is responsible for
-    /// having transmuted the `AsyncNativeFn` pointer to `NativeFn`
-    /// shape (both are `fn` pointers of the same size); see
-    /// [`crate::vm::async_drive`] for the helper that does this.
+    /// [`Heap::new_native`] with `is_async` set: `f` is an `AsyncNativeFn`
+    /// the caller transmuted to `NativeFn` ([`crate::vm::async_drive`]).
     pub fn new_async_native(
         &mut self,
         f: crate::runtime::value::NativeFn,
@@ -317,6 +316,7 @@ impl Heap {
             upvals,
             is_async: true,
             kind: crate::vm::exec::native_call::NativeKind::Async,
+            builtin: Builtin::None,
         })
     }
 

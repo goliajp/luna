@@ -165,7 +165,7 @@ impl Sorter {
         match self.comp {
             // sort is an unprotected C call: the comparator runs non-yieldable.
             Some(f) => Ok(vm
-                .call_noyield(f, &[x, y])?
+                .call_value(f, &[x, y])?
                 .first()
                 .is_some_and(|r| r.truthy())),
             None => match (x, y) {

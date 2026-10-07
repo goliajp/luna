@@ -43,19 +43,13 @@ unsafe extern "C" {
 }
 
 /// The debug library's hook (PUC `hookf`), as `lua_gethook` reports a Lua
-/// hook.
-fn hookf() -> LuaHook {
-    // SAFETY: `luna_c_hookf` is a C function of the `lua_Hook` shape; its
-    // address is only compared and handed out
-    unsafe {
-        std::mem::transmute::<unsafe extern "C" fn(*mut LuaState, *mut c_void), LuaHook>(
-            luna_c_hookf,
-        )
-    }
-}
-
-fn same_hook(a: LuaHook, b: LuaHook) -> bool {
-    std::ptr::fn_addr_eq(a, b)
+/// hook: the value first handed out, which `lua_sethook` knows again by
+/// that value, never by taking the function's address anew.
+fn hookf(api: &mut Api) -> LuaHook {
+    type Raw = unsafe extern "C" fn(*mut LuaState, *mut c_void);
+    // SAFETY: `luna_c_hookf` is a C function of the `lua_Hook` shape; it is
+    // only handed out
+    *(api.g().hookf).get_or_insert(unsafe { std::mem::transmute::<Raw, LuaHook>(luna_c_hookf) })
 }
 
 /// PUC's event codes: `LUA_HOOKTAILCALL` (5.2+) and 5.1's
@@ -223,7 +217,7 @@ pub unsafe extern "C" fn lua_sethook(
     let hook = match func {
         // a Lua hook stays recorded (PUC's hook table keeps it)
         None => old.func.filter(|_| is_lua_hook(old.func)),
-        Some(f) if same_hook(f, hookf()) => {
+        Some(f) if api.g().hookf.is_some_and(|h| h as usize == f as usize) => {
             if is_lua_hook(old.func) {
                 old.func
             } else {
@@ -299,7 +293,7 @@ pub unsafe extern "C" fn lua_gethook(L: *mut LuaState) -> Option<LuaHook> {
             // SAFETY: a C hook's light userdata came from a `lua_Hook`
             Some(unsafe { std::mem::transmute::<*const (), LuaHook>(p) })
         }
-        Some(_) => Some(hookf()),
+        Some(_) => Some(hookf(&mut api)),
         None => None,
     }
 }

@@ -31,14 +31,11 @@ pub(super) fn emit_tfor_call_op<E: Emit>(
         Op::TForCall => {
             let a_us = ins.a() as usize;
             let nvars = ins.c() as i64;
-            // ipairs detection. Recorder's TForLoop
-            // trigger snapshots `R[A]` if Native; we compare against
-            // `ipairs_iter`'s address to specialise emit into inline
-            // Table aget IR (skip the `op_tforcall` C call entirely
-            // on the hot path).
-            let ipairs_addr = luna_core::vm::builtins::ipairs_iter
-                as luna_core::runtime::value::NativeFn as usize;
-            let is_ipairs_trace = record.tfor_iter_ptr == Some(ipairs_addr);
+            // ipairs detection. Recorder's TForLoop trigger snapshots
+            // `R[A]`'s library tag if Native; `ipairs`'s iterator
+            // specialises emit into inline Table aget IR (skip the
+            // `op_tforcall` C call entirely on the hot path).
+            let is_ipairs_trace = record.tfor_iter == Some(luna_core::runtime::Builtin::IpairsIter);
 
             // spill discipline:
             // - non-ipairs case: spill R[A..=A+2] upfront (helper

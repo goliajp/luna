@@ -85,11 +85,11 @@ pub unsafe extern "C" fn luna_jit_math_fn_is_library(math_key: i64, name_key: i6
         return 0;
     };
     let lib = match math_key.as_bytes() {
-        b"math" => luna_core::vm::lib_math::inlinable_native(name_key.as_bytes()),
-        b"string" => luna_core::vm::lib_string::inlinable_native(name_key.as_bytes()),
+        b"math" => luna_core::vm::lib_math::inlinable_builtin(name_key.as_bytes()),
+        b"string" => luna_core::vm::lib_string::inlinable_builtin(name_key.as_bytes()),
         _ => None,
     };
-    i64::from(lib.is_some_and(|lib| std::ptr::fn_addr_eq(f.f, lib)))
+    i64::from(lib.is_some_and(|lib| f.builtin == lib))
 }
 
 /// Float `fmod` for a compiled `%`: the interpreter's, which follows the C

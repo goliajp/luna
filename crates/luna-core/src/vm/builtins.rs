@@ -1,6 +1,6 @@
 //! Minimal base library. The full base library replaces/extends this.
 
-use crate::runtime::Value;
+use crate::runtime::{Builtin, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::error::LuaError;
@@ -9,17 +9,17 @@ use crate::vm::exec::Vm;
 pub(crate) fn open_base(vm: &mut Vm) {
     let f = vm.native(nat_assert);
     vm.set_global("assert", f).expect("stdlib registration");
-    let f = vm.native(nat_error);
+    let f = vm.builtin(nat_error, &[], Builtin::Error);
     vm.set_global("error", f).expect("stdlib registration");
-    let f = vm.native(nat_pcall);
+    let f = vm.builtin(nat_pcall, &[], Builtin::Pcall);
     vm.set_global("pcall", f).expect("stdlib registration");
-    let f = vm.native(nat_xpcall);
+    let f = vm.builtin(nat_xpcall, &[], Builtin::Xpcall);
     vm.set_global("xpcall", f).expect("stdlib registration");
     let f = vm.native(nat_type);
     vm.set_global("type", f).expect("stdlib registration");
     let f = vm.native(nat_print);
     vm.set_global("print", f).expect("stdlib registration");
-    let f = vm.native(nat_tostring);
+    let f = vm.builtin(nat_tostring, &[], Builtin::Tostring);
     vm.set_global("tostring", f).expect("stdlib registration");
     let f = vm.native(nat_rawget);
     vm.set_global("rawget", f).expect("stdlib registration");
@@ -51,10 +51,10 @@ pub(crate) fn open_base(vm: &mut Vm) {
     } else {
         next_obj
     };
-    let pairs_obj = vm.native_with(nat_pairs, Box::new([pairs_next]));
+    let pairs_obj = vm.builtin(nat_pairs, &[pairs_next], Builtin::Pairs);
     vm.set_global("pairs", pairs_obj)
         .expect("stdlib registration");
-    let ipairs_it = vm.native(ipairs_iter);
+    let ipairs_it = vm.builtin(ipairs_iter, &[], Builtin::IpairsIter);
     let ipairs_obj = vm.native_with(nat_ipairs, Box::new([ipairs_it]));
     vm.set_global("ipairs", ipairs_obj)
         .expect("stdlib registration");

@@ -342,8 +342,8 @@ impl Heap {
                 (*h).flags = (*h).with_slow(((*h).flags & !WHITE_BITS) | BLACK);
                 match (*h).tag {
                     ObjTag::Str => {}
-                    ObjTag::Table => (*(h as *mut Table)).trace(&mut m),
-                    ObjTag::Proto => (*(h as *mut Proto)).trace(&mut m),
+                    ObjTag::Table => (*(h as *mut Table)).trace(h as *mut Table, &mut m),
+                    ObjTag::Proto => (*(h as *mut Proto)).trace(h as *mut Proto, &mut m),
                     ObjTag::Closure => (*(h as *mut LuaClosure)).trace(&mut m),
                     ObjTag::Upvalue => (*(h as *mut Upvalue)).trace(&mut m),
                     ObjTag::Native => (*(h as *mut NativeClosure)).trace(&mut m),

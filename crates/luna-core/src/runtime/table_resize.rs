@@ -119,12 +119,16 @@ impl Table {
         // are moved over; inline entries are copied out first, since the
         // inline storage may become the new backing
         let old_asize = self.asize as usize;
-        let mut old_inline = [0u64; INLINE_U64S];
+        // copied as `MaybeUninit` words, not `u64`s: an integer copy drops
+        // the provenance of the object pointers the payloads hold
+        let mut old_inline = [std::mem::MaybeUninit::<u64>::zeroed(); INLINE_U64S];
         let old_slab = if old_asize as u64 > INLINE_ASIZE {
             self.array_ptr
         } else {
             // SAFETY: exclusive &mut self; the inline bytes are read through the cell
-            old_inline = unsafe { *self.inline_storage.get() };
+            old_inline = unsafe {
+                *(self.inline_storage.get() as *const [std::mem::MaybeUninit<u64>; INLINE_U64S])
+            };
             std::ptr::null_mut()
         };
         let old_src: *const u8 = if old_slab.is_null() {

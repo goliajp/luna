@@ -5,8 +5,8 @@
 
 use crate::cerrno::{self, MathFn};
 use crate::numeric::Num;
-use crate::runtime::Value;
 use crate::runtime::value::f2i_exact;
+use crate::runtime::{Builtin, Value};
 use crate::version::LuaVersion as V;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::arg_error;
@@ -78,7 +78,8 @@ pub(crate) fn open_math(vm: &mut Vm) {
         funcs.push(("atan2", m_atan2));
     }
     for (name, f) in funcs {
-        let fv = vm.native(f);
+        let b = inlinable_builtin(name.as_bytes()).unwrap_or(Builtin::None);
+        let fv = vm.builtin(f, &[], b);
         set(vm, name, fv);
     }
     // Aliases are the same function value, so `math.atan2 == math.atan`
@@ -105,30 +106,29 @@ pub(crate) fn open_math(vm: &mut Vm) {
     vm.barrier_back_table(t);
 }
 
-/// The native registered as `math.<name>`, for the functions a JIT may
+/// The library function `math.<name>` is, for the functions a JIT may
 /// inline: it replaces the call with its own code only while the field
-/// still holds this function, since a program can assign any value to
+/// still holds that function, since a program can assign any value to
 /// it. `None` for other names.
 #[doc(hidden)]
-pub fn inlinable_native(name: &[u8]) -> Option<crate::runtime::value::NativeFn> {
-    let f: Native = match name {
-        b"sin" => m_sin,
-        b"cos" => m_cos,
-        b"tan" => m_tan,
-        b"asin" => m_asin,
-        b"acos" => m_acos,
-        b"atan" => m_atan,
-        b"exp" => m_exp,
-        b"log" => m_log,
-        b"sqrt" => m_sqrt,
-        b"floor" => m_floor,
-        b"ceil" => m_ceil,
-        b"max" => m_max,
-        b"min" => m_min,
-        b"fmod" => m_fmod,
+pub fn inlinable_builtin(name: &[u8]) -> Option<Builtin> {
+    Some(match name {
+        b"sin" => Builtin::MathSin,
+        b"cos" => Builtin::MathCos,
+        b"tan" => Builtin::MathTan,
+        b"asin" => Builtin::MathAsin,
+        b"acos" => Builtin::MathAcos,
+        b"atan" => Builtin::MathAtan,
+        b"exp" => Builtin::MathExp,
+        b"log" => Builtin::MathLog,
+        b"sqrt" => Builtin::MathSqrt,
+        b"floor" => Builtin::MathFloor,
+        b"ceil" => Builtin::MathCeil,
+        b"max" => Builtin::MathMax,
+        b"min" => Builtin::MathMin,
+        b"fmod" => Builtin::MathFmod,
         _ => return None,
-    };
-    Some(f)
+    })
 }
 
 /// PUC `pushnumint`: a float that fits an integer becomes one.
