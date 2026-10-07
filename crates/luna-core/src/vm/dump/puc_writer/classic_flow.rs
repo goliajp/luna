@@ -23,11 +23,13 @@ impl C<'_, '_> {
                     Op::Le => Kind::Le,
                     _ => Kind::Eq,
                 };
-                let a = self.asm.r(l.a)?;
+                // a constant luna loaded into a scratch register just before
+                // is PUC's RK operand
+                let a = self.operand(l.a)?;
                 let b = if l.op == Op::EqK {
                     self.rk(l.b)?
                 } else {
-                    self.asm.r(l.b)?
+                    self.operand(l.b)?
                 };
                 self.emit(self.abc(k, l.k as u32, a, b))?;
             }

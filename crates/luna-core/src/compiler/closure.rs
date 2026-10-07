@@ -92,6 +92,11 @@ impl<'a> Compiler<'a> {
         // (luaK_code uses ls->lastline), so the closure-creation line event lands
         // on the function's last line, not its `function` keyword.
         self.last_line = body.end_line;
-        Ok(Exp::Reloc(self.emit(Inst::iabx(Op::Closure, 0, idx))))
+        let pc = self.emit(Inst::iabx(Op::Closure, 0, idx));
+        // 5.2+ `codeclosure` puts the closure in the next register at once
+        if self.version >= LuaVersion::Lua52 {
+            return Ok(Exp::Reg(self.exp_to_nextreg(Exp::Reloc(pc))?));
+        }
+        Ok(Exp::Reloc(pc))
     }
 }

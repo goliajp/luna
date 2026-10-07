@@ -34,9 +34,12 @@ optimization.
   `failure_known` and `publish_failure`.
 
 - Chunks in luna's own binary format (PUC header followed by the
-  `LunaV1` body) no longer load: a table constructor's op now carries
-  its size hints, and the body tag is `LunaV2`. Dump the source again
-  with this version. PUC bytecode loads as before.
+  `LunaV1` or `LunaV2` body) no longer load: a table constructor's op
+  now carries its size hints, a table write can store a constant (`k`
+  on `SetTable` / `SetField` / `SetI` / `SetTabUp`), and there are the
+  opcodes `GetTableK`, `SetTableK`, `GetTabUpR`, `SetTabUpR` and
+  `SetTabUpK`; the body tag is `LunaV3`. Dump the source again with
+  this version. PUC bytecode loads as before.
 - C API: errors leave a C function at once, as in PUC. `lua_error`,
   `luaL_error` and every API function that raises (`lua_gettable`,
   `lua_call`, `luaL_checkinteger`, ...) jump back to the call that luna

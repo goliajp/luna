@@ -174,6 +174,13 @@ impl Vm {
                     Op::SetTable => set_arm!(regs.wrapping_add(inst.b() as usize), newindex_raw_at),
                     Op::SetField => op_set_field!(),
                     Op::SetI => op_set_i!(),
+                    Op::GetTableK => get_arm!(kptr.wrapping_add(inst.c() as usize), index_raw_at),
+                    Op::SetTableK => {
+                        set_arm!(kptr.wrapping_add(inst.b() as usize), newindex_raw_at)
+                    }
+                    Op::GetTabUpR => op_get_tab_up_r!(),
+                    Op::SetTabUpR => op_set_tab_up_x!(regs.wrapping_add(inst.b() as usize)),
+                    Op::SetTabUpK => op_set_tab_up_x!(kptr.wrapping_add(inst.b() as usize)),
                     Op::SelfOp => op_self_op!(),
                     Op::Add => op_add!(),
                     Op::Sub => op_sub!(),

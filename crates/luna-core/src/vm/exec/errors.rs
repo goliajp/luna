@@ -192,11 +192,11 @@ impl Vm {
         let mut cands: Vec<u32> = Vec::new();
         match instr.op() {
             // indexed reads / length / method: the table/object is in B
-            Op::GetField | Op::GetI | Op::GetTable | Op::SelfOp | Op::Len => {
+            Op::GetField | Op::GetI | Op::GetTable | Op::GetTableK | Op::SelfOp | Op::Len => {
                 cands.push(instr.b());
             }
             // indexed writes / calls: the table/function is in A
-            Op::SetField | Op::SetI | Op::SetTable | Op::Call | Op::TailCall => {
+            Op::SetField | Op::SetI | Op::SetTable | Op::SetTableK | Op::Call | Op::TailCall => {
                 cands.push(instr.a());
             }
             // arithmetic/bitwise: a register operand (B, and C unless constant)
@@ -235,8 +235,8 @@ impl Vm {
             | Op::ShlI => cands.push(instr.b()),
             // indexing an upvalue table (`_ENV` for a global): PUC
             // `getupvalname` finds the value among the closure's upvalues
-            Op::GetTabUp | Op::SetTabUp => {
-                let u = if instr.op() == Op::GetTabUp {
+            Op::GetTabUp | Op::GetTabUpR | Op::SetTabUp | Op::SetTabUpR | Op::SetTabUpK => {
+                let u = if matches!(instr.op(), Op::GetTabUp | Op::GetTabUpR) {
                     instr.b()
                 } else {
                     instr.a()

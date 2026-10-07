@@ -1,22 +1,10 @@
-//! Index-LHS object-snapshot elision regression tests.
+//! Assignment targets use registers as PUC's `restassign` does: a table or
+//! key held in a variable is read from the variable when the store runs,
+//! and is copied first only when a later target of the same statement
+//! assigns that variable (`check_conflict`).
 //!
-//! Cover the Index-LHS object-snapshot Move elision wired at
-//! `crates/luna-core/src/compiler/mod.rs` `assign_stat` Index-LHS branch
-//! via the gate
-//! [`Compiler::assign_stat_can_skip_obj_snapshot`].
-//!
-//! Each test compiles a focused snippet via the public `compile_chunk`
-//! entry, inspects the main proto's bytecode for the specific
-//! `Op::Move` shape we care about, and evaluates the same source under
-//! `Vm` to cross-check that the elision did not change observable
-//! semantics (no silent behaviour change).
-//!
-//! The Move count assertions discriminate the obj snapshot Move (whose
-//! source is the local-bucket register) from the RHS materialization
-//! Move (whose source is the *RHS* local reg). Helper
-//! `count_moves_from_reg(src, b)` counts only Moves whose source operand
-//! is `b`, isolating the snapshot decision from RHS-materialization
-//! noise.
+//! Each test compiles a snippet, counts the `Move`s out of a variable's
+//! register, and runs the snippet to check the stored value.
 
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
@@ -36,17 +24,14 @@ fn compile_main(src: &str) -> Vec<Inst> {
     proto.code.to_vec()
 }
 
-/// Count `Op::Move` ops in the main proto whose source-register
-/// operand `b` equals `src_reg`. The obj snapshot Move always has
-/// `b == obj_local_reg`.
+/// The `Move`s out of register `src_reg`.
 fn count_moves_from_reg(code: &[Inst], src_reg: u32) -> usize {
     code.iter()
         .filter(|i| matches!(i.op(), Op::Move) && i.b() == src_reg)
         .count()
 }
 
-/// Count all `Op::Move` ops (used where we want the total instead of
-/// the snapshot-specific source-reg filter).
+/// All the `Move`s.
 fn count_all_moves(code: &[Inst]) -> usize {
     code.iter().filter(|i| matches!(i.op(), Op::Move)).count()
 }
@@ -80,14 +65,13 @@ fn eval_int_pair(src: &str) -> (i64, i64) {
 }
 
 // =====================================================================
-// Safe path — obj snapshot Move elided
+// A table held in a variable is not copied
 // =====================================================================
 
 #[test]
-fn safe_bucket_self_decrement_elides_snapshot() {
-    // `bucket.tokens = bucket.tokens - 1` — RHS is a Sub reloc whose
-    // result lands directly into the result reg, so the only Move
-    // candidate would be the obj snapshot. Gate accepts → 0 Moves.
+fn a_self_decrement_takes_no_moves() {
+    // `bucket.tokens = bucket.tokens - 1`: the Sub lands in a temporary
+    // the SetField reads
     let src = r#"
         local bucket = { tokens = 100 }
         bucket.tokens = bucket.tokens - 1
@@ -97,18 +81,15 @@ fn safe_bucket_self_decrement_elides_snapshot() {
     assert_eq!(
         count_moves_from_reg(&code, 0),
         0,
-        "safe Index-LHS snapshot Move (src=bucket@r0) was not elided"
+        "bucket@r0 copied"
     );
     assert_eq!(count_all_moves(&code), 0, "no other Moves expected either");
     assert_eq!(eval_int(src), 99);
 }
 
 #[test]
-fn safe_math_min_rhs_elides_snapshot() {
-    // Headline token_bucket pc 20 shape: math.min(...) is the
-    // OnlyKnownPure RHS class. Gate accepts → bucket@r0 has no
-    // snapshot Move. (The Call op's self-arg-shuffle Move appears
-    // with src != 0 if it appears at all; not under the snapshot filter.)
+fn a_math_min_call_leaves_the_table_in_place() {
+    // `bucket.tokens = math.min(...)`
     let src = r#"
         local bucket = { tokens = 0 }
         bucket.tokens = math.min(1000, bucket.tokens + 10)
@@ -118,19 +99,15 @@ fn safe_math_min_rhs_elides_snapshot() {
     assert_eq!(
         count_moves_from_reg(&code, 0),
         0,
-        "math.min RHS path must elide the bucket@r0 snapshot Move"
+        "bucket@r0 copied"
     );
     assert_eq!(eval_int(src), 10);
 }
 
 #[test]
-fn safe_literal_local_rhs_elides_both_moves() {
-    // `bucket.last = now` (now is a local reg). The obj snapshot is
-    // elided (no Move with src=bucket@r0), and the RHS local
-    // force-materialization Move (src=now@r1) is ALSO
-    // elided — the SetField now reads `now` directly. Both halves
-    // assert zero Moves; the SetField uses `now@r1` directly as its
-    // C operand (cross-verified by `eval_int`).
+fn a_local_value_is_stored_from_its_register() {
+    // `bucket.last = now`: SetField reads both `bucket` and `now` where
+    // they are
     let src = r#"
         local bucket = { last = 0 }
         local now = 7
@@ -141,25 +118,21 @@ fn safe_literal_local_rhs_elides_both_moves() {
     assert_eq!(
         count_moves_from_reg(&code, 0),
         0,
-        "bucket@r0 snapshot Move must be elided"
+        "bucket@r0 copied"
     );
     assert_eq!(
         count_moves_from_reg(&code, 1),
         0,
-        "the RHS materialization Move (src=now@r1) is now elided by the bundle"
+        "now@r1 copied"
     );
     assert_eq!(eval_int(src), 7);
 }
 
-// =====================================================================
-// Unsafe paths — obj snapshot Move preserved
-// =====================================================================
 
 #[test]
-fn unsafe_user_call_rhs_preserves_snapshot() {
-    // `bucket.x = f()` — UserOrUnknown RHS. Gate rejects so a captured
-    // upvalue inside f could rebind bucket while the RHS evaluates.
-    // The bucket@r0 snapshot Move stays.
+fn a_user_call_on_the_right_leaves_the_table_in_place() {
+    // `bucket.x = f()`: the store reads `bucket` when it runs, after the
+    // call
     let src = r#"
         local bucket = { x = 1 }
         local function f() return 42 end
@@ -169,16 +142,15 @@ fn unsafe_user_call_rhs_preserves_snapshot() {
     let code = compile_main(src);
     assert_eq!(
         count_moves_from_reg(&code, 0),
-        1,
-        "user-call RHS must keep the bucket@r0 snapshot Move"
+        0,
+        "bucket@r0 copied"
     );
     assert_eq!(eval_int(src), 42);
 }
 
 #[test]
-fn unsafe_method_call_rhs_preserves_snapshot() {
-    // `bucket.x = ("a"):byte(1)` — MethodCall RHS is unconditionally
-    // UserOrUnknown per the walker doc.
+fn a_method_call_on_the_right_leaves_the_table_in_place() {
+    // `bucket.x = ("a"):byte(1)`
     let src = r#"
         local bucket = { x = 0 }
         bucket.x = ("a"):byte(1)
@@ -187,17 +159,16 @@ fn unsafe_method_call_rhs_preserves_snapshot() {
     let code = compile_main(src);
     assert_eq!(
         count_moves_from_reg(&code, 0),
-        1,
-        "method-call RHS must keep the bucket@r0 snapshot Move"
+        0,
+        "bucket@r0 copied"
     );
     assert_eq!(eval_int(src), 0x61);
 }
 
 #[test]
-fn unsafe_multi_target_preserves_snapshots() {
-    // PUC §3.3.3 multi-target ordering: every Index-LHS obj must be
-    // snapshotted before any store. Gate rejects multi-target →
-    // both bucket@r0 and bucket@r1 snapshot Moves stay.
+fn several_targets_without_a_conflict_take_no_copies() {
+    // `a.x, b.y = 10, 20`: neither `a` nor `b` is assigned by the
+    // statement
     let src = r#"
         local a = { x = 0 }
         local b = { y = 0 }
@@ -207,23 +178,20 @@ fn unsafe_multi_target_preserves_snapshots() {
     let code = compile_main(src);
     assert_eq!(
         count_moves_from_reg(&code, 0),
-        1,
-        "multi-target a@r0 snapshot Move must remain"
+        0,
+        "a@r0 copied"
     );
     assert_eq!(
         count_moves_from_reg(&code, 1),
-        1,
-        "multi-target b@r1 snapshot Move must remain"
+        0,
+        "b@r1 copied"
     );
     assert_eq!(eval_int_pair(src), (10, 20));
 }
 
 #[test]
-fn unsafe_captured_obj_preserves_snapshot() {
-    // `bucket` is captured by an inner closure. Even though this
-    // snippet's RHS is a pure literal, a __newindex-stored closure
-    // could re-bind bucket through the upvalue — the conservative
-    // reject keeps the snapshot for the captured-local owner.
+fn a_captured_table_is_not_copied() {
+    // `bucket` is captured by a closure; the statement does not assign it
     let src = r#"
         local bucket = { x = 0 }
         local function _grab() return bucket end
@@ -233,18 +201,15 @@ fn unsafe_captured_obj_preserves_snapshot() {
     let code = compile_main(src);
     assert_eq!(
         count_moves_from_reg(&code, 0),
-        1,
-        "captured-local obj must keep the snapshot Move"
+        0,
+        "bucket@r0 copied"
     );
     assert_eq!(eval_int(src), 99);
 }
 
 #[test]
-fn unsafe_dotted_chain_lhs_falls_back_correctly() {
-    // `outer.inner.x = 5` — obj is `outer.inner`, not a bare Name.
-    // Gate rejects conservatively. The obj snapshot
-    // is structurally a GetField Reloc patch (not a Move op), so
-    // we only check semantic equivalence here.
+fn a_dotted_target_stores_into_the_inner_table() {
+    // `outer.inner.x = 5`
     let src = r#"
         local outer = { inner = { x = 0 } }
         outer.inner.x = 5
@@ -254,10 +219,8 @@ fn unsafe_dotted_chain_lhs_falls_back_correctly() {
 }
 
 #[test]
-fn unsafe_global_obj_falls_back_correctly() {
-    // Global obj — obj is GetTabUp Reloc, not Reg(local). Gate
-    // rejects on "obj is not a current-level local". Same as the
-    // dotted-chain case, the snapshot is a Reloc patch not a Move.
+fn a_global_table_target_stores() {
+    // `bucket.x = 7` with `bucket` a global
     let src = r#"
         bucket = { x = 0 }
         bucket.x = 7
@@ -266,16 +229,10 @@ fn unsafe_global_obj_falls_back_correctly() {
     assert_eq!(eval_int(src), 7);
 }
 
-// =====================================================================
-// Cross-path semantic equivalence under metamethod observability
-// =====================================================================
 
 #[test]
-fn elision_preserves_newindex_semantics_on_fresh_key() {
-    // Safe-path RHS (pure arith → gate accepts) elides the snapshot,
-    // then SetField fires __newindex because the key is absent on the
-    // bucket. The metamethod must observe the same receiver / value
-    // as in the snapshot-kept path.
+fn a_fresh_key_goes_through_newindex() {
+    // SetField on an absent key calls `__newindex` with the stored value
     let src = r#"
         local fires = 0
         local seen_val = nil
@@ -293,11 +250,8 @@ fn elision_preserves_newindex_semantics_on_fresh_key() {
 }
 
 #[test]
-fn elision_preserves_present_key_in_place_update() {
-    // Present-key SetField under safe path: bucket.tokens is already
-    // present → in-place update via try_set_existing collapse;
-    // __newindex must NOT fire. The snapshot elision composes with the
-    // try_set_existing single-walk semantics.
+fn a_present_key_is_updated_without_newindex() {
+    // SetField on a present key updates it; `__newindex` does not run
     let src = r#"
         local fires = 0
         local bucket = { tokens = 100 }
@@ -311,7 +265,7 @@ fn elision_preserves_present_key_in_place_update() {
 }
 
 // ---------------------------------------------------------------------
-// Key snapshot
+// Keys
 // ---------------------------------------------------------------------
 
 /// `t[k] = v` with `k` a plain local: the key stays in its register, as
@@ -333,29 +287,21 @@ fn a_local_key_stays_in_its_register() {
     assert_eq!(eval_int(src), 5);
 }
 
-/// A captured key can change while the right side runs, so it is copied.
+/// A captured key is read from its variable when the store runs.
 #[test]
-fn a_captured_local_key_is_copied() {
+fn a_captured_local_key_is_not_copied() {
     let src = "local t = {} local k = 3 local f = function() return k end t[k] = 1 return t[3]";
     let code = compile_main(src);
-    assert_eq!(
-        count_moves_from_reg(&code, 1),
-        1,
-        "captured key not copied: {code:?}"
-    );
+    assert_eq!(count_moves_from_reg(&code, 1), 0, "captured key copied: {code:?}");
     assert_eq!(eval_int(src), 1);
 }
 
-/// An unknown call on the right side keeps the copy.
+/// An unknown call on the right side does not copy the key.
 #[test]
-fn a_key_with_an_unknown_call_on_the_right_is_copied() {
+fn a_key_with_an_unknown_call_on_the_right_is_not_copied() {
     let src = "g = function() return 7 end local t = {} local k = 3 t[k] = g() return t[3]";
     let code = compile_main(src);
-    assert_eq!(
-        count_moves_from_reg(&code, 1),
-        1,
-        "key not copied: {code:?}"
-    );
+    assert_eq!(count_moves_from_reg(&code, 1), 0, "key copied: {code:?}");
     assert_eq!(eval_int(src), 7);
 }
 
@@ -370,4 +316,16 @@ fn a_key_in_a_multiple_assignment_is_copied() {
         "key not copied: {code:?}"
     );
     assert_eq!(eval_int(src), 10);
+}
+
+/// A call on the right that assigns the table's variable through an
+/// upvalue: the store goes to the table the variable holds when the store
+/// runs, as in PUC.
+#[test]
+fn a_call_that_rebinds_the_table_stores_into_the_new_one() {
+    let src = "local b = {} local old = b \
+               local function f() b = {} return 1 end \
+               b.x = f() \
+               if old.x == nil and b.x == 1 then return 1 else return 0 end";
+    assert_eq!(eval_int(src), 1);
 }

@@ -355,7 +355,7 @@ produces. MacroLua has no PUC format; its `string.dump` writes luna's own.
 ### luna's own dumps
 
 `luna_core::vm::dump::dump` (used by `luna-aot`) writes luna's own binary
-format: the running dialect's PUC header, then a `"\x00LunaV2\x00"`
+format: the running dialect's PUC header, then a `"\x00LunaV3\x00"`
 sentinel and a body in luna's 65-op instruction set. It loads back into
 luna, not into PUC.
 

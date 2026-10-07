@@ -27,6 +27,27 @@ impl C<'_, '_> {
         Ok(t)
     }
 
+    /// A 5.2 / 5.3 `GETTABUP` / `SETTABUP` whose key is not a string
+    /// constant (luna's `GetTabUpR`, `SetTabUpR`, `SetTabUpK`).
+    pub(super) fn tab_up_rk(&mut self, l: L) -> Res<()> {
+        if self.f.ver == 51 {
+            return Err(self.asm.err("an upvalue table in 5.1"));
+        }
+        if l.op == Op::GetTabUpR {
+            let a = self.asm.r(l.a)?;
+            let key = if l.k { self.rk(l.c)? } else { self.asm.r(l.c)? };
+            return self.emit(self.abc(Kind::GetTabUp, a, l.b, key));
+        }
+        let key = if l.op == Op::SetTabUpK { self.rk(l.b)? } else { self.asm.r(l.b)? };
+        let c = self.store_val(l)?;
+        self.emit(self.abc(Kind::SetTabUp, l.a, key, c))
+    }
+
+    /// The value a store writes: a constant (`k`) or a register.
+    pub(super) fn store_val(&mut self, l: L) -> Res<u32> {
+        if l.k { self.rk(l.c) } else { self.asm.r(l.c) }
+    }
+
     pub(super) fn rk_num(&mut self, i: i64) -> Res<u32> {
         let v = self.num(i);
         let k = self.asm.konst(v);
@@ -112,19 +133,26 @@ impl C<'_, '_> {
             ) && !x.k
             {
                 x.b == l.a || x.c == l.a
+            } else if matches!(x.op, Op::Eq | Op::Lt | Op::Le) {
+                // a comparison writes no register; the scratch is free after
+                return self.scratch_at(l.a, j) && (x.a == l.a || x.b == l.a);
             } else if matches!(x.op, Op::LoadK | Op::LoadI | Op::LoadF) && x.a != l.a {
                 continue;
             } else {
                 return false;
             };
-            let local = self
-                .asm
-                .p
-                .locvars
-                .iter()
-                .any(|v| v.reg == l.a && (v.start_pc as usize) <= j && j < v.end_pc as usize);
-            return reads && !local && l.a >= x.a;
+            return reads && self.scratch_at(l.a, j) && l.a >= x.a;
         }
         false
+    }
+
+    /// Whether register `r` holds no local variable at luna pc `pc`.
+    fn scratch_at(&self, r: u32, pc: usize) -> bool {
+        !self
+            .asm
+            .p
+            .locvars
+            .iter()
+            .any(|v| v.reg == r && (v.start_pc as usize) <= pc && pc < v.end_pc as usize)
     }
 }

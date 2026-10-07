@@ -55,6 +55,9 @@ impl<'a> Compiler<'a> {
         rhs: ExprId,
         line: u32,
     ) -> Result<Exp, SyntaxError> {
+        if let Some(e) = self.and_or_chain(op, lhs, rhs, line)? {
+            return Ok(e);
+        }
         self.last_line = line;
         let base = self.lr().freereg;
         let le = self.expr(lhs)?;
@@ -268,29 +271,10 @@ impl<'a> Compiler<'a> {
         key: ExprId,
         saved: u32,
     ) -> Result<Exp, SyntaxError> {
-        let ast = self.ast;
-        let o = self.exp_to_anyreg(oe)?;
-        let e = match ast.expr(key) {
-            Expr::Str(s) if self.sb(*s).len() <= 255 => {
-                let c = self.sym_const(*s);
-                if c <= 0xFF {
-                    Exp::Reloc(self.emit(Inst::iabc(Op::GetField, 0, o, c, true)))
-                } else {
-                    let ke = Exp::Const(c);
-                    let k = self.exp_to_nextreg(ke)?;
-                    Exp::Reloc(self.emit(Inst::iabc(Op::GetTable, 0, o, k, false)))
-                }
-            }
-            Expr::Int(i) if (0..=255).contains(i) => {
-                let c = *i as u32;
-                Exp::Reloc(self.emit(Inst::iabc(Op::GetI, 0, o, c, false)))
-            }
-            _ => {
-                let ke = self.expr(key)?;
-                let k = self.exp_to_anyreg(ke)?;
-                Exp::Reloc(self.emit(Inst::iabc(Op::GetTable, 0, o, k, false)))
-            }
-        };
+        let t = self.index_table(oe)?;
+        let ke = self.expr(key)?;
+        let (t, k) = self.indexed(t, ke)?;
+        let e = self.index_get(t, k);
         self.set_freereg(saved);
         Ok(e)
     }
