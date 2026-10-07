@@ -45,6 +45,12 @@ impl<'a> Compiler<'a> {
         for (i, p) in self.ls(body.params).iter().enumerate() {
             self.declare_local(self.nm(p), (i + is_method as usize) as u32, false)?;
         }
+        // 5.5 (PUC `parlist`): an anonymous `...` is a parameter too, with a
+        // register after the fixed ones that holds nil
+        if self.lr().has_vararg_table_pseudo {
+            let r = self.reserve(1)?;
+            self.declare_local("(vararg table)", r, false)?;
+        }
         if let ast::Vararg::Named(n) = &body.vararg {
             let name: &str = self.nm(n);
             let r = self.reserve(1)?;

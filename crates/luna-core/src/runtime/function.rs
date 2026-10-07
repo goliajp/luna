@@ -42,8 +42,10 @@ pub struct Proto {
     pub is_vararg: bool,
     /// PUC `lparser.c` emits a hidden `(vararg table)` locvar for a function
     /// declared with an explicit anonymous `(...)` (and NOT for a main chunk's
-    /// implicit vararg, nor for `(...t)` which becomes a named local). When
-    /// true, `debug.getlocal` exposes the pseudo at `num_params + 1`.
+    /// implicit vararg, nor for `(...t)` which becomes a named local). The
+    /// compiler gives it register `num_params`, as PUC does; the flag says
+    /// that this function was compiled with it (a loaded chunk has it in its
+    /// locals without the flag).
     pub has_vararg_table_pseudo: bool,
     /// PUC 5.1 `LUAI_COMPAT_VARARG`: the function declared `...` and so gets a
     /// hidden local named `arg` at `num_params` populated at entry with the

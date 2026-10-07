@@ -258,29 +258,19 @@ impl Vm {
                     let name = self.vararg_locvar_name().to_string();
                     return Some((name, LocalSlot::Stack(slot)));
                 }
-                if let Some((name, reg)) = self.named_local(f, n) {
-                    let at = match reg {
-                        None => LocalSlot::Held(Value::Nil),
-                        Some(r) => {
-                            let slot = f.base + r;
-                            // a loaded chunk may name any register; as in
-                            // PUC, a level's locals end below the function
-                            // it is calling
-                            if i > 0
-                                && let Some(limit) = ts.func_slot(i - 1)
-                                && slot >= limit
-                            {
-                                return None;
-                            }
-                            LocalSlot::Stack(slot as usize)
-                        }
-                    };
-                    return Some((name, at));
+                if let Some((name, r)) = self.named_local(f, n) {
+                    let slot = f.base + r;
+                    // a loaded chunk may name any register; as in PUC, a
+                    // level's locals end below the function it is calling
+                    if i > 0
+                        && let Some(limit) = ts.func_slot(i - 1)
+                        && slot >= limit
+                    {
+                        return None;
+                    }
+                    return Some((name, LocalSlot::Stack(slot as usize)));
                 }
-                // 5.5's `(vararg table)` has a register in PUC, not in luna
-                let pseudo = f.closure.proto.has_vararg_table_pseudo
-                    && n > f.closure.proto.num_params as i64 + 1;
-                (f.base, n - 1 - i64::from(pseudo))
+                (f.base, n - 1)
             }
             DbgKind::C(CLevel::Cont(fi)) => {
                 let held = self.cont_temporaries(ts, fi);
@@ -314,16 +304,9 @@ impl Vm {
     }
 
     /// Named locals of a Lua frame (PUC `luaF_getlocalname` at the current
-    /// pc), with 5.5's hidden `(vararg table)` slot: `(name, register)`,
-    /// the register being `None` for that storage-less slot.
-    fn named_local(&self, f: &Frame, n: i64) -> Option<(String, Option<u32>)> {
+    /// pc): `(name, register)`.
+    fn named_local(&self, f: &Frame, n: i64) -> Option<(String, u32)> {
         let proto = f.closure.proto;
-        let vararg_slot = proto
-            .has_vararg_table_pseudo
-            .then_some(proto.num_params as i64 + 1);
-        if vararg_slot == Some(n) {
-            return Some(("(vararg table)".to_string(), None));
-        }
         let pc = (f.pc as usize).saturating_sub(1);
         let mut active: Vec<&crate::runtime::LocVar> = proto
             .locvars
@@ -331,12 +314,9 @@ impl Vm {
             .filter(|lv| (lv.start_pc as usize) <= pc && pc < lv.end_pc as usize)
             .collect();
         active.sort_by_key(|lv| (lv.start_pc, lv.reg));
-        let mut idx = n.checked_sub(1)?;
-        if vararg_slot.is_some_and(|vs| n > vs) {
-            idx -= 1;
-        }
+        let idx = n.checked_sub(1)?;
         let lv = active.get(usize::try_from(idx).ok()?)?;
-        Some((lv.name.to_string(), Some(lv.reg)))
+        Some((lv.name.to_string(), lv.reg))
     }
 
     /// The values PUC's pcall / xpcall / pairs keep below the function they

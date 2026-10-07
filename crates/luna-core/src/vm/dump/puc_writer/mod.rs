@@ -27,7 +27,7 @@ mod modern_const;
 mod modern_flow;
 mod proto_parts;
 
-use self::asm::{Asm, Res, Window, loop_windows};
+use self::asm::{Asm, Res, loop_windows};
 use self::proto_parts::{check_skips, consts_for, needs_close, vararg_byte};
 use super::puc::{puc_52, puc_53, puc_54, puc_55};
 use crate::compiler::const_map::const_map_of;
@@ -121,23 +121,12 @@ pub(crate) fn dump_blocks(
 /// function after renumbering its registers (`None` for the main function).
 fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
     let np = p.num_params as u32;
-    let mut windows = match d {
+    let windows = match d {
         Dialect::V54 => Vec::new(),
         Dialect::V55 => loop_windows(p, 3, Some(3))?,
         _ => loop_windows(p, 4, None)?,
     };
-    // 5.5 gives an anonymous `...` parameter a register after the fixed
-    // ones; luna has none, so every register from there moves up one
-    let vararg_slot = d == Dialect::V55 && p.has_vararg_table_pseudo;
-    if vararg_slot {
-        windows.push(Window {
-            first: 0,
-            last: p.code.len().saturating_sub(1),
-            pivot: np,
-            delta: 1,
-        });
-    }
-    let mut frame = p.max_stack as u32 + vararg_slot as u32;
+    let mut frame = p.max_stack as u32;
     if d == Dialect::V55 && p.is_vararg {
         frame = frame.max(np + 1);
     }
@@ -212,10 +201,6 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
             (start, reg, (v.name.clone(), start, end))
         })
         .collect();
-    if vararg_slot {
-        let n = body.code.len() as u32;
-        locvars.push((1, np, ("(vararg table)".into(), 1, n)));
-    }
     locvars.sort_by_key(|v| (v.0, v.1));
 
     // PUC's `mainfunc` describes a main chunk's `_ENV` as register 0 of the
