@@ -113,8 +113,13 @@ impl Vm {
         {
             return Returned::No;
         }
-        // popping the top frame leaves this one in place
-        let caller: Option<*mut Frame> = match &mut self.frames[n - 2] {
+        // popping the top frame leaves this one in place. The caller is
+        // reached through a raw element pointer: indexing `frames` mutably
+        // reborrows the whole slice, the running frame too, which the fast
+        // loop still writes its pc through when this returns `No`
+        // SAFETY: `n >= 2`, so slot `n - 2` holds a frame
+        let caller_slot = unsafe { &mut *self.frames.as_mut_ptr().add(n - 2) };
+        let caller: Option<*mut Frame> = match caller_slot {
             CallFrame::Lua(f) => Some(f),
             CallFrame::Cont(c) if matches!(c.kind, ContKind::Meta(_)) => None,
             CallFrame::Cont(_) => return Returned::No,

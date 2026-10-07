@@ -10,8 +10,8 @@
 //! such entry also compares the stack pointer with the thread's real stack
 //! bounds, which are read from the OS once per thread.
 //!
-//! Where the bounds cannot be read (other targets, or code running on a
-//! stack the thread did not start with), nothing is reported as low and
+//! Where the bounds cannot be read (other targets, Miri, or code running
+//! on a stack the thread did not start with), nothing is reported as low and
 //! only the counts apply.
 
 use std::cell::Cell;
@@ -84,7 +84,7 @@ pub fn is_low(reserve: usize) -> bool {
     sp().wrapping_sub(low()) < reserve
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(all(any(target_os = "linux", target_os = "android"), not(miri)))]
 mod os {
     use std::ffi::c_void;
 
@@ -130,7 +130,11 @@ mod os {
 /// for it, allocating and freeing a stream buffer on the C heap, which
 /// moves where everything allocated after it lands; in a benchmark that
 /// alone made the interpreter's call loop 9% slower.
-#[cfg(all(any(target_os = "linux", target_os = "android"), target_env = "gnu"))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    target_env = "gnu",
+    not(miri)
+))]
 fn main_thread_low() -> Option<usize> {
     use std::ffi::c_void;
     const RLIMIT_STACK: i32 = 3;
@@ -159,13 +163,14 @@ fn main_thread_low() -> Option<usize> {
 
 #[cfg(all(
     any(target_os = "linux", target_os = "android"),
-    not(target_env = "gnu")
+    not(target_env = "gnu"),
+    not(miri)
 ))]
 fn main_thread_low() -> Option<usize> {
     None
 }
 
-#[cfg(target_vendor = "apple")]
+#[cfg(all(target_vendor = "apple", not(miri)))]
 mod os {
     use std::ffi::c_void;
 
@@ -189,7 +194,7 @@ mod os {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(miri)))]
 mod os {
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -204,12 +209,18 @@ mod os {
     }
 }
 
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "android",
-    target_vendor = "apple",
-    windows
-)))]
+// Miri provides no `__libc_stack_end`, and the addresses it gives locals
+// lie inside no stack bounds an OS call could report, so under it the
+// bounds are unknown and only the call counts apply
+#[cfg(any(
+    miri,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple",
+        windows
+    ))
+))]
 mod os {
     pub(super) fn stack_low() -> Option<usize> {
         None

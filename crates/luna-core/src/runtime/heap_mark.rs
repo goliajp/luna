@@ -51,8 +51,8 @@ pub(super) fn drain_marker(m: &mut Marker) {
             (*h).flags = (*h).with_slow(((*h).flags & !WHITE_BITS) | BLACK);
             match (*h).tag {
                 ObjTag::Str => {}
-                ObjTag::Table => (*(h as *mut Table)).trace(m),
-                ObjTag::Proto => (*(h as *mut Proto)).trace(m),
+                ObjTag::Table => (*(h as *mut Table)).trace(h as *mut Table, m),
+                ObjTag::Proto => (*(h as *mut Proto)).trace(h as *mut Proto, m),
                 ObjTag::Closure => (*(h as *mut LuaClosure)).trace(m),
                 ObjTag::Upvalue => (*(h as *mut Upvalue)).trace(m),
                 ObjTag::Native => (*(h as *mut NativeClosure)).trace(m),
