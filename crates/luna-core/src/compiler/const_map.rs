@@ -102,8 +102,7 @@ const Q: f64 = 1.0 / 4_503_599_627_370_496.0;
 /// The integer a float equals exactly, as `luaV_flttointeger(.., F2Ieq)`.
 fn exact_int(f: f64) -> Option<i64> {
     // [-2^63, 2^63)
-    (f == f.floor() && (i64::MIN as f64..-(i64::MIN as f64)).contains(&f))
-        .then_some(f as i64)
+    (f == f.floor() && (i64::MIN as f64..-(i64::MIN as f64)).contains(&f)).then_some(f as i64)
 }
 
 /// A float as a key of a 5.3+ table: an integer value is an integer key.

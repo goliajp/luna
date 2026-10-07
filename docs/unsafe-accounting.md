@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1415** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1417** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 224 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **7** | six `#[doc(hidden)]`, and `MemOwner::raw`, see §5 |
 | **`pub unsafe extern "C" fn`** | 200 | the C API (143), the `luna_jit_*` helpers compiled code calls (51, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
@@ -36,7 +36,7 @@ quotes the pattern counts too.
 
 | Crate | Module | Sites | What the `unsafe` is for |
 |---|---|---:|---|
-| `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `fast_arith.rs`) | 56 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch |
+| `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `fast_arith.rs`) | 58 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch |
 | | `vm/exec/index_*` | 38 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
 | | `vm/exec` (other) | 83 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
 | | `runtime/heap*`, `gc_ptr.rs` | 84 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle, the debug check of the slow-store bit |
@@ -62,7 +62,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1415** | |
+| **Total** | | **1417** | |
 
 ## 3. Pattern catalog
 
@@ -376,8 +376,13 @@ Taking file names, command lines and environment text through the ANSI
 code page as that library's narrow functions do (`vm/lib_io/winfs.rs`:
 one call each way), seeking standard input through its handle
 (`vm/lib_io/crt.rs`), and the environment variables the Windows
-file-name test sets (`tests/win_names.rs`) added 4. That is 1415, the
-ceiling now.
+file-name test sets (`tests/win_names.rs`) added 4. That is 1415.
+
+The table read and the table write of the fast loop for a 5.2 / 5.3
+upvalue table indexed by a key that is not a string constant
+(`GetTabUpR`, and `SetTabUpR` / `SetTabUpK` through one arm) probe the
+table in place as the other table arms do, and added 2. That is 1417,
+the ceiling now.
 
 ## 5. Public `unsafe` surface
 
