@@ -84,16 +84,34 @@ pub(super) fn crt_error(code: i32) -> std::io::Error {
     std::io::Error::other(PosixErrno(code))
 }
 
-/// The errno of an error, as `luaL_fileresult` returns it.
+/// The errno of an error, as `luaL_fileresult` returns it. On Windows an
+/// OS error is a Win32 code, which the C library maps to an errno.
 fn errno(e: &std::io::Error) -> Option<i32> {
     if let Some(p) = e.get_ref().and_then(|r| r.downcast_ref::<PosixErrno>()) {
         return Some(p.0);
     }
-    e.raw_os_error()
+    let code = e.raw_os_error();
+    if cfg!(windows) {
+        return code.map(|c| crate::cerrno::errno_of_win32(c as u32));
+    }
+    code
 }
 
-/// C `strerror` text of an OS error (std appends " (os error N)").
+/// Set the process's `errno` to what the failed C call behind `e` left.
+pub(crate) fn note_failure(e: &std::io::Error) {
+    if let Some(c) = errno(e) {
+        crate::cerrno::set(c);
+    }
+}
+
+/// C `strerror` text of an OS error (std appends " (os error N)"); on
+/// Windows the C library's text for the errno the error maps to.
 pub(crate) fn strerror(e: &std::io::Error) -> String {
+    if cfg!(windows)
+        && let Some(c) = e.raw_os_error()
+    {
+        return PosixErrno(crate::cerrno::errno_of_win32(c as u32)).to_string();
+    }
     let s = e.to_string();
     match e.raw_os_error() {
         Some(code) => s
@@ -115,6 +133,7 @@ pub(super) fn file_fail_values(
     fname: Option<&[u8]>,
     e: &std::io::Error,
 ) -> [Value; 3] {
+    note_failure(e);
     let mut msg = Vec::new();
     if let Some(n) = fname {
         msg.extend_from_slice(c_str(n));
@@ -129,6 +148,14 @@ pub(super) fn file_fail_values(
     }
     let m = Value::Str(vm.heap.intern(&msg));
     [Value::Nil, m, Value::Int(code)]
+}
+
+/// `errno = 0`, which 5.4 and later do before the C calls of most io and
+/// os functions.
+pub(crate) fn reset_errno(vm: &Vm) {
+    if vm.version() >= LuaVersion::Lua54 {
+        crate::cerrno::set(0);
+    }
 }
 
 /// `luaL_fileresult` for success.

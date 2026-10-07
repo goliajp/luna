@@ -36,7 +36,7 @@ pub(super) fn float_mod(version: LuaVersion, a: f64, b: f64) -> f64 {
     if version <= LuaVersion::Lua52 {
         return crate::numeric::nummod_floor(a, b);
     }
-    let m = c_fmod(a, b);
+    let m = crate::cerrno::fmod(a, b);
     let fix = if version == LuaVersion::Lua53 {
         m * b < 0.0
     } else {
@@ -168,7 +168,11 @@ pub(crate) fn arith_num(
 /// from the C library's `pow` in the last bit.
 #[inline(always)]
 pub(super) fn num_pow(v54: bool, a: f64, b: f64) -> f64 {
-    if b == 2.0 && v54 { a * a } else { a.powf(b) }
+    if b == 2.0 && v54 {
+        a * a
+    } else {
+        crate::cerrno::pow(a, b)
+    }
 }
 
 /// Floor division of integers, `b != 0` (PUC `luaV_idiv`; `MIN // -1`

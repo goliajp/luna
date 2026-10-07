@@ -60,6 +60,9 @@ fn run_script(v: LuaVersion, tag: &str, script: &str) -> String {
         },
         Err(e) => panic!("{v:?}: {}", vm.error_text(&e)),
     };
+    // the files the script left open close with the Vm; Windows removes no
+    // open file
+    drop(vm);
     std::fs::remove_dir_all(&dir).expect("remove the work dir");
     out
 }
@@ -149,5 +152,54 @@ fn files_are_binary_by_default() {
     match r.first() {
         Some(Value::Str(s)) => assert_eq!(s.as_bytes(), b"a\nb\r\n"),
         other => panic!("{other:?}"),
+    }
+}
+
+/// `crt_text/errno.lua`: what each operation leaves in `errno`, as a write
+/// right after a read shows it, against what PUC built with MSVC printed
+/// (its last operation, a mode `fopen` calls invalid, ends the process in
+/// 5.1 and is left out). The rules are the Universal CRT's, so this runs
+/// on Windows. An error is compared from its position on, since the chunk
+/// name quotes the operation, whose file names differ.
+#[cfg(windows)]
+#[test]
+fn errno_is_left_as_in_puc_built_with_msvc() {
+    const SCRIPT: &str = include_str!("../crt_text/errno.lua");
+    const PUC: [&str; 5] = [
+        include_str!("../crt_text/errno.5.1.txt"),
+        include_str!("../crt_text/errno.5.2.txt"),
+        include_str!("../crt_text/errno.5.3.txt"),
+        include_str!("../crt_text/errno.5.4.txt"),
+        include_str!("../crt_text/errno.5.5.txt"),
+    ];
+    fn key(line: &str) -> Vec<&str> {
+        let mut f: Vec<&str> = line.split('\t').collect();
+        if f.len() > 3 {
+            // the operation itself, and the chunk name quoting it
+            f[3] = "";
+        }
+        if let Some(e) = f.get_mut(4) {
+            *e = e.split_once("]:").map_or(*e, |(_, m)| m);
+        }
+        f
+    }
+    let dialects = [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ];
+    for (v, want) in dialects.into_iter().zip(PUC) {
+        let want = want.replace("\r\n", "\n");
+        let got = run_script(v, &format!("errno{v:?}"), SCRIPT);
+        for (i, (g, w)) in got.lines().zip(want.lines()).enumerate() {
+            assert_eq!(key(g), key(w), "{v:?}, line {}: {g}", i + 1);
+        }
+        assert_eq!(
+            got.lines().count(),
+            want.lines().count(),
+            "{v:?}: line count"
+        );
     }
 }

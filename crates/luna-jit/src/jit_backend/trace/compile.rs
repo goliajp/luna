@@ -283,6 +283,9 @@ pub(super) fn trace_helper(name: &str) -> Option<*const u8> {
         }
         "luna_jit_str_sub" => crate::jit_backend::luna_jit_str_sub as *const u8,
         "luna_jit_fmod" => crate::jit_backend::luna_jit_fmod as *const u8,
+        "luna_jit_math1" => crate::jit_backend::luna_jit_math1 as *const u8,
+        "luna_jit_pow" => crate::jit_backend::luna_jit_pow as *const u8,
+        "luna_jit_numpow" => crate::jit_backend::luna_jit_numpow as *const u8,
         "luna_jit_upval_get_checked" => crate::jit_backend::luna_jit_upval_get_checked as *const u8,
         "luna_jit_upval_of_checked" => crate::jit_backend::luna_jit_upval_of_checked as *const u8,
         "luna_jit_op_self_checked" => crate::jit_backend::luna_jit_op_self_checked as *const u8,

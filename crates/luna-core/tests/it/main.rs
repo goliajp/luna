@@ -19,10 +19,13 @@ mod compiler_move_elision;
 mod compiler_stress_limits;
 mod coroutine_debug_hook;
 mod corrupt_register_state;
+mod crt_ccs;
 mod crt_text_mode;
 mod diff_puc;
 mod double_dialect_int_arith;
 mod e2e_programs;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+mod errno_glibc;
 mod error_traceback;
 mod eval_async;
 mod fenv_cells;

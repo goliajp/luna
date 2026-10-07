@@ -439,6 +439,15 @@ impl<'s, S: Source> Lexer<'s, S> {
         // the lex buffer of a numeral is its source text
         let text = &self.src.bytes()[start..self.pos];
         let hex = text.len() > 1 && text[0] == b'0' && matches!(text[1], b'x' | b'X');
+        {
+            use crate::cerrno::conv::{Dialect, number};
+            let d = match v {
+                LuaVersion::Lua51 => Dialect::Lua51,
+                LuaVersion::Lua52 => Dialect::Lua52,
+                _ => Dialect::Later,
+            };
+            number(text, d);
+        }
         let num = if hex {
             // 5.1 converts with C99 `strtod`, which reads hex floats too.
             let float_ok = v <= LuaVersion::Lua51 || v.has_hex_float();

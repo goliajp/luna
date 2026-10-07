@@ -15,12 +15,20 @@ fn number_text(vm: &Vm, n: Num) -> Vec<u8> {
 /// `g_write`: write `vals` in order and give the dialect's result.
 fn g_write(vm: &mut Vm, fs: u32, u: Gc<Userdata>, args: Args, first: u32) -> Result<u32, LuaError> {
     let v = vm.version();
+    reset_errno(vm);
     let mut total: i64 = 0;
     let mut failure: Option<std::io::Error> = None;
     for i in first..args.n {
+        let number = |vm: &Vm, n| {
+            // written with `fprintf`
+            if u.crt.is_some() {
+                crt::ansi_only(u);
+            }
+            number_text(vm, n)
+        };
         let bytes = match args.get(vm, i) {
-            Value::Int(x) => number_text(vm, Num::Int(x)),
-            Value::Float(f) => number_text(vm, Num::Float(f)),
+            Value::Int(x) => number(vm, Num::Int(x)),
+            Value::Float(f) => number(vm, Num::Float(f)),
             _ => argcheck::check_string(vm, args, i)?.as_bytes().to_vec(),
         };
         // ≤5.4 stop writing after a failure but still check the remaining
@@ -59,6 +67,7 @@ pub(super) fn f_write(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
 
 pub(super) fn io_flush(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     let u = get_io_file(vm, Io::Output)?;
+    reset_errno(vm);
     Ok(match flush_stream(u) {
         Ok(()) => file_ok(vm, fs),
         Err(e) => file_fail(vm, fs, None, &e),
@@ -67,6 +76,7 @@ pub(super) fn io_flush(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaErro
 
 pub(super) fn f_flush(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = check_open(vm, Args::new(fs, nargs), 0)?;
+    reset_errno(vm);
     Ok(match flush_stream(u) {
         Ok(()) => file_ok(vm, fs),
         Err(e) => file_fail(vm, fs, None, &e),
@@ -90,6 +100,7 @@ pub(super) fn f_seek(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     } else {
         argcheck::opt_integer(vm, a, 2, 0)?
     };
+    reset_errno(vm);
     match seek_stream(u, op, offset) {
         // ≤5.2 has one number type: `lua_pushnumber(ftell(f))`
         Ok(pos) if vm.version() <= LuaVersion::Lua52 => {
@@ -166,6 +177,7 @@ pub(super) fn f_setvbuf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let size = argcheck::opt_integer(vm, a, 2, LUAL_BUFFERSIZE)?;
     // the C library's mode: 0 full, 1 line, 2 none
     let cmode = [2u8, 0, 1][op];
+    reset_errno(vm);
     // what PUC built with MSVC passes when no size is given
     let crt_size = |vm: &Vm| {
         if a.is_none_or_nil(vm, 2) {

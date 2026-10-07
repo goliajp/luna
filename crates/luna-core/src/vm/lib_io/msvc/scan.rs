@@ -280,40 +280,74 @@ fn value(p: Parsed, negative: bool) -> Option<f64> {
             text.push_str(&format!("e{e}"));
             sign(text.parse::<f64>().unwrap_or(0.0))
         }
-        Parsed::Hex(d, e) => sign(hex_value(&d, e)),
+        Parsed::Hex(d, e) => f64::from_bits(hex_bits(&d, e, negative)),
     })
 }
 
-/// 0x0.DIGITS × 2^e, rounded to nearest even.
-fn hex_value(digits: &[u8], e: i64) -> f64 {
-    let mut m: u64 = 0;
-    for &x in digits.iter().take(15) {
-        m = (m << 4) | u64::from(x);
+/// 0x0.DIGITS × 2^e as the library computes it
+/// (`convert_hexadecimal_string_to_floating_type` and
+/// `assemble_floating_point_value`), including its slip on a value that
+/// rounds up from the subnormal range to the smallest normal one (there the
+/// exponent comes out 3 too high).
+fn hex_bits(digits: &[u8], e: i64, negative: bool) -> u64 {
+    const NORMAL_MASK: u64 = (1 << 53) - 1;
+    const DENORMAL_MASK: u64 = (1 << 52) - 1;
+    let mut mantissa: u64 = 0;
+    let mut exponent = e + 52;
+    let mut i = 0;
+    while i < digits.len() && mantissa <= NORMAL_MASK {
+        mantissa = mantissa * 16 + u64::from(digits[i]);
+        exponent -= 4;
+        i += 1;
     }
-    let used = digits.len().min(15) as i64;
-    let sticky = digits.iter().skip(15).any(|&x| x != 0);
-    let mut exp2 = e - 4 * used;
-    let bits = 64 - i64::from(m.leading_zeros());
-    if bits > 53 {
-        let shift = bits - 53;
-        let low = m & ((1 << shift) - 1);
-        let half = 1 << (shift - 1);
-        m >>= shift;
-        exp2 += shift;
-        if low > half || (low == half && (sticky || m & 1 == 1)) {
-            m += 1;
+    let zero_tail = digits[i..].iter().all(|&d| d == 0);
+    let sign = u64::from(negative) << 63;
+    let bits = 64 - i64::from(mantissa.leading_zeros());
+    let shift = 53 - bits;
+    let normal = exponent - shift;
+    let (mut m, mut exp) = (mantissa, normal);
+    if normal > 1023 {
+        return sign | 0x7ff0_0000_0000_0000;
+    } else if normal < -1022 {
+        let dshift = shift + normal + 1023 - 1;
+        exp = -1023;
+        if dshift < 0 {
+            m = shift_rounding(m, -dshift, zero_tail);
+            if m == 0 {
+                return sign;
+            }
+            if m > DENORMAL_MASK {
+                exp = exponent - (dshift + 1) - shift;
+            }
+        } else {
+            m <<= dshift;
         }
+    } else if shift < 0 {
+        m = shift_rounding(m, -shift, zero_tail);
+        if m > NORMAL_MASK {
+            m >>= 1;
+            exp += 1;
+            if exp > 1023 {
+                return sign | 0x7ff0_0000_0000_0000;
+            }
+        }
+    } else if shift > 0 {
+        m <<= shift;
     }
-    let mut x = m as f64;
-    while exp2 > 1000 {
-        x *= 2f64.powi(1000);
-        exp2 -= 1000;
+    sign | ((((exp + 1023) as u64) & 0x7ff) << 52) | (m & DENORMAL_MASK)
+}
+
+/// `right_shift_with_rounding`, to nearest with ties to even.
+fn shift_rounding(value: u64, shift: i64, zero_tail: bool) -> u64 {
+    if shift >= 64 {
+        return 0;
     }
-    while exp2 < -1000 {
-        x *= 2f64.powi(-1000);
-        exp2 += 1000;
-    }
-    x * 2f64.powi(exp2 as i32)
+    let extra = (1u64 << (shift - 1)) - 1;
+    let round = 1u64 << (shift - 1);
+    let lsb = 1u64 << shift;
+    let tail = !zero_tail || value & extra != 0;
+    let up = value & round != 0 && (tail || value & lsb != 0);
+    (value >> shift) + u64::from(up)
 }
 
 /// `fscanf(f, "%lf", &d) == 1`: the number, or `None` when the conversion

@@ -87,6 +87,8 @@
 // unchanged — `Vm` stays `!Send + !Sync`. See
 // `docs/threading.md` for the embedder-facing usage patterns.
 
+#[doc(hidden)]
+pub mod cerrno;
 pub mod compiler;
 pub mod frontend;
 pub mod jit;
