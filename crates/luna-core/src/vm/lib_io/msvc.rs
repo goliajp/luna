@@ -10,6 +10,7 @@
 mod lowio;
 mod read;
 pub(crate) mod scan;
+mod utf8;
 mod wide;
 mod write;
 

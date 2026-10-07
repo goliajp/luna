@@ -12,7 +12,13 @@ use luna_core::vm::Vm;
 
 const SCRIPT: &str = include_str!("../crt_text/ccs.lua");
 const PUC: &str = include_str!("../crt_text/ccs.5.1.txt");
+/// `crt_text/ccsbad.lua`: the UTF-8 mode on bytes that are not UTF-8 (U+FFFD
+/// as `MultiByteToWideChar` puts it, a read that ends in a character it
+/// cannot complete, four continuation bytes) and on lone surrogates written.
+const BAD_SCRIPT: &str = include_str!("../crt_text/ccsbad.lua");
+const BAD_PUC: &str = include_str!("../crt_text/ccsbad.5.1.txt");
 const CASE_VAR: &str = "LUNA_CCS_CASE";
+const SCRIPT_VAR: &str = "LUNA_CCS_SCRIPT";
 const OUT_MARK: &str = "CCS-OUT\t";
 
 /// The case of the child process: run it and print its line.
@@ -20,6 +26,10 @@ const OUT_MARK: &str = "CCS-OUT\t";
 fn ccs_case_child() {
     let Ok(case) = std::env::var(CASE_VAR) else {
         return;
+    };
+    let script = match std::env::var(SCRIPT_VAR).as_deref() {
+        Ok("bad") => BAD_SCRIPT,
+        _ => SCRIPT,
     };
     let dir = std::env::temp_dir().join(format!("luna-ccs-{}-{case}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create the work dir");
@@ -32,7 +42,7 @@ fn ccs_case_child() {
            for i = 1, select('#', ...) do t[i] = tostring((select(i, ...))) end
            OUT[#OUT + 1] = table.concat(t, '\\t')
          end
-         do {SCRIPT}
+         do {script}
          end
          return table.concat(OUT, '\\n')",
         dir.display().to_string().replace('\\', "/")
@@ -63,7 +73,16 @@ fn seen(code: u32) -> i32 {
 
 #[test]
 fn ccs_modes_as_in_puc_51_built_with_msvc() {
-    let want = PUC;
+    run_cases("ccs", PUC, 162);
+}
+
+#[test]
+fn ccs_utf8_mode_on_bad_bytes_as_in_puc_51_built_with_msvc() {
+    run_cases("bad", BAD_PUC, 53);
+}
+
+/// Run each case of `script` in a child and hold it to the recording.
+fn run_cases(script: &str, want: &str, count: usize) {
     let mut lines = want.lines().peekable();
     let exe = std::env::current_exe().expect("the test binary");
     let mut case = 0;
@@ -84,6 +103,7 @@ fn ccs_modes_as_in_puc_51_built_with_msvc() {
                 "--test-threads=1",
             ])
             .env(CASE_VAR, case.to_string())
+            .env(SCRIPT_VAR, script)
             .output()
             .expect("run the case");
         let got = String::from_utf8_lossy(&out.stdout);
@@ -100,5 +120,5 @@ fn ccs_modes_as_in_puc_51_built_with_msvc() {
             assert_eq!(got_line, line, "case {case}");
         }
     }
-    assert_eq!(case, 162, "case count");
+    assert_eq!(case, count, "case count");
 }
