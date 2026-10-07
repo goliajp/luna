@@ -1,9 +1,10 @@
 //! `seek` on the standard streams of the `luna` command on Windows, where
 //! the MSVC C library's `fseek` and `ftell` go to the system for standard
-//! input as for any file: a file redirected in can be sought, a pipe from
-//! `type` answers as the system answers for it, and `NUL` is at 0. Run as
-//! `cmd` runs them, against what PUC 5.1.5 to 5.5.0 built with MSVC gave
-//! on windows-latest (5.2 to 5.5 give the same).
+//! input as for any file: a file redirected in can be sought, and `NUL` is
+//! at 0. Run as `cmd` runs them, against what PUC 5.1.5 to 5.5.0 built
+//! with MSVC gave on windows-latest (5.2 to 5.5 give the same). A pipe is
+//! left out: what the system reports for it depends on how much the
+//! writer has put in it yet.
 #![cfg(windows)]
 
 use crate::cli_common::{luna, workdir};
@@ -22,7 +23,6 @@ fn standard_streams_seek_as_in_puc_built_with_msvc() {
         let q = format!("\"{}\" --lua={d} seek.lua seek.out", exe.display());
         for (label, redirect) in [
             ("file", format!("{q} file < in.txt > so.txt 2> se.txt")),
-            ("pipe", format!("type in.txt | {q} pipe > so.txt 2> se.txt")),
             ("nul", format!("{q} nul < NUL > so.txt 2> se.txt")),
         ] {
             // the command line as `cmd` reads it, quotes and all
