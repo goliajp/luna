@@ -90,8 +90,8 @@ impl<'a> Compiler<'a> {
                     self.set_freereg(base);
                     return Ok(());
                 }
-                let e = self.expr(exprs[0])?;
                 let saved = self.lr().freereg;
+                let e = self.expr(exprs[0])?;
                 let r = self.exp_to_anyreg(e)?;
                 self.set_freereg(saved);
                 self.emit(Inst::iabc(Op::Return1, r, 0, 0, false));

@@ -33,13 +33,6 @@ pub(super) struct Level<'a> {
     /// previously saved pc, ForLoop / TForLoop back-edge, or a defined label).
     /// `None` is PUC's sentinel `-1` — no target has been recorded yet.
     ///
-    /// Read by peephole passes (see `no_jump_lands_here`) that rewrite the
-    /// just-emitted instruction at pc `here() - 1` in place of emitting a
-    /// Move at `here()`: that is safe only when no jump lands at `here()`,
-    /// i.e. `last_target < here()` or `last_target == None`. Consumed by the
-    /// Reloc-landing peephole at `assign_name` and the trailing-Move elision
-    /// at `assign_stat`.
-    ///
     /// Maintained monotonically (only advances upward) by `mark_target(pc)`,
     /// called from every code path that turns some `pc` into a jump landing
     /// point.

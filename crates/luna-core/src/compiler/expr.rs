@@ -59,6 +59,11 @@ impl<'a> Compiler<'a> {
                     rhs,
                     line,
                 } => {
+                    // the top of a chain of one operator may compile flat
+                    let inner = matches!(spine.last(), Some(Pending::AndOr { op: o, .. }) if *o == op);
+                    if !inner && let Some(e) = self.and_or_chain(op, lhs, rhs, line)? {
+                        break e;
+                    }
                     self.last_line = line;
                     let base = self.lr().freereg;
                     spine.push_or_abort(Pending::AndOr {
@@ -293,7 +298,16 @@ impl<'a> Compiler<'a> {
     pub(super) fn exp_to_reg(&mut self, e: Exp, reg: u32) -> Result<(), SyntaxError> {
         match e {
             Exp::Nil => {
-                self.emit(Inst::iabc(Op::LoadNil, reg, 0, 0, false));
+                // PUC 5.1 `luaK_nil`: at function start a register above the
+                // active variables is nil already
+                let fresh = || {
+                    let lvl = self.lr();
+                    lvl.code.is_empty()
+                        && lvl.locals.iter().all(|v| v.konst.is_some() || v.reg < reg)
+                };
+                if !(self.version == LuaVersion::Lua51 && fresh()) {
+                    self.emit(Inst::iabc(Op::LoadNil, reg, 0, 0, false));
+                }
             }
             Exp::True => {
                 self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));

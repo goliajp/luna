@@ -155,7 +155,7 @@ impl M<'_, '_> {
             };
             (asize.min(0xFF) as u32, code)
         } else {
-            (l.c, l.b)
+            (self.ctor_array_size(l), l.b)
         };
         let size = if self.f.v55 { 1024 } else { 256 };
         let (rc, extra) = (narr % size, narr / size);
@@ -166,6 +166,43 @@ impl M<'_, '_> {
         };
         self.asm.emit(w);
         self.emit(self.ax(extra as u64))
+    }
+
+    /// The number of positional items of the constructor the `NewTable`
+    /// `l` starts. luna's hint stops at 255; past it the count is read off
+    /// the constructor's last `SetList` (PUC `luaK_settablesize`).
+    fn ctor_array_size(&self, l: L) -> u32 {
+        if l.c < 0xFF {
+            return l.c;
+        }
+        let mut last = None;
+        let mut pc = self.asm.pc() + 1;
+        while let Some(i) = self.asm.inst(pc) {
+            match i.op() {
+                Op::NewTable if i.a() == l.a => break,
+                Op::SetList if i.a() == l.a => last = Some(pc),
+                _ => {}
+            }
+            pc += 1;
+        }
+        let Some(pc) = last else {
+            return l.c;
+        };
+        let i = self.asm.inst(pc).expect("a SetList seen above");
+        let offset = if i.k() {
+            self.asm.inst(pc + 1).map_or(0, |x| x.ax())
+        } else {
+            i.c()
+        };
+        if i.b() > 0 {
+            return offset + i.b();
+        }
+        // an open last item: the call or `...` before the SetList sits right
+        // after the fixed items of its batch
+        match self.asm.inst(pc - 1) {
+            Some(x) if matches!(x.op(), Op::Call | Op::Vararg) => offset + x.a() - l.a - 1,
+            _ => offset,
+        }
     }
 
     pub(super) fn set_list(&mut self, l: L) -> Res<usize> {

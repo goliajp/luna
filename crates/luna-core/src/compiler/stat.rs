@@ -139,6 +139,9 @@ impl<'a> Compiler<'a> {
                 let reg = self.reserve(1)?;
                 // declared before the body: the function can call itself
                 self.declare_local(self.nm(name), reg, false)?;
+                // PUC does not reserve the variable's register before the
+                // body: the closure takes the next free one, the variable's
+                self.set_freereg(reg);
                 let f = self.function_exp(body, false)?;
                 self.exp_to_reg(f, reg)?;
                 // debug information sees the variable once the closure is in it
@@ -161,8 +164,8 @@ impl<'a> Compiler<'a> {
                     .push_or_abort((text, false));
                 self.declare_global_marker(Some(text));
                 let saved = self.lr().freereg;
+                let lv = self.global_lv(text)?;
                 let f = self.function_exp(body, false)?;
-                let r = self.exp_to_anyreg(f)?;
                 // `global function f` is a defining write: f must not already
                 // exist in the environment (runtime "already defined" check).
                 // Pin the redef-check and assignment emits to the name's source
@@ -172,7 +175,7 @@ impl<'a> Compiler<'a> {
                 let saved_force = self.force_line.replace(name.line);
                 let res = (|| -> Result<(), SyntaxError> {
                     self.emit_global_redef_check(self.nm(name))?;
-                    self.assign_global(self.nm(name), r)
+                    self.store(lv, f)
                 })();
                 self.force_line = saved_force;
                 res?;
@@ -235,12 +238,20 @@ impl<'a> Compiler<'a> {
         // evaluated (PUC bumps `nactvar` after the explist), so `global a = a`
         // reads the enclosing `a`, not the global being defined.
         let saved = self.lr().freereg;
+        let mut lvs: LVec<Lv> = LVec::new(self.heap.mem());
+        for an in names {
+            let lv = self.global_lv(self.nm(&an.name))?;
+            lvs.push_or_abort(lv);
+        }
         let base = self.explist_adjust(exprs, names.len() as u32)?;
         declare(self);
-        // defining write: each target must not already exist (OP_ERRNNIL).
-        for (i, an) in names.iter().enumerate() {
+        // defining write: each target must not already exist (OP_ERRNNIL);
+        // PUC checks and stores the last one first, the check reading into
+        // the register above the values still to store
+        for (i, an) in names.iter().enumerate().rev() {
+            self.set_freereg(base + i as u32 + 1);
             self.emit_global_redef_check(self.nm(&an.name))?;
-            self.assign_global(self.nm(&an.name), base + i as u32)?;
+            self.store(lvs[i], Exp::Reg(base + i as u32))?;
         }
         self.set_freereg(saved);
         Ok(())
@@ -254,60 +265,49 @@ impl<'a> Compiler<'a> {
         self.last_line = name.base.line;
         let is_method = name.method.is_some();
         let saved = self.lr().freereg;
-        let f = self.function_exp(body, is_method)?;
-        let freg = self.exp_to_anyreg(f)?;
-        if name.path.is_empty() && name.method.is_none() {
-            self.assign_name(self.nm(&name.base), name.base.line, freg)?;
-            self.set_freereg(saved);
-            return Ok(());
-        }
-        // function a.b.c:m — walk to the holder, set the final field.
-        // PUC attributes every GETFIELD/SETFIELD on the dotted name to the
-        // line of the function statement's name (its `function` keyword),
-        // not to the `end` token. Mirror that by pinning `force_line` for
-        // the whole holder walk + final store so a `nil` base raises an
-        // error on the right source line (errors.lua :430).
+        // PUC `funcstat` compiles the name first, then the body, then the
+        // store. Every GETFIELD / SETFIELD on a dotted name, and the store,
+        // carry the line of the statement's name, not the `end` token's, so
+        // a `nil` holder raises on the right line (errors.lua :430).
         let saved_force = self.force_line.replace(name.base.line);
-        let res = (|| -> Result<(), SyntaxError> {
-            let be = self.name_expr(self.nm(&name.base))?;
-            let mut holder = self.exp_to_anyreg(be)?;
-            let mut fields: LVec<&str> = LVec::new(self.heap.mem());
-            for n in self.ls(name.path) {
-                fields.push_or_abort(self.nm(n));
-            }
-            if let Some(m) = &name.method {
-                fields.push_or_abort(self.nm(m));
-            }
-            for f_name in &fields[..fields.len() - 1] {
-                let c = self.str_const(f_name.as_bytes());
-                if c <= 0xFF {
-                    let pc = self.emit(Inst::iabc(Op::GetField, 0, holder, c, true));
-                    let dst = self.reserve(1)?;
-                    self.patch_dest(pc, dst);
-                    holder = dst;
-                } else {
-                    let kr = self.reserve(1)?;
-                    self.load_const(kr, c);
-                    let pc = self.emit(Inst::iabc(Op::GetTable, 0, holder, kr, false));
-                    self.patch_dest(pc, kr); // reuse the key register
-                    holder = kr;
-                }
-            }
-            let last = &fields[fields.len() - 1];
-            let c = self.str_const(last.as_bytes());
-            if c <= 0xFF {
-                self.emit(Inst::iabc(Op::SetField, holder, c, freg, true));
-            } else {
-                let kr = self.reserve(1)?;
-                self.load_const(kr, c);
-                self.emit(Inst::iabc(Op::SetTable, holder, kr, freg, false));
-            }
-            Ok(())
-        })();
+        let lv = self.func_name_lv(name);
+        self.force_line = saved_force;
+        let lv = lv?;
+        let f = self.function_exp(body, is_method)?;
+        let saved_force = self.force_line.replace(name.base.line);
+        let res = self.store(lv, f);
         self.force_line = saved_force;
         res?;
         self.set_freereg(saved);
         Ok(())
+    }
+
+    /// PUC `funcname`: `a.b.c:m` as an assignment target.
+    fn func_name_lv(&mut self, name: &FuncName) -> Result<Lv, SyntaxError> {
+        let mut fields: LVec<&str> = LVec::new(self.heap.mem());
+        for n in self.ls(name.path) {
+            fields.push_or_abort(self.nm(n));
+        }
+        if let Some(m) = &name.method {
+            fields.push_or_abort(self.nm(m));
+        }
+        let Some((last, walk)) = fields.split_last() else {
+            return self.name_lv(self.nm(&name.base), name.base.line);
+        };
+        let mut e = self.name_expr(self.nm(&name.base))?;
+        for f in walk {
+            // the holder's register is free again once it is read
+            let mark = self.lr().freereg;
+            let t = self.index_table(e)?;
+            let c = self.str_const(f.as_bytes());
+            let (t, k) = self.indexed(t, Exp::Const(c))?;
+            e = self.index_get(t, k);
+            self.set_freereg(mark);
+        }
+        let t = self.index_table(e)?;
+        let c = self.str_const(last.as_bytes());
+        let (t, k) = self.indexed(t, Exp::Const(c))?;
+        Ok(Lv::Indexed(t, k))
     }
 
     pub(super) fn local_stat(

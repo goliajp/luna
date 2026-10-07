@@ -43,6 +43,16 @@ impl Checker<'_> {
         Ok(())
     }
 
+    /// The value of a table write: constant `c` with `k` set, else a
+    /// register.
+    fn value(&self, pc: usize, k: bool, c: u32) -> Result<(), String> {
+        if k {
+            self.konst(pc, c)
+        } else {
+            self.reg(pc, c)
+        }
+    }
+
     fn upval(&self, pc: usize, u: u32) -> Result<(), String> {
         let n = self.p.upvals.len();
         if u as usize >= n {
@@ -91,29 +101,59 @@ impl Checker<'_> {
                 self.upval(pc, b)?;
                 self.kstr(pc, c)
             }
-            Op::GetTable | Op::SetTable => {
+            Op::GetTable => {
                 self.reg(pc, a)?;
                 self.reg(pc, b)?;
                 self.reg(pc, c)
+            }
+            Op::SetTable => {
+                self.reg(pc, a)?;
+                self.reg(pc, b)?;
+                self.value(pc, i.k(), c)
+            }
+            Op::GetTableK => {
+                self.reg(pc, a)?;
+                self.reg(pc, b)?;
+                self.konst(pc, c)
+            }
+            Op::SetTableK => {
+                self.reg(pc, a)?;
+                self.konst(pc, b)?;
+                self.value(pc, i.k(), c)
             }
             Op::GetField => {
                 self.reg(pc, a)?;
                 self.reg(pc, b)?;
                 self.kstr(pc, c)
             }
+            Op::GetTabUpR => {
+                self.reg(pc, a)?;
+                self.upval(pc, b)?;
+                self.value(pc, i.k(), c)
+            }
+            Op::SetTabUpR => {
+                self.upval(pc, a)?;
+                self.reg(pc, b)?;
+                self.value(pc, i.k(), c)
+            }
+            Op::SetTabUpK => {
+                self.upval(pc, a)?;
+                self.konst(pc, b)?;
+                self.value(pc, i.k(), c)
+            }
             Op::SetTabUp => {
                 self.upval(pc, a)?;
                 self.kstr(pc, b)?;
-                self.reg(pc, c)
+                self.value(pc, i.k(), c)
             }
             Op::SetI => {
                 self.reg(pc, a)?;
-                self.reg(pc, c)
+                self.value(pc, i.k(), c)
             }
             Op::SetField => {
                 self.reg(pc, a)?;
                 self.kstr(pc, b)?;
-                self.reg(pc, c)
+                self.value(pc, i.k(), c)
             }
             Op::SetList => {
                 self.regs(pc, a, b + 1)?;

@@ -38,6 +38,9 @@ fn writes_reg(i: Inst, reg: u32) -> bool {
         | Op::SetUpval
         | Op::SetTabUp
         | Op::SetTable
+        | Op::SetTableK
+        | Op::SetTabUpR
+        | Op::SetTabUpK
         | Op::SetI
         | Op::SetField
         | Op::Close
@@ -228,6 +231,22 @@ pub fn getobjname_in(
             "field" if version <= LuaVersion::Lua51 => Some(("field", unknown())),
             kind => Some((kind, rname(proto, setpc, i.c()))),
         },
+        // a constant key (before 5.4 `GETTABLE` takes it as an `RK`
+        // operand): named when it is a string
+        Op::GetTableK => Some((
+            gxf(proto, setpc, i, false, version),
+            kname(proto, i.c()).unwrap_or_else(unknown),
+        )),
+        // 5.2 / 5.3 `GETTABUP` with an `RK` key that is not a string
+        // constant: named from a string constant key or the register's
+        Op::GetTabUpR => Some((
+            gxf(proto, setpc, i, true, version),
+            if i.k() {
+                kname(proto, i.c()).unwrap_or_else(unknown)
+            } else {
+                rname(proto, setpc, i.c())
+            },
+        )),
         Op::GetI if version <= LuaVersion::Lua53 => Some(("field", unknown())),
         Op::GetI => Some(("field", "integer index".to_string())),
         // A named-vararg table read (`function f(...t) ... t.k ...`) compiles
@@ -260,8 +279,20 @@ pub fn getobjname_in(
 /// metamethod.
 pub(crate) fn instr_event(v: LuaVersion, op: Op) -> Option<&'static str> {
     Some(match op {
-        Op::SelfOp | Op::GetTabUp | Op::GetTable | Op::GetI | Op::GetField => "index",
-        Op::SetTabUp | Op::SetTable | Op::SetI | Op::SetField => "newindex",
+        Op::SelfOp
+        | Op::GetTabUp
+        | Op::GetTabUpR
+        | Op::GetTable
+        | Op::GetTableK
+        | Op::GetI
+        | Op::GetField => "index",
+        Op::SetTabUp
+        | Op::SetTabUpR
+        | Op::SetTabUpK
+        | Op::SetTable
+        | Op::SetTableK
+        | Op::SetI
+        | Op::SetField => "newindex",
         Op::Eq => "eq",
         Op::Add => "add",
         Op::Sub => "sub",

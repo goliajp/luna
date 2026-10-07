@@ -44,6 +44,15 @@ impl Vm {
                     *kptr.add(inst.c() as usize),
                     dst,
                 ),
+                Op::GetTabUpR => (
+                    self.upval_get((*fr).closure, inst.b()),
+                    if inst.k() {
+                        *kptr.add(inst.c() as usize)
+                    } else {
+                        *regs.add(inst.c() as usize)
+                    },
+                    dst,
+                ),
                 op => unreachable!("index_op_miss on {op:?}"),
             }
         };
@@ -100,12 +109,14 @@ impl Vm {
             let (base, cl) = ((*fr).base, (*fr).closure);
             let r = |i: u32| self.stack[(base + i) as usize];
             let k = |i: u32| *cl.consts.add(i as usize);
-            let v = r(inst.c());
+            let v = if inst.k() { k(inst.c()) } else { r(inst.c()) };
             let (t, key) = match inst.op() {
                 Op::SetTable => (r(inst.a()), r(inst.b())),
+                Op::SetTableK => (r(inst.a()), k(inst.b())),
                 Op::SetField => (r(inst.a()), k(inst.b())),
                 Op::SetI => (r(inst.a()), Value::Int(inst.b() as i64)),
-                Op::SetTabUp => (self.upval_get(cl, inst.a()), k(inst.b())),
+                Op::SetTabUp | Op::SetTabUpK => (self.upval_get(cl, inst.a()), k(inst.b())),
+                Op::SetTabUpR => (self.upval_get(cl, inst.a()), r(inst.b())),
                 op => unreachable!("newindex_op_miss on {op:?}"),
             };
             (t, key, v)

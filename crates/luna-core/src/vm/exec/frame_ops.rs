@@ -235,7 +235,14 @@ impl Vm {
         }
         let nc = self.closure_from_proto(proto, ups);
         self.set_r(base, inst.a(), Value::Closure(nc));
-        self.maybe_collect_garbage(base + inst.a() + 1);
+        // 5.1 code puts a closure straight into the variable it is assigned
+        // to, which may lie below other live registers: the whole frame stays
+        let live = if self.version() <= LuaVersion::Lua51 {
+            (cl.proto.max_stack as u32).max(inst.a() + 1)
+        } else {
+            inst.a() + 1
+        };
+        self.maybe_collect_garbage(base + live);
     }
 
     /// A closure of `proto` over `ups`. PUC 5.2 / 5.3 `getcached`: the

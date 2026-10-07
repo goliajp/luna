@@ -39,7 +39,13 @@ impl Compiler<'_> {
         };
         // a comparison also takes a float with a small integer value
         let cmp_imm = imm.or(match *e {
-            Exp::Float(f) if f.fract() == 0.0 && (MIN_SC as f64..=MAX_SC as f64).contains(&f) => {
+            // before 5.4 the immediate stands for a constant, which must keep
+            // the sign of a zero
+            Exp::Float(f)
+                if f.fract() == 0.0
+                    && (MIN_SC as f64..=MAX_SC as f64).contains(&f)
+                    && !(f == 0.0 && f.is_sign_negative() && self.version < LuaVersion::Lua54) =>
+            {
                 Some((f as i32, true))
             }
             _ => None,

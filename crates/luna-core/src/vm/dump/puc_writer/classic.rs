@@ -187,7 +187,7 @@ impl C<'_, '_> {
                 }
             }
             Op::SetTabUp => {
-                let c = self.asm.r(l.c)?;
+                let c = self.store_val(l)?;
                 if self.f.ver == 51 {
                     self.global(l.a)?;
                     self.emit(self.raw_abx(p51::OP_SETGLOBAL as u32, c, l.b))?;
@@ -195,7 +195,8 @@ impl C<'_, '_> {
                     self.emit(self.abc(Kind::SetTabUp, l.a, l.b | RK_BIT, c))?;
                 }
             }
-            Op::GetTable | Op::GetI | Op::GetField => {
+            Op::GetTabUpR | Op::SetTabUpR | Op::SetTabUpK => self.tab_up_rk(l)?,
+            Op::GetTable | Op::GetI | Op::GetField | Op::GetTableK => {
                 let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
                 let key = match l.op {
                     Op::GetTable => self.asm.r(l.c)?,
@@ -204,13 +205,14 @@ impl C<'_, '_> {
                 };
                 self.emit(self.abc(Kind::GetTable, a, b, key))?;
             }
-            Op::SetTable | Op::SetI | Op::SetField => {
-                let (a, c) = (self.asm.r(l.a)?, self.asm.r(l.c)?);
+            Op::SetTable | Op::SetI | Op::SetField | Op::SetTableK => {
+                let a = self.asm.r(l.a)?;
                 let key = match l.op {
                     Op::SetTable => self.asm.r(l.b)?,
                     Op::SetI => self.rk_num(l.b as i64)?,
                     _ => self.rk(l.b)?,
                 };
+                let c = self.store_val(l)?;
                 self.emit(self.abc(Kind::SetTable, a, key, c))?;
             }
             Op::NewTable => {

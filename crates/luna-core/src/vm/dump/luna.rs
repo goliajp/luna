@@ -75,7 +75,7 @@ fn header_and_layout(version: LuaVersion) -> (&'static [u8], &'static [(usize, B
 /// loader would reach this byte expecting the number of upvalues; we use a
 /// non-PUC sentinel so an accidental cross-load (luna chunk into PUC, or
 /// vice-versa) errors cleanly rather than misinterpreting bytes.
-pub(super) const BODY_TAG: &[u8] = b"\x00LunaV2\x00";
+pub(super) const BODY_TAG: &[u8] = b"\x00LunaV3\x00";
 
 fn w_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_le_bytes());

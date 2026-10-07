@@ -13,7 +13,7 @@ mod bytecode_verify;
 mod close_error_gc;
 mod compiler_cond_jumps;
 mod compiler_const_operands;
-mod compiler_index_lhs_snapshot_elision;
+mod compiler_assign_targets;
 mod compiler_jump_target_tracker;
 mod compiler_move_elision;
 mod compiler_stress_limits;

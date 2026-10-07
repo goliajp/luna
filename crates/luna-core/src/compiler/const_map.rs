@@ -83,6 +83,10 @@ pub(crate) enum ConstKey {
     Bytes(u64, u32),
     /// 5.5's key for every zero
     Zero,
+    /// a boolean keys by itself
+    Bool(bool),
+    /// nil, keyed by PUC by the scanner table itself: one entry
+    Nil,
 }
 
 /// Where a constant goes: under a key (reused only when the entry there
@@ -179,6 +183,8 @@ fn plan(v: LuaVersion, c: &Value) -> (Plan, bool) {
         (LuaVersion::Lua55, Value::Int(i)) => (Plan::Key(ConstKey::Int(*i)), true),
         (_, Value::Int(i)) => key(ConstKey::Int(*i)),
         (_, Value::Float(f)) => key(float_key(*f)),
+        (_, Value::Bool(b)) => (Plan::Key(ConstKey::Bool(*b)), true),
+        (_, Value::Nil) => (Plan::Key(ConstKey::Nil), true),
         _ => (Plan::New, false),
     }
 }
