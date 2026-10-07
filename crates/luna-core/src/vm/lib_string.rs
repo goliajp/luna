@@ -47,7 +47,8 @@ pub(crate) fn open_string(vm: &mut Vm) {
         fns.push(("packsize", crate::vm::lib_strpack::s_packsize));
     }
     for (name, f) in fns {
-        let fv = vm.native(f);
+        let b = inlinable_builtin(name.as_bytes()).unwrap_or(crate::runtime::Builtin::None);
+        let fv = vm.builtin(f, &[], b);
         set(vm, t, name, fv);
     }
     // 5.1's LUA_COMPAT_GFIND keeps `gfind` as the very same function as
@@ -123,12 +124,12 @@ pub fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Gc<LuaStr> {
     vm.heap.intern(bytes)
 }
 
-/// The library function `string.<name>` that the trace JIT may run as a
-/// direct call on arguments of known types, if `name` is one.
+/// The library function `string.<name>` is, if it is one the trace JIT
+/// may run as a direct call on arguments of known types.
 #[doc(hidden)]
-pub fn inlinable_native(name: &[u8]) -> Option<crate::runtime::value::NativeFn> {
+pub fn inlinable_builtin(name: &[u8]) -> Option<crate::runtime::Builtin> {
     match name {
-        b"sub" => Some(s_sub),
+        b"sub" => Some(crate::runtime::Builtin::StringSub),
         _ => None,
     }
 }

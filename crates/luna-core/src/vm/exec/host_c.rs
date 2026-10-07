@@ -206,11 +206,11 @@ impl Vm {
         cont: Option<HostContSpec>,
     ) -> Result<Vec<Value>, LuaError> {
         let Some(spec) = cont.filter(|_| self.yield_barrier().is_none()) else {
-            return self.call_noyield(f, args);
+            return self.call_value(f, args);
         };
         let results_at = self.stack.len() as u32;
         self.push_host_cont(spec, results_at);
-        let r = self.call_value(f, args);
+        let r = self.call_value_k(f, args);
         if r.is_err() && self.yielding.is_some() {
             return r;
         }
@@ -258,12 +258,13 @@ impl Vm {
     /// args...)`, without `(f, args...)`; it returns `true, results...` or
     /// `false, error`.
     pub fn host_protected_fn(&mut self, handler: bool) -> Value {
-        let f: crate::runtime::value::NativeFn = if handler {
-            crate::vm::builtins::nat_host_xpcall
+        use crate::runtime::Builtin;
+        use crate::vm::builtins::{nat_host_pcall, nat_host_xpcall};
+        if handler {
+            self.builtin(nat_host_xpcall, &[], Builtin::HostXpcall)
         } else {
-            crate::vm::builtins::nat_host_pcall
-        };
-        self.native(f)
+            self.builtin(nat_host_pcall, &[], Builtin::HostPcall)
+        }
     }
 
     /// Fire the return hook of the running C function now, while its own

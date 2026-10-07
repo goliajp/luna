@@ -59,10 +59,10 @@ impl Vm {
         let mut rec = crate::jit::trace::TraceRecord::start(cl.proto, target, entry_tags, false);
         rec.settings = self.jit.recording_settings();
         if let Some(a) = tfor {
-            // a native iterator's address lets the trace compiler
+            // a native iterator's library tag lets the trace compiler
             // specialise `ipairs` into inline array reads
-            rec.tfor_iter_ptr = match self.stack[base_us + a as usize] {
-                Value::Native(n) => Some(n.f as usize),
+            rec.tfor_iter = match self.stack[base_us + a as usize] {
+                Value::Native(n) => Some(n.builtin),
                 _ => None,
             };
             // the tag of the value the last `TForCall` produced: the inline

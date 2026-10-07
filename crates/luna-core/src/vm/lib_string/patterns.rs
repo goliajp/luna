@@ -287,7 +287,7 @@ fn add_value(
             let mut args = Vec::new();
             push_captures(vm, ms, src, s, e, true, &mut args)?;
             // an unprotected C call: the replacement cannot yield
-            vm.call_noyield(f, &args)?
+            vm.call_value(f, &args)?
                 .first()
                 .copied()
                 .unwrap_or(Value::Nil)

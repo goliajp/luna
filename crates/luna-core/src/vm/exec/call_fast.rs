@@ -194,7 +194,13 @@ impl Vm {
             }
         };
         match result {
-            Ok(n) => Ok(n),
+            Ok(n) => {
+                // a yield starts only where it can unwind to a continuation
+                // (`call_value` refuses one below it), so a native never
+                // returns over one
+                debug_assert!(self.yielding.is_none(), "a native returned over a yield");
+                Ok(n)
+            }
             Err(e) => {
                 // PUC raises with the native still on the stack; remember it
                 // for the handler and traceback of the error (see

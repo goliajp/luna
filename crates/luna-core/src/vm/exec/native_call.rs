@@ -1,12 +1,13 @@
 //! Natives the call path runs itself instead of calling their function:
 //! async natives, and the yieldable `pcall` / `xpcall` / `pairs`. Which
-//! one a closure is was fixed when it was created ([`NativeKind`]).
+//! one a closure is was fixed when it was created ([`NativeKind`], from
+//! the closure's [`crate::runtime::Builtin`]).
 
 use super::*;
 use crate::vm::exec::protected::ProtectedBy;
 
 /// See [`crate::runtime::NativeClosure::kind`].
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum NativeKind {
     Plain,
     Async,
@@ -25,34 +26,34 @@ pub(crate) enum NativeKind {
 }
 
 impl NativeKind {
-    /// The kind of a synchronous native calling `f`.
-    pub(crate) fn of(f: crate::runtime::value::NativeFn) -> NativeKind {
-        use crate::runtime::value::NativeFn;
-        use crate::vm::builtins::{
-            nat_host_pcall, nat_host_pcall_in_c, nat_host_xpcall, nat_host_xpcall_in_c, nat_pairs,
-            nat_pcall, nat_xpcall,
-        };
-        if std::ptr::fn_addr_eq(f, nat_pcall as NativeFn) {
-            NativeKind::Pcall
-        } else if std::ptr::fn_addr_eq(f, nat_xpcall as NativeFn) {
-            NativeKind::Xpcall
-        } else if std::ptr::fn_addr_eq(f, nat_host_xpcall_in_c as NativeFn) {
-            NativeKind::HostXpcallInC
-        } else if std::ptr::fn_addr_eq(f, nat_host_pcall_in_c as NativeFn) {
-            NativeKind::HostPcallInC
-        } else if std::ptr::fn_addr_eq(f, nat_host_pcall as NativeFn) {
-            NativeKind::HostPcall
-        } else if std::ptr::fn_addr_eq(f, nat_host_xpcall as NativeFn) {
-            NativeKind::HostXpcall
-        } else if std::ptr::fn_addr_eq(f, nat_pairs as NativeFn) {
-            NativeKind::Pairs
-        } else {
-            NativeKind::Plain
+    /// The kind of a synchronous native that is `builtin`.
+    pub(crate) fn of(builtin: crate::runtime::Builtin) -> NativeKind {
+        use crate::runtime::Builtin as B;
+        match builtin {
+            B::Pcall => NativeKind::Pcall,
+            B::Xpcall => NativeKind::Xpcall,
+            B::HostXpcall => NativeKind::HostXpcall,
+            B::HostXpcallInC => NativeKind::HostXpcallInC,
+            B::HostPcallInC => NativeKind::HostPcallInC,
+            B::HostPcall => NativeKind::HostPcall,
+            B::Pairs => NativeKind::Pairs,
+            _ => NativeKind::Plain,
         }
     }
 }
 
 impl Vm {
+    /// A native that is the library function `builtin`.
+    #[doc(hidden)]
+    pub fn builtin(
+        &mut self,
+        f: crate::runtime::value::NativeFn,
+        upvals: &[Value],
+        builtin: crate::runtime::Builtin,
+    ) -> Value {
+        Value::Native(self.heap.new_builtin(f, upvals, builtin))
+    }
+
     /// `stack[func_slot]` is `nc`, a native whose kind is not
     /// [`NativeKind::Plain`]. `None` when it is to be called like any other
     /// native after all (`pairs` without a `__pairs` to honour).
@@ -184,3 +185,7 @@ impl Vm {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "native_call_tests.rs"]
+mod tests;

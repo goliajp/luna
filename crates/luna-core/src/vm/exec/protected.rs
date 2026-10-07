@@ -234,20 +234,4 @@ impl Vm {
         self.stack[slot as usize + 1..end].copy_from_slice(args);
         slot
     }
-
-    /// Invoke `f` with the running thread marked non-yieldable for the duration
-    /// (PUC `luaD_callnoyield`): a `coroutine.yield` inside `f` hits the C-call
-    /// boundary and errors instead of suspending. Used by library callbacks
-    /// (sort comparator, gsub replacement) that run via synchronous Rust
-    /// recursion and so could not be re-entered after a yield.
-    pub(crate) fn call_noyield(
-        &mut self,
-        f: Value,
-        args: &[Value],
-    ) -> Result<Vec<Value>, LuaError> {
-        self.nny += 1;
-        let r = self.call_value(f, args);
-        self.nny -= 1;
-        r
-    }
 }

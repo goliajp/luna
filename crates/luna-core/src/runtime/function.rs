@@ -414,17 +414,16 @@ pub struct NativeClosure {
     pub f: crate::runtime::value::NativeFn,
     /// Captured upvalues, visible inside `f` via the Vm's call API.
     pub upvals: crate::runtime::mem::LSlice<Value>,
-    /// Marker bit for async natives. When `true`,
-    /// `f` is actually an `crate::vm::async_drive::AsyncNativeFn`
-    /// (same pointer width, transmuted at the call site) returning a
-    /// `Pin<Box<dyn Future>>`. The dispatcher's native-call path checks
-    /// this bit and routes through the cooperative-yield mechanism
-    /// instead of invoking `f` synchronously. Default `false` (sync
-    /// native) for every other construction site.
+    /// Marker bit for async natives: `f` is then an
+    /// `crate::vm::async_drive::AsyncNativeFn` (same pointer width,
+    /// transmuted at the call site), which the native-call path drives
+    /// through the cooperative-yield mechanism instead of calling it.
     pub is_async: bool,
-    /// Which natives the call path runs itself; fixed at creation, so a
-    /// call tests one byte instead of comparing `f` with each of them.
+    /// Which natives the call path runs itself, from `builtin`; a call
+    /// tests this one byte.
     pub(crate) kind: crate::vm::exec::native_call::NativeKind,
+    /// Which library function this is, given when it was created.
+    pub builtin: crate::runtime::Builtin,
 }
 
 #[path = "function_trace.rs"]
