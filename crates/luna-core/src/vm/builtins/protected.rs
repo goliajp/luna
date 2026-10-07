@@ -11,18 +11,16 @@ pub(crate) fn nat_pcall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
 /// A host's protected call with no message handler, made from inside a C
 /// function of the host's, which is a level of the stack
 /// (`Vm::call_value_in_c`): lua.c's `l_print` calling `print` from
-/// `pmain`. Natives are told apart by address, so the body must not be one
-/// the compiler can fold into `nat_pcall`'s.
+/// `pmain`.
 pub(crate) fn nat_host_pcall_in_c(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    pcall_native(vm, fs, nargs, std::hint::black_box(1))
+    pcall_native(vm, fs, nargs, 1)
 }
 
 /// A host's protected call with no message handler (the C API's
 /// `lua_pcallk` with no `msgh`), which, like `nat_host_xpcall`, is not a
-/// level of the stack. Natives are told apart by address, so the body must
-/// not be one the compiler can fold into `nat_pcall`'s.
+/// level of the stack.
 pub(crate) fn nat_host_pcall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    pcall_native(vm, fs, nargs, std::hint::black_box(2) - 1)
+    pcall_native(vm, fs, nargs, 1)
 }
 
 /// `first`: where the arguments for the protected function start.
@@ -37,6 +35,7 @@ fn pcall_native(vm: &mut Vm, fs: u32, nargs: u32, first: u32) -> Result<u32, Lua
             out.extend(results);
             Ok(vm.nat_return(fs, &out))
         }
+        Err(e) if vm.control_in_flight() => Err(e),
         Err(e) => Ok(vm.nat_return(fs, &[Value::Bool(false), e.0])),
     }
 }
@@ -58,11 +57,9 @@ pub(crate) fn nat_host_xpcall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, L
 }
 
 /// [`nat_host_xpcall`] made from inside a C function of the host's, which
-/// is a level of the stack (`Vm::call_value_with_handler_in_c`). Natives
-/// are told apart by address, so the body must not be one the compiler can
-/// fold into `nat_host_xpcall`'s.
+/// is a level of the stack (`Vm::call_value_with_handler_in_c`).
 pub(crate) fn nat_host_xpcall_in_c(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    xpcall_native(vm, fs, nargs, true, std::hint::black_box(true))
+    xpcall_native(vm, fs, nargs, true, true)
 }
 
 /// `host`: a host's protected call, which takes any handler value, as
@@ -92,6 +89,7 @@ fn xpcall_native(
             out.extend(results);
             Ok(vm.nat_return(fs, &out))
         }
+        Err(e) if vm.control_in_flight() => Err(e),
         Err(e) => {
             let m = handle_error(vm, h, e.0);
             Ok(vm.nat_return(fs, &[Value::Bool(false), m]))

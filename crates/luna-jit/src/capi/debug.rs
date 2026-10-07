@@ -13,9 +13,8 @@ pub(super) use ar::{ArBuf, CStrings, DebugPtr};
 
 /// The C API's function behind `f`, if it is one.
 pub(super) fn c_api_fn(f: Value) -> Option<Gc<NativeClosure>> {
-    let trampoline: luna_core::runtime::value::NativeFn = ccall::capi_trampoline;
     match f {
-        Value::Native(nc) if std::ptr::fn_addr_eq(nc.f, trampoline) => Some(nc),
+        Value::Native(nc) if nc.builtin == luna_core::runtime::Builtin::CFunction => Some(nc),
         _ => None,
     }
 }

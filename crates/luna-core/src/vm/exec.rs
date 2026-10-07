@@ -43,6 +43,7 @@ mod gc;
 mod hooks;
 mod host_api;
 pub mod host_c;
+mod host_pcall;
 mod host_rng;
 mod index;
 mod index_fast;

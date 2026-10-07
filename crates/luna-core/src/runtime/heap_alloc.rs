@@ -1,7 +1,9 @@
 //! Object constructors and string interning.
 
 use super::*;
+use crate::runtime::Builtin;
 use crate::runtime::mem::{LSlice, LVec, oom_abort};
+use crate::runtime::value::NativeFn;
 use std::alloc::Layout;
 
 impl Heap {
@@ -239,19 +241,21 @@ impl Heap {
 
     /// Allocate a [`NativeClosure`] wrapping host function `f` with the
     /// given captured upvalues.
-    pub fn new_native(
-        &mut self,
-        f: crate::runtime::value::NativeFn,
-        upvals: Box<[Value]>,
-    ) -> Gc<NativeClosure> {
-        self.new_native_from(f, &upvals)
+    pub fn new_native(&mut self, f: NativeFn, upvals: Box<[Value]>) -> Gc<NativeClosure> {
+        self.new_builtin(f, &upvals, Builtin::None)
     }
 
     /// [`Heap::new_native`] copying the upvalues from a slice.
-    pub fn new_native_from(
+    pub fn new_native_from(&mut self, f: NativeFn, upvals: &[Value]) -> Gc<NativeClosure> {
+        self.new_builtin(f, upvals, Builtin::None)
+    }
+
+    /// A native that is the library function `builtin`.
+    pub(crate) fn new_builtin(
         &mut self,
-        f: crate::runtime::value::NativeFn,
+        f: NativeFn,
         upvals: &[Value],
+        builtin: Builtin,
     ) -> Gc<NativeClosure> {
         let fix = self.fix_natives && upvals.is_empty();
         let hdr = GcHeader::native(upvals);
@@ -261,7 +265,8 @@ impl Heap {
             f,
             upvals,
             is_async: false,
-            kind: crate::vm::exec::native_call::NativeKind::of(f),
+            kind: crate::vm::exec::native_call::NativeKind::of(builtin),
+            builtin,
         });
         if fix {
             // SAFETY: `adopt` just linked `g` at the head of `all`
@@ -317,6 +322,7 @@ impl Heap {
             upvals,
             is_async: true,
             kind: crate::vm::exec::native_call::NativeKind::Async,
+            builtin: Builtin::None,
         })
     }
 
