@@ -3,12 +3,22 @@
 //! trips while the parser is inside the offending function.
 
 use super::*;
+use crate::runtime::mem::{LMap, LVec, MemRef};
 
-#[derive(Default)]
 pub(super) struct FnUvSlot {
-    pub(super) locals: Vec<Sym>,
-    pub(super) upvalues: std::collections::HashSet<Sym>,
+    pub(super) locals: LVec<Sym>,
+    pub(super) upvalues: LMap<Sym, ()>,
     pub(super) line_defined: u32,
+}
+
+impl FnUvSlot {
+    pub(super) fn new(mem: MemRef, line_defined: u32) -> FnUvSlot {
+        FnUvSlot {
+            locals: LVec::new(mem),
+            upvalues: LMap::new(mem),
+            line_defined,
+        }
+    }
 }
 
 impl Parser<'_> {
@@ -22,7 +32,7 @@ impl Parser<'_> {
                 .last_mut()
                 .expect("fn ctx")
                 .locals
-                .push(name);
+                .push_or_abort(name);
         }
     }
 
@@ -46,10 +56,9 @@ impl Parser<'_> {
 
     pub(super) fn enter_fn_51(&mut self, line_defined: u32) {
         if self.track_uv_51() {
-            self.upval_chain_51.push(FnUvSlot {
-                line_defined,
-                ..Default::default()
-            });
+            let mem = self.upval_chain_51.mem();
+            self.upval_chain_51
+                .push_or_abort(FnUvSlot::new(mem, line_defined));
         }
     }
 
@@ -84,7 +93,10 @@ impl Parser<'_> {
             return Ok(());
         }
         for k in (owner_idx + 1)..n {
-            let inserted = self.upval_chain_51[k].upvalues.insert(name);
+            let inserted = self.upval_chain_51[k]
+                .upvalues
+                .insert_or_abort(name, ())
+                .is_none();
             if inserted && self.upval_chain_51[k].upvalues.len() > MAXUPVAL {
                 let line_defined = self.upval_chain_51[k].line_defined;
                 let where_ = if k == 0 {

@@ -21,6 +21,10 @@
 //! them: `\n` is written as `\r\n`, and `\r\n` read as `\n`.
 
 use std::io::{IsTerminal, Write};
+
+use crate::vm::lib_io::msvc::Std;
+
+mod crt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -68,18 +72,89 @@ pub(crate) fn text_mode() -> bool {
     cfg!(windows) && C_MODE.load(Ordering::Relaxed)
 }
 
-fn text(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-    if text_mode() {
-        crate::vm::lib_io::to_crlf(bytes)
-    } else {
-        std::borrow::Cow::Borrowed(bytes)
-    }
+/// OS text (a command-line argument, an environment value, a path) as the
+/// bytes a C program gets: the bytes themselves on Unix, through the ANSI
+/// code page on Windows, where `lua.exe`'s narrow `argv` and `getenv` come
+/// from `WideCharToMultiByte`.
+pub fn os_bytes(s: &std::ffi::OsStr) -> Vec<u8> {
+    crate::vm::lib_io::os_bytes(s)
 }
 
-/// `fwrite(bytes, 1, n, stderr)`, in text mode where standard output is
-/// (see [`use_c_stdout`]).
+/// `fwrite(bytes, 1, n, stderr)`, through the MSVC C library's `stderr`
+/// where standard output goes through its `stdout` (see [`use_c_stdout`]).
 pub fn write_stderr(bytes: &[u8]) -> std::io::Result<()> {
-    std::io::stderr().write_all(&text(bytes))
+    if text_mode() {
+        return crt::write(Std::Err, bytes);
+    }
+    std::io::stderr().write_all(bytes)
+}
+
+/// `fflush(stderr)`, which only a buffer `setvbuf` gave it can need.
+pub fn flush_stderr() -> std::io::Result<()> {
+    if text_mode() {
+        return crt::flush(Std::Err);
+    }
+    std::io::stderr().flush()
+}
+
+/// `fseek` + `ftell` on the MSVC C library's `stdout` or `stderr`: the
+/// position, or the `errno` of a failed `fseek`.
+pub(crate) fn seek_crt(which: Std, op: u8, offset: i64) -> Result<i64, i32> {
+    crt::seek(which, op, offset)
+}
+
+/// `setvbuf` on the MSVC C library's `stdout` or `stderr` (`mode`: 0 full,
+/// 1 line, 2 none).
+pub(crate) fn setvbuf_crt(which: Std, mode: u8, size: usize) {
+    crt::setvbuf(which, mode, size);
+}
+
+/// An owned duplicate of the descriptor (handle) of standard output.
+fn dup_stdout() -> Option<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsFd;
+        std::io::stdout()
+            .as_fd()
+            .try_clone_to_owned()
+            .ok()
+            .map(Into::into)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsHandle;
+        std::io::stdout()
+            .as_handle()
+            .try_clone_to_owned()
+            .ok()
+            .map(Into::into)
+    }
+    #[cfg(not(any(unix, windows)))]
+    None
+}
+
+/// The same for standard error.
+fn dup_stderr() -> Option<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsFd;
+        std::io::stderr()
+            .as_fd()
+            .try_clone_to_owned()
+            .ok()
+            .map(Into::into)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsHandle;
+        std::io::stderr()
+            .as_handle()
+            .try_clone_to_owned()
+            .ok()
+            .map(Into::into)
+    }
+    #[cfg(not(any(unix, windows)))]
+    None
 }
 
 /// Whether [`use_c_stdout`] is in effect.
@@ -98,6 +173,9 @@ pub fn flush_stdout() -> std::io::Result<()> {
     if let Some(h) = HOST.get() {
         return host_result((h.flush)());
     }
+    if text_mode() {
+        return crt::flush(Std::Out);
+    }
     if c_mode() {
         lock().flush_buf()
     } else {
@@ -113,8 +191,11 @@ pub(crate) fn write_line_flushed(bytes: &[u8]) {
         (h.flush)();
         return;
     }
+    if text_mode() {
+        let _ = crt::write(Std::Out, bytes).and_then(|()| crt::flush(Std::Out));
+        return;
+    }
     if c_mode() {
-        let bytes = &*text(bytes);
         let mut f = lock();
         if f.allocated && f.buf.is_empty() && bytes.len() <= f.cap {
             // what copying it into the empty buffer and flushing writes
@@ -131,8 +212,11 @@ pub(crate) fn try_write_stdout(bytes: &[u8]) -> std::io::Result<()> {
     if let Some(h) = HOST.get() {
         return host_result((h.write)(bytes));
     }
+    if text_mode() {
+        return crt::write(Std::Out, bytes);
+    }
     if c_mode() {
-        lock().xsputn(&text(bytes))
+        lock().xsputn(bytes)
     } else {
         std::io::stdout().write_all(bytes)
     }
@@ -152,6 +236,10 @@ pub(crate) fn setvbuf_stdout(mode: u8) {
 /// glibc refilling a line buffered or unbuffered input stream (stdin on a
 /// terminal) first writes out `stdout` if that is line buffered.
 pub(crate) fn before_stdin_read() {
+    // the MSVC C library writes nothing out before a read
+    if text_mode() {
+        return;
+    }
     if let Some(h) = HOST.get() {
         // the host's C library flushes its line buffered stdout before it
         // reads a terminal; luna reads stdin itself

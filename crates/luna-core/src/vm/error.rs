@@ -48,6 +48,15 @@ impl LuaError {
     }
 }
 
+/// A failed allocation as a Lua error: PUC's memory error, whose object is
+/// the "not enough memory" string made with the heap.
+impl From<crate::runtime::mem::Oom> for LuaError {
+    #[cold]
+    fn from(o: crate::runtime::mem::Oom) -> LuaError {
+        LuaError(Value::Str(o.0.ctx().raise_oom()))
+    }
+}
+
 impl fmt::Display for LuaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {

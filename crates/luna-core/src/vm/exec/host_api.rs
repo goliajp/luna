@@ -1,49 +1,10 @@
 //! The embedder-facing surface: globals, natives, loading and calling
-//! chunks, the random generator and the macro hooks.
+//! chunks, and the macro hooks.
 
 use super::*;
+use crate::native_stack::{HANDLER_RESERVE, RESERVE, is_low};
 
 impl Vm {
-    /// xoshiro256** next.
-    pub(crate) fn rng_next(&mut self) -> u64 {
-        let s = &mut self.rng;
-        let result = s[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
-        let t = s[1] << 17;
-        s[2] ^= s[0];
-        s[3] ^= s[1];
-        s[1] ^= s[2];
-        s[0] ^= s[3];
-        s[2] ^= t;
-        s[3] = s[3].rotate_left(45);
-        result
-    }
-
-    /// Seed the RNG via splitmix64 expansion (PUC randseed shape).
-    pub(crate) fn rng_seed(&mut self, a: u64, b: u64) {
-        // PUC setseed: state = [n1, 0xff, n2, 0] (0xff avoids an all-zero
-        // state), then 16 discards to spread the seed. Matches PUC's exact
-        // sequence so the low-level conformance test passes.
-        self.rng = [a, 0xff, b, 0];
-        for _ in 0..16 {
-            self.rng_next();
-        }
-    }
-
-    /// Wall-clock since VM creation (os.clock approximation).
-    pub(crate) fn uptime(&self) -> std::time::Duration {
-        self.started.elapsed()
-    }
-
-    /// Entropy for math.randomseed() with no arguments.
-    pub(crate) fn rng_auto_seed(&mut self) -> (i64, i64) {
-        let t = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-        let addr = &self.rng as *const _ as u64;
-        (t as i64, addr as i64)
-    }
-
     /// Allocate a native function object (no upvalues): builtin registration.
     pub fn native(&mut self, f: crate::runtime::value::NativeFn) -> Value {
         Value::Native(self.heap.new_native(f, Box::new([])))
@@ -119,8 +80,19 @@ impl Vm {
         name: &str,
         v: V,
     ) -> Result<(), LuaError> {
+        self.set_global_bytes(name.as_bytes(), v)
+    }
+
+    /// [`Vm::set_global`] for a name that is not UTF-8: Lua strings are
+    /// bytes, and a program's command line or environment may hand over
+    /// any.
+    pub fn set_global_bytes<V: crate::vm::IntoValue>(
+        &mut self,
+        name: &[u8],
+        v: V,
+    ) -> Result<(), LuaError> {
         let v = v.into_value(self);
-        let k = Value::Str(self.heap.intern(name.as_bytes()));
+        let k = Value::Str(self.heap.intern(name));
         // SAFETY: `self.globals` is a root of this Vm; the borrow lives for the one `set`, which touches only the heap and the table and does not collect, and `&mut self` rules out another reference into it
         if let Err(e) = unsafe { self.globals.as_mut() }.set(&mut self.heap, k, v) {
             return Err(self.table_error(e));
@@ -410,14 +382,18 @@ impl Vm {
         // mmap'd native code. The lookup is one Cell::get + one match —
         // the slow path (compile attempt on first reach) is paid once per
         // Proto.
-        if args.is_empty()
-            && let Value::Closure(cl) = f
-            && let Some(vs) = self.try_jit_call(cl)
-        {
-            self.public_call_depth -= 1;
-            return Ok(vs);
-        }
-        let r = self.call_value_impl(f, args, true);
+        let r = match f {
+            Value::Closure(cl) if args.is_empty() => self.try_jit_call(cl),
+            _ => None,
+        };
+        let r = match r {
+            Some(Ok(vs)) => {
+                self.public_call_depth -= 1;
+                return Ok(vs);
+            }
+            Some(Err(e)) => Err(e),
+            None => self.call_value_impl(f, args, true, None),
+        };
         if let Err(e) = r
             && self.public_call_depth == 1
             && self.current.is_none()
@@ -432,30 +408,49 @@ impl Vm {
     /// handler runs *within* the closing Lua frame's activation (PUC luaF_close
     /// invokes it inside that ci), so it is called with `from_c = false`: its
     /// debug parent is the closing function, not a synthetic C level.
-    pub(super) fn call_value_impl(
+    /// `at`: the slot to call at, PUC's `L->top` where a message handler
+    /// runs (see `raise_top`); the slots above it belong to the frame
+    /// that raised, dead past that top as PUC's are. Else the stack's end.
+    pub(crate) fn call_value_impl(
         &mut self,
         f: Value,
         args: &[Value],
         from_c: bool,
+        at: Option<u32>,
     ) -> Result<Vec<Value>, LuaError> {
-        if self.c_depth >= MAX_C_DEPTH {
-            // PUC `luaE_checkcstack`: at the limit the call fails; an xpcall
-            // handler running on the error gets a tenth more room before its
-            // own failure is "error in error handling"
+        // the native stack too (a first level is no nesting: unchecked);
+        // a message handler running on the error gets half the reserve
+        if self.g.nccalls > 0 && is_low(RESERVE) {
             if self.msgh_depth == 0 {
                 return Err(self.runerror("C stack overflow"));
             }
-            if self.c_depth >= MAX_C_DEPTH / 10 * 11 {
+            if is_low(HANDLER_RESERVE) {
                 return Err(LuaError(self.errerr()));
             }
         }
-        self.c_depth += 1;
-        let func_slot = self.stack.len() as u32;
-        self.stack.push_or_abort(f);
-        self.stack.extend_from_slice_or_abort(args);
-        self.top = self.stack.len() as u32;
+        self.check_c_level(true)?;
+        self.g.nccalls += 1;
+        let len = self.stack.len();
+        let func_slot = match at {
+            None => {
+                self.stack.push_or_abort(f);
+                self.stack.extend_from_slice_or_abort(args);
+                self.top = self.stack.len() as u32;
+                len as u32
+            }
+            Some(slot) => {
+                self.place_call(slot, f, args);
+                self.top = self.stack.len().max(slot as usize + 1 + args.len()) as u32;
+                slot
+            }
+        };
         let r = self.call_at(func_slot, args.len() as u32, from_c);
-        self.c_depth -= 1;
+        self.g.nccalls -= 1;
+        // a call placed inside a frame's window gives the window back: the
+        // frames below run on when the error is caught
+        if at.is_some() && self.stack.len() < len {
+            self.grow_stack_or_abort(len);
+        }
         if r.is_err()
             && self.yielding.is_none()
             && self.terminating.is_none()
@@ -474,22 +469,6 @@ impl Vm {
             self.stack.truncate(func_slot as usize);
             self.top = func_slot;
         }
-        r
-    }
-
-    /// Invoke `f` with the running thread marked non-yieldable for the duration
-    /// (PUC `luaD_callnoyield`): a `coroutine.yield` inside `f` hits the C-call
-    /// boundary and errors instead of suspending. Used by library callbacks
-    /// (sort comparator, gsub replacement) that run via synchronous Rust
-    /// recursion and so could not be re-entered after a yield.
-    pub(crate) fn call_noyield(
-        &mut self,
-        f: Value,
-        args: &[Value],
-    ) -> Result<Vec<Value>, LuaError> {
-        self.nny += 1;
-        let r = self.call_value(f, args);
-        self.nny -= 1;
         r
     }
 }

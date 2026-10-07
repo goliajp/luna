@@ -16,38 +16,102 @@ pub(super) fn posix_error(code: i32) -> std::io::Error {
     }
 }
 
-#[cfg(windows)]
+/// An errno spelled as the MSVC C runtime's `strerror` spells it.
 #[derive(Debug)]
 struct PosixErrno(i32);
 
-#[cfg(windows)]
 impl std::fmt::Display for PosixErrno {
-    // the MSVC C runtime's strerror texts for the codes luna raises
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self.0 {
-            EBADF => "Bad file descriptor",
-            ENOMEM => "Not enough space",
-            EINVAL => "Invalid argument",
-            ESPIPE => "Invalid seek",
-            _ => "Unknown error",
-        })
+        const TEXT: [&str; 43] = [
+            "No error",
+            "Operation not permitted",
+            "No such file or directory",
+            "No such process",
+            "Interrupted function call",
+            "Input/output error",
+            "No such device or address",
+            "Arg list too long",
+            "Exec format error",
+            "Bad file descriptor",
+            "No child processes",
+            "Resource temporarily unavailable",
+            "Not enough space",
+            "Permission denied",
+            "Bad address",
+            "Unknown error",
+            "Resource device",
+            "File exists",
+            "Improper link",
+            "No such device",
+            "Not a directory",
+            "Is a directory",
+            "Invalid argument",
+            "Too many open files in system",
+            "Too many open files",
+            "Inappropriate I/O control operation",
+            "Unknown error",
+            "File too large",
+            "No space left on device",
+            "Invalid seek",
+            "Read-only file system",
+            "Too many links",
+            "Broken pipe",
+            "Domain error",
+            "Result too large",
+            "Unknown error",
+            "Resource deadlock avoided",
+            "Unknown error",
+            "Filename too long",
+            "No locks available",
+            "Function not implemented",
+            "Directory not empty",
+            "Illegal byte sequence",
+        ];
+        f.write_str(
+            usize::try_from(self.0)
+                .ok()
+                .and_then(|i| TEXT.get(i))
+                .unwrap_or(&"Unknown error"),
+        )
     }
 }
 
-#[cfg(windows)]
 impl std::error::Error for PosixErrno {}
 
-/// The errno of an error, as `luaL_fileresult` returns it.
+/// The error a C call of the MSVC C library leaves in `errno`, with that
+/// library's text, on every platform (for the streams of `Userdata::crt`).
+pub(super) fn crt_error(code: i32) -> std::io::Error {
+    std::io::Error::other(PosixErrno(code))
+}
+
+/// The errno of an error, as `luaL_fileresult` returns it. On Windows an
+/// OS error is a Win32 code, which the C library maps to an errno.
 fn errno(e: &std::io::Error) -> Option<i32> {
-    #[cfg(windows)]
     if let Some(p) = e.get_ref().and_then(|r| r.downcast_ref::<PosixErrno>()) {
         return Some(p.0);
     }
-    e.raw_os_error()
+    let code = e.raw_os_error();
+    if cfg!(windows) {
+        return code.map(|c| crate::cerrno::errno_of_win32(c as u32));
+    }
+    code
 }
 
-/// C `strerror` text of an OS error (std appends " (os error N)").
+/// Set the process's `errno` to what the failed C call behind `e` left.
+pub(crate) fn note_failure(e: &std::io::Error) {
+    if let Some(c) = errno(e) {
+        crate::cerrno::set(c);
+    }
+}
+
+/// C `strerror` text of an OS error (std appends " (os error N)"); on
+/// Windows the C library's text for the errno the error maps to.
 pub(crate) fn strerror(e: &std::io::Error) -> String {
+    if cfg!(windows)
+        && let Some(c) = e.raw_os_error()
+    {
+        return PosixErrno(crate::cerrno::errno_of_win32(c as u32)).to_string();
+    }
     let s = e.to_string();
     match e.raw_os_error() {
         Some(code) => s
@@ -69,15 +133,29 @@ pub(super) fn file_fail_values(
     fname: Option<&[u8]>,
     e: &std::io::Error,
 ) -> [Value; 3] {
+    note_failure(e);
     let mut msg = Vec::new();
     if let Some(n) = fname {
         msg.extend_from_slice(c_str(n));
         msg.extend_from_slice(b": ");
     }
-    msg.extend_from_slice(strerror(e).as_bytes());
     let code = errno(e).map_or(0, i64::from);
+    if errno(e) == Some(0) && vm.version() >= LuaVersion::Lua54 {
+        // 5.4's luaL_fileresult for an errno of 0
+        msg.extend_from_slice(b"(no extra info)");
+    } else {
+        msg.extend_from_slice(strerror(e).as_bytes());
+    }
     let m = Value::Str(vm.heap.intern(&msg));
     [Value::Nil, m, Value::Int(code)]
+}
+
+/// `errno = 0`, which 5.4 and later do before the C calls of most io and
+/// os functions.
+pub(crate) fn reset_errno(vm: &Vm) {
+    if vm.version() >= LuaVersion::Lua54 {
+        crate::cerrno::set(0);
+    }
 }
 
 /// `luaL_fileresult` for success.
@@ -136,15 +214,38 @@ pub(crate) fn c_str(b: &[u8]) -> &[u8] {
         .expect("split yields a first piece")
 }
 
-/// A C file name (bytes up to the first NUL) as an OS path.
+/// A C file name (bytes up to the first NUL) as an OS path: the bytes
+/// themselves on Unix, through the ANSI code page on Windows.
 pub(crate) fn os_path(b: &[u8]) -> std::path::PathBuf {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
         std::ffi::OsStr::from_bytes(c_str(b)).into()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        super::winfs::os_path(b)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         String::from_utf8_lossy(c_str(b)).into_owned().into()
+    }
+}
+
+/// OS text (a path, an environment value) as the bytes a C program gets:
+/// the bytes themselves on Unix, through the ANSI code page on Windows.
+pub fn os_bytes(s: &std::ffi::OsStr) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        s.as_bytes().to_vec()
+    }
+    #[cfg(windows)]
+    {
+        super::winfs::narrow(s)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        s.to_string_lossy().into_owned().into_bytes()
     }
 }

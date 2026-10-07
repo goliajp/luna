@@ -8,7 +8,7 @@
 //! older dialect may have to extend (its `LOADK` replaces luna's
 //! immediates).
 
-use crate::compiler::const_map::{ConstMap, add_const};
+use crate::compiler::const_map::{DumpConstMap, add_const};
 use crate::runtime::Value;
 use crate::runtime::function::Proto;
 use crate::version::LuaVersion;
@@ -62,7 +62,7 @@ pub(super) struct Asm<'p> {
     fixups: Vec<Fixup>,
     pub consts: Vec<Value>,
     /// the dialect and its scanner table over `consts` (see `const_map`)
-    pub kmap: (LuaVersion, ConstMap),
+    pub kmap: (LuaVersion, DumpConstMap),
     /// luna pcs some jump, loop edge or skip lands on
     targets: Vec<bool>,
     pc: usize,
@@ -100,7 +100,7 @@ impl<'p> Asm<'p> {
             first: vec![None; p.code.len()],
             fixups: Vec::new(),
             consts: p.consts.to_vec(),
-            kmap: (LuaVersion::Lua54, ConstMap::default()),
+            kmap: (LuaVersion::Lua54, DumpConstMap::default()),
             targets: jump_targets(p),
             pc: 0,
             line: 0,

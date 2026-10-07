@@ -3,8 +3,23 @@
 
 use super::*;
 use crate::runtime::mem::LVec;
+use crate::vm::exec::state::CallGuards;
 
 impl Vm {
+    /// The host runs its calls from inside a C function of its own that
+    /// holds `frames` frames and `slots` stack slots below everything else,
+    /// as `lua.c`'s `pmain` does: `lua_cpcall` (5.1) or `lua_pcall` with
+    /// two arguments. Call once, before anything runs: the same depth then
+    /// ends a recursion in both.
+    #[doc(hidden)]
+    pub fn host_entry_layout(&mut self, frames: u32, slots: u32) {
+        self.g.host_frames += frames;
+        for _ in 0..slots {
+            self.stack.push_or_abort(Value::Nil);
+        }
+        self.top = self.stack.len() as u32;
+    }
+
     /// `lua_close` from inside a running script (`os.exit(code, true)`):
     /// close the main thread's pending to-be-closed variables, then run every
     /// finalizer. Both run protected, so their errors are dropped as PUC's
@@ -28,10 +43,11 @@ impl Vm {
         heap.no_ephemeron = version <= LuaVersion::Lua51;
         heap.signed_zero_keys = version <= LuaVersion::Lua52;
         heap.table_dialect = crate::runtime::table::Dialect::of(version);
-        // strings made before this would sit in the string table by the
-        // other hash
-        debug_assert!(heap.strings_is_empty());
+        // the strings the heap made before it knew the dialect (its fixed
+        // memory error message) move to the dialect's hash
         heap.hash51 = version == LuaVersion::Lua51;
+        let seed = heap.seed();
+        heap.rehash_strings(seed);
         // PUC 5.3 needs two GC cycles to finalize a table caught in a
         // coroutine reference cycle (gc.lua :502); 5.4+ rewrote the GC and
         // finalize in a single cycle (5.4/5.5 gc.lua :544 assert exactly one).
@@ -52,16 +68,35 @@ impl Vm {
             globals,
             type_mt: [None; 7],
             mm_names,
-            parse_scratch: Default::default(),
-            compile_scratch: Default::default(),
-            c_depth: 0,
-            pcall_depth: 0,
+            parse_scratch: crate::frontend::parser::ParseScratch::new(mem_owner.clone()),
+            compile_scratch: crate::compiler::CompileScratch::new(mem),
+            g: CallGuards {
+                nccalls: 0,
+                stale_frames: 0,
+                frame_size: if version == LuaVersion::Lua51 {
+                    BASIC_FRAME_SIZE_51
+                } else {
+                    u32::MAX
+                },
+                lua_stack_limit: lua_stack_limit(version),
+                frames_native: 0,
+                host_frames: 0,
+                meta_conts: 0,
+            },
             nny: 0,
             msgh_depth: 0,
             terminating: None,
             rng: [0; 4],
             started: std::time::Instant::now(),
             version,
+            frame_cap: if version == LuaVersion::Lua51 {
+                MAX_CALLS_51
+            } else {
+                u32::MAX
+            },
+            c_overflow_err: None,
+            overflow_top: None,
+            stack_extra: false,
             closing_err: None,
             current: None,
             main_ctx: None,
@@ -89,10 +124,11 @@ impl Vm {
             host_warn: None,
             host_light: std::collections::HashMap::new(),
             warn_state: WarnState::Off,
-            warn_buf: Vec::new(),
+            warn_buf: LVec::new(mem),
             warn_cont: false,
-            warn_log: Vec::new(),
+            warn_log: LVec::new(mem),
             instr_budget: None,
+            limited: false,
             bytecode_loading: true,
             puc_bytecode_loading: false,
             loader_input_budget: Vm::DEFAULT_LOADER_INPUT_BUDGET,
@@ -108,13 +144,13 @@ impl Vm {
             trap: true,
             pending_tailcalls: 0,
             pending_ccmt: 0,
-            errored_natives: Vec::new(),
+            errored_natives: LVec::new(mem),
             msgh_floor: 0,
             msgh_running: None,
             msgh_runs: 0,
             errerr_raised: 0,
+            errerr_in_flight: None,
             gcmm_raised: 0,
-            mem_raised: 0,
             native_ret_hooked: false,
             tail_hook_fired: false,
             msgh_applied: None,
@@ -128,7 +164,7 @@ impl Vm {
             hook_resumed: false,
             error_traceback: None,
             public_call_depth: 0,
-            running_natives: Vec::new(),
+            running_natives: LVec::new(mem),
             natives_base: 0,
             // JIT-specific state lives in the `JitState`
             // sidecar. The `luna` crate's `Vm::new_minimal_with_jit` /
@@ -136,7 +172,7 @@ impl Vm {
             // `CraneliftBackend` for callers that want JIT acceleration.
             jit: crate::vm::jit_state::JitState::with_null_backend(),
             // host roots ticket pool for the `Lua` facade
-            host_roots: Vec::new(),
+            host_roots: LVec::new(mem),
             // MacroLua registry. Pre-populated with
             // built-ins (`@quote` / `@unquote` / `@if` / `@gensym`)
             // when this Vm is constructed under `LuaVersion::MacroLua`.
@@ -145,8 +181,8 @@ impl Vm {
             } else {
                 crate::frontend::macro_expander::MacroRegistry::new()
             },
-            host_roots_free: Vec::new(),
-            sort_scratch: Vec::new(),
+            host_roots_free: LVec::new(mem),
+            sort_scratch: LVec::new(mem),
             // LuaUserdata trait sugar's per-Vm
             // metatable cache. Populated lazily by register_userdata.
             userdata_metatables: std::collections::HashMap::new(),
@@ -265,7 +301,7 @@ impl Vm {
         self.jit.chunk_compiler = Box::new(chunk);
         self.jit.trace_compiler = Box::new(trace);
         if !self.jit.enabled_chosen {
-            self.jit.enabled = true;
+            self.set_jit_flag(true);
         }
         if !self.jit.trace_enabled_chosen {
             self.jit.trace_enabled = true;

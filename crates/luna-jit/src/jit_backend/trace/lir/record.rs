@@ -234,6 +234,9 @@ impl Lir {
 }
 
 impl Emit for Lir {
+    fn len_state_flags(&mut self) -> cranelift_codegen::ir::MemFlagsData {
+        cranelift_codegen::ir::MemFlagsData::trusted()
+    }
     fn make_signature(&self) -> Signature {
         Signature::new(CallConv::SystemV)
     }
@@ -299,40 +302,21 @@ impl Emit for Lir {
     }
 }
 
-/// The C math functions a folded `math.*` call reaches, which Cranelift's
-/// JIT finds by symbol lookup in the process.
+/// The C math functions a folded `math.*` call reaches without luna's
+/// `errno` bookkeeping (none of them sets it), which Cranelift's JIT finds
+/// by symbol lookup in the process.
 fn libm(name: &str) -> Option<*const u8> {
     unsafe extern "C" {
-        fn sin(x: f64) -> f64;
-        fn cos(x: f64) -> f64;
-        fn tan(x: f64) -> f64;
-        fn asin(x: f64) -> f64;
-        fn acos(x: f64) -> f64;
         fn atan(x: f64) -> f64;
         fn atan2(y: f64, x: f64) -> f64;
-        fn exp(x: f64) -> f64;
-        fn log(x: f64) -> f64;
-        fn sqrt(x: f64) -> f64;
         fn floor(x: f64) -> f64;
         fn ceil(x: f64) -> f64;
-        fn pow(x: f64, y: f64) -> f64;
-        fn fmod(x: f64, y: f64) -> f64;
     }
     Some(match name {
-        "sin" => sin as *const u8,
-        "cos" => cos as *const u8,
-        "tan" => tan as *const u8,
-        "asin" => asin as *const u8,
-        "acos" => acos as *const u8,
         "atan" => atan as *const u8,
         "atan2" => atan2 as *const u8,
-        "exp" => exp as *const u8,
-        "log" => log as *const u8,
-        "sqrt" => sqrt as *const u8,
         "floor" => floor as *const u8,
         "ceil" => ceil as *const u8,
-        "pow" => pow as *const u8,
-        "fmod" => fmod as *const u8,
         _ => return None,
     })
 }

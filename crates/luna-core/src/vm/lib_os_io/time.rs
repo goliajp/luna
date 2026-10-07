@@ -171,14 +171,24 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     // daylight saving time: glibc's mktime takes DST to be one hour ahead
     // and moves the result an hour back
     let dst_shift = if isdst.truthy() { 3600 } else { 0 };
-    let secs = mktime(
-        year as i64 + 1900,
-        mon as i64,
-        mday as i64,
-        hour as i64,
-        min as i64,
-        sec as i64 - dst_shift,
-    );
+    let mut mon0 = mon as i64;
+    let fields = (mday as i64, hour as i64, min as i64, sec as i64 - dst_shift);
+    let secs = if crate::cerrno::Lib::HOST == crate::cerrno::Lib::Ucrt {
+        let t = ucrt_mktime(year as i64, &mut mon0, fields);
+        if t.is_none() {
+            crate::cerrno::set(crate::cerrno::EINVAL);
+        }
+        t
+    } else {
+        mktime(
+            year as i64 + 1900,
+            mon0,
+            fields.0,
+            fields.1,
+            fields.2,
+            fields.3,
+        )
+    };
     // 5.3+ write the fields back before checking the result, as PUC does:
     // normalised when the time exists, as given when it overflows (yday and
     // wday are then left alone: PUC writes whatever its `struct tm` held)
@@ -191,7 +201,7 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             None => {
                 let given = [
                     year as i64 + 1900,
-                    mon as i64 + 1,
+                    mon0 + 1,
                     mday as i64,
                     hour as i64,
                     min as i64,
@@ -214,6 +224,35 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             "time result cannot be represented in this installation",
         )),
     }
+}
+
+/// The Universal CRT's `mktime` in a zone at UTC: `None` for a time
+/// before 1970 or after 3000 (checked on the year first, before and after
+/// the month is brought into range, which `mon0` keeps).
+fn ucrt_mktime(
+    tm_year: i64,
+    mon0: &mut i64,
+    (mday, hour, min, sec): (i64, i64, i64, i64),
+) -> Option<i64> {
+    const MAX_TIME: i64 = 0x7_9358_2AFF;
+    let in_range = |y: i64| (69..=1102).contains(&y);
+    let mut y = tm_year;
+    if !in_range(y) {
+        return None;
+    }
+    if !(0..=11).contains(mon0) {
+        y += *mon0 / 12;
+        *mon0 %= 12;
+        if *mon0 < 0 {
+            *mon0 += 12;
+            y -= 1;
+        }
+        if !in_range(y) {
+            return None;
+        }
+    }
+    let t = mktime(y + 1900, *mon0, mday, hour, min, sec)?;
+    (0..=MAX_TIME).contains(&t).then_some(t)
 }
 
 /// `l_checktime` (5.3+) or ≤5.2's `(time_t)luaL_checknumber`.

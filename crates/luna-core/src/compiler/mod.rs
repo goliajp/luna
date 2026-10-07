@@ -8,8 +8,6 @@
 //! generic `for`, multret, tail calls. Still pending (slice 5): goto/labels,
 //! `<close>`, `global` declarations.
 
-use std::collections::HashMap;
-
 mod assign;
 mod assign_gate;
 mod binop;
@@ -50,6 +48,7 @@ use crate::frontend::ast::{
 use crate::frontend::error::SyntaxError;
 use crate::numeric::Num;
 use crate::runtime::heap::{GcHeader, ObjTag};
+use crate::runtime::mem::{LMap, LVec};
 use crate::runtime::{Gc, Heap, LuaStr, Proto, UpvalDesc, Value};
 use crate::version::LuaVersion;
 use crate::vm::isa::{Inst, MAX_B, MAX_BX, MAX_C, MAX_SC, MAX_SJ, MIN_SC, OFFSET_SC, Op};
@@ -63,7 +62,7 @@ pub fn compile_chunk(
     source_name: &[u8],
     heap: &mut Heap,
 ) -> Result<Gc<Proto>, SyntaxError> {
-    let mut scratch = CompileScratch::default();
+    let mut scratch = CompileScratch::new(heap.mem());
     let source = heap.intern(source_name);
     compile_parsed(ast, &[], version, source, heap, &mut scratch)
 }
@@ -93,29 +92,44 @@ fn compile_main(
     heap: &mut Heap,
     scratch: &mut CompileScratch,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
+    crate::cerrno::begin_folds();
+    let r = compile_main_body(ast, end_lines, version, source, heap, scratch);
+    crate::cerrno::end_folds();
+    r
+}
+
+fn compile_main_body(
+    ast: &Chunk,
+    end_lines: &[u32],
+    version: LuaVersion,
+    source: Gc<LuaStr>,
+    heap: &mut Heap,
+    scratch: &mut CompileScratch,
+) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
+    let mem = heap.mem();
     let mut c = Compiler {
         ast,
         end_lines,
         heap,
         version,
         source,
-        levels: level::relabel(std::mem::take(&mut scratch.open)),
-        pool: std::mem::take(&mut scratch.levels),
-        sym_strs: std::mem::take(&mut scratch.sym_strs),
+        levels: scratch.open.take().recycle(),
+        pool: scratch.levels.take(),
+        sym_strs: scratch.sym_strs.take(),
         last_line: 0,
         force_line: None,
-        str_cache: HashMap::new(),
+        str_cache: LMap::new(mem),
     };
     c.sym_strs.clear();
-    c.sym_strs.resize(ast.names.len(), None);
+    c.sym_strs.resize_or_abort(ast.names.len(), None);
     let mut main = c.new_level(0, true, 0);
-    main.upvals.push(UpvalDesc {
+    main.upvals.push_or_abort(UpvalDesc {
         in_stack: false,
         index: 0,
         name: "_ENV".into(),
         read_only: false,
     });
-    c.levels.push(main);
+    c.levels.push_or_abort(main);
     c.enter_block(false);
     c.stat_block(&ast.block)?;
     // the implicit final return belongs to the chunk's last line (PUC), so a
@@ -126,7 +140,7 @@ fn compile_main(
     let proto = c.finish_level(lvl, 0, 0);
     scratch.levels = c.pool;
     scratch.sym_strs = c.sym_strs;
-    scratch.open = level::relabel(c.levels);
+    scratch.open = c.levels.recycle();
     Ok((proto, last_target))
 }
 
@@ -141,7 +155,7 @@ pub fn compile_chunk_with_last_target(
     source_name: &[u8],
     heap: &mut Heap,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
-    let mut scratch = CompileScratch::default();
+    let mut scratch = CompileScratch::new(heap.mem());
     let source = heap.intern(source_name);
     compile_main(ast, &[], version, source, heap, &mut scratch)
 }
@@ -195,27 +209,27 @@ struct AVar<'a> {
     global: bool,
 }
 
-struct BlockCx {
+struct BlockCx<'a> {
     first_local: usize,
     /// index into `Level::avars` at block entry (goto-scope truncation point)
     first_avar: usize,
     reg_floor: u32,
     is_loop: bool,
-    breaks: Vec<usize>,
+    breaks: LVec<usize>,
     /// 5.4: per entry of `breaks`, the number of active locals at the
     /// `break`, to tell which blocks with upvalues it leaves
-    break_levels: Vec<usize>,
+    break_levels: LVec<usize>,
     /// 5.4: a `break` left the scope of a local needing a CLOSE (PUC's
     /// goto `close` flag), so the loop's "break" label closes
     break_close: bool,
     /// the pc where the block starts
     start_pc: usize,
     /// visible labels defined in this block
-    labels: Vec<LabelDef>,
+    labels: LVec<LabelDef<'a>>,
     /// forward gotos not yet matched to a label
-    gotos: Vec<GotoRef>,
+    gotos: LVec<GotoRef<'a>>,
     /// explicit `global` declarations in this block (name, read_only)
-    gdecls: Vec<(Box<str>, bool)>,
+    gdecls: LVec<(&'a str, bool)>,
     /// `global [attrib] *` in this block: Some(read_only)
     collective: Option<bool>,
     /// any to-be-closed local declared in this block
@@ -234,8 +248,8 @@ struct BlockCx {
     end_line: Option<u32>,
 }
 
-struct LabelDef {
-    name: Box<str>,
+struct LabelDef<'a> {
+    name: &'a str,
     pc: usize,
     /// source line of the label (for "already defined on line N")
     line: u32,
@@ -243,8 +257,9 @@ struct LabelDef {
     nactive: usize,
 }
 
-struct GotoRef {
-    name: Box<str>,
+#[derive(Clone, Copy)]
+struct GotoRef<'a> {
+    name: &'a str,
     jmp_pc: usize,
     line: u32,
     nactive: usize,
@@ -297,11 +312,11 @@ struct Compiler<'a> {
     heap: &'a mut Heap,
     version: LuaVersion,
     source: Gc<LuaStr>,
-    levels: Vec<Level<'a>>,
+    levels: LVec<Level<'a>>,
     /// emptied vectors of finished functions, for the next function
-    pool: Vec<LevelBufs>,
+    pool: LVec<LevelBufs>,
     /// the heap string of each entry of the chunk's names, once made
-    sym_strs: Vec<Option<Gc<LuaStr>>>,
+    sym_strs: LVec<Option<Gc<LuaStr>>>,
     last_line: u32,
     /// When `Some(line)`, every `emit` ignores `last_line` and attributes the
     /// new instruction to `line` instead. PUC infix discharges its left
@@ -315,7 +330,7 @@ struct Compiler<'a> {
     /// object, so e.g. `string.format("%p", ...)` reports equal addresses for
     /// equal constants. The runtime interner only dedups short strings, so
     /// only long ones are kept here.
-    str_cache: HashMap<Box<[u8]>, Gc<LuaStr>>,
+    str_cache: LMap<Gc<LuaStr>, Gc<LuaStr>>,
 }
 
 impl<'a> Compiler<'a> {
@@ -336,14 +351,17 @@ impl<'a> Compiler<'a> {
 
     /// A level for a new function, in kept vectors when there are some.
     fn new_level(&mut self, num_params: u8, is_vararg: bool, line: u32) -> Level<'a> {
-        let bufs = self.pool.pop().unwrap_or_default();
+        let bufs = match self.pool.pop() {
+            Some(b) => b,
+            None => LevelBufs::new(self.heap.mem()),
+        };
         Level::new(num_params, is_vararg, line, bufs)
     }
 
     /// The finished function `lvl` on the heap; its vectors are kept.
     fn finish_level(&mut self, lvl: Level<'a>, line: u32, last_line: u32) -> Gc<Proto> {
         let (proto, bufs) = lvl.into_proto(self.source, line, last_line, self.heap);
-        self.pool.push(bufs);
+        self.pool.push_or_abort(bufs);
         self.heap.adopt_proto(proto)
     }
 
@@ -361,6 +379,25 @@ impl<'a> Compiler<'a> {
 
     fn lr(&self) -> &Level<'a> {
         self.levels.last().expect("no level")
+    }
+
+    /// An expression nested deeper than the native stack left can compile
+    /// (a long left-associative chain such as `1 + 1 + ... + 1`), reported
+    /// in the words the dialect's parser uses at its nesting limit.
+    fn too_deep(&self) -> SyntaxError {
+        match self.version {
+            LuaVersion::Lua51 => self.err(self.last_line, "chunk has too many syntax levels"),
+            LuaVersion::Lua52 | LuaVersion::Lua53 => {
+                let where_ = if self.levels.len() == 1 {
+                    "main function".to_string()
+                } else {
+                    format!("function at line {}", self.lr().line_defined)
+                };
+                let msg = format!("too many C levels (limit is 200) in {where_}");
+                self.err(self.last_line, msg)
+            }
+            _ => SyntaxError::unpositioned("C stack overflow"),
+        }
     }
 
     fn err(&self, line: u32, msg: impl Into<String>) -> SyntaxError {

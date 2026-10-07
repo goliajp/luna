@@ -12,6 +12,7 @@
 //! goto to a label every loop places at its end; 5.1 and 5.5 check it on
 //! the spot.
 
+use crate::runtime::mem::{LVec, MemRef, Oom};
 use crate::version::LuaVersion;
 
 mod records;
@@ -23,28 +24,47 @@ pub(crate) struct GotoCheck {
     v54: bool,
     v55: bool,
     /// where each active variable's name starts in `names`
-    actvar: Vec<usize>,
+    actvar: LVec<usize>,
     /// what each active variable is
-    kinds: Vec<VarKind>,
+    kinds: LVec<VarKind>,
     /// the active variables' names back to back (they are needed only for an
     /// error message, so one buffer instead of an allocation per variable)
-    names: String,
-    labels: Vec<Label>,
-    pending: Vec<Goto>,
-    blocks: Vec<Block>,
+    names: LVec<u8>,
+    labels: LVec<Label>,
+    pending: LVec<Goto>,
+    blocks: LVec<Block>,
     /// index into `blocks` of each open function's outer block
-    funcs: Vec<usize>,
-    open: Vec<Open>,
+    funcs: LVec<usize>,
+    open: LVec<Open>,
+}
+
+/// Why a goto step failed: a goto or label error to report, or a memory
+/// error.
+pub(crate) enum GotoErr {
+    Text(String),
+    Mem(Oom),
+}
+
+impl From<String> for GotoErr {
+    fn from(s: String) -> GotoErr {
+        GotoErr::Text(s)
+    }
+}
+
+impl From<Oom> for GotoErr {
+    fn from(o: Oom) -> GotoErr {
+        GotoErr::Mem(o)
+    }
 }
 
 impl GotoCheck {
     pub(crate) fn enter_function(&mut self) {
-        self.funcs.push(self.blocks.len());
-        self.enter_block(false);
+        self.funcs.push_or_abort(self.blocks.len());
+        self.enter_block(false)
     }
 
     pub(crate) fn enter_block(&mut self, is_loop: bool) {
-        self.blocks.push(Block {
+        self.blocks.push_or_abort(Block {
             nactvar: self.actvar.len(),
             first_label: self.labels.len(),
             first_goto: self.pending.len(),
@@ -55,9 +75,15 @@ impl GotoCheck {
     /// A variable comes into scope (a local, or a 5.5 global declaration;
     /// `global *` is named "*").
     pub(crate) fn declare(&mut self, name: &str, kind: VarKind) {
-        self.actvar.push(self.names.len());
-        self.kinds.push(kind);
-        self.names.push_str(name);
+        self.actvar.push_or_abort(self.names.len());
+        self.kinds.push_or_abort(kind);
+        self.names.extend_from_slice_or_abort(name.as_bytes());
+    }
+
+    /// The name of active variable `i`.
+    fn var_name(&self, i: usize) -> &[u8] {
+        let end = self.actvar.get(i + 1).copied().unwrap_or(self.names.len());
+        &self.names[self.actvar[i]..end]
     }
 
     fn truncate_actvar(&mut self, n: usize) {
@@ -73,11 +99,11 @@ impl GotoCheck {
     /// `check_readonly`). A global declaration of the name, or a `global *`,
     /// in between leaves the answer to the compiler.
     pub(crate) fn is_const_local(&self, name: &str) -> bool {
+        let name = name.as_bytes();
         for (i, &kind) in self.kinds.iter().enumerate().rev() {
-            let end = self.actvar.get(i + 1).copied().unwrap_or(self.names.len());
-            let n = &self.names[self.actvar[i]..end];
+            let n = self.var_name(i);
             match kind {
-                VarKind::Global if n == name || n == "*" => return false,
+                VarKind::Global if n == name || n == b"*" => return false,
                 VarKind::Global => {}
                 _ if n == name => return kind == VarKind::Const,
                 _ => {}
@@ -97,27 +123,22 @@ impl GotoCheck {
             "<goto {}> at line {} jumps into the scope of {kind}'{}'",
             g.name,
             g.line,
-            &self.names[self.actvar[g.nactvar]
-                ..self
-                    .actvar
-                    .get(g.nactvar + 1)
-                    .copied()
-                    .unwrap_or(self.names.len())]
+            String::from_utf8_lossy(self.var_name(g.nactvar))
         )
     }
 
     /// PUC `closegoto`/`solvegoto`: the goto lands on label `l`; entering
     /// the scope of a local on the way is an error.
-    fn close_goto(&mut self, g: usize, l: usize) -> Result<(), String> {
+    fn close_goto(&mut self, g: usize, l: usize) -> Result<(), GotoErr> {
         if self.pending[g].nactvar < self.labels[l].nactvar {
-            return Err(self.scope_error(&self.pending[g]));
+            return Err(self.scope_error(&self.pending[g]).into());
         }
         self.pending.remove(g);
         Ok(())
     }
 
     /// Resolve the pending gotos of the current block that name label `l`.
-    fn find_gotos(&mut self, l: usize) -> Result<(), String> {
+    fn find_gotos(&mut self, l: usize) -> Result<(), GotoErr> {
         let mut g = self.block().first_goto;
         while g < self.pending.len() {
             if self.pending[g].name == self.labels[l].name {
@@ -131,7 +152,7 @@ impl GotoCheck {
 
     /// 5.2/5.3 `findlabel`: match goto `g` against the current block's
     /// labels.
-    fn find_label_53(&mut self, g: usize) -> Result<bool, String> {
+    fn find_label_53(&mut self, g: usize) -> Result<bool, GotoErr> {
         let first = self.block().first_label;
         match (first..self.labels.len()).find(|&l| self.labels[l].name == self.pending[g].name) {
             Some(l) => self.close_goto(g, l).map(|()| true),
@@ -146,11 +167,11 @@ impl GotoCheck {
     }
 
     /// `goto name` (or `break`, as a goto to "break").
-    pub(crate) fn goto_stat(&mut self, name: &str, line: u32) -> Result<(), String> {
+    pub(crate) fn goto_stat(&mut self, name: &str, line: u32) -> Result<(), GotoErr> {
         if self.v54 && !self.v55 && name != "break" && self.find_label_54(name).is_some() {
             return Ok(()); // backward jump, resolved on the spot
         }
-        self.pending.push(Goto {
+        self.pending.push_or_abort(Goto {
             name: name.into(),
             line,
             nactvar: self.actvar.len(),
@@ -164,24 +185,21 @@ impl GotoCheck {
 
     /// `::name::` has been read up to its closing `::` (not consumed):
     /// 5.2/5.3 check for a repeat in the block and enter the label now.
-    pub(crate) fn label_before_close(&mut self, name: &str, line: u32) -> Result<(), String> {
+    pub(crate) fn label_before_close(&mut self, name: &str, line: u32) -> Result<(), GotoErr> {
         let mut entry = None;
         if !self.v54 {
             let first = self.block().first_label;
             if let Some(prev) = self.labels[first..].iter().find(|l| &*l.name == name) {
-                return Err(format!(
-                    "label '{name}' already defined on line {}",
-                    prev.line
-                ));
+                return Err(format!("label '{name}' already defined on line {}", prev.line).into());
             }
-            self.labels.push(Label {
+            self.labels.push_or_abort(Label {
                 name: name.into(),
                 line,
                 nactvar: self.actvar.len(),
             });
             entry = Some(self.labels.len() - 1);
         }
-        self.open.push(Open {
+        self.open.push_or_abort(Open {
             name: name.into(),
             line,
             entry,
@@ -197,7 +215,7 @@ impl GotoCheck {
     /// the block ends here (`else`/`elseif`/`end`/<eof>), which puts the
     /// labels outside the block's locals. Labels are settled innermost
     /// first, as PUC's recursion unwinds.
-    pub(crate) fn finish_labels(&mut self, last: bool) -> Result<(), String> {
+    pub(crate) fn finish_labels(&mut self, last: bool) -> Result<(), GotoErr> {
         while let Some(open) = self.open.pop() {
             let nactvar = if last {
                 self.block().nactvar
@@ -214,9 +232,10 @@ impl GotoCheck {
                         return Err(format!(
                             "label '{}' already defined on line {}",
                             open.name, self.labels[prev].line
-                        ));
+                        )
+                        .into());
                     }
-                    self.labels.push(Label {
+                    self.labels.push_or_abort(Label {
                         name: open.name,
                         line: open.line,
                         nactvar,
@@ -234,7 +253,7 @@ impl GotoCheck {
     /// PUC `leaveblock`: a loop places its "break" label, the block's
     /// locals and labels go out of scope, and its pending gotos move to
     /// the enclosing block — or, at a function's outer block, are errors.
-    pub(crate) fn leave_block(&mut self) -> Result<(), String> {
+    pub(crate) fn leave_block(&mut self) -> Result<(), GotoErr> {
         let blk = self.block();
         let (nactvar, first_label, first_goto, is_loop) =
             (blk.nactvar, blk.first_label, blk.first_goto, blk.is_loop);
@@ -245,7 +264,7 @@ impl GotoCheck {
             self.truncate_actvar(nactvar);
         }
         if is_loop && !self.v55 {
-            self.labels.push(Label {
+            self.labels.push_or_abort(Label {
                 name: "break".into(),
                 line: 0,
                 nactvar: self.actvar.len(),
@@ -275,7 +294,7 @@ impl GotoCheck {
         if self.funcs.last() == Some(&self.blocks.len()) {
             let _ = self.funcs.pop();
             return match self.pending.get(first_goto) {
-                Some(g) => Err(self.undefined(g)),
+                Some(g) => Err(self.undefined(g).into()),
                 None => Ok(()),
             };
         }

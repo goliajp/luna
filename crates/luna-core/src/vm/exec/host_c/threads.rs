@@ -28,7 +28,7 @@ impl Vm {
     /// Whether a resume now would overflow PUC's C stack
     /// (`LUAI_MAXCCALLS`).
     pub fn host_c_stack_full(&self) -> bool {
-        self.c_depth >= MAX_C_DEPTH
+        self.g.nccalls >= MAX_C_DEPTH
     }
 
     /// Whether the running coroutine is closing itself (the `Err` a call
@@ -72,7 +72,8 @@ impl Vm {
         m.open_upvals.take();
         m.tbc.take();
         m.top = 0;
-        m.pcall_depth = 0;
+        m.meta_conts = 0;
+        m.stale_frames = 0;
         self.heap.barrier_back(co);
     }
 

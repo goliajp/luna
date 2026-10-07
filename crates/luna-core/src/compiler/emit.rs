@@ -1,13 +1,14 @@
 //! Instruction emission, jump patching, register reservation and constants.
 
 use super::*;
+use crate::runtime::mem::word_hash;
 
 impl<'a> Compiler<'a> {
     pub(super) fn emit(&mut self, i: Inst) -> usize {
         let line = self.force_line.unwrap_or(self.last_line);
         let l = self.l();
-        l.code.push(i);
-        l.lines.push(line);
+        l.code.push_or_abort(i);
+        l.lines.push_or_abort(line);
         l.code.len() - 1
     }
 
@@ -268,14 +269,15 @@ impl<'a> Compiler<'a> {
     }
 
     pub(super) fn long_str(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
-        match self.str_cache.get(bytes) {
-            Some(s) => *s,
-            None => {
-                let s = self.heap.intern(bytes);
-                self.str_cache.insert(bytes.into(), s);
-                s
-            }
+        let h = word_hash(bytes);
+        if let Some(s) = self.str_cache.find_with(h, |k| k.as_bytes() == bytes) {
+            return s;
         }
+        let s = self.heap.intern(bytes);
+        self.str_cache
+            .insert_hashed(h, s, s)
+            .unwrap_or_else(|o| o.fail());
+        s
     }
 
     pub(super) fn load_const(&mut self, reg: u32, c: u32) {

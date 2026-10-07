@@ -43,7 +43,7 @@ impl Heap {
                 (*ch).flags = (*ch).with_slow((cf & !COLOR_BITS) | BLACK);
             } else {
                 (*ch).flags = (*ch).with_slow(cf & !WHITE_BITS);
-                self.gray.push(ch);
+                self.push_gray(ch);
             }
         }
     }
@@ -95,7 +95,17 @@ impl Heap {
                 return;
             }
             (*parent).flags = (*parent).with_slow(f & !COLOR_BITS);
-            self.gray.push(parent);
+            self.push_gray(parent);
+        }
+    }
+
+    /// Put `h`, already gray, on the persistent gray queue; when the queue
+    /// cannot grow it stays gray and the next marker finds it by walking
+    /// the object list.
+    #[inline(always)]
+    fn push_gray(&mut self, h: *mut GcHeader) {
+        if self.gray.push(h).is_err() {
+            self.gray_overflow = true;
         }
     }
 

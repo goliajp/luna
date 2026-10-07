@@ -41,6 +41,7 @@ impl Vm {
         // instruction (PUC luaV_finishOp) and resume the running frame.
         if let ContKind::Meta(mc) = nc.kind {
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            self.cont_popped(true, true);
             let result = if self.top > nc.func_slot {
                 self.stack[nc.func_slot as usize]
             } else {
@@ -60,6 +61,7 @@ impl Vm {
         // drive_close hands the results up to exec_with directly.
         if let ContKind::Close(cc) = nc.kind {
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            self.cont_popped(true, true);
             let pending = cc.has_pending.then(|| self.stack[nc.func_slot as usize]);
             self.top = nc.func_slot;
             if let Some(vals) = self.drive_close(cc.from, pending, cc.after, entry_depth)? {
@@ -73,6 +75,7 @@ impl Vm {
         // called, and hand them to pairs's caller.
         if let ContKind::Pairs = nc.kind {
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            self.cont_popped(true, true);
             let total = crate::vm::builtins::pairs_mm_results(self) as u32;
             let need = (nc.func_slot + total) as usize;
             if self.stack.len() < need {
@@ -99,11 +102,24 @@ impl Vm {
             return self.finish_host_cont(nc, hc, entry_depth);
         }
         frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-        self.pcall_depth -= 1;
-        // f's results sit at nc.func_slot+1.. (f was called one slot
-        // above the continuation), so writing `true` at the slot makes
-        // `true, results…` already contiguous.
-        let nret = self.top - (nc.func_slot + 1);
+        self.cont_popped(false, nc.kind.is_level());
+        // f's results sit where f was called (`callee_shift` above the
+        // slot after the continuation): moved to that slot, writing `true`
+        // at the continuation's makes `true, results…` contiguous
+        let callee = (i64::from(nc.func_slot) + 1 + i64::from(nc.kind.callee_shift())) as u32;
+        let nret = self.top - callee;
+        if callee != nc.func_slot + 1 {
+            // the results may end past the stack's length (`top` runs ahead
+            // of it); both ranges of the move must be inside it
+            let end = (callee.max(nc.func_slot + 1) + nret) as usize;
+            if self.stack.len() < end {
+                self.grow_stack_or_abort(end);
+            }
+            self.stack.copy_within(
+                callee as usize..(callee + nret) as usize,
+                (nc.func_slot + 1) as usize,
+            );
+        }
         self.stack[nc.func_slot as usize] = Value::Bool(true);
         let total = 1 + nret;
         self.top = nc.func_slot + total;
@@ -223,10 +239,10 @@ impl Vm {
             // also reset by the deopt site).
             // The one-shot suppression only matters where a downrec trace
             // could be admitted, which needs the proto's flag.
-            // Compiled code does not tick the instruction budget: while one
-            // is armed, every loop stays in the interpreter.
-            let admit =
-                trace_on && cl.proto.has_dispatchable_trace.get() && self.instr_budget.is_none();
+            // Compiled code ticks no instruction budget and checks no
+            // memory cap: while one is armed, every loop stays in the
+            // interpreter.
+            let admit = trace_on && cl.proto.has_dispatchable_trace.get() && !self.limited;
             let downrec_admit_blocked =
                 admit && std::mem::take(&mut self.jit.suppress_downrec_admit_once);
             if admit && self.trace_dispatch(cl, pc, base, downrec_admit_blocked) {
