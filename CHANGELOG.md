@@ -174,6 +174,19 @@ optimization.
 
 ### Changed
 
+- The compiler uses registers as PUC's does in every dialect: a table
+  write stores a constant value directly (`t.x = 1`, `x = 'k'`), keys
+  that are constants take no register before 5.4 (`t[2.5]`, `t[true]`)
+  and on a 5.2 / 5.3 upvalue table, an assignment to several targets
+  copies a variable only when a later target assigns it (PUC's
+  `check_conflict`), the last value of an assignment goes straight into
+  its target, and a generic `for` keeps PUC's room to call its
+  generator. `string.dump` output listed with `luac -l -l` (instructions,
+  constants and slots) is the same as PUC's for these, and a frame is
+  exactly as large as PUC's, so the depth recursion reaches before a
+  stack overflow matches PUC's. Traces, the method JIT, the LLVM backend
+  and AOT compile the new instruction forms.
+
 - Strings hash as PUC 5.4 and 5.5 hash them, from the last byte to the
   first, so that with the same seed a table lays out its string keys —
   and `pairs` visits them — as PUC does. The order a table with string
@@ -458,6 +471,17 @@ optimization.
   about 20 fewer machine instructions each.
 
 ### Fixed
+
+- A message handler run for an error that names its operand (`attempt
+  to index a nil value (local 't')`) starts one slot higher in 5.3+, as
+  in PUC, whose `varinfo` leaves the name on the stack; recursion inside
+  such a handler now stops at PUC's depth.
+- `a or b or c` (and an `and` chain) of plain values jumps from every
+  test straight to the end, as PUC compiles it, instead of from test to
+  test.
+- 5.4 / 5.5 `string.dump` of a table constructor with more than 255
+  positional items writes its full array size (`NEWTABLE` with
+  `EXTRAARG`), as `luac` does.
 
 - An exhausted instruction budget or memory cap now stays exhausted
   until the host arms a new one with `Vm::set_instr_budget` /
