@@ -141,7 +141,7 @@ pub struct TraceRecord {
     /// traces require `cur_depth == 0` so a nested call to the
     /// containing loop's function doesn't prematurely close.
     pub is_call_triggered: bool,
-    /// Generic-for iter fn pointer snapshot.
+    /// Generic-for iterator's library tag snapshot.
     /// Populated by `Op::TForLoop`'s recorder trigger when
     /// `R[A]` is `Value::Native`. Lets the lowerer specialise
     /// `Op::TForCall` emit on `ipairs_iter` (inline Table aget
@@ -149,7 +149,7 @@ pub struct TraceRecord {
     /// skip the `luna_jit_op_tforcall` C call entirely). `None`
     /// for non-generic-for traces or when the recorder fires
     /// for a non-Native iter.
-    pub tfor_iter_ptr: Option<usize>,
+    pub tfor_iter: Option<crate::runtime::Builtin>,
     /// Snapshot of `R[A+5]` (the iter's value
     /// slot) tag at recorder fire. The ipairs inline aget emits a
     /// runtime guard `val_tag == expected_tag` (or Nil for the
@@ -277,7 +277,7 @@ impl TraceRecord {
             ops: Vec::with_capacity(MAX_TRACE_LEN),
             closed: false,
             is_call_triggered,
-            tfor_iter_ptr: None,
+            tfor_iter: None,
             tfor_val_tag: None,
             side_trace_parent: None,
             self_link_kind: None,
@@ -319,7 +319,7 @@ impl TraceRecord {
             ops: Vec::with_capacity(MAX_TRACE_LEN),
             closed: false,
             is_call_triggered: false,
-            tfor_iter_ptr: None,
+            tfor_iter: None,
             tfor_val_tag: None,
             side_trace_parent: Some((parent_head_proto, parent_head_pc, parent_exit_idx)),
             self_link_kind: None,

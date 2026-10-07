@@ -63,8 +63,7 @@ pub unsafe extern "C" fn lua_tocfunction(L: *mut LuaState, idx: c_int) -> Option
     let Some(Value::Native(nc)) = api.get(idx) else {
         return None;
     };
-    let trampoline: luna_core::runtime::value::NativeFn = ccall::capi_trampoline;
-    if !std::ptr::fn_addr_eq(nc.f, trampoline) {
+    if nc.builtin != luna_core::runtime::Builtin::CFunction {
         return None;
     }
     let Value::LightUserdata(p) = nc.upvals[0] else {

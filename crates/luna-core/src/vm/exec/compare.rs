@@ -68,7 +68,7 @@ impl Vm {
             MmOut::CompareSynth { func } => {
                 // ≤5.3 `__le` via `not __lt(r, l)`. Synchronous helper used
                 // by library code (sort comparator etc.) — no yield expected
-                // here (a yield would have hit `call_noyield`'s C boundary).
+                // here (a yield would have hit `call_value`'s C boundary).
                 Ok(!self.call_mm1(func, &[r, l])?.truthy())
             }
         }

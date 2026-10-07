@@ -245,59 +245,6 @@ impl Vm {
         }
     }
 
-    /// Call `f` with `args` in protected mode with the message handler
-    /// `msgh`: PUC `lua_pcall(L, nargs, LUA_MULTRET, msgh)` made by the host.
-    ///
-    /// `msgh` runs where the error was raised, before the stack unwinds, so
-    /// it can take a traceback of the failing call ([`Vm::traceback`]); an
-    /// error inside it calls it again with the new error, as in PUC. The
-    /// returned error carries what the handler returned.
-    ///
-    /// Like `lua_pcall`, the call is not a level of the stack: a traceback
-    /// taken inside ends with `f`.
-    pub fn call_value_with_handler(
-        &mut self,
-        f: Value,
-        args: &[Value],
-        msgh: Value,
-    ) -> Result<Vec<Value>, LuaError> {
-        self.host_pcall(crate::vm::builtins::nat_host_xpcall, f, args, msgh)
-    }
-
-    /// [`Vm::call_value_with_handler`] made from inside a C function of the
-    /// host's, as lua.c's `docall` runs inside `pmain`: that function is one
-    /// C level below `f`, which `debug.getinfo` finds and a traceback ends
-    /// with (`[C]: in ?`, 5.1 `[C]: ?`).
-    #[doc(hidden)]
-    pub fn call_value_with_handler_in_c(
-        &mut self,
-        f: Value,
-        args: &[Value],
-        msgh: Value,
-    ) -> Result<Vec<Value>, LuaError> {
-        self.host_pcall(crate::vm::builtins::nat_host_xpcall_in_c, f, args, msgh)
-    }
-
-    /// `f(args)` in protected mode with no message handler, made from inside
-    /// a C function of the host's: PUC `lua_pcall(L, n, r, 0)` inside a C
-    /// function, as lua.c's `l_print` calls `print` from `pmain`. That
-    /// function is one C level below `f`, as for
-    /// [`Vm::call_value_with_handler_in_c`].
-    #[doc(hidden)]
-    pub fn call_value_in_c(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
-        let level = self.native(crate::vm::builtins::nat_host_pcall_in_c);
-        let mut call_args = Vec::with_capacity(args.len() + 1);
-        call_args.push(f);
-        call_args.extend_from_slice(args);
-        let mut results = self.call_value(level, &call_args)?;
-        if results.first().is_some_and(|ok| ok.truthy()) {
-            results.remove(0);
-            Ok(results)
-        } else {
-            Err(LuaError(results.get(1).copied().unwrap_or(Value::Nil)))
-        }
-    }
-
     /// `t[key]` with metamethods, as the Lua expression does (PUC
     /// `lua_gettable`). For the C API.
     #[doc(hidden)]
@@ -310,49 +257,6 @@ impl Vm {
     #[doc(hidden)]
     pub fn set_index_with_mm(&mut self, t: Value, key: Value, v: Value) -> Result<(), LuaError> {
         self.newindex_value(t, key, v)
-    }
-
-    /// [`Vm::call_value_with_handler`] that also says how it failed: `true`
-    /// when the handler itself failed and the error is "error in error
-    /// handling" (PUC's LUA_ERRERR), `false` for any other error
-    /// (LUA_ERRRUN). For the C API's `lua_pcall`.
-    #[doc(hidden)]
-    pub fn call_value_with_handler_status(
-        &mut self,
-        f: Value,
-        args: &[Value],
-        msgh: Value,
-    ) -> Result<Vec<Value>, (LuaError, bool)> {
-        let before = self.errerr_raised;
-        self.call_value_with_handler(f, args, msgh).map_err(|e| {
-            // a handler may return the same text itself; only an error the
-            // vm turned into it during this call is LUA_ERRERR
-            let errerr = self.errerr_raised != before
-                && matches!(e.0, Value::Str(s) if s.as_bytes() == b"error in error handling");
-            (e, errerr)
-        })
-    }
-
-    fn host_pcall(
-        &mut self,
-        level: crate::runtime::value::NativeFn,
-        f: Value,
-        args: &[Value],
-        msgh: Value,
-    ) -> Result<Vec<Value>, LuaError> {
-        let level = self.native(level);
-        let mut call_args = Vec::with_capacity(args.len() + 2);
-        call_args.push(f);
-        call_args.push(msgh);
-        call_args.extend_from_slice(args);
-        let mut results = self.call_value(level, &call_args)?;
-        // the protected call's `true, results...` or `false, handled error`
-        if results.first().is_some_and(|ok| ok.truthy()) {
-            results.remove(0);
-            Ok(results)
-        } else {
-            Err(LuaError(results.get(1).copied().unwrap_or(Value::Nil)))
-        }
     }
 
     /// PUC `luaL_getmetafield`: the field `event` of `v`'s metatable, read
@@ -368,7 +272,34 @@ impl Vm {
     }
 
     /// Call any callable value from the host (or from natives like pcall).
+    ///
+    /// Like PUC's `lua_call`, the call has no continuation, so the code it
+    /// runs cannot yield: a `coroutine.yield` below it fails with "attempt
+    /// to yield across a C-call boundary".
     pub fn call_value(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
+        self.nny += 1;
+        let r = self.call_value_k(f, args);
+        self.nny -= 1;
+        r
+    }
+
+    /// Whether the error a call just returned is not an error but a yield,
+    /// a cooperative yield or a coroutine closing itself, on its way out to
+    /// where it is handled: no native may catch it.
+    pub(crate) fn control_in_flight(&self) -> bool {
+        self.yielding.is_some()
+            || self.terminating.is_some()
+            || self.host_yield_pending
+            || self.pending_async_native_fut.is_some()
+    }
+
+    /// [`Vm::call_value`] for a caller that can be continued after a yield
+    /// below it (PUC `lua_callk`): the yield unwinds out of this call.
+    pub(crate) fn call_value_k(
+        &mut self,
+        f: Value,
+        args: &[Value],
+    ) -> Result<Vec<Value>, LuaError> {
         // host-level entry (no enclosing exec): drop any error state from a
         // prior call that propagated uncaught (`error_traceback` would
         // otherwise leak into the next debug.traceback call).
@@ -451,12 +382,7 @@ impl Vm {
         if at.is_some() && self.stack.len() < len {
             self.grow_stack_or_abort(len);
         }
-        if r.is_err()
-            && self.yielding.is_none()
-            && self.terminating.is_none()
-            && !self.host_yield_pending
-            && self.pending_async_native_fut.is_none()
-        {
+        if r.is_err() && !self.control_in_flight() {
             // A `coroutine.yield` in flight raises a sentinel error to unwind the
             // Rust stack, but the suspended coroutine's frames/registers (which
             // sit at/above `func_slot`) must survive for the next resume — so we

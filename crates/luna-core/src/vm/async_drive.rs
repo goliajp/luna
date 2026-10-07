@@ -228,7 +228,7 @@ impl Vm {
                 // a chunk whose only op is `return`) the call
                 // finishes within `call_value` and we hit
                 // `Complete` immediately.
-                self.call_value(closure_val, &[])
+                self.call_value_k(closure_val, &[])
             }
             None => {
                 // Resume slice — frames are intact from the prior

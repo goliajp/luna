@@ -228,10 +228,7 @@ impl Vm {
         }
         // ipairs fast path
         let took_fast_path = if let Value::Native(n) = self.stack[abs as usize]
-            && std::ptr::fn_addr_eq(
-                n.f,
-                crate::vm::builtins::ipairs_iter as crate::runtime::value::NativeFn,
-            )
+            && n.builtin == crate::runtime::Builtin::IpairsIter
             && let Value::Table(t) = self.stack[(abs + 1) as usize]
             && t.metatable().is_none()
             && let Value::Int(i) = self.stack[(abs + 2) as usize]

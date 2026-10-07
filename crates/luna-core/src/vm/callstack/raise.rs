@@ -198,8 +198,7 @@ impl Vm {
         }
         if let Some(e) = raised_by.first() {
             let a = e.act;
-            let nat_error: crate::runtime::value::NativeFn = crate::vm::builtins::nat_error;
-            let top = if std::ptr::fn_addr_eq(a.nc.f, nat_error) {
+            let top = if a.nc.builtin == crate::runtime::Builtin::Error {
                 // the arguments may be gone already (a native the host
                 // called directly has had its slots taken back)
                 let arg = |i: u32| {

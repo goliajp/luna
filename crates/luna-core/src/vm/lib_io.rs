@@ -89,7 +89,8 @@ pub(crate) fn open_io(vm: &mut Vm) {
     }
     // The method `close`: 5.1 and 5.2 register `io_close` itself (5.1 with an
     // environment that has no default output, so a missing argument checks
-    // nil); 5.3 split it into `f_close`.
+    // nil); 5.3 split it into `f_close`. 5.2's is the very function value of
+    // `io.close` (a light C function), so an error names it `io.close`.
     let close: crate::runtime::value::NativeFn = match v {
         LuaVersion::Lua51 => f_close_51,
         LuaVersion::Lua52 => io_close,
@@ -115,6 +116,10 @@ pub(crate) fn open_io(vm: &mut Vm) {
     };
     for (name, f) in methods {
         put_native(vm, index, name, f);
+    }
+    if v == LuaVersion::Lua52 {
+        let io_close = io.get(Value::Str(vm.heap.intern(b"close")));
+        put(vm, index, "close", io_close);
     }
     put(vm, mt, "__index", Value::Table(index));
     put_native(vm, mt, "__gc", f_gc);

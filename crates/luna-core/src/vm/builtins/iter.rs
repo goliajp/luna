@@ -40,7 +40,7 @@ pub(crate) fn nat_pairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
             // 5.2/5.3 call `__pairs` with a plain `lua_call` (not yieldable);
             // this path is only reached from C on 5.4+, where yielding is
             // impossible anyway.
-            let res = vm.call_noyield(mm, &[t])?;
+            let res = vm.call_value(mm, &[t])?;
             let mut out = [Value::Nil; 4];
             for (slot, v) in out.iter_mut().zip(res) {
                 *slot = v;
@@ -129,7 +129,7 @@ pub(super) fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         let mm = mt.get(key);
         if !mm.is_nil() {
             // `lua_call`: not yieldable.
-            let rs = vm.call_noyield(mm, &[t])?;
+            let rs = vm.call_value(mm, &[t])?;
             let mut out = [Value::Nil; 3];
             for (slot, v) in out.iter_mut().zip(rs) {
                 *slot = v;
