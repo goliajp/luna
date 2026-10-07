@@ -303,18 +303,7 @@ impl Vm {
             .frames
             .last()
             .and_then(CallFrame::lua)
-            .map(|fr| {
-                let raw = abs_a.saturating_sub(fr.base) + 1;
-                // 5.5 anonymous-vararg functions get a `(vararg table)` pseudo
-                // local injected at index `numparams + 1`, so getlocal
-                // numbering shifts results past it (5.5 db.lua :539
-                // `eqseq(out, {10, 0})`). 5.4 and earlier have no such pseudo.
-                if fr.closure.proto.has_vararg_table_pseudo {
-                    raw + 1
-                } else {
-                    raw
-                }
-            })
+            .map(|fr| abs_a.saturating_sub(fr.base) + 1)
             .unwrap_or(1);
         // PUC 5.1 `luaD_poscall`: fire one extra "tail return" hook event
         // per tail call that collapsed into this activation, *after* its
