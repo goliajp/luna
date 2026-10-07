@@ -188,7 +188,8 @@ impl Vm {
     /// goes where that object was. A Lua frame raises at its `L->top`,
     /// the top of the call the stack overflowed on or else its whole
     /// window: `luaG_runerror` pushes the message there, and before 5.4
-    /// the positioned message as well, which it does not pop. Where the
+    /// the positioned message as well, which it does not pop; 5.3+'s
+    /// `varinfo` has pushed the operand's name before them. Where the
     /// error came from no frame, the handler runs where the stack ends.
     fn raise_top(&mut self, raised_by: &[ErroredNative]) -> Option<u32> {
         let positioned_message = u32::from(self.version() < LuaVersion::Lua54);
@@ -219,11 +220,12 @@ impl Vm {
             };
             return Some(top - 1);
         }
+        let varinfo = u32::from(self.varinfo_pushed);
         self.frames
             .iter()
             .rev()
             .find_map(CallFrame::lua)
-            .map(|f| f.base + f.closure.proto.max_stack as u32 + positioned_message)
+            .map(|f| f.base + f.closure.proto.max_stack as u32 + positioned_message + varinfo)
     }
 
     pub(crate) fn call_msgh(&mut self, handler: Value, err: Value) -> Value {
