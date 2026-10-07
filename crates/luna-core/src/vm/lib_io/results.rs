@@ -214,15 +214,38 @@ pub(crate) fn c_str(b: &[u8]) -> &[u8] {
         .expect("split yields a first piece")
 }
 
-/// A C file name (bytes up to the first NUL) as an OS path.
+/// A C file name (bytes up to the first NUL) as an OS path: the bytes
+/// themselves on Unix, through the ANSI code page on Windows.
 pub(crate) fn os_path(b: &[u8]) -> std::path::PathBuf {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
         std::ffi::OsStr::from_bytes(c_str(b)).into()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        super::winfs::os_path(b)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         String::from_utf8_lossy(c_str(b)).into_owned().into()
+    }
+}
+
+/// OS text (a path, an environment value) as the bytes a C program gets:
+/// the bytes themselves on Unix, through the ANSI code page on Windows.
+pub fn os_bytes(s: &std::ffi::OsStr) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        s.as_bytes().to_vec()
+    }
+    #[cfg(windows)]
+    {
+        super::winfs::narrow(s)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        s.to_string_lossy().into_owned().into_bytes()
     }
 }
