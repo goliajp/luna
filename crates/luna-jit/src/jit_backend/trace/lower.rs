@@ -139,6 +139,10 @@ struct Lower<E: Emit> {
     /// pass: a table access by such a key may use the slot the recording
     /// found it in.
     const_str: Vec<bool>,
+    /// The window slots the virtual registers of the op being lowered
+    /// stand in, with the kinds the slots had (see `enter_virt`): an exit
+    /// taken inside the op snapshots those kinds, not the virtual ones.
+    virt_held: Vec<(usize, RegKind)>,
     /// Blocks the other way of a comparison jumps to, by the recorded op
     /// it rejoins at, with the registers the skipped ops write.
     alt_joins: std::collections::HashMap<usize, (Block, Vec<u32>)>,

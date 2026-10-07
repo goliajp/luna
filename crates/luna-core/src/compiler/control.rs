@@ -246,6 +246,16 @@ impl<'a> Compiler<'a> {
             base
         };
         self.set_freereg(base + 4);
+        // PUC `forlist`'s `luaK_checkstack`: room to call the generator
+        // past the control slots, to `base + 7` in 5.4 and `base + 6`
+        // otherwise
+        let room = if self.version == LuaVersion::Lua54 {
+            3
+        } else {
+            2
+        };
+        self.reserve(room)?;
+        self.set_freereg(base + 4);
         let control_start = self.here() as u32;
         self.enter_block(true);
         // the 4th control value is an implicit to-be-closed variable (5.4+);

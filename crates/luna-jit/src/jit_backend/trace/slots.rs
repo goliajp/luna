@@ -32,6 +32,8 @@ pub(super) fn rw_ranges(inst: luna_core::vm::isa::Inst) -> ([(u32, u32); 3], [(u
     let r0 = [none; 3];
     let w1 = |x: u32| [one(x), none];
     let w0 = [none; 2];
+    // `R[C]`, unless `k` makes C a constant
+    let val = if inst.k() { none } else { one(c) };
     match inst.op() {
         Op::Move => (r1(b), w1(a)),
         Op::LoadI | Op::LoadF | Op::LoadK | Op::LoadKx => (r0, w1(a)),
@@ -44,11 +46,13 @@ pub(super) fn rw_ranges(inst: luna_core::vm::isa::Inst) -> ([(u32, u32); 3], [(u
         Op::GetTable => (r2(b, c), w1(a)),
         Op::GetI => (r1(b), w1(a)),
         Op::GetField => (r1(b), w1(a)),
-        // luna's set ops always take the value from R[C] (the k flag of
-        // SetField / SetTabUp marks B as a constant key)
-        Op::SetTabUp => (r1(c), w0),
-        Op::SetTable => ([one(a), one(b), one(c)], w0),
-        Op::SetI | Op::SetField => (r2(a, c), w0),
+        // a set op takes its value from K[C] with `k` set, else from R[C]
+        Op::SetTabUp | Op::SetTabUpK => ([val, none, none], w0),
+        Op::SetTabUpR => ([one(b), val, none], w0),
+        Op::SetTable => ([one(a), one(b), val], w0),
+        Op::SetI | Op::SetField | Op::SetTableK => ([one(a), val, none], w0),
+        Op::GetTableK => (r1(b), w1(a)),
+        Op::GetTabUpR => ([val, none, none], w1(a)),
         Op::NewTable => (r0, w1(a)),
         // a key too far for the constant field sits in R[C]
         Op::SelfOp if inst.k() => (r1(b), [(a, 2), none]),
