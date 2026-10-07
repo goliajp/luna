@@ -15,6 +15,7 @@ mod cli_common;
 mod cli_console;
 #[cfg(windows)]
 mod cli_console_ctrl_z;
+mod cli_console_screen;
 mod cli_environment;
 mod cli_errors;
 mod cli_lua_init;

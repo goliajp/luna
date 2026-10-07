@@ -1,7 +1,13 @@
 //! A program attached to a Windows pseudo console (ConPTY), so that its
 //! standard streams are a console: what it writes, and keys typed to it.
+//! What the console shows is the screen ConPTY's bytes paint
+//! (`cli_console_screen`), not the bytes themselves.
+//!
+//! With `LUNA_CONSOLE_RAW_DIR` set, each console's bytes are also written
+//! to a file there when it closes, to see which sequences ConPTY sends.
 
 use crate::cli_common::{luna, workdir};
+use crate::cli_console_screen::Screen;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::{Arc, Mutex};
@@ -16,6 +22,10 @@ use windows_sys::Win32::System::Threading::{
     PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
     TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
 };
+
+/// The console's size.
+const WIDTH: usize = 120;
+const HEIGHT: usize = 30;
 
 /// A child process on its own pseudo console.
 pub(crate) struct Console {
@@ -63,7 +73,10 @@ impl Console {
         let (pc_in, input) = pipe();
         let (output_read, pc_out) = pipe();
         let mut pc: HPCON = 0;
-        let size = COORD { X: 120, Y: 30 };
+        let size = COORD {
+            X: WIDTH as i16,
+            Y: HEIGHT as i16,
+        };
         // SAFETY: the pipe ends are open; `pc` receives the console
         let hr = unsafe { CreatePseudoConsole(size, pc_in, pc_out, 0, &mut pc) };
         assert_eq!(hr, 0, "CreatePseudoConsole: {hr:#x}");
@@ -196,12 +209,14 @@ impl Console {
         );
     }
 
-    /// The output so far with its escape sequences taken out.
+    /// What the console shows so far: its rows, each ended by `\r\n` but
+    /// the last (see [`Screen::text`]).
     pub(crate) fn screen(&self) -> String {
-        strip_escapes(&String::from_utf8_lossy(&self.output.lock().unwrap()))
+        Screen::render(&self.output.lock().unwrap(), WIDTH, HEIGHT).text()
     }
 
-    /// Waits until the output after `from` holds `text`; returns where it ends.
+    /// Waits until what the console shows holds `text` after `from` (a
+    /// position in [`Console::screen`]); returns where it ends.
     pub(crate) fn wait_for(&self, text: &str, from: usize) -> usize {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
@@ -267,6 +282,17 @@ impl Drop for Console {
         }
         if let Some(r) = self.reader.take() {
             let _ = r.join();
+        }
+        if let Some(dir) = std::env::var_os("LUNA_CONSOLE_RAW_DIR") {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static N: AtomicUsize = AtomicUsize::new(0);
+            let name = format!(
+                "console-{}-{}.raw",
+                std::process::id(),
+                N.fetch_add(1, Ordering::Relaxed)
+            );
+            let bytes = self.output.lock().unwrap_or_else(|p| p.into_inner());
+            let _ = std::fs::write(std::path::Path::new(&dir).join(name), &*bytes);
         }
     }
 }
