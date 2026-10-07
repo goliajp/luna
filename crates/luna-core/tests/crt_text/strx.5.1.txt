@@ -1,0 +1,20 @@
+123456789x              	nil	34	error	34
+11111111111111111111x   	nil	34	error	34
+1e999x                  	nil	34	error	34
+10x                     	nil	9	error	9
+0x                      	nil	9	error	9
+0xg                     	nil	9	error	9
+0x10                    	16	9	16	9
+0x10x                   	nil	9	error	9
+1x1                     	nil	9	error	9
+12345678x               	nil	9	error	9
+1234567890x             	nil	34	error	34
+99999999999999999999x   	nil	34	error	34
+  1x                    	nil	9	error	9
+1 x                     	nil	9	error	9
+1.5x                    	nil	9	error	9
+1e5x                    	nil	9	error	9
+0X1P4                   	16	9	16	9
+1X                      	nil	9	error	9
+-10x                    	nil	9	error	9
+0xffffffffffffffffffx   	nil	34	error	34

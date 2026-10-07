@@ -32,11 +32,12 @@ pub struct JitState {
     /// Master JIT switch. Off until a real backend is installed
     /// ([`crate::vm::Vm::install_jit_backend`]), which turns it on unless
     /// the embedder already chose a value with `Vm::set_jit_enabled`.
-    /// Sandbox embedders that rely on `instr_budget` for DoS
-    /// containment **must** call `Vm::set_jit_enabled(false)` —
-    /// JIT'd counted-for loops compile to native Cranelift IR
-    /// that does not tick the budget.
+    /// An armed instruction budget or memory cap keeps compiled code out
+    /// whatever this says (`Vm::limited`).
     pub enabled: bool,
+    /// `enabled` with no limit armed: what the call paths test before
+    /// entering compiled code. Written by `set_jit_flag` / `sync_limited`.
+    pub(crate) gate: bool,
 
     /// Trace JIT subswitch. Same default and install rule as
     /// [`Self::enabled`].
@@ -144,14 +145,14 @@ pub struct JitState {
     /// admit; each admit decrements; when it would reach a negative
     /// value the dispatcher refuses entry and force-deopts via
     /// [`Self::suppress_downrec_admit_once`]. Reset to
-    /// [`JitState::STITCH_DEPTH_DEFAULT`] each natural deopt or
-    /// when the suppress flag fires (so a subsequent interp tick
-    /// past `head_pc` re-arms the budget). Default = the constant.
+    /// [`JitState::STITCH_DEPTH_DEFAULT`] each natural deopt or when the
+    /// suppress flag fires (so a subsequent interp tick past `head_pc`
+    /// re-arms the budget). Default = the constant.
     pub stitch_depth_remaining: u32,
 
-    /// One-shot suppression flag for the
-    /// dispatcher's trace admit. Set when a trace hands control back
-    /// at its own `head_pc` without having run the op there: the
+    /// One-shot suppression flag for the dispatcher's trace admit. Set
+    /// when a trace hands control back at its own `head_pc` without
+    /// having run the op there: the
     /// dispatcher when it force-deopts a downrec entry (guard miss OR
     /// cycle-budget exhausted), and a trace side exit taken before the
     /// head op (through `luna_jit_suppress_trace_admit`). The NEXT
@@ -168,6 +169,12 @@ pub struct JitState {
     /// collections. Accessed via downcast
     /// from the `CraneliftBackend` trait impls.
     pub storage: Box<dyn crate::jit::JitStorage>,
+
+    /// An error raised by a call that compiled code handed to the
+    /// interpreter (a self-recursive call made with too little native
+    /// stack left): unlike `pending_err` it is the call's outcome, raised
+    /// where the compiled code was entered, not a reason to run it again.
+    pub pending_raise: Option<LuaError>,
 }
 
 impl JitState {
@@ -177,12 +184,10 @@ impl JitState {
     /// way a downrec trace HITs is when `saved_pc` from the parent
     /// frame matches one of the recorded `caller_pc` candidates;
     /// each natural admit corresponds to ONE Lua call chain pop, so
-    /// the budget can safely grow to cover ~all consecutive HITs
-    /// expected in a hot loop without infinite-loop risk. `32` lets
-    /// 31 HITs accumulate before a forced-deopt resets the budget;
-    /// fib(3) hot loop's per-outer-iter pattern shows 1 HIT every
-    /// 5 admits, so `32` covers ~32 outer iters before any
-    /// false-classify pressure.
+    /// the budget can safely grow to cover ~all consecutive HITs expected
+    /// in a hot loop without infinite-loop risk. `32` lets 31 HITs
+    /// accumulate before a forced-deopt resets the budget; fib(3)'s hot
+    /// loop shows 1 HIT every 5 admits, so `32` covers ~32 outer iters.
     pub const STITCH_DEPTH_DEFAULT: u32 = 32;
 }
 
@@ -394,6 +399,7 @@ impl JitState {
     pub fn with_null_backend() -> JitState {
         JitState {
             enabled: false,
+            gate: false,
             trace_enabled: false,
             enabled_chosen: false,
             trace_enabled_chosen: false,
@@ -410,6 +416,7 @@ impl JitState {
             max_depth_seen: 0,
             counters: JitCounters::default(),
             pending_err: None,
+            pending_raise: None,
             reg_state_buf: Vec::new(),
             ssa_roots: Vec::new(),
             str_buf_pool: Vec::new(),

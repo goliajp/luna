@@ -2,6 +2,14 @@
 //! the globals table.
 
 use super::*;
+use crate::runtime::mem::{LVec, Oom, catch_load_oom, outside_load};
+
+/// The memory error of a load whose frontend ran out of memory.
+#[cold]
+fn load_oom(heap: &crate::runtime::Heap) -> SyntaxError {
+    heap.mem_ctx().raise_oom();
+    SyntaxError::memory()
+}
 
 impl Vm {
     /// Parse + compile a chunk and close it over the globals table.
@@ -12,6 +20,15 @@ impl Vm {
     /// [`Vm::load`] with the chunk name already a heap string (`name`,
     /// whose bytes are `chunkname`), which the functions then share.
     pub(crate) fn load_named(
+        &mut self,
+        src: &[u8],
+        chunkname: &[u8],
+        name: Option<Gc<crate::runtime::LuaStr>>,
+    ) -> Result<Gc<LuaClosure>, SyntaxError> {
+        self.guarded_load(|vm| vm.load_named_inner(src, chunkname, name))
+    }
+
+    fn load_named_inner(
         &mut self,
         src: &[u8],
         chunkname: &[u8],
@@ -62,22 +79,20 @@ impl Vm {
             // `parse_tokens` reinserts Eof when it runs out of tokens.
             raw.pop();
             let expanded = self.macro_registry.expand(raw)?;
-            let depth = self.c_depth + self.pcall_depth;
-            let parsed =
-                crate::frontend::parser::parse_tokens_at_depth(expanded, src, self.version, depth)?;
-            crate::compiler::compile_parsed(
-                &parsed.chunk,
-                &parsed.end_lines,
+            let depth = self.g.nccalls;
+            let parsed = crate::frontend::parser::parse_tokens_at_depth(
+                expanded,
+                src,
                 self.version,
-                source,
-                &mut self.heap,
-                &mut self.compile_scratch,
-            )?
+                depth,
+                self.heap.mem_owner(),
+            )?;
+            self.compile_parsed(&parsed.chunk, &parsed.end_lines, source)?
         } else {
             // PUC's `nCcalls` counts protected calls as well
-            let depth = self.c_depth + self.pcall_depth;
+            let depth = self.g.nccalls;
             let source = name.unwrap_or_else(|| self.heap.intern(chunkname));
-            let scratch = std::mem::take(&mut self.parse_scratch);
+            let scratch = self.parse_scratch.take();
             let parsed = crate::frontend::parser::parse_reusing(src, self.version, depth, scratch)?;
             self.compile_text(parsed, source)?
         };
@@ -91,16 +106,42 @@ impl Vm {
         parsed: crate::frontend::parser::Parsed,
         source: Gc<crate::runtime::LuaStr>,
     ) -> Result<Gc<crate::runtime::Proto>, SyntaxError> {
-        let proto = crate::compiler::compile_parsed(
-            &parsed.chunk,
-            &parsed.end_lines,
+        let proto = self.compile_parsed(&parsed.chunk, &parsed.end_lines, source)?;
+        self.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
+        Ok(proto)
+    }
+
+    fn compile_parsed(
+        &mut self,
+        chunk: &crate::frontend::ast::Chunk,
+        end_lines: &[u32],
+        source: Gc<crate::runtime::LuaStr>,
+    ) -> Result<Gc<crate::runtime::Proto>, SyntaxError> {
+        crate::compiler::compile_parsed(
+            chunk,
+            end_lines,
             self.version,
             source,
             &mut self.heap,
             &mut self.compile_scratch,
-        )?;
-        self.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
-        Ok(proto)
+        )
+    }
+
+    /// Run `f`, a load, so that running out of memory anywhere in it (the
+    /// parser, the compiler, the objects they make) is the memory error.
+    /// What the load built is dropped on the way out, and the compiler's
+    /// vectors, left half filled, are replaced.
+    fn guarded_load<R>(
+        &mut self,
+        f: impl FnOnce(&mut Vm) -> Result<R, SyntaxError>,
+    ) -> Result<R, SyntaxError> {
+        match catch_load_oom(|| f(self)) {
+            Ok(r) => r,
+            Err(()) => {
+                self.compile_scratch = crate::compiler::CompileScratch::new(self.heap.mem());
+                Err(load_oom(&self.heap))
+            }
+        }
     }
 
     /// Start loading a text chunk that a reader hands over piece by piece
@@ -114,9 +155,9 @@ impl Vm {
         }
         Some(TextLoad {
             version: self.version,
-            depth: self.c_depth + self.pcall_depth,
+            depth: self.g.nccalls,
             budget: self.loader_input_budget,
-            scratch: std::mem::take(&mut self.parse_scratch),
+            scratch: self.parse_scratch.take(),
         })
     }
 
@@ -130,9 +171,11 @@ impl Vm {
         name: Option<Gc<crate::runtime::LuaStr>>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         let parsed = parsed.0?;
-        let source = name.unwrap_or_else(|| self.heap.intern(chunkname));
-        let proto = self.compile_text(parsed, source)?;
-        Ok(self.close_chunk(proto))
+        self.guarded_load(|vm| {
+            let source = name.unwrap_or_else(|| vm.heap.intern(chunkname));
+            let proto = vm.compile_text(parsed, source)?;
+            Ok(vm.close_chunk(proto))
+        })
     }
 
     /// The closure of a loaded main function over the globals.
@@ -198,24 +241,38 @@ impl TextLoad {
         if first.len() > budget {
             return ParsedText(Err(oom()));
         }
+        // the source read so far lives in the vm's memory; each piece comes
+        // through a buffer of its own first, as the reader hands it over
+        let mut whole = LVec::new(self.scratch.mem());
+        if let Err(e) = whole.extend_from_slice(&first) {
+            return ParsedText(Err(e.into()));
+        }
+        drop(first);
         let mut over = false;
-        let mut capped = |buf: &mut Vec<u8>| {
-            let before = buf.len();
-            let more = feed(buf);
-            if buf.len() > budget {
-                buf.truncate(before);
+        let mut piece = Vec::new();
+        let mut capped = |buf: &mut LVec<u8>| -> Result<bool, Oom> {
+            piece.clear();
+            // the reader runs Lua code, outside the load's unwinding
+            let more = outside_load(|| feed(&mut piece));
+            if buf.len() + piece.len() > budget {
                 over = true;
-                return false;
+                return Ok(false);
             }
-            more
+            buf.extend_from_slice(&piece)?;
+            Ok(more)
         };
-        let r = crate::frontend::parser::parse_stream(
-            first,
-            &mut capped,
-            self.version,
-            self.depth,
-            self.scratch,
-        );
+        let mem = self.scratch.mem();
+        let (version, depth, scratch) = (self.version, self.depth, self.scratch);
+        let r = catch_load_oom(|| {
+            crate::frontend::parser::parse_stream(whole, &mut capped, version, depth, scratch)
+        });
+        let r = match r {
+            Ok(r) => r,
+            Err(()) => {
+                mem.ctx().raise_oom();
+                Err(SyntaxError::memory())
+            }
+        };
         ParsedText(if over { Err(oom()) } else { r })
     }
 }

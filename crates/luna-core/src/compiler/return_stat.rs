@@ -51,7 +51,7 @@ impl<'a> Compiler<'a> {
                 );
                 if is_call {
                     let base = self.lr().freereg;
-                    let e = self.call_expr(exprs[0])?;
+                    let e = self.expr(exprs[0])?;
                     let Exp::Open { pc, base: cb } = e else {
                         unreachable!()
                     };

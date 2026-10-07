@@ -323,6 +323,10 @@ impl Vm {
     ) -> Result<Option<Vec<Value>>, LuaError> {
         let at = hc.results_at as usize;
         let top = (self.top as usize).max(at);
+        // `top` may run ahead of the stack's length
+        if self.stack.len() < top {
+            self.grow_stack_or_abort(top);
+        }
         let vals = self.stack[at..top].to_vec();
         self.stack.truncate(at);
         self.top = hc.results_at;
@@ -332,7 +336,7 @@ impl Vm {
         let Value::Native(ncl) = self.stack[nc.func_slot as usize] else {
             unreachable!("a C continuation's slot holds its C function")
         };
-        self.running_natives.push(NativeAct {
+        self.running_natives.push_or_abort(NativeAct {
             nc: ncl,
             func_slot: nc.func_slot,
             nargs: 0,

@@ -19,6 +19,7 @@ mod aot_link_and_run;
 mod aot_msvc_link;
 mod aot_nan_sign;
 mod aot_recursive_trace;
+mod aot_stack_overflow;
 mod aot_strkey_resolver;
 mod aot_trace_fires;
 mod aot_trace_gc_roots;

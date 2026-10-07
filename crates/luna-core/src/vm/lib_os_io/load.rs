@@ -12,39 +12,48 @@ pub(crate) fn load_path(
 ) -> Result<Value, Value> {
     let (read, chunkname) = match name {
         Some(n) => {
+            crate::vm::lib_io::reset_errno(vm);
             let mut chunkname = vec![b'@'];
             chunkname.extend_from_slice(n);
-            (
-                std::fs::read(String::from_utf8_lossy(n).as_ref()),
-                chunkname,
-            )
+            let read = match crate::vm::lib_io::open_file(vm.crt_text, n, b"r") {
+                Ok(mut o) => {
+                    let mut buf = Vec::new();
+                    o.file
+                        .read_to_end(&mut buf)
+                        .map(|_| buf)
+                        .map_err(|e| ("read", e))
+                }
+                Err(e) => Err(("open", e)),
+            };
+            (read, chunkname)
         }
-        None => {
-            let mut buf = Vec::new();
-            let r = std::io::stdin().read_to_end(&mut buf).map(|_| buf);
-            (r, b"=stdin".to_vec())
-        }
+        None => match crate::vm::lib_io::read_stdin_chunk(vm) {
+            // through the C library's `stdin`, as `getF` reads it
+            Some(src) => (Ok(src), b"=stdin".to_vec()),
+            None => {
+                let mut buf = Vec::new();
+                let r = std::io::stdin().read_to_end(&mut buf);
+                (r.map(|_| buf).map_err(|e| ("read", e)), b"=stdin".to_vec())
+            }
+        },
     };
     // `errfile`: the name shown is the chunk name without its '@' / '='.
     let shown = String::from_utf8_lossy(&chunkname[1..]).into_owned();
     let src = match read {
         // `luaL_loadfilex` reads a text chunk through a stream in text mode
-        Ok(src)
-            if !crate::vm::dump::is_binary_chunk(&src)
-                && (if name.is_some() {
-                    vm.crt_text
-                } else {
-                    crate::stdio::text_mode()
-                }) =>
-        {
+        Ok(src) if !crate::vm::dump::is_binary_chunk(&src) && name.is_some() && vm.crt_text => {
             crate::vm::lib_io::translate_all(&src)
         }
         Ok(src) => src,
-        Err(e) => {
-            let msg = format!("cannot open {shown}: {}", os_error_text(&e));
+        Err((what, e)) => {
+            crate::vm::lib_io::note_failure(&e);
+            let text = crate::vm::lib_io::strerror(&e);
+            let msg = format!("cannot {what} {shown}: {text}");
             return Err(Value::Str(vm.heap.intern(msg.as_bytes())));
         }
     };
+    // "no useful error number until here"
+    crate::vm::lib_io::reset_errno(vm);
     let src = crate::frontend::lexer::Lexer::strip_shebang_bom(&src);
     // PUC `luaL_loadfilex`: when a `#` comment line precedes a binary
     // chunk, the leading line-terminator left by the comment skip is
@@ -84,16 +93,6 @@ pub(crate) fn load_chunk(
     match vm.load(src, chunkname) {
         Ok(cl) => Ok(Value::Closure(cl)),
         Err(e) => Err(vm.load_error_value(&e, chunkname)),
-    }
-}
-
-/// C `strerror` for an OS error: Rust renders it as
-/// "<strerror text> (os error N)"; PUC prints the text alone.
-fn os_error_text(e: &std::io::Error) -> String {
-    let full = e.to_string();
-    match (e.raw_os_error(), full.rfind(" (os error ")) {
-        (Some(_), Some(at)) => full[..at].to_string(),
-        _ => full,
     }
 }
 

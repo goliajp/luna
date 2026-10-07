@@ -2,6 +2,8 @@
 //! asked for the next piece as the scan moves past the end of what it has
 //! (PUC's `ZIO`), so a syntax error stops the reading where PUC stops it.
 
+use crate::runtime::mem::{LVec, Oom};
+
 /// The bytes a [`super::Lexer`] scans.
 #[doc(hidden)]
 pub trait Source {
@@ -12,6 +14,10 @@ pub trait Source {
     /// Read the next piece onto the end; false at the end of the input.
     fn more(&mut self) -> bool {
         false
+    }
+    /// Why reading stopped, when the bytes read could not be kept.
+    fn out_of_memory(&self) -> Option<Oom> {
+        None
     }
 }
 
@@ -29,26 +35,29 @@ impl Source for Whole<'_> {
 
 /// A reader of the next piece: it appends one piece to the buffer and
 /// returns true, or returns false at the end of the input (PUC's
-/// `lua_Reader` returning no bytes).
-pub(crate) type Feed<'f> = dyn FnMut(&mut Vec<u8>) -> bool + 'f;
+/// `lua_Reader` returning no bytes); an error when the buffer cannot grow.
+pub(crate) type Feed<'f> = dyn FnMut(&mut LVec<u8>) -> Result<bool, Oom> + 'f;
 
 /// A source read piece by piece. Once the reader has signalled the end it
 /// is not called again: PUC's scanner stops at the end of input.
 pub(crate) struct Stream<'f> {
-    buf: Vec<u8>,
+    buf: LVec<u8>,
     feed: &'f mut Feed<'f>,
     ended: bool,
+    /// reading stopped because `buf` could not grow
+    oom: Option<Oom>,
 }
 
 impl<'f> Stream<'f> {
     /// A stream whose first piece, `first`, was already read (to tell text
     /// from a binary chunk), with `feed` for the rest.
-    pub(crate) fn new(first: Vec<u8>, feed: &'f mut Feed<'f>) -> Stream<'f> {
+    pub(crate) fn new(first: LVec<u8>, feed: &'f mut Feed<'f>) -> Stream<'f> {
         let ended = first.is_empty();
         Stream {
             buf: first,
             feed,
             ended,
+            oom: None,
         }
     }
 }
@@ -65,9 +74,21 @@ impl Source for Stream<'_> {
             return false;
         }
         let before = self.buf.len();
-        if !(self.feed)(&mut self.buf) || self.buf.len() == before {
-            self.ended = true;
+        match (self.feed)(&mut self.buf) {
+            Ok(more) if more && self.buf.len() > before => {}
+            Ok(_) => self.ended = true,
+            // the scan sees the end of the input; the parse then reports
+            // the memory error instead of what it found there
+            Err(e) => {
+                self.buf.truncate(before);
+                self.ended = true;
+                self.oom = Some(e);
+            }
         }
         self.buf.len() > before
+    }
+
+    fn out_of_memory(&self) -> Option<Oom> {
+        self.oom
     }
 }

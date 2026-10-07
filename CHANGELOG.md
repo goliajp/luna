@@ -171,6 +171,25 @@ optimization.
 
 ### Changed
 
+- Strings hash as PUC 5.4 and 5.5 hash them, from the last byte to the
+  first, so that with the same seed a table lays out its string keys —
+  and `pairs` visits them — as PUC does. The order a table with string
+  keys is visited in therefore differs from earlier versions.
+- A trace answers 5.4's `#t` from the table's length limit inline, and
+  reads `t[k]` for a string `k` it did not see at recording time by
+  walking the key's chain inline before calling the runtime.
+
+- On Windows the `luna` command keeps the MSVC C library's `FILE` for each
+  file and standard stream, so that what PUC built with MSVC does with
+  them, `luna` does too: `setvbuf` sizes and the positions `seek` then
+  reports, a `write` right after a `read` failing and a `read` right after
+  a `write` returning the stale buffer, `ungetc` at the start of a buffer
+  dropping the byte, 5.1 and 5.2 reading numbers with that library's
+  `fscanf`, standard output buffered in 4096-byte blocks on a pipe or file
+  and written after every call on a console (so stdout and stderr
+  interleave as with `lua.exe`), a Ctrl+Z typed on a console ending only
+  its line, and `setvbuf` with a size below 2 ending the process with
+  status 0xC0000409. Files opened with `b` follow the library too.
 - On Windows the `luna` command reads and writes as `lua.exe` does, through
   the MSVC C library's text mode: its standard output, standard error and
   standard input, and files opened without `b`, write `\n` as `\r\n` and
@@ -180,6 +199,48 @@ optimization.
   `luna_core::stdio::write_stderr` writes to standard error as the `luna`
   command does. 5.1 and 5.2 read lines on Windows in 512-byte pieces, the
   MSVC `BUFSIZ`, as PUC does there.
+- The C library's `errno` is kept as PUC's process would have it, and a
+  failure that sets none reports what an earlier call left there, as it
+  does in PUC 5.1–5.3 on Windows (a `write` right after a `read`): a
+  number that converts out of range (in `tonumber`, in arithmetic, in the
+  lexer, in a constant `^` or `%` the parser folds), a math function out
+  of its domain or range, `^` and a float `%` (also in compiled traces,
+  compiled functions and luna-aot binaries), a failed open, remove or
+  rename, and `os.time` beyond the C library's range each update it, by
+  the rules of the Universal CRT on Windows and of glibc elsewhere; 5.4
+  and 5.5 clear it where PUC does. `luna_core::cerrno` holds the value.
+- On Windows a failed `io.open`, `os.remove`, `os.rename`, `loadfile` or
+  `io.lines` reports the C library's message and number (`No such file or
+  directory`, 2) instead of the system's (`The system cannot find the path
+  specified.`, 3). Files are opened, removed and renamed through the
+  system calls of that library: `os.rename` does not replace an existing
+  file and `os.remove` does not remove a directory, as in `lua.exe`;
+  `os.tmpname` names a file without creating it; `os.time` fails beyond
+  the year 3000 and before 1970; 5.1's `tonumber(s, base)` clamps to the
+  32-bit `unsigned long`.
+- With `Vm::set_crt_text_mode` (the `luna` command on Windows), `io.open`
+  in 5.1 reads its mode as the MSVC C library's `fopen` does: a `ccs=`
+  selects that library's UTF-8, UTF-16LE or `UNICODE` text mode, with the
+  byte order mark read or written as the file opens, and a mode it calls
+  invalid ends the process with status 0xC0000409, as do line, number and
+  `read(0)` reads of such a file; a `seek` after an odd number of bytes in
+  a Unicode mode ends it with 0xC0000005. In every dialect, opening an
+  empty file in a text mode with `+` leaves EINVAL in `errno`.
+- `loadfile` of a file that opens but cannot be read says `cannot read`.
+- On Windows the `luna` command takes file names, its command line and
+  environment variables through the ANSI code page, as `lua.exe`'s narrow
+  C functions do: a name given as UTF-8 bytes reaches the system as the
+  code page reads those bytes, and `arg`, `os.getenv` and `os.tmpname`
+  give the code page's bytes (`?` for a character it has none for).
+  `Vm::set_global_bytes` sets a global whose name is not UTF-8.
+- On Windows `seek` on standard input goes to the system as for any
+  file, so a file redirected in can be sought and read again, as with
+  `lua.exe`; it reported `Invalid seek` before.
+- A UTF-8 stream of 5.1's `ccs=` reads bytes that are not UTF-8 as
+  `MultiByteToWideChar` does (one U+FFFD for a lead byte with the
+  continuation bytes it took, one for every other byte).
+- 5.1's retry of a numeral with `strtoul` leaves ERANGE in `errno` when
+  the value overflows (`unsigned long` has 32 bits on Windows).
 - The LLVM backend (`--features llvm-jit`, `LUNA_JIT_BACKEND=llvm`)
   compiles traces with the same trace lowering as the Cranelift backend:
   traces start in the baseline tier, move to Cranelift's code once hot,
@@ -394,6 +455,57 @@ optimization.
   about 20 fewer machine instructions each.
 
 ### Fixed
+
+- An exhausted instruction budget or memory cap now stays exhausted
+  until the host arms a new one with `Vm::set_instr_budget` /
+  `Vm::set_memory_cap`: every further instruction raises the same
+  error again, inside `pcall` callers, `xpcall` handlers, `__close`
+  and `__gc` handlers, metamethods, library callbacks and coroutines
+  alike, and `Vm::error_kind()` stays `InstrBudget` / `MemoryCap`
+  (which the cap did not set before). Before, the limit cleared itself
+  when it fired, so `pcall(function() while true do end end) while
+  true do end` ran forever once the inner loop had used the budget
+  up, a handler or finalizer could run unmetered, and a script's `__gc`
+  ran unbounded when the Vm was dropped. Every release from 1.1.0 to
+  4.0.2 is affected. `Vm::instr_budget_remaining()` reports `Some(0)`
+  once exhausted. While a budget or a cap is armed the method JIT is
+  no longer entered either (traces already were not), so the JIT does
+  not need to be switched off for sandboxed scripts.
+- Unbounded nesting no longer crashes the process with a native stack
+  overflow; it raises the Lua error PUC raises, which `pcall` catches.
+  Nesting that runs on the native stack (metamethods, library callbacks
+  such as `table.sort`'s comparator, `string.gsub`'s replacement and
+  `load`'s reader, `tostring`'s `__tostring`, coroutine resumes,
+  protected calls, message handlers, C API calls, the parser) is counted
+  against PUC's 200-level C-call limit, failing at the depth PUC fails
+  at in each dialect, and is also checked against the running thread's
+  real stack bounds, so it fails with "C stack overflow" on an embedder
+  thread with a 256 KB or 2 MB stack too. Metamethod calls were not
+  counted before, and a coroutine now starts from its resumer's count,
+  as `lua_resume` does. A function the method JIT compiled calls itself
+  natively only while stack is left, then lets the interpreter make the
+  remaining calls, so deep recursion ends with "stack overflow" at the
+  Lua stack limit, or completes, as in PUC. The Lua stack limit is
+  PUC's: 1,000,000 slots from 5.2 on, checked as `luaD_growstack`
+  checks it, with 200 more for the message handler of the overflow and
+  "error in error handling" past those; 5.1's is `LUAI_MAXCALLS` (20000)
+  frames, doubling its frame array from 8 as PUC does. Frames sit where
+  PUC puts them (vararg frames above the arguments, the function a
+  protected call calls where `pcall` / `xpcall` put it, the message
+  handler at the raising frame's top, the standalone interpreter's
+  chunk under a `pmain` frame), so a recursion ends at the same depth in
+  every dialect. "error in error handling" no longer runs the message
+  handler again. The compiler walks a left-associative chain (`1 + 1 +
+  ... + 1`, `a.b.b...`, `f()()...`) without recursion, so a chain of any
+  length compiles, as in PUC; nested syntax too deep for the parser
+  fails with the dialect's nesting error at PUC's depth (from 5.2 on a
+  level per statement); a `for` loop's hidden control variables count
+  against the 200 locals. `coroutine.wrap` in 5.4 and 5.5 no longer closes a coroutine
+  that a resume refused to start. Seen in 4.0.2: a `table.sort`
+  comparator, `string.gsub` replacement, `__tostring` or coroutine
+  resume recursing without end on a 256 KB thread, a compiled function
+  recursing without end on any thread, and a 200000-term sum on the main
+  thread all crashed it.
 
 - A trace leaving inside a function it inlined two or more calls deep
   rebuilt the middle frames with their callers' resume pcs, so such a
@@ -737,6 +849,18 @@ optimization.
   tables' array and hash parts, prototypes' code, constants and debug
   records, closures' and native functions' upvalues, coroutine stacks and
   frames, the C API's per-thread `lua_State` and its userdata blocks.
+- And so does the rest of what a Vm keeps: the string table, the
+  collector's gray stack and finalizer queues (a gray stack that cannot
+  grow is made up for by walking the object list, so a collection never
+  fails), the stacks of running natives and host roots, and everything the
+  parser and the compiler build while loading a chunk. A load that runs out
+  of memory fails with "not enough memory"; the C API's `lua_load` returns
+  `LUA_ERRMEM` for it.
+  The parser and the compiler do not check each allocation: one that fails
+  unwinds to the load, which drops what it built (giving every block back)
+  and returns the memory error. This needs `panic = "unwind"`; built with
+  `panic = "abort"` (the default for `wasm32` targets) a load that runs out
+  of memory ends the process, as a standard library container would.
 - luna-aot links `x86_64-pc-windows-msvc` without Visual Studio, on
   Linux, macOS or Windows: `clang-cl` and `lld-link` from LLVM with the
   MSVC C runtime and Windows SDK from `xwin splat`, named by

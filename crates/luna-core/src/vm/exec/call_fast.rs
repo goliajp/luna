@@ -21,10 +21,11 @@ impl Vm {
         let p = cl.proto;
         let base = func_slot + 1;
         let need = base as usize + p.max_stack as usize;
-        if self.jit.enabled
+        if self.jit.gate
             || p.is_vararg
             || p.has_compat_vararg_arg
-            || func_slot + 256 > MAX_LUA_STACK
+            || base + nargs + p.max_stack as u32 + 1 > STACK_LIMIT_FLOOR
+            || self.g.frame_size != u32::MAX
             || self.stack.len() < need
         {
             return None;
@@ -176,6 +177,11 @@ impl Vm {
         use std::panic::{AssertUnwindSafe, catch_unwind};
         let result = match catch_unwind(AssertUnwindSafe(|| (nc.f)(self, func_slot, nargs))) {
             Ok(r) => r,
+            // a load's memory failure belongs to that load, never to a
+            // native it may sit under
+            Err(payload) if crate::runtime::mem::is_load_oom(&*payload) => {
+                std::panic::resume_unwind(payload)
+            }
             Err(payload) => {
                 let msg = panic_payload_str(&payload);
                 let s = Value::Str(self.heap.intern(format!("native panic: {msg}").as_bytes()));
@@ -206,19 +212,22 @@ impl Vm {
         nargs: u32,
         nresults: i32,
     ) -> Result<(), LuaError> {
+        // a C function gets `LUA_MINSTACK` slots (PUC `luaD_precall`)
+        self.check_lua_stack(func_slot + 1 + nargs, 20, false)?;
         self.pending_tailcalls = 0;
         let ccmt = std::mem::take(&mut self.pending_ccmt);
         self.native_nresults = nresults;
         // the caller's registers sit below `func_slot`; the native's own
         // arguments stay rooted too (see `begin_call`)
         self.gc_top = func_slot + nargs + 1;
-        self.running_natives.push(crate::vm::callstack::NativeAct {
-            nc,
-            func_slot,
-            nargs,
-            depth: self.frames.len() as u32,
-            ccmt,
-        });
+        self.running_natives
+            .push_or_abort(crate::vm::callstack::NativeAct {
+                nc,
+                func_slot,
+                nargs,
+                depth: self.frames.len() as u32,
+                ccmt,
+            });
         let nret = self.invoke_native(nc, func_slot, nargs)?;
         // the native may have armed a hook, whose return event it gets
         self.finish_native_call(func_slot, nargs, nret, nresults)

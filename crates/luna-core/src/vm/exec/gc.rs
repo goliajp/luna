@@ -73,18 +73,18 @@ impl Vm {
         self.stack[lo..].fill(Value::Nil);
     }
 
-    /// Enumerate the GC roots: first-class `Value` roots plus bare-object
+    /// Mark the GC roots in `m`: first-class `Value` roots plus bare-object
     /// roots (open upvalues, which are not first-class Values). Shared by the
-    /// full collector and the incremental-sweep driver so both snapshot the
-    /// exact same live set.
-    pub(super) fn gc_roots(&self) -> (Vec<Value>, Vec<Gc<Upvalue>>) {
-        let mut roots: Vec<Value> = Vec::with_capacity(self.stack.len() + 32);
-        roots.push(Value::Table(self.globals));
+    /// full collector and the incremental driver so both mark the exact
+    /// same live set. Marks in place, without collecting the roots first, so
+    /// a collection needs no memory for them.
+    pub(crate) fn mark_roots(&self, m: &mut crate::runtime::heap::Marker) {
+        m.value(Value::Table(self.globals));
         for mt in self.type_mt.into_iter().flatten() {
-            roots.push(Value::Table(mt));
+            m.value(Value::Table(mt));
         }
         for &n in &self.mm_names {
-            roots.push(Value::Str(n));
+            m.value(Value::Str(n));
         }
         // Root the running thread's live registers (PUC marks [stack, top)).
         // `gc_top` is the instruction-level cursor of the last GC
@@ -100,39 +100,46 @@ impl Vm {
         // excluded so weak-table entries are not spuriously pinned
         // (gc.lua:544 suspended-coroutine collection).
         let live = (self.gc_top as usize).min(self.stack.len());
-        roots.extend_from_slice(&self.stack[..live]);
-        roots.extend_from_slice(&self.jit.ssa_roots);
+        for &v in self.stack[..live].iter().chain(self.jit.ssa_roots.iter()) {
+            m.value(v);
+        }
         for cf in &self.frames {
             match cf {
-                CallFrame::Lua(f) => roots.push(Value::Closure(f.closure)),
+                CallFrame::Lua(f) => {
+                    m.value(Value::Closure(f.closure));
+                }
                 CallFrame::Cont(NativeCont {
-                    kind: ContKind::Xpcall { handler },
+                    kind: ContKind::Xpcall { handler, .. },
                     ..
-                }) => roots.push(*handler),
+                }) => {
+                    m.value(*handler);
+                }
                 // a close chain's threaded error sits on the stack below its
                 // handler's call, inside the live window
                 CallFrame::Cont(_) => {}
             }
         }
         if let Some(e) = self.closing_err {
-            roots.push(e);
+            m.value(e);
         }
-        roots.extend(self.host_light.values().copied());
+        for &v in self.host_light.values() {
+            m.value(v);
+        }
         // Host roots — Lua-facade handles keep their referenced
         // values alive across calls/yields. Trace the whole vector;
         // unused slots (post-`unpin_all`) carry Value::Nil which the
         // GC ignores.
         for slot in &self.host_roots {
             // free-list slots carry Value::Nil (GC no-op)
-            roots.push(slot.value);
+            m.value(slot.value);
         }
         // `table.sort` and similar builtins stash their working
         // `Vec<Value>` here so a `collectgarbage()` invoked inside the
         // comparator callback doesn't free strings/tables snapshotted
         // off the live table (sort.lua's `load(..)(); collectgarbage()`
         // compare regression).
-        for buf in &self.sort_scratch {
-            roots.extend_from_slice(buf);
+        for &v in self.sort_scratch.iter().flatten() {
+            m.value(v);
         }
         // The running-natives chain holds Gc<NativeClosure>s
         // mid-execution. Without rooting them here, a `collectgarbage()`
@@ -142,59 +149,84 @@ impl Vm {
         // dangling and the Rust local `nc` pointing at recycled memory
         // — the SIGSEGV pops on the very next field access or pop.
         for a in &self.running_natives {
-            roots.push(Value::Native(a.nc));
+            m.value(Value::Native(a.nc));
         }
         // the running thread's debug hook (suspended threads root theirs via
         // Coro::trace / the main_ctx sweep below)
         if let Some(h) = self.hook.func {
-            roots.push(h);
+            m.value(h);
         }
         // the running coroutine (its saved-context fields live in the VM, but
         // the object itself + its resumer chain must stay reachable)
         if let Some(co) = self.current {
-            roots.push(Value::Coro(co));
+            m.value(Value::Coro(co));
         }
         if let Some(mc) = self.main_coro {
-            roots.push(Value::Coro(mc));
+            m.value(Value::Coro(mc));
         }
         // debug.getregistry() and io library state
         if let Some(r) = self.registry {
-            roots.push(Value::Table(r));
+            m.value(Value::Table(r));
         }
         if let Some(mt) = self.file_mt {
-            roots.push(Value::Table(mt));
+            m.value(Value::Table(mt));
         }
         if let Some(f) = self.io_input {
-            roots.push(Value::Userdata(f));
+            m.value(Value::Userdata(f));
         }
         if let Some(f) = self.io_output {
-            roots.push(Value::Userdata(f));
+            m.value(Value::Userdata(f));
         }
         if let Some(f) = self.io_stdin {
-            roots.push(Value::Userdata(f));
+            m.value(Value::Userdata(f));
         }
         // the main thread's saved context while a coroutine runs
-        if let Some(m) = &self.main_ctx {
-            roots.extend_from_slice(&m.stack);
-            if let Some(h) = m.hook.func {
-                roots.push(h);
+        if let Some(mc) = &self.main_ctx {
+            for &v in mc.stack.iter() {
+                m.value(v);
             }
-            for cf in &m.frames {
+            if let Some(h) = mc.hook.func {
+                m.value(h);
+            }
+            for cf in mc.frames.iter() {
                 match cf {
-                    CallFrame::Lua(f) => roots.push(Value::Closure(f.closure)),
+                    CallFrame::Lua(f) => {
+                        m.value(Value::Closure(f.closure));
+                    }
                     CallFrame::Cont(NativeCont {
-                        kind: ContKind::Xpcall { handler },
+                        kind: ContKind::Xpcall { handler, .. },
                         ..
-                    }) => roots.push(*handler),
+                    }) => {
+                        m.value(*handler);
+                    }
                     CallFrame::Cont(_) => {}
                 }
             }
         }
-        let mut extra: Vec<Gc<Upvalue>> = self.open_upvals.iter().map(|&(_, uv)| uv).collect();
-        if let Some(m) = &self.main_ctx {
-            extra.extend(m.open_upvals.iter().map(|&(_, uv)| uv));
+        for &(_, uv) in self.open_upvals.iter() {
+            m.mark(uv);
         }
-        (roots, extra)
+        if let Some(mc) = &self.main_ctx {
+            for &(_, uv) in mc.open_upvals.iter() {
+                m.mark(uv);
+            }
+        }
+    }
+
+    /// A full stop-the-world collection with the VM's roots (PUC
+    /// `luaC_fullgc`), finishing an incremental cycle in progress first.
+    /// Returns the number of objects freed.
+    pub(crate) fn full_collect(&mut self) -> usize {
+        if self.heap.gc_phase_is_propagate() {
+            let mut m = self.heap.loan_marker();
+            self.mark_roots(&mut m);
+            self.heap.stash_marker(m);
+            self.heap.gc_finish_atomic();
+        }
+        self.heap.gc_finish_sweep();
+        let mut m = self.heap.gc_begin_full();
+        self.mark_roots(&mut m);
+        self.heap.gc_end_full(m)
     }
 
     /// Run a full collection with the VM's roots, then run any `__gc`
@@ -205,8 +237,7 @@ impl Vm {
             return 0;
         }
         self.clear_dead_stack();
-        let (roots, extra) = self.gc_roots();
-        let freed = self.heap.collect_ex(&roots, &extra);
+        let freed = self.full_collect();
         #[cfg(feature = "gc-verify")]
         self.verify_frame_regs_live("collect_garbage");
         self.run_finalizers();
@@ -290,8 +321,7 @@ impl Vm {
             return Ok(0);
         }
         self.clear_dead_stack();
-        let (roots, extra) = self.gc_roots();
-        let freed = self.heap.collect_ex(&roots, &extra);
+        let freed = self.full_collect();
         #[cfg(feature = "gc-verify")]
         self.verify_frame_regs_live("collect_garbage_propagating");
         self.run_finalizers_or_err()?;

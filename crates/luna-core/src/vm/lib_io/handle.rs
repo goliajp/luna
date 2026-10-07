@@ -57,7 +57,9 @@ pub(crate) fn flush_all(vm: &mut Vm) {
             let _ = drain_write_buf(u);
         }
     }
-    let _ = crate::stdio::flush_stdout(); // same: fflush(NULL) reports nothing
+    // same: fflush(NULL) reports nothing
+    let _ = crate::stdio::flush_stdout();
+    let _ = crate::stdio::flush_stderr();
 }
 
 // ---- closing ----
@@ -78,7 +80,11 @@ pub(super) fn close_stream(u: Gc<Userdata>) -> Closed {
     if u.file().is_std() {
         return Closed::Std;
     }
-    let flushed = drain_write_buf(u);
+    let flushed = if u.crt.is_some() {
+        crt::fclose(u)
+    } else {
+        drain_write_buf(u)
+    };
     // SAFETY: `u` is a file handle the caller holds (a native argument on the stack, a registered finalizable, or the io library's default stream); `drain_write_buf`'s borrow has ended, and `m` is the only reference into it until return
     let m = unsafe { u.as_mut() };
     // dropping the handle closes the descriptor; for a pipe the child then
@@ -112,6 +118,14 @@ fn push_closed(vm: &mut Vm, fs: u32, c: Closed) -> u32 {
     }
 }
 
+/// `io_fclose` and `io_pclose` begin with `errno = 0` (5.4+); closing a
+/// standard file (`io_noclose`) does not.
+fn close_reset(vm: &Vm, u: Gc<Userdata>) {
+    if matches!(u.file(), FileHandle::File(_)) {
+        reset_errno(vm);
+    }
+}
+
 /// `io.close([file])`, also the 5.2 method: no argument means the default
 /// output.
 pub(super) fn io_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -124,6 +138,7 @@ pub(super) fn io_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     } else {
         check_open(vm, Args::new(fs, nargs), 0)?
     };
+    close_reset(vm, u);
     let c = close_stream(u);
     Ok(push_closed(vm, fs, c))
 }
@@ -139,6 +154,7 @@ pub(super) fn f_close_51(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
 
 pub(super) fn f_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = check_open(vm, Args::new(fs, nargs), 0)?;
+    close_reset(vm, u);
     let c = close_stream(u);
     Ok(push_closed(vm, fs, c))
 }
@@ -147,6 +163,7 @@ pub(super) fn f_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
 pub(super) fn f_gc(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = check_stream(vm, Args::new(fs, nargs), 0)?;
     if !u.file().is_closed() {
+        close_reset(vm, u);
         let _ = close_stream(u); // PUC's f_gc drops aux_close's results
     }
     Ok(vm.nat_return(fs, &[]))

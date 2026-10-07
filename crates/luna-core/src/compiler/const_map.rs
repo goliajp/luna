@@ -6,46 +6,65 @@
 
 use super::Compiler;
 use crate::runtime::Value;
+use crate::runtime::mem::{LMap, LVec};
 use crate::runtime::string::{LuaStr, MAX_SHORT_LEN};
 use crate::version::LuaVersion;
 use std::collections::HashMap;
 
-/// The hasher of a function's constant map: a multiply-rotate over the
-/// key's words. The keys are a handful of numbers and string hashes per
-/// function, where SipHash's setup cost dominates the lookup.
-#[derive(Default)]
-pub(crate) struct ConstHasher(u64);
+/// A function's constant map while it is compiled (allocated from the Vm's
+/// allocation context).
+pub(super) type ConstMap = LMap<ConstKey, u32>;
 
-impl std::hash::Hasher for ConstHasher {
-    fn finish(&self) -> u64 {
-        self.0
+/// The same map for the dump writer, which has no allocation context.
+pub(crate) type DumpConstMap = HashMap<ConstKey, u32>;
+
+/// The scanner table the rules below read and write: either map.
+pub(crate) trait KeyMap {
+    fn find(&self, k: &ConstKey) -> Option<u32>;
+    fn put(&mut self, k: ConstKey, i: u32);
+}
+
+impl KeyMap for ConstMap {
+    fn find(&self, k: &ConstKey) -> Option<u32> {
+        self.get(k)
     }
-    fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.write_u64(u64::from(b));
-        }
-    }
-    fn write_u64(&mut self, v: u64) {
-        self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x517c_c1b7_2722_0a95);
-    }
-    fn write_u8(&mut self, v: u8) {
-        self.write_u64(u64::from(v));
-    }
-    fn write_u32(&mut self, v: u32) {
-        self.write_u64(u64::from(v));
-    }
-    fn write_i64(&mut self, v: i64) {
-        self.write_u64(v as u64);
-    }
-    fn write_usize(&mut self, v: usize) {
-        self.write_u64(v as u64);
-    }
-    fn write_isize(&mut self, v: isize) {
-        self.write_u64(v as u64);
+    fn put(&mut self, k: ConstKey, i: u32) {
+        self.insert_or_abort(k, i);
     }
 }
 
-pub(crate) type ConstMap = HashMap<ConstKey, u32, std::hash::BuildHasherDefault<ConstHasher>>;
+impl KeyMap for DumpConstMap {
+    fn find(&self, k: &ConstKey) -> Option<u32> {
+        self.get(k).copied()
+    }
+    fn put(&mut self, k: ConstKey, i: u32) {
+        self.insert(k, i);
+    }
+}
+
+/// The constant table the rules add to: either vector.
+pub(crate) trait ConstList {
+    fn items(&self) -> &[Value];
+    fn add(&mut self, v: Value);
+}
+
+impl ConstList for LVec<Value> {
+    fn items(&self) -> &[Value] {
+        self
+    }
+    fn add(&mut self, v: Value) {
+        self.push_or_abort(v);
+    }
+}
+
+impl ConstList for Vec<Value> {
+    fn items(&self) -> &[Value] {
+        self
+    }
+    fn add(&mut self, v: Value) {
+        self.push(v);
+    }
+}
 
 /// A key of PUC's scanner table.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -168,15 +187,15 @@ fn plan(v: LuaVersion, c: &Value) -> (Plan, bool) {
 /// whose scanner table is `map`: added when PUC would add a new entry.
 pub(crate) fn add_const(
     v: LuaVersion,
-    consts: &mut Vec<Value>,
-    map: &mut ConstMap,
+    consts: &mut impl ConstList,
+    map: &mut impl KeyMap,
     c: Value,
 ) -> u32 {
     let (plan, trusted) = plan(v, &c);
     let key = match plan {
         Plan::Key(key) => {
-            if let Some(&i) = map.get(&key)
-                && (trusted || raw_equal(v, &consts[i as usize], &c))
+            if let Some(i) = map.find(&key)
+                && (trusted || raw_equal(v, &consts.items()[i as usize], &c))
             {
                 return i;
             }
@@ -184,8 +203,8 @@ pub(crate) fn add_const(
         }
         Plan::New => None,
     };
-    let i = consts.len() as u32;
-    consts.push(c);
+    let i = consts.items().len() as u32;
+    consts.add(c);
     if let Some(key) = key {
         remember(v, map, key, i);
     }
@@ -193,10 +212,10 @@ pub(crate) fn add_const(
 }
 
 /// The index `add_const` would give `c`, without adding it.
-pub(crate) fn peek_const(v: LuaVersion, consts: &[Value], map: &ConstMap, c: &Value) -> u32 {
+pub(crate) fn peek_const(v: LuaVersion, consts: &[Value], map: &impl KeyMap, c: &Value) -> u32 {
     let (plan, trusted) = plan(v, c);
     if let Plan::Key(key) = plan
-        && let Some(&i) = map.get(&key)
+        && let Some(i) = map.find(&key)
         && (trusted || raw_equal(v, &consts[i as usize], c))
     {
         return i;
@@ -206,18 +225,17 @@ pub(crate) fn peek_const(v: LuaVersion, consts: &[Value], map: &ConstMap, c: &Va
 
 /// Records a new entry `i` under `key`; 5.5 caches a float only under a
 /// key that was free.
-fn remember(v: LuaVersion, map: &mut ConstMap, key: ConstKey, i: u32) {
-    if v == LuaVersion::Lua55 && matches!(key, ConstKey::Float(_)) {
-        map.entry(key).or_insert(i);
-    } else {
-        map.insert(key, i);
+fn remember(v: LuaVersion, map: &mut impl KeyMap, key: ConstKey, i: u32) {
+    if v == LuaVersion::Lua55 && matches!(key, ConstKey::Float(_)) && map.find(&key).is_some() {
+        return;
     }
+    map.put(key, i);
 }
 
 /// The scanner table PUC would have after adding `consts` in order, each
 /// as a new entry (to go on adding constants to a finished function).
-pub(crate) fn const_map_of(v: LuaVersion, consts: &[Value]) -> ConstMap {
-    let mut map = ConstMap::default();
+pub(crate) fn const_map_of(v: LuaVersion, consts: &[Value]) -> DumpConstMap {
+    let mut map = DumpConstMap::default();
     for (i, c) in consts.iter().enumerate() {
         if let (Plan::Key(key), _) = plan(v, c) {
             remember(v, &mut map, key, i as u32);

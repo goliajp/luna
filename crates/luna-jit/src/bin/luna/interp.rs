@@ -6,7 +6,7 @@ use super::*;
 pub(crate) struct Interp {
     pub(crate) vm: Vm,
     /// `progname`: `argv[0]`; none while the REPL runs.
-    pub(crate) progname: Option<String>,
+    pub(crate) progname: Option<Vec<u8>>,
 }
 
 impl Interp {
@@ -18,7 +18,7 @@ impl Interp {
     pub(crate) fn message(&self, msg: &[u8]) {
         let mut line = Vec::new();
         if let Some(p) = &self.progname {
-            line.extend_from_slice(p.as_bytes());
+            line.extend_from_slice(p);
             line.extend_from_slice(b": ");
         }
         // printed with "%s": a C string ends at its first NUL
@@ -112,23 +112,26 @@ impl Interp {
     /// `dolibrary`: `-l name`, `require(module)`, whose result 5.2 on store
     /// in a global. From 5.4 on, `g=mod` names the global, and without it a
     /// `-suffix` of the module name is left out of the global's.
-    fn dolibrary(&mut self, spec: &str) -> bool {
-        let (global, module) = match spec.split_once('=') {
-            Some((g, m)) if self.version() >= LuaVersion::Lua54 => (g, m),
+    fn dolibrary(&mut self, spec: &[u8]) -> bool {
+        let eq = spec.iter().position(|&b| b == b'=');
+        let (global, module) = match eq {
+            Some(at) if self.version() >= LuaVersion::Lua54 => (&spec[..at], &spec[at + 1..]),
             _ if self.version() >= LuaVersion::Lua54 => {
-                (spec.split('-').next().unwrap_or_default(), spec)
+                (spec.split(|&b| b == b'-').next().unwrap_or_default(), spec)
             }
             _ => (spec, spec),
         };
         let require = self.vm.globals().get(self.str_value("require"));
-        let name = self.str_value(module);
+        let name = Value::Str(self.vm.heap.intern(module));
         match self.docall(require, &[name]) {
             Ok(_) if self.version() == LuaVersion::Lua51 => true,
             Ok(vals) => {
                 let v = vals.first().copied().unwrap_or(Value::Nil);
                 // the globals table is not ours to refuse; a failure here
                 // would be luna's own
-                self.vm.set_global(global, v).expect("set the -l global");
+                self.vm
+                    .set_global_bytes(global, v)
+                    .expect("set the -l global");
                 true
             }
             Err(e) => {
@@ -145,11 +148,11 @@ impl Interp {
     /// `createargtable` / `getargs`: `arg[0]` is the script (`argv[0]` when
     /// there is none), the script's arguments count up from 1 and what
     /// comes before it down from -1.
-    pub(crate) fn set_arg(&mut self, argv: &[String], script: usize) {
+    pub(crate) fn set_arg(&mut self, argv: &[Vec<u8>], script: usize) {
         let t = self.vm.heap.new_table();
         for (i, a) in argv.iter().enumerate() {
             let k = Value::Int(i as i64 - script as i64);
-            let v = self.str_value(a);
+            let v = Value::Str(self.vm.heap.intern(a));
             // SAFETY: CLI driver — `t` was just allocated and is reachable
             // only from here until it is stored as `arg`.
             unsafe { t.as_mut() }
@@ -163,15 +166,15 @@ impl Interp {
 
     /// `handle_script`: load the script (stdin for `-` unless it follows
     /// `--`) and run it with its arguments.
-    pub(crate) fn handle_script(&mut self, argv: &[String], script: usize) -> bool {
+    pub(crate) fn handle_script(&mut self, argv: &[Vec<u8>], script: usize) -> bool {
         let v = self.version();
         if v <= LuaVersion::Lua52 {
             self.set_arg(argv, script);
         }
-        let stdin = argv[script] == "-" && argv[script - 1] != "--";
-        let name = (!stdin).then(|| argv[script].as_str());
+        let stdin = argv[script] == b"-" && argv[script - 1] != b"--";
+        let name = (!stdin).then(|| argv[script].as_slice());
         // 5.2 on load either kind of chunk; 5.1 had no mode
-        let f = match self.vm.load_file(name.map(str::as_bytes), None) {
+        let f = match self.vm.load_file(name, None) {
             Ok(f) => f,
             Err(e) => {
                 self.report(e.0);
@@ -181,7 +184,7 @@ impl Interp {
         let args = if v <= LuaVersion::Lua52 {
             argv[script + 1..]
                 .iter()
-                .map(|a| self.str_value(a))
+                .map(|a| Value::Str(self.vm.heap.intern(a)))
                 .collect()
         } else {
             match self.pushargs() {
@@ -207,20 +210,20 @@ impl Interp {
 
     /// `runargs`: the `-e`, `-l` and (5.4 on) `-W` options before `optlim`,
     /// in order; false when one failed.
-    pub(crate) fn runargs(&mut self, argv: &[String], optlim: usize) -> bool {
+    pub(crate) fn runargs(&mut self, argv: &[Vec<u8>], optlim: usize) -> bool {
         let mut i = 1;
         while i < optlim {
             let a = &argv[i];
-            match a.as_bytes()[1] {
+            match a[1] {
                 o @ (b'e' | b'l') => {
                     let extra = if a.len() > 2 {
-                        a[2..].to_string()
+                        a[2..].to_vec()
                     } else {
                         i += 1;
                         argv[i].clone()
                     };
                     let ok = if o == b'e' {
-                        self.dostring(extra.as_bytes(), b"=(command line)")
+                        self.dostring(&extra, b"=(command line)")
                             .map(show)
                             .is_some()
                     } else {
@@ -254,14 +257,7 @@ pub(crate) fn show(vals: Vec<Value>) {
 
 /// An environment variable's value as the C library hands it over.
 fn os_bytes(s: std::ffi::OsString) -> Vec<u8> {
-    #[cfg(unix)]
-    {
-        std::os::unix::ffi::OsStringExt::into_vec(s)
-    }
-    #[cfg(not(unix))]
-    {
-        s.to_string_lossy().into_owned().into_bytes()
-    }
+    luna_core::stdio::os_bytes(&s)
 }
 
 /// `lua_tostring` of an error object: strings, and numbers converted; None

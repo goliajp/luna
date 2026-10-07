@@ -25,6 +25,25 @@ pub(super) struct EmitFacts<'a> {
     pub(super) regs: &'a [Variable],
     pub(super) pc_to_block: &'a [Option<Block>],
     pub(super) fn_id: FuncId,
+    /// set when the chunk calls itself: see [`SelfCalls`]
+    pub(super) self_calls: Option<SelfCalls>,
+}
+
+/// A self-recursive chunk's self calls are direct native calls to its
+/// body, which is laid out as a ring of copies, each calling the next and
+/// the last calling a stub (`entry::define_stub`) that checks the native
+/// stack and the dialect's call budget once per lap before calling the
+/// first copy again; the calls themselves cost nothing. The entry fills
+/// the stub's context (`luna_jit_enter_ctx`) and keeps its address in the
+/// pinned register. Where going on after a failed self call could be seen
+/// (a table write) or might not end (a backward jump), the body reads the
+/// context's failure flag after each self call and returns at once when
+/// it is set; elsewhere the callers finish with dummy results that the
+/// dispatcher drops.
+#[derive(Clone, Copy)]
+pub(super) struct SelfCalls {
+    /// read the failure flag after each self call
+    pub(super) check_failure: bool,
 }
 
 /// What every op's emit updates.
@@ -129,6 +148,9 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     // `binary_trees`'s `{nil, nil}` leaf stores actual Nil values
     // instead of misinterpreting the 0 bits as `Int(0)`.
     let current_is_nil: Vec<bool> = vec![false; max_stack];
+    let self_calls = any_self_call.then(|| SelfCalls {
+        check_failure: may_show_dummy_results(c),
+    });
 
     let f = EmitFacts {
         c,
@@ -139,6 +161,7 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
         regs: &regs,
         pc_to_block: &pc_to_block,
         fn_id,
+        self_calls,
     };
     let mut st = EmitState {
         current_kinds,
@@ -216,9 +239,22 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
 
     module.define_function(fn_id, &mut ctx).ok()?;
     chunk_share::note(module, &ctx, fn_id);
+    let ring = any_self_call.then(|| RingSpec {
+        desc: self_call_desc((arg_float_mask, arg_table_mask), num_params, scan, ret_kind),
+        counted: c.float_only,
+        copies: ring_copies(ctx.compiled_code().map_or(0, |cc| cc.code_buffer().len())),
+    });
     module.clear_context(&mut ctx);
 
-    define_entry(module, &mut ctx, fn_id, scan, any_self_call, num_params)
+    define_entry(module, &mut ctx, fn_id, scan, ring, num_params)
+}
+
+/// Copies of a body of `len` bytes in its ring: as many as keep the ring
+/// under 48 KB of code, up to 32. Their frames together stay far below
+/// the stack the stub keeps free (`native_stack::JIT_RESERVE` less what
+/// raising an error needs): a frame holds at most the 255 registers.
+fn ring_copies(len: usize) -> u32 {
+    (48 * 1024 / len.max(1)).clamp(2, 32) as u32
 }
 
 fn declare_regs(
@@ -266,9 +302,10 @@ fn define_entry<M: Module>(
     ctx: &mut cranelift_codegen::Context,
     fn_id: FuncId,
     scan: &ChunkScan,
-    any_self_call: bool,
+    ring: Option<RingSpec>,
     num_params: usize,
 ) -> Option<FuncId> {
+    let any_self_call = ring.is_some();
     let ChunkScan {
         self_upval_idx,
         math_folds,
@@ -292,11 +329,34 @@ fn define_entry<M: Module>(
     let checks = EntryChecks {
         self_upval: self_upval_idx.filter(|_| any_self_call),
         math_fns,
+        ring,
     };
-    let entry_id = if checks.self_upval.is_some() || !checks.math_fns.is_empty() {
+    let entry_id = if any_self_call || !checks.math_fns.is_empty() {
         define_checked_entry(module, ctx, fn_id, &checks, num_params)?
     } else {
         fn_id
     };
     Some(entry_id)
+}
+
+/// `luna_jit_helpers::self_call_desc` of a chunk's self calls.
+fn self_call_desc(masks: (u8, u8), num_params: usize, scan: &ChunkScan, ret_kind: RegKind) -> i64 {
+    use luna_jit_helpers::*;
+    let ret = match (scan.sees_return1, ret_kind) {
+        (false, _) => SELF_CALL_RET_NONE,
+        (true, RegKind::Float) => SELF_CALL_RET_FLOAT,
+        (true, RegKind::Table) => SELF_CALL_RET_TABLE,
+        (true, _) => SELF_CALL_RET_INT,
+    };
+    luna_jit_helpers::self_call_desc(num_params as u32, masks.0, masks.1, ret)
+}
+
+/// Whether computing on after a failed self call could be seen or might
+/// not end: a table write, a new table, or a backward jump.
+fn may_show_dummy_results(c: ChunkIn<'_>) -> bool {
+    c.code.iter().enumerate().any(|(pc, &ins)| match ins.op() {
+        Op::SetTable | Op::SetList | Op::NewTable => true,
+        Op::Jmp => jmp_target(pc, ins) <= pc,
+        _ => false,
+    })
 }

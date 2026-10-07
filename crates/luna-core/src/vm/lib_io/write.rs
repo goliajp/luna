@@ -15,12 +15,20 @@ fn number_text(vm: &Vm, n: Num) -> Vec<u8> {
 /// `g_write`: write `vals` in order and give the dialect's result.
 fn g_write(vm: &mut Vm, fs: u32, u: Gc<Userdata>, args: Args, first: u32) -> Result<u32, LuaError> {
     let v = vm.version();
+    reset_errno(vm);
     let mut total: i64 = 0;
     let mut failure: Option<std::io::Error> = None;
     for i in first..args.n {
+        let number = |vm: &Vm, n| {
+            // written with `fprintf`
+            if u.crt.is_some() {
+                crt::ansi_only(u);
+            }
+            number_text(vm, n)
+        };
         let bytes = match args.get(vm, i) {
-            Value::Int(x) => number_text(vm, Num::Int(x)),
-            Value::Float(f) => number_text(vm, Num::Float(f)),
+            Value::Int(x) => number(vm, Num::Int(x)),
+            Value::Float(f) => number(vm, Num::Float(f)),
             _ => argcheck::check_string(vm, args, i)?.as_bytes().to_vec(),
         };
         // ≤5.4 stop writing after a failure but still check the remaining
@@ -59,6 +67,7 @@ pub(super) fn f_write(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
 
 pub(super) fn io_flush(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     let u = get_io_file(vm, Io::Output)?;
+    reset_errno(vm);
     Ok(match flush_stream(u) {
         Ok(()) => file_ok(vm, fs),
         Err(e) => file_fail(vm, fs, None, &e),
@@ -67,6 +76,7 @@ pub(super) fn io_flush(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaErro
 
 pub(super) fn f_flush(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = check_open(vm, Args::new(fs, nargs), 0)?;
+    reset_errno(vm);
     Ok(match flush_stream(u) {
         Ok(()) => file_ok(vm, fs),
         Err(e) => file_fail(vm, fs, None, &e),
@@ -90,20 +100,29 @@ pub(super) fn f_seek(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     } else {
         argcheck::opt_integer(vm, a, 2, 0)?
     };
+    reset_errno(vm);
     match seek_stream(u, op, offset) {
         // ≤5.2 has one number type: `lua_pushnumber(ftell(f))`
         Ok(pos) if vm.version() <= LuaVersion::Lua52 => {
             Ok(vm.nat_return(fs, &[Value::Float(pos as f64)]))
         }
-        Ok(pos) => Ok(vm.nat_return(fs, &[Value::Int(pos as i64)])),
+        Ok(pos) => Ok(vm.nat_return(fs, &[Value::Int(pos)])),
         Err(e) => Ok(file_fail(vm, fs, None, &e)),
     }
 }
 
 /// `fseek` + `ftell`: flush pending output, give back read-ahead, move.
-fn seek_stream(u: Gc<Userdata>, op: usize, offset: i64) -> std::io::Result<u64> {
-    if u.text.is_some() && matches!(u.file(), FileHandle::File(_)) {
-        return text_mode::fseek(u, op, offset);
+fn seek_stream(u: Gc<Userdata>, op: usize, offset: i64) -> std::io::Result<i64> {
+    if u.crt.is_some() && matches!(u.file(), FileHandle::File(_) | FileHandle::Stdin) {
+        return crt::seek(u, op, offset);
+    }
+    if crate::stdio::text_mode() && matches!(u.file(), FileHandle::Stdout | FileHandle::Stderr) {
+        let which = if matches!(u.file(), FileHandle::Stderr) {
+            msvc::Std::Err
+        } else {
+            msvc::Std::Out
+        };
+        return crate::stdio::seek_crt(which, op as u8, offset).map_err(crt_error);
     }
     drain_write_buf(u)?;
     if matches!(u.file(), FileHandle::Stdout) {
@@ -129,7 +148,7 @@ fn seek_stream(u: Gc<Userdata>, op: usize, offset: i64) -> std::io::Result<u64> 
     };
     m.read_buf = Vec::new();
     m.read_pos = 0;
-    Ok(pos)
+    Ok(pos as i64)
 }
 
 /// Seek a standard stream through a duplicate of its descriptor, which
@@ -155,7 +174,39 @@ pub(super) fn f_setvbuf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let a = Args::new(fs, nargs);
     let u = check_open(vm, a, 0)?;
     let op = argcheck::check_option(vm, a, 1, None, &["no", "full", "line"])?;
-    argcheck::opt_integer(vm, a, 2, LUAL_BUFFERSIZE)?;
+    let size = argcheck::opt_integer(vm, a, 2, LUAL_BUFFERSIZE)?;
+    // the C library's mode: 0 full, 1 line, 2 none
+    let cmode = [2u8, 0, 1][op];
+    reset_errno(vm);
+    // what PUC built with MSVC passes when no size is given
+    let crt_size = |vm: &Vm| {
+        if a.is_none_or_nil(vm, 2) {
+            lual_buffersize(vm.version()) as i64
+        } else {
+            size
+        }
+    };
+    if u.crt.is_some() {
+        let size = crt_size(vm);
+        return Ok(if crt::setvbuf(u, cmode, size) {
+            file_ok(vm, fs)
+        } else {
+            file_fail(vm, fs, None, &crt::error())
+        });
+    }
+    if crate::stdio::text_mode() && !matches!(u.file(), FileHandle::File(_)) {
+        let size = crt_size(vm);
+        if cmode != 2 && !(2..=i64::from(i32::MAX)).contains(&size) {
+            crt::invalid_parameter();
+        }
+        let std = if matches!(u.file(), FileHandle::Stderr) {
+            msvc::Std::Err
+        } else {
+            msvc::Std::Out
+        };
+        crate::stdio::setvbuf_crt(std, cmode, size as usize);
+        return Ok(file_ok(vm, fs));
+    }
     let mode = [BUF_NO, BUF_FULL, BUF_LINE][op];
     // SAFETY: `u` came from `check_open` on a native argument, so the stack keeps it; the borrow covers one field store
     unsafe { u.as_mut() }.buf_mode = mode;

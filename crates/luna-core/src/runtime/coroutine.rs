@@ -82,8 +82,15 @@ pub struct Coro {
     pub tbc: LVec<u32>,
     /// Saved stack top.
     pub top: u32,
+    /// Saved `Vm::stack_extra`: the stack is using its error space.
+    pub stack_extra: bool,
+    /// Saved `Vm::frame_size`: the size of the thread's 5.1 frame array.
+    pub frame_size: u32,
+    /// Saved `Vm::meta_conts`.
     /// live pcall/xpcall continuation count (PUC nCcalls portion); see Vm
-    pub pcall_depth: u32,
+    pub meta_conts: u32,
+    /// Saved `Vm::stale_frames`.
+    pub stale_frames: u32,
     /// this thread's debug hook state (PUC per-thread hook/hookmask)
     pub hook: crate::vm::exec::HookState,
     /// PUC `L->l_gt` — the thread's own globals table. Captured from the
@@ -116,7 +123,7 @@ impl Coro {
                     m.mark(f.closure);
                 }
                 CallFrame::Cont(nc) => {
-                    if let ContKind::Xpcall { handler } = nc.kind {
+                    if let ContKind::Xpcall { handler, .. } = nc.kind {
                         m.value(handler);
                     }
                 }

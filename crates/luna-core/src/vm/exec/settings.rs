@@ -36,12 +36,12 @@ impl Vm {
             let _ = err(b"Lua warning: ");
         }
         let _ = err(msg);
-        self.warn_buf.extend_from_slice(msg);
+        self.warn_buf.extend_from_slice_or_abort(msg);
         self.warn_cont = to_cont;
         if !to_cont {
             let _ = err(b"\n");
-            let line = std::mem::take(&mut self.warn_buf);
-            self.warn_log.push(line);
+            let line = self.warn_buf.take();
+            self.warn_log.push_or_abort(line);
         }
         Ok(())
     }
@@ -74,32 +74,44 @@ impl Vm {
     /// `"Lua warning: "` prefix and newline). For test harnesses that want to
     /// assert on warn output without scraping stderr.
     pub fn warn_log_take(&mut self) -> Vec<Vec<u8>> {
-        std::mem::take(&mut self.warn_log)
+        let log = self.warn_log.take();
+        log.iter().map(|l| l.to_vec()).collect()
     }
 
     /// Arm the cooperative instruction budget. The run loop
-    /// decrements this once per dispatch turn; on zero it raises a catchable
-    /// `"instruction budget exceeded"` error and disarms itself so the host
-    /// can resume with a fresh budget on the next call. `None` removes the
-    /// cap. Pass `Some(n)` before `eval`/`call_value` for the embedder's
-    /// short-script semantics.
+    /// decrements this once per dispatch turn; on zero it raises the
+    /// `"instruction budget exceeded"` error ([`LuaErrorKind::InstrBudget`])
+    /// and the budget stays exhausted: until the next call of this method
+    /// every further instruction raises the same error again, whoever runs
+    /// it — the script after a `pcall` that caught it, an `xpcall` handler,
+    /// a `__close` or `__gc` handler, a metamethod, a library callback such
+    /// as a sort comparator, a coroutine — so the script cannot catch the
+    /// error and carry on. `None` removes the budget. Pass `Some(n)` before
+    /// each `eval` / `call_value` for the embedder's short-script
+    /// semantics. While a budget is armed no compiled code runs: the loops
+    /// the JIT would compile stay in the interpreter, where they are
+    /// counted.
+    ///
+    /// [`LuaErrorKind::InstrBudget`]: crate::vm::error::LuaErrorKind::InstrBudget
     pub fn set_instr_budget(&mut self, budget: Option<i64>) {
         self.instr_budget = budget;
+        self.sync_limited();
         self.trap = true;
     }
 
-    /// Remaining instruction budget (None when unbounded).
+    /// Remaining instruction budget: `None` when unbounded, `Some(0)` once
+    /// it ran out.
     pub fn instr_budget_remaining(&self) -> Option<i64> {
         self.instr_budget
     }
 
     /// Toggle the method JIT. Off on a Vm without a JIT backend, on once
     /// one is installed ([`Self::install_jit_backend`]); a value set here
-    /// is kept across a later install. Sandbox embedders
-    /// **must** disable JIT when relying on `instr_budget` — see the
-    /// `jit_enabled` field doc for the rationale.
+    /// is kept across a later install. An armed instruction budget or
+    /// memory cap keeps compiled code out on its own (see
+    /// [`Self::set_instr_budget`]).
     pub fn set_jit_enabled(&mut self, enabled: bool) {
-        self.jit.enabled = enabled;
+        self.set_jit_flag(enabled);
         self.jit.enabled_chosen = true;
     }
 
@@ -248,15 +260,22 @@ impl Vm {
     /// Arm the soft memory cap. The run loop checks the
     /// heap's tracked byte usage between dispatch turns; on overshoot it
     /// first runs a full collect, and if `bytes` still exceeds the cap it
-    /// raises a catchable `"memory cap exceeded"` Lua error and disarms
-    /// itself (fire-once: re-arm before the next `call_value` if reusing
-    /// the Vm across requests). `None` removes the cap. The accounting is
-    /// approximate — internal Vec/Box capacity overhead is not tracked,
-    /// so embedders should size the cap with ~2× margin over the desired
-    /// hard limit and additionally bound the Vm's lifetime (drop after
-    /// each request).
+    /// raises the `"memory cap exceeded"` Lua error
+    /// ([`LuaErrorKind::MemoryCap`]). Like the instruction budget the cap
+    /// then stays exceeded: every further instruction raises the error
+    /// again until the next call of this method (see
+    /// [`Self::set_instr_budget`] for who that stops). `None` removes the
+    /// cap; re-arm before the next `call_value` when reusing the Vm across
+    /// requests. The accounting is approximate — internal Vec/Box capacity
+    /// overhead is not tracked, so embedders should size the cap with ~2×
+    /// margin over the desired hard limit and additionally bound the Vm's
+    /// lifetime (drop after each request). While a cap is armed no
+    /// compiled code runs.
+    ///
+    /// [`LuaErrorKind::MemoryCap`]: crate::vm::error::LuaErrorKind::MemoryCap
     pub fn set_memory_cap(&mut self, cap: Option<usize>) {
         self.heap.mem_cap = cap;
+        self.sync_limited();
         self.trap = true;
     }
 

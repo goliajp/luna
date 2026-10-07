@@ -1,6 +1,15 @@
 //! Unary operators, `and` / `or`, concatenation and indexing.
 
 use super::*;
+use crate::runtime::mem::LVec;
+
+/// What [`Compiler::index_open`] found.
+pub(super) enum IndexOpen {
+    /// the index compiled, needing no object
+    Done(Exp),
+    /// the object is to be compiled, `saved` the free register before it
+    Object { saved: u32 },
+}
 
 impl<'a> Compiler<'a> {
     pub(super) fn unop(
@@ -49,6 +58,19 @@ impl<'a> Compiler<'a> {
         self.last_line = line;
         let base = self.lr().freereg;
         let le = self.expr(lhs)?;
+        self.and_or_close(op, le, rhs, line, base)
+    }
+
+    /// `and` / `or` with the left operand compiled to `le`, `base` the free
+    /// register before it.
+    pub(super) fn and_or_close(
+        &mut self,
+        op: BinOp,
+        le: Exp,
+        rhs: ExprId,
+        line: u32,
+        base: u32,
+    ) -> Result<Exp, SyntaxError> {
         // PUC's jumplist for `X and Y` / `X or Y` when X is a comparison:
         // skip materializing X to a bool — the comparison's own conditional
         // jump *is* the short-circuit. For AND, emit the Cmp with k=false so
@@ -151,7 +173,8 @@ impl<'a> Compiler<'a> {
         // run-side pre-sum can short-circuit the whole expression.
         //
         // Collect the right-associative chain's operands left-to-right.
-        let mut operands: Vec<ExprId> = vec![lhs];
+        let mut operands: LVec<ExprId> = LVec::new(self.heap.mem());
+        operands.push_or_abort(lhs);
         let mut cur = rhs;
         loop {
             match self.ast.expr(cur) {
@@ -161,11 +184,11 @@ impl<'a> Compiler<'a> {
                     rhs: r,
                     ..
                 } => {
-                    operands.push(*l);
+                    operands.push_or_abort(*l);
                     cur = *r;
                 }
                 _ => {
-                    operands.push(cur);
+                    operands.push_or_abort(cur);
                     break;
                 }
             }
@@ -213,7 +236,13 @@ impl<'a> Compiler<'a> {
             .is_some_and(|idx| lvl.locals[idx].vararg_virtual)
     }
 
-    pub(super) fn index_expr(&mut self, obj: ExprId, key: ExprId) -> Result<Exp, SyntaxError> {
+    /// Before the object of `obj[key]` is compiled: the whole index when it
+    /// needs no object, else the free register to put back.
+    pub(super) fn index_open(
+        &mut self,
+        obj: ExprId,
+        key: ExprId,
+    ) -> Result<IndexOpen, SyntaxError> {
         let ast = self.ast;
         // a read `t[k]` / `t.n` of a virtual named vararg: index the stack
         // varargs directly (OP_VARGIDX), allocating no table.
@@ -225,10 +254,21 @@ impl<'a> Compiler<'a> {
             let k = self.exp_to_anyreg(ke)?;
             let e = Exp::Reloc(self.emit(Inst::iabc(Op::VargIdx, 0, 0, k, false)));
             self.set_freereg(saved);
-            return Ok(e);
+            return Ok(IndexOpen::Done(e));
         }
-        let saved = self.lr().freereg;
-        let oe = self.expr(obj)?;
+        Ok(IndexOpen::Object {
+            saved: self.lr().freereg,
+        })
+    }
+
+    /// `obj[key]` with the object compiled to `oe`.
+    pub(super) fn index_close(
+        &mut self,
+        oe: Exp,
+        key: ExprId,
+        saved: u32,
+    ) -> Result<Exp, SyntaxError> {
+        let ast = self.ast;
         let o = self.exp_to_anyreg(oe)?;
         let e = match ast.expr(key) {
             Expr::Str(s) if self.sb(*s).len() <= 255 => {

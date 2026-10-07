@@ -175,12 +175,16 @@ impl Table {
             // growing appends nil slots, so the count stays; the prefix
             // may lag behind the run (a refill scans only 64 slots ahead,
             // a method-JIT store extends it by one) and catches up here
-            let atags = self.atags();
-            let mut p = self.aprefix as usize;
-            while p < old_asize && atags[p] != raw::NIL {
-                p += 1;
+            if self.aprefix == APREFIX_UNKNOWN {
+                self.recount_array();
+            } else {
+                let atags = self.atags();
+                let mut p = self.aprefix as usize;
+                while p < old_asize && atags[p] != raw::NIL {
+                    p += 1;
+                }
+                self.aprefix = p as u32;
             }
-            self.aprefix = p as u32;
             #[cfg(debug_assertions)]
             {
                 let kept = (self.acount, self.aprefix);

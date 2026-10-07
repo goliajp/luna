@@ -1,6 +1,7 @@
 //! Statement dispatch and declarations (`local`, `global`, `function`).
 
 use super::*;
+use crate::runtime::mem::LVec;
 
 impl<'a> Compiler<'a> {
     pub(super) fn stat_block(&mut self, b: &Block) -> Result<(), SyntaxError> {
@@ -110,8 +111,8 @@ impl<'a> Compiler<'a> {
                     .rev()
                     .find(|b| b.is_loop)
                     .expect("loop block");
-                lp.breaks.push(jmp);
-                lp.break_levels.push(level);
+                lp.breaks.push_or_abort(jmp);
+                lp.break_levels.push_or_abort(level);
                 Ok(())
             }
             Stat::Return { exprs, line } => {
@@ -124,7 +125,7 @@ impl<'a> Compiler<'a> {
                     self.last_line = *line;
                 }
                 let base = self.lr().freereg;
-                let ce = self.call_expr(e)?;
+                let ce = self.expr(e)?;
                 let Exp::Open { pc, .. } = ce else {
                     unreachable!()
                 };
@@ -157,7 +158,7 @@ impl<'a> Compiler<'a> {
                     .last_mut()
                     .expect("no block")
                     .gdecls
-                    .push((text.into(), false));
+                    .push_or_abort((text, false));
                 self.declare_global_marker(Some(text));
                 let saved = self.lr().freereg;
                 let f = self.function_exp(body, false)?;
@@ -222,7 +223,7 @@ impl<'a> Compiler<'a> {
                     .last_mut()
                     .expect("no block")
                     .gdecls
-                    .push((Box::<str>::from(text.text(an.name.sym)), ro));
+                    .push_or_abort((text.text(an.name.sym), ro));
                 c.declare_global_marker(Some(text.text(an.name.sym)));
             }
         };
@@ -270,9 +271,12 @@ impl<'a> Compiler<'a> {
         let res = (|| -> Result<(), SyntaxError> {
             let be = self.name_expr(self.nm(&name.base))?;
             let mut holder = self.exp_to_anyreg(be)?;
-            let mut fields: Vec<&str> = self.ls(name.path).iter().map(|n| self.nm(n)).collect();
+            let mut fields: LVec<&str> = LVec::new(self.heap.mem());
+            for n in self.ls(name.path) {
+                fields.push_or_abort(self.nm(n));
+            }
             if let Some(m) = &name.method {
-                fields.push(self.nm(m));
+                fields.push_or_abort(self.nm(m));
             }
             for f_name in &fields[..fields.len() - 1] {
                 let c = self.str_const(f_name.as_bytes());

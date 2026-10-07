@@ -13,24 +13,34 @@ pub(super) fn os_getenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     Ok(vm.nat_return(fs, &[v]))
 }
 
-fn os_bytes(s: &std::ffi::OsStr) -> Vec<u8> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        s.as_bytes().to_vec()
-    }
-    #[cfg(not(unix))]
-    {
-        s.to_string_lossy().into_owned().into_bytes()
-    }
-}
+use lib_io::os_bytes;
 
 /// C `remove`: `rmdir` for a directory, `unlink` otherwise.
-fn remove_path(p: &std::path::Path) -> std::io::Result<()> {
-    if std::fs::symlink_metadata(p)?.is_dir() {
+#[cfg(not(windows))]
+fn remove_path(name: &[u8]) -> std::io::Result<()> {
+    let p = lib_io::os_path(name);
+    if std::fs::symlink_metadata(&p)?.is_dir() {
         std::fs::remove_dir(p)
     } else {
         std::fs::remove_file(p)
+    }
+}
+
+/// The Universal CRT's `remove`, which removes files only.
+#[cfg(windows)]
+fn remove_path(name: &[u8]) -> std::io::Result<()> {
+    lib_io::winfs::remove(name)
+}
+
+/// C `rename`; the Universal CRT's does not replace an existing file.
+fn rename_path(from: &[u8], to: &[u8]) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        lib_io::winfs::rename(from, to)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(lib_io::os_path(from), lib_io::os_path(to))
     }
 }
 
@@ -38,7 +48,8 @@ pub(super) fn os_remove(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let name = argcheck::check_string(vm, Args::new(fs, nargs), 0)?
         .as_bytes()
         .to_vec();
-    Ok(match remove_path(&lib_io::os_path(&name)) {
+    lib_io::reset_errno(vm);
+    Ok(match remove_path(&name) {
         Ok(()) => vm.nat_return(fs, &[Value::Bool(true)]),
         Err(e) => lib_io::file_fail(vm, fs, Some(&name), &e),
     })
@@ -48,20 +59,61 @@ pub(super) fn os_rename(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let a = Args::new(fs, nargs);
     let from = argcheck::check_string(vm, a, 0)?.as_bytes().to_vec();
     let to = argcheck::check_string(vm, a, 1)?.as_bytes().to_vec();
-    Ok(
-        match std::fs::rename(lib_io::os_path(&from), lib_io::os_path(&to)) {
-            Ok(()) => vm.nat_return(fs, &[Value::Bool(true)]),
-            // 5.1 names the source file in the message; 5.2+ name nothing
-            Err(e) => {
-                let fname = (vm.version() == LuaVersion::Lua51).then_some(from.as_slice());
-                lib_io::file_fail(vm, fs, fname, &e)
+    lib_io::reset_errno(vm);
+    Ok(match rename_path(&from, &to) {
+        Ok(()) => vm.nat_return(fs, &[Value::Bool(true)]),
+        // 5.1 names the source file in the message; 5.2+ name nothing
+        Err(e) => {
+            let fname = (vm.version() == LuaVersion::Lua51).then_some(from.as_slice());
+            lib_io::file_fail(vm, fs, fname, &e)
+        }
+    })
+}
+
+/// `os.tmpname` on Windows: the Universal CRT's `tmpnam`, which creates
+/// nothing. Its names are `s<process id>.<n>` in the temporary directory,
+/// both numbers in base 36, `n` counting up through the process; it skips
+/// names that exist, and the check of the free one leaves ENOENT.
+#[cfg(windows)]
+pub(super) fn os_tmpname(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
+    static NEXT: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+    fn base36(mut n: u64) -> String {
+        let mut d = Vec::new();
+        loop {
+            d.push(b"0123456789abcdefghijklmnopqrstuvwxyz"[(n % 36) as usize]);
+            n /= 36;
+            if n == 0 {
+                break;
             }
-        },
-    )
+        }
+        d.reverse();
+        String::from_utf8(d).expect("ASCII digits")
+    }
+    let mut dir = std::env::temp_dir().display().to_string();
+    if !dir.ends_with('\\') {
+        dir.push('\\');
+    }
+    // `L_tmpnam` less the room the name needs
+    if dir.len() > 260 - 22 {
+        return Err(raise_str(vm, "unable to generate a unique filename"));
+    }
+    let mut next = NEXT.lock().unwrap_or_else(|e| e.into_inner());
+    let pid = base36(u64::from(std::process::id()));
+    let name = loop {
+        let name = format!("{dir}s{pid}.{}", base36(*next));
+        *next += 1;
+        if std::fs::metadata(&name).is_err() {
+            break name;
+        }
+    };
+    crate::cerrno::set(2);
+    let s = Value::Str(vm.heap.intern(name.as_bytes()));
+    Ok(vm.nat_return(fs, &[s]))
 }
 
 /// `os.tmpname`: POSIX builds use `mkstemp("/tmp/lua_XXXXXX")`, which
 /// creates the file it names.
+#[cfg(not(windows))]
 pub(super) fn os_tmpname(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     use std::hash::{BuildHasher, Hasher};
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -109,6 +161,7 @@ pub(super) fn os_tmpname(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaEr
 pub(super) fn os_execute(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let cmd = argcheck::opt_string(vm, Args::new(fs, nargs), 0)?.map(|s| s.as_bytes().to_vec());
     let v = vm.version();
+    lib_io::reset_errno(vm);
     let Some(cmd) = cmd else {
         // system(NULL): whether a shell exists
         return Ok(if v == LuaVersion::Lua51 {

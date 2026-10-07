@@ -124,15 +124,44 @@ pub struct NativeCont {
     pub nresults: i32,
 }
 
+impl ContKind {
+    /// Whether a protected call's continuation took a C level of PUC's.
+    pub fn is_level(&self) -> bool {
+        match self {
+            ContKind::Pcall { level, .. } | ContKind::Xpcall { level, .. } => *level,
+            _ => true,
+        }
+    }
+
+    /// The slot a protected call's callee was called at, above the slot
+    /// after the continuation (`Vm::callee_shift`).
+    pub fn callee_shift(&self) -> i32 {
+        match self {
+            ContKind::Pcall { shift, .. } | ContKind::Xpcall { shift, .. } => i32::from(*shift),
+            _ => 0,
+        }
+    }
+}
+
 /// Continuation kind for yieldable native dispatch.
 #[derive(Clone, Copy)]
 pub enum ContKind {
     /// `pcall(f, ...)` — wraps the result as `(true, ...)` / `(false, msg)`.
-    Pcall,
+    Pcall {
+        /// The call is a C level of PUC's (`Vm::begin_pcall`).
+        level: bool,
+        /// Where the callee was called, relative to the slot above the
+        /// continuation (`Vm::callee_shift`).
+        shift: i8,
+    },
     /// xpcall: the message handler to run if the protected call errors
     Xpcall {
         /// Message handler function invoked on error.
         handler: Value,
+        /// The call is a C level of PUC's (`Vm::begin_pcall`).
+        level: bool,
+        /// Where the callee was called (`Vm::callee_shift`).
+        shift: i8,
     },
     /// a yieldable metamethod call triggered by a VM instruction (PUC's
     /// `luaV_finishOp`): on the metamethod's return the interrupted instruction

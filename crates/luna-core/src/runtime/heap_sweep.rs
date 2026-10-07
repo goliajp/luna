@@ -113,18 +113,17 @@ impl Heap {
                     // future `new_table` without re-mallocing. Cap pool
                     // at 4096 entries to bound idle memory.
                     const TABLE_POOL_CAP: usize = 4096;
-                    if self.table_pool.len() < TABLE_POOL_CAP {
-                        // Free interior heap allocations now; an empty Box is
-                        // dangling, so reassigning is just a pointer move.
-                        (*t).drop_array_part(self.mem());
-                        (*t).drop_hash_part(self.mem());
+                    (*t).free_parts(self.mem());
+                    // the pool owns the table's block until reuse or the
+                    // heap's drop; a pool that cannot grow frees it instead
+                    if self.table_pool.len() < TABLE_POOL_CAP
+                        && self
+                            .table_pool
+                            .push(std::ptr::NonNull::new_unchecked(t))
+                            .is_ok()
+                    {
                         (*t).metatable = None;
-                        // Stash the raw pointer for future reuse.
-                        // SAFETY: t is non-null (came from a live Gc<Table>);
-                        // pool owns it until reuse or Heap::Drop.
-                        self.table_pool.push(std::ptr::NonNull::new_unchecked(t));
                     } else {
-                        (*t).free_parts(self.mem());
                         self.free_block(t);
                     }
                 }

@@ -2,19 +2,21 @@
 //! entries, and allocating a vector for each costs more than the rest of
 //! their handling.
 
+use crate::runtime::mem::{LVec, MemRef};
+
 /// A list of `T` whose first `N` items are stored in place.
 pub(super) struct SmallList<T: Copy, const N: usize> {
     head: [Option<T>; N],
     len: usize,
-    rest: Vec<T>,
+    rest: LVec<T>,
 }
 
 impl<T: Copy, const N: usize> SmallList<T, N> {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(mem: MemRef) -> Self {
         SmallList {
             head: [None; N],
             len: 0,
-            rest: Vec::new(),
+            rest: LVec::new(mem),
         }
     }
 
@@ -22,7 +24,7 @@ impl<T: Copy, const N: usize> SmallList<T, N> {
         if self.len < N {
             self.head[self.len] = Some(v);
         } else {
-            self.rest.push(v);
+            self.rest.push_or_abort(v);
         }
         self.len += 1;
     }
@@ -52,10 +54,12 @@ pub(super) type Jumps = SmallList<usize, 4>;
 #[cfg(test)]
 mod tests {
     use super::SmallList;
+    use crate::runtime::mem::MemOwner;
 
     #[test]
     fn items_past_the_inline_ones_spill() {
-        let mut l: SmallList<u32, 2> = SmallList::new();
+        let o = MemOwner::system();
+        let mut l: SmallList<u32, 2> = SmallList::new(o.mem());
         for i in 0..5 {
             l.push(i * 10);
         }

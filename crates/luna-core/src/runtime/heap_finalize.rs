@@ -54,7 +54,7 @@ impl Heap {
                 // SAFETY: `h` is the allocated header read above; only its flag
                 // byte is written
                 unsafe { (*h).flags = ((*h).flags & !(FIN | DEFERRED)) | FINALIZED };
-                self.tobefnz.push(h);
+                self.queue_to_finalize(h);
                 // SAFETY: `h` is the allocated header read above
                 unsafe { m.header(h) };
                 self.finalize.swap_remove(i);
@@ -64,6 +64,28 @@ impl Heap {
                 unsafe { (*h).flags &= !DEFERRED };
             }
         }
+    }
+
+    /// List `h` (not yet listed) for finalization, keeping room in
+    /// `tobefnz` for every listed object: a collection moves them there and
+    /// must not have to allocate to do it.
+    ///
+    /// # Safety
+    /// `h` heads an allocated table or userdata the caller holds.
+    unsafe fn register(&mut self, h: *mut GcHeader) {
+        let room = self.finalize.len() + 1 + self.tobefnz.len();
+        if self.tobefnz.capacity() < room {
+            self.tobefnz.reserve_or_abort(room - self.tobefnz.len());
+        }
+        self.finalize.push_or_abort(h);
+        // SAFETY: the caller's contract; only the flag byte is written
+        unsafe { (*h).flags |= FIN };
+    }
+
+    /// Put `h` on `tobefnz`, whose room `register` keeps.
+    fn queue_to_finalize(&mut self, h: *mut GcHeader) {
+        debug_assert!(self.tobefnz.len() < self.tobefnz.capacity());
+        self.tobefnz.push_or_abort(h);
     }
 
     /// Register a table for finalization (a live `__gc` metamethod was just set
@@ -79,8 +101,7 @@ impl Heap {
         // SAFETY: `h` is the header of `t`, a table the caller holds a live handle to; only the flag byte is touched
         unsafe {
             if (*h).flags & FIN == 0 {
-                (*h).flags |= FIN;
-                self.finalize.push(h);
+                self.register(h);
             }
         }
     }
@@ -94,8 +115,7 @@ impl Heap {
         // SAFETY: `h` is the header of `u`, a userdata the caller holds a live handle to; only the flag byte is touched
         unsafe {
             if (*h).flags & FIN == 0 {
-                (*h).flags |= FIN;
-                self.finalize.push(h);
+                self.register(h);
             }
         }
     }
@@ -125,7 +145,10 @@ impl Heap {
     /// 5.5 reference manual §2.5.3 re-finalize semantics.
     pub(crate) fn take_tobefnz(&mut self) -> Vec<crate::runtime::Value> {
         use crate::runtime::Value;
-        std::mem::take(&mut self.tobefnz)
+        // emptied in place: its capacity stays for the next collection
+        let queued: Vec<_> = self.tobefnz.iter().copied().collect();
+        self.tobefnz.clear();
+        queued
             .into_iter()
             // SAFETY: every `tobefnz` entry was marked by `separate_finalizables` (or `mark_all` re-marks it) and so is still allocated; it was registered as a table or a userdata, the two tags matched below, and the caller roots the returned handles until the finalizers have run
             .map(|h| unsafe {
@@ -146,10 +169,11 @@ impl Heap {
     /// every `__gc` before the heap is torn down.
     pub(crate) fn queue_all_finalizers(&mut self) {
         // newest first, as `separate_finalizables` orders them
-        for h in std::mem::take(&mut self.finalize).into_iter().rev() {
+        let all = self.finalize.take();
+        for &h in all.iter().rev() {
             // SAFETY: `finalize` entries are registered objects the sweep has not freed (see `finalizable_userdata`); only the flag byte is written
             unsafe { (*h).flags = ((*h).flags & !FIN) | FINALIZED };
-            self.tobefnz.push(h);
+            self.queue_to_finalize(h);
         }
     }
 }

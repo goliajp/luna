@@ -171,7 +171,7 @@ impl Vm {
                 // writes are discarded; interp re-executes from
                 // the original `pc`.
                 while self.frames.len() > pre_frames {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+                    self.pop_frame();
                 }
                 if is_downrec_entry {
                     // pending_err observed
@@ -334,7 +334,7 @@ impl Vm {
         // tail, but a body side-exit before reaching
         // the tail may have via the materialize helper).
         while self.frames.len() > pre_frames {
-            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            self.pop_frame();
         }
     }
 

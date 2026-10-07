@@ -145,21 +145,75 @@ These rules hold in the interpreter, in compiled traces and in luna-aot
 binaries; on Windows they were checked against PUC 5.1–5.5 built with MSVC (`tostring`,
 `string.format`, `%`, `math.fmod`, with the JIT on and off).
 
-On Windows `lua.exe` reads and writes through the MSVC C library in text
-mode, and the `luna` command does the same: standard output, standard
-error and standard input, and every file opened without `b` (`io.open`,
-`io.lines`, `io.input`, `io.output`, `io.popen`, and the source files
-`loadfile`, `dofile` and `require` read). `\n` is written as `\r\n`;
-`\r\n` reads as `\n`; a Ctrl+Z ends the input; opening a file with `+`
-drops a Ctrl+Z at its end; and `seek` reports the position that library's
-`ftell` computes, which for a file whose lines end in a bare `\n` is not
-the true one (it can come out negative, and then `seek` fails). Files
-opened with `b`, `io.tmpfile()`, and everything on other platforms are
-not translated. An embedding host gets this only by calling
-`Vm::set_crt_text_mode(true)`; standard output, standard error and
-standard input are put in text mode by `luna_core::stdio::use_c_stdout`,
-which a host normally does not call. The `luna` command's output was
-compared byte for byte with PUC 5.1–5.5 built with MSVC.
+On Windows `lua.exe` reads and writes through the MSVC C library, and the
+`luna` command does the same: luna keeps that library's `FILE` (its buffer,
+flags and rules) for every file it opens and for standard input, output
+and error. So, as in `lua.exe`:
+
+- files opened without `b`, and the standard streams, are in text mode:
+  `\n` is written as `\r\n`, `\r\n` reads as `\n`, a Ctrl+Z ends the
+  input (on a console it ends only the line it is in, and one at the start
+  of a line is the end of input), and opening a file with `+` drops a
+  Ctrl+Z at its end; `io.tmpfile()` and files opened with `b` are binary;
+- `seek` reports the position that library's `ftell` computes from its
+  buffer, which for a text file whose lines end in a bare `\n` is not the
+  true one (it can come out negative, and then `seek` fails); `setvbuf`
+  sizes the buffer (`"line"` is full buffering, `"no"` a two-byte buffer),
+  and a size below 2 ends the process at once with status 0xC0000409;
+- a `write` right after a `read` that stopped short of the end of the
+  file fails, and a `read` right after a `write` reads whatever the shared
+  buffer held, until a `seek` or `flush` in between; `ungetc` at the start
+  of a buffer that still holds bytes drops the byte;
+- 5.1 and 5.2 read a number with that library's `fscanf("%lf")`, which
+  takes `1e+` of `1e+x` and then fails;
+- standard output to a pipe or file is buffered in 4096-byte blocks, and
+  on a console written out after every call; standard error is written
+  out after every call; so the two interleave as they do with `lua.exe`.
+
+- files are opened, removed and renamed through the Win32 calls that
+  library makes: a file that is open cannot be removed or renamed (the
+  library shares it for reading and writing only), `os.rename` does not
+  replace an existing file, `os.remove` does not remove a directory, and
+  `os.tmpname` names a file without creating it; unlike the library, luna
+  does not let child processes inherit the handles;
+- file names, the command line and environment variables go through the
+  ANSI code page, as that library's narrow functions take them: a name
+  given as UTF-8 bytes reaches the system as the code page reads those
+  bytes (`é` as `Ã©` under code page 1252), and a value such as
+  `os.getenv` or `arg` gives comes back in the code page, `?` for a
+  character it has none for;
+- `seek` on standard input goes to the system as for any file: a file
+  redirected in can be sought, a pipe answers as the system answers for
+  it, `NUL` is at 0;
+- a UTF-8 stream (`ccs=`, below) reads bytes that are not UTF-8 as
+  `MultiByteToWideChar` does, one U+FFFD for a lead byte with the
+  continuation bytes it took and one for every other byte, and a read
+  ending in a character it cannot complete fails with EINVAL;
+- 5.1 passes its `io.open` mode to that library's `fopen` as it is, so a
+  `ccs=UTF-8`, `ccs=UTF-16LE` or `ccs=UNICODE` in it opens the file in
+  the library's Unicode text mode (UTF-16 code units in the stream, with
+  a byte order mark), and a mode the library calls invalid ends the
+  process with status 0xC0000409.
+
+The C library's `errno` is part of what a script can see: in PUC 5.1–5.3
+on Windows a failure that sets none (a `write` right after a `read`)
+reports whatever an earlier C call left there. luna keeps that value for
+every dialect and platform and updates it where PUC's C calls would, by
+the rules of the Universal CRT on Windows and of glibc elsewhere: number
+conversions out of range (in 5.1 also the `strtoul` its reader retries
+with, whose overflow of the 32-bit `unsigned long` on Windows is ERANGE),
+math functions out of their domain or range,
+`^` and float `%` (in the interpreter, in compiled code and in constants
+the parser folds, in the order PUC's parser folds them), failed opens,
+removes and renames, and `os.time` beyond the library's range; 5.4 and
+5.5 clear it where PUC does. On Windows a failure reports the C library's
+message and number, not the system's.
+
+An embedding host gets the files' behaviour only by calling
+`Vm::set_crt_text_mode(true)`, and the standard streams' only through
+`luna_core::stdio::use_c_stdout` on Windows, which a host normally does
+not call; on other platforms nothing changes. The `luna` command's output
+was compared byte for byte with PUC 5.1–5.5 built with MSVC.
 
 `io` and `os` share a single opener because they share a threat model:
 either the host is giving the script filesystem and process access or it
@@ -423,15 +477,25 @@ and numeric-string arguments, every library's surface in each dialect,
 `collectgarbage`, call-stack levels, tracebacks, and language-level error
 messages. What still differs does so on purpose:
 
-- **Metamethod recursion depth.** PUC counts a metamethod call against its
-  200-level C-call limit, so a `__index` function recursing about 200
-  deep raises "C stack overflow". luna does not count metamethod calls;
-  such recursion is bounded by the Lua stack (one million slots) and
-  raises "stack overflow" there. It never crashes the process.
-- **`pcall` nesting depth.** Both stop with "C stack overflow", but the
-  depth at which they do depends on how many C levels the host has
-  already used (PUC's standalone interpreter spends about three before
-  the script runs), so the exact count differs.
+- **Native stack.** Like PUC, luna counts metamethod calls (`__index`,
+  `__eq`, `__close`, `__pairs` and the rest; `__call` runs as a Lua
+  call), library callbacks (`table.sort`, `string.gsub`, `load` readers,
+  `__tostring`), coroutine resumes, protected calls, message handlers
+  and C API calls against a 200-level C-call limit and raises "C stack
+  overflow" past it, at the depth PUC does. On top of that it
+  compares the native stack pointer with the running thread's stack
+  bounds, so on a thread with a small stack (an embedder's 256 KB worker,
+  say) the same error comes after fewer levels instead of a crash. The
+  bounds are read from the OS on Linux, Android, macOS and the other
+  Apple targets, and Windows; elsewhere, or when the embedder runs luna
+  on a stack of its own, only the count applies. Code the method JIT
+  compiled calls itself on the native stack; when that stack runs low
+  the interpreter makes the remaining calls, so deep recursion ends
+  where PUC's Lua stack limit ends it.
+- **Very long `and` / `or` chains.** PUC 5.1 to 5.3 patch every jump of
+  such a chain to its end, so a chain of about 65000 operands fails to
+  compile with "control structure too long"; luna's jumps are short and
+  the chain compiles. From 5.4 on both compile it.
 - **Local time.** luna-core links no C library timezone code:
   `os.date` without a leading `!` formats UTC, and `os.time`'s valid
   range is computed rather than taken from the host's `mktime`.

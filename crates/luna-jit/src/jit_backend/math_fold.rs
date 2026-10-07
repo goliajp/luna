@@ -10,6 +10,24 @@ pub(super) fn is_rounding(fn_name: &str) -> bool {
     matches!(fn_name, "floor" | "ceil")
 }
 
+/// The number `luna_jit_math1` takes for the libm function `fn_name` of a
+/// fold, for those that can set `errno`; the others are called directly.
+pub(super) fn errno_math_fn(fn_name: &str) -> Option<i64> {
+    use luna_core::cerrno::MathFn;
+    let f = match fn_name {
+        "sin" => MathFn::Sin,
+        "cos" => MathFn::Cos,
+        "tan" => MathFn::Tan,
+        "asin" => MathFn::Asin,
+        "acos" => MathFn::Acos,
+        "exp" => MathFn::Exp,
+        "log" => MathFn::Log,
+        "sqrt" => MathFn::Sqrt,
+        _ => return None,
+    };
+    Some(f.index())
+}
+
 /// try to recognize the 4-op `<env>.math.<fn>(R[arg])` window
 /// starting at `start_pc`. Returns `Some(MathFold)` on match, `None`
 /// otherwise. Pure inspection — no side effects, no whitelist

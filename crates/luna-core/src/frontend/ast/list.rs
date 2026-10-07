@@ -1,6 +1,7 @@
 //! Lists of a tree: ranges into vectors of the chunk.
 
 use super::*;
+use crate::runtime::mem::LVec;
 use std::marker::PhantomData;
 
 /// A list of `T` stored in a [`Chunk`]: `len` items from `start` in the
@@ -61,18 +62,18 @@ impl<T> std::fmt::Debug for List<T> {
 /// An item type a [`List`] can hold, with the [`Chunk`] vector it lives in.
 pub trait ListItem: Copy + Sized {
     /// The chunk's vector of this item type.
-    fn items(chunk: &Chunk) -> &Vec<Self>;
+    fn items(chunk: &Chunk) -> &LVec<Self>;
     /// The same vector, to add to.
-    fn items_mut(chunk: &mut Chunk) -> &mut Vec<Self>;
+    fn items_mut(chunk: &mut Chunk) -> &mut LVec<Self>;
 }
 
 macro_rules! list_item {
     ($t:ty, $field:ident) => {
         impl ListItem for $t {
-            fn items(chunk: &Chunk) -> &Vec<Self> {
+            fn items(chunk: &Chunk) -> &LVec<Self> {
                 &chunk.$field
             }
-            fn items_mut(chunk: &mut Chunk) -> &mut Vec<Self> {
+            fn items_mut(chunk: &mut Chunk) -> &mut LVec<Self> {
                 &mut chunk.$field
             }
         }

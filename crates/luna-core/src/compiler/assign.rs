@@ -28,7 +28,7 @@ impl<'a> Compiler<'a> {
         // PUC's `check_conflict` only snapshots locals that actually clash;
         // we copy unconditionally — costs one extra MOVE per Index LHS, much
         // simpler than tracking pairwise conflicts and never wrong.
-        let mut plans: SmallList<LhsPlan, 4> = SmallList::new();
+        let mut plans: SmallList<LhsPlan, 4> = SmallList::new(self.heap.mem());
         for &t in targets {
             match self.ast.expr(t) {
                 Expr::Name(_) => plans.push(LhsPlan::Name(t)),
@@ -139,17 +139,22 @@ impl<'a> Compiler<'a> {
     /// in source order, so they precede the RHS's (PUC restassign ordering). Only
     /// the lvalue prefix (`Name`, and the object/key of an `Index`) is walked.
     pub(super) fn preresolve_target_upvals(&mut self, id: ExprId) -> Result<(), SyntaxError> {
+        if crate::native_stack::is_low(crate::native_stack::RESERVE) {
+            return Err(self.too_deep());
+        }
         let ast = self.ast;
-        match ast.expr(id) {
-            Expr::Name(n) => {
-                self.resolve_name(self.nm(n))?;
-            }
-            Expr::Index { obj, key } => {
-                let (obj, key) = (*obj, *key);
-                self.preresolve_target_upvals(obj)?;
-                self.preresolve_target_upvals(key)?;
-            }
-            _ => {}
+        // the objects of a chain of indices come first, innermost first
+        let mut keys: Vec<ExprId> = Vec::new();
+        let mut cur = id;
+        while let Expr::Index { obj, key } = *ast.expr(cur) {
+            keys.push(key);
+            cur = obj;
+        }
+        if let Expr::Name(n) = ast.expr(cur) {
+            self.resolve_name(self.nm(n))?;
+        }
+        for key in keys.into_iter().rev() {
+            self.preresolve_target_upvals(key)?;
         }
         Ok(())
     }
