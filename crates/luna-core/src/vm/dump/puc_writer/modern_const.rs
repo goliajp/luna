@@ -61,7 +61,11 @@ impl M<'_, '_> {
 
     /// The value a store writes: a constant (`k`) or a register.
     pub(super) fn store_val(&mut self, l: L) -> Res<(u32, bool)> {
-        Ok(if l.k { (l.c, true) } else { (self.asm.r(l.c)?, false) })
+        Ok(if l.k {
+            (l.c, true)
+        } else {
+            (self.asm.r(l.c)?, false)
+        })
     }
 
     /// The `K` form of `op`: `lopcodes.h` lists `ADDK`…`BXORK` in a row.

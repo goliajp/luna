@@ -38,7 +38,11 @@ impl C<'_, '_> {
             let key = if l.k { self.rk(l.c)? } else { self.asm.r(l.c)? };
             return self.emit(self.abc(Kind::GetTabUp, a, l.b, key));
         }
-        let key = if l.op == Op::SetTabUpK { self.rk(l.b)? } else { self.asm.r(l.b)? };
+        let key = if l.op == Op::SetTabUpK {
+            self.rk(l.b)?
+        } else {
+            self.asm.r(l.b)?
+        };
         let c = self.store_val(l)?;
         self.emit(self.abc(Kind::SetTabUp, l.a, key, c))
     }

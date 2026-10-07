@@ -70,7 +70,10 @@ impl<'a> Compiler<'a> {
     /// The variable `text` as an assignment target.
     pub(super) fn name_lv(&mut self, text: &str, line: u32) -> Result<Lv, SyntaxError> {
         let read_only = |c: &Self, name: &str| {
-            c.err(line, format!("attempt to assign to const variable '{name}'"))
+            c.err(
+                line,
+                format!("attempt to assign to const variable '{name}'"),
+            )
         };
         match self.resolve_name(text)? {
             VarKind::Const(_) => Err(read_only(self, text)),
@@ -88,7 +91,8 @@ impl<'a> Compiler<'a> {
                 Ok(Lv::Upval(u))
             }
             VarKind::Global { .. } => {
-                let VarKind::Global { read_only: ro } = self.resolve_global_kind(text, line)? else {
+                let VarKind::Global { read_only: ro } = self.resolve_global_kind(text, line)?
+                else {
                     unreachable!()
                 };
                 if ro {

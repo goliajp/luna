@@ -24,7 +24,12 @@ impl Compiler<'_> {
         stack.push_or_abort((lhs, Some(line)));
         while let Some((id, after)) = stack.pop() {
             match *ast.expr(id) {
-                Expr::BinOp { op: o, lhs: l, rhs: r, line: ln } if o == op => {
+                Expr::BinOp {
+                    op: o,
+                    lhs: l,
+                    rhs: r,
+                    line: ln,
+                } if o == op => {
                     stack.push_or_abort((r, after));
                     stack.push_or_abort((l, Some(ln)));
                 }

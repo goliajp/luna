@@ -87,7 +87,9 @@ fn many_constants() -> String {
     for i in 0..300 {
         s.push_str(&format!("{i}.25, "));
     }
-    s.push_str("}\nt.a = 1.75\nt[2.5] = true\nt[7] = 'k'\ng = 3.5\nreturn t[2.5], t[300.5], g, h\n");
+    s.push_str(
+        "}\nt.a = 1.75\nt[2.5] = true\nt[7] = 'k'\ng = 3.5\nreturn t[2.5], t[300.5], g, h\n",
+    );
     s
 }
 

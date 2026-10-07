@@ -78,11 +78,7 @@ fn a_self_decrement_takes_no_moves() {
         return bucket.tokens
     "#;
     let code = compile_main(src);
-    assert_eq!(
-        count_moves_from_reg(&code, 0),
-        0,
-        "bucket@r0 copied"
-    );
+    assert_eq!(count_moves_from_reg(&code, 0), 0, "bucket@r0 copied");
     assert_eq!(count_all_moves(&code), 0, "no other Moves expected either");
     assert_eq!(eval_int(src), 99);
 }
@@ -96,11 +92,7 @@ fn a_math_min_call_leaves_the_table_in_place() {
         return bucket.tokens
     "#;
     let code = compile_main(src);
-    assert_eq!(
-        count_moves_from_reg(&code, 0),
-        0,
-        "bucket@r0 copied"
-    );
+    assert_eq!(count_moves_from_reg(&code, 0), 0, "bucket@r0 copied");
     assert_eq!(eval_int(src), 10);
 }
 
@@ -115,19 +107,10 @@ fn a_local_value_is_stored_from_its_register() {
         return bucket.last
     "#;
     let code = compile_main(src);
-    assert_eq!(
-        count_moves_from_reg(&code, 0),
-        0,
-        "bucket@r0 copied"
-    );
-    assert_eq!(
-        count_moves_from_reg(&code, 1),
-        0,
-        "now@r1 copied"
-    );
+    assert_eq!(count_moves_from_reg(&code, 0), 0, "bucket@r0 copied");
+    assert_eq!(count_moves_from_reg(&code, 1), 0, "now@r1 copied");
     assert_eq!(eval_int(src), 7);
 }
-
 
 #[test]
 fn a_user_call_on_the_right_leaves_the_table_in_place() {
@@ -140,11 +123,7 @@ fn a_user_call_on_the_right_leaves_the_table_in_place() {
         return bucket.x
     "#;
     let code = compile_main(src);
-    assert_eq!(
-        count_moves_from_reg(&code, 0),
-        0,
-        "bucket@r0 copied"
-    );
+    assert_eq!(count_moves_from_reg(&code, 0), 0, "bucket@r0 copied");
     assert_eq!(eval_int(src), 42);
 }
 
@@ -157,11 +136,7 @@ fn a_method_call_on_the_right_leaves_the_table_in_place() {
         return bucket.x
     "#;
     let code = compile_main(src);
-    assert_eq!(
-        count_moves_from_reg(&code, 0),
-        0,
-        "bucket@r0 copied"
-    );
+    assert_eq!(count_moves_from_reg(&code, 0), 0, "bucket@r0 copied");
     assert_eq!(eval_int(src), 0x61);
 }
 
@@ -176,16 +151,8 @@ fn several_targets_without_a_conflict_take_no_copies() {
         return a.x, b.y
     "#;
     let code = compile_main(src);
-    assert_eq!(
-        count_moves_from_reg(&code, 0),
-        0,
-        "a@r0 copied"
-    );
-    assert_eq!(
-        count_moves_from_reg(&code, 1),
-        0,
-        "b@r1 copied"
-    );
+    assert_eq!(count_moves_from_reg(&code, 0), 0, "a@r0 copied");
+    assert_eq!(count_moves_from_reg(&code, 1), 0, "b@r1 copied");
     assert_eq!(eval_int_pair(src), (10, 20));
 }
 
@@ -199,11 +166,7 @@ fn a_captured_table_is_not_copied() {
         return bucket.x
     "#;
     let code = compile_main(src);
-    assert_eq!(
-        count_moves_from_reg(&code, 0),
-        0,
-        "bucket@r0 copied"
-    );
+    assert_eq!(count_moves_from_reg(&code, 0), 0, "bucket@r0 copied");
     assert_eq!(eval_int(src), 99);
 }
 
@@ -228,7 +191,6 @@ fn a_global_table_target_stores() {
     "#;
     assert_eq!(eval_int(src), 7);
 }
-
 
 #[test]
 fn a_fresh_key_goes_through_newindex() {
@@ -292,7 +254,11 @@ fn a_local_key_stays_in_its_register() {
 fn a_captured_local_key_is_not_copied() {
     let src = "local t = {} local k = 3 local f = function() return k end t[k] = 1 return t[3]";
     let code = compile_main(src);
-    assert_eq!(count_moves_from_reg(&code, 1), 0, "captured key copied: {code:?}");
+    assert_eq!(
+        count_moves_from_reg(&code, 1),
+        0,
+        "captured key copied: {code:?}"
+    );
     assert_eq!(eval_int(src), 1);
 }
 
