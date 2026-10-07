@@ -176,6 +176,19 @@ and error. So, as in `lua.exe`:
   replace an existing file, `os.remove` does not remove a directory, and
   `os.tmpname` names a file without creating it; unlike the library, luna
   does not let child processes inherit the handles;
+- file names, the command line and environment variables go through the
+  ANSI code page, as that library's narrow functions take them: a name
+  given as UTF-8 bytes reaches the system as the code page reads those
+  bytes (`é` as `Ã©` under code page 1252), and a value such as
+  `os.getenv` or `arg` gives comes back in the code page, `?` for a
+  character it has none for;
+- `seek` on standard input goes to the system as for any file: a file
+  redirected in can be sought, a pipe answers as the system answers for
+  it, `NUL` is at 0;
+- a UTF-8 stream (`ccs=`, below) reads bytes that are not UTF-8 as
+  `MultiByteToWideChar` does, one U+FFFD for a lead byte with the
+  continuation bytes it took and one for every other byte, and a read
+  ending in a character it cannot complete fails with EINVAL;
 - 5.1 passes its `io.open` mode to that library's `fopen` as it is, so a
   `ccs=UTF-8`, `ccs=UTF-16LE` or `ccs=UNICODE` in it opens the file in
   the library's Unicode text mode (UTF-16 code units in the stream, with
@@ -187,7 +200,9 @@ on Windows a failure that sets none (a `write` right after a `read`)
 reports whatever an earlier C call left there. luna keeps that value for
 every dialect and platform and updates it where PUC's C calls would, by
 the rules of the Universal CRT on Windows and of glibc elsewhere: number
-conversions out of range, math functions out of their domain or range,
+conversions out of range (in 5.1 also the `strtoul` its reader retries
+with, whose overflow of the 32-bit `unsigned long` on Windows is ERANGE),
+math functions out of their domain or range,
 `^` and float `%` (in the interpreter, in compiled code and in constants
 the parser folds, in the order PUC's parser folds them), failed opens,
 removes and renames, and `os.time` beyond the library's range; 5.4 and

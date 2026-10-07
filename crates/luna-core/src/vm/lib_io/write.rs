@@ -113,7 +113,7 @@ pub(super) fn f_seek(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
 
 /// `fseek` + `ftell`: flush pending output, give back read-ahead, move.
 fn seek_stream(u: Gc<Userdata>, op: usize, offset: i64) -> std::io::Result<i64> {
-    if u.crt.is_some() && matches!(u.file(), FileHandle::File(_)) {
+    if u.crt.is_some() && matches!(u.file(), FileHandle::File(_) | FileHandle::Stdin) {
         return crt::seek(u, op, offset);
     }
     if crate::stdio::text_mode() && matches!(u.file(), FileHandle::Stdout | FileHandle::Stderr) {

@@ -155,8 +155,8 @@ impl Handle {
     }
 
     /// `_read` in UTF-8 mode: the file's bytes, `\r\n` turned to `\n`, up
-    /// to the last whole character, as UTF-16 (`MultiByteToWideChar`, which
-    /// puts U+FFFD for what is not UTF-8).
+    /// to the last whole character, as UTF-16 (`MultiByteToWideChar`, with
+    /// U+FFFD for what is not UTF-8 as [`super::utf8`] has it).
     pub(super) fn read_utf8(&mut self, os: &mut dyn Os, dst: &mut [u8]) -> i64 {
         if !dst.len().is_multiple_of(2) {
             super::super::crt::invalid_parameter();
@@ -197,9 +197,7 @@ impl Handle {
                 end = i;
             }
         }
-        let wide: Vec<u16> = String::from_utf8_lossy(&raw[..end])
-            .encode_utf16()
-            .collect();
+        let wide = super::utf8::to_utf16(&raw[..end]);
         if wide.is_empty() || wide.len() > dst.len() / 2 {
             set_errno(EINVAL);
             return -1;

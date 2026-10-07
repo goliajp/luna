@@ -1,50 +1,10 @@
 //! The embedder-facing surface: globals, natives, loading and calling
-//! chunks, the random generator and the macro hooks.
+//! chunks, and the macro hooks.
 
 use super::*;
 use crate::native_stack::{HANDLER_RESERVE, RESERVE, is_low};
 
 impl Vm {
-    /// xoshiro256** next.
-    pub(crate) fn rng_next(&mut self) -> u64 {
-        let s = &mut self.rng;
-        let result = s[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
-        let t = s[1] << 17;
-        s[2] ^= s[0];
-        s[3] ^= s[1];
-        s[1] ^= s[2];
-        s[0] ^= s[3];
-        s[2] ^= t;
-        s[3] = s[3].rotate_left(45);
-        result
-    }
-
-    /// Seed the RNG via splitmix64 expansion (PUC randseed shape).
-    pub(crate) fn rng_seed(&mut self, a: u64, b: u64) {
-        // PUC setseed: state = [n1, 0xff, n2, 0] (0xff avoids an all-zero
-        // state), then 16 discards to spread the seed. Matches PUC's exact
-        // sequence so the low-level conformance test passes.
-        self.rng = [a, 0xff, b, 0];
-        for _ in 0..16 {
-            self.rng_next();
-        }
-    }
-
-    /// Wall-clock since VM creation (os.clock approximation).
-    pub(crate) fn uptime(&self) -> std::time::Duration {
-        self.started.elapsed()
-    }
-
-    /// Entropy for math.randomseed() with no arguments.
-    pub(crate) fn rng_auto_seed(&mut self) -> (i64, i64) {
-        let t = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-        let addr = &self.rng as *const _ as u64;
-        (t as i64, addr as i64)
-    }
-
     /// Allocate a native function object (no upvalues): builtin registration.
     pub fn native(&mut self, f: crate::runtime::value::NativeFn) -> Value {
         Value::Native(self.heap.new_native(f, Box::new([])))
@@ -120,8 +80,19 @@ impl Vm {
         name: &str,
         v: V,
     ) -> Result<(), LuaError> {
+        self.set_global_bytes(name.as_bytes(), v)
+    }
+
+    /// [`Vm::set_global`] for a name that is not UTF-8: Lua strings are
+    /// bytes, and a program's command line or environment may hand over
+    /// any.
+    pub fn set_global_bytes<V: crate::vm::IntoValue>(
+        &mut self,
+        name: &[u8],
+        v: V,
+    ) -> Result<(), LuaError> {
         let v = v.into_value(self);
-        let k = Value::Str(self.heap.intern(name.as_bytes()));
+        let k = Value::Str(self.heap.intern(name));
         // SAFETY: `self.globals` is a root of this Vm; the borrow lives for the one `set`, which touches only the heap and the table and does not collect, and `&mut self` rules out another reference into it
         if let Err(e) = unsafe { self.globals.as_mut() }.set(&mut self.heap, k, v) {
             return Err(self.table_error(e));

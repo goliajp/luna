@@ -107,6 +107,7 @@ fn conversions_leave_what_the_c_calls_leave() {
         number(s.as_bytes(), d);
         super::get()
     };
+    let windows = cfg!(windows);
     for d in [Dialect::Lua51, Dialect::Lua52, Dialect::Later] {
         assert_eq!(after("1e999", d), ERANGE, "{d:?}");
         // converted before the trailing junk is seen
@@ -114,6 +115,17 @@ fn conversions_leave_what_the_c_calls_leave() {
         assert_eq!(after("1.5", d), 0, "{d:?}");
         assert_eq!(after("inf", d), 0, "{d:?}");
     }
+    // 5.1 retries with strtoul in base 16 when strtod stops at an x; only
+    // its overflow shows (unsigned long has 32 bits on Windows)
+    assert_eq!(after("11111111111111111111x", Dialect::Lua51), ERANGE);
+    assert_eq!(
+        after("123456789x", Dialect::Lua51),
+        if windows { ERANGE } else { 0 }
+    );
+    assert_eq!(after("10x", Dialect::Lua51), 0);
+    assert_eq!(after("0x10x", Dialect::Lua51), 0);
+    assert_eq!(after("11111111111111111111x", Dialect::Lua52), 0);
+    assert_eq!(after("11111111111111111111x", Dialect::Later), 0);
     // 5.2 sends anything with an x to its own reader, which wants `0x`
     assert_eq!(after("1e999x", Dialect::Lua52), 0);
     assert_eq!(after("0x1p2000z", Dialect::Lua52), ERANGE);

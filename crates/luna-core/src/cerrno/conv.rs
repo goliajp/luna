@@ -33,7 +33,16 @@ fn hex(c: u8) -> Option<u32> {
 pub fn number(s: &[u8], d: Dialect) {
     let s = &s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())];
     match d {
-        Dialect::Lua51 => strtod(s),
+        Dialect::Lua51 => {
+            // `luaO_str2d` retries with `strtoul(s, &end, 16)` when `strtod`
+            // stopped at an `x`; that never completes the string, but an
+            // overflow leaves ERANGE
+            if let Some(end) = strtod(s)
+                && matches!(s.get(end), Some(b'x' | b'X'))
+            {
+                strtoul16(s);
+            }
+        }
         Dialect::Lua52 => {
             if s.iter().any(|c| matches!(c, b'n' | b'N')) {
                 return;
@@ -41,7 +50,7 @@ pub fn number(s: &[u8], d: Dialect) {
             if s.iter().any(|c| matches!(c, b'x' | b'X')) {
                 lua_hex(s, false);
             } else {
-                strtod(s);
+                let _ = strtod(s);
             }
         }
         Dialect::Later => {
@@ -51,7 +60,9 @@ pub fn number(s: &[u8], d: Dialect) {
             match s.iter().find(|c| b".xXnN".contains(c)) {
                 Some(b'n' | b'N') => {}
                 Some(b'x' | b'X') if HexConv::LATER == HexConv::Own => lua_hex(s, true),
-                _ => strtod(s),
+                _ => {
+                    let _ = strtod(s);
+                }
             }
         }
     }
@@ -94,13 +105,25 @@ fn is_integer(s: &[u8]) -> bool {
 
 /// `strtod` on `s`: the longest numeral at its start, after spaces and a
 /// sign: decimal, hexadecimal after `0x`, or `inf` / `nan`, which set
-/// nothing.
-fn strtod(s: &[u8]) {
+/// nothing. Gives where the numeral ends, `None` when there is none.
+fn strtod(s: &[u8]) -> Option<usize> {
     let mut i = s.iter().take_while(|&&c| is_space(c)).count();
     if matches!(s.get(i), Some(b'-' | b'+')) {
         i += 1;
     }
+    let start = i;
     let s = &s[i..];
+    let rest = |n: usize| -> Option<usize> { Some(start + n) };
+    let word = |w: &[u8]| s.len() >= w.len() && s[..w.len()].eq_ignore_ascii_case(w);
+    if word(b"infinity") {
+        return rest(8);
+    }
+    if word(b"inf") {
+        return rest(3);
+    }
+    if word(b"nan") {
+        return rest(3);
+    }
     if s.len() > 2 && s[0] == b'0' && matches!(s[1], b'x' | b'X') {
         let h = &s[2..];
         let int = h.iter().take_while(|&&c| hex(c).is_some()).count();
@@ -112,12 +135,20 @@ fn strtod(s: &[u8]) {
             j += 1 + n;
         }
         // with no digit after it, the `0x` is just the numeral "0"
-        if int + frac.len() > 0 {
-            let pexp = exponent(h, j, b"pP").unwrap_or(0);
-            let (x, nonzero, exact) = crate::numeric::hex_float(&h[..int], frac, pexp);
-            apply(strtod_errno(Lib::HOST, x, nonzero, exact));
+        if int + frac.len() == 0 {
+            return rest(1);
         }
-        return;
+        let pexp = exponent(h, j, b"pP");
+        let (x, nonzero, exact) = crate::numeric::hex_float(&h[..int], frac, pexp.unwrap_or(0));
+        apply(strtod_errno(Lib::HOST, x, nonzero, exact));
+        if pexp.is_some() {
+            j += 1;
+            if matches!(h.get(j), Some(b'+' | b'-')) {
+                j += 1;
+            }
+            j += h[j..].iter().take_while(|c| c.is_ascii_digit()).count();
+        }
+        return rest(2 + j);
     }
     let int = s.iter().take_while(|c| c.is_ascii_digit()).count();
     let mut j = int;
@@ -127,7 +158,7 @@ fn strtod(s: &[u8]) {
         j += 1 + frac;
     }
     if int + frac == 0 {
-        return;
+        return None;
     }
     if exponent(s, j, b"eE").is_some() {
         j += 1;
@@ -139,6 +170,39 @@ fn strtod(s: &[u8]) {
     let text = std::str::from_utf8(&s[..j]).expect("an ASCII numeral");
     if let Ok(x) = text.parse::<f64>() {
         after_strtod_decimal(text, x);
+    }
+    rest(j)
+}
+
+/// `strtoul(s, _, 16)`: spaces, a sign, an optional `0x` (only before a
+/// hex digit), hex digits; a value past `ULONG_MAX` (32 bits on Windows)
+/// leaves ERANGE.
+fn strtoul16(s: &[u8]) {
+    let mut i = s.iter().take_while(|&&c| is_space(c)).count();
+    if matches!(s.get(i), Some(b'-' | b'+')) {
+        i += 1;
+    }
+    if s.get(i) == Some(&b'0')
+        && matches!(s.get(i + 1), Some(b'x' | b'X'))
+        && s.get(i + 2).copied().and_then(hex).is_some()
+    {
+        i += 2;
+    }
+    let max: u64 = if cfg!(windows) {
+        u32::MAX as u64
+    } else {
+        u64::MAX
+    };
+    let mut n: u64 = 0;
+    while let Some(d) = s.get(i).copied().and_then(hex) {
+        match n.checked_mul(16).and_then(|n| n.checked_add(u64::from(d))) {
+            Some(v) if v <= max => n = v,
+            _ => {
+                apply(Some(super::ERANGE));
+                return;
+            }
+        }
+        i += 1;
     }
 }
 
