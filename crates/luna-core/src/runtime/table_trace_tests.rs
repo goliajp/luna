@@ -22,7 +22,7 @@ fn one_of_each(heap: &mut Heap, globals: Gc<Table>, n: usize) -> Vec<Value> {
 /// A host pointer the collector must never treat as an object: marking
 /// it would write through an unmapped address.
 fn light() -> Value {
-    Value::LightUserdata(16 as *const ())
+    Value::LightUserdata(std::ptr::without_provenance(16))
 }
 
 fn set(heap: &mut Heap, t: Gc<Table>, k: Value, v: Value) {
@@ -155,5 +155,28 @@ fn native_upvalues_are_marked_through_a_table() {
     let live = heap.live_objects();
     assert_eq!(heap.collect(&[Value::Table(t)]), 0);
     assert_eq!(heap.live_objects(), live);
+    assert_eq!(heap.collect(&[]), live - base);
+}
+
+#[test]
+fn objects_survive_the_inline_array_growing() {
+    let mut heap = Heap::new();
+    let base = heap.live_objects();
+    let t = heap.new_table();
+    let objs = [heap.new_table(), heap.new_table(), heap.new_table()];
+    // one slot inline, then two inline (the inline words are copied out and
+    // back), then a slab: each step moves the object pointers already held
+    for (i, (&o, asize)) in objs.iter().zip([1, 2, 4]).enumerate() {
+        set(&mut heap, t, Value::Int(i as i64 + 1), Value::Table(o));
+        assert_eq!(t.asize, asize, "values belong in the array part");
+    }
+    let live = heap.live_objects();
+    // marking reads every object through the pointers the moves kept
+    assert_eq!(heap.collect(&[Value::Table(t)]), 0);
+    assert_eq!(heap.live_objects(), live);
+    for (i, o) in objs.iter().enumerate() {
+        assert!(matches!(t.get(Value::Int(i as i64 + 1)),
+            Value::Table(x) if x.as_ptr() == o.as_ptr()));
+    }
     assert_eq!(heap.collect(&[]), live - base);
 }
