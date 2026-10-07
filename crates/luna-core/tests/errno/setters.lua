@@ -36,6 +36,12 @@ local SETTERS = {
   { "seekfail", function() local f = io.open(P("n.txt"), "r"); f:seek("set", -1); f:close() end },
   { "date-bad", function() return pcall(os.date, "%Ez") end },
   { "execute", function() return os.execute("exit 2") end },
+  { "setlocale-bad", function() return os.setlocale("xx_YY") end },
+  { "setlocale-c", function() return os.setlocale("C") end },
+  { "setlocale-query", function() return os.setlocale() end },
+  { "print", function() io.stdout:write("") io.stderr:write("") return io.type(io.stdout) end },
+  { "stdin-seek", function() return io.stdin:seek("cur") end },
+  { "strtoul-retry", function() return tonumber("11111111111111111111x") end },
 }
 local FAILS = {
   { "write-after-read", function()
