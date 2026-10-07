@@ -128,15 +128,14 @@ pub(super) fn escape_analyze(
         let ins = rop.inst;
         let a = ins.a();
         let op = ins.op();
-
-        if (depth as usize) >= max_depth || (a as usize) >= max_stack {
+        if (depth as usize) >= max_depth {
             // The lowerer bails on OOB; skip silently here so the
             // sweep stays a side-effect-free analysis.
             continue;
         }
-        // a site's hash keys are constant indices of the head function: an
-        // op of another function neither creates a site nor reads one
-        if !std::ptr::eq(rop.proto.as_ptr(), head_proto.as_ptr()) {
+        // another function's op neither makes nor reads a site (whose keys are
+        // head constants); a store into an upvalue table lets its values escape
+        if !std::ptr::eq(rop.proto.as_ptr(), head_proto.as_ptr()) || (a as usize) >= max_stack {
             let (reads, writes) = super::slots::rw_ranges(ins);
             for &(lo, n) in &reads {
                 for r in lo..lo + n {

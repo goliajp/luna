@@ -10,6 +10,7 @@
 
 use super::asm::{L, Res};
 use super::classic::{C, RK_BIT};
+use crate::compiler::const_map::peek_const;
 use crate::runtime::Value;
 use crate::vm::dump::puc::classic::Kind;
 use crate::vm::isa::{OFFSET_SC, Op};
@@ -24,6 +25,31 @@ impl C<'_, '_> {
         let t = self.asm.temp()?;
         self.load_k(t, k)?;
         Ok(t)
+    }
+
+    /// A 5.2 / 5.3 `GETTABUP` / `SETTABUP` whose key is not a string
+    /// constant (luna's `GetTabUpR`, `SetTabUpR`, `SetTabUpK`).
+    pub(super) fn tab_up_rk(&mut self, l: L) -> Res<()> {
+        if self.f.ver == 51 {
+            return Err(self.asm.err("an upvalue table in 5.1"));
+        }
+        if l.op == Op::GetTabUpR {
+            let a = self.asm.r(l.a)?;
+            let key = if l.k { self.rk(l.c)? } else { self.asm.r(l.c)? };
+            return self.emit(self.abc(Kind::GetTabUp, a, l.b, key));
+        }
+        let key = if l.op == Op::SetTabUpK {
+            self.rk(l.b)?
+        } else {
+            self.asm.r(l.b)?
+        };
+        let c = self.store_val(l)?;
+        self.emit(self.abc(Kind::SetTabUp, l.a, key, c))
+    }
+
+    /// The value a store writes: a constant (`k`) or a register.
+    pub(super) fn store_val(&mut self, l: L) -> Res<u32> {
+        if l.k { self.rk(l.c) } else { self.asm.r(l.c) }
     }
 
     pub(super) fn rk_num(&mut self, i: i64) -> Res<u32> {
@@ -86,13 +112,8 @@ impl C<'_, '_> {
                     Op::LoadI => self.num(l.sbx as i64),
                     _ => Value::Float(l.sbx as f64),
                 };
-                let same = |k: &Value| match (k, &v) {
-                    (Value::Int(a), Value::Int(b)) => a == b,
-                    (Value::Float(a), Value::Float(b)) => a.to_bits() == b.to_bits(),
-                    _ => false,
-                };
-                let consts = &self.asm.consts;
-                consts.iter().position(same).unwrap_or(consts.len())
+                let (ver, map) = &self.asm.kmap;
+                peek_const(*ver, &self.asm.consts, map, &v) as usize
             }
         };
         if k >= RK_BIT as usize {
@@ -116,19 +137,26 @@ impl C<'_, '_> {
             ) && !x.k
             {
                 x.b == l.a || x.c == l.a
+            } else if matches!(x.op, Op::Eq | Op::Lt | Op::Le) {
+                // a comparison writes no register; the scratch is free after
+                return self.scratch_at(l.a, j) && (x.a == l.a || x.b == l.a);
             } else if matches!(x.op, Op::LoadK | Op::LoadI | Op::LoadF) && x.a != l.a {
                 continue;
             } else {
                 return false;
             };
-            let local = self
-                .asm
-                .p
-                .locvars
-                .iter()
-                .any(|v| v.reg == l.a && (v.start_pc as usize) <= j && j < v.end_pc as usize);
-            return reads && !local && l.a >= x.a;
+            return reads && self.scratch_at(l.a, j) && l.a >= x.a;
         }
         false
+    }
+
+    /// Whether register `r` holds no local variable at luna pc `pc`.
+    fn scratch_at(&self, r: u32, pc: usize) -> bool {
+        !self
+            .asm
+            .p
+            .locvars
+            .iter()
+            .any(|v| v.reg == r && (v.start_pc as usize) <= pc && pc < v.end_pc as usize)
     }
 }

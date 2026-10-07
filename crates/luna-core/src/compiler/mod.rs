@@ -8,38 +8,40 @@
 //! generic `for`, multret, tail calls. Still pending (slice 5): goto/labels,
 //! `<close>`, `global` declarations.
 
+mod and_or_chain;
 mod assign;
-mod assign_gate;
 mod binop;
 mod binop_const;
 mod closure;
 mod cond;
-mod const_map;
+pub(crate) mod const_map;
 mod control;
 mod ctconst;
+mod discharge;
 mod emit;
 mod expr;
 mod expr_names;
 mod expr_ops;
 mod fold;
+mod generic_for;
 mod level;
 mod limits;
+mod lvalue;
 mod resolve;
-mod retarget;
 mod return_stat;
 mod scope;
 mod small_list;
 mod stat;
 mod table_ctor;
 mod vararg_scan;
-use const_map::{ConstKey, ConstMap};
+use const_map::ConstMap;
 use ctconst::{CtConst, ct_operand, ct_value};
 use fold::{fold_arith, is_logical, numeral};
 pub(crate) use level::CompileScratch;
 use level::{Level, LevelBufs};
 use limits::{MAX_LOCALS, max_regs, max_upvals};
-use retarget::is_retargetable_op;
-use small_list::{Jumps, SmallList};
+use lvalue::{KeyRef, Lv, TabRef};
+use small_list::Jumps;
 
 use crate::frontend::ast::{
     self, AttribName, BinOp, Block, Chunk, Expr, ExprId, FuncBody, FuncName, List, ListItem, Name,
@@ -158,25 +160,6 @@ pub fn compile_chunk_with_last_target(
     let mut scratch = CompileScratch::new(heap.mem());
     let source = heap.intern(source_name);
     compile_main(ast, &[], version, source, heap, &mut scratch)
-}
-
-/// Per-target plan for `assign_stat`'s two-phase store (snapshot first, then
-/// emit RHS, then stores) so a later store cannot reorder around an earlier
-/// one's table/key reads (PUC manual §3.3.3).
-#[derive(Clone, Copy)]
-enum LhsPlan {
-    Name(ExprId),
-    Indexed { obj: u32, key: SetKey },
-}
-
-#[derive(Clone, Copy)]
-enum SetKey {
-    /// String constant index for OP_SetField (k ≤ 0xFF).
-    Field(u32),
-    /// Small integer literal for OP_SetI (0..=255).
-    Int(u32),
-    /// Any other key, pinned in a register for OP_SetTable.
-    Reg(u32),
 }
 
 struct LocalVar<'a> {

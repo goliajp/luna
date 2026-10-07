@@ -29,10 +29,6 @@ impl<T: Copy, const N: usize> SmallList<T, N> {
         self.len += 1;
     }
 
-    pub(super) fn len(&self) -> usize {
-        self.len
-    }
-
     /// The item at `i` (< `len`).
     pub(super) fn get(&self, i: usize) -> T {
         if i < N {
@@ -63,7 +59,7 @@ mod tests {
         for i in 0..5 {
             l.push(i * 10);
         }
-        assert_eq!(l.len(), 5);
+        assert_eq!(l.iter().count(), 5);
         assert_eq!(l.iter().collect::<Vec<_>>(), vec![0, 10, 20, 30, 40]);
         assert_eq!(l.get(3), 30);
     }

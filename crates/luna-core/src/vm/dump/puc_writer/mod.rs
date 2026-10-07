@@ -30,6 +30,7 @@ mod proto_parts;
 use self::asm::{Asm, Res, Window, loop_windows};
 use self::proto_parts::{check_skips, consts_for, needs_close, vararg_byte};
 use super::puc::{puc_52, puc_53, puc_54, puc_55};
+use crate::compiler::const_map::const_map_of;
 use crate::runtime::Value;
 use crate::runtime::function::Proto;
 use crate::version::LuaVersion;
@@ -52,6 +53,16 @@ impl Dialect {
             Dialect::V53 => "PUC 5.3",
             Dialect::V54 => "PUC 5.4",
             Dialect::V55 => "PUC 5.5",
+        }
+    }
+
+    fn version(self) -> LuaVersion {
+        match self {
+            Dialect::V51 => LuaVersion::Lua51,
+            Dialect::V52 => LuaVersion::Lua52,
+            Dialect::V53 => LuaVersion::Lua53,
+            Dialect::V54 => LuaVersion::Lua54,
+            Dialect::V55 => LuaVersion::Lua55,
         }
     }
 }
@@ -136,6 +147,8 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
     if d <= Dialect::V52 {
         asm.consts = consts_for(d, std::mem::take(&mut asm.consts))?;
     }
+    let ver = d.version();
+    asm.kmap = (ver, const_map_of(ver, &asm.consts));
     let mut child_caps: modern::Caps = vec![None; p.protos.len()];
     let vatab = d == Dialect::V55
         && p.is_vararg

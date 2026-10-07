@@ -22,7 +22,7 @@
 //!   Gc<Proto> (bytecode tree)
 //!     │  luna_core::vm::dump::dump
 //!     ▼
-//!   Vec<u8>   ── luna body, "\x1bLua" + dialect header + "\x00LunaV2\x00" sentinel + body
+//!   Vec<u8>   ── luna body, "\x1bLua" + dialect header + "\x00LunaV3\x00" sentinel + body
 //!     │  object::write::Object  (this module)
 //!     ▼
 //!   foo.luna_bytecode.o   (ELF / Mach-O / PE — host triple)

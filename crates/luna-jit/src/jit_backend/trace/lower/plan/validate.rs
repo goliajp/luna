@@ -5,7 +5,7 @@ use super::*;
 /// a preceding test consumes and which way each test went.
 pub(super) fn validate_ops(
     record: &TraceRecord,
-    vconsts: &[Option<VConst>],
+    vconsts: &[VRegs],
     head_proto: Gc<Proto>,
     max_stack: usize,
     effective_end: usize,
@@ -65,7 +65,7 @@ pub(super) fn validate_ops(
 /// One op of [`validate_ops`].
 fn validate_op(
     record: &TraceRecord,
-    vconsts: &[Option<VConst>],
+    vconsts: &[VRegs],
     head_proto: Gc<Proto>,
     max_stack: usize,
     effective_end: usize,
@@ -209,7 +209,7 @@ fn validate_op(
         | Op::LoadTrue
         | Op::LFalseSkip
         | Op::Not
-        | Op::Close => validate_body_op(max_stack, rop, op, ins, a, b, c)?,
+        | Op::Close => validate_body_op(vconsts, i, max_stack, rop, op, ins, a, b, c)?,
         Op::Closure
         | Op::LoadK
         | Op::Add
@@ -262,7 +262,7 @@ fn validate_op(
         | Op::SetTable
         | Op::SetList
         | Op::Len
-        | Op::GetUpval => validate_table_op(head_proto, max_stack, op, ins, a, b, c)?,
+        | Op::GetUpval => validate_table_op(head_proto, vconsts, i, max_stack, op, ins, a, b, c)?,
         Op::SelfOp => {
             // a constant string key (the register form is the compiler's
             // fallback for a constant past C's range)
