@@ -239,8 +239,7 @@ impl Heap {
             .unwrap_or_else(|_| oom_abort(Layout::for_value(upvals)))
     }
 
-    /// Allocate a [`NativeClosure`] wrapping host function `f` with the
-    /// given captured upvalues.
+    /// A [`NativeClosure`] calling host function `f` over `upvals`.
     pub fn new_native(&mut self, f: NativeFn, upvals: Box<[Value]>) -> Gc<NativeClosure> {
         self.new_builtin(f, &upvals, Builtin::None)
     }
@@ -302,13 +301,8 @@ impl Heap {
         self.mem_ctx().set_memerr(s);
     }
 
-    /// Like [`Heap::new_native`] but tags the
-    /// closure with `is_async = true`. The dispatcher's native-call
-    /// path then transmutes `f` to `AsyncNativeFn` and routes through
-    /// the cooperative-yield path. The caller is responsible for
-    /// having transmuted the `AsyncNativeFn` pointer to `NativeFn`
-    /// shape (both are `fn` pointers of the same size); see
-    /// [`crate::vm::async_drive`] for the helper that does this.
+    /// [`Heap::new_native`] with `is_async` set: `f` is an `AsyncNativeFn`
+    /// the caller transmuted to `NativeFn` ([`crate::vm::async_drive`]).
     pub fn new_async_native(
         &mut self,
         f: crate::runtime::value::NativeFn,

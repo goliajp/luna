@@ -474,7 +474,9 @@ pub(super) fn new_c_closure(api: &mut Api, f: LuaCFunction, n: usize) -> Value {
     // from 5.2 on a C function without upvalues is a light C function,
     // equal to every other push of the same pointer
     if n == 0 && api.version() >= LuaVersion::Lua52 {
-        return api.vm.host_light_fn(f as usize, |vm| vm.builtin(tramp, &upvals, c));
+        return api
+            .vm
+            .host_light_fn(f as usize, |vm| vm.builtin(tramp, &upvals, c));
     }
     api.vm.builtin(tramp, &upvals, c)
 }

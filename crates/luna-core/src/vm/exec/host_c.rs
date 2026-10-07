@@ -258,8 +258,7 @@ impl Vm {
     /// args...)`, without `(f, args...)`; it returns `true, results...` or
     /// `false, error`.
     pub fn host_protected_fn(&mut self, handler: bool) -> Value {
-        use crate::runtime::Builtin;
-        use crate::vm::builtins::{nat_host_pcall, nat_host_xpcall};
+        use crate::{runtime::Builtin, vm::builtins::*};
         if handler {
             self.builtin(nat_host_xpcall, &[], Builtin::HostXpcall)
         } else {
