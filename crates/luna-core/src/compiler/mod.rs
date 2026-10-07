@@ -17,6 +17,7 @@ mod cond;
 pub(crate) mod const_map;
 mod control;
 mod ctconst;
+mod discharge;
 mod emit;
 mod expr;
 mod expr_names;
@@ -37,8 +38,8 @@ use ctconst::{CtConst, ct_operand, ct_value};
 use fold::{fold_arith, is_logical, numeral};
 pub(crate) use level::CompileScratch;
 use level::{Level, LevelBufs};
-use lvalue::{KeyRef, Lv, TabRef};
 use limits::{MAX_LOCALS, max_regs, max_upvals};
+use lvalue::{KeyRef, Lv, TabRef};
 use small_list::Jumps;
 
 use crate::frontend::ast::{

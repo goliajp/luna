@@ -74,7 +74,11 @@ impl Compiler<'_> {
             return KConst::No;
         }
         let c = self.const_idx(v);
-        if c <= MAX_C { KConst::Fits(c) } else { KConst::Big(c) }
+        if c <= MAX_C {
+            KConst::Fits(c)
+        } else {
+            KConst::Big(c)
+        }
     }
 
     /// `e` as a stored value (PUC `codeABRK` / `luaK_exp2RK`).
@@ -130,11 +134,7 @@ impl Compiler<'_> {
 
     /// PUC `luaK_indexed`: table `t` (a register, or an upvalue kept as
     /// one) indexed by `key`, whose code is compiled but not discharged.
-    pub(super) fn indexed(
-        &mut self,
-        t: TabRef,
-        key: Exp,
-    ) -> Result<(TabRef, KeyRef), SyntaxError> {
+    pub(super) fn indexed(&mut self, t: TabRef, key: Exp) -> Result<(TabRef, KeyRef), SyntaxError> {
         if let Exp::Const(c) = key
             && self.kstr(c)
         {
