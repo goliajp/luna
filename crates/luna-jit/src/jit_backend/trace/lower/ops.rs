@@ -20,6 +20,7 @@ use arith_double::*;
 use array::*;
 use basic::*;
 use call::*;
+pub(super) use closure::upval_table_read;
 use closure::*;
 use compare::*;
 use field::*;
@@ -35,7 +36,7 @@ use tfor::*;
 pub(super) struct OpCx<'r> {
     pub(super) i: usize,
     pub(super) rop: &'r RecordedOp,
-    pub(super) vk: Option<VConst>,
+    pub(super) vregs: VRegs,
     pub(super) rc_const: Option<i64>,
     pub(super) off: usize,
     pub(super) regs: &'r [Variable],
@@ -45,11 +46,12 @@ pub(super) struct OpCx<'r> {
 }
 
 impl OpCx<'_> {
-    /// The kind of an operand register, the virtual one included.
+    /// The kind of an operand register, the virtual ones included.
     pub(super) fn kind(&self, current_kinds: &[RegKind], r: u32) -> RegKind {
-        match self.vk {
-            Some(VConst::Int(_)) if r as usize == self.max_stack => RegKind::Int,
-            Some(VConst::Float(_)) if r as usize == self.max_stack => RegKind::Float,
+        match (r as usize).checked_sub(self.max_stack) {
+            Some(j) if j < NVIRT && self.vregs[j].is_some() => {
+                vsrc_kind(self.vregs[j].expect("checked"))
+            }
             _ => k_op(current_kinds, self.off as u32 + r),
         }
     }

@@ -137,12 +137,12 @@ pub(super) fn emit_closure_op<E: Emit>(
             match inferred {
                 Some(ExitTag::Closure) if seen_closure => {
                     let want = luna_core::runtime::value::raw::CLOSURE;
-                    let v = checked_upval_read(lw, pl, oc, idx_b, want)?;
+                    let v = checked_upval_read(lw, pl, oc.i, oc.rop, idx_b, want)?;
                     lw.bcx.def_var(regs[ins.a() as usize], v);
                     lw.current_kinds[off + ins.a() as usize] = RegKind::Closure;
                 }
                 _ if let Some((kind, want)) = seen => {
-                    let v = checked_upval_read(lw, pl, oc, idx_b, want)?;
+                    let v = checked_upval_read(lw, pl, oc.i, oc.rop, idx_b, want)?;
                     lw.bcx.def_var(regs[ins.a() as usize], v);
                     lw.current_kinds[off + ins.a() as usize] = kind;
                 }
@@ -164,7 +164,8 @@ pub(super) fn emit_closure_op<E: Emit>(
 fn checked_upval_read<E: Emit>(
     lw: &mut Lower<E>,
     pl: &Plan<'_>,
-    oc: &OpCx<'_>,
+    i: usize,
+    rop: &RecordedOp,
     idx: u32,
     want: u8,
 ) -> Option<Value> {
@@ -172,7 +173,6 @@ fn checked_upval_read<E: Emit>(
         upval_get_checked_id,
         ..
     } = lw.h.rt;
-    let OpCx { i, rop, .. } = *oc;
     let bcx = &mut lw.bcx;
     let checked = lw.upval_checked.entry(idx).or_insert_with(|| {
         let var = bcx.declare_var(types::I64);
@@ -203,6 +203,23 @@ fn checked_upval_read<E: Emit>(
     Some(lw.bcx.use_var(var))
 }
 
+/// The table in upvalue `idx` of op `i`'s function, checked to be a table
+/// (the trace leaves at the op otherwise).
+pub(in crate::jit_backend::trace::lower) fn upval_table_read<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    i: usize,
+    rop: &RecordedOp,
+    idx: u32,
+) -> Option<Value> {
+    let table = luna_core::runtime::value::raw::TABLE;
+    if std::ptr::eq(rop.proto.as_ptr(), pl.head_proto.as_ptr()) {
+        checked_upval_read(lw, pl, i, rop, idx, table)
+    } else {
+        Some(frame_upval_read(lw, pl, i, rop, idx, table))
+    }
+}
+
 /// `GetUpval` in a function of another proto the trace inlined: read
 /// through that frame's own closure, typed by the value the recording saw.
 fn emit_frame_upval_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<()> {
@@ -216,7 +233,7 @@ fn emit_frame_upval_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>)
         checkpoint("bail:inline-upval-untyped");
         return None;
     };
-    let v = frame_upval_read(lw, pl, oc, ins.b(), kind_tag(kind));
+    let v = frame_upval_read(lw, pl, i, oc.rop, ins.b(), kind_tag(kind));
     lw.bcx.def_var(oc.regs[ins.a() as usize], v);
     lw.current_kinds[off + ins.a() as usize] = kind;
     Some(())
@@ -228,7 +245,8 @@ fn emit_frame_upval_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>)
 pub(super) fn frame_upval_read<E: Emit>(
     lw: &mut Lower<E>,
     pl: &Plan<'_>,
-    oc: &OpCx<'_>,
+    i: usize,
+    rop: &RecordedOp,
     idx: u32,
     want: u8,
 ) -> Value {
@@ -236,7 +254,6 @@ pub(super) fn frame_upval_read<E: Emit>(
         upval_of_checked_id,
         ..
     } = lw.h.rt;
-    let OpCx { i, rop, .. } = *oc;
     let cl = lw.bcx.use_var(lw.regs_full[pl.frame_func[i] as usize]);
     let idx_arg = lw.bcx.ins().iconst(types::I64, i64::from(idx));
     let ss = lw

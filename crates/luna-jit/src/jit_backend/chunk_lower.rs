@@ -72,8 +72,8 @@ pub fn lower_int_chunk_into<M: Module>(
     if n == 0 {
         return None;
     }
-    // two more registers: the constant operands' scratch (`split_const_operands`)
-    let max_stack = (proto.max_stack as usize).max(num_params) + 2;
+    // the scratch registers of `split_const_operands`
+    let max_stack = (proto.max_stack as usize).max(num_params) + const_operands::SCRATCH_REGS;
     let c = ChunkIn {
         proto,
         code,

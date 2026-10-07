@@ -2,6 +2,8 @@ use super::*;
 
 /// Ops lowered through a helper or as plain moves and loads.
 pub(super) fn validate_body_op(
+    vconsts: &[VRegs],
+    i: usize,
     max_stack: usize,
     rop: &RecordedOp,
     op: Op,
@@ -25,10 +27,10 @@ pub(super) fn validate_body_op(
         }
         Op::TForCall => {
             // generic-for body tail. Calls iter
-            // via the `luna_jit_op_tforcall` helper. Bounds:
-            // helper accesses R[A..A+7] (gen/state/ctrl plus the
-            // generator-call window R[A+4..A+6] + space for the
-            // first two returns). Restrict to inline_depth = 0
+            // via the `luna_jit_op_tforcall` helper. Bounds: the
+            // helper grows the stack to R[A+6] for the generator-call
+            // window R[A+4..A+6] itself; the trace holds R[A..A+5],
+            // R[A+5] only when the frame has it. Restrict to inline_depth = 0
             // (helper reads vm.stack via the trace head's frame
             // base; inline frames aren't pushed during trace IR
             // execution). C field = nvars in [1, 250) per PUC.
@@ -38,7 +40,7 @@ pub(super) fn validate_body_op(
                     return None;
                 }
             }
-            if a + 6 >= max_stack {
+            if a + 4 >= max_stack {
                 {
                     checkpoint("bail:cmp-dirs-body-other");
                     return None;
@@ -85,26 +87,18 @@ pub(super) fn validate_body_op(
             }
         }
         Op::SetField | Op::GetField => {
-            // validated above (Str const at K[B] or
-            // K[C] respectively); bounds-check the reg operands
-            // here.
-            if a >= max_stack {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            if matches!(op, Op::SetField) && c >= max_stack {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            if matches!(op, Op::GetField) && b >= max_stack {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
+            // validated above (Str const at K[B] or K[C] respectively);
+            // the table and the stored value may be the op's virtual
+            // registers
+            let oob =
+                |r: usize| r >= max_stack && virt_at(vconsts, i, r as u32, max_stack).is_none();
+            let bad = match op {
+                Op::SetField => oob(a) || oob(c),
+                _ => a >= max_stack || oob(b),
+            };
+            if bad {
+                checkpoint("bail:cmp-dirs-body-other");
+                return None;
             }
         }
         Op::Jmp => {
@@ -178,7 +172,7 @@ pub(super) fn validate_body_op(
 /// Closures, constants, arithmetic and `EqK`.
 pub(super) fn validate_value_op(
     record: &TraceRecord,
-    vconsts: &[Option<VConst>],
+    vconsts: &[VRegs],
     head_proto: Gc<Proto>,
     max_stack: usize,
     effective_end: usize,
@@ -191,9 +185,8 @@ pub(super) fn validate_value_op(
     c: usize,
     consumed_by_cmp: &mut [bool],
 ) -> Option<()> {
-    let oob = |i: usize, r: u32| {
-        r as usize >= max_stack && !(r as usize == max_stack && vconst_at(vconsts, i).is_some())
-    };
+    let oob =
+        |i: usize, r: u32| r as usize >= max_stack && virt_at(vconsts, i, r, max_stack).is_none();
     match op {
         Op::Closure => {
             // R[A] := closure(proto.protos[Bx]).
