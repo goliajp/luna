@@ -101,7 +101,8 @@ const Q: f64 = 1.0 / 4_503_599_627_370_496.0;
 
 /// The integer a float equals exactly, as `luaV_flttointeger(.., F2Ieq)`.
 fn exact_int(f: f64) -> Option<i64> {
-    (f == f.floor() && (-9.223_372_036_854_775_808e18..9.223_372_036_854_775_808e18).contains(&f))
+    // [-2^63, 2^63)
+    (f == f.floor() && (i64::MIN as f64..-(i64::MIN as f64)).contains(&f))
         .then_some(f as i64)
 }
 
