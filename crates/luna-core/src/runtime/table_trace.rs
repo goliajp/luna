@@ -47,7 +47,11 @@ unsafe fn key_obj(n: &Node) -> *mut GcHeader {
 }
 
 impl Table {
-    pub(crate) fn trace(&self, m: &mut Marker) {
+    /// `this` is the pointer the marker reached the table through, `self`
+    /// reborrowed: a weak table is queued by `this`, since the clearing passes
+    /// write through the queued pointer and `&self` grants no write access
+    pub(crate) fn trace(&self, this: *mut Table, m: &mut Marker) {
+        debug_assert!(std::ptr::eq(this, self));
         let (wk, wv) = match self.metatable {
             Some(_) => self.weak_mode(),
             None => (false, false),
@@ -56,15 +60,15 @@ impl Table {
             self.mark_array(m);
             self.mark_nodes::<true, true>(m);
         } else {
-            self.trace_weak(wk, wv, m);
+            self.trace_weak(this, wk, wv, m);
         }
         if let Some(mt) = self.metatable {
             m.mark(mt);
         }
     }
 
-    fn trace_weak(&self, wk: bool, wv: bool, m: &mut Marker) {
-        m.weak.push(self as *const Table as *mut Table);
+    fn trace_weak(&self, this: *mut Table, wk: bool, wv: bool, m: &mut Marker) {
+        m.weak.push(this);
         // weak keys + strong values = an ephemeron table: its hash values are
         // marked only if the key proves reachable (deferred to the convergence
         // pass), not here. PUC 5.1 predates ephemerons — under `no_ephemeron`
@@ -72,7 +76,7 @@ impl Table {
         // is what gc.lua's "weak tables" section requires.
         let ephemeron = wk && !wv && !m.no_ephemeron;
         if ephemeron {
-            m.ephemeron.push(self as *const Table as *mut Table);
+            m.ephemeron.push(this);
         }
         // array keys are integers (never weakly collected); skip values only
         // when the table has weak values

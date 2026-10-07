@@ -36,7 +36,7 @@ pub(super) fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         }
         let piece = match global_tostring {
             // `lua_call` from C: not yieldable.
-            Some(ts) => match vm.call_noyield(ts, &[v]) {
+            Some(ts) => match vm.call_value(ts, &[v]) {
                 // `lua_tostring` on the result: a number is accepted and
                 // rendered, anything else is refused.
                 Ok(r) => match r.first().and_then(|&s| argcheck::to_str_bytes(vm, s)) {
@@ -82,9 +82,7 @@ pub(super) fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
 fn may_run_code(vm: &Vm, v: Value, global_tostring: Option<Value>) -> bool {
     let library_tostring = match global_tostring {
         None => true,
-        Some(Value::Native(nc)) => {
-            std::ptr::fn_addr_eq(nc.f, nat_tostring as crate::runtime::value::NativeFn)
-        }
+        Some(Value::Native(nc)) => nc.builtin == crate::runtime::Builtin::Tostring,
         Some(_) => false,
     };
     !library_tostring || !vm.get_mm(v, crate::vm::exec::Mm::ToString).is_nil()
@@ -118,7 +116,7 @@ pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         let mm = vm.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
             // `luaL_callmeta` is a plain `lua_call`: not yieldable.
-            let r = vm.call_noyield(mm, &[v])?;
+            let r = vm.call_value(mm, &[v])?;
             let mut out = r.into_iter().next().unwrap_or(Value::Nil);
             if vm.version() == LuaVersion::Lua52
                 && let Some(b) = match out {

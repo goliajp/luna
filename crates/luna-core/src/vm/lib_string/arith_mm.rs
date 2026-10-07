@@ -62,7 +62,7 @@ fn string_arith(
     }
     // lua_call from C: the metamethod cannot yield
     let r = vm
-        .call_noyield(mm, &[x, y])?
+        .call_value(mm, &[x, y])?
         .first()
         .copied()
         .unwrap_or(Value::Nil);
