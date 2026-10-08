@@ -45,7 +45,7 @@ impl<'s> Parser<'s> {
         self.expect(Token::Do, "do")?;
         let body = self.loop_block(List::EMPTY)?;
         self.expect_match(Token::End, "end", "while", line)?;
-        Ok(self.push_ended_stat(Stat::While { cond, body }))
+        Ok(self.push_stat(Stat::While { cond, body }))
     }
 
     pub(super) fn repeat_stat(&mut self) -> Result<StatId, SyntaxError> {
@@ -86,7 +86,7 @@ impl<'s> Parser<'s> {
                 let var = self.chunk.push_list(&[first]);
                 let body = self.loop_block(var)?;
                 self.expect_match(Token::End, "end", "for", line)?;
-                Ok(self.push_ended_stat(Stat::NumericFor {
+                Ok(self.push_stat(Stat::NumericFor {
                     var: first,
                     start,
                     limit,
@@ -120,7 +120,7 @@ impl<'s> Parser<'s> {
                 }
                 let body = self.loop_block(vars)?;
                 self.expect_match(Token::End, "end", "for", line)?;
-                Ok(self.push_ended_stat(Stat::GenericFor {
+                Ok(self.push_stat(Stat::GenericFor {
                     vars,
                     exprs,
                     body,

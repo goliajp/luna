@@ -110,7 +110,7 @@ pub(super) fn side_trace_gate(record: &TraceRecord, op_offsets: &[u32]) -> Optio
     if let Some((parent_proto, parent_head_pc, parent_exit)) = record.side_trace_parent {
         // Check 1: any back-edge op? (ForLoop / TForLoop / Jmp -bx)
         let has_back_edge = record.ops.iter().any(|op| match op.inst.op() {
-            luna_core::vm::isa::Op::Jmp => op.inst.sj() < 0,
+            o if o.is_jump() => op.inst.jump_offset() < 0,
             o => o.is_for_loop() || o.is_tfor_loop(),
         });
         if has_back_edge {
@@ -143,6 +143,8 @@ pub(super) fn side_trace_gate(record: &TraceRecord, op_offsets: &[u32]) -> Optio
                         | Op::SetTabUp
                         | Op::Closure
                         | Op::Close
+                        | Op::JmpClose
+                        | Op::JmpCloseBack
                         | Op::Tbc
                 )
             });

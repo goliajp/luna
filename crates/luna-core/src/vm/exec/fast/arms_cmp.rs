@@ -11,8 +11,11 @@ macro_rules! fast_cmp_arms {
         $frames:lifetime
     ) => {
         macro_rules! op_jmp {
-            () => {{
-                let off = $inst.sj();
+            () => {
+                op_jmp!($inst.sj())
+            };
+            ($d off:expr) => {{
+                let off: i32 = $d off;
                 $npc = ($npc as i64 + off as i64) as u32;
                 // a backward jump is a loop's back-edge: the trace JIT
                 // counts them, and from the threshold on looks whether
@@ -35,6 +38,13 @@ macro_rules! fast_cmp_arms {
                     }
                 }
                 next_jumped!()
+            }};
+        }
+        // 5.2 / 5.3: close the upvalues from `R[A-1]` on, then jump
+        macro_rules! op_jmp_close {
+            () => {{
+                $vm.close_from(base!() + $inst.a() - 1);
+                op_jmp!($inst.jump_offset())
             }};
         }
         macro_rules! op_eq {

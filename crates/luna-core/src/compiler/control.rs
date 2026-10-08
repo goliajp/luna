@@ -1,123 +1,172 @@
-//! `if`, `while`, `repeat` and both `for` loops.
+//! `if`, `while` and `repeat`, as each dialect's parser emits them
+//! (`ifstat`, `test_then_block`, `whilestat`, `repeatstat`).
 
 use super::*;
 
 impl<'a> Compiler<'a> {
     pub(super) fn if_stat(
         &mut self,
-        arms: &[ast::IfArm],
-        else_body: Option<&Block>,
+        arms: &'a [ast::IfArm],
+        else_body: Option<&'a Block>,
     ) -> Result<(), SyntaxError> {
-        let mut end_jumps = Jumps::new(self.heap.mem());
-        for (
-            i,
-            ast::IfArm {
-                cond,
-                then_line,
-                body,
-            },
-        ) in arms.iter().enumerate()
-        {
-            let (skips, last) = self.cond_jump_false(*cond)?;
-            // PUC 5.2/5.3/5.4 attribute BOTH the TEST and the conditional-skip
-            // JMP to the `then` keyword's line, because `luaK_goiftrue`
-            // emits them after `checknext(TK_THEN)` has advanced
-            // `ls->lastline` past the keyword. The result is that a taken
-            // if-arm fires a line-hook event for the `then` line between
-            // the condition's last instruction and the body's first
-            // (5.2/5.3/5.4 db.lua first `test` baselines {2,3,4,7}). PUC
-            // 5.5 reorders luaK_goiftrue so the test/jmp keep the condition
-            // line (5.5 db.lua expects {2,4,7}). Only a `TEST` of the
-            // condition's last operand is emitted there: a comparison was
-            // emitted where it was read, and the left operand of an `and` /
-            // `or` was tested at its operator.
-            if self.version >= LuaVersion::Lua52
-                && self.version <= LuaVersion::Lua54
-                && last == cond::LastTest::Test
-            {
-                let jmp = self.here() - 1;
-                self.l().lines[jmp] = *then_line;
-                self.l().lines[jmp - 1] = *then_line;
-            }
-            self.block_scoped(body)?;
-            let is_last = i == arms.len() - 1 && else_body.is_none();
-            if !is_last {
-                end_jumps.push(self.emit_jump());
-            }
-            for skip in skips.iter() {
-                self.patch_to_here(skip)?;
-            }
+        if self.version == LuaVersion::Lua51 {
+            return self.if_stat_51(arms, else_body);
         }
-        if let Some(eb) = else_body {
-            self.block_scoped(eb)?;
+        let mut escape = NO_JUMP;
+        for (i, arm) in arms.iter().enumerate() {
+            let more = i + 1 < arms.len() || else_body.is_some();
+            self.test_then_block(arm, more, &mut escape)?;
         }
-        for j in end_jumps.iter() {
-            self.patch_to_here(j)?;
+        if let Some(b) = else_body {
+            self.block_scoped(b)?;
         }
-        Ok(())
+        self.patch_to_here(escape)
     }
 
-    /// A loop's per-iteration CLOSE of its body (from local `first` on). 5.4
-    /// ends the body's scope before it (see [`Compiler::leave_block`]).
-    pub(super) fn close_body(&mut self, first: usize, floor: u32) {
-        if self.version == LuaVersion::Lua54 {
-            let here = self.here() as u32;
-            self.l().blocks.last_mut().expect("loop block").body_end = Some((first, here));
+    /// 5.1 `ifstat`: each arm's false jumps go to the next arm.
+    fn if_stat_51(
+        &mut self,
+        arms: &'a [ast::IfArm],
+        else_body: Option<&'a Block>,
+    ) -> Result<(), SyntaxError> {
+        let mut escape = NO_JUMP;
+        let mut flist = NO_JUMP;
+        for (i, arm) in arms.iter().enumerate() {
+            if i > 0 {
+                let j = self.jump()?;
+                self.concat_list(&mut escape, j)?;
+                self.patch_to_here(flist)?;
+            }
+            flist = self.cond(arm.cond)?;
+            self.block_scoped(&arm.body)?;
         }
-        self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
+        match else_body {
+            Some(b) => {
+                let j = self.jump()?;
+                self.concat_list(&mut escape, j)?;
+                self.patch_to_here(flist)?;
+                self.block_scoped(b)?;
+            }
+            None => self.concat_list(&mut escape, flist)?,
+        }
+        self.patch_to_here(escape)
+    }
+
+    /// 5.2+ `test_then_block`; `more`: an `elseif` or `else` follows.
+    fn test_then_block(
+        &mut self,
+        arm: &'a ast::IfArm,
+        more: bool,
+        escape: &mut i32,
+    ) -> Result<(), SyntaxError> {
+        let e = self.expr(arm.cond)?;
+        let stats = self.ls(arm.body.stats);
+        // 5.2–5.4 test the condition once `then` is read; 5.5 before
+        if self.version <= LuaVersion::Lua54 {
+            self.last_line = arm.then_line;
+        }
+        let jumps_out = match stats.first().map(|&s| self.ast.stat(s)) {
+            Some(Stat::Break { line }) if self.version <= LuaVersion::Lua54 => {
+                Some(("break", *line))
+            }
+            Some(Stat::Goto(n)) if self.version <= LuaVersion::Lua53 => Some((self.nm(n), n.line)),
+            _ => None,
+        };
+        let jf = match jumps_out {
+            Some((target, line)) => {
+                // the condition's true jumps are the `break` / `goto`
+                let e = self.go_if_false(e)?;
+                let (_, t, _) = self.exp_parts(e);
+                self.enter_block(false);
+                self.last_line = line;
+                self.cond_break(t, target)?;
+                if stats.len() == 1 {
+                    return self.leave_block();
+                }
+                let jf = self.jump()?;
+                self.stat_list(&stats[1..], false)?;
+                jf
+            }
+            None => {
+                let e = if self.version >= LuaVersion::Lua55 {
+                    self.cond_of(e)?
+                } else {
+                    self.go_if_true(e)?
+                };
+                let (_, _, f) = self.exp_parts(e);
+                self.enter_block(false);
+                self.stat_block(&arm.body)?;
+                f
+            }
+        };
+        self.leave_block()?;
+        if more {
+            let j = self.jump()?;
+            self.concat_list(escape, j)?;
+        }
+        self.patch_to_here(jf)
     }
 
     pub(super) fn while_stat(
         &mut self,
         cond: ExprId,
-        body: &Block,
+        body: &'a Block,
         end_line: Option<u32>,
     ) -> Result<(), SyntaxError> {
-        let top = self.here();
-        let (exits, _) = self.cond_jump_false(cond)?;
+        let init = self.get_label();
+        let exit = self.cond(cond)?;
         self.enter_block(true);
-        self.stat_block(body)?;
-        if self.block_captured() {
-            let floor = self.block_floor();
-            let first = self.l().blocks.last().expect("while block").first_local;
-            self.close_body(first, floor);
+        self.block_scoped(body)?;
+        let j = self.jump()?;
+        self.patch_list(j, init)?;
+        if let Some(line) = end_line {
+            self.last_line = line;
         }
-        self.jump_back(top)?;
-        self.l().blocks.last_mut().expect("while block").end_line = end_line;
         self.leave_block()?;
-        for exit in exits.iter() {
-            self.patch_to_here(exit)?;
-        }
-        Ok(())
+        self.patch_to_here(exit)
     }
 
-    pub(super) fn repeat_stat(&mut self, body: &Block, cond: ExprId) -> Result<(), SyntaxError> {
-        let top = self.here();
+    pub(super) fn repeat_stat(&mut self, body: &'a Block, cond: ExprId) -> Result<(), SyntaxError> {
+        let init = self.get_label();
         self.enter_block(true);
+        self.enter_block(false);
         self.stat_block_inner(body, true)?;
-        // the condition's jumps are taken when it is false (loop again) and
-        // the code falls through when it is true (exit), as for `while`. With
-        // no captured body local they go straight back. When a body local is
-        // captured, the loop-back path must first CLOSE its upvalues and the
-        // normal exit must jump over that close-and-loop tail (PUC
-        // `repeatstat`).
-        let (again, _) = self.cond_jump_false(cond)?;
-        if self.block_captured() {
-            let floor = self.block_floor();
-            let exit = self.emit_jump();
-            for pc in again.iter() {
-                self.patch_to_here(pc)?;
+        let mut exit = self.cond(cond)?;
+        let upval = self.block_captured();
+        let level = self.block_floor();
+        match self.version {
+            LuaVersion::Lua51 if upval => {
+                // `if cond then break end`, closing, then repeat
+                self.break_stat(self.last_line)?;
+                self.patch_to_here(exit)?;
+                self.leave_block()?;
+                let j = self.jump()?;
+                self.patch_list(j, init)?;
             }
-            let first = self.l().blocks.last().expect("repeat block").first_local;
-            self.close_body(first, floor);
-            self.jump_back(top)?;
-            self.patch_to_here(exit)?;
-        } else {
-            for pc in again.iter() {
-                self.patch_back(pc, top)?;
+            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => {
+                if upval {
+                    self.patch_close(exit, level);
+                }
+                self.leave_block()?;
+                self.patch_list(exit, init)?;
+            }
+            _ => {
+                if self.version == LuaVersion::Lua54 {
+                    self.leave_block()?;
+                }
+                if upval {
+                    let out = self.jump()?;
+                    self.patch_to_here(exit)?;
+                    self.emit(Inst::iabc(Op::Close, level, 0, 0, false));
+                    exit = self.jump()?;
+                    self.patch_to_here(out)?;
+                }
+                self.patch_list(exit, init)?;
+                if self.version != LuaVersion::Lua54 {
+                    self.leave_block()?;
+                }
             }
         }
-        self.leave_block()?;
-        Ok(())
+        self.leave_block()
     }
 }

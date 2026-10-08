@@ -16,6 +16,11 @@ impl C<'_, '_> {
                 let w = self.jmp(0)?;
                 self.asm.jump(w, Dist::SBx, pc + 1 + l.sj)?;
             }
+            Op::JmpClose | Op::JmpCloseBack if self.f.ver != 51 => {
+                let a = self.asm.r(l.a - 1)?;
+                let w = self.jmp(a + 1)?;
+                self.asm.jump(w, Dist::SBx, pc + 1 + l.sj)?;
+            }
             Op::Eq | Op::Lt | Op::Le => {
                 let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
                 self.emit(self.abc(cmp_kind(l.op), l.k as u32, a, b))?;

@@ -13,6 +13,10 @@ pub(super) struct Level<'a> {
     /// ordered active-variable sequence (locals + global decls) for goto scope
     pub(super) avars: LVec<AVar<'a>>,
     pub(super) blocks: LVec<BlockCx<'a>>,
+    /// the labels of the open blocks and the pending gotos (PUC
+    /// `dyd->label` / `dyd->gt`, for this function)
+    pub(super) labels: LVec<LabelDesc<'a>>,
+    pub(super) gotos: LVec<LabelDesc<'a>>,
     pub(super) freereg: u32,
     pub(super) max_stack: u32,
     pub(super) upvals: LVec<UpvalDesc>,
@@ -41,6 +45,20 @@ pub(super) struct Level<'a> {
     /// its constant table by number value, where `0 == -0`, so every later
     /// zero, of either sign, loads that one.
     pub(super) zero_51: Option<f64>,
+    /// PUC `fs->jpc` (before 5.4): jumps to the next instruction emitted
+    pub(super) jpc: i32,
+    /// a jump [`Compiler::discharge_jpc`] could not reach
+    pub(super) jump_err: Option<SyntaxError>,
+    /// the values with jump lists (see `Exp::Jumps`)
+    pub(super) jexps: LVec<JExp>,
+}
+
+/// A value and its true and false jump lists (PUC `expdesc` `t` / `f`).
+#[derive(Clone, Copy)]
+pub(super) struct JExp {
+    pub(super) e: Exp,
+    pub(super) t: i32,
+    pub(super) f: i32,
 }
 
 impl<'a> Level<'a> {
@@ -58,6 +76,8 @@ impl<'a> Level<'a> {
             locals: bufs.locals.recycle(),
             avars: bufs.avars.recycle(),
             blocks: bufs.blocks.recycle(),
+            labels: bufs.labels.recycle(),
+            gotos: bufs.gotos.recycle(),
             freereg: num_params as u32,
             max_stack: (num_params as u32).max(2),
             upvals: bufs.upvals,
@@ -70,6 +90,9 @@ impl<'a> Level<'a> {
             line_defined,
             last_target: None,
             zero_51: None,
+            jpc: NO_JUMP,
+            jump_err: None,
+            jexps: bufs.jexps,
         }
     }
 
@@ -124,6 +147,9 @@ impl<'a> Level<'a> {
         };
         self.const_map.clear();
         self.blocks.clear();
+        self.labels.clear();
+        self.gotos.clear();
+        self.jexps.clear();
         let bufs = LevelBufs {
             code: self.code,
             lines: self.lines,
@@ -132,9 +158,12 @@ impl<'a> Level<'a> {
             locals: self.locals.recycle(),
             avars: self.avars.recycle(),
             blocks: self.blocks.recycle(),
+            labels: self.labels.recycle(),
+            gotos: self.gotos.recycle(),
             upvals: self.upvals,
             protos: self.protos,
             locvars: self.locvars,
+            jexps: self.jexps,
         };
         (proto, bufs)
     }
@@ -151,9 +180,12 @@ pub(crate) struct LevelBufs {
     locals: LVec<LocalVar<'static>>,
     avars: LVec<AVar<'static>>,
     blocks: LVec<BlockCx<'static>>,
+    labels: LVec<LabelDesc<'static>>,
+    gotos: LVec<LabelDesc<'static>>,
     upvals: LVec<UpvalDesc>,
     protos: LVec<Gc<Proto>>,
     locvars: LVec<crate::runtime::LocVar>,
+    jexps: LVec<JExp>,
 }
 
 impl LevelBufs {
@@ -167,9 +199,12 @@ impl LevelBufs {
             locals: LVec::with_capacity_or_abort(mem, 8),
             avars: LVec::with_capacity_or_abort(mem, 8),
             blocks: LVec::with_capacity_or_abort(mem, 4),
+            labels: LVec::new(mem),
+            gotos: LVec::new(mem),
             upvals: LVec::new(mem),
             protos: LVec::new(mem),
             locvars: LVec::new(mem),
+            jexps: LVec::new(mem),
         }
     }
 }

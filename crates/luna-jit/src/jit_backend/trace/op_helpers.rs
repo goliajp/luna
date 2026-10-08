@@ -284,6 +284,8 @@ pub(super) fn infer_upval_exit(getupval_a: u32, ops_after: &[RecordedOp]) -> Opt
                 | Op::Eq
                 | Op::EqK
                 | Op::Jmp
+                | Op::JmpClose
+                | Op::JmpCloseBack
                 | Op::SetI
                 | Op::SetTable
                 | Op::SetList

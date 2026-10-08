@@ -376,7 +376,7 @@ fn sweep_op(
                 }
             }
         }
-        Op::Close => {
+        Op::Close | Op::JmpClose | Op::JmpCloseBack => {
             // Op::Close A closes open upvals at slot
             // ≥ A. Open upvals point at vm.stack — the trace
             // can't keep them only in virt slots, so any live

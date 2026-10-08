@@ -205,6 +205,8 @@ fn validate_op(
         | Op::SetField
         | Op::GetField
         | Op::Jmp
+        | Op::JmpClose
+        | Op::JmpCloseBack
         | Op::Move
         | Op::LoadI
         | Op::LoadF
@@ -304,7 +306,7 @@ pub(super) fn validate_trace_ends(
     // the loop, or the slot right before an Op::Call truncation —
     // the tail / side-exit emits the control transfer).
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
-        if matches!(rop.inst.op(), Op::Jmp)
+        if rop.inst.op().is_jump()
             && !consumed_by_cmp[i]
             && i + 1 != effective_end
             && !jumps_to_next(rop, &record.ops[i + 1])
@@ -375,8 +377,8 @@ pub(super) fn validate_trace_ends(
 /// the recording followed to `next`: the trace goes on there, and the jump
 /// needs no code.
 fn jumps_to_next(jmp: &RecordedOp, next: &RecordedOp) -> bool {
-    let target = i64::from(jmp.pc) + 1 + i64::from(jmp.inst.sj());
-    jmp.inst.sj() >= 0
+    let target = i64::from(jmp.pc) + 1 + i64::from(jmp.inst.jump_offset());
+    jmp.inst.jump_offset() >= 0
         && next.inline_depth == jmp.inline_depth
         && std::ptr::eq(next.proto.as_ptr(), jmp.proto.as_ptr())
         && i64::from(next.pc) == target

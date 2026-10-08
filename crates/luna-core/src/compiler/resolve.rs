@@ -144,12 +144,6 @@ impl<'a> Compiler<'a> {
         });
     }
 
-    /// Register floor to CLOSE when discarding locals declared at/after the
-    /// given avar index (the first real local in that suffix), if any.
-    pub(super) fn reg_floor_from_avar(&self, avar_idx: usize) -> Option<u32> {
-        self.lr().avars[avar_idx..].iter().find_map(|a| a.reg)
-    }
-
     pub(super) fn resolve_name(&mut self, name: &str) -> Result<VarKind, SyntaxError> {
         let top = self.levels.len() - 1;
         self.resolve_at(top, name)

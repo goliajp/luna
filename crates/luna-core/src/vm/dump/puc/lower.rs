@@ -438,19 +438,15 @@ impl Lowering {
         Ok(())
     }
 
-    /// `R[a] := R[b] .. ... .. R[c]`. luna concatenates in place at the first
-    /// operand, so a result register elsewhere takes a `Move`.
+    /// `R[a] := R[b] .. ... .. R[c]`: a `Concat` with its own destination.
     pub(super) fn concat_range(&mut self, a: u32, b: u32, c: u32) -> Result<(), String> {
         if c < b {
             return Err(self.err(format_args!("CONCAT range {b}..{c} is empty")));
         }
         let n = c - b + 1;
         let first = self.run(b, n)?;
-        self.emit(enc_abc(Op::Concat, first, n, 0, false)?);
-        if a != b {
-            let a = self.r(a)?;
-            self.emit(enc_abc(Op::Move, a, first, 0, false)?);
-        }
+        let a = self.r(a)?;
+        self.emit(enc_abc(Op::Concat, a, n, first, true)?);
         Ok(())
     }
 }

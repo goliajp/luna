@@ -22,15 +22,17 @@ impl<'a> Compiler<'a> {
     /// by a CLOSE of the block.
     pub(super) fn final_return(&mut self, line: u32) -> Result<(), SyntaxError> {
         if self.version <= LuaVersion::Lua51 {
-            self.leave_block_with(false)?;
+            self.leave_block()?;
             self.last_line = line;
             self.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
-            return Ok(());
+        } else {
+            self.last_line = line;
+            let a = self.return0_base();
+            self.emit(Inst::iabc(Op::Return0, a, 0, 0, false));
+            self.leave_block()?;
         }
-        self.last_line = line;
-        let a = self.return0_base();
-        self.emit(Inst::iabc(Op::Return0, a, 0, 0, false));
-        self.leave_block_with(false)
+        self.finish_jumps()?;
+        self.jump_error()
     }
 
     pub(super) fn return_stat(&mut self, exprs: &[ExprId]) -> Result<(), SyntaxError> {

@@ -269,8 +269,9 @@ impl C<'_, '_> {
                 if l.b < 2 {
                     return Err(self.asm.err("concatenation of fewer than two values"));
                 }
-                let a = self.asm.run(l.a, l.b)?;
-                self.emit(self.abc(Kind::Concat, a, a, a + l.b - 1))?;
+                let (first, out) = if l.k { (l.c, l.a) } else { (l.a, l.a) };
+                let (a, first) = (self.asm.r(out)?, self.asm.run(first, l.b)?);
+                self.emit(self.abc(Kind::Concat, a, first, first + l.b - 1))?;
             }
             Op::Close => {
                 let a = self.asm.r(l.a)?;

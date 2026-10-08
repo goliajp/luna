@@ -129,13 +129,17 @@ fn a_constant_index_past_bx_loads_through_extraarg() {
 }
 
 #[test]
-fn concat_into_another_register_moves_the_result() {
+fn concat_into_another_register_names_it() {
     let mut lw = lowering(1, 8);
     lw.begin(0, 0);
     lw.concat_range(5, 2, 4).unwrap();
     let code = lw.finish(&[]).unwrap().code;
-    assert_eq!((code[0].op(), code[0].a(), code[0].b()), (Op::Concat, 2, 3));
-    assert_eq!((code[1].op(), code[1].a(), code[1].b()), (Op::Move, 5, 2));
+    assert_eq!(code.len(), 1);
+    let i = code[0];
+    assert_eq!(
+        (i.op(), i.a(), i.b(), i.c(), i.k()),
+        (Op::Concat, 5, 3, 2, true)
+    );
 }
 
 #[test]

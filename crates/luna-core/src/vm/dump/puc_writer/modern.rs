@@ -250,6 +250,11 @@ impl M<'_, '_> {
                 self.emit(self.abc(Kind::Unary(l.op), a, b, 0, false))?;
             }
             Op::Concat => {
+                // 5.4+ concatenate in place: a 5.1–5.3 chunk's own
+                // destination has no instruction here
+                if l.k && l.a != l.c {
+                    return Err(self.asm.err("concatenation into another register"));
+                }
                 let a = self.asm.run(l.a, l.b.max(1))?;
                 self.emit(self.abc(Kind::Concat, a, l.b, 0, false))?;
             }

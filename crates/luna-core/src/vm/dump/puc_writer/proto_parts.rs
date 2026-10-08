@@ -3,8 +3,7 @@ use super::*;
 /// PUC's `needclose`: some local is captured by a closure or is to be
 /// closed, so returns and tail calls must close upvalues first.
 pub(super) fn needs_close(p: &Proto) -> bool {
-    p.code.iter().any(|i| matches!(i.op(), Op::Close | Op::Tbc))
-        || p.protos.iter().any(|c| c.upvals.iter().any(|u| u.in_stack))
+    crate::runtime::function_close::needs_close(&p.code, &p.protos)
 }
 
 pub(super) fn vararg_byte(p: &Proto, d: Dialect, vatab: bool) -> u8 {

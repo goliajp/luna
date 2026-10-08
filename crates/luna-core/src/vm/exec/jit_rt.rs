@@ -134,7 +134,7 @@ impl Vm {
         let abs_a = f.base + slot_offset;
         self.top = abs_a + n as u32;
         let pre_frames = self.frames.len();
-        let result = self.concat_run(abs_a);
+        let result = self.concat_run(abs_a, abs_a);
         let post_frames = self.frames.len();
         // Frame-push = metamethod path taken (begin_meta_call pushed
         // a Lua frame). The trace can't continue past it; unwind +

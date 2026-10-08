@@ -11,7 +11,7 @@ pub use op::Op;
 pub use op_info::ForLayout;
 
 /// Total number of opcodes defined in [`Op`].
-pub const NUM_OPS: usize = Op::SetGlobal as usize + 1;
+pub const NUM_OPS: usize = Op::JmpCloseBack as usize + 1;
 
 mod inst;
 pub use inst::*;

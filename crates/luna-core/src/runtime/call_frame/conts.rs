@@ -93,5 +93,8 @@ pub enum MetaAction {
         dst: u32,
         /// First operand register of the original concat span.
         base_a: u32,
+        /// Where the folded result goes, from `base_a` (a register of the
+        /// same frame, so a small offset keeps the continuation small).
+        out: i16,
     },
 }
