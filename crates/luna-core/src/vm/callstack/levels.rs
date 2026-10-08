@@ -152,7 +152,7 @@ impl Vm {
             DbgKind::C(c) => {
                 let mut ar = self.function_ar(func);
                 if let CLevel::Native(k) = c {
-                    ar.extraargs = ts.acts[k].ccmt as i64;
+                    ar.extraargs = ts.acts[k].ccmt() as i64;
                 }
                 ar
             }

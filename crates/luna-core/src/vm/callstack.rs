@@ -28,19 +28,22 @@ pub(crate) use raise::ErroredNative;
 pub(crate) use traceback::traceback_from_lines;
 
 /// Where a running native sits: its value-stack window and the number of
-/// frames below it when it was entered.
+/// frames below it when it was entered. 24 bytes: one is pushed on every
+/// native call.
 #[derive(Clone, Copy)]
 pub(crate) struct NativeAct {
     pub(crate) nc: Gc<NativeClosure>,
     pub(crate) func_slot: u32,
     pub(crate) nargs: u32,
-    pub(crate) depth: u32,
-    /// `__call` metamethods resolved to reach it (PUC 5.5 `CIST_CCMT`)
-    pub(crate) ccmt: u8,
+    /// the frames below it (low 24 bits) and the `__call` metamethods
+    /// resolved to reach it (PUC 5.5 `CIST_CCMT`, the high byte)
+    depth_ccmt: u32,
     /// PUC's `L->top` while it runs: its arguments, then what the C
     /// function has pushed or dropped since (see `Vm::native_push`)
     pub(crate) top: u32,
 }
+
+const _: () = assert!(std::mem::size_of::<NativeAct>() == 24);
 
 impl NativeAct {
     /// `nc` entered at `func_slot` with `nargs` arguments, above `depth`
@@ -53,15 +56,25 @@ impl NativeAct {
         ccmt: u8,
     ) -> Self {
         let top = func_slot + 1 + nargs;
-        let depth = depth as u32;
+        // the frame limit keeps the depth far below 2^24
+        let depth_ccmt = depth as u32 | (u32::from(ccmt) << 24);
         NativeAct {
             nc,
             func_slot,
             nargs,
-            depth,
-            ccmt,
+            depth_ccmt,
             top,
         }
+    }
+
+    /// The frames below it when it was entered.
+    pub(crate) fn depth(&self) -> u32 {
+        self.depth_ccmt & 0x00ff_ffff
+    }
+
+    /// `__call` metamethods resolved to reach it.
+    pub(crate) fn ccmt(&self) -> u8 {
+        (self.depth_ccmt >> 24) as u8
     }
 }
 
@@ -144,7 +157,7 @@ impl<'a> ThreadStack<'a> {
         }
         let mut k = acts.len();
         for p in (0..=frames.len()).rev() {
-            while k > 0 && acts[k - 1].depth as usize == p {
+            while k > 0 && acts[k - 1].depth() as usize == p {
                 k -= 1;
                 if !is_host_call(Value::Native(acts[k].nc)) {
                     levels.push(DbgKind::C(CLevel::Native(k)));

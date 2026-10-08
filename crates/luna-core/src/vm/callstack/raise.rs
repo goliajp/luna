@@ -33,7 +33,7 @@ impl Vm {
             && self
                 .running_natives
                 .last()
-                .is_some_and(|a| a.depth as usize == self.frames.len())
+                .is_some_and(|a| a.depth() as usize == self.frames.len())
     }
 
     /// Remember that `nc` raised `err`. A native only leaves the stack by
@@ -44,7 +44,7 @@ impl Vm {
         let continues = self
             .errored_natives
             .last()
-            .is_some_and(|inner| inner.err.raw_eq(err) && inner.act.depth >= act.depth);
+            .is_some_and(|inner| inner.err.raw_eq(err) && inner.act.depth() >= act.depth());
         if !continues {
             self.errored_natives.clear();
         }
@@ -60,7 +60,7 @@ impl Vm {
         let raised_here = self
             .errored_natives
             .last()
-            .is_some_and(|e| e.err.raw_eq(err) && e.act.depth as usize == self.frames.len());
+            .is_some_and(|e| e.err.raw_eq(err) && e.act.depth() as usize == self.frames.len());
         if raised_here && self.error_traceback.is_none() {
             self.raise_to_handler(err);
         }
@@ -73,7 +73,7 @@ impl Vm {
         let depth = self.frames.len() as u32;
         if !list
             .iter()
-            .all(|e| e.err.raw_eq(err) && e.act.depth == depth)
+            .all(|e| e.err.raw_eq(err) && e.act.depth() == depth)
         {
             list.clear();
         }
