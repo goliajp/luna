@@ -169,4 +169,49 @@ impl<'a> Compiler<'a> {
         }
         self.leave_block()
     }
+
+    /// `break`.
+    pub(super) fn break_stat(&mut self, line: u32) -> Result<(), SyntaxError> {
+        self.jump_line(line);
+        match self.version {
+            LuaVersion::Lua51 => {
+                // the blocks left up to the loop: a CLOSE when one of them
+                // has a captured local
+                let mut upval = false;
+                let mut li = None;
+                for (i, b) in self.lr().blocks.iter().enumerate().rev() {
+                    if b.is_loop != 0 {
+                        li = Some(i);
+                        break;
+                    }
+                    upval |= self.lr().locals[b.first_local..].iter().any(|l| l.captured);
+                }
+                let li = li.expect("the frontend checks break");
+                if upval {
+                    let level = self.reg_level(self.lr().blocks[li].first_avar);
+                    self.emit(Inst::iabc(Op::Close, level, 0, 0, false));
+                }
+                let j = self.jump()?;
+                let mut list = self.lr().blocks[li].breaklist;
+                self.concat_list(&mut list, j)?;
+                self.l().blocks[li].breaklist = list;
+                Ok(())
+            }
+            LuaVersion::Lua52 | LuaVersion::Lua53 => {
+                let j = self.jump()?;
+                self.goto_list_53("break", j)
+            }
+            LuaVersion::Lua54 => {
+                let j = self.jump()?;
+                self.new_goto("break", j);
+                Ok(())
+            }
+            _ => {
+                let b = self.l().blocks.iter_mut().rev().find(|b| b.is_loop != 0);
+                b.expect("the frontend checks break").is_loop = 2;
+                self.goto_55("break")?;
+                Ok(())
+            }
+        }
+    }
 }
