@@ -109,22 +109,6 @@ macro_rules! fast_cmp_arms {
                 order_arm!($d op, $d or_eq, pl, pr)
             }};
         }
-        // two constants: `EqKK`, `LtKK`, `LeKK`
-        macro_rules! order_kk_arm {
-            ($d op:tt, $d or_eq:expr) => {{
-                order_arm!($d op, $d or_eq, $kptr.wrapping_add($inst.a() as usize), $kptr.wrapping_add($inst.b() as usize))
-            }};
-        }
-        macro_rules! op_eq_kk {
-            () => {{
-                // SAFETY: constants of the running frame, never a table or
-                // a userdata
-                let eq = unsafe {
-                    (*$kptr.add($inst.a() as usize)).raw_eq(*$kptr.add($inst.b() as usize))
-                };
-                cond_jump!(eq == $inst.k())
-            }};
-        }
         macro_rules! op_test {
             () => {{
                 // the JMP that follows runs when the condition equals k
