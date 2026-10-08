@@ -226,14 +226,13 @@ impl Vm {
         // arguments stay rooted too (see `begin_call`)
         self.gc_top = func_slot + nargs + 1;
         self.running_natives
-            .push_or_abort(crate::vm::callstack::NativeAct {
+            .push_or_abort(crate::vm::callstack::NativeAct::new(
                 nc,
                 func_slot,
                 nargs,
-                depth: self.frames.len() as u32,
+                self.frames.len(),
                 ccmt,
-                top: func_slot + 1 + nargs,
-            });
+            ));
         let nret = self.invoke_native(nc, func_slot, nargs)?;
         // the native may have armed a hook, whose return event it gets
         self.finish_native_call(func_slot, nargs, nret, nresults)

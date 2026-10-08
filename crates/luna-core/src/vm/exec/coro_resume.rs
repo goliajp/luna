@@ -340,14 +340,13 @@ impl Vm {
             // the yield is a level of its own while its return hook runs
             if let Some(nc) = yielder {
                 self.running_natives
-                    .push_or_abort(crate::vm::callstack::NativeAct {
+                    .push_or_abort(crate::vm::callstack::NativeAct::new(
                         nc,
-                        func_slot: fslot,
-                        nargs: 0,
-                        depth: self.frames.len() as u32,
-                        ccmt: 0,
-                        top: fslot + 1,
-                    });
+                        fslot,
+                        0,
+                        self.frames.len(),
+                        0,
+                    ));
             }
             let r = self.hook_return(true, 1, n);
             if yielder.is_some() {

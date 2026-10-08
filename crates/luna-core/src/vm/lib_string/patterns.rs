@@ -301,7 +301,11 @@ fn add_value(
             push_captures(vm, ms, src, s, e, true, &mut args)?;
             vm.native_pop(1);
             // an unprotected C call: the replacement cannot yield
-            let r = vm.call_value(f, &args)?.first().copied().unwrap_or(Value::Nil);
+            let r = vm
+                .call_value(f, &args)?
+                .first()
+                .copied()
+                .unwrap_or(Value::Nil);
             vm.native_push(1);
             r
         }

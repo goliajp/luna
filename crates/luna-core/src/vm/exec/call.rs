@@ -146,16 +146,15 @@ impl Vm {
                     // error, the pop must happen, so the body is bracketed
                     // through a scope guard.
                     self.running_natives
-                        .push_or_abort(crate::vm::callstack::NativeAct {
+                        // a tail call resolved its `__call` chain before
+                        // calling here and passed the count in tail_ccmt
+                        .push_or_abort(crate::vm::callstack::NativeAct::new(
                             nc,
                             func_slot,
                             nargs,
-                            depth: self.frames.len() as u32,
-                            // a tail call resolved its `__call` chain before
-                            // calling here and passed the count in tail_ccmt
-                            ccmt: tail_ccmt + chain as u8,
-                            top: func_slot + 1 + nargs,
-                        });
+                            self.frames.len(),
+                            tail_ccmt + chain as u8,
+                        ));
                     // PUC C-call discipline: entering a C function sets
                     // L->top to func + 1 + nargs, so a collect triggered
                     // INSIDE the native (explicit `collectgarbage()`, or

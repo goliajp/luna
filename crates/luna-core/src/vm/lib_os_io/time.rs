@@ -29,7 +29,13 @@ fn getfield(vm: &mut Vm, t: Gc<Table>, key: &str, d: i32, delta: i64) -> Result<
     r
 }
 
-fn getfield_pushed(vm: &mut Vm, t: Gc<Table>, key: &str, d: i32, delta: i64) -> Result<i32, LuaError> {
+fn getfield_pushed(
+    vm: &mut Vm,
+    t: Gc<Table>,
+    key: &str,
+    d: i32,
+    delta: i64,
+) -> Result<i32, LuaError> {
     let v = vm.native_getfield(Value::Table(t), key.as_bytes())?;
     let missing = |vm: &mut Vm| raise_str(vm, &format!("field '{key}' missing in date table"));
     if vm.version() <= LuaVersion::Lua52 {

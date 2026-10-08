@@ -42,6 +42,29 @@ pub(crate) struct NativeAct {
     pub(crate) top: u32,
 }
 
+impl NativeAct {
+    /// `nc` entered at `func_slot` with `nargs` arguments, above `depth`
+    /// frames, its top just past the arguments.
+    pub(crate) fn new(
+        nc: Gc<NativeClosure>,
+        func_slot: u32,
+        nargs: u32,
+        depth: usize,
+        ccmt: u8,
+    ) -> Self {
+        let top = func_slot + 1 + nargs;
+        let depth = depth as u32;
+        NativeAct {
+            nc,
+            func_slot,
+            nargs,
+            depth,
+            ccmt,
+            top,
+        }
+    }
+}
+
 /// One stack level (one PUC `CallInfo`).
 #[derive(Clone, Copy)]
 pub(crate) enum DbgKind {

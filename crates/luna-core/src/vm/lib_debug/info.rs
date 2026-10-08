@@ -192,17 +192,21 @@ fn cstr(b: &[u8]) -> &[u8] {
 /// What ≤5.3's `lua_getinfo` reports for a value that is not a Lua
 /// function: a C function with no upvalues.
 fn popped_ar(f: Value) -> crate::vm::callstack::Ar {
-    let mut ar = crate::vm::callstack::Ar {
+    crate::vm::callstack::Ar {
+        what: "C",
+        source: b"=[C]".to_vec(),
+        short_src: b"[C]".to_vec(),
+        linedefined: -1,
+        lastlinedefined: -1,
+        currentline: -1,
+        name: None,
+        istailcall: false,
+        extraargs: 0,
+        ftransfer: 0,
+        ntransfer: 0,
         nups: 0,
+        nparams: 0,
+        isvararg: true,
         func: f,
-        ..Default::default()
-    };
-    ar.what = "C";
-    ar.source = b"=[C]".to_vec();
-    ar.short_src = b"[C]".to_vec();
-    ar.linedefined = -1;
-    ar.lastlinedefined = -1;
-    ar.currentline = -1;
-    ar.isvararg = true;
-    ar
+    }
 }

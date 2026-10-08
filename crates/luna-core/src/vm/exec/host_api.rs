@@ -36,7 +36,11 @@ impl Vm {
     /// is being handled) has that space too. 5.4+ grow a stack refused
     /// this way to that size, as an overflow does.
     pub(crate) fn checkstack(&mut self, top: u32, n: i64) -> bool {
-        let room = if self.stack_extra { STACK_ERR_SPACE - 1 } else { 0 };
+        let room = if self.stack_extra {
+            STACK_ERR_SPACE - 1
+        } else {
+            0
+        };
         let fits = i64::from(top) + n <= i64::from(self.g.lua_stack_limit + room);
         if !fits && self.version() >= LuaVersion::Lua54 {
             self.stack_extra = true;
@@ -401,7 +405,11 @@ impl Vm {
             // resumes the same call, so the in-flight frames must
             // survive.
             // the frames below a native that called back run on
-            let keep = if callback { len.max(func_slot as usize) } else { func_slot as usize };
+            let keep = if callback {
+                len.max(func_slot as usize)
+            } else {
+                func_slot as usize
+            };
             self.stack.truncate(keep);
             self.top = func_slot;
         }
