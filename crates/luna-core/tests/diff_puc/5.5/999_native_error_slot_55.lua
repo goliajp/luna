@@ -61,6 +61,7 @@ local cases = {
   { "searcher preload bad", "return (package.searchers or package.loaders)[1], {}" },
   { "require loader raising", "package.preload.r31f_m = function() package.preload.r31f_m = nil error('in loader') end return require, 'r31f_m'" },
   { "string arith idiv zero", "return function() return '1' // '0' end" },
+  { "string arith __add raising", "return function() return '1' + setmetatable({}, {__add = function() error('in __add') end}) end" },
   { "table.move __eq raising", "return table.move, setmetatable({}, {__eq = function() error('in __eq') end}), 1, 2, 2, {}" },
   { "os.time __newindex", "return os.time, setmetatable({year = 2000, month = 1, day = 1}, {__newindex = function() error('in __newindex') end})" },
   { "io.popen bad mode", "if _VERSION < 'Lua 5.3' then return end return io.popen, 'x', 'z'" },
