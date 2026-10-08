@@ -14,6 +14,7 @@ pub use op_info::ForLayout;
 pub const NUM_OPS: usize = Op::JmpCloseBack as usize + 1;
 
 mod inst;
+mod inst_fields;
 pub use inst::*;
 
 #[cfg(test)]
