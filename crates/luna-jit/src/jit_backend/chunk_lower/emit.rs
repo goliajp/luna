@@ -235,7 +235,9 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
             Op::GetUpval => emit_calls::emit_get_upval(module, &mut bcx, &mut st, f, pc, ins)?,
             Op::Call => emit_calls::emit_self_call(module, &mut bcx, &mut st, f, pc, ins)?,
             Op::ForPrep | Op::ForPrep55 => emit_for::emit_for_prep(&mut bcx, &mut st, f, pc, ins),
-            Op::ForLoop | Op::ForLoop55 => emit_for::emit_for_loop(&mut bcx, &mut st, f, pc, ins),
+            Op::ForLoop | Op::ForLoop55 => {
+                emit_for_loop::emit_for_loop(&mut bcx, &mut st, f, pc, ins)
+            }
             Op::Lt | Op::Le | Op::Eq => pc = emit_basic::emit_cmp(&mut bcx, &mut st, f, pc, ins),
             Op::NewTable => emit_table_set::emit_new_table(module, &mut bcx, &mut st, f, pc, ins)?,
             Op::SetTable => emit_table_set::emit_set_table(module, &mut bcx, f, ins)?,
