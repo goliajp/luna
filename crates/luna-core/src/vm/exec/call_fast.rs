@@ -274,13 +274,17 @@ impl Vm {
             for i in (0..nret).rev() {
                 self.stack[(res_dst + i) as usize] = self.stack[(func_slot + i) as usize];
             }
-            // widen the C-frame's argument window for getlocal
+            // widen the C-frame's argument window for getlocal, and its top
+            // past the results: the hook runs above them (PUC `rethook`)
+            let saved_top = self.running_natives.last().map_or(0, |act| act.top);
             if let Some(act) = self.running_natives.last_mut() {
                 act.nargs = nargs + nret;
+                act.top = res_dst + nret;
             }
             let hr = self.hook_return(true, nargs + 1, nret);
             if let Some(act) = self.running_natives.last_mut() {
                 act.nargs = nargs;
+                act.top = saved_top;
             }
             // restore results into the slot finish_results expects
             for i in 0..nret {
