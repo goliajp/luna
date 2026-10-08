@@ -207,7 +207,11 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             return Err(arg_error(vm, 2, "data string too short"));
         }
         pos += ntoalign;
-        argcheck::check_stack(vm, a, results.len() as i64 + 2, "too many results")?;
+        // each result is pushed as it is read, after a check for two slots
+        // from there
+        let top = Args::new(fs, nargs + results.len() as u32);
+        argcheck::check_stack(vm, top, 2, "too many results")?;
+        vm.native_push(1);
         let p = pos as usize;
         match opt {
             KOption::Int | KOption::Uint => {
