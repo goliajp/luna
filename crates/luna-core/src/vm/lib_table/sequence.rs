@@ -1,6 +1,6 @@
 //! Sequence functions: insert, remove, concat, unpack, pack, move and create.
 
-use super::{TAB_L, TAB_R, TAB_RW, TAB_W, aux_getn, checktab, geti_push, obj_len, seti_pop};
+use super::{TAB_L, TAB_R, TAB_RW, TAB_W, aux_getn, checktab, obj_len, tab_geti, tab_seti};
 use crate::runtime::{Gc, LuaStr, Value};
 use crate::version::LuaVersion as V;
 use crate::vm::argcheck::{self, Args};
@@ -34,8 +34,8 @@ pub(super) fn t_insert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             }
             let mut i = e;
             while i > pos {
-                let mv = geti_push(vm, tv, i - 1)?;
-                seti_pop(vm, tv, i, mv)?;
+                let mv = tab_geti(vm, tv, i - 1, 0)?;
+                tab_seti(vm, tv, i, mv, 0)?;
                 i -= 1;
             }
             pos
@@ -43,7 +43,7 @@ pub(super) fn t_insert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         _ => return Err(raise_str(vm, "wrong number of arguments to 'insert'")),
     };
     let v = a.get(vm, nargs - 1);
-    seti_pop(vm, tv, pos, v)?;
+    tab_seti(vm, tv, pos, v, 0)?;
     Ok(0)
 }
 
@@ -62,8 +62,8 @@ fn insert_int(vm: &mut Vm, a: Args, tv: Value, n: i32) -> Result<u32, LuaError> 
             }
             let mut i = e;
             while i > pos {
-                let mv = geti_push(vm, tv, i64::from(i) - 1)?;
-                seti_pop(vm, tv, i.into(), mv)?;
+                let mv = tab_geti(vm, tv, i64::from(i) - 1, 0)?;
+                tab_seti(vm, tv, i.into(), mv, 0)?;
                 i -= 1;
             }
             pos
@@ -71,7 +71,7 @@ fn insert_int(vm: &mut Vm, a: Args, tv: Value, n: i32) -> Result<u32, LuaError> 
         _ => return Err(raise_str(vm, "wrong number of arguments to 'insert'")),
     };
     let v = a.get(vm, a.n - 1);
-    seti_pop(vm, tv, pos.into(), v)?;
+    tab_seti(vm, tv, pos.into(), v, 0)?;
     Ok(0)
 }
 
@@ -105,14 +105,14 @@ pub(super) fn t_remove(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         }
         (pos, size)
     };
-    let removed = geti_push(vm, tv, pos)?;
+    // the removed value stays pushed while the rest shift down
+    let removed = tab_geti(vm, tv, pos, 0)?;
     while pos < size {
-        let mv = geti_push(vm, tv, pos + 1)?;
-        seti_pop(vm, tv, pos, mv)?;
+        let mv = tab_geti(vm, tv, pos + 1, 1)?;
+        tab_seti(vm, tv, pos, mv, 1)?;
         pos += 1;
     }
-    vm.native_push(1);
-    seti_pop(vm, tv, pos, Value::Nil)?;
+    tab_seti(vm, tv, pos, Value::Nil, 1)?;
     Ok(vm.nat_return(fs, &[removed]))
 }
 
@@ -166,14 +166,12 @@ pub(super) fn t_concat(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         (tv, sep, i, last)
     };
     let mut out: Vec<u8> = Vec::new();
-    let mut slotted = vm.native_buffinit(0);
     // PUC appends `[i, last)` each followed by the separator, then `last`
     // on its own, so `last == maxinteger` never overflows the counter.
     let mut k = i;
     while k < last {
         concat_field(vm, tv, k, &mut out)?;
         out.extend_from_slice(sep.bytes());
-        vm.native_buffgrown(&mut slotted, out.len());
         k += 1;
     }
     if k == last {
@@ -184,8 +182,9 @@ pub(super) fn t_concat(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
 }
 
 fn concat_field(vm: &mut Vm, tv: Value, k: i64, out: &mut Vec<u8>) -> Result<(), LuaError> {
-    // pushed until it is added
-    match geti_push(vm, tv, k)? {
+    // the buffer's slot, then the value until it is added
+    let buf = vm.buffer_slot(out.len());
+    match tab_geti(vm, tv, k, buf)? {
         Value::Str(s) => out.extend_from_slice(s.as_bytes()),
         Value::Int(x) => {
             let mut buf = [0u8; 20];
@@ -200,10 +199,10 @@ fn concat_field(vm: &mut Vm, tv: Value, k: i64, out: &mut Vec<u8>) -> Result<(),
                 "invalid value ({}) at index {k} in table for 'concat'",
                 v.type_name()
             );
+            vm.native_push(buf + 1);
             return Err(raise_str(vm, &msg));
         }
     }
-    vm.native_pop(1);
     Ok(())
 }
 
@@ -263,10 +262,13 @@ pub(crate) fn t_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     if !fits {
         return Err(raise_str(vm, "too many results to unpack"));
     }
+    // the results so far stay pushed under each read
     let mut vals: Vec<Value> = Vec::with_capacity(count as usize);
     for k in i..e {
-        vals.push(geti_push(vm, tv, k)?);
+        let v = tab_geti(vm, tv, k, vals.len() as u32)?;
+        vals.push(v);
     }
-    vals.push(geti_push(vm, tv, e)?);
+    let v = tab_geti(vm, tv, e, vals.len() as u32)?;
+    vals.push(v);
     Ok(vm.nat_return(fs, &vals))
 }

@@ -169,9 +169,16 @@ fn aux_getn(vm: &mut Vm, a: Args, what: u8) -> Result<(Value, i64), LuaError> {
     Ok((tv, n))
 }
 
+/// 5.3's `lua_geti` and `lua_seti` push the index as a key before they
+/// reach a metamethod, which then runs above it.
+fn key_slot(vm: &Vm) -> u32 {
+    u32::from(vm.version() == V::Lua53)
+}
+
 /// Element read: raw on ≤5.2 (`lua_rawgeti`), through `__index` on 5.3+
-/// (`lua_geti`).
-fn tab_geti(vm: &mut Vm, tv: Value, i: i64) -> Result<Value, LuaError> {
+/// (`lua_geti`). `before`: the values the native has pushed by now, which
+/// an `__index` runs above and an error counts.
+fn tab_geti(vm: &mut Vm, tv: Value, i: i64, before: u32) -> Result<Value, LuaError> {
     if vm.version() <= V::Lua52 {
         // checktab already guaranteed a real table on these dialects.
         return Ok(match tv {
@@ -179,39 +186,13 @@ fn tab_geti(vm: &mut Vm, tv: Value, i: i64) -> Result<Value, LuaError> {
             _ => Value::Nil,
         });
     }
-    with_key_pushed(vm, |vm| vm.index_value(tv, Value::Int(i)))
-}
-
-/// 5.3's `lua_geti` and `lua_seti` push the index as a key before they reach
-/// a metamethod, which then runs above it
-fn with_key_pushed<R>(
-    vm: &mut Vm,
-    f: impl FnOnce(&mut Vm) -> Result<R, LuaError>,
-) -> Result<R, LuaError> {
-    let key = u32::from(vm.version() == V::Lua53);
-    vm.native_push(key);
-    let r = f(vm)?;
-    vm.native_pop(key);
-    Ok(r)
-}
-
-/// `lua_geti` / `lua_rawgeti`: [`tab_geti`], the value left pushed.
-fn geti_push(vm: &mut Vm, tv: Value, i: i64) -> Result<Value, LuaError> {
-    let v = tab_geti(vm, tv, i)?;
-    vm.native_push(1);
-    Ok(v)
-}
-
-/// `lua_seti` / `lua_rawseti`: [`tab_seti`] of the value on top, popped.
-fn seti_pop(vm: &mut Vm, tv: Value, i: i64, v: Value) -> Result<(), LuaError> {
-    tab_seti(vm, tv, i, v)?;
-    vm.native_pop(1);
-    Ok(())
+    let extra = before + key_slot(vm);
+    vm.index_value_pushed(tv, Value::Int(i), extra)
 }
 
 /// Element write: raw on ≤5.2 (`lua_rawseti`), through `__newindex` on
-/// 5.3+ (`lua_seti`).
-fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value) -> Result<(), LuaError> {
+/// 5.3+ (`lua_seti`) of the value pushed above `before` others.
+fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value, before: u32) -> Result<(), LuaError> {
     if vm.version() <= V::Lua52 {
         if let Value::Table(t) = tv {
             // SAFETY: `t` is the table argument, kept alive by its stack slot; no reference into it is live across the `set`, which does not collect
@@ -225,5 +206,6 @@ fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value) -> Result<(), LuaError> {
         }
         return Ok(());
     }
-    with_key_pushed(vm, |vm| vm.newindex_value(tv, Value::Int(i), v))
+    let extra = before + 1 + key_slot(vm);
+    vm.newindex_value_pushed(tv, Value::Int(i), v, extra)
 }

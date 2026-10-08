@@ -25,14 +25,14 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let f = argcheck::check_string(vm, a, 0)?;
     let fmt = f.as_bytes();
     let v = vm.version();
-    let mut slotted = vm.native_buffinit(0);
     let mut out = Vec::with_capacity(fmt.len());
     let mut arg = 0u32;
     let mut i = 0;
+    // the buffer's slot counts only when a callback runs or an error is
+    // raised: it is added then, from the content built so far
     while i < fmt.len() {
         let c = fmt[i];
         i += 1;
-        vm.native_buffgrown(&mut slotted, out.len());
         if c != b'%' {
             out.push(c);
             continue;
@@ -45,12 +45,22 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         }
         arg += 1;
         if arg >= nargs {
+            let buf = vm.buffer_slot(out.len());
+            vm.native_push(buf);
             return Err(arg_error(vm, arg + 1, "no value"));
         }
-        i = if v >= LuaVersion::Lua54 {
-            item54(vm, a, arg, fmt, i, &mut out)?
+        let item = if v >= LuaVersion::Lua54 {
+            item54(vm, a, arg, fmt, i, &mut out)
         } else {
-            item51(vm, a, arg, fmt, i, &mut out)?
+            item51(vm, a, arg, fmt, i, &mut out)
+        };
+        i = match item {
+            Ok(i) => i,
+            Err(e) => {
+                let buf = vm.buffer_slot(out.len());
+                vm.native_push(buf);
+                return Err(e);
+            }
         };
     }
     let s = vm.built_str(&out)?;
@@ -179,21 +189,22 @@ fn item51(
         b's' => {
             let s = if v == LuaVersion::Lua51 {
                 argcheck::check_string(vm, a, arg)?.as_bytes().to_vec()
-            } else if v == LuaVersion::Lua52 {
-                let s = tolstring_52(vm, a.get(vm, arg))?;
-                vm.native_push(1);
-                s
             } else {
-                // `luaL_tolstring` leaves the string pushed until it is added
-                let s = vm.tostring_value(a.get(vm, arg))?;
-                vm.native_push(1);
-                s
+                // a `__tostring` runs above the buffer's slot
+                let buf = vm.buffer_slot(out.len());
+                if v == LuaVersion::Lua52 {
+                    tolstring_52(vm, a.get(vm, arg), buf)?
+                } else {
+                    vm.tostring_value_pushed(a.get(vm, arg), buf)?
+                }
             };
             let has_prec = body.contains(&b'.');
             if v >= LuaVersion::Lua53 && body.is_empty() {
                 out.extend_from_slice(&s);
             } else {
                 if v >= LuaVersion::Lua53 && s.contains(&0) {
+                    // over the `luaL_tolstring` result
+                    vm.native_push(1);
                     return Err(arg_error(vm, arg + 1, "string contains zeros"));
                 }
                 if !has_prec && s.len() >= 100 {
@@ -201,9 +212,6 @@ fn item51(
                 } else {
                     cfmt::cstr(out, &sp, &s);
                 }
-            }
-            if v != LuaVersion::Lua51 {
-                vm.native_pop(1);
             }
         }
         _ => {
@@ -228,13 +236,13 @@ fn item51(
 /// 5.2's `luaL_tolstring` does not check what `__tostring` returns: a
 /// value that is not a string or a number formats as C's `%s` of a null
 /// pointer.
-fn tolstring_52(vm: &mut Vm, v: Value) -> Result<Vec<u8>, LuaError> {
+fn tolstring_52(vm: &mut Vm, v: Value, extra: u32) -> Result<Vec<u8>, LuaError> {
     let mm = vm.get_mm(v, crate::vm::exec::Mm::ToString);
     if mm.is_nil() {
         return vm.tostring_value(v);
     }
     match vm
-        .call_value(mm, &[v])?
+        .call_value_pushed(mm, &[v], extra)?
         .first()
         .copied()
         .unwrap_or(Value::Nil)
@@ -350,23 +358,27 @@ fn item54(
             addliteral(vm, a, arg, out)?;
         }
         b's' => {
-            // `luaL_tolstring` leaves the string pushed until it is added
-            let s = vm.tostring_value(a.get(vm, arg))?;
-            vm.native_push(1);
+            // a `__tostring` runs above the buffer's slot; its result stays
+            // pushed over the errors that follow
+            let buf = vm.buffer_slot(out.len());
+            let s = vm.tostring_value_pushed(a.get(vm, arg), buf)?;
             if form.len() == 2 {
                 out.extend_from_slice(&s);
             } else {
                 if s.contains(&0) {
+                    vm.native_push(1);
                     return Err(arg_error(vm, arg + 1, "string contains zeros"));
                 }
-                checkformat(vm, &form, b"-", true)?;
+                if let Err(e) = checkformat(vm, &form, b"-", true) {
+                    vm.native_push(1);
+                    return Err(e);
+                }
                 if !form.contains(&b'.') && s.len() >= 100 {
                     out.extend_from_slice(&s);
                 } else {
                     cfmt::cstr(out, &sp, &s);
                 }
             }
-            vm.native_pop(1);
         }
         _ => {
             // the message prints 'form' as a C string
