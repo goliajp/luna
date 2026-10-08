@@ -28,6 +28,7 @@ mod expr_ops;
 mod fold;
 mod for_loops;
 mod jumplist;
+mod labels;
 use jumplist::NO_JUMP;
 mod level;
 mod limits;
