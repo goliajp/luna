@@ -125,8 +125,13 @@ pub(super) fn emit_order_op<E: Emit>(
                 CmpDir::SkippedJmp => {
                     let jmp_pc = (rop.pc + 1) as usize;
                     let jmp_inst = oc.rop.proto.code[jmp_pc];
-                    let pc_after_jmp = (rop.pc as i64) + 2;
-                    (pc_after_jmp + jmp_inst.sj() as i64) as u32
+                    if jmp_inst.op() == Op::Jmp {
+                        let pc_after_jmp = (rop.pc as i64) + 2;
+                        (pc_after_jmp + jmp_inst.sj() as i64) as u32
+                    } else {
+                        // a jump that closes runs in the interpreter
+                        jmp_pc as u32
+                    }
                 }
             };
             lw.bcx.switch_to_block(side_exit_blk);
