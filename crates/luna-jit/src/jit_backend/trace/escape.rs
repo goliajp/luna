@@ -149,6 +149,9 @@ pub struct AccumSite {
     pub piece_slot: u32,
     /// Inline depth; the detector only accepts 0.
     pub inline_depth: u8,
+    /// A `Move` after the `Concat` stores the result back to the
+    /// accumulator; 5.1–5.3's `Concat` names the accumulator itself.
+    pub has_post: bool,
     /// Final buffer-state classification after escape-style sweep.
     pub state: BufferState,
 }

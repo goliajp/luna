@@ -3,8 +3,57 @@
 use super::*;
 
 impl Compiler<'_> {
-    /// Materialize into a specific register.
+    /// PUC `exp2reg`: the value of `e`, and of its jump lists, in `reg`.
     pub(super) fn exp_to_reg(&mut self, e: Exp, reg: u32) -> Result<(), SyntaxError> {
+        let (v, mut t, f) = self.exp_parts(e);
+        self.discharge_to_reg(v, reg)?;
+        if let Exp::Jmp(pc) = v {
+            self.concat_list(&mut t, pc as i32)?;
+        }
+        if t == NO_JUMP && f == NO_JUMP {
+            return Ok(());
+        }
+        let (mut p_f, mut p_t) = (None, None);
+        if self.need_value(t) || self.need_value(f) {
+            let fj = if matches!(v, Exp::Jmp(_)) {
+                NO_JUMP
+            } else {
+                self.jump()?
+            };
+            p_f = Some(self.code_loadbool(reg, Op::LFalseSkip));
+            p_t = Some(self.code_loadbool(reg, Op::LoadTrue));
+            self.patch_to_here(fj)?;
+        }
+        let end = self.get_label();
+        self.patch_list_aux(f, end, Some(reg), p_f.unwrap_or(end))?;
+        self.patch_list_aux(t, end, Some(reg), p_t.unwrap_or(end))
+    }
+
+    /// PUC `code_loadbool`.
+    fn code_loadbool(&mut self, reg: u32, op: Op) -> usize {
+        self.get_label();
+        self.emit(Inst::iabc(op, reg, 0, 0, false))
+    }
+
+    /// PUC `discharge2anyreg`: the value of `e` (not its lists) in a
+    /// register.
+    pub(super) fn exp_to_anyreg_value(&mut self, e: Exp) -> Result<u32, SyntaxError> {
+        match e {
+            Exp::Reg(r) => Ok(r),
+            Exp::Open { pc, base } => {
+                self.patch_wanted(pc, 2);
+                Ok(base)
+            }
+            e => {
+                let r = self.reserve(1)?;
+                self.discharge_to_reg(e, r)?;
+                Ok(r)
+            }
+        }
+    }
+
+    /// PUC `discharge2reg`: the value of `e` (not its lists) in `reg`.
+    fn discharge_to_reg(&mut self, e: Exp, reg: u32) -> Result<(), SyntaxError> {
         match e {
             Exp::Nil => {
                 // PUC 5.1 `luaK_nil`: at function start a register above the
@@ -55,16 +104,8 @@ impl Compiler<'_> {
                 }
             }
             Exp::Reloc(pc) => self.patch_dest(pc, reg),
-            Exp::Cmp { op, l, r, c } => {
-                self.emit(Inst::iabc(op, l, r, c, true));
-                self.emit(Inst::isj(Op::Jmp, 1));
-                self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
-                let tpad = self.here();
-                self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
-                // Jmp(1) above skips the LFalseSkip and lands on the LoadTrue
-                // pad — that pc is a jump destination.
-                self.mark_target(tpad);
-            }
+            Exp::Jmp(_) => {}
+            Exp::Jumps(_) => unreachable!("a value without its lists"),
             Exp::Open { pc, base } => {
                 self.patch_wanted(pc, 2);
                 if base != reg {
@@ -76,9 +117,40 @@ impl Compiler<'_> {
     }
 
     pub(super) fn exp_to_nextreg(&mut self, e: Exp) -> Result<u32, SyntaxError> {
+        // PUC `luaK_exp2nextreg` frees the value's own temporary first
+        if let Exp::Jumps(_) = e {
+            let (v, t, f) = self.exp_parts(e);
+            let v = self.discharge_vars(v);
+            if let Exp::Reg(r) = v {
+                self.free_reg(r);
+            }
+            let e = self.exp_with(v, t, f);
+            let reg = self.reserve(1)?;
+            self.exp_to_reg(e, reg)?;
+            return Ok(reg);
+        }
         let reg = self.reserve(1)?;
         self.exp_to_reg(e, reg)?;
         Ok(reg)
+    }
+
+    /// PUC `luaK_exp2val`: a test or a value with jump lists in a register.
+    pub(super) fn exp_to_val(&mut self, e: Exp) -> Result<Exp, SyntaxError> {
+        Ok(match e {
+            Exp::Jmp(_) | Exp::Jumps(_) => Exp::Reg(self.exp_to_anyreg(e)?),
+            e => e,
+        })
+    }
+
+    /// PUC `luaK_dischargevars` of a call or `...`: its one value.
+    pub(super) fn discharge_vars(&mut self, e: Exp) -> Exp {
+        match e {
+            Exp::Open { pc, base } => {
+                self.patch_wanted(pc, 2);
+                Exp::Reg(base)
+            }
+            e => e,
+        }
     }
 
     pub(super) fn exp_to_anyreg(&mut self, e: Exp) -> Result<u32, SyntaxError> {
@@ -87,6 +159,21 @@ impl Compiler<'_> {
             Exp::Open { pc, base } => {
                 self.patch_wanted(pc, 2);
                 Ok(base)
+            }
+            Exp::Jumps(_) => {
+                // a temporary takes the values of the lists itself; a local
+                // cannot
+                let (v, t, f) = self.exp_parts(e);
+                let v = self.discharge_vars(v);
+                if let Exp::Reg(r) = v
+                    && r >= self.nvarstack()
+                {
+                    let e = self.exp_with(v, t, f);
+                    self.exp_to_reg(e, r)?;
+                    return Ok(r);
+                }
+                let e = self.exp_with(v, t, f);
+                self.exp_to_nextreg(e)
             }
             e => self.exp_to_nextreg(e),
         }

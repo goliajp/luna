@@ -114,9 +114,9 @@ pub fn parse(src: &[u8], version: LuaVersion) -> Result<Chunk, SyntaxError> {
 /// A parsed chunk with what the public [`Chunk`] has no place for.
 pub(crate) struct Parsed {
     pub(crate) chunk: Chunk,
-    /// the line of the closing `end` of each `while` / `for` statement, by
-    /// `StatId` (0 for other statements): PUC attributes the code it emits
-    /// after reading that `end` to its line
+    /// the line of each statement's last token, by `StatId`: PUC attributes
+    /// the code it emits once it has read that token (a loop's `end`) to
+    /// its line
     pub(crate) end_lines: LVec<u32>,
     /// the lexer's token buffer, kept for the next load
     pub(crate) lex_buf: LVec<u8>,

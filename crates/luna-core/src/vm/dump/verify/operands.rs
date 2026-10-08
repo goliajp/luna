@@ -182,9 +182,15 @@ impl Checker<'_> {
                 if b < 2 {
                     return Err(self.err(pc, format!("concatenates {b} values")));
                 }
-                self.regs(pc, a, b)
+                let (first, out) = i.concat_operands();
+                self.reg(pc, out)?;
+                self.regs(pc, first, b)
             }
             Op::Jmp | Op::ExtraArg => Ok(()),
+            Op::JmpClose | Op::JmpCloseBack => match a.checked_sub(1) {
+                Some(r) => self.reg(pc, r),
+                None => Err(self.err(pc, "closes no register".to_string())),
+            },
             // the first register past the returning frame's locals: at most
             // one past its last register
             Op::Return0 => self.regs(pc, a, 0),

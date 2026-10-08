@@ -36,7 +36,7 @@ pub(super) fn validate_branch_op(
                 }
             }
             let next = &record.ops[i + 1];
-            let took_jmp = matches!(next.inst.op(), Op::Jmp) && next.pc == rop.pc + 1;
+            let took_jmp = next.inst.op().is_jump() && next.pc == rop.pc + 1;
             let skipped_jmp = next.pc == rop.pc + 2;
             if took_jmp {
                 consumed_by_cmp[i + 1] = true;
@@ -44,7 +44,7 @@ pub(super) fn validate_branch_op(
             } else if skipped_jmp {
                 let slot = (rop.pc + 1) as usize;
                 let jmp_inst = head_proto.code.get(slot).copied();
-                if !jmp_inst.is_some_and(|x| matches!(x.op(), Op::Jmp)) {
+                if !jmp_inst.is_some_and(|x| x.op().is_jump()) {
                     {
                         checkpoint("bail:cmp-dirs-body-other");
                         return None;
@@ -77,7 +77,7 @@ pub(super) fn validate_branch_op(
                 }
             }
             let next = &record.ops[i + 1];
-            let took_jmp = matches!(next.inst.op(), Op::Jmp) && next.pc == rop.pc + 1;
+            let took_jmp = next.inst.op().is_jump() && next.pc == rop.pc + 1;
             let skipped_jmp = next.pc == rop.pc + 2;
             if took_jmp {
                 consumed_by_cmp[i + 1] = true;
@@ -85,7 +85,7 @@ pub(super) fn validate_branch_op(
             } else if skipped_jmp {
                 let slot = (rop.pc + 1) as usize;
                 let jmp_inst = head_proto.code.get(slot).copied();
-                if !jmp_inst.is_some_and(|x| matches!(x.op(), Op::Jmp)) {
+                if !jmp_inst.is_some_and(|x| x.op().is_jump()) {
                     {
                         checkpoint("bail:cmp-dirs-body-other");
                         return None;
@@ -137,7 +137,7 @@ pub(super) fn validate_branch_op(
                 }
             }
             let next = &record.ops[i + 1];
-            let took_jmp = matches!(next.inst.op(), Op::Jmp) && next.pc == rop.pc + 1;
+            let took_jmp = next.inst.op().is_jump() && next.pc == rop.pc + 1;
             let skipped_jmp = next.pc == rop.pc + 2;
             if took_jmp {
                 if i + 1 < effective_end {
@@ -149,7 +149,7 @@ pub(super) fn validate_branch_op(
                 // is actually a Jmp in the Proto's bytecode.
                 let slot = (rop.pc + 1) as usize;
                 let jmp_inst = head_proto.code.get(slot).copied();
-                if !jmp_inst.is_some_and(|x| matches!(x.op(), Op::Jmp)) {
+                if !jmp_inst.is_some_and(|x| x.op().is_jump()) {
                     {
                         checkpoint("bail:cmp-skipped-but-no-jmp-slot");
                         return None;

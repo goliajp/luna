@@ -92,7 +92,9 @@ pub(super) fn emit_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) 
         Op::SelfOp => emit_self_op(lw, pl, oc),
         Op::GetTabUp => emit_get_tab_up_op(lw, pl, oc),
         Op::SetList | Op::Len | Op::Concat => emit_sequence_op(lw, pl, oc),
-        Op::Closure | Op::Close | Op::GetUpval => emit_closure_op(lw, pl, oc),
+        Op::Closure | Op::Close | Op::JmpClose | Op::JmpCloseBack | Op::GetUpval => {
+            emit_closure_op(lw, pl, oc)
+        }
         Op::Call | Op::Return0 | Op::Return1 | Op::Return | Op::Vararg => emit_call_op(lw, pl, oc),
         Op::TForCall | Op::TForCall53 | Op::TForCall55 => emit_tfor_call_op(lw, pl, oc),
         // generic-for prep is the leading pc-bump

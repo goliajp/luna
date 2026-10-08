@@ -77,12 +77,11 @@ impl Vm {
                 self.arith_slow(inst.a(), base, ArithOp::Pow, l, r)?
             }
             Op::Concat => {
-                // right-associative fold over operands at base+a .. base+a+n,
-                // in place on the stack so a yielding __concat can suspend.
-                let a = inst.a();
-                let n = inst.b();
-                self.top = base + a + n;
-                self.concat_run(base + a)?;
+                // right-associative fold over the operands, in place on the
+                // stack so a yielding __concat can suspend
+                let (first, out) = inst.concat_operands();
+                self.top = base + first + inst.b();
+                self.concat_run(base + first, base + out)?;
             }
             Op::ForPrep | Op::ForPrep55 => self.for_prep(inst, base)?,
             Op::TForPrep | Op::TForPrep53 | Op::TForPrep55 => {

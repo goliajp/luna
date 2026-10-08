@@ -139,6 +139,9 @@ impl Compiler<'_> {
     /// PUC `luaK_indexed`: table `t` (a register, or an upvalue kept as
     /// one) indexed by `key`, whose code is compiled but not discharged.
     pub(super) fn indexed(&mut self, t: TabRef, key: Exp) -> Result<(TabRef, KeyRef), SyntaxError> {
+        // PUC `yindex` gives the key a value (`luaK_exp2val`) before it is
+        // used
+        let key = self.exp_to_val(key)?;
         if let Exp::Const(c) = key
             && self.kstr(c)
         {
@@ -154,12 +157,7 @@ impl Compiler<'_> {
                 Rk::Reg(r) => (t, KeyRef::Reg(r)),
             });
         }
-        // an upvalue indexed by anything else goes into a register, after a
-        // comparison key has used its operands
-        let key = match (t, key) {
-            (TabRef::Up(_), Exp::Cmp { .. }) => Exp::Reg(self.held_reg(key)?),
-            _ => key,
-        };
+        // an upvalue indexed by anything else goes into a register
         let t = match t {
             TabRef::Up(u) => {
                 let r = self.reserve(1)?;
