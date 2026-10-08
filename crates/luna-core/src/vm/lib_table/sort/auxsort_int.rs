@@ -49,7 +49,7 @@ impl Sorter {
                 self.geti(vm, i)?;
                 while self.lt(vm, 1, 2)? {
                     if if strict { i >= u } else { i > u } {
-                        return Err(invalid_order(vm));
+                        return Err(self.invalid_order(vm));
                     }
                     Self::pop(vm, 1);
                     i += 1;
@@ -59,7 +59,7 @@ impl Sorter {
                 self.geti(vm, j)?;
                 while self.lt(vm, 3, 1)? {
                     if if strict { j <= l } else { j < l } {
-                        return Err(invalid_order(vm));
+                        return Err(self.invalid_order(vm));
                     }
                     Self::pop(vm, 1);
                     j -= 1;

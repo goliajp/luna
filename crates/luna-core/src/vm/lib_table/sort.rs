@@ -1,7 +1,7 @@
 //! `table.sort`: PUC's quicksort run in place, so the comparator sees the same
 //! calls in the same order.
 
-use super::{TAB_RW, aux_getn, tab_geti, tab_seti};
+use super::{TAB_RW, aux_getn, key_slot, tab_seti};
 use crate::runtime::Value;
 use crate::runtime::mem::LVec;
 use crate::version::LuaVersion as V;
@@ -27,7 +27,10 @@ pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     } else {
         Some(argcheck::check_function(vm, a, 1)?)
     };
-    vm.native_settop(2);
+    // PUC `lua_settop(L, 2)`, then every element it holds goes on the
+    // stack: this frame of `sort_scratch` is that stack, so what it holds
+    // above the two arguments is what the native has pushed
+    let off = 2 - nargs as i32;
     // PUC keeps every element it is holding on the Lua stack; this frame
     // of `sort_scratch` is that stack, traced by `gc_roots`, so a
     // `collectgarbage()` inside the comparator cannot free them.
@@ -43,6 +46,7 @@ pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         comp,
         snapshot,
         stored: std::cell::Cell::new(false),
+        off,
     };
     let r = if ver <= V::Lua52 {
         s.auxsort_int(vm, 1, i64::from(n as i32))
@@ -58,7 +62,7 @@ pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         && s.stored.get()
     {
         for (i, v) in frame[..len].iter().enumerate() {
-            tab_seti(vm, tv, i as i64 + 1, *v)?;
+            tab_seti(vm, tv, i as i64 + 1, *v, 0)?;
         }
     }
     Ok(0)
@@ -105,10 +109,8 @@ struct Sorter {
     snapshot: Option<usize>,
     /// a store went to the snapshot: PUC would have written the table
     stored: std::cell::Cell<bool>,
-}
-
-fn invalid_order(vm: &mut Vm) -> LuaError {
-    raise_str(vm, "invalid order function for sorting")
+    /// what `lua_settop(L, 2)` left pushed past the arguments
+    off: i32,
 }
 
 impl Sorter {
@@ -124,18 +126,31 @@ impl Sorter {
     fn pop(vm: &mut Vm, n: usize) {
         let st = Self::stack(vm);
         st.truncate(st.len() - n);
-        vm.native_pop(n as u32);
     }
 
     fn push(vm: &mut Vm, v: Value) {
         Self::stack(vm).push_or_abort(v);
-        vm.native_push(1);
+    }
+
+    /// Tell the native's record what the scratch stack holds, before a
+    /// metamethod, a comparator or an error reads it.
+    fn mark(&self, vm: &mut Vm) {
+        let held = Self::stack(vm).len() as i32;
+        vm.native_set_pushed(self.off + held);
+    }
+
+    fn invalid_order(&self, vm: &mut Vm) -> LuaError {
+        self.mark(vm);
+        raise_str(vm, "invalid order function for sorting")
     }
 
     fn geti(&self, vm: &mut Vm, i: i64) -> Result<(), LuaError> {
         let v = match self.snapshot {
             Some(_) => Self::stack(vm)[(i - 1) as usize],
-            None => tab_geti(vm, self.tv, i)?,
+            None => {
+                self.mark(vm);
+                vm.index_value_pushed(self.tv, Value::Int(i), key_slot(vm))?
+            }
         };
         Self::push(vm, v);
         Ok(())
@@ -149,7 +164,10 @@ impl Sorter {
                 Self::stack(vm)[(i - 1) as usize] = v;
                 self.stored.set(true);
             }
-            None => tab_seti(vm, self.tv, i, v)?,
+            None => {
+                self.mark(vm);
+                vm.newindex_value_pushed(self.tv, Value::Int(i), v, key_slot(vm))?;
+            }
         }
         Self::pop(vm, 1);
         Ok(())
@@ -168,14 +186,20 @@ impl Sorter {
         let y = Self::at(vm, b);
         match self.comp {
             // sort is an unprotected C call: the comparator runs non-yieldable.
-            Some(f) => Ok(vm
-                .call_value(f, &[x, y])?
-                .first()
-                .is_some_and(|r| r.truthy())),
+            Some(f) => {
+                self.mark(vm);
+                Ok(vm
+                    .call_value(f, &[x, y])?
+                    .first()
+                    .is_some_and(|r| r.truthy()))
+            }
             None => match (x, y) {
                 (Value::Int(a), Value::Int(b)) => Ok(a < b),
                 (Value::Float(a), Value::Float(b)) => Ok(a < b),
-                _ => vm.less_than(x, y, false),
+                _ => {
+                    self.mark(vm);
+                    vm.less_than(x, y, false)
+                }
             },
         }
     }
@@ -190,7 +214,7 @@ impl Sorter {
             self.geti(vm, i.into())?;
             while self.lt(vm, 1, 2)? {
                 if i == up - 1 {
-                    return Err(invalid_order(vm));
+                    return Err(self.invalid_order(vm));
                 }
                 Self::pop(vm, 1);
                 i += 1;
@@ -200,7 +224,7 @@ impl Sorter {
             self.geti(vm, j.into())?;
             while self.lt(vm, 3, 1)? {
                 if j < i {
-                    return Err(invalid_order(vm));
+                    return Err(self.invalid_order(vm));
                 }
                 Self::pop(vm, 1);
                 j -= 1;

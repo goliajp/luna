@@ -46,13 +46,13 @@ pub(crate) fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         // table; "same" is `lua_compare(EQ)`, so `__eq` takes part.
         if t > e || t <= f || (tt != 0 && !vm.equal(a1, a2)?) {
             for i in 0..n {
-                let v = geti_push(vm, a1, f + i)?;
-                seti_pop(vm, a2, t + i, v)?;
+                let v = tab_geti(vm, a1, f + i, 0)?;
+                tab_seti(vm, a2, t + i, v, 0)?;
             }
         } else {
             for i in (0..n).rev() {
-                let v = geti_push(vm, a1, f + i)?;
-                seti_pop(vm, a2, t + i, v)?;
+                let v = tab_geti(vm, a1, f + i, 0)?;
+                tab_seti(vm, a2, t + i, v, 0)?;
             }
         }
     }

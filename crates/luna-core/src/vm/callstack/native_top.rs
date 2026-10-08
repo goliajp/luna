@@ -62,6 +62,28 @@ impl Vm {
         }
     }
 
+    /// The running native has `n` values pushed past its arguments (`n`
+    /// below zero: it dropped that many of them), set outright before a
+    /// callback or an error, after steps that counted nothing.
+    #[inline]
+    pub(crate) fn native_set_pushed(&mut self, n: i32) {
+        if let Some(a) = self.running_natives.last_mut() {
+            a.top_off = n;
+        }
+    }
+
+    /// The slots a `luaL_Buffer` holding `len` bytes takes on the stack:
+    /// 5.4+ a placeholder from the start, 5.2 and 5.3 a box once the
+    /// content passes `LUAL_BUFFERSIZE` (8192 there), 5.1 none.
+    #[inline]
+    pub(crate) fn buffer_slot(&self, len: usize) -> u32 {
+        match self.version() {
+            LuaVersion::Lua51 => 0,
+            LuaVersion::Lua52 | LuaVersion::Lua53 => u32::from(len > LUAL_BUFFERSIZE_52),
+            _ => 1,
+        }
+    }
+
     /// The running native sets its top to `n` values (C `lua_settop(L, n)`).
     #[inline]
     pub(crate) fn native_settop(&mut self, n: u32) {
@@ -82,18 +104,6 @@ impl Vm {
         Ok(v)
     }
 
-    /// C `lua_geti(L, idx, i)` on `obj`: the value, left pushed. 5.3
-    /// pushes the key first, where the value then goes; an error leaves
-    /// what was pushed.
-    pub(crate) fn native_geti(&mut self, obj: Value, i: i64) -> Result<Value, LuaError> {
-        let key_first = self.version() == LuaVersion::Lua53;
-        self.native_push(u32::from(key_first));
-        let v = self.index_value(obj, Value::Int(i))?;
-        self.native_pop(u32::from(key_first));
-        self.native_push(1);
-        Ok(v)
-    }
-
     /// C `lua_setfield(L, idx, key)` with the value `v` pushed on top: 5.2+
     /// push the key before a `__newindex` runs; both are popped after.
     pub(crate) fn native_setfield(
@@ -111,28 +121,11 @@ impl Vm {
     }
 
     /// C `luaL_buffinitsize(L, &b, n)`, or `luaL_buffinit` with `n` 0:
-    /// 5.4+ push a placeholder for the buffer, 5.2 and 5.3 a box only once
-    /// the content passes `LUAL_BUFFERSIZE` (8192 there), 5.1 nothing.
-    /// Whether the buffer now has a slot, for `native_buffgrown`.
-    #[inline]
-    pub(crate) fn native_buffinit(&mut self, n: usize) -> bool {
-        let pushed = match self.version() {
-            LuaVersion::Lua51 => false,
-            LuaVersion::Lua52 | LuaVersion::Lua53 => n > LUAL_BUFFERSIZE_52,
-            _ => true,
-        };
-        self.native_push(u32::from(pushed));
-        pushed || self.version() == LuaVersion::Lua51
-    }
-
-    /// The buffer holds `len` bytes: 5.2 and 5.3 push its box the first
-    /// time that passes `LUAL_BUFFERSIZE`.
-    #[inline]
-    pub(crate) fn native_buffgrown(&mut self, slotted: &mut bool, len: usize) {
-        if !*slotted && len > LUAL_BUFFERSIZE_52 {
-            *slotted = true;
-            self.native_push(1);
-        }
+    /// the buffer's slot (see [`Vm::buffer_slot`]), pushed outright by a
+    /// native that keeps it for the rest of its run.
+    pub(crate) fn native_buffinit(&mut self, n: usize) {
+        let slot = self.buffer_slot(n);
+        self.native_push(slot);
     }
 }
 

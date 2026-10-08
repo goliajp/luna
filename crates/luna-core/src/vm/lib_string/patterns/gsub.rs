@@ -31,7 +31,6 @@ pub(crate) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
             arg_error(vm, 3, "string/function/table expected")
         });
     }
-    let mut slotted = vm.native_buffinit(0);
     // a string or number replacement is a template
     let template = match repl {
         Value::Str(t) => Some(t),
@@ -56,10 +55,17 @@ pub(crate) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         };
         if let Some(e) = m {
             n += 1;
-            changed |= add_value(vm, &ms, src, pos, e, repl, template, &mut out)?;
+            // the buffer's slot counts only for a callback or an error
+            let buf = vm.buffer_slot(out.len());
+            changed |= match add_value(vm, &ms, src, pos, e, repl, template, buf, &mut out) {
+                Ok(c) => c,
+                Err(err) => {
+                    vm.native_push(buf);
+                    return Err(err);
+                }
+            };
             last = Some(e);
         }
-        vm.native_buffgrown(&mut slotted, out.len());
         match m {
             Some(e) if v >= LuaVersion::Lua53 || e > pos => pos = e,
             _ if pos < src.len() => {
@@ -93,34 +99,35 @@ pub(crate) fn add_value(
     e: usize,
     repl: Value,
     template: Option<Gc<LuaStr>>,
+    buf: u32,
     out: &mut Vec<u8>,
 ) -> Result<bool, LuaError> {
     if let Some(t) = template {
         add_s(vm, ms, src, s, e, t.as_bytes(), out)?;
         return Ok(true);
     }
-    // the value ends up pushed where the key or the function was
+    // the value ends up pushed where the key or the function was, above
+    // the buffer's slot
     let r = match repl {
         Value::Table(_) => {
             let k = ms.get_capture(0, s, e).map_err(|err| pat_err(vm, err))?;
             let k = cap_value(vm, src, k);
-            vm.native_push(1);
-            vm.index_value(repl, k)?
+            // the key is pushed for `lua_gettable`
+            vm.index_value_pushed(repl, k, buf + 1)?
         }
         f => {
             let mut args = Vec::new();
-            // the function, then its arguments, are pushed for the call
-            vm.native_push(1);
-            push_captures(vm, ms, src, s, e, true, &mut args)?;
-            vm.native_pop(1);
+            // the function, then its arguments, are pushed for the call;
+            // a capture error counts the function
+            if let Err(err) = push_captures(vm, ms, src, s, e, true, &mut args) {
+                vm.native_push(1);
+                return Err(err);
+            }
             // an unprotected C call: the replacement cannot yield
-            let r = vm
-                .call_value(f, &args)?
+            vm.call_value_pushed(f, &args, buf)?
                 .first()
                 .copied()
-                .unwrap_or(Value::Nil);
-            vm.native_push(1);
-            r
+                .unwrap_or(Value::Nil)
         }
     };
     let kept = match r {
@@ -139,10 +146,10 @@ pub(crate) fn add_value(
         }
         other => {
             let msg = format!("invalid replacement value (a {})", other.type_name());
+            vm.native_push(buf + 1);
             return Err(raise_str(vm, &msg));
         }
     };
-    vm.native_pop(1);
     Ok(kept)
 }
 

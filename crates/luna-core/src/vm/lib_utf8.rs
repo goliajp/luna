@@ -146,18 +146,24 @@ fn bounds(v: LuaVersion, old: &'static str, new: &'static str) -> &'static str {
 fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
-    if nargs != 1 {
-        vm.native_buffinit(0);
-    }
+    // with several arguments the buffer's slot counts for an error
+    let buf = if nargs != 1 { vm.buffer_slot(0) } else { 0 };
     let mut out = Vec::new();
     for i in 0..nargs {
-        let code = argcheck::check_integer(vm, a, i)?;
+        let code = match argcheck::check_integer(vm, a, i) {
+            Ok(code) => code,
+            Err(e) => {
+                vm.native_push(buf);
+                return Err(e);
+            }
+        };
         let ok = if v == LuaVersion::Lua53 {
             (0..=i64::from(MAX_UNICODE)).contains(&code)
         } else {
             (code as u64) <= u64::from(MAX_UTF)
         };
         if !ok {
+            vm.native_push(buf);
             return Err(arg_error(vm, i + 1, "value out of range"));
         }
         encode(&mut out, code as u32);

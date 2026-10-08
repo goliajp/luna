@@ -15,6 +15,20 @@ impl Vm {
         r
     }
 
+    /// [`Vm::call_value`] from a native with `extra` values pushed where
+    /// PUC's C function would have them: the callee starts above them.
+    pub(crate) fn call_value_pushed(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        extra: u32,
+    ) -> Result<Vec<Value>, LuaError> {
+        self.native_push(extra);
+        let r = self.call_value(f, args)?;
+        self.native_pop(extra);
+        Ok(r)
+    }
+
     /// [`Vm::call_value`] placed at slot `at` of the running native's
     /// stack, where a C function that moved the callee below its arguments
     /// calls it (`lua_insert` then `lua_call`).
