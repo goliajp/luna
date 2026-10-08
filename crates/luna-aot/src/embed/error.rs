@@ -20,8 +20,10 @@ pub enum AotError {
     /// issues without re-running.
     Link(String),
     /// The target triple isn't supported. The scaffold path rejects
-    /// anything other than the host triple; [`compile_and_link`]
-    /// rejects triples [`TargetSpec::from_triple`] can't describe.
+    /// anything other than the host triple;
+    /// [`compile_and_link`](super::compile_and_link) rejects triples
+    /// [`TargetSpec::from_triple`](super::TargetSpec::from_triple) can't
+    /// describe.
     UnsupportedTarget(String),
 }
 
