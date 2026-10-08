@@ -1,5 +1,23 @@
 use super::*;
 
+/// The index a 5.5 numeric loop (`ForPrep` at `prep`) steps, declared after
+/// the registers by `emit_chunk`; `None` for a 5.1–5.4 loop.
+fn shadow_index(f: EmitFacts<'_>, prep: usize) -> Option<Variable> {
+    let code = f.c.code;
+    if code[prep].op() != Op::ForPrep55 {
+        return None;
+    }
+    let loops: Vec<usize> = f
+        .scan
+        .for_loops
+        .iter()
+        .map(|&(p, _, _)| p)
+        .filter(|&p| code[p].op() == Op::ForPrep55)
+        .collect();
+    let j = loops.iter().position(|&p| p == prep)?;
+    Some(f.regs[f.regs.len() - loops.len() + j])
+}
+
 pub(super) fn emit_for_prep(
     bcx: &mut FunctionBuilder<'_>,
     st: &mut EmitState,
@@ -84,6 +102,9 @@ pub(super) fn emit_for_prep(
                     aligned_def(bcx, regs, reg_kinds, r.step, step_i);
                     aligned_def(bcx, regs, reg_kinds, r.idx, init);
                     aligned_def(bcx, regs, reg_kinds, r.var, init);
+                    if let Some(v) = shadow_index(f, pc) {
+                        bcx.def_var(v, init);
+                    }
                     for reg in [r.idx, r.x, r.step, r.var] {
                         current_kinds[reg] = RegKind::Int;
                     }
@@ -150,6 +171,9 @@ pub(super) fn emit_for_prep(
                     aligned_def(bcx, regs, reg_kinds, r.step, step);
                     aligned_def(bcx, regs, reg_kinds, r.idx, init);
                     aligned_def(bcx, regs, reg_kinds, r.var, init);
+                    if let Some(v) = shadow_index(f, pc) {
+                        bcx.def_var(v, init);
+                    }
                     current_kinds[r.idx] = RegKind::Float;
                     current_kinds[r.x] = RegKind::Float;
                     current_kinds[r.step] = step_kind;
@@ -206,7 +230,8 @@ pub(super) fn emit_for_loop(
                 // next = R[A] + step; cont = next ≤ limit (positive)
                 // / next ≥ limit (negative). On continue → R[A] =
                 // next, R[A+3] = next, back-jump to body.
-                let cur = bcx.use_var(regs[r.idx]);
+                let shadow = shadow_index(f, prep_pc);
+                let cur = bcx.use_var(shadow.unwrap_or(regs[r.idx]));
                 let step_f = bcx.ins().f64const(step_imm as f64);
                 let next = bcx.ins().fadd(cur, step_f);
                 let limit = bcx.use_var(regs[r.x]);
@@ -223,6 +248,9 @@ pub(super) fn emit_for_loop(
 
                 bcx.switch_to_block(continue_blk);
                 bcx.seal_block(continue_blk);
+                if let Some(v) = shadow {
+                    bcx.def_var(v, next);
+                }
                 aligned_def(bcx, regs, reg_kinds, r.idx, next);
                 aligned_def(bcx, regs, reg_kinds, r.var, next);
                 current_kinds[r.idx] = RegKind::Float;
@@ -269,9 +297,13 @@ pub(super) fn emit_for_loop(
 
                 bcx.switch_to_block(continue_blk);
                 bcx.seal_block(continue_blk);
-                let cur = bcx.use_var(regs[r.idx]);
+                let shadow = shadow_index(f, prep_pc);
+                let cur = bcx.use_var(shadow.unwrap_or(regs[r.idx]));
                 let step_v = bcx.ins().iconst(types::I64, step_imm);
                 let next = bcx.ins().iadd(cur, step_v);
+                if let Some(v) = shadow {
+                    bcx.def_var(v, next);
+                }
                 let one = bcx.ins().iconst(types::I64, 1);
                 let new_count = bcx.ins().isub(count, one);
                 aligned_def(bcx, regs, reg_kinds, r.idx, next);

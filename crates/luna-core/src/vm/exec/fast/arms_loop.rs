@@ -114,7 +114,10 @@ macro_rules! fast_loop_arms {
                         let count = raw_int(ra);
                         if count != 0 {
                             put_int(ra, count.wrapping_sub(1));
-                            put_int(ra.add(2), raw_int(ra.add(2)).wrapping_add(raw_int(ra.add(1))));
+                            // the whole value: the body reads it whole, and a
+                            // payload-only store stalls that load
+                            let next = raw_int(ra.add(2)).wrapping_add(raw_int(ra.add(1)));
+                            ra.add(2).write(Value::Int(next));
                             $npc = back;
                         }
                         true
