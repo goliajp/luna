@@ -1,3 +1,4 @@
+use super::emit_entry::define_entry;
 use super::*;
 
 /// What the emit pass reads.
@@ -120,7 +121,19 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     // in well-formed Lua but we still need a valid SSA shape.
     // the scratch registers of `split_const_operands`
     let max_stack = (proto.max_stack as usize).max(num_params) + const_operands::SCRATCH_REGS;
-    let regs = declare_regs(&mut bcx, c, reg_kinds, entry, max_stack);
+    let mut regs = declare_regs(&mut bcx, c, reg_kinds, entry, max_stack);
+    // a 5.5 numeric loop steps an index of its own and copies it into the
+    // loop variable, as the 5.1–5.4 layout does: the loop's two values
+    // keep apart, which Cranelift allocates better than one
+    for &(prep, _, _) in &scan.for_loops {
+        if code[prep].op() == Op::ForPrep55 {
+            let ty = match reg_kinds.get(code[prep].a() as usize + 2) {
+                Some(RegKind::Float) => types::F64,
+                _ => types::I64,
+            };
+            regs.push(bcx.declare_var(ty));
+        }
+    }
     // emit-side per-PC kind tracker. Initialized from
     // the per-arg masks (Float bit → Float, Table bit → Table, else
     // Int) and updated forward at every writer op below. Used by
@@ -198,6 +211,10 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
         }
         let _ = current_block; // tracked only for parity assertions in tests.
         let ins = code[pc];
+        if f.scan.dead_loads[pc] {
+            pc += 1;
+            continue;
+        }
         match ins.op() {
             Op::LoadI
             | Op::LoadF
@@ -217,8 +234,10 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
             }
             Op::GetUpval => emit_calls::emit_get_upval(module, &mut bcx, &mut st, f, pc, ins)?,
             Op::Call => emit_calls::emit_self_call(module, &mut bcx, &mut st, f, pc, ins)?,
-            Op::ForPrep => emit_for::emit_for_prep(&mut bcx, &mut st, f, pc, ins),
-            Op::ForLoop => emit_for::emit_for_loop(&mut bcx, &mut st, f, pc, ins),
+            Op::ForPrep | Op::ForPrep55 => emit_for::emit_for_prep(&mut bcx, &mut st, f, pc, ins),
+            Op::ForLoop | Op::ForLoop55 => {
+                emit_for_loop::emit_for_loop(&mut bcx, &mut st, f, pc, ins)
+            }
             Op::Lt | Op::Le | Op::Eq => pc = emit_basic::emit_cmp(&mut bcx, &mut st, f, pc, ins),
             Op::NewTable => emit_table_set::emit_new_table(module, &mut bcx, &mut st, f, pc, ins)?,
             Op::SetTable => emit_table_set::emit_set_table(module, &mut bcx, f, ins)?,
@@ -295,48 +314,6 @@ fn declare_regs(
         regs.push(v);
     }
     regs
-}
-
-fn define_entry<M: Module>(
-    module: &mut M,
-    ctx: &mut cranelift_codegen::Context,
-    fn_id: FuncId,
-    scan: &ChunkScan,
-    ring: Option<RingSpec>,
-    num_params: usize,
-) -> Option<FuncId> {
-    let any_self_call = ring.is_some();
-    let ChunkScan {
-        self_upval_idx,
-        math_folds,
-        ..
-    } = scan;
-    // The body's self-recursive calls go straight to its own code, which
-    // is the Lua call only while the upvalue they load holds the running
-    // closure, and its math folds replace `math.<fn>(...)` by inline code,
-    // which is the Lua call only while the field holds the library
-    // function. The compiled code is shared by every closure of the proto
-    // (and by protos with the same code), so both are checked on each
-    // entry from the interpreter. Recursive calls enter the body directly:
-    // nothing the body runs can reassign the upvalue or, with no table
-    // stores (checked above), a field.
-    let mut math_fns: Vec<(Gc<LuaStr>, Gc<LuaStr>)> = Vec::new();
-    for fold in math_folds {
-        if !math_fns.iter().any(|&(_, n)| n.ptr_eq(fold.name_key)) {
-            math_fns.push((fold.math_key, fold.name_key));
-        }
-    }
-    let checks = EntryChecks {
-        self_upval: self_upval_idx.filter(|_| any_self_call),
-        math_fns,
-        ring,
-    };
-    let entry_id = if any_self_call || !checks.math_fns.is_empty() {
-        define_checked_entry(module, ctx, fn_id, &checks, num_params)?
-    } else {
-        fn_id
-    };
-    Some(entry_id)
 }
 
 /// `luna_jit_helpers::self_call_desc` of a chunk's self calls.

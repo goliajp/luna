@@ -147,7 +147,7 @@ impl Vm {
 
     /// [`Self::runerror`] for a message that names an operand with `extra`
     /// (see `varinfo_pushed`).
-    fn runerror_named(&mut self, msg: &str, extra: &str) -> LuaError {
+    pub(super) fn runerror_named(&mut self, msg: &str, extra: &str) -> LuaError {
         let e = self.runerror(msg);
         self.varinfo_pushed = self.version() >= LuaVersion::Lua53 && !extra.is_empty();
         e

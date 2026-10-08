@@ -56,9 +56,10 @@ impl Compiler<'_> {
                 Some((i, _)) => Operand::Arith(Op::AddI, enc(i)),
                 None => Operand::Arith(Op::AddK, self.num_const(e)?),
             },
+            // PUC's `ADDI` takes the negated immediate, which must fit
             BinOp::Sub if !left => match imm {
-                Some((i, _)) => Operand::Arith(Op::SubI, enc(i)),
-                None => Operand::Arith(Op::SubK, self.num_const(e)?),
+                Some((i, _)) if -i >= MIN_SC => Operand::Arith(Op::SubI, enc(i)),
+                _ => Operand::Arith(Op::SubK, self.num_const(e)?),
             },
             BinOp::Mul => Operand::Arith(Op::MulK, self.num_const(e)?),
             BinOp::Mod if !left => Operand::Arith(Op::ModK, self.num_const(e)?),
@@ -76,7 +77,13 @@ impl Compiler<'_> {
                     k,
                 )
             }
-            BinOp::Shl if !left => Operand::Arith(Op::ShlI, enc(imm?.0)),
+            // `I << x` is `SHLI` with the immediate on the left
+            // `x << I` is PUC's `SHRI x -I`, so -I must fit
+            BinOp::Shl if !left => match imm? {
+                (i, _) if -i >= MIN_SC => Operand::Arith(Op::ShlI, enc(i)),
+                _ => return None,
+            },
+            BinOp::Shl => Operand::Arith(Op::ShlI, enc(imm?.0)),
             BinOp::Shr if !left => Operand::Arith(Op::ShrI, enc(imm?.0)),
             BinOp::Eq | BinOp::Ne => match (cmp_imm, e) {
                 (Some((i, f)), _) => Operand::Cmp(Op::EqI, enc(i), f as u32),

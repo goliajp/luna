@@ -8,8 +8,8 @@ use super::*;
 /// register and the forced line to put back.
 #[derive(Clone, Copy)]
 pub(super) struct BinOpOpen {
-    saved: u32,
-    saved_force: Option<u32>,
+    pub(super) saved: u32,
+    pub(super) saved_force: Option<u32>,
 }
 
 impl Compiler<'_> {
@@ -82,6 +82,12 @@ impl Compiler<'_> {
         line: u32,
         open: BinOpOpen,
     ) -> Result<Exp, SyntaxError> {
+        if self.version <= LuaVersion::Lua53 {
+            return self.binop_close_classic(op, le, rhs, line, open);
+        }
+        if matches!(op, BinOp::Eq | BinOp::Ne) {
+            return self.binop_eq_modern(op, le, rhs, open);
+        }
         let BinOpOpen { saved, saved_force } = open;
         let mut zeros = Vec::new();
         if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros) {
@@ -118,18 +124,21 @@ impl Compiler<'_> {
         {
             self.set_freereg(l + 1);
         }
-        // 5.4+ compiles `x - K` for a small integer constant K as `x + -K`
-        // (`ADDI`). That is the same number except for K = 0, where
-        // `-0.0 - 0` becomes `-0.0 + 0`, which is `0.0`. K is whatever
-        // PUC's parser folds to a constant: `(0)`, `1 - 1`, `5 % 5`...
-        let sub_zero = op == BinOp::Sub && self.version >= LuaVersion::Lua54 && {
+        // `x - K` with K what PUC's parser folds to the constant 0 (`(0)`,
+        // `1 - 1`, `a and nil or 0`...) is PUC's `ADDI x 0`, even when K's
+        // code still runs: `SubI x 0`, after that code
+        let sub_zero = op == BinOp::Sub && {
             let ast = self.ast;
             matches!(
                 ct_operand(ast, rhs, &mut |name| self.ct_const_named(self.nm(name))),
                 Some(CtConst::Int(0))
             )
         };
-        let re = self.expr(rhs)?;
+        let mut re = self.expr(rhs)?;
+        if sub_zero && !matches!(re, Exp::Int(0)) {
+            self.exp_to_anyreg(re)?;
+            re = Exp::Int(0);
+        }
         // The operand that goes into the instruction instead of a register,
         // and the side it was written on.
         let mut in_inst: Option<(Operand, bool)> = None;
@@ -142,15 +151,17 @@ impl Compiler<'_> {
                 // right one becomes the operand, its constant first, and the
                 // left one a register; with no such form the right one takes
                 // its register first.
+                // ... and an immediate `I << x` is `SHLI`
                 let swap = self.version >= LuaVersion::Lua54
                     && (matches!(op, BinOp::Add | BinOp::Mul)
                         || matches!(op, BinOp::BAnd | BinOp::BOr | BinOp::BXor)
-                            && matches!(le, Exp::Int(_)));
+                            && matches!(le, Exp::Int(_))
+                        || op == BinOp::Shl);
                 let saved_line = self.force_line.replace(line);
                 if swap && let Some(form) = self.const_operand(op, &le, true) {
                     in_inst = Some((form, true));
                     right_reg = Some(self.exp_to_anyreg(re)?);
-                } else if !sub_zero && let Some(form) = self.const_operand(op, &re, false) {
+                } else if let Some(form) = self.const_operand(op, &re, false) {
                     in_inst = Some((form, false));
                     l = Some(self.exp_to_anyreg(le)?);
                 } else {
@@ -169,7 +180,6 @@ impl Compiler<'_> {
         if l.is_some()
             && right_reg.is_none()
             && in_inst.is_none()
-            && !sub_zero
             && let Some(form) = self.const_operand(op, &re, false)
         {
             in_inst = Some((form, false));
@@ -212,90 +222,9 @@ impl Compiler<'_> {
         let saved_force_arith = self.force_line.replace(line);
         let r_op = match in_inst {
             Some((form, flip)) => self.emit_const_operand(op, l, form, flip),
-            None => self.emit_binop(op, l, r, sub_zero),
+            None => self.emit_binop(op, l, r),
         };
         self.force_line = saved_force_arith;
         r_op
-    }
-
-    /// Emit `op` on the registers `l` and `r`.
-    fn emit_binop(
-        &mut self,
-        op: BinOp,
-        l: u32,
-        r: u32,
-        sub_zero: bool,
-    ) -> Result<Exp, SyntaxError> {
-        Ok(match op {
-            BinOp::Add => self.arith(Op::Add, l, r),
-            BinOp::Sub if sub_zero => Exp::Reloc(self.emit(Inst::iabc(Op::Add, 0, l, r, true))),
-            BinOp::Sub => self.arith(Op::Sub, l, r),
-            BinOp::Mul => self.arith(Op::Mul, l, r),
-            BinOp::Div => self.arith(Op::Div, l, r),
-            BinOp::IDiv => self.arith(Op::IDiv, l, r),
-            BinOp::Mod => self.arith(Op::Mod, l, r),
-            BinOp::Pow => self.arith(Op::Pow, l, r),
-            BinOp::BAnd => self.arith(Op::BAnd, l, r),
-            BinOp::BOr => self.arith(Op::BOr, l, r),
-            BinOp::BXor => self.arith(Op::BXor, l, r),
-            BinOp::Shl => self.arith(Op::Shl, l, r),
-            BinOp::Shr => self.arith(Op::Shr, l, r),
-            BinOp::Eq => Exp::Cmp {
-                op: Op::Eq,
-                l,
-                r,
-                c: 0,
-            },
-            BinOp::Ne => self.negate_cmp(Op::Eq, l, r, 0)?,
-            BinOp::Lt => Exp::Cmp {
-                op: Op::Lt,
-                l,
-                r,
-                c: 0,
-            },
-            BinOp::Le => Exp::Cmp {
-                op: Op::Le,
-                l,
-                r,
-                c: 0,
-            },
-            BinOp::Gt => Exp::Cmp {
-                op: Op::Lt,
-                l: r,
-                r: l,
-                c: 0,
-            },
-            BinOp::Ge => Exp::Cmp {
-                op: Op::Le,
-                l: r,
-                r: l,
-                c: 0,
-            },
-            BinOp::And | BinOp::Or | BinOp::Concat => unreachable!(),
-        })
-    }
-
-    fn arith(&mut self, op: Op, l: u32, r: u32) -> Exp {
-        Exp::Reloc(self.emit(Inst::iabc(op, 0, l, r, false)))
-    }
-
-    /// `a ~= b`: comparison materialized with inverted k.
-    pub(super) fn negate_cmp(
-        &mut self,
-        op: Op,
-        l: u32,
-        r: u32,
-        c: u32,
-    ) -> Result<Exp, SyntaxError> {
-        let reg = self.reserve(1)?;
-        self.l().freereg -= 1;
-        self.emit(Inst::iabc(op, l, r, c, false));
-        self.emit(Inst::isj(Op::Jmp, 1));
-        self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
-        let tpad = self.here();
-        self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
-        // Jmp(1) lands on tpad — mark.
-        self.mark_target(tpad);
-        Ok(Exp::Reg(reg))
     }
 }

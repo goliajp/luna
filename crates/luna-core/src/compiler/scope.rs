@@ -26,6 +26,7 @@ impl<'a> Compiler<'a> {
             has_tbc: false,
             tbc_scope: false,
             body_end: None,
+            for_loop: false,
             end_line: None,
         });
     }
@@ -39,6 +40,15 @@ impl<'a> Compiler<'a> {
     pub(super) fn leave_block_with(&mut self, close: bool) -> Result<(), SyntaxError> {
         let b = self.l().blocks.pop().expect("block underflow");
         let captured = self.lr().locals[b.first_local..].iter().any(|l| l.captured);
+        // a `for` loop's variables were closed on each pass
+        let open_until = match b.body_end {
+            Some((first, _)) if b.for_loop => first,
+            _ => usize::MAX,
+        };
+        let captured_here = self.lr().locals[b.first_local..]
+            .iter()
+            .enumerate()
+            .any(|(i, l)| l.captured && b.first_local + i < open_until);
         // Where the block's CLOSE falls against its locals' `end_pc` is
         // visible to a `__close` handler reading the frame with
         // `debug.getlocal` (`getlocalname` tests `pc < end_pc`). 5.4's
@@ -72,11 +82,11 @@ impl<'a> Compiler<'a> {
                 self.patch_to_here(pc)?;
             }
         }
-        if close && (captured || b.has_tbc || break_close) {
+        if close && (captured_here || b.has_tbc || break_close) {
             self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
         }
         // record debug LocVar entries for the locals leaving scope here
-        let end_pc = if v54 {
+        let end_pc = if self.vars_end_before_close() {
             before_close
         } else {
             self.lr().code.len() as u32
@@ -327,48 +337,6 @@ impl<'a> Compiler<'a> {
         // patched to land at `here`, AND backward gotos resolved by
         // `goto_stat` lookup against this label will jump here too.
         self.mark_target(here);
-        Ok(())
-    }
-
-    /// Compile `goto name`: backward jump if a label is visible, else a
-    /// pending forward reference in the current block.
-    pub(super) fn goto_stat(&mut self, name: &'a str, line: u32) -> Result<(), SyntaxError> {
-        self.last_line = line;
-        // PUC's `gotostat` scans only the *current* block for an
-        // already-defined backward label; unresolved gotos enter the pending
-        // list and percolate outward on each `leave_block`, so an inner
-        // block's later `::name::` (or the enclosing block's existing one)
-        // gets matched at scope exit. Searching all ancestor blocks here would
-        // make `do goto l; ::l:: end` lock onto the outer `::l::` before the
-        // inner one even gets defined — goto.lua 5.2/5.3 :71 specifically
-        // exercises that shadow.
-        let found: Option<(usize, usize)> = self
-            .lr()
-            .blocks
-            .last()
-            .and_then(|b| b.labels.iter().rev().find(|l| l.name == name))
-            .map(|l| (l.pc, l.nactive));
-        if let Some((pc, nactive)) = found {
-            // jumping back discards locals declared after the label
-            if let Some(floor) = self.reg_floor_from_avar(nactive) {
-                self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
-            }
-            self.jump_back(pc)?;
-            return Ok(());
-        }
-        let jmp = self.emit_jump();
-        let nactive = self.lr().avars.len();
-        self.l()
-            .blocks
-            .last_mut()
-            .expect("no block")
-            .gotos
-            .push_or_abort(GotoRef {
-                name,
-                jmp_pc: jmp,
-                line,
-                nactive,
-            });
         Ok(())
     }
 }

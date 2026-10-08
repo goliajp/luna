@@ -10,8 +10,12 @@
 
 mod and_or_chain;
 mod assign;
+mod assign_conflict;
 mod binop;
+mod binop_classic;
 mod binop_const;
+mod binop_emit;
+mod binop_eq;
 mod closure;
 mod cond;
 pub(crate) mod const_map;
@@ -23,10 +27,13 @@ mod expr;
 mod expr_names;
 mod expr_ops;
 mod fold;
-mod generic_for;
+mod for_loops;
+mod goto_stat;
 mod level;
 mod limits;
 mod lvalue;
+mod main_fn;
+use main_fn::compile_main;
 mod resolve;
 mod return_stat;
 mod scope;
@@ -83,67 +90,6 @@ pub(crate) fn compile_parsed(
     scratch: &mut CompileScratch,
 ) -> Result<Gc<Proto>, SyntaxError> {
     compile_main(ast, end_lines, version, source, heap, scratch).map(|(p, _)| p)
-}
-
-/// Compile the main function; also gives its `last_target`.
-fn compile_main(
-    ast: &Chunk,
-    end_lines: &[u32],
-    version: LuaVersion,
-    source: Gc<LuaStr>,
-    heap: &mut Heap,
-    scratch: &mut CompileScratch,
-) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
-    crate::cerrno::begin_folds();
-    let r = compile_main_body(ast, end_lines, version, source, heap, scratch);
-    crate::cerrno::end_folds();
-    r
-}
-
-fn compile_main_body(
-    ast: &Chunk,
-    end_lines: &[u32],
-    version: LuaVersion,
-    source: Gc<LuaStr>,
-    heap: &mut Heap,
-    scratch: &mut CompileScratch,
-) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
-    let mem = heap.mem();
-    let mut c = Compiler {
-        ast,
-        end_lines,
-        heap,
-        version,
-        source,
-        levels: scratch.open.take().recycle(),
-        pool: scratch.levels.take(),
-        sym_strs: scratch.sym_strs.take(),
-        last_line: 0,
-        force_line: None,
-        str_cache: LMap::new(mem),
-    };
-    c.sym_strs.clear();
-    c.sym_strs.resize_or_abort(ast.names.len(), None);
-    let mut main = c.new_level(0, true, 0);
-    main.upvals.push_or_abort(UpvalDesc {
-        in_stack: false,
-        index: 0,
-        name: "_ENV".into(),
-        read_only: false,
-    });
-    c.levels.push_or_abort(main);
-    c.enter_block(false);
-    c.stat_block(&ast.block)?;
-    // the implicit final return belongs to the chunk's last line (PUC), so a
-    // line hook / activelines see it there rather than on the last statement
-    c.final_return(ast.end_line)?;
-    let lvl = c.levels.pop().expect("main level");
-    let last_target = lvl.last_target;
-    let proto = c.finish_level(lvl, 0, 0);
-    scratch.levels = c.pool;
-    scratch.sym_strs = c.sym_strs;
-    scratch.open = c.levels.recycle();
-    Ok((proto, last_target))
 }
 
 /// Diagnostic version of [`compile_chunk`] that also returns the main
@@ -226,6 +172,9 @@ struct BlockCx<'a> {
     /// of scope at this pc, before the loop's per-iteration CLOSE; PUC keeps
     /// the body in a block of its own and removes its variables first
     body_end: Option<(usize, u32)>,
+    /// a `for` loop: its variables were closed at the end of each pass
+    /// (on exit too), so leaving the block closes only what is above them
+    for_loop: bool,
     /// the line of the loop's closing `end`, when known: the CLOSE after a
     /// 5.4 `break` label is emitted there
     end_line: Option<u32>,

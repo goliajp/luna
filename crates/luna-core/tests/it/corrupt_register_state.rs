@@ -140,15 +140,15 @@ fn run_chunk(vm: &mut Vm, bytes: &[u8]) -> String {
     }
 }
 
-/// The loop body stores a string into the hidden index slot. R[0..=2] is
-/// the loop state, R[3] `i`, R[4] `x`.
+/// The loop body stores a string into the hidden index slot. R[0..=1] is
+/// the loop state, R[2] `i`, R[3] `x`.
 #[test]
 fn crafted_chunk_writes_the_for_index() {
     let mut vm = Vm::new(LuaVersion::Lua55);
     let bytes = patched(
         &mut vm,
         "function() for i = 1, 3 do local x = 'x' end end",
-        Inst::iabx(Op::LoadK, 4, 0),
+        Inst::iabx(Op::LoadK, 3, 0),
         Inst::iabx(Op::LoadK, 0, 0),
     );
     let msg = run_chunk(&mut vm, &bytes);

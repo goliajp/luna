@@ -60,7 +60,9 @@
 //! debug library can change both from plain source code, so they are the
 //! interpreter's to check, not the loader's.
 
+mod flow;
 mod header;
+mod operand_kinds;
 mod operands;
 use header::check_header;
 
@@ -194,13 +196,14 @@ impl Checker<'_> {
             }
         }
         for pc in 0..n {
-            if self.ops[pc] == Op::ForLoop && !claimed[pc] {
+            if self.ops[pc].is_for_loop() && !claimed[pc] {
                 return Err(self.err(pc, "not paired with a ForPrep".to_string()));
             }
+            let call = self.ops[pc].for_layout().map(|l| l.ops().1);
             let after_call = pc.checked_sub(1).is_some_and(|q| {
-                self.ops[q] == Op::TForCall && self.inst(q).a() == self.inst(pc).a()
+                Some(self.ops[q]) == call && self.inst(q).a() == self.inst(pc).a()
             });
-            if self.ops[pc] == Op::TForLoop && !after_call {
+            if self.ops[pc].is_tfor_loop() && !after_call {
                 return Err(self.err(pc, "not preceded by its TForCall".to_string()));
             }
         }
@@ -221,84 +224,6 @@ impl Checker<'_> {
             ));
         }
         Ok(())
-    }
-
-    fn successors(&self, pc: usize) -> Succ {
-        let i = self.inst(pc);
-        let pc_i = pc as i64;
-        let next = pc + 1;
-        let (fall, other) = match self.ops[pc] {
-            Op::Return | Op::Return0 | Op::Return1 => (None, [None, None]),
-            Op::Jmp => (None, [Some(pc_i + 1 + i.sj() as i64), None]),
-            // the extra argument at pc + 1 is consumed, not executed
-            Op::LoadKx => (None, [Some(pc_i + 2), None]),
-            Op::SetList if i.k() => (None, [Some(pc_i + 2), None]),
-            op if op.is_test() || op == Op::LFalseSkip => (Some(next), [Some(pc_i + 2), None]),
-            // 5.1–5.3 enter the loop at its ForLoop; 5.4+ skip past it
-            Op::ForPrep => {
-                let loop_pc = pc_i + i.bx() as i64;
-                (Some(next), [Some(loop_pc), Some(loop_pc + 1)])
-            }
-            Op::ForLoop | Op::TForLoop => (Some(next), [Some(pc_i + 1 - i.bx() as i64), None]),
-            Op::TForPrep => (None, [Some(pc_i + 1 + i.bx() as i64), None]),
-            _ => (Some(next), [None, None]),
-        };
-        Succ { fall, other }
-    }
-
-    /// Loops as luna's compiler lays them out, and the `Jmp` after a
-    /// conditional skip (see the module docs). Returns the loop end a prep
-    /// claims.
-    fn check_pairing(&self, pc: usize) -> Result<Option<usize>, String> {
-        let i = self.inst(pc);
-        let a = i.a();
-        match self.ops[pc] {
-            Op::ForPrep => {
-                let lp = pc + i.bx() as usize;
-                let paired = self.ops.get(lp) == Some(&Op::ForLoop) && {
-                    let l = self.inst(lp);
-                    l.a() == a && lp as i64 + 1 - l.bx() as i64 == pc as i64 + 1
-                };
-                if !paired {
-                    return Err(
-                        self.err(pc, format!("no matching ForLoop at instruction {}", lp + 1))
-                    );
-                }
-                Ok(Some(lp))
-            }
-            Op::TForPrep => {
-                let call = pc + 1 + i.bx() as usize;
-                let paired = self.ops.get(call) == Some(&Op::TForCall)
-                    && self.inst(call).a() == a
-                    && self.ops.get(call + 1) == Some(&Op::TForLoop)
-                    && {
-                        let l = self.inst(call + 1);
-                        l.a() == a && call as i64 + 2 - l.bx() as i64 == pc as i64 + 1
-                    };
-                if !paired {
-                    return Err(self.err(
-                        pc,
-                        format!("no matching TForCall/TForLoop at instruction {}", call + 1),
-                    ));
-                }
-                Ok(Some(call + 1))
-            }
-            Op::TForCall => {
-                let paired =
-                    self.ops.get(pc + 1) == Some(&Op::TForLoop) && self.inst(pc + 1).a() == a;
-                if !paired {
-                    return Err(self.err(pc, "not followed by its TForLoop".to_string()));
-                }
-                Ok(None)
-            }
-            op if op.is_test() => {
-                if self.ops.get(pc + 1) != Some(&Op::Jmp) {
-                    return Err(self.err(pc, "not followed by a Jmp".to_string()));
-                }
-                Ok(None)
-            }
-            _ => Ok(None),
-        }
     }
 
     /// Instructions reading the stack top must directly follow the

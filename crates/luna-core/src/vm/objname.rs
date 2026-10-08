@@ -35,7 +35,10 @@ fn writes_reg(i: Inst, reg: u32) -> bool {
         Op::SelfOp => reg == a || reg == a + 1,
         // these write a run of registers starting at A (results / varargs)
         Op::Call | Op::TailCall | Op::Vararg => reg >= a,
-        Op::TForCall => reg >= a + 4,
+        // PUC: the call affects every register above the loop's base
+        Op::TForCall | Op::TForCall53 | Op::TForCall55 => reg >= a + 2,
+        // 5.2 / 5.3 `TFORLOOP` names the control register
+        Op::TForLoop53 => reg == a + 2,
         // control / store / no-result opcodes write no destination register
         Op::Jmp
         | Op::SetUpval
@@ -57,13 +60,21 @@ fn writes_reg(i: Inst, reg: u32) -> bool {
         | Op::LeI
         | Op::GtI
         | Op::GeI
+        | Op::LtK
+        | Op::LeK
+        | Op::EqKK
+        | Op::LtKK
+        | Op::LeKK
         | Op::Test
         | Op::Return
         | Op::Return0
         | Op::Return1
         | Op::SetList
         | Op::ExtraArg
-        | Op::TForPrep => false,
+        | Op::TForPrep
+        | Op::TForPrep53
+        | Op::TForPrep55
+        | Op::SetGlobal => false,
         _ => reg == a,
     }
 }
@@ -225,6 +236,7 @@ pub fn getobjname_in(
             basicgetobjname(proto, lastpc, reg)
         }
         Op::GetTabUp => kname(proto, i.c()).map(|n| (gxf(proto, setpc, i, true, version), n)),
+        Op::GetGlobal => kname(proto, i.bx()).map(|n| ("global", n)),
         Op::GetField => kname(proto, i.c()).map(|n| (gxf(proto, setpc, i, false, version), n)),
         // a register-keyed read (global with a constant index past the GETFIELD
         // C-operand limit, or an explicit `t[k]`): name from the key register.

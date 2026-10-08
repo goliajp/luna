@@ -14,6 +14,7 @@ mod order;
 mod sequence;
 mod table;
 mod tfor;
+mod tfor_ipairs;
 mod upval;
 use arith::*;
 use arith_divmod::*;
@@ -93,15 +94,19 @@ pub(super) fn emit_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) 
         Op::SetList | Op::Len | Op::Concat => emit_sequence_op(lw, pl, oc),
         Op::Closure | Op::Close | Op::GetUpval => emit_closure_op(lw, pl, oc),
         Op::Call | Op::Return0 | Op::Return1 | Op::Return | Op::Vararg => emit_call_op(lw, pl, oc),
-        Op::TForCall => emit_tfor_call_op(lw, pl, oc),
+        Op::TForCall | Op::TForCall53 | Op::TForCall55 => emit_tfor_call_op(lw, pl, oc),
         // generic-for prep is the leading pc-bump
         // before body_top. Recorder enters at body_top, so this
         // arm is defensive only — pre-emit pass bails before we
         // reach it.
-        Op::TForPrep => unreachable!("Op::TForPrep bailed in pre-emit pass"),
+        Op::TForPrep | Op::TForPrep53 | Op::TForPrep55 => {
+            unreachable!("Op::TForPrep bailed in pre-emit pass")
+        }
         // TForLoop is the trace's terminator; tail
         // emit handles the side-exit + back-edge.
-        Op::TForLoop => unreachable!("Op::TForLoop only appears at effective_end"),
+        Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => {
+            unreachable!("Op::TForLoop only appears at effective_end")
+        }
         _ => unreachable!("non-whitelisted op rejected in pre-emit pass"),
     }
 }

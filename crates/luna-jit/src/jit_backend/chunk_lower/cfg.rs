@@ -96,7 +96,7 @@ pub(super) fn build_cfg(c: ChunkIn<'_>, scan: &ChunkScan) -> Option<ChunkCfg> {
                     found_terminator = true;
                     break;
                 }
-                Op::ForPrep => {
+                Op::ForPrep | Op::ForPrep55 => {
                     let fall = p + 1;
                     if fall < n {
                         let s = pc_to_bb[fall];
@@ -116,7 +116,7 @@ pub(super) fn build_cfg(c: ChunkIn<'_>, scan: &ChunkScan) -> Option<ChunkCfg> {
                     found_terminator = true;
                     break;
                 }
-                Op::ForLoop => {
+                Op::ForLoop | Op::ForLoop55 => {
                     let exit_pc = p + 1;
                     if exit_pc < n {
                         let s = pc_to_bb[exit_pc];

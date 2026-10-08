@@ -17,6 +17,7 @@ use crate::runtime::function::{CallFrame, ContKind, Frame};
 use crate::runtime::{Gc, NativeClosure, Value};
 
 mod chunk_id;
+mod function_ar;
 mod global_name;
 mod levels;
 mod native_top;
