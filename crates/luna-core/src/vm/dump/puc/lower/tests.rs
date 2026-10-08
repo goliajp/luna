@@ -94,25 +94,18 @@ fn a_local_takes_the_register_after_the_locals_live_at_its_start() {
 }
 
 #[test]
-fn a_guarded_closing_jump_stays_one_instruction() {
+fn a_closing_jump_back_turns_round() {
     let mut lw = lowering(3, 4);
     lw.begin(0, 0);
     lw.emit(Inst::iabc(Op::Test, 0, 0, 0, true));
     lw.begin(1, 0);
-    lw.jump_closing(2, 0).unwrap();
+    lw.jump(Inst::jmp_close(3, 0), Jump::JmpClose, 0).unwrap();
     lw.begin(2, 0);
     lw.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
     let code = lw.finish(&[]).unwrap().code;
-    assert_eq!(code.len(), 5);
-    assert_eq!(code[1].op(), Op::Jmp);
-    assert_eq!(
-        1 + 1 + code[1].sj(),
-        3,
-        "the test's jump goes to the trampoline"
-    );
-    assert_eq!((code[3].op(), code[3].a()), (Op::Close, 2));
-    assert_eq!(code[4].op(), Op::Jmp);
-    assert_eq!(4 + 1 + code[4].sj(), 0, "the trampoline goes to the target");
+    assert_eq!(code.len(), 3);
+    assert_eq!((code[1].op(), code[1].a()), (Op::JmpCloseBack, 3));
+    assert_eq!(1 + 1 + code[1].jump_offset(), 0);
 }
 
 #[test]
