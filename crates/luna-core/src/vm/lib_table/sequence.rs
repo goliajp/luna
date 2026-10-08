@@ -35,13 +35,14 @@ pub(super) fn t_insert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             let mut i = e;
             while i > pos {
                 let mv = tab_geti(vm, tv, i - 1, 0)?;
-                tab_seti(vm, tv, i, mv, 0)?;
+                tab_seti(vm, tv, i, mv, 1)?;
                 i -= 1;
             }
             pos
         }
         _ => return Err(raise_str(vm, "wrong number of arguments to 'insert'")),
     };
+    // the value is the last argument, not pushed again
     let v = a.get(vm, nargs - 1);
     tab_seti(vm, tv, pos, v, 0)?;
     Ok(0)
@@ -63,7 +64,7 @@ fn insert_int(vm: &mut Vm, a: Args, tv: Value, n: i32) -> Result<u32, LuaError> 
             let mut i = e;
             while i > pos {
                 let mv = tab_geti(vm, tv, i64::from(i) - 1, 0)?;
-                tab_seti(vm, tv, i.into(), mv, 0)?;
+                tab_seti(vm, tv, i.into(), mv, 1)?;
                 i -= 1;
             }
             pos
@@ -105,14 +106,15 @@ pub(super) fn t_remove(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         }
         (pos, size)
     };
-    // the removed value stays pushed while the rest shift down
+    // the removed value stays pushed while the rest shift down; each
+    // shifted value and the final nil are pushed above it
     let removed = tab_geti(vm, tv, pos, 0)?;
     while pos < size {
         let mv = tab_geti(vm, tv, pos + 1, 1)?;
-        tab_seti(vm, tv, pos, mv, 1)?;
+        tab_seti(vm, tv, pos, mv, 2)?;
         pos += 1;
     }
-    tab_seti(vm, tv, pos, Value::Nil, 1)?;
+    tab_seti(vm, tv, pos, Value::Nil, 2)?;
     Ok(vm.nat_return(fs, &[removed]))
 }
 

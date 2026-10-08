@@ -47,12 +47,12 @@ pub(crate) fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         if t > e || t <= f || (tt != 0 && !vm.equal(a1, a2)?) {
             for i in 0..n {
                 let v = tab_geti(vm, a1, f + i, 0)?;
-                tab_seti(vm, a2, t + i, v, 0)?;
+                tab_seti(vm, a2, t + i, v, 1)?;
             }
         } else {
             for i in (0..n).rev() {
                 let v = tab_geti(vm, a1, f + i, 0)?;
-                tab_seti(vm, a2, t + i, v, 0)?;
+                tab_seti(vm, a2, t + i, v, 1)?;
             }
         }
     }
