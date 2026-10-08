@@ -180,14 +180,13 @@ impl Vm {
             unreachable!("pcall/xpcall dispatch sits on a native")
         };
         self.running_natives
-            .push_or_abort(crate::vm::callstack::NativeAct {
+            .push_or_abort(crate::vm::callstack::NativeAct::new(
                 nc,
                 func_slot,
                 nargs,
-                depth: self.frames.len() as u32,
-                ccmt: 0,
-                top: func_slot + 1 + nargs,
-            });
+                self.frames.len(),
+                0,
+            ));
         let r = check(self);
         let act = self.running_natives.pop().expect("pushed above");
         // raised by that native, as it would have been once entered
