@@ -69,7 +69,7 @@ pub(super) fn sweep_plain_op(
             }
         }
         // the ipairs path reads the previous value
-        Op::TForCall => read(a + 5),
+        op if op.is_tfor_call() => read(a + op.for_layout().map_or(0, |l| l.var()) + 1),
         // a multi-value Return of an inlined callee hands R[A..] up
         Op::Return if ins.b() == 0 => (a..max_stack as u32).for_each(&mut read),
         _ => {}
@@ -79,7 +79,11 @@ pub(super) fn sweep_plain_op(
     }
     match ins.op() {
         // the ipairs path writes the control variable as well
-        Op::TForCall => unbind(bindings, depth, a + 2),
+        op if op.is_tfor_call() => unbind(
+            bindings,
+            depth,
+            a + op.for_layout().map_or(0, |l| l.control()),
+        ),
         // a variable count of values from R[A] up
         Op::Vararg | Op::GetVarg => (a..max_stack as u32).for_each(|r| unbind(bindings, depth, r)),
         _ => {}

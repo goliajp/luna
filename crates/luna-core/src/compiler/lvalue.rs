@@ -34,7 +34,7 @@ pub(super) enum Rk {
 }
 
 /// What a value is as an `RK` / `k` operand.
-enum KConst {
+pub(super) enum KConst {
     Fits(u32),
     /// a constant past the operand's range
     Big(u32),
@@ -51,7 +51,7 @@ pub(super) enum Lv {
 
 impl Compiler<'_> {
     /// PUC `luaK_exp2K` (5.4+) / the constant half of `luaK_exp2RK`.
-    fn exp_const(&mut self, e: &Exp) -> KConst {
+    pub(super) fn exp_const(&mut self, e: &Exp) -> KConst {
         let v = match *e {
             Exp::Const(c) if c <= MAX_C => return KConst::Fits(c),
             Exp::Const(c) => return KConst::Big(c),
@@ -68,9 +68,13 @@ impl Compiler<'_> {
             _ => return KConst::No,
         };
         // 5.1 / 5.2 make a constant an `RK` operand only while the table
-        // has room for it (`fs->nk <= MAXINDEXRK`, checked before adding);
-        // 5.3+ add it and then check its index
-        if self.version <= LuaVersion::Lua52 && self.lr().consts.len() > MAX_C as usize {
+        // has room for it (`fs->nk <= MAXINDEXRK`, checked before adding),
+        // except that 5.2 adds a number first; 5.3+ add it and then check
+        // its index
+        let number = matches!(v, Value::Int(_) | Value::Float(_));
+        let checks_first =
+            self.version == LuaVersion::Lua51 || self.version == LuaVersion::Lua52 && !number;
+        if checks_first && self.lr().consts.len() > MAX_C as usize {
             return KConst::No;
         }
         let c = self.const_idx(v);

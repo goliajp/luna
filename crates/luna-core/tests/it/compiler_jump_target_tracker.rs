@@ -51,14 +51,12 @@ fn straight_line_no_jumps_leaves_tracker_none() {
     );
     // sanity: there really are no jump-shaped ops in the proto
     let has_jmp = code.iter().any(|i| {
-        matches!(
-            i.op(),
-            luna_core::vm::isa::Op::Jmp
-                | luna_core::vm::isa::Op::ForPrep
-                | luna_core::vm::isa::Op::ForLoop
-                | luna_core::vm::isa::Op::TForPrep
-                | luna_core::vm::isa::Op::TForLoop
-        )
+        let op = i.op();
+        op == luna_core::vm::isa::Op::Jmp
+            || op.is_for_prep()
+            || op.is_for_loop()
+            || op.is_tfor_prep()
+            || op.is_tfor_loop()
     });
     assert!(
         !has_jmp,
@@ -154,9 +152,7 @@ fn numeric_for_records_body_top_and_post_loop() {
     // We can't trivially extract the exact body_top without bytecode
     // walking but we can assert tracker stayed monotonically non-
     // decreasing relative to the loop emit ops.
-    let has_forloop = code
-        .iter()
-        .any(|i| matches!(i.op(), luna_core::vm::isa::Op::ForLoop));
+    let has_forloop = code.iter().any(|i| i.op().is_for_loop());
     assert!(has_forloop, "numeric for did not emit ForLoop op");
 }
 
@@ -170,9 +166,7 @@ fn generic_for_records_back_edge() {
     );
     let lt = lt.expect("generic for must record jump targets");
     assert!(lt < code.len());
-    let has_tforloop = code
-        .iter()
-        .any(|i| matches!(i.op(), luna_core::vm::isa::Op::TForLoop));
+    let has_tforloop = code.iter().any(|i| i.op().is_tfor_loop());
     assert!(has_tforloop, "generic for did not emit TForLoop op");
 }
 

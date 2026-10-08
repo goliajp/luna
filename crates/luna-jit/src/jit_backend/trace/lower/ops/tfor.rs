@@ -28,9 +28,11 @@ pub(super) fn emit_tfor_call_op<E: Emit>(
         //      first body iter still uses entry-tag kinds, and
         //      TForLoop tail's tag-check guards the back-edge
         //      so runtime types match emit-time assumptions.
-        Op::TForCall => {
+        Op::TForCall | Op::TForCall53 | Op::TForCall55 => {
             let a_us = ins.a() as usize;
             let nvars = ins.c() as i64;
+            let lay = ins.op().for_layout().expect("a loop op");
+            let (ctl, first) = (a_us + lay.control() as usize, a_us + lay.var() as usize);
             // ipairs detection. Recorder's TForLoop trigger snapshots
             // `R[A]`'s library tag if Native; `ipairs`'s iterator
             // specialises emit into inline Table aget IR (skip the
@@ -61,7 +63,7 @@ pub(super) fn emit_tfor_call_op<E: Emit>(
                 bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
             };
             if !is_ipairs_trace {
-                for slot in a_us..=(a_us + 2) {
+                for slot in [a_us, a_us + 1, ctl] {
                     spill_slot(&mut lw.bcx, slot);
                 }
             }
@@ -72,10 +74,10 @@ pub(super) fn emit_tfor_call_op<E: Emit>(
                 emit_tfor_helper_call(lw, pl, oc, a_us, nvars);
             }
 
-            lw.current_kinds[off + a_us + 2] = RegKind::Unknown;
-            lw.current_kinds[off + a_us + 4] = RegKind::Unknown;
-            if (nvars as usize) >= 2 && a_us + 5 < max_stack {
-                lw.current_kinds[off + a_us + 5] = RegKind::Unknown;
+            lw.current_kinds[off + ctl] = RegKind::Unknown;
+            lw.current_kinds[off + first] = RegKind::Unknown;
+            if (nvars as usize) >= 2 && first + 1 < max_stack {
+                lw.current_kinds[off + first + 1] = RegKind::Unknown;
             }
         }
         _ => unreachable!("routed by emit_op"),
@@ -117,8 +119,13 @@ pub(super) fn emit_tfor_helper_call<E: Emit>(
     // a native iterator can collect: R[A..=A+2] are on the stack (spilled
     // or never changed) and the registers below them go as roots
     let roots = emit_ssa_roots(lw, i, oc.off + a_us);
+    let lay = oc.ins.op().for_layout().expect("a loop op");
+    let (ctl, first) = (a_us + lay.control() as usize, a_us + lay.var() as usize);
     let a_arg = lw.bcx.ins().iconst(types::I64, a_us as i64);
-    let nvars_arg = lw.bcx.ins().iconst(types::I64, nvars);
+    let nvars_arg = lw
+        .bcx
+        .ins()
+        .iconst(types::I64, i64::from(lay.pack_call(nvars as u32)));
     let func_ref = lw.bcx.import_func(op_tforcall_id);
     let call_inst = lw.bcx.ins().call(
         func_ref,
@@ -140,10 +147,12 @@ pub(super) fn emit_tfor_helper_call<E: Emit>(
     let ctrl_raw = lw.bcx.ins().stack_load(types::I64, types::I64, out_ss, 0);
     let key_raw = lw.bcx.ins().stack_load(types::I64, types::I64, out_ss, 8);
     let val_raw = lw.bcx.ins().stack_load(types::I64, types::I64, out_ss, 16);
-    lw.bcx.def_var(regs[a_us + 2], ctrl_raw);
-    lw.bcx.def_var(regs[a_us + 4], key_raw);
-    if (nvars as usize) >= 2 && a_us + 5 < max_stack {
-        lw.bcx.def_var(regs[a_us + 5], val_raw);
+    if lay.copies_control() {
+        lw.bcx.def_var(regs[ctl], ctrl_raw);
+    }
+    lw.bcx.def_var(regs[first], key_raw);
+    if (nvars as usize) >= 2 && first + 1 < max_stack {
+        lw.bcx.def_var(regs[first + 1], val_raw);
     }
 }
 
@@ -166,6 +175,8 @@ pub(super) fn emit_ipairs_tfor_call<E: Emit>(
     } = *lw;
     let OpCx { i, rop, .. } = *oc;
     let regs: &[Variable] = oc.regs;
+    let lay = oc.ins.op().for_layout().expect("a loop op");
+    let (ctl, first) = (a_us + lay.control() as usize, a_us + lay.var() as usize);
     // Inline aget fast path. The recorder confirmed
     // R[A] = ipairs_iter at trace start. The standard
     // ipairs loop has R[A+1] = Table (state) and
@@ -173,7 +184,7 @@ pub(super) fn emit_ipairs_tfor_call<E: Emit>(
     // Per iter: next_i = ctrl + 1; val = t[next_i].
     // If val is Nil → loop ends; else key = next_i,
     // val_raw = val's payload.
-    let ctrl = lw.bcx.use_var(regs[a_us + 2]);
+    let ctrl = lw.bcx.use_var(regs[ctl]);
     let t_raw = lw.bcx.use_var(regs[a_us + 1]);
     let one = lw.bcx.ins().iconst(types::I64, 1);
     let next_i = lw.bcx.ins().iadd(ctrl, one);
@@ -289,9 +300,11 @@ pub(super) fn emit_ipairs_tfor_call<E: Emit>(
     // R[A+4] = is_nil ? Nil(raw=0) : Int(raw=next_i)
     let r4_raw = lw.bcx.ins().select(is_nil, zero_raw, next_i);
     let r4_tag = lw.bcx.ins().select(is_nil, nil_const, int_const);
-    lw.bcx.def_var(regs[a_us + 2], next_i);
-    lw.bcx.def_var(regs[a_us + 4], r4_raw);
-    if a_us + 5 < max_stack {
+    if lay.copies_control() {
+        lw.bcx.def_var(regs[ctl], next_i);
+    }
+    lw.bcx.def_var(regs[first], r4_raw);
+    if first + 1 < max_stack {
         // On the Nil branch, exit_tag[A+5] stays
         // `Untouched` (no per-side-exit override
         // for A+5), so the dispatcher restores
@@ -302,9 +315,9 @@ pub(super) fn emit_ipairs_tfor_call<E: Emit>(
         // (= the last non-Nil iter's value) on the
         // Nil branch so the trace exit restore
         // sees a real GC pointer.
-        let prev_v5 = lw.bcx.use_var(regs[a_us + 5]);
+        let prev_v5 = lw.bcx.use_var(regs[first + 1]);
         let chosen_v5 = lw.bcx.ins().select(is_nil, prev_v5, val_raw_fast);
-        lw.bcx.def_var(regs[a_us + 5], chosen_v5);
+        lw.bcx.def_var(regs[first + 1], chosen_v5);
     }
     lw.bcx.def_var(tforcall_tag_var, r4_tag);
     lw.bcx.def_var(tforcall_val_tag_var, val_tag);
@@ -318,7 +331,7 @@ pub(super) fn emit_ipairs_tfor_call<E: Emit>(
     // so the helper sees the trace's current
     // value. R[A]/R[A+1] still hold their entry
     // values in vm.stack.
-    spill_slot(&mut lw.bcx, a_us + 2);
+    spill_slot(&mut lw.bcx, ctl);
     emit_tfor_helper_call(lw, pl, oc, a_us, nvars);
     lw.bcx.ins().jump(merge_blk, &[]);
 

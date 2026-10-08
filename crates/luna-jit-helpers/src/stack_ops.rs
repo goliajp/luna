@@ -83,13 +83,13 @@ pub unsafe extern "C" fn luna_jit_op_concat(slot_offset: i64, n: i64, roots: i64
     r
 }
 
-/// Trace JIT helper for `Op::TForCall A 0 C`.
+/// Trace JIT helper for a generic `TForCall A 0 C` of any layout; `nvars`
+/// packs C with the layout's registers (`ForLayout::pack_call`).
 ///
-/// Mirrors `exec.rs:5316` Op::TForCall semantics:
-/// - copies `R[A..=A+2]` (iter / state / control) to `R[A+4..=A+6]`,
-///   resizing `vm.stack` if needed
-/// - calls `vm.begin_call(abs+4, Some(2), nvars, false)` to dispatch
-///   the iterator function
+/// Mirrors the interpreter's `TForCall`:
+/// - copies the iterator, state and control to the first loop variable's
+///   register and the two after it, resizing `vm.stack` if needed
+/// - calls `vm.begin_call` there to dispatch the iterator function
 ///
 /// Restriction: the iterator at `R[A]` must be `Value::Native`. A
 /// Lua-closure iter would push a Lua frame mid-trace, breaking the

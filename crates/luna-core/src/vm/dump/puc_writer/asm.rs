@@ -2,11 +2,12 @@
 //!
 //! An encoder walks a luna function one instruction at a time and emits
 //! the PUC instructions that stand for it. [`Asm`] owns what that needs
-//! across dialects: the register renumbering of loop windows, scratch
-//! registers above the frame, the luna-pc → PUC-pc map that jumps and
-//! debug records are rewritten through, and the constant table, which an
-//! older dialect may have to extend (its `LOADK` replaces luna's
-//! immediates).
+//! across dialects: scratch registers above the frame (only code loaded
+//! from another dialect's chunk needs one), the luna-pc → PUC-pc map that
+//! jumps and debug records are rewritten through, and the constant table,
+//! which an older dialect may have to extend (its `LOADK` replaces luna's
+//! immediates). luna's registers are PUC's: an encoder writes them as they
+//! are.
 
 use crate::compiler::const_map::{DumpConstMap, add_const};
 use crate::runtime::Value;
@@ -15,18 +16,6 @@ use crate::version::LuaVersion;
 use crate::vm::isa::{Inst, Op};
 
 pub(super) type Res<T> = Result<T, String>;
-
-/// Luna pcs `first..=last` in which every luna register from `pivot` up
-/// sits `delta` slots away in PUC's frame. A loop whose PUC layout has one
-/// hidden slot fewer than luna's shifts down by one, and the slot it drops
-/// (`pivot - 1`) must not be named inside the loop.
-#[derive(Clone, Copy)]
-pub(super) struct Window {
-    pub first: usize,
-    pub last: usize,
-    pub pivot: u32,
-    pub delta: i32,
-}
 
 /// How a jump-family instruction stores the distance to its target.
 #[derive(Clone, Copy)]
@@ -51,7 +40,6 @@ struct Fixup {
 pub(super) struct Asm<'p> {
     pub p: &'p Proto,
     dialect: &'static str,
-    windows: Vec<Window>,
     temp_base: u32,
     next_temp: u32,
     temps_used: u32,
@@ -80,19 +68,12 @@ pub(super) struct Body {
 }
 
 impl<'p> Asm<'p> {
-    /// `frame` is the PUC frame the renumbered registers need; scratch
-    /// registers go above it.
-    pub(super) fn new(
-        p: &'p Proto,
-        dialect: &'static str,
-        windows: Vec<Window>,
-        frame: u32,
-    ) -> Self {
+    /// Scratch registers go above the function's frame.
+    pub(super) fn new(p: &'p Proto, dialect: &'static str) -> Self {
         Asm {
             p,
             dialect,
-            windows,
-            temp_base: frame,
+            temp_base: p.max_stack as u32,
             next_temp: 0,
             temps_used: 0,
             code: Vec::with_capacity(p.code.len() + 4),
@@ -137,43 +118,18 @@ impl<'p> Asm<'p> {
         self.p.code.get(pc).copied()
     }
 
-    /// PUC register for luna register `r` at luna pc `pc`.
-    pub(super) fn reg_at(&self, pc: usize, r: u32) -> Res<u32> {
-        let mut m = r as i64;
-        for w in self
-            .windows
-            .iter()
-            .filter(|w| w.first <= pc && pc <= w.last)
-        {
-            if r >= w.pivot {
-                m += w.delta as i64;
-            } else if w.delta < 0 && r + 1 == w.pivot {
-                return Err(self.err(format_args!(
-                    "register {r} is a loop slot PUC does not have"
-                )));
-            }
-        }
-        u32::try_from(m)
-            .ok()
-            .filter(|&m| m <= 255)
-            .ok_or_else(|| self.err(format_args!("register {r} maps outside the frame")))
-    }
-
+    /// The PUC register of luna register `r`: the same one.
     pub(super) fn r(&self, r: u32) -> Res<u32> {
-        self.reg_at(self.pc, r)
+        if r > 255 {
+            return Err(self.err(format_args!("register {r} outside the frame")));
+        }
+        Ok(r)
     }
 
-    /// The first of `n` consecutive registers from luna `r`, refusing a run
-    /// that a window would split.
+    /// The first of `n` consecutive registers from luna `r`.
     pub(super) fn run(&self, r: u32, n: u32) -> Res<u32> {
-        let first = self.r(r)?;
-        if n > 1 && self.r(r + n - 1)? != first + n - 1 {
-            return Err(self.err(format_args!(
-                "register run {r}..{} crosses a loop's slots",
-                r + n - 1
-            )));
-        }
-        Ok(first)
+        self.r(r + n.saturating_sub(1))?;
+        self.r(r)
     }
 
     /// A scratch register, unique within the current luna instruction.
@@ -285,12 +241,12 @@ fn jump_targets(p: &Proto) -> Vec<bool> {
         let (pc, bx) = (pc as i64, i.bx() as i64);
         match i.op() {
             Op::Jmp => mark(pc + 1 + i.sj() as i64),
-            Op::ForPrep => {
+            op if op.is_for_prep() => {
                 mark(pc + bx);
                 mark(pc + bx + 1);
             }
-            Op::ForLoop | Op::TForLoop => mark(pc + 1 - bx),
-            Op::TForPrep => mark(pc + 1 + bx),
+            op if op.is_for_loop() || op.is_tfor_loop() => mark(pc + 1 - bx),
+            op if op.is_tfor_prep() => mark(pc + 1 + bx),
             op if op == Op::LFalseSkip || op.is_test() => mark(pc + 2),
             _ => {}
         }
@@ -336,37 +292,4 @@ pub(super) fn setlist_offset(asm: &Asm, l: L) -> Res<u64> {
         Some(x) if x.op() == Op::ExtraArg => Ok(x.ax() as u64),
         _ => Err(asm.err("SetList without its ExtraArg")),
     }
-}
-
-/// Loop windows of `p`: each generic `for` (and, with `numeric`, each
-/// numeric one) from its prep to its loop op, with loop variables that sit
-/// one register lower in PUC than in luna from luna register `A + pivot`.
-pub(super) fn loop_windows(p: &Proto, generic: u32, numeric: Option<u32>) -> Res<Vec<Window>> {
-    let code = &p.code;
-    let mut out = Vec::new();
-    for (pc, i) in code.iter().enumerate() {
-        let (last, pivot) = match i.op() {
-            Op::TForPrep => (pc + 2 + i.bx() as usize, generic),
-            Op::ForPrep => match numeric {
-                Some(n) => (pc + i.bx() as usize, n),
-                None => continue,
-            },
-            _ => continue,
-        };
-        let want = if i.op() == Op::ForPrep {
-            Op::ForLoop
-        } else {
-            Op::TForLoop
-        };
-        if code.get(last).map(|x| x.op()) != Some(want) {
-            return Err(format!("loop prep at pc {} without its loop op", pc + 1));
-        }
-        out.push(Window {
-            first: pc,
-            last,
-            pivot: i.a() + pivot,
-            delta: -1,
-        });
-    }
-    Ok(out)
 }

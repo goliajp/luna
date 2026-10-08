@@ -8,9 +8,10 @@
 mod op;
 mod op_info;
 pub use op::Op;
+pub use op_info::ForLayout;
 
 /// Total number of opcodes defined in [`Op`].
-pub const NUM_OPS: usize = Op::SetTabUpK as usize + 1;
+pub const NUM_OPS: usize = Op::LeKK as usize + 1;
 
 mod inst;
 pub use inst::*;

@@ -149,6 +149,7 @@ fn apply_bb_kinds(
             continue;
         }
         match ins.op() {
+            Op::LoadI if scan.dead_loads[p] => {}
             Op::LoadI => {
                 if let Some(slot) = state.get_mut(ins.a() as usize) {
                     *slot = RegKind::Int;
@@ -199,7 +200,9 @@ fn apply_bb_kinds(
                     *slot = ret_kind;
                 }
             }
-            Op::ForPrep | Op::ForLoop => apply_for_kinds(pre53, reg_kinds, ins, state),
+            Op::ForPrep | Op::ForLoop | Op::ForPrep55 | Op::ForLoop55 => {
+                apply_for_kinds(pre53, reg_kinds, ins, state)
+            }
             Op::NewTable => {
                 if let Some(slot) = state.get_mut(ins.a() as usize) {
                     *slot = RegKind::Table;
@@ -256,98 +259,34 @@ fn apply_bb_kinds(
 }
 
 fn apply_for_kinds(pre53: bool, reg_kinds: &[RegKind], ins: Inst, state: &mut [RegKind]) {
-    match ins.op() {
-        Op::ForPrep => {
-            let a = ins.a() as usize;
-            let is_float = matches!(
-                reg_kinds.get(a).copied().unwrap_or(RegKind::Unset),
-                RegKind::Float
-            );
-            match (pre53, is_float) {
-                (true, false) => {
-                    if let Some(s) = state.get_mut(a) {
-                        *s = RegKind::Int;
-                    }
-                    if let Some(s) = state.get_mut(a + 1) {
-                        *s = RegKind::Int;
-                    }
-                    if let Some(s) = state.get_mut(a + 2) {
-                        *s = RegKind::Int;
-                    }
-                }
-                (false, false) => {
-                    if let Some(s) = state.get_mut(a) {
-                        *s = RegKind::Int;
-                    }
-                    if let Some(s) = state.get_mut(a + 1) {
-                        *s = RegKind::Int;
-                    }
-                    if let Some(s) = state.get_mut(a + 2) {
-                        *s = RegKind::Int;
-                    }
-                    if let Some(s) = state.get_mut(a + 3) {
-                        *s = RegKind::Int;
-                    }
-                }
-                (true, true) => {
-                    if let Some(s) = state.get_mut(a) {
-                        *s = RegKind::Float;
-                    }
-                    if let Some(s) = state.get_mut(a + 1) {
-                        *s = RegKind::Float;
-                    }
-                    if let Some(s) = state.get_mut(a + 2) {
-                        *s = RegKind::Int;
-                    }
-                }
-                (false, true) => {
-                    if let Some(s) = state.get_mut(a) {
-                        *s = RegKind::Float;
-                    }
-                    if let Some(s) = state.get_mut(a + 1) {
-                        *s = RegKind::Float;
-                    }
-                    if let Some(s) = state.get_mut(a + 2) {
-                        *s = RegKind::Int;
-                    }
-                    if let Some(s) = state.get_mut(a + 3) {
-                        *s = RegKind::Float;
-                    }
-                }
-            }
+    let a = ins.a() as usize;
+    let r = ForRegs::of(ins);
+    let kind = match reg_kinds.get(a).copied().unwrap_or(RegKind::Unset) {
+        RegKind::Float => RegKind::Float,
+        _ => RegKind::Int,
+    };
+    // 5.5 loops count down whatever the dialect
+    let pre53 = pre53 && matches!(ins.op(), Op::ForPrep | Op::ForLoop);
+    let mut set = |reg: usize, k: RegKind| {
+        if let Some(s) = state.get_mut(reg) {
+            *s = k;
         }
-        Op::ForLoop => {
-            let a = ins.a() as usize;
-            let is_float = matches!(
-                reg_kinds.get(a).copied().unwrap_or(RegKind::Unset),
-                RegKind::Float
-            );
-            if is_float {
-                if let Some(s) = state.get_mut(a) {
-                    *s = RegKind::Float;
-                }
-                if let Some(s) = state.get_mut(a + 3) {
-                    *s = RegKind::Float;
-                }
-            } else if pre53 {
-                if let Some(s) = state.get_mut(a) {
-                    *s = RegKind::Int;
-                }
-                if let Some(s) = state.get_mut(a + 3) {
-                    *s = RegKind::Int;
-                }
-            } else {
-                if let Some(s) = state.get_mut(a) {
-                    *s = RegKind::Int;
-                }
-                if let Some(s) = state.get_mut(a + 1) {
-                    *s = RegKind::Int;
-                }
-                if let Some(s) = state.get_mut(a + 3) {
-                    *s = RegKind::Int;
-                }
-            }
+    };
+    if ins.op().is_for_prep() {
+        // the count (Int) or limit, the step, and the index; the loop
+        // variable once the loop starts, which a pre-5.4 prep leaves to
+        // its ForLoop
+        set(r.idx, kind);
+        set(r.x, kind);
+        set(r.step, if r.var == r.idx { kind } else { RegKind::Int });
+        if !pre53 {
+            set(r.var, kind);
         }
-        _ => unreachable!("dispatched by op"),
+    } else {
+        set(r.idx, kind);
+        if kind == RegKind::Int && !pre53 {
+            set(r.x, RegKind::Int);
+        }
+        set(r.var, kind);
     }
 }

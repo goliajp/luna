@@ -14,6 +14,9 @@ pub(super) struct ChunkScan {
     pub(super) defines_table: Vec<bool>,
     pub(super) folded_math: Vec<bool>,
     pub(super) math_folds: Vec<MathFold>,
+    /// the `LoadI` of a 5.5 loop's step, which its `ForPrep55` takes as an
+    /// immediate: the register is the loop's index from there on
+    pub(super) dead_loads: Vec<bool>,
 }
 
 pub(super) fn scan_chunk(c: ChunkIn<'_>) -> Option<ChunkScan> {
@@ -154,6 +157,7 @@ pub(super) fn scan_chunk(c: ChunkIn<'_>) -> Option<ChunkScan> {
         defines_table,
         folded_math,
         math_folds,
+        dead_loads: vec![false; n],
     };
     let mut pc = 0;
     while pc < n {
@@ -178,7 +182,9 @@ pub(super) fn scan_chunk(c: ChunkIn<'_>) -> Option<ChunkScan> {
             | Op::Le
             | Op::Eq
             | Op::ForPrep
-            | Op::ForLoop => pc = scan_ops::scan_control(&mut s, c, pc, ins)?,
+            | Op::ForLoop
+            | Op::ForPrep55
+            | Op::ForLoop55 => pc = scan_ops::scan_control(&mut s, c, pc, ins)?,
             Op::NewTable | Op::SetTable | Op::SetList | Op::GetI | Op::GetTable | Op::Len => {
                 scan_ops::scan_tables(&mut s, c, pc, ins)?
             }

@@ -70,16 +70,17 @@ impl Vm {
     /// Notes the step sign of the first depth-0 `ForLoop`, the one that
     /// ends the trace, when its step is an integer.
     pub(super) fn note_for_step(&mut self, inst: Inst, base: u32, cur_depth: usize) {
-        use crate::vm::isa::Op;
-        if inst.op() != Op::ForLoop || cur_depth != 0 {
+        if !inst.op().is_for_loop() || cur_depth != 0 {
             return;
         }
-        let step = self.stack[(base + inst.a() + 2) as usize];
+        // the step is the register before the loop variable
+        let var = inst.op().for_layout().expect("a loop op").var();
+        let step = self.stack[(base + inst.a() + var - 1) as usize];
         let rec = self.jit.active_trace.as_mut().expect("recording");
         if rec
             .ops
             .iter()
-            .any(|r| r.inline_depth == 0 && r.inst.op() == Op::ForLoop)
+            .any(|r| r.inline_depth == 0 && r.inst.op().is_for_loop())
         {
             return;
         }

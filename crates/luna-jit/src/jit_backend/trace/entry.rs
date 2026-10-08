@@ -68,7 +68,7 @@ pub(super) fn entry_live(
             // the ipairs path keeps the previous value. Close needs none:
             // it spills the registers it has a kind for and the helper
             // reads the others off the stack, which holds them
-            Op::TForCall => read(inst.a() + 5),
+            op if op.is_tfor_call() => read(inst.a() + op.for_layout().map_or(0, |l| l.var()) + 1),
             _ => {}
         }
         let inlined_call = matches!(op, Op::Call)
@@ -76,7 +76,8 @@ pub(super) fn entry_live(
                 .get(i + 1)
                 .is_some_and(|n| n.inline_depth > rop.inline_depth);
         let sure =
-            !matches!(op, Op::TestSet | Op::ForLoop | Op::TForLoop | Op::TForCall) && !inlined_call;
+            !(op == Op::TestSet || op.is_for_loop() || op.is_tfor_loop() || op.is_tfor_call())
+                && !inlined_call;
         let mut write = |s: usize| {
             if s < max_stack {
                 written[s] = true;
@@ -91,9 +92,12 @@ pub(super) fn entry_live(
         if let Some(&(first, n)) = inline_writes.get(i) {
             (first..first + n).for_each(|s| write(s as usize));
         }
-        if matches!(op, Op::TForCall) {
+        if let Some(lay) = op.for_layout().filter(|_| op.is_tfor_call()) {
             let a = off + inst.a() as usize;
-            [a + 2, a + 4, a + 5].into_iter().for_each(write);
+            let first = a + lay.var() as usize;
+            [a + lay.control() as usize, first, first + 1]
+                .into_iter()
+                .for_each(write);
         }
     }
     if let Some(tags) = parent_exit {

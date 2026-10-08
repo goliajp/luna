@@ -76,7 +76,8 @@ impl Compiler<'_> {
                     k,
                 )
             }
-            BinOp::Shl if !left => Operand::Arith(Op::ShlI, enc(imm?.0)),
+            // `I << x` is `SHLI` with the immediate on the left
+            BinOp::Shl => Operand::Arith(Op::ShlI, enc(imm?.0)),
             BinOp::Shr if !left => Operand::Arith(Op::ShrI, enc(imm?.0)),
             BinOp::Eq | BinOp::Ne => match (cmp_imm, e) {
                 (Some((i, f)), _) => Operand::Cmp(Op::EqI, enc(i), f as u32),

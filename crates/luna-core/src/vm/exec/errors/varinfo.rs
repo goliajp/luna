@@ -89,36 +89,60 @@ impl Vm {
             }
             _ => {}
         }
-        // Up to 5.3 a binary operator takes a constant operand straight
-        // from the constant table (RK), where `varinfo` cannot see it, so a
-        // string constant is not named there; unary operators load it into
-        // a register first and do name it.
-        let rk_operands = self.version <= LuaVersion::Lua53
-            && matches!(
-                instr.source_op(),
-                Op::Add
-                    | Op::Sub
-                    | Op::Mul
-                    | Op::Div
-                    | Op::Mod
-                    | Op::Pow
-                    | Op::IDiv
-                    | Op::BAnd
-                    | Op::BOr
-                    | Op::BXor
-                    | Op::Shl
-                    | Op::Shr
-            );
         for reg in cands {
             if self.r(f.base, reg).raw_eq(bad) {
-                return match crate::vm::objname::getobjname_in(p, pc - 1, reg, self.version) {
-                    Some(("constant", _)) if rk_operands => String::new(),
-                    Some((kind, name)) => format!(" ({kind} '{name}')"),
-                    None => String::new(),
-                };
+                return self.reg_varinfo(reg).unwrap_or_default();
             }
         }
         String::new()
+    }
+
+    /// PUC `varinfo` of operand `side` (0: left, 1: right) of the current
+    /// arithmetic instruction: a register is named, a constant the
+    /// instruction holds (an `RK` / `K` operand) is not. `None` when the
+    /// current instruction is no arithmetic one.
+    pub(crate) fn operand_varinfo(&self, side: usize) -> Option<String> {
+        use crate::vm::isa::Op;
+        if self.native_on_top() {
+            return Some(String::new());
+        }
+        let f = self.frames.last().and_then(CallFrame::lua)?;
+        let pc = f.pc as usize;
+        let instr = *f.closure.proto.code.get(pc.checked_sub(1)?)?;
+        let reg = if instr.arith_kk_op().is_some() {
+            None
+        } else if instr.arith_const_op().is_some() {
+            // `k`: the constant is the left operand
+            (side != usize::from(!instr.k())).then_some(instr.b())
+        } else if matches!(
+            instr.op(),
+            Op::Add
+                | Op::Sub
+                | Op::Mul
+                | Op::Div
+                | Op::Mod
+                | Op::Pow
+                | Op::IDiv
+                | Op::BAnd
+                | Op::BOr
+                | Op::BXor
+                | Op::Shl
+                | Op::Shr
+        ) {
+            Some(if side == 0 { instr.b() } else { instr.c() })
+        } else {
+            return None;
+        };
+        Some(reg.and_then(|r| self.reg_varinfo(r)).unwrap_or_default())
+    }
+
+    /// " (kind 'name')" for register `reg` of the current Lua frame.
+    fn reg_varinfo(&self, reg: u32) -> Option<String> {
+        let f = self.frames.last().and_then(CallFrame::lua)?;
+        let p: &crate::runtime::Proto = &f.closure.proto;
+        let pc = (f.pc as usize).checked_sub(1)?;
+        let (kind, name) = crate::vm::objname::getobjname_in(p, pc, reg, self.version)?;
+        Some(format!(" ({kind} '{name}')"))
     }
 
     /// "attempt to call a X value", enriched (PUC luaG_callerror) with a name
@@ -168,7 +192,7 @@ impl Vm {
             }
             // 5.4 `funcnamefromcode` names the generic-for iterator call
             // (5.3 had the entry but raised through plain `luaG_typeerror`)
-            Op::TForCall if self.version >= LuaVersion::Lua54 => {
+            op if op.is_tfor_call() && self.version >= LuaVersion::Lua54 => {
                 " (for iterator 'for iterator')".to_string()
             }
             // 5.4 `funcnamefromcall` names the metamethod; up to 5.3 the
@@ -208,13 +232,17 @@ impl Vm {
             return String::new();
         }
         let instr = p.code[pc - 1];
-        let mut regs = vec![instr.b()];
-        // C of a constant- or immediate-operand opcode is not a register
-        if !instr.k() && instr.arith_const_op().is_none() {
-            regs.push(instr.c());
-        }
+        // only a register-operand opcode reads C, and B is a constant in
+        // the two-constant forms
+        let regs: &[u32] = if instr.arith_kk_op().is_some() {
+            &[]
+        } else if instr.arith_const_op().is_some() {
+            &[instr.b()]
+        } else {
+            &[instr.b(), instr.c()]
+        };
         let no_int = |n: Option<Num>| matches!(n, Some(Num::Float(x)) if crate::runtime::value::f2i_exact(x).is_none());
-        for reg in regs {
+        for &reg in regs {
             let v = self.r(f.base, reg);
             // before 5.4 a numeric string is converted first, so "2.5" is
             // the operand without an integer value

@@ -34,12 +34,19 @@ optimization.
   `failure_known` and `publish_failure`.
 
 - Chunks in luna's own binary format (PUC header followed by the
-  `LunaV1` or `LunaV2` body) no longer load: a table constructor's op
-  now carries its size hints, a table write can store a constant (`k`
-  on `SetTable` / `SetField` / `SetI` / `SetTabUp`), and there are the
-  opcodes `GetTableK`, `SetTableK`, `GetTabUpR`, `SetTabUpR` and
-  `SetTabUpK`; the body tag is `LunaV3`. Dump the source again with
-  this version. PUC bytecode loads as before.
+  `LunaV1`, `LunaV2` or `LunaV3` body) no longer load: a table
+  constructor's op now carries its size hints, a table write can store a
+  constant (`k` on `SetTable` / `SetField` / `SetI` / `SetTabUp`), and
+  there are the opcodes `GetTableK`, `SetTableK`, `GetTabUpR`,
+  `SetTabUpR` and `SetTabUpK`. Each dialect's `for` loops keep their
+  control values in the registers that dialect's PUC compiler gives them
+  (`ForPrep55` / `ForLoop55`, `TForPrep53` / `TForCall53` /
+  `TForLoop53`, `TForPrep55` / `TForCall55` / `TForLoop55`), and a
+  5.1–5.3 operator takes a constant of any type on either side of it
+  without a register (`ShlK`, `ShrK`, the two-constant `AddKK` …
+  `ShrKK`, `LtK`, `LeK`, `EqKK`, `LtKK`, `LeKK`; `k` on `AddK` … `ShrK`
+  puts the constant on the left). The body tag is `LunaV4`. Dump the
+  source again with this version. PUC bytecode loads as before.
 - C API: errors leave a C function at once, as in PUC. `lua_error`,
   `luaL_error` and every API function that raises (`lua_gettable`,
   `lua_call`, `luaL_checkinteger`, ...) jump back to the call that luna

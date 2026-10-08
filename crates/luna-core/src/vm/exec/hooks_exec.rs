@@ -13,6 +13,14 @@ impl Vm {
         oldpc: u32,
     ) -> Result<(), LuaError> {
         let lines = &cl.proto.lines;
+        // a 5.1 generic `for` is PUC's `TFORLOOP` and the `JMP` after it,
+        // which `TFORLOOP` takes itself: that jump (luna's `TForLoop53`)
+        // is no instruction a hook sees
+        if self.version == LuaVersion::Lua51
+            && cl.proto.code.get(pc as usize).map(|i| i.op()) == Some(Op::TForLoop53)
+        {
+            return Ok(());
+        }
         // count hook: fire every `count_base` instructions
         let mut counthook = false;
         if self.hook.count {

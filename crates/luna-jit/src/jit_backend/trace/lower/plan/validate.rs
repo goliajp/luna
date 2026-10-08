@@ -188,14 +188,18 @@ fn validate_op(
         Op::Call => {
             unreachable!("Op::Call only appears at effective_end (truncation guarded above)")
         }
-        Op::ForLoop => {
+        Op::ForLoop | Op::ForLoop55 => {
             unreachable!("Op::ForLoop only appears at effective_end (loop-end guarded above)")
         }
-        Op::TForLoop => unreachable!(
+        Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => unreachable!(
             "Op::TForLoop only appears at effective_end (close-on-back-edge guarded above)"
         ),
         Op::TForPrep
+        | Op::TForPrep53
+        | Op::TForPrep55
         | Op::TForCall
+        | Op::TForCall53
+        | Op::TForCall55
         | Op::Concat
         | Op::GetTabUp
         | Op::SetField
@@ -354,25 +358,14 @@ pub(super) fn validate_trace_ends(
             return None;
         }
         let a = rop.inst.a() as usize;
-        match rop.inst.op() {
-            Op::ForLoop => {
-                // ForLoop touches R[A], R[A+1] (count or limit), R[A+2]
-                // (step), R[A+3] (visible loop var). All must fit in the
-                // frame. Which form steps them is decided from their
-                // kinds at the tail (`emit_for_loop_tail`).
-                if a + 3 >= max_stack {
-                    return None;
-                }
-            }
-            Op::TForLoop => {
-                // TForLoop reads R[A+4] (control
-                // returned by the iterator) and writes R[A+2] on
-                // continue. R[A+4] must fit in the trace's frame.
-                if a + 4 >= max_stack {
-                    return None;
-                }
-            }
-            _ => unreachable!("for_loop_idx_opt only set for Op::ForLoop / Op::TForLoop"),
+        // a numeric loop touches its state registers and the loop
+        // variable; a generic one reads the first variable (the key the
+        // iterator returned) and may write the control. All must fit in
+        // the frame. Which form steps a numeric loop is decided from the
+        // kinds at the tail (`emit_for_loop_tail`).
+        let lay = rop.inst.op().for_layout()?;
+        if a + lay.var() as usize >= max_stack {
+            return None;
         }
     }
     Some(())

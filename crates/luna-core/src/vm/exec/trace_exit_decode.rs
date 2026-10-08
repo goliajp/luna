@@ -306,8 +306,8 @@ pub(super) fn keep_tfor_vars(
         return 0..0;
     }
     let call = proto.code[cont_pc as usize - 1];
-    debug_assert!(matches!(call.op(), crate::vm::isa::Op::TForCall));
-    let first = off + call.a() as usize + 4;
+    let lay = call.op().for_layout().expect("an exit after a TForCall");
+    let first = off + (call.a() + lay.var()) as usize;
     first..first + call.c() as usize
 }
 

@@ -232,7 +232,7 @@ impl Vm {
                                     .proto
                                     .code
                                     .get(pc)
-                                    .is_some_and(|ins| ins.op() == Op::TForCall)
+                                    .is_some_and(|ins| ins.op().is_tfor_call())
                             }))
                 }
             });

@@ -5,18 +5,12 @@
 //! and `lua-5.5.1/src/lvm.c`; what needs lowering:
 //!
 //! - **Immediate and constant arithmetic** (`ADDI`, `ADDK`…`BXORK`, `SHRI`,
-//!   `SHLI`): luna has register operands only. The `MMBINI` / `MMBINK` that
-//!   PUC always emits next records the metamethod event, the operand as
-//!   written in the source, and whether the operands were swapped, so the
-//!   pair becomes one luna op on the original operands and operator:
-//!   `x - 1`, compiled as `ADDI x -1; MMBINI x 1 __sub`, runs as `x - 1`,
-//!   which is what a `__sub` metamethod must see. The `MMBIN*` then emits
+//!   `SHLI`): the `MMBINI` / `MMBINK` that PUC always emits next records
+//!   the metamethod event, the operand as written in the source, and
+//!   whether it was the left one, so the pair becomes one luna op on the
+//!   original operator and operand: `x - 1`, compiled as `ADDI x -1;
+//!   MMBINI x 1 __sub`, is luna's `SubI x 1`. The `MMBIN*` then emits
 //!   nothing (luna's arithmetic ops fall back to metamethods themselves).
-//! - **Immediate comparisons** (`EQI`, `LTI`, `LEI`, `GTI`, `GEI`): the
-//!   immediate is loaded into a scratch register, as a float when `C` says
-//!   the source literal was one; `GTI` / `GEI` swap operands.
-//! - **`RK(C)` stores and `SELF`**: a constant value goes through a scratch
-//!   register (luna reads store values from registers only).
 //! - **`NEWTABLE`** always carries an `EXTRAARG`; luna's `NewTable` holds
 //!   the hash size as is and the array size cut at 255, so both become one
 //!   op.
@@ -25,19 +19,14 @@
 //!   `GetVarg`) or nil (`LoadNil`).
 //!
 //! 5.5 differs from 5.4 in its opcode numbering, in 6/10-bit `NEWTABLE` /
-//! `SETLIST` operands, in `SELF` always taking a constant key, and in giving
-//! both kinds of `for` loop three hidden slots instead of 5.4's (and luna's)
-//! four; those loops become luna's ops inside a loop window.
+//! `SETLIST` operands, in `SELF` always taking a constant key, and in its
+//! layout of both kinds of `for` loop (luna's `ForPrep55`, `TForCall55`...).
 
-use super::classic::is_env;
-use super::lower::{Jump, Lowered, Lowering, RawProto, Window, enc_abc, enc_abx, enc_asbx, enc_sj};
-use crate::vm::isa::{self, Op};
+use super::lower::{Jump, Lowered, Lowering, RawProto, enc_abc, enc_abx, enc_asbx, enc_sj};
+use crate::vm::isa::{self, ForLayout, Op};
 
 mod ops;
-use ops::{
-    closure, compare, compare_imm, const_arith, for_jump, self_op, set_list, store, tfor_call,
-    vararg_prep,
-};
+use ops::{closure, compare, const_arith, for_jump, self_op, set_list, store, vararg_prep};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::vm::dump) enum Kind {
@@ -111,9 +100,12 @@ pub(in crate::vm::dump) enum Kind {
 pub(super) struct Dialect {
     pub name: &'static str,
     pub ops: &'static [Kind],
-    /// 5.5: `NEWTABLE` / `SETLIST` use the ivABC layout, `SELF` always has
-    /// a constant key, and `for` loops keep three hidden slots.
+    /// 5.5: `NEWTABLE` / `SETLIST` use the ivABC layout and `SELF` always
+    /// has a constant key.
     pub v55: bool,
+    /// the layouts of the numeric and the generic `for`
+    pub num: ForLayout,
+    pub generic: ForLayout,
 }
 
 #[derive(Clone, Copy)]
@@ -136,10 +128,6 @@ impl I {
     }
     fn c(self) -> u32 {
         self.w >> 24
-    }
-    /// Signed B / C: excess-127 (`OFFSET_sC`).
-    fn sb(self) -> i32 {
-        self.b() as i32 - 127
     }
     fn bx(self) -> u32 {
         self.w >> 15
@@ -185,46 +173,8 @@ fn event_op(tm: u32) -> Option<Op> {
     })
 }
 
-/// 5.5 loops span from their prep to their loop op; their loop variables
-/// start at `A+2` in PUC and `A+3` (numeric) / `A+4` (generic) in luna.
-fn loop_windows(d: &Dialect, code: &[u32]) -> Result<Vec<Window>, String> {
-    if !d.v55 {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    for (p, &w) in code.iter().enumerate() {
-        let i = I { w };
-        let last = match kind(d, w) {
-            Some(Kind::ForPrep) => {
-                let q = p + 1 + i.bx() as usize;
-                (code.get(q).and_then(|&w| kind(d, w)) == Some(Kind::ForLoop)).then_some(q)
-            }
-            Some(Kind::TForPrep) => {
-                let t = p + 1 + i.bx() as usize;
-                let call = code.get(t).and_then(|&w| kind(d, w));
-                let lp = code.get(t + 1).and_then(|&w| kind(d, w));
-                (call == Some(Kind::TForCall) && lp == Some(Kind::TForLoop)).then_some(t + 1)
-            }
-            _ => continue,
-        };
-        let Some(last) = last else {
-            return Err(format!(
-                "{} chunk: loop prep without its loop (pc {p})",
-                d.name
-            ));
-        };
-        out.push(Window {
-            first: p,
-            last,
-            pivot: i.a() + 2,
-        });
-    }
-    Ok(out)
-}
-
 pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, String> {
-    let windows = loop_windows(d, &raw.code)?;
-    let mut lw = Lowering::new(d.name, raw.code.len(), raw.max_stack, windows, &raw.consts);
+    let mut lw = Lowering::new(d.name, raw.code.len(), raw.max_stack, &raw.consts);
     let mut closed = vec![false; raw.protos.len()];
     let code = &raw.code;
     let mut pc = 0;
@@ -288,7 +238,7 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
             }
             Kind::GetTabUp => {
                 let a = lw.r(i.a())?;
-                lw.get_tabup(a, i.b(), i.c(), is_env(raw, i.b()))?;
+                lw.get_tabup(a, i.b(), i.c())?;
             }
             Kind::GetTable => {
                 let (a, b, c) = (lw.r(i.a())?, lw.r(i.b())?, lw.r(i.c())?);
@@ -302,9 +252,7 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                 let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
                 lw.get_field(a, b, i.c())?;
             }
-            Kind::SetTabUp | Kind::SetTable | Kind::SetI | Kind::SetField => {
-                store(&mut lw, raw, k, i)?
-            }
+            Kind::SetTabUp | Kind::SetTable | Kind::SetI | Kind::SetField => store(&mut lw, k, i)?,
             Kind::NewTable => {
                 let Some(extra) = follower(Kind::ExtraArg) else {
                     return Err(lw.err("NEWTABLE without its EXTRAARG"));
@@ -355,7 +303,15 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
             }
             // if ((R[A] <op> sB) ~= k) then pc++; C: the literal was a float
             Kind::EqI | Kind::LtI | Kind::LeI | Kind::GtI | Kind::GeI => {
-                compare_imm(&mut lw, k, i)?
+                let op = match k {
+                    Kind::EqI => Op::EqI,
+                    Kind::LtI => Op::LtI,
+                    Kind::LeI => Op::LeI,
+                    Kind::GtI => Op::GtI,
+                    _ => Op::GeI,
+                };
+                let a = lw.r(i.a())?;
+                lw.emit(enc_abc(op, a, i.b(), i.c(), i.k())?);
             }
             Kind::Test => {
                 let a = lw.r(i.a())?;
@@ -388,15 +344,18 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
             // does not run; FORLOOP jumps back Bx.
             Kind::ForPrep | Kind::ForLoop => for_jump(&mut lw, d, k, i, next)?,
             Kind::TForPrep => {
-                let a = for_base(&lw, d, i.a())?;
+                let a = lw.run(i.a(), d.generic.var())?;
                 let target = next + i.bx() as i64;
-                lw.jump(enc_abx(Op::TForPrep, a, 0)?, Jump::TForPrep, target)?;
+                lw.jump(enc_abx(d.generic.ops().0, a, 0)?, Jump::TForPrep, target)?;
             }
-            Kind::TForCall => tfor_call(&mut lw, d, i)?,
+            Kind::TForCall => {
+                let a = lw.run(i.a(), d.generic.var() + i.c().max(3))?;
+                lw.emit(enc_abc(d.generic.ops().1, a, 0, i.c(), false)?);
+            }
             Kind::TForLoop => {
-                let a = for_base(&lw, d, i.a())?;
+                let a = lw.run(i.a(), d.generic.var() + 1)?;
                 let target = next - i.bx() as i64;
-                lw.jump(enc_abx(Op::TForLoop, a, 0)?, Jump::Back, target)?;
+                lw.jump(enc_abx(d.generic.ops().2, a, 0)?, Jump::Back, target)?;
             }
             // R[A][C+j] := R[A+j], 1 <= j <= B; k: EXTRAARG extends C
             Kind::SetList => {
@@ -434,16 +393,4 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
         pc += 1;
     }
     lw.finish(&raw.locvars)
-}
-
-/// luna register of a `for` loop's base `A`, after checking that luna's
-/// four hidden slots fit the frame. In 5.5 the loop window has already moved
-/// PUC's third slot (`A+2`) up to luna's fourth.
-fn for_base(lw: &Lowering, d: &Dialect, a: u32) -> Result<u32, String> {
-    let base = lw.r(a)?;
-    let last = if d.v55 { a + 2 } else { a + 3 };
-    if lw.r(last)? != base + 3 {
-        return Err(lw.err("loop slots straddle another loop's window"));
-    }
-    Ok(base)
 }

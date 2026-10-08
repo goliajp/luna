@@ -21,7 +21,7 @@ use crate::runtime::string::LuaStr;
 use crate::vm::dump::error::Bad;
 use crate::vm::dump::header;
 use crate::vm::dump::reader::Reader;
-use crate::vm::isa::Op;
+use crate::vm::isa::{ForLayout, Op};
 
 const DIALECT: &str = "PUC 5.4";
 
@@ -127,6 +127,8 @@ const D54: Dialect = Dialect {
     name: DIALECT,
     ops: OPS,
     v55: false,
+    num: ForLayout::Num,
+    generic: ForLayout::Gen54,
 };
 
 pub(super) fn undump(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, Bad> {
@@ -328,17 +330,13 @@ mod tests {
             ],
             vec![],
         );
-        assert_eq!((code[0].op(), code[0].sbx()), (Op::LoadI, 1));
-        let t = code[0].a();
-        assert_eq!(
-            (code[1].op(), code[1].a(), code[1].b(), code[1].c()),
-            (Op::Sub, 0, 1, t)
-        );
+        let i = code[0];
+        assert_eq!((i.op(), i.a(), i.b(), i.sc()), (Op::SubI, 0, 1, 1));
     }
 
     #[test]
-    fn subtracting_an_immediate_zero_stays_an_addition() {
-        // `x - 0` compiles to ADDI x 0 and runs as `x + 0`: `-0.0 - 0` is 0.0.
+    fn subtracting_an_immediate_zero_is_sub_i() {
+        // `x - 0` compiles to ADDI x 0: luna's `SubI x 0` adds as ADDI does
         let code = lower(
             vec![
                 abck(ADDI, 0, 1, 127, false),
@@ -347,12 +345,8 @@ mod tests {
             ],
             vec![],
         );
-        let t = code[0].a();
-        assert_eq!(
-            (code[1].op(), code[1].b(), code[1].c(), code[1].k()),
-            (Op::Add, 1, t, true)
-        );
-        assert_eq!(code[1].source_op(), Op::Sub);
+        assert_eq!((code[0].op(), code[0].b(), code[0].sc()), (Op::SubI, 1, 0));
+        assert_eq!(code[0].source_op(), Op::Sub);
     }
 
     #[test]
@@ -366,9 +360,8 @@ mod tests {
             ],
             vec![Value::Float(2.5)],
         );
-        let t = code[0].a();
-        assert_eq!(code[0].op(), Op::LoadK);
-        assert_eq!((code[1].op(), code[1].b(), code[1].c()), (Op::Add, t, 1));
+        let i = code[0];
+        assert_eq!((i.op(), i.b(), i.c(), i.k()), (Op::AddK, 1, 0, true));
     }
 
     #[test]
@@ -381,14 +374,12 @@ mod tests {
             ],
             vec![],
         );
-        assert_eq!(code[0].op(), Op::LoadF, "C=1: the literal was 1.0");
-        assert_eq!((code[1].op(), code[1].a(), code[1].k()), (Op::Eq, 0, true));
-        assert_eq!(code[2].op(), Op::LoadI);
-        let t = code[2].a();
+        let i = code[0];
         assert_eq!(
-            (code[3].op(), code[3].a(), code[3].b()),
-            (Op::Lt, t, 0),
-            "x > 2 is 2 < x"
+            (i.op(), i.a(), i.sb(), i.c(), i.k()),
+            (Op::EqI, 0, 1, 1, true)
         );
+        let i = code[1];
+        assert_eq!((i.op(), i.a(), i.sb(), i.k()), (Op::GtI, 0, 2, false));
     }
 }

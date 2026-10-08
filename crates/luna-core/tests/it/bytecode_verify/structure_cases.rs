@@ -110,7 +110,7 @@ fn for_prep_without_its_loop() {
     refused(
         "return function() local s = 0 for i = 1, 3 do s = s + i end return s end",
         |p| {
-            let pc = find(p, Op::ForPrep);
+            let pc = find(p, Op::ForPrep55);
             set(p, pc, |i| with_bx(i, i.bx() + 1));
         },
         "no matching ForLoop",
@@ -122,7 +122,7 @@ fn for_loop_without_its_prep() {
     refused(
         "return function() local s = 0 for i = 1, 3 do s = s + i end return s end",
         |p| {
-            let pc = find(p, Op::ForPrep);
+            let pc = find(p, Op::ForPrep55);
             p.code[pc] = Inst::isj(Op::Jmp, 0).0;
         },
         "not paired with a ForPrep",
@@ -134,7 +134,7 @@ fn tforcall_not_followed_by_tforloop() {
     refused(
         "return function(t) for k in pairs(t) do end end",
         |p| {
-            let pc = find(p, Op::TForLoop);
+            let pc = find(p, Op::TForLoop55);
             p.code[pc] = Inst::iabc(Op::Return0, 0, 0, 0, false).0;
         },
         "TForLoop",
@@ -148,9 +148,9 @@ fn tforloop_without_its_tforcall() {
         |p| {
             // a second TForLoop, looping on itself, before the final return:
             // no TForCall precedes it
-            let a = Inst(p.code[find(p, Op::TForCall)]).a();
+            let a = Inst(p.code[find(p, Op::TForCall55)]).a();
             let at = p.code.len() - 1;
-            p.code.insert(at, Inst::iabx(Op::TForLoop, a, 1).0);
+            p.code.insert(at, Inst::iabx(Op::TForLoop55, a, 1).0);
             p.lines.insert(at, 1);
         },
         "not preceded by its TForCall",

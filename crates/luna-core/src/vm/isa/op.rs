@@ -51,9 +51,7 @@ pub enum Op {
     /// `R[A+1] := R[B]; R[A] := R[B][K[C]:string]` self-method prep for
     /// `obj:m(...)`.
     SelfOp,
-    /// `R[A] := R[B] + R[C]/K[C]`. With `k` set it is a 5.4+ `x - 0`, which
-    /// PUC compiles as `ADDI x 0`: numbers add (so `-0.0 - 0` is `0.0`),
-    /// anything else is subtracted, `__sub` and string coercion included.
+    /// `R[A] := R[B] + R[C]`.
     Add,
     /// `R[A] := R[B] - R[C]/K[C]`.
     Sub,
@@ -99,7 +97,8 @@ pub enum Op {
     Lt,
     /// Less-or-equal comparison with optional skip.
     Le,
-    /// Equality against a constant.
+    /// `if ((R[A] == K[B]) ~= k) then pc++`, a constant of any type; with
+    /// `C` set the constant was written on the left. Raw: no `__eq` can run.
     EqK,
     /// `if (not R[A]) == k then pc++`.
     Test,
@@ -115,15 +114,17 @@ pub enum Op {
     Return0,
     /// `return R[A]` single-value return.
     Return1,
-    /// Numeric-for iteration step.
+    /// Numeric `for` step, 5.1–5.4 layout: `R[A]` index, `R[A+1]` limit
+    /// (5.4: count), `R[A+2]` step, `R[A+3]` the loop variable.
     ForLoop,
-    /// Numeric-for prepare (validates types, normalizes step).
+    /// Numeric `for` prepare (validates types, normalizes step).
     ForPrep,
-    /// Generic-for prepare.
+    /// Generic `for` prepare, 5.4 layout: `R[A]` iterator, `R[A+1]` state,
+    /// `R[A+2]` control, `R[A+3]` closing value, the variables from `R[A+4]`.
     TForPrep,
-    /// Generic-for call: invoke iterator once.
+    /// Generic `for` call: invoke the iterator once.
     TForCall,
-    /// Generic-for loop tail (branch back if iterator returned non-nil).
+    /// Generic `for` loop tail (branch back if the iterator returned non-nil).
     TForLoop,
     /// Bulk-store a sequence into a table (table constructor).
     SetList,
@@ -151,27 +152,31 @@ pub enum Op {
     // constant was the left operand.
     /// `R[A] := R[B] + sC`.
     AddI,
-    /// `R[A] := R[B] - sC`.
+    /// `R[A] := R[B] - sC`, which numbers compute as PUC's `ADDI` does
+    /// (`R[B] + -sC`): `-0.0 - 0` is `0.0`.
     SubI,
-    /// `R[A] := R[B] + K[C]:number`.
+    /// `R[A] := R[B] + K[C]`. In the `K` forms the constant is a number
+    /// from 5.4 on; before 5.4 it is any constant PUC passes as an `RK`
+    /// operand (a string converts, anything else goes to the metamethod).
+    /// `k` set: the constant is the left operand, `K[C] op R[B]`.
     AddK,
-    /// `R[A] := R[B] - K[C]:number`.
+    /// `R[A] := R[B] - K[C]`.
     SubK,
-    /// `R[A] := R[B] * K[C]:number`.
+    /// `R[A] := R[B] * K[C]`.
     MulK,
-    /// `R[A] := R[B] % K[C]:number`.
+    /// `R[A] := R[B] % K[C]`.
     ModK,
-    /// `R[A] := R[B] ^ K[C]:number`.
+    /// `R[A] := R[B] ^ K[C]`.
     PowK,
-    /// `R[A] := R[B] / K[C]:number`.
+    /// `R[A] := R[B] / K[C]`.
     DivK,
-    /// `R[A] := R[B] // K[C]:number`.
+    /// `R[A] := R[B] // K[C]`.
     IDivK,
-    /// `R[A] := R[B] & K[C]:integer`.
+    /// `R[A] := R[B] & K[C]`.
     BAndK,
-    /// `R[A] := R[B] | K[C]:integer`.
+    /// `R[A] := R[B] | K[C]`.
     BOrK,
-    /// `R[A] := R[B] ~ K[C]:integer`.
+    /// `R[A] := R[B] ~ K[C]`.
     BXorK,
     /// `R[A] := R[B] >> sC`.
     ShrI,
@@ -204,4 +209,65 @@ pub enum Op {
     /// `Up[A][K[B]] := R[C]/K[C]`: a 5.2 / 5.3 `SETTABUP` whose key is a
     /// constant of any type.
     SetTabUpK,
+    // The loops of the other dialects' layouts (see `ForLayout`).
+    /// 5.5 numeric `for` prepare: `R[A]` count (a float loop: limit),
+    /// `R[A+1]` step, `R[A+2]` the loop variable, which is the index.
+    ForPrep55,
+    /// 5.5 numeric `for` step.
+    ForLoop55,
+    /// 5.1–5.3 generic `for` prepare: `R[A]` iterator, `R[A+1]` state,
+    /// `R[A+2]` control, the variables from `R[A+3]`; no closing value.
+    TForPrep53,
+    /// 5.1–5.3 generic `for` call.
+    TForCall53,
+    /// 5.1–5.3 generic `for` loop tail.
+    TForLoop53,
+    /// 5.5 generic `for` prepare: `R[A]` iterator, `R[A+1]` state, `R[A+2]`
+    /// closing value, the variables from `R[A+3]`, the first of them the
+    /// control.
+    TForPrep55,
+    /// 5.5 generic `for` call.
+    TForCall55,
+    /// 5.5 generic `for` loop tail.
+    TForLoop55,
+    // The constant operands of 5.1–5.3 that the forms above lack.
+    /// `R[A] := R[B] << K[C]` (`k` as for `AddK`).
+    ShlK,
+    /// `R[A] := R[B] >> K[C]` (`k` as for `AddK`).
+    ShrK,
+    /// `R[A] := K[B] + K[C]`: both operands constants.
+    AddKK,
+    /// `R[A] := K[B] - K[C]`.
+    SubKK,
+    /// `R[A] := K[B] * K[C]`.
+    MulKK,
+    /// `R[A] := K[B] % K[C]`.
+    ModKK,
+    /// `R[A] := K[B] ^ K[C]`.
+    PowKK,
+    /// `R[A] := K[B] / K[C]`.
+    DivKK,
+    /// `R[A] := K[B] // K[C]`.
+    IDivKK,
+    /// `R[A] := K[B] & K[C]`.
+    BAndKK,
+    /// `R[A] := K[B] | K[C]`.
+    BOrKK,
+    /// `R[A] := K[B] ~ K[C]`.
+    BXorKK,
+    /// `R[A] := K[B] << K[C]`.
+    ShlKK,
+    /// `R[A] := K[B] >> K[C]`.
+    ShrKK,
+    /// `if ((R[A] < K[B]) ~= k) then pc++`; with `C` set the constant is
+    /// the left operand, `K[B] < R[A]`.
+    LtK,
+    /// `if ((R[A] <= K[B]) ~= k) then pc++`; `C` as for `LtK`.
+    LeK,
+    /// `if ((K[A] == K[B]) ~= k) then pc++`.
+    EqKK,
+    /// `if ((K[A] < K[B]) ~= k) then pc++`.
+    LtKK,
+    /// `if ((K[A] <= K[B]) ~= k) then pc++`.
+    LeKK,
 }

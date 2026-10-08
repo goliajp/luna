@@ -102,7 +102,7 @@ pub(super) fn plain_trace_end(
                 }
                 break;
             }
-            Op::ForLoop => {
+            Op::ForLoop | Op::ForLoop55 => {
                 if depth == 0 {
                     found = Some((i, TraceEnd::ForLoop));
                 } else {
@@ -115,7 +115,7 @@ pub(super) fn plain_trace_end(
             // tail emit branches on `record.ops[idx].inst.op()`
             // to pick the right side-exit predicate (count>0 vs
             // R[A+4] tag check).
-            Op::TForLoop => {
+            Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => {
                 if depth == 0 {
                     found = Some((i, TraceEnd::ForLoop));
                 } else {
@@ -349,6 +349,7 @@ pub(super) fn is_whitelisted_op(op: Op) -> bool {
             | Op::Len
             | Op::Call
             | Op::ForLoop
+            | Op::ForLoop55
             | Op::LoadI
             | Op::LoadF
             | Op::LoadK
@@ -409,6 +410,12 @@ pub(super) fn is_whitelisted_op(op: Op) -> bool {
             | Op::TForPrep
             | Op::TForCall
             | Op::TForLoop
+            | Op::TForPrep53
+            | Op::TForCall53
+            | Op::TForLoop53
+            | Op::TForPrep55
+            | Op::TForCall55
+            | Op::TForLoop55
             // Op::Concat A B does an N-operand
             // right-associative fold over `R[A..A+B-1]`, writing
             // the resulting string to R[A]. Trace emit spills the

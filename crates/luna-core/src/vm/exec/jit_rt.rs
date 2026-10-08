@@ -196,9 +196,12 @@ impl Vm {
         gc.as_ptr() as i64
     }
 
-    /// Trace JIT helper for `Op::TForCall A 0 C`.
+    /// Trace JIT helper for a generic `TForCall A 0 C` of any layout:
+    /// `nvars` packs C with the layout's registers (`ForLayout::pack_call`);
+    /// below, A+4 stands for the first variable and A+2 for the control
+    /// (5.4's layout).
     ///
-    /// Base path: copy R[A..=A+2] → R[A+4..=A+6] + `begin_call`.
+    /// Base path: copy R[A], R[A+1], R[A+2] → R[A+4..=A+6] + `begin_call`.
     /// ipairs `inext` fast path at the top — skip begin_call
     ///     when R[A]=Native(ipairs_iter), R[A+1]=Table no-mt,
     ///     R[A+2]=Int.
@@ -221,8 +224,11 @@ impl Vm {
         let Some(f) = self.jit_last_lua_frame() else {
             return -1;
         };
+        let (nvars, var, ctl) = crate::vm::isa::ForLayout::unpack_call(nvars);
+        let nvars = nvars as i32;
         let abs = f.base + slot_offset;
-        let need = (abs + 7) as usize;
+        let (first, control) = (abs + var, abs + ctl);
+        let need = (first + 3) as usize;
         if self.stack.len() < need {
             self.grow_stack_or_abort(need);
         }
@@ -231,19 +237,19 @@ impl Vm {
             && n.builtin == crate::runtime::Builtin::IpairsIter
             && let Value::Table(t) = self.stack[(abs + 1) as usize]
             && t.metatable().is_none()
-            && let Value::Int(i) = self.stack[(abs + 2) as usize]
+            && let Value::Int(i) = self.stack[control as usize]
         {
             let next_i = i.wrapping_add(1);
             let v = t.get_int(next_i);
             if v.is_nil() {
-                self.stack[(abs + 4) as usize] = Value::Nil;
+                self.stack[first as usize] = Value::Nil;
             } else {
-                self.stack[(abs + 4) as usize] = Value::Int(next_i);
+                self.stack[first as usize] = Value::Int(next_i);
                 if (nvars as usize) >= 2 {
-                    self.stack[(abs + 5) as usize] = v;
+                    self.stack[(first + 1) as usize] = v;
                 }
                 for j in 2..nvars as usize {
-                    let slot = abs + 4 + j as u32;
+                    let slot = first + j as u32;
                     if (slot as usize) < self.stack.len() {
                         self.stack[slot as usize] = Value::Nil;
                     }
@@ -257,9 +263,9 @@ impl Vm {
             // slow path: copy R[A..=A+2] → R[A+4..=A+6], then
             // route through begin_call. Lua-closure iters would push
             // a Lua frame mid-trace → deopt.
-            self.stack[(abs + 4) as usize] = self.stack[abs as usize];
-            self.stack[(abs + 5) as usize] = self.stack[(abs + 1) as usize];
-            self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
+            self.stack[(first + 2) as usize] = self.stack[control as usize];
+            self.stack[(first + 1) as usize] = self.stack[(abs + 1) as usize];
+            self.stack[first as usize] = self.stack[abs as usize];
             // the interpreter raises the call's error itself; and a native
             // that `begin_call` hands to the interpreter loop (pcall, xpcall,
             // pairs, an async native) pushes frames or parks a future
@@ -268,7 +274,7 @@ impl Vm {
                 Value::Native(nc) => nc.kind == NativeKind::Plain,
                 _ => false,
             };
-            if !runs_to_completion || self.begin_call(abs + 4, Some(2), nvars, false).is_err() {
+            if !runs_to_completion || self.begin_call(first, Some(2), nvars, false).is_err() {
                 self.jit.counters.deopt += 1;
                 return -1;
             }
@@ -278,12 +284,12 @@ impl Vm {
         // reload via cranelift `stack_load` instead of separate
         // `luna_jit_stack_load` helper calls.
         // SAFETY: every `RawVal` `unpack` returns has all 8 bytes initialised (`RawVal::NIL` for nil and booleans), so reading them as `zero` is defined
-        let ctrl_raw = unsafe { self.stack[(abs + 2) as usize].unpack().1.zero };
-        let (key_tag, key_rv) = self.stack[(abs + 4) as usize].unpack();
+        let ctrl_raw = unsafe { self.stack[control as usize].unpack().1.zero };
+        let (key_tag, key_rv) = self.stack[first as usize].unpack();
         // SAFETY: `key_rv` came from `unpack`, whose payload has all 8 bytes initialised
         let key_raw = unsafe { key_rv.zero };
         let (val_tag, val_raw) = if (nvars as usize) >= 2 {
-            let (tag, rv) = self.stack[(abs + 5) as usize].unpack();
+            let (tag, rv) = self.stack[(first + 1) as usize].unpack();
             // SAFETY: `rv` came from `unpack`, whose payload has all 8 bytes initialised
             (tag, unsafe { rv.zero })
         } else {

@@ -124,10 +124,10 @@ impl Vm {
         let p = &ts.lua(caller).closure.proto;
         match instr.op() {
             Op::Call | Op::TailCall => crate::vm::objname::getobjname_in(p, pc, instr.a(), v),
-            Op::TForCall if v == LuaVersion::Lua51 => {
+            op if op.is_tfor_call() && v == LuaVersion::Lua51 => {
                 crate::vm::objname::getobjname_in(p, pc, instr.a(), v)
             }
-            Op::TForCall => Some(("for iterator", "for iterator".to_string())),
+            op if op.is_tfor_call() => Some(("for iterator", "for iterator".to_string())),
             _ if v >= LuaVersion::Lua52 => {
                 instr_event(v, instr.source_op()).map(|e| ("metamethod", tm_name(v, e)))
             }
