@@ -150,8 +150,8 @@ macro_rules! fast_loop_arms {
                     // the control variable takes the new key first: a
                     // recording started below snapshots the registers
                     // as the body will see them
-                    // SAFETY: as above
                     if $d copy {
+                        // SAFETY: as above
                         unsafe { Value::copy_whole($regs.add(a as usize + 2), pc4) };
                     }
                     // the generic-for's back-edge, counted like a
