@@ -7,6 +7,7 @@ mod emit_basic;
 mod emit_calls;
 mod emit_entry;
 mod emit_for;
+mod emit_for_loop;
 mod emit_table_get;
 mod emit_table_set;
 mod entry;
