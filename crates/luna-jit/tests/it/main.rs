@@ -43,6 +43,7 @@ mod jit_code_reuse_icache;
 mod jit_compare_operand_kinds;
 mod jit_core_semantics;
 mod jit_dialect_audit;
+mod jit_dialect_layouts;
 mod jit_double_dialect_int_arith;
 mod jit_errno;
 mod jit_float_compare_nan;

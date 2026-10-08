@@ -212,6 +212,11 @@ fn register_form(
         return Some((Inst::iabc(op, a, l, r, false), one(k)));
     }
     match inst.op() {
+        // the register form compares any two kinds; a string stays `EqK`,
+        // which the lowerer compares itself
+        Op::EqK if !matches!(konst(b), Some(VConst::Str(_)) | None) => {
+            return Some((Inst::iabc(Op::Eq, a, virt, 0, inst.k()), one(konst(b))));
+        }
         // `C`: the constant is the left operand
         Op::LtK | Op::LeK => {
             let op = if inst.op() == Op::LtK { Op::Lt } else { Op::Le };
