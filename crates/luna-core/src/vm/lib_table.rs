@@ -144,7 +144,11 @@ fn obj_len(vm: &mut Vm, v: Value) -> Result<i64, LuaError> {
     if ver == V::Lua52 {
         return match n {
             Some(n) => Ok(i64::from(n.as_f64() as i64 as i32)),
-            None => Err(raise_str(vm, "object length is not a number")),
+            None => {
+                // `luaL_len` leaves the length pushed for the error
+                vm.native_push(1);
+                Err(raise_str(vm, "object length is not a number"))
+            }
         };
     }
     let n = match n {
@@ -152,7 +156,10 @@ fn obj_len(vm: &mut Vm, v: Value) -> Result<i64, LuaError> {
         Some(crate::numeric::Num::Float(f)) => crate::runtime::value::f2i_exact(f),
         None => None,
     };
-    n.ok_or_else(|| raise_str(vm, "object length is not an integer"))
+    n.ok_or_else(|| {
+        vm.native_push(1);
+        raise_str(vm, "object length is not an integer")
+    })
 }
 
 /// `aux_getn`: the table check, then the length.
@@ -177,12 +184,15 @@ fn tab_geti(vm: &mut Vm, tv: Value, i: i64) -> Result<Value, LuaError> {
 
 /// 5.3's `lua_geti` and `lua_seti` push the index as a key before they reach
 /// a metamethod, which then runs above it
-fn with_key_pushed<R>(vm: &mut Vm, f: impl FnOnce(&mut Vm) -> R) -> R {
+fn with_key_pushed<R>(
+    vm: &mut Vm,
+    f: impl FnOnce(&mut Vm) -> Result<R, LuaError>,
+) -> Result<R, LuaError> {
     let key = u32::from(vm.version() == V::Lua53);
     vm.native_push(key);
-    let r = f(vm);
+    let r = f(vm)?;
     vm.native_pop(key);
-    r
+    Ok(r)
 }
 
 /// `lua_geti` / `lua_rawgeti`: [`tab_geti`], the value left pushed.

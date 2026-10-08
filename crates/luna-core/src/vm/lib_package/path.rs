@@ -157,8 +157,7 @@ pub(super) fn find_file(
     name: &[u8],
     pname: &str,
 ) -> Result<Result<Vec<u8>, Vec<u8>>, LuaError> {
-    let k = Value::Str(vm.heap.intern(pname.as_bytes()));
-    let path = vm.index_value(Value::Table(pkg), k)?;
+    let path = vm.native_getfield(Value::Table(pkg), pname.as_bytes())?;
     let Some(path) = argcheck::to_str_bytes(vm, path) else {
         return Err(raise_str(
             vm,

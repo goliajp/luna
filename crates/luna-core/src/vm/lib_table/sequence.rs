@@ -1,6 +1,6 @@
 //! Sequence functions: insert, remove, concat, unpack, pack, move and create.
 
-use super::{TAB_R, TAB_RW, TAB_W, aux_getn, checktab, geti_push, obj_len, seti_pop};
+use super::{TAB_L, TAB_R, TAB_RW, TAB_W, aux_getn, checktab, geti_push, obj_len, seti_pop};
 use crate::runtime::{Gc, LuaStr, Value};
 use crate::version::LuaVersion as V;
 use crate::vm::argcheck::{self, Args};
@@ -216,7 +216,7 @@ pub(crate) fn t_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let (tv, n) = match ver {
         V::Lua53 | V::Lua54 | V::MacroLua => (a.get(vm, 0), None),
         _ => {
-            let tv = checktab(vm, a, 0, TAB_R)?;
+            let tv = checktab(vm, a, 0, TAB_R | TAB_L)?;
             if ver >= V::Lua55 {
                 let n = obj_len(vm, tv)?;
                 (tv, Some(n))

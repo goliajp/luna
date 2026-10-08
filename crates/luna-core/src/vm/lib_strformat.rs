@@ -179,6 +179,10 @@ fn item51(
         b's' => {
             let s = if v == LuaVersion::Lua51 {
                 argcheck::check_string(vm, a, arg)?.as_bytes().to_vec()
+            } else if v == LuaVersion::Lua52 {
+                let s = tolstring_52(vm, a.get(vm, arg))?;
+                vm.native_push(1);
+                s
             } else {
                 // `luaL_tolstring` leaves the string pushed until it is added
                 let s = vm.tostring_value(a.get(vm, arg))?;
@@ -221,6 +225,26 @@ fn item51(
 
 /// C's `(int)` conversion of a double on the reference platform: a
 /// saturating one, NaN to zero.
+/// 5.2's `luaL_tolstring` does not check what `__tostring` returns: a
+/// value that is not a string or a number formats as C's `%s` of a null
+/// pointer.
+fn tolstring_52(vm: &mut Vm, v: Value) -> Result<Vec<u8>, LuaError> {
+    let mm = vm.get_mm(v, crate::vm::exec::Mm::ToString);
+    if mm.is_nil() {
+        return vm.tostring_value(v);
+    }
+    match vm
+        .call_value(mm, &[v])?
+        .first()
+        .copied()
+        .unwrap_or(Value::Nil)
+    {
+        Value::Str(s) => Ok(s.as_bytes().to_vec()),
+        r @ (Value::Int(_) | Value::Float(_)) => Ok(vm.tostring_basic(r)),
+        _ => Ok(b"(null)".to_vec()),
+    }
+}
+
 fn c_int_cast(x: f64) -> i32 {
     x as i32
 }

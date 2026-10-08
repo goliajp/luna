@@ -42,6 +42,8 @@ pub(super) fn io_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // manual and every later version do.)
     let (u, toclose) = if a.is_none_or_nil(vm, 0) {
         let d = default_file(vm, Io::Input);
+        // the default input is fetched from the registry before the check
+        vm.native_push(1);
         if d.file().is_closed() {
             return Err(raise_str(vm, "attempt to use a closed file"));
         }
@@ -82,6 +84,13 @@ fn io_readline(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
         // the read's error message is raised
         ReadOut::Error(e) => {
             note_failure(&e);
+            // the line read so far is pushed, then 5.2+ `luaL_fileresult`'s
+            // nil, message and errno
+            vm.native_push(if vm.version() >= LuaVersion::Lua52 {
+                4
+            } else {
+                1
+            });
             return Err(raise_str(vm, &strerror(&e)));
         }
     };

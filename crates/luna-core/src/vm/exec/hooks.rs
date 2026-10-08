@@ -185,7 +185,10 @@ impl Vm {
         // carries `is_hook = true` so `getinfo(1).namewhat` reports "hook"
         // (PUC `CIST_HOOKED`).
         self.pending_is_hook = true;
-        let r = self.call_value_impl(hook, &[name, lv], from_native, None);
+        // `hookf` runs at the interrupted function's top (a Lua frame's
+        // whole window) and pushes its registry table before the hook
+        let at = self.native_top().unwrap_or_else(|| self.lua_window_end()) + 1;
+        let r = self.call_value_impl(hook, &[name, lv], from_native, Some(at));
         self.pending_is_hook = false;
         self.in_hook = false;
         self.trap = true;

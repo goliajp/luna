@@ -51,6 +51,8 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     };
     let (ar, activelines) = match level {
         None => {
+            // the options with '>' prepended stay pushed
+            vm.native_push(1);
             let ar = vm.function_ar(subject);
             let lines = activelines(vm, subject);
             (ar, lines)

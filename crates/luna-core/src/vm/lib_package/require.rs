@@ -103,8 +103,11 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     };
     let r = vm.call_value(loader, args)?;
     let res = r.first().copied().unwrap_or(Value::Nil);
+    // the result is pushed, and `lua_setfield` sets it from there
+    vm.native_push(1);
     if !res.is_nil() {
-        vm.newindex_value(Value::Table(loaded), name, res)?;
+        vm.native_setfield(Value::Table(loaded), name_s.as_bytes(), res)?;
+        vm.native_push(1);
     }
     let mut value = vm.index_value(Value::Table(loaded), name)?;
     let unset = if v == LuaVersion::Lua51 {

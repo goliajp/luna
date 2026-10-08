@@ -293,6 +293,8 @@ fn u_offset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // 5.5 also returns where the character ends
     if at(bytes, posi as usize) & 0x80 != 0 {
         if cont(posi) {
+            // the initial position is pushed before the end is sought
+            vm.native_push(1);
             return Err(raise_str(vm, "initial position is a continuation byte"));
         }
         while cont(posi + 1) {

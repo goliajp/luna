@@ -18,7 +18,11 @@ pub(crate) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let read = match c_str(&mode) {
         b"r" => true,
         b"w" => false,
-        _ if vm.version() >= LuaVersion::Lua53 => return Err(arg_error(vm, 2, "invalid mode")),
+        _ if vm.version() >= LuaVersion::Lua53 => {
+            // the new handle is pushed before the mode is checked
+            vm.native_push(1);
+            return Err(arg_error(vm, 2, "invalid mode"));
+        }
         _ => {
             let e = posix_error(EINVAL);
             return Ok(file_fail(vm, fs, Some(&prog), &e));

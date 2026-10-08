@@ -84,9 +84,10 @@ fn num_exact(n: crate::numeric::Num) -> Option<i64> {
     }
 }
 
+/// `setfield`: the value is pushed, then `lua_setfield` stores it.
 fn setfield(vm: &mut Vm, t: Gc<Table>, key: &str, v: Value) -> Result<(), LuaError> {
-    let k = Value::Str(vm.heap.intern(key.as_bytes()));
-    vm.newindex_value(Value::Table(t), k, v)
+    vm.native_push(1);
+    vm.native_setfield(Value::Table(t), key.as_bytes(), v)
 }
 
 /// `setallfields`: write a broken-down time into `t` in the dialect's
