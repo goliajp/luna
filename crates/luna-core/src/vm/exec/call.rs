@@ -417,7 +417,11 @@ impl Vm {
     fn lua_stack_overflow(&mut self, top: u32, need: u32) -> Result<(), LuaError> {
         if !self.stack_extra {
             self.stack_extra = true;
-            self.overflow_top = Some(top + u32::from(self.version() < LuaVersion::Lua54));
+            // before 5.4 `luaG_runerror` adds the position to the message
+            // of a Lua function, pushing it too; a C function (one whose
+            // message handler is being called on a full stack) gets none
+            let positioned = self.version() < LuaVersion::Lua54 && !self.native_on_top();
+            self.overflow_top = Some(top + u32::from(positioned));
             return Err(self.rt_err("stack overflow"));
         }
         if top + need >= self.g.lua_stack_limit + STACK_ERR_SPACE {
