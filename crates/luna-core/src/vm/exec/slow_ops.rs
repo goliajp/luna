@@ -87,7 +87,7 @@ impl Vm {
         if !matches!(func, Value::Closure(_) | Value::Native(_))
             && self.get_mm(func, Mm::Call).is_nil()
         {
-            return Err(self.call_err(func));
+            return Err(self.call_err_at(func, abs + 1 + nargs));
         }
         // PUC `luaD_pretailcall` resolves a chain of `__call`
         // metamethods *in place* before deciding whether to
@@ -109,7 +109,7 @@ impl Vm {
         while !matches!(func, Value::Closure(_) | Value::Native(_)) {
             let mm = self.get_mm(func, Mm::Call);
             if mm.is_nil() || self.call_mm_unusable(mm) {
-                return Err(self.call_err(func));
+                return Err(self.call_err_at(func, abs + 1 + nargs));
             }
             chain += 1;
             if chain > chain_cap {

@@ -23,11 +23,13 @@ use native_call::NativeKind;
 mod arith;
 mod call;
 mod call_fast;
+mod call_limits;
 mod close;
 mod compare;
 #[cfg(test)]
 mod cont_trap_tests;
 mod coro;
+mod coro_ctx;
 mod coro_resume;
 mod dispatch;
 mod errors;
@@ -41,6 +43,7 @@ mod frames_sync;
 use frames_sync::{frames_pop_known, frames_pop_sync, frames_push_sync};
 mod gc;
 mod hooks;
+mod hooks_exec;
 mod host_api;
 pub mod host_c;
 mod host_pcall;
@@ -48,6 +51,7 @@ mod host_rng;
 mod index;
 mod index_fast;
 mod index_miss;
+mod index_raw;
 mod index_set;
 mod jit_call;
 mod jit_rt;
@@ -58,12 +62,14 @@ mod meta;
 mod names;
 mod native_args;
 pub(crate) mod native_call;
+mod native_invoke;
 mod num;
 mod num_double;
 mod protected;
 mod settings;
 mod slow_ops;
 mod state;
+mod state_guards;
 mod strings;
 mod trace_adopt;
 mod trace_cache;
@@ -78,7 +84,7 @@ mod trace_start;
 mod trace_stats;
 mod trace_wire;
 mod unwind;
-use coro_resume::*;
+use coro_ctx::*;
 pub use errors::SpecialErrors;
 pub(crate) use hooks::HOOK_YIELD_SLOT;
 pub use hooks::{
@@ -90,8 +96,8 @@ pub(crate) use meta::Mm;
 use meta::*;
 use num::*;
 pub(crate) use num::{ArithOp, arith_num, c_fmod, str_to_num};
-pub(crate) use state::AsyncNativeCallCtx;
 pub use state::Vm;
+pub(crate) use state_guards::AsyncNativeCallCtx;
 use trace_cache::*;
 use trace_exit_decode::{ExitSource, keep_tfor_vars};
 use trace_wire::hold_side_trace;
@@ -145,13 +151,6 @@ fn lua_stack_limit(version: LuaVersion) -> u32 {
         _ => 1_000_000 - 1,
     }
 }
-/// PUC `LUAI_MAXSTACK` (`luaconf.h`): the cap library code consults via
-/// `lua_checkstack` to refuse multi-value pushes (`table.unpack` returning
-/// N values, `string.pack` results, etc.). 5.3 coroutine.lua :530 pins
-/// this at one million — `for j in {lim-10, …}` expects every j ≥ lim-10
-/// to fail because the few slots already consumed in the coroutine push
-/// the effective cap below lim-10.
-const PUC_MAXSTACK: i64 = 1_000_000;
 
 /// PUC 5.4+ default warnf state. The base library's `warn` function flips
 /// between `Off` and `On` via the `@on` / `@off` control messages; any other

@@ -476,6 +476,35 @@ optimization.
   to index a nil value (local 't')`) starts one slot higher in 5.3+, as
   in PUC, whose `varinfo` leaves the name on the stack; recursion inside
   such a handler now stops at PUC's depth.
+- A message handler run for an error a library function raises starts
+  where PUC's does: on top of what the C function had pushed by then
+  (an argument error's message and the global name found for it, a
+  `__name`, the key of a `lua_getfield` from 5.2, a buffer's placeholder
+  from 5.4, the metatable fields `checktab` tested, the values a hook,
+  `require`, `os.time` or `string.gsub` keep around a callback), and the
+  callbacks a library function makes (comparators, metamethods, loaders,
+  hooks) start at the function's own top. `xpcall(error, h)` with no
+  argument, `xpcall(setmetatable, h)`, `xpcall(string.rep, h)` and the
+  like placed the handler a slot off before. Measured against PUC for
+  every library function and error path of the five dialects.
+- `lua_checkstack` counted from how far the stack had ever grown instead
+  of from the live top, so a thread that had once held many values
+  refused `table.unpack` and `coroutine.resume` results it had room for.
+  From 5.4 a refused check leaves the stack at its error size until a
+  collection shrinks it, as PUC's does.
+- From 5.4, raising the string `not enough memory` through `error` with
+  no position (level 0) or from a library function (`f:read(-1)` when
+  the buffer cannot be allocated) is a memory error, as `lua_error`
+  makes it in PUC: the message handler does not run and the status is
+  `LUA_ERRMEM`.
+- A metamethod a Lua frame calls runs at the frame's window end, as in
+  PUC; on its return the stack is given back the length it had, not cut
+  to the window of the frame that called it.
+- A debug hook runs where PUC's `hookf` calls it: above the interrupted
+  function's whole window (or the open results of a call above it), and
+  for a library function's return event above the results being
+  returned. A return hook used to be placed over a native's results,
+  which `debug.getlocal` then read back wrong.
 - `a or b or c` (and an `and` chain) of plain values jumps from every
   test straight to the end, as PUC compiles it, instead of from test to
   test.

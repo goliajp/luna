@@ -62,6 +62,10 @@ pub(super) fn io_write(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
 pub(super) fn f_write(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let u = check_open(vm, a, 0)?;
+    // 5.2+ push the file, to be returned
+    if vm.version() >= LuaVersion::Lua52 {
+        vm.native_push(1);
+    }
     g_write(vm, fs, u, a, 1)
 }
 

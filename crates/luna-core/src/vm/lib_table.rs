@@ -96,17 +96,28 @@ fn checktab(vm: &mut Vm, a: Args, i: u32, what: u8) -> Result<Value, LuaError> {
         return Ok(v);
     }
     let ver = vm.version();
-    let ok = ver >= V::Lua53
-        && !a.is_none(i)
-        && vm.metatable_of(v).is_some()
-        && (what & TAB_R == 0 || !vm.get_mm(v, Mm::Index).is_nil())
-        && (what & TAB_W == 0 || !vm.get_mm(v, Mm::NewIndex).is_nil())
-        && (what & TAB_L == 0
-            || (ver >= V::Lua55 && matches!(v, Value::Str(_)))
-            || !vm.get_mm(v, Mm::Len).is_nil());
+    // the metatable and each field tested are pushed, and stay pushed for
+    // the error when one is missing
+    let mut pushed = 0;
+    let mut ok = ver >= V::Lua53 && !a.is_none(i) && vm.metatable_of(v).is_some();
+    if ok {
+        pushed = 1;
+        let len_free = ver >= V::Lua55 && matches!(v, Value::Str(_));
+        for (flag, mm) in [(TAB_R, Mm::Index), (TAB_W, Mm::NewIndex), (TAB_L, Mm::Len)] {
+            if what & flag == 0 || (flag == TAB_L && len_free) {
+                continue;
+            }
+            pushed += 1;
+            if vm.get_mm(v, mm).is_nil() {
+                ok = false;
+                break;
+            }
+        }
+    }
     if ok {
         Ok(v)
     } else {
+        vm.native_push(pushed);
         Err(argcheck::type_error(vm, a, i, "table"))
     }
 }
@@ -133,7 +144,11 @@ fn obj_len(vm: &mut Vm, v: Value) -> Result<i64, LuaError> {
     if ver == V::Lua52 {
         return match n {
             Some(n) => Ok(i64::from(n.as_f64() as i64 as i32)),
-            None => Err(raise_str(vm, "object length is not a number")),
+            None => {
+                // `luaL_len` leaves the length pushed for the error
+                vm.native_push(1);
+                Err(raise_str(vm, "object length is not a number"))
+            }
         };
     }
     let n = match n {
@@ -141,7 +156,10 @@ fn obj_len(vm: &mut Vm, v: Value) -> Result<i64, LuaError> {
         Some(crate::numeric::Num::Float(f)) => crate::runtime::value::f2i_exact(f),
         None => None,
     };
-    n.ok_or_else(|| raise_str(vm, "object length is not an integer"))
+    n.ok_or_else(|| {
+        vm.native_push(1);
+        raise_str(vm, "object length is not an integer")
+    })
 }
 
 /// `aux_getn`: the table check, then the length.
@@ -151,9 +169,16 @@ fn aux_getn(vm: &mut Vm, a: Args, what: u8) -> Result<(Value, i64), LuaError> {
     Ok((tv, n))
 }
 
+/// 5.3's `lua_geti` and `lua_seti` push the index as a key before they
+/// reach a metamethod, which then runs above it.
+fn key_slot(vm: &Vm) -> u32 {
+    u32::from(vm.version() == V::Lua53)
+}
+
 /// Element read: raw on ≤5.2 (`lua_rawgeti`), through `__index` on 5.3+
-/// (`lua_geti`).
-fn tab_geti(vm: &mut Vm, tv: Value, i: i64) -> Result<Value, LuaError> {
+/// (`lua_geti`). `before`: the values the native has pushed by now, which
+/// an `__index` runs above and an error counts.
+fn tab_geti(vm: &mut Vm, tv: Value, i: i64, before: u32) -> Result<Value, LuaError> {
     if vm.version() <= V::Lua52 {
         // checktab already guaranteed a real table on these dialects.
         return Ok(match tv {
@@ -161,12 +186,15 @@ fn tab_geti(vm: &mut Vm, tv: Value, i: i64) -> Result<Value, LuaError> {
             _ => Value::Nil,
         });
     }
-    vm.index_value(tv, Value::Int(i))
+    let extra = before + key_slot(vm);
+    vm.index_value_pushed(tv, Value::Int(i), extra)
 }
 
 /// Element write: raw on ≤5.2 (`lua_rawseti`), through `__newindex` on
-/// 5.3+ (`lua_seti`).
-fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value) -> Result<(), LuaError> {
+/// 5.3+ (`lua_seti`). `before`: the values the native has pushed by now,
+/// the value itself among them when a read pushed it (an argument is
+/// not pushed again).
+fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value, before: u32) -> Result<(), LuaError> {
     if vm.version() <= V::Lua52 {
         if let Value::Table(t) = tv {
             // SAFETY: `t` is the table argument, kept alive by its stack slot; no reference into it is live across the `set`, which does not collect
@@ -180,5 +208,6 @@ fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value) -> Result<(), LuaError> {
         }
         return Ok(());
     }
-    vm.newindex_value(tv, Value::Int(i), v)
+    let extra = before + key_slot(vm);
+    vm.newindex_value_pushed(tv, Value::Int(i), v, extra)
 }

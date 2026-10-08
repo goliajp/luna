@@ -242,10 +242,18 @@ fn s_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let v = vm.version();
     let mut out = Vec::with_capacity(nargs as usize);
     for i in 0..nargs {
-        let c = if v <= LuaVersion::Lua52 {
-            i64::from(argcheck::check_int(vm, a, i)?)
+        let c = match if v <= LuaVersion::Lua52 {
+            argcheck::check_int(vm, a, i).map(i64::from)
         } else {
-            argcheck::check_integer(vm, a, i)?
+            argcheck::check_integer(vm, a, i)
+        } {
+            Ok(c) => c,
+            Err(e) => {
+                // `luaL_buffinitsize` sized the buffer to the arguments
+                let buf = vm.buffer_slot(nargs as usize);
+                vm.native_push(buf);
+                return Err(e);
+            }
         };
         if !(0..=255).contains(&c) {
             let msg = if v == LuaVersion::Lua51 {
@@ -253,6 +261,8 @@ fn s_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             } else {
                 "value out of range"
             };
+            let buf = vm.buffer_slot(nargs as usize);
+            vm.native_push(buf);
             return Err(arg_error(vm, i + 1, msg));
         }
         out.push(c as u8);

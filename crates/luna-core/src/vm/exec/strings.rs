@@ -104,18 +104,35 @@ impl Vm {
     /// number, rendered), else the basic rendering, where 5.3+ names a value
     /// by a string `__name` metafield.
     pub fn tostring_value(&mut self, v: Value) -> Result<Vec<u8>, LuaError> {
+        self.tostring_value_pushed(v, 0)
+    }
+
+    /// [`Vm::tostring_value`] from a native with `extra` values pushed
+    /// where PUC's C function would have them: a `__tostring` it calls
+    /// runs above them. Nothing is counted when there is none.
+    pub(crate) fn tostring_value_pushed(
+        &mut self,
+        v: Value,
+        extra: u32,
+    ) -> Result<Vec<u8>, LuaError> {
         let mm = self.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
             // `luaL_callmeta` is a plain `lua_call`: `__tostring` cannot yield.
+            self.native_push(extra);
             let r = self.call_value(mm, &[v])?;
+            self.native_pop(extra);
             return match r.first().copied().unwrap_or(Value::Nil) {
                 Value::Str(s) => Ok(s.as_bytes().to_vec()),
                 r @ (Value::Int(_) | Value::Float(_)) => Ok(self.tostring_basic(r)),
-                // luaL_error: positioned at whatever called the library function
-                _ => Err(crate::vm::builtins::raise_str(
-                    self,
-                    "'__tostring' must return a string",
-                )),
+                // luaL_error over the result: positioned at whatever called
+                // the library function
+                _ => {
+                    self.native_push_if_native(1);
+                    Err(crate::vm::builtins::raise_str(
+                        self,
+                        "'__tostring' must return a string",
+                    ))
+                }
             };
         }
         if self.version >= LuaVersion::Lua53

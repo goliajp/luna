@@ -138,6 +138,9 @@ pub(crate) fn nat_loadfile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
 pub(super) fn nat_dofile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     use crate::vm::argcheck::{self, Args};
     let name = argcheck::opt_string(vm, Args::new(fs, nargs), 0)?;
+    if vm.version() >= crate::version::LuaVersion::Lua52 {
+        vm.native_settop(1);
+    }
     match load_path(vm, name.as_ref().map(|n| n.as_bytes()), None) {
         Ok(f) => {
             let results = if vm.version() >= crate::version::LuaVersion::Lua52 {
@@ -147,6 +150,10 @@ pub(super) fn nat_dofile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             };
             Ok(vm.nat_return(fs, &results))
         }
-        Err(msg) => Err(LuaError(msg)),
+        Err(msg) => {
+            // the message `luaL_loadfile` pushed
+            vm.native_push(1);
+            Err(LuaError(msg))
+        }
     }
 }

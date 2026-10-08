@@ -18,15 +18,15 @@ pub(super) fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
     let name = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
     let preload = if v == LuaVersion::Lua51 {
         let pkg = upval_table(vm, fs, 0);
-        let k = Value::Str(vm.heap.intern(b"preload"));
-        match vm.index_value(Value::Table(pkg), k)? {
+        match vm.native_getfield(Value::Table(pkg), b"preload")? {
             Value::Table(t) => t,
             _ => return Err(raise_str(vm, "'package.preload' must be a table")),
         }
     } else {
+        vm.native_push(1);
         registry_table(vm, "_PRELOAD")?
     };
-    let loader = vm.index_value(Value::Table(preload), Value::Str(name))?;
+    let loader = vm.native_getfield(Value::Table(preload), name.as_bytes())?;
     if loader.is_nil() {
         let lead = if v >= LuaVersion::Lua54 { "" } else { "\n\t" };
         let msg = format!(
