@@ -15,14 +15,15 @@ macro_rules! fast_arm_helper_macros {
             ($d aop:ident, int($d ia:ident, $d ib:ident) => $d iv:expr, float($d fa:ident, $d fb:ident) => $d fv:expr) => {{
                 if arith_arm!($regs, $inst, $regs.wrapping_add($inst.b() as usize), $regs.wrapping_add($inst.c() as usize),
                     int($d ia, $d ib) => $d iv, float($d fa, $d fb) => $d fv,
-                    slow(l, r) => { save!(); $vm.arith_slow($inst.a(), base!(), ArithOp::$d aop, l, r, $inst.k()) })
+                    slow(l, r) => { save!(); $vm.arith_slow($inst.a(), base!(), ArithOp::$d aop, l, r) })
                 {
                     next!()
                 }
                 resume_same!()
             }};
         }
-        // `R[A] := R[B] op K[C]`; `k`: the constant was on the left
+        // `R[A] := R[B] op K[C]` of a commutative operator; `k`: the
+        // constant was on the left, which only the metamethod sees
         macro_rules! arith_rk {
             ($d aop:ident, int($d ia:ident, $d ib:ident) => $d iv:expr, float($d fa:ident, $d fb:ident) => $d fv:expr) => {{
                 if arith_arm!($regs, $inst, $regs.wrapping_add($inst.b() as usize), $kptr.wrapping_add($inst.c() as usize),
@@ -30,11 +31,35 @@ macro_rules! fast_arm_helper_macros {
                     slow(x, c) => {
                         save!();
                         let (l, r) = if $inst.k() { (c, x) } else { (x, c) };
-                        $vm.arith_slow($inst.a(), base!(), ArithOp::$d aop, l, r, false)
+                        $vm.arith_slow($inst.a(), base!(), ArithOp::$d aop, l, r)
                     })
                 {
                     next!()
                 }
+                resume_same!()
+            }};
+        }
+        // `R[A] := R[B] op K[C]`, or `K[C] op R[B]` with `k` set
+        macro_rules! arith_rk_ordered {
+            ($d aop:ident, int($d ia:ident, $d ib:ident) => $d iv:expr, float($d fa:ident, $d fb:ident) => $d fv:expr) => {{
+                let (pb, pk): (*const Value, *const Value) = ($regs.wrapping_add($inst.b() as usize), $kptr.wrapping_add($inst.c() as usize));
+                let (pl, pr) = if $inst.k() { (pk, pb) } else { (pb, pk) };
+                if arith_arm!($regs, $inst, pl, pr,
+                    int($d ia, $d ib) => $d iv, float($d fa, $d fb) => $d fv,
+                    slow(l, r) => { save!(); $vm.arith_slow($inst.a(), base!(), ArithOp::$d aop, l, r) })
+                {
+                    next!()
+                }
+                resume_same!()
+            }};
+        }
+        // `R[A] := K[B] op K[C]`
+        macro_rules! arith_kk {
+            ($d aop:ident) => {{
+                // SAFETY: constants of the running frame
+                let (l, r) = unsafe { (*$kptr.add($inst.b() as usize), *$kptr.add($inst.c() as usize)) };
+                save!();
+                $vm.arith_slow($inst.a(), base!(), ArithOp::$d aop, l, r)?;
                 resume_same!()
             }};
         }
@@ -46,7 +71,7 @@ macro_rules! fast_arm_helper_macros {
                     slow(x, c) => {
                         save!();
                         let (l, r) = if $inst.k() { (c, x) } else { (x, c) };
-                        $vm.arith_slow($inst.a(), base!(), ArithOp::$d aop, l, r, false)
+                        $vm.arith_slow($inst.a(), base!(), ArithOp::$d aop, l, r)
                     })
                 {
                     next!()
@@ -116,12 +141,12 @@ macro_rules! fast_arm_helper_macros {
         // floats here, the rest (mixed numbers, strings, `__lt` / `__le`)
         // by `less_step`
         macro_rules! order_arm {
-            ($d op:tt, $d or_eq:expr) => {{
-                let (pl, pr) = (
-                    $regs.wrapping_add($inst.a() as usize),
-                    $regs.wrapping_add($inst.b() as usize),
-                );
-                // SAFETY: registers of the running frame, so initialised
+            ($d op:tt, $d or_eq:expr) => {
+                order_arm!($d op, $d or_eq, $regs.wrapping_add($inst.a() as usize), $regs.wrapping_add($inst.b() as usize))
+            };
+            ($d op:tt, $d or_eq:expr, $d pl:expr, $d pr:expr) => {{
+                let (pl, pr): (*const Value, *const Value) = ($d pl, $d pr);
+                // SAFETY: registers or constants of the running frame, so initialised
                 // values; a payload is read as the type its tag names
                 let res = unsafe {
                     let (tl, tr) = (raw_tag(pl), raw_tag(pr));

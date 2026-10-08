@@ -1,7 +1,9 @@
 //! `string.dump` writes the code PUC's own compiler makes for constant
-//! expressions: PUC's `luac -l -l` lists luna's dump of a chunk exactly as
-//! it lists the chunk compiled from source (instructions, constants,
-//! locals and upvalues; addresses aside).
+//! expressions, constant operands, stores and loops: PUC's `luac -l -l`
+//! lists luna's dump of a chunk exactly as it lists the chunk compiled
+//! from source (instructions, constants, locals and upvalues; addresses
+//! aside). The writer writes luna's registers as they are, and the frame
+//! of every function, read off luna's own prototypes, is PUC's.
 //!
 //! Each case is a table constructor holding a constant expression, which
 //! PUC's parser folds to a number (`2^53`, `7 // 2`, `~5.0`) or leaves to
@@ -78,6 +80,41 @@ const STORES: &[&str] = &[
     "global x, y = 1, 2\nglobal function gf() end\nreturn x\n",
     "local t = {}\nreturn function(k)\n  t[k], k = 1, 2\n  t[true] = t[k]\n  t[-1], t[2^53] = t[0.5], t['k']\n\
      t[k + 1] = t[k] or t[1] or t[2]\nend\n",
+];
+
+/// `for` loops of both kinds: their hidden control registers, the loop
+/// variables after them, captured loop and body variables, nesting, and
+/// generic loops of one to five variables.
+const LOOPS: &[&str] = &[
+    "local t = {}\nfor k, v in pairs(t) do print(k, v) end\nfor i = 1, 10 do print(i) end\n\
+     for i = 1, 10, 2 do local x = i * 2; print(x) end\nfor i = 10.5, 1, -0.5 do print(i) end\n",
+    "local t, fs = {}, {}\nfor i = 1, 3 do fs[i] = function() return i end end\n\
+     for k, v in pairs(t) do fs[k] = function() return v end end\n\
+     for k, v in pairs(t) do local w = v; fs[k] = function() return w end end\n\
+     for i = 3, 1, -1 do local y = i; fs[y] = function() return y end end\nreturn fs\n",
+    "local function f(t)\n  for a, b, c in ipairs(t) do\n    for i = 1, #t do\n\
+           if t[i] == a then return b end\n    end\n  end\n  return nil\nend\nreturn f\n",
+    "for k in next, {} do end\nfor i = 1, 2 do end\nlocal s = 0\n\
+     for _, v in ipairs({1, 2, 3}) do s = s + v end\nreturn s\n",
+    "local function g(...)\n  local n = 0\n  for i = 1, select('#', ...) do n = n + (select(i, ...)) end\n\
+       for k, v, w, x, y in pairs({...}) do n = n + v end\n  return n\nend\nreturn g\n",
+    "local t = {}\nfor i = 1, 3 do\n  for j = i, 3 do\n    for k, v in pairs(t) do\n\
+           t[i + j] = k\n    end\n  end\nend\nreturn t\n",
+];
+
+/// Constant operands of the operators: before 5.4 any constant on either
+/// side (or both) is an `RK` operand, from 5.4 on the immediate and `K`
+/// forms take numbers and `EQK` any constant.
+const OPERANDS: &[&str] = &[
+    "local x, y = ...\nlocal a = '1' + x\nlocal b = x + '1'\nlocal c = 1 - x\nlocal d = 2 ^ x\n\
+     local e = 5 % x\nlocal f = x < 1e300\nlocal g = 'a' <= x\nlocal h = x == nil\n\
+     local i = nil == x\nlocal j = x + nil\nlocal k = true < x\nlocal l = 1 / 0\nlocal m = 0 / 0\n\
+     local n = 1 < 2\nlocal o = nil == false\nlocal p = x > 'b'\nlocal q = 3 >= x\nlocal r = x ~= true\n\
+     local s = 2 * 0.0\nif x == 'k' then return 1 end\nif 'k' ~= x then return 2 end\n\
+     if 1.5 <= x then return 3 end\nreturn a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s\n",
+    "local x, y = ...\nlocal a = x // 2.5\nlocal b = 7 // x\nlocal c = x & 1.5\nlocal d = 1 << x\n\
+     local e = x >> 100000\nlocal f = '3' | x\nlocal g = x ~ 'a'\nlocal h = 1 // 0\nlocal i = 3 & 1.5\n\
+     local j = 1 % 0\nlocal k = x - 0\nlocal l = -1 >> x\nreturn a, b, c, d, e, f, g, h, i, j, k, l\n",
 ];
 
 /// A chunk with more constants than an `RK` operand reaches, then stores
@@ -171,6 +208,35 @@ fn compare(version: LuaVersion, luac: &str, source: &str) -> Option<String> {
     }
 }
 
+/// The frame size of each function luna compiles from `source`, read off
+/// the prototypes themselves rather than through `string.dump`, against
+/// the `slots` of PUC's listing (functions in the same order). `None` when
+/// they agree or PUC cannot parse the chunk.
+fn frames(version: LuaVersion, luac: &str, source: &str) -> Option<String> {
+    let src = temp_path("frames.lua");
+    std::fs::write(&src, source).expect("write source");
+    let puc = listing(luac, &src, true);
+    let _ = std::fs::remove_file(&src); // a leftover temp file is harmless
+    let puc = puc?;
+    let parts: Vec<&str> = puc.split(" slots").collect();
+    // the count before each " slots"; the text after the last one has none
+    let puc: Vec<u32> = parts[..parts.len() - 1]
+        .iter()
+        .filter_map(|s| s.rsplit(' ').next()?.parse().ok())
+        .collect();
+    let mut vm = Vm::new(version);
+    let f = vm
+        .load(source.as_bytes(), b"=frames")
+        .expect("luna compiles it");
+    let mut luna = Vec::new();
+    let mut stack = vec![f.proto];
+    while let Some(p) = stack.pop() {
+        luna.push(u32::from(p.max_stack));
+        stack.extend(p.protos.iter().rev().copied());
+    }
+    (puc != luna).then(|| format!("{version:?} {source:?}\nslots: PUC {puc:?}, luna {luna:?}"))
+}
+
 #[test]
 fn constant_expressions_compile_as_puc_compiles_them() {
     let mut failed = Vec::new();
@@ -189,8 +255,12 @@ fn constant_expressions_compile_as_puc_compiles_them() {
             .chain([TABLE.to_string()])
             .chain(DEDUP.iter().map(|s| s.to_string()))
             .chain(STORES.iter().map(|s| s.to_string()))
+            .chain(LOOPS.iter().map(|s| s.to_string()))
+            .chain(OPERANDS.iter().map(|s| s.to_string()))
             .chain([many_constants()]);
-        failed.extend(cases.filter_map(|src| compare(version, &luac, &src)));
+        failed.extend(cases.filter_map(|src| {
+            compare(version, &luac, &src).or_else(|| frames(version, &luac, &src))
+        }));
     }
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }

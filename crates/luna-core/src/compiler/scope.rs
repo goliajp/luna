@@ -26,6 +26,7 @@ impl<'a> Compiler<'a> {
             has_tbc: false,
             tbc_scope: false,
             body_end: None,
+            for_loop: false,
             end_line: None,
         });
     }
@@ -39,6 +40,15 @@ impl<'a> Compiler<'a> {
     pub(super) fn leave_block_with(&mut self, close: bool) -> Result<(), SyntaxError> {
         let b = self.l().blocks.pop().expect("block underflow");
         let captured = self.lr().locals[b.first_local..].iter().any(|l| l.captured);
+        // a `for` loop's variables were closed on each pass
+        let open_until = match b.body_end {
+            Some((first, _)) if b.for_loop => first,
+            _ => usize::MAX,
+        };
+        let captured_here = self.lr().locals[b.first_local..]
+            .iter()
+            .enumerate()
+            .any(|(i, l)| l.captured && b.first_local + i < open_until);
         // Where the block's CLOSE falls against its locals' `end_pc` is
         // visible to a `__close` handler reading the frame with
         // `debug.getlocal` (`getlocalname` tests `pc < end_pc`). 5.4's
@@ -72,11 +82,11 @@ impl<'a> Compiler<'a> {
                 self.patch_to_here(pc)?;
             }
         }
-        if close && (captured || b.has_tbc || break_close) {
+        if close && (captured_here || b.has_tbc || break_close) {
             self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
         }
         // record debug LocVar entries for the locals leaving scope here
-        let end_pc = if v54 {
+        let end_pc = if self.vars_end_before_close() {
             before_close
         } else {
             self.lr().code.len() as u32

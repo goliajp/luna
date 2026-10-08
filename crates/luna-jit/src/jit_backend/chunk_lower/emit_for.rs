@@ -22,7 +22,10 @@ pub(super) fn emit_for_prep(
         ..
     } = st;
     match ins.op() {
-        Op::ForPrep => {
+        Op::ForPrep | Op::ForPrep55 => {
+            let r = ForRegs::of(ins);
+            // 5.5 loops count down whatever the dialect
+            let pre53 = pre53 && ins.op() == Op::ForPrep;
             let &(_, loop_pc, step_imm) = for_loops
                 .iter()
                 .find(|&&(p, _, _)| p == pc)
@@ -77,14 +80,13 @@ pub(super) fn emit_for_prep(
                     let abs_step = bcx.ins().iconst(types::I64, step_imm.unsigned_abs() as i64);
                     let count = bcx.ins().udiv(span, abs_step);
 
-                    aligned_def(bcx, regs, reg_kinds, a, init);
-                    aligned_def(bcx, regs, reg_kinds, a + 1, count);
-                    aligned_def(bcx, regs, reg_kinds, a + 2, step_i);
-                    aligned_def(bcx, regs, reg_kinds, a + 3, init);
-                    current_kinds[a] = RegKind::Int;
-                    current_kinds[a + 1] = RegKind::Int;
-                    current_kinds[a + 2] = RegKind::Int;
-                    current_kinds[a + 3] = RegKind::Int;
+                    aligned_def(bcx, regs, reg_kinds, r.x, count);
+                    aligned_def(bcx, regs, reg_kinds, r.step, step_i);
+                    aligned_def(bcx, regs, reg_kinds, r.idx, init);
+                    aligned_def(bcx, regs, reg_kinds, r.var, init);
+                    for reg in [r.idx, r.x, r.step, r.var] {
+                        current_kinds[reg] = RegKind::Int;
+                    }
 
                     let body_blk = pc_to_block[pc + 1].expect("body BB start");
                     let exit_blk = pc_to_block[loop_pc + 1].expect("exit BB start");
@@ -138,15 +140,20 @@ pub(super) fn emit_for_prep(
 
                     bcx.switch_to_block(set_blk);
                     bcx.seal_block(set_blk);
-                    aligned_def(bcx, regs, reg_kinds, a, init);
-                    aligned_def(bcx, regs, reg_kinds, a + 1, limit);
-                    aligned_def(bcx, regs, reg_kinds, a + 2, step_i);
-                    aligned_def(bcx, regs, reg_kinds, a + 3, init);
-                    current_kinds[a] = RegKind::Float;
-                    current_kinds[a + 1] = RegKind::Float;
-                    current_kinds[a + 2] = RegKind::Int;
-                    current_kinds[a + 3] = RegKind::Float;
-                    let _ = step_f;
+                    // 5.5 keeps a float step in the limit's register
+                    let (step, step_kind) = if r.var == r.idx {
+                        (step_f, RegKind::Float)
+                    } else {
+                        (step_i, RegKind::Int)
+                    };
+                    aligned_def(bcx, regs, reg_kinds, r.x, limit);
+                    aligned_def(bcx, regs, reg_kinds, r.step, step);
+                    aligned_def(bcx, regs, reg_kinds, r.idx, init);
+                    aligned_def(bcx, regs, reg_kinds, r.var, init);
+                    current_kinds[r.idx] = RegKind::Float;
+                    current_kinds[r.x] = RegKind::Float;
+                    current_kinds[r.step] = step_kind;
+                    current_kinds[r.var] = RegKind::Float;
                     let body_blk = pc_to_block[pc + 1].expect("body BB start");
                     bcx.ins().jump(body_blk, &[]);
                 }
@@ -178,7 +185,9 @@ pub(super) fn emit_for_loop(
         ..
     } = st;
     match ins.op() {
-        Op::ForLoop => {
+        Op::ForLoop | Op::ForLoop55 => {
+            let r = ForRegs::of(ins);
+            let pre53 = pre53 && ins.op() == Op::ForLoop;
             let prep_pc = for_loops
                 .iter()
                 .find(|&&(_, lp, _)| lp == pc)
@@ -197,10 +206,10 @@ pub(super) fn emit_for_loop(
                 // next = R[A] + step; cont = next ≤ limit (positive)
                 // / next ≥ limit (negative). On continue → R[A] =
                 // next, R[A+3] = next, back-jump to body.
-                let cur = bcx.use_var(regs[a]);
+                let cur = bcx.use_var(regs[r.idx]);
                 let step_f = bcx.ins().f64const(step_imm as f64);
                 let next = bcx.ins().fadd(cur, step_f);
-                let limit = bcx.use_var(regs[a + 1]);
+                let limit = bcx.use_var(regs[r.x]);
                 let cont = if step_imm > 0 {
                     bcx.ins().fcmp(FloatCC::LessThanOrEqual, next, limit)
                 } else {
@@ -214,10 +223,10 @@ pub(super) fn emit_for_loop(
 
                 bcx.switch_to_block(continue_blk);
                 bcx.seal_block(continue_blk);
-                aligned_def(bcx, regs, reg_kinds, a, next);
-                aligned_def(bcx, regs, reg_kinds, a + 3, next);
-                current_kinds[a] = RegKind::Float;
-                current_kinds[a + 3] = RegKind::Float;
+                aligned_def(bcx, regs, reg_kinds, r.idx, next);
+                aligned_def(bcx, regs, reg_kinds, r.var, next);
+                current_kinds[r.idx] = RegKind::Float;
+                current_kinds[r.var] = RegKind::Float;
                 bcx.ins().jump(body_blk, &[]);
             } else if pre53 {
                 // pre-5.3 Int form. R[A] += step; check vs
@@ -247,7 +256,7 @@ pub(super) fn emit_for_loop(
                 bcx.ins().jump(body_blk, &[]);
             } else {
                 // 5.4+ Int count form.
-                let count = bcx.use_var(regs[a + 1]);
+                let count = bcx.use_var(regs[r.x]);
                 let zero_i = bcx.ins().iconst(types::I64, 0);
                 // unsigned count (see ForPrep)
                 let cont = bcx.ins().icmp(IntCC::NotEqual, count, zero_i);
@@ -260,17 +269,17 @@ pub(super) fn emit_for_loop(
 
                 bcx.switch_to_block(continue_blk);
                 bcx.seal_block(continue_blk);
-                let cur = bcx.use_var(regs[a]);
+                let cur = bcx.use_var(regs[r.idx]);
                 let step_v = bcx.ins().iconst(types::I64, step_imm);
                 let next = bcx.ins().iadd(cur, step_v);
                 let one = bcx.ins().iconst(types::I64, 1);
                 let new_count = bcx.ins().isub(count, one);
-                aligned_def(bcx, regs, reg_kinds, a, next);
-                aligned_def(bcx, regs, reg_kinds, a + 1, new_count);
-                aligned_def(bcx, regs, reg_kinds, a + 3, next);
-                current_kinds[a] = RegKind::Int;
-                current_kinds[a + 1] = RegKind::Int;
-                current_kinds[a + 3] = RegKind::Int;
+                aligned_def(bcx, regs, reg_kinds, r.idx, next);
+                aligned_def(bcx, regs, reg_kinds, r.x, new_count);
+                aligned_def(bcx, regs, reg_kinds, r.var, next);
+                current_kinds[r.idx] = RegKind::Int;
+                current_kinds[r.x] = RegKind::Int;
+                current_kinds[r.var] = RegKind::Int;
                 bcx.ins().jump(body_blk, &[]);
             }
         }

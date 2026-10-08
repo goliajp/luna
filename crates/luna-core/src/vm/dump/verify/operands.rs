@@ -64,6 +64,7 @@ impl Checker<'_> {
     pub(super) fn check_operands(&self, pc: usize) -> Result<(), String> {
         let i = self.inst(pc);
         let (a, b, c) = (i.a(), i.b(), i.c());
+        let var = i.op().for_layout().map_or(0, |l| l.var());
         match self.ops[pc] {
             Op::Move | Op::Unm | Op::BNot | Op::Not | Op::Len | Op::GetI | Op::TestSet => {
                 self.reg(pc, a)?;
@@ -200,10 +201,32 @@ impl Checker<'_> {
             | Op::IDivK
             | Op::BAndK
             | Op::BOrK
-            | Op::BXorK => {
+            | Op::BXorK
+            | Op::ShlK
+            | Op::ShrK => {
                 self.reg(pc, a)?;
                 self.reg(pc, b)?;
                 self.konst(pc, c)
+            }
+            Op::AddKK
+            | Op::SubKK
+            | Op::MulKK
+            | Op::ModKK
+            | Op::PowKK
+            | Op::DivKK
+            | Op::IDivKK
+            | Op::BAndKK
+            | Op::BOrKK
+            | Op::BXorKK
+            | Op::ShlKK
+            | Op::ShrKK => {
+                self.reg(pc, a)?;
+                self.konst(pc, b)?;
+                self.konst(pc, c)
+            }
+            Op::EqKK | Op::LtKK | Op::LeKK => {
+                self.konst(pc, a)?;
+                self.konst(pc, b)
             }
             Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI => self.reg(pc, a),
             Op::Concat => {
@@ -220,7 +243,7 @@ impl Checker<'_> {
                 self.reg(pc, a)?;
                 self.reg(pc, b)
             }
-            Op::EqK => {
+            Op::EqK | Op::LtK | Op::LeK => {
                 self.reg(pc, a)?;
                 self.konst(pc, b)
             }
@@ -239,17 +262,18 @@ impl Checker<'_> {
                     self.regs(pc, a, b - 1)
                 }
             }
-            // four hidden slots A..A+3
-            Op::ForPrep | Op::ForLoop => self.regs(pc, a, 4),
-            // A..A+3 hidden, loop variables from A+4
-            Op::TForPrep => self.regs(pc, a, 4),
-            Op::TForCall => {
+            // the hidden slots and the first loop variable
+            Op::ForPrep | Op::ForLoop | Op::ForPrep55 | Op::ForLoop55 => self.regs(pc, a, var + 1),
+            Op::TForPrep | Op::TForPrep53 | Op::TForPrep55 => self.regs(pc, a, var),
+            // the call runs on three copies at the first variable, which
+            // its results replace
+            Op::TForCall | Op::TForCall53 | Op::TForCall55 => {
                 if c == 0 {
                     return Err(self.err(pc, "no loop variables".to_string()));
                 }
-                self.regs(pc, a, 4 + c)
+                self.regs(pc, a, var + c.max(3))
             }
-            Op::TForLoop => self.regs(pc, a, 5),
+            Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => self.regs(pc, a, var + 1),
             Op::Closure => {
                 self.reg(pc, a)?;
                 let n = self.p.protos.len();

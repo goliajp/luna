@@ -8,10 +8,9 @@
 //! result is serialised as that version's `ldump.c` would ([`format`]).
 //!
 //! PUC dumps no register for a local: `getlocalname` takes the n-th local
-//! active at a pc to live in register n-1. luna's frame follows PUC's
-//! register discipline, and where its layout differs (the hidden slots of
-//! `for` loops, 5.5's vararg parameter) the encoders renumber registers so
-//! that the rule holds for the written code.
+//! active at a pc to live in register n-1. luna's compiler gives every
+//! value the register PUC's gives it, so the encoders write registers as
+//! they are, and the locals in the order of the pcs they start at.
 //!
 //! A function luna cannot express in the dialect's instruction set is
 //! refused (`Err`) rather than approximated.
@@ -27,7 +26,7 @@ mod modern_const;
 mod modern_flow;
 mod proto_parts;
 
-use self::asm::{Asm, Res, loop_windows};
+use self::asm::{Asm, Res};
 use self::proto_parts::{check_skips, consts_for, needs_close, vararg_byte};
 use super::puc::{puc_52, puc_53, puc_54, puc_55};
 use crate::compiler::const_map::const_map_of;
@@ -118,19 +117,10 @@ pub(crate) fn dump_blocks(
 }
 
 /// `caps`: the upvalue descriptors the parent's `Closure` site gave this
-/// function after renumbering its registers (`None` for the main function).
+/// function (`None` for the main function).
 fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
     let np = p.num_params as u32;
-    let windows = match d {
-        Dialect::V54 => Vec::new(),
-        Dialect::V55 => loop_windows(p, 3, Some(3))?,
-        _ => loop_windows(p, 4, None)?,
-    };
-    let mut frame = p.max_stack as u32;
-    if d == Dialect::V55 && p.is_vararg {
-        frame = frame.max(np + 1);
-    }
-    let mut asm = Asm::new(p, d.name(), windows, frame);
+    let mut asm = Asm::new(p, d.name());
     // 5.1 / 5.2 have one number type: the constants the encoder adds meet
     // luna's as the floats these become
     if d <= Dialect::V52 {
@@ -171,11 +161,6 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
         };
         classic::encode(&mut asm, &f, &mut child_caps)?;
     }
-    let loc_regs: Vec<u32> = p
-        .locvars
-        .iter()
-        .map(|v| asm.reg_at(v.start_pc as usize, v.reg).unwrap_or(v.reg))
-        .collect();
     let body = asm.finish()?;
     check_skips(p, &body.pc_map)?;
     let limit = if d == Dialect::V51 { 250 } else { 255 };
@@ -190,8 +175,8 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
     let mut locvars: Vec<(u32, u32, (crate::runtime::DebugName, u32, u32))> = p
         .locvars
         .iter()
-        .zip(&loc_regs)
-        .map(|(v, &reg)| {
+        .map(|v| {
+            let reg = v.reg;
             let start = if v.start_pc == 0 && v.reg < np {
                 0
             } else {

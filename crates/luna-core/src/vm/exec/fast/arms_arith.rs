@@ -73,7 +73,7 @@ macro_rules! fast_arith_arms {
         }
         macro_rules! op_sub_i {
             () => {{
-                arith_ri!(Sub, int(a, b) => Some(if DBL { dbl::sub(a, b) } else { Value::Int(a.wrapping_sub(b)) }), float(a, b) => Some(Value::Float(a - b)))
+                arith_ri!(Sub, int(a, b) => Some(if DBL { dbl::sub(a, b) } else { Value::Int(a.wrapping_sub(b)) }), float(a, b) => Some(Value::Float(a + (0.0 - b))))
             }};
         }
         macro_rules! op_add_k {
@@ -83,7 +83,7 @@ macro_rules! fast_arith_arms {
         }
         macro_rules! op_sub_k {
             () => {{
-                arith_rk!(Sub, int(a, b) => Some(if DBL { dbl::sub(a, b) } else { Value::Int(a.wrapping_sub(b)) }), float(a, b) => Some(Value::Float(a - b)))
+                arith_rk_ordered!(Sub, int(a, b) => Some(if DBL { dbl::sub(a, b) } else { Value::Int(a.wrapping_sub(b)) }), float(a, b) => Some(Value::Float(a - b)))
             }};
         }
         macro_rules! op_mul_k {
@@ -94,22 +94,22 @@ macro_rules! fast_arith_arms {
         // a zero divisor takes the slow path for its error
         macro_rules! op_mod_k {
             () => {{
-                arith_rk!(Mod, int(a, b) => if DBL { Some(dbl::rem(a, b)) } else { int_mod_or_zero_div(a, b).map(Value::Int) }, float(a, b) => { let _ = (a, b); None })
+                arith_rk_ordered!(Mod, int(a, b) => if DBL { Some(dbl::rem(a, b)) } else { int_mod_or_zero_div(a, b).map(Value::Int) }, float(a, b) => { let _ = (a, b); None })
             }};
         }
         macro_rules! op_i_div_k {
             () => {{
-                arith_rk!(IDiv, int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None })
+                arith_rk_ordered!(IDiv, int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None })
             }};
         }
         macro_rules! op_div_k {
             () => {{
-                arith_rk!(Div, int(a, b) => Some(Value::Float(a as f64 / b as f64)), float(a, b) => Some(Value::Float(a / b)))
+                arith_rk_ordered!(Div, int(a, b) => Some(Value::Float(a as f64 / b as f64)), float(a, b) => Some(Value::Float(a / b)))
             }};
         }
         macro_rules! op_pow_k {
             () => {{
-                arith_rk!(Pow, int(a, b) => Some(Value::Float(num_pow($vm.version() >= LuaVersion::Lua54, a as f64, b as f64))), float(a, b) => Some(Value::Float(num_pow($vm.version() >= LuaVersion::Lua54, a, b))))
+                arith_rk_ordered!(Pow, int(a, b) => Some(Value::Float(num_pow($vm.version() >= LuaVersion::Lua54, a as f64, b as f64))), float(a, b) => Some(Value::Float(num_pow($vm.version() >= LuaVersion::Lua54, a, b))))
             }};
         }
         macro_rules! op_b_and_k {
@@ -134,7 +134,28 @@ macro_rules! fast_arith_arms {
         }
         macro_rules! op_shl_i {
             () => {{
+                if $inst.k() {
+                    // `sC << R[B]` (5.4+ `SHLI`)
+                    let x = reg!($inst.b());
+                    if let Value::Int(n) = x {
+                        set_reg!($inst.a(), Value::Int(shift_left($inst.sc() as i64, n)));
+                        next!()
+                    }
+                    save!();
+                    $vm.arith_slow($inst.a(), base!(), ArithOp::Shl, Value::Int($inst.sc() as i64), x)?;
+                    resume_same!()
+                }
                 arith_ri!(Shl, int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None })
+            }};
+        }
+        macro_rules! op_shl_k {
+            () => {{
+                arith_rk_ordered!(Shl, int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None })
+            }};
+        }
+        macro_rules! op_shr_k {
+            () => {{
+                arith_rk_ordered!(Shr, int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))), float(a, b) => { let _ = (a, b); None })
             }};
         }
         macro_rules! op_unm {

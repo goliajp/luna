@@ -10,9 +10,9 @@
 //!   and comparisons take theirs as `RK` operands ([`super::classic_const`]);
 //! - luna's `Close` is `OP_CLOSE` in 5.1 and a `JMP` that closes in
 //!   5.2/5.3;
-//! - the generic `for` keeps three hidden slots, so its body is a register
-//!   window, and it is entered by a `JMP` to its call; in 5.1 the call and
-//!   the loop test are one `TFORLOOP` followed by the back `JMP`;
+//! - the generic `for` is entered by a `JMP` to its call, and its loop test
+//!   names the control register (`A + 2`); in 5.1 the call and the loop
+//!   test are one `TFORLOOP` followed by the back `JMP`;
 //! - 5.1 reads globals with `GETGLOBAL`/`SETGLOBAL` from the function
 //!   environment, which luna keeps as upvalue 0 (`_ENV`): that upvalue is
 //!   dropped, the others move down one, and a `CLOSURE` is followed by one
@@ -127,7 +127,6 @@ impl C<'_, '_> {
                 let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
                 self.emit(self.abc(Kind::Move, a, b, 0))?;
             }
-            Op::LoadI | Op::LoadF | Op::LoadK if self.folded_load(l) => {}
             Op::LoadI | Op::LoadF => {
                 let v = if l.op == Op::LoadI {
                     self.num(l.sbx as i64)
@@ -233,7 +232,6 @@ impl C<'_, '_> {
                 let key = if l.k { self.rk(l.c)? } else { self.asm.r(l.c)? };
                 self.emit(self.abc(Kind::SelfOp, a, b, key))?;
             }
-            Op::Add if l.k => return Err(self.asm.err("`x - 0` has no form before 5.4")),
             Op::Add
             | Op::Sub
             | Op::Mul
@@ -246,12 +244,15 @@ impl C<'_, '_> {
             | Op::BXor
             | Op::Shl
             | Op::Shr => {
-                // the right operand's constant first, as PUC's `codearith`
-                let (a, c) = (self.asm.r(l.a)?, self.operand(l.c)?);
-                let b = self.operand(l.b)?;
+                let (a, b, c) = (self.asm.r(l.a)?, self.asm.r(l.b)?, self.asm.r(l.c)?);
                 self.emit(self.abc(Kind::Arith(l.op), a, b, c))?;
             }
             op if op.arith_const_op().is_some() => self.arith_const(l)?,
+            op if op.arith_kk_op().is_some() => {
+                let kind = Kind::Arith(op.arith_kk_op().expect("checked"));
+                let (a, b, c) = (self.asm.r(l.a)?, self.rk(l.b)?, self.rk(l.c)?);
+                self.emit(self.abc(kind, a, b, c))?;
+            }
             Op::Unm | Op::BNot | Op::Not | Op::Len => {
                 let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
                 self.emit(self.abc(Kind::Unary(l.op), a, b, 0))?;

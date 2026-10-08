@@ -58,6 +58,14 @@ macro_rules! fast_loop_arms {
                         }
                     }
                 };
+                for_loop_tail!(fast)
+            }};
+        }
+        // the end of a numeric `for` step: the slow path for anything the
+        // fast one did not take, and the trace JIT's back-edge count
+        macro_rules! for_loop_tail {
+            ($d fast:ident) => {{
+                let fast = $d fast;
                 let mut slow = false;
                 if !fast {
                     // `for_loop` is the reference: 5.1–5.3 step and compare
@@ -91,17 +99,58 @@ macro_rules! fast_loop_arms {
                 next_jumped!()
             }};
         }
-        macro_rules! op_t_for_loop {
+        // 5.5: `R[A]` count (or limit), `R[A+1]` step, `R[A+2]` the
+        // variable, which is the index
+        macro_rules! op_for_loop55 {
             () => {{
+                let ra = $regs.wrapping_add($inst.a() as usize);
+                let back = $npc.wrapping_sub($inst.bx());
+                // SAFETY: the loop's three registers are in the frame (the
+                // verifier checks the run); payloads are read as the type
+                // their tags name
+                let fast = unsafe {
+                    let (t0, t1, t2) = (raw_tag(ra), raw_tag(ra.add(1)), raw_tag(ra.add(2)));
+                    if t0 == tag::INT && t1 == tag::INT && t2 == tag::INT {
+                        let count = raw_int(ra);
+                        if count != 0 {
+                            put_int(ra, count.wrapping_sub(1));
+                            put_int(ra.add(2), raw_int(ra.add(2)).wrapping_add(raw_int(ra.add(1))));
+                            $npc = back;
+                        }
+                        true
+                    } else {
+                        cold_path();
+                        if t0 == tag::FLOAT && t1 == tag::FLOAT && t2 == tag::FLOAT {
+                            let (lim, st, cur) = (raw_flt(ra), raw_flt(ra.add(1)), raw_flt(ra.add(2)));
+                            let next = cur + st;
+                            if if st > 0.0 { next <= lim } else { lim <= next } {
+                                ra.add(2).write(Value::Float(next));
+                                $npc = back;
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                };
+                for_loop_tail!(fast)
+            }};
+        }
+        // `$var`: the first variable's register from the base; `$copy`:
+        // it is copied into the control register (`ForLayout`)
+        macro_rules! op_t_for_loop {
+            ($d var:expr, $d copy:expr) => {{
                 let a = $inst.a();
-                let pc4 = $regs.wrapping_add(a as usize + 4);
+                let pc4 = $regs.wrapping_add(a as usize + $d var);
                 // SAFETY: the loop's registers are in the frame
                 if unsafe { raw_tag(pc4) } != tag::NIL {
                     // the control variable takes the new key first: a
                     // recording started below snapshots the registers
                     // as the body will see them
                     // SAFETY: as above
-                    unsafe { Value::copy_whole($regs.add(a as usize + 2), pc4) };
+                    if $d copy {
+                        unsafe { Value::copy_whole($regs.add(a as usize + 2), pc4) };
+                    }
                     // the generic-for's back-edge, counted like a
                     // numeric one; an iterator that returned nothing
                     // takes no back-edge
@@ -115,7 +164,7 @@ macro_rules! fast_loop_arms {
                         let target = ($pc as i32 + 1 - $inst.bx() as i32).max(0) as u32;
                         if $vm.jit.loop_hot_tick(&proto, target) {
                             save!();
-                            $vm.trace_start_at_back_edge(cl!(), base!(), target, Some(a));
+                            $vm.trace_start_at_back_edge(cl!(), base!(), target, Some((a, $d var as u32)));
                         }
                     }
                     $npc = $npc.wrapping_sub($inst.bx());

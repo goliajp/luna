@@ -4,8 +4,7 @@
 //! What changes, mirroring what `lvm.c` of each version expects:
 //!
 //! - arithmetic is followed by the `MMBIN` naming its metamethod event;
-//!   luna's flagged `Add` (a source `x - 0`) is PUC's `ADDI x 0` with a
-//!   `__sub` `MMBINI`; the constant- and immediate-operand forms are in
+//!   the constant- and immediate-operand forms are in
 //!   [`super::modern_const`];
 //! - the fast field ops (`GETFIELD`, `GETTABUP`, `SETFIELD`, `SETTABUP`,
 //!   and `SELF` in 5.5) take short-string keys only, so a longer key goes
@@ -227,12 +226,6 @@ impl M<'_, '_> {
             }
             Op::NewTable => self.new_table(l)?,
             Op::SelfOp => self.self_op(l)?,
-            Op::Add if l.k => {
-                // `x - 0`: PUC's `ADDI x 0` with `__sub` recorded on its MMBINI
-                let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
-                self.emit(self.abc(Kind::ArithI, a, b, 127, false))?;
-                self.emit(self.abc(Kind::MmBinI, b, 127, 7, false))?;
-            }
             Op::Add
             | Op::Sub
             | Op::Mul

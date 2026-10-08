@@ -13,7 +13,7 @@ pub(super) fn validate_body_op(
     c: usize,
 ) -> Option<()> {
     match op {
-        Op::TForPrep => {
+        Op::TForPrep | Op::TForPrep53 | Op::TForPrep55 => {
             // generic-for prep: forward `add_pc(bx)`
             // to the body-tail (TForCall). Recorder enters at
             // body_top = head_pc, AFTER TForPrep, so the record
@@ -25,7 +25,7 @@ pub(super) fn validate_body_op(
                 return None;
             }
         }
-        Op::TForCall => {
+        Op::TForCall | Op::TForCall53 | Op::TForCall55 => {
             // generic-for body tail. Calls iter
             // via the `luna_jit_op_tforcall` helper. Bounds: the
             // helper grows the stack to R[A+6] for the generator-call
@@ -40,7 +40,7 @@ pub(super) fn validate_body_op(
                     return None;
                 }
             }
-            if a + 4 >= max_stack {
+            if a + op.for_layout()?.var() as usize >= max_stack {
                 {
                     checkpoint("bail:cmp-dirs-body-other");
                     return None;

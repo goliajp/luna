@@ -14,7 +14,7 @@ impl Vm {
         cl: Gc<LuaClosure>,
         base: u32,
         target: u32,
-        tfor: Option<u32>,
+        tfor: Option<(u32, u32)>,
     ) -> bool {
         let proto = cl.proto;
         // the cheap tests first, then the borrow and scan of the traces
@@ -38,14 +38,15 @@ impl Vm {
     }
 
     /// Start recording at `target`, the first instruction of a loop body in
-    /// the running frame. `tfor` is the base register of a generic `for`.
+    /// the running frame. `tfor` is the base register of a generic `for` and
+    /// the offset of its first loop variable.
     #[inline(never)]
     pub(super) fn trace_start_at_loop(
         &mut self,
         cl: Gc<LuaClosure>,
         base: u32,
         target: u32,
-        tfor: Option<u32>,
+        tfor: Option<(u32, u32)>,
     ) {
         // the tag of each register at entry tells the trace compiler which
         // arithmetic to lower (integer or float, and so on)
@@ -58,7 +59,7 @@ impl Vm {
         }
         let mut rec = crate::jit::trace::TraceRecord::start(cl.proto, target, entry_tags, false);
         rec.settings = self.jit.recording_settings();
-        if let Some(a) = tfor {
+        if let Some((a, var)) = tfor {
             // a native iterator's library tag lets the trace compiler
             // specialise `ipairs` into inline array reads
             rec.tfor_iter = match self.stack[base_us + a as usize] {
@@ -67,7 +68,7 @@ impl Vm {
             };
             // the tag of the value the last `TForCall` produced: the inline
             // read guards on it, so an array of mixed tags leaves the trace
-            let val_slot = base_us + a as usize + 5;
+            let val_slot = base_us + (a + var) as usize + 1;
             rec.tfor_val_tag =
                 (val_slot < self.stack.len()).then(|| self.stack[val_slot].unpack().0);
         }

@@ -23,7 +23,7 @@ use crate::runtime::string::LuaStr;
 use crate::vm::dump::error::Bad;
 use crate::vm::dump::header;
 use crate::vm::dump::reader::{Reader, read_puc_varint};
-use crate::vm::isa::Op;
+use crate::vm::isa::{ForLayout, Op};
 
 const DIALECT: &str = "PUC 5.5";
 
@@ -137,6 +137,8 @@ const D55: Dialect = Dialect {
     name: DIALECT,
     ops: OPS,
     v55: true,
+    num: ForLayout::Num55,
+    generic: ForLayout::Gen55,
 };
 
 pub(super) fn undump_puc_55(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, Bad> {

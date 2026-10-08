@@ -90,6 +90,7 @@ pub(super) fn sweep_kinds(
                 st.is_nil_writer[..m.len()].copy_from_slice(m);
             }
             match ins.op() {
+                Op::LoadI if scan.dead_loads[pc] => {}
                 Op::LoadI | Op::LoadF | Op::LoadK | Op::LoadNil | Op::Move => {
                     sweep_loads(&mut st, c, scan, pc, ins)?
                 }
@@ -103,7 +104,9 @@ pub(super) fn sweep_kinds(
                 | Op::Return1
                 | Op::Return0
                 | Op::Jmp => kinds_ops::sweep_calls(&mut st, scan, pc, ins)?,
-                Op::ForPrep | Op::ForLoop => sweep_for(&mut st, ins)?,
+                Op::ForPrep | Op::ForLoop | Op::ForPrep55 | Op::ForLoop55 => {
+                    sweep_for(&mut st, ins)?
+                }
                 Op::NewTable | Op::SetList | Op::SetTable => {
                     kinds_ops::sweep_table_sets(&mut st, ins)?
                 }
@@ -351,7 +354,7 @@ fn sweep_for(st: &mut KindSweep, ins: Inst) -> Option<()> {
         ..
     } = st;
     match ins.op() {
-        Op::ForPrep | Op::ForLoop => {
+        Op::ForPrep | Op::ForLoop | Op::ForPrep55 | Op::ForLoop55 => {
             // Int loop, or Float loop (5.1 /
             // 5.2 numeric `for` keeps the loop var Float). The
             // loop kind is decided by R[A]'s scanned kind: Float
@@ -374,6 +377,7 @@ fn sweep_for(st: &mut KindSweep, ins: Inst) -> Option<()> {
             // loop slots being Table at the latest write,
             // including `maybe_table` (a GetI return).
             let a = ins.a() as usize;
+            let r = ForRegs::of(ins);
             let loop_kind = match reg_kinds[a] {
                 RegKind::Float => RegKind::Float,
                 RegKind::Int | RegKind::Unset => RegKind::Int,
@@ -383,7 +387,7 @@ fn sweep_for(st: &mut KindSweep, ins: Inst) -> Option<()> {
             // 1, nil`, or a declared-uninitialized local): the
             // interpreter raises the 'for' error, the JIT would
             // loop over the Variable's zero payload.
-            for off in [0usize, 1, 2, 3] {
+            for off in 0..=r.var - a {
                 if matches!(latest_writer_kind[a + off], RegKind::Table)
                     || maybe_table[a + off]
                     || (off < 3 && is_nil_writer[a + off])
@@ -391,20 +395,27 @@ fn sweep_for(st: &mut KindSweep, ins: Inst) -> Option<()> {
                     return None;
                 }
             }
-            for off in [0usize, 1, 3] {
-                if !RegKind::unify(&mut reg_kinds[a + off], loop_kind) {
+            for reg in [r.idx, r.x, r.var] {
+                if !RegKind::unify(&mut reg_kinds[reg], loop_kind) {
                     return None;
                 }
-                latest_writer_kind[a + off] = loop_kind;
-                maybe_table[a + off] = false;
-                is_nil_writer[a + off] = false;
+                latest_writer_kind[reg] = loop_kind;
+                maybe_table[reg] = false;
+                is_nil_writer[reg] = false;
             }
-            if !RegKind::unify(&mut reg_kinds[a + 2], RegKind::Int) {
+            // 5.1–5.4 keep the step in a register of its own, which holds
+            // the integer immediate; 5.5 in the limit's, of the loop's kind
+            let step_kind = if r.var == r.idx {
+                loop_kind
+            } else {
+                RegKind::Int
+            };
+            if !RegKind::unify(&mut reg_kinds[r.step], step_kind) {
                 return None;
             }
-            latest_writer_kind[a + 2] = RegKind::Int;
-            maybe_table[a + 2] = false;
-            is_nil_writer[a + 2] = false;
+            latest_writer_kind[r.step] = step_kind;
+            maybe_table[r.step] = false;
+            is_nil_writer[r.step] = false;
         }
         _ => unreachable!("dispatched by op"),
     }

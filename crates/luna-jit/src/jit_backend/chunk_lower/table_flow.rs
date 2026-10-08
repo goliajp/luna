@@ -63,9 +63,9 @@ fn body_apply(c: ChunkIn<'_>, cfg: &ChunkCfg, bb_idx: usize, state: &mut [bool])
                     *slot = false;
                 }
             }
-            Op::ForPrep | Op::ForLoop => {
+            Op::ForPrep | Op::ForLoop | Op::ForPrep55 | Op::ForLoop55 => {
                 let a = ins.a() as usize;
-                for off in 0..=3 {
+                for off in 0..=ForRegs::of(ins).var - a {
                     if let Some(slot) = state.get_mut(a + off) {
                         *slot = false;
                     }
@@ -204,9 +204,9 @@ pub(super) fn check_table_operands(c: ChunkIn<'_>, cfg: &ChunkCfg) -> Option<()>
                             *slot = false;
                         }
                     }
-                    Op::ForPrep | Op::ForLoop => {
+                    Op::ForPrep | Op::ForLoop | Op::ForPrep55 | Op::ForLoop55 => {
                         let a = prev.a() as usize;
-                        for off in 0..=3 {
+                        for off in 0..=ForRegs::of(prev).var - a {
                             if let Some(slot) = state.get_mut(a + off) {
                                 *slot = false;
                             }

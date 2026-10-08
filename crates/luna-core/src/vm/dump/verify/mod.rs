@@ -194,13 +194,14 @@ impl Checker<'_> {
             }
         }
         for pc in 0..n {
-            if self.ops[pc] == Op::ForLoop && !claimed[pc] {
+            if self.ops[pc].is_for_loop() && !claimed[pc] {
                 return Err(self.err(pc, "not paired with a ForPrep".to_string()));
             }
+            let call = self.ops[pc].for_layout().map(|l| l.ops().1);
             let after_call = pc.checked_sub(1).is_some_and(|q| {
-                self.ops[q] == Op::TForCall && self.inst(q).a() == self.inst(pc).a()
+                Some(self.ops[q]) == call && self.inst(q).a() == self.inst(pc).a()
             });
-            if self.ops[pc] == Op::TForLoop && !after_call {
+            if self.ops[pc].is_tfor_loop() && !after_call {
                 return Err(self.err(pc, "not preceded by its TForCall".to_string()));
             }
         }
@@ -235,12 +236,14 @@ impl Checker<'_> {
             Op::SetList if i.k() => (None, [Some(pc_i + 2), None]),
             op if op.is_test() || op == Op::LFalseSkip => (Some(next), [Some(pc_i + 2), None]),
             // 5.1–5.3 enter the loop at its ForLoop; 5.4+ skip past it
-            Op::ForPrep => {
+            op if op.is_for_prep() => {
                 let loop_pc = pc_i + i.bx() as i64;
                 (Some(next), [Some(loop_pc), Some(loop_pc + 1)])
             }
-            Op::ForLoop | Op::TForLoop => (Some(next), [Some(pc_i + 1 - i.bx() as i64), None]),
-            Op::TForPrep => (None, [Some(pc_i + 1 + i.bx() as i64), None]),
+            op if op.is_for_loop() || op.is_tfor_loop() => {
+                (Some(next), [Some(pc_i + 1 - i.bx() as i64), None])
+            }
+            op if op.is_tfor_prep() => (None, [Some(pc_i + 1 + i.bx() as i64), None]),
             _ => (Some(next), [None, None]),
         };
         Succ { fall, other }
@@ -253,9 +256,10 @@ impl Checker<'_> {
         let i = self.inst(pc);
         let a = i.a();
         match self.ops[pc] {
-            Op::ForPrep => {
+            op if op.is_for_prep() => {
                 let lp = pc + i.bx() as usize;
-                let paired = self.ops.get(lp) == Some(&Op::ForLoop) && {
+                let want = op.for_layout().map(|l| l.ops().2);
+                let paired = self.ops.get(lp).copied() == want && {
                     let l = self.inst(lp);
                     l.a() == a && lp as i64 + 1 - l.bx() as i64 == pc as i64 + 1
                 };
@@ -266,11 +270,12 @@ impl Checker<'_> {
                 }
                 Ok(Some(lp))
             }
-            Op::TForPrep => {
+            op if op.is_tfor_prep() => {
+                let (_, call_op, loop_op) = op.for_layout().expect("a loop op").ops();
                 let call = pc + 1 + i.bx() as usize;
-                let paired = self.ops.get(call) == Some(&Op::TForCall)
+                let paired = self.ops.get(call) == Some(&call_op)
                     && self.inst(call).a() == a
-                    && self.ops.get(call + 1) == Some(&Op::TForLoop)
+                    && self.ops.get(call + 1) == Some(&loop_op)
                     && {
                         let l = self.inst(call + 1);
                         l.a() == a && call as i64 + 2 - l.bx() as i64 == pc as i64 + 1
@@ -283,10 +288,9 @@ impl Checker<'_> {
                 }
                 Ok(Some(call + 1))
             }
-            Op::TForCall => {
-                let paired =
-                    self.ops.get(pc + 1) == Some(&Op::TForLoop) && self.inst(pc + 1).a() == a;
-                if !paired {
+            op if op.is_tfor_call() => {
+                let loop_op = op.for_layout().expect("a loop op").ops().2;
+                if self.ops.get(pc + 1) != Some(&loop_op) || self.inst(pc + 1).a() != a {
                     return Err(self.err(pc, "not followed by its TForLoop".to_string()));
                 }
                 Ok(None)

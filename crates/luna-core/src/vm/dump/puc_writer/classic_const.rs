@@ -10,7 +10,6 @@
 
 use super::asm::{L, Res};
 use super::classic::{C, RK_BIT};
-use crate::compiler::const_map::peek_const;
 use crate::runtime::Value;
 use crate::vm::dump::puc::classic::Kind;
 use crate::vm::isa::{OFFSET_SC, Op};
@@ -58,19 +57,17 @@ impl C<'_, '_> {
         self.rk(k)
     }
 
-    /// `R(A) := RK(B) op RK(C)` with luna's constant operand as an `RK`.
+    /// `R(A) := RK(B) op RK(C)` with luna's constant operand as an `RK`,
+    /// on the side `k` says.
     pub(super) fn arith_const(&mut self, l: L) -> Res<()> {
         let op = l.op.arith_const_op().expect("constant arithmetic");
-        // the constant first, as PUC's `codearith` takes the right operand
-        // first; the register operand folds into an `RK` as in the
-        // register forms
         let c = match l.op {
             Op::AddI | Op::SubI | Op::ShrI | Op::ShlI => {
                 self.rk_num((l.c as i32 - OFFSET_SC) as i64)?
             }
             _ => self.rk(l.c)?,
         };
-        let (a, b) = (self.asm.r(l.a)?, self.operand(l.b)?);
+        let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
         let (x, y) = if l.k { (c, b) } else { (b, c) };
         self.emit(self.abc(Kind::Arith(op), a, x, y))
     }
@@ -95,68 +92,5 @@ impl C<'_, '_> {
             _ => (Kind::Le, imm, a),
         };
         self.emit(self.abc(kind, l.k as u32, x, y))
-    }
-
-    /// Whether the constant load `l` (`LoadK` / `LoadI` / `LoadF` into a
-    /// scratch register) is taken whole into the arithmetic right after it
-    /// as an `RK` operand (see `operand`), with the register dead from
-    /// there on (the instruction writes it or a register below it). Then
-    /// the load has no instruction of its own: PUC passes such a constant
-    /// in the operand and never loads it.
-    pub(super) fn folded_load(&self, l: L) -> bool {
-        let pc = self.asm.pc();
-        let k = match l.op {
-            Op::LoadK => l.bx as usize,
-            _ => {
-                let v = match l.op {
-                    Op::LoadI => self.num(l.sbx as i64),
-                    _ => Value::Float(l.sbx as f64),
-                };
-                let (ver, map) = &self.asm.kmap;
-                peek_const(*ver, &self.asm.consts, map, &v) as usize
-            }
-        };
-        if k >= RK_BIT as usize {
-            return false;
-        }
-        for j in pc + 1..=pc + 2 {
-            if self.asm.is_target(j) {
-                return false;
-            }
-            let Some(x) = self.asm.inst(j).map(L::of) else {
-                return false;
-            };
-            let reads = if x.op.arith_const_op().is_some() {
-                x.b == l.a
-            } else if matches!(
-                x.op,
-                Op::Sub | Op::Mul | Op::Mod | Op::Pow | Op::Div | Op::IDiv
-            ) || matches!(
-                x.op,
-                Op::Add | Op::BAnd | Op::BOr | Op::BXor | Op::Shl | Op::Shr
-            ) && !x.k
-            {
-                x.b == l.a || x.c == l.a
-            } else if matches!(x.op, Op::Eq | Op::Lt | Op::Le) {
-                // a comparison writes no register; the scratch is free after
-                return self.scratch_at(l.a, j) && (x.a == l.a || x.b == l.a);
-            } else if matches!(x.op, Op::LoadK | Op::LoadI | Op::LoadF) && x.a != l.a {
-                continue;
-            } else {
-                return false;
-            };
-            return reads && self.scratch_at(l.a, j) && l.a >= x.a;
-        }
-        false
-    }
-
-    /// Whether register `r` holds no local variable at luna pc `pc`.
-    fn scratch_at(&self, r: u32, pc: usize) -> bool {
-        !self
-            .asm
-            .p
-            .locvars
-            .iter()
-            .any(|v| v.reg == r && (v.start_pc as usize) <= pc && pc < v.end_pc as usize)
     }
 }

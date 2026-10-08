@@ -1,8 +1,50 @@
-//! The numeric and generic `for`.
+//! The numeric and generic `for`, laid out as each dialect's parser lays
+//! them out (`fornum`, `forlist`, `forbody`): the hidden control values,
+//! then the loop variables, in the registers PUC gives them.
 
 use super::*;
+use crate::vm::isa::ForLayout;
 
 impl<'a> Compiler<'a> {
+    /// Whether a block's variables leave scope before the `CLOSE` that ends
+    /// it (PUC 5.1 / 5.4 `leaveblock` remove them first; 5.2 / 5.3 / 5.5
+    /// close first).
+    pub(super) fn vars_end_before_close(&self) -> bool {
+        matches!(self.version, LuaVersion::Lua51 | LuaVersion::Lua54)
+    }
+
+    /// The hidden control values of a loop, as locals `debug.getlocal`
+    /// lists, live from here to the end of the loop's block.
+    fn declare_hidden(&mut self, base: u32, names: &[&'a str]) -> Result<(), SyntaxError> {
+        for (i, &name) in names.iter().enumerate() {
+            self.declare_local(name, base + i as u32, false)?;
+        }
+        Ok(())
+    }
+
+    /// The body in a block of its own (PUC `block`), then the end of the
+    /// loop variables' scope (PUC's `leaveblock` in `forbody`): a `CLOSE`
+    /// when one of them, from local `first` on, is captured.
+    fn for_body(&mut self, body: &Block, first: usize, floor: u32) -> Result<(), SyntaxError> {
+        self.enter_block(false);
+        self.stat_block(body)?;
+        self.leave_block()?;
+        let captured = self.lr().locals[first..].iter().any(|l| l.captured);
+        let before = self.here() as u32;
+        if captured {
+            self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
+        }
+        let end = if self.vars_end_before_close() {
+            before
+        } else {
+            self.here() as u32
+        };
+        let b = self.l().blocks.last_mut().expect("loop block");
+        b.body_end = Some((first, end));
+        b.for_loop = true;
+        Ok(())
+    }
+
     pub(super) fn generic_for(
         &mut self,
         vars: &'a [Name],
@@ -13,45 +55,42 @@ impl<'a> Compiler<'a> {
     ) -> Result<(), SyntaxError> {
         let line = vars[0].line;
         self.last_line = line;
-        // control slots: iterator, state, control, closing (<close>: slice 5).
-        // Before 5.4 the list is cut to three values (PUC `forlist`'s
-        // `adjust_assign(ls, 3, ...)`) and the fourth slot stays nil, so a
-        // fourth value is evaluated and dropped rather than closed.
-        let tbc = self.version >= LuaVersion::Lua54;
-        let base = if tbc {
-            self.explist_adjust(exprs, 4)?
-        } else {
-            let base = self.explist_adjust(exprs, 3)?;
-            self.set_freereg(base + 3);
-            self.reserve(1)?;
-            self.emit(Inst::iabc(Op::LoadNil, base + 3, 0, 0, false));
-            base
+        let layout = match self.version {
+            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => ForLayout::Gen53,
+            LuaVersion::Lua55 => ForLayout::Gen55,
+            _ => ForLayout::Gen54,
         };
-        self.set_freereg(base + 4);
-        // PUC `forlist`'s `luaK_checkstack`: room to call the generator
-        // past the control slots, to `base + 7` in 5.4 and `base + 6`
-        // otherwise
-        let room = if self.version == LuaVersion::Lua54 {
-            3
-        } else {
-            2
-        };
-        self.reserve(room)?;
-        self.set_freereg(base + 4);
-        let control_start = self.here() as u32;
+        let (prep_op, call_op, loop_op) = layout.ops();
+        // PUC `forlist`: the expression list fills the iterator, state and
+        // control (5.4+: and the closing value), then `luaK_checkstack`
+        // leaves room to call the iterator past them
+        let values = if layout == ForLayout::Gen53 { 3 } else { 4 };
+        let base = self.explist_adjust(exprs, values)?;
+        self.set_freereg(base + values);
+        self.reserve(layout.call_end() - values)?;
+        self.set_freereg(base + values);
         self.enter_block(true);
-        // the 4th control value is an implicit to-be-closed variable (5.4+);
-        // a `return f()` in the body must not be a tail call, *and* a `goto`
-        // leaving this block must close the iterator's closing value via a
-        // trampoline (locals.lua:1219 nested-for goto regression).
-        if tbc {
-            let b = self.l().blocks.last_mut().expect("no block");
+        let hidden: &[&'a str] = match layout {
+            ForLayout::Gen53 => &["(for generator)", "(for state)", "(for control)"],
+            ForLayout::Gen54 => &["(for state)"; 4],
+            _ => &["(for state)"; 3],
+        };
+        self.declare_hidden(base, hidden)?;
+        // the closing value: a `return f()` in the body is no tail call,
+        // and a `goto` leaving the loop closes it
+        // PUC enters the loop's block before the expressions: its level is
+        // the base
+        let b = self.l().blocks.last_mut().expect("no block");
+        b.reg_floor = base;
+        if layout.closing().is_some() {
             b.tbc_scope = true;
             b.has_tbc = true;
         }
+        let vbase = base + layout.var();
+        self.set_freereg(vbase);
+        let prep = self.emit(Inst::iabx(prep_op, base, 0));
+        let body_first = self.lr().locals.len();
         let nvars = vars.len() as u32;
-        let vbase = self.reserve(nvars)?;
-        debug_assert_eq!(vbase, base + 4);
         for (i, v) in vars.iter().enumerate() {
             // 5.5: the control (first) variable is read-only
             self.declare_local(
@@ -60,79 +99,48 @@ impl<'a> Compiler<'a> {
                 i == 0 && self.version >= LuaVersion::Lua55,
             )?;
         }
-        let body_first = self.lr().locals.len();
-        let prep = self.emit(Inst::iabx(Op::TForPrep, base, 0));
+        self.reserve(nvars)?;
         let body_top = self.here();
-        self.stat_block(body)?;
-        if self.block_captured() {
-            self.close_body(body_first, vbase);
-        }
+        self.for_body(body, body_first, vbase)?;
         let tforcall_pc = self.here();
         let skip = tforcall_pc - prep - 1;
         if skip as u32 > MAX_BX {
             return Err(self.err(line, "control structure too long"));
         }
-        self.l().code[prep] = Inst::iabx(Op::TForPrep, base, skip as u32);
-        // TForPrep's forward-skip lands at `tforcall_pc` (the upcoming TForCall
-        // emit position). Mark before the TForCall emit advances `here()`.
+        self.l().code[prep] = Inst::iabx(prep_op, base, skip as u32);
         self.mark_target(tforcall_pc);
+        // 5.1's back `JMP` (luna's `TForLoop53`) takes the line of the
+        // body's last token, as PUC emits it after `luaK_fixline`
+        let body_last = self.last_line;
         // PUC `forbody` fixes TFORCALL/TFORLOOP to the line of the first token
         // after `in` (the EXPR's source line). A non-callable iterator
         // (`for k,v in 3 do ...`) then raises on the EXPR's line, not the
         // `for` line (errors.lua :428/:429).
         self.last_line = expr_line;
-        self.emit(Inst::iabc(Op::TForCall, base, 0, nvars, false));
+        self.emit(Inst::iabc(call_op, base, 0, nvars, false));
         let back = self.here() - body_top + 1;
         if back as u32 > MAX_BX {
             return Err(self.err(line, "control structure too long"));
         }
-        self.emit(Inst::iabx(Op::TForLoop, base, back as u32));
-        // TForLoop's back-edge lands at `body_top` (per-iteration restart).
+        if self.version == LuaVersion::Lua51 {
+            self.last_line = body_last;
+        }
+        self.emit(Inst::iabx(loop_op, base, back as u32));
         self.mark_target(body_top);
-        // Override the body block's reg_floor to `base` so trampoline OP_Close
-        // emitted for a `goto` leaving the loop closes the iterator's closing
-        // value at `base + 3` (which sits BELOW the for-body's user-locals
-        // floor `base + 4`). PUC's lparser does the same via `leavelevel` to
-        // `f->level + 4` minus the to-be-closed control width.
-        let blk = self.l().blocks.last_mut().expect("no block");
-        blk.reg_floor = base;
-        blk.end_line = end_line;
-        self.leave_block()?;
-        // close the iterator's closing value (4th control slot, 5.4+). PUC
-        // emits it in `leaveblock` after reading the loop's `end`, so a line
-        // hook sees that line once as the loop exits.
-        if self.version >= LuaVersion::Lua54
+        // the block's CLOSE of the closing value (PUC emits it in
+        // `leaveblock` after reading the loop's `end`, so a line hook sees
+        // that line once as the loop exits)
+        if layout.closing().is_some()
             && let Some(line) = end_line
         {
             self.last_line = line;
         }
-        self.emit(Inst::iabc(Op::Close, base, 0, 0, false));
-        // PUC forlist registers hidden control variables that
-        // debug.getlocal lists; they live across the loop body. 5.1-5.3
-        // have three, named after their roles. 5.4 names all four control
-        // slots "(for state)" — generator, state, control, and
-        // to-be-closed; 5.5 dropped the user-control entry so only three
-        // are reported. 5.4 files.lua :443 expects the to-be-closed at the
-        // 4th "(for state)" hit; 5.5 files.lua :433 expects it at the 3rd.
-        // Without the user-control entry on 5.4 the file never gets closed
-        // on `break`.
-        let end_pc = self.here() as u32;
-        let hidden: &[(&str, u32)] = match self.version {
-            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => &[
-                ("(for generator)", 0),
-                ("(for state)", 1),
-                ("(for control)", 2),
-            ],
-            LuaVersion::Lua55 => &[("(for state)", 0), ("(for state)", 1), ("(for state)", 3)],
-            _ => &[
-                ("(for state)", 0),
-                ("(for state)", 1),
-                ("(for state)", 2),
-                ("(for state)", 3),
-            ],
-        };
-        self.push_hidden_locals(base, hidden, control_start, end_pc);
+        self.l().blocks.last_mut().expect("for block").end_line = end_line;
+        self.leave_block()?;
         self.set_freereg(base);
+        if let Some(line) = end_line {
+            self.last_line = line;
+        }
         Ok(())
     }
 
@@ -168,19 +176,35 @@ impl<'a> Compiler<'a> {
                 self.emit(Inst::iasbx(Op::LoadI, base + 2, 1));
             }
         }
+        // 5.5 keeps the index in the loop variable: its `forprep` drops one
+        // of the three registers the values took
+        let v55 = self.version >= LuaVersion::Lua55;
+        let layout = if v55 {
+            ForLayout::Num55
+        } else {
+            ForLayout::Num
+        };
+        let (prep_op, _, loop_op) = layout.ops();
         self.set_freereg(base + 3);
-        let control_start = self.here() as u32;
         self.enter_block(true);
-        let var_reg = self.reserve(1)?;
-        self.declare_local(var, var_reg, self.version >= LuaVersion::Lua55)?;
-        let body_first = self.lr().locals.len();
+        self.l().blocks.last_mut().expect("no block").reg_floor = base;
+        let hidden: &[&'a str] = match self.version {
+            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => {
+                &["(for index)", "(for limit)", "(for step)"]
+            }
+            LuaVersion::Lua55 => &["(for state)"; 2],
+            _ => &["(for state)"; 3],
+        };
+        self.declare_hidden(base, hidden)?;
         self.last_line = line;
-        let prep = self.emit(Inst::iabx(Op::ForPrep, base, 0));
+        let var_reg = base + layout.var();
+        self.set_freereg(var_reg);
+        let prep = self.emit(Inst::iabx(prep_op, base, 0));
+        let body_first = self.lr().locals.len();
+        self.declare_local(var, var_reg, v55)?;
+        self.reserve(1)?;
         let body_top = self.here();
-        self.stat_block(body)?;
-        if self.block_captured() {
-            self.close_body(body_first, var_reg);
-        }
+        self.for_body(body, body_first, var_reg)?;
         let loop_pc = self.here();
         let back = loop_pc - body_top + 1;
         if back as u32 > MAX_BX {
@@ -189,12 +213,12 @@ impl<'a> Compiler<'a> {
         // PUC attributes FORLOOP (the per-iteration back-edge) to the `for` line,
         // so each loop iteration re-fires a line event there.
         self.last_line = line;
-        self.emit(Inst::iabx(Op::ForLoop, base, back as u32));
+        self.emit(Inst::iabx(loop_op, base, back as u32));
         let skip = self.here() - prep - 1;
         if skip as u32 > MAX_BX {
             return Err(self.err(line, "control structure too long"));
         }
-        self.l().code[prep] = Inst::iabx(Op::ForPrep, base, skip as u32);
+        self.l().code[prep] = Inst::iabx(prep_op, base, skip as u32);
         // ForLoop's back-edge lands at `body_top`; ForPrep's forward-skip
         // lands at the post-loop pc (= `here()` after the ForLoop emit).
         self.mark_target(body_top);
@@ -202,37 +226,10 @@ impl<'a> Compiler<'a> {
         self.mark_target(post_loop);
         self.l().blocks.last_mut().expect("for block").end_line = end_line;
         self.leave_block()?;
-        // PUC fornum's internal locals, which debug.getlocal lists ahead
-        // of the loop variable: 5.1-5.3 name them after their roles, 5.4
-        // has three "(for state)", 5.5 two.
-        let hidden: &[(&str, u32)] = match self.version {
-            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => {
-                &[("(for index)", 0), ("(for limit)", 1), ("(for step)", 2)]
-            }
-            LuaVersion::Lua55 => &[("(for state)", 0), ("(for state)", 1)],
-            _ => &[("(for state)", 0), ("(for state)", 1), ("(for state)", 2)],
-        };
-        self.push_hidden_locals(base, hidden, control_start, post_loop as u32);
         self.set_freereg(base);
-        Ok(())
-    }
-
-    /// Debug entries for a for loop's internal variables, `(name, offset
-    /// from base)`, live over `start_pc..end_pc`.
-    pub(super) fn push_hidden_locals(
-        &mut self,
-        base: u32,
-        hidden: &[(&str, u32)],
-        start_pc: u32,
-        end_pc: u32,
-    ) {
-        for &(name, off) in hidden {
-            self.l().locvars.push_or_abort(crate::runtime::LocVar {
-                name: name.into(),
-                reg: base + off,
-                start_pc,
-                end_pc,
-            });
+        if let Some(line) = end_line {
+            self.last_line = line;
         }
+        Ok(())
     }
 }

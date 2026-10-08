@@ -11,7 +11,9 @@
 mod and_or_chain;
 mod assign;
 mod binop;
+mod binop_classic;
 mod binop_const;
+mod binop_eq;
 mod closure;
 mod cond;
 pub(crate) mod const_map;
@@ -226,6 +228,9 @@ struct BlockCx<'a> {
     /// of scope at this pc, before the loop's per-iteration CLOSE; PUC keeps
     /// the body in a block of its own and removes its variables first
     body_end: Option<(usize, u32)>,
+    /// a `for` loop: its variables were closed at the end of each pass
+    /// (on exit too), so leaving the block closes only what is above them
+    for_loop: bool,
     /// the line of the loop's closing `end`, when known: the CLOSE after a
     /// 5.4 `break` label is emitted there
     end_line: Option<u32>,

@@ -158,6 +158,7 @@ pub(super) fn scan_control(
         self_upval,
         step_const,
         for_loops,
+        dead_loads,
         ..
     } = s;
     let mut pc = pc;
@@ -220,7 +221,7 @@ pub(super) fn scan_control(
             }
             pc = jmp_pc; // outer pc += 1 below moves past the Jmp
         }
-        Op::ForPrep => {
+        Op::ForPrep | Op::ForPrep55 => {
             // both forms admitted. The dialect-
             // specific shape is picked up in emit, gated by `pre53`.
             let a = ins.a() as usize;
@@ -243,7 +244,8 @@ pub(super) fn scan_control(
                 return None;
             }
             let loop_ins = code[loop_pc];
-            if !matches!(loop_ins.op(), Op::ForLoop) || loop_ins.a() as usize != a {
+            let want = ins.op().for_layout().map(|l| l.ops().2);
+            if Some(loop_ins.op()) != want || loop_ins.a() as usize != a {
                 return None;
             }
             // BB boundaries: ForPrep is its own block; body starts
@@ -255,9 +257,18 @@ pub(super) fn scan_control(
             }
             bb_starts[loop_pc] = true; // ForLoop opens its own block.
             for_loops.push((pc, loop_pc, step_imm));
-            // ForPrep writes R[A], R[A+1], R[A+2], R[A+3] — every
-            // register's step_const tracker is stale after this.
-            for off in 0..=3 {
+            if ins.op() == Op::ForPrep55 {
+                // the step's load right before: its register becomes the
+                // index, of the loop's kind
+                let ld = *code.get(pc.wrapping_sub(1))?;
+                if ld.op() != Op::LoadI || ld.a() as usize != a + 2 {
+                    return None;
+                }
+                dead_loads[pc - 1] = true;
+            }
+            // ForPrep writes every register of the loop — their
+            // step_const trackers are stale after this.
+            for off in 0..=ForRegs::of(ins).var - a {
                 if let Some(slot) = step_const.get_mut(a + off) {
                     *slot = None;
                 }
@@ -266,7 +277,7 @@ pub(super) fn scan_control(
                 }
             }
         }
-        Op::ForLoop => {
+        Op::ForLoop | Op::ForLoop55 => {
             // ForLoop alone (without a paired ForPrep earlier in
             // the for_loops list) is an orphan — luna's bytecode
             // emitter never produces that, so reject any ForLoop
@@ -275,13 +286,15 @@ pub(super) fn scan_control(
             if !for_loops.iter().any(|&(_, lp, _)| lp == pc) {
                 return None;
             }
-            // ForLoop writes R[A], R[A+1], R[A+3] on the continue
-            // path — same step_const wipe as ForPrep.
-            for off in [0usize, 1, 3] {
-                if let Some(slot) = step_const.get_mut(a + off) {
+            // ForLoop writes the index, the count and the loop variable
+            // on the continue path — same step_const wipe as ForPrep.
+            let r = ForRegs::of(ins);
+            let _ = a;
+            for reg in [r.idx, r.x, r.var] {
+                if let Some(slot) = step_const.get_mut(reg) {
                     *slot = None;
                 }
-                if let Some(slot) = self_upval.get_mut(a + off) {
+                if let Some(slot) = self_upval.get_mut(reg) {
                     *slot = false;
                 }
             }
