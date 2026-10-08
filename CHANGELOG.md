@@ -493,6 +493,10 @@ optimization.
 
 ### Fixed
 
+- 5.4 / 5.5: a `return` from inside a generic `for`, in a function that
+  captures none of its locals, now calls the `__close` of the loop's
+  closing value. Before, such a return skipped it.
+
 - A message handler run for an error that names its operand (`attempt
   to index a nil value (local 't')`) starts one slot higher in 5.3+, as
   in PUC, whose `varinfo` leaves the name on the stack; recursion inside
