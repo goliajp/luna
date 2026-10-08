@@ -1,6 +1,6 @@
 //! The continuation records: host, close and metamethod continuations.
 
-/// Where a [`ContKind::Host`] continuation's values land, and which of the
+/// Where a [`ContKind::Host`](super::ContKind::Host) continuation's values land, and which of the
 /// C API's records describes it.
 #[derive(Clone, Copy)]
 pub struct HostCont {
