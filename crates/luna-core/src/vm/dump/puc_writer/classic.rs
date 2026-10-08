@@ -273,16 +273,6 @@ impl C<'_, '_> {
                 let (a, first) = (self.asm.r(out)?, self.asm.run(first, l.b)?);
                 self.emit(self.abc(Kind::Concat, a, first, first + l.b - 1))?;
             }
-            Op::Close => {
-                let a = self.asm.r(l.a)?;
-                let w = if self.f.ver == 51 {
-                    self.raw_abc(p51::OP_CLOSE as u32, a, 0, 0)?
-                } else {
-                    // `JMP A+1 0`: close upvalues from R(A), fall through
-                    self.jmp(a + 1)? | ((1 << 17) - 1) << 14
-                };
-                self.asm.emit(w);
-            }
             _ => return self.flow(l, caps),
         }
         Ok(1)
