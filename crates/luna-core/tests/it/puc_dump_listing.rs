@@ -114,7 +114,9 @@ const OPERANDS: &[&str] = &[
      if 1.5 <= x then return 3 end\nreturn a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s\n",
     "local x, y = ...\nlocal a = x // 2.5\nlocal b = 7 // x\nlocal c = x & 1.5\nlocal d = 1 << x\n\
      local e = x >> 100000\nlocal f = '3' | x\nlocal g = x ~ 'a'\nlocal h = 1 // 0\nlocal i = 3 & 1.5\n\
-     local j = 1 % 0\nlocal k = x - 0\nlocal l = -1 >> x\nreturn a, b, c, d, e, f, g, h, i, j, k, l\n",
+     local j = 1 % 0\nlocal k = x - 0\nlocal l = -1 >> x\nlocal m = x - 128\nlocal n = x << 128\n\
+     local o = 128 << x\nlocal p = x - -127\nlocal q = x >> 128\n\
+     return a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q\n",
 ];
 
 /// A chunk with more constants than an `RK` operand reaches, then stores
