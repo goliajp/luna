@@ -207,11 +207,11 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             return Err(arg_error(vm, 2, "data string too short"));
         }
         pos += ntoalign;
-        // each result is pushed as it is read, after a check for two slots
-        // from there
+        // two slots are checked for before each item, and each result is
+        // pushed once it is read
         let top = Args::new(fs, nargs + results.len() as u32);
         argcheck::check_stack(vm, top, 2, "too many results")?;
-        vm.native_push(1);
+        let before = results.len();
         let p = pos as usize;
         match opt {
             KOption::Int | KOption::Uint => {
@@ -271,6 +271,7 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             }
             KOption::Padding | KOption::PadAlign | KOption::Nop => {}
         }
+        vm.native_push(u32::from(results.len() > before));
         pos += size;
     }
     results.push(Value::Int((pos + 1) as i64));
