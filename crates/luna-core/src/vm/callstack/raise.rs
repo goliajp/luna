@@ -80,6 +80,18 @@ impl Vm {
         list
     }
 
+    /// "attempt to call", raised (PUC `luaG_callerror`) with the call's
+    /// function and arguments ending at `top`, where the name of the
+    /// value and the message go, and before 5.4 the positioned message
+    /// a Lua caller adds.
+    pub(crate) fn call_err_at(&mut self, v: Value, top: u32) -> crate::vm::error::LuaError {
+        let lua = !self.native_on_top();
+        let e = self.call_err(v);
+        let positioned = u32::from(lua && self.version() < LuaVersion::Lua54);
+        self.overflow_top = Some(top + u32::from(self.varinfo_pushed) + positioned);
+        e
+    }
+
     /// The pcall (`Some(None)`) or xpcall (`Some(Some(handler))`) that will
     /// catch an error raised now, if any is in reach.
     fn nearest_catcher(&self) -> Option<Option<Value>> {
@@ -172,52 +184,22 @@ impl Vm {
         }
     }
 
-    /// Run an xpcall message handler on `err`, as PUC's `luaG_errormsg`
-    /// does: with the handler still installed, so an error the handler
-    /// raises runs it again at that point (nested, the raising frames still
-    /// on the stack), and what that inner run returns is the error thrown
-    /// out of the outer one. The handler's calls take C levels like any
-    /// other: past `MAX_C_DEPTH` the handler is run on the "C stack
-    /// overflow" that refusing one raises, and at `errerr_c_depth` the
-    /// refusal is "error in error handling", which no handler runs on
-    /// (errors.lua :637).
-    /// The slot `luaG_errormsg` runs the message handler at. A native
-    /// raises with the error object on top of its slots (the `error`
-    /// function sets its top to one argument and adds the position; a
-    /// library function's `luaL_error` adds the message): the handler
-    /// goes where that object was. A Lua frame raises at its `L->top`,
-    /// the top of the call the stack overflowed on or else its whole
-    /// window: `luaG_runerror` pushes the message there, and before 5.4
-    /// the positioned message as well, which it does not pop; 5.3+'s
-    /// `varinfo` has pushed the operand's name before them. Where the
-    /// error came from no frame, the handler runs where the stack ends.
+    /// The slot `luaG_errormsg` runs the message handler at: where the
+    /// error object was, on top of the stack that raised it. A native
+    /// raises with that object on top of its own stack, which `top`
+    /// follows as PUC's does (see `Vm::native_push`). A Lua frame raises
+    /// at its `L->top`, the top of the call the stack overflowed on or else
+    /// its whole window: `luaG_runerror` pushes the message there, and
+    /// before 5.4 the positioned message as well, which it does not pop;
+    /// 5.3+'s `varinfo` has pushed the operand's name before them. Where
+    /// the error came from no frame, the handler runs where the stack ends.
     fn raise_top(&mut self, raised_by: &[ErroredNative]) -> Option<u32> {
-        let positioned_message = u32::from(self.version() < LuaVersion::Lua54);
-        if let Some(top) = self.overflow_top.take() {
-            return Some(top + positioned_message);
+        if let Some(at) = self.overflow_top.take() {
+            return Some(at);
         }
+        let positioned_message = u32::from(self.version() < LuaVersion::Lua54);
         if let Some(e) = raised_by.first() {
-            let a = e.act;
-            let top = if a.nc.builtin == crate::runtime::Builtin::Error {
-                // the arguments may be gone already (a native the host
-                // called directly has had its slots taken back)
-                let arg = |i: u32| {
-                    if i < a.nargs {
-                        self.stack
-                            .get((a.func_slot + 1 + i) as usize)
-                            .copied()
-                            .unwrap_or(Value::Nil)
-                    } else {
-                        Value::Nil
-                    }
-                };
-                let positioned =
-                    matches!(arg(0), Value::Str(_)) && !matches!(arg(1), Value::Int(l) if l <= 0);
-                a.func_slot + 2 + u32::from(positioned)
-            } else {
-                a.func_slot + 1 + a.nargs + 1
-            };
-            return Some(top - 1);
+            return Some(e.act.top - 1);
         }
         let varinfo = u32::from(self.varinfo_pushed);
         self.frames
@@ -227,6 +209,15 @@ impl Vm {
             .map(|f| f.base + f.closure.proto.max_stack as u32 + positioned_message + varinfo)
     }
 
+    /// Run an xpcall message handler on `err`, as PUC's `luaG_errormsg`
+    /// does: with the handler still installed, so an error the handler
+    /// raises runs it again at that point (nested, the raising frames still
+    /// on the stack), and what that inner run returns is the error thrown
+    /// out of the outer one. The handler's calls take C levels like any
+    /// other: past `MAX_C_DEPTH` the handler is run on the "C stack
+    /// overflow" that refusing one raises, and at `errerr_c_depth` the
+    /// refusal is "error in error handling", which no handler runs on
+    /// (errors.lua :637).
     pub(crate) fn call_msgh(&mut self, handler: Value, err: Value) -> Value {
         self.call_msgh_at(handler, err, None)
     }

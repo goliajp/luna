@@ -72,6 +72,11 @@ fn io_readline(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     let fmts: Vec<Value> = (2..vm.nat_upcount(fs))
         .map(|i| vm.nat_upval(fs, i))
         .collect();
+    // `lua_settop(L, 1)`, then the formats are pushed for `g_read` (5.2+)
+    if vm.version() >= LuaVersion::Lua52 {
+        vm.native_settop(1);
+        vm.native_push(fmts.len() as u32);
+    }
     let vals = match g_read(vm, u, &fmts, 2)? {
         ReadOut::Values(v) => v,
         // the read's error message is raised

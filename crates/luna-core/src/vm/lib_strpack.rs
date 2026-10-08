@@ -106,6 +106,9 @@ fn format_arg(vm: &mut Vm, a: Args) -> Result<Vec<u8>, LuaError> {
 pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let fmt = format_arg(vm, a)?;
+    // the nil mark above the arguments, then the buffer
+    vm.native_push(1);
+    vm.native_buffinit(0);
     let v55 = vm.version() >= LuaVersion::Lua55;
     let mut h = Header::new();
     let mut out: Vec<u8> = Vec::new();
@@ -122,8 +125,7 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         out.resize(out.len() + ntoalign as usize, 0);
         arg += 1;
         let i = arg - 1;
-        // str_pack pushes a nil mark above its arguments, so the first
-        // missing one reads as nil rather than "no value"
+        // the nil mark makes the first missing argument read as nil
         if a.is_none(i) && !matches!(opt, KOption::Padding | KOption::PadAlign | KOption::Nop) {
             let expected = match opt {
                 KOption::Char | KOption::Str | KOption::Zstr => "string",

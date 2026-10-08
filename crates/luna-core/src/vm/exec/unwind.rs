@@ -136,7 +136,7 @@ impl Vm {
                 }) => {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     self.cont_popped(true, true);
-                    self.stack.truncate(func_slot as usize);
+                    self.stack.truncate(func_slot.max(self.lua_window_end()) as usize);
                     self.top = mc.saved_top.min(func_slot);
                     self.tbc.retain(|&s| s < func_slot);
                 }
@@ -156,7 +156,7 @@ impl Vm {
                 // a __pairs continuation does not catch either: an error inside
                 // the metamethod propagates past `pairs`.
                 CallFrame::Cont(NativeCont {
-                    kind: ContKind::Pairs,
+                    kind: ContKind::Pairs { .. },
                     func_slot,
                     ..
                 }) => {
@@ -274,7 +274,7 @@ impl Vm {
                     self.call_msgh(handler, err)
                 }
             }
-            ContKind::Meta(_) | ContKind::Pairs | ContKind::Close(_) | ContKind::Host(_) => {
+            ContKind::Meta(_) | ContKind::Pairs { .. } | ContKind::Close(_) | ContKind::Host(_) => {
                 unreachable!("Meta/Pairs/Close/Host cont handled above")
             }
         };

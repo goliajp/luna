@@ -40,14 +40,20 @@ pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
         return Ok(vm.nat_return(fs, &[Value::Table(table)]));
     }
     let mut out = Vec::new();
+    let mut slotted = vm.native_buffinit(0);
     let mut i = 0;
     while i < fmt.len() {
+        vm.native_buffgrown(&mut slotted, out.len() + 1);
         if fmt[i] != b'%' {
             out.push(fmt[i]);
             i += 1;
             continue;
         }
         let rest = &fmt[i + 1..];
+        // room for a conversion is made before it is checked (5.3+)
+        if v >= LuaVersion::Lua53 {
+            vm.native_buffgrown(&mut slotted, out.len() + 250);
+        }
         let len = match conversion_len(v, rest) {
             Some(n) => n,
             None if v == LuaVersion::Lua51 => {
@@ -58,6 +64,8 @@ pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             None => {
                 let shown = String::from_utf8_lossy(lib_io::c_str(rest)).into_owned();
                 let msg = format!("invalid conversion specifier '%{shown}'");
+                // the message is pushed before `luaL_argerror` adds to it
+                vm.native_push(1);
                 return Err(arg_error(vm, 1, &msg));
             }
         };

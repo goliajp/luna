@@ -54,7 +54,14 @@ fn push_captures(
         ms.level()
     };
     for i in 0..n {
-        let c = ms.get_capture(i, s, e).map_err(|err| pat_err(vm, err))?;
+        let c = match ms.get_capture(i, s, e) {
+            Ok(c) => c,
+            Err(err) => {
+                // over what was pushed before it
+                vm.native_push(out.len() as u32);
+                return Err(pat_err(vm, err));
+            }
+        };
         out.push(cap_value(vm, src, c));
     }
     Ok(())
@@ -211,6 +218,7 @@ pub(super) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
             arg_error(vm, 3, "string/function/table expected")
         });
     }
+    let mut slotted = vm.native_buffinit(0);
     // a string or number replacement is a template
     let template = match repl {
         Value::Str(t) => Some(t),
@@ -238,6 +246,7 @@ pub(super) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
             changed |= add_value(vm, &ms, src, pos, e, repl, template, &mut out)?;
             last = Some(e);
         }
+        vm.native_buffgrown(&mut slotted, out.len());
         match m {
             Some(e) if v >= LuaVersion::Lua53 || e > pos => pos = e,
             _ if pos < src.len() => {
@@ -277,41 +286,47 @@ fn add_value(
         add_s(vm, ms, src, s, e, t.as_bytes(), out)?;
         return Ok(true);
     }
+    // the value ends up pushed where the key or the function was
     let r = match repl {
         Value::Table(_) => {
             let k = ms.get_capture(0, s, e).map_err(|err| pat_err(vm, err))?;
             let k = cap_value(vm, src, k);
+            vm.native_push(1);
             vm.index_value(repl, k)?
         }
         f => {
             let mut args = Vec::new();
+            // the function, then its arguments, are pushed for the call
+            vm.native_push(1);
             push_captures(vm, ms, src, s, e, true, &mut args)?;
+            vm.native_pop(1);
             // an unprotected C call: the replacement cannot yield
-            vm.call_value(f, &args)?
-                .first()
-                .copied()
-                .unwrap_or(Value::Nil)
+            let r = vm.call_value(f, &args)?.first().copied().unwrap_or(Value::Nil);
+            vm.native_push(1);
+            r
         }
     };
-    match r {
+    let kept = match r {
         Value::Nil | Value::Bool(false) => {
             out.extend_from_slice(&src[s..e]);
-            Ok(false)
+            false
         }
         Value::Str(x) => {
             out.extend_from_slice(x.as_bytes());
-            Ok(true)
+            true
         }
         n @ (Value::Int(_) | Value::Float(_)) => {
             let b = vm.tostring_basic(n);
             out.extend_from_slice(&b);
-            Ok(true)
+            true
         }
-        other => Err(raise_str(
-            vm,
-            &format!("invalid replacement value (a {})", other.type_name()),
-        )),
-    }
+        other => {
+            let msg = format!("invalid replacement value (a {})", other.type_name());
+            return Err(raise_str(vm, &msg));
+        }
+    };
+    vm.native_pop(1);
+    Ok(kept)
 }
 
 /// PUC `add_s`: expand `%0`-`%9` and `%%` in a template. 5.1 copies any

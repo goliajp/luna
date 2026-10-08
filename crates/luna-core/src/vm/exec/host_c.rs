@@ -342,6 +342,7 @@ impl Vm {
             nargs: 0,
             depth: self.frames.len() as u32,
             ccmt: 0,
+            top: nc.func_slot + 1,
         });
         self.native_nresults = nc.nresults;
         let thread = self.host_thread();

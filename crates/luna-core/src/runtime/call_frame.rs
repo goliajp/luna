@@ -171,10 +171,12 @@ pub enum ContKind {
         /// Continuation describing how to finish the interrupted op.
         MetaCont,
     ),
-    /// a yieldable `__pairs` metamethod call from `pairs()` (PUC luaB_pairs uses
-    /// lua_callk): on return, its (≤4, nil-padded) results are `pairs`'s own
-    /// results. A `coroutine.yield` inside `__pairs` is preserved like pcall's.
-    Pairs,
+    /// a yieldable `__pairs` call from `pairs()` (PUC `lua_callk`); its (≤4,
+    /// nil-padded) results are `pairs`'s own, and a yield is kept as pcall's
+    Pairs {
+        /// where it was called, counted from `pairs`'s slot
+        at: u32,
+    },
     /// a yieldable `__close` handler call driven by `begin_close` (PUC's
     /// `luaF_close` + `lua_callk` continuation). On the handler's return or
     /// error, the close iteration resumes from `CloseCont`'s state and either

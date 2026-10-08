@@ -346,6 +346,7 @@ impl Vm {
                         nargs: 0,
                         depth: self.frames.len() as u32,
                         ccmt: 0,
+                        top: fslot + 1,
                     });
             }
             let r = self.hook_return(true, 1, n);

@@ -232,6 +232,7 @@ impl Vm {
                 nargs,
                 depth: self.frames.len() as u32,
                 ccmt,
+                top: func_slot + 1 + nargs,
             });
         let nret = self.invoke_native(nc, func_slot, nargs)?;
         // the native may have armed a hook, whose return event it gets

@@ -47,7 +47,7 @@ impl Vm {
             } else {
                 Value::Nil
             };
-            self.stack.truncate(nc.func_slot as usize);
+            self.stack.truncate(nc.func_slot.max(self.lua_window_end()) as usize);
             self.top = mc.saved_top;
             self.finish_meta(mc.action, result)?;
             return Ok(None);
@@ -73,7 +73,7 @@ impl Vm {
         // dialect's count (iterator, state, control, and on 5.5 the
         // closing value) at pairs's slot, where the metamethod was
         // called, and hand them to pairs's caller.
-        if let ContKind::Pairs = nc.kind {
+        if let ContKind::Pairs { at } = nc.kind {
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
             self.cont_popped(true, true);
             let total = crate::vm::builtins::pairs_mm_results(self) as u32;
@@ -81,8 +81,8 @@ impl Vm {
             if self.stack.len() < need {
                 self.grow_stack_or_abort(need);
             }
-            // the metamethod ran one slot above pairs's own
-            let first = nc.func_slot + 1;
+            // where the metamethod ran, above pairs's arguments
+            let first = nc.func_slot + at;
             let n = (self.top - first).min(total);
             for i in 0..n {
                 self.stack[(nc.func_slot + i) as usize] = self.stack[(first + i) as usize];

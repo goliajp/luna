@@ -176,7 +176,7 @@ impl Vm {
                 if nargs >= 1 && self.version >= LuaVersion::Lua54 {
                     let arg = self.stack[(func_slot + 1) as usize];
                     if !self.get_mm(arg, Mm::Pairs).is_nil() {
-                        return Some(self.begin_pairs(func_slot, nresults));
+                        return Some(self.begin_pairs(func_slot, nargs, nresults));
                     }
                 }
                 None

@@ -111,11 +111,15 @@ impl Vm {
             return match r.first().copied().unwrap_or(Value::Nil) {
                 Value::Str(s) => Ok(s.as_bytes().to_vec()),
                 r @ (Value::Int(_) | Value::Float(_)) => Ok(self.tostring_basic(r)),
-                // luaL_error: positioned at whatever called the library function
-                _ => Err(crate::vm::builtins::raise_str(
-                    self,
-                    "'__tostring' must return a string",
-                )),
+                // luaL_error over the result: positioned at whatever called
+                // the library function
+                _ => {
+                    self.native_push(1);
+                    Err(crate::vm::builtins::raise_str(
+                        self,
+                        "'__tostring' must return a string",
+                    ))
+                }
             };
         }
         if self.version >= LuaVersion::Lua53

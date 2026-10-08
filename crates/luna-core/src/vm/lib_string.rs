@@ -240,6 +240,9 @@ fn s_byte(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 fn s_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
+    if v >= LuaVersion::Lua52 {
+        vm.native_buffinit(nargs as usize);
+    }
     let mut out = Vec::with_capacity(nargs as usize);
     for i in 0..nargs {
         let c = if v <= LuaVersion::Lua52 {

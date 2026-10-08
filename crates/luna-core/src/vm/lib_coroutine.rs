@@ -156,15 +156,12 @@ fn co_resume(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let args: Vec<Value> = (1..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
     match vm.resume_coro(co, args) {
         Ok(mut vals) => {
-            // PUC `auxresume` (lcorolib.c) gates the return-value transfer on
-            // `lua_checkstack(L, nres + 1)` *against the parent thread's
-            // stack room* — a coroutine that produces a million values into
-            // its own stack still cannot deliver them to a caller with no
-            // room to receive. coroutine.lua :530's "bug (stack overflow)"
-            // series asserts this by spinning up coroutines that build a
-            // table of `lim - 10` … `lim + 1` entries and asserts every
-            // resume fails.
-            if (vals.len() as i64) + 1 > vm.stack_room() {
+            // PUC `auxresume` gates the transfer on `lua_checkstack(L,
+            // nres + 1)` on the resuming thread, whose top is past the
+            // coroutine argument once the other arguments moved to it
+            // (coroutine.lua :530 resumes ones that return `lim - 10` …
+            // `lim + 1` values)
+            if !vm.checkstack(fs + 2, vals.len() as i64 + 1) {
                 let msg = vm.heap.intern(b"too many results to resume");
                 return Ok(vm.nat_return(fs, &[Value::Bool(false), Value::Str(msg)]));
             }
@@ -238,10 +235,13 @@ fn co_wrapped(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         unreachable!("wrap upvalue is a coroutine");
     };
     let in_wrap = upval_table(vm, fs, 1);
+    // the arguments move to the coroutine, and its error comes back pushed
+    let args = collect_args(vm, fs, nargs);
+    vm.native_settop(0);
+    vm.native_push(1);
     let err = match resume_refusal(vm, co, nargs == 0, in_wrap) {
         Some(msg) => Value::Str(vm.heap.intern(msg.as_bytes())),
         None => {
-            let args = collect_args(vm, fs, nargs);
             mark_in_wrap(vm, in_wrap, true)?;
             let r = vm.resume_coro(co, args);
             mark_in_wrap(vm, in_wrap, false)?;
@@ -249,9 +249,11 @@ fn co_wrapped(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                 Ok(vals) => return Ok(vm.nat_return(fs, &vals)),
                 // 5.4+ close a coroutine that died by error before
                 // re-raising, so its pending `__close` handlers run (and one
-                // of them may replace the error); one the resume refused
-                // to start ("C stack overflow") is not dead and stays open
+                // of them may replace the error), whose error is pushed over
+                // the first; one the resume refused to start ("C stack
+                // overflow") is not dead and stays open
                 Err(_) if vm.version() >= LuaVersion::Lua54 && co.status == CoroStatus::Dead => {
+                    vm.native_push(1);
                     match vm.close_coro(co) {
                         Ok(Some(e)) => death_value(vm, e),
                         Ok(None) => unreachable!("a coroutine that died by error has an error"),
@@ -295,7 +297,7 @@ fn co_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let co = if vm.version() >= LuaVersion::Lua55 && a.is_none(0) {
         match vm.current_coro() {
             Some(c) => c,
-            None => return Err(raise_str(vm, "cannot close main thread")),
+            None => return Err(main_close_err(vm)),
         }
     } else {
         check_co(vm, a)?
@@ -328,7 +330,7 @@ fn co_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             // 5.4 rolls both into "cannot close a running coroutine".
             if vm.version() >= LuaVersion::Lua55 {
                 if vm.is_main_coro(co) {
-                    return Err(raise_str(vm, "cannot close main thread"));
+                    return Err(main_close_err(vm));
                 }
                 if vm.current_coro().is_some_and(|c| c.ptr_eq(co)) {
                     return Err(vm.close_running());
@@ -337,4 +339,10 @@ fn co_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             Err(raise_str(vm, "cannot close a running coroutine"))
         }
     }
+}
+
+/// over the main thread `lua_geti` fetched from the registry to compare
+fn main_close_err(vm: &mut Vm) -> LuaError {
+    vm.native_push(1);
+    raise_str(vm, "cannot close main thread")
 }

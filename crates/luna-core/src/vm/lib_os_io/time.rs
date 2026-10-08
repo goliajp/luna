@@ -22,8 +22,15 @@ fn time_value(vm: &Vm, t: i64) -> Value {
 /// absent (`d < 0`: required). ≤5.2 take any number, truncated to `int`,
 /// and treat a non-number as absent; 5.3+ want an integer and bound it.
 fn getfield(vm: &mut Vm, t: Gc<Table>, key: &str, d: i32, delta: i64) -> Result<i32, LuaError> {
-    let k = Value::Str(vm.heap.intern(key.as_bytes()));
-    let v = vm.index_value(Value::Table(t), k)?;
+    let r = getfield_pushed(vm, t, key, d, delta);
+    if r.is_ok() {
+        vm.native_pop(1);
+    }
+    r
+}
+
+fn getfield_pushed(vm: &mut Vm, t: Gc<Table>, key: &str, d: i32, delta: i64) -> Result<i32, LuaError> {
+    let v = vm.native_getfield(Value::Table(t), key.as_bytes())?;
     let missing = |vm: &mut Vm| raise_str(vm, &format!("field '{key}' missing in date table"));
     if vm.version() <= LuaVersion::Lua52 {
         return match argcheck::to_num(vm, v) {
@@ -134,6 +141,7 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
         return Ok(vm.nat_return(fs, &[v]));
     }
     let t = argcheck::check_table(vm, a, 0)?;
+    vm.native_settop(1);
     let v = vm.version();
     // ≤5.3 read the fields from seconds upwards, 5.4 from the year down; the
     // order decides which bad field is reported
@@ -165,8 +173,8 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             }
         }
     }
-    let k = Value::Str(vm.heap.intern(b"isdst"));
-    let isdst = vm.index_value(Value::Table(t), k)?;
+    let isdst = vm.native_getfield(Value::Table(t), b"isdst")?;
+    vm.native_pop(1);
     // a true isdst (`tm_isdst > 0`; nil is -1, false 0) in a zone without
     // daylight saving time: glibc's mktime takes DST to be one hour ahead
     // and moves the result an hour back

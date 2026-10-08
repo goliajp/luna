@@ -154,6 +154,7 @@ impl Vm {
                             // a tail call resolved its `__call` chain before
                             // calling here and passed the count in tail_ccmt
                             ccmt: tail_ccmt + chain as u8,
+                            top: func_slot + 1 + nargs,
                         });
                     // PUC C-call discipline: entering a C function sets
                     // L->top to func + 1 + nargs, so a collect triggered
@@ -203,7 +204,7 @@ impl Vm {
     ) -> Result<(), LuaError> {
         let mm = self.get_mm(v, Mm::Call);
         if mm.is_nil() || self.call_mm_unusable(mm) {
-            return Err(self.call_err(v));
+            return Err(self.call_err_at(v, func_slot + 1 + nargs));
         }
         // PUC 5.5 dropped the chain cap from `MAXTAGRECUR = 200`
         // (the value 5.4's `lvm.c` uses) down to `MAXCCMT = 16`,
@@ -417,7 +418,7 @@ impl Vm {
     fn lua_stack_overflow(&mut self, top: u32, need: u32) -> Result<(), LuaError> {
         if !self.stack_extra {
             self.stack_extra = true;
-            self.overflow_top = Some(top);
+            self.overflow_top = Some(top + u32::from(self.version() < LuaVersion::Lua54));
             return Err(self.rt_err("stack overflow"));
         }
         if top + need >= self.g.lua_stack_limit + STACK_ERR_SPACE {

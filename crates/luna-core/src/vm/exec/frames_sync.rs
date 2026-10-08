@@ -134,7 +134,7 @@ pub(super) fn is_c_level_cont(f: &CallFrame) -> bool {
     matches!(
         f,
         CallFrame::Cont(NativeCont {
-            kind: ContKind::Meta(_) | ContKind::Pairs | ContKind::Close(_),
+            kind: ContKind::Meta(_) | ContKind::Pairs { .. } | ContKind::Close(_),
             ..
         })
     )

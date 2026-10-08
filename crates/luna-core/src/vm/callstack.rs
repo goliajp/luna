@@ -18,6 +18,7 @@ use crate::runtime::{Gc, NativeClosure, Value};
 
 mod chunk_id;
 mod levels;
+mod native_top;
 mod raise;
 mod traceback;
 
@@ -36,6 +37,9 @@ pub(crate) struct NativeAct {
     pub(crate) depth: u32,
     /// `__call` metamethods resolved to reach it (PUC 5.5 `CIST_CCMT`)
     pub(crate) ccmt: u8,
+    /// PUC's `L->top` while it runs: its arguments, then what the C
+    /// function has pushed or dropped since (see `Vm::native_push`)
+    pub(crate) top: u32,
 }
 
 /// One stack level (one PUC `CallInfo`).
@@ -145,7 +149,7 @@ impl<'a> ThreadStack<'a> {
                         ContKind::Pcall { level, .. } | ContKind::Xpcall { level, .. } => {
                             level && !is_host_call(stack[nc.func_slot as usize])
                         }
-                        ContKind::Pairs => !is_host_call(stack[nc.func_slot as usize]),
+                        ContKind::Pairs { .. } => !is_host_call(stack[nc.func_slot as usize]),
                         ContKind::Host(_) => !acts.iter().any(|a| a.func_slot == nc.func_slot),
                         _ => false,
                     };

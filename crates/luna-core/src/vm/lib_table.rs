@@ -96,17 +96,28 @@ fn checktab(vm: &mut Vm, a: Args, i: u32, what: u8) -> Result<Value, LuaError> {
         return Ok(v);
     }
     let ver = vm.version();
-    let ok = ver >= V::Lua53
-        && !a.is_none(i)
-        && vm.metatable_of(v).is_some()
-        && (what & TAB_R == 0 || !vm.get_mm(v, Mm::Index).is_nil())
-        && (what & TAB_W == 0 || !vm.get_mm(v, Mm::NewIndex).is_nil())
-        && (what & TAB_L == 0
-            || (ver >= V::Lua55 && matches!(v, Value::Str(_)))
-            || !vm.get_mm(v, Mm::Len).is_nil());
+    // the metatable and each field tested are pushed, and stay pushed for
+    // the error when one is missing
+    let mut pushed = 0;
+    let mut ok = ver >= V::Lua53 && !a.is_none(i) && vm.metatable_of(v).is_some();
+    if ok {
+        pushed = 1;
+        let len_free = ver >= V::Lua55 && matches!(v, Value::Str(_));
+        for (flag, mm) in [(TAB_R, Mm::Index), (TAB_W, Mm::NewIndex), (TAB_L, Mm::Len)] {
+            if what & flag == 0 || (flag == TAB_L && len_free) {
+                continue;
+            }
+            pushed += 1;
+            if vm.get_mm(v, mm).is_nil() {
+                ok = false;
+                break;
+            }
+        }
+    }
     if ok {
         Ok(v)
     } else {
+        vm.native_push(pushed);
         Err(argcheck::type_error(vm, a, i, "table"))
     }
 }
@@ -161,7 +172,31 @@ fn tab_geti(vm: &mut Vm, tv: Value, i: i64) -> Result<Value, LuaError> {
             _ => Value::Nil,
         });
     }
-    vm.index_value(tv, Value::Int(i))
+    with_key_pushed(vm, |vm| vm.index_value(tv, Value::Int(i)))
+}
+
+/// 5.3's `lua_geti` and `lua_seti` push the index as a key before they reach
+/// a metamethod, which then runs above it
+fn with_key_pushed<R>(vm: &mut Vm, f: impl FnOnce(&mut Vm) -> R) -> R {
+    let key = u32::from(vm.version() == V::Lua53);
+    vm.native_push(key);
+    let r = f(vm);
+    vm.native_pop(key);
+    r
+}
+
+/// `lua_geti` / `lua_rawgeti`: [`tab_geti`], the value left pushed.
+fn geti_push(vm: &mut Vm, tv: Value, i: i64) -> Result<Value, LuaError> {
+    let v = tab_geti(vm, tv, i)?;
+    vm.native_push(1);
+    Ok(v)
+}
+
+/// `lua_seti` / `lua_rawseti`: [`tab_seti`] of the value on top, popped.
+fn seti_pop(vm: &mut Vm, tv: Value, i: i64, v: Value) -> Result<(), LuaError> {
+    tab_seti(vm, tv, i, v)?;
+    vm.native_pop(1);
+    Ok(())
 }
 
 /// Element write: raw on ≤5.2 (`lua_rawseti`), through `__newindex` on
@@ -180,5 +215,5 @@ fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value) -> Result<(), LuaError> {
         }
         return Ok(());
     }
-    vm.newindex_value(tv, Value::Int(i), v)
+    with_key_pushed(vm, |vm| vm.newindex_value(tv, Value::Int(i), v))
 }

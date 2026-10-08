@@ -88,6 +88,8 @@ pub(super) fn io_open(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
         None => b"r".to_vec(),
     };
     if vm.version() >= LuaVersion::Lua52 && !mode_ok(vm.version(), &mode) {
+        // the new handle is pushed before the mode is checked
+        vm.native_push(1);
         return Err(arg_error(vm, 2, "invalid mode"));
     }
     reset_errno(vm);
@@ -243,6 +245,8 @@ pub(super) fn default_file(vm: &Vm, which: Io) -> Gc<Userdata> {
 /// `getiofile`: the default stream, which must still be open.
 pub(super) fn get_io_file(vm: &mut Vm, which: Io) -> Result<Gc<Userdata>, LuaError> {
     let u = default_file(vm, which);
+    // `getiofile` pushes the stream from the registry
+    vm.native_push(1);
     if u.file().is_closed() {
         let what = match which {
             Io::Input => "input",
@@ -295,7 +299,11 @@ pub(super) fn open_checked(
             note_failure(&e);
             let n = String::from_utf8_lossy(c_str(name)).into_owned();
             let err = strerror(&e);
-            Err(if vm.version() == LuaVersion::Lua51 {
+            // over the new handle; 5.1 pushes the message for the argument
+            // error as well
+            let v51 = vm.version() == LuaVersion::Lua51;
+            vm.native_push(1 + u32::from(v51));
+            Err(if v51 {
                 arg_error(vm, 1, &format!("{n}: {err}"))
             } else {
                 raise_str(vm, &format!("cannot open file '{n}' ({err})"))
