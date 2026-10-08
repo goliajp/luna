@@ -18,7 +18,10 @@ pub(super) fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let global_tostring = if vm.version() <= LuaVersion::Lua53 {
         let g = Value::Table(vm.globals());
         let key = Value::Str(vm.heap.intern(b"tostring"));
-        Some(vm.index_value(g, key)?)
+        let ts = vm.index_value(g, key)?;
+        // it stays pushed below each call of it
+        vm.native_push(1);
+        Some(ts)
     } else {
         None
     };
@@ -41,7 +44,11 @@ pub(super) fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
                 // rendered, anything else is refused.
                 Ok(r) => match r.first().and_then(|&s| argcheck::to_str_bytes(vm, s)) {
                     Some(b) => Ok(b),
-                    None => Err(raise_str(vm, "'tostring' must return a string to 'print'")),
+                    None => {
+                        // over the result
+                        vm.native_push(1);
+                        Err(raise_str(vm, "'tostring' must return a string to 'print'"))
+                    }
                 },
                 Err(e) => Err(e),
             },
@@ -182,6 +189,8 @@ pub(super) fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
         _ => return Err(argcheck::arg_expected(vm, a, 1, "nil or table")),
     };
     if !vm.get_mm(Value::Table(t), Mm::Metatable).is_nil() {
+        // over the `__metatable` field `luaL_getmetafield` pushed
+        vm.native_push(1);
         return Err(raise_str(vm, "cannot change a protected metatable"));
     }
     // Redis's `lua_setmetatable` refuses a read-only table

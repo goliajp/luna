@@ -1,6 +1,8 @@
 //! Read formats and the readers for lines, counts and the whole file.
 
 use super::*;
+mod lines_chunks;
+pub(crate) use lines_chunks::*;
 
 /// Outcome of `g_read`: the values (the last one nil when a format failed),
 /// or the I/O error that ends a read (`ferror`).
@@ -34,7 +36,11 @@ fn parse_format(vm: &mut Vm, fmt: Value, argno: u32) -> Result<Fmt, LuaError> {
         Value::Str(s) => s.as_bytes().to_vec(),
         _ if v <= LuaVersion::Lua52 => return Err(arg_error(vm, argno, "invalid option")),
         _ => {
+            // `luaL_checkstring`'s type error: a `__name` it found, then
+            // the message, pushed
             let tn = argcheck::typename_of(vm, fmt);
+            let named = !vm.get_mm(fmt, crate::vm::exec::Mm::Name).is_nil();
+            vm.native_push(1 + u32::from(named));
             return Err(arg_error(vm, argno, &format!("string expected, got {tn}")));
         }
     };
@@ -92,7 +98,14 @@ fn g_read_formats(
     }
     let mut out = Vec::with_capacity(fmts.len());
     for (i, &f) in fmts.iter().enumerate() {
-        let fmt = parse_format(vm, f, argno0 + i as u32)?;
+        let fmt = match parse_format(vm, f, argno0 + i as u32) {
+            Ok(f) => f,
+            Err(e) => {
+                // over the values read before it
+                vm.native_push(out.len() as u32);
+                return Err(e);
+            }
+        };
         let r = match fmt {
             Fmt::Count(n) => read_count(vm, u, n)?,
             Fmt::Number => read_number(vm, u),
@@ -134,166 +147,6 @@ pub(super) fn f_read(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     Ok(push_read(vm, fs, r))
 }
 
-/// `BUFSIZ`, the size of the chunks ≤5.2 read a line in (`LUAL_BUFFERSIZE`).
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "dragonfly"
-))]
-const BUFSIZ: usize = 1024;
-#[cfg(windows)]
-const BUFSIZ: usize = 512;
-#[cfg(not(any(
-    windows,
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "dragonfly"
-)))]
-const BUFSIZ: usize = 8192;
-
-/// `read_line`: up to and excluding (`keep_nl`: including) the newline; nil
-/// when nothing at all was read.
-fn read_line(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Result<Value> {
-    if vm.version() <= LuaVersion::Lua52 {
-        return read_line_fgets(vm, u, keep_nl);
-    }
-    let mut buf = Vec::new();
-    let mut got_nl = false;
-    while let Some(c) = getc(u)? {
-        if c == b'\n' {
-            got_nl = true;
-            if keep_nl {
-                buf.push(c);
-            }
-            break;
-        }
-        buf.push(c);
-    }
-    if got_nl || !buf.is_empty() {
-        read_str(vm, &buf)
-    } else {
-        Ok(Value::Nil)
-    }
-}
-
-/// ≤5.2's `read_line` reads with `fgets` and measures each chunk with
-/// `strlen`: a NUL cuts the chunk short there, and a newline after it is
-/// lost, so the line runs on into the next.
-fn read_line_fgets(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Result<Value> {
-    let mut out = Vec::new();
-    loop {
-        let mut chunk = Vec::new();
-        while chunk.len() < BUFSIZ - 1 {
-            match getc(u)? {
-                Some(c) => {
-                    chunk.push(c);
-                    if c == b'\n' {
-                        break;
-                    }
-                }
-                None => break,
-            }
-        }
-        if chunk.is_empty() {
-            return if out.is_empty() {
-                Ok(Value::Nil)
-            } else {
-                read_str(vm, &out)
-            };
-        }
-        // strlen: up to the first NUL, the whole chunk when there is none
-        let len = chunk.iter().position(|&b| b == 0).unwrap_or(chunk.len());
-        if len == 0 || chunk[len - 1] != b'\n' {
-            out.extend_from_slice(&chunk[..len]);
-        } else {
-            let end = if keep_nl { len } else { len - 1 };
-            out.extend_from_slice(&chunk[..end]);
-            return read_str(vm, &out);
-        }
-    }
-}
-
-/// A string read from a file. One longer than a string can hold is an
-/// allocation failure, which PUC's buffer would meet first.
-fn read_str(vm: &mut Vm, bytes: &[u8]) -> std::io::Result<Value> {
-    if bytes.len() > crate::runtime::string::MAX_LEN {
-        return Err(posix_error(ENOMEM));
-    }
-    Ok(Value::Str(vm.heap.intern(bytes)))
-}
-
-/// `read_all`: never fails (an empty string at end of file).
-fn read_all(vm: &mut Vm, u: Gc<Userdata>) -> std::io::Result<Value> {
-    if u.crt.is_some() {
-        let buf = read_all_crt(vm.version(), u);
-        return read_str(vm, &buf);
-    }
-    let mut buf = Vec::new();
-    loop {
-        buf.extend_from_slice(&u.read_buf[u.read_pos..]);
-        // SAFETY: `u` is a file handle the caller holds; the right-hand side is read before the borrow starts, and the borrow covers one field store
-        unsafe { u.as_mut() }.read_pos = u.read_buf.len();
-        if !fill(u)? {
-            break;
-        }
-    }
-    read_str(vm, &buf)
-}
-
-/// `LUAL_BUFFERSIZE` of PUC built for 64-bit Windows.
-pub(super) fn lual_buffersize(v: LuaVersion) -> usize {
-    match v {
-        LuaVersion::Lua51 | LuaVersion::Lua52 => 512,
-        LuaVersion::Lua53 => 8192,
-        _ => 1024,
-    }
-}
-
-/// Each dialect's `read_all` over the C library's `FILE`, whose `fread`
-/// calls decide what stays in the stream buffer (and so what `seek`
-/// reports).
-fn read_all_crt(v: LuaVersion, u: Gc<Userdata>) -> Vec<u8> {
-    if v == LuaVersion::Lua51 {
-        return read_chars_51(u, usize::MAX);
-    }
-    let mut rlen = lual_buffersize(v);
-    let mut out = Vec::new();
-    loop {
-        let got = crt::fread(u, rlen);
-        let short = got.len() < rlen;
-        out.extend_from_slice(&got);
-        if short {
-            return out;
-        }
-        // 5.2 doubles its buffer on every round
-        if v == LuaVersion::Lua52 {
-            rlen *= 2;
-        }
-    }
-}
-
-/// 5.1's `read_chars`: `fread` in `LUAL_BUFFERSIZE` chunks.
-fn read_chars_51(u: Gc<Userdata>, mut n: usize) -> Vec<u8> {
-    let mut rlen = lual_buffersize(LuaVersion::Lua51);
-    let mut out = Vec::new();
-    loop {
-        rlen = rlen.min(n);
-        let got = crt::fread(u, rlen);
-        n -= got.len();
-        let full = got.len() == rlen;
-        out.extend_from_slice(&got);
-        if n == 0 || !full {
-            return out;
-        }
-    }
-}
-
 /// Sizes no allocator grants; PUC's buffer for them fails before reading.
 const UNALLOCATABLE: u64 = 1 << 47;
 
@@ -307,11 +160,16 @@ fn read_count(vm: &mut Vm, u: Gc<Userdata>, n: i64) -> Result<std::io::Result<Va
     // 5.1 reads in chunks, so any size works; 5.2+ size one buffer for the
     // whole request, which the allocator refuses for absurd sizes
     if size >= UNALLOCATABLE && vm.version() >= LuaVersion::Lua52 {
+        // 5.3 has pushed the buffer's box, 5.4+ the buffer's placeholder
+        vm.native_buffinit(0);
         return Err(match vm.version() {
             LuaVersion::Lua52 if size > u64::MAX - 64 => {
                 vm.plain_err("memory allocation error: block too big")
             }
-            LuaVersion::Lua53 => raise_str(vm, "not enough memory for buffer allocation"),
+            LuaVersion::Lua53 => {
+                vm.native_push(1);
+                raise_str(vm, "not enough memory for buffer allocation")
+            }
             LuaVersion::Lua55 if size >= i64::MAX as u64 => {
                 raise_str(vm, "resulting string too large")
             }

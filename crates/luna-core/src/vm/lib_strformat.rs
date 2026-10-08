@@ -10,6 +10,8 @@ use crate::vm::builtins::{arg_error, raise_bytes, raise_str};
 use crate::vm::cfmt::{self, Spec};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
+mod quoted;
+pub(crate) use quoted::*;
 
 /// PUC `MAX_FORMAT`: a 5.4+ specification plus '%', a length modifier
 /// and the terminator must fit in 32 bytes.
@@ -26,6 +28,8 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let mut out = Vec::with_capacity(fmt.len());
     let mut arg = 0u32;
     let mut i = 0;
+    // the buffer's slot counts only when a callback runs or an error is
+    // raised: it is added then, from the content built so far
     while i < fmt.len() {
         let c = fmt[i];
         i += 1;
@@ -41,12 +45,22 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         }
         arg += 1;
         if arg >= nargs {
+            let buf = vm.buffer_slot(out.len());
+            vm.native_push(buf);
             return Err(arg_error(vm, arg + 1, "no value"));
         }
-        i = if v >= LuaVersion::Lua54 {
-            item54(vm, a, arg, fmt, i, &mut out)?
+        let item = if v >= LuaVersion::Lua54 {
+            item54(vm, a, arg, fmt, i, &mut out)
         } else {
-            item51(vm, a, arg, fmt, i, &mut out)?
+            item51(vm, a, arg, fmt, i, &mut out)
+        };
+        i = match item {
+            Ok(i) => i,
+            Err(e) => {
+                let buf = vm.buffer_slot(out.len());
+                vm.native_push(buf);
+                return Err(e);
+            }
         };
     }
     let s = vm.built_str(&out)?;
@@ -176,13 +190,21 @@ fn item51(
             let s = if v == LuaVersion::Lua51 {
                 argcheck::check_string(vm, a, arg)?.as_bytes().to_vec()
             } else {
-                vm.tostring_value(a.get(vm, arg))?
+                // a `__tostring` runs above the buffer's slot
+                let buf = vm.buffer_slot(out.len());
+                if v == LuaVersion::Lua52 {
+                    tolstring_52(vm, a.get(vm, arg), buf)?
+                } else {
+                    vm.tostring_value_pushed(a.get(vm, arg), buf)?
+                }
             };
             let has_prec = body.contains(&b'.');
             if v >= LuaVersion::Lua53 && body.is_empty() {
                 out.extend_from_slice(&s);
             } else {
                 if v >= LuaVersion::Lua53 && s.contains(&0) {
+                    // over the `luaL_tolstring` result
+                    vm.native_push(1);
                     return Err(arg_error(vm, arg + 1, "string contains zeros"));
                 }
                 if !has_prec && s.len() >= 100 {
@@ -211,6 +233,26 @@ fn item51(
 
 /// C's `(int)` conversion of a double on the reference platform: a
 /// saturating one, NaN to zero.
+/// 5.2's `luaL_tolstring` does not check what `__tostring` returns: a
+/// value that is not a string or a number formats as C's `%s` of a null
+/// pointer.
+fn tolstring_52(vm: &mut Vm, v: Value, extra: u32) -> Result<Vec<u8>, LuaError> {
+    let mm = vm.get_mm(v, crate::vm::exec::Mm::ToString);
+    if mm.is_nil() {
+        return vm.tostring_value(v);
+    }
+    match vm
+        .call_value_pushed(mm, &[v], extra)?
+        .first()
+        .copied()
+        .unwrap_or(Value::Nil)
+    {
+        Value::Str(s) => Ok(s.as_bytes().to_vec()),
+        r @ (Value::Int(_) | Value::Float(_)) => Ok(vm.tostring_basic(r)),
+        _ => Ok(b"(null)".to_vec()),
+    }
+}
+
 fn c_int_cast(x: f64) -> i32 {
     x as i32
 }
@@ -316,14 +358,21 @@ fn item54(
             addliteral(vm, a, arg, out)?;
         }
         b's' => {
-            let s = vm.tostring_value(a.get(vm, arg))?;
+            // a `__tostring` runs above the buffer's slot; its result stays
+            // pushed over the errors that follow
+            let buf = vm.buffer_slot(out.len());
+            let s = vm.tostring_value_pushed(a.get(vm, arg), buf)?;
             if form.len() == 2 {
                 out.extend_from_slice(&s);
             } else {
                 if s.contains(&0) {
+                    vm.native_push(1);
                     return Err(arg_error(vm, arg + 1, "string contains zeros"));
                 }
-                checkformat(vm, &form, b"-", true)?;
+                if let Err(e) = checkformat(vm, &form, b"-", true) {
+                    vm.native_push(1);
+                    return Err(e);
+                }
                 if !form.contains(&b'.') && s.len() >= 100 {
                     out.extend_from_slice(&s);
                 } else {
@@ -341,80 +390,4 @@ fn item54(
         }
     }
     Ok(p + 1)
-}
-
-/// `lua_topointer`: collectable objects by address, a light userdata's own
-/// pointer, everything else NULL.
-/// The addresses match what `tostring` prints.
-fn topointer(v: Value) -> Option<usize> {
-    match v {
-        Value::Str(s) => Some(s.as_ptr() as usize),
-        Value::Table(t) => Some(t.as_ptr() as usize),
-        Value::Closure(c) => Some(c.as_ptr() as usize),
-        Value::Native(n) => Some(n.as_ptr() as usize),
-        Value::Coro(c) => Some(c.as_ptr() as usize),
-        Value::Userdata(u) => Some(u.as_ptr() as usize),
-        Value::LightUserdata(p) => (!p.is_null()).then_some(p as usize),
-        Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_) => None,
-    }
-}
-
-/// `addquoted`: a string as a Lua literal. 5.1 escapes only the bytes that
-/// would break the literal; later versions write every control byte in
-/// decimal, padded to three digits when a digit follows.
-fn addquoted(v: LuaVersion, s: &[u8], out: &mut Vec<u8>) {
-    out.push(b'"');
-    for (i, &c) in s.iter().enumerate() {
-        match c {
-            b'"' | b'\\' | b'\n' => {
-                out.push(b'\\');
-                out.push(c);
-            }
-            b'\r' if v == LuaVersion::Lua51 => out.extend_from_slice(b"\\r"),
-            0 if v == LuaVersion::Lua51 => out.extend_from_slice(b"\\000"),
-            c if v >= LuaVersion::Lua52 && c.is_ascii_control() => {
-                if s.get(i + 1).is_some_and(u8::is_ascii_digit) {
-                    out.extend_from_slice(format!("\\{c:03}").as_bytes());
-                } else {
-                    out.extend_from_slice(format!("\\{c}").as_bytes());
-                }
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(b'"');
-}
-
-/// 5.3+ `addliteral`: any value that has a literal form.
-fn addliteral(vm: &mut Vm, a: Args, arg: u32, out: &mut Vec<u8>) -> Result<(), LuaError> {
-    match a.get(vm, arg) {
-        Value::Str(s) => addquoted(vm.version(), s.as_bytes(), out),
-        Value::Int(n) if n == i64::MIN => {
-            // "-9223372036854775808" would read back as a float
-            out.extend_from_slice(format!("0x{:x}", n as u64).as_bytes());
-        }
-        Value::Int(n) => out.extend_from_slice(n.to_string().as_bytes()),
-        Value::Float(x) => quotefloat(vm.version(), x, out),
-        v @ (Value::Nil | Value::Bool(_)) => {
-            let s = vm.tostring_value(v)?;
-            out.extend_from_slice(&s);
-        }
-        _ => return Err(arg_error(vm, arg + 1, "value has no literal form")),
-    }
-    Ok(())
-}
-
-/// A float as a hexadecimal numeral; 5.4 spells the values `%a` cannot
-/// read back as numerals that can.
-fn quotefloat(v: LuaVersion, x: f64, out: &mut Vec<u8>) {
-    if v >= LuaVersion::Lua54 {
-        if x == f64::INFINITY {
-            return out.extend_from_slice(b"1e9999");
-        } else if x == f64::NEG_INFINITY {
-            return out.extend_from_slice(b"-1e9999");
-        } else if x.is_nan() {
-            return out.extend_from_slice(b"(0/0)");
-        }
-    }
-    cfmt::float(out, &Spec::default(), b'a', x);
 }

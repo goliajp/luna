@@ -107,6 +107,7 @@ fn check_compile_error(src: &str, contains: &str) {
 
 mod api;
 mod coroutines;
+mod coroutines_results;
 mod debug;
 mod dump;
 mod embedding;

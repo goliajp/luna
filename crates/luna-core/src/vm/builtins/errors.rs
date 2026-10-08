@@ -27,12 +27,15 @@ pub(super) fn nat_assert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         }
         // 5.3+ hands the message, of any type, to `error` at level 1; an
         // explicit nil message stays nil (`lua_settop(L, 1)` keeps it).
+        // The message replaces the arguments (`lua_settop(L, 1)`); `error`
+        // then adds the position to a string only.
         _ => {
             argcheck::check_any(vm, a, 0)?;
-            if nargs >= 2 {
-                Err(raise(vm, a.get(vm, 1)))
-            } else {
-                Err(raise_str(vm, "assertion failed!"))
+            vm.native_settop(1);
+            match a.get(vm, 1) {
+                _ if nargs < 2 => Err(raise_str(vm, "assertion failed!")),
+                v @ Value::Str(_) => Err(raise(vm, v)),
+                v => Err(LuaError(v)),
             }
         }
     }
@@ -51,6 +54,8 @@ pub(crate) fn nat_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     // top level, v2.14 fixture 5.5/334), while a plain pcall catch
     // yields the substituted string. luna's substitution lives at the
     // matching point in `unwind` (5.5-gated there).
+    // `lua_settop(L, 1)`: the message is the one value left
+    vm.native_settop(1);
     if level <= 0 {
         return Err(LuaError(msg));
     }
@@ -66,6 +71,8 @@ pub(crate) fn nat_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     // PUC `luaB_error` calls `luaL_where(L, level)` — prepend the position of
     // the Lua frame `level` steps up. If the level is out of range or the
     // target frame has no line info, fall through with no prefix.
+    // `luaL_where` and the message, concatenated into one value
+    vm.native_push(1);
     let mut out = vm
         .position_prefix_at_level(level as i64)
         .map(String::into_bytes)
@@ -79,6 +86,8 @@ pub(crate) fn nat_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
 /// of whatever called the running native — including a Lua frame that
 /// reached it as a metamethod — and nothing when that caller is C.
 fn raise(vm: &mut Vm, msg: Value) -> LuaError {
+    // `luaL_where` and the formatted message, concatenated into one value
+    vm.native_push(1);
     match msg {
         Value::Str(s) => {
             let text = match vm.position_prefix_at_level(1) {
@@ -163,6 +172,12 @@ fn unnamed_native_name(vm: &mut Vm) -> String {
     let Some(target) = vm.running_natives.last().map(|a| a.nc) else {
         return "?".to_string();
     };
-    vm.pushglobalfuncname(target)
-        .unwrap_or_else(|| "?".to_string())
+    match vm.pushglobalfuncname(target) {
+        Some(name) => {
+            // the name found stays on the stack
+            vm.native_push(1);
+            name
+        }
+        None => "?".to_string(),
+    }
 }

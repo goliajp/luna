@@ -12,12 +12,12 @@ pub(super) fn nat_next(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         && vm.version() >= LuaVersion::Lua53
         && crate::runtime::value::f2i_exact(f).is_some()
     {
-        return Err(vm.plain_err("invalid key to 'next'"));
+        return Err(bad_key(vm, nargs));
     }
     match t.next(k) {
         Ok(Some((k, v))) => Ok(vm.nat_return(fs, &[k, v])),
         Ok(None) => Ok(vm.nat_return(fs, &[Value::Nil])),
-        Err(_) => Err(vm.plain_err("invalid key to 'next'")),
+        Err(_) => Err(bad_key(vm, nargs)),
     }
 }
 
@@ -70,6 +70,12 @@ pub(crate) fn pairs_mm_results(vm: &Vm) -> usize {
     }
 }
 
+/// "invalid key to 'next'", raised after `lua_settop(L, 2)`.
+fn bad_key(vm: &mut Vm, nargs: u32) -> LuaError {
+    vm.native_set_pushed(2 - nargs as i32);
+    vm.plain_err("invalid key to 'next'")
+}
+
 /// PUC `ipairsaux` — the iterator behind `ipairs`. Exposed
 /// `pub(crate)` so the trace JIT (`Vm::jit_op_tforcall`) can
 /// fn-pointer-compare against it for the v3 fast path (skip
@@ -84,8 +90,10 @@ pub fn ipairs_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let tv = vm.nat_arg(fs, nargs, 0);
     // `luaL_intop(+, i, 1)`: wraps at the top of the integer range.
     let next_i = i.wrapping_add(1);
-    // PUC 5.3+ ipairsaux uses lua_geti, honouring __index on any value.
-    let v = vm.index_value(tv, Value::Int(next_i))?;
+    // PUC 5.3+ ipairsaux pushes the index, then reads with `lua_geti`
+    // (5.3: the key too), honouring __index on any value
+    let extra = 1 + u32::from(vm.version() == LuaVersion::Lua53);
+    let v = vm.index_value_pushed(tv, Value::Int(next_i), extra)?;
     if v.is_nil() {
         Ok(vm.nat_return(fs, &[Value::Nil]))
     } else {
