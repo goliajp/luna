@@ -5,11 +5,13 @@ mod frames;
 mod op_checks;
 mod scan;
 mod validate;
+mod value_checks;
 use cmp_table_checks::*;
 use frames::*;
 use op_checks::*;
 use scan::*;
 use validate::*;
+use value_checks::*;
 
 // detect the FIRST Bufferable AccumSite.
 // Buffered emit handles a single site. The 4 idiom op indices
