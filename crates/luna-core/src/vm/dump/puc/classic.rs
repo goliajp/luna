@@ -192,7 +192,7 @@ pub(super) fn translate(
             }
             Kind::Concat => lw.concat_range(i.a, i.b, i.c)?,
             // pc += sBx; if (A) close all upvalues >= R(A - 1)
-            Kind::Jmp => lower_jmp(&mut lw, ops, code, pc, i, next)?,
+            Kind::Jmp => lower_jmp(&mut lw, ops, code, i, next)?,
             Kind::Eq => lw.compare_rk(Op::Eq, i.a != 0, i.b, i.c)?,
             Kind::Lt => lw.compare_rk(Op::Lt, i.a != 0, i.b, i.c)?,
             Kind::Le => lw.compare_rk(Op::Le, i.a != 0, i.b, i.c)?,
@@ -255,14 +255,7 @@ pub(super) fn translate(
 }
 
 // pc += sBx; if (A) close all upvalues >= R(A - 1)
-fn lower_jmp(
-    lw: &mut Lowering,
-    ops: &[Kind],
-    code: &[u32],
-    pc: usize,
-    i: I,
-    next: i64,
-) -> Result<(), String> {
+fn lower_jmp(lw: &mut Lowering, ops: &[Kind], code: &[u32], i: I, next: i64) -> Result<(), String> {
     let target = next + i.sbx();
     // the jump into a generic `for`, to its TFORCALL
     // (the TFORLOOP after it jumps back to the instruction after this one)
@@ -280,17 +273,11 @@ fn lower_jmp(
         return lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, target);
     }
     let close = lw.r(i.a - 1)?;
-    let guarded = pc > 0
-        && matches!(
-            kind(ops, code[pc - 1]),
-            Some(Kind::Eq | Kind::Lt | Kind::Le | Kind::Test | Kind::TestSet)
-        );
-    if guarded {
-        lw.jump_closing(close, target)
-    } else {
-        lw.emit(enc_abc(Op::Close, close, 0, 0, false)?);
-        lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, target)
-    }
+    lw.jump(
+        crate::vm::isa::Inst::jmp_close(close + 1, 0),
+        Jump::JmpClose,
+        target,
+    )
 }
 
 /// Lowers `SETLIST` and returns the pc of its last word (the `EXTRAARG`

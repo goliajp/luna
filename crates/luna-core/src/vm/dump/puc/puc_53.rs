@@ -252,12 +252,10 @@ mod tests {
             abc(RETURN, 0, 1, 0),
             abc(RETURN, 0, 1, 0),
         ]);
+        assert_eq!(code.len(), 4);
         assert_eq!(code[0].op(), Op::EqK);
-        assert_eq!(code[1].op(), Op::Jmp, "the skipped instruction is the jump");
-        let tramp = (1 + 1 + code[1].sj()) as usize;
-        assert_eq!((code[tramp].op(), code[tramp].a()), (Op::Close, 1));
-        // the jump back is negative: add in signed arithmetic
-        assert_eq!(tramp as i32 + 2 + code[tramp + 1].sj(), 3);
+        assert_eq!((code[1].op(), code[1].a()), (Op::JmpClose, 2));
+        assert_eq!(code[1].jump_offset(), 1);
     }
 
     #[test]
