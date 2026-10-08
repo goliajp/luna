@@ -225,6 +225,15 @@ impl Vm {
     /// [`Vm::call_msgh`] with the handler called at stack slot `at` (PUC
     /// `luaG_errormsg`, see `raise_top`).
     pub(crate) fn call_msgh_at(&mut self, handler: Value, err: Value, at: Option<u32>) -> Value {
+        // 5.4+ `lua_error` raises the memory error message itself as a
+        // memory error, which no handler runs on
+        if self.version() >= LuaVersion::Lua54
+            && let Value::Str(s) = err
+            && s.as_bytes() == b"not enough memory"
+        {
+            self.heap.mem_ctx().raise_oom();
+            return err;
+        }
         // ≤5.2 `luaG_errormsg` raises LUA_ERRERR at once when the handler
         // is not a function
         if self.version() <= LuaVersion::Lua52
