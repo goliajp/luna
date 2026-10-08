@@ -18,7 +18,7 @@ use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
-const DIALECTS: &[(LuaVersion, &str)] = &[
+pub(crate) const DIALECTS: &[(LuaVersion, &str)] = &[
     (LuaVersion::Lua51, "PUC_LUAC_51"),
     (LuaVersion::Lua52, "PUC_LUAC_52"),
     (LuaVersion::Lua53, "PUC_LUAC_53"),
@@ -190,7 +190,7 @@ fn luna_dump(version: LuaVersion, src: &Path) -> Vec<u8> {
 }
 
 /// `None` when the listings agree or PUC cannot parse `source`.
-fn compare(version: LuaVersion, luac: &str, source: &str) -> Option<String> {
+pub(crate) fn compare(version: LuaVersion, luac: &str, source: &str) -> Option<String> {
     let src = temp_path("src.lua");
     std::fs::write(&src, source).expect("write source");
     let want = listing(luac, &src, true);
@@ -214,7 +214,7 @@ fn compare(version: LuaVersion, luac: &str, source: &str) -> Option<String> {
 /// the prototypes themselves rather than through `string.dump`, against
 /// the `slots` of PUC's listing (functions in the same order). `None` when
 /// they agree or PUC cannot parse the chunk.
-fn frames(version: LuaVersion, luac: &str, source: &str) -> Option<String> {
+pub(crate) fn frames(version: LuaVersion, luac: &str, source: &str) -> Option<String> {
     let src = temp_path("frames.lua");
     std::fs::write(&src, source).expect("write source");
     let puc = listing(luac, &src, true);
