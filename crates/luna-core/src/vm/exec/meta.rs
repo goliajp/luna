@@ -205,6 +205,7 @@ impl Vm {
     ) -> Result<(), LuaError> {
         self.enter_c_level(true)?;
         let saved_top = self.top;
+        let saved_len = self.stack.len() as u32;
         // PUC calls it at `L->top`: the frame's whole window, or for a
         // concatenation the top of the operands left
         let cont_slot = match action {
@@ -218,7 +219,11 @@ impl Vm {
             &mut self.frames_top,
             &mut self.trap,
             CallFrame::Cont(NativeCont {
-                kind: ContKind::Meta(MetaCont { action, saved_top }),
+                kind: ContKind::Meta(MetaCont {
+                    action,
+                    saved_top,
+                    saved_len,
+                }),
                 func_slot: cont_slot,
                 nresults: 1,
             }),

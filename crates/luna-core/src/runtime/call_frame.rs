@@ -255,6 +255,9 @@ pub struct MetaCont {
     pub action: MetaAction,
     /// the interrupted frame's `top` to restore after the metamethod returns
     pub saved_top: u32,
+    /// the stack's length before the call, to give back after it: the call
+    /// sits at the frame's window end, which can be below an outer window
+    pub saved_len: u32,
 }
 
 /// Per-op finishing action for a yielded metamethod call.

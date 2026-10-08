@@ -47,8 +47,7 @@ impl Vm {
             } else {
                 Value::Nil
             };
-            self.stack
-                .truncate(nc.func_slot.max(self.lua_window_end()) as usize);
+            self.stack.truncate(mc.saved_len as usize);
             self.top = mc.saved_top;
             self.finish_meta(mc.action, result)?;
             return Ok(None);

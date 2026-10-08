@@ -71,6 +71,26 @@ impl Vm {
     pub(super) fn clear_dead_stack(&mut self) {
         let lo = (self.gc_top as usize).min(self.stack.len());
         self.stack[lo..].fill(Value::Nil);
+        self.shrink_stacks();
+    }
+
+    /// PUC `luaD_shrinkstack`, run by the collector on every thread: a
+    /// stack in its error space (an overflow, or 5.4+'s refused
+    /// `lua_checkstack`, grew it) gives the space back once what its
+    /// frames use fits under the limit again. The running thread and the
+    /// main thread it suspended; a coroutine suspended with the space
+    /// keeps it.
+    fn shrink_stacks(&mut self) {
+        let limit = self.g.lua_stack_limit;
+        if self.stack_extra && stack_in_use(&self.frames, self.top) <= limit {
+            self.stack_extra = false;
+        }
+        if let Some(m) = &mut self.main_ctx
+            && m.stack_extra
+            && stack_in_use(&m.frames, m.top) <= limit
+        {
+            m.stack_extra = false;
+        }
     }
 
     /// Mark the GC roots in `m`: first-class `Value` roots plus bare-object
@@ -333,4 +353,15 @@ impl Vm {
     pub(crate) fn gc_is_finalizing(&self) -> bool {
         self.gc_finalizing
     }
+}
+
+/// PUC `stackinuse`: the highest slot a frame's window or the top reaches.
+fn stack_in_use(frames: &[CallFrame], top: u32) -> u32 {
+    frames
+        .iter()
+        .filter_map(CallFrame::lua)
+        .map(|f| f.base + u32::from(f.closure.proto.max_stack))
+        .max()
+        .unwrap_or(0)
+        .max(top)
 }
