@@ -270,4 +270,9 @@ pub enum Op {
     LtKK,
     /// `if ((K[A] <= K[B]) ~= k) then pc++`.
     LeKK,
+    /// `R[A] := Upvalues[0][K[Bx]:string]`: 5.1's `GETGLOBAL`, whose name
+    /// may be past constant 255.
+    GetGlobal,
+    /// `Upvalues[0][K[Bx]:string] := R[A]`: 5.1's `SETGLOBAL`.
+    SetGlobal,
 }

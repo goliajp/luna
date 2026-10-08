@@ -237,16 +237,10 @@ impl Compiler<'_> {
                 self.emit(Inst::iabc(Op::SetUpval, r, u, 0, false));
                 Ok(())
             }
-            Lv::Indexed(TabRef::Up(u), KeyRef::K(c)) if self.version == LuaVersion::Lua51 => {
-                // a 5.1 global whose name is past constant 255, in the
-                // shape the 5.1 writer turns back into `SETGLOBAL`
-                let saved = self.lr().freereg;
-                let v = self.held_reg(e)?;
-                let t = self.reserve(2)?;
-                self.emit(Inst::iabc(Op::GetUpval, t, u, 0, false));
-                self.load_const(t + 1, c);
-                self.emit(Inst::iabc(Op::SetTable, t, t + 1, v, false));
-                self.set_freereg(saved);
+            // a 5.1 global whose name is past constant 255
+            Lv::Indexed(TabRef::Up(_), KeyRef::K(c)) if self.version == LuaVersion::Lua51 => {
+                let v = self.exp_to_anyreg(e)?;
+                self.emit(Inst::iabx(Op::SetGlobal, v, c));
                 Ok(())
             }
             Lv::Indexed(t, key) => {

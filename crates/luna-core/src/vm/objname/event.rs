@@ -9,6 +9,7 @@ use crate::vm::isa::Op;
 pub(crate) fn instr_event(v: LuaVersion, op: Op) -> Option<&'static str> {
     Some(match op {
         Op::SelfOp
+        | Op::GetGlobal
         | Op::GetTabUp
         | Op::GetTabUpR
         | Op::GetTable
@@ -16,6 +17,7 @@ pub(crate) fn instr_event(v: LuaVersion, op: Op) -> Option<&'static str> {
         | Op::GetI
         | Op::GetField => "index",
         Op::SetTabUp
+        | Op::SetGlobal
         | Op::SetTabUpR
         | Op::SetTabUpK
         | Op::SetTable

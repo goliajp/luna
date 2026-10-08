@@ -53,6 +53,8 @@ pub(super) fn rw_ranges(inst: luna_core::vm::isa::Inst) -> ([(u32, u32); 3], [(u
         Op::SetI | Op::SetField | Op::SetTableK => ([one(a), val, none], w0),
         Op::GetTableK => (r1(b), w1(a)),
         Op::GetTabUpR => ([val, none, none], w1(a)),
+        Op::GetGlobal => (r0, w1(a)),
+        Op::SetGlobal => (r1(a), w0),
         Op::NewTable => (r0, w1(a)),
         // a key too far for the constant field sits in R[C]
         Op::SelfOp if inst.k() => (r1(b), [(a, 2), none]),

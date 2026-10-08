@@ -73,7 +73,8 @@ fn writes_reg(i: Inst, reg: u32) -> bool {
         | Op::ExtraArg
         | Op::TForPrep
         | Op::TForPrep53
-        | Op::TForPrep55 => false,
+        | Op::TForPrep55
+        | Op::SetGlobal => false,
         _ => reg == a,
     }
 }
@@ -235,6 +236,7 @@ pub fn getobjname_in(
             basicgetobjname(proto, lastpc, reg)
         }
         Op::GetTabUp => kname(proto, i.c()).map(|n| (gxf(proto, setpc, i, true, version), n)),
+        Op::GetGlobal => kname(proto, i.bx()).map(|n| ("global", n)),
         Op::GetField => kname(proto, i.c()).map(|n| (gxf(proto, setpc, i, false, version), n)),
         // a register-keyed read (global with a constant index past the GETFIELD
         // C-operand limit, or an explicit `t[k]`): name from the key register.

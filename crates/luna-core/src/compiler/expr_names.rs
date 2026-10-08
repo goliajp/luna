@@ -74,6 +74,10 @@ impl Compiler<'_> {
             return Ok(e);
         }
         let c = self.str_const(name.as_bytes());
+        // 5.1's `GETGLOBAL` takes any constant
+        if self.version == LuaVersion::Lua51 && c > 0xFF && c <= MAX_BX {
+            return Ok(Exp::Reloc(self.emit(Inst::iabx(Op::GetGlobal, 0, c))));
+        }
         match self.resolve_env()? {
             VarKind::Upval(u) if c <= 0xFF => Ok(Exp::Reloc(self.emit(Inst::iabc(
                 Op::GetTabUp,

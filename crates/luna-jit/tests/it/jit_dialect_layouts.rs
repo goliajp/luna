@@ -152,3 +152,24 @@ fn the_method_jit_runs_each_dialects_numeric_loops() {
         }
     }
 }
+
+#[test]
+fn a_global_past_constant_255_is_read_and_written_in_every_tier() {
+    // 5.1 reaches it with `GETGLOBAL` / `SETGLOBAL` of an 18-bit index
+    let mut src = String::from("local t = {");
+    for i in 0..300 {
+        src.push_str(&format!("{i}.5, "));
+    }
+    src.push_str("}\nG = 0\nfor i = 1, 500 do G = G + i H = G end\nreturn G + H + #t");
+    for v in ALL {
+        let want = run(&mut Vm::new(v), &src);
+        let (got, compiled, failed) = traced(v, &src);
+        assert_eq!(want.to_bits(), got.to_bits(), "{v:?}: {want} vs {got}");
+        assert!(
+            compiled >= 1 && failed == 0,
+            "{v:?}: {compiled} compiled, {failed} refused"
+        );
+        let got = run(&mut luna_jit::new_with_jit(v), &src);
+        assert_eq!(want.to_bits(), got.to_bits(), "{v:?} JIT: {want} vs {got}");
+    }
+}

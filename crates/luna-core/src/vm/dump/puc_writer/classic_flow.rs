@@ -106,37 +106,6 @@ impl C<'_, '_> {
         Ok(1)
     }
 
-    /// luna reaches a global whose name is past constant 255 as
-    /// `GetUpval t _ENV; LoadK t+1 name; GetTable r t t+1` (or `SetTable t
-    /// t+1 v`); 5.1's `GETGLOBAL`/`SETGLOBAL` take the name's index whole.
-    pub(super) fn global_by_register(&mut self, l: L) -> Res<usize> {
-        let pc = self.asm.pc();
-        let (t, key) = (l.a, l.a + 1);
-        let (k, n) = match self.asm.inst(pc + 1) {
-            Some(i) if i.op() == Op::LoadK && i.a() == key => (i.bx(), 2),
-            Some(i) if i.op() == Op::LoadKx && i.a() == key => match self.asm.inst(pc + 2) {
-                Some(x) if x.op() == Op::ExtraArg => (x.ax(), 3),
-                _ => return Err(self.asm.err("LoadKx without its ExtraArg")),
-            },
-            _ => return Err(self.asm.err("the environment is not a value in 5.1")),
-        };
-        let access = self.asm.inst(pc + n).map(L::of);
-        let entered = (1..=n).any(|d| self.asm.is_target(pc + d));
-        let w = match access {
-            Some(x) if !entered && x.op == Op::GetTable && x.b == t && x.c == key => {
-                let a = self.asm.r(x.a)?;
-                self.raw_abx(p51::OP_GETGLOBAL as u32, a, k)?
-            }
-            Some(x) if !entered && x.op == Op::SetTable && x.a == t && x.b == key => {
-                let v = self.asm.r(x.c)?;
-                self.raw_abx(p51::OP_SETGLOBAL as u32, v, k)?
-            }
-            _ => return Err(self.asm.err("the environment is not a value in 5.1")),
-        };
-        self.asm.emit(w);
-        Ok(n + 1)
-    }
-
     /// 5.1 globals live in the function environment, luna's upvalue 0.
     pub(super) fn global(&self, up: u32) -> Res<()> {
         if up != 0 {

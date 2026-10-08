@@ -166,7 +166,6 @@ impl C<'_, '_> {
                 let b = if self.f.ver == 51 { a + l.b } else { l.b };
                 self.emit(self.abc(Kind::LoadNil, a, b, 0))?;
             }
-            Op::GetUpval if self.f.ver == 51 && l.b == 0 => return self.global_by_register(l),
             Op::GetUpval | Op::SetUpval => {
                 let k = if l.op == Op::GetUpval {
                     Kind::GetUpval
@@ -195,6 +194,15 @@ impl C<'_, '_> {
                 }
             }
             Op::GetTabUpR | Op::SetTabUpR | Op::SetTabUpK => self.tab_up_rk(l)?,
+            Op::GetGlobal | Op::SetGlobal if self.f.ver == 51 => {
+                let op = if l.op == Op::GetGlobal {
+                    p51::OP_GETGLOBAL
+                } else {
+                    p51::OP_SETGLOBAL
+                };
+                let a = self.asm.r(l.a)?;
+                self.emit(self.raw_abx(op as u32, a, l.bx))?;
+            }
             Op::GetTable | Op::GetI | Op::GetField | Op::GetTableK => {
                 let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
                 let key = match l.op {
