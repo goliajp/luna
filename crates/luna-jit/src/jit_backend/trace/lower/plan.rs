@@ -4,12 +4,14 @@ mod cmp_table_checks;
 mod frames;
 mod op_checks;
 mod scan;
+mod trace_ends;
 mod validate;
 mod value_checks;
 use cmp_table_checks::*;
 use frames::*;
 use op_checks::*;
 use scan::*;
+use trace_ends::*;
 use validate::*;
 use value_checks::*;
 

@@ -40,6 +40,7 @@ use luna_core::runtime::Heap;
 use luna_core::version::LuaVersion;
 use luna_core::vm::dump;
 
+mod dump_source;
 mod error;
 mod harvest;
 mod link;
@@ -50,6 +51,7 @@ mod staticlib;
 mod target;
 mod trace_object;
 
+use dump_source::compile_to_dump;
 pub use error::AotError;
 use harvest::harvest_and_emit_aot_traces;
 use link::{link_aot_binary_for, write_aot_cmain_object_for, write_bytecode_object_for};
@@ -353,37 +355,4 @@ pub fn compile_and_link_host(
     version: LuaVersion,
 ) -> Result<(), AotError> {
     compile_and_link(source_path, out_path, None, version)
-}
-
-/// Parse + compile and produce the dump bytes the
-/// bytecode object holds. Factored out so [`embed_bytecode`] and
-/// [`compile_and_link`] share the front-end exactly.
-fn compile_to_dump(source_path: &Path, version: LuaVersion) -> Result<Vec<u8>, AotError> {
-    let src = fs::read(source_path)?;
-    let ast = parse(&src, version).map_err(|e| {
-        AotError::Syntax(format!(
-            "{}:{}: {}",
-            source_path.display(),
-            e.line,
-            String::from_utf8_lossy(&e.msg)
-        ))
-    })?;
-
-    let mut heap = Heap::new();
-    let chunk_name = source_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("aot-chunk")
-        .as_bytes()
-        .to_vec();
-    let proto = compile_chunk(&ast, version, &chunk_name, &mut heap).map_err(|e| {
-        AotError::Syntax(format!(
-            "{}:{}: {}",
-            source_path.display(),
-            e.line,
-            String::from_utf8_lossy(&e.msg)
-        ))
-    })?;
-
-    Ok(dump::dump(&proto, false, version))
 }
