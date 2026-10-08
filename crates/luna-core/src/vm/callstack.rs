@@ -38,9 +38,10 @@ pub(crate) struct NativeAct {
     /// the frames below it (low 24 bits) and the `__call` metamethods
     /// resolved to reach it (PUC 5.5 `CIST_CCMT`, the high byte)
     depth_ccmt: u32,
-    /// PUC's `L->top` while it runs: its arguments, then what the C
-    /// function has pushed or dropped since (see `Vm::native_push`)
-    pub(crate) top: u32,
+    /// what the C function has pushed (or dropped) since it was entered
+    /// with its arguments, counted from the slot past them (see
+    /// `Vm::native_push`); nothing is computed when it is pushed
+    pub(crate) top_off: i32,
 }
 
 const _: () = assert!(std::mem::size_of::<NativeAct>() == 24);
@@ -55,7 +56,6 @@ impl NativeAct {
         depth: usize,
         ccmt: u8,
     ) -> Self {
-        let top = func_slot + 1 + nargs;
         // the frame limit keeps the depth far below 2^24
         let depth_ccmt = depth as u32 | (u32::from(ccmt) << 24);
         NativeAct {
@@ -63,8 +63,14 @@ impl NativeAct {
             func_slot,
             nargs,
             depth_ccmt,
-            top,
+            top_off: 0,
         }
+    }
+
+    /// PUC's `L->top` while it runs: its arguments, then what the C
+    /// function has pushed or dropped since.
+    pub(crate) fn top(&self) -> u32 {
+        (self.func_slot + 1 + self.nargs).wrapping_add_signed(self.top_off)
     }
 
     /// The frames below it when it was entered.

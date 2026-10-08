@@ -199,7 +199,7 @@ impl Vm {
         }
         let positioned_message = u32::from(self.version() < LuaVersion::Lua54);
         if let Some(e) = raised_by.first() {
-            return Some(e.act.top - 1);
+            return Some(e.act.top() - 1);
         }
         let varinfo = u32::from(self.varinfo_pushed);
         self.frames

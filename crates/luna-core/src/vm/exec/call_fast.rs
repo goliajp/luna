@@ -276,15 +276,15 @@ impl Vm {
             }
             // widen the C-frame's argument window for getlocal, and its top
             // past the results: the hook runs above them (PUC `rethook`)
-            let saved_top = self.running_natives.last().map_or(0, |act| act.top);
+            let saved_off = self.running_natives.last().map_or(0, |act| act.top_off);
             if let Some(act) = self.running_natives.last_mut() {
                 act.nargs = nargs + nret;
-                act.top = res_dst + nret;
+                act.top_off = 0;
             }
             let hr = self.hook_return(true, nargs + 1, nret);
             if let Some(act) = self.running_natives.last_mut() {
                 act.nargs = nargs;
-                act.top = saved_top;
+                act.top_off = saved_off;
             }
             // restore results into the slot finish_results expects
             for i in 0..nret {
