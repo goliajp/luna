@@ -121,7 +121,19 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     // in well-formed Lua but we still need a valid SSA shape.
     // the scratch registers of `split_const_operands`
     let max_stack = (proto.max_stack as usize).max(num_params) + const_operands::SCRATCH_REGS;
-    let regs = declare_regs(&mut bcx, c, reg_kinds, entry, max_stack);
+    let mut regs = declare_regs(&mut bcx, c, reg_kinds, entry, max_stack);
+    // a 5.5 numeric loop steps an index of its own and copies it into the
+    // loop variable, as the 5.1–5.4 layout does: the loop's two values
+    // keep apart, which Cranelift allocates better than one
+    for &(prep, _, _) in &scan.for_loops {
+        if code[prep].op() == Op::ForPrep55 {
+            let ty = match reg_kinds.get(code[prep].a() as usize + 2) {
+                Some(RegKind::Float) => types::F64,
+                _ => types::I64,
+            };
+            regs.push(bcx.declare_var(ty));
+        }
+    }
     // emit-side per-PC kind tracker. Initialized from
     // the per-arg masks (Float bit → Float, Table bit → Table, else
     // Int) and updated forward at every writer op below. Used by
