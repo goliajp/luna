@@ -500,6 +500,11 @@ optimization.
 - A metamethod a Lua frame calls runs at the frame's window end, as in
   PUC; on its return the stack is given back the length it had, not cut
   to the window of the frame that called it.
+- A debug hook runs where PUC's `hookf` calls it: above the interrupted
+  function's whole window (or the open results of a call above it), and
+  for a library function's return event above the results being
+  returned. A return hook used to be placed over a native's results,
+  which `debug.getlocal` then read back wrong.
 - `a or b or c` (and an `and` chain) of plain values jumps from every
   test straight to the end, as PUC compiles it, instead of from test to
   test.
