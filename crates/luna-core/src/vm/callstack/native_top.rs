@@ -114,6 +114,7 @@ impl Vm {
     /// 5.4+ push a placeholder for the buffer, 5.2 and 5.3 a box only once
     /// the content passes `LUAL_BUFFERSIZE` (8192 there), 5.1 nothing.
     /// Whether the buffer now has a slot, for `native_buffgrown`.
+    #[inline]
     pub(crate) fn native_buffinit(&mut self, n: usize) -> bool {
         let pushed = match self.version() {
             LuaVersion::Lua51 => false,
@@ -126,6 +127,7 @@ impl Vm {
 
     /// The buffer holds `len` bytes: 5.2 and 5.3 push its box the first
     /// time that passes `LUAL_BUFFERSIZE`.
+    #[inline]
     pub(crate) fn native_buffgrown(&mut self, slotted: &mut bool, len: usize) {
         if !*slotted && len > LUAL_BUFFERSIZE_52 {
             *slotted = true;
