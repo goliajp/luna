@@ -24,6 +24,10 @@ use crate::version::LuaVersion;
 use crate::vm::builtins::{arg_error, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
+mod option;
+pub(crate) use option::*;
+mod stack;
+pub(crate) use stack::*;
 
 /// A native's argument window: the callee slot and how many arguments the
 /// caller passed.
@@ -147,24 +151,6 @@ pub(crate) fn opt_integer(vm: &mut Vm, a: Args, i: u32, default: i64) -> Result<
     check_integer(vm, a, i)
 }
 
-/// 5.1 `LUAI_MAXCSTACK`: the most slots `lua_checkstack` grants a C
-/// function.
-const MAXCSTACK_51: i64 = 8000;
-
-/// `luaL_checkstack` before a native pushes `n` more values.
-pub(crate) fn check_stack(vm: &mut Vm, a: Args, n: i64, msg: &str) -> Result<(), LuaError> {
-    let fits = if vm.version() == LuaVersion::Lua51 {
-        n <= MAXCSTACK_51 && i64::from(a.n) + n <= MAXCSTACK_51
-    } else {
-        vm.checkstack(a.fs + 1 + a.n, n)
-    };
-    if fits {
-        Ok(())
-    } else {
-        Err(raise_str(vm, &format!("stack overflow ({msg})")))
-    }
-}
-
 /// 5.2 `luaL_checkunsigned`. `lua_Unsigned` is 32 bits there, and every
 /// target PUC 5.2 builds for converts with `LUA_IEEE754TRICK`: add
 /// 1.5 * 2^52 and keep the low word of the double. That rounds to nearest
@@ -269,34 +255,4 @@ pub(crate) fn check_function(vm: &mut Vm, a: Args, i: u32) -> Result<Value, LuaE
         v @ (Value::Closure(_) | Value::Native(_)) if !a.is_none(i) => Ok(v),
         _ => Err(type_error(vm, a, i, "function")),
     }
-}
-
-/// `luaL_checkoption`: the index of argument `i` in `options`, read with
-/// `luaL_optstring(def)` when a default is given, else `luaL_checkstring`.
-pub(crate) fn check_option(
-    vm: &mut Vm,
-    a: Args,
-    i: u32,
-    def: Option<&str>,
-    options: &[&str],
-) -> Result<usize, LuaError> {
-    let name = match def {
-        Some(d) => match opt_string(vm, a, i)? {
-            Some(s) => s.as_bytes().to_vec(),
-            None => d.as_bytes().to_vec(),
-        },
-        None => check_string(vm, a, i)?.as_bytes().to_vec(),
-    };
-    // The name is a C string to `strcmp` and `%s`: it ends at the first NUL.
-    let name = name
-        .split(|&b| b == 0)
-        .next()
-        .expect("split yields a first piece");
-    if let Some(k) = options.iter().position(|o| o.as_bytes() == name) {
-        return Ok(k);
-    }
-    let shown = String::from_utf8_lossy(name);
-    // the message is pushed before `luaL_argerror` adds to it
-    vm.native_push(1);
-    Err(arg_error(vm, i + 1, &format!("invalid option '{shown}'")))
 }
