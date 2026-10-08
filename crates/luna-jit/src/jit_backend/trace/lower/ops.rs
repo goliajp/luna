@@ -14,6 +14,7 @@ mod order;
 mod sequence;
 mod table;
 mod tfor;
+mod tfor_ipairs;
 mod upval;
 use arith::*;
 use arith_divmod::*;
