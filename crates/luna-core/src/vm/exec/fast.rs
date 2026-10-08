@@ -179,6 +179,8 @@ impl Vm {
                         set_arm!(kptr.wrapping_add(inst.b() as usize), newindex_raw_at)
                     }
                     Op::GetTabUpR => op_get_tab_up_r!(),
+                    Op::GetGlobal => op_get_global!(),
+                    Op::SetGlobal => op_set_global!(),
                     Op::SetTabUpR => op_set_tab_up_x!(regs.wrapping_add(inst.b() as usize)),
                     Op::SetTabUpK => op_set_tab_up_x!(kptr.wrapping_add(inst.b() as usize)),
                     Op::SelfOp => op_self_op!(),

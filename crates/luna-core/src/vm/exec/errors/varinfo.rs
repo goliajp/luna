@@ -69,8 +69,16 @@ impl Vm {
             | Op::ShlI => cands.push(instr.b()),
             // indexing an upvalue table (`_ENV` for a global): PUC
             // `getupvalname` finds the value among the closure's upvalues
-            Op::GetTabUp | Op::GetTabUpR | Op::SetTabUp | Op::SetTabUpR | Op::SetTabUpK => {
-                let u = if matches!(instr.op(), Op::GetTabUp | Op::GetTabUpR) {
+            Op::GetTabUp
+            | Op::GetTabUpR
+            | Op::SetTabUp
+            | Op::SetTabUpR
+            | Op::SetTabUpK
+            | Op::GetGlobal
+            | Op::SetGlobal => {
+                let u = if matches!(instr.op(), Op::GetGlobal | Op::SetGlobal) {
+                    0
+                } else if matches!(instr.op(), Op::GetTabUp | Op::GetTabUpR) {
                     instr.b()
                 } else {
                     instr.a()

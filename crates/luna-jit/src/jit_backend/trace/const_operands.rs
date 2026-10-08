@@ -107,7 +107,13 @@ fn table_form(
         Op::GetTabUp if !env(b) => {}
         Op::SetTabUp if !env(a) => {}
         Op::SetTable | Op::SetField | Op::SetI | Op::SetTabUp if k => {}
-        Op::GetTableK | Op::SetTableK | Op::GetTabUpR | Op::SetTabUpR | Op::SetTabUpK => {}
+        Op::GetTableK
+        | Op::SetTableK
+        | Op::GetTabUpR
+        | Op::SetTabUpR
+        | Op::SetTabUpK
+        | Op::GetGlobal
+        | Op::SetGlobal => {}
         _ => return None,
     }
     if virt as usize + NVIRT > 256 {
@@ -154,6 +160,15 @@ fn table_form(
                 let key = put(1, k_of(b))?;
                 let val = if k { put(2, k_of(c))? } else { c };
                 Inst::iabc(Op::SetTable, t, key, val, false)
+            }
+            // 5.1 globals past constant 255
+            Op::GetGlobal => {
+                let t = put(0, up(0))?;
+                Inst::iabc(Op::GetTable, a, t, put(1, k_of(inst.bx()))?, false)
+            }
+            Op::SetGlobal => {
+                let t = put(0, up(0))?;
+                Inst::iabc(Op::SetTable, t, put(1, k_of(inst.bx()))?, a, false)
             }
             _ => unreachable!("matched above"),
         })

@@ -51,8 +51,6 @@ pub(super) struct Asm<'p> {
     pub consts: Vec<Value>,
     /// the dialect and its scanner table over `consts` (see `const_map`)
     pub kmap: (LuaVersion, DumpConstMap),
-    /// luna pcs some jump, loop edge or skip lands on
-    targets: Vec<bool>,
     pc: usize,
     line: u32,
 }
@@ -82,7 +80,6 @@ impl<'p> Asm<'p> {
             fixups: Vec::new(),
             consts: p.consts.to_vec(),
             kmap: (LuaVersion::Lua54, DumpConstMap::default()),
-            targets: jump_targets(p),
             pc: 0,
             line: 0,
         }
@@ -106,12 +103,6 @@ impl<'p> Asm<'p> {
 
     pub(super) fn pc(&self) -> usize {
         self.pc
-    }
-
-    /// Whether control can reach luna pc `pc` other than by falling
-    /// through from `pc - 1`.
-    pub(super) fn is_target(&self, pc: usize) -> bool {
-        self.targets.get(pc).copied().unwrap_or(false)
     }
 
     pub(super) fn inst(&self, pc: usize) -> Option<Inst> {
@@ -227,31 +218,6 @@ impl<'p> Asm<'p> {
             pc_map,
         })
     }
-}
-
-fn jump_targets(p: &Proto) -> Vec<bool> {
-    let n = p.code.len();
-    let mut t = vec![false; n + 2];
-    let mut mark = |pc: i64| {
-        if (0..t.len() as i64).contains(&pc) {
-            t[pc as usize] = true;
-        }
-    };
-    for (pc, i) in p.code.iter().enumerate() {
-        let (pc, bx) = (pc as i64, i.bx() as i64);
-        match i.op() {
-            Op::Jmp => mark(pc + 1 + i.sj() as i64),
-            op if op.is_for_prep() => {
-                mark(pc + bx);
-                mark(pc + bx + 1);
-            }
-            op if op.is_for_loop() || op.is_tfor_loop() => mark(pc + 1 - bx),
-            op if op.is_tfor_prep() => mark(pc + 1 + bx),
-            op if op == Op::LFalseSkip || op.is_test() => mark(pc + 2),
-            _ => {}
-        }
-    }
-    t
 }
 
 /// A luna instruction's operands, decoded once.

@@ -2,7 +2,7 @@
 //! field opcodes (which read it as a string without looking, see
 //! `Lowering::is_kstr`), any other constant the `K` forms.
 
-use super::lower::{Lowering, Rk, enc_abc};
+use super::lower::{Lowering, Rk, enc_abc, enc_abx};
 use crate::vm::isa::{self, Op};
 
 impl Lowering {
@@ -103,16 +103,13 @@ impl Lowering {
         Ok(())
     }
 
-    /// 5.1 `GETGLOBAL`: `R[dst] := _ENV[K[k]]`; a name past constant 255
-    /// goes through registers, as luna's compiler reads it.
+    /// 5.1 `GETGLOBAL`: `R[dst] := _ENV[K[k]]`, a name past constant 255
+    /// in `GetGlobal`.
     pub(super) fn get_global(&mut self, dst: u32, k: u32) -> Result<(), String> {
         if k <= isa::MAX_C && self.is_kstr(k) {
             return self.get_tabup(dst, 0, k);
         }
-        let (t, key) = (self.temp()?, self.temp()?);
-        self.emit(enc_abc(Op::GetUpval, t, 0, 0, false)?);
-        self.load_k(key, k)?;
-        self.emit(enc_abc(Op::GetTable, dst, t, key, false)?);
+        self.emit(enc_abx(Op::GetGlobal, dst, k)?);
         Ok(())
     }
 
@@ -121,10 +118,7 @@ impl Lowering {
         if k <= isa::MAX_B && self.is_kstr(k) {
             return self.set_tabup(0, k, (v, false));
         }
-        let (t, key) = (self.temp()?, self.temp()?);
-        self.emit(enc_abc(Op::GetUpval, t, 0, 0, false)?);
-        self.load_k(key, k)?;
-        self.emit(enc_abc(Op::SetTable, t, key, v, false)?);
+        self.emit(enc_abx(Op::SetGlobal, v, k)?);
         Ok(())
     }
 }

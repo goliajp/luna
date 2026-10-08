@@ -41,6 +41,11 @@ impl Checker<'_> {
                 self.reg(pc, a)?;
                 self.upval(pc, b)
             }
+            Op::GetGlobal | Op::SetGlobal => {
+                self.reg(pc, a)?;
+                self.upval(pc, 0)?;
+                self.kstr(pc, i.bx())
+            }
             Op::GetTabUp => {
                 self.reg(pc, a)?;
                 self.upval(pc, b)?;

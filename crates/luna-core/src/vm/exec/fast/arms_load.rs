@@ -106,6 +106,36 @@ macro_rules! fast_load_arms {
                 resume_same!()
             }};
         }
+        // 5.1 `GETGLOBAL` with a name past constant 255
+        macro_rules! op_get_global {
+            () => {{
+                let t = $vm.upval_get(cl!(), 0);
+                let pk = $kptr.wrapping_add($inst.bx() as usize);
+                // SAFETY: a constant and a register of the running frame
+                if unsafe { Vm::index_raw_kstr_key_at(t, pk, $regs.add($inst.a() as usize)) }
+                {
+                    next!()
+                }
+                save!();
+                index_op_miss!()?;
+                resume_same!()
+            }};
+        }
+        // 5.1 `SETGLOBAL` with a name past constant 255
+        macro_rules! op_set_global {
+            () => {{
+                let t = $vm.upval_get(cl!(), 0);
+                let pk = $kptr.wrapping_add($inst.bx() as usize);
+                let pv = $regs.wrapping_add($inst.a() as usize);
+                // SAFETY: a constant and a register of the running frame
+                if unsafe { $vm.newindex_raw_key_at(t, pk, pv) } {
+                    next!()
+                }
+                save!();
+                newindex_op_miss!()?;
+                resume_same!()
+            }};
+        }
         // `GetTabUpR`: an upvalue table, a key in a register or a constant
         macro_rules! op_get_tab_up_r {
             () => {{
