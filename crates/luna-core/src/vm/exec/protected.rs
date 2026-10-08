@@ -186,38 +186,49 @@ impl Vm {
                 nargs,
                 depth: self.frames.len() as u32,
                 ccmt: 0,
+                top: func_slot + 1 + nargs,
             });
         let r = check(self);
-        self.running_natives.pop();
+        let act = self.running_natives.pop().expect("pushed above");
+        // raised by that native, as it would have been once entered
+        if let Err(e) = &r {
+            self.note_errored_native(act, e.0);
+        }
         r
     }
 
-    pub(super) fn begin_pairs(&mut self, func_slot: u32, nresults: i32) -> Result<bool, LuaError> {
+    pub(super) fn begin_pairs(
+        &mut self,
+        func_slot: u32,
+        nargs: u32,
+        nresults: i32,
+    ) -> Result<bool, LuaError> {
         self.enter_c_level(false)?;
         let arg = self.stack[(func_slot + 1) as usize];
         let mm = self.get_mm(arg, Mm::Pairs);
-        // layout becomes [pairs@func_slot, mm@func_slot+1, t@func_slot+2]:
-        // `pairs` keeps its slot so the debug interface can report it as the
-        // C function running below the metamethod. Call mm(t) wanting 4.
-        let need = (func_slot + 3) as usize;
+        // mm(t) is pushed above pairs's arguments and called there, wanting
+        // 4; `pairs` keeps its slot so the debug interface can report it as
+        // the C function running below the metamethod
+        let at = 1 + nargs;
+        let need = (func_slot + at + 2) as usize;
         if self.stack.len() < need {
             self.grow_stack_or_abort(need);
         }
-        self.stack[(func_slot + 2) as usize] = arg;
-        self.stack[(func_slot + 1) as usize] = mm;
-        self.top = func_slot + 3;
+        self.stack[(func_slot + at + 1) as usize] = arg;
+        self.stack[(func_slot + at) as usize] = mm;
+        self.top = func_slot + at + 2;
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
             &mut self.trap,
             CallFrame::Cont(NativeCont {
-                kind: ContKind::Pairs,
+                kind: ContKind::Pairs { at },
                 func_slot,
                 nresults,
             }),
         );
         let want = crate::vm::builtins::pairs_mm_results(self) as i32;
-        self.begin_call(func_slot + 1, Some(1), want, true)?;
+        self.begin_call(func_slot + at, Some(1), want, true)?;
         Ok(true)
     }
 

@@ -23,12 +23,14 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let f = argcheck::check_string(vm, a, 0)?;
     let fmt = f.as_bytes();
     let v = vm.version();
+    let mut slotted = vm.native_buffinit(0);
     let mut out = Vec::with_capacity(fmt.len());
     let mut arg = 0u32;
     let mut i = 0;
     while i < fmt.len() {
         let c = fmt[i];
         i += 1;
+        vm.native_buffgrown(&mut slotted, out.len());
         if c != b'%' {
             out.push(c);
             continue;
@@ -176,7 +178,10 @@ fn item51(
             let s = if v == LuaVersion::Lua51 {
                 argcheck::check_string(vm, a, arg)?.as_bytes().to_vec()
             } else {
-                vm.tostring_value(a.get(vm, arg))?
+                // `luaL_tolstring` leaves the string pushed until it is added
+                let s = vm.tostring_value(a.get(vm, arg))?;
+                vm.native_push(1);
+                s
             };
             let has_prec = body.contains(&b'.');
             if v >= LuaVersion::Lua53 && body.is_empty() {
@@ -190,6 +195,9 @@ fn item51(
                 } else {
                     cfmt::cstr(out, &sp, &s);
                 }
+            }
+            if v != LuaVersion::Lua51 {
+                vm.native_pop(1);
             }
         }
         _ => {
@@ -316,7 +324,9 @@ fn item54(
             addliteral(vm, a, arg, out)?;
         }
         b's' => {
+            // `luaL_tolstring` leaves the string pushed until it is added
             let s = vm.tostring_value(a.get(vm, arg))?;
+            vm.native_push(1);
             if form.len() == 2 {
                 out.extend_from_slice(&s);
             } else {
@@ -330,6 +340,7 @@ fn item54(
                     cfmt::cstr(out, &sp, &s);
                 }
             }
+            vm.native_pop(1);
         }
         _ => {
             // the message prints 'form' as a C string

@@ -26,6 +26,7 @@ pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     } else {
         Some(argcheck::check_function(vm, a, 1)?)
     };
+    vm.native_settop(2);
     // PUC keeps every element it is holding on the Lua stack; this frame
     // of `sort_scratch` is that stack, traced by `gc_roots`, so a
     // `collectgarbage()` inside the comparator cannot free them.
@@ -122,10 +123,12 @@ impl Sorter {
     fn pop(vm: &mut Vm, n: usize) {
         let st = Self::stack(vm);
         st.truncate(st.len() - n);
+        vm.native_pop(n as u32);
     }
 
     fn push(vm: &mut Vm, v: Value) {
         Self::stack(vm).push_or_abort(v);
+        vm.native_push(1);
     }
 
     fn geti(&self, vm: &mut Vm, i: i64) -> Result<(), LuaError> {

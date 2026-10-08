@@ -5,6 +5,8 @@ use super::*;
 pub(super) fn nat_next(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let t = argcheck::check_table(vm, a, 0)?;
+    // `lua_settop(L, 2)`: the key, nil if absent
+    vm.native_settop(2);
     let k = a.get(vm, 1);
     // 5.3+ tables keep integer keys only as integers, and `luaH_next` looks a
     // float key up without normalizing it: an integral float never matches.

@@ -77,6 +77,12 @@ pub(crate) fn typename_of(vm: &Vm, v: Value) -> String {
 /// `luaL_typeerror`: "bad argument #n to 'f' (T expected, got U)".
 pub(crate) fn type_error(vm: &mut Vm, a: Args, i: u32, expected: &str) -> LuaError {
     let got = typename_at(vm, a, i);
+    // 5.3+ look a `__name` up first, which stays pushed when present; then
+    // the message is pushed before `luaL_argerror` adds to it
+    let named = vm.version() >= LuaVersion::Lua53
+        && !a.is_none(i)
+        && !vm.get_mm(a.get(vm, i), crate::vm::exec::Mm::Name).is_nil();
+    vm.native_push(1 + u32::from(named));
     arg_error(vm, i + 1, &format!("{expected} expected, got {got}"))
 }
 
@@ -150,7 +156,7 @@ pub(crate) fn check_stack(vm: &mut Vm, a: Args, n: i64, msg: &str) -> Result<(),
     let fits = if vm.version() == LuaVersion::Lua51 {
         n <= MAXCSTACK_51 && i64::from(a.n) + n <= MAXCSTACK_51
     } else {
-        n < vm.stack_room()
+        vm.checkstack(a.fs + 1 + a.n, n)
     };
     if fits {
         Ok(())
@@ -290,5 +296,7 @@ pub(crate) fn check_option(
         return Ok(k);
     }
     let shown = String::from_utf8_lossy(name);
+    // the message is pushed before `luaL_argerror` adds to it
+    vm.native_push(1);
     Err(arg_error(vm, i + 1, &format!("invalid option '{shown}'")))
 }

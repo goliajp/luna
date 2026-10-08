@@ -445,9 +445,9 @@ pub struct Vm {
     /// whose limit is the stack size. The frame array is grown as PUC
     /// 5.1 grows its `CallInfo` array (see `grow_frames`).
     pub(super) frame_cap: u32,
-    /// where the call that overflowed the Lua stack had its top (PUC's
-    /// `L->top` when `luaD_growstack` raised): the message handler runs
-    /// from there
+    /// the slot the message handler runs at for a stack overflow or a call
+    /// of a value that cannot be called, which PUC raise from the top of
+    /// that call (`L->top` when `luaD_growstack` or `luaG_callerror` raised)
     pub(crate) overflow_top: Option<u32>,
     /// the last runtime error a Lua frame raised named its operand, which
     /// 5.3+'s `varinfo` pushes on the stack before the message: the message

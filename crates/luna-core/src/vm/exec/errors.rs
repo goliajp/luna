@@ -61,6 +61,9 @@ impl Vm {
     #[doc(hidden)]
     pub fn rt_err(&mut self, msg: &str) -> LuaError {
         self.varinfo_pushed = false;
+        // `luaG_runerror` pushes the message (a native's stack only: a
+        // Lua frame's handler goes above its window)
+        self.native_push(1);
         let text = match self.position_prefix() {
             Some(p) => format!("{p}{msg}"),
             None => msg.to_string(),
@@ -72,6 +75,7 @@ impl Vm {
     /// `resume_error` (ldo.c) pushes its message as a bare literal,
     /// so `cannot resume dead coroutine` etc. must not be prefixed.
     pub(crate) fn plain_err(&mut self, msg: &str) -> LuaError {
+        self.native_push(1);
         LuaError(Value::Str(self.heap.intern(msg.as_bytes())))
     }
 
@@ -299,7 +303,7 @@ impl Vm {
     /// "attempt to call a X value", enriched (PUC luaG_callerror) with a name
     /// for the call target: "(global 'f')" for a direct call, or "(metamethod
     /// 'add')" when the call is a metamethod dispatched by the current opcode.
-    pub(super) fn call_err(&mut self, v: Value) -> LuaError {
+    pub(crate) fn call_err(&mut self, v: Value) -> LuaError {
         let extra = self.call_target_varinfo(v);
         let tn = self.obj_typename(v);
         let msg = self.compose_type_err("call", &tn, &extra);

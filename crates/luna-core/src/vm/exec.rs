@@ -145,13 +145,6 @@ fn lua_stack_limit(version: LuaVersion) -> u32 {
         _ => 1_000_000 - 1,
     }
 }
-/// PUC `LUAI_MAXSTACK` (`luaconf.h`): the cap library code consults via
-/// `lua_checkstack` to refuse multi-value pushes (`table.unpack` returning
-/// N values, `string.pack` results, etc.). 5.3 coroutine.lua :530 pins
-/// this at one million — `for j in {lim-10, …}` expects every j ≥ lim-10
-/// to fail because the few slots already consumed in the coroutine push
-/// the effective cap below lim-10.
-const PUC_MAXSTACK: i64 = 1_000_000;
 
 /// PUC 5.4+ default warnf state. The base library's `warn` function flips
 /// between `Off` and `On` via the `@on` / `@off` control messages; any other

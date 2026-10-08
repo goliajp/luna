@@ -88,8 +88,19 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
             }
         }
     };
+    // ≤5.3 do not refuse the '>' that asks for the function on top of the
+    // stack: with a level, `lua_getinfo` pops the last argument as that
+    // function and describes it as a C function
+    let popped = v <= LuaVersion::Lua53 && level.is_some() && options.first() == Some(&b'>');
+    let (ar, activelines, checked) = if popped {
+        vm.native_pop(1);
+        let f = a.get(vm, nargs - 1);
+        (popped_ar(f), Value::Nil, &options[1..])
+    } else {
+        (ar, activelines, &options[..])
+    };
     let allowed = valid_options(v);
-    if options.iter().any(|c| !allowed.contains(c)) {
+    if checked.iter().any(|c| !allowed.contains(c)) {
         return Err(arg_error(vm, arg + 2, "invalid option"));
     }
     let t = info_table(vm, &options, &ar, activelines);
@@ -176,4 +187,22 @@ fn cstr(b: &[u8]) -> &[u8] {
         Some(n) => &b[..n],
         None => b,
     }
+}
+
+/// What ≤5.3's `lua_getinfo` reports for a value that is not a Lua
+/// function: a C function with no upvalues.
+fn popped_ar(f: Value) -> crate::vm::callstack::Ar {
+    let mut ar = crate::vm::callstack::Ar {
+        nups: 0,
+        func: f,
+        ..Default::default()
+    };
+    ar.what = "C";
+    ar.source = b"=[C]".to_vec();
+    ar.short_src = b"[C]".to_vec();
+    ar.linedefined = -1;
+    ar.lastlinedefined = -1;
+    ar.currentline = -1;
+    ar.isvararg = true;
+    ar
 }

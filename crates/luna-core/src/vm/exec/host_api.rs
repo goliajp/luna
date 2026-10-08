@@ -29,15 +29,19 @@ impl Vm {
         self.globals
     }
 
-    /// Remaining VM stack slots (PUC `L->stack_last - L->top` analogue).
-    /// Library code that pushes a known number of fresh slots — e.g.
-    /// `table.unpack` returning N values — consults this to refuse when
-    /// the push would blow past `LUAI_MAXSTACK`. 5.3 coroutine.lua :530's
-    /// `for j in {lim-10, lim-5, …}` series pins this contract: the
-    /// coroutine's already-built table eats a few slots, so an unpack of
-    /// ~lim values can't fit.
-    pub(crate) fn stack_room(&self) -> i64 {
-        PUC_MAXSTACK - (self.stack.len() as i64)
+    /// PUC `lua_checkstack(L, n)` (5.2+) with the thread's top at slot
+    /// `top`: whether `n` more slots fit, by the limit a call meets (see
+    /// `lua_stack_limit`). It counts from the live top, not from how far
+    /// the stack has ever grown. A stack in its error space (an overflow
+    /// is being handled) has that space too. 5.4+ grow a stack refused
+    /// this way to that size, as an overflow does.
+    pub(crate) fn checkstack(&mut self, top: u32, n: i64) -> bool {
+        let room = if self.stack_extra { STACK_ERR_SPACE - 1 } else { 0 };
+        let fits = i64::from(top) + n <= i64::from(self.g.lua_stack_limit + room);
+        if !fits && self.version() >= LuaVersion::Lua54 {
+            self.stack_extra = true;
+        }
+        fits
     }
 
     /// Repoint the thread's "global table" used by *future* `Vm::load` calls
@@ -341,7 +345,8 @@ impl Vm {
     /// debug parent is the closing function, not a synthetic C level.
     /// `at`: the slot to call at, PUC's `L->top` where a message handler
     /// runs (see `raise_top`); the slots above it belong to the frame
-    /// that raised, dead past that top as PUC's are. Else the stack's end.
+    /// that raised, dead past that top as PUC's are. Else the running
+    /// native's top (`Vm::native_top`), or the stack's end.
     pub(crate) fn call_value_impl(
         &mut self,
         f: Value,
@@ -362,6 +367,9 @@ impl Vm {
         self.check_c_level(true)?;
         self.g.nccalls += 1;
         let len = self.stack.len();
+        // a native calls back at its own top, as a C function does
+        let callback = at.is_none();
+        let at = at.or_else(|| self.native_top());
         let func_slot = match at {
             None => {
                 self.stack.push_or_abort(f);
@@ -392,7 +400,9 @@ impl Vm {
             // the same boat as `yielding`: the next `EvalFuture::poll`
             // resumes the same call, so the in-flight frames must
             // survive.
-            self.stack.truncate(func_slot as usize);
+            // the frames below a native that called back run on
+            let keep = if callback { len.max(func_slot as usize) } else { func_slot as usize };
+            self.stack.truncate(keep);
             self.top = func_slot;
         }
         r

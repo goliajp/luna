@@ -34,7 +34,11 @@ fn parse_format(vm: &mut Vm, fmt: Value, argno: u32) -> Result<Fmt, LuaError> {
         Value::Str(s) => s.as_bytes().to_vec(),
         _ if v <= LuaVersion::Lua52 => return Err(arg_error(vm, argno, "invalid option")),
         _ => {
+            // `luaL_checkstring`'s type error: a `__name` it found, then
+            // the message, pushed
             let tn = argcheck::typename_of(vm, fmt);
+            let named = !vm.get_mm(fmt, crate::vm::exec::Mm::Name).is_nil();
+            vm.native_push(1 + u32::from(named));
             return Err(arg_error(vm, argno, &format!("string expected, got {tn}")));
         }
     };
@@ -92,7 +96,14 @@ fn g_read_formats(
     }
     let mut out = Vec::with_capacity(fmts.len());
     for (i, &f) in fmts.iter().enumerate() {
-        let fmt = parse_format(vm, f, argno0 + i as u32)?;
+        let fmt = match parse_format(vm, f, argno0 + i as u32) {
+            Ok(f) => f,
+            Err(e) => {
+                // over the values read before it
+                vm.native_push(out.len() as u32);
+                return Err(e);
+            }
+        };
         let r = match fmt {
             Fmt::Count(n) => read_count(vm, u, n)?,
             Fmt::Number => read_number(vm, u),

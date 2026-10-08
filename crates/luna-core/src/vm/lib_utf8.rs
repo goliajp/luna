@@ -144,6 +144,9 @@ fn bounds(v: LuaVersion, old: &'static str, new: &'static str) -> &'static str {
 fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
+    if nargs != 1 {
+        vm.native_buffinit(0);
+    }
     let mut out = Vec::new();
     for i in 0..nargs {
         let code = argcheck::check_integer(vm, a, i)?;

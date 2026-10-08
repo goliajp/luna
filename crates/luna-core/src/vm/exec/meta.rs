@@ -205,10 +205,14 @@ impl Vm {
     ) -> Result<(), LuaError> {
         self.enter_c_level(true)?;
         let saved_top = self.top;
-        let cont_slot = self.stack.len() as u32;
-        self.stack.push_or_abort(func);
-        self.stack.extend_from_slice_or_abort(args);
-        self.top = self.stack.len() as u32;
+        // PUC calls it at `L->top`: the frame's whole window, or for a
+        // concatenation the top of the operands left
+        let cont_slot = match action {
+            MetaAction::Concat { .. } => self.top,
+            _ => self.lua_window_end(),
+        };
+        self.place_call(cont_slot, func, args);
+        self.top = cont_slot + 1 + args.len() as u32;
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
