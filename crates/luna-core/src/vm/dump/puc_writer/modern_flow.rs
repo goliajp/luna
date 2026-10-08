@@ -3,7 +3,7 @@
 use super::asm::{Dist, L, Res, setlist_offset};
 use super::modern::{Caps, M};
 use crate::vm::dump::puc::modern::Kind;
-use crate::vm::isa::Op;
+use crate::vm::isa::{ForLayout, Op};
 
 impl M<'_, '_> {
     /// Control flow, calls, loops, closures and varargs.
@@ -45,34 +45,30 @@ impl M<'_, '_> {
                 self.emit(self.abc(Kind::TailCall, a, l.b, self.f.ret_c, self.f.needclose))?;
             }
             Op::Return | Op::Return0 | Op::Return1 => self.ret(l)?,
-            Op::ForPrep | Op::ForLoop => {
-                let a = self.for_base(l.a)?;
-                if l.op == Op::ForPrep {
-                    let w = self.abx(Kind::ForPrep, a, 0)?;
-                    self.asm.jump(w, Dist::BxFwd, pc + l.bx as i64)?;
+            op if op.is_for_prep()
+                || op.is_for_loop()
+                || op.is_tfor_prep()
+                || op.is_tfor_loop() =>
+            {
+                let a = self.for_base(l)?;
+                let (prep, back) = if op.is_for_prep() || op.is_for_loop() {
+                    (Kind::ForPrep, Kind::ForLoop)
                 } else {
-                    let w = self.abx(Kind::ForLoop, a, 0)?;
-                    self.asm.jump(w, Dist::BxBack, pc + 1 - l.bx as i64)?;
-                }
-            }
-            Op::TForPrep | Op::TForLoop => {
-                let a = self.for_base(l.a)?;
-                if l.op == Op::TForPrep {
-                    let w = self.abx(Kind::TForPrep, a, 0)?;
+                    (Kind::TForPrep, Kind::TForLoop)
+                };
+                if op.is_for_prep() {
+                    let w = self.abx(prep, a, 0)?;
+                    self.asm.jump(w, Dist::BxFwd, pc + l.bx as i64)?;
+                } else if op.is_tfor_prep() {
+                    let w = self.abx(prep, a, 0)?;
                     self.asm.jump(w, Dist::BxFwd, pc + 1 + l.bx as i64)?;
                 } else {
-                    let w = self.abx(Kind::TForLoop, a, 0)?;
+                    let w = self.abx(back, a, 0)?;
                     self.asm.jump(w, Dist::BxBack, pc + 1 - l.bx as i64)?;
                 }
             }
-            Op::TForCall => {
-                let a = self.for_base(l.a)?;
-                let first = if self.f.v55 { a + 3 } else { a + 4 };
-                if self.asm.run(l.a + 4, l.c.max(1))? != first {
-                    return Err(self
-                        .asm
-                        .err("generic-for variables outside the loop's frame"));
-                }
+            op if op.is_tfor_call() => {
+                let a = self.for_base(l)?;
                 self.emit(self.abc(Kind::TForCall, a, 0, l.c, false))?;
             }
             Op::SetList => return self.set_list(l),
@@ -127,19 +123,19 @@ impl M<'_, '_> {
         Ok(1)
     }
 
-    /// Base of a `for` loop, after checking that its hidden slots are where
-    /// PUC's loop ops look for them.
-    pub(super) fn for_base(&self, a: u32) -> Res<u32> {
-        let base = self.asm.r(a)?;
-        let (last, want) = if self.f.v55 {
-            (a + 3, base + 2)
-        } else {
-            (a + 3, base + 3)
+    /// Base of a `for` loop, whose layout must be the dialect's own: the
+    /// loop of another dialect's chunk has no form here.
+    pub(super) fn for_base(&self, l: L) -> Res<u32> {
+        let ok = match l.op.for_layout() {
+            Some(ForLayout::Num) | Some(ForLayout::Gen54) => !self.f.v55,
+            Some(ForLayout::Num55) | Some(ForLayout::Gen55) => self.f.v55,
+            _ => false,
         };
-        if self.asm.r(last)? != want || self.asm.r(a + 1)? != base + 1 {
-            return Err(self.asm.err("loop slots straddle another loop's window"));
+        if !ok {
+            return Err(self.asm.err("a loop of another dialect's layout"));
         }
-        Ok(base)
+        let lay = l.op.for_layout().expect("checked above");
+        self.asm.run(l.a, lay.var() + 1)
     }
 
     pub(super) fn new_table(&mut self, l: L) -> Res<()> {

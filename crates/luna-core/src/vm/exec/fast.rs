@@ -179,6 +179,8 @@ impl Vm {
                         set_arm!(kptr.wrapping_add(inst.b() as usize), newindex_raw_at)
                     }
                     Op::GetTabUpR => op_get_tab_up_r!(),
+                    Op::GetGlobal => op_get_global!(),
+                    Op::SetGlobal => op_set_global!(),
                     Op::SetTabUpR => op_set_tab_up_x!(regs.wrapping_add(inst.b() as usize)),
                     Op::SetTabUpK => op_set_tab_up_x!(kptr.wrapping_add(inst.b() as usize)),
                     Op::SelfOp => op_self_op!(),
@@ -221,10 +223,15 @@ impl Vm {
                     Op::LeI => order_imm_arm!(<=, false, true),
                     Op::GtI => order_imm_arm!(>, true, false),
                     Op::GeI => order_imm_arm!(>=, true, true),
+                    Op::LtK => order_k_arm!(<, false),
+                    Op::LeK => order_k_arm!(<=, true),
                     Op::Test => op_test!(),
                     Op::TestSet => op_test_set!(),
                     Op::ForLoop => op_for_loop!(),
-                    Op::TForLoop => op_t_for_loop!(),
+                    Op::ForLoop55 => op_for_loop55!(),
+                    Op::TForLoop => op_t_for_loop!(4, true),
+                    Op::TForLoop53 => op_t_for_loop!(3, true),
+                    Op::TForLoop55 => op_t_for_loop!(3, false),
                     Op::VargIdx => op_varg_idx!(),
                     Op::ErrNNil => op_err_n_nil!(),
                     Op::Call => op_call!(),
@@ -237,10 +244,30 @@ impl Vm {
                     | Op::Pow
                     | Op::Concat
                     | Op::ForPrep
+                    | Op::ForPrep55
                     | Op::TForPrep
+                    | Op::TForPrep53
+                    | Op::TForPrep55
                     | Op::Closure
                     | Op::Vararg
-                    | Op::GetVarg => {
+                    | Op::GetVarg
+                    | Op::ShlK
+                    | Op::ShrK
+                    | Op::AddKK
+                    | Op::SubKK
+                    | Op::MulKK
+                    | Op::ModKK
+                    | Op::PowKK
+                    | Op::DivKK
+                    | Op::IDivKK
+                    | Op::BAndKK
+                    | Op::BOrKK
+                    | Op::BXorKK
+                    | Op::ShlKK
+                    | Op::ShrKK
+                    | Op::EqKK
+                    | Op::LtKK
+                    | Op::LeKK => {
                         save!();
                         self.run_frame_op(inst)?
                     }
@@ -251,6 +278,8 @@ impl Vm {
                     | Op::TailCall
                     | Op::Return
                     | Op::TForCall
+                    | Op::TForCall53
+                    | Op::TForCall55
                     | Op::ExtraArg => {
                         save!();
                         return Ok(FastExit::Slow(inst));

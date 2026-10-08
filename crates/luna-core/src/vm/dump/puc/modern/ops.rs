@@ -1,37 +1,38 @@
 //! Lowerings of the opcodes that take more than a line or two.
 
-use super::{Dialect, I, Kind, event_op, for_base};
-use crate::vm::dump::puc::classic::is_env;
-use crate::vm::dump::puc::lower::{Jump, Lowering, RawProto, enc_abc, enc_abx, enc_asbx};
+use super::{Dialect, I, Kind, event_op};
+use crate::vm::dump::puc::lower::{Jump, Lowering, RawProto, enc_abc, enc_abx};
 use crate::vm::isa::Op;
 
-/// `SETTABUP` / `SETTABLE` / `SETI` / `SETFIELD`.
-pub(super) fn store(lw: &mut Lowering, raw: &RawProto, k: Kind, i: I) -> Result<(), String> {
-    // RK(C): the value is a constant when k is set.
+/// `SETTABUP` / `SETTABLE` / `SETI` / `SETFIELD`; `k`: the value is
+/// `K[C]`.
+pub(super) fn store(lw: &mut Lowering, k: Kind, i: I) -> Result<(), String> {
     let v = if i.k() {
-        lw.k_in_temp(i.c())?
+        (i.c(), true)
     } else {
-        lw.r(i.c())?
+        (lw.r(i.c())?, false)
     };
     match k {
-        Kind::SetTabUp => lw.set_tabup(i.a(), i.b(), v, is_env(raw, i.a()))?,
+        Kind::SetTabUp => lw.set_tabup(i.a(), i.b(), v)?,
         Kind::SetField => {
             let a = lw.r(i.a())?;
             lw.set_field(a, i.b(), v)?;
         }
         Kind::SetTable => {
             let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
-            lw.emit(enc_abc(Op::SetTable, a, b, v, false)?);
+            lw.emit(enc_abc(Op::SetTable, a, b, v.0, v.1)?);
         }
         _ => {
             let a = lw.r(i.a())?;
-            lw.emit(enc_abc(Op::SetI, a, i.b(), v, false)?);
+            lw.emit(enc_abc(Op::SetI, a, i.b(), v.0, v.1)?);
         }
     }
     Ok(())
 }
 
-/// `ADDI` / `*K` arithmetic, fused with the `MMBINI` / `MMBINK` that follows it.
+/// `ADDI` / `SHRI` / `SHLI` / `*K` arithmetic, fused with the `MMBINI` /
+/// `MMBINK` that follows it: the operator and the operand as the source
+/// wrote them, and on which side (`k` of the `MMBIN*`).
 pub(super) fn const_arith(
     lw: &mut Lowering,
     k: Kind,
@@ -50,49 +51,20 @@ pub(super) fn const_arith(
         return Err(lw.err(format_args!("MMBIN event {} is not arithmetic", mm.c())));
     };
     let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
-    let t = lw.temp()?;
-    if k == Kind::ArithI {
-        lw.emit(enc_asbx(Op::LoadI, t, mm.sb())?);
-    } else {
-        lw.load_k(t, mm.b())?;
+    if k == Kind::ArithK {
+        let kop = op.k_form().expect("an arithmetic op");
+        lw.emit(enc_abc(kop, a, b, mm.b(), mm.k())?);
+        return Ok(());
     }
-    // k on the MMBIN: the constant was the left operand.
-    let (l, r) = if mm.k() { (t, b) } else { (b, t) };
-    // `x - 0` ran as `ADDI x 0`: luna's flagged `Add` (see `Op::Add`)
-    if k == Kind::ArithI && op == Op::Sub && mm.sb() == 0 && !mm.k() {
-        lw.emit(enc_abc(Op::Add, a, l, r, true)?);
-    } else {
-        lw.emit(enc_abc(op, a, l, r, false)?);
-    }
-    Ok(())
-}
-
-/// `EQI` / `LTI` / `LEI` / `GTI` / `GEI`: the immediate goes through a scratch register.
-pub(super) fn compare_imm(lw: &mut Lowering, k: Kind, i: I) -> Result<(), String> {
-    let a = lw.r(i.a())?;
-    let t = lw.temp()?;
-    let load = if i.c() != 0 { Op::LoadF } else { Op::LoadI };
-    lw.emit(enc_asbx(load, t, i.sb())?);
-    let (op, l, r) = match k {
-        Kind::EqI => (Op::Eq, a, t),
-        Kind::LtI => (Op::Lt, a, t),
-        Kind::LeI => (Op::Le, a, t),
-        Kind::GtI => (Op::Lt, t, a),
-        _ => (Op::Le, t, a),
+    // the immediate as written: `x - 1` is `ADDI x -1` with `MMBINI 1 __sub`
+    let iop = match op {
+        Op::Add => Op::AddI,
+        Op::Sub => Op::SubI,
+        Op::Shr => Op::ShrI,
+        Op::Shl => Op::ShlI,
+        _ => return Err(lw.err("an immediate operand of a non-additive operator")),
     };
-    lw.emit(enc_abc(op, l, r, 0, i.k())?);
-    Ok(())
-}
-
-/// `TFORCALL`: results land from luna's A+4, which the loop window must line up.
-pub(super) fn tfor_call(lw: &mut Lowering, d: &Dialect, i: I) -> Result<(), String> {
-    let a = for_base(lw, d, i.a())?;
-    // luna writes the results from its A+4, PUC 5.5 from A+3.
-    let first = if d.v55 { i.a() + 3 } else { i.a() + 4 };
-    if lw.run(first, i.c().max(1))? != a + 4 {
-        return Err(lw.err("generic-for results outside the loop's frame"));
-    }
-    lw.emit(enc_abc(Op::TForCall, a, 0, i.c(), false)?);
+    lw.emit(enc_abc(iop, a, b, mm.b(), mm.k())?);
     Ok(())
 }
 
@@ -152,13 +124,14 @@ pub(super) fn for_jump(
     i: I,
     next: i64,
 ) -> Result<(), String> {
-    let a = for_base(lw, d, i.a())?;
+    let a = lw.run(i.a(), d.num.var() + 1)?;
+    let (prep, _, back) = d.num.ops();
     if k == Kind::ForPrep {
         let target = next + i.bx() as i64;
-        lw.jump(enc_abx(Op::ForPrep, a, 0)?, Jump::ForPrep, target)?;
+        lw.jump(enc_abx(prep, a, 0)?, Jump::ForPrep, target)?;
     } else {
         let target = next - i.bx() as i64;
-        lw.jump(enc_abx(Op::ForLoop, a, 0)?, Jump::Back, target)?;
+        lw.jump(enc_abx(back, a, 0)?, Jump::Back, target)?;
     }
     Ok(())
 }

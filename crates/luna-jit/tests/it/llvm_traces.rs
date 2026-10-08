@@ -206,6 +206,40 @@ fn llvm_compiles_table_constant_operands_in_every_dialect() {
     }
 }
 
+/// Each dialect's layout of both `for` loops, and constant operands on
+/// either side of an operator (any constant before 5.4).
+const LOOPS_AND_OPERANDS: &str = "
+    local function f(n)
+      local t, s = {}, 0
+      for i = 1, n do t[i] = i % 7 end
+      for i, v in ipairs(t) do s = s + v + (1 - i) % 5 end
+      for k, v in pairs(t) do if 3 >= v then s = s + 1 end end
+      for x = 0.5, 200.5 do if x < 1e300 and nil ~= x then s = s + 2 ^ (x % 3) end end
+      return s
+    end
+    return tostring(f(3000))";
+
+#[test]
+fn llvm_compiles_each_dialects_loops_and_constant_operands() {
+    for v in [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        let opt = TraceTier::Optimizing;
+        let interp = run_in(v, Backend::Interpreter, opt, None, LOOPS_AND_OPERANDS);
+        let cl = run_in(v, Backend::Cranelift, opt, None, LOOPS_AND_OPERANDS);
+        let ll = run_in(v, Backend::Llvm, opt, None, LOOPS_AND_OPERANDS);
+        assert_eq!(ll.out, interp.out, "{v:?}: LLVM result");
+        assert_eq!(cl.out, interp.out, "{v:?}: Cranelift result");
+        assert!(ll.compiled > 0, "{v:?}: {ll:?}");
+        assert_eq!((ll.compiled, ll.failed), (cl.compiled, cl.failed), "{v:?}");
+        assert!(ll.llvm > 0 && ll.llvm == ll.codegen, "{v:?}: {ll:?}");
+    }
+}
+
 #[test]
 fn hot_loop_with_a_call_runs_as_an_llvm_trace() {
     let ll = run(Backend::Llvm, TraceTier::Optimizing, None, CALL_LOOP);

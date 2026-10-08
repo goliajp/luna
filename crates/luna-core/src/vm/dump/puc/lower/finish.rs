@@ -92,7 +92,7 @@ impl Lowering {
                 .count() as u32;
             out.push(LocVar {
                 name: v.name.clone(),
-                reg: self.reg_at(v.start_pc as usize, puc_reg)?,
+                reg: self.r(puc_reg)?,
                 start_pc: self.luna_pc(v.start_pc),
                 end_pc: self.luna_pc(v.end_pc),
             });

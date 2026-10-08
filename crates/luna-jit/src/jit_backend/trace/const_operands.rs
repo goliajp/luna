@@ -63,13 +63,18 @@ pub(super) fn split_const_operands(
             any = true;
             continue;
         }
-        let number = |c: u32| konst(c).filter(|k| matches!(k, VConst::Int(_) | VConst::Float(_)));
-        let Some((reg_form, k)) = register_form(inst, virt, number) else {
+        let Some((reg_form, ks)) = register_form(inst, virt, konst) else {
             vregs.push([None; NVIRT]);
             continue;
         };
         rop.inst = reg_form;
-        vregs.push([Some(VSrc::Const(k?)), None, None]);
+        let mut v: VRegs = [None; NVIRT];
+        for (j, k) in ks.into_iter().enumerate() {
+            if let Some(k) = k {
+                v[j] = Some(VSrc::Const(k?));
+            }
+        }
+        vregs.push(v);
         any = true;
     }
     any.then_some((out, vregs))
@@ -102,7 +107,13 @@ fn table_form(
         Op::GetTabUp if !env(b) => {}
         Op::SetTabUp if !env(a) => {}
         Op::SetTable | Op::SetField | Op::SetI | Op::SetTabUp if k => {}
-        Op::GetTableK | Op::SetTableK | Op::GetTabUpR | Op::SetTabUpR | Op::SetTabUpK => {}
+        Op::GetTableK
+        | Op::SetTableK
+        | Op::GetTabUpR
+        | Op::SetTabUpR
+        | Op::SetTabUpK
+        | Op::GetGlobal
+        | Op::SetGlobal => {}
         _ => return None,
     }
     if virt as usize + NVIRT > 256 {
@@ -150,6 +161,15 @@ fn table_form(
                 let val = if k { put(2, k_of(c))? } else { c };
                 Inst::iabc(Op::SetTable, t, key, val, false)
             }
+            // 5.1 globals past constant 255
+            Op::GetGlobal => {
+                let t = put(0, up(0))?;
+                Inst::iabc(Op::GetTable, a, t, put(1, k_of(inst.bx()))?, false)
+            }
+            Op::SetGlobal => {
+                let t = put(0, up(0))?;
+                Inst::iabc(Op::SetTable, t, put(1, k_of(inst.bx()))?, a, false)
+            }
             _ => unreachable!("matched above"),
         })
     })();
@@ -176,22 +196,58 @@ pub(super) fn virt_at(vregs: &[VRegs], i: usize, r: u32, virt: usize) -> Option<
     vregs.get(i)?.get(j).copied().flatten()
 }
 
-/// The register form of `inst` with its constant operand in `virt`, and
-/// the constant (`None` inside: a `K` operand that is not a number).
+/// The constants of an op's register form, in its virtual registers from
+/// `virt` up: `Some(None)` for one this cannot hold.
+type VConsts = [Option<Option<VConst>>; 2];
+
+/// The register form of `inst` with its constant operands in `virt` and
+/// `virt + 1`, and the constants (an arithmetic one must be a number).
 fn register_form(
     inst: Inst,
     virt: u32,
     konst: impl Fn(u32) -> Option<VConst>,
-) -> Option<(Inst, Option<VConst>)> {
-    let (a, b) = (inst.a(), inst.b());
+) -> Option<(Inst, VConsts)> {
+    let (a, b, c) = (inst.a(), inst.b(), inst.c());
+    let number = |k: Option<VConst>| k.filter(|k| matches!(k, VConst::Int(_) | VConst::Float(_)));
+    let one = |k: Option<VConst>| [Some(k), None];
+    if let Some(op) = inst.arith_kk_op() {
+        let ks = [Some(number(konst(b))), Some(number(konst(c)))];
+        return Some((Inst::iabc(op, a, virt, virt + 1, false), ks));
+    }
     if let Some(op) = inst.arith_const_op() {
-        let k = match inst.op() {
-            Op::AddI | Op::SubI | Op::ShrI | Op::ShlI => Some(VConst::Int(inst.sc() as i64)),
-            _ => konst(inst.c()),
+        let (op, k) = match inst.op() {
+            // numbers compute `SubI` as PUC's `ADDI` with the negated
+            // immediate (see `Op::SubI`)
+            Op::SubI => (Op::Add, Some(VConst::Int(-(inst.sc() as i64)))),
+            Op::AddI | Op::ShrI | Op::ShlI => (op, Some(VConst::Int(inst.sc() as i64))),
+            _ => (op, number(konst(c))),
         };
         // `k`: the constant was the left operand
         let (l, r) = if inst.k() { (virt, b) } else { (b, virt) };
-        return Some((Inst::iabc(op, a, l, r, false), k));
+        return Some((Inst::iabc(op, a, l, r, false), one(k)));
+    }
+    match inst.op() {
+        // the register form compares any two kinds; a string stays `EqK`,
+        // which the lowerer compares itself
+        Op::EqK if !matches!(konst(b), Some(VConst::Str(_)) | None) => {
+            return Some((Inst::iabc(Op::Eq, a, virt, 0, inst.k()), one(konst(b))));
+        }
+        // `C`: the constant is the left operand
+        Op::LtK | Op::LeK => {
+            let op = if inst.op() == Op::LtK { Op::Lt } else { Op::Le };
+            let (l, r) = if c != 0 { (virt, a) } else { (a, virt) };
+            return Some((Inst::iabc(op, l, r, 0, inst.k()), one(konst(b))));
+        }
+        Op::EqKK | Op::LtKK | Op::LeKK => {
+            let op = match inst.op() {
+                Op::EqKK => Op::Eq,
+                Op::LtKK => Op::Lt,
+                _ => Op::Le,
+            };
+            let ks = [Some(konst(a)), Some(konst(b))];
+            return Some((Inst::iabc(op, virt, virt + 1, 0, inst.k()), ks));
+        }
+        _ => {}
     }
     let (op, swap) = match inst.op() {
         Op::EqI => (Op::Eq, false),
@@ -208,5 +264,5 @@ fn register_form(
         VConst::Int(im as i64)
     };
     let (l, r) = if swap { (virt, a) } else { (a, virt) };
-    Some((Inst::iabc(op, l, r, 0, inst.k()), Some(k)))
+    Some((Inst::iabc(op, l, r, 0, inst.k()), one(Some(k))))
 }

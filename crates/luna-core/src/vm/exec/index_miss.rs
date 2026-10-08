@@ -44,6 +44,11 @@ impl Vm {
                     *kptr.add(inst.c() as usize),
                     dst,
                 ),
+                Op::GetGlobal => (
+                    self.upval_get((*fr).closure, 0),
+                    *kptr.add(inst.bx() as usize),
+                    dst,
+                ),
                 Op::GetTabUpR => (
                     self.upval_get((*fr).closure, inst.b()),
                     if inst.k() {
@@ -109,6 +114,10 @@ impl Vm {
             let (base, cl) = ((*fr).base, (*fr).closure);
             let r = |i: u32| self.stack[(base + i) as usize];
             let k = |i: u32| *cl.consts.add(i as usize);
+            if inst.op() == Op::SetGlobal {
+                let t = self.upval_get(cl, 0);
+                return self.newindex_miss(t, k(inst.bx()), r(inst.a()));
+            }
             let v = if inst.k() { k(inst.c()) } else { r(inst.c()) };
             let (t, key) = match inst.op() {
                 Op::SetTable => (r(inst.a()), r(inst.b())),

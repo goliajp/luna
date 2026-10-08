@@ -217,18 +217,6 @@ pub(crate) fn add_const(
     i
 }
 
-/// The index `add_const` would give `c`, without adding it.
-pub(crate) fn peek_const(v: LuaVersion, consts: &[Value], map: &impl KeyMap, c: &Value) -> u32 {
-    let (plan, trusted) = plan(v, c);
-    if let Plan::Key(key) = plan
-        && let Some(i) = map.find(&key)
-        && (trusted || raw_equal(v, &consts[i as usize], c))
-    {
-        return i;
-    }
-    consts.len() as u32
-}
-
 /// Records a new entry `i` under `key`; 5.5 caches a float only under a
 /// key that was free.
 fn remember(v: LuaVersion, map: &mut impl KeyMap, key: ConstKey, i: u32) {

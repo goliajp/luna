@@ -1,6 +1,8 @@
 use super::*;
 
-/// `Op::TForLoop`, the generic-for back-edge.
+/// A generic `for`'s `TForLoop`, the back-edge. Below, A+4 stands for
+/// the first loop variable and A+2 for the control register (5.4's layout;
+/// `ForLayout` gives the others).
 pub(super) fn emit_tfor_loop_tail<E: Emit>(
     lw: &mut Lower<E>,
     pl: &Plan<'_>,
@@ -49,13 +51,16 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     // loop has one, a value) of those tags. A pairs loop
     // over string keys meeting an integer key (or the
     // reverse) stored the new key under the old tag.
-    let nvars = match record.ops[for_loop_idx - 1].inst.op() {
-        Op::TForCall => record.ops[for_loop_idx - 1].inst.c() as usize,
-        _ => return None,
-    };
-    let key_tag = *record.entry_tags.get(a + 4)?;
+    let call = record.ops[for_loop_idx - 1].inst;
+    if !call.op().is_tfor_call() {
+        return None;
+    }
+    let nvars = call.c() as usize;
+    let lay = call.op().for_layout()?;
+    let first = a + lay.var() as usize;
+    let key_tag = *record.entry_tags.get(first)?;
     let val_tag = if nvars >= 2 {
-        Some(*record.entry_tags.get(a + 5)?)
+        Some(*record.entry_tags.get(first + 1)?)
     } else {
         None
     };
@@ -79,7 +84,7 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     // the value slots hold what the iterator's last call left
     // (nil in the helper path), which the loop no longer reads.
     let mut nil_snapshot: Vec<RegKind> = lw.current_kinds[..max_stack].to_vec();
-    for k in (a + 4)..(a + 4 + nvars).min(nil_snapshot.len()) {
+    for k in first..(first + nvars).min(nil_snapshot.len()) {
         nil_snapshot[k] = RegKind::Nil;
     }
     let tag_side_box_2: Box<TCellPtr> = Box::new(TCellPtr::null());
@@ -141,17 +146,21 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     // back-edge / store_back+head_pc.
     lw.bcx.switch_to_block(continue_blk);
     lw.bcx.seal_block(continue_blk);
-    let ctrl = lw.bcx.use_var(lw.regs_full[a + 4]);
-    lw.bcx.def_var(lw.regs_full[a + 2], ctrl);
+    if lay.copies_control() {
+        let ctrl = lw.bcx.use_var(lw.regs_full[first]);
+        lw.bcx.def_var(lw.regs_full[a + 2], ctrl);
+    }
     // as for ForLoop: continue at the loop body, which is
     // the trace head only when the trace was recorded from it
     let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
     // the loop variables passed the tag check above, and the
     // control variable is a copy of the key
     let mut tail_kinds = lw.current_kinds[..max_stack].to_vec();
-    let vars = (a + 4)..(a + 4 + nvars.min(2)).min(max_stack);
+    let vars = first..(first + nvars.min(2)).min(max_stack);
     tail_kinds[vars.clone()].copy_from_slice(&lw.head_kinds[vars.clone()]);
-    tail_kinds[a + 2] = lw.head_kinds[a + 4];
+    if lay.copies_control() {
+        tail_kinds[a + 2] = lw.head_kinds[first];
+    }
     // the return below is the trace's clean tail, whose exit tags come
     // from the kinds the emit pass ends with: the loop variables hold the
     // next iteration's values, which the interpreter must get back

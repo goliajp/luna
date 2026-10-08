@@ -344,6 +344,16 @@ would behave differently, for example a 5.1 function that uses its
 environment table as a value (5.1 reaches globals only through
 `GETGLOBAL`/`SETGLOBAL`). No diff_puc fixture hits a refusal.
 
+luna's compiler gives every value the register PUC's compiler of the
+dialect gives it, the `for` loops' control values and the constant
+operands of 5.1–5.3 operators included, so the dump writes luna's
+registers as they are: `luac -l -l` lists luna's dump exactly as it
+lists the chunk compiled from source, and a function's frame has the
+same size in both. A function loaded from another dialect's PUC chunk
+keeps that dialect's loop layout and operand forms, which the running
+dialect's format may have no instructions for; `string.dump` then
+refuses it.
+
 Every diff_puc fixture is compiled by luna, dumped, and run by the stock
 interpreter of its dialect, matching PUC running the source byte for byte
 in stdout (and in the error text for `_err` fixtures); the stripped dump
@@ -357,8 +367,8 @@ produces. MacroLua has no PUC format; its `string.dump` writes luna's own.
 ### luna's own dumps
 
 `luna_core::vm::dump::dump` (used by `luna-aot`) writes luna's own binary
-format: the running dialect's PUC header, then a `"\x00LunaV3\x00"`
-sentinel and a body in luna's 65-op instruction set. It loads back into
+format: the running dialect's PUC header, then a `"\x00LunaV4\x00"`
+sentinel and a body in luna's 117-op instruction set. It loads back into
 luna, not into PUC.
 
 Loading a luna dump, or a chunk of the running dialect's PUC version, is
@@ -373,8 +383,11 @@ untrusted input should still close the gate.
 A chunk of another dialect's PUC version needs
 `Vm::set_puc_bytecode_loading(true)`, **off by default**. The
 translator decodes a PUC chunk of any of the five dialects and re-encodes
-its body into luna's 65-op set; the resulting Proto then runs on luna's
-interpreter and JIT like any other. This is a strictly larger trust
+its body into luna's 117-op set, keeping the chunk's registers: luna has
+each dialect's layout of the `for` loops and its constant operand forms,
+so a loop of a 5.3 chunk keeps 5.3's three control registers in a 5.4
+`Vm` too. The resulting Proto then runs on luna's interpreter and JIT
+like any other. This is a strictly larger trust
 surface than luna's own loader — an embedder taking untrusted chunks
 should keep both gates shut, and read the safety note below.
 

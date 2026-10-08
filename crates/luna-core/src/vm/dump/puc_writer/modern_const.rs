@@ -100,6 +100,8 @@ impl M<'_, '_> {
         let (word, imm) = match op {
             Op::Add => (self.op(Kind::ArithI), c),
             Op::Shr => (self.shift_opcode(false), c),
+            // `I << x`
+            Op::Shl if l.k => (self.shift_opcode(true), c),
             Op::Sub if fits_sc(-c) => (self.op(Kind::ArithI), -c),
             Op::Shl if fits_sc(-c) => (self.shift_opcode(false), -c),
             _ => return self.arith_via_register(a, b, op, c as i64, l.k),
@@ -109,10 +111,20 @@ impl M<'_, '_> {
         self.emit(self.abc(Kind::MmBinI, b, l.c, tm, l.k))
     }
 
-    /// `R[A] := R[B] op K[C]`, then its `MMBINK`.
+    /// `R[A] := R[B] op K[C]`, then its `MMBINK`. PUC's `K` forms take a
+    /// number, and the constant on the left only of a commutative operator;
+    /// luna has the others for 5.1–5.3 code only.
     pub(super) fn arith_k(&mut self, l: L) -> Res<()> {
         let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
         let op = l.op.arith_const_op().expect("constant arithmetic");
+        let number = matches!(
+            self.asm.consts.get(l.c as usize),
+            Some(Value::Int(_) | Value::Float(_))
+        );
+        let commutes = matches!(op, Op::Add | Op::Mul | Op::BAnd | Op::BOr | Op::BXor);
+        if !number || matches!(op, Op::Shl | Op::Shr) || l.k && !commutes {
+            return Err(self.asm.err("a constant operand of a 5.1–5.3 form"));
+        }
         let tm = event(op).expect("arithmetic op");
         self.emit(self.raw_abc(self.k_opcode(op), a, b, l.c, false))?;
         self.emit(self.abc(Kind::MmBinK, b, l.c, tm, l.k))

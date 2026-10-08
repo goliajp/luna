@@ -74,7 +74,7 @@ impl Vm {
             }
             Op::Pow => {
                 let (l, r) = (self.r(base, inst.b()), self.r(base, inst.c()));
-                self.arith_slow(inst.a(), base, ArithOp::Pow, l, r, false)?
+                self.arith_slow(inst.a(), base, ArithOp::Pow, l, r)?
             }
             Op::Concat => {
                 // right-associative fold over operands at base+a .. base+a+n,
@@ -84,10 +84,17 @@ impl Vm {
                 self.top = base + a + n;
                 self.concat_run(base + a)?;
             }
-            Op::ForPrep => self.for_prep(inst, base)?,
-            Op::TForPrep => {
-                // the 4th control slot is the iterator's closing value
-                self.register_tbc(base + inst.a() + 3)?;
+            Op::ForPrep | Op::ForPrep55 => self.for_prep(inst, base)?,
+            Op::TForPrep | Op::TForPrep53 | Op::TForPrep55 => {
+                let a = base + inst.a();
+                // 5.5's list left the closing value above the control:
+                // swap them (PUC `OP_TFORPREP`)
+                if inst.op() == Op::TForPrep55 {
+                    self.stack.swap((a + 2) as usize, (a + 3) as usize);
+                }
+                if let Some(c) = inst.op().for_layout().and_then(|l| l.closing()) {
+                    self.register_tbc(a + c)?;
+                }
                 self.add_pc(inst.bx() as i32);
             }
             Op::Closure => self.op_closure(inst, cl, base),
@@ -164,6 +171,10 @@ impl Vm {
                 self.stack[func_slot as usize] = Value::Table(t);
                 self.set_r(base, inst.a(), Value::Table(t));
             }
+            Op::ShlK | Op::ShrK | Op::EqKK | Op::LtKK | Op::LeKK => {
+                self.const_frame_op(inst, cl, base)?
+            }
+            op if op.arith_kk_op().is_some() => self.const_frame_op(inst, cl, base)?,
             op => unreachable!("{op:?} is not a frame op"),
         }
         Ok(())

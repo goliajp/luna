@@ -156,7 +156,11 @@ pub(super) fn detect_accumulators(
                 | Op::TestSet
                 | Op::ForLoop
                 | Op::ForPrep
-                | Op::TForCall => a == site.accum_slot,
+                | Op::ForLoop55
+                | Op::ForPrep55
+                | Op::TForCall
+                | Op::TForCall53
+                | Op::TForCall55 => a == site.accum_slot,
                 _ => false,
             };
             if reads_slot || writes_slot {

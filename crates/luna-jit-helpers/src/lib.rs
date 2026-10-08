@@ -221,6 +221,8 @@ mod recursion;
 pub use recursion::*;
 mod stack_ops;
 pub use stack_ops::*;
+mod tfor;
+pub use tfor::*;
 mod materialize;
 pub use materialize::*;
 mod inlined;

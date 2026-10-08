@@ -38,6 +38,7 @@ mod fast_arith;
 mod finalize;
 mod for_loop;
 mod frame_ops;
+mod frame_ops_const;
 mod frame_state;
 mod frames_sync;
 use frames_sync::{frames_pop_known, frames_pop_sync, frames_push_sync};
@@ -55,6 +56,7 @@ mod index_raw;
 mod index_set;
 mod jit_call;
 mod jit_rt;
+mod jit_tforcall;
 mod lifecycle;
 mod limits;
 mod load;
@@ -91,6 +93,7 @@ pub use hooks::{
     HOOK_MASK_CALL, HOOK_MASK_COUNT, HOOK_MASK_LINE, HOOK_MASK_RETURN, HookState, RustDebugHook,
     RustHookEvent,
 };
+use jit_tforcall::keep_tfor_vars;
 pub use load::{ParsedText, TextLoad};
 pub(crate) use meta::Mm;
 use meta::*;
@@ -99,7 +102,7 @@ pub(crate) use num::{ArithOp, arith_num, c_fmod, str_to_num};
 pub use state::Vm;
 pub(crate) use state_guards::AsyncNativeCallCtx;
 use trace_cache::*;
-use trace_exit_decode::{ExitSource, keep_tfor_vars};
+use trace_exit_decode::ExitSource;
 use trace_wire::hold_side_trace;
 use unwind::*;
 

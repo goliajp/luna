@@ -34,7 +34,7 @@ pub(super) enum Rk {
 }
 
 /// What a value is as an `RK` / `k` operand.
-enum KConst {
+pub(super) enum KConst {
     Fits(u32),
     /// a constant past the operand's range
     Big(u32),
@@ -51,7 +51,7 @@ pub(super) enum Lv {
 
 impl Compiler<'_> {
     /// PUC `luaK_exp2K` (5.4+) / the constant half of `luaK_exp2RK`.
-    fn exp_const(&mut self, e: &Exp) -> KConst {
+    pub(super) fn exp_const(&mut self, e: &Exp) -> KConst {
         let v = match *e {
             Exp::Const(c) if c <= MAX_C => return KConst::Fits(c),
             Exp::Const(c) => return KConst::Big(c),
@@ -68,9 +68,13 @@ impl Compiler<'_> {
             _ => return KConst::No,
         };
         // 5.1 / 5.2 make a constant an `RK` operand only while the table
-        // has room for it (`fs->nk <= MAXINDEXRK`, checked before adding);
-        // 5.3+ add it and then check its index
-        if self.version <= LuaVersion::Lua52 && self.lr().consts.len() > MAX_C as usize {
+        // has room for it (`fs->nk <= MAXINDEXRK`, checked before adding),
+        // except that 5.2 adds a number first; 5.3+ add it and then check
+        // its index
+        let number = matches!(v, Value::Int(_) | Value::Float(_));
+        let checks_first =
+            self.version == LuaVersion::Lua51 || self.version == LuaVersion::Lua52 && !number;
+        if checks_first && self.lr().consts.len() > MAX_C as usize {
             return KConst::No;
         }
         let c = self.const_idx(v);
@@ -233,16 +237,10 @@ impl Compiler<'_> {
                 self.emit(Inst::iabc(Op::SetUpval, r, u, 0, false));
                 Ok(())
             }
-            Lv::Indexed(TabRef::Up(u), KeyRef::K(c)) if self.version == LuaVersion::Lua51 => {
-                // a 5.1 global whose name is past constant 255, in the
-                // shape the 5.1 writer turns back into `SETGLOBAL`
-                let saved = self.lr().freereg;
-                let v = self.held_reg(e)?;
-                let t = self.reserve(2)?;
-                self.emit(Inst::iabc(Op::GetUpval, t, u, 0, false));
-                self.load_const(t + 1, c);
-                self.emit(Inst::iabc(Op::SetTable, t, t + 1, v, false));
-                self.set_freereg(saved);
+            // a 5.1 global whose name is past constant 255
+            Lv::Indexed(TabRef::Up(_), KeyRef::K(c)) if self.version == LuaVersion::Lua51 => {
+                let v = self.exp_to_anyreg(e)?;
+                self.emit(Inst::iabx(Op::SetGlobal, v, c));
                 Ok(())
             }
             Lv::Indexed(t, key) => {
@@ -256,44 +254,5 @@ impl Compiler<'_> {
                 Ok(())
             }
         }
-    }
-
-    /// PUC `check_conflict`: target `lv`, a local or upvalue, is assigned
-    /// after the indexings `prev` that read it as their table or key; they
-    /// get a copy of its value taken now.
-    pub(super) fn check_conflict(&mut self, prev: &mut [Lv], lv: Lv) -> Result<(), SyntaxError> {
-        let extra = self.lr().freereg;
-        let mut conflict = false;
-        for p in prev.iter_mut() {
-            let Lv::Indexed(t, key) = p else {
-                continue;
-            };
-            match (lv, *t) {
-                (Lv::Upval(u), TabRef::Up(tu)) if u == tu => {
-                    conflict = true;
-                    *t = TabRef::Reg(extra);
-                }
-                (Lv::Local(r), TabRef::Reg(tr)) if r == tr => {
-                    conflict = true;
-                    *t = TabRef::Reg(extra);
-                }
-                _ => {}
-            }
-            if let (Lv::Local(r), KeyRef::Reg(k)) = (lv, *key)
-                && r == k
-            {
-                conflict = true;
-                *key = KeyRef::Reg(extra);
-            }
-        }
-        if conflict {
-            match lv {
-                Lv::Local(r) => self.emit(Inst::iabc(Op::Move, extra, r, 0, false)),
-                Lv::Upval(u) => self.emit(Inst::iabc(Op::GetUpval, extra, u, 0, false)),
-                Lv::Indexed(..) => unreachable!("only a variable conflicts"),
-            };
-            self.reserve(1)?;
-        }
-        Ok(())
     }
 }

@@ -70,6 +70,7 @@ pub(crate) use tiers::tier_up_trace;
 use tiers::*;
 pub use tiers::{baseline_codegen_count, baseline_fallback};
 mod escape;
+mod escape_end;
 mod escape_scan;
 mod escape_sweep;
 mod exits;
@@ -78,11 +79,13 @@ mod lower;
 mod shape;
 mod sunk;
 mod value_ops;
+mod whitelist;
 use accum::*;
 use aot_data::*;
 use block_params::*;
 pub use compile::*;
 pub use escape::*;
+use escape_end::*;
 use escape_scan::*;
 use escape_sweep::*;
 use exits::*;
@@ -92,6 +95,7 @@ use shape::*;
 use sunk::*;
 pub(super) use value_ops::emit_f64_fits_i64;
 use value_ops::*;
+use whitelist::*;
 
 // `pub enum TagResKind` + `pub(crate) fn classify_exit_tags` moved to
 // `trace_types.rs`; re-exported via `pub use super::trace_types::*;`.

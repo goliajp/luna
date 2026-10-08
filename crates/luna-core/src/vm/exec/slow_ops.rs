@@ -22,7 +22,10 @@ impl Vm {
             | Op::Pow
             | Op::Concat
             | Op::ForPrep
+            | Op::ForPrep55
             | Op::TForPrep
+            | Op::TForPrep53
+            | Op::TForPrep55
             | Op::Closure
             | Op::Vararg
             | Op::GetVarg => self.run_frame_op(inst)?,
@@ -47,17 +50,21 @@ impl Vm {
             Op::Return | Op::Return0 | Op::Return1 => {
                 return self.op_return(inst, base, entry_depth);
             }
-            Op::TForCall => {
+            Op::TForCall | Op::TForCall53 | Op::TForCall55 => {
+                let lay = inst.op().for_layout().expect("a loop op");
                 let abs = base + inst.a();
-                let need = (abs + 7) as usize;
+                let need = (abs + lay.call_end()) as usize;
                 if self.stack.len() < need {
                     self.grow_stack_or_abort(need);
                 }
-                self.stack[(abs + 4) as usize] = self.stack[abs as usize];
-                self.stack[(abs + 5) as usize] = self.stack[(abs + 1) as usize];
-                self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
+                // the iterator, the state and the control, copied to where
+                // the call runs (the control first: in 5.5 it is there)
+                let call = (abs + lay.var()) as usize;
+                self.stack[call + 2] = self.stack[(abs + lay.control()) as usize];
+                self.stack[call + 1] = self.stack[(abs + 1) as usize];
+                self.stack[call] = self.stack[abs as usize];
                 let nvars = inst.c() as i32;
-                self.begin_call(abs + 4, Some(2), nvars, false)?;
+                self.begin_call(call as u32, Some(2), nvars, false)?;
             }
             Op::ExtraArg => unreachable!("EXTRAARG executed directly"),
             op => unreachable!("{op:?} is run by the fast loop"),
