@@ -102,7 +102,10 @@ local function run(fargs)
   return free
 end
 
-local base = run(pack(function() local x x.y = 1 end))
+-- the reference error indexes a register, which PUC's bytecode encodes
+-- without a constant to load, so the function has the same frame in the
+-- source and the bytecode channel
+local base = run(pack(function() local x return x.y end))
 
 local function one(label, code)
   local chunk = load(code)
