@@ -136,8 +136,7 @@ impl Vm {
                 }) => {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     self.cont_popped(true, true);
-                    self.stack
-                        .truncate(func_slot.max(self.lua_window_end()) as usize);
+                    self.stack.truncate(mc.saved_len as usize);
                     self.top = mc.saved_top.min(func_slot);
                     self.tbc.retain(|&s| s < func_slot);
                 }
