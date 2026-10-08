@@ -1,7 +1,7 @@
 //! `table.sort`: PUC's quicksort run in place, so the comparator sees the same
 //! calls in the same order.
 
-use super::{TAB_RW, aux_getn, key_slot, tab_seti};
+use super::{TAB_RW, aux_getn, key_slot, tab_geti, tab_seti};
 use crate::runtime::Value;
 use crate::runtime::mem::LVec;
 use crate::version::LuaVersion as V;
@@ -147,6 +147,9 @@ impl Sorter {
     fn geti(&self, vm: &mut Vm, i: i64) -> Result<(), LuaError> {
         let v = match self.snapshot {
             Some(_) => Self::stack(vm)[(i - 1) as usize],
+            // raw before 5.3; a metamethod runs above what the scratch
+            // stack holds
+            None if vm.version() <= V::Lua52 => tab_geti(vm, self.tv, i, 0)?,
             None => {
                 self.mark(vm);
                 vm.index_value_pushed(self.tv, Value::Int(i), key_slot(vm))?
@@ -164,6 +167,7 @@ impl Sorter {
                 Self::stack(vm)[(i - 1) as usize] = v;
                 self.stored.set(true);
             }
+            None if vm.version() <= V::Lua52 => tab_seti(vm, self.tv, i, v, 0)?,
             None => {
                 self.mark(vm);
                 vm.newindex_value_pushed(self.tv, Value::Int(i), v, key_slot(vm))?;

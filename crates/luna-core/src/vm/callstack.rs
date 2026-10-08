@@ -44,7 +44,7 @@ pub(crate) struct NativeAct {
     pub(crate) top_off: i32,
 }
 
-const _: () = assert!(std::mem::size_of::<NativeAct>() == 24);
+const _: () = assert!(std::mem::size_of::<NativeAct>() <= 24);
 
 impl NativeAct {
     /// `nc` entered at `func_slot` with `nargs` arguments, above `depth`

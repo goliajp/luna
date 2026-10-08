@@ -191,7 +191,9 @@ fn tab_geti(vm: &mut Vm, tv: Value, i: i64, before: u32) -> Result<Value, LuaErr
 }
 
 /// Element write: raw on ≤5.2 (`lua_rawseti`), through `__newindex` on
-/// 5.3+ (`lua_seti`) of the value pushed above `before` others.
+/// 5.3+ (`lua_seti`). `before`: the values the native has pushed by now,
+/// the value itself among them when a read pushed it (an argument is
+/// not pushed again).
 fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value, before: u32) -> Result<(), LuaError> {
     if vm.version() <= V::Lua52 {
         if let Value::Table(t) = tv {
@@ -206,6 +208,6 @@ fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value, before: u32) -> Result<(),
         }
         return Ok(());
     }
-    let extra = before + 1 + key_slot(vm);
+    let extra = before + key_slot(vm);
     vm.newindex_value_pushed(tv, Value::Int(i), v, extra)
 }

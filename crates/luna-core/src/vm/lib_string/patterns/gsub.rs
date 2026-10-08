@@ -46,7 +46,14 @@ pub(crate) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     let mut last: Option<usize> = None;
     let mut changed = false;
     while n < max_s {
-        let m = ms.try_at(pos).map_err(|err| pat_err(vm, err))?;
+        let m = match ms.try_at(pos) {
+            Ok(m) => m,
+            Err(err) => {
+                let buf = vm.buffer_slot(out.len());
+                vm.native_push(buf);
+                return Err(pat_err(vm, err));
+            }
+        };
         // 5.3 rejects an empty match right after the previous match; earlier
         // versions take it and then copy a byte
         let m = match m {
@@ -57,13 +64,7 @@ pub(crate) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
             n += 1;
             // the buffer's slot counts only for a callback or an error
             let buf = vm.buffer_slot(out.len());
-            changed |= match add_value(vm, &ms, src, pos, e, repl, template, buf, &mut out) {
-                Ok(c) => c,
-                Err(err) => {
-                    vm.native_push(buf);
-                    return Err(err);
-                }
-            };
+            changed |= add_value(vm, &ms, src, pos, e, repl, template, buf, &mut out)?;
             last = Some(e);
         }
         match m {
@@ -103,14 +104,23 @@ pub(crate) fn add_value(
     out: &mut Vec<u8>,
 ) -> Result<bool, LuaError> {
     if let Some(t) = template {
-        add_s(vm, ms, src, s, e, t.as_bytes(), out)?;
+        if let Err(err) = add_s(vm, ms, src, s, e, t.as_bytes(), out) {
+            vm.native_push(buf);
+            return Err(err);
+        }
         return Ok(true);
     }
     // the value ends up pushed where the key or the function was, above
     // the buffer's slot
     let r = match repl {
         Value::Table(_) => {
-            let k = ms.get_capture(0, s, e).map_err(|err| pat_err(vm, err))?;
+            let k = match ms.get_capture(0, s, e) {
+                Ok(k) => k,
+                Err(err) => {
+                    vm.native_push(buf);
+                    return Err(pat_err(vm, err));
+                }
+            };
             let k = cap_value(vm, src, k);
             // the key is pushed for `lua_gettable`
             vm.index_value_pushed(repl, k, buf + 1)?
@@ -120,7 +130,7 @@ pub(crate) fn add_value(
             // the function, then its arguments, are pushed for the call;
             // a capture error counts the function
             if let Err(err) = push_captures(vm, ms, src, s, e, true, &mut args) {
-                vm.native_push(1);
+                vm.native_push(buf + 1);
                 return Err(err);
             }
             // an unprotected C call: the replacement cannot yield
