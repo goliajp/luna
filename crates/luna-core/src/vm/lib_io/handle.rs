@@ -131,6 +131,7 @@ fn close_reset(vm: &Vm, u: Gc<Userdata>) {
 pub(super) fn io_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = if nargs == 0 {
         let d = default_file(vm, Io::Output);
+        vm.native_push(1);
         if d.file().is_closed() {
             return Err(raise_str(vm, "attempt to use a closed file"));
         }

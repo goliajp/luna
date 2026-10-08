@@ -72,6 +72,34 @@ impl Vm {
         Ok(v)
     }
 
+    /// C `lua_geti(L, idx, i)` on `obj`: the value, left pushed. 5.3
+    /// pushes the key first, where the value then goes; an error leaves
+    /// what was pushed.
+    pub(crate) fn native_geti(&mut self, obj: Value, i: i64) -> Result<Value, LuaError> {
+        let key_first = self.version() == LuaVersion::Lua53;
+        self.native_push(u32::from(key_first));
+        let v = self.index_value(obj, Value::Int(i))?;
+        self.native_pop(u32::from(key_first));
+        self.native_push(1);
+        Ok(v)
+    }
+
+    /// C `lua_setfield(L, idx, key)` with the value `v` pushed on top: 5.2+
+    /// push the key before a `__newindex` runs; both are popped after.
+    pub(crate) fn native_setfield(
+        &mut self,
+        obj: Value,
+        key: &[u8],
+        v: Value,
+    ) -> Result<(), LuaError> {
+        let k = Value::Str(self.heap.intern(key));
+        let key_pushed = self.version() >= LuaVersion::Lua52;
+        self.native_push(u32::from(key_pushed));
+        self.newindex_value(obj, k, v)?;
+        self.native_pop(1 + u32::from(key_pushed));
+        Ok(())
+    }
+
     /// C `luaL_buffinitsize(L, &b, n)`, or `luaL_buffinit` with `n` 0:
     /// 5.4+ push a placeholder for the buffer, 5.2 and 5.3 a box only once
     /// the content passes `LUAL_BUFFERSIZE` (8192 there), 5.1 nothing.

@@ -86,8 +86,10 @@ pub fn ipairs_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let tv = vm.nat_arg(fs, nargs, 0);
     // `luaL_intop(+, i, 1)`: wraps at the top of the integer range.
     let next_i = i.wrapping_add(1);
-    // PUC 5.3+ ipairsaux uses lua_geti, honouring __index on any value.
-    let v = vm.index_value(tv, Value::Int(next_i))?;
+    // PUC 5.3+ ipairsaux pushes the index, then reads with `lua_geti`,
+    // honouring __index on any value
+    vm.native_push(1);
+    let v = vm.native_geti(tv, next_i)?;
     if v.is_nil() {
         Ok(vm.nat_return(fs, &[Value::Nil]))
     } else {

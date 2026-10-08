@@ -155,9 +155,22 @@ fn co_resume(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         let m = Value::Str(vm.heap.intern(msg.as_bytes()));
         return Ok(vm.nat_return(fs, &[Value::Bool(false), m]));
     }
+    // 5.1 raises when `lua_checkstack` on either thread refuses
+    // (`LUAI_MAXCSTACK` slots above the thread's base, which holds the
+    // coroutine's body on one side and the coroutine on the other)
+    let v51 = vm.version() == LuaVersion::Lua51;
+    let max51 = crate::vm::argcheck::MAXCSTACK_51 as u32;
+    if v51 && nargs > max51 {
+        return Err(raise_str(vm, "too many arguments to resume"));
+    }
     let args: Vec<Value> = (1..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
     match vm.resume_coro(co, args) {
         Ok(mut vals) => {
+            if v51 && vals.len() as u32 >= max51 {
+                // the arguments moved to the coroutine
+                vm.native_settop(1);
+                return Err(raise_str(vm, "too many results to resume"));
+            }
             // PUC `auxresume` gates the transfer on `lua_checkstack(L,
             // nres + 1)` on the resuming thread, whose top is past the
             // coroutine argument once the other arguments moved to it

@@ -15,6 +15,21 @@ impl Vm {
         r
     }
 
+    /// [`Vm::call_value`] placed at slot `at` of the running native's
+    /// stack, where a C function that moved the callee below its arguments
+    /// calls it (`lua_insert` then `lua_call`).
+    pub(crate) fn call_value_at(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        at: u32,
+    ) -> Result<Vec<Value>, LuaError> {
+        self.nny += 1;
+        let r = self.call_value_impl(f, args, true, Some(at));
+        self.nny -= 1;
+        r
+    }
+
     /// Whether the error a call just returned is not an error but a yield,
     /// a cooperative yield or a coroutine closing itself, on its way out to
     /// where it is handled: no native may catch it.

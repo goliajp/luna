@@ -160,11 +160,16 @@ fn read_count(vm: &mut Vm, u: Gc<Userdata>, n: i64) -> Result<std::io::Result<Va
     // 5.1 reads in chunks, so any size works; 5.2+ size one buffer for the
     // whole request, which the allocator refuses for absurd sizes
     if size >= UNALLOCATABLE && vm.version() >= LuaVersion::Lua52 {
+        // 5.3 has pushed the buffer's box, 5.4+ the buffer's placeholder
+        vm.native_buffinit(0);
         return Err(match vm.version() {
             LuaVersion::Lua52 if size > u64::MAX - 64 => {
                 vm.plain_err("memory allocation error: block too big")
             }
-            LuaVersion::Lua53 => raise_str(vm, "not enough memory for buffer allocation"),
+            LuaVersion::Lua53 => {
+                vm.native_push(1);
+                raise_str(vm, "not enough memory for buffer allocation")
+            }
             LuaVersion::Lua55 if size >= i64::MAX as u64 => {
                 raise_str(vm, "resulting string too large")
             }
