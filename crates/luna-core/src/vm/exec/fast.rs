@@ -209,20 +209,6 @@ impl Vm {
                     Op::BXorK => op_b_xor_k!(),
                     Op::ShrI => op_shr_i!(),
                     Op::ShlI => op_shl_i!(),
-                    Op::ShlK => op_shl_k!(),
-                    Op::ShrK => op_shr_k!(),
-                    Op::AddKK => arith_kk!(Add),
-                    Op::SubKK => arith_kk!(Sub),
-                    Op::MulKK => arith_kk!(Mul),
-                    Op::ModKK => arith_kk!(Mod),
-                    Op::PowKK => arith_kk!(Pow),
-                    Op::DivKK => arith_kk!(Div),
-                    Op::IDivKK => arith_kk!(IDiv),
-                    Op::BAndKK => arith_kk!(BAnd),
-                    Op::BOrKK => arith_kk!(BOr),
-                    Op::BXorKK => arith_kk!(BXor),
-                    Op::ShlKK => arith_kk!(Shl),
-                    Op::ShrKK => arith_kk!(Shr),
                     Op::Unm => op_unm!(),
                     Op::BNot => op_b_not!(),
                     Op::Not => op_not!(),
@@ -239,9 +225,6 @@ impl Vm {
                     Op::GeI => order_imm_arm!(>=, true, true),
                     Op::LtK => order_k_arm!(<, false),
                     Op::LeK => order_k_arm!(<=, true),
-                    Op::EqKK => op_eq_kk!(),
-                    Op::LtKK => order_kk_arm!(<, false),
-                    Op::LeKK => order_kk_arm!(<=, true),
                     Op::Test => op_test!(),
                     Op::TestSet => op_test_set!(),
                     Op::ForLoop => op_for_loop!(),
@@ -267,7 +250,24 @@ impl Vm {
                     | Op::TForPrep55
                     | Op::Closure
                     | Op::Vararg
-                    | Op::GetVarg => {
+                    | Op::GetVarg
+                    | Op::ShlK
+                    | Op::ShrK
+                    | Op::AddKK
+                    | Op::SubKK
+                    | Op::MulKK
+                    | Op::ModKK
+                    | Op::PowKK
+                    | Op::DivKK
+                    | Op::IDivKK
+                    | Op::BAndKK
+                    | Op::BOrKK
+                    | Op::BXorKK
+                    | Op::ShlKK
+                    | Op::ShrKK
+                    | Op::EqKK
+                    | Op::LtKK
+                    | Op::LeKK => {
                         save!();
                         self.run_frame_op(inst)?
                     }

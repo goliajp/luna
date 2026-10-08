@@ -53,16 +53,6 @@ macro_rules! fast_arm_helper_macros {
                 resume_same!()
             }};
         }
-        // `R[A] := K[B] op K[C]`
-        macro_rules! arith_kk {
-            ($d aop:ident) => {{
-                // SAFETY: constants of the running frame
-                let (l, r) = unsafe { (*$kptr.add($inst.b() as usize), *$kptr.add($inst.c() as usize)) };
-                save!();
-                $vm.arith_slow($inst.a(), base!(), ArithOp::$d aop, l, r)?;
-                resume_same!()
-            }};
-        }
         // `R[A] := R[B] op sC`; `k`: the immediate was on the left
         macro_rules! arith_ri {
             ($d aop:ident, int($d ia:ident, $d ib:ident) => $d iv:expr, float($d fa:ident, $d fb:ident) => $d fv:expr) => {{

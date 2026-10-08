@@ -171,6 +171,10 @@ impl Vm {
                 self.stack[func_slot as usize] = Value::Table(t);
                 self.set_r(base, inst.a(), Value::Table(t));
             }
+            Op::ShlK | Op::ShrK | Op::EqKK | Op::LtKK | Op::LeKK => {
+                self.const_frame_op(inst, cl, base)?
+            }
+            op if op.arith_kk_op().is_some() => self.const_frame_op(inst, cl, base)?,
             op => unreachable!("{op:?} is not a frame op"),
         }
         Ok(())

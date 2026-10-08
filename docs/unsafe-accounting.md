@@ -390,10 +390,9 @@ upvalue table indexed by a key that is not a string constant
 (`GetTabUpR`, and `SetTabUpR` / `SetTabUpK` through one arm) probe the
 table in place as the other table arms do, and added 2. That is 1418.
 
-The fast loop's arms for the forms of 5.1–5.3 operators with two
-constant operands (an arithmetic op and an equality reading both
-operands from the constant table) and for 5.5's numeric `for` step, which
-keeps its index in the loop variable, read their operands in place as
+The fast loop's arm for 5.5's numeric `for` step, which keeps its index
+in the loop variable, and its arms for 5.1's `GetGlobal` / `SetGlobal`
+(a global named by a constant past 255) read their operands in place as
 the other arms do, and added 3. That is 1421, the ceiling now.
 
 ## 5. Public `unsafe` surface

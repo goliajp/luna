@@ -148,16 +148,6 @@ macro_rules! fast_arith_arms {
                 arith_ri!(Shl, int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None })
             }};
         }
-        macro_rules! op_shl_k {
-            () => {{
-                arith_rk_ordered!(Shl, int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None })
-            }};
-        }
-        macro_rules! op_shr_k {
-            () => {{
-                arith_rk_ordered!(Shr, int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))), float(a, b) => { let _ = (a, b); None })
-            }};
-        }
         macro_rules! op_unm {
             () => {{
                 let v = reg!($inst.b());
