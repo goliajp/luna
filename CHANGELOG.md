@@ -34,7 +34,7 @@ optimization.
   `failure_known` and `publish_failure`.
 
 - Chunks in luna's own binary format (PUC header followed by the
-  `LunaV1`, `LunaV2` or `LunaV3` body) no longer load: a table
+  `LunaV1` … `LunaV4` body) no longer load: a table
   constructor's op now carries its size hints, a table write can store a
   constant (`k` on `SetTable` / `SetField` / `SetI` / `SetTabUp`), and
   there are the opcodes `GetTableK`, `SetTableK`, `GetTabUpR`,
@@ -47,7 +47,10 @@ optimization.
   `ShrKK`, `LtK`, `LeK`, `EqKK`, `LtKK`, `LeKK`; `k` on `AddK` … `ShrK`
   puts the constant on the left). A 5.1 function with more than 256
   constants reads and writes globals with `GetGlobal` / `SetGlobal`, as
-  PUC's `GETGLOBAL` / `SETGLOBAL` do. The body tag is `LunaV4`. Dump the
+  PUC's `GETGLOBAL` / `SETGLOBAL` do. A 5.2 / 5.3 jump that also
+  closes upvalues is one instruction (`JmpClose` / `JmpCloseBack`, PUC's
+  `JMP` with `A` set), and a 5.1–5.3 concatenation names its own
+  destination (`k` on `Concat`). The body tag is `LunaV5`. Dump the
   source again with this version. PUC bytecode loads as before.
 - C API: errors leave a C function at once, as in PUC. `lua_error`,
   `luaL_error` and every API function that raises (`lua_gettable`,
@@ -183,6 +186,15 @@ optimization.
 
 ### Changed
 
+- Conditions and `and` / `or` / `not` compile as PUC's code generator
+  compiles them, in every dialect: a value of `a and b or c` goes into
+  its register through `TestSet` instead of a `Move` and a `Test`, a
+  comparison used as a value is loaded with `LFalseSkip` / `LoadTrue`
+  only once its whole expression is known, a jump to a jump goes where
+  the last one goes, and `if c then break end` uses the condition's own
+  jump (5.2–5.4). `break` and `goto` close upvalues only when they leave
+  a block whose locals were captured, the way each dialect closes them.
+  `luac -l -l` lists these the same as PUC's own compilation.
 - The compiler uses registers as PUC's does in every dialect: a table
   write stores a constant value directly (`t.x = 1`, `x = 'k'`), keys
   that are constants take no register before 5.4 (`t[2.5]`, `t[true]`)
