@@ -114,7 +114,7 @@ impl Vm {
                 // luaL_error over the result: positioned at whatever called
                 // the library function
                 _ => {
-                    self.native_push(1);
+                    self.native_push_if_native(1);
                     Err(crate::vm::builtins::raise_str(
                         self,
                         "'__tostring' must return a string",

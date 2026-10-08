@@ -64,7 +64,7 @@ impl Vm {
         self.varinfo_pushed = false;
         // `luaG_runerror` pushes the message (a native's stack only: a
         // Lua frame's handler goes above its window)
-        self.native_push(1);
+        self.native_push_if_native(1);
         let text = match self.position_prefix() {
             Some(p) => format!("{p}{msg}"),
             None => msg.to_string(),
@@ -76,7 +76,7 @@ impl Vm {
     /// `resume_error` (ldo.c) pushes its message as a bare literal,
     /// so `cannot resume dead coroutine` etc. must not be prefixed.
     pub(crate) fn plain_err(&mut self, msg: &str) -> LuaError {
-        self.native_push(1);
+        self.native_push_if_native(1);
         LuaError(Value::Str(self.heap.intern(msg.as_bytes())))
     }
 

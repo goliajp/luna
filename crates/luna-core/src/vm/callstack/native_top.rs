@@ -12,11 +12,13 @@ use crate::version::LuaVersion;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
+use super::NativeAct;
+
 impl Vm {
     /// The running native's `L->top`, if a native is what runs.
     pub(crate) fn native_top(&self) -> Option<u32> {
         if self.native_on_top() {
-            self.running_natives.last().map(|a| a.top)
+            self.running_natives.last().map(NativeAct::top)
         } else {
             None
         }
@@ -33,30 +35,38 @@ impl Vm {
         }
     }
 
-    /// The running native pushes `n` values (C `lua_push*`).
+    /// The running native pushes `n` values (C `lua_push*`). Library code
+    /// calls this from the native itself, the innermost activation; a
+    /// helper that a Lua frame can reach as well uses
+    /// [`Vm::native_push_if_native`].
+    #[inline]
     pub(crate) fn native_push(&mut self, n: u32) {
-        if self.native_on_top()
-            && let Some(a) = self.running_natives.last_mut()
-        {
-            a.top += n;
+        if let Some(a) = self.running_natives.last_mut() {
+            a.top_off += n as i32;
+        }
+    }
+
+    /// [`Vm::native_push`] when a native is what runs, nothing when a Lua
+    /// frame is on top (`luaG_runerror` from an instruction).
+    pub(crate) fn native_push_if_native(&mut self, n: u32) {
+        if self.native_on_top() {
+            self.native_push(n);
         }
     }
 
     /// The running native pops `n` values (C `lua_pop(L, n)`).
+    #[inline]
     pub(crate) fn native_pop(&mut self, n: u32) {
-        if self.native_on_top()
-            && let Some(a) = self.running_natives.last_mut()
-        {
-            a.top -= n;
+        if let Some(a) = self.running_natives.last_mut() {
+            a.top_off -= n as i32;
         }
     }
 
     /// The running native sets its top to `n` values (C `lua_settop(L, n)`).
+    #[inline]
     pub(crate) fn native_settop(&mut self, n: u32) {
-        if self.native_on_top()
-            && let Some(a) = self.running_natives.last_mut()
-        {
-            a.top = a.func_slot + 1 + n;
+        if let Some(a) = self.running_natives.last_mut() {
+            a.top_off = n as i32 - a.nargs as i32;
         }
     }
 
