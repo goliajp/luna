@@ -45,7 +45,9 @@ optimization.
   5.1–5.3 operator takes a constant of any type on either side of it
   without a register (`ShlK`, `ShrK`, the two-constant `AddKK` …
   `ShrKK`, `LtK`, `LeK`, `EqKK`, `LtKK`, `LeKK`; `k` on `AddK` … `ShrK`
-  puts the constant on the left). The body tag is `LunaV4`. Dump the
+  puts the constant on the left). A 5.1 function with more than 256
+  constants reads and writes globals with `GetGlobal` / `SetGlobal`, as
+  PUC's `GETGLOBAL` / `SETGLOBAL` do. The body tag is `LunaV4`. Dump the
   source again with this version. PUC bytecode loads as before.
 - C API: errors leave a C function at once, as in PUC. `lua_error`,
   `luaL_error` and every API function that raises (`lua_gettable`,
