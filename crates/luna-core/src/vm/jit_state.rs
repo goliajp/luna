@@ -201,6 +201,11 @@ pub struct JitCounters {
     pub closed: u64,
     /// Traces moved to the optimizing tier.
     pub tiered_up: u64,
+    /// Functions the method JIT compiled.
+    pub method_compiled: u64,
+    /// Functions whose method JIT code was replaced by code a backend
+    /// compiled in the background (see `Proto::jit_next`).
+    pub method_replaced: u64,
     /// Number of traces that have aborted.
     pub aborted: u64,
     /// Number of compiled traces that closed at a

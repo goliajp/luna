@@ -23,7 +23,9 @@ impl Vm {
             }
             self.populate_jit_cache(proto);
         }
-        take_jit_next(&proto);
+        if take_jit_next(&proto) {
+            self.jit.counters.method_replaced += 1;
+        }
         match proto.jit.get() {
             JitProtoState::Compiled {
                 entry,
@@ -118,6 +120,7 @@ impl Vm {
                 ret_is_float,
                 ret_is_table,
             } => {
+                self.jit.counters.method_compiled += 1;
                 proto.jit.set(JitProtoState::Compiled {
                     entry,
                     num_args,
@@ -167,7 +170,9 @@ impl Vm {
             }
             self.populate_jit_cache(proto);
         }
-        take_jit_next(&proto);
+        if take_jit_next(&proto) {
+            self.jit.counters.method_replaced += 1;
+        }
         let JitProtoState::Compiled {
             entry,
             num_args,
@@ -350,20 +355,20 @@ impl Vm {
 
 /// Puts the code a backend finished compiling in the background (see
 /// `Proto::jit_next`) in place of `proto`'s entry, runnable on this thread
-/// ([`crate::jit::code_fence`]).
+/// ([`crate::jit::code_fence`]). Whether it did.
 #[inline]
-fn take_jit_next(proto: &crate::runtime::function::Proto) {
+fn take_jit_next(proto: &crate::runtime::function::Proto) -> bool {
     use crate::runtime::function::JitProtoState;
     let Some(next) = proto.jit_next.take() else {
-        return;
+        return false;
     };
     let ready = next.load(std::sync::atomic::Ordering::Acquire);
     if ready == 0 {
         proto.jit_next.set(Some(next));
-        return;
+        return false;
     }
     if ready == crate::runtime::function::JIT_NEXT_NONE {
-        return;
+        return false;
     }
     crate::jit::code_fence();
     if let JitProtoState::Compiled {
@@ -386,4 +391,5 @@ fn take_jit_next(proto: &crate::runtime::function::Proto) {
             ret_is_table,
         });
     }
+    true
 }
