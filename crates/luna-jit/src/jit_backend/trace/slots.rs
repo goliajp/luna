@@ -37,7 +37,7 @@ pub(super) fn rw_ranges(inst: luna_core::vm::isa::Inst) -> ([(u32, u32); 3], [(u
     match inst.op() {
         Op::Move => (r1(b), w1(a)),
         Op::LoadI | Op::LoadF | Op::LoadK | Op::LoadKx => (r0, w1(a)),
-        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip => (r0, w1(a)),
+        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip | Op::LTrueSkip => (r0, w1(a)),
         // R[A..=A+B] := nil
         Op::LoadNil => (r0, [(a, b + 1), none]),
         Op::GetUpval => (r0, w1(a)),

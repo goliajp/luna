@@ -18,6 +18,7 @@ impl Checker<'_> {
             | Op::LoadF
             | Op::LoadFalse
             | Op::LFalseSkip
+            | Op::LTrueSkip
             | Op::LoadTrue
             | Op::NewTable
             | Op::Test

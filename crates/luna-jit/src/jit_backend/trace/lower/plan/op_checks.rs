@@ -132,7 +132,7 @@ pub(super) fn validate_body_op(
                 }
             }
         }
-        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip => {
+        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip | Op::LTrueSkip => {
             if a >= max_stack {
                 checkpoint("bail:cmp-dirs-body-other");
                 return None;
