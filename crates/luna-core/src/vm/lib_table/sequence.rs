@@ -264,6 +264,22 @@ pub(crate) fn t_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     if !fits {
         return Err(raise_str(vm, "too many results to unpack"));
     }
+    if let Value::Table(t) = tv
+        && (ver <= V::Lua52 || vm.get_mm(tv, crate::vm::exec::Mm::Index).is_nil())
+    {
+        // every read is a raw one: straight into the result slots
+        let n = count as usize;
+        if vm.stack.len() < fs as usize + n {
+            vm.grow_stack_or_abort(fs as usize + n);
+        }
+        for (k, slot) in vm.stack[fs as usize..fs as usize + n]
+            .iter_mut()
+            .enumerate()
+        {
+            *slot = t.get_int(i + k as i64);
+        }
+        return Ok(n as u32);
+    }
     // the results so far stay pushed under each read
     let mut vals: Vec<Value> = Vec::with_capacity(count as usize);
     for k in i..e {
