@@ -4,11 +4,12 @@
 //!
 //! LLVM takes milliseconds per trace where Cranelift takes a fraction of
 //! one, so a hot baseline trace is by default compiled again on a thread
-//! of its own while the baseline code keeps running; the Vm picks the new
-//! code up the next time the trace reaches its tier-up count (see
+//! of its own while Cranelift's code for it runs; the Vm picks the new
+//! code up the next time the trace is entered (see
 //! `TraceCompiler::tier_up`).
 
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 thread_local! {
@@ -76,27 +77,27 @@ pub(super) fn compile_trace_llvm(
     Some(compiled)
 }
 
-/// A trace being compiled on the compile thread; what [`TierUp::source`]
-/// holds meanwhile.
-struct Pending(Arc<Mutex<Option<Compiled>>>);
-
-/// A trace running Cranelift's code, not yet handed to LLVM: since when.
-struct Waiting {
-    source: Box<share::TierSource>,
-    since: std::time::Instant,
+/// A trace running Cranelift's code while LLVM compiles it on the compile
+/// thread; what [`TierUp::source`] holds meanwhile.
+struct Pending {
+    /// Set by the compile thread once `done` holds the result.
+    ready: Arc<AtomicBool>,
+    done: Arc<Mutex<Option<Compiled>>>,
+    /// Set at each entry of the trace: the job compiles only a trace
+    /// entered again while it waited.
+    entered: Arc<AtomicBool>,
 }
 
 /// [`super::share::tier_up`] for the LLVM backend: the baseline trace `ct`
 /// compiled again by LLVM.
 ///
 /// With `delay`, the first call compiles the trace with Cranelift at once,
-/// as the Cranelift backend would, and the Vm asks again at each entry of
-/// the trace. Once the trace has kept being entered for `delay`, LLVM
-/// compiles it on the compile thread, and the Vm switches to LLVM's code at
-/// the first entry after it is ready. A trace that stops being hot within
-/// `delay` never costs an LLVM compile; a loop that runs on in one entry
-/// keeps Cranelift's code until it is entered again.
-/// Without, LLVM compiles the trace before it runs on.
+/// as the Cranelift backend would, and hands it to the compile thread to
+/// compile with LLVM after `delay`; the Vm asks again at each entry of the
+/// trace and switches to LLVM's code at the first entry after it is ready.
+/// A trace not entered again within `delay` never costs an LLVM compile; a
+/// loop that runs on in one entry keeps Cranelift's code until it is
+/// entered again. Without, LLVM compiles the trace before it runs on.
 pub(crate) fn tier_up_llvm(
     storage: &mut dyn luna_core::jit::JitStorage,
     ct: &CompiledTrace,
@@ -106,62 +107,51 @@ pub(crate) fn tier_up_llvm(
     let source = t.source.borrow_mut().take()?;
     let source = match source.downcast::<Pending>() {
         Ok(p) => {
-            let done =
-                p.0.lock()
-                    .expect("a job never panics holding its result")
-                    .take();
-            let Some(c) = done else {
+            p.entered.store(true, Ordering::Relaxed);
+            if !p.ready.load(Ordering::Acquire) {
                 *t.source.borrow_mut() = Some(p);
                 return None;
-            };
+            }
+            let c = p.done.lock().expect(POISON).take()?;
             // written on the compile thread
             luna_core::jit::code_fence();
             let entry = install(storage, c)?;
             super::code_dump::dump("tier-up-llvm", ct.head_pc, entry as *const u8);
             return Some(entry);
         }
-        Err(s) => s,
-    };
-    let source = match source.downcast::<Waiting>() {
-        Ok(w) if delay.is_some_and(|d| w.since.elapsed() < d) => {
-            *t.source.borrow_mut() = Some(w);
-            return None;
-        }
-        Ok(w) => {
-            let done = Arc::new(Mutex::new(None));
-            let slot = done.clone();
-            let src = w.source;
-            let ticket = crate::jit_backend::llvm_thread::submit(
-                Box::new(move || {
-                    let c = compile(&src.lir, &src.relocs);
-                    *slot.lock().expect("a job never panics holding its result") = Some(c);
-                }),
-                std::time::Instant::now(),
-            );
-            crate::jit_backend::storage::from_storage(storage)
-                .ok()?
-                .llvm_tickets
-                .push(ticket);
-            *t.source.borrow_mut() = Some(Box::new(Pending(done)));
-            return None;
-        }
         Err(s) => s.downcast::<share::TierSource>().ok()?,
     };
-    let Some(_) = delay else {
+    let Some(delay) = delay else {
         let entry = install(storage, compile(&source.lir, &source.relocs))?;
         super::code_dump::dump("tier-up-llvm", ct.head_pc, entry as *const u8);
         return Some(entry);
     };
     let entry = share::clif_tier_up(storage, &source, ct.head_pc);
-    let lir = source.lir.clone();
-    let relocs = source.relocs.clone();
-    *t.source.borrow_mut() = Some(Box::new(Waiting {
-        source: Box::new(share::TierSource {
-            lir,
-            relocs,
-            image: None,
+    let p = Pending {
+        ready: Arc::default(),
+        done: Arc::default(),
+        entered: Arc::default(),
+    };
+    let (ready, done, entered) = (p.ready.clone(), p.done.clone(), p.entered.clone());
+    let (lir, relocs) = (source.lir.clone(), source.relocs.clone());
+    let ticket = crate::jit_backend::llvm_thread::submit(
+        Box::new(move || {
+            let c = if entered.load(Ordering::Relaxed) {
+                compile(&lir, &relocs)
+            } else {
+                Err("llvm:not-entered-again")
+            };
+            *done.lock().expect(POISON) = Some(c);
+            ready.store(true, Ordering::Release);
         }),
-        since: std::time::Instant::now(),
-    }));
+        std::time::Instant::now() + delay,
+    );
+    crate::jit_backend::storage::from_storage(storage)
+        .ok()?
+        .llvm_tickets
+        .push(ticket);
+    *t.source.borrow_mut() = Some(Box::new(p));
     entry
 }
+
+const POISON: &str = "a job never panics holding its result";
