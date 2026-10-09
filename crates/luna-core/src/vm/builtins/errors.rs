@@ -7,9 +7,10 @@ pub(super) fn nat_assert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let a = Args::new(fs, nargs);
     let v = a.get(vm, 0);
     if v.truthy() {
-        // assert returns all its arguments
-        let vals: Vec<Value> = (0..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
-        return Ok(vm.nat_return(fs, &vals));
+        // assert returns all its arguments: one slot down, over itself
+        let (fs, n) = (fs as usize, nargs as usize);
+        vm.stack.copy_within(fs + 1..fs + 1 + n, fs);
+        return Ok(nargs);
     }
     match vm.version() {
         // 5.1 checks for a condition first; 5.2 does not, so a bare

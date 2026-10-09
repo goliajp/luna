@@ -285,7 +285,8 @@ pub(super) fn encode(asm: &mut Asm, f: &Frame, caps: &mut Caps) -> Res<()> {
     let mut pc = 0;
     while pc < p.code.len() {
         asm.begin(pc);
-        let l = L::of(p.code[pc]);
+        let i = crate::vm::isa::imm_form::to_k(p.code[pc], &p.consts);
+        let l = L::of(i.ok_or_else(|| asm.err("an immediate operand not in the constants"))?);
         pc += C { asm, f }.one(l, caps)?;
     }
     Ok(())

@@ -101,13 +101,7 @@ impl<'a> Compiler<'a> {
     /// a constant local. No upvalue is created on the way.
     pub(super) fn ct_const_named(&self, name: &str) -> Option<CtConst> {
         for lvl in self.levels.iter().rev() {
-            if lvl
-                .avars
-                .iter()
-                .rev()
-                .find(|a| a.name == Some(name))
-                .is_some_and(|a| a.global)
-            {
+            if lvl.global_declared(name) {
                 return None;
             }
             if let Some(l) = lvl.locals.iter().rev().find(|l| l.name == name) {
@@ -137,6 +131,7 @@ impl<'a> Compiler<'a> {
     /// a goto jumping over it lands "into its scope" (PUC's `new_varkind` +
     /// `nactvar++`). `name` is `None` for a `global *` collective marker.
     pub(super) fn declare_global_marker(&mut self, name: Option<&'a str>) {
+        self.l().has_global_decl = true;
         self.l().avars.push_or_abort(AVar {
             name,
             reg: None,
@@ -155,13 +150,7 @@ impl<'a> Compiler<'a> {
         // shadows an enclosing local X (and vice-versa). A `global *` marker
         // has no name and never matches here — collective scope is the
         // unbound-name fallback handled by resolve_global_kind.
-        if let Some(av) = self.levels[li]
-            .avars
-            .iter()
-            .rev()
-            .find(|a| a.name == Some(name))
-            && av.global
-        {
+        if self.levels[li].global_declared(name) {
             return Ok(VarKind::Global { read_only: false });
         }
         if let Some(idx) = self.levels[li].locals.iter().rposition(|l| l.name == name) {

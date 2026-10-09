@@ -51,6 +51,9 @@ pub(super) struct Level<'a> {
     pub(super) jump_err: Option<SyntaxError>,
     /// the values with jump lists (see `Exp::Jumps`)
     pub(super) jexps: LVec<JExp>,
+    /// a `global` declaration was made in this function (5.5): until then
+    /// no name lookup needs to look for one among `avars`
+    pub(super) has_global_decl: bool,
 }
 
 /// A value and its true and false jump lists (PUC `expdesc` `t` / `f`).
@@ -93,7 +96,19 @@ impl<'a> Level<'a> {
             jpc: NO_JUMP,
             jump_err: None,
             jexps: bufs.jexps,
+            has_global_decl: false,
         }
+    }
+
+    /// The innermost active variable named `name` is a `global` declaration.
+    pub(super) fn global_declared(&self, name: &str) -> bool {
+        self.has_global_decl
+            && self
+                .avars
+                .iter()
+                .rev()
+                .find(|a| a.name == Some(name))
+                .is_some_and(|a| a.global)
     }
 
     /// The finished function, and this level's vectors emptied for the next
@@ -216,6 +231,9 @@ pub(crate) struct CompileScratch {
     /// the stack of functions being compiled, empty
     pub(super) open: LVec<Level<'static>>,
     pub(super) sym_strs: LVec<Option<Gc<LuaStr>>>,
+    pub(super) spine: LVec<super::expr::Pending>,
+    pub(super) lvs: LVec<super::lvalue::Lv>,
+    pub(super) operands: LVec<ExprId>,
 }
 
 impl CompileScratch {
@@ -225,6 +243,9 @@ impl CompileScratch {
             levels: LVec::new(mem),
             open: LVec::new(mem),
             sym_strs: LVec::new(mem),
+            spine: LVec::new(mem),
+            lvs: LVec::new(mem),
+            operands: LVec::new(mem),
         }
     }
 }

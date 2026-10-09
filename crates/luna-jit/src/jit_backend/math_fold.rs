@@ -109,3 +109,22 @@ pub(super) fn try_match_math_fold(
         name_key: fname,
     })
 }
+
+/// The C math functions a folded `math.*` call reaches without luna's
+/// `errno` bookkeeping (none of them sets it), which Cranelift's JIT finds
+/// by symbol lookup in the process.
+pub(crate) fn libm(name: &str) -> Option<*const u8> {
+    unsafe extern "C" {
+        fn atan(x: f64) -> f64;
+        fn atan2(y: f64, x: f64) -> f64;
+        fn floor(x: f64) -> f64;
+        fn ceil(x: f64) -> f64;
+    }
+    Some(match name {
+        "atan" => atan as *const u8,
+        "atan2" => atan2 as *const u8,
+        "floor" => floor as *const u8,
+        "ceil" => ceil as *const u8,
+        _ => return None,
+    })
+}

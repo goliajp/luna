@@ -1,7 +1,6 @@
 //! Unary operators, `and` / `or`, concatenation and indexing.
 
 use super::*;
-use crate::runtime::mem::LVec;
 
 /// What [`Compiler::index_open`] found.
 pub(super) enum IndexOpen {
@@ -92,7 +91,9 @@ impl<'a> Compiler<'a> {
         // run-side pre-sum can short-circuit the whole expression.
         //
         // Collect the right-associative chain's operands left-to-right.
-        let mut operands: LVec<ExprId> = LVec::new(self.heap.mem());
+        // a concatenation among the operands finds the buffer taken and
+        // makes its own
+        let mut operands = self.operands.take();
         operands.push_or_abort(lhs);
         let mut cur = rhs;
         loop {
@@ -133,6 +134,8 @@ impl<'a> Compiler<'a> {
                 nargs = 1;
             }
         }
+        operands.clear();
+        self.operands = operands;
         self.set_freereg(base);
         self.last_line = line;
         // 5.1–5.3 `CONCAT` names its destination, which is left to the use
@@ -154,9 +157,7 @@ impl<'a> Compiler<'a> {
     pub(super) fn vararg_virtual_local(&self, name: &str) -> bool {
         let lvl = self.lr();
         // a more-recent `global name` marker shadows the local
-        if let Some(av) = lvl.avars.iter().rev().find(|a| a.name == Some(name))
-            && av.global
-        {
+        if lvl.global_declared(name) {
             return false;
         }
         lvl.locals

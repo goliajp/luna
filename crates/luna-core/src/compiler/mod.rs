@@ -34,6 +34,7 @@ mod level;
 mod limits;
 mod lvalue;
 mod main_fn;
+pub use main_fn::compile_chunk_with_last_target;
 use main_fn::compile_main;
 mod resolve;
 mod return_stat;
@@ -89,22 +90,6 @@ pub(crate) fn compile_parsed(
     scratch: &mut CompileScratch,
 ) -> Result<Gc<Proto>, SyntaxError> {
     compile_main(ast, end_lines, version, source, heap, scratch).map(|(p, _)| p)
-}
-
-/// Diagnostic version of [`compile_chunk`] that also returns the main
-/// proto's final `last_target` value (the highest pc recorded as a jump
-/// destination — PUC `fs->lasttarget` equivalent). Used by the
-/// jump-target tracker unit tests at
-/// `crates/luna-core/tests/it/compiler_jump_target_tracker.rs`.
-pub fn compile_chunk_with_last_target(
-    ast: &ast::Chunk,
-    version: LuaVersion,
-    source_name: &[u8],
-    heap: &mut Heap,
-) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
-    let mut scratch = CompileScratch::new(heap.mem());
-    let source = heap.intern(source_name);
-    compile_main(ast, &[], version, source, heap, &mut scratch)
 }
 
 struct LocalVar<'a> {
@@ -236,6 +221,12 @@ struct Compiler<'a> {
     /// equal constants. The runtime interner only dedups short strings, so
     /// only long ones are kept here.
     str_cache: LMap<Gc<LuaStr>, Gc<LuaStr>>,
+    /// the left spines of the expressions being compiled (see [`Self::expr`])
+    spine: LVec<expr::Pending>,
+    /// an assignment's targets, taken while one is compiled
+    lvs: LVec<lvalue::Lv>,
+    /// a concatenation's operands, taken while one is compiled
+    operands: LVec<ExprId>,
 }
 
 impl<'a> Compiler<'a> {
@@ -264,7 +255,12 @@ impl<'a> Compiler<'a> {
     }
 
     /// The finished function `lvl` on the heap; its vectors are kept.
-    fn finish_level(&mut self, lvl: Level<'a>, line: u32, last_line: u32) -> Gc<Proto> {
+    fn finish_level(&mut self, mut lvl: Level<'a>, line: u32, last_line: u32) -> Gc<Proto> {
+        if self.version <= LuaVersion::Lua53 {
+            for i in lvl.code.iter_mut() {
+                *i = crate::vm::isa::imm_form::to_imm(*i, &lvl.consts);
+            }
+        }
         let (proto, bufs) = lvl.into_proto(self.source, line, last_line, self.heap);
         self.pool.push_or_abort(bufs);
         self.heap.adopt_proto(proto)
