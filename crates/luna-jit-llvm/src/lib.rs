@@ -36,11 +36,13 @@ use luna_core::vm::Vm;
 
 mod codegen;
 mod function;
+mod job;
 mod operands;
 mod storage;
 mod upval_roles;
 
 pub use function::{ENTRY, compile_function};
+pub use job::{ChunkJob, CompiledChunk};
 pub use storage::{EnginePair, LlvmJitStorage};
 
 /// LLVM-backed JIT backend zero-sized type. Implements

@@ -34,17 +34,17 @@ macro_rules! h {
 
 fn helper_registry() -> Vec<Helper> {
     use luna_jit_helpers::{
-        luna_jit_materialize_sunk_table, luna_jit_new_table, luna_jit_new_table_sized,
-        luna_jit_no_deopt_parked, luna_jit_op_close, luna_jit_op_closure, luna_jit_op_concat,
-        luna_jit_op_get_tab_up, luna_jit_op_tforcall, luna_jit_park_deopt, luna_jit_self_call_slow,
-        luna_jit_self_enter, luna_jit_self_leave, luna_jit_self_upval_check,
-        luna_jit_spill_to_stack, luna_jit_stack_load, luna_jit_stack_tag,
-        luna_jit_stack_update_raw, luna_jit_str_buf_acquire, luna_jit_str_buf_extend,
-        luna_jit_str_buf_intern, luna_jit_str_buf_release, luna_jit_table_get_field,
-        luna_jit_table_get_float, luna_jit_table_get_int, luna_jit_table_len,
-        luna_jit_table_set_field, luna_jit_table_set_float_float, luna_jit_table_set_int,
-        luna_jit_table_set_nil, luna_jit_table_set_raw, luna_jit_trace_materialize_frames,
-        luna_jit_upval_get, luna_jit_upval_is_int,
+        luna_jit_enter_ctx, luna_jit_materialize_sunk_table, luna_jit_new_table,
+        luna_jit_new_table_sized, luna_jit_no_deopt_parked, luna_jit_op_close, luna_jit_op_closure,
+        luna_jit_op_concat, luna_jit_op_get_tab_up, luna_jit_op_tforcall, luna_jit_park_deopt,
+        luna_jit_self_call_slow, luna_jit_self_upval_check, luna_jit_spill_to_stack,
+        luna_jit_stack_load, luna_jit_stack_tag, luna_jit_stack_update_raw,
+        luna_jit_str_buf_acquire, luna_jit_str_buf_extend, luna_jit_str_buf_intern,
+        luna_jit_str_buf_release, luna_jit_table_get_field, luna_jit_table_get_float,
+        luna_jit_table_get_int, luna_jit_table_len, luna_jit_table_set_field,
+        luna_jit_table_set_float_float, luna_jit_table_set_int, luna_jit_table_set_nil,
+        luna_jit_table_set_raw, luna_jit_trace_materialize_frames, luna_jit_upval_get,
+        luna_jit_upval_is_int,
     };
     vec![
         h!(luna_jit_new_table, 0, true),
@@ -63,8 +63,7 @@ fn helper_registry() -> Vec<Helper> {
         h!(luna_jit_upval_is_int, 1, true),
         h!(luna_jit_no_deopt_parked, 0, true),
         h!(luna_jit_park_deopt, 0, false),
-        h!(luna_jit_self_enter, 0, true),
-        h!(luna_jit_self_leave, 0, false),
+        h!(luna_jit_enter_ctx, 1, false),
         h!(luna_jit_self_call_slow, 7, true),
         h!(luna_jit_self_upval_check, 1, true),
         h!(luna_jit_op_close, 1, true),
