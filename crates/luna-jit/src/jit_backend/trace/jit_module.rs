@@ -50,6 +50,8 @@ pub(super) fn trace_isa() -> Option<cranelift_codegen::isa::OwnedTargetIsa> {
         // numeric loop trace run 1.9x the instructions; traces keep the
         // backtracking one.
         flag_builder.set("opt_level", "none").ok()?;
+        // the block offsets, for the loop head's alignment
+        flag_builder.set("machine_code_cfg_info", "true").ok()?;
         // The IR verifier is a quarter of a trace's compile time (token_bucket:
         // 175 of 720 us of Cranelift passes). Release builds leave it out, as
         // wasmtime does; debug builds, which the lib tests run, keep it.
