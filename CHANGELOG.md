@@ -187,6 +187,17 @@ optimization.
 
 ### Changed
 
+- LLVM backend (`--features llvm-jit`): a hot function runs on the
+  Cranelift method JIT's code at once and, when LLVM's method JIT takes
+  it, on LLVM's code once the compile thread has compiled it (after it has
+  stayed hot for `llvm_after`, 20 ms); the dispatcher's entry calls
+  through a cell the compile thread fills in. LLVM's self-recursive calls
+  check the native stack limit and the call budget at the body's start,
+  with both passed as arguments, instead of calling two helpers per call,
+  so LLVM can turn the recursion into a loop (`fib(30)`: 3.4 ms against
+  Cranelift's 3.8 ms, was 7.2 ms). The helpers `luna_jit_self_enter` and
+  `luna_jit_self_leave` are gone.
+
 - Conditions and `and` / `or` / `not` compile as PUC's code generator
   compiles them, in every dialect: a value of `a and b or c` goes into
   its register through `TestSet` instead of a `Move` and a `Test`, a
@@ -493,6 +504,16 @@ optimization.
   about 20 fewer machine instructions each.
 
 ### Fixed
+
+- LLVM backend: the method JIT took a register that 5.1's code never wrote
+  (5.1 leaves out the `LoadNil` of a register still nil at entry, so
+  `return nil` reads it) for the integer 0; `load` with a reader that
+  returns nil failed with "not enough memory". It now refuses such
+  functions.
+- LLVM backend on aarch64 Linux: code the compile thread wrote is handed
+  to the Vm's thread only after every core has resynchronised its
+  instruction fetch (`membarrier`'s `SYNC_CORE`); elsewhere on aarch64 the
+  code stays on the quicker tier.
 
 - 5.4 / 5.5: a `return` from inside a generic `for`, in a function that
   captures none of its locals, now calls the `__close` of the loop's
