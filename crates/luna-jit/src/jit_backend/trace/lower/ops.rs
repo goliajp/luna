@@ -14,6 +14,8 @@ mod order;
 mod sequence;
 mod table;
 mod tfor;
+mod tfor_ipairs;
+mod upval;
 use arith::*;
 use arith_divmod::*;
 use arith_double::*;
@@ -28,6 +30,8 @@ use order::*;
 use sequence::*;
 use table::*;
 use tfor::*;
+pub(super) use upval::upval_table_read;
+use upval::*;
 
 /// One recorded op as the emit pass sees it: its index, its register
 /// window (`off`, and `regs` with the constant operand's virtual
@@ -35,7 +39,7 @@ use tfor::*;
 pub(super) struct OpCx<'r> {
     pub(super) i: usize,
     pub(super) rop: &'r RecordedOp,
-    pub(super) vk: Option<VConst>,
+    pub(super) vregs: VRegs,
     pub(super) rc_const: Option<i64>,
     pub(super) off: usize,
     pub(super) regs: &'r [Variable],
@@ -45,11 +49,12 @@ pub(super) struct OpCx<'r> {
 }
 
 impl OpCx<'_> {
-    /// The kind of an operand register, the virtual one included.
+    /// The kind of an operand register, the virtual ones included.
     pub(super) fn kind(&self, current_kinds: &[RegKind], r: u32) -> RegKind {
-        match self.vk {
-            Some(VConst::Int(_)) if r as usize == self.max_stack => RegKind::Int,
-            Some(VConst::Float(_)) if r as usize == self.max_stack => RegKind::Float,
+        match (r as usize).checked_sub(self.max_stack) {
+            Some(j) if j < NVIRT && self.vregs[j].is_some() => {
+                vsrc_kind(self.vregs[j].expect("checked"))
+            }
             _ => k_op(current_kinds, self.off as u32 + r),
         }
     }
@@ -67,6 +72,7 @@ pub(super) fn emit_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) 
         | Op::LoadFalse
         | Op::LoadTrue
         | Op::LFalseSkip
+        | Op::LTrueSkip
         | Op::Not => emit_basic_op(lw, pl, oc),
         Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Pow => emit_float_arith_op(lw, pl, oc),
         Op::IDiv
@@ -87,17 +93,23 @@ pub(super) fn emit_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) 
         Op::SelfOp => emit_self_op(lw, pl, oc),
         Op::GetTabUp => emit_get_tab_up_op(lw, pl, oc),
         Op::SetList | Op::Len | Op::Concat => emit_sequence_op(lw, pl, oc),
-        Op::Closure | Op::Close | Op::GetUpval => emit_closure_op(lw, pl, oc),
-        Op::Call | Op::Return0 | Op::Return1 => emit_call_op(lw, pl, oc),
-        Op::TForCall => emit_tfor_call_op(lw, pl, oc),
+        Op::Closure | Op::Close | Op::JmpClose | Op::JmpCloseBack | Op::GetUpval => {
+            emit_closure_op(lw, pl, oc)
+        }
+        Op::Call | Op::Return0 | Op::Return1 | Op::Return | Op::Vararg => emit_call_op(lw, pl, oc),
+        Op::TForCall | Op::TForCall53 | Op::TForCall55 => emit_tfor_call_op(lw, pl, oc),
         // generic-for prep is the leading pc-bump
         // before body_top. Recorder enters at body_top, so this
         // arm is defensive only — pre-emit pass bails before we
         // reach it.
-        Op::TForPrep => unreachable!("Op::TForPrep bailed in pre-emit pass"),
+        Op::TForPrep | Op::TForPrep53 | Op::TForPrep55 => {
+            unreachable!("Op::TForPrep bailed in pre-emit pass")
+        }
         // TForLoop is the trace's terminator; tail
         // emit handles the side-exit + back-edge.
-        Op::TForLoop => unreachable!("Op::TForLoop only appears at effective_end"),
+        Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => {
+            unreachable!("Op::TForLoop only appears at effective_end")
+        }
         _ => unreachable!("non-whitelisted op rejected in pre-emit pass"),
     }
 }

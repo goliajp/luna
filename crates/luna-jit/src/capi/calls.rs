@@ -5,6 +5,7 @@
 
 use super::ccall::{Cont, KFn, LUNA_RECOVER, PendingYield, Wait, pcall_outcome, push_results};
 use super::*;
+use luna_core::runtime::Builtin;
 use luna_core::vm::exec::host_c::HostContSpec;
 
 /// The continuation slot of the C function running on `api`'s thread, as
@@ -469,13 +470,13 @@ pub(super) fn new_c_closure(api: &mut Api, f: LuaCFunction, n: usize) -> Value {
     upvals.push(Value::LightUserdata(f as *const ()));
     upvals.push(env);
     upvals.extend(ups);
-    let trampoline: luna_core::runtime::value::NativeFn = ccall::capi_trampoline;
+    let (tramp, c) = (ccall::capi_trampoline, Builtin::CFunction);
     // from 5.2 on a C function without upvalues is a light C function,
     // equal to every other push of the same pointer
     if n == 0 && api.version() >= LuaVersion::Lua52 {
-        return api.vm.host_light_fn(f as usize, |vm| {
-            vm.native_with(trampoline, upvals.into_boxed_slice())
-        });
+        return api
+            .vm
+            .host_light_fn(f as usize, |vm| vm.builtin(tramp, &upvals, c));
     }
-    api.vm.native_with(trampoline, upvals.into_boxed_slice())
+    api.vm.builtin(tramp, &upvals, c)
 }

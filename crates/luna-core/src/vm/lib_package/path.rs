@@ -48,17 +48,7 @@ pub(super) fn env_path(v: LuaVersion, noenv: bool, var: &str, dft: &[u8]) -> Vec
     out
 }
 
-pub(super) fn os_bytes(s: &std::ffi::OsStr) -> Vec<u8> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        s.as_bytes().to_vec()
-    }
-    #[cfg(not(unix))]
-    {
-        s.to_string_lossy().into_owned().into_bytes()
-    }
-}
+pub(super) use crate::vm::lib_io::os_bytes;
 
 /// `luaL_gsub`: replace every `from` in `src` with `to`.
 pub(super) fn replace(src: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
@@ -78,7 +68,14 @@ pub(super) fn replace(src: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
 
 /// `readable`: whether `fopen(name, "r")` succeeds.
 pub(super) fn readable(name: &[u8]) -> bool {
-    std::fs::File::open(os_path(name)).is_ok()
+    match crate::vm::lib_io::fopen::os_open(name, &crate::vm::lib_io::fopen::Spec::READ) {
+        Ok(_) => true,
+        Err(e) => {
+            // the failed `fopen` leaves its errno
+            crate::vm::lib_io::note_failure(&e);
+            false
+        }
+    }
 }
 
 /// `searchpath`: the first readable file among `path`'s templates with
@@ -160,8 +157,7 @@ pub(super) fn find_file(
     name: &[u8],
     pname: &str,
 ) -> Result<Result<Vec<u8>, Vec<u8>>, LuaError> {
-    let k = Value::Str(vm.heap.intern(pname.as_bytes()));
-    let path = vm.index_value(Value::Table(pkg), k)?;
+    let path = vm.native_getfield(Value::Table(pkg), pname.as_bytes())?;
     let Some(path) = argcheck::to_str_bytes(vm, path) else {
         return Err(raise_str(
             vm,

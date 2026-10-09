@@ -25,6 +25,10 @@ impl<'s> Parser<'s> {
             let line = self.tok.line;
             self.advance()?;
             let rhs = self.sub_expr(rp)?;
+            if matches!(op, BinOp::Pow | BinOp::Mod) {
+                let stamp = crate::cerrno::writes();
+                self.chunk.fold_marks.push_or_abort((rhs.0, stamp));
+            }
             left = self.push_expr(Expr::BinOp {
                 op,
                 lhs: left,

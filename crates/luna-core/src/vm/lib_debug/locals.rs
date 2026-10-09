@@ -93,13 +93,15 @@ fn getlocal_result(
 }
 
 /// PUC `luaF_getlocalname(p, n, 0)`: the `n`-th local live at the first
-/// instruction — a parameter.
+/// instruction — a fixed parameter (5.5's vararg parameter starts after
+/// `VARARGPREP`, which luna's code does not have).
 pub(crate) fn param_name(cl: Gc<LuaClosure>, n: i64) -> Option<String> {
+    let np = u32::from(cl.proto.num_params);
     let mut live: Vec<&crate::runtime::LocVar> = cl
         .proto
         .locvars
         .iter()
-        .filter(|lv| lv.start_pc == 0 && lv.end_pc > 0)
+        .filter(|lv| lv.start_pc == 0 && lv.end_pc > 0 && lv.reg < np)
         .collect();
     live.sort_by_key(|lv| lv.reg);
     let lv = live.get(usize::try_from(n.checked_sub(1)?).ok()?)?;

@@ -4,12 +4,16 @@ mod cmp_table_checks;
 mod frames;
 mod op_checks;
 mod scan;
+mod trace_ends;
 mod validate;
+mod value_checks;
 use cmp_table_checks::*;
 use frames::*;
 use op_checks::*;
 use scan::*;
+use trace_ends::*;
 use validate::*;
+use value_checks::*;
 
 // detect the FIRST Bufferable AccumSite.
 // Buffered emit handles a single site. The 4 idiom op indices
@@ -22,7 +26,7 @@ pub(super) struct BufferedAccum {
     pub(super) pre1_idx: usize,
     pub(super) pre2_idx: usize,
     pub(super) concat_idx: usize,
-    pub(super) post_idx: usize,
+    pub(super) post_idx: Option<usize>,
 }
 
 /// What the pre-emit passes found out about a trace: its register
@@ -33,14 +37,23 @@ pub(super) struct Plan<'r> {
     pub(super) head_proto: Gc<Proto>,
     pub(super) max_stack: usize,
     /// The width of every op's register window: the largest frame among
-    /// the functions the trace runs. Register `frame_w` is the virtual one
-    /// of a constant operand.
+    /// the functions the trace runs. Registers `frame_w` up are the virtual
+    /// ones of a constant operand or an upvalue table (see `vconsts`).
     pub(super) frame_w: usize,
-    pub(super) vconsts: Vec<Option<VConst>>,
+    pub(super) vconsts: Vec<VRegs>,
     pub(super) opts: CompileOptions,
     pub(super) float_only: bool,
     pub(super) op_offsets: Vec<u32>,
-    pub(super) enclosing_call_a: Vec<Option<u8>>,
+    /// The frame of each call the trace inlines (see [`inline_calls`]).
+    pub(super) inline_calls: Vec<Option<InlineCall>>,
+    /// The stack top of each op's frame before it runs, where the
+    /// recording fixes it.
+    pub(super) frame_tops: Vec<Option<u32>>,
+    /// The register holding the closure each op's frame runs.
+    pub(super) frame_func: Vec<u32>,
+    /// The registers each op writes past what its instruction names (see
+    /// [`inline_writes`]).
+    pub(super) inline_writes: Vec<(u32, u32)>,
     pub(super) window_size: u32,
     pub(super) window_size_us: usize,
     pub(super) folded_ops: Vec<bool>,
@@ -67,16 +80,11 @@ pub(super) struct Plan<'r> {
     pub(super) step_guard: Option<(usize, bool)>,
 }
 
-/// The constant held by the virtual register of op `i`, if it has one.
-pub(super) fn vconst_at(vconsts: &[Option<VConst>], i: usize) -> Option<VConst> {
-    vconsts.get(i).copied().flatten()
-}
-
 /// The pre-emit passes. `None` when the trace cannot be compiled; the
 /// escape analysis comes back separately because emit demotes sites.
 pub(super) fn plan_trace<'r>(
     record: &'r TraceRecord,
-    vconsts: Vec<Option<VConst>>,
+    vconsts: Vec<VRegs>,
     head_proto: Gc<Proto>,
     max_stack: usize,
     frame_w: usize,
@@ -84,13 +92,29 @@ pub(super) fn plan_trace<'r>(
     float_only: bool,
 ) -> Option<(Plan<'r>, EscapeAnalysis)> {
     let n = record.ops.len();
+    set_last_op(usize::MAX, 255);
 
-    let (op_offsets, enclosing_call_a, window_size) = plan_frames(record, head_proto, frame_w)?;
+    // a trace that inlines no call needs none of the inline-frame plan
+    // (the vectors stay empty; their readers take a missing entry as none)
+    let inlines = record.ops.iter().any(|r| r.inline_depth > 0);
+    let (inline_calls, frame_tops) = if inlines {
+        inline_calls(record)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let (op_offsets, window_size) = plan_frames(record, head_proto, frame_w, &inline_calls)?;
     let window_size_us = window_size as usize;
+    let (frame_func, inline_writes) = if inlines {
+        let funcs = frame_funcs(record, &op_offsets);
+        let writes = inline_writes(record, &op_offsets, &inline_calls, &frame_tops, &funcs);
+        (funcs, writes)
+    } else {
+        (Vec::new(), Vec::new())
+    };
 
     side_trace_gate(record, &op_offsets)?;
     let (folded_ops, math_folds) = scan_math_folds(record, n, head_proto, opts);
-    let end_idx_opt = find_trace_end(record, &folded_ops, n)?;
+    let end_idx_opt = find_trace_end(record, &folded_ops, n, &inline_calls)?;
     let effective_end = end_idx_opt.map(|(i, _)| i).unwrap_or(n);
     // escape analysis over the recorded body +
     // terminator. The pre-emit pass below demotes any Sinkable
@@ -169,6 +193,7 @@ pub(super) fn plan_trace<'r>(
     let mut head_live = entry_live(
         record,
         &op_offsets,
+        &inline_writes,
         effective_end,
         max_stack,
         do_internal_loop,
@@ -191,7 +216,7 @@ pub(super) fn plan_trace<'r>(
             pre1_idx: s.op_idx - 2,
             pre2_idx: s.op_idx - 1,
             concat_idx: s.op_idx,
-            post_idx: s.op_idx + 1,
+            post_idx: s.has_post.then_some(s.op_idx + 1),
         });
 
     let (consumed_by_cmp, cmp_dirs) = validate_ops(
@@ -201,6 +226,7 @@ pub(super) fn plan_trace<'r>(
         frame_w,
         effective_end,
         &folded_ops,
+        &frame_tops,
     )?;
     let step_guard = plan_step_guard(
         record,
@@ -230,7 +256,10 @@ pub(super) fn plan_trace<'r>(
             opts,
             float_only,
             op_offsets,
-            enclosing_call_a,
+            inline_calls,
+            frame_tops,
+            frame_func,
+            inline_writes,
             window_size,
             window_size_us,
             folded_ops,

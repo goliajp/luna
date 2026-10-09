@@ -1,0 +1,54 @@
+create	utf8-eacute	w-\195\169.txt	ok
+create	latin1-eacute	w-\233.txt	ok
+create	utf8-euro	w-\226\130\172.txt	ok
+create	latin1-euro	w-\128.txt	ok
+create	byte81	w-\129.txt	ok
+create	byte8d	w-\141.txt	ok
+create	byte9d	w-\157.txt	ok
+create	utf8-ri	w-\230\151\165.txt	ok
+create	bytes-ff	w-\255.txt	ok
+create	utf8-eacute-dir	w-d\195\169/x.txt	w-dé/x.txt: No such file or directory,2
+open existing	utf8-eacute	x-\195\169.txt	x-é.txt: No such file or directory,2
+open existing	latin1-eacute	x-\233.txt	ok:return 1
+open existing	utf8-euro	x-\226\130\172.txt	x-€.txt: No such file or directory,2
+open existing	latin1-euro	x-\128.txt	ok:return 1
+open existing	byte81	x-\129.txt	x-�.txt: No such file or directory,2
+open existing	byte8d	x-\141.txt	x-�.txt: No such file or directory,2
+open existing	byte9d	x-\157.txt	x-�.txt: No such file or directory,2
+open existing	utf8-ri	x-\230\151\165.txt	x-日.txt: No such file or directory,2
+open existing	bytes-ff	x-\255.txt	ok:return 1
+open existing	utf8-eacute-dir	x-d\195\169/x.txt	x-dé/x.txt: No such file or directory,2
+remove	utf8-eacute	nil,x-é.txt: No such file or directory,2
+rename	utf8-eacute	true
+loadfile	utf8-eacute	nil,cannot open l-é.txt: No such file or directory
+remove	latin1-eacute	true
+rename	latin1-eacute	true
+loadfile	latin1-eacute	function
+remove	utf8-euro	nil,x-€.txt: No such file or directory,2
+rename	utf8-euro	true
+loadfile	utf8-euro	nil,cannot open l-€.txt: No such file or directory
+remove	latin1-euro	true
+rename	latin1-euro	true
+loadfile	latin1-euro	function
+remove	byte81	nil,x-�.txt: No such file or directory,2
+rename	byte81	true
+loadfile	byte81	nil,cannot open l-�.txt: No such file or directory
+remove	byte8d	nil,x-�.txt: No such file or directory,2
+rename	byte8d	true
+loadfile	byte8d	nil,cannot open l-�.txt: No such file or directory
+remove	byte9d	nil,x-�.txt: No such file or directory,2
+rename	byte9d	true
+loadfile	byte9d	nil,cannot open l-�.txt: No such file or directory
+remove	utf8-ri	nil,x-日.txt: No such file or directory,2
+rename	utf8-ri	true
+loadfile	utf8-ri	nil,cannot open l-日.txt: No such file or directory
+remove	bytes-ff	true
+rename	bytes-ff	true
+loadfile	bytes-ff	function
+remove	utf8-eacute-dir	nil,x-dé/x.txt: No such file or directory,2
+rename	utf8-eacute-dir	nil,w-dé/x.txt: No such file or directory,2
+loadfile	utf8-eacute-dir	nil,cannot open l-dé/x.txt: No such file or directory
+getenv	\233\128
+getenv-ri	?
+tmpname	C:\92Users\92RUNNER~1\92AppData\92Local\92Temp\92s144.0
+getenv-utf8name	nil	ve

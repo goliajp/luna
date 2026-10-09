@@ -8,9 +8,7 @@ impl Vm {
     /// coercion, metamethods and errors. The opcode arms in the dispatch
     /// loop handle Int/Int and Float/Float themselves.
     ///
-    /// `R[a] := l op r`. `sub_zero` marks the `Add` that stands for a 5.4+
-    /// `x - 0` (see `Op::Add`): the right operand is the integer 0, so it
-    /// adds only when the left is a number.
+    /// `R[a] := l op r`.
     #[inline(never)]
     pub(super) fn arith_slow(
         &mut self,
@@ -19,14 +17,7 @@ impl Vm {
         op: ArithOp,
         l: Value,
         r: Value,
-        sub_zero: bool,
     ) -> Result<(), LuaError> {
-        let op = if sub_zero && op == ArithOp::Add && !matches!(l, Value::Int(_) | Value::Float(_))
-        {
-            ArithOp::Sub
-        } else {
-            op
-        };
         match self.arith_fast(op, l, r)? {
             Some(v) => self.set_r(base, a, v),
             None => {
@@ -150,12 +141,15 @@ impl Vm {
             };
             // luaG_opinterror blames the first operand that is not a number;
             // before 5.4 a numeric string counts as one.
-            let bad = if self.arith_operand()(l).is_none() {
-                l
-            } else {
-                r
+            let side = usize::from(self.arith_operand()(l).is_some());
+            let bad = if side == 0 { l } else { r };
+            let extra = match self.operand_varinfo(side) {
+                Some(extra) => extra,
+                None => self.subject_varinfo(bad),
             };
-            return Err(self.type_err(what, bad));
+            let tn = self.obj_typename(bad);
+            let msg = self.compose_type_err(what, &tn, &extra);
+            return Err(self.runerror_named(&msg, &extra));
         }
         Ok(mm)
     }

@@ -132,6 +132,13 @@ pub(crate) fn tier_up_llvm(
             let ticket = crate::jit_backend::llvm_thread::submit(
                 Box::new(move || {
                     let c = compile(&src.lir, &src.relocs);
+                    // code another core may run (`cores_synced`) or none
+                    let c = match c {
+                        Ok(_) if !crate::jit_backend::llvm_thread::cores_synced() => {
+                            Err("llvm:cores-not-synced")
+                        }
+                        c => c,
+                    };
                     *slot.lock().expect("a job never panics holding its result") = Some(c);
                 }),
                 std::time::Instant::now(),

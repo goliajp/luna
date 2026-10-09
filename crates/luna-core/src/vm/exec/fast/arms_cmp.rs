@@ -98,6 +98,17 @@ macro_rules! fast_cmp_arms {
                 cond_jump!(eq == $inst.k())
             }};
         }
+        // `R[A] op K[B]`, or `K[B] op R[A]` with `C` set
+        macro_rules! order_k_arm {
+            ($d op:tt, $d or_eq:expr) => {{
+                let (pr, pk): (*const Value, *const Value) = (
+                    $regs.wrapping_add($inst.a() as usize),
+                    $kptr.wrapping_add($inst.b() as usize),
+                );
+                let (pl, pr) = if $inst.c() != 0 { (pk, pr) } else { (pr, pk) };
+                order_arm!($d op, $d or_eq, pl, pr)
+            }};
+        }
         macro_rules! op_test {
             () => {{
                 // the JMP that follows runs when the condition equals k

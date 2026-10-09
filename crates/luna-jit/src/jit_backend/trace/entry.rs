@@ -25,6 +25,7 @@ use super::*;
 pub(super) fn entry_live(
     record: &TraceRecord,
     op_offsets: &[u32],
+    inline_writes: &[(u32, u32)],
     end: usize,
     max_stack: usize,
     may_loop: bool,
@@ -67,7 +68,7 @@ pub(super) fn entry_live(
             // the ipairs path keeps the previous value. Close needs none:
             // it spills the registers it has a kind for and the helper
             // reads the others off the stack, which holds them
-            Op::TForCall => read(inst.a() + 5),
+            op if op.is_tfor_call() => read(inst.a() + op.for_layout().map_or(0, |l| l.var()) + 1),
             _ => {}
         }
         let inlined_call = matches!(op, Op::Call)
@@ -75,7 +76,8 @@ pub(super) fn entry_live(
                 .get(i + 1)
                 .is_some_and(|n| n.inline_depth > rop.inline_depth);
         let sure =
-            !matches!(op, Op::TestSet | Op::ForLoop | Op::TForLoop | Op::TForCall) && !inlined_call;
+            !(op == Op::TestSet || op.is_for_loop() || op.is_tfor_loop() || op.is_tfor_call())
+                && !inlined_call;
         let mut write = |s: usize| {
             if s < max_stack {
                 written[s] = true;
@@ -85,14 +87,17 @@ pub(super) fn entry_live(
         for &(lo, n) in &writes {
             (lo..lo + n).for_each(|w| write(off + w as usize));
         }
-        // the value of a call inlined into the trace lands in the caller's
-        // R[A] at the callee's Return1, one below the callee's window
-        if matches!(op, Op::Return1) && rop.inline_depth > 0 && off > 0 {
-            write(off - 1);
+        // the values of a call inlined into the trace land in the caller's
+        // R[A] on at the callee's return; a vararg expansion writes R[A] on
+        if let Some(&(first, n)) = inline_writes.get(i) {
+            (first..first + n).for_each(|s| write(s as usize));
         }
-        if matches!(op, Op::TForCall) {
+        if let Some(lay) = op.for_layout().filter(|_| op.is_tfor_call()) {
             let a = off + inst.a() as usize;
-            [a + 2, a + 4, a + 5].into_iter().for_each(write);
+            let first = a + lay.var() as usize;
+            [a + lay.control() as usize, first, first + 1]
+                .into_iter()
+                .for_each(write);
         }
     }
     if let Some(tags) = parent_exit {
@@ -111,22 +116,15 @@ pub(super) fn entry_live(
     live
 }
 
-/// The exit tags of the parent trace's exit a side trace starts from
-/// (laid out as `exit_hit_counts`: inline exits, tagged exits, then the
-/// global one), or `None` for a trace that is not a side trace or whose
-/// parent is gone.
+/// The exit tags of the parent trace's exit a side trace starts from, from
+/// the side trace's register 0 on (the frame that exit resumes in; laid out
+/// as `exit_hit_counts`: inline exits, tagged exits, then the global one),
+/// or `None` for a trace that is not a side trace or whose parent is gone.
 pub(super) fn side_parent_exit_tags(record: &TraceRecord) -> Option<Vec<ExitTag>> {
     let (parent_proto, parent_head_pc, idx) = record.side_trace_parent?;
     let traces = parent_proto.traces.borrow();
     let parent = traces.iter().find(|t| t.head_pc == parent_head_pc)?;
-    let inline_n = parent.per_exit_inline.len();
-    let tags_n = parent.per_exit_tags.len();
-    let tags: &[ExitTag] = if idx < inline_n {
-        &parent.per_exit_inline[idx].exit_tags
-    } else if idx < inline_n + tags_n {
-        &parent.per_exit_tags[idx - inline_n].1
-    } else {
-        &parent.exit_tags
-    };
-    Some(tags.to_vec())
+    let tags = parent.exit_tags_of(idx);
+    let off = parent.exit_frame_offset(idx).min(tags.len());
+    Some(tags[off..].to_vec())
 }

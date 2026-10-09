@@ -85,93 +85,145 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
             if self_link_idx_opt.is_some() && i + 1 == effective_end {
                 return Some(());
             }
-            // Next op is at depth+1 (recorder invariant for an inlined
-            // call); its op_offsets entry is the callee's base_offset.
+            // the callee's frame: where its registers start, how many
+            // arguments and extra arguments the call passes
+            let shape = pl.inline_calls[i].expect("an inlined call has a frame");
             debug_assert!(
                 i + 1 < effective_end,
                 "inlined Call must be followed by callee op in effective_end"
             );
-            let callee_base = pl.op_offsets[i + 1];
-            // a parameter the call passes no argument for starts nil
-            let nargs = ins.b() - 1;
-            for k in nargs..u32::from(callee_proto.num_params) {
-                let slot = (callee_base + k) as usize;
-                let z = lw.bcx.ins().iconst(types::I64, 0);
-                lw.bcx.def_var(lw.regs_full[slot], z);
-                lw.current_kinds[slot] = RegKind::Nil;
-                lw.known_int[slot] = None;
-                lw.const_str[slot] = false;
+            let callee_base = pl.op_offsets[i + 1] as usize;
+            let nparams = u32::from(callee_proto.num_params);
+            if shape.n_varargs > 0 {
+                // a vararg callee's extra arguments go below its registers,
+                // its fixed parameters from its register 0 on (`push_frame`)
+                let first = off + ins.a() as usize + 1;
+                let args: Vec<Slot> = (0..shape.nargs as usize)
+                    .map(|k| read_slot(lw, first + k))
+                    .collect();
+                for (k, v) in args.into_iter().enumerate() {
+                    let dst = if (k as u32) < nparams {
+                        callee_base + k
+                    } else {
+                        first + k - nparams as usize
+                    };
+                    write_slot(lw, dst, v);
+                }
             }
-            // the caller's result count (`C` - 1; `C` = 0 is let through
-            // only for a call the recording saw return one value)
-            let nresults = match ins.c() {
-                0 => 1,
-                c => c as i32 - 1,
-            };
+            // a parameter the call passes no argument for starts nil, and
+            // so does 5.5's vararg parameter (`push_frame`)
+            let v55 = pl.opts.dialect == Some(luna_core::version::LuaVersion::Lua55);
+            let vararg_param = u32::from(v55 && callee_proto.is_vararg);
+            let window = (nparams + vararg_param).min(u32::from(callee_proto.max_stack));
+            for k in shape.nargs.min(nparams)..window {
+                nil_slot(lw, callee_base + k as usize);
+            }
             lw.call_chain.push(FrameMaterializeInfo {
-                base_offset: callee_base,
+                base_offset: callee_base as u32,
                 pc: rop.pc + 1,
-                nresults,
+                nresults: shape.nresults,
+                n_varargs: shape.n_varargs,
             });
         }
-        // inline Return0: callee returns no values
-        // back to the caller. The caller's R[call_a..] slots stay
-        // whatever the caller had written (Lua semantics: the
-        // return values are nil if the caller's call expected
-        // more than the callee delivered; here recorder snapshots
-        // a single concrete trip so trust the recorded trace).
-        // pop the matching call_chain frame.
-        Op::Return0 => {
+        // a return of an inlined function: its values go to the caller's
+        // R[A] on, as many as the caller wants (nil past the ones given)
+        Op::Return0 | Op::Return1 | Op::Return => {
+            if ins.k() {
+                close_frame(lw, pl, oc)?;
+            }
             let frame = lw
                 .call_chain
                 .pop()
-                .expect("Return0 at depth>0 has a matching frame");
-            // a caller that wants one value gets nil
-            if frame.nresults == 1 {
-                let call_a = pl.enclosing_call_a[i]
-                    .expect("Return0 at depth>0 has an enclosing Op::Call")
-                    as usize;
-                let dst = off - (call_a + 1) + call_a;
-                let z = lw.bcx.ins().iconst(types::I64, 0);
-                lw.bcx.def_var(lw.regs_full[dst], z);
-                lw.current_kinds[dst] = RegKind::Nil;
-                lw.known_int[dst] = None;
-                lw.const_str[dst] = false;
+                .expect("a return at depth>0 has a matching frame");
+            let func = pl.frame_func[i] as usize;
+            let nret = return_count(ins, pl.frame_tops[i]).expect("inline_calls fixed the count");
+            let wanted = u32::try_from(frame.nresults).unwrap_or(nret);
+            let vals: Vec<Slot> = (0..wanted.min(nret) as usize)
+                .map(|j| read_slot(lw, off + ins.a() as usize + j))
+                .collect();
+            let given = vals.len();
+            for (j, v) in vals.into_iter().enumerate() {
+                write_slot(lw, func + j, v);
+            }
+            for j in given..wanted as usize {
+                nil_slot(lw, func + j);
+            }
+            if frame.nresults < 0 {
+                emit_set_top(lw, (func + nret as usize) as i64);
             }
         }
-        // inline Return1: copy callee's R[A]
-        // into the caller's R[call_a]. `op_offsets` for the
-        // following ops will revert to the caller's window, but
-        // the value lives in `regs_full[caller_off + call_a]`
-        // ready for the caller's continuation to read it.
-        Op::Return1 => {
-            let a_callee = ins.a() as usize;
-            let call_a = pl.enclosing_call_a[i]
-                .expect("Return1 at depth>0 has an enclosing Op::Call")
-                as usize;
-            // Caller window's offset is below ours by call_a+1
-            // (callee R[0] sits at caller R[call_a+1]).
-            let caller_off = off
-                .checked_sub(call_a + 1)
-                .expect("op_offsets invariant: callee window > caller window");
-            let frame = lw
+        // `...` in a vararg function the trace inlined: the frame's extra
+        // arguments, below its registers, into R[A] on (nil past them)
+        Op::Vararg => {
+            let m = lw
                 .call_chain
-                .pop()
-                .expect("Return1 at depth>0 has a matching frame");
-            // a caller that wants no value drops it
-            if frame.nresults == 1 {
-                let src_var = lw.regs_full[off + a_callee];
-                let dst_var = lw.regs_full[caller_off + call_a];
-                let v = lw.bcx.use_var(src_var);
-                lw.bcx.def_var(dst_var, v);
-                // Propagate the kind so the caller's continuation
-                // sees the right type.
-                lw.current_kinds[caller_off + call_a] = lw.current_kinds[off + a_callee];
-                lw.known_int[caller_off + call_a] = lw.known_int[off + a_callee];
-                lw.const_str[caller_off + call_a] = lw.const_str[off + a_callee];
+                .last()
+                .expect("validated: a vararg expansion in an inlined frame")
+                .n_varargs as usize;
+            let first = pl.frame_func[i] as usize + 1;
+            let want = match ins.c() {
+                0 => m,
+                c => c as usize - 1,
+            };
+            let dst = off + ins.a() as usize;
+            if ins.a() as usize + want > rop.proto.max_stack as usize {
+                checkpoint("bail:vararg-past-frame");
+                return None;
+            }
+            let vals: Vec<Slot> = (0..want.min(m)).map(|j| read_slot(lw, first + j)).collect();
+            let given = vals.len();
+            for (j, v) in vals.into_iter().enumerate() {
+                write_slot(lw, dst + j, v);
+            }
+            for j in given..want {
+                nil_slot(lw, dst + j);
+            }
+            if ins.c() == 0 {
+                emit_set_top(lw, (dst + m) as i64);
             }
         }
         _ => unreachable!("routed by emit_op"),
     }
     Some(())
+}
+
+/// A register's value and what the trace knows about it.
+#[derive(Clone, Copy)]
+pub(super) struct Slot {
+    v: Value,
+    kind: RegKind,
+    int: Option<i64>,
+    str_const: bool,
+}
+
+pub(super) fn read_slot<E: Emit>(lw: &mut Lower<E>, r: usize) -> Slot {
+    Slot {
+        v: lw.bcx.use_var(lw.regs_full[r]),
+        kind: lw.current_kinds[r],
+        int: lw.known_int[r],
+        str_const: lw.const_str[r],
+    }
+}
+
+pub(super) fn write_slot<E: Emit>(lw: &mut Lower<E>, r: usize, s: Slot) {
+    lw.bcx.def_var(lw.regs_full[r], s.v);
+    lw.current_kinds[r] = s.kind;
+    lw.known_int[r] = s.int;
+    lw.const_str[r] = s.str_const;
+}
+
+pub(super) fn nil_slot<E: Emit>(lw: &mut Lower<E>, r: usize) {
+    let z = lw.bcx.ins().iconst(types::I64, 0);
+    lw.bcx.def_var(lw.regs_full[r], z);
+    lw.current_kinds[r] = RegKind::Nil;
+    lw.known_int[r] = None;
+    lw.const_str[r] = false;
+}
+
+/// Sets the stack top to register `rel` of the head frame, where an op
+/// that takes a variable count reads it (see `luna_jit_set_top`).
+pub(super) fn emit_set_top<E: Emit>(lw: &mut Lower<E>, rel: i64) {
+    let f = lw.bcx.import_func(lw.h.op.set_top_id);
+    let arg = lw.bcx.ins().iconst(types::I64, rel);
+    lw.bcx.ins().call(f, &[arg]);
 }

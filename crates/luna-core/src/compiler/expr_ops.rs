@@ -2,6 +2,14 @@
 
 use super::*;
 
+/// What [`Compiler::index_open`] found.
+pub(super) enum IndexOpen {
+    /// the index compiled, needing no object
+    Done(Exp),
+    /// the object is to be compiled, `saved` the free register before it
+    Object { saved: u32 },
+}
+
 impl<'a> Compiler<'a> {
     pub(super) fn unop(
         &mut self,
@@ -26,11 +34,10 @@ impl<'a> Compiler<'a> {
                     None => (Op::BNot, e),
                 }
             }
-            UnOp::Not => match e {
-                Exp::Nil | Exp::False => return Ok(Exp::True),
-                Exp::True | Exp::Int(_) | Exp::Float(_) | Exp::Const(_) => return Ok(Exp::False),
-                e => (Op::Not, e),
-            },
+            UnOp::Not => {
+                let e = self.discharge_vars(e);
+                return self.code_not(e);
+            }
             UnOp::Len => (Op::Len, e),
         };
         let r = self.exp_to_anyreg(folded)?;
@@ -39,101 +46,34 @@ impl<'a> Compiler<'a> {
         Ok(Exp::Reloc(self.emit(Inst::iabc(opcode, 0, r, 0, false))))
     }
 
-    pub(super) fn and_or(
+    /// `and` / `or` with the left operand compiled to `le` (PUC
+    /// `luaK_infix` and `luaK_posfix`): the left operand's test goes into
+    /// the list of the value that decides the whole, and the right operand
+    /// takes over the rest.
+    pub(super) fn and_or_close(
         &mut self,
         op: BinOp,
-        lhs: ExprId,
+        le: Exp,
         rhs: ExprId,
         line: u32,
     ) -> Result<Exp, SyntaxError> {
+        // PUC tests the left operand once it has read the operator
         self.last_line = line;
-        let base = self.lr().freereg;
-        let le = self.expr(lhs)?;
-        // PUC's jumplist for `X and Y` / `X or Y` when X is a comparison:
-        // skip materializing X to a bool — the comparison's own conditional
-        // jump *is* the short-circuit. For AND, emit the Cmp with k=false so
-        // its Jmp fires on FALSE (short-circuit-to-false); for OR, k=true so
-        // the Jmp fires on TRUE (short-circuit-to-true). Then compile Y into
-        // the result register and patch X's jump to land at the matching pad
-        // of Y's materialization. db.lua :603 (count-hook ceiling) needs the
-        // 3-op savings vs the legacy `materialize X → Test → Jmp` path.
-        if let Exp::Cmp { op: cop, l, r, c } = le {
-            let is_and = matches!(op, BinOp::And);
-            // For AND, Jmp on cond==false (k=false). For OR, Jmp on cond==true (k=true).
-            self.emit(Inst::iabc(cop, l, r, c, !is_and));
-            let jmp_lhs = self.emit_jump();
-            self.set_freereg(base);
-            let re = self.expr(rhs)?;
-            // RHS shapes that leak freereg += 1 (nested and/or, function call,
-            // table ctor) would make the next `reserve(1)` return `base + 1`,
-            // tripping the debug_assert and silently emitting `LFalseSkip` /
-            // `LoadTrue` at `base + 1` in release — clobbering RHS's
-            // temporary. Restore the invariant before reserving the result
-            // slot, mirroring the non-Cmp branch below (lines 1786-1796).
-            self.set_freereg(base);
-            let reg = self.reserve(1)?;
-            debug_assert_eq!(reg, base);
-            // Materialize RHS into `reg` with the standard Cmp pad shape
-            // (Lt + Jmp + LFalseSkip + LoadTrue) so X's short-circuit jump
-            // can land on the matching pad slot.
-            let (false_pad_pc, true_pad_pc) = match re {
-                Exp::Cmp {
-                    op: y_op,
-                    l: y_l,
-                    r: y_r,
-                    c: y_c,
-                } => {
-                    self.emit(Inst::iabc(y_op, y_l, y_r, y_c, true));
-                    self.emit(Inst::isj(Op::Jmp, 1));
-                    let fpad = self.here();
-                    self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
-                    let tpad = self.here();
-                    self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
-                    // Jmp(1) skips LFalseSkip → tpad; LHS short-circuit will
-                    // also patch into one of these pads below.
-                    self.mark_target(tpad);
-                    self.mark_target(fpad);
-                    (fpad, tpad)
-                }
-                _ => {
-                    // RHS is a regular value: materialize it normally, then
-                    // emit an inline false/true pad after a skip jump so the
-                    // LHS short-circuit lands on the matching constant.
-                    self.set_freereg(reg);
-                    self.exp_to_reg(re, reg)?;
-                    let jmp_over = self.emit_jump();
-                    let fpad = self.here();
-                    self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
-                    let tpad = self.here();
-                    self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
-                    self.patch_to_here(jmp_over)?;
-                    // LHS short-circuit patches into fpad or tpad below.
-                    self.mark_target(fpad);
-                    self.mark_target(tpad);
-                    (fpad, tpad)
-                }
-            };
-            let target = if is_and { false_pad_pc } else { true_pad_pc };
-            let off = target as i64 - jmp_lhs as i64 - 1;
-            if off.unsigned_abs() > MAX_SJ as u64 {
-                return Err(self.err(line, "control structure too long"));
-            }
-            self.l().code[jmp_lhs].set_sj(off as i32);
-            return Ok(Exp::Reg(reg));
-        }
-        self.set_freereg(base);
-        let reg = self.exp_to_nextreg(le)?;
-        debug_assert_eq!(reg, base);
-        let k = op == BinOp::Or;
-        self.emit(Inst::iabc(Op::Test, reg, 0, 0, k));
-        let jmp = self.emit_jump();
-        self.set_freereg(reg);
+        let le = if op == BinOp::And {
+            self.go_if_true(le)?
+        } else {
+            self.go_if_false(le)?
+        };
         let re = self.expr(rhs)?;
-        self.set_freereg(reg);
-        let got = self.exp_to_nextreg(re)?;
-        debug_assert_eq!(got, reg);
-        self.patch_to_here(jmp)?;
-        Ok(Exp::Reg(reg))
+        let (v, mut t, mut f) = self.exp_parts(re);
+        let v = self.discharge_vars(v);
+        let (_, lt, lf) = self.exp_parts(le);
+        if op == BinOp::And {
+            self.concat_list(&mut f, lf)?;
+        } else {
+            self.concat_list(&mut t, lt)?;
+        }
+        Ok(self.exp_with(v, t, f))
     }
 
     pub(super) fn concat(
@@ -151,7 +91,10 @@ impl<'a> Compiler<'a> {
         // run-side pre-sum can short-circuit the whole expression.
         //
         // Collect the right-associative chain's operands left-to-right.
-        let mut operands: Vec<ExprId> = vec![lhs];
+        // a concatenation among the operands finds the buffer taken and
+        // makes its own
+        let mut operands = self.operands.take();
+        operands.push_or_abort(lhs);
         let mut cur = rhs;
         loop {
             match self.ast.expr(cur) {
@@ -161,11 +104,11 @@ impl<'a> Compiler<'a> {
                     rhs: r,
                     ..
                 } => {
-                    operands.push(*l);
+                    operands.push_or_abort(*l);
                     cur = *r;
                 }
                 _ => {
-                    operands.push(cur);
+                    operands.push_or_abort(cur);
                     break;
                 }
             }
@@ -191,8 +134,20 @@ impl<'a> Compiler<'a> {
                 nargs = 1;
             }
         }
+        operands.clear();
+        self.operands = operands;
         self.set_freereg(base);
         self.last_line = line;
+        // 5.1–5.3 `CONCAT` names its destination, which is left to the use
+        if self.version <= LuaVersion::Lua53 {
+            return Ok(Exp::Reloc(self.emit(Inst::iabc(
+                Op::Concat,
+                0,
+                nargs,
+                base,
+                true,
+            ))));
+        }
         self.emit(Inst::iabc(Op::Concat, base, nargs, 0, false));
         Ok(Exp::Reg(base))
     }
@@ -202,9 +157,7 @@ impl<'a> Compiler<'a> {
     pub(super) fn vararg_virtual_local(&self, name: &str) -> bool {
         let lvl = self.lr();
         // a more-recent `global name` marker shadows the local
-        if let Some(av) = lvl.avars.iter().rev().find(|a| a.name == Some(name))
-            && av.global
-        {
+        if lvl.global_declared(name) {
             return false;
         }
         lvl.locals
@@ -213,7 +166,13 @@ impl<'a> Compiler<'a> {
             .is_some_and(|idx| lvl.locals[idx].vararg_virtual)
     }
 
-    pub(super) fn index_expr(&mut self, obj: ExprId, key: ExprId) -> Result<Exp, SyntaxError> {
+    /// Before the object of `obj[key]` is compiled: the whole index when it
+    /// needs no object, else the free register to put back.
+    pub(super) fn index_open(
+        &mut self,
+        obj: ExprId,
+        key: ExprId,
+    ) -> Result<IndexOpen, SyntaxError> {
         let ast = self.ast;
         // a read `t[k]` / `t.n` of a virtual named vararg: index the stack
         // varargs directly (OP_VARGIDX), allocating no table.
@@ -225,32 +184,24 @@ impl<'a> Compiler<'a> {
             let k = self.exp_to_anyreg(ke)?;
             let e = Exp::Reloc(self.emit(Inst::iabc(Op::VargIdx, 0, 0, k, false)));
             self.set_freereg(saved);
-            return Ok(e);
+            return Ok(IndexOpen::Done(e));
         }
-        let saved = self.lr().freereg;
-        let oe = self.expr(obj)?;
-        let o = self.exp_to_anyreg(oe)?;
-        let e = match ast.expr(key) {
-            Expr::Str(s) if self.sb(*s).len() <= 255 => {
-                let c = self.sym_const(*s);
-                if c <= 0xFF {
-                    Exp::Reloc(self.emit(Inst::iabc(Op::GetField, 0, o, c, true)))
-                } else {
-                    let ke = Exp::Const(c);
-                    let k = self.exp_to_nextreg(ke)?;
-                    Exp::Reloc(self.emit(Inst::iabc(Op::GetTable, 0, o, k, false)))
-                }
-            }
-            Expr::Int(i) if (0..=255).contains(i) => {
-                let c = *i as u32;
-                Exp::Reloc(self.emit(Inst::iabc(Op::GetI, 0, o, c, false)))
-            }
-            _ => {
-                let ke = self.expr(key)?;
-                let k = self.exp_to_anyreg(ke)?;
-                Exp::Reloc(self.emit(Inst::iabc(Op::GetTable, 0, o, k, false)))
-            }
-        };
+        Ok(IndexOpen::Object {
+            saved: self.lr().freereg,
+        })
+    }
+
+    /// `obj[key]` with the object compiled to `oe`.
+    pub(super) fn index_close(
+        &mut self,
+        oe: Exp,
+        key: ExprId,
+        saved: u32,
+    ) -> Result<Exp, SyntaxError> {
+        let t = self.index_table(oe)?;
+        let ke = self.expr(key)?;
+        let (t, k) = self.indexed(t, ke)?;
+        let e = self.index_get(t, k);
         self.set_freereg(saved);
         Ok(e)
     }

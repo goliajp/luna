@@ -44,6 +44,9 @@ pub(crate) struct CraneliftJitStorage {
     /// The shared image of each trace compiled or installed here, by the
     /// address of its first code.
     pub(crate) images: std::collections::HashMap<usize, u64>,
+    /// This Vm among the engine's (0 without one): the failures it shares
+    /// are not counted again when it reaches their head.
+    pub(crate) engine_vm: u64,
     /// With the LLVM backend: its method JIT's cache and the code of the
     /// traces its optimizing tier compiled.
     #[cfg(feature = "llvm-jit")]
@@ -63,6 +66,7 @@ impl CraneliftJitStorage {
         version: luna_core::version::LuaVersion,
     ) -> CraneliftJitStorage {
         CraneliftJitStorage {
+            engine_vm: engine.next_id(),
             engine: Some(engine),
             version: Some(version),
             ..CraneliftJitStorage::default()

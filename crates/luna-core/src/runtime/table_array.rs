@@ -53,7 +53,7 @@ impl Table {
             }
         } else if old != raw::NIL && new == raw::NIL {
             self.acount -= 1;
-            if idx < self.aprefix as usize {
+            if idx < self.aprefix as usize && self.aprefix != APREFIX_UNKNOWN {
                 self.aprefix = idx as u32;
             }
         }

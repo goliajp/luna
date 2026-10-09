@@ -9,11 +9,26 @@ impl Vm {
     /// the raw table border. Returns the raw length value (may be non-integer
     /// when `__len` is exotic).
     pub(crate) fn len_value(&mut self, v: Value) -> Result<Value, LuaError> {
-        match self.len_step(v)? {
-            MmOut::Done(n) => Ok(n),
+        self.len_value_pushed(v, 0)
+    }
+
+    /// [`Vm::len_value`] with `extra` values pushed by the calling native,
+    /// as [`Vm::index_value_pushed`].
+    pub(crate) fn len_value_pushed(&mut self, v: Value, extra: u32) -> Result<Value, LuaError> {
+        match self.len_step(v) {
+            Ok(MmOut::Done(n)) => Ok(n),
             // PUC calls unary metamethods with the operand twice
-            MmOut::Mm { func, recv } => self.call_mm1(func, &[recv, recv]),
-            MmOut::CompareSynth { .. } => unreachable!("CompareSynth from len_step"),
+            Ok(MmOut::Mm { func, recv }) => {
+                self.native_push(extra);
+                let r = self.call_mm1(func, &[recv, recv])?;
+                self.native_pop(extra);
+                Ok(r)
+            }
+            Ok(MmOut::CompareSynth { .. }) => unreachable!("CompareSynth from len_step"),
+            Err(e) => {
+                self.native_push(extra);
+                Err(e)
+            }
         }
     }
 
@@ -54,22 +69,65 @@ impl Vm {
 
     /// `lua_compare(L, a, b, LUA_OPEQ)`: equality including `__eq`.
     pub(crate) fn equal(&mut self, l: Value, r: Value) -> Result<bool, LuaError> {
+        self.equal_pushed(l, r, 0)
+    }
+
+    /// [`Vm::equal`] with `extra` values pushed by the calling native, as
+    /// [`Vm::index_value_pushed`].
+    pub(crate) fn equal_pushed(
+        &mut self,
+        l: Value,
+        r: Value,
+        extra: u32,
+    ) -> Result<bool, LuaError> {
         match self.eq_step(l, r) {
             MmOut::Done(v) => Ok(v.truthy()),
-            MmOut::Mm { func, .. } => Ok(self.call_mm1(func, &[l, r])?.truthy()),
+            MmOut::Mm { func, .. } => {
+                self.native_push(extra);
+                let r = self.call_mm1(func, &[l, r])?.truthy();
+                self.native_pop(extra);
+                Ok(r)
+            }
             MmOut::CompareSynth { .. } => unreachable!("CompareSynth from eq_step"),
         }
     }
 
     pub(crate) fn less_than(&mut self, l: Value, r: Value, or_eq: bool) -> Result<bool, LuaError> {
-        match self.less_step(l, r, or_eq)? {
+        self.less_than_pushed(l, r, or_eq, 0)
+    }
+
+    /// [`Vm::less_than`] with `extra` values pushed by the calling native,
+    /// as [`Vm::index_value_pushed`].
+    pub(crate) fn less_than_pushed(
+        &mut self,
+        l: Value,
+        r: Value,
+        or_eq: bool,
+        extra: u32,
+    ) -> Result<bool, LuaError> {
+        let step = match self.less_step(l, r, or_eq) {
+            Ok(step) => step,
+            Err(e) => {
+                self.native_push(extra);
+                return Err(e);
+            }
+        };
+        match step {
             MmOut::Done(v) => Ok(v.truthy()),
-            MmOut::Mm { func, .. } => Ok(self.call_mm1(func, &[l, r])?.truthy()),
+            MmOut::Mm { func, .. } => {
+                self.native_push(extra);
+                let r = self.call_mm1(func, &[l, r])?.truthy();
+                self.native_pop(extra);
+                Ok(r)
+            }
             MmOut::CompareSynth { func } => {
                 // ≤5.3 `__le` via `not __lt(r, l)`. Synchronous helper used
                 // by library code (sort comparator etc.) — no yield expected
-                // here (a yield would have hit `call_noyield`'s C boundary).
-                Ok(!self.call_mm1(func, &[r, l])?.truthy())
+                // here (a yield would have hit `call_value`'s C boundary).
+                self.native_push(extra);
+                let r = !self.call_mm1(func, &[r, l])?.truthy();
+                self.native_pop(extra);
+                Ok(r)
             }
         }
     }

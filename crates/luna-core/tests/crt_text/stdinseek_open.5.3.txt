@@ -1,0 +1,6 @@
+open-pipe	stdin set0	0
+open-pipe	stdin cur	0
+open-pipe	stdin end	0
+open-pipe	stdin set 1	1
+open-pipe	stdin cur again	1
+open-pipe	stdin set -1	nil,Invalid argument,22

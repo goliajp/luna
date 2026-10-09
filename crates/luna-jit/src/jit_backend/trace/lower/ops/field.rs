@@ -165,6 +165,71 @@ pub(super) fn emit_field_slot_read<E: Emit>(
     lw.bcx.block_params(merge)[0]
 }
 
+/// `t[key]` for an interned string `key` whose node the recording did
+/// not pin: a few hops of its chain are walked inline, and a node holding
+/// the key with a value of raw tag `w` is read there; a table with a
+/// metatable, a longer chain, an absent key or another value tag go
+/// through the checked helper, which exits the trace when the value is
+/// not of that tag.
+pub(super) fn emit_str_key_read<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    oc: &OpCx<'_>,
+    t: Value,
+    key: Value,
+    w: u8,
+) -> Value {
+    let OpHelpers {
+        get_field_checked_id,
+        ..
+    } = lw.h.op;
+    let OpCx { i, rop, .. } = *oc;
+    let flags = MemFlagsData::trusted();
+    let hit = lw.bcx.create_block();
+    lw.bcx.append_block_param(hit, types::I64);
+    let slow = lw.bcx.create_block();
+    let merge = lw.bcx.create_block();
+    lw.bcx.append_block_param(merge, types::I64);
+    let mt = lw.bcx.ins().load(
+        types::I64,
+        flags,
+        t,
+        crate::jit_backend::TABLE_METATABLE_OFFSET as i32,
+    );
+    let has_mt = lw.bcx.ins().icmp_imm_u(IntCC::NotEqual, mt, 0);
+    let walk = lw.bcx.create_block();
+    lw.bcx.ins().brif(has_mt, slow, &[], walk, &[]);
+    lw.bcx.switch_to_block(walk);
+    lw.bcx.seal_block(walk);
+    field_slot::emit_str_key_walk(&mut lw.bcx, t, key, 3, Some(hit), slow, slow);
+    lw.bcx.switch_to_block(hit);
+    lw.bcx.seal_block(hit);
+    let node = lw.bcx.block_params(hit)[0];
+    let val_tag = lw.bcx.ins().uload8(
+        types::I64,
+        flags,
+        node,
+        crate::jit_backend::NODE_VAL_TAG_OFFSET as i32,
+    );
+    let val_ok = lw
+        .bcx
+        .ins()
+        .icmp_imm_u(IntCC::Equal, val_tag, i64::from(field_slot::mem_tag(w)));
+    let read = lw.bcx.create_block();
+    lw.bcx.ins().brif(val_ok, read, &[], slow, &[]);
+    lw.bcx.switch_to_block(read);
+    lw.bcx.seal_block(read);
+    let fast = field_slot::emit_slot_load(&mut lw.bcx, node);
+    lw.bcx.ins().jump(merge, &[fast.into()]);
+    lw.bcx.switch_to_block(slow);
+    lw.bcx.seal_block(slow);
+    let v = checked_read!(lw, pl, get_field_checked_id, t, key, w, rop.pc, i);
+    lw.bcx.ins().jump(merge, &[v.into()]);
+    lw.bcx.switch_to_block(merge);
+    lw.bcx.seal_block(merge);
+    lw.bcx.block_params(merge)[0]
+}
+
 /// Global reads through an upvalue table.
 pub(super) fn emit_get_tab_up_op<E: Emit>(
     lw: &mut Lower<E>,
@@ -368,7 +433,14 @@ fn emit_frame_get_tab_up<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_
         checkpoint("bail:inline-get-tab-up-untyped");
         return None;
     };
-    let env = frame_upval_read(lw, pl, oc, ins.b(), luna_core::runtime::value::raw::TABLE);
+    let env = frame_upval_read(
+        lw,
+        pl,
+        oc.i,
+        oc.rop,
+        ins.b(),
+        luna_core::runtime::value::raw::TABLE,
+    );
     let key_v = match rop.proto.consts[ins.c() as usize] {
         luna_core::runtime::Value::Str(s) => s,
         _ => unreachable!("pre-emit gates Str const at K[C]"),

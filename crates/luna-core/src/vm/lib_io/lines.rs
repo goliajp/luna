@@ -42,6 +42,8 @@ pub(super) fn io_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // manual and every later version do.)
     let (u, toclose) = if a.is_none_or_nil(vm, 0) {
         let d = default_file(vm, Io::Input);
+        // the default input is fetched from the registry before the check
+        vm.native_push(1);
         if d.file().is_closed() {
             return Err(raise_str(vm, "attempt to use a closed file"));
         }
@@ -72,10 +74,25 @@ fn io_readline(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     let fmts: Vec<Value> = (2..vm.nat_upcount(fs))
         .map(|i| vm.nat_upval(fs, i))
         .collect();
+    // `lua_settop(L, 1)`, then the formats are pushed for `g_read` (5.2+)
+    if vm.version() >= LuaVersion::Lua52 {
+        vm.native_settop(1);
+        vm.native_push(fmts.len() as u32);
+    }
     let vals = match g_read(vm, u, &fmts, 2)? {
         ReadOut::Values(v) => v,
         // the read's error message is raised
-        ReadOut::Error(e) => return Err(raise_str(vm, &strerror(&e))),
+        ReadOut::Error(e) => {
+            note_failure(&e);
+            // the line read so far is pushed, then 5.2+ `luaL_fileresult`'s
+            // nil, message and errno
+            vm.native_push(if vm.version() >= LuaVersion::Lua52 {
+                4
+            } else {
+                1
+            });
+            return Err(raise_str(vm, &strerror(&e)));
+        }
     };
     // ≤5.2 continue on a non-nil first value, 5.3+ on a true one; the only
     // false-ish value a read produces is nil, so the tests agree

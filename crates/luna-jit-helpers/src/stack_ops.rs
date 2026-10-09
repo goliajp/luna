@@ -83,54 +83,6 @@ pub unsafe extern "C" fn luna_jit_op_concat(slot_offset: i64, n: i64, roots: i64
     r
 }
 
-/// Trace JIT helper for `Op::TForCall A 0 C`.
-///
-/// Mirrors `exec.rs:5316` Op::TForCall semantics:
-/// - copies `R[A..=A+2]` (iter / state / control) to `R[A+4..=A+6]`,
-///   resizing `vm.stack` if needed
-/// - calls `vm.begin_call(abs+4, Some(2), nvars, false)` to dispatch
-///   the iterator function
-///
-/// Restriction: the iterator at `R[A]` must be `Value::Native`. A
-/// Lua-closure iter would push a Lua frame mid-trace, breaking the
-/// trace head's `recording_frame_base` invariant; we deopt instead
-/// (sets `jit_pending_err`, returns sentinel).
-///
-/// Returns `0` on success, `-1` on deopt (pending_err set OR
-/// pre-existing pending_err).
-///
-/// A native iterator can allocate, call back into Lua and collect, so
-/// `roots` carries the collectable values the trace holds only in
-/// registers (see `push_ssa_roots`).
-///
-/// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `ctrl_out`, `key_out` and
-/// `val_out` are each valid for writing one `i64`; `roots` is 0 or the address of a root list as
-/// `push_ssa_roots` takes it.
-// SAFETY: no other item in the link is named `luna_jit_op_tforcall`: only this crate defines
-// `luna_jit_` symbols, each once
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_op_tforcall(
-    abs_offset: i64,
-    nvars: i64,
-    ctrl_out: *mut i64,
-    key_out: *mut i64,
-    val_out: *mut i64,
-    roots: i64,
-) -> i64 {
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, the
-    // three out-pointers are each valid for one `i64` for the length of this call, and `roots`
-    // is 0 or a root list
-    let (vm, ctrl, key, val, mark) = unsafe {
-        let vm = current_jit_vm();
-        let mark = push_ssa_roots(vm, roots);
-        (vm, &mut *ctrl_out, &mut *key_out, &mut *val_out, mark)
-    };
-    let r = vm.jit_op_tforcall(abs_offset as u32, nvars as i32, ctrl, key, val);
-    vm.jit.ssa_roots.truncate(mark);
-    r
-}
-
 /// Load the raw `i64` payload of `vm.stack[base + slot_offset]`
 /// for the active trace's head frame. Used to reload trace IR
 /// `Variable`s after a helper (e.g. `luna_jit_op_tforcall`) has
@@ -229,20 +181,14 @@ pub unsafe extern "C" fn luna_jit_spill_to_stack(slot_offset: i64, tag: i64, raw
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
-    use luna_core::runtime::function::{INLINE_UPVALS_N, UpvalState, Upvalue};
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
     if vm.jit.pending_err.is_some() {
         return 0;
     }
-    let inner = cl.proto.protos[proto_idx as usize];
-    let n_ups = inner.upvals.len();
-    // Determine the caller frame's base for in_stack captures. The
-    // helper runs MID-trace, before any frame writeback — the trace
-    // head's frame is the topmost Lua frame here (the lowerer restricts
-    // Op::Closure emit to inline_depth=0 only, so no deeper frame
-    // exists).
+    // the trace head's frame is the topmost Lua frame while the trace runs
+    // (inlined frames are not pushed)
     let base = match vm.jit_last_lua_frame() {
         Some(f) => f.base,
         None => {
@@ -250,6 +196,24 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
             return 0;
         }
     };
+    new_closure(vm, cl, proto_idx as usize, base)
+}
+
+/// `cl.proto.protos[idx]` as a new closure of a frame of `cl` whose
+/// registers start at stack slot `base`: in-stack upvalues are opened on
+/// that frame's slots (the trace spilled their values first), the others
+/// taken from `cl`; 5.1 gives the closure its own `_ENV` cell and 5.2 /
+/// 5.3 reuse the proto's cached closure, as the interpreter does. Returns
+/// the closure's payload.
+pub(crate) fn new_closure(
+    vm: &mut luna_core::vm::Vm,
+    cl: luna_core::runtime::Gc<luna_core::runtime::LuaClosure>,
+    idx: usize,
+    base: u32,
+) -> i64 {
+    use luna_core::runtime::function::{INLINE_UPVALS_N, UpvalState, Upvalue};
+    let inner = cl.proto.protos[idx];
+    let n_ups = inner.upvals.len();
     // Build the upval slice — small (0..2 typical) so use a stack
     // array up to INLINE_UPVALS_N like the interp does, else heap.
     let mut stack_buf: [std::mem::MaybeUninit<luna_core::runtime::Gc<Upvalue>>; INLINE_UPVALS_N] =

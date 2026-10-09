@@ -74,20 +74,26 @@ impl Vm {
             }
             Op::Pow => {
                 let (l, r) = (self.r(base, inst.b()), self.r(base, inst.c()));
-                self.arith_slow(inst.a(), base, ArithOp::Pow, l, r, false)?
+                self.arith_slow(inst.a(), base, ArithOp::Pow, l, r)?
             }
             Op::Concat => {
-                // right-associative fold over operands at base+a .. base+a+n,
-                // in place on the stack so a yielding __concat can suspend.
-                let a = inst.a();
-                let n = inst.b();
-                self.top = base + a + n;
-                self.concat_run(base + a)?;
+                // right-associative fold over the operands, in place on the
+                // stack so a yielding __concat can suspend
+                let (first, out) = inst.concat_operands();
+                self.top = base + first + inst.b();
+                self.concat_run(base + first, base + out)?;
             }
-            Op::ForPrep => self.for_prep(inst, base)?,
-            Op::TForPrep => {
-                // the 4th control slot is the iterator's closing value
-                self.register_tbc(base + inst.a() + 3)?;
+            Op::ForPrep | Op::ForPrep55 => self.for_prep(inst, base)?,
+            Op::TForPrep | Op::TForPrep53 | Op::TForPrep55 => {
+                let a = base + inst.a();
+                // 5.5's list left the closing value above the control:
+                // swap them (PUC `OP_TFORPREP`)
+                if inst.op() == Op::TForPrep55 {
+                    self.stack.swap((a + 2) as usize, (a + 3) as usize);
+                }
+                if let Some(c) = inst.op().for_layout().and_then(|l| l.closing()) {
+                    self.register_tbc(a + c)?;
+                }
                 self.add_pc(inst.bx() as i32);
             }
             Op::Closure => self.op_closure(inst, cl, base),
@@ -96,7 +102,7 @@ impl Vm {
                 let wanted = inst.c() as i32 - 1;
                 // A materialized named vararg lives in func_slot (its writes
                 // must be visible to `...`); otherwise spread the extra args
-                // straight off the stack at func_slot+1 .. +n_varargs.
+                // straight off the stack, where they sit just below `base`.
                 let vt = match self.stack[func_slot as usize] {
                     Value::Table(t) => Some(t),
                     _ => None,
@@ -117,9 +123,7 @@ impl Vm {
                 // a named vararg's `n` can be set to anything up to
                 // INT_MAX/2; PUC's `luaD_checkstack` refuses what the
                 // stack cannot hold
-                if abs_a + count > MAX_LUA_STACK {
-                    return Err(self.rt_err("stack overflow"));
-                }
+                self.check_lua_stack(abs_a, count, false)?;
                 let need = (abs_a + count) as usize;
                 if self.stack.len() < need {
                     self.grow_stack_or_abort(need);
@@ -130,7 +134,7 @@ impl Vm {
                     } else if let Some(t) = vt {
                         t.get_int(i as i64 + 1)
                     } else {
-                        self.stack[(func_slot + 1 + i) as usize]
+                        self.stack[(base - n_varargs + i) as usize]
                     };
                     self.stack[(abs_a + i) as usize] = v;
                 }
@@ -154,7 +158,7 @@ impl Vm {
                     // PUC `createvarargtab`: an array part of exactly `n`
                     tm.resize(&mut self.heap, n as usize, 1);
                     for i in 0..n {
-                        tm.set_list_slot(i as usize, self.stack[(func_slot + 1 + i) as usize]);
+                        tm.set_list_slot(i as usize, self.stack[(base - n_varargs + i) as usize]);
                     }
                     let n_key = Value::Str(self.heap.intern(b"n"));
                     tm.set(&mut self.heap, n_key, Value::Int(n as i64))
@@ -166,6 +170,10 @@ impl Vm {
                 self.stack[func_slot as usize] = Value::Table(t);
                 self.set_r(base, inst.a(), Value::Table(t));
             }
+            Op::ShlK | Op::ShrK | Op::EqKK | Op::LtKK | Op::LeKK => {
+                self.const_frame_op(inst, cl, base)?
+            }
+            op if op.arith_kk_op().is_some() => self.const_frame_op(inst, cl, base)?,
             op => unreachable!("{op:?} is not a frame op"),
         }
         Ok(())
@@ -237,7 +245,14 @@ impl Vm {
         }
         let nc = self.closure_from_proto(proto, ups);
         self.set_r(base, inst.a(), Value::Closure(nc));
-        self.maybe_collect_garbage(base + inst.a() + 1);
+        // 5.1 code puts a closure straight into the variable it is assigned
+        // to, which may lie below other live registers: the whole frame stays
+        let live = if self.version() <= LuaVersion::Lua51 {
+            (cl.proto.max_stack as u32).max(inst.a() + 1)
+        } else {
+            inst.a() + 1
+        };
+        self.maybe_collect_garbage(base + live);
     }
 
     /// A closure of `proto` over `ups`. PUC 5.2 / 5.3 `getcached`: the

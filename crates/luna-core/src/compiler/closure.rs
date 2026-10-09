@@ -1,4 +1,5 @@
-//! Function bodies: compiling a nested function into a closure.
+//! Function bodies: compiling a nested function into a closure, and the
+//! `function` statements that store one.
 
 use super::*;
 
@@ -30,20 +31,26 @@ impl<'a> Compiler<'a> {
         // upvalue 0 too), so it inherits the creator's upvalue 0. 5.2+ keeps
         // the lazy-capture model.
         if self.version == LuaVersion::Lua51 {
-            level.upvals.push(UpvalDesc {
+            level.upvals.push_or_abort(UpvalDesc {
                 in_stack: false,
                 index: 0,
                 name: "_ENV".into(),
                 read_only: false,
             });
         }
-        self.levels.push(level);
+        self.levels.push_or_abort(level);
         self.enter_block(false);
         if is_method {
             self.declare_local("self", 0, false)?;
         }
         for (i, p) in self.ls(body.params).iter().enumerate() {
             self.declare_local(self.nm(p), (i + is_method as usize) as u32, false)?;
+        }
+        // 5.5 (PUC `parlist`): an anonymous `...` is a parameter too, with a
+        // register after the fixed ones that holds nil
+        if self.lr().has_vararg_table_pseudo {
+            let r = self.reserve(1)?;
+            self.declare_local("(vararg table)", r, false)?;
         }
         if let ast::Vararg::Named(n) = &body.vararg {
             let name: &str = self.nm(n);
@@ -87,11 +94,69 @@ impl<'a> Compiler<'a> {
         if idx > MAX_BX {
             return Err(self.err(line, "too many nested functions"));
         }
-        self.l().protos.push(proto);
+        self.l().protos.push_or_abort(proto);
         // PUC emits OP_CLOSURE with the line of the just-consumed `end` token
         // (luaK_code uses ls->lastline), so the closure-creation line event lands
         // on the function's last line, not its `function` keyword.
         self.last_line = body.end_line;
-        Ok(Exp::Reloc(self.emit(Inst::iabx(Op::Closure, 0, idx))))
+        let pc = self.emit(Inst::iabx(Op::Closure, 0, idx));
+        // 5.2+ `codeclosure` puts the closure in the next register at once
+        if self.version >= LuaVersion::Lua52 {
+            return Ok(Exp::Reg(self.exp_to_nextreg(Exp::Reloc(pc))?));
+        }
+        Ok(Exp::Reloc(pc))
+    }
+
+    pub(super) fn function_stat(
+        &mut self,
+        name: &FuncName,
+        body: &'a FuncBody,
+    ) -> Result<(), SyntaxError> {
+        self.last_line = name.base.line;
+        let is_method = name.method.is_some();
+        let saved = self.lr().freereg;
+        // PUC `funcstat` compiles the name first, then the body, then the
+        // store. Every GETFIELD / SETFIELD on a dotted name, and the store,
+        // carry the line of the statement's name, not the `end` token's, so
+        // a `nil` holder raises on the right line (errors.lua :430).
+        let saved_force = self.force_line.replace(name.base.line);
+        let lv = self.func_name_lv(name);
+        self.force_line = saved_force;
+        let lv = lv?;
+        let f = self.function_exp(body, is_method)?;
+        let saved_force = self.force_line.replace(name.base.line);
+        let res = self.store(lv, f);
+        self.force_line = saved_force;
+        res?;
+        self.set_freereg(saved);
+        Ok(())
+    }
+
+    /// PUC `funcname`: `a.b.c:m` as an assignment target.
+    fn func_name_lv(&mut self, name: &FuncName) -> Result<Lv, SyntaxError> {
+        let mut fields: LVec<&str> = LVec::new(self.heap.mem());
+        for n in self.ls(name.path) {
+            fields.push_or_abort(self.nm(n));
+        }
+        if let Some(m) = &name.method {
+            fields.push_or_abort(self.nm(m));
+        }
+        let Some((last, walk)) = fields.split_last() else {
+            return self.name_lv(self.nm(&name.base), name.base.line);
+        };
+        let mut e = self.name_expr(self.nm(&name.base))?;
+        for f in walk {
+            // the holder's register is free again once it is read
+            let mark = self.lr().freereg;
+            let t = self.index_table(e)?;
+            let c = self.str_const(f.as_bytes());
+            let (t, k) = self.indexed(t, Exp::Const(c))?;
+            e = self.index_get(t, k);
+            self.set_freereg(mark);
+        }
+        let t = self.index_table(e)?;
+        let c = self.str_const(last.as_bytes());
+        let (t, k) = self.indexed(t, Exp::Const(c))?;
+        Ok(Lv::Indexed(t, k))
     }
 }

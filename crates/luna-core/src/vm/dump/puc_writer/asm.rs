@@ -2,29 +2,20 @@
 //!
 //! An encoder walks a luna function one instruction at a time and emits
 //! the PUC instructions that stand for it. [`Asm`] owns what that needs
-//! across dialects: the register renumbering of loop windows, scratch
-//! registers above the frame, the luna-pc → PUC-pc map that jumps and
-//! debug records are rewritten through, and the constant table, which an
-//! older dialect may have to extend (its `LOADK` replaces luna's
-//! immediates).
+//! across dialects: scratch registers above the frame (only code loaded
+//! from another dialect's chunk needs one), the luna-pc → PUC-pc map that
+//! jumps and debug records are rewritten through, and the constant table,
+//! which an older dialect may have to extend (its `LOADK` replaces luna's
+//! immediates). luna's registers are PUC's: an encoder writes them as they
+//! are.
 
+use crate::compiler::const_map::{DumpConstMap, add_const};
 use crate::runtime::Value;
 use crate::runtime::function::Proto;
+use crate::version::LuaVersion;
 use crate::vm::isa::{Inst, Op};
 
 pub(super) type Res<T> = Result<T, String>;
-
-/// Luna pcs `first..=last` in which every luna register from `pivot` up
-/// sits `delta` slots away in PUC's frame. A loop whose PUC layout has one
-/// hidden slot fewer than luna's shifts down by one, and the slot it drops
-/// (`pivot - 1`) must not be named inside the loop.
-#[derive(Clone, Copy)]
-pub(super) struct Window {
-    pub first: usize,
-    pub last: usize,
-    pub pivot: u32,
-    pub delta: i32,
-}
 
 /// How a jump-family instruction stores the distance to its target.
 #[derive(Clone, Copy)]
@@ -49,7 +40,6 @@ struct Fixup {
 pub(super) struct Asm<'p> {
     pub p: &'p Proto,
     dialect: &'static str,
-    windows: Vec<Window>,
     temp_base: u32,
     next_temp: u32,
     temps_used: u32,
@@ -59,8 +49,8 @@ pub(super) struct Asm<'p> {
     first: Vec<Option<u32>>,
     fixups: Vec<Fixup>,
     pub consts: Vec<Value>,
-    /// luna pcs some jump, loop edge or skip lands on
-    targets: Vec<bool>,
+    /// the dialect and its scanner table over `consts` (see `const_map`)
+    pub kmap: (LuaVersion, DumpConstMap),
     pc: usize,
     line: u32,
 }
@@ -76,19 +66,12 @@ pub(super) struct Body {
 }
 
 impl<'p> Asm<'p> {
-    /// `frame` is the PUC frame the renumbered registers need; scratch
-    /// registers go above it.
-    pub(super) fn new(
-        p: &'p Proto,
-        dialect: &'static str,
-        windows: Vec<Window>,
-        frame: u32,
-    ) -> Self {
+    /// Scratch registers go above the function's frame.
+    pub(super) fn new(p: &'p Proto, dialect: &'static str) -> Self {
         Asm {
             p,
             dialect,
-            windows,
-            temp_base: frame,
+            temp_base: p.max_stack as u32,
             next_temp: 0,
             temps_used: 0,
             code: Vec::with_capacity(p.code.len() + 4),
@@ -96,7 +79,7 @@ impl<'p> Asm<'p> {
             first: vec![None; p.code.len()],
             fixups: Vec::new(),
             consts: p.consts.to_vec(),
-            targets: jump_targets(p),
+            kmap: (LuaVersion::Lua54, DumpConstMap::default()),
             pc: 0,
             line: 0,
         }
@@ -122,53 +105,22 @@ impl<'p> Asm<'p> {
         self.pc
     }
 
-    /// Whether control can reach luna pc `pc` other than by falling
-    /// through from `pc - 1`.
-    pub(super) fn is_target(&self, pc: usize) -> bool {
-        self.targets.get(pc).copied().unwrap_or(false)
-    }
-
     pub(super) fn inst(&self, pc: usize) -> Option<Inst> {
         self.p.code.get(pc).copied()
     }
 
-    /// PUC register for luna register `r` at luna pc `pc`.
-    pub(super) fn reg_at(&self, pc: usize, r: u32) -> Res<u32> {
-        let mut m = r as i64;
-        for w in self
-            .windows
-            .iter()
-            .filter(|w| w.first <= pc && pc <= w.last)
-        {
-            if r >= w.pivot {
-                m += w.delta as i64;
-            } else if w.delta < 0 && r + 1 == w.pivot {
-                return Err(self.err(format_args!(
-                    "register {r} is a loop slot PUC does not have"
-                )));
-            }
-        }
-        u32::try_from(m)
-            .ok()
-            .filter(|&m| m <= 255)
-            .ok_or_else(|| self.err(format_args!("register {r} maps outside the frame")))
-    }
-
+    /// The PUC register of luna register `r`: the same one.
     pub(super) fn r(&self, r: u32) -> Res<u32> {
-        self.reg_at(self.pc, r)
+        if r > 255 {
+            return Err(self.err(format_args!("register {r} outside the frame")));
+        }
+        Ok(r)
     }
 
-    /// The first of `n` consecutive registers from luna `r`, refusing a run
-    /// that a window would split.
+    /// The first of `n` consecutive registers from luna `r`.
     pub(super) fn run(&self, r: u32, n: u32) -> Res<u32> {
-        let first = self.r(r)?;
-        if n > 1 && self.r(r + n - 1)? != first + n - 1 {
-            return Err(self.err(format_args!(
-                "register run {r}..{} crosses a loop's slots",
-                r + n - 1
-            )));
-        }
-        Ok(first)
+        self.r(r + n.saturating_sub(1))?;
+        self.r(r)
     }
 
     /// A scratch register, unique within the current luna instruction.
@@ -212,20 +164,10 @@ impl<'p> Asm<'p> {
         Ok(())
     }
 
-    /// Index of constant `v`, appended when the table lacks it.
+    /// Index of constant `v`, appended where PUC's code generator would.
     pub(super) fn konst(&mut self, v: Value) -> u32 {
-        let same = |k: &Value| match (k, &v) {
-            (Value::Int(a), Value::Int(b)) => a == b,
-            (Value::Float(a), Value::Float(b)) => a.to_bits() == b.to_bits(),
-            _ => false,
-        };
-        match self.consts.iter().position(same) {
-            Some(i) => i as u32,
-            None => {
-                self.consts.push(v);
-                self.consts.len() as u32 - 1
-            }
-        }
+        let (ver, map) = &mut self.kmap;
+        add_const(*ver, &mut self.consts, map, v)
     }
 
     /// Constant `k` when it is a string PUC 5.3+ interns (the fast field
@@ -278,31 +220,6 @@ impl<'p> Asm<'p> {
     }
 }
 
-fn jump_targets(p: &Proto) -> Vec<bool> {
-    let n = p.code.len();
-    let mut t = vec![false; n + 2];
-    let mut mark = |pc: i64| {
-        if (0..t.len() as i64).contains(&pc) {
-            t[pc as usize] = true;
-        }
-    };
-    for (pc, i) in p.code.iter().enumerate() {
-        let (pc, bx) = (pc as i64, i.bx() as i64);
-        match i.op() {
-            Op::Jmp => mark(pc + 1 + i.sj() as i64),
-            Op::ForPrep => {
-                mark(pc + bx);
-                mark(pc + bx + 1);
-            }
-            Op::ForLoop | Op::TForLoop => mark(pc + 1 - bx),
-            Op::TForPrep => mark(pc + 1 + bx),
-            op if op == Op::LFalseSkip || op.is_test() => mark(pc + 2),
-            _ => {}
-        }
-    }
-    t
-}
-
 /// A luna instruction's operands, decoded once.
 #[derive(Clone, Copy)]
 pub(super) struct L {
@@ -326,7 +243,7 @@ impl L {
             k: i.k(),
             bx: i.bx(),
             sbx: i.sbx(),
-            sj: i.sj() as i64,
+            sj: i.jump_offset() as i64,
         }
     }
 }
@@ -341,37 +258,4 @@ pub(super) fn setlist_offset(asm: &Asm, l: L) -> Res<u64> {
         Some(x) if x.op() == Op::ExtraArg => Ok(x.ax() as u64),
         _ => Err(asm.err("SetList without its ExtraArg")),
     }
-}
-
-/// Loop windows of `p`: each generic `for` (and, with `numeric`, each
-/// numeric one) from its prep to its loop op, with loop variables that sit
-/// one register lower in PUC than in luna from luna register `A + pivot`.
-pub(super) fn loop_windows(p: &Proto, generic: u32, numeric: Option<u32>) -> Res<Vec<Window>> {
-    let code = &p.code;
-    let mut out = Vec::new();
-    for (pc, i) in code.iter().enumerate() {
-        let (last, pivot) = match i.op() {
-            Op::TForPrep => (pc + 2 + i.bx() as usize, generic),
-            Op::ForPrep => match numeric {
-                Some(n) => (pc + i.bx() as usize, n),
-                None => continue,
-            },
-            _ => continue,
-        };
-        let want = if i.op() == Op::ForPrep {
-            Op::ForLoop
-        } else {
-            Op::TForLoop
-        };
-        if code.get(last).map(|x| x.op()) != Some(want) {
-            return Err(format!("loop prep at pc {} without its loop op", pc + 1));
-        }
-        out.push(Window {
-            first: pc,
-            last,
-            pivot: i.a() + pivot,
-            delta: -1,
-        });
-    }
-    Ok(out)
 }

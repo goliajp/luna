@@ -3,6 +3,7 @@
 
 use crate::runtime::Value;
 use crate::runtime::function::{CallFrame, ContKind};
+use crate::runtime::mem::LVec;
 use crate::version::LuaVersion;
 use crate::vm::exec::Vm;
 
@@ -32,7 +33,7 @@ impl Vm {
             && self
                 .running_natives
                 .last()
-                .is_some_and(|a| a.depth as usize == self.frames.len())
+                .is_some_and(|a| a.depth() as usize == self.frames.len())
     }
 
     /// Remember that `nc` raised `err`. A native only leaves the stack by
@@ -43,11 +44,12 @@ impl Vm {
         let continues = self
             .errored_natives
             .last()
-            .is_some_and(|inner| inner.err.raw_eq(err) && inner.act.depth >= act.depth);
+            .is_some_and(|inner| inner.err.raw_eq(err) && inner.act.depth() >= act.depth());
         if !continues {
             self.errored_natives.clear();
         }
-        self.errored_natives.push(ErroredNative { act, err });
+        self.errored_natives
+            .push_or_abort(ErroredNative { act, err });
     }
 
     /// An error a native raised when the host called it directly (no Lua
@@ -58,7 +60,7 @@ impl Vm {
         let raised_here = self
             .errored_natives
             .last()
-            .is_some_and(|e| e.err.raw_eq(err) && e.act.depth as usize == self.frames.len());
+            .is_some_and(|e| e.err.raw_eq(err) && e.act.depth() as usize == self.frames.len());
         if raised_here && self.error_traceback.is_none() {
             self.raise_to_handler(err);
         }
@@ -66,16 +68,28 @@ impl Vm {
 
     /// The natives recorded for `err` that were running at the top of the
     /// stack, innermost first.
-    fn take_errored_natives(&mut self, err: Value) -> Vec<ErroredNative> {
-        let mut list = std::mem::take(&mut self.errored_natives);
+    fn take_errored_natives(&mut self, err: Value) -> LVec<ErroredNative> {
+        let mut list = self.errored_natives.take();
         let depth = self.frames.len() as u32;
         if !list
             .iter()
-            .all(|e| e.err.raw_eq(err) && e.act.depth == depth)
+            .all(|e| e.err.raw_eq(err) && e.act.depth() == depth)
         {
             list.clear();
         }
         list
+    }
+
+    /// "attempt to call", raised (PUC `luaG_callerror`) with the call's
+    /// function and arguments ending at `top`, where the name of the
+    /// value and the message go, and before 5.4 the positioned message
+    /// a Lua caller adds.
+    pub(crate) fn call_err_at(&mut self, v: Value, top: u32) -> crate::vm::error::LuaError {
+        let lua = !self.native_on_top();
+        let e = self.call_err(v);
+        let positioned = u32::from(lua && self.version() < LuaVersion::Lua54);
+        self.overflow_top = Some(top + u32::from(self.varinfo_pushed) + positioned);
+        e
     }
 
     /// The pcall (`Some(None)`) or xpcall (`Some(Some(handler))`) that will
@@ -87,8 +101,8 @@ impl Vm {
             .rev()
             .find_map(|cf| match cf {
                 CallFrame::Cont(nc) => match nc.kind {
-                    ContKind::Pcall => Some(None),
-                    ContKind::Xpcall { handler } => Some(Some(handler)),
+                    ContKind::Pcall { .. } => Some(None),
+                    ContKind::Xpcall { handler, .. } => Some(Some(handler)),
                     _ => None,
                 },
                 CallFrame::Lua(_) => None,
@@ -104,10 +118,15 @@ impl Vm {
     /// keeps its traceback for the host and for `debug.traceback` of a dead
     /// coroutine.
     pub(crate) fn raise_to_handler(&mut self, err: Value) -> Value {
+        // LUA_ERRERR is thrown past the handler
+        if self.errerr_in_flight.take().is_some_and(|v| v.raw_eq(err)) {
+            return err;
+        }
         let raised_by = self.take_errored_natives(err);
+        let at = self.raise_top(&raised_by);
         let base = self.running_natives.len();
         for e in raised_by.iter().rev() {
-            self.running_natives.push(e.act);
+            self.running_natives.push_or_abort(e.act);
         }
         let catcher = self.nearest_catcher();
         let to_host = catcher.is_none() && self.current.is_none() && self.keep_error_traceback;
@@ -115,7 +134,7 @@ impl Vm {
         let out = match catcher {
             Some(Some(handler)) if !self.msgh_applied.is_some_and(|v| v.raw_eq(err)) => {
                 handled = true;
-                self.call_msgh(handler, err)
+                self.call_msgh_at(handler, err, at)
             }
             None => {
                 if self.keep_error_traceback && self.error_traceback.is_none() {
@@ -165,15 +184,56 @@ impl Vm {
         }
     }
 
+    /// The slot `luaG_errormsg` runs the message handler at: where the
+    /// error object was, on top of the stack that raised it. A native
+    /// raises with that object on top of its own stack, which `top`
+    /// follows as PUC's does (see `Vm::native_push`). A Lua frame raises
+    /// at its `L->top`, the top of the call the stack overflowed on or else
+    /// its whole window: `luaG_runerror` pushes the message there, and
+    /// before 5.4 the positioned message as well, which it does not pop;
+    /// 5.3+'s `varinfo` has pushed the operand's name before them. Where
+    /// the error came from no frame, the handler runs where the stack ends.
+    fn raise_top(&mut self, raised_by: &[ErroredNative]) -> Option<u32> {
+        if let Some(at) = self.overflow_top.take() {
+            return Some(at);
+        }
+        let positioned_message = u32::from(self.version() < LuaVersion::Lua54);
+        if let Some(e) = raised_by.first() {
+            return Some(e.act.top() - 1);
+        }
+        let varinfo = u32::from(self.varinfo_pushed);
+        self.frames
+            .iter()
+            .rev()
+            .find_map(CallFrame::lua)
+            .map(|f| f.base + f.closure.proto.max_stack as u32 + positioned_message + varinfo)
+    }
+
     /// Run an xpcall message handler on `err`, as PUC's `luaG_errormsg`
     /// does: with the handler still installed, so an error the handler
     /// raises runs it again at that point (nested, the raising frames still
     /// on the stack), and what that inner run returns is the error thrown
-    /// out of the outer one. At `MAX_C_DEPTH` nested runs the error becomes
-    /// "C stack overflow", handled once more without re-entry; if the
-    /// handler fails on that too, "error in error handling" (errors.lua
-    /// :637).
+    /// out of the outer one. The handler's calls take C levels like any
+    /// other: past `MAX_C_DEPTH` the handler is run on the "C stack
+    /// overflow" that refusing one raises, and at `errerr_c_depth` the
+    /// refusal is "error in error handling", which no handler runs on
+    /// (errors.lua :637).
     pub(crate) fn call_msgh(&mut self, handler: Value, err: Value) -> Value {
+        self.call_msgh_at(handler, err, None)
+    }
+
+    /// [`Vm::call_msgh`] with the handler called at stack slot `at` (PUC
+    /// `luaG_errormsg`, see `raise_top`).
+    pub(crate) fn call_msgh_at(&mut self, handler: Value, err: Value, at: Option<u32>) -> Value {
+        // 5.4+ `lua_error` raises the memory error message itself as a
+        // memory error, which no handler runs on
+        if self.version() >= LuaVersion::Lua54
+            && let Value::Str(s) = err
+            && s.as_bytes() == b"not enough memory"
+        {
+            self.heap.mem_ctx().raise_oom();
+            return err;
+        }
         // ≤5.2 `luaG_errormsg` raises LUA_ERRERR at once when the handler
         // is not a function
         if self.version() <= LuaVersion::Lua52
@@ -181,73 +241,28 @@ impl Vm {
         {
             return self.errerr();
         }
-        let capped = self.msgh_depth >= crate::vm::exec::MAX_C_DEPTH;
-        let (arg, reenter) = if capped {
-            (Value::Str(self.heap.intern(b"C stack overflow")), None)
-        } else {
-            (err, Some(handler))
-        };
         self.msgh_runs += 1;
         let runs = self.msgh_runs;
+        let errerrs = self.errerr_raised;
+        // a call refused at the C-level limit keeps its level while its
+        // handler runs (PUC's `luaD_call` never takes it back)
+        let held = self.c_overflow_err.take().is_some_and(|v| v.raw_eq(err));
+        self.g.nccalls += u32::from(held);
         self.msgh_depth += 1;
-        let r = self.call_protected_with(handler, &[arg], reenter);
+        let r = self.call_protected_with(handler, &[err], Some(handler), at);
+        self.msgh_depth -= 1;
+        self.g.nccalls -= u32::from(held);
         match r {
-            Ok(results) => {
-                self.msgh_depth -= 1;
-                results.first().copied().unwrap_or(Value::Nil)
-            }
-            Err(_) if capped => {
-                self.msgh_depth -= 1;
-                self.errerr()
-            }
+            Ok(results) => results.first().copied().unwrap_or(Value::Nil),
+            // the handler's own call was refused with LUA_ERRERR
+            Err(e) if self.msgh_runs == runs && self.errerr_raised != errerrs => e.0,
             // already the result of the handler run nested at that error
-            Err(e) if self.msgh_runs != runs => {
-                self.msgh_depth -= 1;
-                e.0
-            }
+            Err(e) if self.msgh_runs != runs => e.0,
             // raised with no Lua frame to unwind (a native handler such as
-            // `error` failing at once): no nested run saw it, so run the
-            // handler on it here, one level deeper
-            Err(e) => {
-                let r = self.call_msgh(handler, e.0);
-                self.msgh_depth -= 1;
-                r
-            }
+            // `error` failing at once, or the call refused at the C-level
+            // limit): no nested run saw it, so run the handler on it here,
+            // one level deeper
+            Err(e) => self.call_msgh(handler, e.0),
         }
-    }
-
-    /// `call_value` as a protected call made from Rust (PUC `lua_pcall`
-    /// with no handler): errors inside it do not reach the handler of an
-    /// enclosing xpcall, and its error bookkeeping does not outlive it.
-    pub(crate) fn call_protected(
-        &mut self,
-        f: Value,
-        args: &[Value],
-    ) -> Result<Vec<Value>, crate::vm::error::LuaError> {
-        self.call_protected_with(f, args, None)
-    }
-
-    /// [`Vm::call_protected`] with `handler` as the message handler that is
-    /// running while `f` runs (`L->errfunc` during `luaG_errormsg`'s call).
-    fn call_protected_with(
-        &mut self,
-        f: Value,
-        args: &[Value],
-        handler: Option<Value>,
-    ) -> Result<Vec<Value>, crate::vm::error::LuaError> {
-        let running = std::mem::replace(&mut self.msgh_running, handler);
-        let floor = std::mem::replace(&mut self.msgh_floor, self.frames.len());
-        let applied = self.msgh_applied.take();
-        let traceback = self.error_traceback.take();
-        let natives = std::mem::take(&mut self.errored_natives);
-        let keep = std::mem::replace(&mut self.keep_error_traceback, false);
-        let r = self.call_value(f, args);
-        self.keep_error_traceback = keep;
-        self.msgh_running = running;
-        self.msgh_floor = floor;
-        self.msgh_applied = applied;
-        self.error_traceback = traceback;
-        self.errored_natives = natives;
-        r
     }
 }

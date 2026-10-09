@@ -1,11 +1,20 @@
 //! The marker: the gray stack and the entry points that color objects.
 
 use super::*;
+use crate::runtime::mem::LVec;
 
 /// Mark accumulator: gray stack plus entry points for Values and bare
 /// object headers (Protos/Upvalues are not first-class Values).
 pub(crate) struct Marker {
-    pub(super) stack: Vec<*mut GcHeader>,
+    /// The gray stack, in a block of the heap's allocation context. When it
+    /// cannot grow, the object stays gray off the stack and `overflow` is
+    /// set; [`Marker::refill`] finds such objects again by walking `scan`.
+    pub(super) stack: LVec<*mut GcHeader>,
+    pub(super) overflow: bool,
+    /// The head of the heap's object list when the marker was lent out:
+    /// every object that can be gray is on it (new ones are born black or
+    /// white, fixed ones live on their own list).
+    pub(super) scan: *mut GcHeader,
     /// live tables with a weak `__mode`, collected during marking and processed
     /// (dead weak entries cleared) before the sweep
     pub(crate) weak: Vec<*mut Table>,
@@ -33,7 +42,7 @@ pub(crate) struct Marker {
 /// the worklist is empty (iterative, so deep graphs don't overflow the Rust
 /// stack). Shared by the root mark and the post-resurrection remark.
 pub(super) fn drain_marker(m: &mut Marker) {
-    while let Some(h) = m.stack.pop() {
+    while let Some(h) = m.pop() {
         // SAFETY: `h` was popped off the gray stack, which only `Marker::header` and `barrier_back` push to, with headers of allocated objects; nothing is freed while marking, and the tag names the type to trace it as
         unsafe {
             // PUC `propagatemark`: gray → black before scanning children, so a
@@ -42,8 +51,8 @@ pub(super) fn drain_marker(m: &mut Marker) {
             (*h).flags = (*h).with_slow(((*h).flags & !WHITE_BITS) | BLACK);
             match (*h).tag {
                 ObjTag::Str => {}
-                ObjTag::Table => (*(h as *mut Table)).trace(m),
-                ObjTag::Proto => (*(h as *mut Proto)).trace(m),
+                ObjTag::Table => (*(h as *mut Table)).trace(h as *mut Table, m),
+                ObjTag::Proto => (*(h as *mut Proto)).trace(h as *mut Proto, m),
                 ObjTag::Closure => (*(h as *mut LuaClosure)).trace(m),
                 ObjTag::Upvalue => (*(h as *mut Upvalue)).trace(m),
                 ObjTag::Native => (*(h as *mut NativeClosure)).trace(m),
@@ -55,6 +64,51 @@ pub(super) fn drain_marker(m: &mut Marker) {
 }
 
 impl Marker {
+    /// The next gray object to trace: off the stack, or found again by a walk
+    /// of the object list after the stack overflowed.
+    #[inline]
+    pub(super) fn pop(&mut self) -> Option<*mut GcHeader> {
+        match self.stack.pop() {
+            Some(h) => Some(h),
+            None if self.overflow => self.refill(),
+            None => None,
+        }
+    }
+
+    /// Push `h`, already gray; when the stack cannot grow it stays gray and
+    /// [`Marker::refill`] finds it later.
+    #[inline(always)]
+    pub(super) fn push_gray(&mut self, h: *mut GcHeader) {
+        if self.stack.push(h).is_err() {
+            self.overflow = true;
+        }
+    }
+
+    /// Walk the object list for gray objects left off the stack when it
+    /// could not grow, and stack them; the first one comes back.
+    #[cold]
+    #[inline(never)]
+    fn refill(&mut self) -> Option<*mut GcHeader> {
+        self.overflow = false;
+        let mut first = None;
+        let mut cur = self.scan;
+        while !cur.is_null() {
+            // SAFETY: `scan` heads the heap's object list, whose objects stay
+            // allocated while marking (frees happen only in the sweep), and
+            // each `next` is read from a live object; only flag bytes are read
+            let (f, next) = unsafe { ((*cur).flags, (*cur).next) };
+            if !is_white(f) && !is_black(f) {
+                if first.is_none() {
+                    first = Some(cur);
+                } else {
+                    self.push_gray(cur);
+                }
+            }
+            cur = next;
+        }
+        first
+    }
+
     /// Mark a value, returning true if it was newly marked (was white).
     pub(crate) fn value(&mut self, v: Value) -> bool {
         let h = match v {
@@ -96,7 +150,7 @@ impl Marker {
                     (*h).flags = (*h).with_slow((f & !WHITE_BITS) | BLACK);
                 } else {
                     (*h).flags = (*h).with_slow(f & !WHITE_BITS);
-                    self.stack.push(h);
+                    self.push_gray(h);
                 }
                 true
             } else {

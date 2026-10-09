@@ -5,11 +5,12 @@ use super::*;
 /// a preceding test consumes and which way each test went.
 pub(super) fn validate_ops(
     record: &TraceRecord,
-    vconsts: &[Option<VConst>],
+    vconsts: &[VRegs],
     head_proto: Gc<Proto>,
     max_stack: usize,
     effective_end: usize,
     folded_ops: &[bool],
+    frame_tops: &[Option<u32>],
 ) -> Option<(Vec<bool>, Vec<Option<CmpDir>>)> {
     // Pre-emit verification. Any op outside the whitelist contract
     // bails so the trace becomes a no-op (the recorder counts it
@@ -27,6 +28,24 @@ pub(super) fn validate_ops(
     let mut cmp_dirs: Vec<Option<CmpDir>> = vec![None; effective_end];
     checkpoint("pre:cmp-dirs-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
+        // a list store of the values a call just returned: the recording
+        // fixes their count (`inline_calls`), which the store takes from
+        // the recorded `var_count`
+        if rop.inst.op() == Op::SetList && rop.inst.b() == 0 && !folded_ops[i] {
+            set_last_op(i, rop.inst.op() as u8);
+            let a = rop.inst.a();
+            let fixed = frame_tops
+                .get(i)
+                .copied()
+                .flatten()
+                .and_then(|t| t.checked_sub(a + 1))
+                .filter(|&n| Some(n) == rop.var_count && (a + n) as usize <= max_stack);
+            if fixed.is_none() || rop.inst.k() {
+                checkpoint("bail:setlist-count-not-fixed");
+                return None;
+            }
+            continue;
+        }
         validate_op(
             record,
             vconsts,
@@ -46,7 +65,7 @@ pub(super) fn validate_ops(
 /// One op of [`validate_ops`].
 fn validate_op(
     record: &TraceRecord,
-    vconsts: &[Option<VConst>],
+    vconsts: &[VRegs],
     head_proto: Gc<Proto>,
     max_stack: usize,
     effective_end: usize,
@@ -70,7 +89,7 @@ fn validate_op(
     // a same-proto inline body op the lowerer can handle.
     // capture op_id BEFORE per-op checks for
     // failure-phase narrowing.
-    set_last_op_id(rop.inst.op() as u8);
+    set_last_op(i, rop.inst.op() as u8);
     // an inlined function's op reads its own constants, nested
     // functions and upvalue descriptions
     let _ = head_proto;
@@ -90,10 +109,32 @@ fn validate_op(
     // the inline path's unwind ops. They're not in the
     // whitelist (it only covers depth=0 ops with no return
     // semantics); admit them when depth>0.
-    if rop.inline_depth > 0 && matches!(op, Op::Return0 | Op::Return1) {
-        // Bound the A operand for Return1 — Return0 has no A read.
-        if matches!(op, Op::Return1) && (rop.inst.a() as usize) >= max_stack {
+    if rop.inline_depth > 0 && matches!(op, Op::Return0 | Op::Return1 | Op::Return) {
+        // the values returned sit in the frame (`inline_calls` fixed the
+        // count of a `Return`)
+        let n = match op {
+            Op::Return0 => 0,
+            Op::Return1 => 1,
+            _ if rop.inst.b() > 0 => rop.inst.b() - 1,
+            _ => 1,
+        };
+        if (rop.inst.a() + n) as usize > max_stack {
             checkpoint("bail:cmp-dirs-Return1-a-oob");
+            return None;
+        }
+        return Some(());
+    }
+    // a vararg expansion in a vararg function the trace inlined: the extra
+    // arguments sit below the frame's registers, as many as the call
+    // passed (the head frame's are on the stack, which the trace does not
+    // read)
+    if matches!(op, Op::Vararg) {
+        let fits = rop.inline_depth > 0 && rop.proto.is_vararg && {
+            let n = rop.inst.c().saturating_sub(1);
+            (rop.inst.a() + n) as usize <= max_stack
+        };
+        if !fits {
+            checkpoint("bail:vararg-outside-inlined-frame");
             return None;
         }
         return Some(());
@@ -147,19 +188,25 @@ fn validate_op(
         Op::Call => {
             unreachable!("Op::Call only appears at effective_end (truncation guarded above)")
         }
-        Op::ForLoop => {
+        Op::ForLoop | Op::ForLoop55 => {
             unreachable!("Op::ForLoop only appears at effective_end (loop-end guarded above)")
         }
-        Op::TForLoop => unreachable!(
+        Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => unreachable!(
             "Op::TForLoop only appears at effective_end (close-on-back-edge guarded above)"
         ),
         Op::TForPrep
+        | Op::TForPrep53
+        | Op::TForPrep55
         | Op::TForCall
+        | Op::TForCall53
+        | Op::TForCall55
         | Op::Concat
         | Op::GetTabUp
         | Op::SetField
         | Op::GetField
         | Op::Jmp
+        | Op::JmpClose
+        | Op::JmpCloseBack
         | Op::Move
         | Op::LoadI
         | Op::LoadF
@@ -167,8 +214,9 @@ fn validate_op(
         | Op::LoadFalse
         | Op::LoadTrue
         | Op::LFalseSkip
+        | Op::LTrueSkip
         | Op::Not
-        | Op::Close => validate_body_op(max_stack, rop, op, ins, a, b, c)?,
+        | Op::Close => validate_body_op(vconsts, i, max_stack, rop, op, ins, a, b, c)?,
         Op::Closure
         | Op::LoadK
         | Op::Add
@@ -221,7 +269,7 @@ fn validate_op(
         | Op::SetTable
         | Op::SetList
         | Op::Len
-        | Op::GetUpval => validate_table_op(head_proto, max_stack, op, ins, a, b, c)?,
+        | Op::GetUpval => validate_table_op(head_proto, vconsts, i, max_stack, op, ins, a, b, c)?,
         Op::SelfOp => {
             // a constant string key (the register form is the compiler's
             // fallback for a constant past C's range)
@@ -238,112 +286,4 @@ fn validate_op(
         _ => unreachable!("whitelist gated above"),
     }
     Some(())
-}
-
-/// The ops that end the body: stray `Jmp`s, and the truncating call,
-/// the depth-0 return or the loop edge at `effective_end`.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn validate_trace_ends(
-    record: &TraceRecord,
-    head_proto: Gc<Proto>,
-    max_stack: usize,
-    effective_end: usize,
-    consumed_by_cmp: &[bool],
-    call_idx_opt: Option<usize>,
-    return_idx_opt: Option<usize>,
-    for_loop_idx_opt: Option<usize>,
-) -> Option<()> {
-    // Jmp validation inside the normal range. A Jmp is OK if it
-    // was consumed by a preceding cmp (handled above) or sits at
-    // the effective end's last position (the back-edge that closes
-    // the loop, or the slot right before an Op::Call truncation —
-    // the tail / side-exit emits the control transfer).
-    for (i, rop) in record.ops[..effective_end].iter().enumerate() {
-        if matches!(rop.inst.op(), Op::Jmp)
-            && !consumed_by_cmp[i]
-            && i + 1 != effective_end
-            && !jumps_to_next(rop, &record.ops[i + 1])
-        {
-            checkpoint("bail:body-jmp");
-            return None;
-        }
-    }
-
-    // Validate the truncating Op::Call (if any). Self-recursion is
-    // not verified — the recorder is trusted to only feed sound
-    // patterns.
-    if let Some(call_idx) = call_idx_opt {
-        // call_idx_opt only set for non-self
-        // Op::Call at depth 0 (self-recursive inline calls pass
-        // through end_idx_opt without truncating; depth>0 closures
-        // close via TraceEnd::InlineAbort), so the depth check below
-        // is only a debug assert.
-        let rop = &record.ops[call_idx];
-        debug_assert_eq!(rop.inline_depth, 0, "TraceEnd::Call only at depth 0");
-        if !std::ptr::eq(rop.proto.as_ptr(), head_proto.as_ptr()) {
-            return None;
-        }
-        let a = rop.inst.a() as usize;
-        if a >= max_stack {
-            return None;
-        }
-    }
-
-    // validate Op::Return0/Return1 at depth=0
-    // (TraceEnd::Return). Same A bound rule as Call truncation
-    // applies to Return1; Return0 has no A read.
-    if let Some(return_idx) = return_idx_opt {
-        let rop = &record.ops[return_idx];
-        debug_assert_eq!(rop.inline_depth, 0, "TraceEnd::Return only at depth 0");
-        if !std::ptr::eq(rop.proto.as_ptr(), head_proto.as_ptr()) {
-            return None;
-        }
-        if matches!(rop.inst.op(), Op::Return1) {
-            let a = rop.inst.a() as usize;
-            if a >= max_stack {
-                return None;
-            }
-        }
-    }
-
-    if let Some(for_loop_idx) = for_loop_idx_opt {
-        let rop = &record.ops[for_loop_idx];
-        debug_assert_eq!(rop.inline_depth, 0, "TraceEnd::ForLoop only at depth 0");
-        if !std::ptr::eq(rop.proto.as_ptr(), head_proto.as_ptr()) {
-            return None;
-        }
-        let a = rop.inst.a() as usize;
-        match rop.inst.op() {
-            Op::ForLoop => {
-                // ForLoop touches R[A], R[A+1] (count or limit), R[A+2]
-                // (step), R[A+3] (visible loop var). All must fit in the
-                // frame. Which form steps them is decided from their
-                // kinds at the tail (`emit_for_loop_tail`).
-                if a + 3 >= max_stack {
-                    return None;
-                }
-            }
-            Op::TForLoop => {
-                // TForLoop reads R[A+4] (control
-                // returned by the iterator) and writes R[A+2] on
-                // continue. R[A+4] must fit in the trace's frame.
-                if a + 4 >= max_stack {
-                    return None;
-                }
-            }
-            _ => unreachable!("for_loop_idx_opt only set for Op::ForLoop / Op::TForLoop"),
-        }
-    }
-    Some(())
-}
-
-/// A forward `Jmp` (the end of an `if` branch skipping the `else`) that
-/// the recording followed to `next`: the trace goes on there, and the jump
-/// needs no code.
-fn jumps_to_next(jmp: &RecordedOp, next: &RecordedOp) -> bool {
-    let target = i64::from(jmp.pc) + 1 + i64::from(jmp.inst.sj());
-    jmp.inst.sj() >= 0
-        && next.inline_depth == jmp.inline_depth
-        && std::ptr::eq(next.proto.as_ptr(), jmp.proto.as_ptr())
-        && i64::from(next.pc) == target
 }

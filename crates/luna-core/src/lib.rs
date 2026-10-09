@@ -39,17 +39,20 @@
 //!
 //! ## Sandbox caveats
 //!
-//! - **JIT bypass of `instr_budget`** — the (optional) cranelift JIT
-//!   compiles counted-for loops to native code that does not tick the
-//!   budget. Sandbox embedders that link against `luna` (not
-//!   `luna-core`) must call `vm.set_jit_enabled(false)` before
-//!   running untrusted scripts.
+//! - **Compiled code is kept out by the limits** — the (optional)
+//!   cranelift JIT compiles loops to native code that neither ticks the
+//!   budget nor checks the cap, so while either is armed no compiled
+//!   code is entered and every loop runs in the interpreter, where it
+//!   is counted.
 //! - **Bytecode load surface** — `load()` defaults to mode `"bt"`
 //!   which accepts precompiled chunks, bypassing the parser's
 //!   depth/opcode limits. Sandbox embedders should call
 //!   `vm.set_bytecode_loading(false)`.
-//! - **`instr_budget` / `mem_cap` are fire-once** — both clear to
-//!   `None` on first trip. Re-arm before each `call_value` if reusing
+//! - **`instr_budget` / `mem_cap` stay exhausted** — once either trips
+//!   it stays at zero, and every further instruction raises the same
+//!   error again (also inside `pcall`, `xpcall` handlers, `__close`,
+//!   `__gc`, metamethods, library callbacks and coroutines) until the
+//!   host arms a new limit. Re-arm before each `call_value` if reusing
 //!   the Vm across requests, or (recommended) create a fresh Vm per
 //!   request for isolation.
 //! - **`heap.bytes()` is approximate** — internal `Vec`/`Box`
@@ -84,9 +87,13 @@
 // unchanged — `Vm` stays `!Send + !Sync`. See
 // `docs/threading.md` for the embedder-facing usage patterns.
 
+#[doc(hidden)]
+pub mod cerrno;
 pub mod compiler;
 pub mod frontend;
 pub mod jit;
+#[doc(hidden)]
+pub mod native_stack;
 pub mod numeric;
 pub mod pattern;
 pub mod runtime;

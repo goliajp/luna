@@ -13,8 +13,8 @@ pub(super) fn emit_loop_tail<E: Emit>(
     let rop = &record.ops[for_loop_idx];
     let a = rop.inst.a() as usize;
     match rop.inst.op() {
-        Op::ForLoop => emit_for_loop_tail(lw, pl, rop, a)?,
-        Op::TForLoop => emit_tfor_loop_tail(lw, pl, for_loop_idx, rop, a)?,
+        op if op.is_for_loop() => emit_for_loop_tail(lw, pl, rop, a)?,
+        op if op.is_tfor_loop() => emit_tfor_loop_tail(lw, pl, for_loop_idx, rop, a)?,
         _ => unreachable!("for_loop_idx_opt only set for Op::ForLoop / Op::TForLoop"),
     }
     Some(())
@@ -56,7 +56,9 @@ pub(super) fn for_form(pre53: bool, float_only: bool, kinds: [RegKind; 3]) -> Op
 ///
 /// On continue R[A+3] = R[A] and the trace goes back to the loop body;
 /// on exit it leaves at forloop.pc + 1 with the registers unchanged
-/// (PUC writes nothing when the loop ends).
+/// (PUC writes nothing when the loop ends). 5.5's `ForLoop55` keeps the
+/// count (or limit) in R[A], the step in R[A+1] and the index in R[A+2],
+/// the loop variable itself.
 pub(super) fn emit_for_loop_tail<E: Emit>(
     lw: &mut Lower<E>,
     pl: &Plan<'_>,
@@ -76,15 +78,23 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
         trace_fn_sig_ref,
         ..
     } = *lw;
+    // the index, the count or limit, the step, and the loop variable when
+    // it is a copy of the index
+    let v55 = rop.inst.op() == Op::ForLoop55;
+    let (r_cur, r_x, r_step, r_var) = if v55 {
+        (a + 2, a, a + 1, None)
+    } else {
+        (a, a + 1, a + 2, Some(a + 3))
+    };
     let kinds = [
-        lw.current_kinds[a],
-        lw.current_kinds[a + 1],
-        lw.current_kinds[a + 2],
+        lw.current_kinds[r_cur],
+        lw.current_kinds[r_x],
+        lw.current_kinds[r_step],
     ];
-    let form = for_form(opts.pre53, float_only, kinds)?;
-    let cur = lw.bcx.use_var(lw.regs_full[a]);
-    let x = lw.bcx.use_var(lw.regs_full[a + 1]);
-    let step = lw.bcx.use_var(lw.regs_full[a + 2]);
+    let form = for_form(opts.pre53 && !v55, float_only, kinds)?;
+    let cur = lw.bcx.use_var(lw.regs_full[r_cur]);
+    let x = lw.bcx.use_var(lw.regs_full[r_x]);
+    let step = lw.bcx.use_var(lw.regs_full[r_step]);
     let (cond, next) = match form {
         ForForm::IntCount => {
             let zero = lw.bcx.ins().iconst(types::I64, 0);
@@ -92,7 +102,7 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
             (lw.bcx.ins().icmp(IntCC::NotEqual, x, zero), None)
         }
         // the step's sign was checked before the loop head
-        ForForm::IntLimit if pl.step_guard.is_some_and(|(r, _)| r == a + 2) => {
+        ForForm::IntLimit if pl.step_guard.is_some_and(|(r, _)| r == r_step) => {
             let next = lw.bcx.ins().iadd(cur, step);
             let cc = match pl.step_guard {
                 Some((_, true)) => IntCC::SignedLessThanOrEqual,
@@ -154,12 +164,14 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
             let next = lw.bcx.ins().iadd(cur, step);
             let one = lw.bcx.ins().iconst(types::I64, 1);
             let count_new = lw.bcx.ins().isub(x, one);
-            lw.bcx.def_var(lw.regs_full[a + 1], count_new);
+            lw.bcx.def_var(lw.regs_full[r_x], count_new);
             next
         }
     };
-    lw.bcx.def_var(lw.regs_full[a], next);
-    lw.bcx.def_var(lw.regs_full[a + 3], next);
+    lw.bcx.def_var(lw.regs_full[r_cur], next);
+    if let Some(r) = r_var {
+        lw.bcx.def_var(lw.regs_full[r], next);
+    }
     // ForLoop's continue branch jumps to the loop's
     // BODY START (= (rop.pc + 1) - bx per OP_FORLOOP's
     // backward jump encoding), not record.head_pc.
@@ -178,7 +190,9 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
     // loop. Compute the body start explicitly.
     let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
     let mut tail_kinds = lw.current_kinds[..max_stack].to_vec();
-    tail_kinds[a + 3] = kinds[0];
+    if let Some(r) = r_var {
+        tail_kinds[r] = kinds[0];
+    }
     if do_internal_loop
         && body_pc == record.head_pc
         && loop_kinds_match(&tail_kinds, &lw.head_kinds)

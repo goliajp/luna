@@ -1,18 +1,20 @@
 //! Instruction emission, jump patching, register reservation and constants.
 
 use super::*;
+use crate::runtime::mem::word_hash;
 
 impl<'a> Compiler<'a> {
+    #[inline]
     pub(super) fn emit(&mut self, i: Inst) -> usize {
+        // only 5.1–5.3 leave jumps waiting for the next instruction
+        if self.lr().jpc != NO_JUMP {
+            self.discharge_jpc();
+        }
         let line = self.force_line.unwrap_or(self.last_line);
         let l = self.l();
-        l.code.push(i);
-        l.lines.push(line);
+        l.code.push_or_abort(i);
+        l.lines.push_or_abort(line);
         l.code.len() - 1
-    }
-
-    pub(super) fn emit_jump(&mut self) -> usize {
-        self.emit(Inst::isj(Op::Jmp, 0))
     }
 
     pub(super) fn here(&self) -> usize {
@@ -33,50 +35,6 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// Patch a pending forward jump emitted earlier at `pc` so that it lands
-    /// at the current `here()` position, and mark `here()` as a jump target
-    /// (see `Level::last_target`). Mirrors PUC `luaK_patchtohere`.
-    ///
-    /// This is the canonical "this jump lands at the next instruction we are
-    /// about to emit" hook; every patch-pending-forward-jump call site routes
-    /// through it so that the jump-target tracker stays consistent. There is
-    /// no separate `patch_jump` variant that elides the mark — patching a
-    /// forward jump to a position that is not yet a target is meaningless.
-    pub(super) fn patch_to_here(&mut self, pc: usize) -> Result<(), SyntaxError> {
-        let target = self.here();
-        let off = target as i64 - pc as i64 - 1;
-        if off.unsigned_abs() > self.jump_cap() {
-            return Err(self.err(self.last_line, "control structure too long"));
-        }
-        self.l().code[pc].set_sj(off as i32);
-        self.mark_target(target);
-        Ok(())
-    }
-
-    /// Point the jump at `pc` back to `target`, an earlier pc.
-    pub(super) fn patch_back(&mut self, pc: usize, target: usize) -> Result<(), SyntaxError> {
-        let off = target as i64 - pc as i64 - 1;
-        if off.unsigned_abs() > self.jump_cap() {
-            return Err(self.err(self.last_line, "control structure too long"));
-        }
-        self.l().code[pc].set_sj(off as i32);
-        self.mark_target(target);
-        Ok(())
-    }
-
-    pub(super) fn jump_back(&mut self, target: usize) -> Result<(), SyntaxError> {
-        let off = target as i64 - self.here() as i64 - 1;
-        if off.unsigned_abs() > self.jump_cap() {
-            return Err(self.err(self.last_line, "control structure too long"));
-        }
-        self.emit(Inst::isj(Op::Jmp, off as i32));
-        // The back-edge lands at `target`, which was captured upstream
-        // (typically `let top = self.here()` before a loop header). Mark it
-        // so a future peephole pass sees that pc as occupied.
-        self.mark_target(target);
-        Ok(())
-    }
-
     /// Record that `pc` is now a jump destination. Monotonic; advances
     /// `last_target` only when `pc` exceeds the recorded maximum. Mirrors the
     /// effect of PUC `luaK_getlabel` (which sets `fs->lasttarget = fs->pc`).
@@ -87,72 +45,6 @@ impl<'a> Compiler<'a> {
             Some(t) if pc > t => l.last_target = Some(pc),
             _ => {}
         }
-    }
-
-    /// Whether the instruction at `here() - 1` may take the place of a Move
-    /// that would otherwise be emitted at `here()`: every path that would
-    /// reach the Move then runs that instruction last. `false` when nothing
-    /// has been emitted yet, or when a jump lands at `here()` (such a path
-    /// skips the instruction and needs the Move).
-    ///
-    /// A jump landing at `here() - 1` itself is fine (PUC `discharge2reg`
-    /// rewrites the A field without looking at `fs->lasttarget`): the paths
-    /// arriving there run the rewritten instruction like the fall-through
-    /// path does, and the temporary register it wrote is read only by the
-    /// Move being dropped.
-    ///
-    /// Consumed by the Reloc-landing peephole at `assign_name` and the
-    /// RHS materialization elision at `assign_stat`.
-    pub(super) fn no_jump_lands_here(&self) -> bool {
-        let here = self.here();
-        if here == 0 {
-            return false;
-        }
-        match self.lr().last_target {
-            None => true,
-            Some(t) => t < here,
-        }
-    }
-
-    /// Reloc-landing peephole gate. Returns `Some(prev_pc)` when the
-    /// instruction at `here() - 1` is a retargetable producer whose A field
-    /// equals `vreg` AND no jump lands right after it. The caller can
-    /// then `patch_dest(prev_pc, local_reg)` to retarget the A field
-    /// directly and skip the otherwise-required `Move local_reg, vreg`.
-    ///
-    /// The "retargetable producer" set is the closed list of ops produced
-    /// by paths that yield `Exp::Reloc(pc)`: arith / bitwise / unop / Len /
-    /// Get{Field,I,Table,TabUp}. Concat / SelfOp / Move are NOT in the set
-    /// (Concat reads A as operand base, SelfOp writes A+1 too, Move's A is
-    /// a sink). LoadK / LoadI / LoadF / LoadNil are excluded because they
-    /// are already discharged to their final register by `exp_to_reg` —
-    /// no Reloc landing happens through assign_name for them.
-    ///
-    pub(super) fn assign_name_can_retarget_reloc(&self, vreg: u32) -> Option<usize> {
-        if !self.no_jump_lands_here() {
-            return None;
-        }
-        let prev_pc = self.here() - 1;
-        let prev = self.lr().code[prev_pc];
-        if !is_retargetable_op(prev.op()) {
-            return None;
-        }
-        if prev.a() != vreg {
-            return None;
-        }
-        // The value may sit in a local's own register (`assign_stat` stores
-        // `b = a` from `a` directly): the instruction before is then the
-        // statement that last assigned `a`, and retargeting it would drop
-        // that assignment.
-        if self
-            .lr()
-            .locals
-            .iter()
-            .any(|v| v.konst.is_none() && v.reg == vreg)
-        {
-            return None;
-        }
-        Some(prev_pc)
     }
 
     /// PUC `errorlimit`: render the "too many … (limit is …) in <where>"
@@ -238,7 +130,7 @@ impl<'a> Compiler<'a> {
 
     pub(super) fn str_const(&mut self, bytes: &[u8]) -> u32 {
         let s = self.intern_str(bytes);
-        self.const_idx(ConstKey::Str(s.as_ptr()), Value::Str(s))
+        self.const_idx(Value::Str(s))
     }
 
     /// The constant of the tree's string (or name) `s`: each entry of the
@@ -253,7 +145,7 @@ impl<'a> Compiler<'a> {
                 g
             }
         };
-        self.const_idx(ConstKey::Str(g.as_ptr()), Value::Str(g))
+        self.const_idx(Value::Str(g))
     }
 
     pub(super) fn intern_str(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
@@ -268,14 +160,15 @@ impl<'a> Compiler<'a> {
     }
 
     pub(super) fn long_str(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
-        match self.str_cache.get(bytes) {
-            Some(s) => *s,
-            None => {
-                let s = self.heap.intern(bytes);
-                self.str_cache.insert(bytes.into(), s);
-                s
-            }
+        let h = word_hash(bytes);
+        if let Some(s) = self.str_cache.find_with(h, |k| k.as_bytes() == bytes) {
+            return s;
         }
+        let s = self.heap.intern(bytes);
+        self.str_cache
+            .insert_hashed(h, s, s)
+            .unwrap_or_else(|o| o.fail());
+        s
     }
 
     pub(super) fn load_const(&mut self, reg: u32, c: u32) {

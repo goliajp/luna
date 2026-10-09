@@ -1,50 +1,81 @@
 //! Concatenation and `tostring` conversion.
 
 use super::*;
+use crate::runtime::LuaStr;
 use crate::vm::cfmt::c_pointer;
+
+/// A concatenation result up to this long is built on the stack.
+const SHORT_CONCAT: usize = 128;
+
+/// A concatenation operand's bytes: a string's own, an integer written
+/// into a stack buffer, or a float's rendering.
+enum Piece<'a> {
+    Str(Gc<LuaStr>),
+    Int(&'a [u8]),
+    Float(Vec<u8>),
+}
+
+impl Piece<'_> {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Piece::Str(s) => s.as_bytes(),
+            Piece::Int(b) => b,
+            Piece::Float(v) => v,
+        }
+    }
+}
+
+/// [`concat_piece`] without copying: `None` when only a `__concat`
+/// metamethod can handle `v`.
+fn piece(v: Value, float_fmt: numeric::FloatFmt, buf: &mut [u8; 20]) -> Option<Piece<'_>> {
+    match v {
+        Value::Str(s) => Some(Piece::Str(s)),
+        Value::Int(x) => Some(Piece::Int(numeric::write_i64_dec(x, buf))),
+        Value::Float(x) => Some(Piece::Float(
+            numeric::num_to_string_for(Num::Float(x), float_fmt).into_bytes(),
+        )),
+        _ => None,
+    }
+}
 
 impl Vm {
     /// Fast string concatenation of an adjacent pair, or `None` when a
     /// `__concat` metamethod is required.
     pub(super) fn concat_pair(&mut self, l: Value, r: Value) -> Result<Option<Value>, LuaError> {
         let legacy = self.float_fmt();
-        // Length-check fast paths for both string operands BEFORE the
-        // (expensive) copy in `concat_piece`, so a runaway `a..a..a..…`
-        // chain (5.1 big.lua / 5.5 heavy.lua's `teststring`) raises the
-        // overflow on the first pair that would exceed `INT_MAX` instead
-        // of allocating multi-GB intermediates first.
-        let max_str = i32::MAX as usize;
-        if let (Value::Str(ls), Value::Str(rs)) = (l, r) {
-            let a_len = ls.as_bytes().len();
-            let b_len = rs.as_bytes().len();
-            let new_len = a_len.checked_add(b_len);
-            if new_len.is_none() || new_len.unwrap() > max_str {
-                return Err(self.rt_err("string length overflow"));
-            }
-        }
-        match (concat_piece(l, legacy), concat_piece(r, legacy)) {
-            (Some(a), Some(b)) => {
-                // PUC `MAX_SIZE` for Lua strings is `INT_MAX`; an attempt to
-                // concat past it raises "string length overflow"
-                // (5.5 heavy.lua `teststring` doubles `a..a..…` until it hits
-                // exactly this wall).
-                let new_len = a.len().checked_add(b.len());
-                if new_len.is_none() || new_len.unwrap() > max_str {
-                    return Err(self.rt_err("string length overflow"));
-                }
-                let mut combined = a;
-                combined.extend_from_slice(&b);
-                Ok(Some(Value::Str(self.heap.intern(&combined))))
-            }
-            _ => Ok(None),
-        }
+        let (mut lb, mut rb) = ([0u8; 20], [0u8; 20]);
+        let (Some(a), Some(b)) = (piece(l, legacy, &mut lb), piece(r, legacy, &mut rb)) else {
+            return Ok(None);
+        };
+        let (a, b) = (a.bytes(), b.bytes());
+        // PUC `MAX_SIZE` for Lua strings is `INT_MAX`: a runaway `a..a..…`
+        // (5.1 big.lua, 5.5 heavy.lua `teststring`) raises before anything
+        // that size is built
+        let len = match a.len().checked_add(b.len()) {
+            Some(n) if n <= i32::MAX as usize => n,
+            _ => return Err(self.rt_err("string length overflow")),
+        };
+        let s = if len <= SHORT_CONCAT {
+            let mut buf = [0u8; SHORT_CONCAT];
+            buf[..a.len()].copy_from_slice(a);
+            buf[a.len()..len].copy_from_slice(b);
+            self.heap.intern(&buf[..len])
+        } else {
+            let mut buf = Vec::with_capacity(len);
+            buf.extend_from_slice(a);
+            buf.extend_from_slice(b);
+            self.heap.intern(&buf)
+        };
+        Ok(Some(Value::Str(s)))
     }
 
     /// Fold the concat operands occupying `[base_a .. self.top)` right-to-left
     /// into a single result at `base_a` (PUC `luaV_concat`). Returns after
     /// either finishing (result at `base_a`) or arming a yieldable `__concat`
     /// call — its `Meta` continuation re-enters here on the metamethod's return.
-    pub(super) fn concat_run(&mut self, base_a: u32) -> Result<(), LuaError> {
+    /// `out`: where the result goes once the operands from `base_a` up
+    /// are folded into one (5.1–5.3 `CONCAT` names its own destination).
+    pub(super) fn concat_run(&mut self, base_a: u32, out: u32) -> Result<(), LuaError> {
         // Sum the lengths of all all-Str operands BEFORE starting the
         // right-associative fold so a 129-operand `a..a..…` chain
         // (5.1 big.lua's `rep129(longs)`) raises overflow immediately,
@@ -91,10 +122,14 @@ impl Vm {
                     }
                     // result lands at i-1, dropping y (top→i); resume continues.
                     let dst = i - 1;
-                    self.begin_meta_call(mm, &[x, y], MetaAction::Concat { dst, base_a })?;
+                    let out = (out as i64 - base_a as i64) as i16;
+                    self.begin_meta_call(mm, &[x, y], MetaAction::Concat { dst, base_a, out })?;
                     return Ok(());
                 }
             }
+        }
+        if out != base_a {
+            self.stack[out as usize] = self.stack[base_a as usize];
         }
         self.maybe_collect_garbage(base_a + 1);
         Ok(())
@@ -104,18 +139,35 @@ impl Vm {
     /// number, rendered), else the basic rendering, where 5.3+ names a value
     /// by a string `__name` metafield.
     pub fn tostring_value(&mut self, v: Value) -> Result<Vec<u8>, LuaError> {
+        self.tostring_value_pushed(v, 0)
+    }
+
+    /// [`Vm::tostring_value`] from a native with `extra` values pushed
+    /// where PUC's C function would have them: a `__tostring` it calls
+    /// runs above them. Nothing is counted when there is none.
+    pub(crate) fn tostring_value_pushed(
+        &mut self,
+        v: Value,
+        extra: u32,
+    ) -> Result<Vec<u8>, LuaError> {
         let mm = self.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
             // `luaL_callmeta` is a plain `lua_call`: `__tostring` cannot yield.
-            let r = self.call_noyield(mm, &[v])?;
+            self.native_push(extra);
+            let r = self.call_value(mm, &[v])?;
+            self.native_pop(extra);
             return match r.first().copied().unwrap_or(Value::Nil) {
                 Value::Str(s) => Ok(s.as_bytes().to_vec()),
                 r @ (Value::Int(_) | Value::Float(_)) => Ok(self.tostring_basic(r)),
-                // luaL_error: positioned at whatever called the library function
-                _ => Err(crate::vm::builtins::raise_str(
-                    self,
-                    "'__tostring' must return a string",
-                )),
+                // luaL_error over the result: positioned at whatever called
+                // the library function
+                _ => {
+                    self.native_push_if_native(1);
+                    Err(crate::vm::builtins::raise_str(
+                        self,
+                        "'__tostring' must return a string",
+                    ))
+                }
             };
         }
         if self.version >= LuaVersion::Lua53

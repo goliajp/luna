@@ -22,32 +22,20 @@
 //! lowering by the loader's verifier (`super::super::verify`), which checks
 //! these invariants on every loaded function whatever its format.
 //!
-//! luna's operands are also narrower than PUC's in one respect that shapes
-//! most lowerings: apart from the constant *keys* of `GetTabUp`, `GetField`,
-//! `SetTabUp` and `SetField`, the method-name key of `SelfOp` (when `k` is
-//! set) and the right operand of `EqK`, every operand is a register. The `k`
-//! bit is ignored by `SetTable`/`SetField`/`SetTabUp`/`SetI` and by the
-//! arithmetic ops, so a PUC constant in any other position is first loaded
-//! into a scratch register.
-//!
-//! ## Loop windows
-//!
-//! luna lays out both kinds of `for` loop the way PUC 5.4 does: four hidden
-//! slots (`A..A+3`) with the loop variables after them. PUC 5.1–5.3 generic
-//! loops keep three hidden slots, and PUC 5.5 keeps three for both kinds, so
-//! their loop variables sit one register lower than luna's ops write them.
-//! Each such loop becomes a [`Window`]: across its PUC pcs, every register at
-//! or above the window's pivot is renumbered one higher. Registers above the
-//! pivot are dead when control enters or leaves the loop, which is why a
-//! renumbering confined to the loop's pcs is sound. Windows nest with loops,
-//! so the frame grows by the deepest nesting.
+//! luna's instruction set holds every operand form PUC's compilers emit:
+//! the `RK` operands of 5.1–5.3 (a constant on either side, or on both,
+//! of an arithmetic op or a comparison), 5.4 / 5.5's immediate and constant
+//! forms, and each dialect's layout of the `for` loops (`ForLayout`). A
+//! PUC register is the same luna register, so a translated function has
+//! PUC's frame.
 //!
 //! ## Scratch registers
 //!
-//! A lowering that needs a register PUC did not allocate takes one above
-//! every mapped register. Scratch values live only within the expansion of a
-//! single PUC instruction, so each instruction reuses the same slots, and none
-//! is ever read after a call (a callee's frame starts inside the caller's).
+//! Only a chunk PUC's compiler could not have produced needs a register PUC
+//! did not allocate (a method key that is not a string): it takes one above
+//! the frame. Scratch values live only within the expansion of a single PUC
+//! instruction, so each instruction reuses the same slots, and none is ever
+//! read after a call (a callee's frame starts inside the caller's).
 
 pub(super) use super::lines::rle_lines;
 use crate::runtime::Value;
@@ -63,6 +51,13 @@ pub(super) struct RawLocVar {
     pub name: crate::runtime::DebugName,
     pub start_pc: u32,
     pub end_pc: u32,
+}
+
+/// An `RK` operand: a register or a constant.
+#[derive(Clone, Copy)]
+pub(super) enum Rk {
+    R(u32),
+    K(u32),
 }
 
 /// One function as read from a PUC chunk, before its code is translated.
@@ -157,15 +152,6 @@ pub(super) fn build(
     }))
 }
 
-/// PUC pcs `first..=last` of a loop whose registers from `pivot` up are one
-/// slot higher in luna's frame (see the module docs).
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Window {
-    pub first: usize,
-    pub last: usize,
-    pub pivot: u32,
-}
-
 /// How a jump's target is encoded once the target's luna pc is known.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Jump {
@@ -177,32 +163,21 @@ pub(super) enum Jump {
     Back,
     /// `TForPrep`: `Bx` = distance from the next pc to its `TForCall`.
     TForPrep,
-}
-
-enum Target {
-    Puc(usize),
-    /// Index into `Lowering::trampolines`.
-    Trampoline(usize),
+    /// `JmpClose` / `JmpCloseBack`: the offset from the next pc.
+    JmpClose,
 }
 
 struct Fixup {
     at: usize,
-    target: Target,
-    kind: Jump,
-}
-
-/// `Close close; Jmp target`, placed after the function's code.
-struct Trampoline {
-    close: u32,
+    /// the PUC pc jumped to
     target: usize,
-    line: u32,
+    kind: Jump,
 }
 
 /// Emitter for one function body. See the module docs.
 pub(super) struct Lowering {
     dialect: &'static str,
     n_puc: usize,
-    windows: Vec<Window>,
     temp_base: u32,
     temps_used: u32,
     next_temp: u32,
@@ -211,7 +186,6 @@ pub(super) struct Lowering {
     /// PUC pc → first luna pc emitted for it (`None`: emitted nothing).
     first: Vec<Option<u32>>,
     fixups: Vec<Fixup>,
-    trampolines: Vec<Trampoline>,
     pc: usize,
     line: u32,
     /// which constants are strings: only those may be the key of `GetField`,
@@ -221,37 +195,23 @@ pub(super) struct Lowering {
 }
 
 impl Lowering {
-    /// `frame` is PUC's `maxstacksize`; `windows` must already hold every
-    /// loop window of the function.
+    /// `frame` is PUC's `maxstacksize`.
     pub(super) fn new(
         dialect: &'static str,
         n_puc: usize,
         frame: u8,
-        windows: Vec<Window>,
         consts: &[Value],
     ) -> Lowering {
-        let depth = windows
-            .iter()
-            .map(|w| {
-                windows
-                    .iter()
-                    .filter(|o| o.first <= w.first && w.first <= o.last)
-                    .count()
-            })
-            .max()
-            .unwrap_or(0) as u32;
         Lowering {
             dialect,
             n_puc,
-            windows,
-            temp_base: frame as u32 + depth,
+            temp_base: frame as u32,
             temps_used: 0,
             next_temp: 0,
             code: Vec::with_capacity(n_puc),
             lines: Vec::with_capacity(n_puc),
             first: vec![None; n_puc],
             fixups: Vec::new(),
-            trampolines: Vec::new(),
             pc: 0,
             line: 0,
             kstr: consts.iter().map(|v| matches!(v, Value::Str(_))).collect(),
@@ -275,41 +235,18 @@ impl Lowering {
         self.next_temp = 0;
     }
 
-    /// luna register for PUC register `r` at PUC pc `pc`.
-    pub(super) fn reg_at(&self, pc: usize, r: u32) -> Result<u32, String> {
-        let shift = self
-            .windows
-            .iter()
-            .filter(|w| w.first <= pc && pc <= w.last && r >= w.pivot)
-            .count() as u32;
-        let m = r + shift;
-        if m > isa::MAX_A {
-            return Err(self.err(format_args!(
-                "register {r} maps to {m}, past luna's 255-register frame"
-            )));
-        }
-        Ok(m)
-    }
-
-    /// luna register for PUC register `r` at the current pc.
+    /// luna register for PUC register `r`: the same one, when it fits.
     pub(super) fn r(&self, r: u32) -> Result<u32, String> {
-        self.reg_at(self.pc, r)
+        if r > isa::MAX_A {
+            return Err(self.err(format_args!("register {r} past luna's 255-register frame")));
+        }
+        Ok(r)
     }
 
-    /// luna register for the first of `n` consecutive PUC registers from `r`,
-    /// refusing a run that a loop window would split.
+    /// luna register for the first of `n` consecutive PUC registers from `r`.
     pub(super) fn run(&self, r: u32, n: u32) -> Result<u32, String> {
-        let first = self.r(r)?;
-        if n > 1 {
-            let last = self.r(r + n - 1)?;
-            if last - first != n - 1 {
-                return Err(self.err(format_args!(
-                    "register run {r}..{} straddles a loop's hidden slots",
-                    r + n - 1
-                )));
-            }
-        }
-        Ok(first)
+        self.r(r + n.saturating_sub(1))?;
+        self.r(r)
     }
 
     /// `v` as an 8-bit luna operand. PUC's 9-bit B/C fields (5.1–5.3) can
@@ -347,31 +284,10 @@ impl Lowering {
         let target = self.puc_target(target)?;
         self.fixups.push(Fixup {
             at: self.code.len(),
-            target: Target::Puc(target),
+            target,
             kind,
         });
         self.emit(inst);
-        Ok(())
-    }
-
-    /// Jump to `target`, closing upvalues from `R[close]` on the way, as a
-    /// single luna instruction. A comparison or test skips exactly one luna
-    /// instruction, and PUC lets the jump it guards close upvalues (a
-    /// `break` out of a loop that captured a local), so the `Close` cannot
-    /// sit inline: it goes in a trampoline after the function's code.
-    pub(super) fn jump_closing(&mut self, close: u32, target: i64) -> Result<(), String> {
-        let target = self.puc_target(target)?;
-        self.trampolines.push(Trampoline {
-            close,
-            target,
-            line: self.line,
-        });
-        self.fixups.push(Fixup {
-            at: self.code.len(),
-            target: Target::Trampoline(self.trampolines.len() - 1),
-            kind: Jump::Jmp,
-        });
-        self.emit(enc_sj(Op::Jmp, 0)?);
         Ok(())
     }
 
@@ -439,45 +355,65 @@ impl Lowering {
     // A 9-bit B or C field whose top bit is set names constant `field & 0xFF`
     // instead of a register.
 
-    /// A register holding the RK operand `field`.
-    pub(super) fn rk(&mut self, field: u32) -> Result<u32, String> {
+    /// The RK operand `field`.
+    pub(super) fn rk(&self, field: u32) -> Result<Rk, String> {
         if field & RK_BIT != 0 {
-            self.k_in_temp(field & 0xFF)
+            Ok(Rk::K(field & 0xFF))
         } else {
-            self.r(field)
+            Ok(Rk::R(self.r(field)?))
         }
     }
 
-    /// `if ((RK(b) <op> RK(c)) ~= k) then pc++`. A constant equality
-    /// operand becomes `EqK`'s constant; `==` against a constant is symmetric
-    /// (no `__eq` can run), so a constant on the left swaps sides.
-    pub(super) fn compare_rk(&mut self, op: Op, k: bool, b: u32, c: u32) -> Result<(), String> {
-        let (b_k, c_k) = (b & RK_BIT != 0, c & RK_BIT != 0);
-        if op == Op::Eq && (b_k || c_k) {
-            let (reg, konst) = if c_k { (b, c) } else { (c, b) };
-            let reg = self.rk(reg)?;
-            self.emit(enc_abc(Op::EqK, reg, konst & 0xFF, 0, k)?);
-            return Ok(());
-        }
-        let l = self.rk(b)?;
-        let r = self.rk(c)?;
-        self.emit(enc_abc(op, l, r, 0, k)?);
+    /// The RK operand `field` as a store's value: `(C, k)`.
+    pub(super) fn rk_value(&self, field: u32) -> Result<(u32, bool), String> {
+        Ok(match self.rk(field)? {
+            Rk::K(k) => (k, true),
+            Rk::R(r) => (r, false),
+        })
+    }
+
+    /// `R[a] := RK(b) op RK(c)`.
+    pub(super) fn arith_rk(&mut self, op: Op, a: u32, b: u32, c: u32) -> Result<(), String> {
+        let k_op = op.k_form().expect("an arithmetic op");
+        let inst = match (self.rk(b)?, self.rk(c)?) {
+            (Rk::R(x), Rk::R(y)) => enc_abc(op, a, x, y, false)?,
+            (Rk::R(x), Rk::K(y)) => enc_abc(k_op, a, x, y, false)?,
+            (Rk::K(x), Rk::R(y)) => enc_abc(k_op, a, y, x, true)?,
+            (Rk::K(x), Rk::K(y)) => {
+                enc_abc(op.kk_form().expect("an arithmetic op"), a, x, y, false)?
+            }
+        };
+        self.emit(inst);
         Ok(())
     }
 
-    /// `R[a] := R[b] .. ... .. R[c]`. luna concatenates in place at the first
-    /// operand, so a result register elsewhere takes a `Move`.
+    /// `if ((RK(b) <op> RK(c)) ~= k) then pc++`, `op` one of `Eq`, `Lt`,
+    /// `Le`; `C` of the constant forms says the constant was the left one.
+    pub(super) fn compare_rk(&mut self, op: Op, k: bool, b: u32, c: u32) -> Result<(), String> {
+        let (k_op, kk_op) = match op {
+            Op::Eq => (Op::EqK, Op::EqKK),
+            Op::Lt => (Op::LtK, Op::LtKK),
+            _ => (Op::LeK, Op::LeKK),
+        };
+        let inst = match (self.rk(b)?, self.rk(c)?) {
+            (Rk::R(x), Rk::R(y)) => enc_abc(op, x, y, 0, k)?,
+            (Rk::R(x), Rk::K(y)) => enc_abc(k_op, x, y, 0, k)?,
+            (Rk::K(x), Rk::R(y)) => enc_abc(k_op, y, x, 1, k)?,
+            (Rk::K(x), Rk::K(y)) => enc_abc(kk_op, x, y, 0, k)?,
+        };
+        self.emit(inst);
+        Ok(())
+    }
+
+    /// `R[a] := R[b] .. ... .. R[c]`: a `Concat` with its own destination.
     pub(super) fn concat_range(&mut self, a: u32, b: u32, c: u32) -> Result<(), String> {
         if c < b {
             return Err(self.err(format_args!("CONCAT range {b}..{c} is empty")));
         }
         let n = c - b + 1;
         let first = self.run(b, n)?;
-        self.emit(enc_abc(Op::Concat, first, n, 0, false)?);
-        if a != b {
-            let a = self.r(a)?;
-            self.emit(enc_abc(Op::Move, a, first, 0, false)?);
-        }
+        let a = self.r(a)?;
+        self.emit(enc_abc(Op::Concat, a, n, first, true)?);
         Ok(())
     }
 }

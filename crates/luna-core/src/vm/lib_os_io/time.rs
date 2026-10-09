@@ -22,8 +22,21 @@ fn time_value(vm: &Vm, t: i64) -> Value {
 /// absent (`d < 0`: required). ≤5.2 take any number, truncated to `int`,
 /// and treat a non-number as absent; 5.3+ want an integer and bound it.
 fn getfield(vm: &mut Vm, t: Gc<Table>, key: &str, d: i32, delta: i64) -> Result<i32, LuaError> {
-    let k = Value::Str(vm.heap.intern(key.as_bytes()));
-    let v = vm.index_value(Value::Table(t), k)?;
+    let r = getfield_pushed(vm, t, key, d, delta);
+    if r.is_ok() {
+        vm.native_pop(1);
+    }
+    r
+}
+
+fn getfield_pushed(
+    vm: &mut Vm,
+    t: Gc<Table>,
+    key: &str,
+    d: i32,
+    delta: i64,
+) -> Result<i32, LuaError> {
+    let v = vm.native_getfield(Value::Table(t), key.as_bytes())?;
     let missing = |vm: &mut Vm| raise_str(vm, &format!("field '{key}' missing in date table"));
     if vm.version() <= LuaVersion::Lua52 {
         return match argcheck::to_num(vm, v) {
@@ -71,9 +84,10 @@ fn num_exact(n: crate::numeric::Num) -> Option<i64> {
     }
 }
 
+/// `setfield`: the value is pushed, then `lua_setfield` stores it.
 fn setfield(vm: &mut Vm, t: Gc<Table>, key: &str, v: Value) -> Result<(), LuaError> {
-    let k = Value::Str(vm.heap.intern(key.as_bytes()));
-    vm.newindex_value(Value::Table(t), k, v)
+    vm.native_push(1);
+    vm.native_setfield(Value::Table(t), key.as_bytes(), v)
 }
 
 /// `setallfields`: write a broken-down time into `t` in the dialect's
@@ -134,6 +148,7 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
         return Ok(vm.nat_return(fs, &[v]));
     }
     let t = argcheck::check_table(vm, a, 0)?;
+    vm.native_settop(1);
     let v = vm.version();
     // ≤5.3 read the fields from seconds upwards, 5.4 from the year down; the
     // order decides which bad field is reported
@@ -165,20 +180,30 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             }
         }
     }
-    let k = Value::Str(vm.heap.intern(b"isdst"));
-    let isdst = vm.index_value(Value::Table(t), k)?;
+    let isdst = vm.native_getfield(Value::Table(t), b"isdst")?;
+    vm.native_pop(1);
     // a true isdst (`tm_isdst > 0`; nil is -1, false 0) in a zone without
     // daylight saving time: glibc's mktime takes DST to be one hour ahead
     // and moves the result an hour back
     let dst_shift = if isdst.truthy() { 3600 } else { 0 };
-    let secs = mktime(
-        year as i64 + 1900,
-        mon as i64,
-        mday as i64,
-        hour as i64,
-        min as i64,
-        sec as i64 - dst_shift,
-    );
+    let mut mon0 = mon as i64;
+    let fields = (mday as i64, hour as i64, min as i64, sec as i64 - dst_shift);
+    let secs = if crate::cerrno::Lib::HOST == crate::cerrno::Lib::Ucrt {
+        let t = ucrt_mktime(year as i64, &mut mon0, fields);
+        if t.is_none() {
+            crate::cerrno::set(crate::cerrno::EINVAL);
+        }
+        t
+    } else {
+        mktime(
+            year as i64 + 1900,
+            mon0,
+            fields.0,
+            fields.1,
+            fields.2,
+            fields.3,
+        )
+    };
     // 5.3+ write the fields back before checking the result, as PUC does:
     // normalised when the time exists, as given when it overflows (yday and
     // wday are then left alone: PUC writes whatever its `struct tm` held)
@@ -191,7 +216,7 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             None => {
                 let given = [
                     year as i64 + 1900,
-                    mon as i64 + 1,
+                    mon0 + 1,
                     mday as i64,
                     hour as i64,
                     min as i64,
@@ -214,6 +239,35 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             "time result cannot be represented in this installation",
         )),
     }
+}
+
+/// The Universal CRT's `mktime` in a zone at UTC: `None` for a time
+/// before 1970 or after 3000 (checked on the year first, before and after
+/// the month is brought into range, which `mon0` keeps).
+fn ucrt_mktime(
+    tm_year: i64,
+    mon0: &mut i64,
+    (mday, hour, min, sec): (i64, i64, i64, i64),
+) -> Option<i64> {
+    const MAX_TIME: i64 = 0x7_9358_2AFF;
+    let in_range = |y: i64| (69..=1102).contains(&y);
+    let mut y = tm_year;
+    if !in_range(y) {
+        return None;
+    }
+    if !(0..=11).contains(mon0) {
+        y += *mon0 / 12;
+        *mon0 %= 12;
+        if *mon0 < 0 {
+            *mon0 += 12;
+            y -= 1;
+        }
+        if !in_range(y) {
+            return None;
+        }
+    }
+    let t = mktime(y + 1900, *mon0, mday, hour, min, sec)?;
+    (0..=MAX_TIME).contains(&t).then_some(t)
 }
 
 /// `l_checktime` (5.3+) or ≤5.2's `(time_t)luaL_checknumber`.

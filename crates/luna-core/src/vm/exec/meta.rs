@@ -1,121 +1,8 @@
 //! Metamethod lookup and the continuation plumbing for metamethod calls.
 
 use super::*;
-
-/// Outcome of an index/newindex/comparison fast path: either a directly
-/// computed result, or a metamethod (with the receiver it resolved against) the
-/// caller must invoke — synchronously (C context) or yieldably (VM opcode).
-pub(super) enum MmOut {
-    /// index → the looked-up value; newindex → done (raw set performed);
-    /// comparison → the boolean result already known
-    Done(Value),
-    /// a metamethod to call; `recv` is the chain element it was found on (the
-    /// extra args — key / value — are supplied by the caller)
-    Mm { func: Value, recv: Value },
-    /// ≤5.3 `a <= b` synthesised via `not __lt(b, a)` when neither operand
-    /// carries `__le` — `op_compare` swaps the args and negates the result.
-    /// Lives separate from `Mm` so the synth path can stay yieldable without
-    /// every other Mm caller learning a swap flag they would never set.
-    CompareSynth { func: Value },
-}
-
-/// Metamethod events; discriminants index `Vm::mm_names`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(usize)]
-pub(crate) enum Mm {
-    Index,
-    NewIndex,
-    Call,
-    ToString,
-    Metatable,
-    Name,
-    Eq,
-    Lt,
-    Le,
-    Concat,
-    Len,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-    Pow,
-    IDiv,
-    BAnd,
-    BOr,
-    BXor,
-    Shl,
-    Shr,
-    Unm,
-    BNot,
-    Close,
-    Gc,
-    Pairs,
-}
-
-// one absent bit per event in `Table::flags`, below the read-only bit
-const _: () = assert!(MM_NAMES.len() <= 31);
-
-pub(super) const MM_NAMES: [&str; 28] = [
-    "__index",
-    "__newindex",
-    "__call",
-    "__tostring",
-    "__metatable",
-    "__name",
-    "__eq",
-    "__lt",
-    "__le",
-    "__concat",
-    "__len",
-    "__add",
-    "__sub",
-    "__mul",
-    "__div",
-    "__mod",
-    "__pow",
-    "__idiv",
-    "__band",
-    "__bor",
-    "__bxor",
-    "__shl",
-    "__shr",
-    "__unm",
-    "__bnot",
-    "__close",
-    "__gc",
-    "__pairs",
-];
-
-/// The metamethod event an opcode dispatches, without the `__` prefix (PUC
-/// funcnamefromcode), for "(metamethod 'event')" call-error suffixes.
-pub(super) fn mm_event_name(op: crate::vm::isa::Op) -> Option<&'static str> {
-    use crate::vm::isa::Op;
-    Some(match op {
-        Op::Add => "add",
-        Op::Sub => "sub",
-        Op::Mul => "mul",
-        Op::Div => "div",
-        Op::Mod => "mod",
-        Op::Pow => "pow",
-        Op::IDiv => "idiv",
-        Op::BAnd => "band",
-        Op::BOr => "bor",
-        Op::BXor => "bxor",
-        Op::Shl => "shl",
-        Op::Shr => "shr",
-        Op::Unm => "unm",
-        Op::BNot => "bnot",
-        Op::Concat => "concat",
-        Op::Len => "len",
-        Op::GetField | Op::GetTable | Op::GetI | Op::SelfOp => "index",
-        Op::SetField | Op::SetTable | Op::SetI => "newindex",
-        Op::Eq | Op::EqK => "eq",
-        Op::Lt => "lt",
-        Op::Le => "le",
-        _ => return None,
-    })
-}
+mod mm;
+pub(crate) use mm::*;
 
 impl Vm {
     /// Call a metamethod with a single expected result.
@@ -126,6 +13,61 @@ impl Vm {
         } else {
             r.swap_remove(0)
         })
+    }
+
+    /// The level a call made while a message handler runs fails at with
+    /// "error in error handling" (see `ERRERR_C_DEPTH`).
+    pub(crate) fn errerr_c_depth(&self) -> u32 {
+        if self.version >= LuaVersion::Lua54 {
+            ERRERR_C_DEPTH
+        } else {
+            ERRERR_C_DEPTH_PRE54
+        }
+    }
+
+    /// PUC's check before a call that takes a C level (5.4
+    /// `luaE_checkcstack`, 5.1 `luaD_call`): the call that would run at
+    /// `MAX_C_DEPTH` fails with "C stack overflow", positioned when Lua
+    /// code made it; a message handler running on that error gets a tenth
+    /// more levels before "error in error handling". Whoever passes the
+    /// check takes the level (`c_depth` or `pcall_depth`).
+    #[inline(always)]
+    pub(crate) fn check_c_level(&mut self, positioned: bool) -> Result<(), LuaError> {
+        if self.g.nccalls + 1 < MAX_C_DEPTH {
+            return Ok(());
+        }
+        self.c_level_overflow(positioned)
+    }
+
+    /// [`Vm::check_c_level`] at the limit.
+    #[cold]
+    #[inline(never)]
+    fn c_level_overflow(&mut self, positioned: bool) -> Result<(), LuaError> {
+        let next = self.g.nccalls + 1;
+        if next == MAX_C_DEPTH || self.msgh_depth == 0 {
+            let e = if positioned {
+                self.runerror("C stack overflow")
+            } else {
+                self.plain_err("C stack overflow")
+            };
+            // the refused call keeps its level while its handler runs
+            self.c_overflow_err = Some(e.0);
+            return Err(e);
+        }
+        if next >= self.errerr_c_depth() {
+            return Err(LuaError(self.errerr()));
+        }
+        Ok(())
+    }
+
+    /// Count a metamethod, `__pairs` or `__close` call as PUC counts the C
+    /// call it makes. The caller pushes the continuation that holds the
+    /// level.
+    pub(super) fn enter_c_level(&mut self, positioned: bool) -> Result<(), LuaError> {
+        self.check_c_level(positioned)?;
+        self.g.nccalls += 1;
+        self.g.meta_conts += 1;
+        Ok(())
     }
 
     /// Begin a *yieldable* metamethod call from a VM instruction: `func(args…)`
@@ -144,17 +86,27 @@ impl Vm {
         args: &[Value],
         action: MetaAction,
     ) -> Result<(), LuaError> {
+        self.enter_c_level(true)?;
         let saved_top = self.top;
-        let cont_slot = self.stack.len() as u32;
-        self.stack.push_or_abort(func);
-        self.stack.extend_from_slice_or_abort(args);
-        self.top = self.stack.len() as u32;
+        let saved_len = self.stack.len() as u32;
+        // PUC calls it at `L->top`: the frame's whole window, or for a
+        // concatenation the top of the operands left
+        let cont_slot = match action {
+            MetaAction::Concat { .. } => self.top,
+            _ => self.lua_window_end(),
+        };
+        self.place_call(cont_slot, func, args);
+        self.top = cont_slot + 1 + args.len() as u32;
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
             &mut self.trap,
             CallFrame::Cont(NativeCont {
-                kind: ContKind::Meta(MetaCont { action, saved_top }),
+                kind: ContKind::Meta(MetaCont {
+                    action,
+                    saved_top,
+                    saved_len,
+                }),
                 func_slot: cont_slot,
                 nresults: 1,
             }),
@@ -216,10 +168,10 @@ impl Vm {
                 };
                 self.cond_skip(t, k);
             }
-            MetaAction::Concat { dst, base_a } => {
+            MetaAction::Concat { dst, base_a, out } => {
                 self.stack[dst as usize] = result;
                 self.top = dst + 1;
-                self.concat_run(base_a)?;
+                self.concat_run(base_a, (base_a as i64 + out as i64) as u32)?;
             }
         }
         Ok(())

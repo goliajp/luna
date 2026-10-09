@@ -108,19 +108,20 @@ fn sandbox_host_callback_registered() {
 }
 
 #[test]
-fn sandbox_jit_disabled_meters_counted_for() {
-    // Without `set_jit_enabled(false)` the JIT compiles counted-for to
-    // native Cranelift IR that does not tick instr_budget — the host must
-    // disable JIT so a malicious `for i=1,1e18 do end` is bounded.
-    let mut vm = sandbox_51();
-    vm.set_jit_enabled(false);
-    vm.set_instr_budget(Some(50_000));
-    let err = run(&mut vm, b"for i = 1, 1000000000 do end").unwrap_err();
-    let msg = vm.error_text(&err);
-    assert!(
-        msg.contains("instruction budget exceeded"),
-        "JIT-bypass: expected budget exceeded, got: {msg}"
-    );
+fn sandbox_budget_meters_counted_for_with_the_jit_on() {
+    // compiled code does not tick instr_budget; with a budget armed the
+    // JIT is not entered, so `for i=1,1e18 do end` is bounded either way
+    for jit in [true, false] {
+        let mut vm = sandbox_51();
+        vm.set_jit_enabled(jit);
+        vm.set_instr_budget(Some(50_000));
+        let err = run(&mut vm, b"for i = 1, 1000000000 do end").unwrap_err();
+        let msg = vm.error_text(&err);
+        assert!(
+            msg.contains("instruction budget exceeded"),
+            "jit {jit}: expected budget exceeded, got: {msg}"
+        );
+    }
 }
 
 #[test]
@@ -169,22 +170,22 @@ fn sandbox_error_traceback_exposed() {
 }
 
 #[test]
-fn sandbox_budget_clears_after_exhaustion() {
-    // The dispatcher's `instr_budget` is cleared to `None` after firing
-    // once (see `Vm::run`'s `self.instr_budget = None;` on exhaustion),
-    // so the next call against the same Vm with NO new budget runs
-    // freely. Embedders are expected to call `set_instr_budget` again
-    // per request — the host resets it on each invocation.
+fn sandbox_budget_stays_exhausted_until_rearmed() {
+    // An exhausted budget stays at zero: the next call against the same
+    // Vm raises at its first instruction, until the host arms a new one.
     let mut vm = sandbox_51();
     vm.set_instr_budget(Some(50));
     let err = run(&mut vm, b"while true do end").unwrap_err();
     assert!(vm.error_text(&err).contains("instruction budget exceeded"));
-    // After firing, the budget is cleared — a fresh call runs free.
+    assert_eq!(vm.instr_budget_remaining(), Some(0));
+    let err = run(&mut vm, b"return 1").unwrap_err();
+    assert!(vm.error_text(&err).contains("instruction budget exceeded"));
+    vm.set_instr_budget(Some(50_000));
     let r = run(
         &mut vm,
         b"local s = 0; for i = 1, 100 do s = s + i end; return s",
     )
-    .expect("clean run after budget clear");
+    .expect("clean run after a new budget");
     // 5.1 has no Int subtype — sum is a Float.
     match r.first() {
         Some(&Value::Float(f)) if (f - 5050.0).abs() < 1e-9 => {}

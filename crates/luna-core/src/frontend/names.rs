@@ -4,6 +4,8 @@
 //! numbers and the compiler compares them. The bytes live back to back in
 //! one buffer owned by the chunk.
 
+use crate::runtime::mem::{LVec, MemRef};
+
 /// An interned identifier or string literal: an index into [`Names`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, PartialOrd, Ord)]
 pub struct Sym(
@@ -12,19 +14,24 @@ pub struct Sym(
 );
 
 /// The identifiers and string literals of one chunk.
-#[derive(Clone, Debug, Default)]
 pub struct Names {
     /// every entry back to back
-    text: Vec<u8>,
+    text: LVec<u8>,
     /// where each entry starts in `text`; the last element is the end.
     /// The top bit of an entry's end is set when the entry is not UTF-8
-    ends: Vec<u32>,
+    ends: LVec<u32>,
     /// open addressing over entry numbers plus one (0 is empty); its length
     /// is a power of two, at most half full. Long literals are not entered:
     /// hashing them costs more than the duplicate they might save
-    table: Vec<u32>,
+    table: LVec<u32>,
     /// entries in `table`
     hashed: u32,
+}
+
+impl std::fmt::Debug for Names {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Names").field("len", &self.len()).finish()
+    }
 }
 
 /// Literals longer than this are stored without looking for an equal one.
@@ -34,35 +41,47 @@ const MAX_HASHED_LEN: usize = 40;
 const NOT_TEXT: u32 = 1 << 31;
 
 impl Names {
-    /// An empty set sized for a chunk of `src_len` source bytes.
-    pub fn with_capacity(src_len: usize) -> Names {
-        // about one distinct identifier per 32 source bytes
-        let n = (src_len / 32).max(8);
-        let mut ends = Vec::with_capacity(n + 1);
-        ends.push(0);
+    /// An empty set with nothing allocated yet, on `mem`.
+    pub fn new(mem: MemRef) -> Names {
         Names {
-            text: Vec::with_capacity(n * 6),
-            ends,
-            table: vec![0; (2 * n).next_power_of_two()],
+            text: LVec::new(mem),
+            ends: LVec::new(mem),
+            table: LVec::new(mem),
             hashed: 0,
         }
+    }
+
+    /// An empty set sized for a chunk of `src_len` source bytes, on `mem`.
+    pub fn with_capacity(mem: MemRef, src_len: usize) -> Names {
+        Names::new(mem).reuse(src_len)
     }
 
     /// These buffers emptied for a chunk of `src_len` bytes, keeping what
     /// they have allocated.
     pub(crate) fn reuse(mut self, src_len: usize) -> Names {
-        if self.ends.capacity() == 0 {
-            return Names::with_capacity(src_len);
-        }
+        // about one distinct identifier per 32 source bytes
         let n = (src_len / 32).max(8);
         let len = (2 * n).next_power_of_two();
         self.text.clear();
         self.ends.clear();
-        self.ends.push(0);
         self.table.clear();
-        self.table.resize(len, 0);
         self.hashed = 0;
+        self.text.reserve_or_abort(n * 6);
+        self.ends.reserve_or_abort(n + 1);
+        self.ends.push_or_abort(0);
+        self.table.resize_or_abort(len, 0);
         self
+    }
+
+    /// The handle the set allocates through.
+    pub(crate) fn mem(&self) -> MemRef {
+        self.text.mem()
+    }
+
+    /// An empty set on the same context, leaving this one empty with
+    /// nothing allocated.
+    pub(crate) fn take(&mut self) -> Names {
+        std::mem::replace(self, Names::new(self.text.mem()))
     }
 
     fn hash(s: &[u8]) -> u32 {
@@ -77,7 +96,7 @@ impl Names {
     /// The number of `s`, giving it one when it is new.
     pub fn intern(&mut self, s: &[u8]) -> Sym {
         if self.ends.is_empty() {
-            *self = Names::with_capacity(0);
+            *self = Names::new(self.text.mem()).reuse(0);
         }
         if s.len() > MAX_HASHED_LEN {
             return self.append(s);
@@ -107,7 +126,7 @@ impl Names {
 
     fn append(&mut self, s: &[u8]) -> Sym {
         let sym = Sym(self.ends.len() as u32 - 1);
-        self.text.extend_from_slice(s);
+        self.text.extend_from_slice_or_abort(s);
         assert!(
             self.text.len() < NOT_TEXT as usize,
             "names of a chunk past 2 GiB"
@@ -117,13 +136,14 @@ impl Names {
         } else {
             NOT_TEXT
         };
-        self.ends.push(self.text.len() as u32 | flag);
+        self.ends.push_or_abort(self.text.len() as u32 | flag);
         sym
     }
 
     fn grow(&mut self) {
         let len = self.table.len() * 2;
-        let mut table = vec![0; len];
+        let mut table = LVec::with_capacity_or_abort(self.table.mem(), len);
+        table.resize_or_abort(len, 0);
         for s in 0..self.ends.len() as u32 - 1 {
             let b = self.bytes(Sym(s));
             if b.len() > MAX_HASHED_LEN {
@@ -169,10 +189,12 @@ impl Names {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::mem::MemOwner;
 
     #[test]
     fn same_text_same_number() {
-        let mut n = Names::with_capacity(0);
+        let o = MemOwner::system();
+        let mut n = Names::with_capacity(o.mem(), 0);
         let words: Vec<String> = (0..200).map(|i| format!("v{}", i % 70)).collect();
         let syms: Vec<Sym> = words.iter().map(|w| n.intern(w.as_bytes())).collect();
         for (w, s) in words.iter().zip(&syms) {
@@ -187,7 +209,8 @@ mod tests {
 
     #[test]
     fn long_literals_are_kept_apart() {
-        let mut n = Names::with_capacity(0);
+        let o = MemOwner::system();
+        let mut n = Names::with_capacity(o.mem(), 0);
         let long = vec![b'x'; 100];
         let a = n.intern(&long);
         let b = n.intern(&long);

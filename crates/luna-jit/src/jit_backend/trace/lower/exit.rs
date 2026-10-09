@@ -37,15 +37,25 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
         .map_or(pc, |f| record.ops[f.start_idx].pc);
     if !lw.call_chain.is_empty() {
         let head_resume_pc = lw.call_chain[0].pc;
+        // each chain entry holds the pc its caller resumes at: a rebuilt
+        // frame resumes after its own call into the next frame, the
+        // innermost at the exit
         let mut snapshot: Vec<FrameMaterializeInfo> = lw.call_chain.clone();
-        if let Some(last) = snapshot.last_mut() {
-            last.pc = side_exit_pc;
+        let n = snapshot.len();
+        for k in 0..n {
+            snapshot[k].pc = lw.call_chain.get(k + 1).map_or(side_exit_pc, |c| c.pc);
         }
         let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
         let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
         let chain_len = chain_rc.len() as i64;
         let site_idx = lw.per_exit_inline_vec.len() as u32;
-        let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds.clone();
+        let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds[..window_size_us].to_vec();
+        // the slots the op's virtual registers stand in keep their kinds
+        for &(slot, kind) in &lw.virt_held {
+            if let Some(k) = kinds_snapshot.get_mut(slot) {
+                *k = kind;
+            }
+        }
         let mat_count = emit_materialize_live_sunk(
             &mut lw.bcx,
             mat_sunk_id,
@@ -130,7 +140,8 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
 
 /// The closure of each frame of `chain`, in a stack buffer for the
 /// frame-materialise helper: the value the caller called, in its R[A],
-/// one below the callee's window (the callee never writes below its base).
+/// below the callee's extra arguments and window (the callee never writes
+/// below its base).
 fn emit_frame_closures<E: Emit>(lw: &mut Lower<E>, chain: &[FrameMaterializeInfo]) -> Value {
     let ss = lw
         .bcx
@@ -140,7 +151,9 @@ fn emit_frame_closures<E: Emit>(lw: &mut Lower<E>, chain: &[FrameMaterializeInfo
             3,
         ));
     for (k, f) in chain.iter().enumerate() {
-        let cl = lw.bcx.use_var(lw.regs_full[f.base_offset as usize - 1]);
+        let cl = lw
+            .bcx
+            .use_var(lw.regs_full[(f.base_offset - f.n_varargs) as usize - 1]);
         lw.bcx.ins().stack_store(types::I64, cl, ss, 8 * k as i32);
     }
     lw.bcx.ins().stack_addr(types::I64, ss, 0)

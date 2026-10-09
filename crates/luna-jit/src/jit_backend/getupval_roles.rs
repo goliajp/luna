@@ -91,6 +91,7 @@ fn writes_register_a(ins: Inst, target_a: usize) -> bool {
         | Op::LoadKx
         | Op::LoadFalse
         | Op::LFalseSkip
+        | Op::LTrueSkip
         | Op::LoadTrue
         | Op::Move
         | Op::Add
@@ -109,7 +110,6 @@ fn writes_register_a(ins: Inst, target_a: usize) -> bool {
         | Op::BNot
         | Op::Not
         | Op::Len
-        | Op::Concat
         | Op::Call
         | Op::GetUpval
         | Op::GetTabUp
@@ -118,8 +118,15 @@ fn writes_register_a(ins: Inst, target_a: usize) -> bool {
         | Op::GetField
         | Op::NewTable
         | Op::SelfOp => a == target_a,
+        Op::Concat => {
+            let (first, out) = ins.concat_operands();
+            target_a == first as usize || target_a == out as usize
+        }
         Op::LoadNil => target_a >= a && target_a <= a + ins.b() as usize,
-        Op::ForPrep | Op::ForLoop => target_a >= a && target_a <= a + 3,
+        Op::ForPrep | Op::ForLoop | Op::ForPrep55 | Op::ForLoop55 => {
+            let var = ins.op().for_layout().map_or(0, |l| l.var()) as usize;
+            target_a >= a && target_a <= a + var
+        }
         _ => false,
     }
 }

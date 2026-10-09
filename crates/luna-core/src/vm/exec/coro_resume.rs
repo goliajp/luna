@@ -4,83 +4,7 @@
 use super::*;
 use crate::runtime::mem::LVec;
 
-/// A thread's swapped-out execution context (PUC per-thread stack state).
-pub(super) struct SavedCtx {
-    pub(super) stack: LVec<Value>,
-    pub(super) frames: LVec<CallFrame>,
-    pub(super) open_upvals: LVec<(u32, Gc<Upvalue>)>,
-    pub(super) tbc: LVec<u32>,
-    pub(super) top: u32,
-    pub(super) pcall_depth: u32,
-    pub(super) hook: HookState,
-    /// PUC `L->l_gt` — the thread's own globals table. Carried alongside
-    /// the rest of the suspended state so each thread can keep its own
-    /// `setfenv(0, env)` rewire without the swap leaking into another
-    /// thread (5.1 closure.lua :177).
-    pub(super) globals: Gc<Table>,
-}
-
 impl Vm {
-    pub(super) fn take_ctx(&mut self) -> SavedCtx {
-        let saved = SavedCtx {
-            stack: self.stack.take(),
-            frames: self.frames.take(),
-            open_upvals: self.open_upvals.take(),
-            tbc: self.tbc.take(),
-            top: self.top,
-            pcall_depth: self.pcall_depth,
-            hook: self.hook,
-            globals: self.globals,
-        };
-        self.frames_resync(); // frames now empty
-        saved
-    }
-
-    pub(super) fn put_ctx(&mut self, c: SavedCtx) {
-        self.stack = c.stack;
-        self.frames = c.frames;
-        self.open_upvals = c.open_upvals;
-        self.tbc = c.tbc;
-        self.top = c.top;
-        self.pcall_depth = c.pcall_depth;
-        self.hook = c.hook;
-        self.globals = c.globals;
-        self.frames_resync(); // sync shadow to new Vec
-    }
-
-    /// Move a coroutine's saved context into the live VM fields.
-    pub(super) fn load_coro_ctx(&mut self, co: Gc<Coro>) {
-        // SAFETY: `co` is the coroutine `resume_coro` is switching to (or its resumer `r`), which the caller holds and which is a root through `self.current` or a saved stack; `m` is the only reference into it until the function returns, and nothing here can collect
-        let m = unsafe { co.as_mut() };
-        self.stack = m.stack.take();
-        self.frames = m.frames.take();
-        self.open_upvals = m.open_upvals.take();
-        self.tbc = m.tbc.take();
-        self.top = m.top;
-        self.frames_resync(); // sync shadow to coro's frames
-        self.pcall_depth = m.pcall_depth;
-        self.hook = m.hook;
-        self.globals = m.globals;
-    }
-
-    /// Save the live VM context back into a coroutine object.
-    pub(super) fn store_coro_ctx(&mut self, co: Gc<Coro>) {
-        let c = self.take_ctx();
-        // SAFETY: `co` is the coroutine `resume_coro` is switching away from, held by its caller; `take_ctx` above did not touch it, and `m` is the only reference into it until the barrier call, which takes only its address
-        let m = unsafe { co.as_mut() };
-        m.stack = c.stack;
-        m.frames = c.frames;
-        m.open_upvals = c.open_upvals;
-        m.tbc = c.tbc;
-        m.top = c.top;
-        m.pcall_depth = c.pcall_depth;
-        m.hook = c.hook;
-        m.globals = c.globals;
-        // bulk-overwrite of every collectable field traced by Coro::trace:
-        // demote the coro back to gray so propagate re-traces its new state.
-        self.heap.barrier_back(co);
-    }
-
     /// `coroutine.resume` core: drive `co` with `args` until it yields, returns
     /// or errors. Ok(values) carries yielded or returned values; Err carries an
     /// error raised inside the coroutine (the coroutine becomes dead).
@@ -95,10 +19,15 @@ impl Vm {
             CoroStatus::Dead => return Err(self.plain_err("cannot resume dead coroutine")),
             _ => return Err(self.plain_err("cannot resume non-suspended coroutine")),
         }
-        if self.c_depth >= MAX_C_DEPTH {
+        // PUC `lua_resume` refuses when the resumer's count has reached the
+        // limit (5.1), or would with the resume (5.2 on)
+        let reached = self.g.nccalls + u32::from(self.version >= LuaVersion::Lua52);
+        if reached >= MAX_C_DEPTH || native_stack::is_low(native_stack::RESERVE) {
             return Err(self.plain_err("C stack overflow"));
         }
-        self.c_depth += 1;
+        // the coroutine runs from the resumer's count, plus the resume
+        let nccalls = self.g.nccalls;
+        self.g.nccalls += 1;
         let special_before = self.special_errors();
         let resumer = self.current;
         // save the resumer's live context away
@@ -112,7 +41,10 @@ impl Vm {
                 m.open_upvals = rctx.open_upvals;
                 m.tbc = rctx.tbc;
                 m.top = rctx.top;
-                m.pcall_depth = rctx.pcall_depth;
+                m.meta_conts = rctx.meta_conts;
+                m.stale_frames = rctx.stale_frames;
+                m.stack_extra = rctx.stack_extra;
+                m.frame_size = rctx.frame_size;
                 m.globals = rctx.globals;
                 m.status = CoroStatus::Normal;
                 m.natives = self.natives_base..self.running_natives.len();
@@ -122,8 +54,9 @@ impl Vm {
             }
             None => self.main_ctx = Some(rctx),
         }
-        // swap the coroutine in
         self.load_coro_ctx(co);
+        // the continuations it was suspended in hold no level now
+        self.g.stale_frames = self.frames.len() as u32;
         {
             // SAFETY: `co` is the argument being resumed, held by the caller (a stack slot or native argument) and about to become `self.current`; `load_coro_ctx`'s borrow has ended, so `m` is the only one
             let m = unsafe { co.as_mut() };
@@ -241,7 +174,7 @@ impl Vm {
                 self.current = None;
             }
         }
-        self.c_depth -= 1;
+        self.g.nccalls = nccalls;
         outcome
     }
 
@@ -309,13 +242,14 @@ impl Vm {
         if !host_cont {
             // the yield is a level of its own while its return hook runs
             if let Some(nc) = yielder {
-                self.running_natives.push(crate::vm::callstack::NativeAct {
-                    nc,
-                    func_slot: fslot,
-                    nargs: 0,
-                    depth: self.frames.len() as u32,
-                    ccmt: 0,
-                });
+                self.running_natives
+                    .push_or_abort(crate::vm::callstack::NativeAct::new(
+                        nc,
+                        fslot,
+                        0,
+                        self.frames.len(),
+                        0,
+                    ));
             }
             let r = self.hook_return(true, 1, n);
             if yielder.is_some() {

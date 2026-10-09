@@ -416,9 +416,7 @@ pub(crate) fn define<M: Module>(
         ctx.set_disasm(true);
     }
     crate::jit_backend::trace::reloc::set_values(relocs);
-    module.define_function(fn_id, &mut ctx).ok()?;
-    crate::jit_backend::trace::code_dump::note_size(&ctx);
-    crate::jit_backend::trace::reloc::note_sites(&*module, &ctx);
+    crate::jit_backend::trace::reloc::define_aligned(&mut *module, fn_id, &mut ctx)?;
     if asm_dump && let Some(vcode) = ctx.compiled_code().and_then(|c| c.vcode.as_ref()) {
         eprintln!("=== TRACE ASM DUMP (from baseline) ===\n{vcode}\n=== END ===");
     }

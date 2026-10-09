@@ -158,6 +158,9 @@ impl Vm {
                 unsafe { entry_fn(reg_state.as_mut_ptr()) }
             };
             self.jit.counters.dispatched += 1;
+            if ct.inline_kinds != 0 {
+                self.count_inline_kinds(ct.inline_kinds);
+            }
 
             if self.jit.pending_err.is_some() {
                 self.jit.pending_err = None;
@@ -168,7 +171,7 @@ impl Vm {
                 // writes are discarded; interp re-executes from
                 // the original `pc`.
                 while self.frames.len() > pre_frames {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+                    self.pop_frame();
                 }
                 if is_downrec_entry {
                     // pending_err observed
@@ -189,7 +192,6 @@ impl Vm {
             } else {
                 self.trace_exit_restore(
                     cl,
-                    pc,
                     base,
                     &ct,
                     continuation_pc,
@@ -224,12 +226,42 @@ impl Vm {
         reg_state: &mut [i64],
         checked_only: bool,
     ) -> bool {
+        // one loop per value of `checked_only`: tested once per slot, it
+        // cost two instructions on every register of every entry
+        if checked_only {
+            self.marshal_in_slots::<true>(
+                base_us,
+                max_stack,
+                compile_entry_tags,
+                entry_tags,
+                reg_state,
+            )
+        } else {
+            self.marshal_in_slots::<false>(
+                base_us,
+                max_stack,
+                compile_entry_tags,
+                entry_tags,
+                reg_state,
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn marshal_in_slots<const CHECKED_ONLY: bool>(
+        &self,
+        base_us: usize,
+        max_stack: usize,
+        compile_entry_tags: &[u8],
+        entry_tags: &mut [u8],
+        reg_state: &mut [i64],
+    ) -> bool {
         use crate::jit::trace::ENTRY_TAG_ANY;
         let frame = &self.stack[base_us..base_us + max_stack];
         let regs = &mut reg_state[..max_stack];
         let tags = &mut entry_tags[..max_stack];
         for i in 0..max_stack {
-            if checked_only && compile_entry_tags.get(i) == Some(&ENTRY_TAG_ANY) {
+            if CHECKED_ONLY && compile_entry_tags.get(i) == Some(&ENTRY_TAG_ANY) {
                 continue;
             }
             let (tag, payload) = frame[i].unpack();
@@ -248,19 +280,14 @@ impl Vm {
             // tags: on another, body ops would misread the raw bits (a Str
             // pointer as an Int payload). The interpreter runs this entry;
             // the trace stays for later ones. The payload of anything else
-            // cannot stand for the value.
-            use crate::runtime::value::raw;
-            if tag != want {
-                // a trace compiled for a boolean takes either value
-                if want != raw::FALSE || tag != raw::TRUE {
-                    return false;
+            // cannot stand for the value. A boolean, the one entry type
+            // two tags enter, is left to the out-of-line test, so that the
+            // common case costs one comparison and one bit test
+            if tag != want || crate::jit::trace::PLAIN_ENTRY_TAGS >> tag & 1 == 0 {
+                match bool_entry(want, tag) {
+                    Some(p) => regs[i] = p,
+                    None => return false,
                 }
-            } else if !crate::jit::trace::entry_tag_enterable(tag) {
-                return false;
-            }
-            if want == raw::FALSE {
-                // a boolean enters as payload 0 or 1
-                regs[i] = i64::from(tag - want);
             }
             tags[i] = tag;
         }
@@ -307,7 +334,7 @@ impl Vm {
         // tail, but a body side-exit before reaching
         // the tail may have via the materialize helper).
         while self.frames.len() > pre_frames {
-            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            self.pop_frame();
         }
     }
 
@@ -377,6 +404,21 @@ fn downrec_close_exit(continuation_pc: i64, head_pc_val: u32) -> bool {
 }
 
 impl Vm {
+    #[cold]
+    fn count_inline_kinds(&mut self, kinds: u8) {
+        for (b, n) in self
+            .jit
+            .counters
+            .inline_kind_dispatched
+            .iter_mut()
+            .enumerate()
+        {
+            if kinds & (1 << b) != 0 {
+                *n += 1;
+            }
+        }
+    }
+
     /// The entry to call for `ct`, counting the entry towards its move to
     /// the optimizing tier and making that move when it is due. `calls`:
     /// the head function's `call_hot_count` now.
@@ -444,4 +486,15 @@ impl Vm {
         }
         self.jit.counters.tiered_up += 1;
     }
+}
+
+/// The payload a register of tag `tag` enters a trace with whose entry tag
+/// for it is `want`, when `tag` is not the plain match of `want`: a trace
+/// compiled for a boolean takes either value, as payload 0 or 1. `None`:
+/// the register cannot enter.
+#[cold]
+#[inline(never)]
+fn bool_entry(want: u8, tag: u8) -> Option<i64> {
+    use crate::runtime::value::raw;
+    (want == raw::FALSE && (tag == raw::FALSE || tag == raw::TRUE)).then(|| i64::from(tag - want))
 }

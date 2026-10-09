@@ -75,6 +75,7 @@ pub(crate) fn verify_depth_invariant(items: &[(u8, bool)]) -> bool {
 pub(super) fn plain_trace_end(
     record: &TraceRecord,
     folded_ops: &[bool],
+    calls: &[Option<InlineCall>],
 ) -> Option<(usize, TraceEnd)> {
     let mut found: Option<(usize, TraceEnd)> = None;
     for (i, r) in record.ops.iter().enumerate() {
@@ -88,7 +89,7 @@ pub(super) fn plain_trace_end(
         }
         match r.inst.op() {
             Op::Call => {
-                if call_inlinable(record, i) {
+                if call_inlinable(record, calls, i) {
                     // Continue walking — Op::Call emits nothing in
                     // the inline path and op_offsets handles the
                     // window shift for the callee's subsequent ops.
@@ -101,7 +102,7 @@ pub(super) fn plain_trace_end(
                 }
                 break;
             }
-            Op::ForLoop => {
+            Op::ForLoop | Op::ForLoop55 => {
                 if depth == 0 {
                     found = Some((i, TraceEnd::ForLoop));
                 } else {
@@ -114,7 +115,7 @@ pub(super) fn plain_trace_end(
             // tail emit branches on `record.ops[idx].inst.op()`
             // to pick the right side-exit predicate (count>0 vs
             // R[A+4] tag check).
-            Op::TForLoop => {
+            Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => {
                 if depth == 0 {
                     found = Some((i, TraceEnd::ForLoop));
                 } else {
@@ -136,35 +137,36 @@ pub(super) fn plain_trace_end(
 }
 
 /// Whether the `Op::Call` at `i` is lowered inline: the recorder followed
-/// it into a Lua function (the next op is one level deeper) and the inline
-/// path can hold the call without a real frame, and the frame-materialise
-/// helper rebuild one at an exit inside the callee:
-///   - the caller wants 0 or 1 results (`C` = 1 or 2, or `C` = 0 when the
-///     callee returned exactly one value while recording): the callee's
-///     `Return0` / `Return1` writes the caller's R[A] or not
-///   - the argument count is fixed (`B` > 0): a missing parameter is
-///     written nil by the call, a surplus argument is not seen
-///   - the callee is not vararg: its frame would first move the arguments
-///     above the fixed parameters, which neither the inline path nor the
-///     helper does
+/// it into a Lua function (the next op is one level deeper) and
+/// [`inline_calls`] could lay out the callee's frame: the argument count
+/// is fixed or the recording fixes the stack top it comes from, the callee
+/// returns a count the recording fixes, and it does not need the
+/// arguments as a table. A vararg callee's extra arguments move below its
+/// registers as `push_frame` moves them, in the trace's registers and in
+/// the frames the frame-materialise helper rebuilds at an exit.
 ///
 /// Any other call ends the trace there, as a call the trace leaves to the
 /// interpreter.
-pub(super) fn call_inlinable(record: &TraceRecord, i: usize) -> bool {
-    let rop = &record.ops[i];
-    let depth = rop.inline_depth as usize;
-    let Some(next) = record.ops.get(i + 1) else {
-        return false;
-    };
-    let c = rop.inst.c();
-    next.inline_depth as usize == depth + 1
+pub(super) fn call_inlinable(record: &TraceRecord, calls: &[Option<InlineCall>], i: usize) -> bool {
+    let depth = record.ops[i].inline_depth as usize;
+    calls.get(i).copied().flatten().is_some()
+        && record
+            .ops
+            .get(i + 1)
+            .is_some_and(|next| next.inline_depth as usize == depth + 1)
         && depth < MAX_INLINE_DEPTH as usize
-        && (c == 1 || c == 2 || (c == 0 && rop.var_count == Some(1)))
-        && rop.inst.b() != 0
-        && !next.proto.is_vararg
 }
 
+#[cfg(test)]
 pub(super) fn compute_op_offsets(record: &TraceRecord) -> (Vec<u32>, Vec<Option<u8>>) {
+    compute_op_offsets_with(record, &inline_calls(record).0)
+}
+
+/// [`compute_op_offsets`] given the record's [`inline_calls`].
+pub(super) fn compute_op_offsets_with(
+    record: &TraceRecord,
+    calls: &[Option<InlineCall>],
+) -> (Vec<u32>, Vec<Option<u8>>) {
     let n = record.ops.len();
     let mut offsets = Vec::with_capacity(n);
     let mut enclosing_call_a = Vec::with_capacity(n);
@@ -191,7 +193,9 @@ pub(super) fn compute_op_offsets(record: &TraceRecord) -> (Vec<u32>, Vec<Option<
             );
             let caller_offset = offset_stack[offset_stack.len() - 1];
             let caller_a = caller.inst.a();
-            let new_offset = caller_offset + caller_a + 1;
+            // a vararg callee's extra arguments sit below its registers
+            let extras = calls[caller_idx].map_or(0, |c| c.n_varargs);
+            let new_offset = caller_offset + caller_a + 1 + extras;
             offset_stack.push(new_offset);
             // Lua register indices fit in u8 by VM design; this
             // cast is lossless for any valid bytecode.
@@ -293,137 +297,4 @@ pub(super) enum CmpDir {
     /// = the Jmp's target. Standard `while cond do` body-entry
     /// shape.
     SkippedJmp,
-}
-
-/// First filter on a recorded op: an op outside this set makes the
-/// lowerer return `None` and the recorder drops the trace. Admission is
-/// not compilation: the pre-emit pass of
-/// [`try_compile_trace_with_options`] still bails on operand kinds,
-/// register bounds and shapes it cannot lower (for example `GetTabUp` /
-/// `GetField` outside a math fold).
-///
-/// - `Move` copies the 8-byte payload whatever its type.
-/// - Arithmetic, bitwise and compare ops lower for the operand kinds
-///   recorded in the trace.
-/// - `Jmp` emits no IR: it is either consumed by the compare before it
-///   or the trailing back edge.
-/// - Table reads and writes go through the `luna_jit_table_*` helpers,
-///   or through the virtual slots of a site `escape_analyze` sank. A
-///   helper that meets a metatable reports it and the trace side-exits,
-///   so the interpreter runs the metamethod.
-/// - `Call`, `ForLoop`, `TForLoop` and returns end the trace (see
-///   [`TraceEnd`]), except self-recursive calls, which are inlined.
-pub(super) fn is_whitelisted_op(op: Op) -> bool {
-    matches!(
-        op,
-        Op::Move
-            | Op::Add
-            | Op::Sub
-            | Op::Mul
-            | Op::Div
-            | Op::Pow
-            | Op::IDiv
-            | Op::Mod
-            | Op::BAnd
-            | Op::BOr
-            | Op::BXor
-            | Op::Shl
-            | Op::Shr
-            | Op::Unm
-            | Op::BNot
-            | Op::Jmp
-            | Op::Lt
-            | Op::Le
-            | Op::Eq
-            | Op::EqK
-            | Op::NewTable
-            | Op::GetI
-            | Op::GetTable
-            | Op::SetI
-            | Op::SetTable
-            | Op::SetList
-            | Op::Len
-            | Op::Call
-            | Op::ForLoop
-            | Op::LoadI
-            | Op::LoadF
-            | Op::LoadK
-            // Op::LoadNil writes Nil to R[A..=A+B].
-            // Emit: iconst(0) + def_var per slot + current_kinds[slot]
-            // = RegKind::Nil. ExitTag::Nil carries the Nil
-            // through restore so non-Nil entry slots get repacked
-            // as Value::Nil rather than mis-typed.
-            | Op::LoadNil
-            // Op::Closure creates `R[A] := closure(proto[Bx])`.
-            // Emit: call `luna_jit_op_closure(bx)` (shared-upval path
-            // only; in_stack upvals bail compile in pre-emit). Result
-            // is the Gc<LuaClosure> raw payload; current_kinds =
-            // RegKind::Closure → ExitTag::Closure on side-exit restore.
-            | Op::Closure
-            // Op::Close closes open upvals at slot ≥ A.
-            // Emit: pre-Close spill of all live regs ≥ A, then
-            // call `luna_jit_op_close(a)` returning 0 (continue) or
-            // 1 (deopt). Deopt block writes store_back + returns
-            // close_pc so interp redoes the Op::Close. Helper's
-            // close_from is idempotent on the deopt path (open
-            // upvals already popped).
-            | Op::Close
-            // Op::GetUpval reads the trace head
-            // closure's upvals[idx] via the `luna_jit_upval_get`
-            // helper (the dispatcher's enter_jit pins JIT_CL).
-            | Op::GetUpval
-            // GetTabUp / GetField are admitted ONLY inside a math
-            // fold; the pre-emit pass enforces that gate via
-            // `folded_math[i]`.
-            | Op::GetTabUp
-            | Op::GetField
-            // Op::SetField writes `R[A][K[B]:string] = R[C]`.
-            // Helper-path emit calls luna_jit_table_set_field with the
-            // string key's Gc<LuaStr> raw ptr baked into IR.
-            | Op::SetField
-            // Op::Test gates `if x then ...` branches
-            // when x isn't a comparison. Followed by Op::Jmp (taken
-            // or skipped depending on R[A] truthiness vs K).
-            // Kind-known truthy/falsy via compile-time
-            // const fold (no IR — recorded direction is provably
-            // stable); RegKind::Unset bails compile.
-            | Op::Test
-            // Op::TestSet is `if R[B].truthy()==K
-            // then R[A]=R[B] else pc++`. Same kind-fold approach
-            // as Op::Test (truthy of R[B]); on test-pass branch
-            // (TookJmp recorded), emit a Move-style def_var
-            // R[A] = R[B].
-            | Op::TestSet
-            // generic-for ops. TForPrep is a forward
-            // pc-bump emitted before the body (head_pc = body_top,
-            // so recorder never actually sees TForPrep in record —
-            // whitelist only as a defensive arm). TForCall calls
-            // the iterator via `luna_jit_op_tforcall` helper.
-            // TForLoop terminates the trace at its back-edge,
-            // handled in the tail emit (same TraceEnd::ForLoop
-            // arm as Op::ForLoop, dispatch branches on inst.op()).
-            | Op::TForPrep
-            | Op::TForCall
-            | Op::TForLoop
-            // Op::Concat A B does an N-operand
-            // right-associative fold over `R[A..A+B-1]`, writing
-            // the resulting string to R[A]. Trace emit spills the
-            // operand window to vm.stack and calls
-            // `luna_jit_op_concat(A, B, roots)` helper which runs
-            // concat_run + detects/deopts on the __concat
-            // metamethod path. Helper-path equivalent to interp
-            // (perf wash); the perf wins live in the buffered string
-            // accumulator path.
-            | Op::Concat
-            // Op::SelfOp `R[A+1] := R[B]; R[A] := R[B][K[C]]`: a method
-            // lookup through the receiver's table-valued `__index` links
-            // (`luna_jit_op_self_checked`)
-            | Op::SelfOp
-            // booleans: `LFalseSkip` writes false and skips the next op,
-            // which the recording already did not follow
-            | Op::LoadFalse
-            | Op::LoadTrue
-            | Op::LFalseSkip
-            | Op::Not
-    )
 }

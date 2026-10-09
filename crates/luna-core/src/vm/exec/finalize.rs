@@ -124,16 +124,18 @@ impl Vm {
             return false;
         }
         if self.heap.gc_phase_is_pause() {
-            let (roots, extra) = self.gc_roots();
-            self.heap.gc_start_propagate(&roots, &extra);
+            let mut m = self.heap.gc_begin_propagate();
+            self.mark_roots(&mut m);
+            self.heap.stash_marker(m);
         }
         if self.heap.gc_phase_is_propagate() {
             if !self.heap.gc_step_propagate(budget) {
                 return false;
             }
             self.clear_dead_stack();
-            let (roots, extra) = self.gc_roots();
-            self.heap.gc_remark(&roots, &extra);
+            let mut m = self.heap.loan_marker();
+            self.mark_roots(&mut m);
+            self.heap.stash_marker(m);
             self.heap.gc_finish_atomic();
             // any __gc scheduled by atomic — run before sweep so a finalizer
             // re-registering `self` re-enters the next cycle, not this sweep

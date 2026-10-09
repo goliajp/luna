@@ -2,6 +2,8 @@ use super::*;
 
 /// Ops lowered through a helper or as plain moves and loads.
 pub(super) fn validate_body_op(
+    vconsts: &[VRegs],
+    i: usize,
     max_stack: usize,
     rop: &RecordedOp,
     op: Op,
@@ -11,7 +13,7 @@ pub(super) fn validate_body_op(
     c: usize,
 ) -> Option<()> {
     match op {
-        Op::TForPrep => {
+        Op::TForPrep | Op::TForPrep53 | Op::TForPrep55 => {
             // generic-for prep: forward `add_pc(bx)`
             // to the body-tail (TForCall). Recorder enters at
             // body_top = head_pc, AFTER TForPrep, so the record
@@ -23,12 +25,12 @@ pub(super) fn validate_body_op(
                 return None;
             }
         }
-        Op::TForCall => {
+        Op::TForCall | Op::TForCall53 | Op::TForCall55 => {
             // generic-for body tail. Calls iter
-            // via the `luna_jit_op_tforcall` helper. Bounds:
-            // helper accesses R[A..A+7] (gen/state/ctrl plus the
-            // generator-call window R[A+4..A+6] + space for the
-            // first two returns). Restrict to inline_depth = 0
+            // via the `luna_jit_op_tforcall` helper. Bounds: the
+            // helper grows the stack to R[A+6] for the generator-call
+            // window R[A+4..A+6] itself; the trace holds R[A..A+5],
+            // R[A+5] only when the frame has it. Restrict to inline_depth = 0
             // (helper reads vm.stack via the trace head's frame
             // base; inline frames aren't pushed during trace IR
             // execution). C field = nvars in [1, 250) per PUC.
@@ -38,7 +40,7 @@ pub(super) fn validate_body_op(
                     return None;
                 }
             }
-            if a + 6 >= max_stack {
+            if a + op.for_layout()?.var() as usize >= max_stack {
                 {
                     checkpoint("bail:cmp-dirs-body-other");
                     return None;
@@ -85,26 +87,18 @@ pub(super) fn validate_body_op(
             }
         }
         Op::SetField | Op::GetField => {
-            // validated above (Str const at K[B] or
-            // K[C] respectively); bounds-check the reg operands
-            // here.
-            if a >= max_stack {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            if matches!(op, Op::SetField) && c >= max_stack {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            if matches!(op, Op::GetField) && b >= max_stack {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
+            // validated above (Str const at K[B] or K[C] respectively);
+            // the table and the stored value may be the op's virtual
+            // registers
+            let oob =
+                |r: usize| r >= max_stack && virt_at(vconsts, i, r as u32, max_stack).is_none();
+            let bad = match op {
+                Op::SetField => oob(a) || oob(c),
+                _ => a >= max_stack || oob(b),
+            };
+            if bad {
+                checkpoint("bail:cmp-dirs-body-other");
+                return None;
             }
         }
         Op::Jmp => {
@@ -138,7 +132,7 @@ pub(super) fn validate_body_op(
                 }
             }
         }
-        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip => {
+        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip | Op::LTrueSkip => {
             if a >= max_stack {
                 checkpoint("bail:cmp-dirs-body-other");
                 return None;
@@ -159,203 +153,17 @@ pub(super) fn validate_body_op(
                 _ => return None,
             }
         }
-        Op::Close => {
-            // close open upvals at slot ≥ A.
-            // Limited to inline_depth=0 (helper reads vm.stack
-            // via the trace-head frame's base; inline frames aren't
-            // pushed). Bounds check on A.
+        Op::Close | Op::JmpClose | Op::JmpCloseBack => {
+            // close open upvals at slot ≥ A of the op's frame (the
+            // helper counts slots from the head frame, inlined frames
+            // included); a closing jump closes from A - 1
+            let a = if op == Op::Close { a } else { a - 1 };
             if a >= max_stack {
                 {
                     checkpoint("bail:cmp-dirs-body-other");
                     return None;
                 }
             }
-            if rop.inline_depth > 0 {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-        }
-        _ => unreachable!("routed by validate_op"),
-    }
-    Some(())
-}
-
-/// Closures, constants, arithmetic and `EqK`.
-pub(super) fn validate_value_op(
-    record: &TraceRecord,
-    vconsts: &[Option<VConst>],
-    head_proto: Gc<Proto>,
-    max_stack: usize,
-    effective_end: usize,
-    i: usize,
-    rop: &RecordedOp,
-    op: Op,
-    ins: Inst,
-    a: usize,
-    b: usize,
-    c: usize,
-    consumed_by_cmp: &mut [bool],
-) -> Option<()> {
-    let oob = |i: usize, r: u32| {
-        r as usize >= max_stack && !(r as usize == max_stack && vconst_at(vconsts, i).is_some())
-    };
-    match op {
-        Op::Closure => {
-            // R[A] := closure(proto.protos[Bx]).
-            // Shared-upval / 0-upval closures, plus in_stack
-            // upval support via per-upval pre-Closure
-            // spill (emit writes vm.stack[base + d.index] from
-            // regs[d.index] before calling op_closure helper).
-            //
-            // Restrictions:
-            // - depth = 0 only: spill writes vm.stack via the
-            //   trace-head frame's `base`; inline frames (depth>0)
-            //   aren't pushed during trace IR execution, so a
-            //   spill at depth>0 would target wrong slots.
-            // - Source slot must have a known RegKind (not Unset):
-            //   spill needs a tag to pack the i64 payload back to
-            //   a Value. Unset would mean trace never wrote the
-            //   slot AND entry_tags didn't snapshot it.
-            if a >= max_stack {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            if rop.inline_depth > 0 {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            let bx = ins.bx() as usize;
-            if bx >= head_proto.protos.len() {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            let inner = head_proto.protos[bx];
-            for d in inner.upvals.iter() {
-                if !d.in_stack {
-                    continue;
-                }
-                let src_idx = d.index as usize;
-                if src_idx >= max_stack {
-                    {
-                        checkpoint("bail:cmp-dirs-body-other");
-                        return None;
-                    }
-                }
-            }
-        }
-        Op::LoadK => {
-            // R[A] := proto.consts[Bx]: a number or a string (its
-            // pointer, the constant table keeping it alive)
-            if a >= max_stack {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            let bx = ins.bx() as usize;
-            if bx >= head_proto.consts.len() {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            if !matches!(
-                head_proto.consts[bx],
-                luna_core::runtime::Value::Int(_)
-                    | luna_core::runtime::Value::Float(_)
-                    | luna_core::runtime::Value::Str(_)
-            ) {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-        }
-        Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Pow => {
-            if a >= max_stack || oob(i, b as u32) || oob(i, c as u32) {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-        }
-        // 3-reg Int arith / bitwise ops — same bounds rules as
-        // Add/Sub/Mul. Operand-type assumed Int (recorder is
-        // trusted); Float / mixed paths would need RegKind
-        // tracking like the method JIT.
-        Op::IDiv | Op::Mod | Op::BAnd | Op::BOr | Op::BXor | Op::Shl | Op::Shr => {
-            if a >= max_stack || oob(i, b as u32) || oob(i, c as u32) {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-        }
-        // 2-reg unary: `R[A] := op R[B]` — Unm (negation),
-        // BNot (bitwise NOT).
-        Op::Unm | Op::BNot => {
-            if a >= max_stack || b >= max_stack {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-        }
-        // `if (R[A] == const[B]) ~= K then pc++` — same
-        // cmp-then-Jmp shape as Lt/Le/Eq. Const RHS is either
-        // an Int (icmp eq) or a Float (fcmp eq).
-        Op::EqK => {
-            if a >= max_stack {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            let bx = ins.b() as usize;
-            if bx >= head_proto.consts.len() {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            // a short string is interned: equal ones are one object
-            let comparable = match head_proto.consts[bx] {
-                luna_core::runtime::Value::Int(_)
-                | luna_core::runtime::Value::Float(_)
-                | luna_core::runtime::Value::Bool(_) => true,
-                luna_core::runtime::Value::Str(k) => {
-                    k.len() <= luna_core::runtime::string::MAX_SHORT_LEN
-                }
-                _ => false,
-            };
-            if !comparable {
-                checkpoint("bail:cmp-dirs-body-other");
-                return None;
-            }
-            // EqK pairs with the same trailing Jmp at
-            // cmp_pc + 1 contract as Lt/Le/Eq.
-            if i + 1 >= effective_end {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            let next = &record.ops[i + 1];
-            if !matches!(next.inst.op(), Op::Jmp) || next.pc != rop.pc + 1 {
-                {
-                    checkpoint("bail:cmp-dirs-body-other");
-                    return None;
-                }
-            }
-            consumed_by_cmp[i + 1] = true;
         }
         _ => unreachable!("routed by validate_op"),
     }

@@ -51,6 +51,8 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     };
     let (ar, activelines) = match level {
         None => {
+            // the options with '>' prepended stay pushed
+            vm.native_push(1);
             let ar = vm.function_ar(subject);
             let lines = activelines(vm, subject);
             (ar, lines)
@@ -88,8 +90,19 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
             }
         }
     };
+    // ≤5.3 do not refuse the '>' that asks for the function on top of the
+    // stack: with a level, `lua_getinfo` pops the last argument as that
+    // function and describes it as a C function
+    let popped = v <= LuaVersion::Lua53 && level.is_some() && options.first() == Some(&b'>');
+    let (ar, activelines, checked) = if popped {
+        vm.native_pop(1);
+        let f = a.get(vm, nargs - 1);
+        (popped_ar(f), Value::Nil, &options[1..])
+    } else {
+        (ar, activelines, &options[..])
+    };
     let allowed = valid_options(v);
-    if options.iter().any(|c| !allowed.contains(c)) {
+    if checked.iter().any(|c| !allowed.contains(c)) {
         return Err(arg_error(vm, arg + 2, "invalid option"));
     }
     let t = info_table(vm, &options, &ar, activelines);
@@ -175,5 +188,27 @@ fn cstr(b: &[u8]) -> &[u8] {
     match b.iter().position(|&c| c == 0) {
         Some(n) => &b[..n],
         None => b,
+    }
+}
+
+/// What ≤5.3's `lua_getinfo` reports for a value that is not a Lua
+/// function: a C function with no upvalues.
+fn popped_ar(f: Value) -> crate::vm::callstack::Ar {
+    crate::vm::callstack::Ar {
+        what: "C",
+        source: b"=[C]".to_vec(),
+        short_src: b"[C]".to_vec(),
+        linedefined: -1,
+        lastlinedefined: -1,
+        currentline: -1,
+        name: None,
+        istailcall: false,
+        extraargs: 0,
+        ftransfer: 0,
+        ntransfer: 0,
+        nups: 0,
+        nparams: 0,
+        isvararg: true,
+        func: f,
     }
 }
