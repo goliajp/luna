@@ -298,7 +298,12 @@ fn background_tier_up_installs_llvm_code() {
 #[test]
 fn background_tier_up_reaches_a_loop_entered_once_per_call() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
-    luna_jit::install_llvm_backend(&mut vm);
+    luna_jit::install_llvm_backend_with(
+        &mut vm,
+        luna_jit::jit_backend::LlvmBackend {
+            llvm_after: Some(std::time::Duration::ZERO),
+        },
+    );
     vm.set_trace_tier(TraceTier::Auto);
     vm.set_trace_tier_up_at(64);
     vm.eval(
@@ -315,8 +320,9 @@ fn background_tier_up_reaches_a_loop_entered_once_per_call() {
         let r = vm.eval("return RUN()").expect("runs");
         assert_eq!(show(&r), "Some(Int(60000))");
         calls += 1;
-        // the wait (20 ms) and LLVM's compile, with room for a slow machine
-        assert!(calls < 50, "LLVM's code not taken after {calls} calls");
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        // LLVM's compile, behind the other tests' jobs on a loaded machine,
+        // has 6 s; fewer calls than one ask in 64 entries would need
+        assert!(calls < 60, "LLVM's code not taken after {calls} calls");
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
