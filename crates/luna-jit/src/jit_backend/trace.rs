@@ -56,7 +56,7 @@ mod llvm_tier;
 #[cfg(feature = "llvm-jit")]
 pub use llvm_tier::llvm_codegen_count;
 #[cfg(feature = "llvm-jit")]
-pub(crate) use llvm_tier::{quiesce as llvm_quiesce, tier_up_llvm};
+pub(crate) use llvm_tier::tier_up_llvm;
 pub(crate) mod reloc;
 mod share;
 pub(crate) mod share_failures;

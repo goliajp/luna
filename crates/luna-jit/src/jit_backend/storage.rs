@@ -51,6 +51,13 @@ pub(crate) struct CraneliftJitStorage {
     /// traces its optimizing tier compiled.
     #[cfg(feature = "llvm-jit")]
     pub(crate) llvm: Option<luna_jit_llvm::LlvmJitStorage>,
+    /// With the LLVM backend: the jobs it gave the compile thread.
+    #[cfg(feature = "llvm-jit")]
+    pub(crate) llvm_tickets: Vec<super::llvm_thread::Ticket>,
+    /// With the LLVM backend: the method JIT's functions that run
+    /// Cranelift's code until LLVM's is ready.
+    #[cfg(feature = "llvm-jit")]
+    pub(crate) llvm_chunks: super::llvm_chunk::Chunks,
 }
 
 impl CraneliftJitStorage {
@@ -98,9 +105,7 @@ impl JitStorage for CraneliftJitStorage {
 
     unsafe fn release_code(&mut self, vm: u64) {
         #[cfg(feature = "llvm-jit")]
-        if self.llvm.is_some() {
-            super::trace::llvm_quiesce();
-        }
+        super::llvm_thread::cancel_and_wait(&self.llvm_tickets);
         if self.shared || self.owner != Some(vm) {
             return;
         }

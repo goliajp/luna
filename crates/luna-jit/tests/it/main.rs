@@ -53,6 +53,8 @@ mod jit_table_const_operands;
 mod jit_trait_boundary;
 mod jit_vm_scoped_rebind;
 #[cfg(feature = "llvm-jit")]
+mod llvm_method_jit;
+#[cfg(feature = "llvm-jit")]
 mod llvm_traces;
 mod lua_facade;
 mod materialize_frames_counter;

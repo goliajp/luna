@@ -3,7 +3,6 @@
 use crate::operands::{Operand, int_arith, is_arith};
 use inkwell::context::Context;
 use inkwell::values::{FunctionValue, PointerValue};
-use luna_core::runtime::Value;
 use luna_core::vm::isa::{Inst, Op};
 use std::collections::HashMap;
 
@@ -33,6 +32,13 @@ pub(super) struct ComputeEmitter<'ctx, 'a> {
     pub(super) helpers: &'a HashMap<&'static str, FunctionValue<'ctx>>,
     /// `luna_jit_helpers::self_call_desc` of this chunk's self calls
     pub(super) self_call_desc: i64,
+    /// The body can park a deopt of its own (see `compute::may_park`).
+    pub(super) may_park: bool,
+    /// The body jumps backwards somewhere.
+    pub(super) has_loop: bool,
+    /// `llvm.read_register.i64`, which reads the stack pointer for the
+    /// self-call guard.
+    pub(super) read_register: FunctionValue<'ctx>,
 }
 
 impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
@@ -124,7 +130,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
     /// produces a non-int value into a reg (LoadNil → 0, LoadI/Move →
     /// ints, arithmetic → int) and a constant operand is admitted only
     /// when it is an integer.
-    pub(super) fn emit_arith(&self, ins: Inst, consts: &[Value]) -> Option<()> {
+    pub(super) fn emit_arith(&self, ins: Inst, consts: &[Option<i64>]) -> Option<()> {
         let (op, lhs, rhs_operand) = int_arith(ins, consts)?;
         let lhs = self.operand_value(lhs, "arith_lhs")?;
         let rhs = self.operand_value(rhs_operand, "arith_rhs")?;
@@ -242,7 +248,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         )
     }
 
-    pub(super) fn emit_op(&mut self, ins: Inst, consts: &[Value]) -> Option<()> {
+    pub(super) fn emit_op(&mut self, ins: Inst, consts: &[Option<i64>]) -> Option<()> {
         match ins.op() {
             Op::LoadI => {
                 let a = ins.a();
@@ -338,8 +344,25 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         let v = self.guarded_self_call(&arg_vals, "self_call")?;
         let slot = self.reg_slot_ptr(a, "call_dst")?;
         builder.build_store(slot, v).ok()?;
-        let parked = self.helpers.get("luna_jit_no_deopt_parked").copied()?;
-        self.return_unless(parked, &[], "call")?;
+        // A call below that failed (the context's flag) or parked a deopt
+        // makes the dispatcher drop this call's result. The body has no
+        // effect but its result, so without a loop that a dummy result
+        // could keep going it may finish: its self calls are bounded by
+        // the budget and the stack. Without the checks LLVM can turn the
+        // recursion into a loop (`return f(n - 1) + n`).
+        if !self.has_loop {
+            return Some(());
+        }
+        let failed = self.ctx_word(1, "call_failed")?;
+        let zero = self.i64_type.const_zero();
+        let ok = builder
+            .build_int_compare(inkwell::IntPredicate::EQ, failed, zero, "call_ok")
+            .ok()?;
+        self.return_if_not(ok, "call")?;
+        if self.may_park {
+            let parked = self.helpers.get("luna_jit_no_deopt_parked").copied()?;
+            self.return_unless(parked, &[], "parked")?;
+        }
         Some(())
     }
 
@@ -361,78 +384,132 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         Some(())
     }
 
-    /// A self call made natively while `luna_jit_self_enter` allows it
-    /// (enough native stack, calls left before the dialect's depth limit),
-    /// else through `luna_jit_self_call_slow`, which parks what went wrong
-    /// for the `luna_jit_no_deopt_parked` checks.
+    /// The address of word `w` of the self-call context (the body's first
+    /// parameter).
+    fn ctx_addr(&self, w: u64, name: &str) -> Option<inkwell::values::PointerValue<'ctx>> {
+        let base = self.function.get_nth_param(0)?.into_int_value();
+        let off = self.i64_type.const_int(8 * w, false);
+        let at = self.builder.build_int_add(base, off, name).ok()?;
+        self.builder
+            .build_int_to_ptr(at, self.ctx.ptr_type(Default::default()), name)
+            .ok()
+    }
+
+    fn ctx_word(&self, w: u64, name: &str) -> Option<inkwell::values::IntValue<'ctx>> {
+        let p = self.ctx_addr(w, name)?;
+        Some(
+            self.builder
+                .build_load(self.i64_type, p, name)
+                .ok()?
+                .into_int_value(),
+        )
+    }
+
+    /// Return 0 from the chunk unless `ok`, else go on in a fresh block.
+    fn return_if_not(&self, ok: inkwell::values::IntValue<'ctx>, name: &str) -> Option<()> {
+        let go = self
+            .ctx
+            .append_basic_block(self.function, &format!("{name}_go"));
+        let back = self
+            .ctx
+            .append_basic_block(self.function, &format!("{name}_back"));
+        self.builder.build_conditional_branch(ok, go, back).ok()?;
+        self.builder.position_at_end(back);
+        self.builder
+            .build_return(Some(&self.i64_type.const_zero()))
+            .ok()?;
+        self.builder.position_at_end(go);
+        Some(())
+    }
+
+    /// A self call: the body itself, with one call fewer left. The body
+    /// checks on entry whether it may run natively (`emit_self_guard`), so
+    /// the call is a plain call LLVM can turn into a loop.
     fn guarded_self_call(
         &self,
         args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
         name: &str,
     ) -> Option<inkwell::values::IntValue<'ctx>> {
         let builder = self.builder;
-        let int_of = |call: inkwell::values::CallSiteValue<'ctx>| match call.try_as_basic_value() {
+        let left = self.function.get_nth_param(2)?.into_int_value();
+        let one = self.i64_type.const_int(1, false);
+        let fewer = builder.build_int_sub(left, one, "fewer").ok()?;
+        let mut body_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = vec![
+            self.function.get_nth_param(0)?.into(),
+            self.function.get_nth_param(1)?.into(),
+            fewer.into(),
+        ];
+        body_args.extend_from_slice(args);
+        let call = builder.build_call(self.function, &body_args, name).ok()?;
+        call.set_call_convention(self.function.get_call_conventions());
+        match call.try_as_basic_value() {
             inkwell::values::ValueKind::Basic(bv) => Some(bv.into_int_value()),
             inkwell::values::ValueKind::Instruction(_) => None,
+        }
+    }
+
+    /// At the body's start, when it was entered by a self call: with the
+    /// native stack below the context's limit, or no calls left in the
+    /// budget, have `luna_jit_self_call_slow` make this call instead (in
+    /// the interpreter, or raising "stack overflow"), as the Cranelift
+    /// tier's stub does, and return its result.
+    pub(super) fn emit_self_guard(&self, num_params: u32) -> Option<()> {
+        let builder = self.builder;
+        let i64t = self.i64_type;
+        let ctx_arg = self.function.get_nth_param(0)?.into_int_value();
+        let limit = self.function.get_nth_param(1)?.into_int_value();
+        let left = self.function.get_nth_param(2)?.into_int_value();
+        let sp_name = if cfg!(target_arch = "x86_64") {
+            "rsp"
+        } else {
+            "sp"
         };
-        let ok_fn = self.helpers.get("luna_jit_self_enter").copied()?;
-        let ok = int_of(
-            builder
-                .build_call(ok_fn, &[], &format!("{name}_stack"))
-                .ok()?,
-        )?;
-        let zero = self.i64_type.const_zero();
-        let native = builder
+        let sp_reg = self
+            .ctx
+            .metadata_node(&[self.ctx.metadata_string(sp_name).into()]);
+        let sp = builder
+            .build_call(self.read_register, &[sp_reg.into()], "sp")
+            .ok()?;
+        let sp = match sp.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
+            inkwell::values::ValueKind::Instruction(_) => return None,
+        };
+        let low = builder
+            .build_int_compare(inkwell::IntPredicate::ULT, sp, limit, "stack_low")
+            .ok()?;
+        let spent = builder
             .build_int_compare(
-                inkwell::IntPredicate::NE,
-                ok,
-                zero,
-                &format!("{name}_native"),
+                inkwell::IntPredicate::SLE,
+                left,
+                i64t.const_int(1, false),
+                "calls_spent",
             )
             .ok()?;
-        let fast_bb = self
-            .ctx
-            .append_basic_block(self.function, &format!("{name}_fast"));
-        let slow_bb = self
-            .ctx
-            .append_basic_block(self.function, &format!("{name}_slow"));
-        let join_bb = self
-            .ctx
-            .append_basic_block(self.function, &format!("{name}_join"));
+        let slow = builder.build_or(low, spent, "go_slow").ok()?;
+        let slow_bb = self.ctx.append_basic_block(self.function, "self_slow");
+        let go_bb = self.ctx.append_basic_block(self.function, "self_native");
         builder
-            .build_conditional_branch(native, fast_bb, slow_bb)
+            .build_conditional_branch(slow, slow_bb, go_bb)
             .ok()?;
-
-        builder.position_at_end(fast_bb);
-        let fast = int_of(builder.build_call(self.function, args, name).ok()?)?;
-        let leave_fn = self.helpers.get("luna_jit_self_leave").copied()?;
-        builder
-            .build_call(leave_fn, &[], &format!("{name}_leave"))
-            .ok()?;
-        builder.build_unconditional_branch(join_bb).ok()?;
-
         builder.position_at_end(slow_bb);
         let slow_fn = self.helpers.get("luna_jit_self_call_slow").copied()?;
-        let desc = self.i64_type.const_int(self.self_call_desc as u64, false);
-        let uncounted = self
-            .i64_type
-            .const_int(luna_jit_helpers::SELF_CALL_UNCOUNTED as u64, false);
+        let desc = i64t.const_int(self.self_call_desc as u64, false);
+        let zero = i64t.const_zero();
         let mut slow_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
-            vec![zero.into(), desc.into(), uncounted.into()];
-        slow_args.extend_from_slice(args);
+            vec![ctx_arg.into(), desc.into(), left.into()];
+        for i in 0..num_params {
+            slow_args.push(self.function.get_nth_param(3 + i)?.into());
+        }
         slow_args.resize(7, zero.into());
-        let slow = int_of(
-            builder
-                .build_call(slow_fn, &slow_args, &format!("{name}_interp"))
-                .ok()?,
-        )?;
-        builder.build_unconditional_branch(join_bb).ok()?;
-
-        builder.position_at_end(join_bb);
-        let phi = builder
-            .build_phi(self.i64_type, &format!("{name}_result"))
+        let r = builder
+            .build_call(slow_fn, &slow_args, "self_interp")
             .ok()?;
-        phi.add_incoming(&[(&fast, fast_bb), (&slow, slow_bb)]);
-        Some(phi.as_basic_value().into_int_value())
+        let r = match r.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v,
+            inkwell::values::ValueKind::Instruction(_) => return None,
+        };
+        builder.build_return(Some(&r)).ok()?;
+        builder.position_at_end(go_bb);
+        Some(())
     }
 }
