@@ -45,7 +45,7 @@ impl<'s> Parser<'s> {
         self.expect(Token::Do, "do")?;
         let body = self.loop_block(List::EMPTY)?;
         self.expect_match(Token::End, "end", "while", line)?;
-        Ok(self.push_ended_stat(Stat::While { cond, body }))
+        Ok(self.push_stat(Stat::While { cond, body }))
     }
 
     pub(super) fn repeat_stat(&mut self) -> Result<StatId, SyntaxError> {
@@ -86,7 +86,7 @@ impl<'s> Parser<'s> {
                 let var = self.chunk.push_list(&[first]);
                 let body = self.loop_block(var)?;
                 self.expect_match(Token::End, "end", "for", line)?;
-                Ok(self.push_ended_stat(Stat::NumericFor {
+                Ok(self.push_stat(Stat::NumericFor {
                     var: first,
                     start,
                     limit,
@@ -120,7 +120,7 @@ impl<'s> Parser<'s> {
                 }
                 let body = self.loop_block(vars)?;
                 self.expect_match(Token::End, "end", "for", line)?;
-                Ok(self.push_ended_stat(Stat::GenericFor {
+                Ok(self.push_stat(Stat::GenericFor {
                     vars,
                     exprs,
                     body,
@@ -222,48 +222,6 @@ impl<'s> Parser<'s> {
         }
         Ok(self.push_stat(Stat::Local {
             collective,
-            names,
-            exprs,
-        }))
-    }
-
-    pub(super) fn global_stat(&mut self) -> Result<StatId, SyntaxError> {
-        self.advance()?;
-        if self.accept(Token::Function)? {
-            let line = self.prev_line;
-            let name = self.expect_name()?;
-            self.declare([name.sym], VarKind::Global);
-            let body = self.func_body(line)?;
-            return Ok(self.push_stat(Stat::GlobalFunction { name, body }));
-        }
-        // `global [attrib] '*'`
-        let leading = self.attrib()?;
-        if self.accept(Token::Star)? {
-            self.goto_step(|g| {
-                g.declare("*", VarKind::Global);
-                Ok(())
-            })?;
-            return Ok(self.push_stat(Stat::GlobalAll { attrib: leading }));
-        }
-        let mark = self.stk.attribs.len();
-        loop {
-            let name = self.expect_name()?;
-            let attrib = self.attrib()?;
-            self.stk.attribs.push_or_abort(AttribName { name, attrib });
-            if !self.accept(Token::Comma)? {
-                break;
-            }
-        }
-        let names = finish(&mut self.chunk, &mut self.stk.attribs, mark);
-        let exprs = if self.accept(Token::Assign)? {
-            self.exprlist()?
-        } else {
-            List::EMPTY
-        };
-        // the declared names come into scope after their initializers
-        self.declare_attrib_names(names, leading, true);
-        Ok(self.push_stat(Stat::Global {
-            collective: leading,
             names,
             exprs,
         }))

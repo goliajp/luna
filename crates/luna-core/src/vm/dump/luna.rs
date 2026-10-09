@@ -75,7 +75,7 @@ fn header_and_layout(version: LuaVersion) -> (&'static [u8], &'static [(usize, B
 /// loader would reach this byte expecting the number of upvalues; we use a
 /// non-PUC sentinel so an accidental cross-load (luna chunk into PUC, or
 /// vice-versa) errors cleanly rather than misinterpreting bytes.
-pub(super) const BODY_TAG: &[u8] = b"\x00LunaV4\x00";
+pub(super) const BODY_TAG: &[u8] = b"\x00LunaV5\x00";
 
 mod write;
 pub(super) use write::dump;

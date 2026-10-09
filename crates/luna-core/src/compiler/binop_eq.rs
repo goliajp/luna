@@ -70,15 +70,7 @@ impl Compiler<'_> {
         let Operand::Cmp(cop, b, c) = form else {
             unreachable!("an equality operand")
         };
-        if op == BinOp::Ne {
-            return self.negate_cmp(cop, r1, b, c);
-        }
-        Ok(Exp::Cmp {
-            op: cop,
-            l: r1,
-            r: b,
-            c,
-        })
+        self.compare(cop, r1, b, c, op == BinOp::Eq)
     }
 
     /// The second operand of `==` as an immediate (`EqI`) or a constant

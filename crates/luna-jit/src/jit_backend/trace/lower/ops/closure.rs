@@ -79,6 +79,8 @@ pub(super) fn emit_closure_op<E: Emit>(
             // Op::Close → begin_close → close_from sees no work.
             close_from(lw, pl, oc, ins.a() as usize)?;
         }
+        // 5.2 / 5.3: close from `A - 1`; the recording follows the jump
+        Op::JmpClose | Op::JmpCloseBack => close_from(lw, pl, oc, ins.a() as usize - 1)?,
         Op::GetUpval => {
             // R[A] := UpVal[B]. The helper reads JIT_CL's
             // upvals[B] and returns the raw 8-byte payload.

@@ -131,13 +131,7 @@ impl Compiler<'_> {
     ) -> Result<Exp, SyntaxError> {
         Ok(match form {
             Operand::Arith(kop, c) => Exp::Reloc(self.emit(Inst::iabc(kop, 0, reg, c, flip))),
-            Operand::Cmp(cop, b, c) if op == BinOp::Ne => self.negate_cmp(cop, reg, b, c)?,
-            Operand::Cmp(cop, b, c) => Exp::Cmp {
-                op: cop,
-                l: reg,
-                r: b,
-                c,
-            },
+            Operand::Cmp(cop, b, c) => self.compare(cop, reg, b, c, op != BinOp::Ne)?,
         })
     }
 }

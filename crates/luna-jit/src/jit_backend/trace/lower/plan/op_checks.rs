@@ -153,10 +153,11 @@ pub(super) fn validate_body_op(
                 _ => return None,
             }
         }
-        Op::Close => {
+        Op::Close | Op::JmpClose | Op::JmpCloseBack => {
             // close open upvals at slot ≥ A of the op's frame (the
             // helper counts slots from the head frame, inlined frames
-            // included)
+            // included); a closing jump closes from A - 1
+            let a = if op == Op::Close { a } else { a - 1 };
             if a >= max_stack {
                 {
                     checkpoint("bail:cmp-dirs-body-other");

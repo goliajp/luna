@@ -1,6 +1,6 @@
 //! The multiply that replaces a division by a constant divisor.
 
-use super::super::op_helpers::div_magic;
+use super::super::floor_div::div_magic;
 
 fn umulhi(a: u64, b: u64) -> u64 {
     ((u128::from(a) * u128::from(b)) >> 64) as u64

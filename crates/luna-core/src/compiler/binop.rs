@@ -13,30 +13,6 @@ pub(super) struct BinOpOpen {
 }
 
 impl Compiler<'_> {
-    /// A binary operation other than `and`, `or` and `..`, which have
-    /// their own shapes. [`Compiler::expr`] compiles a chain of them without
-    /// recursion by calling [`Self::binop_open`] and [`Self::binop_close`]
-    /// itself.
-    pub(super) fn binop(
-        &mut self,
-        op: BinOp,
-        lhs: ExprId,
-        rhs: ExprId,
-        line: u32,
-    ) -> Result<Exp, SyntaxError> {
-        match op {
-            BinOp::And | BinOp::Or => return self.and_or(op, lhs, rhs, line),
-            BinOp::Concat => return self.concat(lhs, rhs, line),
-            _ => {}
-        }
-        let (open, le) = self.binop_open(op, lhs, line)?;
-        let le = match le {
-            Some(le) => le,
-            None => self.expr(lhs)?,
-        };
-        self.binop_close(op, le, rhs, line, open)
-    }
-
     /// Before the left operand of `op` is compiled: the value it has
     /// without being compiled, when it has one.
     pub(super) fn binop_open(
@@ -219,7 +195,13 @@ impl Compiler<'_> {
         // / SETUPVAL for the assignment lands on the rhs's end line, not the
         // operator). Pin the line for the arith emit, but don't stomp
         // `last_line` permanently.
-        let saved_force_arith = self.force_line.replace(line);
+        // a comparison goes where the right operand ends
+        let compare = matches!(op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge);
+        let saved_force_arith = if compare {
+            self.force_line
+        } else {
+            self.force_line.replace(line)
+        };
         let r_op = match in_inst {
             Some((form, flip)) => self.emit_const_operand(op, l, form, flip),
             None => self.emit_binop(op, l, r),

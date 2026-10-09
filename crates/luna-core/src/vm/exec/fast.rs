@@ -274,6 +274,8 @@ impl Vm {
                     // listed rather than `_`, so that the jump table covers every
                     // opcode without a range check
                     Op::Close
+                    | Op::JmpClose
+                    | Op::JmpCloseBack
                     | Op::Tbc
                     | Op::TailCall
                     | Op::Return

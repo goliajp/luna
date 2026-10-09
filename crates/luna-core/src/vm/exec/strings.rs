@@ -44,7 +44,9 @@ impl Vm {
     /// into a single result at `base_a` (PUC `luaV_concat`). Returns after
     /// either finishing (result at `base_a`) or arming a yieldable `__concat`
     /// call — its `Meta` continuation re-enters here on the metamethod's return.
-    pub(super) fn concat_run(&mut self, base_a: u32) -> Result<(), LuaError> {
+    /// `out`: where the result goes once the operands from `base_a` up
+    /// are folded into one (5.1–5.3 `CONCAT` names its own destination).
+    pub(super) fn concat_run(&mut self, base_a: u32, out: u32) -> Result<(), LuaError> {
         // Sum the lengths of all all-Str operands BEFORE starting the
         // right-associative fold so a 129-operand `a..a..…` chain
         // (5.1 big.lua's `rep129(longs)`) raises overflow immediately,
@@ -91,10 +93,14 @@ impl Vm {
                     }
                     // result lands at i-1, dropping y (top→i); resume continues.
                     let dst = i - 1;
-                    self.begin_meta_call(mm, &[x, y], MetaAction::Concat { dst, base_a })?;
+                    let out = (out as i64 - base_a as i64) as i16;
+                    self.begin_meta_call(mm, &[x, y], MetaAction::Concat { dst, base_a, out })?;
                     return Ok(());
                 }
             }
+        }
+        if out != base_a {
+            self.stack[out as usize] = self.stack[base_a as usize];
         }
         self.maybe_collect_garbage(base_a + 1);
         Ok(())

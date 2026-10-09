@@ -81,7 +81,7 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         if let Some(ref ba) = active_accum
             && let Some(ref fctx) = lw.flush_ctx
         {
-            if i == ba.pre1_idx || i == ba.pre2_idx || i == ba.post_idx {
+            if i == ba.pre1_idx || i == ba.pre2_idx || Some(i) == ba.post_idx {
                 continue;
             }
             if i == ba.concat_idx {
@@ -110,8 +110,10 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         if pl.consumed_by_cmp[i] {
             // The cmp at i-1 already accounted for this Jmp via
             // its `brif`'s continue edge; emitting jump IR here
-            // would double-jump.
-            continue;
+            // would double-jump. A closing jump still closes.
+            if !matches!(rop.inst.op(), Op::JmpClose | Op::JmpCloseBack) {
+                continue;
+            }
         }
         // Math fold emit. Layout (see `math_folds` doc above):
         //

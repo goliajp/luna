@@ -185,17 +185,14 @@ impl<'s> Parser<'s> {
         ExprId((self.chunk.exprs.len() - 1) as u32)
     }
 
+    /// Push a statement whose last token was just read, and that token's
+    /// line.
     pub(super) fn push_stat(&mut self, s: Stat) -> StatId {
         self.chunk.stats.push_or_abort(s);
-        StatId((self.chunk.stats.len() - 1) as u32)
-    }
-
-    /// Push a statement that ended with the `end` just read.
-    pub(super) fn push_ended_stat(&mut self, s: Stat) -> StatId {
-        let id = self.push_stat(s);
-        let idx = id.0 as usize;
-        self.end_lines.resize_or_abort(idx + 1, 0);
-        self.end_lines[idx] = self.prev_line;
-        id
+        let idx = self.chunk.stats.len() - 1;
+        // statements end in the order they are pushed
+        debug_assert_eq!(self.end_lines.len(), idx);
+        self.end_lines.push_or_abort(self.prev_line);
+        StatId(idx as u32)
     }
 }

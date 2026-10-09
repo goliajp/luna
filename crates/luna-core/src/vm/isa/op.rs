@@ -83,7 +83,8 @@ pub enum Op {
     Not,
     /// `R[A] := #R[B]` length operator.
     Len,
-    /// `R[A] := R[A] .. ... .. R[A+B-1]` string concatenation chain.
+    /// `R[A] := R[A] .. ... .. R[A+B-1]` string concatenation chain; with
+    /// `k` set, `R[A] := R[C] .. ... .. R[C+B-1]` (5.1–5.3 `CONCAT`).
     Concat,
     /// Close upvalues in scope `A` (closes pending `<close>` and upvalues).
     Close,
@@ -275,4 +276,10 @@ pub enum Op {
     GetGlobal,
     /// `Upvalues[0][K[Bx]:string] := R[A]`: 5.1's `SETGLOBAL`.
     SetGlobal,
+    /// 5.2 / 5.3 `JMP` that closes: close the upvalues from `R[A-1]` on,
+    /// then `pc += Bx`. With [`Op::JmpCloseBack`] it spans PUC's 18-bit
+    /// `sBx`, which one 17-bit field cannot.
+    JmpClose,
+    /// [`Op::JmpClose`] jumping back: `pc -= Bx + 1`.
+    JmpCloseBack,
 }

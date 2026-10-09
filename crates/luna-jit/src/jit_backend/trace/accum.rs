@@ -60,7 +60,7 @@ pub(super) fn detect_accumulators(
     let mut out: Vec<AccumSite> = Vec::with_capacity(candidates.len());
     for (mut site, pre1, pre2, concat, post) in candidates {
         for i in 0..upper {
-            if i == pre1 || i == pre2 || i == concat || i == post {
+            if i == pre1 || i == pre2 || i == concat || Some(i) == post {
                 continue;
             }
             let rop = &record.ops[i];
@@ -90,9 +90,8 @@ pub(super) fn detect_accumulators(
                 Op::Eq | Op::Lt | Op::Le => a == site.accum_slot || b == site.accum_slot,
                 Op::EqK | Op::Test | Op::TestSet => a == site.accum_slot,
                 Op::Concat => {
-                    let n = ins.b();
-                    let end_op = a.saturating_add(n);
-                    (a..end_op).any(|r| r == site.accum_slot)
+                    let first = ins.concat_operands().0;
+                    (first..first.saturating_add(b)).any(|r| r == site.accum_slot)
                 }
                 Op::Call | Op::TailCall => {
                     let lo = a;
@@ -150,7 +149,6 @@ pub(super) fn detect_accumulators(
                 | Op::BNot
                 | Op::Not
                 | Op::Len
-                | Op::Concat
                 | Op::Call
                 | Op::TailCall
                 | Op::TestSet
@@ -161,6 +159,10 @@ pub(super) fn detect_accumulators(
                 | Op::TForCall
                 | Op::TForCall53
                 | Op::TForCall55 => a == site.accum_slot,
+                Op::Concat => {
+                    let (first, out) = ins.concat_operands();
+                    first == site.accum_slot || out == site.accum_slot
+                }
                 _ => false,
             };
             if reads_slot || writes_slot {
@@ -174,17 +176,17 @@ pub(super) fn detect_accumulators(
 }
 
 /// Step 1 of [`detect_accumulators`]: the idiom matches, each with its
-/// four op indices (pre1, pre2, concat, post).
+/// op indices (pre1, pre2, concat, and the post `Move` when there is one).
 fn accum_candidates(
     record: &TraceRecord,
     upper: usize,
-) -> Vec<(AccumSite, usize, usize, usize, usize)> {
+) -> Vec<(AccumSite, usize, usize, usize, Option<usize>)> {
     use luna_core::vm::isa::Op;
 
     // Step 1: idiom scan. For each Concat at index `ci`, check the
     // 3 surrounding ops match.
-    let mut candidates: Vec<(AccumSite, usize, usize, usize, usize)> = Vec::new();
-    for ci in 2..upper.saturating_sub(1) {
+    let mut candidates: Vec<(AccumSite, usize, usize, usize, Option<usize>)> = Vec::new();
+    for ci in 2..upper {
         let concat_rop = &record.ops[ci];
         if !matches!(concat_rop.inst.op(), Op::Concat) {
             continue;
@@ -195,7 +197,8 @@ fn accum_candidates(
         if concat_rop.inst.b() != 2 {
             continue;
         }
-        let tmp = concat_rop.inst.a();
+        // 5.1–5.3: `Concat A=s B=2 C=tmp` stores the result itself
+        let (tmp, out) = concat_rop.inst.concat_operands();
 
         // Pre-Move 1: Move A=tmp B=s_slot
         let pre1 = &record.ops[ci - 2];
@@ -213,12 +216,19 @@ fn accum_candidates(
         let v_slot = pre2.inst.b();
 
         // Post-Move: Move A=s_slot B=tmp
-        let post = &record.ops[ci + 1];
-        if post.inline_depth != 0
-            || !matches!(post.inst.op(), Op::Move)
-            || post.inst.a() != s_slot
-            || post.inst.b() != tmp
-        {
+        let has_post = out == tmp;
+        if has_post {
+            let Some(post) = record.ops.get(ci + 1).filter(|_| ci + 1 < upper) else {
+                continue;
+            };
+            if post.inline_depth != 0
+                || !matches!(post.inst.op(), Op::Move)
+                || post.inst.a() != s_slot
+                || post.inst.b() != tmp
+            {
+                continue;
+            }
+        } else if out != s_slot {
             continue;
         }
 
@@ -248,12 +258,13 @@ fn accum_candidates(
                 accum_slot: s_slot,
                 piece_slot: v_slot,
                 inline_depth: 0,
+                has_post,
                 state: BufferState::Bufferable,
             },
             ci - 2, // pre1 idx
             ci - 1, // pre2 idx
             ci,     // concat idx
-            ci + 1, // post idx
+            has_post.then_some(ci + 1),
         ));
     }
     candidates

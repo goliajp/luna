@@ -243,7 +243,7 @@ impl L {
             k: i.k(),
             bx: i.bx(),
             sbx: i.sbx(),
-            sj: i.sj() as i64,
+            sj: i.jump_offset() as i64,
         }
     }
 }

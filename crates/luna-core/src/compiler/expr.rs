@@ -18,7 +18,6 @@ enum Pending {
         op: BinOp,
         rhs: ExprId,
         line: u32,
-        base: u32,
     },
     Index {
         key: ExprId,
@@ -59,20 +58,7 @@ impl<'a> Compiler<'a> {
                     rhs,
                     line,
                 } => {
-                    // the top of a chain of one operator may compile flat
-                    let inner =
-                        matches!(spine.last(), Some(Pending::AndOr { op: o, .. }) if *o == op);
-                    if !inner && let Some(e) = self.and_or_chain(op, lhs, rhs, line)? {
-                        break e;
-                    }
-                    self.last_line = line;
-                    let base = self.lr().freereg;
-                    spine.push_or_abort(Pending::AndOr {
-                        op,
-                        rhs,
-                        line,
-                        base,
-                    });
+                    spine.push_or_abort(Pending::AndOr { op, rhs, line });
                     cur = lhs;
                 }
                 Expr::BinOp { op, lhs, rhs, line } if op != BinOp::Concat => {
@@ -126,12 +112,7 @@ impl<'a> Compiler<'a> {
                     line,
                     open,
                 } => self.binop_close(op, e, rhs, line, open)?,
-                Pending::AndOr {
-                    op,
-                    rhs,
-                    line,
-                    base,
-                } => self.and_or_close(op, e, rhs, line, base)?,
+                Pending::AndOr { op, rhs, line } => self.and_or_close(op, e, rhs, line)?,
                 Pending::Index { key, saved } => self.index_close(e, key, saved)?,
                 Pending::Call { args, line, base } => self.call_close(e, args, line, base)?,
                 Pending::Method {
