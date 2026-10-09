@@ -41,7 +41,7 @@ fn a_zero_divisor_deep_in_the_recursion_raises() {
          local ok, e = pcall(f, 40, 0)
          return s .. ' ' .. tostring(ok) .. ' ' .. tostring(e):gsub('^.*: ', '') .. ' ' .. f(40, 7)",
     );
-    assert_eq!(r, "36000 false attempt to perform 'n%%0' 120");
+    assert_eq!(r, "36000 false attempt to perform 'n%0' 120");
 }
 
 #[test]
