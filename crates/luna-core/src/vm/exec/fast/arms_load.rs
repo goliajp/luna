@@ -60,6 +60,13 @@ macro_rules! fast_load_arms {
                 next!()
             }};
         }
+        macro_rules! op_l_true_skip {
+            () => {{
+                set_reg!($inst.a(), Value::Bool(true));
+                $npc += 1;
+                next!()
+            }};
+        }
         macro_rules! op_load_true {
             () => {{
                 set_reg!($inst.a(), Value::Bool(true));

@@ -243,5 +243,5 @@ fn split_table(proto: &Proto, inst: Inst, s: Scratch) -> Option<Vec<Inst>> {
 
 /// Opcodes that may skip the instruction after them.
 fn skips_next(op: Op) -> bool {
-    op.is_test() || op == Op::LFalseSkip
+    op.is_test() || matches!(op, Op::LFalseSkip | Op::LTrueSkip)
 }

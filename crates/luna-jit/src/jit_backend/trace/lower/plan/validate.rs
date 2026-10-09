@@ -214,6 +214,7 @@ fn validate_op(
         | Op::LoadFalse
         | Op::LoadTrue
         | Op::LFalseSkip
+        | Op::LTrueSkip
         | Op::Not
         | Op::Close => validate_body_op(vconsts, i, max_stack, rop, op, ins, a, b, c)?,
         Op::Closure

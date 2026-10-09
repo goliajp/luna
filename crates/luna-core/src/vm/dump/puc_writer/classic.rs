@@ -152,11 +152,12 @@ impl C<'_, '_> {
                 self.load_k(a, x.ax())?;
                 return Ok(2);
             }
-            Op::LoadFalse | Op::LFalseSkip | Op::LoadTrue => {
+            Op::LoadFalse | Op::LFalseSkip | Op::LoadTrue | Op::LTrueSkip => {
                 let a = self.asm.r(l.a)?;
                 let (b, c) = match l.op {
                     Op::LoadFalse => (0, 0),
                     Op::LFalseSkip => (0, 1),
+                    Op::LTrueSkip => (1, 1),
                     _ => (1, 0),
                 };
                 self.emit(self.abc(Kind::LoadBool, a, b, c))?;

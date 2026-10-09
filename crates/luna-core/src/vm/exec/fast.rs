@@ -162,6 +162,7 @@ impl Vm {
                     Op::LoadK => op_load_k!(),
                     Op::LoadFalse => op_load_false!(),
                     Op::LFalseSkip => op_l_false_skip!(),
+                    Op::LTrueSkip => op_l_true_skip!(),
                     Op::LoadTrue => op_load_true!(),
                     Op::LoadNil => op_load_nil!(),
                     Op::GetUpval => op_get_upval!(),

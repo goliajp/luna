@@ -368,7 +368,7 @@ produces. MacroLua has no PUC format; its `string.dump` writes luna's own.
 
 `luna_core::vm::dump::dump` (used by `luna-aot`) writes luna's own binary
 format: the running dialect's PUC header, then a `"\x00LunaV5\x00"`
-sentinel and a body in luna's 119-op instruction set. It loads back into
+sentinel and a body in luna's 120-op instruction set. It loads back into
 luna, not into PUC.
 
 Loading a luna dump, or a chunk of the running dialect's PUC version, is
@@ -383,7 +383,7 @@ untrusted input should still close the gate.
 A chunk of another dialect's PUC version needs
 `Vm::set_puc_bytecode_loading(true)`, **off by default**. The
 translator decodes a PUC chunk of any of the five dialects and re-encodes
-its body into luna's 119-op set, keeping the chunk's registers: luna has
+its body into luna's 120-op set, keeping the chunk's registers: luna has
 each dialect's layout of the `for` loops and its constant operand forms,
 so a loop of a 5.3 chunk keeps 5.3's three control registers in a 5.4
 `Vm` too. The resulting Proto then runs on luna's interpreter and JIT

@@ -49,8 +49,9 @@ optimization.
   constants reads and writes globals with `GetGlobal` / `SetGlobal`, as
   PUC's `GETGLOBAL` / `SETGLOBAL` do. A 5.2 / 5.3 jump that also
   closes upvalues is one instruction (`JmpClose` / `JmpCloseBack`, PUC's
-  `JMP` with `A` set), and a 5.1–5.3 concatenation names its own
-  destination (`k` on `Concat`). The body tag is `LunaV5`. Dump the
+  `JMP` with `A` set), a 5.1–5.3 concatenation names its own
+  destination (`k` on `Concat`), and `LTrueSkip` is PUC's
+  `LOADBOOL A 1 1`. The body tag is `LunaV5`. Dump the
   source again with this version. PUC bytecode loads as before.
 - C API: errors leave a C function at once, as in PUC. `lua_error`,
   `luaL_error` and every API function that raises (`lua_gettable`,
