@@ -165,6 +165,11 @@ pub const TIER_UP_THRESHOLD: u32 = 16384;
 /// being reused from a long loop that runs once.
 pub const TIER_UP_REUSED_DIVISOR: u32 = 4;
 
+/// Entries of a trace between two asks of a backend still compiling
+/// better code for it in the background (see `TraceCompiler::tier_up`):
+/// asking at every entry costs a trace entered often more than it gains.
+pub const TIER_UP_REASK: u32 = 64;
+
 /// The code generator a trace is compiled with.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TraceTier {
