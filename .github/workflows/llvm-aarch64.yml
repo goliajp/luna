@@ -1,0 +1,92 @@
+name: llvm-aarch64
+
+# The LLVM backend (`luna-jit --features llvm-jit`) on aarch64 macOS and
+# Windows. Its compile thread writes code the Vm's thread then runs, which
+# on aarch64 is only correct with the writer's instruction cache
+# maintenance and the reader's `isb`; Linux aarch64 is covered on the
+# project's own machines. No hosted runner ships LLVM 18 with
+# `llvm-config` for Windows on aarch64 (the release has an installer
+# only), so that job builds it once and caches the install.
+
+on:
+  push:
+    paths:
+      - "crates/luna-jit-llvm/**"
+      - "crates/luna-jit/src/jit_backend/llvm*"
+      - "crates/luna-jit/src/jit_backend/trace/llvm*"
+      - "crates/luna-jit/src/jit_backend/trace/lir/llvm*"
+      - "crates/luna-jit/tests/it/llvm*"
+      - "crates/luna-core/src/jit/**"
+      - "crates/luna-core/src/vm/exec/jit_call.rs"
+      - ".github/workflows/llvm-aarch64.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: llvm-aarch64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_RELEASE_LTO: "false"
+
+jobs:
+  macos:
+    name: macos-latest LLVM backend
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: install LLVM 18
+        run: |
+          brew install llvm@18 zstd
+          echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+      - name: cargo test -p luna-jit-llvm
+        run: cargo test --release -p luna-jit-llvm
+      - name: cargo test -p luna-jit --features llvm-jit (LLVM tests)
+        run: cargo test --release -p luna-jit --features llvm-jit --test it -- llvm_
+
+  windows:
+    name: windows-11-arm LLVM backend
+    runs-on: windows-11-arm
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v6
+        id: llvm
+        with:
+          path: C:\llvm-18
+          key: llvm-18.1.8-aarch64-pc-windows-msvc-v1
+      - name: build LLVM 18.1.8
+        if: steps.llvm.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Set-Location $env:RUNNER_TEMP
+          gh release download llvmorg-18.1.8 -R llvm/llvm-project --pattern 'llvm-18.1.8.src.tar.xz' --pattern 'cmake-18.1.8.src.tar.xz'
+          tar -xf llvm-18.1.8.src.tar.xz
+          tar -xf cmake-18.1.8.src.tar.xz
+          Rename-Item cmake-18.1.8.src cmake
+          # every target: inkwell's default features initialise them all.
+          # no DIA SDK: llvm-config would list its library by a path with
+          # spaces, which llvm-sys cannot pass on
+          cmake -S llvm-18.1.8.src -B build -G "Visual Studio 17 2022" -A ARM64 -Thost=ARM64 `
+            -DCMAKE_INSTALL_PREFIX=C:/llvm-18 `
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF `
+            -DLLVM_INCLUDE_DOCS=OFF -DLLVM_ENABLE_BINDINGS=OFF `
+            -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_LIBXML2=OFF `
+            -DLLVM_ENABLE_DIA_SDK=OFF
+          if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
+          cmake --build build --config Release --target install --parallel
+          if ($LASTEXITCODE -ne 0) { throw "LLVM build failed" }
+      - name: point llvm-sys at LLVM 18
+        shell: pwsh
+        run: |
+          & C:\llvm-18\bin\llvm-config.exe --version
+          "LLVM_SYS_181_PREFIX=C:\llvm-18" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: cargo test -p luna-jit-llvm
+        run: cargo test --release -p luna-jit-llvm
+      - name: cargo test -p luna-jit --features llvm-jit (LLVM tests)
+        run: cargo test --release -p luna-jit --features llvm-jit --test it -- llvm_

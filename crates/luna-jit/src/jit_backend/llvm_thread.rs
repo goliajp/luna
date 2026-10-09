@@ -105,38 +105,3 @@ fn work() {
         WAKE.notify_all();
     }
 }
-
-/// Whether code this thread just wrote can be handed to another thread to
-/// run. On aarch64 a core that runs code another core wrote must first
-/// resynchronise its instruction fetch (an `isb`); the writer has cleaned
-/// and invalidated the caches already (the execution engine does), and
-/// Linux's `membarrier` makes every core of the process resynchronise. Where
-/// that is not available the code is not handed over.
-pub(crate) fn cores_synced() -> bool {
-    sync_cores()
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-fn sync_cores() -> bool {
-    // x86 keeps instruction fetch coherent with stores
-    true
-}
-
-#[cfg(all(target_arch = "aarch64", target_os = "linux"))]
-fn sync_cores() -> bool {
-    // linux/membarrier.h
-    const REGISTER_SYNC_CORE: libc::c_long = 1 << 6;
-    const SYNC_CORE: libc::c_long = 1 << 5;
-    static REGISTERED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let registered = *REGISTERED.get_or_init(|| {
-        // SAFETY: membarrier takes two integers and touches no memory
-        unsafe { libc::syscall(libc::SYS_membarrier, REGISTER_SYNC_CORE, 0) == 0 }
-    });
-    // SAFETY: as above
-    registered && unsafe { libc::syscall(libc::SYS_membarrier, SYNC_CORE, 0) == 0 }
-}
-
-#[cfg(all(target_arch = "aarch64", not(target_os = "linux")))]
-fn sync_cores() -> bool {
-    false
-}

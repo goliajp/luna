@@ -84,6 +84,7 @@ pub(super) fn try_compile(
     if let Some(cell) = cs.llvm_chunks.cells.get(&key) {
         let ready = cell.load(Ordering::Acquire);
         if ready != 0 {
+            luna_core::jit::code_fence();
             return CompileResult::Compiled {
                 entry: ready as *const u8,
                 num_args,
@@ -106,9 +107,9 @@ pub(super) fn try_compile(
                 code.lock()
                     .expect("a job never panics holding the code list")
                     .push(c.pair);
-                if super::llvm_thread::cores_synced() {
-                    to.store(entry, Ordering::Release);
-                }
+                // the execution engine has done the cache maintenance; the
+                // thread that takes the entry runs `code_fence`
+                to.store(entry, Ordering::Release);
             }
         }),
         std::time::Instant::now() + llvm_after,

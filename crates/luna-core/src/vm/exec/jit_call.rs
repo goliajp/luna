@@ -349,7 +349,8 @@ impl Vm {
 }
 
 /// Puts the code a backend finished compiling in the background (see
-/// `Proto::jit_next`) in place of `proto`'s entry.
+/// `Proto::jit_next`) in place of `proto`'s entry, runnable on this thread
+/// ([`crate::jit::code_fence`]).
 #[inline]
 fn take_jit_next(proto: &crate::runtime::function::Proto) {
     use crate::runtime::function::JitProtoState;
@@ -361,6 +362,7 @@ fn take_jit_next(proto: &crate::runtime::function::Proto) {
         proto.jit_next.set(Some(next));
         return;
     }
+    crate::jit::code_fence();
     if let JitProtoState::Compiled {
         num_args,
         returns_one,
