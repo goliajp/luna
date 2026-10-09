@@ -11,7 +11,9 @@ impl<'a> Compiler<'a> {
         exprs: &[ExprId],
     ) -> Result<(), SyntaxError> {
         let saved = self.lr().freereg;
-        let mut lvs: LVec<Lv> = LVec::new(self.heap.mem());
+        // a nested assignment (in a function among the targets) finds the
+        // buffer taken and makes its own
+        let mut lvs = self.lvs.take();
         for &t in targets {
             let lv = self.target_lv(t)?;
             // a variable assigned after an indexing that reads it: the
@@ -46,6 +48,8 @@ impl<'a> Compiler<'a> {
         for (i, &lv) in lvs.iter().enumerate().rev() {
             self.store(lv, Exp::Reg(base + i as u32))?;
         }
+        lvs.clear();
+        self.lvs = lvs;
         self.set_freereg(saved);
         Ok(())
     }

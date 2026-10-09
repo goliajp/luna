@@ -1,7 +1,6 @@
 //! Statement dispatch and declarations (`local`, `global`, `function`).
 
 use super::*;
-use crate::runtime::mem::LVec;
 
 impl<'a> Compiler<'a> {
     pub(super) fn stat_block(&mut self, b: &Block) -> Result<(), SyntaxError> {
@@ -231,7 +230,7 @@ impl<'a> Compiler<'a> {
         // evaluated (PUC bumps `nactvar` after the explist), so `global a = a`
         // reads the enclosing `a`, not the global being defined.
         let saved = self.lr().freereg;
-        let mut lvs: LVec<Lv> = LVec::new(self.heap.mem());
+        let mut lvs = self.lvs.take();
         for an in names {
             let lv = self.global_lv(self.nm(&an.name))?;
             lvs.push_or_abort(lv);
@@ -246,61 +245,10 @@ impl<'a> Compiler<'a> {
             self.emit_global_redef_check(self.nm(&an.name))?;
             self.store(lvs[i], Exp::Reg(base + i as u32))?;
         }
+        lvs.clear();
+        self.lvs = lvs;
         self.set_freereg(saved);
         Ok(())
-    }
-
-    pub(super) fn function_stat(
-        &mut self,
-        name: &FuncName,
-        body: &'a FuncBody,
-    ) -> Result<(), SyntaxError> {
-        self.last_line = name.base.line;
-        let is_method = name.method.is_some();
-        let saved = self.lr().freereg;
-        // PUC `funcstat` compiles the name first, then the body, then the
-        // store. Every GETFIELD / SETFIELD on a dotted name, and the store,
-        // carry the line of the statement's name, not the `end` token's, so
-        // a `nil` holder raises on the right line (errors.lua :430).
-        let saved_force = self.force_line.replace(name.base.line);
-        let lv = self.func_name_lv(name);
-        self.force_line = saved_force;
-        let lv = lv?;
-        let f = self.function_exp(body, is_method)?;
-        let saved_force = self.force_line.replace(name.base.line);
-        let res = self.store(lv, f);
-        self.force_line = saved_force;
-        res?;
-        self.set_freereg(saved);
-        Ok(())
-    }
-
-    /// PUC `funcname`: `a.b.c:m` as an assignment target.
-    fn func_name_lv(&mut self, name: &FuncName) -> Result<Lv, SyntaxError> {
-        let mut fields: LVec<&str> = LVec::new(self.heap.mem());
-        for n in self.ls(name.path) {
-            fields.push_or_abort(self.nm(n));
-        }
-        if let Some(m) = &name.method {
-            fields.push_or_abort(self.nm(m));
-        }
-        let Some((last, walk)) = fields.split_last() else {
-            return self.name_lv(self.nm(&name.base), name.base.line);
-        };
-        let mut e = self.name_expr(self.nm(&name.base))?;
-        for f in walk {
-            // the holder's register is free again once it is read
-            let mark = self.lr().freereg;
-            let t = self.index_table(e)?;
-            let c = self.str_const(f.as_bytes());
-            let (t, k) = self.indexed(t, Exp::Const(c))?;
-            e = self.index_get(t, k);
-            self.set_freereg(mark);
-        }
-        let t = self.index_table(e)?;
-        let c = self.str_const(last.as_bytes());
-        let (t, k) = self.indexed(t, Exp::Const(c))?;
-        Ok(Lv::Indexed(t, k))
     }
 
     pub(super) fn local_stat(

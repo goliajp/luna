@@ -253,7 +253,8 @@ mod tests {
             abc(RETURN, 0, 1, 0),
         ]);
         assert_eq!(code.len(), 4);
-        assert_eq!(code[0].op(), Op::EqK);
+        // K0 is 1, which luna keeps in the instruction
+        assert_eq!(code[0].op(), Op::EqI);
         assert_eq!((code[1].op(), code[1].a()), (Op::JmpClose, 2));
         assert_eq!(code[1].jump_offset(), 1);
     }

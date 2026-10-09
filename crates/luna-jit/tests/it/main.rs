@@ -120,6 +120,7 @@ mod trace_loop_carried_kinds;
 mod trace_loop_carried_sunk;
 mod trace_loop_concat_edge_cases;
 mod trace_loop_coverage;
+mod trace_ltrue_skip;
 mod trace_math_fmod;
 mod trace_math_fold_exit;
 mod trace_math_minmax_fold;

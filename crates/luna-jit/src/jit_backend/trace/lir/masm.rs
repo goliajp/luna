@@ -129,6 +129,8 @@ pub(crate) trait Masm {
 
     fn new_label(&mut self) -> Label;
     fn bind(&mut self, l: Label);
+    /// No-ops up to the next multiple of `to` bytes of code.
+    fn align(&mut self, to: u32);
     fn jmp(&mut self, l: Label);
     fn jcc(&mut self, c: Cond, l: Label);
     /// Branch to `l` when `r` is non-zero (`nz`) or zero.
