@@ -179,9 +179,6 @@ pub fn install_llvm_backend(vm: &mut vm::Vm) {
 pub fn install_llvm_backend_with(vm: &mut vm::Vm, backend: jit_backend::LlvmBackend) {
     vm.install_jit_backend(backend, backend);
     vm.install_jit_storage(jit_backend::storage::CraneliftJitStorage::with_llvm());
-    if backend.llvm_after.is_some() {
-        jit_backend::llvm_thread::start();
-    }
 }
 
 /// `LUNA_JIT_BACKEND=llvm` was requested but

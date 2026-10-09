@@ -37,15 +37,10 @@ static WAKE: Condvar = Condvar::new();
 
 const POISON: &str = "the compile thread never panics holding its lock";
 
-/// Starts the compile thread unless it runs already. A Vm that will
-/// compile in the background starts it as it is set up, so the first hot
-/// function does not wait for a thread to start.
-pub(crate) fn start() {
+/// Runs `run` on the compile thread, not before `not_before`.
+pub(crate) fn submit(run: Box<dyn FnOnce() + Send>, not_before: Instant) -> Ticket {
+    let cancelled = Ticket::default();
     let mut st = STATE.lock().expect(POISON);
-    start_locked(&mut st);
-}
-
-fn start_locked(st: &mut State) {
     if !st.started {
         st.started = true;
         std::thread::Builder::new()
@@ -53,13 +48,6 @@ fn start_locked(st: &mut State) {
             .spawn(work)
             .expect("starting the LLVM compile thread");
     }
-}
-
-/// Runs `run` on the compile thread, not before `not_before`.
-pub(crate) fn submit(run: Box<dyn FnOnce() + Send>, not_before: Instant) -> Ticket {
-    let cancelled = Ticket::default();
-    let mut st = STATE.lock().expect(POISON);
-    start_locked(&mut st);
     st.queue.push(Job {
         run,
         not_before,
