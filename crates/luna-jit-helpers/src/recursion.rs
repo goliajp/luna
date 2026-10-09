@@ -9,12 +9,10 @@
 //! the Lua stack allows and fails with Lua's own "stack overflow", or, with
 //! no budget left, by raising that error itself.
 //!
-//! The Cranelift tier keeps limit, failure flag and budget in a context its
-//! entry fills ([`luna_jit_enter_ctx`]) and whose address it holds in the
-//! pinned register; the LLVM tier asks [`luna_jit_self_enter`] before each
-//! call and reports its return to [`luna_jit_self_leave`].
-
-use std::cell::Cell;
+//! Both tiers keep limit, failure flag and budget in a context their entry
+//! fills ([`luna_jit_enter_ctx`]): the Cranelift tier holds its address in
+//! the pinned register, the LLVM tier passes it, the limit and the calls
+//! left as arguments of its self calls.
 
 use luna_core::runtime::Value;
 
@@ -37,11 +35,6 @@ pub const SELF_CTX_WORDS: usize = 4;
 /// The `left` [`luna_jit_self_call_slow`] gets from code that does not
 /// count its calls: the budget is then the thread's own.
 pub const SELF_CALL_UNCOUNTED: i64 = i64::MIN;
-
-thread_local! {
-    /// native self-calls the LLVM tier's code has open on this thread
-    static NATIVE_DEPTH: Cell<i64> = const { Cell::new(0) };
-}
 
 /// What [`luna_jit_self_call_slow`] needs to know about the call, packed
 /// into the constant compiled code passes it: the argument count, which
@@ -77,49 +70,17 @@ pub unsafe extern "C" fn luna_jit_enter_ctx(ctx: *mut i64) {
     }
 }
 
-/// 1 when an LLVM-compiled self call may go on natively (and is then
-/// counted until [`luna_jit_self_leave`]), 0 when it must go through
-/// [`luna_jit_self_call_slow`].
-///
-/// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread.
-// SAFETY: no other item in the link is named `luna_jit_self_enter`: only this crate defines
-// `luna_jit_` symbols, each once
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_self_enter() -> i64 {
-    if luna_core::native_stack::is_low(luna_core::native_stack::JIT_RESERVE) {
-        return 0;
-    }
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
-    let vm = unsafe { current_jit_vm() };
-    let depth = NATIVE_DEPTH.with(Cell::get);
-    if vm.jit_call_budget(depth) <= 0 {
-        return 0;
-    }
-    NATIVE_DEPTH.with(|d| d.set(depth + 1));
-    1
-}
-
-/// An LLVM-compiled self call that [`luna_jit_self_enter`] let go on
-/// natively has returned.
-// SAFETY: no other item in the link is named `luna_jit_self_leave`: only this crate defines
-// `luna_jit_` symbols, each once
-#[unsafe(no_mangle)]
-pub extern "C" fn luna_jit_self_leave() {
-    NATIVE_DEPTH.with(|d| d.set(d.get() - 1));
-}
-
 /// Make the running closure's self-recursive call that compiled code could
 /// not make natively, with the arguments `a0..` described by `desc`
 /// ([`self_call_desc`]), and return its result as compiled code holds it.
-/// `ctx` is the Cranelift tier's context, or null from the LLVM tier;
+/// `ctx` is the code's context;
 /// `left` the calls the code had left, or [`SELF_CALL_UNCOUNTED`].
 /// With no calls left in the budget the call raises "stack overflow";
 /// otherwise the interpreter makes it. When the call fails, the error is
 /// left in `vm.jit.pending_raise` for the dispatcher to raise; when its
 /// result is not of the kind the compiled code expects, a deopt is parked.
-/// Either way the context's failure flag is set (the LLVM tier checks
-/// `luna_jit_no_deopt_parked`): callers whose going on could be seen
+/// Either way the context's failure flag is set: callers whose going on
+/// could be seen
 /// return at once, the others finish with dummy results that the
 /// dispatcher drops, and every self call they still make lands here and
 /// returns at once.
@@ -153,7 +114,7 @@ pub unsafe extern "C" fn luna_jit_self_call_slow(
         return 0;
     }
     let budget = if left == SELF_CALL_UNCOUNTED {
-        vm.jit_call_budget(NATIVE_DEPTH.with(Cell::get))
+        vm.jit_call_budget(0)
     } else {
         left
     };
