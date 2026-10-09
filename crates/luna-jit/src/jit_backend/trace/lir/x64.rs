@@ -78,7 +78,7 @@ impl Masm for X64 {
             &[0x0f, 0x1f, 0x00],
             &[0x0f, 0x1f, 0x40, 0x00],
         ];
-        while self.code.len() as u32 % to != 0 {
+        while !(self.code.len() as u32).is_multiple_of(to) {
             let k = ((to - self.code.len() as u32 % to) as usize).min(NOPS.len());
             self.code.extend_from_slice(NOPS[k - 1]);
         }
