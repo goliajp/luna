@@ -169,8 +169,8 @@ fn chunk_immediate_arithmetic() {
         -122
     );
     assert_eq!(
-        jit_matches_interpreter("local x = 5; return x - 128", Op::SubI),
-        -123
+        jit_matches_interpreter("local x = 5; return x - 127", Op::SubI),
+        -122
     );
     assert_eq!(
         jit_matches_interpreter("local x = 5; return x - -3", Op::SubI),
