@@ -29,6 +29,24 @@ impl Vm {
             | Op::Closure
             | Op::Vararg
             | Op::GetVarg => self.run_frame_op(inst)?,
+            // 5.2 / 5.3 jumps that close: rare enough to leave the fast loop
+            Op::JmpClose | Op::JmpCloseBack => {
+                self.close_from(base + inst.a() - 1);
+                let off = inst.jump_offset();
+                self.add_pc(off);
+                // a loop's back-edge counts toward recording it, as a `Jmp`'s
+                if off < 0 && self.jit.trace_enabled {
+                    let proto = cl.proto;
+                    let c = proto.trace_hot_count.get();
+                    if c < u32::MAX / 2 {
+                        proto.trace_hot_count.set(c + 1);
+                    }
+                    let target = self.pc_of_top();
+                    if self.jit.loop_hot_tick(&proto, target) {
+                        self.trace_start_at_back_edge(cl, base, target, None);
+                    }
+                }
+            }
             Op::Close => {
                 // Yieldable: drive __close handlers through the
                 // interpreter loop so a coroutine.yield() inside a

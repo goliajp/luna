@@ -214,7 +214,6 @@ impl Vm {
                     Op::Not => op_not!(),
                     Op::Len => op_len!(),
                     Op::Jmp => op_jmp!(),
-                    Op::JmpClose | Op::JmpCloseBack => op_jmp_close!(),
                     Op::Eq => op_eq!(),
                     Op::EqK => op_eq_k!(),
                     Op::Lt => order_arm!(<, false),
@@ -275,6 +274,8 @@ impl Vm {
                     // listed rather than `_`, so that the jump table covers every
                     // opcode without a range check
                     Op::Close
+                    | Op::JmpClose
+                    | Op::JmpCloseBack
                     | Op::Tbc
                     | Op::TailCall
                     | Op::Return
