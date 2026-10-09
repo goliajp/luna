@@ -95,9 +95,9 @@ struct Pending {
 /// as the Cranelift backend would, and hands it to the compile thread to
 /// compile with LLVM after `delay`; the Vm asks again at each entry of the
 /// trace and switches to LLVM's code at the first entry after it is ready.
-/// A trace not entered again within `delay` never costs an LLVM compile; a
-/// loop that runs on in one entry keeps Cranelift's code until it is
-/// entered again. Without, LLVM compiles the trace before it runs on.
+/// A trace not entered again within a nonzero `delay` never costs an LLVM
+/// compile; a loop that runs on in one entry keeps Cranelift's code until
+/// it is entered again. Without, LLVM compiles the trace before it runs on.
 pub(crate) fn tier_up_llvm(
     storage: &mut dyn luna_core::jit::JitStorage,
     ct: &CompiledTrace,
@@ -134,9 +134,10 @@ pub(crate) fn tier_up_llvm(
     };
     let (ready, done, entered) = (p.ready.clone(), p.done.clone(), p.entered.clone());
     let (lir, relocs) = (source.lir.clone(), source.relocs.clone());
+    let waited = !delay.is_zero();
     let ticket = crate::jit_backend::llvm_thread::submit(
         Box::new(move || {
-            let c = if entered.load(Ordering::Relaxed) {
+            let c = if entered.load(Ordering::Relaxed) || !waited {
                 compile(&lir, &relocs)
             } else {
                 Err("llvm:not-entered-again")
