@@ -447,15 +447,16 @@ impl Vm {
             let reused =
                 calls != t.calls_at && n >= t.at / crate::jit::trace::TIER_UP_REUSED_DIVISOR;
             if n >= t.at || reused {
-                self.trace_tier_up(ct);
+                self.trace_tier_up(ct, calls);
             }
         }
     }
 
     /// Hands a hot trace to the optimizing tier and points everything that
-    /// enters it at the new code.
+    /// enters it at the new code. `calls`: as for
+    /// [`Self::count_towards_tier_up`].
     #[cold]
-    fn trace_tier_up(&mut self, ct: &crate::jit::trace::CompiledTrace) {
+    fn trace_tier_up(&mut self, ct: &crate::jit::trace::CompiledTrace, calls: u32) {
         let Some(t) = &ct.tier_up else { return };
         t.tried.set(true);
         let entry = {
@@ -469,10 +470,15 @@ impl Vm {
         // iterations, else once the baseline code's count reaches `at` anew
         if t.source.borrow().is_some() {
             let counting = entry.is_none() && t.optimized.get().is_null();
+            let due = if calls != t.calls_at {
+                t.at / crate::jit::trace::TIER_UP_REUSED_DIVISOR
+            } else {
+                t.at
+            };
             t.count.set(if counting {
                 0
             } else {
-                t.at.saturating_sub(crate::jit::trace::TIER_UP_REASK)
+                due.saturating_sub(crate::jit::trace::TIER_UP_REASK)
             });
             t.tried.set(false);
         }
