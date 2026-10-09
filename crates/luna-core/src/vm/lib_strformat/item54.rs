@@ -102,6 +102,7 @@ pub(super) fn item54(
             }
             addliteral(vm, a, arg, out)?;
         }
+        b's' if form.len() == 2 && plain_str(vm, a, arg, out) => {}
         b's' => {
             // a `__tostring` runs above the buffer's slot; its result stays
             // pushed over the errors that follow
