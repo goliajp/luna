@@ -27,7 +27,8 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let f = argcheck::check_string(vm, a, 0)?;
     let fmt = f.as_bytes();
     let v = vm.version();
-    let mut out = Vec::with_capacity(fmt.len());
+    // room for a few converted items before the buffer regrows
+    let mut out = Vec::with_capacity(fmt.len() + 32);
     let mut arg = 0u32;
     let mut i = 0;
     // the buffer's slot counts only when a callback runs or an error is
@@ -188,6 +189,7 @@ fn item51(
             }
             _ => addliteral(vm, a, arg, out)?,
         },
+        b's' if v >= LuaVersion::Lua53 && body.is_empty() && plain_str(vm, a, arg, out) => {}
         b's' => {
             let s = if v == LuaVersion::Lua51 {
                 argcheck::check_string(vm, a, arg)?.as_bytes().to_vec()
@@ -257,4 +259,18 @@ fn tolstring_52(vm: &mut Vm, v: Value, extra: u32) -> Result<Vec<u8>, LuaError> 
 
 fn c_int_cast(x: f64) -> i32 {
     x as i32
+}
+
+/// Append argument `arg` when it is a string `luaL_tolstring` gives back
+/// as it is (no `__tostring` in the way); false, appending nothing, when it
+/// is not.
+fn plain_str(vm: &mut Vm, a: Args, arg: u32, out: &mut Vec<u8>) -> bool {
+    let v = a.get(vm, arg);
+    match v {
+        Value::Str(s) if vm.get_mm(v, crate::vm::exec::Mm::ToString).is_nil() => {
+            out.extend_from_slice(s.as_bytes());
+            true
+        }
+        _ => false,
+    }
 }
