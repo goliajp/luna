@@ -18,37 +18,12 @@ impl Compiler<'_> {
             BinOp::BXor => self.arith(Op::BXor, l, r),
             BinOp::Shl => self.arith(Op::Shl, l, r),
             BinOp::Shr => self.arith(Op::Shr, l, r),
-            BinOp::Eq => Exp::Cmp {
-                op: Op::Eq,
-                l,
-                r,
-                c: 0,
-            },
-            BinOp::Ne => self.negate_cmp(Op::Eq, l, r, 0)?,
-            BinOp::Lt => Exp::Cmp {
-                op: Op::Lt,
-                l,
-                r,
-                c: 0,
-            },
-            BinOp::Le => Exp::Cmp {
-                op: Op::Le,
-                l,
-                r,
-                c: 0,
-            },
-            BinOp::Gt => Exp::Cmp {
-                op: Op::Lt,
-                l: r,
-                r: l,
-                c: 0,
-            },
-            BinOp::Ge => Exp::Cmp {
-                op: Op::Le,
-                l: r,
-                r: l,
-                c: 0,
-            },
+            BinOp::Eq => self.compare(Op::Eq, l, r, 0, true)?,
+            BinOp::Ne => self.compare(Op::Eq, l, r, 0, false)?,
+            BinOp::Lt => self.compare(Op::Lt, l, r, 0, true)?,
+            BinOp::Le => self.compare(Op::Le, l, r, 0, true)?,
+            BinOp::Gt => self.compare(Op::Lt, r, l, 0, true)?,
+            BinOp::Ge => self.compare(Op::Le, r, l, 0, true)?,
             BinOp::And | BinOp::Or | BinOp::Concat => unreachable!(),
         })
     }
@@ -57,23 +32,17 @@ impl Compiler<'_> {
         Exp::Reloc(self.emit(Inst::iabc(op, 0, l, r, false)))
     }
 
-    /// `a ~= b`: comparison materialized with inverted k.
-    pub(super) fn negate_cmp(
+    /// PUC `condjump` of a comparison: the test and its jump, taken when
+    /// the test gives `k` (PUC `VJMP`).
+    pub(super) fn compare(
         &mut self,
         op: Op,
         l: u32,
         r: u32,
         c: u32,
+        k: bool,
     ) -> Result<Exp, SyntaxError> {
-        let reg = self.reserve(1)?;
-        self.l().freereg -= 1;
-        self.emit(Inst::iabc(op, l, r, c, false));
-        self.emit(Inst::isj(Op::Jmp, 1));
-        self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
-        let tpad = self.here();
-        self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
-        // Jmp(1) lands on tpad — mark.
-        self.mark_target(tpad);
-        Ok(Exp::Reg(reg))
+        let pc = self.cond_jump(Inst::iabc(op, l, r, c, k))?;
+        Ok(Exp::Jmp(pc as usize))
     }
 }

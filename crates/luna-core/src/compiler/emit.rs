@@ -4,16 +4,17 @@ use super::*;
 use crate::runtime::mem::word_hash;
 
 impl<'a> Compiler<'a> {
+    #[inline]
     pub(super) fn emit(&mut self, i: Inst) -> usize {
+        // only 5.1–5.3 leave jumps waiting for the next instruction
+        if self.lr().jpc != NO_JUMP {
+            self.discharge_jpc();
+        }
         let line = self.force_line.unwrap_or(self.last_line);
         let l = self.l();
         l.code.push_or_abort(i);
         l.lines.push_or_abort(line);
         l.code.len() - 1
-    }
-
-    pub(super) fn emit_jump(&mut self) -> usize {
-        self.emit(Inst::isj(Op::Jmp, 0))
     }
 
     pub(super) fn here(&self) -> usize {
@@ -32,50 +33,6 @@ impl<'a> Compiler<'a> {
         } else {
             MAX_SJ as u64
         }
-    }
-
-    /// Patch a pending forward jump emitted earlier at `pc` so that it lands
-    /// at the current `here()` position, and mark `here()` as a jump target
-    /// (see `Level::last_target`). Mirrors PUC `luaK_patchtohere`.
-    ///
-    /// This is the canonical "this jump lands at the next instruction we are
-    /// about to emit" hook; every patch-pending-forward-jump call site routes
-    /// through it so that the jump-target tracker stays consistent. There is
-    /// no separate `patch_jump` variant that elides the mark — patching a
-    /// forward jump to a position that is not yet a target is meaningless.
-    pub(super) fn patch_to_here(&mut self, pc: usize) -> Result<(), SyntaxError> {
-        let target = self.here();
-        let off = target as i64 - pc as i64 - 1;
-        if off.unsigned_abs() > self.jump_cap() {
-            return Err(self.err(self.last_line, "control structure too long"));
-        }
-        self.l().code[pc].set_sj(off as i32);
-        self.mark_target(target);
-        Ok(())
-    }
-
-    /// Point the jump at `pc` back to `target`, an earlier pc.
-    pub(super) fn patch_back(&mut self, pc: usize, target: usize) -> Result<(), SyntaxError> {
-        let off = target as i64 - pc as i64 - 1;
-        if off.unsigned_abs() > self.jump_cap() {
-            return Err(self.err(self.last_line, "control structure too long"));
-        }
-        self.l().code[pc].set_sj(off as i32);
-        self.mark_target(target);
-        Ok(())
-    }
-
-    pub(super) fn jump_back(&mut self, target: usize) -> Result<(), SyntaxError> {
-        let off = target as i64 - self.here() as i64 - 1;
-        if off.unsigned_abs() > self.jump_cap() {
-            return Err(self.err(self.last_line, "control structure too long"));
-        }
-        self.emit(Inst::isj(Op::Jmp, off as i32));
-        // The back-edge lands at `target`, which was captured upstream
-        // (typically `let top = self.here()` before a loop header). Mark it
-        // so a future peephole pass sees that pc as occupied.
-        self.mark_target(target);
-        Ok(())
     }
 
     /// Record that `pc` is now a jump destination. Monotonic; advances

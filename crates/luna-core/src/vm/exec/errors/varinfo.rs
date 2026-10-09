@@ -90,7 +90,7 @@ impl Vm {
                 }
             }
             Op::Concat => {
-                let a = instr.a();
+                let a = instr.concat_operands().0;
                 for r in a..a + instr.b() {
                     cands.push(r);
                 }

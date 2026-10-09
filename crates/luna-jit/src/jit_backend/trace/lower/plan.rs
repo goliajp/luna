@@ -4,12 +4,14 @@ mod cmp_table_checks;
 mod frames;
 mod op_checks;
 mod scan;
+mod trace_ends;
 mod validate;
 mod value_checks;
 use cmp_table_checks::*;
 use frames::*;
 use op_checks::*;
 use scan::*;
+use trace_ends::*;
 use validate::*;
 use value_checks::*;
 
@@ -24,7 +26,7 @@ pub(super) struct BufferedAccum {
     pub(super) pre1_idx: usize,
     pub(super) pre2_idx: usize,
     pub(super) concat_idx: usize,
-    pub(super) post_idx: usize,
+    pub(super) post_idx: Option<usize>,
 }
 
 /// What the pre-emit passes found out about a trace: its register
@@ -214,7 +216,7 @@ pub(super) fn plan_trace<'r>(
             pre1_idx: s.op_idx - 2,
             pre2_idx: s.op_idx - 1,
             concat_idx: s.op_idx,
-            post_idx: s.op_idx + 1,
+            post_idx: s.has_post.then_some(s.op_idx + 1),
         });
 
     let (consumed_by_cmp, cmp_dirs) = validate_ops(

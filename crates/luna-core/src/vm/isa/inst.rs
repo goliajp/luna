@@ -11,7 +11,7 @@ pub struct Inst(
 );
 
 const POS_A: u32 = 7;
-const POS_K: u32 = 15;
+pub(super) const POS_K: u32 = 15;
 const POS_B: u32 = 16;
 const POS_C: u32 = 24;
 const POS_BX: u32 = 15;

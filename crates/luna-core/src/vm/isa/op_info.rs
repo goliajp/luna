@@ -202,6 +202,11 @@ impl Op {
         })
     }
 
+    /// An unconditional jump: `Jmp`, or a 5.2 / 5.3 jump that closes.
+    pub fn is_jump(self) -> bool {
+        matches!(self, Op::Jmp | Op::JmpClose | Op::JmpCloseBack)
+    }
+
     /// A conditional test: the instruction after it is the `Jmp` it may skip.
     pub fn is_test(self) -> bool {
         matches!(

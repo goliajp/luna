@@ -11,7 +11,9 @@ impl Checker<'_> {
         let next = pc + 1;
         let (fall, other) = match self.ops[pc] {
             Op::Return | Op::Return0 | Op::Return1 => (None, [None, None]),
-            Op::Jmp => (None, [Some(pc_i + 1 + i.sj() as i64), None]),
+            Op::Jmp | Op::JmpClose | Op::JmpCloseBack => {
+                (None, [Some(pc_i + 1 + i.jump_offset() as i64), None])
+            }
             // the extra argument at pc + 1 is consumed, not executed
             Op::LoadKx => (None, [Some(pc_i + 2), None]),
             Op::SetList if i.k() => (None, [Some(pc_i + 2), None]),
@@ -77,7 +79,10 @@ impl Checker<'_> {
                 Ok(None)
             }
             op if op.is_test() => {
-                if self.ops.get(pc + 1) != Some(&Op::Jmp) {
+                if !matches!(
+                    self.ops.get(pc + 1),
+                    Some(Op::Jmp | Op::JmpClose | Op::JmpCloseBack)
+                ) {
                     return Err(self.err(pc, "not followed by a Jmp".to_string()));
                 }
                 Ok(None)

@@ -76,6 +76,10 @@ pub(super) fn is_whitelisted_op(op: Op) -> bool {
             // close_from is idempotent on the deopt path (open
             // upvals already popped).
             | Op::Close
+            // 5.2 / 5.3 closing jumps: the close as `Op::Close`, the
+            // jump as `Op::Jmp`
+            | Op::JmpClose
+            | Op::JmpCloseBack
             // Op::GetUpval reads the trace head
             // closure's upvals[idx] via the `luna_jit_upval_get`
             // helper (the dispatcher's enter_jit pins JIT_CL).

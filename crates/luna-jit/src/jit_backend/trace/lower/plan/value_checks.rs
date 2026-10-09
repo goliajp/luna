@@ -157,7 +157,7 @@ pub(super) fn validate_value_op(
                 }
             }
             let next = &record.ops[i + 1];
-            if !matches!(next.inst.op(), Op::Jmp) || next.pc != rop.pc + 1 {
+            if !next.inst.op().is_jump() || next.pc != rop.pc + 1 {
                 {
                     checkpoint("bail:cmp-dirs-body-other");
                     return None;

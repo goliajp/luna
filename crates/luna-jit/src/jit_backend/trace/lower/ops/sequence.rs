@@ -147,7 +147,10 @@ pub(super) fn emit_sequence_op<E: Emit>(
         }
         // N-operand concat via helper.
         Op::Concat => {
-            let a_us = ins.a() as usize;
+            // 5.1–5.3 name their destination: the operands from C fold
+            // into R[C] and the result goes to R[A] too
+            let (first, out) = ins.concat_operands();
+            let a_us = first as usize;
             let n_operands = ins.b() as usize;
             // Spill every operand slot to vm.stack so the
             // helper's concat_run can read them. For Unset
@@ -189,8 +192,10 @@ pub(super) fn emit_sequence_op<E: Emit>(
             let a_arg_reload = lw.bcx.ins().iconst(types::I64, a_us as i64);
             let reload_inst = lw.bcx.ins().call(stack_load_ref, &[a_arg_reload]);
             let result_raw = lw.bcx.inst_results(reload_inst)[0];
-            lw.bcx.def_var(regs[a_us], result_raw);
-            lw.current_kinds[off + a_us] = RegKind::Str;
+            for r in [a_us, out as usize] {
+                lw.bcx.def_var(regs[r], result_raw);
+                lw.current_kinds[off + r] = RegKind::Str;
+            }
         }
         _ => unreachable!("routed by emit_op"),
     }

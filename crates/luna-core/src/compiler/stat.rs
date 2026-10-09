@@ -17,18 +17,27 @@ impl<'a> Compiler<'a> {
         b: &Block,
         until_follows: bool,
     ) -> Result<(), SyntaxError> {
-        for (i, &sid) in self.ls(b.stats).iter().enumerate() {
+        self.stat_list(self.ls(b.stats), until_follows)
+    }
+
+    /// The statements `stats` of a block (see [`Self::stat_block_inner`]).
+    pub(super) fn stat_list(
+        &mut self,
+        stats: &'a [StatId],
+        until_follows: bool,
+    ) -> Result<(), SyntaxError> {
+        for (i, &sid) in stats.iter().enumerate() {
             let ast = self.ast;
             if let Stat::Label(n) = ast.stat(sid) {
                 // a trailing label (only labels after it) does not enter the
                 // scope of the block's locals (continue-style jumps); in a
                 // repeat body the trailing `until` keeps the locals alive.
                 let trailing = !until_follows
-                    && self.ls(b.stats)[i + 1..]
+                    && stats[i + 1..]
                         .iter()
                         .all(|&s| matches!(self.ast.stat(s), Stat::Label(_)));
                 self.last_line = n.line;
-                self.define_label(self.nm(n), n.line, trailing)?;
+                self.define_label(self.nm(n), trailing)?;
                 continue;
             }
             self.stat(sid)?;
@@ -48,9 +57,22 @@ impl<'a> Compiler<'a> {
         // activelines, and line hooks are precise even before the first sub-
         // expression sets a finer line.
         let sline = self.ast.stat_line(sid);
-        if sline != 0 {
+        // 5.2 / 5.3 emit the jump of a `break` / `goto` before reading the
+        // keyword: it takes the line of the token before
+        let jumps_first = matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53)
+            && matches!(self.ast.stat(sid), Stat::Break { .. } | Stat::Goto(_));
+        if sline != 0 && !jumps_first {
             self.last_line = sline;
         }
+        self.stat_body(sid)?;
+        // the statement's last token is read
+        if let Some(line) = self.stat_end_line(sid) {
+            self.last_line = line;
+        }
+        self.jump_error()
+    }
+
+    fn stat_body(&mut self, sid: StatId) -> Result<(), SyntaxError> {
         let ast = self.ast;
         match ast.stat(sid) {
             Stat::Do(b) => self.block_scoped(b),
@@ -85,36 +107,7 @@ impl<'a> Compiler<'a> {
                 *expr_line,
                 self.stat_end_line(sid),
             ),
-            Stat::Break { line } => {
-                self.last_line = *line;
-                let Some(loop_floor) = self
-                    .lr()
-                    .blocks
-                    .iter()
-                    .rev()
-                    .find(|b| b.is_loop)
-                    .map(|b| b.reg_floor)
-                else {
-                    return Err(self.err(*line, "break outside a loop"));
-                };
-                // 5.4 jumps to the loop's end and closes there (PUC's
-                // "break" label); the others close on the spot
-                if self.version != LuaVersion::Lua54 {
-                    self.emit(Inst::iabc(Op::Close, loop_floor, 0, 0, false));
-                }
-                let jmp = self.emit_jump();
-                let level = self.lr().locals.len();
-                let lp = self
-                    .l()
-                    .blocks
-                    .iter_mut()
-                    .rev()
-                    .find(|b| b.is_loop)
-                    .expect("loop block");
-                lp.breaks.push_or_abort(jmp);
-                lp.break_levels.push_or_abort(level);
-                Ok(())
-            }
+            Stat::Break { line } => self.break_stat(*line),
             Stat::Return { exprs, line } => {
                 self.last_line = *line;
                 self.return_stat(self.ls(*exprs))

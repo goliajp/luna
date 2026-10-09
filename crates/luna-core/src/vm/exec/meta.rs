@@ -168,10 +168,10 @@ impl Vm {
                 };
                 self.cond_skip(t, k);
             }
-            MetaAction::Concat { dst, base_a } => {
+            MetaAction::Concat { dst, base_a, out } => {
                 self.stack[dst as usize] = result;
                 self.top = dst + 1;
-                self.concat_run(base_a)?;
+                self.concat_run(base_a, (base_a as i64 + out as i64) as u32)?;
             }
         }
         Ok(())

@@ -8,7 +8,6 @@
 //! generic `for`, multret, tail calls. Still pending (slice 5): goto/labels,
 //! `<close>`, `global` declarations.
 
-mod and_or_chain;
 mod assign;
 mod assign_conflict;
 mod binop;
@@ -28,7 +27,9 @@ mod expr_names;
 mod expr_ops;
 mod fold;
 mod for_loops;
-mod goto_stat;
+mod jumplist;
+mod labels;
+use jumplist::NO_JUMP;
 mod level;
 mod limits;
 mod lvalue;
@@ -37,7 +38,6 @@ use main_fn::compile_main;
 mod resolve;
 mod return_stat;
 mod scope;
-mod small_list;
 mod stat;
 mod table_ctor;
 mod vararg_scan;
@@ -48,7 +48,6 @@ pub(crate) use level::CompileScratch;
 use level::{Level, LevelBufs};
 use limits::{MAX_LOCALS, max_regs, max_upvals};
 use lvalue::{KeyRef, Lv, TabRef};
-use small_list::Jumps;
 
 use crate::frontend::ast::{
     self, AttribName, BinOp, Block, Chunk, Expr, ExprId, FuncBody, FuncName, List, ListItem, Name,
@@ -140,23 +139,16 @@ struct AVar<'a> {
 
 struct BlockCx<'a> {
     first_local: usize,
-    /// index into `Level::avars` at block entry (goto-scope truncation point)
+    /// index into `Level::avars` at block entry (PUC `bl->nactvar`)
     first_avar: usize,
     reg_floor: u32,
-    is_loop: bool,
-    breaks: LVec<usize>,
-    /// 5.4: per entry of `breaks`, the number of active locals at the
-    /// `break`, to tell which blocks with upvalues it leaves
-    break_levels: LVec<usize>,
-    /// 5.4: a `break` left the scope of a local needing a CLOSE (PUC's
-    /// goto `close` flag), so the loop's "break" label closes
-    break_close: bool,
-    /// the pc where the block starts
-    start_pc: usize,
-    /// visible labels defined in this block
-    labels: LVec<LabelDef<'a>>,
-    /// forward gotos not yet matched to a label
-    gotos: LVec<GotoRef<'a>>,
+    /// PUC `bl->isloop`; 5.5 sets 2 once a `break` waits for the loop
+    is_loop: u8,
+    /// 5.1: the loop's `break` jumps (PUC `bl->breaklist`)
+    breaklist: i32,
+    /// the first of `Level::labels` / `Level::gotos` this block holds
+    first_label: usize,
+    first_goto: usize,
     /// explicit `global` declarations in this block (name, read_only)
     gdecls: LVec<(&'a str, bool)>,
     /// `global [attrib] *` in this block: Some(read_only)
@@ -168,33 +160,18 @@ struct BlockCx<'a> {
     /// tail calls so the function returns to run __close. Tracked separately
     /// from `has_tbc` so it doesn't perturb CLOSE-instruction emission.
     tbc_scope: bool,
-    /// 5.4: the loop body's locals (from this index of `locals`) went out
-    /// of scope at this pc, before the loop's per-iteration CLOSE; PUC keeps
-    /// the body in a block of its own and removes its variables first
-    body_end: Option<(usize, u32)>,
-    /// a `for` loop: its variables were closed at the end of each pass
-    /// (on exit too), so leaving the block closes only what is above them
-    for_loop: bool,
-    /// the line of the loop's closing `end`, when known: the CLOSE after a
-    /// 5.4 `break` label is emitted there
-    end_line: Option<u32>,
 }
 
-struct LabelDef<'a> {
-    name: &'a str,
-    pc: usize,
-    /// source line of the label (for "already defined on line N")
-    line: u32,
-    /// locals active at the label (trailing labels use the block floor)
-    nactive: usize,
-}
-
+/// A label, or a pending `goto` (PUC `Labeldesc`).
 #[derive(Clone, Copy)]
-struct GotoRef<'a> {
+struct LabelDesc<'a> {
     name: &'a str,
-    jmp_pc: usize,
-    line: u32,
-    nactive: usize,
+    /// the label's pc; a goto's jump list
+    pc: i32,
+    /// active variables at the label or goto (PUC `nactvar`)
+    nactvar: usize,
+    /// 5.4+: the goto leaves a block that needs closing
+    close: bool,
 }
 
 enum VarKind {
@@ -221,15 +198,11 @@ enum Exp {
     Reg(u32),
     /// instruction at index has an unassigned A (destination pending)
     Reloc(usize),
-    /// comparison not yet materialized
-    /// `l` is A, `r` is B (a register, or the biased immediate of `EqI`…
-    /// `GeI`, or the constant index of `EqK`), `c` is C
-    Cmp {
-        op: Op,
-        l: u32,
-        r: u32,
-        c: u32,
-    },
+    /// a test and its jump, the jump at this pc taken when the test is
+    /// true (PUC `VJMP`)
+    Jmp(usize),
+    /// a value with true / false jump lists: entry of `Level::jexps`
+    Jumps(u32),
     /// open multi-result producer (CALL/VARARG) at `pc`, results from `base`
     Open {
         pc: usize,
@@ -297,7 +270,7 @@ impl<'a> Compiler<'a> {
         self.heap.adopt_proto(proto)
     }
 
-    /// The `end` line the parser recorded for statement `sid`.
+    /// The line of statement `sid`'s last token, as the parser recorded it.
     fn stat_end_line(&self, sid: StatId) -> Option<u32> {
         self.end_lines
             .get(sid.0 as usize)

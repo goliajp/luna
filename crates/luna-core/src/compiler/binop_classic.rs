@@ -51,12 +51,16 @@ impl Compiler<'_> {
             None => self.exp_rk(le)?,
         };
         self.set_freereg(saved);
-        let saved_force = self.force_line.replace(line);
-        let e = if arith {
-            self.arith_rk(op, l, r)
-        } else {
-            self.compare_rk(op, l, r)
+        // 5.2 / 5.3 put an arithmetic instruction on the operator's line; a
+        // comparison, and 5.1's arithmetic, go where the right operand ends
+        if !arith {
+            return self.compare_rk(op, l, r);
+        }
+        let saved_force = match self.version {
+            LuaVersion::Lua51 => self.force_line,
+            _ => self.force_line.replace(line),
         };
+        let e = self.arith_rk(op, l, r);
         self.force_line = saved_force;
         e
     }
@@ -111,14 +115,6 @@ impl Compiler<'_> {
             (Rk::K(k), Rk::Reg(b)) => (kop, b, k, 1),
             (Rk::K(x), Rk::K(y)) => (kkop, x, y, 0),
         };
-        if op == BinOp::Ne {
-            return self.negate_cmp(cop, a, b, c);
-        }
-        Ok(Exp::Cmp {
-            op: cop,
-            l: a,
-            r: b,
-            c,
-        })
+        self.compare(cop, a, b, c, op != BinOp::Ne)
     }
 }

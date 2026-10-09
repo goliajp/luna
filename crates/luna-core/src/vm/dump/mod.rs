@@ -2,7 +2,7 @@
 //!
 //! Sub-modules:
 //! - `luna` — luna's own dump / undump (per-dialect PUC header + a
-//!   luna-specific body sentinel-tagged `"\x00LunaV4\x00"`).
+//!   luna-specific body sentinel-tagged `"\x00LunaV5\x00"`).
 //! - `reader` — shared byte-stream reader + PUC `loadSize` ULEB128 port
 //!   (0-dep — luna-core contract forbids `leb128` / `byteorder` crates).
 //! - `puc` — magic-byte → per-dialect PUC undumper dispatch.
@@ -33,7 +33,7 @@ use crate::version::LuaVersion;
 /// Serialise a function prototype to a binary chunk.
 ///
 /// Delegates to `luna::dump` (private sibling module); output is luna's
-/// own body format (PUC dialect header + `"\x00LunaV4\x00"` sentinel +
+/// own body format (PUC dialect header + `"\x00LunaV5\x00"` sentinel +
 /// luna body). Not PUC-loadable.
 pub fn dump(proto: &Proto, strip: bool, version: LuaVersion) -> Vec<u8> {
     luna::dump(proto, strip, version)

@@ -16,6 +16,21 @@ impl C<'_, '_> {
                 let w = self.jmp(0)?;
                 self.asm.jump(w, Dist::SBx, pc + 1 + l.sj)?;
             }
+            Op::JmpClose | Op::JmpCloseBack if self.f.ver != 51 => {
+                let a = self.asm.r(l.a - 1)?;
+                let w = self.jmp(a + 1)?;
+                self.asm.jump(w, Dist::SBx, pc + 1 + l.sj)?;
+            }
+            Op::Close => {
+                let a = self.asm.r(l.a)?;
+                let w = if self.f.ver == 51 {
+                    self.raw_abc(p51::OP_CLOSE as u32, a, 0, 0)?
+                } else {
+                    // `JMP A+1 0`: close upvalues from R(A), fall through
+                    self.jmp(a + 1)? | ((1 << 17) - 1) << 14
+                };
+                self.asm.emit(w);
+            }
             Op::Eq | Op::Lt | Op::Le => {
                 let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
                 self.emit(self.abc(cmp_kind(l.op), l.k as u32, a, b))?;

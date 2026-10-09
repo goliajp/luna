@@ -11,7 +11,10 @@ use luna_core::vm::isa::Op;
 use luna_jit::LuaVersion;
 use luna_jit_llvm::{LlvmBackend, LlvmJitStorage};
 
+#[path = "operand_types/forms.rs"]
+mod forms;
 mod support;
+use forms::{jit_matches_interpreter, refused};
 
 /// The storage owns the compiled code: keep it while calling `entry`.
 fn chunk(src: &[u8]) -> (luna_jit::vm::Vm, LlvmJitStorage, CompileResult) {
@@ -110,54 +113,6 @@ fn chunk_call_through_a_reassigned_upvalue_deopts() {
     );
 }
 
-/// The compiler folds a constant operand into the instruction (`AddI`,
-/// `AddK`, `LtI`, `EqK`, …) instead of loading it into a register. The
-/// chunk JIT reads those operands from the instruction and the constant
-/// table; `src` must contain `op`, and the JIT entry must return what the
-/// interpreter returns.
-fn jit_matches_interpreter(src: &str, op: Op) -> i64 {
-    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
-    let cl = vm.load(src.as_bytes(), b"=chunk").expect("parse");
-    let proto = cl.proto;
-    assert!(
-        proto.code.iter().any(|i| i.op() == op),
-        "{src}: expected {op:?}, got {:?}",
-        proto.code
-    );
-    let expected = match vm
-        .call_value(Value::Closure(cl), &[])
-        .expect("runs")
-        .first()
-    {
-        Some(Value::Int(i)) => *i,
-        other => panic!("{src}: interpreter returned {other:?}"),
-    };
-    let mut storage = LlvmJitStorage::default();
-    let CompileResult::Compiled { entry, .. } =
-        LlvmBackend.try_compile(&mut storage, proto, false, false)
-    else {
-        panic!("{src}: did not compile ({:?})", proto.code)
-    };
-    // SAFETY: `entry` is from the `try_compile` above, for a chunk with no
-    // parameters, and `storage` is still alive
-    let got = unsafe { support::call_chunk(entry, &[]) };
-    assert_eq!(got, expected, "{src}: jit {got}, interpreter {expected}");
-    got
-}
-
-/// `src` contains `op` and the chunk JIT refuses it.
-fn refused(src: &str, op: Op) {
-    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
-    let proto = vm.load(src.as_bytes(), b"=chunk").expect("parse").proto;
-    assert!(
-        proto.code.iter().any(|i| i.op() == op),
-        "{src}: expected {op:?}, got {:?}",
-        proto.code
-    );
-    let r = LlvmBackend.try_compile(&mut LlvmJitStorage::default(), proto, false, false);
-    assert!(matches!(r, CompileResult::Skipped), "{src}: compiled");
-}
-
 #[test]
 fn chunk_immediate_arithmetic() {
     assert_eq!(
@@ -169,8 +124,8 @@ fn chunk_immediate_arithmetic() {
         -122
     );
     assert_eq!(
-        jit_matches_interpreter("local x = 5; return x - 128", Op::SubI),
-        -123
+        jit_matches_interpreter("local x = 5; return x - 127", Op::SubI),
+        -122
     );
     assert_eq!(
         jit_matches_interpreter("local x = 5; return x - -3", Op::SubI),

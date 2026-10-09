@@ -163,25 +163,15 @@ pub(super) enum Jump {
     Back,
     /// `TForPrep`: `Bx` = distance from the next pc to its `TForCall`.
     TForPrep,
-}
-
-enum Target {
-    Puc(usize),
-    /// Index into `Lowering::trampolines`.
-    Trampoline(usize),
+    /// `JmpClose` / `JmpCloseBack`: the offset from the next pc.
+    JmpClose,
 }
 
 struct Fixup {
     at: usize,
-    target: Target,
-    kind: Jump,
-}
-
-/// `Close close; Jmp target`, placed after the function's code.
-struct Trampoline {
-    close: u32,
+    /// the PUC pc jumped to
     target: usize,
-    line: u32,
+    kind: Jump,
 }
 
 /// Emitter for one function body. See the module docs.
@@ -196,7 +186,6 @@ pub(super) struct Lowering {
     /// PUC pc → first luna pc emitted for it (`None`: emitted nothing).
     first: Vec<Option<u32>>,
     fixups: Vec<Fixup>,
-    trampolines: Vec<Trampoline>,
     pc: usize,
     line: u32,
     /// which constants are strings: only those may be the key of `GetField`,
@@ -223,7 +212,6 @@ impl Lowering {
             lines: Vec::with_capacity(n_puc),
             first: vec![None; n_puc],
             fixups: Vec::new(),
-            trampolines: Vec::new(),
             pc: 0,
             line: 0,
             kstr: consts.iter().map(|v| matches!(v, Value::Str(_))).collect(),
@@ -296,31 +284,10 @@ impl Lowering {
         let target = self.puc_target(target)?;
         self.fixups.push(Fixup {
             at: self.code.len(),
-            target: Target::Puc(target),
+            target,
             kind,
         });
         self.emit(inst);
-        Ok(())
-    }
-
-    /// Jump to `target`, closing upvalues from `R[close]` on the way, as a
-    /// single luna instruction. A comparison or test skips exactly one luna
-    /// instruction, and PUC lets the jump it guards close upvalues (a
-    /// `break` out of a loop that captured a local), so the `Close` cannot
-    /// sit inline: it goes in a trampoline after the function's code.
-    pub(super) fn jump_closing(&mut self, close: u32, target: i64) -> Result<(), String> {
-        let target = self.puc_target(target)?;
-        self.trampolines.push(Trampoline {
-            close,
-            target,
-            line: self.line,
-        });
-        self.fixups.push(Fixup {
-            at: self.code.len(),
-            target: Target::Trampoline(self.trampolines.len() - 1),
-            kind: Jump::Jmp,
-        });
-        self.emit(enc_sj(Op::Jmp, 0)?);
         Ok(())
     }
 
@@ -438,19 +405,15 @@ impl Lowering {
         Ok(())
     }
 
-    /// `R[a] := R[b] .. ... .. R[c]`. luna concatenates in place at the first
-    /// operand, so a result register elsewhere takes a `Move`.
+    /// `R[a] := R[b] .. ... .. R[c]`: a `Concat` with its own destination.
     pub(super) fn concat_range(&mut self, a: u32, b: u32, c: u32) -> Result<(), String> {
         if c < b {
             return Err(self.err(format_args!("CONCAT range {b}..{c} is empty")));
         }
         let n = c - b + 1;
         let first = self.run(b, n)?;
-        self.emit(enc_abc(Op::Concat, first, n, 0, false)?);
-        if a != b {
-            let a = self.r(a)?;
-            self.emit(enc_abc(Op::Move, a, first, 0, false)?);
-        }
+        let a = self.r(a)?;
+        self.emit(enc_abc(Op::Concat, a, n, first, true)?);
         Ok(())
     }
 }
