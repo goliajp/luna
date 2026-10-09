@@ -90,7 +90,8 @@ pub struct Proto {
     /// Code a backend is still compiling for this function in the
     /// background: the entry it stores once ready (0 until then), with the
     /// ABI of `jit`'s, which the next call from the interpreter puts in
-    /// place of `jit`'s entry. `None` when nothing is pending.
+    /// place of `jit`'s entry; [`JIT_NEXT_NONE`] when it compiled none.
+    /// `None` when nothing is pending.
     pub jit_next: std::cell::Cell<Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>>,
     /// Trace JIT hot-loop detector. Incremented by `Vm::run`
     /// on each backward-jump dispatched within this Proto. Once the
@@ -174,6 +175,10 @@ pub struct Proto {
     #[doc(hidden)]
     pub trace_call_head_settled: std::cell::Cell<bool>,
 }
+
+/// What a backend stores in [`Proto::jit_next`] when it compiled no code
+/// after all.
+pub const JIT_NEXT_NONE: usize = usize::MAX;
 
 /// Per-Proto JIT cache state. Copy so it fits a plain
 /// `Cell` on the dispatch hot path (no `RefCell` borrow check); the

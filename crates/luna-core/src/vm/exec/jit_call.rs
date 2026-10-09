@@ -362,6 +362,9 @@ fn take_jit_next(proto: &crate::runtime::function::Proto) {
         proto.jit_next.set(Some(next));
         return;
     }
+    if ready == crate::runtime::function::JIT_NEXT_NONE {
+        return;
+    }
     crate::jit::code_fence();
     if let JitProtoState::Compiled {
         num_args,

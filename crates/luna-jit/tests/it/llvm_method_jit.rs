@@ -121,3 +121,52 @@ fn background_code_becomes_the_entry() {
     let taken = fib.proto.jit_next.take();
     assert!(taken.is_none(), "the cell stays after its code was taken");
 }
+
+/// A function LLVM's method JIT turns down on the compile thread (5.1's
+/// `return nil` from a register nothing wrote) stops being looked at for
+/// LLVM's code and keeps Cranelift's.
+#[test]
+fn background_code_turned_down_keeps_the_entry() {
+    use luna_jit::runtime::function::JitProtoState;
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua51);
+    luna_jit::install_llvm_backend_with(
+        &mut vm,
+        luna_jit::jit_backend::LlvmBackend {
+            llvm_after: Some(std::time::Duration::ZERO),
+        },
+    );
+    let cl = vm
+        .load(
+            b"local function f() return nil end
+              return f, function() return tostring(f()) end",
+            b"=t",
+        )
+        .expect("compile");
+    let r = vm.call_value(Value::Closure(cl), &[]).expect("run");
+    let (Value::Closure(f), Value::Closure(run)) = (r[0], r[1]) else {
+        panic!("{r:?}")
+    };
+    let call = |vm: &mut luna_jit::vm::Vm| {
+        let r = vm.call_value(Value::Closure(run), &[]).expect("run");
+        assert_eq!(text(&r), "nil");
+        match f.proto.jit.get() {
+            JitProtoState::Compiled { entry, .. } => entry,
+            s => panic!("{s:?}"),
+        }
+    };
+    let first = call(&mut vm);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        assert_eq!(call(&mut vm), first);
+        let pending = f.proto.jit_next.take();
+        if pending.is_none() {
+            break;
+        }
+        f.proto.jit_next.set(pending);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the compile thread never answered"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}

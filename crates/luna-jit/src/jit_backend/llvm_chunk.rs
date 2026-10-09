@@ -72,17 +72,18 @@ pub(super) fn try_compile(
     };
     // LLVM's code passes integers only and returns an integer or nothing
     let plain = arg_float_mask == 0 && arg_table_mask == 0 && !ret_is_float && !ret_is_table;
-    let Some(job) = luna_jit_llvm::ChunkJob::of(&proto)
-        .filter(|j| plain && j.num_args() == num_args && j.returns_one() == returns_one)
-    else {
+    if !plain {
         return cranelift;
-    };
+    }
     let key = chunk_cache::proto_cache_key(&proto, pre53, float_only);
     let Ok(cs) = storage::from_storage(storage) else {
         return cranelift;
     };
     if let Some(cell) = cs.llvm_chunks.cells.get(&key) {
         let ready = cell.load(Ordering::Acquire);
+        if ready == luna_core::runtime::function::JIT_NEXT_NONE {
+            return cranelift;
+        }
         if ready != 0 {
             luna_core::jit::code_fence();
             return CompileResult::Compiled {
@@ -98,19 +99,26 @@ pub(super) fn try_compile(
         proto.jit_next.set(Some(cell.clone()));
         return cranelift;
     }
+    // the copy is all done here: whether LLVM takes the function is found
+    // out on the compile thread
+    let job = luna_jit_llvm::ChunkJob::of(&proto);
     let cell = Arc::new(AtomicUsize::new(0));
     let (to, code) = (cell.clone(), cs.llvm_chunks.code.clone());
     let ticket = super::llvm_thread::submit(
         Box::new(move || {
-            if let Some(c) = job.compile() {
-                let entry = c.entry;
-                code.lock()
-                    .expect("a job never panics holding the code list")
-                    .push(c.pair);
-                // the execution engine has done the cache maintenance; the
-                // thread that takes the entry runs `code_fence`
-                to.store(entry, Ordering::Release);
-            }
+            let Some(c) = job.compile(num_args, returns_one) else {
+                to.store(
+                    luna_core::runtime::function::JIT_NEXT_NONE,
+                    Ordering::Release,
+                );
+                return;
+            };
+            code.lock()
+                .expect("a job never panics holding the code list")
+                .push(c.pair);
+            // the execution engine has done the cache maintenance; the
+            // thread that takes the entry runs `code_fence`
+            to.store(c.entry, Ordering::Release);
         }),
         std::time::Instant::now() + llvm_after,
     );
