@@ -6,9 +6,10 @@
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 
-/// `src`'s result with LLVM's code at once, and with LLVM's code after
-/// Cranelift's (the default), which must agree.
-fn eval(src: &str) -> Vec<Value> {
+/// `src`'s result, as text, with LLVM's code at once, and with LLVM's code
+/// after Cranelift's (the default, and with no wait), which must agree.
+/// The text is made before the Vm, which owns the result's string, goes.
+fn eval(src: &str) -> String {
     let run = |llvm_after| {
         let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
         luna_jit::install_llvm_backend_with(
@@ -21,12 +22,7 @@ fn eval(src: &str) -> Vec<Value> {
     let now = run(None);
     assert_eq!(run(Some(luna_jit::jit_backend::LLVM_AFTER)), now);
     assert_eq!(run(Some(std::time::Duration::ZERO)), now);
-    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
-    luna_jit::install_llvm_backend_with(
-        &mut vm,
-        luna_jit::jit_backend::LlvmBackend { llvm_after: None },
-    );
-    vm.eval(src).unwrap_or_else(|e| panic!("{e}"))
+    now
 }
 
 fn text(r: &[Value]) -> String {
@@ -45,7 +41,7 @@ fn a_zero_divisor_deep_in_the_recursion_raises() {
          local ok, e = pcall(f, 40, 0)
          return s .. ' ' .. tostring(ok) .. ' ' .. tostring(e):gsub('^.*: ', '') .. ' ' .. f(40, 7)",
     );
-    assert_eq!(text(&r), "36000 false attempt to perform 'n%%0' 120");
+    assert_eq!(r, "36000 false attempt to perform 'n%%0' 120");
 }
 
 #[test]
@@ -59,7 +55,7 @@ fn recursion_through_a_reassigned_upvalue_follows_it() {
          f = function(n) return 1000 end
          return s .. ' ' .. g(30)",
     );
-    assert_eq!(text(&r), "9000 1001");
+    assert_eq!(r, "9000 1001");
 }
 
 /// 5.1's code generator leaves out the `LoadNil` of a register still nil
