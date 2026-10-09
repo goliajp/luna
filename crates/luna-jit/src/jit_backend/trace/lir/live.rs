@@ -49,7 +49,7 @@ pub(crate) struct Analysis {
     stack: Vec<(u32, u8)>,
     read: Vec<bool>,
     /// (loop head position, back edge position)
-    loops: Vec<(u32, u32)>,
+    pub(crate) loops: Vec<(u32, u32)>,
     depth: Vec<i32>,
     writes: Vec<Vec<u32>>,
 }
