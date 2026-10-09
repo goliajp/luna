@@ -53,6 +53,7 @@ impl Compiler<'_> {
     }
 
     /// PUC `discharge2reg`: the value of `e` (not its lists) in `reg`.
+    #[inline]
     fn discharge_to_reg(&mut self, e: Exp, reg: u32) -> Result<(), SyntaxError> {
         match e {
             Exp::Nil => {

@@ -190,8 +190,9 @@ impl<'s> Parser<'s> {
     pub(super) fn push_stat(&mut self, s: Stat) -> StatId {
         self.chunk.stats.push_or_abort(s);
         let idx = self.chunk.stats.len() - 1;
-        self.end_lines.resize_or_abort(idx + 1, 0);
-        self.end_lines[idx] = self.prev_line;
+        // statements end in the order they are pushed
+        debug_assert_eq!(self.end_lines.len(), idx);
+        self.end_lines.push_or_abort(self.prev_line);
         StatId(idx as u32)
     }
 }

@@ -163,6 +163,7 @@ impl Compiler<'_> {
     /// PUC `dischargejpc`, run before an instruction is emitted: the jumps
     /// waiting for it land on it. An error (a jump too long) is kept for
     /// [`Self::jump_error`].
+    #[inline(never)]
     pub(super) fn discharge_jpc(&mut self) {
         let jpc = std::mem::replace(&mut self.l().jpc, NO_JUMP);
         if jpc == NO_JUMP {
