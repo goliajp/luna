@@ -27,8 +27,8 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let f = argcheck::check_string(vm, a, 0)?;
     let fmt = f.as_bytes();
     let v = vm.version();
-    // room for a few converted items before the buffer regrows
-    let mut out = Vec::with_capacity(fmt.len() + 32);
+    // room for an item or two past the format before the buffer regrows
+    let mut out = Vec::with_capacity(fmt.len() + 16);
     let mut arg = 0u32;
     let mut i = 0;
     // the buffer's slot counts only when a callback runs or an error is
