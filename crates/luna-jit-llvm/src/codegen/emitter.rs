@@ -34,8 +34,9 @@ pub(super) struct ComputeEmitter<'ctx, 'a> {
     pub(super) self_call_desc: i64,
     /// The body can park a deopt of its own (see `compute::may_park`).
     pub(super) may_park: bool,
-    /// `llvm.stacksave`, the stack pointer for the self-call guard.
-    pub(super) stacksave: FunctionValue<'ctx>,
+    /// `llvm.read_register.i64`, which reads the stack pointer for the
+    /// self-call guard.
+    pub(super) read_register: FunctionValue<'ctx>,
 }
 
 impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
@@ -428,20 +429,22 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
             inkwell::values::ValueKind::Basic(bv) => Some(bv.into_int_value()),
             inkwell::values::ValueKind::Instruction(_) => None,
         };
-        let limit = self.ctx_word(0, &format!("{name}_limit"))?;
-        let left_at = self.ctx_addr(2, &format!("{name}_left_at"))?;
-        let left = builder
-            .build_load(i64t, left_at, &format!("{name}_left"))
-            .ok()?
-            .into_int_value();
-        let sp = builder
-            .build_call(self.stacksave, &[], &format!("{name}_sp"))
-            .ok()?;
-        let sp = match sp.try_as_basic_value() {
-            inkwell::values::ValueKind::Basic(v) => v.into_pointer_value(),
-            inkwell::values::ValueKind::Instruction(_) => return None,
+        let ctx_arg = self.function.get_nth_param(0)?.into_int_value();
+        let limit = self.function.get_nth_param(1)?.into_int_value();
+        let left = self.function.get_nth_param(2)?.into_int_value();
+        let sp_name = if cfg!(target_arch = "x86_64") {
+            "rsp"
+        } else {
+            "sp"
         };
-        let sp = builder.build_ptr_to_int(sp, i64t, "sp").ok()?;
+        let sp_reg = self
+            .ctx
+            .metadata_node(&[self.ctx.metadata_string(sp_name).into()]);
+        let sp = int_of(
+            builder
+                .build_call(self.read_register, &[sp_reg.into()], "sp")
+                .ok()?,
+        )?;
         let low = builder
             .build_int_compare(inkwell::IntPredicate::ULT, sp, limit, "stack_low")
             .ok()?;
@@ -465,20 +468,17 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
 
         builder.position_at_end(fast_bb);
         let fewer = builder.build_int_sub(left, one, "fewer").ok()?;
-        builder.build_store(left_at, fewer).ok()?;
         let mut body_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
-            vec![self.function.get_nth_param(0)?.into()];
+            vec![ctx_arg.into(), limit.into(), fewer.into()];
         body_args.extend_from_slice(args);
         let call = builder.build_call(self.function, &body_args, name).ok()?;
         call.set_call_convention(self.function.get_call_conventions());
         let fast = int_of(call)?;
-        builder.build_store(left_at, left).ok()?;
         builder.build_unconditional_branch(join_bb).ok()?;
 
         builder.position_at_end(slow_bb);
         let slow_fn = self.helpers.get("luna_jit_self_call_slow").copied()?;
         let desc = i64t.const_int(self.self_call_desc as u64, false);
-        let ctx_arg = self.function.get_nth_param(0)?.into_int_value();
         let zero = i64t.const_zero();
         let mut slow_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
             vec![ctx_arg.into(), desc.into(), left.into()];
