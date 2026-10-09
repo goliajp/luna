@@ -200,6 +200,12 @@ optimization.
   so LLVM can turn the recursion into a loop (`fib(30)`: 3.4 ms against
   Cranelift's 3.8 ms, was 7.2 ms). The helpers `luna_jit_self_enter` and
   `luna_jit_self_leave` are gone.
+- Traces commit a register to the VM's register file as the value is
+  made only when no op writes the register again before something reads
+  the register file (a helper call, a branch that rejoins, an exit, the
+  back edge); before, every op committed every register it had changed.
+  Instructions: `tbl` 1.6–2.3% fewer, `token_bucket_1k` 1.0–1.4%,
+  `sliding_window_500` up to 1.7%, `loop` unchanged, on both trace tiers.
 - LLVM backend: a trace waiting for LLVM's code asks the backend again
   every `TIER_UP_REASK` (64) entries, also when its function has been
   called again since it was compiled; it asked at every entry, which cost
