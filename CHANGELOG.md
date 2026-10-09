@@ -192,9 +192,8 @@ optimization.
   it, on LLVM's code once the compile thread has compiled it (after it has
   stayed hot for `llvm_after`, 20 ms). The compile thread stores LLVM's
   entry in the new `Proto::jit_next`, and the next call into the function
-  from the interpreter puts it in place of Cranelift's; the compile thread
-  starts as the backend is installed, so the first hot function waits for
-  neither a thread nor an entry stub of its own. LLVM's self-recursive calls
+  from the interpreter puts it in place of Cranelift's, so the first hot
+  function no longer waits for an entry stub of its own to be compiled. LLVM's self-recursive calls
   check the native stack limit and the call budget at the body's start,
   with both passed as arguments, instead of calling two helpers per call,
   so LLVM can turn the recursion into a loop (`fib(30)`: 3.4 ms against
