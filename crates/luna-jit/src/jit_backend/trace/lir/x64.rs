@@ -70,6 +70,19 @@ impl Masm for X64 {
     fn bind(&mut self, l: Label) {
         self.labels[l.0 as usize] = self.code.len() as u32;
     }
+    fn align(&mut self, to: u32) {
+        // the multi-byte forms of `nop`, by length
+        const NOPS: [&[u8]; 4] = [
+            &[0x90],
+            &[0x66, 0x90],
+            &[0x0f, 0x1f, 0x00],
+            &[0x0f, 0x1f, 0x40, 0x00],
+        ];
+        while self.code.len() as u32 % to != 0 {
+            let k = ((to - self.code.len() as u32 % to) as usize).min(NOPS.len());
+            self.code.extend_from_slice(NOPS[k - 1]);
+        }
+    }
     fn jmp(&mut self, l: Label) {
         self.code.push(0xE9);
         self.fixups.push((self.code.len() as u32, l.0, 0));

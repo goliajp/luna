@@ -61,6 +61,11 @@ impl Masm for A64 {
     fn bind(&mut self, l: Label) {
         self.labels[l.0 as usize] = self.code.len() as u32;
     }
+    fn align(&mut self, to: u32) {
+        while (self.code.len() * 4) as u32 % to != 0 {
+            self.put(0xd503_201f);
+        }
+    }
     fn jmp(&mut self, l: Label) {
         self.branch_fix(l, 0);
         self.put(0x1400_0000);
