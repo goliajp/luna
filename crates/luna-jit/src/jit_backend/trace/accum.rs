@@ -126,6 +126,7 @@ pub(super) fn detect_accumulators(
                 | Op::LoadKx
                 | Op::LoadFalse
                 | Op::LFalseSkip
+                | Op::LTrueSkip
                 | Op::LoadTrue
                 | Op::GetUpval
                 | Op::GetTabUp

@@ -282,4 +282,7 @@ pub enum Op {
     JmpClose,
     /// [`Op::JmpClose`] jumping back: `pc -= Bx + 1`.
     JmpCloseBack,
+    /// `R[A] := true; pc++`: 5.1–5.3 `LOADBOOL A 1 1`, which no PUC
+    /// compiler emits but a chunk may hold.
+    LTrueSkip,
 }

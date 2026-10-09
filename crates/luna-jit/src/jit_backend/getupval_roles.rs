@@ -91,6 +91,7 @@ fn writes_register_a(ins: Inst, target_a: usize) -> bool {
         | Op::LoadKx
         | Op::LoadFalse
         | Op::LFalseSkip
+        | Op::LTrueSkip
         | Op::LoadTrue
         | Op::Move
         | Op::Add

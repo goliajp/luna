@@ -17,7 +17,9 @@ impl Checker<'_> {
             // the extra argument at pc + 1 is consumed, not executed
             Op::LoadKx => (None, [Some(pc_i + 2), None]),
             Op::SetList if i.k() => (None, [Some(pc_i + 2), None]),
-            op if op.is_test() || op == Op::LFalseSkip => (Some(next), [Some(pc_i + 2), None]),
+            op if op.is_test() || matches!(op, Op::LFalseSkip | Op::LTrueSkip) => {
+                (Some(next), [Some(pc_i + 2), None])
+            }
             // 5.1–5.3 enter the loop at its ForLoop; 5.4+ skip past it
             op if op.is_for_prep() => {
                 let loop_pc = pc_i + i.bx() as i64;
