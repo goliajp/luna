@@ -6,6 +6,7 @@ use super::*;
 
 impl Compiler<'_> {
     /// The value of `e` and its true and false lists.
+    #[inline]
     pub(super) fn exp_parts(&self, e: Exp) -> (Exp, i32, i32) {
         match e {
             Exp::Jumps(i) => {

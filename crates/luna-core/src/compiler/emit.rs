@@ -4,8 +4,10 @@ use super::*;
 use crate::runtime::mem::word_hash;
 
 impl<'a> Compiler<'a> {
+    #[inline]
     pub(super) fn emit(&mut self, i: Inst) -> usize {
-        if self.version <= LuaVersion::Lua53 {
+        // only 5.1–5.3 leave jumps waiting for the next instruction
+        if self.lr().jpc != NO_JUMP {
             self.discharge_jpc();
         }
         let line = self.force_line.unwrap_or(self.last_line);
