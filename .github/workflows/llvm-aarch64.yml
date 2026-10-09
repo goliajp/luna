@@ -75,7 +75,7 @@ jobs:
             '-DLLVM_ENABLE_DIA_SDK=OFF',
             '-DLLVM_BUILD_TOOLS=OFF', '-DLLVM_BUILD_UTILS=OFF'
           ) | Set-Content llvm-configure.txt
-      - uses: actions/cache@v6
+      - uses: actions/cache/restore@v6
         id: llvm
         with:
           path: C:\llvm-18
@@ -101,6 +101,12 @@ jobs:
           cmake --build build --config Release --target llvm-config
           if ($LASTEXITCODE -ne 0) { throw "llvm-config build failed" }
           Copy-Item build\Release\bin\llvm-config.exe C:\llvm-18\bin\
+      # saved as soon as it is built, whatever the tests do after
+      - uses: actions/cache/save@v6
+        if: steps.llvm.outputs.cache-hit != 'true'
+        with:
+          path: C:\llvm-18
+          key: ${{ steps.llvm.outputs.cache-primary-key }}
       - name: point llvm-sys at LLVM 18
         shell: pwsh
         run: |
