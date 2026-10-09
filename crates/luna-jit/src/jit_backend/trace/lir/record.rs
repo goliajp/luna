@@ -78,6 +78,14 @@ impl Lir {
         val(d)
     }
 
+    /// A read of variable `n`, whose value the block does not know yet.
+    #[inline(never)]
+    pub(super) fn read_var(&mut self, n: u32) -> Value {
+        let x = self.def(Op::VarRead, self.var_ty[n as usize], n, NONE, NONE);
+        self.var_cur[n as usize] = v(x);
+        x
+    }
+
     pub(super) fn with_args(&mut self, inst: u32, args: impl IntoIterator<Item = u32>) {
         let at = self.args.len() as u32;
         self.args.extend(args);
