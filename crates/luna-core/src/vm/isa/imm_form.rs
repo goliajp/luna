@@ -11,6 +11,9 @@ use crate::runtime::Value;
 
 /// The immediate form of a constant-operand instruction, or `i` itself.
 pub fn to_imm(i: Inst, consts: &[Value]) -> Inst {
+    if !matches!(i.op(), Op::AddK | Op::SubK | Op::LtK | Op::LeK | Op::EqK) {
+        return i;
+    }
     let imm = |k: u32| -> Option<(u32, u32)> {
         let v = *consts.get(k as usize)?;
         let (n, float) = immediate(v)?;

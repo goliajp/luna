@@ -126,19 +126,11 @@ pub(crate) fn generate<M: Masm>(
             g.commit(r, d);
         }
     }
-    // a loop's head starts a 16-byte block, as in the optimizing tier's code
-    let mut head = vec![false; lir.blocks.len()];
-    for &b in &an.order {
-        let (lo, hi) = an.block_at[b as usize];
-        for s in super::live::succs(lir, b) {
-            if hi > lo && s != NONE && an.block_at[s as usize].0 <= lo {
-                head[s as usize] = true;
-            }
-        }
-    }
     for (k, &b) in an.order.iter().enumerate() {
         let next = an.order.get(k + 1).copied().unwrap_or(NONE);
-        if head[b as usize] {
+        // a loop's head starts a 16-byte block, as in the optimizing tier's code
+        let at = 2 * an.block_at[b as usize].0;
+        if an.loops.iter().any(|&(head, _)| head == at) {
             g.m.align(16);
         }
         g.m.bind(g.labels[b as usize]);
