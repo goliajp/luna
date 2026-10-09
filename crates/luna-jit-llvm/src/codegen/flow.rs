@@ -261,12 +261,12 @@ pub(super) fn reads_written(
             return false;
         }
         let writes = match ins.op() {
-            Op::LoadNil => ins.a()..=ins.a() + ins.b(),
-            Op::LoadI | Op::Move | Op::GetUpval | Op::Call => ins.a()..=ins.a(),
-            op if is_arith(op) => ins.a()..=ins.a(),
-            _ => 1..=0,
+            Op::LoadNil => Some(ins.a()..=ins.a() + ins.b()),
+            Op::LoadI | Op::Move | Op::GetUpval | Op::Call => Some(ins.a()..=ins.a()),
+            op if is_arith(op) => Some(ins.a()..=ins.a()),
+            _ => None,
         };
-        for r in writes {
+        for r in writes.into_iter().flatten() {
             if let Some(x) = set.get_mut(r as usize) {
                 *x = true;
             }
