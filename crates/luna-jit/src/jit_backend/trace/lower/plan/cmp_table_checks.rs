@@ -3,7 +3,7 @@ use super::*;
 /// Tests and comparisons: each pairs with the `Jmp` after it.
 pub(super) fn validate_branch_op(
     record: &TraceRecord,
-    vconsts: &[Option<VConst>],
+    vconsts: &[VRegs],
     head_proto: Gc<Proto>,
     max_stack: usize,
     effective_end: usize,
@@ -15,9 +15,8 @@ pub(super) fn validate_branch_op(
     consumed_by_cmp: &mut [bool],
     cmp_dirs: &mut [Option<CmpDir>],
 ) -> Option<()> {
-    let oob = |i: usize, r: u32| {
-        r as usize >= max_stack && !(r as usize == max_stack && vconst_at(vconsts, i).is_some())
-    };
+    let oob =
+        |i: usize, r: u32| r as usize >= max_stack && virt_at(vconsts, i, r, max_stack).is_none();
     match op {
         Op::Test => {
             // `if (not R[A] == k) then pc++`. Same
@@ -37,7 +36,7 @@ pub(super) fn validate_branch_op(
                 }
             }
             let next = &record.ops[i + 1];
-            let took_jmp = matches!(next.inst.op(), Op::Jmp) && next.pc == rop.pc + 1;
+            let took_jmp = next.inst.op().is_jump() && next.pc == rop.pc + 1;
             let skipped_jmp = next.pc == rop.pc + 2;
             if took_jmp {
                 consumed_by_cmp[i + 1] = true;
@@ -45,7 +44,7 @@ pub(super) fn validate_branch_op(
             } else if skipped_jmp {
                 let slot = (rop.pc + 1) as usize;
                 let jmp_inst = head_proto.code.get(slot).copied();
-                if !jmp_inst.is_some_and(|x| matches!(x.op(), Op::Jmp)) {
+                if !jmp_inst.is_some_and(|x| x.op().is_jump()) {
                     {
                         checkpoint("bail:cmp-dirs-body-other");
                         return None;
@@ -78,7 +77,7 @@ pub(super) fn validate_branch_op(
                 }
             }
             let next = &record.ops[i + 1];
-            let took_jmp = matches!(next.inst.op(), Op::Jmp) && next.pc == rop.pc + 1;
+            let took_jmp = next.inst.op().is_jump() && next.pc == rop.pc + 1;
             let skipped_jmp = next.pc == rop.pc + 2;
             if took_jmp {
                 consumed_by_cmp[i + 1] = true;
@@ -86,7 +85,7 @@ pub(super) fn validate_branch_op(
             } else if skipped_jmp {
                 let slot = (rop.pc + 1) as usize;
                 let jmp_inst = head_proto.code.get(slot).copied();
-                if !jmp_inst.is_some_and(|x| matches!(x.op(), Op::Jmp)) {
+                if !jmp_inst.is_some_and(|x| x.op().is_jump()) {
                     {
                         checkpoint("bail:cmp-dirs-body-other");
                         return None;
@@ -138,7 +137,7 @@ pub(super) fn validate_branch_op(
                 }
             }
             let next = &record.ops[i + 1];
-            let took_jmp = matches!(next.inst.op(), Op::Jmp) && next.pc == rop.pc + 1;
+            let took_jmp = next.inst.op().is_jump() && next.pc == rop.pc + 1;
             let skipped_jmp = next.pc == rop.pc + 2;
             if took_jmp {
                 if i + 1 < effective_end {
@@ -150,7 +149,7 @@ pub(super) fn validate_branch_op(
                 // is actually a Jmp in the Proto's bytecode.
                 let slot = (rop.pc + 1) as usize;
                 let jmp_inst = head_proto.code.get(slot).copied();
-                if !jmp_inst.is_some_and(|x| matches!(x.op(), Op::Jmp)) {
+                if !jmp_inst.is_some_and(|x| x.op().is_jump()) {
                     {
                         checkpoint("bail:cmp-skipped-but-no-jmp-slot");
                         return None;
@@ -172,6 +171,8 @@ pub(super) fn validate_branch_op(
 /// Table and upvalue ops.
 pub(super) fn validate_table_op(
     head_proto: Gc<Proto>,
+    vconsts: &[VRegs],
+    i: usize,
     max_stack: usize,
     op: Op,
     ins: Inst,
@@ -179,6 +180,9 @@ pub(super) fn validate_table_op(
     b: usize,
     c: usize,
 ) -> Option<()> {
+    // a register past the frame is one of the op's virtual registers
+    let oob =
+        |i: usize, r: u32| r as usize >= max_stack && virt_at(vconsts, i, r, max_stack).is_none();
     match op {
         // Table ops — A is the dest / table reg per op; B/C may be
         // immediates (SetI's key, GetI's key, NewTable's hints).
@@ -201,7 +205,7 @@ pub(super) fn validate_table_op(
         }
         Op::GetTable => {
             // R[A] := R[B][R[C]]
-            if a >= max_stack || b >= max_stack || c >= max_stack {
+            if a >= max_stack || oob(i, b as u32) || oob(i, c as u32) {
                 {
                     checkpoint("bail:cmp-dirs-body-other");
                     return None;
@@ -210,7 +214,7 @@ pub(super) fn validate_table_op(
         }
         Op::SetI => {
             // R[A][B_imm] := R[C]
-            if a >= max_stack || c >= max_stack {
+            if a >= max_stack || oob(i, c as u32) {
                 {
                     checkpoint("bail:cmp-dirs-body-other");
                     return None;
@@ -227,7 +231,7 @@ pub(super) fn validate_table_op(
                     return None;
                 }
             }
-            if a >= max_stack || b >= max_stack || c >= max_stack {
+            if oob(i, a as u32) || oob(i, b as u32) || oob(i, c as u32) {
                 {
                     checkpoint("bail:cmp-dirs-body-other");
                     return None;

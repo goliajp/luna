@@ -12,9 +12,13 @@ impl Vm {
     /// 5.1/5.2 test initial value, limit, step; 5.3+ limit, step, initial
     /// value; only 5.4+ reject a zero step, and an integer loop does that
     /// before looking at the limit.
-    pub(super) fn for_operands(&mut self, base: u32, a: u32) -> Result<(Num, Num, Num), LuaError> {
+    pub(super) fn for_operands(
+        &mut self,
+        base: u32,
+        a: u32,
+        v: LuaVersion,
+    ) -> Result<(Num, Num, Num), LuaError> {
         let (init, limit, step) = (self.r(base, a), self.r(base, a + 1), self.r(base, a + 2));
-        let v = self.version();
         let order = if v <= LuaVersion::Lua52 {
             [("initial value", init), ("limit", limit), ("step", step)]
         } else {
@@ -50,7 +54,14 @@ impl Vm {
 
     pub(super) fn for_prep(&mut self, inst: Inst, base: u32) -> Result<(), LuaError> {
         let a = inst.a();
-        let (init_n, limit_n, step_n) = self.for_operands(base, a)?;
+        // a 5.5 loop (from a 5.5 chunk in another dialect's Vm too) runs as
+        // 5.5 runs it
+        let v = if inst.op() == Op::ForPrep55 {
+            LuaVersion::Lua55
+        } else {
+            self.version()
+        };
+        let (init_n, limit_n, step_n) = self.for_operands(base, a, v)?;
         // PUC 5.1–5.3 `OP_FORPREP` stores `i = init - step` and *unconditionally*
         // jumps to the matching `OP_FORLOOP` — the body never runs ahead of the
         // first test, so each successful iteration emits a backward `OP_FORLOOP`
@@ -58,13 +69,13 @@ impl Vm {
         // 5.4's 4). 5.4+ collapsed that to a count-based fall-through. The skip
         // distance in luna's encoding is `loop_pc - prep_pc`; firing
         // `add_pc(bx - 1)` lands the running pc on OP_FORLOOP itself.
-        let pre53 = self.version() <= LuaVersion::Lua53;
+        let pre53 = v <= LuaVersion::Lua53;
         // 5.1/5.2 have only doubles: PUC steps every loop in floating
         // point, so a loop over integers the VM keeps (`#t`) is a float
         // loop too. An integer loop there would wrap instead of rounding
         // and would compare with a floored limit (`for i = 1, 1.5, 0`
         // runs zero times on PUC, forever with the limit floored to 1).
-        let dbl = self.version() <= LuaVersion::Lua52;
+        let dbl = v <= LuaVersion::Lua52;
         match (init_n, step_n) {
             (Num::Int(i0), Num::Int(st)) if !dbl => {
                 if pre53 {
@@ -114,6 +125,12 @@ impl Vm {
                 } else {
                     (i0 as u64).wrapping_sub(lim as u64) / (st as i128).unsigned_abs() as u64
                 };
+                if inst.op() == Op::ForPrep55 {
+                    self.set_r(base, a, Value::Int(count as i64));
+                    self.set_r(base, a + 1, Value::Int(st));
+                    self.set_r(base, a + 2, Value::Int(i0));
+                    return Ok(());
+                }
                 self.set_r(base, a, Value::Int(i0));
                 self.set_r(base, a + 1, Value::Int(count as i64));
                 self.set_r(base, a + 2, Value::Int(st));
@@ -138,6 +155,12 @@ impl Vm {
                     self.add_pc(inst.bx() as i32);
                     return Ok(());
                 }
+                if inst.op() == Op::ForPrep55 {
+                    self.set_r(base, a, Value::Float(lim));
+                    self.set_r(base, a + 1, Value::Float(st));
+                    self.set_r(base, a + 2, Value::Float(x0));
+                    return Ok(());
+                }
                 self.set_r(base, a, Value::Float(x0));
                 self.set_r(base, a + 1, Value::Float(lim));
                 self.set_r(base, a + 2, Value::Float(st));
@@ -156,6 +179,9 @@ impl Vm {
         // every later iteration. 5.4+ switched to the count-based form luna
         // already uses for `Int`; the float branch was already PUC-3.x-style.
         let v = self.version();
+        if inst.op() == Op::ForLoop55 {
+            return self.for_loop55(inst, base);
+        }
         let pre53 = v <= LuaVersion::Lua53;
         // `for_prep` leaves the three slots all Int or all Float; anything
         // else was written by `debug.setlocal` or by crafted bytecode. PUC
@@ -209,5 +235,29 @@ impl Vm {
             self.set_r(base, a + 3, Value::Float(next));
             self.add_pc(-(inst.bx() as i32));
         }
+    }
+
+    /// [`Vm::for_loop`] of the 5.5 layout: `R[A]` count (a float loop:
+    /// limit), `R[A+1]` step, `R[A+2]` the loop variable.
+    fn for_loop55(&mut self, inst: Inst, base: u32) -> Result<(), LuaError> {
+        let a = inst.a();
+        match (self.r(base, a), self.r(base, a + 1), self.r(base, a + 2)) {
+            (Value::Int(count), Value::Int(st), Value::Int(cur)) => {
+                if count != 0 {
+                    self.set_r(base, a, Value::Int(count.wrapping_sub(1)));
+                    self.set_r(base, a + 2, Value::Int(cur.wrapping_add(st)));
+                    self.add_pc(-(inst.bx() as i32));
+                }
+            }
+            (Value::Float(lim), Value::Float(st), Value::Float(cur)) => {
+                let next = cur + st;
+                if if st > 0.0 { next <= lim } else { lim <= next } {
+                    self.set_r(base, a + 2, Value::Float(next));
+                    self.add_pc(-(inst.bx() as i32));
+                }
+            }
+            _ => return Err(self.rt_err("'for' state corrupted")),
+        }
+        Ok(())
     }
 }

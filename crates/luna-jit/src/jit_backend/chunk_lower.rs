@@ -5,17 +5,22 @@ mod checks;
 mod emit;
 mod emit_basic;
 mod emit_calls;
+mod emit_entry;
 mod emit_for;
+mod emit_for_loop;
 mod emit_table_get;
 mod emit_table_set;
 mod entry;
 mod helpers;
 mod kind_flow;
 mod kinds;
+mod kinds_for;
 mod kinds_ops;
 mod nil_flow;
 mod scan;
+mod scan_data;
 mod scan_ops;
+mod scan_tables;
 mod table_flow;
 use cfg::ChunkCfg;
 use emit::{EmitFacts, EmitState};
@@ -72,8 +77,8 @@ pub fn lower_int_chunk_into<M: Module>(
     if n == 0 {
         return None;
     }
-    // two more registers: the constant operands' scratch (`split_const_operands`)
-    let max_stack = (proto.max_stack as usize).max(num_params) + 2;
+    // the scratch registers of `split_const_operands`
+    let max_stack = (proto.max_stack as usize).max(num_params) + const_operands::SCRATCH_REGS;
     let c = ChunkIn {
         proto,
         code,
@@ -89,6 +94,12 @@ pub fn lower_int_chunk_into<M: Module>(
     let presize_for_newtable = checks::presize_hints(c, &scan);
     checks::check_fold_blocks(&scan)?;
     let any_self_call = checks::check_self_call_base_case(c, &scan)?;
+    // self calls keep the stack limit in the pinned register: without one
+    // (an AOT object module, another target) they are left to the
+    // interpreter
+    if any_self_call && !module.isa().flags().enable_pinned_reg() {
+        return None;
+    }
     let (reg_kinds, ret_kind) = kinds::sweep_kinds(c, &scan, &cfg)?;
     // After convergence: derive per-arg kinds + the ret_is_float flag
     // for the cache slot. An arg that's still Unset (param read by

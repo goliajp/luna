@@ -22,10 +22,31 @@ impl Vm {
             | Op::Pow
             | Op::Concat
             | Op::ForPrep
+            | Op::ForPrep55
             | Op::TForPrep
+            | Op::TForPrep53
+            | Op::TForPrep55
             | Op::Closure
             | Op::Vararg
             | Op::GetVarg => self.run_frame_op(inst)?,
+            // 5.2 / 5.3 jumps that close: rare enough to leave the fast loop
+            Op::JmpClose | Op::JmpCloseBack => {
+                self.close_from(base + inst.a() - 1);
+                let off = inst.jump_offset();
+                self.add_pc(off);
+                // a loop's back-edge counts toward recording it, as a `Jmp`'s
+                if off < 0 && self.jit.trace_enabled {
+                    let proto = cl.proto;
+                    let c = proto.trace_hot_count.get();
+                    if c < u32::MAX / 2 {
+                        proto.trace_hot_count.set(c + 1);
+                    }
+                    let target = self.pc_of_top();
+                    if self.jit.loop_hot_tick(&proto, target) {
+                        self.trace_start_at_back_edge(cl, base, target, None);
+                    }
+                }
+            }
             Op::Close => {
                 // Yieldable: drive __close handlers through the
                 // interpreter loop so a coroutine.yield() inside a
@@ -47,17 +68,21 @@ impl Vm {
             Op::Return | Op::Return0 | Op::Return1 => {
                 return self.op_return(inst, base, entry_depth);
             }
-            Op::TForCall => {
+            Op::TForCall | Op::TForCall53 | Op::TForCall55 => {
+                let lay = inst.op().for_layout().expect("a loop op");
                 let abs = base + inst.a();
-                let need = (abs + 7) as usize;
+                let need = (abs + lay.call_end()) as usize;
                 if self.stack.len() < need {
                     self.grow_stack_or_abort(need);
                 }
-                self.stack[(abs + 4) as usize] = self.stack[abs as usize];
-                self.stack[(abs + 5) as usize] = self.stack[(abs + 1) as usize];
-                self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
+                // the iterator, the state and the control, copied to where
+                // the call runs (the control first: in 5.5 it is there)
+                let call = (abs + lay.var()) as usize;
+                self.stack[call + 2] = self.stack[(abs + lay.control()) as usize];
+                self.stack[call + 1] = self.stack[(abs + 1) as usize];
+                self.stack[call] = self.stack[abs as usize];
                 let nvars = inst.c() as i32;
-                self.begin_call(abs + 4, Some(2), nvars, false)?;
+                self.begin_call(call as u32, Some(2), nvars, false)?;
             }
             Op::ExtraArg => unreachable!("EXTRAARG executed directly"),
             op => unreachable!("{op:?} is run by the fast loop"),
@@ -87,7 +112,7 @@ impl Vm {
         if !matches!(func, Value::Closure(_) | Value::Native(_))
             && self.get_mm(func, Mm::Call).is_nil()
         {
-            return Err(self.call_err(func));
+            return Err(self.call_err_at(func, abs + 1 + nargs));
         }
         // PUC `luaD_pretailcall` resolves a chain of `__call`
         // metamethods *in place* before deciding whether to
@@ -109,7 +134,7 @@ impl Vm {
         while !matches!(func, Value::Closure(_) | Value::Native(_)) {
             let mm = self.get_mm(func, Mm::Call);
             if mm.is_nil() || self.call_mm_unusable(mm) {
-                return Err(self.call_err(func));
+                return Err(self.call_err_at(func, abs + 1 + nargs));
             }
             chain += 1;
             if chain > chain_cap {

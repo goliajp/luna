@@ -42,24 +42,22 @@ pub(super) fn emit_float_arith_op<E: Emit>(
                 pow_sig.params.push(AbiParam::new(types::F64));
                 pow_sig.params.push(AbiParam::new(types::F64));
                 pow_sig.returns.push(AbiParam::new(types::F64));
+                // 5.4+ `luai_numpow` squares by multiplying, which can
+                // differ from `pow` in the last bit, and then calls no `pow`
+                // that could set `errno`
+                let name = if opts.pre53 {
+                    "luna_jit_pow"
+                } else {
+                    "luna_jit_numpow"
+                };
                 let pow_id = lw
                     .bcx
-                    .declare_function("pow", Linkage::Import, &pow_sig)
+                    .declare_function(name, Linkage::Import, &pow_sig)
                     .ok()?;
                 let pow_ref = lw.bcx.import_func(pow_id);
                 let call = lw.bcx.ins().call(pow_ref, &[lhs, rhs]);
                 let r = lw.bcx.inst_results(call)[0];
-                let mut bits = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), r);
-                // 5.4+ `luai_numpow` squares by multiplying, which can
-                // differ from `pow` in the last bit (selected on the bits:
-                // the baseline code generator selects integers only)
-                if !opts.pre53 {
-                    let two = lw.bcx.ins().f64const(2.0);
-                    let is_two = lw.bcx.ins().fcmp(FloatCC::Equal, rhs, two);
-                    let sq = lw.bcx.ins().fmul(lhs, lhs);
-                    let sq = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), sq);
-                    bits = lw.bcx.ins().select(is_two, sq, bits);
-                }
+                let bits = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), r);
                 lw.bcx.def_var(regs[ins.a() as usize], bits);
                 lw.current_kinds[off + ins.a() as usize] = RegKind::Float;
                 return Some(());

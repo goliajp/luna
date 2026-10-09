@@ -122,7 +122,7 @@ struct LunaOpts {
 /// Take luna's own options out of `argv` (`argv[0]` stays): those among the
 /// options before the script, the arguments of `-e` / `-l` aside.
 /// `-h` / `--help` prints the help and exits.
-fn take_luna_opts(argv: Vec<String>) -> (LunaOpts, Vec<String>) {
+fn take_luna_opts(argv: Vec<Vec<u8>>) -> (LunaOpts, Vec<Vec<u8>>) {
     let mut opts = LunaOpts {
         version: LuaVersion::Lua55,
         sandbox: false,
@@ -134,40 +134,41 @@ fn take_luna_opts(argv: Vec<String>) -> (LunaOpts, Vec<String>) {
     let mut it = argv.into_iter();
     rest.extend(it.next());
     while let Some(a) = it.next() {
-        if a == "-h" || a == "--help" {
+        if a == b"-h" || a == b"--help" {
             println!("{HELP}");
             std::process::exit(0);
         }
-        if let Some(v) = a.strip_prefix("--lua=") {
-            opts.version = parse_version(v).unwrap_or_else(|| {
+        if let Some(v) = a.strip_prefix(b"--lua=") {
+            let v = String::from_utf8_lossy(v);
+            opts.version = parse_version(&v).unwrap_or_else(|| {
                 eprintln!("error: unknown --lua={v} (use 5.1 / 5.2 / 5.3 / 5.4 / 5.5)");
                 std::process::exit(2);
             });
             continue;
         }
-        if let Some(n) = a.strip_prefix("--budget=") {
-            opts.budget = Some(n.parse().unwrap_or_else(|_| {
+        if let Some(n) = a.strip_prefix(b"--budget=") {
+            opts.budget = Some(String::from_utf8_lossy(n).parse().unwrap_or_else(|_| {
                 eprintln!("error: --budget=N expects an integer");
                 std::process::exit(2);
             }));
             continue;
         }
-        match a.as_str() {
-            "--sandbox" => opts.sandbox = true,
-            "--no-jit" => opts.no_jit = true,
-            "--profile" => opts.profile = true,
+        match a.as_slice() {
+            b"--sandbox" => opts.sandbox = true,
+            b"--no-jit" => opts.no_jit = true,
+            b"--profile" => opts.profile = true,
             // the end of the options: the rest is lua.c's
-            "--" | "-" => {
+            b"--" | b"-" => {
                 rest.push(a);
                 rest.extend(it);
                 break;
             }
-            _ if !a.starts_with('-') => {
+            _ if a.first() != Some(&b'-') => {
                 rest.push(a);
                 rest.extend(it);
                 break;
             }
-            "-e" | "-l" => {
+            b"-e" | b"-l" => {
                 rest.push(a);
                 rest.extend(it.next());
             }
@@ -218,6 +219,14 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
         // Test knob, deliberately left out of --help: hash strings with a
         // fixed seed, so that two runs, and two builds, do the same work
         // (instruction counts otherwise vary with the random seed).
+        // Another: take 5.5's `#t` random steps from a fixed seed, to
+        // compare with a PUC 5.5 built with that seed.
+        if let Some(s) = std::env::var("LUNA_LEN_SEED")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+        {
+            luna_jit::runtime::table::set_len_search_seed(Some(s));
+        }
         let seed = std::env::var("LUNA_HASH_SEED")
             .ok()
             .and_then(|s| s.parse::<u32>().ok());
@@ -301,7 +310,7 @@ fn print_profile(vm: &Vm) {
 }
 
 /// `lua.c`'s `pmain`, after the options: true when everything ran.
-fn pmain(interp: &mut Interp, argv: &[String], args: &LuaArgs) -> bool {
+fn pmain(interp: &mut Interp, argv: &[Vec<u8>], args: &LuaArgs) -> bool {
     let v = interp.version();
     if args.has_v {
         print_version(v);
@@ -342,14 +351,17 @@ fn pmain(interp: &mut Interp, argv: &[String], args: &LuaArgs) -> bool {
 }
 
 fn main() {
-    let argv: Vec<String> = std::env::args().collect();
+    // the bytes `lua.c`'s `argv` holds: through the ANSI code page on Windows
+    let argv: Vec<Vec<u8>> = std::env::args_os()
+        .map(|a| luna_core::stdio::os_bytes(&a))
+        .collect();
     let (opts, argv) = take_luna_opts(argv);
     // stdout is buffered as lua.c's C stdio buffers it, so output and the
     // messages on stderr interleave as they do with PUC
     luna_core::stdio::use_c_stdout();
     let progname = match argv.first() {
         Some(p) if !p.is_empty() => p.clone(),
-        _ => "lua".to_string(),
+        _ => b"lua".to_vec(),
     };
     let args = collectargs(opts.version, &argv);
     let ignore_env = args.as_ref().is_ok_and(|a| a.ignore_env);
@@ -357,6 +369,15 @@ fn main() {
         vm: new_vm(&opts, ignore_env),
         progname: Some(progname.clone()),
     };
+    // lua.c runs everything inside `pmain`, a C function `main` calls
+    // protected with `lua_cpcall` (5.1: the function and its userdata on
+    // the stack) or `lua_pcall` with `argc` and `argv` as arguments
+    let slots = if opts.version == LuaVersion::Lua51 {
+        2
+    } else {
+        3
+    };
+    interp.vm.host_entry_layout(1, slots);
     // 5.1 runs LUA_INIT before it looks at the options
     let ok = (opts.version != LuaVersion::Lua51 || interp.handle_luainit())
         && match args {
@@ -373,7 +394,8 @@ fn main() {
     // lua.c closes the state before it exits, which finalizes open files
     // and so writes out what they still buffer
     drop(interp);
-    // C's exit flushes stdout
+    // C's exit flushes stdout (and stderr, if setvbuf buffered it)
     let _ = luna_core::stdio::flush_stdout();
+    let _ = luna_core::stdio::flush_stderr();
     std::process::exit(if ok { 0 } else { 1 });
 }

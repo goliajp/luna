@@ -4,19 +4,24 @@
 use super::binop_const::Operand;
 use super::*;
 
+/// What [`Compiler::binop_open`] set up before the left operand: the free
+/// register and the forced line to put back.
+#[derive(Clone, Copy)]
+pub(super) struct BinOpOpen {
+    pub(super) saved: u32,
+    pub(super) saved_force: Option<u32>,
+}
+
 impl Compiler<'_> {
-    pub(super) fn binop(
+    /// Before the left operand of `op` is compiled: the value it has
+    /// without being compiled, when it has one.
+    pub(super) fn binop_open(
         &mut self,
         op: BinOp,
         lhs: ExprId,
-        rhs: ExprId,
         line: u32,
-    ) -> Result<Exp, SyntaxError> {
-        match op {
-            BinOp::And | BinOp::Or => return self.and_or(op, lhs, rhs, line),
-            BinOp::Concat => return self.concat(lhs, rhs, line),
-            _ => {}
-        }
+    ) -> Result<(BinOpOpen, Option<Exp>), SyntaxError> {
+        debug_assert!(!matches!(op, BinOp::And | BinOp::Or | BinOp::Concat));
         let saved = self.lr().freereg;
         // PUC's `infix` discharges the left operand *after* consuming the
         // operator token (luaK_indexed → luaK_exp2anyreg called from infix),
@@ -28,19 +33,39 @@ impl Compiler<'_> {
         // before parsing the rhs (which discharges at its own last-token
         // line, matching PUC).
         let saved_force = self.force_line.replace(line);
+        let open = BinOpOpen { saved, saved_force };
         // a 5.1 left operand whose logic folds away (see `numeral`)
+        if self.version != LuaVersion::Lua51 || !is_logical(self.ast, lhs) {
+            return Ok((open, None));
+        }
         let mut zeros = Vec::new();
-        let le = match numeral(self.ast, lhs, self.version, &mut zeros) {
-            Some(n) if self.version == LuaVersion::Lua51 && is_logical(self.ast, lhs) => {
-                self.note_zeros(&zeros);
-                match n {
-                    Num::Int(i) => Exp::Int(i),
-                    Num::Float(f) => Exp::Float(f),
-                }
+        let le = numeral(self.ast, lhs, self.version, &mut zeros).map(|n| {
+            self.note_zeros(&zeros);
+            match n {
+                Num::Int(i) => Exp::Int(i),
+                Num::Float(f) => Exp::Float(f),
             }
-            _ => self.expr(lhs)?,
-        };
-        zeros.clear();
+        });
+        Ok((open, le))
+    }
+
+    /// The rest of `op`, its left operand compiled to `le`.
+    pub(super) fn binop_close(
+        &mut self,
+        op: BinOp,
+        le: Exp,
+        rhs: ExprId,
+        line: u32,
+        open: BinOpOpen,
+    ) -> Result<Exp, SyntaxError> {
+        if self.version <= LuaVersion::Lua53 {
+            return self.binop_close_classic(op, le, rhs, line, open);
+        }
+        if matches!(op, BinOp::Eq | BinOp::Ne) {
+            return self.binop_eq_modern(op, le, rhs, open);
+        }
+        let BinOpOpen { saved, saved_force } = open;
+        let mut zeros = Vec::new();
         if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros) {
             self.note_zeros(&zeros);
             self.force_line = saved_force;
@@ -75,18 +100,21 @@ impl Compiler<'_> {
         {
             self.set_freereg(l + 1);
         }
-        // 5.4+ compiles `x - K` for a small integer constant K as `x + -K`
-        // (`ADDI`). That is the same number except for K = 0, where
-        // `-0.0 - 0` becomes `-0.0 + 0`, which is `0.0`. K is whatever
-        // PUC's parser folds to a constant: `(0)`, `1 - 1`, `5 % 5`...
-        let sub_zero = op == BinOp::Sub && self.version >= LuaVersion::Lua54 && {
+        // `x - K` with K what PUC's parser folds to the constant 0 (`(0)`,
+        // `1 - 1`, `a and nil or 0`...) is PUC's `ADDI x 0`, even when K's
+        // code still runs: `SubI x 0`, after that code
+        let sub_zero = op == BinOp::Sub && {
             let ast = self.ast;
             matches!(
                 ct_operand(ast, rhs, &mut |name| self.ct_const_named(self.nm(name))),
                 Some(CtConst::Int(0))
             )
         };
-        let re = self.expr(rhs)?;
+        let mut re = self.expr(rhs)?;
+        if sub_zero && !matches!(re, Exp::Int(0)) {
+            self.exp_to_anyreg(re)?;
+            re = Exp::Int(0);
+        }
         // The operand that goes into the instruction instead of a register,
         // and the side it was written on.
         let mut in_inst: Option<(Operand, bool)> = None;
@@ -99,15 +127,17 @@ impl Compiler<'_> {
                 // right one becomes the operand, its constant first, and the
                 // left one a register; with no such form the right one takes
                 // its register first.
+                // ... and an immediate `I << x` is `SHLI`
                 let swap = self.version >= LuaVersion::Lua54
                     && (matches!(op, BinOp::Add | BinOp::Mul)
                         || matches!(op, BinOp::BAnd | BinOp::BOr | BinOp::BXor)
-                            && matches!(le, Exp::Int(_)));
+                            && matches!(le, Exp::Int(_))
+                        || op == BinOp::Shl);
                 let saved_line = self.force_line.replace(line);
-                if swap && let Some(form) = self.const_operand(op, &le, true, saved) {
+                if swap && let Some(form) = self.const_operand(op, &le, true) {
                     in_inst = Some((form, true));
                     right_reg = Some(self.exp_to_anyreg(re)?);
-                } else if !sub_zero && let Some(form) = self.const_operand(op, &re, false, saved) {
+                } else if let Some(form) = self.const_operand(op, &re, false) {
                     in_inst = Some((form, false));
                     l = Some(self.exp_to_anyreg(le)?);
                 } else {
@@ -119,15 +149,14 @@ impl Compiler<'_> {
                     l = Some(self.exp_to_anyreg(le)?);
                 }
                 self.force_line = saved_line;
-            } else if let Some(form) = self.const_operand(op, &le, true, saved) {
+            } else if let Some(form) = self.const_operand(op, &le, true) {
                 in_inst = Some((form, true));
             }
         }
         if l.is_some()
             && right_reg.is_none()
             && in_inst.is_none()
-            && !sub_zero
-            && let Some(form) = self.const_operand(op, &re, false, saved)
+            && let Some(form) = self.const_operand(op, &re, false)
         {
             in_inst = Some((form, false));
         }
@@ -166,93 +195,18 @@ impl Compiler<'_> {
         // / SETUPVAL for the assignment lands on the rhs's end line, not the
         // operator). Pin the line for the arith emit, but don't stomp
         // `last_line` permanently.
-        let saved_force_arith = self.force_line.replace(line);
+        // a comparison goes where the right operand ends
+        let compare = matches!(op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge);
+        let saved_force_arith = if compare {
+            self.force_line
+        } else {
+            self.force_line.replace(line)
+        };
         let r_op = match in_inst {
             Some((form, flip)) => self.emit_const_operand(op, l, form, flip),
-            None => self.emit_binop(op, l, r, sub_zero),
+            None => self.emit_binop(op, l, r),
         };
         self.force_line = saved_force_arith;
         r_op
-    }
-
-    /// Emit `op` on the registers `l` and `r`.
-    fn emit_binop(
-        &mut self,
-        op: BinOp,
-        l: u32,
-        r: u32,
-        sub_zero: bool,
-    ) -> Result<Exp, SyntaxError> {
-        Ok(match op {
-            BinOp::Add => self.arith(Op::Add, l, r),
-            BinOp::Sub if sub_zero => Exp::Reloc(self.emit(Inst::iabc(Op::Add, 0, l, r, true))),
-            BinOp::Sub => self.arith(Op::Sub, l, r),
-            BinOp::Mul => self.arith(Op::Mul, l, r),
-            BinOp::Div => self.arith(Op::Div, l, r),
-            BinOp::IDiv => self.arith(Op::IDiv, l, r),
-            BinOp::Mod => self.arith(Op::Mod, l, r),
-            BinOp::Pow => self.arith(Op::Pow, l, r),
-            BinOp::BAnd => self.arith(Op::BAnd, l, r),
-            BinOp::BOr => self.arith(Op::BOr, l, r),
-            BinOp::BXor => self.arith(Op::BXor, l, r),
-            BinOp::Shl => self.arith(Op::Shl, l, r),
-            BinOp::Shr => self.arith(Op::Shr, l, r),
-            BinOp::Eq => Exp::Cmp {
-                op: Op::Eq,
-                l,
-                r,
-                c: 0,
-            },
-            BinOp::Ne => self.negate_cmp(Op::Eq, l, r, 0)?,
-            BinOp::Lt => Exp::Cmp {
-                op: Op::Lt,
-                l,
-                r,
-                c: 0,
-            },
-            BinOp::Le => Exp::Cmp {
-                op: Op::Le,
-                l,
-                r,
-                c: 0,
-            },
-            BinOp::Gt => Exp::Cmp {
-                op: Op::Lt,
-                l: r,
-                r: l,
-                c: 0,
-            },
-            BinOp::Ge => Exp::Cmp {
-                op: Op::Le,
-                l: r,
-                r: l,
-                c: 0,
-            },
-            BinOp::And | BinOp::Or | BinOp::Concat => unreachable!(),
-        })
-    }
-
-    fn arith(&mut self, op: Op, l: u32, r: u32) -> Exp {
-        Exp::Reloc(self.emit(Inst::iabc(op, 0, l, r, false)))
-    }
-
-    /// `a ~= b`: comparison materialized with inverted k.
-    pub(super) fn negate_cmp(
-        &mut self,
-        op: Op,
-        l: u32,
-        r: u32,
-        c: u32,
-    ) -> Result<Exp, SyntaxError> {
-        let reg = self.reserve(1)?;
-        self.l().freereg -= 1;
-        self.emit(Inst::iabc(op, l, r, c, false));
-        self.emit(Inst::isj(Op::Jmp, 1));
-        self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
-        let tpad = self.here();
-        self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
-        // Jmp(1) lands on tpad — mark.
-        self.mark_target(tpad);
-        Ok(Exp::Reg(reg))
     }
 }

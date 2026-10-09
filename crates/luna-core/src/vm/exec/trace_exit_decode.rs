@@ -11,18 +11,17 @@ impl Vm {
     pub(super) fn trace_exit_source(
         &mut self,
         cl: Gc<LuaClosure>,
-        pc: u32,
         ct: &CompiledTrace,
         raw_ret: u64,
-        reg_state: &mut [i64],
+        reg_state: &mut Vec<i64>,
         base_us: usize,
         entry_tags: &[u8],
     ) -> ExitSource {
-        let src = self.exit_source_of(cl, pc, ct, raw_ret, reg_state, base_us, entry_tags);
+        let src = self.exit_source_of(cl, ct, raw_ret, reg_state, base_us, entry_tags);
         // a side trace runs one pass for each return through here, and the
         // dispatcher never enters it: count the pass as its entry
-        if src.2
-            && let Some(c) = &src.0
+        if src.ran
+            && let Some(c) = &src.child
         {
             self.count_towards_tier_up(c, cl.proto.call_hot_count.get());
         }
@@ -32,125 +31,120 @@ impl Vm {
     fn exit_source_of(
         &mut self,
         cl: Gc<LuaClosure>,
-        pc: u32,
         ct: &CompiledTrace,
         raw_ret: u64,
-        reg_state: &mut [i64],
+        reg_state: &mut Vec<i64>,
         base_us: usize,
         entry_tags: &[u8],
     ) -> ExitSource {
-        let window_size = ct.window_size;
-        let from_side_trace = (raw_ret >> 63) & 1 == 1;
-        if from_side_trace {
+        let parent_only = ExitSource {
+            child: None,
+            body: raw_ret,
+            ran: false,
+            off: 0,
+        };
+        if (raw_ret >> 63) & 1 == 1 {
+            // the parent's code ran the side trace wired to one of its
+            // exits; the sentinel names the exit
             let sentinel_code = ((raw_ret >> 56) & 0x7F) as u32;
-            let body = raw_ret & 0x00FF_FFFF_FFFF_FFFFu64;
-            let traces = cl.proto.traces.borrow();
-            let child_idx = ct.side_trace_cache.borrow().get(&sentinel_code).copied();
-            if let Some(idx) = child_idx
-                && let Some(child) = traces.get(idx as usize)
-            {
-                if crate::jit::trace::v2c_probe_enabled() {
-                    eprintln!(
-                        "[v2c-A3-decode] sentinel={:#04x} body={:#018x} child_idx={} child.n_ops={} child.head_pc={} child.window_size={} parent.pc={} parent.window_size={} child.dispatchable={} child.inline_abort={}",
-                        sentinel_code,
-                        body,
-                        idx,
-                        child.n_ops,
-                        child.head_pc,
-                        child.window_size,
-                        pc,
-                        window_size,
-                        child.dispatchable,
-                        child.is_inline_abort_close,
-                    );
-                }
-                (Some(child.clone()), body, true)
-            } else {
-                if crate::jit::trace::v2c_probe_enabled() {
-                    eprintln!(
-                        "[v2c-A3-decode] sentinel={:#04x} body={:#018x} child MISS (fallback parent shapes)",
-                        sentinel_code, body,
-                    );
-                }
-                // Cache miss — fall back to parent
-                // shapes with the body bits. Best-
-                // effort; the trace_side_trace_
-                // shape_mismatch_count records this
-                // path indirectly (close-handler
-                // skips wiring on mismatch so we
-                // shouldn't reach here when shape
-                // gate held).
-                (None, body, true)
-            }
-        } else if !ct.has_any_side_wired.get() {
-            (None, raw_ret, false)
+            let exit = ct.side_trace_cache.borrow().get(&sentinel_code).copied();
+            let child = exit.and_then(|e| ct.side_children.borrow().get(&e).cloned());
+            return ExitSource {
+                child,
+                body: raw_ret & 0x00FF_FFFF_FFFF_FFFFu64,
+                ran: true,
+                off: exit.map_or(0, |e| ct.exit_frame_offset(e as usize)),
+            };
+        }
+        if !ct.has_any_side_wired.get() {
+            return parent_only;
+        }
+        // The side trace wired to the exit taken runs here rather than
+        // from the parent's code: a test at every exit of the parent cost
+        // more than it saved.
+        let tentative = crate::jit::trace::decode_exit_shape(
+            raw_ret,
+            &ct.per_exit_inline,
+            &ct.per_exit_tags,
+            &ct.exit_tags,
+        );
+        let exit = tentative.exit_hit_idx;
+        let Some(child) = ct.side_children.borrow().get(&(exit as u32)).cloned() else {
+            return parent_only;
+        };
+        // a side trace was recorded from the pc its exit resumed at; a
+        // plain-pc exit can return other pcs (a for loop's tail goes back
+        // to the body or leaves the loop), and the child only continues
+        // from its own
+        let off = ct.exit_frame_offset(exit);
+        if child.head_pc != tentative.cont_pc
+            || !self.child_reads_stack_held_ok(base_us, off, entry_tags, &child.entry_tags)
+        {
+            return parent_only;
+        }
+        // The child's registers start at the frame the exit resumes in.
+        // Past that frame they are its own scratch slots, which start at
+        // zero as on any entry; the parent left nothing there that is
+        // still live.
+        let child_cl = if off == 0 {
+            cl
         } else {
-            // Dispatcher-level side-trace invocation,
-            // rather than an IR gate (`load + icmp +
-            // brif`) at every emit_store_back callsite,
-            // which measured as a net slowdown.
-            let tentative = crate::jit::trace::decode_exit_shape(
-                raw_ret,
-                &ct.per_exit_inline,
-                &ct.per_exit_tags,
-                &ct.exit_tags,
-            );
-            let fn_ptr = ct
-                .exit_side_trace_ptrs
-                .get(tentative.exit_hit_idx)
-                .map_or(std::ptr::null(), |cell| cell.get());
-            let child = (!fn_ptr.is_null())
-                .then(|| {
-                    cl.proto
-                        .traces
-                        .borrow()
-                        .iter()
-                        .find(|t| t.current_entry() as *const () as *const u8 == fn_ptr)
-                        .cloned()
-                })
-                .flatten();
-            // a side trace was recorded from the pc its exit resumed at; a
-            // plain-pc exit can return other pcs (a for loop's tail goes back
-            // to the body or leaves the loop), and the child only continues
-            // from its own
-            if let Some(child) = child
-                && child.head_pc == tentative.cont_pc
-                && self.child_reads_stack_held_ok(base_us, entry_tags, &child.entry_tags)
-            {
-                let cent = child.current_entry();
-                let child_raw_ret = {
-                    // chunk_compiler.enter
-                    // (side-trace entry).
-                    let vm_ptr: *mut Vm = self;
-                    let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
-                    // SAFETY: `cent` is the entry of a side trace compiled for this exit and found in `cl.proto.traces`, which keeps its code alive; `reg_state` is the register window the parent ran on, whose tags were just checked against what the child reads; the guard above pins this Vm and `cl` for the helpers the trace calls
-                    unsafe { cent(reg_state.as_mut_ptr()) }
-                };
-                (Some(child), child_raw_ret as u64, true)
-            } else {
-                (None, raw_ret, false)
+            match self.frames.last() {
+                // the exit rebuilt the frames of the functions the parent
+                // inlined: the innermost is the one the child starts in
+                Some(CallFrame::Lua(f)) => {
+                    let frame_end = off + f.closure.proto.max_stack as usize;
+                    let need = off + child.window_size as usize;
+                    if reg_state.len() < need {
+                        reg_state.resize(need, 0);
+                    }
+                    if need > frame_end {
+                        reg_state[frame_end..need].fill(0);
+                    }
+                    f.closure
+                }
+                _ => return parent_only,
             }
+        };
+        let cent = child.current_entry();
+        self.jit.counters.side_trace_runs += 1;
+        if off > 0 {
+            self.jit.counters.side_trace_runs_inlined += 1;
+        }
+        let child_raw_ret = {
+            let vm_ptr: *mut Vm = self;
+            let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(child_cl));
+            // SAFETY: `cent` is the entry of a side trace compiled for this exit and held by `ct`, whose code lives as long as this Vm; from register `off` on, `reg_state` holds at least the child's window, and the registers the child reads carry the tags it was compiled for (checked when it was wired, and the stack-held ones just above); `child_cl` runs the frame the child starts in, and the guard pins it and this Vm for the helpers the trace calls
+            unsafe { cent(reg_state.as_mut_ptr().add(off)) }
+        };
+        ExitSource {
+            child: Some(child),
+            body: child_raw_ret as u64,
+            ran: true,
+            off,
         }
     }
 
     /// Whether a side trace may run on the registers as they are: a slot
     /// the parent took unchecked (its runtime entry tag is ANY) but the
     /// child reads holds, on the stack, a value of the tag the child was
-    /// compiled for.
+    /// compiled for. The child's register `i` is the parent's `off + i`.
     fn child_reads_stack_held_ok(
         &self,
         base_us: usize,
+        off: usize,
         entry_tags: &[u8],
         child_entry: &[u8],
     ) -> bool {
         entry_tags
             .iter()
+            .skip(off)
             .zip(child_entry)
             .enumerate()
             .all(|(i, (&p, &c))| {
                 p != crate::jit::trace::ENTRY_TAG_ANY
                     || c == crate::jit::trace::ENTRY_TAG_ANY
-                    || self.stack[base_us + i].unpack().0 == c
+                    || self.stack[base_us + off + i].unpack().0 == c
             })
     }
 
@@ -159,11 +153,9 @@ impl Vm {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn trace_restore_slots(
         &mut self,
-        cl: Gc<LuaClosure>,
         base_us: usize,
         max_stack: usize,
-        decode_body: u64,
-        cont_pc: u32,
+        keep_tfor: std::ops::Range<usize>,
         using_global_exit_tags: bool,
         global_tag_res_kind: crate::jit::trace::TagResKind,
         exit_tags_for_pc: &[crate::jit::trace::ExitTag],
@@ -210,17 +202,6 @@ impl Vm {
         // hits always take the general path —
         // their per-side-exit shapes aren't
         // pre-classified yet.
-        // A generic-for exit whose TForCall wrote the loop
-        // variables to the stack with tags the trace did not
-        // compile for: leave those slots as they are.
-        let keep_tfor = if decode_body & crate::jit::trace_types::EXIT_KEEP_TFOR_VARS != 0 {
-            let call = cl.proto.code[cont_pc as usize - 1];
-            debug_assert!(matches!(call.op(), crate::vm::isa::Op::TForCall));
-            let first = call.a() as usize + 4;
-            first..first + call.c() as usize
-        } else {
-            0..0
-        };
         let fast_path_taken = if using_global_exit_tags && keep_tfor.is_empty() {
             match global_tag_res_kind {
                 crate::jit::trace::TagResKind::AllUntouched => {
@@ -269,9 +250,9 @@ impl Vm {
             let regs = &reg_state[..slot_count];
             for (i, &exit_tag) in exit_tags_for_pc.iter().enumerate() {
                 let mut tag = RAW_OF[exit_tag as usize];
-                if tag == BOOL {
-                    tag = raw::FALSE + (regs[i] & 1) as u8;
-                } else if tag == UNTOUCHED {
+                // `Untouched` first: a trace leaves most slots unwritten,
+                // and a written boolean is rare
+                if tag == UNTOUCHED {
                     if i >= max_stack {
                         tag = raw::NIL;
                     } else {
@@ -288,6 +269,8 @@ impl Vm {
                             continue;
                         }
                     }
+                } else if tag == BOOL {
+                    tag = raw::FALSE + (regs[i] & 1) as u8;
                 }
                 if keep_tfor.contains(&i) {
                     continue;
@@ -309,6 +292,15 @@ impl Vm {
     }
 }
 
-/// The side trace whose exit shapes decode a trace's return (`None`: the
-/// trace's own), the return bits themselves, and whether a side trace ran.
-pub(super) type ExitSource = (Option<TArc<CompiledTrace>>, u64, bool);
+/// Which trace's exit decodes a trace's return.
+pub(super) struct ExitSource {
+    /// The side trace whose exit shapes decode the return (`None`: the
+    /// trace's own).
+    pub(super) child: Option<TArc<CompiledTrace>>,
+    /// The return bits to decode.
+    pub(super) body: u64,
+    /// A side trace ran.
+    pub(super) ran: bool,
+    /// The register of the parent's window the side trace's register 0 is.
+    pub(super) off: usize,
+}

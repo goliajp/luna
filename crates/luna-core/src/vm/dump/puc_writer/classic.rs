@@ -10,9 +10,9 @@
 //!   and comparisons take theirs as `RK` operands ([`super::classic_const`]);
 //! - luna's `Close` is `OP_CLOSE` in 5.1 and a `JMP` that closes in
 //!   5.2/5.3;
-//! - the generic `for` keeps three hidden slots, so its body is a register
-//!   window, and it is entered by a `JMP` to its call; in 5.1 the call and
-//!   the loop test are one `TFORLOOP` followed by the back `JMP`;
+//! - the generic `for` is entered by a `JMP` to its call, and its loop test
+//!   names the control register (`A + 2`); in 5.1 the call and the loop
+//!   test are one `TFORLOOP` followed by the back `JMP`;
 //! - 5.1 reads globals with `GETGLOBAL`/`SETGLOBAL` from the function
 //!   environment, which luna keeps as upvalue 0 (`_ENV`): that upvalue is
 //!   dropped, the others move down one, and a `CLOSURE` is followed by one
@@ -127,7 +127,6 @@ impl C<'_, '_> {
                 let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
                 self.emit(self.abc(Kind::Move, a, b, 0))?;
             }
-            Op::LoadI | Op::LoadF | Op::LoadK if self.folded_load(l) => {}
             Op::LoadI | Op::LoadF => {
                 let v = if l.op == Op::LoadI {
                     self.num(l.sbx as i64)
@@ -153,11 +152,12 @@ impl C<'_, '_> {
                 self.load_k(a, x.ax())?;
                 return Ok(2);
             }
-            Op::LoadFalse | Op::LFalseSkip | Op::LoadTrue => {
+            Op::LoadFalse | Op::LFalseSkip | Op::LoadTrue | Op::LTrueSkip => {
                 let a = self.asm.r(l.a)?;
                 let (b, c) = match l.op {
                     Op::LoadFalse => (0, 0),
                     Op::LFalseSkip => (0, 1),
+                    Op::LTrueSkip => (1, 1),
                     _ => (1, 0),
                 };
                 self.emit(self.abc(Kind::LoadBool, a, b, c))?;
@@ -167,7 +167,6 @@ impl C<'_, '_> {
                 let b = if self.f.ver == 51 { a + l.b } else { l.b };
                 self.emit(self.abc(Kind::LoadNil, a, b, 0))?;
             }
-            Op::GetUpval if self.f.ver == 51 && l.b == 0 => return self.global_by_register(l),
             Op::GetUpval | Op::SetUpval => {
                 let k = if l.op == Op::GetUpval {
                     Kind::GetUpval
@@ -187,7 +186,7 @@ impl C<'_, '_> {
                 }
             }
             Op::SetTabUp => {
-                let c = self.asm.r(l.c)?;
+                let c = self.store_val(l)?;
                 if self.f.ver == 51 {
                     self.global(l.a)?;
                     self.emit(self.raw_abx(p51::OP_SETGLOBAL as u32, c, l.b))?;
@@ -195,7 +194,17 @@ impl C<'_, '_> {
                     self.emit(self.abc(Kind::SetTabUp, l.a, l.b | RK_BIT, c))?;
                 }
             }
-            Op::GetTable | Op::GetI | Op::GetField => {
+            Op::GetTabUpR | Op::SetTabUpR | Op::SetTabUpK => self.tab_up_rk(l)?,
+            Op::GetGlobal | Op::SetGlobal if self.f.ver == 51 => {
+                let op = if l.op == Op::GetGlobal {
+                    p51::OP_GETGLOBAL
+                } else {
+                    p51::OP_SETGLOBAL
+                };
+                let a = self.asm.r(l.a)?;
+                self.emit(self.raw_abx(op as u32, a, l.bx))?;
+            }
+            Op::GetTable | Op::GetI | Op::GetField | Op::GetTableK => {
                 let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
                 let key = match l.op {
                     Op::GetTable => self.asm.r(l.c)?,
@@ -204,13 +213,14 @@ impl C<'_, '_> {
                 };
                 self.emit(self.abc(Kind::GetTable, a, b, key))?;
             }
-            Op::SetTable | Op::SetI | Op::SetField => {
-                let (a, c) = (self.asm.r(l.a)?, self.asm.r(l.c)?);
+            Op::SetTable | Op::SetI | Op::SetField | Op::SetTableK => {
+                let a = self.asm.r(l.a)?;
                 let key = match l.op {
                     Op::SetTable => self.asm.r(l.b)?,
                     Op::SetI => self.rk_num(l.b as i64)?,
                     _ => self.rk(l.b)?,
                 };
+                let c = self.store_val(l)?;
                 self.emit(self.abc(Kind::SetTable, a, key, c))?;
             }
             Op::NewTable => {
@@ -231,7 +241,6 @@ impl C<'_, '_> {
                 let key = if l.k { self.rk(l.c)? } else { self.asm.r(l.c)? };
                 self.emit(self.abc(Kind::SelfOp, a, b, key))?;
             }
-            Op::Add if l.k => return Err(self.asm.err("`x - 0` has no form before 5.4")),
             Op::Add
             | Op::Sub
             | Op::Mul
@@ -244,12 +253,15 @@ impl C<'_, '_> {
             | Op::BXor
             | Op::Shl
             | Op::Shr => {
-                // the right operand's constant first, as PUC's `codearith`
-                let (a, c) = (self.asm.r(l.a)?, self.operand(l.c)?);
-                let b = self.operand(l.b)?;
+                let (a, b, c) = (self.asm.r(l.a)?, self.asm.r(l.b)?, self.asm.r(l.c)?);
                 self.emit(self.abc(Kind::Arith(l.op), a, b, c))?;
             }
             op if op.arith_const_op().is_some() => self.arith_const(l)?,
+            op if op.arith_kk_op().is_some() => {
+                let kind = Kind::Arith(op.arith_kk_op().expect("checked"));
+                let (a, b, c) = (self.asm.r(l.a)?, self.rk(l.b)?, self.rk(l.c)?);
+                self.emit(self.abc(kind, a, b, c))?;
+            }
             Op::Unm | Op::BNot | Op::Not | Op::Len => {
                 let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
                 self.emit(self.abc(Kind::Unary(l.op), a, b, 0))?;
@@ -258,18 +270,9 @@ impl C<'_, '_> {
                 if l.b < 2 {
                     return Err(self.asm.err("concatenation of fewer than two values"));
                 }
-                let a = self.asm.run(l.a, l.b)?;
-                self.emit(self.abc(Kind::Concat, a, a, a + l.b - 1))?;
-            }
-            Op::Close => {
-                let a = self.asm.r(l.a)?;
-                let w = if self.f.ver == 51 {
-                    self.raw_abc(p51::OP_CLOSE as u32, a, 0, 0)?
-                } else {
-                    // `JMP A+1 0`: close upvalues from R(A), fall through
-                    self.jmp(a + 1)? | ((1 << 17) - 1) << 14
-                };
-                self.asm.emit(w);
+                let (first, out) = if l.k { (l.c, l.a) } else { (l.a, l.a) };
+                let (a, first) = (self.asm.r(out)?, self.asm.run(first, l.b)?);
+                self.emit(self.abc(Kind::Concat, a, first, first + l.b - 1))?;
             }
             _ => return self.flow(l, caps),
         }
@@ -282,7 +285,8 @@ pub(super) fn encode(asm: &mut Asm, f: &Frame, caps: &mut Caps) -> Res<()> {
     let mut pc = 0;
     while pc < p.code.len() {
         asm.begin(pc);
-        let l = L::of(p.code[pc]);
+        let i = crate::vm::isa::imm_form::to_k(p.code[pc], &p.consts);
+        let l = L::of(i.ok_or_else(|| asm.err("an immediate operand not in the constants"))?);
         pc += C { asm, f }.one(l, caps)?;
     }
     Ok(())

@@ -103,8 +103,18 @@ fn repeated(body: &str) -> String {
 }
 
 fn run(backend: Backend, tier: TraceTier, tier_up_at: Option<u32>, src: &str) -> Run {
+    run_in(LuaVersion::Lua54, backend, tier, tier_up_at, src)
+}
+
+fn run_in(
+    v: LuaVersion,
+    backend: Backend,
+    tier: TraceTier,
+    tier_up_at: Option<u32>,
+    src: &str,
+) -> Run {
     let src = &repeated(src);
-    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    let mut vm = luna_jit::new_with_jit(v);
     match backend {
         Backend::Interpreter => vm.install_null_jit(),
         Backend::Cranelift => vm.install_default_jit(),
@@ -156,6 +166,77 @@ fn llvm_compiles_and_dispatches_the_traces_cranelift_does() {
         assert_eq!(ll.codegen, cl.codegen, "{name}: traces given code");
         assert_eq!(ll.llvm, ll.codegen, "{name}: traces LLVM compiled");
         assert!(ll.dispatched > 0, "{name}: no LLVM trace was dispatched");
+    }
+}
+
+/// Table reads and writes with a constant operand, a constant key and an
+/// upvalue table, whose forms differ per dialect.
+const TABLE_OPERANDS: &str = "
+    local u = {0, 0}
+    local function f(n)
+      local t, s = {}, 0
+      for i = 1, n do
+        t.a = 1.5 t[1] = 2 t[i] = 0.25 t[2.5] = i t[-3] = 4
+        u[i] = i u[1.5] = 2 u.x = i
+        s = s + t.a + t[1] + t[i] + t[2.5] + t[-3] + u[i] + u[1.5] + u.x
+      end
+      return s
+    end
+    return tostring(f(5000))";
+
+#[test]
+fn llvm_compiles_table_constant_operands_in_every_dialect() {
+    for v in [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        let opt = TraceTier::Optimizing;
+        let interp = run_in(v, Backend::Interpreter, opt, None, TABLE_OPERANDS);
+        let cl = run_in(v, Backend::Cranelift, opt, None, TABLE_OPERANDS);
+        let ll = run_in(v, Backend::Llvm, opt, None, TABLE_OPERANDS);
+        assert_eq!(ll.out, interp.out, "{v:?}: LLVM result");
+        assert_eq!(cl.out, interp.out, "{v:?}: Cranelift result");
+        assert!(ll.compiled > 0 && ll.failed == 0, "{v:?}: {ll:?}");
+        assert_eq!((ll.compiled, ll.failed), (cl.compiled, cl.failed), "{v:?}");
+        assert!(ll.llvm > 0 && ll.llvm == ll.codegen, "{v:?}: {ll:?}");
+        assert!(ll.dispatched > 0, "{v:?}: {ll:?}");
+    }
+}
+
+/// Each dialect's layout of both `for` loops, and constant operands on
+/// either side of an operator (any constant before 5.4).
+const LOOPS_AND_OPERANDS: &str = "
+    local function f(n)
+      local t, s = {}, 0
+      for i = 1, n do t[i] = i % 7 end
+      for i, v in ipairs(t) do s = s + v + (1 - i) % 5 end
+      for k, v in pairs(t) do if 3 >= v then s = s + 1 end end
+      for x = 0.5, 200.5 do if x < 1e300 and nil ~= x then s = s + 2 ^ (x % 3) end end
+      return s
+    end
+    return tostring(f(3000))";
+
+#[test]
+fn llvm_compiles_each_dialects_loops_and_constant_operands() {
+    for v in [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        let opt = TraceTier::Optimizing;
+        let interp = run_in(v, Backend::Interpreter, opt, None, LOOPS_AND_OPERANDS);
+        let cl = run_in(v, Backend::Cranelift, opt, None, LOOPS_AND_OPERANDS);
+        let ll = run_in(v, Backend::Llvm, opt, None, LOOPS_AND_OPERANDS);
+        assert_eq!(ll.out, interp.out, "{v:?}: LLVM result");
+        assert_eq!(cl.out, interp.out, "{v:?}: Cranelift result");
+        assert!(ll.compiled > 0, "{v:?}: {ll:?}");
+        assert_eq!((ll.compiled, ll.failed), (cl.compiled, cl.failed), "{v:?}");
+        assert!(ll.llvm > 0 && ll.llvm == ll.codegen, "{v:?}: {ll:?}");
     }
 }
 

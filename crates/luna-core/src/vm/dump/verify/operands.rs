@@ -5,55 +5,10 @@ use super::Checker;
 use crate::vm::isa::Op;
 
 impl Checker<'_> {
-    /// Registers `first .. first + len` must lie below `max_stack`.
-    fn regs(&self, pc: usize, first: u32, len: u32) -> Result<(), String> {
-        if first + len > self.max() {
-            let what = if len <= 1 {
-                format!("register {first}")
-            } else {
-                format!("registers {first}..{}", first + len - 1)
-            };
-            return Err(self.err(
-                pc,
-                format!("{what} out of range (stack size {})", self.max()),
-            ));
-        }
-        Ok(())
-    }
-
-    fn reg(&self, pc: usize, r: u32) -> Result<(), String> {
-        self.regs(pc, r, 1)
-    }
-
-    fn konst(&self, pc: usize, k: u32) -> Result<(), String> {
-        let n = self.p.consts.len();
-        if k as usize >= n {
-            return Err(self.err(pc, format!("constant {k} out of range ({n} constants)")));
-        }
-        Ok(())
-    }
-
-    /// A constant the interpreter reads as a string key without checking
-    /// (`GetField`, `SetField`, `GetTabUp`, `SetTabUp`, a `k` `SelfOp`).
-    fn kstr(&self, pc: usize, k: u32) -> Result<(), String> {
-        self.konst(pc, k)?;
-        if !matches!(self.p.consts[k as usize], crate::runtime::Value::Str(_)) {
-            return Err(self.err(pc, format!("constant {k} is not a string")));
-        }
-        Ok(())
-    }
-
-    fn upval(&self, pc: usize, u: u32) -> Result<(), String> {
-        let n = self.p.upvals.len();
-        if u as usize >= n {
-            return Err(self.err(pc, format!("upvalue {u} out of range ({n} upvalues)")));
-        }
-        Ok(())
-    }
-
     pub(super) fn check_operands(&self, pc: usize) -> Result<(), String> {
         let i = self.inst(pc);
         let (a, b, c) = (i.a(), i.b(), i.c());
+        let var = i.op().for_layout().map_or(0, |l| l.var());
         match self.ops[pc] {
             Op::Move | Op::Unm | Op::BNot | Op::Not | Op::Len | Op::GetI | Op::TestSet => {
                 self.reg(pc, a)?;
@@ -63,6 +18,7 @@ impl Checker<'_> {
             | Op::LoadF
             | Op::LoadFalse
             | Op::LFalseSkip
+            | Op::LTrueSkip
             | Op::LoadTrue
             | Op::NewTable
             | Op::Test
@@ -86,34 +42,69 @@ impl Checker<'_> {
                 self.reg(pc, a)?;
                 self.upval(pc, b)
             }
+            Op::GetGlobal | Op::SetGlobal => {
+                self.reg(pc, a)?;
+                self.upval(pc, 0)?;
+                self.kstr(pc, i.bx())
+            }
             Op::GetTabUp => {
                 self.reg(pc, a)?;
                 self.upval(pc, b)?;
                 self.kstr(pc, c)
             }
-            Op::GetTable | Op::SetTable => {
+            Op::GetTable => {
                 self.reg(pc, a)?;
                 self.reg(pc, b)?;
                 self.reg(pc, c)
+            }
+            Op::SetTable => {
+                self.reg(pc, a)?;
+                self.reg(pc, b)?;
+                self.value(pc, i.k(), c)
+            }
+            Op::GetTableK => {
+                self.reg(pc, a)?;
+                self.reg(pc, b)?;
+                self.konst(pc, c)
+            }
+            Op::SetTableK => {
+                self.reg(pc, a)?;
+                self.konst(pc, b)?;
+                self.value(pc, i.k(), c)
             }
             Op::GetField => {
                 self.reg(pc, a)?;
                 self.reg(pc, b)?;
                 self.kstr(pc, c)
             }
+            Op::GetTabUpR => {
+                self.reg(pc, a)?;
+                self.upval(pc, b)?;
+                self.value(pc, i.k(), c)
+            }
+            Op::SetTabUpR => {
+                self.upval(pc, a)?;
+                self.reg(pc, b)?;
+                self.value(pc, i.k(), c)
+            }
+            Op::SetTabUpK => {
+                self.upval(pc, a)?;
+                self.konst(pc, b)?;
+                self.value(pc, i.k(), c)
+            }
             Op::SetTabUp => {
                 self.upval(pc, a)?;
                 self.kstr(pc, b)?;
-                self.reg(pc, c)
+                self.value(pc, i.k(), c)
             }
             Op::SetI => {
                 self.reg(pc, a)?;
-                self.reg(pc, c)
+                self.value(pc, i.k(), c)
             }
             Op::SetField => {
                 self.reg(pc, a)?;
                 self.kstr(pc, b)?;
-                self.reg(pc, c)
+                self.value(pc, i.k(), c)
             }
             Op::SetList => {
                 self.regs(pc, a, b + 1)?;
@@ -160,19 +151,47 @@ impl Checker<'_> {
             | Op::IDivK
             | Op::BAndK
             | Op::BOrK
-            | Op::BXorK => {
+            | Op::BXorK
+            | Op::ShlK
+            | Op::ShrK => {
                 self.reg(pc, a)?;
                 self.reg(pc, b)?;
                 self.konst(pc, c)
+            }
+            Op::AddKK
+            | Op::SubKK
+            | Op::MulKK
+            | Op::ModKK
+            | Op::PowKK
+            | Op::DivKK
+            | Op::IDivKK
+            | Op::BAndKK
+            | Op::BOrKK
+            | Op::BXorKK
+            | Op::ShlKK
+            | Op::ShrKK => {
+                self.reg(pc, a)?;
+                self.konst(pc, b)?;
+                self.konst(pc, c)
+            }
+            Op::EqKK | Op::LtKK | Op::LeKK => {
+                self.konst(pc, a)?;
+                self.konst(pc, b)
             }
             Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI => self.reg(pc, a),
             Op::Concat => {
                 if b < 2 {
                     return Err(self.err(pc, format!("concatenates {b} values")));
                 }
-                self.regs(pc, a, b)
+                let (first, out) = i.concat_operands();
+                self.reg(pc, out)?;
+                self.regs(pc, first, b)
             }
             Op::Jmp | Op::ExtraArg => Ok(()),
+            Op::JmpClose | Op::JmpCloseBack => match a.checked_sub(1) {
+                Some(r) => self.reg(pc, r),
+                None => Err(self.err(pc, "closes no register".to_string())),
+            },
             // the first register past the returning frame's locals: at most
             // one past its last register
             Op::Return0 => self.regs(pc, a, 0),
@@ -180,7 +199,7 @@ impl Checker<'_> {
                 self.reg(pc, a)?;
                 self.reg(pc, b)
             }
-            Op::EqK => {
+            Op::EqK | Op::LtK | Op::LeK => {
                 self.reg(pc, a)?;
                 self.konst(pc, b)
             }
@@ -199,17 +218,18 @@ impl Checker<'_> {
                     self.regs(pc, a, b - 1)
                 }
             }
-            // four hidden slots A..A+3
-            Op::ForPrep | Op::ForLoop => self.regs(pc, a, 4),
-            // A..A+3 hidden, loop variables from A+4
-            Op::TForPrep => self.regs(pc, a, 4),
-            Op::TForCall => {
+            // the hidden slots and the first loop variable
+            Op::ForPrep | Op::ForLoop | Op::ForPrep55 | Op::ForLoop55 => self.regs(pc, a, var + 1),
+            Op::TForPrep | Op::TForPrep53 | Op::TForPrep55 => self.regs(pc, a, var),
+            // the call runs on three copies at the first variable, which
+            // its results replace
+            Op::TForCall | Op::TForCall53 | Op::TForCall55 => {
                 if c == 0 {
                     return Err(self.err(pc, "no loop variables".to_string()));
                 }
-                self.regs(pc, a, 4 + c)
+                self.regs(pc, a, var + c.max(3))
             }
-            Op::TForLoop => self.regs(pc, a, 5),
+            Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => self.regs(pc, a, var + 1),
             Op::Closure => {
                 self.reg(pc, a)?;
                 let n = self.p.protos.len();

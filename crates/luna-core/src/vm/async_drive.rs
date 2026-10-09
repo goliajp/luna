@@ -217,17 +217,18 @@ impl Vm {
         // `instr_budget` was set to `None` by the hot loop on
         // exhaustion. Reload it for this slice.
         self.instr_budget = Some(self.async_slice_size);
+        self.sync_limited();
 
         let raw = match bootstrap {
             Some(closure_val) => {
                 // First slice — set up the call frame via the existing
-                // `call_value` path. This handles `c_depth`,
+                // `call_value` path. This handles `nccalls`,
                 // `public_call_depth`, `clear_error_metadata`, and the
                 // `begin_call` push. On a synchronous completion (e.g.
                 // a chunk whose only op is `return`) the call
                 // finishes within `call_value` and we hit
                 // `Complete` immediately.
-                self.call_value(closure_val, &[])
+                self.call_value_k(closure_val, &[])
             }
             None => {
                 // Resume slice — frames are intact from the prior

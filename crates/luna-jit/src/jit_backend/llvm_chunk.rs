@@ -101,10 +101,13 @@ pub(super) fn try_compile(
     let ticket = super::llvm_thread::submit(
         Box::new(move || {
             if let Some(c) = job.compile() {
+                let entry = c.entry;
                 code.lock()
                     .expect("a job never panics holding the code list")
                     .push(c.pair);
-                to.store(c.entry, Ordering::Release);
+                if super::llvm_thread::cores_synced() {
+                    to.store(entry, Ordering::Release);
+                }
             }
         }),
         std::time::Instant::now() + llvm_after,
@@ -159,6 +162,8 @@ fn cell_entry(cell: &Arc<AtomicUsize>, num_args: u8, returns_one: bool) -> Optio
     Some(JitHandle {
         _module: module.publish(),
         entry_raw: ptr,
+        ring: None,
+        layout: None,
         num_args,
         returns_one,
         arg_float_mask: 0,

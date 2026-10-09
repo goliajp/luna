@@ -217,10 +217,16 @@ mod upval;
 pub use upval::*;
 mod guards;
 pub use guards::*;
+mod recursion;
+pub use recursion::*;
 mod stack_ops;
 pub use stack_ops::*;
+mod tfor;
+pub use tfor::*;
 mod materialize;
 pub use materialize::*;
+mod inlined;
+pub use inlined::*;
 
 mod str_buf;
 pub use str_buf::*;

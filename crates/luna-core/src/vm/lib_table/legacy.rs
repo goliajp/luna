@@ -49,7 +49,7 @@ pub(super) fn t_foreachi(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let (tv, n) = aux_getn(vm, a, 0)?;
     let f = argcheck::check_function(vm, a, 1)?;
     for i in 1..=n {
-        let v = tab_geti(vm, tv, i)?;
+        let v = tab_geti(vm, tv, i, 0)?;
         let r = vm.call_value(f, &[Value::Int(i), v])?.first().copied();
         if let Some(r) = r
             && !r.is_nil()

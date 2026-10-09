@@ -1,8 +1,8 @@
 //! Jump resolution and debug-table remapping that close out a [`Lowering`].
 
-use super::{Fixup, Jump, Lowered, Lowering, RawLocVar, Target, enc_abc, enc_abx, enc_sj};
+use super::{Jump, Lowered, Lowering, RawLocVar, enc_abx, enc_sj};
 use crate::runtime::function::LocVar;
-use crate::vm::isa::{self, Op};
+use crate::vm::isa;
 
 impl Lowering {
     /// Resolve every jump and remap the debug tables.
@@ -10,30 +10,10 @@ impl Lowering {
         mut self,
         raw_locvars: &[RawLocVar],
     ) -> Result<Lowered, String> {
-        // Trampolines follow the last instruction, which never falls through.
-        let mut tramp_at = Vec::with_capacity(self.trampolines.len());
-        for t in std::mem::take(&mut self.trampolines) {
-            tramp_at.push(self.code.len() as u32);
-            self.code.push(enc_abc(Op::Close, t.close, 0, 0, false)?);
-            self.lines.push(t.line);
-            self.fixups.push(Fixup {
-                at: self.code.len(),
-                target: Target::Puc(t.target),
-                kind: Jump::Jmp,
-            });
-            self.code.push(enc_sj(Op::Jmp, 0)?);
-            self.lines.push(t.line);
-        }
         for f in std::mem::take(&mut self.fixups) {
-            let t = match f.target {
-                Target::Trampoline(i) => tramp_at[i],
-                Target::Puc(pc) => match self.first[pc] {
-                    Some(t) => t,
-                    None => {
-                        self.pc = pc;
-                        return Err(self.err("jump lands on an instruction that has no luna form"));
-                    }
-                },
+            let Some(t) = self.first[f.target] else {
+                self.pc = f.target;
+                return Err(self.err("jump lands on an instruction that has no luna form"));
             };
             let (t, at) = (t as i64, f.at as i64);
             let inst = &mut self.code[f.at];
@@ -53,6 +33,9 @@ impl Lowering {
                 Jump::ForPrep => enc_abx(op, a, bx_distance(self.dialect, t - at)?)?,
                 Jump::Back => enc_abx(op, a, bx_distance(self.dialect, at + 1 - t)?)?,
                 Jump::TForPrep => enc_abx(op, a, bx_distance(self.dialect, t - (at + 1))?)?,
+                // PUC's 18-bit `sBx` reaches no further than the two
+                // directions of `JmpClose` do
+                Jump::JmpClose => isa::Inst::jmp_close(a, (t - (at + 1)) as i32),
             };
         }
         let locvars = self.locvars(raw_locvars)?;
@@ -69,6 +52,20 @@ impl Lowering {
             locvars,
             max_stack: max_stack as u8,
         })
+    }
+
+    /// [`Self::finish`] for 5.1–5.3, whose small-number operands luna
+    /// keeps in the instruction (see [`isa::imm_form`]).
+    pub(in crate::vm::dump::puc) fn finish_classic(
+        self,
+        raw_locvars: &[RawLocVar],
+        consts: &[crate::runtime::Value],
+    ) -> Result<Lowered, String> {
+        let mut l = self.finish(raw_locvars)?;
+        for i in l.code.iter_mut() {
+            *i = isa::imm_form::to_imm(*i, consts);
+        }
+        Ok(l)
     }
 
     /// First luna pc at or after PUC pc `pc` (the code length past the end).
@@ -92,7 +89,7 @@ impl Lowering {
                 .count() as u32;
             out.push(LocVar {
                 name: v.name.clone(),
-                reg: self.reg_at(v.start_pc as usize, puc_reg)?,
+                reg: self.r(puc_reg)?,
                 start_pc: self.luna_pc(v.start_pc),
                 end_pc: self.luna_pc(v.end_pc),
             });

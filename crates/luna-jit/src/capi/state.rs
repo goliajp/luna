@@ -5,13 +5,8 @@ use super::ccall::{CCall, CHook, PendingYield};
 use super::*;
 use luna_core::runtime::mem::{BlockKind, LAny, MemOwner};
 
-/// PUC `lua_Alloc`.
-pub type LuaAlloc = unsafe extern "C" fn(
-    ud: *mut c_void,
-    ptr: *mut c_void,
-    osize: usize,
-    nsize: usize,
-) -> *mut c_void;
+/// PUC `lua_Alloc`: `(ud, ptr, osize, nsize)`.
+pub type LuaAlloc = unsafe extern "C" fn(*mut c_void, *mut c_void, usize, usize) -> *mut c_void;
 
 /// What every thread of a state shares (PUC `global_State`). The first
 /// five fields are read and written by the C side (`struct luna_G` in
@@ -40,6 +35,8 @@ pub(crate) struct Global {
     pub(super) alloc_ud: *mut c_void,
     /// `lua_newstate`'s seed (5.5)
     pub(super) seed: u32,
+    /// the debug library's hook as `lua_gethook` handed it out
+    pub(super) hookf: Option<super::ccall::LuaHook>,
 }
 
 /// A thread as C sees it (PUC `lua_State`). The first field is read by the
@@ -244,6 +241,7 @@ fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: u32) -> *mut
             alloc: Some(alloc),
             alloc_ud: ud,
             seed,
+            hookf: None,
         })
     };
     // SAFETY: `vm_ptr` was just written and nothing else refers to it yet

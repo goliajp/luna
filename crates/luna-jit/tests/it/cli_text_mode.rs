@@ -158,3 +158,23 @@ fn files_read_and_write_as_in_lua_exe() {
         assert_eq!(show(&r.stdout), show(want.as_bytes()), "--lua={d}");
     }
 }
+
+/// `setvbuf` with a size below 2 is an invalid argument to the MSVC C
+/// library, whose handler ends the process at once (status 0xC0000409,
+/// nothing flushed), as `lua.exe` ends.
+#[test]
+fn invalid_setvbuf_size_ends_the_process() {
+    for d in DIALECTS {
+        let out = Command::new(luna())
+            .arg(format!("--lua={d}"))
+            .args([
+                "-e",
+                "io.write('lost') io.stdout:setvbuf('full', 1) print('x')",
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .expect("run luna");
+        assert_eq!(out.status.code(), Some(0xC000_0409_u32 as i32), "--lua={d}");
+        assert_eq!(show(&out.stdout), "", "--lua={d}");
+    }
+}

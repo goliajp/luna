@@ -1,13 +1,12 @@
 //! Per-level debug queries: names, `lua_Debug` records, locals.
 
 use crate::runtime::function::{CallFrame, ContKind, Frame};
-use crate::runtime::{Coro, CoroStatus, Gc, LuaClosure, Table, Value};
+use crate::runtime::{Coro, CoroStatus, Gc, LuaClosure, Value};
 use crate::version::LuaVersion;
 use crate::vm::exec::Vm;
 use crate::vm::isa::Op;
 use crate::vm::objname::instr_event;
 
-use super::chunk_id::chunk_id;
 use super::{Ar, CLevel, DbgKind, LocalSlot, ThreadStack};
 
 /// PUC's `tmname` for a debug name: 5.2/5.3 keep the `__`, 5.4+ drop it.
@@ -124,10 +123,10 @@ impl Vm {
         let p = &ts.lua(caller).closure.proto;
         match instr.op() {
             Op::Call | Op::TailCall => crate::vm::objname::getobjname_in(p, pc, instr.a(), v),
-            Op::TForCall if v == LuaVersion::Lua51 => {
+            op if op.is_tfor_call() && v == LuaVersion::Lua51 => {
                 crate::vm::objname::getobjname_in(p, pc, instr.a(), v)
             }
-            Op::TForCall => Some(("for iterator", "for iterator".to_string())),
+            op if op.is_tfor_call() => Some(("for iterator", "for iterator".to_string())),
             _ if v >= LuaVersion::Lua52 => {
                 instr_event(v, instr.source_op()).map(|e| ("metamethod", tm_name(v, e)))
             }
@@ -152,7 +151,7 @@ impl Vm {
             DbgKind::C(c) => {
                 let mut ar = self.function_ar(func);
                 if let CLevel::Native(k) = c {
-                    ar.extraargs = ts.acts[k].ccmt as i64;
+                    ar.extraargs = ts.acts[k].ccmt() as i64;
                 }
                 ar
             }
@@ -166,72 +165,6 @@ impl Vm {
             ar.ntransfer = self.hook_ntransfer as i64;
         }
         ar
-    }
-
-    /// PUC `lua_getinfo(">...")` on a function value.
-    pub(crate) fn function_ar(&self, f: Value) -> Ar {
-        match f {
-            Value::Closure(cl) => self.closure_ar(cl),
-            Value::Native(nc) => Ar {
-                what: "C",
-                source: b"=[C]".to_vec(),
-                short_src: b"[C]".to_vec(),
-                linedefined: -1,
-                lastlinedefined: -1,
-                currentline: -1,
-                name: None,
-                istailcall: false,
-                extraargs: 0,
-                ftransfer: 0,
-                ntransfer: 0,
-                nups: nc.upvals.len() as i64,
-                nparams: 0,
-                isvararg: true,
-                func: f,
-            },
-            _ => unreachable!("a function value"),
-        }
-    }
-
-    pub(crate) fn closure_ar(&self, cl: Gc<LuaClosure>) -> Ar {
-        let proto = cl.proto;
-        let raw = proto.source.as_bytes();
-        // PUC `funcinfo` substitutes "=?" for a Proto without a source (a
-        // stripped binary chunk); luna marks that as no source and no line
-        // table, so a text chunk named "" still reads `[string ""]`.
-        let source: Vec<u8> = if raw.is_empty() && proto.lines.is_empty() {
-            b"=?".to_vec()
-        } else {
-            raw.to_vec()
-        };
-        // 5.1 functions keep their environment outside the upvalues, so
-        // `_ENV` (which luna keeps in a cell) is not counted.
-        let nups = if self.version() <= LuaVersion::Lua51 {
-            (proto.upvals.len() - usize::from(proto.env_upval_idx != u8::MAX)) as i64
-        } else {
-            cl.upvals().len() as i64
-        };
-        Ar {
-            what: if proto.line_defined == 0 {
-                "main"
-            } else {
-                "Lua"
-            },
-            short_src: chunk_id(self.version(), &source),
-            source,
-            linedefined: proto.line_defined as i64,
-            lastlinedefined: proto.last_line_defined as i64,
-            currentline: -1,
-            name: None,
-            istailcall: false,
-            extraargs: 0,
-            ftransfer: 0,
-            ntransfer: 0,
-            nups,
-            nparams: proto.num_params as i64,
-            isvararg: proto.is_vararg,
-            func: Value::Closure(cl),
-        }
     }
 
     /// PUC `luaG_findlocal` / 5.1 `findlocal`: the `n`-th local of level `i`
@@ -254,33 +187,23 @@ impl Vm {
                     if k > f.n_varargs as u64 {
                         return None;
                     }
-                    let slot = (f.func_slot as u64 + k) as usize;
+                    let slot = (u64::from(f.base - f.n_varargs) + k - 1) as usize;
                     let name = self.vararg_locvar_name().to_string();
                     return Some((name, LocalSlot::Stack(slot)));
                 }
-                if let Some((name, reg)) = self.named_local(f, n) {
-                    let at = match reg {
-                        None => LocalSlot::Held(Value::Nil),
-                        Some(r) => {
-                            let slot = f.base + r;
-                            // a loaded chunk may name any register; as in
-                            // PUC, a level's locals end below the function
-                            // it is calling
-                            if i > 0
-                                && let Some(limit) = ts.func_slot(i - 1)
-                                && slot >= limit
-                            {
-                                return None;
-                            }
-                            LocalSlot::Stack(slot as usize)
-                        }
-                    };
-                    return Some((name, at));
+                if let Some((name, r)) = self.named_local(f, n) {
+                    let slot = f.base + r;
+                    // a loaded chunk may name any register; as in PUC, a
+                    // level's locals end below the function it is calling
+                    if i > 0
+                        && let Some(limit) = ts.func_slot(i - 1)
+                        && slot >= limit
+                    {
+                        return None;
+                    }
+                    return Some((name, LocalSlot::Stack(slot as usize)));
                 }
-                // 5.5's `(vararg table)` has a register in PUC, not in luna
-                let pseudo = f.closure.proto.has_vararg_table_pseudo
-                    && n > f.closure.proto.num_params as i64 + 1;
-                (f.base, n - 1 - i64::from(pseudo))
+                (f.base, n - 1)
             }
             DbgKind::C(CLevel::Cont(fi)) => {
                 let held = self.cont_temporaries(ts, fi);
@@ -314,16 +237,9 @@ impl Vm {
     }
 
     /// Named locals of a Lua frame (PUC `luaF_getlocalname` at the current
-    /// pc), with 5.5's hidden `(vararg table)` slot: `(name, register)`,
-    /// the register being `None` for that storage-less slot.
-    fn named_local(&self, f: &Frame, n: i64) -> Option<(String, Option<u32>)> {
+    /// pc): `(name, register)`.
+    fn named_local(&self, f: &Frame, n: i64) -> Option<(String, u32)> {
         let proto = f.closure.proto;
-        let vararg_slot = proto
-            .has_vararg_table_pseudo
-            .then_some(proto.num_params as i64 + 1);
-        if vararg_slot == Some(n) {
-            return Some(("(vararg table)".to_string(), None));
-        }
         let pc = (f.pc as usize).saturating_sub(1);
         let mut active: Vec<&crate::runtime::LocVar> = proto
             .locvars
@@ -331,12 +247,9 @@ impl Vm {
             .filter(|lv| (lv.start_pc as usize) <= pc && pc < lv.end_pc as usize)
             .collect();
         active.sort_by_key(|lv| (lv.start_pc, lv.reg));
-        let mut idx = n.checked_sub(1)?;
-        if vararg_slot.is_some_and(|vs| n > vs) {
-            idx -= 1;
-        }
+        let idx = n.checked_sub(1)?;
         let lv = active.get(usize::try_from(idx).ok()?)?;
-        Some((lv.name.to_string(), Some(lv.reg)))
+        Some((lv.name.to_string(), lv.reg))
     }
 
     /// The values PUC's pcall / xpcall / pairs keep below the function they
@@ -348,11 +261,11 @@ impl Vm {
             unreachable!("continuation level")
         };
         match nc.kind {
-            ContKind::Pcall if v == LuaVersion::Lua51 => vec![],
-            ContKind::Pcall if v == LuaVersion::Lua52 => vec![Value::Nil],
-            ContKind::Pcall => vec![Value::Bool(true)],
-            ContKind::Xpcall { handler } if v <= LuaVersion::Lua52 => vec![handler],
-            ContKind::Xpcall { handler } => {
+            ContKind::Pcall { .. } if v == LuaVersion::Lua51 => vec![],
+            ContKind::Pcall { .. } if v == LuaVersion::Lua52 => vec![Value::Nil],
+            ContKind::Pcall { .. } => vec![Value::Bool(true)],
+            ContKind::Xpcall { handler, .. } if v <= LuaVersion::Lua52 => vec![handler],
+            ContKind::Xpcall { handler, .. } => {
                 vec![
                     ts.stack[(nc.func_slot + 1) as usize],
                     handler,
@@ -380,54 +293,6 @@ impl Vm {
         }
         stack[slot] = v;
     }
-
-    /// PUC `pushglobalfuncname`: the name `f` is reachable by, two tables
-    /// deep, from the loaded modules (5.3+, dropping a `_G.` prefix) or the
-    /// global table (5.2, where PUC's `_G.` spelling depends on hash order
-    /// and luna keeps the short form).
-    pub(crate) fn global_func_name(&mut self, f: Value) -> Option<String> {
-        let root = if self.version() == LuaVersion::Lua52 {
-            self.globals()
-        } else {
-            let pkg_k = Value::Str(self.heap.intern(b"package"));
-            let Value::Table(pkg) = self.globals().get(pkg_k) else {
-                return None;
-            };
-            let loaded_k = Value::Str(self.heap.intern(b"loaded"));
-            let Value::Table(loaded) = pkg.get(loaded_k) else {
-                return None;
-            };
-            loaded
-        };
-        let name = find_field(root, f, 2)?;
-        Some(match name.strip_prefix("_G.") {
-            Some(rest) => rest.to_string(),
-            None => name,
-        })
-    }
-}
-
-/// PUC `findfield`: a string-keyed path to `f` at most `level` tables deep,
-/// in the table's traversal order.
-fn find_field(t: Gc<Table>, f: Value, level: u32) -> Option<String> {
-    if level == 0 {
-        return None;
-    }
-    let mut k = Value::Nil;
-    while let Ok(Some((nk, nv))) = t.next(k) {
-        k = nk;
-        let Value::Str(key) = nk else { continue };
-        let key = String::from_utf8_lossy(key.as_bytes());
-        if nv.raw_eq(f) {
-            return Some(key.into_owned());
-        }
-        if let Value::Table(inner) = nv
-            && let Some(rest) = find_field(inner, f, level - 1)
-        {
-            return Some(format!("{key}.{rest}"));
-        }
-    }
-    None
 }
 
 /// PUC 5.1 `info_tailcall`: the placeholder a lost tail call reports.

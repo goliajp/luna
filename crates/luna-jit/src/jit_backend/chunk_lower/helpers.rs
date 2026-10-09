@@ -187,7 +187,10 @@ pub(super) fn emit_array_in_range(
     key_minus_1: Value,
 ) -> Value {
     let flags = MemFlagsData::trusted();
-    let alimit = bcx.ins().load(types::I32, flags, t, TABLE_ALIMIT_OFFSET);
+    let len_flags = crate::jit_backend::trace::len_state_flags_in(bcx.func);
+    let alimit = bcx
+        .ins()
+        .load(types::I32, len_flags, t, TABLE_ALIMIT_OFFSET);
     let alimit = bcx.ins().uextend(types::I64, alimit);
     let in_limit = bcx.ins().icmp(IntCC::UnsignedLessThan, key_minus_1, alimit);
     let past_blk = bcx.create_block();
@@ -218,9 +221,41 @@ pub(super) fn emit_array_in_range(
     bcx.seal_block(raise_blk);
     let key = bcx.ins().iadd_imm_u(key_minus_1, 1);
     let key32 = bcx.ins().ireduce(types::I32, key);
-    bcx.ins().store(flags, key32, t, TABLE_ALIMIT_OFFSET);
+    bcx.ins().store(len_flags, key32, t, TABLE_ALIMIT_OFFSET);
     bcx.ins().jump(merge_blk, &[BlockArg::Value(in_array)]);
     bcx.switch_to_block(merge_blk);
     bcx.seal_block(merge_blk);
     bcx.block_params(merge_blk)[0]
+}
+
+/// A numeric `for`'s registers once its `ForPrep` has run: the index, the
+/// count (a float loop: the limit), the step, and the loop variable, which
+/// in 5.5's layout is the index itself.
+#[derive(Clone, Copy)]
+pub(super) struct ForRegs {
+    pub idx: usize,
+    pub x: usize,
+    pub step: usize,
+    pub var: usize,
+}
+
+impl ForRegs {
+    pub(super) fn of(ins: Inst) -> ForRegs {
+        let a = ins.a() as usize;
+        if matches!(ins.op(), Op::ForPrep55 | Op::ForLoop55) {
+            ForRegs {
+                idx: a + 2,
+                x: a,
+                step: a + 1,
+                var: a + 2,
+            }
+        } else {
+            ForRegs {
+                idx: a,
+                x: a + 1,
+                step: a + 2,
+                var: a + 3,
+            }
+        }
+    }
 }

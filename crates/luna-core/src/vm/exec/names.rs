@@ -50,14 +50,14 @@ impl Vm {
         }
     }
 
-    /// PUC `pushglobalfuncname`: walk `package.loaded` to depth 2 looking for a
-    /// native whose function pointer matches `target`, and return its qualified
+    /// PUC `pushglobalfuncname`: walk `package.loaded` to depth 2 looking for
+    /// `target` itself (`lua_rawequal`), and return its qualified
     /// name (e.g. `"table.sort"`). A `_G.X` match is stripped to `"X"`. Returns
     /// `None` if no match is found. Used by `arg_error` when the running native
     /// was invoked from another native (PUC `ar.name == NULL` at level 0).
     pub(crate) fn pushglobalfuncname(
         &mut self,
-        target: crate::runtime::value::NativeFn,
+        target: Gc<crate::runtime::NativeClosure>,
     ) -> Option<String> {
         let pkg_k = Value::Str(self.heap.intern(b"package"));
         let pkg = match self.globals().get(pkg_k) {
@@ -69,9 +69,7 @@ impl Vm {
             Value::Table(t) => t,
             _ => return None,
         };
-        let matches = |v: Value| -> bool {
-            matches!(v, Value::Native(nc) if std::ptr::fn_addr_eq(nc.f, target))
-        };
+        let matches = |v: Value| -> bool { matches!(v, Value::Native(nc) if nc.ptr_eq(target)) };
         let mut k = Value::Nil;
         while let Ok(Some((nk, nv))) = loaded.next(k) {
             k = nk;

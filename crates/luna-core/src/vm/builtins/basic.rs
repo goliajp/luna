@@ -18,7 +18,10 @@ pub(super) fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let global_tostring = if vm.version() <= LuaVersion::Lua53 {
         let g = Value::Table(vm.globals());
         let key = Value::Str(vm.heap.intern(b"tostring"));
-        Some(vm.index_value(g, key)?)
+        let ts = vm.index_value(g, key)?;
+        // it stays pushed below each call of it
+        vm.native_push(1);
+        Some(ts)
     } else {
         None
     };
@@ -36,12 +39,16 @@ pub(super) fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         }
         let piece = match global_tostring {
             // `lua_call` from C: not yieldable.
-            Some(ts) => match vm.call_noyield(ts, &[v]) {
+            Some(ts) => match vm.call_value(ts, &[v]) {
                 // `lua_tostring` on the result: a number is accepted and
                 // rendered, anything else is refused.
                 Ok(r) => match r.first().and_then(|&s| argcheck::to_str_bytes(vm, s)) {
                     Some(b) => Ok(b),
-                    None => Err(raise_str(vm, "'tostring' must return a string to 'print'")),
+                    None => {
+                        // over the result
+                        vm.native_push(1);
+                        Err(raise_str(vm, "'tostring' must return a string to 'print'"))
+                    }
                 },
                 Err(e) => Err(e),
             },
@@ -82,9 +89,7 @@ pub(super) fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
 fn may_run_code(vm: &Vm, v: Value, global_tostring: Option<Value>) -> bool {
     let library_tostring = match global_tostring {
         None => true,
-        Some(Value::Native(nc)) => {
-            std::ptr::fn_addr_eq(nc.f, nat_tostring as crate::runtime::value::NativeFn)
-        }
+        Some(Value::Native(nc)) => nc.builtin == crate::runtime::Builtin::Tostring,
         Some(_) => false,
     };
     !library_tostring || !vm.get_mm(v, crate::vm::exec::Mm::ToString).is_nil()
@@ -118,7 +123,7 @@ pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         let mm = vm.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
             // `luaL_callmeta` is a plain `lua_call`: not yieldable.
-            let r = vm.call_noyield(mm, &[v])?;
+            let r = vm.call_value(mm, &[v])?;
             let mut out = r.into_iter().next().unwrap_or(Value::Nil);
             if vm.version() == LuaVersion::Lua52
                 && let Some(b) = match out {
@@ -184,6 +189,8 @@ pub(super) fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
         _ => return Err(argcheck::arg_expected(vm, a, 1, "nil or table")),
     };
     if !vm.get_mm(Value::Table(t), Mm::Metatable).is_nil() {
+        // over the `__metatable` field `luaL_getmetafield` pushed
+        vm.native_push(1);
         return Err(raise_str(vm, "cannot change a protected metatable"));
     }
     // Redis's `lua_setmetatable` refuses a read-only table

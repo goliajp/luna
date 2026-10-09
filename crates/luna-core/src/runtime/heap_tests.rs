@@ -4,6 +4,8 @@ use crate::vm::isa::{Inst, Op};
 #[test]
 fn collect_traces_function_objects() {
     let mut heap = Heap::new();
+    // the fixed "not enough memory" string is live from the start
+    let base = heap.live_objects();
     let source = heap.intern(b"@test");
     let kstr = heap.intern(b"a-constant-string");
     let inner = Proto {
@@ -76,33 +78,37 @@ fn collect_traces_function_objects() {
     let uv = heap.new_upvalue(UpvalState::Closed(Value::Str(captured)));
     let cl = heap.new_closure(outer, Box::new([uv]));
     // objects: source, kstr, inner, outer, captured, uv, cl
-    assert_eq!(heap.live_objects(), 7);
+    assert_eq!(heap.live_objects(), base + 7);
     // rooting the closure keeps the whole graph alive
     assert_eq!(heap.collect(&[Value::Closure(cl)]), 0);
-    assert_eq!(heap.live_objects(), 7);
+    assert_eq!(heap.live_objects(), base + 7);
     assert_eq!(heap.collect(&[]), 7);
-    assert_eq!(heap.live_objects(), 0);
+    assert_eq!(heap.live_objects(), base);
 }
 
 #[test]
 fn collect_unreachable() {
     let mut heap = Heap::new();
+    // the fixed "not enough memory" string is live from the start
+    let base = heap.live_objects();
     let s = heap.intern(b"hello");
     let t = heap.new_table();
-    assert_eq!(heap.live_objects(), 2);
+    assert_eq!(heap.live_objects(), base + 2);
     // both rooted: nothing freed
     assert_eq!(heap.collect(&[Value::Str(s), Value::Table(t)]), 0);
     // only table rooted: string freed
     assert_eq!(heap.collect(&[Value::Table(t)]), 1);
-    assert_eq!(heap.live_objects(), 1);
+    assert_eq!(heap.live_objects(), base + 1);
     // nothing rooted
     assert_eq!(heap.collect(&[]), 1);
-    assert_eq!(heap.live_objects(), 0);
+    assert_eq!(heap.live_objects(), base);
 }
 
 #[test]
 fn collect_traces_table_contents() {
     let mut heap = Heap::new();
+    // the fixed "not enough memory" string is live from the start
+    let base = heap.live_objects();
     let t = heap.new_table();
     let k = heap.intern(b"key-string-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); // long
     let v = heap.intern(b"val");
@@ -120,21 +126,23 @@ fn collect_traces_table_contents() {
     // SAFETY: `inner` was allocated above and is held by a local; nothing has collected since, and
     // the borrow covers one call
     unsafe { inner.as_mut() }.set_metatable(Some(t));
-    assert_eq!(heap.live_objects(), 4);
+    assert_eq!(heap.live_objects(), base + 4);
     // root only the outer table: everything reachable through it survives
     assert_eq!(heap.collect(&[Value::Table(t)]), 0);
-    assert_eq!(heap.live_objects(), 4);
+    assert_eq!(heap.live_objects(), base + 4);
     assert_eq!(heap.collect(&[]), 4);
 }
 
 #[test]
 fn interned_string_reclaimed_and_reinternable() {
     let mut heap = Heap::new();
+    // the fixed "not enough memory" string is live from the start
+    let base = heap.live_objects();
     heap.intern(b"transient");
     assert_eq!(heap.collect(&[]), 1);
     let s2 = heap.intern(b"transient");
     assert_eq!(s2.as_bytes(), b"transient");
-    assert_eq!(heap.live_objects(), 1);
+    assert_eq!(heap.live_objects(), base + 1);
 }
 
 #[test]
@@ -145,8 +153,9 @@ fn bytes_and_live_round_trip_to_zero() {
     // alloc / free asymmetry in the Table internal-Box delta tracking
     // or the live counter (link/sweep symmetry).
     let mut heap = Heap::new();
-    assert_eq!(heap.bytes(), 0);
-    assert_eq!(heap.live_objects(), 0);
+    // a new heap holds only its fixed memory error message
+    let (bytes0, live0) = (heap.bytes(), heap.live_objects());
+    assert_eq!(live0, 1);
     // Build a churn: 50 tables, each filled with 200 int keys (forces
     // multiple rehashes); plus interned strings spliced through the
     // hash part. Bytes should grow well past the empty baseline.
@@ -182,14 +191,18 @@ fn bytes_and_live_round_trip_to_zero() {
         heap.live_objects() < live_peak,
         "live must drop after partial collect"
     );
-    // Drop everything: counters must return to 0 exactly.
+    // Drop everything: counters must return to the start exactly.
     drop(roots);
     let _ = heap.collect(&[]);
-    assert_eq!(heap.live_objects(), 0, "live not zero after full collect");
+    assert_eq!(
+        heap.live_objects(),
+        live0,
+        "live not back after full collect"
+    );
     assert_eq!(
         heap.bytes(),
-        0,
-        "bytes not zero after full collect — asymmetric alloc/free"
+        bytes0,
+        "bytes not back after full collect — asymmetric alloc/free"
     );
 }
 

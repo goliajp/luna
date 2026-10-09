@@ -24,6 +24,50 @@ fn enc(i: i32) -> u32 {
 }
 
 impl M<'_, '_> {
+    /// The table ops 5.4 / 5.5 have no form for, made of their parts: an
+    /// upvalue table (`GetTabUpR`, `SetTabUpR`, `SetTabUpK`) and a
+    /// constant key (`GetTableK`, `SetTableK`, `SetTabUpK`) go into scratch
+    /// registers first. luna's compiler makes these ops for 5.1–5.3 only.
+    pub(super) fn by_temp_key(&mut self, l: L) -> Res<()> {
+        let get = matches!(l.op, Op::GetTabUpR | Op::GetTableK);
+        let (t, key) = if get { (l.b, l.c) } else { (l.a, l.b) };
+        let a = if get { self.asm.r(l.a)? } else { 0 };
+        let val = if get { (0, false) } else { self.store_val(l)? };
+        let t = if matches!(l.op, Op::GetTabUpR | Op::SetTabUpR | Op::SetTabUpK) {
+            let r = self.asm.temp()?;
+            self.emit(self.abc(Kind::GetUpval, r, t, 0, false))?;
+            r
+        } else {
+            self.asm.r(t)?
+        };
+        let const_key = match l.op {
+            Op::GetTabUpR => l.k,
+            Op::SetTabUpR => false,
+            _ => true,
+        };
+        let key = if const_key {
+            let r = self.asm.temp()?;
+            self.load_k(r, key)?;
+            r
+        } else {
+            self.asm.r(key)?
+        };
+        if get {
+            self.emit(self.abc(Kind::GetTable, a, t, key, false))
+        } else {
+            self.emit(self.abc(Kind::SetTable, t, key, val.0, val.1))
+        }
+    }
+
+    /// The value a store writes: a constant (`k`) or a register.
+    pub(super) fn store_val(&mut self, l: L) -> Res<(u32, bool)> {
+        Ok(if l.k {
+            (l.c, true)
+        } else {
+            (self.asm.r(l.c)?, false)
+        })
+    }
+
     /// The `K` form of `op`: `lopcodes.h` lists `ADDK`…`BXORK` in a row.
     fn k_opcode(&self, op: Op) -> u32 {
         self.op(Kind::ArithK)
@@ -56,6 +100,8 @@ impl M<'_, '_> {
         let (word, imm) = match op {
             Op::Add => (self.op(Kind::ArithI), c),
             Op::Shr => (self.shift_opcode(false), c),
+            // `I << x`
+            Op::Shl if l.k => (self.shift_opcode(true), c),
             Op::Sub if fits_sc(-c) => (self.op(Kind::ArithI), -c),
             Op::Shl if fits_sc(-c) => (self.shift_opcode(false), -c),
             _ => return self.arith_via_register(a, b, op, c as i64, l.k),
@@ -65,10 +111,20 @@ impl M<'_, '_> {
         self.emit(self.abc(Kind::MmBinI, b, l.c, tm, l.k))
     }
 
-    /// `R[A] := R[B] op K[C]`, then its `MMBINK`.
+    /// `R[A] := R[B] op K[C]`, then its `MMBINK`. PUC's `K` forms take a
+    /// number, and the constant on the left only of a commutative operator;
+    /// luna has the others for 5.1–5.3 code only.
     pub(super) fn arith_k(&mut self, l: L) -> Res<()> {
         let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
         let op = l.op.arith_const_op().expect("constant arithmetic");
+        let number = matches!(
+            self.asm.consts.get(l.c as usize),
+            Some(Value::Int(_) | Value::Float(_))
+        );
+        let commutes = matches!(op, Op::Add | Op::Mul | Op::BAnd | Op::BOr | Op::BXor);
+        if !number || matches!(op, Op::Shl | Op::Shr) || l.k && !commutes {
+            return Err(self.asm.err("a constant operand of a 5.1–5.3 form"));
+        }
         let tm = event(op).expect("arithmetic op");
         self.emit(self.raw_abc(self.k_opcode(op), a, b, l.c, false))?;
         self.emit(self.abc(Kind::MmBinK, b, l.c, tm, l.k))

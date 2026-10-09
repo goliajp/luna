@@ -7,10 +7,10 @@ impl Parser<'_> {
     pub(super) fn exprlist(&mut self) -> Result<List<ExprId>, SyntaxError> {
         let mark = self.stk.exprs.len();
         let e = self.expr()?;
-        self.stk.exprs.push(e);
+        self.stk.exprs.push_or_abort(e);
         while self.accept(Token::Comma)? {
             let e = self.expr()?;
-            self.stk.exprs.push(e);
+            self.stk.exprs.push_or_abort(e);
         }
         Ok(finish(&mut self.chunk, &mut self.stk.exprs, mark))
     }
@@ -60,15 +60,17 @@ impl Parser<'_> {
                 self.expect(Token::RBracket, "]")?;
                 self.expect(Token::Assign, "=")?;
                 let value = self.expr()?;
-                self.stk.fields.push(TableField::Keyed(key, value));
+                self.stk.fields.push_or_abort(TableField::Keyed(key, value));
             } else if matches!(self.tok.tok, Token::Name(_)) && *self.peek()? == Token::Assign {
                 let name = self.expect_name()?;
                 self.advance()?; // '='
                 let value = self.expr()?;
-                self.stk.fields.push(TableField::Named(name, value));
+                self.stk
+                    .fields
+                    .push_or_abort(TableField::Named(name, value));
             } else {
                 let e = self.expr()?;
-                self.stk.fields.push(TableField::Item(e));
+                self.stk.fields.push_or_abort(TableField::Item(e));
             }
             if !(self.accept(Token::Comma)? || self.accept(Token::Semi)?) {
                 break;

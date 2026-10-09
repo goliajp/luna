@@ -40,6 +40,7 @@ pub(super) fn alloc_sunk_sites<E: Emit>(
     // (below the loop's `A + 4`). So we don't need an explicit
     // `internal_loop` check here.
     const MAX_SUNK_CAP: u32 = 8;
+    let unsized_moves = moved_by_count(pl, escape);
     let return_a_for_sunk_check: Option<u32> = match end_idx_opt {
         Some((idx, TraceEnd::Return)) if idx < record.ops.len() => {
             let term = &record.ops[idx];
@@ -78,6 +79,7 @@ pub(super) fn alloc_sunk_sites<E: Emit>(
         let n_hash = site.hash_keys.len();
         let total_slots = array_cap + n_hash;
         if total_slots == 0
+            || unsized_moves.contains(&(idx as u32))
             || array_cap > MAX_SUNK_CAP as usize
             || (site.inline_depth == 0 && return_a_for_sunk_check == Some(site.a))
         {
@@ -101,4 +103,29 @@ pub(super) fn alloc_sunk_sites<E: Emit>(
         sunk_alloc_seen += 1;
     }
     (virt_vars, virt_kinds, sunk_alloc_seen)
+}
+
+/// The sites live at an op that moves a count of values the escape sweep
+/// does not see (it counts one for a variable count): an inlined call
+/// passing a variable number of arguments, an inlined function returning
+/// all of its values, a vararg expansion. A sunk table among those values
+/// would reach a register the sweep never bound it to, so it is not sunk.
+fn moved_by_count(pl: &Plan<'_>, escape: &EscapeAnalysis) -> Vec<u32> {
+    let mut out = Vec::new();
+    for (i, rop) in pl.record.ops[..pl.effective_end.min(escape.live_at_op.len())]
+        .iter()
+        .enumerate()
+    {
+        let ins = rop.inst;
+        let by_count = match ins.op() {
+            Op::Call => ins.b() == 0 && pl.inline_calls.get(i).is_some_and(Option::is_some),
+            Op::Return => rop.inline_depth > 0 && ins.b() == 0,
+            Op::Vararg => true,
+            _ => false,
+        };
+        if by_count {
+            out.extend(escape.live_at_op[i].iter().map(|b| b.site));
+        }
+    }
+    out
 }

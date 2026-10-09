@@ -98,9 +98,10 @@ impl SandboxBuilder {
         self
     }
 
-    /// Cap dispatched instructions to `n` per `call_value` invocation.
-    /// Beyond `n`, the Vm raises a catchable "instruction budget
-    /// exceeded" error so the embedder can yield control.
+    /// Cap dispatched instructions to `n`. Beyond `n`, the Vm raises the
+    /// "instruction budget exceeded" error and keeps raising it on every
+    /// instruction until the host calls `Vm::set_instr_budget` again
+    /// (see there).
     pub fn with_instr_budget(mut self, n: i64) -> Self {
         self.instr_budget = Some(n);
         self

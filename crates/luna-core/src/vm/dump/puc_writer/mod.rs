@@ -8,10 +8,9 @@
 //! result is serialised as that version's `ldump.c` would ([`format`]).
 //!
 //! PUC dumps no register for a local: `getlocalname` takes the n-th local
-//! active at a pc to live in register n-1. luna's frame follows PUC's
-//! register discipline, and where its layout differs (the hidden slots of
-//! `for` loops, 5.5's vararg parameter) the encoders renumber registers so
-//! that the rule holds for the written code.
+//! active at a pc to live in register n-1. luna's compiler gives every
+//! value the register PUC's gives it, so the encoders write registers as
+//! they are, and the locals in the order of the pcs they start at.
 //!
 //! A function luna cannot express in the dialect's instruction set is
 //! refused (`Err`) rather than approximated.
@@ -27,9 +26,10 @@ mod modern_const;
 mod modern_flow;
 mod proto_parts;
 
-use self::asm::{Asm, Res, Window, loop_windows};
+use self::asm::{Asm, Res};
 use self::proto_parts::{check_skips, consts_for, needs_close, vararg_byte};
 use super::puc::{puc_52, puc_53, puc_54, puc_55};
+use crate::compiler::const_map::const_map_of;
 use crate::runtime::Value;
 use crate::runtime::function::Proto;
 use crate::version::LuaVersion;
@@ -52,6 +52,16 @@ impl Dialect {
             Dialect::V53 => "PUC 5.3",
             Dialect::V54 => "PUC 5.4",
             Dialect::V55 => "PUC 5.5",
+        }
+    }
+
+    fn version(self) -> LuaVersion {
+        match self {
+            Dialect::V51 => LuaVersion::Lua51,
+            Dialect::V52 => LuaVersion::Lua52,
+            Dialect::V53 => LuaVersion::Lua53,
+            Dialect::V54 => LuaVersion::Lua54,
+            Dialect::V55 => LuaVersion::Lua55,
         }
     }
 }
@@ -107,35 +117,17 @@ pub(crate) fn dump_blocks(
 }
 
 /// `caps`: the upvalue descriptors the parent's `Closure` site gave this
-/// function after renumbering its registers (`None` for the main function).
+/// function (`None` for the main function).
 fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
     let np = p.num_params as u32;
-    let mut windows = match d {
-        Dialect::V54 => Vec::new(),
-        Dialect::V55 => loop_windows(p, 3, Some(3))?,
-        _ => loop_windows(p, 4, None)?,
-    };
-    // 5.5 gives an anonymous `...` parameter a register after the fixed
-    // ones; luna has none, so every register from there moves up one
-    let vararg_slot = d == Dialect::V55 && p.has_vararg_table_pseudo;
-    if vararg_slot {
-        windows.push(Window {
-            first: 0,
-            last: p.code.len().saturating_sub(1),
-            pivot: np,
-            delta: 1,
-        });
-    }
-    let mut frame = p.max_stack as u32 + vararg_slot as u32;
-    if d == Dialect::V55 && p.is_vararg {
-        frame = frame.max(np + 1);
-    }
-    let mut asm = Asm::new(p, d.name(), windows, frame);
+    let mut asm = Asm::new(p, d.name());
     // 5.1 / 5.2 have one number type: the constants the encoder adds meet
     // luna's as the floats these become
     if d <= Dialect::V52 {
         asm.consts = consts_for(d, std::mem::take(&mut asm.consts))?;
     }
+    let ver = d.version();
+    asm.kmap = (ver, const_map_of(ver, &asm.consts));
     let mut child_caps: modern::Caps = vec![None; p.protos.len()];
     let vatab = d == Dialect::V55
         && p.is_vararg
@@ -169,11 +161,6 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
         };
         classic::encode(&mut asm, &f, &mut child_caps)?;
     }
-    let loc_regs: Vec<u32> = p
-        .locvars
-        .iter()
-        .map(|v| asm.reg_at(v.start_pc as usize, v.reg).unwrap_or(v.reg))
-        .collect();
     let body = asm.finish()?;
     check_skips(p, &body.pc_map)?;
     let limit = if d == Dialect::V51 { 250 } else { 255 };
@@ -188,8 +175,8 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
     let mut locvars: Vec<(u32, u32, (crate::runtime::DebugName, u32, u32))> = p
         .locvars
         .iter()
-        .zip(&loc_regs)
-        .map(|(v, &reg)| {
+        .map(|v| {
+            let reg = v.reg;
             let start = if v.start_pc == 0 && v.reg < np {
                 0
             } else {
@@ -199,10 +186,6 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
             (start, reg, (v.name.clone(), start, end))
         })
         .collect();
-    if vararg_slot {
-        let n = body.code.len() as u32;
-        locvars.push((1, np, ("(vararg table)".into(), 1, n)));
-    }
     locvars.sort_by_key(|v| (v.0, v.1));
 
     // PUC's `mainfunc` describes a main chunk's `_ENV` as register 0 of the
@@ -241,7 +224,7 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
         line_defined: p.line_defined,
         last_line_defined: p.last_line_defined,
         num_params: p.num_params,
-        vararg: vararg_byte(p, d, vatab),
+        vararg: vararg_byte(p, d, vatab, main),
         max_stack: body.frame as u8,
         code: body.code,
         lines: body.lines,

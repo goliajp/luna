@@ -1,9 +1,8 @@
 //! The control-flow half of the 5.1–5.3 encoder (see [`super::classic`]).
 
 use super::asm::{Dist, L, Res, setlist_offset};
-use super::classic::{C, FIELDS_PER_FLUSH, RK_BIT};
+use super::classic::{C, FIELDS_PER_FLUSH};
 use super::modern::Caps;
-use crate::runtime::Value;
 use crate::vm::dump::puc::classic::Kind;
 use crate::vm::dump::puc::puc_51 as p51;
 use crate::vm::isa::Op;
@@ -17,19 +16,34 @@ impl C<'_, '_> {
                 let w = self.jmp(0)?;
                 self.asm.jump(w, Dist::SBx, pc + 1 + l.sj)?;
             }
-            Op::Eq | Op::Lt | Op::Le | Op::EqK => {
-                let k = match l.op {
-                    Op::Lt => Kind::Lt,
-                    Op::Le => Kind::Le,
-                    _ => Kind::Eq,
-                };
+            Op::JmpClose | Op::JmpCloseBack if self.f.ver != 51 => {
+                let a = self.asm.r(l.a - 1)?;
+                let w = self.jmp(a + 1)?;
+                self.asm.jump(w, Dist::SBx, pc + 1 + l.sj)?;
+            }
+            Op::Close => {
                 let a = self.asm.r(l.a)?;
-                let b = if l.op == Op::EqK {
-                    self.rk(l.b)?
+                let w = if self.f.ver == 51 {
+                    self.raw_abc(p51::OP_CLOSE as u32, a, 0, 0)?
                 } else {
-                    self.asm.r(l.b)?
+                    // `JMP A+1 0`: close upvalues from R(A), fall through
+                    self.jmp(a + 1)? | ((1 << 17) - 1) << 14
                 };
-                self.emit(self.abc(k, l.k as u32, a, b))?;
+                self.asm.emit(w);
+            }
+            Op::Eq | Op::Lt | Op::Le => {
+                let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
+                self.emit(self.abc(cmp_kind(l.op), l.k as u32, a, b))?;
+            }
+            // `C`: the constant was the left operand
+            Op::EqK | Op::LtK | Op::LeK => {
+                let (a, b) = (self.asm.r(l.a)?, self.rk(l.b)?);
+                let (x, y) = if l.c != 0 { (b, a) } else { (a, b) };
+                self.emit(self.abc(cmp_kind(l.op), l.k as u32, x, y))?;
+            }
+            Op::EqKK | Op::LtKK | Op::LeKK => {
+                let (a, b) = (self.rk(l.a)?, self.rk(l.b)?);
+                self.emit(self.abc(cmp_kind(l.op), l.k as u32, a, b))?;
             }
             Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI => self.cmp_const(l)?,
             Op::Test => {
@@ -68,17 +82,12 @@ impl C<'_, '_> {
                 let w = self.abx(k, a, 0)?;
                 self.asm.jump(w, Dist::SBx, target)?;
             }
-            Op::TForPrep => {
+            Op::TForPrep53 => {
                 let w = self.jmp(0)?;
                 self.asm.jump(w, Dist::SBx, pc + 1 + l.bx as i64)?;
             }
-            Op::TForCall => {
-                let a = self.asm.run(l.a, 3)?;
-                if self.asm.run(l.a + 4, l.c.max(1))? != a + 3 {
-                    return Err(self
-                        .asm
-                        .err("generic-for variables outside the loop's frame"));
-                }
+            Op::TForCall53 => {
+                let a = self.asm.run(l.a, 3 + l.c.max(1))?;
                 let w = if self.f.ver == 51 {
                     self.raw_abc(p51::OP_TFORLOOP as u32, a, 0, l.c)?
                 } else {
@@ -88,7 +97,7 @@ impl C<'_, '_> {
             }
             // 5.2/5.3: if R(A+1) ~= nil then { R(A) := R(A+1); pc += sBx }
             // with A the control slot; 5.1's TFORLOOP did the test already
-            Op::TForLoop => {
+            Op::TForLoop53 => {
                 let a = self.asm.r(l.a)?;
                 let w = if self.f.ver == 51 {
                     self.jmp(0)?
@@ -110,79 +119,6 @@ impl C<'_, '_> {
             }
         }
         Ok(1)
-    }
-
-    /// An arithmetic operand: the constant itself (`RK`) when luna loaded
-    /// it into a scratch register just before, as PUC's parser passes a
-    /// constant operand. An error then names no variable for it, as in
-    /// PUC; from a register filled by `LOADK` it would read "constant".
-    pub(super) fn operand(&mut self, r: u32) -> Res<u32> {
-        let pc = self.asm.pc();
-        let local = self
-            .asm
-            .p
-            .locvars
-            .iter()
-            .any(|v| v.reg == r && (v.start_pc as usize) <= pc && pc < v.end_pc as usize);
-        if !local {
-            for j in (pc.saturating_sub(2)..pc).rev() {
-                if self.asm.is_target(j + 1) {
-                    break;
-                }
-                let l = L::of(self.asm.inst(j).expect("an earlier pc"));
-                if l.a != r {
-                    if matches!(l.op, Op::LoadK | Op::LoadI | Op::LoadF) {
-                        continue;
-                    }
-                    break;
-                }
-                let k = match l.op {
-                    Op::LoadK => l.bx,
-                    Op::LoadI => {
-                        let v = self.num(l.sbx as i64);
-                        self.asm.konst(v)
-                    }
-                    Op::LoadF => self.asm.konst(Value::Float(l.sbx as f64)),
-                    _ => break,
-                };
-                if k < RK_BIT {
-                    return Ok(k | RK_BIT);
-                }
-                break;
-            }
-        }
-        self.asm.r(r)
-    }
-
-    /// luna reaches a global whose name is past constant 255 as
-    /// `GetUpval t _ENV; LoadK t+1 name; GetTable r t t+1` (or `SetTable t
-    /// t+1 v`); 5.1's `GETGLOBAL`/`SETGLOBAL` take the name's index whole.
-    pub(super) fn global_by_register(&mut self, l: L) -> Res<usize> {
-        let pc = self.asm.pc();
-        let (t, key) = (l.a, l.a + 1);
-        let (k, n) = match self.asm.inst(pc + 1) {
-            Some(i) if i.op() == Op::LoadK && i.a() == key => (i.bx(), 2),
-            Some(i) if i.op() == Op::LoadKx && i.a() == key => match self.asm.inst(pc + 2) {
-                Some(x) if x.op() == Op::ExtraArg => (x.ax(), 3),
-                _ => return Err(self.asm.err("LoadKx without its ExtraArg")),
-            },
-            _ => return Err(self.asm.err("the environment is not a value in 5.1")),
-        };
-        let access = self.asm.inst(pc + n).map(L::of);
-        let entered = (1..=n).any(|d| self.asm.is_target(pc + d));
-        let w = match access {
-            Some(x) if !entered && x.op == Op::GetTable && x.b == t && x.c == key => {
-                let a = self.asm.r(x.a)?;
-                self.raw_abx(p51::OP_GETGLOBAL as u32, a, k)?
-            }
-            Some(x) if !entered && x.op == Op::SetTable && x.a == t && x.b == key => {
-                let v = self.asm.r(x.c)?;
-                self.raw_abx(p51::OP_SETGLOBAL as u32, v, k)?
-            }
-            _ => return Err(self.asm.err("the environment is not a value in 5.1")),
-        };
-        self.asm.emit(w);
-        Ok(n + 1)
     }
 
     /// 5.1 globals live in the function environment, luna's upvalue 0.
@@ -262,5 +198,14 @@ impl C<'_, '_> {
                 .err(format_args!("function {idx} instantiated twice")));
         }
         Ok(())
+    }
+}
+
+/// The comparison an `EQ` / `LT` / `LE` writes.
+fn cmp_kind(op: Op) -> Kind {
+    match op {
+        Op::Lt | Op::LtK | Op::LtKK => Kind::Lt,
+        Op::Le | Op::LeK | Op::LeKK => Kind::Le,
+        _ => Kind::Eq,
     }
 }

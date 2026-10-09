@@ -16,18 +16,27 @@ impl<'a> Compiler<'a> {
         b: &Block,
         until_follows: bool,
     ) -> Result<(), SyntaxError> {
-        for (i, &sid) in self.ls(b.stats).iter().enumerate() {
+        self.stat_list(self.ls(b.stats), until_follows)
+    }
+
+    /// The statements `stats` of a block (see [`Self::stat_block_inner`]).
+    pub(super) fn stat_list(
+        &mut self,
+        stats: &'a [StatId],
+        until_follows: bool,
+    ) -> Result<(), SyntaxError> {
+        for (i, &sid) in stats.iter().enumerate() {
             let ast = self.ast;
             if let Stat::Label(n) = ast.stat(sid) {
                 // a trailing label (only labels after it) does not enter the
                 // scope of the block's locals (continue-style jumps); in a
                 // repeat body the trailing `until` keeps the locals alive.
                 let trailing = !until_follows
-                    && self.ls(b.stats)[i + 1..]
+                    && stats[i + 1..]
                         .iter()
                         .all(|&s| matches!(self.ast.stat(s), Stat::Label(_)));
                 self.last_line = n.line;
-                self.define_label(self.nm(n), n.line, trailing)?;
+                self.define_label(self.nm(n), trailing)?;
                 continue;
             }
             self.stat(sid)?;
@@ -47,9 +56,22 @@ impl<'a> Compiler<'a> {
         // activelines, and line hooks are precise even before the first sub-
         // expression sets a finer line.
         let sline = self.ast.stat_line(sid);
-        if sline != 0 {
+        // 5.2 / 5.3 emit the jump of a `break` / `goto` before reading the
+        // keyword: it takes the line of the token before
+        let jumps_first = matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53)
+            && matches!(self.ast.stat(sid), Stat::Break { .. } | Stat::Goto(_));
+        if sline != 0 && !jumps_first {
             self.last_line = sline;
         }
+        self.stat_body(sid)?;
+        // the statement's last token is read
+        if let Some(line) = self.stat_end_line(sid) {
+            self.last_line = line;
+        }
+        self.jump_error()
+    }
+
+    fn stat_body(&mut self, sid: StatId) -> Result<(), SyntaxError> {
         let ast = self.ast;
         match ast.stat(sid) {
             Stat::Do(b) => self.block_scoped(b),
@@ -84,36 +106,7 @@ impl<'a> Compiler<'a> {
                 *expr_line,
                 self.stat_end_line(sid),
             ),
-            Stat::Break { line } => {
-                self.last_line = *line;
-                let Some(loop_floor) = self
-                    .lr()
-                    .blocks
-                    .iter()
-                    .rev()
-                    .find(|b| b.is_loop)
-                    .map(|b| b.reg_floor)
-                else {
-                    return Err(self.err(*line, "break outside a loop"));
-                };
-                // 5.4 jumps to the loop's end and closes there (PUC's
-                // "break" label); the others close on the spot
-                if self.version != LuaVersion::Lua54 {
-                    self.emit(Inst::iabc(Op::Close, loop_floor, 0, 0, false));
-                }
-                let jmp = self.emit_jump();
-                let level = self.lr().locals.len();
-                let lp = self
-                    .l()
-                    .blocks
-                    .iter_mut()
-                    .rev()
-                    .find(|b| b.is_loop)
-                    .expect("loop block");
-                lp.breaks.push(jmp);
-                lp.break_levels.push(level);
-                Ok(())
-            }
+            Stat::Break { line } => self.break_stat(*line),
             Stat::Return { exprs, line } => {
                 self.last_line = *line;
                 self.return_stat(self.ls(*exprs))
@@ -124,7 +117,7 @@ impl<'a> Compiler<'a> {
                     self.last_line = *line;
                 }
                 let base = self.lr().freereg;
-                let ce = self.call_expr(e)?;
+                let ce = self.expr(e)?;
                 let Exp::Open { pc, .. } = ce else {
                     unreachable!()
                 };
@@ -138,6 +131,9 @@ impl<'a> Compiler<'a> {
                 let reg = self.reserve(1)?;
                 // declared before the body: the function can call itself
                 self.declare_local(self.nm(name), reg, false)?;
+                // PUC does not reserve the variable's register before the
+                // body: the closure takes the next free one, the variable's
+                self.set_freereg(reg);
                 let f = self.function_exp(body, false)?;
                 self.exp_to_reg(f, reg)?;
                 // debug information sees the variable once the closure is in it
@@ -157,11 +153,11 @@ impl<'a> Compiler<'a> {
                     .last_mut()
                     .expect("no block")
                     .gdecls
-                    .push((text.into(), false));
+                    .push_or_abort((text, false));
                 self.declare_global_marker(Some(text));
                 let saved = self.lr().freereg;
+                let lv = self.global_lv(text)?;
                 let f = self.function_exp(body, false)?;
-                let r = self.exp_to_anyreg(f)?;
                 // `global function f` is a defining write: f must not already
                 // exist in the environment (runtime "already defined" check).
                 // Pin the redef-check and assignment emits to the name's source
@@ -171,7 +167,7 @@ impl<'a> Compiler<'a> {
                 let saved_force = self.force_line.replace(name.line);
                 let res = (|| -> Result<(), SyntaxError> {
                     self.emit_global_redef_check(self.nm(name))?;
-                    self.assign_global(self.nm(name), r)
+                    self.store(lv, f)
                 })();
                 self.force_line = saved_force;
                 res?;
@@ -222,7 +218,7 @@ impl<'a> Compiler<'a> {
                     .last_mut()
                     .expect("no block")
                     .gdecls
-                    .push((Box::<str>::from(text.text(an.name.sym)), ro));
+                    .push_or_abort((text.text(an.name.sym), ro));
                 c.declare_global_marker(Some(text.text(an.name.sym)));
             }
         };
@@ -234,74 +230,23 @@ impl<'a> Compiler<'a> {
         // evaluated (PUC bumps `nactvar` after the explist), so `global a = a`
         // reads the enclosing `a`, not the global being defined.
         let saved = self.lr().freereg;
+        let mut lvs = self.lvs.take();
+        for an in names {
+            let lv = self.global_lv(self.nm(&an.name))?;
+            lvs.push_or_abort(lv);
+        }
         let base = self.explist_adjust(exprs, names.len() as u32)?;
         declare(self);
-        // defining write: each target must not already exist (OP_ERRNNIL).
-        for (i, an) in names.iter().enumerate() {
+        // defining write: each target must not already exist (OP_ERRNNIL);
+        // PUC checks and stores the last one first, the check reading into
+        // the register above the values still to store
+        for (i, an) in names.iter().enumerate().rev() {
+            self.set_freereg(base + i as u32 + 1);
             self.emit_global_redef_check(self.nm(&an.name))?;
-            self.assign_global(self.nm(&an.name), base + i as u32)?;
+            self.store(lvs[i], Exp::Reg(base + i as u32))?;
         }
-        self.set_freereg(saved);
-        Ok(())
-    }
-
-    pub(super) fn function_stat(
-        &mut self,
-        name: &FuncName,
-        body: &'a FuncBody,
-    ) -> Result<(), SyntaxError> {
-        self.last_line = name.base.line;
-        let is_method = name.method.is_some();
-        let saved = self.lr().freereg;
-        let f = self.function_exp(body, is_method)?;
-        let freg = self.exp_to_anyreg(f)?;
-        if name.path.is_empty() && name.method.is_none() {
-            self.assign_name(self.nm(&name.base), name.base.line, freg)?;
-            self.set_freereg(saved);
-            return Ok(());
-        }
-        // function a.b.c:m — walk to the holder, set the final field.
-        // PUC attributes every GETFIELD/SETFIELD on the dotted name to the
-        // line of the function statement's name (its `function` keyword),
-        // not to the `end` token. Mirror that by pinning `force_line` for
-        // the whole holder walk + final store so a `nil` base raises an
-        // error on the right source line (errors.lua :430).
-        let saved_force = self.force_line.replace(name.base.line);
-        let res = (|| -> Result<(), SyntaxError> {
-            let be = self.name_expr(self.nm(&name.base))?;
-            let mut holder = self.exp_to_anyreg(be)?;
-            let mut fields: Vec<&str> = self.ls(name.path).iter().map(|n| self.nm(n)).collect();
-            if let Some(m) = &name.method {
-                fields.push(self.nm(m));
-            }
-            for f_name in &fields[..fields.len() - 1] {
-                let c = self.str_const(f_name.as_bytes());
-                if c <= 0xFF {
-                    let pc = self.emit(Inst::iabc(Op::GetField, 0, holder, c, true));
-                    let dst = self.reserve(1)?;
-                    self.patch_dest(pc, dst);
-                    holder = dst;
-                } else {
-                    let kr = self.reserve(1)?;
-                    self.load_const(kr, c);
-                    let pc = self.emit(Inst::iabc(Op::GetTable, 0, holder, kr, false));
-                    self.patch_dest(pc, kr); // reuse the key register
-                    holder = kr;
-                }
-            }
-            let last = &fields[fields.len() - 1];
-            let c = self.str_const(last.as_bytes());
-            if c <= 0xFF {
-                self.emit(Inst::iabc(Op::SetField, holder, c, freg, true));
-            } else {
-                let kr = self.reserve(1)?;
-                self.load_const(kr, c);
-                self.emit(Inst::iabc(Op::SetTable, holder, kr, freg, false));
-            }
-            Ok(())
-        })();
-        self.force_line = saved_force;
-        res?;
+        lvs.clear();
+        self.lvs = lvs;
         self.set_freereg(saved);
         Ok(())
     }

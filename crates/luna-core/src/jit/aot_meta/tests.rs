@@ -160,6 +160,7 @@ fn v3_per_exit_inline_round_trip() {
                 v.extend_from_slice(&3u32.to_le_bytes());
                 v.extend_from_slice(&4u32.to_le_bytes());
                 v.extend_from_slice(&1i32.to_le_bytes());
+                v.extend_from_slice(&0u32.to_le_bytes());
                 v
             },
         },
@@ -171,13 +172,14 @@ fn v3_per_exit_inline_round_trip() {
                 pack_exit_tag(ExitTag::Untouched),
                 pack_exit_tag(ExitTag::Float),
             ],
-            // 2 frames = 24 bytes.
+            // 2 frames = 32 bytes.
             chain_bytes: {
                 let mut v = Vec::new();
-                for (off, pc, nr) in [(2u32, 7u32, 1i32), (5u32, 11u32, 2i32)] {
+                for (off, pc, nr, va) in [(2u32, 7u32, 1i32, 0u32), (5u32, 11u32, 2i32, 3u32)] {
                     v.extend_from_slice(&off.to_le_bytes());
                     v.extend_from_slice(&pc.to_le_bytes());
                     v.extend_from_slice(&nr.to_le_bytes());
+                    v.extend_from_slice(&va.to_le_bytes());
                 }
                 v
             },
@@ -203,6 +205,7 @@ fn v3_per_exit_inline_round_trip() {
     assert_eq!(chain1[0].base_offset, 2);
     assert_eq!(chain1[1].pc, 11);
     assert_eq!(chain1[1].nresults, 2);
+    assert_eq!(chain1[1].n_varargs, 3);
 }
 
 #[test]
@@ -217,6 +220,7 @@ fn v3_per_exit_inline_round_trip_from_live() {
         base_offset: 1,
         pc: 2,
         nresults: 3,
+        n_varargs: 4,
     }];
     let live = InlineSideExit {
         cont_pc: 42,
@@ -254,6 +258,7 @@ fn v3_per_exit_inline_round_trip_from_live() {
     assert_eq!(rebuilt[0].base_offset, 1);
     assert_eq!(rebuilt[0].pc, 2);
     assert_eq!(rebuilt[0].nresults, 3);
+    assert_eq!(rebuilt[0].n_varargs, 4);
 }
 
 #[test]

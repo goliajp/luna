@@ -40,6 +40,9 @@ impl Vm {
                     // run the cached native fn in-place.
                     if self.try_jit_call_op(cl, func_slot, nargs, nresults) {
                         self.pending_tailcalls = tailcalls;
+                        if let Some(e) = self.jit.pending_raise.take() {
+                            return Err(e);
+                        }
                         return Ok(false);
                     }
                     self.pending_tailcalls = tailcalls;
@@ -122,6 +125,8 @@ impl Vm {
                     return Ok(true);
                 }
                 Value::Native(nc) => {
+                    // a C function gets `LUA_MINSTACK` slots (PUC `luaD_precall`)
+                    self.check_lua_stack(func_slot + 1 + nargs, 20, false)?;
                     if nc.kind != NativeKind::Plain
                         && let Some(r) = self.begin_special_native(nc, func_slot, nargs, nresults)
                     {
@@ -140,15 +145,16 @@ impl Vm {
                     // Popped after the matching return hook fires — even on
                     // error, the pop must happen, so the body is bracketed
                     // through a scope guard.
-                    self.running_natives.push(crate::vm::callstack::NativeAct {
-                        nc,
-                        func_slot,
-                        nargs,
-                        depth: self.frames.len() as u32,
+                    self.running_natives
                         // a tail call resolved its `__call` chain before
                         // calling here and passed the count in tail_ccmt
-                        ccmt: tail_ccmt + chain as u8,
-                    });
+                        .push_or_abort(crate::vm::callstack::NativeAct::new(
+                            nc,
+                            func_slot,
+                            nargs,
+                            self.frames.len(),
+                            tail_ccmt + chain as u8,
+                        ));
                     // PUC C-call discipline: entering a C function sets
                     // L->top to func + 1 + nargs, so a collect triggered
                     // INSIDE the native (explicit `collectgarbage()`, or
@@ -197,7 +203,7 @@ impl Vm {
     ) -> Result<(), LuaError> {
         let mm = self.get_mm(v, Mm::Call);
         if mm.is_nil() || self.call_mm_unusable(mm) {
-            return Err(self.call_err(v));
+            return Err(self.call_err_at(v, func_slot + 1 + nargs));
         }
         // PUC 5.5 dropped the chain cap from `MAXTAGRECUR = 200`
         // (the value 5.4's `lvm.c` uses) down to `MAXCCMT = 16`,
@@ -245,30 +251,46 @@ impl Vm {
         nresults: i32,
         from_c: bool,
     ) -> Result<(), LuaError> {
-        if func_slot + 256 > MAX_LUA_STACK {
-            // PUC `luaD_growstack`: the overflow raises "stack overflow" and
-            // leaves ERRORSTACKSIZE's extra slots for the xpcall handler that
-            // runs on it; overflowing those is LUA_ERRERR, "error in error
-            // handling" (errors.lua :606, cstack.lua :29).
-            if self.msgh_depth == 0 {
-                return Err(self.rt_err("stack overflow"));
-            }
-            if func_slot + 256 > MAX_LUA_STACK + ERROR_STACK_EXTRA {
-                return Err(LuaError(self.errerr()));
-            }
+        if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
+            self.grow_frames()?;
         }
         let proto = cl.proto;
+        self.check_lua_stack(
+            func_slot + 1 + nargs,
+            proto.max_stack as u32,
+            proto.is_vararg,
+        )?;
         let nparams = proto.num_params as u32;
         // 5.5 vararg layout (PUC luaT_adjustvarargs): the extra args stay on the
         // stack just below the new `base`, so a named vararg can be indexed
         // virtually without allocating a table. Rotate `[p1..pn][e1..em]` to
         // `[e1..em][p1..pn]` so the fixed params land at the new base.
         let n_varargs = nargs.saturating_sub(nparams) * u32::from(proto.is_vararg);
-        if n_varargs > 0 {
+        // a vararg frame sits where PUC puts it, so a recursion through
+        // vararg functions takes the same stack: above the arguments, where
+        // 5.1 to 5.3 copy the fixed parameters (`adjust_varargs`) and 5.4 on
+        // the function too (`luaT_adjustvarargs`); the extras stay just
+        // below the base, the slots they came from are dead
+        let gap = if proto.is_vararg {
+            nparams + u32::from(self.version >= LuaVersion::Lua54)
+        } else {
+            0
+        };
+        let base = func_slot + 1 + n_varargs + gap;
+        if proto.is_vararg && nargs > 0 {
             let s = (func_slot + 1) as usize;
-            self.stack[s..s + nargs as usize].rotate_left(nparams as usize);
+            let kept = nargs.min(nparams) as usize;
+            let end = (base + kept as u32) as usize;
+            if self.stack.len() < end {
+                self.grow_stack_or_abort(end);
+            }
+            self.stack.copy_within(s..s + kept, base as usize);
+            if n_varargs > 0 {
+                let from = s + nparams as usize;
+                let to = (base - n_varargs) as usize;
+                self.stack.copy_within(from..from + n_varargs as usize, to);
+            }
         }
-        let base = func_slot + 1 + n_varargs;
         let max = proto.max_stack as u32;
         let need = (base + max) as usize;
         if self.stack.len() < need {
@@ -280,14 +302,18 @@ impl Vm {
         // 5.1 clears the whole window as PUC 5.1 does (its compiler drops a
         // leading `local x` LoadNil on that promise).
         let kept = nargs.saturating_sub(n_varargs).min(nparams);
+        // 5.5's `luaT_adjustvarargs` sets the vararg parameter, the
+        // register after the fixed ones, to nil
         let window = if self.version == LuaVersion::Lua51 {
             max
+        } else if self.version == LuaVersion::Lua55 && proto.is_vararg {
+            (nparams + 1).min(max)
         } else {
             nparams
         };
         let end = (base + window) as usize;
         // SAFETY: `need <= stack.len()` (resized above) and `base + kept <=
-        // end <= need` since `kept <= nparams <= max_stack`.
+        // end <= need` since `kept <= nparams <= window <= max_stack`.
         unsafe {
             self.stack
                 .get_unchecked_mut((base + kept) as usize..end)

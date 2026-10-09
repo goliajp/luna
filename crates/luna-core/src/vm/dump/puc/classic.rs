@@ -10,14 +10,15 @@
 //!
 //! - `JMP A sBx` with `A > 0` also closes upvalues from `R(A-1)`.
 //! - `LOADNIL A B` clears `A..=A+B`, the same run as luna's.
-//! - The generic `for` keeps three hidden slots: `TFORCALL A C` writes the
-//!   loop variables at `A+3`, and `TFORLOOP` names the control slot `A+2`.
-//!   Both become luna's ops inside a loop window over the body.
+//! - The generic `for` keeps three hidden slots (luna's `TForCall53`
+//!   layout); `TFORLOOP` names the control slot `A+2`.
 //! - `SETLIST` counts 50-field blocks from 1; `C = 0` takes the block number
 //!   from the `EXTRAARG` that follows.
 
-use super::lower::{Jump, Lowered, Lowering, RawProto, Window, enc_abc, enc_abx, enc_sj};
+use super::lower::{Jump, Lowered, Lowering, RawProto, Rk, enc_abc, enc_abx, enc_sj};
 use crate::vm::isa::Op;
+mod set_list_closure;
+use set_list_closure::{lower_closure, lower_set_list};
 
 /// An opcode's meaning, independent of the dialect's numbering.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -95,44 +96,12 @@ fn kind(ops: &[Kind], w: u32) -> Option<Kind> {
     ops.get(I::decode(w).op as usize).copied()
 }
 
-/// `TFORLOOP A sBx` at `p` closes a body running from its jump target to
-/// `p`; the loop variables start at `A+1` (`TFORCALL`'s `A+3`).
-fn loop_windows(dialect: &str, code: &[u32], ops: &[Kind]) -> Result<Vec<Window>, String> {
-    let mut out = Vec::new();
-    for (p, &w) in code.iter().enumerate() {
-        if kind(ops, w) != Some(Kind::TForLoop) {
-            continue;
-        }
-        let i = I::decode(w);
-        let body = p as i64 + 1 + i.sbx();
-        if !(0..=p as i64).contains(&body) {
-            return Err(format!(
-                "{dialect} chunk: TFORLOOP jumps to {body} (pc {p})"
-            ));
-        }
-        out.push(Window {
-            first: body as usize,
-            last: p,
-            pivot: i.a + 1,
-        });
-    }
-    Ok(out)
-}
-
-/// Whether upvalue `up` is the environment (by name, as PUC's `isEnv`).
-pub(super) fn is_env(raw: &RawProto, up: u32) -> bool {
-    raw.upvals
-        .get(up as usize)
-        .is_some_and(|u| &*u.name == "_ENV")
-}
-
 pub(super) fn translate(
     dialect: &'static str,
     ops: &[Kind],
     raw: &mut RawProto,
 ) -> Result<Lowered, String> {
-    let windows = loop_windows(dialect, &raw.code, ops)?;
-    let mut lw = Lowering::new(dialect, raw.code.len(), raw.max_stack, windows, &raw.consts);
+    let mut lw = Lowering::new(dialect, raw.code.len(), raw.max_stack, &raw.consts);
     let mut closed = vec![false; raw.protos.len()];
     let code = &raw.code;
     let mut pc = 0;
@@ -166,10 +135,7 @@ pub(super) fn translate(
                     (false, false) => lw.emit(enc_abc(Op::LoadFalse, a, 0, 0, false)?),
                     (false, true) => lw.emit(enc_abc(Op::LFalseSkip, a, 0, 0, false)?),
                     (true, false) => lw.emit(enc_abc(Op::LoadTrue, a, 0, 0, false)?),
-                    (true, true) => {
-                        lw.emit(enc_abc(Op::LoadTrue, a, 0, 0, false)?);
-                        lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, next + 1)?;
-                    }
+                    (true, true) => lw.emit(enc_abc(Op::LTrueSkip, a, 0, 0, false)?),
                 }
             }
             Kind::LoadNil => {
@@ -188,23 +154,17 @@ pub(super) fn translate(
             // R(A) := UpValue[B][RK(C)]
             Kind::GetTabUp => {
                 let (a, up) = (lw.r(i.a)?, lw.byte(i.b, "GETTABUP B")?);
-                if i.c & super::lower::RK_BIT != 0 {
-                    lw.get_tabup(a, up, i.c & 0xFF, is_env(raw, up))?;
-                } else {
-                    let (t, key) = (lw.temp()?, lw.r(i.c)?);
-                    lw.emit(enc_abc(Op::GetUpval, t, up, 0, false)?);
-                    lw.emit(enc_abc(Op::GetTable, a, t, key, false)?);
+                match lw.rk(i.c)? {
+                    Rk::K(k) => lw.get_tabup(a, up, k)?,
+                    Rk::R(key) => lw.emit(enc_abc(Op::GetTabUpR, a, up, key, false)?),
                 }
             }
             // UpValue[A][RK(B)] := RK(C)
             Kind::SetTabUp => {
-                let v = lw.rk(i.c)?;
-                if i.b & super::lower::RK_BIT != 0 {
-                    lw.set_tabup(i.a, i.b & 0xFF, v, is_env(raw, i.a))?;
-                } else {
-                    let (t, key) = (lw.temp()?, lw.r(i.b)?);
-                    lw.emit(enc_abc(Op::GetUpval, t, i.a, 0, false)?);
-                    lw.emit(enc_abc(Op::SetTable, t, key, v, false)?);
+                let v = lw.rk_value(i.c)?;
+                match lw.rk(i.b)? {
+                    Rk::K(k) => lw.set_tabup(i.a, k, v)?,
+                    Rk::R(key) => lw.emit(enc_abc(Op::SetTabUpR, i.a, key, v.0, v.1)?),
                 }
             }
             Kind::GetTable => {
@@ -223,9 +183,7 @@ pub(super) fn translate(
             Kind::SelfOp => lw.self_rk(i.a, i.b, i.c)?,
             Kind::Arith(op) => {
                 let a = lw.r(i.a)?;
-                let b = lw.rk(i.b)?;
-                let c = lw.rk(i.c)?;
-                lw.emit(enc_abc(op, a, b, c, false)?);
+                lw.arith_rk(op, a, i.b, i.c)?;
             }
             Kind::Unary(op) => {
                 let (a, b) = (lw.r(i.a)?, lw.r(i.b)?);
@@ -233,7 +191,7 @@ pub(super) fn translate(
             }
             Kind::Concat => lw.concat_range(i.a, i.b, i.c)?,
             // pc += sBx; if (A) close all upvalues >= R(A - 1)
-            Kind::Jmp => lower_jmp(&mut lw, ops, code, pc, i, next)?,
+            Kind::Jmp => lower_jmp(&mut lw, ops, code, i, next)?,
             Kind::Eq => lw.compare_rk(Op::Eq, i.a != 0, i.b, i.c)?,
             Kind::Lt => lw.compare_rk(Op::Lt, i.a != 0, i.b, i.c)?,
             Kind::Le => lw.compare_rk(Op::Le, i.a != 0, i.b, i.c)?,
@@ -269,9 +227,8 @@ pub(super) fn translate(
             }
             Kind::TForCall => {
                 let c = lw.byte(i.c, "TFORCALL C")?;
-                let a = lw.run(i.a, 3)?;
-                lw.run(i.a + 3, c.max(1))?;
-                lw.emit(enc_abc(Op::TForCall, a, 0, c, false)?);
+                let a = lw.run(i.a, 3 + c.max(1))?;
+                lw.emit(enc_abc(Op::TForCall53, a, 0, c, false)?);
             }
             // if R(A+1) ~= nil then { R(A) := R(A+1); pc += sBx }, where A is
             // the TFORCALL's A + 2.
@@ -280,7 +237,7 @@ pub(super) fn translate(
                     return Err(lw.err(format_args!("TFORLOOP A={} below 2", i.a)));
                 };
                 let a = lw.run(base, 3)?;
-                lw.jump(enc_abx(Op::TForLoop, a, 0)?, Jump::Back, next + i.sbx())?;
+                lw.jump(enc_abx(Op::TForLoop53, a, 0)?, Jump::Back, next + i.sbx())?;
             }
             Kind::SetList => pc = lower_set_list(&mut lw, ops, code, pc, i)?,
             Kind::Closure => lower_closure(&mut lw, &mut raw.protos, &mut closed, i)?,
@@ -293,81 +250,31 @@ pub(super) fn translate(
         }
         pc += 1;
     }
-    lw.finish(&raw.locvars)
+    lw.finish_classic(&raw.locvars, &raw.consts)
 }
 
 // pc += sBx; if (A) close all upvalues >= R(A - 1)
-fn lower_jmp(
-    lw: &mut Lowering,
-    ops: &[Kind],
-    code: &[u32],
-    pc: usize,
-    i: I,
-    next: i64,
-) -> Result<(), String> {
+fn lower_jmp(lw: &mut Lowering, ops: &[Kind], code: &[u32], i: I, next: i64) -> Result<(), String> {
     let target = next + i.sbx();
+    // the jump into a generic `for`, to its TFORCALL
+    // (the TFORLOOP after it jumps back to the instruction after this one)
+    let back = code.get(target as usize + 1).copied();
+    let enters_loop = target > next
+        && kind(ops, code.get(target as usize).copied().unwrap_or(0)) == Some(Kind::TForCall)
+        && back.and_then(|w| kind(ops, w)) == Some(Kind::TForLoop)
+        && back.is_some_and(|w| target + 2 + I::decode(w).sbx() == next);
+    if i.a == 0 && enters_loop {
+        let base = I::decode(code[target as usize]).a;
+        let a = lw.r(base)?;
+        return lw.jump(enc_abx(Op::TForPrep53, a, 0)?, Jump::TForPrep, target);
+    }
     if i.a == 0 {
         return lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, target);
     }
     let close = lw.r(i.a - 1)?;
-    let guarded = pc > 0
-        && matches!(
-            kind(ops, code[pc - 1]),
-            Some(Kind::Eq | Kind::Lt | Kind::Le | Kind::Test | Kind::TestSet)
-        );
-    if guarded {
-        lw.jump_closing(close, target)
-    } else {
-        lw.emit(enc_abc(Op::Close, close, 0, 0, false)?);
-        lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, target)
-    }
-}
-
-/// Lowers `SETLIST` and returns the pc of its last word (the `EXTRAARG`
-/// when `C = 0` takes the block number from it).
-fn lower_set_list(
-    lw: &mut Lowering,
-    ops: &[Kind],
-    code: &[u32],
-    mut pc: usize,
-    i: I,
-) -> Result<usize, String> {
-    let block = if i.c == 0 {
-        pc += 1;
-        match code.get(pc) {
-            Some(&w) if kind(ops, w) == Some(Kind::ExtraArg) => ax(w),
-            _ => return Err(lw.err("SETLIST without its EXTRAARG")),
-        }
-    } else {
-        i.c
-    };
-    if block == 0 {
-        return Err(lw.err("SETLIST block number 0"));
-    }
-    let a = lw.run(i.a, i.b + 1)?;
-    lw.set_list(a, i.b, (block as u64 - 1) * FIELDS_PER_FLUSH)?;
-    Ok(pc)
-}
-
-fn lower_closure(
-    lw: &mut Lowering,
-    protos: &mut [RawProto],
-    closed: &mut [bool],
-    i: I,
-) -> Result<(), String> {
-    let idx = i.bx() as usize;
-    let Some(child) = protos.get_mut(idx) else {
-        return Err(lw.err(format_args!("CLOSURE of missing function {idx}")));
-    };
-    if std::mem::replace(&mut closed[idx], true) {
-        return Err(lw.err(format_args!("function {idx} instantiated twice")));
-    }
-    for u in child.upvals.iter_mut().filter(|u| u.in_stack) {
-        let r = lw.r(u.index as u32)?;
-        // `r` is at most 255: `Lowering::reg_at` refuses more.
-        u.index = r as u8;
-    }
-    let a = lw.r(i.a)?;
-    lw.emit(enc_abx(Op::Closure, a, idx as u32)?);
-    Ok(())
+    lw.jump(
+        crate::vm::isa::Inst::jmp_close(close + 1, 0),
+        Jump::JmpClose,
+        target,
+    )
 }

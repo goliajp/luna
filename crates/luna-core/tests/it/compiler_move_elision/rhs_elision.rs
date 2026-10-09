@@ -43,10 +43,7 @@ fn rhs_elision_single_target_simple_reg_rhs_elides_materialization() {
 
 #[test]
 fn rhs_elision_name_target_simple_reg_rhs_collapses_to_one_move() {
-    // `x = y` where both are locals. Without the elision explist_adjust
-    // would emit Move(temp, y) and assign_name would emit Move(x, temp).
-    // With it the materialization Move is popped, and only assign_name's
-    // Move(x, y) remains.
+    // `x = y` where both are locals: one Move(x, y).
     let src = r#"
         local x, y = 0, 41
         x = y

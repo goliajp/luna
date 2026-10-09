@@ -7,21 +7,29 @@ use super::*;
 impl Vm {
     /// For `GetField` / `SetField` / `Self`, the hash slot of the table
     /// operand holding the constant string key, if the key is there; for
-    /// `GetTable` / `SetTable`, the slot of a string key in a register.
+    /// `GetTable` / `SetTable`, the slot of a string key in a register, and
+    /// for `GetTableK` / `SetTableK` of a constant string key; for
+    /// `GetTabUp` / `SetTabUp`, the slot of the key in the upvalue table.
     pub(super) fn field_slot_of(&self, cl: Gc<LuaClosure>, inst: Inst, base: u32) -> Option<u32> {
         use crate::vm::isa::Op;
         let reg = |r: u32| self.stack.get((base + r) as usize).copied();
+        let k = |i: u32| cl.proto.consts.get(i as usize).copied();
+        let up = |u: u32| ((u as usize) < cl.upvals().len()).then(|| self.upval_get(cl, u));
         let (t, key) = match inst.op() {
-            Op::GetField | Op::SelfOp => {
-                (inst.b(), cl.proto.consts.get(inst.c() as usize).copied())
-            }
-            Op::SetField => (inst.a(), cl.proto.consts.get(inst.b() as usize).copied()),
+            Op::GetField | Op::SelfOp => (reg(inst.b()), k(inst.c())),
+            Op::SetField => (reg(inst.a()), k(inst.b())),
             // a string key in a register
-            Op::GetTable => (inst.b(), reg(inst.c())),
-            Op::SetTable => (inst.a(), reg(inst.b())),
+            Op::GetTable => (reg(inst.b()), reg(inst.c())),
+            Op::SetTable => (reg(inst.a()), reg(inst.b())),
+            // a constant key of any type
+            Op::GetTableK => (reg(inst.b()), k(inst.c())),
+            Op::SetTableK => (reg(inst.a()), k(inst.b())),
+            // a field of an upvalue table
+            Op::GetTabUp => (up(inst.b()), k(inst.c())),
+            Op::SetTabUp => (up(inst.a()), k(inst.b())),
             _ => return None,
         };
-        let Value::Table(t) = reg(t)? else {
+        let Value::Table(t) = t? else {
             return None;
         };
         let key @ Value::Str(_) = key? else {
@@ -62,16 +70,17 @@ impl Vm {
     /// Notes the step sign of the first depth-0 `ForLoop`, the one that
     /// ends the trace, when its step is an integer.
     pub(super) fn note_for_step(&mut self, inst: Inst, base: u32, cur_depth: usize) {
-        use crate::vm::isa::Op;
-        if inst.op() != Op::ForLoop || cur_depth != 0 {
+        if !inst.op().is_for_loop() || cur_depth != 0 {
             return;
         }
-        let step = self.stack[(base + inst.a() + 2) as usize];
+        // the step is the register before the loop variable
+        let var = inst.op().for_layout().expect("a loop op").var();
+        let step = self.stack[(base + inst.a() + var - 1) as usize];
         let rec = self.jit.active_trace.as_mut().expect("recording");
         if rec
             .ops
             .iter()
-            .any(|r| r.inline_depth == 0 && r.inst.op() == Op::ForLoop)
+            .any(|r| r.inline_depth == 0 && r.inst.op().is_for_loop())
         {
             return;
         }

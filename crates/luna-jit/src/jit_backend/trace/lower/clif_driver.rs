@@ -83,9 +83,7 @@ pub(super) fn lower_clif<M: Module>(
         if want_asm_dump {
             ctx.set_disasm(true);
         }
-        module.define_function(fn_id, &mut ctx).ok()?;
-        super::code_dump::note_size(&ctx);
-        reloc::note_sites(&*module, &ctx);
+        reloc::define_aligned(&mut *module, fn_id, &mut ctx)?;
         if want_asm_dump
             && let Some(cc) = ctx.compiled_code()
             && let Some(vcode) = cc.vcode.as_ref()

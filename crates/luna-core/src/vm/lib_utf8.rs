@@ -9,6 +9,8 @@ use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
+mod codes;
+pub(crate) use codes::*;
 
 pub(crate) fn open_utf8(vm: &mut Vm) {
     let v = vm.version();
@@ -144,15 +146,24 @@ fn bounds(v: LuaVersion, old: &'static str, new: &'static str) -> &'static str {
 fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
+    // with several arguments the buffer's slot counts for an error
+    let buf = if nargs != 1 { vm.buffer_slot(0) } else { 0 };
     let mut out = Vec::new();
     for i in 0..nargs {
-        let code = argcheck::check_integer(vm, a, i)?;
+        let code = match argcheck::check_integer(vm, a, i) {
+            Ok(code) => code,
+            Err(e) => {
+                vm.native_push(buf);
+                return Err(e);
+            }
+        };
         let ok = if v == LuaVersion::Lua53 {
             (0..=i64::from(MAX_UNICODE)).contains(&code)
         } else {
             (code as u64) <= u64::from(MAX_UTF)
         };
         if !ok {
+            vm.native_push(buf);
             return Err(arg_error(vm, i + 1, "value out of range"));
         }
         encode(&mut out, code as u32);
@@ -288,6 +299,8 @@ fn u_offset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // 5.5 also returns where the character ends
     if at(bytes, posi as usize) & 0x80 != 0 {
         if cont(posi) {
+            // the initial position is pushed before the end is sought
+            vm.native_push(1);
             return Err(raise_str(vm, "initial position is a continuation byte"));
         }
         while cont(posi + 1) {
@@ -295,69 +308,4 @@ fn u_offset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
     }
     Ok(vm.nat_return(fs, &[start, Value::Int(posi + 1)]))
-}
-
-/// The `utf8.codes` iterator; upvalue [strict].
-fn codes_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let a = Args::new(fs, nargs);
-    let v = vm.version();
-    let strict = vm.nat_upval(fs, 0).truthy();
-    let s = argcheck::check_string(vm, a, 0)?;
-    let bytes = s.as_bytes();
-    let len = bytes.len() as u64;
-    // lua_tointeger: anything but an integral number reads as 0
-    let control = match a.get(vm, 1) {
-        Value::Int(i) => i,
-        Value::Float(f) => crate::runtime::value::f2i_exact(f).unwrap_or(0),
-        Value::Str(x) => match argcheck::to_num(vm, Value::Str(x)) {
-            Some(crate::numeric::Num::Int(i)) => i,
-            Some(crate::numeric::Num::Float(f)) => crate::runtime::value::f2i_exact(f).unwrap_or(0),
-            None => 0,
-        },
-        _ => 0,
-    };
-    let n: u64 = if v == LuaVersion::Lua53 {
-        // step past the previous character and its continuation bytes
-        let n = control.wrapping_sub(1);
-        if n < 0 {
-            0
-        } else if (n as u64) < len {
-            let mut n = n as u64 + 1;
-            while is_cont(at(bytes, n as usize)) {
-                n += 1;
-            }
-            n
-        } else {
-            n as u64
-        }
-    } else {
-        let mut n = control as u64;
-        if n < len {
-            while is_cont(at(bytes, n as usize)) {
-                n += 1;
-            }
-        }
-        n
-    };
-    if n >= len {
-        return Ok(0);
-    }
-    match decode(v, bytes, n as usize, strict) {
-        Some((code, next)) if !is_cont(at(bytes, next)) => {
-            Ok(vm.nat_return(fs, &[Value::Int(n as i64 + 1), Value::Int(i64::from(code))]))
-        }
-        _ => Err(raise_str(vm, "invalid UTF-8 code")),
-    }
-}
-
-fn u_codes(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let a = Args::new(fs, nargs);
-    let v = vm.version();
-    let lax = v >= LuaVersion::Lua54 && a.get(vm, 1).truthy();
-    let s = argcheck::check_string(vm, a, 0)?;
-    if v >= LuaVersion::Lua54 && is_cont(at(s.as_bytes(), 0)) {
-        return Err(arg_error(vm, 1, "invalid UTF-8 code"));
-    }
-    let it = vm.native_with(codes_iter, Box::new([Value::Bool(!lax)]));
-    Ok(vm.nat_return(fs, &[it, Value::Str(s), Value::Int(0)]))
 }

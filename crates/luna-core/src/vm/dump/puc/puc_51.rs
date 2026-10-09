@@ -20,15 +20,12 @@
 //!
 //! 4. **Generic `for`** — `TFORLOOP A C` both calls the iterator and tests
 //!    its first result; the `JMP` after it jumps back to the body. The pair
-//!    becomes luna's `TForCall` + `TForLoop`, inside a loop window (5.1 has
-//!    three hidden slots where luna has four).
+//!    becomes luna's `TForCall53` + `TForLoop53`.
 //!
 //! 5. **`SETLIST`** — `C` is a 1-based block number of 50 fields; `C = 0`
 //!    takes the block number from the next code word, a raw integer.
 
-use super::lower::{
-    self, Jump, Lowered, Lowering, RawLocVar, RawProto, Window, enc_abc, enc_abx, enc_sj,
-};
+use super::lower::{self, Jump, Lowered, Lowering, RawLocVar, RawProto, enc_abc, enc_abx, enc_sj};
 use crate::runtime::Value;
 use crate::runtime::function::{Proto, UpvalDesc};
 use crate::runtime::heap::{Gc, Heap};
@@ -38,7 +35,9 @@ use crate::vm::dump::reader::Reader;
 use crate::vm::isa::Op;
 
 mod closure;
+mod ops;
 use closure::lower_closure;
+pub(in crate::vm::dump) use ops::*;
 
 const DIALECT: &str = "PUC 5.1";
 
@@ -73,46 +72,6 @@ impl I51 {
         self.bx() as i64 - 131071
     }
 }
-
-// Opcode numbers, lopcodes.h 5.1.5.
-pub(in crate::vm::dump) const OP_MOVE: u8 = 0;
-pub(in crate::vm::dump) const OP_LOADK: u8 = 1;
-pub(in crate::vm::dump) const OP_LOADBOOL: u8 = 2;
-pub(in crate::vm::dump) const OP_LOADNIL: u8 = 3;
-pub(in crate::vm::dump) const OP_GETUPVAL: u8 = 4;
-pub(in crate::vm::dump) const OP_GETGLOBAL: u8 = 5;
-pub(in crate::vm::dump) const OP_GETTABLE: u8 = 6;
-pub(in crate::vm::dump) const OP_SETGLOBAL: u8 = 7;
-pub(in crate::vm::dump) const OP_SETUPVAL: u8 = 8;
-pub(in crate::vm::dump) const OP_SETTABLE: u8 = 9;
-pub(in crate::vm::dump) const OP_NEWTABLE: u8 = 10;
-pub(in crate::vm::dump) const OP_SELF: u8 = 11;
-pub(in crate::vm::dump) const OP_ADD: u8 = 12;
-pub(in crate::vm::dump) const OP_SUB: u8 = 13;
-pub(in crate::vm::dump) const OP_MUL: u8 = 14;
-pub(in crate::vm::dump) const OP_DIV: u8 = 15;
-pub(in crate::vm::dump) const OP_MOD: u8 = 16;
-pub(in crate::vm::dump) const OP_POW: u8 = 17;
-pub(in crate::vm::dump) const OP_UNM: u8 = 18;
-pub(in crate::vm::dump) const OP_NOT: u8 = 19;
-pub(in crate::vm::dump) const OP_LEN: u8 = 20;
-pub(in crate::vm::dump) const OP_CONCAT: u8 = 21;
-pub(in crate::vm::dump) const OP_JMP: u8 = 22;
-pub(in crate::vm::dump) const OP_EQ: u8 = 23;
-pub(in crate::vm::dump) const OP_LT: u8 = 24;
-pub(in crate::vm::dump) const OP_LE: u8 = 25;
-pub(in crate::vm::dump) const OP_TEST: u8 = 26;
-pub(in crate::vm::dump) const OP_TESTSET: u8 = 27;
-pub(in crate::vm::dump) const OP_CALL: u8 = 28;
-pub(in crate::vm::dump) const OP_TAILCALL: u8 = 29;
-pub(in crate::vm::dump) const OP_RETURN: u8 = 30;
-pub(in crate::vm::dump) const OP_FORLOOP: u8 = 31;
-pub(in crate::vm::dump) const OP_FORPREP: u8 = 32;
-pub(in crate::vm::dump) const OP_TFORLOOP: u8 = 33;
-pub(in crate::vm::dump) const OP_SETLIST: u8 = 34;
-pub(in crate::vm::dump) const OP_CLOSE: u8 = 35;
-pub(in crate::vm::dump) const OP_CLOSURE: u8 = 36;
-pub(in crate::vm::dump) const OP_VARARG: u8 = 37;
 
 /// The `_ENV` cell every translated function carries at upvalue 0.
 const ENV_UPVAL: u32 = 0;
@@ -257,39 +216,8 @@ fn env_upval() -> UpvalDesc {
     }
 }
 
-/// `TFORLOOP A C` at `p` with its back-`JMP` at `p+1`: the body runs from the
-/// jump's target to `p+1`, and the loop variables start at `A+3`.
-fn loop_windows(code: &[u32]) -> Result<Vec<Window>, String> {
-    let mut out = Vec::new();
-    for (p, &w) in code.iter().enumerate() {
-        let i = I51::decode(w);
-        if i.op != OP_TFORLOOP {
-            continue;
-        }
-        let jmp = code.get(p + 1).map(|&w| I51::decode(w));
-        let Some(jmp) = jmp.filter(|j| j.op == OP_JMP) else {
-            return Err(format!(
-                "{DIALECT} chunk: TFORLOOP without its back-jump (pc {p})"
-            ));
-        };
-        let body = p as i64 + 2 + jmp.sbx();
-        if !(0..=p as i64).contains(&body) {
-            return Err(format!(
-                "{DIALECT} chunk: TFORLOOP back-jump to {body} (pc {p})"
-            ));
-        }
-        out.push(Window {
-            first: body as usize,
-            last: p + 1,
-            pivot: i.a + 3,
-        });
-    }
-    Ok(out)
-}
-
 fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
-    let windows = loop_windows(&raw.code)?;
-    let mut lw = Lowering::new(DIALECT, raw.code.len(), raw.max_stack, windows, &raw.consts);
+    let mut lw = Lowering::new(DIALECT, raw.code.len(), raw.max_stack, &raw.consts);
     let mut closed = vec![false; raw.protos.len()];
     let code = &raw.code;
     let mut pc = 0;
@@ -312,10 +240,7 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
                     (false, false) => lw.emit(enc_abc(Op::LoadFalse, a, 0, 0, false)?),
                     (false, true) => lw.emit(enc_abc(Op::LFalseSkip, a, 0, 0, false)?),
                     (true, false) => lw.emit(enc_abc(Op::LoadTrue, a, 0, 0, false)?),
-                    (true, true) => {
-                        lw.emit(enc_abc(Op::LoadTrue, a, 0, 0, false)?);
-                        lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, next + 1)?;
-                    }
+                    (true, true) => lw.emit(enc_abc(Op::LTrueSkip, a, 0, 0, false)?),
                 }
             }
             OP_LOADNIL => {
@@ -336,11 +261,11 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
             }
             OP_GETGLOBAL => {
                 let a = lw.r(i.a)?;
-                lw.get_tabup(a, ENV_UPVAL, i.bx(), true)?;
+                lw.get_global(a, i.bx())?;
             }
             OP_SETGLOBAL => {
                 let a = lw.r(i.a)?;
-                lw.set_tabup(ENV_UPVAL, i.bx(), a, true)?;
+                lw.set_global(a, i.bx())?;
             }
             OP_GETTABLE => {
                 let (a, b) = (lw.r(i.a)?, lw.r(i.b)?);
@@ -366,9 +291,7 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
                     _ => Op::Pow,
                 };
                 let a = lw.r(i.a)?;
-                let b = lw.rk(i.b)?;
-                let c = lw.rk(i.c)?;
-                lw.emit(enc_abc(op, a, b, c, false)?);
+                lw.arith_rk(op, a, i.b, i.c)?;
             }
             OP_UNM | OP_NOT | OP_LEN => {
                 let op = match i.op {
@@ -380,7 +303,25 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
                 lw.emit(enc_abc(op, a, b, 0, false)?);
             }
             OP_CONCAT => lw.concat_range(i.a, i.b, i.c)?,
-            OP_JMP => lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, next + i.sbx())?,
+            OP_JMP => {
+                let target = next + i.sbx();
+                let t = code.get(target.max(0) as usize).map(|&w| I51::decode(w));
+                match t {
+                    // the jump into a generic `for`, to its TFORLOOP
+                    Some(t)
+                        if target > next
+                            && t.op == OP_TFORLOOP
+                            && code.get(target as usize + 1).is_some_and(|&w| {
+                                let j = I51::decode(w);
+                                j.op == OP_JMP && target + 2 + j.sbx() == next
+                            }) =>
+                    {
+                        let a = lw.r(t.a)?;
+                        lw.jump(enc_abx(Op::TForPrep53, a, 0)?, Jump::TForPrep, target)?;
+                    }
+                    _ => lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, target)?,
+                }
+            }
             OP_EQ => lw.compare_rk(Op::Eq, i.a != 0, i.b, i.c)?,
             OP_LT => lw.compare_rk(Op::Lt, i.a != 0, i.b, i.c)?,
             OP_LE => lw.compare_rk(Op::Le, i.a != 0, i.b, i.c)?,
@@ -415,16 +356,20 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
                 lw.jump(enc_abx(Op::ForLoop, a, 0)?, Jump::Back, next + i.sbx())?;
             }
             OP_TFORLOOP => {
-                // `loop_windows` checked that a JMP follows.
                 let c = lw.byte(i.c, "TFORLOOP C")?;
-                let a = lw.run(i.a, 3)?;
-                lw.run(i.a + 3, c.max(1))?;
-                lw.emit(enc_abc(Op::TForCall, a, 0, c, false)?);
+                let a = lw.run(i.a, 3 + c.max(1))?;
+                lw.emit(enc_abc(Op::TForCall53, a, 0, c, false)?);
                 pc += 1;
-                let jmp = I51::decode(code[pc]);
+                let jmp = code
+                    .get(pc)
+                    .map(|&w| I51::decode(w))
+                    .filter(|j| j.op == OP_JMP);
+                let Some(jmp) = jmp else {
+                    return Err(lw.err("TFORLOOP without its back-jump"));
+                };
                 lw.begin(pc, raw.lines.get(pc).copied().unwrap_or(0));
                 let body = pc as i64 + 1 + jmp.sbx();
-                lw.jump(enc_abx(Op::TForLoop, a, 0)?, Jump::Back, body)?;
+                lw.jump(enc_abx(Op::TForLoop53, a, 0)?, Jump::Back, body)?;
             }
             OP_SETLIST => {
                 let block = if i.c == 0 {
@@ -455,5 +400,5 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
         }
         pc += 1;
     }
-    lw.finish(&raw.locvars)
+    lw.finish_classic(&raw.locvars, &raw.consts)
 }

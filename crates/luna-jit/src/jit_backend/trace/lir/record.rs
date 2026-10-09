@@ -78,6 +78,14 @@ impl Lir {
         val(d)
     }
 
+    /// A read of variable `n`, whose value the block does not know yet.
+    #[inline(never)]
+    pub(super) fn read_var(&mut self, n: u32) -> Value {
+        let x = self.def(Op::VarRead, self.var_ty[n as usize], n, NONE, NONE);
+        self.var_cur[n as usize] = v(x);
+        x
+    }
+
     pub(super) fn with_args(&mut self, inst: u32, args: impl IntoIterator<Item = u32>) {
         let at = self.args.len() as u32;
         self.args.extend(args);
@@ -234,6 +242,9 @@ impl Lir {
 }
 
 impl Emit for Lir {
+    fn len_state_flags(&mut self) -> cranelift_codegen::ir::MemFlagsData {
+        cranelift_codegen::ir::MemFlagsData::trusted()
+    }
     fn make_signature(&self) -> Signature {
         Signature::new(CallConv::SystemV)
     }
@@ -243,7 +254,9 @@ impl Emit for Lir {
         _linkage: Linkage,
         sig: &Signature,
     ) -> ModuleResult<FuncId> {
-        let addr = match crate::jit_backend::trace::trace_helper(name).or_else(|| libm(name)) {
+        let addr = match crate::jit_backend::trace::trace_helper(name)
+            .or_else(|| crate::jit_backend::math_fold::libm(name))
+        {
             Some(a) => a as usize,
             None => {
                 self.unsupported = Some("call to an unknown function");
@@ -297,42 +310,4 @@ impl Emit for Lir {
         let n = self.reloc_index(kind, live);
         self.def(Op::Reloc(n), Ty::I64, NONE, NONE, NONE)
     }
-}
-
-/// The C math functions a folded `math.*` call reaches, which Cranelift's
-/// JIT finds by symbol lookup in the process.
-fn libm(name: &str) -> Option<*const u8> {
-    unsafe extern "C" {
-        fn sin(x: f64) -> f64;
-        fn cos(x: f64) -> f64;
-        fn tan(x: f64) -> f64;
-        fn asin(x: f64) -> f64;
-        fn acos(x: f64) -> f64;
-        fn atan(x: f64) -> f64;
-        fn atan2(y: f64, x: f64) -> f64;
-        fn exp(x: f64) -> f64;
-        fn log(x: f64) -> f64;
-        fn sqrt(x: f64) -> f64;
-        fn floor(x: f64) -> f64;
-        fn ceil(x: f64) -> f64;
-        fn pow(x: f64, y: f64) -> f64;
-        fn fmod(x: f64, y: f64) -> f64;
-    }
-    Some(match name {
-        "sin" => sin as *const u8,
-        "cos" => cos as *const u8,
-        "tan" => tan as *const u8,
-        "asin" => asin as *const u8,
-        "acos" => acos as *const u8,
-        "atan" => atan as *const u8,
-        "atan2" => atan2 as *const u8,
-        "exp" => exp as *const u8,
-        "log" => log as *const u8,
-        "sqrt" => sqrt as *const u8,
-        "floor" => floor as *const u8,
-        "ceil" => ceil as *const u8,
-        "pow" => pow as *const u8,
-        "fmod" => fmod as *const u8,
-        _ => return None,
-    })
 }

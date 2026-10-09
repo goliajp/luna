@@ -77,7 +77,8 @@ pub(super) fn presize_hints(
         if limit_val <= 0 || limit_val > (1 << 27) {
             continue;
         }
-        if !fills_every_slot(proto, &code[prep_pc + 1..loop_pc], nt.a(), fp.a() + 3) {
+        let var = ForRegs::of(fp).var as u32;
+        if !fills_every_slot(proto, &code[prep_pc + 1..loop_pc], nt.a(), var) {
             continue;
         }
         // filling `1..=N` in order leaves a table PUC sized by doubling:
@@ -201,7 +202,7 @@ pub(super) fn check_self_call_base_case(c: ChunkIn<'_>, scan: &ChunkScan) -> Opt
                 Op::Call if self_call_pcs[pc] => {
                     // self-recursive — treat as a wall; do NOT traverse past.
                 }
-                Op::ForPrep => {
+                Op::ForPrep | Op::ForPrep55 => {
                     // Two successors: fall-through (body) AND the
                     // paired ForLoop's exit (skip when empty). Either
                     // path can reach a Return.

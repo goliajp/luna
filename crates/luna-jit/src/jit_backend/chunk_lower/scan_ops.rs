@@ -158,6 +158,7 @@ pub(super) fn scan_control(
         self_upval,
         step_const,
         for_loops,
+        dead_loads,
         ..
     } = s;
     let mut pc = pc;
@@ -220,7 +221,7 @@ pub(super) fn scan_control(
             }
             pc = jmp_pc; // outer pc += 1 below moves past the Jmp
         }
-        Op::ForPrep => {
+        Op::ForPrep | Op::ForPrep55 => {
             // both forms admitted. The dialect-
             // specific shape is picked up in emit, gated by `pre53`.
             let a = ins.a() as usize;
@@ -243,7 +244,8 @@ pub(super) fn scan_control(
                 return None;
             }
             let loop_ins = code[loop_pc];
-            if !matches!(loop_ins.op(), Op::ForLoop) || loop_ins.a() as usize != a {
+            let want = ins.op().for_layout().map(|l| l.ops().2);
+            if Some(loop_ins.op()) != want || loop_ins.a() as usize != a {
                 return None;
             }
             // BB boundaries: ForPrep is its own block; body starts
@@ -255,9 +257,18 @@ pub(super) fn scan_control(
             }
             bb_starts[loop_pc] = true; // ForLoop opens its own block.
             for_loops.push((pc, loop_pc, step_imm));
-            // ForPrep writes R[A], R[A+1], R[A+2], R[A+3] — every
-            // register's step_const tracker is stale after this.
-            for off in 0..=3 {
+            if ins.op() == Op::ForPrep55 {
+                // the step's load right before: its register becomes the
+                // index, of the loop's kind
+                let ld = *code.get(pc.wrapping_sub(1))?;
+                if ld.op() != Op::LoadI || ld.a() as usize != a + 2 {
+                    return None;
+                }
+                dead_loads[pc - 1] = true;
+            }
+            // ForPrep writes every register of the loop — their
+            // step_const trackers are stale after this.
+            for off in 0..=ForRegs::of(ins).var - a {
                 if let Some(slot) = step_const.get_mut(a + off) {
                     *slot = None;
                 }
@@ -266,7 +277,7 @@ pub(super) fn scan_control(
                 }
             }
         }
-        Op::ForLoop => {
+        Op::ForLoop | Op::ForLoop55 => {
             // ForLoop alone (without a paired ForPrep earlier in
             // the for_loops list) is an orphan — luna's bytecode
             // emitter never produces that, so reject any ForLoop
@@ -275,13 +286,15 @@ pub(super) fn scan_control(
             if !for_loops.iter().any(|&(_, lp, _)| lp == pc) {
                 return None;
             }
-            // ForLoop writes R[A], R[A+1], R[A+3] on the continue
-            // path — same step_const wipe as ForPrep.
-            for off in [0usize, 1, 3] {
-                if let Some(slot) = step_const.get_mut(a + off) {
+            // ForLoop writes the index, the count and the loop variable
+            // on the continue path — same step_const wipe as ForPrep.
+            let r = ForRegs::of(ins);
+            let _ = a;
+            for reg in [r.idx, r.x, r.var] {
+                if let Some(slot) = step_const.get_mut(reg) {
                     *slot = None;
                 }
-                if let Some(slot) = self_upval.get_mut(a + off) {
+                if let Some(slot) = self_upval.get_mut(reg) {
                     *slot = false;
                 }
             }
@@ -289,125 +302,4 @@ pub(super) fn scan_control(
         _ => unreachable!("dispatched by op"),
     }
     Some(pc)
-}
-
-pub(super) fn scan_tables(s: &mut ChunkScan, c: ChunkIn<'_>, pc: usize, ins: Inst) -> Option<()> {
-    let ChunkIn { code, .. } = c;
-    let ChunkScan {
-        self_upval,
-        step_const,
-        defines_table,
-        ..
-    } = s;
-    match ins.op() {
-        Op::NewTable => {
-            // a table with no hash part (`{}` or a list literal); one
-            // whose constructor sizes a hash part still bails — none of
-            // our headline cells use hash literals, and the per-slot
-            // lowering would need a separate dispatch for `nodes`
-            match luna_core::runtime::table::new_table_sizes(ins.b(), ins.c(), ins.k()) {
-                Some((_, 0)) => {}
-                _ => return None,
-            }
-            let a = ins.a() as usize;
-            if let Some(slot) = self_upval.get_mut(a) {
-                *slot = false;
-            }
-            if let Some(slot) = step_const.get_mut(a) {
-                *slot = None;
-            }
-            if let Some(slot) = defines_table.get_mut(a) {
-                *slot = true;
-            }
-        }
-        Op::SetTable => {
-            // register-keyed set. The proper safety
-            // gate (R[A] must be a definitively-defined table at
-            // this PC) lives in the BB-level dataflow check
-            // below; the linear `defines_table` walk would
-            // wrongly accept a false-branch-only NewTable.
-        }
-        Op::SetList => {
-            // fixed-count array literal initializer
-            // (B > 0). Variadic form (B == 0, C ==
-            // 0) accepted when paired with the immediately
-            // preceding `Op::Call C=0`; the JIT'd self-recursive
-            // callee returns exactly 1 value, so the static
-            // count is `A_call - A_list`.
-            let b = ins.b();
-            // the emit stores from index 1: no offset, and no
-            // `ExtraArg` offset either
-            if ins.c() != 0 || ins.k() {
-                return None;
-            }
-            if b == 0 {
-                if pc == 0 {
-                    return None;
-                }
-                let prev = code[pc - 1];
-                if !matches!(prev.op(), Op::Call) || prev.c() != 0 {
-                    return None;
-                }
-                let a_call = prev.a() as i64;
-                let a_list = ins.a() as i64;
-                if a_call <= a_list {
-                    return None;
-                }
-            }
-            // BB-level dataflow verifies R[A] is a table at this
-            // PC. No register-tracker side effects — SetList
-            // writes through R[A] into the table's array part,
-            // not into R[A..A+B] themselves.
-        }
-        Op::GetI => {
-            // `R[A] = R[B][imm(C)]`. BB-level dataflow
-            // verifies R[B] is a table at this PC.
-            let a = ins.a() as usize;
-            if let Some(slot) = self_upval.get_mut(a) {
-                *slot = false;
-            }
-            if let Some(slot) = step_const.get_mut(a) {
-                *slot = None;
-            }
-            // R[A] receives an Int value pulled from the table;
-            // it is not itself a table reference.
-            if let Some(slot) = defines_table.get_mut(a) {
-                *slot = false;
-            }
-        }
-        Op::GetTable => {
-            // `R[A] = R[B][R[C]]`. BB-level dataflow
-            // verifies R[B] is a table at this PC. Parallel to
-            // GetI but the key is in a register (5.1/5.2 lower
-            // `t[1]` this way because they have no Int subtype:
-            // the literal `1` lands in a register via `LoadF 1.0`
-            // and then `OP_GETTABLE` reads it).
-            let a = ins.a() as usize;
-            if let Some(slot) = self_upval.get_mut(a) {
-                *slot = false;
-            }
-            if let Some(slot) = step_const.get_mut(a) {
-                *slot = None;
-            }
-            if let Some(slot) = defines_table.get_mut(a) {
-                *slot = false;
-            }
-        }
-        Op::Len => {
-            // `R[A] = #R[B]`. BB-level dataflow
-            // verifies R[B] is a table at this PC.
-            let a = ins.a() as usize;
-            if let Some(slot) = self_upval.get_mut(a) {
-                *slot = false;
-            }
-            if let Some(slot) = step_const.get_mut(a) {
-                *slot = None;
-            }
-            if let Some(slot) = defines_table.get_mut(a) {
-                *slot = false;
-            }
-        }
-        _ => unreachable!("dispatched by op"),
-    }
-    Some(())
 }

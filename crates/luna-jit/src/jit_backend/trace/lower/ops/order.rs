@@ -27,7 +27,16 @@ pub(super) fn emit_order_op<E: Emit>(
             let k_effective = if invert { !ins.k() } else { ins.k() };
             let ka = oc.kind(&lw.current_kinds, ins.a());
             let kb = oc.kind(&lw.current_kinds, ins.b());
-            let float_path = matches!(ka, RegKind::Float) || matches!(kb, RegKind::Float);
+            // a float is never equal to a value that is no number
+            let not_number = |k: RegKind| {
+                matches!(
+                    k,
+                    RegKind::Nil | RegKind::Bool | RegKind::Str | RegKind::Table | RegKind::Closure
+                )
+            };
+            let unequal = op == Op::Eq && (not_number(ka) || not_number(kb));
+            let float_path =
+                !unequal && (matches!(ka, RegKind::Float) || matches!(kb, RegKind::Float));
             let cond = if float_path {
                 let c = match (ka, kb) {
                     (RegKind::Float, RegKind::Float) => {
@@ -116,8 +125,13 @@ pub(super) fn emit_order_op<E: Emit>(
                 CmpDir::SkippedJmp => {
                     let jmp_pc = (rop.pc + 1) as usize;
                     let jmp_inst = oc.rop.proto.code[jmp_pc];
-                    let pc_after_jmp = (rop.pc as i64) + 2;
-                    (pc_after_jmp + jmp_inst.sj() as i64) as u32
+                    if jmp_inst.op() == Op::Jmp {
+                        let pc_after_jmp = (rop.pc as i64) + 2;
+                        (pc_after_jmp + jmp_inst.sj() as i64) as u32
+                    } else {
+                        // a jump that closes runs in the interpreter
+                        jmp_pc as u32
+                    }
                 }
             };
             lw.bcx.switch_to_block(side_exit_blk);

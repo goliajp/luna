@@ -18,7 +18,6 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
     let RuntimeHelpers {
         str_buf_extend_id, ..
     } = lw.h.rt;
-    let vconst = |i: usize| pl.vconsts.get(i).copied().flatten();
     lw.bcx.switch_to_block(body_loop);
     // Intentionally NOT sealed: the tail's clean-close back-edge
     // adds a second predecessor below.
@@ -27,29 +26,23 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
             .iter()
             .map(|&v| Some(use_var_resolved(&mut lw.bcx, v))),
     );
-    // the virtual register of a constant-operand op (see `vconsts`)
-    let kvar = lw.bcx.declare_var(types::I64);
+    // the virtual registers of an op (see `vconsts`)
+    let kvars: [Variable; NVIRT] = std::array::from_fn(|_| lw.bcx.declare_var(types::I64));
     // this op's register window (a copy, so the emit code can take `lw`
-    // mutably while it reads it), plus `kvar` for a constant operand
-    let mut regs_w: Vec<Variable> = Vec::with_capacity(frame_w + 1);
+    // mutably while it reads it), plus `kvars` for the virtual registers
+    let mut regs_w: Vec<Variable> = Vec::with_capacity(frame_w + NVIRT);
     checkpoint("pre:main-emit-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
-        // Commit the earlier ops' register writes to reg_state where this
-        // op may read it, and where it can take another way that rejoins
-        // later (both ways then hold the same reg_state)
-        if !pure_op(rop.inst.op()) || pl.alt_paths.get(i).is_some_and(|a| a.is_some()) {
-            sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
-        }
+        // Commit the previous op's register writes to reg_state.
+        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
         alt_join(lw, i);
-        let vk = vconst(i);
+        let vregs: VRegs = pl.vconsts.get(i).copied().unwrap_or([None; NVIRT]);
         // R[C] of a register-operand op, read before this op's own write
         // forgets it (`x = x % 7` divides by the old value)
-        let rc_const = match vk {
-            Some(k) if rop.inst.c() as usize == frame_w => match k {
-                VConst::Int(n) => Some(n),
-                VConst::Float(_) => None,
-            },
-            _ => lw
+        let rc_const = match virt_at(&pl.vconsts, i, rop.inst.c(), frame_w) {
+            Some(VSrc::Const(VConst::Int(n))) => Some(n),
+            Some(_) => None,
+            None => lw
                 .known_int
                 .get(pl.op_offsets[i] as usize + rop.inst.c() as usize)
                 .copied()
@@ -73,19 +66,11 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         let off = pl.op_offsets[i] as usize;
         regs_w.clear();
         regs_w.extend_from_slice(&lw.regs_full[off..off + frame_w]);
-        // a constant operand: its value in `kvar`, which `regs` gets as
-        // register `frame_w`
-        if let Some(k) = vk {
-            let v = match k {
-                VConst::Int(n) => lw.bcx.ins().iconst(types::I64, n),
-                VConst::Float(f) => {
-                    let fv = lw.bcx.ins().f64const(f);
-                    lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), fv)
-                }
-            };
-            lw.bcx.def_var(kvar, v);
-            regs_w.push(kvar);
-        }
+        // the op's virtual registers, `frame_w` up (defined by
+        // `enter_virt`); an op without any keeps its window exactly
+        // `frame_w` wide, which the ops spilling their window rely on
+        let nvirt = vregs.iter().rposition(Option::is_some).map_or(0, |j| j + 1);
+        regs_w.extend_from_slice(&kvars[..nvirt]);
         let regs: &[Variable] = &regs_w;
         // body emit handler for the 4-op
         // string-accumulator idiom. Skip the 2 pre-Moves + the
@@ -96,7 +81,7 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         if let Some(ref ba) = active_accum
             && let Some(ref fctx) = lw.flush_ctx
         {
-            if i == ba.pre1_idx || i == ba.pre2_idx || i == ba.post_idx {
+            if i == ba.pre1_idx || i == ba.pre2_idx || Some(i) == ba.post_idx {
                 continue;
             }
             if i == ba.concat_idx {
@@ -125,8 +110,10 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         if pl.consumed_by_cmp[i] {
             // The cmp at i-1 already accounted for this Jmp via
             // its `brif`'s continue edge; emitting jump IR here
-            // would double-jump.
-            continue;
+            // would double-jump. A closing jump still closes.
+            if !matches!(rop.inst.op(), Op::JmpClose | Op::JmpCloseBack) {
+                continue;
+            }
         }
         // Math fold emit. Layout (see `math_folds` doc above):
         //
@@ -147,7 +134,7 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         let oc = OpCx {
             i,
             rop,
-            vk,
+            vregs,
             rc_const,
             off,
             regs,
@@ -159,73 +146,77 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
             emit_fold(lw, pl, &oc)?;
             continue;
         }
+        // the op a failed emit stopped at, for diagnostics
+        set_last_op(oc.i, oc.op as u8);
+        let held = enter_virt(lw, pl, &oc, &kvars)?;
         emit_op(lw, pl, &oc)?;
+        leave_virt(lw, held);
         readonly_after_op(lw, oc.op);
     }
-    // the tails that call helpers reading reg_state; the others store
-    // what they leave with
-    let generic_for = pl
-        .for_loop_idx_opt
-        .is_some_and(|k| record.ops[k].inst.op() == Op::TForLoop);
-    if generic_for || pl.downrec_idx_opt.is_some() || pl.self_link_idx_opt.is_some() {
-        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
-    }
+    sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
     alt_join(lw, effective_end);
     debug_assert!(lw.alt_joins.is_empty(), "every skip joins a recorded op");
     Some(())
 }
 
-/// Ops whose lowering neither calls a helper that reads reg_state or the
-/// Lua stack nor lets the collector run: arithmetic, comparisons, moves,
-/// loads of constants and the numeric `for` step. Their guards leave
-/// through exits, which store what they leave with.
-fn pure_op(op: Op) -> bool {
-    matches!(
-        op,
-        Op::Move
-            | Op::LoadI
-            | Op::LoadF
-            | Op::LoadK
-            | Op::LoadNil
-            | Op::LoadFalse
-            | Op::LoadTrue
-            | Op::Add
-            | Op::Sub
-            | Op::Mul
-            | Op::Div
-            | Op::IDiv
-            | Op::Mod
-            | Op::AddI
-            | Op::AddK
-            | Op::SubK
-            | Op::MulK
-            | Op::DivK
-            | Op::IDivK
-            | Op::ModK
-            | Op::Unm
-            | Op::BAnd
-            | Op::BOr
-            | Op::BXor
-            | Op::Shl
-            | Op::Shr
-            | Op::BAndK
-            | Op::BOrK
-            | Op::BXorK
-            | Op::ShrI
-            | Op::ShlI
-            | Op::BNot
-            | Op::Not
-            | Op::Lt
-            | Op::Le
-            | Op::Eq
-            | Op::LtI
-            | Op::LeI
-            | Op::GtI
-            | Op::GeI
-            | Op::EqI
-            | Op::EqK
-            | Op::Test
-            | Op::Jmp
-            | Op::ForLoop
-    )
+/// What a window slot held before an op's virtual register stood in it.
+type HeldSlot = (usize, RegKind, Option<i64>, bool);
+
+/// Defines the virtual registers of op `oc` in `kvars`, and puts their
+/// kinds (and known constants) in the window slots `off + frame_w` up for
+/// the op, so that the emit code reads them as it reads any register.
+/// No register of a running frame is there while the op runs; the slots
+/// past the widest window exist for this only. Returns what the slots
+/// held.
+fn enter_virt<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    oc: &OpCx<'_>,
+    kvars: &[Variable; NVIRT],
+) -> Option<Vec<HeldSlot>> {
+    let mut held = Vec::new();
+    for (j, src) in oc.vregs.iter().enumerate() {
+        let Some(src) = *src else {
+            continue;
+        };
+        let v = match src {
+            VSrc::Const(VConst::Int(n)) => lw.bcx.ins().iconst(types::I64, n),
+            VSrc::Const(VConst::Float(f)) => {
+                let fv = lw.bcx.ins().f64const(f);
+                lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), fv)
+            }
+            VSrc::Const(VConst::Str(s)) => {
+                emit_str_key_arg(&mut lw.bcx, s, pl.opts.aot, &mut lw.defined_aot_data)
+            }
+            VSrc::Const(VConst::Bool(b)) => lw.bcx.ins().iconst(types::I64, i64::from(b)),
+            VSrc::Const(VConst::Nil) => lw.bcx.ins().iconst(types::I64, 0),
+            VSrc::Upval(u) => upval_table_read(lw, pl, oc.i, oc.rop, u)?,
+        };
+        lw.bcx.def_var(kvars[j], v);
+        let slot = oc.off + pl.frame_w + j;
+        held.push((
+            slot,
+            lw.current_kinds[slot],
+            lw.known_int[slot],
+            lw.const_str[slot],
+        ));
+        lw.virt_held.push((slot, lw.current_kinds[slot]));
+        lw.current_kinds[slot] = vsrc_kind(src);
+        lw.known_int[slot] = match src {
+            VSrc::Const(VConst::Int(n)) => Some(n),
+            _ => None,
+        };
+        lw.const_str[slot] = matches!(src, VSrc::Const(VConst::Str(_)));
+    }
+    Some(held)
+}
+
+/// Puts back what [`enter_virt`] found in the window slots.
+fn leave_virt<E: Emit>(lw: &mut Lower<E>, held: Vec<HeldSlot>) {
+    for (slot, kind, int, s) in held {
+        lw.current_kinds[slot] = kind;
+        lw.known_int[slot] = int;
+        lw.const_str[slot] = s;
+    }
+    lw.virt_held.clear();
 }

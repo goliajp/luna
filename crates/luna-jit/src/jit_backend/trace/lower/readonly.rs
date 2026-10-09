@@ -21,7 +21,7 @@ use super::*;
 
 /// Whether `op` may run host code (see the module comment).
 fn runs_host_code(op: Op) -> bool {
-    matches!(op, Op::Concat | Op::TForCall)
+    op == Op::Concat || op.is_tfor_call()
 }
 
 /// The registers some op of the trace writes, absolute; an op that writes

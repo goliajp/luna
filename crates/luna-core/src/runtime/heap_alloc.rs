@@ -1,7 +1,9 @@
 //! Object constructors and string interning.
 
 use super::*;
+use crate::runtime::Builtin;
 use crate::runtime::mem::{LSlice, LVec, oom_abort};
+use crate::runtime::value::NativeFn;
 use std::alloc::Layout;
 
 impl Heap {
@@ -237,21 +239,22 @@ impl Heap {
             .unwrap_or_else(|_| oom_abort(Layout::for_value(upvals)))
     }
 
-    /// Allocate a [`NativeClosure`] wrapping host function `f` with the
-    /// given captured upvalues.
-    pub fn new_native(
-        &mut self,
-        f: crate::runtime::value::NativeFn,
-        upvals: Box<[Value]>,
-    ) -> Gc<NativeClosure> {
-        self.new_native_from(f, &upvals)
+    /// A [`NativeClosure`] calling host function `f` over `upvals`.
+    pub fn new_native(&mut self, f: NativeFn, upvals: Box<[Value]>) -> Gc<NativeClosure> {
+        self.new_builtin(f, &upvals, Builtin::None)
     }
 
     /// [`Heap::new_native`] copying the upvalues from a slice.
-    pub fn new_native_from(
+    pub fn new_native_from(&mut self, f: NativeFn, upvals: &[Value]) -> Gc<NativeClosure> {
+        self.new_builtin(f, upvals, Builtin::None)
+    }
+
+    /// A native that is the library function `builtin`.
+    pub(crate) fn new_builtin(
         &mut self,
-        f: crate::runtime::value::NativeFn,
+        f: NativeFn,
         upvals: &[Value],
+        builtin: Builtin,
     ) -> Gc<NativeClosure> {
         let fix = self.fix_natives && upvals.is_empty();
         let hdr = GcHeader::native(upvals);
@@ -261,29 +264,45 @@ impl Heap {
             f,
             upvals,
             is_async: false,
-            kind: crate::vm::exec::native_call::NativeKind::of(f),
+            kind: crate::vm::exec::native_call::NativeKind::of(builtin),
+            builtin,
         });
         if fix {
-            // SAFETY: `adopt` just linked `g` at the head of `all`. PUC `luaC_fix`:
-            // onto `fixed`, gray, so marking, barriers and weak tables skip it
-            unsafe {
-                let h = g.as_ptr() as *mut GcHeader;
-                self.all = (*h).next;
-                (*h).next = self.fixed;
-                (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
-                self.fixed = h;
-            }
+            // SAFETY: `adopt` just linked `g` at the head of `all`
+            unsafe { self.fix_newest(g.as_ptr() as *mut GcHeader) };
         }
         g
     }
 
-    /// Like [`Heap::new_native`] but tags the
-    /// closure with `is_async = true`. The dispatcher's native-call
-    /// path then transmutes `f` to `AsyncNativeFn` and routes through
-    /// the cooperative-yield path. The caller is responsible for
-    /// having transmuted the `AsyncNativeFn` pointer to `NativeFn`
-    /// shape (both are `fn` pointers of the same size); see
-    /// [`crate::vm::async_drive`] for the helper that does this.
+    /// PUC `luaC_fix`: move `h` from the head of `all` onto `fixed`, gray, so
+    /// marking, barriers and weak tables skip it and only the heap's drop
+    /// frees it.
+    ///
+    /// # Safety
+    /// `h` is the object at the head of `all`.
+    unsafe fn fix_newest(&mut self, h: *mut GcHeader) {
+        debug_assert!(self.all == h);
+        // SAFETY: the caller's contract: `h` is a live object, first on `all`
+        unsafe {
+            self.all = (*h).next;
+            (*h).next = self.fixed;
+            (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
+        }
+        self.fixed = h;
+    }
+
+    /// Make the fixed "not enough memory" string memory errors carry (PUC
+    /// `luaS_init` makes `memerrmsg` first thing and fixes it).
+    pub(super) fn make_memerr(&mut self) {
+        let s = self.intern(b"not enough memory");
+        // SAFETY: a new heap's first string was linked at the head of `all`
+        // by the intern just above
+        unsafe { self.fix_newest(s.as_ptr() as *mut GcHeader) };
+        self.mem_ctx().set_memerr(s);
+    }
+
+    /// [`Heap::new_native`] with `is_async` set: `f` is an `AsyncNativeFn`
+    /// the caller transmuted to `NativeFn` ([`crate::vm::async_drive`]).
     pub fn new_async_native(
         &mut self,
         f: crate::runtime::value::NativeFn,
@@ -297,6 +316,7 @@ impl Heap {
             upvals,
             is_async: true,
             kind: crate::vm::exec::native_call::NativeKind::Async,
+            builtin: Builtin::None,
         })
     }
 
@@ -333,7 +353,10 @@ impl Heap {
             open_upvals: LVec::new(self.mem()),
             tbc: LVec::new(self.mem()),
             top: 0,
-            pcall_depth: 0,
+            meta_conts: 0,
+            stale_frames: 0,
+            stack_extra: false,
+            frame_size: 0,
             hook: crate::vm::exec::HookState::default(),
             globals,
             host_stack: LVec::new(self.mem()),
@@ -349,6 +372,15 @@ impl Heap {
             payload,
             writable,
         ))
+    }
+
+    /// Recolour the dead-white `h` to the current white, out of line: the
+    /// hot path of [`Self::intern`] only tests the colour, and inlined, this
+    /// cold store made it keep `self` on the stack.
+    #[cold]
+    #[inline(never)]
+    fn resurrect(&self, h: &mut GcHeader) {
+        h.flags = h.with_slow((h.flags & !WHITE_BITS) | self.current_white);
     }
 
     /// Create (or find) a string. Short strings (≤ 40 bytes) are interned.
@@ -380,8 +412,7 @@ impl Heap {
                 unsafe {
                     let f = (*(p as *mut GcHeader)).flags;
                     if is_white(f) && (f & self.current_white) == 0 {
-                        (*(p as *mut GcHeader)).flags = (*(p as *mut GcHeader))
-                            .with_slow((f & !WHITE_BITS) | self.current_white);
+                        self.resurrect(&mut *(p as *mut GcHeader));
                     }
                 }
             }

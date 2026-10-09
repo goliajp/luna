@@ -37,6 +37,8 @@ fn string_arith(
         _ => a.get(vm, 1),
     };
     if let (Some(nx), Some(ny)) = (tonum(x), tonum(y)) {
+        // `tonum` pushed each converted operand
+        vm.native_push(2);
         let r = match op {
             Some(op) => arith_num(vm.version(), op, nx, ny).map_err(|msg| vm.plain_err(msg))?,
             // unary minus works on the second (duplicated) operand
@@ -60,9 +62,10 @@ fn string_arith(
         );
         return Err(raise_str(vm, &msg));
     }
-    // lua_call from C: the metamethod cannot yield
+    // `trymt` moves the metamethod below the two operands, so the call
+    // sits at the first argument; a lua_call from C, it cannot yield
     let r = vm
-        .call_noyield(mm, &[x, y])?
+        .call_value_at(mm, &[x, y], fs + 1)?
         .first()
         .copied()
         .unwrap_or(Value::Nil);

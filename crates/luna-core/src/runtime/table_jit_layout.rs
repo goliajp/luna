@@ -14,6 +14,9 @@ pub const TABLE_ACOUNT_OFFSET: usize = std::mem::offset_of!(Table, acount);
 /// See [`TABLE_ACOUNT_OFFSET`].
 pub const TABLE_APREFIX_OFFSET: usize = std::mem::offset_of!(Table, aprefix);
 
+/// `aprefix` when the leading run is not kept (`table::APREFIX_UNKNOWN`).
+pub const TABLE_APREFIX_UNKNOWN: u32 = super::APREFIX_UNKNOWN;
+
 /// Byte offset of the `u32` `alimit`: compiled code bounds its inline
 /// array accesses by it, and leaves an index past it (only a 5.4 table
 /// has one below the array size) to the helpers, which raise it.

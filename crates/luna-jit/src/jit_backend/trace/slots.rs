@@ -32,10 +32,12 @@ pub(super) fn rw_ranges(inst: luna_core::vm::isa::Inst) -> ([(u32, u32); 3], [(u
     let r0 = [none; 3];
     let w1 = |x: u32| [one(x), none];
     let w0 = [none; 2];
+    // `R[C]`, unless `k` makes C a constant
+    let val = if inst.k() { none } else { one(c) };
     match inst.op() {
         Op::Move => (r1(b), w1(a)),
         Op::LoadI | Op::LoadF | Op::LoadK | Op::LoadKx => (r0, w1(a)),
-        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip => (r0, w1(a)),
+        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip | Op::LTrueSkip => (r0, w1(a)),
         // R[A..=A+B] := nil
         Op::LoadNil => (r0, [(a, b + 1), none]),
         Op::GetUpval => (r0, w1(a)),
@@ -44,11 +46,15 @@ pub(super) fn rw_ranges(inst: luna_core::vm::isa::Inst) -> ([(u32, u32); 3], [(u
         Op::GetTable => (r2(b, c), w1(a)),
         Op::GetI => (r1(b), w1(a)),
         Op::GetField => (r1(b), w1(a)),
-        // luna's set ops always take the value from R[C] (the k flag of
-        // SetField / SetTabUp marks B as a constant key)
-        Op::SetTabUp => (r1(c), w0),
-        Op::SetTable => ([one(a), one(b), one(c)], w0),
-        Op::SetI | Op::SetField => (r2(a, c), w0),
+        // a set op takes its value from K[C] with `k` set, else from R[C]
+        Op::SetTabUp | Op::SetTabUpK => ([val, none, none], w0),
+        Op::SetTabUpR => ([one(b), val, none], w0),
+        Op::SetTable => ([one(a), one(b), val], w0),
+        Op::SetI | Op::SetField | Op::SetTableK => ([one(a), val, none], w0),
+        Op::GetTableK => (r1(b), w1(a)),
+        Op::GetTabUpR => ([val, none, none], w1(a)),
+        Op::GetGlobal => (r0, w1(a)),
+        Op::SetGlobal => (r1(a), w0),
         Op::NewTable => (r0, w1(a)),
         // a key too far for the constant field sits in R[C]
         Op::SelfOp if inst.k() => (r1(b), [(a, 2), none]),
@@ -80,13 +86,33 @@ pub(super) fn rw_ranges(inst: luna_core::vm::isa::Inst) -> ([(u32, u32); 3], [(u
         | Op::BOrK
         | Op::BXorK
         | Op::ShrI
-        | Op::ShlI => (r1(b), w1(a)),
+        | Op::ShlI
+        | Op::ShlK
+        | Op::ShrK => (r1(b), w1(a)),
+        Op::AddKK
+        | Op::SubKK
+        | Op::MulKK
+        | Op::ModKK
+        | Op::PowKK
+        | Op::DivKK
+        | Op::IDivKK
+        | Op::BAndKK
+        | Op::BOrKK
+        | Op::BXorKK
+        | Op::ShlKK
+        | Op::ShrKK => (r0, w1(a)),
+        Op::LtK | Op::LeK => (r1(a), w0),
+        Op::EqKK | Op::LtKK | Op::LeKK => (r0, w0),
         Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI => (r1(a), w0),
         Op::Unm | Op::BNot | Op::Not | Op::Len => (r1(b), w1(a)),
-        // R[A] := concat(R[A..A+B-1])
-        Op::Concat => ([(a, b), none, none], w1(a)),
+        // R[A] := concat(R[A..A+B-1]); with `k`, R[A] := concat(R[C..C+B-1]),
+        // the result left in R[C] too
+        Op::Concat => {
+            let (first, out) = inst.concat_operands();
+            ([(first, b), none, none], [one(first), one(out)])
+        }
         Op::Close | Op::Tbc => (r0, w0),
-        Op::Jmp | Op::ExtraArg => (r0, w0),
+        Op::Jmp | Op::JmpClose | Op::JmpCloseBack | Op::ExtraArg => (r0, w0),
         Op::Eq | Op::Lt | Op::Le => (r2(a, b), w0),
         Op::EqK => (r1(a), w0),
         Op::Test => (r1(a), w0),
@@ -105,11 +131,20 @@ pub(super) fn rw_ranges(inst: luna_core::vm::isa::Inst) -> ([(u32, u32); 3], [(u
         // R[A+1] = count, R[A] = idx, R[A+2] = step, R[A+3] = ctrl
         // Reads R[A], R[A+1], R[A+2]; writes R[A], R[A+1], R[A+3].
         Op::ForLoop | Op::ForPrep => ([(a, 3), none, none], [(a, 2), (a + 3, 1)]),
-        Op::TForPrep => (r0, w0),
+        // 5.5: R[A] count, R[A+1] step, R[A+2] the index and variable
+        Op::ForLoop55 | Op::ForPrep55 => ([(a, 3), none, none], [(a, 3), none]),
+        Op::TForPrep | Op::TForPrep53 => (r0, w0),
+        // swaps the closing value and the control
+        Op::TForPrep55 => ([(a + 2, 2), none, none], [(a + 2, 2), none]),
         // R[A+4], R[A+5], ..., R[A+3+C] := R[A](R[A+1], R[A+2])
         Op::TForCall => ([(a, 3), none, none], [(a + 4, c), none]),
+        Op::TForCall53 => ([(a, 3), none, none], [(a + 3, c), none]),
+        // the control is the first variable
+        Op::TForCall55 => ([(a, 2), one(a + 3), none], [(a + 3, c), none]),
         // If R[A+4] ~= nil: R[A+2] = R[A+4]; pc -= Bx
         Op::TForLoop => (r1(a + 4), w1(a + 2)),
+        Op::TForLoop53 => (r1(a + 3), w1(a + 2)),
+        Op::TForLoop55 => (r1(a + 3), w0),
         // R[A] is the table; R[A+1..A+B] are values to set
         Op::SetList => ([(a, b + 1), none, none], w0),
         Op::Closure => (r0, w1(a)),

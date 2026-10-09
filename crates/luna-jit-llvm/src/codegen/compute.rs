@@ -63,15 +63,18 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
     let param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
         (0..plan.num_params).map(|_| i64_type.into()).collect();
     let fn_type = i64_type.fn_type(&param_types, false);
-    // the body, which self-recursive calls enter directly, and the entry
-    // the dispatcher calls, which checks once what the body relies on
+    // the entry the dispatcher calls checks once what the body relies on
+    // and fills the self-call context; the body, which self-recursive
+    // calls enter directly, takes the context's address first
+    let entry = module.add_function("luna_jit_llvm_entry", fn_type, None);
+    let mut body_params = vec![i64_type.into()];
+    body_params.extend_from_slice(&param_types);
     let function = module.add_function(
         "luna_jit_llvm_body",
-        fn_type,
+        i64_type.fn_type(&body_params, false),
         Some(inkwell::module::Linkage::Private),
     );
     function.set_call_conventions(FASTCC);
-    let entry = module.add_function("luna_jit_llvm_entry", fn_type, None);
 
     // Declare every `luna_jit_*` helper as an
     // external IR function. Used by Op::GetUpval / Op::Call emit
@@ -105,6 +108,18 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         regs,
         helpers: &helpers,
         may_park: may_park(plan),
+        stacksave: inkwell::intrinsics::Intrinsic::find("llvm.stacksave")?
+            .get_declaration(&module, &[ctx_static.ptr_type(Default::default()).into()])?,
+        self_call_desc: luna_jit_helpers::self_call_desc(
+            plan.num_params,
+            0,
+            0,
+            if plan.returns_one {
+                luna_jit_helpers::SELF_CALL_RET_INT
+            } else {
+                luna_jit_helpers::SELF_CALL_RET_NONE
+            },
+        ),
     };
 
     // Populate `regs[0..num_params]` from the fn
@@ -113,7 +128,7 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
     // bound them with `LoadI` / `Move`.
     for i in 0..plan.num_params {
         let slot = emitter.reg_slot_ptr(i, "param_slot")?;
-        let arg = function.get_nth_param(i)?.into_int_value();
+        let arg = function.get_nth_param(i + 1)?.into_int_value();
         builder.build_store(slot, arg).ok()?;
     }
 
@@ -219,12 +234,14 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
 }
 
 /// LLVM's `fastcc` calling convention, for the body's calls to itself.
-const FASTCC: u32 = 8;
+pub(super) const FASTCC: u32 = 8;
 
 /// The entry the dispatcher calls: checks that the upvalue the body's
 /// self-recursive calls go through still holds the running closure (they
 /// are direct calls to the body, right only while it does; nothing the
-/// body runs can reassign it), then runs the body.
+/// body runs can reassign it), fills the self-call context
+/// (`luna_jit_enter_ctx`: the native stack limit, the failure flag and
+/// the calls the dialect allows), then runs the body.
 fn emit_entry<'ctx>(
     ctx: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -234,9 +251,15 @@ fn emit_entry<'ctx>(
     helpers: &std::collections::HashMap<&'static str, inkwell::values::FunctionValue<'ctx>>,
 ) -> Option<()> {
     let i64_type = ctx.i64_type();
+    let zero = i64_type.const_zero();
     let start = ctx.append_basic_block(entry, "entry");
     builder.position_at_end(start);
-    if let Some(idx) = plan.self_upval_idx {
+    let self_calls = plan
+        .self_call_pcs
+        .iter()
+        .chain(&plan.tail_call_pcs)
+        .any(|&c| c);
+    if let Some(idx) = plan.self_upval_idx.filter(|_| self_calls) {
         let check = helpers.get("luna_jit_self_upval_check").copied()?;
         let idx_arg = i64_type.const_int(u64::from(idx), false);
         let ok = builder
@@ -246,7 +269,6 @@ fn emit_entry<'ctx>(
             inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
             inkwell::values::ValueKind::Instruction(_) => return None,
         };
-        let zero = i64_type.const_zero();
         let is_ok = builder
             .build_int_compare(inkwell::IntPredicate::NE, ok, zero, "self_ok")
             .ok()?;
@@ -257,8 +279,24 @@ fn emit_entry<'ctx>(
         builder.build_return(Some(&zero)).ok()?;
         builder.position_at_end(go);
     }
-    let args: Vec<inkwell::values::BasicMetadataValueEnum> =
-        entry.get_param_iter().map(Into::into).collect();
+    let self_ctx = if self_calls {
+        let words = i64_type.array_type(luna_jit_helpers::SELF_CTX_WORDS as u32);
+        let at = builder.build_alloca(words, "self_ctx").ok()?;
+        let at = builder
+            .build_ptr_to_int(at, i64_type, "self_ctx_addr")
+            .ok()?;
+        let fill = helpers.get("luna_jit_enter_ctx").copied()?;
+        builder.build_call(fill, &[at.into()], "fill_ctx").ok()?;
+        at
+    } else {
+        zero
+    };
+    let mut args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![self_ctx.into()];
+    args.extend(
+        entry
+            .get_param_iter()
+            .map(Into::<inkwell::values::BasicMetadataValueEnum>::into),
+    );
     let call = builder.build_call(body, &args, "body").ok()?;
     call.set_call_convention(FASTCC);
     let v = match call.try_as_basic_value() {
@@ -269,15 +307,15 @@ fn emit_entry<'ctx>(
     Some(())
 }
 
-/// Whether the body can park a deopt (`luna_jit_park_deopt`, or a check
-/// helper that parks one): a self-recursive call must then look after it
-/// returns whether the callee parked one.
+/// Whether the body can park a deopt of its own (`luna_jit_park_deopt`, or
+/// a check helper that parks one): a self-recursive call must then ask
+/// after it returns whether the callee parked one.
 fn may_park(plan: &ChunkPlan) -> bool {
     plan.code.iter().enumerate().any(|(pc, ins)| {
         plan.reachable[pc]
             && match ins.op() {
                 Op::GetUpval => plan.is_upval_value_read[pc],
-                Op::Mod => true,
+                Op::Mod | Op::ModK => true,
                 _ => false,
             }
     })
