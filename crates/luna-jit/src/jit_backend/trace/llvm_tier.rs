@@ -114,6 +114,8 @@ pub(crate) fn tier_up_llvm(
                 *t.source.borrow_mut() = Some(p);
                 return None;
             };
+            // written on the compile thread
+            luna_core::jit::code_fence();
             let entry = install(storage, c)?;
             super::code_dump::dump("tier-up-llvm", ct.head_pc, entry as *const u8);
             return Some(entry);
@@ -132,13 +134,6 @@ pub(crate) fn tier_up_llvm(
             let ticket = crate::jit_backend::llvm_thread::submit(
                 Box::new(move || {
                     let c = compile(&src.lir, &src.relocs);
-                    // code another core may run (`cores_synced`) or none
-                    let c = match c {
-                        Ok(_) if !crate::jit_backend::llvm_thread::cores_synced() => {
-                            Err("llvm:cores-not-synced")
-                        }
-                        c => c,
-                    };
                     *slot.lock().expect("a job never panics holding its result") = Some(c);
                 }),
                 std::time::Instant::now(),

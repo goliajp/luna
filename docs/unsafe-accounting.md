@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1423** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1422** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 224 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **7** | six `#[doc(hidden)]`, and `MemOwner::raw`, see §5 |
 | **`pub unsafe extern "C" fn`** | 200 | the C API (143), the `luna_jit_*` helpers compiled code calls (51, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
@@ -47,11 +47,11 @@ quotes the pattern counts too.
 | | `vm` (other) | 48 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
 | | `stdio.rs` | 1 | C-style standard output writing descriptor 1 without closing it |
 | | `native_stack.rs` | 10 | reading the running thread's stack bounds from the OS (`pthread_getattr_np`, `pthread_get_stackaddr_np`, `GetCurrentThreadStackLimits`, and on glibc's and musl's main thread `getrlimit`, on glibc also `__libc_stack_end`) |
-| | `jit`, `frontend` | 11 | trace metadata handed to the backend; interned-name text |
+| | `jit`, `frontend` | 12 | trace metadata handed to the backend; the `isb` that lets a thread run code another thread wrote (aarch64); interned-name text |
 | | unit-test files under `src/` | 20 | tests that inspect raw layouts; a test `lua_Alloc` |
 | | `tests/` | 54 | integration tests: a poisoning global allocator, async wakers, userdata internals, a raw write into a read-only table, the host C library's `%p`, a counting `lua_Alloc`, the environment variables of the Windows file-name test |
 | `luna-jit` | `capi*` | 382 | the C API: raw `lua_State` pointers, C strings, `lua_Debug` and `luaL_Buffer` structs and C function pointers across the boundary (§3.7) |
-| | `jit_backend` | 61 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points (the LLVM backend's trace entries among them), the `membarrier` calls that let another core run code the LLVM compile thread wrote (aarch64 Linux), `Send` for handles that own JIT modules or code pages, copying compiled code out to share it between Vms, the debug dump of a trace's machine code |
+| | `jit_backend` | 59 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points (the LLVM backend's trace entries among them), `Send` for handles that own JIT modules or code pages, copying compiled code out to share it between Vms, the debug dump of a trace's machine code |
 | | other | 2 | the CLI's `arg` table and the `lua_facade` table handle |
 | | unit-test files under `src/` | 70 | tests that call compiled code or the `extern "C"` helpers directly |
 | | `tests/`, `benches/`, `examples/` | 43 | a C API state driven from Rust, a counting global allocator, the `send` overhead bench |
@@ -62,7 +62,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1423** | |
+| **Total** | | **1422** | |
 
 ## 3. Pattern catalog
 
@@ -398,7 +398,13 @@ the other arms do, and added 3. That is 1421.
 On musl the main thread's stack bounds are read as on glibc, its top less
 the stack size limit (musl's `pthread_getattr_np` gives only the part the
 kernel has mapped so far): one foreign block and one call, 2 more. That is
-1423, the ceiling now.
+1423.
+
+Code the LLVM backend's compile thread writes is made runnable on the
+Vm's thread by an `isb` the Vm's thread runs as it takes the entry (one
+block in luna-core's `jit`, for every operating system), in place of the
+two `membarrier` calls in `jit_backend` that covered aarch64 Linux only:
+1 less. That is 1422, the ceiling now.
 
 ## 5. Public `unsafe` surface
 

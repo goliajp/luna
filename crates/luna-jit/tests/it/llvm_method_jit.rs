@@ -112,7 +112,10 @@ fn background_code_becomes_the_entry() {
     let first = entry(&mut vm);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while entry(&mut vm) == first {
-        assert!(std::time::Instant::now() < deadline, "LLVM's code never arrived");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "LLVM's code never arrived"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     let taken = fib.proto.jit_next.take();
