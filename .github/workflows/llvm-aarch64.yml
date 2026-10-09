@@ -61,6 +61,8 @@ jobs:
         shell: pwsh
         run: |
           # every target: inkwell's default features initialise them all.
+          # libraries only (linking LLVM's tools starved the runner), and
+          # llvm-config, which llvm-sys reads
           # no DIA SDK: llvm-config would list its library by a path with
           # spaces, which llvm-sys cannot pass on
           # the generator is cmake's default, the newest Visual Studio installed
@@ -70,7 +72,8 @@ jobs:
             '-DLLVM_INCLUDE_TESTS=OFF', '-DLLVM_INCLUDE_EXAMPLES=OFF', '-DLLVM_INCLUDE_BENCHMARKS=OFF',
             '-DLLVM_INCLUDE_DOCS=OFF', '-DLLVM_ENABLE_BINDINGS=OFF',
             '-DLLVM_ENABLE_ZLIB=OFF', '-DLLVM_ENABLE_ZSTD=OFF', '-DLLVM_ENABLE_LIBXML2=OFF',
-            '-DLLVM_ENABLE_DIA_SDK=OFF'
+            '-DLLVM_ENABLE_DIA_SDK=OFF',
+            '-DLLVM_BUILD_TOOLS=OFF', '-DLLVM_BUILD_UTILS=OFF'
           ) | Set-Content llvm-configure.txt
       - uses: actions/cache@v6
         id: llvm
@@ -86,7 +89,6 @@ jobs:
           $v = $env:LLVM_VERSION
           $opts = Get-Content llvm-configure.txt
           cmake --version
-          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -products * -format text -property displayName
           Set-Location $env:RUNNER_TEMP
           gh release download "llvmorg-$v" -R llvm/llvm-project --pattern "llvm-$v.src.tar.xz" --pattern "cmake-$v.src.tar.xz"
           tar -xf "llvm-$v.src.tar.xz"
@@ -96,6 +98,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
           cmake --build build --config Release --target install --parallel
           if ($LASTEXITCODE -ne 0) { throw "LLVM build failed" }
+          cmake --build build --config Release --target llvm-config
+          if ($LASTEXITCODE -ne 0) { throw "llvm-config build failed" }
+          Copy-Item build\Release\bin\llvm-config.exe C:\llvm-18\bin\
       - name: point llvm-sys at LLVM 18
         shell: pwsh
         run: |
