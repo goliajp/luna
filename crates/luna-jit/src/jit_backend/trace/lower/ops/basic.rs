@@ -75,11 +75,9 @@ pub(super) fn emit_basic_op<E: Emit>(
             lw.bcx.def_var(regs[ins.a() as usize], v);
             lw.current_kinds[off + ins.a() as usize] = k;
         }
-        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip => {
-            let v = lw
-                .bcx
-                .ins()
-                .iconst(types::I64, i64::from(oc.op == Op::LoadTrue));
+        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip | Op::LTrueSkip => {
+            let t = matches!(oc.op, Op::LoadTrue | Op::LTrueSkip);
+            let v = lw.bcx.ins().iconst(types::I64, i64::from(t));
             lw.bcx.def_var(regs[ins.a() as usize], v);
             lw.current_kinds[off + ins.a() as usize] = RegKind::Bool;
             lw.known_int[off + ins.a() as usize] = None;

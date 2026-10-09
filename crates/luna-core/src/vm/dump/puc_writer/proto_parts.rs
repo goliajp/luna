@@ -43,6 +43,7 @@ pub(super) fn check_skips(p: &Proto, pc_map: &[u32]) -> Res<()> {
         let skips = matches!(
             i.op(),
             Op::LFalseSkip
+                | Op::LTrueSkip
                 | Op::Eq
                 | Op::Lt
                 | Op::Le

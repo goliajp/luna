@@ -276,13 +276,13 @@ mod tests {
     }
 
     #[test]
-    fn loadbool_true_with_skip_jumps_over_the_next_instruction() {
+    fn loadbool_true_with_skip_is_one_instruction() {
         let code = lower(vec![
             abc(LOADBOOL, 0, 1, 1),
             abc(LOADBOOL, 0, 0, 0),
             abc(RETURN, 0, 2, 0),
         ]);
-        assert_eq!(code[0].op(), Op::LoadTrue);
-        assert_eq!((code[1].op(), 1 + 1 + code[1].sj()), (Op::Jmp, 3));
+        assert_eq!(code.len(), 3);
+        assert_eq!((code[0].op(), code[0].a()), (Op::LTrueSkip, 0));
     }
 }

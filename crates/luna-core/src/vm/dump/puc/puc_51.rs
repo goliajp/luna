@@ -278,10 +278,7 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
                     (false, false) => lw.emit(enc_abc(Op::LoadFalse, a, 0, 0, false)?),
                     (false, true) => lw.emit(enc_abc(Op::LFalseSkip, a, 0, 0, false)?),
                     (true, false) => lw.emit(enc_abc(Op::LoadTrue, a, 0, 0, false)?),
-                    (true, true) => {
-                        lw.emit(enc_abc(Op::LoadTrue, a, 0, 0, false)?);
-                        lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, next + 1)?;
-                    }
+                    (true, true) => lw.emit(enc_abc(Op::LTrueSkip, a, 0, 0, false)?),
                 }
             }
             OP_LOADNIL => {

@@ -137,11 +137,12 @@ pub(super) fn is_whitelisted_op(op: Op) -> bool {
             // lookup through the receiver's table-valued `__index` links
             // (`luna_jit_op_self_checked`)
             | Op::SelfOp
-            // booleans: `LFalseSkip` writes false and skips the next op,
-            // which the recording already did not follow
+            // booleans: `LFalseSkip` / `LTrueSkip` write a boolean and skip
+            // the next op, which the recording already did not follow
             | Op::LoadFalse
             | Op::LoadTrue
             | Op::LFalseSkip
+            | Op::LTrueSkip
             | Op::Not
     )
 }

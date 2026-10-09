@@ -72,6 +72,7 @@ pub(super) fn emit_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) 
         | Op::LoadFalse
         | Op::LoadTrue
         | Op::LFalseSkip
+        | Op::LTrueSkip
         | Op::Not => emit_basic_op(lw, pl, oc),
         Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Pow => emit_float_arith_op(lw, pl, oc),
         Op::IDiv
