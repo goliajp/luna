@@ -207,12 +207,12 @@ optimization.
   keeps it from holding a machine register longer.
   Instructions: `tbl` 1.6–2.3% fewer, `token_bucket_1k` 1.0–1.4%,
   `sliding_window_500` up to 1.7%, `loop` unchanged, on both trace tiers.
-- LLVM backend: a trace moving to the optimizing tier is handed to the
-  compile thread at once, to be compiled after `llvm_after` if it was
-  entered again meanwhile; each later entry only checks whether LLVM's
-  code is ready. Before, each entry asked the backend, which read the
-  clock until `llvm_after` had passed (`sliding_window_500` on 5.4 ran
-  8% slower while LLVM had not yet taken over).
+- LLVM backend: a trace waiting for LLVM's code only reads flags at each
+  entry. The compile thread marks when `llvm_after` has passed, the first
+  entry after that hands the trace to it, and the first entry after
+  LLVM's code is ready switches to it. Before, each entry read the clock
+  until `llvm_after` had passed (`sliding_window_500` on 5.4 ran 8%
+  slower while LLVM had not yet taken over).
 
 - Conditions and `and` / `or` / `not` compile as PUC's code generator
   compiles them, in every dialect: a value of `a and b or c` goes into
