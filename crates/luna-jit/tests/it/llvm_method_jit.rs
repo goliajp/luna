@@ -132,7 +132,8 @@ fn background_code_turned_down_keeps_the_entry() {
     luna_jit::install_llvm_backend_with(
         &mut vm,
         luna_jit::jit_backend::LlvmBackend {
-            llvm_after: Some(std::time::Duration::ZERO),
+            // the first call is done well before the compile thread starts
+            llvm_after: Some(luna_jit::jit_backend::LLVM_AFTER),
         },
     );
     let cl = vm
