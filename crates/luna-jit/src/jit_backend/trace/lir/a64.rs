@@ -62,7 +62,7 @@ impl Masm for A64 {
         self.labels[l.0 as usize] = self.code.len() as u32;
     }
     fn align(&mut self, to: u32) {
-        while (self.code.len() * 4) as u32 % to != 0 {
+        while !((self.code.len() * 4) as u32).is_multiple_of(to) {
             self.put(0xd503_201f);
         }
     }
