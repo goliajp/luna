@@ -63,8 +63,9 @@ jobs:
           # every target: inkwell's default features initialise them all.
           # no DIA SDK: llvm-config would list its library by a path with
           # spaces, which llvm-sys cannot pass on
+          # the generator is cmake's default, the newest Visual Studio installed
           @(
-            '-G', 'Visual Studio 17 2022', '-A', 'ARM64', '-Thost=ARM64',
+            '-A', 'ARM64', '-Thost=ARM64',
             '-DCMAKE_INSTALL_PREFIX=C:/llvm-18',
             '-DLLVM_INCLUDE_TESTS=OFF', '-DLLVM_INCLUDE_EXAMPLES=OFF', '-DLLVM_INCLUDE_BENCHMARKS=OFF',
             '-DLLVM_INCLUDE_DOCS=OFF', '-DLLVM_ENABLE_BINDINGS=OFF',
@@ -84,6 +85,8 @@ jobs:
         run: |
           $v = $env:LLVM_VERSION
           $opts = Get-Content llvm-configure.txt
+          cmake --version
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -products * -format text -property displayName
           Set-Location $env:RUNNER_TEMP
           gh release download "llvmorg-$v" -R llvm/llvm-project --pattern "llvm-$v.src.tar.xz" --pattern "cmake-$v.src.tar.xz"
           tar -xf "llvm-$v.src.tar.xz"
