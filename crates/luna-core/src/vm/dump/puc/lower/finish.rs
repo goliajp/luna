@@ -54,6 +54,20 @@ impl Lowering {
         })
     }
 
+    /// [`Self::finish`] for 5.1–5.3, whose small-number operands luna
+    /// keeps in the instruction (see [`isa::imm_form`]).
+    pub(in crate::vm::dump::puc) fn finish_classic(
+        self,
+        raw_locvars: &[RawLocVar],
+        consts: &[crate::runtime::Value],
+    ) -> Result<Lowered, String> {
+        let mut l = self.finish(raw_locvars)?;
+        for i in l.code.iter_mut() {
+            *i = isa::imm_form::to_imm(*i, consts);
+        }
+        Ok(l)
+    }
+
     /// First luna pc at or after PUC pc `pc` (the code length past the end).
     fn luna_pc(&self, pc: u32) -> u32 {
         self.first

@@ -255,7 +255,12 @@ impl<'a> Compiler<'a> {
     }
 
     /// The finished function `lvl` on the heap; its vectors are kept.
-    fn finish_level(&mut self, lvl: Level<'a>, line: u32, last_line: u32) -> Gc<Proto> {
+    fn finish_level(&mut self, mut lvl: Level<'a>, line: u32, last_line: u32) -> Gc<Proto> {
+        if self.version <= LuaVersion::Lua53 {
+            for i in lvl.code.iter_mut() {
+                *i = crate::vm::isa::imm_form::to_imm(*i, &lvl.consts);
+            }
+        }
         let (proto, bufs) = lvl.into_proto(self.source, line, last_line, self.heap);
         self.pool.push_or_abort(bufs);
         self.heap.adopt_proto(proto)

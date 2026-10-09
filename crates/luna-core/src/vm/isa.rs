@@ -13,6 +13,7 @@ pub use op_info::ForLayout;
 /// Total number of opcodes defined in [`Op`].
 pub const NUM_OPS: usize = Op::LTrueSkip as usize + 1;
 
+pub mod imm_form;
 mod inst;
 mod inst_fields;
 pub use inst::*;
