@@ -1,19 +1,27 @@
 //! A constant operand of an arithmetic, bitwise or comparison operator is
 //! encoded in the instruction instead of being loaded into a register
 //! first: 5.4 / 5.5 take PUC's `ADDI`, `ADDK`, `EQI`... forms, 5.1–5.3 the
-//! constant forms on whichever side PUC's `RK` operands put it.
+//! constant forms on whichever side PUC's `RK` operands put it. 5.1–5.3 code
+//! is read here in those constant forms (`imm_form::to_k`): luna keeps a
+//! small number in the instruction, as the `imm_form` tests check.
 
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
 use luna_core::runtime::Heap;
 use luna_core::version::LuaVersion;
-use luna_core::vm::isa::{Inst, Op};
+use luna_core::vm::isa::{Inst, Op, imm_form};
 
 fn compile(version: LuaVersion, src: &str) -> Vec<Inst> {
     let ast = parse(src.as_bytes(), version).expect("parse");
     let mut heap = Heap::new();
     let proto = compile_chunk(&ast, version, b"=k", &mut heap).expect("compile");
-    proto.code.to_vec()
+    let k = |i: &Inst| imm_form::to_k(*i, &proto.consts).expect("constant form");
+    match version {
+        LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => {
+            proto.code.iter().map(k).collect()
+        }
+        _ => proto.code.to_vec(),
+    }
 }
 
 fn ops(version: LuaVersion, src: &str) -> Vec<Op> {

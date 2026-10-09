@@ -400,5 +400,5 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
         }
         pc += 1;
     }
-    lw.finish(&raw.locvars)
+    lw.finish_classic(&raw.locvars, &raw.consts)
 }

@@ -250,7 +250,7 @@ pub(super) fn translate(
         }
         pc += 1;
     }
-    lw.finish(&raw.locvars)
+    lw.finish_classic(&raw.locvars, &raw.consts)
 }
 
 // pc += sBx; if (A) close all upvalues >= R(A - 1)
