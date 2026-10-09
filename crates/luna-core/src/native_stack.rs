@@ -108,6 +108,12 @@ mod os {
         if let Some(low) = super::main_thread_low() {
             return Some(low);
         }
+        stack_bounds().map(|(addr, _)| addr)
+    }
+
+    /// The running thread's stack as the C library reports it: its lowest
+    /// address and its size.
+    pub(super) fn stack_bounds() -> Option<(usize, usize)> {
         let mut attr = Attr([0; 128]);
         let mut addr: *mut c_void = std::ptr::null_mut();
         let mut size = 0usize;
@@ -120,7 +126,7 @@ mod os {
             }
             let r = pthread_attr_getstack(&attr, &mut addr, &mut size);
             pthread_attr_destroy(&mut attr);
-            (r == 0).then_some(addr as usize)
+            (r == 0).then_some((addr as usize, size))
         }
     }
 }
@@ -161,9 +167,37 @@ fn main_thread_low() -> Option<usize> {
     top.checked_sub(rlim[0] as usize)
 }
 
+/// The main thread's stack on musl: its top less the stack size limit.
+/// musl's `pthread_getattr_np` gives the main thread only the part of its
+/// stack the kernel has mapped so far (about 100 KiB below the stack
+/// pointer at start), which the stack grows past on demand; the top it
+/// gives is right.
 #[cfg(all(
     any(target_os = "linux", target_os = "android"),
-    not(target_env = "gnu"),
+    target_env = "musl",
+    not(miri)
+))]
+fn main_thread_low() -> Option<usize> {
+    const RLIMIT_STACK: i32 = 3;
+    unsafe extern "C" {
+        fn getpid() -> i32;
+        fn gettid() -> i32;
+        fn getrlimit(resource: i32, rlim: *mut [u64; 2]) -> i32;
+    }
+    let mut rlim = [0u64; 2];
+    // SAFETY: the C library's own process and thread ids, and the stack
+    // size limit written to a local of `struct rlimit`'s layout
+    let (main, r) = unsafe { (gettid() == getpid(), getrlimit(RLIMIT_STACK, &mut rlim)) };
+    if !main || r != 0 || rlim[0] == u64::MAX {
+        return None;
+    }
+    let (addr, size) = os::stack_bounds()?;
+    (addr + size).checked_sub(rlim[0] as usize)
+}
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    not(any(target_env = "gnu", target_env = "musl")),
     not(miri)
 ))]
 fn main_thread_low() -> Option<usize> {
