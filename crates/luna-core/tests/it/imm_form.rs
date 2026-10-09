@@ -1,9 +1,9 @@
 //! 5.1–5.3 code keeps small-number operands in the instruction
 //! (`luna_core::vm::isa::imm_form`): one instruction stands for one, the
 //! constant table is PUC's, and the bytecode PUC's `luac` writes reads in
-//! and writes out unchanged. The `luac` round trip needs `PUC_LUAC_51` …
-//! `PUC_LUAC_53`; a dialect without one is skipped with a notice, or fails
-//! under `LUNA_DIFF_PUC_REQUIRE_ALL=1`.
+//! and writes out unchanged, 5.1's vararg flags included. The `luac` round
+//! trip needs `PUC_LUAC_51` … `PUC_LUAC_53`; a dialect without one is
+//! skipped with a notice, or fails under `LUNA_DIFF_PUC_REQUIRE_ALL=1`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,6 +32,15 @@ if a == 4 then x = 0 end if a ~= 4 then x = 0 end
 if a == -0.0 then x = 0 end if a < 1.0 then x = 0 end if a < 300 then x = 0 end
 if a == 's' then x = 0 end if b > -127 then x = 0 end if b < 128 then x = 0 end
 return x, y, z, w, f, g, h, m";
+
+/// The three kinds of 5.1 vararg function: the main function (PUC's
+/// `VARARG_ISVARARG`), one that reads `...` (`| VARARG_HASARG`) and one that
+/// leaves it to the `arg` table (`| VARARG_NEEDSARG`).
+const VARARGS: &str = "local function uses(...) return select('#', ...) end
+local function ignores(a, ...) return a end
+local function plain(a) return a end
+return uses(1, 2), ignores(3), plain(4), ...
+";
 
 fn fixtures(dialect: &str) -> Vec<PathBuf> {
     // 5.1 has no directory of its own: it takes the 5.2 programs it parses
@@ -161,7 +170,9 @@ fn luac_bytecode_reads_in_and_writes_out_unchanged() {
     let require = std::env::var_os("LUNA_DIFF_PUC_REQUIRE_ALL").is_some();
     let out = std::env::temp_dir().join(format!("luna-imm-form-{}.luac", std::process::id()));
     let src = std::env::temp_dir().join(format!("luna-imm-form-{}.lua", std::process::id()));
+    let va = std::env::temp_dir().join(format!("luna-imm-form-va-{}.lua", std::process::id()));
     std::fs::write(&src, FORMS).expect("temp source");
+    std::fs::write(&va, VARARGS).expect("temp source");
     let mut failed = Vec::new();
     for &(dialect, version, env) in DIALECTS {
         let Ok(bin) = std::env::var(env) else {
@@ -171,6 +182,17 @@ fn luac_bytecode_reads_in_and_writes_out_unchanged() {
         };
         let mut files = fixtures(dialect);
         files.push(src.clone());
+        files.push(va.clone());
+        // what luna compiles from it is what luac compiles, vararg flags too
+        assert!(luac(&bin, &va, &out), "{dialect}: luac rejects VARARGS");
+        let mut lua = vm(version);
+        let name = format!("@{}", va.display());
+        let f = lua
+            .load(VARARGS.as_bytes(), name.as_bytes())
+            .expect("VARARGS compiles");
+        if dump(&mut lua, Value::Closure(f)) != std::fs::read(&out).expect("luac output") {
+            failed.push(format!("{dialect} VARARGS compiled by luna"));
+        }
         let mut n = 0;
         for path in files {
             if !luac(&bin, &path, &out) {
@@ -180,16 +202,7 @@ fn luac_bytecode_reads_in_and_writes_out_unchanged() {
             let mut vm = vm(version);
             let f = vm.load(&bytes, b"=x").expect("luac output loads");
             assert_one_for_one(dialect, f.proto);
-            let again = dump(&mut vm, Value::Closure(f));
-            // luna writes a 5.1 main function's vararg flag as 3 where luac
-            // writes 2: from 5.1 the bytes must come back the second time
-            let back = if version == LuaVersion::Lua51 {
-                let g = vm.load(&again, b"=x").expect("the dump loads");
-                dump(&mut vm, Value::Closure(g)) == again
-            } else {
-                again == bytes
-            };
-            if !back {
+            if dump(&mut vm, Value::Closure(f)) != bytes {
                 failed.push(format!("{dialect} {}", path.display()));
             }
             n += 1;
@@ -197,6 +210,7 @@ fn luac_bytecode_reads_in_and_writes_out_unchanged() {
         assert!(n > 1, "{dialect}: luac compiled {n} files");
     }
     let _ = (std::fs::remove_file(&out), std::fs::remove_file(&src));
+    let _ = std::fs::remove_file(&va);
     assert!(
         failed.is_empty(),
         "written back differently:\n{}",

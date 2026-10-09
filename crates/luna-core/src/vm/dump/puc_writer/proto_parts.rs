@@ -6,11 +6,14 @@ pub(super) fn needs_close(p: &Proto) -> bool {
     crate::runtime::function_close::needs_close(&p.code, &p.protos)
 }
 
-pub(super) fn vararg_byte(p: &Proto, d: Dialect, vatab: bool) -> u8 {
+/// `main`: the chunk's main function.
+pub(super) fn vararg_byte(p: &Proto, d: Dialect, vatab: bool, main: bool) -> u8 {
     if !p.is_vararg {
         return 0;
     }
     match d {
+        // a main function is VARARG_ISVARARG only: it has no `arg` local
+        Dialect::V51 if main => 2,
         // VARARG_ISVARARG | VARARG_HASARG for the `arg` local, plus
         // VARARG_NEEDSARG when it holds the extra arguments
         Dialect::V51 if p.has_compat_vararg_arg => 7,
