@@ -224,7 +224,7 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
         line_defined: p.line_defined,
         last_line_defined: p.last_line_defined,
         num_params: p.num_params,
-        vararg: vararg_byte(p, d, vatab),
+        vararg: vararg_byte(p, d, vatab, main),
         max_stack: body.frame as u8,
         code: body.code,
         lines: body.lines,
