@@ -54,6 +54,9 @@ fn compile_main_body(
         last_line: 0,
         force_line: None,
         str_cache: LMap::new(mem),
+        spine: scratch.spine.take(),
+        lvs: scratch.lvs.take(),
+        operands: scratch.operands.take(),
     };
     c.sym_strs.clear();
     c.sym_strs.resize_or_abort(ast.names.len(), None);
@@ -75,6 +78,10 @@ fn compile_main_body(
     let proto = c.finish_level(lvl, 0, 0);
     scratch.levels = c.pool;
     scratch.sym_strs = c.sym_strs;
+    c.spine.clear();
+    scratch.spine = c.spine;
+    scratch.lvs = c.lvs;
+    scratch.operands = c.operands;
     scratch.open = c.levels.recycle();
     Ok((proto, last_target))
 }
