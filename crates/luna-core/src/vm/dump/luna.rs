@@ -221,6 +221,7 @@ fn r_proto(
         locvars: heap.block_of(locvars.into_iter()),
         cache: std::cell::Cell::new(None),
         jit: std::cell::Cell::new(crate::runtime::function::JitProtoState::Untried),
+        jit_next: std::cell::Cell::new(None),
         env_upval_idx,
         trace_hot_count: std::cell::Cell::new(0),
         call_hot_count: std::cell::Cell::new(0),

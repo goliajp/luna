@@ -76,3 +76,45 @@ fn a_register_nothing_wrote_is_nil() {
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(text(&r), "nil function");
 }
+
+/// LLVM's code for a function, compiled on the compile thread, replaces
+/// Cranelift's as the function's own entry at the next call, so calls
+/// reach it with nothing in between.
+#[test]
+fn background_code_becomes_the_entry() {
+    use luna_jit::runtime::function::JitProtoState;
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    luna_jit::install_llvm_backend_with(
+        &mut vm,
+        luna_jit::jit_backend::LlvmBackend {
+            llvm_after: Some(std::time::Duration::ZERO),
+        },
+    );
+    let cl = vm
+        .load(
+            b"local function fib(n) if n < 2 then return n end return fib(n - 1) + fib(n - 2) end
+              return fib, function() return fib(15) end",
+            b"=t",
+        )
+        .expect("compile");
+    let r = vm.call_value(Value::Closure(cl), &[]).expect("run");
+    let (Value::Closure(fib), Value::Closure(run)) = (r[0], r[1]) else {
+        panic!("{r:?}")
+    };
+    let entry = |vm: &mut luna_jit::vm::Vm| {
+        let r = vm.call_value(Value::Closure(run), &[]).expect("run");
+        assert!(matches!(r[0], Value::Int(610)), "{r:?}");
+        match fib.proto.jit.get() {
+            JitProtoState::Compiled { entry, .. } => entry,
+            s => panic!("{s:?}"),
+        }
+    };
+    let first = entry(&mut vm);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while entry(&mut vm) == first {
+        assert!(std::time::Instant::now() < deadline, "LLVM's code never arrived");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let taken = fib.proto.jit_next.take();
+    assert!(taken.is_none(), "the cell stays after its code was taken");
+}

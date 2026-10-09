@@ -23,6 +23,7 @@ impl Vm {
             }
             self.populate_jit_cache(proto);
         }
+        take_jit_next(&proto);
         match proto.jit.get() {
             JitProtoState::Compiled {
                 entry,
@@ -166,6 +167,7 @@ impl Vm {
             }
             self.populate_jit_cache(proto);
         }
+        take_jit_next(&proto);
         let JitProtoState::Compiled {
             entry,
             num_args,
@@ -343,5 +345,40 @@ impl Vm {
         self.heap.gc_set_stopped(stopped);
         self.g.frames_native = native_before;
         r
+    }
+}
+
+/// Puts the code a backend finished compiling in the background (see
+/// `Proto::jit_next`) in place of `proto`'s entry.
+#[inline]
+fn take_jit_next(proto: &crate::runtime::function::Proto) {
+    use crate::runtime::function::JitProtoState;
+    let Some(next) = proto.jit_next.take() else {
+        return;
+    };
+    let ready = next.load(std::sync::atomic::Ordering::Acquire);
+    if ready == 0 {
+        proto.jit_next.set(Some(next));
+        return;
+    }
+    if let JitProtoState::Compiled {
+        num_args,
+        returns_one,
+        arg_float_mask,
+        arg_table_mask,
+        ret_is_float,
+        ret_is_table,
+        ..
+    } = proto.jit.get()
+    {
+        proto.jit.set(JitProtoState::Compiled {
+            entry: ready as *const u8,
+            num_args,
+            returns_one,
+            arg_float_mask,
+            arg_table_mask,
+            ret_is_float,
+            ret_is_table,
+        });
     }
 }
