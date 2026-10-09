@@ -139,6 +139,15 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         builder.build_store(slot, arg).ok()?;
     }
 
+    if plan
+        .self_call_pcs
+        .iter()
+        .chain(&plan.tail_call_pcs)
+        .any(|&c| c)
+    {
+        emitter.emit_self_guard(plan.num_params)?;
+    }
+
     // Walk PCs; switch BB on bb_starts boundaries; terminators
     // (Return*/Jmp/Lt|Le|Eq) handled here; non-CF ops delegated to
     // `emitter.emit_op`.

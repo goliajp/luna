@@ -422,22 +422,40 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         Some(())
     }
 
-    /// A self call made natively while the native stack is above the
-    /// context's limit and calls are left in its budget (as the Cranelift
-    /// tier's stub does), else through `luna_jit_self_call_slow`, which
-    /// makes it in the interpreter or raises "stack overflow" and sets the
-    /// context's failure flag when it fails.
+    /// A self call: the body itself, with one call fewer left. The body
+    /// checks on entry whether it may run natively (`emit_self_guard`), so
+    /// the call is a plain call LLVM can turn into a loop.
     fn guarded_self_call(
         &self,
         args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
         name: &str,
     ) -> Option<inkwell::values::IntValue<'ctx>> {
         let builder = self.builder;
-        let i64t = self.i64_type;
-        let int_of = |call: inkwell::values::CallSiteValue<'ctx>| match call.try_as_basic_value() {
+        let left = self.function.get_nth_param(2)?.into_int_value();
+        let one = self.i64_type.const_int(1, false);
+        let fewer = builder.build_int_sub(left, one, "fewer").ok()?;
+        let mut body_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = vec![
+            self.function.get_nth_param(0)?.into(),
+            self.function.get_nth_param(1)?.into(),
+            fewer.into(),
+        ];
+        body_args.extend_from_slice(args);
+        let call = builder.build_call(self.function, &body_args, name).ok()?;
+        call.set_call_convention(self.function.get_call_conventions());
+        match call.try_as_basic_value() {
             inkwell::values::ValueKind::Basic(bv) => Some(bv.into_int_value()),
             inkwell::values::ValueKind::Instruction(_) => None,
-        };
+        }
+    }
+
+    /// At the body's start, when it was entered by a self call: with the
+    /// native stack below the context's limit, or no calls left in the
+    /// budget, have `luna_jit_self_call_slow` make this call instead (in
+    /// the interpreter, or raising "stack overflow"), as the Cranelift
+    /// tier's stub does, and return its result.
+    pub(super) fn emit_self_guard(&self, num_params: u32) -> Option<()> {
+        let builder = self.builder;
+        let i64t = self.i64_type;
         let ctx_arg = self.function.get_nth_param(0)?.into_int_value();
         let limit = self.function.get_nth_param(1)?.into_int_value();
         let left = self.function.get_nth_param(2)?.into_int_value();
@@ -449,60 +467,49 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         let sp_reg = self
             .ctx
             .metadata_node(&[self.ctx.metadata_string(sp_name).into()]);
-        let sp = int_of(
-            builder
-                .build_call(self.read_register, &[sp_reg.into()], "sp")
-                .ok()?,
-        )?;
+        let sp = builder
+            .build_call(self.read_register, &[sp_reg.into()], "sp")
+            .ok()?;
+        let sp = match sp.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
+            inkwell::values::ValueKind::Instruction(_) => return None,
+        };
         let low = builder
             .build_int_compare(inkwell::IntPredicate::ULT, sp, limit, "stack_low")
             .ok()?;
-        let one = i64t.const_int(1, false);
         let spent = builder
-            .build_int_compare(inkwell::IntPredicate::SLE, left, one, "calls_spent")
+            .build_int_compare(
+                inkwell::IntPredicate::SLE,
+                left,
+                i64t.const_int(1, false),
+                "calls_spent",
+            )
             .ok()?;
         let slow = builder.build_or(low, spent, "go_slow").ok()?;
-        let fast_bb = self
-            .ctx
-            .append_basic_block(self.function, &format!("{name}_fast"));
-        let slow_bb = self
-            .ctx
-            .append_basic_block(self.function, &format!("{name}_slow"));
-        let join_bb = self
-            .ctx
-            .append_basic_block(self.function, &format!("{name}_join"));
+        let slow_bb = self.ctx.append_basic_block(self.function, "self_slow");
+        let go_bb = self.ctx.append_basic_block(self.function, "self_native");
         builder
-            .build_conditional_branch(slow, slow_bb, fast_bb)
+            .build_conditional_branch(slow, slow_bb, go_bb)
             .ok()?;
-
-        builder.position_at_end(fast_bb);
-        let fewer = builder.build_int_sub(left, one, "fewer").ok()?;
-        let mut body_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
-            vec![ctx_arg.into(), limit.into(), fewer.into()];
-        body_args.extend_from_slice(args);
-        let call = builder.build_call(self.function, &body_args, name).ok()?;
-        call.set_call_convention(self.function.get_call_conventions());
-        let fast = int_of(call)?;
-        builder.build_unconditional_branch(join_bb).ok()?;
-
         builder.position_at_end(slow_bb);
         let slow_fn = self.helpers.get("luna_jit_self_call_slow").copied()?;
         let desc = i64t.const_int(self.self_call_desc as u64, false);
         let zero = i64t.const_zero();
         let mut slow_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
             vec![ctx_arg.into(), desc.into(), left.into()];
-        slow_args.extend_from_slice(args);
+        for i in 0..num_params {
+            slow_args.push(self.function.get_nth_param(3 + i)?.into());
+        }
         slow_args.resize(7, zero.into());
-        let slow = int_of(
-            builder
-                .build_call(slow_fn, &slow_args, &format!("{name}_interp"))
-                .ok()?,
-        )?;
-        builder.build_unconditional_branch(join_bb).ok()?;
-
-        builder.position_at_end(join_bb);
-        let phi = builder.build_phi(i64t, &format!("{name}_result")).ok()?;
-        phi.add_incoming(&[(&fast, fast_bb), (&slow, slow_bb)]);
-        Some(phi.as_basic_value().into_int_value())
+        let r = builder
+            .build_call(slow_fn, &slow_args, "self_interp")
+            .ok()?;
+        let r = match r.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v,
+            inkwell::values::ValueKind::Instruction(_) => return None,
+        };
+        builder.build_return(Some(&r)).ok()?;
+        builder.position_at_end(go_bb);
+        Some(())
     }
 }
