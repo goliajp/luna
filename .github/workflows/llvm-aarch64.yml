@@ -62,9 +62,10 @@ jobs:
         run: |
           # every target: inkwell's default features initialise them all.
           # libraries only, and llvm-config, which llvm-sys reads; one
-          # compiler per project (`/MP1`) with four projects at a time: the
-          # default, `/MP` in every project at once, starved the runner
-          # until it lost contact
+          # compiler per project (`/MP1`) with two projects at a time: `/MP`
+          # in every project at once starved the runner until it lost
+          # contact, and four compilers ran out of memory on the AMDGPU
+          # target's generated tables
           # no DIA SDK: llvm-config would list its library by a path with
           # spaces, which llvm-sys cannot pass on
           # the generator is cmake's default, the newest Visual Studio installed
@@ -99,7 +100,7 @@ jobs:
           Rename-Item "cmake-$v.src" cmake
           cmake -S "llvm-$v.src" -B build @opts
           if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
-          cmake --build build --config Release --target install --parallel 4
+          cmake --build build --config Release --target install --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "LLVM build failed" }
           cmake --build build --config Release --target llvm-config
           if ($LASTEXITCODE -ne 0) { throw "llvm-config build failed" }
