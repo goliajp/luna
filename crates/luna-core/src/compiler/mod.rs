@@ -34,6 +34,7 @@ mod level;
 mod limits;
 mod lvalue;
 mod main_fn;
+pub use main_fn::compile_chunk_with_last_target;
 use main_fn::compile_main;
 mod resolve;
 mod return_stat;
@@ -89,22 +90,6 @@ pub(crate) fn compile_parsed(
     scratch: &mut CompileScratch,
 ) -> Result<Gc<Proto>, SyntaxError> {
     compile_main(ast, end_lines, version, source, heap, scratch).map(|(p, _)| p)
-}
-
-/// Diagnostic version of [`compile_chunk`] that also returns the main
-/// proto's final `last_target` value (the highest pc recorded as a jump
-/// destination — PUC `fs->lasttarget` equivalent). Used by the
-/// jump-target tracker unit tests at
-/// `crates/luna-core/tests/it/compiler_jump_target_tracker.rs`.
-pub fn compile_chunk_with_last_target(
-    ast: &ast::Chunk,
-    version: LuaVersion,
-    source_name: &[u8],
-    heap: &mut Heap,
-) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
-    let mut scratch = CompileScratch::new(heap.mem());
-    let source = heap.intern(source_name);
-    compile_main(ast, &[], version, source, heap, &mut scratch)
 }
 
 struct LocalVar<'a> {

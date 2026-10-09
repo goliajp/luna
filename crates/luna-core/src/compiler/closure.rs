@@ -1,4 +1,5 @@
-//! Function bodies: compiling a nested function into a closure.
+//! Function bodies: compiling a nested function into a closure, and the
+//! `function` statements that store one.
 
 use super::*;
 
@@ -104,5 +105,58 @@ impl<'a> Compiler<'a> {
             return Ok(Exp::Reg(self.exp_to_nextreg(Exp::Reloc(pc))?));
         }
         Ok(Exp::Reloc(pc))
+    }
+
+    pub(super) fn function_stat(
+        &mut self,
+        name: &FuncName,
+        body: &'a FuncBody,
+    ) -> Result<(), SyntaxError> {
+        self.last_line = name.base.line;
+        let is_method = name.method.is_some();
+        let saved = self.lr().freereg;
+        // PUC `funcstat` compiles the name first, then the body, then the
+        // store. Every GETFIELD / SETFIELD on a dotted name, and the store,
+        // carry the line of the statement's name, not the `end` token's, so
+        // a `nil` holder raises on the right line (errors.lua :430).
+        let saved_force = self.force_line.replace(name.base.line);
+        let lv = self.func_name_lv(name);
+        self.force_line = saved_force;
+        let lv = lv?;
+        let f = self.function_exp(body, is_method)?;
+        let saved_force = self.force_line.replace(name.base.line);
+        let res = self.store(lv, f);
+        self.force_line = saved_force;
+        res?;
+        self.set_freereg(saved);
+        Ok(())
+    }
+
+    /// PUC `funcname`: `a.b.c:m` as an assignment target.
+    fn func_name_lv(&mut self, name: &FuncName) -> Result<Lv, SyntaxError> {
+        let mut fields: LVec<&str> = LVec::new(self.heap.mem());
+        for n in self.ls(name.path) {
+            fields.push_or_abort(self.nm(n));
+        }
+        if let Some(m) = &name.method {
+            fields.push_or_abort(self.nm(m));
+        }
+        let Some((last, walk)) = fields.split_last() else {
+            return self.name_lv(self.nm(&name.base), name.base.line);
+        };
+        let mut e = self.name_expr(self.nm(&name.base))?;
+        for f in walk {
+            // the holder's register is free again once it is read
+            let mark = self.lr().freereg;
+            let t = self.index_table(e)?;
+            let c = self.str_const(f.as_bytes());
+            let (t, k) = self.indexed(t, Exp::Const(c))?;
+            e = self.index_get(t, k);
+            self.set_freereg(mark);
+        }
+        let t = self.index_table(e)?;
+        let c = self.str_const(last.as_bytes());
+        let (t, k) = self.indexed(t, Exp::Const(c))?;
+        Ok(Lv::Indexed(t, k))
     }
 }
