@@ -87,6 +87,11 @@ pub struct Proto {
     /// lifetime. `Failed` records the whitelist miss so subsequent
     /// calls skip the compile attempt.
     pub jit: std::cell::Cell<JitProtoState>,
+    /// Code a backend is still compiling for this function in the
+    /// background: the entry it stores once ready (0 until then), with the
+    /// ABI of `jit`'s, which the next call from the interpreter puts in
+    /// place of `jit`'s entry. `None` when nothing is pending.
+    pub jit_next: std::cell::Cell<Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>>,
     /// Trace JIT hot-loop detector. Incremented by `Vm::run`
     /// on each backward-jump dispatched within this Proto. Once the
     /// counter passes `TRACE_HOT_THRESHOLD`, the next visit to the

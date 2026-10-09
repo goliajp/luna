@@ -3,22 +3,22 @@
 //! compile thread, has compiled it (LLVM takes milliseconds per function,
 //! Cranelift a fraction of one).
 //!
-//! The dispatcher keeps the entry it was given, so the function is given a
-//! small entry of its own that calls through a cell: Cranelift's code first,
-//! LLVM's after the compile thread writes it in. Calls the code makes to
-//! itself go straight to its own body.
+//! The compile thread stores LLVM's entry in a cell the function's proto
+//! holds (`Proto::jit_next`); the Vm puts it in place of Cranelift's at the
+//! next call into the function from the interpreter. Calls the code makes
+//! to itself go straight to its own body, so a call already running
+//! finishes in Cranelift's code.
 
 use super::*;
 use luna_core::jit::JitStorage;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// The functions of one Vm that run through a cell, by cache key.
+/// The functions of one Vm LLVM compiles in the background.
 #[derive(Default)]
 pub(crate) struct Chunks {
-    entries: std::collections::HashMap<u64, CompileResult>,
-    /// The cells the entries call through.
-    cells: Vec<Arc<AtomicUsize>>,
+    /// By cache key: the cell the compile thread stores LLVM's entry in.
+    cells: std::collections::HashMap<u64, Arc<AtomicUsize>>,
     /// The code LLVM compiled, kept mapped for the Vm's lifetime.
     code: Arc<Mutex<Vec<luna_jit_llvm::EnginePair>>>,
 }
@@ -81,22 +81,23 @@ pub(super) fn try_compile(
     let Ok(cs) = storage::from_storage(storage) else {
         return cranelift;
     };
-    if let Some(&hit) = cs.llvm_chunks.entries.get(&key) {
-        return hit;
-    }
-    let cell = Arc::new(AtomicUsize::new(entry as usize));
-    let Some(handle) = cell_entry(&cell, num_args, returns_one) else {
+    if let Some(cell) = cs.llvm_chunks.cells.get(&key) {
+        let ready = cell.load(Ordering::Acquire);
+        if ready != 0 {
+            return CompileResult::Compiled {
+                entry: ready as *const u8,
+                num_args,
+                returns_one,
+                arg_float_mask,
+                arg_table_mask,
+                ret_is_float,
+                ret_is_table,
+            };
+        }
+        proto.jit_next.set(Some(cell.clone()));
         return cranelift;
-    };
-    let result = CompileResult::Compiled {
-        entry: handle.entry_raw,
-        num_args,
-        returns_one,
-        arg_float_mask: 0,
-        arg_table_mask: 0,
-        ret_is_float: false,
-        ret_is_table: false,
-    };
+    }
+    let cell = Arc::new(AtomicUsize::new(0));
     let (to, code) = (cell.clone(), cs.llvm_chunks.code.clone());
     let ticket = super::llvm_thread::submit(
         Box::new(move || {
@@ -113,64 +114,9 @@ pub(super) fn try_compile(
         std::time::Instant::now() + llvm_after,
     );
     cs.llvm_tickets.push(ticket);
-    cs.cache_handles.push(handle);
-    cs.llvm_chunks.cells.push(cell);
-    cs.llvm_chunks.entries.insert(key, result);
-    result
-}
-
-/// A function of `num_args` integer arguments that calls the function
-/// whose address `cell` holds with them and returns its result.
-fn cell_entry(cell: &Arc<AtomicUsize>, num_args: u8, returns_one: bool) -> Option<JitHandle> {
-    let mut module =
-        send_jit_module::UnpublishedModule::new(chunk_module::build_jit_module_with_helpers()?);
-    let mut sig = module.make_signature();
-    for _ in 0..num_args {
-        sig.params.push(AbiParam::new(types::I64));
-    }
-    sig.returns.push(AbiParam::new(types::I64));
-    let fn_id = module
-        .declare_function("luna_jit_llvm_cell_entry", Linkage::Local, &sig)
-        .ok()?;
-    let mut ctx = module.make_context();
-    ctx.func.signature = sig.clone();
-    let mut fbc = FunctionBuilderContext::new();
-    let mut b = FunctionBuilder::new(&mut ctx.func, &mut fbc);
-    let start = b.create_block();
-    b.append_block_params_for_function_params(start);
-    b.switch_to_block(start);
-    b.seal_block(start);
-    let args = b.block_params(start).to_vec();
-    let at = b
-        .ins()
-        .iconst(types::I64, Arc::as_ptr(cell) as *const AtomicUsize as i64);
-    let target = b.ins().load(
-        types::I64,
-        cranelift_codegen::ir::MemFlagsData::trusted(),
-        at,
-        0,
-    );
-    let sref = b.import_signature(sig);
-    let call = b.ins().call_indirect(sref, target, &args);
-    let r = b.inst_results(call)[0];
-    b.ins().return_(&[r]);
-    b.finalize(module.target_config());
-    module.define_function(fn_id, &mut ctx).ok()?;
-    module.clear_context(&mut ctx);
-    module.finalize_definitions().ok()?;
-    let ptr = module.get_finalized_function(fn_id);
-    Some(JitHandle {
-        _module: module.publish(),
-        entry_raw: ptr,
-        ring: None,
-        layout: None,
-        num_args,
-        returns_one,
-        arg_float_mask: 0,
-        arg_table_mask: 0,
-        ret_is_float: false,
-        ret_is_table: false,
-    })
+    proto.jit_next.set(Some(cell.clone()));
+    cs.llvm_chunks.cells.insert(key, cell);
+    cranelift
 }
 
 /// The Cranelift backend's method JIT.
