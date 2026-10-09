@@ -34,6 +34,8 @@ pub(super) struct ComputeEmitter<'ctx, 'a> {
     pub(super) self_call_desc: i64,
     /// The body can park a deopt of its own (see `compute::may_park`).
     pub(super) may_park: bool,
+    /// The body jumps backwards somewhere.
+    pub(super) has_loop: bool,
     /// `llvm.read_register.i64`, which reads the stack pointer for the
     /// self-call guard.
     pub(super) read_register: FunctionValue<'ctx>,
@@ -342,8 +344,15 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         let v = self.guarded_self_call(&arg_vals, "self_call")?;
         let slot = self.reg_slot_ptr(a, "call_dst")?;
         builder.build_store(slot, v).ok()?;
-        // a call below that failed set the context's flag; a deopt the
-        // body parks itself is asked for
+        // A call below that failed (the context's flag) or parked a deopt
+        // makes the dispatcher drop this call's result. The body has no
+        // effect but its result, so without a loop that a dummy result
+        // could keep going it may finish: its self calls are bounded by
+        // the budget and the stack. Without the checks LLVM can turn the
+        // recursion into a loop (`return f(n - 1) + n`).
+        if !self.has_loop {
+            return Some(());
+        }
         let failed = self.ctx_word(1, "call_failed")?;
         let zero = self.i64_type.const_zero();
         let ok = builder

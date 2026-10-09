@@ -109,6 +109,12 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         regs,
         helpers: &helpers,
         may_park: may_park(plan),
+        // every backward jump, a comparison's too
+        has_loop: plan
+            .code
+            .iter()
+            .enumerate()
+            .any(|(pc, ins)| ins.op() == Op::Jmp && jmp_target(pc, *ins) <= pc),
         read_register: inkwell::intrinsics::Intrinsic::find("llvm.read_register")?
             .get_declaration(&module, &[i64_type.into()])?,
         self_call_desc: luna_jit_helpers::self_call_desc(
