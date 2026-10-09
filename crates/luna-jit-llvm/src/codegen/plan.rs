@@ -164,6 +164,9 @@ impl<'a> ChunkPlan<'a> {
         if !flow::registers_in_bounds(code, &reachable, regs) {
             return None;
         }
+        if !flow::reads_written(code, &consumed_jmp, regs, proto.num_params as u32) {
+            return None;
+        }
         if !flow::reads_no_nil(code, &reachable, regs) {
             return None;
         }

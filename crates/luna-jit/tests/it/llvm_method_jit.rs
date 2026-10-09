@@ -61,3 +61,22 @@ fn recursion_through_a_reassigned_upvalue_follows_it() {
     );
     assert_eq!(text(&r), "9000 1001");
 }
+
+/// 5.1's code generator leaves out the `LoadNil` of a register still nil
+/// at entry: `return nil` reads a register nothing wrote, which the method
+/// JIT must not take for the integer 0 (`load` got 0 from its reader).
+#[test]
+fn a_register_nothing_wrote_is_nil() {
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua51);
+    luna_jit::install_llvm_backend(&mut vm);
+    let r = vm
+        .eval(
+            "local function f() return nil end
+             local s = ''
+             for _ = 1, 200 do s = tostring(f()) end
+             local g = load(function() return nil end)
+             return s .. ' ' .. type(g)",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(text(&r), "nil function");
+}

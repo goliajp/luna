@@ -67,7 +67,8 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
     // and fills the self-call context; the body, which self-recursive
     // calls enter directly, takes the context's address first
     let entry = module.add_function("luna_jit_llvm_entry", fn_type, None);
-    let mut body_params = vec![i64_type.into()];
+    // the context's address, the native stack limit and the calls left
+    let mut body_params = vec![i64_type.into(), i64_type.into(), i64_type.into()];
     body_params.extend_from_slice(&param_types);
     let function = module.add_function(
         "luna_jit_llvm_body",
@@ -108,8 +109,8 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         regs,
         helpers: &helpers,
         may_park: may_park(plan),
-        stacksave: inkwell::intrinsics::Intrinsic::find("llvm.stacksave")?
-            .get_declaration(&module, &[ctx_static.ptr_type(Default::default()).into()])?,
+        read_register: inkwell::intrinsics::Intrinsic::find("llvm.read_register")?
+            .get_declaration(&module, &[i64_type.into()])?,
         self_call_desc: luna_jit_helpers::self_call_desc(
             plan.num_params,
             0,
@@ -128,7 +129,7 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
     // bound them with `LoadI` / `Move`.
     for i in 0..plan.num_params {
         let slot = emitter.reg_slot_ptr(i, "param_slot")?;
-        let arg = function.get_nth_param(i + 1)?.into_int_value();
+        let arg = function.get_nth_param(i + 3)?.into_int_value();
         builder.build_store(slot, arg).ok()?;
     }
 
@@ -279,19 +280,29 @@ fn emit_entry<'ctx>(
         builder.build_return(Some(&zero)).ok()?;
         builder.position_at_end(go);
     }
-    let self_ctx = if self_calls {
+    let (self_ctx, limit, left) = if self_calls {
         let words = i64_type.array_type(luna_jit_helpers::SELF_CTX_WORDS as u32);
         let at = builder.build_alloca(words, "self_ctx").ok()?;
-        let at = builder
+        let addr = builder
             .build_ptr_to_int(at, i64_type, "self_ctx_addr")
             .ok()?;
         let fill = helpers.get("luna_jit_enter_ctx").copied()?;
-        builder.build_call(fill, &[at.into()], "fill_ctx").ok()?;
-        at
+        builder.build_call(fill, &[addr.into()], "fill_ctx").ok()?;
+        let word = |w: u64, name: &str| -> Option<inkwell::values::IntValue<'ctx>> {
+            let a = builder
+                .build_int_add(addr, i64_type.const_int(8 * w, false), name)
+                .ok()?;
+            let p = builder
+                .build_int_to_ptr(a, ctx.ptr_type(Default::default()), name)
+                .ok()?;
+            Some(builder.build_load(i64_type, p, name).ok()?.into_int_value())
+        };
+        (addr, word(0, "limit")?, word(2, "left")?)
     } else {
-        zero
+        (zero, zero, zero)
     };
-    let mut args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![self_ctx.into()];
+    let mut args: Vec<inkwell::values::BasicMetadataValueEnum> =
+        vec![self_ctx.into(), limit.into(), left.into()];
     args.extend(
         entry
             .get_param_iter()

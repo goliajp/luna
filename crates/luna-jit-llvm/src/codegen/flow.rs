@@ -222,3 +222,79 @@ pub(super) fn reads_no_nil(code: &[Inst], reachable: &[bool], regs: u32) -> bool
     }
     true
 }
+
+/// Whether every register the function reads past its parameters was
+/// written first on every path to the read. A register no op has written
+/// holds nil at entry, which the compute path cannot carry (it holds
+/// integers only): 5.1's code generator leaves out the `LoadNil` of a
+/// register it knows is still nil (`return nil` is a lone `Return`).
+pub(super) fn reads_written(
+    code: &[Inst],
+    consumed_jmp: &[bool],
+    regs: u32,
+    num_params: u32,
+) -> bool {
+    let n = code.len();
+    let mut entry: Vec<Option<Vec<bool>>> = vec![None; n];
+    let mut start = vec![false; regs as usize];
+    for r in start.iter_mut().take(num_params as usize) {
+        *r = true;
+    }
+    entry[0] = Some(start);
+    let mut work = vec![0usize];
+    while let Some(pc) = work.pop() {
+        let Some(mut set) = entry[pc].clone() else {
+            continue;
+        };
+        let ins = code[pc];
+        let reads: Vec<u32> = match ins.op() {
+            op if is_arith(op) || is_compare(op) => operand_regs(ins),
+            Op::Move => vec![ins.b()],
+            Op::Return1 => vec![ins.a()],
+            Op::Call | Op::TailCall => (1..ins.b()).map(|off| ins.a() + off).collect(),
+            _ => Vec::new(),
+        };
+        if reads
+            .iter()
+            .any(|&r| !set.get(r as usize).copied().unwrap_or(false))
+        {
+            return false;
+        }
+        let writes = match ins.op() {
+            Op::LoadNil => ins.a()..=ins.a() + ins.b(),
+            Op::LoadI | Op::Move | Op::GetUpval | Op::Call => ins.a()..=ins.a(),
+            op if is_arith(op) => ins.a()..=ins.a(),
+            _ => 1..=0,
+        };
+        for r in writes {
+            if let Some(x) = set.get_mut(r as usize) {
+                *x = true;
+            }
+        }
+        let succ: Vec<usize> = match ins.op() {
+            Op::Return0 | Op::Return1 | Op::TailCall => Vec::new(),
+            Op::Jmp if consumed_jmp[pc] => Vec::new(),
+            Op::Jmp => vec![jmp_target(pc, ins)],
+            op if is_compare(op) => {
+                let mut v = vec![pc + 2];
+                if let Some(j) = code.get(pc + 1) {
+                    v.push(jmp_target(pc + 1, *j));
+                }
+                v
+            }
+            _ => vec![pc + 1],
+        };
+        for t in succ.into_iter().filter(|&t| t < n) {
+            // a register is written at `t` only when it is on every way in
+            let merged = match &entry[t] {
+                None => set.clone(),
+                Some(old) => old.iter().zip(&set).map(|(&a, &b)| a && b).collect(),
+            };
+            if entry[t].as_ref() != Some(&merged) {
+                entry[t] = Some(merged);
+                work.push(t);
+            }
+        }
+    }
+    true
+}
