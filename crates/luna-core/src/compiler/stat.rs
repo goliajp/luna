@@ -1,7 +1,6 @@
 //! Statement dispatch and declarations (`local`, `global`, `function`).
 
 use super::*;
-use crate::runtime::mem::LVec;
 
 impl<'a> Compiler<'a> {
     pub(super) fn stat_block(&mut self, b: &Block) -> Result<(), SyntaxError> {
@@ -231,7 +230,7 @@ impl<'a> Compiler<'a> {
         // evaluated (PUC bumps `nactvar` after the explist), so `global a = a`
         // reads the enclosing `a`, not the global being defined.
         let saved = self.lr().freereg;
-        let mut lvs: LVec<Lv> = LVec::new(self.heap.mem());
+        let mut lvs = self.lvs.take();
         for an in names {
             let lv = self.global_lv(self.nm(&an.name))?;
             lvs.push_or_abort(lv);
@@ -246,6 +245,8 @@ impl<'a> Compiler<'a> {
             self.emit_global_redef_check(self.nm(&an.name))?;
             self.store(lvs[i], Exp::Reg(base + i as u32))?;
         }
+        lvs.clear();
+        self.lvs = lvs;
         self.set_freereg(saved);
         Ok(())
     }

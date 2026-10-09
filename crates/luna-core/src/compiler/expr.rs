@@ -7,7 +7,7 @@ use super::*;
 
 /// A node of an expression's left spine whose left child is being
 /// compiled: what finishing it needs besides that child's value.
-enum Pending {
+pub(super) enum Pending {
     BinOp {
         op: BinOp,
         rhs: ExprId,
@@ -48,7 +48,8 @@ impl<'a> Compiler<'a> {
             return Err(self.too_deep());
         }
         let ast = self.ast;
-        let mut spine: LVec<Pending> = LVec::new(self.heap.mem());
+        // the spine of this expression sits above `mark` on the shared stack
+        let mark = self.spine.len();
         let mut cur = id;
         let mut e = loop {
             match *ast.expr(cur) {
@@ -58,12 +59,12 @@ impl<'a> Compiler<'a> {
                     rhs,
                     line,
                 } => {
-                    spine.push_or_abort(Pending::AndOr { op, rhs, line });
+                    self.spine.push_or_abort(Pending::AndOr { op, rhs, line });
                     cur = lhs;
                 }
                 Expr::BinOp { op, lhs, rhs, line } if op != BinOp::Concat => {
                     let (open, le) = self.binop_open(op, lhs, line)?;
-                    spine.push_or_abort(Pending::BinOp {
+                    self.spine.push_or_abort(Pending::BinOp {
                         op,
                         rhs,
                         line,
@@ -77,13 +78,13 @@ impl<'a> Compiler<'a> {
                 Expr::Index { obj, key } => match self.index_open(obj, key)? {
                     IndexOpen::Done(e) => break e,
                     IndexOpen::Object { saved } => {
-                        spine.push_or_abort(Pending::Index { key, saved });
+                        self.spine.push_or_abort(Pending::Index { key, saved });
                         cur = obj;
                     }
                 },
                 Expr::Call { func, args, line } => {
                     let base = self.lr().freereg;
-                    spine.push_or_abort(Pending::Call { args, line, base });
+                    self.spine.push_or_abort(Pending::Call { args, line, base });
                     cur = func;
                 }
                 Expr::MethodCall {
@@ -93,7 +94,7 @@ impl<'a> Compiler<'a> {
                     line,
                 } => {
                     let base = self.lr().freereg;
-                    spine.push_or_abort(Pending::Method {
+                    self.spine.push_or_abort(Pending::Method {
                         method,
                         args,
                         line,
@@ -104,7 +105,8 @@ impl<'a> Compiler<'a> {
                 _ => break self.expr_leaf(cur)?,
             }
         };
-        while let Some(p) = spine.pop() {
+        while self.spine.len() > mark {
+            let p = self.spine.pop().expect("spine entry");
             e = match p {
                 Pending::BinOp {
                     op,

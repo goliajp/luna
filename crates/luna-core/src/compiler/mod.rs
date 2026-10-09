@@ -221,6 +221,12 @@ struct Compiler<'a> {
     /// equal constants. The runtime interner only dedups short strings, so
     /// only long ones are kept here.
     str_cache: LMap<Gc<LuaStr>, Gc<LuaStr>>,
+    /// the left spines of the expressions being compiled (see [`Self::expr`])
+    spine: LVec<expr::Pending>,
+    /// an assignment's targets, taken while one is compiled
+    lvs: LVec<lvalue::Lv>,
+    /// a concatenation's operands, taken while one is compiled
+    operands: LVec<ExprId>,
 }
 
 impl<'a> Compiler<'a> {
