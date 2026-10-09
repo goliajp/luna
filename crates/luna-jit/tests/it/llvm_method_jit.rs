@@ -122,13 +122,13 @@ fn background_code_becomes_the_entry() {
     assert!(taken.is_none(), "the cell stays after its code was taken");
 }
 
-/// A function LLVM's method JIT turns down on the compile thread (5.1's
-/// `return nil` from a register nothing wrote) stops being looked at for
-/// LLVM's code and keeps Cranelift's.
+/// A function LLVM's method JIT turns down on the compile thread (it takes
+/// no numeric `for`, Cranelift's does) stops being looked at for LLVM's
+/// code and keeps Cranelift's.
 #[test]
 fn background_code_turned_down_keeps_the_entry() {
     use luna_jit::runtime::function::JitProtoState;
-    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua51);
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     luna_jit::install_llvm_backend_with(
         &mut vm,
         luna_jit::jit_backend::LlvmBackend {
@@ -137,8 +137,8 @@ fn background_code_turned_down_keeps_the_entry() {
     );
     let cl = vm
         .load(
-            b"local function f() return nil end
-              return f, function() return tostring(f()) end",
+            b"local function f(n) local s = 0 for i = 1, n do s = s + i end return s end
+              return f, function() return f(10) end",
             b"=t",
         )
         .expect("compile");
@@ -148,13 +148,19 @@ fn background_code_turned_down_keeps_the_entry() {
     };
     let call = |vm: &mut luna_jit::vm::Vm| {
         let r = vm.call_value(Value::Closure(run), &[]).expect("run");
-        assert_eq!(text(&r), "nil");
+        assert!(matches!(r[0], Value::Int(55)), "{r:?}");
         match f.proto.jit.get() {
             JitProtoState::Compiled { entry, .. } => entry,
             s => panic!("{s:?}"),
         }
     };
     let first = call(&mut vm);
+    let pending = f.proto.jit_next.take();
+    assert!(
+        pending.is_some(),
+        "nothing was handed to the compile thread"
+    );
+    f.proto.jit_next.set(pending);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
         assert_eq!(call(&mut vm), first);
