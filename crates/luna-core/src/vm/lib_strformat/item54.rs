@@ -35,6 +35,7 @@ fn checkformat(vm: &mut Vm, form: &[u8], flags: &[u8], precision: bool) -> Resul
 }
 
 /// One conversion under 5.4 or 5.5. Returns where scanning resumes.
+#[inline]
 pub(super) fn item54(
     vm: &mut Vm,
     a: Args,
