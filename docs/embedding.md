@@ -999,7 +999,28 @@ compatibility.
 
 ## 14. Known limitations
 
-*(none currently)*
+### Interpreter speed on aarch64 depends on code alignment
+
+On aarch64 the interpreter's dispatch loop runs measurably faster or
+slower depending on where the linker happens to place it relative to the
+core's 32-byte fetch blocks. The builds of this repository avoid that with
+a compiler flag in its `.cargo/config.toml`, which a crate that depends on
+luna does not inherit. Add it to your own `.cargo/config.toml` when you
+build for aarch64 Linux:
+
+```toml
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "llvm-args=-align-all-nofallthru-blocks=5"]
+```
+
+It aligns every block entered only by a branch (each bytecode handler is
+one) to 32 bytes. Without it, measured on a Cortex-A76 with LTO off or
+thin, the same interpreter built twice with an unrelated change elsewhere
+in the binary ran exactly the same instructions, yet a float `for` loop
+took 18% more cycles with the same cache and branch misses, and a
+table-heavy loop 10% more, because the loop started at a different offset
+within its cache line. Rust has no stable attribute yet to align one
+function, so luna cannot set this for you.
 
 **Resolved in v2.13** — Windows gc.lua / gengc.lua /
 tracegc.lua weak-table sweep `STATUS_ACCESS_VIOLATION`: root-
