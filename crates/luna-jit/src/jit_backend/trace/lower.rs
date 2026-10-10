@@ -88,7 +88,7 @@ struct Lower<E: Emit> {
     current_kinds: Vec<RegKind>,
     dispatchable: bool,
     dispatch_off_reason: Option<&'static str>,
-    per_exit_kinds: Vec<(u32, Vec<RegKind>, Box<TCellPtr>)>,
+    per_exit_kinds: ExitKinds,
     per_exit_inline_vec: Vec<(
         u32,
         u32,

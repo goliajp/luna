@@ -33,7 +33,6 @@ pub(crate) struct Allocation {
     // scratch, kept for the next trace
     first: Vec<u32>,
     starts: Vec<u32>,
-    ends: Vec<u32>,
 }
 
 fn mask(regs: &[u8]) -> u64 {
@@ -50,8 +49,12 @@ fn by_position(key: &[u32], live: &[u32], n_pos: usize, first: &mut Vec<u32>, ou
             first[k as usize + 1] += 1;
         }
     }
-    for p in 0..n_pos {
-        first[p + 1] += first[p];
+    // the running sum stays in a register: summing in place makes every
+    // step wait for the store of the one before
+    let mut sum = 0;
+    for x in first.iter_mut() {
+        sum += *x;
+        *x = sum;
     }
     out.clear();
     out.resize(first[n_pos] as usize, 0);
@@ -82,10 +85,8 @@ pub(crate) fn allocate(lir: &Lir, an: &Analysis, classes: [&Class; 2], al: &mut 
         callee_used,
         first,
         starts,
-        ends,
     } = al;
     by_position(&an.start, &an.start, n_pos, first, starts);
-    by_position(&an.end, &an.start, n_pos, first, ends);
     loc.clear();
     loc.resize(nreg, Loc::None);
     let callee = [mask(classes[0].callee), mask(classes[1].callee)];
@@ -95,7 +96,10 @@ pub(crate) fn allocate(lir: &Lir, an: &Analysis, classes: [&Class; 2], al: &mut 
     let mut holder = [[NONE; 64]; 2];
     *spill_slots = 0;
     *callee_used = [0; 2];
-    let mut ei = 0;
+    // registers held, per class, and the earliest end among their holders
+    // (no later than it: a spilled holder may have left it behind)
+    let mut busy = [0u64; 2];
+    let mut soonest = [u32::MAX; 2];
     // the first call after the current start; starts only grow
     let mut ci = 0;
     for &r in starts.iter() {
@@ -104,14 +108,24 @@ pub(crate) fn allocate(lir: &Lir, an: &Analysis, classes: [&Class; 2], al: &mut 
         while ci < an.calls.len() && an.calls[ci] <= s {
             ci += 1;
         }
-        while ei < ends.len() && an.end[ends[ei] as usize] < s {
-            let o = ends[ei] as usize;
-            ei += 1;
-            if let Loc::Reg(p) = loc[o] {
-                let k = usize::from(float_of(o));
-                if holder[k][p as usize] == o as u32 {
-                    holder[k][p as usize] = NONE;
+        // the intervals that ended before this one starts give their
+        // registers back
+        for k in 0..2 {
+            if soonest[k] >= s {
+                continue;
+            }
+            soonest[k] = u32::MAX;
+            let mut m = busy[k];
+            while m != 0 {
+                let p = m.trailing_zeros() as usize;
+                m &= m - 1;
+                let e = an.end[holder[k][p] as usize];
+                if e < s {
+                    holder[k][p] = NONE;
                     free[k] |= 1 << p;
+                    busy[k] &= !(1 << p);
+                } else {
+                    soonest[k] = soonest[k].min(e);
                 }
             }
         }
@@ -157,6 +171,8 @@ pub(crate) fn allocate(lir: &Lir, an: &Analysis, classes: [&Class; 2], al: &mut 
             }
         };
         free[k] &= !(1 << p);
+        busy[k] |= 1 << p;
+        soonest[k] = soonest[k].min(an.end[ri]);
         holder[k][p as usize] = r;
         loc[ri] = Loc::Reg(p);
         if callee[k] & (1 << p) != 0 {

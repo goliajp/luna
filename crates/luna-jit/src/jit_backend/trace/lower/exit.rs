@@ -104,7 +104,11 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             trace_fn_sig_ref,
         );
     } else {
-        let mut snapshot: Vec<RegKind> = lw.current_kinds[..max_stack].to_vec();
+        let tag_side_local = lw.per_exit_kinds.push(
+            side_exit_pc,
+            &lw.current_kinds[..max_stack],
+            Box::new(TCellPtr::null()),
+        );
         let mat_count = emit_materialize_live_sunk(
             &mut lw.bcx,
             mat_sunk_id,
@@ -114,15 +118,12 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             &lw.regs_full,
             &pl.op_offsets,
             i,
-            &mut snapshot,
+            lw.per_exit_kinds.kinds_mut(tag_side_local),
             head_proto,
             opts.aot,
             &mut lw.defined_aot_data,
         );
         lw.materialize_emit_count += mat_count;
-        let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
-        let tag_side_local = lw.per_exit_kinds.len() as u32;
-        lw.per_exit_kinds.push((side_exit_pc, snapshot, side_box));
         emit_tagged_exit(
             &mut lw.bcx,
             suppress_admit_id,
