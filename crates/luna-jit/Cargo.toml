@@ -59,8 +59,9 @@ luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 4.0.2" }
 # `publish = true`.
 luna-jit-llvm = { path = "../luna-jit-llvm", version = "= 4.0.2", optional = true }
 # The LLVM backend's trace tier builds LLVM IR from the shared trace
-# lowering here; same version and LLVM feature as luna-jit-llvm.
-inkwell = { version = "0.10", features = ["llvm18-1"], optional = true }
+# lowering here; same version and LLVM feature as luna-jit-llvm, which
+# also picks the LLVM target of the architecture.
+inkwell = { version = "0.10", default-features = false, features = ["llvm18-1"], optional = true }
 
 # JIT backend. cranelift is the mainstream Rust codegen for embedded
 # JITs (wasmtime, cg_clif, etc.). aarch64 + x86-64 from day one,
