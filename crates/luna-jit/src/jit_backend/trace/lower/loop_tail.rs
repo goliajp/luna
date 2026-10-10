@@ -227,7 +227,7 @@ pub(super) fn emit_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         body_loop,
         ..
     } = *lw;
-    sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+    commit_back_edge(lw);
     let Some((cell, at)) = &lw.tier_count else {
         lw.bcx.ins().jump(body_loop, &[]);
         return;

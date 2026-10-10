@@ -76,7 +76,7 @@ fn compile_trace_baseline(
     float_only: bool,
     capture: bool,
 ) -> Result<Compiled, &'static str> {
-    let Some((lir, mut compiled)) = lower_trace_lir(record, opts, float_only) else {
+    let Some((lir, mut compiled)) = lower_trace_lir(record, opts, float_only, false) else {
         return Ok(None);
     };
     if !always_codegen && !trace_is_enterable(record, &compiled) {
@@ -102,6 +102,11 @@ fn compile_trace_baseline(
             lir: l.clone(),
             relocs: lir.relocs.clone(),
             image: None,
+            record: Some(super::tier_source::TierRecord {
+                record: record.clone(),
+                opts,
+                float_only,
+            }),
         }));
     }
     let relocs = lir.relocs.clone();
@@ -131,8 +136,15 @@ pub(super) fn compile_trace_cranelift(
 ) -> Compiled {
     let mut module =
         crate::jit_backend::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
-    let (fn_id, mut compiled) =
-        lower_trace_into_inner(&mut *module, record, opts, None, always_codegen, float_only)?;
+    let (fn_id, mut compiled) = lower_trace_into_inner(
+        &mut *module,
+        record,
+        opts,
+        None,
+        always_codegen,
+        float_only,
+        true,
+    )?;
     if !always_codegen && !trace_is_enterable(record, &compiled) {
         let cap = capture.then(|| image::Captured {
             code: None,
