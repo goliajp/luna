@@ -33,7 +33,17 @@ luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 4.0.2" }
 # (`llvm18-1`); requires `LLVM_SYS_181_PREFIX` env var pointing at an
 # LLVM 18.1.x install (e.g. `brew install llvm@18` →
 # `/opt/homebrew/opt/llvm@18`).
-inkwell = { version = "0.10", features = ["llvm18-1"] }
+# No default features: inkwell's default names every LLVM target, and a
+# linker that keeps whole objects (MSVC's) then wants all their libraries.
+# The backend only initialises the native target, so it needs the LLVM
+# target of the architecture it runs on, enabled below.
+inkwell = { version = "0.10", default-features = false, features = ["llvm18-1"] }
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+inkwell = { version = "0.10", default-features = false, features = ["target-x86"] }
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+inkwell = { version = "0.10", default-features = false, features = ["target-aarch64"] }
 
 [dev-dependencies]
 # Integration tests need luna-jit's parser (to materialise real

@@ -187,6 +187,12 @@ optimization.
 
 ### Changed
 
+- `llvm-jit` now needs LLVM with the native target only: luna-jit-llvm
+  turns inkwell's default features (every LLVM target) off and enables
+  the target of the architecture it is built for. A linker that keeps
+  whole objects, as MSVC's does, otherwise asked for every target's
+  libraries. On an architecture other than x86_64 and aarch64 the
+  backend now fails to compile with a message saying so.
 - LLVM backend (`--features llvm-jit`): a hot function runs on the
   Cranelift method JIT's code at once and, when LLVM's method JIT takes
   it, on LLVM's code once the compile thread has compiled it (after it has
