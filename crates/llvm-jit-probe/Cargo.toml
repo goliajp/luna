@@ -24,7 +24,14 @@ publish = false
 #
 # `llvm-sys`'s build script reads `LLVM_SYS_181_PREFIX` (note the
 # version-major-minor in the var name) to locate `llvm-config`.
-inkwell = { version = "0.10", features = ["llvm18-1"] }
+# the native target only, as in luna-jit-llvm
+inkwell = { version = "0.10", default-features = false, features = ["llvm18-1"] }
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+inkwell = { version = "0.10", default-features = false, features = ["target-x86"] }
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+inkwell = { version = "0.10", default-features = false, features = ["target-aarch64"] }
 
 [lints]
 workspace = true

@@ -459,6 +459,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         let ctx_arg = self.function.get_nth_param(0)?.into_int_value();
         let limit = self.function.get_nth_param(1)?.into_int_value();
         let left = self.function.get_nth_param(2)?.into_int_value();
+        // x86_64 or aarch64, the architectures `lib.rs` admits
         let sp_name = if cfg!(target_arch = "x86_64") {
             "rsp"
         } else {

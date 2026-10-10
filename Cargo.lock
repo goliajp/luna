@@ -1022,7 +1022,6 @@ dependencies = [
  "cranelift-native",
  "criterion",
  "inkwell",
- "libc",
  "luna-core",
  "luna-jit-derive",
  "luna-jit-helpers",

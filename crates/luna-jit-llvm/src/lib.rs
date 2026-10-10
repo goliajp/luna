@@ -27,6 +27,11 @@
 //!   the shared `luna-jit-helpers` crate (single-source-of-truth
 //!   for helper definitions).
 
+// The code reads the stack pointer by its name on these two and picks
+// the matching LLVM target in Cargo.toml.
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+compile_error!("the LLVM backend (`llvm-jit`) supports x86_64 and aarch64 only");
+
 use luna_core::jit::{
     CompileResult, IntChunkCompiler, JitStorage, JitVmGuard, TraceCompiler,
     trace_types::{CompileOptions, CompiledTrace, TraceRecord},
