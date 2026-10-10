@@ -120,7 +120,7 @@ pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
         }
     }
     // per position: how many loops are around it
-    let n_pos = 2 * an.code.len() + 2;
+    let n_pos = 2 * at as usize + 2;
     reset(&mut an.depth, n_pos + 1, 0);
     for &(h, e) in &an.loops {
         an.depth[h as usize] += 1;
