@@ -18,6 +18,15 @@
 //! `LocalSet`. See [`docs/threading.md`](../../docs/threading.md) for
 //! canonical patterns and the `feature = "send"` wrapper.
 //!
+//! # Compatibility
+//!
+//! The modules `compiler`, `frontend`, `jit` and `pattern` are public
+//! because luna's other crates (the JIT backends, the AOT compiler and its
+//! runtime) use them. They are not covered by semantic versioning and may
+//! change in any release. The trace JIT's data types in `jit` (recordings,
+//! compiled traces, exit records, compile options) are hidden from these
+//! docs for that reason; their fields change whenever the trace JIT does.
+//!
 //! # Embedding contract (script-host sandbox)
 //!
 //! The minimal embedding flow:

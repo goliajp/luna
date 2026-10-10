@@ -206,6 +206,34 @@ fn exit_two_calls_deep_resumes_the_middle_frame() {
     assert_every_tier(src, 4, "trace entries", |vm| vm.trace_dispatched_count());
 }
 
+/// The same through a function that inlines itself from two call sites,
+/// with the default hot thresholds as well: each level resumes after its
+/// own call, not its caller's.
+#[test]
+fn exit_in_self_recursion_resumes_each_level_after_its_own_call() {
+    let src = "local function g(n, k)
+          if n <= 0 then
+            if k % 7 == 0 then return 1000 end
+            return 1
+          end
+          local a = g(n - 1, k) * 2
+          local b = g(n - 2, k + 1) + 3
+          return a - b
+        end
+        return function()
+          local s = 0
+          for i = 1, 3000 do s = s + g(5, i) end
+          return s
+        end";
+    assert_every_tier(src, 2, "trace entries", |vm| vm.trace_dispatched_count());
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    assert_eq!(results(&mut vm, src, 2), ["Int(294573)", "Int(294573)"]);
+    assert!(
+        vm.trace_dispatched_count() > 0,
+        "default thresholds: no trace ran"
+    );
+}
+
 /// A callee the trace cannot hold (it reads a global the trace cannot
 /// type): the recording is compiled up to the call instead, and the trace
 /// still runs the loop's other work (enough of it that a trace ending at a
