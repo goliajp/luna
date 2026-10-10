@@ -12,6 +12,9 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{FuncId, Linkage, Module};
 
+mod ops;
+use ops::hoist;
+
 fn cty(t: Ty) -> Type {
     match t {
         Ty::I8 => types::I8,
@@ -43,7 +46,17 @@ struct Replay<'a, 'f> {
     call_conv: CallConv,
     /// The data symbol each relocation is read from.
     reloc_gv: Vec<cranelift_codegen::ir::GlobalValue>,
+    /// Relocations read once, in the entry block, for every use: the
+    /// trace module is compiled without optimization, which would leave
+    /// a string key or a function checked against read anew at each use
+    /// inside the loop ([`HOISTED`]).
+    hoisted: Vec<Option<Value>>,
 }
+
+/// The most relocations read in the entry block: the first string and
+/// function ones, which the loop's guards use; more would hold registers
+/// across the loop for values only exits need.
+const HOISTED: usize = 4;
 
 impl Replay<'_, '_> {
     fn v(&self, n: u32) -> Value {
@@ -75,51 +88,6 @@ impl Replay<'_, '_> {
         self.vals[dst as usize] = Some(v);
     }
 
-    fn bin(&mut self, op: BinOp, x: Value, y: Value) -> Value {
-        let ins = self.b.ins();
-        match op {
-            BinOp::Add => ins.iadd(x, y),
-            BinOp::Sub => ins.isub(x, y),
-            BinOp::Mul => ins.imul(x, y),
-            BinOp::Sdiv => ins.sdiv(x, y),
-            BinOp::Umulhi => ins.umulhi(x, y),
-            BinOp::Smin => ins.smin(x, y),
-            BinOp::Smax => ins.smax(x, y),
-            BinOp::And => ins.band(x, y),
-            BinOp::Or => ins.bor(x, y),
-            BinOp::Xor => ins.bxor(x, y),
-            BinOp::Shl => ins.ishl(x, y),
-            BinOp::Ushr => ins.ushr(x, y),
-            BinOp::Sshr => ins.sshr(x, y),
-            BinOp::Fadd => ins.fadd(x, y),
-            BinOp::Fsub => ins.fsub(x, y),
-            BinOp::Fmul => ins.fmul(x, y),
-            BinOp::Fdiv => ins.fdiv(x, y),
-        }
-    }
-
-    fn un(&mut self, u: UnOp, i: &Inst) -> Value {
-        let x = self.v(i.a);
-        let from = self.lir.value_ty[i.a as usize];
-        let t = cty(i.ty);
-        let ins = self.b.ins();
-        match u {
-            UnOp::Ineg => ins.ineg(x),
-            UnOp::Bnot => ins.bnot(x),
-            UnOp::Fneg => ins.fneg(x),
-            UnOp::Floor => ins.floor(x),
-            UnOp::Ceil => ins.ceil(x),
-            UnOp::Uextend if from == i.ty => x,
-            UnOp::Uextend => ins.uextend(t, x),
-            UnOp::Ireduce if from == i.ty => x,
-            UnOp::Ireduce => ins.ireduce(t, x),
-            UnOp::Bitcast => ins.bitcast(t, MemFlagsData::new(), x),
-            UnOp::FcvtFromSint => ins.fcvt_from_sint(t, x),
-            UnOp::FcvtToSint => ins.fcvt_to_sint(t, x),
-            UnOp::FcvtToSintSat => ins.fcvt_to_sint_sat(t, x),
-        }
-    }
-
     fn inst(&mut self, i: &Inst) {
         let lir = self.lir;
         let t = cty(i.ty);
@@ -129,10 +97,13 @@ impl Replay<'_, '_> {
                 self.set(i.dst, v);
             }
             Op::Reloc(n) => {
-                let v = self
-                    .b
-                    .ins()
-                    .symbol_value(types::I64, self.reloc_gv[n as usize]);
+                let v = match self.hoisted[n as usize] {
+                    Some(v) => v,
+                    None => self
+                        .b
+                        .ins()
+                        .symbol_value(types::I64, self.reloc_gv[n as usize]),
+                };
                 self.set(i.dst, v);
             }
             Op::Fconst(bits) => {
@@ -360,6 +331,7 @@ pub(crate) fn define<M: Module>(
         blocks,
         slots,
         call_conv,
+        hoisted: vec![None; relocs.len()],
         reloc_gv,
     };
     // each block is sealed once its last predecessor branches to it: with
@@ -382,6 +354,9 @@ pub(crate) fn define<M: Module>(
     for &blk in &an.order {
         let cb = r.blocks[blk as usize].expect("laid out");
         r.b.switch_to_block(cb);
+        if blk == 0 {
+            hoist(&mut r, relocs);
+        }
         // a block no branch reaches (the entry, or the hot exit of a
         // `TierCount`, which the replay does not take) is sealed as it starts
         if preds[blk as usize] == 0 && !sealed[blk as usize] {
