@@ -13,14 +13,18 @@ ref/head ratio of the same two binaries differs between runners by a few
 percent, so the runners are the unit that has to be averaged. A cell fails
 when its estimate exceeds T.
 
-The default T = 1.0315 is derived for 7 jobs x 3 rounds from hosted-runner
-measurements: the job-to-job spread of a cell's ratio is taken as 0.021
-(worst seen) and the spread of a 3-round median within a job as 0.017
-(worst cell), giving a standard error of 0.0102 on ln(estimate). With that,
-an unchanged commit fails with probability <= 0.01 summed over 6 cells, and
-a 5% slowdown in any one cell fails with probability >= 0.95. The threshold
-only holds for that layout; change it together with the job and round
-counts in perf.yml.
+The default T = 1.0313 is derived for 15 jobs x 3 rounds, each job measuring
+its own pair of binaries linked with a different function order (perf.yml).
+Per job the ratio's spread has three parts: runner to runner, 0.021 (worst
+seen on hosted runners); the 3-round median within a job, 0.017 (worst
+cell); and layout to layout, which applies to both binaries of the pair:
+2 x 0.0215^2 in variance, 0.0215 being the largest coefficient of variation
+of a cell's time (loading and running it, JIT on and off) over 16 function
+orders of one build on a Cortex-A76. That gives a standard error of 0.0105 on
+ln(estimate). With that, an unchanged commit fails with probability <= 0.01
+summed over 6 cells, and a 5% slowdown in any one cell fails with
+probability >= 0.95. The threshold only holds for that layout; change it
+together with the job and round counts in perf.yml.
 """
 import argparse
 import json
@@ -31,7 +35,7 @@ import statistics
 GROUP = "redis_lua_shape"
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--threshold", type=float, default=1.0315)
+ap.add_argument("--threshold", type=float, default=1.0313)
 ap.add_argument("outs", nargs="+")
 args = ap.parse_args()
 
