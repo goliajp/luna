@@ -200,6 +200,9 @@ impl Vm {
         let should_close =
             at_head_loop || returned_past_head || depth_cap_hit || self_link_trip.is_some();
         if should_close {
+            if at_head_loop && let Some(rec) = self.jit.active_trace.as_mut() {
+                rec.closed_at_head = true;
+            }
             self.trace_close_recording();
         } else {
             self.trace_record_push(cl, pc, inst, base, cur_depth);

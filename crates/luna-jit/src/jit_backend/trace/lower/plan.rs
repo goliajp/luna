@@ -112,7 +112,7 @@ pub(super) fn plan_trace<'r>(
         (Vec::new(), Vec::new())
     };
 
-    side_trace_gate(record, &op_offsets)?;
+    side_trace_gate(record, &op_offsets, opts.internal_loop)?;
     let (folded_ops, math_folds) = scan_math_folds(record, n, head_proto, opts);
     let end_idx_opt = find_trace_end(record, &folded_ops, n, &inline_calls)?;
     let effective_end = end_idx_opt.map(|(i, _)| i).unwrap_or(n);

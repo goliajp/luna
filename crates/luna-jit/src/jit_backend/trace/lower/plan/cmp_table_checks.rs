@@ -130,15 +130,29 @@ pub(super) fn validate_branch_op(
             // The took_jmp path's `consumed_by_cmp[i+1]`
             // write is gated by `i + 1 < effective_end` so
             // we don't mark a terminator op as consumed.
-            if i + 1 >= record.ops.len() {
+            // the op after the comparison: the next recorded one, or the
+            // head when the recording closed there right after it (a side
+            // trace that went round its loop back to where it started)
+            let (next_pc, next_is_jmp) = match record.ops.get(i + 1) {
+                Some(next) => (next.pc, next.inst.op().is_jump()),
+                None if record.closed_at_head
+                    && rop.inline_depth == 0
+                    && rop.proto.ptr_eq(record.head_proto) =>
                 {
+                    let head = record.head_pc;
+                    let is_jmp = head_proto
+                        .code
+                        .get(head as usize)
+                        .is_some_and(|x| x.op().is_jump());
+                    (head, is_jmp)
+                }
+                None => {
                     checkpoint("bail:cmp-at-record-end");
                     return None;
                 }
-            }
-            let next = &record.ops[i + 1];
-            let took_jmp = next.inst.op().is_jump() && next.pc == rop.pc + 1;
-            let skipped_jmp = next.pc == rop.pc + 2;
+            };
+            let took_jmp = next_is_jmp && next_pc == rop.pc + 1;
+            let skipped_jmp = next_pc == rop.pc + 2;
             if took_jmp {
                 if i + 1 < effective_end {
                     consumed_by_cmp[i + 1] = true;

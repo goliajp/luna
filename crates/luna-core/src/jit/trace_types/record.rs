@@ -219,6 +219,10 @@ pub struct TraceRecord {
     /// lowerer of a 5.3 integer loop checks the sign once before the loop
     /// instead of choosing the comparison on every iteration.
     pub for_step_up: Option<bool>,
+    /// The recording closed because the interpreter came back to
+    /// `head_pc` in the head frame: the op that would follow the last
+    /// recorded one is the head.
+    pub closed_at_head: bool,
 }
 
 /// [`TraceRecord::index_slots`] for an op with none.
@@ -289,6 +293,7 @@ impl TraceRecord {
             index_slots: Vec::with_capacity(MAX_TRACE_LEN),
             index_key: None,
             for_step_up: None,
+            closed_at_head: false,
         }
     }
 
@@ -331,6 +336,7 @@ impl TraceRecord {
             index_slots: Vec::with_capacity(MAX_TRACE_LEN),
             index_key: None,
             for_step_up: None,
+            closed_at_head: false,
         }
     }
 
@@ -339,6 +345,7 @@ impl TraceRecord {
     #[doc(hidden)]
     pub fn truncated(&self, n: usize) -> TraceRecord {
         let mut r = self.clone();
+        r.closed_at_head &= n == r.ops.len();
         r.ops.truncate(n);
         r.result_tags.truncate(n);
         r.field_slots.truncate(n);

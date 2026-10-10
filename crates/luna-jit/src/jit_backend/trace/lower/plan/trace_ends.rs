@@ -24,7 +24,7 @@ pub(super) fn validate_trace_ends(
         if rop.inst.op().is_jump()
             && !consumed_by_cmp[i]
             && i + 1 != effective_end
-            && !jumps_to_next(rop, &record.ops[i + 1])
+            && !jumps_to_next(rop, &record.ops[i + 1], record.side_trace_parent.is_some())
         {
             checkpoint("bail:body-jmp");
             return None;
@@ -88,12 +88,15 @@ pub(super) fn validate_trace_ends(
     Some(())
 }
 
-/// A forward `Jmp` (the end of an `if` branch skipping the `else`) that
-/// the recording followed to `next`: the trace goes on there, and the jump
-/// needs no code.
-fn jumps_to_next(jmp: &RecordedOp, next: &RecordedOp) -> bool {
+/// A jump the recording followed to `next`: the trace goes on there, and
+/// the jump itself needs no code (a closing jump's close is emitted with the
+/// body). Forward (the end of an `if` branch skipping the `else`) in any
+/// trace; backward (the loop edge of a loop the trace runs into) in a side
+/// trace, which runs its ops once from its head to where it ends and never
+/// loops back itself.
+fn jumps_to_next(jmp: &RecordedOp, next: &RecordedOp, side: bool) -> bool {
     let target = i64::from(jmp.pc) + 1 + i64::from(jmp.inst.jump_offset());
-    jmp.inst.jump_offset() >= 0
+    (jmp.inst.jump_offset() >= 0 || side)
         && next.inline_depth == jmp.inline_depth
         && std::ptr::eq(next.proto.as_ptr(), jmp.proto.as_ptr())
         && i64::from(next.pc) == target
