@@ -265,7 +265,9 @@ fn emit_trace<E: Emit>(
     if count_at > 0 {
         lower.tier_count = Some((Box::new(TCellU32::new(0)), count_at));
     }
-    lower.at_exits = at_exits;
+    // only a body of pure ops gains: elsewhere every op that is not pure
+    // commits everything anyway, and the exits store more
+    lower.at_exits = at_exits && (0..pl.effective_end).all(|i| !syncs_before(pl.record, pl, i));
     let lw = &mut lower;
     emit_fold_precheck(lw, pl);
     emit_readonly_precheck(lw, pl);
