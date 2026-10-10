@@ -53,9 +53,7 @@ struct Replay<'a, 'f> {
     hoisted: Vec<Option<Value>>,
 }
 
-/// The most relocations read in the entry block: the first string and
-/// function ones, which the loop's guards use; more would hold registers
-/// across the loop for values only exits need.
+/// The most relocations read in the entry block ([`ops::hoist`]).
 const HOISTED: usize = 4;
 
 impl Replay<'_, '_> {
@@ -355,7 +353,7 @@ pub(crate) fn define<M: Module>(
         let cb = r.blocks[blk as usize].expect("laid out");
         r.b.switch_to_block(cb);
         if blk == 0 {
-            hoist(&mut r, relocs);
+            hoist(&mut r, &an, relocs);
         }
         // a block no branch reaches (the entry, or the hot exit of a
         // `TierCount`, which the replay does not take) is sealed as it starts
