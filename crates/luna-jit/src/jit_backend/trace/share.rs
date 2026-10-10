@@ -10,14 +10,7 @@ use crate::jit_backend::storage::CraneliftJitStorage;
 use luna_core::jit::trace_types::{AdoptRequest, AdoptedTrace, CompiledTrace, entry_tags_admit};
 use std::sync::Arc;
 
-/// What a baseline trace moves to the optimizing tier from: its
-/// instructions, this Vm's values of their relocations, and the image it
-/// shares (to take the optimizing tier's code from, or give it to).
-pub(crate) struct TierSource {
-    pub(crate) lir: Arc<lir::Lir>,
-    pub(crate) relocs: Vec<(RelocKind, i64)>,
-    pub(crate) image: Option<Arc<TraceImage>>,
-}
+pub(crate) use super::tier_source::TierSource;
 
 /// Hands `ct`, just compiled from `record` with `cap`'s code, to the
 /// engine of the Vm `storage` belongs to, if it has one.
@@ -200,6 +193,7 @@ fn install(
                 lir: lir.clone(),
                 relocs,
                 image: Some(img.clone()),
+                record: None,
             }));
         }
     }
@@ -294,7 +288,8 @@ pub(crate) fn clif_tier_up(
     }
     let mut module =
         crate::jit_backend::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
-    let fn_id = lir::define_clif(&src.lir, &src.relocs, &mut *module)?;
+    let (lir, relocs) = src.optimizing_lir();
+    let fn_id = lir::define_clif(&lir, &relocs, &mut *module)?;
     module.finalize_definitions().ok()?;
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     let ptr = module.get_finalized_function(fn_id);

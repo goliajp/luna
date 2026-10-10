@@ -60,6 +60,7 @@ pub(crate) use llvm_tier::tier_up_llvm;
 pub(crate) mod reloc;
 mod share;
 pub(crate) mod share_failures;
+mod tier_source;
 pub(crate) use emit::{ClifEmit, Emit, Ins, RelocKind, len_state_flags_in, reloc_symbol};
 pub(crate) use lir::CodeArena;
 mod aot_data;

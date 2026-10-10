@@ -289,7 +289,7 @@ pub fn lower_trace_into_named<M: Module>(
     opts: CompileOptions,
     aot_fn_name: Option<&str>,
 ) -> Option<(FuncId, CompiledTrace)> {
-    lower_trace_into_inner(module, record, opts, aot_fn_name, true, false)
+    lower_trace_into_inner(module, record, opts, aot_fn_name, true, false, false)
 }
 
 /// [`lower_trace_into_named`] for a record of dialect `version`.
@@ -303,7 +303,7 @@ pub fn lower_trace_into_named_for<M: Module>(
     version: luna_core::version::LuaVersion,
 ) -> Option<(FuncId, CompiledTrace)> {
     let float_only = version <= luna_core::version::LuaVersion::Lua52;
-    lower_trace_into_inner(module, record, opts, aot_fn_name, true, float_only)
+    lower_trace_into_inner(module, record, opts, aot_fn_name, true, float_only, false)
 }
 
 // SAFETY: `SendJitModule` is `Send` because luna only ever

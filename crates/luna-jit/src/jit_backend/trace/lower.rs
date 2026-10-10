@@ -76,6 +76,15 @@ struct Lower<E: Emit> {
     materialize_emit_count: u32,
     closure_seen: u32,
     stored: Vec<Option<Value>>,
+    /// Commit register writes to reg_state only where something reads it
+    /// (`commit.rs`), keeping values in machine registers across the back
+    /// edge: for the optimizing tiers, whose register allocators make use
+    /// of that; the baseline tier's would spill.
+    at_exits: bool,
+    /// With `at_exits`, per register: the value reg_state holds for it at
+    /// the loop head whichever way the head is reached (`None`: the body
+    /// writes the register and the back edge does not store it).
+    head_stored: Vec<Option<Value>>,
     current_kinds: Vec<RegKind>,
     dispatchable: bool,
     dispatch_off_reason: Option<&'static str>,
@@ -129,9 +138,10 @@ pub(super) fn lower_trace_into_inner<M: Module>(
     aot_fn_name: Option<&str>,
     always_codegen: bool,
     float_only: bool,
+    at_exits: bool,
 ) -> Option<(FuncId, CompiledTrace)> {
     with_plan(record, opts, float_only, |pl, escape| {
-        lower_clif(module, pl, escape, aot_fn_name, always_codegen)
+        lower_clif(module, pl, escape, aot_fn_name, always_codegen, at_exits)
     })?
 }
 
@@ -189,12 +199,21 @@ fn with_plan<R>(
     Some(f(&plan, escape))
 }
 
+/// Whether every op of `record` is one the optimizing tiers lower with
+/// values kept to the exits (`Lower::at_exits`); for any other record
+/// lowering again gives the baseline tier's instructions.
+pub(super) fn ops_all_pure(record: &TraceRecord) -> bool {
+    record.ops.iter().all(|r| commit::pure_op(r.inst.op()))
+}
+
 /// The trace recorded for the baseline code generator, with what the
-/// emit pass decided; `None` when it cannot be lowered.
+/// emit pass decided; `None` when it cannot be lowered. `at_exits`: see
+/// `Lower::at_exits`.
 pub(super) fn lower_trace_lir(
     record: &TraceRecord,
     opts: CompileOptions,
     float_only: bool,
+    at_exits: bool,
 ) -> Option<(super::lir::Lir, CompiledTrace)> {
     with_plan(record, opts, float_only, |pl, escape| {
         let mut e = super::lir::Lir::take();
@@ -210,7 +229,7 @@ pub(super) fn lower_trace_lir(
             TraceTier::Auto => opts.tier_up_at,
             _ => 0,
         };
-        let (e, emitted) = emit_trace(e, pl, h, escape, count_at)?;
+        let (e, emitted) = emit_trace(e, pl, h, escape, count_at, at_exits)?;
         Some((e, build_compiled(pl, emitted)))
     })?
 }
@@ -225,6 +244,7 @@ fn emit_trace<E: Emit>(
     h: Helpers,
     escape: EscapeAnalysis,
     count_at: u32,
+    at_exits: bool,
 ) -> Option<(E, Emitted)> {
     // track which AOT data slots
     // we've already `define_data`'d this lower call. `declare_data`
@@ -252,6 +272,9 @@ fn emit_trace<E: Emit>(
     if count_at > 0 {
         lower.tier_count = Some((Box::new(TCellU32::new(0)), count_at));
     }
+    // only a body of pure ops gains: elsewhere every op that is not pure
+    // commits everything anyway, and the exits store more
+    lower.at_exits = at_exits && (0..pl.effective_end).all(|i| !syncs_before(pl.record, pl, i));
     let lw = &mut lower;
     emit_fold_precheck(lw, pl);
     emit_readonly_precheck(lw, pl);

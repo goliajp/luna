@@ -10,47 +10,23 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         active_accum,
         ..
     } = *pl;
-    let Lower {
-        reg_state,
-        body_loop,
-        ..
-    } = *lw;
+    let Lower { body_loop, .. } = *lw;
     let RuntimeHelpers {
         str_buf_extend_id, ..
     } = lw.h.rt;
     lw.bcx.switch_to_block(body_loop);
     // Intentionally NOT sealed: the tail's clean-close back-edge
     // adds a second predecessor below.
-    lw.stored.extend(
-        lw.regs_full
-            .iter()
-            .map(|&v| Some(use_var_resolved(&mut lw.bcx, v))),
-    );
+    commit_start(lw, pl);
     // the virtual registers of an op (see `vconsts`)
     let kvars: [Variable; NVIRT] = std::array::from_fn(|_| lw.bcx.declare_var(types::I64));
     // this op's register window (a copy, so the emit code can take `lw`
     // mutably while it reads it), plus `kvars` for the virtual registers
     let mut regs_w: Vec<Variable> = Vec::with_capacity(frame_w + NVIRT);
     checkpoint("pre:main-emit-loop");
-    let syncs = |i: usize| syncs_before(record, pl, i);
     let rewritten = rewritten_before_sync(lw.regs_full.len(), record, pl, effective_end);
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
-        // Commit the earlier ops' register writes to reg_state: all of them
-        // where this op may read it, or can take another way that rejoins
-        // later (both ways then hold the same reg_state); before any other
-        // op, those not written again before then, so a value is stored as
-        // it is made (its register freed) unless a later one replaces it
-        if syncs(i) {
-            sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
-        } else {
-            sync_reg_state_except(
-                &mut lw.bcx,
-                &lw.regs_full,
-                &mut lw.stored,
-                reg_state,
-                &rewritten[i],
-            );
-        }
+        commit_before(lw, pl, i, &rewritten[i]);
         alt_join(lw, i);
         let vregs: VRegs = pl.vconsts.get(i).copied().unwrap_or([None; NVIRT]);
         // R[C] of a register-operand op, read before this op's own write
@@ -169,24 +145,7 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         leave_virt(lw, held);
         readonly_after_op(lw, oc.op);
     }
-    // the tails that call helpers reading reg_state get everything; the
-    // others store what they leave with, so here only what the closing op
-    // does not write again
-    let generic_for = pl
-        .for_loop_idx_opt
-        .is_some_and(|k| record.ops[k].inst.op() == Op::TForLoop);
-    if generic_for || pl.downrec_idx_opt.is_some() || pl.self_link_idx_opt.is_some() {
-        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
-    } else {
-        let closing = writes_of(lw.regs_full.len(), record, pl, effective_end);
-        sync_reg_state_except(
-            &mut lw.bcx,
-            &lw.regs_full,
-            &mut lw.stored,
-            reg_state,
-            &closing,
-        );
-    }
+    commit_end(lw, pl, effective_end);
     alt_join(lw, effective_end);
     debug_assert!(lw.alt_joins.is_empty(), "every skip joins a recorded op");
     Some(())
