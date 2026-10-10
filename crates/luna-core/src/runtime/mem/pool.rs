@@ -161,6 +161,20 @@ impl MemCtx {
         NonNull::new(unsafe { std::alloc::alloc(layout) })
     }
 
+    /// [`MemCtx::alloc_zeroed`] for a size [`pooled`]: a kept block
+    /// cleared, or a new one from `alloc_zeroed`, which knows when fresh
+    /// memory is zero already and need not clear it.
+    #[inline(never)]
+    pub(super) fn alloc_pooled_zeroed(&self, layout: Layout) -> Option<NonNull<u8>> {
+        if let Some(p) = self.pool.borrow_mut().take(layout) {
+            // SAFETY: `p` is a block of `layout.size()` bytes
+            unsafe { p.as_ptr().write_bytes(0, layout.size()) };
+            return Some(p);
+        }
+        // SAFETY: the size is not 0
+        NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })
+    }
+
     /// [`MemCtx::realloc`] in `Mode::System` where the old or the new size
     /// is [`pooled`]: a block from [`MemCtx::alloc`], the bytes copied, the
     /// old block given to [`MemCtx::free`].

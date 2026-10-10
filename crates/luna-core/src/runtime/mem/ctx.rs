@@ -158,12 +158,7 @@ impl MemCtx {
     pub(crate) fn alloc_zeroed(&self, layout: Layout, kind: BlockKind) -> Option<NonNull<u8>> {
         debug_assert!(layout.size() != 0);
         match &self.mode {
-            Mode::System if super::pool::pooled(layout.size()) => {
-                let p = self.alloc_pooled(layout)?;
-                // SAFETY: `p` is a block of `layout.size()` bytes
-                unsafe { p.as_ptr().write_bytes(0, layout.size()) };
-                Some(p)
-            }
+            Mode::System if super::pool::pooled(layout.size()) => self.alloc_pooled_zeroed(layout),
             // SAFETY: the size is not 0
             Mode::System => NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }),
             _ => {
