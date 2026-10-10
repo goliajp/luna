@@ -63,6 +63,7 @@ impl Lir {
         });
         let blk = &mut self.blocks[self.cur as usize];
         let last = std::mem::replace(&mut blk.last, idx);
+        blk.len += 1;
         if blk.first == NONE {
             blk.first = idx;
         } else {
