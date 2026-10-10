@@ -202,6 +202,15 @@ optimization.
   recording followed needs no code. Before, a side trace whose exit sat
   in front of an inner loop the trace JIT did not record by itself never
   compiled.
+- The baseline trace tier compiles faster, with the same generated code:
+  the token bucket benchmark's trace takes 54.5 µs instead of 62.4 µs
+  compiled again and again on a Cortex-A76, and 64.8 µs instead of
+  75.3 µs as the first compile of a fresh Vm.
+- The slow paths of the interpreter loop's `<`, `<=` and `==` (mixed
+  operands, metamethods) run in functions of their own. On aarch64 the
+  loop's stack frame shrank from 2160 to 1232 bytes and entering it (after
+  every `pcall` and every trace exit) takes 41 fewer instructions:
+  `pcall` in a loop runs 4.5% fewer instructions.
 - `llvm-jit` now needs LLVM with the native target only: luna-jit-llvm
   turns inkwell's default features (every LLVM target) off and enables
   the target of the architecture it is built for. A linker that keeps
