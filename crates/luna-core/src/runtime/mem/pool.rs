@@ -113,7 +113,7 @@ impl Pool {
     /// each layout what the program allocated of it this cycle, within
     /// the share of `live`, and free the rest.
     pub(super) fn cycle_ended(&mut self, live: usize) {
-        let share = (live / CAP_SHARE).max(CAP_FLOOR).min(CAP_MAX);
+        let share = (live / CAP_SHARE).clamp(CAP_FLOOR, CAP_MAX);
         self.cap = self.allocated.min(share);
         self.allocated = 0;
         for l in &mut self.lists {

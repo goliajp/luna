@@ -88,7 +88,8 @@ pub(super) enum Mode {
 
 /// Where a Vm's memory comes from, shared by every container of the Vm
 /// through a [`MemRef`]. Owned jointly by the heap and the Vm
-/// ([`MemOwner`]), so it outlives every container either of them holds.
+/// ([`MemOwner`](super::MemOwner)), so it outlives every container either
+/// of them holds.
 pub struct MemCtx {
     pub(super) mode: Mode,
     /// the host function and its `ud` (`Mode::Raw`); `lua_setallocf`
