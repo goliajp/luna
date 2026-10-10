@@ -53,12 +53,8 @@ struct Replay<'a, 'f> {
     hoisted: Vec<Option<Value>>,
 }
 
-/// The most relocations read in the entry block ([`ops::hoist`]). On
-/// aarch64 each read is a literal load and a branch around it, and 28
-/// registers leave room. x86-64 reads one in a single instruction and has
-/// fewer registers: even one held across the loop made `token_bucket_1k`
-/// run 2% more instructions there, so it hoists none.
-const HOISTED: usize = if cfg!(target_arch = "aarch64") { 4 } else { 0 };
+/// The most relocations read in the entry block ([`ops::hoist`]).
+const HOISTED: usize = 4;
 
 impl Replay<'_, '_> {
     fn v(&self, n: u32) -> Value {
