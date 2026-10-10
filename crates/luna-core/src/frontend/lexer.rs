@@ -178,6 +178,8 @@ impl<'s, S: Source> Lexer<'s, S> {
     }
 
     /// PUC `lexerror`: `msg near <token>` at the scanner's current line.
+    #[cold]
+    #[inline(never)]
     fn error(&self, msg: &str, near: Near<'_>) -> SyntaxError {
         let mut out = msg.as_bytes().to_vec();
         out.extend_from_slice(b" near ");
@@ -189,6 +191,8 @@ impl<'s, S: Source> Lexer<'s, S> {
     }
 
     /// A lexer error quoting the lex buffer.
+    #[cold]
+    #[inline(never)]
     fn buf_error(&self, msg: &str) -> SyntaxError {
         self.error(msg, Near::Text(&self.buf))
     }

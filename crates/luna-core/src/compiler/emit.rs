@@ -52,6 +52,8 @@ impl<'a> Compiler<'a> {
     /// for the chunk's top-level proto and "function at line N" for every
     /// nested function — N is the proto's `line_defined`. errors.lua :766/:775
     /// check the line number substring.
+    #[cold]
+    #[inline(never)]
     pub(super) fn limit_err(&self, what: &str, limit: u32) -> SyntaxError {
         self.limit_err_at(self.depth - 1, what, limit)
     }
@@ -62,6 +64,8 @@ impl<'a> Compiler<'a> {
     /// the lexical chain. 5.1 errors.lua :238's 70 nested closures fill foo1's
     /// upval cap when foo70 first references a70, and PUC reports
     /// "...function at line 3" — foo1's start.
+    #[cold]
+    #[inline(never)]
     pub(super) fn limit_err_at(&self, li: usize, what: &str, limit: u32) -> SyntaxError {
         let line_defined = self.levels[li].line_defined;
         let where_ = if line_defined == 0 {

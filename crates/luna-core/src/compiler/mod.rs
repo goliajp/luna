@@ -302,6 +302,8 @@ impl<'a> Compiler<'a> {
     /// An expression nested deeper than the native stack left can compile
     /// (a long left-associative chain such as `1 + 1 + ... + 1`), reported
     /// in the words the dialect's parser uses at its nesting limit.
+    #[cold]
+    #[inline(never)]
     fn too_deep(&self) -> SyntaxError {
         match self.version {
             LuaVersion::Lua51 => self.err(self.last_line, "chunk has too many syntax levels"),
@@ -318,6 +320,8 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    #[cold]
+    #[inline(never)]
     fn err(&self, line: u32, msg: impl Into<String>) -> SyntaxError {
         SyntaxError {
             line,
