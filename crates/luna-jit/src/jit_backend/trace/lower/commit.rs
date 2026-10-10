@@ -1,8 +1,12 @@
-//! Where a trace's body commits its register writes to reg_state: before
-//! an op that may read reg_state (one that is not [`pure_op`]) everything,
-//! before any other op the registers no op writes again before then. Exits
-//! store what they leave with, so a value is stored as it is made unless a
-//! later one replaces it before anything reads reg_state.
+//! Where a trace's body commits its register writes to reg_state. Before
+//! an op that may read reg_state (one that is not [`pure_op`]) everything.
+//! Exits store what they leave with. Between those:
+//! - for the baseline tier, a value is stored as it is made, unless an op
+//!   writes the register again before anything reads reg_state; holding
+//!   it longer would make the baseline allocator spill;
+//! - for the optimizing tiers (`Lower::at_exits`), nothing: values stay in
+//!   registers across the back edge, which keeps only the promise that
+//!   registers the body never writes hold at the head what reg_state holds.
 
 use super::*;
 
@@ -121,4 +125,99 @@ pub(super) fn pure_op(op: Op) -> bool {
             | Op::Jmp
             | Op::ForLoop
     )
+}
+
+/// Sets what reg_state holds at the loop head (`Lower::stored`), before
+/// the body.
+pub(super) fn commit_start<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
+    if !lw.at_exits {
+        for &v in &lw.regs_full {
+            let val = use_var_resolved(&mut lw.bcx, v);
+            lw.stored.push(Some(val));
+        }
+        return;
+    }
+    let mut written = vec![false; lw.regs_full.len()];
+    for w in compute_body_writes(pl.record, &pl.op_offsets) {
+        if let Some(x) = written.get_mut(w as usize) {
+            *x = true;
+        }
+    }
+    for (idx, x) in written.iter_mut().enumerate() {
+        // inline frames' windows: written by the calls the trace inlines
+        *x |= idx >= pl.max_stack;
+    }
+    for (idx, &v) in lw.regs_full.iter().enumerate() {
+        let val = use_var_resolved(&mut lw.bcx, v);
+        let promise = (!written[idx]).then_some(val);
+        lw.stored.push(promise);
+        lw.head_stored.push(promise);
+    }
+}
+
+/// The commit before body op `i`; `rewritten`: the registers it or a later
+/// op writes before the next full commit ([`rewritten_before_sync`]).
+pub(super) fn commit_before<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    i: usize,
+    rewritten: &[bool],
+) {
+    let reg_state = lw.reg_state;
+    if syncs_before(pl.record, pl, i) {
+        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+    } else if !lw.at_exits {
+        sync_reg_state_except(
+            &mut lw.bcx,
+            &lw.regs_full,
+            &mut lw.stored,
+            reg_state,
+            rewritten,
+        );
+    }
+}
+
+/// The commit after the last body op, `end`, before the tail: everything
+/// for the tails that call helpers reading reg_state; otherwise, for the
+/// baseline tier, what the closing op does not write again.
+pub(super) fn commit_end<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, end: usize) {
+    let record = pl.record;
+    let reg_state = lw.reg_state;
+    let generic_for = pl
+        .for_loop_idx_opt
+        .is_some_and(|k| record.ops[k].inst.op() == Op::TForLoop);
+    if generic_for || pl.downrec_idx_opt.is_some() || pl.self_link_idx_opt.is_some() {
+        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+    } else if !lw.at_exits {
+        let closing = writes_of(lw.regs_full.len(), record, pl, end);
+        sync_reg_state_except(
+            &mut lw.bcx,
+            &lw.regs_full,
+            &mut lw.stored,
+            reg_state,
+            &closing,
+        );
+    }
+}
+
+/// The commit at the back edge: everything for the baseline tier; for the
+/// optimizing tiers, the head's promise (`Lower::head_stored`), storing a
+/// register the body was not expected to write but did.
+pub(super) fn commit_back_edge<E: Emit>(lw: &mut Lower<E>) {
+    let reg_state = lw.reg_state;
+    if !lw.at_exits {
+        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+        return;
+    }
+    for idx in 0..lw.regs_full.len() {
+        if let Some(hv) = lw.head_stored[idx] {
+            let v = use_var_resolved(&mut lw.bcx, lw.regs_full[idx]);
+            if v != hv && lw.stored[idx] != Some(v) {
+                lw.bcx
+                    .ins()
+                    .store(MemFlagsData::new(), v, reg_state, (idx as i32) * 8);
+                lw.stored[idx] = Some(v);
+            }
+        }
+    }
 }

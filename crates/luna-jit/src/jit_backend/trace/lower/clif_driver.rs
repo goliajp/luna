@@ -6,6 +6,7 @@ pub(super) fn lower_clif<M: Module>(
     escape: EscapeAnalysis,
     aot_fn_name: Option<&str>,
     always_codegen: bool,
+    at_exits: bool,
 ) -> Option<(FuncId, CompiledTrace)> {
     let Plan { record, .. } = *pl;
     let mut ctx = module.make_context();
@@ -36,7 +37,7 @@ pub(super) fn lower_clif<M: Module>(
     e.b.func.signature = sig;
     e.b.func.name = UserFuncName::user(0, fn_id.as_u32());
 
-    let (e, emitted) = emit_trace(e, pl, h, escape, 0)?;
+    let (e, emitted) = emit_trace(e, pl, h, escape, 0, at_exits)?;
     let ClifEmit {
         b: bcx,
         m: module,
