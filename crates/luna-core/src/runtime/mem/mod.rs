@@ -13,6 +13,7 @@ mod boxed;
 mod ctx;
 mod map;
 mod owner;
+mod pool;
 mod resize;
 mod vec;
 mod vec_abort;
