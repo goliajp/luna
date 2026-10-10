@@ -194,14 +194,14 @@ fn members(set: &[bool]) -> Vec<u32> {
 /// Stored on `CompiledTrace.body_writes` so child side traces can
 /// intersect against it at compile time.
 pub fn compute_body_writes(record: &TraceRecord, op_offsets: &[u32]) -> Vec<u32> {
-    let mut s = Vec::new();
+    let mut s = Vec::with_capacity(record.ops.len());
     for (i, rop) in record.ops.iter().enumerate() {
         let off = op_offsets.get(i).copied().unwrap_or(0);
-        for w in op_writes_at_offset(rop, off) {
-            insert(&mut s, w);
-        }
+        s.extend(op_writes_at_offset(rop, off));
     }
-    members(&s)
+    s.sort_unstable();
+    s.dedup();
+    s
 }
 
 /// compute the side trace's "live-in" slot set: slots

@@ -105,6 +105,8 @@ pub(crate) struct Bufs {
     pub(crate) fixups: Vec<(u32, u32, u8)>,
     /// Where the relocated addresses sit in `bytes`.
     pub(crate) sites: Vec<crate::jit_backend::trace::reloc::Site>,
+    /// AArch64 literal loads: (code offset, relocation, value).
+    pub(crate) lits: Vec<(u32, u32, i64)>,
 }
 
 pub(crate) trait Masm {

@@ -68,19 +68,36 @@ impl RegKind {
 }
 
 pub(super) fn kinds_to_exit_tags(kinds: &[RegKind]) -> Vec<ExitTag> {
-    kinds
-        .iter()
-        .map(|k| match k {
-            RegKind::Unset | RegKind::Unknown | RegKind::StackHeld => ExitTag::Untouched,
-            RegKind::Int => ExitTag::Int,
-            RegKind::Float => ExitTag::Float,
-            RegKind::Table => ExitTag::Table,
-            RegKind::Closure => ExitTag::Closure,
-            RegKind::Nil => ExitTag::Nil,
-            RegKind::Str => ExitTag::Str,
-            RegKind::Bool => ExitTag::Bool,
-        })
-        .collect()
+    kinds.iter().map(exit_tag_of).collect()
+}
+
+/// The exit tags of `kinds`, sharing the slice of the exit before when
+/// that exit left with the same kinds (`last`: its kinds and tags).
+pub(super) fn shared_exit_tags<'k>(
+    kinds: &'k [RegKind],
+    last: &mut Option<(&'k [RegKind], TArc<[ExitTag]>)>,
+) -> TArc<[ExitTag]> {
+    if let Some((k, t)) = last
+        && *k == kinds
+    {
+        return t.clone();
+    }
+    let tags: TArc<[ExitTag]> = kinds.iter().map(exit_tag_of).collect();
+    *last = Some((kinds, tags.clone()));
+    tags
+}
+
+fn exit_tag_of(k: &RegKind) -> ExitTag {
+    match k {
+        RegKind::Unset | RegKind::Unknown | RegKind::StackHeld => ExitTag::Untouched,
+        RegKind::Int => ExitTag::Int,
+        RegKind::Float => ExitTag::Float,
+        RegKind::Table => ExitTag::Table,
+        RegKind::Closure => ExitTag::Closure,
+        RegKind::Nil => ExitTag::Nil,
+        RegKind::Str => ExitTag::Str,
+        RegKind::Bool => ExitTag::Bool,
+    }
 }
 
 /// Whether a loop's back-edge may run the body again with the registers
@@ -149,4 +166,52 @@ pub(super) fn kind_tag(k: RegKind) -> u8 {
 /// the kind from scratch on every operand access.
 pub(super) fn k_op(current_kinds: &[RegKind], reg: u32) -> RegKind {
     *current_kinds.get(reg as usize).unwrap_or(&RegKind::Unset)
+}
+
+/// The kinds each tagged exit leaves with, in one buffer: `(pc, at, len)`
+/// per exit, its kinds at `kinds[at..at + len]`, and the cell its side
+/// trace goes in (the code holds the cell's address, so it never moves).
+#[derive(Default)]
+pub(super) struct ExitKinds {
+    kinds: Vec<RegKind>,
+    exits: Vec<(u32, u32, u32)>,
+    cells: Vec<Box<TCellPtr>>,
+}
+
+impl ExitKinds {
+    /// Room for `exits` exits of `width` registers before growing.
+    pub(super) fn with_capacity(exits: usize, width: usize) -> ExitKinds {
+        ExitKinds {
+            kinds: Vec::with_capacity(exits * width),
+            exits: Vec::with_capacity(exits),
+            cells: Vec::with_capacity(exits),
+        }
+    }
+
+    /// Records an exit to `pc` leaving with `kinds`; its index.
+    pub(super) fn push(&mut self, pc: u32, kinds: &[RegKind], cell: Box<TCellPtr>) -> u32 {
+        let at = self.kinds.len() as u32;
+        self.kinds.extend_from_slice(kinds);
+        self.exits.push((pc, at, kinds.len() as u32));
+        self.cells.push(cell);
+        (self.exits.len() - 1) as u32
+    }
+
+    /// The kinds exit `k` leaves with.
+    pub(super) fn kinds_mut(&mut self, k: u32) -> &mut [RegKind] {
+        let (_, at, len) = self.exits[k as usize];
+        &mut self.kinds[at as usize..(at + len) as usize]
+    }
+
+    /// Each exit's pc and kinds, in order.
+    pub(super) fn iter(&self) -> impl Iterator<Item = (u32, &[RegKind])> {
+        self.exits
+            .iter()
+            .map(|&(pc, at, len)| (pc, &self.kinds[at as usize..(at + len) as usize]))
+    }
+
+    /// The side-trace cells, in exit order.
+    pub(super) fn into_cells(self) -> Vec<Box<TCellPtr>> {
+        self.cells
+    }
 }

@@ -349,19 +349,21 @@ impl Masm for A64 {
             mut labels,
             mut fixups,
             mut sites,
+            mut lits,
         } = b;
         bytes.clear();
         code.clear();
         labels.clear();
         fixups.clear();
         sites.clear();
+        lits.clear();
         A64 {
             code,
             bytes,
             labels,
             fixups,
             sites,
-            lits: Vec::new(),
+            lits,
             saved: Vec::new(),
             fsaved: Vec::new(),
             locals: 0,
@@ -383,20 +385,22 @@ impl Masm for A64 {
             // nop: the pool's eight-byte words start eight-byte aligned
             self.put(0xD503_201F);
         }
-        let mut pool: Vec<(u32, u32)> = Vec::new();
-        for &(at, n, v) in &self.lits {
-            let lit = match pool.iter().find(|p| p.0 == n) {
-                Some(&(_, w)) => w,
+        // each relocation's word goes in the pool once; a placed entry
+        // keeps its word's index where its value was
+        for j in 0..self.lits.len() {
+            let (at, n, v) = self.lits[j];
+            let lit = match self.lits[..j].iter().find(|p| p.1 == n) {
+                Some(&(_, _, w)) => w as u32,
                 None => {
                     let w = self.code.len() as u32;
                     self.code.push(v as u32);
                     self.code.push((v as u64 >> 32) as u32);
                     self.sites
                         .push(crate::jit_backend::trace::reloc::Site { at: 4 * w, n });
-                    pool.push((n, w));
                     w
                 }
             };
+            self.lits[j].2 = i64::from(lit);
             self.code[at as usize] |= ((lit - at) & 0x7FFFF) << 5;
         }
         for w in &self.code {
@@ -408,6 +412,7 @@ impl Masm for A64 {
             labels: self.labels,
             fixups: self.fixups,
             sites: self.sites,
+            lits: self.lits,
         }
     }
 }

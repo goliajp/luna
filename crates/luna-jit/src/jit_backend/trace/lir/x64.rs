@@ -32,6 +32,8 @@ pub(crate) struct X64 {
     words: Vec<u32>,
     sites: Vec<crate::jit_backend::trace::reloc::Site>,
     saved: Vec<u8>,
+    /// Unused on x86-64: kept for the next AArch64-shaped [`Bufs`].
+    lits: Vec<(u32, u32, i64)>,
     frame: u32,
 }
 
@@ -458,6 +460,7 @@ impl Masm for X64 {
             mut labels,
             mut fixups,
             mut sites,
+            lits,
         } = b;
         code.clear();
         labels.clear();
@@ -469,6 +472,7 @@ impl Masm for X64 {
             fixups,
             words,
             sites,
+            lits,
             saved: Vec::new(),
             frame: 0,
         }
@@ -485,6 +489,7 @@ impl Masm for X64 {
             labels: self.labels,
             fixups: self.fixups,
             sites: self.sites,
+            lits: self.lits,
         }
     }
 }

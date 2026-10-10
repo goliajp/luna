@@ -78,7 +78,8 @@ pub(super) fn begin_body<E: Emit>(
     // site BEFORE the helper call so the IR's `iconst`-baked address
     // exists. Transported through into `tags_side_trace_ptrs` at the
     // end of emit (the cell never moves).
-    let per_exit_kinds: Vec<(u32, Vec<RegKind>, Box<TCellPtr>)> = Vec::new();
+    // about one exit per recorded op
+    let per_exit_kinds = ExitKinds::with_capacity(record.ops.len(), max_stack);
     // per inline cmp@d>0 side-exit. Each entry
     // is built at the cmp emit site and includes the side-exit PC,
     // a window-sized exit-tag snapshot, and the frame-mat chain. The
