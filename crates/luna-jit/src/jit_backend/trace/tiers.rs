@@ -102,7 +102,9 @@ fn compile_trace_baseline(
             lir: l.clone(),
             relocs: lir.relocs.clone(),
             image: None,
-            record: Some(super::tier_source::TierRecord {
+            // kept only where lowering again can differ: a clone per
+            // compiled trace is a cost every short-lived trace pays
+            record: lower::ops_all_pure(record).then(|| super::tier_source::TierRecord {
                 record: record.clone(),
                 opts,
                 float_only,
