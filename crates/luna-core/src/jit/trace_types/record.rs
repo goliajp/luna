@@ -6,6 +6,7 @@ use super::*;
 /// runtime context needed to emit cranelift guards (register kinds,
 /// metatable null checks, etc.). Stored in `TraceRecord.ops`.
 #[derive(Clone, Debug)]
+#[doc(hidden)]
 pub struct RecordedOp {
     /// Original Proto + PC that produced this op. Multiple
     /// `RecordedOp`s with different `proto` come from inlined calls.
@@ -76,6 +77,7 @@ pub fn field_ic_enabled() -> bool {
 ///
 /// Only a single snapshot is supported (the first eligible site).
 #[derive(Clone, Copy, Debug)]
+#[doc(hidden)]
 pub struct FieldIcSnapshot {
     /// Index into `TraceRecord.ops` of the `Op::GetField` this
     /// snapshot describes. The lowerer matches `op_idx == i` at
@@ -108,6 +110,7 @@ pub struct FieldIcSnapshot {
 /// target PC, terminating at either a loop close (back to head) or a
 /// hard exit (return, error).
 #[derive(Clone, Debug)]
+#[doc(hidden)]
 pub struct TraceRecord {
     /// The PC the trace starts at (back-edge target).
     pub head_proto: Gc<Proto>,

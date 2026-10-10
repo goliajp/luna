@@ -31,7 +31,16 @@ optimization.
   `side_trace_cache` maps a sentinel to an exit index.
   `AdoptRequest::side_parent` and `AdoptedTrace::side_parent` carry the
   parent's prototype. `TraceCompiler` has the hidden methods
-  `failure_known` and `publish_failure`.
+  `failure_known` and `publish_failure`. `TraceRecord` has the field
+  `closed_at_head` (the recording ended because execution came back to
+  its head).
+- The trace JIT's data types in `luna_core::jit` (`TraceRecord`,
+  `RecordedOp`, `FieldIcSnapshot`, `CompiledTrace`, `TierUp`,
+  `CompileOptions`, `RetfRecord`, `DownRecClose`, `InlineSideExit`,
+  `HotExitInfo`, `FrameMaterializeInfo`) are hidden from the docs, like
+  `AdoptedTrace` already was. `luna_core::jit` has been outside the
+  stable API since 2.7.0; the crate docs now say so, and that these
+  types gain fields whenever the trace JIT changes.
 
 - Chunks in luna's own binary format (PUC header followed by the
   `LunaV1` … `LunaV4` body) no longer load: a table
@@ -187,6 +196,12 @@ optimization.
 
 ### Changed
 
+- A side trace can run into a loop and round its edge back to where it
+  started: a comparison that is the last op of such a recording takes
+  the side trace's head as the op after it, and a backward jump the
+  recording followed needs no code. Before, a side trace whose exit sat
+  in front of an inner loop the trace JIT did not record by itself never
+  compiled.
 - `llvm-jit` now needs LLVM with the native target only: luna-jit-llvm
   turns inkwell's default features (every LLVM target) off and enables
   the target of the architecture it is built for. A linker that keeps
@@ -660,9 +675,18 @@ optimization.
   rebuilt the middle frames with their callers' resume pcs, so such a
   frame went on at the wrong instruction once the inner call returned
   (`return h(x) + 1` lost the `+ 1`). Exits one call deep were right.
+  Versions 1.3.0 through 4.0.2 are affected with the default hot
+  thresholds when a function inlines itself from two call sites:
+  `local function g(n, k) if n <= 0 then if k % 7 == 0 then return 1000
+  end return 1 end local a = g(n - 1, k) * 2 local b = g(n - 2, k + 1)
+  + 3 return a - b end`, summed over `g(5, i)` for `i = 1, 3000`, gives
+  291149 under 5.4 instead of 294573 (checked on 1.3.0, 2.3.0, 2.9.0,
+  3.0.0, 3.2.2, 4.0.0 and 4.0.2; 1.1.0 is right).
 - The side-trace gate read a `Jmp`'s offset from the `sBx` field instead
   of `sJ`, so it took a backward jump of fewer than 256 instructions for
-  no jump and let a side trace that loops and writes to tables compile.
+  no jump. No program computed a wrong result from it: a side trace runs
+  its ops once and never loops on itself, so the checks this skipped do
+  not apply to it, and they now run only for traces that loop.
 
 - `#t` on a table with holes could return a different border than PUC.
   `{f(6), f(7), g(), f(8)}` (with `g` returning nothing) has borders 2
