@@ -47,6 +47,7 @@ pub enum SelfRecKind {
 /// No `PartialEq, Eq` derives because `Gc<T>` intentionally doesn't
 /// impl those traits (use `Gc::ptr_eq` for pointer-identity equality).
 #[derive(Clone, Copy, Debug)]
+#[doc(hidden)]
 pub struct RetfRecord {
     /// Depth this return originated from (>0; the frame about to be
     /// popped).
@@ -84,6 +85,7 @@ pub struct RetfRecord {
 /// `asm_retf`-equivalent guard sequence; the dispatcher follows the
 /// stitch.
 #[derive(Clone, Copy, Debug)]
+#[doc(hidden)]
 pub struct DownRecClose {
     /// PC the inlined-frame `Return` is unwinding to. Used by the
     /// lowerer to bake the guard-target into the stitch IR and by

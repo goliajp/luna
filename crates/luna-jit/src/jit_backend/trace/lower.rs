@@ -88,7 +88,7 @@ struct Lower<E: Emit> {
     current_kinds: Vec<RegKind>,
     dispatchable: bool,
     dispatch_off_reason: Option<&'static str>,
-    per_exit_kinds: Vec<(u32, Vec<RegKind>, Box<TCellPtr>)>,
+    per_exit_kinds: ExitKinds,
     per_exit_inline_vec: Vec<(
         u32,
         u32,
@@ -175,28 +175,39 @@ fn with_plan<R>(
     let translated;
     let (record, vconsts) = match split_const_operands(record, frame_w as u32) {
         Some((t, v)) => {
-            translated = t;
-            (&translated, v)
+            translated = Some(t);
+            (translated.as_ref().unwrap_or(record), v)
         }
-        None => (record, Vec::new()),
+        None => {
+            translated = None;
+            (record, Vec::new())
+        }
     };
-    let (plan, escape) = plan_trace(
-        record, vconsts, head_proto, max_stack, frame_w, opts, float_only,
-    )?;
-    // a root trace reading a register on entry that holds a value no trace
-    // is entered with (a boolean, a coroutine) could never run: it is not
-    // compiled, and leaves its head free for a later recording
-    let never_entered = record.side_trace_parent.is_none()
-        && record
-            .entry_tags
-            .iter()
-            .zip(&plan.head_live)
-            .any(|(&t, &live)| live && !luna_core::jit::trace::entry_tag_enterable(t));
-    if never_entered {
-        checkpoint("bail:entry-tag-never-entered");
-        return None;
+    let out = 'planned: {
+        let Some((plan, escape)) = plan_trace(
+            record, vconsts, head_proto, max_stack, frame_w, opts, float_only,
+        ) else {
+            break 'planned None;
+        };
+        // a root trace reading a register on entry that holds a value no
+        // trace is entered with (a boolean, a coroutine) could never run: it
+        // is not compiled, and leaves its head free for a later recording
+        let never_entered = record.side_trace_parent.is_none()
+            && record
+                .entry_tags
+                .iter()
+                .zip(&plan.head_live)
+                .any(|(&t, &live)| live && !luna_core::jit::trace::entry_tag_enterable(t));
+        if never_entered {
+            checkpoint("bail:entry-tag-never-entered");
+            break 'planned None;
+        }
+        Some(f(&plan, escape))
+    };
+    if let Some(t) = translated {
+        give_record(t);
     }
-    Some(f(&plan, escape))
+    out
 }
 
 /// Whether every op of `record` is one the optimizing tiers lower with

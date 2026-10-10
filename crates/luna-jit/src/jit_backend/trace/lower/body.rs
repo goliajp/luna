@@ -24,9 +24,10 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
     // mutably while it reads it), plus `kvars` for the virtual registers
     let mut regs_w: Vec<Variable> = Vec::with_capacity(frame_w + NVIRT);
     checkpoint("pre:main-emit-loop");
-    let rewritten = rewritten_before_sync(lw.regs_full.len(), record, pl, effective_end);
+    let n_regs = lw.regs_full.len();
+    let rewritten = rewritten_before_sync(n_regs, record, pl, effective_end);
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
-        commit_before(lw, pl, i, &rewritten[i]);
+        commit_before(lw, pl, i, &rewritten[i * n_regs..(i + 1) * n_regs]);
         alt_join(lw, i);
         let vregs: VRegs = pl.vconsts.get(i).copied().unwrap_or([None; NVIRT]);
         // R[C] of a register-operand op, read before this op's own write
@@ -154,6 +155,9 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
 /// What a window slot held before an op's virtual register stood in it.
 type HeldSlot = (usize, RegKind, Option<i64>, bool);
 
+/// The slots of an op's virtual registers, as [`enter_virt`] found them.
+type Held = [Option<HeldSlot>; NVIRT];
+
 /// Defines the virtual registers of op `oc` in `kvars`, and puts their
 /// kinds (and known constants) in the window slots `off + frame_w` up for
 /// the op, so that the emit code reads them as it reads any register.
@@ -165,8 +169,8 @@ fn enter_virt<E: Emit>(
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
     kvars: &[Variable; NVIRT],
-) -> Option<Vec<HeldSlot>> {
-    let mut held = Vec::new();
+) -> Option<Held> {
+    let mut held: Held = [None; NVIRT];
     for (j, src) in oc.vregs.iter().enumerate() {
         let Some(src) = *src else {
             continue;
@@ -186,7 +190,7 @@ fn enter_virt<E: Emit>(
         };
         lw.bcx.def_var(kvars[j], v);
         let slot = oc.off + pl.frame_w + j;
-        held.push((
+        held[j] = Some((
             slot,
             lw.current_kinds[slot],
             lw.known_int[slot],
@@ -204,8 +208,8 @@ fn enter_virt<E: Emit>(
 }
 
 /// Puts back what [`enter_virt`] found in the window slots.
-fn leave_virt<E: Emit>(lw: &mut Lower<E>, held: Vec<HeldSlot>) {
-    for (slot, kind, int, s) in held {
+fn leave_virt<E: Emit>(lw: &mut Lower<E>, held: Held) {
+    for (slot, kind, int, s) in held.into_iter().flatten() {
         lw.current_kinds[slot] = kind;
         lw.known_int[slot] = int;
         lw.const_str[slot] = s;

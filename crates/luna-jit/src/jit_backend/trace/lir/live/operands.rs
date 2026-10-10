@@ -4,6 +4,7 @@
 use super::*;
 
 /// Calls `f` with each vreg `inst` reads.
+#[inline(always)]
 pub(crate) fn for_uses(lir: &Lir, i: &Inst, mut f: impl FnMut(u32)) {
     let nv = lir.value_ty.len() as u32;
     match i.op {
@@ -43,6 +44,7 @@ pub(crate) fn for_uses(lir: &Lir, i: &Inst, mut f: impl FnMut(u32)) {
 }
 
 /// Calls `f` with each vreg `inst` writes.
+#[inline(always)]
 pub(crate) fn for_defs(lir: &Lir, i: &Inst, mut f: impl FnMut(u32)) {
     let nv = lir.value_ty.len() as u32;
     if i.dst != NONE {

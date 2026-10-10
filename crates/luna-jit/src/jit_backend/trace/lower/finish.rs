@@ -5,7 +5,7 @@ pub(super) struct Emitted {
     pub(super) current_kinds: Vec<RegKind>,
     pub(super) dispatchable: bool,
     pub(super) dispatch_off_reason: Option<&'static str>,
-    pub(super) per_exit_kinds: Vec<(u32, Vec<RegKind>, Box<TCellPtr>)>,
+    pub(super) per_exit_kinds: ExitKinds,
     pub(super) per_exit_inline_vec: Vec<(
         u32,
         u32,
@@ -199,57 +199,54 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
     }
     let global_tag_res_kind = classify_exit_tags(&exit_tags_vec);
     let exit_tags: TArc<[ExitTag]> = exit_tags_vec.into();
-    // split per_exit_kinds's 3-tuple into the
-    // 2-tuple `per_exit_tags` for the dispatcher AND the parallel
-    // `tags_side_trace_ptrs` Box slice the close handler writes to.
-    // The Box transports the cell's heap address (baked into the
-    // IR's `iconst` at each callsite) through this move without
-    // moving the cell itself.
-    let mut tags_side_boxes: Vec<Box<TCellPtr>> = Vec::with_capacity(per_exit_kinds.len());
+    // `per_exit_tags` for the dispatcher, and the parallel
+    // `tags_side_trace_ptrs` cells the close handler writes to (the code
+    // holds each cell's address, so the boxes move but the cells do not)
+    let mut last = None;
     let per_exit_tags: TArc<[(u32, TArc<[ExitTag]>)]> = per_exit_kinds
-        .into_iter()
-        .map(|(pc, kinds, side_box)| {
+        .iter()
+        .map(|(pc, kinds)| {
             // The cmp emit site pushed the right slice
             // length (caller-window for depth=0, full window for
             // depth>0). Hand it through verbatim — the dispatcher
             // iterates `exit_tags_for_pc.len()` and walks both
             // shapes uniformly.
-            let tags: TArc<[ExitTag]> = kinds_to_exit_tags(&kinds).into();
-            tags_side_boxes.push(side_box);
-            (pc, tags)
+            (pc, shared_exit_tags(kinds, &mut last))
         })
-        .collect::<Vec<_>>()
-        .into();
-    let tags_side_trace_ptrs: TArc<[Box<TCellPtr>]> = tags_side_boxes.into();
+        .collect();
+    let tags_side_trace_ptrs: TArc<[Box<TCellPtr>]> = per_exit_kinds.into_cells().into();
+    let mut last = None;
+    let inline_tags: Vec<TArc<[ExitTag]>> = per_exit_inline_vec
+        .iter()
+        .map(|(_, _, kinds, _, _)| shared_exit_tags(kinds, &mut last))
+        .collect();
     let per_exit_inline: TArc<[InlineSideExit]> = per_exit_inline_vec
         .into_iter()
+        .zip(inline_tags)
         .map(
-            |(cont_pc, head_resume_pc, kinds, chain, side_trace_ptr)| InlineSideExit {
+            |((cont_pc, head_resume_pc, _, chain, side_trace_ptr), exit_tags)| InlineSideExit {
                 cont_pc,
                 head_resume_pc,
-                exit_tags: kinds_to_exit_tags(&kinds).into(),
+                exit_tags,
                 chain,
                 side_trace_ptr,
             },
         )
-        .collect::<Vec<_>>()
-        .into();
+        .collect();
 
     checkpoint("post:emit-pass-done");
     // pre-compute exit_hit_counts before the struct
     // init so per_exit_tags's len is still accessible.
     let exit_hit_counts: TArc<[TCellU32]> = {
         let total = per_exit_inline.len() + per_exit_tags.len() + 1;
-        let v: Vec<TCellU32> = (0..total).map(|_| TCellU32::new(0)).collect();
-        v.into()
+        (0..total).map(|_| TCellU32::new(0)).collect()
     };
     // parallel per-exit raw fn-ptr slots, all null
     // until a child side trace compiles for the slot. Same length
     // as exit_hit_counts.
     let exit_side_trace_ptrs: TArc<[TCellPtr]> = {
         let total = per_exit_inline.len() + per_exit_tags.len() + 1;
-        let v: Vec<TCellPtr> = (0..total).map(|_| TCellPtr::null()).collect();
-        v.into()
+        (0..total).map(|_| TCellPtr::null()).collect()
     };
     CompiledTrace {
         head_pc: record.head_pc,

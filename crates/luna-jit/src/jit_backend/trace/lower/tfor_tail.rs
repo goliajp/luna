@@ -51,7 +51,9 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     // loop has one, a value) of those tags. A pairs loop
     // over string keys meeting an integer key (or the
     // reverse) stored the new key under the old tag.
-    let call = record.ops[for_loop_idx - 1].inst;
+    // a side trace can begin at the loop instruction itself, with no call
+    // recorded before it
+    let call = for_loop_idx.checked_sub(1).map(|k| record.ops[k].inst)?;
     if !call.op().is_tfor_call() {
         return None;
     }
@@ -83,15 +85,16 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     // Every loop variable restores as nil: the key is nil, and
     // the value slots hold what the iterator's last call left
     // (nil in the helper path), which the loop no longer reads.
-    let mut nil_snapshot: Vec<RegKind> = lw.current_kinds[..max_stack].to_vec();
-    for k in first..(first + nvars).min(nil_snapshot.len()) {
-        nil_snapshot[k] = RegKind::Nil;
+    let tag_side_local_2 = lw.per_exit_kinds.push(
+        rop.pc + 1,
+        &lw.current_kinds[..max_stack],
+        Box::new(TCellPtr::null()),
+    );
+    let nil_snapshot = lw.per_exit_kinds.kinds_mut(tag_side_local_2);
+    let n = nil_snapshot.len();
+    for k in nil_snapshot[first.min(n)..(first + nvars).min(n)].iter_mut() {
+        *k = RegKind::Nil;
     }
-    let tag_side_box_2: Box<TCellPtr> = Box::new(TCellPtr::null());
-    let _tag_side_cell_addr_2 = (&*tag_side_box_2) as *const TCellPtr as i64;
-    let tag_side_local_2 = lw.per_exit_kinds.len() as u32;
-    lw.per_exit_kinds
-        .push((rop.pc + 1, nil_snapshot, tag_side_box_2));
     emit_tagged_exit(
         &mut lw.bcx,
         suppress_admit_id,

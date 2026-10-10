@@ -52,6 +52,8 @@ pub(crate) struct Analysis {
     pub(crate) loops: Vec<(u32, u32)>,
     depth: Vec<i32>,
     writes: Vec<Vec<u32>>,
+    /// `(value, variable, position)` of each variable read.
+    var_reads: Vec<(u32, u32, u32)>,
 }
 
 /// How much more a read or write inside a loop counts than one outside.
@@ -93,27 +95,54 @@ pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
     let nv = lir.value_ty.len() as u32;
     let nreg = (nv as usize) + lir.var_ty.len();
     layout(lir, an);
-    an.code.clear();
+    // each block's place in the layout from the blocks' lengths; the
+    // instructions themselves are listed in the pass below
     reset(&mut an.block_at, lir.blocks.len(), (NONE, NONE));
+    let mut at = 0;
     for &b in &an.order {
-        let first = an.code.len() as u32;
-        let mut i = lir.blocks[b as usize].first;
-        while i != NONE {
-            an.code.push(i);
-            i = lir.insts[i as usize].next;
+        let n = lir.blocks[b as usize].len;
+        an.block_at[b as usize] = (at, at + n);
+        at += n;
+    }
+    an.code.clear();
+    an.code.reserve(at as usize);
+    // the loops, from the back edges: a successor laid out at or before
+    // the block
+    an.loops.clear();
+    for &b in &an.order {
+        let (lo, hi) = an.block_at[b as usize];
+        if hi > lo {
+            for s in succs(lir, b) {
+                if s != NONE && an.block_at[s as usize].0 <= lo {
+                    an.loops.push((2 * an.block_at[s as usize].0, 2 * hi - 1));
+                }
+            }
         }
-        an.block_at[b as usize] = (first, an.code.len() as u32);
+    }
+    // per position: how many loops are around it
+    let n_pos = 2 * at as usize + 2;
+    reset(&mut an.depth, n_pos + 1, 0);
+    for &(h, e) in &an.loops {
+        an.depth[h as usize] += 1;
+        an.depth[e as usize + 1] -= 1;
+    }
+    let mut d = 0;
+    for x in an.depth.iter_mut() {
+        d += *x;
+        *x = d;
     }
     reset(&mut an.start, nreg, NONE);
     reset(&mut an.end, nreg, 0);
     reset(&mut an.uses, nv as usize, 0);
     reset(&mut an.read, lir.var_ty.len(), false);
+    reset(&mut an.weight, nreg, 0);
+    an.writes.iter_mut().for_each(Vec::clear);
+    an.writes.resize_with(lir.var_ty.len(), Vec::new);
+    an.var_reads.clear();
     an.calls.clear();
-    an.loops.clear();
     let Analysis {
         order,
         code,
-        block_at,
         start,
         end,
         uses,
@@ -121,9 +150,14 @@ pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
         entry_vars,
         read,
         loops,
+        depth,
+        weight,
+        writes,
+        var_reads,
         ..
     } = an;
-    let mut touch = |r: u32, p: u32| {
+    #[inline(always)]
+    fn touch(start: &mut [u32], end: &mut [u32], weight: &mut [u32], r: u32, p: u32, w: u32) {
         let r = r as usize;
         if start[r] == NONE {
             start[r] = p;
@@ -131,36 +165,37 @@ pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
         if p > end[r] {
             end[r] = p;
         }
-    };
+        weight[r] = weight[r].saturating_add(w);
+    }
     for &b in order.iter() {
-        let (lo, hi) = block_at[b as usize];
-        for (off, &ii) in code[lo as usize..hi as usize].iter().enumerate() {
-            let p = 2 * (lo + off as u32);
+        let mut ii = lir.blocks[b as usize].first;
+        while ii != NONE {
+            let k = code.len();
+            code.push(ii);
+            let p = 2 * k as u32;
+            let w = LOOP_WEIGHT.saturating_pow(depth[p as usize] as u32);
             let inst = &lir.insts[ii as usize];
+            ii = inst.next;
             for_uses(lir, inst, |r| {
                 if r < nv {
                     uses[r as usize] += 1;
                 } else {
                     read[(r - nv) as usize] = true;
                 }
-                touch(r, p);
+                touch(start, end, weight, r, p, w);
             });
-            for_defs(lir, inst, |r| touch(r, p + 1));
-            if matches!(inst.op, Op::Call | Op::CallIndirect) {
-                calls.push(p);
-            }
-        }
-        if hi > lo {
-            for s in succs(lir, b) {
-                if s != NONE && block_at[s as usize].0 <= lo {
-                    loops.push((2 * block_at[s as usize].0, 2 * hi - 1));
-                }
+            for_defs(lir, inst, |r| touch(start, end, weight, r, p + 1, w));
+            match inst.op {
+                Op::Call | Op::CallIndirect => calls.push(p),
+                Op::VarWrite => writes[inst.a as usize].push(p + 1),
+                Op::VarRead => var_reads.push((inst.dst, inst.a, p + 1)),
+                _ => {}
             }
         }
     }
     // the function's parameter arrives in the entry block
     if lir.arg0 != NONE {
-        touch(lir.arg0, 0);
+        touch(start, end, weight, lir.arg0, 0, 0);
     }
     // a value nothing reads needs no register (its pure instruction is not
     // emitted; a call's result is dropped)
@@ -169,7 +204,6 @@ pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
             start[r] = NONE;
         }
     }
-
     entry_vars.clear();
     for (k, &r) in read.iter().enumerate() {
         if r {
@@ -194,89 +228,43 @@ pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
         }
     }
     an.n_values = nv;
-    coalesce_var_reads(lir, an);
-    weigh(lir, an);
+    coalesce_var_reads(an);
 }
 
 /// A value read from a variable that is not written while the value is
 /// live stays in the variable's home: the read is no copy, and the
-/// variable, now read wherever the value is, keeps a register more often.
-fn coalesce_var_reads(lir: &Lir, an: &mut Analysis) {
+/// variable, now read wherever the value is, keeps a register more often
+/// (it takes the value's weight).
+fn coalesce_var_reads(an: &mut Analysis) {
     let nv = an.n_values as usize;
     let Analysis {
-        code,
         start,
         end,
         alias,
         writes,
+        var_reads,
+        weight,
         ..
     } = an;
     reset(alias, nv, NONE);
-    writes.iter_mut().for_each(Vec::clear);
-    writes.resize_with(lir.var_ty.len(), Vec::new);
-    for (k, &ii) in code.iter().enumerate() {
-        let i = &lir.insts[ii as usize];
-        if matches!(i.op, Op::VarWrite) {
-            writes[i.a as usize].push(2 * k as u32 + 1);
-        }
-    }
-    for (k, &ii) in code.iter().enumerate() {
-        let i = &lir.insts[ii as usize];
-        if !matches!(i.op, Op::VarRead) || start[i.dst as usize] == NONE {
+    for &(dst, var, p) in var_reads.iter() {
+        let d = dst as usize;
+        if start[d] == NONE {
             continue;
         }
-        let d = i.dst as usize;
-        let p = 2 * k as u32 + 1;
-        let w = &writes[i.a as usize];
+        let w = &writes[var as usize];
         // the first write after the read, in layout order: loops extended
         // the value's interval over every write that can run while it lives
         let next = w.partition_point(|&x| x <= p);
         if w.get(next).is_some_and(|&x| x <= end[d]) {
             continue;
         }
-        let r = nv + i.a as usize;
+        let r = nv + var as usize;
         end[r] = end[r].max(end[d]);
         start[r] = start[r].min(start[d]);
         start[d] = NONE;
         alias[d] = r as u32;
-    }
-}
-
-/// Fills `an.weight` once the loops are known.
-fn weigh(lir: &Lir, an: &mut Analysis) {
-    let n_pos = 2 * an.code.len() + 2;
-    let Analysis {
-        code,
-        weight,
-        loops,
-        depth,
-        start,
-        alias,
-        ..
-    } = an;
-    reset(weight, start.len(), 0);
-    reset(depth, n_pos + 1, 0);
-    for &(h, e) in loops.iter() {
-        depth[h as usize] += 1;
-        depth[e as usize + 1] -= 1;
-    }
-    let mut d = 0;
-    for x in depth.iter_mut() {
-        d += *x;
-        *x = d;
-    }
-    for (k, &ii) in code.iter().enumerate() {
-        let p = 2 * k;
-        let w = LOOP_WEIGHT.saturating_pow(depth[p] as u32);
-        let inst = &lir.insts[ii as usize];
-        let mut add = |r: u32| {
-            let r = match alias.get(r as usize) {
-                Some(&a) if a != NONE => a,
-                _ => r,
-            };
-            weight[r as usize] = weight[r as usize].saturating_add(w);
-        };
-        for_uses(lir, inst, &mut add);
-        for_defs(lir, inst, &mut add);
+        weight[r] = weight[r].saturating_add(weight[d]);
+        weight[d] = 0;
     }
 }

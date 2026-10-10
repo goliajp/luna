@@ -27,6 +27,7 @@ pub type TraceFn = unsafe extern "C" fn(*mut i64) -> i64;
 /// at its head PC. Owned by `Proto.traces`; the underlying mmap is
 /// kept alive by the `Vm.jit_handles` Vec for the Vm's lifetime,
 /// just like the method JIT's compiled functions.
+#[doc(hidden)]
 pub struct CompiledTrace {
     /// Pc the trace dispatches at (matches the recorder's `head_pc`).
     pub head_pc: u32,
@@ -306,6 +307,7 @@ pub struct CompiledTrace {
 }
 
 /// A trace on its way to the optimizing tier.
+#[doc(hidden)]
 pub struct TierUp {
     /// Loop iterations run in the trace's code plus entries: the code adds
     /// one per iteration through this cell (whose address it holds), the

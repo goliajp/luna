@@ -54,11 +54,9 @@ macro_rules! fast_cmp_arms {
                     // SAFETY: as above
                     unsafe { (*pl).raw_eq(*pr) }
                 } else {
-                    // SAFETY: as above
-                    let (l, r) = unsafe { (*pl, *pr) };
                     save!();
-                    let step = $vm.eq_step(l, r);
-                    $vm.op_compare(step, l, r, $inst.k())?;
+                    // SAFETY: as above
+                    unsafe { $vm.eq_slow(pl, pr, $inst.k())? };
                     resume!()
                 };
                 cond_jump!(eq == $inst.k())

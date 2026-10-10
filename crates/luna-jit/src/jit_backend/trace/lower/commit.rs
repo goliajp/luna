@@ -41,6 +41,12 @@ pub(super) fn syncs_before(record: &TraceRecord, pl: &Plan<'_>, i: usize) -> boo
 /// Per register: whether op `i` writes it (none past the recorded ops).
 pub(super) fn writes_of(n: usize, record: &TraceRecord, pl: &Plan<'_>, i: usize) -> Vec<bool> {
     let mut w = vec![false; n];
+    mark_writes(&mut w, record, pl, i);
+    w
+}
+
+/// Sets `w[r]` for each register `r` op `i` writes.
+fn mark_writes(w: &mut [bool], record: &TraceRecord, pl: &Plan<'_>, i: usize) {
     if let (Some(rop), Some(&off)) = (record.ops.get(i), pl.op_offsets.get(i)) {
         for r in op_writes_at_offset(rop, off) {
             if let Some(x) = w.get_mut(r as usize) {
@@ -48,26 +54,26 @@ pub(super) fn writes_of(n: usize, record: &TraceRecord, pl: &Plan<'_>, i: usize)
             }
         }
     }
-    w
 }
 
-/// Per op below `end`: the registers it or a later op writes before the
-/// next op everything is committed before ([`syncs_before`]).
+/// Per op below `end`, a row of `n` flags: the registers it or a later op
+/// writes before the next op everything is committed before
+/// ([`syncs_before`]). Row `i` is `[i * n..(i + 1) * n]`.
 pub(super) fn rewritten_before_sync(
     n: usize,
     record: &TraceRecord,
     pl: &Plan<'_>,
     end: usize,
-) -> Vec<Vec<bool>> {
-    let mut rewritten: Vec<Vec<bool>> = vec![Vec::new(); end];
+) -> Vec<bool> {
+    let mut rewritten = vec![false; end * n];
     for i in (0..end).rev() {
-        let mut w = writes_of(n, record, pl, i);
+        let (row, later) = rewritten[i * n..].split_at_mut(n);
+        mark_writes(row, record, pl, i);
         if i + 1 < end && !syncs_before(record, pl, i + 1) {
-            for (x, &y) in w.iter_mut().zip(&rewritten[i + 1]) {
+            for (x, &y) in row.iter_mut().zip(&later[..n]) {
                 *x |= y;
             }
         }
-        rewritten[i] = w;
     }
     rewritten
 }
@@ -130,6 +136,7 @@ pub(super) fn pure_op(op: Op) -> bool {
 /// Sets what reg_state holds at the loop head (`Lower::stored`), before
 /// the body.
 pub(super) fn commit_start<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
+    lw.stored.reserve(lw.regs_full.len());
     if !lw.at_exits {
         for &v in &lw.regs_full {
             let val = use_var_resolved(&mut lw.bcx, v);

@@ -6,6 +6,7 @@ use super::*;
 /// runtime context needed to emit cranelift guards (register kinds,
 /// metatable null checks, etc.). Stored in `TraceRecord.ops`.
 #[derive(Clone, Debug)]
+#[doc(hidden)]
 pub struct RecordedOp {
     /// Original Proto + PC that produced this op. Multiple
     /// `RecordedOp`s with different `proto` come from inlined calls.
@@ -76,6 +77,7 @@ pub fn field_ic_enabled() -> bool {
 ///
 /// Only a single snapshot is supported (the first eligible site).
 #[derive(Clone, Copy, Debug)]
+#[doc(hidden)]
 pub struct FieldIcSnapshot {
     /// Index into `TraceRecord.ops` of the `Op::GetField` this
     /// snapshot describes. The lowerer matches `op_idx == i` at
@@ -108,6 +110,7 @@ pub struct FieldIcSnapshot {
 /// target PC, terminating at either a loop close (back to head) or a
 /// hard exit (return, error).
 #[derive(Clone, Debug)]
+#[doc(hidden)]
 pub struct TraceRecord {
     /// The PC the trace starts at (back-edge target).
     pub head_proto: Gc<Proto>,
@@ -219,6 +222,10 @@ pub struct TraceRecord {
     /// lowerer of a 5.3 integer loop checks the sign once before the loop
     /// instead of choosing the comparison on every iteration.
     pub for_step_up: Option<bool>,
+    /// The recording closed because the interpreter came back to
+    /// `head_pc` in the head frame: the op that would follow the last
+    /// recorded one is the head.
+    pub closed_at_head: bool,
 }
 
 /// [`TraceRecord::index_slots`] for an op with none.
@@ -289,6 +296,7 @@ impl TraceRecord {
             index_slots: Vec::with_capacity(MAX_TRACE_LEN),
             index_key: None,
             for_step_up: None,
+            closed_at_head: false,
         }
     }
 
@@ -331,6 +339,7 @@ impl TraceRecord {
             index_slots: Vec::with_capacity(MAX_TRACE_LEN),
             index_key: None,
             for_step_up: None,
+            closed_at_head: false,
         }
     }
 
@@ -339,6 +348,7 @@ impl TraceRecord {
     #[doc(hidden)]
     pub fn truncated(&self, n: usize) -> TraceRecord {
         let mut r = self.clone();
+        r.closed_at_head &= n == r.ops.len();
         r.ops.truncate(n);
         r.result_tags.truncate(n);
         r.field_slots.truncate(n);
