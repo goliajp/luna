@@ -675,13 +675,14 @@ optimization.
   rebuilt the middle frames with their callers' resume pcs, so such a
   frame went on at the wrong instruction once the inner call returned
   (`return h(x) + 1` lost the `+ 1`). Exits one call deep were right.
-  Versions 1.3.0 through 4.0.2 are affected with the default hot
-  thresholds when a function inlines itself from two call sites:
-  `local function g(n, k) if n <= 0 then if k % 7 == 0 then return 1000
-  end return 1 end local a = g(n - 1, k) * 2 local b = g(n - 2, k + 1)
-  + 3 return a - b end`, summed over `g(5, i)` for `i = 1, 3000`, gives
-  291149 under 5.4 instead of 294573 (checked on 1.3.0, 2.3.0, 2.9.0,
-  3.0.0, 3.2.2, 4.0.0 and 4.0.2; 1.1.0 is right).
+  Versions 1.3.0 through 4.0.2 are affected with the default settings
+  when a function inlines itself from two call sites: `local function
+  g(n, k) if n <= 0 then if k % 7 == 0 then return 1000 end return 1
+  end local a = g(n - 1, k) * 2 local b = g(n - 2, k + 1) + 3 return a
+  - b end`, summed over `g(5, i)` for `i = 1, 3000`, gives 291149 under
+  5.4 instead of 294573 (checked on 1.3.0, 2.3.0, 2.9.0, 3.0.0, 3.2.2,
+  4.0.0 and 4.0.2). 1.1.0 is affected only with the trace JIT turned on:
+  it was off by default until 1.3.0, the first release after 1.1.0.
 - The side-trace gate read a `Jmp`'s offset from the `sBx` field instead
   of `sJ`, so it took a backward jump of fewer than 256 instructions for
   no jump. No program computed a wrong result from it: a side trace runs
