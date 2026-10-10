@@ -183,6 +183,8 @@ pub(crate) struct Inst {
 pub(crate) struct BlockData {
     pub(crate) first: u32,
     pub(crate) last: u32,
+    /// Instructions in the block.
+    pub(crate) len: u32,
     /// `params_at..params_at + n_params` in [`Lir::bparams`].
     pub(crate) params_at: u32,
     pub(crate) n_params: u32,
@@ -314,6 +316,7 @@ impl Lir {
                 .map(|b| BlockData {
                     first: b.first,
                     last: b.last,
+                    len: b.len,
                     params_at: b.params_at,
                     n_params: b.n_params,
                     ..BlockData::default()

@@ -95,17 +95,17 @@ pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
     let nv = lir.value_ty.len() as u32;
     let nreg = (nv as usize) + lir.var_ty.len();
     layout(lir, an);
-    an.code.clear();
+    // each block's place in the layout from the blocks' lengths; the
+    // instructions themselves are listed in the pass below
     reset(&mut an.block_at, lir.blocks.len(), (NONE, NONE));
+    let mut at = 0;
     for &b in &an.order {
-        let first = an.code.len() as u32;
-        let mut i = lir.blocks[b as usize].first;
-        while i != NONE {
-            an.code.push(i);
-            i = lir.insts[i as usize].next;
-        }
-        an.block_at[b as usize] = (first, an.code.len() as u32);
+        let n = lir.blocks[b as usize].len;
+        an.block_at[b as usize] = (at, at + n);
+        at += n;
     }
+    an.code.clear();
+    an.code.reserve(at as usize);
     // the loops, from the back edges: a successor laid out at or before
     // the block
     an.loops.clear();
@@ -141,6 +141,7 @@ pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
     an.var_reads.clear();
     an.calls.clear();
     let Analysis {
+        order,
         code,
         start,
         end,
@@ -166,24 +167,30 @@ pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
         }
         weight[r] = weight[r].saturating_add(w);
     }
-    for (k, &ii) in code.iter().enumerate() {
-        let p = 2 * k as u32;
-        let w = LOOP_WEIGHT.saturating_pow(depth[p as usize] as u32);
-        let inst = &lir.insts[ii as usize];
-        for_uses(lir, inst, |r| {
-            if r < nv {
-                uses[r as usize] += 1;
-            } else {
-                read[(r - nv) as usize] = true;
+    for &b in order.iter() {
+        let mut ii = lir.blocks[b as usize].first;
+        while ii != NONE {
+            let k = code.len();
+            code.push(ii);
+            let p = 2 * k as u32;
+            let w = LOOP_WEIGHT.saturating_pow(depth[p as usize] as u32);
+            let inst = &lir.insts[ii as usize];
+            ii = inst.next;
+            for_uses(lir, inst, |r| {
+                if r < nv {
+                    uses[r as usize] += 1;
+                } else {
+                    read[(r - nv) as usize] = true;
+                }
+                touch(start, end, weight, r, p, w);
+            });
+            for_defs(lir, inst, |r| touch(start, end, weight, r, p + 1, w));
+            match inst.op {
+                Op::Call | Op::CallIndirect => calls.push(p),
+                Op::VarWrite => writes[inst.a as usize].push(p + 1),
+                Op::VarRead => var_reads.push((inst.dst, inst.a, p + 1)),
+                _ => {}
             }
-            touch(start, end, weight, r, p, w);
-        });
-        for_defs(lir, inst, |r| touch(start, end, weight, r, p + 1, w));
-        match inst.op {
-            Op::Call | Op::CallIndirect => calls.push(p),
-            Op::VarWrite => writes[inst.a as usize].push(p + 1),
-            Op::VarRead => var_reads.push((inst.dst, inst.a, p + 1)),
-            _ => {}
         }
     }
     // the function's parameter arrives in the entry block
