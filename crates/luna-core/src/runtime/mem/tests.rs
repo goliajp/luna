@@ -343,5 +343,9 @@ fn freed_blocks_are_pooled_by_what_the_last_cycle_allocated() {
     r.ctx().gc_cycle_ended(64 * 1024);
     let g: LVec<u8> = LVec::with_capacity(r.mem(), 4000).unwrap();
     drop(g);
-    assert_eq!(seen.live.get(), 0, "a host function's blocks are freed through it");
+    assert_eq!(
+        seen.live.get(),
+        0,
+        "a host function's blocks are freed through it"
+    );
 }
