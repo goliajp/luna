@@ -47,7 +47,7 @@ pub enum BlockKind {
 const KINDS: usize = 9;
 
 /// The `osize` each [`BlockKind`] has for a new block in dialect `v`.
-fn kind_codes(v: LuaVersion) -> [u8; KINDS] {
+pub(super) fn kind_codes(v: LuaVersion) -> [u8; KINDS] {
     match v {
         LuaVersion::Lua51 => [0; KINDS],
         LuaVersion::Lua52 => [0, 4, 5, 6, 6, 7, 8, 9, 10],
@@ -80,7 +80,7 @@ impl MemoryPolicy for MemoryLimit {
     }
 }
 
-enum Mode {
+pub(super) enum Mode {
     System,
     Raw,
     Policy(RefCell<Box<dyn MemoryPolicy>>),
@@ -88,28 +88,31 @@ enum Mode {
 
 /// Where a Vm's memory comes from, shared by every container of the Vm
 /// through a [`MemRef`]. Owned jointly by the heap and the Vm
-/// ([`MemOwner`]), so it outlives every container either of them holds.
+/// ([`MemOwner`](super::MemOwner)), so it outlives every container either
+/// of them holds.
 pub struct MemCtx {
-    mode: Mode,
+    pub(super) mode: Mode,
     /// the host function and its `ud` (`Mode::Raw`); `lua_setallocf`
     /// replaces them
-    raw: Cell<Option<(RawAllocFn, *mut c_void)>>,
-    codes: [u8; KINDS],
+    pub(super) raw: Cell<Option<(RawAllocFn, *mut c_void)>>,
+    pub(super) codes: [u8; KINDS],
     /// bytes allocated and not freed, kept outside `Mode::System`
-    total: Cell<usize>,
-    owners: Cell<usize>,
+    pub(super) total: Cell<usize>,
+    pub(super) owners: Cell<usize>,
     /// the fixed "not enough memory" string a memory error carries (PUC
     /// `memerrmsg`); null until the heap has made it
-    memerr: Cell<*mut crate::runtime::LuaStr>,
+    pub(super) memerr: Cell<*mut crate::runtime::LuaStr>,
     /// memory errors raised so far, for telling a memory error from a
     /// program's error with the same text
-    oom_raised: Cell<u64>,
+    pub(super) oom_raised: Cell<u64>,
+    /// freed blocks kept for reuse (`Mode::System`, see `pool.rs`)
+    pub(super) pool: RefCell<super::pool::Pool>,
 }
 
 /// A handle to a [`MemCtx`], kept by each container to free and grow its
 /// block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MemRef(NonNull<MemCtx>);
+pub struct MemRef(pub(super) NonNull<MemCtx>);
 
 /// An allocation the context could not make.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +146,7 @@ impl MemCtx {
     pub(crate) fn alloc(&self, layout: Layout, kind: BlockKind) -> Option<NonNull<u8>> {
         debug_assert!(layout.size() != 0);
         match &self.mode {
+            Mode::System if super::pool::pooled(layout.size()) => self.alloc_pooled(layout),
             // SAFETY: the size is not 0
             Mode::System => NonNull::new(unsafe { std::alloc::alloc(layout) }),
             _ => self.alloc_slow(layout, kind),
@@ -154,6 +158,7 @@ impl MemCtx {
     pub(crate) fn alloc_zeroed(&self, layout: Layout, kind: BlockKind) -> Option<NonNull<u8>> {
         debug_assert!(layout.size() != 0);
         match &self.mode {
+            Mode::System if super::pool::pooled(layout.size()) => self.alloc_pooled_zeroed(layout),
             // SAFETY: the size is not 0
             Mode::System => NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }),
             _ => {
@@ -204,6 +209,14 @@ impl MemCtx {
         debug_assert!(new != 0);
         match &self.mode {
             // SAFETY: the caller's contract
+            Mode::System if new <= super::resize::SMALL_MOVE => unsafe {
+                super::resize::move_small(p, layout, new)
+            },
+            // SAFETY: the caller's contract
+            Mode::System if super::pool::pooled(new) || super::pool::pooled(layout.size()) => unsafe {
+                self.move_pooled(p, layout, new)
+            },
+            // SAFETY: the caller's contract
             Mode::System => NonNull::new(unsafe { std::alloc::realloc(p.as_ptr(), layout, new) }),
             // SAFETY: the caller's contract
             _ => unsafe { self.realloc_slow(p, layout, new) },
@@ -246,6 +259,12 @@ impl MemCtx {
     #[inline(always)]
     pub(crate) unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {
         match &self.mode {
+            Mode::System if super::pool::pooled(layout.size()) => {
+                if !self.pool.borrow_mut().keep(p, layout) {
+                    // SAFETY: the caller's contract
+                    unsafe { std::alloc::dealloc(p.as_ptr(), layout) }
+                }
+            }
             // SAFETY: the caller's contract
             Mode::System => unsafe { std::alloc::dealloc(p.as_ptr(), layout) },
             // SAFETY: the caller's contract
@@ -336,83 +355,5 @@ impl MemCtx {
             "the context has a host function"
         );
         self.raw.set(Some((f, ud)));
-    }
-}
-
-/// One owner of a [`MemCtx`]; the context is freed with its last owner.
-pub struct MemOwner(MemRef);
-
-impl MemOwner {
-    fn with_mode(mode: Mode, raw: Option<(RawAllocFn, *mut c_void)>, v: LuaVersion) -> MemOwner {
-        let ctx = Box::new(MemCtx {
-            mode,
-            raw: Cell::new(raw),
-            codes: kind_codes(v),
-            total: Cell::new(0),
-            owners: Cell::new(1),
-            memerr: Cell::new(std::ptr::null_mut()),
-            oom_raised: Cell::new(0),
-        });
-        MemOwner(MemRef(NonNull::from(Box::leak(ctx))))
-    }
-
-    /// A context on the system allocator.
-    pub fn system() -> MemOwner {
-        MemOwner::with_mode(Mode::System, None, LuaVersion::Lua54)
-    }
-
-    /// A context whose memory comes from `f` with `ud`, numbering the
-    /// kinds of new blocks as dialect `v` does.
-    ///
-    /// # Safety
-    /// `f` follows PUC's `lua_Alloc` contract and may be called with
-    /// `ud` until the last owner is dropped, which frees through it every
-    /// block still allocated.
-    pub unsafe fn raw(f: RawAllocFn, ud: *mut c_void, v: LuaVersion) -> MemOwner {
-        MemOwner::with_mode(Mode::Raw, Some((f, ud)), v)
-    }
-
-    /// A context on the system allocator that asks `policy` first.
-    pub fn policy(policy: Box<dyn MemoryPolicy>) -> MemOwner {
-        MemOwner::with_mode(Mode::Policy(RefCell::new(policy)), None, LuaVersion::Lua54)
-    }
-
-    /// The handle containers keep.
-    #[inline(always)]
-    pub fn mem(&self) -> MemRef {
-        self.0
-    }
-
-    /// The context.
-    pub fn ctx(&self) -> &MemCtx {
-        self.0.ctx()
-    }
-}
-
-impl std::fmt::Debug for MemOwner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("MemOwner").field(&self.0.0).finish()
-    }
-}
-
-impl Clone for MemOwner {
-    fn clone(&self) -> MemOwner {
-        let c = self.0.ctx();
-        c.owners.set(c.owners.get() + 1);
-        MemOwner(self.0)
-    }
-}
-
-impl Drop for MemOwner {
-    fn drop(&mut self) {
-        let c = self.0.ctx();
-        let n = c.owners.get() - 1;
-        c.owners.set(n);
-        if n == 0 {
-            // SAFETY: the context came from `Box::leak` in `with_mode`, and
-            // this was its last owner: every container holding a handle has
-            // been dropped by now (the owners outlive them)
-            drop(unsafe { Box::from_raw(self.0.0.as_ptr()) });
-        }
     }
 }

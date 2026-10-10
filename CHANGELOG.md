@@ -205,6 +205,29 @@ optimization.
   so LLVM can turn the recursion into a loop (`fib(30)`: 3.4 ms against
   Cranelift's 3.8 ms, was 7.2 ms). The helpers `luna_jit_self_enter` and
   `luna_jit_self_leave` are gone.
+- With the system allocator, a Vm keeps freed blocks of 1 KiB to 256 KiB
+  for its next allocations of the same layout: as many of each layout as
+  the last collection cycle allocated, in all at most what that cycle
+  allocated of those sizes, capped by the larger of 1 MiB and an eighth of
+  the live heap, and 8 MiB. The pool is trimmed at the end of every cycle
+  and emptied with the Vm; its blocks count as freed for
+  `collectgarbage("count")` and the collector's pace. Blocks up to 1 KiB
+  are resized by moving them instead of `realloc`. Both spare a process
+  with a second thread (the LLVM backend's compile thread, or the host's)
+  glibc's arena lock: `sliding_window_500` on 5.4 runs in 257 µs with
+  Cranelift (273 before) and 262 µs on the LLVM backend before LLVM takes
+  over (292 before). A Vm with a host allocation function (`lua_Alloc`)
+  or a memory policy uses neither.
+- The optimizing tiers lower a loop body of plain arithmetic, comparisons
+  and moves again when a trace moves up, keeping its values in registers
+  across the back edge and storing them only where the trace leaves:
+  `loop` runs 9% / 19% fewer instructions with Cranelift on 5.1 / 5.4,
+  and its LLVM code 43% less time on 5.4 (9388 → 5360 µs).
+- The optimizing Cranelift tier reads the string keys and functions a
+  loop uses at least twice once, before the loop, instead of at every
+  use: on aarch64, where each read is a literal load, `tbl` runs 8%
+  faster, `token_bucket_1k` 4–9%, `method_dispatch_5k` 4%; on x86-64
+  `tbl` and `token_bucket_1k` run 1–2% fewer instructions.
 - A trace no longer stores a value into the VM's register file when a
   later op overwrites that register before anything reads the register
   file (an op that calls a helper, a branch that rejoins, an exit, the

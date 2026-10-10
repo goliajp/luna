@@ -66,7 +66,7 @@ pub(super) fn compile_trace_llvm(
         tier: TraceTier::Optimizing,
         ..opts
     };
-    let (lir, mut compiled) = lower_trace_lir(record, opts, float_only)?;
+    let (lir, mut compiled) = lower_trace_lir(record, opts, float_only, true)?;
     if !always_codegen && !trace_is_enterable(record, &compiled) {
         lir.give();
         return Some(compiled);
@@ -128,16 +128,13 @@ pub(crate) fn tier_up_llvm(
         Err(s) => s.downcast::<share::TierSource>().ok()?,
     };
     let Some(delay) = delay else {
-        let entry = install(storage, compile(&source.lir, &source.relocs))?;
+        let (lir, relocs) = source.optimizing_lir();
+        let entry = install(storage, compile(&lir, &relocs))?;
         super::code_dump::dump("tier-up-llvm", ct.head_pc, entry as *const u8);
         return Some(entry);
     };
     let entry = share::clif_tier_up(storage, &source, ct.head_pc);
-    let src = Box::new(share::TierSource {
-        lir: source.lir.clone(),
-        relocs: source.relocs.clone(),
-        image: None,
-    });
+    let src = source;
     let mut p = Pending {
         source: None,
         due: Arc::default(),
@@ -168,9 +165,11 @@ fn hand_over(
     now: std::time::Instant,
 ) {
     let (ready, done) = (p.ready.clone(), p.done.clone());
+    // lowered here: the record stays on the Vm's thread
+    let (lir, relocs) = src.optimizing_lir();
     let ticket = crate::jit_backend::llvm_thread::submit(
         Box::new(move || {
-            *done.lock().expect(POISON) = Some(compile(&src.lir, &src.relocs));
+            *done.lock().expect(POISON) = Some(compile(&lir, &relocs));
             ready.store(true, Ordering::Release);
         }),
         now,
