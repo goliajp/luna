@@ -36,7 +36,9 @@ mod entry;
 mod field_slot;
 mod kinds;
 mod slots;
-use const_operands::{NVIRT, VConst, VRegs, VSrc, split_const_operands, virt_at, vsrc_kind};
+use const_operands::{
+    NVIRT, VConst, VRegs, VSrc, give_record, split_const_operands, virt_at, vsrc_kind,
+};
 use cranelift::prelude::*;
 use cranelift_codegen::ir::UserFuncName;
 use cranelift_codegen::settings;
