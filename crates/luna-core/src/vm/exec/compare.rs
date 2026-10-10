@@ -155,6 +155,25 @@ impl Vm {
         self.op_compare(step, l, r, k)
     }
 
+    /// The fast loop's `==` of two tables or two full userdata (`__eq`);
+    /// out of line for the reason [`Self::order_slow`] is.
+    ///
+    /// # Safety
+    ///
+    /// `pl` and `pr` point at initialised values.
+    #[inline(never)]
+    pub(super) unsafe fn eq_slow(
+        &mut self,
+        pl: *const Value,
+        pr: *const Value,
+        k: bool,
+    ) -> Result<(), LuaError> {
+        // SAFETY: the caller's contract
+        let (l, r) = unsafe { (*pl, *pr) };
+        let step = self.eq_step(l, r);
+        self.op_compare(step, l, r, k)
+    }
+
     /// [`Self::order_slow`] of `R[A] op sB`: `float_imm` when the immediate
     /// was written as a float, `swap` when it is the left operand (`>` and
     /// `>=`).
