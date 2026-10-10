@@ -25,13 +25,22 @@ env:
 # number of measure jobs, not rounds per job, is what makes the gate
 # reliable; the threshold is derived for 7 jobs x 3 rounds. Bypass via
 # [perf-allow] in the commit message for intentional regressions.
+#
+# Where the linker puts the hot functions moves a cell by a few percent
+# whenever unrelated code changes. Each job therefore measures its own pair
+# of binaries linked with a different function order (lld shuffling the
+# input sections with the job's seed); the code is the same, only its
+# placement differs. The verdict's mean over the jobs then averages over
+# layouts as well as runners. The shuffled order exists only in these
+# measuring builds, never in a shipped binary.
 jobs:
   build:
-    name: build ${{ matrix.side }} bench
+    name: build ${{ matrix.side }} bench, layout ${{ matrix.layout }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
         side: [ref, head]
+        layout: [1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -43,14 +52,18 @@ jobs:
             git worktree add /tmp/perfref "$PERF_REF"
             cd /tmp/perfref
           fi
-          bin=$(cargo bench -p luna-jit --bench redis_lua_shape --no-run --message-format=json \
+          # rust-lld from the toolchain, whatever the runner's linker is
+          lld=$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld
+          bin=$(cargo rustc -p luna-jit --bench redis_lua_shape --profile bench --message-format=json -- \
+              -C link-arg=-B"$lld" -C link-arg=-fuse-ld=lld \
+              "-Clink-arg=-Wl,--shuffle-sections=.text*=${{ matrix.layout }}" \
             | jq -r 'select(.reason == "compiler-artifact" and .target.name == "redis_lua_shape") | .executable')
           mkdir -p /tmp/bench
-          cp "$bin" /tmp/bench/${{ matrix.side }}
+          cp "$bin" /tmp/bench/${{ matrix.side }}-${{ matrix.layout }}
       - uses: actions/upload-artifact@v7
         with:
-          name: bench-${{ matrix.side }}
-          path: /tmp/bench/${{ matrix.side }}
+          name: bench-${{ matrix.side }}-${{ matrix.layout }}
+          path: /tmp/bench/${{ matrix.side }}-${{ matrix.layout }}
           retention-days: 1
           overwrite: true
 
@@ -75,8 +88,10 @@ jobs:
         env:
           PERF_ROUNDS: 3
         run: |
-          chmod +x /tmp/bench/ref /tmp/bench/head
-          ./scripts/perf-gate.sh measure /tmp/bench/ref /tmp/bench/head /tmp/rounds/job${{ matrix.job }}
+          # each job measures the pair linked with its own function order
+          ref=/tmp/bench/ref-${{ matrix.job }} head=/tmp/bench/head-${{ matrix.job }}
+          chmod +x "$ref" "$head"
+          ./scripts/perf-gate.sh measure "$ref" "$head" /tmp/rounds/job${{ matrix.job }}
       - uses: actions/upload-artifact@v7
         with:
           name: rounds-${{ matrix.job }}
