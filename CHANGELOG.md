@@ -211,6 +211,13 @@ optimization.
   loop's stack frame shrank from 2160 to 1232 bytes and entering it (after
   every `pcall` and every trace exit) takes 41 fewer instructions:
   `pcall` in a loop runs 4.5% fewer instructions.
+- The method JIT keeps float constants (a numeric for loop's step and
+  limit, a float `LoadK`) in registers across a loop instead of
+  rebuilding them on every iteration: on aarch64 an empty float loop runs
+  27% fewer cycles under 5.1 and 5.2. A loop that summed floats used to
+  load its limit from the code's own cache line on every iteration, and
+  its time on a Cortex-A76 swung by up to 13% from run to run; it now
+  runs at the same speed every time, at the slower end of that range.
 - `llvm-jit` now needs LLVM with the native target only: luna-jit-llvm
   turns inkwell's default features (every LLVM target) off and enables
   the target of the architecture it is built for. A linker that keeps
