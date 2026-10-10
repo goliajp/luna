@@ -53,7 +53,7 @@ impl<'a> Compiler<'a> {
     /// nested function — N is the proto's `line_defined`. errors.lua :766/:775
     /// check the line number substring.
     pub(super) fn limit_err(&self, what: &str, limit: u32) -> SyntaxError {
-        self.limit_err_at(self.levels.len() - 1, what, limit)
+        self.limit_err_at(self.depth - 1, what, limit)
     }
 
     /// PUC's "too many X" errors attribute to the *level* whose budget got
