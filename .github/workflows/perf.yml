@@ -23,7 +23,7 @@ env:
 # threshold in scripts/perf-gate-verdict.py. The ratio between the same two
 # binaries shifts by a few percent from one runner to the next, so the
 # number of measure jobs, not rounds per job, is what makes the gate
-# reliable; the threshold is derived for 7 jobs x 3 rounds. Bypass via
+# reliable; the threshold is derived for 15 jobs x 3 rounds. Bypass via
 # [perf-allow] in the commit message for intentional regressions.
 #
 # Where the linker puts the hot functions moves a cell by a few percent
@@ -31,7 +31,8 @@ env:
 # of binaries linked with a different function order (lld shuffling the
 # input sections with the job's seed); the code is the same, only its
 # placement differs. The verdict's mean over the jobs then averages over
-# layouts as well as runners. The shuffled order exists only in these
+# layouts as well as runners; the extra spread layouts add is why there are
+# 15 jobs (see perf-gate-verdict.py). The shuffled order exists only in these
 # measuring builds, never in a shipped binary.
 jobs:
   build:
@@ -40,7 +41,7 @@ jobs:
     strategy:
       matrix:
         side: [ref, head]
-        layout: [1, 2, 3, 4, 5, 6, 7]
+        layout: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -74,7 +75,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        job: [1, 2, 3, 4, 5, 6, 7]
+        job: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
