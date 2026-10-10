@@ -65,6 +65,24 @@ pub(super) struct JExp {
 }
 
 impl<'a> Level<'a> {
+    /// This level, its vectors emptied by [`Self::take_proto`], set up for a
+    /// new function in place: a level is a few hundred bytes, and moving it
+    /// in and out of the stack for every function cost a copy each way.
+    pub(super) fn reset(&mut self, num_params: u8, is_vararg: bool, line_defined: u32) {
+        self.freereg = num_params as u32;
+        self.max_stack = (num_params as u32).max(2);
+        self.num_params = num_params;
+        self.is_vararg = is_vararg;
+        self.has_vararg_table_pseudo = false;
+        self.has_compat_vararg_arg = false;
+        self.line_defined = line_defined;
+        self.last_target = None;
+        self.zero_51 = None;
+        self.jpc = NO_JUMP;
+        self.jump_err = None;
+        self.has_global_decl = false;
+    }
+
     pub(super) fn new(
         num_params: u8,
         is_vararg: bool,
@@ -111,15 +129,15 @@ impl<'a> Level<'a> {
                 .is_some_and(|a| a.global)
     }
 
-    /// The finished function, and this level's vectors emptied for the next
-    /// one. The function's arrays are allocated at their exact size.
-    pub(super) fn into_proto(
-        mut self,
+    /// The finished function, leaving this level's vectors empty for the
+    /// next one. The function's arrays are allocated at their exact size.
+    pub(super) fn take_proto(
+        &mut self,
         source: Gc<LuaStr>,
         line_defined: u32,
         last_line_defined: u32,
         heap: &Heap,
-    ) -> (Proto, LevelBufs) {
+    ) -> Proto {
         crate::runtime::function_close::mark_closing_returns(&mut self.code, &self.protos);
         let env_upval_idx = self
             .upvals
@@ -162,11 +180,18 @@ impl<'a> Level<'a> {
             trace_call_head_settled: std::cell::Cell::new(false),
         };
         self.const_map.clear();
+        self.locals.clear();
+        self.avars.clear();
         self.blocks.clear();
         self.labels.clear();
         self.gotos.clear();
         self.jexps.clear();
-        let bufs = LevelBufs {
+        proto
+    }
+
+    /// This level's vectors, emptied, to keep for a later load.
+    pub(super) fn into_bufs(self) -> LevelBufs {
+        LevelBufs {
             code: self.code,
             lines: self.lines,
             consts: self.consts,
@@ -180,8 +205,7 @@ impl<'a> Level<'a> {
             protos: self.protos,
             locvars: self.locvars,
             jexps: self.jexps,
-        };
-        (proto, bufs)
+        }
     }
 }
 

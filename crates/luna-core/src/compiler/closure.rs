@@ -15,7 +15,9 @@ impl<'a> Compiler<'a> {
             return Err(self.err(line, "too many parameters"));
         }
         let is_vararg = !matches!(body.vararg, ast::Vararg::None);
-        let mut level = self.new_level(nparams as u8, is_vararg, line);
+        self.open_level(nparams as u8, is_vararg, line);
+        let version = self.version;
+        let level = self.l();
         // PUC 5.5 `parlist`: emit a hidden `(vararg table)` locvar only for
         // an explicit anonymous `(...)` (Named goes through a real local;
         // main chunks set is_vararg implicitly with no pseudo). 5.4 and
@@ -23,14 +25,14 @@ impl<'a> Compiler<'a> {
         // the exact `getlocal` shift: 5.5 setlocal(2, 4) = "AAAA" vs
         // 5.4/5.3/5.2 setlocal(2, 3) = "AAAA".
         level.has_vararg_table_pseudo =
-            self.version >= LuaVersion::Lua55 && matches!(body.vararg, ast::Vararg::Anonymous);
+            version >= LuaVersion::Lua55 && matches!(body.vararg, ast::Vararg::Anonymous);
         // PUC 5.1 attached an `env` slot to *every* Lua function so
         // `setfenv` always had something to rewrite, even for bodies that
         // never touched a global. luna keeps it as a hidden `_ENV` upvalue,
         // seeded eagerly as upvalue 0 of every 5.1 function (the main chunk's
         // upvalue 0 too), so it inherits the creator's upvalue 0. 5.2+ keeps
         // the lazy-capture model.
-        if self.version == LuaVersion::Lua51 {
+        if version == LuaVersion::Lua51 {
             level.upvals.push_or_abort(UpvalDesc {
                 in_stack: false,
                 index: 0,
@@ -38,7 +40,6 @@ impl<'a> Compiler<'a> {
                 read_only: false,
             });
         }
-        self.levels.push_or_abort(level);
         self.enter_block(false);
         if is_method {
             self.declare_local("self", 0, false)?;
@@ -88,8 +89,7 @@ impl<'a> Compiler<'a> {
         // PUC attributes the implicit final return to the closing `end` line, so
         // that line shows up in `debug.getinfo(...,"L").activelines`.
         self.final_return(body.end_line)?;
-        let lvl = self.levels.pop().expect("function level");
-        let proto = self.finish_level(lvl, line, body.end_line);
+        let proto = self.finish_level(line, body.end_line);
         let idx = self.lr().protos.len() as u32;
         if idx > MAX_BX {
             return Err(self.err(line, "too many nested functions"));

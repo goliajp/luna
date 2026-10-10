@@ -30,7 +30,7 @@ impl Compiler<'_> {
     /// global access then needs `_ENV._ENV`, which is itself global — an error
     /// (PUC's `buildglobal` rejects a VGLOBAL environment).
     pub(super) fn env_is_global(&self) -> bool {
-        self.levels.iter().rev().any(|lvl| {
+        self.open_levels().iter().rev().any(|lvl| {
             lvl.blocks
                 .iter()
                 .any(|b| b.gdecls.iter().any(|(n, _)| &**n == "_ENV"))

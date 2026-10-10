@@ -91,22 +91,30 @@ pub(crate) fn parse_reusing(
     src: &[u8],
     version: LuaVersion,
     c_depth: u32,
-    scratch: ParseScratch,
+    mut scratch: ParseScratch,
 ) -> Result<Parsed, SyntaxError> {
-    let ParseScratch {
-        mut chunk,
-        end_lines,
-        lex_buf,
-        stacks,
-    } = scratch;
-    let names = chunk.names.take();
-    let lex = Lexer::interning(src, version, names, lex_buf);
+    parse_in_place(src, version, c_depth, &mut scratch)?;
+    Ok(scratch.into_parsed())
+}
+
+/// [`parse_reusing`] leaving the tree in `scratch` (see
+/// [`ParseScratch::parsed`]): a load parses and compiles without moving the
+/// tree's few hundred bytes of vector headers from one owner to the next.
+pub(crate) fn parse_in_place<'s>(
+    src: &'s [u8],
+    version: LuaVersion,
+    c_depth: u32,
+    scratch: &'s mut ParseScratch,
+) -> Result<(), SyntaxError> {
+    scratch.clear();
+    let names = scratch.chunk.names.take();
+    let lex = Lexer::interning(src, version, names, scratch.lex_buf.take());
     parse_from_source(
         TokenSource::Lexer(lex),
         version,
         c_depth,
         src.len(),
-        (chunk, end_lines, stacks),
+        scratch,
     )
 }
 
@@ -119,24 +127,21 @@ pub(crate) fn parse_stream<'f>(
     feed: &'f mut crate::frontend::lexer::Feed<'f>,
     version: LuaVersion,
     c_depth: u32,
-    scratch: ParseScratch,
+    mut scratch: ParseScratch,
 ) -> Result<Parsed, SyntaxError> {
-    let ParseScratch {
-        mut chunk,
-        end_lines,
-        lex_buf,
-        stacks,
-    } = scratch;
-    let names = chunk.names.take();
+    scratch.clear();
+    let names = scratch.chunk.names.take();
     let len = first.len();
+    let lex_buf = scratch.lex_buf.take();
     let lex = Lexer::interning_stream(Stream::new(first, feed), version, names, lex_buf);
     parse_from_source(
         TokenSource::Stream(lex),
         version,
         c_depth,
         len,
-        (chunk, end_lines, stacks),
-    )
+        &mut scratch,
+    )?;
+    Ok(scratch.into_parsed())
 }
 
 /// Parse a **pre-materialized** token stream. Used by the MacroLua
@@ -162,12 +167,7 @@ pub(crate) fn parse_tokens_at_depth(
     mem: MemOwner,
 ) -> Result<Parsed, SyntaxError> {
     let names = Names::with_capacity(mem.mem(), src.len());
-    let ParseScratch {
-        chunk,
-        end_lines,
-        stacks,
-        ..
-    } = ParseScratch::new(mem);
+    let mut scratch = ParseScratch::new(mem);
     parse_from_source(
         TokenSource::PreExpanded {
             tokens,
@@ -178,8 +178,9 @@ pub(crate) fn parse_tokens_at_depth(
         version,
         c_depth,
         src.len(),
-        (chunk, end_lines, stacks),
-    )
+        &mut scratch,
+    )?;
+    Ok(scratch.into_parsed())
 }
 
 fn parse_from_source<'s>(
@@ -187,13 +188,19 @@ fn parse_from_source<'s>(
     version: LuaVersion,
     c_depth: u32,
     src_len: usize,
-    vecs: (Chunk, LVec<u32>, ListStacks),
-) -> Result<Parsed, SyntaxError> {
+    scratch: &'s mut ParseScratch,
+) -> Result<(), SyntaxError> {
     let cur = match lex.next_token() {
         Ok(cur) => cur,
         Err(e) => return Err(lex.out_of_memory().map_or(e, SyntaxError::from)),
     };
-    let mut p = Parser::new(lex, cur, version, c_depth, vecs)?;
+    let ParseScratch {
+        chunk,
+        end_lines,
+        lex_buf,
+        stacks,
+    } = scratch;
+    let mut p = Parser::new(lex, cur, version, c_depth, chunk, end_lines, stacks)?;
     let r = p.main(src_len);
     // a reader whose pieces could not be kept ended the input early:
     // whatever the parse made of it, the load failed for lack of memory
@@ -201,20 +208,23 @@ fn parse_from_source<'s>(
         return Err(o.into());
     }
     let (block, end_line) = r?;
-    let mut chunk = p.chunk;
-    chunk.names = p.lex.take_names();
-    let mut stacks = p.stk;
-    stacks.func_local_count = p.func_local_count;
-    stacks.funcs = p.funcs;
-    stacks.gotos = p.gotos;
+    let Parser {
+        mut lex,
+        chunk,
+        stk,
+        func_local_count,
+        funcs,
+        gotos,
+        ..
+    } = p;
+    chunk.names = lex.take_names();
     chunk.block = block;
     chunk.end_line = end_line;
-    Ok(Parsed {
-        lex_buf: p.lex.take_buf(),
-        chunk,
-        end_lines: p.end_lines,
-        stacks,
-    })
+    stk.func_local_count = func_local_count;
+    stk.funcs = funcs;
+    stk.gotos = gotos;
+    *lex_buf = lex.take_buf();
+    Ok(())
 }
 
 impl<'s> Parser<'s> {
@@ -225,9 +235,10 @@ impl<'s> Parser<'s> {
         cur: Cur,
         version: LuaVersion,
         c_depth: u32,
-        vecs: (Chunk, LVec<u32>, ListStacks),
+        chunk: &'s mut Chunk,
+        end_lines: &'s mut LVec<u32>,
+        stacks: &'s mut ListStacks,
     ) -> Result<Parser<'s>, SyntaxError> {
-        let (chunk, end_lines, mut stacks) = vecs;
         let mem = chunk.mem_owner().mem();
         let mut func_local_count = stacks.func_local_count.take();
         func_local_count.clear();
@@ -305,11 +316,11 @@ struct Parser<'s> {
     /// line of the previously consumed token (for the 5.1 ambiguity check)
     prev_line: u32,
     /// the tree being built (its names stay with the lexer until the end)
-    chunk: Chunk,
+    chunk: &'s mut Chunk,
     /// lists being collected, before they are moved into `chunk`
-    stk: ListStacks,
+    stk: &'s mut ListStacks,
     /// see [`Parsed::end_lines`]
-    end_lines: LVec<u32>,
+    end_lines: &'s mut LVec<u32>,
     depth: u32,
     version: LuaVersion,
     /// One entry per function context (main chunk + nested functions): the

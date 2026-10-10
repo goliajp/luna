@@ -92,9 +92,21 @@ impl Vm {
             // PUC's `nCcalls` counts protected calls as well
             let depth = self.g.nccalls;
             let source = name.unwrap_or_else(|| self.heap.intern(chunkname));
-            let scratch = self.parse_scratch.take();
-            let parsed = crate::frontend::parser::parse_reusing(src, self.version, depth, scratch)?;
-            self.compile_text(parsed, source)?
+            crate::frontend::parser::parse_in_place(
+                src,
+                self.version,
+                depth,
+                &mut self.parse_scratch,
+            )?;
+            let (chunk, end_lines) = self.parse_scratch.parsed();
+            crate::compiler::compile_parsed(
+                chunk,
+                end_lines,
+                self.version,
+                source,
+                &mut self.heap,
+                &mut self.compile_scratch,
+            )?
         };
         Ok(self.close_chunk(proto))
     }
