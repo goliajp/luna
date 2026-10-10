@@ -51,7 +51,9 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     // loop has one, a value) of those tags. A pairs loop
     // over string keys meeting an integer key (or the
     // reverse) stored the new key under the old tag.
-    let call = record.ops[for_loop_idx - 1].inst;
+    // a side trace can begin at the loop instruction itself, with no call
+    // recorded before it
+    let call = for_loop_idx.checked_sub(1).map(|k| record.ops[k].inst)?;
     if !call.op().is_tfor_call() {
         return None;
     }
