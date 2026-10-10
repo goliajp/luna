@@ -45,7 +45,7 @@ pub(super) fn split_const_operands(
 ) -> Option<(TraceRecord, Vec<VRegs>)> {
     let mut vregs: Vec<VRegs> = Vec::with_capacity(record.ops.len());
     let mut any = false;
-    let mut out = record.clone();
+    let mut out = copy_record(record);
     for rop in &mut out.ops {
         let inst = rop.inst;
         let konst = |c: u32| match rop.proto.consts.get(c as usize) {
@@ -77,7 +77,74 @@ pub(super) fn split_const_operands(
         vregs.push(v);
         any = true;
     }
-    any.then_some((out, vregs))
+    if !any {
+        give_record(out);
+        return None;
+    }
+    Some((out, vregs))
+}
+
+thread_local! {
+    static SPARE_RECORD: std::cell::RefCell<Option<TraceRecord>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A copy of `src` in the buffers of the record last given back on this
+/// thread ([`give_record`]).
+fn copy_record(src: &TraceRecord) -> TraceRecord {
+    let Some(mut out) = SPARE_RECORD.with(|s| s.borrow_mut().take()) else {
+        return src.clone();
+    };
+    // every field by name: one added to the record does not compile here
+    // until it is copied
+    let TraceRecord {
+        head_proto,
+        settings,
+        head_pc,
+        entry_tags,
+        ops,
+        closed,
+        is_call_triggered,
+        tfor_iter,
+        tfor_val_tag,
+        side_trace_parent,
+        self_link_kind,
+        retfs,
+        downrec_close,
+        field_ic_snapshot,
+        result_tags,
+        field_slots,
+        index_slots,
+        index_key,
+        for_step_up,
+        closed_at_head,
+    } = src;
+    out.head_proto = *head_proto;
+    out.settings = *settings;
+    out.head_pc = *head_pc;
+    out.entry_tags.clone_from(entry_tags);
+    out.ops.clone_from(ops);
+    out.closed = *closed;
+    out.is_call_triggered = *is_call_triggered;
+    out.tfor_iter = tfor_iter.clone();
+    out.tfor_val_tag = *tfor_val_tag;
+    out.side_trace_parent = *side_trace_parent;
+    out.self_link_kind = self_link_kind.clone();
+    out.retfs.clone_from(retfs);
+    out.downrec_close = *downrec_close;
+    out.field_ic_snapshot = *field_ic_snapshot;
+    out.result_tags.clone_from(result_tags);
+    out.field_slots.clone_from(field_slots);
+    out.index_slots.clone_from(index_slots);
+    out.index_key = *index_key;
+    out.for_step_up = *for_step_up;
+    out.closed_at_head = *closed_at_head;
+    out
+}
+
+/// Keeps `r`'s buffers for the next [`copy_record`] on this thread.
+pub(super) fn give_record(r: TraceRecord) {
+    SPARE_RECORD.with(|s| *s.borrow_mut() = Some(r));
 }
 
 /// The register form of a table op with a constant operand or an upvalue
