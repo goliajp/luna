@@ -175,6 +175,9 @@ pub(super) fn k_op(current_kinds: &[RegKind], reg: u32) -> RegKind {
 pub(super) struct ExitKinds {
     kinds: Vec<RegKind>,
     exits: Vec<(u32, u32, u32)>,
+    // boxed: compiled code holds each cell's address, which a growing
+    // `Vec<TCellPtr>` would move
+    #[allow(clippy::vec_box)]
     cells: Vec<Box<TCellPtr>>,
 }
 
@@ -211,6 +214,7 @@ impl ExitKinds {
     }
 
     /// The side-trace cells, in exit order.
+    #[allow(clippy::vec_box)]
     pub(super) fn into_cells(self) -> Vec<Box<TCellPtr>> {
         self.cells
     }
