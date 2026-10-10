@@ -78,6 +78,7 @@ impl Heap {
         self.verify_no_dangling("sweep_step");
         if self.sweep_cur.is_null() {
             self.phase = GcPhase::Pause;
+            self.mem_ctx().gc_cycle_ended(self.bytes);
             #[cfg(any(debug_assertions, feature = "gc-verify"))]
             self.verify_slow_bits("sweep_step");
             true

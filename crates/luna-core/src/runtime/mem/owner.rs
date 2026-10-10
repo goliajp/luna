@@ -20,6 +20,7 @@ impl MemOwner {
             owners: Cell::new(1),
             memerr: Cell::new(std::ptr::null_mut()),
             oom_raised: Cell::new(0),
+            pool: RefCell::default(),
         });
         MemOwner(MemRef(NonNull::from(Box::leak(ctx))))
     }

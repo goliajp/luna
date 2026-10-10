@@ -104,6 +104,8 @@ pub struct MemCtx {
     /// memory errors raised so far, for telling a memory error from a
     /// program's error with the same text
     pub(super) oom_raised: Cell<u64>,
+    /// freed blocks kept for reuse (`Mode::System`, see `pool.rs`)
+    pub(super) pool: RefCell<super::pool::Pool>,
 }
 
 /// A handle to a [`MemCtx`], kept by each container to free and grow its
@@ -143,6 +145,7 @@ impl MemCtx {
     pub(crate) fn alloc(&self, layout: Layout, kind: BlockKind) -> Option<NonNull<u8>> {
         debug_assert!(layout.size() != 0);
         match &self.mode {
+            Mode::System if super::pool::pooled(layout.size()) => self.alloc_pooled(layout),
             // SAFETY: the size is not 0
             Mode::System => NonNull::new(unsafe { std::alloc::alloc(layout) }),
             _ => self.alloc_slow(layout, kind),
@@ -154,6 +157,12 @@ impl MemCtx {
     pub(crate) fn alloc_zeroed(&self, layout: Layout, kind: BlockKind) -> Option<NonNull<u8>> {
         debug_assert!(layout.size() != 0);
         match &self.mode {
+            Mode::System if super::pool::pooled(layout.size()) => {
+                let p = self.alloc_pooled(layout)?;
+                // SAFETY: `p` is a block of `layout.size()` bytes
+                unsafe { p.as_ptr().write_bytes(0, layout.size()) };
+                Some(p)
+            }
             // SAFETY: the size is not 0
             Mode::System => NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }),
             _ => {
@@ -208,6 +217,10 @@ impl MemCtx {
                 super::resize::move_small(p, layout, new)
             },
             // SAFETY: the caller's contract
+            Mode::System if super::pool::pooled(new) || super::pool::pooled(layout.size()) => unsafe {
+                self.move_pooled(p, layout, new)
+            },
+            // SAFETY: the caller's contract
             Mode::System => NonNull::new(unsafe { std::alloc::realloc(p.as_ptr(), layout, new) }),
             // SAFETY: the caller's contract
             _ => unsafe { self.realloc_slow(p, layout, new) },
@@ -250,6 +263,12 @@ impl MemCtx {
     #[inline(always)]
     pub(crate) unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {
         match &self.mode {
+            Mode::System if super::pool::pooled(layout.size()) => {
+                if !self.pool.borrow_mut().keep(p, layout) {
+                    // SAFETY: the caller's contract
+                    unsafe { std::alloc::dealloc(p.as_ptr(), layout) }
+                }
+            }
             // SAFETY: the caller's contract
             Mode::System => unsafe { std::alloc::dealloc(p.as_ptr(), layout) },
             // SAFETY: the caller's contract
