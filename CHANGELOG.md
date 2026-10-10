@@ -223,10 +223,11 @@ optimization.
   across the back edge and storing them only where the trace leaves:
   `loop` runs 9% / 19% fewer instructions with Cranelift on 5.1 / 5.4,
   and its LLVM code 43% less time on 5.4 (9388 → 5360 µs).
-- On aarch64 the optimizing Cranelift tier reads the string keys and
-  functions a loop uses at least twice once, before the loop, instead of
-  loading each from its literal at every use: `tbl` 8% faster,
-  `token_bucket_1k` 4–9%, `method_dispatch_5k` 4%.
+- The optimizing Cranelift tier reads the string keys and functions a
+  loop uses at least twice once, before the loop, instead of at every
+  use: on aarch64, where each read is a literal load, `tbl` runs 8%
+  faster, `token_bucket_1k` 4–9%, `method_dispatch_5k` 4%; on x86-64
+  `tbl` and `token_bucket_1k` run 1–2% fewer instructions.
 - A trace no longer stores a value into the VM's register file when a
   later op overwrites that register before anything reads the register
   file (an op that calls a helper, a branch that rejoins, an exit, the
