@@ -126,10 +126,10 @@ fn copy_record(src: &TraceRecord) -> TraceRecord {
     out.ops.clone_from(ops);
     out.closed = *closed;
     out.is_call_triggered = *is_call_triggered;
-    out.tfor_iter = tfor_iter.clone();
+    out.tfor_iter = *tfor_iter;
     out.tfor_val_tag = *tfor_val_tag;
     out.side_trace_parent = *side_trace_parent;
-    out.self_link_kind = self_link_kind.clone();
+    out.self_link_kind = *self_link_kind;
     out.retfs.clone_from(retfs);
     out.downrec_close = *downrec_close;
     out.field_ic_snapshot = *field_ic_snapshot;
