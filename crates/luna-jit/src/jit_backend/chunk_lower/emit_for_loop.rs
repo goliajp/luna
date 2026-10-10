@@ -46,7 +46,7 @@ pub(super) fn emit_for_loop(
                 // next, R[A+3] = next, back-jump to body.
                 let shadow = shadow_index(f, prep_pc);
                 let cur = bcx.use_var(shadow.unwrap_or(regs[r.idx]));
-                let step_f = bcx.ins().f64const(step_imm as f64);
+                let step_f = float_const(bcx, step_imm as f64);
                 let next = bcx.ins().fadd(cur, step_f);
                 let limit = bcx.use_var(regs[r.x]);
                 let cont = if step_imm > 0 {

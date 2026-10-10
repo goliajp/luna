@@ -62,8 +62,8 @@ pub(super) fn emit_math_fold<M: Module>(
                         // Folds only compile in chunks without
                         // table stores, so nothing has happened yet
                         // that a rerun would repeat.
-                        let lo = bcx.ins().f64const(-9_223_372_036_854_775_808.0);
-                        let hi = bcx.ins().f64const(9_223_372_036_854_775_808.0);
+                        let lo = float_const(bcx, -9_223_372_036_854_775_808.0);
+                        let hi = float_const(bcx, 9_223_372_036_854_775_808.0);
                         let ge_lo = bcx.ins().fcmp(FloatCC::GreaterThanOrEqual, r, lo);
                         let lt_hi = bcx.ins().fcmp(FloatCC::LessThan, r, hi);
                         let fits = bcx.ins().band(ge_lo, lt_hi);
@@ -123,7 +123,7 @@ pub(super) fn emit_math_fold<M: Module>(
                     .ok()?;
                 let libm_ref = module.declare_func_in_func(libm_id, bcx.func);
                 let call_inst = if atan2 {
-                    let one = bcx.ins().f64const(1.0);
+                    let one = float_const(bcx, 1.0);
                     bcx.ins().call(libm_ref, &[arg_f64, one])
                 } else if let Some(f) = errno_fn {
                     let f = bcx.ins().iconst(types::I64, f);
@@ -197,7 +197,7 @@ pub(super) fn emit_get_upval<M: Module>(
                 // Op::Call gets rewritten to a direct cranelift
                 // call; this register's value is never read.
                 let zero = if matches!(a_kind(reg_kinds, ins.a()), RegKind::Float) {
-                    bcx.ins().f64const(0.0)
+                    float_const(bcx, 0.0)
                 } else {
                     bcx.ins().iconst(types::I64, 0)
                 };

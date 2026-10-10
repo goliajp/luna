@@ -123,7 +123,7 @@ pub(super) fn emit_for_prep(
                     // Int bit-pattern to R[A+2]'s declared Int slot.
                     let init = bcx.use_var(regs[a]);
                     let limit = bcx.use_var(regs[a + 1]);
-                    let step_f = bcx.ins().f64const(step_imm as f64);
+                    let step_f = float_const(bcx, step_imm as f64);
                     let pre = bcx.ins().fsub(init, step_f);
                     aligned_def(bcx, regs, reg_kinds, a, pre);
                     aligned_def(bcx, regs, reg_kinds, a + 1, limit);
@@ -146,7 +146,7 @@ pub(super) fn emit_for_prep(
                     // remaining-count.
                     let init = bcx.use_var(regs[a]);
                     let limit = bcx.use_var(regs[a + 1]);
-                    let step_f = bcx.ins().f64const(step_imm as f64);
+                    let step_f = float_const(bcx, step_imm as f64);
 
                     let empty = if step_imm > 0 {
                         bcx.ins().fcmp(FloatCC::GreaterThan, init, limit)
