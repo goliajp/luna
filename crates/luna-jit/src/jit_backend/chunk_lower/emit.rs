@@ -306,7 +306,7 @@ fn declare_regs(
                 raw
             }
         } else if cl_ty == types::F64 {
-            bcx.ins().f64const(0.0)
+            float_const(bcx, 0.0)
         } else {
             bcx.ins().iconst(types::I64, 0)
         };

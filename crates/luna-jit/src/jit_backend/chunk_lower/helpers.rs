@@ -1,5 +1,16 @@
 use super::*;
 
+/// A float constant. Cranelift rematerialises an `f64const` in every block
+/// that uses it, so a constant used in a loop is rebuilt on every
+/// iteration, on aarch64 by a load from a literal pool in the code's own
+/// cache line, whose cost on a Cortex-A76 swings between runs. A bitcast of
+/// the integer bits is an ordinary pure value that loop-invariant code
+/// motion moves out of the loop, so the loop keeps it in a register.
+pub(super) fn float_const(bcx: &mut FunctionBuilder<'_>, f: f64) -> Value {
+    let bits = bcx.ins().iconst(types::I64, f.to_bits() as i64);
+    bcx.ins().bitcast(types::F64, MemFlagsData::new(), bits)
+}
+
 /// The tag a method-JIT register of `kind` holds, as `Value::unpack`
 /// reports it.
 pub(super) fn want_tag(kind: RegKind) -> i64 {
