@@ -9,11 +9,13 @@
 //! those blocks here hands them back without any lock.
 //!
 //! How many of a layout are kept follows the program: as many as it
-//! allocated of that layout during the last collection cycle, and all
-//! of them together at most [`CAP_SHARE`] of the live heap and [`CAP_MAX`]
-//! bytes. The pool is trimmed to that at the end of every cycle, and gives
-//! everything back when its context goes. Kept blocks are freed memory to
-//! the collector: they count in neither the heap's bytes nor its pace.
+//! allocated of that layout during the last collection cycle, and in all
+//! at most the bytes it allocated of pooled sizes that cycle, capped by
+//! the larger of [`CAP_FLOOR`] and an eighth of the live heap, and by
+//! [`CAP_MAX`]. The pool is trimmed to that at the end of every cycle, and
+//! gives everything back when its context goes. Kept blocks are freed
+//! memory to the collector: they count in neither the heap's bytes nor
+//! its pace.
 
 use std::alloc::Layout;
 use std::ptr::NonNull;
@@ -26,9 +28,11 @@ pub(super) const MIN: usize = 1025;
 pub(super) const MAX: usize = 256 * 1024;
 /// Layouts tracked at a time.
 const LAYOUTS: usize = 32;
-/// The pool holds at most the live heap's bytes divided by this, and
-/// [`CAP_MAX`].
-const CAP_SHARE: usize = 2;
+/// The pool holds at most what the program allocated of pooled sizes the
+/// last cycle, and at most the larger of [`CAP_FLOOR`] and the live heap
+/// divided by [`CAP_SHARE`], and never more than [`CAP_MAX`].
+const CAP_SHARE: usize = 8;
+const CAP_FLOOR: usize = 1024 * 1024;
 const CAP_MAX: usize = 8 * 1024 * 1024;
 
 /// Whether blocks of `size` bytes go through the pool.
@@ -53,6 +57,8 @@ pub(super) struct Pool {
     bytes: usize,
     /// at most this many bytes kept (0 until the first cycle ends)
     cap: usize,
+    /// bytes of pooled sizes allocated this cycle
+    allocated: usize,
 }
 
 impl Pool {
@@ -78,6 +84,7 @@ impl Pool {
         let i = self.index(layout)?;
         let l = &mut self.lists[i];
         l.allocs += 1;
+        self.allocated += layout.size();
         let p = l.blocks.pop()?;
         self.bytes -= layout.size();
         Some(p)
@@ -106,7 +113,9 @@ impl Pool {
     /// each layout what the program allocated of it this cycle, within
     /// the share of `live`, and free the rest.
     pub(super) fn cycle_ended(&mut self, live: usize) {
-        self.cap = (live / CAP_SHARE).min(CAP_MAX);
+        let share = (live / CAP_SHARE).max(CAP_FLOOR).min(CAP_MAX);
+        self.cap = self.allocated.min(share);
+        self.allocated = 0;
         for l in &mut self.lists {
             l.want = l.allocs;
             l.allocs = 0;
