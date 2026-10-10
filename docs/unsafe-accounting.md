@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1437** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1443** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 224 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **7** | six `#[doc(hidden)]`, and `MemOwner::raw`, see §5 |
 | **`pub unsafe extern "C" fn`** | 200 | the C API (143), the `luna_jit_*` helpers compiled code calls (51, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
@@ -38,7 +38,7 @@ quotes the pattern counts too.
 |---|---|---:|---|
 | `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `fast_arith.rs`) | 61 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch |
 | | `vm/exec/index_*` | 38 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
-| | `vm/exec` (other) | 84 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
+| | `vm/exec` (other) | 90 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
 | | `runtime/heap*`, `gc_ptr.rs` | 84 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle, the debug check of the slow-store bit |
 | | `runtime/table*` | 48 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
 | | `runtime/mem` | 70 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the freed blocks a system-allocator context keeps for reuse, the vector's and boxed slice's initialised prefix |
@@ -62,7 +62,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1437** | |
+| **Total** | | **1443** | |
 
 ## 3. Pattern catalog
 
@@ -212,7 +212,7 @@ Two CI checks cover `unsafe`:
 - the `unsafe-drift` job in `.github/workflows/ci.yml` counts the sites
   in every `.rs` file under `crates/` on every push, `luna-jit-llvm`
   included although CI does not build it, and fails above the ceiling.
-  The ceiling is the exact count, **1290**, with no headroom;
+  The ceiling is the exact count, **1443**, with no headroom;
 - `clippy::undocumented_unsafe_blocks` is set in the workspace
   `[lints.clippy]` table, and the lint job runs clippy with
   `-D warnings`, so a block or `unsafe impl` without a `SAFETY:` note
@@ -424,7 +424,13 @@ room for: 10 more in `runtime/mem`. A baseline trace
 keeps the record it was lowered from, to lower it again for the optimizing
 tier, and the record's function handles need `Send` and `Sync` to live in
 the trace's tier-up state (`jit_backend/trace/tier_source.rs`): 2 more.
-That is 1437, the ceiling now.
+That is 1437.
+
+The slow paths of the interpreter loop's comparisons moved into functions
+of their own that read the operands through the register pointers the
+loop already holds (`vm/exec/compare.rs`: three `unsafe fn` and their
+three reads), so the loop's frame keeps no slots for them: 6 more. That
+is 1443, the ceiling now.
 
 ## 5. Public `unsafe` surface
 
@@ -474,7 +480,7 @@ wrapper in `luna-jit/benches/bench_send_overhead.rs`.
 
 ```sh
 grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' crates | wc -l
-# 1290, the ceiling in ci.yml's unsafe-drift job
+# 1443, the ceiling in ci.yml's unsafe-drift job
 cargo clippy --workspace --all-targets \
     --exclude llvm-jit-probe --exclude luna-jit-llvm -- -D warnings
 # no undocumented_unsafe_blocks warnings (the LLVM crates need
