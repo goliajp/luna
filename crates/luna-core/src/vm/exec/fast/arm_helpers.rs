@@ -154,11 +154,9 @@ macro_rules! fast_arm_helper_macros {
                 let res = match res {
                     Some(res) => res,
                     None => {
-                        // SAFETY: as above
-                        let (l, r) = unsafe { (*pl, *pr) };
                         save!();
-                        let step = $vm.less_step(l, r, $d or_eq)?;
-                        $vm.op_compare(step, l, r, $inst.k())?;
+                        // SAFETY: as above
+                        unsafe { $vm.order_slow(pl, pr, $d or_eq, $inst.k())? };
                         resume!()
                     }
                 };
@@ -191,17 +189,11 @@ macro_rules! fast_arm_helper_macros {
                 let res = match res {
                     Some(res) => res,
                     None => {
-                        // SAFETY: as above
-                        let x = unsafe { *px };
-                        let imv = if $inst.c() != 0 {
-                            Value::Float(im as f64)
-                        } else {
-                            Value::Int(im as i64)
-                        };
-                        let (l, r) = if $d swap { (imv, x) } else { (x, imv) };
                         save!();
-                        let step = $vm.less_step(l, r, $d or_eq)?;
-                        $vm.op_compare(step, l, r, $inst.k())?;
+                        // SAFETY: as above
+                        unsafe {
+                            $vm.order_imm_slow(px, im, $inst.c() != 0, $d swap, $d or_eq, $inst.k())?
+                        };
                         resume!()
                     }
                 };
