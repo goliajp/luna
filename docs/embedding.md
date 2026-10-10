@@ -137,6 +137,22 @@ While a budget or a cap is armed no compiled code runs: loops the JIT
 would compile stay in the interpreter, where they are counted, so the
 JIT does not need to be disabled for sandboxed scripts.
 
+### Freed blocks the Vm keeps
+
+A Vm on the system allocator (no `lua_Alloc` from `lua_newstate`, no
+`MemoryPolicy`) keeps some of the blocks of 1 KiB to 256 KiB it frees,
+to hand them back to its next allocations of the same size without
+going through the allocator: with a second thread in the process
+(the LLVM backend's compile thread, or the host's own) glibc's
+allocator takes a lock for each of those. It keeps at most what it
+allocated of those sizes during the last collection cycle, at most the
+larger of 1 MiB and an eighth of its live heap, and never more than
+8 MiB; the collector trims the pool at the end of every cycle, and the
+Vm gives it all back when it is dropped. The kept blocks count as freed:
+`collectgarbage("count")` and the collector's pace do not see them. A
+Vm with a host allocation function or a memory policy keeps nothing,
+so the host sees every allocation and free.
+
 ---
 
 ## 4. Setting globals
