@@ -51,19 +51,28 @@ impl Replay<'_, '_> {
 }
 
 /// Reads the relocations [`Replay::hoisted`] keeps, at the start of the
-/// entry block.
+/// entry block: string and function ones read at least twice inside a
+/// loop, the most read first, at most [`HOISTED`]. Each of those saves a
+/// read per iteration; one read once would only hold a register.
 pub(super) fn hoist(
     r: &mut Replay<'_, '_>,
+    an: &live::Analysis,
     relocs: &[(crate::jit_backend::trace::RelocKind, i64)],
 ) {
     use crate::jit_backend::trace::RelocKind;
-    let keep = relocs
-        .iter()
-        .enumerate()
-        .filter(|(_, (k, _))| matches!(k, RelocKind::Str | RelocKind::Proto))
-        .map(|(n, _)| n)
-        .take(HOISTED);
-    for n in keep {
+    let mut in_loops = vec![0u32; relocs.len()];
+    for &(head, back) in &an.loops {
+        for c in head / 2..=back / 2 {
+            if let Op::Reloc(n) = r.lir.insts[an.code[c as usize] as usize].op {
+                in_loops[n as usize] += 1;
+            }
+        }
+    }
+    let mut keep: Vec<usize> = (0..relocs.len())
+        .filter(|&n| in_loops[n] >= 2 && matches!(relocs[n].0, RelocKind::Str | RelocKind::Proto))
+        .collect();
+    keep.sort_by_key(|&n| std::cmp::Reverse(in_loops[n]));
+    for &n in keep.iter().take(HOISTED) {
         let v = r.b.ins().symbol_value(types::I64, r.reloc_gv[n]);
         r.hoisted[n] = Some(v);
     }
