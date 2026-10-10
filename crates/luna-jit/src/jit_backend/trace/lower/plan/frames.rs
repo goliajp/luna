@@ -90,7 +90,15 @@ pub(super) fn plan_frames(
     Some((op_offsets, window_size))
 }
 
-pub(super) fn side_trace_gate(record: &TraceRecord, op_offsets: &[u32]) -> Option<()> {
+/// `may_loop`: the side trace would be compiled to loop on itself (side
+/// traces are compiled one-shot: each run goes once from its head to its
+/// end, so a loop edge it recorded is straight-line code and the checks
+/// below have nothing to guard).
+pub(super) fn side_trace_gate(
+    record: &TraceRecord,
+    op_offsets: &[u32],
+    may_loop: bool,
+) -> Option<()> {
     // SMART side-trace gate. Compute the child's read-before-write live-
     // in slot set (slots READ without first being WRITTEN within
     // child's body — values carried in from the parent's exit
@@ -113,7 +121,7 @@ pub(super) fn side_trace_gate(record: &TraceRecord, op_offsets: &[u32]) -> Optio
             o if o.is_jump() => op.inst.jump_offset() < 0,
             o => o.is_for_loop() || o.is_tfor_loop(),
         });
-        if has_back_edge {
+        if has_back_edge && may_loop {
             // Back-edge means the trace's IR will internal-loop OR
             // re-execute body ops. Two correctness requirements:
             //
