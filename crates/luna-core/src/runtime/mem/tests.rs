@@ -292,3 +292,20 @@ fn map_with_caller_hash_and_failed_growth() {
     m.insert(i, i).unwrap();
     assert_eq!(m.get(&i), Some(i));
 }
+
+/// A vector grown byte by byte past the size small blocks are moved at
+/// (to a fresh block, rather than reallocated) and shrunk back below it
+/// keeps its bytes.
+#[test]
+fn resizing_across_the_small_move_size_keeps_the_bytes() {
+    let o = MemOwner::system();
+    let mut v: LVec<u8> = LVec::new(o.mem());
+    for i in 0..5000u32 {
+        v.push(i as u8).unwrap();
+    }
+    assert!(v.iter().enumerate().all(|(i, &b)| b == i as u8));
+    v.truncate(300);
+    v.shrink_to_fit();
+    assert_eq!(v.len(), 300);
+    assert!(v.iter().enumerate().all(|(i, &b)| b == i as u8));
+}
