@@ -39,11 +39,10 @@ impl TierSource {
     /// relocations do not line up.
     pub(crate) fn optimizing_lir(&self) -> (Arc<lir::Lir>, Vec<(RelocKind, i64)>) {
         if let Some(r) = &self.record {
-            let opts = CompileOptions {
-                tier: TraceTier::Optimizing,
-                ..r.opts
-            };
-            if let Some((lir, _)) = lower::lower_trace_lir(&r.record, opts, r.float_only, true) {
+            // the baseline tier's options: the same relocations (its
+            // iteration count among them), which the optimizing tier's
+            // code generators read past
+            if let Some((lir, _)) = lower::lower_trace_lir(&r.record, r.opts, r.float_only, true) {
                 // the relocations name the same things in the same order;
                 // their values are the baseline trace's, which the trace
                 // keeps alive (this lowering's own frame chains go with
