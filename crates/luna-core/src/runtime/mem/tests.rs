@@ -309,3 +309,39 @@ fn resizing_across_the_small_move_size_keeps_the_bytes() {
     assert_eq!(v.len(), 300);
     assert!(v.iter().enumerate().all(|(i, &b)| b == i as u8));
 }
+
+/// A freed block of a pooled size is kept for the next allocation of its
+/// layout once a collection cycle has shown the program allocates that
+/// layout, as many as it allocated then; the pool is empty before the
+/// first cycle ends, and a context with a host function never pools.
+#[test]
+fn freed_blocks_are_pooled_by_what_the_last_cycle_allocated() {
+    let o = MemOwner::system();
+    let a: LVec<u8> = LVec::with_capacity(o.mem(), 4000).unwrap();
+    drop(a);
+    // no cycle has ended: nothing is kept
+    let b: LVec<u8> = LVec::with_capacity(o.mem(), 4000).unwrap();
+    let c: LVec<u8> = LVec::with_capacity(o.mem(), 4000).unwrap();
+    o.ctx().gc_cycle_ended(64 * 1024);
+    let (pb, pc) = (b.as_ptr(), c.as_ptr());
+    drop(b);
+    drop(c);
+    // this cycle allocated two (plus the first): two are kept and come back
+    let d: LVec<u8> = LVec::with_capacity(o.mem(), 4000).unwrap();
+    let e: LVec<u8> = LVec::with_capacity(o.mem(), 4000).unwrap();
+    let mut got = [d.as_ptr(), e.as_ptr()];
+    got.sort();
+    let mut want = [pb, pc];
+    want.sort();
+    assert_eq!(got, want);
+    // a third of the same layout is new
+    let f: LVec<u8> = LVec::with_capacity(o.mem(), 4000).unwrap();
+    assert!(!want.contains(&f.as_ptr()));
+
+    let seen = Seen::default();
+    let r = raw_owner(&seen, LuaVersion::Lua54);
+    r.ctx().gc_cycle_ended(64 * 1024);
+    let g: LVec<u8> = LVec::with_capacity(r.mem(), 4000).unwrap();
+    drop(g);
+    assert_eq!(seen.live.get(), 0, "a host function's blocks are freed through it");
+}

@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1425** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1436** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 224 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **7** | six `#[doc(hidden)]`, and `MemOwner::raw`, see §5 |
 | **`pub unsafe extern "C" fn`** | 200 | the C API (143), the `luna_jit_*` helpers compiled code calls (51, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
@@ -41,7 +41,7 @@ quotes the pattern counts too.
 | | `vm/exec` (other) | 84 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
 | | `runtime/heap*`, `gc_ptr.rs` | 84 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle, the debug check of the slow-store bit |
 | | `runtime/table*` | 48 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
-| | `runtime/mem` | 60 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the vector's and boxed slice's initialised prefix |
+| | `runtime/mem` | 69 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the freed blocks a system-allocator context keeps for reuse, the vector's and boxed slice's initialised prefix |
 | | `runtime` (other) | 38 | string headers and their trailing bytes, the value tag/payload encoding, closure upvalue storage |
 | | `vm/lib_*` | 55 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`), the table writes that build each library, and on Windows the `ReadFile` call that reads a console as the MSVC C library does, the `CreateFileW`, `DeleteFileW` and `MoveFileExW` calls that open, remove and rename files as it does, the `MultiByteToWideChar` and `WideCharToMultiByte` calls that take names and environment text through the ANSI code page as it does, and the `File` made of the standard input handle for seeking it |
 | | `vm` (other) | 48 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
@@ -51,7 +51,7 @@ quotes the pattern counts too.
 | | unit-test files under `src/` | 20 | tests that inspect raw layouts; a test `lua_Alloc` |
 | | `tests/` | 54 | integration tests: a poisoning global allocator, async wakers, userdata internals, a raw write into a read-only table, the host C library's `%p`, a counting `lua_Alloc`, the environment variables of the Windows file-name test |
 | `luna-jit` | `capi*` | 382 | the C API: raw `lua_State` pointers, C strings, `lua_Debug` and `luaL_Buffer` structs and C function pointers across the boundary (§3.7) |
-| | `jit_backend` | 59 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points (the LLVM backend's trace entries among them), `Send` for handles that own JIT modules or code pages, copying compiled code out to share it between Vms, the debug dump of a trace's machine code |
+| | `jit_backend` | 61 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points (the LLVM backend's trace entries among them), `Send` for handles that own JIT modules or code pages, `Send` and `Sync` for the record a baseline trace keeps to be lowered again for the optimizing tier, copying compiled code out to share it between Vms, the debug dump of a trace's machine code |
 | | other | 2 | the CLI's `arg` table and the `lua_facade` table handle |
 | | unit-test files under `src/` | 70 | tests that call compiled code or the `extern "C"` helpers directly |
 | | `tests/`, `benches/`, `examples/` | 43 | a C API state driven from Rust, a counting global allocator, the `send` overhead bench |
@@ -62,7 +62,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1425** | |
+| **Total** | | **1436** | |
 
 ## 3. Pattern catalog
 
@@ -411,7 +411,19 @@ fresh block (`runtime/mem/resize.rs`: the function, the block that
 allocates, copies and frees, and the call in `MemCtx::realloc`), since
 glibc's `realloc` takes the arena lock once the process has a second
 thread and its per-thread cache of small blocks does not: 3 more. That
-is 1425, the ceiling now.
+is 1425.
+
+A system-allocator context keeps freed blocks of 1 KiB to 256 KiB for its
+next allocations of the same layout (`runtime/mem/pool.rs`, so a process
+with a second thread skips glibc's arena lock for them too): giving the
+kept blocks back when a cycle trims the pool and when the context goes,
+taking one, moving a block through the pool on a resize (the function and
+its two blocks), zeroing a kept block for `alloc_zeroed`, and freeing a
+block the pool has no room for: 9 more in `runtime/mem`. A baseline trace
+keeps the record it was lowered from, to lower it again for the optimizing
+tier, and the record's function handles need `Send` and `Sync` to live in
+the trace's tier-up state (`jit_backend/trace/tier_source.rs`): 2 more.
+That is 1436, the ceiling now.
 
 ## 5. Public `unsafe` surface
 
