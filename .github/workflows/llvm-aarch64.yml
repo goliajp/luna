@@ -60,12 +60,11 @@ jobs:
       - name: LLVM configure options
         shell: pwsh
         run: |
-          # every target: inkwell's default features initialise them all.
-          # libraries only, and llvm-config, which llvm-sys reads; one
-          # compiler per project (`/MP1`) with two projects at a time: `/MP`
-          # in every project at once starved the runner until it lost
-          # contact, and four compilers ran out of memory on the AMDGPU
-          # target's generated tables
+          # the AArch64 and X86 targets only: with every target (inkwell's
+          # default features name them all, the code initialises the native
+          # one only) the runner lost contact three times, an hour or more
+          # into the build. Libraries only, and llvm-config, which llvm-sys
+          # reads; one compiler per project (`/MP1`), two projects at a time
           # no DIA SDK: llvm-config would list its library by a path with
           # spaces, which llvm-sys cannot pass on
           # the generator is cmake's default, the newest Visual Studio installed
@@ -77,7 +76,8 @@ jobs:
             '-DLLVM_ENABLE_ZLIB=OFF', '-DLLVM_ENABLE_ZSTD=OFF', '-DLLVM_ENABLE_LIBXML2=OFF',
             '-DLLVM_ENABLE_DIA_SDK=OFF',
             '-DLLVM_BUILD_TOOLS=OFF', '-DLLVM_BUILD_UTILS=OFF',
-            '-DLLVM_COMPILER_JOBS=1'
+            '-DLLVM_COMPILER_JOBS=1',
+            '-DLLVM_TARGETS_TO_BUILD=AArch64;X86'
           ) | Set-Content llvm-configure.txt
       - uses: actions/cache/restore@v6
         id: llvm
@@ -100,8 +100,17 @@ jobs:
           Rename-Item "cmake-$v.src" cmake
           cmake -S "llvm-$v.src" -B build @opts
           if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
-          cmake --build build --config Release --target install --parallel 2
-          if ($LASTEXITCODE -ne 0) { throw "LLVM build failed" }
+          # free disk and memory every two minutes while it builds, to tell
+          # what runs out if the runner goes away again
+          $b = Start-Process cmake -NoNewWindow -PassThru -ArgumentList `
+            '--build', 'build', '--config', 'Release', '--target', 'install', '--parallel', '2'
+          $null = $b.Handle  # keeps the exit code readable after it exits
+          while (-not $b.WaitForExit(120000)) {
+            $d = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
+            $m = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 1)
+            "free: disk C $d GB, memory $m GB"
+          }
+          if ($b.ExitCode -ne 0) { throw "LLVM build failed" }
           cmake --build build --config Release --target llvm-config
           if ($LASTEXITCODE -ne 0) { throw "llvm-config build failed" }
           Copy-Item build\Release\bin\llvm-config.exe C:\llvm-18\bin\
