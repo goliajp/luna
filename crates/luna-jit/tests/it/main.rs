@@ -65,6 +65,7 @@ mod method_jit_float_keys;
 mod method_jit_float_loops;
 mod method_jit_kind_edges;
 mod method_jit_upvalues;
+mod native_panic_jit;
 mod per_vm_jit_storage;
 mod puc_bytecode_jit;
 mod sandbox;

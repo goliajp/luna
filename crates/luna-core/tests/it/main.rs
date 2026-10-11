@@ -50,6 +50,7 @@ mod macro_lua;
 mod mm_absent_cache;
 mod nan_matches_host_printf;
 mod native_call_bookkeeping;
+mod native_panic_behaviour;
 mod native_typed;
 mod os_time_isdst;
 mod pointer_text;
