@@ -194,19 +194,38 @@ impl Vm {
             let fx = fast::Fast {
                 fr,
                 trace_on,
-                pre53,
                 entry_depth,
                 stay,
                 heads,
             };
             let watch = !stay || heads[0] != crate::runtime::function::TRACE_HEADS_NONE;
-            let out = match (watch, trace_on, dbl) {
-                (true, _, false) => self.run_fast::<true, true, false>(fx, inst, pc + 1)?,
-                (false, true, false) => self.run_fast::<false, true, false>(fx, inst, pc + 1)?,
-                (false, false, false) => self.run_fast::<false, false, false>(fx, inst, pc + 1)?,
-                (true, _, true) => self.run_fast::<true, true, true>(fx, inst, pc + 1)?,
-                (false, true, true) => self.run_fast::<false, true, true>(fx, inst, pc + 1)?,
-                (false, false, true) => self.run_fast::<false, false, true>(fx, inst, pc + 1)?,
+            // 5.1/5.2 (`dbl`) are pre-5.3 too
+            let out = match (watch, trace_on, dbl, pre53) {
+                (true, _, true, _) => self.run_fast::<true, true, true, true>(fx, inst, pc + 1)?,
+                (false, true, true, _) => {
+                    self.run_fast::<false, true, true, true>(fx, inst, pc + 1)?
+                }
+                (false, false, true, _) => {
+                    self.run_fast::<false, false, true, true>(fx, inst, pc + 1)?
+                }
+                (true, _, false, true) => {
+                    self.run_fast::<true, true, false, true>(fx, inst, pc + 1)?
+                }
+                (false, true, false, true) => {
+                    self.run_fast::<false, true, false, true>(fx, inst, pc + 1)?
+                }
+                (false, false, false, true) => {
+                    self.run_fast::<false, false, false, true>(fx, inst, pc + 1)?
+                }
+                (true, _, false, false) => {
+                    self.run_fast::<true, true, false, false>(fx, inst, pc + 1)?
+                }
+                (false, true, false, false) => {
+                    self.run_fast::<false, true, false, false>(fx, inst, pc + 1)?
+                }
+                (false, false, false, false) => {
+                    self.run_fast::<false, false, false, false>(fx, inst, pc + 1)?
+                }
             };
             let inst = match out {
                 fast::FastExit::Reload => continue,

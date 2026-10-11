@@ -200,6 +200,22 @@ optimization.
 
 ### Changed
 
+- The interpreter loop prepares numeric `for` loops itself when the
+  control values need no conversion (integers, or numbers of a float
+  loop), instead of going through the general instruction path, and its
+  `for` step tests the three control registers' tags with compares
+  against memory on x86-64 and conditional compares on aarch64. A loop
+  of three iterations entered 300,000 times runs 45–52% fewer
+  instructions on x86-64 (fewer than PUC Lua in every dialect), and an empty
+  integer loop 23–33% fewer. The `'for' state corrupted` error for
+  control registers changed by `debug.setlocal` is unchanged. On a
+  Cortex-A76 an empty integer loop takes 8.2 cycles per iteration in 5.5
+  (8.8 before, PUC 9.0) and 10.0 in 5.4 (10.7, PUC 9.9).
+- On aarch64 the interpreter loop writes a float arithmetic result from
+  the floating-point register it was computed in. Written as a whole
+  value it went through an integer register first, which made a loop
+  that adds floats (`s = s + x`) take 23 cycles per iteration on a
+  Cortex-A76 instead of 19, and one that adds integers 17 instead of 15.
 - A side trace can run into a loop and round its edge back to where it
   started: a comparison that is the last op of such a recording takes
   the side trace's head as the op after it, and a backward jump the
