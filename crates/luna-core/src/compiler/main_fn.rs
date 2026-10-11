@@ -49,6 +49,7 @@ fn compile_main_body(
         version,
         source,
         levels: scratch.open.take().recycle(),
+        depth: 0,
         pool: scratch.levels.take(),
         sym_strs: scratch.sym_strs.take(),
         last_line: 0,
@@ -60,22 +61,23 @@ fn compile_main_body(
     };
     c.sym_strs.clear();
     c.sym_strs.resize_or_abort(ast.names.len(), None);
-    let mut main = c.new_level(0, true, 0);
-    main.upvals.push_or_abort(UpvalDesc {
+    c.open_level(0, true, 0);
+    c.l().upvals.push_or_abort(UpvalDesc {
         in_stack: false,
         index: 0,
         name: "_ENV".into(),
         read_only: false,
     });
-    c.levels.push_or_abort(main);
     c.enter_block(false);
     c.stat_block(&ast.block)?;
     // the implicit final return belongs to the chunk's last line (PUC), so a
     // line hook / activelines see it there rather than on the last statement
     c.final_return(ast.end_line)?;
-    let lvl = c.levels.pop().expect("main level");
-    let last_target = lvl.last_target;
-    let proto = c.finish_level(lvl, 0, 0);
+    let last_target = c.lr().last_target;
+    let proto = c.finish_level(0, 0);
+    for lvl in c.levels.drain_all() {
+        c.pool.push_or_abort(lvl.into_bufs());
+    }
     scratch.levels = c.pool;
     scratch.sym_strs = c.sym_strs;
     c.spine.clear();

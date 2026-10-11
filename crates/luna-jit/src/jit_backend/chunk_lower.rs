@@ -16,6 +16,7 @@ mod kind_flow;
 mod kinds;
 mod kinds_for;
 mod kinds_ops;
+mod narrow;
 mod nil_flow;
 mod scan;
 mod scan_data;

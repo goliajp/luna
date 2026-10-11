@@ -32,7 +32,7 @@ pub(super) fn emit_basic(
         }
         Op::LoadF => {
             let f = ins.sbx() as f64;
-            let v = bcx.ins().f64const(f);
+            let v = float_const(bcx, f);
             aligned_def(bcx, regs, reg_kinds, ins.a() as usize, v);
             current_kinds[ins.a() as usize] = RegKind::Float;
             current_is_nil[ins.a() as usize] = false;
@@ -41,7 +41,7 @@ pub(super) fn emit_basic(
             // Whitelist ensures Int or Float const.
             let bx = ins.bx() as usize;
             let (v, k) = match proto.consts[bx] {
-                LuaValue::Float(f) => (bcx.ins().f64const(f), RegKind::Float),
+                LuaValue::Float(f) => (float_const(bcx, f), RegKind::Float),
                 LuaValue::Int(i) => (bcx.ins().iconst(types::I64, i), RegKind::Int),
                 _ => unreachable!("scanner rejects non-numeric LoadK"),
             };

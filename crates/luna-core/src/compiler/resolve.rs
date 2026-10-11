@@ -13,7 +13,7 @@ impl<'a> Compiler<'a> {
     ) -> Result<VarKind, SyntaxError> {
         let mut innermost_collective: Option<bool> = None;
         let mut any_decl = false;
-        for lvl in self.levels.iter().rev() {
+        for lvl in self.open_levels().iter().rev() {
             for b in lvl.blocks.iter().rev() {
                 if let Some(&(_, ro)) = b.gdecls.iter().rev().find(|&&(n, _)| n == name) {
                     return Ok(VarKind::Global { read_only: ro });
@@ -100,7 +100,7 @@ impl<'a> Compiler<'a> {
     /// nearest binding of the name, walking out through the functions, is
     /// a constant local. No upvalue is created on the way.
     pub(super) fn ct_const_named(&self, name: &str) -> Option<CtConst> {
-        for lvl in self.levels.iter().rev() {
+        for lvl in self.open_levels().iter().rev() {
             if lvl.global_declared(name) {
                 return None;
             }
@@ -140,7 +140,7 @@ impl<'a> Compiler<'a> {
     }
 
     pub(super) fn resolve_name(&mut self, name: &str) -> Result<VarKind, SyntaxError> {
-        let top = self.levels.len() - 1;
+        let top = self.depth - 1;
         self.resolve_at(top, name)
     }
 

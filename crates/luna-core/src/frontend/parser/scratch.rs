@@ -85,14 +85,23 @@ impl ParseScratch {
 
     /// Empty the vectors of a finished parse for the next one.
     pub(crate) fn recycle(p: Parsed) -> ParseScratch {
-        let Parsed {
-            mut chunk,
-            mut end_lines,
-            lex_buf,
-            stacks,
-        } = p;
+        let mut s = ParseScratch {
+            chunk: p.chunk,
+            end_lines: p.end_lines,
+            lex_buf: p.lex_buf,
+            stacks: p.stacks,
+        };
+        s.clear();
+        s
+    }
+
+    /// Empty the tree's vectors (left filled by the last parse, or half
+    /// filled by one that failed), giving back a huge chunk's.
+    pub(super) fn clear(&mut self) {
+        let chunk = &mut self.chunk;
         if chunk.exprs.capacity() > Self::MAX_EXPRS {
-            return ParseScratch::new(chunk.mem_owner().clone());
+            *self = ParseScratch::new(self.chunk.mem_owner().clone());
+            return;
         }
         chunk.exprs.clear();
         chunk.stats.clear();
@@ -104,12 +113,23 @@ impl ParseScratch {
         chunk.field_lists.clear();
         chunk.arm_lists.clear();
         chunk.fold_marks.clear();
-        end_lines.clear();
-        ParseScratch {
-            chunk,
-            end_lines,
-            lex_buf,
-            stacks,
+        self.end_lines.clear();
+    }
+
+    /// The tree and statement end lines [`parse_in_place`] left here.
+    ///
+    /// [`parse_in_place`]: super::parse_in_place
+    pub(crate) fn parsed(&self) -> (&Chunk, &[u32]) {
+        (&self.chunk, &self.end_lines)
+    }
+
+    /// The parse left here, as the owner of its vectors.
+    pub(super) fn into_parsed(self) -> Parsed {
+        Parsed {
+            chunk: self.chunk,
+            end_lines: self.end_lines,
+            lex_buf: self.lex_buf,
+            stacks: self.stacks,
         }
     }
 }

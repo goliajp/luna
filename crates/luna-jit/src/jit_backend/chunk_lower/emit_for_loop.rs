@@ -44,9 +44,29 @@ pub(super) fn emit_for_loop(
                 // next = R[A] + step; cont = next ≤ limit (positive)
                 // / next ≥ limit (negative). On continue → R[A] =
                 // next, R[A+3] = next, back-jump to body.
+                let counted = match f.pass {
+                    Some(i) => Some(&f.counted[i]),
+                    None => f
+                        .counted
+                        .iter()
+                        .find(|k| k.prep == prep_pc && k.fixed.is_some()),
+                };
+                if let Some(k) = counted {
+                    // the counted form of a pre-5.3 loop (no shadow index)
+                    let body_blk = pc_to_block[prep_pc + 1].expect("body BB");
+                    let exit_blk = pc_to_block[pc + 1].expect("exit BB");
+                    super::narrow::step(bcx, k, step_imm, body_blk, exit_blk, |bcx, next| {
+                        aligned_def(bcx, regs, reg_kinds, r.idx, next);
+                        aligned_def(bcx, regs, reg_kinds, r.var, next);
+                    });
+                    *terminated = true;
+                    current_kinds[r.idx] = RegKind::Float;
+                    current_kinds[r.var] = RegKind::Float;
+                    return;
+                }
                 let shadow = shadow_index(f, prep_pc);
                 let cur = bcx.use_var(shadow.unwrap_or(regs[r.idx]));
-                let step_f = bcx.ins().f64const(step_imm as f64);
+                let step_f = float_const(bcx, step_imm as f64);
                 let next = bcx.ins().fadd(cur, step_f);
                 let limit = bcx.use_var(regs[r.x]);
                 let cont = if step_imm > 0 {

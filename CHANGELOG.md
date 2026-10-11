@@ -211,6 +211,25 @@ optimization.
   loop's stack frame shrank from 2160 to 1232 bytes and entering it (after
   every `pcall` and every trace exit) takes 41 fewer instructions:
   `pcall` in a loop runs 4.5% fewer instructions.
+- The method JIT keeps float constants (a numeric for loop's step and
+  limit, a float `LoadK`) in registers across a loop instead of
+  rebuilding them on every iteration. A loop that summed floats used to
+  load its limit from the code's own cache line on every iteration, and
+  its time on a Cortex-A76 swung by up to 13% from run to run.
+- A 5.1 or 5.2 float `for` loop whose values are all exact (its start and
+  step multiples of one power of two, its bounds small enough for every
+  value to have an exact double) runs its test on an integer count and
+  builds the loop variable from it, with the same values bit for bit. When
+  the start and limit are numerals this is decided while compiling;
+  otherwise once per entry into the loop, with the body compiled for both
+  cases. On a Cortex-A76 an empty such loop takes 33% fewer cycles and a
+  loop summing its variable 13% fewer than before, within 4% from run to
+  run.
+- Loading a chunk copies less: the compiler keeps each function's state
+  in place instead of moving it in and out of its stack, the parser builds
+  the tree straight into the buffers the Vm keeps, and the parser's and
+  compiler's error paths are out of line. Loading the method dispatch
+  benchmark takes 24.9 µs instead of 26.3 µs on a Cortex-A76.
 - `llvm-jit` now needs LLVM with the native target only: luna-jit-llvm
   turns inkwell's default features (every LLVM target) off and enables
   the target of the architecture it is built for. A linker that keeps

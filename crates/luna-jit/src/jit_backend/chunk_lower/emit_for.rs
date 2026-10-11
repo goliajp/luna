@@ -18,13 +18,14 @@ pub(super) fn shadow_index(f: EmitFacts<'_>, prep: usize) -> Option<Variable> {
     Some(f.regs[f.regs.len() - loops.len() + j])
 }
 
-pub(super) fn emit_for_prep(
+pub(super) fn emit_for_prep<M: Module>(
+    module: &mut M,
     bcx: &mut FunctionBuilder<'_>,
     st: &mut EmitState,
     f: EmitFacts<'_>,
     pc: usize,
     ins: Inst,
-) {
+) -> Option<()> {
     let EmitFacts {
         c: ChunkIn { pre53, .. },
         scan,
@@ -123,7 +124,7 @@ pub(super) fn emit_for_prep(
                     // Int bit-pattern to R[A+2]'s declared Int slot.
                     let init = bcx.use_var(regs[a]);
                     let limit = bcx.use_var(regs[a + 1]);
-                    let step_f = bcx.ins().f64const(step_imm as f64);
+                    let step_f = float_const(bcx, step_imm as f64);
                     let pre = bcx.ins().fsub(init, step_f);
                     aligned_def(bcx, regs, reg_kinds, a, pre);
                     aligned_def(bcx, regs, reg_kinds, a + 1, limit);
@@ -132,7 +133,31 @@ pub(super) fn emit_for_prep(
                     current_kinds[a + 1] = RegKind::Float;
                     current_kinds[a + 2] = RegKind::Int;
                     let loop_blk = pc_to_block[loop_pc].expect("ForLoop BB");
-                    bcx.ins().jump(loop_blk, &[]);
+                    match f.counted.iter().find(|k| k.prep == pc) {
+                        Some(k) if k.fixed.is_some() => {
+                            let fixed = k.fixed.expect("checked above");
+                            super::narrow::prepare_fixed(
+                                module, bcx, k, fixed, init, limit, step_imm,
+                            )?;
+                            bcx.ins().jump(loop_blk, &[]);
+                        }
+                        Some(k) => {
+                            let counted_blk = k.blocks[loop_pc].expect("ForLoop BB");
+                            super::narrow::prepare(
+                                module,
+                                bcx,
+                                k,
+                                init,
+                                limit,
+                                step_imm,
+                                counted_blk,
+                                loop_blk,
+                            )?;
+                        }
+                        None => {
+                            bcx.ins().jump(loop_blk, &[]);
+                        }
+                    }
                     *terminated = true;
                 }
                 (false, true) => {
@@ -146,7 +171,7 @@ pub(super) fn emit_for_prep(
                     // remaining-count.
                     let init = bcx.use_var(regs[a]);
                     let limit = bcx.use_var(regs[a + 1]);
-                    let step_f = bcx.ins().f64const(step_imm as f64);
+                    let step_f = float_const(bcx, step_imm as f64);
 
                     let empty = if step_imm > 0 {
                         bcx.ins().fcmp(FloatCC::GreaterThan, init, limit)
@@ -185,4 +210,5 @@ pub(super) fn emit_for_prep(
         }
         _ => unreachable!("dispatched by op"),
     }
+    Some(())
 }

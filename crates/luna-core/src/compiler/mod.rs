@@ -202,7 +202,10 @@ struct Compiler<'a> {
     heap: &'a mut Heap,
     version: LuaVersion,
     source: Gc<LuaStr>,
+    /// the functions being compiled are the first `depth`; the ones past it
+    /// are emptied levels kept for the next nested function
     levels: LVec<Level<'a>>,
+    depth: usize,
     /// emptied vectors of finished functions, for the next function
     pool: LVec<LevelBufs>,
     /// the heap string of each entry of the chunk's names, once made
@@ -245,24 +248,33 @@ impl<'a> Compiler<'a> {
         self.ast.list(l)
     }
 
-    /// A level for a new function, in kept vectors when there are some.
-    fn new_level(&mut self, num_params: u8, is_vararg: bool, line: u32) -> Level<'a> {
-        let bufs = match self.pool.pop() {
-            Some(b) => b,
-            None => LevelBufs::new(self.heap.mem()),
-        };
-        Level::new(num_params, is_vararg, line, bufs)
+    /// Open a level for a new function, reusing an emptied one (or kept
+    /// vectors) when there is one.
+    fn open_level(&mut self, num_params: u8, is_vararg: bool, line: u32) {
+        if self.depth == self.levels.len() {
+            let bufs = match self.pool.pop() {
+                Some(b) => b,
+                None => LevelBufs::new(self.heap.mem()),
+            };
+            self.levels
+                .push_or_abort(Level::new(num_params, is_vararg, line, bufs));
+        } else {
+            self.levels[self.depth].reset(num_params, is_vararg, line);
+        }
+        self.depth += 1;
     }
 
-    /// The finished function `lvl` on the heap; its vectors are kept.
-    fn finish_level(&mut self, mut lvl: Level<'a>, line: u32, last_line: u32) -> Gc<Proto> {
+    /// Close the innermost level: the finished function on the heap. The
+    /// level stays, emptied, for the next function at this depth.
+    fn finish_level(&mut self, line: u32, last_line: u32) -> Gc<Proto> {
+        self.depth -= 1;
+        let lvl = &mut self.levels[self.depth];
         if self.version <= LuaVersion::Lua53 {
             for i in lvl.code.iter_mut() {
                 *i = crate::vm::isa::imm_form::to_imm(*i, &lvl.consts);
             }
         }
-        let (proto, bufs) = lvl.into_proto(self.source, line, last_line, self.heap);
-        self.pool.push_or_abort(bufs);
+        let proto = lvl.take_proto(self.source, line, last_line, self.heap);
         self.heap.adopt_proto(proto)
     }
 
@@ -275,21 +287,28 @@ impl<'a> Compiler<'a> {
     }
 
     fn l(&mut self) -> &mut Level<'a> {
-        self.levels.last_mut().expect("no level")
+        &mut self.levels[self.depth - 1]
     }
 
     fn lr(&self) -> &Level<'a> {
-        self.levels.last().expect("no level")
+        &self.levels[self.depth - 1]
+    }
+
+    /// The functions being compiled, outermost first.
+    fn open_levels(&self) -> &[Level<'a>] {
+        &self.levels[..self.depth]
     }
 
     /// An expression nested deeper than the native stack left can compile
     /// (a long left-associative chain such as `1 + 1 + ... + 1`), reported
     /// in the words the dialect's parser uses at its nesting limit.
+    #[cold]
+    #[inline(never)]
     fn too_deep(&self) -> SyntaxError {
         match self.version {
             LuaVersion::Lua51 => self.err(self.last_line, "chunk has too many syntax levels"),
             LuaVersion::Lua52 | LuaVersion::Lua53 => {
-                let where_ = if self.levels.len() == 1 {
+                let where_ = if self.depth == 1 {
                     "main function".to_string()
                 } else {
                     format!("function at line {}", self.lr().line_defined)
@@ -301,6 +320,8 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    #[cold]
+    #[inline(never)]
     fn err(&self, line: u32, msg: impl Into<String>) -> SyntaxError {
         SyntaxError {
             line,
