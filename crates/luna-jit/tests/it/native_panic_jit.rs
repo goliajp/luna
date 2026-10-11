@@ -49,10 +49,7 @@ fn native_panics_read_the_same_in_compiled_code() {
             if got != core_case::expected(dialect) {
                 failures.push(format!("{mode:?} == {dialect}\n{got}"));
             }
-            // 5.1/5.2's float loops leave every trace of the script under
-            // the length gate
-            let traced = !matches!(dialect, "5.1" | "5.2");
-            if traced && vm.trace_dispatched_count() == 0 {
+            if vm.trace_dispatched_count() == 0 {
                 failures.push(format!(
                     "{mode:?} {dialect}: no trace ran (closed {} compiled {} aborted {} off {:?} failed {:?})",
                     vm.trace_closed_count(), vm.trace_compiled_count(), vm.trace_aborted_count(),

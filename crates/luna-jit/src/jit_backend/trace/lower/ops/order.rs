@@ -31,7 +31,12 @@ pub(super) fn emit_order_op<E: Emit>(
             let not_number = |k: RegKind| {
                 matches!(
                     k,
-                    RegKind::Nil | RegKind::Bool | RegKind::Str | RegKind::Table | RegKind::Closure
+                    RegKind::Nil
+                        | RegKind::Bool
+                        | RegKind::Str
+                        | RegKind::Table
+                        | RegKind::Closure
+                        | RegKind::Native
                 )
             };
             let unequal = op == Op::Eq && (not_number(ka) || not_number(kb));

@@ -129,6 +129,7 @@ mod trace_math_fmod;
 mod trace_math_fold_exit;
 mod trace_math_minmax_fold;
 mod trace_move_alias_escape;
+mod trace_native_copy;
 mod trace_numeric_for_dialects;
 mod trace_overflow_head_given_up;
 mod trace_plain_exit_side_trace;

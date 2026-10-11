@@ -96,7 +96,7 @@ end
 
 -- the hot loops take what they use as arguments, which keeps them
 -- traceable: a native held in an upvalue stops a trace
-local c = {0, 0, 0}
+local c = {0, 0, 0, 0}
 show("loop", pcall(function(c, f)
   for i = 1, 2000 do c[1] = c[1] + f(i == 1500) end
 end, c, boomif))
@@ -110,6 +110,12 @@ show("loop-mm", pcall(function(c, t)
   for i = 1, 2000 do c[3] = c[3] + t[i] end
 end, c, ix))
 log("loop-mm-m", c[3])
+-- a trace that stops at a call is run only when the code before the call
+-- is long enough, whatever the dialect's loops compile to
+local long = loadstr("local c, f = ... for i = 1, 2000 do local x = i "
+  .. string.rep("x = x + 1 ", 45) .. "c[4] = c[4] + f(i == 1500) + x - x end")
+show("loop-long", pcall(long, c, boomif))
+log("loop-long-n", c[4])
 
 -- after the panics the stack reads as before (the recursion depth to a
 -- stack overflow is not stable from run to run, so it is not compared)
