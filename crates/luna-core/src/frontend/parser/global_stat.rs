@@ -30,7 +30,7 @@ impl<'s> Parser<'s> {
                 break;
             }
         }
-        let names = finish(&mut self.chunk, &mut self.stk.attribs, mark);
+        let names = finish(self.chunk, &mut self.stk.attribs, mark);
         let exprs = if self.accept(Token::Assign)? {
             self.exprlist()?
         } else {
