@@ -369,7 +369,7 @@ pub fn run_bytecode_as(bytecode: &[u8], version: LuaVersion) -> i32 {
     run_inner(bytecode, version)
 }
 
-// Re-export of the 51 `luna_jit_*` Cranelift
+// Re-export of the 52 `luna_jit_*` Cranelift
 // trace-mcode helpers from `luna-jit::jit_backend`. AOT binaries whose
 // embedded `.o` calls these helpers (any trace that does table get/set,
 // upvalue read, concat, etc.) needs them resolvable as strong externs
@@ -392,7 +392,7 @@ pub fn run_bytecode_as(bytecode: &[u8], version: LuaVersion) -> i32 {
 //
 // Verified post-build:
 //   `nm target/release/libluna_runtime_helpers.a | grep " T _luna_jit_" | wc -l`
-//   reports 51 (one per helper).
+//   reports 52 (one per helper).
 // Re-export the helpers at the crate root. This pulls them into our
 // `pub` surface so rustc treats them as kept symbols. The
 // `extern "C"` + `#[no_mangle]` on the upstream definitions means
@@ -403,7 +403,7 @@ pub fn run_bytecode_as(bytecode: &[u8], version: LuaVersion) -> i32 {
 // bundling step is forced to pull in the defining cgus.
 #[cfg(feature = "jit-helpers")]
 pub use luna_jit::jit_backend::{
-    luna_jit_fmod, luna_jit_head_closure, luna_jit_materialize_sunk_table,
+    luna_jit_fmod, luna_jit_for_scale, luna_jit_head_closure, luna_jit_materialize_sunk_table,
     luna_jit_math_fn_is_library, luna_jit_math1, luna_jit_new_table, luna_jit_new_table_sized,
     luna_jit_numpow, luna_jit_op_close, luna_jit_op_closure, luna_jit_op_closure_in,
     luna_jit_op_concat, luna_jit_op_get_tab_up, luna_jit_op_get_tab_up_checked,
@@ -424,7 +424,7 @@ pub use luna_jit::jit_backend::{
 #[cfg(feature = "jit-helpers")]
 mod jit_helpers_pin;
 
-/// Pull all 51 `luna_jit_*` Cranelift
+/// Pull all 52 `luna_jit_*` Cranelift
 /// trace-mcode helper symbols into the deploy-side staticlib's
 /// linkmap. Called by the AOT-generated C `main` stub or by the
 /// integration tests to make sure the helper symbols are still
@@ -435,7 +435,7 @@ mod jit_helpers_pin;
 /// `luna-jit` from its dep graph and this function from its API
 /// surface — interp-only AOT binaries pay zero cranelift cost.
 ///
-/// Returns the number of helper symbols pinned (always 51 with the
+/// Returns the number of helper symbols pinned (always 52 with the
 /// current `luna-jit` shape; will need to be bumped in lock-step
 /// any time `crates/luna-jit/src/jit_backend/mod.rs` adds a 43rd
 /// `pub unsafe extern "C" fn luna_jit_*`).

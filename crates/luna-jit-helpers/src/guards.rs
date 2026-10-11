@@ -112,6 +112,54 @@ pub extern "C" fn luna_jit_math1(x: f64, f: i64) -> f64 {
     luna_core::cerrno::math1(luna_core::cerrno::MathFn::ALL[f as usize], x)
 }
 
+/// For a compiled 5.1 / 5.2 float `for` loop `init, limit, step` (`step` a
+/// non-zero integer): the exponent `e` such that the loop, counted on
+/// integers scaled by `q = 2^e`, gives the float loop's values bit for bit;
+/// `i64::MIN` when no such `e` is known.
+///
+/// `e` is the smaller of the exponent of the lowest set bit of `init` (any,
+/// when `init` is ±0) and that of `step`, so `init` and `step` are
+/// multiples of `q`, and so is every value `x_k = init + k * step`. The
+/// loop stops at the first value past the limit, so every value it reaches
+/// has `|x_k| <= max(|init|, |limit| + |step|) <= T = |init| + |limit| +
+/// |step|`. `T <= 2^(51 + e)`, with `T` summed in floats, keeps the true
+/// `T` below `2^(52 + e)` despite the sum's rounding; then every
+/// `|x_k / q|` is below `2^52`: each `x_k` is exact, each float step
+/// `x_k + step` is exact, `x_k / q` and its product with `q` are exact, and
+/// so is `limit / q` before it is rounded to an integer, so an integer test
+/// against that bound agrees with the float test. `e >= -1000` keeps `q`,
+/// `1 / q` and every `x_k` normal. A NaN or infinite bound fails the test,
+/// as does a subnormal or non-finite `init`.
+// SAFETY: no other item in the link is named `luna_jit_for_scale`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub extern "C" fn luna_jit_for_scale(init: f64, limit: f64, step: i64) -> i64 {
+    for_scale(init, limit, step).unwrap_or(i64::MIN)
+}
+
+/// The `e` of [`luna_jit_for_scale`].
+fn for_scale(init: f64, limit: f64, step: i64) -> Option<i64> {
+    if !init.is_finite() || (init != 0.0 && !init.is_normal()) || step == 0 {
+        return None;
+    }
+    let e_step = i64::from(step.unsigned_abs().trailing_zeros());
+    let e = if init == 0.0 {
+        e_step
+    } else {
+        let bits = init.to_bits();
+        let exp_field = ((bits >> 52) & 0x7ff) as i64;
+        let sig = (bits & ((1u64 << 52) - 1)) | (1u64 << 52);
+        (exp_field - 1075 + i64::from(sig.trailing_zeros())).min(e_step)
+    };
+    if e < -1000 {
+        return None;
+    }
+    let total = init.abs() + limit.abs() + step.unsigned_abs() as f64;
+    let bound = f64::from_bits(((51 + e + 1023) as u64) << 52);
+    // false for a NaN or infinite total
+    (total <= bound).then_some(e)
+}
+
 /// C `pow` for a compiled `^` of 5.1 to 5.3, leaving `errno` as it does.
 // SAFETY: no other item in the link is named `luna_jit_pow`: only this crate defines
 // `luna_jit_` symbols, each once
