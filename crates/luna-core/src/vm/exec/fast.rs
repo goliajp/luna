@@ -2,12 +2,14 @@
 //! run a metamethod execute here on locals, in a function of their own so
 //! that its register allocation does not depend on the rest of the loop.
 
+use super::for_loop::int_for_count;
 use super::num_double as dbl;
 use super::*;
 use crate::runtime::value::tag;
 use call_fast::Returned;
 use fast_arith::{
-    arith_arm, arith_imm_arm, cold_path, put_int, raw_flt, raw_gc, raw_int, raw_tag, raw_truthy,
+    arith_arm, arith_imm_arm, cold_path, is_num_tag, put_flt, put_int, raw_flt, raw_gc, raw_int,
+    raw_num, raw_tag, raw_tag_again, raw_truthy, reg_a,
 };
 use index_fast::self_key;
 
@@ -33,7 +35,6 @@ pub(super) struct Fast {
     /// the running frame, on top of `frames`
     pub(super) fr: *mut Frame,
     pub(super) trace_on: bool,
-    pub(super) pre53: bool,
     pub(super) entry_depth: usize,
     /// false when some instruction needs the loop head's checks (a trap,
     /// a recording, or more trace heads than `heads` holds)
@@ -66,9 +67,15 @@ impl Vm {
     /// tests nothing per instruction. Without `WATCH`, `TRACE` is
     /// `fx.trace_on`, fixed for the loop so that it costs nothing. `DBL`
     /// is true for 5.1/5.2, whose integers stand for doubles (see
-    /// [`super::num_double`]).
+    /// [`super::num_double`]); `PRE53` for 5.1-5.3, whose numeric `for`
+    /// steps before it tests and compares with the limit.
     #[inline(never)]
-    pub(super) fn run_fast<const WATCH: bool, const TRACE: bool, const DBL: bool>(
+    pub(super) fn run_fast<
+        const WATCH: bool,
+        const TRACE: bool,
+        const DBL: bool,
+        const PRE53: bool,
+    >(
         &mut self,
         fx: Fast,
         mut inst: Inst,
@@ -77,12 +84,12 @@ impl Vm {
         let Fast {
             mut fr,
             trace_on: trace_rt,
-            pre53,
             entry_depth,
             stay,
             heads,
         } = fx;
         let trace_on = if WATCH { trace_rt } else { TRACE };
+        let pre53 = PRE53;
         // From here the running frame's state lives in locals (PUC keeps
         // `pc`, `base` and `k` in registers the same way). An arm that only
         // reads and writes registers advances `npc` and stores it through
@@ -228,6 +235,8 @@ impl Vm {
                     Op::LeK => order_k_arm!(<=, true),
                     Op::Test => op_test!(),
                     Op::TestSet => op_test_set!(),
+                    Op::ForPrep => op_for_prep!(),
+                    Op::ForPrep55 => op_for_prep55!(),
                     Op::ForLoop => op_for_loop!(),
                     Op::ForLoop55 => op_for_loop55!(),
                     Op::TForLoop => op_t_for_loop!(4, true),
@@ -244,8 +253,6 @@ impl Vm {
                     | Op::SetList
                     | Op::Pow
                     | Op::Concat
-                    | Op::ForPrep
-                    | Op::ForPrep55
                     | Op::TForPrep
                     | Op::TForPrep53
                     | Op::TForPrep55

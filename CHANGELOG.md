@@ -114,6 +114,10 @@ optimization.
   made from inside a C function of the host's, as `lua.c`'s `docall` runs
   inside `pmain`.
 
+- `luna_core::jit::trace::ExitTag` has a `Native` variant (a native
+  function's pointer, packed into AOT trace metadata as byte 8). Code
+  that matches `ExitTag` exhaustively has to name it.
+
 - `luna_core::jit::trace::ExitTag` has a `Bool` variant and `TraceRecord`
   the `index_slots`, `index_key` and `settings` fields; the frame-materialise helper
   `luna_jit_trace_materialize_frames` takes a third argument, the
@@ -196,6 +200,29 @@ optimization.
 
 ### Changed
 
+- The interpreter loop prepares numeric `for` loops itself when the
+  control values need no conversion (integers, or numbers of a float
+  loop), instead of going through the general instruction path, and its
+  `for` step tests the three control registers' tags with compares
+  against memory on x86-64 and conditional compares on aarch64. A loop
+  of three iterations entered 300,000 times runs 45–52% fewer
+  instructions on x86-64 (fewer than PUC Lua in every dialect), and an empty
+  integer loop 23–33% fewer. The `'for' state corrupted` error for
+  control registers changed by `debug.setlocal` is unchanged. On a
+  Cortex-A76 an empty integer loop takes 8.2 cycles per iteration in 5.5
+  (8.8 before, PUC 9.0) and 10.0 in 5.4 (10.7, PUC 9.9).
+- A native function the interpreter loop calls directly (a plain host
+  or library function, outside hooks) runs without a panic guard of its
+  own: a Rust panic in it is caught where the loop was entered and raised
+  there as the same `native panic: <msg>` error, with the same traceback,
+  handler call and `pcall` result as before. A panic in a call or return
+  hook of a native still reaches the host as a panic, and a load's memory
+  error still unwinds to the load.
+- On aarch64 the interpreter loop writes a float arithmetic result from
+  the floating-point register it was computed in. Written as a whole
+  value it went through an integer register first, which made a loop
+  that adds floats (`s = s + x`) take 23 cycles per iteration on a
+  Cortex-A76 instead of 19, and one that adds integers 17 instead of 15.
 - A side trace can run into a loop and round its edge back to where it
   started: a comparison that is the last op of such a recording takes
   the side trace's head as the op after it, and a backward jump the
@@ -592,6 +619,18 @@ optimization.
 
 ### Fixed
 
+- Trace JIT (all three trace code generators: baseline, Cranelift and
+  LLVM): a native function a trace copied into another register (`local
+  g = f`, the function and arguments of a call, a native passed to a Lua
+  function the trace inlined) reached the interpreter at the trace's exit
+  as whatever that register held before, so the call that followed raised
+  "attempt to call a number value" or "a nil value"; a test of the copy
+  (`if g then`) could take the wrong branch. The trace now knows a
+  native's type wherever it copies one. A native passed to an inlined Lua
+  function fails this way in every release since the trace JIT was turned
+  on by default, 1.3.0 through 4.0.2; the other shapes did not run as
+  traces in a release (develop only, from the per-loop back-edge counting
+  of 2026-10-02).
 - LLVM backend: the method JIT took a register that 5.1's code never wrote
   (5.1 leaves out the `LoadNil` of a register still nil at entry, so
   `return nil` reads it) for the integer 0; `load` with a reader that
