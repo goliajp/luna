@@ -191,6 +191,9 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     }
     // the counted copies, each ending in its own `ForLoop`
     for (i, k) in counted.iter().enumerate() {
+        if k.fixed.is_some() {
+            continue;
+        }
         let start = k.prep + 1;
         let first = k.blocks[start].expect("body BB start");
         bcx.switch_to_block(first);

@@ -44,8 +44,15 @@ pub(super) fn emit_for_loop(
                 // next = R[A] + step; cont = next ≤ limit (positive)
                 // / next ≥ limit (negative). On continue → R[A] =
                 // next, R[A+3] = next, back-jump to body.
-                if let Some(k) = f.pass.map(|i| &f.counted[i]) {
-                    // the counted copy of a pre-5.3 loop (no shadow index)
+                let counted = match f.pass {
+                    Some(i) => Some(&f.counted[i]),
+                    None => f
+                        .counted
+                        .iter()
+                        .find(|k| k.prep == prep_pc && k.fixed.is_some()),
+                };
+                if let Some(k) = counted {
+                    // the counted form of a pre-5.3 loop (no shadow index)
                     let body_blk = pc_to_block[prep_pc + 1].expect("body BB");
                     let exit_blk = pc_to_block[pc + 1].expect("exit BB");
                     super::narrow::step(bcx, k, step_imm, body_blk, exit_blk, |bcx, next| {
