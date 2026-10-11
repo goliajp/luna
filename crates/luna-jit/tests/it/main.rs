@@ -62,6 +62,7 @@ mod math_fold_semantics;
 mod method_jit_conditional_nil;
 mod method_jit_const_operands;
 mod method_jit_float_keys;
+mod method_jit_float_loops;
 mod method_jit_kind_edges;
 mod method_jit_upvalues;
 mod per_vm_jit_storage;
