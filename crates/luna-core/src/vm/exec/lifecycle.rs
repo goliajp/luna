@@ -167,6 +167,7 @@ impl Vm {
             public_call_depth: 0,
             running_natives: LVec::new(mem),
             natives_base: 0,
+            native_window_panic: 0,
             // JIT-specific state lives in the `JitState`
             // sidecar. The `luna` crate's `Vm::new_minimal_with_jit` /
             // `install_jit_backend` / `luaL_newstate` swap in

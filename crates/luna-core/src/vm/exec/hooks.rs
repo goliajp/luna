@@ -130,6 +130,21 @@ impl Vm {
         line: Option<i64>,
         from_native: bool,
     ) -> Result<(), LuaError> {
+        // a native's call or return hook runs with the native on top of
+        // `running_natives`, though not running
+        if from_native {
+            self.in_native_window(|vm| vm.run_hook_body(event, line, true))
+        } else {
+            self.run_hook_body(event, line, false)
+        }
+    }
+
+    fn run_hook_body(
+        &mut self,
+        event: &[u8],
+        line: Option<i64>,
+        from_native: bool,
+    ) -> Result<(), LuaError> {
         // line and count events transfer no values (PUC `luaD_hook(L,
         // event, line, 0, 0)`); call and return hooks set theirs first
         if matches!(event, b"line" | b"count") {

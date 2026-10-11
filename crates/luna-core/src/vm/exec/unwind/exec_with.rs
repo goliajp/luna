@@ -17,8 +17,16 @@ impl Vm {
     }
 
     pub(crate) fn exec_with(&mut self, entry_depth: usize) -> Result<Vec<Value>, LuaError> {
+        // a mark left by a panic that went on to the host
+        self.native_window_panic = 0;
         loop {
-            let r = self.run(entry_depth);
+            let natives_at_entry = self.running_natives.len();
+            let r = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.run(entry_depth)
+            })) {
+                Ok(r) => r,
+                Err(payload) => Err(self.unguarded_native_panic(payload, natives_at_entry)),
+            };
             if r.is_err()
                 && (self.yielding.is_some()
                     || self.terminating.is_some()

@@ -211,6 +211,13 @@ optimization.
   control registers changed by `debug.setlocal` is unchanged. On a
   Cortex-A76 an empty integer loop takes 8.2 cycles per iteration in 5.5
   (8.8 before, PUC 9.0) and 10.0 in 5.4 (10.7, PUC 9.9).
+- A native function the interpreter loop calls directly (a plain host
+  or library function, outside hooks) runs without a panic guard of its
+  own: a Rust panic in it is caught where the loop was entered and raised
+  there as the same `native panic: <msg>` error, with the same traceback,
+  handler call and `pcall` result as before. A panic in a call or return
+  hook of a native still reaches the host as a panic, and a load's memory
+  error still unwinds to the load.
 - On aarch64 the interpreter loop writes a float arithmetic result from
   the floating-point register it was computed in. Written as a whole
   value it went through an integer register first, which made a loop

@@ -261,6 +261,12 @@ pub struct Vm {
     /// Index into `running_natives` where the running thread's own natives
     /// begin; the ones below belong to the threads that resumed it.
     pub(crate) natives_base: usize,
+    /// Set while a panic unwinds out of a native's call or return hook (or
+    /// another stretch where a native is on top of `running_natives` but
+    /// not running): that native's index plus one. It tells the dispatch
+    /// loop's entry the panic is not the native's own (see
+    /// [`Vm::in_native_window`]); 0 otherwise.
+    pub(crate) native_window_panic: u32,
 
     /// Host waker cloned by `EvalFuture::poll` before driving a slice.
     /// The dispatcher itself does not call it (the future's poll loop
