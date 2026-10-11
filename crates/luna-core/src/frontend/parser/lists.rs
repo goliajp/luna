@@ -12,7 +12,7 @@ impl Parser<'_> {
             let e = self.expr()?;
             self.stk.exprs.push_or_abort(e);
         }
-        Ok(finish(&mut self.chunk, &mut self.stk.exprs, mark))
+        Ok(finish(self.chunk, &mut self.stk.exprs, mark))
     }
 
     pub(super) fn call_args(&mut self) -> Result<List<ExprId>, SyntaxError> {
@@ -77,7 +77,7 @@ impl Parser<'_> {
             }
         }
         self.expect_match(Token::RBrace, "}", "{", line)?;
-        let fields = finish(&mut self.chunk, &mut self.stk.fields, mark);
+        let fields = finish(self.chunk, &mut self.stk.fields, mark);
         Ok(self.push_expr(Expr::Table { fields, line }))
     }
 

@@ -24,6 +24,10 @@ pub(super) struct EmitFacts<'a> {
     pub(super) ret_kind: RegKind,
     pub(super) presize_for_newtable: &'a std::collections::HashMap<usize, i64>,
     pub(super) regs: &'a [Variable],
+    /// the loops with a counted copy (see [`narrow`](super::narrow))
+    pub(super) counted: &'a [super::narrow::Counted],
+    /// the counted copy being emitted, when this is one
+    pub(super) pass: Option<usize>,
     pub(super) pc_to_block: &'a [Option<Block>],
     pub(super) fn_id: FuncId,
     /// set when the chunk calls itself: see [`SelfCalls`]
@@ -76,11 +80,7 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
         num_params,
         ..
     } = c;
-    let ChunkScan {
-        bb_starts,
-        folded_math,
-        ..
-    } = scan;
+    let ChunkScan { bb_starts, .. } = scan;
     let pc_to_bb = &cfg.pc_to_bb;
     let mut sig = module.make_signature();
     for _ in 0..num_params {
@@ -165,6 +165,7 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
         check_failure: may_show_dummy_results(c),
     });
 
+    let counted = narrow::plan(&mut bcx, c, scan, reg_kinds, &pc_to_block, any_self_call);
     let f = EmitFacts {
         c,
         scan,
@@ -172,6 +173,8 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
         ret_kind,
         presize_for_newtable,
         regs: &regs,
+        counted: &counted,
+        pass: None,
         pc_to_block: &pc_to_block,
         fn_id,
         self_calls,
@@ -181,19 +184,86 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
         current_is_nil,
         terminated: false,
     };
-    let mut current_block = entry;
-    let mut pc = 0;
-    while pc < n {
+    emit_pcs(module, &mut bcx, &mut st, f, 0, n, bb_entry_kinds, pc_to_bb)?;
+    if !st.terminated {
+        let zero = bcx.ins().iconst(types::I64, 0);
+        bcx.ins().return_(&[zero]);
+    }
+    // the counted copies, each ending in its own `ForLoop`
+    for (i, k) in counted.iter().enumerate() {
+        if k.fixed.is_some() {
+            continue;
+        }
+        let start = k.prep + 1;
+        let first = k.blocks[start].expect("body BB start");
+        bcx.switch_to_block(first);
+        st.current_kinds = bb_entry_kinds[pc_to_bb[start]].clone();
+        for slot in st.current_is_nil.iter_mut() {
+            *slot = false;
+        }
+        st.terminated = false;
+        let copy = EmitFacts {
+            pc_to_block: &k.blocks,
+            pass: Some(i),
+            ..f
+        };
+        emit_pcs(
+            module,
+            &mut bcx,
+            &mut st,
+            copy,
+            start,
+            k.loop_pc + 1,
+            bb_entry_kinds,
+            pc_to_bb,
+        )?;
+    }
+    bcx.seal_all_blocks();
+    bcx.finalize(module.target_config());
+
+    module.define_function(fn_id, &mut ctx).ok()?;
+    chunk_share::note(module, &ctx, fn_id);
+    let ring = any_self_call.then(|| RingSpec {
+        desc: self_call_desc((arg_float_mask, arg_table_mask), num_params, scan, ret_kind),
+        counted: c.float_only,
+        copies: ring_copies(ctx.compiled_code().map_or(0, |cc| cc.code_buffer().len())),
+    });
+    module.clear_context(&mut ctx);
+
+    define_entry(module, &mut ctx, fn_id, scan, ring, num_params)
+}
+
+/// Emit the ops at `from..to`, starting in the current block. The function
+/// body is one such run; a counted loop copy (see [`narrow`](super::narrow))
+/// is another, over its body and `ForLoop`.
+#[allow(clippy::too_many_arguments)]
+fn emit_pcs<M: Module>(
+    module: &mut M,
+    bcx: &mut FunctionBuilder<'_>,
+    st: &mut EmitState,
+    f: EmitFacts<'_>,
+    from: usize,
+    to: usize,
+    bb_entry_kinds: &[Vec<RegKind>],
+    pc_to_bb: &[usize],
+) -> Option<()> {
+    let code = f.c.code;
+    let ChunkScan {
+        bb_starts,
+        folded_math,
+        ..
+    } = f.scan;
+    let mut pc = from;
+    while pc < to {
         // Entering a new BB: if the previous BB fell through without a
         // terminator, append an explicit jump so cranelift's verifier
         // doesn't choke.
-        if pc != 0 && bb_starts[pc] {
-            let next_blk = pc_to_block[pc].expect("BB present");
+        if pc != from && bb_starts[pc] {
+            let next_blk = f.pc_to_block[pc].expect("BB present");
             if !st.terminated {
                 bcx.ins().jump(next_blk, &[]);
             }
             bcx.switch_to_block(next_blk);
-            current_block = next_blk;
             st.terminated = false;
             // reset emit-side `current_kinds` to
             // the per-BB dataflow result so an alternate-path
@@ -209,7 +279,6 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
                 *slot = false;
             }
         }
-        let _ = current_block; // tracked only for parity assertions in tests.
         let ins = code[pc];
         if f.scan.dead_loads[pc] {
             pc += 1;
@@ -227,45 +296,27 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
             | Op::Div
             | Op::Return1
             | Op::Return0
-            | Op::Jmp => emit_basic::emit_basic(&mut bcx, &mut st, f, pc, ins)?,
-            Op::GetTabUp => pc = emit_calls::emit_math_fold(module, &mut bcx, &mut st, f, pc)?,
+            | Op::Jmp => emit_basic::emit_basic(bcx, st, f, pc, ins)?,
+            Op::GetTabUp => pc = emit_calls::emit_math_fold(module, bcx, st, f, pc)?,
             Op::GetField if folded_math[pc] => {
                 unreachable!("GetTabUp emit advances pc past the rest of the fold");
             }
-            Op::GetUpval => emit_calls::emit_get_upval(module, &mut bcx, &mut st, f, pc, ins)?,
-            Op::Call => emit_calls::emit_self_call(module, &mut bcx, &mut st, f, pc, ins)?,
-            Op::ForPrep | Op::ForPrep55 => emit_for::emit_for_prep(&mut bcx, &mut st, f, pc, ins),
-            Op::ForLoop | Op::ForLoop55 => {
-                emit_for_loop::emit_for_loop(&mut bcx, &mut st, f, pc, ins)
-            }
-            Op::Lt | Op::Le | Op::Eq => pc = emit_basic::emit_cmp(&mut bcx, &mut st, f, pc, ins),
-            Op::NewTable => emit_table_set::emit_new_table(module, &mut bcx, &mut st, f, pc, ins)?,
-            Op::SetTable => emit_table_set::emit_set_table(module, &mut bcx, f, ins)?,
-            Op::SetList => emit_table_set::emit_set_list(module, &mut bcx, &mut st, f, pc, ins)?,
-            Op::GetI => emit_table_get::emit_get_i(module, &mut bcx, &mut st, f, ins)?,
-            Op::GetTable => emit_table_get::emit_get_table(module, &mut bcx, &mut st, f, ins)?,
-            Op::Len => emit_table_get::emit_len(module, &mut bcx, &mut st, f, ins)?,
+            Op::GetUpval => emit_calls::emit_get_upval(module, bcx, st, f, pc, ins)?,
+            Op::Call => emit_calls::emit_self_call(module, bcx, st, f, pc, ins)?,
+            Op::ForPrep | Op::ForPrep55 => emit_for::emit_for_prep(module, bcx, st, f, pc, ins)?,
+            Op::ForLoop | Op::ForLoop55 => emit_for_loop::emit_for_loop(bcx, st, f, pc, ins),
+            Op::Lt | Op::Le | Op::Eq => pc = emit_basic::emit_cmp(bcx, st, f, pc, ins),
+            Op::NewTable => emit_table_set::emit_new_table(module, bcx, st, f, pc, ins)?,
+            Op::SetTable => emit_table_set::emit_set_table(module, bcx, f, ins)?,
+            Op::SetList => emit_table_set::emit_set_list(module, bcx, st, f, pc, ins)?,
+            Op::GetI => emit_table_get::emit_get_i(module, bcx, st, f, ins)?,
+            Op::GetTable => emit_table_get::emit_get_table(module, bcx, st, f, ins)?,
+            Op::Len => emit_table_get::emit_len(module, bcx, st, f, ins)?,
             _ => return None,
         }
         pc += 1;
     }
-    if !st.terminated {
-        let zero = bcx.ins().iconst(types::I64, 0);
-        bcx.ins().return_(&[zero]);
-    }
-    bcx.seal_all_blocks();
-    bcx.finalize(module.target_config());
-
-    module.define_function(fn_id, &mut ctx).ok()?;
-    chunk_share::note(module, &ctx, fn_id);
-    let ring = any_self_call.then(|| RingSpec {
-        desc: self_call_desc((arg_float_mask, arg_table_mask), num_params, scan, ret_kind),
-        counted: c.float_only,
-        copies: ring_copies(ctx.compiled_code().map_or(0, |cc| cc.code_buffer().len())),
-    });
-    module.clear_context(&mut ctx);
-
-    define_entry(module, &mut ctx, fn_id, scan, ring, num_params)
+    Some(())
 }
 
 /// Copies of a body of `len` bytes in its ring: as many as keep the ring
@@ -306,7 +357,7 @@ fn declare_regs(
                 raw
             }
         } else if cl_ty == types::F64 {
-            bcx.ins().f64const(0.0)
+            float_const(bcx, 0.0)
         } else {
             bcx.ins().iconst(types::I64, 0)
         };

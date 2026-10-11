@@ -83,7 +83,7 @@ impl<'s> Parser<'s> {
         self.func_local_count.last_mut().expect("func ctx").0 = local_snapshot;
         self.restore_locals_51(locals_51_snap);
         Ok(Block {
-            stats: finish(&mut self.chunk, &mut self.stk.stats, mark),
+            stats: finish(self.chunk, &mut self.stk.stats, mark),
         })
     }
 

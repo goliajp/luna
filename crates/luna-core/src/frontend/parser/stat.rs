@@ -28,7 +28,7 @@ impl<'s> Parser<'s> {
                 body,
             });
         }
-        let arms = finish(&mut self.chunk, &mut self.stk.arms, mark);
+        let arms = finish(self.chunk, &mut self.stk.arms, mark);
         let else_body = if self.accept(Token::Else)? {
             Some(self.block()?)
         } else {
@@ -101,7 +101,7 @@ impl<'s> Parser<'s> {
                     let n = self.expect_name()?;
                     self.stk.names.push_or_abort(n);
                 }
-                let vars = finish(&mut self.chunk, &mut self.stk.names, mark);
+                let vars = finish(self.chunk, &mut self.stk.names, mark);
                 // PUC `forlist`: three hidden locals (generator, state,
                 // control), four in 5.4 (plus the closing value), three
                 // again in 5.5
@@ -140,7 +140,7 @@ impl<'s> Parser<'s> {
             let n = self.expect_name()?;
             self.stk.names.push_or_abort(n);
         }
-        let path = finish(&mut self.chunk, &mut self.stk.names, mark);
+        let path = finish(self.chunk, &mut self.stk.names, mark);
         let method = if self.accept(Token::Colon)? {
             Some(self.expect_name()?)
         } else {
@@ -191,7 +191,7 @@ impl<'s> Parser<'s> {
                 break;
             }
         }
-        let names = finish(&mut self.chunk, &mut self.stk.attribs, mark);
+        let names = finish(self.chunk, &mut self.stk.attribs, mark);
         let exprs = if self.accept(Token::Assign)? {
             self.exprlist()?
         } else {
@@ -305,7 +305,7 @@ impl<'s> Parser<'s> {
                 }
             }
         }
-        let targets = finish(&mut self.chunk, &mut self.stk.exprs, mark);
+        let targets = finish(self.chunk, &mut self.stk.exprs, mark);
         self.expect(Token::Assign, "=")?;
         let exprs = self.exprlist()?;
         self.depth -= entered;

@@ -45,7 +45,7 @@ impl<'s> Parser<'s> {
             g.enter_function();
             Ok(())
         })?;
-        let params = finish(&mut self.chunk, &mut self.stk.names, mark);
+        let params = finish(self.chunk, &mut self.stk.names, mark);
         let Parser {
             gotos, lex, chunk, ..
         } = self;
