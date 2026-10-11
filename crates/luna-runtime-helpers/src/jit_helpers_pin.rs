@@ -193,7 +193,7 @@ pub fn force_link_jit_helpers() -> usize {
             let _ = jb::luna_jit_math1(0.0, 0);
             let _ = jb::luna_jit_pow(0.0, 1.0);
             let _ = jb::luna_jit_numpow(0.0, 1.0);
-            let _ = jb::luna_jit_for_scale(0.0, 1.0, 1);
+            let _ = jb::luna_jit_for_scale(0.0, 1.0, 1, 0);
             let _ = jb::luna_jit_upval_get_checked(0, 0, std::ptr::null_mut());
             let _ = jb::luna_jit_upval_of_checked(0, 0, 0, std::ptr::null_mut());
             let _ = jb::luna_jit_op_self_checked(0, 0, 0, std::ptr::null_mut());

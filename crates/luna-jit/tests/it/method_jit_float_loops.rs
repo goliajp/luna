@@ -231,3 +231,33 @@ fn huge_values_keep_the_float_steps() {
         true,
     );
 }
+
+/// Loops whose bounds are only known when they run (computed from an outer
+/// loop's variable `i`, which is 1, so the method JIT decides then which copy
+/// of the inner loop to run).
+#[track_caller]
+fn same_runtime(a: &str, b: &str) {
+    same(
+        &format!(
+            "for i = 1, 1 do local lo, hi = {a}, {b} \
+             for x = lo, hi do s = s + x n = n + 1 last = x end end"
+        ),
+        true,
+    );
+}
+
+#[test]
+fn bounds_known_only_at_run_time() {
+    same_runtime("i - 0.5", "i * 30000 + 0.5");
+    same_runtime("i", "i * 100000");
+    same_runtime("i - 0.5", "i * 10.3");
+    same_runtime("i * 0.1", "i * 1000");
+    same_runtime("i * 5.5", "i");
+    same_runtime("i", "(i - i) / (i - i)");
+    same_runtime("(i - i) / (i - i)", "i * 10");
+    same_runtime("(i - i) * -1", "i * 3");
+    same_runtime("i * 4503599627370496", "i * 4503599627370501");
+    same_runtime("i * 1099511627776.5", "i * 1099511627786.5");
+    same_runtime("i * 1125899906842624.5", "i * 1125899906842634.5");
+    same_runtime("i * 9007199254740987", "i * 9007199254740990");
+}

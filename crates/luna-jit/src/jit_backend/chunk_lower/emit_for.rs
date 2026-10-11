@@ -134,6 +134,13 @@ pub(super) fn emit_for_prep<M: Module>(
                     current_kinds[a + 2] = RegKind::Int;
                     let loop_blk = pc_to_block[loop_pc].expect("ForLoop BB");
                     match f.counted.iter().find(|k| k.prep == pc) {
+                        Some(k) if k.fixed.is_some() => {
+                            let fixed = k.fixed.expect("checked above");
+                            super::narrow::prepare_fixed(
+                                module, bcx, k, fixed, init, limit, step_imm,
+                            )?;
+                            bcx.ins().jump(loop_blk, &[]);
+                        }
                         Some(k) => {
                             let counted_blk = k.blocks[loop_pc].expect("ForLoop BB");
                             super::narrow::prepare(

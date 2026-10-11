@@ -16,7 +16,8 @@
 //! When the scaled loop is exact is decided once in `ForPrep`, by
 //! `luna_jit_for_scale`, which states the invariant; loops it rejects
 //! (values too large for the scale, a NaN or infinite bound, a subnormal
-//! `init`) run the float copy. A loop that integer kinds already type as
+//! `init`) run the float copy. When `init` and `limit` are numerals, it is
+//! decided while compiling, and only one of the two loops is compiled. A loop that integer kinds already type as
 //! `Int` needs none of this, and an integer-valued float loop is the case
 //! `e >= 0`.
 
@@ -28,6 +29,9 @@ use super::*;
 pub(super) struct Counted {
     pub(super) prep: usize,
     pub(super) loop_pc: usize,
+    /// the counted form when `init` and `limit` are constants of the chunk:
+    /// the loop is then only compiled counted, and `blocks` is empty
+    pub(super) fixed: Option<luna_jit_helpers::ForScale>,
     pub(super) blocks: Vec<Option<Block>>,
     x: Variable,
     step: Variable,
@@ -38,7 +42,10 @@ pub(super) struct Counted {
 /// The loops of the chunk that get a counted copy: pre-5.3 float loops with
 /// no loop inside them, in a chunk without self calls (whose ring of copies
 /// would multiply the body again). Declares their variables and creates
-/// the blocks of the copies.
+/// the blocks of the copies. A loop whose `init` and `limit` are numerals
+/// loaded right before its `ForPrep` is decided here instead: counted only
+/// when its values are exact (it is then `fixed`, with no copy), else left
+/// out and compiled as the float loop alone.
 pub(super) fn plan(
     bcx: &mut FunctionBuilder<'_>,
     c: ChunkIn<'_>,
@@ -52,7 +59,7 @@ pub(super) fn plan(
     if !c.pre53 || any_self_call {
         return out;
     }
-    for &(prep, loop_pc, _) in &scan.for_loops {
+    for &(prep, loop_pc, step) in &scan.for_loops {
         let float = matches!(reg_kinds.get(code[prep].a() as usize), Some(RegKind::Float));
         let inner = code[prep + 1..loop_pc]
             .iter()
@@ -60,15 +67,30 @@ pub(super) fn plan(
         if code[prep].op() != Op::ForPrep || !float || inner {
             continue;
         }
-        let mut blocks = pc_to_block.to_vec();
-        for slot in &mut blocks[prep + 1..=loop_pc] {
-            if slot.is_some() {
-                *slot = Some(bcx.create_block());
+        let a = code[prep].a();
+        let consts = (prep >= 3 && !scan.bb_starts[prep - 2..=prep].contains(&true))
+            .then(|| Some((numeral(c, prep - 3, a)?, numeral(c, prep - 2, a + 1)?)))
+            .flatten();
+        let fixed = match consts {
+            Some((init, limit)) => match luna_jit_helpers::for_scale_parts(init, limit, step) {
+                Some(f) => Some(f),
+                None => continue,
+            },
+            None => None,
+        };
+        let mut blocks = Vec::new();
+        if fixed.is_none() {
+            blocks = pc_to_block.to_vec();
+            for slot in &mut blocks[prep + 1..=loop_pc] {
+                if slot.is_some() {
+                    *slot = Some(bcx.create_block());
+                }
             }
         }
         out.push(Counted {
             prep,
             loop_pc,
+            fixed,
             blocks,
             x: bcx.declare_var(types::I64),
             step: bcx.declare_var(types::I64),
@@ -79,11 +101,79 @@ pub(super) fn plan(
     out
 }
 
-/// `2^p` from its exponent, for `|p| <= 1022`.
-fn pow2(bcx: &mut FunctionBuilder<'_>, p: Value) -> Value {
-    let biased = bcx.ins().iadd_imm_s(p, 1023);
-    let bits = bcx.ins().ishl_imm_u(biased, 52);
-    bcx.ins().bitcast(types::F64, MemFlagsData::new(), bits)
+/// The number instruction `pc` loads into register `reg`, when it is a
+/// numeral load.
+fn numeral(c: ChunkIn<'_>, pc: usize, reg: u32) -> Option<f64> {
+    let i = c.code[pc];
+    if i.a() != reg {
+        return None;
+    }
+    match i.op() {
+        Op::LoadI | Op::LoadF => Some(i.sbx() as f64),
+        Op::LoadK => match c.proto.consts.get(i.bx() as usize)? {
+            luna_core::runtime::Value::Float(f) => Some(*f),
+            luna_core::runtime::Value::Int(n) => Some(*n as f64),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// In `ForPrep` of a `fixed` loop: the counter, as constants. A scale
+/// other than 1 is asked of `luna_jit_for_scale` at run time all the same:
+/// as a constant, `q` would be rebuilt in the loop at every use (Cranelift
+/// rematerializes constants), an extra float operation per iteration.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepare_fixed<M: Module>(
+    module: &mut M,
+    bcx: &mut FunctionBuilder<'_>,
+    c: &Counted,
+    f: luna_jit_helpers::ForScale,
+    init: Value,
+    limit: Value,
+    step: i64,
+) -> Option<()> {
+    let before = bcx.ins().iconst(types::I64, f.before);
+    let s = bcx.ins().iconst(types::I64, f.step);
+    let bound = bcx.ins().iconst(types::I64, f.bound);
+    bcx.def_var(c.x, before);
+    bcx.def_var(c.step, s);
+    bcx.def_var(c.bound, bound);
+    if f.e != 0 {
+        // the bound too, else the loop rebuilds it from its constant at the
+        // test of every iteration
+        let q = scale_call(module, bcx, init, limit, step, 0)?;
+        bcx.def_var(c.q, q);
+        let bound_f = scale_call(module, bcx, init, limit, step, 1)?;
+        let bound = bcx.ins().fcvt_to_sint_sat(types::I64, bound_f);
+        bcx.def_var(c.bound, bound);
+    }
+    Some(())
+}
+
+/// A call of `luna_jit_for_scale(init, limit, step, part)`.
+fn scale_call<M: Module>(
+    module: &mut M,
+    bcx: &mut FunctionBuilder<'_>,
+    init: Value,
+    limit: Value,
+    step: i64,
+    part: i64,
+) -> Option<Value> {
+    let mut sig = module.make_signature();
+    sig.params.push(AbiParam::new(types::F64));
+    sig.params.push(AbiParam::new(types::F64));
+    sig.params.push(AbiParam::new(types::I64));
+    sig.params.push(AbiParam::new(types::I64));
+    sig.returns.push(AbiParam::new(types::F64));
+    let id = module
+        .declare_function("luna_jit_for_scale", Linkage::Import, &sig)
+        .ok()?;
+    let callee = module.declare_func_in_func(id, bcx.func);
+    let step_i = bcx.ins().iconst(types::I64, step);
+    let part = bcx.ins().iconst(types::I64, part);
+    let call = bcx.ins().call(callee, &[init, limit, step_i, part]);
+    Some(bcx.inst_results(call)[0])
 }
 
 /// In `ForPrep`: go on to `counted` (the counted copy's `ForLoop`), with
@@ -100,28 +190,20 @@ pub(super) fn prepare<M: Module>(
     counted: Block,
     float: Block,
 ) -> Option<()> {
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::F64));
-    sig.params.push(AbiParam::new(types::F64));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.returns.push(AbiParam::new(types::I64));
-    let id = module
-        .declare_function("luna_jit_for_scale", Linkage::Import, &sig)
-        .ok()?;
-    let callee = module.declare_func_in_func(id, bcx.func);
-    let step_i = bcx.ins().iconst(types::I64, step);
-    let call = bcx.ins().call(callee, &[init, limit, step_i]);
-    let e = bcx.inst_results(call)[0];
-    let on = bcx.ins().icmp_imm_s(IntCC::NotEqual, e, i64::MIN);
+    let q = scale_call(module, bcx, init, limit, step, 0)?;
+    let zero = float_const(bcx, 0.0);
+    let on = bcx.ins().fcmp(FloatCC::NotEqual, q, zero);
     let setup = bcx.create_block();
     bcx.ins().brif(on, setup, &[], float, &[]);
     bcx.seal_block(setup);
     bcx.switch_to_block(setup);
     // the scaled values: integers below 2^52 in magnitude (see
     // `luna_jit_for_scale`), so the conversions are exact and in range
-    let q = pow2(bcx, e);
-    let neg_e = bcx.ins().ineg(e);
-    let inv_q = pow2(bcx, neg_e);
+    let q_bits = bcx.ins().bitcast(types::I64, MemFlagsData::new(), q);
+    // `1 / q`: the exponent field `1023 + e` becomes `1023 - e`
+    let both = bcx.ins().iconst(types::I64, 2046 << 52);
+    let inv_bits = bcx.ins().isub(both, q_bits);
+    let inv_q = bcx.ins().bitcast(types::F64, MemFlagsData::new(), inv_bits);
     let init_s = bcx.ins().fmul(init, inv_q);
     let x0 = bcx.ins().fcvt_to_sint(types::I64, init_s);
     let step_f = float_const(bcx, step as f64);
@@ -170,8 +252,13 @@ pub(super) fn step(
     bcx.seal_block(into);
     bcx.switch_to_block(into);
     let xf = bcx.ins().fcvt_from_sint(types::F64, x);
-    let q = bcx.use_var(c.q);
-    let next = bcx.ins().fmul(xf, q);
+    // an integer-valued loop known while compiling needs no scaling
+    let next = if c.fixed.is_some_and(|f| f.e == 0) {
+        xf
+    } else {
+        let q = bcx.use_var(c.q);
+        bcx.ins().fmul(xf, q)
+    };
     next_into(bcx, next);
     bcx.ins().jump(body, &[]);
 }

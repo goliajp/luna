@@ -113,9 +113,11 @@ pub extern "C" fn luna_jit_math1(x: f64, f: i64) -> f64 {
 }
 
 /// For a compiled 5.1 / 5.2 float `for` loop `init, limit, step` (`step` a
-/// non-zero integer): the exponent `e` such that the loop, counted on
-/// integers scaled by `q = 2^e`, gives the float loop's values bit for bit;
-/// `i64::MIN` when no such `e` is known.
+/// non-zero integer), with `part` 0: `q = 2^e` such that the loop, counted
+/// on integers scaled by `q`, gives the float loop's values bit for bit, 0
+/// when no such `e` is known; with `part` 1, the scaled bound
+/// `floor(limit / q)` (`ceil` for a negative step), as a double, when there
+/// is a `q`.
 ///
 /// `e` is the smaller of the exponent of the lowest set bit of `init` (any,
 /// when `init` is ±0) and that of `step`, so `init` and `step` are
@@ -133,8 +135,46 @@ pub extern "C" fn luna_jit_math1(x: f64, f: i64) -> f64 {
 // SAFETY: no other item in the link is named `luna_jit_for_scale`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-pub extern "C" fn luna_jit_for_scale(init: f64, limit: f64, step: i64) -> i64 {
-    for_scale(init, limit, step).unwrap_or(i64::MIN)
+pub extern "C" fn luna_jit_for_scale(init: f64, limit: f64, step: i64, part: i64) -> f64 {
+    match for_scale_parts(init, limit, step) {
+        None => 0.0,
+        // `q` is a normal double for `|e| <= 1000`, so never 0
+        Some(f) if part == 0 => f64::from_bits(((f.e + 1023) as u64) << 52),
+        Some(f) => f.bound as f64,
+    }
+}
+
+/// The counted form of a loop (see [`luna_jit_for_scale`]): `e`, the scaled
+/// value one step before `init`, the scaled step, and the scaled bound
+/// (`floor(limit / 2^e)`, `ceil` for a negative step).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForScale {
+    pub e: i64,
+    pub before: i64,
+    pub step: i64,
+    pub bound: i64,
+}
+
+/// The counted form of the loop `init, limit, step`, when its values are
+/// all exact (see [`luna_jit_for_scale`]).
+pub fn for_scale_parts(init: f64, limit: f64, step: i64) -> Option<ForScale> {
+    let e = for_scale(init, limit, step)?;
+    // `1 / 2^e`, a normal double for `|e| <= 1000`; every product below is
+    // exact and below 2^52 in magnitude
+    let inv_q = f64::from_bits(((1023 - e) as u64) << 52);
+    let scaled_step = (step as f64 * inv_q) as i64;
+    let limit_s = limit * inv_q;
+    let bound = if step > 0 {
+        limit_s.floor()
+    } else {
+        limit_s.ceil()
+    } as i64;
+    Some(ForScale {
+        e,
+        before: (init * inv_q) as i64 - scaled_step,
+        step: scaled_step,
+        bound,
+    })
 }
 
 /// The `e` of [`luna_jit_for_scale`].
