@@ -18,13 +18,14 @@ pub(super) fn shadow_index(f: EmitFacts<'_>, prep: usize) -> Option<Variable> {
     Some(f.regs[f.regs.len() - loops.len() + j])
 }
 
-pub(super) fn emit_for_prep(
+pub(super) fn emit_for_prep<M: Module>(
+    module: &mut M,
     bcx: &mut FunctionBuilder<'_>,
     st: &mut EmitState,
     f: EmitFacts<'_>,
     pc: usize,
     ins: Inst,
-) {
+) -> Option<()> {
     let EmitFacts {
         c: ChunkIn { pre53, .. },
         scan,
@@ -132,7 +133,24 @@ pub(super) fn emit_for_prep(
                     current_kinds[a + 1] = RegKind::Float;
                     current_kinds[a + 2] = RegKind::Int;
                     let loop_blk = pc_to_block[loop_pc].expect("ForLoop BB");
-                    bcx.ins().jump(loop_blk, &[]);
+                    match f.counted.iter().find(|k| k.prep == pc) {
+                        Some(k) => {
+                            let counted_blk = k.blocks[loop_pc].expect("ForLoop BB");
+                            super::narrow::prepare(
+                                module,
+                                bcx,
+                                k,
+                                init,
+                                limit,
+                                step_imm,
+                                counted_blk,
+                                loop_blk,
+                            )?;
+                        }
+                        None => {
+                            bcx.ins().jump(loop_blk, &[]);
+                        }
+                    }
                     *terminated = true;
                 }
                 (false, true) => {
@@ -185,4 +203,5 @@ pub(super) fn emit_for_prep(
         }
         _ => unreachable!("dispatched by op"),
     }
+    Some(())
 }
