@@ -43,6 +43,9 @@ pub(super) enum RegKind {
     /// a boolean: payload 0 (false) or 1 (true); its value tag is
     /// `raw::FALSE` plus the payload, known only at run time
     Bool,
+    /// native function pointer (raw payload is a `Gc<NativeClosure>`
+    /// ptr): an entry slot tagged NATIVE, or a copy of one
+    Native,
 }
 
 impl RegKind {
@@ -52,6 +55,7 @@ impl RegKind {
             luna_core::runtime::value::raw::FLOAT => Some(RegKind::Float),
             luna_core::runtime::value::raw::TABLE => Some(RegKind::Table),
             luna_core::runtime::value::raw::CLOSURE => Some(RegKind::Closure),
+            luna_core::runtime::value::raw::NATIVE => Some(RegKind::Native),
             luna_core::runtime::value::raw::NIL => Some(RegKind::Nil),
             luna_core::runtime::value::raw::STR => Some(RegKind::Str),
             luna_core::runtime::value::raw::FALSE | luna_core::runtime::value::raw::TRUE => {
@@ -97,6 +101,7 @@ fn exit_tag_of(k: &RegKind) -> ExitTag {
         RegKind::Nil => ExitTag::Nil,
         RegKind::Str => ExitTag::Str,
         RegKind::Bool => ExitTag::Bool,
+        RegKind::Native => ExitTag::Native,
     }
 }
 
@@ -124,6 +129,7 @@ pub(super) fn kind_to_raw_tag(k: RegKind) -> u8 {
         RegKind::Float => raw::FLOAT,
         RegKind::Table => raw::TABLE,
         RegKind::Closure => raw::CLOSURE,
+        RegKind::Native => raw::NATIVE,
         RegKind::Str => raw::STR,
         RegKind::Unset | RegKind::Unknown | RegKind::StackHeld | RegKind::Nil => raw::NIL,
         RegKind::Bool => unreachable!("a boolean's tag is computed (`emit_kind_tag`)"),
@@ -139,6 +145,7 @@ pub(super) fn known_tag(k: RegKind) -> Option<u8> {
         RegKind::Float => Some(raw::FLOAT),
         RegKind::Table => Some(raw::TABLE),
         RegKind::Closure => Some(raw::CLOSURE),
+        RegKind::Native => Some(raw::NATIVE),
         RegKind::Str => Some(raw::STR),
         RegKind::Nil => Some(raw::NIL),
         RegKind::Unset | RegKind::Unknown | RegKind::StackHeld | RegKind::Bool => None,
@@ -217,5 +224,25 @@ impl ExitKinds {
     #[allow(clippy::vec_box)]
     pub(super) fn into_cells(self) -> Vec<Box<TCellPtr>> {
         self.cells
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // a register enters with its payload under its tag: a tag no kind
+    // describes would leave a copy of the value untagged at the exits
+    #[test]
+    fn every_enterable_tag_has_a_kind() {
+        use luna_core::jit::trace::{entry_tag_enterable, entry_tag_of};
+        // the tags fit the 32-bit masks `entry_tag_enterable` shifts
+        for tag in 0..32 {
+            let t = entry_tag_of(tag);
+            if entry_tag_enterable(t) {
+                let k = RegKind::from_entry_tag(t);
+                assert!(k.is_some_and(|k| !k.untyped()), "tag {tag}");
+            }
+        }
     }
 }

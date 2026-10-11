@@ -1,0 +1,429 @@
+== 5.1
+pcall 2 false native panic: boom
+pcall-nonstr 2 false native panic: <non-string panic>
+pcall-args 2 false native panic: boom
+xpcall-tb 2 false native panic: boom
+stack traceback:
+	[C]: ?
+	[C]: in function 'xpcall'
+	panics.lua:18: in main chunk
+xpcall-info 2 false native panic: boom | Lua:nil:22,C:nil:-1,C:xpcall:-1,main:nil:19
+lua-tail 2 false native panic: boom
+lua-plain 2 false native panic: boom
+lua-deeper-tb 2 false native panic: boom
+stack traceback:
+	[C]: in function 'boom'
+	panics.lua:30: in function 'plain'
+	panics.lua:31: in function <panics.lua:31>
+	[C]: in function 'xpcall'
+	panics.lua:34: in main chunk
+nested 2 false outer:false:native panic: boom
+nested-xpcall 2 true inner<native panic: boom>
+pcall-chain 4 true true false native panic: boom
+error-in-handler 2 false error in error handling
+co-1 2 true 1
+co-2 2 false native panic: boom
+co-status dead
+co-tb stack traceback:
+	[C]: in function 'boom'
+	panics.lua:30: in function 'plain'
+	panics.lua:45: in function <panics.lua:45>
+co-wrap 2 false native panic: boom
+co-direct 2 false panics.lua:52: bad argument #1 to 'create' (Lua function expected)
+co-in-pcall 3 true false native panic: boom
+mm-index 2 false native panic: boom
+mm-newindex 2 false native panic: boom
+mm-add 2 false native panic: boom
+mm-concat 2 false native panic: boom
+mm-unm 2 false native panic: boom
+mm-call 2 false native panic: boom
+mm-lt 2 false native panic: boom
+mm-le 2 false native panic: boom
+mm-eq 2 false native panic: boom
+mm-len 2 true 0
+mm-tostring 2 false native panic: boom
+mm-index-tb 2 false native panic: boom
+stack traceback:
+	[C]: ?
+	panics.lua:71: in function <panics.lua:71>
+	[C]: in function 'xpcall'
+	panics.lua:71: in main chunk
+lib-sort 2 false native panic: boom
+lib-gsub 2 false native panic: boom
+lib-load-reader 3 true nil native panic: boom
+lib-select 2 true native panic: boom
+hooked 2 false native panic: boom
+hooked-tb 2 false native panic: boom
+stack traceback:
+	[C]: in function 'boom'
+	panics.lua:30: in function 'plain'
+	panics.lua:31: in function <panics.lua:31>
+	[C]: in function 'xpcall'
+	panics.lua:80: in main chunk
+hook-events 3 return,call,call
+loop 2 false native panic: boomif
+loop-n 1499
+tfor 2 false native panic: boomiter
+tfor-s 1124250
+loop-mm 2 false native panic: boomif
+loop-mm-m 1499
+loop-long 2 false native panic: boomif
+loop-long-n 1499
+tb-same true
+traceback-here here
+stack traceback:
+	panics.lua:131: in main chunk
+host-direct native panic: boom
+host-direct-tb Some("stack traceback:\n\t[C]: ?")
+host-eval native panic: boom
+host-eval-tb Some("stack traceback:\n\t[C]: in function 'boom'\n\teval:1: in main chunk")
+host-eval-nested native panic: boom
+host-eval-nested-tb Some("stack traceback:\n\t[C]: in function 'boom'\n\teval:1: in function 'f'\n\teval:1: in function 'g'\n\teval:1: in main chunk")
+host-eval-tail native panic: boom
+host-eval-tail-tb Some("stack traceback:\n\t[C]: in function 'boom'\n\teval:1: in function 'f'\n\teval:1: in main chunk")
+host-handler handled native panic: boom
+host-after Some(Float(2.0))
+== 5.2
+pcall 2 false native panic: boom
+pcall-nonstr 2 false native panic: <non-string panic>
+pcall-args 2 false native panic: boom
+xpcall-tb 2 false native panic: boom
+stack traceback:
+	[C]: in ?
+	[C]: in function 'xpcall'
+	panics.lua:18: in main chunk
+xpcall-info 2 false native panic: boom | Lua:nil:22,C:nil:-1,C:xpcall:-1,main:nil:19
+lua-tail 2 false native panic: boom
+lua-plain 2 false native panic: boom
+lua-deeper-tb 2 false native panic: boom
+stack traceback:
+	[C]: in function 'boom'
+	panics.lua:30: in function 'plain'
+	panics.lua:31: in function <panics.lua:31>
+	[C]: in function 'xpcall'
+	panics.lua:34: in main chunk
+nested 2 false outer:false:native panic: boom
+nested-xpcall 2 true inner<native panic: boom>
+pcall-chain 4 true true false native panic: boom
+error-in-handler 2 false error in error handling
+co-1 2 true 1
+co-2 2 false native panic: boom
+co-status dead
+co-tb stack traceback:
+	[C]: in function 'boom'
+	panics.lua:30: in function 'plain'
+	panics.lua:45: in function <panics.lua:45>
+co-wrap 2 false native panic: boom
+co-direct 3 true false native panic: boom
+co-in-pcall 3 true false native panic: boom
+mm-index 2 false native panic: boom
+mm-newindex 2 false native panic: boom
+mm-add 2 false native panic: boom
+mm-concat 2 false native panic: boom
+mm-unm 2 false native panic: boom
+mm-call 2 false native panic: boom
+mm-lt 2 false native panic: boom
+mm-le 2 false native panic: boom
+mm-eq 2 false native panic: boom
+mm-len 2 false native panic: boom
+mm-tostring 2 false native panic: boom
+mm-index-tb 2 false native panic: boom
+stack traceback:
+	[C]: in function '__index'
+	panics.lua:71: in function <panics.lua:71>
+	[C]: in function 'xpcall'
+	panics.lua:71: in main chunk
+lib-sort 2 false native panic: boom
+lib-gsub 2 false native panic: boom
+lib-load-reader 3 true nil native panic: boom
+lib-select 2 true native panic: boom
+hooked 2 false native panic: boom
+hooked-tb 2 false native panic: boom
+stack traceback:
+	[C]: in function 'boom'
+	panics.lua:30: in function 'plain'
+	panics.lua:31: in function <panics.lua:31>
+	[C]: in function 'xpcall'
+	panics.lua:80: in main chunk
+hook-events 3 return,call,call
+loop 2 false native panic: boomif
+loop-n 1499
+tfor 2 false native panic: boomiter
+tfor-s 1124250
+loop-mm 2 false native panic: boomif
+loop-mm-m 1499
+loop-long 2 false native panic: boomif
+loop-long-n 1499
+tb-same true
+traceback-here here
+stack traceback:
+	panics.lua:131: in main chunk
+host-direct native panic: boom
+host-direct-tb Some("stack traceback:\n\t[C]: in ?")
+host-eval native panic: boom
+host-eval-tb Some("stack traceback:\n\t[C]: in function 'boom'\n\teval:1: in main chunk")
+host-eval-nested native panic: boom
+host-eval-nested-tb Some("stack traceback:\n\t[C]: in function 'boom'\n\teval:1: in function 'f'\n\teval:1: in function 'g'\n\teval:1: in main chunk")
+host-eval-tail native panic: boom
+host-eval-tail-tb Some("stack traceback:\n\t[C]: in function 'boom'\n\teval:1: in function 'f'\n\teval:1: in main chunk")
+host-handler handled native panic: boom
+host-after Some(Float(2.0))
+== 5.3
+pcall 2 false native panic: boom
+pcall-nonstr 2 false native panic: <non-string panic>
+pcall-args 2 false native panic: boom
+xpcall-tb 2 false native panic: boom
+stack traceback:
+	[C]: in ?
+	[C]: in function 'xpcall'
+	panics.lua:18: in main chunk
+xpcall-info 2 false native panic: boom | Lua:nil:22,C:nil:-1,C:xpcall:-1,main:nil:19
+lua-tail 2 false native panic: boom
+lua-plain 2 false native panic: boom
+lua-deeper-tb 2 false native panic: boom
+stack traceback:
+	[C]: in upvalue 'boom'
+	panics.lua:30: in upvalue 'plain'
+	panics.lua:31: in function <panics.lua:31>
+	[C]: in function 'xpcall'
+	panics.lua:34: in main chunk
+nested 2 false outer:false:native panic: boom
+nested-xpcall 2 true inner<native panic: boom>
+pcall-chain 4 true true false native panic: boom
+error-in-handler 2 false error in error handling
+co-1 2 true 1
+co-2 2 false native panic: boom
+co-status dead
+co-tb stack traceback:
+	[C]: in upvalue 'boom'
+	panics.lua:30: in upvalue 'plain'
+	panics.lua:45: in function <panics.lua:45>
+co-wrap 2 false native panic: boom
+co-direct 3 true false native panic: boom
+co-in-pcall 3 true false native panic: boom
+mm-index 2 false native panic: boom
+mm-newindex 2 false native panic: boom
+mm-add 2 false native panic: boom
+mm-concat 2 false native panic: boom
+mm-unm 2 false native panic: boom
+mm-call 2 false native panic: boom
+mm-lt 2 false native panic: boom
+mm-le 2 false native panic: boom
+mm-eq 2 false native panic: boom
+mm-len 2 false native panic: boom
+mm-tostring 2 false native panic: boom
+mm-index-tb 2 false native panic: boom
+stack traceback:
+	[C]: in metamethod '__index'
+	panics.lua:71: in function <panics.lua:71>
+	[C]: in function 'xpcall'
+	panics.lua:71: in main chunk
+lib-sort 2 false native panic: boom
+lib-gsub 2 false native panic: boom
+lib-load-reader 3 true nil native panic: boom
+lib-select 2 true native panic: boom
+hooked 2 false native panic: boom
+hooked-tb 2 false native panic: boom
+stack traceback:
+	[C]: in upvalue 'boom'
+	panics.lua:30: in upvalue 'plain'
+	panics.lua:31: in function <panics.lua:31>
+	[C]: in function 'xpcall'
+	panics.lua:80: in main chunk
+hook-events 3 return,call,call
+loop 2 false native panic: boomif
+loop-n 1499
+tfor 2 false native panic: boomiter
+tfor-s 1124250
+loop-mm 2 false native panic: boomif
+loop-mm-m 1499
+loop-long 2 false native panic: boomif
+loop-long-n 1499
+tb-same true
+traceback-here here
+stack traceback:
+	panics.lua:131: in main chunk
+host-direct native panic: boom
+host-direct-tb Some("stack traceback:\n\t[C]: in ?")
+host-eval native panic: boom
+host-eval-tb Some("stack traceback:\n\t[C]: in function 'boom'\n\teval:1: in main chunk")
+host-eval-nested native panic: boom
+host-eval-nested-tb Some("stack traceback:\n\t[C]: in function 'boom'\n\teval:1: in upvalue 'f'\n\teval:1: in local 'g'\n\teval:1: in main chunk")
+host-eval-tail native panic: boom
+host-eval-tail-tb Some("stack traceback:\n\t[C]: in function 'boom'\n\teval:1: in local 'f'\n\teval:1: in main chunk")
+host-handler handled native panic: boom
+host-after Some(Int(2))
+== 5.4
+pcall 2 false native panic: boom
+pcall-nonstr 2 false native panic: <non-string panic>
+pcall-args 2 false native panic: boom
+xpcall-tb 2 false native panic: boom
+stack traceback:
+	[C]: in ?
+	[C]: in function 'xpcall'
+	panics.lua:18: in main chunk
+xpcall-info 2 false native panic: boom | Lua:nil:22,C:nil:-1,C:xpcall:-1,main:nil:19
+lua-tail 2 false native panic: boom
+lua-plain 2 false native panic: boom
+lua-deeper-tb 2 false native panic: boom
+stack traceback:
+	[C]: in upvalue 'boom'
+	panics.lua:30: in upvalue 'plain'
+	panics.lua:31: in function <panics.lua:31>
+	[C]: in function 'xpcall'
+	panics.lua:34: in main chunk
+nested 2 false outer:false:native panic: boom
+nested-xpcall 2 true inner<native panic: boom>
+pcall-chain 4 true true false native panic: boom
+error-in-handler 2 false error in error handling
+co-1 2 true 1
+co-2 2 false native panic: boom
+co-status dead
+co-tb stack traceback:
+	[C]: in upvalue 'boom'
+	panics.lua:30: in upvalue 'plain'
+	panics.lua:45: in function <panics.lua:45>
+co-wrap 2 false native panic: boom
+co-direct 3 true false native panic: boom
+co-in-pcall 3 true false native panic: boom
+mm-index 2 false native panic: boom
+mm-newindex 2 false native panic: boom
+mm-add 2 false native panic: boom
+mm-concat 2 false native panic: boom
+mm-unm 2 false native panic: boom
+mm-call 2 false native panic: boom
+mm-lt 2 false native panic: boom
+mm-le 2 false native panic: boom
+mm-eq 2 false native panic: boom
+mm-len 2 false native panic: boom
+mm-tostring 2 false native panic: boom
+mm-index-tb 2 false native panic: boom
+stack traceback:
+	[C]: in metamethod 'index'
+	panics.lua:71: in function <panics.lua:71>
+	[C]: in function 'xpcall'
+	panics.lua:71: in main chunk
+lib-sort 2 false native panic: boom
+lib-gsub 2 false native panic: boom
+lib-load-reader 3 true nil native panic: boom
+lib-select 2 true native panic: boom
+hooked 2 false native panic: boom
+hooked-tb 2 false native panic: boom
+stack traceback:
+	[C]: in upvalue 'boom'
+	panics.lua:30: in upvalue 'plain'
+	panics.lua:31: in function <panics.lua:31>
+	[C]: in function 'xpcall'
+	panics.lua:80: in main chunk
+hook-events 3 return,call,call
+close-saw native panic: boom
+tbc 2 false native panic: boom
+loop 2 false native panic: boomif
+loop-n 1499
+tfor 2 false native panic: boomiter
+tfor-s 1124250
+loop-mm 2 false native panic: boomif
+loop-mm-m 1499
+loop-long 2 false native panic: boomif
+loop-long-n 1499
+tb-same true
+traceback-here here
+stack traceback:
+	panics.lua:131: in main chunk
+host-direct native panic: boom
+host-direct-tb Some("stack traceback:\n\t[C]: in ?")
+host-eval native panic: boom
+host-eval-tb Some("stack traceback:\n\t[C]: in function 'boom'\n\teval:1: in main chunk")
+host-eval-nested native panic: boom
+host-eval-nested-tb Some("stack traceback:\n\t[C]: in function 'boom'\n\teval:1: in upvalue 'f'\n\teval:1: in local 'g'\n\teval:1: in main chunk")
+host-eval-tail native panic: boom
+host-eval-tail-tb Some("stack traceback:\n\t[C]: in function 'boom'\n\teval:1: in local 'f'\n\teval:1: in main chunk")
+host-handler handled native panic: boom
+host-after Some(Int(2))
+== 5.5
+pcall 2 false native panic: boom
+pcall-nonstr 2 false native panic: <non-string panic>
+pcall-args 2 false native panic: boom
+xpcall-tb 2 false native panic: boom
+stack traceback:
+	[C]: in ?
+	[C]: in global 'xpcall'
+	panics.lua:18: in main chunk
+xpcall-info 2 false native panic: boom | Lua:nil:22,C:nil:-1,C:xpcall:-1,main:nil:19
+lua-tail 2 false native panic: boom
+lua-plain 2 false native panic: boom
+lua-deeper-tb 2 false native panic: boom
+stack traceback:
+	[C]: in upvalue 'boom'
+	panics.lua:30: in upvalue 'plain'
+	panics.lua:31: in function <panics.lua:31>
+	[C]: in global 'xpcall'
+	panics.lua:34: in main chunk
+nested 2 false outer:false:native panic: boom
+nested-xpcall 2 true inner<native panic: boom>
+pcall-chain 4 true true false native panic: boom
+error-in-handler 2 false error in error handling
+co-1 2 true 1
+co-2 2 false native panic: boom
+co-status dead
+co-tb stack traceback:
+	[C]: in upvalue 'boom'
+	panics.lua:30: in upvalue 'plain'
+	panics.lua:45: in function <panics.lua:45>
+co-wrap 2 false native panic: boom
+co-direct 3 true false native panic: boom
+co-in-pcall 3 true false native panic: boom
+mm-index 2 false native panic: boom
+mm-newindex 2 false native panic: boom
+mm-add 2 false native panic: boom
+mm-concat 2 false native panic: boom
+mm-unm 2 false native panic: boom
+mm-call 2 false native panic: boom
+mm-lt 2 false native panic: boom
+mm-le 2 false native panic: boom
+mm-eq 2 false native panic: boom
+mm-len 2 false native panic: boom
+mm-tostring 2 false native panic: boom
+mm-index-tb 2 false native panic: boom
+stack traceback:
+	[C]: in metamethod 'index'
+	panics.lua:71: in function <panics.lua:71>
+	[C]: in global 'xpcall'
+	panics.lua:71: in main chunk
+lib-sort 2 false native panic: boom
+lib-gsub 2 false native panic: boom
+lib-load-reader 3 true nil native panic: boom
+lib-select 2 true native panic: boom
+hooked 2 false native panic: boom
+hooked-tb 2 false native panic: boom
+stack traceback:
+	[C]: in upvalue 'boom'
+	panics.lua:30: in upvalue 'plain'
+	panics.lua:31: in function <panics.lua:31>
+	[C]: in global 'xpcall'
+	panics.lua:80: in main chunk
+hook-events 3 return,call,call
+close-saw native panic: boom
+tbc 2 false native panic: boom
+loop 2 false native panic: boomif
+loop-n 1499
+tfor 2 false native panic: boomiter
+tfor-s 1124250
+loop-mm 2 false native panic: boomif
+loop-mm-m 1499
+loop-long 2 false native panic: boomif
+loop-long-n 1499
+tb-same true
+traceback-here here
+stack traceback:
+	panics.lua:131: in main chunk
+host-direct native panic: boom
+host-direct-tb Some("stack traceback:\n\t[C]: in ?")
+host-eval native panic: boom
+host-eval-tb Some("stack traceback:\n\t[C]: in global 'boom'\n\teval:1: in main chunk")
+host-eval-nested native panic: boom
+host-eval-nested-tb Some("stack traceback:\n\t[C]: in global 'boom'\n\teval:1: in upvalue 'f'\n\teval:1: in local 'g'\n\teval:1: in main chunk")
+host-eval-tail native panic: boom
+host-eval-tail-tb Some("stack traceback:\n\t[C]: in global 'boom'\n\teval:1: in local 'f'\n\teval:1: in main chunk")
+host-handler handled native panic: boom
+host-after Some(Int(2))

@@ -18,6 +18,32 @@ pub(super) unsafe fn raw_tag(p: *const Value) -> u8 {
     unsafe { *(p as *const u8) }
 }
 
+/// The tag byte of the value at `p`, read again where a test of the same
+/// tag through [`raw_tag`] came first: the compiler then keeps the two reads
+/// apart, so the first can be folded into its comparison on x86-64.
+///
+/// # Safety
+/// `p` points at an initialised `Value`.
+#[inline(always)]
+pub(super) unsafe fn raw_tag_again(p: *const Value) -> u8 {
+    // SAFETY: the caller's contract; the tag is the first byte
+    unsafe { std::ptr::read_volatile(p as *const u8) }
+}
+
+/// Register `A` of `inst` among the registers at `regs`. On x86-64 the
+/// register's byte offset is one shift and one mask of the instruction (`A`
+/// sits at bit 7 and a `Value` is 16 bytes); aarch64 extracts `A` and
+/// scales it in the add.
+#[inline(always)]
+pub(super) fn reg_a(regs: *mut Value, inst: crate::vm::isa::Inst) -> *mut Value {
+    const _: () = assert!(size_of::<Value>() == 16);
+    if cfg!(target_arch = "x86_64") {
+        regs.wrapping_byte_add(((inst.0 >> 3) & 0xff0) as usize)
+    } else {
+        regs.wrapping_add(inst.a() as usize)
+    }
+}
+
 /// The integer at `p`.
 ///
 /// # Safety
@@ -62,6 +88,16 @@ pub(super) unsafe fn raw_num(p: *const Value, t: u8) -> f64 {
 pub(super) unsafe fn put_int(p: *mut Value, v: i64) {
     // SAFETY: the caller's contract
     unsafe { *(p as *mut i64).add(1) = v }
+}
+
+/// Overwrite the float at `p`, keeping its tag.
+///
+/// # Safety
+/// `p` points at a `Value::Float`.
+#[inline(always)]
+pub(super) unsafe fn put_flt(p: *mut Value, v: f64) {
+    // SAFETY: the caller's contract
+    unsafe { *(p as *mut f64).add(1) = v }
 }
 
 /// Lua truth of the value at `p`: everything but `nil` and `false`.
@@ -174,9 +210,25 @@ macro_rules! arith_result {
     ($regs:ident, $inst:ident, $v:ident, $read:expr, slow($l:ident, $r:ident) => $sv:expr) => {
         match $v {
             Some(v) => {
+                let dst = $regs.wrapping_add($inst.a() as usize);
                 // SAFETY: `$regs` is the running frame's register window,
-                // `A` one of its registers
-                unsafe { $regs.add($inst.a() as usize).write(v) };
+                // `A` one of its registers. On aarch64 a float is written as
+                // its tag and its payload, from the floating-point register
+                // it was computed in: as one write of the whole value it
+                // shared the integer result's store and went through an
+                // integer register first, a cycle more per iteration of a
+                // loop that carries a float or an integer through a register
+                // (Cortex-A76: `s = s + x` 23 -> 19 cycles, `s = s + i` 17
+                // -> 15)
+                unsafe {
+                    match v {
+                        Value::Float(f) if !cfg!(target_arch = "x86_64") => {
+                            (dst as *mut u8).write(tag::FLOAT);
+                            (dst as *mut f64).add(1).write(f);
+                        }
+                        v => dst.write(v),
+                    }
+                }
                 true
             }
             None => {

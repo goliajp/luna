@@ -233,8 +233,8 @@ impl Vm {
             const UNTOUCHED: u8 = u8::MAX;
             // a boolean's tag is FALSE plus its payload
             const BOOL: u8 = u8::MAX - 1;
-            const RAW_OF: [u8; 8] = {
-                let mut m = [0; 8];
+            const RAW_OF: [u8; 9] = {
+                let mut m = [0; 9];
                 m[ExitTag::Untouched as usize] = UNTOUCHED;
                 m[ExitTag::Int as usize] = raw::INT;
                 m[ExitTag::Float as usize] = raw::FLOAT;
@@ -244,6 +244,7 @@ impl Vm {
                 m[ExitTag::Nil as usize] = raw::NIL;
                 m[ExitTag::Str as usize] = raw::STR;
                 m[ExitTag::Bool as usize] = BOOL;
+                m[ExitTag::Native as usize] = raw::NATIVE;
                 m
             };
             let frame = &mut self.stack[base_us..base_us + slot_count];

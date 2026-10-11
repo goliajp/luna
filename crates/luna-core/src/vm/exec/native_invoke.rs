@@ -18,17 +18,19 @@ impl Vm {
         use std::panic::{AssertUnwindSafe, catch_unwind};
         let result = match catch_unwind(AssertUnwindSafe(|| (nc.f)(self, func_slot, nargs))) {
             Ok(r) => r,
-            // a load's memory failure belongs to that load, never to a
-            // native it may sit under
-            Err(payload) if crate::runtime::mem::is_load_oom(&*payload) => {
-                std::panic::resume_unwind(payload)
-            }
             Err(payload) => {
-                let msg = panic_payload_str(&payload);
-                let s = Value::Str(self.heap.intern(format!("native panic: {msg}").as_bytes()));
-                Err(LuaError(s))
+                // whatever window it came out of is closed now
+                self.native_window_panic = 0;
+                Err(self.native_panic_error(payload))
             }
         };
+        self.native_returned(result)
+    }
+
+    /// The end of a native's run: an error pops it and notes it as the
+    /// error's raiser.
+    #[inline(always)]
+    fn native_returned(&mut self, result: Result<u32, LuaError>) -> Result<u32, LuaError> {
         match result {
             Ok(n) => {
                 // a native runs Lua through `call_value`, which raises
@@ -44,6 +46,74 @@ impl Vm {
                 let act = self.running_natives.pop().expect("pushed by the caller");
                 self.note_errored_native(act, e.0);
                 Err(e)
+            }
+        }
+    }
+
+    /// The Lua error a native's panic becomes, `native panic: <msg>`. A
+    /// load's memory failure belongs to that load, never to a native it
+    /// may sit under: it goes on unwinding.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn native_panic_error(
+        &mut self,
+        payload: Box<dyn std::any::Any + Send>,
+    ) -> LuaError {
+        if crate::runtime::mem::is_load_oom(&*payload) {
+            std::panic::resume_unwind(payload)
+        }
+        let msg = panic_payload_str(&payload);
+        LuaError(Value::Str(
+            self.heap.intern(format!("native panic: {msg}").as_bytes()),
+        ))
+    }
+
+    /// A panic that unwound out of [`Vm::run`] to `exec_with`, which
+    /// entered it with `natives_at_entry` natives running. The natives the
+    /// fast loop calls ([`Vm::call_native_plain`]) have no guard of their
+    /// own, so this does for them what [`Vm::invoke_native`] does: a panic
+    /// that came out of a native this run called is that native's error.
+    /// Any other goes on unwinding: one from the run's own code (no native
+    /// of this run on the stack), from a hook of this run's native
+    /// ([`Vm::in_native_window`]), or a load's memory failure.
+    ///
+    /// Between the native and here only `call_native_plain`, `run_fast`
+    /// and `run` unwind, which on an error do nothing but return it: the
+    /// error then leaves the state the guarded call would. A native this
+    /// run called calls Lua at a level of its own, whose `exec_with` deals
+    /// with what happens there; a panic that still comes out went through
+    /// the native as it would have gone through its guard.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn unguarded_native_panic(
+        &mut self,
+        payload: Box<dyn std::any::Any + Send>,
+        natives_at_entry: usize,
+    ) -> LuaError {
+        let window = self.native_window_panic as usize;
+        if self.running_natives.len() == natives_at_entry || window == natives_at_entry + 1 {
+            std::panic::resume_unwind(payload)
+        }
+        self.native_window_panic = 0;
+        let e = self.native_panic_error(payload);
+        // as `native_returned` pops: the top one, which is this run's
+        // native or what a level below it left there
+        let act = self.running_natives.pop().expect("checked above");
+        self.note_errored_native(act, e.0);
+        e
+    }
+
+    /// Run `f` with the native on top of `running_natives` not running
+    /// (its call or return hook, the argument check of `pcall`, a C
+    /// continuation's resume): a panic out of `f` is not the native's, so
+    /// [`Vm::unguarded_native_panic`] must let it go on unwinding.
+    pub(super) fn in_native_window<R>(&mut self, f: impl FnOnce(&mut Vm) -> R) -> R {
+        let at = self.running_natives.len() as u32;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
+            Ok(r) => r,
+            Err(payload) => {
+                self.native_window_panic = at;
+                std::panic::resume_unwind(payload)
             }
         }
     }
@@ -75,7 +145,10 @@ impl Vm {
                 self.frames.len(),
                 ccmt,
             ));
-        let nret = self.invoke_native(nc, func_slot, nargs)?;
+        // no guard here: a panic unwinds to `exec_with`, which raises it as
+        // this native's error (see `Vm::unguarded_native_panic`)
+        let result = (nc.f)(self, func_slot, nargs);
+        let nret = self.native_returned(result)?;
         // the native may have armed a hook, whose return event it gets
         self.finish_native_call(func_slot, nargs, nret, nresults)
     }

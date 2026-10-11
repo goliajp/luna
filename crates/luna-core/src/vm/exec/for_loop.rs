@@ -116,14 +116,12 @@ impl Vm {
                     return Ok(());
                 }
                 let (lim, empty) = int_for_limit(limit_n, i0, st);
-                if empty {
-                    self.add_pc(inst.bx() as i32);
-                    return Ok(());
-                }
-                let count = if st > 0 {
-                    (lim as u64).wrapping_sub(i0 as u64) / (st as u64)
-                } else {
-                    (i0 as u64).wrapping_sub(lim as u64) / (st as i128).unsigned_abs() as u64
+                let count = match int_for_count(i0, lim, st) {
+                    Some(count) if !empty => count,
+                    _ => {
+                        self.add_pc(inst.bx() as i32);
+                        return Ok(());
+                    }
                 };
                 if inst.op() == Op::ForPrep55 {
                     self.set_r(base, a, Value::Int(count as i64));
@@ -259,5 +257,25 @@ impl Vm {
             _ => return Err(self.rt_err("'for' state corrupted")),
         }
         Ok(())
+    }
+}
+
+/// The iterations after the first of an integer loop from `init` to
+/// `limit` by `step` (not 0), as PUC 5.4 `forprep` counts them (unsigned:
+/// a loop over more than 2^63 values has a "negative" count); `None` when
+/// the loop does not run.
+#[inline(always)]
+pub(super) fn int_for_count(init: i64, limit: i64, step: i64) -> Option<u64> {
+    if step > 0 {
+        if init > limit {
+            return None;
+        }
+        let n = (limit as u64).wrapping_sub(init as u64);
+        Some(if step == 1 { n } else { n / step as u64 })
+    } else {
+        if init < limit {
+            return None;
+        }
+        Some((init as u64).wrapping_sub(limit as u64) / step.unsigned_abs())
     }
 }
