@@ -133,6 +133,7 @@ pub(super) fn emit_test_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
                 | RegKind::Float
                 | RegKind::Table
                 | RegKind::Closure
+                | RegKind::Native
                 | RegKind::Str => Some(true),
                 RegKind::Nil => Some(false),
                 RegKind::Unset | RegKind::Unknown | RegKind::Bool => None,
@@ -188,6 +189,7 @@ pub(super) fn emit_test_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
                 | RegKind::Float
                 | RegKind::Table
                 | RegKind::Closure
+                | RegKind::Native
                 | RegKind::Str => Some(true),
                 RegKind::Nil => Some(false),
                 RegKind::Unset | RegKind::Unknown | RegKind::Bool => None,

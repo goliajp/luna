@@ -114,6 +114,10 @@ optimization.
   made from inside a C function of the host's, as `lua.c`'s `docall` runs
   inside `pmain`.
 
+- `luna_core::jit::trace::ExitTag` has a `Native` variant (a native
+  function's pointer, packed into AOT trace metadata as byte 8). Code
+  that matches `ExitTag` exhaustively has to name it.
+
 - `luna_core::jit::trace::ExitTag` has a `Bool` variant and `TraceRecord`
   the `index_slots`, `index_key` and `settings` fields; the frame-materialise helper
   `luna_jit_trace_materialize_frames` takes a third argument, the
@@ -592,6 +596,18 @@ optimization.
 
 ### Fixed
 
+- Trace JIT (all three trace code generators: baseline, Cranelift and
+  LLVM): a native function a trace copied into another register (`local
+  g = f`, the function and arguments of a call, a native passed to a Lua
+  function the trace inlined) reached the interpreter at the trace's exit
+  as whatever that register held before, so the call that followed raised
+  "attempt to call a number value" or "a nil value"; a test of the copy
+  (`if g then`) could take the wrong branch. The trace now knows a
+  native's type wherever it copies one. A native passed to an inlined Lua
+  function fails this way in every release since the trace JIT was turned
+  on by default, 1.3.0 through 4.0.2; the other shapes did not run as
+  traces in a release (develop only, from the per-loop back-edge counting
+  of 2026-10-02).
 - LLVM backend: the method JIT took a register that 5.1's code never wrote
   (5.1 leaves out the `LoadNil` of a register still nil at entry, so
   `return nil` reads it) for the integer 0; `load` with a reader that

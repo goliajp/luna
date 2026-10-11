@@ -67,10 +67,12 @@ tfor 2 false native panic: boomiter
 tfor-s 1124250
 loop-mm 2 false native panic: boomif
 loop-mm-m 1499
+loop-long 2 false native panic: boomif
+loop-long-n 1499
 tb-same true
 traceback-here here
 stack traceback:
-	panics.lua:125: in main chunk
+	panics.lua:131: in main chunk
 host-direct native panic: boom
 host-direct-tb Some("stack traceback:\n\t[C]: ?")
 host-eval native panic: boom
@@ -150,10 +152,12 @@ tfor 2 false native panic: boomiter
 tfor-s 1124250
 loop-mm 2 false native panic: boomif
 loop-mm-m 1499
+loop-long 2 false native panic: boomif
+loop-long-n 1499
 tb-same true
 traceback-here here
 stack traceback:
-	panics.lua:125: in main chunk
+	panics.lua:131: in main chunk
 host-direct native panic: boom
 host-direct-tb Some("stack traceback:\n\t[C]: in ?")
 host-eval native panic: boom
@@ -233,10 +237,12 @@ tfor 2 false native panic: boomiter
 tfor-s 1124250
 loop-mm 2 false native panic: boomif
 loop-mm-m 1499
+loop-long 2 false native panic: boomif
+loop-long-n 1499
 tb-same true
 traceback-here here
 stack traceback:
-	panics.lua:125: in main chunk
+	panics.lua:131: in main chunk
 host-direct native panic: boom
 host-direct-tb Some("stack traceback:\n\t[C]: in ?")
 host-eval native panic: boom
@@ -318,10 +324,12 @@ tfor 2 false native panic: boomiter
 tfor-s 1124250
 loop-mm 2 false native panic: boomif
 loop-mm-m 1499
+loop-long 2 false native panic: boomif
+loop-long-n 1499
 tb-same true
 traceback-here here
 stack traceback:
-	panics.lua:125: in main chunk
+	panics.lua:131: in main chunk
 host-direct native panic: boom
 host-direct-tb Some("stack traceback:\n\t[C]: in ?")
 host-eval native panic: boom
@@ -403,10 +411,12 @@ tfor 2 false native panic: boomiter
 tfor-s 1124250
 loop-mm 2 false native panic: boomif
 loop-mm-m 1499
+loop-long 2 false native panic: boomif
+loop-long-n 1499
 tb-same true
 traceback-here here
 stack traceback:
-	panics.lua:125: in main chunk
+	panics.lua:131: in main chunk
 host-direct native panic: boom
 host-direct-tb Some("stack traceback:\n\t[C]: in ?")
 host-eval native panic: boom

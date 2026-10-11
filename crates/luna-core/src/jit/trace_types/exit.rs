@@ -39,6 +39,9 @@ pub enum ExitTag {
     /// Trace writes a boolean: payload 0 (false) or 1 (true); the
     /// dispatcher repacks it with tag `raw::FALSE` plus the payload.
     Bool,
+    /// Trace writes a native function's pointer to this slot (a copy of
+    /// a register that entered holding one).
+    Native,
 }
 
 /// Derive an [`ExitTag`] vector from a per-slot `RegKind` snapshot.
@@ -113,6 +116,7 @@ pub fn exit_tags_match_entry_tags(
             ExitTag::Str => crate::runtime::value::raw::STR,
             // a trace takes a boolean of either value under `raw::FALSE`
             ExitTag::Bool => crate::runtime::value::raw::FALSE,
+            ExitTag::Native => crate::runtime::value::raw::NATIVE,
         };
         if child != expected {
             return false;
