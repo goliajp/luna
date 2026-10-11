@@ -187,7 +187,7 @@ impl Vm {
                 self.frames.len(),
                 0,
             ));
-        let r = check(self);
+        let r = self.in_native_window(check);
         let act = self.running_natives.pop().expect("pushed above");
         // raised by that native, as it would have been once entered
         if let Err(e) = &r {

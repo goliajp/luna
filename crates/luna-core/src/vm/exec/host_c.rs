@@ -340,7 +340,7 @@ impl Vm {
         self.running_natives.push_or_abort(act);
         self.native_nresults = nc.nresults;
         let thread = self.host_thread();
-        match (hooks.resume)(self, thread, hc.token, nc.func_slot, vals) {
+        match self.in_native_window(|vm| (hooks.resume)(vm, thread, hc.token, nc.func_slot, vals)) {
             Ok(nret) => {
                 if self.frames.len() < entry_depth {
                     self.running_natives.pop();
