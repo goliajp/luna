@@ -10,7 +10,8 @@ pub(super) fn load_error(vm: &mut Vm, name: &[u8], file: &[u8], msg: &[u8]) -> L
         String::from_utf8_lossy(file),
         String::from_utf8_lossy(msg)
     );
-    raise_str(vm, &text)
+    // "error loading module '%s' from file '%s':\n\t%s"
+    crate::vm::builtins::raise_fmt(vm, 3, &text)
 }
 
 pub(super) fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

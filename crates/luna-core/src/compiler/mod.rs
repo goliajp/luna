@@ -64,7 +64,9 @@ use crate::runtime::heap::{GcHeader, ObjTag};
 use crate::runtime::mem::{LMap, LVec};
 use crate::runtime::{Gc, Heap, LuaStr, Proto, UpvalDesc, Value};
 use crate::version::LuaVersion;
-use crate::vm::isa::{Inst, MAX_B, MAX_BX, MAX_C, MAX_SC, MAX_SJ, MIN_SC, OFFSET_SC, Op};
+use crate::vm::isa::{
+    Inst, MAX_B, MAX_BX, MAX_C, MAX_SC, MAX_SJ, MAX_SJ_FORWARD, MIN_SC, OFFSET_SC, Op,
+};
 
 /// Lower an [`ast::Chunk`] into a [`Proto`] (luna bytecode) for the
 /// given dialect. The interned source name is attached to the proto for

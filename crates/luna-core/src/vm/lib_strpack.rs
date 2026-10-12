@@ -133,12 +133,7 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     }
     let mut pos = rel as u64 - 1;
     let mut results = LVec::new(vm.heap.mem());
-    // each result read so far is pushed under the next item: they count
-    // when one raises
-    if let Err(e) = unpack_items(vm, a, &fmt, data, &mut pos, &mut results) {
-        vm.native_push(results.len() as u32);
-        return Err(e);
-    }
+    unpack_items(vm, a, &fmt, data, &mut pos, &mut results)?;
     results.push(Value::Int((pos + 1) as i64))?;
     vm.nat_ret(fs, &results)
 }

@@ -92,7 +92,8 @@ fn concat_field(vm: &mut Vm, tv: Value, k: i64, out: &mut LVec<u8>) -> Result<()
                 v.type_name()
             ))?;
             vm.native_push(buf + 1);
-            return Err(crate::vm::builtins::raise_bytes(vm, &msg));
+            // "invalid value (at index %d) in table for 'concat'"
+            return Err(crate::vm::builtins::raise_bytes_fmt(vm, 1, &msg));
         }
     }
     Ok(())

@@ -45,9 +45,14 @@ pub(crate) struct NativeAct {
     /// with its arguments, counted from the slot past them (see
     /// `Vm::native_push`); nothing is computed when it is pushed
     pub(crate) top_off: i32,
+    /// the slot past what PUC's `CallInfo` of the C function reserves
+    /// (`ci->top`): `LUA_MINSTACK` above its arguments, raised by the
+    /// room `lua_checkstack` grants it. A protected call's catch and the
+    /// collector shrink the stack to what the frames reserve.
+    pub(crate) ci_top: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<NativeAct>() <= 24);
+const _: () = assert!(std::mem::size_of::<NativeAct>() <= 32);
 
 impl NativeAct {
     /// `nc` entered at `func_slot` with `nargs` arguments, above `depth`
@@ -67,6 +72,7 @@ impl NativeAct {
             nargs,
             depth_ccmt,
             top_off: 0,
+            ci_top: func_slot + 1 + nargs + crate::vm::exec::stack_size::MIN_STACK,
         }
     }
 

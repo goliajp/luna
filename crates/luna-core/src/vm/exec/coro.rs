@@ -146,7 +146,7 @@ impl Vm {
                 m.top = rctx.top;
                 m.meta_conts = rctx.meta_conts;
                 m.stale_frames = rctx.stale_frames;
-                m.stack_extra = rctx.stack_extra;
+                m.stack_size = rctx.stack_size;
                 m.frame_size = rctx.frame_size;
             }
             None => self.main_ctx = Some(rctx),
@@ -186,7 +186,7 @@ impl Vm {
             m.top = 0;
             m.meta_conts = 0;
             m.stale_frames = 0;
-            m.stack_extra = false;
+            m.stack_size = 0;
             m.frame_size = 0;
             m.resume_at = None;
             m.error_value = None;

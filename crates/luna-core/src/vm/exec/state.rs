@@ -461,11 +461,11 @@ pub struct Vm {
     /// call keeps its level while its error is in flight, which lets the
     /// message handler run on it one level above the limit
     pub(crate) c_overflow_err: Option<Value>,
-    /// the running thread's stack has overflowed and is using the error
-    /// space (PUC's stack grown to `ERRORSTACKSIZE`), until a protected
-    /// call catches the error; a call that does not fit it is "error in
-    /// error handling". Per-thread, saved with the coroutine context.
-    pub(super) stack_extra: bool,
+    /// the size PUC's stack of the running thread has (see `stack_size`):
+    /// past `MAX_STACK` it has overflowed and is using the room left for
+    /// the message handler, until it is shrunk again. Per-thread, saved
+    /// with the coroutine context.
+    pub(crate) stack_size: u32,
     /// construction finished (PUC `completestate`): an allocation that
     /// fails may run an emergency collection from now on
     pub(super) state_complete: bool,

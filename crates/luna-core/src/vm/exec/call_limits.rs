@@ -1,14 +1,16 @@
 //! The Lua stack and frame array limits of a call.
 
+use super::stack_size::{self, Grown};
 use super::*;
 
 impl Vm {
     /// Room for `need` slots above `top` on the thread's stack (PUC
-    /// `luaD_checkstack` at a call, `top` being `L->top` there), else the
-    /// error PUC raises. `vararg`: a vararg function is called, which 5.4
-    /// on checks one slot more for, as its frame moves up past the
-    /// function and the arguments (`luaT_adjustvarargs`); the fast path
-    /// counts that slot for every call and the slow one takes it back.
+    /// `luaD_checkstack` at a call, `top` being `L->top` there), the stack
+    /// grown as PUC grows it, else the error PUC raises. `vararg`: a vararg
+    /// function is called, which 5.4 on checks one slot more for, as its
+    /// frame moves up past the function and the arguments
+    /// (`luaT_adjustvarargs`); the fast path counts that slot for every
+    /// call and the slow one takes it back.
     #[inline(always)]
     pub(super) fn check_lua_stack(
         &mut self,
@@ -16,39 +18,48 @@ impl Vm {
         need: u32,
         vararg: bool,
     ) -> Result<(), LuaError> {
-        // under the lowest dialect's limit by a slot to spare, no exact
-        // count is needed (the constant keeps the fast path free of loads)
-        if top + need < STACK_LIMIT_FLOOR {
+        if top + need < self.g.stack_last {
             return Ok(());
         }
         let need = need + u32::from(vararg && self.version >= LuaVersion::Lua54);
-        if top + need <= self.g.lua_stack_limit {
-            return Ok(());
-        }
-        self.lua_stack_overflow(top, need)
+        self.grow_lua_stack(top, need)
     }
 
-    /// PUC `luaD_growstack` past the limit: the first overflow raises
-    /// "stack overflow" and opens `STACK_ERR_SPACE` more slots for the
-    /// message handler that runs on it; a call that does not fit those
-    /// either is "error in error handling" (errors.lua :606, cstack.lua
-    /// :29). The space closes when a protected call catches the error.
+    /// The running thread's stack is now `s` slots (PUC's count).
+    #[inline]
+    pub(crate) fn set_stack_size(&mut self, s: u32) {
+        self.stack_size = s;
+        self.g.stack_last = fast_stack_last(self.version, s);
+    }
+
+    /// PUC `luaD_checkstack` past the fast bound: the stack grows, or past
+    /// the limit the first overflow raises "stack overflow" and leaves the
+    /// stack the room for the message handler that runs on it; a call that
+    /// does not fit that room either is "error in error handling"
+    /// (errors.lua :606, cstack.lua :29).
     #[cold]
     #[inline(never)]
-    fn lua_stack_overflow(&mut self, top: u32, need: u32) -> Result<(), LuaError> {
-        if !self.stack_extra {
-            self.stack_extra = true;
-            // before 5.4 `luaG_runerror` adds the position to the message
-            // of a Lua function, pushing it too; a C function (one whose
-            // message handler is being called on a full stack) gets none
-            let positioned = self.version() < LuaVersion::Lua54 && !self.native_on_top();
-            self.overflow_top = Some(top + u32::from(positioned));
+    pub(super) fn grow_lua_stack(&mut self, top: u32, need: u32) -> Result<(), LuaError> {
+        if self.version == LuaVersion::Lua51 && top + need > STACK_CAP_51 {
             return Err(self.rt_err("stack overflow"));
         }
-        if top + need >= self.g.lua_stack_limit + STACK_ERR_SPACE {
-            return Err(LuaError(self.errerr()));
+        match stack_size::check(self.version, self.stack_size, top + 1, need) {
+            Grown::Fits(s) => {
+                self.set_stack_size(s);
+                Ok(())
+            }
+            Grown::Overflow(s) => {
+                self.set_stack_size(s);
+                // before 5.4 `luaG_runerror` adds the position to the
+                // message of a Lua function, pushing it too; a C function
+                // (one whose message handler is being called on a full
+                // stack) gets none
+                let positioned = self.version() < LuaVersion::Lua54 && !self.native_on_top();
+                self.overflow_top = Some(top + u32::from(positioned));
+                Err(self.rt_err("stack overflow"))
+            }
+            Grown::ErrErr => Err(LuaError(self.errerr())),
         }
-        Ok(())
     }
 
     /// Room for one more frame. 5.1 checks its call limit here, as PUC

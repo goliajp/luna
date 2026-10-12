@@ -84,7 +84,7 @@ impl Vm {
                 } else {
                     u32::MAX
                 },
-                lua_stack_limit: lua_stack_limit(version),
+                stack_last: fast_stack_last(version, stack_size::initial(version)),
                 frames_native: 0,
                 host_frames: 0,
                 meta_conts: 0,
@@ -103,7 +103,7 @@ impl Vm {
             c_overflow_err: None,
             overflow_top: None,
             varinfo_pushed: false,
-            stack_extra: false,
+            stack_size: stack_size::initial(version),
             closing_err: None,
             current: None,
             main_ctx: None,

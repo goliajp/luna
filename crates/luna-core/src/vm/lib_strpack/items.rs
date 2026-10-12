@@ -16,7 +16,11 @@ pub(super) fn unpack_items(
     let ld = data.len() as u64;
     let mut h = Header::new();
     let mut fp = 0usize;
+    let pushed = vm.running_natives.last().map_or(0, |a| a.top_off);
     while fp < fmt.len() {
+        // the results read so far are pushed: an item that raises, or the
+        // check before it, finds them under the top
+        vm.native_set_pushed(pushed + results.len() as i32);
         let (opt, size, ntoalign) = getdetails(vm, &mut h, *pos, fmt, &mut fp)?;
         if *pos > ld || ntoalign + size > ld - *pos {
             return Err(arg_error(vm, 2, "data string too short"));

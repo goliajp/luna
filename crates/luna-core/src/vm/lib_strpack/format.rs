@@ -62,8 +62,9 @@ fn getnumlimit(vm: &mut Vm, fmt: &[u8], pos: &mut usize, df: u64) -> Result<u64,
     if sz.wrapping_sub(1) >= MAXINTSIZE {
         // printed with "%d": 5.5's size_t shows its low 32 bits
         let shown = sz as u32 as i32;
-        return Err(raise_str(
+        return Err(crate::vm::builtins::raise_fmt(
             vm,
+            2,
             &format!("integral size ({shown}) out of limits [1,{MAXINTSIZE}]"),
         ));
     }
@@ -122,7 +123,7 @@ fn getoption(
             let mut msg = b"invalid format option '".to_vec();
             msg.push(opt);
             msg.push(b'\'');
-            return Err(crate::vm::builtins::raise_bytes(vm, &msg));
+            return Err(crate::vm::builtins::raise_bytes_fmt(vm, 1, &msg));
         }
     })
 }

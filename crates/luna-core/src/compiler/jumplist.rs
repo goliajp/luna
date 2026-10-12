@@ -24,7 +24,7 @@ impl Compiler<'_> {
     /// PUC `fixjump`.
     pub(super) fn fix_jump(&mut self, pc: usize, dest: usize) -> Result<(), SyntaxError> {
         let off = dest as i64 - (pc as i64 + 1);
-        if off.unsigned_abs() > self.jump_cap() {
+        if !self.jump_fits(off) {
             return Err(self.near_err("control structure too long"));
         }
         let i = self.lr().code[pc];

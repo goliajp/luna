@@ -22,8 +22,8 @@ pub(super) fn nat_assert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
                 argcheck::check_any(vm, a, 0)?;
             }
             match argcheck::opt_string(vm, a, 1)? {
-                Some(msg) => Err(raise(vm, Value::Str(msg))),
-                None => Err(raise_str(vm, "assertion failed!")),
+                Some(msg) => Err(raise(vm, Value::Str(msg), Some(1))),
+                None => Err(raise_fmt(vm, 1, "assertion failed!")),
             }
         }
         // 5.3+ hands the message, of any type, to `error` at level 1; an
@@ -34,8 +34,8 @@ pub(super) fn nat_assert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             argcheck::check_any(vm, a, 0)?;
             vm.native_settop(1);
             match a.get(vm, 1) {
-                _ if nargs < 2 => Err(raise_str(vm, "assertion failed!")),
-                v @ Value::Str(_) => Err(raise(vm, v)),
+                _ if nargs < 2 => Err(raise_value(vm, "assertion failed!")),
+                v @ Value::Str(_) => Err(raise(vm, v, None)),
                 v => Err(LuaError(v)),
             }
         }
@@ -72,12 +72,13 @@ pub(crate) fn nat_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     // PUC `luaB_error` calls `luaL_where(L, level)` — prepend the position of
     // the Lua frame `level` steps up. If the level is out of range or the
     // target frame has no line info, fall through with no prefix.
+    let prefix = vm.position_prefix_at_level(level as i64);
+    if let Some(e) = vm.format_pushes(&[prefix.is_some().then_some(2), None]) {
+        return Err(e);
+    }
     // `luaL_where` and the message, concatenated into one value
     vm.native_push(1);
-    let mut out = vm
-        .position_prefix_at_level(level as i64)
-        .map(String::into_bytes)
-        .unwrap_or_default();
+    let mut out = prefix.map(String::into_bytes).unwrap_or_default();
     out.extend_from_slice(&text);
     Err(LuaError(vm.str_value(&out)?))
 }
@@ -85,13 +86,22 @@ pub(crate) fn nat_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
 /// Raise a string-ish error with the caller's position prefix (PUC level 1).
 /// PUC `luaL_error`: a string message gets `luaL_where(L, 1)`, the position
 /// of whatever called the running native — including a Lua frame that
-/// reached it as a metamethod — and nothing when that caller is C.
-fn raise(vm: &mut Vm, msg: Value) -> LuaError {
-    // `luaL_where` and the formatted message, concatenated into one value
+/// reached it as a metamethod — and nothing when that caller is C. `conv`:
+/// the conversions (`%s`, `%d`, ...) of the format PUC formats the message
+/// with, whose pieces it pushes one by one (see [`Vm::format_pushes`]);
+/// `None`: the message is pushed as it is (`error` and 5.3+ `assert`).
+fn raise(vm: &mut Vm, msg: Value, conv: Option<u32>) -> LuaError {
+    let prefix = vm.position_prefix_at_level(1);
+    // `luaL_where`, a formatted position or a literal "", then the message
+    let at = prefix.is_some().then_some(2);
+    if let Some(e) = vm.format_pushes(&[at, conv]) {
+        return e;
+    }
+    // concatenated into one value
     vm.native_push(1);
     match msg {
         Value::Str(s) => {
-            let p = vm.position_prefix_at_level(1).unwrap_or_default();
+            let p = prefix.unwrap_or_default();
             match vm.concat_str(&[p.as_bytes(), s.as_bytes()]) {
                 Ok(v) => LuaError(v),
                 Err(e) => e,
@@ -101,14 +111,39 @@ fn raise(vm: &mut Vm, msg: Value) -> LuaError {
     }
 }
 
+/// `luaL_error` with a literal message (a format with no conversions).
 pub(crate) fn raise_str(vm: &mut Vm, msg: &str) -> LuaError {
     raise_bytes(vm, msg.as_bytes())
+}
+
+/// [`raise_str`] for a message PUC formats with `conv` conversions.
+pub(crate) fn raise_fmt(vm: &mut Vm, conv: u32, msg: &str) -> LuaError {
+    match vm.str_value(msg.as_bytes()) {
+        Ok(s) => raise(vm, s, Some(conv)),
+        Err(e) => e,
+    }
+}
+
+/// 5.3+ `assert`'s default message, which `error` positions as it is.
+fn raise_value(vm: &mut Vm, msg: &str) -> LuaError {
+    match vm.str_value(msg.as_bytes()) {
+        Ok(s) => raise(vm, s, None),
+        Err(e) => e,
+    }
 }
 
 /// `luaL_error` with a message that need not be UTF-8.
 pub(crate) fn raise_bytes(vm: &mut Vm, msg: &[u8]) -> LuaError {
     match vm.str_value(msg) {
-        Ok(s) => raise(vm, s),
+        Ok(s) => raise(vm, s, Some(0)),
+        Err(e) => e,
+    }
+}
+
+/// [`raise_bytes`] for a message PUC formats with `conv` conversions.
+pub(crate) fn raise_bytes_fmt(vm: &mut Vm, conv: u32, msg: &[u8]) -> LuaError {
+    match vm.str_value(msg) {
+        Ok(s) => raise(vm, s, Some(conv)),
         Err(e) => e,
     }
 }
@@ -143,7 +178,7 @@ pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
         if let Some(("method", name)) = &call_name {
             let n = n - 1; // self is not counted
             if n == 0 {
-                return raise_str(vm, &format!("calling '{name}' on bad self ({extra})"));
+                return raise_fmt(vm, 2, &format!("calling '{name}' on bad self ({extra})"));
             }
             ("argument", n)
         } else {
@@ -154,7 +189,7 @@ pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
         Some((_, name)) => name,
         None => unnamed_native_name(vm),
     };
-    raise_str(vm, &format!("bad {argword} #{n} to '{name}' ({extra})"))
+    raise_fmt(vm, 3, &format!("bad {argword} #{n} to '{name}' ({extra})"))
 }
 
 /// `luaL_argerror`'s fallback when `ar.name` is NULL: '?' on 5.1, otherwise

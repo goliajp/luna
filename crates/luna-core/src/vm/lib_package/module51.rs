@@ -37,7 +37,7 @@ pub(super) fn ll_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
                     "name conflict for module '{}'",
                     String::from_utf8_lossy(&name)
                 );
-                return Err(raise_str(vm, &text));
+                return Err(crate::vm::builtins::raise_fmt(vm, 1, &text));
             };
             raw_set_checked(vm, loaded, Value::Str(name_s), Value::Table(t))?;
             t

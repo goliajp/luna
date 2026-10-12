@@ -46,8 +46,11 @@ pub(crate) struct CallGuards {
     /// use (`Vm::frames_in_use`) fill it, which is where its limit is
     /// checked (`grow_frames`). Per-thread. `u32::MAX` in later dialects.
     pub(crate) frame_size: u32,
-    /// `lua_stack_limit` of the dialect
-    pub(crate) lua_stack_limit: u32,
+    /// a call whose frame ends below this slot needs no look at the
+    /// stack's size (`Vm::check_lua_stack`): PUC's `stack_last` of the
+    /// running thread, less the slots luna's numbering and a 5.4 vararg
+    /// frame need. Per-thread.
+    pub(crate) stack_last: u32,
     /// calls compiled code made on the native stack below the running
     /// interpreter frames, which take no frame but count against 5.1's
     /// call limit
