@@ -54,7 +54,10 @@ impl Vm {
     pub(in crate::vm::exec) fn enter_c_level(&mut self, positioned: bool) -> Result<(), LuaError> {
         self.check_c_level(positioned)?;
         self.g.nccalls += 1;
-        self.g.meta_conts += 1;
+        // only 5.1 counts frames (see `frames_in_use`)
+        if self.g.frame_size != u32::MAX {
+            self.g.meta_conts += 1;
+        }
         Ok(())
     }
 }
