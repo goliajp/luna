@@ -19,7 +19,7 @@ end
 local function measure(label, f, ...)
   free, seen = -1, nil
   local ok, r = xpcall(f, hfree, ...)
-  print(label, free, tostring(seen))
+  print(label, free, (tostring(seen):gsub("^[^\n]-:%d+: ", "@ ")))
 end
 local max = _VERSION == "Lua 5.3" and 999976 or 999980
 local Z = string.rep('\0', 1000100)
