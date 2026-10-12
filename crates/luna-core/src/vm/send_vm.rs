@@ -232,14 +232,7 @@ impl SendVm {
     /// because the bare Vm's `globals()` + raw `Gc<Table>` deref
     /// pattern is awkward across the lock boundary.
     pub fn get_global(&self, name: &str) -> Value {
-        self.with_vm_mut(|vm| {
-            let key = vm.str_value(name.as_bytes()).unwrap_or(Value::Nil);
-            // SAFETY: Gc<T> = NonNull<T> over the single-threaded
-            // GC heap (the lock guard above re-establishes the
-            // single-mutator invariant). Globals table is reachable
-            // for the lifetime of the Vm.
-            unsafe { (*vm.globals().as_ptr()).get(key) }
-        })
+        self.with_vm_mut(|vm| vm.global_named(name))
     }
 
     /// Intern a UTF-8 string into the heap's string table. Mirror
