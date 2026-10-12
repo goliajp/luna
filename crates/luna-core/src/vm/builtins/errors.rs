@@ -187,7 +187,10 @@ pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
     };
     let name = match call_name {
         Some((_, name)) => name,
-        None => unnamed_native_name(vm),
+        None => match unnamed_native_name(vm) {
+            Ok(name) => name,
+            Err(e) => return e,
+        },
     };
     raise_fmt(vm, 3, &format!("bad {argword} #{n} to '{name}' ({extra})"))
 }
@@ -199,19 +202,28 @@ pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
 /// seeded per run, so it prints `'_G.tonumber'` on some runs and `'tonumber'`
 /// on others (measured on stock 5.2.4). luna gives the short form, the one
 /// 5.3 settled on.
-fn unnamed_native_name(vm: &mut Vm) -> String {
+fn unnamed_native_name(vm: &mut Vm) -> Result<String, LuaError> {
     if vm.version() == crate::version::LuaVersion::Lua51 {
-        return "?".to_string();
+        return Ok("?".to_string());
     }
     let Some(target) = vm.running_natives.last().map(|a| a.nc) else {
-        return "?".to_string();
+        return Ok("?".to_string());
     };
-    match vm.pushglobalfuncname(target) {
+    if vm.version() >= LuaVersion::Lua54 {
+        // the function and the loaded table are pushed, then room for
+        // `findfield` checked for, which a full stack refuses
+        vm.native_push(2);
+        let top = vm.native_top().expect("a native runs");
+        let r = argcheck::check_stack(vm, Args::new(top - 1, 0), 6, "not enough stack");
+        vm.native_pop(2);
+        r?;
+    }
+    Ok(match vm.pushglobalfuncname(target) {
         Some(name) => {
             // the name found stays on the stack
             vm.native_push(1);
             name
         }
         None => "?".to_string(),
-    }
+    })
 }
