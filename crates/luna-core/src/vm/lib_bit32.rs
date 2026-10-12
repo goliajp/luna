@@ -16,11 +16,7 @@ use crate::vm::exec::Vm;
 
 type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 
-pub(crate) fn open_bit32(vm: &mut Vm) {
-    crate::vm::lib_mem::opened(try_open_bit32(vm));
-}
-
-/// [`open_bit32`], failing when memory runs out.
+/// Open the `bit32` library, failing when memory runs out.
 pub(crate) fn try_open_bit32(vm: &mut Vm) -> Result<(), LuaError> {
     let t = vm.alloc_table()?;
     let funcs: [(&str, Native); 12] = [

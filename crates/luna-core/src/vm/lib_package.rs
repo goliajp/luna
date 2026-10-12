@@ -33,8 +33,9 @@ const LUA_CPATH_DEFAULT: &[u8] = b"";
 /// PUC's message and `loadlib` "where" when built without dynamic libraries.
 const DLMSG: &[u8] = b"dynamic libraries not enabled; check your Lua installation";
 
-pub(crate) fn open_package(vm: &mut Vm) {
-    crate::vm::lib_mem::opened(open_package_with(vm, true));
+/// Open the `package` library, failing when memory runs out.
+pub(crate) fn try_open_package(vm: &mut Vm) -> Result<(), LuaError> {
+    open_package_with(vm, true)
 }
 
 /// [`open_package_bare`], raising a memory error.

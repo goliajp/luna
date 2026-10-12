@@ -6,11 +6,7 @@ use crate::vm::argcheck::{self, Args};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
-pub(crate) fn open_base(vm: &mut Vm) {
-    crate::vm::lib_mem::opened(try_open_base(vm));
-}
-
-/// [`open_base`], failing when memory runs out.
+/// Open the base library, failing when memory runs out.
 pub(crate) fn try_open_base(vm: &mut Vm) -> Result<(), LuaError> {
     let f = vm.lib_native(nat_assert)?;
     vm.lib_set_global("assert", f)?;

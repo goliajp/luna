@@ -29,11 +29,7 @@ use load::*;
 use system::*;
 use time::*;
 
-pub(crate) fn open_os_io(vm: &mut Vm) {
-    crate::vm::lib_mem::opened(try_open_os_io(vm));
-}
-
-/// [`open_os_io`], failing when memory runs out.
+/// Open the `os` and `io` libraries, failing when memory runs out.
 pub(crate) fn try_open_os_io(vm: &mut Vm) -> Result<(), LuaError> {
     try_open_os(vm)?;
     lib_io::try_open_io(vm)?;

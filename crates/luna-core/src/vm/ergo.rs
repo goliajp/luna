@@ -31,8 +31,7 @@ impl Vm {
                 // Classify + record source position.
                 self.set_error_kind(crate::vm::error::LuaErrorKind::Syntax);
                 self.set_error_source(name.to_string(), syntax.line);
-                // Surface SyntaxError as a LuaError carrying the
-                // formatted PUC-style message (`<line>: <msg>`).
+                // a SyntaxError surfaces as a LuaError with PUC's `<line>: <msg>`
                 let msg = format!("{}", syntax);
                 let s = self.alloc_str(msg.as_bytes())?;
                 return Err(LuaError(Value::Str(s)));
@@ -189,8 +188,7 @@ impl Vm {
         // single-threaded and the pointer is live.
         unsafe { g.as_mut() }.set_metatable(Some(mt));
         self.heap.barrier_back(g);
-        // PUC contract: __gc is registered for finalization at
-        // metatable-set time, not at later mutation of the metatable.
+        // as in PUC, __gc counts when the metatable is set, not when it changes later
         if self.check_finalizer_userdata(g).is_err() {
             crate::runtime::mem::oom_abort(std::alloc::Layout::new::<T>());
         }
