@@ -114,7 +114,8 @@ static void print_outcomes(const char *what, Outcomes *o) {
 /* the outcome of a protected call that left status st and its result or
    error on top */
 static void outcome_of(lua_State *L, int st, char *buf, size_t size) {
-  const char *msg = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1)
+  const char *msg = lua_gettop(L) == 0 ? ""
+                    : lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1)
                     : lua_type(L, -1) == LUA_TNUMBER ? lua_tostring(L, -1)
                     : lua_type(L, -1) == LUA_TNONE ? "" : lua_typename(L, lua_type(L, -1));
   snprintf(buf, size, "%s %s", status_name(st), msg);

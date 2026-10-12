@@ -3,21 +3,48 @@
 //! guard on the way (the fast loop's unguarded call, a protected call, a
 //! hook's window, a metamethod, a coroutine) turns it into anything else.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use luna_core::runtime::Value;
-use luna_core::runtime::mem::MemOwner;
+use luna_core::runtime::mem::{BlockKind, MemOwner, MemoryPolicy};
 use luna_core::version::LuaVersion;
 use luna_core::vm::{LuaError, Vm};
 
-use super::load_memory_errors::{Nth, RefuseNth, source};
+use super::load_memory_errors::source;
 
-std::thread_local! {
-    static NATIVE_NTH: std::cell::RefCell<Option<Rc<Nth>>> = const { std::cell::RefCell::new(None) };
+/// While armed, refuses every growth from the `n`th on.
+#[derive(Default)]
+struct FromNth {
+    left: Cell<Option<usize>>,
+    refused: Cell<bool>,
 }
 
-/// Load a chunk with the `n`th allocation of the load refused: "ok", or
-/// the memory error's text.
+struct Refuse(Rc<FromNth>);
+
+impl MemoryPolicy for Refuse {
+    fn allow(&mut self, _old: usize, _new: usize, _kind: BlockKind, _in_use: usize) -> bool {
+        let k = &*self.0;
+        match k.left.get() {
+            None => true,
+            Some(0) => {
+                k.refused.set(true);
+                false
+            }
+            Some(n) => {
+                k.left.set(Some(n - 1));
+                true
+            }
+        }
+    }
+}
+
+std::thread_local! {
+    static NATIVE_NTH: std::cell::RefCell<Option<Rc<FromNth>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Load a chunk with every allocation of the load from the `n`th on
+/// refused: "ok" when nothing was refused, or the memory error's text.
 fn load_nth(vm: &mut Vm, n: usize) -> &'static [u8] {
     let nth = NATIVE_NTH.with(|c| c.borrow().as_ref().unwrap().clone());
     let src = source(vm.version());
@@ -60,9 +87,9 @@ fn nat_load_nth_mm(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// Run `body` (which sets `r` from `n`) in a loop over `n` until the load
 /// succeeds, checking every failure is the memory error.
 fn refused_until_ok(v: LuaVersion, prelude: &str, body: &str) {
-    let nth = Rc::new(Nth::default());
+    let nth = Rc::new(FromNth::default());
     NATIVE_NTH.with(|c| *c.borrow_mut() = Some(nth.clone()));
-    let mut vm = Vm::new_with_mem(v, MemOwner::policy(Box::new(RefuseNth(nth.clone()))));
+    let mut vm = Vm::new_with_mem(v, MemOwner::policy(Box::new(Refuse(nth.clone()))));
     let f = vm.native(nat_load_nth);
     vm.set_global("load_nth", f).unwrap();
     let f = vm.native(nat_load_nth_mm);
@@ -80,7 +107,12 @@ fn refused_until_ok(v: LuaVersion, prelude: &str, body: &str) {
          return mem, ok\n"
     );
     let cl = vm.load(src.as_bytes(), b"=loop").unwrap();
-    let r = vm.call_value(Value::Closure(cl), &[]).unwrap();
+    let r = vm
+        .call_value(Value::Closure(cl), &[])
+        .unwrap_or_else(|e| match e.0 {
+            Value::Str(s) => panic!("{v:?} {body}: {}", String::from_utf8_lossy(s.as_bytes())),
+            x => panic!("{v:?} {body}: {x:?}"),
+        });
     let num = |x: Value| match x {
         Value::Int(i) => i,
         Value::Float(f) => f as i64,

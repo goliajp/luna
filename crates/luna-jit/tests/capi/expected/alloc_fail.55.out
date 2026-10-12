@@ -1,5 +1,5 @@
 lua_newstate: [NULL] [state]
-opening the libraries: [LUA_ERRMEM not enough memory] [ok nil]
+opening the libraries: [LUA_ERRMEM not enough memory] [ok ]
 luaL_loadstring: [LUA_ERRMEM not enough memory] [ok]
 script: [LUA_ERRMEM not enough memory] [ok 40 a!b? 40]
 pcall in Lua: [LUA_ERRMEM not enough memory] [ok true 200]

@@ -47,7 +47,7 @@ const SCRIPTS: &[&str] = &[
        table.insert(t, 1, "first")
        table.sort(t)
        local c = table.concat(t, ",")
-       return #c .. c:sub(1, 20) .. select("#", table.unpack(t, 1, 50))"##,
+       return #c .. c:sub(1, 20) .. select("#", (table.unpack or unpack)(t, 1, 50))"##,
     r##"local co = coroutine.wrap(function(a)
          local acc = {}
          for i = 1, 30 do acc[i] = coroutine.yield(a .. i) end
@@ -64,7 +64,7 @@ const SCRIPTS: &[&str] = &[
        return #p .. a .. b .. c .. #u"##,
     r##"local d = os.date("*t", 0)
        local s = os.date("!%Y-%m-%d %H:%M:%S", 86400 * 365)
-       local f, msg = load("local x = ... return x * 2, '" .. string.rep("y", 100) .. "'")
+       local f, msg = (loadstring or load)("local x = ... return x * 2, '" .. string.rep("y", 100) .. "'")
        if not f then return "load failed: " .. msg end
        local a, b = f(21)
        return d.year .. s .. a .. #b"##,
@@ -123,6 +123,9 @@ fn run(v: LuaVersion, plan: &Plan, src: &str, protected: bool) -> Outcome {
 fn memory_message(v: LuaVersion, msg: &str) -> bool {
     msg == "not enough memory"
         || (v == LuaVersion::Lua53 && msg.ends_with("not enough memory for buffer allocation"))
+        // up to 5.3 `coroutine.wrap` puts its position in front of any
+        // string error, the memory one included
+        || (v <= LuaVersion::Lua53 && msg.ends_with(": not enough memory"))
 }
 
 /// The growths a successful run makes, and its result.
@@ -198,9 +201,16 @@ fn a_single_refusal_retries_where_puc_does() {
                     ..Plan::default()
                 };
                 match run(v, &plan, src, false) {
+                    // the script caught the memory error itself
+                    // (`coroutine.resume` reports it)
+                    Outcome::Ok(out) if out.ends_with("not enough memory") => {}
                     Outcome::Ok(out) => {
                         if n < total {
-                            assert_ne!(v, LuaVersion::Lua51, "5.1 has no emergency collection");
+                            assert_ne!(
+                                v,
+                                LuaVersion::Lua51,
+                                "5.1 has no emergency collection: n={n} {src}"
+                            );
                         }
                         assert!(
                             out == want || out == "load failed: not enough memory",

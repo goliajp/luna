@@ -101,8 +101,9 @@ const VERSIONS: [LuaVersion; 5] = [
     LuaVersion::Lua55,
 ];
 
-/// Trace loops allocating in compiled code: new tables, a growing array
-/// part, a string accumulator, closures.
+/// Loops allocating in compiled code (a trace, or the method JIT's code
+/// for the whole chunk): new tables, a growing array part, a string
+/// accumulator, closures.
 const TRACE_PROGS: &[&str] = &[
     "local t = {} for i = 1, 2000 do t[i] = {i, i * 2} end \
      local s = 0 for i = 1, #t do s = s + t[i][2] end return s",
@@ -132,6 +133,11 @@ fn a_trace_that_cannot_allocate_leaves_and_the_interpreter_allocates() {
     for v in VERSIONS {
         for src in TRACE_PROGS {
             let want = interpreted(v, src);
+            // compiled code, a trace or a method compiled whole, allocates
+            assert!(
+                compiled_growths(v, src, None) > 0,
+                "{v:?}: no compiled code allocated: {src}"
+            );
             for kind in [
                 Some(BlockKind::Table),
                 Some(BlockKind::Str),
@@ -145,10 +151,6 @@ fn a_trace_that_cannot_allocate_leaves_and_the_interpreter_allocates() {
                     let mut vm = vm_with(v, Some(p), true);
                     assert_eq!(result(&mut vm, src), want, "{v:?} {kind:?} #{k}: {src}");
                     assert_eq!(refused.get(), 1, "{v:?} {kind:?} #{k}: {src}");
-                    assert!(
-                        vm.trace_dispatched_count() > 0,
-                        "{v:?}: no trace ran: {src}"
-                    );
                 }
             }
         }
