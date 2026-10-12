@@ -14,7 +14,7 @@ pub enum TableError {
     /// "table overflow" so a runaway `a[i] = i` loop walls within budget
     /// (5.5/5.4 heavy.lua's `toomanyidx` pcalls exactly this scenario).
     Overflow,
-    /// The table is read-only (see [`Table::is_readonly`]); nothing was
+    /// The table is read-only (see [`Table::is_readonly`](super::Table::is_readonly)); nothing was
     /// written. Raised back as "Attempt to modify a readonly table".
     ReadOnly,
     /// The table needed to grow and the allocation failed; nothing was
