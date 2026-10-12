@@ -116,31 +116,42 @@ fn s_sub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     vm.nat_ret(fs, &[r])
 }
 
-/// `string.sub(s, i, j)` past its argument checks.
+/// `string.sub(s, i, j)` past its argument checks, for compiled code:
+/// `None`, with a deopt parked, when the string cannot be made (compiled
+/// code may not collect in an emergency; the interpreter runs the call
+/// again).
 #[doc(hidden)]
-pub fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Gc<LuaStr> {
-    match try_str_sub(vm, s, i, j) {
-        Ok(r) => r,
-        Err(_) => crate::runtime::mem::oom_abort(std::alloc::Layout::new::<LuaStr>()),
+pub fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<LuaStr>> {
+    match vm.heap.try_intern(sub_bytes(&s, i, j)) {
+        Ok(r) => Some(r),
+        Err(_) => {
+            vm.jit_park_oom();
+            None
+        }
     }
 }
 
-/// [`str_sub`], raising a memory error when the string cannot be made.
+/// [`str_sub`] in the interpreter, raising a memory error when the string
+/// cannot be made.
 pub(crate) fn try_str_sub(
     vm: &mut Vm,
     s: Gc<LuaStr>,
     i: i64,
     j: i64,
 ) -> Result<Gc<LuaStr>, LuaError> {
+    vm.alloc_str(sub_bytes(&s, i, j))
+}
+
+/// The bytes `string.sub(s, i, j)` takes.
+fn sub_bytes(s: &Gc<LuaStr>, i: i64, j: i64) -> &[u8] {
     let l = s.len();
     let start = posrelat(i, l).max(1);
     let end = posrelat(j, l).min(l as i64);
-    let bytes: &[u8] = if start <= end {
+    if start <= end {
         &s.as_bytes()[(start - 1) as usize..end as usize]
     } else {
         b""
-    };
-    vm.alloc_str(bytes)
+    }
 }
 
 /// The library function `string.<name>` is, if it is one the trace JIT

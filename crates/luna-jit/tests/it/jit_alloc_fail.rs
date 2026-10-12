@@ -157,6 +157,41 @@ fn a_trace_that_cannot_allocate_leaves_and_the_interpreter_allocates() {
     }
 }
 
+/// `string.sub` the trace folds into a helper call: a string the helper
+/// cannot make leaves the trace at the call, which the interpreter makes.
+/// The method JIT is off: it would take the chunk whole.
+#[test]
+fn a_folded_string_sub_that_cannot_allocate_leaves_the_trace() {
+    let src = "local t = {} for i = 1, 3000 do t[i] = i end local s = table.concat(t) \
+               local f = function(s) local c = 0 \
+                 for p = 1, #s - 6 do if string.sub(s, p, p + 5) == '9' then c = p end end \
+                 return c end \
+               local r = 0 for k = 1, 3 do r = r + f(s) end return r";
+    let traced = |v: LuaVersion, p: Refuse| {
+        let mut vm = vm_with(v, Some(p), true);
+        vm.set_jit_enabled(false);
+        let r = result(&mut vm, src);
+        (r, vm.trace_dispatched_count())
+    };
+    let mut swept = 0;
+    for v in VERSIONS {
+        let want = interpreted(v, src);
+        let all = Refuse::new(Some(BlockKind::Str), usize::MAX, true);
+        let seen = all.seen.clone();
+        traced(v, all);
+        for k in spread(seen.get(), 12) {
+            let p = Refuse::new(Some(BlockKind::Str), k, true);
+            let refused = p.refused.clone();
+            let (r, dispatched) = traced(v, p);
+            assert_eq!(r, want, "{v:?} #{k}");
+            assert_eq!(refused.get(), 1, "{v:?} #{k}");
+            assert!(dispatched > 0, "{v:?} #{k}: no trace ran");
+            swept += 1;
+        }
+    }
+    assert!(swept > 0, "no dialect's trace made the strings");
+}
+
 #[test]
 fn compiled_code_refused_every_allocation_from_some_point_still_agrees() {
     for v in VERSIONS {
@@ -261,3 +296,4 @@ fn running_out_with_the_jit_on_is_a_memory_error() {
         }
     }
 }
+
