@@ -3,8 +3,6 @@
 use super::*;
 
 impl Vm {
-    // ---- indexing (with __index/__newindex chains) ----
-
     /// The `#` length operation: string byte length, `__len` if present, else
     /// the raw table border. Returns the raw length value (may be non-integer
     /// when `__len` is exotic).
@@ -62,10 +60,6 @@ impl Vm {
         }
         MmOut::Done(Value::Bool(false))
     }
-
-    // ---- arithmetic ----
-
-    // ---- comparison ----
 
     /// `lua_compare(L, a, b, LUA_OPEQ)`: equality including `__eq`.
     pub(crate) fn equal(&mut self, l: Value, r: Value) -> Result<bool, LuaError> {
