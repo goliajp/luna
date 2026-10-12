@@ -117,8 +117,22 @@ impl Vm {
         self.str_value(bytes)
     }
 
+    /// PUC's `LUAL_BUFFERSIZE`, the room a library buffer has on the C
+    /// stack before it allocates: `BUFSIZ` up to 5.2, 8192 in 5.3, 1024
+    /// from 5.4 on (64-bit).
+    pub(crate) fn lual_buffersize(v: LuaVersion) -> usize {
+        match v {
+            LuaVersion::Lua51 | LuaVersion::Lua52 if cfg!(windows) => 512,
+            LuaVersion::Lua51 | LuaVersion::Lua52 if cfg!(target_vendor = "apple") => 1024,
+            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => 8192,
+            _ => 1024,
+        }
+    }
+
     /// An empty string buffer for a library function: the one the last
-    /// call gave back, when there is one.
+    /// call gave back, when there is one. The Vm starts with one of
+    /// `LUAL_BUFFERSIZE`, so a buffer that fits PUC's C stack allocates
+    /// nothing, as there.
     #[inline]
     pub(crate) fn new_buf(&mut self) -> LVec<u8> {
         let mem = self.heap.mem();
@@ -128,7 +142,7 @@ impl Vm {
     /// Keep `buf` for the next [`Vm::new_buf`], unless it has grown large.
     #[inline]
     pub(crate) fn recycle_buf(&mut self, mut buf: LVec<u8>) {
-        if buf.capacity() <= 4096 && buf.capacity() >= self.buf_spare.capacity() {
+        if buf.capacity() <= 8192 && buf.capacity() >= self.buf_spare.capacity() {
             buf.clear();
             self.buf_spare = buf;
         }

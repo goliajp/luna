@@ -300,6 +300,9 @@ impl Vm {
         vm.main_coro = Some(mc);
         let (a, b) = vm.rng_auto_seed();
         vm.rng_seed(a as u64, b as u64);
+        vm.buf_spare
+            .reserve_exact(Vm::lual_buffersize(version))
+            .ok()?;
         vm.state_complete = true;
         Some(vm)
     }
