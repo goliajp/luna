@@ -132,6 +132,9 @@ impl<'a> Compiler<'a> {
         let base = self.lr().freereg;
         self.set_freereg(base);
         let se = self.expr(start)?;
+        // a float start or step makes a float loop from 5.3 on (5.1/5.2
+        // step every loop in floating point already)
+        let mut float_loop = matches!(se, Exp::Float(_));
         self.set_freereg(base);
         let s0 = self.exp_to_nextreg(se)?;
         debug_assert_eq!(s0, base);
@@ -142,6 +145,7 @@ impl<'a> Compiler<'a> {
         match step {
             Some(st) => {
                 let ste = self.expr(st)?;
+                float_loop |= matches!(ste, Exp::Float(_));
                 self.set_freereg(base + 2);
                 let st0 = self.exp_to_nextreg(ste)?;
                 debug_assert_eq!(st0, base + 2);
@@ -161,6 +165,11 @@ impl<'a> Compiler<'a> {
             ForLayout::Num
         };
         let (prep_op, _, loop_op) = layout.ops();
+        let loop_op = match loop_op {
+            Op::ForLoop if float_loop && self.version >= LuaVersion::Lua53 => Op::ForLoopF,
+            Op::ForLoop55 if float_loop => Op::ForLoop55F,
+            op => op,
+        };
         self.set_freereg(base + 3);
         self.enter_block(true);
         self.l().blocks.last_mut().expect("no block").reg_floor = base;

@@ -7,49 +7,44 @@ use super::num_double as dbl;
 use super::*;
 use crate::runtime::value::tag;
 use call_fast::Returned;
+#[cfg(all(target_arch = "x86_64", not(miri)))]
+use fast_arith::raw_tag_again;
 use fast_arith::{
     arith_arm, arith_imm_arm, cold_path, is_num_tag, put_flt, put_int, raw_flt, raw_gc, raw_int,
-    raw_num, raw_tag, raw_tag_again, raw_truthy, reg_a,
+    raw_num, raw_tag, raw_truthy, reg_a,
 };
 use index_fast::self_key;
+use num_words::put_words;
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), not(miri)))]
+use num_words::raw_word;
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), not(miri)))]
+use num_words::tag_word;
+#[cfg(all(target_arch = "aarch64", not(miri)))]
+use num_words::{first, raw_tag_words3, raw_words3};
 
 mod arm_helpers;
 mod arms_arith;
 mod arms_call;
 mod arms_cmp;
+mod arms_for_prep;
 mod arms_load;
 mod arms_loop;
+mod arms_loop_a64;
 mod flow;
 mod step;
 use arm_helpers::fast_arm_helper_macros;
 use arms_arith::fast_arith_arms;
 use arms_call::fast_call_arms;
 use arms_cmp::fast_cmp_arms;
+use arms_for_prep::fast_for_prep_arms;
 use arms_load::fast_load_arms;
 use arms_loop::fast_loop_arms;
+use arms_loop_a64::fast_loop_a64_arms;
 use flow::fast_flow_macros;
 use step::fast_step_macros;
 
-/// The running frame, as the loop head found it.
-pub(super) struct Fast {
-    /// the running frame, on top of `frames`
-    pub(super) fr: *mut Frame,
-    pub(super) trace_on: bool,
-    pub(super) entry_depth: usize,
-    /// false when some instruction needs the loop head's checks (a trap,
-    /// a recording, or more trace heads than `heads` holds)
-    pub(super) stay: bool,
-    /// the pcs where a trace this function could enter starts
-    pub(super) heads: [u32; crate::runtime::function::TRACE_HEADS_CAP],
-}
-
-/// Why the fast loop handed control back.
-pub(super) enum FastExit {
-    /// the frame state may have changed: back to the loop head
-    Reload,
-    /// an opcode the loop head's own match runs
-    Slow(Inst),
-}
+mod frame;
+pub(super) use frame::{Fast, FastExit};
 
 impl Vm {
     /// The register window of a frame at `base`. It is valid while
@@ -160,7 +155,9 @@ impl Vm {
                 fast_load_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
                 fast_arith_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
                 fast_cmp_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
+                fast_for_prep_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
                 fast_loop_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
+                fast_loop_a64_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
                 fast_call_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
                 match inst.op() {
                     Op::Move => op_move!(),
@@ -237,8 +234,10 @@ impl Vm {
                     Op::TestSet => op_test_set!(),
                     Op::ForPrep => op_for_prep!(),
                     Op::ForPrep55 => op_for_prep55!(),
-                    Op::ForLoop => op_for_loop!(),
-                    Op::ForLoop55 => op_for_loop55!(),
+                    Op::ForLoop => op_for_loop!(false),
+                    Op::ForLoop55 => op_for_loop55!(false),
+                    Op::ForLoopF => op_for_loop!(true),
+                    Op::ForLoop55F => op_for_loop55!(true),
                     Op::TForLoop => op_t_for_loop!(4, true),
                     Op::TForLoop53 => op_t_for_loop!(3, true),
                     Op::TForLoop55 => op_t_for_loop!(3, false),

@@ -130,6 +130,7 @@ pub(super) fn pure_op(op: Op) -> bool {
             | Op::Test
             | Op::Jmp
             | Op::ForLoop
+            | Op::ForLoopF
     )
 }
 

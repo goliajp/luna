@@ -285,4 +285,9 @@ pub enum Op {
     /// `R[A] := true; pc++`: 5.1–5.3 `LOADBOOL A 1 1`, which no PUC
     /// compiler emits but a chunk may hold.
     LTrueSkip,
+    /// [`Op::ForLoop`] of a loop the compiler knows to be a float loop (a
+    /// float start or step): the same step, which tests for floats first.
+    ForLoopF,
+    /// [`Op::ForLoop55`] of a float loop, as [`Op::ForLoopF`].
+    ForLoop55F,
 }

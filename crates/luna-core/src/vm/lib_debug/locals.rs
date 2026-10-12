@@ -126,7 +126,7 @@ pub(super) fn d_setlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let val = a.get(vm, arg + 2);
     let name = match find_local(vm, co, level, n) {
         Some((name, LocalSlot::Stack(slot))) => {
-            vm.write_thread_slot(co, slot, val);
+            vm.write_thread_slot(co, slot, &name, val);
             Some(name)
         }
         // the value lives in a slot of PUC's C function that luna's native

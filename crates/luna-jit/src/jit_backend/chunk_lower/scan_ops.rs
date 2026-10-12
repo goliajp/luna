@@ -245,7 +245,7 @@ pub(super) fn scan_control(
             }
             let loop_ins = code[loop_pc];
             let want = ins.op().for_layout().map(|l| l.ops().2);
-            if Some(loop_ins.op()) != want || loop_ins.a() as usize != a {
+            if Some(loop_ins.op().plain_for_loop()) != want || loop_ins.a() as usize != a {
                 return None;
             }
             // BB boundaries: ForPrep is its own block; body starts
@@ -277,7 +277,7 @@ pub(super) fn scan_control(
                 }
             }
         }
-        Op::ForLoop | Op::ForLoop55 => {
+        Op::ForLoop | Op::ForLoop55 | Op::ForLoopF | Op::ForLoop55F => {
             // ForLoop alone (without a paired ForPrep earlier in
             // the for_loops list) is an orphan — luna's bytecode
             // emitter never produces that, so reject any ForLoop

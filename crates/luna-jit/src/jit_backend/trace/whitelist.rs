@@ -52,7 +52,9 @@ pub(super) fn is_whitelisted_op(op: Op) -> bool {
             | Op::Len
             | Op::Call
             | Op::ForLoop
+            | Op::ForLoopF
             | Op::ForLoop55
+            | Op::ForLoop55F
             | Op::LoadI
             | Op::LoadF
             | Op::LoadK

@@ -116,7 +116,7 @@ pub(super) fn build_cfg(c: ChunkIn<'_>, scan: &ChunkScan) -> Option<ChunkCfg> {
                     found_terminator = true;
                     break;
                 }
-                Op::ForLoop | Op::ForLoop55 => {
+                Op::ForLoop | Op::ForLoop55 | Op::ForLoopF | Op::ForLoop55F => {
                     let exit_pc = p + 1;
                     if exit_pc < n {
                         let s = pc_to_bb[exit_pc];

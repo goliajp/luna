@@ -44,7 +44,7 @@ impl Checker<'_> {
             op if op.is_for_prep() => {
                 let lp = pc + i.bx() as usize;
                 let want = op.for_layout().map(|l| l.ops().2);
-                let paired = self.ops.get(lp).copied() == want && {
+                let paired = self.ops.get(lp).map(|o| o.plain_for_loop()) == want && {
                     let l = self.inst(lp);
                     l.a() == a && lp as i64 + 1 - l.bx() as i64 == pc as i64 + 1
                 };

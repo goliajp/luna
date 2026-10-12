@@ -105,9 +105,12 @@ pub(super) fn sweep_kinds(
                 | Op::Return1
                 | Op::Return0
                 | Op::Jmp => kinds_ops::sweep_calls(&mut st, scan, pc, ins)?,
-                Op::ForPrep | Op::ForLoop | Op::ForPrep55 | Op::ForLoop55 => {
-                    sweep_for(&mut st, ins)?
-                }
+                Op::ForPrep
+                | Op::ForLoop
+                | Op::ForPrep55
+                | Op::ForLoop55
+                | Op::ForLoopF
+                | Op::ForLoop55F => sweep_for(&mut st, ins)?,
                 Op::NewTable | Op::SetList | Op::SetTable => {
                     kinds_ops::sweep_table_sets(&mut st, ins)?
                 }

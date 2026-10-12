@@ -23,9 +23,9 @@ pub(super) fn emit_for_loop(
         ..
     } = st;
     match ins.op() {
-        Op::ForLoop | Op::ForLoop55 => {
+        Op::ForLoop | Op::ForLoop55 | Op::ForLoopF | Op::ForLoop55F => {
             let r = ForRegs::of(ins);
-            let pre53 = pre53 && ins.op() == Op::ForLoop;
+            let pre53 = pre53 && ins.op().plain_for_loop() == Op::ForLoop;
             let prep_pc = for_loops
                 .iter()
                 .find(|&&(_, lp, _)| lp == pc)

@@ -276,9 +276,15 @@ impl Vm {
         }
     }
 
-    /// Write stack slot `slot` of thread `co` (`None`: the running one), as
-    /// `lua_setlocal` does.
-    pub(crate) fn write_thread_slot(&mut self, co: Option<Gc<Coro>>, slot: usize, v: Value) {
+    /// Write stack slot `slot`, local `name`, of thread `co` (`None`: the
+    /// running one), as `lua_setlocal` does.
+    pub(crate) fn write_thread_slot(
+        &mut self,
+        co: Option<Gc<Coro>>,
+        slot: usize,
+        name: &str,
+        v: Value,
+    ) {
         let stack = match co {
             Some(co) if !self.is_current_thread(Some(co)) => {
                 // the coroutine's saved stack is traced through `co`; re-gray it
@@ -292,6 +298,7 @@ impl Vm {
             stack.resize_or_abort(slot + 1, Value::Nil);
         }
         stack[slot] = v;
+        Vm::unseal_after_local_write(stack, slot, name);
     }
 }
 
