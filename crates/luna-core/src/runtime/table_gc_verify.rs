@@ -22,7 +22,7 @@ impl Table {
         for (i, n) in self.nodes().iter().enumerate() {
             // NOTE: tombstones (val nil, key kept) are NOT skipped —
             // the walk below raw_eq's their keys too.
-            if n.dead_key {
+            if n.dead_key() {
                 continue;
             }
             if let Some(p) = hdr(n.key())
@@ -64,7 +64,7 @@ impl Table {
             if n.val.is_nil() {
                 continue;
             }
-            if !n.dead_key && !is_live(n.key()) {
+            if !n.dead_key() && !is_live(n.key()) {
                 report("node key", i, n.key());
             }
             if !is_live(n.val) {
