@@ -50,6 +50,18 @@ impl<T> LVec<T> {
         }
     }
 
+    /// Append `v` to a vector the caller made room in.
+    ///
+    /// # Safety
+    /// `len() < capacity()`.
+    #[inline(always)]
+    pub unsafe fn push_in_room(&mut self, v: T) {
+        debug_assert!(self.len < self.cap);
+        // SAFETY: the caller's contract: the slot is inside the block and unused
+        unsafe { self.ptr.as_ptr().add(self.len).write(v) };
+        self.len += 1;
+    }
+
     /// [`LVec::insert`], ending the process on failure.
     pub fn insert_or_abort(&mut self, i: usize, v: T) {
         if self.insert(i, v).is_err() {

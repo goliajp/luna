@@ -141,7 +141,7 @@ impl Vm {
         // the caller's registers sit below `func_slot`; the native's own
         // arguments stay rooted too (see `begin_call`)
         self.gc_top = func_slot + nargs + 1;
-        self.push_native(crate::vm::callstack::NativeAct::new(
+        self.push_native_fast(crate::vm::callstack::NativeAct::new(
             nc,
             func_slot,
             nargs,
