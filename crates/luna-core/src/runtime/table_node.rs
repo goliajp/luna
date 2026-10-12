@@ -6,20 +6,19 @@ use crate::runtime::value::Value;
 
 /// A hash-part entry (PUC `Node`): the key is kept as its tag and its
 /// payload at the offsets a `Value` has them, so the first 16 bytes read
-/// as the key ([`Node::key`]), and `dead_key` and `next` live in what is a
-/// `Value`'s padding (PUC `NodeKey`). 32 bytes, so a chain step is a shift.
+/// as the key ([`Node::key`]), and `flags`, `khash` and `next` live in what
+/// is a `Value`'s padding (PUC `NodeKey`). 32 bytes, so a chain step is a
+/// shift.
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub(crate) struct Node {
     pub(super) key_tag: u8,
-    /// PUC `setdeadkey` analogue: the key was a collectable that got swept
-    /// out of a weak table; the key is now nil, and this flag tells
-    /// `insert_new` that the slot still sits in a chain (its `next` is
-    /// kept) rather than being free.
-    pub(super) dead_key: bool,
-    /// the key is integer 0 but was stored as -0 under 5.1/5.2, which
-    /// keep a new key as it was given; iteration hands it back that way
-    pub(super) neg_zero: bool,
+    /// [`DEAD_KEY`] and [`NEG_ZERO`]
+    flags: u8,
+    /// a string key's hash, its low 16 bits: where the key goes in a hash
+    /// part of up to 2^16 nodes, known without loading the string (which
+    /// rehashing and collisions would load in no useful order)
+    pub(super) khash: u16,
     /// absolute index of the next node in this chain, or NONE
     pub(super) next: i32,
     pub(super) key_payload: std::mem::MaybeUninit<u64>,
@@ -28,26 +27,68 @@ pub(crate) struct Node {
 
 pub(super) const NONE: i32 = -1;
 
+/// PUC `setdeadkey` analogue: the key was a collectable that got swept out
+/// of a weak table; the key is now nil, and this flag tells `insert_new`
+/// that the slot still sits in a chain (its `next` is kept) rather than
+/// being free.
+const DEAD_KEY: u8 = 1;
+/// The key is integer 0 but was stored as -0 under 5.1/5.2, which keep a
+/// new key as it was given; iteration hands it back that way.
+const NEG_ZERO: u8 = 2;
+
+/// The largest node mask [`Node::khash`] covers.
+pub(super) const KHASH_MASK: u32 = u16::MAX as u32;
+
+/// What [`Node::khash`] holds for `key`.
+#[inline(always)]
+pub(super) fn khash_of(key: Value) -> u16 {
+    match key {
+        Value::Str(s) => s.hash() as u16,
+        _ => 0,
+    }
+}
+
 impl Node {
     pub(super) const EMPTY: Node = Node {
         key_tag: crate::runtime::value::tag::NIL,
-        dead_key: false,
-        neg_zero: false,
+        flags: 0,
+        khash: 0,
         next: NONE,
         key_payload: std::mem::MaybeUninit::uninit(),
         val: Value::Nil,
     };
 
-    /// A live entry.
-    #[inline]
-    pub(super) fn new(key: Value, val: Value, next: i32) -> Node {
+    /// A live entry; `khash` is [`khash_of`] the key.
+    #[inline(always)]
+    pub(super) fn new(key: Value, val: Value, next: i32, khash: u16) -> Node {
         let mut n = Node {
             val,
             next,
+            khash,
             ..Node::EMPTY
         };
         n.set_key(key);
         n
+    }
+
+    /// See [`DEAD_KEY`].
+    #[inline(always)]
+    pub(super) fn dead_key(&self) -> bool {
+        self.flags & DEAD_KEY != 0
+    }
+
+    pub(super) fn set_dead_key(&mut self) {
+        self.flags |= DEAD_KEY;
+    }
+
+    /// See [`NEG_ZERO`].
+    #[inline]
+    pub(super) fn neg_zero(&self) -> bool {
+        self.flags & NEG_ZERO != 0
+    }
+
+    pub(super) fn set_neg_zero(&mut self) {
+        self.flags |= NEG_ZERO;
     }
 
     /// The key.
@@ -62,14 +103,14 @@ impl Node {
     /// The key as iteration hands it back.
     #[inline]
     pub(super) fn shown_key(&self) -> Value {
-        if self.neg_zero {
+        if self.neg_zero() {
             Value::Float(-0.0)
         } else {
             self.key()
         }
     }
 
-    /// Store `key`, leaving `dead_key` and `next` as they are.
+    /// Store `key`, leaving the flags, `khash` and `next` as they are.
     #[inline(always)]
     pub(super) fn set_key(&mut self, key: Value) {
         let src = &key as *const Value as *const u8;
@@ -92,7 +133,7 @@ impl Node {
     /// True when the slot holds no key and sits in no chain.
     #[inline(always)]
     pub(super) fn is_free(&self) -> bool {
-        self.key_tag == crate::runtime::value::tag::NIL && !self.dead_key
+        self.key_tag == crate::runtime::value::tag::NIL && !self.dead_key()
     }
 }
 
