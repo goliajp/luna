@@ -289,11 +289,12 @@ impl Vm {
                     // PUC luaG_ordererror: "two X values" when the operand
                     // types match, "X with Y" otherwise (objtypename-aware).
                     let (t1, t2) = (self.obj_typename(l), self.obj_typename(r));
-                    return Err(self.runerror(&if t1 == t2 {
-                        format!("attempt to compare two {t1} values")
+                    let (msg, conv) = if t1 == t2 {
+                        (format!("attempt to compare two {t1} values"), 1)
                     } else {
-                        format!("attempt to compare {t1} with {t2}")
-                    }));
+                        (format!("attempt to compare {t1} with {t2}"), 2)
+                    };
+                    return Err(self.runerror_conv(&msg, conv, false));
                 }
                 return Ok(MmOut::Mm { func: mm, recv: l });
             }

@@ -20,10 +20,24 @@ impl Vm {
     /// PUC `luaG_runerror`: `msg` with the position of the running function
     /// when that is a Lua function; a running native adds none.
     pub(crate) fn runerror(&mut self, msg: &str) -> crate::vm::error::LuaError {
+        self.runerror_conv(msg, 0, false)
+    }
+
+    /// [`Vm::runerror`] for a message PUC formats with `conv` conversions
+    /// (see [`Vm::rt_errf_conv`]).
+    pub(crate) fn runerror_conv(
+        &mut self,
+        msg: &str,
+        conv: u32,
+        varinfo: bool,
+    ) -> crate::vm::error::LuaError {
         if self.native_on_top() {
+            if let Some(e) = self.format_pushes(&[Some(conv)]) {
+                return e;
+            }
             self.plain_err(msg)
         } else {
-            self.rt_err(msg)
+            self.rt_errf_conv(format_args!("{msg}"), conv, varinfo)
         }
     }
 
@@ -263,9 +277,13 @@ impl Vm {
             Err(e) if self.msgh_runs != runs => e.0,
             // raised with no Lua frame to unwind (a native handler such as
             // `error` failing at once, or the call refused at the C-level
-            // limit): no nested run saw it, so run the handler on it here,
-            // one level deeper
-            Err(e) => self.call_msgh(handler, e.0),
+            // limit or for want of stack): no nested run saw it, so run the
+            // handler on it here, one level deeper, where the refused call's
+            // error was raised when that was the stack's end
+            Err(e) => {
+                let at = self.overflow_top.take();
+                self.call_msgh_at(handler, e.0, at)
+            }
         }
     }
 }
