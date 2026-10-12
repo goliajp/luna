@@ -177,8 +177,11 @@ impl Vm {
             return self.format_pushes(&[Some(conv)]);
         }
         let top = self.raise_from.unwrap_or_else(|| self.lua_window_end());
-        let name = (varinfo && self.version() == LuaVersion::Lua53).then_some(2);
-        self.pushes_from(top, &[name, Some(conv), Some(3)], 1)
+        if varinfo && self.version() == LuaVersion::Lua53 {
+            self.pushes_from(top, &[Some(2), Some(conv), Some(3)], 1)
+        } else {
+            self.pushes_from(top, &[Some(conv), Some(3)], 1)
+        }
     }
 
     /// The pushes of [`Vm::format_pushes`] from slot `top`; an overflow is
