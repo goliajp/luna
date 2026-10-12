@@ -34,7 +34,7 @@ impl Heap {
 
     /// [`Heap::try_intern`] with the failure as `None`: one register to
     /// return, where the `Result` takes two.
-    fn intern_or_none(&mut self, bytes: &[u8]) -> Option<Gc<LuaStr>> {
+    pub(crate) fn intern_or_none(&mut self, bytes: &[u8]) -> Option<Gc<LuaStr>> {
         if bytes.len() <= string::MAX_SHORT_LEN {
             let (p, is_new) = self
                 .strings
