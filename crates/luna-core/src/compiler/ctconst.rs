@@ -8,6 +8,7 @@
 use super::{Chunk, Expr, Name};
 use crate::frontend::ast::{BinOp, ExprId, Sym, UnOp};
 use crate::numeric::Num;
+use crate::runtime::mem::LVec;
 use crate::runtime::value::f2i_exact;
 use crate::version::LuaVersion;
 
@@ -88,7 +89,7 @@ fn value(
     }
     // the left spine of binary operators, outermost first: a long chain
     // is folded without recursion
-    let mut ops: Vec<(BinOp, ExprId)> = Vec::new();
+    let mut ops = LVec::new(ast.exprs.mem());
     let mut cur = id;
     let mut v = loop {
         match ast.expr(cur) {
@@ -103,13 +104,13 @@ fn value(
                 break value(ast, *rhs, named, compiled)?;
             }
             Expr::BinOp { op, lhs, rhs, .. } => {
-                ops.push((*op, *rhs));
+                ops.push_or_abort((*op, *rhs));
                 cur = *lhs;
             }
             _ => break value_leaf(ast, cur, named, compiled)?,
         }
     };
-    for (op, rhs) in ops.into_iter().rev() {
+    for &(op, rhs) in ops.iter().rev() {
         v = match op {
             // a constant left operand that decides the outcome emits no
             // jump, leaving the right operand as the result
