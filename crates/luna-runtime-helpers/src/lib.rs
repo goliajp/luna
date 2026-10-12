@@ -253,12 +253,11 @@ fn run_inner(bytecode: &[u8], version: LuaVersion) -> i32 {
     // traces): both bracket symbols collapse to the same address, the
     // walk terminates immediately.
     //
-    // `vm.load` interns its own strings into `vm.heap`'s string table,
-    // which the resolver also populates here; intern is idempotent, so
-    // an AOT-time and load-time intern of the same UTF-8 bytes
-    // resolve to the same `Gc<LuaStr>` pointer — the load-bearing
-    // invariant that lets trace mcode pass interned-key pointers to
-    // the `luna_jit_*_field` helpers.
+    // `vm.load` interns its own strings into `vm.heap`'s string table, which
+    // the resolver also populates here; intern is idempotent, so an AOT-time
+    // and load-time intern of the same UTF-8 bytes resolve to the same
+    // `Gc<LuaStr>` pointer — the load-bearing invariant that lets trace mcode
+    // pass interned-key pointers to the `luna_jit_*_field` helpers.
     #[cfg(feature = "jit-helpers")]
     {
         let Some(resolved) = aot_strkey_resolver::resolve_all(&mut vm) else {
@@ -291,15 +290,13 @@ fn run_inner(bytecode: &[u8], version: LuaVersion) -> i32 {
         }
     };
 
-    // Install AOT-emitted traces
-    // against the loaded chunk's proto tree. Runs after `vm.load`
-    // (the resolver needs the closure's proto as the BFS root) and
-    // BEFORE `vm.call_value` (so the dispatcher's first back-edge
-    // visit finds the installed trace and fires AOT mcode, instead
-    // of bumping `trace_hot_count` from zero and going through the
-    // runtime recorder again). Empty-section tolerant: a binary with
-    // zero linked AOT trace `.o`s sees `installed == 0`, fall through
-    // to runtime JIT.
+    // Install AOT-emitted traces against the loaded chunk's proto tree. Runs
+    // after `vm.load` (the resolver needs the closure's proto as the BFS root)
+    // and BEFORE `vm.call_value` (so the dispatcher's first back-edge visit
+    // finds the installed trace and fires AOT mcode, instead of bumping
+    // `trace_hot_count` from zero and going through the runtime recorder
+    // again). Empty-section tolerant: a binary with zero linked AOT trace `.o`s
+    // sees `installed == 0`, fall through to runtime JIT.
     #[cfg(feature = "jit-helpers")]
     {
         let root_proto = closure.proto;
