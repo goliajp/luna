@@ -131,3 +131,52 @@ impl Vm {
 
 /// 5.2's and 5.3's `LUAL_BUFFERSIZE` (`BUFSIZ`, 8192 with glibc)
 const LUAL_BUFFERSIZE_52: usize = 8192;
+
+/// The checks of the stack's room `luaO_pushvfstring` makes formatting a
+/// message of `conv` conversions, each as (slot, slots) counted from the
+/// top it starts at: 5.1 one slot per piece it pushes (`incr_top`), 5.2
+/// two before each conversion and one before the tail, 5.3 one per piece
+/// (`luaD_inctop`) and the tail's twice; 5.4 on none (it counts on
+/// `EXTRA_STACK`).
+fn pushvfstring_checks(v: LuaVersion, conv: u32) -> Vec<(u32, u32)> {
+    match v {
+        LuaVersion::Lua51 => (0..2 * conv + 2).map(|i| (i, 1)).collect(),
+        LuaVersion::Lua52 => (0..conv)
+            .map(|i| (2 * i, 2))
+            .chain([(2 * conv, 1)])
+            .collect(),
+        LuaVersion::Lua53 => (0..2 * conv)
+            .map(|i| (i, 1))
+            .chain([(2 * conv, 1), (2 * conv, 1)])
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+impl Vm {
+    /// The pushes of a running native formatting an error message, from its
+    /// top: each part a `lua_pushfstring` of that many conversions, or
+    /// `None` for a value pushed as it is, leaving one value. They grow the
+    /// stack as PUC's do (see `pushvfstring_checks`); a push past the
+    /// limit raises "stack overflow" there instead of the message, and one
+    /// past the room an overflow left "error in error handling".
+    pub(crate) fn format_pushes(&mut self, parts: &[Option<u32>]) -> Option<LuaError> {
+        use crate::vm::exec::stack_size::{self, Grown};
+        let mut top = self.native_top()?;
+        for part in parts {
+            for (off, n) in part.map_or_else(Vec::new, |c| pushvfstring_checks(self.version(), c)) {
+                match stack_size::check(self.version(), self.stack_size, top + off + 1, n) {
+                    Grown::Fits(s) => self.set_stack_size(s),
+                    Grown::Overflow(s) => {
+                        self.set_stack_size(s);
+                        self.overflow_top = Some(top + off);
+                        return Some(self.runerror("stack overflow"));
+                    }
+                    Grown::ErrErr => return Some(LuaError(self.errerr())),
+                }
+            }
+            top += 1;
+        }
+        None
+    }
+}

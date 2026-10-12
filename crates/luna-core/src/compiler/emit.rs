@@ -21,17 +21,15 @@ impl<'a> Compiler<'a> {
         self.lr().code.len()
     }
 
-    /// PUC ≤5.3's OP_JMP used an 18-bit sBx field, capping reachable code
-    /// at ~131k instructions. luna's bytecode widens that to 24-bit sJ
-    /// (~16M), but the 5.3 test gate (constructs.lua :308) literally
-    /// generates a 262144-instruction `while` to probe the limit. Match
-    /// the older dialects' tighter cap so the error fires when the suite
-    /// expects it. 5.4+ keeps the wider luna bound.
-    pub(super) fn jump_cap(&self) -> u64 {
+    /// Whether a jump of `off` instructions is one the dialect's jump can
+    /// make (PUC `fixjump`): up to 5.3 an 18-bit `sBx`, 131071 either way
+    /// (luna's own field is wider, but constructs.lua :308 probes the
+    /// limit); from 5.4 the 25-bit `sJ`, 2^24 - 1 back and 2^24 forward.
+    pub(super) fn jump_fits(&self, off: i64) -> bool {
         if self.version <= LuaVersion::Lua53 {
-            (1u64 << 17) - 1
+            off.unsigned_abs() < 1 << 17
         } else {
-            MAX_SJ as u64
+            (-i64::from(MAX_SJ)..=i64::from(MAX_SJ_FORWARD)).contains(&off)
         }
     }
 

@@ -12,7 +12,9 @@ pub(super) struct SavedCtx {
     pub(super) top: u32,
     pub(super) meta_conts: u32,
     pub(super) stale_frames: u32,
-    pub(super) stack_extra: bool,
+    pub(super) stack_size: u32,
+    /// the natives running on the thread, in `Vm::running_natives`
+    pub(super) natives: std::ops::Range<usize>,
     pub(super) frame_size: u32,
     pub(super) hook: HookState,
     /// PUC `L->l_gt` — the thread's own globals table. Carried alongside
@@ -32,7 +34,8 @@ impl Vm {
             top: self.top,
             meta_conts: self.g.meta_conts,
             stale_frames: self.g.stale_frames,
-            stack_extra: self.stack_extra,
+            stack_size: self.stack_size,
+            natives: self.natives_base..self.running_natives.len(),
             frame_size: self.g.frame_size,
             hook: self.hook,
             globals: self.globals,
@@ -49,7 +52,7 @@ impl Vm {
         self.top = c.top;
         self.g.meta_conts = c.meta_conts;
         self.g.stale_frames = c.stale_frames;
-        self.stack_extra = c.stack_extra;
+        self.set_stack_size(c.stack_size);
         self.g.frame_size = c.frame_size;
         self.hook = c.hook;
         self.globals = c.globals;
@@ -65,7 +68,11 @@ impl Vm {
         self.open_upvals = m.open_upvals.take();
         self.tbc = m.tbc.take();
         self.top = m.top;
-        self.stack_extra = m.stack_extra;
+        // a thread's stack starts at the basic size (`stack_init`)
+        self.set_stack_size(match m.stack_size {
+            0 => stack_size::initial(self.version),
+            s => s,
+        });
         // a thread's 5.1 frame array starts at the basic size (PUC
         // `lua_newthread`: `stack_init`)
         self.g.frame_size = match m.frame_size {
@@ -92,7 +99,7 @@ impl Vm {
         m.top = c.top;
         m.meta_conts = c.meta_conts;
         m.stale_frames = c.stale_frames;
-        m.stack_extra = c.stack_extra;
+        m.stack_size = c.stack_size;
         m.frame_size = c.frame_size;
         m.hook = c.hook;
         m.globals = c.globals;

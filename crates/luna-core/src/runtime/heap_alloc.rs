@@ -337,7 +337,7 @@ impl Heap {
             top: 0,
             meta_conts: 0,
             stale_frames: 0,
-            stack_extra: false,
+            stack_size: 0,
             frame_size: 0,
             hook: crate::vm::exec::HookState::default(),
             globals,

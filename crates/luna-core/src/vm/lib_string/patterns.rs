@@ -6,7 +6,7 @@ use crate::pattern::{self, CapValue, Flavor, MatchState, PatError};
 use crate::runtime::{Gc, LuaStr, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
-use crate::vm::builtins::{arg_error, raise_bytes, raise_str};
+use crate::vm::builtins::arg_error;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 mod gsub;
@@ -29,7 +29,10 @@ fn pattern_bytes(v: LuaVersion, p: &[u8]) -> &[u8] {
 }
 
 fn pat_err(vm: &mut Vm, e: PatError) -> LuaError {
-    raise_str(vm, &e.0)
+    // PUC's formats: each '%' shown is a `%%`, and the capture index is
+    // `"invalid capture index %%%d"`
+    let conv = e.0.matches('%').count() + usize::from(e.0.starts_with("invalid capture index %"));
+    crate::vm::builtins::raise_fmt(vm, conv as u32, &e.0)
 }
 
 fn cap_value(vm: &mut Vm, src: &[u8], c: CapValue) -> Result<Value, LuaError> {

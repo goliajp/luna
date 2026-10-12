@@ -43,7 +43,7 @@ impl Vm {
                 m.top = rctx.top;
                 m.meta_conts = rctx.meta_conts;
                 m.stale_frames = rctx.stale_frames;
-                m.stack_extra = rctx.stack_extra;
+                m.stack_size = rctx.stack_size;
                 m.frame_size = rctx.frame_size;
                 m.globals = rctx.globals;
                 m.status = CoroStatus::Normal;

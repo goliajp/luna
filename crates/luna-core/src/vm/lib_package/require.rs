@@ -20,7 +20,11 @@ pub(super) fn find_loader(
     // the searcher being tried are pushed; each searcher is called where
     // it is pushed
     let Value::Table(searchers) = vm.native_getfield(Value::Table(pkg), field.as_bytes())? else {
-        return Err(raise_str(vm, &format!("'package.{field}' must be a table")));
+        return Err(crate::vm::builtins::raise_fmt(
+            vm,
+            1,
+            &format!("'package.{field}' must be a table"),
+        ));
     };
     if v == LuaVersion::Lua51 {
         vm.native_push(1);
@@ -58,7 +62,8 @@ pub(super) fn find_loader(
         String::from_utf8_lossy(c_str(n.as_bytes())),
         String::from_utf8_lossy(&msg)
     );
-    Err(raise_str(vm, &text))
+    // "module '%s' not found:%s"
+    Err(crate::vm::builtins::raise_fmt(vm, 2, &text))
 }
 
 pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -79,7 +84,7 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
                 "loop or previous error loading module '{}'",
                 String::from_utf8_lossy(c_str(name_s.as_bytes()))
             );
-            return Err(raise_str(vm, &text));
+            return Err(crate::vm::builtins::raise_fmt(vm, 1, &text));
         }
         return vm.nat_ret(fs, &[cur]);
     }
