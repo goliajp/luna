@@ -6,8 +6,10 @@ impl Vm {
     /// Push the frame of a Lua function called from the fast loop (PUC
     /// `luaD_precall`) when that is all the call needs: no method JIT to
     /// try, fixed parameters, the stack big enough; the caller runs with no
-    /// hook and no trace JIT. The new frame, or `None`, having done nothing,
-    /// to leave the call to `begin_call`.
+    /// hook and no trace JIT. The new frame, or `None`, having done nothing
+    /// but clear registers of the callee's, to leave the call to
+    /// `begin_call` (which grows a frame stack with no room left, where
+    /// running out of memory can be raised).
     #[inline(always)]
     pub(super) fn push_lua_frame_fast(
         &mut self,
@@ -19,20 +21,33 @@ impl Vm {
         let p = cl.proto;
         let base = func_slot + 1;
         let need = base as usize + p.max_stack as usize;
-        // a frame stack with no room left is grown by `begin_call`, where
-        // running out of memory can be raised
         if self.jit.gate
             || p.is_vararg
             || p.has_compat_vararg_arg
             || base + nargs + p.max_stack as u32 + 1 > STACK_LIMIT_FLOOR
             || self.g.frame_size != u32::MAX
             || self.stack.len() < need
-            || self.frames.len() == self.frames.capacity()
         {
             return None;
         }
-        // the push comes right after the room test, before any write
-        // through the stack could make the compiler test again
+        // as `push_frame`: missing parameters are nil, and 5.1 clears the
+        // whole window
+        let kept = nargs.min(p.num_params as u32);
+        let end = if self.version == LuaVersion::Lua51 {
+            need
+        } else {
+            base as usize + p.num_params as usize
+        };
+        // SAFETY: `need <= stack.len()` was checked above and `base + kept
+        // <= end <= need` (the verifier keeps `num_params <= max_stack`)
+        unsafe {
+            self.stack
+                .get_unchecked_mut((base + kept) as usize..end)
+                .fill(Value::Nil);
+        }
+        if self.frames.len() == self.frames.capacity() {
+            return None;
+        }
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
@@ -52,30 +67,12 @@ impl Vm {
                 ccmt: std::mem::take(&mut self.pending_ccmt),
             }),
         );
-        // taken before the writes below, which would make the compiler load
-        // the frame stack again
         // SAFETY: a Lua frame was just pushed
-        let frame: *mut Frame = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
-            CallFrame::Lua(f) => f,
+        match unsafe { self.frames.last_mut().unwrap_unchecked() } {
+            CallFrame::Lua(f) => Some(f),
             // SAFETY: see above
             CallFrame::Cont(_) => unsafe { std::hint::unreachable_unchecked() },
-        };
-        // as `push_frame`: missing parameters are nil, and 5.1 clears the
-        // whole window
-        let kept = nargs.min(p.num_params as u32);
-        let end = if self.version == LuaVersion::Lua51 {
-            need
-        } else {
-            base as usize + p.num_params as usize
-        };
-        // SAFETY: `need <= stack.len()` was checked above and `base + kept
-        // <= end <= need` (the verifier keeps `num_params <= max_stack`)
-        unsafe {
-            self.stack
-                .get_unchecked_mut((base + kept) as usize..end)
-                .fill(Value::Nil);
         }
-        Some(frame)
     }
 }
 
