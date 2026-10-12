@@ -58,6 +58,8 @@ impl Compiler<'_> {
         line: u32,
         open: BinOpOpen,
     ) -> Result<Exp, SyntaxError> {
+        // `luaK_infix`, once the operator is read
+        self.at(TokRef::First(rhs, 0));
         if self.version <= LuaVersion::Lua53 {
             return self.binop_close_classic(op, le, rhs, line, open);
         }
@@ -111,6 +113,8 @@ impl Compiler<'_> {
             )
         };
         let mut re = self.expr(rhs)?;
+        // `luaK_posfix`, once the right operand is read
+        self.at(TokRef::After(rhs, 0));
         if sub_zero && !matches!(re, Exp::Int(0)) {
             self.exp_to_anyreg(re)?;
             re = Exp::Int(0);

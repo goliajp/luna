@@ -25,7 +25,7 @@ impl Compiler<'_> {
     pub(super) fn fix_jump(&mut self, pc: usize, dest: usize) -> Result<(), SyntaxError> {
         let off = dest as i64 - (pc as i64 + 1);
         if off.unsigned_abs() > self.jump_cap() {
-            return Err(self.err(self.last_line, "control structure too long"));
+            return Err(self.near_err("control structure too long"));
         }
         let i = self.lr().code[pc];
         self.l().code[pc] = i.with_jump_offset(off as i32);
@@ -171,14 +171,23 @@ impl Compiler<'_> {
         }
         let here = self.here();
         if let Err(e) = self.patch_list_aux(jpc, here, None, here) {
-            self.l().jump_err.get_or_insert(e);
+            let at = if self.early_emit {
+                self.next_pending = true;
+                TokRef::Next
+            } else {
+                self.cur
+            };
+            self.l().jump_err.get_or_insert((e, at));
         }
     }
 
     /// The error [`Self::discharge_jpc`] met, raised at the next statement.
     pub(super) fn jump_error(&mut self) -> Result<(), SyntaxError> {
         match self.l().jump_err.take() {
-            Some(e) => Err(e),
+            Some((e, at)) => {
+                self.err_tok = Some((at, e.msg.clone()));
+                Err(e)
+            }
             None => Ok(()),
         }
     }

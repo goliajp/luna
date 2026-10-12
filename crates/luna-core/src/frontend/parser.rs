@@ -13,19 +13,25 @@ use crate::runtime::mem::{LVec, MemOwner};
 use crate::version::LuaVersion;
 
 mod block;
+mod decl;
 mod expr;
 mod func;
 mod global_stat;
 mod lists;
+mod marks;
 mod operators;
 mod plumbing;
 mod scratch;
 mod stat;
+mod streams;
 mod token_source;
 mod upval51;
+pub(crate) use marks::{Marks, record_marks, token_at};
 use operators::{UNARY_PRIORITY, bin_op_of, bin_priority, un_op_of};
 pub(crate) use scratch::ParseScratch;
 use scratch::{ListStacks, finish};
+pub use streams::parse_tokens;
+pub(crate) use streams::{parse_stream, parse_tokens_at_depth};
 use token_source::Cur;
 pub(crate) use token_source::TokenSource;
 use upval51::FnUvSlot;
@@ -68,6 +74,9 @@ pub(crate) struct Parsed {
     pub(crate) lex_buf: LVec<u8>,
     /// the parser's list stacks, kept for the next load
     pub(crate) stacks: ListStacks,
+    /// the source of a parse that read it piece by piece, where a compile
+    /// error is placed (a whole source is the caller's)
+    pub(crate) src: Option<LVec<u8>>,
 }
 
 /// [`parse`] run by a VM that is `c_depth` C calls deep. PUC's parser
@@ -118,71 +127,6 @@ pub(crate) fn parse_in_place<'s>(
     )
 }
 
-/// [`parse_reusing`] over a source read piece by piece: `first` is the
-/// piece already read, and `feed` appends the next one or returns false at
-/// the end. The parser asks for a piece only when the scan moves past the
-/// bytes it has, as PUC's does, so it stops reading at a syntax error.
-pub(crate) fn parse_stream<'f>(
-    first: LVec<u8>,
-    feed: &'f mut crate::frontend::lexer::Feed<'f>,
-    version: LuaVersion,
-    c_depth: u32,
-    mut scratch: ParseScratch,
-) -> Result<Parsed, SyntaxError> {
-    scratch.clear();
-    let names = scratch.chunk.names.take();
-    let len = first.len();
-    let lex_buf = scratch.lex_buf.take();
-    let lex = Lexer::interning_stream(Stream::new(first, feed), version, names, lex_buf);
-    parse_from_source(
-        TokenSource::Stream(lex),
-        version,
-        c_depth,
-        len,
-        &mut scratch,
-    )?;
-    Ok(scratch.into_parsed())
-}
-
-/// Parse a **pre-materialized** token stream. Used by the MacroLua
-/// expander pre-pass — it walks the lexer output once, expands
-/// `@name(...)` invocations against the per-Vm macro registry, and
-/// feeds the resulting `Vec<TokenInfo>` here.
-pub fn parse_tokens(
-    tokens: Vec<TokenInfo>,
-    src: &[u8],
-    version: LuaVersion,
-) -> Result<Chunk, SyntaxError> {
-    let mem = MemOwner::system();
-    parse_tokens_at_depth(tokens, src, version, 0, mem.clone()).map(|p| p.chunk)
-}
-
-/// [`parse_tokens`] at a C depth (see [`parse_at_depth`]), building the
-/// tree in vectors from `mem`.
-pub(crate) fn parse_tokens_at_depth(
-    tokens: Vec<TokenInfo>,
-    src: &[u8],
-    version: LuaVersion,
-    c_depth: u32,
-    mem: MemOwner,
-) -> Result<Parsed, SyntaxError> {
-    let names = Names::with_capacity(mem.mem(), src.len());
-    let mut scratch = ParseScratch::new(mem);
-    parse_from_source(
-        TokenSource::PreExpanded {
-            tokens,
-            cursor: 0,
-            src,
-            names,
-        },
-        version,
-        c_depth,
-        src.len(),
-        &mut scratch,
-    )?;
-    Ok(scratch.into_parsed())
-}
-
 fn parse_from_source<'s>(
     mut lex: TokenSource<'s>,
     version: LuaVersion,
@@ -199,6 +143,7 @@ fn parse_from_source<'s>(
         end_lines,
         lex_buf,
         stacks,
+        streamed,
     } = scratch;
     let mut p = Parser::new(lex, cur, version, c_depth, chunk, end_lines, stacks)?;
     let r = p.main(src_len);
@@ -224,6 +169,7 @@ fn parse_from_source<'s>(
     stk.funcs = funcs;
     stk.gotos = gotos;
     *lex_buf = lex.take_buf();
+    *streamed = lex.take_streamed();
     Ok(())
 }
 
@@ -272,6 +218,8 @@ impl<'s> Parser<'s> {
             gotos,
             last_line: 1,
             upval_chain_51,
+            tok_ix: 0,
+            rec: None,
         })
     }
 
@@ -342,6 +290,10 @@ struct Parser<'s> {
     /// goes through `_ENV` (which would itself be an upvalue) and 5.5
     /// tolerates a wider cap.
     upval_chain_51: LVec<FnUvSlot>,
+    /// the number of `tok` among the tokens read, the first being 0
+    tok_ix: u32,
+    /// set while parsing again to place a compile error (see [`Marks`])
+    rec: Option<Box<marks::Recording>>,
 }
 
 pub(crate) struct FnFlow {
