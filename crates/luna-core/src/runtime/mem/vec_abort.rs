@@ -55,7 +55,7 @@ impl<T> LVec<T> {
     /// # Safety
     /// `len() < capacity()`.
     #[inline(always)]
-    pub unsafe fn push_in_room(&mut self, v: T) {
+    pub(crate) unsafe fn push_in_room(&mut self, v: T) {
         debug_assert!(self.len < self.cap);
         // SAFETY: the caller's contract: the slot is inside the block and unused
         unsafe { self.ptr.as_ptr().add(self.len).write(v) };
