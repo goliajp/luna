@@ -24,9 +24,8 @@ use crate::runtime::mem::LVec;
 /// must_be_send::<luna_core::Vm>(); // error[E0277]: `Vm` cannot be sent between threads safely
 /// ```
 ///
-/// A future `feature = "send"` will gate an
-/// opt-in `Arc<RwLock<T>>` mode with a hard ≤8% perf regression
-/// budget.
+/// A future `feature = "send"` will gate an opt-in `Arc<RwLock<T>>` mode with a
+/// hard ≤8% perf regression budget.
 // fixed field order: the interpreter's hot paths are tuned to this layout
 // (stack, frames and the call counters near the front), and letting the
 // compiler reorder it after an unrelated field change costs instructions
@@ -89,11 +88,10 @@ pub struct Vm {
     #[doc(hidden)]
     pub jit: crate::vm::jit_state::JitState,
 
-    /// Host roots — a `Vec<Value>` traced as an extra GC root set.
-    /// `Lua` facade handles (`LuaFunction`, `LuaTable`, `LuaRoot`) hold
-    /// indices into this vector so the underlying `Gc<T>` stays alive
-    /// across `eval` calls / yield boundaries. Freed slots are recycled
-    /// through `host_roots_free`.
+    /// Host roots — a `Vec<Value>` traced as an extra GC root set. `Lua` facade
+    /// handles (`LuaFunction`, `LuaTable`, `LuaRoot`) hold indices into this
+    /// vector so the underlying `Gc<T>` stays alive across `eval` calls / yield
+    /// boundaries. Freed slots are recycled through `host_roots_free`.
     pub(crate) host_roots: LVec<crate::vm::host_roots::HostRootSlot>,
     /// Recycled-slot index pool. `pin_host` pops the
     /// back if non-empty, else extends `host_roots`. Generation
@@ -126,9 +124,8 @@ pub struct Vm {
     /// `call_value` entry (`public_call_depth == 0`).
     pub(crate) error_traceback: Option<Vec<Vec<u8>>>,
 
-    /// `(source_name, line)` of the most recent error. Set by the
-    /// dispatcher / lexer / parser; cleared when a new call_value
-    /// enters cleanly.
+    /// `(source_name, line)` of the most recent error. Set by the dispatcher /
+    /// lexer / parser; cleared when a new call_value enters cleanly.
     pub(crate) last_error_source: Option<(String, u32)>,
     /// VM creation time (os.clock)
     pub(super) started: std::time::Instant,
@@ -280,15 +277,13 @@ pub struct Vm {
     /// [`Vm::set_async_slice`].
     pub(crate) async_slice_size: i64,
 
-    /// Set by the dispatcher's native-call path
-    /// when an async-marked [`NativeClosure`] is invoked under
-    /// `async_mode`. The Vm pauses the dispatcher (same sentinel-Err
-    /// mechanism as `host_yield_pending` — see `exec_with` +
-    /// `call_value_impl`), stashes the in-flight future +
-    /// post-completion context here, and surfaces them to
-    /// `EvalFuture::poll` via `drive_one`. Cleared by `drive_one`
-    /// once the future is moved out into a
-    /// `DispatchOutcome::AsyncNativeAwaiting`.
+    /// Set by the dispatcher's native-call path when an async-marked
+    /// [`NativeClosure`] is invoked under `async_mode`. The Vm pauses the
+    /// dispatcher (same sentinel-Err mechanism as `host_yield_pending` — see
+    /// `exec_with` + `call_value_impl`), stashes the in-flight future +
+    /// post-completion context here, and surfaces them to `EvalFuture::poll`
+    /// via `drive_one`. Cleared by `drive_one` once the future is moved out
+    /// into a `DispatchOutcome::AsyncNativeAwaiting`.
     pub(crate) pending_async_native_fut:
         Option<std::pin::Pin<Box<dyn std::future::Future<Output = Result<u32, LuaError>>>>>,
 

@@ -13,6 +13,7 @@ mod boxed;
 mod ctx;
 mod map;
 mod owner;
+mod policy;
 mod pool;
 mod resize;
 mod vec;
@@ -20,9 +21,10 @@ mod vec_abort;
 
 pub use any::LAny;
 pub use boxed::{LBox, LSlice};
-pub use ctx::{BlockKind, MemCtx, MemRef, MemoryLimit, MemoryPolicy, Oom, RawAllocFn};
+pub use ctx::{BlockKind, MemCtx, MemRef, Oom, RawAllocFn};
 pub use map::{LMap, WordHasher, word_hash};
 pub use owner::MemOwner;
+pub use policy::{MemoryLimit, MemoryPolicy};
 pub use vec::{Drain, LVec};
 
 #[cfg(test)]
