@@ -72,7 +72,7 @@ impl C<'_, '_> {
                 self.emit(self.abc(Kind::Return, a, l.b, 0))?;
             }
             // FORPREP jumps to its FORLOOP, which jumps back to the body
-            Op::ForPrep | Op::ForLoop => {
+            Op::ForPrep | Op::ForLoop | Op::ForLoopF => {
                 let a = self.asm.run(l.a, 4)?;
                 let (k, target) = if l.op == Op::ForPrep {
                     (Kind::ForPrep, pc + l.bx as i64)

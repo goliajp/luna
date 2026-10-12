@@ -80,7 +80,7 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
     } = *lw;
     // the index, the count or limit, the step, and the loop variable when
     // it is a copy of the index
-    let v55 = rop.inst.op() == Op::ForLoop55;
+    let v55 = rop.inst.op().plain_for_loop() == Op::ForLoop55;
     let (r_cur, r_x, r_step, r_var) = if v55 {
         (a + 2, a, a + 1, None)
     } else {

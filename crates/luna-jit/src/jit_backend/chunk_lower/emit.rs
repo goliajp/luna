@@ -304,7 +304,9 @@ fn emit_pcs<M: Module>(
             Op::GetUpval => emit_calls::emit_get_upval(module, bcx, st, f, pc, ins)?,
             Op::Call => emit_calls::emit_self_call(module, bcx, st, f, pc, ins)?,
             Op::ForPrep | Op::ForPrep55 => emit_for::emit_for_prep(module, bcx, st, f, pc, ins)?,
-            Op::ForLoop | Op::ForLoop55 => emit_for_loop::emit_for_loop(bcx, st, f, pc, ins),
+            Op::ForLoop | Op::ForLoop55 | Op::ForLoopF | Op::ForLoop55F => {
+                emit_for_loop::emit_for_loop(bcx, st, f, pc, ins)
+            }
             Op::Lt | Op::Le | Op::Eq => pc = emit_basic::emit_cmp(bcx, st, f, pc, ins),
             Op::NewTable => emit_table_set::emit_new_table(module, bcx, st, f, pc, ins)?,
             Op::SetTable => emit_table_set::emit_set_table(module, bcx, f, ins)?,

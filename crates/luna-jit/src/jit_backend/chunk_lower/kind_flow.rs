@@ -200,9 +200,12 @@ fn apply_bb_kinds(
                     *slot = ret_kind;
                 }
             }
-            Op::ForPrep | Op::ForLoop | Op::ForPrep55 | Op::ForLoop55 => {
-                apply_for_kinds(pre53, reg_kinds, ins, state)
-            }
+            Op::ForPrep
+            | Op::ForLoop
+            | Op::ForPrep55
+            | Op::ForLoop55
+            | Op::ForLoopF
+            | Op::ForLoop55F => apply_for_kinds(pre53, reg_kinds, ins, state),
             Op::NewTable => {
                 if let Some(slot) = state.get_mut(ins.a() as usize) {
                     *slot = RegKind::Table;
@@ -266,7 +269,7 @@ fn apply_for_kinds(pre53: bool, reg_kinds: &[RegKind], ins: Inst, state: &mut [R
         _ => RegKind::Int,
     };
     // 5.5 loops count down whatever the dialect
-    let pre53 = pre53 && matches!(ins.op(), Op::ForPrep | Op::ForLoop);
+    let pre53 = pre53 && matches!(ins.op(), Op::ForPrep | Op::ForLoop | Op::ForLoopF);
     let mut set = |reg: usize, k: RegKind| {
         if let Some(s) = state.get_mut(reg) {
             *s = k;

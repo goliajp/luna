@@ -89,8 +89,8 @@ impl Op {
     /// The layout of the loop a `for` opcode belongs to.
     pub fn for_layout(self) -> Option<ForLayout> {
         Some(match self {
-            Op::ForPrep | Op::ForLoop => ForLayout::Num,
-            Op::ForPrep55 | Op::ForLoop55 => ForLayout::Num55,
+            Op::ForPrep | Op::ForLoop | Op::ForLoopF => ForLayout::Num,
+            Op::ForPrep55 | Op::ForLoop55 | Op::ForLoop55F => ForLayout::Num55,
             Op::TForPrep53 | Op::TForCall53 | Op::TForLoop53 => ForLayout::Gen53,
             Op::TForPrep | Op::TForCall | Op::TForLoop => ForLayout::Gen54,
             Op::TForPrep55 | Op::TForCall55 | Op::TForLoop55 => ForLayout::Gen55,
@@ -105,7 +105,21 @@ impl Op {
 
     /// A numeric `for` step.
     pub fn is_for_loop(self) -> bool {
-        matches!(self, Op::ForLoop | Op::ForLoop55)
+        matches!(
+            self,
+            Op::ForLoop | Op::ForLoop55 | Op::ForLoopF | Op::ForLoop55F
+        )
+    }
+
+    /// The numeric `for` step an [`Op::ForLoopF`] or [`Op::ForLoop55F`]
+    /// stands for; any other opcode itself. They differ only in which kind
+    /// of loop the interpreter tests for first.
+    pub fn plain_for_loop(self) -> Op {
+        match self {
+            Op::ForLoopF => Op::ForLoop,
+            Op::ForLoop55F => Op::ForLoop55,
+            op => op,
+        }
     }
 
     /// A generic `for` prepare.
