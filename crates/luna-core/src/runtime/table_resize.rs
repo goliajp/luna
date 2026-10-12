@@ -243,8 +243,8 @@ impl Table {
             // SAFETY: `i` is inside the old hash part, still allocated
             let n = unsafe { *old_nodes.add(i) };
             if !n.val.is_nil() {
-                let _ = self.set_norm(heap, n.key(), n.val);
-                if n.neg_zero {
+                self.reinsert(n.key(), n.val, n.khash);
+                if n.neg_zero() {
                     self.mark_neg_zero();
                 }
             }
@@ -253,6 +253,21 @@ impl Table {
         // entries have been moved over
         unsafe { Self::free_nodes(mem, old_nodes, old_nodes_len) };
         Ok(())
+    }
+
+    /// Put back a key of the old hash part after a resize. The keys are
+    /// distinct and the new parts were sized to hold them all, so there is
+    /// nothing to look up first and a node is always free.
+    #[inline]
+    fn reinsert(&mut self, k: Value, v: Value, khash: u16) {
+        if let Value::Int(i) = k
+            && let Some(idx) = self.array_index(i)
+        {
+            self.aset(idx, v);
+            return;
+        }
+        let placed = self.place_new(k, v, khash);
+        debug_assert!(placed, "a resized hash part holds every old key");
     }
 
     /// Preallocate the array part (table.create); existing contents are

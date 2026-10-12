@@ -75,7 +75,7 @@ impl Table {
 
     pub(super) fn mark_neg_zero(&mut self) {
         if let Some(i) = self.find_node(Value::Int(0)) {
-            self.nodes_mut()[i].neg_zero = true;
+            self.nodes_mut()[i].set_neg_zero();
         }
     }
 
@@ -249,55 +249,10 @@ impl Table {
         // as in `set_norm`: never a read-only table
         debug_assert!(!self.is_readonly());
         self.hdr.aux = 0;
-        if self.nodes().is_empty() {
+        if self.nodes().is_empty() || !self.place_new(k, v, node::khash_of(k)) {
             self.rehash(heap, k)?;
             return self.set_norm(heap, k, v);
-        }
-        let mp = self.main_position(k);
-        // a main position holding no value is taken over as PUC
-        // `luaH_newkey` does: a free node, or one whose key was removed or
-        // swept, which keeps its `next` so the chain through it stays whole
-        if self.nodes()[mp].val.is_nil() {
-            let next = self.nodes()[mp].next;
-            self.nodes_mut()[mp] = Node::new(k, v, next);
-            return Ok(());
-        }
-        let Some(free) = self.free_pos() else {
-            self.rehash(heap, k)?;
-            return self.set_norm(heap, k, v);
-        };
-        let other_mp = self.main_position(self.nodes()[mp].key());
-        if other_mp != mp {
-            // colliding node is out of its main position: relocate it to the
-            // free slot and take its place
-            let mut prev = other_mp;
-            while self.nodes()[prev].next != mp as i32 {
-                prev = self.nodes()[prev].next as usize;
-            }
-            self.nodes_mut()[prev].next = free as i32;
-            let moved = self.nodes()[mp];
-            self.nodes_mut()[free] = moved;
-            self.nodes_mut()[mp] = Node::new(k, v, NONE);
-        } else {
-            // colliding node owns this position: chain the new node behind it
-            let next = self.nodes()[mp].next;
-            self.nodes_mut()[free] = Node::new(k, v, next);
-            self.nodes_mut()[mp].next = free as i32;
         }
         Ok(())
-    }
-
-    pub(super) fn free_pos(&mut self) -> Option<usize> {
-        while self.lastfree > 0 {
-            self.lastfree -= 1;
-            let n = &self.nodes()[self.lastfree as usize];
-            // Dead-key slots are still occupied for chain purposes (their
-            // `next` may be the only path to a downstream entry) — don't
-            // hand them out as free.
-            if n.is_free() {
-                return Some(self.lastfree as usize);
-            }
-        }
-        None
     }
 }

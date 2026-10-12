@@ -96,7 +96,7 @@ impl Table {
                 // unmarked by the weak-key trace, so its string key gets
                 // freed while `find_node` still raw_eq's it walking the
                 // chain (a use-after-free ASAN reports on Linux).
-                if !n.dead_key
+                if !n.dead_key()
                     && matches!(
                         n.key(),
                         Value::Table(_)
@@ -108,7 +108,7 @@ impl Table {
                     )
                 {
                     n.key_tag = crate::runtime::value::tag::NIL;
-                    n.dead_key = true;
+                    n.set_dead_key();
                 }
                 continue;
             }
@@ -134,7 +134,7 @@ impl Table {
                         | Value::Str(_)
                 ) {
                     n.key_tag = crate::runtime::value::tag::NIL;
-                    n.dead_key = true;
+                    n.set_dead_key();
                 }
             } else {
                 // entry survives — resurrect any string reachable through it
