@@ -161,7 +161,7 @@ impl Vm {
     /// limit raises "stack overflow" there instead of the message, and one
     /// past the room an overflow left "error in error handling".
     pub(crate) fn format_pushes(&mut self, parts: &[Option<u32>]) -> Option<LuaError> {
-        let top = self.native_top()?;
+        let top = self.raise_from.or_else(|| self.native_top())?;
         self.pushes_from(top, parts, 0)
     }
 
@@ -176,7 +176,7 @@ impl Vm {
         if self.native_on_top() {
             return self.format_pushes(&[Some(conv)]);
         }
-        let top = self.lua_window_end();
+        let top = self.raise_from.unwrap_or_else(|| self.lua_window_end());
         let name = (varinfo && self.version() == LuaVersion::Lua53).then_some(2);
         self.pushes_from(top, &[name, Some(conv), Some(3)], 1)
     }

@@ -101,7 +101,15 @@ impl Vm {
     /// a Lua caller adds.
     pub(crate) fn call_err_at(&mut self, v: Value, top: u32) -> crate::vm::error::LuaError {
         let lua = !self.native_on_top();
+        // the message is formatted from there too
+        self.raise_from = Some(top);
+        self.overflow_top = None;
         let e = self.call_err(v);
+        self.raise_from = None;
+        if self.overflow_top.is_some() {
+            // formatting it ran out of stack: that overflow is raised
+            return e;
+        }
         let positioned = u32::from(lua && self.version() < LuaVersion::Lua54);
         self.overflow_top = Some(top + u32::from(self.varinfo_pushed) + positioned);
         e
@@ -151,7 +159,11 @@ impl Vm {
         let out = match catcher {
             Some(Some(handler)) if !self.msgh_applied.is_some_and(|v| v.raw_eq(err)) => {
                 handled = true;
-                self.call_msgh_at(handler, err, at)
+                match self.errormsg_room(at) {
+                    Ok(()) => self.call_msgh_at(handler, err, at),
+                    // the room for the handler ran out: it runs on that
+                    Err(e) => self.raise_to_handler(e.0),
+                }
             }
             None => {
                 if self.keep_error_traceback && self.error_traceback.is_none() {
@@ -224,6 +236,16 @@ impl Vm {
             .rev()
             .find_map(CallFrame::lua)
             .map(|f| f.base + f.closure.proto.max_stack as u32 + positioned_message + varinfo)
+    }
+
+    /// The slot 5.1 and 5.2 `luaG_errormsg` take for the message handler
+    /// it puts at `at` (`incr_top`), which may find the stack full.
+    fn errormsg_room(&mut self, at: Option<u32>) -> Result<(), crate::vm::error::LuaError> {
+        match (self.version(), at) {
+            (LuaVersion::Lua51, Some(at)) => self.check_lua_stack(at + 1, 1, false),
+            (LuaVersion::Lua52, Some(at)) => self.check_lua_stack(at + 2, 0, false),
+            _ => Ok(()),
+        }
     }
 
     /// Run an xpcall message handler on `err`, as PUC's `luaG_errormsg`

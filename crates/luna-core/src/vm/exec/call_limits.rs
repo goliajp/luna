@@ -12,7 +12,7 @@ impl Vm {
     /// (`luaT_adjustvarargs`); the fast path counts that slot for every
     /// call and the slow one takes it back.
     #[inline(always)]
-    pub(super) fn check_lua_stack(
+    pub(crate) fn check_lua_stack(
         &mut self,
         top: u32,
         need: u32,

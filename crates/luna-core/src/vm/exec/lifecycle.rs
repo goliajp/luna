@@ -102,6 +102,7 @@ impl Vm {
             },
             c_overflow_err: None,
             overflow_top: None,
+            raise_from: None,
             varinfo_pushed: false,
             stack_size: stack_size::initial(version),
             closing_err: None,
