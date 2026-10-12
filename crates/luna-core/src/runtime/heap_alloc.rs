@@ -71,10 +71,8 @@ impl Heap {
     /// [`Heap::new_table`], failing when memory runs out.
     #[inline]
     pub fn try_new_table(&mut self) -> Result<Gc<Table>, Oom> {
-        // table_pool fast path. When btrees-
-        // style alloc bursts have left freed Tables in the pool, pop a
-        // recycled one and reset its fields instead of mallocing fresh.
-        // Saves ~30ns per alloc (malloc roundtrip elided).
+        // tables freed by earlier allocation bursts wait in the pool: one
+        // is reset instead of allocating afresh (~30 ns a table)
         let p = if let Some(ptr) = self.table_pool.pop() {
             let t = ptr.as_ptr();
             // gc-verify: the pointer is alive again — drop it from the
