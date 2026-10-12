@@ -122,13 +122,11 @@ fn s_sub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// again).
 #[doc(hidden)]
 pub fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<LuaStr>> {
-    match vm.heap.try_intern(sub_bytes(&s, i, j)) {
-        Ok(r) => Some(r),
-        Err(_) => {
-            vm.jit_park_oom();
-            None
-        }
+    let r = vm.heap.intern_or_none(sub_bytes(&s, i, j));
+    if r.is_none() {
+        vm.jit_park_oom();
     }
+    r
 }
 
 /// [`str_sub`] in the interpreter, raising a memory error when the string
