@@ -44,7 +44,10 @@ impl Vm {
                 // for the handler and traceback of the error (see
                 // `raise_to_handler`)
                 let act = self.running_natives.pop().expect("pushed by the caller");
-                self.note_errored_native(act, e.0);
+                // a yield on its way out is no error of the native's
+                if !self.control_in_flight() {
+                    self.note_errored_native(act, e.0);
+                }
                 Err(e)
             }
         }
