@@ -128,13 +128,11 @@ impl Vm {
         let callback = at.is_none();
         let at = at.or_else(|| self.native_top());
         let placed = match at {
-            None => self.place_call(len as u32, f, args).map(|slot| {
+            None => self.place_call(len as u32, f, args).inspect(|_| {
                 self.top = self.stack.len() as u32;
-                slot
             }),
-            Some(slot) => self.place_call(slot, f, args).map(|slot| {
+            Some(slot) => self.place_call(slot, f, args).inspect(|&slot| {
                 self.top = self.stack.len().max(slot as usize + 1 + args.len()) as u32;
-                slot
             }),
         };
         let func_slot = match placed {
