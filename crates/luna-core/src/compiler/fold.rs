@@ -5,6 +5,7 @@ use super::ctconst::{Arith, fold_numbers};
 use super::{Chunk, Expr};
 use crate::frontend::ast::{BinOp, ExprId, UnOp};
 use crate::numeric::Num;
+use crate::runtime::mem::LVec;
 use crate::version::LuaVersion;
 
 /// Constant-fold arithmetic over two numeric literals where Lua semantics
@@ -16,7 +17,7 @@ pub(super) fn fold_arith(
     ast: &Chunk,
     rhs: ExprId,
     version: LuaVersion,
-    zeros: &mut Vec<f64>,
+    zeros: &mut LVec<f64>,
 ) -> Option<Exp> {
     let l = match le {
         Exp::Int(i) => Num::Int(*i),
@@ -44,7 +45,7 @@ pub(super) fn numeral(
     ast: &Chunk,
     id: ExprId,
     version: LuaVersion,
-    zeros: &mut Vec<f64>,
+    zeros: &mut LVec<f64>,
 ) -> Option<Num> {
     if crate::native_stack::is_low(crate::native_stack::RESERVE) {
         return None;
@@ -52,27 +53,32 @@ pub(super) fn numeral(
     let v51 = version == LuaVersion::Lua51;
     // the left spine of arithmetic operators, outermost first: a long
     // chain (`1 + 1 + ... + 1`) is folded without recursion
-    let mut ops: Vec<(BinOp, ExprId)> = Vec::new();
+    let mut ops = LVec::new(ast.exprs.mem());
     let mut cur = id;
     while let Expr::BinOp { op, lhs, rhs, .. } = *ast.expr(cur) {
         if v51 && matches!(op, BinOp::And | BinOp::Or) {
             break;
         }
-        ops.push((op, rhs));
+        ops.push_or_abort((op, rhs));
         cur = lhs;
     }
-    let mut z = Vec::new();
+    let mut z = LVec::new(ast.exprs.mem());
     let mut n = numeral_leaf(ast, cur, version, &mut z)?;
-    for (op, rhs) in ops.into_iter().rev() {
+    for &(op, rhs) in ops.iter().rev() {
         let r = numeral(ast, rhs, version, &mut z)?;
         n = fold_nums(op, n, (ast, rhs, r), version)?;
     }
-    zeros.extend(z);
+    zeros.extend_from_slice_or_abort(&z);
     Some(n)
 }
 
 /// [`numeral`] of an expression that is not an arithmetic operator.
-fn numeral_leaf(ast: &Chunk, id: ExprId, version: LuaVersion, zeros: &mut Vec<f64>) -> Option<Num> {
+fn numeral_leaf(
+    ast: &Chunk,
+    id: ExprId,
+    version: LuaVersion,
+    zeros: &mut LVec<f64>,
+) -> Option<Num> {
     let v51 = version == LuaVersion::Lua51;
     match ast.expr(id) {
         Expr::Int(i) => Some(Num::Int(*i)),
@@ -89,12 +95,12 @@ fn numeral_leaf(ast: &Chunk, id: ExprId, version: LuaVersion, zeros: &mut Vec<f6
             rhs,
             ..
         } if v51 => {
-            let mut z = Vec::new();
+            let mut z = LVec::new(ast.exprs.mem());
             if !always_falsy(ast, *lhs, &mut z) {
                 return None;
             }
             let n = numeral(ast, *rhs, version, &mut z)?;
-            zeros.extend(z);
+            zeros.extend_from_slice_or_abort(&z);
             Some(n)
         }
         Expr::BinOp {
@@ -151,7 +157,7 @@ fn literal(ast: &Chunk, id: ExprId) -> Option<Lit> {
 
 /// `nil`, `false`, or `C and` one of them where `C` is a literal or an
 /// equality test of two literals.
-fn always_falsy(ast: &Chunk, id: ExprId, zeros: &mut Vec<f64>) -> bool {
+fn always_falsy(ast: &Chunk, id: ExprId, zeros: &mut LVec<f64>) -> bool {
     if crate::native_stack::is_low(crate::native_stack::RESERVE) {
         return false;
     }
@@ -169,7 +175,7 @@ fn always_falsy(ast: &Chunk, id: ExprId, zeros: &mut Vec<f64>) -> bool {
 
 /// A literal, or an equality test of two whose zeros (left first) go on
 /// `zeros`: PUC compiles the test's operands as constants.
-fn fixed_condition(ast: &Chunk, id: ExprId, zeros: &mut Vec<f64>) -> bool {
+fn fixed_condition(ast: &Chunk, id: ExprId, zeros: &mut LVec<f64>) -> bool {
     if crate::native_stack::is_low(crate::native_stack::RESERVE) {
         return false;
     }
@@ -188,7 +194,7 @@ fn fixed_condition(ast: &Chunk, id: ExprId, zeros: &mut Vec<f64>) -> bool {
                 if let Lit::Truthy(Some(f)) = lit
                     && f == 0.0
                 {
-                    zeros.push(f);
+                    zeros.push_or_abort(f);
                 }
             }
             true

@@ -38,7 +38,7 @@ impl Compiler<'_> {
         if self.version != LuaVersion::Lua51 || !is_logical(self.ast, lhs) {
             return Ok((open, None));
         }
-        let mut zeros = Vec::new();
+        let mut zeros = LVec::new(self.heap.mem());
         let le = numeral(self.ast, lhs, self.version, &mut zeros).map(|n| {
             self.note_zeros(&zeros);
             match n {
@@ -65,7 +65,7 @@ impl Compiler<'_> {
             return self.binop_eq_modern(op, le, rhs, open);
         }
         let BinOpOpen { saved, saved_force } = open;
-        let mut zeros = Vec::new();
+        let mut zeros = LVec::new(self.heap.mem());
         if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros) {
             self.note_zeros(&zeros);
             self.force_line = saved_force;
