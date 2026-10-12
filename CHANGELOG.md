@@ -644,6 +644,9 @@ optimization.
 
 ### Fixed
 
+- A load that failed part way left the lists the parser was gathering in
+  the vectors a Vm keeps from one load to the next, and every later load
+  added to them: a Vm whose loads kept failing held more memory each time.
 - Trace JIT (all three trace code generators: baseline, Cranelift and
   LLVM): a native function a trace copied into another register (`local
   g = f`, the function and arguments of a call, a native passed to a Lua
