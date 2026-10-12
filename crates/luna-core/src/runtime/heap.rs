@@ -435,7 +435,7 @@ mod pace;
 #[path = "heap_sweep.rs"]
 mod sweep;
 pub(crate) use self::mark::Marker;
-use self::mark::{drain_marker, weak_key_alive};
+use self::mark::{blacken, drain_marker, weak_key_alive};
 
 #[cfg(feature = "gc-verify")]
 #[path = "heap_verify.rs"]
