@@ -231,8 +231,7 @@ pub unsafe extern "C" fn lua_sethook(
             }
         }
         Some(f) => {
-            // when memory runs out the displaced Lua hook is not kept: the
-            // function cannot raise
+            // without memory the displaced Lua hook is not kept: this cannot raise
             if let Some(lua) = old.func.filter(|_| is_lua_hook(old.func))
                 && let Ok(t) = hook_table(api.vm)
             {
