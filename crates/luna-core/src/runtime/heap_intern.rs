@@ -26,10 +26,20 @@ impl Heap {
     /// [`Heap::intern`], failing when memory runs out.
     #[inline]
     pub fn try_intern(&mut self, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
+        match self.intern_or_none(bytes) {
+            Some(s) => Ok(s),
+            None => Err(Oom(self.mem.mem())),
+        }
+    }
+
+    /// [`Heap::try_intern`] with the failure as `None`: one register to
+    /// return, where the `Result` takes two.
+    fn intern_or_none(&mut self, bytes: &[u8]) -> Option<Gc<LuaStr>> {
         if bytes.len() <= string::MAX_SHORT_LEN {
             let (p, is_new) = self
                 .strings
-                .intern(self.mem.mem(), bytes, self.seed, self.hash51)?;
+                .intern(self.mem.mem(), bytes, self.seed, self.hash51)
+                .ok()?;
             if is_new {
                 // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
                 unsafe { self.link(p as *mut GcHeader) };
@@ -57,14 +67,14 @@ impl Heap {
                 }
             }
             // SAFETY: `p` is an interned string the heap manages: new and linked above, or found in the table and kept from this cycle's sweep by the recoloring above
-            Ok(unsafe { Gc::from_ptr(p) })
+            Some(unsafe { Gc::from_ptr(p) })
         } else {
-            let p = string::alloc_long(self.mem.mem(), bytes, self.seed, self.hash51)?;
+            let p = string::alloc_long(self.mem.mem(), bytes, self.seed, self.hash51).ok()?;
             // SAFETY: `alloc_long` just allocated `p`, linked nowhere yet
             unsafe { self.link(p as *mut GcHeader) };
             self.bytes += string::alloc_size(bytes.len());
             // SAFETY: `p` is the string linked just above
-            Ok(unsafe { Gc::from_ptr(p) })
+            Some(unsafe { Gc::from_ptr(p) })
         }
     }
 
