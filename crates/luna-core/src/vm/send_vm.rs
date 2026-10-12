@@ -233,7 +233,7 @@ impl SendVm {
     /// pattern is awkward across the lock boundary.
     pub fn get_global(&self, name: &str) -> Value {
         self.with_vm_mut(|vm| {
-            let key = vm.str_value(name.as_bytes())?;
+            let key = vm.str_value(name.as_bytes()).unwrap_or(Value::Nil);
             // SAFETY: Gc<T> = NonNull<T> over the single-threaded
             // GC heap (the lock guard above re-establishes the
             // single-mutator invariant). Globals table is reachable
