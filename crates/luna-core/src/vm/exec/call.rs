@@ -264,16 +264,17 @@ impl Vm {
         // 5.1 to 5.3 copy the fixed parameters (`adjust_varargs`) and 5.4 on
         // the function too (`luaT_adjustvarargs`); the extras stay just
         // below the base, the slots they came from are dead
-        let gap = if proto.is_vararg {
-            nparams + u32::from(self.version >= LuaVersion::Lua54)
+        let base = if proto.is_vararg {
+            func_slot + 1 + n_varargs + nparams + u32::from(self.version >= LuaVersion::Lua54)
         } else {
-            0
+            func_slot + 1
         };
-        let base = func_slot + 1 + n_varargs + gap;
         let max = proto.max_stack as u32;
         let need = (base + max) as usize;
         if self.stack.len() < need || self.frames.len() == self.frames.capacity() {
-            self.frame_room(need)?;
+            // out of line, and nothing computed here is live across it: the
+            // call starts over once there is room
+            return self.push_frame_after_room(cl, func_slot, nargs, nresults, from_c, need);
         }
         // the frame stack has room: tested just above, and pushed before any
         // write through the stack could make the compiler test again
@@ -375,16 +376,24 @@ impl Vm {
         Ok(())
     }
 
-    /// Room for a new Lua frame: `need` stack slots and one more frame,
-    /// collecting in an emergency when memory runs out. Out of line, and
-    /// taking nothing the caller has to build first.
+    /// [`Vm::push_frame`] once there is room for the frame: `need` stack
+    /// slots and one more frame, collecting in an emergency when memory runs
+    /// out.
     #[cold]
     #[inline(never)]
-    fn frame_room(&mut self, need: usize) -> Result<(), LuaError> {
+    fn push_frame_after_room(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        func_slot: u32,
+        nargs: u32,
+        nresults: i32,
+        from_c: bool,
+        need: usize,
+    ) -> Result<(), LuaError> {
         self.grow_stack(need)?;
         if self.frames.len() == self.frames.capacity() {
             self.retry_oom(|vm| vm.frames.reserve(1))?;
         }
-        Ok(())
+        self.push_frame(cl, func_slot, nargs, nresults, from_c)
     }
 }
