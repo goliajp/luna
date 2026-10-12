@@ -160,7 +160,8 @@ impl Vm {
         let extra = self.call_target_varinfo(v);
         let tn = self.obj_typename(v);
         let msg = self.compose_type_err("call", &tn, &extra);
-        self.runerror_named(&msg, &extra)
+        let conv = self.type_err_conv(&extra);
+        self.runerror_named(&msg, &extra, conv)
     }
 
     /// Name the offending call target. A metamethod dispatch pushes a `Cont`
@@ -218,9 +219,11 @@ impl Vm {
     /// current arithmetic instruction when it can be recovered from bytecode.
     pub(crate) fn no_int_rep_err(&mut self) -> LuaError {
         let extra = self.bad_operand_varinfo();
+        // `"number%s has no integer representation"`
         self.runerror_named(
             &format!("number{extra} has no integer representation"),
             &extra,
+            1,
         )
     }
 

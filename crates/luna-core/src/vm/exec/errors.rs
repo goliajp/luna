@@ -66,6 +66,22 @@ impl Vm {
 
     /// [`Vm::rt_err`] with a message to format.
     pub(crate) fn rt_errf(&mut self, msg: std::fmt::Arguments<'_>) -> LuaError {
+        self.rt_errf_conv(msg, 0, false)
+    }
+
+    /// [`Vm::rt_errf`] for a message PUC formats with `conv` conversions,
+    /// after (5.3, `varinfo`) the operand's name was formatted and pushed:
+    /// the pushes that format it may find the stack full (see
+    /// `format_pushes`).
+    pub(crate) fn rt_errf_conv(
+        &mut self,
+        msg: std::fmt::Arguments<'_>,
+        conv: u32,
+        varinfo: bool,
+    ) -> LuaError {
+        if let Some(e) = self.runerror_pushes(conv, varinfo) {
+            return e;
+        }
         self.varinfo_pushed = false;
         // `luaG_runerror` pushes the message (a native's stack only: a
         // Lua frame's handler goes above its window)
@@ -162,13 +178,29 @@ impl Vm {
         let extra = self.subject_varinfo(v);
         let tn = self.obj_typename(v);
         let msg = self.compose_type_err(what, &tn, &extra);
-        self.runerror_named(&msg, &extra)
+        let conv = self.type_err_conv(&extra);
+        self.runerror_named(&msg, &extra, conv)
     }
 
-    /// [`Self::runerror`] for a message that names an operand with `extra`
-    /// (see `varinfo_pushed`).
-    pub(super) fn runerror_named(&mut self, msg: &str, extra: &str) -> LuaError {
-        let e = self.runerror(msg);
+    /// The conversions of PUC's `luaG_typeerror` format for an operand
+    /// named by `extra`: 5.3 `"attempt to %s a %s value%s"`; before, the
+    /// named form `"attempt to %s %s '%s' (a %s value)"` or the bare one.
+    pub(super) fn type_err_conv(&self, extra: &str) -> u32 {
+        if self.version() > LuaVersion::Lua52 {
+            return 3;
+        }
+        let inner = extra.trim_start().trim_start_matches('(');
+        if inner.is_empty() || inner.starts_with("metamethod") {
+            2
+        } else {
+            4
+        }
+    }
+
+    /// [`Self::runerror`] for a message of `conv` conversions that names an
+    /// operand with `extra` (see `varinfo_pushed`).
+    pub(super) fn runerror_named(&mut self, msg: &str, extra: &str, conv: u32) -> LuaError {
+        let e = self.runerror_conv(msg, conv, !extra.is_empty());
         self.varinfo_pushed = self.version() >= LuaVersion::Lua53 && !extra.is_empty();
         e
     }

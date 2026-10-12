@@ -1,6 +1,7 @@
 //! Debug hooks: the hook state, installing a hook, and firing the call,
 //! return, line and count events.
 
+use super::stack_size;
 use super::*;
 
 /// Per-thread debug hook state (PUC `lua_State` hook/hookmask/basehookcount/
@@ -183,6 +184,12 @@ impl Vm {
         if let (Value::LightUserdata(cf), Some(host)) = (hook, self.host_hook) {
             return self.run_host_hook(host, cf, event, line);
         }
+        // `luaD_hook` makes sure of `LUA_MINSTACK` slots above the running
+        // function's top first
+        let top = self
+            .native_top()
+            .unwrap_or_else(|| self.lua_window_end().max(self.top));
+        self.check_lua_stack(top, stack_size::MIN_STACK, false)?;
         let saved_top = self.top;
         let saved_len = self.stack.len();
         let name = self.str_value(event)?;
@@ -203,10 +210,7 @@ impl Vm {
         // `hookf` runs at the interrupted function's top (a Lua frame's
         // whole window, or the open results of a call above it) and pushes
         // its registry table before the hook
-        let at = self
-            .native_top()
-            .unwrap_or_else(|| self.lua_window_end().max(self.top))
-            + 1;
+        let at = top + 1;
         let r = self.call_value_impl(hook, &[name, lv], from_native, Some(at));
         self.pending_is_hook = false;
         self.in_hook = false;
