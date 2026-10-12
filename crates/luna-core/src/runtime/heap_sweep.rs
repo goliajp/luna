@@ -36,6 +36,8 @@ impl Heap {
             self.all = head;
         }
         self.live -= freed;
+        // a sweep keeps the order of `all`, so the young boundary (marked,
+        // so it survived) still splits new objects from old ones
         #[cfg(feature = "gc-verify")]
         self.verify_no_dangling("full_sweep");
         #[cfg(any(debug_assertions, feature = "gc-verify"))]
@@ -76,6 +78,9 @@ impl Heap {
         // is already a live bug.
         #[cfg(feature = "gc-verify")]
         self.verify_no_dangling("sweep_step");
+        // survivors went to the head of `all`, in front of the young
+        // boundary: an emergency collection marks them as young, which only
+        // keeps them longer
         if self.sweep_cur.is_null() {
             self.phase = GcPhase::Pause;
             self.mem_ctx().gc_cycle_ended(self.bytes);

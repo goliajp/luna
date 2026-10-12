@@ -284,7 +284,7 @@ impl Vm {
         slot: usize,
         name: &str,
         v: Value,
-    ) {
+    ) -> Result<(), crate::runtime::mem::Oom> {
         let stack = match co {
             Some(co) if !self.is_current_thread(Some(co)) => {
                 // the coroutine's saved stack is traced through `co`; re-gray it
@@ -294,11 +294,10 @@ impl Vm {
             }
             _ => &mut self.stack,
         };
-        if stack.len() <= slot {
-            stack.resize_or_abort(slot + 1, Value::Nil);
-        }
+        stack.resize(stack.len().max(slot + 1), Value::Nil)?;
         stack[slot] = v;
         Vm::unseal_after_local_write(stack, slot, name);
+        Ok(())
     }
 }
 

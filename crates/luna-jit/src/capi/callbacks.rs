@@ -16,7 +16,11 @@ pub unsafe extern "C" fn luna_capi_lua_getglobal(L: *mut LuaState, name: *const 
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
     // SAFETY: `name` is a NUL-terminated string (PUC's contract)
-    let key = api.str(unsafe { c_bytes(name) }.unwrap_or_default());
+    let key = or_raise!(
+        api,
+        api.str(unsafe { c_bytes(name) }.unwrap_or_default()),
+        0
+    );
     let g = tables::globals_value(&mut api);
     api.push(key);
     tables::index_into_top(&mut api, g, key)
@@ -35,7 +39,7 @@ pub unsafe extern "C" fn luna_capi_lua_setglobal(L: *mut LuaState, name: *const 
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
     // SAFETY: `name` is a NUL-terminated string (PUC's contract)
-    let key = api.str(unsafe { c_bytes(name) }.unwrap_or_default());
+    let key = or_raise!(api, api.str(unsafe { c_bytes(name) }.unwrap_or_default()));
     let g = tables::globals_value(&mut api);
     let v = api.get_or_nil(-1);
     api.push(key);
@@ -61,10 +65,13 @@ pub unsafe extern "C" fn luna_capi_lua_register(
     name: *const c_char,
     f: LuaCFunction,
 ) {
-    // SAFETY: the caller's contract (# Safety)
+    // SAFETY: the caller's contract (# Safety); the C wrapper throws what
+    // either raises, and the second runs only when the first did not
     unsafe {
-        push::lua_pushcclosure(L, f, 0);
-        luna_capi_lua_setglobal(L, name);
+        push::luna_capi_lua_pushcclosure(L, f, 0);
+        if (*(*L).g).raised == 0 {
+            luna_capi_lua_setglobal(L, name);
+        }
     }
 }
 

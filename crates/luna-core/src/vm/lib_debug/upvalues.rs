@@ -65,10 +65,10 @@ pub(super) fn d_getupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     };
     match found {
         Some((name, value)) => {
-            let nm = Value::Str(vm.heap.intern(name.as_bytes()));
-            Ok(vm.nat_return(fs, &[nm, value]))
+            let nm = vm.str_value(name.as_bytes())?;
+            vm.nat_ret(fs, &[nm, value])
         }
-        None => Ok(vm.nat_return(fs, &[])),
+        None => vm.nat_ret(fs, &[]),
     }
 }
 
@@ -95,10 +95,10 @@ pub(super) fn d_setupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     };
     match name {
         Some(name) => {
-            let nm = Value::Str(vm.heap.intern(name.as_bytes()));
-            Ok(vm.nat_return(fs, &[nm]))
+            let nm = vm.str_value(name.as_bytes())?;
+            vm.nat_ret(fs, &[nm])
         }
-        None => Ok(vm.nat_return(fs, &[])),
+        None => vm.nat_ret(fs, &[]),
     }
 }
 
@@ -137,7 +137,7 @@ fn check_upval(
 pub(super) fn d_upvalueid(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let (_, _, id) = check_upval(vm, Args::new(fs, nargs), 0, 1, false)?;
     let r = id.map_or(Value::Nil, Value::LightUserdata);
-    Ok(vm.nat_return(fs, &[r]))
+    vm.nat_ret(fs, &[r])
 }
 
 pub(super) fn d_upvaluejoin(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

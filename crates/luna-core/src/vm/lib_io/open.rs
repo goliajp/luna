@@ -22,15 +22,15 @@ fn mode_ok(v: LuaVersion, mode: &[u8]) -> bool {
 
 /// The handle for a file `fopen` opened, with the C library's `FILE` when
 /// the Vm opens files as PUC built with MSVC does.
-fn opened(vm: &mut Vm, o: Opened, pipe: bool) -> Gc<Userdata> {
-    let u = new_file(vm, FileHandle::File(o.file), o.spec.writable());
+fn opened(vm: &mut Vm, o: Opened, pipe: bool) -> Result<Gc<Userdata>, LuaError> {
+    let u = new_file(vm, FileHandle::File(o.file), o.spec.writable())?;
     if vm.crt_text {
         let mut f = msvc::CrtFile::open(&o.spec, pipe);
         f.io.mode = o.mode;
         f.io.unicode = o.spec.ccs == Some(fopen::Ccs::Unicode);
         crt::attach(u, f);
     }
-    u
+    Ok(u)
 }
 
 /// A file `fopen` opened: the file, the mode as the library took it, and
@@ -97,10 +97,10 @@ pub(super) fn io_open(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     reset_errno(vm);
     match open_file(vm.crt_text, &name, &mode) {
         Ok(o) => {
-            let u = opened(vm, o, false);
-            Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
+            let u = opened(vm, o, false)?;
+            vm.nat_ret(fs, &[Value::Userdata(u)])
         }
-        Err(e) => Ok(file_fail(vm, fs, Some(&name), &e)),
+        Err(e) => file_fail(vm, fs, Some(&name), &e),
     }
 }
 
@@ -118,11 +118,11 @@ pub(super) fn io_tmpfile(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaEr
         .open(&path)
     {
         Ok(f) => f,
-        Err(e) => return Ok(file_fail(vm, fs, None, &e)),
+        Err(e) => return file_fail(vm, fs, None, &e),
     };
     // tmpfile(3) leaves no name behind; the open handle keeps the file.
     if let Err(e) = std::fs::remove_file(&path) {
-        return Ok(file_fail(vm, fs, None, &e));
+        return file_fail(vm, fs, None, &e);
     }
     // tmpfile(3) opens "w+bD"
     let spec = fopen::libc_mode(b"w+b").expect("a valid mode");
@@ -131,8 +131,8 @@ pub(super) fn io_tmpfile(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaEr
         spec,
         mode: msvc::TextMode::Ansi,
     };
-    let u = opened(vm, o, false);
-    Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
+    let u = opened(vm, o, false)?;
+    vm.nat_ret(fs, &[Value::Userdata(u)])
 }
 
 #[derive(Clone, Copy)]
@@ -191,7 +191,7 @@ fn g_iofile(vm: &mut Vm, fs: u32, nargs: u32, which: Io) -> Result<u32, LuaError
         }
     }
     let cur = default_file(vm, which);
-    Ok(vm.nat_return(fs, &[Value::Userdata(cur)]))
+    vm.nat_ret(fs, &[Value::Userdata(cur)])
 }
 
 /// `opencheck` (5.2+) / 5.1's `fileerror`: open or raise.
@@ -201,7 +201,7 @@ pub(super) fn open_checked(
     mode: &[u8],
 ) -> Result<Gc<Userdata>, LuaError> {
     match open_file(vm.crt_text, name, mode) {
-        Ok(o) => Ok(opened(vm, o, false)),
+        Ok(o) => Ok(opened(vm, o, false)?),
         Err(e) => {
             note_failure(&e);
             let n = String::from_utf8_lossy(c_str(name)).into_owned();

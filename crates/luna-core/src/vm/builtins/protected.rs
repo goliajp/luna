@@ -33,10 +33,10 @@ fn pcall_native(vm: &mut Vm, fs: u32, nargs: u32, first: u32) -> Result<u32, Lua
             let mut out = Vec::with_capacity(results.len() + 1);
             out.push(Value::Bool(true));
             out.extend(results);
-            Ok(vm.nat_return(fs, &out))
+            vm.nat_ret(fs, &out)
         }
         Err(e) if vm.control_in_flight() => Err(e),
-        Err(e) => Ok(vm.nat_return(fs, &[Value::Bool(false), e.0])),
+        Err(e) => vm.nat_ret(fs, &[Value::Bool(false), e.0]),
     }
 }
 
@@ -87,12 +87,12 @@ fn xpcall_native(
             let mut out = Vec::with_capacity(results.len() + 1);
             out.push(Value::Bool(true));
             out.extend(results);
-            Ok(vm.nat_return(fs, &out))
+            vm.nat_ret(fs, &out)
         }
         Err(e) if vm.control_in_flight() => Err(e),
         Err(e) => {
             let m = handle_error(vm, h, e.0);
-            Ok(vm.nat_return(fs, &[Value::Bool(false), m]))
+            vm.nat_ret(fs, &[Value::Bool(false), m])
         }
     }
 }

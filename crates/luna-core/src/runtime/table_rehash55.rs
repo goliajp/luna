@@ -59,8 +59,7 @@ impl Table {
         if nsize > MAX_ASIZE {
             return Err(TableError::Overflow);
         }
-        self.resize(heap, new_asize, nsize);
-        Ok(())
+        self.resize(heap, new_asize, nsize)
     }
 }
 

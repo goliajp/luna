@@ -234,5 +234,7 @@ pub unsafe extern "C" fn luna_jit_str_sub(s: i64, i: i64, j: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, and `s` is
     // a live string
     let (vm, s) = unsafe { (current_jit_vm(), str_arg(s)) };
-    luna_core::vm::lib_string::str_sub(vm, s, i, j).as_ptr() as i64
+    // 0 with a deopt parked when the string cannot be made, as the
+    // allocating helpers do
+    luna_core::vm::lib_string::str_sub(vm, s, i, j).map_or(0, |r| r.as_ptr() as i64)
 }

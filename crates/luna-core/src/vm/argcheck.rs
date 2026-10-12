@@ -126,10 +126,18 @@ pub(crate) fn opt_number(vm: &mut Vm, a: Args, i: u32, default: f64) -> Result<f
 }
 
 /// `luaL_checkinteger`.
+#[inline]
 pub(crate) fn check_integer(vm: &mut Vm, a: Args, i: u32) -> Result<i64, LuaError> {
     if let Value::Int(x) = a.get(vm, i) {
         return Ok(x);
     }
+    check_integer_conv(vm, a, i)
+}
+
+/// [`check_integer`] for an argument that is not an integer already: out
+/// of line, so the common case pays nothing for the conversions.
+#[inline(never)]
+fn check_integer_conv(vm: &mut Vm, a: Args, i: u32) -> Result<i64, LuaError> {
     let n = match to_num(vm, a.get(vm, i)) {
         Some(n) if !a.is_none(i) => n,
         _ => return Err(type_error(vm, a, i, "number")),
@@ -206,6 +214,7 @@ pub(crate) fn arg_expected(vm: &mut Vm, a: Args, i: u32, tname: &str) -> LuaErro
 /// converted with the dialect's rendering and, as `lua_tolstring` does,
 /// the string replaces it in the argument slot, which keeps it alive for
 /// as long as the native runs.
+#[inline]
 pub(crate) fn check_string(
     vm: &mut Vm,
     a: Args,
@@ -215,9 +224,21 @@ pub(crate) fn check_string(
     if let Value::Str(s) = v {
         return Ok(s);
     }
+    check_string_conv(vm, a, i, v)
+}
+
+/// [`check_string`] for an argument that is not a string already: out of
+/// line, so the common case pays nothing for the conversion.
+#[inline(never)]
+fn check_string_conv(
+    vm: &mut Vm,
+    a: Args,
+    i: u32,
+    v: Value,
+) -> Result<crate::runtime::Gc<crate::runtime::LuaStr>, LuaError> {
     match to_str_bytes(vm, v) {
         Some(b) if !a.is_none(i) => {
-            let s = vm.heap.intern(&b);
+            let s = vm.alloc_str(&b)?;
             vm.nat_set_arg(a.fs, i, Value::Str(s));
             Ok(s)
         }

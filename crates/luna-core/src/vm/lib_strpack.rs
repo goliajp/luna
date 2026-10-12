@@ -4,6 +4,7 @@
 //! endianness / alignment control.
 
 use crate::runtime::Value;
+use crate::runtime::mem::LVec;
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
@@ -51,7 +52,7 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     let fmt = format_arg(vm, a)?;
     let v55 = vm.version() >= LuaVersion::Lua55;
     let mut h = Header::new();
-    let mut out: Vec<u8> = Vec::new();
+    let mut out = vm.new_buf();
     let mut totalsize: u64 = 0;
     // 1-based index of the last argument consumed
     let mut arg: u32 = 1;
@@ -74,8 +75,9 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         vm.native_push(1 + buf);
         return Err(e);
     }
-    let r = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[r]))
+    let r = vm.str_value(&out)?;
+    vm.recycle_buf(out);
+    vm.nat_ret(fs, &[r])
 }
 
 pub(crate) fn s_packsize(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -101,7 +103,7 @@ pub(crate) fn s_packsize(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             return Err(arg_error(vm, 1, "variable-length format"));
         }
     }
-    Ok(vm.nat_return(fs, &[Value::Int(totalsize as i64)]))
+    vm.nat_ret(fs, &[Value::Int(totalsize as i64)])
 }
 
 pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -130,13 +132,13 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         return Err(arg_error(vm, 3, "initial position out of string"));
     }
     let mut pos = rel as u64 - 1;
-    let mut results: Vec<Value> = Vec::new();
+    let mut results = LVec::new(vm.heap.mem());
     // each result read so far is pushed under the next item: they count
     // when one raises
     if let Err(e) = unpack_items(vm, a, &fmt, data, &mut pos, &mut results) {
         vm.native_push(results.len() as u32);
         return Err(e);
     }
-    results.push(Value::Int((pos + 1) as i64));
-    Ok(vm.nat_return(fs, &results))
+    results.push(Value::Int((pos + 1) as i64))?;
+    vm.nat_ret(fs, &results)
 }

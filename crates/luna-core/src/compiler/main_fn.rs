@@ -14,7 +14,7 @@ pub fn compile_chunk_with_last_target(
     heap: &mut Heap,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
     let mut scratch = CompileScratch::new(heap.mem());
-    let source = heap.intern(source_name);
+    let source = heap.try_intern(source_name)?;
     compile_main(ast, &[], version, source, heap, &mut scratch)
 }
 

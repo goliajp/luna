@@ -85,8 +85,7 @@ impl Table {
         if hash_entries > MAX_ASIZE {
             return Err(TableError::Overflow);
         }
-        self.resize(heap, new_asize, hash_entries);
-        Ok(())
+        self.resize(heap, new_asize, hash_entries)
     }
 
     /// Resize the table's array and hash parts. The array part grows
@@ -99,7 +98,12 @@ impl Table {
     /// `Heap::new_table_sized` calls this on a freshly
     /// adopted empty table to pre-allocate the array part, sparing
     /// the table-fill loop from O(log N) intermediate `rehash`es.
-    pub(crate) fn resize(&mut self, heap: &mut Heap, new_asize: usize, hash_entries: usize) {
+    pub(crate) fn resize(
+        &mut self,
+        heap: &mut Heap,
+        new_asize: usize,
+        hash_entries: usize,
+    ) -> Result<(), TableError> {
         let mem = heap.mem();
         let before = self.internal_bytes();
         let hsize = if hash_entries == 0 {
@@ -110,11 +114,21 @@ impl Table {
         // both new parts are allocated before the table changes, so a
         // failed allocation leaves it as it was
         let new_slab = if new_asize > INLINE_ASIZE as usize {
-            Self::alloc_slab(mem, new_asize)
+            Self::alloc_slab(mem, new_asize)?
         } else {
             std::ptr::null_mut()
         };
-        let new_nodes = Self::alloc_nodes(mem, hsize);
+        let new_nodes = match Self::alloc_nodes(mem, hsize) {
+            Ok(p) => p,
+            Err(e) => {
+                if !new_slab.is_null() {
+                    // SAFETY: the slab was just allocated for `new_asize` and
+                    // nothing refers to it
+                    unsafe { Self::free_slab(mem, new_slab, new_asize) };
+                }
+                return Err(e.into());
+            }
+        };
         // the old array part: its slab stays allocated until its entries
         // are moved over; inline entries are copied out first, since the
         // inline storage may become the new backing
@@ -238,22 +252,25 @@ impl Table {
         // SAFETY: the old hash part came from `alloc_nodes(mem, len)` and its
         // entries have been moved over
         unsafe { Self::free_nodes(mem, old_nodes, old_nodes_len) };
+        Ok(())
     }
 
     /// Preallocate the array part (table.create); existing contents are
     /// preserved.
-    pub fn ensure_array(&mut self, heap: &mut Heap, n: usize) {
+    pub fn ensure_array(&mut self, heap: &mut Heap, n: usize) -> Result<(), TableError> {
         if n > self.asize() {
             let hash_entries = self.nodes().iter().filter(|nd| !nd.val.is_nil()).count();
-            self.resize(heap, n, hash_entries);
+            self.resize(heap, n, hash_entries)?;
         }
+        Ok(())
     }
 
     /// Preallocate hash-part capacity (table.create's second size).
-    pub fn ensure_hash(&mut self, heap: &mut Heap, n: usize) {
+    pub fn ensure_hash(&mut self, heap: &mut Heap, n: usize) -> Result<(), TableError> {
         let entries = self.nodes().iter().filter(|nd| !nd.val.is_nil()).count();
         if n > self.nodes().len() {
-            self.resize(heap, self.asize(), n.max(entries));
+            self.resize(heap, self.asize(), n.max(entries))?;
         }
+        Ok(())
     }
 }

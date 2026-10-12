@@ -49,7 +49,7 @@ pub(crate) fn codes_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     }
     match decode(v, bytes, n as usize, strict) {
         Some((code, next)) if !is_cont(at(bytes, next)) => {
-            Ok(vm.nat_return(fs, &[Value::Int(n as i64 + 1), Value::Int(i64::from(code))]))
+            vm.nat_ret(fs, &[Value::Int(n as i64 + 1), Value::Int(i64::from(code))])
         }
         _ => Err(raise_str(vm, "invalid UTF-8 code")),
     }
@@ -63,6 +63,6 @@ pub(crate) fn u_codes(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     if v >= LuaVersion::Lua54 && is_cont(at(s.as_bytes(), 0)) {
         return Err(arg_error(vm, 1, "invalid UTF-8 code"));
     }
-    let it = vm.native_with(codes_iter, Box::new([Value::Bool(!lax)]));
-    Ok(vm.nat_return(fs, &[it, Value::Str(s), Value::Int(0)]))
+    let it = vm.lib_native_with(codes_iter, &[Value::Bool(!lax)])?;
+    vm.nat_ret(fs, &[it, Value::Str(s), Value::Int(0)])
 }

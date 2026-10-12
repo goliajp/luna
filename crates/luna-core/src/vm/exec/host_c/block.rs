@@ -3,7 +3,7 @@
 //! user values.
 
 use super::*;
-use crate::runtime::mem::{BlockKind, LAny, LVec, oom_abort};
+use crate::runtime::mem::{BlockKind, LAny, LVec, Oom};
 use crate::runtime::userdata::UserdataPayload;
 use std::alloc::Layout;
 
@@ -59,28 +59,14 @@ fn trace_block(any: &crate::runtime::mem::LAny, m: &mut crate::vm::UserdataMarke
 #[doc(hidden)]
 impl Vm {
     /// A new full userdata of `size` bytes, zeroed, with `nuv` nil user
-    /// values and no metatable.
-    pub fn host_new_block(&mut self, size: usize, nuv: usize) -> Gc<crate::runtime::Userdata> {
-        let layout = HostBlock::layout(size);
-        let ctx = self.heap.mem_ctx();
-        let mem = match ctx.alloc_zeroed(layout, BlockKind::Other) {
-            Some(p) => p.as_ptr(),
-            None => oom_abort(layout),
-        };
-        let mut uservalues = LVec::new(self.heap.mem());
-        uservalues.resize_or_abort(nuv, Value::Nil);
-        let block = HostBlock {
-            mem,
-            size,
-            uservalues,
-        };
-        let payload = UserdataPayload::Host {
-            type_id: std::any::TypeId::of::<HostBlock>(),
-            data: LAny::new(self.heap.mem(), block, BlockKind::Other)
-                .unwrap_or_else(|_| oom_abort(std::alloc::Layout::new::<HostBlock>())),
-            trace_fn: Some(trace_block),
-        };
-        let u = self.heap.new_userdata(payload, true);
+    /// values and no metatable; a memory error when it cannot be made, after
+    /// an emergency collection.
+    pub fn host_new_block(
+        &mut self,
+        size: usize,
+        nuv: usize,
+    ) -> Result<Gc<crate::runtime::Userdata>, LuaError> {
+        let u = self.retry_oom(|vm| vm.try_new_block(size, nuv))?;
         // the block and the user values count in the heap's size, as PUC's
         // `luaS_newudata` counts them
         let extra = size.saturating_add(nuv * std::mem::size_of::<Value>());
@@ -88,7 +74,34 @@ impl Vm {
         // the borrow covers one store
         unsafe { u.as_mut() }.extra_bytes = extra;
         self.heap.apply_bytes_delta(0, extra);
-        u
+        Ok(u)
+    }
+
+    /// [`Vm::host_new_block`]'s allocations; what was allocated before a
+    /// failure is freed again.
+    fn try_new_block(
+        &mut self,
+        size: usize,
+        nuv: usize,
+    ) -> Result<Gc<crate::runtime::Userdata>, Oom> {
+        let layout = HostBlock::layout(size);
+        let mem = match self.heap.mem_ctx().alloc_zeroed(layout, BlockKind::Other) {
+            Some(p) => p.as_ptr(),
+            None => return Err(Oom(self.heap.mem())),
+        };
+        // from here the block's drop frees `mem`
+        let mut block = HostBlock {
+            mem,
+            size,
+            uservalues: LVec::new(self.heap.mem()),
+        };
+        block.uservalues.resize(nuv, Value::Nil)?;
+        let payload = UserdataPayload::Host {
+            type_id: std::any::TypeId::of::<HostBlock>(),
+            data: LAny::new(self.heap.mem(), block, BlockKind::Other)?,
+            trace_fn: Some(trace_block),
+        };
+        self.heap.try_new_userdata(payload, true)
     }
 
     /// The C API block of userdata `u`, if the C API made it.

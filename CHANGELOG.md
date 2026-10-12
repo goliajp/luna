@@ -644,6 +644,9 @@ optimization.
 
 ### Fixed
 
+- A load that failed part way left the lists the parser was gathering in
+  the vectors a Vm keeps from one load to the next, and every later load
+  added to them: a Vm whose loads kept failing held more memory each time.
 - Trace JIT (all three trace code generators: baseline, Cranelift and
   LLVM): a native function a trace copied into another register (`local
   g = f`, the function and arguments of a call, a native passed to a Lua
@@ -1127,6 +1130,19 @@ optimization.
   and returns the memory error. This needs `panic = "unwind"`; built with
   `panic = "abort"` (the default for `wasm32` targets) a load that runs out
   of memory ends the process, as a standard library container would.
+- Running out of memory is a Lua error everywhere, not only in a load:
+  an allocation the context refuses raises "not enough memory"
+  (`LUA_ERRMEM` from `lua_pcall`, `lua_resume` and the C API functions
+  that allocate, `LuaError::is_memory` from Rust), which `pcall` catches,
+  and the Vm goes on working. As in each dialect's `lmem.c`, an
+  allocation that fails first runs an emergency collection (no
+  finalizers) and tries once more: never in 5.1, in 5.2 while the
+  collector runs, from 5.3 on once the state is built. Compiled code whose
+  helper cannot allocate leaves to the interpreter, which runs the
+  instruction again. Each operation that fails leaves the object it was
+  changing as it was; a block the system allocator cannot give is the same
+  memory error. The constructors without `try_` (`Vm::new`,
+  `Heap::new_table`, ...) still end the process when memory runs out.
 - luna-aot links `x86_64-pc-windows-msvc` without Visual Studio, on
   Linux, macOS or Windows: `clang-cl` and `lld-link` from LLVM with the
   MSVC C runtime and Windows SDK from `xwin splat`, named by

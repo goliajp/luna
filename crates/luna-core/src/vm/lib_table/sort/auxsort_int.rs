@@ -39,7 +39,7 @@ impl Sorter {
             }
             self.geti(vm, i)?;
             let pivot = Self::at(vm, 1);
-            Self::push(vm, pivot);
+            Self::push(vm, pivot)?;
             self.geti(vm, u - 1)?;
             self.set2(vm, i, u - 1)?;
             i = l;

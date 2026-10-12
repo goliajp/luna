@@ -101,13 +101,9 @@ impl Vm {
         v: V,
     ) -> Result<(), LuaError> {
         let v = v.into_value(self);
-        let k = Value::Str(self.heap.intern(name));
-        // SAFETY: `self.globals` is a root of this Vm; the borrow lives for the one `set`, which touches only the heap and the table and does not collect, and `&mut self` rules out another reference into it
-        if let Err(e) = unsafe { self.globals.as_mut() }.set(&mut self.heap, k, v) {
-            return Err(self.table_error(e));
-        }
-        self.heap.barrier_back(self.globals);
-        Ok(())
+        // `v`, when new, is young until the table holds it
+        let k = self.str_value(name)?;
+        self.raw_set(self.globals, k, v)
     }
 
     /// Mark `t` read-only (`on = true`) or writable again (`on = false`),
@@ -272,10 +268,11 @@ impl Vm {
     /// raw; nil when `v` has no metatable or the field is absent.
     pub fn metafield(&mut self, v: Value, event: &str) -> Value {
         match self.metatable_of(v) {
-            Some(mt) => {
-                let key = Value::Str(self.heap.intern(event.as_bytes()));
-                mt.get(key)
-            }
+            // a name no string has been made for is no table's key
+            Some(mt) => match self.heap.find_interned(event.as_bytes()) {
+                Some(key) => mt.get(Value::Str(key)),
+                None => Value::Nil,
+            },
             None => Value::Nil,
         }
     }

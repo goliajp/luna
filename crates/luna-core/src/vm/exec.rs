@@ -61,6 +61,7 @@ mod jit_tforcall;
 mod lifecycle;
 mod limits;
 mod load;
+mod mem;
 mod meta;
 mod names;
 mod native_args;

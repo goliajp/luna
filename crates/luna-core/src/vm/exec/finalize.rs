@@ -6,24 +6,30 @@ impl Vm {
     /// Register a table for finalization if its (just-set) metatable carries a
     /// `__gc` metamethod (PUC luaC_checkfinalizer at setmetatable time — adding
     /// `__gc` to the metatable afterwards does not retroactively register).
-    pub(crate) fn check_finalizer(&mut self, t: Gc<Table>) {
+    pub(crate) fn check_finalizer(&mut self, t: Gc<Table>) -> Result<(), LuaError> {
         // Tables gained finalizers in 5.2; PUC 5.1 runs `__gc` for userdata only.
         if self.version == crate::version::LuaVersion::Lua51 {
-            return;
+            return Ok(());
         }
         if !self.get_mm(Value::Table(t), Mm::Gc).is_nil() {
-            self.heap.register_finalizable(t);
+            // `t` is the operand of the running `setmetatable`, a root
+            self.retry_oom(|vm| vm.heap.register_finalizable(t))?;
         }
+        Ok(())
     }
 
     /// Same as [`Self::check_finalizer`] for a userdata (the C API's
     /// `lua_setmetatable` from 5.2 on). PUC 5.1 instead marks every
     /// userdata that gets a metatable and looks for `__gc` when it is
     /// collected, as `newproxy` does.
-    pub(crate) fn check_finalizer_userdata(&mut self, u: Gc<crate::runtime::Userdata>) {
+    pub(crate) fn check_finalizer_userdata(
+        &mut self,
+        u: Gc<crate::runtime::Userdata>,
+    ) -> Result<(), LuaError> {
         if !self.get_mm(Value::Userdata(u), Mm::Gc).is_nil() {
-            self.heap.register_finalizable_userdata(u);
+            self.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;
         }
+        Ok(())
     }
 
     /// Run pending `__gc` finalizers (objects the collector resurrected for
@@ -86,9 +92,10 @@ impl Vm {
                                 Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
                                 _ => "no message".to_string(),
                             };
-                            let msg = format!("error in __gc metamethod ({inner})");
-                            let s = Value::Str(self.heap.intern(msg.as_bytes()));
-                            LuaError(s)
+                            self.error_from(
+                                None,
+                                format_args!("error in __gc metamethod ({inner})"),
+                            )
                         } else {
                             e
                         };

@@ -4,7 +4,8 @@ use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
-use super::ctx::{MemCtx, MemRef, MemoryPolicy, Mode, RawAllocFn, kind_codes};
+use super::MemoryPolicy;
+use super::ctx::{MemCtx, MemRef, Mode, RawAllocFn, kind_codes};
 use crate::version::LuaVersion;
 
 /// One owner of a [`MemCtx`]; the context is freed with its last owner.

@@ -153,6 +153,10 @@ impl Vm {
     /// `__newindex` chain without repeating that probe.
     #[inline(always)]
     fn newindex_miss(&mut self, t: Value, key: Value, v: Value) -> Result<(), LuaError> {
+        // the fast path's raw set ran out of memory: that was the first
+        // attempt, so what is left is the emergency collection and one more
+        #[cfg(not(feature = "gc-verify"))]
+        let failed = std::mem::take(&mut self.heap.store_failed);
         // with no `__newindex` to call the write is a raw set (PUC
         // `luaV_finishset`)
         #[cfg(not(feature = "gc-verify"))]
@@ -161,7 +165,11 @@ impl Vm {
                 .metatable()
                 .is_none_or(|mt| self.fast_tm(mt, Mm::NewIndex).is_nil())
         {
-            return self.raw_set(tb, key, v);
+            return if failed {
+                self.raw_set_after_oom(tb, key, v)
+            } else {
+                self.raw_set(tb, key, v)
+            };
         }
         // the fast path tried the existing key unless the table's flags
         // sent it here (`plain_store`): a black table still has it to do

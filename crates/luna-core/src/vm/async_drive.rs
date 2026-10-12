@@ -133,7 +133,7 @@ impl Vm {
     ///
     /// The returned `Value` can be installed under a Lua global via
     /// [`Vm::set_global`], passed as a callback, stored in a table —
-    /// whatever a sync `vm.native(f)` value supports. Calling it from
+    /// whatever a sync `vm.lib_native(f)?` value supports. Calling it from
     /// a sync `Vm::eval` context raises `LuaError` ("async native
     /// called in sync context"); only `Vm::eval_async` (or another
     /// driver that sets `async_mode = true`) can drive it.

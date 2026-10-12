@@ -102,4 +102,32 @@ impl Heap {
             self.bytes = self.bytes.saturating_sub(before - after);
         }
     }
+
+    /// Every live object is rooted now (an interpreter safe point, or the
+    /// end of a collection): objects allocated from here on are young
+    /// until the next such point.
+    #[inline(always)]
+    pub(crate) fn safe_point(&mut self) {
+        self.young = self.all;
+    }
+
+    /// Mark every object allocated since the last [`Heap::safe_point`],
+    /// and the object that was newest then, which keeps the boundary from
+    /// being freed (and its address reused) by the collection. An
+    /// emergency collection runs in the middle of an operation, whose new
+    /// objects may be held only by Rust locals.
+    pub(crate) fn mark_young(&self, m: &mut Marker) {
+        let mut cur = self.all;
+        while !cur.is_null() {
+            // SAFETY: `cur` is on `all`, whose objects are allocated (nothing
+            // is freed while marking); only the header is touched
+            unsafe {
+                m.header(cur);
+                if cur == self.young {
+                    break;
+                }
+                cur = (*cur).next;
+            }
+        }
+    }
 }

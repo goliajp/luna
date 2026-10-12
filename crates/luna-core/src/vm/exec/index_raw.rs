@@ -11,7 +11,32 @@ impl Vm {
         if !self.heap.store_barrier(t) {
             return Err(self.readonly_error());
         }
-        // SAFETY: `t` is a table the caller holds (an operand of the running op or a native argument); the borrow lives for the one `set_inlined`, which touches only the heap and the table and does not collect
+        // SAFETY: `t` is a table the caller holds (an operand of the running op or a native argument); each borrow lives for one `set_inlined`, which touches only the heap and the table and does not collect
+        let r = self.table_op(|vm| unsafe { t.as_mut() }.set_inlined(&mut vm.heap, key, v));
+        match r {
+            Ok(()) => Ok(()),
+            Err(e) => Err(self.table_error_cold(e)),
+        }
+    }
+
+    /// [`Vm::raw_set`] when a first attempt at the same store already ran
+    /// out of memory: the emergency collection, then one more attempt.
+    #[cfg(not(feature = "gc-verify"))]
+    #[cold]
+    #[inline(never)]
+    pub(super) fn raw_set_after_oom(
+        &mut self,
+        t: Gc<Table>,
+        key: Value,
+        v: Value,
+    ) -> Result<(), LuaError> {
+        if !self.emergency_collect() {
+            return Err(crate::runtime::mem::Oom(self.heap.mem()).into());
+        }
+        if !self.heap.store_barrier(t) {
+            return Err(self.readonly_error());
+        }
+        // SAFETY: `t` is a table the caller holds; the borrow lives for the one `set_inlined`, which does not collect
         match unsafe { t.as_mut() }.set_inlined(&mut self.heap, key, v) {
             Ok(()) => Ok(()),
             Err(e) => Err(self.table_error_cold(e)),
@@ -49,12 +74,16 @@ impl Vm {
     /// (PUC `luaG_runerror`). For an embedder that wrote through
     /// [`Table::set`] and got a [`TableError`] back.
     pub fn table_error(&mut self, e: TableError) -> LuaError {
+        if let TableError::Memory(o) = e {
+            return o.into();
+        }
         self.runerror(match e {
             TableError::NilIndex => "table index is nil",
             TableError::NanIndex => "table index is NaN",
             TableError::Overflow => "table overflow",
             TableError::ReadOnly => "Attempt to modify a readonly table",
             TableError::InvalidNext => "invalid key to 'next'",
+            TableError::Memory(_) => unreachable!("handled above"),
         })
     }
 }

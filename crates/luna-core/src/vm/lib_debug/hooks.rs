@@ -41,9 +41,9 @@ pub(super) fn d_gethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     // a C hook (`lua_sethook`) keeps its function as a light userdata
     let external = matches!(state.func, None | Some(Value::LightUserdata(_)));
     let hook = match state.func {
-        _ if armed && external => Value::Str(vm.heap.intern(b"external hook")),
+        _ if armed && external => vm.str_value(b"external hook")?,
         Some(h) if armed => h,
-        _ if v >= LuaVersion::Lua54 => return Ok(vm.nat_return(fs, &[Value::Nil])),
+        _ if v >= LuaVersion::Lua54 => return vm.nat_ret(fs, &[Value::Nil]),
         Some(h) if v <= LuaVersion::Lua52 => h,
         _ => Value::Nil,
     };
@@ -57,6 +57,6 @@ pub(super) fn d_gethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     if state.line {
         mask.push(b'l');
     }
-    let m = Value::Str(vm.heap.intern(&mask));
-    Ok(vm.nat_return(fs, &[hook, m, Value::Int(state.count_base)]))
+    let m = vm.str_value(&mask)?;
+    vm.nat_ret(fs, &[hook, m, Value::Int(state.count_base)])
 }

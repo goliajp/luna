@@ -29,15 +29,16 @@ use load::*;
 use system::*;
 use time::*;
 
-pub(crate) fn open_os_io(vm: &mut Vm) {
-    open_os(vm);
-    lib_io::open_io(vm);
-    open_file_loaders(vm);
+/// Open the `os` and `io` libraries, failing when memory runs out.
+pub(crate) fn try_open_os_io(vm: &mut Vm) -> Result<(), LuaError> {
+    try_open_os(vm)?;
+    lib_io::try_open_io(vm)?;
+    try_open_file_loaders(vm)
 }
 
-/// The os library alone.
-pub(crate) fn open_os(vm: &mut Vm) {
-    let os = vm.heap.new_table();
+/// [`open_os`], failing when memory runs out.
+pub(crate) fn try_open_os(vm: &mut Vm) -> Result<(), LuaError> {
+    let os = vm.lib_table(11)?;
     for (name, f) in [
         ("clock", os_clock as crate::runtime::value::NativeFn),
         ("date", os_date),
@@ -50,32 +51,31 @@ pub(crate) fn open_os(vm: &mut Vm) {
         ("time", os_time),
         ("tmpname", os_tmpname),
     ] {
-        let fv = vm.native(f);
-        set_field(vm, os, name, fv);
+        let fv = vm.lib_native(f)?;
+        set_field(vm, os, name, fv)?;
     }
     // the locale in effect per category, which `os.setlocale` reads and
     // sets: strings, so a script reading them through `debug.getupvalue`
     // cannot change them
-    let c = Value::Str(vm.heap.intern(b"C"));
-    let sl = vm.native_with(os_setlocale, vec![c; LC_COUNT].into_boxed_slice());
-    set_field(vm, os, "setlocale", sl);
-    vm.set_global("os", Value::Table(os))
-        .expect("stdlib registration");
+    let c = vm.str_value(b"C")?;
+    let sl = vm.lib_native_with(os_setlocale, &[c; LC_COUNT])?;
+    set_field(vm, os, "setlocale", sl)?;
+    vm.lib_set_global("os", Value::Table(os))?;
     vm.barrier_back_table(os);
+    Ok(())
 }
 
-/// The base functions that read files, `loadfile` and `dofile`.
-pub(crate) fn open_file_loaders(vm: &mut Vm) {
-    let f = vm.native(nat_loadfile);
-    vm.set_global("loadfile", f).expect("stdlib registration");
-    let f = vm.native(nat_dofile);
-    vm.set_global("dofile", f).expect("stdlib registration");
+/// [`open_file_loaders`], failing when memory runs out.
+pub(crate) fn try_open_file_loaders(vm: &mut Vm) -> Result<(), LuaError> {
+    let f = vm.lib_native(nat_loadfile)?;
+    vm.lib_set_global("loadfile", f)?;
+    let f = vm.lib_native(nat_dofile)?;
+    vm.lib_set_global("dofile", f)?;
+    Ok(())
 }
 
-fn set_field(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) {
-    let k = Value::Str(vm.heap.intern(k.as_bytes()));
-    // SAFETY: `t` is a table the caller allocated or holds in a local, so it is alive; no reference into it is held across this call, and `set` does not collect
-    unsafe { t.as_mut() }
-        .set(&mut vm.heap, k, v)
-        .expect("valid key");
+fn set_field(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) -> Result<(), LuaError> {
+    let k = vm.str_value(k.as_bytes())?;
+    vm.lib_set_value(t, k, v)?;
+    Ok(())
 }

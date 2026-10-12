@@ -3,8 +3,16 @@
 use super::*;
 
 /// Pack `n` into `size` bytes, sign-extending past eight bytes when `neg`.
-pub(crate) fn pack_int(out: &mut Vec<u8>, n: u64, islittle: bool, size: usize, neg: bool) {
+pub(crate) fn pack_int(
+    vm: &mut Vm,
+    out: &mut LVec<u8>,
+    n: u64,
+    islittle: bool,
+    size: usize,
+    neg: bool,
+) -> Result<(), LuaError> {
     let at = out.len();
+    vm.buf_reserve(out, size)?;
     for i in 0..size {
         let b = if i < SZINT as usize {
             (n >> (8 * i)) as u8
@@ -13,11 +21,12 @@ pub(crate) fn pack_int(out: &mut Vec<u8>, n: u64, islittle: bool, size: usize, n
         } else {
             0
         };
-        out.push(b);
+        vm.buf_push(out, &[b])?;
     }
     if !islittle {
         out[at..].reverse();
     }
+    Ok(())
 }
 
 /// Unpack a `size`-byte integer from `bytes[..size]`, sign-extending or
@@ -56,9 +65,21 @@ pub(crate) fn unpack_int(
     Ok(res as i64)
 }
 
-pub(crate) fn float_bytes(out: &mut Vec<u8>, mut b: Vec<u8>, islittle: bool) {
+pub(crate) fn float_bytes(
+    vm: &mut Vm,
+    out: &mut LVec<u8>,
+    b: &mut [u8],
+    islittle: bool,
+) -> Result<(), LuaError> {
     if !islittle {
         b.reverse();
     }
-    out.extend_from_slice(&b);
+    vm.buf_push(out, b)
+}
+
+/// Append `n` zero bytes.
+pub(crate) fn zeros(vm: &mut Vm, out: &mut LVec<u8>, n: usize) -> Result<(), LuaError> {
+    vm.buf_reserve(out, n)?;
+    out.resize(out.len() + n, 0)?;
+    Ok(())
 }

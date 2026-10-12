@@ -14,20 +14,36 @@ use crate::vm::{
 
 /// The opener of library `name` (its global name; `_G` for the base
 /// library).
-fn opener(name: &str) -> fn(&mut Vm) {
+fn opener(name: &str) -> fn(&mut Vm) -> Result<(), LuaError> {
     match name {
-        "_G" => builtins::open_base,
-        "package" => lib_package::open_package_bare,
-        "coroutine" => lib_coroutine::open_coroutine,
-        "table" => lib_table::open_table,
-        "io" => lib_io::open_io,
-        "os" => lib_os_io::open_os,
-        "string" => lib_string::open_string,
-        "bit32" => lib_bit32::open_bit32,
-        "math" => lib_math::open_math,
-        "utf8" => lib_utf8::open_utf8,
-        "debug" => lib_debug::open_debug,
+        "_G" => builtins::try_open_base,
+        "package" => lib_package::try_open_package_bare,
+        "coroutine" => lib_coroutine::try_open_coroutine,
+        "table" => lib_table::try_open_table,
+        "io" => lib_io::try_open_io,
+        "os" => lib_os_io::try_open_os,
+        "string" => lib_string::try_open_string,
+        "bit32" => lib_bit32::try_open_bit32,
+        "math" => lib_math::try_open_math,
+        "utf8" => lib_utf8::try_open_utf8,
+        "debug" => lib_debug::try_open_debug,
         _ => unreachable!("the C API names a standard library"),
+    }
+}
+
+/// Why [`Vm::host_open_lib`] failed.
+#[doc(hidden)]
+pub enum HostOpenError {
+    /// 5.1's "name conflict for module": the global of this name holds a
+    /// value that is not a table
+    Conflict(String),
+    /// an error raised while opening (a memory error)
+    Error(LuaError),
+}
+
+impl From<LuaError> for HostOpenError {
+    fn from(e: LuaError) -> HostOpenError {
+        HostOpenError::Error(e)
     }
 }
 
@@ -35,89 +51,88 @@ fn opener(name: &str) -> fn(&mut Vm) {
 impl Vm {
     /// Open the standard library `name` (`_G` for the base library) as the
     /// dialect's `luaopen_*` does, and return what that function returns.
-    /// The error is 5.1's "name conflict for module": the global of the
-    /// name it holds is a value that is not a table.
-    pub fn host_open_lib(&mut self, name: &str) -> Result<Vec<Value>, String> {
+    pub fn host_open_lib(&mut self, name: &str) -> Result<Vec<Value>, HostOpenError> {
         let g = self.globals;
-        let key = Value::Str(self.heap.intern(name.as_bytes()));
+        let key = self.str_value(name.as_bytes())?;
         if name == "_G" {
-            self.open_lib(builtins::open_base);
-            self.open_lib(lib_os_io::open_file_loaders);
+            self.try_open_lib(builtins::try_open_base)?;
+            self.try_open_lib(lib_os_io::try_open_file_loaders)?;
             if self.version != LuaVersion::Lua51 {
                 return Ok(vec![Value::Table(g)]);
             }
             // 5.1's base library registers itself as `_G`, then the
             // coroutine library, and returns both
-            let loaded = self.host_loaded();
-            self.lib_raw_set(loaded, key, Value::Table(g));
+            let loaded = self.host_loaded()?;
+            self.lib_raw_set(loaded, key, Value::Table(g))?;
             let co = self.host_open_lib("coroutine")?;
             return Ok(vec![Value::Table(g), co[0]]);
         }
         let prev = g.get(key);
         if self.version != LuaVersion::Lua51 {
-            self.open_lib(opener(name));
+            self.try_open_lib(opener(name))?;
             let fresh = g.get(key);
-            self.lib_raw_set(g, key, prev);
+            self.lib_raw_set(g, key, prev)?;
             return Ok(vec![fresh]);
         }
-        let loaded = self.host_loaded();
+        let loaded = self.host_loaded()?;
         let entry = loaded.get(key);
-        self.open_lib(opener(name));
+        self.try_open_lib(opener(name))?;
         let fresh = g.get(key);
-        self.lib_raw_set(g, key, prev);
+        self.lib_raw_set(g, key, prev)?;
         let Value::Table(fresh_t) = fresh else {
             unreachable!("a library is a table");
         };
         let target = match (entry, prev) {
             (Value::Table(t), _) | (Value::Nil, Value::Table(t)) => {
-                self.host_merge(fresh_t, t);
+                self.host_merge(fresh_t, t)?;
                 t
             }
             (_, Value::Nil) => {
-                self.lib_raw_set(g, key, fresh);
+                self.lib_raw_set(g, key, fresh)?;
                 fresh_t
             }
-            _ => return Err(name.to_string()),
+            _ => return Err(HostOpenError::Conflict(name.to_string())),
         };
-        self.lib_raw_set(loaded, key, Value::Table(target));
+        self.lib_raw_set(loaded, key, Value::Table(target))?;
         if name == "string"
             && !target.ptr_eq(fresh_t)
             && let Some(mt) = self.type_mt[3]
         {
-            let k = Value::Str(self.heap.intern(b"__index"));
-            self.lib_raw_set(mt, k, Value::Table(target));
+            let k = self.str_value(b"__index")?;
+            self.lib_raw_set(mt, k, Value::Table(target))?;
         }
         Ok(vec![Value::Table(target)])
     }
 
     /// The registry's `_LOADED` table, made on first use.
-    fn host_loaded(&mut self) -> Gc<Table> {
+    fn host_loaded(&mut self) -> Result<Gc<Table>, LuaError> {
         let reg = self.host_registry();
-        let k = Value::Str(self.heap.intern(b"_LOADED"));
+        let k = self.str_value(b"_LOADED")?;
         if let Value::Table(t) = reg.get(k) {
-            return t;
+            return Ok(t);
         }
-        let t = self.heap.new_table();
-        self.lib_raw_set(reg, k, Value::Table(t));
-        t
+        let t = self.alloc_table()?;
+        self.lib_raw_set(reg, k, Value::Table(t))?;
+        Ok(t)
     }
 
     /// Copy every field of `from` into `to`, as 5.1's `luaL_register` fills
     /// a library table that already exists.
-    fn host_merge(&mut self, from: Gc<Table>, to: Gc<Table>) {
+    fn host_merge(&mut self, from: Gc<Table>, to: Gc<Table>) -> Result<(), LuaError> {
         let mut k = Value::Nil;
         while let Ok(Some((nk, v))) = from.next(k) {
-            self.lib_raw_set(to, nk, v);
+            self.lib_raw_set(to, nk, v)?;
             k = nk;
         }
+        Ok(())
     }
 
-    fn lib_raw_set(&mut self, t: Gc<Table>, k: Value, v: Value) {
+    fn lib_raw_set(&mut self, t: Gc<Table>, k: Value, v: Value) -> Result<(), LuaError> {
         // SAFETY: `t` is reachable from the Vm's roots (the globals, the
-        // registry, or a library table held by the caller); the borrow
+        // registry, or a library table held by the caller); each borrow
         // covers one store, which does not collect
-        let r = unsafe { t.as_mut() }.set(&mut self.heap, k, v);
-        debug_assert!(r.is_ok(), "a string or table key");
+        let r = self.table_op(|vm| unsafe { t.as_mut() }.set(&mut vm.heap, k, v));
         self.heap.barrier_back(t);
+        r.map_err(|e| self.table_error(e))
     }
 }

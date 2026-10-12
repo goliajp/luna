@@ -1,6 +1,8 @@
 //! Metamethod lookup and the continuation plumbing for metamethod calls.
 
 use super::*;
+
+mod c_level;
 mod mm;
 pub(crate) use mm::*;
 
@@ -13,61 +15,6 @@ impl Vm {
         } else {
             r.swap_remove(0)
         })
-    }
-
-    /// The level a call made while a message handler runs fails at with
-    /// "error in error handling" (see `ERRERR_C_DEPTH`).
-    pub(crate) fn errerr_c_depth(&self) -> u32 {
-        if self.version >= LuaVersion::Lua54 {
-            ERRERR_C_DEPTH
-        } else {
-            ERRERR_C_DEPTH_PRE54
-        }
-    }
-
-    /// PUC's check before a call that takes a C level (5.4
-    /// `luaE_checkcstack`, 5.1 `luaD_call`): the call that would run at
-    /// `MAX_C_DEPTH` fails with "C stack overflow", positioned when Lua
-    /// code made it; a message handler running on that error gets a tenth
-    /// more levels before "error in error handling". Whoever passes the
-    /// check takes the level (`c_depth` or `pcall_depth`).
-    #[inline(always)]
-    pub(crate) fn check_c_level(&mut self, positioned: bool) -> Result<(), LuaError> {
-        if self.g.nccalls + 1 < MAX_C_DEPTH {
-            return Ok(());
-        }
-        self.c_level_overflow(positioned)
-    }
-
-    /// [`Vm::check_c_level`] at the limit.
-    #[cold]
-    #[inline(never)]
-    fn c_level_overflow(&mut self, positioned: bool) -> Result<(), LuaError> {
-        let next = self.g.nccalls + 1;
-        if next == MAX_C_DEPTH || self.msgh_depth == 0 {
-            let e = if positioned {
-                self.runerror("C stack overflow")
-            } else {
-                self.plain_err("C stack overflow")
-            };
-            // the refused call keeps its level while its handler runs
-            self.c_overflow_err = Some(e.0);
-            return Err(e);
-        }
-        if next >= self.errerr_c_depth() {
-            return Err(LuaError(self.errerr()));
-        }
-        Ok(())
-    }
-
-    /// Count a metamethod, `__pairs` or `__close` call as PUC counts the C
-    /// call it makes. The caller pushes the continuation that holds the
-    /// level.
-    pub(super) fn enter_c_level(&mut self, positioned: bool) -> Result<(), LuaError> {
-        self.check_c_level(positioned)?;
-        self.g.nccalls += 1;
-        self.g.meta_conts += 1;
-        Ok(())
     }
 
     /// Begin a *yieldable* metamethod call from a VM instruction: `func(args…)`
@@ -86,7 +33,6 @@ impl Vm {
         args: &[Value],
         action: MetaAction,
     ) -> Result<(), LuaError> {
-        self.enter_c_level(true)?;
         let saved_top = self.top;
         let saved_len = self.stack.len() as u32;
         // PUC calls it at `L->top`: the frame's whole window, or for a
@@ -95,7 +41,12 @@ impl Vm {
             MetaAction::Concat { .. } => self.top,
             _ => self.lua_window_end(),
         };
-        self.place_call(cont_slot, func, args);
+        // the room first: once the level is taken nothing may fail before
+        // the continuation that gives it back is pushed. `func` and `args`
+        // are the operands of the running instruction, still on the stack
+        self.place_call(cont_slot, func, args)?;
+        self.cf_room()?;
+        self.enter_c_level(true)?;
         self.top = cont_slot + 1 + args.len() as u32;
         frames_push_sync(
             &mut self.frames,

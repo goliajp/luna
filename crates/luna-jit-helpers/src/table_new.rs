@@ -26,8 +26,15 @@ pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
     if vm.jit.pending_err.is_some() {
         return 0;
     }
-    let g = vm.heap.new_table();
-    g.as_ptr() as i64
+    match vm.heap.try_new_table() {
+        Ok(g) => g.as_ptr() as i64,
+        // compiled code leaves at the `NewTable`, and the interpreter
+        // allocates, collecting in an emergency as compiled code may not
+        Err(_) => {
+            vm.jit_park_oom();
+            0
+        }
+    }
 }
 
 /// A table sized as `NewTable` with the packed operands `ops` (`B` in
@@ -49,10 +56,15 @@ pub unsafe extern "C" fn luna_jit_new_table_sized(ops: i64) -> i64 {
         return 0;
     }
     let (b, c, k) = unpack_table_ops(ops);
-    match vm.heap.new_table_presized(b, c, k) {
-        Some(g) => g.as_ptr() as i64,
-        None => {
+    match vm.heap.try_new_table_presized(b, c, k) {
+        Ok(Some(g)) => g.as_ptr() as i64,
+        Ok(None) => {
             vm.jit.pending_err = Some(vm.rt_err("table overflow"));
+            0
+        }
+        // the interpreter runs the `NewTable` again and allocates
+        Err(_) => {
+            vm.jit_park_oom();
             0
         }
     }
@@ -86,11 +98,13 @@ pub unsafe extern "C" fn luna_jit_table_reserve_list(t: i64, last: i64) {
     // SAFETY: `t` is a live table (# Safety); `reserve_list` never runs the
     // collector, and nothing else refers into the table meanwhile
     let table = unsafe { table_arg(t).as_mut() };
-    if table
-        .reserve_list(&mut vm.heap, last.max(0) as u64)
-        .is_err()
-    {
-        vm.jit.pending_err = Some(vm.rt_err("table overflow"));
+    match table.reserve_list(&mut vm.heap, last.max(0) as u64) {
+        Ok(()) => {}
+        Err(luna_core::runtime::table::TableError::Overflow) => {
+            vm.jit.pending_err = Some(vm.rt_err("table overflow"));
+        }
+        // the interpreter runs the `SetList` again and grows the table
+        Err(_) => vm.jit_park_oom(),
     }
 }
 
@@ -135,9 +149,19 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
     let n_hash_u = if n_hash > 0 { n_hash as usize } else { 0 };
     // sized by the site's `NewTable`, as the interpreter would have made it
     let (b, c, k) = unpack_table_ops(ops);
-    let Some(g) = vm.heap.new_table_presized(b, c, k) else {
-        vm.jit.pending_err = Some(vm.rt_err("table overflow"));
-        return 0;
+    // a table that cannot be made here, at an exit, parks a deopt: the
+    // dispatcher drops the trace's registers and the interpreter runs the
+    // loop again from the trace head
+    let g = match vm.heap.try_new_table_presized(b, c, k) {
+        Ok(Some(g)) => g,
+        Ok(None) => {
+            vm.jit.pending_err = Some(vm.rt_err("table overflow"));
+            return 0;
+        }
+        Err(_) => {
+            vm.jit_park_oom();
+            return 0;
+        }
     };
     // SAFETY: `g` was allocated just above and nothing else refers to it
     // yet; `Table::set` never runs the collector
@@ -153,7 +177,10 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
             };
             luna_core::runtime::Value::pack(*kinds_ptr.add(i), raw)
         };
-        let _ = table.set_int(&mut vm.heap, (i + 1) as i64, v);
+        if table.set_int(&mut vm.heap, (i + 1) as i64, v).is_err() {
+            vm.jit_park_oom();
+            return 0;
+        }
     }
     // Hash slots. Each entry is a
     // (key_ptr: *const LuaStr, raw_bits, kind_byte) triple from
@@ -174,7 +201,10 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
             )
         };
         let key = luna_core::runtime::Value::Str(key);
-        let _ = table.set(&mut vm.heap, key, v);
+        if table.set(&mut vm.heap, key, v).is_err() {
+            vm.jit_park_oom();
+            return 0;
+        }
     }
     g.as_ptr() as i64
 }

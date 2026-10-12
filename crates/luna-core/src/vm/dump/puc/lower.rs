@@ -98,8 +98,8 @@ pub(super) fn build(
     heap: &mut Heap,
     mut raw: RawProto,
     translate: &dyn Fn(&mut RawProto) -> Result<Lowered, String>,
-) -> Result<Gc<Proto>, String> {
-    let mut lowered = translate(&mut raw)?;
+) -> Result<Gc<Proto>, crate::vm::dump::error::Bad> {
+    let mut lowered = translate(&mut raw).map_err(crate::vm::dump::error::Bad::Code)?;
     // a stripped chunk has no line info; the translated one must not
     // invent line 0 for every instruction
     if raw.lines.is_empty() {
@@ -116,12 +116,12 @@ pub(super) fn build(
         .take(u8::MAX as usize)
         .position(|u| &*u.name == "_ENV")
         .map_or(u8::MAX, |i| i as u8);
-    Ok(heap.adopt_proto(Proto {
+    Ok(heap.try_adopt_proto(Proto {
         hdr: GcHeader::new(ObjTag::Proto),
-        code: heap.block_of(lowered.code.into_iter()),
-        consts: heap.block_of(raw.consts.into_iter()),
-        protos: heap.block_of(protos.into_iter()),
-        upvals: heap.block_of(raw.upvals.into_iter()),
+        code: heap.try_block_of(lowered.code.into_iter())?,
+        consts: heap.try_block_of(raw.consts.into_iter())?,
+        protos: heap.try_block_of(protos.into_iter())?,
+        upvals: heap.try_block_of(raw.upvals.into_iter())?,
         num_params: raw.num_params,
         is_vararg: raw.is_vararg,
         // A PUC 5.5 chunk lists its `(vararg table)` local in `locvars` with
@@ -129,11 +129,11 @@ pub(super) fn build(
         has_vararg_table_pseudo: false,
         has_compat_vararg_arg: raw.has_compat_vararg_arg,
         max_stack: lowered.max_stack,
-        lines: heap.block_of(lowered.lines.into_iter()),
+        lines: heap.try_block_of(lowered.lines.into_iter())?,
         source: raw.source,
         line_defined: raw.line_defined,
         last_line_defined: raw.last_line_defined,
-        locvars: heap.block_of(lowered.locvars.into_iter()),
+        locvars: heap.try_block_of(lowered.locvars.into_iter())?,
         cache: std::cell::Cell::new(None),
         jit: std::cell::Cell::new(JitProtoState::Untried),
         jit_next: std::cell::Cell::new(None),
@@ -150,7 +150,7 @@ pub(super) fn build(
             [crate::runtime::function::TRACE_HEADS_NONE; crate::runtime::function::TRACE_HEADS_CAP],
         ),
         trace_call_head_settled: std::cell::Cell::new(false),
-    }))
+    })?)
 }
 
 /// How a jump's target is encoded once the target's luna pc is known.

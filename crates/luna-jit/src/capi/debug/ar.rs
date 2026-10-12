@@ -5,8 +5,8 @@
 //! calls come and go above it. 0 is 5.1's lost tail call.
 
 use super::super::*;
+use super::CStrings;
 use luna_core::vm::exec::host_c::HostAr;
-use std::collections::HashSet;
 
 /// PUC `LUA_IDSIZE`.
 const IDSIZE: usize = 60;
@@ -109,28 +109,6 @@ impl ArBuf {
 
     pub(in super::super) fn as_mut_ptr(&mut self) -> *mut c_void {
         (self as *mut ArBuf).cast()
-    }
-}
-
-/// The strings `lua_getinfo` hands out, kept as long as the thread whose
-/// call returned them: PUC's point into strings of the function, which
-/// live as long as it does.
-#[derive(Default)]
-pub(in super::super) struct CStrings(HashSet<Box<[u8]>>);
-
-impl CStrings {
-    /// `b` NUL-terminated, at an address that stays put.
-    pub(in super::super) fn get(&mut self, b: &[u8]) -> *const c_char {
-        let mut z = Vec::with_capacity(b.len() + 1);
-        z.extend_from_slice(b);
-        z.push(0);
-        if let Some(s) = self.0.get(z.as_slice()) {
-            return s.as_ptr().cast();
-        }
-        let s: Box<[u8]> = z.into_boxed_slice();
-        let p = s.as_ptr().cast();
-        self.0.insert(s);
-        p
     }
 }
 

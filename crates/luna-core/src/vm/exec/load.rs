@@ -4,6 +4,9 @@
 use super::*;
 use crate::runtime::mem::{LVec, Oom, catch_load_oom, outside_load};
 
+mod text;
+pub use text::{ParsedText, TextLoad};
+
 /// The memory error of a load whose frontend ran out of memory.
 #[cold]
 fn load_oom(heap: &crate::runtime::Heap) -> SyntaxError {
@@ -25,7 +28,19 @@ impl Vm {
         chunkname: &[u8],
         name: Option<Gc<crate::runtime::LuaStr>>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
-        self.guarded_load(|vm| vm.load_named_inner(src, chunkname, name))
+        // the parser and the compiler cannot collect (what they made so far
+        // is held only by them), so a load that ran out of memory is run
+        // once more after an emergency collection, as PUC's allocations
+        // inside the parser retry; the source is all in `src`
+        match self.guarded_load(|vm| vm.load_named_inner(src, chunkname, name)) {
+            Err(e) if e.is_memory() && src.len() <= self.loader_input_budget => {
+                if !self.emergency_collect() {
+                    return Err(e);
+                }
+                self.guarded_load(|vm| vm.load_named_inner(src, chunkname, name))
+            }
+            r => r,
+        }
     }
 
     fn load_named_inner(
@@ -59,7 +74,10 @@ impl Vm {
             crate::vm::dump::undump_named(src, &mut self.heap, self.version, allow_puc, chunkname)
                 .map_err(SyntaxError::unpositioned)?
         } else if self.version.is_macro_lua() {
-            let source = name.unwrap_or_else(|| self.heap.intern(chunkname));
+            let source = match name {
+                Some(n) => n,
+                None => self.heap.try_intern(chunkname)?,
+            };
             // MacroLua dialect: drain the lexer into a
             // token vec, run the macro expander pre-pass against the
             // per-Vm registry, then hand the rewritten stream to
@@ -91,7 +109,10 @@ impl Vm {
         } else {
             // PUC's `nCcalls` counts protected calls as well
             let depth = self.g.nccalls;
-            let source = name.unwrap_or_else(|| self.heap.intern(chunkname));
+            let source = match name {
+                Some(n) => n,
+                None => self.heap.try_intern(chunkname)?,
+            };
             crate::frontend::parser::parse_in_place(
                 src,
                 self.version,
@@ -108,7 +129,7 @@ impl Vm {
                 &mut self.compile_scratch,
             )?
         };
-        Ok(self.close_chunk(proto))
+        self.close_chunk(proto)
     }
 
     /// Compile a parsed chunk named `source`, keeping the parse's vectors
@@ -184,14 +205,22 @@ impl Vm {
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         let parsed = parsed.0?;
         self.guarded_load(|vm| {
-            let source = name.unwrap_or_else(|| vm.heap.intern(chunkname));
+            let source = match name {
+                Some(n) => n,
+                None => vm.heap.try_intern(chunkname)?,
+            };
             let proto = vm.compile_text(parsed, source)?;
-            Ok(vm.close_chunk(proto))
+            vm.close_chunk(proto)
         })
     }
 
     /// The closure of a loaded main function over the globals.
-    fn close_chunk(&mut self, proto: Gc<crate::runtime::Proto>) -> Gc<LuaClosure> {
+    fn close_chunk(
+        &mut self,
+        proto: Gc<crate::runtime::Proto>,
+    ) -> Result<Gc<LuaClosure>, SyntaxError> {
+        // the new prototype is held only here until the closure holds it, so
+        // these allocations fail without an emergency collection
         if self.heap.track_chunk_roots {
             self.heap.chunk_roots.push(proto);
         }
@@ -200,91 +229,19 @@ impl Vm {
         // upvalue — that's the main-chunk `_ENV` case. A dumped non-main
         // function with two-or-more upvalues keeps every cell at nil; the
         // host must use `debug.setupvalue` to wire them up. 5.2 calls.lua
-        // :293's `assert(x() == nil)` pins this contract.
+        // :293's `assert(x() == nil)` pins this contract. A synthetic main
+        // chunk with no declared upvalues still gets one cell, so the host can
+        // probe it via `debug.upvalueid`.
         let n = proto.upvals.len();
-        let mut ups: Vec<Gc<Upvalue>> = Vec::with_capacity(n.max(1));
-        if n == 0 {
-            // synthetic main chunk has no declared upvalues, but the engine
-            // still expects at least one cell so the host can probe via
-            // `debug.upvalueid` etc. Match the historical luna shape.
-            ups.push(
-                self.heap
-                    .new_upvalue(UpvalState::Closed(Value::Table(self.globals))),
-            );
-        } else if n == 1 {
-            ups.push(
-                self.heap
-                    .new_upvalue(UpvalState::Closed(Value::Table(self.globals))),
-            );
+        let first = if n <= 1 {
+            Value::Table(self.globals)
         } else {
-            for _ in 0..n {
-                ups.push(self.heap.new_upvalue(UpvalState::Closed(Value::Nil)));
-            }
-        }
-        self.heap.new_closure(proto, ups.into_boxed_slice())
-    }
-}
-
-/// A text chunk being loaded from a reader (see [`Vm::text_load`]).
-#[doc(hidden)]
-pub struct TextLoad {
-    version: crate::version::LuaVersion,
-    depth: u32,
-    budget: usize,
-    scratch: crate::frontend::parser::ParseScratch,
-}
-
-/// The outcome of [`TextLoad::parse`], for [`Vm::load_parsed`].
-#[doc(hidden)]
-pub struct ParsedText(Result<crate::frontend::parser::Parsed, SyntaxError>);
-
-impl TextLoad {
-    /// Parse the chunk whose first piece is `first`, calling `feed` for
-    /// each further piece only when the parser moves past the end of what
-    /// it has; `feed` appends a piece and returns true, or returns false at
-    /// the end. Input past the loader's byte budget fails the load with
-    /// "not enough memory", as [`Vm::load`] does.
-    pub fn parse(self, first: Vec<u8>, feed: &mut dyn FnMut(&mut Vec<u8>) -> bool) -> ParsedText {
-        let oom = || SyntaxError {
-            line: 0,
-            msg: b"not enough memory".to_vec(),
+            Value::Nil
         };
-        let budget = self.budget;
-        if first.len() > budget {
-            return ParsedText(Err(oom()));
+        let mut ups = crate::runtime::mem::LVec::with_capacity(self.heap.mem(), n.max(1))?;
+        for _ in 0..n.max(1) {
+            ups.push(self.heap.try_new_upvalue(UpvalState::Closed(first))?)?;
         }
-        // the source read so far lives in the vm's memory; each piece comes
-        // through a buffer of its own first, as the reader hands it over
-        let mut whole = LVec::new(self.scratch.mem());
-        if let Err(e) = whole.extend_from_slice(&first) {
-            return ParsedText(Err(e.into()));
-        }
-        drop(first);
-        let mut over = false;
-        let mut piece = Vec::new();
-        let mut capped = |buf: &mut LVec<u8>| -> Result<bool, Oom> {
-            piece.clear();
-            // the reader runs Lua code, outside the load's unwinding
-            let more = outside_load(|| feed(&mut piece));
-            if buf.len() + piece.len() > budget {
-                over = true;
-                return Ok(false);
-            }
-            buf.extend_from_slice(&piece)?;
-            Ok(more)
-        };
-        let mem = self.scratch.mem();
-        let (version, depth, scratch) = (self.version, self.depth, self.scratch);
-        let r = catch_load_oom(|| {
-            crate::frontend::parser::parse_stream(whole, &mut capped, version, depth, scratch)
-        });
-        let r = match r {
-            Ok(r) => r,
-            Err(()) => {
-                mem.ctx().raise_oom();
-                Err(SyntaxError::memory())
-            }
-        };
-        ParsedText(if over { Err(oom()) } else { r })
+        Ok(self.heap.try_new_closure(proto, &ups)?)
     }
 }

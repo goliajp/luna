@@ -112,6 +112,8 @@ pub(crate) fn undump_named(
 ) -> Result<Gc<Proto>, Vec<u8>> {
     undump_checked(bytes, heap, version, allow_puc).map_err(|r| match r {
         Refusal::Gate(msg) => msg.into_bytes(),
+        // a memory error carries no chunk name (PUC `luaD_throw(L, LUA_ERRMEM)`)
+        Refusal::Bad(error::Bad::Memory) => b"not enough memory".to_vec(),
         Refusal::Bad(bad) => {
             let mut out = error::lundump_name(chunkname).to_vec();
             out.extend_from_slice(b": ");

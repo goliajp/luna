@@ -44,7 +44,10 @@ impl Vm {
                 // for the handler and traceback of the error (see
                 // `raise_to_handler`)
                 let act = self.running_natives.pop().expect("pushed by the caller");
-                self.note_errored_native(act, e.0);
+                // a yield on its way out is no error of the native's
+                if !self.control_in_flight() {
+                    self.note_errored_native(act, e.0);
+                }
                 Err(e)
             }
         }
@@ -63,9 +66,10 @@ impl Vm {
             std::panic::resume_unwind(payload)
         }
         let msg = panic_payload_str(&payload);
-        LuaError(Value::Str(
-            self.heap.intern(format!("native panic: {msg}").as_bytes()),
-        ))
+        match self.fmt_str(format_args!("native panic: {msg}")) {
+            Ok(s) => LuaError(Value::Str(s)),
+            Err(e) => e,
+        }
     }
 
     /// A panic that unwound out of [`Vm::run`] to `exec_with`, which
@@ -137,14 +141,13 @@ impl Vm {
         // the caller's registers sit below `func_slot`; the native's own
         // arguments stay rooted too (see `begin_call`)
         self.gc_top = func_slot + nargs + 1;
-        self.running_natives
-            .push_or_abort(crate::vm::callstack::NativeAct::new(
-                nc,
-                func_slot,
-                nargs,
-                self.frames.len(),
-                ccmt,
-            ));
+        self.push_native_fast(crate::vm::callstack::NativeAct::new(
+            nc,
+            func_slot,
+            nargs,
+            self.frames.len(),
+            ccmt,
+        ))?;
         // no guard here: a panic unwinds to `exec_with`, which raises it as
         // this native's error (see `Vm::unguarded_native_panic`)
         let result = (nc.f)(self, func_slot, nargs);
@@ -183,9 +186,7 @@ impl Vm {
         {
             let res_dst = func_slot + nargs + 1;
             let need = (res_dst + nret) as usize;
-            if self.stack.len() < need {
-                self.grow_stack_or_abort(need);
-            }
+            self.grow_stack(need)?;
             for i in (0..nret).rev() {
                 self.stack[(res_dst + i) as usize] = self.stack[(func_slot + i) as usize];
             }

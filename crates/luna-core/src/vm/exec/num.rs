@@ -2,6 +2,9 @@
 
 use super::*;
 
+mod int_float;
+pub(super) use int_float::*;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ArithOp {
     Add,
@@ -84,6 +87,29 @@ pub(super) fn concat_piece(v: Value, float_fmt: numeric::FloatFmt) -> Option<Vec
         Value::Float(x) => Some(numeric::num_to_string_for(Num::Float(x), float_fmt).into_bytes()),
         _ => None,
     }
+}
+
+/// The bytes `v` contributes to a concatenation: a string's own, or a
+/// number's text kept in `text`; `None` for any other value.
+pub(super) fn concat_piece_into(
+    v: Value,
+    float_fmt: numeric::FloatFmt,
+    text: &mut numeric::NumText,
+) -> Option<&[u8]> {
+    match v {
+        // SAFETY: the string is an operand of the running instruction, in a
+        // register, so it outlives the borrow
+        Value::Str(s) => Some(unsafe { s.as_bytes_unbounded() }),
+        Value::Int(x) => Some(text.set(&numeric::num_to_string(Num::Int(x)))),
+        Value::Float(x) => Some(text.set(&numeric::num_to_string_for(Num::Float(x), float_fmt))),
+        _ => None,
+    }
+}
+
+/// Whether `v` takes part in a concatenation as it is (a string or a
+/// number).
+pub(super) fn is_concat_piece(v: Value) -> bool {
+    matches!(v, Value::Str(_) | Value::Int(_) | Value::Float(_))
 }
 
 /// Index into the per-basic-type metatable table for a non-table value
@@ -263,83 +289,5 @@ pub(super) fn shift_left(a: i64, b: i64) -> i64 {
         0
     } else {
         ((a as u64) << (b as u32)) as i64
-    }
-}
-
-/// i < f, exactly (PUC LTintfloat shape).
-pub(super) fn int_lt_float(i: i64, f: f64) -> bool {
-    if f.is_nan() {
-        return false;
-    }
-    if f >= 9_223_372_036_854_775_808.0 {
-        return true;
-    }
-    if f < -9_223_372_036_854_775_808.0 {
-        return false;
-    }
-    let ff = f.floor();
-    let fi = ff as i64;
-    if f == ff { i < fi } else { i <= fi }
-}
-
-/// i <= f, exactly.
-pub(super) fn int_le_float(i: i64, f: f64) -> bool {
-    if f.is_nan() {
-        return false;
-    }
-    if f >= 9_223_372_036_854_775_808.0 {
-        return true;
-    }
-    if f < -9_223_372_036_854_775_808.0 {
-        return false;
-    }
-    i <= f.floor() as i64
-}
-
-/// Clip a numeric `for` limit to the integer range (PUC forlimit). Returns
-/// (clipped limit, loop-is-empty).
-pub(super) fn int_for_limit(limit: Num, init: i64, step: i64) -> (i64, bool) {
-    match limit {
-        Num::Int(l) => {
-            let empty = if step > 0 { init > l } else { init < l };
-            (l, empty)
-        }
-        Num::Float(f) => {
-            // PUC `forlimit` treats NaN like a limit below the integer
-            // range (`0 < flim` is false): no run upward, down to minint
-            // otherwise.
-            if f.is_nan() {
-                return if step > 0 {
-                    (0, true)
-                } else {
-                    (i64::MIN, false)
-                };
-            }
-            if step > 0 {
-                if f >= 9_223_372_036_854_775_808.0 {
-                    (i64::MAX, false)
-                } else {
-                    let l = f.floor();
-                    if l < -9_223_372_036_854_775_808.0 {
-                        (i64::MIN, true)
-                    } else {
-                        let li = l as i64;
-                        (li, init > li)
-                    }
-                }
-            } else if f <= -9_223_372_036_854_775_808.0 {
-                (i64::MIN, false)
-            } else {
-                let l = f.ceil();
-                if l >= 9_223_372_036_854_775_808.0 {
-                    // PUC forlimit: a positive limit beyond the integer range
-                    // is unreachable for a decreasing loop — empty.
-                    (i64::MAX, true)
-                } else {
-                    let li = l as i64;
-                    (li, init < li)
-                }
-            }
-        }
     }
 }

@@ -1,6 +1,7 @@
 //! Reading lines and whole files, in the chunk sizes each dialect uses.
 
 use super::*;
+use crate::runtime::mem::LVec;
 
 /// `BUFSIZ`, the size of the chunks ≤5.2 read a line in (`LUAL_BUFFERSIZE`).
 #[cfg(any(
@@ -27,21 +28,21 @@ pub(crate) const BUFSIZ: usize = 8192;
 
 /// `read_line`: up to and excluding (`keep_nl`: including) the newline; nil
 /// when nothing at all was read.
-pub(crate) fn read_line(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Result<Value> {
+pub(crate) fn read_line(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> Rd {
     if vm.version() <= LuaVersion::Lua52 {
         return read_line_fgets(vm, u, keep_nl);
     }
-    let mut buf = Vec::new();
+    let mut buf = LVec::new(vm.heap.mem());
     let mut got_nl = false;
     while let Some(c) = getc(u)? {
         if c == b'\n' {
             got_nl = true;
             if keep_nl {
-                buf.push(c);
+                buf.push(c)?;
             }
             break;
         }
-        buf.push(c);
+        buf.push(c)?;
     }
     if got_nl || !buf.is_empty() {
         read_str(vm, &buf)
@@ -53,12 +54,8 @@ pub(crate) fn read_line(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io:
 /// ≤5.2's `read_line` reads with `fgets` and measures each chunk with
 /// `strlen`: a NUL cuts the chunk short there, and a newline after it is
 /// lost, so the line runs on into the next.
-pub(crate) fn read_line_fgets(
-    vm: &mut Vm,
-    u: Gc<Userdata>,
-    keep_nl: bool,
-) -> std::io::Result<Value> {
-    let mut out = Vec::new();
+pub(crate) fn read_line_fgets(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> Rd {
+    let mut out = LVec::new(vm.heap.mem());
     loop {
         let mut chunk = Vec::new();
         while chunk.len() < BUFSIZ - 1 {
@@ -82,10 +79,10 @@ pub(crate) fn read_line_fgets(
         // strlen: up to the first NUL, the whole chunk when there is none
         let len = chunk.iter().position(|&b| b == 0).unwrap_or(chunk.len());
         if len == 0 || chunk[len - 1] != b'\n' {
-            out.extend_from_slice(&chunk[..len]);
+            out.extend_from_slice(&chunk[..len])?;
         } else {
             let end = if keep_nl { len } else { len - 1 };
-            out.extend_from_slice(&chunk[..end]);
+            out.extend_from_slice(&chunk[..end])?;
             return read_str(vm, &out);
         }
     }
@@ -93,22 +90,22 @@ pub(crate) fn read_line_fgets(
 
 /// A string read from a file. One longer than a string can hold is an
 /// allocation failure, which PUC's buffer would meet first.
-pub(crate) fn read_str(vm: &mut Vm, bytes: &[u8]) -> std::io::Result<Value> {
+pub(crate) fn read_str(vm: &mut Vm, bytes: &[u8]) -> Rd {
     if bytes.len() > crate::runtime::string::MAX_LEN {
-        return Err(posix_error(ENOMEM));
+        return Err(posix_error(ENOMEM).into());
     }
-    Ok(Value::Str(vm.heap.intern(bytes)))
+    Ok(vm.str_value(bytes)?)
 }
 
 /// `read_all`: never fails (an empty string at end of file).
-pub(crate) fn read_all(vm: &mut Vm, u: Gc<Userdata>) -> std::io::Result<Value> {
+pub(crate) fn read_all(vm: &mut Vm, u: Gc<Userdata>) -> Rd {
     if u.crt.is_some() {
         let buf = read_all_crt(vm.version(), u);
         return read_str(vm, &buf);
     }
-    let mut buf = Vec::new();
+    let mut buf = LVec::new(vm.heap.mem());
     loop {
-        buf.extend_from_slice(&u.read_buf[u.read_pos..]);
+        buf.extend_from_slice(&u.read_buf[u.read_pos..])?;
         // SAFETY: `u` is a file handle the caller holds; the right-hand side is read before the borrow starts, and the borrow covers one field store
         unsafe { u.as_mut() }.read_pos = u.read_buf.len();
         if !fill(u)? {

@@ -98,7 +98,7 @@ fn r_const(
         ))),
         5 => {
             let b = r.bytes()?;
-            let s = heap.intern(b);
+            let s = heap.try_intern(b)?;
             strings.push(s);
             Value::Str(s)
         }
@@ -137,9 +137,12 @@ fn r_proto(
     // the dumper writes nothing when this proto shares the parent's source.
     let raw = r.bytes()?;
     let source = if raw.is_empty() {
-        parent_source.unwrap_or_else(|| heap.intern(b""))
+        match parent_source {
+            Some(s) => s,
+            None => heap.try_intern(b"")?,
+        }
     } else {
-        heap.intern(raw)
+        heap.try_intern(raw)?
     };
 
     // each count sizes an allocation; `count` refuses one the remaining
@@ -203,22 +206,22 @@ fn r_proto(
         .take(u8::MAX as usize)
         .position(|u| &*u.name == "_ENV")
         .map_or(u8::MAX, |i| i as u8);
-    Ok(heap.adopt_proto(Proto {
+    Ok(heap.try_adopt_proto(Proto {
         hdr: GcHeader::new(ObjTag::Proto),
-        code: heap.block_of(code.into_iter()),
-        consts: heap.block_of(consts.into_iter()),
-        protos: heap.block_of(protos.into_iter()),
-        upvals: heap.block_of(upvals.into_iter()),
+        code: heap.try_block_of(code.into_iter())?,
+        consts: heap.try_block_of(consts.into_iter())?,
+        protos: heap.try_block_of(protos.into_iter())?,
+        upvals: heap.try_block_of(upvals.into_iter())?,
         num_params,
         is_vararg,
         has_vararg_table_pseudo: false,
         has_compat_vararg_arg: false,
         max_stack,
-        lines: heap.block_of(lines.into_iter()),
+        lines: heap.try_block_of(lines.into_iter())?,
         source,
         line_defined,
         last_line_defined,
-        locvars: heap.block_of(locvars.into_iter()),
+        locvars: heap.try_block_of(locvars.into_iter())?,
         cache: std::cell::Cell::new(None),
         jit: std::cell::Cell::new(crate::runtime::function::JitProtoState::Untried),
         jit_next: std::cell::Cell::new(None),
@@ -235,7 +238,7 @@ fn r_proto(
             [crate::runtime::function::TRACE_HEADS_NONE; crate::runtime::function::TRACE_HEADS_CAP],
         ),
         trace_call_head_settled: std::cell::Cell::new(false),
-    }))
+    })?)
 }
 
 /// Reconstruct a prototype tree from a binary chunk produced by [`dump`].

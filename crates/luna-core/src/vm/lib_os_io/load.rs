@@ -48,8 +48,8 @@ pub(crate) fn load_path(
         Err((what, e)) => {
             crate::vm::lib_io::note_failure(&e);
             let text = crate::vm::lib_io::strerror(&e);
-            let msg = format!("cannot {what} {shown}: {text}");
-            return Err(Value::Str(vm.heap.intern(msg.as_bytes())));
+            let msg = vm.fmt_str(format_args!("cannot {what} {shown}: {text}"));
+            return Err(msg.map_or_else(|e| e.0, Value::Str));
         }
     };
     // "no useful error number until here"
@@ -83,12 +83,15 @@ pub(crate) fn load_chunk(
     if let Some(mode) = mode
         && !mode.contains(if binary { &b'b' } else { &b't' })
     {
-        let kind = if binary { "binary" } else { "text" };
-        let msg = format!(
-            "attempt to load a {kind} chunk (mode is '{}')",
-            String::from_utf8_lossy(mode)
-        );
-        return Err(Value::Str(vm.heap.intern(msg.as_bytes())));
+        let kind: &[u8] = if binary { b"binary" } else { b"text" };
+        let msg = vm.concat_str(&[
+            b"attempt to load a ",
+            kind,
+            b" chunk (mode is '",
+            mode,
+            b"')",
+        ]);
+        return Err(msg.unwrap_or_else(|e| e.0));
     }
     match vm.load(src, chunkname) {
         Ok(cl) => Ok(Value::Closure(cl)),
@@ -121,14 +124,14 @@ pub(crate) fn nat_loadfile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             // when the function has one.
             if vm.version() >= LuaVersion::Lua52 && !a.is_none(2) && !cl.upvals().is_empty() {
                 let env = a.get(vm, 2);
-                let uv = vm.heap.new_upvalue(crate::runtime::UpvalState::Closed(env));
+                let uv = vm.lib_closed_upvalue(env)?;
                 // SAFETY: `cl` is the closure `load_path` just built, held only by this local, and `new_upvalue` does not collect; the borrow covers one slot store, inside the bounds checked by `upvals().is_empty()`
                 unsafe { cl.as_mut() }.upvals_mut()[0] = uv;
             }
-            Ok(vm.nat_return(fs, &[Value::Closure(cl)]))
+            vm.nat_ret(fs, &[Value::Closure(cl)])
         }
-        Ok(other) => Ok(vm.nat_return(fs, &[other])),
-        Err(msg) => Ok(vm.nat_return(fs, &[Value::Nil, msg])),
+        Ok(other) => vm.nat_ret(fs, &[other]),
+        Err(msg) => vm.nat_ret(fs, &[Value::Nil, msg]),
     }
 }
 
@@ -148,7 +151,7 @@ pub(super) fn nat_dofile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             } else {
                 vm.call_value(f, &[])?
             };
-            Ok(vm.nat_return(fs, &results))
+            vm.nat_ret(fs, &results)
         }
         Err(msg) => {
             // the message `luaL_loadfile` pushed

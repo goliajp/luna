@@ -154,7 +154,7 @@ pub(super) fn undump_puc_55(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, 
         )
         .into());
     }
-    Ok(lower::build(heap, raw, &translate)?)
+    lower::build(heap, raw, &translate)
 }
 
 fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
@@ -207,7 +207,7 @@ fn read_string(
     }
     let n = r.count(size, 1)?;
     let bytes = r.take(n)?;
-    let s = heap.intern(&bytes[..n - 1]);
+    let s = heap.try_intern(&bytes[..n - 1])?;
     strings.push(s);
     Ok(Some(s))
 }
@@ -289,7 +289,7 @@ fn read_proto(
     // A stripped chunk has no source; errors then report "?".
     let source = match read_string(r, heap, strings)? {
         Some(s) => s,
-        None => heap.intern(b"=?"),
+        None => heap.try_intern(b"=?")?,
     };
 
     let n = read_count(r, 1)?;

@@ -114,6 +114,14 @@ impl ParseScratch {
         chunk.arm_lists.clear();
         chunk.fold_marks.clear();
         self.end_lines.clear();
+        // a parse that failed leaves the lists it was gathering
+        let st = &mut self.stacks;
+        st.exprs.clear();
+        st.stats.clear();
+        st.names.clear();
+        st.attribs.clear();
+        st.fields.clear();
+        st.arms.clear();
     }
 
     /// The tree and statement end lines [`parse_in_place`] left here.

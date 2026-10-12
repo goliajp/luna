@@ -42,8 +42,10 @@ pub(super) fn item54(
     arg: u32,
     fmt: &[u8],
     start: usize,
-    out: &mut Vec<u8>,
+    out: &mut LVec<u8>,
 ) -> Result<usize, LuaError> {
+    // every conversion but a long `%s` and `%q` fits in this
+    vm.buf_reserve(out, cfmt::ITEM_MAX)?;
     // getformat: flags, width and precision bytes ('0' counted as a flag),
     // then the conversion
     let mut p = start;
@@ -103,14 +105,19 @@ pub(super) fn item54(
             }
             addliteral(vm, a, arg, out)?;
         }
-        b's' if form.len() == 2 && plain_str(vm, a, arg, out) => {}
         b's' => {
+            if form.len() == 2
+                && let Some(s) = plain_str(vm, a, arg)
+            {
+                vm.buf_push(out, s.as_bytes())?;
+                return Ok(p + 1);
+            }
             // a `__tostring` runs above the buffer's slot; its result stays
             // pushed over the errors that follow
             let buf = vm.buffer_slot(out.len());
             let s = vm.tostring_value_pushed(a.get(vm, arg), buf)?;
             if form.len() == 2 {
-                out.extend_from_slice(&s);
+                vm.buf_push(out, &s)?;
             } else {
                 if s.contains(&0) {
                     vm.native_push(1);
@@ -121,7 +128,7 @@ pub(super) fn item54(
                     return Err(e);
                 }
                 if !form.contains(&b'.') && s.len() >= 100 {
-                    out.extend_from_slice(&s);
+                    vm.buf_push(out, &s)?;
                 } else {
                     cfmt::cstr(out, &sp, &s);
                 }

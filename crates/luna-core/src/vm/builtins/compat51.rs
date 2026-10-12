@@ -15,12 +15,10 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     let mt = match arg {
         v if !v.truthy() => None,
         Value::Bool(true) => {
-            let m = vm.heap.new_table();
-            // SAFETY: `proxies` is the weak set newproxy carries as its upvalue, so the running native keeps it alive; no reference into it is live across the `set`, which does not collect
-            unsafe { proxies.as_mut() }
-                .set(&mut vm.heap, Value::Table(m), Value::Bool(true))
-                .expect("a table key is never nil or NaN");
-            vm.barrier_back_table(proxies);
+            let m = vm.alloc_table()?;
+            // `proxies` is the weak set newproxy carries as its upvalue, so
+            // the running native keeps it alive
+            vm.lib_set_value(proxies, Value::Table(m), Value::Bool(true))?;
             Some(m)
         }
         v => match vm.metatable_of(v) {
@@ -28,7 +26,7 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             _ => return Err(arg_error(vm, 1, "boolean or proxy expected")),
         },
     };
-    let u = vm.heap.new_userdata(UserdataPayload::Empty, false);
+    let u = vm.lib_userdata(UserdataPayload::Empty, false)?;
     if let Some(mt) = mt {
         // SAFETY: `u` was allocated on the line above and is held only by this local; the borrow covers one call
         unsafe { u.as_mut() }.set_metatable(Some(mt));
@@ -37,9 +35,9 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         // GC time, so adding `__gc` to a shared metatable *after* the
         // proxy was made still works). 5.2+ moved the check to
         // setmetatable time; that's gated by version when needed.
-        vm.heap.register_finalizable_userdata(u);
+        vm.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;
     }
-    Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
+    vm.nat_ret(fs, &[Value::Userdata(u)])
 }
 
 /// PUC 5.1 `gcinfo()` — memory in use, in KB (an integer in PUC, which had
@@ -47,7 +45,7 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
 /// `collectgarbage("count")`. gc.lua 5.1 :88 uses it as a loop guard.
 pub(super) fn nat_gcinfo(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     let kb = (vm.gc_count_bytes() as f64 / 1024.0).floor() as i64;
-    Ok(vm.nat_return(fs, &[Value::Int(kb)]))
+    vm.nat_ret(fs, &[Value::Int(kb)])
 }
 
 /// What PUC 5.1's `getfunc` finds for argument 1 of `getfenv`/`setfenv`.
@@ -116,7 +114,7 @@ pub(super) fn nat_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     // the new table.
     if argcheck::to_num(vm, a.get(vm, 0)).is_some_and(|n| n.as_f64() == 0.0) {
         vm.set_globals(env);
-        return Ok(vm.nat_return(fs, &[]));
+        return vm.nat_ret(fs, &[]);
     }
     let cl = match target {
         FenvTarget::Lua(cl) => cl,
@@ -129,8 +127,8 @@ pub(super) fn nat_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     };
     let env_idx = env_upvalue(cl)
         .ok_or_else(|| raise_str(vm, "'setfenv' cannot change environment of given object"))?;
-    vm.set_closure_env(cl, env_idx, env);
-    Ok(vm.nat_return(fs, &[Value::Closure(cl)]))
+    vm.try_set_closure_env(cl, env_idx, env)?;
+    vm.nat_ret(fs, &[Value::Closure(cl)])
 }
 
 /// PUC 5.1 `getfenv(f|level)`: the env of the Lua function `f` (or of the
@@ -147,5 +145,5 @@ pub(super) fn nat_getfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
         },
         FenvTarget::C => Value::Table(vm.globals()),
     };
-    Ok(vm.nat_return(fs, &[env]))
+    vm.nat_ret(fs, &[env])
 }

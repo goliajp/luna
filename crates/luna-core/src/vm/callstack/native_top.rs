@@ -96,7 +96,7 @@ impl Vm {
     /// push the key first, where the value then goes, so an `__index` it
     /// runs starts one slot higher than in 5.1.
     pub(crate) fn native_getfield(&mut self, obj: Value, key: &[u8]) -> Result<Value, LuaError> {
-        let k = Value::Str(self.heap.intern(key));
+        let k = self.str_value(key)?;
         let key_first = self.version() >= LuaVersion::Lua52;
         self.native_push(u32::from(key_first));
         let v = self.index_value(obj, k)?;
@@ -112,7 +112,7 @@ impl Vm {
         key: &[u8],
         v: Value,
     ) -> Result<(), LuaError> {
-        let k = Value::Str(self.heap.intern(key));
+        let k = self.str_value(key)?;
         let key_pushed = self.version() >= LuaVersion::Lua52;
         self.native_push(u32::from(key_pushed));
         self.newindex_value(obj, k, v)?;

@@ -58,19 +58,8 @@ impl Vm {
 
     /// A new table with room for `narr` array items and `nrec` others
     /// (PUC `lua_createtable`).
-    pub fn host_new_table(&mut self, narr: usize, nrec: usize) -> Gc<Table> {
-        let t = self.heap.new_table();
-        // SAFETY: `t` was allocated above and is held only by this local;
-        // the borrows cover two resizes, which do not collect
-        unsafe {
-            if narr > 0 {
-                t.as_mut().ensure_array(&mut self.heap, narr);
-            }
-            if nrec > 0 {
-                t.as_mut().ensure_hash(&mut self.heap, nrec);
-            }
-        }
-        t
+    pub fn host_new_table(&mut self, narr: usize, nrec: usize) -> Result<Gc<Table>, LuaError> {
+        self.alloc_table_sized(narr, nrec)
     }
 
     /// The entry of `t` after key `k` (PUC `lua_next`); an absent key
@@ -104,7 +93,7 @@ impl Vm {
                 unsafe { t.as_mut() }.set_metatable(mt);
                 self.heap.barrier_back(t);
                 if mt.is_some() {
-                    self.check_finalizer(t);
+                    self.check_finalizer(t)?;
                 }
             }
             Value::Userdata(u) => {
@@ -113,9 +102,9 @@ impl Vm {
                 self.heap.barrier_back(u);
                 if mt.is_some() {
                     if self.version == LuaVersion::Lua51 {
-                        self.heap.register_finalizable_userdata(u);
+                        self.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;
                     } else {
-                        self.check_finalizer_userdata(u);
+                        self.check_finalizer_userdata(u)?;
                     }
                 }
             }
@@ -238,13 +227,13 @@ impl Vm {
 
     /// Give the Lua function `cl` the 5.1 environment `env` (PUC
     /// `lua_setfenv`); `false` when it has no `_ENV` cell, as luna keeps
-    /// a 5.1 environment only in that cell.
+    /// a 5.1 environment only in that cell, or when there is no memory for
+    /// the new cell.
     pub fn host_set_closure_env(&mut self, cl: Gc<LuaClosure>, env: Gc<Table>) -> bool {
         match cl.proto.upvals.iter().position(|d| &*d.name == "_ENV") {
-            Some(i) => {
-                self.set_closure_env(cl, i, env);
-                true
-            }
+            // a new cell that cannot be made leaves the environment as it was,
+            // and the call reports it was not set
+            Some(i) => self.try_set_closure_env(cl, i, env).is_ok(),
             None => false,
         }
     }

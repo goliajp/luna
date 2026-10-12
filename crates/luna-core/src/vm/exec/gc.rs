@@ -9,9 +9,8 @@ impl Vm {
         std::mem::replace(&mut self.gc_mode, new)
     }
 
-    /// Whether the current `collectgarbage` mode is "generational" (where a
-    /// "step" is a minor collection — a full atomic pass — rather than a paced
-    /// incremental sweep).
+    /// Whether the current `collectgarbage` mode is "generational" (where a "step"
+    /// is a minor collection — a full atomic pass — rather than a paced sweep).
     pub(crate) fn gc_mode_is_generational(&self) -> bool {
         self.gc_mode == "generational"
     }
@@ -43,13 +42,14 @@ impl Vm {
     /// O(SWEEP_DIVISOR) safe-points regardless of size.
     #[inline(always)]
     pub(crate) fn maybe_collect_garbage(&mut self, live_top: u32) {
+        // everything live is rooted here; what is allocated next is young
+        self.heap.safe_point();
         if !self.heap.gc_due() || self.gc_finalizing {
             return;
         }
-        // Bare `live_top`, no `max(self.top)` widening: every frame-pop
-        // site (`finish_results`, the Op::TailCall collapse, pcall
-        // unwind) clears the slots it vacates, mirroring PUC's L->top
-        // discipline.
+        // Bare `live_top`, no `max(self.top)` widening: every frame-pop site
+        // (`finish_results`, the Op::TailCall collapse, pcall unwind) clears
+        // the slots it vacates, mirroring PUC's L->top discipline.
         self.gc_top = live_top;
         // PUC stepmul: % of allocation rate. Higher = more GC work per
         // safe-point (lower memory, more CPU). Default 100 = `live / 4` per

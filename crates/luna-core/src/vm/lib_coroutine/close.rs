@@ -26,12 +26,12 @@ pub(crate) fn co_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             // died with an error, or a __close handler raised: report (false, e)
             Ok(Some(e)) => {
                 let e = death_value(vm, e);
-                Ok(vm.nat_return(fs, &[Value::Bool(false), e]))
+                vm.nat_ret(fs, &[Value::Bool(false), e])
             }
-            Ok(None) => Ok(vm.nat_return(fs, &[Value::Bool(true)])),
+            Ok(None) => vm.nat_ret(fs, &[Value::Bool(true)]),
             Err(e) => {
                 let e = death_value(vm, e.0);
-                Ok(vm.nat_return(fs, &[Value::Bool(false), e]))
+                vm.nat_ret(fs, &[Value::Bool(false), e])
             }
         },
         CoroStatus::Normal => Err(raise_str(vm, "cannot close a normal coroutine")),

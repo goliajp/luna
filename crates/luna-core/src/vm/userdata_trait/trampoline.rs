@@ -19,7 +19,7 @@ where
     let ud_gc = match self_val {
         Value::Userdata(g) => g,
         _ => {
-            return Err(vm.rt_err(&format!(
+            return Err(vm.rt_errf(format_args!(
                 "method called on non-userdata value (expected {})",
                 T::type_name()
             )));
@@ -31,7 +31,7 @@ where
     // pinned by being on the Lua stack at slot `fs`.
     let type_matches = unsafe { (*ud_ptr).downcast::<T>().is_some() };
     if !type_matches {
-        return Err(vm.rt_err(&format!(
+        return Err(vm.rt_errf(format_args!(
             "method called on wrong userdata type (expected {})",
             T::type_name()
         )));
@@ -55,7 +55,7 @@ where
     let ud_gc = match self_val {
         Value::Userdata(g) => g,
         _ => {
-            return Err(vm.rt_err(&format!(
+            return Err(vm.rt_errf(format_args!(
                 "method called on non-userdata value (expected {})",
                 T::type_name()
             )));
@@ -65,7 +65,7 @@ where
     // SAFETY: see method_trampoline.
     let type_matches = unsafe { (*ud_ptr).downcast::<T>().is_some() };
     if !type_matches {
-        return Err(vm.rt_err(&format!(
+        return Err(vm.rt_errf(format_args!(
             "method called on wrong userdata type (expected {})",
             T::type_name()
         )));
@@ -113,7 +113,7 @@ pub(super) fn index_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
     if let Value::Table(m) = methods_upval {
         let v = m.get(key);
         if !v.is_nil() {
-            return Ok(vm.nat_return(fs, &[v]));
+            return vm.nat_ret(fs, &[v]);
         }
     }
     // 2. field getters — call getter(self,) and surface its result.
@@ -126,11 +126,11 @@ pub(super) fn index_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
             } else {
                 results.swap_remove(0)
             };
-            return Ok(vm.nat_return(fs, &[r]));
+            return vm.nat_ret(fs, &[r]);
         }
     }
     // 3. nothing matched — return nil (matches PUC `__index` semantics).
-    Ok(vm.nat_return(fs, &[Value::Nil]))
+    vm.nat_ret(fs, &[Value::Nil])
 }
 
 /// `__newindex` trampoline. Installed by
@@ -155,7 +155,7 @@ pub(super) fn newindex_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u3
         if !setter.is_nil() {
             // setter(self, value) → Result<(), LuaError>; discard return.
             vm.call_value(setter, &[self_val, value])?;
-            return Ok(vm.nat_return(fs, &[]));
+            return vm.nat_ret(fs, &[]);
         }
     }
     // Unknown field — pretty-print key + host type name.
@@ -171,7 +171,7 @@ pub(super) fn newindex_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u3
             .to_string(),
         _ => "userdata".to_string(),
     };
-    Err(vm.rt_err(&format!(
+    Err(vm.rt_errf(format_args!(
         "attempt to write unknown field '{}' on {} (no setter registered)",
         key_str, type_str
     )))

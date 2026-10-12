@@ -33,20 +33,20 @@ const LUA_CPATH_DEFAULT: &[u8] = b"";
 /// PUC's message and `loadlib` "where" when built without dynamic libraries.
 const DLMSG: &[u8] = b"dynamic libraries not enabled; check your Lua installation";
 
-pub(crate) fn open_package(vm: &mut Vm) {
-    open_package_with(vm, true);
+/// Open the `package` library, failing when memory runs out.
+pub(crate) fn try_open_package(vm: &mut Vm) -> Result<(), LuaError> {
+    open_package_with(vm, true)
 }
 
-/// The package library as PUC's `luaopen_package` opens it: `package.loaded`
-/// keeps what it holds, without the libraries opened before.
-pub(crate) fn open_package_bare(vm: &mut Vm) {
-    open_package_with(vm, false);
+/// [`open_package_bare`], raising a memory error.
+pub(crate) fn try_open_package_bare(vm: &mut Vm) -> Result<(), LuaError> {
+    open_package_with(vm, false)
 }
 
-fn open_package_with(vm: &mut Vm, list_opened: bool) {
+fn open_package_with(vm: &mut Vm, list_opened: bool) -> Result<(), LuaError> {
     let v = vm.version();
-    let pkg = vm.heap.new_table();
-    let loaded = registry_table(vm, "_LOADED").expect("stdlib registration");
+    let pkg = vm.alloc_table()?;
+    let loaded = registry_table(vm, "_LOADED")?;
     let names: &[&str] = if list_opened {
         &[
             "_G",
@@ -68,57 +68,54 @@ fn open_package_with(vm: &mut Vm, list_opened: bool) {
         let val = match name {
             "package" => Value::Table(pkg),
             _ => {
-                let k = Value::Str(vm.heap.intern(name.as_bytes()));
+                let k = vm.str_value(name.as_bytes())?;
                 vm.globals().get(k)
             }
         };
         if !val.is_nil() {
-            raw_set(vm, loaded, name, val);
+            raw_set(vm, loaded, name, val)?;
         }
     }
-    raw_set(vm, pkg, "loaded", Value::Table(loaded));
+    raw_set(vm, pkg, "loaded", Value::Table(loaded))?;
     // 5.1 keeps preload in the package table only; 5.2 moved it to the
     // registry
     let preload = if v == LuaVersion::Lua51 {
-        vm.heap.new_table()
+        vm.alloc_table()?
     } else {
-        registry_table(vm, "_PRELOAD").expect("stdlib registration")
+        registry_table(vm, "_PRELOAD")?
     };
-    raw_set(vm, pkg, "preload", Value::Table(preload));
+    raw_set(vm, pkg, "preload", Value::Table(preload))?;
 
-    let searchers = vm.heap.new_table();
-    let lf = vm.native(crate::vm::lib_os_io::nat_loadfile);
-    let lua_searcher = vm.native_with(searcher_lua, Box::new([Value::Table(pkg), lf]));
+    let searchers = vm.alloc_table()?;
+    let lf = vm.lib_native(crate::vm::lib_os_io::nat_loadfile)?;
+    let lua_searcher = vm.lib_native_with(searcher_lua, &[Value::Table(pkg), lf])?;
     let fns = [
-        vm.native_with(searcher_preload, Box::new([Value::Table(pkg)])),
+        vm.lib_native_with(searcher_preload, &[Value::Table(pkg)])?,
         lua_searcher,
-        vm.native_with(searcher_c, Box::new([Value::Table(pkg)])),
-        vm.native_with(searcher_croot, Box::new([Value::Table(pkg)])),
+        vm.lib_native_with(searcher_c, &[Value::Table(pkg)])?,
+        vm.lib_native_with(searcher_croot, &[Value::Table(pkg)])?,
     ];
     for (i, f) in fns.into_iter().enumerate() {
-        // SAFETY: `searchers` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
-        unsafe { searchers.as_mut() }
-            .set(&mut vm.heap, Value::Int(i as i64 + 1), f)
-            .expect("valid key");
+        vm.lib_set_value(searchers, Value::Int(i as i64 + 1), f)?;
     }
     vm.barrier_back_table(searchers);
     match v {
-        LuaVersion::Lua51 => raw_set(vm, pkg, "loaders", Value::Table(searchers)),
+        LuaVersion::Lua51 => raw_set(vm, pkg, "loaders", Value::Table(searchers))?,
         LuaVersion::Lua52 => {
-            raw_set(vm, pkg, "searchers", Value::Table(searchers));
-            raw_set(vm, pkg, "loaders", Value::Table(searchers));
+            raw_set(vm, pkg, "searchers", Value::Table(searchers))?;
+            raw_set(vm, pkg, "loaders", Value::Table(searchers))?;
         }
-        _ => raw_set(vm, pkg, "searchers", Value::Table(searchers)),
+        _ => raw_set(vm, pkg, "searchers", Value::Table(searchers))?,
     }
 
     // 5.2 on: `-E` (the registry's LUA_NOENV) keeps the defaults
     let noenv = vm.ignore_env && v >= LuaVersion::Lua52;
     let path = env_path(v, noenv, "LUA_PATH", LUA_PATH_DEFAULT);
-    let path = Value::Str(vm.heap.intern(&path));
-    raw_set(vm, pkg, "path", path);
+    let path = vm.str_value(&path)?;
+    raw_set(vm, pkg, "path", path)?;
     let cpath = env_path(v, noenv, "LUA_CPATH", LUA_CPATH_DEFAULT);
-    let cpath = Value::Str(vm.heap.intern(&cpath));
-    raw_set(vm, pkg, "cpath", cpath);
+    let cpath = vm.str_value(&cpath)?;
+    raw_set(vm, pkg, "cpath", cpath)?;
     // dir separator, path separator, template mark, executable-dir mark,
     // ignore mark; 5.2 added the final newline
     let config: &[u8] = if v == LuaVersion::Lua51 {
@@ -126,32 +123,32 @@ fn open_package_with(vm: &mut Vm, list_opened: bool) {
     } else {
         b"/\n;\n?\n!\n-\n"
     };
-    let config = Value::Str(vm.heap.intern(config));
-    raw_set(vm, pkg, "config", config);
+    let config = vm.str_value(config)?;
+    raw_set(vm, pkg, "config", config)?;
 
-    let f = vm.native(ll_loadlib);
-    raw_set(vm, pkg, "loadlib", f);
+    let f = vm.lib_native(ll_loadlib)?;
+    raw_set(vm, pkg, "loadlib", f)?;
     if v >= LuaVersion::Lua52 {
-        let f = vm.native(ll_searchpath);
-        raw_set(vm, pkg, "searchpath", f);
+        let f = vm.lib_native(ll_searchpath)?;
+        raw_set(vm, pkg, "searchpath", f)?;
     }
     // 5.1 marks a module being loaded with a sentinel, to catch loops
-    let sentinel = Value::Userdata(vm.heap.new_userdata(UserdataPayload::Empty, false));
-    let req = vm.native_with(
+    let sentinel = Value::Userdata(vm.lib_userdata(UserdataPayload::Empty, false)?);
+    let req = vm.lib_native_with(
         ll_require,
-        Box::new([Value::Table(pkg), Value::Table(loaded), sentinel]),
-    );
-    vm.set_global("require", req).expect("stdlib registration");
+        &[Value::Table(pkg), Value::Table(loaded), sentinel],
+    )?;
+    vm.lib_set_global("require", req)?;
     if v <= LuaVersion::Lua52 {
-        let f = vm.native(ll_seeall);
-        raw_set(vm, pkg, "seeall", f);
-        let m = vm.native_with(ll_module, Box::new([Value::Table(loaded)]));
-        vm.set_global("module", m).expect("stdlib registration");
+        let f = vm.lib_native(ll_seeall)?;
+        raw_set(vm, pkg, "seeall", f)?;
+        let m = vm.lib_native_with(ll_module, &[Value::Table(loaded)])?;
+        vm.lib_set_global("module", m)?;
     }
-    vm.set_global("package", Value::Table(pkg))
-        .expect("stdlib registration");
+    vm.lib_set_global("package", Value::Table(pkg))?;
     vm.barrier_back_table(pkg);
     vm.barrier_back_table(loaded);
+    Ok(())
 }
 
 impl Vm {
@@ -165,21 +162,19 @@ impl Vm {
     }
 }
 
-fn raw_set(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) {
-    let k = Value::Str(vm.heap.intern(k.as_bytes()));
-    // SAFETY: `t` is a table the caller allocated or holds in a local, so it is alive; no reference into it is held across this call, and `set` does not collect
-    unsafe { t.as_mut() }
-        .set(&mut vm.heap, k, v)
-        .expect("valid key");
+fn raw_set(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) -> Result<(), LuaError> {
+    let k = vm.str_value(k.as_bytes())?;
+    vm.lib_set_value(t, k, v)?;
+    Ok(())
 }
 
 /// A raw store into a table a script can reach and fill: a full hash
 /// part raises "table overflow" as any other store does.
 fn raw_set_checked(vm: &mut Vm, t: Gc<Table>, k: Value, v: Value) -> Result<(), LuaError> {
     // SAFETY: `t` is a table the caller holds (the package table or one reached from it); no reference into it is live across the `set`, which does not collect
-    match unsafe { t.as_mut() }.set(&mut vm.heap, k, v) {
+    match vm.table_op(|vm| unsafe { t.as_mut() }.set(&mut vm.heap, k, v)) {
         Ok(()) => {}
-        Err(e @ TableError::ReadOnly) => return Err(vm.table_error(e)),
+        Err(e @ (TableError::ReadOnly | TableError::Memory(_))) => return Err(vm.table_error(e)),
         Err(_) => return Err(vm.rt_err("table overflow")),
     }
     vm.barrier_back_table(t);
@@ -191,13 +186,13 @@ fn raw_set_checked(vm: &mut Vm, t: Gc<Table>, k: Value, v: Value) -> Result<(), 
 /// makes it) the table is simply not reachable from there.
 fn registry_table(vm: &mut Vm, name: &str) -> Result<Gc<Table>, LuaError> {
     let Some(reg) = vm.registry else {
-        return Ok(vm.heap.new_table());
+        return vm.alloc_table();
     };
-    let k = Value::Str(vm.heap.intern(name.as_bytes()));
+    let k = vm.str_value(name.as_bytes())?;
     if let Value::Table(t) = reg.get(k) {
         return Ok(t);
     }
-    let t = vm.heap.new_table();
+    let t = vm.alloc_table()?;
     raw_set_checked(vm, reg, k, Value::Table(t))?;
     Ok(t)
 }
@@ -214,6 +209,6 @@ fn same(a: Value, b: Value) -> bool {
     matches!((a, b), (Value::Userdata(x), Value::Userdata(y)) if x.ptr_eq(y))
 }
 
-fn str_value(vm: &mut Vm, b: &[u8]) -> Value {
-    Value::Str(vm.heap.intern(b))
+fn str_value(vm: &mut Vm, b: &[u8]) -> Result<Value, LuaError> {
+    vm.str_value(b)
 }
