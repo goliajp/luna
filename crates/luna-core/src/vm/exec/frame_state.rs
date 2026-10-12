@@ -151,16 +151,6 @@ impl Vm {
         self.top = new_top;
     }
 
-    /// Grow the stack to `need` nil slots (`need` > its length), ending
-    /// the process when the allocation fails. Out of line, and on the Vm
-    /// rather than the vector, so the hot callers keep only the length test
-    /// and never take the stack's address.
-    #[cold]
-    #[inline(never)]
-    pub(crate) fn grow_stack_or_abort(&mut self, need: usize) {
-        self.stack.resize_or_abort(need, Value::Nil);
-    }
-
     /// Nil the missing results `[from, to)`.
     pub(super) fn pad_results(&mut self, from: u32, to: u32) {
         if self.stack.len() < to as usize {
@@ -195,17 +185,18 @@ impl Vm {
 
     // ---- open upvalues ----
 
-    #[doc(hidden)]
-    pub fn find_or_create_upval(&mut self, slot: u32) -> Gc<Upvalue> {
+    /// The open upvalue of stack slot `slot`, made and listed when there
+    /// is none; a memory error when it cannot be.
+    pub(crate) fn try_find_or_create_upval(&mut self, slot: u32) -> Result<Gc<Upvalue>, LuaError> {
         match self.open_upvals.binary_search_by_key(&slot, |&(s, _)| s) {
-            Ok(i) => self.open_upvals[i].1,
+            Ok(i) => Ok(self.open_upvals[i].1),
             Err(i) => {
-                let uv = self.heap.new_upvalue(UpvalState::Open {
-                    slot,
-                    thread: self.current,
-                });
-                self.open_upvals.insert_or_abort(i, (slot, uv));
-                uv
+                let thread = self.current;
+                let uv = self
+                    .retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Open { slot, thread }))?;
+                // the new upvalue is young while it is not listed yet
+                self.retry_oom(|vm| vm.open_upvals.insert(i, (slot, uv)))?;
+                Ok(uv)
             }
         }
     }

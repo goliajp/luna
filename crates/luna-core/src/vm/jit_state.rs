@@ -115,9 +115,9 @@ pub struct JitState {
     /// nested entries stack; the collector treats them as roots.
     pub ssa_roots: Vec<Value>,
 
-    /// Pool of reusable per-trace string accumulator
-    /// buffers.
-    pub str_buf_pool: Vec<Vec<u8>>,
+    /// Pool of reusable per-trace string accumulator buffers, in the Vm's
+    /// allocation context: they grow with the string a loop builds.
+    pub str_buf_pool: Vec<crate::runtime::mem::LVec<u8>>,
 
     /// Cap on the buffer pool size.
     pub str_buf_pool_cap: usize,

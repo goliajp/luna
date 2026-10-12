@@ -43,22 +43,32 @@ pub(crate) struct Marker {
 /// stack). Shared by the root mark and the post-resurrection remark.
 pub(super) fn drain_marker(m: &mut Marker) {
     while let Some(h) = m.pop() {
-        // SAFETY: `h` was popped off the gray stack, which only `Marker::header` and `barrier_back` push to, with headers of allocated objects; nothing is freed while marking, and the tag names the type to trace it as
-        unsafe {
-            // PUC `propagatemark`: gray → black before scanning children, so a
-            // child that points back at us (cycle) re-traces us as already
-            // black and does not loop. White bits were cleared on push.
-            (*h).flags = (*h).with_slow(((*h).flags & !WHITE_BITS) | BLACK);
-            match (*h).tag {
-                ObjTag::Str => {}
-                ObjTag::Table => (*(h as *mut Table)).trace(h as *mut Table, m),
-                ObjTag::Proto => (*(h as *mut Proto)).trace(h as *mut Proto, m),
-                ObjTag::Closure => (*(h as *mut LuaClosure)).trace(m),
-                ObjTag::Upvalue => (*(h as *mut Upvalue)).trace(m),
-                ObjTag::Native => (*(h as *mut NativeClosure)).trace(m),
-                ObjTag::Coro => (*(h as *mut crate::runtime::Coro)).trace(m),
-                ObjTag::Userdata => (*(h as *mut Userdata)).trace(m),
-            }
+        // SAFETY: `h` was popped off the gray stack, which only `Marker::header` and `barrier_back` push to, with headers of allocated objects; nothing is freed while marking
+        unsafe { blacken(h, m) };
+    }
+}
+
+/// PUC `propagatemark`: `h` gray → black before tracing its children, so a
+/// child that points back at it (a cycle) finds it black and does not loop.
+/// White bits were cleared when it was grayed.
+///
+/// # Safety
+/// `h` is the header of a gray object, allocated until the sweep; the tag
+/// names the type to trace it as.
+#[inline(always)]
+pub(super) unsafe fn blacken(h: *mut GcHeader, m: &mut Marker) {
+    // SAFETY: the caller's contract
+    unsafe {
+        (*h).flags = (*h).with_slow(((*h).flags & !WHITE_BITS) | BLACK);
+        match (*h).tag {
+            ObjTag::Str => {}
+            ObjTag::Table => (*(h as *mut Table)).trace(h as *mut Table, m),
+            ObjTag::Proto => (*(h as *mut Proto)).trace(h as *mut Proto, m),
+            ObjTag::Closure => (*(h as *mut LuaClosure)).trace(m),
+            ObjTag::Upvalue => (*(h as *mut Upvalue)).trace(m),
+            ObjTag::Native => (*(h as *mut NativeClosure)).trace(m),
+            ObjTag::Coro => (*(h as *mut crate::runtime::Coro)).trace(m),
+            ObjTag::Userdata => (*(h as *mut Userdata)).trace(m),
         }
     }
 }
@@ -85,28 +95,31 @@ impl Marker {
     }
 
     /// Walk the object list for gray objects left off the stack when it
-    /// could not grow, and stack them; the first one comes back.
+    /// could not grow, tracing each where it is found (a stack that cannot
+    /// grow could not hold them), until a walk leaves none behind; then the
+    /// next object on the stack.
     #[cold]
     #[inline(never)]
     fn refill(&mut self) -> Option<*mut GcHeader> {
-        self.overflow = false;
-        let mut first = None;
-        let mut cur = self.scan;
-        while !cur.is_null() {
-            // SAFETY: `scan` heads the heap's object list, whose objects stay
-            // allocated while marking (frees happen only in the sweep), and
-            // each `next` is read from a live object; only flag bytes are read
-            let (f, next) = unsafe { ((*cur).flags, (*cur).next) };
-            if !is_white(f) && !is_black(f) {
-                if first.is_none() {
-                    first = Some(cur);
-                } else {
-                    self.push_gray(cur);
+        while self.overflow {
+            self.overflow = false;
+            let mut cur = self.scan;
+            while !cur.is_null() {
+                // SAFETY: `scan` heads the heap's object list, whose objects
+                // stay allocated while marking (frees happen only in the
+                // sweep), and each `next` is read from a live object
+                let (f, next) = unsafe { ((*cur).flags, (*cur).next) };
+                if !is_white(f) && !is_black(f) {
+                    // SAFETY: `cur` is a gray object on the list (see above)
+                    unsafe { blacken(cur, self) };
                 }
+                cur = next;
             }
-            cur = next;
+            if let Some(h) = self.stack.pop() {
+                return Some(h);
+            }
         }
-        first
+        None
     }
 
     /// Mark a value, returning true if it was newly marked (was white).

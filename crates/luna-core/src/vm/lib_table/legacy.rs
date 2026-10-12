@@ -17,7 +17,7 @@ pub(super) fn t_setn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
 /// 5.1 `table.getn(t)`.
 pub(super) fn t_getn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let (_, n) = aux_getn(vm, Args::new(fs, nargs), 0)?;
-    Ok(vm.nat_return(fs, &[Value::Int(n)]))
+    vm.nat_ret(fs, &[Value::Int(n)])
 }
 
 /// 5.1 `table.foreach(t, f)`: the first non-nil result of `f(k, v)`, or no
@@ -35,7 +35,7 @@ pub(super) fn t_foreach(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         if let Some(r) = r
             && !r.is_nil()
         {
-            return Ok(vm.nat_return(fs, &[r]));
+            return vm.nat_ret(fs, &[r]);
         }
         key = k;
     }
@@ -54,7 +54,7 @@ pub(super) fn t_foreachi(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         if let Some(r) = r
             && !r.is_nil()
         {
-            return Ok(vm.nat_return(fs, &[r]));
+            return vm.nat_ret(fs, &[r]);
         }
     }
     Ok(0)
@@ -79,5 +79,5 @@ pub(super) fn t_maxn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         }
         key = k;
     }
-    Ok(vm.nat_return(fs, &[Value::Float(max)]))
+    vm.nat_ret(fs, &[Value::Float(max)])
 }

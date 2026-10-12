@@ -338,19 +338,7 @@ impl Heap {
                 break;
             };
             // SAFETY: `h` was popped off the gray stack, which only `Marker::header` and `barrier_back` push to, with headers of allocated objects; frees happen only in the sweep, never during propagate or between its steps
-            unsafe {
-                (*h).flags = (*h).with_slow(((*h).flags & !WHITE_BITS) | BLACK);
-                match (*h).tag {
-                    ObjTag::Str => {}
-                    ObjTag::Table => (*(h as *mut Table)).trace(h as *mut Table, &mut m),
-                    ObjTag::Proto => (*(h as *mut Proto)).trace(h as *mut Proto, &mut m),
-                    ObjTag::Closure => (*(h as *mut LuaClosure)).trace(&mut m),
-                    ObjTag::Upvalue => (*(h as *mut Upvalue)).trace(&mut m),
-                    ObjTag::Native => (*(h as *mut NativeClosure)).trace(&mut m),
-                    ObjTag::Coro => (*(h as *mut crate::runtime::Coro)).trace(&mut m),
-                    ObjTag::Userdata => (*(h as *mut Userdata)).trace(&mut m),
-                }
-            }
+            unsafe { blacken(h, &mut m) };
             n += 1;
         }
         let exhausted = m.stack.is_empty() && !m.overflow;
@@ -392,6 +380,10 @@ impl Heap {
             "gray queue not drained at atomic"
         );
         self.sweep_cur = std::mem::replace(&mut self.all, ptr::null_mut());
+        // the sweep moves survivors in front of anything allocated now, out
+        // of allocation order: until the next safe point every object counts
+        // as young
+        self.young = ptr::null_mut();
         self.phase = GcPhase::Sweep;
     }
 

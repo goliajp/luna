@@ -1,0 +1,2 @@
+garbage past the limit: ok 4088894
+every block freed after lua_close: yes

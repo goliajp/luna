@@ -1,71 +1,47 @@
 //! Concatenation and `tostring` conversion.
 
 use super::*;
-use crate::runtime::LuaStr;
 use crate::vm::cfmt::c_pointer;
-
-/// A concatenation result up to this long is built on the stack.
-const SHORT_CONCAT: usize = 128;
-
-/// A concatenation operand's bytes: a string's own, an integer written
-/// into a stack buffer, or a float's rendering.
-enum Piece<'a> {
-    Str(Gc<LuaStr>),
-    Int(&'a [u8]),
-    Float(Vec<u8>),
-}
-
-impl Piece<'_> {
-    fn bytes(&self) -> &[u8] {
-        match self {
-            Piece::Str(s) => s.as_bytes(),
-            Piece::Int(b) => b,
-            Piece::Float(v) => v,
-        }
-    }
-}
-
-/// [`concat_piece`] without copying: `None` when only a `__concat`
-/// metamethod can handle `v`.
-fn piece(v: Value, float_fmt: numeric::FloatFmt, buf: &mut [u8; 20]) -> Option<Piece<'_>> {
-    match v {
-        Value::Str(s) => Some(Piece::Str(s)),
-        Value::Int(x) => Some(Piece::Int(numeric::write_i64_dec(x, buf))),
-        Value::Float(x) => Some(Piece::Float(
-            numeric::num_to_string_for(Num::Float(x), float_fmt).into_bytes(),
-        )),
-        _ => None,
-    }
-}
 
 impl Vm {
     /// Fast string concatenation of an adjacent pair, or `None` when a
     /// `__concat` metamethod is required.
     pub(super) fn concat_pair(&mut self, l: Value, r: Value) -> Result<Option<Value>, LuaError> {
         let legacy = self.float_fmt();
-        let (mut lb, mut rb) = ([0u8; 20], [0u8; 20]);
-        let (Some(a), Some(b)) = (piece(l, legacy, &mut lb), piece(r, legacy, &mut rb)) else {
+        // Length-check fast paths for both string operands BEFORE the
+        // (expensive) copy in `concat_piece`, so a runaway `a..a..a..…`
+        // chain (5.1 big.lua / 5.5 heavy.lua's `teststring`) raises the
+        // overflow on the first pair that would exceed `INT_MAX` instead
+        // of allocating multi-GB intermediates first.
+        let max_str = i32::MAX as usize;
+        if let (Value::Str(ls), Value::Str(rs)) = (l, r) {
+            let a_len = ls.as_bytes().len();
+            let b_len = rs.as_bytes().len();
+            let new_len = a_len.checked_add(b_len);
+            if new_len.is_none() || new_len.unwrap() > max_str {
+                return Err(self.rt_err("string length overflow"));
+            }
+        }
+        // a number operand is rendered on the stack; a string is used where
+        // it is (both operands sit in registers, roots for the emergency
+        // collection)
+        let mut na = numeric::NumText::default();
+        let mut nb = numeric::NumText::default();
+        let (Some(a), Some(b)) = (
+            concat_piece_into(l, legacy, &mut na),
+            concat_piece_into(r, legacy, &mut nb),
+        ) else {
             return Ok(None);
         };
-        let (a, b) = (a.bytes(), b.bytes());
-        // PUC `MAX_SIZE` for Lua strings is `INT_MAX`: a runaway `a..a..…`
-        // (5.1 big.lua, 5.5 heavy.lua `teststring`) raises before anything
-        // that size is built
-        let len = match a.len().checked_add(b.len()) {
-            Some(n) if n <= i32::MAX as usize => n,
-            _ => return Err(self.rt_err("string length overflow")),
-        };
-        let s = if len <= SHORT_CONCAT {
-            let mut buf = [0u8; SHORT_CONCAT];
-            buf[..a.len()].copy_from_slice(a);
-            buf[a.len()..len].copy_from_slice(b);
-            self.heap.intern(&buf[..len])
-        } else {
-            let mut buf = Vec::with_capacity(len);
-            buf.extend_from_slice(a);
-            buf.extend_from_slice(b);
-            self.heap.intern(&buf)
-        };
+        // PUC `MAX_SIZE` for Lua strings is `INT_MAX`; an attempt to
+        // concat past it raises "string length overflow"
+        // (5.5 heavy.lua `teststring` doubles `a..a..…` until it hits
+        // exactly this wall).
+        let new_len = a.len().checked_add(b.len());
+        if new_len.is_none() || new_len.unwrap() > max_str {
+            return Err(self.rt_err("string length overflow"));
+        }
+        let s = self.retry_oom(|vm| vm.heap.try_intern_pair(a, b))?;
         Ok(Some(Value::Str(s)))
     }
 
@@ -112,12 +88,7 @@ impl Vm {
                         mm = self.get_mm(y, Mm::Concat);
                     }
                     if mm.is_nil() {
-                        let legacy = self.float_fmt();
-                        let bad = if concat_piece(x, legacy).is_none() {
-                            x
-                        } else {
-                            y
-                        };
+                        let bad = if !is_concat_piece(x) { x } else { y };
                         return Err(self.type_err("concatenate", bad));
                     }
                     // result lands at i-1, dropping y (top→i); resume continues.

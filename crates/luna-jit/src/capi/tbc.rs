@@ -70,7 +70,9 @@ pub unsafe extern "C" fn luna_capi_lua_toclose(L: *mut LuaState, idx: c_int) {
         api.raise_msg("variable '?' got a non-closable value");
         return;
     }
-    api.st().tbc.push_or_abort(i);
+    if let Err(o) = api.st().tbc.push(i) {
+        api.raise(o.into());
+    }
 }
 
 /// PUC `lua_closeslot` (5.4.3+): close the to-be-closed slot `idx` and

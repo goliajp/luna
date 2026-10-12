@@ -62,7 +62,7 @@ pub unsafe extern "C" fn luna_capi_lua_setfield(L: *mut LuaState, idx: c_int, k:
     let t = api.get_or_nil(idx);
     let v = api.get_or_nil(-1);
     // SAFETY: `k` is NUL-terminated (# Safety)
-    let key = api.str(unsafe { c_bytes(k) }.unwrap_or_default());
+    let key = or_raise!(api, api.str(unsafe { c_bytes(k) }.unwrap_or_default()));
     api.push(key);
     set_and_pop(&mut api, t, key, v, 2);
 }

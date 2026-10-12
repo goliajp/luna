@@ -33,14 +33,14 @@ pub(super) fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
             "{lead}no field package.preload['{}']",
             String::from_utf8_lossy(c_str(name.as_bytes()))
         );
-        let m = str_value(vm, msg.as_bytes());
-        return Ok(vm.nat_return(fs, &[m]));
+        let m = str_value(vm, msg.as_bytes())?;
+        return vm.nat_ret(fs, &[m]);
     }
     if v >= LuaVersion::Lua54 {
-        let data = str_value(vm, b":preload:");
-        return Ok(vm.nat_return(fs, &[loader, data]));
+        let data = str_value(vm, b":preload:")?;
+        return vm.nat_ret(fs, &[loader, data]);
     }
-    Ok(vm.nat_return(fs, &[loader]))
+    vm.nat_ret(fs, &[loader])
 }
 
 pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -51,21 +51,21 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     let file = match find_file(vm, pkg, &name, "path")? {
         Ok(f) => f,
         Err(msg) => {
-            let m = str_value(vm, &msg);
-            return Ok(vm.nat_return(fs, &[m]));
+            let m = str_value(vm, &msg)?;
+            return vm.nat_ret(fs, &[m]);
         }
     };
     let loadfile = vm.nat_upval(fs, 1);
-    let fname = str_value(vm, &file);
+    let fname = str_value(vm, &file)?;
     let r = vm.call_value(loadfile, &[fname])?;
     match r.first() {
         Some(f @ Value::Closure(_)) => {
             let f = *f;
             // 5.1's loader gets only the name; 5.2+ also the file name
             if vm.version() == LuaVersion::Lua51 {
-                return Ok(vm.nat_return(fs, &[f]));
+                return vm.nat_ret(fs, &[f]);
             }
-            Ok(vm.nat_return(fs, &[f, fname]))
+            vm.nat_ret(fs, &[f, fname])
         }
         _ => {
             let msg = match r.get(1) {
@@ -87,8 +87,8 @@ pub(super) fn searcher_c(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     match find_file(vm, pkg, &name, "cpath")? {
         Ok(file) => Err(load_error(vm, &name, &file, DLMSG)),
         Err(msg) => {
-            let m = str_value(vm, &msg);
-            Ok(vm.nat_return(fs, &[m]))
+            let m = str_value(vm, &msg)?;
+            vm.nat_ret(fs, &[m])
         }
     }
 }
@@ -100,14 +100,14 @@ pub(super) fn searcher_croot(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lu
         .as_bytes()
         .to_vec();
     let Some(dot) = c_str(&name).iter().position(|&b| b == b'.') else {
-        return Ok(vm.nat_return(fs, &[]));
+        return vm.nat_ret(fs, &[]);
     };
     let pkg = upval_table(vm, fs, 0);
     match find_file(vm, pkg, &name[..dot], "cpath")? {
         Ok(file) => Err(load_error(vm, &name, &file, DLMSG)),
         Err(msg) => {
-            let m = str_value(vm, &msg);
-            Ok(vm.nat_return(fs, &[m]))
+            let m = str_value(vm, &msg)?;
+            vm.nat_ret(fs, &[m])
         }
     }
 }
@@ -116,7 +116,7 @@ pub(super) fn ll_loadlib(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let a = Args::new(fs, nargs);
     argcheck::check_string(vm, a, 0)?;
     argcheck::check_string(vm, a, 1)?;
-    let msg = str_value(vm, DLMSG);
-    let place = str_value(vm, b"absent");
-    Ok(vm.nat_return(fs, &[Value::Nil, msg, place]))
+    let msg = str_value(vm, DLMSG)?;
+    let place = str_value(vm, b"absent")?;
+    vm.nat_ret(fs, &[Value::Nil, msg, place])
 }

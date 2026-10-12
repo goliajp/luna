@@ -1,8 +1,19 @@
 //! `string.gsub` and its replacement forms.
 
 use super::*;
+use crate::runtime::mem::LVec;
 
 pub(crate) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    // a frame of `sort_scratch`, a GC root, for the replacement in hand
+    let mut frame = LVec::new(vm.heap.mem());
+    frame.push(Value::Nil)?;
+    vm.sort_scratch.push(frame)?;
+    let r = gsub(vm, fs, nargs);
+    vm.sort_scratch.pop();
+    r
+}
+
+fn gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
     let s = argcheck::check_string(vm, a, 0)?;
@@ -40,7 +51,7 @@ pub(crate) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     let src = s.as_bytes();
     let (anchor, body) = pattern::anchor_split(pattern_bytes(v, p.as_bytes()));
     let mut ms = MatchState::new(src, body, flavor(v));
-    let mut out: Vec<u8> = Vec::new();
+    let mut out = vm.new_buf();
     let mut pos = 0usize;
     let mut n: i128 = 0;
     let mut last: Option<usize> = None;
@@ -70,7 +81,7 @@ pub(crate) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         match m {
             Some(e) if v >= LuaVersion::Lua53 || e > pos => pos = e,
             _ if pos < src.len() => {
-                out.push(src[pos]);
+                vm.buf_push(&mut out, &[src[pos]])?;
                 pos += 1;
             }
             _ => break,
@@ -83,10 +94,12 @@ pub(crate) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     let res = if v >= LuaVersion::Lua54 && !changed {
         Value::Str(s)
     } else {
-        out.extend_from_slice(&src[pos..]);
-        vm.built_str(&out)?
+        vm.buf_push(&mut out, &src[pos..])?;
+        let r = vm.lib_built_str(&out)?;
+        vm.recycle_buf(out);
+        r
     };
-    Ok(vm.nat_return(fs, &[res, Value::Int(n as i64)]))
+    vm.nat_ret(fs, &[res, Value::Int(n as i64)])
 }
 
 /// PUC `add_value`: append the replacement for the match `[s, e)`; false
@@ -101,7 +114,7 @@ pub(crate) fn add_value(
     repl: Value,
     template: Option<Gc<LuaStr>>,
     buf: u32,
-    out: &mut Vec<u8>,
+    out: &mut LVec<u8>,
 ) -> Result<bool, LuaError> {
     if let Some(t) = template {
         if let Err(err) = add_s(vm, ms, src, s, e, t.as_bytes(), out) {
@@ -121,7 +134,7 @@ pub(crate) fn add_value(
                     return Err(pat_err(vm, err));
                 }
             };
-            let k = cap_value(vm, src, k);
+            let k = cap_value(vm, src, k)?;
             // the key is pushed for `lua_gettable`
             vm.index_value_pushed(repl, k, buf + 1)?
         }
@@ -140,24 +153,30 @@ pub(crate) fn add_value(
                 .unwrap_or(Value::Nil)
         }
     };
+    // the value may be held by nothing else now; the scratch frame keeps it
+    // rooted while it is copied (a 5.2 buffer collects when it cannot grow)
+    vm.sort_scratch.last_mut().expect("gsub frame")[0] = r;
     let kept = match r {
         Value::Nil | Value::Bool(false) => {
-            out.extend_from_slice(&src[s..e]);
+            vm.buf_push(out, &src[s..e])?;
             false
         }
         Value::Str(x) => {
-            out.extend_from_slice(x.as_bytes());
+            vm.buf_push(out, x.as_bytes())?;
             true
         }
         n @ (Value::Int(_) | Value::Float(_)) => {
             let b = vm.tostring_basic(n);
-            out.extend_from_slice(&b);
+            vm.buf_push(out, &b)?;
             true
         }
         other => {
-            let msg = format!("invalid replacement value (a {})", other.type_name());
+            let tn = other.type_name();
             vm.native_push(buf + 1);
-            return Err(raise_str(vm, &msg));
+            return Err(raise_bytes(
+                vm,
+                &[b"invalid replacement value (a ", tn.as_bytes(), b")"].concat(),
+            ));
         }
     };
     Ok(kept)
@@ -172,7 +191,7 @@ pub(crate) fn add_s(
     s: usize,
     e: usize,
     t: &[u8],
-    out: &mut Vec<u8>,
+    out: &mut LVec<u8>,
 ) -> Result<(), LuaError> {
     let lenient = vm.version() == LuaVersion::Lua51;
     let mut i = 0;
@@ -180,25 +199,29 @@ pub(crate) fn add_s(
         let c = t[i];
         i += 1;
         if c != b'%' {
-            out.push(c);
+            vm.buf_push(out, &[c])?;
             continue;
         }
         // the template's terminating zero follows a final '%'
         let d = t.get(i).copied().unwrap_or(0);
         i += 1;
         match d {
-            b'0' => out.extend_from_slice(&src[s..e]),
+            b'0' => vm.buf_push(out, &src[s..e])?,
             b'1'..=b'9' => {
                 let c = ms
                     .get_capture((d - b'1') as usize, s, e)
                     .map_err(|err| pat_err(vm, err))?;
                 match c {
-                    CapValue::Span(a, b) => out.extend_from_slice(&src[a..b]),
-                    CapValue::Pos(p) => out.extend_from_slice((p + 1).to_string().as_bytes()),
+                    CapValue::Span(a, b) => vm.buf_push(out, &src[a..b])?,
+                    CapValue::Pos(p) => {
+                        let mut d = Vec::new();
+                        crate::vm::cfmt::signed(&mut d, &Default::default(), p as i64 + 1);
+                        vm.buf_push(out, &d)?
+                    }
                 }
             }
-            b'%' => out.push(b'%'),
-            d if lenient => out.push(d),
+            b'%' => vm.buf_push(out, b"%")?,
+            d if lenient => vm.buf_push(out, &[d])?,
             _ => return Err(raise_str(vm, "invalid use of '%' in replacement string")),
         }
     }

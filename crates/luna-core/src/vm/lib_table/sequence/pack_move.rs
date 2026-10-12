@@ -3,27 +3,30 @@
 use super::*;
 
 pub(crate) fn t_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let t = vm.heap.new_table();
-    {
+    // `lua_createtable(L, n, 1)`: the arguments, nil ones included, fill an
+    // array part of exactly their count; the table is young until it is
+    // returned, so an emergency collection keeps it
+    let t = vm.alloc_table()?;
+    let r = vm.table_op(|vm| {
         // SAFETY: `t` was allocated above and is held only by this local;
-        // `tm` is the only reference into it, and the heap calls made while
-        // it lives (`set_int`, `intern`, `set`) do not collect
-        let tm = unsafe { t.as_mut() };
-        // `lua_createtable(L, n, 1)`: the arguments, nil ones included, fill
-        // an array part of exactly their count
-        tm.resize(&mut vm.heap, nargs as usize, 1);
-        for i in 0..nargs {
-            tm.set_list_slot(i as usize, vm.nat_arg(fs, nargs, i));
-        }
-        let nk = Value::Str(vm.heap.intern(b"n"));
-        tm.set(&mut vm.heap, nk, Value::Int(nargs as i64))
-            .expect("valid key");
+        // the borrow covers the one resize
+        unsafe { t.as_mut() }.resize(&mut vm.heap, nargs as usize, 1)
+    });
+    if let Err(e) = r {
+        return Err(vm.table_error(e));
     }
+    for i in 0..nargs {
+        let v = vm.nat_arg(fs, nargs, i);
+        // SAFETY: as above, for this one store
+        unsafe { t.as_mut() }.set_list_slot(i as usize, v);
+    }
+    let nk = vm.str_value(b"n")?;
+    vm.lib_set_value(t, nk, Value::Int(nargs as i64))?;
     // SETLIST-style once-per-table barrier: t is born BLACK if we're mid-
     // Propagate, and the bulk inserts above are bare `set_int`/`set` that
     // don't barrier. PUC's `lua_seti`/`lua_setfield` in `tpack` do.
     vm.barrier_back_table(t);
-    Ok(vm.nat_return(fs, &[Value::Table(t)]))
+    vm.nat_ret(fs, &[Value::Table(t)])
 }
 
 pub(crate) fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -56,7 +59,7 @@ pub(crate) fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
             }
         }
     }
-    Ok(vm.nat_return(fs, &[a2]))
+    vm.nat_ret(fs, &[a2])
 }
 
 pub(crate) fn t_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -75,16 +78,9 @@ pub(crate) fn t_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     if m > (1 << 30) {
         return Err(vm.plain_err("table overflow"));
     }
-    let t = vm.heap.new_table();
-    // `ensure_array` / `ensure_hash` credit the box-size delta straight to
-    // `Heap.bytes` via `apply_bytes_delta`; `free_obj` later subtracts
-    // `Table::internal_bytes()` so the round-trip is symmetric. 5.5
-    // sort.lua:22 pins this round-trip (`memdiff > N * 4` after
-    // `table.create(N)`).
-    // SAFETY: `t` was allocated above and is held only by this local; `tm`
-    // is the only reference into it, and the two calls do not collect
-    let tm = unsafe { t.as_mut() };
-    tm.ensure_array(&mut vm.heap, n as usize);
-    tm.ensure_hash(&mut vm.heap, m as usize);
-    Ok(vm.nat_return(fs, &[Value::Table(t)]))
+    // the parts' sizes count in `Heap.bytes`, and `free_obj` takes them
+    // off again: 5.5 sort.lua:22 checks `memdiff > N * 4` after
+    // `table.create(N)`
+    let t = vm.alloc_table_sized(n as usize, m as usize)?;
+    vm.nat_ret(fs, &[Value::Table(t)])
 }

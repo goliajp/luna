@@ -1,13 +1,17 @@
 //! Sequence functions: insert, remove, concat, unpack, pack, move and create.
 
 use super::{TAB_L, TAB_R, TAB_RW, TAB_W, aux_getn, checktab, obj_len, tab_geti, tab_seti};
+use crate::runtime::mem::LVec;
 use crate::runtime::{Gc, LuaStr, Value};
 use crate::version::LuaVersion as V;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
+
+mod concat;
 mod pack_move;
+pub(super) use concat::t_concat;
 pub(crate) use pack_move::*;
 
 pub(super) fn t_insert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -115,97 +119,7 @@ pub(super) fn t_remove(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         pos += 1;
     }
     tab_seti(vm, tv, pos, Value::Nil, 2)?;
-    Ok(vm.nat_return(fs, &[removed]))
-}
-
-/// The separator `concat` appends: the argument string itself (rooted by
-/// the call frame) or a number's rendering.
-enum Sep {
-    Str(Gc<LuaStr>),
-    Bytes(Vec<u8>),
-}
-
-impl Sep {
-    fn bytes(&self) -> &[u8] {
-        match self {
-            Sep::Str(s) => s.as_bytes(),
-            Sep::Bytes(b) => b,
-        }
-    }
-}
-
-/// `luaL_optlstring(L, 2, "")`.
-fn concat_sep(vm: &mut Vm, a: Args) -> Result<Sep, LuaError> {
-    Ok(match a.get(vm, 1) {
-        Value::Str(s) => Sep::Str(s),
-        _ if a.is_none_or_nil(vm, 1) => Sep::Bytes(Vec::new()),
-        v => match argcheck::to_str_bytes(vm, v) {
-            Some(b) => Sep::Bytes(b),
-            None => return Err(argcheck::type_error(vm, a, 1, "string")),
-        },
-    })
-}
-
-pub(super) fn t_concat(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let a = Args::new(fs, nargs);
-    let (tv, sep, i, last) = if vm.version() <= V::Lua52 {
-        // ≤5.2 reads the separator before checking the table, and takes
-        // the length only when no end index is given.
-        let sep = concat_sep(vm, a)?;
-        let tv = checktab(vm, a, 0, TAB_R)?;
-        let i = argcheck::opt_int(vm, a, 2, 1)?;
-        let last = if a.is_none_or_nil(vm, 3) {
-            obj_len(vm, tv)? as i32
-        } else {
-            argcheck::check_int(vm, a, 3)?
-        };
-        (tv, sep, i64::from(i), i64::from(last))
-    } else {
-        let (tv, n) = aux_getn(vm, a, TAB_R)?;
-        let sep = concat_sep(vm, a)?;
-        let i = argcheck::opt_integer(vm, a, 2, 1)?;
-        let last = argcheck::opt_integer(vm, a, 3, n)?;
-        (tv, sep, i, last)
-    };
-    let mut out: Vec<u8> = Vec::new();
-    // PUC appends `[i, last)` each followed by the separator, then `last`
-    // on its own, so `last == maxinteger` never overflows the counter.
-    let mut k = i;
-    while k < last {
-        concat_field(vm, tv, k, &mut out)?;
-        out.extend_from_slice(sep.bytes());
-        k += 1;
-    }
-    if k == last {
-        concat_field(vm, tv, last, &mut out)?;
-    }
-    let s = vm.built_str(&out)?;
-    Ok(vm.nat_return(fs, &[s]))
-}
-
-fn concat_field(vm: &mut Vm, tv: Value, k: i64, out: &mut Vec<u8>) -> Result<(), LuaError> {
-    // the buffer's slot, then the value until it is added
-    let buf = vm.buffer_slot(out.len());
-    match tab_geti(vm, tv, k, buf)? {
-        Value::Str(s) => out.extend_from_slice(s.as_bytes()),
-        Value::Int(x) => {
-            let mut buf = [0u8; 20];
-            out.extend_from_slice(crate::numeric::write_i64_dec(x, &mut buf))
-        }
-        v @ Value::Float(_) => {
-            out.extend_from_slice(&argcheck::to_str_bytes(vm, v).expect("a number converts"))
-        }
-        // `luaL_typename`: the base type name, never `__name`.
-        v => {
-            let msg = format!(
-                "invalid value ({}) at index {k} in table for 'concat'",
-                v.type_name()
-            );
-            vm.native_push(buf + 1);
-            return Err(raise_str(vm, &msg));
-        }
-    }
-    Ok(())
+    vm.nat_ret(fs, &[removed])
 }
 
 /// `table.unpack`, and 5.1's global `unpack` (`luaB_unpack`).
@@ -269,9 +183,7 @@ pub(crate) fn t_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     {
         // every read is a raw one: straight into the result slots
         let n = count as usize;
-        if vm.stack.len() < fs as usize + n {
-            vm.grow_stack_or_abort(fs as usize + n);
-        }
+        vm.grow_stack(fs as usize + n)?;
         for (k, slot) in vm.stack[fs as usize..fs as usize + n]
             .iter_mut()
             .enumerate()
@@ -280,13 +192,21 @@ pub(crate) fn t_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         }
         return Ok(n as u32);
     }
-    // the results so far stay pushed under each read
-    let mut vals: Vec<Value> = Vec::with_capacity(count as usize);
+    // the values go to slots above the arguments as they are read, the
+    // results so far pushed under each read (a nested `__index` call runs
+    // above them, and the table stays rooted in its argument slot), then
+    // move down to the results
+    let count = count as usize;
+    let base = (fs + 1 + nargs) as usize;
+    vm.grow_stack(base + count)?;
+    let mut slot = base;
     for k in i..e {
-        let v = tab_geti(vm, tv, k, vals.len() as u32)?;
-        vals.push(v);
+        let v = tab_geti(vm, tv, k, (slot - base) as u32)?;
+        vm.stack[slot] = v;
+        slot += 1;
     }
-    let v = tab_geti(vm, tv, e, vals.len() as u32)?;
-    vals.push(v);
-    Ok(vm.nat_return(fs, &vals))
+    let v = tab_geti(vm, tv, e, (slot - base) as u32)?;
+    vm.stack[slot] = v;
+    vm.stack.copy_within(base..base + count, fs as usize);
+    Ok(count as u32)
 }

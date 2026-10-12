@@ -94,8 +94,10 @@ unsafe extern "C" {
 /// the PE-header-located `.lt_skix` section (Windows), intern each
 /// bytes block into `vm.heap`, write the resulting pointer into
 /// the matching slot. Returns the number of slots populated
-/// (zero on a binary that linked zero AOT trace `.o`s).
-pub fn resolve_all(vm: &mut Vm) -> usize {
+/// (zero on a binary that linked zero AOT trace `.o`s), or `None` when a
+/// string cannot be allocated: the slots are then not all set, and no AOT
+/// trace may be installed.
+pub fn resolve_all(vm: &mut Vm) -> Option<usize> {
     // Locate the strkey-idx section + length, dispatching on
     // target platform. Windows: runtime PE header walk via
     // [`crate::windows_section::find_section`] for the short name
@@ -110,7 +112,7 @@ pub fn resolve_all(vm: &mut Vm) -> usize {
         {
             match crate::windows_section::find_section(b".lt_skix") {
                 Some((b, l)) => (b, l),
-                None => return 0,
+                None => return Some(0),
             }
         }
         #[cfg(all(not(target_os = "windows"), unix, not(target_vendor = "apple")))]
@@ -122,7 +124,7 @@ pub fn resolve_all(vm: &mut Vm) -> usize {
             // gives the count.
             let len = (end as isize) - (start as isize);
             if len <= 0 {
-                return 0;
+                return Some(0);
             }
             (start as *const u8, len as usize)
         }
@@ -132,7 +134,7 @@ pub fn resolve_all(vm: &mut Vm) -> usize {
             let end = &raw mut LUNA_STRKEY_IDX_END as *mut IndexEntry;
             let len = (end as isize) - (start as isize);
             if len <= 0 {
-                return 0;
+                return Some(0);
             }
             (start as *const u8, len as usize)
         }
@@ -145,7 +147,7 @@ pub fn resolve_all(vm: &mut Vm) -> usize {
         )))]
         {
             let _ = vm;
-            return 0;
+            return Some(0);
         }
     };
     // SAFETY: `(base, len_bytes)` bounds the `luna_strkey_idx` section
@@ -173,9 +175,9 @@ pub fn resolve_all(vm: &mut Vm) -> usize {
 /// `IndexEntry`s, aligned for them, as `luna-aot` emits the section:
 /// each entry's non-null `bytes_ptr` points at a length followed by that
 /// many bytes, and its non-null `slot_ptr` at a writable pointer slot.
-unsafe fn walk_index_bytes(vm: &mut Vm, base: *const u8, len_bytes: usize) -> usize {
+unsafe fn walk_index_bytes(vm: &mut Vm, base: *const u8, len_bytes: usize) -> Option<usize> {
     if base.is_null() || len_bytes == 0 {
-        return 0;
+        return Some(0);
     }
     let n_entries = len_bytes / core::mem::size_of::<IndexEntry>();
     let start = base as *const IndexEntry;
@@ -193,11 +195,11 @@ unsafe fn walk_index_bytes(vm: &mut Vm, base: *const u8, len_bytes: usize) -> us
             let len = core::ptr::read_unaligned(entry.bytes_ptr as *const u64) as usize;
             core::slice::from_raw_parts(entry.bytes_ptr.add(8), len)
         };
-        let interned = vm.heap.intern(bytes);
+        let interned = vm.heap.try_intern(bytes).ok()?;
         // SAFETY: a non-null `slot_ptr` points at a writable pointer slot
         // (# Safety)
         unsafe { core::ptr::write(entry.slot_ptr, interned.as_ptr() as *const u8) };
         populated += 1;
     }
-    populated
+    Some(populated)
 }

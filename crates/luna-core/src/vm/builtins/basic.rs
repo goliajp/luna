@@ -5,8 +5,8 @@ use super::*;
 
 pub(super) fn nat_type(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let v = argcheck::check_any(vm, Args::new(fs, nargs), 0)?;
-    let s = Value::Str(vm.heap.intern(v.type_name().as_bytes()));
-    Ok(vm.nat_return(fs, &[s]))
+    let s = vm.str_value(v.type_name().as_bytes())?;
+    vm.nat_ret(fs, &[s])
 }
 
 pub(super) fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -17,7 +17,7 @@ pub(super) fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     // 5.4 (`luaL_tolstring`) converts in place without consulting the global.
     let global_tostring = if vm.version() <= LuaVersion::Lua53 {
         let g = Value::Table(vm.globals());
-        let key = Value::Str(vm.heap.intern(b"tostring"));
+        let key = vm.str_value(b"tostring")?;
         let ts = vm.index_value(g, key)?;
         // it stays pushed below each call of it
         vm.native_push(1);
@@ -111,8 +111,8 @@ pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     {
         let mut buf = [0u8; 20];
         let bytes = crate::numeric::write_i64_dec(i, &mut buf);
-        let s = Value::Str(vm.heap.intern(bytes));
-        return Ok(vm.nat_return(fs, &[s]));
+        let s = vm.str_value(bytes)?;
+        return vm.nat_ret(fs, &[s]);
     }
     // PUC ≤5.2: `tostring(x)` returns whatever `__tostring` returns — even
     // non-string values like nil. 5.1 hands it back untouched; 5.2 goes
@@ -131,14 +131,14 @@ pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
                     _ => None,
                 }
             {
-                out = Value::Str(vm.heap.intern(&b));
+                out = vm.str_value(&b)?;
             }
-            return Ok(vm.nat_return(fs, &[out]));
+            return vm.nat_ret(fs, &[out]);
         }
     }
     let bytes = vm.tostring_value(v)?;
-    let s = Value::Str(vm.heap.intern(&bytes));
-    Ok(vm.nat_return(fs, &[s]))
+    let s = vm.str_value(&bytes)?;
+    vm.nat_ret(fs, &[s])
 }
 
 pub(super) fn nat_rawget(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -146,7 +146,7 @@ pub(super) fn nat_rawget(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let t = argcheck::check_table(vm, a, 0)?;
     let k = argcheck::check_any(vm, a, 1)?;
     let v = t.get(k);
-    Ok(vm.nat_return(fs, &[v]))
+    vm.nat_ret(fs, &[v])
 }
 
 pub(super) fn nat_rawset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -158,14 +158,14 @@ pub(super) fn nat_rawset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     // `lua_rawset` → `luaG_runerror`), raised while rawset runs, so it
     // carries no position
     vm.raw_set(t, k, v)?;
-    Ok(vm.nat_return(fs, &[Value::Table(t)]))
+    vm.nat_ret(fs, &[Value::Table(t)])
 }
 
 pub(super) fn nat_rawequal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let x = argcheck::check_any(vm, a, 0)?;
     let y = argcheck::check_any(vm, a, 1)?;
-    Ok(vm.nat_return(fs, &[Value::Bool(x.raw_eq(y))]))
+    vm.nat_ret(fs, &[Value::Bool(x.raw_eq(y))])
 }
 
 pub(super) fn nat_rawlen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -175,7 +175,7 @@ pub(super) fn nat_rawlen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         Value::Str(s) => s.len() as i64,
         _ => return Err(argcheck::arg_expected(vm, a, 0, "table or string")),
     };
-    Ok(vm.nat_return(fs, &[Value::Int(n)]))
+    vm.nat_ret(fs, &[Value::Int(n)])
 }
 
 pub(super) fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -202,8 +202,8 @@ pub(super) fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
     vm.barrier_back_table(t);
     // register for finalization if the new metatable carries `__gc` (PUC marks
     // the object finalizable at setmetatable time)
-    vm.check_finalizer(t);
-    Ok(vm.nat_return(fs, &[Value::Table(t)]))
+    vm.check_finalizer(t)?;
+    vm.nat_ret(fs, &[Value::Table(t)])
 }
 
 pub(super) fn nat_getmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -212,10 +212,10 @@ pub(super) fn nat_getmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
     // __metatable protection: return that field instead
     let protected = vm.get_mm(v, Mm::Metatable);
     if !protected.is_nil() {
-        return Ok(vm.nat_return(fs, &[protected]));
+        return vm.nat_ret(fs, &[protected]);
     }
     let mt = vm.metatable_of(v).map(Value::Table).unwrap_or(Value::Nil);
-    Ok(vm.nat_return(fs, &[mt]))
+    vm.nat_ret(fs, &[mt])
 }
 
 pub(super) fn nat_select(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -224,7 +224,7 @@ pub(super) fn nat_select(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         Value::Int(i) if vm.version() >= LuaVersion::Lua53 => i,
         // PUC tests only the first character: `select("#x", ...)` counts too.
         Value::Str(s) if s.as_bytes().first() == Some(&b'#') => {
-            return Ok(vm.nat_return(fs, &[Value::Int(nargs as i64 - 1)]));
+            return vm.nat_ret(fs, &[Value::Int(nargs as i64 - 1)]);
         }
         // ≤5.2 reads the index with `luaL_checkint`, a C int.
         _ if vm.version() <= LuaVersion::Lua52 => argcheck::check_int(vm, a, 0)? as i64,
@@ -242,7 +242,7 @@ pub(super) fn nat_select(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         return Err(arg_error(vm, 1, "index out of range"));
     }
     let vals: Vec<Value> = (i..top).map(|k| vm.nat_arg(fs, nargs, k as u32)).collect();
-    Ok(vm.nat_return(fs, &vals))
+    vm.nat_ret(fs, &vals)
 }
 
 /// PUC 5.4+ `warn(msg1, ..., msgN)` — every argument must be a string (or a
@@ -261,5 +261,5 @@ pub(crate) fn nat_warn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     for (i, p) in parts.iter().enumerate() {
         vm.emit_warn(p.as_bytes(), i + 1 < n)?;
     }
-    Ok(vm.nat_return(fs, &[]))
+    vm.nat_ret(fs, &[])
 }

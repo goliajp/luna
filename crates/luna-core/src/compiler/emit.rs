@@ -157,7 +157,7 @@ impl<'a> Compiler<'a> {
         // object; heap.intern already dedups short strings, the cache only
         // has to hold long ones
         if bytes.len() <= crate::runtime::string::MAX_SHORT_LEN {
-            self.heap.intern(bytes)
+            self.heap.try_intern(bytes).unwrap_or_else(|o| o.fail())
         } else {
             self.long_str(bytes)
         }
@@ -168,7 +168,7 @@ impl<'a> Compiler<'a> {
         if let Some(s) = self.str_cache.find_with(h, |k| k.as_bytes() == bytes) {
             return s;
         }
-        let s = self.heap.intern(bytes);
+        let s = self.heap.try_intern(bytes).unwrap_or_else(|o| o.fail());
         self.str_cache
             .insert_hashed(h, s, s)
             .unwrap_or_else(|o| o.fail());

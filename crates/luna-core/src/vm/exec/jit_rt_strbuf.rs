@@ -3,50 +3,63 @@
 use super::*;
 
 impl Vm {
-    /// Pop a reusable `Vec<u8>` from the JIT accumulator buffer
-    /// pool, or allocate one when the pool is empty. The trace keeps
-    /// it (as the boxed pointer the helper leaks) in a stack slot
-    /// through the loop and appends each piece to it.
+    /// Pop a reusable buffer from the JIT accumulator buffer pool, or
+    /// make an empty one when the pool is empty. The trace keeps it (as
+    /// the boxed pointer the helper leaks) in a stack slot through the
+    /// loop and appends each piece to it.
     #[doc(hidden)]
-    pub fn jit_str_buf_acquire(&mut self) -> Box<Vec<u8>> {
-        Box::new(self.jit.str_buf_pool.pop().unwrap_or_default())
+    pub fn jit_str_buf_acquire(&mut self) -> Box<crate::runtime::mem::LVec<u8>> {
+        let buf = self.jit.str_buf_pool.pop();
+        Box::new(buf.unwrap_or_else(|| crate::runtime::mem::LVec::new(self.heap.mem())))
     }
 
     /// Return a previously-acquired buffer to the
     /// pool, dropping any excess past `jit_str_buf_pool_cap`. The
     /// buffer is `clear`ed (capacity retained) so the next acquire
-    /// gets a ready-to-extend Vec.
+    /// gets a ready-to-extend buffer.
     #[doc(hidden)]
     #[allow(clippy::boxed_local)] // the trace held the buffer boxed; it comes back that way
-    pub fn jit_str_buf_release(&mut self, mut buf: Box<Vec<u8>>) {
+    pub fn jit_str_buf_release(&mut self, mut buf: Box<crate::runtime::mem::LVec<u8>>) {
         buf.clear();
         if self.jit.str_buf_pool.len() < self.jit.str_buf_pool_cap {
-            self.jit.str_buf_pool.push(*buf);
+            self.jit.str_buf_pool.push(buf.take());
         }
-        // Else: drop the buffer.
     }
 
-    /// Append a piece's bytes to an accumulator buffer.
+    /// Append a piece's bytes to an accumulator buffer; `false`, the
+    /// buffer as it was, when it cannot grow.
     #[doc(hidden)]
-    pub fn jit_str_buf_extend(&mut self, buf: &mut Vec<u8>, piece: Gc<crate::runtime::LuaStr>) {
-        buf.extend_from_slice(piece.as_bytes());
+    pub fn jit_str_buf_extend(
+        &mut self,
+        buf: &mut crate::runtime::mem::LVec<u8>,
+        piece: Gc<crate::runtime::LuaStr>,
+    ) -> bool {
+        buf.extend_from_slice(piece.as_bytes()).is_ok()
     }
 
-    /// Drain the accumulator buffer into a fresh
-    /// `LuaStr` via `heap.intern`, returning the raw ptr bits for
-    /// the trace to write into the accumulator slot.
+    /// Drain the accumulator buffer into a fresh string, returning its raw
+    /// pointer bits for the trace to write into the accumulator slot. The
+    /// buffer is left empty, its capacity kept, ready for release.
     ///
-    /// Returns the LuaStr ptr as i64 on success, 0 on overflow
-    /// (the hard cap; the trace deopts). The buffer is left
-    /// CLEAR (drained) ready for release.
+    /// Returns 0 when the string is past the hard cap or cannot be
+    /// allocated; a deopt is parked then, so the dispatcher drops the
+    /// trace's registers (the 0 among them) and the interpreter runs the
+    /// loop again.
     #[doc(hidden)]
-    pub fn jit_str_buf_intern(&mut self, buf: &mut Vec<u8>) -> i64 {
-        let bytes = std::mem::take(buf);
+    pub fn jit_str_buf_intern(&mut self, buf: &mut crate::runtime::mem::LVec<u8>) -> i64 {
         // hard cap at 256KB
-        if bytes.len() > 256 * 1024 {
-            return 0;
+        let r = if buf.len() > 256 * 1024 {
+            None
+        } else {
+            self.heap.try_intern(buf).ok()
+        };
+        buf.clear();
+        match r {
+            Some(gc) => gc.as_ptr() as i64,
+            None => {
+                self.jit_park_oom();
+                0
+            }
         }
-        let gc = self.heap.intern(&bytes);
-        gc.as_ptr() as i64
     }
 }

@@ -77,7 +77,7 @@ pub unsafe extern "C" fn luna_capi_lua_getfield(
     let mut api = unsafe { Api::new(L) };
     let t = api.get_or_nil(idx);
     // SAFETY: `k` is NUL-terminated (# Safety)
-    let key = api.str(unsafe { c_bytes(k) }.unwrap_or_default());
+    let key = or_raise!(api, api.str(unsafe { c_bytes(k) }.unwrap_or_default()), 0);
     api.push(key);
     index_into_top(&mut api, t, key)
 }
@@ -171,21 +171,25 @@ pub unsafe extern "C" fn lua_rawgetp(L: *mut LuaState, idx: c_int, p: *const c_v
     type_tag(v)
 }
 
+c_exports! {
+    lua_createtable => luna_c_lua_createtable,
+}
+
 /// PUC `lua_createtable`: push a new table with room for `narr` array
 /// items and `nrec` other entries.
 ///
 /// # Safety
-/// As [`lua_rawget`], without the table.
-// SAFETY: no other item in the link is named `lua_createtable`: the host
-// does not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
+/// `L` is a live thread of an open state, the innermost API call on it;
+/// called by the C wrapper, which throws what this raises.
+// SAFETY: no other item in the link is named `luna_capi_lua_createtable`;
+// the C wrapper is its only caller
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lua_createtable(L: *mut LuaState, narr: c_int, nrec: c_int) {
+pub unsafe extern "C" fn luna_capi_lua_createtable(L: *mut LuaState, narr: c_int, nrec: c_int) {
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
     let narr = usize::try_from(narr).unwrap_or(0);
     let nrec = usize::try_from(nrec).unwrap_or(0);
-    let t = api.vm.host_new_table(narr, nrec);
+    let t = or_raise!(api, api.vm.host_new_table(narr, nrec));
     api.push(Value::Table(t));
     api.vm.host_check_gc();
 }

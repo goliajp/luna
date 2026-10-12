@@ -91,8 +91,8 @@ static inline void luna_check(lua_State *L) {
   }
 
 /* functions of the Rust side the C side calls */
-void luna_capi_raise_msg(lua_State *L, const char *msg);
-const char *luna_capi_pushlstring(lua_State *L, const char *s, size_t len);
+void luna_capi_raise_mem(lua_State *L);
+const char *luna_capi_lua_pushlstring(lua_State *L, const char *s, size_t len);
 size_t luna_capi_num2str(lua_State *L, int isint, lua_Integer i, lua_Number n, char *buff);
 void luna_capi_concat(lua_State *L, int n);
 const char *luna_capi_tolstring(lua_State *L, int idx, size_t *len);

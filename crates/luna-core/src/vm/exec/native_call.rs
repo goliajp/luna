@@ -43,15 +43,17 @@ impl NativeKind {
 }
 
 impl Vm {
-    /// A native that is the library function `builtin`.
+    /// A native that is the library function `builtin`, collecting in an
+    /// emergency when memory runs out.
     #[doc(hidden)]
     pub fn builtin(
         &mut self,
         f: crate::runtime::value::NativeFn,
         upvals: &[Value],
         builtin: crate::runtime::Builtin,
-    ) -> Value {
-        Value::Native(self.heap.new_builtin(f, upvals, builtin))
+    ) -> Result<Value, LuaError> {
+        self.retry_oom(|vm| vm.heap.try_new_builtin(f, upvals, builtin, false))
+            .map(Value::Native)
     }
 
     /// `stack[func_slot]` is `nc`, a native whose kind is not
@@ -73,9 +75,10 @@ impl Vm {
                 // a sync `eval`/`call_value` path (would have no
                 // executor to drive the returned future).
                 if !self.async_mode {
-                    let s = Value::Str(self.heap.intern(b"async native called in sync context"));
+                    let e =
+                        self.error_from(None, format_args!("async native called in sync context"));
                     self.last_error_kind = crate::vm::error::LuaErrorKind::Runtime;
-                    return Some(Err(LuaError(s)));
+                    return Some(Err(e));
                 }
                 // Same root-up bookkeeping as the sync path:
                 // pin args + result-count expectation so a

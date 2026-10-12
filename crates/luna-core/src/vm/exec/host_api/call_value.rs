@@ -127,17 +127,19 @@ impl Vm {
         // a native calls back at its own top, as a C function does
         let callback = at.is_none();
         let at = at.or_else(|| self.native_top());
-        let func_slot = match at {
-            None => {
-                self.stack.push_or_abort(f);
-                self.stack.extend_from_slice_or_abort(args);
+        let placed = match at {
+            None => self.place_call(len as u32, f, args).inspect(|_| {
                 self.top = self.stack.len() as u32;
-                len as u32
-            }
-            Some(slot) => {
-                self.place_call(slot, f, args);
+            }),
+            Some(slot) => self.place_call(slot, f, args).inspect(|&slot| {
                 self.top = self.stack.len().max(slot as usize + 1 + args.len()) as u32;
-                slot
+            }),
+        };
+        let func_slot = match placed {
+            Ok(slot) => slot,
+            Err(e) => {
+                self.g.nccalls -= 1;
+                return Err(e);
             }
         };
         let r = self.call_at(func_slot, args.len() as u32, from_c);
@@ -145,7 +147,7 @@ impl Vm {
         // a call placed inside a frame's window gives the window back: the
         // frames below run on when the error is caught
         if at.is_some() && self.stack.len() < len {
-            self.grow_stack_or_abort(len);
+            self.stack.regrow(len, Value::Nil);
         }
         if r.is_err() && !self.control_in_flight() {
             // A `coroutine.yield` in flight raises a sentinel error to unwind the

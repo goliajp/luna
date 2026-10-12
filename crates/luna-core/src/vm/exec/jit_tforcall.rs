@@ -36,8 +36,8 @@ impl Vm {
         let abs = f.base + slot_offset;
         let (first, control) = (abs + var, abs + ctl);
         let need = (first + 3) as usize;
-        if self.stack.len() < need {
-            self.grow_stack_or_abort(need);
+        if !self.jit_ensure_stack(need) {
+            return -1;
         }
         // ipairs fast path
         let took_fast_path = if let Value::Native(n) = self.stack[abs as usize]

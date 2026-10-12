@@ -26,95 +26,90 @@ use traceback::d_traceback;
 use upvalues::{d_getupvalue, d_setupvalue, d_upvalueid, d_upvaluejoin};
 pub(crate) use upvalues::{upvalue_name, visible_upvalue_index};
 
-pub(crate) fn open_debug(vm: &mut Vm) {
+/// Open the `debug` library, failing when memory runs out.
+pub(crate) fn try_open_debug(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();
-    let t = vm.heap.new_table();
-    let set = |vm: &mut Vm, name: &str, f| {
-        let fv = vm.native(f);
-        let k = Value::Str(vm.heap.intern(name.as_bytes()));
-        // SAFETY: `t` is the table allocated above, so it is alive; no reference into it is held across this call, and `set` does not collect
-        unsafe { t.as_mut() }
-            .set(&mut vm.heap, k, fv)
-            .expect("valid key");
+    let t = vm.lib_table(16)?;
+    let set = |vm: &mut Vm, name: &str, f| -> Result<(), LuaError> {
+        let fv = vm.lib_native(f)?;
+        let k = vm.str_value(name.as_bytes())?;
+        vm.lib_set_value(t, k, fv)
     };
-    set(vm, "debug", d_debug);
-    set(vm, "gethook", d_gethook);
-    set(vm, "getinfo", d_getinfo);
-    set(vm, "getlocal", d_getlocal);
-    set(vm, "getregistry", d_getregistry);
-    set(vm, "getmetatable", d_getmetatable);
-    set(vm, "getupvalue", d_getupvalue);
-    set(vm, "sethook", d_sethook);
-    set(vm, "setlocal", d_setlocal);
-    set(vm, "setmetatable", d_setmetatable);
-    set(vm, "setupvalue", d_setupvalue);
-    set(vm, "traceback", d_traceback);
+    set(vm, "debug", d_debug)?;
+    set(vm, "gethook", d_gethook)?;
+    set(vm, "getinfo", d_getinfo)?;
+    set(vm, "getlocal", d_getlocal)?;
+    set(vm, "getregistry", d_getregistry)?;
+    set(vm, "getmetatable", d_getmetatable)?;
+    set(vm, "getupvalue", d_getupvalue)?;
+    set(vm, "sethook", d_sethook)?;
+    set(vm, "setlocal", d_setlocal)?;
+    set(vm, "setmetatable", d_setmetatable)?;
+    set(vm, "setupvalue", d_setupvalue)?;
+    set(vm, "traceback", d_traceback)?;
     if v == LuaVersion::Lua51 {
-        set(vm, "getfenv", d_getfenv);
-        set(vm, "setfenv", d_setfenv);
+        set(vm, "getfenv", d_getfenv)?;
+        set(vm, "setfenv", d_setfenv)?;
     } else {
-        set(vm, "getuservalue", d_getuservalue);
-        set(vm, "setuservalue", d_setuservalue);
-        set(vm, "upvalueid", d_upvalueid);
-        set(vm, "upvaluejoin", d_upvaluejoin);
+        set(vm, "getuservalue", d_getuservalue)?;
+        set(vm, "setuservalue", d_setuservalue)?;
+        set(vm, "upvalueid", d_upvalueid)?;
+        set(vm, "upvaluejoin", d_upvaluejoin)?;
     }
     if v == LuaVersion::Lua54 {
-        set(vm, "setcstacklimit", d_setcstacklimit);
+        set(vm, "setcstacklimit", d_setcstacklimit)?;
     }
-    vm.set_global("debug", Value::Table(t))
-        .expect("stdlib registration");
+    vm.lib_set_global("debug", Value::Table(t))?;
     vm.barrier_back_table(t);
     // PUC's LUA_REGISTRYINDEX table — eagerly built so `_HOOKKEY` (weak-key)
     // is observable from db.lua :328 the moment the debug library loads.
-    init_registry(vm);
+    init_registry(vm)?;
     // register in package.loaded so require"debug" finds it
-    let pkg_k = Value::Str(vm.heap.intern(b"package"));
+    let pkg_k = vm.str_value(b"package")?;
     if let Value::Table(pkg) = vm.globals().get(pkg_k) {
-        let lk = Value::Str(vm.heap.intern(b"loaded"));
+        let lk = vm.str_value(b"loaded")?;
         if let Value::Table(loaded) = pkg.get(lk) {
-            let dk = Value::Str(vm.heap.intern(b"debug"));
-            // SAFETY: `loaded` was just read from `package.loaded`, so it is alive; no reference into it is held across this call, and `set` does not collect
-            unsafe { loaded.as_mut() }
-                .set(&mut vm.heap, dk, Value::Table(t))
-                .expect("valid key");
+            let dk = vm.str_value(b"debug")?;
+            vm.lib_set_value(loaded, dk, Value::Table(t))?;
             vm.barrier_back_table(loaded);
         }
     }
+    Ok(())
 }
 
-fn set_field(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) {
-    let key = Value::Str(vm.heap.intern(k.as_bytes()));
-    // SAFETY: `t` is a table the caller allocated or holds in a local, so it is alive; no reference into it is held across this call, and `set` does not collect
-    unsafe { t.as_mut() }
-        .set(&mut vm.heap, key, v)
-        .expect("valid key");
+fn set_field(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) -> Result<(), LuaError> {
+    let key = vm.str_value(k.as_bytes())?;
+    vm.lib_set_value(t, key, v)?;
+    Ok(())
 }
 
-fn set_str(vm: &mut Vm, t: Gc<Table>, k: &str, bytes: &[u8]) {
-    let v = Value::Str(vm.heap.intern(bytes));
-    set_field(vm, t, k, v);
+fn set_str(vm: &mut Vm, t: Gc<Table>, k: &str, bytes: &[u8]) -> Result<(), LuaError> {
+    let v = vm.str_value(bytes)?;
+    set_field(vm, t, k, v)?;
+    Ok(())
 }
 
 /// Build PUC's `LUA_REGISTRYINDEX` table (kept on `Vm.registry`, a GC root)
 /// and populate `_HOOKKEY` (PUC `db_sethook`'s per-thread weak-key table).
 /// db.lua :328 only checks `__mode == 'k'`; luna's sethook stores hook state
 /// directly in `Vm.hook`/`Coro.hook`, so the entry is shape-only.
-fn init_registry(vm: &mut Vm) {
+fn init_registry(vm: &mut Vm) -> Result<(), LuaError> {
     // the C API may have made the registry already
     let reg = vm.host_registry();
-    let hook_t = vm.heap.new_table();
-    let mt = vm.heap.new_table();
-    let mode_k = Value::Str(vm.heap.intern(b"k"));
-    set_field(vm, mt, "__mode", mode_k);
+    let hook_t = vm.alloc_table()?;
+    let mt = vm.alloc_table()?;
+    let mode_k = vm.str_value(b"k")?;
+    set_field(vm, mt, "__mode", mode_k)?;
     vm.barrier_back_table(mt);
     // SAFETY: `hook_t` was allocated above and is held only by this local; the borrow covers one call
     unsafe { hook_t.as_mut() }.set_metatable(Some(mt));
     vm.barrier_back_table(hook_t);
-    set_field(vm, reg, "_HOOKKEY", Value::Table(hook_t));
+    set_field(vm, reg, "_HOOKKEY", Value::Table(hook_t))?;
     if vm.ignore_env && vm.version() >= LuaVersion::Lua52 {
-        set_field(vm, reg, "LUA_NOENV", Value::Bool(true));
+        set_field(vm, reg, "LUA_NOENV", Value::Bool(true))?;
     }
     vm.barrier_back_table(reg);
+    Ok(())
 }
 
 /// PUC `getthread`: an optional leading thread argument, and the offset of
@@ -137,13 +132,13 @@ fn is_function(vm: &Vm, a: Args, i: u32) -> bool {
 
 fn d_getregistry(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     let r = vm.registry.map(Value::Table).unwrap_or(Value::Nil);
-    Ok(vm.nat_return(fs, &[r]))
+    vm.nat_ret(fs, &[r])
 }
 
 fn d_getmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let v = check_any(vm, Args::new(fs, nargs), 0)?;
     let mt = vm.metatable_of(v).map(Value::Table).unwrap_or(Value::Nil);
-    Ok(vm.nat_return(fs, &[mt]))
+    vm.nat_ret(fs, &[mt])
 }
 
 fn d_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -177,7 +172,7 @@ fn d_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     } else {
         v
     };
-    Ok(vm.nat_return(fs, &[r]))
+    vm.nat_ret(fs, &[r])
 }
 
 fn d_getuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -187,7 +182,7 @@ fn d_getuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             Value::Userdata(u) if !a.is_none(0) => vm.host_uservalue(u, 1).unwrap_or(Value::Nil),
             _ => Value::Nil,
         };
-        return Ok(vm.nat_return(fs, &[r]));
+        return vm.nat_ret(fs, &[r]);
     }
     // 5.4+: user value `n` of a full userdata and `true`, or nil alone when
     // it has no such value
@@ -199,8 +194,8 @@ fn d_getuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         _ => None,
     };
     match found {
-        Some(v) => Ok(vm.nat_return(fs, &[v, Value::Bool(true)])),
-        None => Ok(vm.nat_return(fs, &[Value::Nil])),
+        Some(v) => vm.nat_ret(fs, &[v, Value::Bool(true)]),
+        None => vm.nat_ret(fs, &[Value::Nil]),
     }
 }
 
@@ -235,9 +230,9 @@ fn d_setuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let set = usize::try_from(n).is_ok_and(|n| vm.host_set_uservalue(u, n, value));
     if !set {
         // `lua_setiuservalue` failed: no such user value
-        return Ok(vm.nat_return(fs, &[Value::Nil]));
+        return vm.nat_ret(fs, &[Value::Nil]);
     }
-    Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
+    vm.nat_ret(fs, &[Value::Userdata(u)])
 }
 
 /// PUC `db_debug`: read commands from stdin (in 250-byte `fgets` chunks),
@@ -310,7 +305,7 @@ fn run_debug_command(vm: &mut Vm, line: &[u8]) -> Result<(), Vec<u8>> {
 fn d_setcstacklimit(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     check_int(vm, Args::new(fs, nargs), 0)?;
     // PUC 5.4.9's `lua_setcstacklimit` is a stub that returns LUAI_MAXCCALLS
-    Ok(vm.nat_return(fs, &[Value::Int(200)]))
+    vm.nat_ret(fs, &[Value::Int(200)])
 }
 
 /// PUC 5.1 `debug.setfenv(o, env)`: replace the environment of a function,
@@ -328,7 +323,7 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                     "'setfenv' cannot change environment of given object",
                 ));
             };
-            vm.set_closure_env(cl, env_idx, env_t);
+            vm.try_set_closure_env(cl, env_idx, env_t)?;
         }
         Value::Coro(co) => {
             // the running thread's globals are the Vm's; a suspended one
@@ -355,7 +350,7 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             ));
         }
     }
-    Ok(vm.nat_return(fs, &[o]))
+    vm.nat_ret(fs, &[o])
 }
 
 /// PUC 5.1 `debug.getfenv(o)`: the environment of a function, thread or
@@ -378,5 +373,5 @@ fn d_getfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         Value::Coro(_) | Value::Native(_) | Value::Userdata(_) => Value::Table(vm.globals()),
         _ => Value::Nil,
     };
-    Ok(vm.nat_return(fs, &[env]))
+    vm.nat_ret(fs, &[env])
 }

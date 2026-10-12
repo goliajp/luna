@@ -239,9 +239,9 @@ impl Vm {
         // overhangs the current stack len (rare,
         // but inline-pushed frame stack writes
         // only covered the trace's writeback).
-        if self.stack.len() < resume_base + resume_max_stack {
-            self.stack
-                .resize_or_abort(resume_base + resume_max_stack, crate::runtime::Value::Nil);
+        // a stack that cannot grow just starts no side trace here
+        if !self.jit_ensure_stack(resume_base + resume_max_stack) {
+            return;
         }
         let parent = Some((cl.proto, head_pc_val, exit_hit_idx));
         if self.trace_try_adopt(resume_proto, cont_pc, resume_base, parent, false) {

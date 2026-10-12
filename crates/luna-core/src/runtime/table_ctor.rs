@@ -87,8 +87,7 @@ impl Table {
             return Err(TableError::Overflow);
         }
         let nodes = self.nodes().len();
-        self.resize(heap, last as usize, nodes);
-        Ok(())
+        self.resize(heap, last as usize, nodes)
     }
 
     /// Store list item `idx` (0-based, below `asize`) the way `SetList`

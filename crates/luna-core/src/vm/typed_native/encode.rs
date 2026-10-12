@@ -15,7 +15,7 @@ pub trait IntoLuaReturn {
 impl IntoLuaReturn for () {
     #[inline]
     fn into_lua_return(self, vm: &mut Vm, fs: u32) -> Result<u32, LuaError> {
-        Ok(vm.nat_return(fs, &[]))
+        vm.nat_ret(fs, &[])
     }
 }
 
@@ -33,7 +33,7 @@ macro_rules! impl_into_lua_return_single {
                 #[inline]
                 fn into_lua_return(self, vm: &mut Vm, fs: u32) -> Result<u32, LuaError> {
                     let v = <$t as IntoValue>::into_value(self, vm);
-                    Ok(vm.nat_return(fs, &[v]))
+                    vm.nat_ret(fs, &[v])
                 }
             }
         )+
@@ -59,7 +59,7 @@ impl IntoLuaReturn for &'static str {
     #[inline]
     fn into_lua_return(self, vm: &mut Vm, fs: u32) -> Result<u32, LuaError> {
         let v = self.into_value(vm);
-        Ok(vm.nat_return(fs, &[v]))
+        vm.nat_ret(fs, &[v])
     }
 }
 
@@ -72,7 +72,7 @@ macro_rules! impl_into_lua_return_tuple {
                     let vs = [
                         $( self.$idx.into_value(vm), )+
                     ];
-                    Ok(vm.nat_return(fs, &vs))
+                    vm.nat_ret(fs, &vs)
                 }
             }
         )+

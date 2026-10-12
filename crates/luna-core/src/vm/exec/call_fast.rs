@@ -6,8 +6,10 @@ impl Vm {
     /// Push the frame of a Lua function called from the fast loop (PUC
     /// `luaD_precall`) when that is all the call needs: no method JIT to
     /// try, fixed parameters, the stack big enough; the caller runs with no
-    /// hook and no trace JIT. The new frame, or `None`, having done nothing,
-    /// to leave the call to `begin_call`.
+    /// hook and no trace JIT. The new frame, or `None`, having done nothing
+    /// but clear registers of the callee's, to leave the call to
+    /// `begin_call` (which grows a frame stack with no room left, where
+    /// running out of memory can be raised).
     #[inline(always)]
     pub(super) fn push_lua_frame_fast(
         &mut self,
@@ -42,6 +44,9 @@ impl Vm {
             self.stack
                 .get_unchecked_mut((base + kept) as usize..end)
                 .fill(Value::Nil);
+        }
+        if self.frames.len() == self.frames.capacity() {
+            return None;
         }
         frames_push_sync(
             &mut self.frames,

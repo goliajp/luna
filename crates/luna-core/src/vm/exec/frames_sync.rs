@@ -23,10 +23,24 @@ pub(super) fn frames_push_sync(
     trap: &mut bool,
     cf: CallFrame,
 ) {
+    if try_frames_push_sync(frames, frames_top, trap, cf).is_err() {
+        crate::runtime::mem::oom_abort(std::alloc::Layout::new::<CallFrame>());
+    }
+}
+
+/// [`frames_push_sync`], failing (with nothing pushed) when the frame
+/// stack cannot grow.
+#[inline(always)]
+pub(super) fn try_frames_push_sync(
+    frames: &mut LVec<CallFrame>,
+    frames_top: &mut u32,
+    trap: &mut bool,
+    cf: CallFrame,
+) -> Result<(), crate::runtime::mem::Oom> {
+    frames.push(cf)?;
     if matches!(cf, CallFrame::Cont(_)) {
         *trap = true;
     }
-    frames.push_or_abort(cf);
     // Shadow maintenance is debug-only: release builds skip the
     // increment + assertion entirely. While nothing reads the shadow,
     // its purpose is to VERIFY the assumed invariant
@@ -43,6 +57,45 @@ pub(super) fn frames_push_sync(
     }
     #[cfg(not(debug_assertions))]
     let _ = frames_top;
+    Ok(())
+}
+
+impl Vm {
+    /// Push `cf` on the running thread's frame stack, collecting in an
+    /// emergency when the stack cannot grow (PUC `luaE_extendCI`).
+    #[inline(always)]
+    pub(super) fn push_cf(&mut self, cf: CallFrame) -> Result<(), LuaError> {
+        // the room test first, so the common path keeps nothing across a call
+        if self.frames.len() == self.frames.capacity() {
+            return self.push_cf_slow(cf);
+        }
+        frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf);
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn push_cf_slow(&mut self, cf: CallFrame) -> Result<(), LuaError> {
+        self.retry_oom(|vm| vm.frames.reserve(1))?;
+        frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf);
+        Ok(())
+    }
+
+    /// Room for one more frame, so a push that follows cannot fail;
+    /// collecting in an emergency when the stack cannot grow.
+    #[inline(always)]
+    pub(super) fn cf_room(&mut self) -> Result<(), LuaError> {
+        if self.frames.len() == self.frames.capacity() {
+            return self.cf_room_slow();
+        }
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn cf_room_slow(&mut self) -> Result<(), LuaError> {
+        self.retry_oom(|vm| vm.frames.reserve(1))
+    }
 }
 
 #[inline(always)]

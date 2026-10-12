@@ -204,8 +204,8 @@ impl Vm {
                 // borrow lasts until the slot is written, which does not collect
                 unsafe { &mut co.as_mut().stack }
             };
-            if stack.len() <= slot {
-                stack.resize_or_abort(slot + 1, Value::Nil);
+            if stack.len() <= slot && stack.resize(slot + 1, Value::Nil).is_err() {
+                return None; // a stack that cannot grow has no such slot to write
             }
             stack[slot] = v;
             Vm::unseal_after_local_write(stack, slot, &name);

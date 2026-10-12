@@ -10,7 +10,7 @@ use std::ptr;
 
 use crate::runtime::function::{LuaClosure, NativeClosure, Proto, UpvalState, Upvalue};
 use crate::runtime::string::{self, LuaStr, StringTable};
-use crate::runtime::table::Table;
+use crate::runtime::table::{self, Table};
 use crate::runtime::userdata::{Userdata, UserdataPayload};
 use crate::runtime::value::Value;
 
@@ -194,6 +194,13 @@ pub struct Heap {
     gray: crate::runtime::mem::LVec<*mut GcHeader>,
     /// gray objects are left off `gray` because it could not grow
     gray_overflow: bool,
+    /// a raw table store the interpreter's fast path tried could not grow
+    /// the table: the slow path it falls back to counts that as the first
+    /// attempt (see `Vm::newindex_miss`)
+    pub(crate) store_failed: bool,
+    /// the head of `all` at the last point where every live object was
+    /// rooted; objects before it on `all` are newer (see `mark_young`)
+    young: *mut GcHeader,
     /// Incremental traversal state. `Some` between `gc_start_propagate` and
     /// `gc_finish_atomic` (and inline within `mark_all`); `None` otherwise.
     propagate: Option<PropagateState>,
@@ -267,78 +274,6 @@ pub struct Heap {
 const GC_MIN_THRESHOLD: usize = 1 << 20;
 
 impl Heap {
-    /// Build a fresh empty heap with default GC pacing and no memory cap.
-    pub fn new() -> Heap {
-        Heap::with_seed(make_seed())
-    }
-
-    /// Whether no string has been interned yet.
-    /// Hash the interned strings again with `seed` and the dialect's
-    /// function.
-    pub(crate) fn rehash_strings(&mut self, seed: u32) {
-        self.strings.rehash(seed, self.hash51);
-    }
-
-    /// The seed strings are hashed with.
-    pub fn seed(&self) -> u32 {
-        self.seed
-    }
-
-    /// [`Heap::new`] hashing strings with `seed`.
-    pub fn with_seed(seed: u32) -> Heap {
-        Heap::with_mem(crate::runtime::mem::MemOwner::system(), seed)
-    }
-
-    /// A heap whose memory comes from `mem`, hashing strings with `seed`.
-    pub fn with_mem(mem: crate::runtime::mem::MemOwner, seed: u32) -> Heap {
-        let mut h = Heap {
-            all: ptr::null_mut(),
-            fixed: ptr::null_mut(),
-            fix_natives: false,
-            strings: StringTable::new(mem.mem()),
-            seed,
-            live: 0,
-            bytes: 0,
-            next_gc: GC_MIN_THRESHOLD,
-            gc_limit: GC_MIN_THRESHOLD,
-            current_white: WHITE0,
-            gray: crate::runtime::mem::LVec::new(mem.mem()),
-            gray_overflow: false,
-            propagate: None,
-            phase: GcPhase::Pause,
-            sweep_cur: ptr::null_mut(),
-            gc_stopped: false,
-            finalize: crate::runtime::mem::LVec::new(mem.mem()),
-            tobefnz: crate::runtime::mem::LVec::new(mem.mem()),
-            no_ephemeron: false,
-            signed_zero_keys: false,
-            table_dialect: crate::runtime::table::Dialect::L55,
-            hash51: false,
-            defer_thread_cycle_finalize: false,
-            chunk_roots: Vec::new(),
-            track_chunk_roots: false,
-            mem_cap: None,
-            table_pool: crate::runtime::mem::LVec::new(mem.mem()),
-            #[cfg(feature = "gc-verify")]
-            recently_freed: std::collections::HashSet::new(),
-            mem,
-        };
-        h.make_memerr();
-        h
-    }
-
-    /// The handle the heap's containers allocate through.
-    #[inline(always)]
-    pub fn mem(&self) -> crate::runtime::mem::MemRef {
-        self.mem.mem()
-    }
-
-    /// An owner of the heap's allocation context, for holders that must
-    /// keep it alive as long as they do (the Vm's own containers).
-    pub fn mem_owner(&self) -> crate::runtime::mem::MemOwner {
-        self.mem.clone()
-    }
-
     /// Put a new object on the all-objects list with its born color.
     ///
     /// # Safety
@@ -400,20 +335,6 @@ impl Default for Heap {
     }
 }
 
-/// Hash seed from address entropy (ASLR) and clock, luaL_makeseed style.
-fn make_seed() -> u32 {
-    let stack_var = 0u8;
-    let mut h = &stack_var as *const u8 as u64;
-    h ^= (make_seed as *const () as u64) << 16;
-    if let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        h ^= (d.subsec_nanos() as u64) << 32 ^ d.as_secs();
-    }
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    h ^= h >> 33;
-    h as u32
-}
-
 #[path = "heap_alloc.rs"]
 mod alloc;
 #[path = "heap_barrier.rs"]
@@ -422,6 +343,12 @@ mod barrier;
 mod collect;
 #[path = "heap_finalize.rs"]
 mod finalize;
+#[path = "heap_intern.rs"]
+mod intern;
+#[path = "heap_new.rs"]
+mod new;
+pub(crate) use self::intern::fresh_seed;
+use self::intern::{make_seed, oom_abort_heap};
 #[path = "heap_mark.rs"]
 mod mark;
 #[path = "heap_pace.rs"]
@@ -429,7 +356,7 @@ mod pace;
 #[path = "heap_sweep.rs"]
 mod sweep;
 pub(crate) use self::mark::Marker;
-use self::mark::{drain_marker, weak_key_alive};
+use self::mark::{blacken, drain_marker, weak_key_alive};
 
 #[cfg(feature = "gc-verify")]
 #[path = "heap_verify.rs"]

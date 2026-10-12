@@ -5,6 +5,8 @@ use super::*;
 use crate::runtime::mem::LVec;
 use crate::vm::exec::state::CallGuards;
 
+mod libs;
+
 impl Vm {
     /// The host runs its calls from inside a C function of its own that
     /// holds `frames` frames and `slots` stack slots below everything else,
@@ -36,7 +38,7 @@ impl Vm {
     /// Build the raw `Vm` struct without main coroutine / RNG seed / library
     /// setup. Private helper shared by `Vm::new` and `Vm::new_minimal`; the
     /// caller is responsible for the rest of the bring-up.
-    pub(super) fn new_inner(version: LuaVersion, heap: Heap) -> Vm {
+    pub(super) fn new_inner(version: LuaVersion, heap: Heap) -> Option<Vm> {
         let mut heap = heap;
         // PUC 5.1 had no ephemeron pass — `__mode='k'` tables marked their
         // values strongly. gc.lua's "weak tables" section relies on that.
@@ -52,12 +54,16 @@ impl Vm {
         // coroutine reference cycle (gc.lua :502); 5.4+ rewrote the GC and
         // finalize in a single cycle (5.4/5.5 gc.lua :544 assert exactly one).
         heap.defer_thread_cycle_finalize = version == LuaVersion::Lua53;
-        let globals = heap.new_table();
-        let mm_names = std::array::from_fn(|i| heap.intern(MM_NAMES[i].as_bytes()));
+        let globals = heap.try_new_table().ok()?;
+        let mut names = [None; MM_NAMES.len()];
+        for (slot, name) in names.iter_mut().zip(MM_NAMES) {
+            *slot = Some(heap.try_intern(name.as_bytes()).ok()?);
+        }
+        let mm_names = names.map(|n| n.expect("every name was made above"));
 
         let mem = heap.mem();
         let mem_owner = heap.mem_owner();
-        Vm {
+        Some(Vm {
             heap,
             stack: LVec::new(mem),
             frames: LVec::new(mem),
@@ -210,8 +216,10 @@ impl Vm {
                 NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             },
             retired_jit_storage: Vec::new(),
+            buf_spare: LVec::new(mem),
             _mem: mem_owner,
-        }
+            state_complete: false,
+        })
     }
 
     /// Build a fully-loaded Vm — the default for embedders that want PUC's
@@ -248,6 +256,17 @@ impl Vm {
         Vm::new_minimal_on(version, Heap::new_on(mem))
     }
 
+    /// [`Vm::new_minimal_with_mem`], or `None` when the allocation context
+    /// cannot give the Vm the memory it starts with (PUC `lua_newstate`
+    /// returns NULL then); what was allocated is freed.
+    pub fn try_new_minimal_with_mem(
+        version: LuaVersion,
+        mem: crate::runtime::mem::MemOwner,
+    ) -> Option<Vm> {
+        let heap = Heap::try_with_mem(mem, crate::runtime::heap::fresh_seed())?;
+        Vm::try_new_minimal_on(version, heap)
+    }
+
     /// [`Vm::new`] whose memory comes from `mem` (see
     /// [`Vm::new_minimal_with_mem`]).
     pub fn new_with_mem(version: LuaVersion, mem: crate::runtime::mem::MemOwner) -> Vm {
@@ -271,14 +290,23 @@ impl Vm {
     }
 
     fn new_minimal_on(version: LuaVersion, heap: Heap) -> Vm {
-        let mut vm = Vm::new_inner(version, heap);
-        let mc = vm.heap.new_coro(Value::Nil, vm.globals);
+        Vm::try_new_minimal_on(version, heap)
+            .unwrap_or_else(|| crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Vm>()))
+    }
+
+    fn try_new_minimal_on(version: LuaVersion, heap: Heap) -> Option<Vm> {
+        let mut vm = Vm::new_inner(version, heap)?;
+        let mc = vm.heap.try_new_coro(Value::Nil, vm.globals).ok()?;
         // SAFETY: `mc` was allocated on the line above and is held only by this local; the borrow covers one field store
         unsafe { mc.as_mut() }.status = CoroStatus::Running;
         vm.main_coro = Some(mc);
         let (a, b) = vm.rng_auto_seed();
         vm.rng_seed(a as u64, b as u64);
-        vm
+        vm.buf_spare
+            .reserve_exact(Vm::lual_buffersize(version))
+            .ok()?;
+        vm.state_complete = true;
+        Some(vm)
     }
 
     /// Install a caller-supplied JIT backend. The
@@ -343,99 +371,6 @@ impl Vm {
         self.jit.trace_compiler = Box::new(crate::jit::NullJitBackend);
         self.set_jit_enabled(false);
         self.set_trace_jit_enabled(false);
-    }
-
-    /// Open the entire 5.5 standard library on a `new_minimal`-built Vm.
-    /// `Vm::new` calls this; sandboxed embedders open libraries one at a
-    /// time instead (`open_base`, `open_math`, `open_table`, …).
-    pub fn open_all_libs(&mut self) {
-        self.open_base();
-        self.open_math();
-        self.open_table();
-        self.open_string();
-        self.open_utf8();
-        self.open_os_io();
-        self.open_debug();
-        self.open_coroutine();
-        // PUC 5.2 introduced `bit32`; 5.3 retired it in the manual BUT
-        // the stock 5.3 build ships -DLUA_COMPAT_5_2, which keeps the
-        // library loaded. The diff ground truth is the default build
-        // (stock lua5.3), so expose it under 5.2 AND
-        // 5.3; 5.4 dropped the compat default for real.
-        if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
-            self.open_bit32();
-        }
-        // last, so `package.loaded` lists every library opened before it
-        self.open_package();
-    }
-
-    /// Install the base library (`print`, `type`, `pairs`, `tostring`,
-    /// `pcall`, `error`, `assert`, `select`, `setmetatable`, `getmetatable`,
-    /// `rawequal`, `rawget`, `rawset`, `rawlen`, `next`, `tonumber`,
-    /// `collectgarbage`, `warn` on 5.4+, `_VERSION`, `_G`, plus 5.1's
-    /// retired globals `unpack`, `loadstring`, `setfenv`, `getfenv`,
-    /// `newproxy`, `gcinfo` when version == 5.1). Safe to call at most
-    /// once per Vm.
-    pub fn open_base(&mut self) {
-        self.open_lib(crate::vm::builtins::open_base);
-    }
-
-    /// Install the `math` standard library.
-    pub fn open_math(&mut self) {
-        self.open_lib(crate::vm::lib_math::open_math);
-    }
-
-    /// Install the `table` standard library.
-    pub fn open_table(&mut self) {
-        self.open_lib(crate::vm::lib_table::open_table);
-    }
-
-    /// Install the `string` standard library (and the shared string metatable).
-    pub fn open_string(&mut self) {
-        self.open_lib(crate::vm::lib_string::open_string);
-    }
-
-    /// Install the `utf8` standard library (5.3+).
-    pub fn open_utf8(&mut self) {
-        self.open_lib(crate::vm::lib_utf8::open_utf8);
-    }
-
-    /// `os` and `io` are merged because file userdata shares state with both
-    /// (`io.tmpname` and `os.tmpname` are the same function, `io.popen`
-    /// wraps `os.execute`'s shell).
-    pub fn open_os_io(&mut self) {
-        self.open_lib(crate::vm::lib_os_io::open_os_io);
-    }
-
-    /// Install the `debug` standard library (introspection / hooks). Off by
-    /// default for sandbox embedders.
-    pub fn open_debug(&mut self) {
-        self.open_lib(crate::vm::lib_debug::open_debug);
-    }
-
-    /// Install the `coroutine` standard library.
-    pub fn open_coroutine(&mut self) {
-        self.open_lib(crate::vm::lib_coroutine::open_coroutine);
-    }
-
-    /// `package` plus the 5.1-only `module` and `package.seeall` aliases.
-    pub fn open_package(&mut self) {
-        self.open_lib(crate::vm::lib_package::open_package);
-    }
-
-    /// 5.2-only `bit32` library (5.3+ retired in favour of native bitwise
-    /// ops on 64-bit integers).
-    pub fn open_bit32(&mut self) {
-        self.open_lib(crate::vm::lib_bit32::open_bit32);
-    }
-
-    /// From 5.2 on, library functions are PUC light C functions, which are
-    /// not collectable: luna keeps them off the swept list and frees them
-    /// with the Vm, so a weak table never drops one. 5.1 collects them.
-    pub(crate) fn open_lib(&mut self, open: fn(&mut Vm)) {
-        self.heap.fix_natives = self.version >= LuaVersion::Lua52;
-        open(self);
-        self.heap.fix_natives = false;
     }
 }
 

@@ -194,18 +194,16 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
     // fail. ≤5.3 answer normally; luna's collector is not reentrant, so a
     // collection requested there does not run.
     if vm.gc_is_finalizing() && v >= LuaVersion::Lua54 {
-        return Ok(vm.nat_return(fs, &[Value::Nil]));
+        return vm.nat_ret(fs, &[Value::Nil]);
     }
     let out: Vec<Value> = match opt {
         "collect" => {
-            if !vm.gc_is_finalizing() {
-                if v <= LuaVersion::Lua53 {
-                    // 5.1–5.3 propagate the first `__gc` error to the caller;
-                    // 5.4 warns and continues (gc.lua 5.1 :255, 5.2 :346, 5.3 :360).
-                    vm.collect_garbage_propagating()?;
-                } else {
-                    vm.collect_garbage();
-                }
+            // 5.1–5.3 propagate the first `__gc` error to the caller;
+            // 5.4 warns and continues (gc.lua 5.1 :255, 5.2 :346, 5.3 :360).
+            if !vm.gc_is_finalizing() && v <= LuaVersion::Lua53 {
+                vm.collect_garbage_propagating()?;
+            } else if !vm.gc_is_finalizing() {
+                vm.collect_garbage();
             }
             vec![Value::Int(0)]
         }
@@ -228,12 +226,8 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
             };
             vec![Value::Bool(step(vm, n))]
         }
-        "stop" => {
-            vm.heap.gc_set_stopped(true);
-            vec![Value::Int(0)]
-        }
-        "restart" => {
-            vm.heap.gc_set_stopped(false);
+        "stop" | "restart" => {
+            vm.heap.gc_set_stopped(opt == "stop");
             vec![Value::Int(0)]
         }
         // 5.2/5.3 stop the collector while a finalizer runs (GCTM clears
@@ -248,7 +242,7 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
         "param" => vec![param(vm, a)?],
         _ => unreachable!("check_option returned an index into options()"),
     };
-    Ok(vm.nat_return(fs, &out))
+    vm.nat_ret(fs, &out)
 }
 
 fn options(v: LuaVersion) -> &'static [&'static str] {
@@ -368,7 +362,7 @@ fn switch_mode(vm: &mut Vm, a: Args, opt: &'static str) -> Result<Vec<Value>, Lu
     Ok(vec![if v == LuaVersion::Lua52 {
         Value::Int(0)
     } else {
-        Value::Str(vm.heap.intern(prev.as_bytes()))
+        vm.str_value(prev.as_bytes())?
     }])
 }
 

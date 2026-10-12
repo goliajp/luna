@@ -58,7 +58,7 @@ impl Vm {
     /// [`Vm::call_value_with_handler_in_c`].
     #[doc(hidden)]
     pub fn call_value_in_c(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
-        let level = self.builtin(builtins::nat_host_pcall_in_c, &[], Builtin::HostPcallInC);
+        let level = self.builtin(builtins::nat_host_pcall_in_c, &[], Builtin::HostPcallInC)?;
         let mut call_args = Vec::with_capacity(args.len() + 1);
         call_args.push(f);
         call_args.extend_from_slice(args);
@@ -100,7 +100,7 @@ impl Vm {
         args: &[Value],
         msgh: Value,
     ) -> Result<Vec<Value>, LuaError> {
-        let level = self.builtin(level, &[], builtin);
+        let level = self.builtin(level, &[], builtin)?;
         let mut call_args = Vec::with_capacity(args.len() + 2);
         call_args.push(f);
         call_args.push(msgh);

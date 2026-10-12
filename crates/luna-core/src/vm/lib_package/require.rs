@@ -81,7 +81,7 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             );
             return Err(raise_str(vm, &text));
         }
-        return Ok(vm.nat_return(fs, &[cur]));
+        return vm.nat_ret(fs, &[cur]);
     }
     if v >= LuaVersion::Lua52 {
         vm.native_pop(1);
@@ -121,7 +121,7 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     }
     // 5.4 also returns the loader data
     if v >= LuaVersion::Lua54 {
-        return Ok(vm.nat_return(fs, &[value, data]));
+        return vm.nat_ret(fs, &[value, data]);
     }
-    Ok(vm.nat_return(fs, &[value]))
+    vm.nat_ret(fs, &[value])
 }

@@ -21,7 +21,7 @@ pub(super) fn minmax(vm: &mut Vm, fs: u32, nargs: u32, want_max: bool) -> Result
                 best = d;
             }
         }
-        return Ok(vm.nat_return(fs, &[Value::Float(best)]));
+        return vm.nat_ret(fs, &[Value::Float(best)]);
     }
     if nargs == 0 {
         return Err(arg_error(vm, 1, "value expected"));

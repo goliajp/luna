@@ -39,19 +39,19 @@ fn g_write(vm: &mut Vm, fs: u32, u: Gc<Userdata>, args: Args, first: u32) -> Res
         match put_bytes(u, &bytes) {
             Ok(()) => total += bytes.len() as i64,
             Err(e) if v >= LuaVersion::Lua55 => {
-                let mut vals = file_fail_values(vm, None, &e).to_vec();
+                let mut vals = file_fail_values(vm, None, &e)?.to_vec();
                 vals.push(Value::Int(total));
-                return Ok(vm.nat_return(fs, &vals));
+                return vm.nat_ret(fs, &vals);
             }
             Err(e) => failure = Some(e),
         }
     }
-    Ok(match failure {
+    match failure {
         Some(e) => file_fail(vm, fs, None, &e),
         // 5.1 reports success as true; 5.2+ return the file
         None if v == LuaVersion::Lua51 => file_ok(vm, fs),
-        None => vm.nat_return(fs, &[Value::Userdata(u)]),
-    })
+        None => vm.nat_ret(fs, &[Value::Userdata(u)]),
+    }
 }
 
 pub(super) fn io_write(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -72,19 +72,19 @@ pub(super) fn f_write(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
 pub(super) fn io_flush(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     let u = get_io_file(vm, Io::Output)?;
     reset_errno(vm);
-    Ok(match flush_stream(u) {
+    match flush_stream(u) {
         Ok(()) => file_ok(vm, fs),
         Err(e) => file_fail(vm, fs, None, &e),
-    })
+    }
 }
 
 pub(super) fn f_flush(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = check_open(vm, Args::new(fs, nargs), 0)?;
     reset_errno(vm);
-    Ok(match flush_stream(u) {
+    match flush_stream(u) {
         Ok(()) => file_ok(vm, fs),
         Err(e) => file_fail(vm, fs, None, &e),
-    })
+    }
 }
 
 // ---- seek / setvbuf ----
@@ -107,11 +107,9 @@ pub(super) fn f_seek(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     reset_errno(vm);
     match seek_stream(u, op, offset) {
         // ≤5.2 has one number type: `lua_pushnumber(ftell(f))`
-        Ok(pos) if vm.version() <= LuaVersion::Lua52 => {
-            Ok(vm.nat_return(fs, &[Value::Float(pos as f64)]))
-        }
-        Ok(pos) => Ok(vm.nat_return(fs, &[Value::Int(pos)])),
-        Err(e) => Ok(file_fail(vm, fs, None, &e)),
+        Ok(pos) if vm.version() <= LuaVersion::Lua52 => vm.nat_ret(fs, &[Value::Float(pos as f64)]),
+        Ok(pos) => vm.nat_ret(fs, &[Value::Int(pos)]),
+        Err(e) => file_fail(vm, fs, None, &e),
     }
 }
 
@@ -192,11 +190,11 @@ pub(super) fn f_setvbuf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     };
     if u.crt.is_some() {
         let size = crt_size(vm);
-        return Ok(if crt::setvbuf(u, cmode, size) {
+        return if crt::setvbuf(u, cmode, size) {
             file_ok(vm, fs)
         } else {
             file_fail(vm, fs, None, &crt::error())
-        });
+        };
     }
     if crate::stdio::text_mode() && !matches!(u.file(), FileHandle::File(_)) {
         let size = crt_size(vm);
@@ -209,7 +207,7 @@ pub(super) fn f_setvbuf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
             msvc::Std::Out
         };
         crate::stdio::setvbuf_crt(std, cmode, size as usize);
-        return Ok(file_ok(vm, fs));
+        return file_ok(vm, fs);
     }
     let mode = [BUF_NO, BUF_FULL, BUF_LINE][op];
     // SAFETY: `u` came from `check_open` on a native argument, so the stack keeps it; the borrow covers one field store
@@ -220,7 +218,7 @@ pub(super) fn f_setvbuf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     if mode == BUF_NO
         && let Err(e) = drain_write_buf(u)
     {
-        return Ok(file_fail(vm, fs, None, &e));
+        return file_fail(vm, fs, None, &e);
     }
-    Ok(file_ok(vm, fs))
+    file_ok(vm, fs)
 }

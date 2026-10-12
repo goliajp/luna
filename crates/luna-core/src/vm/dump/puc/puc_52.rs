@@ -72,7 +72,7 @@ pub(super) fn undump(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, Bad> {
     check_header(bytes)?;
     let mut r = Reader::at(bytes, HEADER.len());
     let raw = read_proto(&mut r, heap)?;
-    Ok(lower::build(heap, raw, &translate)?)
+    lower::build(heap, raw, &translate)
 }
 
 fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
@@ -111,7 +111,7 @@ fn read_const(r: &mut Reader, heap: &mut Heap) -> Result<Value, Bad> {
         0 => Value::Nil,
         1 => Value::Bool(r.u8()? != 0),
         3 => Value::Float(f64::from_le_bytes(r.take(8)?.try_into().expect("8 bytes"))),
-        4 => Value::Str(heap.intern(read_string(r)?.unwrap_or(b""))),
+        4 => Value::Str(heap.try_intern(read_string(r)?.unwrap_or(b""))?),
         _ => return Err(Bad::Constant),
     })
 }
@@ -148,7 +148,7 @@ fn read_proto(r: &mut Reader, heap: &mut Heap) -> Result<RawProto, Bad> {
     }
 
     // A stripped chunk has no source; errors then report "?".
-    let source = heap.intern(read_string(r)?.unwrap_or(b"=?"));
+    let source = heap.try_intern(read_string(r)?.unwrap_or(b"=?"))?;
     let n = read_count(r, 4)?;
     let lines = (0..n).map(|_| read_int(r)).collect::<Result<Vec<_>, _>>()?;
     let n = read_count(r, 16)?;

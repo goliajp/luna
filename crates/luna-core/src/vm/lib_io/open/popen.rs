@@ -25,7 +25,7 @@ pub(crate) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         }
         _ => {
             let e = posix_error(EINVAL);
-            return Ok(file_fail(vm, fs, Some(&prog), &e));
+            return file_fail(vm, fs, Some(&prog), &e);
         }
     };
     reset_errno(vm);
@@ -40,7 +40,7 @@ pub(crate) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return Ok(file_fail(vm, fs, Some(&prog), &e)),
+        Err(e) => return file_fail(vm, fs, Some(&prog), &e),
     };
     let file = if read {
         pipe_file(child.stdout.take().expect("stdout was piped"))
@@ -53,10 +53,10 @@ pub(crate) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         spec,
         mode: msvc::TextMode::Ansi,
     };
-    let u = opened(vm, o, true);
+    let u = opened(vm, o, true)?;
     // SAFETY: `u` was created by `opened` just above and is held only by this local; the borrow covers one field store
     unsafe { u.as_mut() }.popen_child = Some(child);
-    Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
+    vm.nat_ret(fs, &[Value::Userdata(u)])
 }
 
 /// A child's pipe end as a plain file, so reads and writes share one path.

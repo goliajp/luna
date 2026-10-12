@@ -21,8 +21,8 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1467** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
-| of which in tests, benches and examples | 227 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1477** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| of which in tests, benches and examples | 229 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **7** | six `#[doc(hidden)]`, and `MemOwner::raw`, see §5 |
 | **`pub unsafe extern "C" fn`** | 200 | the C API (143), the `luna_jit_*` helpers compiled code calls (51, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
 | **`unsafe impl Send` / `Sync`** | 10 | see §5 |
@@ -37,20 +37,20 @@ quotes the pattern counts too.
 | Crate | Module | Sites | What the `unsafe` is for |
 |---|---|---:|---|
 | `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `fast_arith.rs`, `num_words.rs`) | 82 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch; a numeric `for`'s control values read a word pair at a time (aarch64) |
-| | `vm/exec/index_*` | 38 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
-| | `vm/exec` (other) | 90 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
-| | `runtime/heap*`, `gc_ptr.rs` | 84 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle, the debug check of the slow-store bit |
-| | `runtime/table*` | 48 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
-| | `runtime/mem` | 70 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the freed blocks a system-allocator context keeps for reuse, the vector's and boxed slice's initialised prefix |
-| | `runtime` (other) | 38 | string headers and their trailing bytes, the value tag/payload encoding, closure upvalue storage |
-| | `vm/lib_*` | 55 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`), the table writes that build each library, and on Windows the `ReadFile` call that reads a console as the MSVC C library does, the `CreateFileW`, `DeleteFileW` and `MoveFileExW` calls that open, remove and rename files as it does, the `MultiByteToWideChar` and `WideCharToMultiByte` calls that take names and environment text through the ANSI code page as it does, and the `File` made of the standard input handle for seeking it |
-| | `vm` (other) | 48 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
+| | `vm/exec/index_*` | 39 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
+| | `vm/exec` (other) | 97 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
+| | `runtime/heap*`, `gc_ptr.rs` | 91 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle, the debug check of the slow-store bit |
+| | `runtime/table*` | 49 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
+| | `runtime/mem` | 72 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the freed blocks a system-allocator context keeps for reuse, the vector's and boxed slice's initialised prefix, a push into room the caller made |
+| | `runtime` (other) | 41 | string headers and their trailing bytes, the value tag/payload encoding, closure upvalue storage |
+| | `vm/lib_*` | 41 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`), the table writes that build each library, and on Windows the `ReadFile` call that reads a console as the MSVC C library does, the `CreateFileW`, `DeleteFileW` and `MoveFileExW` calls that open, remove and rename files as it does, the `MultiByteToWideChar` and `WideCharToMultiByte` calls that take names and environment text through the ANSI code page as it does, and the `File` made of the standard input handle for seeking it |
+| | `vm` (other) | 45 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
 | | `stdio.rs` | 1 | C-style standard output writing descriptor 1 without closing it |
 | | `native_stack.rs` | 10 | reading the running thread's stack bounds from the OS (`pthread_getattr_np`, `pthread_get_stackaddr_np`, `GetCurrentThreadStackLimits`, and on glibc's and musl's main thread `getrlimit`, on glibc also `__libc_stack_end`) |
 | | `jit`, `frontend` | 12 | trace metadata handed to the backend; the `isb` that lets a thread run code another thread wrote (aarch64); interned-name text |
-| | unit-test files under `src/` | 20 | tests that inspect raw layouts; a test `lua_Alloc` |
+| | unit-test files under `src/` | 22 | tests that inspect raw layouts; a test `lua_Alloc` |
 | | `tests/` | 54 | integration tests: a poisoning global allocator, async wakers, userdata internals, a raw write into a read-only table, the host C library's `%p`, a counting `lua_Alloc`, the environment variables of the Windows file-name test |
-| `luna-jit` | `capi*` | 382 | the C API: raw `lua_State` pointers, C strings, `lua_Debug` and `luaL_Buffer` structs and C function pointers across the boundary (§3.7) |
+| `luna-jit` | `capi*` | 386 | the C API: raw `lua_State` pointers, C strings, `lua_Debug` and `luaL_Buffer` structs and C function pointers across the boundary (§3.7) |
 | | `jit_backend` | 61 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points (the LLVM backend's trace entries among them), `Send` for handles that own JIT modules or code pages, `Send` and `Sync` for the record a baseline trace keeps to be lowered again for the optimizing tier, copying compiled code out to share it between Vms, the debug dump of a trace's machine code |
 | | other | 2 | the CLI's `arg` table and the `lua_facade` table handle |
 | | unit-test files under `src/` | 70 | tests that call compiled code or the `extern "C"` helpers directly |
@@ -62,7 +62,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1467** | |
+| **Total** | | **1477** | |
 
 ## 3. Pattern catalog
 
@@ -212,7 +212,7 @@ Two CI checks cover `unsafe`:
 - the `unsafe-drift` job in `.github/workflows/ci.yml` counts the sites
   in every `.rs` file under `crates/` on every push, `luna-jit-llvm`
   included although CI does not build it, and fails above the ceiling.
-  The ceiling is the exact count, **1467**, with no headroom;
+  The ceiling is the exact count, **1477**, with no headroom;
 - `clippy::undocumented_unsafe_blocks` is set in the workspace
   `[lints.clippy]` table, and the lint job runs clippy with
   `-D warnings`, so a block or `unsafe impl` without a `SAFETY:` note
@@ -452,8 +452,24 @@ control value's tag (`num_words.rs`: a read of one word, an `unsafe fn`
 with its block for each of x86-64 and aarch64; the write that unseals a value after a debug
 write; the empty `asm!` that orders the aarch64 back-edge target before
 the loads), and a test drives `lua_setlocal` from Rust (its `extern`
-block, the C function's block and the test's): 9 more. That is 1467, the
-ceiling now.
+block, the C function's block and the test's): 9 more. That is 1467.
+
+Every allocation can now fail with the memory error: the emergency
+collection and the constructors that can fail, the C API functions that
+raise the memory error, and the table writes of the libraries moved into
+helpers that need no `unsafe` of their own, and the marker tracing gray
+objects where a walk of the object list finds them when its stack cannot
+grow. That is 6 more in `vm/exec`, 7 in the heap, 1 each in the table and
+in `vm/exec/index_*`, 3 elsewhere in `runtime`, 4 in the C API and 2 in
+unit tests; 14 fewer in the libraries and 2 fewer elsewhere in `vm`: 8
+more in all. That is 1475.
+
+A native call pushes its activation record without checking the
+capacity, after the call has made room for it (`LVec::push_in_room`, an
+`unsafe fn` with its block, and the call's block): 3 more. That is 1478.
+
+`SendVm::get_global` reads the globals table through the safe handle
+instead of a raw pointer: 1 fewer. That is 1477, the ceiling now.
 
 ## 5. Public `unsafe` surface
 
@@ -503,7 +519,7 @@ wrapper in `luna-jit/benches/bench_send_overhead.rs`.
 
 ```sh
 grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' crates | wc -l
-# 1467, the ceiling in ci.yml's unsafe-drift job
+# 1477, the ceiling in ci.yml's unsafe-drift job
 cargo clippy --workspace --all-targets \
     --exclude llvm-jit-probe --exclude luna-jit-llvm -- -D warnings
 # no undocumented_unsafe_blocks warnings (the LLVM crates need

@@ -71,13 +71,23 @@ impl Vm {
     /// (analogous to pushing N values then `return N` from a C function).
     /// Public so embedders can author their own natives.
     pub fn nat_return(&mut self, func_slot: u32, vals: &[Value]) -> u32 {
+        match self.nat_ret(func_slot, vals) {
+            Ok(n) => n,
+            Err(_) => crate::runtime::mem::oom_abort(std::alloc::Layout::for_value(vals)),
+        }
+    }
+
+    /// [`Vm::nat_return`], raising a memory error when the stack cannot
+    /// grow to hold the results.
+    #[inline(always)]
+    pub fn nat_ret(&mut self, func_slot: u32, vals: &[Value]) -> Result<u32, LuaError> {
         let need = func_slot as usize + vals.len();
         if self.stack.len() < need {
-            self.grow_stack_or_abort(need);
+            self.grow_stack(need)?;
         }
         for (i, &v) in vals.iter().enumerate() {
             self.stack[func_slot as usize + i] = v;
         }
-        vals.len() as u32
+        Ok(vals.len() as u32)
     }
 }

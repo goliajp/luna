@@ -61,30 +61,59 @@ impl Vm {
 
     #[doc(hidden)]
     pub fn rt_err(&mut self, msg: &str) -> LuaError {
+        self.rt_errf(format_args!("{msg}"))
+    }
+
+    /// [`Vm::rt_err`] with a message to format.
+    pub(crate) fn rt_errf(&mut self, msg: std::fmt::Arguments<'_>) -> LuaError {
         self.varinfo_pushed = false;
         // `luaG_runerror` pushes the message (a native's stack only: a
         // Lua frame's handler goes above its window)
         self.native_push_if_native(1);
-        let text = match self.position_prefix() {
-            Some(p) => format!("{p}{msg}"),
-            None => msg.to_string(),
-        };
-        LuaError(Value::Str(self.heap.intern(text.as_bytes())))
+        let prefix = self.position_prefix();
+        self.error_from(prefix.as_deref(), msg)
     }
 
     /// Error without the `chunk:line:` position prefix. PUC's
     /// `resume_error` (ldo.c) pushes its message as a bare literal,
     /// so `cannot resume dead coroutine` etc. must not be prefixed.
     pub(crate) fn plain_err(&mut self, msg: &str) -> LuaError {
+        self.plain_errf(format_args!("{msg}"))
+    }
+
+    /// [`Vm::plain_err`] with a message to format.
+    pub(crate) fn plain_errf(&mut self, msg: std::fmt::Arguments<'_>) -> LuaError {
         self.native_push_if_native(1);
-        LuaError(Value::Str(self.heap.intern(msg.as_bytes())))
+        self.error_from(None, msg)
+    }
+
+    /// An error whose object is `prefix` then `msg` as a string; a memory
+    /// error when that string cannot be made (PUC raises the memory error
+    /// in place of a message it cannot allocate). Nothing is counted as
+    /// pushed on the running native's stack.
+    pub(crate) fn error_from(
+        &mut self,
+        prefix: Option<&str>,
+        msg: std::fmt::Arguments<'_>,
+    ) -> LuaError {
+        let s = match prefix {
+            Some(p) => self.fmt_str(format_args!("{p}{msg}")),
+            None => self.fmt_str(msg),
+        };
+        match s {
+            Ok(s) => LuaError(Value::Str(s)),
+            Err(e) => e,
+        }
     }
 
     /// PUC's LUA_ERRERR: the message handler itself failed, and the error
     /// object becomes "error in error handling" (`luaD_seterrorobj`).
     pub(crate) fn errerr(&mut self) -> Value {
         self.errerr_raised += 1;
-        let v = Value::Str(self.heap.intern(b"error in error handling"));
+        let v = match self.alloc_str(b"error in error handling") {
+            Ok(s) => Value::Str(s),
+            Err(e) => e.0,
+        };
         self.errerr_in_flight = Some(v);
         v
     }
@@ -127,15 +156,6 @@ impl Vm {
         } else {
             ErrorStatus::Run
         }
-    }
-
-    /// A string a library built from pieces of any size: one longer than a
-    /// string can hold raises, as the concatenation operator does.
-    pub(crate) fn built_str(&mut self, bytes: &[u8]) -> Result<Value, LuaError> {
-        if bytes.len() > crate::runtime::string::MAX_LEN {
-            return Err(self.rt_err("string length overflow"));
-        }
-        Ok(Value::Str(self.heap.intern(bytes)))
     }
 
     pub(crate) fn type_err(&mut self, what: &str, v: Value) -> LuaError {

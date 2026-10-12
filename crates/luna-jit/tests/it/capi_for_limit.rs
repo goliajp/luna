@@ -8,11 +8,14 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 
 // SAFETY: the C API exports these under these names with these signatures
-// (the first two in its C half). C sees `lua_State` as opaque
+// (the first five in its C half). C sees `lua_State` as opaque
 #[allow(improper_ctypes)]
 unsafe extern "C" {
     fn luaL_openlibs(L: *mut LuaState);
     fn luaL_loadstring(L: *mut LuaState, s: *const c_char) -> c_int;
+    fn lua_pushstring(L: *mut LuaState, s: *const c_char) -> *const c_char;
+    fn lua_pushcclosure(L: *mut LuaState, f: LuaCFunction, n: c_int);
+    fn lua_tolstring(L: *mut LuaState, idx: c_int, len: *mut usize) -> *const c_char;
     fn lua_getstack(L: *mut LuaState, level: c_int, ar: *mut c_void) -> c_int;
     fn lua_setlocal(L: *mut LuaState, ar: *const c_void, n: c_int) -> *const c_char;
 }

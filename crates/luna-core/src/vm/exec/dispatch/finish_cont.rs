@@ -53,9 +53,7 @@ impl Vm {
             self.cont_popped(true, true);
             let total = crate::vm::builtins::pairs_mm_results(self) as u32;
             let need = (nc.func_slot + total) as usize;
-            if self.stack.len() < need {
-                self.grow_stack_or_abort(need);
-            }
+            self.grow_stack(need)?;
             // where the metamethod ran, above pairs's arguments
             let first = nc.func_slot + at;
             let n = (self.top - first).min(total);
@@ -87,9 +85,7 @@ impl Vm {
             // the results may end past the stack's length (`top` runs ahead
             // of it); both ranges of the move must be inside it
             let end = (callee.max(nc.func_slot + 1) + nret) as usize;
-            if self.stack.len() < end {
-                self.grow_stack_or_abort(end);
-            }
+            self.grow_stack(end)?;
             self.stack.copy_within(
                 callee as usize..(callee + nret) as usize,
                 (nc.func_slot + 1) as usize,

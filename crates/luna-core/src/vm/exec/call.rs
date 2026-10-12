@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod call_mm;
+
 impl Vm {
     // ---- frames & calls ----
 
@@ -145,16 +147,15 @@ impl Vm {
                     // Popped after the matching return hook fires — even on
                     // error, the pop must happen, so the body is bracketed
                     // through a scope guard.
-                    self.running_natives
-                        // a tail call resolved its `__call` chain before
-                        // calling here and passed the count in tail_ccmt
-                        .push_or_abort(crate::vm::callstack::NativeAct::new(
-                            nc,
-                            func_slot,
-                            nargs,
-                            self.frames.len(),
-                            tail_ccmt + chain as u8,
-                        ));
+                    // a tail call resolved its `__call` chain before
+                    // calling here and passed the count in tail_ccmt
+                    self.push_native(crate::vm::callstack::NativeAct::new(
+                        nc,
+                        func_slot,
+                        nargs,
+                        self.frames.len(),
+                        tail_ccmt + chain as u8,
+                    ))?;
                     // PUC C-call discipline: entering a C function sets
                     // L->top to func + 1 + nargs, so a collect triggered
                     // INSIDE the native (explicit `collectgarbage()`, or
@@ -188,61 +189,6 @@ impl Vm {
         }
     }
 
-    /// One `__call` hop of [`Vm::begin_call`] (PUC tryfuncTM): put the
-    /// handler of `v` below the callee and its arguments. Out of line: it is
-    /// rare, and keeping it inside makes the common call path pay for the
-    /// registers it needs.
-    #[cold]
-    #[inline(never)]
-    fn shift_in_call_mm(
-        &mut self,
-        v: Value,
-        func_slot: u32,
-        nargs: u32,
-        chain: u32,
-    ) -> Result<(), LuaError> {
-        let mm = self.get_mm(v, Mm::Call);
-        if mm.is_nil() || self.call_mm_unusable(mm) {
-            return Err(self.call_err_at(v, func_slot + 1 + nargs));
-        }
-        // PUC 5.5 dropped the chain cap from `MAXTAGRECUR = 200`
-        // (the value 5.4's `lvm.c` uses) down to `MAXCCMT = 16`,
-        // and the 5.5 test exercises the new tight bound directly
-        // (calls.lua :225 builds a 16-deep chain and expects the
-        // 16th to error). 5.4 calls.lua :194 instead builds a 20-
-        // deep chain and expects it to succeed.
-        let cap = if self.version >= crate::version::LuaVersion::Lua55 {
-            15
-        } else {
-            MAX_CCMT
-        };
-        if chain > cap {
-            return Err(self.rt_err("'__call' chain too long"));
-        }
-        // the callee and its arguments (and anything up to top)
-        // shift up by one (PUC tryfuncTM); slots above them are
-        // dead temps, and inserting into the whole stack would
-        // move all of them and grow it on every hop
-        let from = func_slot as usize;
-        let end = (func_slot + 1 + nargs).max(self.top) as usize;
-        if self.stack.len() <= end {
-            self.grow_stack_or_abort(end + 1);
-        }
-        self.stack.copy_within(from..end, from + 1);
-        self.stack[from] = mm;
-        if self.top > func_slot {
-            self.top += 1;
-        }
-        Ok(())
-    }
-
-    /// Up to 5.3 `tryfuncTM` takes one `__call` hop and needs a function
-    /// there; anything else is a call error on the original object. 5.4
-    /// retries the call with whatever `__call` holds, so chains resolve.
-    pub(super) fn call_mm_unusable(&self, mm: Value) -> bool {
-        self.version <= LuaVersion::Lua53 && !matches!(mm, Value::Closure(_) | Value::Native(_))
-    }
-
     pub(super) fn push_frame(
         &mut self,
         cl: Gc<LuaClosure>,
@@ -261,40 +207,58 @@ impl Vm {
             proto.is_vararg,
         )?;
         let nparams = proto.num_params as u32;
-        // 5.5 vararg layout (PUC luaT_adjustvarargs): the extra args stay on the
-        // stack just below the new `base`, so a named vararg can be indexed
-        // virtually without allocating a table. Rotate `[p1..pn][e1..em]` to
-        // `[e1..em][p1..pn]` so the fixed params land at the new base.
         let n_varargs = nargs.saturating_sub(nparams) * u32::from(proto.is_vararg);
         // a vararg frame sits where PUC puts it, so a recursion through
         // vararg functions takes the same stack: above the arguments, where
         // 5.1 to 5.3 copy the fixed parameters (`adjust_varargs`) and 5.4 on
         // the function too (`luaT_adjustvarargs`); the extras stay just
         // below the base, the slots they came from are dead
-        let gap = if proto.is_vararg {
-            nparams + u32::from(self.version >= LuaVersion::Lua54)
+        let base = if proto.is_vararg {
+            func_slot + 1 + n_varargs + nparams + u32::from(self.version >= LuaVersion::Lua54)
         } else {
-            0
+            func_slot + 1
         };
-        let base = func_slot + 1 + n_varargs + gap;
+        let max = proto.max_stack as u32;
+        let need = (base + max) as usize;
+        if self.stack.len() < need || self.frames.len() == self.frames.capacity() {
+            // out of line, and nothing computed here is live across it: the
+            // call starts over once there is room
+            return self.push_frame_after_room(cl, func_slot, nargs, nresults, from_c, need);
+        }
+        // the frame stack has room: tested just above, and pushed before any
+        // write through the stack could make the compiler test again
+        let cf = CallFrame::Lua(Frame {
+            closure: cl,
+            base,
+            pc: 0,
+            func_slot,
+            nresults,
+            hook_oldpc: u32::MAX,
+            from_c,
+            n_varargs,
+            // single-shot consume: `close_slots` sets pending_tm before each
+            // handler call; the next Lua frame born is that handler's.
+            tm: self.pending_tm.take(),
+            // `run_hook` sets `pending_is_hook` before dispatching the user
+            // hook so its frame reports `namewhat = "hook"` via getinfo.
+            is_hook: std::mem::take(&mut self.pending_is_hook),
+            tailcalls: std::mem::take(&mut self.pending_tailcalls),
+            ccmt: std::mem::take(&mut self.pending_ccmt),
+        });
+        frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf);
+        // 5.5 vararg layout (PUC luaT_adjustvarargs): the extra args stay on the
+        // stack just below the new `base`, so a named vararg can be indexed
+        // virtually without allocating a table.
         if proto.is_vararg && nargs > 0 {
             let s = (func_slot + 1) as usize;
             let kept = nargs.min(nparams) as usize;
-            let end = (base + kept as u32) as usize;
-            if self.stack.len() < end {
-                self.grow_stack_or_abort(end);
-            }
+            // `base + kept <= need` since `kept <= nparams <= max_stack`
             self.stack.copy_within(s..s + kept, base as usize);
             if n_varargs > 0 {
                 let from = s + nparams as usize;
                 let to = (base - n_varargs) as usize;
                 self.stack.copy_within(from..from + n_varargs as usize, to);
             }
-        }
-        let max = proto.max_stack as u32;
-        let need = (base + max) as usize;
-        if self.stack.len() < need {
-            self.grow_stack_or_abort(need);
         }
         // Only missing parameters become nil (PUC `luaD_precall`): the code
         // writes the rest before reading it, the collector keeps it valid
@@ -312,56 +276,35 @@ impl Vm {
             nparams
         };
         let end = (base + window) as usize;
-        // SAFETY: `need <= stack.len()` (resized above) and `base + kept <=
+        // SAFETY: `need <= stack.len()` (tested above) and `base + kept <=
         // end <= need` since `kept <= nparams <= window <= max_stack`.
         unsafe {
             self.stack
                 .get_unchecked_mut((base + kept) as usize..end)
                 .fill(Value::Nil)
         };
-        frames_push_sync(
-            &mut self.frames,
-            &mut self.frames_top,
-            &mut self.trap,
-            CallFrame::Lua(Frame {
-                closure: cl,
-                base,
-                pc: 0,
-                func_slot,
-                nresults,
-                hook_oldpc: u32::MAX,
-                from_c,
-                n_varargs,
-                // single-shot consume: `close_slots` sets pending_tm before each
-                // handler call; the next Lua frame born is that handler's.
-                tm: self.pending_tm.take(),
-                // `run_hook` sets `pending_is_hook` before dispatching the user
-                // hook so its frame reports `namewhat = "hook"` via getinfo.
-                is_hook: std::mem::take(&mut self.pending_is_hook),
-                tailcalls: std::mem::take(&mut self.pending_tailcalls),
-                ccmt: std::mem::take(&mut self.pending_ccmt),
-            }),
-        );
         // PUC 5.1 `LUAI_COMPAT_VARARG`: the hidden `arg` local (the slot at
         // `base + nparams`) gets `{ n = n_varargs, e1, e2, … }` from the extras
         // just below `base` (5.1 db.lua :279 reads `arg.n` from a line hook).
         if proto.has_compat_vararg_arg {
             let arg_slot = (base + nparams) as usize;
-            let t = self.heap.new_table();
-            {
-                // SAFETY: `t` was allocated above and is held only by this local; `tm` is the only reference into it, and the heap calls made while it lives (`set_int`, `intern`, `set`) do not collect
-                let tm = unsafe { t.as_mut() };
-                // `luaH_new(L, nvar, 1)`: an array part of exactly the
-                // extras' count (bounded by the stack, well below
-                // `MAX_ASIZE`), nil ones included
-                tm.resize(&mut self.heap, n_varargs as usize, 1);
-                for i in 0..n_varargs {
-                    tm.set_list_slot(i as usize, self.stack[(base - n_varargs + i) as usize]);
-                }
-                let nk = Value::Str(self.heap.intern(b"n"));
-                tm.set(&mut self.heap, nk, Value::Int(n_varargs as i64))
-                    .expect("'n' key");
+            // young until stored in its slot below; `luaH_new(L, nvar, 1)`:
+            // an array part of exactly the extras' count (bounded by the
+            // stack, well below `MAX_ASIZE`), nil ones included
+            let t = self.alloc_table()?;
+            self.table_op(|vm| {
+                // SAFETY: `t` was allocated above and is held only by this
+                // local; the borrow covers the resize, which does not collect
+                unsafe { t.as_mut() }.resize(&mut vm.heap, n_varargs as usize, 1)
+            })?;
+            for i in 0..n_varargs {
+                let v = self.stack[(base - n_varargs + i) as usize];
+                // SAFETY: `t` was allocated above and is held only by this
+                // local; the reference lives for this one store
+                unsafe { t.as_mut() }.set_list_slot(i as usize, v);
             }
+            let nk = self.str_value(b"n")?;
+            self.raw_set(t, nk, Value::Int(n_varargs as i64))?;
             // once-per-table barrier mirrors SETLIST: t is born BLACK during
             // Propagate and the bulk `set_int`/`set` calls above don't barrier
             self.heap.barrier_back(t);
@@ -380,5 +323,26 @@ impl Vm {
             .is_some_and(|f| f.tailcalls > 0);
         self.hook_call_with(false, nparams, is_tail)?;
         Ok(())
+    }
+
+    /// [`Vm::push_frame`] once there is room for the frame: `need` stack
+    /// slots and one more frame, collecting in an emergency when memory runs
+    /// out.
+    #[cold]
+    #[inline(never)]
+    fn push_frame_after_room(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        func_slot: u32,
+        nargs: u32,
+        nresults: i32,
+        from_c: bool,
+        need: usize,
+    ) -> Result<(), LuaError> {
+        self.grow_stack(need)?;
+        if self.frames.len() == self.frames.capacity() {
+            self.retry_oom(|vm| vm.frames.reserve(1))?;
+        }
+        self.push_frame(cl, func_slot, nargs, nresults, from_c)
     }
 }

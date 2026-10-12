@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod upvals;
+
 impl Vm {
     /// Last live Lua frame (the trace head's frame at
     /// dispatch time). The frame-materialization helper reads `.base`
@@ -28,10 +30,22 @@ impl Vm {
     /// `[0..need)`. Extends with Nil if shorter. Called by the
     /// frame-materialization helper before pushing an inlined frame
     /// whose register window may exceed the current stack length.
+    /// `false` when the stack cannot grow: the caller parks a deopt.
     #[doc(hidden)]
-    pub fn jit_ensure_stack(&mut self, need: usize) {
-        if self.stack.len() < need {
-            self.grow_stack_or_abort(need);
+    pub fn jit_ensure_stack(&mut self, need: usize) -> bool {
+        self.stack.len() >= need || self.stack.resize(need, Value::Nil).is_ok()
+    }
+
+    /// Park a deopt for an allocation compiled code could not make: the
+    /// dispatcher drops what the compiled code computed and the
+    /// interpreter runs the code again, allocating through its own path
+    /// (which may collect in an emergency, as compiled code may not: it
+    /// can hold new objects only in machine registers). The parked value
+    /// is never raised, so it allocates nothing.
+    #[doc(hidden)]
+    pub fn jit_park_oom(&mut self) {
+        if self.jit.pending_err.is_none() {
+            self.jit.pending_err = Some(LuaError(Value::Nil));
         }
     }
 
@@ -93,8 +107,9 @@ impl Vm {
             return;
         };
         let idx = (f.base as usize) + (slot_offset as usize);
-        if self.stack.len() <= idx {
-            self.grow_stack_or_abort(idx + 1);
+        if !self.jit_ensure_stack(idx + 1) {
+            self.jit_park_oom();
+            return;
         }
         self.stack[idx] = v;
     }
@@ -205,6 +220,7 @@ impl Vm {
     /// below `base`, the function one below them, as `push_frame` leaves
     /// them. The caller has already called `jit_ensure_stack` to cover
     /// `[0..base + cl.proto.max_stack)`.
+    /// `false`, pushing nothing, when the frame stack cannot grow.
     #[doc(hidden)]
     pub fn jit_push_inlined_frame(
         &mut self,
@@ -213,7 +229,11 @@ impl Vm {
         pc: u32,
         nresults: i32,
         n_varargs: u32,
-    ) {
+    ) -> bool {
+        // room first, so the push below never has to allocate
+        if self.frames.reserve(1).is_err() {
+            return false;
+        }
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
@@ -233,58 +253,6 @@ impl Vm {
                 ccmt: 0,
             }),
         );
-    }
-
-    /// Upvalue `idx` of `cl`, for compiled code running a function a trace
-    /// inlined, whose head frame starts at `head_base`: `None` when the
-    /// upvalue is open at a slot of the running thread at or above
-    /// `head_base`, a register the trace may hold only in its own
-    /// registers while the stack has an older value.
-    #[doc(hidden)]
-    pub fn jit_upval_below(
-        &self,
-        cl: Gc<LuaClosure>,
-        idx: u32,
-        head_base: u32,
-    ) -> Option<crate::runtime::Value> {
-        use crate::runtime::UpvalState;
-        match cl.upvals()[idx as usize].state() {
-            UpvalState::Open { slot, thread }
-                if slot >= head_base && self.is_current_thread(thread) =>
-            {
-                None
-            }
-            UpvalState::Open { slot, thread } => Some(self.read_slot(slot, thread)),
-            UpvalState::Closed(v) => Some(v),
-        }
-    }
-
-    /// `t[key]` through table-valued `__index` links (up to four, as the
-    /// interpreter's fast path follows), for compiled code: `None` when a
-    /// link is a function or the chain goes on, which the interpreter has
-    /// to run.
-    #[doc(hidden)]
-    pub fn jit_index_str_tables(
-        &self,
-        t: Gc<Table>,
-        key: Gc<crate::runtime::string::LuaStr>,
-    ) -> Option<crate::runtime::Value> {
-        use crate::runtime::Value;
-        let mut cur = t;
-        for _ in 0..4 {
-            let v = cur.get_str(key);
-            if !v.is_nil() {
-                return Some(v);
-            }
-            let Some(mt) = cur.metatable() else {
-                return Some(Value::Nil);
-            };
-            match self.fast_tm(mt, Mm::Index) {
-                Value::Nil => return Some(Value::Nil),
-                Value::Table(next) => cur = next,
-                _ => return None,
-            }
-        }
-        None
+        true
     }
 }

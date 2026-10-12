@@ -40,6 +40,7 @@ mod engine_shared_traces;
 mod field_ic_switch;
 mod forced_jit_corpus;
 mod instr_budget_jit;
+mod jit_alloc_fail;
 mod jit_code_reuse_icache;
 mod jit_compare_operand_kinds;
 mod jit_core_semantics;

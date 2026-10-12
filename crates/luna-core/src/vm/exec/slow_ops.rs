@@ -72,9 +72,7 @@ impl Vm {
                 let lay = inst.op().for_layout().expect("a loop op");
                 let abs = base + inst.a();
                 let need = (abs + lay.call_end()) as usize;
-                if self.stack.len() < need {
-                    self.grow_stack_or_abort(need);
-                }
+                self.grow_stack(need)?;
                 // the iterator, the state and the control, copied to where
                 // the call runs (the control first: in 5.5 it is there)
                 let call = (abs + lay.var()) as usize;
@@ -141,9 +139,7 @@ impl Vm {
                 return Err(self.rt_err("'__call' chain too long"));
             }
             let end = (abs + 1 + nargs) as usize;
-            if self.stack.len() < end + 1 {
-                self.grow_stack_or_abort(end + 1);
-            }
+            self.grow_stack(end + 1)?;
             for i in (0..=nargs).rev() {
                 self.stack[(abs + 1 + i) as usize] = self.stack[(abs + i) as usize];
             }

@@ -174,22 +174,20 @@ impl Vm {
         // marshal-in only captured caller slots) and
         // we write to interp stack at `base + i` which
         // mirrors `op_offsets`-derived layout.
-        let slot_count = exit_tags_for_pc.len();
-        // The helper only extends
-        // vm.stack up to the deepest pushed frame's
-        // window, but the exit_tags snapshot covers
-        // the trace's full `window_size` (which
-        // includes depth-N+1 scratch slots that the
-        // trace's IR may have written without a
-        // matching pushed frame). Extend with Nil so
-        // the write at the tail doesn't panic; these
-        // slots get overwritten by the writeback loop
-        // and won't leak meaningful data past the
-        // pushed frames' R[0..max_stack) windows.
-        if self.stack.len() < base_us + slot_count {
-            self.stack
-                .resize_or_abort(base_us + slot_count, crate::runtime::Value::Nil);
+        let mut slot_count = exit_tags_for_pc.len();
+        // The helper only extends vm.stack up to the deepest pushed frame's
+        // window, but the exit_tags snapshot covers the trace's full
+        // `window_size` (which includes depth-N+1 scratch slots that the
+        // trace's IR may have written without a matching pushed frame).
+        // Extend with Nil so the write at the tail doesn't panic; these slots
+        // get overwritten by the writeback loop and won't leak meaningful
+        // data past the pushed frames' R[0..max_stack) windows. When the
+        // stack cannot grow, those scratch slots are left out: every pushed
+        // frame's window is on the stack already.
+        if !self.jit_ensure_stack(base_us + slot_count) {
+            slot_count = self.stack.len().saturating_sub(base_us);
         }
+        let exit_tags_for_pc = &exit_tags_for_pc[..slot_count];
         // Fast-path restore loop. When
         // we landed on the global `exit_tags`,
         // dispatch on the compile-time

@@ -6,7 +6,7 @@ use crate::pattern::{self, CapValue, Flavor, MatchState, PatError};
 use crate::runtime::{Gc, LuaStr, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
-use crate::vm::builtins::{arg_error, raise_str};
+use crate::vm::builtins::{arg_error, raise_bytes, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 mod gsub;
@@ -32,10 +32,10 @@ fn pat_err(vm: &mut Vm, e: PatError) -> LuaError {
     raise_str(vm, &e.0)
 }
 
-fn cap_value(vm: &mut Vm, src: &[u8], c: CapValue) -> Value {
+fn cap_value(vm: &mut Vm, src: &[u8], c: CapValue) -> Result<Value, LuaError> {
     match c {
-        CapValue::Span(a, b) => Value::Str(vm.heap.intern(&src[a..b])),
-        CapValue::Pos(p) => Value::Int(p as i64 + 1),
+        CapValue::Span(a, b) => vm.str_value(&src[a..b]),
+        CapValue::Pos(p) => Ok(Value::Int(p as i64 + 1)),
     }
 }
 
@@ -64,7 +64,7 @@ fn push_captures(
                 return Err(pat_err(vm, err));
             }
         };
-        out.push(cap_value(vm, src, c));
+        out.push(cap_value(vm, src, c)?);
     }
     Ok(())
 }
@@ -86,21 +86,21 @@ fn find_aux(vm: &mut Vm, fs: u32, nargs: u32, find: bool) -> Result<u32, LuaErro
         // 5.1 clamps a start past the end instead of failing
         (init - 1).clamp(0, ls as i64) as usize
     } else if init > ls as i64 + 1 {
-        return Ok(vm.nat_return(fs, &[Value::Nil]));
+        return vm.nat_ret(fs, &[Value::Nil]);
     } else {
         (init.max(1) - 1) as usize
     };
     if find && (a.get(vm, 3).truthy() || no_specials(v, pat)) {
-        return Ok(match pattern::plain_find(src, pat, init) {
+        return match pattern::plain_find(src, pat, init) {
             Some(at) => {
                 let r = [
                     Value::Int(at as i64 + 1),
                     Value::Int((at + pat.len()) as i64),
                 ];
-                vm.nat_return(fs, &r)
+                vm.nat_ret(fs, &r)
             }
-            None => vm.nat_return(fs, &[Value::Nil]),
-        });
+            None => vm.nat_ret(fs, &[Value::Nil]),
+        };
     }
     let pat = pattern_bytes(v, pat);
     let (anchor, body) = pattern::anchor_split(pat);
@@ -114,10 +114,10 @@ fn find_aux(vm: &mut Vm, fs: u32, nargs: u32, find: bool) -> Result<u32, LuaErro
                 out.push(Value::Int(e as i64));
             }
             push_captures(vm, &ms, src, s1, e, !find, &mut out)?;
-            return Ok(vm.nat_return(fs, &out));
+            return vm.nat_ret(fs, &out);
         }
         if anchor || s1 >= ls {
-            return Ok(vm.nat_return(fs, &[Value::Nil]));
+            return vm.nat_ret(fs, &[Value::Nil]);
         }
         s1 += 1;
     }
@@ -160,7 +160,7 @@ fn gmatch_iter(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
             vm.nat_set_upval(fs, 3, Value::Int(e as i64));
             let mut out = Vec::new();
             push_captures(vm, &ms, src, from, e, true, &mut out)?;
-            return Ok(vm.nat_return(fs, &out));
+            return vm.nat_ret(fs, &out);
         }
         from += 1;
     }
@@ -179,14 +179,14 @@ pub(super) fn s_gmatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     } else {
         0
     };
-    let it = vm.native_with(
+    let it = vm.lib_native_with(
         gmatch_iter,
-        Box::new([
+        &[
             Value::Str(s),
             Value::Str(p),
             Value::Int(init),
             Value::Int(-1),
-        ]),
-    );
-    Ok(vm.nat_return(fs, &[it]))
+        ],
+    )?;
+    vm.nat_ret(fs, &[it])
 }

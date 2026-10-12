@@ -104,47 +104,52 @@ impl Compiler<'_> {
         use ast::Expr::*;
         // every expression to look at, with whether it is the object of a
         // read index; no recursion, so a long chain is no deeper
-        let mut todo: Vec<(ExprId, bool)> = vec![(e, is_index_obj)];
+        let mut todo = LVec::new(self.heap.mem());
+        todo.push_or_abort((e, is_index_obj));
         while let Some((e, is_index_obj)) = todo.pop() {
             let forces = match self.ast.expr(e) {
                 Name(n) => self.nm(n) == name && !is_index_obj,
                 Index { obj, key } => {
-                    todo.push((*obj, true));
-                    todo.push((*key, false));
+                    todo.push_or_abort((*obj, true));
+                    todo.push_or_abort((*key, false));
                     false
                 }
                 Call { func, args, .. } => {
-                    todo.push((*func, false));
-                    todo.extend(self.ls(*args).iter().map(|&a| (a, false)));
+                    todo.push_or_abort((*func, false));
+                    for &a in self.ls(*args) {
+                        todo.push_or_abort((a, false));
+                    }
                     false
                 }
                 MethodCall { obj, args, .. } => {
-                    todo.push((*obj, false));
-                    todo.extend(self.ls(*args).iter().map(|&a| (a, false)));
+                    todo.push_or_abort((*obj, false));
+                    for &a in self.ls(*args) {
+                        todo.push_or_abort((a, false));
+                    }
                     false
                 }
                 BinOp { lhs, rhs, .. } => {
-                    todo.push((*lhs, false));
-                    todo.push((*rhs, false));
+                    todo.push_or_abort((*lhs, false));
+                    todo.push_or_abort((*rhs, false));
                     false
                 }
                 UnOp { operand, .. } => {
-                    todo.push((*operand, false));
+                    todo.push_or_abort((*operand, false));
                     false
                 }
                 Paren(inner) => {
-                    todo.push((*inner, false));
+                    todo.push_or_abort((*inner, false));
                     false
                 }
                 Table { fields, .. } => {
                     for f in self.ls(*fields) {
                         match f {
                             ast::TableField::Item(e) | ast::TableField::Named(_, e) => {
-                                todo.push((*e, false));
+                                todo.push_or_abort((*e, false));
                             }
                             ast::TableField::Keyed(k, v) => {
-                                todo.push((*k, false));
-                                todo.push((*v, false));
+                                todo.push_or_abort((*k, false));
+                                todo.push_or_abort((*v, false));
                             }
                         }
                     }
@@ -224,43 +229,46 @@ impl Compiler<'_> {
             return true;
         }
         use ast::Expr::*;
-        let mut todo: Vec<ExprId> = vec![e];
+        let mut todo = LVec::new(self.heap.mem());
+        todo.push_or_abort(e);
         while let Some(e) = todo.pop() {
             let mentions = match self.ast.expr(e) {
                 Name(n) => self.nm(n) == name,
                 Index { obj, key } => {
-                    todo.extend([*obj, *key]);
+                    todo.extend_from_slice_or_abort(&[*obj, *key]);
                     false
                 }
                 Call { func, args, .. } => {
-                    todo.push(*func);
-                    todo.extend_from_slice(self.ls(*args));
+                    todo.push_or_abort(*func);
+                    todo.extend_from_slice_or_abort(self.ls(*args));
                     false
                 }
                 MethodCall { obj, args, .. } => {
-                    todo.push(*obj);
-                    todo.extend_from_slice(self.ls(*args));
+                    todo.push_or_abort(*obj);
+                    todo.extend_from_slice_or_abort(self.ls(*args));
                     false
                 }
                 BinOp { lhs, rhs, .. } => {
-                    todo.extend([*lhs, *rhs]);
+                    todo.extend_from_slice_or_abort(&[*lhs, *rhs]);
                     false
                 }
                 UnOp { operand, .. } => {
-                    todo.push(*operand);
+                    todo.push_or_abort(*operand);
                     false
                 }
                 Paren(inner) => {
-                    todo.push(*inner);
+                    todo.push_or_abort(*inner);
                     false
                 }
                 Table { fields, .. } => {
                     for f in self.ls(*fields) {
                         match f {
                             ast::TableField::Item(e) | ast::TableField::Named(_, e) => {
-                                todo.push(*e);
+                                todo.push_or_abort(*e);
                             }
-                            ast::TableField::Keyed(k, v) => todo.extend([*k, *v]),
+                            ast::TableField::Keyed(k, v) => {
+                                todo.extend_from_slice_or_abort(&[*k, *v])
+                            }
                         }
                     }
                     false

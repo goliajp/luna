@@ -15,8 +15,8 @@ pub(super) fn nat_next(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         return Err(bad_key(vm, nargs));
     }
     match t.next(k) {
-        Ok(Some((k, v))) => Ok(vm.nat_return(fs, &[k, v])),
-        Ok(None) => Ok(vm.nat_return(fs, &[Value::Nil])),
+        Ok(Some((k, v))) => vm.nat_ret(fs, &[k, v]),
+        Ok(None) => vm.nat_ret(fs, &[Value::Nil]),
         Err(_) => Err(bad_key(vm, nargs)),
     }
 }
@@ -45,7 +45,7 @@ pub(crate) fn nat_pairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
             for (slot, v) in out.iter_mut().zip(res) {
                 *slot = v;
             }
-            return Ok(vm.nat_return(fs, &out[..n]));
+            return vm.nat_ret(fs, &out[..n]);
         }
     }
     if ver <= LuaVersion::Lua52 {
@@ -54,9 +54,9 @@ pub(crate) fn nat_pairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let it = vm.nat_upval(fs, 0);
     // 5.5 adds a fourth value, the (nil) to-be-closed variable.
     if ver >= LuaVersion::Lua55 {
-        Ok(vm.nat_return(fs, &[it, t, Value::Nil, Value::Nil]))
+        vm.nat_ret(fs, &[it, t, Value::Nil, Value::Nil])
     } else {
-        Ok(vm.nat_return(fs, &[it, t, Value::Nil]))
+        vm.nat_ret(fs, &[it, t, Value::Nil])
     }
 }
 
@@ -95,9 +95,9 @@ pub fn ipairs_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let extra = 1 + u32::from(vm.version() == LuaVersion::Lua53);
     let v = vm.index_value_pushed(tv, Value::Int(next_i), extra)?;
     if v.is_nil() {
-        Ok(vm.nat_return(fs, &[Value::Nil]))
+        vm.nat_ret(fs, &[Value::Nil])
     } else {
-        Ok(vm.nat_return(fs, &[Value::Int(next_i), v]))
+        vm.nat_ret(fs, &[Value::Int(next_i), v])
     }
 }
 
@@ -111,11 +111,11 @@ fn ipairs_iter_raw(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let t = argcheck::check_table(vm, a, 0)?;
     let v = t.get_int(i as i64);
     if !v.is_nil() {
-        Ok(vm.nat_return(fs, &[Value::Int(i as i64), v]))
+        vm.nat_ret(fs, &[Value::Int(i as i64), v])
     } else if vm.version() == LuaVersion::Lua51 {
-        Ok(vm.nat_return(fs, &[]))
+        vm.nat_ret(fs, &[])
     } else {
-        Ok(vm.nat_return(fs, &[Value::Nil]))
+        vm.nat_ret(fs, &[Value::Nil])
     }
 }
 
@@ -133,7 +133,7 @@ pub(super) fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     if (ver == LuaVersion::Lua52 || ver == LuaVersion::Lua53)
         && let Some(mt) = vm.metatable_of(t)
     {
-        let key = Value::Str(vm.heap.intern(b"__ipairs"));
+        let key = vm.str_value(b"__ipairs")?;
         let mm = mt.get(key);
         if !mm.is_nil() {
             // `lua_call`: not yieldable.
@@ -142,12 +142,12 @@ pub(super) fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             for (slot, v) in out.iter_mut().zip(rs) {
                 *slot = v;
             }
-            return Ok(vm.nat_return(fs, &out));
+            return vm.nat_ret(fs, &out);
         }
     }
     if ver <= LuaVersion::Lua52 {
         argcheck::check_table(vm, a, 0)?;
     }
     let it = vm.nat_upval(fs, 0);
-    Ok(vm.nat_return(fs, &[it, t, Value::Int(0)]))
+    vm.nat_ret(fs, &[it, t, Value::Int(0)])
 }

@@ -4,12 +4,18 @@
 use super::api::C_UPVALS;
 use super::*;
 use luna_core::runtime::NativeClosure;
+use luna_core::runtime::mem::{LBox, LVec, MemRef};
 use luna_core::vm::exec::host_c::{HostAr, HostLevel};
 
 mod ar;
+mod cstrings;
 pub(super) mod upvals;
 
-pub(super) use ar::{ArBuf, CStrings, DebugPtr};
+pub(super) use ar::{ArBuf, DebugPtr};
+pub(super) use cstrings::CStrings;
+
+mod level_ref;
+pub(super) use level_ref::*;
 
 /// The C API's function behind `f`, if it is one.
 pub(super) fn c_api_fn(f: Value) -> Option<Gc<NativeClosure>> {
@@ -24,57 +30,6 @@ fn debug_ptr(api: &Api, ar: *mut c_void) -> DebugPtr {
     // SAFETY: the API functions taking `ar` require a `lua_Debug` of the
     // state's dialect there (PUC's contract)
     unsafe { DebugPtr::new(api.version(), ar) }
-}
-
-/// The level index a level reference names on `api`'s thread, if it is a
-/// level of it.
-pub(super) fn level_of_ref(api: &Api, r: usize) -> Option<usize> {
-    let n = api.vm.host_level_count(api.thread());
-    (r >= 1 && r <= n).then(|| n - r)
-}
-
-/// A level a `lua_Debug` points at from 5.2 on: the thread, as PUC's
-/// `i_ci` names a `CallInfo` of whichever thread `lua_getstack` was asked
-/// about, and the level reference on it.
-pub(super) struct LevelRef {
-    l: *mut LuaState,
-    r: usize,
-}
-
-/// The `LevelRef`s handed out for a thread, one per level reference, at
-/// addresses that stay put as long as the thread.
-#[derive(Default)]
-pub(super) struct LevelRefs(std::collections::HashMap<usize, Box<LevelRef>>);
-
-/// What `i_ci` holds for level reference `r` of `l`'s thread: 5.1's is an
-/// `int` relative to the thread its functions are given, as PUC's.
-pub(super) fn encode_ref(api: &mut Api, l: *mut LuaState, r: usize) -> usize {
-    if api.version() == LuaVersion::Lua51 {
-        return r;
-    }
-    // SAFETY: `l` is a live thread of the state; the borrow ends here
-    let refs = unsafe { &mut (*l).hook.refs };
-    let b = refs
-        .0
-        .entry(r)
-        .or_insert_with(|| Box::new(LevelRef { l, r }));
-    std::ptr::from_ref::<LevelRef>(b) as usize
-}
-
-/// The thread and level reference `i_ci` holds; `None` for 5.1's lost
-/// tail call.
-fn decode_ref(api: &Api, raw: usize) -> Option<(*mut LuaState, usize)> {
-    if api.version() == LuaVersion::Lua51 {
-        return Some((api.l, raw));
-    }
-    if raw == 0 {
-        return None;
-    }
-    // SAFETY: a nonzero `i_ci` of 5.2+ is the address of a `LevelRef` that
-    // `encode_ref` keeps with its thread (PUC's contract: `ar` was filled by
-    // `lua_getstack` or a hook while the thread lives)
-    let lr = unsafe { &*(raw as *const LevelRef) };
-    Some((lr.l, lr.r))
 }
 
 /// The level `ar` points at: its thread's API context and level index.
@@ -114,7 +69,9 @@ pub unsafe extern "C" fn lua_getstack(L: *mut LuaState, level: c_int, ar: *mut c
     if level >= n {
         return 0;
     }
-    let raw = encode_ref(&mut api, L, n - level);
+    let Some(raw) = encode_ref(&mut api, L, n - level) else {
+        return 0;
+    };
     d.set_level_ref(raw);
     1
 }

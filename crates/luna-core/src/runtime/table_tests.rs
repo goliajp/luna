@@ -278,7 +278,7 @@ fn growing_catches_up_a_lagging_prefix() {
         let asize = t.asize();
         assert_eq!(t.acount as usize, asize);
         t.aprefix = 1;
-        t.resize(heap, asize * 2, 0);
+        t.resize(heap, asize * 2, 0).unwrap();
         check_counts(t);
         assert_eq!(t.aprefix as usize, asize);
     });
@@ -289,7 +289,7 @@ fn growing_catches_up_a_lagging_prefix() {
         let _ = t.set_int(heap, 6, Value::Nil);
         let asize = t.asize();
         t.aprefix = 1;
-        t.resize(heap, asize * 2, 0);
+        t.resize(heap, asize * 2, 0).unwrap();
         check_counts(t);
         assert_eq!(t.aprefix, 5);
     });
@@ -420,7 +420,7 @@ fn appending_past_a_full_array_matches_the_full_rehash() {
     ]);
     // an array part that is not a power of two
     same_as_full_rehash(&[
-        &|heap: &mut Heap, t: &mut Table| t.ensure_array(heap, 3),
+        &|heap: &mut Heap, t: &mut Table| t.ensure_array(heap, 3).unwrap(),
         &append(3),
         &append(20),
     ]);
@@ -443,7 +443,7 @@ fn len_54_shortcut_matches_the_search() {
                 for (k, o) in out.iter_mut().enumerate() {
                     with_table(|heap, t| {
                         t.hdr.sub = Dialect::L54 as u8;
-                        t.resize(heap, a, 0);
+                        t.resize(heap, a, 0).unwrap();
                         for i in 1..=p {
                             let _ = t.set_int(heap, i as i64, Value::Int(1));
                         }

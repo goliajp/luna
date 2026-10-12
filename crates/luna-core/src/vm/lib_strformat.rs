@@ -4,6 +4,7 @@
 //! The items themselves are rendered by [`crate::vm::cfmt`].
 
 use crate::runtime::Value;
+use crate::runtime::mem::LVec;
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_bytes, raise_str};
@@ -27,8 +28,9 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let f = argcheck::check_string(vm, a, 0)?;
     let fmt = f.as_bytes();
     let v = vm.version();
-    // room for an item or two past the format before the buffer regrows
-    let mut out = Vec::with_capacity(fmt.len() + 16);
+    // room for the format and an item before the buffer regrows
+    let mut out = vm.new_buf();
+    vm.buf_reserve(&mut out, fmt.len() + cfmt::ITEM_MAX)?;
     let mut arg = 0u32;
     let mut i = 0;
     // the buffer's slot counts only when a callback runs or an error is
@@ -37,12 +39,18 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         let c = fmt[i];
         i += 1;
         if c != b'%' {
-            out.push(c);
+            // the run of plain bytes up to the next '%', in one copy
+            let end = fmt[i..]
+                .iter()
+                .position(|&b| b == b'%')
+                .map_or(fmt.len(), |k| i + k);
+            vm.buf_push(&mut out, &fmt[i - 1..end])?;
+            i = end;
             continue;
         }
         // a '%' at the very end pairs with the string's terminating zero
         if fmt.get(i) == Some(&b'%') {
-            out.push(b'%');
+            vm.buf_push(&mut out, b"%")?;
             i += 1;
             continue;
         }
@@ -66,8 +74,9 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             }
         };
     }
-    let s = vm.built_str(&out)?;
-    Ok(vm.nat_return(fs, &[s]))
+    let s = vm.lib_built_str(&out)?;
+    vm.recycle_buf(out);
+    vm.nat_ret(fs, &[s])
 }
 
 fn byte_at(fmt: &[u8], i: usize) -> u8 {
@@ -115,10 +124,12 @@ fn item51(
     arg: u32,
     fmt: &[u8],
     start: usize,
-    out: &mut Vec<u8>,
+    out: &mut LVec<u8>,
 ) -> Result<usize, LuaError> {
     let v = vm.version();
     let p = scanformat(vm, fmt, start)?;
+    // every conversion but a long `%s` and `%q` fits in this
+    vm.buf_reserve(out, cfmt::ITEM_MAX)?;
     let conv = byte_at(fmt, p);
     let body = &fmt[start..p.min(fmt.len())];
     let sp = Spec::parse(body);
@@ -185,12 +196,18 @@ fn item51(
         b'q' => match v {
             LuaVersion::Lua51 | LuaVersion::Lua52 => {
                 let s = argcheck::check_string(vm, a, arg)?;
-                addquoted(v, s.as_bytes(), out);
+                addquoted(vm, s.as_bytes(), out)?;
             }
             _ => addliteral(vm, a, arg, out)?,
         },
-        b's' if v >= LuaVersion::Lua53 && body.is_empty() && plain_str(vm, a, arg, out) => {}
         b's' => {
+            if v >= LuaVersion::Lua53
+                && body.is_empty()
+                && let Some(s) = plain_str(vm, a, arg)
+            {
+                vm.buf_push(out, s.as_bytes())?;
+                return Ok(p + 1);
+            }
             let s = if v == LuaVersion::Lua51 {
                 argcheck::check_string(vm, a, arg)?.as_bytes().to_vec()
             } else {
@@ -204,7 +221,7 @@ fn item51(
             };
             let has_prec = body.contains(&b'.');
             if v >= LuaVersion::Lua53 && body.is_empty() {
-                out.extend_from_slice(&s);
+                vm.buf_push(out, &s)?;
             } else {
                 if v >= LuaVersion::Lua53 && s.contains(&0) {
                     // over the `luaL_tolstring` result
@@ -212,7 +229,7 @@ fn item51(
                     return Err(arg_error(vm, arg + 1, "string contains zeros"));
                 }
                 if !has_prec && s.len() >= 100 {
-                    out.extend_from_slice(&s);
+                    vm.buf_push(out, &s)?;
                 } else {
                     cfmt::cstr(out, &sp, &s);
                 }
@@ -261,16 +278,12 @@ fn c_int_cast(x: f64) -> i32 {
     x as i32
 }
 
-/// Append argument `arg` when it is a string `luaL_tolstring` gives back
-/// as it is (no `__tostring` in the way); false, appending nothing, when it
-/// is not.
-fn plain_str(vm: &mut Vm, a: Args, arg: u32, out: &mut Vec<u8>) -> bool {
+/// Argument `arg` when it is a string `luaL_tolstring` gives back as it
+/// is (no `__tostring` in the way).
+fn plain_str(vm: &mut Vm, a: Args, arg: u32) -> Option<crate::runtime::Gc<crate::runtime::LuaStr>> {
     let v = a.get(vm, arg);
     match v {
-        Value::Str(s) if vm.get_mm(v, crate::vm::exec::Mm::ToString).is_nil() => {
-            out.extend_from_slice(s.as_bytes());
-            true
-        }
-        _ => false,
+        Value::Str(s) if vm.get_mm(v, crate::vm::exec::Mm::ToString).is_nil() => Some(s),
+        _ => None,
     }
 }

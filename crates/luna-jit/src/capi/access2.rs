@@ -42,7 +42,12 @@ pub unsafe extern "C" fn lua_objlen(L: *mut LuaState, idx: c_int) -> usize {
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
     if let Some(Value::Int(_) | Value::Float(_)) = api.get(idx) {
-        return access::tolstring(&mut api, idx).map_or(0, |(_, n)| n);
+        // a string that cannot be made has no length to give (the function
+        // cannot raise)
+        return access::tolstring(&mut api, idx)
+            .ok()
+            .flatten()
+            .map_or(0, |(_, n)| n);
     }
     let v = api.get_or_nil(idx);
     raw_len(&api, v) as usize

@@ -145,7 +145,7 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     let a = Args::new(fs, nargs);
     if a.is_none_or_nil(vm, 0) {
         let v = time_value(vm, now());
-        return Ok(vm.nat_return(fs, &[v]));
+        return vm.nat_ret(fs, &[v]);
     }
     let t = argcheck::check_table(vm, a, 0)?;
     vm.native_settop(1);
@@ -231,9 +231,9 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     match secs.filter(|&s| s != -1) {
         Some(s) => {
             let r = time_value(vm, s);
-            Ok(vm.nat_return(fs, &[r]))
+            vm.nat_ret(fs, &[r])
         }
-        None if v <= LuaVersion::Lua52 => Ok(vm.nat_return(fs, &[Value::Nil])),
+        None if v <= LuaVersion::Lua52 => vm.nat_ret(fs, &[Value::Nil]),
         None => Err(raise_str(
             vm,
             "time result cannot be represented in this installation",
@@ -287,12 +287,12 @@ pub(super) fn os_difftime(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     } else {
         check_time(vm, a, 1)?
     };
-    Ok(vm.nat_return(fs, &[Value::Float(t1 as f64 - t2 as f64)]))
+    vm.nat_ret(fs, &[Value::Float(t1 as f64 - t2 as f64)])
 }
 
 pub(super) fn os_clock(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     // C's clock() is processor time, which std cannot read; the time since
     // the Vm started stands in for it.
     let secs = vm.uptime().as_secs_f64();
-    Ok(vm.nat_return(fs, &[Value::Float(secs)]))
+    vm.nat_ret(fs, &[Value::Float(secs)])
 }

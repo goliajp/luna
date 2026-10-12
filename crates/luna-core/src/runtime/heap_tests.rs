@@ -10,20 +10,22 @@ fn collect_traces_function_objects() {
     let kstr = heap.intern(b"a-constant-string");
     let inner = Proto {
         hdr: GcHeader::new(ObjTag::Proto),
-        code: heap.block_of([Inst::iabc(Op::Return0, 0, 0, 0, false)].into_iter()),
-        consts: heap.block_of([].into_iter()),
-        protos: heap.block_of([].into_iter()),
-        upvals: heap.block_of([].into_iter()),
+        code: heap
+            .try_block_of([Inst::iabc(Op::Return0, 0, 0, 0, false)].into_iter())
+            .unwrap(),
+        consts: heap.try_block_of([].into_iter()).unwrap(),
+        protos: heap.try_block_of([].into_iter()).unwrap(),
+        upvals: heap.try_block_of([].into_iter()).unwrap(),
         num_params: 0,
         is_vararg: false,
         has_vararg_table_pseudo: false,
         has_compat_vararg_arg: false,
         max_stack: 2,
-        lines: heap.block_of([1].into_iter()),
+        lines: heap.try_block_of([1].into_iter()).unwrap(),
         source,
         line_defined: 1,
         last_line_defined: 1,
-        locvars: heap.block_of([].into_iter()),
+        locvars: heap.try_block_of([].into_iter()).unwrap(),
         cache: std::cell::Cell::new(None),
         jit: std::cell::Cell::new(crate::runtime::function::JitProtoState::Untried),
         jit_next: std::cell::Cell::new(None),
@@ -44,20 +46,22 @@ fn collect_traces_function_objects() {
     let inner = heap.adopt_proto(inner);
     let outer = Proto {
         hdr: GcHeader::new(ObjTag::Proto),
-        code: heap.block_of([Inst::iabc(Op::Return0, 0, 0, 0, false)].into_iter()),
-        consts: heap.block_of([Value::Str(kstr)].into_iter()),
-        protos: heap.block_of([inner].into_iter()),
-        upvals: heap.block_of([].into_iter()),
+        code: heap
+            .try_block_of([Inst::iabc(Op::Return0, 0, 0, 0, false)].into_iter())
+            .unwrap(),
+        consts: heap.try_block_of([Value::Str(kstr)].into_iter()).unwrap(),
+        protos: heap.try_block_of([inner].into_iter()).unwrap(),
+        upvals: heap.try_block_of([].into_iter()).unwrap(),
         num_params: 0,
         is_vararg: true,
         has_vararg_table_pseudo: false,
         has_compat_vararg_arg: false,
         max_stack: 2,
-        lines: heap.block_of([1].into_iter()),
+        lines: heap.try_block_of([1].into_iter()).unwrap(),
         source,
         line_defined: 0,
         last_line_defined: 0,
-        locvars: heap.block_of([].into_iter()),
+        locvars: heap.try_block_of([].into_iter()).unwrap(),
         cache: std::cell::Cell::new(None),
         jit: std::cell::Cell::new(crate::runtime::function::JitProtoState::Untried),
         jit_next: std::cell::Cell::new(None),
@@ -258,23 +262,5 @@ fn intern_resurrects_dead_white_short_string() {
     drop(heap);
 }
 
-#[test]
-fn deep_table_chain_marks_iteratively() {
-    // deep chain: explicit mark stack must not overflow (smaller under
-    // miri — the interpreter makes 100k tables take ~30 minutes)
-    let n = if cfg!(miri) { 2_000 } else { 100_000 };
-    let mut heap = Heap::new();
-    let head = heap.new_table();
-    let mut cur = head;
-    for _ in 0..n {
-        let next = heap.new_table();
-        // SAFETY: `cur` is `head` or the table allocated in the previous iteration, and nothing
-        // collects inside the loop; the borrow covers one call
-        unsafe { cur.as_mut() }
-            .set(&mut heap, Value::Int(1), Value::Table(next))
-            .unwrap();
-        cur = next;
-    }
-    assert_eq!(heap.collect(&[Value::Table(head)]), 0);
-    assert_eq!(heap.collect(&[]), n + 1);
-}
+#[path = "heap_mark_tests.rs"]
+mod mark;

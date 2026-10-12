@@ -6,7 +6,7 @@
 
 use std::alloc::Layout;
 
-use crate::runtime::mem::{BlockKind, LVec, MemRef};
+use crate::runtime::mem::{BlockKind, LVec, MemRef, Oom};
 use std::cell::Cell;
 use std::ptr;
 use std::slice;
@@ -68,6 +68,15 @@ impl crate::runtime::heap::Gc<LuaStr> {
     /// Borrow the underlying bytes of this Lua string.
     pub fn as_bytes(&self) -> &[u8] {
         // SAFETY: `self.as_ptr()` is the start of this `LuaStr`'s header which was allocated with the trailing bytes / hash fields in the same allocation by `StringTable::intern`.
+        unsafe { bytes_of(self.as_ptr()) }
+    }
+
+    /// [`Self::as_bytes`] with a lifetime of the caller's choosing.
+    ///
+    /// # Safety
+    /// The string stays allocated (rooted) for as long as the slice is used.
+    pub(crate) unsafe fn as_bytes_unbounded<'a>(self) -> &'a [u8] {
+        // SAFETY: as in `as_bytes`; the caller keeps the string alive
         unsafe { bytes_of(self.as_ptr()) }
     }
 
@@ -154,6 +163,24 @@ pub(crate) fn lua_hash_51(bytes: &[u8]) -> u32 {
     h
 }
 
+/// [`lua_hash_51`] of `a` followed by `b`, without joining them.
+pub(crate) fn lua_hash_51_pair(a: &[u8], b: &[u8]) -> u32 {
+    let l = a.len() + b.len();
+    let mut h = l as u32;
+    let step = (l >> 5) + 1;
+    let mut l1 = l;
+    while l1 >= step {
+        let i = l1 - 1;
+        let c = if i < a.len() { a[i] } else { b[i - a.len()] };
+        h ^= h
+            .wrapping_shl(5)
+            .wrapping_add(h >> 2)
+            .wrapping_add(u32::from(c));
+        l1 -= step;
+    }
+    h
+}
+
 /// Longest string a `LuaStr` can describe (its length is a `u32`). Code
 /// that builds a string from script-controlled pieces checks against it.
 pub(crate) const MAX_LEN: usize = u32::MAX as usize;
@@ -168,16 +195,34 @@ fn layout(len: usize) -> Layout {
         .pad_to_align()
 }
 
-fn alloc_str(mem: MemRef, bytes: &[u8], short: bool, hash: u32, hashed: bool) -> *mut LuaStr {
-    let layout = layout(bytes.len());
+fn alloc_str(
+    mem: MemRef,
+    bytes: &[u8],
+    short: bool,
+    hash: u32,
+    hashed: bool,
+) -> Result<*mut LuaStr, Oom> {
+    alloc_str_of(mem, &[bytes], short, hash, hashed)
+}
+
+/// [`alloc_str`] for the bytes of `parts` one after the other.
+fn alloc_str_of(
+    mem: MemRef,
+    parts: &[&[u8]],
+    short: bool,
+    hash: u32,
+    hashed: bool,
+) -> Result<*mut LuaStr, Oom> {
+    let len: usize = parts.iter().map(|p| p.len()).sum();
+    let layout = layout(len);
     let p = match mem.ctx().alloc(layout, BlockKind::Str) {
         Some(p) => p.as_ptr() as *mut LuaStr,
-        None => crate::runtime::mem::oom_abort(layout),
+        None => return Err(Oom(mem)),
     };
     // SAFETY: layout is built from the header size + the trailing bytes and their NUL that we just computed, so the header, the bytes and the NUL written below are inside the allocation; deallocation will use the same layout in `free`.
     unsafe {
         let mut hdr = GcHeader::new(ObjTag::Str);
-        hdr.aux = bytes.len() as u32;
+        hdr.aux = len as u32;
         p.write(LuaStr {
             hdr,
             hnext: ptr::null_mut(),
@@ -185,15 +230,40 @@ fn alloc_str(mem: MemRef, bytes: &[u8], short: bool, hash: u32, hashed: bool) ->
             hashed: Cell::new(hashed),
             short,
         });
-        ptr::copy_nonoverlapping(bytes.as_ptr(), p.add(1) as *mut u8, bytes.len());
-        (p.add(1) as *mut u8).add(bytes.len()).write(0);
-        p
+        let mut dst = p.add(1) as *mut u8;
+        for part in parts {
+            ptr::copy_nonoverlapping(part.as_ptr(), dst, part.len());
+            dst = dst.add(part.len());
+        }
+        dst.write(0);
+    }
+    Ok(p)
+}
+
+/// A long string of `a` then `b` (together longer than `MAX_SHORT_LEN`).
+pub(crate) fn alloc_long_pair(
+    mem: MemRef,
+    a: &[u8],
+    b: &[u8],
+    seed: u32,
+    h51: bool,
+) -> Result<*mut LuaStr, Oom> {
+    debug_assert!(a.len() + b.len() > MAX_SHORT_LEN);
+    if h51 {
+        alloc_str_of(mem, &[a, b], false, lua_hash_51_pair(a, b), true)
+    } else {
+        alloc_str_of(mem, &[a, b], false, seed, false)
     }
 }
 
 /// A long string: hashed when first used as a key, or at once with PUC
 /// 5.1's hash (`h51`).
-pub(crate) fn alloc_long(mem: MemRef, bytes: &[u8], seed: u32, h51: bool) -> *mut LuaStr {
+pub(crate) fn alloc_long(
+    mem: MemRef,
+    bytes: &[u8],
+    seed: u32,
+    h51: bool,
+) -> Result<*mut LuaStr, Oom> {
     debug_assert!(bytes.len() > MAX_SHORT_LEN);
     if h51 {
         alloc_str(mem, bytes, false, lua_hash_51(bytes), true)
@@ -213,147 +283,8 @@ pub(crate) unsafe fn free(p: *mut LuaStr, mem: MemRef) {
     }
 }
 
-/// Open hashing with per-string chains (PUC stringtable shape).
-pub(crate) struct StringTable {
-    buckets: LVec<*mut LuaStr>,
-    count: usize,
-}
-
-impl StringTable {
-    pub(crate) fn new(mem: MemRef) -> StringTable {
-        let mut buckets = LVec::new(mem);
-        buckets.resize_or_abort(64, ptr::null_mut());
-        StringTable { buckets, count: 0 }
-    }
-
-    /// Find or create an interned short string. Returns `(ptr, newly_created)`.
-    #[inline]
-    pub(crate) fn intern(
-        &mut self,
-        mem: MemRef,
-        bytes: &[u8],
-        seed: u32,
-        h51: bool,
-    ) -> (*mut LuaStr, bool) {
-        debug_assert!(bytes.len() <= MAX_SHORT_LEN);
-        let h = if h51 {
-            lua_hash_51(bytes)
-        } else {
-            lua_hash(bytes, seed)
-        };
-        let b = h as usize & (self.buckets.len() - 1);
-        let mut cur = self.buckets[b];
-        // SAFETY: `self.as_ptr()` is the start of this `LuaStr`'s header which was allocated with the trailing bytes / hash fields in the same allocation by `StringTable::intern`.
-        unsafe {
-            while !cur.is_null() {
-                // the hash first: it is in the header already loaded for
-                // `hnext`, and keeps the byte compare to the string sought
-                // (`bytes_of` compares lengths before bytes)
-                if (*cur).hash.get() == h && bytes_of(cur) == bytes {
-                    return (cur, false);
-                }
-                cur = (*cur).hnext;
-            }
-        }
-        if self.count >= self.buckets.len() {
-            self.grow();
-        }
-        let b = h as usize & (self.buckets.len() - 1);
-        let p = alloc_str(mem, bytes, true, h, true);
-        // SAFETY: `p` was just returned by `alloc_str` and is not in any chain yet; nothing else points at it
-        unsafe {
-            (*p).hnext = self.buckets[b];
-        }
-        self.buckets[b] = p;
-        self.count += 1;
-        (p, true)
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn grow(&mut self) {
-        // a table that cannot grow keeps working with longer chains, as
-        // PUC's `luaS_resize` leaves it when the reallocation fails
-        let mut nb = LVec::new(self.buckets.mem());
-        if nb.resize(self.buckets.len() * 2, ptr::null_mut()).is_err() {
-            return;
-        }
-        let mask = nb.len() - 1;
-        for &head in self.buckets.iter() {
-            let mut cur = head;
-            while !cur.is_null() {
-                // SAFETY: the bucket chains hold only interned strings that are still allocated: `remove` unlinks a string before the sweep frees it
-                unsafe {
-                    let next = (*cur).hnext;
-                    let b = (*cur).hash.get() as usize & mask;
-                    (*cur).hnext = nb[b];
-                    nb[b] = cur;
-                    cur = next;
-                }
-            }
-        }
-        self.buckets = nb;
-    }
-
-    /// Hash every interned string again, by PUC 5.1's function when `h51`
-    /// and the seeded one otherwise, and chain it in its new bucket: for
-    /// the few strings a heap makes before its dialect is known.
-    pub(crate) fn rehash(&mut self, seed: u32, h51: bool) {
-        let mut all = ptr::null_mut::<LuaStr>();
-        for head in self.buckets.iter_mut() {
-            let mut cur = std::mem::replace(head, ptr::null_mut());
-            while !cur.is_null() {
-                // SAFETY: the bucket chains hold only interned strings that are still allocated (see `grow`)
-                unsafe {
-                    let next = (*cur).hnext;
-                    (*cur).hnext = all;
-                    all = cur;
-                    cur = next;
-                }
-            }
-        }
-        let mask = self.buckets.len() - 1;
-        while !all.is_null() {
-            // SAFETY: as above; each string is moved from `all` to one chain
-            unsafe {
-                let next = (*all).hnext;
-                let b = bytes_of(all);
-                let h = if h51 {
-                    lua_hash_51(b)
-                } else {
-                    lua_hash(b, seed)
-                };
-                (*all).hash.set(h);
-                let i = h as usize & mask;
-                (*all).hnext = self.buckets[i];
-                self.buckets[i] = all;
-                all = next;
-            }
-        }
-    }
-
-    /// Unlink a dying interned string (called from sweep).
-    ///
-    /// # Safety
-    /// `p` is a short string this table interned, still allocated and in its
-    /// bucket.
-    pub(crate) unsafe fn remove(&mut self, p: *mut LuaStr) {
-        // SAFETY: `p` is allocated and chained (the caller's contract), and every other chained string is allocated too, so `cur` always points at a bucket slot or at the `hnext` of a live string
-        unsafe {
-            let b = (*p).hash.get() as usize & (self.buckets.len() - 1);
-            let mut cur: *mut *mut LuaStr = &mut self.buckets[b];
-            while !(*cur).is_null() {
-                if *cur == p {
-                    *cur = (*p).hnext;
-                    self.count -= 1;
-                    return;
-                }
-                cur = &mut (**cur).hnext;
-            }
-            unreachable!("interned string missing from string table");
-        }
-    }
-}
+mod table;
+pub(crate) use table::StringTable;
 
 /// Allocation footprint of a string of `len` bytes (heap accounting).
 pub(crate) fn alloc_size(len: usize) -> usize {

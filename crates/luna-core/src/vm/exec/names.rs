@@ -59,12 +59,13 @@ impl Vm {
         &mut self,
         target: Gc<crate::runtime::NativeClosure>,
     ) -> Option<String> {
-        let pkg_k = Value::Str(self.heap.intern(b"package"));
+        // names no string exists for are no table's keys
+        let pkg_k = Value::Str(self.heap.find_interned(b"package")?);
         let pkg = match self.globals().get(pkg_k) {
             Value::Table(t) => t,
             _ => return None,
         };
-        let loaded_k = Value::Str(self.heap.intern(b"loaded"));
+        let loaded_k = Value::Str(self.heap.find_interned(b"loaded")?);
         let loaded = match pkg.get(loaded_k) {
             Value::Table(t) => t,
             _ => return None,
@@ -127,5 +128,20 @@ impl Vm {
                 self.heap.barrier_forward(uv, v);
             }
         }
+    }
+
+    /// The global `name`. A short name is only looked up: `try_intern`
+    /// finds an existing short string before it makes one, so a short name
+    /// no string exists for is no key of the globals table, and nothing is
+    /// allocated. A long name is not interned and is made, aborting when
+    /// memory runs out, as `Heap::intern` does.
+    #[cfg(feature = "send")]
+    pub(crate) fn global_named(&mut self, name: &str) -> Value {
+        let key = match self.heap.find_interned(name.as_bytes()) {
+            Some(s) => s,
+            None if name.len() <= crate::runtime::string::MAX_SHORT_LEN => return Value::Nil,
+            None => self.heap.intern(name.as_bytes()),
+        };
+        self.globals().get(Value::Str(key))
     }
 }
