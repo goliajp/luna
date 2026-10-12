@@ -209,7 +209,10 @@ impl Vm {
     /// from before the thread's last resume (see `stale_frames`).
     #[inline(always)]
     pub(super) fn cont_popped(&mut self, meta: bool, level: bool) {
-        self.g.meta_conts -= u32::from(meta);
+        // only 5.1 counts frames (see `frames_in_use`)
+        if meta && self.g.frame_size != u32::MAX {
+            self.g.meta_conts -= 1;
+        }
         let depth = self.frames.len() as u32;
         if depth < self.g.stale_frames {
             self.g.stale_frames = depth;
