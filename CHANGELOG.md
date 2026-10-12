@@ -59,8 +59,9 @@ optimization.
   PUC's `GETGLOBAL` / `SETGLOBAL` do. A 5.2 / 5.3 jump that also
   closes upvalues is one instruction (`JmpClose` / `JmpCloseBack`, PUC's
   `JMP` with `A` set), a 5.1–5.3 concatenation names its own
-  destination (`k` on `Concat`), and `LTrueSkip` is PUC's
-  `LOADBOOL A 1 1`. The body tag is `LunaV5`. Dump the
+  destination (`k` on `Concat`), `LTrueSkip` is PUC's
+  `LOADBOOL A 1 1`, and a numeric `for` with a float start or step steps
+  with `ForLoopF` / `ForLoop55F` (from 5.3 on). The body tag is `LunaV5`. Dump the
   source again with this version. PUC bytecode loads as before.
 - C API: errors leave a C function at once, as in PUC. `lua_error`,
   `luaL_error` and every API function that raises (`lua_gettable`,
@@ -200,6 +201,30 @@ optimization.
 
 ### Changed
 
+- The numeric `for` step and float arithmetic run in fewer instructions
+  and cycles. A loop the compiler knows to be a float loop (a float start
+  or step, from 5.3 on) has its own step opcode, which tests for floats
+  first instead of trying integers. The control registers are written
+  with the bytes between tag and payload zeroed, so that on aarch64 the
+  step reads each one's tag and payload in one load and tests whole tag
+  words, and computes its back-edge target before those loads; a float
+  step compares once, the pair it compares chosen by the step's sign; an
+  arithmetic opcode on two floats computes its result where it reads its
+  operands and stays on the fast path on aarch64. A control register
+  written otherwise (`debug.setlocal`, `lua_setlocal`, a trace's exit)
+  takes the slow path once. On a Cortex-A76, cycles per iteration without
+  the JIT (before, PUC): an empty integer loop 8.3 in 5.4 (9.9, PUC 9.9)
+  and 7.9 in 5.5 (7.9, PUC 9.0); an empty float loop 8.4 in 5.4 (9.7, PUC
+  9.3) and 7.7 in 5.5 (9.0, PUC 8.0); `s = s + i` 14.3 in 5.4 (16.0, PUC
+  14.6) and 14.0 in 5.5 (14.5, PUC 13.9); `s = s + x` over a float loop
+  15.3 in 5.4 (20.0, PUC 16.0) and 14.6 in 5.5 (20.0, PUC 15.1).
+- A numeric `for` step no longer tests the tag of a float loop's limit,
+  which it only reads. A crafted binary chunk whose loop body overwrites
+  the limit now runs on with the bits it finds there, as PUC Lua does,
+  instead of raising `'for' state corrupted` (memory stays safe: the step
+  only reads it as a number). `debug.setlocal` and `lua_setlocal` on any of
+  a loop's control values still make its next step raise `'for' state
+  corrupted`, as before.
 - The interpreter loop prepares numeric `for` loops itself when the
   control values need no conversion (integers, or numbers of a float
   loop), instead of going through the general instruction path, and its

@@ -11,7 +11,12 @@ pub(super) fn sweep_for(st: &mut KindSweep, ins: Inst) -> Option<()> {
         ..
     } = st;
     match ins.op() {
-        Op::ForPrep | Op::ForLoop | Op::ForPrep55 | Op::ForLoop55 => {
+        Op::ForPrep
+        | Op::ForLoop
+        | Op::ForPrep55
+        | Op::ForLoop55
+        | Op::ForLoopF
+        | Op::ForLoop55F => {
             // Int loop, or Float loop (5.1 /
             // 5.2 numeric `for` keeps the loop var Float). The
             // loop kind is decided by R[A]'s scanned kind: Float

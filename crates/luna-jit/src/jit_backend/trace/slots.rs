@@ -130,9 +130,9 @@ pub(super) fn rw_ranges(inst: luna_core::vm::isa::Inst) -> ([(u32, u32); 3], [(u
         Op::Return1 => (r1(a), w0),
         // R[A+1] = count, R[A] = idx, R[A+2] = step, R[A+3] = ctrl
         // Reads R[A], R[A+1], R[A+2]; writes R[A], R[A+1], R[A+3].
-        Op::ForLoop | Op::ForPrep => ([(a, 3), none, none], [(a, 2), (a + 3, 1)]),
+        Op::ForLoop | Op::ForLoopF | Op::ForPrep => ([(a, 3), none, none], [(a, 2), (a + 3, 1)]),
         // 5.5: R[A] count, R[A+1] step, R[A+2] the index and variable
-        Op::ForLoop55 | Op::ForPrep55 => ([(a, 3), none, none], [(a, 3), none]),
+        Op::ForLoop55 | Op::ForLoop55F | Op::ForPrep55 => ([(a, 3), none, none], [(a, 3), none]),
         Op::TForPrep | Op::TForPrep53 => (r0, w0),
         // swaps the closing value and the control
         Op::TForPrep55 => ([(a + 2, 2), none, none], [(a + 2, 2), none]),

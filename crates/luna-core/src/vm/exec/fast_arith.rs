@@ -24,6 +24,7 @@ pub(super) unsafe fn raw_tag(p: *const Value) -> u8 {
 ///
 /// # Safety
 /// `p` points at an initialised `Value`.
+#[cfg(all(target_arch = "x86_64", not(miri)))]
 #[inline(always)]
 pub(super) unsafe fn raw_tag_again(p: *const Value) -> u8 {
     // SAFETY: the caller's contract; the tag is the first byte
@@ -142,29 +143,38 @@ macro_rules! arith_arm {
      int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr,
      slow($l:ident, $r:ident) => $sv:expr) => {{
         use $crate::vm::exec::fast_arith::{
-            Operands, cold_path, is_num_tag, raw_int, raw_num, raw_tag,
+            cold_path, is_num_tag, raw_flt, raw_int, raw_num, raw_tag,
         };
         let (pl, pr): (*const Value, *const Value) = ($pl, $pr);
         // SAFETY: both point at initialised values, a register of the
         // running frame or a constant of its proto; a payload is read as
         // the type its tag names
-        let ops = unsafe {
+        // two floats are as common as two integers in float code: on
+        // aarch64, which writes a float result apart from an integer one
+        // (see `arith_result`), only mixed numbers and the rest are out of
+        // line; on x86-64 the two results share their write, and a second
+        // inline path made the integer one jump through it. Not in 5.1/5.2
+        // (`DBL`, used by `run_fast`'s arms), whose integers and floats mix
+        // in one number type and would pay the second test
+        // each case computes its result where its operands were read, so
+        // that the float case is not a jump to a block the cases share
+        let v: Option<Value> = unsafe {
             let (tl, tr) = (raw_tag(pl), raw_tag(pr));
             if tl == tag::INT && tr == tag::INT {
-                Operands::Ints(raw_int(pl), raw_int(pr))
+                let ($ia, $ib) = (raw_int(pl), raw_int(pr));
+                $iv
+            } else if cfg!(target_arch = "aarch64") && !DBL && tl == tag::FLOAT && tr == tag::FLOAT {
+                let ($fa, $fb) = (raw_flt(pl), raw_flt(pr));
+                $fv
             } else {
                 cold_path();
                 if is_num_tag(tl) && is_num_tag(tr) {
-                    Operands::Nums(raw_num(pl, tl), raw_num(pr, tr))
+                    let ($fa, $fb) = (raw_num(pl, tl), raw_num(pr, tr));
+                    $fv
                 } else {
-                    Operands::Other
+                    None
                 }
             }
-        };
-        let v: Option<Value> = match ops {
-            Operands::Ints($ia, $ib) => $iv,
-            Operands::Nums($fa, $fb) => $fv,
-            Operands::Other => None,
         };
         $crate::vm::exec::fast_arith::arith_result!($regs, $inst, v, (*pl, *pr), slow($l, $r) => $sv)
     }};
@@ -185,6 +195,9 @@ macro_rules! arith_imm_arm {
             let tl = raw_tag(pl);
             if tl == tag::INT {
                 Operands::Ints(raw_int(pl), im)
+            } else if cfg!(target_arch = "aarch64") && !DBL && tl == tag::FLOAT {
+                // as in `arith_arm`
+                Operands::Nums(raw_flt(pl), im as f64)
             } else {
                 cold_path();
                 if tl == tag::FLOAT {

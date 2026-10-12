@@ -5,6 +5,7 @@
 mod base_var_scaffold;
 mod capi_aux;
 mod capi_debug;
+mod capi_for_limit;
 mod capi_hosts;
 mod capi_load;
 mod capi_tables;

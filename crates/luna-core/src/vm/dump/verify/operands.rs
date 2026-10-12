@@ -219,7 +219,12 @@ impl Checker<'_> {
                 }
             }
             // the hidden slots and the first loop variable
-            Op::ForPrep | Op::ForLoop | Op::ForPrep55 | Op::ForLoop55 => self.regs(pc, a, var + 1),
+            Op::ForPrep
+            | Op::ForLoop
+            | Op::ForPrep55
+            | Op::ForLoop55
+            | Op::ForLoopF
+            | Op::ForLoop55F => self.regs(pc, a, var + 1),
             Op::TForPrep | Op::TForPrep53 | Op::TForPrep55 => self.regs(pc, a, var),
             // the call runs on three copies at the first variable, which
             // its results replace

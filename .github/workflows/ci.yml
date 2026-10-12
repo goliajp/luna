@@ -391,7 +391,11 @@ jobs:
   # pointers, and those reads) to 1443, and the fast loop preparing
   # numeric `for` loops itself (two blocks) and the tag reread and float
   # payload store of its `for` steps (two `unsafe fn` and their blocks)
-  # to 1449.
+  # to 1449, and the numeric `for` reading and writing its control values
+  # as word pairs (three `unsafe fn` and their blocks, the slow path's
+  # rewrite, two aarch64 step arms) to 1458, and the step testing whole
+  # words where it does not test a tag (a word read, the unseal write, the
+  # back-edge barrier) and a lua_setlocal test from Rust to 1467.
   # docs/unsafe-accounting.md has the count per crate and module
   # and why each kind of site exists. Each justified unsafe addition
   # needs an explicit ceiling bump to the new exact count. Never widen to
@@ -406,7 +410,7 @@ jobs:
         run: |
           count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
                   crates | wc -l | tr -d ' ')
-          ceiling=1449
+          ceiling=1467
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then

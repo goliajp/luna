@@ -53,6 +53,12 @@ impl Vm {
     }
 
     pub(super) fn for_prep(&mut self, inst: Inst, base: u32) -> Result<(), LuaError> {
+        self.for_prep_values(inst, base)?;
+        self.pad_for_state(base, inst);
+        Ok(())
+    }
+
+    fn for_prep_values(&mut self, inst: Inst, base: u32) -> Result<(), LuaError> {
         let a = inst.a();
         // a 5.5 loop (from a 5.5 chunk in another dialect's Vm too) runs as
         // 5.5 runs it
@@ -168,8 +174,14 @@ impl Vm {
         Ok(())
     }
 
-    #[inline(always)]
     pub(super) fn for_loop(&mut self, inst: Inst, base: u32) -> Result<(), LuaError> {
+        self.for_step(inst, base)?;
+        self.pad_for_state(base, inst);
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn for_step(&mut self, inst: Inst, base: u32) -> Result<(), LuaError> {
         let a = inst.a();
         // PUC 5.1–5.3 `OP_FORLOOP` compares the post-step `i` to `limit`
         // directly (R[a+1] holds the limit, *not* a remaining-count) so the
@@ -177,7 +189,7 @@ impl Vm {
         // every later iteration. 5.4+ switched to the count-based form luna
         // already uses for `Int`; the float branch was already PUC-3.x-style.
         let v = self.version();
-        if inst.op() == Op::ForLoop55 {
+        if inst.op().plain_for_loop() == Op::ForLoop55 {
             return self.for_loop55(inst, base);
         }
         let pre53 = v <= LuaVersion::Lua53;

@@ -102,7 +102,7 @@ pub(super) fn plain_trace_end(
                 }
                 break;
             }
-            Op::ForLoop | Op::ForLoop55 => {
+            Op::ForLoop | Op::ForLoop55 | Op::ForLoopF | Op::ForLoop55F => {
                 if depth == 0 {
                     found = Some((i, TraceEnd::ForLoop));
                 } else {

@@ -68,6 +68,7 @@ pub(crate) mod native_call;
 mod native_invoke;
 mod num;
 mod num_double;
+mod num_words;
 mod protected;
 mod settings;
 mod slow_ops;
