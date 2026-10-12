@@ -9,7 +9,10 @@ use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
+
 mod auxsort_int;
+mod snapshot;
+use snapshot::pure_snapshot;
 
 pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
@@ -66,39 +69,6 @@ pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         }
     }
     Ok(0)
-}
-
-/// The elements, when sorting them cannot be observed: no comparator,
-/// and `t[1..n]` all non-NaN numbers or all strings. Then no comparison
-/// calls a metamethod or fails, and no element access reaches `__index`
-/// or `__newindex` (every slot is present), so running the same
-/// algorithm over a copy and storing the result gives the same table as
-/// sorting in place, without a table access per step.
-fn pure_snapshot(vm: &Vm, tv: Value, n: i64) -> Result<Option<LVec<Value>>, LuaError> {
-    let Value::Table(t) = tv else {
-        return Ok(None);
-    };
-    // `n` may come from `__len`; only a real sequence fills the vector
-    let mut out = LVec::new(vm.heap.mem());
-    let Ok(room) = usize::try_from(n.min(t.len())) else {
-        return Ok(None);
-    };
-    out.reserve(room)?;
-    let mut strings = None;
-    for i in 1..=n {
-        let v = t.get(Value::Int(i));
-        let is_str = match v {
-            Value::Int(_) => false,
-            Value::Float(f) if !f.is_nan() => false,
-            Value::Str(_) => true,
-            _ => return Ok(None),
-        };
-        if *strings.get_or_insert(is_str) != is_str {
-            return Ok(None);
-        }
-        out.push(v)?;
-    }
-    Ok(Some(out))
 }
 
 /// PUC's quicksort (`auxsort`), translated with its stack discipline: `geti`
