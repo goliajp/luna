@@ -10,34 +10,6 @@ use crate::runtime::heap::{Gc, GcHeader, Heap};
 use crate::runtime::mem::MemRef;
 use crate::runtime::value::{RawVal, Value, f2i_exact, raw};
 
-/// Errors that table mutation can raise back to the interpreter.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TableError {
-    /// `t[nil] = …` — `nil` is forbidden as a key.
-    NilIndex,
-    /// `t[0/0] = …` — NaN floats are forbidden as keys.
-    NanIndex,
-    /// `next` called with a key not present in the table.
-    InvalidNext,
-    /// PUC `luaH_resizearray` — the array part would have to grow past
-    /// `MAXASIZE`, or the hash part past `MAXHBITS`. Raised back as
-    /// "table overflow" so a runaway `a[i] = i` loop walls within budget
-    /// (5.5/5.4 heavy.lua's `toomanyidx` pcalls exactly this scenario).
-    Overflow,
-    /// The table is read-only (see [`Table::is_readonly`]); nothing was
-    /// written. Raised back as "Attempt to modify a readonly table".
-    ReadOnly,
-    /// The table needed to grow and the allocation failed; nothing was
-    /// written. Raised back as a memory error.
-    Memory(crate::runtime::mem::Oom),
-}
-
-impl From<crate::runtime::mem::Oom> for TableError {
-    fn from(o: crate::runtime::mem::Oom) -> TableError {
-        TableError::Memory(o)
-    }
-}
-
 /// PUC `MAXASIZE` analogue: the highest power of two an array part may
 /// grow to. Choose a cap that comfortably fits in the gate's 60-second
 /// budget (each grow is O(n), so 2^27 entries × 16 bytes ≈ 2 GB is the
@@ -105,6 +77,9 @@ mod ctor;
 pub use ctor::new_table_sizes;
 pub(crate) use ctor::{int2fb, new_table_operands};
 pub use len::set_len_search_seed;
+#[path = "table_error.rs"]
+mod error;
+pub use error::TableError;
 #[path = "table_get.rs"]
 mod get;
 #[path = "table_grow.rs"]
