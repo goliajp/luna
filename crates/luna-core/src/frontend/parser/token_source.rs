@@ -100,6 +100,14 @@ impl<'s> TokenSource<'s> {
         }
     }
 
+    /// The source a streamed parse read (kept to place a compile error).
+    pub(super) fn take_streamed(&mut self) -> Option<LVec<u8>> {
+        match self {
+            TokenSource::Stream(l) => Some(l.source_mut().take_bytes()),
+            _ => None,
+        }
+    }
+
     pub(super) fn take_buf(&mut self) -> LVec<u8> {
         match self {
             TokenSource::Lexer(l) => l.take_buf(),

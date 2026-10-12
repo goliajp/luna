@@ -21,6 +21,7 @@ impl<'a> Compiler<'a> {
     /// inside it.
     fn for_body(
         &mut self,
+        sid: StatId,
         vars: &[(&'a str, bool)],
         vbase: u32,
         body: &'a Block,
@@ -30,12 +31,14 @@ impl<'a> Compiler<'a> {
             self.declare_local(name, vbase + i as u32, read_only)?;
         }
         self.reserve(vars.len() as u32)?;
-        self.block_scoped(body)?;
+        // the loop's code after the body is made on its `end`
+        self.block_scoped(body, TokRef::StatAfter(sid, -1))?;
         self.leave_block()
     }
 
     pub(super) fn generic_for(
         &mut self,
+        sid: StatId,
         vars: &'a [Name],
         exprs: &[ExprId],
         body: &'a Block,
@@ -55,6 +58,7 @@ impl<'a> Compiler<'a> {
         // leaves room to call the iterator past them
         let values = if layout == ForLayout::Gen53 { 3 } else { 4 };
         let base = self.explist_adjust(exprs, values)?;
+        let last = *exprs.last().expect("an expression list");
         self.set_freereg(base + values);
         self.reserve(layout.call_end() - values)?;
         self.set_freereg(base + values);
@@ -77,6 +81,8 @@ impl<'a> Compiler<'a> {
         }
         let vbase = base + layout.var();
         self.set_freereg(vbase);
+        // `forbody`, once `do` is read
+        self.at(TokRef::After(last, 1));
         let prep = self.emit(Inst::iabx(prep_op, base, 0));
         let nvars = vars.len() as u32;
         // 5.5: the control (first) variable is read-only
@@ -85,11 +91,11 @@ impl<'a> Compiler<'a> {
             names.push_or_abort((self.nm(v), i == 0 && self.version >= LuaVersion::Lua55));
         }
         let body_top = self.here();
-        self.for_body(&names, vbase, body)?;
+        self.for_body(sid, &names, vbase, body)?;
         let tforcall_pc = self.here();
         let skip = tforcall_pc - prep - 1;
         if skip as u32 > MAX_BX {
-            return Err(self.err(line, "control structure too long"));
+            return Err(self.near_err("control structure too long"));
         }
         self.l().code[prep] = Inst::iabx(prep_op, base, skip as u32);
         self.mark_target(tforcall_pc);
@@ -104,7 +110,7 @@ impl<'a> Compiler<'a> {
         self.emit(Inst::iabc(call_op, base, 0, nvars, false));
         let back = self.here() - body_top + 1;
         if back as u32 > MAX_BX {
-            return Err(self.err(line, "control structure too long"));
+            return Err(self.near_err("control structure too long"));
         }
         if self.version == LuaVersion::Lua51 {
             self.last_line = body_last;
@@ -115,6 +121,7 @@ impl<'a> Compiler<'a> {
         if let Some(line) = end_line {
             self.last_line = line;
         }
+        self.at(TokRef::StatAfter(sid, 0));
         self.leave_block()?;
         self.set_freereg(base);
         Ok(())
@@ -122,6 +129,7 @@ impl<'a> Compiler<'a> {
 
     pub(super) fn numeric_for(
         &mut self,
+        sid: StatId,
         var: &'a str,
         line: u32,
         (start, limit, step): (ExprId, ExprId, Option<ExprId>),
@@ -135,16 +143,20 @@ impl<'a> Compiler<'a> {
         // a float start or step makes a float loop from 5.3 on (5.1/5.2
         // step every loop in floating point already)
         let mut float_loop = matches!(se, Exp::Float(_));
+        // each value goes to its register once the token after it is read
+        self.at(TokRef::After(start, 0));
         self.set_freereg(base);
         let s0 = self.exp_to_nextreg(se)?;
         debug_assert_eq!(s0, base);
         let le = self.expr(limit)?;
+        self.at(TokRef::After(limit, 0));
         self.set_freereg(base + 1);
         let l0 = self.exp_to_nextreg(le)?;
         debug_assert_eq!(l0, base + 1);
         match step {
             Some(st) => {
                 let ste = self.expr(st)?;
+                self.at(TokRef::After(st, 0));
                 float_loop |= matches!(ste, Exp::Float(_));
                 self.set_freereg(base + 2);
                 let st0 = self.exp_to_nextreg(ste)?;
@@ -184,13 +196,15 @@ impl<'a> Compiler<'a> {
         self.last_line = line;
         let var_reg = base + layout.var();
         self.set_freereg(var_reg);
+        // `forbody`, once `do` is read
+        self.at(TokRef::After(step.unwrap_or(limit), 1));
         let prep = self.emit(Inst::iabx(prep_op, base, 0));
         let body_top = self.here();
-        self.for_body(&[(var, v55)], var_reg, body)?;
+        self.for_body(sid, &[(var, v55)], var_reg, body)?;
         let loop_pc = self.here();
         let back = loop_pc - body_top + 1;
         if back as u32 > MAX_BX {
-            return Err(self.err(line, "control structure too long"));
+            return Err(self.near_err("control structure too long"));
         }
         // PUC attributes FORLOOP (the per-iteration back-edge) to the `for` line,
         // so each loop iteration re-fires a line event there.
@@ -198,7 +212,7 @@ impl<'a> Compiler<'a> {
         self.emit(Inst::iabx(loop_op, base, back as u32));
         let skip = self.here() - prep - 1;
         if skip as u32 > MAX_BX {
-            return Err(self.err(line, "control structure too long"));
+            return Err(self.near_err("control structure too long"));
         }
         self.l().code[prep] = Inst::iabx(prep_op, base, skip as u32);
         // ForLoop's back-edge lands at `body_top`; ForPrep's forward-skip
@@ -209,6 +223,7 @@ impl<'a> Compiler<'a> {
         if let Some(line) = end_line {
             self.last_line = line;
         }
+        self.at(TokRef::StatAfter(sid, 0));
         self.leave_block()?;
         self.set_freereg(base);
         Ok(())

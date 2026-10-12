@@ -54,7 +54,7 @@ impl<'a> Compiler<'a> {
     /// check the line number substring.
     #[cold]
     #[inline(never)]
-    pub(super) fn limit_err(&self, what: &str, limit: u32) -> SyntaxError {
+    pub(super) fn limit_err(&mut self, what: &str, limit: u32) -> SyntaxError {
         self.limit_err_at(self.depth - 1, what, limit)
     }
 
@@ -66,19 +66,21 @@ impl<'a> Compiler<'a> {
     /// "...function at line 3" — foo1's start.
     #[cold]
     #[inline(never)]
-    pub(super) fn limit_err_at(&self, li: usize, what: &str, limit: u32) -> SyntaxError {
+    pub(super) fn limit_err_at(&mut self, li: usize, what: &str, limit: u32) -> SyntaxError {
         let line_defined = self.levels[li].line_defined;
         let where_ = if line_defined == 0 {
             "main function".to_string()
         } else {
             format!("function at line {line_defined}")
         };
-        let msg = if self.version <= LuaVersion::Lua51 {
-            format!("{where_} has more than {limit} {what}")
-        } else {
-            format!("too many {what} (limit is {limit}) in {where_}")
-        };
-        self.err(self.last_line, msg)
+        // 5.1 shows no token (`luaX_lexerror(.., 0)`)
+        if self.version <= LuaVersion::Lua51 {
+            return self.err(
+                self.last_line,
+                format!("{where_} has more than {limit} {what}"),
+            );
+        }
+        self.near_err(format!("too many {what} (limit is {limit}) in {where_}"))
     }
 
     /// Upvalues a level already holds that count against the limit. A 5.1
@@ -97,26 +99,24 @@ impl<'a> Compiler<'a> {
 
     /// PUC `luaK_checkstack` on overflow: 5.1/5.2 say the expression is too
     /// complex, 5.3/5.4 that it needs too many registers, 5.5 runs it through
-    /// `errorlimit`. PUC appends the token being read; the AST keeps no
-    /// tokens, so luna cannot.
-    pub(super) fn regs_error(&self, line: u32) -> SyntaxError {
+    /// `errorlimit`; all show the token being read.
+    pub(super) fn regs_error(&mut self) -> SyntaxError {
         match self.version {
             LuaVersion::Lua51 | LuaVersion::Lua52 => {
-                self.err(line, "function or expression too complex")
+                self.near_err("function or expression too complex")
             }
             LuaVersion::Lua55 => self.limit_err("registers", 255),
-            _ => self.err(line, "function or expression needs too many registers"),
+            _ => self.near_err("function or expression needs too many registers"),
         }
     }
 
     pub(super) fn reserve(&mut self, n: u32) -> Result<u32, SyntaxError> {
-        let line = self.last_line;
         let cap = max_regs(self.version);
         let l = self.l();
         let base = l.freereg;
         l.freereg += n;
         if l.freereg > cap {
-            return Err(self.regs_error(line));
+            return Err(self.regs_error());
         }
         if l.freereg > l.max_stack {
             l.max_stack = l.freereg;

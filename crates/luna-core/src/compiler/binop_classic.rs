@@ -44,6 +44,7 @@ impl Compiler<'_> {
         };
         self.force_line = saved_force;
         let re = self.expr(rhs)?;
+        self.at(TokRef::After(rhs, 0));
         // `luaK_posfix`: the right operand first
         let r = self.exp_rk(re)?;
         let l = match left {

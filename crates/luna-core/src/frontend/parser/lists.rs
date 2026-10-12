@@ -48,6 +48,7 @@ impl Parser<'_> {
 
     pub(super) fn table_constructor(&mut self) -> Result<ExprId, SyntaxError> {
         let line = self.tok.line;
+        let open = self.tok_ix;
         self.expect(Token::LBrace, "{")?;
         let mark = self.stk.fields.len();
         loop {
@@ -78,7 +79,9 @@ impl Parser<'_> {
         }
         self.expect_match(Token::RBrace, "}", "{", line)?;
         let fields = finish(self.chunk, &mut self.stk.fields, mark);
-        Ok(self.push_expr(Expr::Table { fields, line }))
+        let id = self.push_expr(Expr::Table { fields, line });
+        self.opened_expr(id, open);
+        Ok(id)
     }
 
     /// Declare a declaration's names to the goto checker: locals, read-only

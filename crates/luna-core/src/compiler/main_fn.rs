@@ -58,6 +58,10 @@ fn compile_main_body(
         spine: scratch.spine.take(),
         lvs: scratch.lvs.take(),
         operands: scratch.operands.take(),
+        cur: TokRef::Eof,
+        early_emit: false,
+        next_pending: false,
+        err_tok: None,
     };
     c.sym_strs.clear();
     c.sym_strs.resize_or_abort(ast.names.len(), None);
@@ -69,10 +73,18 @@ fn compile_main_body(
         read_only: false,
     });
     c.enter_block(false);
-    c.stat_block(&ast.block)?;
-    // the implicit final return belongs to the chunk's last line (PUC), so a
-    // line hook / activelines see it there rather than on the last statement
-    c.final_return(ast.end_line)?;
+    scratch.err_tok = None;
+    let body = c.stat_block(&ast.block).and_then(|()| {
+        // the implicit final return belongs to the chunk's last line (PUC),
+        // so a line hook / activelines see it there rather than on the last
+        // statement
+        c.at(TokRef::Eof);
+        c.final_return(ast.end_line)
+    });
+    if let Err(e) = body {
+        scratch.err_tok = c.err_tok.take();
+        return Err(e);
+    }
     let last_target = c.lr().last_target;
     let proto = c.finish_level(0, 0);
     for lvl in c.levels.drain_all() {

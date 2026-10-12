@@ -11,6 +11,7 @@ impl<'s> Parser<'s> {
         let then_line = self.tok.line;
         self.expect(Token::Then, "then")?;
         let body = self.block()?;
+        self.mark();
         self.stk.arms.push_or_abort(IfArm {
             cond,
             then_line,
@@ -22,6 +23,7 @@ impl<'s> Parser<'s> {
             let then_line = self.tok.line;
             self.expect(Token::Then, "then")?;
             let body = self.block()?;
+            self.mark();
             self.stk.arms.push_or_abort(IfArm {
                 cond,
                 then_line,
@@ -52,6 +54,7 @@ impl<'s> Parser<'s> {
         let line = self.tok.line;
         self.advance()?;
         let body = self.loop_block(List::EMPTY)?;
+        self.mark();
         self.expect_match(Token::Until, "until", "repeat", line)?;
         let cond = self.expr()?;
         Ok(self.push_stat(Stat::Repeat { body, cond }))
@@ -63,16 +66,16 @@ impl<'s> Parser<'s> {
         let first = self.expect_name()?;
         match self.tok.tok {
             Token::Assign => {
-                self.advance()?;
                 // the loop's hidden control locals count against the
-                // local limit from the header on (PUC `fornum`): three up
-                // to 5.4, two from 5.5
+                // local limit from the header on, declared before the `=`
+                // (PUC `fornum`): three up to 5.4, two from 5.5
                 let hidden = if self.version >= LuaVersion::Lua55 {
                     2
                 } else {
                     3
                 };
                 self.new_locals(hidden + 1)?;
+                self.advance()?;
                 let start = self.expr()?;
                 self.expect(Token::Comma, ",")?;
                 let limit = self.expr()?;
@@ -81,6 +84,8 @@ impl<'s> Parser<'s> {
                 } else {
                     None
                 };
+                // 5.5 opens the hidden ones on the `do`
+                self.activate_hidden_55(hidden)?;
                 self.expect(Token::Do, "do")?;
                 self.add_local_51(first.sym);
                 let var = self.chunk.push_list(&[first]);
@@ -95,25 +100,28 @@ impl<'s> Parser<'s> {
                 }))
             }
             Token::Comma | Token::In => {
-                let mark = self.stk.names.len();
-                self.stk.names.push_or_abort(first);
-                while self.accept(Token::Comma)? {
-                    let n = self.expect_name()?;
-                    self.stk.names.push_or_abort(n);
-                }
-                let vars = finish(self.chunk, &mut self.stk.names, mark);
                 // PUC `forlist`: three hidden locals (generator, state,
                 // control), four in 5.4 (plus the closing value), three
-                // again in 5.5
+                // again in 5.5, declared with the first name, each other
+                // name once it is read
                 let hidden = if self.version == LuaVersion::Lua54 {
                     4
                 } else {
                     3
                 };
-                self.new_locals(hidden + vars.range().len() as u32)?;
+                self.new_locals(hidden + 1)?;
+                let mark = self.stk.names.len();
+                self.stk.names.push_or_abort(first);
+                while self.accept(Token::Comma)? {
+                    let n = self.expect_name()?;
+                    self.new_local()?;
+                    self.stk.names.push_or_abort(n);
+                }
+                let vars = finish(self.chunk, &mut self.stk.names, mark);
                 self.expect(Token::In, "in")?;
                 let expr_line = self.tok.line;
                 let exprs = self.exprlist()?;
+                self.activate_hidden_55(hidden)?;
                 self.expect(Token::Do, "do")?;
                 for i in vars.range() {
                     self.add_local_51(self.chunk.name_lists[i].sym);
@@ -129,102 +137,6 @@ impl<'s> Parser<'s> {
             }
             _ => Err(self.error("'=' or 'in' expected")),
         }
-    }
-
-    pub(super) fn function_stat(&mut self) -> Result<StatId, SyntaxError> {
-        let line = self.tok.line;
-        self.advance()?;
-        let base = self.expect_name()?;
-        let mark = self.stk.names.len();
-        while self.accept(Token::Dot)? {
-            let n = self.expect_name()?;
-            self.stk.names.push_or_abort(n);
-        }
-        let path = finish(self.chunk, &mut self.stk.names, mark);
-        let method = if self.accept(Token::Colon)? {
-            Some(self.expect_name()?)
-        } else {
-            None
-        };
-        let body = self.func_body(line)?;
-        Ok(self.push_stat(Stat::Function {
-            name: FuncName { base, path, method },
-            body,
-        }))
-    }
-
-    pub(super) fn attrib(&mut self) -> Result<Option<Attrib>, SyntaxError> {
-        if !(self.version.has_attribs() && self.tok.tok == Token::Lt) {
-            return Ok(None);
-        }
-        self.advance()?;
-        let name = self.expect_name()?;
-        let attrib = match self.text(name.sym) {
-            "const" => Attrib::Const,
-            "close" => Attrib::Close,
-            other => {
-                return Err(SyntaxError {
-                    line: name.line,
-                    msg: format!("unknown attribute '{other}'").into_bytes(),
-                });
-            }
-        };
-        self.expect(Token::Gt, ">")?;
-        Ok(Some(attrib))
-    }
-
-    /// `[attrib] Name [attrib] {',' Name [attrib]} ['=' explist]` — shared by
-    /// `local` and `global` declarations.
-    pub(super) fn attnamelist(&mut self) -> Result<DeclList, SyntaxError> {
-        let collective = if self.version.has_collective_attrib() {
-            self.attrib()?
-        } else {
-            None
-        };
-        let mark = self.stk.attribs.len();
-        loop {
-            let name = self.expect_name()?;
-            self.new_local()?;
-            let attrib = self.attrib()?;
-            self.stk.attribs.push_or_abort(AttribName { name, attrib });
-            if !self.accept(Token::Comma)? {
-                break;
-            }
-        }
-        let names = finish(self.chunk, &mut self.stk.attribs, mark);
-        let exprs = if self.accept(Token::Assign)? {
-            self.exprlist()?
-        } else {
-            List::EMPTY
-        };
-        Ok((collective, names, exprs))
-    }
-
-    pub(super) fn local_stat(&mut self) -> Result<StatId, SyntaxError> {
-        self.advance()?;
-        if self.accept(Token::Function)? {
-            let line = self.prev_line;
-            let name = self.expect_name()?;
-            // `local function f` declares `f` in the enclosing function before
-            // the body is parsed (PUC `localfunc`'s pre-declare); count it.
-            self.new_local()?;
-            self.activate_locals()?;
-            self.add_local_51(name.sym);
-            self.declare([name.sym], VarKind::Local);
-            let body = self.func_body(line)?;
-            return Ok(self.push_stat(Stat::LocalFunction { name, body }));
-        }
-        let (collective, names, exprs) = self.attnamelist()?;
-        self.activate_locals()?;
-        self.declare_attrib_names(names, collective, false);
-        for i in names.range() {
-            self.add_local_51(self.chunk.attrib_name_lists[i].name.sym);
-        }
-        Ok(self.push_stat(Stat::Local {
-            collective,
-            names,
-            exprs,
-        }))
     }
 
     pub(super) fn expr_stat(&mut self) -> Result<StatId, SyntaxError> {

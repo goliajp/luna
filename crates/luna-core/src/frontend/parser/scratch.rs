@@ -54,6 +54,8 @@ pub(crate) struct ParseScratch {
     pub(super) end_lines: LVec<u32>,
     pub(super) lex_buf: LVec<u8>,
     pub(super) stacks: ListStacks,
+    /// the source of a streamed parse (see [`Parsed::src`])
+    pub(super) streamed: Option<LVec<u8>>,
 }
 
 impl ParseScratch {
@@ -65,6 +67,7 @@ impl ParseScratch {
             end_lines: LVec::new(m),
             lex_buf: LVec::new(m),
             stacks: ListStacks::new(m),
+            streamed: None,
         }
     }
 
@@ -90,6 +93,7 @@ impl ParseScratch {
             end_lines: p.end_lines,
             lex_buf: p.lex_buf,
             stacks: p.stacks,
+            streamed: None,
         };
         s.clear();
         s
@@ -138,6 +142,7 @@ impl ParseScratch {
             end_lines: self.end_lines,
             lex_buf: self.lex_buf,
             stacks: self.stacks,
+            src: self.streamed,
         }
     }
 }

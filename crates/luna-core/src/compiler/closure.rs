@@ -4,10 +4,13 @@
 use super::*;
 
 impl<'a> Compiler<'a> {
+    /// A function literal: `body`, closed (PUC `close_func`) at token
+    /// `close`, the one after its `end`.
     pub(super) fn function_exp(
         &mut self,
         body: &'a FuncBody,
         is_method: bool,
+        close: TokRef,
     ) -> Result<Exp, SyntaxError> {
         let line = body.line;
         let nparams = body.params.len as usize + is_method as usize;
@@ -86,6 +89,7 @@ impl<'a> Compiler<'a> {
             }
         }
         self.stat_block(&body.block)?;
+        self.at(close);
         // PUC attributes the implicit final return to the closing `end` line, so
         // that line shows up in `debug.getinfo(...,"L").activelines`.
         self.final_return(body.end_line)?;
@@ -109,6 +113,7 @@ impl<'a> Compiler<'a> {
 
     pub(super) fn function_stat(
         &mut self,
+        sid: StatId,
         name: &FuncName,
         body: &'a FuncBody,
     ) -> Result<(), SyntaxError> {
@@ -120,10 +125,10 @@ impl<'a> Compiler<'a> {
         // carry the line of the statement's name, not the `end` token's, so
         // a `nil` holder raises on the right line (errors.lua :430).
         let saved_force = self.force_line.replace(name.base.line);
-        let lv = self.func_name_lv(name);
+        let lv = self.func_name_lv(sid, name);
         self.force_line = saved_force;
         let lv = lv?;
-        let f = self.function_exp(body, is_method)?;
+        let f = self.function_exp(body, is_method, TokRef::StatAfter(sid, 0))?;
         let saved_force = self.force_line.replace(name.base.line);
         let res = self.store(lv, f);
         self.force_line = saved_force;
@@ -132,8 +137,11 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    /// PUC `funcname`: `a.b.c:m` as an assignment target.
-    fn func_name_lv(&mut self, name: &FuncName) -> Result<Lv, SyntaxError> {
+    /// PUC `funcname`: `a.b.c:m` as an assignment target, the statement
+    /// `sid`'s.
+    fn func_name_lv(&mut self, sid: StatId, name: &FuncName) -> Result<Lv, SyntaxError> {
+        // `function`, the name: then a `.` or `:` and a name per field
+        self.at(TokRef::StatFirst(sid, 2));
         let mut fields: LVec<&str> = LVec::new(self.heap.mem());
         for n in self.ls(name.path) {
             fields.push_or_abort(self.nm(n));
@@ -144,17 +152,27 @@ impl<'a> Compiler<'a> {
         let Some((last, walk)) = fields.split_last() else {
             return self.name_lv(self.nm(&name.base), name.base.line);
         };
-        let mut e = self.name_expr(self.nm(&name.base))?;
+        self.early_emit = true;
+        let mut e = self.name_expr(self.nm(&name.base));
+        self.early_emit = false;
+        let mut at = 2;
         for f in walk {
             // the holder's register is free again once it is read
             let mark = self.lr().freereg;
-            let t = self.index_table(e)?;
+            self.at(TokRef::StatFirst(sid, at));
+            let t = self.index_table(e?)?;
             let c = self.str_const(f.as_bytes());
+            self.at(TokRef::StatFirst(sid, at + 2));
             let (t, k) = self.indexed(t, Exp::Const(c))?;
-            e = self.index_get(t, k);
+            self.early_emit = true;
+            e = Ok(self.index_get(t, k));
+            self.early_emit = false;
             self.set_freereg(mark);
+            at += 2;
         }
-        let t = self.index_table(e)?;
+        self.at(TokRef::StatFirst(sid, at));
+        let t = self.index_table(e?)?;
+        self.at(TokRef::StatFirst(sid, at + 2));
         let c = self.str_const(last.as_bytes());
         let (t, k) = self.indexed(t, Exp::Const(c))?;
         Ok(Lv::Indexed(t, k))

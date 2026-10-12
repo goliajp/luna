@@ -121,6 +121,22 @@ impl<'s> Parser<'s> {
         Ok(())
     }
 
+    /// 5.5 `forbody`'s caller: the loop's `hidden` control locals, pending
+    /// first, come into scope (and are checked) before the `do`.
+    pub(super) fn activate_hidden_55(&mut self, hidden: u32) -> Result<(), SyntaxError> {
+        if self.version < LuaVersion::Lua55 {
+            return Ok(());
+        }
+        let (active, _, _) = *self.func_local_count.last().expect("func ctx");
+        if active + hidden > MAXVARS {
+            return Err(self.local_limit_error());
+        }
+        let slot = self.func_local_count.last_mut().expect("func ctx");
+        slot.0 += hidden;
+        slot.2 -= hidden;
+        Ok(())
+    }
+
     pub(super) fn local_limit_error(&self) -> SyntaxError {
         self.error(format!(
             "too many local variables (limit is {MAXVARS}) in {}",

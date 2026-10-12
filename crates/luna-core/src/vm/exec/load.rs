@@ -127,7 +127,11 @@ impl Vm {
                 source,
                 &mut self.heap,
                 &mut self.compile_scratch,
-            )?
+            )
+            .map_err(|e| {
+                let s = &mut self.compile_scratch;
+                crate::compiler::place_error(s, chunk, src, self.version, depth, e)
+            })?
         };
         self.close_chunk(proto)
     }
@@ -136,10 +140,20 @@ impl Vm {
     /// for the next load.
     fn compile_text(
         &mut self,
-        parsed: crate::frontend::parser::Parsed,
+        mut parsed: crate::frontend::parser::Parsed,
         source: Gc<crate::runtime::LuaStr>,
     ) -> Result<Gc<crate::runtime::Proto>, SyntaxError> {
-        let proto = self.compile_parsed(&parsed.chunk, &parsed.end_lines, source)?;
+        let src = parsed.src.take();
+        let proto = self
+            .compile_parsed(&parsed.chunk, &parsed.end_lines, source)
+            .map_err(|e| match &src {
+                Some(src) => {
+                    let (v, depth) = (self.version, self.g.nccalls);
+                    let s = &mut self.compile_scratch;
+                    crate::compiler::place_error(s, &parsed.chunk, src, v, depth, e)
+                }
+                None => e,
+            })?;
         self.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
         Ok(proto)
     }

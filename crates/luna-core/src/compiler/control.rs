@@ -6,26 +6,30 @@ use super::*;
 impl<'a> Compiler<'a> {
     pub(super) fn if_stat(
         &mut self,
+        sid: StatId,
         arms: &'a [ast::IfArm],
         else_body: Option<&'a Block>,
     ) -> Result<(), SyntaxError> {
         if self.version == LuaVersion::Lua51 {
-            return self.if_stat_51(arms, else_body);
+            return self.if_stat_51(sid, arms, else_body);
         }
         let mut escape = NO_JUMP;
         for (i, arm) in arms.iter().enumerate() {
             let more = i + 1 < arms.len() || else_body.is_some();
-            self.test_then_block(arm, more, &mut escape)?;
+            let end = TokRef::StatMark(sid, i as u8);
+            self.test_then_block(arm, end, more, &mut escape)?;
         }
         if let Some(b) = else_body {
-            self.block_scoped(b)?;
+            self.block_scoped(b, TokRef::StatAfter(sid, -1))?;
         }
+        self.at(TokRef::StatAfter(sid, 0));
         self.patch_to_here(escape)
     }
 
     /// 5.1 `ifstat`: each arm's false jumps go to the next arm.
     fn if_stat_51(
         &mut self,
+        sid: StatId,
         arms: &'a [ast::IfArm],
         else_body: Option<&'a Block>,
     ) -> Result<(), SyntaxError> {
@@ -38,24 +42,28 @@ impl<'a> Compiler<'a> {
                 self.patch_to_here(flist)?;
             }
             flist = self.cond(arm.cond)?;
-            self.block_scoped(&arm.body)?;
+            self.block_scoped(&arm.body, TokRef::StatMark(sid, i as u8))?;
         }
         match else_body {
             Some(b) => {
                 let j = self.jump()?;
                 self.concat_list(&mut escape, j)?;
                 self.patch_to_here(flist)?;
-                self.block_scoped(b)?;
+                self.block_scoped(b, TokRef::StatAfter(sid, -1))?;
             }
             None => self.concat_list(&mut escape, flist)?,
         }
+        // before `end` is read
+        self.at(TokRef::StatAfter(sid, -1));
         self.patch_to_here(escape)
     }
 
     /// 5.2+ `test_then_block`; `more`: an `elseif` or `else` follows.
+    /// `end`: the token the arm's block ends at.
     fn test_then_block(
         &mut self,
         arm: &'a ast::IfArm,
+        end: TokRef,
         more: bool,
         escape: &mut i32,
     ) -> Result<(), SyntaxError> {
@@ -64,6 +72,9 @@ impl<'a> Compiler<'a> {
         // 5.2–5.4 test the condition once `then` is read; 5.5 before
         if self.version <= LuaVersion::Lua54 {
             self.last_line = arm.then_line;
+            self.at(TokRef::After(arm.cond, 1));
+        } else {
+            self.at(TokRef::After(arm.cond, 0));
         }
         let jumps_out = match stats.first().map(|&s| self.ast.stat(s)) {
             Some(Stat::Break { line }) if self.version <= LuaVersion::Lua54 => {
@@ -79,10 +90,15 @@ impl<'a> Compiler<'a> {
                 let (_, t, _) = self.exp_parts(e);
                 self.enter_block(false);
                 self.last_line = line;
+                // the label is resolved once its name is read
+                let skip = if target == "break" { 1 } else { 2 };
+                self.at(TokRef::StatFirst(stats[0], skip));
                 self.cond_break(t, target)?;
                 if stats.len() == 1 {
+                    self.at(end);
                     return self.leave_block();
                 }
+                self.at(TokRef::StatFirst(stats[1], 0));
                 let jf = self.jump()?;
                 self.stat_list(&stats[1..], false)?;
                 jf
@@ -99,6 +115,7 @@ impl<'a> Compiler<'a> {
                 f
             }
         };
+        self.at(end);
         self.leave_block()?;
         if more {
             let j = self.jump()?;
@@ -109,6 +126,7 @@ impl<'a> Compiler<'a> {
 
     pub(super) fn while_stat(
         &mut self,
+        sid: StatId,
         cond: ExprId,
         body: &'a Block,
         end_line: Option<u32>,
@@ -116,12 +134,14 @@ impl<'a> Compiler<'a> {
         let init = self.get_label();
         let exit = self.cond(cond)?;
         self.enter_block(true);
-        self.block_scoped(body)?;
+        // the jump back is made on `end`, the loop left after it
+        self.block_scoped(body, TokRef::StatAfter(sid, -1))?;
         let j = self.jump()?;
         self.patch_list(j, init)?;
         if let Some(line) = end_line {
             self.last_line = line;
         }
+        self.at(TokRef::StatAfter(sid, 0));
         self.leave_block()?;
         self.patch_to_here(exit)
     }
@@ -131,6 +151,7 @@ impl<'a> Compiler<'a> {
         self.enter_block(true);
         self.enter_block(false);
         self.stat_block_inner(body, true)?;
+        // the rest happens once the condition is read
         let mut exit = self.cond(cond)?;
         let upval = self.block_captured();
         let level = self.block_floor();
@@ -199,6 +220,12 @@ impl<'a> Compiler<'a> {
             }
             LuaVersion::Lua52 | LuaVersion::Lua53 => {
                 let j = self.jump()?;
+                // `break` is a goto, looked up once the keyword is read
+                let after = match self.cur {
+                    TokRef::StatFirst(s, 0) => TokRef::StatFirst(s, 1),
+                    t => t,
+                };
+                self.at(after);
                 self.goto_list_53("break", j)
             }
             LuaVersion::Lua54 => {

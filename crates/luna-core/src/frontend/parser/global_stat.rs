@@ -9,6 +9,7 @@ impl<'s> Parser<'s> {
             let line = self.prev_line;
             let name = self.expect_name()?;
             self.declare([name.sym], VarKind::Global);
+            self.mark();
             let body = self.func_body(line)?;
             return Ok(self.push_stat(Stat::GlobalFunction { name, body }));
         }
