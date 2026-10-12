@@ -1,0 +1,78 @@
+//! `coroutine.wrap` and the function it returns.
+
+use super::*;
+
+/// The function returned by `coroutine.wrap`: upvalue [0] holds the coroutine;
+/// resuming it propagates errors instead of returning `(false, err)`.
+fn co_wrapped(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let Value::Coro(co) = vm.nat_upval(fs, 0) else {
+        unreachable!("wrap upvalue is a coroutine");
+    };
+    let in_wrap = upval_table(vm, fs, 1);
+    // the arguments move to the coroutine, and its error comes back pushed
+    let args = collect_args(vm, fs, nargs);
+    vm.native_settop(0);
+    vm.native_push(1);
+    let before = vm.special_errors();
+    let err = match resume_refusal(vm, co, nargs == 0, in_wrap) {
+        Some(msg) => vm.str_value(msg.as_bytes())?,
+        None => {
+            mark_in_wrap(vm, in_wrap, true)?;
+            let r = vm.resume_coro(co, args);
+            mark_in_wrap(vm, in_wrap, false)?;
+            match r {
+                Ok(vals) => return vm.nat_ret(fs, &vals),
+                // 5.4+ close a coroutine that died by error before
+                // re-raising, so its pending `__close` handlers run (and one
+                // of them may replace the error), whose error is pushed over
+                // the first; one the resume refused to start ("C stack
+                // overflow") is not dead and stays open
+                Err(_) if vm.version() >= LuaVersion::Lua54 && co.status == CoroStatus::Dead => {
+                    vm.native_push(1);
+                    match vm.close_coro(co) {
+                        Ok(Some(e)) => death_value(vm, e),
+                        Ok(None) => unreachable!("a coroutine that died by error has an error"),
+                        Err(e) => death_value(vm, e.0),
+                    }
+                }
+                Err(e) => death_value(vm, e.0),
+            }
+        }
+    };
+    // 5.4+ leave a memory error as it is
+    if vm.version() >= LuaVersion::Lua54
+        && vm.error_status(err, before) == crate::runtime::ErrorStatus::Mem
+    {
+        return Err(LuaError(err));
+    }
+    Err(LuaError(wrap_where(vm, err)))
+}
+
+/// `luaB_auxwrap` prefixes a string error with `luaL_where(L, 1)` — the
+/// position of whoever called the wrapped function. ≤5.2 test `lua_isstring`,
+/// so a number error is converted and prefixed too; 5.3+ only strings.
+fn wrap_where(vm: &mut Vm, err: Value) -> Value {
+    let num;
+    let held;
+    let text: &[u8] = match err {
+        Value::Str(s) => {
+            held = s;
+            held.as_bytes()
+        }
+        Value::Int(_) | Value::Float(_) if vm.version() <= LuaVersion::Lua52 => {
+            num = crate::vm::argcheck::to_str_bytes(vm, err).expect("a number converts");
+            &num
+        }
+        _ => return err,
+    };
+    let p = vm.position_prefix().unwrap_or_default();
+    vm.concat_str(&[p.as_bytes(), text]).unwrap_or_else(|e| e.0)
+}
+
+pub(super) fn co_wrap(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let body = check_body(vm, Args::new(fs, nargs))?;
+    let co = vm.try_new_coro(body)?;
+    let in_wrap = vm.nat_upval(fs, 0);
+    let f = vm.lib_native_with(co_wrapped, &[Value::Coro(co), in_wrap])?;
+    vm.nat_ret(fs, &[f])
+}

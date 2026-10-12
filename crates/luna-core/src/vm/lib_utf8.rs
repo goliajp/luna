@@ -110,11 +110,12 @@ fn encode(vm: &mut Vm, out: &mut LVec<u8>, mut x: u32) -> Result<(), LuaError> {
     if x < 0x80 {
         return vm.buf_push(out, &[x as u8]);
     }
-    let mut cont = [0u8; 6];
-    let mut n = 0;
+    // filled from the end, as PUC does; `n` counts the bytes written plus one
+    let mut seq = [0u8; 7];
+    let mut n = 1;
     let mut mfb: u32 = 0x3f;
     loop {
-        cont[n] = 0x80 | (x & 0x3f) as u8;
+        seq[7 - n] = 0x80 | (x & 0x3f) as u8;
         n += 1;
         x >>= 6;
         mfb >>= 1;
@@ -122,12 +123,8 @@ fn encode(vm: &mut Vm, out: &mut LVec<u8>, mut x: u32) -> Result<(), LuaError> {
             break;
         }
     }
-    let mut seq = [0u8; 7];
-    seq[0] = ((!mfb << 1) | x) as u8;
-    for (k, &c) in cont[..n].iter().rev().enumerate() {
-        seq[k + 1] = c;
-    }
-    vm.buf_push(out, &seq[..=n])
+    seq[7 - n] = ((!mfb << 1) | x) as u8;
+    vm.buf_push(out, &seq[7 - n..])
 }
 
 fn u_posrelat(pos: i64, len: usize) -> i64 {
