@@ -1,12 +1,24 @@
-//! Main positions in the hash part. Numbers and booleans go where the
+//! Main positions in the hash part, and placing a new key there. Numbers and booleans go where the
 //! table's PUC version puts them: which keys collide decides when the hash
 //! part fills up and the table is rehashed, and so how large its array
 //! part is when `#t` searches it. Other keys keep luna's own hashing (PUC
 //! hashes them by address, or by string hashes seeded per run from 5.2 on).
 
 use super::*;
+use node::KHASH_MASK;
 
 impl Table {
+    /// [`Self::main_position`] with a string's taken in line: the common
+    /// key, and the one insertion asks about twice (the new key and the
+    /// key it collides with).
+    #[inline(always)]
+    pub(super) fn main_position_inline(&self, k: Value) -> usize {
+        match k {
+            Value::Str(s) => s.hash() as usize & self.node_mask as usize,
+            k => self.main_position(k),
+        }
+    }
+
     pub(super) fn main_position(&self, k: Value) -> usize {
         let n = self.nodes().len();
         debug_assert!(n > 0);
@@ -29,6 +41,78 @@ impl Table {
             Value::Bool(b) => b as usize & mask,
             k => hash_key(k) as usize & mask,
         }
+    }
+}
+
+impl Table {
+    /// Put `k`, absent from the hash part, into it as PUC `luaH_newkey`
+    /// does; `false`, having changed nothing but the free-node cursor, when
+    /// no node is free. The hash part is not empty; `khash` is
+    /// [`node::khash_of`] the key.
+    #[inline(always)]
+    pub(super) fn place_new(&mut self, k: Value, v: Value, khash: u16) -> bool {
+        let mp = match k {
+            Value::Str(_) if self.node_mask <= KHASH_MASK => {
+                (khash as u32 & self.node_mask) as usize
+            }
+            k => self.main_position_inline(k),
+        };
+        // a main position holding no value is taken over as PUC
+        // `luaH_newkey` does: a free node, or one whose key was removed or
+        // swept, which keeps its `next` so the chain through it stays whole
+        if self.nodes()[mp].val.is_nil() {
+            let next = self.nodes()[mp].next;
+            self.nodes_mut()[mp] = Node::new(k, v, next, khash);
+            return true;
+        }
+        self.place_colliding(mp, k, v, khash)
+    }
+
+    /// [`Self::place_new`] when the main position `mp` holds a value.
+    #[inline(never)]
+    fn place_colliding(&mut self, mp: usize, k: Value, v: Value, khash: u16) -> bool {
+        let Some(free) = self.free_pos() else {
+            return false;
+        };
+        let other = &self.nodes()[mp];
+        let other_mp =
+            if other.key_tag == crate::runtime::value::tag::STR && self.node_mask <= KHASH_MASK {
+                (other.khash as u32 & self.node_mask) as usize
+            } else {
+                self.main_position_inline(other.key())
+            };
+        if other_mp != mp {
+            // colliding node is out of its main position: relocate it to the
+            // free slot and take its place
+            let mut prev = other_mp;
+            while self.nodes()[prev].next != mp as i32 {
+                prev = self.nodes()[prev].next as usize;
+            }
+            self.nodes_mut()[prev].next = free as i32;
+            let moved = self.nodes()[mp];
+            self.nodes_mut()[free] = moved;
+            self.nodes_mut()[mp] = Node::new(k, v, NONE, khash);
+        } else {
+            // colliding node owns this position: chain the new node behind it
+            let next = self.nodes()[mp].next;
+            self.nodes_mut()[free] = Node::new(k, v, next, khash);
+            self.nodes_mut()[mp].next = free as i32;
+        }
+        true
+    }
+
+    pub(super) fn free_pos(&mut self) -> Option<usize> {
+        while self.lastfree > 0 {
+            self.lastfree -= 1;
+            let n = &self.nodes()[self.lastfree as usize];
+            // Dead-key slots are still occupied for chain purposes (their
+            // `next` may be the only path to a downstream entry) — don't
+            // hand them out as free.
+            if n.is_free() {
+                return Some(self.lastfree as usize);
+            }
+        }
+        None
     }
 }
 
@@ -86,6 +170,36 @@ fn frexp(n: f64) -> (f64, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every live node is on the chain of its key's main position, worked
+    /// out from the key itself, and a string key's node holds the low bits
+    /// of its hash: below 2^16 nodes, where placement reads those bits, and
+    /// past it, where it loads the string.
+    #[test]
+    fn string_keys_sit_on_their_main_position_chains() {
+        for n in [5_000, 70_000] {
+            crate::runtime::table::tests::with_table(|heap, t| {
+                for i in 0..n {
+                    let k = Value::Str(heap.intern(format!("k{i:05}").as_bytes()));
+                    t.set(heap, k, Value::Int(i)).unwrap();
+                }
+                assert_eq!(t.nodes().len() > 1 << 16, n > 1 << 16);
+                for (i, node) in t.nodes().iter().enumerate() {
+                    let Value::Str(s) = node.key() else { continue };
+                    assert_eq!(node.khash, s.hash() as u16);
+                    let mut at = t.main_position(node.key());
+                    while at != i {
+                        assert_ne!(t.nodes()[at].next, NONE, "node {i} off its chain");
+                        at = t.nodes()[at].next as usize;
+                    }
+                }
+                for i in 0..n {
+                    let k = Value::Str(heap.intern(format!("k{i:05}").as_bytes()));
+                    assert!(matches!(t.get(k), Value::Int(v) if v == i));
+                }
+            });
+        }
+    }
 
     #[test]
     fn frexp_matches_c() {

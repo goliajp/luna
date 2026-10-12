@@ -201,6 +201,15 @@ optimization.
 
 ### Changed
 
+- Inserting a key into a table's hash part does less work; which node
+  each key takes, and so the order in which `pairs` and `next` visit
+  them, is unchanged. A string key's node keeps the low 16 bits of the
+  string's hash, so moving a colliding entry and putting the keys back
+  when the hash part grows no longer load the key strings (in hash parts
+  of up to 2^16 nodes), and the keys put back after a resize are placed
+  without being looked up first. On a Cortex-A76, inserting 5000 short
+  string keys in order into a new table takes 481 µs instead of 662
+  without the JIT and 438 instead of 609 with it.
 - The numeric `for` step and float arithmetic run in fewer instructions
   and cycles. A loop the compiler knows to be a float loop (a float start
   or step, from 5.3 on) has its own step opcode, which tests for floats
