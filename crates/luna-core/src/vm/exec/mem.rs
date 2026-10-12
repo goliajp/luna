@@ -124,6 +124,21 @@ impl Vm {
         Ok(())
     }
 
+    /// [`Vm::push_native`] for the fast loop's native calls, with no
+    /// second room test.
+    #[inline(always)]
+    pub(crate) fn push_native_fast(
+        &mut self,
+        act: crate::vm::callstack::NativeAct,
+    ) -> Result<(), LuaError> {
+        if self.running_natives.len() == self.running_natives.capacity() {
+            self.native_room()?;
+        }
+        // SAFETY: there is room: there was, or `native_room` made it
+        unsafe { self.running_natives.push_in_room(act) };
+        Ok(())
+    }
+
     /// Room for one more running native; out of line, and taking nothing
     /// the caller has to build first.
     #[cold]
