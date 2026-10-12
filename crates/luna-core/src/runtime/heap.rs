@@ -10,7 +10,7 @@ use std::ptr;
 
 use crate::runtime::function::{LuaClosure, NativeClosure, Proto, UpvalState, Upvalue};
 use crate::runtime::string::{self, LuaStr, StringTable};
-use crate::runtime::table::Table;
+use crate::runtime::table::{self, Table};
 use crate::runtime::userdata::{Userdata, UserdataPayload};
 use crate::runtime::value::Value;
 
@@ -279,11 +279,11 @@ impl Heap {
         Heap::with_seed(make_seed())
     }
 
-    /// Whether no string has been interned yet.
     /// Hash the interned strings again with `seed` and the dialect's
     /// function.
     pub(crate) fn rehash_strings(&mut self, seed: u32) {
-        self.strings.rehash(seed, self.hash51);
+        let strict = self.table_dialect <= table::Dialect::L53;
+        self.strings.rehash(seed, self.hash51, strict);
     }
 
     /// The seed strings are hashed with.
