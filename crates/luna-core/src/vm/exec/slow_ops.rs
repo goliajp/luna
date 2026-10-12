@@ -110,6 +110,10 @@ impl Vm {
         if !matches!(func, Value::Closure(_) | Value::Native(_))
             && self.get_mm(func, Mm::Call).is_nil()
         {
+            // 5.3 on make sure of a slot for `__call` before finding none
+            if self.version >= LuaVersion::Lua53 {
+                self.check_lua_stack(abs + 1 + nargs, 1, false)?;
+            }
             return Err(self.call_err_at(func, abs + 1 + nargs));
         }
         // PUC `luaD_pretailcall` resolves a chain of `__call`
@@ -162,6 +166,20 @@ impl Vm {
         // thread's globals fallback that happens when no Lua
         // frame is on the stack.
         if let Value::Closure(cl) = func {
+            // PUC checks the stack for the callee before moving it down
+            // over this frame, from where it was called; 5.4 on count the
+            // slots a vararg caller's extra arguments free (`delta`)
+            let delta = if self.version >= LuaVersion::Lua54 && fr.closure.proto.is_vararg {
+                fr.n_varargs + u32::from(fr.closure.proto.num_params) + 1
+            } else {
+                0
+            };
+            let fsize = u32::from(cl.proto.max_stack).saturating_sub(delta);
+            self.check_lua_stack(abs + 1 + nargs, fsize, false)?;
+            // 5.1's `CallInfo` of the callee is taken before this one goes
+            if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
+                self.grow_frames()?;
+            }
             if self.version <= LuaVersion::Lua53 && self.call_hook_armed() {
                 self.tail_call_hook(cl, abs, nargs)?;
             }

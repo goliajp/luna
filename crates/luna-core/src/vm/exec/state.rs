@@ -453,6 +453,9 @@ pub struct Vm {
     /// of a value that cannot be called, which PUC raise from the top of
     /// that call (`L->top` when `luaD_growstack` or `luaG_callerror` raised)
     pub(crate) overflow_top: Option<u32>,
+    /// the top an error being raised is formatted from, when that is not
+    /// the running function's (`luaG_callerror` raises at the call's)
+    pub(crate) raise_from: Option<u32>,
     /// the last runtime error a Lua frame raised named its operand, which
     /// 5.3+'s `varinfo` pushes on the stack before the message: the message
     /// handler runs one slot higher
