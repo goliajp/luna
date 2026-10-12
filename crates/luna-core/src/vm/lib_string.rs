@@ -20,8 +20,8 @@ type NativeFn = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 
 /// Open the `string` library, failing when memory runs out.
 pub(crate) fn try_open_string(vm: &mut Vm) -> Result<(), LuaError> {
-    let t = vm.alloc_table()?;
     let v = vm.version();
+    let t = vm.lib_table(if v >= LuaVersion::Lua53 { 17 } else { 15 })?;
     let set = |vm: &mut Vm,
                t: Gc<crate::runtime::Table>,
                name: &str,
@@ -64,7 +64,7 @@ pub(crate) fn try_open_string(vm: &mut Vm) -> Result<(), LuaError> {
     }
     vm.lib_set_global("string", Value::Table(t))?;
     vm.barrier_back_table(t);
-    let mt = vm.alloc_table()?;
+    let mt = vm.lib_table(if v >= LuaVersion::Lua54 { 9 } else { 1 })?;
     set(vm, mt, "__index", Value::Table(t))?;
     if v >= LuaVersion::Lua54 {
         let arith: [(&str, NativeFn); 8] = [

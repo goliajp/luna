@@ -18,7 +18,7 @@ type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 
 /// Open the `bit32` library, failing when memory runs out.
 pub(crate) fn try_open_bit32(vm: &mut Vm) -> Result<(), LuaError> {
-    let t = vm.alloc_table()?;
+    let t = vm.lib_table(12)?;
     let funcs: [(&str, Native); 12] = [
         ("band", b_and),
         ("bor", b_or),
