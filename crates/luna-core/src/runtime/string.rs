@@ -297,13 +297,14 @@ impl StringTable {
     }
 
     /// Find or create an interned short string. Returns `(ptr, newly_created)`.
+    /// A table too full that cannot grow is a memory error when `strict`
+    /// (PUC up to 5.3, whose `luaS_resize` raises), else it keeps working.
     #[inline]
     pub(crate) fn intern(
         &mut self,
         mem: MemRef,
         bytes: &[u8],
-        seed: u32,
-        h51: bool,
+        (seed, h51, strict): (u32, bool, bool),
     ) -> Result<(*mut LuaStr, bool), Oom> {
         debug_assert!(bytes.len() <= MAX_SHORT_LEN);
         let h = if h51 {
@@ -325,8 +326,8 @@ impl StringTable {
                 cur = (*cur).hnext;
             }
         }
-        if self.count >= self.buckets.len() {
-            self.grow();
+        if self.count >= self.buckets.len() && !self.grow() && strict {
+            return Err(Oom(mem));
         }
         let b = h as usize & (self.buckets.len() - 1);
         let p = alloc_str(mem, bytes, true, h, true)?;
@@ -362,12 +363,11 @@ impl StringTable {
 
     #[cold]
     #[inline(never)]
-    fn grow(&mut self) {
-        // a table that cannot grow keeps working with longer chains, as
-        // PUC's `luaS_resize` leaves it when the reallocation fails
+    fn grow(&mut self) -> bool {
+        // false, the table as it was, when it cannot grow
         let mut nb = LVec::new(self.buckets.mem());
         if nb.resize(self.buckets.len() * 2, ptr::null_mut()).is_err() {
-            return;
+            return false;
         }
         let mask = nb.len() - 1;
         for &head in self.buckets.iter() {
@@ -384,6 +384,7 @@ impl StringTable {
             }
         }
         self.buckets = nb;
+        true
     }
 
     /// Hash every interned string again, by PUC 5.1's function when `h51`

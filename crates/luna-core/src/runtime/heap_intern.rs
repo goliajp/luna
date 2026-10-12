@@ -23,13 +23,21 @@ impl Heap {
         h.flags = h.with_slow((h.flags & !WHITE_BITS) | self.current_white);
     }
 
+    /// Whether a string table that cannot grow fails the new string (PUC
+    /// up to 5.3).
+    fn strict_strtab(&self) -> bool {
+        self.table_dialect <= crate::runtime::table::Dialect::L53
+    }
+
     /// [`Heap::intern`], failing when memory runs out.
     #[inline]
     pub fn try_intern(&mut self, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
         if bytes.len() <= string::MAX_SHORT_LEN {
-            let (p, is_new) = self
-                .strings
-                .intern(self.mem.mem(), bytes, self.seed, self.hash51)?;
+            let (p, is_new) = self.strings.intern(
+                self.mem.mem(),
+                bytes,
+                (self.seed, self.hash51, self.strict_strtab()),
+            )?;
             if is_new {
                 // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
                 unsafe { self.link(p as *mut GcHeader) };
