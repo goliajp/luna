@@ -23,206 +23,63 @@ use std::collections::HashMap;
 ///    C-ABI and bitcast'ing on the helper side is layout-equivalent
 ///    to passing a `ptr` directly on 64-bit targets.
 /// 3. Keeps the registry one-liner per helper.
-fn helper_registry() -> Vec<(&'static str, usize, u32, bool)> {
+type Helper = (&'static str, usize, u32, bool);
+
+/// `h!(helper, n_args, returns_i64)`: one registry entry.
+macro_rules! h {
+    ($f:ident, $n:expr, $r:expr) => {
+        (stringify!($f), $f as *const () as usize, $n, $r)
+    };
+}
+
+fn helper_registry() -> Vec<Helper> {
     use luna_jit_helpers::{
-        luna_jit_materialize_sunk_table, luna_jit_new_table, luna_jit_new_table_sized,
-        luna_jit_no_deopt_parked, luna_jit_op_close, luna_jit_op_closure, luna_jit_op_concat,
-        luna_jit_op_get_tab_up, luna_jit_op_tforcall, luna_jit_park_deopt,
-        luna_jit_self_upval_check, luna_jit_spill_to_stack, luna_jit_stack_load,
-        luna_jit_stack_tag, luna_jit_stack_update_raw, luna_jit_str_buf_acquire,
-        luna_jit_str_buf_extend, luna_jit_str_buf_intern, luna_jit_str_buf_release,
-        luna_jit_table_get_field, luna_jit_table_get_float, luna_jit_table_get_int,
-        luna_jit_table_len, luna_jit_table_set_field, luna_jit_table_set_float_float,
-        luna_jit_table_set_int, luna_jit_table_set_nil, luna_jit_table_set_raw,
-        luna_jit_trace_materialize_frames, luna_jit_upval_get, luna_jit_upval_is_int,
+        luna_jit_enter_ctx, luna_jit_materialize_sunk_table, luna_jit_new_table,
+        luna_jit_new_table_sized, luna_jit_no_deopt_parked, luna_jit_op_close, luna_jit_op_closure,
+        luna_jit_op_concat, luna_jit_op_get_tab_up, luna_jit_op_tforcall, luna_jit_park_deopt,
+        luna_jit_self_call_slow, luna_jit_self_upval_check, luna_jit_spill_to_stack,
+        luna_jit_stack_load, luna_jit_stack_tag, luna_jit_stack_update_raw,
+        luna_jit_str_buf_acquire, luna_jit_str_buf_extend, luna_jit_str_buf_intern,
+        luna_jit_str_buf_release, luna_jit_table_get_field, luna_jit_table_get_float,
+        luna_jit_table_get_int, luna_jit_table_len, luna_jit_table_set_field,
+        luna_jit_table_set_float_float, luna_jit_table_set_int, luna_jit_table_set_nil,
+        luna_jit_table_set_raw, luna_jit_trace_materialize_frames, luna_jit_upval_get,
+        luna_jit_upval_is_int,
     };
     vec![
-        (
-            "luna_jit_new_table",
-            luna_jit_new_table as *const () as usize,
-            0,
-            true,
-        ),
-        (
-            "luna_jit_new_table_sized",
-            luna_jit_new_table_sized as *const () as usize,
-            1,
-            true,
-        ),
-        (
-            "luna_jit_materialize_sunk_table",
-            luna_jit_materialize_sunk_table as *const () as usize,
-            8,
-            true,
-        ),
-        (
-            "luna_jit_table_set_int",
-            luna_jit_table_set_int as *const () as usize,
-            3,
-            false,
-        ),
-        (
-            "luna_jit_table_set_raw",
-            luna_jit_table_set_raw as *const () as usize,
-            4,
-            false,
-        ),
-        (
-            "luna_jit_table_set_field",
-            luna_jit_table_set_field as *const () as usize,
-            4,
-            false,
-        ),
-        (
-            "luna_jit_table_get_field",
-            luna_jit_table_get_field as *const () as usize,
-            2,
-            true,
-        ),
-        (
-            "luna_jit_op_get_tab_up",
-            luna_jit_op_get_tab_up as *const () as usize,
-            2,
-            true,
-        ),
-        (
-            "luna_jit_table_set_nil",
-            luna_jit_table_set_nil as *const () as usize,
-            2,
-            false,
-        ),
-        (
-            "luna_jit_table_set_float_float",
-            luna_jit_table_set_float_float as *const () as usize,
-            3,
-            false,
-        ),
-        (
-            "luna_jit_table_get_int",
-            luna_jit_table_get_int as *const () as usize,
-            2,
-            true,
-        ),
-        (
-            "luna_jit_table_get_float",
-            luna_jit_table_get_float as *const () as usize,
-            2,
-            true,
-        ),
-        (
-            "luna_jit_upval_get",
-            luna_jit_upval_get as *const () as usize,
-            1,
-            true,
-        ),
-        (
-            "luna_jit_upval_is_int",
-            luna_jit_upval_is_int as *const () as usize,
-            1,
-            true,
-        ),
-        (
-            "luna_jit_no_deopt_parked",
-            luna_jit_no_deopt_parked as *const () as usize,
-            0,
-            true,
-        ),
-        (
-            "luna_jit_park_deopt",
-            luna_jit_park_deopt as *const () as usize,
-            0,
-            false,
-        ),
-        (
-            "luna_jit_self_upval_check",
-            luna_jit_self_upval_check as *const () as usize,
-            1,
-            true,
-        ),
-        (
-            "luna_jit_op_close",
-            luna_jit_op_close as *const () as usize,
-            1,
-            true,
-        ),
-        (
-            "luna_jit_stack_update_raw",
-            luna_jit_stack_update_raw as *const () as usize,
-            2,
-            false,
-        ),
-        (
-            "luna_jit_op_concat",
-            luna_jit_op_concat as *const () as usize,
-            3,
-            true,
-        ),
-        (
-            "luna_jit_str_buf_acquire",
-            luna_jit_str_buf_acquire as *const () as usize,
-            0,
-            true,
-        ),
-        (
-            "luna_jit_str_buf_release",
-            luna_jit_str_buf_release as *const () as usize,
-            1,
-            false,
-        ),
-        (
-            "luna_jit_str_buf_extend",
-            luna_jit_str_buf_extend as *const () as usize,
-            2,
-            true,
-        ),
-        (
-            "luna_jit_str_buf_intern",
-            luna_jit_str_buf_intern as *const () as usize,
-            1,
-            true,
-        ),
-        (
-            "luna_jit_op_tforcall",
-            luna_jit_op_tforcall as *const () as usize,
-            6,
-            true,
-        ),
-        (
-            "luna_jit_stack_load",
-            luna_jit_stack_load as *const () as usize,
-            1,
-            true,
-        ),
-        (
-            "luna_jit_stack_tag",
-            luna_jit_stack_tag as *const () as usize,
-            1,
-            true,
-        ),
-        (
-            "luna_jit_spill_to_stack",
-            luna_jit_spill_to_stack as *const () as usize,
-            3,
-            false,
-        ),
-        (
-            "luna_jit_op_closure",
-            luna_jit_op_closure as *const () as usize,
-            1,
-            true,
-        ),
-        (
-            "luna_jit_trace_materialize_frames",
-            luna_jit_trace_materialize_frames as *const () as usize,
-            2,
-            true,
-        ),
-        (
-            "luna_jit_table_len",
-            luna_jit_table_len as *const () as usize,
-            1,
-            true,
-        ),
+        h!(luna_jit_new_table, 0, true),
+        h!(luna_jit_new_table_sized, 1, true),
+        h!(luna_jit_materialize_sunk_table, 8, true),
+        h!(luna_jit_table_set_int, 3, false),
+        h!(luna_jit_table_set_raw, 4, false),
+        h!(luna_jit_table_set_field, 4, false),
+        h!(luna_jit_table_get_field, 2, true),
+        h!(luna_jit_op_get_tab_up, 2, true),
+        h!(luna_jit_table_set_nil, 2, false),
+        h!(luna_jit_table_set_float_float, 3, false),
+        h!(luna_jit_table_get_int, 2, true),
+        h!(luna_jit_table_get_float, 2, true),
+        h!(luna_jit_upval_get, 1, true),
+        h!(luna_jit_upval_is_int, 1, true),
+        h!(luna_jit_no_deopt_parked, 0, true),
+        h!(luna_jit_park_deopt, 0, false),
+        h!(luna_jit_enter_ctx, 1, false),
+        h!(luna_jit_self_call_slow, 7, true),
+        h!(luna_jit_self_upval_check, 1, true),
+        h!(luna_jit_op_close, 1, true),
+        h!(luna_jit_stack_update_raw, 2, false),
+        h!(luna_jit_op_concat, 3, true),
+        h!(luna_jit_str_buf_acquire, 0, true),
+        h!(luna_jit_str_buf_release, 1, false),
+        h!(luna_jit_str_buf_extend, 2, true),
+        h!(luna_jit_str_buf_intern, 1, true),
+        h!(luna_jit_op_tforcall, 6, true),
+        h!(luna_jit_stack_load, 1, true),
+        h!(luna_jit_stack_tag, 1, true),
+        h!(luna_jit_spill_to_stack, 3, false),
+        h!(luna_jit_op_closure, 1, true),
+        h!(luna_jit_trace_materialize_frames, 2, true),
+        h!(luna_jit_table_len, 1, true),
     ]
 }
 

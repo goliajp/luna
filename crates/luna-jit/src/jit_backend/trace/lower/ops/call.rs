@@ -110,8 +110,12 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
                     write_slot(lw, dst, v);
                 }
             }
-            // a parameter the call passes no argument for starts nil
-            for k in shape.nargs..nparams {
+            // a parameter the call passes no argument for starts nil, and
+            // so does 5.5's vararg parameter (`push_frame`)
+            let v55 = pl.opts.dialect == Some(luna_core::version::LuaVersion::Lua55);
+            let vararg_param = u32::from(v55 && callee_proto.is_vararg);
+            let window = (nparams + vararg_param).min(u32::from(callee_proto.max_stack));
+            for k in shape.nargs.min(nparams)..window {
                 nil_slot(lw, callee_base + k as usize);
             }
             lw.call_chain.push(FrameMaterializeInfo {

@@ -40,6 +40,8 @@ impl<'s> Parser<'s> {
     }
 
     /// PUC `luaX_syntaxerror`: `msg near <current token>`.
+    #[cold]
+    #[inline(never)]
     pub(super) fn error(&self, msg: impl AsRef<str>) -> SyntaxError {
         // a NUL byte comes back from PUC's scanner as token 0, which
         // `lexerror` reads as "no near-token"
@@ -56,6 +58,8 @@ impl<'s> Parser<'s> {
     }
 
     /// PUC `luaK_semerror` / `luaX_lexerror(.., 0)`: no near-token.
+    #[cold]
+    #[inline(never)]
     pub(super) fn plain_error(&self, msg: impl Into<Vec<u8>>) -> SyntaxError {
         SyntaxError {
             line: self.lex.line(),
@@ -65,6 +69,8 @@ impl<'s> Parser<'s> {
 
     /// PUC `error_expected`. `what` is a token as `luaX_token2str` spells
     /// it; the `<name>`-style pseudo-tokens are quoted only by 5.1.
+    #[cold]
+    #[inline(never)]
     pub(super) fn error_expected(&self, what: &str) -> SyntaxError {
         if what.starts_with('<') && self.version >= LuaVersion::Lua52 {
             self.error(format!("{what} expected"))
@@ -144,7 +150,7 @@ impl<'s> Parser<'s> {
         } else {
             MAX_DEPTH
         };
-        if self.depth > limit {
+        if self.depth > limit || crate::native_stack::is_low(crate::native_stack::RESERVE) {
             return Err(self.levels_error());
         }
         Ok(())
@@ -185,17 +191,14 @@ impl<'s> Parser<'s> {
         ExprId((self.chunk.exprs.len() - 1) as u32)
     }
 
+    /// Push a statement whose last token was just read, and that token's
+    /// line.
     pub(super) fn push_stat(&mut self, s: Stat) -> StatId {
         self.chunk.stats.push_or_abort(s);
-        StatId((self.chunk.stats.len() - 1) as u32)
-    }
-
-    /// Push a statement that ended with the `end` just read.
-    pub(super) fn push_ended_stat(&mut self, s: Stat) -> StatId {
-        let id = self.push_stat(s);
-        let idx = id.0 as usize;
-        self.end_lines.resize_or_abort(idx + 1, 0);
-        self.end_lines[idx] = self.prev_line;
-        id
+        let idx = self.chunk.stats.len() - 1;
+        // statements end in the order they are pushed
+        debug_assert_eq!(self.end_lines.len(), idx);
+        self.end_lines.push_or_abort(self.prev_line);
+        StatId(idx as u32)
     }
 }

@@ -1,6 +1,6 @@
 //! Minimal base library. The full base library replaces/extends this.
 
-use crate::runtime::Value;
+use crate::runtime::{Builtin, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::error::LuaError;
@@ -14,17 +14,17 @@ pub(crate) fn open_base(vm: &mut Vm) {
 pub(crate) fn try_open_base(vm: &mut Vm) -> Result<(), LuaError> {
     let f = vm.lib_native(nat_assert)?;
     vm.lib_set_global("assert", f)?;
-    let f = vm.lib_native(nat_error)?;
+    let f = vm.builtin(nat_error, &[], Builtin::Error)?;
     vm.lib_set_global("error", f)?;
-    let f = vm.lib_native(nat_pcall)?;
+    let f = vm.builtin(nat_pcall, &[], Builtin::Pcall)?;
     vm.lib_set_global("pcall", f)?;
-    let f = vm.lib_native(nat_xpcall)?;
+    let f = vm.builtin(nat_xpcall, &[], Builtin::Xpcall)?;
     vm.lib_set_global("xpcall", f)?;
     let f = vm.lib_native(nat_type)?;
     vm.lib_set_global("type", f)?;
     let f = vm.lib_native(nat_print)?;
     vm.lib_set_global("print", f)?;
-    let f = vm.lib_native(nat_tostring)?;
+    let f = vm.builtin(nat_tostring, &[], Builtin::Tostring)?;
     vm.lib_set_global("tostring", f)?;
     let f = vm.lib_native(nat_rawget)?;
     vm.lib_set_global("rawget", f)?;
@@ -53,9 +53,9 @@ pub(crate) fn try_open_base(vm: &mut Vm) -> Result<(), LuaError> {
     } else {
         next_obj
     };
-    let pairs_obj = vm.lib_native_with(nat_pairs, &[pairs_next])?;
+    let pairs_obj = vm.builtin(nat_pairs, &[pairs_next], Builtin::Pairs)?;
     vm.lib_set_global("pairs", pairs_obj)?;
-    let ipairs_it = vm.lib_native(ipairs_iter)?;
+    let ipairs_it = vm.builtin(ipairs_iter, &[], Builtin::IpairsIter)?;
     let ipairs_obj = vm.lib_native_with(nat_ipairs, &[ipairs_it])?;
     vm.lib_set_global("ipairs", ipairs_obj)?;
     let f = vm.lib_native(nat_tonumber)?;
@@ -139,8 +139,9 @@ use basic::{
     nat_setmetatable, nat_tostring, nat_type, nat_warn,
 };
 use compat51::{nat_gcinfo, nat_getfenv, nat_newproxy, nat_setfenv};
+use errors::nat_assert;
+pub(crate) use errors::nat_error;
 pub(crate) use errors::{arg_error, raise_bytes, raise_str};
-use errors::{nat_assert, nat_error};
 pub use iter::ipairs_iter;
 use iter::{nat_ipairs, nat_next};
 pub(crate) use iter::{nat_pairs, pairs_mm_results};

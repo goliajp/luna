@@ -1,5 +1,6 @@
 //! The `Vm` struct and the per-call context it hands to async natives.
 
+pub(crate) use super::state_guards::{AsyncNativeCallCtx, CallGuards};
 use super::*;
 use crate::runtime::mem::LVec;
 
@@ -36,14 +37,18 @@ pub struct Vm {
     /// `Vm` methods (`load` / `call_value` / `set_global` / …) rather than
     /// the heap directly.
     pub heap: Heap,
-    /// Embedding cooperative budget: a per-Vm tick counter that the run
-    /// loop decrements once per dispatch turn. When it hits zero the loop
-    /// raises a catchable "instruction budget exceeded" error so the embedder
-    /// can yield control back to its caller (short-script eval, game
-    /// frame budgets). `None` = unbounded; reset on each call via
-    /// `set_instr_budget`.
+    /// Embedding cooperative budget: a per-Vm tick counter the run loop
+    /// decrements once per dispatch turn; at zero it raises "instruction
+    /// budget exceeded". `None` = unbounded; `Some(0)` once it ran out,
+    /// until the host calls `set_instr_budget` again (see `limits.rs`).
     pub(crate) instr_budget: Option<i64>,
+    /// `instr_budget` or the heap's `mem_cap` is armed, so no compiled code
+    /// is entered (`jit.gate` off, no trace admitted); see `sync_limited`
+    pub(crate) limited: bool,
     pub(crate) stack: LVec<Value>,
+    /// the counters every call checks, together so a call touches one
+    /// cache line for them
+    pub(crate) g: CallGuards,
     pub(crate) frames: LVec<CallFrame>,
     /// open upvalues, sorted ascending by stack slot
     pub(super) open_upvals: LVec<(u32, Gc<Upvalue>)>,
@@ -244,6 +249,9 @@ pub struct Vm {
     /// handling"); a host protected call compares it before and after to
     /// report that status instead of LUA_ERRRUN.
     pub(crate) errerr_raised: u64,
+    /// the "error in error handling" just raised, until it reaches the
+    /// unwinder: PUC's `luaD_throw(LUA_ERRERR)` runs no message handler
+    pub(crate) errerr_in_flight: Option<Value>,
     /// finalizer errors a 5.2/5.3 full collection raised (`LUA_ERRGCMM`)
     pub(crate) gcmm_raised: u64,
     /// The C API's dispatcher of C hook functions: a thread whose hook
@@ -253,6 +261,12 @@ pub struct Vm {
     /// Index into `running_natives` where the running thread's own natives
     /// begin; the ones below belong to the threads that resumed it.
     pub(crate) natives_base: usize,
+    /// Set while a panic unwinds out of a native's call or return hook (or
+    /// another stretch where a native is on top of `running_natives` but
+    /// not running): that native's index plus one. It tells the dispatch
+    /// loop's entry the panic is not the native's own (see
+    /// [`Vm::in_native_window`]); 0 otherwise.
+    pub(crate) native_window_panic: u32,
 
     /// Host waker cloned by `EvalFuture::poll` before driving a slice.
     /// The dispatcher itself does not call it (the future's poll loop
@@ -297,13 +311,6 @@ pub struct Vm {
     pub(super) frames_top: u32,
     /// logical stack top for multi-result sequences
     pub(crate) top: u32,
-    /// native↔Lua nesting depth (PUC C-stack guard analogue)
-    pub(super) c_depth: u32,
-    /// number of live pcall/xpcall continuation frames on the running thread
-    /// (PUC counts these against nCcalls). Bounds protected-call recursion the
-    /// way `c_depth` bounds call_value recursion. Per-thread: saved/restored
-    /// with the coroutine context, since continuations survive a yield.
-    pub(super) pcall_depth: u32,
     /// number of non-yieldable C calls in flight on the running thread (PUC's
     /// `L->nny`). A library callback that runs via synchronous Rust recursion
     /// (sort comparator, gsub replacement) cannot be continued across a yield,
@@ -414,12 +421,11 @@ pub struct Vm {
     /// leave it `false` so budget exhaustion stays a real error there.
     pub(crate) async_mode: bool,
 
-    /// Set by the dispatcher when an async-mode
-    /// budget exhaustion fires; checked by `exec_with` (so the
-    /// sentinel propagates without `unwind` running, mirroring
-    /// `yielding.is_some()`) and by `call_value_impl` (so the call
-    /// frames survive for the next poll). Cleared by `drive_one`
-    /// after translating it to `DispatchOutcome::BudgetExhausted`.
+    /// Set by the dispatcher when an async-mode budget exhaustion fires;
+    /// checked by `exec_with` (so the sentinel propagates without `unwind`
+    /// running, mirroring `yielding.is_some()`) and by `call_value_impl`
+    /// (so the call frames survive for the next poll). Cleared by
+    /// `drive_one` after translating it to `DispatchOutcome::BudgetExhausted`.
     pub(crate) host_yield_pending: bool,
     /// metamethod event tag (e.g. "close") to attach to the next Lua frame
     /// pushed by `push_frame`; `close_slots` sets this before calling a
@@ -437,38 +443,35 @@ pub struct Vm {
     /// by `push_frame`. `OP_TailCall` sets it to the reused activation's
     /// count; `begin_call` otherwise sets the chain it just resolved.
     pub(super) pending_ccmt: u8,
-    /// The allocation context the Vm's own containers (the stack and the
-    /// frame stack above) free through. Last, so it outlives them: the
-    /// heap, which owns it too, is the first field to be dropped.
     /// a library string buffer kept from one call to the next
     pub(crate) buf_spare: LVec<u8>,
+    /// The allocation context the Vm's own containers (the stack and the
+    /// frame stack above) free through. After them, so it outlives them:
+    /// the heap, which owns it too, is the first field to be dropped.
     pub(super) _mem: crate::runtime::mem::MemOwner,
+    /// Lua frames a thread may hold before a call raises "stack
+    /// overflow": PUC 5.1's `LUAI_MAXCALLS`; no count in later dialects,
+    /// whose limit is the stack size. The frame array is grown as PUC
+    /// 5.1 grows its `CallInfo` array (see `grow_frames`).
+    pub(super) frame_cap: u32,
+    /// the slot the message handler runs at for a stack overflow or a call
+    /// of a value that cannot be called, which PUC raise from the top of
+    /// that call (`L->top` when `luaD_growstack` or `luaG_callerror` raised)
+    pub(crate) overflow_top: Option<u32>,
+    /// the last runtime error a Lua frame raised named its operand, which
+    /// 5.3+'s `varinfo` pushes on the stack before the message: the message
+    /// handler runs one slot higher
+    pub(crate) varinfo_pushed: bool,
+    /// the "C stack overflow" a call was last refused with: PUC's refused
+    /// call keeps its level while its error is in flight, which lets the
+    /// message handler run on it one level above the limit
+    pub(crate) c_overflow_err: Option<Value>,
+    /// the running thread's stack has overflowed and is using the error
+    /// space (PUC's stack grown to `ERRORSTACKSIZE`), until a protected
+    /// call catches the error; a call that does not fit it is "error in
+    /// error handling". Per-thread, saved with the coroutine context.
+    pub(super) stack_extra: bool,
     /// construction finished (PUC `completestate`): an allocation that
     /// fails may run an emergency collection from now on
     pub(super) state_complete: bool,
-}
-
-/// Call-site context an in-flight async native
-/// needs preserved across the cooperative-yield boundary.
-///
-/// The dispatcher records this when it routes a `NativeClosure` with
-/// `is_async == true` through the cooperative path; `EvalFuture::poll`
-/// hands it back to [`Vm::commit_async_native_result`] once the
-/// awaited future resolves so `finish_results` (and the post-call GC
-/// checkpoint) can run as if the native had completed synchronously.
-#[derive(Clone, Copy)]
-pub(crate) struct AsyncNativeCallCtx {
-    pub func_slot: u32,
-    /// Recorded for parity with the sync native-call path's
-    /// `native_nresults`/`gc_top` bookkeeping; reserved for hook
-    /// firing + traceback shaping. Not read yet.
-    #[allow(dead_code)]
-    pub nargs: u32,
-    pub nresults: i32,
-    /// Recorded for traceback + GC-root-window checks. The resume path
-    /// reads `Vm.gc_top` directly, so this is unread today; carried so a
-    /// check can confirm the pre-suspend root window matches the
-    /// post-resume one.
-    #[allow(dead_code)]
-    pub gc_top: u32,
 }

@@ -1,0 +1,262 @@
+//! How much of the running thread's native stack is left.
+//!
+//! Lua-to-Lua calls in the interpreter push frames on the VM's own stack,
+//! but some nesting runs on the native stack: a library function calling
+//! back into Lua (`table.sort`'s comparator, `string.gsub`'s replacement,
+//! `tostring`'s `__tostring`), a coroutine resume, the parser, and
+//! compiled code calling itself. PUC bounds these by counting C calls;
+//! luna counts them the same way, but a count does not say how many bytes
+//! a level takes, and a thread with a small stack runs out first. So each
+//! such entry also compares the stack pointer with the thread's real stack
+//! bounds, which are read from the OS once per thread.
+//!
+//! Where the bounds cannot be read (other targets, Miri, or code running
+//! on a stack the thread did not start with), nothing is reported as low and
+//! only the counts apply.
+
+use std::cell::Cell;
+
+/// Bytes a nested entry leaves free below it: enough to raise the error,
+/// unwind, and run a message handler and the library code it calls.
+pub const RESERVE: usize = 96 * 1024;
+
+/// What an error handler may still use of [`RESERVE`] (PUC gives a
+/// handler a few more C levels than the code that failed).
+pub const HANDLER_RESERVE: usize = RESERVE / 2;
+
+/// Bytes compiled code leaves free before it hands a self-recursive call
+/// to the interpreter: more than [`RESERVE`] by the room that handing over
+/// and the interpreter's own entry take, so the handed-over call does not
+/// itself fail for want of stack.
+pub const JIT_RESERVE: usize = 2 * RESERVE;
+
+/// Bytes that must be free to compile a function or a trace: Cranelift
+/// runs on the caller's stack, and an unoptimised build of it needs a few
+/// hundred kilobytes. With less left the code is not compiled now, and
+/// may be on a later call.
+pub const COMPILE_RESERVE: usize = if cfg!(debug_assertions) {
+    512 * 1024
+} else {
+    JIT_RESERVE
+};
+
+thread_local! {
+    /// lowest address of this thread's stack; 0 before it is read, 1 when
+    /// it cannot be
+    static LOW: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The address of a local in the caller's frame: the stack pointer, near
+/// enough for a check that keeps tens of kilobytes free.
+#[inline(always)]
+pub fn sp() -> usize {
+    let b = 0u8;
+    std::hint::black_box(&b) as *const u8 as usize
+}
+
+/// The lowest address of the running thread's stack, or 1 when it is not
+/// known.
+#[inline]
+pub fn low() -> usize {
+    let low = LOW.with(Cell::get);
+    if low != 0 {
+        return low;
+    }
+    let low = os::stack_low().filter(|&l| l > 1).unwrap_or(1);
+    LOW.with(|c| c.set(low));
+    low
+}
+
+/// The stack address below which compiled code stops recursing natively
+/// (see [`JIT_RESERVE`]), or 0 when the bounds are not known.
+pub fn jit_limit() -> usize {
+    match low() {
+        1 => 0,
+        low => low + JIT_RESERVE,
+    }
+}
+
+/// Whether fewer than `reserve` bytes of the stack are left. A stack
+/// pointer outside the thread's stack (an embedder running luna on a
+/// stack of its own) is never low.
+#[inline]
+pub fn is_low(reserve: usize) -> bool {
+    sp().wrapping_sub(low()) < reserve
+}
+
+#[cfg(all(any(target_os = "linux", target_os = "android"), not(miri)))]
+mod os {
+    use std::ffi::c_void;
+
+    /// `pthread_attr_t` is 56 bytes or fewer on every Linux libc luna
+    /// builds for (64 on glibc aarch64); this is room for all of them.
+    #[repr(C, align(16))]
+    struct Attr([u8; 128]);
+
+    unsafe extern "C" {
+        fn pthread_self() -> usize;
+        fn pthread_getattr_np(thread: usize, attr: *mut Attr) -> i32;
+        fn pthread_attr_getstack(
+            attr: *const Attr,
+            addr: *mut *mut c_void,
+            size: *mut usize,
+        ) -> i32;
+        fn pthread_attr_destroy(attr: *mut Attr) -> i32;
+    }
+
+    pub(super) fn stack_low() -> Option<usize> {
+        if let Some(low) = super::main_thread_low() {
+            return Some(low);
+        }
+        stack_bounds().map(|(addr, _)| addr)
+    }
+
+    /// The running thread's stack as the C library reports it: its lowest
+    /// address and its size.
+    pub(super) fn stack_bounds() -> Option<(usize, usize)> {
+        let mut attr = Attr([0; 128]);
+        let mut addr: *mut c_void = std::ptr::null_mut();
+        let mut size = 0usize;
+        // SAFETY: `attr` is larger and more aligned than the libc's
+        // `pthread_attr_t`; getattr_np initialises it on success, and only
+        // then is it read and destroyed; `addr` and `size` are locals
+        unsafe {
+            if pthread_getattr_np(pthread_self(), &mut attr) != 0 {
+                return None;
+            }
+            let r = pthread_attr_getstack(&attr, &mut addr, &mut size);
+            pthread_attr_destroy(&mut attr);
+            (r == 0).then_some((addr as usize, size))
+        }
+    }
+}
+
+/// The main thread's stack on glibc: its top (`__libc_stack_end`) less the
+/// stack size limit. `pthread_getattr_np` would read `/proc/self/maps`
+/// for it, allocating and freeing a stream buffer on the C heap, which
+/// moves where everything allocated after it lands; in a benchmark that
+/// alone made the interpreter's call loop 9% slower.
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    target_env = "gnu",
+    not(miri)
+))]
+fn main_thread_low() -> Option<usize> {
+    use std::ffi::c_void;
+    const RLIMIT_STACK: i32 = 3;
+    unsafe extern "C" {
+        static __libc_stack_end: *const c_void;
+        fn getpid() -> i32;
+        fn gettid() -> i32;
+        fn getrlimit(resource: i32, rlim: *mut [u64; 2]) -> i32;
+    }
+    let mut rlim = [0u64; 2];
+    // SAFETY: the C library's own process and thread ids, its record of
+    // where the main thread's stack starts (set before `main` runs), and
+    // the stack size limit written to a local of `struct rlimit`'s layout
+    let (main, top, r) = unsafe {
+        (
+            gettid() == getpid(),
+            __libc_stack_end as usize,
+            getrlimit(RLIMIT_STACK, &mut rlim),
+        )
+    };
+    if !main || r != 0 || rlim[0] == u64::MAX {
+        return None;
+    }
+    top.checked_sub(rlim[0] as usize)
+}
+
+/// The main thread's stack on musl: its top less the stack size limit.
+/// musl's `pthread_getattr_np` gives the main thread only the part of its
+/// stack the kernel has mapped so far (about 100 KiB below the stack
+/// pointer at start), which the stack grows past on demand; the top it
+/// gives is right.
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    target_env = "musl",
+    not(miri)
+))]
+fn main_thread_low() -> Option<usize> {
+    const RLIMIT_STACK: i32 = 3;
+    unsafe extern "C" {
+        fn getpid() -> i32;
+        fn gettid() -> i32;
+        fn getrlimit(resource: i32, rlim: *mut [u64; 2]) -> i32;
+    }
+    let mut rlim = [0u64; 2];
+    // SAFETY: the C library's own process and thread ids, and the stack
+    // size limit written to a local of `struct rlimit`'s layout
+    let (main, r) = unsafe { (gettid() == getpid(), getrlimit(RLIMIT_STACK, &mut rlim)) };
+    if !main || r != 0 || rlim[0] == u64::MAX {
+        return None;
+    }
+    let (addr, size) = os::stack_bounds()?;
+    (addr + size).checked_sub(rlim[0] as usize)
+}
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    not(any(target_env = "gnu", target_env = "musl")),
+    not(miri)
+))]
+fn main_thread_low() -> Option<usize> {
+    None
+}
+
+#[cfg(all(target_vendor = "apple", not(miri)))]
+mod os {
+    use std::ffi::c_void;
+
+    unsafe extern "C" {
+        fn pthread_self() -> *mut c_void;
+        fn pthread_get_stackaddr_np(thread: *mut c_void) -> *mut c_void;
+        fn pthread_get_stacksize_np(thread: *mut c_void) -> usize;
+    }
+
+    pub(super) fn stack_low() -> Option<usize> {
+        // SAFETY: both read the running thread's own bookkeeping, which
+        // lives as long as the thread
+        let (top, size) = unsafe {
+            let t = pthread_self();
+            (
+                pthread_get_stackaddr_np(t) as usize,
+                pthread_get_stacksize_np(t),
+            )
+        };
+        top.checked_sub(size)
+    }
+}
+
+#[cfg(all(windows, not(miri)))]
+mod os {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentThreadStackLimits(low: *mut usize, high: *mut usize);
+    }
+
+    pub(super) fn stack_low() -> Option<usize> {
+        let (mut low, mut high) = (0usize, 0usize);
+        // SAFETY: writes the running thread's stack bounds to two locals
+        unsafe { GetCurrentThreadStackLimits(&mut low, &mut high) };
+        Some(low)
+    }
+}
+
+// Miri provides no `__libc_stack_end`, and the addresses it gives locals
+// lie inside no stack bounds an OS call could report, so under it the
+// bounds are unknown and only the call counts apply
+#[cfg(any(
+    miri,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple",
+        windows
+    ))
+))]
+mod os {
+    pub(super) fn stack_low() -> Option<usize> {
+        None
+    }
+}

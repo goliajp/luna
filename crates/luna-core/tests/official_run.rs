@@ -223,6 +223,10 @@ const SUITES: &[Suite] = &[
             "errors.lua",
             "events.lua",
             "files.lua",
+            // files.lua with its open files closed before they are removed
+            // or renamed (see `windows`)
+            #[cfg(windows)]
+            "files_win.lua",
             "gc.lua",
             "literals.lua",
             "locals.lua",
@@ -258,7 +262,9 @@ fn run_suite(suite: &Suite, coverage: &mut Vec<FileCoverage>) -> Vec<String> {
         // PUC-printed line as the deceptive "last test that ran".
         eprintln!("[official_run] starting {:?}/{}", suite.version, name);
         let cov = run_file(name, suite.version);
-        if let Some(err) = &cov.error {
+        if let Some(recorded) = windows::recording(suite.version, name) {
+            failures.extend(windows::compare(name, recorded, cov.error.as_deref()));
+        } else if let Some(err) = &cov.error {
             failures.push(format!("{:?} {name}: {err}", suite.version));
         }
         coverage.push(cov);
@@ -299,6 +305,8 @@ mod parse;
 mod report;
 #[path = "official_run/run_file.rs"]
 mod run_file;
+#[path = "official_run/windows.rs"]
+mod windows;
 
 use report::write_coverage_report;
 use run_file::run_file;

@@ -1,0 +1,246 @@
+1	write UTF-8 w even true 7 true \239\187\191\236\141\161\224\170\169\232\139\162\231\162\172
+exit 1 00000000
+exit 2 C0000005
+3	write UTF-8 w nl true 6 true \239\187\191\230\137\161\230\140\138\224\169\164
+exit 3 00000000
+4	write UTF-8 a even true 7 true \239\187\191\236\141\161\224\170\169\232\139\162\231\162\172
+exit 4 00000000
+exit 5 C0000005
+6	write UTF-8 a nl true 6 true \239\187\191\230\137\161\230\140\138\224\169\164
+exit 6 00000000
+7	write UTF-8 w+ even true 7 true \239\187\191\236\141\161\224\170\169\232\139\162\231\162\172
+exit 7 00000000
+exit 8 C0000005
+9	write UTF-8 w+ nl true 6 true \239\187\191\230\137\161\230\140\138\224\169\164
+exit 9 00000000
+10	append UTF-8 utf8bom true \239\187\191a\195\169\13\10\226\130\172x\236\141\161\224\170\169\232\139\162\231\162\172
+exit 10 00000000
+11	append UTF-8 utf16bom true \255\254a\0\233\0\13\0\10\0\172 x\0a\195\169\10\226\130\172x
+exit 11 00000000
+exit 12 C0000409
+13	read UTF-8 ascii *a a\0b\0\10\0c\0d\0\10\0@7|@7|@7|@7
+exit 13 00000000
+14	read UTF-8 ascii 2 a\0@0|a\0@0|a\0@0|a\0@0
+exit 14 00000000
+exit 15 C0000005
+exit 16 C0000409
+exit 17 C0000409
+18	read UTF-8 ascii seek 0|0|7|2|3
+exit 18 00000000
+exit 19 C0000409
+exit 20 C0000409
+21	read UTF-8 utf8 *a a\0\233\0\10\0\172 x\0@9|@9|@9|@9
+exit 21 00000000
+22	read UTF-8 utf8 2 a\0@1|\233\0@3|\10\0@5|\172 @8
+exit 22 00000000
+23	read UTF-8 utf8 1 a@0|a@0|a@0|a@0
+exit 23 00000000
+exit 24 C0000409
+exit 25 C0000409
+26	read UTF-8 utf8 seek 0|0|9|2|3
+exit 26 00000000
+exit 27 C0000409
+exit 28 C0000409
+29	read UTF-8 utf8bom *a a\0\233\0\10\0\172 x\0@12|@12|@12|@12
+exit 29 00000000
+30	read UTF-8 utf8bom 2 a\0@4|\233\0@6|\10\0@8|\172 @11
+exit 30 00000000
+31	read UTF-8 utf8bom 1 a@3|a@3|a@3|a@3
+exit 31 00000000
+exit 32 C0000409
+exit 33 C0000409
+34	read UTF-8 utf8bom seek 3|0|12|2|3
+exit 34 00000000
+exit 35 C0000409
+exit 36 C0000409
+37	read UTF-8 utf16bom *a a\0\233\0\10\0\172 x\0@14|@14|@14|@14
+exit 37 00000000
+38	read UTF-8 utf16bom 2 a\0@4|\233\0@6|\10\0@10|\172 @12
+exit 38 00000000
+exit 39 C0000005
+exit 40 C0000409
+exit 41 C0000409
+42	read UTF-8 utf16bom seek 2|0|14|2|3
+exit 42 00000000
+exit 43 C0000409
+exit 44 C0000409
+45	read UTF-8 utf16 *a a\0\0\0\253\255\0\0\13\0\0\0\10\0\0\0\253\255 \0x\0\0\0@12|@12|@12|@12
+exit 45 00000000
+46	read UTF-8 utf16 2 a\0@0|a\0@0|a\0@0|a\0@0
+exit 46 00000000
+exit 47 C0000005
+exit 48 C0000409
+exit 49 C0000409
+50	read UTF-8 utf16 seek 0|0|12|2|3
+exit 50 00000000
+exit 51 C0000409
+52	update UTF-8 a\0|4|true|0|\255\254a\0Zz\10\0\172 x\0 \255\254a\0Zz\13\0\10\0\172 x\0
+exit 52 00000000
+53	write UTF-16LE w even true 10 true \255\254a\195\169\10\226\130\172x
+exit 53 00000000
+exit 54 C0000005
+55	write UTF-16LE w nl true 8 true \255\254ab\10cd\10
+exit 55 00000000
+56	write UTF-16LE a even true 10 true \255\254a\195\169\10\226\130\172x
+exit 56 00000000
+exit 57 C0000005
+58	write UTF-16LE a nl true 8 true \255\254ab\10cd\10
+exit 58 00000000
+59	write UTF-16LE w+ even true 10 true \255\254a\195\169\10\226\130\172x
+exit 59 00000000
+exit 60 C0000005
+61	write UTF-16LE w+ nl true 8 true \255\254ab\10cd\10
+exit 61 00000000
+62	append UTF-16LE utf8bom true \239\187\191a\195\169\13\10\226\130\172x\236\141\161\224\170\169\232\139\162\231\162\172
+exit 62 00000000
+63	append UTF-16LE utf16bom true \255\254a\0\233\0\13\0\10\0\172 x\0a\195\169\10\226\130\172x
+exit 63 00000000
+exit 64 C0000409
+65	read UTF-16LE ascii *a ab\13\10cd@7|@7|@7|@7
+exit 65 00000000
+66	read UTF-16LE ascii 2 ab@3|\10c@5|d\10@7|nil@7
+exit 66 00000000
+exit 67 C0000005
+exit 68 C0000409
+exit 69 C0000409
+70	read UTF-16LE ascii seek 0|0|7|2|3
+exit 70 00000000
+exit 71 C0000409
+exit 72 C0000409
+73	read UTF-16LE utf8 *a a\195\169\13\10\226\130\172@9|@9|@9|@9
+exit 73 00000000
+74	read UTF-16LE utf8 2 a\195@3|\13\10@5|\226\130@7|\172x@9
+exit 74 00000000
+exit 75 C0000005
+exit 76 C0000409
+exit 77 C0000409
+78	read UTF-16LE utf8 seek 0|0|9|2|3
+exit 78 00000000
+exit 79 C0000409
+exit 80 C0000409
+81	read UTF-16LE utf8bom *a a\0\233\0\10\0\172 x\0@12|@12|@12|@12
+exit 81 00000000
+82	read UTF-16LE utf8bom 2 a\0@4|\233\0@6|\10\0@8|\172 @11
+exit 82 00000000
+83	read UTF-16LE utf8bom 1 a@3|a@3|a@3|a@3
+exit 83 00000000
+exit 84 C0000409
+exit 85 C0000409
+86	read UTF-16LE utf8bom seek 3|0|12|2|3
+exit 86 00000000
+exit 87 C0000409
+exit 88 C0000409
+89	read UTF-16LE utf16bom *a a\0\233\0\10\0\172 x\0@14|@14|@14|@14
+exit 89 00000000
+90	read UTF-16LE utf16bom 2 a\0@4|\233\0@6|\10\0@10|\172 @12
+exit 90 00000000
+exit 91 C0000005
+exit 92 C0000409
+exit 93 C0000409
+94	read UTF-16LE utf16bom seek 2|0|14|2|3
+exit 94 00000000
+exit 95 C0000409
+exit 96 C0000409
+97	read UTF-16LE utf16 *a a\0\233\0\10\0\172 x\0@12|@12|@12|@12
+exit 97 00000000
+98	read UTF-16LE utf16 2 a\0@2|\233\0@4|\10\0@8|\172 @10
+exit 98 00000000
+exit 99 C0000005
+exit 100 C0000409
+exit 101 C0000409
+102	read UTF-16LE utf16 seek 0|0|12|2|3
+exit 102 00000000
+exit 103 C0000409
+104	update UTF-16LE a\0|4|true|0|\255\254a\0Zz\10\0\172 x\0 \255\254a\0Zz\13\0\10\0\172 x\0
+exit 104 00000000
+105	write UNICODE w even true 10 true \255\254a\195\169\10\226\130\172x
+exit 105 00000000
+exit 106 C0000005
+107	write UNICODE w nl true 8 true \255\254ab\10cd\10
+exit 107 00000000
+108	write UNICODE a even true 9 true a\195\169\13\10\226\130\172x
+exit 108 00000000
+109	write UNICODE a odd true 10 true a\195\169\13\10\226\130\172x!
+exit 109 00000000
+110	write UNICODE a nl true 8 true ab\13\10cd\13\10
+exit 110 00000000
+111	write UNICODE w+ even true 9 true a\195\169\13\10\226\130\172x
+exit 111 00000000
+112	write UNICODE w+ odd true 10 true a\195\169\13\10\226\130\172x!
+exit 112 00000000
+113	write UNICODE w+ nl true 8 true ab\13\10cd\13\10
+exit 113 00000000
+114	append UNICODE utf8bom true \239\187\191a\195\169\13\10\226\130\172x\236\141\161\224\170\169\232\139\162\231\162\172
+exit 114 00000000
+115	append UNICODE utf16bom true \255\254a\0\233\0\13\0\10\0\172 x\0a\195\169\10\226\130\172x
+exit 115 00000000
+exit 116 C0000409
+117	read UNICODE ascii *a ab\10cd\10@7|@7|@7|@7
+exit 117 00000000
+118	read UNICODE ascii 2 ab@1|b\10@3|\10c@4|cd@5
+exit 118 00000000
+119	read UNICODE ascii 1 a@0|a@0|a@0|a@0
+exit 119 00000000
+exit 120 C0000409
+exit 121 C0000409
+122	read UNICODE ascii seek 0|0|7|2|3
+exit 122 00000000
+exit 123 C0000409
+exit 124 C0000409
+125	read UNICODE utf8 *a a\195\169\10\226\130\172x@9|@9|@9|@9
+exit 125 00000000
+126	read UNICODE utf8 2 a\195@2|\169\10@5|\226\130@7|\172x@9
+exit 126 00000000
+127	read UNICODE utf8 1 a@1|\195@2|\169@3|\10@5
+exit 127 00000000
+exit 128 C0000409
+exit 129 C0000409
+130	read UNICODE utf8 seek 0|0|9|2|3
+exit 130 00000000
+exit 131 C0000409
+exit 132 C0000409
+133	read UNICODE utf8bom *a a\0\233\0\10\0\172 x\0@12|@12|@12|@12
+exit 133 00000000
+134	read UNICODE utf8bom 2 a\0@4|\233\0@6|\10\0@8|\172 @11
+exit 134 00000000
+135	read UNICODE utf8bom 1 a@3|a@3|a@3|a@3
+exit 135 00000000
+exit 136 C0000409
+exit 137 C0000409
+138	read UNICODE utf8bom seek 3|0|12|2|3
+exit 138 00000000
+exit 139 C0000409
+exit 140 C0000409
+141	read UNICODE utf16bom *a a\0\233\0\10\0\172 x\0@14|@14|@14|@14
+exit 141 00000000
+142	read UNICODE utf16bom 2 a\0@4|\233\0@6|\10\0@10|\172 @12
+exit 142 00000000
+exit 143 C0000005
+exit 144 C0000409
+exit 145 C0000409
+146	read UNICODE utf16bom seek 2|0|14|2|3
+exit 146 00000000
+exit 147 C0000409
+exit 148 C0000409
+149	read UNICODE utf16 *a a\0\233\0\13\0\10\0\172 x\0@12|@12|@12|@12
+exit 149 00000000
+150	read UNICODE utf16 2 a\0@1|\0\233@2|\233\0@3|\0\13@4
+exit 150 00000000
+151	read UNICODE utf16 1 a@0|a@0|a@0|a@0
+exit 151 00000000
+exit 152 C0000409
+exit 153 C0000409
+154	read UNICODE utf16 seek 0|0|12|2|3
+exit 154 00000000
+exit 155 C0000409
+156	update UNICODE a\0|4|true|0|\255\254a\0Zz\10\0\172 x\0 \255\254a\0Zz\13\0\10\0\172 x\0
+exit 156 00000000
+exit 157 C0000409
+158	mode r,ccs=UTF-8 file
+exit 158 00000000
+159	mode rt, ccs=utf-8 file
+exit 159 00000000
+160	mode rb, ccs=UTF-8 file
+exit 160 00000000
+exit 161 C0000409
+exit 162 C0000409

@@ -1,0 +1,127 @@
+strtod 1.5                           99
+strtod 0x1p3                         99
+strtod inf                           99
+strtod nan                           99
+strtod 1e999                         34
+strtod -1e999                        34
+strtod 1e-999                        34
+strtod 4e-320                        34
+strtod 2.2250738585072011e-308       34
+strtod 0x1p-1074                     99
+strtod 0x1p-1080                     34
+strtod 0x1p2000                      34
+strtod abc                           99
+strtod empty                         99
+sscanf 1e999                         34
+sscanf 1e-999                        34
+sscanf x                             99
+log 2                                99
+log 0                                34
+log -1                               33
+log10 0                              34
+log2 0                               34
+log1p -1                             34
+exp 1                                99
+exp 1000                             34
+exp -1000                            34
+pow 2 3                              99
+pow 10 400                           34
+pow 10 -400                          34
+pow 0 -1                             99
+pow -1 0.5                           33
+pow 0 0                              99
+fmod 5 3                             99
+fmod 1 0                             33
+fmod inf 1                           33
+sqrt 2                               99
+sqrt -1                              33
+acos 2                               33
+asin 2                               33
+acos 0.5                             99
+atan2 0 0                            99
+sinh 1000                            34
+cosh 1000                            34
+tanh 1000                            99
+sin 1e300                            99
+sin inf                              99
+cos inf                              99
+tan inf                              99
+ldexp 1 5000                         34
+ldexp 1 -5000                        34
+ldexp 1 3                            99
+frexp 8                              99
+modf 1.5                             99
+floor 1.5                            99
+ceil 1.5                             99
+fopen w ok                           99
+fprintf                              99
+fwrite                               99
+fflush                               99
+fseek ok                             99
+ftell                                99
+fclose ok                            99
+fopen r ok                           99
+setvbuf full                         99
+getc                                 99
+ungetc                               99
+fread                                99
+fread eof                            99
+feof/ferror                          99
+fgets eof                            99
+fscanf eof                           0
+clearerr                             99
+fwrite on r                          9
+fseek bad                            22
+fclose                               99
+fopen a ok                           99
+fread on w                           9
+fopen r+ ok                          99
+getc r+                              99
+fwrite after read                    99
+fopen missing                        2
+fopen bad mode                       22
+fopen dir                            99
+fopen ccs utf8                       99
+fopen ccs bad                        99
+tmpfile                              99
+fclose tmp                           99
+tmpnam                               99
+remove ok                            99
+remove missing                       2
+rename ok                            99
+rename missing                       2
+system exit 3                        99
+system NULL                          99
+_popen                               99
+fread popen                          99
+_pclose                              99
+_popen w                             99
+_pclose w                            99
+getenv set                           99
+getenv unset                         99
+time                                 99
+localtime                            99
+gmtime                               99
+mktime ok                            99
+mktime huge                          99
+strftime %Y                          99
+strftime %c                          99
+strftime empty out                   99
+clock                                99
+setlocale query                      99
+setlocale C                          99
+setlocale bad                        2
+_isatty 0                            25
+_isatty 1                            25
+_isatty 2                            25
+malloc                               99
+realloc                              99
+dlopen missing                       99
+printf                               99
+fputs stderr                         99
+fflush stdout                        99
+snprintf %.14g                       99
+snprintf %a                          99
+strcoll                              99
+strerror                             99
+memchr                               99

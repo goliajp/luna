@@ -11,7 +11,7 @@ pub struct Inst(
 );
 
 const POS_A: u32 = 7;
-const POS_K: u32 = 15;
+pub(super) const POS_K: u32 = 15;
 const POS_B: u32 = 16;
 const POS_C: u32 = 24;
 const POS_BX: u32 = 15;
@@ -127,10 +127,10 @@ impl Inst {
     /// operator it abbreviates.
     pub(crate) fn source_op(self) -> Op {
         match self.op() {
-            Op::Add if self.k() => Op::Sub,
-            Op::LtI | Op::GtI => Op::Lt,
-            Op::LeI | Op::GeI => Op::Le,
-            op => self.arith_const_op().unwrap_or(op),
+            Op::LtI | Op::GtI | Op::LtK | Op::LtKK => Op::Lt,
+            Op::LeI | Op::GeI | Op::LeK | Op::LeKK => Op::Le,
+            Op::EqKK => Op::EqK,
+            op => op.arith_const_op().or(op.arith_kk_op()).unwrap_or(op),
         }
     }
 
@@ -163,6 +163,11 @@ impl Inst {
         self.op().arith_const_op()
     }
 
+    /// [`Op::arith_kk_op`] of this instruction's opcode.
+    pub fn arith_kk_op(self) -> Option<Op> {
+        self.op().arith_kk_op()
+    }
+
     /// A constant- or immediate-operand instruction as the two instructions
     /// it abbreviates: a load of the operand into register `scratch`, then
     /// the register-operand opcode. `None` for any other instruction.
@@ -170,9 +175,15 @@ impl Inst {
         let (a, b) = (self.a(), self.b());
         if let Some(op) = self.arith_const_op() {
             let load = match self.op() {
-                Op::AddI | Op::SubI | Op::ShrI | Op::ShlI => {
-                    Inst::iasbx(Op::LoadI, scratch, self.sc())
+                // `SubI` numbers compute as PUC's `ADDI` with the negated
+                // immediate (see `Op::SubI`)
+                Op::SubI => {
+                    return Some([
+                        Inst::iasbx(Op::LoadI, scratch, -self.sc()),
+                        Inst::iabc(Op::Add, a, b, scratch, false),
+                    ]);
                 }
+                Op::AddI | Op::ShrI | Op::ShlI => Inst::iasbx(Op::LoadI, scratch, self.sc()),
                 _ => Inst::iabx(Op::LoadK, scratch, self.c()),
             };
             let (l, r) = if self.k() { (scratch, b) } else { (b, scratch) };

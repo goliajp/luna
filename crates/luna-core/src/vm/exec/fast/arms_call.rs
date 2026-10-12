@@ -15,14 +15,15 @@ macro_rules! fast_call_arms {
                 // R[A] := vararg[R[C]] without allocating: integer key in
                 // [1,n] → that vararg, "n" → the count, else nil.
                 let key = reg!($inst.c());
+                // the extras sit just below the base
                 // SAFETY: `fr` is the running frame
-                let (fs, n) = unsafe { ((*$fr).func_slot, (*$fr).n_varargs) };
+                let (first, n) = unsafe { ((*$fr).base - (*$fr).n_varargs, (*$fr).n_varargs) };
                 let v = match key {
                     Value::Int(k) if k >= 1 && (k as u64) <= n as u64 => {
-                        $vm.stack[(fs + k as u32) as usize]
+                        $vm.stack[(first + k as u32 - 1) as usize]
                     }
                     Value::Float(f) if f.fract() == 0.0 && f >= 1.0 && f <= n as f64 => {
-                        $vm.stack[(fs + f as u32) as usize]
+                        $vm.stack[(first + f as u32 - 1) as usize]
                     }
                     Value::Str(s) if s.as_bytes() == b"n" => Value::Int(n as i64),
                     _ => Value::Nil,

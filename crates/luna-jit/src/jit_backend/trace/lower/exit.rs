@@ -49,7 +49,13 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
         let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
         let chain_len = chain_rc.len() as i64;
         let site_idx = lw.per_exit_inline_vec.len() as u32;
-        let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds.clone();
+        let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds[..window_size_us].to_vec();
+        // the slots the op's virtual registers stand in keep their kinds
+        for &(slot, kind) in &lw.virt_held {
+            if let Some(k) = kinds_snapshot.get_mut(slot) {
+                *k = kind;
+            }
+        }
         let mat_count = emit_materialize_live_sunk(
             &mut lw.bcx,
             mat_sunk_id,
@@ -98,7 +104,11 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             trace_fn_sig_ref,
         );
     } else {
-        let mut snapshot: Vec<RegKind> = lw.current_kinds[..max_stack].to_vec();
+        let tag_side_local = lw.per_exit_kinds.push(
+            side_exit_pc,
+            &lw.current_kinds[..max_stack],
+            Box::new(TCellPtr::null()),
+        );
         let mat_count = emit_materialize_live_sunk(
             &mut lw.bcx,
             mat_sunk_id,
@@ -108,15 +118,12 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             &lw.regs_full,
             &pl.op_offsets,
             i,
-            &mut snapshot,
+            lw.per_exit_kinds.kinds_mut(tag_side_local),
             head_proto,
             opts.aot,
             &mut lw.defined_aot_data,
         );
         lw.materialize_emit_count += mat_count;
-        let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
-        let tag_side_local = lw.per_exit_kinds.len() as u32;
-        lw.per_exit_kinds.push((side_exit_pc, snapshot, side_box));
         emit_tagged_exit(
             &mut lw.bcx,
             suppress_admit_id,

@@ -49,7 +49,9 @@ impl Vm {
     /// into a single result at `base_a` (PUC `luaV_concat`). Returns after
     /// either finishing (result at `base_a`) or arming a yieldable `__concat`
     /// call — its `Meta` continuation re-enters here on the metamethod's return.
-    pub(super) fn concat_run(&mut self, base_a: u32) -> Result<(), LuaError> {
+    /// `out`: where the result goes once the operands from `base_a` up
+    /// are folded into one (5.1–5.3 `CONCAT` names its own destination).
+    pub(super) fn concat_run(&mut self, base_a: u32, out: u32) -> Result<(), LuaError> {
         // Sum the lengths of all all-Str operands BEFORE starting the
         // right-associative fold so a 129-operand `a..a..…` chain
         // (5.1 big.lua's `rep129(longs)`) raises overflow immediately,
@@ -91,10 +93,14 @@ impl Vm {
                     }
                     // result lands at i-1, dropping y (top→i); resume continues.
                     let dst = i - 1;
-                    self.begin_meta_call(mm, &[x, y], MetaAction::Concat { dst, base_a })?;
+                    let out = (out as i64 - base_a as i64) as i16;
+                    self.begin_meta_call(mm, &[x, y], MetaAction::Concat { dst, base_a, out })?;
                     return Ok(());
                 }
             }
+        }
+        if out != base_a {
+            self.stack[out as usize] = self.stack[base_a as usize];
         }
         self.maybe_collect_garbage(base_a + 1);
         Ok(())
@@ -104,18 +110,35 @@ impl Vm {
     /// number, rendered), else the basic rendering, where 5.3+ names a value
     /// by a string `__name` metafield.
     pub fn tostring_value(&mut self, v: Value) -> Result<Vec<u8>, LuaError> {
+        self.tostring_value_pushed(v, 0)
+    }
+
+    /// [`Vm::tostring_value`] from a native with `extra` values pushed
+    /// where PUC's C function would have them: a `__tostring` it calls
+    /// runs above them. Nothing is counted when there is none.
+    pub(crate) fn tostring_value_pushed(
+        &mut self,
+        v: Value,
+        extra: u32,
+    ) -> Result<Vec<u8>, LuaError> {
         let mm = self.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
             // `luaL_callmeta` is a plain `lua_call`: `__tostring` cannot yield.
-            let r = self.call_noyield(mm, &[v])?;
+            self.native_push(extra);
+            let r = self.call_value(mm, &[v])?;
+            self.native_pop(extra);
             return match r.first().copied().unwrap_or(Value::Nil) {
                 Value::Str(s) => Ok(s.as_bytes().to_vec()),
                 r @ (Value::Int(_) | Value::Float(_)) => Ok(self.tostring_basic(r)),
-                // luaL_error: positioned at whatever called the library function
-                _ => Err(crate::vm::builtins::raise_str(
-                    self,
-                    "'__tostring' must return a string",
-                )),
+                // luaL_error over the result: positioned at whatever called
+                // the library function
+                _ => {
+                    self.native_push_if_native(1);
+                    Err(crate::vm::builtins::raise_str(
+                        self,
+                        "'__tostring' must return a string",
+                    ))
+                }
             };
         }
         if self.version >= LuaVersion::Lua53

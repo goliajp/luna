@@ -1,7 +1,9 @@
 //! String interning, native functions, and the objects the heap fixes.
 
 use super::*;
+use crate::runtime::Builtin;
 use crate::runtime::mem::{LSlice, Oom, oom_abort};
+use crate::runtime::value::NativeFn;
 use std::alloc::Layout;
 
 impl Heap {
@@ -103,39 +105,31 @@ impl Heap {
         }
     }
 
-    /// Allocate a [`NativeClosure`] wrapping host function `f` with the
-    /// given captured upvalues.
-    pub fn new_native(
-        &mut self,
-        f: crate::runtime::value::NativeFn,
-        upvals: Box<[Value]>,
-    ) -> Gc<NativeClosure> {
-        self.new_native_from(f, &upvals)
+    /// A [`NativeClosure`] calling host function `f` over `upvals`.
+    pub fn new_native(&mut self, f: NativeFn, upvals: Box<[Value]>) -> Gc<NativeClosure> {
+        self.new_builtin(f, &upvals, Builtin::None)
     }
 
     /// [`Heap::new_native`] copying the upvalues from a slice.
-    pub fn new_native_from(
+    pub fn new_native_from(&mut self, f: NativeFn, upvals: &[Value]) -> Gc<NativeClosure> {
+        self.new_builtin(f, upvals, Builtin::None)
+    }
+
+    /// A native that is the library function `builtin`.
+    pub(crate) fn new_builtin(
         &mut self,
-        f: crate::runtime::value::NativeFn,
+        f: NativeFn,
         upvals: &[Value],
+        builtin: Builtin,
     ) -> Gc<NativeClosure> {
-        self.try_new_native(f, upvals, false)
+        self.try_new_builtin(f, upvals, builtin, false)
             .unwrap_or_else(|_| oom_abort(Layout::new::<NativeClosure>()))
     }
 
-    /// Like [`Heap::new_native`] but tags the
-    /// closure with `is_async = true`. The dispatcher's native-call
-    /// path then transmutes `f` to `AsyncNativeFn` and routes through
-    /// the cooperative-yield path. The caller is responsible for
-    /// having transmuted the `AsyncNativeFn` pointer to `NativeFn`
-    /// shape (both are `fn` pointers of the same size); see
-    /// [`crate::vm::async_drive`] for the helper that does this.
-    pub fn new_async_native(
-        &mut self,
-        f: crate::runtime::value::NativeFn,
-        upvals: Box<[Value]>,
-    ) -> Gc<NativeClosure> {
-        self.try_new_native(f, &upvals, true)
+    /// [`Heap::new_native`] with `is_async` set: `f` is an `AsyncNativeFn`
+    /// the caller transmuted to `NativeFn` ([`crate::vm::async_drive`]).
+    pub fn new_async_native(&mut self, f: NativeFn, upvals: Box<[Value]>) -> Gc<NativeClosure> {
+        self.try_new_builtin(f, &upvals, Builtin::None, true)
             .unwrap_or_else(|_| oom_abort(Layout::new::<NativeClosure>()))
     }
 
@@ -143,8 +137,19 @@ impl Heap {
     /// `is_async`, failing when memory runs out.
     pub fn try_new_native(
         &mut self,
-        f: crate::runtime::value::NativeFn,
+        f: NativeFn,
         upvals: &[Value],
+        is_async: bool,
+    ) -> Result<Gc<NativeClosure>, Oom> {
+        self.try_new_builtin(f, upvals, Builtin::None, is_async)
+    }
+
+    /// [`Heap::try_new_native`] for the library function `builtin`.
+    pub(crate) fn try_new_builtin(
+        &mut self,
+        f: NativeFn,
+        upvals: &[Value],
+        builtin: Builtin,
         is_async: bool,
     ) -> Result<Gc<NativeClosure>, Oom> {
         let fix = self.fix_natives && upvals.is_empty() && !is_async;
@@ -152,7 +157,7 @@ impl Heap {
         let kind = if is_async {
             crate::vm::exec::native_call::NativeKind::Async
         } else {
-            crate::vm::exec::native_call::NativeKind::of(f)
+            crate::vm::exec::native_call::NativeKind::of(builtin)
         };
         let upvals = LSlice::from_slice(self.mem(), upvals)?;
         let g = self.try_adopt(NativeClosure {
@@ -161,6 +166,7 @@ impl Heap {
             upvals,
             is_async,
             kind,
+            builtin,
         })?;
         if fix {
             // SAFETY: `try_adopt` just linked `g` at the head of `all`

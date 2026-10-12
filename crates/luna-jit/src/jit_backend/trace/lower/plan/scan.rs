@@ -119,12 +119,13 @@ pub(super) fn find_trace_end(
             if depth != 0 {
                 continue;
             }
-            match r.inst.op() {
-                Op::Call | Op::ForLoop | Op::TForLoop | Op::Return0 | Op::Return1 => {
-                    natural_end = i;
-                    break;
-                }
-                _ => {}
+            let op = r.inst.op();
+            if matches!(op, Op::Call | Op::Return0 | Op::Return1)
+                || op.is_for_loop()
+                || op.is_tfor_loop()
+            {
+                natural_end = i;
+                break;
             }
         }
         if plain_end.is_some_and(|(i, _)| i < natural_end) {

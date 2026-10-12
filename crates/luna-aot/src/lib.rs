@@ -11,7 +11,7 @@
 //!    [`luna_core::runtime::Proto`] tree).
 //! 3. The bytecode is dumped via [`luna_core::vm::dump`] (luna's own
 //!    body format — `"\x1bLua" + version-byte` header + the
-//!    `"\x00LunaV2\x00"` sentinel + luna body).
+//!    `"\x00LunaV5\x00"` sentinel + luna body).
 //! 4. The dump bytes are written into a `.luna.bytecode` section of an
 //!    ELF / Mach-O / PE object file via [`object::write::Object`],
 //!    bracketed by two **public** symbols

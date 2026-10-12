@@ -1,0 +1,6 @@
+C:\puc\lua-5.1.5\src\lua.exe: files.lua:59: C:\Users\RUNNER~1\AppData\Local\Temp\s46c.0: Permission denied
+stack traceback:
+	[C]: in function 'assert'
+	files.lua:59: in main chunk
+	[C]: ?
+exit 00000001

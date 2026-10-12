@@ -72,6 +72,14 @@ pub(crate) fn text_mode() -> bool {
     cfg!(windows) && C_MODE.load(Ordering::Relaxed)
 }
 
+/// OS text (a command-line argument, an environment value, a path) as the
+/// bytes a C program gets: the bytes themselves on Unix, through the ANSI
+/// code page on Windows, where `lua.exe`'s narrow `argv` and `getenv` come
+/// from `WideCharToMultiByte`.
+pub fn os_bytes(s: &std::ffi::OsStr) -> Vec<u8> {
+    crate::vm::lib_io::os_bytes(s)
+}
+
 /// `fwrite(bytes, 1, n, stderr)`, through the MSVC C library's `stderr`
 /// where standard output goes through its `stdout` (see [`use_c_stdout`]).
 pub fn write_stderr(bytes: &[u8]) -> std::io::Result<()> {

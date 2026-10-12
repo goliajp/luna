@@ -90,6 +90,10 @@ mod const_operands;
 mod getupval_roles;
 #[cfg(feature = "llvm-jit")]
 mod llvm_backend;
+#[cfg(feature = "llvm-jit")]
+mod llvm_chunk;
+#[cfg(feature = "llvm-jit")]
+pub(crate) mod llvm_thread;
 mod math_fold;
 mod send_jit_module;
 mod trace_backend;

@@ -235,8 +235,8 @@ impl Vm {
             const UNTOUCHED: u8 = u8::MAX;
             // a boolean's tag is FALSE plus its payload
             const BOOL: u8 = u8::MAX - 1;
-            const RAW_OF: [u8; 8] = {
-                let mut m = [0; 8];
+            const RAW_OF: [u8; 9] = {
+                let mut m = [0; 9];
                 m[ExitTag::Untouched as usize] = UNTOUCHED;
                 m[ExitTag::Int as usize] = raw::INT;
                 m[ExitTag::Float as usize] = raw::FLOAT;
@@ -246,6 +246,7 @@ impl Vm {
                 m[ExitTag::Nil as usize] = raw::NIL;
                 m[ExitTag::Str as usize] = raw::STR;
                 m[ExitTag::Bool as usize] = BOOL;
+                m[ExitTag::Native as usize] = raw::NATIVE;
                 m
             };
             let frame = &mut self.stack[base_us..base_us + slot_count];
@@ -292,25 +293,6 @@ impl Vm {
             }
         }
     }
-}
-
-/// The registers a generic-for exit leaves as they are, counted from the
-/// head frame (the exit's frame of `proto` starts at register `off`): its
-/// TForCall wrote the loop variables to the stack with tags the trace did
-/// not compile for.
-pub(super) fn keep_tfor_vars(
-    proto: &crate::runtime::function::Proto,
-    decode_body: u64,
-    cont_pc: u32,
-    off: usize,
-) -> std::ops::Range<usize> {
-    if decode_body & crate::jit::trace_types::EXIT_KEEP_TFOR_VARS == 0 {
-        return 0..0;
-    }
-    let call = proto.code[cont_pc as usize - 1];
-    debug_assert!(matches!(call.op(), crate::vm::isa::Op::TForCall));
-    let first = off + call.a() as usize + 4;
-    first..first + call.c() as usize
 }
 
 /// Which trace's exit decodes a trace's return.

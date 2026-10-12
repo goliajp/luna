@@ -2,53 +2,49 @@
 //! run a metamethod execute here on locals, in a function of their own so
 //! that its register allocation does not depend on the rest of the loop.
 
+use super::for_loop::int_for_count;
 use super::num_double as dbl;
 use super::*;
 use crate::runtime::value::tag;
 use call_fast::Returned;
+#[cfg(all(target_arch = "x86_64", not(miri)))]
+use fast_arith::raw_tag_again;
 use fast_arith::{
-    arith_arm, arith_imm_arm, cold_path, put_int, raw_flt, raw_gc, raw_int, raw_tag, raw_truthy,
+    arith_arm, arith_imm_arm, cold_path, is_num_tag, put_flt, put_int, raw_flt, raw_gc, raw_int,
+    raw_num, raw_tag, raw_truthy, reg_a,
 };
 use index_fast::self_key;
+use num_words::put_words;
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), not(miri)))]
+use num_words::raw_word;
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), not(miri)))]
+use num_words::tag_word;
+#[cfg(all(target_arch = "aarch64", not(miri)))]
+use num_words::{first, raw_tag_words3, raw_words3};
 
 mod arm_helpers;
 mod arms_arith;
 mod arms_call;
 mod arms_cmp;
+mod arms_for_prep;
 mod arms_load;
 mod arms_loop;
+mod arms_loop_a64;
 mod flow;
 mod step;
 use arm_helpers::fast_arm_helper_macros;
 use arms_arith::fast_arith_arms;
 use arms_call::fast_call_arms;
 use arms_cmp::fast_cmp_arms;
+use arms_for_prep::fast_for_prep_arms;
 use arms_load::fast_load_arms;
 use arms_loop::fast_loop_arms;
+use arms_loop_a64::fast_loop_a64_arms;
 use flow::fast_flow_macros;
 use step::fast_step_macros;
 
-/// The running frame, as the loop head found it.
-pub(super) struct Fast {
-    /// the running frame, on top of `frames`
-    pub(super) fr: *mut Frame,
-    pub(super) trace_on: bool,
-    pub(super) pre53: bool,
-    pub(super) entry_depth: usize,
-    /// false when some instruction needs the loop head's checks (a trap,
-    /// a recording, or more trace heads than `heads` holds)
-    pub(super) stay: bool,
-    /// the pcs where a trace this function could enter starts
-    pub(super) heads: [u32; crate::runtime::function::TRACE_HEADS_CAP],
-}
-
-/// Why the fast loop handed control back.
-pub(super) enum FastExit {
-    /// the frame state may have changed: back to the loop head
-    Reload,
-    /// an opcode the loop head's own match runs
-    Slow(Inst),
-}
+mod frame;
+pub(super) use frame::{Fast, FastExit};
 
 impl Vm {
     /// The register window of a frame at `base`. It is valid while
@@ -66,9 +62,15 @@ impl Vm {
     /// tests nothing per instruction. Without `WATCH`, `TRACE` is
     /// `fx.trace_on`, fixed for the loop so that it costs nothing. `DBL`
     /// is true for 5.1/5.2, whose integers stand for doubles (see
-    /// [`super::num_double`]).
+    /// [`super::num_double`]); `PRE53` for 5.1-5.3, whose numeric `for`
+    /// steps before it tests and compares with the limit.
     #[inline(never)]
-    pub(super) fn run_fast<const WATCH: bool, const TRACE: bool, const DBL: bool>(
+    pub(super) fn run_fast<
+        const WATCH: bool,
+        const TRACE: bool,
+        const DBL: bool,
+        const PRE53: bool,
+    >(
         &mut self,
         fx: Fast,
         mut inst: Inst,
@@ -77,12 +79,12 @@ impl Vm {
         let Fast {
             mut fr,
             trace_on: trace_rt,
-            pre53,
             entry_depth,
             stay,
             heads,
         } = fx;
         let trace_on = if WATCH { trace_rt } else { TRACE };
+        let pre53 = PRE53;
         // From here the running frame's state lives in locals (PUC keeps
         // `pc`, `base` and `k` in registers the same way). An arm that only
         // reads and writes registers advances `npc` and stores it through
@@ -153,7 +155,9 @@ impl Vm {
                 fast_load_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
                 fast_arith_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
                 fast_cmp_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
+                fast_for_prep_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
                 fast_loop_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
+                fast_loop_a64_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
                 fast_call_arms!($, self, fr, regs, npc, inst, pc, code, kptr, trace_on, pre53, entry_depth, 'frames);
                 match inst.op() {
                     Op::Move => op_move!(),
@@ -162,6 +166,7 @@ impl Vm {
                     Op::LoadK => op_load_k!(),
                     Op::LoadFalse => op_load_false!(),
                     Op::LFalseSkip => op_l_false_skip!(),
+                    Op::LTrueSkip => op_l_true_skip!(),
                     Op::LoadTrue => op_load_true!(),
                     Op::LoadNil => op_load_nil!(),
                     Op::GetUpval => op_get_upval!(),
@@ -174,6 +179,15 @@ impl Vm {
                     Op::SetTable => set_arm!(regs.wrapping_add(inst.b() as usize), newindex_raw_at),
                     Op::SetField => op_set_field!(),
                     Op::SetI => op_set_i!(),
+                    Op::GetTableK => get_arm!(kptr.wrapping_add(inst.c() as usize), index_raw_at),
+                    Op::SetTableK => {
+                        set_arm!(kptr.wrapping_add(inst.b() as usize), newindex_raw_at)
+                    }
+                    Op::GetTabUpR => op_get_tab_up_r!(),
+                    Op::GetGlobal => op_get_global!(),
+                    Op::SetGlobal => op_set_global!(),
+                    Op::SetTabUpR => op_set_tab_up_x!(regs.wrapping_add(inst.b() as usize)),
+                    Op::SetTabUpK => op_set_tab_up_x!(kptr.wrapping_add(inst.b() as usize)),
                     Op::SelfOp => op_self_op!(),
                     Op::Add => op_add!(),
                     Op::Sub => op_sub!(),
@@ -214,10 +228,19 @@ impl Vm {
                     Op::LeI => order_imm_arm!(<=, false, true),
                     Op::GtI => order_imm_arm!(>, true, false),
                     Op::GeI => order_imm_arm!(>=, true, true),
+                    Op::LtK => order_k_arm!(<, false),
+                    Op::LeK => order_k_arm!(<=, true),
                     Op::Test => op_test!(),
                     Op::TestSet => op_test_set!(),
-                    Op::ForLoop => op_for_loop!(),
-                    Op::TForLoop => op_t_for_loop!(),
+                    Op::ForPrep => op_for_prep!(),
+                    Op::ForPrep55 => op_for_prep55!(),
+                    Op::ForLoop => op_for_loop!(false),
+                    Op::ForLoop55 => op_for_loop55!(false),
+                    Op::ForLoopF => op_for_loop!(true),
+                    Op::ForLoop55F => op_for_loop55!(true),
+                    Op::TForLoop => op_t_for_loop!(4, true),
+                    Op::TForLoop53 => op_t_for_loop!(3, true),
+                    Op::TForLoop55 => op_t_for_loop!(3, false),
                     Op::VargIdx => op_varg_idx!(),
                     Op::ErrNNil => op_err_n_nil!(),
                     Op::Call => op_call!(),
@@ -229,21 +252,43 @@ impl Vm {
                     | Op::SetList
                     | Op::Pow
                     | Op::Concat
-                    | Op::ForPrep
                     | Op::TForPrep
+                    | Op::TForPrep53
+                    | Op::TForPrep55
                     | Op::Closure
                     | Op::Vararg
-                    | Op::GetVarg => {
+                    | Op::GetVarg
+                    | Op::ShlK
+                    | Op::ShrK
+                    | Op::AddKK
+                    | Op::SubKK
+                    | Op::MulKK
+                    | Op::ModKK
+                    | Op::PowKK
+                    | Op::DivKK
+                    | Op::IDivKK
+                    | Op::BAndKK
+                    | Op::BOrKK
+                    | Op::BXorKK
+                    | Op::ShlKK
+                    | Op::ShrKK
+                    | Op::EqKK
+                    | Op::LtKK
+                    | Op::LeKK => {
                         save!();
                         self.run_frame_op(inst)?
                     }
                     // listed rather than `_`, so that the jump table covers every
                     // opcode without a range check
                     Op::Close
+                    | Op::JmpClose
+                    | Op::JmpCloseBack
                     | Op::Tbc
                     | Op::TailCall
                     | Op::Return
                     | Op::TForCall
+                    | Op::TForCall53
+                    | Op::TForCall55
                     | Op::ExtraArg => {
                         save!();
                         return Ok(FastExit::Slow(inst));

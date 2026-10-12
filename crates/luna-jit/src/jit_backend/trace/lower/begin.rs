@@ -41,8 +41,10 @@ pub(super) fn begin_body<E: Emit>(
     // it), held on the stack for the other head-frame registers, and
     // Unset past the head frame (the dispatcher zero-initialises those
     // reg_state slots and trace IR fills them via writers). Sized to
-    // `window_size_us` (mirrors `regs_full`).
-    let current_kinds: Vec<RegKind> = (0..window_size_us)
+    // `window_size_us` (mirrors `regs_full`), plus the virtual registers
+    // past the widest window, which hold a kind only while an op that reads
+    // them is lowered (see `enter_virt`) and are never part of a snapshot.
+    let current_kinds: Vec<RegKind> = (0..window_size_us + NVIRT)
         .map(|i| match head_live.get(i) {
             Some(true) => record
                 .entry_tags
@@ -76,7 +78,8 @@ pub(super) fn begin_body<E: Emit>(
     // site BEFORE the helper call so the IR's `iconst`-baked address
     // exists. Transported through into `tags_side_trace_ptrs` at the
     // end of emit (the cell never moves).
-    let per_exit_kinds: Vec<(u32, Vec<RegKind>, Box<TCellPtr>)> = Vec::new();
+    // about one exit per recorded op
+    let per_exit_kinds = ExitKinds::with_capacity(record.ops.len(), max_stack);
     // per inline cmp@d>0 side-exit. Each entry
     // is built at the cmp emit site and includes the side-exit PC,
     // a window-sized exit-tag snapshot, and the frame-mat chain. The
@@ -159,7 +162,7 @@ pub(super) fn begin_body<E: Emit>(
     // Integer constants the registers hold at this point of the trace
     // (from LoadI / LoadK earlier in the same pass), so a `//`, `%` or shift
     // by a constant needs no runtime guard.
-    let known_int: Vec<Option<i64>> = vec![None; window_size_us];
+    let known_int: Vec<Option<i64>> = vec![None; window_size_us + NVIRT];
     let ro_invariant = match ro_precheck {
         Some(_) => readonly_invariants(pl, &current_kinds),
         None => vec![false; window_size_us],
@@ -187,6 +190,8 @@ pub(super) fn begin_body<E: Emit>(
         materialize_emit_count,
         closure_seen,
         stored,
+        at_exits: false,
+        head_stored: Vec::new(),
         current_kinds,
         dispatchable,
         dispatch_off_reason,
@@ -198,7 +203,8 @@ pub(super) fn begin_body<E: Emit>(
         upval_check_done: Vec::new(),
         head_closure_var,
         known_int,
-        const_str: vec![false; window_size_us],
+        const_str: vec![false; window_size_us + NVIRT],
+        virt_held: Vec::new(),
         alt_joins: std::collections::HashMap::new(),
         tier_count: None,
         ro_invariant,

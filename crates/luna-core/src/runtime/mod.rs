@@ -1,5 +1,6 @@
 //! Runtime core: values, GC heap, strings, tables, function objects.
 
+mod builtin;
 pub mod coroutine;
 pub mod frame_marker;
 /// v2.13 WUC `gc-verify` — thread-local log of every freed GcHeader
@@ -31,6 +32,7 @@ mod upvalue;
 pub mod userdata;
 pub mod value;
 
+pub use builtin::Builtin;
 pub use coroutine::{Coro, CoroStatus, ErrorStatus};
 pub use function::{
     AfterClose, CallFrame, CloseCont, ContKind, DebugName, Frame, HostCont, LocVar, LuaClosure,

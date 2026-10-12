@@ -112,7 +112,15 @@ pub(super) fn pcallk(
     pargs.push(f);
     pargs.extend(handler);
     pargs.extend(args);
-    let pf = api.vm.host_protected_fn(handler.is_some());
+    // the operands are still on the stack, kept by an emergency collection
+    let pf = match api.vm.host_protected_fn(handler.is_some()) {
+        Ok(pf) => pf,
+        Err(e) => {
+            api.truncate(at);
+            api.push(e.0);
+            return LUA_ERRMEM;
+        }
+    };
     let errerr_before = api.vm.special_errors();
     let spec = match k {
         Some(k) => {

@@ -31,6 +31,8 @@ pub(super) fn ll_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         Value::Table(t) => t,
         _ => {
             let Some(t) = find_table(vm, &name)? else {
+                // 5.2 looks the module up in `_LOADED` first, which stays
+                vm.native_push(u32::from(v == LuaVersion::Lua52));
                 let text = format!(
                     "name conflict for module '{}'",
                     String::from_utf8_lossy(&name)
@@ -75,6 +77,8 @@ pub(super) fn ll_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
 /// first upvalue.
 pub(super) fn set_caller_env(vm: &mut Vm, env: Gc<Table>) -> Result<(), LuaError> {
     let Some(cl) = lua_caller(vm) else {
+        // the module table, its copy and the calling function are pushed
+        vm.native_push(3);
         return Err(raise_str(vm, "'module' not called from a Lua function"));
     };
     if vm.version() == LuaVersion::Lua51 {

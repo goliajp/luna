@@ -84,16 +84,34 @@ pub(super) fn crt_error(code: i32) -> std::io::Error {
     std::io::Error::other(PosixErrno(code))
 }
 
-/// The errno of an error, as `luaL_fileresult` returns it.
+/// The errno of an error, as `luaL_fileresult` returns it. On Windows an
+/// OS error is a Win32 code, which the C library maps to an errno.
 fn errno(e: &std::io::Error) -> Option<i32> {
     if let Some(p) = e.get_ref().and_then(|r| r.downcast_ref::<PosixErrno>()) {
         return Some(p.0);
     }
-    e.raw_os_error()
+    let code = e.raw_os_error();
+    if cfg!(windows) {
+        return code.map(|c| crate::cerrno::errno_of_win32(c as u32));
+    }
+    code
 }
 
-/// C `strerror` text of an OS error (std appends " (os error N)").
+/// Set the process's `errno` to what the failed C call behind `e` left.
+pub(crate) fn note_failure(e: &std::io::Error) {
+    if let Some(c) = errno(e) {
+        crate::cerrno::set(c);
+    }
+}
+
+/// C `strerror` text of an OS error (std appends " (os error N)"); on
+/// Windows the C library's text for the errno the error maps to.
 pub(crate) fn strerror(e: &std::io::Error) -> String {
+    if cfg!(windows)
+        && let Some(c) = e.raw_os_error()
+    {
+        return PosixErrno(crate::cerrno::errno_of_win32(c as u32)).to_string();
+    }
     let s = e.to_string();
     match e.raw_os_error() {
         Some(code) => s
@@ -120,6 +138,7 @@ pub(super) fn file_fail_values(
     fname: Option<&[u8]>,
     e: &std::io::Error,
 ) -> Result<[Value; 3], LuaError> {
+    note_failure(e);
     // 5.4's luaL_fileresult for an errno of 0
     let text = if errno(e) == Some(0) && vm.version() >= LuaVersion::Lua54 {
         "(no extra info)".to_string()
@@ -132,6 +151,14 @@ pub(super) fn file_fail_values(
     };
     let code = errno(e).map_or(0, i64::from);
     Ok([Value::Nil, m, Value::Int(code)])
+}
+
+/// `errno = 0`, which 5.4 and later do before the C calls of most io and
+/// os functions.
+pub(crate) fn reset_errno(vm: &Vm) {
+    if vm.version() >= LuaVersion::Lua54 {
+        crate::cerrno::set(0);
+    }
 }
 
 /// `luaL_fileresult` for success.
@@ -190,15 +217,38 @@ pub(crate) fn c_str(b: &[u8]) -> &[u8] {
         .expect("split yields a first piece")
 }
 
-/// A C file name (bytes up to the first NUL) as an OS path.
+/// A C file name (bytes up to the first NUL) as an OS path: the bytes
+/// themselves on Unix, through the ANSI code page on Windows.
 pub(crate) fn os_path(b: &[u8]) -> std::path::PathBuf {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
         std::ffi::OsStr::from_bytes(c_str(b)).into()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        super::winfs::os_path(b)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         String::from_utf8_lossy(c_str(b)).into_owned().into()
+    }
+}
+
+/// OS text (a path, an environment value) as the bytes a C program gets:
+/// the bytes themselves on Unix, through the ANSI code page on Windows.
+pub fn os_bytes(s: &std::ffi::OsStr) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        s.as_bytes().to_vec()
+    }
+    #[cfg(windows)]
+    {
+        super::winfs::narrow(s)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        s.to_string_lossy().into_owned().into_bytes()
     }
 }

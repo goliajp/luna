@@ -159,9 +159,9 @@ impl<M: Masm> Gen<'_, M> {
                 }
             }
             Op::Jump => {
-                let args =
-                    self.lir.args[i.args_at as usize..(i.args_at + i.n_args) as usize].to_vec();
-                self.jump(i.a, &args, next);
+                let lir = self.lir;
+                let args = &lir.args[i.args_at as usize..(i.args_at + i.n_args) as usize];
+                self.jump(i.a, args, next);
             }
             Op::Brif(n_then) => self.brif(&i, n_then, next),
             Op::TierCount { n, at } => self.tier_count(n, at, i.b, i.c, next),

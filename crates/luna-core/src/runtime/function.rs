@@ -42,8 +42,10 @@ pub struct Proto {
     pub is_vararg: bool,
     /// PUC `lparser.c` emits a hidden `(vararg table)` locvar for a function
     /// declared with an explicit anonymous `(...)` (and NOT for a main chunk's
-    /// implicit vararg, nor for `(...t)` which becomes a named local). When
-    /// true, `debug.getlocal` exposes the pseudo at `num_params + 1`.
+    /// implicit vararg, nor for `(...t)` which becomes a named local). The
+    /// compiler gives it register `num_params`, as PUC does; the flag says
+    /// that this function was compiled with it (a loaded chunk has it in its
+    /// locals without the flag).
     pub has_vararg_table_pseudo: bool,
     /// PUC 5.1 `LUAI_COMPAT_VARARG`: the function declared `...` and so gets a
     /// hidden local named `arg` at `num_params` populated at entry with the
@@ -85,6 +87,12 @@ pub struct Proto {
     /// lifetime. `Failed` records the whitelist miss so subsequent
     /// calls skip the compile attempt.
     pub jit: std::cell::Cell<JitProtoState>,
+    /// Code a backend is still compiling for this function in the
+    /// background: the entry it stores once ready (0 until then), with the
+    /// ABI of `jit`'s, which the next call from the interpreter puts in
+    /// place of `jit`'s entry; [`JIT_NEXT_NONE`] when it compiled none.
+    /// `None` when nothing is pending.
+    pub jit_next: std::cell::Cell<Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>>,
     /// Trace JIT hot-loop detector. Incremented by `Vm::run`
     /// on each backward-jump dispatched within this Proto. Once the
     /// counter passes `TRACE_HOT_THRESHOLD`, the next visit to the
@@ -167,6 +175,10 @@ pub struct Proto {
     #[doc(hidden)]
     pub trace_call_head_settled: std::cell::Cell<bool>,
 }
+
+/// What a backend stores in [`Proto::jit_next`] when it compiled no code
+/// after all.
+pub const JIT_NEXT_NONE: usize = usize::MAX;
 
 /// Per-Proto JIT cache state. Copy so it fits a plain
 /// `Cell` on the dispatch hot path (no `RefCell` borrow check); the
@@ -414,17 +426,16 @@ pub struct NativeClosure {
     pub f: crate::runtime::value::NativeFn,
     /// Captured upvalues, visible inside `f` via the Vm's call API.
     pub upvals: crate::runtime::mem::LSlice<Value>,
-    /// Marker bit for async natives. When `true`,
-    /// `f` is actually an `crate::vm::async_drive::AsyncNativeFn`
-    /// (same pointer width, transmuted at the call site) returning a
-    /// `Pin<Box<dyn Future>>`. The dispatcher's native-call path checks
-    /// this bit and routes through the cooperative-yield mechanism
-    /// instead of invoking `f` synchronously. Default `false` (sync
-    /// native) for every other construction site.
+    /// Marker bit for async natives: `f` is then an
+    /// `crate::vm::async_drive::AsyncNativeFn` (same pointer width,
+    /// transmuted at the call site), which the native-call path drives
+    /// through the cooperative-yield mechanism instead of calling it.
     pub is_async: bool,
-    /// Which natives the call path runs itself; fixed at creation, so a
-    /// call tests one byte instead of comparing `f` with each of them.
+    /// Which natives the call path runs itself, from `builtin`; a call
+    /// tests this one byte.
     pub(crate) kind: crate::vm::exec::native_call::NativeKind,
+    /// Which library function this is, given when it was created.
+    pub builtin: crate::runtime::Builtin,
 }
 
 #[path = "function_trace.rs"]

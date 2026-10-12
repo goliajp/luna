@@ -150,8 +150,14 @@ fn tonumber_51(vm: &mut Vm, a: Args) -> Result<u32, LuaError> {
 /// What 5.1's `tonumber(s, base)` accepts: C `strtoul` on the string as a C
 /// string (it ends at the first NUL), then only trailing spaces. `strtoul`
 /// takes a sign — negating the unsigned value — and, in base 16, a `0x`
-/// prefix; an out-of-range value is clamped to `ULONG_MAX`.
+/// prefix; an out-of-range value is clamped to `ULONG_MAX`, with ERANGE in
+/// `errno`. `unsigned long` has 32 bits on Windows, 64 elsewhere.
 fn strtoul(s: &[u8], base: u32) -> Option<u64> {
+    const ULONG_MAX: u64 = if cfg!(windows) {
+        u32::MAX as u64
+    } else {
+        u64::MAX
+    };
     let s = &s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())];
     let mut i = s.iter().position(|&c| !is_c_space(c)).unwrap_or(s.len());
     let neg = s.get(i) == Some(&b'-');
@@ -174,19 +180,23 @@ fn strtoul(s: &[u8], base: u32) -> Option<u64> {
         match n
             .checked_mul(base as u64)
             .and_then(|n| n.checked_add(d as u64))
+            .filter(|&n| u128::from(n) <= u128::from(ULONG_MAX))
         {
             Some(v) => n = v,
             None => overflow = true,
         }
         i += 1;
     }
+    if overflow {
+        crate::cerrno::set(crate::cerrno::ERANGE);
+    }
     if i == digits_start || s[i..].iter().any(|&c| !is_c_space(c)) {
         return None;
     }
     Some(if overflow {
-        u64::MAX
+        ULONG_MAX
     } else if neg {
-        n.wrapping_neg()
+        n.wrapping_neg() & ULONG_MAX
     } else {
         n
     })

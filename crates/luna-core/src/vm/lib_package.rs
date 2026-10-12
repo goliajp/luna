@@ -13,7 +13,7 @@ use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::raise_str;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
-use crate::vm::lib_io::{c_str, os_path};
+use crate::vm::lib_io::c_str;
 
 mod module51;
 mod path;

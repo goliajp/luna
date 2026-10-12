@@ -269,7 +269,8 @@ impl LuaSandboxBuilder {
         self.inner = self.inner.open_coroutine();
         self
     }
-    /// Cap interpreter instruction count per call (fires once, then trips).
+    /// Cap the instruction count; once exhausted, the Vm raises the error
+    /// on every instruction until `Vm::set_instr_budget` arms a new one.
     pub fn with_instr_budget(mut self, n: i64) -> Self {
         self.inner = self.inner.with_instr_budget(n);
         self

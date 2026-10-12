@@ -7,6 +7,7 @@ use super::*;
 /// every byte after it; with no valid prefix, it pushes everything back.
 pub(super) fn scan_double(u: Gc<Userdata>) -> std::io::Result<Value> {
     if u.crt.is_some() {
+        crt::ansi_only(u);
         let d = crt::with(u, msvc::scan::scan_double);
         return Ok(d.map_or(Value::Nil, Value::Float));
     }
@@ -150,21 +151,19 @@ fn parse_c_double(s: &[u8]) -> f64 {
         _ => (false, s),
     };
     let lower = body.to_ascii_lowercase();
+    // glibc's scanf converts with strtod, and leaves its errno; the MSVC
+    // library's (`msvc::scan`) leaves none
+    let saved = crate::cerrno::get();
     let mag = if lower.starts_with(b"inf") {
         f64::INFINITY
     } else if lower.starts_with(b"nan") {
         f64::NAN
-    } else if lower.starts_with(b"0x") {
-        match numeric::str2num(body, false, true) {
-            Some(n) => n.as_f64(),
-            None => unreachable!("the scanner only commits valid hex numerals"),
-        }
     } else {
-        std::str::from_utf8(body)
-            .expect("decimal numerals are ASCII")
-            .parse::<f64>()
-            .expect("the scanner only commits valid decimal numerals")
+        numeric::strtod_str(body).expect("the scanner only commits valid numerals")
     };
+    if crate::cerrno::Lib::HOST != crate::cerrno::Lib::Glibc {
+        crate::cerrno::set(saved);
+    }
     if neg { -mag } else { mag }
 }
 

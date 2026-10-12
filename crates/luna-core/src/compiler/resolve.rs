@@ -13,7 +13,7 @@ impl<'a> Compiler<'a> {
     ) -> Result<VarKind, SyntaxError> {
         let mut innermost_collective: Option<bool> = None;
         let mut any_decl = false;
-        for lvl in self.levels.iter().rev() {
+        for lvl in self.open_levels().iter().rev() {
             for b in lvl.blocks.iter().rev() {
                 if let Some(&(_, ro)) = b.gdecls.iter().rev().find(|&&(n, _)| n == name) {
                     return Ok(VarKind::Global { read_only: ro });
@@ -100,14 +100,8 @@ impl<'a> Compiler<'a> {
     /// nearest binding of the name, walking out through the functions, is
     /// a constant local. No upvalue is created on the way.
     pub(super) fn ct_const_named(&self, name: &str) -> Option<CtConst> {
-        for lvl in self.levels.iter().rev() {
-            if lvl
-                .avars
-                .iter()
-                .rev()
-                .find(|a| a.name == Some(name))
-                .is_some_and(|a| a.global)
-            {
+        for lvl in self.open_levels().iter().rev() {
+            if lvl.global_declared(name) {
                 return None;
             }
             if let Some(l) = lvl.locals.iter().rev().find(|l| l.name == name) {
@@ -137,6 +131,7 @@ impl<'a> Compiler<'a> {
     /// a goto jumping over it lands "into its scope" (PUC's `new_varkind` +
     /// `nactvar++`). `name` is `None` for a `global *` collective marker.
     pub(super) fn declare_global_marker(&mut self, name: Option<&'a str>) {
+        self.l().has_global_decl = true;
         self.l().avars.push_or_abort(AVar {
             name,
             reg: None,
@@ -144,14 +139,8 @@ impl<'a> Compiler<'a> {
         });
     }
 
-    /// Register floor to CLOSE when discarding locals declared at/after the
-    /// given avar index (the first real local in that suffix), if any.
-    pub(super) fn reg_floor_from_avar(&self, avar_idx: usize) -> Option<u32> {
-        self.lr().avars[avar_idx..].iter().find_map(|a| a.reg)
-    }
-
     pub(super) fn resolve_name(&mut self, name: &str) -> Result<VarKind, SyntaxError> {
-        let top = self.levels.len() - 1;
+        let top = self.depth - 1;
         self.resolve_at(top, name)
     }
 
@@ -161,13 +150,7 @@ impl<'a> Compiler<'a> {
         // shadows an enclosing local X (and vice-versa). A `global *` marker
         // has no name and never matches here — collective scope is the
         // unbound-name fallback handled by resolve_global_kind.
-        if let Some(av) = self.levels[li]
-            .avars
-            .iter()
-            .rev()
-            .find(|a| a.name == Some(name))
-            && av.global
-        {
+        if self.levels[li].global_declared(name) {
             return Ok(VarKind::Global { read_only: false });
         }
         if let Some(idx) = self.levels[li].locals.iter().rposition(|l| l.name == name) {

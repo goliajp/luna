@@ -4,41 +4,60 @@
 
 use super::*;
 
+/// The seed 5.5's hash part search takes its random steps from, when a
+/// test fixed one (`u64::MAX`: none).
+static LEN_SEARCH_SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+
+/// Make 5.5's `#t` take the random steps of its hash part search from
+/// `seed`, as PUC 5.5 does from a state's seed, in every Vm of the process;
+/// `None` goes back to drawing them from each table's address. Only for
+/// comparing with a PUC 5.5 built with a fixed seed.
+#[doc(hidden)]
+pub fn set_len_search_seed(seed: Option<u32>) {
+    let v = seed.map_or(u64::MAX, u64::from);
+    LEN_SEARCH_SEED.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
 impl Table {
     /// A border: `n` where `t[n]` is non-nil and `t[n+1]` is nil (PUC `luaH_getn`).
     /// This is Lua `#` semantics, not a container size — an `is_empty`
     /// counterpart would be meaningless. Of several borders it returns the
     /// one the table's PUC version returns, given the same history.
     #[allow(clippy::len_without_is_empty)]
+    #[inline]
     pub fn len(&self) -> i64 {
+        // a leading run and nothing after it: its end is the only border,
+        // the one every version's search finds; 5.4's search moves
+        // `alimit` as `alimit_after_dense_len` says and 5.5's keeps it as
+        // the hint (with `aprefix` unknown the test fails and the search
+        // runs)
+        let p = self.aprefix;
+        if self.acount == p && (p as usize) < self.asize() {
+            match self.dialect() {
+                Dialect::L54 => {
+                    let l = self.alimit.get();
+                    if l != p {
+                        self.alimit
+                            .set(alimit_after_dense_len(l, p, self.asize as u32));
+                    }
+                }
+                Dialect::L55 => self.lenhint.set(p),
+                _ => {}
+            }
+            return p as i64;
+        }
+        self.len_search()
+    }
+
+    /// `#t` when the array part is not a leading run alone: the version's
+    /// own search. Kept out of line so that the common case above stays
+    /// small.
+    #[inline(never)]
+    fn len_search(&self) -> i64 {
         match self.dialect() {
-            Dialect::L54 => {
-                // a leading run and nothing after it: its end is the only
-                // border, which 5.4's search returns, moving `alimit` as
-                // `alimit_after_dense_len` says
-                let p = self.aprefix;
-                if self.acount == p && (p as usize) < self.asize() {
-                    let l = alimit_after_dense_len(self.alimit.get(), p, self.asize as u32);
-                    self.alimit.set(l);
-                    return p as i64;
-                }
-                self.len_54()
-            }
-            Dialect::L55 => {
-                // a leading run and nothing after it: its end is the only
-                // border, the one 5.5's search finds and keeps as the hint
-                if self.acount == self.aprefix && (self.aprefix as usize) < self.asize() {
-                    self.lenhint.set(self.aprefix);
-                    return self.aprefix as i64;
-                }
-                self.len_55()
-            }
-            d => {
-                if self.acount == self.aprefix && (self.aprefix as usize) < self.asize() {
-                    return self.aprefix as i64;
-                }
-                self.len_51(d)
-            }
+            Dialect::L54 => self.len_54(),
+            Dialect::L55 => self.len_55(),
+            d => self.len_51(d),
         }
     }
 
@@ -233,11 +252,17 @@ impl Table {
     /// past it, then double, adding a random bit each time, until an
     /// absent index, then binary search. The randomness keeps a crafted
     /// table (keys 1, 2, 4, ..., 2^62) from making `#t` its huge border;
-    /// PUC draws it from the state's seed, luna from the table's address.
+    /// PUC draws it from the state's seed, luna from the table's address,
+    /// or from the seed [`set_len_search_seed`] fixed.
     fn hash_search_55(&self, asize: u64) -> i64 {
         const MAX: u64 = i64::MAX as u64;
-        let addr = self as *const Table as usize as u64;
-        let mut rnd = ((addr >> 4) ^ (addr >> 36)) as u32 | 1;
+        let mut rnd = match LEN_SEARCH_SEED.load(std::sync::atomic::Ordering::Relaxed) {
+            u64::MAX => {
+                let addr = self as *const Table as usize as u64;
+                ((addr >> 4) ^ (addr >> 36)) as u32 | 1
+            }
+            seed => seed as u32,
+        };
         let n = if asize > 0 {
             ceil_log2(asize) as u32
         } else {

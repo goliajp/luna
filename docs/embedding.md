@@ -108,7 +108,7 @@ covering each opt-in.
 Bytecode loading is **off** by default in the builder. Enable it
 with `.allow_bytecode_loading()` only for fully trusted input.
 
-### 3.1 Limiting and watching a Vm's memory
+### Limiting and watching a Vm's memory
 
 Every allocation a `Vm` makes goes through its allocation context
 (`luna_core::runtime::mem`). Give it a `MemoryPolicy` to see each
@@ -134,6 +134,50 @@ The constructors that do not start with `try_` (`Vm::new`,
 `Heap::new_table`, `Vm::create_userdata`, ...) end the process when
 memory runs out, as the standard library's containers do.
 
+### Exhausted limits stay exhausted
+
+When the instruction budget runs out or the memory cap is exceeded the
+call fails with `"instruction budget exceeded"` / `"memory cap
+exceeded"` (`vm.error_kind()` is `InstrBudget` / `MemoryCap`), and the
+limit stays at zero: until the host calls `set_instr_budget` /
+`set_memory_cap` again, every instruction raises the same error — the
+script after a `pcall` that caught it, an `xpcall` handler, a `__close`
+or `__gc` handler, a metamethod, a library callback, a coroutine — so
+the script cannot catch the error and keep running, and the finalizers
+run when the Vm is dropped cannot either. This is the Redis
+`SCRIPT KILL` model: a request that ran out of budget is over, and the
+host decides what runs next.
+
+```rust
+vm.set_instr_budget(Some(100_000));
+let err = vm.eval("pcall(function() while true do end end) while true do end")
+    .unwrap_err();                       // the loop after pcall never ran
+assert_eq!(vm.error_kind(), LuaErrorKind::InstrBudget);
+assert_eq!(vm.instr_budget_remaining(), Some(0));
+
+vm.set_instr_budget(Some(100_000));     // the next request starts afresh
+let r: Vec<Value> = vm.eval("return 1 + 2").unwrap();
+```
+
+While a budget or a cap is armed no compiled code runs: loops the JIT
+would compile stay in the interpreter, where they are counted, so the
+JIT does not need to be disabled for sandboxed scripts.
+
+### Freed blocks the Vm keeps
+
+A Vm on the system allocator (no `lua_Alloc` from `lua_newstate`, no
+`MemoryPolicy`) keeps some of the blocks of 1 KiB to 256 KiB it frees,
+to hand them back to its next allocations of the same size without
+going through the allocator: with a second thread in the process
+(the LLVM backend's compile thread, or the host's own) glibc's
+allocator takes a lock for each of those. It keeps at most what it
+allocated of those sizes during the last collection cycle, at most the
+larger of 1 MiB and an eighth of its live heap, and never more than
+8 MiB; the collector trims the pool at the end of every cycle, and the
+Vm gives it all back when it is dropped. The kept blocks count as freed:
+`collectgarbage("count")` and the collector's pace do not see them. A
+Vm with a host allocation function or a memory policy keeps nothing,
+so the host sees every allocation and free.
 ---
 
 ## 4. Setting globals
@@ -980,7 +1024,28 @@ compatibility.
 
 ## 14. Known limitations
 
-*(none currently)*
+### Interpreter speed on aarch64 depends on code alignment
+
+On aarch64 the interpreter's dispatch loop runs measurably faster or
+slower depending on where the linker happens to place it relative to the
+core's 32-byte fetch blocks. The builds of this repository avoid that with
+a compiler flag in its `.cargo/config.toml`, which a crate that depends on
+luna does not inherit. Add it to your own `.cargo/config.toml` when you
+build for aarch64 Linux:
+
+```toml
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "llvm-args=-align-all-nofallthru-blocks=5"]
+```
+
+It aligns every block entered only by a branch (each bytecode handler is
+one) to 32 bytes. Without it, measured on a Cortex-A76 with LTO off or
+thin, the same interpreter built twice with an unrelated change elsewhere
+in the binary ran exactly the same instructions, yet a float `for` loop
+took 18% more cycles with the same cache and branch misses, and a
+table-heavy loop 10% more, because the loop started at a different offset
+within its cache line. Rust has no stable attribute yet to align one
+function, so luna cannot set this for you.
 
 **Resolved in v2.13** — Windows gc.lua / gengc.lua /
 tracegc.lua weak-table sweep `STATUS_ACCESS_VIOLATION`: root-

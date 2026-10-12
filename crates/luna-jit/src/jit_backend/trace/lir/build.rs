@@ -89,15 +89,14 @@ impl Ins for Lir {
         self.push(Op::VarWrite, self.var_ty[n as usize], NONE, n, v(x), NONE);
         self.var_cur[n as usize] = v(x);
     }
+    #[inline]
     fn use_var(&mut self, var: Variable) -> Value {
         let n = var.as_u32();
         let known = self.var_cur[n as usize];
         if known != NONE {
             return val(known);
         }
-        let x = self.def(Op::VarRead, self.var_ty[n as usize], n, NONE, NONE);
-        self.var_cur[n as usize] = v(x);
-        x
+        self.read_var(n)
     }
     fn create_sized_stack_slot(&mut self, data: StackSlotData) -> StackSlot {
         self.slots.push((data.size, data.align_shift));

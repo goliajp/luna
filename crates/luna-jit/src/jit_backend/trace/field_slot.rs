@@ -8,7 +8,7 @@ use cranelift_codegen::ir::{Block, MemFlagsData};
 /// The tag byte a `Value` of `raw` tag `r` carries in memory (the enum
 /// discriminant, `value::tag`), for the kinds a trace reads or writes in
 /// a slot.
-fn mem_tag(r: u8) -> u8 {
+pub(super) fn mem_tag(r: u8) -> u8 {
     use luna_core::runtime::value::{raw, tag};
     match r {
         raw::INT => tag::INT,
@@ -148,6 +148,23 @@ pub(super) fn emit_str_key_absent<E: Emit>(
     absent: Block,
     unsure: Block,
 ) {
+    emit_str_key_walk(bcx, t, key, hops, None, absent, unsure);
+}
+
+/// Walk at most `hops` nodes of the chain the interned string `key` hashes
+/// to in table `t`: branch to `found`, with the node's address as its one
+/// parameter, at the node holding the key (to `unsure` when there is no
+/// `found`), to `absent` when the chain ends first, to `unsure` when it
+/// goes on. Leaves the builder in no block; the caller seals the targets.
+pub(super) fn emit_str_key_walk<E: Emit>(
+    bcx: &mut E,
+    t: Value,
+    key: Value,
+    hops: usize,
+    found: Option<Block>,
+    absent: Block,
+    unsure: Block,
+) {
     use luna_core::runtime::value::tag;
     let flags = MemFlagsData::trusted();
     let mask = bcx.ins().load(
@@ -197,7 +214,10 @@ pub(super) fn emit_str_key_absent<E: Emit>(
         let key_ok = bcx.ins().icmp(IntCC::Equal, key_raw, key);
         let here = bcx.ins().band(tag_ok, key_ok);
         let next_blk = bcx.create_block();
-        bcx.ins().brif(here, unsure, &[], next_blk, &[]);
+        match found {
+            Some(found) => bcx.ins().brif(here, found, &[node.into()], next_blk, &[]),
+            None => bcx.ins().brif(here, unsure, &[], next_blk, &[]),
+        };
         bcx.switch_to_block(next_blk);
         bcx.seal_block(next_blk);
         let next = bcx.ins().load(

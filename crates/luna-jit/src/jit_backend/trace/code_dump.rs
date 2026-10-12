@@ -21,12 +21,9 @@ fn dir() -> Option<std::path::PathBuf> {
         .clone()
 }
 
-/// Remember the size of the function `ctx` just defined, when dumping.
-pub(super) fn note_size(ctx: &cranelift_codegen::Context) {
+/// Remember the size of the function just defined, when dumping.
+pub(super) fn note_len(n: usize) {
     if dir().is_some() {
-        let n = ctx
-            .compiled_code()
-            .map_or(0, |c| c.code_info().total_size as usize);
         LAST_SIZE.with(|s| s.set(n));
     }
 }

@@ -94,12 +94,12 @@ macro_rules! fast_step_macros {
                 if !$d taken {
                     $npc += 1;
                 } else if !WATCH {
-                    // the compiler and the bytecode verifier put a `Jmp`
-                    // after every comparison and test
+                    // the compiler and the bytecode verifier put a jump
+                    // after every comparison and test; one that closes runs
+                    // as an instruction of its own
                     let j = fetch!($npc);
-                    debug_assert!(j.op() == Op::Jmp);
                     let off = j.sj();
-                    if !($trace_on && off < 0) {
+                    if j.op() == Op::Jmp && !($trace_on && off < 0) {
                         $npc = ($npc as i64 + 1 + off as i64) as u32;
                     }
                 }

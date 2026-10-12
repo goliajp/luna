@@ -28,7 +28,7 @@ impl<'s> Parser<'s> {
                 body,
             });
         }
-        let arms = finish(&mut self.chunk, &mut self.stk.arms, mark);
+        let arms = finish(self.chunk, &mut self.stk.arms, mark);
         let else_body = if self.accept(Token::Else)? {
             Some(self.block()?)
         } else {
@@ -45,7 +45,7 @@ impl<'s> Parser<'s> {
         self.expect(Token::Do, "do")?;
         let body = self.loop_block(List::EMPTY)?;
         self.expect_match(Token::End, "end", "while", line)?;
-        Ok(self.push_ended_stat(Stat::While { cond, body }))
+        Ok(self.push_stat(Stat::While { cond, body }))
     }
 
     pub(super) fn repeat_stat(&mut self) -> Result<StatId, SyntaxError> {
@@ -64,6 +64,15 @@ impl<'s> Parser<'s> {
         match self.tok.tok {
             Token::Assign => {
                 self.advance()?;
+                // the loop's hidden control locals count against the
+                // local limit from the header on (PUC `fornum`): three up
+                // to 5.4, two from 5.5
+                let hidden = if self.version >= LuaVersion::Lua55 {
+                    2
+                } else {
+                    3
+                };
+                self.new_locals(hidden + 1)?;
                 let start = self.expr()?;
                 self.expect(Token::Comma, ",")?;
                 let limit = self.expr()?;
@@ -77,7 +86,7 @@ impl<'s> Parser<'s> {
                 let var = self.chunk.push_list(&[first]);
                 let body = self.loop_block(var)?;
                 self.expect_match(Token::End, "end", "for", line)?;
-                Ok(self.push_ended_stat(Stat::NumericFor {
+                Ok(self.push_stat(Stat::NumericFor {
                     var: first,
                     start,
                     limit,
@@ -92,7 +101,16 @@ impl<'s> Parser<'s> {
                     let n = self.expect_name()?;
                     self.stk.names.push_or_abort(n);
                 }
-                let vars = finish(&mut self.chunk, &mut self.stk.names, mark);
+                let vars = finish(self.chunk, &mut self.stk.names, mark);
+                // PUC `forlist`: three hidden locals (generator, state,
+                // control), four in 5.4 (plus the closing value), three
+                // again in 5.5
+                let hidden = if self.version == LuaVersion::Lua54 {
+                    4
+                } else {
+                    3
+                };
+                self.new_locals(hidden + vars.range().len() as u32)?;
                 self.expect(Token::In, "in")?;
                 let expr_line = self.tok.line;
                 let exprs = self.exprlist()?;
@@ -102,7 +120,7 @@ impl<'s> Parser<'s> {
                 }
                 let body = self.loop_block(vars)?;
                 self.expect_match(Token::End, "end", "for", line)?;
-                Ok(self.push_ended_stat(Stat::GenericFor {
+                Ok(self.push_stat(Stat::GenericFor {
                     vars,
                     exprs,
                     body,
@@ -122,7 +140,7 @@ impl<'s> Parser<'s> {
             let n = self.expect_name()?;
             self.stk.names.push_or_abort(n);
         }
-        let path = finish(&mut self.chunk, &mut self.stk.names, mark);
+        let path = finish(self.chunk, &mut self.stk.names, mark);
         let method = if self.accept(Token::Colon)? {
             Some(self.expect_name()?)
         } else {
@@ -173,7 +191,7 @@ impl<'s> Parser<'s> {
                 break;
             }
         }
-        let names = finish(&mut self.chunk, &mut self.stk.attribs, mark);
+        let names = finish(self.chunk, &mut self.stk.attribs, mark);
         let exprs = if self.accept(Token::Assign)? {
             self.exprlist()?
         } else {
@@ -204,48 +222,6 @@ impl<'s> Parser<'s> {
         }
         Ok(self.push_stat(Stat::Local {
             collective,
-            names,
-            exprs,
-        }))
-    }
-
-    pub(super) fn global_stat(&mut self) -> Result<StatId, SyntaxError> {
-        self.advance()?;
-        if self.accept(Token::Function)? {
-            let line = self.prev_line;
-            let name = self.expect_name()?;
-            self.declare([name.sym], VarKind::Global);
-            let body = self.func_body(line)?;
-            return Ok(self.push_stat(Stat::GlobalFunction { name, body }));
-        }
-        // `global [attrib] '*'`
-        let leading = self.attrib()?;
-        if self.accept(Token::Star)? {
-            self.goto_step(|g| {
-                g.declare("*", VarKind::Global);
-                Ok(())
-            })?;
-            return Ok(self.push_stat(Stat::GlobalAll { attrib: leading }));
-        }
-        let mark = self.stk.attribs.len();
-        loop {
-            let name = self.expect_name()?;
-            let attrib = self.attrib()?;
-            self.stk.attribs.push_or_abort(AttribName { name, attrib });
-            if !self.accept(Token::Comma)? {
-                break;
-            }
-        }
-        let names = finish(&mut self.chunk, &mut self.stk.attribs, mark);
-        let exprs = if self.accept(Token::Assign)? {
-            self.exprlist()?
-        } else {
-            List::EMPTY
-        };
-        // the declared names come into scope after their initializers
-        self.declare_attrib_names(names, leading, true);
-        Ok(self.push_stat(Stat::Global {
-            collective: leading,
             names,
             exprs,
         }))
@@ -329,7 +305,7 @@ impl<'s> Parser<'s> {
                 }
             }
         }
-        let targets = finish(&mut self.chunk, &mut self.stk.exprs, mark);
+        let targets = finish(self.chunk, &mut self.stk.exprs, mark);
         self.expect(Token::Assign, "=")?;
         let exprs = self.exprlist()?;
         self.depth -= entered;

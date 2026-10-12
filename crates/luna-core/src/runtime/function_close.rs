@@ -7,10 +7,15 @@ use crate::vm::isa::{Inst, Op};
 
 /// Whether a return from a function with this code and these nested
 /// functions may find something to close: a register a nested function
-/// captures (an open upvalue) or a to-be-closed variable.
+/// captures (an open upvalue) or a to-be-closed variable, a generic `for`'s
+/// closing value among them.
 pub(crate) fn needs_close(code: &[Inst], protos: &[Gc<Proto>]) -> bool {
     protos.iter().any(|p| p.upvals.iter().any(|u| u.in_stack))
-        || code.iter().any(|i| i.op() == Op::Tbc)
+        || code.iter().any(|i| {
+            let op = i.op();
+            op == Op::Tbc
+                || op.is_tfor_prep() && op.for_layout().is_some_and(|l| l.closing().is_some())
+        })
 }
 
 /// Set `k` on every `Return0` / `Return1` of a function that

@@ -143,9 +143,9 @@ fn make_setfield_record(proto: Gc<Proto>) -> TraceRecord {
     let pushed = rec.push(RecordedOp {
         proto,
         pc: 0,
-        // Op::SetField R[A=0][K[B=0]:string] := R[C=1].
-        // K=true flag set so the lowerer takes the K[B] const path.
-        inst: Inst::iabc(Op::SetField, 0, 0, 1, true),
+        // Op::SetField R[A=0][K[B=0]:string] := R[C=1] (`k` clear: the
+        // value is a register).
+        inst: Inst::iabc(Op::SetField, 0, 0, 1, false),
         inline_depth: 0,
         var_count: None,
     });

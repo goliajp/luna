@@ -66,27 +66,12 @@ impl<'a> Compiler<'a> {
                     }
                 }
                 TableField::Named(name, v) => {
-                    let saved = self.lr().freereg;
-                    let ve = self.expr(*v)?;
-                    let vr = self.exp_to_anyreg(ve)?;
                     let c = self.sym_const(name.sym);
-                    if c <= 0xFF {
-                        self.emit(Inst::iabc(Op::SetField, treg, c, vr, true));
-                    } else {
-                        let kr = self.reserve(1)?;
-                        self.load_const(kr, c);
-                        self.emit(Inst::iabc(Op::SetTable, treg, kr, vr, false));
-                    }
-                    self.set_freereg(saved);
+                    self.rec_field(treg, Exp::Const(c), *v)?;
                 }
                 TableField::Keyed(k, v) => {
-                    let saved = self.lr().freereg;
                     let ke = self.expr(*k)?;
-                    let kr = self.exp_to_anyreg(ke)?;
-                    let ve = self.expr(*v)?;
-                    let vr = self.exp_to_anyreg(ve)?;
-                    self.emit(Inst::iabc(Op::SetTable, treg, kr, vr, false));
-                    self.set_freereg(saved);
+                    self.rec_field(treg, ke, *v)?;
                 }
             }
         }
@@ -98,6 +83,17 @@ impl<'a> Compiler<'a> {
         self.l().code[new_pc] = Inst::iabc(Op::NewTable, treg, b, c, k);
         self.set_freereg(treg + 1);
         Ok(Exp::Reg(treg))
+    }
+
+    /// PUC `recfield`: `t[key] = v`, the key placed before `v` is compiled.
+    fn rec_field(&mut self, treg: u32, key: Exp, v: ExprId) -> Result<(), SyntaxError> {
+        let saved = self.lr().freereg;
+        let (t, k) = self.indexed(TabRef::Reg(treg), key)?;
+        let ve = self.expr(v)?;
+        let rk = self.exp_rk(ve)?;
+        self.index_set(t, k, rk);
+        self.set_freereg(saved);
+        Ok(())
     }
 
     pub(super) fn setlist(&mut self, treg: u32, n: u32, flushed: u32) -> Result<(), SyntaxError> {

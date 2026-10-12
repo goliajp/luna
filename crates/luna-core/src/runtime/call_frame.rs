@@ -5,6 +5,9 @@ use crate::runtime::function::LuaClosure;
 use crate::runtime::heap::Gc;
 use crate::runtime::value::Value;
 
+mod conts;
+pub use conts::*;
+
 /// An activation record on a thread's call stack. Pure data (closure handle +
 /// stack offsets), so it lives in `runtime` where the GC can trace a suspended
 /// coroutine's frames.
@@ -124,15 +127,44 @@ pub struct NativeCont {
     pub nresults: i32,
 }
 
+impl ContKind {
+    /// Whether a protected call's continuation took a C level of PUC's.
+    pub fn is_level(&self) -> bool {
+        match self {
+            ContKind::Pcall { level, .. } | ContKind::Xpcall { level, .. } => *level,
+            _ => true,
+        }
+    }
+
+    /// The slot a protected call's callee was called at, above the slot
+    /// after the continuation (`Vm::callee_shift`).
+    pub fn callee_shift(&self) -> i32 {
+        match self {
+            ContKind::Pcall { shift, .. } | ContKind::Xpcall { shift, .. } => i32::from(*shift),
+            _ => 0,
+        }
+    }
+}
+
 /// Continuation kind for yieldable native dispatch.
 #[derive(Clone, Copy)]
 pub enum ContKind {
     /// `pcall(f, ...)` — wraps the result as `(true, ...)` / `(false, msg)`.
-    Pcall,
+    Pcall {
+        /// The call is a C level of PUC's (`Vm::begin_pcall`).
+        level: bool,
+        /// Where the callee was called, relative to the slot above the
+        /// continuation (`Vm::callee_shift`).
+        shift: i8,
+    },
     /// xpcall: the message handler to run if the protected call errors
     Xpcall {
         /// Message handler function invoked on error.
         handler: Value,
+        /// The call is a C level of PUC's (`Vm::begin_pcall`).
+        level: bool,
+        /// Where the callee was called (`Vm::callee_shift`).
+        shift: i8,
     },
     /// a yieldable metamethod call triggered by a VM instruction (PUC's
     /// `luaV_finishOp`): on the metamethod's return the interrupted instruction
@@ -142,10 +174,12 @@ pub enum ContKind {
         /// Continuation describing how to finish the interrupted op.
         MetaCont,
     ),
-    /// a yieldable `__pairs` metamethod call from `pairs()` (PUC luaB_pairs uses
-    /// lua_callk): on return, its (≤4, nil-padded) results are `pairs`'s own
-    /// results. A `coroutine.yield` inside `__pairs` is preserved like pcall's.
-    Pairs,
+    /// a yieldable `__pairs` call from `pairs()` (PUC `lua_callk`); its (≤4,
+    /// nil-padded) results are `pairs`'s own, and a yield is kept as pcall's
+    Pairs {
+        /// where it was called, counted from `pairs`'s slot
+        at: u32,
+    },
     /// a yieldable `__close` handler call driven by `begin_close` (PUC's
     /// `luaF_close` + `lua_callk` continuation). On the handler's return or
     /// error, the close iteration resumes from `CloseCont`'s state and either
@@ -162,99 +196,6 @@ pub enum ContKind {
     /// from `results_at` on, and what the continuation returns are the C
     /// function's results.
     Host(HostCont),
-}
-
-/// Where a [`ContKind::Host`] continuation's values land, and which of the
-/// C API's records describes it.
-#[derive(Clone, Copy)]
-pub struct HostCont {
-    /// first stack slot of the called function's results, or of the values
-    /// a resume passes
-    pub results_at: u32,
-    /// the C API's own index for the continuation
-    pub token: u32,
-}
-
-/// Per-iteration state for a chain of `__close` handlers driven through the
-/// interpreter loop. When a handler is pushed onto the call stack, this rides
-/// in a `Cont::Close` frame underneath it so a `coroutine.yield` from the
-/// handler preserves the close iteration with the rest of the thread.
-#[derive(Clone, Copy)]
-pub struct CloseCont {
-    /// the close threshold: keep closing tbc slots ≥ from until exhausted
-    pub from: u32,
-    /// an error object is threaded through the remaining handlers; it sits
-    /// in the continuation's own stack slot (`NativeCont::func_slot`), just
-    /// below the handler's call, where the collector sees it
-    pub has_pending: bool,
-    /// what to do once every slot ≥ from is closed
-    pub after: AfterClose,
-}
-
-/// What to run once `begin_close` has drained every tbc slot.
-#[derive(Clone, Copy)]
-pub enum AfterClose {
-    /// `OP_Close` (block-end close): nothing else; next instruction continues.
-    Block,
-    /// `OP_Return*`: pop the Lua frame whose `OP_Return` triggered the close
-    /// and deliver `nret` results from `[abs_a, abs_a + nret)` to the frame's
-    /// `func_slot`. `from_native` mirrors the original op's hook flag.
-    Return {
-        /// Absolute stack index of the first return value.
-        abs_a: u32,
-        /// Number of return values.
-        nret: u32,
-        /// Mirrors the original op's hook-fired flag.
-        from_native: bool,
-    },
-    /// Error unwind: the close runs while unwinding a Lua frame. When every
-    /// handler is done, pop the deferred Lua frame, truncate to `func_slot`,
-    /// and re-raise the threaded error: the original one, or the last a
-    /// handler raised (PUC luaF_close).
-    ResumeUnwind {
-        /// Slot to truncate the value stack to before re-raising.
-        func_slot: u32,
-    },
-}
-
-/// How to complete a VM instruction once its metamethod returns.
-#[derive(Clone, Copy)]
-pub struct MetaCont {
-    /// What to do with the metamethod's return value.
-    pub action: MetaAction,
-    /// the interrupted frame's `top` to restore after the metamethod returns
-    pub saved_top: u32,
-}
-
-/// Per-op finishing action for a yielded metamethod call.
-#[derive(Clone, Copy)]
-pub enum MetaAction {
-    /// arithmetic / index / unary / length: store the single result at `dst`
-    Store {
-        /// Destination register receiving the metamethod's first result.
-        dst: u32,
-    },
-    /// `__newindex`: the metamethod has no result to keep
-    Discard,
-    /// comparison (`__eq`/`__lt`/`__le`): the truthiness of the result feeds the
-    /// conditional skip — the following JMP runs iff `result.truthy() == k`.
-    /// `negate=true` flips the truthiness first, for the ≤5.3 `__le` →
-    /// `not __lt(b, a)` synthesis path where the metamethod is `__lt` but
-    /// the operator was `<=`.
-    Compare {
-        /// Sense of the conditional skip the comparison op was emitted for.
-        k: bool,
-        /// True when the 5.3 `__le → not __lt(b,a)` synthesis is in effect.
-        negate: bool,
-    },
-    /// `__concat`: store the result at `dst`, set `top = dst + 1`, then continue
-    /// folding the operands still at `[base_a .. top)` (PUC finishOp re-runs).
-    Concat {
-        /// Destination register for the metamethod's result.
-        dst: u32,
-        /// First operand register of the original concat span.
-        base_a: u32,
-    },
 }
 
 #[cfg(test)]

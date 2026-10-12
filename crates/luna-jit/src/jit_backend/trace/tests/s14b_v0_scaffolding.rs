@@ -16,6 +16,7 @@ fn accum_site_clones_cleanly() {
         accum_slot: 0,
         piece_slot: 1,
         inline_depth: 0,
+        has_post: true,
         state: BufferState::Bufferable,
     };
     let cloned = site.clone();

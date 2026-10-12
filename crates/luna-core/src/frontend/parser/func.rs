@@ -45,7 +45,7 @@ impl<'s> Parser<'s> {
             g.enter_function();
             Ok(())
         })?;
-        let params = finish(&mut self.chunk, &mut self.stk.names, mark);
+        let params = finish(self.chunk, &mut self.stk.names, mark);
         let Parser {
             gotos, lex, chunk, ..
         } = self;
@@ -97,6 +97,14 @@ impl<'s> Parser<'s> {
             });
         }
         self.func_local_count.last_mut().expect("func ctx").2 += 1;
+        Ok(())
+    }
+
+    /// [`Self::new_local`] `n` times.
+    pub(super) fn new_locals(&mut self, n: u32) -> Result<(), SyntaxError> {
+        for _ in 0..n {
+            self.new_local()?;
+        }
         Ok(())
     }
 

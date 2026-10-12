@@ -64,6 +64,7 @@ pub const RECUNROLL_THRESHOLD: usize = 2;
 
 /// Compile-time options for the trace lowerer.
 #[derive(Clone, Copy, Debug, Default)]
+#[doc(hidden)]
 pub struct CompileOptions {
     /// When `true`, the trace's clean-close path emits a back-edge
     /// jump to its own body-loop block instead of returning

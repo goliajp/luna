@@ -5,6 +5,7 @@ use super::*;
 /// Per inline cmp@d>0 side-exit record. See
 /// [`CompiledTrace::per_exit_inline`] for the shape rationale.
 #[derive(Clone, Debug)]
+#[doc(hidden)]
 pub struct InlineSideExit {
     /// PC the interpreter resumes at after the side-exit fires.
     /// Mirrors the innermost frame's `pc` in `chain`.
@@ -174,6 +175,7 @@ pub fn v2c_probe_enabled() -> bool {
 /// entry PC. `exit_tags` is the compile-time slot-shape snapshot the
 /// side trace would inherit as its entry tags.
 #[derive(Clone, Debug)]
+#[doc(hidden)]
 pub struct HotExitInfo {
     /// The trace head's Proto. `head_proto.traces` owns the parent
     /// [`CompiledTrace`]; combined with `head_pc` it uniquely
@@ -217,6 +219,7 @@ pub struct HotExitInfo {
 /// Four 32-bit fields, no padding: 16 bytes per entry.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+#[doc(hidden)]
 pub struct FrameMaterializeInfo {
     /// Stack offset (relative to the trace head's `frame.base`) of
     /// the callee's first register slot. The new frame's `base` is
