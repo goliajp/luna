@@ -5,6 +5,7 @@
 
 use super::ccall::{Cont, KFn, LUNA_RECOVER, PendingYield, Wait, pcall_outcome, push_results};
 use super::*;
+use luna_core::runtime::ErrorStatus;
 use luna_core::vm::exec::host_c::HostContSpec;
 
 /// The continuation slot of the C function running on `api`'s thread, as
@@ -184,14 +185,16 @@ pub(super) fn pcallk(
             return LUA_OK;
         }
         // an error the protected call could not catch (the C stack was
-        // already full): it is still the call's error
+        // already full, or the call could not be set up for lack of
+        // memory): it is still the call's error
         Err(e) => {
             if spec.is_some() {
                 set_cont(api, None);
             }
+            let mem = api.vm.error_status(e.0, errerr_before) == ErrorStatus::Mem;
             api.truncate(at);
             api.push(e.0);
-            LUA_ERRRUN
+            if mem { LUA_ERRMEM } else { LUA_ERRRUN }
         }
     };
     api.vm.heap.barrier_back(co);
