@@ -294,9 +294,7 @@ impl Vm {
             }
             _ => &mut self.stack,
         };
-        if stack.len() <= slot {
-            stack.resize(slot + 1, Value::Nil)?;
-        }
+        stack.resize(stack.len().max(slot + 1), Value::Nil)?;
         stack[slot] = v;
         Vm::unseal_after_local_write(stack, slot, name);
         Ok(())

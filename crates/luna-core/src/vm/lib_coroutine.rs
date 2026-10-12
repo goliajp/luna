@@ -12,11 +12,7 @@ use crate::vm::exec::Vm;
 mod close;
 pub(crate) use close::*;
 
-pub(crate) fn open_coroutine(vm: &mut Vm) {
-    crate::vm::lib_mem::opened(try_open_coroutine(vm));
-}
-
-/// [`open_coroutine`], failing when memory runs out.
+/// Open the `coroutine` library, failing when memory runs out.
 pub(crate) fn try_open_coroutine(vm: &mut Vm) -> Result<(), LuaError> {
     let t = vm.alloc_table()?;
     let set =

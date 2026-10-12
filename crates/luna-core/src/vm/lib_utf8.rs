@@ -13,11 +13,7 @@ use crate::vm::exec::Vm;
 mod codes;
 pub(crate) use codes::*;
 
-pub(crate) fn open_utf8(vm: &mut Vm) {
-    crate::vm::lib_mem::opened(try_open_utf8(vm));
-}
-
-/// [`open_utf8`], failing when memory runs out.
+/// Open the `utf8` library, failing when memory runs out.
 pub(crate) fn try_open_utf8(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();
     if v < LuaVersion::Lua53 {

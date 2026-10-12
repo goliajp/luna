@@ -18,11 +18,7 @@ pub use sub::*;
 
 type NativeFn = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 
-pub(crate) fn open_string(vm: &mut Vm) {
-    crate::vm::lib_mem::opened(try_open_string(vm));
-}
-
-/// [`open_string`], failing when memory runs out.
+/// Open the `string` library, failing when memory runs out.
 pub(crate) fn try_open_string(vm: &mut Vm) -> Result<(), LuaError> {
     let t = vm.alloc_table()?;
     let v = vm.version();

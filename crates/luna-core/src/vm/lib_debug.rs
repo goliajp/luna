@@ -26,11 +26,7 @@ use traceback::d_traceback;
 use upvalues::{d_getupvalue, d_setupvalue, d_upvalueid, d_upvaluejoin};
 pub(crate) use upvalues::{upvalue_name, visible_upvalue_index};
 
-pub(crate) fn open_debug(vm: &mut Vm) {
-    crate::vm::lib_mem::opened(try_open_debug(vm));
-}
-
-/// [`open_debug`], failing when memory runs out.
+/// Open the `debug` library, failing when memory runs out.
 pub(crate) fn try_open_debug(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();
     let t = vm.alloc_table()?;

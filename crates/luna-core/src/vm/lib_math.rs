@@ -22,11 +22,7 @@ use random::{m_random, m_randomseed};
 
 type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 
-pub(crate) fn open_math(vm: &mut Vm) {
-    crate::vm::lib_mem::opened(try_open_math(vm));
-}
-
-/// [`open_math`], failing when memory runs out.
+/// Open the `math` library, failing when memory runs out.
 pub(crate) fn try_open_math(vm: &mut Vm) -> Result<(), LuaError> {
     let ver = vm.version();
     let t = vm.alloc_table()?;

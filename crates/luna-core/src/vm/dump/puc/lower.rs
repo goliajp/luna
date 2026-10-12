@@ -42,7 +42,6 @@ use crate::runtime::Value;
 use crate::runtime::function::{JitProtoState, LocVar, Proto, UpvalDesc};
 use crate::runtime::heap::{Gc, GcHeader, Heap, ObjTag};
 use crate::runtime::string::LuaStr;
-use crate::vm::dump::error::Bad;
 use crate::vm::isa::{self, Inst, Op};
 
 pub(super) use super::encode::{RK_BIT, enc_abc, enc_abx, enc_asbx, enc_ax, enc_sj};
@@ -99,8 +98,8 @@ pub(super) fn build(
     heap: &mut Heap,
     mut raw: RawProto,
     translate: &dyn Fn(&mut RawProto) -> Result<Lowered, String>,
-) -> Result<Gc<Proto>, Bad> {
-    let mut lowered = translate(&mut raw).map_err(Bad::Code)?;
+) -> Result<Gc<Proto>, crate::vm::dump::error::Bad> {
+    let mut lowered = translate(&mut raw).map_err(crate::vm::dump::error::Bad::Code)?;
     // a stripped chunk has no line info; the translated one must not
     // invent line 0 for every instruction
     if raw.lines.is_empty() {

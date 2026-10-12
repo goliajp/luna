@@ -275,9 +275,7 @@ impl<'a> Compiler<'a> {
             }
         }
         let proto = lvl.take_proto(self.source, line, last_line, self.heap);
-        self.heap
-            .try_adopt_proto(proto)
-            .unwrap_or_else(|o| o.fail())
+        self.heap.adopt_proto(proto)
     }
 
     /// The line of statement `sid`'s last token, as the parser recorded it.
