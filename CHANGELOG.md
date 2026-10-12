@@ -31,12 +31,38 @@ optimization.
   `side_trace_cache` maps a sentinel to an exit index.
   `AdoptRequest::side_parent` and `AdoptedTrace::side_parent` carry the
   parent's prototype. `TraceCompiler` has the hidden methods
-  `failure_known` and `publish_failure`.
+  `failure_known` and `publish_failure`. `TraceRecord` has the field
+  `closed_at_head` (the recording ended because execution came back to
+  its head).
+- The trace JIT's data types in `luna_core::jit` (`TraceRecord`,
+  `RecordedOp`, `FieldIcSnapshot`, `CompiledTrace`, `TierUp`,
+  `CompileOptions`, `RetfRecord`, `DownRecClose`, `InlineSideExit`,
+  `HotExitInfo`, `FrameMaterializeInfo`) are hidden from the docs, like
+  `AdoptedTrace` already was. `luna_core::jit` has been outside the
+  stable API since 2.7.0; the crate docs now say so, and that these
+  types gain fields whenever the trace JIT changes.
 
 - Chunks in luna's own binary format (PUC header followed by the
-  `LunaV1` body) no longer load: a table constructor's op now carries
-  its size hints, and the body tag is `LunaV2`. Dump the source again
-  with this version. PUC bytecode loads as before.
+  `LunaV1` … `LunaV4` body) no longer load: a table
+  constructor's op now carries its size hints, a table write can store a
+  constant (`k` on `SetTable` / `SetField` / `SetI` / `SetTabUp`), and
+  there are the opcodes `GetTableK`, `SetTableK`, `GetTabUpR`,
+  `SetTabUpR` and `SetTabUpK`. Each dialect's `for` loops keep their
+  control values in the registers that dialect's PUC compiler gives them
+  (`ForPrep55` / `ForLoop55`, `TForPrep53` / `TForCall53` /
+  `TForLoop53`, `TForPrep55` / `TForCall55` / `TForLoop55`), and a
+  5.1–5.3 operator takes a constant of any type on either side of it
+  without a register (`ShlK`, `ShrK`, the two-constant `AddKK` …
+  `ShrKK`, `LtK`, `LeK`, `EqKK`, `LtKK`, `LeKK`; `k` on `AddK` … `ShrK`
+  puts the constant on the left). A 5.1 function with more than 256
+  constants reads and writes globals with `GetGlobal` / `SetGlobal`, as
+  PUC's `GETGLOBAL` / `SETGLOBAL` do. A 5.2 / 5.3 jump that also
+  closes upvalues is one instruction (`JmpClose` / `JmpCloseBack`, PUC's
+  `JMP` with `A` set), a 5.1–5.3 concatenation names its own
+  destination (`k` on `Concat`), `LTrueSkip` is PUC's
+  `LOADBOOL A 1 1`, and a numeric `for` with a float start or step steps
+  with `ForLoopF` / `ForLoop55F` (from 5.3 on). The body tag is `LunaV5`. Dump the
+  source again with this version. PUC bytecode loads as before.
 - C API: errors leave a C function at once, as in PUC. `lua_error`,
   `luaL_error` and every API function that raises (`lua_gettable`,
   `lua_call`, `luaL_checkinteger`, ...) jump back to the call that luna
@@ -88,6 +114,10 @@ optimization.
   `Vm::call_value_with_handler_in_c` (hidden from the docs), the same call
   made from inside a C function of the host's, as `lua.c`'s `docall` runs
   inside `pmain`.
+
+- `luna_core::jit::trace::ExitTag` has a `Native` variant (a native
+  function's pointer, packed into AOT trace metadata as byte 8). Code
+  that matches `ExitTag` exhaustively has to name it.
 
 - `luna_core::jit::trace::ExitTag` has a `Bool` variant and `TraceRecord`
   the `index_slots`, `index_key` and `settings` fields; the frame-materialise helper
@@ -171,6 +201,172 @@ optimization.
 
 ### Changed
 
+- The numeric `for` step and float arithmetic run in fewer instructions
+  and cycles. A loop the compiler knows to be a float loop (a float start
+  or step, from 5.3 on) has its own step opcode, which tests for floats
+  first instead of trying integers. The control registers are written
+  with the bytes between tag and payload zeroed, so that on aarch64 the
+  step reads each one's tag and payload in one load and tests whole tag
+  words, and computes its back-edge target before those loads; a float
+  step compares once, the pair it compares chosen by the step's sign; an
+  arithmetic opcode on two floats computes its result where it reads its
+  operands and stays on the fast path on aarch64. A control register
+  written otherwise (`debug.setlocal`, `lua_setlocal`, a trace's exit)
+  takes the slow path once. On a Cortex-A76, cycles per iteration without
+  the JIT (before, PUC): an empty integer loop 8.3 in 5.4 (9.9, PUC 9.9)
+  and 7.9 in 5.5 (7.9, PUC 9.0); an empty float loop 8.4 in 5.4 (9.7, PUC
+  9.3) and 7.7 in 5.5 (9.0, PUC 8.0); `s = s + i` 14.3 in 5.4 (16.0, PUC
+  14.6) and 14.0 in 5.5 (14.5, PUC 13.9); `s = s + x` over a float loop
+  15.3 in 5.4 (20.0, PUC 16.0) and 14.6 in 5.5 (20.0, PUC 15.1).
+- A numeric `for` step no longer tests the tag of a float loop's limit,
+  which it only reads. A crafted binary chunk whose loop body overwrites
+  the limit now runs on with the bits it finds there, as PUC Lua does,
+  instead of raising `'for' state corrupted` (memory stays safe: the step
+  only reads it as a number). `debug.setlocal` and `lua_setlocal` on any of
+  a loop's control values still make its next step raise `'for' state
+  corrupted`, as before.
+- The interpreter loop prepares numeric `for` loops itself when the
+  control values need no conversion (integers, or numbers of a float
+  loop), instead of going through the general instruction path, and its
+  `for` step tests the three control registers' tags with compares
+  against memory on x86-64 and conditional compares on aarch64. A loop
+  of three iterations entered 300,000 times runs 45–52% fewer
+  instructions on x86-64 (fewer than PUC Lua in every dialect), and an empty
+  integer loop 23–33% fewer. The `'for' state corrupted` error for
+  control registers changed by `debug.setlocal` is unchanged. On a
+  Cortex-A76 an empty integer loop takes 8.2 cycles per iteration in 5.5
+  (8.8 before, PUC 9.0) and 10.0 in 5.4 (10.7, PUC 9.9).
+- A native function the interpreter loop calls directly (a plain host
+  or library function, outside hooks) runs without a panic guard of its
+  own: a Rust panic in it is caught where the loop was entered and raised
+  there as the same `native panic: <msg>` error, with the same traceback,
+  handler call and `pcall` result as before. A panic in a call or return
+  hook of a native still reaches the host as a panic, and a load's memory
+  error still unwinds to the load.
+- On aarch64 the interpreter loop writes a float arithmetic result from
+  the floating-point register it was computed in. Written as a whole
+  value it went through an integer register first, which made a loop
+  that adds floats (`s = s + x`) take 23 cycles per iteration on a
+  Cortex-A76 instead of 19, and one that adds integers 17 instead of 15.
+- A side trace can run into a loop and round its edge back to where it
+  started: a comparison that is the last op of such a recording takes
+  the side trace's head as the op after it, and a backward jump the
+  recording followed needs no code. Before, a side trace whose exit sat
+  in front of an inner loop the trace JIT did not record by itself never
+  compiled.
+- The baseline trace tier compiles faster, with the same generated code:
+  the token bucket benchmark's trace takes 54.5 µs instead of 62.4 µs
+  compiled again and again on a Cortex-A76, and 64.8 µs instead of
+  75.3 µs as the first compile of a fresh Vm.
+- The slow paths of the interpreter loop's `<`, `<=` and `==` (mixed
+  operands, metamethods) run in functions of their own. On aarch64 the
+  loop's stack frame shrank from 2160 to 1232 bytes and entering it (after
+  every `pcall` and every trace exit) takes 41 fewer instructions:
+  `pcall` in a loop runs 4.5% fewer instructions.
+- The method JIT keeps float constants (a numeric for loop's step and
+  limit, a float `LoadK`) in registers across a loop instead of
+  rebuilding them on every iteration. A loop that summed floats used to
+  load its limit from the code's own cache line on every iteration, and
+  its time on a Cortex-A76 swung by up to 13% from run to run.
+- A 5.1 or 5.2 float `for` loop whose values are all exact (its start and
+  step multiples of one power of two, its bounds small enough for every
+  value to have an exact double) runs its test on an integer count and
+  builds the loop variable from it, with the same values bit for bit. When
+  the start and limit are numerals this is decided while compiling;
+  otherwise once per entry into the loop, with the body compiled for both
+  cases. On a Cortex-A76 an empty such loop takes 33% fewer cycles and a
+  loop summing its variable 13% fewer than before, within 4% from run to
+  run.
+- Loading a chunk copies less: the compiler keeps each function's state
+  in place instead of moving it in and out of its stack, the parser builds
+  the tree straight into the buffers the Vm keeps, and the parser's and
+  compiler's error paths are out of line. Loading the method dispatch
+  benchmark takes 24.9 µs instead of 26.3 µs on a Cortex-A76.
+- `llvm-jit` now needs LLVM with the native target only: luna-jit-llvm
+  turns inkwell's default features (every LLVM target) off and enables
+  the target of the architecture it is built for. A linker that keeps
+  whole objects, as MSVC's does, otherwise asked for every target's
+  libraries. On an architecture other than x86_64 and aarch64 the
+  backend now fails to compile with a message saying so.
+- LLVM backend (`--features llvm-jit`): a hot function runs on the
+  Cranelift method JIT's code at once and, when LLVM's method JIT takes
+  it, on LLVM's code once the compile thread has compiled it (after it has
+  stayed hot for `llvm_after`, 20 ms). The compile thread stores LLVM's
+  entry in the new `Proto::jit_next`, and the next call into the function
+  from the interpreter puts it in place of Cranelift's, so the first hot
+  function no longer waits for an entry stub of its own to be compiled. LLVM's self-recursive calls
+  check the native stack limit and the call budget at the body's start,
+  with both passed as arguments, instead of calling two helpers per call,
+  so LLVM can turn the recursion into a loop (`fib(30)`: 3.4 ms against
+  Cranelift's 3.8 ms, was 7.2 ms). The helpers `luna_jit_self_enter` and
+  `luna_jit_self_leave` are gone.
+- With the system allocator, a Vm keeps freed blocks of 1 KiB to 256 KiB
+  for its next allocations of the same layout: as many of each layout as
+  the last collection cycle allocated, in all at most what that cycle
+  allocated of those sizes, capped by the larger of 1 MiB and an eighth of
+  the live heap, and 8 MiB. The pool is trimmed at the end of every cycle
+  and emptied with the Vm; its blocks count as freed for
+  `collectgarbage("count")` and the collector's pace. Blocks up to 1 KiB
+  are resized by moving them instead of `realloc`. Both spare a process
+  with a second thread (the LLVM backend's compile thread, or the host's)
+  glibc's arena lock: `sliding_window_500` on 5.4 runs in 257 µs with
+  Cranelift (273 before) and 262 µs on the LLVM backend before LLVM takes
+  over (292 before). A Vm with a host allocation function (`lua_Alloc`)
+  or a memory policy uses neither.
+- The optimizing tiers lower a loop body of plain arithmetic, comparisons
+  and moves again when a trace moves up, keeping its values in registers
+  across the back edge and storing them only where the trace leaves:
+  `loop` runs 9% / 19% fewer instructions with Cranelift on 5.1 / 5.4,
+  and its LLVM code 43% less time on 5.4 (9388 → 5360 µs).
+- The optimizing Cranelift tier reads the string keys and functions a
+  loop uses at least twice once, before the loop, instead of at every
+  use: on aarch64, where each read is a literal load, `tbl` runs 8%
+  faster, `token_bucket_1k` 4–9%, `method_dispatch_5k` 4%; on x86-64
+  `tbl` and `token_bucket_1k` run 1–2% fewer instructions.
+- A trace no longer stores a value into the VM's register file when a
+  later op overwrites that register before anything reads the register
+  file (an op that calls a helper, a branch that rejoins, an exit, the
+  back edge); every other value is still stored as it is made, which
+  keeps it from holding a machine register longer.
+  Instructions: `tbl` 1.6–2.3% fewer, `token_bucket_1k` 1.0–1.4%,
+  `sliding_window_500` up to 1.7%, `loop` unchanged, on both trace tiers.
+- LLVM backend: a trace waiting for LLVM's code only reads flags at each
+  entry. The compile thread marks when `llvm_after` has passed, the first
+  entry after that hands the trace to it, and the first entry after
+  LLVM's code is ready switches to it. Before, each entry read the clock
+  until `llvm_after` had passed (`sliding_window_500` on 5.4 ran 8%
+  slower while LLVM had not yet taken over).
+
+- Conditions and `and` / `or` / `not` compile as PUC's code generator
+  compiles them, in every dialect: a value of `a and b or c` goes into
+  its register through `TestSet` instead of a `Move` and a `Test`, a
+  comparison used as a value is loaded with `LFalseSkip` / `LoadTrue`
+  only once its whole expression is known, a jump to a jump goes where
+  the last one goes, and `if c then break end` uses the condition's own
+  jump (5.2–5.4). `break` and `goto` close upvalues only when they leave
+  a block whose locals were captured, the way each dialect closes them.
+  `luac -l -l` lists these the same as PUC's own compilation.
+- The compiler uses registers as PUC's does in every dialect: a table
+  write stores a constant value directly (`t.x = 1`, `x = 'k'`), keys
+  that are constants take no register before 5.4 (`t[2.5]`, `t[true]`)
+  and on a 5.2 / 5.3 upvalue table, an assignment to several targets
+  copies a variable only when a later target assigns it (PUC's
+  `check_conflict`), the last value of an assignment goes straight into
+  its target, and a generic `for` keeps PUC's room to call its
+  generator. `string.dump` output listed with `luac -l -l` (instructions,
+  constants and slots) is the same as PUC's for these, and a frame is
+  exactly as large as PUC's, so the depth recursion reaches before a
+  stack overflow matches PUC's. Traces, the method JIT, the LLVM backend
+  and AOT compile the new instruction forms.
+
+- Strings hash as PUC 5.4 and 5.5 hash them, from the last byte to the
+  first, so that with the same seed a table lays out its string keys —
+  and `pairs` visits them — as PUC does. The order a table with string
+  keys is visited in therefore differs from earlier versions.
+- A trace answers 5.4's `#t` from the table's length limit inline, and
+  reads `t[k]` for a string `k` it did not see at recording time by
+  walking the key's chain inline before calling the runtime.
+
 - On Windows the `luna` command keeps the MSVC C library's `FILE` for each
   file and standard stream, so that what PUC built with MSVC does with
   them, `luna` does too: `setvbuf` sizes and the positions `seek` then
@@ -191,6 +387,48 @@ optimization.
   `luna_core::stdio::write_stderr` writes to standard error as the `luna`
   command does. 5.1 and 5.2 read lines on Windows in 512-byte pieces, the
   MSVC `BUFSIZ`, as PUC does there.
+- The C library's `errno` is kept as PUC's process would have it, and a
+  failure that sets none reports what an earlier call left there, as it
+  does in PUC 5.1–5.3 on Windows (a `write` right after a `read`): a
+  number that converts out of range (in `tonumber`, in arithmetic, in the
+  lexer, in a constant `^` or `%` the parser folds), a math function out
+  of its domain or range, `^` and a float `%` (also in compiled traces,
+  compiled functions and luna-aot binaries), a failed open, remove or
+  rename, and `os.time` beyond the C library's range each update it, by
+  the rules of the Universal CRT on Windows and of glibc elsewhere; 5.4
+  and 5.5 clear it where PUC does. `luna_core::cerrno` holds the value.
+- On Windows a failed `io.open`, `os.remove`, `os.rename`, `loadfile` or
+  `io.lines` reports the C library's message and number (`No such file or
+  directory`, 2) instead of the system's (`The system cannot find the path
+  specified.`, 3). Files are opened, removed and renamed through the
+  system calls of that library: `os.rename` does not replace an existing
+  file and `os.remove` does not remove a directory, as in `lua.exe`;
+  `os.tmpname` names a file without creating it; `os.time` fails beyond
+  the year 3000 and before 1970; 5.1's `tonumber(s, base)` clamps to the
+  32-bit `unsigned long`.
+- With `Vm::set_crt_text_mode` (the `luna` command on Windows), `io.open`
+  in 5.1 reads its mode as the MSVC C library's `fopen` does: a `ccs=`
+  selects that library's UTF-8, UTF-16LE or `UNICODE` text mode, with the
+  byte order mark read or written as the file opens, and a mode it calls
+  invalid ends the process with status 0xC0000409, as do line, number and
+  `read(0)` reads of such a file; a `seek` after an odd number of bytes in
+  a Unicode mode ends it with 0xC0000005. In every dialect, opening an
+  empty file in a text mode with `+` leaves EINVAL in `errno`.
+- `loadfile` of a file that opens but cannot be read says `cannot read`.
+- On Windows the `luna` command takes file names, its command line and
+  environment variables through the ANSI code page, as `lua.exe`'s narrow
+  C functions do: a name given as UTF-8 bytes reaches the system as the
+  code page reads those bytes, and `arg`, `os.getenv` and `os.tmpname`
+  give the code page's bytes (`?` for a character it has none for).
+  `Vm::set_global_bytes` sets a global whose name is not UTF-8.
+- On Windows `seek` on standard input goes to the system as for any
+  file, so a file redirected in can be sought and read again, as with
+  `lua.exe`; it reported `Invalid seek` before.
+- A UTF-8 stream of 5.1's `ccs=` reads bytes that are not UTF-8 as
+  `MultiByteToWideChar` does (one U+FFFD for a lead byte with the
+  continuation bytes it took, one for every other byte).
+- 5.1's retry of a numeral with `strtoul` leaves ERANGE in `errno` when
+  the value overflows (`unsigned long` has 32 bits on Windows).
 - The LLVM backend (`--features llvm-jit`, `LUNA_JIT_BACKEND=llvm`)
   compiles traces with the same trace lowering as the Cranelift backend:
   traces start in the baseline tier, move to Cranelift's code once hot,
@@ -406,13 +644,142 @@ optimization.
 
 ### Fixed
 
+- Trace JIT (all three trace code generators: baseline, Cranelift and
+  LLVM): a native function a trace copied into another register (`local
+  g = f`, the function and arguments of a call, a native passed to a Lua
+  function the trace inlined) reached the interpreter at the trace's exit
+  as whatever that register held before, so the call that followed raised
+  "attempt to call a number value" or "a nil value"; a test of the copy
+  (`if g then`) could take the wrong branch. The trace now knows a
+  native's type wherever it copies one. A native passed to an inlined Lua
+  function fails this way in every release since the trace JIT was turned
+  on by default, 1.3.0 through 4.0.2; the other shapes did not run as
+  traces in a release (develop only, from the per-loop back-edge counting
+  of 2026-10-02).
+- LLVM backend: the method JIT took a register that 5.1's code never wrote
+  (5.1 leaves out the `LoadNil` of a register still nil at entry, so
+  `return nil` reads it) for the integer 0; `load` with a reader that
+  returns nil failed with "not enough memory". It now refuses such
+  functions.
+- LLVM backend on aarch64: the Vm's thread runs an `isb` as it takes code
+  the compile thread wrote, before running it (the writer's instruction
+  cache maintenance, which LLVM's execution engine does, reaches every
+  core; the reader must still drop what it fetched ahead). This holds on
+  Linux, macOS and Windows alike. The new `luna_core::jit::code_fence` is
+  that step.
+
+- 5.4 / 5.5: a `return` from inside a generic `for`, in a function that
+  captures none of its locals, now calls the `__close` of the loop's
+  closing value. Before, such a return skipped it.
+
+- A message handler run for an error that names its operand (`attempt
+  to index a nil value (local 't')`) starts one slot higher in 5.3+, as
+  in PUC, whose `varinfo` leaves the name on the stack; recursion inside
+  such a handler now stops at PUC's depth.
+- A message handler run for an error a library function raises starts
+  where PUC's does: on top of what the C function had pushed by then
+  (an argument error's message and the global name found for it, a
+  `__name`, the key of a `lua_getfield` from 5.2, a buffer's placeholder
+  from 5.4, the metatable fields `checktab` tested, the values a hook,
+  `require`, `os.time` or `string.gsub` keep around a callback), and the
+  callbacks a library function makes (comparators, metamethods, loaders,
+  hooks) start at the function's own top. `xpcall(error, h)` with no
+  argument, `xpcall(setmetatable, h)`, `xpcall(string.rep, h)` and the
+  like placed the handler a slot off before. Measured against PUC for
+  every library function and error path of the five dialects.
+- `lua_checkstack` counted from how far the stack had ever grown instead
+  of from the live top, so a thread that had once held many values
+  refused `table.unpack` and `coroutine.resume` results it had room for.
+  From 5.4 a refused check leaves the stack at its error size until a
+  collection shrinks it, as PUC's does.
+- From 5.4, raising the string `not enough memory` through `error` with
+  no position (level 0) or from a library function (`f:read(-1)` when
+  the buffer cannot be allocated) is a memory error, as `lua_error`
+  makes it in PUC: the message handler does not run and the status is
+  `LUA_ERRMEM`.
+- A metamethod a Lua frame calls runs at the frame's window end, as in
+  PUC; on its return the stack is given back the length it had, not cut
+  to the window of the frame that called it.
+- A debug hook runs where PUC's `hookf` calls it: above the interrupted
+  function's whole window (or the open results of a call above it), and
+  for a library function's return event above the results being
+  returned. A return hook used to be placed over a native's results,
+  which `debug.getlocal` then read back wrong.
+- `a or b or c` (and an `and` chain) of plain values jumps from every
+  test straight to the end, as PUC compiles it, instead of from test to
+  test.
+- 5.4 / 5.5 `string.dump` of a table constructor with more than 255
+  positional items writes its full array size (`NEWTABLE` with
+  `EXTRAARG`), as `luac` does.
+
+- An exhausted instruction budget or memory cap now stays exhausted
+  until the host arms a new one with `Vm::set_instr_budget` /
+  `Vm::set_memory_cap`: every further instruction raises the same
+  error again, inside `pcall` callers, `xpcall` handlers, `__close`
+  and `__gc` handlers, metamethods, library callbacks and coroutines
+  alike, and `Vm::error_kind()` stays `InstrBudget` / `MemoryCap`
+  (which the cap did not set before). Before, the limit cleared itself
+  when it fired, so `pcall(function() while true do end end) while
+  true do end` ran forever once the inner loop had used the budget
+  up, a handler or finalizer could run unmetered, and a script's `__gc`
+  ran unbounded when the Vm was dropped. Every release from 1.1.0 to
+  4.0.2 is affected. `Vm::instr_budget_remaining()` reports `Some(0)`
+  once exhausted. While a budget or a cap is armed the method JIT is
+  no longer entered either (traces already were not), so the JIT does
+  not need to be switched off for sandboxed scripts.
+- Unbounded nesting no longer crashes the process with a native stack
+  overflow; it raises the Lua error PUC raises, which `pcall` catches.
+  Nesting that runs on the native stack (metamethods, library callbacks
+  such as `table.sort`'s comparator, `string.gsub`'s replacement and
+  `load`'s reader, `tostring`'s `__tostring`, coroutine resumes,
+  protected calls, message handlers, C API calls, the parser) is counted
+  against PUC's 200-level C-call limit, failing at the depth PUC fails
+  at in each dialect, and is also checked against the running thread's
+  real stack bounds, so it fails with "C stack overflow" on an embedder
+  thread with a 256 KB or 2 MB stack too. Metamethod calls were not
+  counted before, and a coroutine now starts from its resumer's count,
+  as `lua_resume` does. A function the method JIT compiled calls itself
+  natively only while stack is left, then lets the interpreter make the
+  remaining calls, so deep recursion ends with "stack overflow" at the
+  Lua stack limit, or completes, as in PUC. The Lua stack limit is
+  PUC's: 1,000,000 slots from 5.2 on, checked as `luaD_growstack`
+  checks it, with 200 more for the message handler of the overflow and
+  "error in error handling" past those; 5.1's is `LUAI_MAXCALLS` (20000)
+  frames, doubling its frame array from 8 as PUC does. Frames sit where
+  PUC puts them (vararg frames above the arguments, the function a
+  protected call calls where `pcall` / `xpcall` put it, the message
+  handler at the raising frame's top, the standalone interpreter's
+  chunk under a `pmain` frame), so a recursion ends at the same depth in
+  every dialect. "error in error handling" no longer runs the message
+  handler again. The compiler walks a left-associative chain (`1 + 1 +
+  ... + 1`, `a.b.b...`, `f()()...`) without recursion, so a chain of any
+  length compiles, as in PUC; nested syntax too deep for the parser
+  fails with the dialect's nesting error at PUC's depth (from 5.2 on a
+  level per statement); a `for` loop's hidden control variables count
+  against the 200 locals. `coroutine.wrap` in 5.4 and 5.5 no longer closes a coroutine
+  that a resume refused to start. Seen in 4.0.2: a `table.sort`
+  comparator, `string.gsub` replacement, `__tostring` or coroutine
+  resume recursing without end on a 256 KB thread, a compiled function
+  recursing without end on any thread, and a 200000-term sum on the main
+  thread all crashed it.
+
 - A trace leaving inside a function it inlined two or more calls deep
   rebuilt the middle frames with their callers' resume pcs, so such a
   frame went on at the wrong instruction once the inner call returned
   (`return h(x) + 1` lost the `+ 1`). Exits one call deep were right.
+  Versions 1.3.0 through 4.0.2 are affected with the default settings
+  when a function inlines itself from two call sites: `local function
+  g(n, k) if n <= 0 then if k % 7 == 0 then return 1000 end return 1
+  end local a = g(n - 1, k) * 2 local b = g(n - 2, k + 1) + 3 return a
+  - b end`, summed over `g(5, i)` for `i = 1, 3000`, gives 291149 under
+  5.4 instead of 294573 (checked on 1.3.0, 2.3.0, 2.9.0, 3.0.0, 3.2.2,
+  4.0.0 and 4.0.2). 1.1.0 is affected only with the trace JIT turned on:
+  it was off by default until 1.3.0, the first release after 1.1.0.
 - The side-trace gate read a `Jmp`'s offset from the `sBx` field instead
   of `sJ`, so it took a backward jump of fewer than 256 instructions for
-  no jump and let a side trace that loops and writes to tables compile.
+  no jump. No program computed a wrong result from it: a side trace runs
+  its ops once and never loops on itself, so the checks this skipped do
+  not apply to it, and they now run only for traces that loop.
 
 - `#t` on a table with holes could return a different border than PUC.
   `{f(6), f(7), g(), f(8)}` (with `g` returning nothing) has borders 2

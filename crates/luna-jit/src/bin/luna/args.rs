@@ -16,11 +16,11 @@ pub(super) struct LuaArgs {
 
 /// `lua.c`'s `collectargs` of each dialect. `Err` holds the index of the
 /// bad option (5.1 reports none, and takes it only for the usage).
-pub(super) fn collectargs(v: LuaVersion, argv: &[String]) -> Result<LuaArgs, usize> {
+pub(super) fn collectargs(v: LuaVersion, argv: &[Vec<u8>]) -> Result<LuaArgs, usize> {
     let mut args = LuaArgs::default();
     let mut i = 1;
     while i < argv.len() {
-        let a = argv[i].as_bytes();
+        let a = argv[i].as_slice();
         if a.first() != Some(&b'-') {
             args.script = Some(i);
             return Ok(args);
@@ -54,7 +54,7 @@ pub(super) fn collectargs(v: LuaVersion, argv: &[String]) -> Result<LuaArgs, usi
                     // 5.2 on refuse another option as the argument
                     let missing = match argv.get(i) {
                         None => true,
-                        Some(next) => v >= LuaVersion::Lua52 && next.starts_with('-'),
+                        Some(next) => v >= LuaVersion::Lua52 && next.first() == Some(&b'-'),
                     };
                     if missing {
                         return Err(i - 1);
@@ -68,8 +68,11 @@ pub(super) fn collectargs(v: LuaVersion, argv: &[String]) -> Result<LuaArgs, usi
     Ok(args)
 }
 
-/// `lua.c`'s `print_usage` of each dialect.
-pub(super) fn print_usage(v: LuaVersion, progname: &str, badoption: &str) {
+/// `lua.c`'s `print_usage` of each dialect; `progname` and `badoption` are
+/// printed as the bytes they are.
+pub(super) fn print_usage(v: LuaVersion, progname: &[u8], badoption: &[u8]) {
+    let progname = String::from_utf8_lossy(progname);
+    let badoption = String::from_utf8_lossy(badoption);
     let mut out = String::new();
     if v == LuaVersion::Lua51 {
         out.push_str(&format!(

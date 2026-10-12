@@ -25,11 +25,9 @@ fn make_sandbox() -> Vm {
     vm.open_string();
     vm.open_table();
     vm.open_coroutine();
-    // Sandbox-required gates:
-    //   - JIT off so counted-for loops tick instr_budget (`for i=1,1e18 do end`
-    //     would otherwise compile to native code and bypass the budget).
-    //   - Bytecode loading off so `load("\27Lua…")` cannot bypass the parser.
-    vm.set_jit_enabled(false);
+    // Sandbox-required gate: bytecode loading off so `load("\27Lua…")`
+    // cannot bypass the parser. (An armed instruction budget keeps the JIT's
+    // compiled code out by itself.)
     vm.set_bytecode_loading(false);
     vm
 }

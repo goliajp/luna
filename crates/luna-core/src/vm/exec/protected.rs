@@ -3,6 +3,17 @@
 
 use super::*;
 
+/// Who makes a protected call (see `Vm::begin_pcall`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ProtectedBy {
+    /// `pcall` / `xpcall` called from Lua
+    Lua,
+    /// the C API's `lua_pcall`
+    Host,
+    /// lua.c's `docall`, from inside `pmain`
+    HostInC,
+}
+
 impl Vm {
     /// `pcall(f, ...)` (PUC luaB_pcall): push a continuation frame, then drive
     /// the protected call `f` through the interpreter loop. The protected
@@ -11,11 +22,18 @@ impl Vm {
     /// the loop head then writes `true` at `func_slot` to form `true, results…`.
     /// Always returns `Ok(true)`: a continuation is now on the stack to be
     /// resolved by the loop (even when `f` is a native that already ran inline).
+    /// `by`: who makes the call. `pcall` from Lua makes its call through
+    /// `lua_pcallk`, and lua.c's `docall` through `lua_pcall` inside
+    /// `pmain`: each a C level of PUC's; a host's `lua_pcall` is the level
+    /// its own call took (`call_value`), no more. The callee is called
+    /// where PUC calls it (`callee_shift`), so a recursion through
+    /// protected calls takes the same stack.
     pub(super) fn begin_pcall(
         &mut self,
         func_slot: u32,
         nargs: u32,
         nresults: i32,
+        by: ProtectedBy,
     ) -> Result<bool, LuaError> {
         if nargs == 0 {
             // `luaL_checkany` fails here: there is no function to call.
@@ -24,22 +42,67 @@ impl Vm {
                 crate::vm::argcheck::check_any(vm, a, 0).map(drop)
             })?;
         }
-        if self.pcall_depth >= MAX_C_DEPTH {
-            // raised inside pcall, a C function: no position
-            return Err(self.plain_err("C stack overflow"));
-        }
-        let cf = CallFrame::Cont(NativeCont {
-            kind: ContKind::Pcall,
-            func_slot,
-            nresults,
-        });
-        self.push_cf(cf)?;
-        self.pcall_depth += 1;
-        // call f (slot func_slot+1) with the remaining args, asking for all
-        // results; a yield or error inside propagates with the continuation kept
-        // on the stack (caught by `unwind` / preserved across a yield).
-        self.begin_call(func_slot + 1, Some(nargs - 1), -1, true)?;
+        let level = by != ProtectedBy::Host;
+        let shift = self.callee_shift(by, false);
+        // the room first: once the level is taken nothing may fail before
+        // the continuation that gives it back is pushed
+        self.pcall_room(func_slot + 1, nargs, shift)?;
+        self.enter_pcall_level(level)?;
+        let callee = self.shift_callee(func_slot + 1, nargs, shift);
+        frames_push_sync(
+            &mut self.frames,
+            &mut self.frames_top,
+            &mut self.trap,
+            CallFrame::Cont(NativeCont {
+                kind: ContKind::Pcall { level, shift },
+                func_slot,
+                nresults,
+            }),
+        );
+        // call f with the remaining args, asking for all results; a yield or
+        // error inside propagates with the continuation kept on the stack
+        // (caught by `unwind` / preserved across a yield).
+        self.begin_call(callee, Some(nargs - 1), -1, true)?;
         Ok(true)
+    }
+
+    /// Where PUC's `pcall` / `xpcall` call their function, counted from
+    /// the slot above their own: the status result they push first (5.2
+    /// on), the handler `xpcall` keeps below (5.1, 5.2) or the function it
+    /// copies above them both (5.3 on). A host's `lua_pcall` calls the
+    /// function where the host pushed it, which the native that drives the
+    /// call sits on (-1); lua.c's `docall` has its handler there.
+    fn callee_shift(&self, by: ProtectedBy, xpcall: bool) -> i8 {
+        match (by, xpcall) {
+            (ProtectedBy::Host, _) => -1,
+            (ProtectedBy::HostInC, _) => 0,
+            (ProtectedBy::Lua, false) => i8::from(self.version >= LuaVersion::Lua52),
+            (ProtectedBy::Lua, true) if self.version >= LuaVersion::Lua53 => 3,
+            (ProtectedBy::Lua, true) => 1,
+        }
+    }
+
+    /// Move the callee and its `n - 1` arguments at `from` to `from +
+    /// shift`, where it is called; the slots they pass over belong to the
+    /// protected call itself.
+    /// The room [`Vm::pcall_room`] made is there.
+    fn shift_callee(&mut self, from: u32, n: u32, shift: i8) -> u32 {
+        let to = (i64::from(from) + i64::from(shift)) as u32;
+        debug_assert!(self.stack.len() >= (to + n) as usize);
+        if shift != 0 {
+            self.stack
+                .copy_within(from as usize..(from + n) as usize, to as usize);
+        }
+        to
+    }
+
+    /// Stack room for the callee and its `n - 1` arguments moved by
+    /// `shift`, and frame room for the continuation, collecting in an
+    /// emergency when memory runs out.
+    fn pcall_room(&mut self, from: u32, n: u32, shift: i8) -> Result<(), LuaError> {
+        let to = (i64::from(from) + i64::from(shift)) as u32;
+        self.grow_stack((to + n) as usize)?;
+        self.cf_room()
     }
 
     /// `xpcall(f, msgh, ...)` (PUC luaB_xpcall): like `begin_pcall`, but the
@@ -56,6 +119,7 @@ impl Vm {
         nresults: i32,
         forward: bool,
         host: bool,
+        by: ProtectedBy,
     ) -> Result<bool, LuaError> {
         if !host {
             self.with_native_running(func_slot, nargs, |vm| {
@@ -63,31 +127,51 @@ impl Vm {
                 crate::vm::builtins::xpcall_handler(vm, a).map(drop)
             })?;
         }
-        if self.pcall_depth >= MAX_C_DEPTH {
-            // raised inside pcall, a C function: no position
-            return Err(self.plain_err("C stack overflow"));
-        }
-        // layout: [xpcall@func_slot, f@+1, msgh@+2, a1@+3, ...]. Stash msgh in
-        // the continuation (a root) before its slot is reused below
-        let handler = self.stack[(func_slot + 2) as usize];
-        let cf = CallFrame::Cont(NativeCont {
-            kind: ContKind::Xpcall { handler },
-            func_slot,
-            nresults,
-        });
-        self.push_cf(cf)?;
-        self.pcall_depth += 1;
-        // close the handler's gap so f's args become [f@+1, a1@+2, ...].
+        let level = by != ProtectedBy::Host;
         // 5.1: `xpcall (f, err)` takes exactly two parameters — extra
         // arguments are NOT forwarded to `f` (5.2 added forwarding;
         // 5.1 calls f with zero args).
         let nfargs = if forward { nargs - 2 } else { 0 };
+        let shift = self.callee_shift(by, true);
+        // the room first, while msgh is still on the stack: nothing
+        // allocates once its slot is reused, until the continuation holds it
+        self.pcall_room(func_slot + 1, nfargs + 1, shift)?;
+        self.enter_pcall_level(level)?;
+        // layout: [xpcall@func_slot, f@+1, msgh@+2, a1@+3, ...]. Stash msgh and
+        // close its gap so f's args become [f@+1, a1@+2, ...].
+        let handler = self.stack[(func_slot + 2) as usize];
         for i in 0..nfargs {
             self.stack[(func_slot + 2 + i) as usize] = self.stack[(func_slot + 3 + i) as usize];
         }
-        self.top = func_slot + 2 + nfargs;
-        self.begin_call(func_slot + 1, Some(nfargs), -1, true)?;
+        let callee = self.shift_callee(func_slot + 1, nfargs + 1, shift);
+        self.top = callee + 1 + nfargs;
+        frames_push_sync(
+            &mut self.frames,
+            &mut self.frames_top,
+            &mut self.trap,
+            CallFrame::Cont(NativeCont {
+                kind: ContKind::Xpcall {
+                    handler,
+                    level,
+                    shift,
+                },
+                func_slot,
+                nresults,
+            }),
+        );
+        self.begin_call(callee, Some(nfargs), -1, true)?;
         Ok(true)
+    }
+
+    /// The continuation of a protected call takes a C level when it is one
+    /// of PUC's (see `begin_pcall`); the error is raised inside pcall, a C
+    /// function: no position.
+    fn enter_pcall_level(&mut self, level: bool) -> Result<(), LuaError> {
+        if level {
+            self.check_c_level(false)?;
+            self.g.nccalls += 1;
+        }
+        Ok(())
     }
 
     /// `pairs(t)` where `t` has a `__pairs` metamethod (PUC luaB_pairs's
@@ -108,38 +192,72 @@ impl Vm {
         let Value::Native(nc) = self.stack[func_slot as usize] else {
             unreachable!("pcall/xpcall dispatch sits on a native")
         };
-        let act = crate::vm::callstack::NativeAct {
+        self.push_native(crate::vm::callstack::NativeAct::new(
             nc,
             func_slot,
             nargs,
-            depth: self.frames.len() as u32,
-            ccmt: 0,
-        };
-        self.push_native(act)?;
-        let r = check(self);
-        self.running_natives.pop();
+            self.frames.len(),
+            0,
+        ))?;
+        let r = self.in_native_window(check);
+        let act = self.running_natives.pop().expect("pushed above");
+        // raised by that native, as it would have been once entered
+        if let Err(e) = &r {
+            self.note_errored_native(act, e.0);
+        }
         r
     }
 
-    pub(super) fn begin_pairs(&mut self, func_slot: u32, nresults: i32) -> Result<bool, LuaError> {
+    pub(super) fn begin_pairs(
+        &mut self,
+        func_slot: u32,
+        nargs: u32,
+        nresults: i32,
+    ) -> Result<bool, LuaError> {
+        // mm(t) is pushed above pairs's arguments and called there, wanting
+        // 4; `pairs` keeps its slot so the debug interface can report it as
+        // the C function running below the metamethod
+        let at = 1 + nargs;
+        let need = (func_slot + at + 2) as usize;
+        // the room first: once the level is taken nothing may fail before
+        // the continuation that gives it back is pushed
+        self.grow_stack(need)?;
+        self.cf_room()?;
+        self.enter_c_level(false)?;
         let arg = self.stack[(func_slot + 1) as usize];
         let mm = self.get_mm(arg, Mm::Pairs);
-        // layout becomes [pairs@func_slot, mm@func_slot+1, t@func_slot+2]:
-        // `pairs` keeps its slot so the debug interface can report it as the
-        // C function running below the metamethod. Call mm(t) wanting 4.
-        let need = (func_slot + 3) as usize;
-        self.grow_stack(need)?;
-        self.stack[(func_slot + 2) as usize] = arg;
-        self.stack[(func_slot + 1) as usize] = mm;
-        self.top = func_slot + 3;
-        let cf = CallFrame::Cont(NativeCont {
-            kind: ContKind::Pairs,
-            func_slot,
-            nresults,
-        });
-        self.push_cf(cf)?;
+        self.stack[(func_slot + at + 1) as usize] = arg;
+        self.stack[(func_slot + at) as usize] = mm;
+        self.top = func_slot + at + 2;
+        frames_push_sync(
+            &mut self.frames,
+            &mut self.frames_top,
+            &mut self.trap,
+            CallFrame::Cont(NativeCont {
+                kind: ContKind::Pairs { at },
+                func_slot,
+                nresults,
+            }),
+        );
         let want = crate::vm::builtins::pairs_mm_results(self) as i32;
-        self.begin_call(func_slot + 1, Some(1), want, true)?;
+        self.begin_call(func_slot + at, Some(1), want, true)?;
         Ok(true)
+    }
+
+    /// Put `f` and `args` at `slot` for a call made there (see
+    /// `call_value_impl`), over whatever the stack holds above it.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn place_call(
+        &mut self,
+        slot: u32,
+        f: Value,
+        args: &[Value],
+    ) -> Result<u32, LuaError> {
+        let end = slot as usize + 1 + args.len();
+        self.grow_stack(end)?;
+        self.stack[slot as usize] = f;
+        self.stack[slot as usize + 1..end].copy_from_slice(args);
+        Ok(slot)
     }
 }

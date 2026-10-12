@@ -55,3 +55,7 @@ dhat = "0.3"
 [[bench]]
 name = "mem_baseline"
 harness = false
+
+[[test]]
+name = "main_thread_stack"
+harness = false

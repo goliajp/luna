@@ -7,7 +7,6 @@
 //! `LoadF` / `LoadK` that used to precede the register form.
 
 use inkwell::IntPredicate;
-use luna_core::runtime::Value;
 use luna_core::vm::isa::{Inst, Op};
 
 /// One operand of an integer op.
@@ -39,7 +38,17 @@ pub(crate) fn is_arith(op: Op) -> bool {
 pub(crate) fn is_compare(op: Op) -> bool {
     matches!(
         op,
-        Op::Lt | Op::Le | Op::Eq | Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI | Op::EqK
+        Op::Lt
+            | Op::Le
+            | Op::Eq
+            | Op::EqI
+            | Op::LtI
+            | Op::LeI
+            | Op::GtI
+            | Op::GeI
+            | Op::EqK
+            | Op::LtK
+            | Op::LeK
     )
 }
 
@@ -51,22 +60,21 @@ pub(crate) fn operand_regs(ins: Inst) -> Vec<u32> {
         Op::Add | Op::Sub | Op::Mul | Op::Mod => vec![ins.b(), ins.c()],
         Op::AddI | Op::SubI | Op::AddK | Op::SubK | Op::MulK | Op::ModK => vec![ins.b()],
         Op::Lt | Op::Le | Op::Eq => vec![ins.a(), ins.b()],
-        Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI | Op::EqK => vec![ins.a()],
+        Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI | Op::EqK | Op::LtK | Op::LeK => {
+            vec![ins.a()]
+        }
         _ => vec![],
     }
 }
 
-fn int_const(consts: &[Value], idx: u32) -> Option<i64> {
-    match consts.get(idx as usize)? {
-        Value::Int(i) => Some(*i),
-        _ => None,
-    }
+fn int_const(consts: &[Option<i64>], idx: u32) -> Option<i64> {
+    consts.get(idx as usize).copied().flatten()
 }
 
 /// The register-form operator and the two operands of an arithmetic
 /// instruction, `None` when the instruction is not one the path lowers.
-/// The result does not depend on `k` (the constant written on the left).
-pub(crate) fn int_arith(ins: Inst, consts: &[Value]) -> Option<(Op, Operand, Operand)> {
+/// A constant written on the left (`k`) is the left operand.
+pub(crate) fn int_arith(ins: Inst, consts: &[Option<i64>]) -> Option<(Op, Operand, Operand)> {
     let lhs = Operand::Reg(ins.b());
     match ins.op() {
         Op::Add | Op::Sub | Op::Mul | Op::Mod => Some((ins.op(), lhs, Operand::Reg(ins.c()))),
@@ -75,11 +83,18 @@ pub(crate) fn int_arith(ins: Inst, consts: &[Value]) -> Option<(Op, Operand, Ope
             lhs,
             Operand::Imm(i64::from(ins.sc())),
         )),
+        Op::AddK | Op::SubK | Op::MulK if ins.k() => Some((
+            ins.arith_const_op()?,
+            Operand::Imm(int_const(consts, ins.c())?),
+            lhs,
+        )),
         Op::AddK | Op::SubK | Op::MulK => Some((
             ins.arith_const_op()?,
             lhs,
             Operand::Imm(int_const(consts, ins.c())?),
         )),
+        // `K % R[B]`: the register divisor is checked where it is used
+        Op::ModK if ins.k() => Some((Op::Mod, Operand::Imm(int_const(consts, ins.c())?), lhs)),
         // a zero divisor is the interpreter's error
         Op::ModK => match int_const(consts, ins.c())? {
             0 => None,
@@ -92,7 +107,7 @@ pub(crate) fn int_arith(ins: Inst, consts: &[Value]) -> Option<(Op, Operand, Ope
 /// The predicate and right operand of a comparison instruction (the left
 /// operand is `R[A]`), `None` when the instruction is not one the path
 /// lowers: a float immediate (`C != 0`) or a non-integer constant.
-pub(crate) fn int_compare(ins: Inst, consts: &[Value]) -> Option<(IntPredicate, Operand)> {
+pub(crate) fn int_compare(ins: Inst, consts: &[Option<i64>]) -> Option<(IntPredicate, Operand)> {
     let imm = Operand::Imm(i64::from(ins.sb()));
     match ins.op() {
         Op::Lt => Some((IntPredicate::SLT, Operand::Reg(ins.b()))),
@@ -105,6 +120,17 @@ pub(crate) fn int_compare(ins: Inst, consts: &[Value]) -> Option<(IntPredicate, 
         Op::GtI => Some((IntPredicate::SGT, imm)),
         Op::GeI => Some((IntPredicate::SGE, imm)),
         Op::EqK => Some((IntPredicate::EQ, Operand::Imm(int_const(consts, ins.b())?))),
+        // `C`: the constant is the left operand, `K < R[A]` is `R[A] > K`
+        Op::LtK | Op::LeK => {
+            let k = Operand::Imm(int_const(consts, ins.b())?);
+            let p = match (ins.op(), ins.c() != 0) {
+                (Op::LtK, false) => IntPredicate::SLT,
+                (Op::LtK, true) => IntPredicate::SGT,
+                (_, false) => IntPredicate::SLE,
+                (_, true) => IntPredicate::SGE,
+            };
+            Some((p, k))
+        }
         _ => None,
     }
 }
@@ -119,8 +145,29 @@ mod tests {
     }
 
     #[test]
+    fn a_constant_on_the_left_is_the_left_operand() {
+        let consts = [Some(5)];
+        assert_eq!(
+            int_arith(Inst::iabc(Op::SubK, 1, 0, 0, true), &consts),
+            Some((Op::Sub, Operand::Imm(5), Operand::Reg(0)))
+        );
+        assert_eq!(
+            int_arith(Inst::iabc(Op::ModK, 1, 0, 0, true), &consts),
+            Some((Op::Mod, Operand::Imm(5), Operand::Reg(0)))
+        );
+        assert_eq!(
+            int_compare(Inst::iabc(Op::LtK, 2, 0, 1, true), &consts),
+            Some((IntPredicate::SGT, Operand::Imm(5)))
+        );
+        assert_eq!(
+            int_compare(Inst::iabc(Op::LeK, 2, 0, 0, true), &consts),
+            Some((IntPredicate::SLE, Operand::Imm(5)))
+        );
+    }
+
+    #[test]
     fn immediate_forms_carry_the_signed_field() {
-        let consts = [Value::Int(100_000), Value::Float(1.5), Value::Nil];
+        let consts = [Some(100_000), None, None];
         assert_eq!(
             int_arith(Inst::iabc(Op::AddI, 1, 0, enc(-3), false), &consts),
             Some((Op::Add, Operand::Reg(0), Operand::Imm(-3)))
@@ -170,7 +217,7 @@ mod tests {
 
     #[test]
     fn mod_by_a_constant_zero_is_refused() {
-        let consts = [Value::Int(0), Value::Int(-3)];
+        let consts = [Some(0), Some(-3)];
         assert_eq!(
             int_arith(Inst::iabc(Op::ModK, 1, 0, 0, false), &consts),
             None

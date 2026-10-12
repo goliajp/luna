@@ -181,6 +181,7 @@ pub fn pack_exit_tag(t: ExitTag) -> u8 {
         ExitTag::Nil => 5,
         ExitTag::Str => 6,
         ExitTag::Bool => 7,
+        ExitTag::Native => 8,
     }
 }
 
@@ -196,6 +197,7 @@ pub fn unpack_exit_tag(b: u8) -> Option<ExitTag> {
         5 => Some(ExitTag::Nil),
         6 => Some(ExitTag::Str),
         7 => Some(ExitTag::Bool),
+        8 => Some(ExitTag::Native),
         _ => None,
     }
 }

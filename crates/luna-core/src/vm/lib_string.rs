@@ -53,7 +53,8 @@ pub(crate) fn try_open_string(vm: &mut Vm) -> Result<(), LuaError> {
         fns.push(("packsize", crate::vm::lib_strpack::s_packsize));
     }
     for (name, f) in fns {
-        let fv = vm.lib_native(f)?;
+        let b = inlinable_builtin(name.as_bytes()).unwrap_or(crate::runtime::Builtin::None);
+        let fv = vm.builtin(f, &[], b)?;
         set(vm, t, name, fv)?;
     }
     // 5.1's LUA_COMPAT_GFIND keeps `gfind` as the very same function as
@@ -142,12 +143,12 @@ pub(crate) fn try_str_sub(
     vm.alloc_str(bytes)
 }
 
-/// The library function `string.<name>` that the trace JIT may run as a
-/// direct call on arguments of known types, if `name` is one.
+/// The library function `string.<name>` is, if it is one the trace JIT
+/// may run as a direct call on arguments of known types.
 #[doc(hidden)]
-pub fn inlinable_native(name: &[u8]) -> Option<crate::runtime::value::NativeFn> {
+pub fn inlinable_builtin(name: &[u8]) -> Option<crate::runtime::Builtin> {
     match name {
-        b"sub" => Some(s_sub),
+        b"sub" => Some(crate::runtime::Builtin::StringSub),
         _ => None,
     }
 }
@@ -271,10 +272,18 @@ fn s_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let mut out = vm.new_buf();
     vm.buf_reserve(&mut out, nargs as usize)?;
     for i in 0..nargs {
-        let c = if v <= LuaVersion::Lua52 {
-            i64::from(argcheck::check_int(vm, a, i)?)
+        let c = match if v <= LuaVersion::Lua52 {
+            argcheck::check_int(vm, a, i).map(i64::from)
         } else {
-            argcheck::check_integer(vm, a, i)?
+            argcheck::check_integer(vm, a, i)
+        } {
+            Ok(c) => c,
+            Err(e) => {
+                // `luaL_buffinitsize` sized the buffer to the arguments
+                let buf = vm.buffer_slot(nargs as usize);
+                vm.native_push(buf);
+                return Err(e);
+            }
         };
         if !(0..=255).contains(&c) {
             let msg = if v == LuaVersion::Lua51 {
@@ -282,6 +291,8 @@ fn s_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             } else {
                 "value out of range"
             };
+            let buf = vm.buffer_slot(nargs as usize);
+            vm.native_push(buf);
             return Err(arg_error(vm, i + 1, msg));
         }
         vm.buf_push(&mut out, &[c as u8])?;

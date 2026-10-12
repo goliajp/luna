@@ -20,6 +20,13 @@ impl Os for Mem {
     }
 }
 
+/// What `fopen` with `mode` makes, in text mode unless `text` is false.
+fn open(mode: &[u8], text: bool, pipe: bool) -> CrtFile {
+    let mut spec = super::super::fopen::ucrt_mode(mode).expect("a valid mode");
+    spec.binary = !text;
+    CrtFile::open(&spec, pipe)
+}
+
 fn mem(bytes: &[u8]) -> Mem {
     Mem(Cursor::new(bytes.to_vec()))
 }
@@ -31,7 +38,7 @@ fn mem(bytes: &[u8]) -> Mem {
 fn positions_after_setvbuf_match_the_library() {
     for (mode, size, want) in [(2, 0, [1, 4]), (0, 100, [1, 5]), (1, 30, [1, 5])] {
         let mut os = mem(&b"abc\n".repeat(300));
-        let mut f = CrtFile::open(b"r", true, false);
+        let mut f = open(b"r", true, false);
         f.setvbuf(&mut os, mode, size);
         assert_eq!(f.fread(&mut os, 1), b"a");
         assert!(f.fseek(&mut os, 0, 1));
@@ -52,12 +59,12 @@ fn positions_after_setvbuf_match_the_library() {
 #[test]
 fn text_mode_translates_both_ways() {
     let mut os = mem(b"");
-    let mut f = CrtFile::open(b"w", true, false);
+    let mut f = open(b"w", true, false);
     assert_eq!(f.fwrite(&mut os, b"a\nb\r\n"), 5);
     assert!(f.fflush(&mut os));
     assert_eq!(os.0.get_ref(), b"a\r\nb\r\r\n");
     let mut os = mem(b"a\r\nb\r\r\nc\x1ad");
-    let mut f = CrtFile::open(b"r", true, false);
+    let mut f = open(b"r", true, false);
     assert_eq!(f.fread(&mut os, 100), b"a\nb\r\nc");
     assert_eq!(translate_all(b"a\r\nb\x1ac"), b"a\nb");
 }
@@ -67,7 +74,7 @@ fn text_mode_translates_both_ways() {
 #[test]
 fn write_after_read_fails_until_a_seek() {
     let mut os = mem(b"aa\nbb\n");
-    let mut f = CrtFile::open(b"r+", false, false);
+    let mut f = open(b"r+", false, false);
     assert_eq!(f.getc(&mut os), Some(b'a'));
     assert_eq!(f.fwrite(&mut os, b"X"), 0);
     assert!(!f.ferror());
@@ -80,7 +87,7 @@ fn write_after_read_fails_until_a_seek() {
 #[test]
 fn ungetc_at_the_start_of_a_full_buffer_is_refused() {
     let mut os = mem(b"12345");
-    let mut f = CrtFile::open(b"r", false, false);
+    let mut f = open(b"r", false, false);
     assert_eq!(f.getc(&mut os), Some(b'1'));
     assert!(f.ungetc(b'1'));
     assert!(!f.ungetc(b'0'));
@@ -102,8 +109,34 @@ fn scanf_takes_what_msvc_takes() {
         (b"- 3", None, b" 3"),
     ] {
         let mut os = mem(input);
-        let mut f = CrtFile::open(b"r", false, false);
+        let mut f = open(b"r", false, false);
         assert_eq!(scan::scan_double(&mut f, &mut os), want, "{input:?}");
         assert_eq!(f.fread(&mut os, 100), rest, "{input:?}");
     }
+}
+
+/// Numbers for `fscanf("%lf")`, with the bits MSVC's `sscanf` gave for
+/// each on windows-latest (`tests/crt_text/hexscan.c`): 25 chosen
+/// hexadecimal edge cases and 4000 random ones (long mantissas, ties,
+/// subnormals, overflow, and the library's slip at the smallest normal),
+/// then 14 decimal edge cases and 3000 random ones.
+#[test]
+fn numbers_convert_as_msvc_converts_them() {
+    let data = include_str!("../../../../tests/crt_text/hexscan-msvc.txt");
+    let mut checked = 0;
+    for line in data.lines() {
+        let mut parts = line.split('\t');
+        let (input, n, bits) = (
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+        );
+        assert_eq!(n, "1", "{input}");
+        let mut os = mem(input.as_bytes());
+        let mut f = open(b"r", false, false);
+        let got = scan::scan_double(&mut f, &mut os).expect(input);
+        assert_eq!(format!("{:016x}", got.to_bits()), bits, "{input}");
+        checked += 1;
+    }
+    assert_eq!(checked, 7039);
 }

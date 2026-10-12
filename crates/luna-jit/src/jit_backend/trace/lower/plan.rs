@@ -4,12 +4,16 @@ mod cmp_table_checks;
 mod frames;
 mod op_checks;
 mod scan;
+mod trace_ends;
 mod validate;
+mod value_checks;
 use cmp_table_checks::*;
 use frames::*;
 use op_checks::*;
 use scan::*;
+use trace_ends::*;
 use validate::*;
+use value_checks::*;
 
 // detect the FIRST Bufferable AccumSite.
 // Buffered emit handles a single site. The 4 idiom op indices
@@ -22,7 +26,7 @@ pub(super) struct BufferedAccum {
     pub(super) pre1_idx: usize,
     pub(super) pre2_idx: usize,
     pub(super) concat_idx: usize,
-    pub(super) post_idx: usize,
+    pub(super) post_idx: Option<usize>,
 }
 
 /// What the pre-emit passes found out about a trace: its register
@@ -33,10 +37,10 @@ pub(super) struct Plan<'r> {
     pub(super) head_proto: Gc<Proto>,
     pub(super) max_stack: usize,
     /// The width of every op's register window: the largest frame among
-    /// the functions the trace runs. Register `frame_w` is the virtual one
-    /// of a constant operand.
+    /// the functions the trace runs. Registers `frame_w` up are the virtual
+    /// ones of a constant operand or an upvalue table (see `vconsts`).
     pub(super) frame_w: usize,
-    pub(super) vconsts: Vec<Option<VConst>>,
+    pub(super) vconsts: Vec<VRegs>,
     pub(super) opts: CompileOptions,
     pub(super) float_only: bool,
     pub(super) op_offsets: Vec<u32>,
@@ -76,16 +80,11 @@ pub(super) struct Plan<'r> {
     pub(super) step_guard: Option<(usize, bool)>,
 }
 
-/// The constant held by the virtual register of op `i`, if it has one.
-pub(super) fn vconst_at(vconsts: &[Option<VConst>], i: usize) -> Option<VConst> {
-    vconsts.get(i).copied().flatten()
-}
-
 /// The pre-emit passes. `None` when the trace cannot be compiled; the
 /// escape analysis comes back separately because emit demotes sites.
 pub(super) fn plan_trace<'r>(
     record: &'r TraceRecord,
-    vconsts: Vec<Option<VConst>>,
+    vconsts: Vec<VRegs>,
     head_proto: Gc<Proto>,
     max_stack: usize,
     frame_w: usize,
@@ -113,7 +112,7 @@ pub(super) fn plan_trace<'r>(
         (Vec::new(), Vec::new())
     };
 
-    side_trace_gate(record, &op_offsets)?;
+    side_trace_gate(record, &op_offsets, opts.internal_loop)?;
     let (folded_ops, math_folds) = scan_math_folds(record, n, head_proto, opts);
     let end_idx_opt = find_trace_end(record, &folded_ops, n, &inline_calls)?;
     let effective_end = end_idx_opt.map(|(i, _)| i).unwrap_or(n);
@@ -217,7 +216,7 @@ pub(super) fn plan_trace<'r>(
             pre1_idx: s.op_idx - 2,
             pre2_idx: s.op_idx - 1,
             concat_idx: s.op_idx,
-            post_idx: s.op_idx + 1,
+            post_idx: s.has_post.then_some(s.op_idx + 1),
         });
 
     let (consumed_by_cmp, cmp_dirs) = validate_ops(

@@ -18,12 +18,38 @@ impl Os for StdinOs {
     fn write_all(&mut self, _buf: &[u8]) -> std::io::Result<()> {
         Err(posix_error(EBADF))
     }
-    fn seek(&mut self, _from: SeekFrom) -> std::io::Result<u64> {
-        Err(posix_error(ESPIPE))
+    fn seek(&mut self, from: SeekFrom) -> std::io::Result<u64> {
+        std::io::Seek::seek(&mut *stdin_file()?, from)
     }
     fn len(&mut self) -> std::io::Result<u64> {
-        Err(posix_error(ESPIPE))
+        Ok(stdin_file()?.metadata()?.len())
     }
+}
+
+/// The OS file behind standard input, for the seeks the C library makes
+/// on it (`_lseeki64` on its handle: the system answers for a file, a
+/// pipe or a device). A duplicate of the descriptor on Unix; the handle
+/// itself on Windows, left open.
+#[cfg(unix)]
+fn stdin_file() -> std::io::Result<std::mem::ManuallyDrop<std::fs::File>> {
+    use std::os::fd::AsFd;
+    let fd = std::io::stdin().as_fd().try_clone_to_owned()?;
+    Ok(std::mem::ManuallyDrop::new(std::fs::File::from(fd)))
+}
+
+#[cfg(windows)]
+fn stdin_file() -> std::io::Result<std::mem::ManuallyDrop<std::fs::File>> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle};
+    let h = std::io::stdin().as_raw_handle();
+    // SAFETY: the handle is this process's standard input, open for its lifetime; the `File` is never dropped, so it stays open
+    Ok(std::mem::ManuallyDrop::new(unsafe {
+        std::fs::File::from_raw_handle(h)
+    }))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn stdin_file() -> std::io::Result<std::mem::ManuallyDrop<std::fs::File>> {
+    Err(posix_error(ESPIPE))
 }
 
 /// `ReadFile` on a console: a line typed in the console's code page, and
@@ -92,13 +118,24 @@ pub(super) fn error() -> std::io::Error {
     crt_error(super::msvc::errno())
 }
 
+/// `_VALIDATE_STREAM_ANSI_RETURN`: the functions on bytes (`getc`,
+/// `ungetc`, `fgets`, `fscanf`, `fprintf`) take no stream in a Unicode
+/// mode; given one, they end the process.
+pub(super) fn ansi_only(u: Gc<Userdata>) {
+    if with(u, |f, _| f.io.mode != msvc::TextMode::Ansi || f.io.unicode) {
+        invalid_parameter();
+    }
+}
+
 /// `getc`
 pub(super) fn getc(u: Gc<Userdata>) -> Option<u8> {
+    ansi_only(u);
     with(u, |f, os| f.getc(os))
 }
 
 /// `ungetc` of each byte; a refused one is lost, as in the C library.
 pub(super) fn unget(u: Gc<Userdata>, bytes: &[u8]) {
+    ansi_only(u);
     with(u, |f, _| {
         for &b in bytes {
             f.ungetc(b);
@@ -141,12 +178,9 @@ pub(super) fn seek(u: Gc<Userdata>, op: usize, offset: i64) -> std::io::Result<i
     })
 }
 
-/// `clearerr`, and (5.4+) `errno = 0`, at the start of a read.
-pub(super) fn begin_read(vm: &Vm, u: Gc<Userdata>) {
+/// `clearerr` at the start of a read.
+pub(super) fn begin_read(u: Gc<Userdata>) {
     with(u, |f, _| f.clearerr());
-    if vm.version() >= LuaVersion::Lua54 {
-        super::msvc::set_errno(0);
-    }
 }
 
 /// `ferror` after the formats of a read.

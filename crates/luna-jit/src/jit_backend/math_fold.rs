@@ -10,6 +10,24 @@ pub(super) fn is_rounding(fn_name: &str) -> bool {
     matches!(fn_name, "floor" | "ceil")
 }
 
+/// The number `luna_jit_math1` takes for the libm function `fn_name` of a
+/// fold, for those that can set `errno`; the others are called directly.
+pub(super) fn errno_math_fn(fn_name: &str) -> Option<i64> {
+    use luna_core::cerrno::MathFn;
+    let f = match fn_name {
+        "sin" => MathFn::Sin,
+        "cos" => MathFn::Cos,
+        "tan" => MathFn::Tan,
+        "asin" => MathFn::Asin,
+        "acos" => MathFn::Acos,
+        "exp" => MathFn::Exp,
+        "log" => MathFn::Log,
+        "sqrt" => MathFn::Sqrt,
+        _ => return None,
+    };
+    Some(f.index())
+}
+
 /// try to recognize the 4-op `<env>.math.<fn>(R[arg])` window
 /// starting at `start_pc`. Returns `Some(MathFold)` on match, `None`
 /// otherwise. Pure inspection — no side effects, no whitelist
@@ -89,5 +107,24 @@ pub(super) fn try_match_math_fold(
         int_result: !float_only && is_rounding(fn_name),
         math_key: s,
         name_key: fname,
+    })
+}
+
+/// The C math functions a folded `math.*` call reaches without luna's
+/// `errno` bookkeeping (none of them sets it), which Cranelift's JIT finds
+/// by symbol lookup in the process.
+pub(crate) fn libm(name: &str) -> Option<*const u8> {
+    unsafe extern "C" {
+        fn atan(x: f64) -> f64;
+        fn atan2(y: f64, x: f64) -> f64;
+        fn floor(x: f64) -> f64;
+        fn ceil(x: f64) -> f64;
+    }
+    Some(match name {
+        "atan" => atan as *const u8,
+        "atan2" => atan2 as *const u8,
+        "floor" => floor as *const u8,
+        "ceil" => ceil as *const u8,
+        _ => return None,
     })
 }

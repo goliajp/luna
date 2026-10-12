@@ -3,8 +3,23 @@
 
 use super::*;
 use crate::runtime::mem::LVec;
+use crate::vm::exec::state::CallGuards;
 
 impl Vm {
+    /// The host runs its calls from inside a C function of its own that
+    /// holds `frames` frames and `slots` stack slots below everything else,
+    /// as `lua.c`'s `pmain` does: `lua_cpcall` (5.1) or `lua_pcall` with
+    /// two arguments. Call once, before anything runs: the same depth then
+    /// ends a recursion in both.
+    #[doc(hidden)]
+    pub fn host_entry_layout(&mut self, frames: u32, slots: u32) {
+        self.g.host_frames += frames;
+        for _ in 0..slots {
+            self.stack.push_or_abort(Value::Nil);
+        }
+        self.top = self.stack.len() as u32;
+    }
+
     /// `lua_close` from inside a running script (`os.exit(code, true)`):
     /// close the main thread's pending to-be-closed variables, then run every
     /// finalizer. Both run protected, so their errors are dropped as PUC's
@@ -59,14 +74,34 @@ impl Vm {
             mm_names,
             parse_scratch: crate::frontend::parser::ParseScratch::new(mem_owner.clone()),
             compile_scratch: crate::compiler::CompileScratch::new(mem),
-            c_depth: 0,
-            pcall_depth: 0,
+            g: CallGuards {
+                nccalls: 0,
+                stale_frames: 0,
+                frame_size: if version == LuaVersion::Lua51 {
+                    BASIC_FRAME_SIZE_51
+                } else {
+                    u32::MAX
+                },
+                lua_stack_limit: lua_stack_limit(version),
+                frames_native: 0,
+                host_frames: 0,
+                meta_conts: 0,
+            },
             nny: 0,
             msgh_depth: 0,
             terminating: None,
             rng: [0; 4],
             started: std::time::Instant::now(),
             version,
+            frame_cap: if version == LuaVersion::Lua51 {
+                MAX_CALLS_51
+            } else {
+                u32::MAX
+            },
+            c_overflow_err: None,
+            overflow_top: None,
+            varinfo_pushed: false,
+            stack_extra: false,
             closing_err: None,
             current: None,
             main_ctx: None,
@@ -98,6 +133,7 @@ impl Vm {
             warn_cont: false,
             warn_log: LVec::new(mem),
             instr_budget: None,
+            limited: false,
             bytecode_loading: true,
             puc_bytecode_loading: false,
             loader_input_budget: Vm::DEFAULT_LOADER_INPUT_BUDGET,
@@ -118,6 +154,7 @@ impl Vm {
             msgh_running: None,
             msgh_runs: 0,
             errerr_raised: 0,
+            errerr_in_flight: None,
             gcmm_raised: 0,
             native_ret_hooked: false,
             tail_hook_fired: false,
@@ -134,6 +171,7 @@ impl Vm {
             public_call_depth: 0,
             running_natives: LVec::new(mem),
             natives_base: 0,
+            native_window_panic: 0,
             // JIT-specific state lives in the `JitState`
             // sidecar. The `luna` crate's `Vm::new_minimal_with_jit` /
             // `install_jit_backend` / `luaL_newstate` swap in
@@ -288,7 +326,7 @@ impl Vm {
         self.jit.chunk_compiler = Box::new(chunk);
         self.jit.trace_compiler = Box::new(trace);
         if !self.jit.enabled_chosen {
-            self.jit.enabled = true;
+            self.set_jit_flag(true);
         }
         if !self.jit.trace_enabled_chosen {
             self.jit.trace_enabled = true;

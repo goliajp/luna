@@ -60,6 +60,13 @@ macro_rules! fast_load_arms {
                 next!()
             }};
         }
+        macro_rules! op_l_true_skip {
+            () => {{
+                set_reg!($inst.a(), Value::Bool(true));
+                $npc += 1;
+                next!()
+            }};
+        }
         macro_rules! op_load_true {
             () => {{
                 set_reg!($inst.a(), Value::Bool(true));
@@ -106,6 +113,70 @@ macro_rules! fast_load_arms {
                 resume_same!()
             }};
         }
+        // 5.1 `GETGLOBAL` with a name past constant 255
+        macro_rules! op_get_global {
+            () => {{
+                let t = $vm.upval_get(cl!(), 0);
+                let pk = $kptr.wrapping_add($inst.bx() as usize);
+                // SAFETY: a constant and a register of the running frame
+                if unsafe { Vm::index_raw_kstr_key_at(t, pk, $regs.add($inst.a() as usize)) }
+                {
+                    next!()
+                }
+                save!();
+                index_op_miss!()?;
+                resume_same!()
+            }};
+        }
+        // 5.1 `SETGLOBAL` with a name past constant 255
+        macro_rules! op_set_global {
+            () => {{
+                let t = $vm.upval_get(cl!(), 0);
+                let pk = $kptr.wrapping_add($inst.bx() as usize);
+                let pv = $regs.wrapping_add($inst.a() as usize);
+                // SAFETY: a constant and a register of the running frame
+                if unsafe { $vm.newindex_raw_key_at(t, pk, pv) } {
+                    next!()
+                }
+                save!();
+                newindex_op_miss!()?;
+                resume_same!()
+            }};
+        }
+        // `GetTabUpR`: an upvalue table, a key in a register or a constant
+        macro_rules! op_get_tab_up_r {
+            () => {{
+                let t = $vm.upval_get(cl!(), $inst.b());
+                let pk = if $inst.k() {
+                    $kptr.wrapping_add($inst.c() as usize)
+                } else {
+                    $regs.wrapping_add($inst.c() as usize)
+                };
+                // SAFETY: a local, a register or constant and a register of
+                // the running frame
+                if unsafe { Vm::index_raw_at(&t, pk, $regs.add($inst.a() as usize)) } {
+                    next!()
+                }
+                save!();
+                index_op_miss!()?;
+                resume_same!()
+            }};
+        }
+        // `SetTabUpR` / `SetTabUpK`: an upvalue table, the key at `pk`
+        macro_rules! op_set_tab_up_x {
+            ($d pk:expr) => {{
+                let t = $vm.upval_get(cl!(), $inst.a());
+                let pk: *const Value = $d pk;
+                let pv = store_value!();
+                // SAFETY: registers and constants of the running frame
+                if unsafe { $vm.newindex_raw_key_at(t, pk, pv) } {
+                    next!()
+                }
+                save!();
+                newindex_op_miss!()?;
+                resume_same!()
+            }};
+        }
         macro_rules! op_get_field {
             () => {{
                 get_arm!($kptr.wrapping_add($inst.c() as usize), index_raw_kstr_at)
@@ -128,8 +199,8 @@ macro_rules! fast_load_arms {
             () => {{
                 let t = $vm.upval_get(cl!(), $inst.a());
                 let pk = $kptr.wrapping_add($inst.b() as usize);
-                let pv = $regs.wrapping_add($inst.c() as usize);
-                // SAFETY: a constant and a register of the running frame
+                let pv = store_value!();
+                // SAFETY: constants and a register of the running frame
                 if unsafe { $vm.newindex_raw_key_at(t, pk, pv) } {
                     next!()
                 }
@@ -147,8 +218,8 @@ macro_rules! fast_load_arms {
             () => {{
                 let pt = $regs.wrapping_add($inst.a() as usize);
                 let key = Value::Int($inst.b() as i64);
-                let pv = $regs.wrapping_add($inst.c() as usize);
-                // SAFETY: registers of the running frame
+                let pv = store_value!();
+                // SAFETY: a register or constant of the running frame
                 if unsafe { $vm.newindex_raw_at(pt, &key, pv) } {
                     next!()
                 }

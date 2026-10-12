@@ -83,8 +83,8 @@ pub(crate) fn resolve_symbol(name: &str) -> Option<*const u8> {
 }
 
 /// Notes where the relocations sit in the function `ctx` just compiled
-/// into `module` (see [`take_sites`]).
-pub(crate) fn note_sites<M: Module>(module: &M, ctx: &cranelift_codegen::Context) {
+/// into `module` behind `lead` bytes (see [`take_sites`]).
+fn note_sites<M: Module>(module: &M, ctx: &cranelift_codegen::Context, lead: u32) {
     let sites = ctx.compiled_code().and_then(|cc| {
         let mut sites = Vec::new();
         for r in cc.buffer.relocs() {
@@ -119,11 +119,83 @@ pub(crate) fn note_sites<M: Module>(module: &M, ctx: &cranelift_codegen::Context
                 .as_deref()
                 .and_then(|s| s.strip_prefix("__luna_reloc_"))
                 .and_then(|s| s.parse::<u32>().ok())?;
-            sites.push(Site { at: r.offset, n });
+            sites.push(Site {
+                at: r.offset + lead,
+                n,
+            });
         }
-        Some((cc.code_buffer().len(), sites))
+        Some((lead as usize + cc.code_buffer().len(), sites))
     });
     LAST_SITES.with(|s| *s.borrow_mut() = sites);
+}
+
+/// The byte a trace's loop head starts at a multiple of.
+const LOOP_ALIGN: u32 = 16;
+
+/// Compiles `ctx` into function `id` of `module` with no-ops in front, so
+/// that its loop head (the target of its last back edge) starts at a
+/// multiple of [`LOOP_ALIGN`]: where the loop starts in the fetch blocks
+/// changed a table loop's speed by 4% (`tbl`).
+pub(crate) fn define_aligned<M: Module>(
+    module: &mut M,
+    id: FuncId,
+    ctx: &mut cranelift_codegen::Context,
+) -> Option<()> {
+    ctx.compile(module.isa(), &mut Default::default()).ok()?;
+    let cc = ctx.compiled_code()?;
+    let head = cc
+        .bb_edges
+        .iter()
+        .filter(|e| e.1 <= e.0)
+        .max_by_key(|e| e.0);
+    let lead = head.map_or(0, |&(_, to)| (LOOP_ALIGN - to % LOOP_ALIGN) % LOOP_ALIGN);
+    let mut bytes = Vec::with_capacity(lead as usize + cc.code_buffer().len());
+    nops(&mut bytes, lead as usize);
+    bytes.extend_from_slice(cc.code_buffer());
+    let relocs: Vec<_> = (cc.buffer.relocs().iter())
+        .map(|r| {
+            let mut m = cranelift_module::ModuleReloc::from_mach_reloc(r, &ctx.func, id);
+            m.offset += lead;
+            m
+        })
+        .collect();
+    let align = u64::from(cc.buffer.alignment.max(LOOP_ALIGN));
+    module
+        .define_function_bytes(id, align, &bytes, &relocs)
+        .ok()?;
+    super::code_dump::note_len(bytes.len());
+    note_sites(module, ctx, lead);
+    Some(())
+}
+
+/// `n` bytes of no-ops, `n` a multiple of the instruction size.
+fn nops(out: &mut Vec<u8>, n: usize) {
+    #[cfg(target_arch = "aarch64")]
+    for _ in 0..n / 4 {
+        out.extend_from_slice(&0xd503_201f_u32.to_le_bytes());
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        // the multi-byte forms of `nop` Intel recommends, by length
+        const NOPS: [&[u8]; 8] = [
+            &[0x90],
+            &[0x66, 0x90],
+            &[0x0f, 0x1f, 0x00],
+            &[0x0f, 0x1f, 0x40, 0x00],
+            &[0x0f, 0x1f, 0x44, 0x00, 0x00],
+            &[0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00],
+            &[0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00],
+            &[0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00],
+        ];
+        let mut left = n;
+        while left > 0 {
+            let k = left.min(NOPS.len());
+            out.extend_from_slice(NOPS[k - 1]);
+            left -= k;
+        }
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    out.resize(out.len() + n, 0);
 }
 
 /// What [`note_sites`] noted last on this thread.

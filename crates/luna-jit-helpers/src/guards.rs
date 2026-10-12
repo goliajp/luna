@@ -2,9 +2,10 @@
 
 use crate::{current_jit_closure, current_jit_vm, str_arg};
 
-/// 1 while no deopt is parked. A method-JIT chunk checks it after a
-/// self-recursive call: once the callee parked one, the caller's result
-/// is thrown away and it returns at once instead of computing on.
+/// 1 while no deopt is parked and no error is waiting to be raised. A
+/// method-JIT chunk checks it after a self-recursive call: once the callee
+/// parked one, the caller's result is thrown away and it returns at once
+/// instead of computing on.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread.
@@ -14,7 +15,7 @@ use crate::{current_jit_closure, current_jit_vm, str_arg};
 pub unsafe extern "C" fn luna_jit_no_deopt_parked() -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    i64::from(vm.jit.pending_err.is_none())
+    i64::from(vm.jit.pending_err.is_none() && vm.jit.pending_raise.is_none())
 }
 
 /// A trace side exit that resumes at the trace's own head: the op there
@@ -84,11 +85,11 @@ pub unsafe extern "C" fn luna_jit_math_fn_is_library(math_key: i64, name_key: i6
         return 0;
     };
     let lib = match math_key.as_bytes() {
-        b"math" => luna_core::vm::lib_math::inlinable_native(name_key.as_bytes()),
-        b"string" => luna_core::vm::lib_string::inlinable_native(name_key.as_bytes()),
+        b"math" => luna_core::vm::lib_math::inlinable_builtin(name_key.as_bytes()),
+        b"string" => luna_core::vm::lib_string::inlinable_builtin(name_key.as_bytes()),
         _ => None,
     };
-    i64::from(lib.is_some_and(|lib| std::ptr::fn_addr_eq(f.f, lib)))
+    i64::from(lib.is_some_and(|lib| f.builtin == lib))
 }
 
 /// Float `fmod` for a compiled `%`: the interpreter's, which follows the C
@@ -99,7 +100,125 @@ pub unsafe extern "C" fn luna_jit_math_fn_is_library(math_key: i64, name_key: i6
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub extern "C" fn luna_jit_fmod(a: f64, b: f64) -> f64 {
-    luna_core::numeric::c_fmod(a, b)
+    luna_core::cerrno::fmod(a, b)
+}
+
+/// A one-argument C math function for a compiled `math.<fn>(x)`, `f` its
+/// number in `MathFn::ALL`, leaving `errno` as the C function does.
+// SAFETY: no other item in the link is named `luna_jit_math1`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub extern "C" fn luna_jit_math1(x: f64, f: i64) -> f64 {
+    luna_core::cerrno::math1(luna_core::cerrno::MathFn::ALL[f as usize], x)
+}
+
+/// For a compiled 5.1 / 5.2 float `for` loop `init, limit, step` (`step` a
+/// non-zero integer), with `part` 0: `q = 2^e` such that the loop, counted
+/// on integers scaled by `q`, gives the float loop's values bit for bit, 0
+/// when no such `e` is known; with `part` 1, the scaled bound
+/// `floor(limit / q)` (`ceil` for a negative step), as a double, when there
+/// is a `q`.
+///
+/// `e` is the smaller of the exponent of the lowest set bit of `init` (any,
+/// when `init` is ±0) and that of `step`, so `init` and `step` are
+/// multiples of `q`, and so is every value `x_k = init + k * step`. The
+/// loop stops at the first value past the limit, so every value it reaches
+/// has `|x_k| <= max(|init|, |limit| + |step|) <= T = |init| + |limit| +
+/// |step|`. `T <= 2^(51 + e)`, with `T` summed in floats, keeps the true
+/// `T` below `2^(52 + e)` despite the sum's rounding; then every
+/// `|x_k / q|` is below `2^52`: each `x_k` is exact, each float step
+/// `x_k + step` is exact, `x_k / q` and its product with `q` are exact, and
+/// so is `limit / q` before it is rounded to an integer, so an integer test
+/// against that bound agrees with the float test. `e >= -1000` keeps `q`,
+/// `1 / q` and every `x_k` normal. A NaN or infinite bound fails the test,
+/// as does a subnormal or non-finite `init`.
+// SAFETY: no other item in the link is named `luna_jit_for_scale`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub extern "C" fn luna_jit_for_scale(init: f64, limit: f64, step: i64, part: i64) -> f64 {
+    match for_scale_parts(init, limit, step) {
+        None => 0.0,
+        // `q` is a normal double for `|e| <= 1000`, so never 0
+        Some(f) if part == 0 => f64::from_bits(((f.e + 1023) as u64) << 52),
+        Some(f) => f.bound as f64,
+    }
+}
+
+/// The counted form of a loop (see [`luna_jit_for_scale`]): `e`, the scaled
+/// value one step before `init`, the scaled step, and the scaled bound
+/// (`floor(limit / 2^e)`, `ceil` for a negative step).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForScale {
+    pub e: i64,
+    pub before: i64,
+    pub step: i64,
+    pub bound: i64,
+}
+
+/// The counted form of the loop `init, limit, step`, when its values are
+/// all exact (see [`luna_jit_for_scale`]).
+pub fn for_scale_parts(init: f64, limit: f64, step: i64) -> Option<ForScale> {
+    let e = for_scale(init, limit, step)?;
+    // `1 / 2^e`, a normal double for `|e| <= 1000`; every product below is
+    // exact and below 2^52 in magnitude
+    let inv_q = f64::from_bits(((1023 - e) as u64) << 52);
+    let scaled_step = (step as f64 * inv_q) as i64;
+    let limit_s = limit * inv_q;
+    let bound = if step > 0 {
+        limit_s.floor()
+    } else {
+        limit_s.ceil()
+    } as i64;
+    Some(ForScale {
+        e,
+        before: (init * inv_q) as i64 - scaled_step,
+        step: scaled_step,
+        bound,
+    })
+}
+
+/// The `e` of [`luna_jit_for_scale`].
+fn for_scale(init: f64, limit: f64, step: i64) -> Option<i64> {
+    if !init.is_finite() || (init != 0.0 && !init.is_normal()) || step == 0 {
+        return None;
+    }
+    let e_step = i64::from(step.unsigned_abs().trailing_zeros());
+    let e = if init == 0.0 {
+        e_step
+    } else {
+        let bits = init.to_bits();
+        let exp_field = ((bits >> 52) & 0x7ff) as i64;
+        let sig = (bits & ((1u64 << 52) - 1)) | (1u64 << 52);
+        (exp_field - 1075 + i64::from(sig.trailing_zeros())).min(e_step)
+    };
+    if e < -1000 {
+        return None;
+    }
+    let total = init.abs() + limit.abs() + step.unsigned_abs() as f64;
+    let bound = f64::from_bits(((51 + e + 1023) as u64) << 52);
+    // false for a NaN or infinite total
+    (total <= bound).then_some(e)
+}
+
+/// C `pow` for a compiled `^` of 5.1 to 5.3, leaving `errno` as it does.
+// SAFETY: no other item in the link is named `luna_jit_pow`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub extern "C" fn luna_jit_pow(a: f64, b: f64) -> f64 {
+    luna_core::cerrno::pow(a, b)
+}
+
+/// A compiled `^` of 5.4 and later (`luai_numpow`): `a*a` when `b` is 2,
+/// else C `pow`, leaving `errno` as it does.
+// SAFETY: no other item in the link is named `luna_jit_numpow`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub extern "C" fn luna_jit_numpow(a: f64, b: f64) -> f64 {
+    if b == 2.0 {
+        a * a
+    } else {
+        luna_core::cerrno::pow(a, b)
+    }
 }
 
 /// `string.sub(s, i, j)` for the trace JIT, which checked that the call is

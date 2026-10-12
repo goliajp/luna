@@ -4,8 +4,7 @@
 //! What changes, mirroring what `lvm.c` of each version expects:
 //!
 //! - arithmetic is followed by the `MMBIN` naming its metamethod event;
-//!   luna's flagged `Add` (a source `x - 0`) is PUC's `ADDI x 0` with a
-//!   `__sub` `MMBINI`; the constant- and immediate-operand forms are in
+//!   the constant- and immediate-operand forms are in
 //!   [`super::modern_const`];
 //! - the fast field ops (`GETFIELD`, `GETTABUP`, `SETFIELD`, `SETTABUP`,
 //!   and `SELF` in 5.5) take short-string keys only, so a longer key goes
@@ -191,42 +190,42 @@ impl M<'_, '_> {
                 }
             }
             Op::SetTabUp => {
-                let c = self.asm.r(l.c)?;
+                let (c, k) = self.store_val(l)?;
                 if self.asm.short_str(l.b) {
-                    self.emit(self.abc(Kind::SetTabUp, l.a, l.b, c, false))?;
+                    self.emit(self.abc(Kind::SetTabUp, l.a, l.b, c, k))?;
                 } else {
                     let (t, key) = (self.asm.temp()?, self.asm.temp()?);
                     self.emit(self.abc(Kind::GetUpval, t, l.a, 0, false))?;
                     self.load_k(key, l.b)?;
-                    self.emit(self.abc(Kind::SetTable, t, key, c, false))?;
+                    self.emit(self.abc(Kind::SetTable, t, key, c, k))?;
                 }
             }
             Op::SetTable => {
-                let (a, b, c) = (self.asm.r(l.a)?, self.asm.r(l.b)?, self.asm.r(l.c)?);
-                self.emit(self.abc(Kind::SetTable, a, b, c, false))?;
+                let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
+                let (c, k) = self.store_val(l)?;
+                self.emit(self.abc(Kind::SetTable, a, b, c, k))?;
             }
             Op::SetI => {
-                let (a, c) = (self.asm.r(l.a)?, self.asm.r(l.c)?);
-                self.emit(self.abc(Kind::SetI, a, l.b, c, false))?;
+                let a = self.asm.r(l.a)?;
+                let (c, k) = self.store_val(l)?;
+                self.emit(self.abc(Kind::SetI, a, l.b, c, k))?;
             }
             Op::SetField => {
-                let (a, c) = (self.asm.r(l.a)?, self.asm.r(l.c)?);
+                let a = self.asm.r(l.a)?;
+                let (c, k) = self.store_val(l)?;
                 if self.asm.short_str(l.b) {
-                    self.emit(self.abc(Kind::SetField, a, l.b, c, false))?;
+                    self.emit(self.abc(Kind::SetField, a, l.b, c, k))?;
                 } else {
                     let key = self.asm.temp()?;
                     self.load_k(key, l.b)?;
-                    self.emit(self.abc(Kind::SetTable, a, key, c, false))?;
+                    self.emit(self.abc(Kind::SetTable, a, key, c, k))?;
                 }
+            }
+            Op::GetTabUpR | Op::SetTabUpR | Op::SetTabUpK | Op::GetTableK | Op::SetTableK => {
+                self.by_temp_key(l)?
             }
             Op::NewTable => self.new_table(l)?,
             Op::SelfOp => self.self_op(l)?,
-            Op::Add if l.k => {
-                // `x - 0`: PUC's `ADDI x 0` with `__sub` recorded on its MMBINI
-                let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
-                self.emit(self.abc(Kind::ArithI, a, b, 127, false))?;
-                self.emit(self.abc(Kind::MmBinI, b, 127, 7, false))?;
-            }
             Op::Add
             | Op::Sub
             | Op::Mul
@@ -251,6 +250,11 @@ impl M<'_, '_> {
                 self.emit(self.abc(Kind::Unary(l.op), a, b, 0, false))?;
             }
             Op::Concat => {
+                // 5.4+ concatenate in place: a 5.1–5.3 chunk's own
+                // destination has no instruction here
+                if l.k && l.a != l.c {
+                    return Err(self.asm.err("concatenation into another register"));
+                }
                 let a = self.asm.run(l.a, l.b.max(1))?;
                 self.emit(self.abc(Kind::Concat, a, l.b, 0, false))?;
             }

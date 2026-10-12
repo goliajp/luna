@@ -63,7 +63,7 @@ fn load_mode(vm: &mut Vm, a: Args, i: u32) -> Result<Option<Gc<LuaStr>>, LuaErro
 /// the message `load` returns after its nil. The reader runs with the
 /// thread non-yieldable, as under PUC's `lua_load`.
 fn next_piece(vm: &mut Vm, reader: Value) -> Result<Option<Vec<u8>>, Value> {
-    let r = vm.call_noyield(reader, &[]).map_err(|e| e.0)?;
+    let r = vm.call_value(reader, &[]).map_err(|e| e.0)?;
     match r.first() {
         None | Some(Value::Nil) => Ok(None),
         Some(&v) => match argcheck::to_str_bytes(vm, v) {

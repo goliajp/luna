@@ -1,51 +1,12 @@
 use super::*;
 
-// Call a checked read helper; on failure leave the trace at `$pc`,
-// otherwise evaluate to the payload it wrote.
-macro_rules! checked_read {
-    ($lw:ident, $pl:ident, $id:expr, $a0:expr, $a1:expr, $want:expr, $pc:expr, $i:expr) => {{
-        let out_ss = $lw
-            .bcx
-            .create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                8,
-                3,
-            ));
-        let out_addr = $lw.bcx.ins().stack_addr(types::I64, out_ss, 0);
-        let want = $lw.bcx.ins().iconst(types::I64, $want as i64);
-        let fref = $lw.bcx.import_func($id);
-        let call = $lw.bcx.ins().call(fref, &[$a0, $a1, want, out_addr]);
-        let ok = $lw.bcx.inst_results(call)[0];
-        let cont_blk = $lw.bcx.create_block();
-        let exit_blk = $lw.bcx.create_block();
-        $lw.bcx.ins().brif(ok, cont_blk, &[], exit_blk, &[]);
-        $lw.bcx.switch_to_block(exit_blk);
-        $lw.bcx.seal_block(exit_blk);
-        guard_exit($lw, $pl, $pc, $i);
-        $lw.bcx.switch_to_block(cont_blk);
-        $lw.bcx.seal_block(cont_blk);
-        $lw.bcx.ins().stack_load(types::I64, types::I64, out_ss, 0)
-    }};
-}
-// Continue in a new block when `$cond` holds, else take a
-// `guard_exit!` to `$pc`.
-macro_rules! guard {
-    ($lw:ident, $pl:ident, $cond:expr, $i:expr, $pc:expr) => {{
-        let continue_blk = $lw.bcx.create_block();
-        let exit_blk = $lw.bcx.create_block();
-        $lw.bcx.ins().brif($cond, continue_blk, &[], exit_blk, &[]);
-        $lw.bcx.switch_to_block(exit_blk);
-        $lw.bcx.seal_block(exit_blk);
-        guard_exit($lw, $pl, $pc, $i);
-        $lw.bcx.switch_to_block(continue_blk);
-        $lw.bcx.seal_block(continue_blk);
-    }};
-}
-
+#[macro_use]
+mod macros;
 mod alt;
 mod begin;
 mod body;
 mod clif_driver;
+mod commit;
 mod downrec_tail;
 mod exit;
 mod finish;
@@ -67,6 +28,7 @@ use alt::*;
 use begin::*;
 use body::*;
 use clif_driver::*;
+use commit::*;
 use downrec_tail::*;
 use exit::*;
 use finish::*;
@@ -114,10 +76,19 @@ struct Lower<E: Emit> {
     materialize_emit_count: u32,
     closure_seen: u32,
     stored: Vec<Option<Value>>,
+    /// Commit register writes to reg_state only where something reads it
+    /// (`commit.rs`), keeping values in machine registers across the back
+    /// edge: for the optimizing tiers, whose register allocators make use
+    /// of that; the baseline tier's would spill.
+    at_exits: bool,
+    /// With `at_exits`, per register: the value reg_state holds for it at
+    /// the loop head whichever way the head is reached (`None`: the body
+    /// writes the register and the back edge does not store it).
+    head_stored: Vec<Option<Value>>,
     current_kinds: Vec<RegKind>,
     dispatchable: bool,
     dispatch_off_reason: Option<&'static str>,
-    per_exit_kinds: Vec<(u32, Vec<RegKind>, Box<TCellPtr>)>,
+    per_exit_kinds: ExitKinds,
     per_exit_inline_vec: Vec<(
         u32,
         u32,
@@ -139,6 +110,10 @@ struct Lower<E: Emit> {
     /// pass: a table access by such a key may use the slot the recording
     /// found it in.
     const_str: Vec<bool>,
+    /// The window slots the virtual registers of the op being lowered
+    /// stand in, with the kinds the slots had (see `enter_virt`): an exit
+    /// taken inside the op snapshots those kinds, not the virtual ones.
+    virt_held: Vec<(usize, RegKind)>,
     /// Blocks the other way of a comparison jumps to, by the recorded op
     /// it rejoins at, with the registers the skipped ops write.
     alt_joins: std::collections::HashMap<usize, (Block, Vec<u32>)>,
@@ -163,9 +138,10 @@ pub(super) fn lower_trace_into_inner<M: Module>(
     aot_fn_name: Option<&str>,
     always_codegen: bool,
     float_only: bool,
+    at_exits: bool,
 ) -> Option<(FuncId, CompiledTrace)> {
     with_plan(record, opts, float_only, |pl, escape| {
-        lower_clif(module, pl, escape, aot_fn_name, always_codegen)
+        lower_clif(module, pl, escape, aot_fn_name, always_codegen, at_exits)
     })?
 }
 
@@ -199,36 +175,56 @@ fn with_plan<R>(
     let translated;
     let (record, vconsts) = match split_const_operands(record, frame_w as u32) {
         Some((t, v)) => {
-            translated = t;
-            (&translated, v)
+            translated = Some(t);
+            (translated.as_ref().unwrap_or(record), v)
         }
-        None => (record, Vec::new()),
+        None => {
+            translated = None;
+            (record, Vec::new())
+        }
     };
-    let (plan, escape) = plan_trace(
-        record, vconsts, head_proto, max_stack, frame_w, opts, float_only,
-    )?;
-    // a root trace reading a register on entry that holds a value no trace
-    // is entered with (a boolean, a coroutine) could never run: it is not
-    // compiled, and leaves its head free for a later recording
-    let never_entered = record.side_trace_parent.is_none()
-        && record
-            .entry_tags
-            .iter()
-            .zip(&plan.head_live)
-            .any(|(&t, &live)| live && !luna_core::jit::trace::entry_tag_enterable(t));
-    if never_entered {
-        checkpoint("bail:entry-tag-never-entered");
-        return None;
+    let out = 'planned: {
+        let Some((plan, escape)) = plan_trace(
+            record, vconsts, head_proto, max_stack, frame_w, opts, float_only,
+        ) else {
+            break 'planned None;
+        };
+        // a root trace reading a register on entry that holds a value no
+        // trace is entered with (a boolean, a coroutine) could never run: it
+        // is not compiled, and leaves its head free for a later recording
+        let never_entered = record.side_trace_parent.is_none()
+            && record
+                .entry_tags
+                .iter()
+                .zip(&plan.head_live)
+                .any(|(&t, &live)| live && !luna_core::jit::trace::entry_tag_enterable(t));
+        if never_entered {
+            checkpoint("bail:entry-tag-never-entered");
+            break 'planned None;
+        }
+        Some(f(&plan, escape))
+    };
+    if let Some(t) = translated {
+        give_record(t);
     }
-    Some(f(&plan, escape))
+    out
+}
+
+/// Whether every op of `record` is one the optimizing tiers lower with
+/// values kept to the exits (`Lower::at_exits`); for any other record
+/// lowering again gives the baseline tier's instructions.
+pub(super) fn ops_all_pure(record: &TraceRecord) -> bool {
+    record.ops.iter().all(|r| commit::pure_op(r.inst.op()))
 }
 
 /// The trace recorded for the baseline code generator, with what the
-/// emit pass decided; `None` when it cannot be lowered.
+/// emit pass decided; `None` when it cannot be lowered. `at_exits`: see
+/// `Lower::at_exits`.
 pub(super) fn lower_trace_lir(
     record: &TraceRecord,
     opts: CompileOptions,
     float_only: bool,
+    at_exits: bool,
 ) -> Option<(super::lir::Lir, CompiledTrace)> {
     with_plan(record, opts, float_only, |pl, escape| {
         let mut e = super::lir::Lir::take();
@@ -244,7 +240,7 @@ pub(super) fn lower_trace_lir(
             TraceTier::Auto => opts.tier_up_at,
             _ => 0,
         };
-        let (e, emitted) = emit_trace(e, pl, h, escape, count_at)?;
+        let (e, emitted) = emit_trace(e, pl, h, escape, count_at, at_exits)?;
         Some((e, build_compiled(pl, emitted)))
     })?
 }
@@ -259,6 +255,7 @@ fn emit_trace<E: Emit>(
     h: Helpers,
     escape: EscapeAnalysis,
     count_at: u32,
+    at_exits: bool,
 ) -> Option<(E, Emitted)> {
     // track which AOT data slots
     // we've already `define_data`'d this lower call. `declare_data`
@@ -286,6 +283,9 @@ fn emit_trace<E: Emit>(
     if count_at > 0 {
         lower.tier_count = Some((Box::new(TCellU32::new(0)), count_at));
     }
+    // only a body of pure ops gains: elsewhere every op that is not pure
+    // commits everything anyway, and the exits store more
+    lower.at_exits = at_exits && (0..pl.effective_end).all(|i| !syncs_before(pl.record, pl, i));
     let lw = &mut lower;
     emit_fold_precheck(lw, pl);
     emit_readonly_precheck(lw, pl);

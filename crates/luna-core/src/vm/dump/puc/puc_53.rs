@@ -252,12 +252,11 @@ mod tests {
             abc(RETURN, 0, 1, 0),
             abc(RETURN, 0, 1, 0),
         ]);
-        assert_eq!(code[0].op(), Op::EqK);
-        assert_eq!(code[1].op(), Op::Jmp, "the skipped instruction is the jump");
-        let tramp = (1 + 1 + code[1].sj()) as usize;
-        assert_eq!((code[tramp].op(), code[tramp].a()), (Op::Close, 1));
-        // the jump back is negative: add in signed arithmetic
-        assert_eq!(tramp as i32 + 2 + code[tramp + 1].sj(), 3);
+        assert_eq!(code.len(), 4);
+        // K0 is 1, which luna keeps in the instruction
+        assert_eq!(code[0].op(), Op::EqI);
+        assert_eq!((code[1].op(), code[1].a()), (Op::JmpClose, 2));
+        assert_eq!(code[1].jump_offset(), 1);
     }
 
     #[test]
@@ -278,13 +277,13 @@ mod tests {
     }
 
     #[test]
-    fn loadbool_true_with_skip_jumps_over_the_next_instruction() {
+    fn loadbool_true_with_skip_is_one_instruction() {
         let code = lower(vec![
             abc(LOADBOOL, 0, 1, 1),
             abc(LOADBOOL, 0, 0, 0),
             abc(RETURN, 0, 2, 0),
         ]);
-        assert_eq!(code[0].op(), Op::LoadTrue);
-        assert_eq!((code[1].op(), 1 + 1 + code[1].sj()), (Op::Jmp, 3));
+        assert_eq!(code.len(), 3);
+        assert_eq!((code[0].op(), code[0].a()), (Op::LTrueSkip, 0));
     }
 }

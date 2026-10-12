@@ -45,6 +45,24 @@ pub use storage::{JitStorage, NullJitStorage};
 pub mod send_compat;
 pub use send_compat::{TArc, TCellBool, TCellPtr, TCellU32, TRefLock};
 
+/// Makes code another thread wrote and published runnable on this thread.
+/// Call it after reading, with acquire ordering, the entry the writer
+/// published (after its instruction cache maintenance), and before running
+/// the code. On aarch64 the core may have fetched instructions at that
+/// address before they were written; `isb` discards what it fetched ahead.
+/// The writer's cache maintenance reaches every core already, so this is
+/// all the reader needs, on any operating system. x86 keeps instruction
+/// fetch coherent with stores.
+#[inline]
+pub fn code_fence() {
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: `isb` flushes this core's pipeline only; it reads and writes
+    // no memory and no register
+    unsafe {
+        std::arch::asm!("isb", options(nostack, preserves_flags))
+    };
+}
+
 // Compatibility re-export so external `use luna::jit::trace::*` paths
 // (and `crate::jit::trace::*` accesses inside this crate) keep
 // resolving. In luna-core `trace` is just a namespace alias for `trace_types`; in

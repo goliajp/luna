@@ -13,6 +13,10 @@ pub(super) struct Level<'a> {
     /// ordered active-variable sequence (locals + global decls) for goto scope
     pub(super) avars: LVec<AVar<'a>>,
     pub(super) blocks: LVec<BlockCx<'a>>,
+    /// the labels of the open blocks and the pending gotos (PUC
+    /// `dyd->label` / `dyd->gt`, for this function)
+    pub(super) labels: LVec<LabelDesc<'a>>,
+    pub(super) gotos: LVec<LabelDesc<'a>>,
     pub(super) freereg: u32,
     pub(super) max_stack: u32,
     pub(super) upvals: LVec<UpvalDesc>,
@@ -27,19 +31,11 @@ pub(super) struct Level<'a> {
     /// PUC 5.1 LUAI_COMPAT_VARARG: the hidden `arg` table local was reserved.
     /// The runtime populates it on entry; see Proto::has_compat_vararg_arg.
     pub(super) has_compat_vararg_arg: bool,
-    #[allow(dead_code)]
     pub(super) line_defined: u32,
     /// PUC `fs->lasttarget` equivalent: the highest pc that is the destination
     /// of any patched jump (forward jump landing here, backward jump-back to a
     /// previously saved pc, ForLoop / TForLoop back-edge, or a defined label).
     /// `None` is PUC's sentinel `-1` — no target has been recorded yet.
-    ///
-    /// Read by peephole passes (see `no_jump_lands_here`) that rewrite the
-    /// just-emitted instruction at pc `here() - 1` in place of emitting a
-    /// Move at `here()`: that is safe only when no jump lands at `here()`,
-    /// i.e. `last_target < here()` or `last_target == None`. Consumed by the
-    /// Reloc-landing peephole at `assign_name` and the trailing-Move elision
-    /// at `assign_stat`.
     ///
     /// Maintained monotonically (only advances upward) by `mark_target(pc)`,
     /// called from every code path that turns some `pc` into a jump landing
@@ -49,9 +45,44 @@ pub(super) struct Level<'a> {
     /// its constant table by number value, where `0 == -0`, so every later
     /// zero, of either sign, loads that one.
     pub(super) zero_51: Option<f64>,
+    /// PUC `fs->jpc` (before 5.4): jumps to the next instruction emitted
+    pub(super) jpc: i32,
+    /// a jump [`Compiler::discharge_jpc`] could not reach
+    pub(super) jump_err: Option<SyntaxError>,
+    /// the values with jump lists (see `Exp::Jumps`)
+    pub(super) jexps: LVec<JExp>,
+    /// a `global` declaration was made in this function (5.5): until then
+    /// no name lookup needs to look for one among `avars`
+    pub(super) has_global_decl: bool,
+}
+
+/// A value and its true and false jump lists (PUC `expdesc` `t` / `f`).
+#[derive(Clone, Copy)]
+pub(super) struct JExp {
+    pub(super) e: Exp,
+    pub(super) t: i32,
+    pub(super) f: i32,
 }
 
 impl<'a> Level<'a> {
+    /// This level, its vectors emptied by [`Self::take_proto`], set up for a
+    /// new function in place: a level is a few hundred bytes, and moving it
+    /// in and out of the stack for every function cost a copy each way.
+    pub(super) fn reset(&mut self, num_params: u8, is_vararg: bool, line_defined: u32) {
+        self.freereg = num_params as u32;
+        self.max_stack = (num_params as u32).max(2);
+        self.num_params = num_params;
+        self.is_vararg = is_vararg;
+        self.has_vararg_table_pseudo = false;
+        self.has_compat_vararg_arg = false;
+        self.line_defined = line_defined;
+        self.last_target = None;
+        self.zero_51 = None;
+        self.jpc = NO_JUMP;
+        self.jump_err = None;
+        self.has_global_decl = false;
+    }
+
     pub(super) fn new(
         num_params: u8,
         is_vararg: bool,
@@ -66,6 +97,8 @@ impl<'a> Level<'a> {
             locals: bufs.locals.recycle(),
             avars: bufs.avars.recycle(),
             blocks: bufs.blocks.recycle(),
+            labels: bufs.labels.recycle(),
+            gotos: bufs.gotos.recycle(),
             freereg: num_params as u32,
             max_stack: (num_params as u32).max(2),
             upvals: bufs.upvals,
@@ -78,18 +111,33 @@ impl<'a> Level<'a> {
             line_defined,
             last_target: None,
             zero_51: None,
+            jpc: NO_JUMP,
+            jump_err: None,
+            jexps: bufs.jexps,
+            has_global_decl: false,
         }
     }
 
-    /// The finished function, and this level's vectors emptied for the next
-    /// one. The function's arrays are allocated at their exact size.
-    pub(super) fn into_proto(
-        mut self,
+    /// The innermost active variable named `name` is a `global` declaration.
+    pub(super) fn global_declared(&self, name: &str) -> bool {
+        self.has_global_decl
+            && self
+                .avars
+                .iter()
+                .rev()
+                .find(|a| a.name == Some(name))
+                .is_some_and(|a| a.global)
+    }
+
+    /// The finished function, leaving this level's vectors empty for the
+    /// next one. The function's arrays are allocated at their exact size.
+    pub(super) fn take_proto(
+        &mut self,
         source: Gc<LuaStr>,
         line_defined: u32,
         last_line_defined: u32,
         heap: &Heap,
-    ) -> (Proto, LevelBufs) {
+    ) -> Proto {
         crate::runtime::function_close::mark_closing_returns(&mut self.code, &self.protos);
         let env_upval_idx = self
             .upvals
@@ -115,6 +163,7 @@ impl<'a> Level<'a> {
             locvars: heap.block_of(self.locvars.drain_all()),
             cache: std::cell::Cell::new(None),
             jit: std::cell::Cell::new(crate::runtime::function::JitProtoState::Untried),
+            jit_next: std::cell::Cell::new(None),
             env_upval_idx,
             trace_hot_count: std::cell::Cell::new(0),
             call_hot_count: std::cell::Cell::new(0),
@@ -131,8 +180,18 @@ impl<'a> Level<'a> {
             trace_call_head_settled: std::cell::Cell::new(false),
         };
         self.const_map.clear();
+        self.locals.clear();
+        self.avars.clear();
         self.blocks.clear();
-        let bufs = LevelBufs {
+        self.labels.clear();
+        self.gotos.clear();
+        self.jexps.clear();
+        proto
+    }
+
+    /// This level's vectors, emptied, to keep for a later load.
+    pub(super) fn into_bufs(self) -> LevelBufs {
+        LevelBufs {
             code: self.code,
             lines: self.lines,
             consts: self.consts,
@@ -140,11 +199,13 @@ impl<'a> Level<'a> {
             locals: self.locals.recycle(),
             avars: self.avars.recycle(),
             blocks: self.blocks.recycle(),
+            labels: self.labels.recycle(),
+            gotos: self.gotos.recycle(),
             upvals: self.upvals,
             protos: self.protos,
             locvars: self.locvars,
-        };
-        (proto, bufs)
+            jexps: self.jexps,
+        }
     }
 }
 
@@ -159,9 +220,12 @@ pub(crate) struct LevelBufs {
     locals: LVec<LocalVar<'static>>,
     avars: LVec<AVar<'static>>,
     blocks: LVec<BlockCx<'static>>,
+    labels: LVec<LabelDesc<'static>>,
+    gotos: LVec<LabelDesc<'static>>,
     upvals: LVec<UpvalDesc>,
     protos: LVec<Gc<Proto>>,
     locvars: LVec<crate::runtime::LocVar>,
+    jexps: LVec<JExp>,
 }
 
 impl LevelBufs {
@@ -175,9 +239,12 @@ impl LevelBufs {
             locals: LVec::with_capacity_or_abort(mem, 8),
             avars: LVec::with_capacity_or_abort(mem, 8),
             blocks: LVec::with_capacity_or_abort(mem, 4),
+            labels: LVec::new(mem),
+            gotos: LVec::new(mem),
             upvals: LVec::new(mem),
             protos: LVec::new(mem),
             locvars: LVec::new(mem),
+            jexps: LVec::new(mem),
         }
     }
 }
@@ -189,6 +256,9 @@ pub(crate) struct CompileScratch {
     /// the stack of functions being compiled, empty
     pub(super) open: LVec<Level<'static>>,
     pub(super) sym_strs: LVec<Option<Gc<LuaStr>>>,
+    pub(super) spine: LVec<super::expr::Pending>,
+    pub(super) lvs: LVec<super::lvalue::Lv>,
+    pub(super) operands: LVec<ExprId>,
 }
 
 impl CompileScratch {
@@ -198,6 +268,9 @@ impl CompileScratch {
             levels: LVec::new(mem),
             open: LVec::new(mem),
             sym_strs: LVec::new(mem),
+            spine: LVec::new(mem),
+            lvs: LVec::new(mem),
+            operands: LVec::new(mem),
         }
     }
 }

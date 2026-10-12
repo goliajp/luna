@@ -209,6 +209,7 @@ impl Vm {
                 return None;
             }
             stack[slot] = v;
+            Vm::unseal_after_local_write(stack, slot, &name);
         }
         // a value PUC's C library function keeps in a slot luna's native
         // does not have cannot be written

@@ -178,6 +178,8 @@ impl<'s, S: Source> Lexer<'s, S> {
     }
 
     /// PUC `lexerror`: `msg near <token>` at the scanner's current line.
+    #[cold]
+    #[inline(never)]
     fn error(&self, msg: &str, near: Near<'_>) -> SyntaxError {
         let mut out = msg.as_bytes().to_vec();
         out.extend_from_slice(b" near ");
@@ -189,6 +191,8 @@ impl<'s, S: Source> Lexer<'s, S> {
     }
 
     /// A lexer error quoting the lex buffer.
+    #[cold]
+    #[inline(never)]
     fn buf_error(&self, msg: &str) -> SyntaxError {
         self.error(msg, Near::Text(&self.buf))
     }
@@ -439,6 +443,15 @@ impl<'s, S: Source> Lexer<'s, S> {
         // the lex buffer of a numeral is its source text
         let text = &self.src.bytes()[start..self.pos];
         let hex = text.len() > 1 && text[0] == b'0' && matches!(text[1], b'x' | b'X');
+        {
+            use crate::cerrno::conv::{Dialect, number};
+            let d = match v {
+                LuaVersion::Lua51 => Dialect::Lua51,
+                LuaVersion::Lua52 => Dialect::Lua52,
+                _ => Dialect::Later,
+            };
+            number(text, d);
+        }
         let num = if hex {
             // 5.1 converts with C99 `strtod`, which reads hex floats too.
             let float_ok = v <= LuaVersion::Lua51 || v.has_hex_float();

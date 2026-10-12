@@ -306,14 +306,17 @@ pub(super) fn new_c_closure(api: &mut Api, f: LuaCFunction, n: usize) -> Result<
     upvals.push(Value::LightUserdata(f as *const ()));
     upvals.push(env);
     upvals.extend_from_slice(&api.stack()[from..top]);
-    let trampoline: luna_core::runtime::value::NativeFn = ccall::capi_trampoline;
+    let (tramp, c) = (
+        ccall::capi_trampoline as luna_core::runtime::value::NativeFn,
+        luna_core::runtime::Builtin::CFunction,
+    );
     // from 5.2 on a C function without upvalues is a light C function,
     // equal to every other push of the same pointer
     let c = if n == 0 && api.version() >= LuaVersion::Lua52 {
         api.vm
-            .host_light_fn(f as usize, |vm| vm.host_new_native(trampoline, &upvals))?
+            .host_light_fn(f as usize, |vm| vm.builtin(tramp, &upvals, c))?
     } else {
-        api.vm.host_new_native(trampoline, &upvals)?
+        api.vm.builtin(tramp, &upvals, c)?
     };
     api.truncate(from);
     Ok(c)

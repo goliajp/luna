@@ -94,7 +94,7 @@ impl Vm {
             // `parse_tokens` reinserts Eof when it runs out of tokens.
             raw.pop();
             let expanded = self.macro_registry.expand(raw)?;
-            let depth = self.c_depth + self.pcall_depth;
+            let depth = self.g.nccalls;
             let parsed = crate::frontend::parser::parse_tokens_at_depth(
                 expanded,
                 src,
@@ -105,14 +105,26 @@ impl Vm {
             self.compile_parsed(&parsed.chunk, &parsed.end_lines, source)?
         } else {
             // PUC's `nCcalls` counts protected calls as well
-            let depth = self.c_depth + self.pcall_depth;
+            let depth = self.g.nccalls;
             let source = match name {
                 Some(n) => n,
                 None => self.heap.try_intern(chunkname)?,
             };
-            let scratch = self.parse_scratch.take();
-            let parsed = crate::frontend::parser::parse_reusing(src, self.version, depth, scratch)?;
-            self.compile_text(parsed, source)?
+            crate::frontend::parser::parse_in_place(
+                src,
+                self.version,
+                depth,
+                &mut self.parse_scratch,
+            )?;
+            let (chunk, end_lines) = self.parse_scratch.parsed();
+            crate::compiler::compile_parsed(
+                chunk,
+                end_lines,
+                self.version,
+                source,
+                &mut self.heap,
+                &mut self.compile_scratch,
+            )?
         };
         self.close_chunk(proto)
     }
@@ -173,7 +185,7 @@ impl Vm {
         }
         Some(TextLoad {
             version: self.version,
-            depth: self.c_depth + self.pcall_depth,
+            depth: self.g.nccalls,
             budget: self.loader_input_budget,
             scratch: self.parse_scratch.take(),
         })

@@ -9,11 +9,26 @@ impl Vm {
     /// the raw table border. Returns the raw length value (may be non-integer
     /// when `__len` is exotic).
     pub(crate) fn len_value(&mut self, v: Value) -> Result<Value, LuaError> {
-        match self.len_step(v)? {
-            MmOut::Done(n) => Ok(n),
+        self.len_value_pushed(v, 0)
+    }
+
+    /// [`Vm::len_value`] with `extra` values pushed by the calling native,
+    /// as [`Vm::index_value_pushed`].
+    pub(crate) fn len_value_pushed(&mut self, v: Value, extra: u32) -> Result<Value, LuaError> {
+        match self.len_step(v) {
+            Ok(MmOut::Done(n)) => Ok(n),
             // PUC calls unary metamethods with the operand twice
-            MmOut::Mm { func, recv } => self.call_mm1(func, &[recv, recv]),
-            MmOut::CompareSynth { .. } => unreachable!("CompareSynth from len_step"),
+            Ok(MmOut::Mm { func, recv }) => {
+                self.native_push(extra);
+                let r = self.call_mm1(func, &[recv, recv])?;
+                self.native_pop(extra);
+                Ok(r)
+            }
+            Ok(MmOut::CompareSynth { .. }) => unreachable!("CompareSynth from len_step"),
+            Err(e) => {
+                self.native_push(extra);
+                Err(e)
+            }
         }
     }
 
@@ -54,24 +69,139 @@ impl Vm {
 
     /// `lua_compare(L, a, b, LUA_OPEQ)`: equality including `__eq`.
     pub(crate) fn equal(&mut self, l: Value, r: Value) -> Result<bool, LuaError> {
+        self.equal_pushed(l, r, 0)
+    }
+
+    /// [`Vm::equal`] with `extra` values pushed by the calling native, as
+    /// [`Vm::index_value_pushed`].
+    pub(crate) fn equal_pushed(
+        &mut self,
+        l: Value,
+        r: Value,
+        extra: u32,
+    ) -> Result<bool, LuaError> {
         match self.eq_step(l, r) {
             MmOut::Done(v) => Ok(v.truthy()),
-            MmOut::Mm { func, .. } => Ok(self.call_mm1(func, &[l, r])?.truthy()),
+            MmOut::Mm { func, .. } => {
+                self.native_push(extra);
+                let r = self.call_mm1(func, &[l, r])?.truthy();
+                self.native_pop(extra);
+                Ok(r)
+            }
             MmOut::CompareSynth { .. } => unreachable!("CompareSynth from eq_step"),
         }
     }
 
     pub(crate) fn less_than(&mut self, l: Value, r: Value, or_eq: bool) -> Result<bool, LuaError> {
-        match self.less_step(l, r, or_eq)? {
+        self.less_than_pushed(l, r, or_eq, 0)
+    }
+
+    /// [`Vm::less_than`] with `extra` values pushed by the calling native,
+    /// as [`Vm::index_value_pushed`].
+    pub(crate) fn less_than_pushed(
+        &mut self,
+        l: Value,
+        r: Value,
+        or_eq: bool,
+        extra: u32,
+    ) -> Result<bool, LuaError> {
+        let step = match self.less_step(l, r, or_eq) {
+            Ok(step) => step,
+            Err(e) => {
+                self.native_push(extra);
+                return Err(e);
+            }
+        };
+        match step {
             MmOut::Done(v) => Ok(v.truthy()),
-            MmOut::Mm { func, .. } => Ok(self.call_mm1(func, &[l, r])?.truthy()),
+            MmOut::Mm { func, .. } => {
+                self.native_push(extra);
+                let r = self.call_mm1(func, &[l, r])?.truthy();
+                self.native_pop(extra);
+                Ok(r)
+            }
             MmOut::CompareSynth { func } => {
                 // ≤5.3 `__le` via `not __lt(r, l)`. Synchronous helper used
                 // by library code (sort comparator etc.) — no yield expected
-                // here (a yield would have hit `call_noyield`'s C boundary).
-                Ok(!self.call_mm1(func, &[r, l])?.truthy())
+                // here (a yield would have hit `call_value`'s C boundary).
+                self.native_push(extra);
+                let r = !self.call_mm1(func, &[r, l])?.truthy();
+                self.native_pop(extra);
+                Ok(r)
             }
         }
+    }
+
+    /// The fast loop's `<` / `<=` of operands it does not compare itself
+    /// (mixed numbers, strings, `__lt` / `__le`), `k` the result the
+    /// following jump wants. Out of line, so the operand copies and the
+    /// metamethod step live in this frame: every slot of the loop's frame
+    /// has its address worked out each time the loop is entered.
+    ///
+    /// # Safety
+    ///
+    /// `pl` and `pr` point at initialised values.
+    #[inline(never)]
+    pub(super) unsafe fn order_slow(
+        &mut self,
+        pl: *const Value,
+        pr: *const Value,
+        or_eq: bool,
+        k: bool,
+    ) -> Result<(), LuaError> {
+        // SAFETY: the caller's contract
+        let (l, r) = unsafe { (*pl, *pr) };
+        let step = self.less_step(l, r, or_eq)?;
+        self.op_compare(step, l, r, k)
+    }
+
+    /// The fast loop's `==` of two tables or two full userdata (`__eq`);
+    /// out of line for the reason [`Self::order_slow`] is.
+    ///
+    /// # Safety
+    ///
+    /// `pl` and `pr` point at initialised values.
+    #[inline(never)]
+    pub(super) unsafe fn eq_slow(
+        &mut self,
+        pl: *const Value,
+        pr: *const Value,
+        k: bool,
+    ) -> Result<(), LuaError> {
+        // SAFETY: the caller's contract
+        let (l, r) = unsafe { (*pl, *pr) };
+        let step = self.eq_step(l, r);
+        self.op_compare(step, l, r, k)
+    }
+
+    /// [`Self::order_slow`] of `R[A] op sB`: `float_imm` when the immediate
+    /// was written as a float, `swap` when it is the left operand (`>` and
+    /// `>=`).
+    ///
+    /// # Safety
+    ///
+    /// `px` points at an initialised value.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) unsafe fn order_imm_slow(
+        &mut self,
+        px: *const Value,
+        im: i32,
+        float_imm: bool,
+        swap: bool,
+        or_eq: bool,
+        k: bool,
+    ) -> Result<(), LuaError> {
+        // SAFETY: the caller's contract
+        let x = unsafe { *px };
+        let imv = if float_imm {
+            Value::Float(f64::from(im))
+        } else {
+            Value::Int(i64::from(im))
+        };
+        let (l, r) = if swap { (imv, x) } else { (x, imv) };
+        let step = self.less_step(l, r, or_eq)?;
+        self.op_compare(step, l, r, k)
     }
 
     /// Decide `l < r` / `l <= r`, or surface the `__lt`/`__le` metamethod. `Done`

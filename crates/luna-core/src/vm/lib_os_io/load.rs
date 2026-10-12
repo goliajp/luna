@@ -12,20 +12,28 @@ pub(crate) fn load_path(
 ) -> Result<Value, Value> {
     let (read, chunkname) = match name {
         Some(n) => {
+            crate::vm::lib_io::reset_errno(vm);
             let mut chunkname = vec![b'@'];
             chunkname.extend_from_slice(n);
-            (
-                std::fs::read(String::from_utf8_lossy(n).as_ref()),
-                chunkname,
-            )
+            let read = match crate::vm::lib_io::open_file(vm.crt_text, n, b"r") {
+                Ok(mut o) => {
+                    let mut buf = Vec::new();
+                    o.file
+                        .read_to_end(&mut buf)
+                        .map(|_| buf)
+                        .map_err(|e| ("read", e))
+                }
+                Err(e) => Err(("open", e)),
+            };
+            (read, chunkname)
         }
         None => match crate::vm::lib_io::read_stdin_chunk(vm) {
             // through the C library's `stdin`, as `getF` reads it
             Some(src) => (Ok(src), b"=stdin".to_vec()),
             None => {
                 let mut buf = Vec::new();
-                let r = std::io::stdin().read_to_end(&mut buf).map(|_| buf);
-                (r, b"=stdin".to_vec())
+                let r = std::io::stdin().read_to_end(&mut buf);
+                (r.map(|_| buf).map_err(|e| ("read", e)), b"=stdin".to_vec())
             }
         },
     };
@@ -37,11 +45,15 @@ pub(crate) fn load_path(
             crate::vm::lib_io::translate_all(&src)
         }
         Ok(src) => src,
-        Err(e) => {
-            let msg = vm.fmt_str(format_args!("cannot open {shown}: {}", os_error_text(&e)));
+        Err((what, e)) => {
+            crate::vm::lib_io::note_failure(&e);
+            let text = crate::vm::lib_io::strerror(&e);
+            let msg = vm.fmt_str(format_args!("cannot {what} {shown}: {text}"));
             return Err(msg.map_or_else(|e| e.0, Value::Str));
         }
     };
+    // "no useful error number until here"
+    crate::vm::lib_io::reset_errno(vm);
     let src = crate::frontend::lexer::Lexer::strip_shebang_bom(&src);
     // PUC `luaL_loadfilex`: when a `#` comment line precedes a binary
     // chunk, the leading line-terminator left by the comment skip is
@@ -87,16 +99,6 @@ pub(crate) fn load_chunk(
     }
 }
 
-/// C `strerror` for an OS error: Rust renders it as
-/// "<strerror text> (os error N)"; PUC prints the text alone.
-fn os_error_text(e: &std::io::Error) -> String {
-    let full = e.to_string();
-    match (e.raw_os_error(), full.rfind(" (os error ")) {
-        (Some(_), Some(at)) => full[..at].to_string(),
-        _ => full,
-    }
-}
-
 /// `loadfile([filename [, mode [, env]]])`; 5.1 takes the filename only.
 pub(crate) fn nat_loadfile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     use crate::version::LuaVersion;
@@ -134,15 +136,27 @@ pub(crate) fn nat_loadfile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
 }
 
 /// `dofile([filename])`: a load failure is raised as is (`lua_error`, no
-/// position added).
+/// position added). From 5.2 the chunk may yield (PUC calls it with
+/// `lua_callk`), and the resume finishes `dofile` with the chunk's results.
 pub(super) fn nat_dofile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     use crate::vm::argcheck::{self, Args};
     let name = argcheck::opt_string(vm, Args::new(fs, nargs), 0)?;
+    if vm.version() >= crate::version::LuaVersion::Lua52 {
+        vm.native_settop(1);
+    }
     match load_path(vm, name.as_ref().map(|n| n.as_bytes()), None) {
         Ok(f) => {
-            let results = vm.call_value(f, &[])?;
+            let results = if vm.version() >= crate::version::LuaVersion::Lua52 {
+                vm.call_value_k(f, &[])?
+            } else {
+                vm.call_value(f, &[])?
+            };
             vm.nat_ret(fs, &results)
         }
-        Err(msg) => Err(LuaError(msg)),
+        Err(msg) => {
+            // the message `luaL_loadfile` pushed
+            vm.native_push(1);
+            Err(LuaError(msg))
+        }
     }
 }

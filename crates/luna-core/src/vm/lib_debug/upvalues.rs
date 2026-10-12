@@ -129,6 +129,8 @@ fn check_upval(
     if id.is_none() && (joining || vm.version() <= LuaVersion::Lua53) {
         return Err(arg_error(vm, argnup + 1, "invalid upvalue index"));
     }
+    // 5.3 checks with `lua_getupvalue`, whose value stays pushed
+    vm.native_push(u32::from(vm.version() == LuaVersion::Lua53));
     Ok((f, n, id))
 }
 

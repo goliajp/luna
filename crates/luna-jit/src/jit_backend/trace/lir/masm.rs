@@ -105,6 +105,8 @@ pub(crate) struct Bufs {
     pub(crate) fixups: Vec<(u32, u32, u8)>,
     /// Where the relocated addresses sit in `bytes`.
     pub(crate) sites: Vec<crate::jit_backend::trace::reloc::Site>,
+    /// AArch64 literal loads: (code offset, relocation, value).
+    pub(crate) lits: Vec<(u32, u32, i64)>,
 }
 
 pub(crate) trait Masm {
@@ -129,6 +131,8 @@ pub(crate) trait Masm {
 
     fn new_label(&mut self) -> Label;
     fn bind(&mut self, l: Label);
+    /// No-ops up to the next multiple of `to` bytes of code.
+    fn align(&mut self, to: u32);
     fn jmp(&mut self, l: Label);
     fn jcc(&mut self, c: Cond, l: Label);
     /// Branch to `l` when `r` is non-zero (`nz`) or zero.

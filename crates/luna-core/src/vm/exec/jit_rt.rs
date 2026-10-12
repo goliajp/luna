@@ -147,181 +147,19 @@ impl Vm {
         let abs_a = f.base + slot_offset;
         self.top = abs_a + n as u32;
         let pre_frames = self.frames.len();
-        let result = self.concat_run(abs_a);
+        let result = self.concat_run(abs_a, abs_a);
         let post_frames = self.frames.len();
         // Frame-push = metamethod path taken (begin_meta_call pushed
         // a Lua frame). The trace can't continue past it; unwind +
         // deopt so interp redoes Op::Concat in the slow path.
         while self.frames.len() > pre_frames {
-            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            self.pop_frame();
         }
         if result.is_err() || post_frames > pre_frames {
             self.jit.counters.deopt += 1;
             return -1;
         }
         0
-    }
-
-    /// Pop a reusable buffer from the JIT accumulator buffer pool, or
-    /// make an empty one when the pool is empty. The trace keeps it (as
-    /// the boxed pointer the helper leaks) in a stack slot through the
-    /// loop and appends each piece to it.
-    #[doc(hidden)]
-    pub fn jit_str_buf_acquire(&mut self) -> Box<crate::runtime::mem::LVec<u8>> {
-        let buf = self.jit.str_buf_pool.pop();
-        Box::new(buf.unwrap_or_else(|| crate::runtime::mem::LVec::new(self.heap.mem())))
-    }
-
-    /// Return a previously-acquired buffer to the
-    /// pool, dropping any excess past `jit_str_buf_pool_cap`. The
-    /// buffer is `clear`ed (capacity retained) so the next acquire
-    /// gets a ready-to-extend buffer.
-    #[doc(hidden)]
-    #[allow(clippy::boxed_local)] // the trace held the buffer boxed; it comes back that way
-    pub fn jit_str_buf_release(&mut self, mut buf: Box<crate::runtime::mem::LVec<u8>>) {
-        buf.clear();
-        if self.jit.str_buf_pool.len() < self.jit.str_buf_pool_cap {
-            self.jit.str_buf_pool.push(buf.take());
-        }
-    }
-
-    /// Append a piece's bytes to an accumulator buffer; `false`, the
-    /// buffer as it was, when it cannot grow.
-    #[doc(hidden)]
-    pub fn jit_str_buf_extend(
-        &mut self,
-        buf: &mut crate::runtime::mem::LVec<u8>,
-        piece: Gc<crate::runtime::LuaStr>,
-    ) -> bool {
-        buf.extend_from_slice(piece.as_bytes()).is_ok()
-    }
-
-    /// Drain the accumulator buffer into a fresh string, returning its raw
-    /// pointer bits for the trace to write into the accumulator slot. The
-    /// buffer is left empty, its capacity kept, ready for release.
-    ///
-    /// Returns 0 when the string is past the hard cap or cannot be
-    /// allocated; a deopt is parked then, so the dispatcher drops the
-    /// trace's registers (the 0 among them) and the interpreter runs the
-    /// loop again.
-    #[doc(hidden)]
-    pub fn jit_str_buf_intern(&mut self, buf: &mut crate::runtime::mem::LVec<u8>) -> i64 {
-        // hard cap at 256KB
-        let r = if buf.len() > 256 * 1024 {
-            None
-        } else {
-            self.heap.try_intern(buf).ok()
-        };
-        buf.clear();
-        match r {
-            Some(gc) => gc.as_ptr() as i64,
-            None => {
-                self.jit_park_oom();
-                0
-            }
-        }
-    }
-
-    /// Trace JIT helper for `Op::TForCall A 0 C`.
-    ///
-    /// Base path: copy R[A..=A+2] → R[A+4..=A+6] + `begin_call`.
-    /// ipairs `inext` fast path at the top — skip begin_call
-    ///     when R[A]=Native(ipairs_iter), R[A+1]=Table no-mt,
-    ///     R[A+2]=Int.
-    /// Batched out-ptr writeback — fill ctrl/key/val raws into
-    ///     caller-provided buffers + return R[A+4]'s tag byte. Lets
-    ///     emit skip 3 separate `luna_jit_stack_load` calls and 1
-    ///     `luna_jit_stack_tag` call by reading the buffer via
-    ///     cranelift `stack_load` IR instead. Returns -1 on deopt,
-    ///     else R[A+4]'s tag byte | R[A+5]'s tag byte << 8 (the value's
-    ///     tag only when `nvars >= 2`, 0 otherwise).
-    #[doc(hidden)]
-    pub fn jit_op_tforcall(
-        &mut self,
-        slot_offset: u32,
-        nvars: i32,
-        ctrl_out: &mut i64,
-        key_out: &mut i64,
-        val_out: &mut i64,
-    ) -> i64 {
-        let Some(f) = self.jit_last_lua_frame() else {
-            return -1;
-        };
-        let abs = f.base + slot_offset;
-        let need = (abs + 7) as usize;
-        if !self.jit_ensure_stack(need) {
-            return -1;
-        }
-        // ipairs fast path
-        let took_fast_path = if let Value::Native(n) = self.stack[abs as usize]
-            && std::ptr::fn_addr_eq(
-                n.f,
-                crate::vm::builtins::ipairs_iter as crate::runtime::value::NativeFn,
-            )
-            && let Value::Table(t) = self.stack[(abs + 1) as usize]
-            && t.metatable().is_none()
-            && let Value::Int(i) = self.stack[(abs + 2) as usize]
-        {
-            let next_i = i.wrapping_add(1);
-            let v = t.get_int(next_i);
-            if v.is_nil() {
-                self.stack[(abs + 4) as usize] = Value::Nil;
-            } else {
-                self.stack[(abs + 4) as usize] = Value::Int(next_i);
-                if (nvars as usize) >= 2 {
-                    self.stack[(abs + 5) as usize] = v;
-                }
-                for j in 2..nvars as usize {
-                    let slot = abs + 4 + j as u32;
-                    if (slot as usize) < self.stack.len() {
-                        self.stack[slot as usize] = Value::Nil;
-                    }
-                }
-            }
-            true
-        } else {
-            false
-        };
-        if !took_fast_path {
-            // slow path: copy R[A..=A+2] → R[A+4..=A+6], then
-            // route through begin_call. Lua-closure iters would push
-            // a Lua frame mid-trace → deopt.
-            self.stack[(abs + 4) as usize] = self.stack[abs as usize];
-            self.stack[(abs + 5) as usize] = self.stack[(abs + 1) as usize];
-            self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
-            // the interpreter raises the call's error itself; and a native
-            // that `begin_call` hands to the interpreter loop (pcall, xpcall,
-            // pairs, an async native) pushes frames or parks a future
-            // instead of returning its results here
-            let runs_to_completion = match self.stack[abs as usize] {
-                Value::Native(nc) => nc.kind == NativeKind::Plain,
-                _ => false,
-            };
-            if !runs_to_completion || self.begin_call(abs + 4, Some(2), nvars, false).is_err() {
-                self.jit.counters.deopt += 1;
-                return -1;
-            }
-        }
-        // Batched writeback — fill the caller's buffers with the
-        // raw bits of R[A+2] / R[A+4] / R[A+5] so the trace IR can
-        // reload via cranelift `stack_load` instead of separate
-        // `luna_jit_stack_load` helper calls.
-        // SAFETY: every `RawVal` `unpack` returns has all 8 bytes initialised (`RawVal::NIL` for nil and booleans), so reading them as `zero` is defined
-        let ctrl_raw = unsafe { self.stack[(abs + 2) as usize].unpack().1.zero };
-        let (key_tag, key_rv) = self.stack[(abs + 4) as usize].unpack();
-        // SAFETY: `key_rv` came from `unpack`, whose payload has all 8 bytes initialised
-        let key_raw = unsafe { key_rv.zero };
-        let (val_tag, val_raw) = if (nvars as usize) >= 2 {
-            let (tag, rv) = self.stack[(abs + 5) as usize].unpack();
-            // SAFETY: `rv` came from `unpack`, whose payload has all 8 bytes initialised
-            (tag, unsafe { rv.zero })
-        } else {
-            (0, 0u64)
-        };
-        *ctrl_out = ctrl_raw as i64;
-        *key_out = key_raw as i64;
-        *val_out = val_raw as i64;
-        i64::from(key_tag) | i64::from(val_tag) << 8
     }
 
     /// Load the raw `i64` payload of

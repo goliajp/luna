@@ -62,8 +62,8 @@ pub(super) fn emit_math_fold<M: Module>(
                         // Folds only compile in chunks without
                         // table stores, so nothing has happened yet
                         // that a rerun would repeat.
-                        let lo = bcx.ins().f64const(-9_223_372_036_854_775_808.0);
-                        let hi = bcx.ins().f64const(9_223_372_036_854_775_808.0);
+                        let lo = float_const(bcx, -9_223_372_036_854_775_808.0);
+                        let hi = float_const(bcx, 9_223_372_036_854_775_808.0);
                         let ge_lo = bcx.ins().fcmp(FloatCC::GreaterThanOrEqual, r, lo);
                         let lt_hi = bcx.ins().fcmp(FloatCC::LessThan, r, hi);
                         let fits = bcx.ins().band(ge_lo, lt_hi);
@@ -102,20 +102,32 @@ pub(super) fn emit_math_fold<M: Module>(
                 // 5.3+ `atan(y)` is `atan2(y, 1)` (lmathlib.c), which
                 // libm rounds differently from `atan(y)`.
                 let atan2 = fold.fn_name == "atan" && !float_only;
+                // a function that can set `errno` goes through luna's, which
+                // keeps the value PUC's process would have
+                let errno_fn = super::math_fold::errno_math_fn(fold.fn_name);
                 let mut libm_sig = module.make_signature();
                 libm_sig.params.push(AbiParam::new(types::F64));
                 if atan2 {
                     libm_sig.params.push(AbiParam::new(types::F64));
+                } else if errno_fn.is_some() {
+                    libm_sig.params.push(AbiParam::new(types::I64));
                 }
                 libm_sig.returns.push(AbiParam::new(types::F64));
-                let name = if atan2 { "atan2" } else { fold.fn_name };
+                let name = match errno_fn {
+                    _ if atan2 => "atan2",
+                    Some(_) => "luna_jit_math1",
+                    None => fold.fn_name,
+                };
                 let libm_id = module
                     .declare_function(name, Linkage::Import, &libm_sig)
                     .ok()?;
                 let libm_ref = module.declare_func_in_func(libm_id, bcx.func);
                 let call_inst = if atan2 {
-                    let one = bcx.ins().f64const(1.0);
+                    let one = float_const(bcx, 1.0);
                     bcx.ins().call(libm_ref, &[arg_f64, one])
+                } else if let Some(f) = errno_fn {
+                    let f = bcx.ins().iconst(types::I64, f);
+                    bcx.ins().call(libm_ref, &[arg_f64, f])
                 } else {
                     bcx.ins().call(libm_ref, &[arg_f64])
                 };
@@ -185,7 +197,7 @@ pub(super) fn emit_get_upval<M: Module>(
                 // Op::Call gets rewritten to a direct cranelift
                 // call; this register's value is never read.
                 let zero = if matches!(a_kind(reg_kinds, ins.a()), RegKind::Float) {
-                    bcx.ins().f64const(0.0)
+                    float_const(bcx, 0.0)
                 } else {
                     bcx.ins().iconst(types::I64, 0)
                 };
@@ -211,6 +223,7 @@ pub(super) fn emit_self_call<M: Module>(
         ret_kind,
         regs,
         fn_id,
+        self_calls,
         ..
     } = f;
     let ChunkScan { self_call_pcs, .. } = scan;
@@ -241,9 +254,13 @@ pub(super) fn emit_self_call<M: Module>(
                 };
                 arg_vals.push(v_i64);
             }
+            let sc = self_calls?;
             let self_ref = module.declare_func_in_func(fn_id, bcx.func);
-            let call_inst = bcx.ins().call(self_ref, &arg_vals);
-            let result_i64 = bcx.inst_results(call_inst)[0];
+            let call = bcx.ins().call(self_ref, &arg_vals);
+            let result_i64 = bcx.inst_results(call)[0];
+            if sc.check_failure {
+                return_if_failed(bcx);
+            }
             // Self-call result is `ret_kind`; bitcast back to
             // F64 if Float. Pre-write `current_kinds[a]` would
             // be stale here.
@@ -263,4 +280,18 @@ pub(super) fn emit_self_call<M: Module>(
         _ => unreachable!("dispatched by op"),
     }
     Some(())
+}
+
+/// Return at once when the failure flag in the stub's context (the pinned
+/// register) is set: a self call this one made, or one below it, failed.
+fn return_if_failed(bcx: &mut FunctionBuilder<'_>) {
+    let abort = bcx.create_block();
+    let cont = bcx.create_block();
+    let ctx = bcx.ins().get_pinned_reg(types::I64);
+    let failed = bcx.ins().load(types::I64, MemFlagsData::trusted(), ctx, 8);
+    bcx.ins().brif(failed, abort, &[], cont, &[]);
+    bcx.switch_to_block(abort);
+    let zero = bcx.ins().iconst(types::I64, 0);
+    bcx.ins().return_(&[zero]);
+    bcx.switch_to_block(cont);
 }

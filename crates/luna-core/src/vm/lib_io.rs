@@ -19,6 +19,7 @@ use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
 mod crt;
+pub(crate) mod fopen;
 mod handle;
 mod lines;
 pub(crate) mod msvc;
@@ -27,12 +28,15 @@ mod open;
 mod read;
 mod results;
 mod stream;
+#[cfg(windows)]
+pub(crate) mod winfs;
 mod write;
 pub(crate) use handle::flush_all;
 use handle::*;
 use lines::*;
 pub(crate) use msvc::translate_all;
 use numeral::*;
+pub(crate) use open::open_file;
 #[cfg(any(unix, windows))]
 pub(crate) use open::shell_command;
 use open::*;
@@ -41,7 +45,10 @@ pub(crate) use results::c_str;
 #[cfg(any(unix, windows))]
 pub(crate) use results::exec_result;
 pub(crate) use results::file_fail;
+pub(crate) use results::note_failure;
+pub use results::os_bytes;
 pub(crate) use results::os_path;
+pub(crate) use results::reset_errno;
 pub(crate) use results::strerror;
 use results::*;
 use stream::*;
@@ -52,6 +59,7 @@ use write::*;
 const EINVAL: i32 = 22;
 const ENOMEM: i32 = 12;
 const EBADF: i32 = 9;
+#[cfg(not(unix))]
 const ESPIPE: i32 = 29;
 
 /// `LUAL_BUFFERSIZE` for `setvbuf`'s default size; luna's buffers do not
@@ -82,7 +90,8 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
     }
     // The method `close`: 5.1 and 5.2 register `io_close` itself (5.1 with an
     // environment that has no default output, so a missing argument checks
-    // nil); 5.3 split it into `f_close`.
+    // nil); 5.3 split it into `f_close`. 5.2's is the very function value of
+    // `io.close` (a light C function), so an error names it `io.close`.
     let close: crate::runtime::value::NativeFn = match v {
         LuaVersion::Lua51 => f_close_51,
         LuaVersion::Lua52 => io_close,
@@ -108,6 +117,11 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
     };
     for (name, f) in methods {
         put_native(vm, index, name, f)?;
+    }
+    if v == LuaVersion::Lua52 {
+        let k = vm.str_value(b"close")?;
+        let io_close = io.get(k);
+        put(vm, index, "close", io_close)?;
     }
     put(vm, mt, "__index", Value::Table(index))?;
     put_native(vm, mt, "__gc", f_gc)?;

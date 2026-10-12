@@ -18,6 +18,33 @@ pub(super) unsafe fn raw_tag(p: *const Value) -> u8 {
     unsafe { *(p as *const u8) }
 }
 
+/// The tag byte of the value at `p`, read again where a test of the same
+/// tag through [`raw_tag`] came first: the compiler then keeps the two reads
+/// apart, so the first can be folded into its comparison on x86-64.
+///
+/// # Safety
+/// `p` points at an initialised `Value`.
+#[cfg(all(target_arch = "x86_64", not(miri)))]
+#[inline(always)]
+pub(super) unsafe fn raw_tag_again(p: *const Value) -> u8 {
+    // SAFETY: the caller's contract; the tag is the first byte
+    unsafe { std::ptr::read_volatile(p as *const u8) }
+}
+
+/// Register `A` of `inst` among the registers at `regs`. On x86-64 the
+/// register's byte offset is one shift and one mask of the instruction (`A`
+/// sits at bit 7 and a `Value` is 16 bytes); aarch64 extracts `A` and
+/// scales it in the add.
+#[inline(always)]
+pub(super) fn reg_a(regs: *mut Value, inst: crate::vm::isa::Inst) -> *mut Value {
+    const _: () = assert!(size_of::<Value>() == 16);
+    if cfg!(target_arch = "x86_64") {
+        regs.wrapping_byte_add(((inst.0 >> 3) & 0xff0) as usize)
+    } else {
+        regs.wrapping_add(inst.a() as usize)
+    }
+}
+
 /// The integer at `p`.
 ///
 /// # Safety
@@ -64,6 +91,16 @@ pub(super) unsafe fn put_int(p: *mut Value, v: i64) {
     unsafe { *(p as *mut i64).add(1) = v }
 }
 
+/// Overwrite the float at `p`, keeping its tag.
+///
+/// # Safety
+/// `p` points at a `Value::Float`.
+#[inline(always)]
+pub(super) unsafe fn put_flt(p: *mut Value, v: f64) {
+    // SAFETY: the caller's contract
+    unsafe { *(p as *mut f64).add(1) = v }
+}
+
 /// Lua truth of the value at `p`: everything but `nil` and `false`.
 ///
 /// # Safety
@@ -106,29 +143,38 @@ macro_rules! arith_arm {
      int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr,
      slow($l:ident, $r:ident) => $sv:expr) => {{
         use $crate::vm::exec::fast_arith::{
-            Operands, cold_path, is_num_tag, raw_int, raw_num, raw_tag,
+            cold_path, is_num_tag, raw_flt, raw_int, raw_num, raw_tag,
         };
         let (pl, pr): (*const Value, *const Value) = ($pl, $pr);
         // SAFETY: both point at initialised values, a register of the
         // running frame or a constant of its proto; a payload is read as
         // the type its tag names
-        let ops = unsafe {
+        // two floats are as common as two integers in float code: on
+        // aarch64, which writes a float result apart from an integer one
+        // (see `arith_result`), only mixed numbers and the rest are out of
+        // line; on x86-64 the two results share their write, and a second
+        // inline path made the integer one jump through it. Not in 5.1/5.2
+        // (`DBL`, used by `run_fast`'s arms), whose integers and floats mix
+        // in one number type and would pay the second test
+        // each case computes its result where its operands were read, so
+        // that the float case is not a jump to a block the cases share
+        let v: Option<Value> = unsafe {
             let (tl, tr) = (raw_tag(pl), raw_tag(pr));
             if tl == tag::INT && tr == tag::INT {
-                Operands::Ints(raw_int(pl), raw_int(pr))
+                let ($ia, $ib) = (raw_int(pl), raw_int(pr));
+                $iv
+            } else if cfg!(target_arch = "aarch64") && !DBL && tl == tag::FLOAT && tr == tag::FLOAT {
+                let ($fa, $fb) = (raw_flt(pl), raw_flt(pr));
+                $fv
             } else {
                 cold_path();
                 if is_num_tag(tl) && is_num_tag(tr) {
-                    Operands::Nums(raw_num(pl, tl), raw_num(pr, tr))
+                    let ($fa, $fb) = (raw_num(pl, tl), raw_num(pr, tr));
+                    $fv
                 } else {
-                    Operands::Other
+                    None
                 }
             }
-        };
-        let v: Option<Value> = match ops {
-            Operands::Ints($ia, $ib) => $iv,
-            Operands::Nums($fa, $fb) => $fv,
-            Operands::Other => None,
         };
         $crate::vm::exec::fast_arith::arith_result!($regs, $inst, v, (*pl, *pr), slow($l, $r) => $sv)
     }};
@@ -149,6 +195,9 @@ macro_rules! arith_imm_arm {
             let tl = raw_tag(pl);
             if tl == tag::INT {
                 Operands::Ints(raw_int(pl), im)
+            } else if cfg!(target_arch = "aarch64") && !DBL && tl == tag::FLOAT {
+                // as in `arith_arm`
+                Operands::Nums(raw_flt(pl), im as f64)
             } else {
                 cold_path();
                 if tl == tag::FLOAT {
@@ -174,9 +223,25 @@ macro_rules! arith_result {
     ($regs:ident, $inst:ident, $v:ident, $read:expr, slow($l:ident, $r:ident) => $sv:expr) => {
         match $v {
             Some(v) => {
+                let dst = $regs.wrapping_add($inst.a() as usize);
                 // SAFETY: `$regs` is the running frame's register window,
-                // `A` one of its registers
-                unsafe { $regs.add($inst.a() as usize).write(v) };
+                // `A` one of its registers. On aarch64 a float is written as
+                // its tag and its payload, from the floating-point register
+                // it was computed in: as one write of the whole value it
+                // shared the integer result's store and went through an
+                // integer register first, a cycle more per iteration of a
+                // loop that carries a float or an integer through a register
+                // (Cortex-A76: `s = s + x` 23 -> 19 cycles, `s = s + i` 17
+                // -> 15)
+                unsafe {
+                    match v {
+                        Value::Float(f) if !cfg!(target_arch = "x86_64") => {
+                            (dst as *mut u8).write(tag::FLOAT);
+                            (dst as *mut f64).add(1).write(f);
+                        }
+                        v => dst.write(v),
+                    }
+                }
                 true
             }
             None => {

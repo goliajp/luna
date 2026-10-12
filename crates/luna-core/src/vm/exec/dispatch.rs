@@ -2,6 +2,7 @@
 //! dispatch, then the fast loop and the opcodes it hands back.
 
 use super::*;
+mod finish_cont;
 
 impl Vm {
     /// The loop head's slow path, taken while [`Vm::trap`] is set: tick the
@@ -26,90 +27,6 @@ impl Vm {
             || self.hook_armed()
             || matches!(self.frames.last(), Some(CallFrame::Cont(_)));
         Ok(())
-    }
-
-    /// A continuation frame is on top: the call it protected has delivered
-    /// its results (or a `__close` handler / yieldable metamethod finished).
-    /// `Some` hands results out of this activation.
-    #[inline(never)]
-    pub(super) fn finish_cont(
-        &mut self,
-        nc: NativeCont,
-        entry_depth: usize,
-    ) -> Result<Option<Vec<Value>>, LuaError> {
-        // a yieldable metamethod returned: complete the interrupted
-        // instruction (PUC luaV_finishOp) and resume the running frame.
-        if let ContKind::Meta(mc) = nc.kind {
-            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-            let result = if self.top > nc.func_slot {
-                self.stack[nc.func_slot as usize]
-            } else {
-                Value::Nil
-            };
-            self.stack.truncate(nc.func_slot as usize);
-            self.top = mc.saved_top;
-            self.finish_meta(mc.action, result)?;
-            return Ok(None);
-        }
-        // a __close handler returned successfully: discard its
-        // results, restore `top` to the slot the handler was called
-        // at (the surrounding frame's register window above this slot
-        // must stay alloc'd — never truncate the underlying stack),
-        // then continue the close chain (next slot, or fire
-        // AfterClose). When the close ends an entry activation,
-        // drive_close hands the results up to exec_with directly.
-        if let ContKind::Close(cc) = nc.kind {
-            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-            let pending = cc.has_pending.then(|| self.stack[nc.func_slot as usize]);
-            self.top = nc.func_slot;
-            if let Some(vals) = self.drive_close(cc.from, pending, cc.after, entry_depth)? {
-                return Ok(Some(vals));
-            }
-            return Ok(None);
-        }
-        // __pairs returned: normalize its results to exactly the
-        // dialect's count (iterator, state, control, and on 5.5 the
-        // closing value) at pairs's slot, where the metamethod was
-        // called, and hand them to pairs's caller.
-        if let ContKind::Pairs = nc.kind {
-            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-            let total = crate::vm::builtins::pairs_mm_results(self) as u32;
-            let need = (nc.func_slot + total) as usize;
-            self.grow_stack(need)?;
-            // the metamethod ran one slot above pairs's own
-            let first = nc.func_slot + 1;
-            let n = (self.top - first).min(total);
-            for i in 0..n {
-                self.stack[(nc.func_slot + i) as usize] = self.stack[(first + i) as usize];
-            }
-            for s in (nc.func_slot + n)..(nc.func_slot + total) {
-                self.stack[s as usize] = Value::Nil;
-            }
-            self.top = nc.func_slot + total;
-            if self.frames.len() < entry_depth {
-                return Ok(Some(self.take_results(nc.func_slot)));
-            }
-            self.finish_results(nc.func_slot, total, nc.nresults);
-            return Ok(None);
-        }
-        if let ContKind::Host(hc) = nc.kind {
-            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-            return self.finish_host_cont(nc, hc, entry_depth);
-        }
-        frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-        self.pcall_depth -= 1;
-        // f's results sit at nc.func_slot+1.. (f was called one slot
-        // above the continuation), so writing `true` at the slot makes
-        // `true, results…` already contiguous.
-        let nret = self.top - (nc.func_slot + 1);
-        self.stack[nc.func_slot as usize] = Value::Bool(true);
-        let total = 1 + nret;
-        self.top = nc.func_slot + total;
-        if self.frames.len() < entry_depth {
-            return Ok(Some(self.take_results(nc.func_slot)));
-        }
-        self.finish_results(nc.func_slot, total, nc.nresults);
-        Ok(None)
     }
 
     pub(super) fn run(&mut self, entry_depth: usize) -> Result<Vec<Value>, LuaError> {
@@ -221,10 +138,10 @@ impl Vm {
             // also reset by the deopt site).
             // The one-shot suppression only matters where a downrec trace
             // could be admitted, which needs the proto's flag.
-            // Compiled code does not tick the instruction budget: while one
-            // is armed, every loop stays in the interpreter.
-            let admit =
-                trace_on && cl.proto.has_dispatchable_trace.get() && self.instr_budget.is_none();
+            // Compiled code ticks no instruction budget and checks no
+            // memory cap: while one is armed, every loop stays in the
+            // interpreter.
+            let admit = trace_on && cl.proto.has_dispatchable_trace.get() && !self.limited;
             let downrec_admit_blocked =
                 admit && std::mem::take(&mut self.jit.suppress_downrec_admit_once);
             if admit && self.trace_dispatch(cl, pc, base, downrec_admit_blocked) {
@@ -277,19 +194,38 @@ impl Vm {
             let fx = fast::Fast {
                 fr,
                 trace_on,
-                pre53,
                 entry_depth,
                 stay,
                 heads,
             };
             let watch = !stay || heads[0] != crate::runtime::function::TRACE_HEADS_NONE;
-            let out = match (watch, trace_on, dbl) {
-                (true, _, false) => self.run_fast::<true, true, false>(fx, inst, pc + 1)?,
-                (false, true, false) => self.run_fast::<false, true, false>(fx, inst, pc + 1)?,
-                (false, false, false) => self.run_fast::<false, false, false>(fx, inst, pc + 1)?,
-                (true, _, true) => self.run_fast::<true, true, true>(fx, inst, pc + 1)?,
-                (false, true, true) => self.run_fast::<false, true, true>(fx, inst, pc + 1)?,
-                (false, false, true) => self.run_fast::<false, false, true>(fx, inst, pc + 1)?,
+            // 5.1/5.2 (`dbl`) are pre-5.3 too
+            let out = match (watch, trace_on, dbl, pre53) {
+                (true, _, true, _) => self.run_fast::<true, true, true, true>(fx, inst, pc + 1)?,
+                (false, true, true, _) => {
+                    self.run_fast::<false, true, true, true>(fx, inst, pc + 1)?
+                }
+                (false, false, true, _) => {
+                    self.run_fast::<false, false, true, true>(fx, inst, pc + 1)?
+                }
+                (true, _, false, true) => {
+                    self.run_fast::<true, true, false, true>(fx, inst, pc + 1)?
+                }
+                (false, true, false, true) => {
+                    self.run_fast::<false, true, false, true>(fx, inst, pc + 1)?
+                }
+                (false, false, false, true) => {
+                    self.run_fast::<false, false, false, true>(fx, inst, pc + 1)?
+                }
+                (true, _, false, false) => {
+                    self.run_fast::<true, true, false, false>(fx, inst, pc + 1)?
+                }
+                (false, true, false, false) => {
+                    self.run_fast::<false, true, false, false>(fx, inst, pc + 1)?
+                }
+                (false, false, false, false) => {
+                    self.run_fast::<false, false, false, false>(fx, inst, pc + 1)?
+                }
             };
             let inst = match out {
                 fast::FastExit::Reload => continue,

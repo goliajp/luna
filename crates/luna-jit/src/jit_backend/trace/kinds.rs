@@ -43,6 +43,9 @@ pub(super) enum RegKind {
     /// a boolean: payload 0 (false) or 1 (true); its value tag is
     /// `raw::FALSE` plus the payload, known only at run time
     Bool,
+    /// native function pointer (raw payload is a `Gc<NativeClosure>`
+    /// ptr): an entry slot tagged NATIVE, or a copy of one
+    Native,
 }
 
 impl RegKind {
@@ -52,6 +55,7 @@ impl RegKind {
             luna_core::runtime::value::raw::FLOAT => Some(RegKind::Float),
             luna_core::runtime::value::raw::TABLE => Some(RegKind::Table),
             luna_core::runtime::value::raw::CLOSURE => Some(RegKind::Closure),
+            luna_core::runtime::value::raw::NATIVE => Some(RegKind::Native),
             luna_core::runtime::value::raw::NIL => Some(RegKind::Nil),
             luna_core::runtime::value::raw::STR => Some(RegKind::Str),
             luna_core::runtime::value::raw::FALSE | luna_core::runtime::value::raw::TRUE => {
@@ -68,19 +72,37 @@ impl RegKind {
 }
 
 pub(super) fn kinds_to_exit_tags(kinds: &[RegKind]) -> Vec<ExitTag> {
-    kinds
-        .iter()
-        .map(|k| match k {
-            RegKind::Unset | RegKind::Unknown | RegKind::StackHeld => ExitTag::Untouched,
-            RegKind::Int => ExitTag::Int,
-            RegKind::Float => ExitTag::Float,
-            RegKind::Table => ExitTag::Table,
-            RegKind::Closure => ExitTag::Closure,
-            RegKind::Nil => ExitTag::Nil,
-            RegKind::Str => ExitTag::Str,
-            RegKind::Bool => ExitTag::Bool,
-        })
-        .collect()
+    kinds.iter().map(exit_tag_of).collect()
+}
+
+/// The exit tags of `kinds`, sharing the slice of the exit before when
+/// that exit left with the same kinds (`last`: its kinds and tags).
+pub(super) fn shared_exit_tags<'k>(
+    kinds: &'k [RegKind],
+    last: &mut Option<(&'k [RegKind], TArc<[ExitTag]>)>,
+) -> TArc<[ExitTag]> {
+    if let Some((k, t)) = last
+        && *k == kinds
+    {
+        return t.clone();
+    }
+    let tags: TArc<[ExitTag]> = kinds.iter().map(exit_tag_of).collect();
+    *last = Some((kinds, tags.clone()));
+    tags
+}
+
+fn exit_tag_of(k: &RegKind) -> ExitTag {
+    match k {
+        RegKind::Unset | RegKind::Unknown | RegKind::StackHeld => ExitTag::Untouched,
+        RegKind::Int => ExitTag::Int,
+        RegKind::Float => ExitTag::Float,
+        RegKind::Table => ExitTag::Table,
+        RegKind::Closure => ExitTag::Closure,
+        RegKind::Nil => ExitTag::Nil,
+        RegKind::Str => ExitTag::Str,
+        RegKind::Bool => ExitTag::Bool,
+        RegKind::Native => ExitTag::Native,
+    }
 }
 
 /// Whether a loop's back-edge may run the body again with the registers
@@ -107,6 +129,7 @@ pub(super) fn kind_to_raw_tag(k: RegKind) -> u8 {
         RegKind::Float => raw::FLOAT,
         RegKind::Table => raw::TABLE,
         RegKind::Closure => raw::CLOSURE,
+        RegKind::Native => raw::NATIVE,
         RegKind::Str => raw::STR,
         RegKind::Unset | RegKind::Unknown | RegKind::StackHeld | RegKind::Nil => raw::NIL,
         RegKind::Bool => unreachable!("a boolean's tag is computed (`emit_kind_tag`)"),
@@ -122,6 +145,7 @@ pub(super) fn known_tag(k: RegKind) -> Option<u8> {
         RegKind::Float => Some(raw::FLOAT),
         RegKind::Table => Some(raw::TABLE),
         RegKind::Closure => Some(raw::CLOSURE),
+        RegKind::Native => Some(raw::NATIVE),
         RegKind::Str => Some(raw::STR),
         RegKind::Nil => Some(raw::NIL),
         RegKind::Unset | RegKind::Unknown | RegKind::StackHeld | RegKind::Bool => None,
@@ -149,4 +173,76 @@ pub(super) fn kind_tag(k: RegKind) -> u8 {
 /// the kind from scratch on every operand access.
 pub(super) fn k_op(current_kinds: &[RegKind], reg: u32) -> RegKind {
     *current_kinds.get(reg as usize).unwrap_or(&RegKind::Unset)
+}
+
+/// The kinds each tagged exit leaves with, in one buffer: `(pc, at, len)`
+/// per exit, its kinds at `kinds[at..at + len]`, and the cell its side
+/// trace goes in (the code holds the cell's address, so it never moves).
+#[derive(Default)]
+pub(super) struct ExitKinds {
+    kinds: Vec<RegKind>,
+    exits: Vec<(u32, u32, u32)>,
+    // boxed: compiled code holds each cell's address, which a growing
+    // `Vec<TCellPtr>` would move
+    #[allow(clippy::vec_box)]
+    cells: Vec<Box<TCellPtr>>,
+}
+
+impl ExitKinds {
+    /// Room for `exits` exits of `width` registers before growing.
+    pub(super) fn with_capacity(exits: usize, width: usize) -> ExitKinds {
+        ExitKinds {
+            kinds: Vec::with_capacity(exits * width),
+            exits: Vec::with_capacity(exits),
+            cells: Vec::with_capacity(exits),
+        }
+    }
+
+    /// Records an exit to `pc` leaving with `kinds`; its index.
+    pub(super) fn push(&mut self, pc: u32, kinds: &[RegKind], cell: Box<TCellPtr>) -> u32 {
+        let at = self.kinds.len() as u32;
+        self.kinds.extend_from_slice(kinds);
+        self.exits.push((pc, at, kinds.len() as u32));
+        self.cells.push(cell);
+        (self.exits.len() - 1) as u32
+    }
+
+    /// The kinds exit `k` leaves with.
+    pub(super) fn kinds_mut(&mut self, k: u32) -> &mut [RegKind] {
+        let (_, at, len) = self.exits[k as usize];
+        &mut self.kinds[at as usize..(at + len) as usize]
+    }
+
+    /// Each exit's pc and kinds, in order.
+    pub(super) fn iter(&self) -> impl Iterator<Item = (u32, &[RegKind])> {
+        self.exits
+            .iter()
+            .map(|&(pc, at, len)| (pc, &self.kinds[at as usize..(at + len) as usize]))
+    }
+
+    /// The side-trace cells, in exit order.
+    #[allow(clippy::vec_box)]
+    pub(super) fn into_cells(self) -> Vec<Box<TCellPtr>> {
+        self.cells
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // a register enters with its payload under its tag: a tag no kind
+    // describes would leave a copy of the value untagged at the exits
+    #[test]
+    fn every_enterable_tag_has_a_kind() {
+        use luna_core::jit::trace::{entry_tag_enterable, entry_tag_of};
+        // the tags fit the 32-bit masks `entry_tag_enterable` shifts
+        for tag in 0..32 {
+            let t = entry_tag_of(tag);
+            if entry_tag_enterable(t) {
+                let k = RegKind::from_entry_tag(t);
+                assert!(k.is_some_and(|k| !k.untyped()), "tag {tag}");
+            }
+        }
+    }
 }

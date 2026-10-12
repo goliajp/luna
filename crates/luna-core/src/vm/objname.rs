@@ -12,6 +12,9 @@ use crate::runtime::function::Proto;
 use crate::version::LuaVersion;
 use crate::vm::isa::{Inst, Op};
 
+mod event;
+pub(crate) use event::instr_event;
+
 /// The string constant at index `c`, if it is a string.
 fn kname(proto: &Proto, c: u32) -> Option<String> {
     match proto.consts.get(c as usize) {
@@ -32,12 +35,18 @@ fn writes_reg(i: Inst, reg: u32) -> bool {
         Op::SelfOp => reg == a || reg == a + 1,
         // these write a run of registers starting at A (results / varargs)
         Op::Call | Op::TailCall | Op::Vararg => reg >= a,
-        Op::TForCall => reg >= a + 4,
+        // PUC: the call affects every register above the loop's base
+        Op::TForCall | Op::TForCall53 | Op::TForCall55 => reg >= a + 2,
+        // 5.2 / 5.3 `TFORLOOP` names the control register
+        Op::TForLoop53 => reg == a + 2,
         // control / store / no-result opcodes write no destination register
         Op::Jmp
         | Op::SetUpval
         | Op::SetTabUp
         | Op::SetTable
+        | Op::SetTableK
+        | Op::SetTabUpR
+        | Op::SetTabUpK
         | Op::SetI
         | Op::SetField
         | Op::Close
@@ -51,13 +60,21 @@ fn writes_reg(i: Inst, reg: u32) -> bool {
         | Op::LeI
         | Op::GtI
         | Op::GeI
+        | Op::LtK
+        | Op::LeK
+        | Op::EqKK
+        | Op::LtKK
+        | Op::LeKK
         | Op::Test
         | Op::Return
         | Op::Return0
         | Op::Return1
         | Op::SetList
         | Op::ExtraArg
-        | Op::TForPrep => false,
+        | Op::TForPrep
+        | Op::TForPrep53
+        | Op::TForPrep55
+        | Op::SetGlobal => false,
         _ => reg == a,
     }
 }
@@ -219,6 +236,7 @@ pub fn getobjname_in(
             basicgetobjname(proto, lastpc, reg)
         }
         Op::GetTabUp => kname(proto, i.c()).map(|n| (gxf(proto, setpc, i, true, version), n)),
+        Op::GetGlobal => kname(proto, i.bx()).map(|n| ("global", n)),
         Op::GetField => kname(proto, i.c()).map(|n| (gxf(proto, setpc, i, false, version), n)),
         // a register-keyed read (global with a constant index past the GETFIELD
         // C-operand limit, or an explicit `t[k]`): name from the key register.
@@ -228,6 +246,22 @@ pub fn getobjname_in(
             "field" if version <= LuaVersion::Lua51 => Some(("field", unknown())),
             kind => Some((kind, rname(proto, setpc, i.c()))),
         },
+        // a constant key (before 5.4 `GETTABLE` takes it as an `RK`
+        // operand): named when it is a string
+        Op::GetTableK => Some((
+            gxf(proto, setpc, i, false, version),
+            kname(proto, i.c()).unwrap_or_else(unknown),
+        )),
+        // 5.2 / 5.3 `GETTABUP` with an `RK` key that is not a string
+        // constant: named from a string constant key or the register's
+        Op::GetTabUpR => Some((
+            gxf(proto, setpc, i, true, version),
+            if i.k() {
+                kname(proto, i.c()).unwrap_or_else(unknown)
+            } else {
+                rname(proto, setpc, i.c())
+            },
+        )),
         Op::GetI if version <= LuaVersion::Lua53 => Some(("field", unknown())),
         Op::GetI => Some(("field", "integer index".to_string())),
         // A named-vararg table read (`function f(...t) ... t.k ...`) compiles
@@ -253,37 +287,4 @@ pub fn getobjname_in(
         }
         _ => None,
     }
-}
-
-/// The metamethod event an instruction can call, per PUC
-/// `funcnamefromcode` of each version (5.2's `getfuncname`). 5.1 names no
-/// metamethod.
-pub(crate) fn instr_event(v: LuaVersion, op: Op) -> Option<&'static str> {
-    Some(match op {
-        Op::SelfOp | Op::GetTabUp | Op::GetTable | Op::GetI | Op::GetField => "index",
-        Op::SetTabUp | Op::SetTable | Op::SetI | Op::SetField => "newindex",
-        Op::Eq => "eq",
-        Op::Add => "add",
-        Op::Sub => "sub",
-        Op::Mul => "mul",
-        Op::Div => "div",
-        Op::Mod => "mod",
-        Op::Pow => "pow",
-        Op::Unm => "unm",
-        Op::Len => "len",
-        Op::Lt => "lt",
-        Op::Le => "le",
-        Op::Concat => "concat",
-        Op::IDiv if v >= LuaVersion::Lua53 => "idiv",
-        Op::BAnd if v >= LuaVersion::Lua53 => "band",
-        Op::BOr if v >= LuaVersion::Lua53 => "bor",
-        Op::BXor if v >= LuaVersion::Lua53 => "bxor",
-        Op::Shl if v >= LuaVersion::Lua53 => "shl",
-        Op::Shr if v >= LuaVersion::Lua53 => "shr",
-        Op::BNot if v >= LuaVersion::Lua53 => "bnot",
-        // luna keeps `Return0`/`Return1` (with `k`) where PUC's
-        // `luaK_finish` makes them `OP_RETURN` to close what is open
-        Op::Close | Op::Return | Op::Return0 | Op::Return1 if v >= LuaVersion::Lua54 => "close",
-        _ => return None,
-    })
 }

@@ -17,8 +17,12 @@ use crate::runtime::function::{CallFrame, ContKind, Frame};
 use crate::runtime::{Gc, NativeClosure, Value};
 
 mod chunk_id;
+mod function_ar;
+mod global_name;
 mod levels;
+mod native_top;
 mod raise;
+mod raise_protected;
 mod traceback;
 
 pub(crate) use chunk_id::{chunk_id, syntax_chunk_id};
@@ -27,15 +31,60 @@ pub(crate) use raise::ErroredNative;
 pub(crate) use traceback::traceback_from_lines;
 
 /// Where a running native sits: its value-stack window and the number of
-/// frames below it when it was entered.
+/// frames below it when it was entered. 24 bytes: one is pushed on every
+/// native call.
 #[derive(Clone, Copy)]
 pub(crate) struct NativeAct {
     pub(crate) nc: Gc<NativeClosure>,
     pub(crate) func_slot: u32,
     pub(crate) nargs: u32,
-    pub(crate) depth: u32,
-    /// `__call` metamethods resolved to reach it (PUC 5.5 `CIST_CCMT`)
-    pub(crate) ccmt: u8,
+    /// the frames below it (low 24 bits) and the `__call` metamethods
+    /// resolved to reach it (PUC 5.5 `CIST_CCMT`, the high byte)
+    depth_ccmt: u32,
+    /// what the C function has pushed (or dropped) since it was entered
+    /// with its arguments, counted from the slot past them (see
+    /// `Vm::native_push`); nothing is computed when it is pushed
+    pub(crate) top_off: i32,
+}
+
+const _: () = assert!(std::mem::size_of::<NativeAct>() <= 24);
+
+impl NativeAct {
+    /// `nc` entered at `func_slot` with `nargs` arguments, above `depth`
+    /// frames, its top just past the arguments.
+    pub(crate) fn new(
+        nc: Gc<NativeClosure>,
+        func_slot: u32,
+        nargs: u32,
+        depth: usize,
+        ccmt: u8,
+    ) -> Self {
+        // the frame limit keeps the depth far below 2^24
+        let depth_ccmt = depth as u32 | (u32::from(ccmt) << 24);
+        NativeAct {
+            nc,
+            func_slot,
+            nargs,
+            depth_ccmt,
+            top_off: 0,
+        }
+    }
+
+    /// PUC's `L->top` while it runs: its arguments, then what the C
+    /// function has pushed or dropped since.
+    pub(crate) fn top(&self) -> u32 {
+        (self.func_slot + 1 + self.nargs).wrapping_add_signed(self.top_off)
+    }
+
+    /// The frames below it when it was entered.
+    pub(crate) fn depth(&self) -> u32 {
+        self.depth_ccmt & 0x00ff_ffff
+    }
+
+    /// `__call` metamethods resolved to reach it.
+    pub(crate) fn ccmt(&self) -> u8 {
+        (self.depth_ccmt >> 24) as u8
+    }
 }
 
 /// One stack level (one PUC `CallInfo`).
@@ -117,7 +166,7 @@ impl<'a> ThreadStack<'a> {
         }
         let mut k = acts.len();
         for p in (0..=frames.len()).rev() {
-            while k > 0 && acts[k - 1].depth as usize == p {
+            while k > 0 && acts[k - 1].depth() as usize == p {
                 k -= 1;
                 if !is_host_call(Value::Native(acts[k].nc)) {
                     levels.push(DbgKind::C(CLevel::Native(k)));
@@ -140,9 +189,12 @@ impl<'a> ThreadStack<'a> {
                     // of its own once a yield has taken it off the running
                     // natives; before that, the native is the level
                     let level = match nc.kind {
-                        ContKind::Pcall | ContKind::Xpcall { .. } | ContKind::Pairs => {
-                            !is_host_call(stack[nc.func_slot as usize])
+                        // a host's `lua_pcall` is no level: its callee sits
+                        // on the slot (`callee_shift`)
+                        ContKind::Pcall { level, .. } | ContKind::Xpcall { level, .. } => {
+                            level && !is_host_call(stack[nc.func_slot as usize])
                         }
+                        ContKind::Pairs { .. } => !is_host_call(stack[nc.func_slot as usize]),
                         ContKind::Host(_) => !acts.iter().any(|a| a.func_slot == nc.func_slot),
                         _ => false,
                     };
