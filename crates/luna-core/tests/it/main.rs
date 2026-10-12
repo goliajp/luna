@@ -45,6 +45,7 @@ mod jit_default_off;
 mod library_edge_arguments;
 mod load_memory_errors;
 mod load_oom_paths;
+mod load_refused_in_turn;
 mod loop_trap;
 mod lua_error_structured;
 mod macro_lua;
