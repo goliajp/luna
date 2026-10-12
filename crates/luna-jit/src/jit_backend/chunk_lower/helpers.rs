@@ -253,7 +253,7 @@ pub(super) struct ForRegs {
 impl ForRegs {
     pub(super) fn of(ins: Inst) -> ForRegs {
         let a = ins.a() as usize;
-        if matches!(ins.op(), Op::ForPrep55 | Op::ForLoop55) {
+        if matches!(ins.op(), Op::ForPrep55 | Op::ForLoop55 | Op::ForLoop55F) {
             ForRegs {
                 idx: a + 2,
                 x: a,

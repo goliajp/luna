@@ -184,8 +184,10 @@ pub(super) fn scan_chunk(c: ChunkIn<'_>) -> Option<ChunkScan> {
             | Op::Eq
             | Op::ForPrep
             | Op::ForLoop
+            | Op::ForLoopF
             | Op::ForPrep55
-            | Op::ForLoop55 => pc = scan_ops::scan_control(&mut s, c, pc, ins)?,
+            | Op::ForLoop55
+            | Op::ForLoop55F => pc = scan_ops::scan_control(&mut s, c, pc, ins)?,
             Op::NewTable | Op::SetTable | Op::SetList | Op::GetI | Op::GetTable | Op::Len => {
                 scan_tables::scan_tables(&mut s, c, pc, ins)?
             }

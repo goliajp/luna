@@ -57,7 +57,7 @@ fn apply_tail_kinds_and_gates(
     if let Some(for_loop_idx) = for_loop_idx_opt {
         let rop = &record.ops[for_loop_idx];
         let a = rop.inst.a() as usize;
-        if rop.inst.op() == Op::ForLoop {
+        if rop.inst.op().plain_for_loop() == Op::ForLoop {
             current_kinds[a + 3] = current_kinds[a];
         }
     }

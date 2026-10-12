@@ -154,8 +154,10 @@ pub(super) fn detect_accumulators(
                 | Op::TailCall
                 | Op::TestSet
                 | Op::ForLoop
+                | Op::ForLoopF
                 | Op::ForPrep
                 | Op::ForLoop55
+                | Op::ForLoop55F
                 | Op::ForPrep55
                 | Op::TForCall
                 | Op::TForCall53

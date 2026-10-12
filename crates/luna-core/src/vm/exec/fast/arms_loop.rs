@@ -1,5 +1,4 @@
-//! Fast-loop arms for the numeric `for` loop's preparation and the
-//! numeric and generic `for` loop back-edges.
+//! Fast-loop arms for the numeric and generic `for` loop back-edges.
 //! The generator defines one macro per opcode inside `run_fast`; it takes
 //! the loop's locals and label as arguments.
 
@@ -11,138 +10,6 @@ macro_rules! fast_loop_arms {
         $code:ident, $kptr:ident, $trace_on:ident, $pre53:ident, $entry_depth:ident,
         $frames:lifetime
     ) => {
-        // Control values that need no conversion and cannot raise are
-        // prepared here, as `Vm::for_prep` prepares them; the rest (a
-        // string or mixed numbers, a zero step from 5.4 on, a non-number)
-        // go to it. `$d off` is how far past the instruction after the
-        // prepare the loop goes on: 0 into the body, `bx` past the loop,
-        // `bx - 1` onto the step, where 5.1-5.3 test the first value. The
-        // work stays inline: a call here changed the register allocation of
-        // the call and table arms (method_dispatch +2.2% instructions).
-        macro_rules! for_prep_tail {
-            ($d off:expr) => {{
-                match $d off {
-                    Some(off) => {
-                        $npc += off;
-                        next!()
-                    }
-                    None => {
-                        cold_path();
-                        save!();
-                        $vm.run_frame_op($inst)?;
-                        resume!()
-                    }
-                }
-            }};
-        }
-        // the dialect's own layout: `R[A]` index, `R[A+1]` limit (5.1-5.3)
-        // or count, `R[A+2]` step, `R[A+3]` the variable. An integer loop
-        // (5.3 on: integer start and step) whose limit is an integer, or
-        // any loop over numbers that is a float loop (5.1/5.2 step every
-        // loop in floating point).
-        macro_rules! op_for_prep {
-            () => {{
-                let ra = $regs.wrapping_add($inst.a() as usize);
-                let bx = $inst.bx();
-                // SAFETY: the loop's four registers are in the frame (the
-                // verifier checks the run); payloads are read as the type
-                // their tags name, and a payload is written only over a
-                // register already tagged with its type
-                let off = unsafe {
-                    let (t0, t1, t2) = (raw_tag(ra), raw_tag(ra.add(1)), raw_tag(ra.add(2)));
-                    if !DBL && t0 == tag::INT && t2 == tag::INT {
-                        let (init, step) = (raw_int(ra), raw_int(ra.add(2)));
-                        if t1 != tag::INT {
-                            None
-                        } else if $pre53 {
-                            put_int(ra, init.wrapping_sub(step));
-                            Some(bx - 1)
-                        } else if step == 0 {
-                            None
-                        } else if let Some(count) = int_for_count(init, raw_int(ra.add(1)), step) {
-                            put_int(ra.add(1), count as i64);
-                            ra.add(3).write(Value::Int(init));
-                            Some(0)
-                        } else {
-                            Some(bx)
-                        }
-                    } else if is_num_tag(t0) && is_num_tag(t1) && is_num_tag(t2) {
-                        let init = raw_num(ra, t0);
-                        let limit = raw_num(ra.add(1), t1);
-                        let step = raw_num(ra.add(2), t2);
-                        if $pre53 {
-                            ra.write(Value::Float(init - step));
-                            ra.add(1).write(Value::Float(limit));
-                            ra.add(2).write(Value::Float(step));
-                            Some(bx - 1)
-                        } else if step == 0.0 {
-                            None
-                        } else if if 0.0 < step {
-                            limit < init
-                        } else {
-                            init < limit
-                        } {
-                            Some(bx)
-                        } else {
-                            ra.write(Value::Float(init));
-                            ra.add(1).write(Value::Float(limit));
-                            ra.add(2).write(Value::Float(step));
-                            ra.add(3).write(Value::Float(init));
-                            Some(0)
-                        }
-                    } else {
-                        None
-                    }
-                };
-                for_prep_tail!(off)
-            }};
-        }
-        // 5.5's layout, whatever the dialect: `R[A]` count (a float loop:
-        // limit), `R[A+1]` step, `R[A+2]` the variable
-        macro_rules! op_for_prep55 {
-            () => {{
-                let ra = $regs.wrapping_add($inst.a() as usize);
-                let bx = $inst.bx();
-                // SAFETY: as for `op_for_prep`
-                let off = unsafe {
-                    let (t0, t1, t2) = (raw_tag(ra), raw_tag(ra.add(1)), raw_tag(ra.add(2)));
-                    if t0 == tag::INT && t2 == tag::INT {
-                        let (init, step) = (raw_int(ra), raw_int(ra.add(2)));
-                        if t1 != tag::INT || step == 0 {
-                            None
-                        } else if let Some(count) = int_for_count(init, raw_int(ra.add(1)), step) {
-                            put_int(ra, count as i64);
-                            put_int(ra.add(1), step);
-                            put_int(ra.add(2), init);
-                            Some(0)
-                        } else {
-                            Some(bx)
-                        }
-                    } else if is_num_tag(t0) && is_num_tag(t1) && is_num_tag(t2) {
-                        let init = raw_num(ra, t0);
-                        let limit = raw_num(ra.add(1), t1);
-                        let step = raw_num(ra.add(2), t2);
-                        if step == 0.0 {
-                            None
-                        } else if if 0.0 < step {
-                            limit < init
-                        } else {
-                            init < limit
-                        } {
-                            Some(bx)
-                        } else {
-                            ra.write(Value::Float(limit));
-                            ra.add(1).write(Value::Float(step));
-                            ra.add(2).write(Value::Float(init));
-                            Some(0)
-                        }
-                    } else {
-                        None
-                    }
-                };
-                for_prep_tail!(off)
-            }};
-        }
         // One step of a numeric `for` whose control registers at `$d ra`
         // all hold integers (`for_int_step`) or all floats
         // (`for_flt_step`), as `Vm::for_loop` steps it: 5.4 on count down,
@@ -150,15 +17,15 @@ macro_rules! fast_loop_arms {
         // the loop goes on. The index and the count or limit keep their
         // tags (the control variable is the body's to change).
         macro_rules! for_int_step {
-            ($d ra:ident, $d back:expr) => {{
-                let (cur, x, st) = (raw_int($d ra), raw_int($d ra.add(1)), raw_int($d ra.add(2)));
+            ($d ra:ident, $d back:expr, $d cur:expr, $d x:expr, $d st:expr) => {{
+                let (cur, x, st): (i64, i64, i64) = ($d cur, $d x, $d st);
                 if !$pre53 {
                     if x != 0 {
                         $npc = $d back;
                         let next = cur.wrapping_add(st);
                         put_int($d ra, next);
                         put_int($d ra.add(1), x.wrapping_sub(1));
-                        $d ra.add(3).write(Value::Int(next));
+                        put_words($d ra.add(3), tag::INT, next as u64);
                     }
                 } else {
                     let next = cur.wrapping_add(st);
@@ -166,21 +33,41 @@ macro_rules! fast_loop_arms {
                     if st > 0 {
                         if next <= x {
                             put_int($d ra, next);
-                            $d ra.add(3).write(Value::Int(next));
+                            put_words($d ra.add(3), tag::INT, next as u64);
                             $npc = $d back;
                         }
                     } else if next >= x {
                         put_int($d ra, next);
-                        $d ra.add(3).write(Value::Int(next));
+                        put_words($d ra.add(3), tag::INT, next as u64);
                         $npc = $d back;
                     }
                 }
             }};
         }
+        // the payloads of the three control registers at `$d ra` as integers
+        #[cfg(not(all(target_arch = "aarch64", not(miri))))]
+        macro_rules! int_pays {
+            ($d ra:ident) => {
+                (raw_int($d ra), raw_int($d ra.add(1)), raw_int($d ra.add(2)))
+            };
+        }
         // One step of a float loop as PUC `floatforloop` takes it:
-        // `0 < step ? next <= limit : limit <= next`. The two directions
-        // are separate branches, so that the compiler does not merge them
-        // into a select of both tests. `$d put` stores the next index.
+        // `0 < step ? next <= limit : limit <= next`. On aarch64 one
+        // comparison of the pair the step's sign selects (`fcsel`), so that
+        // the step has one branch and one store; elsewhere the two
+        // directions are separate branches, which x86-64 does with fewer
+        // instructions. `$d put` stores the next index.
+        #[cfg(target_arch = "aarch64")]
+        macro_rules! flt_step {
+            ($d next:ident, $d lim:ident, $d st:ident, $d back:expr, $d put:expr) => {{
+                let (lo, hi) = if $d st > 0.0 { ($d next, $d lim) } else { ($d lim, $d next) };
+                if lo <= hi {
+                    $npc = $d back;
+                    $d put;
+                }
+            }};
+        }
+        #[cfg(not(target_arch = "aarch64"))]
         macro_rules! flt_step {
             ($d next:ident, $d lim:ident, $d st:ident, $d back:expr, $d put:expr) => {
                 if $d st > 0.0 {
@@ -207,60 +94,96 @@ macro_rules! fast_loop_arms {
         // `for_prep` leaves the three registers all integers or all floats;
         // anything else (`debug.setlocal`, crafted bytecode) goes to
         // `Vm::for_loop`, which raises. 5.1/5.2 loops are float loops.
-        // True after running `$d hot` when the three control registers at
-        // `$d ra` all have the tag `$d h`, or `$d other` when they all have
-        // `$d o`; false (the slow path) otherwise. On x86-64 each tag is
-        // read once on each path, so that the tests compare memory: the
-        // other kind reads the first tag again rather than reuse the hot
-        // test's read. Elsewhere the three tags are read once and tested
-        // together, which aarch64 does with conditional compares.
-        macro_rules! for_kinds {
-            ($d ra:ident, $d h:expr, $d o:expr, $d hot:block, $d other:block) => {
-                if cfg!(target_arch = "x86_64") {
-                    if raw_tag($d ra) == $d h {
-                        if raw_tag($d ra.add(1)) == $d h && raw_tag($d ra.add(2)) == $d h {
-                            $d hot;
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        cold_path();
-                        if raw_tag_again($d ra) == $d o
-                            && raw_tag($d ra.add(1)) == $d o
-                            && raw_tag($d ra.add(2)) == $d o
-                        {
-                            $d other;
-                            true
-                        } else {
-                            false
-                        }
-                    }
+        // True when the control registers at `$d ra`, the limit at offset
+        // `$d lim`, hold a loop of kind `$d k`. On x86-64 a float loop
+        // tests its index (or variable) tag and its step's whole first word
+        // and not the limit's tag: the step only reads the limit, and
+        // whatever changes it outside the loop's own code unseals the step
+        // (see `num_words::unseal`). Elsewhere the three tags.
+        // `$d tag` reads the first register's tag: the test of the other
+        // kind reads it again (`raw_tag_again`), so that both reads stay
+        // compares against memory
+        #[cfg(all(target_arch = "x86_64", not(miri)))]
+        macro_rules! kind_ok {
+            ($d ra:ident, $d k:expr, $d lim:expr) => {
+                kind_ok!($d ra, $d k, $d lim, raw_tag)
+            };
+            ($d ra:ident, $d k:expr, $d lim:expr, $d tag:ident) => {
+                if $d k == tag::FLOAT {
+                    let (idx, st) = if $d lim == 0 { (2, 1) } else { (0, 2) };
+                    $d tag($d ra.add(idx)) == tag::FLOAT
+                        && raw_word($d ra.add(st)) == tag_word(tag::FLOAT)
                 } else {
-                    let (t0, t1, t2) = (raw_tag($d ra), raw_tag($d ra.add(1)), raw_tag($d ra.add(2)));
-                    if (t0 == $d h) & (t1 == $d h) & (t2 == $d h) {
-                        $d hot;
+                    $d tag($d ra) == $d k
+                        && raw_tag($d ra.add(1)) == $d k
+                        && raw_tag($d ra.add(2)) == $d k
+                }
+            };
+        }
+        #[cfg(not(any(target_arch = "aarch64", all(target_arch = "x86_64", not(miri)))))]
+        macro_rules! kind_ok {
+            ($d ra:ident, $d k:expr, $d lim:expr) => {{
+                let _ = $d lim;
+                raw_tag($d ra) == $d k && raw_tag($d ra.add(1)) == $d k && raw_tag($d ra.add(2)) == $d k
+            }};
+        }
+        #[cfg(any(all(target_arch = "aarch64", miri), all(target_arch = "x86_64", miri)))]
+        macro_rules! kind_ok_again {
+            ($d ra:ident, $d k:expr, $d lim:expr) => {
+                kind_ok!($d ra, $d k, $d lim)
+            };
+        }
+        #[cfg(all(target_arch = "aarch64", miri))]
+        macro_rules! kind_ok {
+            ($d ra:ident, $d k:expr, $d lim:expr) => {{
+                let _ = $d lim;
+                raw_tag($d ra) == $d k && raw_tag($d ra.add(1)) == $d k && raw_tag($d ra.add(2)) == $d k
+            }};
+        }
+        #[cfg(all(target_arch = "x86_64", not(miri)))]
+        macro_rules! kind_ok_again {
+            ($d ra:ident, $d k:expr, $d lim:expr) => {
+                kind_ok!($d ra, $d k, $d lim, raw_tag_again)
+            };
+        }
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+        macro_rules! kind_ok_again {
+            ($d ra:ident, $d k:expr, $d lim:expr) => {
+                kind_ok!($d ra, $d k, $d lim)
+            };
+        }
+        // `$d hot` when the registers hold a loop of kind `$d h`, else
+        // `$d other` when they hold one of kind `$d o` (see `kind_ok`);
+        // false (the slow path) otherwise
+        #[cfg(not(all(target_arch = "aarch64", not(miri))))]
+        macro_rules! for_kinds {
+            ($d ra:ident, $d lim:expr, $d h:expr, $d o:expr, $d hot:block, $d other:block) => {
+                if kind_ok!($d ra, $d h, $d lim) {
+                    $d hot;
+                    true
+                } else {
+                    cold_path();
+                    if kind_ok_again!($d ra, $d o, $d lim) {
+                        $d other;
                         true
                     } else {
-                        cold_path();
-                        if (t0 == $d o) & (t1 == $d o) & (t2 == $d o) {
-                            $d other;
-                            true
-                        } else {
-                            false
-                        }
+                        false
                     }
                 }
             };
         }
         // `$d back` computed first, or on x86-64 again where it is used
+        #[cfg(not(all(target_arch = "aarch64", not(miri))))]
         macro_rules! back_at {
             ($d back:ident) => {
                 if cfg!(target_arch = "x86_64") { $npc.wrapping_sub($inst.bx()) } else { $d back }
             };
         }
+        #[cfg(not(all(target_arch = "aarch64", not(miri))))]
         macro_rules! op_for_loop {
-            () => {{
+            ($d flt:expr) => {{
+                // the kind of loop tested first
+                let fl = DBL || $d flt;
                 let ra = reg_a($regs, $inst);
                 // the back-edge's target: on aarch64 the next fetch waits for
                 // it, and computed first it is ready by then (fl_empty 5.5
@@ -272,16 +195,18 @@ macro_rules! fast_loop_arms {
                 // their tags name
                 let fast = unsafe {
                     // the dialect's loops first, the other kind out of line
-                    let (hot, other) = if DBL { (tag::FLOAT, tag::INT) } else { (tag::INT, tag::FLOAT) };
-                    for_kinds!(ra, hot, other, {
-                        if DBL {
+                    let (hot, other) = if fl { (tag::FLOAT, tag::INT) } else { (tag::INT, tag::FLOAT) };
+                    for_kinds!(ra, 1, hot, other, {
+                        if fl {
                             for_flt_step!(ra, back_at!(back))
                         } else {
-                            for_int_step!(ra, back_at!(back))
+                            let (c, x, st) = int_pays!(ra);
+                            for_int_step!(ra, back_at!(back), c, x, st)
                         }
                     }, {
-                        if DBL {
-                            for_int_step!(ra, back_at!(back))
+                        if fl {
+                            let (c, x, st) = int_pays!(ra);
+                            for_int_step!(ra, back_at!(back), c, x, st)
                         } else {
                             for_flt_step!(ra, back_at!(back))
                         }
@@ -330,8 +255,31 @@ macro_rules! fast_loop_arms {
         }
         // 5.5: `R[A]` count (or limit), `R[A+1]` step, `R[A+2]` the
         // variable, which is the index
+        // the steps of a 5.5 loop, its registers' payloads read as the
+        // kind the tests found
+        macro_rules! int55_step {
+            ($d ra:ident, $d back:expr, $d count:expr, $d st:expr, $d var:expr) => {{
+                let count: i64 = $d count;
+                if count != 0 {
+                    $npc = $d back;
+                    put_int($d ra, count.wrapping_sub(1));
+                    // the variable is the index here, its tag tested above
+                    put_int($d ra.add(2), ($d var as i64).wrapping_add($d st as i64));
+                }
+            }};
+        }
+        macro_rules! flt55_step {
+            ($d ra:ident, $d back:expr) => {{
+                let (lim, st, cur) = (raw_flt($d ra), raw_flt($d ra.add(1)), raw_flt($d ra.add(2)));
+                let next = cur + st;
+                flt_step!(next, lim, st, $d back, put_flt($d ra.add(2), next));
+            }};
+        }
+        // 5.5: `R[A]` count (or limit), `R[A+1]` step, `R[A+2]` the
+        // variable, which is the index. `$d flt`: floats first.
+        #[cfg(not(all(target_arch = "aarch64", not(miri))))]
         macro_rules! op_for_loop55 {
-            () => {{
+            ($d flt:expr) => {{
                 let ra = reg_a($regs, $inst);
                 // as in `op_for_loop`
                 let back = $npc.wrapping_sub($inst.bx());
@@ -339,20 +287,19 @@ macro_rules! fast_loop_arms {
                 // verifier checks the run); payloads are read as the type
                 // their tags name
                 let fast = unsafe {
-                    for_kinds!(ra, tag::INT, tag::FLOAT, {
-                        let count = raw_int(ra);
-                        if count != 0 {
-                            $npc = back_at!(back);
-                            put_int(ra, count.wrapping_sub(1));
-                            // the variable is the index here, its tag tested
-                            // above
-                            put_int(ra.add(2), raw_int(ra.add(2)).wrapping_add(raw_int(ra.add(1))));
-                        }
-                    }, {
-                        let (lim, st, cur) = (raw_flt(ra), raw_flt(ra.add(1)), raw_flt(ra.add(2)));
-                        let next = cur + st;
-                        flt_step!(next, lim, st, back_at!(back), put_flt(ra.add(2), next));
-                    })
+                    if $d flt {
+                        for_kinds!(ra, 0, tag::FLOAT, tag::INT, {
+                            flt55_step!(ra, back_at!(back))
+                        }, {
+                            int55_step!(ra, back_at!(back), raw_int(ra), raw_int(ra.add(1)), raw_int(ra.add(2)))
+                        })
+                    } else {
+                        for_kinds!(ra, 0, tag::INT, tag::FLOAT, {
+                            int55_step!(ra, back_at!(back), raw_int(ra), raw_int(ra.add(1)), raw_int(ra.add(2)))
+                        }, {
+                            flt55_step!(ra, back_at!(back))
+                        })
+                    }
                 };
                 for_loop_tail!(fast)
             }};

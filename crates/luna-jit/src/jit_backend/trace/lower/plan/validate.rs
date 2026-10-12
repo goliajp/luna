@@ -188,7 +188,7 @@ fn validate_op(
         Op::Call => {
             unreachable!("Op::Call only appears at effective_end (truncation guarded above)")
         }
-        Op::ForLoop | Op::ForLoop55 => {
+        Op::ForLoop | Op::ForLoop55 | Op::ForLoopF | Op::ForLoop55F => {
             unreachable!("Op::ForLoop only appears at effective_end (loop-end guarded above)")
         }
         Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => unreachable!(
