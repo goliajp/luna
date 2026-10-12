@@ -214,9 +214,9 @@ fn unnamed_native_name(vm: &mut Vm) -> Result<String, LuaError> {
         // `findfield` checked for, which a full stack refuses
         vm.native_push(2);
         let top = vm.native_top().expect("a native runs");
-        let r = argcheck::check_stack(vm, Args::new(top - 1, 0), 6, "not enough stack");
+        // (raised with them pushed)
+        argcheck::check_stack(vm, Args::new(top - 1, 0), 6, "not enough stack")?;
         vm.native_pop(2);
-        r?;
     }
     Ok(match vm.pushglobalfuncname(target) {
         Some(name) => {
