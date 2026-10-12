@@ -55,6 +55,7 @@ pub(super) fn drain_marker(m: &mut Marker) {
 /// # Safety
 /// `h` is the header of a gray object, allocated until the sweep; the tag
 /// names the type to trace it as.
+#[inline(always)]
 pub(super) unsafe fn blacken(h: *mut GcHeader, m: &mut Marker) {
     // SAFETY: the caller's contract
     unsafe {
