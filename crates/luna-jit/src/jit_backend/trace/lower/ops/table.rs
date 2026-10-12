@@ -13,18 +13,15 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
     } = *pl;
     let OpHelpers { new_table_id, .. } = lw.h.op;
     let RuntimeHelpers { get_int_id, .. } = lw.h.rt;
-    let OpCx {
-        i, off, ins, rop, ..
-    } = *oc;
+    let OpCx { i, off, ins, .. } = *oc;
     let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::NewTable => {
-            // sunk path: skip the heap alloc helper.
-            // The site's virt slot Variables (allocated pre-emit)
-            // hold the array elements directly. `current_kinds`
-            // for the site's slot stays at its entry value
-            // (Unset → maps to ExitTag::Untouched, so the
-            // dispatcher carries the entry tag in the restore).
+            // sunk path: skip the heap alloc helper. The site's virt slot
+            // Variables (allocated pre-emit) hold the array elements directly.
+            // `current_kinds` for the site's slot stays at its entry value
+            // (Unset → maps to ExitTag::Untouched, so the dispatcher carries
+            // the entry tag in the restore).
             if let Some(OpAction::NewTableSite { site_idx }) = lw.escape.op_actions[i]
                 && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
                 && lw.virt_vars[site_idx as usize].is_some()
@@ -38,18 +35,16 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
                 .iconst(types::I64, crate::jit_backend::pack_table_ops(ins));
             let call = lw.bcx.ins().call(func_ref, &[ops]);
             let t = lw.bcx.inst_results(call)[0];
-            // 0: the allocation failed (or a deopt is parked); the
-            // interpreter makes the table, collecting in an emergency
+            // 0: no table (no memory, or a deopt parked); the interpreter makes it
             let ok = lw.bcx.ins().icmp_imm_s(IntCC::NotEqual, t, 0);
-            guard!(lw, pl, ok, i, rop.pc);
+            guard!(lw, pl, ok, i, oc.rop.pc);
             lw.bcx.def_var(regs[ins.a() as usize], t);
             lw.current_kinds[off + ins.a() as usize] = RegKind::Table;
         }
         Op::GetI => {
-            // sunk path: a GetI from a Sinkable site
-            // at a key in `1..=cap` becomes a `use_var` of the
-            // matching virt slot Variable, with kind carried
-            // from `virt_kinds`.
+            // sunk path: a GetI from a Sinkable site at a key in `1..=cap`
+            // becomes a `use_var` of the matching virt slot Variable, with kind
+            // carried from `virt_kinds`.
             if let Some(OpAction::GetIRead { site_idx, key }) = lw.escape.op_actions[i]
                 && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
                 && let Some(vars) = lw.virt_vars[site_idx as usize].as_ref()
@@ -182,11 +177,10 @@ pub(super) fn emit_table_set_op<E: Emit>(
             emit_set_field(lw, pl, oc)?;
         }
         Op::SetI => {
-            // sunk path: when escape sweep tagged
-            // SetISunkWrite, def_var the source register into
-            // the matching virt slot Variable + propagate the
-            // source RegKind into virt_kinds so the next
-            // GetIRead restores the right kind into current_kinds.
+            // sunk path: when escape sweep tagged SetISunkWrite, def_var the
+            // source register into the matching virt slot Variable + propagate
+            // the source RegKind into virt_kinds so the next GetIRead restores
+            // the right kind into current_kinds.
             if let Some(OpAction::SetISunkWrite { site_idx, key }) = lw.escape.op_actions[i]
                 && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
                 && lw.virt_vars[site_idx as usize].is_some()

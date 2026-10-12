@@ -308,7 +308,7 @@ fn emit_pcs<M: Module>(
                 emit_for_loop::emit_for_loop(bcx, st, f, pc, ins)
             }
             Op::Lt | Op::Le | Op::Eq => pc = emit_basic::emit_cmp(bcx, st, f, pc, ins),
-            Op::NewTable => emit_table_set::emit_new_table(module, bcx, st, f, pc, ins)?,
+            Op::NewTable => emit_alloc::emit_new_table(module, bcx, st, f, pc, ins)?,
             Op::SetTable => emit_table_set::emit_set_table(module, bcx, f, ins)?,
             Op::SetList => emit_table_set::emit_set_list(module, bcx, st, f, pc, ins)?,
             Op::GetI => emit_table_get::emit_get_i(module, bcx, st, f, ins)?,
