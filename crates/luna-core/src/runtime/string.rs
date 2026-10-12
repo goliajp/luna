@@ -287,24 +287,30 @@ pub(crate) unsafe fn free(p: *mut LuaStr, mem: MemRef) {
 pub(crate) struct StringTable {
     buckets: LVec<*mut LuaStr>,
     count: usize,
+    /// a table too full that cannot grow fails the new string (PUC up to
+    /// 5.3, whose `luaS_resize` raises); else it keeps working
+    strict: bool,
 }
 
 impl StringTable {
     pub(crate) fn new(mem: MemRef) -> Result<StringTable, Oom> {
         let mut buckets = LVec::new(mem);
         buckets.resize(64, ptr::null_mut())?;
-        Ok(StringTable { buckets, count: 0 })
+        Ok(StringTable {
+            buckets,
+            count: 0,
+            strict: false,
+        })
     }
 
     /// Find or create an interned short string. Returns `(ptr, newly_created)`.
-    /// A table too full that cannot grow is a memory error when `strict`
-    /// (PUC up to 5.3, whose `luaS_resize` raises), else it keeps working.
     #[inline]
     pub(crate) fn intern(
         &mut self,
         mem: MemRef,
         bytes: &[u8],
-        (seed, h51, strict): (u32, bool, bool),
+        seed: u32,
+        h51: bool,
     ) -> Result<(*mut LuaStr, bool), Oom> {
         debug_assert!(bytes.len() <= MAX_SHORT_LEN);
         let h = if h51 {
@@ -326,7 +332,7 @@ impl StringTable {
                 cur = (*cur).hnext;
             }
         }
-        if self.count >= self.buckets.len() && !self.grow() && strict {
+        if self.count >= self.buckets.len() && !self.grow() && self.strict {
             return Err(Oom(mem));
         }
         let b = h as usize & (self.buckets.len() - 1);
@@ -390,7 +396,8 @@ impl StringTable {
     /// Hash every interned string again, by PUC 5.1's function when `h51`
     /// and the seeded one otherwise, and chain it in its new bucket: for
     /// the few strings a heap makes before its dialect is known.
-    pub(crate) fn rehash(&mut self, seed: u32, h51: bool) {
+    pub(crate) fn rehash(&mut self, seed: u32, h51: bool, strict: bool) {
+        self.strict = strict;
         let mut all = ptr::null_mut::<LuaStr>();
         for head in self.buckets.iter_mut() {
             let mut cur = std::mem::replace(head, ptr::null_mut());
