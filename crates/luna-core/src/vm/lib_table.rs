@@ -24,7 +24,6 @@ type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 /// Open the `table` library, failing when memory runs out.
 pub(crate) fn try_open_table(vm: &mut Vm) -> Result<(), LuaError> {
     let ver = vm.version();
-    let t = vm.alloc_table()?;
     // Ordering note: the enum runs Lua51 < Lua52 < Lua53 < Lua54 <
     // MacroLua < Lua55, so MacroLua (a 5.4 base) inherits exactly the 5.4
     // surface from these comparisons.
@@ -58,6 +57,7 @@ pub(crate) fn try_open_table(vm: &mut Vm) -> Result<(), LuaError> {
             ("setn", t_setn),
         ]);
     }
+    let t = vm.lib_table(funcs.len())?;
     for (name, f) in funcs {
         let fv = vm.lib_native(f)?;
         let k = vm.str_value(name.as_bytes())?;

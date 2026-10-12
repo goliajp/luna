@@ -19,6 +19,12 @@ use crate::version::LuaVersion;
 use crate::vm::Vm;
 
 impl Vm {
+    /// A table with room for `n` fields, as PUC's `luaL_newlib` makes one:
+    /// a library fills it without growing it.
+    pub(crate) fn lib_table(&mut self, n: usize) -> Result<Gc<Table>, LuaError> {
+        self.alloc_table_sized(0, n)
+    }
+
     /// A native function without upvalues, collecting in an emergency when
     /// memory runs out.
     pub(crate) fn lib_native(&mut self, f: NativeFn) -> Result<Value, LuaError> {

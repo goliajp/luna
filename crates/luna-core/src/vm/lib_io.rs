@@ -72,7 +72,7 @@ const READ_CHUNK: usize = 4096;
 /// [`open_io`], failing when memory runs out.
 pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();
-    let io = vm.alloc_table()?;
+    let io = vm.lib_table(14)?;
     for (name, f) in [
         ("close", io_close as crate::runtime::value::NativeFn),
         ("flush", io_flush),
@@ -109,9 +109,9 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
     // ≤5.3 keep the methods in the metatable itself (`__index = mt`); 5.4
     // moved them to a table of their own and added `__close`. `__name` comes
     // from `luaL_newmetatable`, which only sets it from 5.3 on.
-    let mt = vm.alloc_table()?;
+    let mt = vm.lib_table(if v >= LuaVersion::Lua54 { 5 } else { 11 })?;
     let index = if v >= LuaVersion::Lua54 {
-        vm.alloc_table()?
+        vm.lib_table(7)?
     } else {
         mt
     };

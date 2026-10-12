@@ -25,11 +25,6 @@ type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 /// Open the `math` library, failing when memory runs out.
 pub(crate) fn try_open_math(vm: &mut Vm) -> Result<(), LuaError> {
     let ver = vm.version();
-    let t = vm.alloc_table()?;
-    let set = |vm: &mut Vm, name: &str, v: Value| -> Result<(), LuaError> {
-        let k = vm.str_value(name.as_bytes())?;
-        vm.lib_set_value(t, k, v)
-    };
     let mut funcs: Vec<(&str, Native)> = vec![
         ("abs", m_abs),
         ("ceil", m_ceil),
@@ -75,6 +70,12 @@ pub(crate) fn try_open_math(vm: &mut Vm) -> Result<(), LuaError> {
     if ver <= V::Lua52 {
         funcs.push(("atan2", m_atan2));
     }
+    // the functions, an alias, `pi`, `huge` and the two integer limits
+    let t = vm.lib_table(funcs.len() + 5)?;
+    let set = |vm: &mut Vm, name: &str, v: Value| -> Result<(), LuaError> {
+        let k = vm.str_value(name.as_bytes())?;
+        vm.lib_set_value(t, k, v)
+    };
     for (name, f) in funcs {
         let b = inlinable_builtin(name.as_bytes()).unwrap_or(Builtin::None);
         let fv = vm.builtin(f, &[], b)?;

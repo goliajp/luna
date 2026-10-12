@@ -29,7 +29,7 @@ pub(crate) use upvalues::{upvalue_name, visible_upvalue_index};
 /// Open the `debug` library, failing when memory runs out.
 pub(crate) fn try_open_debug(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();
-    let t = vm.alloc_table()?;
+    let t = vm.lib_table(16)?;
     let set = |vm: &mut Vm, name: &str, f| -> Result<(), LuaError> {
         let fv = vm.lib_native(f)?;
         let k = vm.str_value(name.as_bytes())?;

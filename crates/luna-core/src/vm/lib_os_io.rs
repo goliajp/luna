@@ -38,7 +38,7 @@ pub(crate) fn try_open_os_io(vm: &mut Vm) -> Result<(), LuaError> {
 
 /// [`open_os`], failing when memory runs out.
 pub(crate) fn try_open_os(vm: &mut Vm) -> Result<(), LuaError> {
-    let os = vm.alloc_table()?;
+    let os = vm.lib_table(11)?;
     for (name, f) in [
         ("clock", os_clock as crate::runtime::value::NativeFn),
         ("date", os_date),

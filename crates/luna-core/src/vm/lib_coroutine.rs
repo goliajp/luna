@@ -17,7 +17,7 @@ use wrap::co_wrap;
 
 /// Open the `coroutine` library, failing when memory runs out.
 pub(crate) fn try_open_coroutine(vm: &mut Vm) -> Result<(), LuaError> {
-    let t = vm.alloc_table()?;
+    let t = vm.lib_table(8)?;
     let set =
         |vm: &mut Vm, name: &str, f: crate::runtime::value::NativeFn| -> Result<(), LuaError> {
             let k = vm.str_value(name.as_bytes())?;

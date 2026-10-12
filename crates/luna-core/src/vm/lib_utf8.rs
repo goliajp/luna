@@ -19,7 +19,7 @@ pub(crate) fn try_open_utf8(vm: &mut Vm) -> Result<(), LuaError> {
     if v < LuaVersion::Lua53 {
         return Ok(());
     }
-    let t = vm.alloc_table()?;
+    let t = vm.lib_table(6)?;
     let set = |vm: &mut Vm, name: &str, fv: Value| -> Result<(), LuaError> {
         let k = vm.str_value(name.as_bytes())?;
         vm.lib_set_value(t, k, fv)
