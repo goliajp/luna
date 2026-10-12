@@ -16,6 +16,7 @@ int luna_capi_openlib(lua_State *L, const char *name);
 
 static int openlib(lua_State *L, const char *name) {
   int n = luna_capi_openlib(L, name);
+  luna_check(L);
   if (n < 0) {
     const char *mod = lua_tostring(L, -1);
     luna_c_luaL_error(L, "name conflict for module '%s'", mod);
