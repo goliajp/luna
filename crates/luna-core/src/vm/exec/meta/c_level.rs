@@ -87,14 +87,10 @@ impl Vm {
         }
         let e = self.plain_err("C stack overflow");
         if v == LuaVersion::Lua51 || (v >= LuaVersion::Lua54 && !refused && !low) {
-            // SAFETY: `co` is the argument being resumed, held by the caller, and not running; the borrow covers the field stores
-            let m = unsafe { co.as_mut() };
-            m.status = CoroStatus::Dead;
+            self.set_coro_status(co, CoroStatus::Dead);
             if v >= LuaVersion::Lua54 {
-                m.error_value = Some(e.0);
-                m.error_status = crate::runtime::ErrorStatus::Run;
+                self.set_coro_error(co, e.0, crate::runtime::ErrorStatus::Run);
             }
-            self.heap.barrier_back(co);
             self.host_thread_reset(co);
         }
         Err(e)
