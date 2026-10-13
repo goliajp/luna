@@ -293,7 +293,8 @@ mod tests {
         assert_eq!(shrink(Lua54, 4000, 100), 200);
         assert_eq!(shrink(Lua52, 4000, 100), 122);
         assert_eq!(halve_51(1000, 100), 506);
-        assert_eq!(halve_calls_51(32768, 100, 20000, 8), 16384);
+        assert_eq!(halve_calls_51(16384, 100, 20000, 8), 8192);
+        assert_eq!(halve_calls_51(20000, 100, 20000, 8), 10000);
         assert_eq!(halve_calls_51(40000, 100, 20000, 8), 40000);
     }
 }
