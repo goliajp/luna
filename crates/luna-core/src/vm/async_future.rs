@@ -84,6 +84,8 @@ impl<'vm> Future for EvalFuture<'vm> {
         // plain mutable borrow, `state` is owned by value), so nothing
         // relies on it staying where it is pinned
         let this = unsafe { self.as_mut().get_unchecked_mut() };
+        // this poll may run on another thread than the last
+        this.vm.g.native_ok = usize::MAX;
 
         loop {
             // ---- State transition: Initial → Running ----

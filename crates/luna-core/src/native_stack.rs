@@ -76,13 +76,6 @@ pub fn jit_limit() -> usize {
     }
 }
 
-/// [`is_low`] on a thread whose bounds [`low`] has read, or never low: no
-/// test for the first read, for a check made on every nested call.
-#[inline(always)]
-pub fn is_low_read(reserve: usize) -> bool {
-    sp().wrapping_sub(LOW.with(Cell::get)) < reserve
-}
-
 /// Whether fewer than `reserve` bytes of the stack are left. A stack
 /// pointer outside the thread's stack (an embedder running luna on a
 /// stack of its own) is never low.

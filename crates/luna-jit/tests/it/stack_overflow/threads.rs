@@ -128,4 +128,9 @@ cases! {
     self_recursion_without_end
     self_recursion_15000_deep
     self_recursion_150000_deep
+    sort_comparator_jit
+    hook_callback
+    close_from_native
+    index_from_native
+    lt_from_sort
 }
