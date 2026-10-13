@@ -1,3 +1,4 @@
+-- rule: lstrlib.luaopen_string.1
 -- v2.14 HD 5.1 seed: string.gmatch + the 5.0-compat gfind alias
 -- present in the official 5.1 binary.
 for w in string.gmatch("one two", "%a+") do io.write(w, "|") end

@@ -1,3 +1,4 @@
+-- rule: loslib.os_time.4
 -- os.time on a time of -1: ≤5.2 return nil and leave the table alone,
 -- 5.3+ write the normalised fields back before raising
 local function show(t, ok, r)

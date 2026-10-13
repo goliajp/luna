@@ -1,3 +1,4 @@
+-- rule: ldo.luaD_closeprotected.1 lfunc.luaF_close.2
 -- v2.12 CORPUS-III: to-be-closed variables (5.4+) — reverse
 -- close order + __close fires on error unwinding under pcall.
 local function closer(name)

@@ -1,3 +1,4 @@
+-- rule: loslib.os_date.1
 -- v2.12 CORPUS-III: os.date with UTC ("!") prefix + fixed
 -- epoch inputs only — deterministic across machines.
 print(os.date("!%Y-%m-%d %H:%M:%S", 0))

@@ -1,3 +1,4 @@
+-- rule: lfunc.luaF_close.1
 -- v3.1 bytecode: generic-for variables captured by closures, nested loops,
 -- break, and the loop's locals as debug.getlocal sees them.
 local fns = {}

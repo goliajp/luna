@@ -1,3 +1,4 @@
+-- rule: lmathlib.math_fmod.2
 -- v2.13 CORPUS-IV: math.fmod sign follows DIVIDEND (C fmod);
 -- % sign follows divisor — contrast both.
 print(math.fmod(7, 3), 7 % 3)

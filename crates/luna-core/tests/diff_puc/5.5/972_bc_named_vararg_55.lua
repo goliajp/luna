@@ -1,3 +1,4 @@
+-- rule: ltm.createvarargtab.1 ltm.luaT_getvararg.1 ltm.luaT_getvarargs.1
 -- v3.1 bytecode: named varargs, read in place and materialised as a table.
 local function peek(...t) return t.n, t[1], t[3] end
 local function keep(...t) t[1] = "changed"; return t, ... end

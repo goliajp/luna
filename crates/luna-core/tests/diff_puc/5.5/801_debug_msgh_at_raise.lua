@@ -1,3 +1,4 @@
+-- rule: ldebug.luaG_errormsg.1
 -- v3.1 debug slice: an xpcall message handler runs where the error was
 -- raised — before any __close handler, and seeing the function that raised
 -- it (the C function 'error' included) — as PUC's luaG_errormsg does.

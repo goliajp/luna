@@ -1,3 +1,4 @@
+-- rule: lstrlib.reprepstate.1
 -- v3.1 W2: PUC 5.4.9 moved the pattern matcher's depth counter reset from
 -- prepstate to reprepstate. Before that, an error raised deep inside one
 -- gmatch step (here: a malformed trailing '%' reached after 150 nested

@@ -1,3 +1,4 @@
+-- rule: ldblib.db_getinfo.1
 -- v3.1 debug slice: debug.getinfo fills only the fields of the requested
 -- options, and rejects letters its version does not know ('t' is 5.2+, 'r'
 -- 5.4+) — after the level is resolved, so an absent level is still nil.

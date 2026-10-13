@@ -1,3 +1,4 @@
+-- rule: ldo.adjust_varargs.1 lparser.parlist.2
 -- 5.1 (LUA_COMPAT_VARARG) declares a local `arg` after the fixed
 -- parameters of every vararg function; it holds a table of the extra
 -- arguments only when the body does not use `...`, and is nil otherwise

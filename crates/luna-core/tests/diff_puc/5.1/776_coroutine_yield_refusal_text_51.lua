@@ -1,3 +1,4 @@
+-- rule: ldo.lua_yield.1
 -- v3.1 iopkg follow-up: a refused yield raises lua_yield's own message,
 -- which carries no position (the running call is the yield itself). 5.1
 -- says "attempt to yield across metamethod/C-call boundary" for every case;

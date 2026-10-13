@@ -1,3 +1,4 @@
+-- rule: ldblib.hookf.1
 -- v3.1 debug slice: 5.1/5.2 name a hook function after the instruction the
 -- hooked function is at — for a call hook, its first one.
 local names = {}

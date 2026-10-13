@@ -1,3 +1,4 @@
+-- rule: lfunc.luaF_newtbcupval.1
 -- A to-be-closed variable without __close: PUC names the variable (as
 -- luaG_findlocal sees it) and nothing else.
 local function e(src)

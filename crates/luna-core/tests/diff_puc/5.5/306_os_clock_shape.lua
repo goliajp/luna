@@ -1,3 +1,4 @@
+-- rule: loslib.os_clock.1
 -- v2.14 CV.1: os.clock shape — float subtype, non-decreasing.
 local a = os.clock()
 local b = os.clock()

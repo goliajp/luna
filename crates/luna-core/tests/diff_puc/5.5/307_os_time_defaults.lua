@@ -1,3 +1,4 @@
+-- rule: loslib.os_time.2
 -- v2.14 CV.1: os.time table defaults — hour defaults to 12,
 -- min/sec to 0; missing year/month/day error.
 local t1 = os.time({ year = 2000, month = 6, day = 15 })
