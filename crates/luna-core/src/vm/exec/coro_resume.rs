@@ -90,11 +90,7 @@ impl Vm {
             // error a `__close` handler raised.
             let r = match death {
                 Some(e) => {
-                    // SAFETY: `co` is still `self.current`, a root, and the coroutine's frames have all unwound; the borrow covers two field stores
-                    let m = unsafe { co.as_mut() };
-                    m.error_value = Some(e);
-                    m.error_status = crate::runtime::ErrorStatus::Run;
-                    self.heap.barrier_back(co);
+                    self.set_coro_error(co, e, crate::runtime::ErrorStatus::Run);
                     (Err(LuaError(e)), CoroStatus::Dead)
                 }
                 None => (Ok(Vec::new()), CoroStatus::Dead),
@@ -143,11 +139,7 @@ impl Vm {
                     }
                     if let Err(e) = drive {
                         let kind = self.error_status(e.0, special_before);
-                        // SAFETY: `co` is still `self.current`, a root; the borrow covers two field stores
-                        let m = unsafe { co.as_mut() };
-                        m.error_value = Some(e.0);
-                        m.error_status = kind;
-                        self.heap.barrier_back(co);
+                        self.set_coro_error(co, e.0, kind);
                     }
                     (self.host_returned(co, drive), CoroStatus::Dead)
                 }
@@ -161,13 +153,11 @@ impl Vm {
         self.keep_error_traceback = resumer_keeps_traceback;
         self.nny = resumer_nny;
         self.store_coro_ctx(co);
-        // SAFETY: `co` is still `self.current`, a root; `store_coro_ctx`'s borrow has ended, and this one covers one field store
-        unsafe { co.as_mut() }.status = status;
+        self.set_coro_status(co, status);
         match resumer {
             Some(r) => {
                 self.load_coro_ctx(r);
-                // SAFETY: `r` is the resumer, made `self.current` again on the next line and held by the caller's frames meanwhile; `load_coro_ctx`'s borrow has ended, and this one covers one field store
-                unsafe { r.as_mut() }.status = CoroStatus::Running;
+                self.set_coro_status(r, CoroStatus::Running);
                 self.current = Some(r);
             }
             None => {
@@ -266,5 +256,30 @@ impl Vm {
         self.yielding = Some((vals, func_slot, nres));
         // value is irrelevant: resume_coro consults `self.yielding`, not this
         LuaError(Value::Nil)
+    }
+
+    /// `co`, which the caller holds, takes `status`.
+    pub(crate) fn set_coro_status(&mut self, co: Gc<Coro>, status: CoroStatus) {
+        // SAFETY: a thread's fields are only written through the Vm that
+        // runs it, which this `&mut self` is; its callers hold the thread as
+        // a `Gc` handle and no reference into it, so this borrow, which
+        // covers one store, is the only one
+        unsafe { co.as_mut() }.status = status;
+    }
+
+    /// `co`, which the caller holds, died with `err`, raised as `kind`:
+    /// what `coroutine.close` and the C API's status report for it.
+    pub(crate) fn set_coro_error(
+        &mut self,
+        co: Gc<Coro>,
+        err: Value,
+        kind: crate::runtime::ErrorStatus,
+    ) {
+        // SAFETY: as in `set_coro_status`: the only reference into the
+        // thread, for two stores
+        let m = unsafe { co.as_mut() };
+        m.error_value = Some(err);
+        m.error_status = kind;
+        self.heap.barrier_back(co);
     }
 }
