@@ -73,10 +73,12 @@ impl<'a> Compiler<'a> {
         };
         // 5.1 shows no token (`luaX_lexerror(.., 0)`)
         if self.version <= LuaVersion::Lua51 {
-            return self.err(
+            let e = self.err(
                 self.last_line,
                 format!("{where_} has more than {limit} {what}"),
             );
+            self.err_tok = Some((self.cur, e.msg.clone(), false));
+            return e;
         }
         self.near_err(format!("too many {what} (limit is {limit}) in {where_}"))
     }

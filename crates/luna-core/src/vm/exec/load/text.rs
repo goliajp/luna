@@ -13,7 +13,13 @@ pub struct TextLoad {
 
 /// The outcome of [`TextLoad::parse`], for [`Vm::load_parsed`].
 #[doc(hidden)]
-pub struct ParsedText(pub(super) Result<crate::frontend::parser::Parsed, SyntaxError>);
+pub struct ParsedText(pub(super) Result<crate::frontend::parser::Parsed, Failure>);
+
+/// A parse error, with where the parse failed and the source it read.
+pub(super) type Failure = (
+    SyntaxError,
+    Option<(crate::frontend::parser::Failed, LVec<u8>)>,
+);
 
 impl TextLoad {
     /// Parse the chunk whose first piece is `first`, calling `feed` for
@@ -28,13 +34,13 @@ impl TextLoad {
         };
         let budget = self.budget;
         if first.len() > budget {
-            return ParsedText(Err(oom()));
+            return ParsedText(Err((oom(), None)));
         }
         // the source read so far lives in the vm's memory; each piece comes
         // through a buffer of its own first, as the reader hands it over
         let mut whole = LVec::new(self.scratch.mem());
         if let Err(e) = whole.extend_from_slice(&first) {
-            return ParsedText(Err(e.into()));
+            return ParsedText(Err((e.into(), None)));
         }
         drop(first);
         let mut over = false;
@@ -59,9 +65,9 @@ impl TextLoad {
             Ok(r) => r,
             Err(()) => {
                 mem.ctx().raise_oom();
-                Err(SyntaxError::memory())
+                Err((SyntaxError::memory(), None))
             }
         };
-        ParsedText(if over { Err(oom()) } else { r })
+        ParsedText(if over { Err((oom(), None)) } else { r })
     }
 }

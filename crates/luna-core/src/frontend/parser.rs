@@ -21,14 +21,16 @@ mod lists;
 mod marks;
 mod operators;
 mod plumbing;
+mod repair;
 mod scratch;
 mod stat;
 mod streams;
 mod token_source;
 mod upval51;
-pub(crate) use marks::{Marks, record_marks, token_at};
+pub(crate) use marks::{Found, Marks, record_marks, token_at};
 use operators::{UNARY_PRIORITY, bin_op_of, bin_priority, un_op_of};
-pub(crate) use scratch::ParseScratch;
+pub(crate) use repair::completed;
+pub(crate) use scratch::{Failed, ParseScratch, Parsed};
 use scratch::{ListStacks, finish};
 pub use streams::parse_tokens;
 pub(crate) use streams::{parse_stream, parse_tokens_at_depth};
@@ -61,22 +63,6 @@ type DeclList = (Option<Attrib>, List<AttribName>, List<ExprId>);
 /// The tree's vectors come from the system allocator.
 pub fn parse(src: &[u8], version: LuaVersion) -> Result<Chunk, SyntaxError> {
     parse_at_depth(src, version, 0).map(|p| p.chunk)
-}
-
-/// A parsed chunk with what the public [`Chunk`] has no place for.
-pub(crate) struct Parsed {
-    pub(crate) chunk: Chunk,
-    /// the line of each statement's last token, by `StatId`: PUC attributes
-    /// the code it emits once it has read that token (a loop's `end`) to
-    /// its line
-    pub(crate) end_lines: LVec<u32>,
-    /// the lexer's token buffer, kept for the next load
-    pub(crate) lex_buf: LVec<u8>,
-    /// the parser's list stacks, kept for the next load
-    pub(crate) stacks: ListStacks,
-    /// the source of a parse that read it piece by piece, where a compile
-    /// error is placed (a whole source is the caller's)
-    pub(crate) src: Option<LVec<u8>>,
 }
 
 /// [`parse`] run by a VM that is `c_depth` C calls deep. PUC's parser
@@ -134,6 +120,7 @@ fn parse_from_source<'s>(
     src_len: usize,
     scratch: &'s mut ParseScratch,
 ) -> Result<(), SyntaxError> {
+    scratch.failed = None;
     let cur = match lex.next_token() {
         Ok(cur) => cur,
         Err(e) => return Err(lex.out_of_memory().map_or(e, SyntaxError::from)),
@@ -144,6 +131,7 @@ fn parse_from_source<'s>(
         lex_buf,
         stacks,
         streamed,
+        failed,
     } = scratch;
     let mut p = Parser::new(lex, cur, version, c_depth, chunk, end_lines, stacks)?;
     let r = p.main(src_len);
@@ -151,6 +139,13 @@ fn parse_from_source<'s>(
     // whatever the parse made of it, the load failed for lack of memory
     if let Some(o) = p.lex.out_of_memory() {
         return Err(o.into());
+    }
+    if r.is_err() {
+        *failed = Some(Failed {
+            at: p.tok_ix,
+            scanning: p.lex_failed,
+        });
+        *streamed = p.lex.take_streamed();
     }
     let (block, end_line) = r?;
     let Parser {
@@ -219,6 +214,7 @@ impl<'s> Parser<'s> {
             last_line: 1,
             upval_chain_51,
             tok_ix: 0,
+            lex_failed: false,
             rec: None,
         })
     }
@@ -292,6 +288,8 @@ struct Parser<'s> {
     upval_chain_51: LVec<FnUvSlot>,
     /// the number of `tok` among the tokens read, the first being 0
     tok_ix: u32,
+    /// the scanner failed to read the token after `tok`
+    lex_failed: bool,
     /// set while parsing again to place a compile error (see [`Marks`])
     rec: Option<Box<marks::Recording>>,
 }

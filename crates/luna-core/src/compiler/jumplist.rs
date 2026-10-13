@@ -185,7 +185,7 @@ impl Compiler<'_> {
     pub(super) fn jump_error(&mut self) -> Result<(), SyntaxError> {
         match self.l().jump_err.take() {
             Some((e, at)) => {
-                self.err_tok = Some((at, e.msg.clone()));
+                self.err_tok = Some((at, e.msg.clone(), true));
                 Err(e)
             }
             None => Ok(()),

@@ -113,12 +113,16 @@ impl Vm {
                 Some(n) => n,
                 None => self.heap.try_intern(chunkname)?,
             };
-            crate::frontend::parser::parse_in_place(
+            let parsed = crate::frontend::parser::parse_in_place(
                 src,
                 self.version,
                 depth,
                 &mut self.parse_scratch,
-            )?;
+            );
+            if let Err(e) = parsed {
+                let failed = self.parse_scratch.failed;
+                return Err(self.error_before(src, failed, source).unwrap_or(e));
+            }
             let (chunk, end_lines) = self.parse_scratch.parsed();
             crate::compiler::compile_parsed(
                 chunk,
@@ -156,6 +160,19 @@ impl Vm {
             })?;
         self.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
         Ok(proto)
+    }
+
+    /// The compile error a load of `src`, which failed to parse at
+    /// `failed`, meets before its syntax error, if any.
+    fn error_before(
+        &mut self,
+        src: &[u8],
+        failed: Option<crate::frontend::parser::Failed>,
+        source: Gc<crate::runtime::LuaStr>,
+    ) -> Option<SyntaxError> {
+        let (v, depth) = (self.version, self.g.nccalls);
+        let (heap, scratch) = (&mut self.heap, &mut self.compile_scratch);
+        crate::compiler::error_before(src, v, depth, failed?, source, heap, scratch)
     }
 
     fn compile_parsed(
@@ -217,11 +234,17 @@ impl Vm {
         chunkname: &[u8],
         name: Option<Gc<crate::runtime::LuaStr>>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
-        let parsed = parsed.0?;
         self.guarded_load(|vm| {
             let source = match name {
                 Some(n) => n,
                 None => vm.heap.try_intern(chunkname)?,
+            };
+            let parsed = match parsed.0 {
+                Ok(p) => p,
+                Err((e, Some((failed, src)))) => {
+                    return Err(vm.error_before(&src, Some(failed), source).unwrap_or(e));
+                }
+                Err((e, None)) => return Err(e),
             };
             let proto = vm.compile_text(parsed, source)?;
             vm.close_chunk(proto)

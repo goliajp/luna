@@ -261,7 +261,7 @@ pub(crate) struct CompileScratch {
     pub(super) operands: LVec<ExprId>,
     /// the token of the last error the compiler returned, and its message
     /// (see [`super::TokRef`])
-    pub(crate) err_tok: Option<(super::TokRef, Vec<u8>)>,
+    pub(crate) err_tok: Option<(super::TokRef, Vec<u8>, bool)>,
 }
 
 impl CompileScratch {
@@ -279,10 +279,10 @@ impl CompileScratch {
     }
 
     /// The token PUC reports `e`, the error the last compile returned, at.
-    pub(crate) fn error_token(&mut self, e: &SyntaxError) -> Option<super::TokRef> {
+    pub(crate) fn error_token(&mut self, e: &SyntaxError) -> Option<(super::TokRef, bool)> {
         self.err_tok
             .take()
-            .filter(|(_, m)| *m == e.msg)
-            .map(|(t, _)| t)
+            .filter(|(_, m, _)| *m == e.msg)
+            .map(|(t, _, near)| (t, near))
     }
 }

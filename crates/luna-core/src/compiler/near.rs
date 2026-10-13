@@ -3,7 +3,7 @@
 //! shows it (`near 'x'`), as PUC's errors from the code generator do.
 
 use super::*;
-use crate::frontend::parser::Marks;
+use crate::frontend::parser::{Found, Marks};
 
 /// A token, relative to a node of the tree (see [`Marks`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -86,7 +86,7 @@ impl Compiler<'_> {
     #[inline(never)]
     pub(super) fn near_err(&mut self, msg: impl Into<String>) -> SyntaxError {
         let e = self.err(self.last_line, msg);
-        self.err_tok = Some((self.cur, e.msg.clone()));
+        self.err_tok = Some((self.cur, e.msg.clone(), true));
         e
     }
 
@@ -130,19 +130,51 @@ pub(crate) fn place_error(
     src: &[u8],
     version: LuaVersion,
     c_depth: u32,
-    mut e: SyntaxError,
+    e: SyntaxError,
 ) -> SyntaxError {
-    let Some(t) = scratch.error_token(&e) else {
+    let Some((t, true)) = scratch.error_token(&e) else {
         return e;
     };
-    let reparse = "the source parsed before";
-    let marks = crate::frontend::parser::record_marks(src, version, c_depth).expect(reparse);
-    let ix = t.resolve(ast, &marks);
-    let (line, near) = crate::frontend::parser::token_at(src, version, c_depth, ix)
-        .expect(reparse)
-        .expect("a token of the source");
-    e.line = line;
-    e.msg.extend_from_slice(b" near ");
-    e.msg.extend_from_slice(&near);
+    let marks = crate::frontend::parser::record_marks(src, version, c_depth);
+    let ix = t.resolve(ast, &marks.expect("the source parsed before"));
+    let at = crate::frontend::parser::token_at(src, version, c_depth, ix);
+    shown_at(e, true, &at.expect("a token of the source"))
+}
+
+/// `e` raised on token `at`: on its line, and showing it when `near`.
+pub(crate) fn shown_at(mut e: SyntaxError, near: bool, at: &Found) -> SyntaxError {
+    if near {
+        e.line = at.line;
+        e.msg.extend_from_slice(b" near ");
+        e.msg.extend_from_slice(&at.near);
+    }
     e
+}
+
+/// The error that compiling what a parse of `src` read before failing at
+/// `failed` raises on a token up to that one: an error PUC, generating code
+/// as it parses, meets before the syntax error (see
+/// [`crate::frontend::parser::completed`]).
+pub(crate) fn error_before(
+    src: &[u8],
+    version: LuaVersion,
+    c_depth: u32,
+    failed: crate::frontend::parser::Failed,
+    source: Gc<LuaStr>,
+    heap: &mut Heap,
+    scratch: &mut CompileScratch,
+) -> Option<SyntaxError> {
+    use crate::frontend::parser as p;
+    let fixed = p::completed(src, version, c_depth, failed)?;
+    let mem = crate::runtime::mem::MemOwner::system();
+    let mut tree = p::ParseScratch::new(mem.clone());
+    p::parse_in_place(&fixed, version, c_depth, &mut tree).ok()?;
+    let (ast, end_lines) = tree.parsed();
+    let e = super::compile_parsed(ast, end_lines, version, source, heap, scratch).err()?;
+    let (t, near) = scratch.error_token(&e)?;
+    let ix = t.resolve(ast, &p::record_marks(&fixed, version, c_depth).ok()?);
+    if ix > failed.at {
+        return None;
+    }
+    Some(shown_at(e, near, &p::token_at(src, version, c_depth, ix)?))
 }

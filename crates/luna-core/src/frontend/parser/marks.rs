@@ -40,7 +40,15 @@ pub(super) struct Recording {
     pub(super) marks: Marks,
     /// the token to report, and what was found for it
     target: Option<u32>,
-    found: Option<(u32, Vec<u8>)>,
+    found: Option<Found>,
+}
+
+/// A token of the source: the line PUC reports an error on it at, the
+/// token as `near` shows it, and where it is in the source.
+pub(crate) struct Found {
+    pub(crate) line: u32,
+    pub(crate) near: Vec<u8>,
+    pub(crate) span: Span,
 }
 
 impl Marks {
@@ -68,15 +76,10 @@ pub(crate) fn record_marks(
     record(src, version, c_depth, None).map(|r| r.marks)
 }
 
-/// The line PUC reports an error at when its scanner is on token `ix` of
-/// `src`, and that token as `near` shows it.
-pub(crate) fn token_at(
-    src: &[u8],
-    version: LuaVersion,
-    c_depth: u32,
-    ix: u32,
-) -> Result<Option<(u32, Vec<u8>)>, SyntaxError> {
-    record(src, version, c_depth, Some(ix)).map(|r| r.found)
+/// Token `ix` of `src` as PUC's scanner, on it, reports an error at. A
+/// source that fails to parse has the tokens up to where it fails.
+pub(crate) fn token_at(src: &[u8], version: LuaVersion, c_depth: u32, ix: u32) -> Option<Found> {
+    record(src, version, c_depth, Some(ix)).ok()?.found
 }
 
 fn record(
@@ -105,8 +108,13 @@ fn record(
         found: None,
     }));
     p.reached();
-    p.main(src.len())?;
+    let r = p.main(src.len());
     let mut rec = p.rec.take().expect("recording");
+    if let Err(e) = r
+        && rec.found.is_none()
+    {
+        return Err(e);
+    }
     rec.marks.eof = p.tok_ix;
     drop(p);
     drop(scratch);
@@ -120,7 +128,11 @@ impl Parser<'_> {
         if let Some(r) = &self.rec
             && r.target == Some(self.tok_ix)
         {
-            let found = (self.lex.line(), self.near());
+            let found = Found {
+                line: self.lex.line(),
+                near: self.near(),
+                span: self.tok.span,
+            };
             self.rec.as_mut().expect("recording").found = Some(found);
         }
     }
