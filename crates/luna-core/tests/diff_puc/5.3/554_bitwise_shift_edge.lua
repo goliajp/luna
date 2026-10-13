@@ -1,3 +1,4 @@
+-- rule: lvm.luaV_shiftl.1
 -- v2.15 P2.5 (5.3): shift by ≥64 or negative.
 print(1 << 63)
 print(1 << 64)             -- 0 (over-shift)

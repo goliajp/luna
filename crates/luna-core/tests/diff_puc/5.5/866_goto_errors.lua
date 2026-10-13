@@ -1,3 +1,4 @@
+-- rule: lparser.closegoto.1
 -- goto/label errors come from the parser at fixed points — when a label
 -- is placed, when a block or function closes — and are reported at the
 -- line the parser stands on there; they win over a syntax error further

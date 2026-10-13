@@ -1,3 +1,4 @@
+-- rule: lvm.luaV_finishset.1
 -- v2.13 CORPUS-IV: __newindex — function form + table-forward
 -- form; rawset bypass.
 local store = {}

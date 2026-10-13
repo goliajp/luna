@@ -1,3 +1,4 @@
+-- rule: lgc.luaC_checkfinalizer.1
 -- v2.13 CORPUS-IV: __gc fires on collect; order for a single
 -- unreachable object is deterministic under full collect.
 local fired = 0

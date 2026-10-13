@@ -1,3 +1,4 @@
+-- rule: ldo.luaD_closeprotected.1 lfunc.luaF_close.2
 -- v2.15 P2.5: tbc __close all fire even on error inside block.
 local closed = {}
 local ok = pcall(function()

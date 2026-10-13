@@ -1,3 +1,4 @@
+-- rule: liolib.f_lines.1
 -- v2.14 CV.1: io.lines over a named temp file + cleanup.
 local name = os.tmpname()
 local f = assert(io.open(name, "w"))

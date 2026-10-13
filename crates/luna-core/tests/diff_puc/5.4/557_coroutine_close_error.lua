@@ -1,3 +1,4 @@
+-- rule: lstate.luaE_resetthread.1
 -- v2.15 P2.5: coroutine.close returns false + error on dead-error state.
 local function strip(e) return type(e) == "string" and (e:match(": (.+)$") or e) or tostring(e) end
 local co = coroutine.create(function() error("crash") end)

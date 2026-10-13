@@ -1,3 +1,4 @@
+-- rule: lvm.pushclosure.1
 -- closures built twice from one function expression: 5.2 / 5.3 reuse the
 -- prototype's last closure when every upvalue is the same, 5.4 removed that
 -- cache and always builds a new one

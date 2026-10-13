@@ -1,3 +1,4 @@
+-- rule: loslib.os_exit.2
 -- v3.1 iopkg: the 5.2 os library. os.date checks its conversions against
 -- the C99 set (E and O modifiers with their letters only) and reports the
 -- rest of the format; a date gmtime cannot represent gives nil; os.time

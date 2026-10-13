@@ -1,3 +1,4 @@
+-- rule: lcode.luaK_exp2const.1 lparser.localstat.3
 -- 5.4+ compile-time constants: a <const> local whose value the parser
 -- can compute is not a variable — no register, no debug entry, no
 -- upvalue — while one holding a table or a call result is.

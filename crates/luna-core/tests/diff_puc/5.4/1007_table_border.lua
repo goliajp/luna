@@ -1,3 +1,4 @@
+-- rule: ltable.luaH_getn.1 ltable.rehash.1
 -- `#t` on tables with holes: the border each PUC version picks depends on
 -- how large the array part is and, from 5.4 on, on what earlier lookups
 -- left behind; the construction history here decides both

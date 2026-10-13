@@ -1,3 +1,4 @@
+-- rule: lvm.Arith.1
 -- v2.14 HD 5.1 seed: % on doubles + math.fmod.
 print(7 % 3, -7 % 3, 7.5 % 2)
 print(math.fmod(7, 3), math.fmod(-7, 3))

@@ -1,3 +1,4 @@
+-- rule: lparser.assignment.1 lparser.parlist.1 lparser.simpleexp.1 lparser.undefgoto.1
 -- Parser errors: how each dialect words and quotes them, which token it
 -- is looking at when it gives up, and where `...`/`break` are checked.
 local ld = loadstring or load

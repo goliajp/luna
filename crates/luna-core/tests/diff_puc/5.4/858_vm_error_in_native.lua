@@ -1,3 +1,4 @@
+-- rule: ldebug.luaG_addinfo.1
 -- An error the VM raises while a native function is running carries no
 -- position (luaG_runerror adds one only for a Lua activation) and names
 -- no variable; the same error raised by a Lua function has both.

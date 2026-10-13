@@ -1,3 +1,4 @@
+-- rule: ldblib.auxupvalue.1
 -- v3.1 debug slice: getupvalue / setupvalue on Lua and C functions, and
 -- their argument checks.
 local u1, u2 = 1, 2

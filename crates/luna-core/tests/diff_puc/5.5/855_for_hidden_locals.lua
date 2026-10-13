@@ -1,3 +1,4 @@
+-- rule: lparser.fornum.1
 -- The hidden control variables of both for loops, as debug.getlocal
 -- lists them ahead of the loop variable: their names and count are per
 -- dialect.

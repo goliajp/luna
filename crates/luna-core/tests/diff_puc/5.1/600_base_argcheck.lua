@@ -1,3 +1,4 @@
+-- rule: lbaselib.luaB_xpcall.2
 -- Base-library argument checks follow lbaselib: a missing argument is
 -- "no value", checkany-style arguments must be present, and each dialect
 -- words its type errors its own way.

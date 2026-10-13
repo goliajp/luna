@@ -1,3 +1,4 @@
+-- rule: lbaselib.luaB_load.4 ldo.luaD_protectedparser.1 lzio.luaZ_fill.1 lzio.luaZ_lookahead.1
 -- how often `load` calls its reader function: the parser stops calling it
 -- at a syntax error, and asks for the next piece as soon as it moves past
 -- the end of the one it has

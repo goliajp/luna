@@ -1,3 +1,4 @@
+-- rule: ldebug.auxgetinfo.4 ldo.luaD_hookcall.1 ldo.rethook.1
 -- v3.1 debug slice: getinfo 'r' reports transferred values only for the
 -- function a call/return hook interrupted; line hooks transfer none.
 local log = {}

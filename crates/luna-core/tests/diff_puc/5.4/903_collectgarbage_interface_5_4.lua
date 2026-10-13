@@ -1,3 +1,4 @@
+-- rule: lapi.lua_gc.5 lbaselib.luaB_collectgarbage.1 lbaselib.luaB_collectgarbage.10 lbaselib.luaB_collectgarbage.3 lbaselib.luaB_collectgarbage.6
 -- v3.1 W3: collectgarbage's interface per dialect — which options exist,
 -- what each returns, and how a written pacing parameter reads back (PUC
 -- stores them in lossy, version-specific encodings). Values that depend on
