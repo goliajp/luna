@@ -51,19 +51,20 @@ impl Vm {
         // PUC's stack test (`luaD_precall`) wants the arguments' top plus
         // the frame's size below the stack's end: `need + nargs` is that for
         // a function of fixed parameters and no less for a vararg one, so a
-        // test of it, the room and the frame stack go out of line together
-        if at.need + nargs >= self.g.stack_last
-            || self.stack.len() < at.need as usize
-            || self.frames.len() == self.frames.capacity()
-        {
+        // test of it and the frame stack go out of line together. A function
+        // a native calls back finds the stack shorter than its frame on most
+        // calls: that room is made here, so the frame is entered by the one
+        // copy of the code the common path runs
+        if at.need + nargs >= self.g.stack_last || self.frames.len() == self.frames.capacity() {
             return self.push_frame_after_room(cl, func_slot, nargs, nresults, from_c);
         }
+        self.grow_stack(at.need as usize)?;
         self.enter_frame(cl, func_slot, nargs, nresults, from_c, at)
     }
 
-    /// [`Vm::push_frame`] past its fast tests: PUC's exact stack test, then
-    /// room for `need` stack slots and one more frame, collecting in an
-    /// emergency when memory runs out.
+    /// [`Vm::push_frame`] near the stack's end or with the frame stack full:
+    /// PUC's exact stack test, then room for `need` stack slots and one more
+    /// frame, collecting in an emergency when memory runs out.
     #[cold]
     #[inline(never)]
     fn push_frame_after_room(
