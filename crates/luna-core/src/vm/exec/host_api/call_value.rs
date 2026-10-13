@@ -111,16 +111,16 @@ impl Vm {
         from_c: bool,
         at: Option<u32>,
     ) -> Result<Vec<Value>, LuaError> {
-        // the native stack too (a first level is no nesting: unchecked);
-        // a message handler running on the error gets half the reserve
-        if self.g.nccalls == 0 {
+        // the C level, and the native stack too (a first level is no
+        // nesting: unchecked); both tested here, the errors out of line
+        let n = self.g.nccalls;
+        if n == 0 {
             // the bounds of the thread a call from the host runs on
             crate::native_stack::low();
-        } else if crate::native_stack::is_low_read(RESERVE) {
-            self.native_stack_low()?;
+        } else if n + 1 >= MAX_C_DEPTH || crate::native_stack::is_low_read(RESERVE) {
+            self.callback_limits()?;
         }
-        self.check_c_level(true)?;
-        self.g.nccalls += 1;
+        self.g.nccalls = n + 1;
         let len = self.stack.len();
         // a native calls back at its own top, as a C function does
         let callback = at.is_none();
@@ -169,17 +169,20 @@ impl Vm {
         r
     }
 
-    /// A nested call with less than [`RESERVE`] of the native stack left
-    /// fails, unless a message handler runs on that error: it may use half.
+    /// A nested call at the C level limit or with less than [`RESERVE`] of
+    /// the native stack left fails, unless a message handler runs on that
+    /// error: it may go a few levels further, and use half the reserve.
     #[cold]
     #[inline(never)]
-    fn native_stack_low(&mut self) -> Result<(), LuaError> {
-        if self.msgh_depth == 0 {
-            return Err(self.runerror("C stack overflow"));
+    fn callback_limits(&mut self) -> Result<(), LuaError> {
+        if is_low(RESERVE) {
+            if self.msgh_depth == 0 {
+                return Err(self.runerror("C stack overflow"));
+            }
+            if is_low(HANDLER_RESERVE) {
+                return Err(LuaError(self.errerr()));
+            }
         }
-        if is_low(HANDLER_RESERVE) {
-            return Err(LuaError(self.errerr()));
-        }
-        Ok(())
+        self.check_c_level(true)
     }
 }
