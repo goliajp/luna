@@ -51,6 +51,11 @@ pub(crate) struct CallGuards {
     /// running thread, less the slots luna's numbering and a 5.4 vararg
     /// frame need. Per-thread.
     pub(crate) stack_last: u32,
+    /// a stack address where a nested call found the native stack not
+    /// low: a call that starts no deeper needs no look at the bounds
+    /// (`Vm::call_value_impl`). Forgotten on a call from the host, which
+    /// may come on another thread.
+    pub(crate) native_ok: usize,
     /// calls compiled code made on the native stack below the running
     /// interpreter frames, which take no frame but count against 5.1's
     /// call limit
