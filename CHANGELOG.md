@@ -657,6 +657,10 @@ optimization.
 
 ### Fixed
 
+- From 5.4 on, a table constructor with more than 1073741823 items
+  (`INT_MAX / 2`) fails with PUC's "too many items in a constructor
+  (limit is 1073741823)" error; 5.1 to 5.3 keep no such limit, as in PUC,
+  whose check there can never fail.
 - Errors the compiler raises at a limit (registers, jump range, local
   variables and upvalues from 5.2 on, 5.5's returns) end with the token
   PUC's scanner is on (`near 'x'`) and are reported at that token's line,
