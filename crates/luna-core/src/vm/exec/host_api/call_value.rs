@@ -114,14 +114,8 @@ impl Vm {
         // the C level, and the native stack too (a first level is no
         // nesting: unchecked); both tested here, the errors out of line
         let n = self.g.nccalls;
-        if n == 0 {
-            // a call from the host, which may run on another thread
-            self.g.native_ok = usize::MAX;
-        } else {
-            let sp = crate::native_stack::sp();
-            if n + 1 >= MAX_C_DEPTH || sp < self.g.native_ok {
-                self.callback_limits(sp)?;
-            }
+        if n > 0 && (n + 1 >= MAX_C_DEPTH || crate::native_stack::nested_call_low()) {
+            self.callback_limits()?;
         }
         self.g.nccalls = n + 1;
         let len = self.stack.len();
@@ -173,14 +167,12 @@ impl Vm {
     }
 
     /// A nested call at the C level limit or with less than [`RESERVE`] of
-    /// the native stack left (`sp` is where it starts) fails, unless a message handler runs on that
+    /// the native stack left fails, unless a message handler runs on that
     /// error: it may go a few levels further, and use half the reserve.
     #[cold]
     #[inline(never)]
-    fn callback_limits(&mut self, sp: usize) -> Result<(), LuaError> {
-        if !is_low(RESERVE) {
-            self.g.native_ok = sp;
-        } else {
+    fn callback_limits(&mut self) -> Result<(), LuaError> {
+        if is_low(RESERVE) {
             if self.msgh_depth == 0 {
                 return Err(self.runerror("C stack overflow"));
             }

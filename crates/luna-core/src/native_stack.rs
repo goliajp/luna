@@ -76,6 +76,29 @@ pub fn jit_limit() -> usize {
     }
 }
 
+thread_local! {
+    /// a stack address where [`nested_call_low`] found [`RESERVE`] left:
+    /// a call that starts no deeper has at least as much
+    static NOT_LOW_AT: Cell<usize> = const { Cell::new(usize::MAX) };
+}
+
+/// [`is_low`]`(`[`RESERVE`]`)` for a nested call, reading the bounds only
+/// when the call starts deeper than one that found the stack not low. The
+/// stack grows down, so any call above that point has more room; each level
+/// of an unbounded nesting starts deeper, so it is checked.
+#[inline(always)]
+pub fn nested_call_low() -> bool {
+    let sp = sp();
+    if sp >= NOT_LOW_AT.with(Cell::get) {
+        return false;
+    }
+    let low = is_low(RESERVE);
+    if !low {
+        NOT_LOW_AT.with(|c| c.set(sp));
+    }
+    low
+}
+
 /// Whether fewer than `reserve` bytes of the stack are left. A stack
 /// pointer outside the thread's stack (an embedder running luna on a
 /// stack of its own) is never low.
