@@ -35,7 +35,7 @@ use jumplist::NO_JUMP;
 mod level;
 mod limits;
 mod near;
-pub(crate) use near::{TokRef, place_error};
+pub(crate) use near::{TokRef, error_before, place_error};
 mod lvalue;
 mod main_fn;
 pub use main_fn::compile_chunk_with_last_target;
@@ -244,7 +244,7 @@ struct Compiler<'a> {
     /// a jump error waits for the token of the next step
     next_pending: bool,
     /// the token of the error being returned, and its message
-    err_tok: Option<(TokRef, Vec<u8>)>,
+    err_tok: Option<(TokRef, Vec<u8>, bool)>,
 }
 
 impl<'a> Compiler<'a> {

@@ -45,6 +45,30 @@ pub(super) fn finish<T: ListItem>(chunk: &mut Chunk, stack: &mut LVec<T>, mark: 
     l
 }
 
+/// A parsed chunk with what the public [`Chunk`] has no place for.
+pub(crate) struct Parsed {
+    pub(crate) chunk: Chunk,
+    /// the line of each statement's last token, by `StatId`: PUC attributes
+    /// the code it emits once it has read that token (a loop's `end`) to
+    /// its line
+    pub(crate) end_lines: LVec<u32>,
+    /// the lexer's token buffer, kept for the next load
+    pub(crate) lex_buf: LVec<u8>,
+    /// the parser's list stacks, kept for the next load
+    pub(crate) stacks: ListStacks,
+    /// the source of a parse that read it piece by piece, where a compile
+    /// error is placed (a whole source is the caller's)
+    pub(crate) src: Option<LVec<u8>>,
+}
+
+/// Where a parse failed: at token `at` (the first is 0), or reading the
+/// token after it (`scanning`).
+#[derive(Clone, Copy)]
+pub(crate) struct Failed {
+    pub(crate) at: u32,
+    pub(crate) scanning: bool,
+}
+
 /// The vectors a parse builds its tree in, kept by a VM from one load to
 /// the next: a load then starts with the room the last one needed instead
 /// of growing every vector from empty.
@@ -55,7 +79,9 @@ pub(crate) struct ParseScratch {
     pub(super) lex_buf: LVec<u8>,
     pub(super) stacks: ListStacks,
     /// the source of a streamed parse (see [`Parsed::src`])
-    pub(super) streamed: Option<LVec<u8>>,
+    pub(crate) streamed: Option<LVec<u8>>,
+    /// where the last parse failed, if it did
+    pub(crate) failed: Option<Failed>,
 }
 
 impl ParseScratch {
@@ -68,6 +94,7 @@ impl ParseScratch {
             lex_buf: LVec::new(m),
             stacks: ListStacks::new(m),
             streamed: None,
+            failed: None,
         }
     }
 
@@ -94,6 +121,7 @@ impl ParseScratch {
             lex_buf: p.lex_buf,
             stacks: p.stacks,
             streamed: None,
+            failed: None,
         };
         s.clear();
         s

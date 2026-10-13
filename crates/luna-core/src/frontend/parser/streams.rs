@@ -13,20 +13,24 @@ pub(crate) fn parse_stream<'f>(
     version: LuaVersion,
     c_depth: u32,
     mut scratch: ParseScratch,
-) -> Result<Parsed, SyntaxError> {
+) -> Result<Parsed, (SyntaxError, Option<(Failed, LVec<u8>)>)> {
     scratch.clear();
     let names = scratch.chunk.names.take();
     let len = first.len();
     let lex_buf = scratch.lex_buf.take();
     let lex = Lexer::interning_stream(Stream::new(first, feed), version, names, lex_buf);
-    parse_from_source(
+    let r = parse_from_source(
         TokenSource::Stream(lex),
         version,
         c_depth,
         len,
         &mut scratch,
-    )?;
-    Ok(scratch.into_parsed())
+    );
+    match r {
+        Ok(()) => Ok(scratch.into_parsed()),
+        // with the source read, to find an error it meets first
+        Err(e) => Err((e, scratch.failed.zip(scratch.streamed.take()))),
+    }
 }
 
 /// Parse a **pre-materialized** token stream. Used by the MacroLua

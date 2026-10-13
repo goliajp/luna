@@ -7,7 +7,10 @@ impl<'s> Parser<'s> {
         self.last_line = self.lex.line();
         let next = match self.peeked.take() {
             Some(t) => t,
-            None => self.lex.next_token()?,
+            None => self
+                .lex
+                .next_token()
+                .inspect_err(|_| self.lex_failed = true)?,
         };
         self.prev_line = self.tok.line;
         self.tok_char = next.char;
@@ -20,7 +23,11 @@ impl<'s> Parser<'s> {
 
     pub(super) fn peek(&mut self) -> Result<&Tok, SyntaxError> {
         if self.peeked.is_none() {
-            self.peeked = Some(self.lex.next_token()?);
+            self.peeked = Some(
+                self.lex
+                    .next_token()
+                    .inspect_err(|_| self.lex_failed = true)?,
+            );
         }
         Ok(&self.peeked.as_ref().unwrap().info.tok)
     }
