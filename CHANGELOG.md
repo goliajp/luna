@@ -664,7 +664,9 @@ optimization.
   when one is raised. The 5.5 table constructor stores as many values per
   `SETLIST` as PUC 5.5 does (by the registers left); 5.4 and 5.5 take a
   forward jump of exactly 2^24 instructions; the hidden variables of a
-  `for` count against the local limit where PUC counts them.
+  `for` count against the local limit where PUC counts them. A chunk that
+  reaches such a limit before a syntax error fails with the limit error,
+  as PUC's, which generates code while it parses, does.
 - The Lua stack follows PUC's size per thread: it grows and shrinks where
   PUC's does (calls, tail calls before the callee moves down, `__call`,
   `...`, hooks, `lua_checkstack`, the pieces of an error message up to

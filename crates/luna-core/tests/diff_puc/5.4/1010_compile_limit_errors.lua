@@ -46,6 +46,18 @@ for ci, ctx in ipairs(contexts) do
   end
 end
 
+-- a limit met before a syntax error: PUC generates code as it parses, so
+-- the limit error is reported
+local pre = "local " .. list(190, function(i) return "a" .. i end) .. "\n"
+local function idx(n) return "t[f(" .. list(n, function() return "1" end) .. ")]" end
+for n = 45, 70 do
+  try("before.stat." .. n, pre .. idx(n))
+  try("before.ctor." .. n, pre .. "x = {" .. fillers.cat(n) .. "}[1]")
+  try("before.late." .. n, pre .. "x = " .. fillers.call(n) .. "\nlocal = 1")
+  try("before.open." .. n, pre .. "if a then\nwhile b do\nx = " .. fillers.nl(n))
+  try("before.scan." .. n, pre .. "x = " .. fillers.call(n) .. " .. 'abc")
+end
+
 -- locals, parameters and upvalues
 local function names(n, p) return list(n, function(i) return (p or "a") .. i end) end
 try("locals201", "local " .. names(201))
@@ -112,3 +124,4 @@ end
 tryr("args", "local " .. list(190, function(i) return "a" .. i end) .. "\nf(\n" ..
   list(70, function() return "1" end, ",\n") .. "\n)")
 tryr("while", "while c do\n" .. body .. "end")
+tryr("before", pre .. "f(\n" .. list(70, function() return "1" end, ",\n") .. "\n) )")
