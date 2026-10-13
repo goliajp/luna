@@ -114,12 +114,7 @@ impl Vm {
         // the native stack too (a first level is no nesting: unchecked);
         // a message handler running on the error gets half the reserve
         if self.g.nccalls > 0 && is_low(RESERVE) {
-            if self.msgh_depth == 0 {
-                return Err(self.runerror("C stack overflow"));
-            }
-            if is_low(HANDLER_RESERVE) {
-                return Err(LuaError(self.errerr()));
-            }
+            self.native_stack_low()?;
         }
         self.check_c_level(true)?;
         self.g.nccalls += 1;
@@ -169,5 +164,19 @@ impl Vm {
             self.top = func_slot;
         }
         r
+    }
+
+    /// A nested call with less than [`RESERVE`] of the native stack left
+    /// fails, unless a message handler runs on that error: it may use half.
+    #[cold]
+    #[inline(never)]
+    fn native_stack_low(&mut self) -> Result<(), LuaError> {
+        if self.msgh_depth == 0 {
+            return Err(self.runerror("C stack overflow"));
+        }
+        if is_low(HANDLER_RESERVE) {
+            return Err(LuaError(self.errerr()));
+        }
+        Ok(())
     }
 }

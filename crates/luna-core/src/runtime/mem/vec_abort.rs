@@ -93,7 +93,7 @@ impl<T: Clone> LVec<T> {
     /// Grow with clones of `v` to length `n`, which the block already has
     /// room for: a length the vector had before, since its block never
     /// shrinks. Never allocates.
-    #[inline]
+    #[inline(always)]
     pub fn regrow(&mut self, n: usize, v: T) {
         assert!(n <= self.cap);
         self.fill_to(n, v);
