@@ -1,6 +1,7 @@
 //! The embedder-facing surface: globals, natives, loading and calling
 //! chunks, and the macro hooks.
 
+use super::stack_size;
 use super::*;
 use crate::native_stack::{HANDLER_RESERVE, RESERVE, is_low};
 mod call_value;
@@ -30,23 +31,33 @@ impl Vm {
         self.globals
     }
 
-    /// PUC `lua_checkstack(L, n)` (5.2+) with the thread's top at slot
-    /// `top`: whether `n` more slots fit, by the limit a call meets (see
-    /// `lua_stack_limit`). It counts from the live top, not from how far
-    /// the stack has ever grown. A stack in its error space (an overflow
-    /// is being handled) has that space too. 5.4+ grow a stack refused
-    /// this way to that size, as an overflow does.
+    /// PUC `lua_checkstack(L, n)` with the thread's top at slot `top`:
+    /// whether `n` more slots fit, the stack grown as PUC grows it (see
+    /// `stack_size::api_check`; 5.4+ leave a stack refused this way at the
+    /// size an overflow leaves). The room granted is the running C
+    /// function's (`ci->top`).
     pub(crate) fn checkstack(&mut self, top: u32, n: i64) -> bool {
-        let room = if self.stack_extra {
-            STACK_ERR_SPACE - 1
-        } else {
-            0
+        let Ok(n) = u32::try_from(n) else {
+            return n <= 0;
         };
-        let fits = i64::from(top) + n <= i64::from(self.g.lua_stack_limit + room);
-        if !fits && self.version() >= LuaVersion::Lua54 {
-            self.stack_extra = true;
+        // 5.1 counts the room from the C function's base
+        let base = self.running_natives.last().map_or(top, |a| a.func_slot + 1);
+        let (ok, s) = stack_size::api_check(self.version, self.stack_size, top + 1, base + 1, n);
+        self.set_stack_size(s);
+        if ok {
+            self.reserve_native_room(top + n);
         }
-        fits
+        ok
+    }
+
+    /// The running C function's frame reserves the stack up to `end` (PUC
+    /// `lua_checkstack` raising `ci->top`).
+    pub(crate) fn reserve_native_room(&mut self, end: u32) {
+        if self.running_natives.len() > self.natives_base
+            && let Some(a) = self.running_natives.last_mut()
+        {
+            a.ci_top = a.ci_top.max(end);
+        }
     }
 
     /// Repoint the thread's "global table" used by *future* `Vm::load` calls

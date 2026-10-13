@@ -24,7 +24,7 @@ impl Vm {
         if self.jit.gate
             || p.is_vararg
             || p.has_compat_vararg_arg
-            || base + nargs + p.max_stack as u32 + 1 > STACK_LIMIT_FLOOR
+            || base + nargs + p.max_stack as u32 >= self.g.stack_last
             || self.g.frame_size != u32::MAX
             || self.stack.len() < need
         {

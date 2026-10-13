@@ -142,10 +142,13 @@ impl Vm {
                     None => n_varargs,
                 };
                 let count = if wanted < 0 { n } else { wanted as u32 };
-                // a named vararg's `n` can be set to anything up to
-                // INT_MAX/2; PUC's `luaD_checkstack` refuses what the
-                // stack cannot hold
-                self.check_lua_stack(abs_a, count, false)?;
+                // all of them (PUC `luaT_getvarargs`) are checked for above
+                // the frame's top (`L->top` is `ci->top` while it runs); a
+                // named vararg's `n` can be set to anything up to INT_MAX/2,
+                // which the stack cannot hold
+                if wanted < 0 {
+                    self.check_lua_stack(self.lua_window_end(), count, false)?;
+                }
                 let need = (abs_a + count) as usize;
                 self.grow_stack(need)?;
                 for i in 0..count {

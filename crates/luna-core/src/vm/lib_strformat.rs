@@ -246,7 +246,8 @@ fn item51(
                 _ => msg.push(conv),
             }
             msg.extend_from_slice(b"' to 'format'");
-            return Err(raise_bytes(vm, &msg));
+            // `"invalid option '%%%c' to 'format'"`
+            return Err(crate::vm::builtins::raise_bytes_fmt(vm, 2, &msg));
         }
     }
     Ok(p + 1)

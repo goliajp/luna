@@ -128,9 +128,10 @@ impl Compiler<'_> {
     }
 
     /// PUC `cond`: a statement's condition, compiled to the jumps taken
-    /// when it is false.
+    /// when it is false, tested once the token after it is read.
     pub(super) fn cond(&mut self, id: ExprId) -> Result<i32, SyntaxError> {
         let e = self.expr(id)?;
+        self.at(TokRef::After(id, 0));
         let e = self.cond_of(e)?;
         Ok(self.exp_parts(e).2)
     }

@@ -444,15 +444,15 @@ pub struct Vm {
     /// frame stack above) free through. After them, so it outlives them:
     /// the heap, which owns it too, is the first field to be dropped.
     pub(super) _mem: crate::runtime::mem::MemOwner,
-    /// Lua frames a thread may hold before a call raises "stack
-    /// overflow": PUC 5.1's `LUAI_MAXCALLS`; no count in later dialects,
-    /// whose limit is the stack size. The frame array is grown as PUC
-    /// 5.1 grows its `CallInfo` array (see `grow_frames`).
+    /// Lua frames a thread may hold before a call raises "stack overflow":
+    /// PUC 5.1's `LUAI_MAXCALLS` (see `grow_frames`); no count later.
     pub(super) frame_cap: u32,
     /// the slot the message handler runs at for a stack overflow or a call
     /// of a value that cannot be called, which PUC raise from the top of
     /// that call (`L->top` when `luaD_growstack` or `luaG_callerror` raised)
     pub(crate) overflow_top: Option<u32>,
+    /// where an error being raised is formatted, when not at the top
+    pub(crate) raise_from: Option<u32>,
     /// the last runtime error a Lua frame raised named its operand, which
     /// 5.3+'s `varinfo` pushes on the stack before the message: the message
     /// handler runs one slot higher
@@ -461,11 +461,9 @@ pub struct Vm {
     /// call keeps its level while its error is in flight, which lets the
     /// message handler run on it one level above the limit
     pub(crate) c_overflow_err: Option<Value>,
-    /// the running thread's stack has overflowed and is using the error
-    /// space (PUC's stack grown to `ERRORSTACKSIZE`), until a protected
-    /// call catches the error; a call that does not fit it is "error in
-    /// error handling". Per-thread, saved with the coroutine context.
-    pub(super) stack_extra: bool,
+    /// the size of the running thread's stack as PUC counts it (see
+    /// `stack_size`), saved with the coroutine context
+    pub(crate) stack_size: u32,
     /// construction finished (PUC `completestate`): an allocation that
     /// fails may run an emergency collection from now on
     pub(super) state_complete: bool,

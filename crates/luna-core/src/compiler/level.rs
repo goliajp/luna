@@ -48,7 +48,7 @@ pub(super) struct Level<'a> {
     /// PUC `fs->jpc` (before 5.4): jumps to the next instruction emitted
     pub(super) jpc: i32,
     /// a jump [`Compiler::discharge_jpc`] could not reach
-    pub(super) jump_err: Option<SyntaxError>,
+    pub(super) jump_err: Option<(SyntaxError, near::TokRef)>,
     /// the values with jump lists (see `Exp::Jumps`)
     pub(super) jexps: LVec<JExp>,
     /// a `global` declaration was made in this function (5.5): until then
@@ -259,6 +259,9 @@ pub(crate) struct CompileScratch {
     pub(super) spine: LVec<super::expr::Pending>,
     pub(super) lvs: LVec<super::lvalue::Lv>,
     pub(super) operands: LVec<ExprId>,
+    /// the token of the last error the compiler returned, and its message
+    /// (see [`super::TokRef`])
+    pub(crate) err_tok: Option<(super::TokRef, Vec<u8>, bool)>,
 }
 
 impl CompileScratch {
@@ -271,6 +274,15 @@ impl CompileScratch {
             spine: LVec::new(mem),
             lvs: LVec::new(mem),
             operands: LVec::new(mem),
+            err_tok: None,
         }
+    }
+
+    /// The token PUC reports `e`, the error the last compile returned, at.
+    pub(crate) fn error_token(&mut self, e: &SyntaxError) -> Option<(super::TokRef, bool)> {
+        self.err_tok
+            .take()
+            .filter(|(_, m, _)| *m == e.msg)
+            .map(|(t, _, near)| (t, near))
     }
 }

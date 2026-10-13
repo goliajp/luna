@@ -16,6 +16,7 @@ impl<'a> Compiler<'a> {
         let mut lvs = self.lvs.take();
         for &t in targets {
             let lv = self.target_lv(t)?;
+            self.at(TokRef::After(t, 0));
             // a variable assigned after an indexing that reads it: the
             // indexing keeps a copy of its current value
             if !matches!(lv, Lv::Indexed(..)) {
@@ -32,11 +33,13 @@ impl<'a> Compiler<'a> {
                 let dst = base + i as u32;
                 self.set_freereg(dst);
                 let e = self.expr(eid)?;
+                self.at(TokRef::After(eid, 1));
                 self.set_freereg(dst);
                 self.exp_to_nextreg(e)?;
             }
             self.set_freereg(base + nvars as u32 - 1);
             let e = self.expr(exprs[nvars - 1])?;
+            self.at(TokRef::After(exprs[nvars - 1], 0));
             self.store(lvs[nvars - 1], e)?;
             lvs.pop();
             base
@@ -59,11 +62,18 @@ impl<'a> Compiler<'a> {
     fn target_lv(&mut self, t: ExprId) -> Result<Lv, SyntaxError> {
         let ast = self.ast;
         match *ast.expr(t) {
-            Expr::Name(ref n) => self.name_lv(self.nm(n), n.line),
+            Expr::Name(ref n) => {
+                self.at(TokRef::After(t, 0));
+                self.name_lv(self.nm(n), n.line)
+            }
             Expr::Index { obj, key } => {
                 let oe = self.expr(obj)?;
+                self.at(TokRef::After(obj, 0));
                 let tr = self.index_table(oe)?;
                 let ke = self.expr(key)?;
+                self.at(TokRef::After(key, 0));
+                let ke = self.exp_to_val(ke)?;
+                self.at(TokRef::After(t, 0));
                 let (tr, k) = self.indexed(tr, ke)?;
                 Ok(Lv::Indexed(tr, k))
             }

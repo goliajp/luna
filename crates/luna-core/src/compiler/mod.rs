@@ -15,6 +15,7 @@ mod binop_classic;
 mod binop_const;
 mod binop_emit;
 mod binop_eq;
+mod call;
 mod closure;
 mod cond;
 pub(crate) mod const_map;
@@ -22,6 +23,7 @@ mod control;
 mod ctconst;
 mod discharge;
 mod emit;
+mod explist;
 mod expr;
 mod expr_names;
 mod expr_ops;
@@ -32,6 +34,8 @@ mod labels;
 use jumplist::NO_JUMP;
 mod level;
 mod limits;
+mod near;
+pub(crate) use near::{TokRef, error_before, place_error};
 mod lvalue;
 mod main_fn;
 pub use main_fn::compile_chunk_with_last_target;
@@ -60,7 +64,9 @@ use crate::runtime::heap::{GcHeader, ObjTag};
 use crate::runtime::mem::{LMap, LVec};
 use crate::runtime::{Gc, Heap, LuaStr, Proto, UpvalDesc, Value};
 use crate::version::LuaVersion;
-use crate::vm::isa::{Inst, MAX_B, MAX_BX, MAX_C, MAX_SC, MAX_SJ, MIN_SC, OFFSET_SC, Op};
+use crate::vm::isa::{
+    Inst, MAX_B, MAX_BX, MAX_C, MAX_SC, MAX_SJ, MAX_SJ_FORWARD, MIN_SC, OFFSET_SC, Op,
+};
 
 /// Lower an [`ast::Chunk`] into a [`Proto`] (luna bytecode) for the
 /// given dialect. The interned source name is attached to the proto for
@@ -230,6 +236,15 @@ struct Compiler<'a> {
     lvs: LVec<lvalue::Lv>,
     /// a concatenation's operands, taken while one is compiled
     operands: LVec<ExprId>,
+    /// the token PUC's scanner would be on (see [`TokRef`])
+    cur: TokRef,
+    /// an instruction is being emitted that PUC emits at the next step
+    /// (see [`TokRef::Next`])
+    early_emit: bool,
+    /// a jump error waits for the token of the next step
+    next_pending: bool,
+    /// the token of the error being returned, and its message
+    err_tok: Option<(TokRef, Vec<u8>, bool)>,
 }
 
 impl<'a> Compiler<'a> {
@@ -297,35 +312,5 @@ impl<'a> Compiler<'a> {
     /// The functions being compiled, outermost first.
     fn open_levels(&self) -> &[Level<'a>] {
         &self.levels[..self.depth]
-    }
-
-    /// An expression nested deeper than the native stack left can compile
-    /// (a long left-associative chain such as `1 + 1 + ... + 1`), reported
-    /// in the words the dialect's parser uses at its nesting limit.
-    #[cold]
-    #[inline(never)]
-    fn too_deep(&self) -> SyntaxError {
-        match self.version {
-            LuaVersion::Lua51 => self.err(self.last_line, "chunk has too many syntax levels"),
-            LuaVersion::Lua52 | LuaVersion::Lua53 => {
-                let where_ = if self.depth == 1 {
-                    "main function".to_string()
-                } else {
-                    format!("function at line {}", self.lr().line_defined)
-                };
-                let msg = format!("too many C levels (limit is 200) in {where_}");
-                self.err(self.last_line, msg)
-            }
-            _ => SyntaxError::unpositioned("C stack overflow"),
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn err(&self, line: u32, msg: impl Into<String>) -> SyntaxError {
-        SyntaxError {
-            line,
-            msg: msg.into().into_bytes(),
-        }
     }
 }

@@ -46,6 +46,7 @@ impl<'s> Parser<'s> {
             if !per_block {
                 self.enter()?;
             }
+            self.open_stat();
             if self.tok.tok == Token::Return {
                 let s = self.return_stat()?;
                 self.stk.stats.push_or_abort(s);
@@ -65,8 +66,9 @@ impl<'s> Parser<'s> {
                 }
                 break;
             }
-            if let Some(s) = self.statement()? {
-                self.stk.stats.push_or_abort(s);
+            match self.statement()? {
+                Some(s) => self.stk.stats.push_or_abort(s),
+                None => self.drop_stat(),
             }
             if !per_block {
                 self.leave();

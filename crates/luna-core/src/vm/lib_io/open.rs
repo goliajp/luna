@@ -164,7 +164,11 @@ pub(super) fn get_io_file(vm: &mut Vm, which: Io) -> Result<Gc<Userdata>, LuaErr
         } else {
             "standard"
         };
-        return Err(raise_str(vm, &format!("{adj} {what} file is closed")));
+        return Err(crate::vm::builtins::raise_fmt(
+            vm,
+            1,
+            &format!("{adj} {what} file is closed"),
+        ));
     }
     Ok(u)
 }
@@ -213,7 +217,7 @@ pub(super) fn open_checked(
             Err(if v51 {
                 arg_error(vm, 1, &format!("{n}: {err}"))
             } else {
-                raise_str(vm, &format!("cannot open file '{n}' ({err})"))
+                crate::vm::builtins::raise_fmt(vm, 2, &format!("cannot open file '{n}' ({err})"))
             })
         }
     }

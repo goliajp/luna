@@ -22,7 +22,7 @@ impl Lowering {
             *inst = match f.kind {
                 Jump::Jmp => {
                     let sj = t - (at + 1);
-                    if !(-(isa::MAX_SJ as i64)..=isa::MAX_SJ as i64).contains(&sj) {
+                    if !(-(isa::MAX_SJ as i64)..=isa::MAX_SJ_FORWARD as i64).contains(&sj) {
                         return Err(format!(
                             "{} chunk: jump distance {sj} too long",
                             self.dialect

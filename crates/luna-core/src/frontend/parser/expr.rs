@@ -82,7 +82,11 @@ impl<'s> Parser<'s> {
             Token::Function => {
                 let line = self.tok.line;
                 self.advance()?;
-                Expr::Function(self.func_body(line)?)
+                let open = self.tok_ix;
+                let e = Expr::Function(self.func_body(line)?);
+                let id = self.push_expr(e);
+                self.opened_expr(id, open);
+                return Ok(id);
             }
             _ => return self.suffixed_expr(),
         };

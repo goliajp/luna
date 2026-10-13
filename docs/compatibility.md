@@ -517,10 +517,6 @@ messages. What still differs does so on purpose:
   compiled calls itself on the native stack; when that stack runs low
   the interpreter makes the remaining calls, so deep recursion ends
   where PUC's Lua stack limit ends it.
-- **Very long `and` / `or` chains.** PUC 5.1 to 5.3 patch every jump of
-  such a chain to its end, so a chain of about 65000 operands fails to
-  compile with "control structure too long"; luna's jumps are short and
-  the chain compiles. From 5.4 on both compile it.
 - **Local time.** luna-core links no C library timezone code:
   `os.date` without a leading `!` formats UTC, and `os.time`'s valid
   range is computed rather than taken from the host's `mktime`.
@@ -545,11 +541,6 @@ messages. What still differs does so on purpose:
   expose the compiler: `debug.getlocal` past the declared locals reads temporaries
   whose contents depend on register allocation; a C function's
   return-hook `ftransfer` depends on its own stack use.
-- **Compile-time limit errors have no `near` token** ("too many
-  registers", "function or expression too complex", "too many upvalues"
-  from 5.2 on). PUC raises them while parsing, with the lexer's current
-  token at hand; luna allocates registers and resolves upvalues after the
-  whole chunk is parsed, so the message stops before the `near` part.
 - **Not reproduced: PUC bugs and C undefined behaviour.** `debug.getinfo(level, ">…")`
   before 5.4 treating the option string as the function (5.1 crashes;
   luna rejects the option, as 5.4 does); 5.1 `io.lines(nil)` raising

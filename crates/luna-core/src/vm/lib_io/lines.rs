@@ -97,7 +97,7 @@ fn io_readline(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
             } else {
                 1
             });
-            return Err(raise_str(vm, &strerror(&e)));
+            return Err(crate::vm::builtins::raise_fmt(vm, 1, &strerror(&e)));
         }
     };
     // ≤5.2 continue on a non-nil first value, 5.3+ on a true one; the only

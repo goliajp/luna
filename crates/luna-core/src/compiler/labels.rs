@@ -184,11 +184,19 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    pub(super) fn goto_stat(&mut self, name: &'a str, line: u32) -> Result<(), SyntaxError> {
+    /// `goto name`, `after` the token after the name.
+    pub(super) fn goto_stat(
+        &mut self,
+        name: &'a str,
+        line: u32,
+        after: TokRef,
+    ) -> Result<(), SyntaxError> {
         self.jump_line(line);
         match self.version {
             LuaVersion::Lua52 | LuaVersion::Lua53 => {
                 let j = self.jump()?;
+                // the label is looked for once its name is read
+                self.at(after);
                 self.goto_list_53(name, j)
             }
             LuaVersion::Lua54 => {

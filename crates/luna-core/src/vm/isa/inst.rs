@@ -28,8 +28,12 @@ pub const MAX_BX: u32 = (1 << 17) - 1;
 pub const MAX_SBX: i32 = (MAX_BX >> 1) as i32; // 65535
 /// Maximum value encodable in the `Ax` field.
 pub const MAX_AX: u32 = (1 << 25) - 1;
-/// Maximum magnitude encodable in the signed `sJ` (jump offset) field.
-pub const MAX_SJ: i32 = ((1u32 << 24) - 1) as i32; // sJ stored with this offset
+/// Maximum magnitude encodable in the signed `sJ` (jump offset) field
+/// backwards; the field is stored with this offset.
+pub const MAX_SJ: i32 = ((1u32 << 24) - 1) as i32;
+/// Largest forward `sJ`: the field's 25 bits less the offset (PUC
+/// `MAXARG_sJ - OFFSET_sJ`), one more than [`MAX_SJ`].
+pub const MAX_SJ_FORWARD: i32 = MAX_SJ + 1;
 
 /// Bias of the signed `sB` / `sC` fields (PUC `OFFSET_sC`).
 pub const OFFSET_SC: i32 = 127;
@@ -64,7 +68,9 @@ impl Inst {
 
     /// [`Inst::isj`] with the range check of [`Inst::try_iabc`].
     pub(crate) fn try_isj(op: Op, sj: i32) -> Option<Inst> {
-        (-MAX_SJ..=MAX_SJ).contains(&sj).then(|| Inst::isj(op, sj))
+        (-MAX_SJ..=MAX_SJ_FORWARD)
+            .contains(&sj)
+            .then(|| Inst::isj(op, sj))
     }
 
     /// Build an iABC-format instruction (`A`, `B`, `C`, `k` flag).
@@ -95,7 +101,7 @@ impl Inst {
 
     /// Build an isJ-format instruction (signed jump offset `sJ`).
     pub fn isj(op: Op, sj: i32) -> Inst {
-        debug_assert!((-MAX_SJ..=MAX_SJ).contains(&sj));
+        debug_assert!((-MAX_SJ..=MAX_SJ_FORWARD).contains(&sj));
         Inst::iax(op, (sj + MAX_SJ) as u32)
     }
 
@@ -231,7 +237,7 @@ impl Inst {
 
     /// Patch the sJ field of a jump (forward-jump backfill).
     pub fn set_sj(&mut self, sj: i32) {
-        debug_assert!((-MAX_SJ..=MAX_SJ).contains(&sj));
+        debug_assert!((-MAX_SJ..=MAX_SJ_FORWARD).contains(&sj));
         self.0 = (self.0 & 0x7F) | (((sj + MAX_SJ) as u32) << POS_A);
     }
 }

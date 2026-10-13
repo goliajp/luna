@@ -173,8 +173,9 @@ pub(crate) fn add_value(
         other => {
             let tn = other.type_name();
             vm.native_push(buf + 1);
-            return Err(raise_bytes(
+            return Err(crate::vm::builtins::raise_bytes_fmt(
                 vm,
+                1,
                 &[b"invalid replacement value (a ", tn.as_bytes(), b")"].concat(),
             ));
         }
@@ -222,7 +223,14 @@ pub(crate) fn add_s(
             }
             b'%' => vm.buf_push(out, b"%")?,
             d if lenient => vm.buf_push(out, &[d])?,
-            _ => return Err(raise_str(vm, "invalid use of '%' in replacement string")),
+            // `"invalid use of '%c' in replacement string"`
+            _ => {
+                return Err(crate::vm::builtins::raise_fmt(
+                    vm,
+                    1,
+                    "invalid use of '%' in replacement string",
+                ));
+            }
         }
     }
     Ok(())

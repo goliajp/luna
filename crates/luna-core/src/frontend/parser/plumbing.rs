@@ -7,17 +7,27 @@ impl<'s> Parser<'s> {
         self.last_line = self.lex.line();
         let next = match self.peeked.take() {
             Some(t) => t,
-            None => self.lex.next_token()?,
+            None => self
+                .lex
+                .next_token()
+                .inspect_err(|_| self.lex_failed = true)?,
         };
         self.prev_line = self.tok.line;
         self.tok_char = next.char;
         self.tok_sym = next.sym;
-        Ok(std::mem::replace(&mut self.tok, next.info))
+        let prev = std::mem::replace(&mut self.tok, next.info);
+        self.tok_ix += 1;
+        self.reached();
+        Ok(prev)
     }
 
     pub(super) fn peek(&mut self) -> Result<&Tok, SyntaxError> {
         if self.peeked.is_none() {
-            self.peeked = Some(self.lex.next_token()?);
+            self.peeked = Some(
+                self.lex
+                    .next_token()
+                    .inspect_err(|_| self.lex_failed = true)?,
+            );
         }
         Ok(&self.peeked.as_ref().unwrap().info.tok)
     }
@@ -188,7 +198,9 @@ impl<'s> Parser<'s> {
 
     pub(super) fn push_expr(&mut self, e: Expr) -> ExprId {
         self.chunk.exprs.push_or_abort(e);
-        ExprId((self.chunk.exprs.len() - 1) as u32)
+        let id = ExprId((self.chunk.exprs.len() - 1) as u32);
+        self.close_expr(id);
+        id
     }
 
     /// Push a statement whose last token was just read, and that token's
@@ -199,6 +211,7 @@ impl<'s> Parser<'s> {
         // statements end in the order they are pushed
         debug_assert_eq!(self.end_lines.len(), idx);
         self.end_lines.push_or_abort(self.prev_line);
+        self.close_stat(StatId(idx as u32));
         StatId(idx as u32)
     }
 }

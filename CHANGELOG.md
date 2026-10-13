@@ -23,6 +23,10 @@ optimization.
 
 ### Breaking
 
+- `Coro::stack_extra` (whether the thread's stack was using the room an
+  overflow leaves) is replaced by `Coro::stack_size`, the size of the
+  thread's stack as PUC counts it (0 for a thread that has not run).
+
 - `FrameMaterializeInfo` has a new field, `n_varargs` (the extra
   arguments of a vararg function a trace inlined), and is 16 bytes;
   `Vm::jit_push_inlined_frame` takes it as a fifth argument. AOT trace
@@ -652,6 +656,28 @@ optimization.
   about 20 fewer machine instructions each.
 
 ### Fixed
+
+- Errors the compiler raises at a limit (registers, jump range, local
+  variables and upvalues from 5.2 on, 5.5's returns) end with the token
+  PUC's scanner is on (`near 'x'`) and are reported at that token's line,
+  as PUC reports them: luna parses the source again to place an error
+  when one is raised. The 5.5 table constructor stores as many values per
+  `SETLIST` as PUC 5.5 does (by the registers left); 5.4 and 5.5 take a
+  forward jump of exactly 2^24 instructions; the hidden variables of a
+  `for` count against the local limit where PUC counts them. A chunk that
+  reaches such a limit before a syntax error fails with the limit error,
+  as PUC's, which generates code while it parses, does.
+- `coroutine.resume` at the C level limit leaves the thread as PUC's
+  does: in 5.1 the refused thread reads as dead, and from 5.4 a resume
+  one level below the limit kills the thread with "C stack overflow", so
+  `coroutine.close` returns `false` and the error.
+- The Lua stack follows PUC's size per thread: it grows and shrinks where
+  PUC's does (calls, tail calls before the callee moves down, `__call`,
+  `...`, hooks, `lua_checkstack`, the pieces of an error message up to
+  5.3, a protected call catching an error, the collector), so near the
+  top of a full stack the error raised, the slot a message handler runs
+  at and the room `lua_checkstack` grants match PUC's. 5.1's collector
+  halves the stack and the `CallInfo` array as PUC 5.1's does.
 
 - A load that failed part way left the lists the parser was gathering in
   the vectors a Vm keeps from one load to the next, and every later load

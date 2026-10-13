@@ -38,6 +38,7 @@ impl Compiler<'_> {
         };
         self.force_line = open.saved_force;
         let re = self.expr(rhs)?;
+        self.at(TokRef::After(rhs, 0));
         // the first operand must be in a register: a left one that is not
         // trades places with the right one
         let (r1, form) = match left {

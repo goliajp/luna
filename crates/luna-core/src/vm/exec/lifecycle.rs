@@ -84,7 +84,7 @@ impl Vm {
                 } else {
                     u32::MAX
                 },
-                lua_stack_limit: lua_stack_limit(version),
+                stack_last: fast_stack_last(version, stack_size::initial(version)),
                 frames_native: 0,
                 host_frames: 0,
                 meta_conts: 0,
@@ -102,20 +102,19 @@ impl Vm {
             },
             c_overflow_err: None,
             overflow_top: None,
+            raise_from: None,
             varinfo_pushed: false,
-            stack_extra: false,
+            stack_size: stack_size::initial(version),
             closing_err: None,
             current: None,
             main_ctx: None,
             yielding: None,
             native_nresults: -1,
             main_coro: None,
-            // PUC 5.4+ boots in GENERATIONAL mode (the first
-            // `collectgarbage("generational")` reports "generational"
-            // as the previous mode on stock lua5.4;
-            // 5.5 behaves the same, probed against lua5.5). luna's
-            // collector is a single incremental engine either way;
-            // this field is the MODE REPORT the stdlib exposes.
+            // PUC 5.4+ boots in generational mode (the first
+            // `collectgarbage("generational")` reports it as the previous
+            // mode on stock 5.4 and 5.5); luna's collector is incremental
+            // either way, and this is the mode the stdlib reports.
             gc_mode: if version >= crate::version::LuaVersion::Lua54 {
                 "generational"
             } else {

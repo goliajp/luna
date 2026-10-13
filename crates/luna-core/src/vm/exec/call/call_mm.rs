@@ -16,6 +16,12 @@ impl Vm {
         nargs: u32,
         chain: u32,
     ) -> Result<(), LuaError> {
+        // a slot for the metamethod (PUC `tryfuncTM`): 5.3 on make sure of
+        // it before looking for one, 5.1 and 5.2 once the hole is open
+        let top = func_slot + 1 + nargs;
+        if self.version >= LuaVersion::Lua53 {
+            self.check_lua_stack(top, 1, false)?;
+        }
         let mm = self.get_mm(v, Mm::Call);
         if mm.is_nil() || self.call_mm_unusable(mm) {
             return Err(self.call_err_at(v, func_slot + 1 + nargs));
@@ -33,6 +39,11 @@ impl Vm {
         };
         if chain > cap {
             return Err(self.rt_err("'__call' chain too long"));
+        }
+        match self.version {
+            LuaVersion::Lua51 => self.check_lua_stack(top, 1, false)?,
+            LuaVersion::Lua52 => self.check_lua_stack(top + 1, 0, false)?,
+            _ => {}
         }
         // the callee and its arguments (and anything up to top)
         // shift up by one (PUC tryfuncTM); slots above them are

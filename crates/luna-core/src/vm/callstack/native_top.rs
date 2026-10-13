@@ -131,3 +131,87 @@ impl Vm {
 
 /// 5.2's and 5.3's `LUAL_BUFFERSIZE` (`BUFSIZ`, 8192 with glibc)
 const LUAL_BUFFERSIZE_52: usize = 8192;
+
+/// The checks of the stack's room `luaO_pushvfstring` makes formatting a
+/// message of `conv` conversions, each as (slot, slots) counted from the
+/// top it starts at: 5.1 one slot per piece it pushes (`incr_top`), 5.2
+/// two before each conversion and one before the tail, 5.3 one per piece
+/// (`luaD_inctop`) and the tail's twice; 5.4 on none (it counts on
+/// `EXTRA_STACK`).
+fn pushvfstring_checks(v: LuaVersion, conv: u32) -> Vec<(u32, u32)> {
+    match v {
+        LuaVersion::Lua51 => (0..2 * conv + 2).map(|i| (i, 1)).collect(),
+        LuaVersion::Lua52 => (0..conv)
+            .map(|i| (2 * i, 2))
+            .chain([(2 * conv, 1)])
+            .collect(),
+        LuaVersion::Lua53 => (0..2 * conv)
+            .map(|i| (i, 1))
+            .chain([(2 * conv, 1), (2 * conv, 1)])
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+impl Vm {
+    /// The pushes of a running native formatting an error message, from its
+    /// top: each part a `lua_pushfstring` of that many conversions, or
+    /// `None` for a value pushed as it is, leaving one value. They grow the
+    /// stack as PUC's do (see `pushvfstring_checks`); a push past the
+    /// limit raises "stack overflow" there instead of the message, and one
+    /// past the room an overflow left "error in error handling".
+    pub(crate) fn format_pushes(&mut self, parts: &[Option<u32>]) -> Option<LuaError> {
+        let top = self.raise_from.or_else(|| self.native_top())?;
+        self.pushes_from(top, parts, 0)
+    }
+
+    /// PUC `luaG_runerror`'s pushes formatting a message of `conv`
+    /// conversions: on a native's stack (see [`Vm::format_pushes`]), or
+    /// above a Lua function's whole window, after the operand's name
+    /// (5.3 `varinfo`) and then the position (`luaG_addinfo`).
+    pub(crate) fn runerror_pushes(&mut self, conv: u32, varinfo: bool) -> Option<LuaError> {
+        if self.version() >= LuaVersion::Lua54 {
+            return None;
+        }
+        if self.native_on_top() {
+            return self.format_pushes(&[Some(conv)]);
+        }
+        let top = self.raise_from.unwrap_or_else(|| self.lua_window_end());
+        if varinfo && self.version() == LuaVersion::Lua53 {
+            self.pushes_from(top, &[Some(2), Some(conv), Some(3)], 1)
+        } else {
+            self.pushes_from(top, &[Some(conv), Some(3)], 1)
+        }
+    }
+
+    /// The pushes of [`Vm::format_pushes`] from slot `top`; an overflow is
+    /// raised with the position a Lua function's error gets (`positioned`).
+    fn pushes_from(
+        &mut self,
+        mut top: u32,
+        parts: &[Option<u32>],
+        positioned: u32,
+    ) -> Option<LuaError> {
+        use crate::vm::exec::stack_size::{self, Grown};
+        for part in parts {
+            for (off, n) in part.map_or_else(Vec::new, |c| pushvfstring_checks(self.version(), c)) {
+                match stack_size::check(self.version(), self.stack_size, top + off + 1, n) {
+                    Grown::Fits(s) => self.set_stack_size(s),
+                    Grown::Overflow(s) => {
+                        self.set_stack_size(s);
+                        self.overflow_top = Some(top + off + positioned);
+                        let msg = format_args!("stack overflow");
+                        return Some(if positioned == 0 {
+                            self.plain_errf(msg)
+                        } else {
+                            self.rt_errf(msg)
+                        });
+                    }
+                    Grown::ErrErr => return Some(LuaError(self.errerr())),
+                }
+            }
+            top += 1;
+        }
+        None
+    }
+}
