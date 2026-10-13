@@ -41,12 +41,12 @@ impl Vm {
             MetaAction::Concat { .. } => self.top,
             _ => self.lua_window_end(),
         };
-        // the room first: once the level is taken nothing may fail before
-        // the continuation that gives it back is pushed. `func` and `args`
-        // are the operands of the running instruction, still on the stack
+        // the room first: the level is taken with the continuation that
+        // gives it back. `func` and `args` are the operands of the running
+        // instruction, still on the stack
         self.place_call(cont_slot, func, args)?;
+        self.check_c_level(true)?;
         self.cf_room()?;
-        self.enter_c_level(true)?;
         self.top = cont_slot + 1 + args.len() as u32;
         frames_push_sync(
             &mut self.frames,
@@ -62,6 +62,7 @@ impl Vm {
                 nresults: 1,
             }),
         );
+        self.take_c_level();
         let saved_tm = self
             .pending_tm
             .replace(crate::runtime::function::FrameTm::Meta);
