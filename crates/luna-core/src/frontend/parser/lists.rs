@@ -73,6 +73,11 @@ impl Parser<'_> {
                 let e = self.expr()?;
                 self.stk.fields.push_or_abort(TableField::Item(e));
             }
+            // checked after each item, before its separator: the error is
+            // near the token that follows the item
+            if ctor_items_over(self.version, self.stk.fields.len() - mark) {
+                return Err(self.error(ctor_limit_msg(&self.where_())));
+            }
             if !(self.accept(Token::Comma)? || self.accept(Token::Semi)?) {
                 break;
             }
@@ -106,5 +111,37 @@ impl Parser<'_> {
                 g.declare(lex.names().text(an.name.sym), kind);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constructor_cap_is_puc_5_4_int_max_half() {
+        for v in [LuaVersion::Lua54, LuaVersion::MacroLua, LuaVersion::Lua55] {
+            assert!(!ctor_items_over(v, 1_073_741_823));
+            assert!(ctor_items_over(v, 1_073_741_824));
+        }
+    }
+
+    #[test]
+    fn constructors_have_no_cap_before_5_4() {
+        // PUC 5.1-5.3 compare int counters with INT_MAX, which never fails
+        for v in [LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Lua53] {
+            assert!(!ctor_items_over(v, 1_073_741_824));
+            assert!(!ctor_items_over(v, usize::MAX));
+        }
+    }
+
+    #[test]
+    fn constructor_cap_message_matches_puc() {
+        // PUC 5.4.9 and 5.5.1 on 1073741824 `nil,` items read through load:
+        // ctor:1: too many items in a constructor (limit is 1073741823) in main function near ','
+        assert_eq!(
+            ctor_limit_msg("main function"),
+            "too many items in a constructor (limit is 1073741823) in main function"
+        );
     }
 }
