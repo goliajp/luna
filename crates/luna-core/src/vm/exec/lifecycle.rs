@@ -85,7 +85,6 @@ impl Vm {
                     u32::MAX
                 },
                 stack_last: fast_stack_last(version, stack_size::initial(version)),
-                native_ok: usize::MAX,
                 frames_native: 0,
                 host_frames: 0,
                 meta_conts: 0,
