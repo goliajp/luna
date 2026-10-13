@@ -3,6 +3,22 @@
 
 use super::*;
 
+/// PUC 5.4+ cap on the items of one table constructor (`INT_MAX / 2`;
+/// 5.5's `MAX_CNST` works out to the same value).
+const MAX_CTOR_ITEMS: usize = (i32::MAX / 2) as usize;
+
+/// Whether a constructor that has read `items` items is past the cap. 5.1
+/// to 5.3 compare `int` counters with `INT_MAX`, a check that cannot fail,
+/// so those dialects have no cap.
+fn ctor_items_over(version: LuaVersion, items: usize) -> bool {
+    version >= LuaVersion::Lua54 && items > MAX_CTOR_ITEMS
+}
+
+/// PUC `errorlimit`'s message for the constructor cap, in `where_`.
+fn ctor_limit_msg(where_: &str) -> String {
+    format!("too many items in a constructor (limit is {MAX_CTOR_ITEMS}) in {where_}")
+}
+
 impl Parser<'_> {
     pub(super) fn exprlist(&mut self) -> Result<List<ExprId>, SyntaxError> {
         let mark = self.stk.exprs.len();
