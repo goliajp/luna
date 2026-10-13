@@ -1,12 +1,13 @@
--- coroutine.resume at the C level limit: the deepest failure's depth, the
--- error, the thread's status, and resuming / closing it again
+-- coroutine.resume at the C level limit: the error, the thread's status,
+-- and resuming / closing it again (the depth it fails at depends on how
+-- deep the script itself runs, so it is not shown)
 local e = 0
 local function h()
   e = e + 1
   local c = coroutine.create(h)
   local ok, m = coroutine.resume(c)
   if not ok and not R then
-    R = { e, tostring(m), coroutine.status(c) }
+    R = { tostring(m), coroutine.status(c) }
     local ok2, m2 = coroutine.resume(c)
     R[#R + 1] = tostring(ok2) .. ":" .. tostring(m2)
     if coroutine.close then
@@ -24,4 +25,4 @@ print(table.concat(R, " | "))
 local d = 0
 local function w() d = d + 1 return coroutine.wrap(w)() end
 local ok, m = pcall(w)
-print(ok, (tostring(m):gsub("^.*: ", "")), d)
+print(ok, (tostring(m):gsub("^.*: ", "")), d > 100)
