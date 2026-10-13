@@ -1,3 +1,4 @@
+-- rule: ldo.recover.1
 -- Base functions that call Lua back with a plain lua_call are not
 -- yieldable: __tostring (tostring, and print's call to tostring on <=5.3),
 -- __pairs on 5.2/5.3 (5.4+ use lua_callk), __ipairs, and load's reader

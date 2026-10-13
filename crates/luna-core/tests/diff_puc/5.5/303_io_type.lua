@@ -1,3 +1,4 @@
+-- rule: liolib.io_type.1
 -- v2.14 CV.1: io.type states.
 local f = io.tmpfile()
 print(io.type(f))

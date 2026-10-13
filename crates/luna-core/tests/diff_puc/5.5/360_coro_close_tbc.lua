@@ -1,3 +1,4 @@
+-- rule: lstate.luaE_resetthread.1
 -- v2.14 CV.3: close runs pending to-be-closed variables.
 local log = {}
 local co = coroutine.create(function()

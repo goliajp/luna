@@ -1,3 +1,4 @@
+-- rule: ldo.luaD_closeprotected.1
 -- v2.13 CORPUS-IV: error thrown from __close propagates; value
 -- observed through pcall.
 local ok, err = pcall(function()

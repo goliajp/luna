@@ -1,3 +1,4 @@
+-- rule: lfunc.luaF_findupval.1
 -- v2.13 CORPUS-IV: two closures share ONE upvalue cell.
 local function make()
   local n = 0

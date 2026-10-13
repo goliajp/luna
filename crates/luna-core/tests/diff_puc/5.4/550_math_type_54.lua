@@ -1,3 +1,4 @@
+-- rule: lmathlib.math_type.1
 -- v2.14 HD 5.4 seed: integer/float printing + math.ult, carried
 -- behavior in the 5.4 dialect.
 print(1, 1.0, 2^53)

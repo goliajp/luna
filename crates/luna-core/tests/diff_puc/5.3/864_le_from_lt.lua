@@ -1,3 +1,4 @@
+-- rule: lvm.luaV_lessequal.1
 -- Without __le, `a <= b` becomes `not (b < a)` up to 5.4 (5.4 through
 -- its default build's LUA_COMPAT_LT_LE); __lt is looked up as for
 -- `b < a`, on b first.

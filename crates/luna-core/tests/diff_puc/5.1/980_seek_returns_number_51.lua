@@ -1,3 +1,4 @@
+-- rule: liolib.f_seek.1
 -- 5.1 has one number type: file:seek's position is a double, so a large
 -- offset prints in %.14g form, not as integer digits
 local f = io.tmpfile()

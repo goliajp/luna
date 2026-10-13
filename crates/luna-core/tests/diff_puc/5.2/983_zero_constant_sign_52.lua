@@ -1,3 +1,4 @@
+-- rule: lcode.constfolding.1 lcode.luaK_numberK.1
 -- 5.2 stores a zero constant under its bytes, so 0 and a folded -0 stay two
 -- constants (5.1 merges them). A folded `x * 0` is -0 when x is negative.
 print(tostring(0) .. tostring(-812646400 * 0))

@@ -1,3 +1,4 @@
+-- rule: lbaselib.luaB_xpcall.1
 -- v2.14 HD 5.1 seed: xpcall does NOT forward extra arguments to
 -- the called function (5.2+ added that).
 local ok, v = xpcall(function(a) return a end, function(e) return e end, 42)

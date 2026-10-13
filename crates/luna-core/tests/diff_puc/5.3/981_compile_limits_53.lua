@@ -1,3 +1,4 @@
+-- rule: lparser.newupvalue.1
 -- Compile-time limits on upvalues and returned values, at and around each
 -- dialect's edge: 5.1 allows 60 upvalues ("has more than 60 upvalues"),
 -- later dialects 255; a return statement fails on registers first, except

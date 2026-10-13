@@ -1,3 +1,4 @@
+-- rule: ldo.luaD_pcall.1
 -- v2.15 P2.5: pcall catches error from body but still fires __close.
 local closed = 0
 local ok, err = pcall(function()

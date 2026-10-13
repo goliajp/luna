@@ -1,3 +1,4 @@
+-- rule: lvm.luaV_gettable.2
 -- An __index/__newindex chain that loops: 5.1/5.2 give up after 100
 -- links with "loop in gettable/settable", 5.3+ after 2000.
 local ld = loadstring or load

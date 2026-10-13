@@ -1,3 +1,4 @@
+-- rule: ltablib.luaopen_table.1
 -- v2.18 P3: the table library's surface is dialect-specific.
 --
 -- luna used to register the union of every dialect's functions, so 5.1 saw

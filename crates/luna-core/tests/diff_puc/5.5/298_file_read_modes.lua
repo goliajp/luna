@@ -1,3 +1,4 @@
+-- rule: liolib.f_read.1
 -- v2.14 CV.1: file:read mode matrix — "l" strips EOL, "L" keeps
 -- it, "a" slurps, numeric reads count bytes, "n" parses numbers.
 local f = io.tmpfile()

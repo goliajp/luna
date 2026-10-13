@@ -1,3 +1,4 @@
+-- rule: loslib.os_date.3
 -- v2.12 CORPUS-III: os.date("!*t") table form, fixed epoch.
 local t = os.date("!*t", 86400)
 print(t.year, t.month, t.day)

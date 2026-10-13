@@ -1,3 +1,4 @@
+-- rule: lbaselib.luaB_setfenv.1
 -- v2.14 HD 5.1 seed: setfenv/getfenv (removed in 5.2).
 local function f() return x end
 setfenv(f, { x = "sandboxed" })

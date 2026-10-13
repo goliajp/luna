@@ -1,3 +1,4 @@
+-- rule: lbaselib.auxresume.1 lbaselib.luaB_cocreate.1
 -- v3.1 iopkg: the 5.1 coroutine library (lbaselib) differs from lcorolib.
 -- running() returns one value (nil on the main thread); a body must be a
 -- Lua function; thread errors say "coroutine expected"; resume names the

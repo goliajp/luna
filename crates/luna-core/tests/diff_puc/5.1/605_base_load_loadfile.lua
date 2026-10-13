@@ -1,3 +1,4 @@
+-- rule: lbaselib.luaB_loadfile.1 ldo.f_parser.1
 -- load (and 5.1 loadstring): 5.1 load takes only a reader; 5.2+ also takes
 -- a string or number, reads name and mode with luaL_optstring, checks the
 -- mode against the chunk kind, and ignores env for upvalue-less functions.

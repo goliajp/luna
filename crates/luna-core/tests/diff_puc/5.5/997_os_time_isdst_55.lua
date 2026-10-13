@@ -1,3 +1,4 @@
+-- rule: loslib.getboolfield.1
 -- os.time with isdst: PUC hands tm_isdst (nil -> -1, otherwise the
 -- truth value) to mktime. Only the cases mktime treats the same on every
 -- C library are here; a true isdst in UTC depends on the C library

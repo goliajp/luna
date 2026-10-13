@@ -1,3 +1,4 @@
+-- rule: ltm.luaT_trybinassocTM.1
 -- v3.1 bytecode: arithmetic and comparisons with constant and immediate
 -- operands call metamethods with the operator and operand order the source
 -- wrote, not the rewritten immediate form.

@@ -1,3 +1,4 @@
+-- rule: ldblib.db_gethook.1 lvm.traceexec.1
 -- v3.1 debug slice: debug.gethook's results per version, including a hook
 -- set with an empty mask (which lua_sethook drops).
 local function hook() end
