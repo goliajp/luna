@@ -194,9 +194,9 @@ pub const CASES: &[Case] = &[
     Case {
         name: "close_from_native",
         dialects: (54, 55),
-        script: "local last local function f() local co = coroutine.create(function() local x <close> = setmetatable({}, {__close = function() f() end}) coroutine.yield() end) coroutine.resume(co) local ok, e = coroutine.close(co) if not ok then last = e end end local ok, e = pcall(f) return tostring(ok) .. '|' .. tostring(last ~= nil) .. '|' .. norm(e)",
-        // the deepest close fails: at the C level limit, or with a small
-        // thread stack where the native stack runs low first
+        // the stack runs out on a resume or on a close, whichever the
+        // platform's frame sizes reach first: either way an error is kept
+        script: "local last local function f() local co = coroutine.create(function() local x <close> = setmetatable({}, {__close = function() f() end}) coroutine.yield() end) local ok1, e1 = coroutine.resume(co) if not ok1 then last = e1 end local ok, e = coroutine.close(co) if not ok then last = e end end local ok, e = pcall(f) return tostring(ok) .. '|' .. tostring(last ~= nil) .. '|' .. norm(e)",
         expect: |_| "true|true|nil",
     },
     Case {
