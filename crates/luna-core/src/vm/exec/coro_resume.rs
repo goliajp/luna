@@ -19,12 +19,7 @@ impl Vm {
             CoroStatus::Dead => return Err(self.plain_err("cannot resume dead coroutine")),
             _ => return Err(self.plain_err("cannot resume non-suspended coroutine")),
         }
-        // PUC `lua_resume` refuses when the resumer's count has reached the
-        // limit (5.1), or would with the resume (5.2 on)
-        let reached = self.g.nccalls + u32::from(self.version >= LuaVersion::Lua52);
-        if reached >= MAX_C_DEPTH || native_stack::is_low(native_stack::RESERVE) {
-            return Err(self.plain_err("C stack overflow"));
-        }
+        self.resume_c_level(co)?;
         // the coroutine runs from the resumer's count, plus the resume
         let nccalls = self.g.nccalls;
         self.g.nccalls += 1;

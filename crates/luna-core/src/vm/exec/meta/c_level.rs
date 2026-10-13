@@ -66,4 +66,37 @@ impl Vm {
         self.g.nccalls += 1;
         self.g.meta_conts += 1;
     }
+
+    /// PUC `lua_resume` at the C level limit. It refuses a resumer whose
+    /// count has reached the limit (5.1, 5.4 on) or would with the resume
+    /// (5.2, 5.3): the thread keeps its state, except in 5.1, whose refusal
+    /// drops the thread's function so that the thread reads as dead. From
+    /// 5.4 a resume one level below the limit goes in, and the call that
+    /// starts or continues the body fails there: the thread dies with the
+    /// error.
+    pub(in crate::vm::exec) fn resume_c_level(&mut self, co: Gc<Coro>) -> Result<(), LuaError> {
+        let n = self.g.nccalls;
+        let v = self.version;
+        let low = native_stack::is_low(native_stack::RESERVE);
+        let refused = match v {
+            LuaVersion::Lua52 | LuaVersion::Lua53 => n + 1 >= MAX_C_DEPTH,
+            _ => n >= MAX_C_DEPTH,
+        };
+        if !refused && !low && !(v >= LuaVersion::Lua54 && n + 1 >= MAX_C_DEPTH) {
+            return Ok(());
+        }
+        let e = self.plain_err("C stack overflow");
+        if v == LuaVersion::Lua51 || (v >= LuaVersion::Lua54 && !refused && !low) {
+            // SAFETY: `co` is the argument being resumed, held by the caller, and not running; the borrow covers the field stores
+            let m = unsafe { co.as_mut() };
+            m.status = CoroStatus::Dead;
+            if v >= LuaVersion::Lua54 {
+                m.error_value = Some(e.0);
+                m.error_status = crate::runtime::ErrorStatus::Run;
+            }
+            self.heap.barrier_back(co);
+            self.host_thread_reset(co);
+        }
+        Err(e)
+    }
 }
