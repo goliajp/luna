@@ -1,3 +1,4 @@
+-- rule: lmathlib.math_ceil.2 lmathlib.math_floor.2
 -- v2.13 CORPUS-IV: math.floor/ceil/abs subtype behavior (5.3+:
 -- integer-valued results are integers).
 print(math.floor(3.7), math.ceil(3.2), math.floor(-3.7), math.ceil(-3.2))

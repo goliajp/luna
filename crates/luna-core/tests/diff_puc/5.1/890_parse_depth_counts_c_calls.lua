@@ -1,3 +1,4 @@
+-- rule: lparser.assignment.2 lparser.enterlevel.1
 -- The parser counts its nesting on top of the C calls already running
 -- (PUC `enterlevel` uses the thread's nCcalls): a chunk loaded deep in
 -- pcalls or in C-to-Lua callbacks has less room, and a module that

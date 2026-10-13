@@ -1,3 +1,4 @@
+-- rule: llex.luaX_token2str.1 llex.luaX_token2str.2
 -- Lexer errors quote PUC's lex buffer as the near-token: the string
 -- read so far (delimiter included, escapes half-decoded as each
 -- dialect leaves them), the numeral as scanned, or <eof>.

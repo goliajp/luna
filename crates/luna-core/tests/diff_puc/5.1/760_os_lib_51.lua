@@ -1,3 +1,5 @@
+-- rule: loslib.getfield.1 loslib.os_date.4 loslib.os_date.7 loslib.os_difftime.1 loslib.os_execute.1 loslib.os_exit.1
+-- rule: loslib.os_time.3
 -- v3.1 iopkg: the 5.1 os library. os.date walks its format as a C string
 -- and passes a trailing '%' through; os.time takes any number (a string
 -- too) for a field, treats anything else as absent, reads fields from the

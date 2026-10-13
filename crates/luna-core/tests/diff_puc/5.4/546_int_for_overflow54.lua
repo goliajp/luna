@@ -1,3 +1,4 @@
+-- rule: lvm.forprep.1
 -- v2.14 HD 5.4 seed: integer numeric-for termination guard near
 -- maxinteger (5.4 rework).
 local n = 0

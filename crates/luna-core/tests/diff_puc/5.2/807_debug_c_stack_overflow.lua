@@ -1,3 +1,4 @@
+-- rule: ldo.luaD_call.1
 -- v3.1 debug slice: "C stack overflow" raised while a C function (pcall,
 -- a gsub callback's caller) is running carries no position.
 local function deep(n)

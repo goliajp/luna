@@ -1,3 +1,4 @@
+-- rule: ldo.growCI.1 ldo.luaD_growstack.2 ldo.luaD_reallocCI.1 lgc.checkstacksizes.1 lstate.stack_init.1
 -- errors raised at the very top of a full stack (in a coroutine, whose
 -- stack starts where it does whatever host runs the script), by Lua code and by
 -- natives: how much room a message handler then has (free: what

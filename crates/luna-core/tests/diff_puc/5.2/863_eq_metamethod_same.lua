@@ -1,3 +1,4 @@
+-- rule: lvm.luaV_equalval.1
 -- __eq in 5.1/5.2 fires only when both operands' metatables yield the
 -- same metamethod; 5.3+ take it from either operand.
 local ld = loadstring or load

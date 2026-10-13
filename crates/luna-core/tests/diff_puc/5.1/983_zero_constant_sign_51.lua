@@ -1,3 +1,4 @@
+-- rule: lcode.constfolding.1 lcode.luaK_numberK.1
 -- 5.1 keys a function's constant table by number value, and 0 == -0: the
 -- first zero a function loads decides the sign of every later one. A folded
 -- `x * 0` is -0 when x is negative.

@@ -3,6 +3,22 @@
 
 use super::*;
 
+/// PUC 5.4+ cap on the items of one table constructor (`INT_MAX / 2`;
+/// 5.5's `MAX_CNST` works out to the same value).
+const MAX_CTOR_ITEMS: usize = (i32::MAX / 2) as usize;
+
+/// Whether a constructor that has read `items` items is past the cap. 5.1
+/// to 5.3 compare `int` counters with `INT_MAX`, a check that cannot fail,
+/// so those dialects have no cap.
+fn ctor_items_over(version: LuaVersion, items: usize) -> bool {
+    version >= LuaVersion::Lua54 && items > MAX_CTOR_ITEMS
+}
+
+/// PUC `errorlimit`'s message for the constructor cap, in `where_`.
+fn ctor_limit_msg(where_: &str) -> String {
+    format!("too many items in a constructor (limit is {MAX_CTOR_ITEMS}) in {where_}")
+}
+
 impl Parser<'_> {
     pub(super) fn exprlist(&mut self) -> Result<List<ExprId>, SyntaxError> {
         let mark = self.stk.exprs.len();
@@ -73,6 +89,11 @@ impl Parser<'_> {
                 let e = self.expr()?;
                 self.stk.fields.push_or_abort(TableField::Item(e));
             }
+            // checked after each item, before its separator: the error is
+            // near the token that follows the item
+            if ctor_items_over(self.version, self.stk.fields.len() - mark) {
+                return Err(self.error(ctor_limit_msg(&self.where_())));
+            }
             if !(self.accept(Token::Comma)? || self.accept(Token::Semi)?) {
                 break;
             }
@@ -106,5 +127,37 @@ impl Parser<'_> {
                 g.declare(lex.names().text(an.name.sym), kind);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constructor_cap_is_puc_5_4_int_max_half() {
+        for v in [LuaVersion::Lua54, LuaVersion::MacroLua, LuaVersion::Lua55] {
+            assert!(!ctor_items_over(v, 1_073_741_823));
+            assert!(ctor_items_over(v, 1_073_741_824));
+        }
+    }
+
+    #[test]
+    fn constructors_have_no_cap_before_5_4() {
+        // PUC 5.1-5.3 compare int counters with INT_MAX, which never fails
+        for v in [LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Lua53] {
+            assert!(!ctor_items_over(v, 1_073_741_824));
+            assert!(!ctor_items_over(v, usize::MAX));
+        }
+    }
+
+    #[test]
+    fn constructor_cap_message_matches_puc() {
+        // PUC 5.4.9 and 5.5.1 on 1073741824 `nil,` items read through load:
+        // ctor:1: too many items in a constructor (limit is 1073741823) in main function near ','
+        assert_eq!(
+            ctor_limit_msg("main function"),
+            "too many items in a constructor (limit is 1073741823) in main function"
+        );
     }
 }

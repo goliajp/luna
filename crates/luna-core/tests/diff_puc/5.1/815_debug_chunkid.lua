@@ -1,3 +1,4 @@
+-- rule: lobject.luaO_chunkid.1
 -- v3.1 debug slice: luaO_chunkid's short_src for long chunk names, per
 -- version (5.1 keeps 52 bytes of a path and 43 of a string, 5.2+ 56 and
 -- 45; 5.1 also stops a string at '\r'), at and around each boundary.

@@ -1,3 +1,4 @@
+-- rule: ldblib.db_errorfb.1
 -- Tracebacks a message handler takes where an error is raised, C function
 -- levels included, in each dialect's wording: library functions as C
 -- levels ('error', 'gsub', 'sort'), every way a function gets its name,

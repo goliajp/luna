@@ -1,3 +1,4 @@
+-- rule: liolib.aux_lines.1
 -- v3.1 iopkg: the 5.1 io library. The FILE* metatable holds the methods
 -- itself and has no __name; writes report true, not the file; a standard
 -- file refuses to close with nil; read formats must start with '*' and

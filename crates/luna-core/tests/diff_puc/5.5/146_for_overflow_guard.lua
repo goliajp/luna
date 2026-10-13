@@ -1,3 +1,4 @@
+-- rule: lvm.forprep.1
 -- v2.12 CORPUS-III: integer numeric-for near maxinteger must
 -- terminate without wrapping (5.4+ overflow guard).
 local n = 0

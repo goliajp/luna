@@ -1,3 +1,4 @@
+-- rule: lfunc.luaF_close.1
 -- v2.13 CORPUS-IV: each loop iteration closes its OWN upvalue.
 local fs = {}
 for i = 1, 3 do

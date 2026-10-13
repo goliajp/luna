@@ -1,3 +1,4 @@
+-- rule: lmathlib.math_toint.1
 -- v2.15 P2.5 (5.3): math.tointeger.
 print(math.tointeger(1))
 print(math.tointeger(1.0))

@@ -1,3 +1,4 @@
+-- rule: ldebug.luaG_traceexec.1
 -- PUC emits a loop's closing code after reading its `end` and attributes
 -- it to that line: the CLOSE of a generic for's closing value (5.4+) and
 -- the CLOSE at a 5.4 `break` label. A line hook sees the `end` line once

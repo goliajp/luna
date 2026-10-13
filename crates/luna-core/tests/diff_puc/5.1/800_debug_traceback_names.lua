@@ -1,3 +1,4 @@
+-- rule: ldblib.db_errorfb.1
 -- v3.1 debug slice: luaL_traceback's per-version naming of each level
 -- (global / local / method / field / upvalue, C functions by their
 -- loaded-module name, tail calls). Source names and lines differ between

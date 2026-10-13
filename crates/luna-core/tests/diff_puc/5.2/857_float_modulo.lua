@@ -1,3 +1,4 @@
+-- rule: lvm.Arith.1
 -- Float `%` per dialect: 5.1/5.2 compute a - floor(a/b)*b, 5.3 fixes
 -- fmod's sign when m*b < 0 (which underflows for tiny operands), 5.4+
 -- compare the signs.

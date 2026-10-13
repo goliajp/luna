@@ -1,3 +1,4 @@
+-- rule: lbaselib.luaB_newproxy.1
 -- 5.1 getfenv / setfenv / newproxy argument handling.
 -- Error messages are compared without their position ("@" marks one)
 -- and without 5.2's hash-order-dependent "_G." qualifier.

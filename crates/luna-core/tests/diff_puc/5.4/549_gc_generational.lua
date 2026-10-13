@@ -1,3 +1,4 @@
+-- rule: lgc.luaC_changemode.1 lgc.luaC_changemode.2
 -- v2.14 HD 5.4 seed: generational GC mode arrives; mode switches
 -- report the previous mode.
 print(collectgarbage("generational"))

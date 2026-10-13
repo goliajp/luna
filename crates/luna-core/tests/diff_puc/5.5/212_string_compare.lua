@@ -1,3 +1,4 @@
+-- rule: lvm.l_strcmp.1
 -- v2.13 CORPUS-IV: string relational comparison (byte-wise
 -- lexicographic, prefix rule).
 print("a" < "b", "b" < "a", "a" < "a")

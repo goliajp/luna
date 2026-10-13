@@ -1,3 +1,4 @@
+-- rule: ldo.ccall.1 lstate.luaE_checkcstack.1
 -- Unbounded nesting through library callbacks, metamethods, coroutines,
 -- protected calls and message handlers ends in PUC's C-call-limit or
 -- Lua-stack error, caught by pcall. Positions are cut down to "@" (chunk

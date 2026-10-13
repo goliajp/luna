@@ -1,3 +1,4 @@
+-- rule: lcode.fixjump.1 lcode.luaK_checkstack.1 lparser.errorlimit.1 lparser.fixforjump.1 lparser.new_localvar.1 lstate.luaE_incCstack.1
 -- Errors the code generator raises at its limits (registers, jump
 -- offsets, locals, upvalues), in many contexts: the message, the line and
 -- the token PUC's scanner is on (`near`). Sources are built here and

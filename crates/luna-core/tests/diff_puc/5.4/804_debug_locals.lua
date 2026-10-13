@@ -1,3 +1,4 @@
+-- rule: ldblib.db_getlocal.1 lfunc.luaF_getlocalname.1
 -- v3.1 debug slice: debug.getlocal / setlocal argument checks and the
 -- hidden locals of a for loop, whose names differ by version.
 local function names(level)

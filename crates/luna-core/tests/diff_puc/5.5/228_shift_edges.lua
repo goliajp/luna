@@ -1,3 +1,4 @@
+-- rule: lvm.luaV_shiftl.1
 -- v2.13 CORPUS-IV: shifts — negative amounts reverse direction,
 -- >= 64 yields 0, >> is logical (unsigned).
 print(1 << 4, 16 >> 4)

@@ -1,3 +1,4 @@
+-- rule: ldo.lua_isyieldable.1
 -- coroutine.isyieldable of a dead coroutine: PUC asks only whether the
 -- thread sits in a non-yieldable call
 local co = coroutine.create(function() end)

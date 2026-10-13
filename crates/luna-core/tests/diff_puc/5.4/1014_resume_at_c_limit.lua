@@ -1,3 +1,4 @@
+-- rule: ldo.lua_resume.2
 -- coroutine.resume at the C level limit: the error, the thread's status,
 -- and resuming / closing it again (the depth it fails at depends on how
 -- deep the script itself runs, so it is not shown)

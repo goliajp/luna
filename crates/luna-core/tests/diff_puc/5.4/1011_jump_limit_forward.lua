@@ -1,3 +1,4 @@
+-- rule: lcode.fixjump.1
 -- A forward jump of exactly 2^24 instructions is the longest the sJ field
 -- takes (PUC `MAXARG_sJ - OFFSET_sJ`); one more is "control structure too
 -- long". Each `x = y` is two instructions.

@@ -1,3 +1,4 @@
+-- rule: ldblib.db_traceback.1
 -- v3.1 debug slice: tracebacks of other threads — suspended (level 0 is
 -- the yield), dead by an error (the stack it died with, from any level),
 -- and a coroutine waiting on one it resumed (inside coroutine.resume).

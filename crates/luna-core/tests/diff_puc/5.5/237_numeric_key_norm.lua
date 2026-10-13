@@ -1,3 +1,4 @@
+-- rule: ltable.luaH_newkey.2
 -- v2.13 CORPUS-IV: float keys with integer values normalize to
 -- integer keys; -0.0 keys to 0; NaN key errors.
 local t = {}

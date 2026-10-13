@@ -1,3 +1,4 @@
+-- rule: ldebug.getobjname.1 ldebug.luaG_typeerror.1
 -- __name joined the type name in error messages in 5.3; 5.1/5.2 ignore it.
 local ld = loadstring or load
 local function e(src) print(pcall(ld(src, "=c"))) end
