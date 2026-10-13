@@ -21,7 +21,7 @@ use crate::numeric::{self, Num};
 use crate::runtime::Value;
 use crate::runtime::value::f2i_exact;
 use crate::version::LuaVersion;
-use crate::vm::builtins::{arg_error, raise_str};
+use crate::vm::builtins::arg_error;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 mod option;
@@ -86,7 +86,12 @@ pub(crate) fn type_error(vm: &mut Vm, a: Args, i: u32, expected: &str) -> LuaErr
     let named = vm.version() >= LuaVersion::Lua53
         && !a.is_none(i)
         && !vm.get_mm(a.get(vm, i), crate::vm::exec::Mm::Name).is_nil();
-    vm.native_push(1 + u32::from(named));
+    vm.native_push(u32::from(named));
+    // `lua_pushfstring(L, "%s expected, got %s", ...)`
+    if let Some(e) = vm.format_pushes(&[Some(2)]) {
+        return e;
+    }
+    vm.native_push(1);
     arg_error(vm, i + 1, &format!("{expected} expected, got {got}"))
 }
 

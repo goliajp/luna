@@ -36,6 +36,7 @@ impl<'a> Compiler<'a> {
                         .iter()
                         .all(|&s| matches!(self.ast.stat(s), Stat::Label(_)));
                 self.last_line = n.line;
+                self.at(TokRef::StatAfter(sid, 0));
                 self.define_label(self.nm(n), trailing)?;
                 continue;
             }
@@ -44,9 +45,12 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    pub(super) fn block_scoped(&mut self, b: &Block) -> Result<(), SyntaxError> {
+    /// Block `b` in a scope of its own, left at token `end` (the one that
+    /// ends it).
+    pub(super) fn block_scoped(&mut self, b: &Block, end: TokRef) -> Result<(), SyntaxError> {
         self.enter_block(false);
         self.stat_block(b)?;
+        self.at(end);
         self.leave_block()
     }
 
@@ -63,6 +67,7 @@ impl<'a> Compiler<'a> {
         if sline != 0 && !jumps_first {
             self.last_line = sline;
         }
+        self.at(TokRef::StatFirst(sid, 0));
         self.stat_body(sid)?;
         // the statement's last token is read
         if let Some(line) = self.stat_end_line(sid) {
@@ -74,15 +79,17 @@ impl<'a> Compiler<'a> {
     fn stat_body(&mut self, sid: StatId) -> Result<(), SyntaxError> {
         let ast = self.ast;
         match ast.stat(sid) {
-            Stat::Do(b) => self.block_scoped(b),
+            Stat::Do(b) => self.block_scoped(b, TokRef::StatAfter(sid, -1)),
             Stat::Local {
                 collective,
                 names,
                 exprs,
-            } => self.local_stat(*collective, self.ls(*names), self.ls(*exprs)),
+            } => self.local_stat(sid, *collective, self.ls(*names), self.ls(*exprs)),
             Stat::Assign { targets, exprs } => self.assign_stat(self.ls(*targets), self.ls(*exprs)),
-            Stat::If { arms, else_body } => self.if_stat(self.ls(*arms), else_body.as_ref()),
-            Stat::While { cond, body } => self.while_stat(*cond, body, self.stat_end_line(sid)),
+            Stat::If { arms, else_body } => self.if_stat(sid, self.ls(*arms), else_body.as_ref()),
+            Stat::While { cond, body } => {
+                self.while_stat(sid, *cond, body, self.stat_end_line(sid))
+            }
             Stat::Repeat { body, cond } => self.repeat_stat(body, *cond),
             Stat::NumericFor {
                 var,
@@ -92,7 +99,14 @@ impl<'a> Compiler<'a> {
                 body,
             } => {
                 let end = self.stat_end_line(sid);
-                self.numeric_for(self.nm(var), var.line, (*start, *limit, *step), body, end)
+                self.numeric_for(
+                    sid,
+                    self.nm(var),
+                    var.line,
+                    (*start, *limit, *step),
+                    body,
+                    end,
+                )
             }
             Stat::GenericFor {
                 vars,
@@ -100,15 +114,22 @@ impl<'a> Compiler<'a> {
                 body,
                 expr_line,
             } => self.generic_for(
+                sid,
                 self.ls(*vars),
                 self.ls(*exprs),
                 body,
                 *expr_line,
                 self.stat_end_line(sid),
             ),
-            Stat::Break { line } => self.break_stat(*line),
+            Stat::Break { line } => {
+                // 5.2 / 5.3 jump before reading `break`, the others after
+                let skip = !matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53);
+                self.at(TokRef::StatFirst(sid, i32::from(skip)));
+                self.break_stat(*line)
+            }
             Stat::Return { exprs, line } => {
                 self.last_line = *line;
+                self.at(TokRef::StatFirst(sid, 1));
                 self.return_stat(self.ls(*exprs))
             }
             Stat::Call(e) => {
@@ -125,16 +146,18 @@ impl<'a> Compiler<'a> {
                 self.set_freereg(base);
                 Ok(())
             }
-            Stat::Function { name, body } => self.function_stat(name, body),
+            Stat::Function { name, body } => self.function_stat(sid, name, body),
             Stat::LocalFunction { name, body } => {
                 self.last_line = name.line;
+                // the closure goes to the variable's register after `end`
+                self.at(TokRef::StatAfter(sid, 0));
                 let reg = self.reserve(1)?;
                 // declared before the body: the function can call itself
                 self.declare_local(self.nm(name), reg, false)?;
                 // PUC does not reserve the variable's register before the
                 // body: the closure takes the next free one, the variable's
                 self.set_freereg(reg);
-                let f = self.function_exp(body, false)?;
+                let f = self.function_exp(body, false, TokRef::StatAfter(sid, 0))?;
                 self.exp_to_reg(f, reg)?;
                 // debug information sees the variable once the closure is in it
                 let pc = self.lr().code.len() as u32;
@@ -157,7 +180,7 @@ impl<'a> Compiler<'a> {
                 self.declare_global_marker(Some(text));
                 let saved = self.lr().freereg;
                 let lv = self.global_lv(text)?;
-                let f = self.function_exp(body, false)?;
+                let f = self.function_exp(body, false, TokRef::StatAfter(sid, 0))?;
                 // `global function f` is a defining write: f must not already
                 // exist in the environment (runtime "already defined" check).
                 // Pin the redef-check and assignment emits to the name's source
@@ -190,69 +213,24 @@ impl<'a> Compiler<'a> {
                 self.declare_global_marker(None);
                 Ok(())
             }
-            Stat::Goto(n) => self.goto_stat(self.nm(n), n.line),
+            Stat::Goto(n) => {
+                // 5.2 / 5.3 jump before reading `goto`, the others after the
+                // label's name
+                let skip = if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
+                    0
+                } else {
+                    2
+                };
+                self.at(TokRef::StatFirst(sid, skip));
+                self.goto_stat(self.nm(n), n.line, TokRef::StatFirst(sid, 2))
+            }
             Stat::Label(_) => unreachable!("labels handled in stat_block"),
         }
     }
 
-    /// 5.5 `global [attrib] name {, name} [= explist]`.
-    pub(super) fn global_decl_stat(
-        &mut self,
-        collective: Option<ast::Attrib>,
-        names: &'a [AttribName],
-        exprs: &[ExprId],
-    ) -> Result<(), SyntaxError> {
-        // attribute validation happens before any evaluation
-        for an in names {
-            let attrib = an.attrib.or(collective);
-            if attrib == Some(ast::Attrib::Close) {
-                return Err(self.err(an.name.line, "global variables cannot be to-be-closed"));
-            }
-        }
-        let declare = |c: &mut Self| {
-            let text = &c.ast.names;
-            for an in names {
-                let ro = an.attrib.or(collective) == Some(ast::Attrib::Const);
-                c.l()
-                    .blocks
-                    .last_mut()
-                    .expect("no block")
-                    .gdecls
-                    .push_or_abort((text.text(an.name.sym), ro));
-                c.declare_global_marker(Some(text.text(an.name.sym)));
-            }
-        };
-        if exprs.is_empty() {
-            declare(self);
-            return Ok(());
-        }
-        // With an initializer the globals enter scope only AFTER the RHS is
-        // evaluated (PUC bumps `nactvar` after the explist), so `global a = a`
-        // reads the enclosing `a`, not the global being defined.
-        let saved = self.lr().freereg;
-        let mut lvs = self.lvs.take();
-        for an in names {
-            let lv = self.global_lv(self.nm(&an.name))?;
-            lvs.push_or_abort(lv);
-        }
-        let base = self.explist_adjust(exprs, names.len() as u32)?;
-        declare(self);
-        // defining write: each target must not already exist (OP_ERRNNIL);
-        // PUC checks and stores the last one first, the check reading into
-        // the register above the values still to store
-        for (i, an) in names.iter().enumerate().rev() {
-            self.set_freereg(base + i as u32 + 1);
-            self.emit_global_redef_check(self.nm(&an.name))?;
-            self.store(lvs[i], Exp::Reg(base + i as u32))?;
-        }
-        lvs.clear();
-        self.lvs = lvs;
-        self.set_freereg(saved);
-        Ok(())
-    }
-
     pub(super) fn local_stat(
         &mut self,
+        sid: StatId,
         collective: Option<ast::Attrib>,
         names: &'a [AttribName],
         exprs: &[ExprId],
@@ -291,6 +269,8 @@ impl<'a> Compiler<'a> {
             None => (names, exprs),
         };
         let n = names.len() as u32;
+        // with no values the names are adjusted where the statement ends
+        self.at(TokRef::StatAfter(sid, 0));
         let base = self.explist_adjust(vals, n)?;
         if let (Some(_), Some(e)) = (&run_last, last_expr) {
             self.set_freereg(base + n);
@@ -325,67 +305,5 @@ impl<'a> Compiler<'a> {
         }
         self.set_freereg(base + n);
         Ok(())
-    }
-
-    /// Evaluate an expression list into exactly `want` consecutive registers
-    /// starting at the current freereg (nil-padded / truncated; an open last
-    /// expression is patched to produce the balance). Returns the base.
-    pub(super) fn explist_adjust(
-        &mut self,
-        exprs: &[ExprId],
-        want: u32,
-    ) -> Result<u32, SyntaxError> {
-        let base = self.lr().freereg;
-        // PUC `checkstack`: an open call (`f()`) on the last RHS slot is patched
-        // to deliver up to `want` results, bypassing the per-expr `reserve`'s
-        // bounds check. errors.lua :721's `local a,a,…(500),a = f()` would
-        // otherwise slip past the register cap — guard the target window here.
-        if base.saturating_add(want) > max_regs(self.version) {
-            return Err(self.regs_error(self.last_line));
-        }
-        if exprs.is_empty() {
-            if want > 0 {
-                self.reserve(want)?;
-                // PUC 5.1 `luaK_nil`: at function start (pc==0) a LoadNil whose
-                // first register is at-or-above nactvar is skipped — locals
-                // come in already nil at frame entry, so the op is a no-op.
-                // 5.2+ retired the optimization (the LoadNil shows up in the
-                // line table either way), so the gate is 5.1-only. db.lua's
-                // line-trace tests rely on the suppression — expected line
-                // events skip the `local a` line of a chunk that opens with
-                // an uninitialized declaration.
-                let skip = self.version == LuaVersion::Lua51 && self.lr().code.is_empty();
-                if !skip {
-                    self.emit(Inst::iabc(Op::LoadNil, base, want - 1, 0, false));
-                }
-            }
-            return Ok(base);
-        }
-        let n = exprs.len() as u32;
-        for (i, &eid) in exprs.iter().enumerate() {
-            let dst = base + i as u32;
-            if dst >= max_regs(self.version) {
-                return Err(self.regs_error(self.last_line));
-            }
-            self.set_freereg(dst);
-            let e = self.expr(eid)?;
-            let last = i as u32 == n - 1;
-            if last && let Exp::Open { pc, base: ob } = e {
-                debug_assert_eq!(ob, dst);
-                let missing = (want + 1).saturating_sub(n); // results the open expr must provide
-                self.patch_wanted(pc, missing + 1);
-                self.set_freereg(base + want.max(n - 1));
-                return Ok(base);
-            }
-            self.set_freereg(dst);
-            let got = self.exp_to_nextreg(e)?;
-            debug_assert_eq!(got, dst);
-        }
-        if n < want {
-            let first = self.reserve(want - n)?;
-            self.emit(Inst::iabc(Op::LoadNil, first, want - n - 1, 0, false));
-        }
-        self.set_freereg(base + want);
-        Ok(base)
     }
 }

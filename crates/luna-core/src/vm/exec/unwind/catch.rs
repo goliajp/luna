@@ -111,12 +111,11 @@ impl Vm {
         } else if self.stack.len() > restore {
             self.stack.truncate(restore);
         }
-        // the error space closes once the frames in use fit under the
-        // limit again (PUC `luaD_shrinkstack` leaves a thread that is still
-        // handling its overflow alone)
-        if restore <= self.g.lua_stack_limit as usize {
-            self.stack_extra = false;
-        }
+        // PUC `luaD_pcall` shrinks the stack to what the frames still in
+        // use reserve, the protected call's own among them; that closes the
+        // room an overflow opened once they fit under the limit again
+        let inuse = self.stack_in_use().max(nc.kind.ci_top() + 2);
+        self.set_stack_size(stack_size::shrink(self.version, self.stack_size, inuse));
         // Clear slots vacated by the popped
         // frames the unwind walked over. finish_results
         // above clears `[nc.func_slot + nresults ..

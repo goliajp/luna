@@ -82,8 +82,9 @@ pub struct Coro {
     pub tbc: LVec<u32>,
     /// Saved stack top.
     pub top: u32,
-    /// Saved `Vm::stack_extra`: the stack is using its error space.
-    pub stack_extra: bool,
+    /// Saved `Vm::stack_size`: PUC's size of the thread's stack, 0 for a
+    /// thread that has not run.
+    pub stack_size: u32,
     /// Saved `Vm::frame_size`: the size of the thread's 5.1 frame array.
     pub frame_size: u32,
     /// Saved `Vm::meta_conts`.

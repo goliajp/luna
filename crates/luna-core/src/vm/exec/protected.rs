@@ -49,12 +49,17 @@ impl Vm {
         self.pcall_room(func_slot + 1, nargs, shift)?;
         self.enter_pcall_level(level)?;
         let callee = self.shift_callee(func_slot + 1, nargs, shift);
+        let ci_top = self.c_frame_top(by, func_slot, nargs);
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
             &mut self.trap,
             CallFrame::Cont(NativeCont {
-                kind: ContKind::Pcall { level, shift },
+                kind: ContKind::Pcall {
+                    level,
+                    shift,
+                    ci_top,
+                },
                 func_slot,
                 nresults,
             }),
@@ -64,6 +69,16 @@ impl Vm {
         // (caught by `unwind` / preserved across a yield).
         self.begin_call(callee, Some(nargs - 1), -1, true)?;
         Ok(true)
+    }
+
+    /// PUC's `ci->top` of the `pcall` / `xpcall` at `func_slot` called with
+    /// `nargs` arguments: `LUA_MINSTACK` above them. A host's `lua_pcall`
+    /// runs in the host's own frame.
+    fn c_frame_top(&self, by: ProtectedBy, func_slot: u32, nargs: u32) -> u32 {
+        match by {
+            ProtectedBy::Host => 0,
+            _ => func_slot + 1 + nargs + super::stack_size::MIN_STACK,
+        }
     }
 
     /// Where PUC's `pcall` / `xpcall` call their function, counted from
@@ -145,6 +160,7 @@ impl Vm {
         }
         let callee = self.shift_callee(func_slot + 1, nfargs + 1, shift);
         self.top = callee + 1 + nfargs;
+        let ci_top = self.c_frame_top(by, func_slot, nargs);
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
@@ -154,6 +170,7 @@ impl Vm {
                     handler,
                     level,
                     shift,
+                    ci_top,
                 },
                 func_slot,
                 nresults,

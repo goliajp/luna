@@ -94,21 +94,10 @@ impl<'a> Compiler<'a> {
                 }
                 let saved = self.lr().freereg;
                 let e = self.expr(exprs[0])?;
+                self.at(TokRef::After(exprs[0], 0));
                 let r = self.exp_to_anyreg(e)?;
                 self.set_freereg(saved);
                 self.emit(Inst::iabc(Op::Return1, r, 0, 0, false));
-            }
-            n if n > 254 => {
-                // `OP_RETURN`'s B field is a byte (`b = nret + 1`): at most
-                // 254 fixed values. PUC places every value in a register
-                // first, so the register limit speaks first unless the
-                // values fit: only 5.5 allows 255 registers and then checks
-                // the count, with `errorlimit` (5.5 calls.lua :591).
-                let base = self.lr().freereg as usize;
-                if self.version >= LuaVersion::Lua55 && base + n <= 255 {
-                    return Err(self.limit_err("returns", 255));
-                }
-                return Err(self.regs_error(self.last_line));
             }
             n => {
                 let base = self.lr().freereg;
@@ -117,9 +106,11 @@ impl<'a> Compiler<'a> {
                     let dst = base + i as u32;
                     self.set_freereg(dst);
                     let e = self.expr(eid)?;
-                    if i == n - 1
-                        && let Exp::Open { pc, base: ob } = e
-                    {
+                    let last = i == n - 1;
+                    // a value goes to its register once the `,` after it is
+                    // read, the last once the list ends
+                    self.at(TokRef::After(eid, i32::from(!last)));
+                    if last && let Exp::Open { pc, base: ob } = e {
                         debug_assert_eq!(ob, dst);
                         self.patch_wanted(pc, 0);
                         open = true;
@@ -128,6 +119,13 @@ impl<'a> Compiler<'a> {
                     self.set_freereg(dst);
                     let got = self.exp_to_nextreg(e)?;
                     debug_assert_eq!(got, dst);
+                }
+                // `OP_RETURN`'s B field is a byte (`b = nret + 1`): at most
+                // 254 fixed values. The register limit speaks first except
+                // in 5.5, which allows 255 registers and checks the count
+                // with `errorlimit` (5.5 calls.lua :591).
+                if !open && n > 254 {
+                    return Err(self.limit_err("returns", 255));
                 }
                 let b = if open { 0 } else { n as u32 + 1 };
                 self.emit(Inst::iabc(Op::Return, base, b, 0, false));

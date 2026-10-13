@@ -13,12 +13,15 @@ pub(super) enum IndexOpen {
 impl<'a> Compiler<'a> {
     pub(super) fn unop(
         &mut self,
+        id: ExprId,
         op: UnOp,
         operand: ExprId,
         line: u32,
     ) -> Result<Exp, SyntaxError> {
         self.last_line = line;
         let e = self.expr(operand)?;
+        // `luaK_prefix`, once the operand is read
+        self.at(TokRef::After(id, 0));
         let saved = self.lr().freereg;
         let (opcode, folded) = match op {
             UnOp::Neg | UnOp::BNot => {
@@ -59,12 +62,14 @@ impl<'a> Compiler<'a> {
     ) -> Result<Exp, SyntaxError> {
         // PUC tests the left operand once it has read the operator
         self.last_line = line;
+        self.at(TokRef::First(rhs, 0));
         let le = if op == BinOp::And {
             self.go_if_true(le)?
         } else {
             self.go_if_false(le)?
         };
         let re = self.expr(rhs)?;
+        self.at(TokRef::After(rhs, 0));
         let (v, mut t, mut f) = self.exp_parts(re);
         let v = self.discharge_vars(v);
         let (_, lt, lf) = self.exp_parts(le);
@@ -118,6 +123,12 @@ impl<'a> Compiler<'a> {
         for (idx, &eid) in operands.iter().enumerate() {
             self.set_freereg(base + nargs);
             let e = self.expr(eid)?;
+            // an operand goes to its register once the `..` after it is
+            // read (`luaK_infix`), the last when the chain ends
+            self.at(match operands.get(idx + 1) {
+                Some(&next) => TokRef::First(next, 0),
+                None => TokRef::After(eid, 0),
+            });
             self.set_freereg(base + nargs);
             let r = self.exp_to_nextreg(e)?;
             debug_assert_eq!(r, base + nargs);
@@ -194,14 +205,27 @@ impl<'a> Compiler<'a> {
     /// `obj[key]` with the object compiled to `oe`.
     pub(super) fn index_close(
         &mut self,
+        id: ExprId,
         oe: Exp,
         key: ExprId,
         saved: u32,
     ) -> Result<Exp, SyntaxError> {
+        let Expr::Index { obj, .. } = *self.ast.expr(id) else {
+            unreachable!("an index")
+        };
+        // the object is made a table on the `.` or `[`
+        self.at(TokRef::After(obj, 0));
         let t = self.index_table(oe)?;
         let ke = self.expr(key)?;
+        // `yindex` gives the key a value on the `]`, `luaK_indexed` comes
+        // after it
+        self.at(TokRef::After(key, 0));
+        let ke = self.exp_to_val(ke)?;
+        self.at(TokRef::After(id, 0));
         let (t, k) = self.indexed(t, ke)?;
+        self.early_emit = true;
         let e = self.index_get(t, k);
+        self.early_emit = false;
         self.set_freereg(saved);
         Ok(e)
     }

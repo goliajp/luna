@@ -102,7 +102,9 @@ impl Vm {
         }
         match arith_num(self.version, op, ln, rn) {
             Ok(v) => Ok(Some(v)),
-            Err(msg) => Err(self.runerror(msg)),
+            // a '%' shown is a `%%` of PUC's format ("attempt to perform
+            // 'n%%0'")
+            Err(msg) => Err(self.runerror_conv(msg, msg.matches('%').count() as u32, false)),
         }
     }
 
@@ -149,7 +151,8 @@ impl Vm {
             };
             let tn = self.obj_typename(bad);
             let msg = self.compose_type_err(what, &tn, &extra);
-            return Err(self.runerror_named(&msg, &extra));
+            let conv = self.type_err_conv(&extra);
+            return Err(self.runerror_named(&msg, &extra, conv));
         }
         Ok(mm)
     }

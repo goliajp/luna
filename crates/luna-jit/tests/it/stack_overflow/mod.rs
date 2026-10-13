@@ -175,6 +175,49 @@ pub const CASES: &[Case] = &[
             }
         },
     },
+    // the paths a native or the interpreter calls back through, each
+    // nesting without bound: a comparator handing a JIT-compiled recursion
+    // to the interpreter, a hook, `__close` run by `coroutine.close`,
+    // `__index` run by `table.concat` and `__lt` run by `table.sort`
+    Case {
+        name: "sort_comparator_jit",
+        dialects: ALL,
+        script: "local function r(n) if n == 0 then return 0 end return 1 + r(n - 1) end for i = 1, 300 do r(10) end local a, b local t = {3, 2, 1} table.sort(t, function(x, y) if not a then a = select(2, pcall(r, 15000)) b = select(2, pcall(r, -1)) end return x < y end) return tostring(a) .. '|' .. norm(b)",
+        expect: |_| "15000|@ stack overflow",
+    },
+    Case {
+        name: "hook_callback",
+        dialects: ALL,
+        script: "local function f() table.sort({3, 2, 1}, function(a, b) f() return a < b end) end local ok, e debug.sethook(function() debug.sethook() ok, e = pcall(f) end, '', 1) local _ = 1 debug.sethook() return tostring(ok) .. '|' .. norm(e)",
+        expect: |_| "false|C stack overflow",
+    },
+    Case {
+        name: "close_from_native",
+        dialects: (54, 55),
+        script: "local last local function f() local co = coroutine.create(function() local x <close> = setmetatable({}, {__close = function() f() end}) coroutine.yield() end) coroutine.resume(co) local ok, e = coroutine.close(co) if not ok then last = e end end local ok, e = pcall(f) return tostring(ok) .. '|' .. tostring(last ~= nil) .. '|' .. norm(e)",
+        // the deepest close fails: at the C level limit, or with a small
+        // thread stack where the native stack runs low first
+        expect: |_| "true|true|nil",
+    },
+    Case {
+        name: "index_from_native",
+        dialects: ALL,
+        script: "local t t = setmetatable({}, {__index = function(t, k) return table.concat(t, '', 1, 1) end}) local ok, e = pcall(table.concat, t, '', 1, 1) return tostring(ok) .. '|' .. norm(e)",
+        // before 5.3 `table.concat` reads the table raw
+        expect: |v| {
+            if v < 53 {
+                "false|invalid value (nil) at index 1 in table for 'concat'"
+            } else {
+                "false|C stack overflow"
+            }
+        },
+    },
+    Case {
+        name: "lt_from_sort",
+        dialects: ALL,
+        script: "local mt = {} mt.__lt = function(a, b) table.sort({a, b}) return true end local ok, e = pcall(table.sort, {setmetatable({}, mt), setmetatable({}, mt)}) return tostring(ok) .. '|' .. norm(e)",
+        expect: |_| "false|C stack overflow",
+    },
 ];
 
 pub fn case(name: &str) -> &'static Case {

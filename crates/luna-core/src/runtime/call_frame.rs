@@ -128,6 +128,15 @@ pub struct NativeCont {
 }
 
 impl ContKind {
+    /// The slot past the stack the C function a continuation stands for
+    /// reserves (PUC `ci->top`), 0 when it is no C function of PUC's.
+    pub fn ci_top(&self) -> u32 {
+        match self {
+            ContKind::Pcall { ci_top, .. } | ContKind::Xpcall { ci_top, .. } => *ci_top,
+            _ => 0,
+        }
+    }
+
     /// Whether a protected call's continuation took a C level of PUC's.
     pub fn is_level(&self) -> bool {
         match self {
@@ -156,6 +165,10 @@ pub enum ContKind {
         /// Where the callee was called, relative to the slot above the
         /// continuation (`Vm::callee_shift`).
         shift: i8,
+        /// The slot past the stack PUC's `CallInfo` of `pcall` reserves
+        /// (`LUA_MINSTACK` above its arguments), 0 for a host's
+        /// `lua_pcall`, which takes none.
+        ci_top: u32,
     },
     /// xpcall: the message handler to run if the protected call errors
     Xpcall {
@@ -165,6 +178,8 @@ pub enum ContKind {
         level: bool,
         /// Where the callee was called (`Vm::callee_shift`).
         shift: i8,
+        /// As [`ContKind::Pcall`]'s.
+        ci_top: u32,
     },
     /// a yieldable metamethod call triggered by a VM instruction (PUC's
     /// `luaV_finishOp`): on the metamethod's return the interrupted instruction

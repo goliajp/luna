@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::runtime::ErrorStatus;
+mod type_err;
 mod varinfo;
 
 impl Vm {
@@ -66,6 +67,22 @@ impl Vm {
 
     /// [`Vm::rt_err`] with a message to format.
     pub(crate) fn rt_errf(&mut self, msg: std::fmt::Arguments<'_>) -> LuaError {
+        self.rt_errf_conv(msg, 0, false)
+    }
+
+    /// [`Vm::rt_errf`] for a message PUC formats with `conv` conversions,
+    /// after (5.3, `varinfo`) the operand's name was formatted and pushed:
+    /// the pushes that format it may find the stack full (see
+    /// `format_pushes`).
+    pub(crate) fn rt_errf_conv(
+        &mut self,
+        msg: std::fmt::Arguments<'_>,
+        conv: u32,
+        varinfo: bool,
+    ) -> LuaError {
+        if let Some(e) = self.runerror_pushes(conv, varinfo) {
+            return e;
+        }
         self.varinfo_pushed = false;
         // `luaG_runerror` pushes the message (a native's stack only: a
         // Lua frame's handler goes above its window)
@@ -155,51 +172,6 @@ impl Vm {
             ErrorStatus::Gcmm
         } else {
             ErrorStatus::Run
-        }
-    }
-
-    pub(crate) fn type_err(&mut self, what: &str, v: Value) -> LuaError {
-        let extra = self.subject_varinfo(v);
-        let tn = self.obj_typename(v);
-        let msg = self.compose_type_err(what, &tn, &extra);
-        self.runerror_named(&msg, &extra)
-    }
-
-    /// [`Self::runerror`] for a message that names an operand with `extra`
-    /// (see `varinfo_pushed`).
-    pub(super) fn runerror_named(&mut self, msg: &str, extra: &str) -> LuaError {
-        let e = self.runerror(msg);
-        self.varinfo_pushed = self.version() >= LuaVersion::Lua53 && !extra.is_empty();
-        e
-    }
-
-    /// Assemble a `luaG_typeerror` / `luaG_callerror` message in the dialect's
-    /// word order.
-    ///
-    /// PUC ≤5.2 names the operand first — `attempt to call field 'f' (a nil
-    /// value)`. 5.3 flipped it to type-first — `attempt to call a nil value
-    /// (field 'f')`. luna emitted the 5.3+ form on every dialect, so every
-    /// such error was worded wrong under 5.1/5.2.
-    ///
-    /// Two shapes carry no operand name on ≤5.2 and must collapse to the bare
-    /// message: an absent varinfo (identical across dialects), and a
-    /// metamethod target — ≤5.2's `luaG_typeerror` only names locals, globals,
-    /// fields, upvalues and methods, so `(metamethod 'add')` has no ≤5.2
-    /// counterpart and is dropped rather than reworded. All four shapes were
-    /// measured against stock 5.1.5 / 5.2.4 / 5.5.1 before this was written.
-    pub(super) fn compose_type_err(&self, what: &str, tn: &str, extra: &str) -> String {
-        if self.version() > crate::version::LuaVersion::Lua52 {
-            return format!("attempt to {what} a {tn} value{extra}");
-        }
-        // `extra` is "" or " (kind 'name')" — unwrap to "kind 'name'".
-        let inner = extra
-            .trim_start()
-            .trim_start_matches('(')
-            .trim_end_matches(')');
-        if inner.is_empty() || inner.starts_with("metamethod") {
-            format!("attempt to {what} a {tn} value")
-        } else {
-            format!("attempt to {what} {inner} (a {tn} value)")
         }
     }
 

@@ -56,8 +56,9 @@ pub(crate) fn unpack_int(
             0xff
         };
         if (limit..size).any(|i| at(i) != fill) {
-            return Err(raise_str(
+            return Err(crate::vm::builtins::raise_fmt(
                 vm,
+                1,
                 &format!("{size}-byte integer does not fit into Lua Integer"),
             ));
         }

@@ -62,6 +62,20 @@ impl<'f> Stream<'f> {
     }
 }
 
+impl<'f> super::Lexer<'_, Stream<'f>> {
+    /// The stream the lexer reads.
+    pub(crate) fn source_mut(&mut self) -> &mut Stream<'f> {
+        &mut self.src
+    }
+}
+
+impl Stream<'_> {
+    /// The source read, the whole of it once the scan reached its end.
+    pub(crate) fn take_bytes(&mut self) -> LVec<u8> {
+        self.buf.take()
+    }
+}
+
 impl Source for Stream<'_> {
     const STREAMS: bool = true;
 

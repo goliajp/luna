@@ -183,30 +183,29 @@ impl Vm {
         if let (Value::LightUserdata(cf), Some(host)) = (hook, self.host_hook) {
             return self.run_host_hook(host, cf, event, line);
         }
+        // `luaD_hook` makes sure of `LUA_MINSTACK` slots above the top first
+        let top = self
+            .native_top()
+            .unwrap_or_else(|| self.lua_window_end().max(self.top));
+        self.check_lua_stack(top, super::stack_size::MIN_STACK, false)?;
         let saved_top = self.top;
         let saved_len = self.stack.len();
         let name = self.str_value(event)?;
         let lv = line.map_or(Value::Nil, Value::Int);
         self.in_hook = true;
         // PUC `db_sethook`'s C trampoline `hookf` sits between the engine and
-        // the Lua hook — so `getinfo(2)` inside the hook resolves to whatever
-        // ci sat below `hookf` (the function being hooked). When that hooked
-        // function is native, no Lua frame for it exists in luna's `frames`;
-        // model it as a synthetic C level by pushing the hook with
-        // `from_c = true` (then `c_frame_name` reads the caller's call
-        // instruction → e.g. `name = "sethook"`). When the hooked function is
-        // Lua (its frame is still on the stack), push with `from_c = false`
-        // so the level descent lands on it directly. The hook's own frame
-        // carries `is_hook = true` so `getinfo(1).namewhat` reports "hook"
-        // (PUC `CIST_HOOKED`).
+        // the Lua hook, so `getinfo(2)` inside the hook resolves to the
+        // hooked function. A hooked native has no Lua frame in `frames`: the
+        // hook is pushed `from_c` (a synthetic C level, whose name
+        // `c_frame_name` reads from the caller's call instruction); a hooked
+        // Lua function's frame is still there, and the level descent lands
+        // on it. The hook's frame is `is_hook` (`getinfo(1).namewhat` is
+        // "hook", PUC `CIST_HOOKED`).
         self.pending_is_hook = true;
         // `hookf` runs at the interrupted function's top (a Lua frame's
         // whole window, or the open results of a call above it) and pushes
         // its registry table before the hook
-        let at = self
-            .native_top()
-            .unwrap_or_else(|| self.lua_window_end().max(self.top))
-            + 1;
+        let at = top + 1;
         let r = self.call_value_impl(hook, &[name, lv], from_native, Some(at));
         self.pending_is_hook = false;
         self.in_hook = false;

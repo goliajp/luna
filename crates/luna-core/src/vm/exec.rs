@@ -73,6 +73,8 @@ mod num_words;
 mod protected;
 mod settings;
 mod slow_ops;
+mod stack_inuse;
+pub(crate) mod stack_size;
 mod state;
 mod state_guards;
 mod strings;
@@ -129,32 +131,25 @@ const ERRERR_C_DEPTH: u32 = 220;
 const ERRERR_C_DEPTH_PRE54: u32 = 225;
 /// PUC 5.1 `LUAI_MAXCALLS`: nested Lua calls a 5.1 thread may make.
 const MAX_CALLS_51: u32 = 20000;
-/// Stack an xpcall handler may use past `MAX_LUA_STACK` while handling a
-/// stack overflow: PUC's 200 extra `ERRORSTACKSIZE` slots, plus the frame
-/// reserve the overflowing call was refused, so the handler's first frame
-/// fits where that one did not (PUC `ERRORSTACKSIZE - LUAI_MAXSTACK`).
-const STACK_ERR_SPACE: u32 = 200;
-/// Where a thread's stack ends for a call needing `n` slots at top `t`
-/// (both counted from the first function, as luna's slots are; PUC's
-/// slot 0 holds no function, so its `L->top - L->stack` is one more):
-/// the call fails when `t + n` passes it. PUC 5.4 and 5.5 fail when
-/// `L->top - L->stack + n > LUAI_MAXSTACK`, 5.2 and 5.3 when that sum
-/// plus `EXTRA_STACK` (5) does. 5.1 has no stack limit: its 20000-frame
-/// `LUAI_MAXCALLS` ends a recursion first (`MAX_CALLS_51`), and the cap
-/// here only bounds memory.
+/// luna's memory bound for a 5.1 stack, which PUC grows without a limit
+/// (5.1's 20000-frame `LUAI_MAXCALLS` ends a recursion first,
+/// `MAX_CALLS_51`): a call that would take it past this many slots is a
+/// "stack overflow".
+const STACK_CAP_51: u32 = (1 << 20) - 1;
 /// PUC 5.1's `BASIC_CI_SIZE`: the frames a thread's `CallInfo` array
 /// holds at first.
 const BASIC_FRAME_SIZE_51: u32 = 8;
 
-/// The lowest `lua_stack_limit` of any dialect: below it a call needs no
-/// exact check.
-const STACK_LIMIT_FLOOR: u32 = 1_000_000 - 5 - 1;
-
-fn lua_stack_limit(version: LuaVersion) -> u32 {
-    match version {
-        LuaVersion::Lua51 => (1 << 20) - 1,
-        LuaVersion::Lua52 | LuaVersion::Lua53 => 1_000_000 - 5 - 1,
-        _ => 1_000_000 - 1,
+/// [`CallGuards::stack_last`] for a stack of size `s`: PUC's `stack_last`
+/// less one for luna's numbering (its slot `s` is PUC's `s + 1`) and one
+/// for the slot a 5.4+ vararg frame checks for besides its own
+/// (`luaT_adjustvarargs`), which the exact check takes back.
+fn fast_stack_last(version: LuaVersion, s: u32) -> u32 {
+    let last = stack_size::last(version, s).saturating_sub(2);
+    if version == LuaVersion::Lua51 {
+        last.min(STACK_CAP_51)
+    } else {
+        last
     }
 }
 
