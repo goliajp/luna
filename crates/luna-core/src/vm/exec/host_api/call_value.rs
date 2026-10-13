@@ -113,7 +113,10 @@ impl Vm {
     ) -> Result<Vec<Value>, LuaError> {
         // the native stack too (a first level is no nesting: unchecked);
         // a message handler running on the error gets half the reserve
-        if self.g.nccalls > 0 && is_low(RESERVE) {
+        if self.g.nccalls == 0 {
+            // the bounds of the thread a call from the host runs on
+            crate::native_stack::low();
+        } else if crate::native_stack::is_low_read(RESERVE) {
             self.native_stack_low()?;
         }
         self.check_c_level(true)?;

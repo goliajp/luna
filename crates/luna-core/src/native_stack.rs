@@ -51,7 +51,7 @@ thread_local! {
 #[inline(always)]
 pub fn sp() -> usize {
     let b = 0u8;
-    std::hint::black_box(&b) as *const u8 as usize
+    std::ptr::addr_of!(b) as usize
 }
 
 /// The lowest address of the running thread's stack, or 1 when it is not
@@ -74,6 +74,13 @@ pub fn jit_limit() -> usize {
         1 => 0,
         low => low + JIT_RESERVE,
     }
+}
+
+/// [`is_low`] on a thread whose bounds [`low`] has read, or never low: no
+/// test for the first read, for a check made on every nested call.
+#[inline(always)]
+pub fn is_low_read(reserve: usize) -> bool {
+    sp().wrapping_sub(LOW.with(Cell::get)) < reserve
 }
 
 /// Whether fewer than `reserve` bytes of the stack are left. A stack
