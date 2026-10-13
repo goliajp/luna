@@ -667,6 +667,10 @@ optimization.
   `for` count against the local limit where PUC counts them. A chunk that
   reaches such a limit before a syntax error fails with the limit error,
   as PUC's, which generates code while it parses, does.
+- `coroutine.resume` at the C level limit leaves the thread as PUC's
+  does: in 5.1 the refused thread reads as dead, and from 5.4 a resume
+  one level below the limit kills the thread with "C stack overflow", so
+  `coroutine.close` returns `false` and the error.
 - The Lua stack follows PUC's size per thread: it grows and shrinks where
   PUC's does (calls, tail calls before the callee moves down, `__call`,
   `...`, hooks, `lua_checkstack`, the pieces of an error message up to
