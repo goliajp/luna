@@ -541,12 +541,6 @@ messages. What still differs does so on purpose:
   expose the compiler: `debug.getlocal` past the declared locals reads temporaries
   whose contents depend on register allocation; a C function's
   return-hook `ftransfer` depends on its own stack use.
-- **A compile-time limit error before a syntax error.** PUC generates
-  code while it parses, so a chunk that runs out of registers or of jump
-  range and later has a syntax error fails with the limit error; luna
-  parses the whole chunk first and reports the syntax error. A chunk
-  without one fails as PUC's does, with the same message, line and `near`
-  token.
 - **Not reproduced: PUC bugs and C undefined behaviour.** `debug.getinfo(level, ">…")`
   before 5.4 treating the option string as the function (5.1 crashes;
   luna rejects the option, as 5.4 does); 5.1 `io.lines(nil)` raising
