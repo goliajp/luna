@@ -1,4 +1,6 @@
 -- rule: lbaselib.luaB_collectgarbage.8
+-- only the explicit collections below run, whatever the automatic pacing
+collectgarbage("stop")
 local r = {}
 setmetatable({}, {__gc = function()
   r[#r+1] = tostring(collectgarbage("param", "pause"))

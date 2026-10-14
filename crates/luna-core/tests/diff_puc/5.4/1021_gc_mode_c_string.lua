@@ -1,4 +1,6 @@
 -- rule: lgc.traversetable.3 lgc.traversetable.4
+-- only the explicit collections below run, whatever the automatic pacing
+collectgarbage("stop")
 local function cnt(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n end
 local a = setmetatable({}, {__mode = "\0k"})
 a[{}] = 1

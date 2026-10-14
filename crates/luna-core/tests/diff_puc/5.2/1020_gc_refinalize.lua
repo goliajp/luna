@@ -1,4 +1,6 @@
 -- rule: lgc.luaC_checkfinalizer.2
+-- only the explicit collections below run, whatever the automatic pacing
+collectgarbage("stop")
 local n = 0
 local saved
 local mt = {__gc = function(o) n = n + 1; saved = o end}

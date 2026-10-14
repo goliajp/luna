@@ -1,3 +1,5 @@
+-- only the explicit collections below run, whatever the automatic pacing
+collectgarbage("stop")
 local ran = {}
 -- the chunk name and line differ with how the file is run
 local function nopos(ok, e) return ok, (tostring(e):gsub("[^%s(]+:%d+: ", "")) end
