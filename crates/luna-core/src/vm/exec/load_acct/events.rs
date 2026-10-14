@@ -59,10 +59,11 @@ impl Vm {
                 let (shape, pc) = (f.shape, f.pc);
                 // the PUC instructions that stand for this one, with their
                 // lines, and the constants PUC adds for it
+                // (an instruction PUC has none for stands for none)
                 let (from, to) = r.shapes.get(shape).map_or((0, 1), |sh| {
                     let a = sh.pc_map.get(pc).copied().unwrap_or(0) as usize;
                     let b = sh.pc_map.get(pc + 1).copied().unwrap_or(a as u32 + 1) as usize;
-                    (a, b.max(a + 1))
+                    (a, b.max(a))
                 });
                 for j in from..to {
                     let l = r
