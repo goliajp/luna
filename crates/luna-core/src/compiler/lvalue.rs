@@ -140,6 +140,8 @@ impl Compiler<'_> {
     /// PUC `luaK_indexed`: table `t` (a register, or an upvalue kept as
     /// one) indexed by `key`, whose code is compiled but not discharged.
     pub(super) fn indexed(&mut self, t: TabRef, key: Exp) -> Result<(TabRef, KeyRef), SyntaxError> {
+        // `luaK_indexed` uses the key
+        self.use_early();
         // PUC `yindex` gives the key a value (`luaK_exp2val`) before it is
         // used
         let key = self.exp_to_val(key)?;

@@ -222,7 +222,6 @@ impl<'a> Compiler<'a> {
         self.at(TokRef::After(key, 0));
         let ke = self.exp_to_val(ke)?;
         self.at(TokRef::After(id, 0));
-        self.use_early();
         let (t, k) = self.indexed(t, ke)?;
         self.early_emit = true;
         let e = self.index_get(t, k);
