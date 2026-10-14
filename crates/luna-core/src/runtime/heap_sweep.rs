@@ -131,7 +131,9 @@ impl Heap {
                     }
                 }
                 ObjTag::Proto => {
-                    self.acct_proto_free(&*(h as *mut Proto));
+                    if !is_uncounted(h) {
+                        self.acct_proto_free(&*(h as *mut Proto));
+                    }
                     self.free_block(h as *mut Proto);
                 }
                 ObjTag::Closure => {

@@ -160,7 +160,11 @@ impl Vm {
             self.heap.acct_source(r.source);
             self.setinput(r)?;
         }
-        self.heap.acct_obj(PucKind::Proto, s.proto);
+        // the prototype luna made without counting
+        if let Some(p) = r.opening.get(r.opened) {
+            let h = p.as_ptr() as *mut crate::runtime::heap::GcHeader;
+            self.heap.acct_promote_obj(h, PucKind::Proto, s.proto);
+        }
         if main && d != Dialect::L51 {
             self.heap.acct_source(r.source);
             self.setinput(r)?;
@@ -172,7 +176,7 @@ impl Vm {
         if d == Dialect::L55 {
             self.anchor_in_h(r, h)?;
         }
-        let ld = r.lines_defined.get(r.opened).copied().unwrap_or(0);
+        let ld = r.opening.get(r.opened).map_or(0, |p| p.line_defined);
         let shape = r.opened;
         r.opened += 1;
         r.fs.push(Fs {
