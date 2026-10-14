@@ -190,7 +190,8 @@ impl Heap {
         })?;
         // PUC 5.2+ makes a C function without upvalues a light value
         if nup > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
-            self.acct_obj(PucKind::CClosure, self.sizes.c_closure(nup));
+            let size = self.sizes.c_closure(nup);
+            self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::CClosure, size);
         }
         if fix {
             // SAFETY: `try_adopt` just linked `g` at the head of `all`

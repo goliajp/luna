@@ -294,7 +294,7 @@ impl Heap {
 
 #[path = "heap_acct.rs"]
 mod acct;
-pub(crate) use acct::PucKind;
+pub(crate) use acct::{PucKind, is_uncounted};
 #[path = "heap_alloc.rs"]
 mod alloc;
 #[path = "heap_barrier.rs"]

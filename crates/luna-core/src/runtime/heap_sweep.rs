@@ -135,29 +135,40 @@ impl Heap {
                     self.free_block(h as *mut Proto);
                 }
                 ObjTag::Closure => {
-                    let n = (*(h as *mut LuaClosure)).upvals_len as usize;
-                    self.acct_free(self.sizes.lua_closure(n));
+                    let c = &*(h as *mut LuaClosure);
+                    if !is_uncounted(h) {
+                        let size = self.closure_size(&c.proto, c.upvals_len as usize);
+                        self.acct_free(size);
+                    }
                     (*(h as *mut LuaClosure)).free_overflow(self.mem());
                     self.free_block(h as *mut LuaClosure);
                 }
                 ObjTag::Upvalue => {
-                    self.acct_free(self.sizes.upval);
+                    if !is_uncounted(h) {
+                        self.acct_free(self.sizes.upval);
+                    }
                     self.free_block(h as *mut Upvalue);
                 }
                 ObjTag::Native => {
                     let n = (&(*(h as *mut NativeClosure)).upvals).len();
-                    if n > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
+                    if (n > 0 || self.table_dialect == crate::runtime::table::Dialect::L51)
+                        && !is_uncounted(h)
+                    {
                         self.acct_free(self.sizes.c_closure(n));
                     }
                     self.free_block(h as *mut NativeClosure);
                 }
                 ObjTag::Coro => {
-                    self.acct_free(self.sizes.thread);
+                    if !is_uncounted(h) {
+                        self.acct_free(self.sizes.thread);
+                    }
                     self.free_block(h as *mut crate::runtime::Coro);
                 }
                 ObjTag::Userdata => {
                     let extra = (*(h as *mut Userdata)).extra_bytes;
-                    self.acct_free(self.sizes.userdata(1, 0) + extra);
+                    if !is_uncounted(h) {
+                        self.acct_free(self.sizes.userdata(1, 0) + extra);
+                    }
                     self.free_block(h as *mut Userdata);
                 }
                 ObjTag::Str => {

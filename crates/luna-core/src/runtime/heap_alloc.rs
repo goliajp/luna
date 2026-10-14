@@ -260,7 +260,8 @@ impl Heap {
             self.link(p as *mut GcHeader);
             Gc::from_ptr(p)
         };
-        self.acct_obj(PucKind::LuaClosure, self.sizes.lua_closure(n));
+        let size = self.closure_size(&proto, n);
+        self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::LuaClosure, size);
         // SAFETY: `g` is the closure linked just above; no other handle or reference to it exists yet
         unsafe { g.as_mut() }.init_upvals_ptr();
         Ok(g)
@@ -296,7 +297,7 @@ impl Heap {
             hdr: GcHeader::new(ObjTag::Upvalue),
             state,
         })?;
-        self.acct_obj(PucKind::Upval, self.sizes.upval);
+        self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::Upval, self.sizes.upval);
         Ok(g)
     }
 
@@ -345,7 +346,7 @@ impl Heap {
             host_stack: LVec::new(mem),
             host_state: None,
         })?;
-        self.acct_obj(PucKind::Thread, self.sizes.thread);
+        self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::Thread, self.sizes.thread);
         Ok(g)
     }
 
@@ -367,7 +368,8 @@ impl Heap {
             payload,
             writable,
         ))?;
-        self.acct_obj(PucKind::Userdata, self.sizes.userdata(1, 0));
+        let size = self.sizes.userdata(1, 0);
+        self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::Userdata, size);
         Ok(g)
     }
 }
