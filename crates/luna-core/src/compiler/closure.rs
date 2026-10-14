@@ -54,7 +54,7 @@ impl<'a> Compiler<'a> {
         }
         // each parameter is declared once its name is read; their debug
         // records come at `)` (PUC `parlist`'s `adjustlocalvars`)
-        self.puc_locals.defer = true;
+        self.puc_state.defer = true;
         let params = self.ls(body.params);
         for (i, p) in params.iter().enumerate() {
             self.at(open.plus(2 + 2 * i as i32));

@@ -5,6 +5,7 @@ use super::*;
 impl Compiler<'_> {
     /// PUC `exp2reg`: the value of `e`, and of its jump lists, in `reg`.
     pub(super) fn exp_to_reg(&mut self, e: Exp, reg: u32) -> Result<(), SyntaxError> {
+        self.use_early();
         let (v, mut t, f) = self.exp_parts(e);
         self.discharge_to_reg(v, reg)?;
         if let Exp::Jmp(pc) = v {
@@ -155,6 +156,7 @@ impl Compiler<'_> {
     }
 
     pub(super) fn exp_to_anyreg(&mut self, e: Exp) -> Result<u32, SyntaxError> {
+        self.use_early();
         match e {
             Exp::Reg(r) => Ok(r),
             Exp::Open { pc, base } => {

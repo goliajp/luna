@@ -75,8 +75,8 @@ impl<'a> Compiler<'a> {
             global: false,
         });
         self.log_new_localvar(name);
-        if self.puc_locals.defer {
-            self.puc_locals.pending += 1;
+        if self.puc_state.defer {
+            self.puc_state.pending += 1;
         } else {
             self.log(super::puc_log::PEv::LocVar);
         }

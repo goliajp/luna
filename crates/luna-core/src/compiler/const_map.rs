@@ -68,6 +68,7 @@ impl ConstList for Vec<Value> {
 
 /// A key of PUC's scanner table.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "gc-trace", derive(Debug))]
 pub(crate) enum ConstKey {
     /// an integer key (a float key with an integer value becomes one)
     Int(i64),

@@ -250,8 +250,8 @@ struct Compiler<'a> {
     /// what PUC allocates while it compiles, for the load to count (see
     /// [`puc_log`])
     puc_log: LVec<(TokRef, puc_log::PEv)>,
-    /// when the locals' entries are logged (see [`puc_log::PucLocals`])
-    puc_locals: puc_log::PucLocals,
+    /// when the locals' entries are logged (see [`puc_log::LogState`])
+    puc_state: puc_log::LogState,
 }
 
 impl<'a> Compiler<'a> {

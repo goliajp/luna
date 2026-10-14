@@ -60,6 +60,7 @@ impl Compiler<'_> {
     ) -> Result<Exp, SyntaxError> {
         // `luaK_infix`, once the operator is read
         self.at(TokRef::First(rhs, 0));
+        self.use_early();
         if self.version <= LuaVersion::Lua53 {
             return self.binop_close_classic(op, le, rhs, line, open);
         }
