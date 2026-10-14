@@ -7,7 +7,8 @@ use crate::runtime::value::NativeFn;
 use std::alloc::Layout;
 
 impl Heap {
-    /// Create (or find) a string. Short strings (≤ 40 bytes) are interned.
+    /// Create (or find) a string. Short strings (≤ 40 bytes) are interned,
+    /// in 5.1 every string.
     pub fn intern(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
         self.try_intern(bytes).unwrap_or_else(|_| {
             oom_abort(Layout::array::<u8>(bytes.len()).unwrap_or(Layout::new::<u8>()))
@@ -35,7 +36,8 @@ impl Heap {
     /// [`Heap::try_intern`] with the failure as `None`: one register to
     /// return, where the `Result` takes two.
     pub(crate) fn intern_or_none(&mut self, bytes: &[u8]) -> Option<Gc<LuaStr>> {
-        if bytes.len() <= string::MAX_SHORT_LEN {
+        // 5.1 interns strings of every length
+        if bytes.len() <= string::MAX_SHORT_LEN || self.hash51 {
             let (p, is_new) = self
                 .strings
                 .intern(self.mem.mem(), bytes, self.seed, self.hash51)
@@ -92,6 +94,9 @@ impl Heap {
             buf[a.len()..n].copy_from_slice(b);
             return self.try_intern(&buf[..n]);
         }
+        if self.hash51 {
+            return self.try_intern(&[a, b].concat());
+        }
         let p = string::alloc_long_pair(self.mem.mem(), a, b, self.seed, self.hash51)?;
         // SAFETY: `alloc_long_pair` just allocated `p`, linked nowhere yet
         unsafe { self.link(p as *mut GcHeader) };
@@ -103,7 +108,7 @@ impl Heap {
     /// The interned string with `bytes`, if one has been made; never
     /// allocates. A short name no string exists for is no table's key.
     pub fn find_interned(&self, bytes: &[u8]) -> Option<Gc<LuaStr>> {
-        if bytes.len() > string::MAX_SHORT_LEN {
+        if bytes.len() > string::MAX_SHORT_LEN && !self.hash51 {
             return None;
         }
         let p = self.strings.find(bytes, self.seed, self.hash51)?;

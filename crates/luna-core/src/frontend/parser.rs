@@ -27,7 +27,7 @@ mod stat;
 mod streams;
 mod token_source;
 mod upval51;
-pub(crate) use marks::{Found, Marks, record_marks, record_strings, scan_buf_grown, token_at};
+pub(crate) use marks::{Found, Marks, record_marks, record_strings, scan, token_at};
 use operators::{UNARY_PRIORITY, bin_op_of, bin_priority, un_op_of};
 pub(crate) use repair::completed;
 pub(crate) use scratch::{Failed, ParseScratch, Parsed};

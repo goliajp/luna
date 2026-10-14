@@ -5,16 +5,22 @@
 //! code generator would allocate, each step with the token PUC's scanner is
 //! on (`compiler::puc_log`). Here a second, recording parse finds the
 //! tokens and the strings the scanner makes for them, and the two are
-//! replayed in PUC's order: the main closure, the scanner's string table
-//! (a real table, garbage once the load is done, as PUC's is), the
-//! prototypes and the growth and final trimming of their arrays, the
-//! strings, the scanner's buffer and the parser's descriptor arrays.
+//! replayed in PUC's order: the main closure, the tables the parser keys
+//! strings and constants in (real tables, garbage once the load is done,
+//! as PUC's are), the prototypes and the growth and final trimming of their
+//! arrays, the strings, the scanner's buffer and the parser's descriptor
+//! arrays. Which tables there are differs by dialect: 5.1 and 5.2 give each
+//! function its own, 5.3 and 5.4 have one for the chunk, 5.5 has one for
+//! the chunk's strings and one per function for its constants.
 
 use super::*;
 use crate::compiler::puc_log::PEv;
-use crate::runtime::Proto;
+use crate::frontend::parser::scan::{ScanKind, Scanned};
 use crate::runtime::heap::PucKind;
 use crate::runtime::table::{Dialect, TableError};
+use crate::runtime::{Proto, Table};
+
+mod events;
 
 /// One array PUC grows by doubling (`luaM_growvector`) and trims when the
 /// function ends.
@@ -63,6 +69,9 @@ struct Fs {
     p: Arr,
     loc: Arr,
     up: Arr,
+    /// the function's own table: 5.1 and 5.2 key its strings and constants
+    /// in it, 5.5 its constants (`kcache`)
+    h: Option<Gc<Table>>,
     prev_line: u32,
     iwthabs: u32,
     /// the last instruction's line entry: absolute, and the line before it
@@ -76,11 +85,12 @@ struct Fs {
 }
 
 /// The replay's state.
-struct Replay {
+struct Replay<'s> {
     d: Dialect,
     fs: Vec<Fs>,
-    /// the scanner's string table
-    h: Gc<crate::runtime::Table>,
+    /// the chunk's table (5.3+): the scanner's strings, 5.3 and 5.4's
+    /// constants, 5.5's anchors
+    h: Option<Gc<Table>>,
     /// the scanner's buffer
     buff: usize,
     actvar: Arr,
@@ -98,14 +108,19 @@ struct Replay {
     closed: usize,
     /// the chunk name, as the prototypes hold it
     source: Gc<crate::runtime::LuaStr>,
+    /// the strings the scanner made, by token
+    scanned: &'s Scanned,
+    /// a distinct key for each object 5.5 anchors that luna has no object
+    /// for
+    anchors: usize,
 }
 
-/// A failed store into the scanner table: out of memory (its keys are
-/// strings, numbers, booleans and itself, all valid).
+/// A failed store into a parser table: out of memory (its keys are
+/// strings, numbers, booleans and tables, all valid).
 fn table_err(e: TableError) -> SyntaxError {
     match e {
         TableError::Memory(o) => o.into(),
-        _ => unreachable!("a scanner-table key is a valid key"),
+        _ => unreachable!("a parser-table key is a valid key"),
     }
 }
 
@@ -137,17 +152,13 @@ impl Vm {
         let log = crate::compiler::puc_log::resolve(&self.compile_scratch.puc_log, chunk, &marks);
         let d = self.heap.table_dialect;
         let s = self.heap.sizes;
-        // `luaY_parser`: the main closure, the scanner's table, the main
-        // prototype, the scanner's buffer
-        self.heap.acct_obj(PucKind::LuaClosure, s.lua_closure(1));
-        let h = self.heap.try_new_table()?;
         let (mut lines, mut closing) = (Vec::new(), Vec::new());
         walk(proto, &mut lines, &mut closing);
         let shapes = crate::vm::dump::shapes(&proto, self.version).unwrap_or_default();
         let mut r = Replay {
             d,
             fs: Vec::new(),
-            h,
+            h: None,
             buff: 0,
             actvar: Arr::default(),
             gt: Arr::default(),
@@ -158,23 +169,62 @@ impl Vm {
             closing,
             closed: 0,
             source: proto.source,
+            scanned: &scanned,
+            anchors: 0,
         };
+        // `luaY_parser` (5.5 `f_parser`) before the main function opens
+        match d {
+            Dialect::L51 => {}
+            Dialect::L52 => self.heap.acct_obj(PucKind::LuaClosure, s.lua_closure(1)),
+            Dialect::L53 | Dialect::L54 => {
+                self.heap.acct_obj(PucKind::LuaClosure, s.lua_closure(1));
+                r.h = Some(self.heap.try_new_table()?);
+            }
+            Dialect::L55 => {
+                // the anchor table, then the closure anchored in it
+                r.h = Some(self.heap.try_new_table()?);
+                self.heap.acct_obj(PucKind::LuaClosure, s.lua_closure(1));
+                self.anchor_in_h(&mut r, None)?;
+            }
+        }
+        self.replay_log(&mut r, &log)?;
+        // 5.1's `f_parser` makes the closure now; the others give it its
+        // upvalue (`luaF_initupvals`)
+        if d == Dialect::L51 {
+            self.heap.acct_obj(PucKind::LuaClosure, s.lua_closure(0));
+        } else {
+            self.heap.acct_obj(PucKind::Upval, s.upval);
+        }
+        // `luaD_protectedparser` frees the buffer and the descriptor arrays
+        self.heap.acct_block(r.buff, 0);
+        if d != Dialect::L51 {
+            let (vd, ld) = crate::runtime::puc_size::dyd_sizes(d);
+            for (a, e) in [(r.actvar, vd), (r.gt, ld), (r.label, ld)] {
+                self.heap.acct_block(a.cap * e, 0);
+            }
+        }
+        Ok(())
+    }
+
+    /// The log's events, with what the scanner does up to each one's token:
+    /// it fills its buffer while it reads a token, then makes the token's
+    /// string.
+    fn replay_log(&mut self, r: &mut Replay, log: &[(i64, PEv)]) -> Result<(), SyntaxError> {
+        let scanned = r.scanned;
         let mut strs = scanned.strings.iter().peekable();
         let mut peaks = scanned.peaks.iter().peekable();
-        for &(tok, ev) in &log {
+        for &(tok, ev) in log {
             #[cfg(feature = "gc-trace")]
             self.heap.trace.line(format_args!("E {tok} {ev:?}"));
-            // what the scanner does up to this token: it fills its buffer
-            // while it reads a token, then makes the token's string
             loop {
                 let p = peaks.peek().map(|&&(t, _)| i64::from(t));
-                let st = strs.peek().map(|(t, _)| i64::from(*t));
+                let st = strs.peek().map(|(t, ..)| i64::from(*t));
                 match (p, st) {
                     (Some(p), _) if p <= tok && st.is_none_or(|st| p <= st) => {
                         let (_, peak) = peaks.next().expect("peeked");
                         // each save that overflows grows the buffer once
                         while r.buff < *peak as usize {
-                            let size = crate::frontend::parser::scan_buf_grown(
+                            let size = crate::frontend::parser::scan::grown(
                                 self.version,
                                 r.buff,
                                 r.buff + 1,
@@ -184,254 +234,47 @@ impl Vm {
                         }
                     }
                     (_, Some(st)) if st <= tok => {
-                        let (_, bytes) = strs.next().expect("peeked");
-                        self.replay_scan(&mut r, bytes)?;
+                        let (_, bytes, kind) = strs.next().expect("peeked");
+                        self.replay_scan(r, bytes, *kind)?;
                     }
                     _ => break,
                 }
             }
-            self.replay_event(&mut r, ev)?;
-        }
-        // `luaF_initupvals`, then `luaD_protectedparser` frees the buffer and
-        // the descriptor arrays
-        self.heap.acct_obj(PucKind::Upval, s.upval);
-        self.heap.acct_block(r.buff, 0);
-        let (vd, ld) = crate::runtime::puc_size::dyd_sizes(d);
-        for (a, e) in [(r.actvar, vd), (r.gt, ld), (r.label, ld)] {
-            self.heap.acct_block(a.cap * e, 0);
+            self.replay_event(r, tok, ev)?;
         }
         Ok(())
     }
 
-    /// The scanner makes the string of a token (`luaX_newstring`): the
-    /// string, then the table entry that anchors it.
-    fn replay_scan(&mut self, r: &mut Replay, bytes: &[u8]) -> Result<(), SyntaxError> {
-        let s = self.heap.try_intern(bytes)?;
-        let key = Value::Str(s);
-        // SAFETY: `r.h` is the scanner table made for this load, held only
-        // by the replay
-        let t = unsafe { r.h.as_mut() };
-        if t.get(key).is_nil() {
-            t.set(&mut self.heap, key, key).map_err(table_err)?;
-        }
-        Ok(())
-    }
-
-    fn replay_event(&mut self, r: &mut Replay, ev: PEv) -> Result<(), SyntaxError> {
-        let s = self.heap.sizes;
-        let lineinfo_elem = if matches!(r.d, Dialect::L54 | Dialect::L55) {
-            1
-        } else {
-            4
+    /// 5.5 `luaD_anchorobj`: an object keyed in the chunk's table (`t`, or
+    /// one luna has no object for).
+    fn anchor_in_h(&mut self, r: &mut Replay, t: Option<Gc<Table>>) -> Result<(), SyntaxError> {
+        let key = match t {
+            Some(t) => Value::Table(t),
+            None => {
+                r.anchors += 1;
+                Value::LightUserdata(r.anchors as *const ())
+            }
         };
-        match ev {
-            PEv::Open => {
-                let ld = r.lines_defined.get(r.opened).copied().unwrap_or(0);
-                if let Some(parent) = r.fs.last_mut() {
-                    // `addprototype`: the parent's array, then the new prototype
-                    parent.p.push(&mut self.heap, s.ptr);
-                }
-                // the parser's own string of the chunk name (`luaS_new`):
-                // 5.1 makes it first, the others after the main prototype
-                if r.opened == 0 && r.d == Dialect::L51 {
-                    self.heap.acct_source(r.source);
-                }
-                self.heap.acct_obj(PucKind::Proto, s.proto);
-                if r.opened == 0 && r.d != Dialect::L51 {
-                    self.heap.acct_source(r.source);
-                }
-                if r.opened == 0 {
-                    // `luaX_setinput` sizes the scanner's buffer
-                    r.buff = 32;
-                    self.heap.acct_block(0, 32);
-                }
-                let shape = r.opened;
-                r.opened += 1;
-                r.fs.push(Fs {
-                    prev_line: ld,
-                    shape,
-                    ..Fs::default()
-                });
-            }
-            PEv::Prologue => {
-                // a vararg function's first instructions (`setvararg`)
-                let Some(f) = r.fs.last() else {
-                    return Ok(());
-                };
-                let (shape, ld) = (f.shape, f.prev_line);
-                let pro = r
-                    .shapes
-                    .get(shape)
-                    .map_or(0, |sh| sh.pc_map.first().copied().unwrap_or(0));
-                for j in 0..pro as usize {
-                    let line = r.shapes[shape].lines.get(j).copied().unwrap_or(ld);
-                    self.replay_code(r, line);
-                }
-            }
-            PEv::Lit(text) => self.replay_scan(r, text.as_bytes())?,
-            PEv::Close => {
-                let mut f = r.fs.pop().unwrap_or_default();
-                let h = &mut self.heap;
-                f.code.trim(h, 4);
-                f.line.trim(h, lineinfo_elem);
-                f.abs.trim(h, s.abslineinfo);
-                f.k.trim(h, s.tvalue);
-                f.p.trim(h, s.ptr);
-                f.loc.trim(h, s.locvar);
-                f.up.trim(h, s.upvaldesc);
-                if let Some(p) = r.closing.get(r.closed) {
-                    let arrays = [
-                        (f.code, 4),
-                        (f.p, s.ptr),
-                        (f.k, s.tvalue),
-                        (f.line, lineinfo_elem),
-                        (f.abs, s.abslineinfo),
-                        (f.loc, s.locvar),
-                        (f.up, s.upvaldesc),
-                    ];
-                    p.puc_arrays.set(arrays.map(|(a, e)| (a.n * e) as u32));
-                }
-                r.closed += 1;
-            }
-            PEv::Code(line) => {
-                let Some(f) = r.fs.last() else {
-                    return Ok(());
-                };
-                let (shape, pc) = (f.shape, f.pc);
-                // the PUC instructions that stand for this one, with their
-                // lines, and the constants PUC adds for it
-                let (from, to) = r.shapes.get(shape).map_or((0, 1), |sh| {
-                    let a = sh.pc_map.get(pc).copied().unwrap_or(0) as usize;
-                    let b = sh.pc_map.get(pc + 1).copied().unwrap_or(a as u32 + 1) as usize;
-                    (a, b.max(a + 1))
-                });
-                for j in from..to {
-                    let l = r
-                        .shapes
-                        .get(shape)
-                        .and_then(|sh| sh.lines.get(j).copied())
-                        .unwrap_or(line);
-                    self.replay_code(r, l);
-                }
-                let added = r
-                    .shapes
-                    .get(shape)
-                    .map_or(0, |sh| sh.k_added.iter().filter(|&&p| p == pc).count());
-                for _ in 0..added {
-                    if let Some(f) = r.fs.last_mut() {
-                        f.k.push(&mut self.heap, s.tvalue);
-                    }
-                }
-                if let Some(f) = r.fs.last_mut() {
-                    f.pc += 1;
-                }
-            }
-            PEv::CodeUp(line) => {
-                let child = r.fs.pop();
-                let coded = self.replay_event(r, PEv::Code(line));
-                r.fs.extend(child);
-                coded?;
-            }
-            PEv::Use => {}
-            PEv::Uncode => {
-                if let Some(f) = r.fs.last_mut() {
-                    f.pc -= 1;
-                    f.code.n -= 1;
-                    f.line.n -= 1;
-                    // 5.4+ `removelastlineinfo`
-                    if f.last_abs {
-                        f.abs.n -= 1;
-                        f.iwthabs = 129;
-                    } else {
-                        f.prev_line = f.last_prev;
-                        f.iwthabs = f.iwthabs.saturating_sub(1);
-                    }
-                }
-            }
-            PEv::Const(key) => {
-                // `addk` keys the constant in the scanner table, then grows
-                // the constant array; 5.5 grows it first
-                let k_first = r.d == Dialect::L55;
-                if k_first && let Some(f) = r.fs.last_mut() {
-                    f.k.push(&mut self.heap, s.tvalue);
-                }
-                if let Some(k) = key.and_then(|k| self.scanner_key(r, k)) {
-                    // SAFETY: as in `replay_scan`
-                    let t = unsafe { r.h.as_mut() };
-                    if t.get(k).is_nil() {
-                        t.set(&mut self.heap, k, Value::Int(0)).map_err(table_err)?;
-                    }
-                }
-                if !k_first && let Some(f) = r.fs.last_mut() {
-                    f.k.push(&mut self.heap, s.tvalue);
-                }
-            }
-            PEv::Upval(depth) => {
-                if let Some(f) = r.fs.get_mut(depth as usize) {
-                    f.up.push(&mut self.heap, s.upvaldesc);
-                }
-            }
-            PEv::LocVar => {
-                if let Some(f) = r.fs.last_mut() {
-                    f.loc.push(&mut self.heap, s.locvar);
-                }
-            }
-            PEv::ActVar(n) => {
-                // `new_localvar` asks for room past the new entry
-                let (vd, _) = crate::runtime::puc_size::dyd_sizes(r.d);
-                r.actvar.reach(&mut self.heap, n as usize + 1, vd);
-                r.actvar.n = n as usize;
-            }
-            PEv::Goto(n) => {
-                let (_, ld) = crate::runtime::puc_size::dyd_sizes(r.d);
-                r.gt.reach(&mut self.heap, n as usize, ld);
-            }
-            PEv::Label(n) => {
-                let (_, ld) = crate::runtime::puc_size::dyd_sizes(r.d);
-                r.label.reach(&mut self.heap, n as usize, ld);
-            }
-        }
-        Ok(())
-    }
-
-    /// One PUC instruction on `line` (`luaK_code`): the code array, then
-    /// the line info (5.4+ `savelineinfo`, with its absolute entries).
-    fn replay_code(&mut self, r: &mut Replay, line: u32) {
-        let d = r.d;
-        let s = self.heap.sizes;
-        let Some(f) = r.fs.last_mut() else {
-            return;
-        };
-        let h = &mut self.heap;
-        f.code.push(h, 4);
-        if matches!(d, Dialect::L54 | Dialect::L55) {
-            let dif = i64::from(line) - i64::from(f.prev_line);
-            let wthabs = f.iwthabs;
-            f.iwthabs += 1;
-            f.last_prev = f.prev_line;
-            f.last_abs = dif.abs() >= 0x80 || wthabs >= 128;
-            if f.last_abs {
-                f.abs.push(h, s.abslineinfo);
-                f.iwthabs = 1;
-            }
-            f.prev_line = line;
-            f.line.push(h, 1);
-        } else {
-            f.line.push(h, 4);
+        match r.h {
+            Some(h) => self.set_in(h, key, key),
+            None => Ok(()),
         }
     }
 
-    /// The scanner-table key of a constant that is not a string (a string
-    /// constant's key is the scanner's own string, already there).
-    fn scanner_key(&self, r: &Replay, k: crate::compiler::const_map::ConstKey) -> Option<Value> {
-        use crate::compiler::const_map::ConstKey as K;
-        match k {
-            K::Int(i) => Some(Value::Int(i)),
-            K::Float(b) => Some(Value::Float(f64::from_bits(b))),
-            K::Bool(b) => Some(Value::Bool(b)),
-            K::Nil => Some(Value::Table(r.h)),
-            K::Zero => Some(Value::Int(0)),
-            K::LightInt(_) | K::Str(_) | K::Bytes(..) => None,
+    /// `t[k] = v` in a parser table, when `k` is not there yet (PUC
+    /// `luaH_set` on a new key; a key already there allocates nothing).
+    fn set_in(&mut self, t: Gc<Table>, k: Value, v: Value) -> Result<(), SyntaxError> {
+        if !t.get(k).is_nil() {
+            return Ok(());
         }
+        self.store_in(t, k, v)
+    }
+
+    /// `t[k] = v` in a parser table.
+    fn store_in(&mut self, t: Gc<Table>, k: Value, v: Value) -> Result<(), SyntaxError> {
+        // SAFETY: parser tables are made for this load and held only by
+        // the replay
+        let t = unsafe { t.as_mut() };
+        t.set(&mut self.heap, k, v).map_err(table_err)
     }
 }

@@ -26,9 +26,9 @@ pub(crate) enum PEv {
     Prologue,
     /// the parser makes a string of its own (`luaX_newliteral`)
     Lit(&'static str),
-    /// a new constant, under its scanner-table key (none: PUC adds it
-    /// under no key)
-    Const(Option<const_map::ConstKey>),
+    /// a new constant, with luna's key for it (none: PUC adds it under no
+    /// key), and its value (from which the replay makes PUC's key)
+    Const(Option<const_map::ConstKey>, Value),
     /// a new upvalue descriptor of the function at this depth (0: the
     /// main function)
     Upval(u32),
@@ -84,7 +84,16 @@ impl<'a> Compiler<'a> {
         if let Some(lit) = puc_literal(name) {
             self.log(PEv::Lit(lit));
         }
+        self.log_early_locvar();
         self.log_actvar();
+    }
+
+    /// Up to 5.3 `new_localvar` registers the variable's debug record at
+    /// once; 5.4 waits for `adjustlocalvars`.
+    fn log_early_locvar(&mut self) {
+        if self.version <= LuaVersion::Lua53 {
+            self.log(PEv::LocVar);
+        }
     }
 
     /// Log the parser's entries for the local `name` at token `at`, where
@@ -95,6 +104,7 @@ impl<'a> Compiler<'a> {
         if let Some(lit) = puc_literal(name) {
             self.log(PEv::Lit(lit));
         }
+        self.log_early_locvar();
         let n = self.actvars() + 1;
         self.log(PEv::ActVar(n));
         self.cur = cur;

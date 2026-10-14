@@ -24,6 +24,9 @@ pub(crate) struct PucState {
     /// calls are now
     pub(crate) ci_count: usize,
     pub(crate) depth: usize,
+    /// 5.1 and 5.2: the size of the buffer concatenations are made in
+    /// (`G(L)->buff`)
+    pub(crate) gbuff: usize,
 }
 
 impl Default for PucState {
@@ -36,6 +39,7 @@ impl Default for PucState {
             pins: Vec::new(),
             ci_count: 0,
             depth: 0,
+            gbuff: 0,
         }
     }
 }
@@ -154,5 +158,7 @@ impl Heap {
 
 #[path = "heap_acct_boot.rs"]
 mod boot;
+#[path = "heap_acct_fmt.rs"]
+mod fmt;
 #[path = "heap_acct_parts.rs"]
 mod parts;
