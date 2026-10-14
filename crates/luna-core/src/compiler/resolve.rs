@@ -74,12 +74,9 @@ impl<'a> Compiler<'a> {
             reg: Some(reg),
             global: false,
         });
-        if let Some(lit) = puc_literal(name) {
-            self.log(super::puc_log::PEv::Lit(lit));
-        }
-        self.log_actvar();
-        if self.defer_locvars {
-            self.pending_locvars += 1;
+        self.log_new_localvar(name);
+        if self.puc_locals.defer {
+            self.puc_locals.pending += 1;
         } else {
             self.log(super::puc_log::PEv::LocVar);
         }
@@ -103,7 +100,7 @@ impl<'a> Compiler<'a> {
             reg: None,
             global: false,
         });
-        self.log_actvar();
+        self.log_new_localvar(name);
     }
 
     /// The compile-time constant `name` refers to here, if it does: the
@@ -234,21 +231,4 @@ impl<'a> Compiler<'a> {
             .filter(|l| l.read_only)
             .map(|l| l.name)
     }
-}
-
-/// The names of locals PUC's parser makes its own strings for.
-fn puc_literal(name: &str) -> Option<&'static str> {
-    [
-        "self",
-        "arg",
-        "(for index)",
-        "(for limit)",
-        "(for step)",
-        "(for generator)",
-        "(for state)",
-        "(for control)",
-        "(vararg table)",
-    ]
-    .into_iter()
-    .find(|&l| l == name)
 }

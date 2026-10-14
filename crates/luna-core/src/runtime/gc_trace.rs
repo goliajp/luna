@@ -27,6 +27,12 @@ impl Default for Trace {
 }
 
 impl Trace {
+    pub(crate) fn flush(&mut self) {
+        if let Some(o) = &mut self.out {
+            let _ = o.flush();
+        }
+    }
+
     pub(crate) fn line(&mut self, args: std::fmt::Arguments<'_>) {
         if let Some(o) = &mut self.out {
             let _ = o.write_fmt(args);

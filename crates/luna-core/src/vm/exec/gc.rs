@@ -289,6 +289,11 @@ impl Vm {
     #[doc(hidden)]
     pub fn trace_mark(&mut self, name: &str) {
         self.heap.trace.line(format_args!("M {name}"));
+        // `R38_EXIT_AT=<name>`: stop the program at this mark
+        if std::env::var("R38_EXIT_AT").is_ok_and(|at| at == name) {
+            self.heap.trace.flush();
+            std::process::exit(0);
+        }
     }
 
     /// Whether a `__gc` finalizer is currently running (so `collectgarbage`

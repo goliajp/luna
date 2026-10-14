@@ -88,6 +88,12 @@ struct Replay {
     opened: usize,
     /// PUC's layout of each function, in the order they open
     shapes: Vec<crate::vm::dump::Shape>,
+    /// the prototypes in the order their functions close (postorder), and
+    /// how many have closed
+    closing: Vec<Gc<Proto>>,
+    closed: usize,
+    /// the chunk name, as the prototypes hold it
+    source: Gc<crate::runtime::LuaStr>,
 }
 
 /// A failed store into the scanner table: out of memory (its keys are
@@ -100,12 +106,13 @@ fn table_err(e: TableError) -> SyntaxError {
 }
 
 /// The definition line of each prototype under `p`, in the order the
-/// functions open (preorder).
-fn lines_defined(p: Gc<Proto>, out: &mut Vec<u32>) {
-    out.push(p.line_defined);
+/// functions open (preorder), and the prototypes in the order they close.
+fn walk(p: Gc<Proto>, lines: &mut Vec<u32>, closing: &mut Vec<Gc<Proto>>) {
+    lines.push(p.line_defined);
     for &c in p.protos.iter() {
-        lines_defined(c, out);
+        walk(c, lines, closing);
     }
+    closing.push(p);
 }
 
 impl Vm {
@@ -121,7 +128,7 @@ impl Vm {
         if self.heap.puc.silent > 0 {
             return Ok(());
         }
-        let (marks, strings) =
+        let (marks, scanned) =
             crate::frontend::parser::record_strings(src, self.version, self.g.nccalls)?;
         let log = crate::compiler::puc_log::resolve(&self.compile_scratch.puc_log, chunk, &marks);
         let d = self.heap.table_dialect;
@@ -130,8 +137,8 @@ impl Vm {
         // prototype, the scanner's buffer
         self.heap.acct_obj(PucKind::LuaClosure, s.lua_closure(1));
         let h = self.heap.try_new_table()?;
-        let mut lines = Vec::new();
-        lines_defined(proto, &mut lines);
+        let (mut lines, mut closing) = (Vec::new(), Vec::new());
+        walk(proto, &mut lines, &mut closing);
         let shapes = crate::vm::dump::shapes(&proto, self.version).unwrap_or_default();
         let mut r = Replay {
             d,
@@ -144,15 +151,35 @@ impl Vm {
             lines_defined: lines,
             opened: 0,
             shapes,
+            closing,
+            closed: 0,
+            source: proto.source,
         };
-        let mut strs = strings.iter().peekable();
+        let mut strs = scanned.strings.iter().peekable();
+        let mut peaks = scanned.peaks.iter().peekable();
         for &(tok, ev) in &log {
-            while let Some((t, bytes)) = strs.peek() {
-                if i64::from(*t) > tok {
-                    break;
+            // what the scanner does up to this token: it fills its buffer
+            // while it reads a token, then makes the token's string
+            loop {
+                let p = peaks.peek().map(|&&(t, _)| i64::from(t));
+                let st = strs.peek().map(|(t, _)| i64::from(*t));
+                match (p, st) {
+                    (Some(p), _) if p <= tok && st.is_none_or(|st| p <= st) => {
+                        let (_, peak) = peaks.next().expect("peeked");
+                        let size = crate::frontend::parser::scan_buf_grown(
+                            self.version,
+                            r.buff,
+                            *peak as usize,
+                        );
+                        self.heap.acct_block(r.buff, size);
+                        r.buff = size;
+                    }
+                    (_, Some(st)) if st <= tok => {
+                        let (_, bytes) = strs.next().expect("peeked");
+                        self.replay_scan(&mut r, bytes)?;
+                    }
+                    _ => break,
                 }
-                self.replay_scan(&mut r, bytes)?;
-                strs.next();
             }
             self.replay_event(&mut r, ev)?;
         }
@@ -195,7 +222,15 @@ impl Vm {
                     // `addprototype`: the parent's array, then the new prototype
                     parent.p.push(&mut self.heap, s.ptr);
                 }
+                // the parser's own string of the chunk name (`luaS_new`):
+                // 5.1 makes it first, the others after the main prototype
+                if r.opened == 0 && r.d == Dialect::L51 {
+                    self.heap.acct_source(r.source);
+                }
                 self.heap.acct_obj(PucKind::Proto, s.proto);
+                if r.opened == 0 && r.d != Dialect::L51 {
+                    self.heap.acct_source(r.source);
+                }
                 if r.opened == 0 {
                     // `luaX_setinput` sizes the scanner's buffer
                     r.buff = 32;
@@ -235,6 +270,19 @@ impl Vm {
                 f.p.trim(h, s.ptr);
                 f.loc.trim(h, s.locvar);
                 f.up.trim(h, s.upvaldesc);
+                if let Some(p) = r.closing.get(r.closed) {
+                    let arrays = [
+                        (f.code, 4),
+                        (f.p, s.ptr),
+                        (f.k, s.tvalue),
+                        (f.line, lineinfo_elem),
+                        (f.abs, s.abslineinfo),
+                        (f.loc, s.locvar),
+                        (f.up, s.upvaldesc),
+                    ];
+                    p.puc_arrays.set(arrays.map(|(a, e)| (a.n * e) as u32));
+                }
+                r.closed += 1;
             }
             PEv::Code(line) => {
                 let Some(f) = r.fs.last() else {
@@ -268,6 +316,12 @@ impl Vm {
                 if let Some(f) = r.fs.last_mut() {
                     f.pc += 1;
                 }
+            }
+            PEv::CodeUp(line) => {
+                let child = r.fs.pop();
+                let coded = self.replay_event(r, PEv::Code(line));
+                r.fs.extend(child);
+                coded?;
             }
             PEv::Uncode => {
                 if let Some(f) = r.fs.last_mut() {
