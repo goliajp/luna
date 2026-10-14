@@ -28,15 +28,16 @@ impl Vm {
         text: ScanText,
         kind: ScanKind,
     ) -> Result<(), SyntaxError> {
-        let ScanText::Sym(sym) = text else {
-            return self.replay_scan(r, text.bytes(r.names, r.src), kind);
+        let (names, src) = (r.names, r.src);
+        let slot = match text {
+            ScanText::Sym(sym) => &mut r.syms[sym.0 as usize],
+            ScanText::Reserved(k, _) => &mut r.reserved[usize::from(k)],
         };
-        let i = sym.0 as usize;
-        let s = match r.syms[i].0 {
+        let s = match slot.0 {
             Some(s) => s,
             None => {
-                let s = self.heap.try_intern(r.names.bytes(sym))?;
-                r.syms[i].0 = Some(s);
+                let s = self.heap.try_intern(text.bytes(names, src))?;
+                slot.0 = Some(s);
                 s
             }
         };
@@ -45,20 +46,67 @@ impl Vm {
         };
         // a table's keys stay until the load is done
         let id = r.table_id();
-        if r.syms[i].1 != id {
+        let slot = match text {
+            ScanText::Sym(sym) => &mut r.syms[sym.0 as usize].1,
+            ScanText::Reserved(k, _) => &mut r.reserved[usize::from(k)].1,
+        };
+        if *slot != id {
+            *slot = id;
             self.set_in(t, Value::Str(s), Value::Bool(true))?;
-            r.syms[i].1 = id;
         }
         Ok(())
     }
 
     /// One event of the log, logged at token `tok`.
+    #[inline]
     pub(super) fn replay_event(
         &mut self,
         r: &mut Replay,
         tok: i64,
         ev: PEv,
     ) -> Result<(), SyntaxError> {
+        match ev {
+            PEv::Code(line) => {
+                self.replay_instruction(r, line);
+                Ok(())
+            }
+            ev => self.replay_other(r, tok, ev),
+        }
+    }
+
+    /// An instruction luna emitted on `line`: the PUC instructions that
+    /// stand for it, with their lines, and the constants PUC adds for it
+    /// (an instruction PUC has none for stands for none).
+    fn replay_instruction(&mut self, r: &mut Replay, line: u32) {
+        let Some(f) = r.fs.last() else {
+            return;
+        };
+        let (shape, pc) = (f.shape, f.pc);
+        let Some(sh) = r.shapes.get(shape) else {
+            self.replay_code(r, line);
+            if let Some(f) = r.fs.last_mut() {
+                f.pc += 1;
+            }
+            return;
+        };
+        let a = sh.pc_map.get(pc).copied().unwrap_or(0) as usize;
+        let b = sh.pc_map.get(pc + 1).copied().unwrap_or(a as u32 + 1) as usize;
+        for j in a..b.max(a) {
+            let l = r.shapes[shape].lines.get(j).copied().unwrap_or(line);
+            self.replay_code(r, l);
+        }
+        let added = r.shapes[shape].k_added.iter().filter(|&&p| p == pc).count();
+        let tvalue = self.heap.sizes.tvalue;
+        if let Some(f) = r.fs.last_mut() {
+            for _ in 0..added {
+                f.k.push(&mut self.heap, tvalue);
+            }
+            f.pc += 1;
+        }
+    }
+
+    /// An event other than an instruction.
+    fn replay_other(&mut self, r: &mut Replay, tok: i64, ev: PEv) -> Result<(), SyntaxError> {
         let s = self.heap.sizes;
         match ev {
             PEv::Open => self.replay_open(r)?,
@@ -79,40 +127,7 @@ impl Vm {
             }
             PEv::Lit(text) => self.replay_scan(r, text.as_bytes(), ScanKind::Str)?,
             PEv::Close => self.replay_close(r, tok)?,
-            PEv::Code(line) => {
-                let Some(f) = r.fs.last() else {
-                    return Ok(());
-                };
-                let (shape, pc) = (f.shape, f.pc);
-                // the PUC instructions that stand for this one, with their
-                // lines, and the constants PUC adds for it
-                // (an instruction PUC has none for stands for none)
-                let (from, to) = r.shapes.get(shape).map_or((0, 1), |sh| {
-                    let a = sh.pc_map.get(pc).copied().unwrap_or(0) as usize;
-                    let b = sh.pc_map.get(pc + 1).copied().unwrap_or(a as u32 + 1) as usize;
-                    (a, b.max(a))
-                });
-                for j in from..to {
-                    let l = r
-                        .shapes
-                        .get(shape)
-                        .and_then(|sh| sh.lines.get(j).copied())
-                        .unwrap_or(line);
-                    self.replay_code(r, l);
-                }
-                let added = r
-                    .shapes
-                    .get(shape)
-                    .map_or(0, |sh| sh.k_added.iter().filter(|&&p| p == pc).count());
-                for _ in 0..added {
-                    if let Some(f) = r.fs.last_mut() {
-                        f.k.push(&mut self.heap, s.tvalue);
-                    }
-                }
-                if let Some(f) = r.fs.last_mut() {
-                    f.pc += 1;
-                }
-            }
+            PEv::Code(line) => self.replay_instruction(r, line),
             PEv::CodeUp(line) => {
                 let child = r.fs.pop();
                 let coded = self.replay_event(r, tok, PEv::Code(line));

@@ -16,12 +16,16 @@ pub(crate) enum ScanKind {
 }
 
 /// The text of a scanned string: an interned name or literal of the
-/// chunk, or a reserved word's place in the source.
+/// chunk, or a reserved word (its number among them, from 0) and its
+/// place in the source.
 #[derive(Clone, Copy)]
 pub(crate) enum ScanText {
     Sym(crate::frontend::names::Sym),
-    Span(crate::frontend::span::Span),
+    Reserved(u8, crate::frontend::span::Span),
 }
+
+/// How many reserved words there are (see [`ScanText::Reserved`]).
+pub(crate) const RESERVED: usize = 23;
 
 impl ScanText {
     /// The bytes, in the chunk's names and its source.
@@ -32,7 +36,7 @@ impl ScanText {
     ) -> &'a [u8] {
         match self {
             ScanText::Sym(s) => names.bytes(s),
-            ScanText::Span(s) => s.slice(src),
+            ScanText::Reserved(_, s) => s.slice(src),
         }
     }
 }

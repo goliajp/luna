@@ -239,6 +239,26 @@ impl Table {
         self.insert_new(heap, k, v)
     }
 
+    /// `t[k] = v` for a string `k` with no value here yet; a key with a
+    /// value is left as it is. One walk of the hash chain.
+    pub(crate) fn insert_absent_str(
+        &mut self,
+        heap: &mut Heap,
+        k: Value,
+        v: Value,
+    ) -> Result<(), TableError> {
+        debug_assert!(matches!(k, Value::Str(_)) && !self.is_readonly());
+        match self.find_node(k) {
+            Some(idx) if !self.nodes()[idx].val.is_nil() => Ok(()),
+            Some(idx) => {
+                self.hdr.aux = 0;
+                self.nodes_mut()[idx].val = v;
+                Ok(())
+            }
+            None => self.insert_new(heap, k, v),
+        }
+    }
+
     pub(super) fn insert_new(
         &mut self,
         heap: &mut Heap,

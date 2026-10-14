@@ -5,7 +5,6 @@
 //! `vm/exec/load_acct.rs`).
 
 use super::*;
-use crate::frontend::parser::Marks;
 
 /// One allocation-relevant step of PUC's parser or code generator.
 #[derive(Clone, Copy)]
@@ -237,26 +236,6 @@ impl<'a> Compiler<'a> {
         let at = self.cur;
         self.puc_log.push_or_abort((at, ev));
     }
-}
-
-/// The log resolved to token numbers: each event with the token PUC's
-/// scanner is on, in order (-1: before the first token). An event logged at
-/// [`TokRef::Next`] takes the token of the next event that names one.
-pub(crate) fn resolve(log: &[(TokRef, PEv)], ast: &Chunk, m: &Marks) -> Vec<(i64, PEv)> {
-    let at = |t: TokRef| match t {
-        TokRef::Start => -1,
-        t => i64::from(t.resolve(ast, m)),
-    };
-    let mut out: Vec<(i64, PEv)> = log.iter().map(|&(t, e)| (at(t), e)).collect();
-    let mut next = i64::from(m.eof);
-    for (i, &(t, _)) in log.iter().enumerate().rev() {
-        if t == TokRef::Next {
-            out[i].0 = next;
-        } else {
-            next = out[i].0;
-        }
-    }
-    out
 }
 
 /// The names PUC's parser makes strings of its own for
