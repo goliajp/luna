@@ -47,6 +47,7 @@ pub(crate) struct PucSizes {
     pub uvalue: usize,
 }
 
+#[cfg(target_pointer_width = "64")]
 const fn s64(d: Dialect) -> PucSizes {
     // measured on PUC built for x86_64 Linux
     match d {
@@ -168,6 +169,7 @@ const fn s64(d: Dialect) -> PucSizes {
     }
 }
 
+#[cfg(not(any(target_pointer_width = "64", target_arch = "wasm32")))]
 const fn s32(d: Dialect) -> PucSizes {
     // measured on PUC built for i386 Linux
     match d {
@@ -289,6 +291,7 @@ const fn s32(d: Dialect) -> PucSizes {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 const fn swasm(d: Dialect) -> PucSizes {
     // measured on PUC built by emscripten for wasm32, where a double is
     // 8-aligned (values take 16 bytes, unlike on i386)
@@ -414,11 +417,12 @@ const fn swasm(d: Dialect) -> PucSizes {
 impl PucSizes {
     /// The sizes for `d` on the pointer width luna is built for.
     pub(crate) const fn of(d: Dialect) -> PucSizes {
-        if cfg!(target_pointer_width = "64") {
-            s64(d)
-        } else {
-            s32(d)
-        }
+        #[cfg(target_pointer_width = "64")]
+        return s64(d);
+        #[cfg(target_arch = "wasm32")]
+        return swasm(d);
+        #[cfg(not(any(target_pointer_width = "64", target_arch = "wasm32")))]
+        return s32(d);
     }
 
     /// A string of `len` bytes; `long` from 5.5 on uses the long header.
