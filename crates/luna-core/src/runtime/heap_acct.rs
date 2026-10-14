@@ -18,6 +18,12 @@ pub(crate) struct PucState {
     /// the string table's size and its number of strings
     pub(crate) strt_size: usize,
     pub(crate) strt_nuse: usize,
+    /// strings PUC's libraries keep and luna's may not: kept alive
+    pub(crate) pins: Vec<Gc<crate::runtime::LuaStr>>,
+    /// 5.2+: the CallInfos the main thread has allocated, and how deep its
+    /// calls are now
+    pub(crate) ci_count: usize,
+    pub(crate) depth: usize,
 }
 
 impl Default for PucState {
@@ -27,6 +33,9 @@ impl Default for PucState {
             silent: 1,
             strt_size: 0,
             strt_nuse: 0,
+            pins: Vec::new(),
+            ci_count: 0,
+            depth: 0,
         }
     }
 }
@@ -355,5 +364,114 @@ impl Heap {
             self.acct_string(memerr);
         }
         Ok(())
+    }
+}
+
+impl Heap {
+    /// A string just made: counted, or, while luna builds its own objects,
+    /// marked as one PUC has not made.
+    pub(crate) fn acct_new_string(&mut self, h: *mut GcHeader, len: usize) {
+        if self.puc.silent > 0 {
+            // SAFETY: `h` is the string the caller just made and linked
+            unsafe { (*h).sub |= UNCOUNTED };
+        } else {
+            self.acct_string(len);
+        }
+    }
+
+    /// A string luna made for itself is made by the program now: PUC makes
+    /// it here.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn acct_promote(&mut self, h: *mut GcHeader, len: usize) {
+        if self.puc.silent > 0 {
+            return;
+        }
+        // SAFETY: `h` is a live string the caller found
+        unsafe { (*h).sub &= !UNCOUNTED };
+        self.acct_string(len);
+    }
+
+    fn raw_event(&mut self, op: u32, x: usize, y: usize) {
+        match op {
+            1 => self.bytes = self.bytes + y - x,
+            2 => self.bytes -= x,
+            _ => self.bytes += y,
+        }
+        #[cfg(feature = "gc-trace")]
+        match op {
+            1 => self.trace.line(format_args!("r {x} {y}")),
+            2 => self.trace.line(format_args!("d {x}")),
+            _ => self.trace.line(format_args!("a {x} {y}")),
+        }
+    }
+
+    /// What PUC's `luaL_openlibs` allocates, replayed from its record
+    /// (`puc_libs_data.rs`), after luna opened its libraries without
+    /// counting. Each string PUC made is made counted in luna too (luna
+    /// may not have it), and the ones PUC keeps are kept, so a later
+    /// string of the same bytes finds it as in PUC.
+    pub(crate) fn acct_replay_openlibs(&mut self) -> Result<(), crate::runtime::mem::Oom> {
+        let (ops, strs) = crate::runtime::puc_libs::record(self.table_dialect);
+        // each library opens in a call one level down (its CallInfo, when
+        // a new one, is in the record)
+        self.puc.ci_count = self.puc.ci_count.max(self.puc.depth + 1);
+        let mut live = true;
+        for op in ops.chunks_exact(3) {
+            let (x, y) = (op[1] as usize, op[2] as usize);
+            match op[0] {
+                3 => self.replay_string(strs[x], live)?,
+                k => {
+                    live = k != 4;
+                    self.raw_event(k, x, y);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn replay_string(&mut self, bytes: &[u8], live: bool) -> Result<(), crate::runtime::mem::Oom> {
+        let short = bytes.len() <= crate::runtime::string::MAX_SHORT_LEN
+            || self.table_dialect == Dialect::L51;
+        if short {
+            // the string table's growth is in the record; follow its size
+            if self.table_dialect != Dialect::L51 && self.puc.strt_nuse >= self.puc.strt_size {
+                self.puc.strt_size *= 2;
+            }
+            self.puc.strt_nuse += 1;
+            if self.table_dialect == Dialect::L51 && self.puc.strt_nuse > self.puc.strt_size {
+                self.puc.strt_size *= 2;
+            }
+        }
+        if bytes.len() > crate::runtime::string::MAX_SHORT_LEN {
+            // luna does not intern long strings: nothing to find later
+            return Ok(());
+        }
+        self.puc.silent += 1;
+        let s = self.try_intern(bytes);
+        self.puc.silent -= 1;
+        let s = s?;
+        // SAFETY: `s` is the live string just found or made; only its
+        // header byte is written
+        unsafe { (*(s.as_ptr() as *mut GcHeader)).sub &= !UNCOUNTED };
+        if live {
+            self.puc.pins.push(s);
+        }
+        Ok(())
+    }
+}
+
+impl Heap {
+    /// The main thread's calls are `depth` deep: 5.2+ allocate a CallInfo
+    /// for each level never reached before (PUC `luaE_extendCI`).
+    pub(crate) fn acct_call_depth(&mut self, depth: usize) {
+        if self.table_dialect != Dialect::L51 {
+            while self.puc.ci_count < depth {
+                let ci = self.sizes.callinfo;
+                self.acct_block(0, ci);
+                self.puc.ci_count += 1;
+            }
+        }
+        self.puc.depth = depth;
     }
 }

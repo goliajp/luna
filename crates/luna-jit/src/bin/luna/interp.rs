@@ -150,6 +150,13 @@ impl Interp {
     /// comes before it down from -1.
     pub(crate) fn set_arg(&mut self, argv: &[Vec<u8>], script: usize) {
         let t = self.vm.heap.new_table();
+        // presized as lua.c's `lua_createtable(L, narg, script + 1)`
+        let narg = argv.len() - script - 1;
+        // SAFETY: CLI driver: `t` was just allocated and is reachable only
+        // from here
+        unsafe { t.as_mut() }
+            .presize(&mut self.vm.heap, narg, script + 1)
+            .expect("the arg table is small");
         for (i, a) in argv.iter().enumerate() {
             let k = Value::Int(i as i64 - script as i64);
             let v = Value::Str(self.vm.heap.intern(a));

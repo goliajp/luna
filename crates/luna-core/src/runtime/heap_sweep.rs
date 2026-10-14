@@ -162,7 +162,9 @@ impl Heap {
                 }
                 ObjTag::Str => {
                     let s = h as *mut LuaStr;
-                    self.acct_string_free((*s).len());
+                    if (*h).sub & UNCOUNTED == 0 {
+                        self.acct_string_free((*s).len());
+                    }
                     if (*s).is_short() {
                         self.strings.remove(s);
                     }

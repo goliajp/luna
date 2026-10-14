@@ -7,6 +7,9 @@ impl Vm {
     /// `Vm::new` calls this; sandboxed embedders open libraries one at a
     /// time instead (`open_base`, `open_math`, `open_table`, …).
     pub fn open_all_libs(&mut self) {
+        // what PUC's `luaL_openlibs` allocates is counted from its record,
+        // after luna builds its own libraries without counting
+        self.heap.puc.silent += 1;
         self.open_base();
         self.open_math();
         self.open_table();
@@ -25,6 +28,10 @@ impl Vm {
         }
         // last, so `package.loaded` lists every library opened before it
         self.open_package();
+        self.heap.puc.silent -= 1;
+        if self.heap.acct_replay_openlibs().is_err() {
+            crate::runtime::mem::oom_abort(std::alloc::Layout::new::<u8>());
+        }
     }
 
     /// Install the base library (`print`, `type`, `pairs`, `tostring`,

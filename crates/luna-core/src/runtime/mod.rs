@@ -29,6 +29,7 @@ pub(crate) mod gc_trace;
 pub mod heap;
 pub mod mem;
 pub(crate) mod puc_boot;
+pub(crate) mod puc_libs;
 pub(crate) mod puc_size;
 pub mod string;
 pub mod table;
