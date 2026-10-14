@@ -97,9 +97,8 @@ struct Replay<'s> {
     actvar: Arr,
     gt: Arr,
     label: Arr,
-    /// the prototypes in the order their functions open, with their
-    /// definition lines
-    lines_defined: Vec<u32>,
+    /// the prototypes in the order their functions open
+    opening: Vec<Gc<Proto>>,
     opened: usize,
     /// PUC's layout of each function, in the order they open
     shapes: Vec<crate::vm::dump::Shape>,
@@ -125,12 +124,12 @@ fn table_err(e: TableError) -> SyntaxError {
     }
 }
 
-/// The definition line of each prototype under `p`, in the order the
-/// functions open (preorder), and the prototypes in the order they close.
-fn walk(p: Gc<Proto>, lines: &mut Vec<u32>, closing: &mut Vec<Gc<Proto>>) {
-    lines.push(p.line_defined);
+/// The prototypes under `p` in the order their functions open (preorder)
+/// and in the order they close.
+fn walk(p: Gc<Proto>, opening: &mut Vec<Gc<Proto>>, closing: &mut Vec<Gc<Proto>>) {
+    opening.push(p);
     for &c in p.protos.iter() {
-        walk(c, lines, closing);
+        walk(c, opening, closing);
     }
     closing.push(p);
 }
@@ -154,8 +153,8 @@ impl Vm {
         let log = crate::compiler::puc_log::resolve(&self.compile_scratch.puc_log, chunk, &marks);
         let d = self.heap.table_dialect;
         let s = self.heap.sizes;
-        let (mut lines, mut closing) = (Vec::new(), Vec::new());
-        walk(proto, &mut lines, &mut closing);
+        let (mut opening, mut closing) = (Vec::new(), Vec::new());
+        walk(proto, &mut opening, &mut closing);
         let shapes = crate::vm::dump::shapes(&proto, self.version).unwrap_or_default();
         let mut r = Replay {
             d,
@@ -165,7 +164,7 @@ impl Vm {
             actvar: Arr::default(),
             gt: Arr::default(),
             label: Arr::default(),
-            lines_defined: lines,
+            opening,
             opened: 0,
             shapes,
             closing,
