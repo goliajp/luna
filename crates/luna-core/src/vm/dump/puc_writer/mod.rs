@@ -75,6 +75,7 @@ struct Up {
 }
 
 /// One function, re-encoded, ready to serialise.
+#[derive(Default)]
 struct Out {
     source: Vec<u8>,
     line_defined: u32,
@@ -90,8 +91,6 @@ struct Out {
     upvals: Vec<Up>,
     protos: Vec<Out>,
     locvars: Vec<(crate::runtime::DebugName, u32, u32)>,
-    pc_map: Vec<u32>,
-    k_added: Vec<usize>,
 }
 
 /// A function as PUC's code generator lays it out, for counting its
@@ -116,18 +115,8 @@ pub(crate) fn shapes(proto: &Proto, version: LuaVersion) -> Result<Vec<Shape>, S
         LuaVersion::Lua55 => Dialect::V55,
         LuaVersion::MacroLua => return Err("MacroLua has no PUC bytecode format".to_string()),
     };
-    fn flat(o: Out, out: &mut Vec<Shape>) {
-        out.push(Shape {
-            pc_map: o.pc_map,
-            lines: o.lines,
-            k_added: o.k_added,
-        });
-        for c in o.protos {
-            flat(c, out);
-        }
-    }
     let mut out = Vec::new();
-    flat(build(proto, d, None)?, &mut out);
+    build(proto, d, None, Some(&mut out))?;
     Ok(out)
 }
 
@@ -151,13 +140,19 @@ pub(crate) fn dump_blocks(
         LuaVersion::Lua55 => Dialect::V55,
         LuaVersion::MacroLua => return Err("MacroLua has no PUC bytecode format".to_string()),
     };
-    let root = build(proto, d, None)?;
+    let root = build(proto, d, None, None)?;
     Ok(format::write(d, &root, strip))
 }
 
 /// `caps`: the upvalue descriptors the parent's `Closure` site gave this
-/// function (`None` for the main function).
-fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
+/// function (`None` for the main function). With `shapes`, only the
+/// functions' [`Shape`]s are made, pushed there in preorder.
+fn build(
+    p: &Proto,
+    d: Dialect,
+    caps: Option<Vec<(bool, u8)>>,
+    mut shapes: Option<&mut Vec<Shape>>,
+) -> Res<Out> {
     let np = p.num_params as u32;
     let mut asm = Asm::new(p, d.name());
     // 5.1 / 5.2 have one number type: the constants the encoder adds meet
@@ -210,6 +205,17 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
             body.frame
         ));
     }
+    if let Some(out) = shapes.as_deref_mut() {
+        out.push(Shape {
+            pc_map: body.pc_map,
+            lines: body.lines,
+            k_added: body.k_added,
+        });
+        for (child, cap) in p.protos.iter().zip(child_caps) {
+            build(child, d, cap, Some(out))?;
+        }
+        return Ok(Out::default());
+    }
 
     let mut locvars: Vec<(u32, u32, (crate::runtime::DebugName, u32, u32))> = p
         .locvars
@@ -256,7 +262,7 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
 
     let mut protos = Vec::with_capacity(p.protos.len());
     for (child, cap) in p.protos.iter().zip(child_caps) {
-        protos.push(build(child, d, cap)?);
+        protos.push(build(child, d, cap, None)?);
     }
     Ok(Out {
         source: p.source.as_bytes().to_vec(),
@@ -271,7 +277,5 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
         upvals,
         protos,
         locvars: locvars.into_iter().map(|v| v.2).collect(),
-        pc_map: body.pc_map,
-        k_added: body.k_added,
     })
 }

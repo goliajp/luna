@@ -16,7 +16,8 @@ use std::collections::HashMap;
 pub(super) type ConstMap = LMap<ConstKey, u32>;
 
 /// The same map for the dump writer, which has no allocation context.
-pub(crate) type DumpConstMap = HashMap<ConstKey, u32>;
+pub(crate) type DumpConstMap =
+    HashMap<ConstKey, u32, std::hash::BuildHasherDefault<crate::runtime::mem::WordHasher>>;
 
 /// The scanner table the rules below read and write: either map.
 pub(crate) trait KeyMap {

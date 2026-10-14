@@ -112,6 +112,7 @@ impl Vm {
             // in the order PUC's parser makes it; that includes its own
             // string of the chunk name, a new one when the name is long
             // (5.2+ does not intern long strings)
+            self.parse_scratch.record = self.heap.puc.silent == 0;
             self.heap.puc.silent += 1;
             let long = chunkname.len() > crate::runtime::string::MAX_SHORT_LEN
                 && self.heap.table_dialect != crate::runtime::table::Dialect::L51;
@@ -122,12 +123,13 @@ impl Vm {
             .and_then(|source| self.compile_text_in_place(src, source))
             .and_then(|p| Ok((p, self.close_chunk(p)?)));
             self.heap.puc.silent -= 1;
+            self.parse_scratch.record = false;
             let (_, cl) = made?;
             let scratch = std::mem::replace(
                 &mut self.parse_scratch,
                 crate::frontend::parser::ParseScratch::new(self.heap.mem_owner()),
             );
-            let counted = self.acct_text_load(src, scratch.parsed().0, cl);
+            let counted = self.acct_text_load(src, &scratch, cl);
             self.parse_scratch = scratch;
             counted?;
             return Ok(cl);
