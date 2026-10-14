@@ -14,29 +14,6 @@ use crate::runtime::table::{self, Table};
 use crate::runtime::userdata::{Userdata, UserdataPayload};
 use crate::runtime::value::Value;
 
-/// Discriminator the GC stores in every [`GcHeader`] so a raw header pointer
-/// can be cast back to the right object kind during tracing and sweeping.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u8)]
-pub enum ObjTag {
-    /// [`crate::runtime::string::LuaStr`].
-    Str,
-    /// [`crate::runtime::table::Table`].
-    Table,
-    /// [`crate::runtime::function::Proto`].
-    Proto,
-    /// [`crate::runtime::function::LuaClosure`].
-    Closure,
-    /// [`crate::runtime::function::Upvalue`].
-    Upvalue,
-    /// [`crate::runtime::function::NativeClosure`].
-    Native,
-    /// [`crate::runtime::coroutine::Coro`].
-    Coro,
-    /// [`crate::runtime::userdata::Userdata`].
-    Userdata,
-}
-
 /// Header prefix on every GC-managed object: intrusive next-link + type tag +
 /// mark bits. Always at offset 0 of the containing struct (`#[repr(C)]`).
 #[repr(C)]
@@ -123,6 +100,7 @@ pub(crate) fn header_is_marked<T: GcObject>(g: Gc<T>) -> bool {
 
 #[path = "heap_header.rs"]
 mod header;
+pub use header::ObjTag;
 
 #[path = "gc_ptr.rs"]
 mod gc_ptr;
@@ -170,14 +148,9 @@ pub struct Heap {
     strings: StringTable,
     seed: u32,
     live: usize,
-    /// approximate allocated bytes — shells only. Each `link()` adds
-    /// `size_of::<T>` for its tag; each `free_obj` subtracts the same.
-    /// Internal Vec/Box growth (table array/hash parts, proto code,
-    /// closure upvals slice) is NOT auto-tracked, so this is a lower
-    /// bound on real memory. PUC's `g->GCtotalbytes` is exact because
-    /// `lmem.c` routes every malloc/free through one helper; luna pays
-    /// for that uniformity in exchange for a smaller, drift-free count.
-    bytes: usize,
+    /// PUC's `totalbytes`: every object and block at the size PUC gives it
+    /// (`sizes`), not what luna's own objects take (see `heap_acct.rs`)
+    pub(crate) bytes: usize,
     /// byte threshold at which the VM should run a collection (auto-GC pacing)
     next_gc: usize,
     /// `next_gc`, or `usize::MAX` while auto-GC is stopped: the one
@@ -241,6 +214,12 @@ pub struct Heap {
     /// An object finalized once can be registered again (all but 5.2,
     /// whose `luaC_checkfinalizer` refuses a finalized object).
     pub(crate) refinalize: bool,
+    /// the sizes of PUC's objects in this dialect, which `bytes` counts
+    pub(crate) sizes: crate::runtime::puc_size::PucSizes,
+    /// PUC's own structures luna has none of (see `heap_acct.rs`)
+    pub(crate) puc: acct::PucState,
+    #[cfg(feature = "gc-trace")]
+    pub(crate) trace: crate::runtime::gc_trace::Trace,
     /// The main functions of the chunks loaded while `track_chunk_roots`
     /// is set, without keeping them alive: the collector drops each one it
     /// finds dead. Compiled traces taken over from another Vm find the
@@ -310,6 +289,9 @@ impl Heap {
     }
 }
 
+#[path = "heap_acct.rs"]
+mod acct;
+pub(crate) use acct::PucKind;
 #[path = "heap_alloc.rs"]
 mod alloc;
 #[path = "heap_barrier.rs"]

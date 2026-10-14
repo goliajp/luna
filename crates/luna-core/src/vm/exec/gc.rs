@@ -235,7 +235,7 @@ impl Vm {
     /// finalizers the collection scheduled. A no-op (returns 0) when already
     /// inside a finalizer — the collector is not reentrant (PUC).
     pub fn collect_garbage(&mut self) -> usize {
-        if self.gc_finalizing {
+        if self.gc_finalizing || self.heap.no_gc() {
             return 0;
         }
         self.clear_dead_stack();
@@ -251,7 +251,7 @@ impl Vm {
     /// variant runs the same cycle but propagates the captured finalizer
     /// error to the explicit caller.
     pub(crate) fn collect_garbage_propagating(&mut self) -> Result<usize, LuaError> {
-        if self.gc_finalizing {
+        if self.gc_finalizing || self.heap.no_gc() {
             return Ok(0);
         }
         self.clear_dead_stack();
@@ -263,10 +263,9 @@ impl Vm {
     }
 
     /// What `collectgarbage("count")` and `lua_gc(LUA_GCCOUNT)` report:
-    /// the allocation context's count when it keeps one, else the
-    /// collector's own estimate.
+    /// PUC's `totalbytes` (see `heap_acct.rs`).
     pub(crate) fn gc_count_bytes(&self) -> usize {
-        self.memory_in_use().unwrap_or(self.heap.bytes())
+        self.heap.bytes()
     }
 
     /// Whether a `__gc` finalizer is currently running (so `collectgarbage`

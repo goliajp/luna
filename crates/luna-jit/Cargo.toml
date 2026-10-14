@@ -96,6 +96,10 @@ rustyline = { version = "18", optional = true }
 # `repl-line-editor` job) so the default-feature surface keeps verifying.
 repl-line-editor = ["dep:rustyline"]
 
+# log the collector's accounting for comparison with an instrumented PUC
+# build (see luna-core's `gc-trace`)
+gc-trace = ["luna-core/gc-trace"]
+
 # opt-in LLVM 18 alt JIT backend. Default OFF; Cranelift remains the
 # default backend. With this feature enabled, the
 # `LUNA_JIT_BACKEND=llvm` env var (read by `install_default_jit` at

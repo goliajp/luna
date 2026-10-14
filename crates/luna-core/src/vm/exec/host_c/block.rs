@@ -73,7 +73,7 @@ impl Vm {
         // SAFETY: `u` was allocated above and is held only by this local;
         // the borrow covers one store
         unsafe { u.as_mut() }.extra_bytes = extra;
-        self.heap.apply_bytes_delta(0, extra);
+        self.heap.bytes += extra;
         Ok(u)
     }
 

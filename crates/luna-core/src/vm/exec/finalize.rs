@@ -185,7 +185,7 @@ impl Vm {
         // that may hit a safe point and try to step again. Re-entry was OK
         // under STW (collect_garbage had its own guard) but here the
         // intermediate phase state would corrupt.
-        if self.gc_finalizing {
+        if self.gc_finalizing || self.heap.no_gc() {
             return false;
         }
         if self.heap.gc_phase_is_pause() {

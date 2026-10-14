@@ -3,9 +3,8 @@
 use super::*;
 
 impl Table {
-    /// Insert / update `(key, val)`. `heap` is used to credit any internal
-    /// Box growth (rehash) to `heap.bytes` so the counter stays in sync with
-    /// real memory; `free_obj` subtracts `internal_bytes()` on the way out.
+    /// Insert / update `(key, val)`. `heap` counts a rehash's parts (see
+    /// `heap_acct.rs`).
     /// A read-only table refuses the write with [`TableError::ReadOnly`].
     pub fn set(&mut self, heap: &mut Heap, key: Value, val: Value) -> Result<(), TableError> {
         if self.is_readonly() {

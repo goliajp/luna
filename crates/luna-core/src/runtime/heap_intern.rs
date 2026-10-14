@@ -43,7 +43,7 @@ impl Heap {
             if is_new {
                 // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
                 unsafe { self.link(p as *mut GcHeader) };
-                self.bytes += string::alloc_size(bytes.len());
+                self.acct_string(bytes.len());
             } else {
                 // PUC `luaS_new` resurrect guard (lstring.c).
                 // The bucket-chain is walked open-loop without consulting GC
@@ -72,7 +72,7 @@ impl Heap {
             let p = string::alloc_long(self.mem.mem(), bytes, self.seed, self.hash51).ok()?;
             // SAFETY: `alloc_long` just allocated `p`, linked nowhere yet
             unsafe { self.link(p as *mut GcHeader) };
-            self.bytes += string::alloc_size(bytes.len());
+            self.acct_string(bytes.len());
             // SAFETY: `p` is the string linked just above
             Some(unsafe { Gc::from_ptr(p) })
         }
@@ -91,7 +91,7 @@ impl Heap {
         let p = string::alloc_long_pair(self.mem.mem(), a, b, self.seed, self.hash51)?;
         // SAFETY: `alloc_long_pair` just allocated `p`, linked nowhere yet
         unsafe { self.link(p as *mut GcHeader) };
-        self.bytes += string::alloc_size(n);
+        self.acct_string(n);
         // SAFETY: `p` is the string linked just above
         Ok(unsafe { Gc::from_ptr(p) })
     }
@@ -169,6 +169,7 @@ impl Heap {
         } else {
             crate::vm::exec::native_call::NativeKind::of(builtin)
         };
+        let nup = upvals.len();
         let upvals = LSlice::from_slice(self.mem(), upvals)?;
         let g = self.try_adopt(NativeClosure {
             hdr,
@@ -178,6 +179,10 @@ impl Heap {
             kind,
             builtin,
         })?;
+        // PUC 5.2+ makes a C function without upvalues a light value
+        if nup > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
+            self.acct_obj(PucKind::CClosure, self.sizes.c_closure(nup));
+        }
         if fix {
             // SAFETY: `try_adopt` just linked `g` at the head of `all`
             unsafe { self.fix_newest(g.as_ptr() as *mut GcHeader) };
