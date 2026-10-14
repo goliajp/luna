@@ -29,7 +29,6 @@ mod proto_parts;
 use self::asm::{Asm, Res};
 use self::proto_parts::{check_skips, consts_for, needs_close, vararg_byte};
 use super::puc::{puc_52, puc_53, puc_54, puc_55};
-use crate::compiler::const_map::const_map_of;
 use crate::runtime::Value;
 use crate::runtime::function::Proto;
 use crate::version::LuaVersion;
@@ -161,7 +160,7 @@ fn build(
         asm.consts = consts_for(d, std::mem::take(&mut asm.consts))?;
     }
     let ver = d.version();
-    asm.kmap = (ver, const_map_of(ver, &asm.consts));
+    asm.kmap = (ver, None);
     let mut child_caps: modern::Caps = vec![None; p.protos.len()];
     let vatab = d == Dialect::V55
         && p.is_vararg

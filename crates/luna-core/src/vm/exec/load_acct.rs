@@ -14,6 +14,7 @@
 //! the chunk's strings and one per function for its constants.
 
 use super::*;
+use crate::compiler::TokRef;
 use crate::compiler::puc_log::PEv;
 use crate::frontend::parser::scan::{ScanKind, ScanText, Scanned};
 use crate::runtime::heap::PucKind;
@@ -116,6 +117,8 @@ struct Replay<'s> {
     /// by name number: its string once made, and the table it was last
     /// found in or put in (see [`Replay::table_id`]; 0 for none)
     syms: Vec<(Option<Gc<crate::runtime::LuaStr>>, u32)>,
+    /// the same by reserved word
+    reserved: [(Option<Gc<crate::runtime::LuaStr>>, u32); crate::frontend::parser::scan::RESERVED],
     /// a distinct key for each object 5.5 anchors that luna has no object
     /// for
     anchors: usize,
@@ -175,7 +178,6 @@ impl Vm {
             return Ok(());
         };
         let chunk = parsed.parsed().0;
-        let log = crate::compiler::puc_log::resolve(&self.compile_scratch.puc_log, chunk, marks);
         let d = self.heap.table_dialect;
         let s = self.heap.sizes;
         let (mut opening, mut closing) = (Vec::new(), Vec::new());
@@ -199,6 +201,7 @@ impl Vm {
             names: &chunk.names,
             src,
             syms: vec![(None, 0); chunk.names.len()],
+            reserved: [(None, 0); crate::frontend::parser::scan::RESERVED],
             anchors: 0,
         };
         // `luaY_parser` (5.5 `f_parser`) before the main function opens
@@ -216,7 +219,10 @@ impl Vm {
                 self.anchor_in_h(&mut r, None)?;
             }
         }
-        self.replay_log(&mut r, &log)?;
+        let log = self.compile_scratch.puc_log.take();
+        let replayed = self.replay_log(&mut r, &log, chunk, marks);
+        self.compile_scratch.puc_log = log;
+        replayed?;
         // 5.1's `f_parser` makes the closure now; the others give it its
         // upvalue (`luaF_initupvals`)
         if d == Dialect::L51 {
@@ -256,11 +262,40 @@ impl Vm {
     /// The log's events, with what the scanner does up to each one's token:
     /// it fills its buffer while it reads a token, then makes the token's
     /// string.
-    fn replay_log(&mut self, r: &mut Replay, log: &[(i64, PEv)]) -> Result<(), SyntaxError> {
+    fn replay_log(
+        &mut self,
+        r: &mut Replay,
+        log: &[(TokRef, PEv)],
+        chunk: &crate::frontend::ast::Chunk,
+        marks: &crate::frontend::parser::Marks,
+    ) -> Result<(), SyntaxError> {
         let scanned = r.scanned;
         let mut strs = scanned.strings.iter().peekable();
         let mut peaks = scanned.peaks.iter().peekable();
-        for &(tok, ev) in log {
+        // the token of the event at `i`: one logged at `TokRef::Next`
+        // takes the token of the next event that names one
+        let at = |t: TokRef| match t {
+            TokRef::Start => -1,
+            t => i64::from(t.resolve(chunk, marks)),
+        };
+        let mut next: Option<(usize, i64)> = None;
+        for (i, &(t, ev)) in log.iter().enumerate() {
+            let tok = if t == TokRef::Next {
+                match next {
+                    Some((j, tok)) if j > i => tok,
+                    _ => {
+                        let j = log[i..]
+                            .iter()
+                            .position(|&(t, _)| t != TokRef::Next)
+                            .map(|n| i + n);
+                        let tok = j.map_or(i64::from(marks.eof), |j| at(log[j].0));
+                        next = Some((j.unwrap_or(log.len()), tok));
+                        tok
+                    }
+                }
+            } else {
+                at(t)
+            };
             #[cfg(feature = "gc-trace")]
             self.heap.trace.line(format_args!("E {tok} {ev:?}"));
             loop {

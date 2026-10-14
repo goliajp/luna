@@ -9,7 +9,7 @@
 //! immediates). luna's registers are PUC's: an encoder writes them as they
 //! are.
 
-use crate::compiler::const_map::{DumpConstMap, add_const};
+use crate::compiler::const_map::{DumpConstMap, add_const, const_map_of};
 use crate::runtime::Value;
 use crate::runtime::function::Proto;
 use crate::version::LuaVersion;
@@ -50,7 +50,8 @@ pub(super) struct Asm<'p> {
     fixups: Vec<Fixup>,
     pub consts: Vec<Value>,
     /// the dialect and its scanner table over `consts` (see `const_map`)
-    pub kmap: (LuaVersion, DumpConstMap),
+    /// built when the encoding first adds a constant
+    pub kmap: (LuaVersion, Option<DumpConstMap>),
     /// the luna pc of each constant the encoding adds
     pub k_added: Vec<usize>,
     pc: usize,
@@ -83,7 +84,7 @@ impl<'p> Asm<'p> {
             first: vec![None; p.code.len()],
             fixups: Vec::new(),
             consts: p.consts.to_vec(),
-            kmap: (LuaVersion::Lua54, DumpConstMap::default()),
+            kmap: (LuaVersion::Lua54, None),
             k_added: Vec::new(),
             pc: 0,
             line: 0,
@@ -172,6 +173,7 @@ impl<'p> Asm<'p> {
     /// Index of constant `v`, appended where PUC's code generator would.
     pub(super) fn konst(&mut self, v: Value) -> u32 {
         let (ver, map) = &mut self.kmap;
+        let map = map.get_or_insert_with(|| const_map_of(*ver, &self.consts));
         let n = self.consts.len();
         let k = add_const(*ver, &mut self.consts, map, v);
         if self.consts.len() > n {
@@ -214,7 +216,11 @@ impl<'p> Asm<'p> {
                 _ => return Err(format!("{}: jump distance {d} does not fit", self.dialect)),
             };
         }
-        let pc_map = (0..=self.p.code.len()).map(|pc| self.puc_pc(pc)).collect();
+        // each luna pc's first PUC pc, filled from the end
+        let mut pc_map = vec![self.code.len() as u32; self.p.code.len() + 1];
+        for pc in (0..self.p.code.len()).rev() {
+            pc_map[pc] = self.first[pc].unwrap_or(pc_map[pc + 1]);
+        }
         let lines = if self.p.lines.is_empty() {
             Vec::new()
         } else {

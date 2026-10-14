@@ -49,6 +49,10 @@ pub(crate) struct Recording {
     strings: bool,
     pub(crate) scanned: Scanned,
     last_end: usize,
+    /// from 5.3: the names numbered below this one, and the reserved words
+    /// whose bits are set, were recorded already
+    next_sym: u32,
+    reserved_seen: u32,
     /// the token to report, and what was found for it
     target: Option<u32>,
     found: Option<Found>,
@@ -99,7 +103,7 @@ use scan_buf::{ScanKind, ScanText, Scanned};
 /// What the load's replay needs of the scanner's record.
 pub(crate) mod scan {
     pub(crate) use super::scan_buf::grown;
-    pub(crate) use super::scan_buf::{ScanKind, ScanText, Scanned};
+    pub(crate) use super::scan_buf::{RESERVED, ScanKind, ScanText, Scanned};
 }
 
 fn record(
@@ -164,6 +168,8 @@ impl Parser<'_> {
         rec.scanned.peaks.clear();
         rec.strings = true;
         rec.last_end = 0;
+        rec.next_sym = 0;
+        rec.reserved_seen = 0;
         self.start_recording(Some(rec));
     }
 
@@ -180,76 +186,107 @@ impl Parser<'_> {
     }
 
     /// Token `tok_ix` became the current one.
+    #[inline]
     pub(super) fn reached(&mut self) {
-        if let Some(r) = &self.rec
-            && r.strings
-        {
-            self.record_string();
-        }
-        if let Some(r) = &self.rec
-            && r.target == Some(self.tok_ix)
-        {
-            let found = Found {
-                line: self.lex.line(),
-                near: self.near(),
-                span: self.tok.span,
-            };
-            self.rec.as_mut().expect("recording").found = Some(found);
+        if self.rec.is_some() {
+            self.reached_recording();
         }
     }
 
-    /// The current token's string, when PUC's scanner makes one for it.
-    fn record_string(&mut self) {
-        use crate::frontend::token::Token as T;
-        let span = self.tok.span;
-        let src = self.lex.src();
-        if let Some(r) = self.rec.as_mut() {
-            let gap = &src[r.last_end.min(span.start as usize)..span.start as usize];
-            let raw = span.slice(src);
-            // the scanner holds no more than the gap's bytes or the token's
-            // and a terminating zero
-            if gap.len() > 32 || raw.len() >= 32 {
-                let peak = scan_buf::peak(self.version, gap, raw);
-                if peak > 32 {
-                    r.scanned.peaks.push((self.tok_ix, peak as u32));
-                }
-            }
-            r.last_end = span.end as usize;
+    #[inline(never)]
+    fn reached_recording(&mut self) {
+        let (ix, tok, sym) = (self.tok_ix, self.tok, self.tok_sym);
+        let (src, version) = (self.lex.src(), self.version);
+        let r = self.rec.as_deref_mut().expect("recording");
+        if r.strings {
+            r.scan(version, src, ix, tok, sym);
         }
-        let (text, kind) = match self.tok.tok {
-            T::Name(()) => (ScanText::Sym(self.tok_sym), ScanKind::Name),
-            T::Str(()) => (ScanText::Sym(self.tok_sym), ScanKind::Str),
-            T::And
-            | T::Break
-            | T::Do
-            | T::Else
-            | T::Elseif
-            | T::End
-            | T::False
-            | T::For
-            | T::Function
-            | T::Global
-            | T::Goto
-            | T::If
-            | T::In
-            | T::Local
-            | T::Nil
-            | T::Not
-            | T::Or
-            | T::Repeat
-            | T::Return
-            | T::Then
-            | T::True
-            | T::Until
-            | T::While => (ScanText::Span(self.tok.span), ScanKind::Reserved),
+        if r.target == Some(ix) {
+            self.found_target();
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn found_target(&mut self) {
+        let found = Found {
+            line: self.lex.line(),
+            near: self.near(),
+            span: self.tok.span,
+        };
+        self.rec.as_mut().expect("recording").found = Some(found);
+    }
+}
+
+impl Recording {
+    /// Token `ix`, `tok`: how full the scanner's buffer gets reading it,
+    /// and the string PUC's scanner makes for it. Up to 5.2 each function
+    /// keys the strings in its own table, so every one is kept; later the
+    /// chunk's one table takes each string once, so only the first of each.
+    #[inline]
+    fn scan(&mut self, version: LuaVersion, src: &[u8], ix: u32, tok: LexTok, sym: Sym) {
+        use crate::frontend::token::Token as T;
+        let span = tok.span;
+        let (start, end) = (span.start as usize, span.end as usize);
+        // the scanner holds no more than the gap's bytes or the token's
+        // and a terminating zero
+        if start > self.last_end + 32 || end - start >= 32 {
+            self.peak(version, src, ix, span);
+        }
+        self.last_end = end;
+        let reserved = |i: u8| (ScanText::Reserved(i, span), ScanKind::Reserved);
+        let (text, kind) = match tok.tok {
+            T::Name(()) => (ScanText::Sym(sym), ScanKind::Name),
+            T::Str(()) => (ScanText::Sym(sym), ScanKind::Str),
+            T::And => reserved(0),
+            T::Break => reserved(1),
+            T::Do => reserved(2),
+            T::Else => reserved(3),
+            T::Elseif => reserved(4),
+            T::End => reserved(5),
+            T::False => reserved(6),
+            T::For => reserved(7),
+            T::Function => reserved(8),
+            T::Global => reserved(9),
+            T::Goto => reserved(10),
+            T::If => reserved(11),
+            T::In => reserved(12),
+            T::Local => reserved(13),
+            T::Nil => reserved(14),
+            T::Not => reserved(15),
+            T::Or => reserved(16),
+            T::Repeat => reserved(17),
+            T::Return => reserved(18),
+            T::Then => reserved(19),
+            T::True => reserved(20),
+            T::Until => reserved(21),
+            T::While => reserved(22),
             _ => return,
         };
-        let ix = self.tok_ix;
-        if let Some(r) = self.rec.as_mut() {
-            r.scanned.strings.push((ix, text, kind));
+        if version >= LuaVersion::Lua53 {
+            // names are numbered as they first appear
+            match text {
+                ScanText::Sym(s) if s.0 < self.next_sym => return,
+                ScanText::Sym(s) => self.next_sym = s.0 + 1,
+                ScanText::Reserved(i, _) if self.reserved_seen & 1 << i != 0 => return,
+                ScanText::Reserved(i, _) => self.reserved_seen |= 1 << i,
+            }
         }
+        self.scanned.strings.push((ix, text, kind));
     }
 
+    #[cold]
+    #[inline(never)]
+    fn peak(&mut self, version: LuaVersion, src: &[u8], ix: u32, span: Span) {
+        let gap = &src[self.last_end.min(span.start as usize)..span.start as usize];
+        let peak = scan_buf::peak(version, gap, span.slice(src));
+        if peak > 32 {
+            self.scanned.peaks.push((ix, peak as u32));
+        }
+    }
+}
+
+impl Parser<'_> {
     /// A statement starts at the current token.
     pub(super) fn open_stat(&mut self) {
         if let Some(r) = &mut self.rec {

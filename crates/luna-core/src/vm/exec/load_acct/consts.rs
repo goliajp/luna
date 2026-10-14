@@ -99,6 +99,13 @@ impl Vm {
     /// `t[k] = v` in a parser table, when `k` is not there yet (PUC
     /// `luaH_set` on a new key; a key already there allocates nothing).
     pub(super) fn set_in(&mut self, t: Gc<Table>, k: Value, v: Value) -> Result<(), SyntaxError> {
+        // a string key is looked for once (the trace shows the keys that
+        // go in before they do)
+        if cfg!(not(feature = "gc-trace")) && matches!(k, Value::Str(_)) {
+            return self
+                .with_table(t, |t, heap| t.insert_absent_str(heap, k, v))
+                .map_err(table_err);
+        }
         if !t.get(k).is_nil() {
             return Ok(());
         }
@@ -116,9 +123,15 @@ impl Vm {
 
     /// `t[k] = v` in a parser table.
     pub(super) fn store_in(&mut self, t: Gc<Table>, k: Value, v: Value) -> Result<(), SyntaxError> {
+        self.with_table(t, |t, heap| t.set(heap, k, v))
+            .map_err(table_err)
+    }
+
+    /// `f` on parser table `t`.
+    fn with_table<R>(&mut self, t: Gc<Table>, f: impl FnOnce(&mut Table, &mut Heap) -> R) -> R {
         // SAFETY: parser tables are made for this load and held only by
         // the replay
         let t = unsafe { t.as_mut() };
-        t.set(&mut self.heap, k, v).map_err(table_err)
+        f(t, &mut self.heap)
     }
 }
