@@ -47,7 +47,7 @@ pub(crate) struct PucSizes {
 }
 
 const fn s64(d: Dialect) -> PucSizes {
-    // measured on lx64 (`.dev/rfcs/20261014-r38-data/puc-sizes.txt`)
+    // measured on PUC built for x86_64 Linux
     match d {
         Dialect::L51 => PucSizes {
             tvalue: 16,
@@ -168,7 +168,7 @@ const fn s64(d: Dialect) -> PucSizes {
 }
 
 const fn s32(d: Dialect) -> PucSizes {
-    // measured in an i386 container (same file)
+    // measured on PUC built for i386 Linux
     match d {
         Dialect::L51 => PucSizes {
             tvalue: 12,
@@ -329,7 +329,7 @@ impl PucSizes {
 mod tests {
     use super::*;
 
-    // values PUC's own macros give (`gctrace/sizes.c`, lx64)
+    // values PUC's own macros give on x86_64 Linux
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn formulas_match_puc_macros_on_64_bit() {

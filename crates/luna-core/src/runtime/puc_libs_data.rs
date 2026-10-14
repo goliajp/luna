@@ -1,4 +1,4 @@
-// CODEGEN: .dev/tools/antirot-probes/gctrace/template.py
+// CODEGEN: gctrace template.py (traces of an instrumented PUC build)
 //! What PUC's `luaL_openlibs` allocates, in order, for each dialect and
 //! pointer width, recorded from PUC itself: `[op, x, y]` triples, op 0 a
 //! new object or block (tag, size) that stays, 4 one that is garbage once
