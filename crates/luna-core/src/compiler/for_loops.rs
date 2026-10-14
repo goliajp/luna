@@ -175,6 +175,8 @@ impl<'a> Compiler<'a> {
             None => {
                 self.set_freereg(base + 2);
                 self.reserve(1)?;
+                // up to 5.3 the step 1 is a constant (`luaK_codek`)
+                self.number_const_before_54(Value::Int(1));
                 self.emit(Inst::iasbx(Op::LoadI, base + 2, 1));
             }
         }
