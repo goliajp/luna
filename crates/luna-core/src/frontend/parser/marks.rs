@@ -193,7 +193,7 @@ impl Parser<'_> {
         }
     }
 
-    #[inline(never)]
+    #[inline]
     fn reached_recording(&mut self) {
         let (ix, tok, sym) = (self.tok_ix, self.tok, self.tok_sym);
         let (src, version) = (self.lex.src(), self.version);

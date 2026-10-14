@@ -18,6 +18,8 @@ pub(crate) struct PucState {
     /// the string table's size and its number of strings
     pub(crate) strt_size: usize,
     pub(crate) strt_nuse: usize,
+    /// the longest string PUC keeps in that table (5.1: all of them)
+    pub(crate) short_max: usize,
     /// strings PUC's libraries keep and luna's may not: kept alive
     pub(crate) pins: Vec<Gc<crate::runtime::LuaStr>>,
     /// 5.2+: the CallInfos the main thread has allocated, and how deep its
@@ -36,6 +38,7 @@ impl Default for PucState {
             silent: 1,
             strt_size: 0,
             strt_nuse: 0,
+            short_max: crate::runtime::string::MAX_SHORT_LEN,
             pins: Vec::new(),
             ci_count: 0,
             depth: 0,
@@ -103,6 +106,9 @@ impl Heap {
         // the strings the heap made before it knew the dialect (its fixed
         // memory error message) move to the dialect's hash
         self.hash51 = version == LuaVersion::Lua51;
+        if self.hash51 {
+            self.puc.short_max = usize::MAX;
+        }
         let seed = self.seed();
         self.rehash_strings(seed);
         // PUC 5.3 needs two GC cycles to finalize a table caught in a

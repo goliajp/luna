@@ -17,7 +17,11 @@ pub(super) fn s_sub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// again).
 #[doc(hidden)]
 pub fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<LuaStr>> {
-    let r = vm.heap.intern_or_none(sub_bytes(&s, i, j));
+    let b = sub_bytes(&s, i, j);
+    if let Some(r) = vm.heap.find_single(b) {
+        return Some(r);
+    }
+    let r = vm.heap.intern_or_none(b);
     if r.is_none() {
         vm.jit_park_oom();
     }
@@ -32,7 +36,11 @@ pub(crate) fn try_str_sub(
     i: i64,
     j: i64,
 ) -> Result<Gc<LuaStr>, LuaError> {
-    vm.alloc_str(sub_bytes(&s, i, j))
+    let b = sub_bytes(&s, i, j);
+    match vm.heap.find_single(b) {
+        Some(r) => Ok(r),
+        None => vm.alloc_str(b),
+    }
 }
 
 /// The bytes `string.sub(s, i, j)` takes.
