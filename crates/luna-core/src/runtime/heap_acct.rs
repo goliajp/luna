@@ -152,7 +152,7 @@ impl Heap {
     }
 }
 
-#[path = "heap_acct_parts.rs"]
-mod parts;
 #[path = "heap_acct_boot.rs"]
 mod boot;
+#[path = "heap_acct_parts.rs"]
+mod parts;

@@ -262,6 +262,8 @@ pub(crate) struct CompileScratch {
     /// the token of the last error the compiler returned, and its message
     /// (see [`super::TokRef`])
     pub(crate) err_tok: Option<(super::TokRef, Vec<u8>, bool)>,
+    /// the last compile's log of what PUC allocates (see [`super::puc_log`])
+    pub(crate) puc_log: LVec<(super::TokRef, super::puc_log::PEv)>,
 }
 
 impl CompileScratch {
@@ -275,6 +277,7 @@ impl CompileScratch {
             lvs: LVec::new(mem),
             operands: LVec::new(mem),
             err_tok: None,
+            puc_log: LVec::new(mem),
         }
     }
 

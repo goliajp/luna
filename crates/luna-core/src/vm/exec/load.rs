@@ -107,37 +107,61 @@ impl Vm {
             )?;
             self.compile_parsed(&parsed.chunk, &parsed.end_lines, source)?
         } else {
-            // PUC's `nCcalls` counts protected calls as well
-            let depth = self.g.nccalls;
             let source = match name {
                 Some(n) => n,
                 None => self.heap.try_intern(chunkname)?,
             };
-            let parsed = crate::frontend::parser::parse_in_place(
-                src,
-                self.version,
-                depth,
+            // what the parser and the compiler make is counted afterwards,
+            // in the order PUC's parser makes it
+            self.heap.puc.silent += 1;
+            let made = self
+                .compile_text_in_place(src, source)
+                .and_then(|p| Ok((p, self.close_chunk(p)?)));
+            self.heap.puc.silent -= 1;
+            let (proto, cl) = made?;
+            let scratch = std::mem::replace(
                 &mut self.parse_scratch,
+                crate::frontend::parser::ParseScratch::new(self.heap.mem_owner()),
             );
-            if let Err(e) = parsed {
-                let failed = self.parse_scratch.failed;
-                return Err(self.error_before(src, failed, source).unwrap_or(e));
-            }
-            let (chunk, end_lines) = self.parse_scratch.parsed();
-            crate::compiler::compile_parsed(
-                chunk,
-                end_lines,
-                self.version,
-                source,
-                &mut self.heap,
-                &mut self.compile_scratch,
-            )
-            .map_err(|e| {
-                let s = &mut self.compile_scratch;
-                crate::compiler::place_error(s, chunk, src, self.version, depth, e)
-            })?
+            let counted = self.acct_text_load(src, scratch.parsed().0, proto);
+            self.parse_scratch = scratch;
+            counted?;
+            return Ok(cl);
         };
         self.close_chunk(proto)
+    }
+
+    /// Parse and compile `src` named `source`, in the Vm's scratch.
+    fn compile_text_in_place(
+        &mut self,
+        src: &[u8],
+        source: Gc<crate::runtime::LuaStr>,
+    ) -> Result<Gc<crate::runtime::Proto>, SyntaxError> {
+        // PUC's `nCcalls` counts protected calls as well
+        let depth = self.g.nccalls;
+        let parsed = crate::frontend::parser::parse_in_place(
+            src,
+            self.version,
+            depth,
+            &mut self.parse_scratch,
+        );
+        if let Err(e) = parsed {
+            let failed = self.parse_scratch.failed;
+            return Err(self.error_before(src, failed, source).unwrap_or(e));
+        }
+        let (chunk, end_lines) = self.parse_scratch.parsed();
+        crate::compiler::compile_parsed(
+            chunk,
+            end_lines,
+            self.version,
+            source,
+            &mut self.heap,
+            &mut self.compile_scratch,
+        )
+        .map_err(|e| {
+            let s = &mut self.compile_scratch;
+            crate::compiler::place_error(s, chunk, src, self.version, depth, e)
+        })
     }
 
     /// Compile a parsed chunk named `source`, keeping the parse's vectors

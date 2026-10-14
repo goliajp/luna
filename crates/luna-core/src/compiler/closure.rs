@@ -4,12 +4,14 @@
 use super::*;
 
 impl<'a> Compiler<'a> {
-    /// A function literal: `body`, closed (PUC `close_func`) at token
-    /// `close`, the one after its `end`.
+    /// A function literal: `body`, opened (PUC `addprototype`) at token
+    /// `open`, its `(`, and closed (PUC `close_func`) at token `close`, the
+    /// one after its `end`.
     pub(super) fn function_exp(
         &mut self,
         body: &'a FuncBody,
         is_method: bool,
+        open: TokRef,
         close: TokRef,
     ) -> Result<Exp, SyntaxError> {
         let line = body.line;
@@ -18,6 +20,7 @@ impl<'a> Compiler<'a> {
             return Err(self.err(line, "too many parameters"));
         }
         let is_vararg = !matches!(body.vararg, ast::Vararg::None);
+        self.at(open);
         self.open_level(nparams as u8, is_vararg, line);
         let version = self.version;
         let level = self.l();
@@ -44,10 +47,17 @@ impl<'a> Compiler<'a> {
             });
         }
         self.enter_block(false);
+        // the scanner past `(`: `self`, entered at once
         if is_method {
+            self.at(open.plus(1));
             self.declare_local("self", 0, false)?;
         }
-        for (i, p) in self.ls(body.params).iter().enumerate() {
+        // each parameter is declared once its name is read; their debug
+        // records come at `)` (PUC `parlist`'s `adjustlocalvars`)
+        self.defer_locvars = true;
+        let params = self.ls(body.params);
+        for (i, p) in params.iter().enumerate() {
+            self.at(open.plus(2 + 2 * i as i32));
             self.declare_local(self.nm(p), (i + is_method as usize) as u32, false)?;
         }
         // 5.5 (PUC `parlist`): an anonymous `...` is a parameter too, with a
@@ -87,6 +97,18 @@ impl<'a> Compiler<'a> {
             if !block_uses_vararg(self.ast, &body.block) {
                 self.l().has_compat_vararg_arg = true;
             }
+        }
+        // `)`: past the names and their commas, and `...` with its comma
+        let n = params.len() as i32;
+        let dots = match body.vararg {
+            ast::Vararg::None => 0,
+            _ if n > 0 => 2,
+            _ => 1,
+        };
+        self.at(open.plus(1 + (2 * n - 1).max(0) + dots));
+        self.flush_locvars();
+        if is_vararg {
+            self.log(super::puc_log::PEv::Prologue);
         }
         self.stat_block(&body.block)?;
         self.at(close);
@@ -128,7 +150,12 @@ impl<'a> Compiler<'a> {
         let lv = self.func_name_lv(sid, name);
         self.force_line = saved_force;
         let lv = lv?;
-        let f = self.function_exp(body, is_method, TokRef::StatAfter(sid, 0))?;
+        let f = self.function_exp(
+            body,
+            is_method,
+            TokRef::StatMark(sid, 0),
+            TokRef::StatAfter(sid, 0),
+        )?;
         let saved_force = self.force_line.replace(name.base.line);
         let res = self.store(lv, f);
         self.force_line = saved_force;

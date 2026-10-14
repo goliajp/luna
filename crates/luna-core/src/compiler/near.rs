@@ -18,14 +18,35 @@ pub(crate) enum TokRef {
     StatAfter(StatId, i32),
     /// the `k`th token statement `s` marked (see `Parser::mark`)
     StatMark(StatId, u8),
+    /// the `(` function literal `e` opens its parameters with, plus `n`
+    Open(ExprId, i32),
+    /// the `k`th token statement `s` marked, plus `n`
+    MarkPlus(StatId, u8, i32),
     /// the end of the chunk
     Eof,
+    /// before the scanner reads the first token (the main function's
+    /// start)
+    Start,
     /// the token of the next code generation step: an instruction luna
     /// emits early that PUC emits only once the value is used
     Next,
 }
 
 impl TokRef {
+    /// The token `n` after this one.
+    pub(crate) fn plus(self, n: i32) -> TokRef {
+        match self {
+            TokRef::After(e, k) => TokRef::After(e, k + n),
+            TokRef::First(e, k) => TokRef::First(e, k + n),
+            TokRef::StatFirst(s, k) => TokRef::StatFirst(s, k + n),
+            TokRef::StatAfter(s, k) => TokRef::StatAfter(s, k + n),
+            TokRef::StatMark(s, k) => TokRef::MarkPlus(s, k, n),
+            TokRef::MarkPlus(s, k, m) => TokRef::MarkPlus(s, k, m + n),
+            TokRef::Open(e, k) => TokRef::Open(e, k + n),
+            t => t,
+        }
+    }
+
     /// The token's number among the chunk's tokens.
     pub(crate) fn resolve(self, ast: &Chunk, m: &Marks) -> u32 {
         let off = |base: u32, n: i32| base.wrapping_add_signed(n);
@@ -36,6 +57,9 @@ impl TokRef {
             TokRef::StatAfter(s, n) => off(m.stat_follow[s.0 as usize], n),
             TokRef::StatMark(s, k) => m.stat_marks(s)[k as usize],
             TokRef::Eof | TokRef::Next => m.eof,
+            TokRef::Start => 0,
+            TokRef::Open(e, n) => off(m.expr_open(e).unwrap_or(m.eof), n),
+            TokRef::MarkPlus(s, k, n) => off(m.stat_marks(s)[k as usize], n),
         }
     }
 }

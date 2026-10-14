@@ -14,7 +14,9 @@ impl<'a> Compiler<'a> {
         let l = self.l();
         l.code.push_or_abort(i);
         l.lines.push_or_abort(line);
-        l.code.len() - 1
+        let pc = l.code.len() - 1;
+        self.log(puc_log::PEv::Code(line));
+        pc
     }
 
     pub(super) fn here(&self) -> usize {

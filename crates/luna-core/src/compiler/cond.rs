@@ -68,6 +68,7 @@ impl Compiler<'_> {
                 let l = self.l();
                 l.code.pop();
                 l.lines.pop();
+                self.log(super::puc_log::PEv::Uncode);
                 return self.cond_jump(Inst::iabc(Op::Test, i.b(), 0, 0, !cond));
             }
         }

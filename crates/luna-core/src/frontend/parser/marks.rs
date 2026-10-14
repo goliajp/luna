@@ -38,6 +38,9 @@ pub(crate) struct Marks {
 /// token.
 pub(super) struct Recording {
     pub(super) marks: Marks,
+    /// with `strings`: each token PUC's scanner makes a string for (a
+    /// name, a reserved word, a string literal), its number and bytes
+    pub(super) strings: Option<Vec<(u32, Vec<u8>)>>,
     /// the token to report, and what was found for it
     target: Option<u32>,
     found: Option<Found>,
@@ -82,11 +85,31 @@ pub(crate) fn token_at(src: &[u8], version: LuaVersion, c_depth: u32, ix: u32) -
     record(src, version, c_depth, Some(ix)).ok()?.found
 }
 
+/// [`record_marks`] with the strings PUC's scanner makes, by token.
+pub(crate) fn record_strings(
+    src: &[u8],
+    version: LuaVersion,
+    c_depth: u32,
+) -> Result<(Marks, Vec<(u32, Vec<u8>)>), SyntaxError> {
+    let r = record_with(src, version, c_depth, None, true)?;
+    Ok((r.marks, r.strings.unwrap_or_default()))
+}
+
 fn record(
     src: &[u8],
     version: LuaVersion,
     c_depth: u32,
     target: Option<u32>,
+) -> Result<Recording, SyntaxError> {
+    record_with(src, version, c_depth, target, false)
+}
+
+fn record_with(
+    src: &[u8],
+    version: LuaVersion,
+    c_depth: u32,
+    target: Option<u32>,
+    strings: bool,
 ) -> Result<Recording, SyntaxError> {
     // held past the vectors made through it (see `parse_at_depth`)
     let mem = MemOwner::system();
@@ -104,6 +127,7 @@ fn record(
     let mut p = Parser::new(lex, cur, version, c_depth, chunk, end_lines, stacks)?;
     p.rec = Some(Box::new(Recording {
         marks: Marks::default(),
+        strings: strings.then(Vec::new),
         target,
         found: None,
     }));
@@ -126,6 +150,11 @@ impl Parser<'_> {
     /// Token `tok_ix` became the current one.
     pub(super) fn reached(&mut self) {
         if let Some(r) = &self.rec
+            && r.strings.is_some()
+        {
+            self.record_string();
+        }
+        if let Some(r) = &self.rec
             && r.target == Some(self.tok_ix)
         {
             let found = Found {
@@ -134,6 +163,42 @@ impl Parser<'_> {
                 span: self.tok.span,
             };
             self.rec.as_mut().expect("recording").found = Some(found);
+        }
+    }
+
+    /// The current token's string, when PUC's scanner makes one for it.
+    fn record_string(&mut self) {
+        use crate::frontend::token::Token as T;
+        let bytes = match self.tok.tok {
+            T::Name(()) | T::Str(()) => self.lex.names().bytes(self.tok_sym).to_vec(),
+            T::And
+            | T::Break
+            | T::Do
+            | T::Else
+            | T::Elseif
+            | T::End
+            | T::False
+            | T::For
+            | T::Function
+            | T::Global
+            | T::Goto
+            | T::If
+            | T::In
+            | T::Local
+            | T::Nil
+            | T::Not
+            | T::Or
+            | T::Repeat
+            | T::Return
+            | T::Then
+            | T::True
+            | T::Until
+            | T::While => self.tok.span.slice(self.lex.src()).to_vec(),
+            _ => return,
+        };
+        let ix = self.tok_ix;
+        if let Some(Some(v)) = self.rec.as_mut().map(|r| r.strings.as_mut()) {
+            v.push((ix, bytes));
         }
     }
 
