@@ -62,6 +62,12 @@ impl<'a> Compiler<'a> {
         }
         // 5.5 (PUC `parlist`): an anonymous `...` is a parameter too, with a
         // register after the fixed ones that holds nil
+        // the vararg parameter is made once `...` is read
+        let vararg_local =
+            self.lr().has_vararg_table_pseudo || matches!(body.vararg, ast::Vararg::Named(_));
+        if vararg_local {
+            self.at(open.plus(2 + 2 * params.len() as i32));
+        }
         if self.lr().has_vararg_table_pseudo {
             let r = self.reserve(1)?;
             self.declare_local("(vararg table)", r, false)?;
@@ -106,9 +112,17 @@ impl<'a> Compiler<'a> {
             _ => 1,
         };
         self.at(open.plus(1 + (2 * n - 1).max(0) + dots));
+        // 5.5 registers the vararg parameter after the prologue
+        let late = vararg_local && self.puc_state.pending > 0;
+        if late {
+            self.puc_state.pending -= 1;
+        }
         self.flush_locvars();
         if is_vararg {
             self.log(super::puc_log::PEv::Prologue);
+        }
+        if late {
+            self.log(super::puc_log::PEv::LocVar);
         }
         self.stat_block(&body.block)?;
         self.at(close);
