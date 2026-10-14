@@ -1,5 +1,4 @@
 -- rule: lgc.GCTM.6
-if warn then warn("@on") end
 setmetatable({}, {__gc = true})
 collectgarbage()
 local called = 0
