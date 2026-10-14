@@ -15,6 +15,21 @@ impl Heap {
         }
     }
 
+    /// The bytes of a table's hash part of `h` nodes: 5.5 puts a `lastfree`
+    /// pointer (`Limbox`, padded to a node's alignment) in front of eight
+    /// nodes or more.
+    fn hash_bytes(&self, h: usize) -> usize {
+        let limbox = if cfg!(target_arch = "wasm32") {
+            8
+        } else {
+            self.sizes.ptr
+        };
+        match self.table_dialect {
+            Dialect::L55 if h >= 8 => h * self.sizes.node + limbox,
+            _ => h * self.sizes.node,
+        }
+    }
+
     /// A table's parts going from `old_a` array slots and `old_h` nodes to
     /// `new_a` and `new_h`, as PUC's `luaH_resize` allocates and frees them:
     /// up to 5.3 a growing array first, then the new nodes, a shrinking
@@ -28,50 +43,41 @@ impl Heap {
         new_a: usize,
         new_h: usize,
     ) {
-        let node = self.sizes.node;
+        let (oh, nh) = (self.hash_bytes(old_h), self.hash_bytes(new_h));
         let (oa, na) = (self.array_bytes(old_a), self.array_bytes(new_a));
         match self.table_dialect {
             Dialect::L51 | Dialect::L52 | Dialect::L53 => {
                 if new_a > old_a {
                     self.acct_block(oa, na);
                 }
-                self.acct_block(0, new_h * node);
+                self.acct_block(0, nh);
                 if new_a < old_a {
                     self.acct_block(oa, na);
                 }
-                self.acct_block(old_h * node, 0);
+                self.acct_block(oh, 0);
             }
             Dialect::L54 => {
                 // the array is reallocated even at the same size
-                self.acct_block(0, new_h * node);
+                self.acct_block(0, nh);
                 self.acct_block(oa, na);
-                self.acct_block(old_h * node, 0);
+                self.acct_block(oh, 0);
             }
             Dialect::L55 => {
-                self.acct_block(0, new_h * node);
+                self.acct_block(0, nh);
                 if new_a != old_a {
                     self.acct_block(0, na);
                     self.acct_block(oa, 0);
                 }
-                self.acct_block(old_h * node, 0);
+                self.acct_block(oh, 0);
             }
         }
     }
 
     /// A table freed with `a` array slots and `h` nodes (PUC `luaH_free`).
     pub(crate) fn acct_table_free(&mut self, a: usize, h: usize) {
-        let node = self.sizes.node;
-        let ab = self.array_bytes(a);
-        match self.table_dialect {
-            Dialect::L51 | Dialect::L52 | Dialect::L53 => {
-                self.acct_block(h * node, 0);
-                self.acct_block(ab, 0);
-            }
-            _ => {
-                self.acct_block(h * node, 0);
-                self.acct_block(ab, 0);
-            }
-        }
+        let (ab, hb) = (self.array_bytes(a), self.hash_bytes(h));
+        self.acct_block(hb, 0);
+        self.acct_block(ab, 0);
         let t = self.sizes.table;
         self.acct_free(t);
     }
