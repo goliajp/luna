@@ -149,3 +149,9 @@ const fn classic_slot(k: classic::Kind) -> usize {
         classic::Kind::ExtraArg => 30,
     }
 }
+
+/// Each dialect's opcodes by kind.
+pub(in crate::vm::dump) const OPCODES_52: Opcodes = Opcodes::classic(super::puc_52::OPS);
+pub(in crate::vm::dump) const OPCODES_53: Opcodes = Opcodes::classic(super::puc_53::OPS);
+pub(in crate::vm::dump) const OPCODES_54: Opcodes = Opcodes::modern(super::puc_54::OPS);
+pub(in crate::vm::dump) const OPCODES_55: Opcodes = Opcodes::modern(super::puc_55::OPS);

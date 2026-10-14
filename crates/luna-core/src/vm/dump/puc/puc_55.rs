@@ -133,10 +133,6 @@ pub(in crate::vm::dump) const OPS: &[Kind] = &[
     Kind::ExtraArg,
 ];
 
-/// [`OPS`] by kind.
-pub(in crate::vm::dump) const OPCODES: super::opcodes::Opcodes =
-    super::opcodes::Opcodes::modern(OPS);
-
 const D55: Dialect = Dialect {
     name: DIALECT,
     ops: OPS,

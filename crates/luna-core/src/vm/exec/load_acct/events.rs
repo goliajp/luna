@@ -3,60 +3,6 @@
 use super::*;
 
 impl Vm {
-    /// The scanner makes the string of a token (`luaX_newstring`): the
-    /// string, then the entry that anchors it, in the function's table up
-    /// to 5.2, in the chunk's from 5.3 (5.5 does not anchor reserved
-    /// words).
-    pub(super) fn replay_scan(
-        &mut self,
-        r: &mut Replay,
-        bytes: &[u8],
-        kind: ScanKind,
-    ) -> Result<(), SyntaxError> {
-        let s = self.heap.try_intern(bytes)?;
-        match r.scan_table(kind) {
-            Some(t) => self.set_in(t, Value::Str(s), Value::Bool(true)),
-            None => Ok(()),
-        }
-    }
-
-    /// [`Vm::replay_scan`] of a recorded token: a name or a literal is
-    /// made once, and put once in each table.
-    pub(super) fn replay_scan_text(
-        &mut self,
-        r: &mut Replay,
-        text: ScanText,
-        kind: ScanKind,
-    ) -> Result<(), SyntaxError> {
-        let (names, src) = (r.names, r.src);
-        let slot = match text {
-            ScanText::Sym(sym) => &mut r.syms[sym.0 as usize],
-            ScanText::Reserved(k, _) => &mut r.reserved[usize::from(k)],
-        };
-        let s = match slot.0 {
-            Some(s) => s,
-            None => {
-                let s = self.heap.try_intern(text.bytes(names, src))?;
-                slot.0 = Some(s);
-                s
-            }
-        };
-        let Some(t) = r.scan_table(kind) else {
-            return Ok(());
-        };
-        // a table's keys stay until the load is done
-        let id = r.table_id();
-        let slot = match text {
-            ScanText::Sym(sym) => &mut r.syms[sym.0 as usize].1,
-            ScanText::Reserved(k, _) => &mut r.reserved[usize::from(k)].1,
-        };
-        if *slot != id {
-            *slot = id;
-            self.set_in(t, Value::Str(s), Value::Bool(true))?;
-        }
-        Ok(())
-    }
-
     /// One event of the log, logged at token `tok`.
     #[inline]
     pub(super) fn replay_event(

@@ -28,7 +28,7 @@ mod proto_parts;
 
 use self::asm::{Asm, Res};
 use self::proto_parts::{check_skips, consts_for, needs_close, vararg_byte};
-use super::puc::{puc_52, puc_53, puc_54, puc_55};
+
 use crate::runtime::Value;
 use crate::runtime::function::Proto;
 use crate::version::LuaVersion;
@@ -173,9 +173,9 @@ fn build(
         let hidden = p.is_vararg && !(v55 && vatab);
         let f = modern::Frame {
             ops: if v55 {
-                &puc_55::OPCODES
+                &crate::vm::dump::puc::opcodes::OPCODES_55
             } else {
-                &puc_54::OPCODES
+                &crate::vm::dump::puc::opcodes::OPCODES_54
             },
             v55,
             np,
@@ -192,9 +192,9 @@ fn build(
                 _ => 53,
             },
             ops: if d == Dialect::V52 {
-                &puc_52::OPCODES
+                &crate::vm::dump::puc::opcodes::OPCODES_52
             } else {
-                &puc_53::OPCODES
+                &crate::vm::dump::puc::opcodes::OPCODES_53
             },
         };
         classic::encode(&mut asm, &f, &mut child_caps)?;
