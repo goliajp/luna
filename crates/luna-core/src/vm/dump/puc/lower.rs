@@ -124,8 +124,7 @@ pub(super) fn build(
         upvals: heap.try_block_of(raw.upvals.into_iter())?,
         num_params: raw.num_params,
         is_vararg: raw.is_vararg,
-        // A PUC 5.5 chunk lists its `(vararg table)` local in `locvars` with
-        // the register PUC gave it, so the debug view needs no synthetic one.
+        // a PUC 5.5 chunk lists its own `(vararg table)` local in `locvars`
         has_vararg_table_pseudo: false,
         has_compat_vararg_arg: raw.has_compat_vararg_arg,
         max_stack: lowered.max_stack,

@@ -48,6 +48,19 @@ impl Heap {
     /// Put `obj` in a new block and under GC management. On failure `obj`
     /// is dropped.
     #[inline]
+    /// [`Heap::try_adopt`], the object counted at `size` (see
+    /// [`Heap::acct_new`]).
+    pub(super) fn adopt_counted<T: GcObject>(
+        &mut self,
+        obj: T,
+        kind: PucKind,
+        size: usize,
+    ) -> Result<Gc<T>, Oom> {
+        let g = self.try_adopt(obj)?;
+        self.acct_new(g.as_ptr() as *mut GcHeader, kind, size);
+        Ok(g)
+    }
+
     pub(crate) fn try_adopt<T: GcObject>(&mut self, obj: T) -> Result<Gc<T>, Oom> {
         let p = self.alloc_block::<T>()?;
         // SAFETY: `p` is a fresh block for one `T`, linked nowhere yet, and a
@@ -144,12 +157,21 @@ impl Heap {
         asize: usize,
     ) -> Result<Gc<Table>, crate::runtime::table::TableError> {
         const MAX_ASIZE_HINT: usize = 1 << 27;
+        self.try_create_table(asize.min(MAX_ASIZE_HINT), 0)
+    }
+
+    /// A table sized as `lua_createtable(narr, nrec)` sizes it.
+    #[doc(hidden)]
+    pub fn try_create_table(
+        &mut self,
+        narr: usize,
+        nrec: usize,
+    ) -> Result<Gc<Table>, crate::runtime::table::TableError> {
         let g = self.try_new_table()?;
-        let clamped = asize.min(MAX_ASIZE_HINT);
-        if clamped > 0 {
+        if narr > 0 || nrec > 0 {
             // SAFETY: the freshly adopted table has no live borrow
             // anywhere else; we hold the only `Gc<Table>` handle.
-            unsafe { g.as_mut() }.resize(self, clamped, 0)?;
+            unsafe { g.as_mut() }.resize(self, narr, nrec)?;
         }
         Ok(g)
     }
@@ -293,69 +315,12 @@ impl Heap {
     /// [`Heap::new_upvalue`], failing when memory runs out.
     #[inline]
     pub fn try_new_upvalue(&mut self, state: UpvalState) -> Result<Gc<Upvalue>, Oom> {
-        let g = self.try_adopt(Upvalue {
+        let size = self.sizes.upval;
+        let upval = Upvalue {
             hdr: GcHeader::new(ObjTag::Upvalue),
             state,
-        })?;
-        self.acct_new(
-            g.as_ptr() as *mut GcHeader,
-            PucKind::Upval,
-            self.sizes.upval,
-        );
-        Ok(g)
-    }
-
-    /// Create a fresh suspended coroutine wrapping `body`. The new thread
-    /// inherits the creator's globals table; a `setfenv(0, env)` inside it
-    /// will retune that copy without affecting the creator.
-    pub fn new_coro(
-        &mut self,
-        body: Value,
-        globals: Gc<crate::runtime::Table>,
-    ) -> Gc<crate::runtime::Coro> {
-        self.try_new_coro(body, globals)
-            .unwrap_or_else(|_| oom_abort(Layout::new::<crate::runtime::Coro>()))
-    }
-
-    /// [`Heap::new_coro`], failing when memory runs out.
-    pub fn try_new_coro(
-        &mut self,
-        body: Value,
-        globals: Gc<crate::runtime::Table>,
-    ) -> Result<Gc<crate::runtime::Coro>, Oom> {
-        let mem = self.mem();
-        let g = self.try_adopt(crate::runtime::Coro {
-            hdr: GcHeader::new(ObjTag::Coro),
-            status: crate::runtime::CoroStatus::Suspended,
-            body,
-            started: false,
-            resumer: None,
-            resume_at: None,
-            error_value: None,
-            error_status: crate::runtime::coroutine::ErrorStatus::Run,
-            error_traceback: None,
-            error_levels: None,
-            natives: 0..0,
-            stack: LVec::new(mem),
-            frames: LVec::new(mem),
-            open_upvals: LVec::new(mem),
-            tbc: LVec::new(mem),
-            top: 0,
-            meta_conts: 0,
-            stale_frames: 0,
-            stack_size: 0,
-            frame_size: 0,
-            hook: crate::vm::exec::HookState::default(),
-            globals,
-            host_stack: LVec::new(mem),
-            host_state: None,
-        })?;
-        self.acct_new(
-            g.as_ptr() as *mut GcHeader,
-            PucKind::Thread,
-            self.sizes.thread,
-        );
-        Ok(g)
+        };
+        self.adopt_counted(upval, PucKind::Upval, size)
     }
 
     /// Create a userdata (an io file handle — luna's only userdata) with no
@@ -371,13 +336,8 @@ impl Heap {
         payload: UserdataPayload,
         writable: bool,
     ) -> Result<Gc<Userdata>, Oom> {
-        let g = self.try_adopt(Userdata::new(
-            GcHeader::new(ObjTag::Userdata),
-            payload,
-            writable,
-        ))?;
         let size = self.sizes.userdata(1, 0);
-        self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::Userdata, size);
-        Ok(g)
+        let u = Userdata::new(GcHeader::new(ObjTag::Userdata), payload, writable);
+        self.adopt_counted(u, PucKind::Userdata, size)
     }
 }

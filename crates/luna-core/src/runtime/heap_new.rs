@@ -1,6 +1,8 @@
 //! Making a heap, and the allocation context it takes its memory from.
 
 use super::*;
+use crate::runtime::mem::{LVec, Oom, oom_abort};
+use std::alloc::Layout;
 
 impl Heap {
     /// Build a fresh empty heap with default GC pacing and no memory cap.
@@ -115,5 +117,56 @@ impl Drop for Heap {
 impl Default for Heap {
     fn default() -> Heap {
         Heap::new()
+    }
+}
+
+impl Heap {
+    /// Create a fresh suspended coroutine wrapping `body`. The new thread
+    /// inherits the creator's globals table; a `setfenv(0, env)` inside it
+    /// will retune that copy without affecting the creator.
+    pub fn new_coro(
+        &mut self,
+        body: Value,
+        globals: Gc<crate::runtime::Table>,
+    ) -> Gc<crate::runtime::Coro> {
+        self.try_new_coro(body, globals)
+            .unwrap_or_else(|_| oom_abort(Layout::new::<crate::runtime::Coro>()))
+    }
+
+    /// [`Heap::new_coro`], failing when memory runs out.
+    pub fn try_new_coro(
+        &mut self,
+        body: Value,
+        globals: Gc<crate::runtime::Table>,
+    ) -> Result<Gc<crate::runtime::Coro>, Oom> {
+        let mem = self.mem();
+        let size = self.sizes.thread;
+        let coro = crate::runtime::Coro {
+            hdr: GcHeader::new(ObjTag::Coro),
+            status: crate::runtime::CoroStatus::Suspended,
+            body,
+            started: false,
+            resumer: None,
+            resume_at: None,
+            error_value: None,
+            error_status: crate::runtime::coroutine::ErrorStatus::Run,
+            error_traceback: None,
+            error_levels: None,
+            natives: 0..0,
+            stack: LVec::new(mem),
+            frames: LVec::new(mem),
+            open_upvals: LVec::new(mem),
+            tbc: LVec::new(mem),
+            top: 0,
+            meta_conts: 0,
+            stale_frames: 0,
+            stack_size: 0,
+            frame_size: 0,
+            hook: crate::vm::exec::HookState::default(),
+            globals,
+            host_stack: LVec::new(mem),
+            host_state: None,
+        };
+        self.adopt_counted(coro, PucKind::Thread, size)
     }
 }

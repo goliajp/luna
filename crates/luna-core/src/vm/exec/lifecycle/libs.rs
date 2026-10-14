@@ -3,6 +3,22 @@
 use super::*;
 
 impl Vm {
+    /// The standalone interpreter's libraries: first what `lua.c` allocates
+    /// to call its main function (5.1's `lua_cpcall` makes a C closure for
+    /// it, later versions call it one level down), then
+    /// [`Vm::open_all_libs`].
+    #[doc(hidden)]
+    pub fn open_lua_c_libs(&mut self) {
+        if self.version == crate::version::LuaVersion::Lua51 {
+            let size = self.heap.sizes.c_closure(0);
+            let kind = crate::runtime::heap::PucKind::CClosure;
+            self.heap.acct_obj(kind, size);
+        } else {
+            self.heap.acct_call_depth(1);
+        }
+        self.open_all_libs();
+    }
+
     /// Open the entire 5.5 standard library on a `new_minimal`-built Vm.
     /// `Vm::new` calls this; sandboxed embedders open libraries one at a
     /// time instead (`open_base`, `open_math`, `open_table`, …).

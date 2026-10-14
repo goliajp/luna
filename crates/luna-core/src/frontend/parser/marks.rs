@@ -90,23 +90,6 @@ pub(crate) fn token_at(src: &[u8], version: LuaVersion, c_depth: u32, ix: u32) -
     record(src, version, c_depth, Some(ix)).ok()?.found
 }
 
-/// What kind of token a scanned string is for: which of them PUC's
-/// scanner anchors, and re-anchors when a function ends, differs by
-/// dialect.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ScanKind {
-    Name,
-    Str,
-    Reserved,
-}
-
-/// What the scanner makes, by token: the strings, and how full its buffer
-/// gets (see `scan_buf`).
-pub(crate) struct Scanned {
-    pub(crate) strings: Vec<(u32, Vec<u8>, ScanKind)>,
-    pub(crate) peaks: Vec<(u32, u32)>,
-}
-
 /// [`record_marks`] with what PUC's scanner makes.
 pub(crate) fn record_strings(
     src: &[u8],
@@ -126,10 +109,11 @@ pub(crate) fn record_strings(
 
 #[path = "scan_buf.rs"]
 mod scan_buf;
+use scan_buf::{ScanKind, Scanned};
 /// What the load's replay needs of the scanner's record.
 pub(crate) mod scan {
     pub(crate) use super::scan_buf::grown;
-    pub(crate) use super::{ScanKind, Scanned};
+    pub(crate) use super::scan_buf::{ScanKind, Scanned};
 }
 
 fn record(

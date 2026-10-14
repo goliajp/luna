@@ -20,6 +20,7 @@ use crate::runtime::heap::PucKind;
 use crate::runtime::table::{Dialect, TableError};
 use crate::runtime::{Proto, Table};
 
+mod consts;
 mod events;
 
 /// One array PUC grows by doubling (`luaM_growvector`) and trims when the
@@ -262,47 +263,5 @@ impl Vm {
             self.replay_event(r, tok, ev)?;
         }
         Ok(())
-    }
-
-    /// 5.5 `luaD_anchorobj`: an object keyed in the chunk's table (`t`, or
-    /// one luna has no object for).
-    fn anchor_in_h(&mut self, r: &mut Replay, t: Option<Gc<Table>>) -> Result<(), SyntaxError> {
-        let key = match t {
-            Some(t) => Value::Table(t),
-            None => {
-                r.anchors += 1;
-                Value::LightUserdata(r.anchors as *const ())
-            }
-        };
-        match r.h {
-            Some(h) => self.set_in(h, key, key),
-            None => Ok(()),
-        }
-    }
-
-    /// `t[k] = v` in a parser table, when `k` is not there yet (PUC
-    /// `luaH_set` on a new key; a key already there allocates nothing).
-    fn set_in(&mut self, t: Gc<Table>, k: Value, v: Value) -> Result<(), SyntaxError> {
-        if !t.get(k).is_nil() {
-            return Ok(());
-        }
-        #[cfg(feature = "gc-trace")]
-        if let Value::Str(s) = k {
-            self.heap.trace.line(format_args!(
-                "K {:p} {} {:08x}",
-                t.as_ptr(),
-                String::from_utf8_lossy(s.as_bytes()).escape_debug(),
-                s.hash()
-            ));
-        }
-        self.store_in(t, k, v)
-    }
-
-    /// `t[k] = v` in a parser table.
-    fn store_in(&mut self, t: Gc<Table>, k: Value, v: Value) -> Result<(), SyntaxError> {
-        // SAFETY: parser tables are made for this load and held only by
-        // the replay
-        let t = unsafe { t.as_mut() };
-        t.set(&mut self.heap, k, v).map_err(table_err)
     }
 }

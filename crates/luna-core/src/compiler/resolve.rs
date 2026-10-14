@@ -2,6 +2,18 @@
 
 use super::*;
 
+/// What a name refers to.
+pub(super) enum VarKind {
+    Local(u32),
+    /// a compile-time constant local (5.4+)
+    Const(CtConst),
+    Upval(u32),
+    /// global access; read_only from 5.5 declarations
+    Global {
+        read_only: bool,
+    },
+}
+
 impl<'a> Compiler<'a> {
     /// 5.5 global-declaration resolution: explicit declaration > innermost
     /// collective `global *` > implicit chunk default (void once any
