@@ -1,0 +1,2 @@
+allocation refused in a finalizer: ok false not enough memory
+every block freed after lua_close: yes

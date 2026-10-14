@@ -131,7 +131,7 @@ impl Vm {
             Ok(s) => Value::Str(s),
             Err(e) => e.0,
         };
-        self.errerr_in_flight = Some(v);
+        self.handler_bypass = Some(v);
         v
     }
 

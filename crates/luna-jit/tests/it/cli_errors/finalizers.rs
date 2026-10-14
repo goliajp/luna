@@ -1,0 +1,84 @@
+//! Finalizers as the standalone interpreter shows them: an error a 5.2/5.3
+//! finalizer raises reaches `lua.c` without its message handler, finalizers
+//! run when the state closes, and the 5.4+ warning for a `__gc` that cannot
+//! be called.
+
+use super::*;
+
+/// 5.2/5.3 throw a finalizer's error with `LUA_ERRGCMM`, past the message
+/// handler: `lua.c` prints it without a traceback.
+#[test]
+fn finalizer_error_uncaught() {
+    let case = Case {
+        files: &[(
+            "gcmm.lua",
+            "setmetatable({}, {__gc = function() error(\"boom\") end})\ncollectgarbage()\n",
+        )],
+        args: &["gcmm.lua"],
+        stdin: None,
+        env: &[],
+    };
+    case.expect(&[
+        Expect {
+            dialects: &["5.1", "5.4", "5.5"],
+            stdout: "",
+            stderr: "",
+            status: 0,
+        },
+        Expect {
+            dialects: &["5.2", "5.3"],
+            stdout: "",
+            stderr: "lua: error in __gc metamethod (gcmm.lua:1: boom)\n",
+            status: 1,
+        },
+    ]);
+}
+
+/// An object a finalizer registers while the state closes is not finalized.
+#[test]
+fn registered_while_closing() {
+    let case = Case {
+        files: &[(
+            "closereg.lua",
+            "keep = setmetatable({}, {__gc = function()\n  print(\"outer finalizer\")\n  setmetatable({}, {__gc = function() print(\"inner finalizer\") end})\nend})\nprint(\"end of script\")\n",
+        )],
+        args: &["closereg.lua"],
+        stdin: None,
+        env: &[],
+    };
+    case.expect(&[
+        Expect {
+            dialects: &["5.1"],
+            stdout: "end of script\n",
+            stderr: "",
+            status: 0,
+        },
+        Expect {
+            dialects: &["5.2", "5.3", "5.4", "5.5"],
+            stdout: "end of script\nouter finalizer\n",
+            stderr: "",
+            status: 0,
+        },
+    ]);
+}
+
+/// From 5.4 a `__gc` that is not callable gets the warning a failed call of
+/// it would give.
+#[test]
+fn uncallable_gc_warns() {
+    let case = Case {
+        files: &[(
+            "uncallable.lua",
+            "warn(\"@on\")\nsetmetatable({}, {__gc = true})\ncollectgarbage()\nprint(\"done\")\n",
+        )],
+        args: &["uncallable.lua"],
+        stdin: None,
+        env: &[],
+    };
+    case.expect_dialects(&[Expect {
+        dialects: &["5.4", "5.5"],
+        stdout: "done\n",
+        stderr: "Lua warning: error in __gc (attempt to call a boolean value (metamethod '__gc'))\n",
+        status: 0,
+    }]);
+}

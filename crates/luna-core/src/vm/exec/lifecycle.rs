@@ -43,6 +43,7 @@ impl Vm {
         // PUC 5.1 had no ephemeron pass — `__mode='k'` tables marked their
         // values strongly. gc.lua's "weak tables" section relies on that.
         heap.no_ephemeron = version <= LuaVersion::Lua51;
+        heap.refinalize = version != LuaVersion::Lua52;
         heap.signed_zero_keys = version <= LuaVersion::Lua52;
         heap.table_dialect = crate::runtime::table::Dialect::of(version);
         // the strings the heap made before it knew the dialect (its fixed
@@ -155,7 +156,7 @@ impl Vm {
             msgh_running: None,
             msgh_runs: 0,
             errerr_raised: 0,
-            errerr_in_flight: None,
+            handler_bypass: None,
             gcmm_raised: 0,
             native_ret_hooked: false,
             tail_hook_fired: false,
@@ -279,13 +280,6 @@ impl Vm {
     /// counted.
     pub fn memory_in_use(&self) -> Option<usize> {
         self.heap.mem().ctx().in_use()
-    }
-
-    /// What `collectgarbage("count")` and `lua_gc(LUA_GCCOUNT)` report:
-    /// the allocation context's count when it keeps one, else the
-    /// collector's own estimate.
-    pub(crate) fn gc_count_bytes(&self) -> usize {
-        self.memory_in_use().unwrap_or(self.heap.bytes())
     }
 
     fn new_minimal_on(version: LuaVersion, heap: Heap) -> Vm {

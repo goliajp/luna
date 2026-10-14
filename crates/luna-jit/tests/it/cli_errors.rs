@@ -179,5 +179,6 @@ fn error_level_0() {
 
 mod error_objects;
 mod exit_and_options;
+mod finalizers;
 mod libraries_and_warnings;
 mod load_and_input;
