@@ -47,8 +47,7 @@ impl Heap {
                 unsafe { self.link(p as *mut GcHeader) };
                 self.acct_new_string(p as *mut GcHeader, bytes.len());
             } else {
-                // SAFETY: `p` is an interned string, allocated (see below)
-                if unsafe { (*(p as *mut GcHeader)).sub } & UNCOUNTED != 0 {
+                if is_uncounted(p as *mut GcHeader) {
                     self.acct_promote(p as *mut GcHeader, bytes.len());
                 }
                 // PUC `luaS_new` resurrect guard (lstring.c).

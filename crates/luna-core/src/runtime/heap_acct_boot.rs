@@ -59,8 +59,7 @@ impl Heap {
     /// marked as one PUC has not made.
     pub(crate) fn acct_new_string(&mut self, h: *mut GcHeader, len: usize) {
         if self.puc.silent > 0 {
-            // SAFETY: `h` is the string the caller just made and linked
-            unsafe { (*h).sub |= UNCOUNTED };
+            super::set_uncounted(h, true);
         } else {
             self.acct_string(len);
         }
@@ -74,8 +73,7 @@ impl Heap {
         if self.puc.silent > 0 {
             return;
         }
-        // SAFETY: `h` is a live string the caller found
-        unsafe { (*h).sub &= !UNCOUNTED };
+        super::set_uncounted(h, false);
         self.acct_string(len);
     }
 
@@ -148,9 +146,7 @@ impl Heap {
         let s = self.try_intern(bytes);
         self.puc.silent -= 1;
         let s = s?;
-        // SAFETY: `s` is the live string just found or made; only its
-        // header byte is written
-        unsafe { (*(s.as_ptr() as *mut GcHeader)).sub &= !UNCOUNTED };
+        super::set_uncounted(s.as_ptr() as *mut GcHeader, false);
         if live {
             self.puc.pins.push(s);
         }
