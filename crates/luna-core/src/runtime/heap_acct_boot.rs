@@ -57,6 +57,7 @@ impl Heap {
 impl Heap {
     /// A string just made: counted, or, while luna builds its own objects,
     /// marked as one PUC has not made.
+    #[inline]
     pub(crate) fn acct_new_string(&mut self, h: *mut GcHeader, len: usize) {
         if self.puc.silent > 0 {
             super::set_uncounted(h, true);

@@ -47,31 +47,9 @@ impl Heap {
                 unsafe { self.link(p as *mut GcHeader) };
                 self.acct_new_string(p as *mut GcHeader, bytes.len());
             } else {
-                if is_uncounted(p as *mut GcHeader) {
-                    self.acct_promote(p as *mut GcHeader, bytes.len());
-                }
-                // PUC `luaS_new` resurrect guard (lstring.c).
-                // The bucket-chain is walked open-loop without consulting GC
-                // color; during incremental sweep an existing entry may be
-                // dead-white (in `sweep_cur`, scheduled for `free_obj`). If we
-                // hand its pointer back, the budget-paced sweep frees it out
-                // from under the mutator and the next bucket walk dereferences
-                // a libc-recycled slot.
-                //
-                // Flip the white bits to `current_white` so the upcoming sweep
-                // skips it (PUC `changewhite`). Black / not-white objects are
-                // already safe and untouched.
-                // SAFETY: `p` came from `StringTable::intern` and is a valid
-                // `LuaStr` header (its bucket chain is consistent under our
-                // single-threaded heap).
-                unsafe {
-                    let f = (*(p as *mut GcHeader)).flags;
-                    if is_white(f) && (f & self.current_white) == 0 {
-                        self.resurrect(&mut *(p as *mut GcHeader));
-                    }
-                }
+                return Some(self.found_string(p, bytes.len()));
             }
-            // SAFETY: `p` is an interned string the heap manages: new and linked above, or found in the table and kept from this cycle's sweep by the recoloring above
+            // SAFETY: `p` is an interned string the heap manages, new and linked above
             Some(unsafe { Gc::from_ptr(p) })
         } else {
             let p = string::alloc_long(self.mem.mem(), bytes, self.seed, self.hash51).ok()?;
@@ -80,6 +58,46 @@ impl Heap {
             self.acct_new_string(p as *mut GcHeader, bytes.len());
             // SAFETY: `p` is the string linked just above
             Some(unsafe { Gc::from_ptr(p) })
+        }
+    }
+
+    /// The one-byte string of `bytes` when it exists, found without a
+    /// lookup (`string.sub` makes many).
+    #[inline]
+    pub(crate) fn find_single(&mut self, bytes: &[u8]) -> Option<Gc<LuaStr>> {
+        let [c] = *bytes else { return None };
+        let p = self.strings.single(c);
+        (!p.is_null()).then(|| self.found_string(p, 1))
+    }
+
+    /// An interned string `p` of `len` bytes found again.
+    #[inline]
+    fn found_string(&mut self, p: *mut LuaStr, len: usize) -> Gc<LuaStr> {
+        if is_uncounted(p as *mut GcHeader) {
+            self.acct_promote(p as *mut GcHeader, len);
+        }
+        // PUC `luaS_new` resurrect guard (lstring.c).
+        // The bucket-chain is walked open-loop without consulting GC
+        // color; during incremental sweep an existing entry may be
+        // dead-white (in `sweep_cur`, scheduled for `free_obj`). If we
+        // hand its pointer back, the budget-paced sweep frees it out
+        // from under the mutator and the next bucket walk dereferences
+        // a libc-recycled slot.
+        //
+        // Flip the white bits to `current_white` so the upcoming sweep
+        // skips it (PUC `changewhite`). Black / not-white objects are
+        // already safe and untouched.
+        // SAFETY: `p` came from `StringTable::intern` and is a valid
+        // `LuaStr` header (its bucket chain is consistent under our
+        // single-threaded heap).
+        unsafe {
+            let f = (*(p as *mut GcHeader)).flags;
+            if is_white(f) && (f & self.current_white) == 0 {
+                self.resurrect(&mut *(p as *mut GcHeader));
+            }
+            // found in the table and kept from this cycle's sweep by the
+            // recoloring above
+            Gc::from_ptr(p)
         }
     }
 

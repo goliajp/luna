@@ -78,30 +78,26 @@ impl Vm {
     /// stand for it, with their lines, and the constants PUC adds for it
     /// (an instruction PUC has none for stands for none).
     fn replay_instruction(&mut self, r: &mut Replay, line: u32) {
-        let Some(f) = r.fs.last() else {
+        let (d, sizes) = (r.d, &self.heap.sizes);
+        let (abs, tvalue) = (sizes.abslineinfo, sizes.tvalue);
+        let Replay { fs, shapes, .. } = r;
+        let Some(f) = fs.last_mut() else {
             return;
         };
-        let (shape, pc) = (f.shape, f.pc);
-        let Some(sh) = r.shapes.get(shape) else {
-            self.replay_code(r, line);
-            if let Some(f) = r.fs.last_mut() {
-                f.pc += 1;
-            }
+        let h = &mut self.heap;
+        let pc = f.pc;
+        f.pc += 1;
+        let Some(sh) = shapes.get(f.shape) else {
+            code_one(f, h, d, abs, line);
             return;
         };
         let a = sh.pc_map.get(pc).copied().unwrap_or(0) as usize;
         let b = sh.pc_map.get(pc + 1).copied().unwrap_or(a as u32 + 1) as usize;
         for j in a..b.max(a) {
-            let l = r.shapes[shape].lines.get(j).copied().unwrap_or(line);
-            self.replay_code(r, l);
+            code_one(f, h, d, abs, sh.lines.get(j).copied().unwrap_or(line));
         }
-        let added = r.shapes[shape].k_added.iter().filter(|&&p| p == pc).count();
-        let tvalue = self.heap.sizes.tvalue;
-        if let Some(f) = r.fs.last_mut() {
-            for _ in 0..added {
-                f.k.push(&mut self.heap, tvalue);
-            }
-            f.pc += 1;
+        for _ in sh.k_added.iter().filter(|&&p| p == pc) {
+            f.k.push(h, tvalue);
         }
     }
 
@@ -313,27 +309,32 @@ impl Vm {
     /// One PUC instruction on `line` (`luaK_code`): the code array, then
     /// the line info (5.4+ `savelineinfo`, with its absolute entries).
     pub(super) fn replay_code(&mut self, r: &mut Replay, line: u32) {
-        let d = r.d;
-        let s = self.heap.sizes;
-        let Some(f) = r.fs.last_mut() else {
-            return;
-        };
-        let h = &mut self.heap;
-        f.code.push(h, 4);
-        if matches!(d, Dialect::L54 | Dialect::L55) {
-            let dif = i64::from(line) - i64::from(f.prev_line);
-            let wthabs = f.iwthabs;
-            f.iwthabs += 1;
-            f.last_prev = f.prev_line;
-            f.last_abs = dif.abs() >= 0x80 || wthabs >= 128;
-            if f.last_abs {
-                f.abs.push(h, s.abslineinfo);
-                f.iwthabs = 1;
-            }
-            f.prev_line = line;
-            f.line.push(h, 1);
-        } else {
-            f.line.push(h, 4);
+        let abs = self.heap.sizes.abslineinfo;
+        if let Some(f) = r.fs.last_mut() {
+            code_one(f, &mut self.heap, r.d, abs, line);
         }
+    }
+}
+
+/// One PUC instruction on `line` in function `f`: the code array, then the
+/// line info (5.4+ `savelineinfo`, with its absolute entries of `abs`
+/// bytes).
+#[inline(always)]
+fn code_one(f: &mut Fs, h: &mut Heap, d: Dialect, abs: usize, line: u32) {
+    f.code.push(h, 4);
+    if matches!(d, Dialect::L54 | Dialect::L55) {
+        let dif = i64::from(line) - i64::from(f.prev_line);
+        let wthabs = f.iwthabs;
+        f.iwthabs += 1;
+        f.last_prev = f.prev_line;
+        f.last_abs = dif.abs() >= 0x80 || wthabs >= 128;
+        if f.last_abs {
+            f.abs.push(h, abs);
+            f.iwthabs = 1;
+        }
+        f.prev_line = line;
+        f.line.push(h, 1);
+    } else {
+        f.line.push(h, 4);
     }
 }

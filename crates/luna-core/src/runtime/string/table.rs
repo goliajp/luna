@@ -61,12 +61,6 @@ impl StringTable {
         h51: bool,
     ) -> Result<(*mut LuaStr, bool), Oom> {
         debug_assert!(h51 || bytes.len() <= MAX_SHORT_LEN);
-        if let [c] = *bytes {
-            let p = self.single[usize::from(c)];
-            if !p.is_null() {
-                return Ok((p, false));
-            }
-        }
         let h = if h51 {
             lua_hash_51(bytes)
         } else {
@@ -98,10 +92,16 @@ impl StringTable {
         }
         self.buckets[b] = p;
         self.count += 1;
-        if let [c] = *bytes {
-            self.single[usize::from(c)] = p;
+        if bytes.len() == 1 {
+            self.single[usize::from(bytes[0])] = p;
         }
         Ok((p, true))
+    }
+
+    /// The one-byte string `c`, if there is one (null otherwise).
+    #[inline]
+    pub(crate) fn single(&self, c: u8) -> *mut LuaStr {
+        self.single[usize::from(c)]
     }
 
     /// The interned string with `bytes`, if any.
@@ -204,8 +204,8 @@ impl StringTable {
                 if *cur == p {
                     *cur = (*p).hnext;
                     self.count -= 1;
-                    if let [c] = *bytes_of(p) {
-                        self.single[usize::from(c)] = ptr::null_mut();
+                    if (*p).hdr.aux == 1 {
+                        self.single[usize::from(*bytes_of(p).as_ptr())] = ptr::null_mut();
                     }
                     return;
                 }

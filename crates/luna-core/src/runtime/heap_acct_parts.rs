@@ -92,7 +92,19 @@ impl Heap {
 
 impl Heap {
     /// A new string of `len` bytes (PUC `createstrobj`).
+    #[inline]
     pub(crate) fn acct_string(&mut self, len: usize) {
+        // a short string with no trace to write: only the sum is seen
+        // (the table grows on the same condition either side of the
+        // string's own count)
+        if cfg!(not(feature = "gc-trace")) && len <= self.puc.short_max && self.puc.silent == 0 {
+            if self.puc.strt_nuse >= self.puc.strt_size {
+                self.grow_strtab();
+            }
+            self.bytes += self.sizes.string(len, false);
+            self.puc.strt_nuse += 1;
+            return;
+        }
         let d = self.table_dialect;
         let long = len > crate::runtime::string::MAX_SHORT_LEN && d != Dialect::L51;
         let kind = if long {
@@ -118,6 +130,7 @@ impl Heap {
 
     /// The string table doubling: 5.1 allocates the new one and frees the
     /// old, later versions reallocate.
+    #[cold]
     fn grow_strtab(&mut self) {
         let (old, new) = (self.puc.strt_size, self.puc.strt_size * 2);
         let p = self.sizes.ptr;
@@ -193,9 +206,9 @@ impl Heap {
     }
 
     /// A string of `len` bytes freed.
+    #[inline]
     pub(crate) fn acct_string_free(&mut self, len: usize) {
-        let long =
-            len > crate::runtime::string::MAX_SHORT_LEN && self.table_dialect != Dialect::L51;
+        let long = len > self.puc.short_max;
         if !long && self.puc.silent == 0 {
             self.puc.strt_nuse -= 1;
         }
