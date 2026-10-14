@@ -74,6 +74,15 @@ impl<'a> Compiler<'a> {
             reg: Some(reg),
             global: false,
         });
+        if let Some(lit) = puc_literal(name) {
+            self.log(super::puc_log::PEv::Lit(lit));
+        }
+        self.log_actvar();
+        if self.defer_locvars {
+            self.pending_locvars += 1;
+        } else {
+            self.log(super::puc_log::PEv::LocVar);
+        }
         Ok(())
     }
 
@@ -94,6 +103,7 @@ impl<'a> Compiler<'a> {
             reg: None,
             global: false,
         });
+        self.log_actvar();
     }
 
     /// The compile-time constant `name` refers to here, if it does: the
@@ -194,6 +204,7 @@ impl<'a> Compiler<'a> {
                     name: name.into(),
                     read_only,
                 });
+                self.log(super::puc_log::PEv::Upval(li as u32));
                 Ok(VarKind::Upval(ui))
             }
             VarKind::Upval(pidx) => {
@@ -208,6 +219,7 @@ impl<'a> Compiler<'a> {
                     name: name.into(),
                     read_only,
                 });
+                self.log(super::puc_log::PEv::Upval(li as u32));
                 Ok(VarKind::Upval(ui))
             }
         }
@@ -222,4 +234,21 @@ impl<'a> Compiler<'a> {
             .filter(|l| l.read_only)
             .map(|l| l.name)
     }
+}
+
+/// The names of locals PUC's parser makes its own strings for.
+fn puc_literal(name: &str) -> Option<&'static str> {
+    [
+        "self",
+        "arg",
+        "(for index)",
+        "(for limit)",
+        "(for step)",
+        "(for generator)",
+        "(for state)",
+        "(for control)",
+        "(vararg table)",
+    ]
+    .into_iter()
+    .find(|&l| l == name)
 }

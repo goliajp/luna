@@ -90,6 +90,45 @@ struct Out {
     upvals: Vec<Up>,
     protos: Vec<Out>,
     locvars: Vec<(crate::runtime::DebugName, u32, u32)>,
+    pc_map: Vec<u32>,
+    k_added: Vec<usize>,
+}
+
+/// A function as PUC's code generator lays it out, for counting its
+/// arrays (see `vm/exec/load_acct.rs`).
+pub(crate) struct Shape {
+    /// luna pc → the first PUC instruction for it; one past the end
+    pub pc_map: Vec<u32>,
+    /// PUC's line of each PUC instruction
+    pub lines: Vec<u32>,
+    /// the luna pc at which each constant PUC has and luna lacks is added
+    pub k_added: Vec<usize>,
+}
+
+/// The [`Shape`] of `proto` and of every function in it, in the order
+/// their functions open (preorder), for dialect `version`.
+pub(crate) fn shapes(proto: &Proto, version: LuaVersion) -> Result<Vec<Shape>, String> {
+    let d = match version {
+        LuaVersion::Lua51 => Dialect::V51,
+        LuaVersion::Lua52 => Dialect::V52,
+        LuaVersion::Lua53 => Dialect::V53,
+        LuaVersion::Lua54 => Dialect::V54,
+        LuaVersion::Lua55 => Dialect::V55,
+        LuaVersion::MacroLua => return Err("MacroLua has no PUC bytecode format".to_string()),
+    };
+    fn flat(o: Out, out: &mut Vec<Shape>) {
+        out.push(Shape {
+            pc_map: o.pc_map,
+            lines: o.lines,
+            k_added: o.k_added,
+        });
+        for c in o.protos {
+            flat(c, out);
+        }
+    }
+    let mut out = Vec::new();
+    flat(build(proto, d, None)?, &mut out);
+    Ok(out)
 }
 
 /// Serialise `proto` as a chunk of the PUC version `version` names;
@@ -232,5 +271,7 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
         upvals,
         protos,
         locvars: locvars.into_iter().map(|v| v.2).collect(),
+        pc_map: body.pc_map,
+        k_added: body.k_added,
     })
 }

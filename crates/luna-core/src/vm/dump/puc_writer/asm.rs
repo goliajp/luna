@@ -51,6 +51,8 @@ pub(super) struct Asm<'p> {
     pub consts: Vec<Value>,
     /// the dialect and its scanner table over `consts` (see `const_map`)
     pub kmap: (LuaVersion, DumpConstMap),
+    /// the luna pc of each constant the encoding adds
+    pub k_added: Vec<usize>,
     pc: usize,
     line: u32,
 }
@@ -63,6 +65,8 @@ pub(super) struct Body {
     pub frame: u32,
     /// luna pc → PUC pc, one entry past the last luna pc
     pub pc_map: Vec<u32>,
+    /// the luna pc of each constant the encoding added
+    pub k_added: Vec<usize>,
 }
 
 impl<'p> Asm<'p> {
@@ -80,6 +84,7 @@ impl<'p> Asm<'p> {
             fixups: Vec::new(),
             consts: p.consts.to_vec(),
             kmap: (LuaVersion::Lua54, DumpConstMap::default()),
+            k_added: Vec::new(),
             pc: 0,
             line: 0,
         }
@@ -167,7 +172,12 @@ impl<'p> Asm<'p> {
     /// Index of constant `v`, appended where PUC's code generator would.
     pub(super) fn konst(&mut self, v: Value) -> u32 {
         let (ver, map) = &mut self.kmap;
-        add_const(*ver, &mut self.consts, map, v)
+        let n = self.consts.len();
+        let k = add_const(*ver, &mut self.consts, map, v);
+        if self.consts.len() > n {
+            self.k_added.push(self.pc);
+        }
+        k
     }
 
     /// Constant `k` when it is a string PUC 5.3+ interns (the fast field
@@ -216,6 +226,7 @@ impl<'p> Asm<'p> {
             consts: self.consts,
             frame: self.temp_base + self.temps_used,
             pc_map,
+            k_added: self.k_added,
         })
     }
 }

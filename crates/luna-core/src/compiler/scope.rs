@@ -128,7 +128,10 @@ impl<'a> Compiler<'a> {
             nactvar,
             close: false,
         });
-        l.labels.len() - 1
+        let i = l.labels.len() - 1;
+        let n: usize = self.open_levels().iter().map(|l| l.labels.len()).sum();
+        self.log(super::puc_log::PEv::Label(n as u32));
+        i
     }
 
     pub(super) fn new_goto(&mut self, name: &'a str, pc: i32) -> usize {
@@ -140,7 +143,10 @@ impl<'a> Compiler<'a> {
             nactvar,
             close: false,
         });
-        l.gotos.len() - 1
+        let i = l.gotos.len() - 1;
+        let n: usize = self.open_levels().iter().map(|l| l.gotos.len()).sum();
+        self.log(super::puc_log::PEv::Goto(n as u32));
+        i
     }
 }
 

@@ -152,12 +152,19 @@ impl<'a> Compiler<'a> {
                 // the closure goes to the variable's register after `end`
                 self.at(TokRef::StatAfter(sid, 0));
                 let reg = self.reserve(1)?;
-                // declared before the body: the function can call itself
+                // declared before the body, when the scanner is on its `(`:
+                // the function can call itself
+                self.at(TokRef::StatMark(sid, 0));
                 self.declare_local(self.nm(name), reg, false)?;
                 // PUC does not reserve the variable's register before the
                 // body: the closure takes the next free one, the variable's
                 self.set_freereg(reg);
-                let f = self.function_exp(body, false, TokRef::StatAfter(sid, 0))?;
+                let f = self.function_exp(
+                    body,
+                    false,
+                    TokRef::StatMark(sid, 0),
+                    TokRef::StatAfter(sid, 0),
+                )?;
                 self.exp_to_reg(f, reg)?;
                 // debug information sees the variable once the closure is in it
                 let pc = self.lr().code.len() as u32;
@@ -180,7 +187,12 @@ impl<'a> Compiler<'a> {
                 self.declare_global_marker(Some(text));
                 let saved = self.lr().freereg;
                 let lv = self.global_lv(text)?;
-                let f = self.function_exp(body, false, TokRef::StatAfter(sid, 0))?;
+                let f = self.function_exp(
+                    body,
+                    false,
+                    TokRef::StatMark(sid, 0),
+                    TokRef::StatAfter(sid, 0),
+                )?;
                 // `global function f` is a defining write: f must not already
                 // exist in the environment (runtime "already defined" check).
                 // Pin the redef-check and assignment emits to the name's source

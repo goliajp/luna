@@ -244,6 +244,15 @@ impl Compiler<'_> {
     pub(super) fn const_idx(&mut self, c: Value) -> u32 {
         let v = self.version;
         let l = self.l();
-        add_const(v, &mut l.consts, &mut l.const_map, c)
+        let n = l.consts.len();
+        let i = add_const(v, &mut l.consts, &mut l.const_map, c);
+        if i as usize == n {
+            let key = match plan(v, &c).0 {
+                Plan::Key(k) => Some(k),
+                Plan::New => None,
+            };
+            self.log(super::puc_log::PEv::Const(key));
+        }
+        i
     }
 }

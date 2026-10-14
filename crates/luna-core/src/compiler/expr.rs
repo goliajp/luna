@@ -204,7 +204,7 @@ impl<'a> Compiler<'a> {
                 e
             }
             Expr::Function(body) => {
-                let f = self.function_exp(body, false, TokRef::After(id, 0));
+                let f = self.function_exp(body, false, TokRef::Open(id, 0), TokRef::After(id, 0));
                 self.at(TokRef::After(id, 0));
                 f
             }
