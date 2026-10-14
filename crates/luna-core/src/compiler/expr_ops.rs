@@ -101,16 +101,20 @@ impl<'a> Compiler<'a> {
         let mut operands = self.operands.take();
         operands.push_or_abort(lhs);
         let mut cur = rhs;
+        // the `CONCAT` is made for the last `..` (the innermost pair) and
+        // takes its line
+        let mut line = line;
         loop {
             match self.ast.expr(cur) {
                 Expr::BinOp {
                     op: BinOp::Concat,
                     lhs: l,
                     rhs: r,
-                    ..
+                    line: l_line,
                 } => {
                     operands.push_or_abort(*l);
                     cur = *r;
+                    line = *l_line;
                 }
                 _ => {
                     operands.push_or_abort(cur);
