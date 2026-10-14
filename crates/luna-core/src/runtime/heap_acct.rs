@@ -184,6 +184,7 @@ mod fmt;
 mod parts;
 
 /// Whether object `h` is one PUC has not made (see [`Heap::acct_new`]).
+#[inline(always)]
 pub(crate) fn is_uncounted(h: *const GcHeader) -> bool {
     // SAFETY: `h` heads a live object of this heap; its header is read
     unsafe { (*h).sub & UNCOUNTED != 0 }
@@ -191,7 +192,7 @@ pub(crate) fn is_uncounted(h: *const GcHeader) -> bool {
 
 fn set_uncounted(h: *mut GcHeader, on: bool) {
     // SAFETY: `h` heads a live object of this heap; only its per-type byte
-    // is written, which no other type than a table or a string uses
+    // is written, which no type but a table uses otherwise
     unsafe {
         if on {
             (*h).sub |= UNCOUNTED;
