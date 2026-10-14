@@ -27,12 +27,11 @@ fn bucket_of(bytes: &[u8], h: u32, h51: bool) -> u32 {
     }
     const K: u64 = 0x517c_c1b7_2722_0a95;
     let mut x = bytes.len() as u64;
-    let mut words = bytes.chunks_exact(8);
-    for w in &mut words {
-        let w = u64::from_le_bytes(w.try_into().expect("eight bytes"));
-        x = (x.rotate_left(5) ^ w).wrapping_mul(K);
+    let (words, rest) = bytes.as_chunks::<8>();
+    for &w in words {
+        x = (x.rotate_left(5) ^ u64::from_le_bytes(w)).wrapping_mul(K);
     }
-    for &b in words.remainder() {
+    for &b in rest {
         x = (x.rotate_left(5) ^ u64::from(b)).wrapping_mul(K);
     }
     (x >> 32) as u32 ^ x as u32
