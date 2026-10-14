@@ -181,7 +181,10 @@ impl Interp {
         let stdin = argv[script] == b"-" && argv[script - 1] != b"--";
         let name = (!stdin).then(|| argv[script].as_slice());
         // 5.2 on load either kind of chunk; 5.1 had no mode
-        let f = match self.vm.load_file(name, None) {
+        let loaded = self.vm.load_file(name, None);
+        #[cfg(feature = "gc-trace")]
+        self.vm.trace_mark("/load");
+        let f = match loaded {
             Ok(f) => f,
             Err(e) => {
                 self.report(e.0);
