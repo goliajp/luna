@@ -154,6 +154,7 @@ fn build(
 ) -> Res<Out> {
     let np = p.num_params as u32;
     let mut asm = Asm::new(p, d.name());
+    asm.shape_only = shapes.is_some();
     // 5.1 / 5.2 have one number type: the constants the encoder adds meet
     // luna's as the floats these become
     if d <= Dialect::V52 {
