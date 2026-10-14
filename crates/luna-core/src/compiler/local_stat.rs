@@ -50,8 +50,12 @@ impl<'a> Compiler<'a> {
         let base = self.explist_adjust(vals, n)?;
         if let (Some(_), Some(e)) = (&run_last, last_expr) {
             self.set_freereg(base + n);
+            // PUC keeps the code of X and makes no load of the constant
+            // (`luaK_exp2const` takes the value once its jumps are patched)
             let v = self.expr(e)?;
-            self.exp_to_nextreg(v)?;
+            if matches!(v, Exp::Jumps(_) | Exp::Jmp(_)) {
+                self.exp_to_nextreg(v)?;
+            }
             self.set_freereg(base + n);
         }
         let mut tbc: Option<u32> = None;

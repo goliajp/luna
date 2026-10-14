@@ -19,7 +19,7 @@ impl Compiler<'_> {
     ) -> Result<Exp, SyntaxError> {
         let (saved, saved_force) = (open.saved, open.saved_force);
         let mut zeros = LVec::new(self.heap.mem());
-        if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros) {
+        if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros, None) {
             self.note_zeros(&zeros);
             self.force_line = saved_force;
             return Ok(folded);
