@@ -1,0 +1,170 @@
+//! PUC's sizes of tables, strings and prototypes, and the order PUC
+//! allocates their parts in.
+
+use super::*;
+use crate::runtime::table::Dialect;
+
+impl Heap {
+    /// The bytes of a table's array part of `n` slots.
+    fn array_bytes(&self, n: usize) -> usize {
+        match (self.table_dialect, n) {
+            (_, 0) => 0,
+            // 5.5 keeps the values, then a byte per tag, around an unsigned
+            (Dialect::L55, n) => n * 9 + 4,
+            (_, n) => n * self.sizes.tvalue,
+        }
+    }
+
+    /// A table's parts going from `old_a` array slots and `old_h` nodes to
+    /// `new_a` and `new_h`, as PUC's `luaH_resize` allocates and frees them:
+    /// up to 5.3 a growing array first, then the new nodes, a shrinking
+    /// array, the old nodes; from 5.4 the new nodes, the array, the old
+    /// nodes. A part of no nodes is PUC's shared dummy node, never
+    /// allocated.
+    pub(crate) fn acct_table_resize(
+        &mut self,
+        old_a: usize,
+        old_h: usize,
+        new_a: usize,
+        new_h: usize,
+    ) {
+        let node = self.sizes.node;
+        let (oa, na) = (self.array_bytes(old_a), self.array_bytes(new_a));
+        match self.table_dialect {
+            Dialect::L51 | Dialect::L52 | Dialect::L53 => {
+                if new_a > old_a {
+                    self.acct_block(oa, na);
+                }
+                self.acct_block(0, new_h * node);
+                if new_a < old_a {
+                    self.acct_block(oa, na);
+                }
+                self.acct_block(old_h * node, 0);
+            }
+            Dialect::L54 => {
+                // the array is reallocated even at the same size
+                self.acct_block(0, new_h * node);
+                self.acct_block(oa, na);
+                self.acct_block(old_h * node, 0);
+            }
+            Dialect::L55 => {
+                self.acct_block(0, new_h * node);
+                if new_a != old_a {
+                    self.acct_block(0, na);
+                    self.acct_block(oa, 0);
+                }
+                self.acct_block(old_h * node, 0);
+            }
+        }
+    }
+
+    /// A table freed with `a` array slots and `h` nodes (PUC `luaH_free`).
+    pub(crate) fn acct_table_free(&mut self, a: usize, h: usize) {
+        let node = self.sizes.node;
+        let ab = self.array_bytes(a);
+        match self.table_dialect {
+            Dialect::L51 | Dialect::L52 | Dialect::L53 => {
+                self.acct_block(h * node, 0);
+                self.acct_block(ab, 0);
+            }
+            _ => {
+                self.acct_block(h * node, 0);
+                self.acct_block(ab, 0);
+            }
+        }
+        let t = self.sizes.table;
+        self.acct_free(t);
+    }
+}
+
+impl Heap {
+    /// A new string of `len` bytes (PUC `createstrobj`).
+    pub(crate) fn acct_string(&mut self, len: usize) {
+        let d = self.table_dialect;
+        let long = len > crate::runtime::string::MAX_SHORT_LEN && d != Dialect::L51;
+        let kind = if long {
+            PucKind::LongStr
+        } else {
+            PucKind::ShortStr
+        };
+        let size = self.sizes.string(len, long && d == Dialect::L55);
+        if long || self.puc.silent > 0 {
+            return self.acct_obj(kind, size);
+        }
+        // the string table grows when it is full: 5.2 on before the new
+        // string goes in, 5.1 once it is past full
+        if d != Dialect::L51 && self.puc.strt_nuse >= self.puc.strt_size {
+            self.grow_strtab();
+        }
+        self.acct_obj(kind, size);
+        self.puc.strt_nuse += 1;
+        if d == Dialect::L51 && self.puc.strt_nuse > self.puc.strt_size {
+            self.grow_strtab();
+        }
+    }
+
+    /// The string table doubling: 5.1 allocates the new one and frees the
+    /// old, later versions reallocate.
+    fn grow_strtab(&mut self) {
+        let (old, new) = (self.puc.strt_size, self.puc.strt_size * 2);
+        let p = self.sizes.ptr;
+        if self.table_dialect == Dialect::L51 {
+            self.acct_block(0, new * p);
+            self.acct_block(old * p, 0);
+        } else {
+            self.acct_block(old * p, new * p);
+        }
+        self.puc.strt_size = new;
+    }
+
+    /// The bytes of a prototype's arrays, in PUC's `luaF_freeproto` order.
+    fn proto_arrays(&self, p: &crate::runtime::function::Proto) -> [usize; 6] {
+        let s = self.sizes;
+        let n = p.code.len();
+        let lineinfo = match self.table_dialect {
+            Dialect::L54 | Dialect::L55 => n,
+            _ => 4 * n,
+        };
+        [
+            4 * n,
+            s.ptr * p.protos.len(),
+            s.tvalue * p.consts.len(),
+            lineinfo,
+            s.locvar * p.locvars.len(),
+            s.upvaldesc * p.upvals.len(),
+        ]
+    }
+
+    /// A finished prototype with its arrays (their growth while compiling
+    /// is not counted yet).
+    pub(crate) fn acct_proto(&mut self, p: Gc<crate::runtime::function::Proto>) {
+        self.acct_obj(PucKind::Proto, self.sizes.proto);
+        for b in self.proto_arrays(&p) {
+            self.acct_block(0, b);
+        }
+    }
+
+    /// A prototype freed.
+    pub(crate) fn acct_proto_free(&mut self, p: &crate::runtime::function::Proto) {
+        for b in self.proto_arrays(p) {
+            self.acct_block(b, 0);
+        }
+        let s = self.sizes.proto;
+        self.acct_free(s);
+    }
+}
+
+impl Heap {
+    /// A string of `len` bytes freed.
+    pub(crate) fn acct_string_free(&mut self, len: usize) {
+        let long =
+            len > crate::runtime::string::MAX_SHORT_LEN && self.table_dialect != Dialect::L51;
+        if !long && self.puc.silent == 0 {
+            self.puc.strt_nuse -= 1;
+        }
+        let size = self
+            .sizes
+            .string(len, long && self.table_dialect == Dialect::L55);
+        self.acct_free(size);
+    }
+}
