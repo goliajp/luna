@@ -233,6 +233,7 @@ fn r_proto(
         puc_arrays: std::cell::Cell::new([0; 7]),
         trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
         inlined_protos: std::cell::RefCell::new(Vec::new()),
+        puc_names: std::cell::RefCell::new(Vec::new()),
         traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         has_dispatchable_trace: std::cell::Cell::new(false),
         trace_heads: std::cell::Cell::new(

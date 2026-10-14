@@ -121,6 +121,7 @@ impl Vm {
                 _ => self.heap.try_intern(chunkname).map_err(SyntaxError::from),
             }
             .and_then(|source| self.compile_text_in_place(src, source))
+            .and_then(|p| self.hold_puc_names(p).map(|()| p))
             .and_then(|p| Ok((p, self.close_chunk(p)?)));
             self.heap.puc.silent -= 1;
             self.parse_scratch.record = false;
