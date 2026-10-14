@@ -97,7 +97,7 @@ fn numeral_leaf(
             ..
         } if v51 => {
             let mut z = LVec::new(ast.exprs.mem());
-            if !always_falsy(ast, *lhs, &mut z) {
+            if !always_falsy(ast, *lhs) {
                 return None;
             }
             let n = numeral(ast, *rhs, version, &mut z)?;
@@ -158,48 +158,31 @@ fn literal(ast: &Chunk, id: ExprId) -> Option<Lit> {
 
 /// `nil`, `false`, or `C and` one of them where `C` is a literal or an
 /// equality test of two literals.
-fn always_falsy(ast: &Chunk, id: ExprId, zeros: &mut LVec<f64>) -> bool {
+fn always_falsy(ast: &Chunk, id: ExprId) -> bool {
     if crate::native_stack::is_low(crate::native_stack::RESERVE) {
         return false;
     }
     match ast.expr(id) {
-        Expr::Paren(inner) => always_falsy(ast, *inner, zeros),
+        Expr::Paren(inner) => always_falsy(ast, *inner),
         Expr::BinOp {
             op: BinOp::And,
             lhs,
             rhs,
             ..
-        } => fixed_condition(ast, *lhs, zeros) && always_falsy(ast, *rhs, zeros),
+        } => fixed_condition(ast, *lhs) && always_falsy(ast, *rhs),
         _ => matches!(literal(ast, id), Some(Lit::Falsy)),
     }
 }
 
-/// A literal, or an equality test of two whose zeros (left first) go on
-/// `zeros`: PUC compiles the test's operands as constants.
-fn fixed_condition(ast: &Chunk, id: ExprId, zeros: &mut LVec<f64>) -> bool {
+/// A literal: what 5.1's parser drops the jumps of without code (an
+/// equality test makes its code, and is compiled; the fold comes once its
+/// value is known).
+fn fixed_condition(ast: &Chunk, id: ExprId) -> bool {
     if crate::native_stack::is_low(crate::native_stack::RESERVE) {
         return false;
     }
     match ast.expr(id) {
-        Expr::Paren(inner) => fixed_condition(ast, *inner, zeros),
-        Expr::BinOp {
-            op: BinOp::Eq | BinOp::Ne,
-            lhs,
-            rhs,
-            ..
-        } => {
-            let (Some(l), Some(r)) = (literal(ast, *lhs), literal(ast, *rhs)) else {
-                return false;
-            };
-            for lit in [l, r] {
-                if let Lit::Truthy(Some(f)) = lit
-                    && f == 0.0
-                {
-                    zeros.push_or_abort(f);
-                }
-            }
-            true
-        }
+        Expr::Paren(inner) => fixed_condition(ast, *inner),
         _ => literal(ast, id).is_some(),
     }
 }
