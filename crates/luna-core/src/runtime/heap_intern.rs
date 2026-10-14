@@ -43,8 +43,12 @@ impl Heap {
             if is_new {
                 // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
                 unsafe { self.link(p as *mut GcHeader) };
-                self.acct_string(bytes.len());
+                self.acct_new_string(p as *mut GcHeader, bytes.len());
             } else {
+                // SAFETY: `p` is an interned string, allocated (see below)
+                if unsafe { (*(p as *mut GcHeader)).sub } & UNCOUNTED != 0 {
+                    self.acct_promote(p as *mut GcHeader, bytes.len());
+                }
                 // PUC `luaS_new` resurrect guard (lstring.c).
                 // The bucket-chain is walked open-loop without consulting GC
                 // color; during incremental sweep an existing entry may be
@@ -72,7 +76,7 @@ impl Heap {
             let p = string::alloc_long(self.mem.mem(), bytes, self.seed, self.hash51).ok()?;
             // SAFETY: `alloc_long` just allocated `p`, linked nowhere yet
             unsafe { self.link(p as *mut GcHeader) };
-            self.acct_string(bytes.len());
+            self.acct_new_string(p as *mut GcHeader, bytes.len());
             // SAFETY: `p` is the string linked just above
             Some(unsafe { Gc::from_ptr(p) })
         }
@@ -91,7 +95,7 @@ impl Heap {
         let p = string::alloc_long_pair(self.mem.mem(), a, b, self.seed, self.hash51)?;
         // SAFETY: `alloc_long_pair` just allocated `p`, linked nowhere yet
         unsafe { self.link(p as *mut GcHeader) };
-        self.acct_string(n);
+        self.acct_new_string(p as *mut GcHeader, n);
         // SAFETY: `p` is the string linked just above
         Ok(unsafe { Gc::from_ptr(p) })
     }

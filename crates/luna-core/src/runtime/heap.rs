@@ -69,6 +69,9 @@ const DEFERRED: u8 = 32;
 const LEAF: u8 = 64;
 /// BLACK or a read-only table; see the flag layout on `GcHeader`
 const SLOW: u8 = 8;
+/// in a string's `sub` byte: luna made the string for itself, PUC has not
+/// made it, and the count leaves it out (see `heap_acct.rs`)
+pub(crate) const UNCOUNTED: u8 = 0x80;
 /// The `aux` bit of a table that marks it read-only (`Table::is_readonly`).
 /// A table's other `aux` bits are its absent-metamethod bits, one per event
 /// below this one; the JIT's inline stores test this bit in the byte of

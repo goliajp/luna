@@ -85,7 +85,7 @@ impl Vm {
         for mt in self.type_mt.into_iter().flatten() {
             m.value(Value::Table(mt));
         }
-        for &n in &self.mm_names {
+        for &n in self.mm_names.iter().chain(&self.heap.puc.pins) {
             m.value(Value::Str(n));
         }
         // Root the running thread's live registers (PUC marks [stack, top)).
@@ -266,6 +266,21 @@ impl Vm {
     /// PUC's `totalbytes` (see `heap_acct.rs`).
     pub(crate) fn gc_count_bytes(&self) -> usize {
         self.heap.bytes()
+    }
+
+    /// Count what the standalone interpreter allocates to call its main
+    /// function: 5.1's `lua_cpcall` makes a C closure for it, later versions
+    /// call it one level down. The `luna` command calls this before it
+    /// opens the libraries.
+    #[doc(hidden)]
+    pub fn acct_lua_c_main(&mut self) {
+        if self.version == crate::version::LuaVersion::Lua51 {
+            let size = self.heap.sizes.c_closure(0);
+            self.heap
+                .acct_obj(crate::runtime::heap::PucKind::CClosure, size);
+        } else {
+            self.heap.acct_call_depth(1);
+        }
     }
 
     /// Whether a `__gc` finalizer is currently running (so `collectgarbage`
