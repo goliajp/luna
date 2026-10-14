@@ -81,10 +81,6 @@ pub(in crate::vm::dump) const OPS: &[Kind] = &[
     Kind::ExtraArg,
 ];
 
-/// [`OPS`] by kind.
-pub(in crate::vm::dump) const OPCODES: super::opcodes::Opcodes =
-    super::opcodes::Opcodes::classic(OPS);
-
 pub(super) fn undump_puc_53(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, Bad> {
     check_header(bytes)?;
     let mut r = Reader::at(bytes, HEADER.len());
