@@ -35,6 +35,13 @@ impl ListStacks {
     }
 }
 
+/// What `...` and `break` are checked against in an open function.
+pub(crate) struct FnFlow {
+    pub(super) vararg: bool,
+    /// Loops enclosing the current position inside this function.
+    pub(super) loops: u32,
+}
+
 /// The items gathered on `stack` since `mark`, moved to `chunk` as a list.
 pub(super) fn finish<T: ListItem>(chunk: &mut Chunk, stack: &mut LVec<T>, mark: usize) -> List<T> {
     if stack.len() == mark {
@@ -82,6 +89,12 @@ pub(crate) struct ParseScratch {
     pub(crate) streamed: Option<LVec<u8>>,
     /// where the last parse failed, if it did
     pub(crate) failed: Option<Failed>,
+    /// the next parse records its marks and the strings PUC's scanner
+    /// makes, for a load that is counted
+    pub(crate) record: bool,
+    /// the last recording, kept for its vectors; valid while `recorded`
+    pub(super) recording: Option<Box<marks::Recording>>,
+    pub(super) recorded: bool,
 }
 
 impl ParseScratch {
@@ -95,6 +108,9 @@ impl ParseScratch {
             stacks: ListStacks::new(m),
             streamed: None,
             failed: None,
+            record: false,
+            recording: None,
+            recorded: false,
         }
     }
 
@@ -122,6 +138,9 @@ impl ParseScratch {
             stacks: p.stacks,
             streamed: None,
             failed: None,
+            record: false,
+            recording: None,
+            recorded: false,
         };
         s.clear();
         s
@@ -130,9 +149,12 @@ impl ParseScratch {
     /// Empty the tree's vectors (left filled by the last parse, or half
     /// filled by one that failed), giving back a huge chunk's.
     pub(super) fn clear(&mut self) {
+        self.recorded = false;
         let chunk = &mut self.chunk;
         if chunk.exprs.capacity() > Self::MAX_EXPRS {
+            let record = self.record;
             *self = ParseScratch::new(self.chunk.mem_owner().clone());
+            self.record = record;
             return;
         }
         chunk.exprs.clear();
@@ -162,6 +184,13 @@ impl ParseScratch {
     /// [`parse_in_place`]: super::parse_in_place
     pub(crate) fn parsed(&self) -> (&Chunk, &[u32]) {
         (&self.chunk, &self.end_lines)
+    }
+
+    /// What the last parse recorded, when it was asked to (see
+    /// [`ParseScratch::record`]) and succeeded.
+    pub(crate) fn recorded(&self) -> Option<(&marks::Marks, &marks::scan::Scanned)> {
+        let r = self.recording.as_deref().filter(|_| self.recorded)?;
+        Some((&r.marks, &r.scanned))
     }
 
     /// The parse left here, as the owner of its vectors.

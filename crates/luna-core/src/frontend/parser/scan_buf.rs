@@ -15,10 +15,33 @@ pub(crate) enum ScanKind {
     Reserved,
 }
 
+/// The text of a scanned string: an interned name or literal of the
+/// chunk, or a reserved word's place in the source.
+#[derive(Clone, Copy)]
+pub(crate) enum ScanText {
+    Sym(crate::frontend::names::Sym),
+    Span(crate::frontend::span::Span),
+}
+
+impl ScanText {
+    /// The bytes, in the chunk's names and its source.
+    pub(crate) fn bytes<'a>(
+        self,
+        names: &'a crate::frontend::names::Names,
+        src: &'a [u8],
+    ) -> &'a [u8] {
+        match self {
+            ScanText::Sym(s) => names.bytes(s),
+            ScanText::Span(s) => s.slice(src),
+        }
+    }
+}
+
 /// What the scanner makes, by token: the strings, and how full its buffer
 /// gets (see [`peak`]).
+#[derive(Default)]
 pub(crate) struct Scanned {
-    pub(crate) strings: Vec<(u32, Vec<u8>, ScanKind)>,
+    pub(crate) strings: Vec<(u32, ScanText, ScanKind)>,
     pub(crate) peaks: Vec<(u32, u32)>,
 }
 

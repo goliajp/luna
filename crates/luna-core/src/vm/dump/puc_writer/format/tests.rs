@@ -47,8 +47,6 @@ fn out_with_lines(line_defined: u32, lines: Vec<u32>) -> Out {
         upvals: Vec::new(),
         protos: Vec::new(),
         locvars: Vec::new(),
-        pc_map: Vec::new(),
-        k_added: Vec::new(),
     }
 }
 

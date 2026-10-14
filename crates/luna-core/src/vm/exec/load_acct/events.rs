@@ -14,15 +14,42 @@ impl Vm {
         kind: ScanKind,
     ) -> Result<(), SyntaxError> {
         let s = self.heap.try_intern(bytes)?;
-        let t = match r.d {
-            Dialect::L51 | Dialect::L52 => r.fs.last().and_then(|f| f.h),
-            Dialect::L55 if kind == ScanKind::Reserved => None,
-            _ => r.h,
-        };
-        match t {
+        match r.scan_table(kind) {
             Some(t) => self.set_in(t, Value::Str(s), Value::Bool(true)),
             None => Ok(()),
         }
+    }
+
+    /// [`Vm::replay_scan`] of a recorded token: a name or a literal is
+    /// made once, and put once in each table.
+    pub(super) fn replay_scan_text(
+        &mut self,
+        r: &mut Replay,
+        text: ScanText,
+        kind: ScanKind,
+    ) -> Result<(), SyntaxError> {
+        let ScanText::Sym(sym) = text else {
+            return self.replay_scan(r, text.bytes(r.names, r.src), kind);
+        };
+        let i = sym.0 as usize;
+        let s = match r.syms[i].0 {
+            Some(s) => s,
+            None => {
+                let s = self.heap.try_intern(r.names.bytes(sym))?;
+                r.syms[i].0 = Some(s);
+                s
+            }
+        };
+        let Some(t) = r.scan_table(kind) else {
+            return Ok(());
+        };
+        // a table's keys stay until the load is done
+        let id = r.table_id();
+        if r.syms[i].1 != id {
+            self.set_in(t, Value::Str(s), Value::Bool(true))?;
+            r.syms[i].1 = id;
+        }
+        Ok(())
     }
 
     /// One event of the log, logged at token `tok`.
@@ -248,12 +275,11 @@ impl Vm {
             // `anchor_token`
             let toks = &r.scanned.strings;
             let at = toks.partition_point(|&(t, ..)| i64::from(t) < tok);
-            if let Some((t, bytes, kind)) = toks.get(at)
-                && i64::from(*t) == tok
-                && *kind != ScanKind::Reserved
+            if let Some(&(t, text, kind)) = toks.get(at)
+                && i64::from(t) == tok
+                && kind != ScanKind::Reserved
             {
-                let bytes = bytes.clone();
-                self.replay_scan(r, &bytes, *kind)?;
+                self.replay_scan_text(r, text, kind)?;
             }
         }
         if d == Dialect::L51

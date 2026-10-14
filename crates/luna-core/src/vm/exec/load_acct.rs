@@ -3,8 +3,8 @@
 //! luna parses to a tree and compiles the tree; PUC generates code while it
 //! scans. The compile runs without counting and logs what PUC's parser and
 //! code generator would allocate, each step with the token PUC's scanner is
-//! on (`compiler::puc_log`). Here a second, recording parse finds the
-//! tokens and the strings the scanner makes for them, and the two are
+//! on (`compiler::puc_log`). The parse recorded the tokens and the strings
+//! the scanner makes for them (`parser::Marks`), and the two are
 //! replayed in PUC's order: the main closure, the tables the parser keys
 //! strings and constants in (real tables, garbage once the load is done,
 //! as PUC's are), the prototypes and the growth and final trimming of their
@@ -15,7 +15,7 @@
 
 use super::*;
 use crate::compiler::puc_log::PEv;
-use crate::frontend::parser::scan::{ScanKind, Scanned};
+use crate::frontend::parser::scan::{ScanKind, ScanText, Scanned};
 use crate::runtime::heap::PucKind;
 use crate::runtime::table::{Dialect, TableError};
 use crate::runtime::{Proto, Table};
@@ -108,11 +108,37 @@ struct Replay<'s> {
     closed: usize,
     /// the chunk name, as the prototypes hold it
     source: Gc<crate::runtime::LuaStr>,
-    /// the strings the scanner made, by token
+    /// the strings the scanner made, by token, and the chunk's names and
+    /// source their text is in
     scanned: &'s Scanned,
+    names: &'s crate::frontend::ast::Names,
+    src: &'s [u8],
+    /// by name number: its string once made, and the table it was last
+    /// found in or put in (see [`Replay::table_id`]; 0 for none)
+    syms: Vec<(Option<Gc<crate::runtime::LuaStr>>, u32)>,
     /// a distinct key for each object 5.5 anchors that luna has no object
     /// for
     anchors: usize,
+}
+
+impl Replay<'_> {
+    /// The table the scanner keys a string of `kind` in, if any.
+    fn scan_table(&self, kind: ScanKind) -> Option<Gc<Table>> {
+        match self.d {
+            Dialect::L51 | Dialect::L52 => self.fs.last().and_then(|f| f.h),
+            Dialect::L55 if kind == ScanKind::Reserved => None,
+            _ => self.h,
+        }
+    }
+
+    /// A number for that table, other than 0: the innermost function's
+    /// up to 5.2, the chunk's after.
+    fn table_id(&self) -> u32 {
+        match self.d {
+            Dialect::L51 | Dialect::L52 => self.fs.last().map_or(u32::MAX, |f| f.shape as u32 + 1),
+            _ => u32::MAX,
+        }
+    }
 }
 
 /// A failed store into a parser table: out of memory (its keys are
@@ -141,16 +167,15 @@ impl Vm {
     pub(super) fn acct_text_load(
         &mut self,
         src: &[u8],
-        chunk: &crate::frontend::ast::Chunk,
+        parsed: &crate::frontend::parser::ParseScratch,
         cl: Gc<LuaClosure>,
     ) -> Result<(), SyntaxError> {
         let proto = cl.proto;
-        if self.heap.puc.silent > 0 {
+        let Some((marks, scanned)) = parsed.recorded() else {
             return Ok(());
-        }
-        let (marks, scanned) =
-            crate::frontend::parser::record_strings(src, self.version, self.g.nccalls)?;
-        let log = crate::compiler::puc_log::resolve(&self.compile_scratch.puc_log, chunk, &marks);
+        };
+        let chunk = parsed.parsed().0;
+        let log = crate::compiler::puc_log::resolve(&self.compile_scratch.puc_log, chunk, marks);
         let d = self.heap.table_dialect;
         let s = self.heap.sizes;
         let (mut opening, mut closing) = (Vec::new(), Vec::new());
@@ -170,7 +195,10 @@ impl Vm {
             closing,
             closed: 0,
             source: proto.source,
-            scanned: &scanned,
+            scanned,
+            names: &chunk.names,
+            src,
+            syms: vec![(None, 0); chunk.names.len()],
             anchors: 0,
         };
         // `luaY_parser` (5.5 `f_parser`) before the main function opens
@@ -253,8 +281,8 @@ impl Vm {
                         }
                     }
                     (_, Some(st)) if st <= tok => {
-                        let (_, bytes, kind) = strs.next().expect("peeked");
-                        self.replay_scan(r, bytes, *kind)?;
+                        let &(_, text, kind) = strs.next().expect("peeked");
+                        self.replay_scan_text(r, text, kind)?;
                     }
                     _ => break,
                 }
