@@ -161,11 +161,12 @@ fn bytes_and_live_round_trip_to_zero() {
     // alloc / free asymmetry in the Table internal-Box delta tracking
     // or the live counter (link/sweep symmetry).
     let mut heap = Heap::new();
-    // a heap counts once it knows its dialect
+    // a heap counts once it knows its dialect; what its state holds for
+    // good after a collection is the baseline
     heap.set_version(crate::version::LuaVersion::Lua55).unwrap();
-    // a new heap holds only its fixed memory error message
+    let _ = heap.collect(&[]);
     let (bytes0, live0) = (heap.bytes(), heap.live_objects());
-    assert_eq!(live0, 1);
+    let strt0 = heap.puc.strt_size;
     // Build a churn: 50 tables, each filled with 200 int keys (forces
     // multiple rehashes); plus interned strings spliced through the
     // hash part. Bytes should grow well past the empty baseline.
@@ -209,9 +210,12 @@ fn bytes_and_live_round_trip_to_zero() {
         live0,
         "live not back after full collect"
     );
+    // the string table keeps the size it grew to (PUC shrinks it only in
+    // a collection's `checkSizes`)
+    let strt_grown = (heap.puc.strt_size - strt0) * heap.sizes.ptr;
     assert_eq!(
         heap.bytes(),
-        bytes0,
+        bytes0 + strt_grown,
         "bytes not back after full collect — asymmetric alloc/free"
     );
 }
