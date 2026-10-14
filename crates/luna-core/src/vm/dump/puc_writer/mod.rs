@@ -172,7 +172,11 @@ fn build(
         let v55 = d == Dialect::V55;
         let hidden = p.is_vararg && !(v55 && vatab);
         let f = modern::Frame {
-            ops: if v55 { puc_55::OPS } else { puc_54::OPS },
+            ops: if v55 {
+                &puc_55::OPCODES
+            } else {
+                &puc_54::OPCODES
+            },
             v55,
             np,
             ret_c: if hidden { np + 1 } else { 0 },
@@ -188,9 +192,9 @@ fn build(
                 _ => 53,
             },
             ops: if d == Dialect::V52 {
-                puc_52::OPS
+                &puc_52::OPCODES
             } else {
-                puc_53::OPS
+                &puc_53::OPCODES
             },
         };
         classic::encode(&mut asm, &f, &mut child_caps)?;

@@ -94,6 +94,13 @@ impl Heap {
             return self.try_intern(&buf[..n]);
         }
         if self.hash51 {
+            // 5.1 looks every string up by its bytes
+            let mut buf = [0u8; 256];
+            if n <= buf.len() {
+                buf[..a.len()].copy_from_slice(a);
+                buf[a.len()..n].copy_from_slice(b);
+                return self.try_intern(&buf[..n]);
+            }
             return self.try_intern(&[a, b].concat());
         }
         let p = string::alloc_long_pair(self.mem.mem(), a, b, self.seed, self.hash51)?;

@@ -20,11 +20,13 @@
 use super::asm::{Asm, L, Res};
 use super::modern_const::event;
 use crate::vm::dump::puc::modern::Kind;
+use crate::vm::dump::puc::opcodes::Opcodes;
 use crate::vm::isa::Op;
 
 /// What a function's encoding depends on besides its code.
 pub(super) struct Frame {
-    pub ops: &'static [Kind],
+    /// the dialect's opcode of each kind (`puc::modern::opcodes`)
+    pub ops: &'static Opcodes,
     pub v55: bool,
     pub np: u32,
     /// `C` of `RETURN` / `TAILCALL`: `numparams + 1` when the frame was
@@ -39,10 +41,8 @@ pub(super) struct Frame {
 /// A child's upvalue descriptors as its `Closure` site maps them.
 pub(super) type Caps = Vec<Option<Vec<(bool, u8)>>>;
 
-fn opn(ops: &[Kind], k: Kind) -> u32 {
-    ops.iter()
-        .position(|&x| x == k)
-        .expect("every emitted kind has an opcode") as u32
+fn opn(ops: &Opcodes, k: Kind) -> u32 {
+    ops.of_modern(k).expect("every emitted kind has an opcode")
 }
 
 pub(super) struct M<'a, 'p> {

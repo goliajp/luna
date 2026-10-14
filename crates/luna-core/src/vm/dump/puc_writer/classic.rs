@@ -24,6 +24,7 @@ use super::classic_ops::op51;
 use super::modern::Caps;
 use crate::runtime::Value;
 use crate::vm::dump::puc::classic::Kind;
+use crate::vm::dump::puc::opcodes::Opcodes;
 use crate::vm::dump::puc::puc_51 as p51;
 use crate::vm::isa::Op;
 
@@ -31,7 +32,8 @@ pub(super) struct Frame {
     /// 51, 52 or 53
     pub ver: u8,
     /// 5.2 / 5.3 opcode numbering
-    pub ops: &'static [Kind],
+    /// the dialect's opcode of each kind (`puc::classic::opcodes`)
+    pub ops: &'static Opcodes,
 }
 
 /// `LFIELDS_PER_FLUSH` (lopcodes.h, all three versions).
@@ -49,7 +51,7 @@ impl C<'_, '_> {
         let n = if self.f.ver == 51 {
             op51(k).map(u32::from)
         } else {
-            self.f.ops.iter().position(|&x| x == k).map(|n| n as u32)
+            self.f.ops.of_classic(k)
         };
         n.ok_or_else(|| self.asm.err("instruction has no form in this dialect"))
     }
