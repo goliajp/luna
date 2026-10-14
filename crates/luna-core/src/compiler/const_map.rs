@@ -271,7 +271,7 @@ impl Compiler<'_> {
                 Plan::Key(k) => Some(k),
                 Plan::New => None,
             };
-            self.log(super::puc_log::PEv::Const(key));
+            self.log(super::puc_log::PEv::Const(key, c));
         }
         i
     }

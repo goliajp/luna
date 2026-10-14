@@ -75,10 +75,13 @@ impl<'a> Compiler<'a> {
             global: false,
         });
         self.log_new_localvar(name);
-        if self.puc_state.defer {
-            self.puc_state.pending += 1;
-        } else {
-            self.log(super::puc_log::PEv::LocVar);
+        // 5.4+ registers the debug record in `adjustlocalvars`
+        if self.version >= LuaVersion::Lua54 {
+            if self.puc_state.defer {
+                self.puc_state.pending += 1;
+            } else {
+                self.log(super::puc_log::PEv::LocVar);
+            }
         }
         Ok(())
     }

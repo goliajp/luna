@@ -1,4 +1,5 @@
-//! The interned short strings: PUC's string table, chained by hash.
+//! The interned short strings (5.1: all strings): PUC's string table,
+//! chained by hash.
 
 use super::*;
 
@@ -31,7 +32,7 @@ impl StringTable {
         seed: u32,
         h51: bool,
     ) -> Result<(*mut LuaStr, bool), Oom> {
-        debug_assert!(bytes.len() <= MAX_SHORT_LEN);
+        debug_assert!(h51 || bytes.len() <= MAX_SHORT_LEN);
         let h = if h51 {
             lua_hash_51(bytes)
         } else {
@@ -65,8 +66,7 @@ impl StringTable {
         Ok((p, true))
     }
 
-    /// The interned string with `bytes` (at most `MAX_SHORT_LEN` long), if
-    /// any.
+    /// The interned string with `bytes`, if any.
     pub(crate) fn find(&self, bytes: &[u8], seed: u32, h51: bool) -> Option<*mut LuaStr> {
         let h = if h51 {
             lua_hash_51(bytes)

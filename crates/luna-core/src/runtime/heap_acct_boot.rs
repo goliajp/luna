@@ -138,8 +138,10 @@ impl Heap {
                 self.puc.strt_size *= 2;
             }
         }
-        if bytes.len() > crate::runtime::string::MAX_SHORT_LEN {
-            // luna does not intern long strings: nothing to find later
+        if bytes.len() > crate::runtime::string::MAX_SHORT_LEN && self.table_dialect != Dialect::L51
+        {
+            // luna does not intern long strings (but 5.1's): nothing to
+            // find later
             return Ok(());
         }
         self.puc.silent += 1;

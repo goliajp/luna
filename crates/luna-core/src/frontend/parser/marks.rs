@@ -40,7 +40,7 @@ pub(super) struct Recording {
     pub(super) marks: Marks,
     /// with `strings`: each token PUC's scanner makes a string for (a
     /// name, a reserved word, a string literal), its number and bytes
-    pub(super) strings: Option<Vec<(u32, Vec<u8>)>>,
+    pub(super) strings: Option<Vec<(u32, Vec<u8>, ScanKind)>>,
     /// with `strings`: the tokens for which the scanner's buffer holds
     /// more than its first 32 bytes, with how many, and where the last
     /// token read ended
@@ -90,10 +90,20 @@ pub(crate) fn token_at(src: &[u8], version: LuaVersion, c_depth: u32, ix: u32) -
     record(src, version, c_depth, Some(ix)).ok()?.found
 }
 
+/// What kind of token a scanned string is for: which of them PUC's
+/// scanner anchors, and re-anchors when a function ends, differs by
+/// dialect.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScanKind {
+    Name,
+    Str,
+    Reserved,
+}
+
 /// What the scanner makes, by token: the strings, and how full its buffer
 /// gets (see `scan_buf`).
 pub(crate) struct Scanned {
-    pub(crate) strings: Vec<(u32, Vec<u8>)>,
+    pub(crate) strings: Vec<(u32, Vec<u8>, ScanKind)>,
     pub(crate) peaks: Vec<(u32, u32)>,
 }
 
@@ -116,7 +126,11 @@ pub(crate) fn record_strings(
 
 #[path = "scan_buf.rs"]
 mod scan_buf;
-pub(crate) use scan_buf::grown as scan_buf_grown;
+/// What the load's replay needs of the scanner's record.
+pub(crate) mod scan {
+    pub(crate) use super::scan_buf::grown;
+    pub(crate) use super::{ScanKind, Scanned};
+}
 
 fn record(
     src: &[u8],
@@ -204,8 +218,12 @@ impl Parser<'_> {
             }
             r.last_end = span.end as usize;
         }
-        let bytes = match self.tok.tok {
-            T::Name(()) | T::Str(()) => self.lex.names().bytes(self.tok_sym).to_vec(),
+        let (bytes, kind) = match self.tok.tok {
+            T::Name(()) => (
+                self.lex.names().bytes(self.tok_sym).to_vec(),
+                ScanKind::Name,
+            ),
+            T::Str(()) => (self.lex.names().bytes(self.tok_sym).to_vec(), ScanKind::Str),
             T::And
             | T::Break
             | T::Do
@@ -228,12 +246,15 @@ impl Parser<'_> {
             | T::Then
             | T::True
             | T::Until
-            | T::While => self.tok.span.slice(self.lex.src()).to_vec(),
+            | T::While => (
+                self.tok.span.slice(self.lex.src()).to_vec(),
+                ScanKind::Reserved,
+            ),
             _ => return,
         };
         let ix = self.tok_ix;
         if let Some(Some(v)) = self.rec.as_mut().map(|r| r.strings.as_mut()) {
-            v.push((ix, bytes));
+            v.push((ix, bytes, kind));
         }
     }
 
