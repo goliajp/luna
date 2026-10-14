@@ -246,9 +246,9 @@ pub struct Vm {
     /// handling"); a host protected call compares it before and after to
     /// report that status instead of LUA_ERRRUN.
     pub(crate) errerr_raised: u64,
-    /// the "error in error handling" just raised, until it reaches the
-    /// unwinder: PUC's `luaD_throw(LUA_ERRERR)` runs no message handler
-    pub(crate) errerr_in_flight: Option<Value>,
+    /// an error PUC throws with a status of its own (`LUA_ERRERR`, 5.2/5.3
+    /// `LUA_ERRGCMM`), until it reaches the unwinder: no handler runs on it
+    pub(crate) handler_bypass: Option<Value>,
     /// finalizer errors a 5.2/5.3 full collection raised (`LUA_ERRGCMM`)
     pub(crate) gcmm_raised: u64,
     /// The C API's dispatcher of C hook functions: a thread whose hook

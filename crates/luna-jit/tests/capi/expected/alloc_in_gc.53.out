@@ -1,0 +1,2 @@
+allocation refused in a finalizer: ok false [string "local res = 'not run'..."]:6: not enough memory for buffer allocation
+every block freed after lua_close: yes

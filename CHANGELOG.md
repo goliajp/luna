@@ -657,6 +657,24 @@ optimization.
 
 ### Fixed
 
+- A finalizer that runs while a library function is using the results of
+  a call it made no longer overwrites them: in 5.1 to 5.3, `print` could
+  fail with "'tostring' must return a string to 'print'" when a
+  collection ran inside its call to `tostring` (likelier with the JIT on).
+  Finalizers now run above every value in use, as PUC's do.
+- Finalizers follow PUC's rules: debug hooks do not fire while one runs;
+  objects registered for finalization keep their order across
+  collections; in 5.1 to 5.3 an explicit `collectgarbage()` stops at the
+  first finalizer error and leaves the rest for the next collection; 5.2
+  and 5.3 throw that error past any message handler (no traceback from
+  the standalone interpreter); 5.2 does not finalize an object twice;
+  from 5.4 a `__gc` that is not a function is called (a callable table
+  runs, anything else gives the "error in __gc" warning); 5.1 calls any
+  `__gc` of a userdata; from 5.4 a finalizer waits for a later
+  collection when the C stack is two levels from its limit; 5.5's
+  `collectgarbage("param")` inside a finalizer returns -1.
+- `__mode` is read as a C string (nothing after a `\0` counts), and 5.4
+  reads it only from a string of at most 40 bytes.
 - From 5.4 on, a table constructor with more than 1073741823 items
   (`INT_MAX / 2`) fails with PUC's "too many items in a constructor
   (limit is 1073741823)" error; 5.1 to 5.3 keep no such limit, as in PUC,

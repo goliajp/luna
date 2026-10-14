@@ -141,8 +141,10 @@ impl Vm {
     /// keeps its traceback for the host and for `debug.traceback` of a dead
     /// coroutine.
     pub(crate) fn raise_to_handler(&mut self, err: Value) -> Value {
-        // LUA_ERRERR is thrown past the handler
-        if self.errerr_in_flight.take().is_some_and(|v| v.raw_eq(err)) {
+        // LUA_ERRERR and LUA_ERRGCMM are thrown past the handler, the one
+        // the catching xpcall would otherwise call too
+        if self.handler_bypass.take().is_some_and(|v| v.raw_eq(err)) {
+            self.msgh_applied = Some(err);
             return err;
         }
         let raised_by = self.take_errored_natives(err);

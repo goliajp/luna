@@ -33,13 +33,17 @@ impl Vm {
     }
 
     /// Run pending `__gc` finalizers (objects the collector resurrected for
-    /// finalization). Finalizer errors are swallowed — PUC turns them into a
-    /// warning; they must never propagate to the mutator. Reentrancy-guarded.
+    /// finalization), from an automatic collection: errors do not reach the
+    /// mutator. Reentrancy-guarded.
     pub(super) fn run_finalizers(&mut self) {
-        let _ = self.run_finalizers_or_err();
+        let _ = self.run_finalizers_or_err(false);
     }
 
-    pub(super) fn run_finalizers_or_err(&mut self) -> Result<(), LuaError> {
+    /// Run the pending finalizers. With `propagate` (an explicit collection
+    /// on 5.1–5.3), the first error stops the run and is returned; the
+    /// finalizers after it stay queued for the next collection, as in PUC,
+    /// where `GCTM` throws out of the loop that calls them.
+    pub(super) fn run_finalizers_or_err(&mut self, propagate: bool) -> Result<(), LuaError> {
         if self.gc_finalizing {
             return Ok(());
         }
@@ -48,68 +52,122 @@ impl Vm {
             return Ok(());
         }
         self.gc_finalizing = true;
+        // PUC `GCTM` turns hooks off while a finalizer runs (`allowhook`)
+        let in_hook = std::mem::replace(&mut self.in_hook, true);
         let mut first_err: Option<LuaError> = None;
-        for obj in pending {
-            let gc = self.get_mm(obj, Mm::Gc);
-            // PUC 5.2+ accepts any non-nil `__gc` at setmetatable time to
-            // schedule the object for finalization (`__gc = true` is the
-            // canonical placeholder); only call it at finalize time when it
-            // is actually a function. gc.lua 5.2 :412 wires up exactly this
-            // sentinel and then expects no call.
-            let callable = matches!(gc, Value::Closure(_) | Value::Native(_));
-            if callable {
-                // PUC `GCTM` sets `CIST_FIN` on the new ci so
-                // `funcnamefromfinalizer` reports `namewhat = "metamethod"`,
-                // `name = "__gc"`. luna threads the same outcome through the
-                // generic `pending_tm` slot: the Lua frame born from this
-                // call consumes it in `push_frame`. Saved/restored around the
-                // call in case the handler is a native (which never pops it).
-                // Bare event name; `frame_name` / `c_frame_name` add the
-                // `"__"` debug prefix for 5.2/5.3, drop it for 5.4+. Matches
-                // the convention used by `__close`, `__index`, …
-                let saved_tm = self
-                    .pending_tm
-                    .replace(crate::runtime::function::FrameTm::Gc);
-                // PUC `GCTM` runs the finalizer with `luaD_pcall` and no
-                // message handler
-                if let Err(e) = self.call_protected(gc, &[obj]) {
-                    // PUC 5.1 GCTM raised the finalizer's error to the
-                    // explicit `collectgarbage()` caller (`gc.lua 5.1 :255`
-                    // baselines on `not pcall(collectgarbage)`). 5.2/5.3
-                    // wrapped it in `error in __gc metamethod (msg)` first
-                    // (`callGCTM` → `luaG_runerror`) but still raised. 5.4
-                    // introduced the warning system and switched to "warn
-                    // then continue" — never re-raise, just route the
-                    // wrapped message through `warn`. gc.lua 5.5 :378 wires
-                    // up `_WARN` capture under the `if T then …` block to
-                    // baseline on the same wrapped string.
-                    if self.version >= LuaVersion::Lua54 {
-                        self.warn_error("__gc", e.0);
-                    } else if first_err.is_none() {
-                        let wrapped = if self.version >= LuaVersion::Lua52 {
-                            self.gcmm_raised += 1;
-                            let inner = match e.0 {
-                                Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
-                                _ => "no message".to_string(),
-                            };
-                            self.error_from(
-                                None,
-                                format_args!("error in __gc metamethod ({inner})"),
-                            )
-                        } else {
-                            e
-                        };
-                        first_err = Some(wrapped);
-                    }
-                }
-                self.pending_tm = saved_tm;
+        let mut ran = 0;
+        for &obj in &pending {
+            if !self.finalizer_has_room() {
+                break;
+            }
+            ran += 1;
+            if let Err(e) = self.run_one_finalizer(obj)
+                && propagate
+            {
+                first_err = Some(e);
+                break;
             }
         }
+        if ran < pending.len() {
+            self.heap.requeue_tobefnz(&pending[ran..]);
+        }
+        self.in_hook = in_hook;
         self.gc_finalizing = false;
         match first_err {
             Some(e) => Err(e),
             None => Ok(()),
         }
+    }
+
+    /// 5.4/5.5 `luaD_checkminstack`: a finalizer runs only with two C levels
+    /// to spare; otherwise it waits for a later collection.
+    fn finalizer_has_room(&self) -> bool {
+        self.version < LuaVersion::Lua54 || self.g.nccalls + 2 < super::MAX_C_DEPTH
+    }
+
+    /// Call `obj`'s `__gc`. The error a 5.1–5.3 finalizer raised comes back
+    /// as the error the collection raises; 5.4+ turn it into a warning.
+    fn run_one_finalizer(&mut self, obj: Value) -> Result<(), LuaError> {
+        let gc = self.get_mm(obj, Mm::Gc);
+        // 5.2/5.3 call only a function (`__gc = true` just marks the object
+        // for finalization); 5.1 and 5.4+ call any value
+        let call = match self.version {
+            LuaVersion::Lua52 | LuaVersion::Lua53 => {
+                matches!(gc, Value::Closure(_) | Value::Native(_))
+            }
+            _ => !gc.is_nil(),
+        };
+        if !call {
+            return Ok(());
+        }
+        // a 5.4+ `__gc` that cannot be called warns as calling it would fail
+        // in GCTM, with no position (the running level is not Lua code)
+        if self.version >= LuaVersion::Lua54
+            && !matches!(gc, Value::Closure(_) | Value::Native(_))
+            && self.get_mm(gc, Mm::Call).is_nil()
+        {
+            let tn = self.obj_typename(gc);
+            let msg = format!("attempt to call a {tn} value (metamethod '__gc')");
+            let v = match self.alloc_str(msg.as_bytes()) {
+                Ok(s) => Value::Str(s),
+                Err(e) => e.0,
+            };
+            self.warn_error("__gc", v);
+            return Ok(());
+        }
+        // the frame born from this call is named `__gc` (PUC `CIST_FIN`);
+        // saved around the call in case the handler is a native, which never
+        // takes it
+        let saved_tm = self
+            .pending_tm
+            .replace(crate::runtime::function::FrameTm::Gc);
+        // PUC `GCTM` pushes the finalizer at `L->top`, above everything in
+        // use; a native's top can lie below results a call it made has just
+        // returned (print's nested tostring)
+        let r = match self.native_top() {
+            Some(t) => {
+                let len = self.stack.len();
+                let r = self.call_protected_at(gc, &[obj], t.max(self.top));
+                // the call gives back the slots it took, not the window of
+                // the native below it
+                if self.stack.len() < len {
+                    self.stack.regrow(len, Value::Nil);
+                }
+                r
+            }
+            None => self.call_protected(gc, &[obj]),
+        };
+        self.pending_tm = saved_tm;
+        let Err(e) = r else {
+            return Ok(());
+        };
+        if self.version >= LuaVersion::Lua54 {
+            self.warn_error("__gc", e.0);
+            return Ok(());
+        }
+        if self.version == LuaVersion::Lua51 {
+            return Err(e);
+        }
+        Err(self.gcmm_error(e.0))
+    }
+
+    /// 5.2/5.3 `LUA_ERRGCMM`: "error in __gc metamethod (msg)", thrown past
+    /// any message handler.
+    fn gcmm_error(&mut self, inner: Value) -> LuaError {
+        self.gcmm_raised += 1;
+        let msg = match inner {
+            Value::Str(s) => s.as_bytes().to_vec(),
+            _ => b"no message".to_vec(),
+        };
+        let mut text = b"error in __gc metamethod (".to_vec();
+        text.extend_from_slice(&msg);
+        text.push(b')');
+        let v = match self.alloc_str(&text) {
+            Ok(s) => Value::Str(s),
+            Err(e) => e.0,
+        };
+        self.handler_bypass = Some(v);
+        LuaError(v)
     }
 
     /// Drive one incremental GC step (PUC `collectgarbage("step", n)`).
