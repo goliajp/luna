@@ -18,13 +18,14 @@ pub(super) fn fold_arith(
     rhs: ExprId,
     version: LuaVersion,
     zeros: &mut LVec<f64>,
+    named: Option<Num>,
 ) -> Option<Exp> {
     let l = match le {
         Exp::Int(i) => Num::Int(*i),
         Exp::Float(f) => Num::Float(*f),
         _ => return None,
     };
-    let r = numeral(ast, rhs, version, zeros)?;
+    let r = numeral(ast, rhs, version, zeros).or(named)?;
     Some(match fold_nums(op, l, (ast, rhs, r), version)? {
         Num::Int(i) => Exp::Int(i),
         Num::Float(f) => Exp::Float(f),

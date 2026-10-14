@@ -69,7 +69,12 @@ impl Compiler<'_> {
         }
         let BinOpOpen { saved, saved_force } = open;
         let mut zeros = LVec::new(self.heap.mem());
-        if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros) {
+        // a right operand made of compile-time constants is a numeral too
+        // (`luaK_posfix` discharges it to one before folding)
+        let ast = self.ast;
+        let named = ct_value(ast, rhs, &mut |name| self.ct_const_named(self.nm(name)))
+            .and_then(|c| c.num());
+        if let Some(folded) = fold_arith(op, &le, ast, rhs, self.version, &mut zeros, named) {
             self.note_zeros(&zeros);
             self.force_line = saved_force;
             return Ok(folded);
