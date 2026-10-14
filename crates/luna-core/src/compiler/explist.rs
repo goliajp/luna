@@ -82,7 +82,7 @@ impl<'a> Compiler<'a> {
                 // an uninitialized declaration.
                 let skip = self.version == LuaVersion::Lua51 && self.lr().code.is_empty();
                 if !skip {
-                    self.emit(Inst::iabc(Op::LoadNil, base, want - 1, 0, false));
+                    self.load_nil(base, want);
                 }
             }
             return Ok(base);
@@ -115,7 +115,7 @@ impl<'a> Compiler<'a> {
         }
         if n < want {
             let first = self.reserve(want - n)?;
-            self.emit(Inst::iabc(Op::LoadNil, first, want - n - 1, 0, false));
+            self.load_nil(first, want - n);
         }
         self.set_freereg(base + want);
         Ok(base)
