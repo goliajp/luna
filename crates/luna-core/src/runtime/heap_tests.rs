@@ -161,6 +161,8 @@ fn bytes_and_live_round_trip_to_zero() {
     // alloc / free asymmetry in the Table internal-Box delta tracking
     // or the live counter (link/sweep symmetry).
     let mut heap = Heap::new();
+    // a heap counts once it knows its dialect
+    heap.set_version(crate::version::LuaVersion::Lua55).unwrap();
     // a new heap holds only its fixed memory error message
     let (bytes0, live0) = (heap.bytes(), heap.live_objects());
     assert_eq!(live0, 1);
