@@ -337,7 +337,10 @@ impl Vm {
                 }
             }
             PEv::Const(key) => {
-                if let Some(f) = r.fs.last_mut() {
+                // `addk` keys the constant in the scanner table, then grows
+                // the constant array; 5.5 grows it first
+                let k_first = r.d == Dialect::L55;
+                if k_first && let Some(f) = r.fs.last_mut() {
                     f.k.push(&mut self.heap, s.tvalue);
                 }
                 if let Some(k) = key.and_then(|k| self.scanner_key(r, k)) {
@@ -346,6 +349,9 @@ impl Vm {
                     if t.get(k).is_nil() {
                         t.set(&mut self.heap, k, Value::Int(0)).map_err(table_err)?;
                     }
+                }
+                if !k_first && let Some(f) = r.fs.last_mut() {
+                    f.k.push(&mut self.heap, s.tvalue);
                 }
             }
             PEv::Upval(depth) => {
