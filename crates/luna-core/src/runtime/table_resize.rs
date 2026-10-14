@@ -88,13 +88,6 @@ impl Table {
         self.resize(heap, new_asize, hash_entries)
     }
 
-    /// [`Table::resize`] for a host that sizes a new table as
-    /// `lua_createtable` does.
-    #[doc(hidden)]
-    pub fn presize(&mut self, heap: &mut Heap, narr: usize, nrec: usize) -> Result<(), TableError> {
-        self.resize(heap, narr, nrec)
-    }
-
     /// Resize the table's array and hash parts. The array part grows
     /// (or shrinks) to `new_asize` NIL-initialized slots; the hash
     /// part rounds to the next power of two ≥ `hash_entries`. Any

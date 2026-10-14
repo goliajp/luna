@@ -3,10 +3,6 @@
 //! are deduplicated, forward jumps are patch lists (plain Vecs instead of
 //! PUC's in-code jump chains). Function nesting is a stack of `Level`s;
 //! upvalue resolution walks it (PUC singlevaraux).
-//!
-//! Slice 3 state: calls, closures, upvalues, varargs (5.5 table semantics),
-//! generic `for`, multret, tail calls. Still pending (slice 5): goto/labels,
-//! `<close>`, `global` declarations.
 
 mod assign;
 mod assign_conflict;
@@ -43,6 +39,7 @@ mod main_fn;
 pub use main_fn::compile_chunk_with_last_target;
 use main_fn::compile_main;
 mod resolve;
+use resolve::VarKind;
 mod return_stat;
 mod scope;
 mod stat;
@@ -165,17 +162,6 @@ struct LabelDesc<'a> {
     nactvar: usize,
     /// 5.4+: the goto leaves a block that needs closing
     close: bool,
-}
-
-enum VarKind {
-    Local(u32),
-    /// a compile-time constant local (5.4+)
-    Const(CtConst),
-    Upval(u32),
-    /// global access; read_only from 5.5 declarations
-    Global {
-        read_only: bool,
-    },
 }
 
 /// Where an expression's value currently lives.

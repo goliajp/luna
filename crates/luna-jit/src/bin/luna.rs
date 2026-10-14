@@ -241,8 +241,7 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
         }
         // lua.c sets it before it opens the libraries
         vm.set_ignore_env(ignore_env);
-        vm.acct_lua_c_main();
-        vm.open_all_libs();
+        vm.open_lua_c_libs();
         vm
     };
     if let Some(n) = opts.budget {

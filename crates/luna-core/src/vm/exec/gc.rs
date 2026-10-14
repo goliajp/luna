@@ -268,21 +268,6 @@ impl Vm {
         self.heap.bytes()
     }
 
-    /// Count what the standalone interpreter allocates to call its main
-    /// function: 5.1's `lua_cpcall` makes a C closure for it, later versions
-    /// call it one level down. The `luna` command calls this before it
-    /// opens the libraries.
-    #[doc(hidden)]
-    pub fn acct_lua_c_main(&mut self) {
-        if self.version == crate::version::LuaVersion::Lua51 {
-            let size = self.heap.sizes.c_closure(0);
-            self.heap
-                .acct_obj(crate::runtime::heap::PucKind::CClosure, size);
-        } else {
-            self.heap.acct_call_depth(1);
-        }
-    }
-
     /// Write a mark into the accounting trace (`gc-trace`), where a test
     /// cuts the comparison with PUC's.
     #[cfg(feature = "gc-trace")]
