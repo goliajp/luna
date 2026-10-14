@@ -100,8 +100,7 @@ pub(super) fn build(
     translate: &dyn Fn(&mut RawProto) -> Result<Lowered, String>,
 ) -> Result<Gc<Proto>, crate::vm::dump::error::Bad> {
     let mut lowered = translate(&mut raw).map_err(crate::vm::dump::error::Bad::Code)?;
-    // a stripped chunk has no line info; the translated one must not
-    // invent line 0 for every instruction
+    // a stripped chunk has no line info: none is made up for its code
     if raw.lines.is_empty() {
         lowered.lines.clear();
     }
@@ -124,8 +123,7 @@ pub(super) fn build(
         upvals: heap.try_block_of(raw.upvals.into_iter())?,
         num_params: raw.num_params,
         is_vararg: raw.is_vararg,
-        // a PUC 5.5 chunk lists its own `(vararg table)` local in `locvars`
-        has_vararg_table_pseudo: false,
+        has_vararg_table_pseudo: false, // PUC 5.5 lists it in `locvars`
         has_compat_vararg_arg: raw.has_compat_vararg_arg,
         max_stack: lowered.max_stack,
         lines: heap.try_block_of(lowered.lines.into_iter())?,
