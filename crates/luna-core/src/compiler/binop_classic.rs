@@ -54,8 +54,7 @@ impl Compiler<'_> {
         };
         if left.is_none()
             && num.is_some()
-            && let Some(folded) =
-                fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros, num)
+            && let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros, num)
         {
             self.note_zeros(&zeros);
             self.set_freereg(saved);
