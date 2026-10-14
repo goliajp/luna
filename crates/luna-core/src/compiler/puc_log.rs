@@ -151,11 +151,15 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// The constant of a string literal. From 5.4 PUC adds it only once
-    /// the value is used (`VKSTR`), which luna's next step logs.
-    pub(super) fn literal_const(&mut self, s: ast::Sym) -> u32 {
+    /// The constant of string literal `id`. Up to 5.3 PUC adds it while
+    /// the literal is the scanner's token (`codestring`); from 5.4 only
+    /// once the value is used (`VKSTR`), which luna's next step logs.
+    pub(super) fn literal_const(&mut self, s: ast::Sym, id: ExprId) -> u32 {
         if self.version < LuaVersion::Lua54 {
-            return self.sym_const(s);
+            let cur = std::mem::replace(&mut self.cur, TokRef::First(id, 0));
+            let k = self.sym_const(s);
+            self.cur = cur;
+            return k;
         }
         let cur = std::mem::replace(&mut self.cur, TokRef::Next);
         let k = self.sym_const(s);
