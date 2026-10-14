@@ -54,6 +54,9 @@ pub(super) struct LogState {
     /// ([`Compiler::flush_locvars`])
     pub(super) defer: bool,
     pub(super) pending: u32,
+    /// the constant the newest 5.4+ string literal made, in the function
+    /// at this depth ([`Compiler::drop_literal`])
+    pub(super) fresh_literal: Option<(usize, u32)>,
 }
 
 impl<'a> Compiler<'a> {
@@ -169,10 +172,29 @@ impl<'a> Compiler<'a> {
             return k;
         }
         let cur = std::mem::replace(&mut self.cur, TokRef::Next);
+        let n = self.lr().consts.len();
         let k = self.sym_const(s);
         self.cur = cur;
         self.puc_state.early = true;
+        self.puc_state.fresh_literal = (k as usize == n).then_some((self.depth, k));
         k
+    }
+
+    /// From 5.4 a string literal whose value goes unused makes no constant
+    /// (PUC drops the `VKSTR` undischarged): the constant luna made for it,
+    /// the function's newest, is taken back.
+    pub(super) fn drop_literal(&mut self, e: Exp) {
+        let fresh = self.puc_state.fresh_literal.take();
+        if let Exp::Const(k) = e
+            && fresh == Some((self.depth, k))
+            && k as usize + 1 == self.lr().consts.len()
+        {
+            self.l().consts.pop();
+            let log = &mut self.puc_log;
+            if let Some(i) = log.iter().rposition(|(_, e)| matches!(e, PEv::Const(..))) {
+                log.remove(i);
+            }
+        }
     }
 
     /// From 5.2 PUC codes a function's closure in the enclosing function
