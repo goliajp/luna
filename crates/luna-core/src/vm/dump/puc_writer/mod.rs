@@ -150,7 +150,7 @@ fn build(
     p: &Proto,
     d: Dialect,
     caps: Option<Vec<(bool, u8)>>,
-    mut shapes: Option<&mut Vec<Shape>>,
+    shapes: Option<&mut Vec<Shape>>,
 ) -> Res<Out> {
     let np = p.num_params as u32;
     let mut asm = Asm::new(p, d.name());
@@ -209,7 +209,7 @@ fn build(
             body.frame
         ));
     }
-    if let Some(out) = shapes.as_deref_mut() {
+    if let Some(out) = shapes {
         out.push(Shape {
             pc_map: body.pc_map,
             lines: body.lines,
