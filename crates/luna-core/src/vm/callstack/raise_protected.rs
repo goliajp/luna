@@ -15,6 +15,17 @@ impl Vm {
         self.call_protected_with(f, args, None, None)
     }
 
+    /// [`Vm::call_protected`] placed at slot `at` of the running native's
+    /// stack instead of at that native's top.
+    pub(crate) fn call_protected_at(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        at: u32,
+    ) -> Result<Vec<Value>, crate::vm::error::LuaError> {
+        self.call_protected_with(f, args, None, Some(at))
+    }
+
     /// [`Vm::call_protected`] with `handler` as the message handler that is
     /// running while `f` runs (`L->errfunc` during `luaG_errormsg`'s call).
     pub(super) fn call_protected_with(

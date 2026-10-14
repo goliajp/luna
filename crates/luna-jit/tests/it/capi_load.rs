@@ -53,6 +53,11 @@ fn alloc_limit() {
 }
 
 #[test]
+fn alloc_in_gc() {
+    check("alloc_in_gc");
+}
+
+#[test]
 fn warn_default() {
     check("warn_default");
 }

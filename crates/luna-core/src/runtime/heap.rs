@@ -238,6 +238,9 @@ pub struct Heap {
     /// gc.lua :544 asserts collected after one `collectgarbage()`). 5.1/5.2
     /// don't exercise this path. Set by the VM at construction.
     pub(crate) defer_thread_cycle_finalize: bool,
+    /// An object finalized once can be registered again (all but 5.2,
+    /// whose `luaC_checkfinalizer` refuses a finalized object).
+    pub(crate) refinalize: bool,
     /// The main functions of the chunks loaded while `track_chunk_roots`
     /// is set, without keeping them alive: the collector drops each one it
     /// finds dead. Compiled traces taken over from another Vm find the
@@ -304,34 +307,6 @@ impl Heap {
         }
         self.all = h;
         self.live += 1;
-    }
-}
-
-impl Drop for Heap {
-    fn drop(&mut self) {
-        // free everything regardless of reachability, including any list still
-        // detached for an in-flight incremental sweep
-        // SAFETY: the heap is being dropped, so nothing uses its objects any more; `all`, `sweep_cur` and `fixed` hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds tables from `alloc_block` already unlinked from every list
-        unsafe {
-            for mut cur in [self.all, self.sweep_cur, self.fixed] {
-                while !cur.is_null() {
-                    let next = (*cur).next;
-                    self.free_obj(cur);
-                    cur = next;
-                }
-            }
-            // the pooled tables' interiors were freed when they were
-            // recycled; only their blocks are left
-            for &ptr in self.table_pool.take().iter() {
-                self.free_block(ptr.as_ptr());
-            }
-        }
-    }
-}
-
-impl Default for Heap {
-    fn default() -> Heap {
-        Heap::new()
     }
 }
 

@@ -258,8 +258,15 @@ impl Vm {
         let freed = self.full_collect();
         #[cfg(feature = "gc-verify")]
         self.verify_frame_regs_live("collect_garbage_propagating");
-        self.run_finalizers_or_err()?;
+        self.run_finalizers_or_err(true)?;
         Ok(freed)
+    }
+
+    /// What `collectgarbage("count")` and `lua_gc(LUA_GCCOUNT)` report:
+    /// the allocation context's count when it keeps one, else the
+    /// collector's own estimate.
+    pub(crate) fn gc_count_bytes(&self) -> usize {
+        self.memory_in_use().unwrap_or(self.heap.bytes())
     }
 
     /// Whether a `__gc` finalizer is currently running (so `collectgarbage`

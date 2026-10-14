@@ -159,6 +159,12 @@ impl Vm {
             self.stack[(func_slot + 2 + i) as usize] = self.stack[(func_slot + 3 + i) as usize];
         }
         let callee = self.shift_callee(func_slot + 1, nfargs + 1, shift);
+        if shift == 3 {
+            // 5.3+ `luaB_xpcall` leaves `f, msgh, true` below the callee;
+            // a stale value left there would stay reachable for the call
+            self.stack[(func_slot + 2) as usize] = handler;
+            self.stack[(func_slot + 3) as usize] = Value::Bool(true);
+        }
         self.top = callee + 1 + nfargs;
         let ci_top = self.c_frame_top(by, func_slot, nargs);
         frames_push_sync(
