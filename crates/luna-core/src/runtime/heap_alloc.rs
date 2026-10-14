@@ -297,7 +297,11 @@ impl Heap {
             hdr: GcHeader::new(ObjTag::Upvalue),
             state,
         })?;
-        self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::Upval, self.sizes.upval);
+        self.acct_new(
+            g.as_ptr() as *mut GcHeader,
+            PucKind::Upval,
+            self.sizes.upval,
+        );
         Ok(g)
     }
 
@@ -346,7 +350,11 @@ impl Heap {
             host_stack: LVec::new(mem),
             host_state: None,
         })?;
-        self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::Thread, self.sizes.thread);
+        self.acct_new(
+            g.as_ptr() as *mut GcHeader,
+            PucKind::Thread,
+            self.sizes.thread,
+        );
         Ok(g)
     }
 
