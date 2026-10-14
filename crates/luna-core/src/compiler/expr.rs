@@ -165,7 +165,7 @@ impl<'a> Compiler<'a> {
             Expr::False => Ok(Exp::False),
             Expr::Int(i) => Ok(Exp::Int(*i)),
             Expr::Float(f) => Ok(Exp::Float(*f)),
-            Expr::Str(s) => Ok(Exp::Const(self.literal_const(*s))),
+            Expr::Str(s) => Ok(Exp::Const(self.literal_const(*s, id))),
             Expr::Name(n) => {
                 self.last_line = n.line;
                 // PUC emits the load of an upvalue or a global only when
