@@ -272,7 +272,7 @@ impl Vm {
             self.heap.trace.line(format_args!(
                 "K {:p} {} {:08x}",
                 t.as_ptr(),
-                String::from_utf8_lossy(s.as_bytes()),
+                String::from_utf8_lossy(s.as_bytes()).escape_debug(),
                 s.hash()
             ));
         }
