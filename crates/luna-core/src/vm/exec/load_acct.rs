@@ -232,6 +232,24 @@ impl Vm {
         Ok(())
     }
 
+    /// The strings PUC's prototypes under `p` keep for their local
+    /// variable and upvalue names, made now (while nothing is counted) and
+    /// held by the prototypes: the replay counts each where PUC's scanner
+    /// makes it, and the collector frees it only with its prototype.
+    pub(super) fn hold_puc_names(&mut self, p: Gc<Proto>) -> Result<(), SyntaxError> {
+        let names = p.locvars.iter().map(|v| v.name.as_str());
+        let names = names.chain(p.upvals.iter().map(|u| u.name.as_str()));
+        let mut held = Vec::with_capacity(p.locvars.len() + p.upvals.len());
+        for n in names {
+            held.push(self.heap.try_intern(n.as_bytes())?);
+        }
+        *p.puc_names.borrow_mut() = held;
+        for &c in p.protos.iter() {
+            self.hold_puc_names(c)?;
+        }
+        Ok(())
+    }
+
     /// The main closure, made without counting, is counted where PUC makes
     /// it.
     fn acct_main_closure(&mut self, cl: Gc<LuaClosure>) {

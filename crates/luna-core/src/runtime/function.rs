@@ -66,14 +66,10 @@ pub struct Proto {
     pub last_line_defined: u32,
     /// local-variable debug records (name + live pc range)
     pub locvars: LSlice<LocVar>,
-    /// PUC 5.2 / 5.3 closure cache (`Proto.cache`): the last LClosure built from
-    /// this Proto. When OP_CLOSURE fires, the VM compares each candidate
-    /// upvalue to the cached closure's same-slot upvalue (`getcached`); on a
-    /// full match the cached closure is reused, so two `function() ... end`
-    /// literals reached from the same source compile but with identical
-    /// upvalue bindings compare equal. closure.lua's `for i=1,5 do
-    /// a[i]=function(x) return x+a+_ENV end end` asserts that subsequent
-    /// iterations reuse the closure; capturing `i` instead defeats the cache.
+    /// PUC 5.2 / 5.3 closure cache (`Proto.cache`): the last LClosure built
+    /// from this Proto, reused when OP_CLOSURE finds the same upvalues in it
+    /// (`getcached`; closure.lua asserts a loop's closures over `a` and
+    /// `_ENV` compare equal).
     pub cache: std::cell::Cell<Option<Gc<LuaClosure>>>,
     /// Index into `upvals` of the `_ENV` upvalue (5.1 per-function-env
     /// model needs to clone-on-closure), or `u8::MAX` for "no _ENV
@@ -147,6 +143,9 @@ pub struct Proto {
     /// A trace checks a callee against them by address, so the collector
     /// keeps them alive while this prototype lives (`Proto::trace`).
     pub(crate) inlined_protos: std::cell::RefCell<Vec<Gc<Proto>>>,
+    /// The strings PUC's prototype keeps for its local variable and upvalue
+    /// names (luna's own are `DebugName`s), kept alive as long as it is.
+    pub(crate) puc_names: std::cell::RefCell<Vec<Gc<LuaStr>>>,
     /// Compiled trace cache for this Proto. A successful
     /// `compile_trace(record)` parks its `CompiledTrace` here;
     /// `Vm::run`'s trace dispatcher iterates this on each
