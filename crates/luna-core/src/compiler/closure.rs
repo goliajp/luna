@@ -114,6 +114,7 @@ impl<'a> Compiler<'a> {
         self.at(close);
         // PUC attributes the implicit final return to the closing `end` line, so
         // that line shows up in `debug.getinfo(...,"L").activelines`.
+        let final_ret = self.puc_log.len();
         self.final_return(body.end_line)?;
         let proto = self.finish_level(line, body.end_line);
         let idx = self.lr().protos.len() as u32;
@@ -128,7 +129,7 @@ impl<'a> Compiler<'a> {
         let pc = self.emit(Inst::iabx(Op::Closure, 0, idx));
         // 5.2+ `codeclosure` puts the closure in the next register at once
         if self.version >= LuaVersion::Lua52 {
-            self.close_after_closure();
+            self.close_after_closure(final_ret);
             return Ok(Exp::Reg(self.exp_to_nextreg(Exp::Reloc(pc))?));
         }
         Ok(Exp::Reloc(pc))
