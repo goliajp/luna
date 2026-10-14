@@ -673,6 +673,9 @@ optimization.
   `__gc` of a userdata; from 5.4 a finalizer waits for a later
   collection when the C stack is two levels from its limit; 5.5's
   `collectgarbage("param")` inside a finalizer returns -1.
+- From 5.3 on, `xpcall` lays out the slots below the function it calls
+  as PUC's does, so a value an earlier call left there is no longer kept
+  alive during the call.
 - `__mode` is read as a C string (nothing after a `\0` counts), and 5.4
   reads it only from a string of at most 40 bytes.
 - From 5.4 on, a table constructor with more than 1073741823 items

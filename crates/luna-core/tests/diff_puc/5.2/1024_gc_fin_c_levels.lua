@@ -1,3 +1,5 @@
+-- only the explicit collections below run, whatever the automatic pacing
+collectgarbage("stop")
 -- a collection run with the C stack nearly full leaves finalizers for later;
 -- the depths are counted back from the deepest pcall nesting that still
 -- runs, which depends on how the file is run

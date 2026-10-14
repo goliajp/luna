@@ -1,3 +1,5 @@
+-- only the explicit collections below run, whatever the automatic pacing
+collectgarbage("stop")
 if warn then warn("@on") end
 setmetatable({}, {__gc = true})
 collectgarbage()

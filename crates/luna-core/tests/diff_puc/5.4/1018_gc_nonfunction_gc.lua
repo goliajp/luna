@@ -1,4 +1,6 @@
 -- rule: lgc.GCTM.6
+-- only the explicit collections below run, whatever the automatic pacing
+collectgarbage("stop")
 setmetatable({}, {__gc = true})
 collectgarbage()
 local called = 0
