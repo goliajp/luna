@@ -66,7 +66,7 @@ impl Compiler<'_> {
                         && lvl.locals.iter().all(|v| v.konst.is_some() || v.reg < reg)
                 };
                 if !(self.version == LuaVersion::Lua51 && fresh()) {
-                    self.emit(Inst::iabc(Op::LoadNil, reg, 0, 0, false));
+                    self.load_nil(reg, 1);
                 }
             }
             Exp::True => {

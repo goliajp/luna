@@ -26,6 +26,29 @@ impl<'a> Compiler<'a> {
         pc
     }
 
+    /// PUC `luaK_nil`: `n` registers from `from` set to nil, joined to a
+    /// `LOADNIL` just before when no jump lands between and the ranges
+    /// meet (5.1 only extends the earlier range upward).
+    pub(super) fn load_nil(&mut self, from: u32, n: u32) {
+        let here = self.here();
+        let l = from + n - 1;
+        let lvl = self.lr();
+        if here > 0 && lvl.last_target.is_none_or(|t| here > t) {
+            let prev = lvl.code[here - 1];
+            if prev.op() == Op::LoadNil {
+                let (pfrom, pl) = (prev.a(), prev.a() + prev.b());
+                let joins = (pfrom <= from && from <= pl + 1)
+                    || (self.version != LuaVersion::Lua51 && from <= pfrom && pfrom <= l + 1);
+                if joins {
+                    let (f, l) = (from.min(pfrom), l.max(pl));
+                    self.l().code[here - 1] = Inst::iabc(Op::LoadNil, f, l - f, 0, false);
+                    return;
+                }
+            }
+        }
+        self.emit(Inst::iabc(Op::LoadNil, from, n - 1, 0, false));
+    }
+
     pub(super) fn here(&self) -> usize {
         self.lr().code.len()
     }
