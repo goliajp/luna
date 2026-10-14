@@ -45,6 +45,13 @@ impl Heap {
     ) {
         let (oh, nh) = (self.hash_bytes(old_h), self.hash_bytes(new_h));
         let (oa, na) = (self.array_bytes(old_a), self.array_bytes(new_a));
+        // with no trace to write, only the sum is seen
+        if cfg!(not(feature = "gc-trace")) {
+            if self.puc.silent == 0 {
+                self.bytes = self.bytes + nh + na - oh - oa;
+            }
+            return;
+        }
         match self.table_dialect {
             Dialect::L51 | Dialect::L52 | Dialect::L53 => {
                 if new_a > old_a {
