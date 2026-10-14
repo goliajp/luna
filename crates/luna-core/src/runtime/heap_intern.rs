@@ -240,6 +240,11 @@ pub(crate) fn fresh_seed() -> u32 {
 
 /// Hash seed from address entropy (ASLR) and clock, luaL_makeseed style.
 pub(super) fn make_seed() -> u32 {
+    // the instrumented PUC build takes its seed from `R38_SEED` too
+    #[cfg(feature = "gc-trace")]
+    if let Some(s) = std::env::var("R38_SEED").ok().and_then(|s| s.parse().ok()) {
+        return s;
+    }
     let stack_var = 0u8;
     let mut h = &stack_var as *const u8 as u64;
     h ^= (make_seed as *const () as u64) << 16;

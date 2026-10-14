@@ -267,6 +267,15 @@ impl Vm {
         if !t.get(k).is_nil() {
             return Ok(());
         }
+        #[cfg(feature = "gc-trace")]
+        if let Value::Str(s) = k {
+            self.heap.trace.line(format_args!(
+                "K {:p} {} {:08x}",
+                t.as_ptr(),
+                String::from_utf8_lossy(s.as_bytes()),
+                s.hash()
+            ));
+        }
         self.store_in(t, k, v)
     }
 

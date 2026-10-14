@@ -145,6 +145,7 @@ impl ParseScratch {
         chunk.field_lists.clear();
         chunk.arm_lists.clear();
         chunk.fold_marks.clear();
+        chunk.dot_keys.clear();
         self.end_lines.clear();
         // a parse that failed leaves the lists it was gathering
         let st = &mut self.stacks;

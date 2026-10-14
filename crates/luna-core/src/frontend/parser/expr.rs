@@ -134,6 +134,7 @@ impl<'s> Parser<'s> {
                     self.advance()?;
                     let name = self.expect_name()?;
                     let key = self.push_expr(Expr::Str(name.sym));
+                    self.chunk.dot_keys.push_or_abort(key.0);
                     e = self.push_expr(Expr::Index { obj: e, key });
                 }
                 Token::LBracket => {
