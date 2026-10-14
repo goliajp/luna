@@ -122,12 +122,12 @@ impl Vm {
             .and_then(|source| self.compile_text_in_place(src, source))
             .and_then(|p| Ok((p, self.close_chunk(p)?)));
             self.heap.puc.silent -= 1;
-            let (proto, cl) = made?;
+            let (_, cl) = made?;
             let scratch = std::mem::replace(
                 &mut self.parse_scratch,
                 crate::frontend::parser::ParseScratch::new(self.heap.mem_owner()),
             );
-            let counted = self.acct_text_load(src, scratch.parsed().0, proto);
+            let counted = self.acct_text_load(src, scratch.parsed().0, cl);
             self.parse_scratch = scratch;
             counted?;
             return Ok(cl);

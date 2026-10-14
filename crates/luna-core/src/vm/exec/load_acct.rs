@@ -142,8 +142,9 @@ impl Vm {
         &mut self,
         src: &[u8],
         chunk: &crate::frontend::ast::Chunk,
-        proto: Gc<Proto>,
+        cl: Gc<LuaClosure>,
     ) -> Result<(), SyntaxError> {
+        let proto = cl.proto;
         if self.heap.puc.silent > 0 {
             return Ok(());
         }
@@ -175,15 +176,15 @@ impl Vm {
         // `luaY_parser` (5.5 `f_parser`) before the main function opens
         match d {
             Dialect::L51 => {}
-            Dialect::L52 => self.heap.acct_obj(PucKind::LuaClosure, s.lua_closure(1)),
+            Dialect::L52 => self.acct_main_closure(cl),
             Dialect::L53 | Dialect::L54 => {
-                self.heap.acct_obj(PucKind::LuaClosure, s.lua_closure(1));
+                self.acct_main_closure(cl);
                 r.h = Some(self.heap.try_new_table()?);
             }
             Dialect::L55 => {
                 // the anchor table, then the closure anchored in it
                 r.h = Some(self.heap.try_new_table()?);
-                self.heap.acct_obj(PucKind::LuaClosure, s.lua_closure(1));
+                self.acct_main_closure(cl);
                 self.anchor_in_h(&mut r, None)?;
             }
         }
@@ -191,9 +192,19 @@ impl Vm {
         // 5.1's `f_parser` makes the closure now; the others give it its
         // upvalue (`luaF_initupvals`)
         if d == Dialect::L51 {
-            self.heap.acct_obj(PucKind::LuaClosure, s.lua_closure(0));
+            self.acct_main_closure(cl);
         } else {
-            self.heap.acct_obj(PucKind::Upval, s.upval);
+            match cl.upvals().first() {
+                Some(&uv) => {
+                    let h = uv.as_ptr() as *mut crate::runtime::heap::GcHeader;
+                    if crate::runtime::heap::is_uncounted(h) {
+                        self.heap.acct_promote_obj(h, PucKind::Upval, s.upval);
+                    } else {
+                        self.heap.acct_obj(PucKind::Upval, s.upval);
+                    }
+                }
+                None => self.heap.acct_obj(PucKind::Upval, s.upval),
+            }
         }
         // `luaD_protectedparser` frees the buffer and the descriptor arrays
         self.heap.acct_block(r.buff, 0);
@@ -204,6 +215,14 @@ impl Vm {
             }
         }
         Ok(())
+    }
+
+    /// The main closure, made without counting, is counted where PUC makes
+    /// it.
+    fn acct_main_closure(&mut self, cl: Gc<LuaClosure>) {
+        let size = self.heap.closure_size(&cl.proto, cl.upvals().len());
+        let h = cl.as_ptr() as *mut crate::runtime::heap::GcHeader;
+        self.heap.acct_promote_obj(h, PucKind::LuaClosure, size);
     }
 
     /// The log's events, with what the scanner does up to each one's token:

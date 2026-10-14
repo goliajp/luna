@@ -173,6 +173,13 @@ impl Heap {
 }
 
 impl Heap {
+    /// PUC's size of a Lua closure of `proto` with luna's `n` upvalues
+    /// (5.1's has no upvalue for the environment luna gives it).
+    pub(crate) fn closure_size(&self, proto: &crate::runtime::function::Proto, n: usize) -> usize {
+        let env = self.table_dialect == Dialect::L51 && proto.env_upval_idx != u8::MAX;
+        self.sizes.lua_closure(n - usize::from(env))
+    }
+
     /// A string of `len` bytes freed.
     pub(crate) fn acct_string_free(&mut self, len: usize) {
         let long =
