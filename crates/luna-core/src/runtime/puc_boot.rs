@@ -142,8 +142,11 @@ pub(crate) fn boot_sizes(d: Dialect) -> BootSizes {
     let lg64 = [616, 704, 1552, 1624, 1624];
     let lg32 = [348, 372, 808, 848, 852];
     let i = d as usize - 1;
+    let lgwasm = [376, 400, 820, 864, 864];
     let lg = if cfg!(target_pointer_width = "64") {
         lg64[i]
+    } else if cfg!(target_arch = "wasm32") {
+        lgwasm[i]
     } else {
         lg32[i]
     };
