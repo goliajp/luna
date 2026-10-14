@@ -65,6 +65,10 @@ struct Fs {
     up: Arr,
     prev_line: u32,
     iwthabs: u32,
+    /// the last instruction's line entry: absolute, and the line before it
+    /// (to take it back, PUC `removelastlineinfo`)
+    last_abs: bool,
+    last_prev: u32,
     /// which of the shapes is this function's, and the luna instructions
     /// emitted so far
     shape: usize,
@@ -334,6 +338,14 @@ impl Vm {
                     f.pc -= 1;
                     f.code.n -= 1;
                     f.line.n -= 1;
+                    // 5.4+ `removelastlineinfo`
+                    if f.last_abs {
+                        f.abs.n -= 1;
+                        f.iwthabs = 129;
+                    } else {
+                        f.prev_line = f.last_prev;
+                        f.iwthabs = f.iwthabs.saturating_sub(1);
+                    }
                 }
             }
             PEv::Const(key) => {
@@ -396,7 +408,9 @@ impl Vm {
             let dif = i64::from(line) - i64::from(f.prev_line);
             let wthabs = f.iwthabs;
             f.iwthabs += 1;
-            if dif.abs() >= 0x80 || wthabs >= 128 {
+            f.last_prev = f.prev_line;
+            f.last_abs = dif.abs() >= 0x80 || wthabs >= 128;
+            if f.last_abs {
                 f.abs.push(h, s.abslineinfo);
                 f.iwthabs = 1;
             }
