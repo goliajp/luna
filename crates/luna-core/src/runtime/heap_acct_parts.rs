@@ -97,7 +97,12 @@ impl Heap {
         // a short string with no trace to write: only the sum is seen
         // (the table grows on the same condition either side of the
         // string's own count)
-        if cfg!(not(feature = "gc-trace")) && len <= self.puc.short_max && self.puc.silent == 0 {
+        if cfg!(not(feature = "gc-trace")) && self.puc.silent == 0 {
+            if len > self.puc.short_max {
+                let l55 = self.table_dialect == Dialect::L55;
+                self.bytes += self.sizes.string(len, l55);
+                return;
+            }
             if self.puc.strt_nuse >= self.puc.strt_size {
                 self.grow_strtab();
             }

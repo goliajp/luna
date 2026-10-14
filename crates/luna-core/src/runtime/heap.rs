@@ -235,7 +235,6 @@ pub struct Heap {
     /// finds dead. Compiled traces taken over from another Vm find the
     /// functions they inlined in these chunks.
     pub(crate) chunk_roots: Vec<Gc<Proto>>,
-    strings: StringTable,
     /// the sizes of PUC's objects in this dialect, which `bytes` counts
     pub(crate) sizes: crate::runtime::puc_size::PucSizes,
     /// PUC's own structures luna has none of (see `heap_acct.rs`)
@@ -248,6 +247,7 @@ pub struct Heap {
     /// under ASAN-style quarantining allocators (no immediate reuse).
     #[cfg(feature = "gc-verify")]
     pub(crate) recently_freed: std::collections::HashSet<usize>,
+    strings: StringTable,
     /// Where the heap's memory comes from. Last, so the context outlives
     /// whatever the other fields free through it.
     mem: crate::runtime::mem::MemOwner,
