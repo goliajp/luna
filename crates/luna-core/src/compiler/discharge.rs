@@ -76,7 +76,7 @@ impl Compiler<'_> {
                 self.emit(Inst::iabc(Op::LoadFalse, reg, 0, 0, false));
             }
             Exp::Int(i) => {
-                if (-65535..=65535).contains(&i) {
+                if (-65535..=65536).contains(&i) {
                     self.number_const_before_54(Value::Int(i));
                     self.emit(Inst::iasbx(Op::LoadI, reg, i as i32));
                 } else {
@@ -91,7 +91,7 @@ impl Compiler<'_> {
                 let as_int = f as i32;
                 // bit-compare so the LoadF fast path doesn't fold -0.0 to +0.0
                 // (`-0.0 == 0.0` but their bit patterns differ)
-                if (-65535..=65535).contains(&as_int) && (as_int as f64).to_bits() == f.to_bits() {
+                if (-65535..=65536).contains(&as_int) && (as_int as f64).to_bits() == f.to_bits() {
                     self.number_const_before_54(Value::Float(f));
                     self.emit(Inst::iasbx(Op::LoadF, reg, as_int));
                 } else {
