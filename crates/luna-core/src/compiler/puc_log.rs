@@ -154,17 +154,18 @@ impl<'a> Compiler<'a> {
     }
 
     /// From 5.2 PUC codes a function's closure in the enclosing function
-    /// before it closes the function: the `Close` logged before the
-    /// instruction just emitted goes after it.
-    pub(super) fn close_after_closure(&mut self) {
-        let n = self.puc_log.len();
-        if n < 2 || !matches!(self.puc_log[n - 2].1, PEv::Close) {
+    /// before it closes the function (`close_func` makes the final return):
+    /// the closure instruction just emitted goes before the events from
+    /// `final_ret` on, the function's final return and its `Close`.
+    pub(super) fn close_after_closure(&mut self, final_ret: usize) {
+        let log = &mut self.puc_log;
+        let n = log.len();
+        if n < 2 || final_ret >= n - 1 || !matches!(log[n - 2].1, PEv::Close) {
             return;
         }
-        if let (tok, PEv::Code(line)) = self.puc_log[n - 1] {
-            let close = self.puc_log[n - 2].0;
-            self.puc_log[n - 2] = (tok, PEv::CodeUp(line));
-            self.puc_log[n - 1] = (close, PEv::Close);
+        if let (tok, PEv::Code(line)) = log[n - 1] {
+            log[final_ret..].rotate_right(1);
+            log[final_ret] = (tok, PEv::CodeUp(line));
         }
     }
 

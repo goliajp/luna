@@ -168,13 +168,16 @@ impl Vm {
                 match (p, st) {
                     (Some(p), _) if p <= tok && st.is_none_or(|st| p <= st) => {
                         let (_, peak) = peaks.next().expect("peeked");
-                        let size = crate::frontend::parser::scan_buf_grown(
-                            self.version,
-                            r.buff,
-                            *peak as usize,
-                        );
-                        self.heap.acct_block(r.buff, size);
-                        r.buff = size;
+                        // each save that overflows grows the buffer once
+                        while r.buff < *peak as usize {
+                            let size = crate::frontend::parser::scan_buf_grown(
+                                self.version,
+                                r.buff,
+                                r.buff + 1,
+                            );
+                            self.heap.acct_block(r.buff, size);
+                            r.buff = size;
+                        }
                     }
                     (_, Some(st)) if st <= tok => {
                         let (_, bytes) = strs.next().expect("peeked");

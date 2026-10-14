@@ -73,12 +73,22 @@ impl Compiler<'_> {
             self.set_freereg(saved);
             return Ok(e);
         }
+        // 5.4+ `singlevar` finds `_ENV` before it makes the name's constant
+        let early_env = if self.version >= LuaVersion::Lua54 {
+            Some(self.resolve_env()?)
+        } else {
+            None
+        };
         let c = self.str_const(name.as_bytes());
         // 5.1's `GETGLOBAL` takes any constant
         if self.version == LuaVersion::Lua51 && c > 0xFF && c <= MAX_BX {
             return Ok(Exp::Reloc(self.emit(Inst::iabx(Op::GetGlobal, 0, c))));
         }
-        match self.resolve_env()? {
+        let env = match early_env {
+            Some(env) => env,
+            None => self.resolve_env()?,
+        };
+        match env {
             VarKind::Upval(u) if c <= 0xFF => Ok(Exp::Reloc(self.emit(Inst::iabc(
                 Op::GetTabUp,
                 0,
