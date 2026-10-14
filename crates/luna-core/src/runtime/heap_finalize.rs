@@ -14,6 +14,7 @@ impl Heap {
     /// section asserts the finalizers fire from value 10 back to 0).
     pub(super) fn separate_finalizables(&mut self, m: &mut Marker) {
         let mut i = self.finalize.len();
+        let mut queued = false;
         while i > 0 {
             i -= 1;
             let h = self.finalize[i];
@@ -55,14 +56,20 @@ impl Heap {
                 // byte is written
                 unsafe { (*h).flags = ((*h).flags & !(FIN | DEFERRED)) | FINALIZED };
                 self.queue_to_finalize(h);
+                self.finalize[i] = ptr::null_mut();
+                queued = true;
                 // SAFETY: `h` is the allocated header read above
                 unsafe { m.header(h) };
-                self.finalize.swap_remove(i);
             } else {
                 // SAFETY: `h` is the allocated header read above; only its flag
                 // byte is written
                 unsafe { (*h).flags &= !DEFERRED };
             }
+        }
+        // drop the queued ones in place: the survivors keep their order,
+        // which decides the order of their finalizers in a later cycle
+        if queued {
+            self.finalize.retain(|h| !h.is_null());
         }
     }
 
@@ -81,6 +88,12 @@ impl Heap {
         // SAFETY: the caller's contract; only the flag byte is written
         unsafe { (*h).flags |= FIN };
         Ok(())
+    }
+
+    /// Whether an object with header flags `flags` can be registered now:
+    /// not while registered, nor, in 5.2, once it has been finalized.
+    fn may_register(&self, flags: u8) -> bool {
+        flags & FIN == 0 && (self.refinalize || flags & FINALIZED == 0)
     }
 
     /// Put `h` on `tobefnz`, whose room `register` keeps.
@@ -106,7 +119,7 @@ impl Heap {
         let h = t.as_ptr() as *mut GcHeader;
         // SAFETY: `h` is the header of `t`, a table the caller holds a live handle to; only the flag byte is touched
         unsafe {
-            if (*h).flags & FIN == 0 {
+            if self.may_register((*h).flags) {
                 return self.register(h);
             }
         }
@@ -124,7 +137,7 @@ impl Heap {
         let h = u.as_ptr() as *mut GcHeader;
         // SAFETY: `h` is the header of `u`, a userdata the caller holds a live handle to; only the flag byte is touched
         unsafe {
-            if (*h).flags & FIN == 0 {
+            if self.may_register((*h).flags) {
                 return self.register(h);
             }
         }
@@ -163,7 +176,9 @@ impl Heap {
             .into_iter()
             // SAFETY: every `tobefnz` entry was marked by `separate_finalizables` (or `mark_all` re-marks it) and so is still allocated; it was registered as a table or a userdata, the two tags matched below, and the caller roots the returned handles until the finalizers have run
             .map(|h| unsafe {
-                (*h).flags &= !FINALIZED;
+                if self.refinalize {
+                    (*h).flags &= !FINALIZED;
+                }
                 match (*h).tag {
                     ObjTag::Table => Value::Table(Gc::from_ptr(h as *mut Table)),
                     ObjTag::Userdata => {
@@ -173,6 +188,28 @@ impl Heap {
                 }
             })
             .collect()
+    }
+
+    /// Put back, at the head of the queue and in their order, objects
+    /// [`Heap::take_tobefnz`] handed out whose finalizers did not run: they
+    /// run first at the next chance.
+    pub(crate) fn requeue_tobefnz(&mut self, rest: &[crate::runtime::Value]) {
+        let later: Vec<_> = self.tobefnz.iter().copied().collect();
+        self.tobefnz.clear();
+        for v in rest {
+            let h = match *v {
+                crate::runtime::Value::Table(t) => t.as_ptr() as *mut GcHeader,
+                crate::runtime::Value::Userdata(u) => u.as_ptr() as *mut GcHeader,
+                _ => unreachable!("only tables and userdata are queued"),
+            };
+            // SAFETY: `h` was queued and is rooted by the caller until here;
+            // only the flag byte is written
+            unsafe { (*h).flags |= FINALIZED };
+            self.queue_to_finalize(h);
+        }
+        for h in later {
+            self.queue_to_finalize(h);
+        }
     }
 
     /// Move ALL still-registered finalizables to the pending queue regardless of

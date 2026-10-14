@@ -15,6 +15,12 @@ impl Table {
                 && k.as_bytes() == b"__mode"
             {
                 let b = mode.as_bytes();
+                // 5.4 reads `__mode` only from a short string
+                if self.dialect() == Dialect::L54 && b.len() > 40 {
+                    return (false, false);
+                }
+                // read as a C string: nothing past the first NUL counts
+                let b = b.split(|&c| c == 0).next().unwrap_or(b);
                 return (b.contains(&b'k'), b.contains(&b'v'));
             }
         }

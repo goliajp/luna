@@ -56,6 +56,7 @@ impl Heap {
             finalize: crate::runtime::mem::LVec::new(mem.mem()),
             tobefnz: crate::runtime::mem::LVec::new(mem.mem()),
             no_ephemeron: false,
+            refinalize: true,
             signed_zero_keys: false,
             table_dialect: crate::runtime::table::Dialect::L55,
             hash51: false,
@@ -82,5 +83,33 @@ impl Heap {
     /// keep it alive as long as they do (the Vm's own containers).
     pub fn mem_owner(&self) -> crate::runtime::mem::MemOwner {
         self.mem.clone()
+    }
+}
+
+impl Drop for Heap {
+    fn drop(&mut self) {
+        // free everything regardless of reachability, including any list still
+        // detached for an in-flight incremental sweep
+        // SAFETY: the heap is being dropped, so nothing uses its objects any more; `all`, `sweep_cur` and `fixed` hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds tables from `alloc_block` already unlinked from every list
+        unsafe {
+            for mut cur in [self.all, self.sweep_cur, self.fixed] {
+                while !cur.is_null() {
+                    let next = (*cur).next;
+                    self.free_obj(cur);
+                    cur = next;
+                }
+            }
+            // the pooled tables' interiors were freed when they were
+            // recycled; only their blocks are left
+            for &ptr in self.table_pool.take().iter() {
+                self.free_block(ptr.as_ptr());
+            }
+        }
+    }
+}
+
+impl Default for Heap {
+    fn default() -> Heap {
+        Heap::new()
     }
 }
