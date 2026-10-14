@@ -117,37 +117,49 @@ impl Heap {
         self.puc.strt_size = new;
     }
 
-    /// The bytes of a prototype's arrays, in PUC's `luaF_freeproto` order.
-    fn proto_arrays(&self, p: &crate::runtime::function::Proto) -> [usize; 6] {
+    /// The bytes of each of PUC's arrays for `p` (see `Proto::puc_arrays`),
+    /// from luna's own: a text load counts them as PUC's parser grows them
+    /// instead.
+    fn proto_arrays(&self, p: &crate::runtime::function::Proto) -> [u32; 7] {
         let s = self.sizes;
         let n = p.code.len();
-        let lineinfo = match self.table_dialect {
-            Dialect::L54 | Dialect::L55 => n,
-            _ => 4 * n,
+        let (lineinfo, abs) = match self.table_dialect {
+            Dialect::L54 | Dialect::L55 => (n, abs_lines(p.line_defined, &p.lines)),
+            _ => (4 * n, 0),
         };
         [
             4 * n,
             s.ptr * p.protos.len(),
             s.tvalue * p.consts.len(),
             lineinfo,
+            s.abslineinfo * abs,
             s.locvar * p.locvars.len(),
             s.upvaldesc * p.upvals.len(),
         ]
+        .map(|b| b as u32)
     }
 
-    /// A finished prototype with its arrays (their growth while compiling
-    /// is not counted yet).
+    /// A finished prototype with its arrays.
     pub(crate) fn acct_proto(&mut self, p: Gc<crate::runtime::function::Proto>) {
         self.acct_obj(PucKind::Proto, self.sizes.proto);
-        for b in self.proto_arrays(&p) {
-            self.acct_block(0, b);
+        let arrays = self.proto_arrays(&p);
+        p.puc_arrays.set(arrays);
+        for b in arrays {
+            self.acct_block(0, b as usize);
         }
     }
 
     /// A prototype freed.
     pub(crate) fn acct_proto_free(&mut self, p: &crate::runtime::function::Proto) {
-        for b in self.proto_arrays(p) {
-            self.acct_block(b, 0);
+        let a = p.puc_arrays.get();
+        // 5.5 frees the code and line arrays first
+        let order = if self.table_dialect == Dialect::L55 {
+            [0, 3, 4, 1, 2, 5, 6]
+        } else {
+            [0, 1, 2, 3, 4, 5, 6]
+        };
+        for i in order {
+            self.acct_block(a[i] as usize, 0);
         }
         let s = self.sizes.proto;
         self.acct_free(s);
@@ -167,4 +179,19 @@ impl Heap {
             .string(len, long && self.table_dialect == Dialect::L55);
         self.acct_free(size);
     }
+}
+
+/// How many absolute line entries 5.4's `savelineinfo` makes for
+/// instructions on `lines`, in a function defined on `line_defined`.
+fn abs_lines(line_defined: u32, lines: &[u32]) -> usize {
+    let (mut prev, mut since, mut n) = (line_defined, 0u32, 0);
+    for &l in lines {
+        if (i64::from(l) - i64::from(prev)).abs() >= 0x80 || since >= 128 {
+            n += 1;
+            since = 0;
+        }
+        since += 1;
+        prev = l;
+    }
+    n
 }

@@ -54,7 +54,7 @@ impl<'a> Compiler<'a> {
         }
         // each parameter is declared once its name is read; their debug
         // records come at `)` (PUC `parlist`'s `adjustlocalvars`)
-        self.defer_locvars = true;
+        self.puc_locals.defer = true;
         let params = self.ls(body.params);
         for (i, p) in params.iter().enumerate() {
             self.at(open.plus(2 + 2 * i as i32));
@@ -128,6 +128,7 @@ impl<'a> Compiler<'a> {
         let pc = self.emit(Inst::iabx(Op::Closure, 0, idx));
         // 5.2+ `codeclosure` puts the closure in the next register at once
         if self.version >= LuaVersion::Lua52 {
+            self.close_after_closure();
             return Ok(Exp::Reg(self.exp_to_nextreg(Exp::Reloc(pc))?));
         }
         Ok(Exp::Reloc(pc))

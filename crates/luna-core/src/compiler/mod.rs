@@ -31,6 +31,7 @@ mod fold;
 mod for_loops;
 mod jumplist;
 mod labels;
+mod local_stat;
 use jumplist::NO_JUMP;
 mod level;
 mod limits;
@@ -249,10 +250,8 @@ struct Compiler<'a> {
     /// what PUC allocates while it compiles, for the load to count (see
     /// [`puc_log`])
     puc_log: LVec<(TokRef, puc_log::PEv)>,
-    /// locals declared now get their debug records later
-    /// ([`Self::flush_locvars`])
-    defer_locvars: bool,
-    pending_locvars: u32,
+    /// when the locals' entries are logged (see [`puc_log::PucLocals`])
+    puc_locals: puc_log::PucLocals,
 }
 
 impl<'a> Compiler<'a> {

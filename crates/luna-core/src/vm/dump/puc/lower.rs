@@ -142,6 +142,7 @@ pub(super) fn build(
         call_hot_count: std::cell::Cell::new(0),
         trace_discard_count: std::cell::Cell::new(0),
         trace_gave_up: std::cell::Cell::new(false),
+        puc_arrays: std::cell::Cell::new([0; 7]),
         trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
         inlined_protos: std::cell::RefCell::new(Vec::new()),
         traces: crate::jit::send_compat::TRefLock::new(Vec::new()),

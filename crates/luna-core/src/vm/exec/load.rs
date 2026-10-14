@@ -108,16 +108,19 @@ impl Vm {
             )?;
             self.compile_parsed(&parsed.chunk, &parsed.end_lines, source)?
         } else {
-            let source = match name {
-                Some(n) => n,
-                None => self.heap.try_intern(chunkname)?,
-            };
             // what the parser and the compiler make is counted afterwards,
-            // in the order PUC's parser makes it
+            // in the order PUC's parser makes it; that includes its own
+            // string of the chunk name, a new one when the name is long
+            // (5.2+ does not intern long strings)
             self.heap.puc.silent += 1;
-            let made = self
-                .compile_text_in_place(src, source)
-                .and_then(|p| Ok((p, self.close_chunk(p)?)));
+            let long = chunkname.len() > crate::runtime::string::MAX_SHORT_LEN
+                && self.heap.table_dialect != crate::runtime::table::Dialect::L51;
+            let made = match name {
+                Some(n) if !long => Ok(n),
+                _ => self.heap.try_intern(chunkname).map_err(SyntaxError::from),
+            }
+            .and_then(|source| self.compile_text_in_place(src, source))
+            .and_then(|p| Ok((p, self.close_chunk(p)?)));
             self.heap.puc.silent -= 1;
             let (proto, cl) = made?;
             let scratch = std::mem::replace(

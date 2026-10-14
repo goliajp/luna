@@ -79,6 +79,14 @@ impl Heap {
         self.acct_string(len);
     }
 
+    /// The parser's string of the chunk name `s`: counted now if luna made
+    /// it without counting (PUC found it made already otherwise).
+    pub(crate) fn acct_source(&mut self, s: Gc<LuaStr>) {
+        if s.hdr.sub & UNCOUNTED != 0 {
+            self.acct_promote(s.as_ptr() as *mut GcHeader, s.len());
+        }
+    }
+
     fn raw_event(&mut self, op: u32, x: usize, y: usize) {
         match op {
             1 => self.bytes = self.bytes + y - x,

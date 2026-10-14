@@ -41,6 +41,11 @@ pub(super) struct Recording {
     /// with `strings`: each token PUC's scanner makes a string for (a
     /// name, a reserved word, a string literal), its number and bytes
     pub(super) strings: Option<Vec<(u32, Vec<u8>)>>,
+    /// with `strings`: the tokens for which the scanner's buffer holds
+    /// more than its first 32 bytes, with how many, and where the last
+    /// token read ended
+    peaks: Vec<(u32, u32)>,
+    last_end: usize,
     /// the token to report, and what was found for it
     target: Option<u32>,
     found: Option<Found>,
@@ -85,15 +90,33 @@ pub(crate) fn token_at(src: &[u8], version: LuaVersion, c_depth: u32, ix: u32) -
     record(src, version, c_depth, Some(ix)).ok()?.found
 }
 
-/// [`record_marks`] with the strings PUC's scanner makes, by token.
+/// What the scanner makes, by token: the strings, and how full its buffer
+/// gets (see `scan_buf`).
+pub(crate) struct Scanned {
+    pub(crate) strings: Vec<(u32, Vec<u8>)>,
+    pub(crate) peaks: Vec<(u32, u32)>,
+}
+
+/// [`record_marks`] with what PUC's scanner makes.
 pub(crate) fn record_strings(
     src: &[u8],
     version: LuaVersion,
     c_depth: u32,
-) -> Result<(Marks, Vec<(u32, Vec<u8>)>), SyntaxError> {
+) -> Result<(Marks, Scanned), SyntaxError> {
     let r = record_with(src, version, c_depth, None, true)?;
-    Ok((r.marks, r.strings.unwrap_or_default()))
+    let strings = r.strings.unwrap_or_default();
+    Ok((
+        r.marks,
+        Scanned {
+            strings,
+            peaks: r.peaks,
+        },
+    ))
 }
+
+#[path = "scan_buf.rs"]
+mod scan_buf;
+pub(crate) use scan_buf::grown as scan_buf_grown;
 
 fn record(
     src: &[u8],
@@ -128,6 +151,8 @@ fn record_with(
     p.rec = Some(Box::new(Recording {
         marks: Marks::default(),
         strings: strings.then(Vec::new),
+        peaks: Vec::new(),
+        last_end: 0,
         target,
         found: None,
     }));
@@ -169,6 +194,16 @@ impl Parser<'_> {
     /// The current token's string, when PUC's scanner makes one for it.
     fn record_string(&mut self) {
         use crate::frontend::token::Token as T;
+        let span = self.tok.span;
+        let src = self.lex.src();
+        if let Some(r) = self.rec.as_mut() {
+            let gap = &src[r.last_end.min(span.start as usize)..span.start as usize];
+            let peak = scan_buf::peak(self.version, gap, span.slice(src));
+            if peak > 32 {
+                r.peaks.push((self.tok_ix, peak as u32));
+            }
+            r.last_end = span.end as usize;
+        }
         let bytes = match self.tok.tok {
             T::Name(()) | T::Str(()) => self.lex.names().bytes(self.tok_sym).to_vec(),
             T::And
