@@ -283,6 +283,14 @@ impl Vm {
         }
     }
 
+    /// Write a mark into the accounting trace (`gc-trace`), where a test
+    /// cuts the comparison with PUC's.
+    #[cfg(feature = "gc-trace")]
+    #[doc(hidden)]
+    pub fn trace_mark(&mut self, name: &str) {
+        self.heap.trace.line(format_args!("M {name}"));
+    }
+
     /// Whether a `__gc` finalizer is currently running (so `collectgarbage`
     /// should report fail rather than collect).
     pub(crate) fn gc_is_finalizing(&self) -> bool {
