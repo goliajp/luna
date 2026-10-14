@@ -67,7 +67,7 @@ fn compile_main_body(
             log.clear();
             log
         },
-        puc_locals: Default::default(),
+        puc_state: Default::default(),
     };
     c.sym_strs.clear();
     c.sym_strs.resize_or_abort(ast.names.len(), None);

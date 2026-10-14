@@ -9,6 +9,7 @@ use crate::frontend::parser::Marks;
 
 /// One allocation-relevant step of PUC's parser or code generator.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "gc-trace", derive(Debug))]
 pub(crate) enum PEv {
     /// a function starts (`open_func`, with 5.4+'s `addprototype`)
     Open,
@@ -38,11 +39,17 @@ pub(crate) enum PEv {
     /// a pending goto, and a label: how many there are now
     Goto(u32),
     Label(u32),
+    /// nothing allocated: the values loaded early are used here (see
+    /// [`TokRef::Next`])
+    Use,
 }
 
-/// When the parser's entries for local variables are logged.
+/// The log's state while a function compiles.
 #[derive(Default)]
-pub(super) struct PucLocals {
+pub(super) struct LogState {
+    /// an instruction luna emitted early waits for the token where its
+    /// value is used ([`Compiler::use_early`])
+    pub(super) early: bool,
     /// locals declared now get their debug records later
     /// ([`Compiler::flush_locvars`])
     pub(super) defer: bool,
@@ -57,13 +64,13 @@ impl<'a> Compiler<'a> {
         self.log(PEv::ActVar(n));
     }
 
-    /// The local variables declared since [`PucLocals::defer`] was set
+    /// The local variables declared since [`LogState::defer`] was set
     /// get their debug records now (PUC `adjustlocalvars`).
     pub(super) fn flush_locvars(&mut self) {
-        for _ in 0..std::mem::take(&mut self.puc_locals.pending) {
+        for _ in 0..std::mem::take(&mut self.puc_state.pending) {
             self.log(PEv::LocVar);
         }
-        self.puc_locals.defer = false;
+        self.puc_state.defer = false;
     }
 
     /// The parser's entries for a new local `name` (PUC `new_localvar`):
@@ -158,6 +165,24 @@ impl<'a> Compiler<'a> {
             let close = self.puc_log[n - 2].0;
             self.puc_log[n - 2] = (tok, PEv::CodeUp(line));
             self.puc_log[n - 1] = (close, PEv::Close);
+        }
+    }
+
+    /// The last instruction luna emitted is taken back before PUC would
+    /// make it: PUC never codes it.
+    pub(super) fn unlog_code(&mut self) {
+        let log = &mut self.puc_log;
+        if let Some(i) = log.iter().rposition(|(_, e)| matches!(e, PEv::Code(_))) {
+            log.remove(i);
+        }
+    }
+
+    /// A value is used here: the instructions luna emitted early for it are
+    /// PUC's now.
+    #[inline]
+    pub(super) fn use_early(&mut self) {
+        if std::mem::take(&mut self.puc_state.early) {
+            self.log(PEv::Use);
         }
     }
 

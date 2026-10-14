@@ -123,7 +123,7 @@ impl Compiler<'_> {
         }
         self.l().code.pop();
         self.l().lines.pop();
-        self.log(super::puc_log::PEv::Uncode);
+        self.unlog_code();
         Some(i.b())
     }
 

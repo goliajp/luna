@@ -158,6 +158,8 @@ impl Vm {
         let mut strs = scanned.strings.iter().peekable();
         let mut peaks = scanned.peaks.iter().peekable();
         for &(tok, ev) in &log {
+            #[cfg(feature = "gc-trace")]
+            self.heap.trace.line(format_args!("E {tok} {ev:?}"));
             // what the scanner does up to this token: it fills its buffer
             // while it reads a token, then makes the token's string
             loop {
@@ -323,6 +325,7 @@ impl Vm {
                 r.fs.extend(child);
                 coded?;
             }
+            PEv::Use => {}
             PEv::Uncode => {
                 if let Some(f) = r.fs.last_mut() {
                     f.pc -= 1;

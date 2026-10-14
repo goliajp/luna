@@ -15,7 +15,14 @@ impl<'a> Compiler<'a> {
         l.code.push_or_abort(i);
         l.lines.push_or_abort(line);
         let pc = l.code.len() - 1;
-        self.log(puc_log::PEv::Code(line));
+        // an instruction luna emits early PUC makes where the value is used
+        let at = if self.early_emit {
+            self.puc_state.early = true;
+            TokRef::Next
+        } else {
+            self.cur
+        };
+        self.puc_log.push_or_abort((at, puc_log::PEv::Code(line)));
         pc
     }
 
