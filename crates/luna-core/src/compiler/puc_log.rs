@@ -150,6 +150,7 @@ impl<'a> Compiler<'a> {
         let cur = std::mem::replace(&mut self.cur, TokRef::Next);
         let k = self.sym_const(s);
         self.cur = cur;
+        self.puc_state.early = true;
         k
     }
 
