@@ -175,8 +175,14 @@ impl<'a> Compiler<'a> {
             None => {
                 self.set_freereg(base + 2);
                 self.reserve(1)?;
-                // up to 5.3 the step 1 is a constant (`luaK_codek`)
-                self.number_const_before_54(Value::Int(1));
+                // up to 5.3 the step 1 is a constant (`luaK_codek`): a
+                // float before 5.3, which has no integers
+                let one = if self.version <= LuaVersion::Lua52 {
+                    Value::Float(1.0)
+                } else {
+                    Value::Int(1)
+                };
+                self.number_const_before_54(one);
                 self.emit(Inst::iasbx(Op::LoadI, base + 2, 1));
             }
         }
