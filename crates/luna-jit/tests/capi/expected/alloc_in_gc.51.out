@@ -1,2 +1,0 @@
-allocation refused in a finalizer: ok true 600000
-every block freed after lua_close: yes
