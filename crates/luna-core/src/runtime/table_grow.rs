@@ -49,7 +49,6 @@ impl Table {
     /// reallocated (in place when the allocator can) and the tags move up
     /// to their new offset.
     fn grow_slab(&mut self, heap: &mut Heap, new_asize: usize) -> Result<(), TableError> {
-        let before = self.internal_bytes();
         let old = self.asize as usize;
         debug_assert!(old as u64 > INLINE_ASIZE && new_asize > old);
         let old_layout = Self::slab_layout(old);
@@ -82,7 +81,7 @@ impl Table {
         // every old slot holds a value: the run of them is the whole old
         // part, as the full resize's catch-up scan finds
         self.aprefix = old as u32;
-        heap.apply_bytes_delta(before, self.internal_bytes());
+        heap.acct_table_resize(old, 0, new_asize, 0);
         Ok(())
     }
 }

@@ -57,6 +57,10 @@ impl Heap {
             tobefnz: crate::runtime::mem::LVec::new(mem.mem()),
             no_ephemeron: false,
             refinalize: true,
+            sizes: crate::runtime::puc_size::PucSizes::of(crate::runtime::table::Dialect::L55),
+            puc: Default::default(),
+            #[cfg(feature = "gc-trace")]
+            trace: Default::default(),
             signed_zero_keys: false,
             table_dialect: crate::runtime::table::Dialect::L55,
             hash51: false,

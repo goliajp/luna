@@ -109,10 +109,7 @@ impl Heap {
             match (*h).tag {
                 ObjTag::Table => {
                     let t = h as *mut Table;
-                    let internal = (*t).internal_bytes();
-                    self.bytes = self
-                        .bytes
-                        .saturating_sub(std::mem::size_of::<Table>() + internal);
+                    self.acct_table_free((*t).asize as usize, (*t).node_count());
                     // pool recycle. Drop the
                     // Box-owned interior (slab, nodes, metatable) so the
                     // Table struct itself can be re-handed-out by a
@@ -134,40 +131,38 @@ impl Heap {
                     }
                 }
                 ObjTag::Proto => {
-                    self.bytes = self.bytes.saturating_sub(std::mem::size_of::<Proto>());
+                    self.acct_proto_free(&*(h as *mut Proto));
                     self.free_block(h as *mut Proto);
                 }
                 ObjTag::Closure => {
-                    self.bytes = self.bytes.saturating_sub(std::mem::size_of::<LuaClosure>());
+                    let n = (*(h as *mut LuaClosure)).upvals_len as usize;
+                    self.acct_free(self.sizes.lua_closure(n));
                     (*(h as *mut LuaClosure)).free_overflow(self.mem());
                     self.free_block(h as *mut LuaClosure);
                 }
                 ObjTag::Upvalue => {
-                    self.bytes = self.bytes.saturating_sub(std::mem::size_of::<Upvalue>());
+                    self.acct_free(self.sizes.upval);
                     self.free_block(h as *mut Upvalue);
                 }
                 ObjTag::Native => {
-                    self.bytes = self
-                        .bytes
-                        .saturating_sub(std::mem::size_of::<NativeClosure>());
+                    let n = (&(*(h as *mut NativeClosure)).upvals).len();
+                    if n > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
+                        self.acct_free(self.sizes.c_closure(n));
+                    }
                     self.free_block(h as *mut NativeClosure);
                 }
                 ObjTag::Coro => {
-                    self.bytes = self
-                        .bytes
-                        .saturating_sub(std::mem::size_of::<crate::runtime::Coro>());
+                    self.acct_free(self.sizes.thread);
                     self.free_block(h as *mut crate::runtime::Coro);
                 }
                 ObjTag::Userdata => {
                     let extra = (*(h as *mut Userdata)).extra_bytes;
-                    self.bytes = self
-                        .bytes
-                        .saturating_sub(std::mem::size_of::<Userdata>() + extra);
+                    self.acct_free(self.sizes.userdata(1, 0) + extra);
                     self.free_block(h as *mut Userdata);
                 }
                 ObjTag::Str => {
                     let s = h as *mut LuaStr;
-                    self.bytes = self.bytes.saturating_sub(string::alloc_size((*s).len()));
+                    self.acct_string_free((*s).len());
                     if (*s).is_short() {
                         self.strings.remove(s);
                     }

@@ -57,7 +57,6 @@ impl Heap {
             p.write(obj);
             self.link(p as *mut GcHeader);
         }
-        self.bytes += std::mem::size_of::<T>();
         // SAFETY: as above
         Ok(unsafe { Gc::from_ptr(p) })
     }
@@ -99,7 +98,7 @@ impl Heap {
         };
         // SAFETY: `p` is a fresh block or a pool table reset above, linked nowhere yet
         unsafe { self.link(p as *mut GcHeader) };
-        self.bytes += std::mem::size_of::<Table>();
+        self.acct_obj(PucKind::Table, self.sizes.table);
         // the Table is now at its final heap address; wire `array_ptr` to
         // point at the inline storage that lives inside it
         // SAFETY: `p` is the table linked just above, which the heap now manages; no other handle or reference to it exists yet
@@ -192,7 +191,9 @@ impl Heap {
     /// [`Heap::adopt_proto`], failing when memory runs out.
     pub fn try_adopt_proto(&mut self, proto: Proto) -> Result<Gc<Proto>, Oom> {
         debug_assert!(proto.hdr.tag == ObjTag::Proto);
-        self.try_adopt(proto)
+        let g = self.try_adopt(proto)?;
+        self.acct_proto(g);
+        Ok(g)
     }
 
     /// Back-compat constructor for callers that already
@@ -259,7 +260,7 @@ impl Heap {
             self.link(p as *mut GcHeader);
             Gc::from_ptr(p)
         };
-        self.bytes += std::mem::size_of::<LuaClosure>();
+        self.acct_obj(PucKind::LuaClosure, self.sizes.lua_closure(n));
         // SAFETY: `g` is the closure linked just above; no other handle or reference to it exists yet
         unsafe { g.as_mut() }.init_upvals_ptr();
         Ok(g)
@@ -291,10 +292,12 @@ impl Heap {
     /// [`Heap::new_upvalue`], failing when memory runs out.
     #[inline]
     pub fn try_new_upvalue(&mut self, state: UpvalState) -> Result<Gc<Upvalue>, Oom> {
-        self.try_adopt(Upvalue {
+        let g = self.try_adopt(Upvalue {
             hdr: GcHeader::new(ObjTag::Upvalue),
             state,
-        })
+        })?;
+        self.acct_obj(PucKind::Upval, self.sizes.upval);
+        Ok(g)
     }
 
     /// Create a fresh suspended coroutine wrapping `body`. The new thread
@@ -316,7 +319,7 @@ impl Heap {
         globals: Gc<crate::runtime::Table>,
     ) -> Result<Gc<crate::runtime::Coro>, Oom> {
         let mem = self.mem();
-        self.try_adopt(crate::runtime::Coro {
+        let g = self.try_adopt(crate::runtime::Coro {
             hdr: GcHeader::new(ObjTag::Coro),
             status: crate::runtime::CoroStatus::Suspended,
             body,
@@ -341,7 +344,9 @@ impl Heap {
             globals,
             host_stack: LVec::new(mem),
             host_state: None,
-        })
+        })?;
+        self.acct_obj(PucKind::Thread, self.sizes.thread);
+        Ok(g)
     }
 
     /// Create a userdata (an io file handle — luna's only userdata) with no
@@ -357,10 +362,12 @@ impl Heap {
         payload: UserdataPayload,
         writable: bool,
     ) -> Result<Gc<Userdata>, Oom> {
-        self.try_adopt(Userdata::new(
+        let g = self.try_adopt(Userdata::new(
             GcHeader::new(ObjTag::Userdata),
             payload,
             writable,
-        ))
+        ))?;
+        self.acct_obj(PucKind::Userdata, self.sizes.userdata(1, 0));
+        Ok(g)
     }
 }

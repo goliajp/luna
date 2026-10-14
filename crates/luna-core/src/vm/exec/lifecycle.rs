@@ -40,21 +40,9 @@ impl Vm {
     /// caller is responsible for the rest of the bring-up.
     pub(super) fn new_inner(version: LuaVersion, heap: Heap) -> Option<Vm> {
         let mut heap = heap;
-        // PUC 5.1 had no ephemeron pass — `__mode='k'` tables marked their
-        // values strongly. gc.lua's "weak tables" section relies on that.
-        heap.no_ephemeron = version <= LuaVersion::Lua51;
-        heap.refinalize = version != LuaVersion::Lua52;
-        heap.signed_zero_keys = version <= LuaVersion::Lua52;
-        heap.table_dialect = crate::runtime::table::Dialect::of(version);
-        // the strings the heap made before it knew the dialect (its fixed
-        // memory error message) move to the dialect's hash
-        heap.hash51 = version == LuaVersion::Lua51;
-        let seed = heap.seed();
-        heap.rehash_strings(seed);
-        // PUC 5.3 needs two GC cycles to finalize a table caught in a
-        // coroutine reference cycle (gc.lua :502); 5.4+ rewrote the GC and
-        // finalize in a single cycle (5.4/5.5 gc.lua :544 assert exactly one).
-        heap.defer_thread_cycle_finalize = version == LuaVersion::Lua53;
+        heap.set_version(version).ok()?;
+        // luna's own objects PUC made at other points, or not at all
+        heap.puc.silent += 1;
         let globals = heap.try_new_table().ok()?;
         let mut names = [None; MM_NAMES.len()];
         for (slot, name) in names.iter_mut().zip(MM_NAMES) {
@@ -299,6 +287,7 @@ impl Vm {
             .reserve_exact(Vm::lual_buffersize(version))
             .ok()?;
         vm.state_complete = true;
+        vm.heap.puc.silent -= 1;
         Some(vm)
     }
 
