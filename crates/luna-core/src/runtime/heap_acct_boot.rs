@@ -112,7 +112,7 @@ impl Heap {
         // a new one, is in the record)
         self.puc.ci_count = self.puc.ci_count.max(self.puc.depth + 1);
         let mut live = true;
-        for op in ops.chunks_exact(3) {
+        for op in ops.as_chunks::<3>().0 {
             let (x, y) = (op[1] as usize, op[2] as usize);
             match op[0] {
                 3 => self.replay_string(strs[x], live)?,

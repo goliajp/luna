@@ -150,7 +150,8 @@ impl Heap {
                     self.free_block(h as *mut Upvalue);
                 }
                 ObjTag::Native => {
-                    let n = (&(*(h as *mut NativeClosure)).upvals).len();
+                    let nat = &*(h as *mut NativeClosure);
+                    let n = nat.upvals.len();
                     if (n > 0 || self.table_dialect == crate::runtime::table::Dialect::L51)
                         && !is_uncounted(h)
                     {

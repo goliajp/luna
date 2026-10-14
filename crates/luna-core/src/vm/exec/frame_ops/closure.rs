@@ -96,7 +96,8 @@ impl Vm {
         for (i, uv) in ups.iter().enumerate() {
             if self.version() > LuaVersion::Lua51 || i != proto.env_upval_idx as usize {
                 let h = uv.as_ptr() as *mut crate::runtime::heap::GcHeader;
-                self.heap.acct_promote_obj(h, crate::runtime::heap::PucKind::Upval, upval);
+                self.heap
+                    .acct_promote_obj(h, crate::runtime::heap::PucKind::Upval, upval);
             }
         }
         self.set_r(base, inst.a(), Value::Closure(nc));
