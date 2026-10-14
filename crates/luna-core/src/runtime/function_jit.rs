@@ -1,6 +1,6 @@
 //! A prototype's JIT cache state.
 
-/// What a backend stores in [`Proto::jit_next`] when it compiled no code
+/// What a backend stores in [`super::Proto::jit_next`] when it compiled no code
 /// after all.
 pub const JIT_NEXT_NONE: usize = usize::MAX;
 
