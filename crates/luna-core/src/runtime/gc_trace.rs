@@ -15,7 +15,7 @@ pub(crate) struct Trace {
     /// `R38_NOAUTO`: no automatic step runs, a full collection does
     pub(crate) no_auto: bool,
     /// `R38_WHERE`: each line also names the luna functions that made it
-    where_: bool,
+    pub(crate) where_: bool,
 }
 
 impl Default for Trace {
