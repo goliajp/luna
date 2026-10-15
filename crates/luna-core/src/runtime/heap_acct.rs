@@ -31,6 +31,9 @@ pub(crate) struct PucState {
     pub(crate) gbuff: usize,
     /// the long strings PUC's `luaL_openlibs` made and kept
     pub(crate) kept_long: Vec<(&'static [u8], usize)>,
+    /// the debt and estimate the collector had reached when the libraries
+    /// were open, when it ran meanwhile (5.3)
+    pub(crate) libs_pace: Option<(i64, i64)>,
     /// uncounted objects of luna's standing for objects of PUC's of the
     /// given size (see `Heap::acct_stand_in`)
     pub(crate) stand_ins: Vec<(*mut GcHeader, Vec<usize>)>,
@@ -58,6 +61,7 @@ impl Default for PucState {
             pins: Vec::new(),
             gbuff: 0,
             kept_long: Vec::new(),
+            libs_pace: None,
             stand_ins: Vec::new(),
             own_tables: Vec::new(),
             load_msg: None,
