@@ -101,15 +101,10 @@ impl Vm {
             yielding: None,
             native_nresults: -1,
             main_coro: None,
-            // PUC 5.4+ boots in generational mode (the first
-            // `collectgarbage("generational")` reports it as the previous
-            // mode on stock 5.4 and 5.5); luna's collector is incremental
-            // either way, and this is the mode the stdlib reports.
-            gc_mode: if version >= crate::version::LuaVersion::Lua54 {
-                "generational"
-            } else {
-                "incremental"
-            },
+            // PUC's `lua_newstate` starts in incremental mode; the
+            // standalone interpreter switches to generational
+            // (`gc_enter_generational`)
+            gc_mode: "incremental",
             gc_top: 0,
             gc_pause: 200,
             gc_stepmul: 100,

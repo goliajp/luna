@@ -324,6 +324,8 @@ fn pmain(interp: &mut Interp, argv: &[Vec<u8>], args: &LuaArgs) -> bool {
     if v >= LuaVersion::Lua53 {
         interp.set_arg(argv, args.script.unwrap_or(0));
     }
+    // 5.4 on run the collector in generational mode
+    interp.vm.gc_enter_generational();
     // 5.1 ran it before looking at the options
     if v >= LuaVersion::Lua52 && !args.ignore_env && !interp.handle_luainit() {
         return false;
