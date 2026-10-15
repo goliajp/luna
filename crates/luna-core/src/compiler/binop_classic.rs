@@ -19,7 +19,7 @@ impl Compiler<'_> {
     ) -> Result<Exp, SyntaxError> {
         let (saved, saved_force) = (open.saved, open.saved_force);
         let mut zeros = LVec::new(self.heap.mem());
-        if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros) {
+        if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros, None) {
             self.note_zeros(&zeros);
             self.force_line = saved_force;
             return Ok(folded);
@@ -45,6 +45,21 @@ impl Compiler<'_> {
         self.force_line = saved_force;
         let re = self.expr(rhs)?;
         self.at(TokRef::After(rhs, 0));
+        // a right operand whose code ran but left a numeral folds with a
+        // numeral on the left (`constfolding`)
+        let num = match re {
+            Exp::Int(i) => Some(Num::Int(i)),
+            Exp::Float(f) => Some(Num::Float(f)),
+            _ => None,
+        };
+        if left.is_none()
+            && num.is_some()
+            && let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros, num)
+        {
+            self.note_zeros(&zeros);
+            self.set_freereg(saved);
+            return Ok(folded);
+        }
         // `luaK_posfix`: the right operand first
         let r = self.exp_rk(re)?;
         let l = match left {

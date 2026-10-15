@@ -66,14 +66,10 @@ pub struct Proto {
     pub last_line_defined: u32,
     /// local-variable debug records (name + live pc range)
     pub locvars: LSlice<LocVar>,
-    /// PUC 5.2 / 5.3 closure cache (`Proto.cache`): the last LClosure built from
-    /// this Proto. When OP_CLOSURE fires, the VM compares each candidate
-    /// upvalue to the cached closure's same-slot upvalue (`getcached`); on a
-    /// full match the cached closure is reused, so two `function() ... end`
-    /// literals reached from the same source compile but with identical
-    /// upvalue bindings compare equal. closure.lua's `for i=1,5 do
-    /// a[i]=function(x) return x+a+_ENV end end` asserts that subsequent
-    /// iterations reuse the closure; capturing `i` instead defeats the cache.
+    /// PUC 5.2 / 5.3 closure cache (`Proto.cache`): the last LClosure built
+    /// from this Proto, reused when OP_CLOSURE finds the same upvalues in it
+    /// (`getcached`; closure.lua asserts a loop's closures over `a` and
+    /// `_ENV` compare equal).
     pub cache: std::cell::Cell<Option<Gc<LuaClosure>>>,
     /// Index into `upvals` of the `_ENV` upvalue (5.1 per-function-env
     /// model needs to clone-on-closure), or `u8::MAX` for "no _ENV
@@ -147,6 +143,9 @@ pub struct Proto {
     /// A trace checks a callee against them by address, so the collector
     /// keeps them alive while this prototype lives (`Proto::trace`).
     pub(crate) inlined_protos: std::cell::RefCell<Vec<Gc<Proto>>>,
+    /// The strings PUC's prototype keeps for its local variable and upvalue
+    /// names (luna's own are `DebugName`s), kept alive as long as it is.
+    pub(crate) puc_names: std::cell::RefCell<Vec<Gc<LuaStr>>>,
     /// Compiled trace cache for this Proto. A successful
     /// `compile_trace(record)` parks its `CompiledTrace` here;
     /// `Vm::run`'s trace dispatcher iterates this on each
@@ -174,69 +173,13 @@ pub struct Proto {
     /// it spares every later call the scan of `traces`.
     #[doc(hidden)]
     pub trace_call_head_settled: std::cell::Cell<bool>,
+    /// The bytes PUC's prototype holds in each of its arrays (code,
+    /// prototypes, constants, line info, absolute line info, local
+    /// variables, upvalue descriptors), counted when it was made and
+    /// uncounted when it is freed (they differ from this prototype's).
+    #[doc(hidden)]
+    pub puc_arrays: std::cell::Cell<[u32; 7]>,
 }
-
-/// What a backend stores in [`Proto::jit_next`] when it compiled no code
-/// after all.
-pub const JIT_NEXT_NONE: usize = usize::MAX;
-
-/// Per-Proto JIT cache state. Copy so it fits a plain
-/// `Cell` on the dispatch hot path (no `RefCell` borrow check); the
-/// fn pointer's mmap is kept alive by `Vm.jit_handles`.
-#[derive(Clone, Copy, Debug)]
-pub enum JitProtoState {
-    /// Compilation hasn't been attempted yet.
-    Untried,
-    /// Compilation was attempted and the body fell outside the whitelist;
-    /// subsequent calls skip the attempt.
-    Failed,
-    /// Native code is installed and callable through the recorded entry.
-    Compiled {
-        /// Raw mmap'd code address. Transmute to the
-        /// `unsafe extern "C" fn(i64, …) -> i64` shape matching
-        /// `num_args` at the call site.
-        entry: *const u8,
-        /// 0..=MAX_JIT_ARITY. Picks the transmute target.
-        num_args: u8,
-        /// True when the Lua chunk terminates with `Return1` (single
-        /// observable return value). False means the chunk only
-        /// side-effects + `Return0` — host gets an empty `Vec<Value>`
-        /// from `Vm::call_value`, an interpreter `Op::Call` gets
-        /// zero results pushed (PUC nresults handling).
-        returns_one: bool,
-        /// Per-arg Float bit. Bit `i = 1` ↔ arg slot `i`
-        /// is f64 (passed as i64 bit-pattern across the ABI, bitcast
-        /// inside the JIT). Bit `i = 0` ↔ Int. Bits ≥ MAX_JIT_ARITY
-        /// are zero.
-        arg_float_mask: u8,
-        /// Per-arg Table bit. Bit `i = 1` ↔ arg slot `i`
-        /// is `Gc<Table>` raw ptr (passed as the i64 pointer value
-        /// directly, since `Gc<Table>` is `NonNull<Table>` =
-        /// pointer-shaped). Mutually exclusive with `arg_float_mask`
-        /// for the same bit. Required so `try_jit_call_op`'s arg
-        /// marshalling can accept `Value::Table(t)` and pack
-        /// `t.as_ptr() as i64`; without it a Table arg would fall
-        /// into the dispatcher's default-deny match arm and the
-        /// callee couldn't be reached via JIT.
-        arg_table_mask: u8,
-        /// True iff the chunk's `Return1` value is f64.
-        /// Dispatcher wraps `r` as `Value::Float(f64::from_bits(r))`
-        /// vs `Value::Int(r)` accordingly. Meaningful only when
-        /// `returns_one == true`.
-        ret_is_float: bool,
-        /// True iff the chunk's `Return1` value is a
-        /// `Gc<Table>` ptr. Mutually exclusive with `ret_is_float`.
-        /// Dispatcher wraps `r` as
-        /// `Value::Table(Gc::from_ptr(r as *mut Table))`.
-        ret_is_table: bool,
-    },
-}
-
-// Cell<JitProtoState> stores raw pointers; explicit Send + Sync
-// negative: keep these on a single-threaded runtime. The Vm itself
-// already is !Send (Heap holds raw GcHeader pointers), so we don't
-// need any auto-trait gymnastics — this comment exists so a future
-// audit doesn't try to flip the trait without thinking.
 
 impl Proto {
     /// Stable 128-bit hash over a
@@ -438,6 +381,9 @@ pub struct NativeClosure {
     pub builtin: crate::runtime::Builtin,
 }
 
+#[path = "function_jit.rs"]
+mod jit_state;
+pub use jit_state::{JIT_NEXT_NONE, JitProtoState};
 #[path = "function_trace.rs"]
 mod trace;
 #[path = "function_upvals.rs"]

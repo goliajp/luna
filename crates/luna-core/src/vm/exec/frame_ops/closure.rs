@@ -26,10 +26,19 @@ impl Vm {
         if !use_inline {
             heap_buf.reserve_exact(n_ups)?;
         }
+        // PUC makes the closure first, then the upvalues it finds no open
+        // one for (`luaF_findupval`): the new ones are counted after it
+        self.heap.puc.silent += 1;
         for (i, d) in proto.upvals.iter().enumerate() {
             // a new upvalue goes on the open list, a root
             let uv = if d.in_stack {
-                self.try_find_or_create_upval(base + d.index as u32)?
+                match self.try_find_or_create_upval(base + d.index as u32) {
+                    Ok(uv) => uv,
+                    Err(e) => {
+                        self.heap.puc.silent -= 1;
+                        return Err(e);
+                    }
+                }
             } else {
                 cl.upvals()[d.index as usize]
             };
@@ -71,10 +80,26 @@ impl Vm {
             if let UpvalState::Open { slot, thread } = ups[i].state() {
                 let cur = self.read_slot(slot, thread);
                 // young until the closure holds it
-                ups[i] = self.retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Closed(cur)))?;
+                match self.retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Closed(cur))) {
+                    Ok(uv) => ups[i] = uv,
+                    Err(e) => {
+                        self.heap.puc.silent -= 1;
+                        return Err(e);
+                    }
+                }
             }
         }
+        self.heap.puc.silent -= 1;
         let nc = self.try_closure_from_proto(proto, ups)?;
+        // (5.1's environment is not an upvalue in PUC: never counted)
+        let upval = self.heap.sizes.upval;
+        for (i, uv) in ups.iter().enumerate() {
+            if self.version() > LuaVersion::Lua51 || i != proto.env_upval_idx as usize {
+                let h = uv.as_ptr() as *mut crate::runtime::heap::GcHeader;
+                self.heap
+                    .acct_promote_obj(h, crate::runtime::heap::PucKind::Upval, upval);
+            }
+        }
         self.set_r(base, inst.a(), Value::Closure(nc));
         // 5.1 code puts a closure straight into the variable it is assigned
         // to, which may lie below other live registers: the whole frame stays
@@ -128,10 +153,14 @@ impl Vm {
         idx: usize,
         env: Gc<Table>,
     ) -> Result<(), LuaError> {
+        // luna's own cell: PUC keeps a 5.1 environment in the closure
+        self.heap.puc.silent += 1;
         let uv = self.retry_oom(|vm| {
             vm.heap
                 .try_new_upvalue(UpvalState::Closed(Value::Table(env)))
-        })?;
+        });
+        self.heap.puc.silent -= 1;
+        let uv = uv?;
         // SAFETY: `cl` is a live closure (see `Gc`), and no reference into
         // it is held across this write
         unsafe { cl.as_mut() }.upvals_mut()[idx] = uv;

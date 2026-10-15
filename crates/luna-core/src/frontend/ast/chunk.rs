@@ -42,6 +42,9 @@ pub struct Chunk {
     /// For each `^` and `%`, in the order they were made: the id of the
     /// right operand and how many times `errno` had been set by then.
     pub fold_marks: LVec<(u32, u64)>,
+    /// The ids of the keys written `obj.name` (string-literal keys made from
+    /// a name), in increasing order.
+    pub dot_keys: LVec<u32>,
     /// the allocation context the vectors come from
     mem: MemOwner,
 }
@@ -70,6 +73,7 @@ impl Chunk {
             field_lists: LVec::new(m),
             arm_lists: LVec::new(m),
             fold_marks: LVec::new(m),
+            dot_keys: LVec::new(m),
             mem,
         }
     }
@@ -119,6 +123,11 @@ impl Chunk {
     pub fn fold_stamp(&self, rhs: ExprId) -> Option<u64> {
         let i = self.fold_marks.binary_search_by_key(&rhs.0, |m| m.0).ok()?;
         Some(self.fold_marks[i].1)
+    }
+
+    /// Whether `key` is the key of an `obj.name` (see [`Chunk::dot_keys`]).
+    pub fn is_dot_key(&self, key: ExprId) -> bool {
+        self.dot_keys.binary_search(&key.0).is_ok()
     }
 
     /// Store `items` as a new list.

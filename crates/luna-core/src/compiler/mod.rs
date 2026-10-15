@@ -3,10 +3,6 @@
 //! are deduplicated, forward jumps are patch lists (plain Vecs instead of
 //! PUC's in-code jump chains). Function nesting is a stack of `Level`s;
 //! upvalue resolution walks it (PUC singlevaraux).
-//!
-//! Slice 3 state: calls, closures, upvalues, varargs (5.5 table semantics),
-//! generic `for`, multret, tail calls. Still pending (slice 5): goto/labels,
-//! `<close>`, `global` declarations.
 
 mod assign;
 mod assign_conflict;
@@ -31,16 +27,19 @@ mod fold;
 mod for_loops;
 mod jumplist;
 mod labels;
+mod local_stat;
 use jumplist::NO_JUMP;
 mod level;
 mod limits;
 mod near;
+pub(crate) mod puc_log;
 pub(crate) use near::{TokRef, error_before, place_error};
 mod lvalue;
 mod main_fn;
 pub use main_fn::compile_chunk_with_last_target;
 use main_fn::compile_main;
 mod resolve;
+use resolve::VarKind;
 mod return_stat;
 mod scope;
 mod stat;
@@ -165,17 +164,6 @@ struct LabelDesc<'a> {
     close: bool,
 }
 
-enum VarKind {
-    Local(u32),
-    /// a compile-time constant local (5.4+)
-    Const(CtConst),
-    Upval(u32),
-    /// global access; read_only from 5.5 declarations
-    Global {
-        read_only: bool,
-    },
-}
-
 /// Where an expression's value currently lives.
 #[derive(Clone, Copy)]
 enum Exp {
@@ -245,6 +233,11 @@ struct Compiler<'a> {
     next_pending: bool,
     /// the token of the error being returned, and its message
     err_tok: Option<(TokRef, Vec<u8>, bool)>,
+    /// what PUC allocates while it compiles, for the load to count (see
+    /// [`puc_log`])
+    puc_log: LVec<(TokRef, puc_log::PEv)>,
+    /// when the locals' entries are logged (see [`puc_log::LogState`])
+    puc_state: puc_log::LogState,
 }
 
 impl<'a> Compiler<'a> {
@@ -277,11 +270,13 @@ impl<'a> Compiler<'a> {
             self.levels[self.depth].reset(num_params, is_vararg, line);
         }
         self.depth += 1;
+        self.log(puc_log::PEv::Open);
     }
 
     /// Close the innermost level: the finished function on the heap. The
     /// level stays, emptied, for the next function at this depth.
     fn finish_level(&mut self, line: u32, last_line: u32) -> Gc<Proto> {
+        self.log(puc_log::PEv::Close);
         self.depth -= 1;
         let lvl = &mut self.levels[self.depth];
         if self.version <= LuaVersion::Lua53 {

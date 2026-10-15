@@ -85,7 +85,7 @@ impl Vm {
         for mt in self.type_mt.into_iter().flatten() {
             m.value(Value::Table(mt));
         }
-        for &n in &self.mm_names {
+        for &n in self.mm_names.iter().chain(&self.heap.puc.pins) {
             m.value(Value::Str(n));
         }
         // Root the running thread's live registers (PUC marks [stack, top)).
@@ -223,19 +223,24 @@ impl Vm {
             let mut m = self.heap.loan_marker();
             self.mark_roots(&mut m);
             self.heap.stash_marker(m);
+            self.watch_errors();
             self.heap.gc_finish_atomic();
+            self.forget_dead_errors();
         }
         self.heap.gc_finish_sweep();
         let mut m = self.heap.gc_begin_full();
         self.mark_roots(&mut m);
-        self.heap.gc_end_full(m)
+        self.watch_errors();
+        let freed = self.heap.gc_end_full(m);
+        self.forget_dead_errors();
+        freed
     }
 
     /// Run a full collection with the VM's roots, then run any `__gc`
     /// finalizers the collection scheduled. A no-op (returns 0) when already
     /// inside a finalizer — the collector is not reentrant (PUC).
     pub fn collect_garbage(&mut self) -> usize {
-        if self.gc_finalizing {
+        if self.gc_finalizing || self.heap.no_gc() {
             return 0;
         }
         self.clear_dead_stack();
@@ -251,7 +256,7 @@ impl Vm {
     /// variant runs the same cycle but propagates the captured finalizer
     /// error to the explicit caller.
     pub(crate) fn collect_garbage_propagating(&mut self) -> Result<usize, LuaError> {
-        if self.gc_finalizing {
+        if self.gc_finalizing || self.heap.no_gc() {
             return Ok(0);
         }
         self.clear_dead_stack();
@@ -263,10 +268,22 @@ impl Vm {
     }
 
     /// What `collectgarbage("count")` and `lua_gc(LUA_GCCOUNT)` report:
-    /// the allocation context's count when it keeps one, else the
-    /// collector's own estimate.
+    /// PUC's `totalbytes` (see `heap_acct.rs`).
     pub(crate) fn gc_count_bytes(&self) -> usize {
-        self.memory_in_use().unwrap_or(self.heap.bytes())
+        self.heap.bytes()
+    }
+
+    /// Write a mark into the accounting trace (`gc-trace`), where a test
+    /// cuts the comparison with PUC's.
+    #[cfg(feature = "gc-trace")]
+    #[doc(hidden)]
+    pub fn trace_mark(&mut self, name: &str) {
+        self.heap.trace.line(format_args!("M {name}"));
+        // `R38_EXIT_AT=<name>`: stop the program at this mark
+        if std::env::var("R38_EXIT_AT").is_ok_and(|at| at == name) {
+            self.heap.trace.flush();
+            std::process::exit(0);
+        }
     }
 
     /// Whether a `__gc` finalizer is currently running (so `collectgarbage`

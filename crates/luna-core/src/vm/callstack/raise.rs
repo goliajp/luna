@@ -240,3 +240,35 @@ impl Vm {
             .map(|f| f.base + f.closure.proto.max_stack as u32 + positioned_message + varinfo)
     }
 }
+
+impl Vm {
+    /// Before a collection's atomic phase: the error values the unwinder
+    /// compares by identity, watched without being kept alive.
+    pub(crate) fn watch_errors(&mut self) {
+        let w = &mut self.heap.weak_watch;
+        w.clear();
+        for v in [self.msgh_applied, self.handler_bypass] {
+            w.push((v.unwrap_or(Value::Nil), false));
+        }
+        w.extend(self.errored_natives.iter().map(|e| (e.err, false)));
+    }
+
+    /// After it: forget each one the collection found dead, before its
+    /// object is freed and its address reused by another value.
+    pub(crate) fn forget_dead_errors(&mut self) {
+        let w = std::mem::take(&mut self.heap.weak_watch);
+        if w.first().is_some_and(|x| x.1) {
+            self.msgh_applied = None;
+        }
+        if w.get(1).is_some_and(|x| x.1) {
+            self.handler_bypass = None;
+        }
+        let mut dead = w.iter().skip(2).map(|x| x.1);
+        self.errored_natives
+            .retain(|_| !dead.next().unwrap_or(false));
+    }
+}
+
+#[cfg(test)]
+#[path = "raise_tests.rs"]
+mod tests;

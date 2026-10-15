@@ -2,6 +2,7 @@
 //! constant- and immediate-operand forms are in `binop_const`).
 
 use super::binop_const::Operand;
+use super::ctconst::{Arith, fold_numbers};
 use super::*;
 
 /// What [`Compiler::binop_open`] set up before the left operand: the free
@@ -60,6 +61,7 @@ impl Compiler<'_> {
     ) -> Result<Exp, SyntaxError> {
         // `luaK_infix`, once the operator is read
         self.at(TokRef::First(rhs, 0));
+        self.use_early();
         if self.version <= LuaVersion::Lua53 {
             return self.binop_close_classic(op, le, rhs, line, open);
         }
@@ -68,7 +70,12 @@ impl Compiler<'_> {
         }
         let BinOpOpen { saved, saved_force } = open;
         let mut zeros = LVec::new(self.heap.mem());
-        if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros) {
+        // a right operand made of compile-time constants is a numeral too
+        // (`luaK_posfix` discharges it to one before folding)
+        let ast = self.ast;
+        let named = ct_value(ast, rhs, &mut |name| self.ct_const_named(self.nm(name)))
+            .and_then(|c| c.num());
+        if let Some(folded) = fold_arith(op, &le, ast, rhs, self.version, &mut zeros, named) {
             self.note_zeros(&zeros);
             self.force_line = saved_force;
             return Ok(folded);
@@ -115,6 +122,24 @@ impl Compiler<'_> {
         let mut re = self.expr(rhs)?;
         // `luaK_posfix`, once the right operand is read
         self.at(TokRef::After(rhs, 0));
+        // a right operand whose code ran but left a numeral folds with a
+        // numeral on the left (`constfolding`)
+        let num = |e: &Exp| match *e {
+            Exp::Int(i) => Some(Num::Int(i)),
+            Exp::Float(f) => Some(Num::Float(f)),
+            _ => None,
+        };
+        if l.is_none()
+            && let (Some(a), Some(b)) = (num(&le), num(&re))
+            && let Some(n) = Arith::of(op).and_then(|o| fold_numbers(o, a, b, false))
+        {
+            self.force_line = saved_force;
+            self.set_freereg(saved);
+            return Ok(match n {
+                Num::Int(i) => Exp::Int(i),
+                Num::Float(f) => Exp::Float(f),
+            });
+        }
         if sub_zero && !matches!(re, Exp::Int(0)) {
             self.exp_to_anyreg(re)?;
             re = Exp::Int(0);

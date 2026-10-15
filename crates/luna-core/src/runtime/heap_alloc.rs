@@ -48,6 +48,19 @@ impl Heap {
     /// Put `obj` in a new block and under GC management. On failure `obj`
     /// is dropped.
     #[inline]
+    /// [`Heap::try_adopt`], the object counted at `size` (see
+    /// [`Heap::acct_new`]).
+    pub(super) fn adopt_counted<T: GcObject>(
+        &mut self,
+        obj: T,
+        kind: PucKind,
+        size: usize,
+    ) -> Result<Gc<T>, Oom> {
+        let g = self.try_adopt(obj)?;
+        self.acct_new(g.as_ptr() as *mut GcHeader, kind, size);
+        Ok(g)
+    }
+
     pub(crate) fn try_adopt<T: GcObject>(&mut self, obj: T) -> Result<Gc<T>, Oom> {
         let p = self.alloc_block::<T>()?;
         // SAFETY: `p` is a fresh block for one `T`, linked nowhere yet, and a
@@ -57,7 +70,6 @@ impl Heap {
             p.write(obj);
             self.link(p as *mut GcHeader);
         }
-        self.bytes += std::mem::size_of::<T>();
         // SAFETY: as above
         Ok(unsafe { Gc::from_ptr(p) })
     }
@@ -99,7 +111,7 @@ impl Heap {
         };
         // SAFETY: `p` is a fresh block or a pool table reset above, linked nowhere yet
         unsafe { self.link(p as *mut GcHeader) };
-        self.bytes += std::mem::size_of::<Table>();
+        self.acct_obj(PucKind::Table, self.sizes.table);
         // the Table is now at its final heap address; wire `array_ptr` to
         // point at the inline storage that lives inside it
         // SAFETY: `p` is the table linked just above, which the heap now manages; no other handle or reference to it exists yet
@@ -145,12 +157,21 @@ impl Heap {
         asize: usize,
     ) -> Result<Gc<Table>, crate::runtime::table::TableError> {
         const MAX_ASIZE_HINT: usize = 1 << 27;
+        self.try_create_table(asize.min(MAX_ASIZE_HINT), 0)
+    }
+
+    /// A table sized as `lua_createtable(narr, nrec)` sizes it.
+    #[doc(hidden)]
+    pub fn try_create_table(
+        &mut self,
+        narr: usize,
+        nrec: usize,
+    ) -> Result<Gc<Table>, crate::runtime::table::TableError> {
         let g = self.try_new_table()?;
-        let clamped = asize.min(MAX_ASIZE_HINT);
-        if clamped > 0 {
+        if narr > 0 || nrec > 0 {
             // SAFETY: the freshly adopted table has no live borrow
             // anywhere else; we hold the only `Gc<Table>` handle.
-            unsafe { g.as_mut() }.resize(self, clamped, 0)?;
+            unsafe { g.as_mut() }.resize(self, narr, nrec)?;
         }
         Ok(g)
     }
@@ -192,7 +213,9 @@ impl Heap {
     /// [`Heap::adopt_proto`], failing when memory runs out.
     pub fn try_adopt_proto(&mut self, proto: Proto) -> Result<Gc<Proto>, Oom> {
         debug_assert!(proto.hdr.tag == ObjTag::Proto);
-        self.try_adopt(proto)
+        let g = self.try_adopt(proto)?;
+        self.acct_proto(g);
+        Ok(g)
     }
 
     /// Back-compat constructor for callers that already
@@ -259,9 +282,15 @@ impl Heap {
             self.link(p as *mut GcHeader);
             Gc::from_ptr(p)
         };
-        self.bytes += std::mem::size_of::<LuaClosure>();
+        let size = self.closure_size(&proto, n);
+        let env = self.env51(&proto);
+        self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::LuaClosure, size);
         // SAFETY: `g` is the closure linked just above; no other handle or reference to it exists yet
-        unsafe { g.as_mut() }.init_upvals_ptr();
+        let c = unsafe { g.as_mut() };
+        c.init_upvals_ptr();
+        if env {
+            c.hdr.sub |= super::acct::ENV51;
+        }
         Ok(g)
     }
 
@@ -291,57 +320,12 @@ impl Heap {
     /// [`Heap::new_upvalue`], failing when memory runs out.
     #[inline]
     pub fn try_new_upvalue(&mut self, state: UpvalState) -> Result<Gc<Upvalue>, Oom> {
-        self.try_adopt(Upvalue {
+        let size = self.sizes.upval;
+        let upval = Upvalue {
             hdr: GcHeader::new(ObjTag::Upvalue),
             state,
-        })
-    }
-
-    /// Create a fresh suspended coroutine wrapping `body`. The new thread
-    /// inherits the creator's globals table; a `setfenv(0, env)` inside it
-    /// will retune that copy without affecting the creator.
-    pub fn new_coro(
-        &mut self,
-        body: Value,
-        globals: Gc<crate::runtime::Table>,
-    ) -> Gc<crate::runtime::Coro> {
-        self.try_new_coro(body, globals)
-            .unwrap_or_else(|_| oom_abort(Layout::new::<crate::runtime::Coro>()))
-    }
-
-    /// [`Heap::new_coro`], failing when memory runs out.
-    pub fn try_new_coro(
-        &mut self,
-        body: Value,
-        globals: Gc<crate::runtime::Table>,
-    ) -> Result<Gc<crate::runtime::Coro>, Oom> {
-        let mem = self.mem();
-        self.try_adopt(crate::runtime::Coro {
-            hdr: GcHeader::new(ObjTag::Coro),
-            status: crate::runtime::CoroStatus::Suspended,
-            body,
-            started: false,
-            resumer: None,
-            resume_at: None,
-            error_value: None,
-            error_status: crate::runtime::coroutine::ErrorStatus::Run,
-            error_traceback: None,
-            error_levels: None,
-            natives: 0..0,
-            stack: LVec::new(mem),
-            frames: LVec::new(mem),
-            open_upvals: LVec::new(mem),
-            tbc: LVec::new(mem),
-            top: 0,
-            meta_conts: 0,
-            stale_frames: 0,
-            stack_size: 0,
-            frame_size: 0,
-            hook: crate::vm::exec::HookState::default(),
-            globals,
-            host_stack: LVec::new(mem),
-            host_state: None,
-        })
+        };
+        self.adopt_counted(upval, PucKind::Upval, size)
     }
 
     /// Create a userdata (an io file handle — luna's only userdata) with no
@@ -357,10 +341,8 @@ impl Heap {
         payload: UserdataPayload,
         writable: bool,
     ) -> Result<Gc<Userdata>, Oom> {
-        self.try_adopt(Userdata::new(
-            GcHeader::new(ObjTag::Userdata),
-            payload,
-            writable,
-        ))
+        let size = self.sizes.userdata(1, 0);
+        let u = Userdata::new(GcHeader::new(ObjTag::Userdata), payload, writable);
+        self.adopt_counted(u, PucKind::Userdata, size)
     }
 }

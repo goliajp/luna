@@ -1,11 +1,14 @@
-//! Token positions recorded by a second parse, to place a compile error.
+//! Token positions recorded by a parse, to place a compile error and to
+//! count a load as PUC allocates it.
 //!
 //! PUC generates code while it parses, so an error its code generator
 //! raises (a jump or a register past its limit) shows the token the
 //! scanner is on and is reported at that token's line. luna compiles the
 //! finished tree; the compiler names that token in terms of the tree (a
 //! [`crate::compiler::TokRef`]), and a load that fails that way parses the
-//! source again, recording where the nodes start and end, to find it.
+//! source again, recording where the nodes start and end, to find it. A
+//! load that is counted records the same while it parses, with the strings
+//! PUC's scanner makes.
 
 use super::*;
 
@@ -36,8 +39,20 @@ pub(crate) struct Marks {
 
 /// A recording parse: the marks, or the line and near-token text of one
 /// token.
-pub(super) struct Recording {
-    pub(super) marks: Marks,
+#[derive(Default)]
+pub(crate) struct Recording {
+    pub(crate) marks: Marks,
+    /// with `strings`: each token PUC's scanner makes a string for (a
+    /// name, a reserved word, a string literal), and the tokens for which
+    /// the scanner's buffer holds more than its first 32 bytes, with how
+    /// many; and where the last token read ended
+    strings: bool,
+    pub(crate) scanned: Scanned,
+    last_end: usize,
+    /// from 5.3: the names numbered below this one, and the reserved words
+    /// whose bits are set, were recorded already
+    next_sym: u32,
+    reserved_seen: u32,
     /// the token to report, and what was found for it
     target: Option<u32>,
     found: Option<Found>,
@@ -82,6 +97,17 @@ pub(crate) fn token_at(src: &[u8], version: LuaVersion, c_depth: u32, ix: u32) -
     record(src, version, c_depth, Some(ix)).ok()?.found
 }
 
+#[path = "marks_scan.rs"]
+mod marks_scan;
+#[path = "scan_buf.rs"]
+mod scan_buf;
+use scan_buf::{ScanKind, ScanText, Scanned};
+/// What the load's replay needs of the scanner's record.
+pub(crate) mod scan {
+    pub(crate) use super::scan_buf::grown;
+    pub(crate) use super::scan_buf::{RESERVED, ScanKind, ScanText, Scanned};
+}
+
 fn record(
     src: &[u8],
     version: LuaVersion,
@@ -102,41 +128,99 @@ fn record(
         ..
     } = &mut scratch;
     let mut p = Parser::new(lex, cur, version, c_depth, chunk, end_lines, stacks)?;
-    p.rec = Some(Box::new(Recording {
-        marks: Marks::default(),
+    p.start_recording(Some(Box::new(Recording {
         target,
-        found: None,
-    }));
-    p.reached();
+        ..Recording::default()
+    })));
     let r = p.main(src.len());
-    let mut rec = p.rec.take().expect("recording");
+    let rec = p.stop_recording().expect("recording");
     if let Err(e) = r
         && rec.found.is_none()
     {
         return Err(e);
     }
-    rec.marks.eof = p.tok_ix;
     drop(p);
     drop(scratch);
     drop(mem);
     Ok(*rec)
 }
 
+impl Marks {
+    /// Emptied for the next parse, keeping its vectors.
+    fn clear(&mut self) {
+        self.expr_follow.clear();
+        self.expr_open.clear();
+        self.stat_first.clear();
+        self.stat_follow.clear();
+        self.stat_marks.clear();
+        self.marks.clear();
+        self.eof = 0;
+        self.open.clear();
+        self.pending.clear();
+    }
+}
+
 impl Parser<'_> {
+    /// Record this parse in `rec` (emptied first, keeping its vectors), or
+    /// a new recording, with the strings the scanner makes.
+    pub(super) fn record_load(&mut self, rec: Option<Box<Recording>>) {
+        let mut rec = rec.unwrap_or_default();
+        rec.marks.clear();
+        rec.scanned.strings.clear();
+        rec.scanned.peaks.clear();
+        rec.strings = true;
+        rec.last_end = 0;
+        rec.next_sym = 0;
+        rec.reserved_seen = 0;
+        self.start_recording(Some(rec));
+    }
+
+    fn start_recording(&mut self, rec: Option<Box<Recording>>) {
+        self.rec = rec;
+        self.reached();
+    }
+
+    /// The recording, with the `<eof>` token (the last one read).
+    pub(super) fn stop_recording(&mut self) -> Option<Box<Recording>> {
+        let mut rec = self.rec.take()?;
+        rec.marks.eof = self.tok_ix;
+        Some(rec)
+    }
+
     /// Token `tok_ix` became the current one.
+    #[inline]
     pub(super) fn reached(&mut self) {
-        if let Some(r) = &self.rec
-            && r.target == Some(self.tok_ix)
-        {
-            let found = Found {
-                line: self.lex.line(),
-                near: self.near(),
-                span: self.tok.span,
-            };
-            self.rec.as_mut().expect("recording").found = Some(found);
+        if self.rec.is_some() {
+            self.reached_recording();
         }
     }
 
+    #[inline]
+    fn reached_recording(&mut self) {
+        let (ix, tok, sym) = (self.tok_ix, self.tok, self.tok_sym);
+        let (src, version) = (self.lex.src(), self.version);
+        let r = self.rec.as_deref_mut().expect("recording");
+        if r.strings {
+            r.scan(version, src, ix, tok, sym);
+        }
+        if r.target == Some(ix) {
+            self.found_target();
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn found_target(&mut self) {
+        let found = Found {
+            line: self.lex.line(),
+            near: self.near(),
+            span: self.tok.span,
+        };
+        self.rec.as_mut().expect("recording").found = Some(found);
+    }
+}
+
+impl Parser<'_> {
     /// A statement starts at the current token.
     pub(super) fn open_stat(&mut self) {
         if let Some(r) = &mut self.rec {

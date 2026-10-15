@@ -2,6 +2,29 @@
 
 use super::*;
 
+/// Discriminator the GC stores in every [`GcHeader`] so a raw header pointer
+/// can be cast back to the right object kind during tracing and sweeping.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum ObjTag {
+    /// [`crate::runtime::string::LuaStr`].
+    Str,
+    /// [`crate::runtime::table::Table`].
+    Table,
+    /// [`crate::runtime::function::Proto`].
+    Proto,
+    /// [`crate::runtime::function::LuaClosure`].
+    Closure,
+    /// [`crate::runtime::function::Upvalue`].
+    Upvalue,
+    /// [`crate::runtime::function::NativeClosure`].
+    Native,
+    /// [`crate::runtime::coroutine::Coro`].
+    Coro,
+    /// [`crate::runtime::userdata::Userdata`].
+    Userdata,
+}
+
 impl GcHeader {
     /// Whether this is a read-only table (`Table::is_readonly`).
     #[inline(always)]

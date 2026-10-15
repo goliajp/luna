@@ -2,6 +2,18 @@
 
 use super::*;
 
+/// What a name refers to.
+pub(super) enum VarKind {
+    Local(u32),
+    /// a compile-time constant local (5.4+)
+    Const(CtConst),
+    Upval(u32),
+    /// global access; read_only from 5.5 declarations
+    Global {
+        read_only: bool,
+    },
+}
+
 impl<'a> Compiler<'a> {
     /// 5.5 global-declaration resolution: explicit declaration > innermost
     /// collective `global *` > implicit chunk default (void once any
@@ -74,6 +86,15 @@ impl<'a> Compiler<'a> {
             reg: Some(reg),
             global: false,
         });
+        self.log_new_localvar(name);
+        // 5.4+ registers the debug record in `adjustlocalvars`
+        if self.version >= LuaVersion::Lua54 {
+            if self.puc_state.defer {
+                self.puc_state.pending += 1;
+            } else {
+                self.log(super::puc_log::PEv::LocVar);
+            }
+        }
         Ok(())
     }
 
@@ -94,6 +115,7 @@ impl<'a> Compiler<'a> {
             reg: None,
             global: false,
         });
+        self.log_new_localvar(name);
     }
 
     /// The compile-time constant `name` refers to here, if it does: the
@@ -194,6 +216,7 @@ impl<'a> Compiler<'a> {
                     name: name.into(),
                     read_only,
                 });
+                self.log(super::puc_log::PEv::Upval(li as u32));
                 Ok(VarKind::Upval(ui))
             }
             VarKind::Upval(pidx) => {
@@ -208,6 +231,7 @@ impl<'a> Compiler<'a> {
                     name: name.into(),
                     read_only,
                 });
+                self.log(super::puc_log::PEv::Upval(li as u32));
                 Ok(VarKind::Upval(ui))
             }
         }

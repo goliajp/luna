@@ -3,9 +3,8 @@
 use super::*;
 
 impl Table {
-    /// Insert / update `(key, val)`. `heap` is used to credit any internal
-    /// Box growth (rehash) to `heap.bytes` so the counter stays in sync with
-    /// real memory; `free_obj` subtracts `internal_bytes()` on the way out.
+    /// Insert / update `(key, val)`. `heap` counts a rehash's parts (see
+    /// `heap_acct.rs`).
     /// A read-only table refuses the write with [`TableError::ReadOnly`].
     pub fn set(&mut self, heap: &mut Heap, key: Value, val: Value) -> Result<(), TableError> {
         if self.is_readonly() {
@@ -238,6 +237,26 @@ impl Table {
             return Ok(());
         }
         self.insert_new(heap, k, v)
+    }
+
+    /// `t[k] = v` for a string `k` with no value here yet; a key with a
+    /// value is left as it is. One walk of the hash chain.
+    pub(crate) fn insert_absent_str(
+        &mut self,
+        heap: &mut Heap,
+        k: Value,
+        v: Value,
+    ) -> Result<(), TableError> {
+        debug_assert!(matches!(k, Value::Str(_)) && !self.is_readonly());
+        match self.find_node(k) {
+            Some(idx) if !self.nodes()[idx].val.is_nil() => Ok(()),
+            Some(idx) => {
+                self.hdr.aux = 0;
+                self.nodes_mut()[idx].val = v;
+                Ok(())
+            }
+            None => self.insert_new(heap, k, v),
+        }
     }
 
     pub(super) fn insert_new(

@@ -286,11 +286,6 @@ pub(crate) unsafe fn free(p: *mut LuaStr, mem: MemRef) {
 mod table;
 pub(crate) use table::StringTable;
 
-/// Allocation footprint of a string of `len` bytes (heap accounting).
-pub(crate) fn alloc_size(len: usize) -> usize {
-    layout(len).size()
-}
-
 #[cfg(test)]
 mod tests {
     use crate::runtime::heap::Heap;

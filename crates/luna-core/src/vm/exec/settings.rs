@@ -281,11 +281,9 @@ impl Vm {
         self.trap = true;
     }
 
-    /// Approximate bytes the heap is currently holding. Object shells plus
-    /// every table's internal array/hash boxes (tracked via
-    /// `Heap::apply_bytes_delta` in `set`/`rehash`/`ensure_*`). Proto
-    /// bytecode and closure upvalue slices still go uncounted — this is a
-    /// lower bound, not a precise `malloc_stats`-style total.
+    /// The bytes `collectgarbage("count")` reports: every object at the
+    /// size PUC gives it, not what luna's own objects take
+    /// ([`Vm::memory_in_use`] has that, when the allocation context counts).
     pub fn memory_used(&self) -> usize {
         self.heap.bytes()
     }

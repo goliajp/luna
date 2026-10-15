@@ -305,25 +305,6 @@ impl Table {
         self.metatable = mt;
     }
 
-    /// Bytes occupied by the table's *external* internal allocations
-    /// (slab and nodes). Cheap O(1) read — Box len × element size, no
-    /// allocator query. `Heap::free_obj` subtracts this on the way out
-    /// so the credit applied via `set`/`rehash`/`ensure_*` is symmetric.
-    ///
-    /// Inline storage doesn't count toward this (it's part
-    /// of the Table struct itself, accounted for by `size_of::<Table>()`
-    /// at adoption time). When the array part lives inline, the slab
-    /// is empty and contributes nothing here.
-    pub(crate) fn internal_bytes(&self) -> usize {
-        let n = self.asize as usize;
-        let array_external = if n > INLINE_ASIZE as usize {
-            n + n * std::mem::size_of::<RawVal>()
-        } else {
-            0
-        };
-        array_external + std::mem::size_of_val(self.nodes())
-    }
-
     #[inline]
     fn asize(&self) -> usize {
         self.asize as usize

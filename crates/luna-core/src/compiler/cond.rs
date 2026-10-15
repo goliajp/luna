@@ -68,6 +68,7 @@ impl Compiler<'_> {
                 let l = self.l();
                 l.code.pop();
                 l.lines.pop();
+                self.log(super::puc_log::PEv::Uncode);
                 return self.cond_jump(Inst::iabc(Op::Test, i.b(), 0, 0, !cond));
             }
         }
@@ -84,7 +85,10 @@ impl Compiler<'_> {
                 self.negate_condition(pc);
                 pc as i32
             }
-            Exp::Const(_) | Exp::Int(_) | Exp::Float(_) | Exp::True => NO_JUMP,
+            Exp::Const(_) | Exp::Int(_) | Exp::Float(_) | Exp::True => {
+                self.drop_literal(v);
+                NO_JUMP
+            }
             _ => self.jump_on_cond(v, false)?,
         };
         self.concat_list(&mut f, pc)?;
@@ -110,7 +114,10 @@ impl Compiler<'_> {
         let (v, t, f) = self.exp_parts(e);
         let v = match v {
             Exp::Nil | Exp::False => Exp::True,
-            Exp::Const(_) | Exp::Int(_) | Exp::Float(_) | Exp::True => Exp::False,
+            Exp::Const(_) | Exp::Int(_) | Exp::Float(_) | Exp::True => {
+                self.drop_literal(v);
+                Exp::False
+            }
             Exp::Jmp(pc) => {
                 self.negate_condition(pc);
                 v
