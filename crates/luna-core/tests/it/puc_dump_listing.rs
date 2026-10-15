@@ -174,6 +174,8 @@ fn luna_dump(version: LuaVersion, src: &Path) -> Vec<u8> {
     let source = std::fs::read(src).expect("read source");
     let name = format!("@{}", src.display());
     let f = vm.load(&source, name.as_bytes()).expect("luna compiles it");
+    // held across a call that may collect
+    vm.pin_host(Value::Closure(f));
     let dump = vm.eval("return string.dump").expect("string.dump")[0];
     let out = match vm.call_value(dump, &[Value::Closure(f)]) {
         Ok(out) => out,

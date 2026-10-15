@@ -25,7 +25,7 @@ impl Vm {
     /// (appears in tracebacks for debugging).
     pub fn eval_chunk(&mut self, src: &str, name: &str) -> Result<Vec<Value>, LuaError> {
         self.clear_error_metadata();
-        let cl = match self.load(src.as_bytes(), name.as_bytes()) {
+        let cl = match self.load_named(src.as_bytes(), name.as_bytes(), None) {
             Ok(c) => c,
             Err(syntax) => {
                 // Classify + record source position.

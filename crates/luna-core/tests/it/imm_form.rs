@@ -110,9 +110,12 @@ fn assert_one_for_one(what: &str, p: Gc<Proto>) {
 fn round_trip(version: LuaVersion, what: &str, src: &[u8]) -> Option<Vec<Op>> {
     let mut vm = vm(version);
     let f = vm.load(src, b"=x").ok()?;
+    // the functions are held across calls that may collect
+    vm.pin_host(Value::Closure(f));
     assert_one_for_one(what, f.proto);
     let bytes = dump(&mut vm, Value::Closure(f));
     let g = vm.load(&bytes, b"=x").expect("the dump loads");
+    vm.pin_host(Value::Closure(g));
     assert_one_for_one(what, g.proto);
     assert_eq!(
         dump(&mut vm, Value::Closure(g)),
@@ -190,6 +193,7 @@ fn luac_bytecode_reads_in_and_writes_out_unchanged() {
         let f = lua
             .load(VARARGS.as_bytes(), name.as_bytes())
             .expect("VARARGS compiles");
+        lua.pin_host(Value::Closure(f));
         if dump(&mut lua, Value::Closure(f)) != std::fs::read(&out).expect("luac output") {
             failed.push(format!("{dialect} VARARGS compiled by luna"));
         }
@@ -201,6 +205,7 @@ fn luac_bytecode_reads_in_and_writes_out_unchanged() {
             let bytes = std::fs::read(&out).expect("luac output");
             let mut vm = vm(version);
             let f = vm.load(&bytes, b"=x").expect("luac output loads");
+            vm.pin_host(Value::Closure(f));
             assert_one_for_one(dialect, f.proto);
             if dump(&mut vm, Value::Closure(f)) != bytes {
                 failed.push(format!("{dialect} {}", path.display()));

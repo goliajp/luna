@@ -17,8 +17,11 @@ fn load_oom(heap: &crate::runtime::Heap) -> SyntaxError {
 }
 
 impl Vm {
-    /// Parse + compile a chunk and close it over the globals table.
+    /// Parse + compile a chunk and close it over the globals table. It
+    /// does not collect: the closures loaded before and held only in Rust
+    /// values stay valid until a call or an `eval` runs.
     pub fn load(&mut self, src: &[u8], chunkname: &[u8]) -> Result<Gc<LuaClosure>, SyntaxError> {
+        self.heap.puc.load_checked = true;
         self.load_named(src, chunkname, None)
     }
 

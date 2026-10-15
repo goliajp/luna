@@ -36,7 +36,7 @@ impl Vm {
         src: &[u8],
         chunkname: &[u8],
     ) -> Result<(Gc<LuaClosure>, usize), HostLoadError> {
-        match self.load(src, chunkname) {
+        match self.load_named(src, chunkname, None) {
             Ok(cl) => {
                 let n = cl.proto.upvals.len();
                 Ok((cl, n))

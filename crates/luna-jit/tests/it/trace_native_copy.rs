@@ -66,13 +66,23 @@ fn run(v: LuaVersion, src: &str, jit: bool) -> (String, u64) {
     let mut vm = luna_jit::new_with_jit(v);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(jit);
+    // the values are held across calls that may collect: pinned
+    let keep = |vm: &mut Vm, v: Value| {
+        vm.pin_host(v);
+        v
+    };
     let f = vm.native(one);
+    let f = keep(&mut vm, f);
     let three = vm.native(three);
+    let three = keep(&mut vm, three);
     let count = vm.native(count);
+    let count = keep(&mut vm, count);
     let mt = vm.eval("return function(f) return setmetatable({}, {__call = f}), setmetatable({}, {__index = f}) end")
         .expect("constructor")[0];
     let om = vm.call_value(mt, &[f]).expect("o, m");
+    let om = [keep(&mut vm, om[0]), keep(&mut vm, om[1])];
     let c = vm.eval("return {0}").expect("c")[0];
+    let c = keep(&mut vm, c);
     let main = vm.load(src.as_bytes(), b"=loop").expect("load");
     let out = match vm.call_value(Value::Closure(main), &[c, f, three, count, om[0], om[1]]) {
         Ok(r) => format!("{:?}", r.first()),
