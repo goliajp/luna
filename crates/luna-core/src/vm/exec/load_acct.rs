@@ -229,11 +229,6 @@ impl Vm {
     /// closure, from 5.3 the chunk's table (5.5 anchors the closure in it).
     fn replay_begin(&mut self, r: &mut Replay, cl: Gc<LuaClosure>) -> Result<(), SyntaxError> {
         // `luaY_parser` (5.5 `f_parser`) before the main function opens;
-        // 5.1's `f_parser` checks for a collection first
-        #[cfg(feature = "gc-trace")]
-        if r.d == Dialect::L51 {
-            self.trace_checkpoint();
-        }
         // the reader's first call, which reads the first character
         while r.splices.front().is_some_and(|&(t, _)| t < 0) {
             let (_, d) = r.splices.pop_front().expect("peeked");

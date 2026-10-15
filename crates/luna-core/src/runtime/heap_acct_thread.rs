@@ -21,18 +21,9 @@ impl Heap {
 pub(crate) const BASIC_CI_51: u32 = 8;
 
 impl Heap {
-    /// The bytes of a stack of `s` slots (PUC's `stacksize`, which from 5.4
-    /// leaves out the `EXTRA_STACK` slots it allocates beyond it).
-    fn stack_bytes(&self, s: u32) -> usize {
-        if s == 0 {
-            return 0;
-        }
-        let extra = if self.table_dialect >= Dialect::L54 {
-            5
-        } else {
-            0
-        };
-        (s as usize + extra) * self.sizes.tvalue
+    /// The bytes of a stack of `s` slots.
+    pub(in crate::runtime::heap) fn stack_bytes(&self, s: u32) -> usize {
+        crate::runtime::heap::pace::stack_bytes(&self.sizes, self.table_dialect, s)
     }
 
     /// A thread's stack resized from `old` to `new` slots

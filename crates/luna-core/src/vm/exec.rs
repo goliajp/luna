@@ -44,6 +44,7 @@ mod frame_state;
 mod frames_sync;
 use frames_sync::{frames_pop_known, frames_pop_sync, frames_push_sync};
 mod gc;
+mod gc_step;
 mod hooks;
 mod hooks_exec;
 mod host_api;

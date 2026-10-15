@@ -18,9 +18,6 @@ use crate::vm::argcheck::{self, Args};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
-/// Objects swept per unit of an explicit `collectgarbage("step", n)`.
-const GC_STEP_OBJS: usize = 32;
-
 /// luna's own pacing defaults: heap growth before a new cycle (%), sweep work
 /// per safe point (see `Vm::checkpoint`), and objects per step.
 pub(crate) const LUNA_PAUSE: i64 = 200;
@@ -178,17 +175,7 @@ pub(crate) fn step(vm: &mut Vm, n: i64) -> bool {
         vm.collect_garbage();
         return false;
     }
-    let budget = if n > 0 {
-        (n as usize).saturating_mul(GC_STEP_OBJS)
-    } else if vm.version() <= LuaVersion::Lua53 {
-        GC_STEP_OBJS
-    } else {
-        match vm.gc_stepsize() {
-            0 => usize::MAX,
-            ss => (ss.max(1) as usize).saturating_mul(GC_STEP_OBJS),
-        }
-    };
-    vm.gc_step(budget)
+    vm.gc_lua_step(n)
 }
 
 /// `setpause` / `setstepmul` / `setmajorinc`: store the new value (≤5.3 take

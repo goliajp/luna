@@ -225,3 +225,16 @@ impl Heap {
         }
     }
 }
+
+impl Heap {
+    /// How many objects PUC's `finobj` list holds: those registered for
+    /// finalization.
+    pub(crate) fn finobj_count(&self) -> i64 {
+        self.finalize.len() as i64
+    }
+
+    /// How many objects PUC's `tobefnz` list holds.
+    pub(crate) fn tobefnz_count(&self) -> i64 {
+        self.tobefnz.len() as i64
+    }
+}

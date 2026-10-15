@@ -31,6 +31,7 @@ pub mod mem;
 pub(crate) mod puc_boot;
 pub(crate) mod puc_fmt;
 pub(crate) mod puc_libs;
+pub(crate) mod gc_pace;
 pub(crate) mod puc_size;
 pub mod string;
 pub mod table;

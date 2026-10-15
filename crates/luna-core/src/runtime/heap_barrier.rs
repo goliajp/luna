@@ -39,6 +39,9 @@ impl Heap {
             if !is_white(cf) {
                 return;
             }
+            if self.pace.count_marked && self.phase == GcPhase::Propagate {
+                self.count_marked(ch);
+            }
             if (*ch).tag == ObjTag::Str {
                 (*ch).flags = (*ch).with_slow((cf & !COLOR_BITS) | BLACK);
             } else {
@@ -122,7 +125,7 @@ impl Heap {
             let (ok, flags) = unsafe { ((*h).slow_consistent(), (*h).flags) };
             assert!(ok, "[slow-bit] {ctx}: object {h:p} flags {flags:#x}");
         };
-        for mut cur in [self.all, self.sweep_cur, self.fixed] {
+        for mut cur in [self.all, self.fixed] {
             while !cur.is_null() {
                 check(cur);
                 // SAFETY: as above

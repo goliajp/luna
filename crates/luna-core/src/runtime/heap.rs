@@ -117,7 +117,7 @@ pub use gc_ptr::{Gc, GcObject};
 ///                   alongside `gc_step_propagate(budget)` calls. Born objects
 ///                   stamp the current-white; barriers re-gray modified
 ///                   parents. Transitions to `Sweep` via `gc_finish_atomic`.
-///   * `Sweep`     — `sweep_cur` is the detached old heap being budget-swept.
+///   * `Sweep`     — `all` is swept in place, from after `sweep_prev`.
 ///
 /// `mark_all` (the STW path used by `collect_ex`) sequences start_propagate +
 /// drain_all + finish_atomic inline, never crossing a step boundary.
@@ -148,8 +148,8 @@ pub struct Heap {
     /// PUC's `totalbytes`: every object and block at the size PUC gives it
     /// (`sizes`), not what luna's own objects take (see `heap_acct.rs`)
     pub(crate) bytes: usize,
-    /// `next_gc`, or `usize::MAX` while auto-GC is stopped: the one
-    /// comparison a safe point makes
+    /// where the next collection step falls due (`pace`), or `usize::MAX`
+    /// while there is none: the one comparison a safe point makes
     gc_limit: usize,
     /// PUC `g->currentwhite`: which white bit (WHITE0 or WHITE1) means
     /// "born / surviving this cycle". The other white is the dead-white that
@@ -193,12 +193,13 @@ pub struct Heap {
     /// the head of `all` at the last point where every live object was
     /// rooted; objects before it on `all` are newer (see `mark_young`)
     young: *mut GcHeader,
-    /// the remaining detached object list being swept during `GcPhase::Sweep`;
-    /// survivors are spliced back onto `all`, garbage is freed
-    sweep_cur: *mut GcHeader,
+    /// during `GcPhase::Sweep`: the last object swept and kept, whose
+    /// `next` is the next one to sweep (null: the head of `all`). Objects
+    /// made since are in front of it and are not swept (PUC `sweepgc`)
+    sweep_prev: *mut GcHeader,
     live: usize,
-    /// byte threshold at which the VM should run a collection (auto-GC pacing)
-    next_gc: usize,
+    /// PUC's collector state and pace
+    pub(crate) pace: crate::runtime::gc_pace::Pace,
     seed: u32,
     /// Embedding memory cap. When `Some(n)`, the VM's run loop watches
     /// `bytes` between dispatch turns and, on overshoot, runs a full collect
@@ -255,7 +256,6 @@ pub struct Heap {
 }
 
 /// Initial auto-GC threshold and floor (PUC GCSTEPSIZE-ish pacing).
-const GC_MIN_THRESHOLD: usize = 1 << 20;
 
 impl Heap {
     /// Put a new object on the all-objects list with its born color.
@@ -269,22 +269,11 @@ impl Heap {
         // SAFETY: the caller's contract
         unsafe {
             (*h).next = self.all;
-            // Born color depends on phase:
-            //   * Pause / Sweep — born current-white (PUC `luaC_white(g)`);
-            //     reachable from roots gets marked next cycle.
-            //   * Propagate     — born BLACK (PUC `LUAGCRYOUNG` / sasimpl
-            //     of new-during-cycle). Born-current-white during Propagate
-            //     would lose the WHITE bits at the upcoming atomic flip and
-            //     be swept this same cycle even when reachable from a
-            //     barrier-grayed root. Born BLACK skips the trace and
-            //     transitions to current-white at sweep, matching the
-            //     reachable-survivor flow.
-            let born = if self.phase == GcPhase::Propagate {
-                BLACK
-            } else {
-                self.current_white
-            };
-            (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | born);
+            // born the current white in every phase (PUC `luaC_white(g)`):
+            // one made while marking is marked by the atomic step if it is
+            // reachable then (the roots are marked again there, and a black
+            // object that took it was sent back to gray by its barrier)
+            (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.current_white);
         }
         self.all = h;
         self.live += 1;
@@ -300,6 +289,7 @@ mod alloc;
 mod barrier;
 #[path = "heap_collect.rs"]
 mod collect;
+pub(crate) use collect::Running;
 #[path = "heap_finalize.rs"]
 mod finalize;
 #[path = "heap_intern.rs"]

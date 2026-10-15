@@ -9,28 +9,13 @@ pub(crate) const ENV51: u8 = 0x40;
 
 impl Heap {
     /// The bytes of a table's array part of `n` slots.
-    fn array_bytes(&self, n: usize) -> usize {
-        match (self.table_dialect, n) {
-            (_, 0) => 0,
-            // 5.5 keeps the values, then a byte per tag, around an unsigned
-            (Dialect::L55, n) => n * 9 + 4,
-            (_, n) => n * self.sizes.tvalue,
-        }
+    pub(in crate::runtime::heap) fn array_bytes(&self, n: usize) -> usize {
+        crate::runtime::heap::pace::array_bytes(&self.sizes, self.table_dialect, n)
     }
 
-    /// The bytes of a table's hash part of `h` nodes: 5.5 puts a `lastfree`
-    /// pointer (`Limbox`, padded to a node's alignment) in front of eight
-    /// nodes or more.
-    fn hash_bytes(&self, h: usize) -> usize {
-        let limbox = if cfg!(target_arch = "wasm32") {
-            8
-        } else {
-            self.sizes.ptr
-        };
-        match self.table_dialect {
-            Dialect::L55 if h >= 8 => h * self.sizes.node + limbox,
-            _ => h * self.sizes.node,
-        }
+    /// The bytes of a table's hash part of `h` nodes.
+    pub(in crate::runtime::heap) fn hash_bytes(&self, h: usize) -> usize {
+        crate::runtime::heap::pace::hash_bytes(&self.sizes, self.table_dialect, h)
     }
 
     /// A table's parts going from `old_a` array slots and `old_h` nodes to
@@ -83,13 +68,13 @@ impl Heap {
         }
     }
 
-    /// A table freed with `a` array slots and `h` nodes (PUC `luaH_free`).
     /// Whether `t` is one of luna's own tables, which nothing counts.
     #[inline]
     pub(crate) fn is_own_table(&self, t: *const crate::runtime::Table) -> bool {
         !self.puc.own_tables.is_empty() && self.puc.own_tables.contains(&t)
     }
 
+    /// A table freed with `a` array slots and `h` nodes (PUC `luaH_free`).
     pub(crate) fn acct_table_free(&mut self, a: usize, h: usize) {
         let (ab, hb) = (self.array_bytes(a), self.hash_bytes(h));
         self.acct_block(hb, 0);

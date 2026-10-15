@@ -16,9 +16,13 @@ impl Vm {
             if !self.gc_finalizing && !self.heap.no_gc() {
                 self.clear_dead_stack();
                 self.full_collect();
+                self.gc_minor_debt();
             }
             #[cfg(feature = "gc-trace")]
             self.heap.trace.line(format_args!("x"));
+        }
+        if new == "incremental" && prev == "generational" {
+            self.gc_leave_generational();
         }
         prev
     }
@@ -38,12 +42,6 @@ impl Vm {
         self.gc_mode == "generational"
     }
 
-    /// Current `stepsize` pacing parameter (PUC: 0 means an unbounded step that
-    /// completes a whole cycle at once).
-    pub(crate) fn gc_stepsize(&self) -> i64 {
-        self.gc_stepsize
-    }
-
     /// Set luna's collector knobs: heap growth before a new cycle (%), sweep
     /// work per safe point, and the default step size (0 = a step completes
     /// the cycle).
@@ -57,13 +55,12 @@ impl Vm {
     /// (`luaC_checkGC`), with PUC's stack top there (luna's numbering):
     /// the slots from `live_top` up are dead to a collection that runs.
     ///
-    /// Running Propagate from a checkpoint relies on objects being **born
-    /// black during Propagate**: a newly allocated object never becomes
-    /// dead-white at the atomic flip.
+    /// A new object is born white in every phase: one made while marking
+    /// survives the cycle when the atomic step finds it reachable (from the
+    /// roots marked again there, or a black object its barrier sent back
+    /// to gray).
     ///
-    /// Adaptive budget scales with heap size: 100M-object heap (heavy.lua's
-    /// `loadrep` stress) gets a 25M-object budget so a cycle completes in
-    /// O(SWEEP_DIVISOR) checkpoints regardless of size.
+    /// The step that falls due is PUC's (`gc_step.rs`).
     #[inline(always)]
     pub(crate) fn checkpoint(&mut self, live_top: u32) {
         #[cfg(feature = "gc-trace")]
@@ -84,17 +81,7 @@ impl Vm {
         // (`finish_results`, the Op::TailCall collapse, pcall unwind) clears
         // the slots it vacates, mirroring PUC's L->top discipline.
         self.gc_top = live_top;
-        // PUC stepmul: % of allocation rate. Higher = more GC work per
-        // safe-point (lower memory, more CPU). Default 100 = `live / 4` per
-        // step (~4 safe-points per cycle). stepmul=200 → `live / 2`, etc.
-        const SWEEP_BASE: usize = 400; // 400 / stepmul=100 = divisor 4
-        const MIN_BUDGET: usize = 64_000;
-        let stepmul = self.gc_stepmul.max(1) as usize;
-        let divisor = (SWEEP_BASE / stepmul).max(1);
-        let budget = (self.heap.live_objects() / divisor).max(MIN_BUDGET);
-        if self.gc_step(budget) {
-            self.heap.rearm_gc_pause(self.gc_pause);
-        }
+        self.puc_step();
     }
 
     /// The running stack's contract with the collector (PUC
@@ -116,6 +103,7 @@ impl Vm {
         // one in progress, or the one `luaC_fullgc` starts from marking
         // (5.1 from a pause too, which it treats as marking)
         let swept = !self.heap.gc_phase_is_pause() || self.version == LuaVersion::Lua51;
+        self.gc_hold_threads();
         if self.heap.gc_phase_is_propagate() {
             let mut m = self.heap.loan_marker();
             self.mark_roots(&mut m);
@@ -129,6 +117,7 @@ impl Vm {
         if swept {
             self.heap.acct_check_sizes();
         }
+        self.gc_count_marked();
         let mut m = self.heap.gc_begin_full();
         self.mark_roots(&mut m);
         self.watch_errors();
@@ -136,6 +125,7 @@ impl Vm {
         self.collector_shrinks_threads();
         self.heap.acct_check_sizes();
         self.forget_dead_errors();
+        self.gc_full_pause();
         freed
     }
 
@@ -157,7 +147,7 @@ impl Vm {
             self.run_finalizers();
         }
         #[cfg(feature = "gc-trace")]
-        self.heap.trace.line(format_args!("x"));
+        self.trace_full_end();
         freed
     }
 
@@ -179,12 +169,12 @@ impl Vm {
             self.verify_frame_regs_live("collect_garbage_propagating");
             let r = self.run_finalizers_or_err(true);
             #[cfg(feature = "gc-trace")]
-            self.heap.trace.line(format_args!("x"));
+            self.trace_full_end();
             r?;
             return Ok(freed);
         }
         #[cfg(feature = "gc-trace")]
-        self.heap.trace.line(format_args!("x"));
+        self.trace_full_end();
         Ok(freed)
     }
 

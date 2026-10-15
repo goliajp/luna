@@ -17,6 +17,9 @@ impl Heap {
         let s = self.sizes;
         self.puc.silent = 0;
         self.acct_obj(PucKind::Thread, b.lg);
+        // `lua_newstate`: no debt (5.1 sets its threshold when the state is
+        // built)
+        self.pace.set_debt(d, self.bytes, 0);
         if b.ci_entries > 0 {
             self.acct_block(0, b.ci_entries * s.callinfo);
         }
@@ -54,6 +57,9 @@ impl Heap {
         }
         if d <= Dialect::L52 {
             self.acct_string(memerr);
+        }
+        if d == Dialect::L51 {
+            self.pace.set_threshold(4 * self.bytes as i64);
         }
         Ok(())
     }

@@ -85,6 +85,9 @@ impl Vm {
         if self.version != LuaVersion::Lua51 {
             self.g.ci_alloc += 1;
         }
+        // the collector starts from no debt, as `lua_gc(L, LUA_GCRESTART)`
+        // after `luaL_openlibs` leaves it
+        self.heap.gc_set_stopped(false);
     }
 
     /// Install the base library (`print`, `type`, `pairs`, `tostring`,

@@ -37,8 +37,8 @@ pub(crate) struct Marker {
     pub(super) stack: GrayStack,
     pub(super) overflow: bool,
     /// The head of the heap's object list when the marker was lent out:
-    /// every object that can be gray is on it (new ones are born black or
-    /// white, fixed ones live on their own list).
+    /// every object that can be gray is on it (new ones are born white,
+    /// fixed ones live on their own list).
     pub(super) scan: *mut GcHeader,
     /// live tables with a weak `__mode`, collected during marking and processed
     /// (dead weak entries cleared) before the sweep
@@ -61,6 +61,14 @@ pub(crate) struct Marker {
     /// leaving the queue would change how far each step gets. `LEAF` or 0,
     /// tested against an object's flags.
     pub(super) leaf_black: u8,
+    /// 5.2 and 5.3: the size of a string's header, to count what marking
+    /// a string or a userdata adds to the work (PUC `GCmemtrav`); 0 for
+    /// the other dialects
+    pub(super) leaf_hdr: usize,
+    /// that work so far
+    pub(super) leaf_bytes: i64,
+    /// 5.5: counts what is marked
+    pub(super) sizer: Option<super::collect::Sizer>,
 }
 
 /// Drain the gray stack: pop each marked object and trace its children until
@@ -147,6 +155,27 @@ impl Marker {
         None
     }
 
+    /// 5.2 and 5.3 count a string's or a userdata's size as the work of
+    /// marking it.
+    ///
+    /// # Safety
+    /// `h` heads an allocated object.
+    #[cold]
+    #[inline(never)]
+    unsafe fn count_leaf(&mut self, h: *mut GcHeader) {
+        // SAFETY: the caller's contract; the tag names the type
+        unsafe {
+            if (*h).sub & UNCOUNTED != 0 {
+                return;
+            }
+            self.leaf_bytes += match (*h).tag {
+                ObjTag::Str => (self.leaf_hdr + (*(h as *const LuaStr)).len() + 1) as i64,
+                ObjTag::Userdata => (*(h as *const Userdata)).puc_size as i64,
+                _ => 0,
+            };
+        }
+    }
+
     /// Mark a value, returning true if it was newly marked (was white).
     pub(crate) fn value(&mut self, v: Value) -> bool {
         let h = match v {
@@ -184,6 +213,12 @@ impl Marker {
         unsafe {
             let f = (*h).flags;
             if is_white(f) {
+                if self.leaf_hdr != 0 {
+                    self.count_leaf(h);
+                }
+                if let Some(s) = &mut self.sizer {
+                    s.marked += s.size(h);
+                }
                 if f & self.leaf_black != 0 {
                     (*h).flags = (*h).with_slow((f & !WHITE_BITS) | BLACK);
                 } else {

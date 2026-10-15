@@ -287,6 +287,7 @@ impl Vm {
             .ok()?;
         vm.state_complete = true;
         vm.heap.puc.silent -= 1;
+        vm.heap.refresh_gc_limit();
         Some(vm)
     }
 
