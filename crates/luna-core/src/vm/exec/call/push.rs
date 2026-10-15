@@ -76,7 +76,25 @@ impl Vm {
         from_c: bool,
     ) -> Result<(), LuaError> {
         let p = cl.proto;
-        self.check_lua_stack(func_slot + 1 + nargs, p.max_stack as u32, p.is_vararg)?;
+        let (top, max) = (func_slot + 1 + nargs, p.max_stack as u32);
+        self.check_lua_stack(top, max, false)?;
+        if p.is_vararg {
+            // a vararg function's stack is checked again: 5.2 above the
+            // missing parameters (`adjust_varargs`), 5.4 and 5.5 for the
+            // function's copy too (`luaT_adjustvarargs`, unless 5.5 builds
+            // a vararg table instead)
+            match self.version {
+                LuaVersion::Lua52 => {
+                    let missing = u32::from(p.num_params).saturating_sub(nargs);
+                    self.check_lua_stack(top + missing, max, false)?;
+                }
+                LuaVersion::Lua54 => self.check_lua_stack(top, max + 1, false)?,
+                LuaVersion::Lua55 if !vararg_table_55(p) => {
+                    self.check_lua_stack(top, max + 1, false)?
+                }
+                _ => {}
+            }
+        }
         let at = FrameAt::new(self.version, p, func_slot, nargs);
         self.grow_stack(at.need as usize)?;
         if self.frames.len() == self.frames.capacity() {
@@ -203,4 +221,13 @@ impl Vm {
         self.hook_call_with(false, nparams, is_tail)?;
         Ok(())
     }
+}
+
+/// 5.5's `PF_VATAB`: the function's vararg parameter is a table its
+/// `VARARGPREP` builds (its first instruction reads it into the
+/// parameter's register).
+fn vararg_table_55(p: Gc<Proto>) -> bool {
+    p.code
+        .first()
+        .is_some_and(|i| i.op() == crate::vm::isa::Op::GetVarg && i.a() == u32::from(p.num_params))
 }
