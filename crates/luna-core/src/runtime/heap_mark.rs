@@ -1,15 +1,40 @@
 //! The marker: the gray stack and the entry points that color objects.
 
 use super::*;
-use crate::runtime::mem::LVec;
+
+/// The gray stack, outside the allocation context: PUC links gray
+/// objects through themselves, so marking allocates nothing a host
+/// allocator or memory policy could see or refuse.
+#[derive(Default)]
+pub(crate) struct GrayStack(Vec<*mut GcHeader>);
+
+impl GrayStack {
+    pub(super) fn push(&mut self, h: *mut GcHeader) -> Result<(), ()> {
+        self.0.try_reserve(1).map_err(drop)?;
+        self.0.push(h);
+        Ok(())
+    }
+
+    pub(super) fn pop(&mut self) -> Option<*mut GcHeader> {
+        self.0.pop()
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub(super) fn take(&mut self) -> GrayStack {
+        std::mem::take(self)
+    }
+}
 
 /// Mark accumulator: gray stack plus entry points for Values and bare
 /// object headers (Protos/Upvalues are not first-class Values).
 pub(crate) struct Marker {
-    /// The gray stack, in a block of the heap's allocation context. When it
-    /// cannot grow, the object stays gray off the stack and `overflow` is
-    /// set; [`Marker::refill`] finds such objects again by walking `scan`.
-    pub(super) stack: LVec<*mut GcHeader>,
+    /// The gray stack. When it cannot grow, the object stays gray off the
+    /// stack and `overflow` is set; [`Marker::refill`] finds such objects
+    /// again by walking `scan`.
+    pub(super) stack: GrayStack,
     pub(super) overflow: bool,
     /// The head of the heap's object list when the marker was lent out:
     /// every object that can be gray is on it (new ones are born black or

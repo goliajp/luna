@@ -211,7 +211,7 @@ pub struct Heap {
     /// the time the marker first reached them and the next propagate step.
     /// Lives outside `propagate` so barriers can push without going through
     /// the Option; `gc_step_propagate` and `gc_finish_atomic` drain it.
-    gray: crate::runtime::mem::LVec<*mut GcHeader>,
+    gray: mark::GrayStack,
     /// objects registered for finalization (a live `__gc` metamethod was set);
     /// parallel-tracked — ownership stays on `all` (PUC `finobj`).
     finalize: crate::runtime::mem::LVec<*mut GcHeader>,
@@ -222,8 +222,10 @@ pub struct Heap {
     /// `gc_finish_atomic` (and inline within `mark_all`); `None` otherwise.
     propagate: Option<PropagateState>,
     /// Freed tables (at most 4096) that new tables reuse: a workload making
-    /// and freeing many tables skips the allocator's round trip.
-    table_pool: crate::runtime::mem::LVec<std::ptr::NonNull<crate::runtime::table::Table>>,
+    /// and freeing many tables skips the allocator's round trip. Its list
+    /// is outside the allocation context: a sweep allocates nothing a host
+    /// allocator or memory policy could see, as PUC's does not.
+    table_pool: Vec<std::ptr::NonNull<crate::runtime::table::Table>>,
     /// The main functions of the chunks loaded while `track_chunk_roots`
     /// is set, without keeping them alive: the collector drops each one it
     /// finds dead. Compiled traces taken over from another Vm find the
