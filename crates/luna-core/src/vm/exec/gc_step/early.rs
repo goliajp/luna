@@ -150,7 +150,9 @@ impl Vm {
                 let size = self.heap.puc.strt_size as i64;
                 let i = max.min(size - self.heap.pace.strt_swept);
                 self.heap.pace.strt_swept += i;
+                self.heap.sweep_strings_upto(self.heap.pace.strt_swept);
                 if self.heap.pace.strt_swept >= size {
+                    self.heap.end_string_sweep();
                     self.heap.pace.state = St::SweepUdata;
                     self.heap.pace.fin_left = Some(self.heap.finobj_count());
                 }
@@ -228,7 +230,10 @@ impl Vm {
             }
             St::SweepString => {
                 self.heap.pace.strt_swept += 1;
+                let freed = self.heap.sweep_strings_upto(self.heap.pace.strt_swept);
+                self.heap.pace.estimate -= freed;
                 if self.heap.pace.strt_swept >= self.heap.puc.strt_size as i64 {
+                    self.heap.end_string_sweep();
                     self.heap.pace.state = St::SweepAll;
                 }
                 SWEEPCOST_51

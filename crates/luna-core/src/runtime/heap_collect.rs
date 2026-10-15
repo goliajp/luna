@@ -40,6 +40,7 @@ impl Heap {
     /// Finish an incremental sweep in progress, so the whole heap is on
     /// `all` again with every mark cleared.
     pub(crate) fn gc_finish_sweep(&mut self) {
+        self.end_string_sweep();
         if self.phase == GcPhase::Sweep {
             self.gc_sweep_step(usize::MAX);
         }
