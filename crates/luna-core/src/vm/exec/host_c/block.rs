@@ -66,15 +66,7 @@ impl Vm {
         size: usize,
         nuv: usize,
     ) -> Result<Gc<crate::runtime::Userdata>, LuaError> {
-        let u = self.retry_oom(|vm| vm.try_new_block(size, nuv))?;
-        // the block and the user values count in the heap's size, as PUC's
-        // `luaS_newudata` counts them
-        let extra = size.saturating_add(nuv * std::mem::size_of::<Value>());
-        // SAFETY: `u` was allocated above and is held only by this local;
-        // the borrow covers one store
-        unsafe { u.as_mut() }.extra_bytes = extra;
-        self.heap.bytes += extra;
-        Ok(u)
+        self.retry_oom(|vm| vm.try_new_block(size, nuv))
     }
 
     /// [`Vm::host_new_block`]'s allocations; what was allocated before a
@@ -101,7 +93,10 @@ impl Vm {
             data: LAny::new(self.heap.mem(), block, BlockKind::Other)?,
             trace_fn: Some(trace_block),
         };
-        self.heap.try_new_userdata(payload, true)
+        // the block and the user values count as PUC's `luaS_newudata`
+        // counts them
+        let puc = self.heap.sizes.userdata(nuv, size);
+        self.heap.try_new_userdata_sized(payload, true, puc)
     }
 
     /// The C API block of userdata `u`, if the C API made it.

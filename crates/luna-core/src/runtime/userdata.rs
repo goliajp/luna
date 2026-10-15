@@ -61,9 +61,9 @@ pub struct Userdata {
     /// on close. Unaffected by `__gc` paths that just drop the pipe — the
     /// process will be reaped by the kernel.
     pub(crate) popen_child: Option<std::process::Child>,
-    /// Bytes the payload owns outside this object that the heap counts
-    /// (the memory block of a C API userdata), given back when it is freed.
-    pub(crate) extra_bytes: usize,
+    /// The size PUC's userdata of this kind has, which the count takes
+    /// and gives back when it is freed.
+    pub(crate) puc_size: usize,
     /// The MSVC C library's `FILE` for this file, when the Vm opens files
     /// as PUC built with MSVC does (see [`crate::vm::Vm::set_crt_text_mode`]).
     pub(crate) crt: Option<Box<crate::vm::lib_io::msvc::CrtFile>>,
@@ -152,7 +152,7 @@ impl Userdata {
             writable,
             buf_mode: 0,
             popen_child: None,
-            extra_bytes: 0,
+            puc_size: 0,
             crt: None,
         }
     }
