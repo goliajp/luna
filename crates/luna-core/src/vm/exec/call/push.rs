@@ -211,9 +211,6 @@ impl Vm {
             }
             let nk = self.str_value(b"n")?;
             self.raw_set(t, nk, Value::Int(n_varargs as i64))?;
-            // once-per-table barrier mirrors SETLIST: t is born BLACK during
-            // Propagate and the bulk `set_int`/`set` calls above don't barrier
-            self.heap.barrier_back(t);
             self.stack[arg_slot] = Value::Table(t);
         }
         // PUC luaD_precall fires the "call" hook with the new frame current, so

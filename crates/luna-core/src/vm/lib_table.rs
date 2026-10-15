@@ -64,10 +64,6 @@ pub(crate) fn try_open_table(vm: &mut Vm) -> Result<(), LuaError> {
         vm.lib_set_value(t, k, fv)?;
     }
     vm.lib_set_global("table", Value::Table(t))?;
-    // once-per-table barrier so a post-init `Vm::open_table` call (the embed
-    // API can re-open libraries mid-Propagate) demotes `t` back to gray —
-    // no-op when phase != Propagate, where t was born current_white.
-    vm.barrier_back_table(t);
     // LUA_COMPAT_UNPACK (default in 5.2): `_G.unpack = table.unpack`, the
     // same function value.
     if ver == V::Lua52 {

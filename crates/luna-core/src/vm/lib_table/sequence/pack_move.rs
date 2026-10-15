@@ -24,10 +24,6 @@ pub(crate) fn t_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     }
     let nk = vm.str_value(b"n")?;
     vm.lib_set_value(t, nk, Value::Int(nargs as i64))?;
-    // SETLIST-style once-per-table barrier: t is born BLACK if we're mid-
-    // Propagate, and the bulk inserts above are bare `set_int`/`set` that
-    // don't barrier. PUC's `lua_seti`/`lua_setfield` in `tpack` do.
-    vm.barrier_back_table(t);
     vm.nat_ret(fs, &[Value::Table(t)])
 }
 
