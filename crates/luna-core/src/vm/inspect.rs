@@ -26,23 +26,20 @@ use crate::vm::Vm;
 /// Heap snapshot from one [`heap_walk`] invocation.
 #[derive(Debug, Clone)]
 pub struct HeapSnapshot {
-    /// Total live (or not-yet-swept) GC objects. Matches
-    /// [`crate::runtime::Heap::live_objects`].
+    /// Live (or not yet swept) objects: [`crate::runtime::Heap::live_objects`].
     pub total_objects: usize,
     /// Approximate heap byte count. Matches
     /// [`crate::runtime::Heap::bytes`] — see that field's
     /// rustdoc on what is and isn't tracked.
     pub total_bytes: usize,
-    /// Per-tag breakdown, sorted descending by count for stable
-    /// downstream display.
+    /// Per-tag breakdown, by count descending.
     pub buckets: Vec<HeapBucket>,
 }
 
 /// One per-type row in [`HeapSnapshot::buckets`].
 #[derive(Debug, Clone)]
 pub struct HeapBucket {
-    /// Lower-cased name of the [`ObjTag`] discriminant
-    /// (`"str"`, `"table"`, `"proto"`, ...).
+    /// The [`ObjTag`]'s name in lower case (`"str"`, `"table"`, ...).
     pub type_name: &'static str,
     /// Count of live objects with this tag.
     pub count: usize,
@@ -55,8 +52,7 @@ pub struct HeapBucket {
 
 /// Walk the Vm's heap and produce a per-type [`HeapSnapshot`].
 ///
-/// The walk runs under a `&Heap` borrow so no concurrent mutation
-/// can occur; safe to call from any host context that has a `&Vm`.
+/// The walk borrows the heap: safe from any host context with a `&Vm`.
 /// Cost: O(live_objects) reads of the intrusive next-link, plus
 /// one `Vec::push` per *distinct* tag (one entry per tag at most).
 pub fn heap_walk(vm: &Vm) -> HeapSnapshot {

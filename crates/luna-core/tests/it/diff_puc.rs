@@ -14,12 +14,9 @@
 //!   (a PUC-side error fails the run — no silent skips) and stdout
 //!   must match byte-for-byte after newline normalization. This
 //!   pins the exit-code-0 leg implicitly.
-//! - error mode (`*_err.lua`): the chunk must FAIL at top level on
-//!   both sides (PUC: non-zero exit; luna: eval Err) and the error
-//!   text must match after position-prefix normalization — the
-//!   `<chunk>:<line>:` prefix is stripped (chunknames differ and
-//!   the capture preamble shifts lines) but its PRESENCE must
-//!   agree. stdout is not compared in this mode.
+//! - error mode (`*_err.lua`): the chunk must FAIL at top level on both
+//!   sides and the error text match with the `<chunk>:<line>:` prefix
+//!   stripped (its presence must agree); stdout is not compared.
 //!
 //! ## Env
 //! - `PUC_LUA_51` … `PUC_LUA_55` — per-dialect interpreter paths
@@ -54,13 +51,9 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/diff_puc")
 }
 
-/// v2.14 HD — dialect directories. Each `tests/diff_puc/5.x/`
-/// subtree runs against the matching `LuaVersion` on the luna side
-/// and the `PUC_LUA_5X` binary on the PUC side (`PUC_LUA` is the
-/// 5.5 fallback for local dev). A dialect whose binary is absent
-/// is skipped WITH a per-dialect notice — CI installs all five, so
-/// a skip there is an install failure surfaced by the workflow's
-/// version-print step.
+/// Each `tests/diff_puc/5.x/` runs on the matching `LuaVersion` and the
+/// `PUC_LUA_5X` binary (5.5 falls back to `PUC_LUA`). A dialect whose
+/// binary is absent is skipped with a notice (in CI, an install failure).
 const DIALECTS: &[(&str, LuaVersion, &str)] = &[
     ("5.1", LuaVersion::Lua51, "PUC_LUA_51"),
     ("5.2", LuaVersion::Lua52, "PUC_LUA_52"),
@@ -181,9 +174,7 @@ end
     full.push_str(source);
     full.push_str(POSTAMBLE);
 
-    let mut vm = Vm::new(version);
-    // as lua.c, which runs scripts in generational mode from 5.4
-    vm.gc_enter_generational();
+    let mut vm = lua_c_vm(version);
     let r = vm
         .eval(&full)
         .expect("luna eval must not error on diff fixtures");
@@ -273,9 +264,7 @@ fn diff_one_err(path: &Path, bin: &str, version: LuaVersion, source: &str) {
         .unwrap_or(first);
     let (puc_pos, puc_n) = normalize_err(puc_msg);
 
-    let mut vm = Vm::new(version);
-    // as lua.c, which runs scripts in generational mode from 5.4
-    vm.gc_enter_generational();
+    let mut vm = lua_c_vm(version);
     let luna_err = match vm.eval(source) {
         Ok(_) => panic!(
             "[diff_puc] {}: expected a top-level error on luna (fixture is _err) \
@@ -378,3 +367,10 @@ fn require_all() -> bool {
 }
 
 mod bytecode;
+
+/// A Vm as lua.c runs a script: in generational mode from 5.4.
+fn lua_c_vm(version: LuaVersion) -> Vm {
+    let mut vm = Vm::new(version);
+    vm.gc_enter_generational();
+    vm
+}

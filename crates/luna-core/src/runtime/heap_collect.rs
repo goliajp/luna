@@ -159,10 +159,8 @@ impl Heap {
                 }
             }
         }
-        // (2) `origweak` snapshot — PUC takes the list head; luna's `m.weak`
-        // is a Vec, so the equivalent is its length before resurrection.
-        // Anything appended past this index is a "NEW" weak table that the
-        // resurrection pass brought into view.
+        // (2) `origweak` snapshot: the length of `m.weak` before resurrection;
+        // a table past it is a "NEW" weak table the resurrection brought in
         let origweak_n = m.weak.len();
         // (3) separate + markbeingfnz — resurrect every registered finalizable
         // that ended up unmarked. `m.header(h)` enqueues each into the marker

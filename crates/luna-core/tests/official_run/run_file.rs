@@ -168,12 +168,9 @@ fn read_chunk(name: &str, version: LuaVersion) -> Result<Vec<u8>, String> {
 /// The memory the stress files may use.
 const STRESS_CAP: usize = 1 << 30;
 
-/// A fresh Vm for the file. heavy.lua's stress loops (`toomanyidx`'s
-/// `a[i] = i` up to `MAX_ASIZE`, the huge chunks `loadrep` feeds to
-/// `load`) run into the end of memory and catch "not enough memory", as
-/// they do under PUC's test allocator: the Vm's allocations go through a
-/// 1 GiB limit, which refuses the growth that would pass it and serves the
-/// next request once the memory is back.
+/// A fresh Vm for the file, as lua.c runs it. heavy.lua's stress loops run
+/// into the end of memory and catch "not enough memory" as under PUC's
+/// test allocator: the Vm's allocations go through a 1 GiB limit.
 fn new_vm(version: LuaVersion, label: &str) -> Vm {
     let mut vm = if label == "heavy.lua" {
         let limit = luna_core::runtime::mem::MemoryLimit(STRESS_CAP);
@@ -184,7 +181,6 @@ fn new_vm(version: LuaVersion, label: &str) -> Vm {
     } else {
         Vm::new(version)
     };
-    // the suites run under lua.c, in generational mode from 5.4
     vm.gc_enter_generational();
     vm
 }
