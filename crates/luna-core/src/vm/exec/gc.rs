@@ -225,6 +225,7 @@ impl Vm {
             self.heap.stash_marker(m);
             self.watch_errors();
             self.heap.gc_finish_atomic();
+            self.collector_shrinks_threads();
             self.forget_dead_errors();
         }
         self.heap.gc_finish_sweep();
@@ -232,6 +233,7 @@ impl Vm {
         self.mark_roots(&mut m);
         self.watch_errors();
         let freed = self.heap.gc_end_full(m);
+        self.collector_shrinks_threads();
         self.forget_dead_errors();
         freed
     }

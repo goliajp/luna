@@ -343,7 +343,7 @@ impl Vm {
             // the native frames included (`grow_frames`); the budget kept
             // the doubling under the limit
             while self.frames_in_use() > self.g.frame_size {
-                self.g.frame_size *= 2;
+                self.resize_frames_51(self.g.frame_size * 2);
             }
         }
         let stopped = self.heap.gc_is_stopped();

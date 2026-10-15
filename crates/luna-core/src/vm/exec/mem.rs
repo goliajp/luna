@@ -125,6 +125,7 @@ impl Vm {
             self.native_room()?;
         }
         self.running_natives.push_or_abort(act);
+        self.note_call_level();
         Ok(())
     }
 
@@ -140,6 +141,7 @@ impl Vm {
         }
         // SAFETY: there is room: there was, or `native_room` made it
         unsafe { self.running_natives.push_in_room(act) };
+        self.note_call_level();
         Ok(())
     }
 

@@ -40,6 +40,7 @@ impl Vm {
                 m.stale_frames = rctx.stale_frames;
                 m.stack_size = rctx.stack_size;
                 m.frame_size = rctx.frame_size;
+                m.ci_alloc = rctx.ci_alloc;
                 m.globals = rctx.globals;
                 m.status = CoroStatus::Normal;
                 m.natives = self.natives_base..self.running_natives.len();

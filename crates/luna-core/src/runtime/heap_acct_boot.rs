@@ -107,9 +107,6 @@ impl Heap {
     /// string of the same bytes finds it as in PUC.
     pub(crate) fn acct_replay_openlibs(&mut self) -> Result<(), crate::runtime::mem::Oom> {
         let (ops, strs) = crate::runtime::puc_libs::record(self.table_dialect);
-        // each library opens in a call one level down (its CallInfo, when
-        // a new one, is in the record)
-        self.puc.ci_count = self.puc.ci_count.max(self.puc.depth + 1);
         let mut live = true;
         for op in ops.as_chunks::<3>().0 {
             let (x, y) = (op[1] as usize, op[2] as usize);

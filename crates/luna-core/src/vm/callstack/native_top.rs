@@ -196,9 +196,9 @@ impl Vm {
         for part in parts {
             for (off, n) in part.map_or_else(Vec::new, |c| pushvfstring_checks(self.version(), c)) {
                 match stack_size::check(self.version(), self.stack_size, top + off + 1, n) {
-                    Grown::Fits(s) => self.set_stack_size(s),
+                    Grown::Fits(s) => self.resize_stack(s),
                     Grown::Overflow(s) => {
-                        self.set_stack_size(s);
+                        self.resize_stack(s);
                         self.overflow_top = Some(top + off + positioned);
                         let msg = format_args!("stack overflow");
                         return Some(if positioned == 0 {

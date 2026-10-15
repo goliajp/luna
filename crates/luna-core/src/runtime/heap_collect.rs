@@ -244,6 +244,8 @@ impl Heap {
         // sweep tests for). Born-during-sweep allocations stamp the new
         // current-white via `Heap::link`, so they survive this cycle.
         self.current_white ^= WHITE_BITS;
+        // the threads the sweep is about to free are no longer visited
+        self.threads.retain(|&c| header_is_marked(c));
         // `gc-verify` — tricolor invariant check at the one
         // moment it is exact: marking is complete, nothing is freed yet.
         // A BLACK (surviving) table holding a dead-white child means a

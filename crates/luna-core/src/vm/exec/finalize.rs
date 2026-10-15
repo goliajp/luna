@@ -203,6 +203,7 @@ impl Vm {
             self.heap.stash_marker(m);
             self.watch_errors();
             self.heap.gc_finish_atomic();
+            self.collector_shrinks_threads();
             self.forget_dead_errors();
             // any __gc scheduled by atomic — run before sweep so a finalizer
             // re-registering `self` re-enters the next cycle, not this sweep

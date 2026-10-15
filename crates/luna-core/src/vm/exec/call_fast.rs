@@ -67,6 +67,7 @@ impl Vm {
                 ccmt: std::mem::take(&mut self.pending_ccmt),
             }),
         );
+        self.note_call_level();
         // SAFETY: a Lua frame was just pushed
         match unsafe { self.frames.last_mut().unwrap_unchecked() } {
             CallFrame::Lua(f) => Some(f),

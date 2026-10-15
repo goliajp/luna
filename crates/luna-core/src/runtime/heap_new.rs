@@ -69,6 +69,7 @@ impl Heap {
             defer_thread_cycle_finalize: false,
             chunk_roots: Vec::new(),
             weak_watch: Vec::new(),
+            threads: Vec::new(),
             track_chunk_roots: false,
             mem_cap: None,
             table_pool: crate::runtime::mem::LVec::new(mem.mem()),
@@ -142,6 +143,9 @@ impl Heap {
     ) -> Result<Gc<crate::runtime::Coro>, Oom> {
         let mem = self.mem();
         let size = self.sizes.thread;
+        let l51 = self.table_dialect == table::Dialect::L51;
+        // `stack_init`: `BASIC_STACK_SIZE`, 5.1 with its extra slots
+        let stack_size = if l51 { 45 } else { 40 };
         let coro = crate::runtime::Coro {
             hdr: GcHeader::new(ObjTag::Coro),
             status: crate::runtime::CoroStatus::Suspended,
@@ -161,13 +165,23 @@ impl Heap {
             top: 0,
             meta_conts: 0,
             stale_frames: 0,
-            stack_size: 0,
-            frame_size: 0,
+            stack_size,
+            frame_size: if l51 {
+                acct::BASIC_CI_51
+            } else {
+                u32::MAX
+            },
+            ci_alloc: if l51 { u32::MAX } else { 0 },
             hook: crate::vm::exec::HookState::default(),
             globals,
             host_stack: LVec::new(mem),
             host_state: None,
         };
-        self.adopt_counted(coro, PucKind::Thread, size)
+        let co = self.adopt_counted(coro, PucKind::Thread, size)?;
+        if self.puc.silent == 0 {
+            self.threads.push(co);
+        }
+        self.acct_thread_blocks(stack_size);
+        Ok(co)
     }
 }

@@ -87,6 +87,8 @@ pub struct Coro {
     pub stack_size: u32,
     /// Saved `Vm::frame_size`: the size of the thread's 5.1 frame array.
     pub frame_size: u32,
+    /// Saved `Vm::ci_alloc`: PUC 5.2+'s `CallInfo`s of the thread.
+    pub(crate) ci_alloc: u32,
     /// Saved `Vm::meta_conts`.
     /// live pcall/xpcall continuation count (PUC nCcalls portion); see Vm
     pub meta_conts: u32,

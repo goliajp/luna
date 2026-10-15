@@ -16,6 +16,7 @@ pub(super) struct SavedCtx {
     /// the natives running on the thread, in `Vm::running_natives`
     pub(super) natives: std::ops::Range<usize>,
     pub(super) frame_size: u32,
+    pub(super) ci_alloc: u32,
     pub(super) hook: HookState,
     /// PUC `L->l_gt` — the thread's own globals table. Carried alongside
     /// the rest of the suspended state so each thread can keep its own
@@ -37,6 +38,7 @@ impl Vm {
             stack_size: self.stack_size,
             natives: self.natives_base..self.running_natives.len(),
             frame_size: self.g.frame_size,
+            ci_alloc: self.g.ci_alloc,
             hook: self.hook,
             globals: self.globals,
         };
@@ -54,6 +56,7 @@ impl Vm {
         self.g.stale_frames = c.stale_frames;
         self.set_stack_size(c.stack_size);
         self.g.frame_size = c.frame_size;
+        self.g.ci_alloc = c.ci_alloc;
         self.hook = c.hook;
         self.globals = c.globals;
         self.frames_resync(); // sync shadow to new Vec
@@ -80,6 +83,7 @@ impl Vm {
             0 => u32::MAX,
             n => n,
         };
+        self.g.ci_alloc = m.ci_alloc;
         self.frames_resync(); // sync shadow to coro's frames
         self.g.meta_conts = m.meta_conts;
         self.g.stale_frames = m.stale_frames;
@@ -101,6 +105,7 @@ impl Vm {
         m.stale_frames = c.stale_frames;
         m.stack_size = c.stack_size;
         m.frame_size = c.frame_size;
+        m.ci_alloc = c.ci_alloc;
         m.hook = c.hook;
         m.globals = c.globals;
         // bulk-overwrite of every collectable field traced by Coro::trace:

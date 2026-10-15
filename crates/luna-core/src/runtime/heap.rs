@@ -236,6 +236,9 @@ pub struct Heap {
     /// values the VM refers to without keeping them alive, and whether the
     /// last marking found each dead (see `Vm::forget_dead_errors`)
     pub(crate) weak_watch: Vec<(Value, bool)>,
+    /// the coroutines PUC counts, as of the last marking the ones it kept:
+    /// the threads its collector visits
+    pub(crate) threads: Vec<Gc<crate::runtime::Coro>>,
     /// the sizes of PUC's objects in this dialect, which `bytes` counts
     pub(crate) sizes: crate::runtime::puc_size::PucSizes,
     /// PUC's own structures luna has none of (see `heap_acct.rs`)
