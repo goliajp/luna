@@ -188,15 +188,18 @@ impl Vm {
 
     /// Write a mark into the accounting trace (`gc-trace`), where a test
     /// cuts the comparison with PUC's.
-    #[cfg(feature = "gc-trace")]
     #[doc(hidden)]
     pub fn trace_mark(&mut self, name: &str) {
-        self.heap.trace.line(format_args!("M {name}"));
-        // `R38_EXIT_AT=<name>`: stop the program at this mark
-        if std::env::var("R38_EXIT_AT").is_ok_and(|at| at == name) {
-            self.heap.trace.flush();
-            std::process::exit(0);
+        #[cfg(feature = "gc-trace")]
+        {
+            self.heap.trace.line(format_args!("M {name}"));
+            // `R38_EXIT_AT=<name>`: stop the program at this mark
+            if std::env::var("R38_EXIT_AT").is_ok_and(|at| at == name) {
+                self.heap.trace.flush();
+                std::process::exit(0);
+            }
         }
+        let _ = name;
     }
 
     /// A checkpoint in the accounting trace: `k` and the running Lua

@@ -14,8 +14,12 @@ pub(crate) struct Trace {
     pub(crate) no_gc: bool,
     /// `R38_NOAUTO`: no automatic step runs, a full collection does
     pub(crate) no_auto: bool,
-    /// `R38_WHERE`: each line also names the luna functions that made it
+    /// `R38_WHERE`: each line also names the luna functions that made it;
+    /// `R38_WHERE=<n>` only the allocation events within 30 of the n-th
+    /// (counted from 1, as `where.sh` counts PUC's)
     pub(crate) where_: bool,
+    window: Option<(u64, u64)>,
+    events: u64,
 }
 
 impl Default for Trace {
@@ -28,6 +32,11 @@ impl Default for Trace {
             no_gc: std::env::var_os("R38_NOGC").is_some(),
             no_auto: std::env::var_os("R38_NOAUTO").is_some(),
             where_: std::env::var_os("R38_WHERE").is_some(),
+            window: std::env::var("R38_WHERE")
+                .ok()
+                .and_then(|w| w.parse::<u64>().ok())
+                .map(|n| (n.saturating_sub(30), n + 30)),
+            events: 0,
         }
     }
 }
@@ -40,13 +49,29 @@ impl Trace {
     }
 
     pub(crate) fn line(&mut self, args: std::fmt::Arguments<'_>) {
-        if let Some(o) = &mut self.out {
+        let Some(o) = &mut self.out else {
+            return;
+        };
+        if !self.where_ {
             let _ = o.write_fmt(args);
-            if self.where_ {
-                let _ = write!(o, "  {}", callers());
-            }
             let _ = o.write_all(b"\n");
+            return;
         }
+        let text = std::fmt::format(args);
+        let shown = match self.window {
+            Some((lo, hi)) => {
+                if text.starts_with(['a', 'r', 'd']) {
+                    self.events += 1;
+                }
+                (lo..=hi).contains(&self.events)
+            }
+            None => true,
+        };
+        let _ = o.write_all(text.as_bytes());
+        if shown {
+            let _ = write!(o, "  {}", callers());
+        }
+        let _ = o.write_all(b"\n");
     }
 }
 
