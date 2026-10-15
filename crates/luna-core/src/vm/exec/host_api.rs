@@ -161,13 +161,6 @@ impl Vm {
         self.heap.barrier_back(t);
     }
 
-    /// Forward write barrier shorthand: a closed upvalue is a single-slot
-    /// container — `barrier_forward` is cheaper than `barrier_back` here.
-    /// No-op outside Propagate.
-    pub(crate) fn barrier_forward_upvalue(&mut self, uv: Gc<Upvalue>, child: Value) {
-        self.heap.barrier_forward(uv, child);
-    }
-
     /// Register a MacroLua macro under `name`. Inert
     /// under non-MacroLua dialects (the macro is stored but the load
     /// path only consults the registry when
