@@ -369,7 +369,7 @@ fn require_all() -> bool {
 mod bytecode;
 
 /// A Vm as lua.c runs a script: in generational mode from 5.4.
-fn lua_c_vm(version: LuaVersion) -> Vm {
+pub(super) fn lua_c_vm(version: LuaVersion) -> Vm {
     let mut vm = Vm::new(version);
     vm.gc_enter_generational();
     vm

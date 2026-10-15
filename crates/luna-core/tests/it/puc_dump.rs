@@ -134,10 +134,10 @@ fn luna_dump(version: LuaVersion, source: &str, strip: bool) -> Result<Vec<u8>, 
     }
 }
 
-/// Load `bytes` into a default luna Vm and run it, capturing what it
+/// Load `bytes` into a luna Vm set up as lua.c and run it, capturing what it
 /// prints the way diff_puc.rs does.
 fn run_on_luna(version: LuaVersion, bytes: &[u8]) -> Result<Outcome, String> {
-    let mut vm = Vm::new(version);
+    let mut vm = super::diff_puc::lua_c_vm(version);
     vm.eval(
         r#"
 _G.__luna_diff_puc_buf = ""
