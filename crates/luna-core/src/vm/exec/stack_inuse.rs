@@ -45,7 +45,8 @@ impl Vm {
         let v = self.version;
         let inuse = self.stack_in_use();
         if v == LuaVersion::Lua51 {
-            let used = self.frames_in_use() - 1;
+            // the host collecting with no call running has only the base
+            let used = self.frames_in_use().saturating_sub(1);
             let (s, calls) = halve_51(self.stack_size, inuse, self.g.frame_size, used);
             self.set_stack_size(s);
             self.g.frame_size = calls;
