@@ -12,6 +12,8 @@ pub(crate) struct Trace {
     /// `R38_NOGC`: no collection runs, as in the instrumented PUC build
     /// with the same variable set
     pub(crate) no_gc: bool,
+    /// `R38_WHERE`: each line also names the luna functions that made it
+    where_: bool,
 }
 
 impl Default for Trace {
@@ -22,6 +24,7 @@ impl Default for Trace {
         Trace {
             out,
             no_gc: std::env::var_os("R38_NOGC").is_some(),
+            where_: std::env::var_os("R38_WHERE").is_some(),
         }
     }
 }
@@ -36,7 +39,35 @@ impl Trace {
     pub(crate) fn line(&mut self, args: std::fmt::Arguments<'_>) {
         if let Some(o) = &mut self.out {
             let _ = o.write_fmt(args);
+            if self.where_ {
+                let _ = write!(o, "  {}", callers());
+            }
             let _ = o.write_all(b"\n");
         }
     }
+}
+
+/// The innermost luna functions on the stack, past the log's own.
+fn callers() -> String {
+    let bt = std::backtrace::Backtrace::force_capture().to_string();
+    let mut out = Vec::new();
+    for l in bt.lines() {
+        let l = l.trim();
+        let Some((_, name)) = l.split_once(": ") else {
+            continue;
+        };
+        if !name.starts_with("luna_core::")
+            || name.contains("gc_trace")
+            || name.contains("heap::acct")
+        {
+            continue;
+        }
+        let name = name.trim_end_matches(|c: char| c == ':' || c.is_ascii_hexdigit());
+        let short = name.rsplit("::").take(2).collect::<Vec<_>>();
+        out.push(format!("{}::{}", short.get(1).unwrap_or(&""), short[0]));
+        if out.len() == 5 {
+            break;
+        }
+    }
+    out.join("<")
 }
