@@ -111,7 +111,13 @@ pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     {
         let mut buf = [0u8; 20];
         let bytes = crate::numeric::write_i64_dec(i, &mut buf);
-        let s = vm.str_value(bytes)?;
+        let s = if vm.version() == LuaVersion::Lua53 {
+            // `lua_pushfstring(L, "%I")`, made of pieces
+            let f = [crate::runtime::puc_fmt::FmtArg::I(i)];
+            Value::Str(vm.heap.pushfstring(b"%I", &f)?)
+        } else {
+            vm.str_value(bytes)?
+        };
         // the number converted (`lua_tolstring`, 5.3 and 5.4 `%I`)
         vm.api_check_converted(s);
         if vm.version() == LuaVersion::Lua51 {
