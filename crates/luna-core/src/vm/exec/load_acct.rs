@@ -102,6 +102,9 @@ struct Replay<'s> {
     /// a distinct key for each object 5.5 anchors that luna has no object
     /// for
     anchors: usize,
+    /// what the reader of a load read piece by piece counted, and the token
+    /// whose scan called it (-1: before the parse starts)
+    splices: std::collections::VecDeque<(i64, crate::runtime::heap::Deferred)>,
 }
 
 /// A failed store into a parser table: out of memory (its keys are
@@ -155,6 +158,21 @@ impl<'s> Replay<'s> {
             syms: vec![(None, 0); names.len()],
             reserved: [(None, 0); crate::frontend::parser::scan::RESERVED],
             anchors: 0,
+            splices: Default::default(),
+        }
+    }
+
+    /// The reader calls `splices` made at their byte offsets, each placed
+    /// at the token whose scan read that byte.
+    fn splice(&mut self, splices: Vec<(u32, crate::runtime::heap::Deferred)>) {
+        let ends = &self.scanned.ends;
+        for (off, d) in splices {
+            let tok = if off == 0 {
+                -1
+            } else {
+                ends.partition_point(|&e| e < off) as i64
+            };
+            self.splices.push_back((tok, d));
         }
     }
 }
@@ -169,12 +187,14 @@ impl Vm {
         chunk: &crate::frontend::ast::Chunk,
         rec: (&crate::frontend::parser::Marks, &Scanned),
         cl: Gc<LuaClosure>,
+        splices: Vec<(u32, crate::runtime::heap::Deferred)>,
     ) -> Result<(), SyntaxError> {
         let proto = cl.proto;
         let (marks, scanned) = rec;
         let d = self.heap.table_dialect;
         let s = self.heap.sizes;
         let mut r = Replay::new(d, proto, self.version, scanned, &chunk.names, src);
+        r.splice(splices);
         self.replay_begin(&mut r, cl)?;
         let log = self.compile_scratch.puc_log.take();
         let replayed = self.replay_log(&mut r, &log, chunk, marks, None);
@@ -209,6 +229,11 @@ impl Vm {
         #[cfg(feature = "gc-trace")]
         if r.d == Dialect::L51 {
             self.trace_checkpoint();
+        }
+        // the reader's first call, which reads the first character
+        while r.splices.front().is_some_and(|&(t, _)| t < 0) {
+            let (_, d) = r.splices.pop_front().expect("peeked");
+            self.heap.defer_apply(d);
         }
         match r.d {
             Dialect::L51 => {}

@@ -20,6 +20,8 @@ pub(crate) struct Trace {
     pub(crate) where_: bool,
     window: Option<(u64, u64)>,
     events: u64,
+    /// lines held back (see [`Trace::hold`]), innermost last
+    held: Vec<Vec<String>>,
 }
 
 impl Default for Trace {
@@ -37,6 +39,7 @@ impl Default for Trace {
                 .and_then(|w| w.parse::<u64>().ok())
                 .map(|n| (n.saturating_sub(30), n + 30)),
             events: 0,
+            held: Vec::new(),
         }
     }
 }
@@ -48,7 +51,31 @@ impl Trace {
         }
     }
 
+    /// Hold back the lines from now on until [`Trace::release`].
+    pub(crate) fn hold(&mut self) {
+        self.held.push(Vec::new());
+    }
+
+    /// The lines held back since the matching [`Trace::hold`].
+    pub(crate) fn release(&mut self) -> Vec<String> {
+        self.held.pop().unwrap_or_default()
+    }
+
+    /// Write lines held back before, where they belong now.
+    pub(crate) fn put(&mut self, lines: Vec<String>) {
+        for l in lines {
+            self.line(format_args!("{l}"));
+        }
+    }
+
     pub(crate) fn line(&mut self, args: std::fmt::Arguments<'_>) {
+        if self.out.is_none() {
+            return;
+        }
+        if let Some(h) = self.held.last_mut() {
+            h.push(std::fmt::format(args));
+            return;
+        }
         let Some(o) = &mut self.out else {
             return;
         };

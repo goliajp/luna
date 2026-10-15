@@ -16,17 +16,6 @@ pub enum HostLoadError {
 
 #[doc(hidden)]
 impl Vm {
-    /// Make the running thread non-yieldable while a chunk is parsed (PUC
-    /// `incnny` in `luaD_protectedparser`).
-    pub fn host_nny_enter(&mut self) {
-        self.nny += 1;
-    }
-
-    /// Undo [`Vm::host_nny_enter`].
-    pub fn host_nny_leave(&mut self) {
-        self.nny -= 1;
-    }
-
     /// Whether `prefix`, the start of a binary chunk a `lua_load` reader
     /// delivered, already holds every byte PUC's undumper reads: PUC stops
     /// calling the reader there.

@@ -87,15 +87,41 @@ fn load_reader(
     name: &[u8],
     mode: Option<&[u8]>,
 ) -> Result<u32, LuaError> {
+    let r = read_and_load(vm, a, reader, name, mode);
+    vm.host_load_end();
+    r
+}
+
+fn read_and_load(
+    vm: &mut Vm,
+    a: Args,
+    reader: Value,
+    name: &[u8],
+    mode: Option<&[u8]>,
+) -> Result<u32, LuaError> {
     let fail = |vm: &mut Vm, msg: Value| vm.nat_ret(a.fs, &[Value::Nil, msg]);
-    let mut first = match next_piece(vm, reader) {
+    vm.host_load_begin();
+    // what each call of the reader counts is set aside, to be counted
+    // where PUC's parser calls it: at the byte the piece starts at
+    let counted = vm.heap.puc.silent == 0;
+    let mut splices = Vec::new();
+    let mut fed = 0u32;
+    let mut spliced = |vm: &mut Vm, at: u32| {
+        let mark = counted.then(|| vm.heap.defer_begin());
+        let r = next_piece(vm, reader);
+        if let Some(m) = mark {
+            splices.push((at, vm.heap.defer_end(m)));
+        }
+        r
+    };
+    let mut first = match spliced(vm, 0) {
         Ok(p) => p,
         Err(msg) => return fail(vm, msg),
     };
     // 5.1 peeks at the first character and then reads it again, so a
     // reader that signals the end at once is asked a second time
     if first.is_none() && vm.version() == LuaVersion::Lua51 {
-        first = match next_piece(vm, reader) {
+        first = match spliced(vm, 0) {
             Ok(p) => p,
             Err(msg) => return fail(vm, msg),
         };
@@ -130,8 +156,10 @@ fn load_reader(
         return fail(vm, m);
     }
     let mut failed = None;
-    let parsed = text.parse(first, &mut |buf| match next_piece(vm, reader) {
+    fed += first.len() as u32;
+    let parsed = text.parse(first, &mut |buf| match spliced(vm, fed) {
         Ok(Some(p)) => {
+            fed += p.len() as u32;
             buf.extend_from_slice(&p);
             true
         }
@@ -144,7 +172,7 @@ fn load_reader(
     if let Some(msg) = failed {
         return fail(vm, msg);
     }
-    let r = vm.load_parsed(parsed, name, None);
+    let r = vm.load_parsed_spliced(parsed, name, None, splices);
     loaded(vm, a, r, name)
 }
 

@@ -5,6 +5,7 @@ use super::*;
 use crate::runtime::mem::{LVec, Oom, catch_load_oom, outside_load};
 
 mod compile;
+mod streamed;
 mod text;
 pub use text::{ParsedText, TextLoad};
 
@@ -44,7 +45,9 @@ impl Vm {
         name: Option<Gc<crate::runtime::LuaStr>>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         // 5.4 on, `lua_load` checks for a collection before it parses
-        self.lua_load_checkpoint();
+        if !std::mem::take(&mut self.heap.puc.load_checked) {
+            self.lua_load_checkpoint();
+        }
         // the parser and the compiler cannot collect (what they made so far
         // is held only by them), so a load that ran out of memory is run
         // once more after an emergency collection, as PUC's allocations
@@ -158,7 +161,7 @@ impl Vm {
                 crate::frontend::parser::ParseScratch::new(self.heap.mem_owner()),
             );
             let counted = match scratch.recorded() {
-                Some(rec) => self.acct_text_load(src, scratch.parsed().0, rec, cl),
+                Some(rec) => self.acct_text_load(src, scratch.parsed().0, rec, cl, Vec::new()),
                 None => Ok(()),
             };
             self.parse_scratch = scratch;
@@ -182,56 +185,6 @@ impl Vm {
                 self.compile_scratch = crate::compiler::CompileScratch::new(self.heap.mem());
                 Err(load_oom(&self.heap))
             }
-        }
-    }
-
-    /// Start loading a text chunk that a reader hands over piece by piece
-    /// (`lua_load`, `load` with a function): what the parse needs from the
-    /// vm, so that the reader can use the vm while the parse runs. `None`
-    /// for MacroLua, whose macro pass needs the whole source first.
-    #[doc(hidden)]
-    pub fn text_load(&mut self) -> Option<TextLoad> {
-        if self.version.is_macro_lua() {
-            return None;
-        }
-        Some(TextLoad {
-            version: self.version,
-            depth: self.g.nccalls,
-            budget: self.loader_input_budget,
-            scratch: self.parse_scratch.take(),
-        })
-    }
-
-    /// Compile what [`TextLoad::parse`] read as the chunk `chunkname` and
-    /// close it over the globals, as [`Vm::load`] does.
-    #[doc(hidden)]
-    pub fn load_parsed(
-        &mut self,
-        parsed: ParsedText,
-        chunkname: &[u8],
-        name: Option<Gc<crate::runtime::LuaStr>>,
-    ) -> Result<Gc<LuaClosure>, SyntaxError> {
-        self.guarded_load(|vm| {
-            let source = match name {
-                Some(n) => n,
-                None => vm.heap.try_intern(chunkname)?,
-            };
-            let parsed = match parsed.0 {
-                Ok(p) => p,
-                Err((e, Some((failed, src)))) => {
-                    return Err(vm.error_before(&src, Some(failed), source).unwrap_or(e));
-                }
-                Err((e, None)) => return Err(e),
-            };
-            let proto = vm.compile_text(parsed, source)?;
-            vm.close_chunk(proto)
-        })
-    }
-
-    /// 5.4 on, `lua_load` checks for a collection before it reads.
-    pub(crate) fn lua_load_checkpoint(&mut self) {
-        if self.version >= LuaVersion::Lua54 {
-            self.native_checkpoint();
         }
     }
 

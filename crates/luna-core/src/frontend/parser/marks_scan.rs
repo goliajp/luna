@@ -13,6 +13,9 @@ impl Recording {
         use crate::frontend::token::Token as T;
         let span = tok.span;
         let (start, end) = (span.start as usize, span.end as usize);
+        if self.ends {
+            self.scanned.ends.push(span.end);
+        }
         // the scanner holds no more than the gap's bytes or the token's
         // and a terminating zero
         if start > self.last_end + 32 || end - start >= 32 {
