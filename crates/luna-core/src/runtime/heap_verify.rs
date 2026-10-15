@@ -6,7 +6,7 @@ use super::*;
 
 impl Heap {
     /// `gc-verify` — the set of every live object header
-    /// (all + sweep_cur + finalizer queues), for callers that need to
+    /// (all + fixed + finalizer queues), for callers that need to
     /// audit their own containers (e.g. the VM auditing its register
     /// stack after a collect).
     #[cfg(feature = "gc-verify")]
@@ -15,7 +15,7 @@ impl Heap {
         // SAFETY: heap-owned intrusive lists; all elements are live
         // allocations.
         unsafe {
-            for mut cur in [self.all, self.sweep_cur, self.fixed] {
+            for mut cur in [self.all, self.fixed] {
                 while !cur.is_null() {
                     live.insert(cur as usize);
                     cur = (*cur).next;
@@ -119,11 +119,11 @@ impl Heap {
             }
         }
         let mut live: HashSet<usize> = HashSet::new();
-        // SAFETY: `all` / `sweep_cur` / finalizer-queue pointers are the
+        // SAFETY: `all` / `fixed` / finalizer-queue pointers are the
         // heap's own intrusive lists; every element is a live allocation
         // until free_obj unlinks it.
         unsafe {
-            for mut cur in [self.all, self.sweep_cur, self.fixed] {
+            for mut cur in [self.all, self.fixed] {
                 while !cur.is_null() {
                     live.insert(cur as usize);
                     cur = (*cur).next;
@@ -141,15 +141,14 @@ impl Heap {
                     Some(h) => live.contains(&(h as usize)),
                 }
             };
-            // Walk BOTH lists: `all` (already-swept survivors) and
-            // `sweep_cur` (not-yet-swept remainder of an incremental
-            // cycle). A dangling reference can live in either while the
-            // mutator runs between sweep steps.
+            // `all` holds the swept survivors and, during a sweep, the
+            // part not swept yet; a dangling reference can live in either
+            // while the mutator runs between sweep steps.
             let new_white = self.current_white;
-            for head in [self.all, self.sweep_cur] {
+            for head in [self.all] {
                 let mut cur = head;
                 while !cur.is_null() {
-                    // Skip dead-but-not-yet-swept objects on `sweep_cur`:
+                    // Skip dead objects not swept yet:
                     // they are unreachable, so a dangling ref inside them
                     // is benign (their peers may already be freed).
                     let f = (*cur).flags;

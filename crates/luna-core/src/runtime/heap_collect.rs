@@ -2,6 +2,11 @@
 
 use super::*;
 
+#[path = "heap_step.rs"]
+mod step;
+pub(crate) use step::Running;
+pub(super) use step::Sizer;
+
 impl Heap {
     /// Mark from `roots`, sweep everything unreachable. Returns the number of
     /// objects freed.
@@ -57,6 +62,9 @@ impl Heap {
             no_ephemeron: self.no_ephemeron,
             cached_protos: Vec::new(),
             leaf_black: LEAF,
+            leaf_hdr: 0,
+            leaf_bytes: 0,
+            sizer: self.lend_sizer(),
         }
     }
 
@@ -99,6 +107,7 @@ impl Heap {
             }
         }
         self.atomic_tail(m);
+        self.settle_sizer(m);
         debug_assert!(m.stack.is_empty() && !m.overflow);
         self.gray = m.stack.take();
     }
@@ -276,10 +285,14 @@ impl Heap {
             no_ephemeron: prop.no_ephemeron,
             cached_protos: std::mem::take(&mut prop.cached_protos),
             leaf_black: 0,
+            leaf_hdr: self.leaf_hdr(),
+            leaf_bytes: 0,
+            sizer: self.lend_sizer(),
         }
     }
 
-    pub(crate) fn stash_marker(&mut self, m: Marker) {
+    pub(crate) fn stash_marker(&mut self, mut m: Marker) {
+        self.settle_sizer(&mut m);
         let no_ephemeron = m.no_ephemeron;
         self.gray = m.stack;
         self.gray_overflow = m.overflow;
@@ -289,113 +302,5 @@ impl Heap {
             cached_protos: m.cached_protos,
             no_ephemeron,
         });
-    }
-
-    /// Begin an incremental mark cycle (precondition: `Pause`): enter
-    /// `GcPhase::Propagate` with a fresh PropagateState and lend out the
-    /// marker, with tobefnz and any barrier-carried gray already in it, for
-    /// the caller to mark its roots with and return through
-    /// [`Heap::stash_marker`].
-    pub(crate) fn gc_begin_propagate(&mut self) -> Marker {
-        debug_assert!(self.phase == GcPhase::Pause);
-        self.phase = GcPhase::Propagate;
-        self.propagate = Some(PropagateState {
-            weak: Vec::new(),
-            ephemeron: Vec::new(),
-            cached_protos: Vec::new(),
-            no_ephemeron: self.no_ephemeron,
-        });
-        let mut m = self.loan_marker();
-        for &h in &self.tobefnz {
-            // SAFETY: a queued finalizable stays allocated until its `__gc` has run (`take_tobefnz`)
-            unsafe { m.header(h) };
-        }
-        m
-    }
-
-    /// [`Heap::gc_begin_propagate`] with `roots` / `extra` as the roots.
-    #[cfg(test)]
-    pub(crate) fn gc_start_propagate(&mut self, roots: &[Value], extra: &[Gc<Upvalue>]) {
-        let mut m = self.gc_begin_propagate();
-        for &r in roots {
-            m.value(r);
-        }
-        for &uv in extra {
-            m.mark(uv);
-        }
-        self.stash_marker(m);
-    }
-
-    /// Drain up to `budget` gray objects (blacken + trace). Returns true if
-    /// the gray queue is now empty (caller should follow up with
-    /// `gc_finish_atomic`). PUC `propagatemark` budgeted loop.
-    pub(crate) fn gc_step_propagate(&mut self, budget: usize) -> bool {
-        debug_assert!(self.phase == GcPhase::Propagate);
-        let mut m = self.loan_marker();
-        let mut n = 0;
-        while n < budget {
-            let Some(h) = m.pop() else {
-                break;
-            };
-            // SAFETY: `h` was popped off the gray stack, which only `Marker::header` and `barrier_back` push to, with headers of allocated objects; frees happen only in the sweep, never during propagate or between its steps
-            unsafe { blacken(h, &mut m) };
-            n += 1;
-        }
-        let exhausted = m.stack.is_empty() && !m.overflow;
-        self.stash_marker(m);
-        exhausted
-    }
-
-    /// Conclude a Propagate cycle: drain any residual gray, run the atomic
-    /// tail (weak / ephemeron / finalizer / proto-cache / flip), detach `all`
-    /// into `sweep_cur`, and enter `GcPhase::Sweep`. Releases `propagate`.
-    /// PUC `atomic` + `entersweep` transition.
-    pub(crate) fn gc_finish_atomic(&mut self) {
-        debug_assert!(self.phase == GcPhase::Propagate);
-        let mut m = self.loan_marker();
-        // any residual gray (caller may not have drained to empty)
-        drain_marker(&mut m);
-        // pre-atomic ephemeron convergence
-        if !m.ephemeron.is_empty() {
-            loop {
-                let mut changed = false;
-                let eph = m.ephemeron.clone();
-                for t in eph {
-                    // SAFETY: as in `mark_all`: `t` is a marked table from `m.ephemeron`, nothing is freed before the sweep, and the marker holds no other reference to it
-                    changed |= unsafe { (*t).converge_ephemeron(&weak_key_alive, &mut m) };
-                }
-                drain_marker(&mut m);
-                if !changed {
-                    break;
-                }
-            }
-        }
-        self.atomic_tail(&mut m);
-        // PropagateState consumed; transition to Sweep phase by detaching
-        // the whole heap into sweep_cur (mirrors gc_mark_atomic). Anything
-        // allocated past this point links onto fresh `all` and survives.
-        self.propagate = None;
-        debug_assert!(
-            self.gray.is_empty() && !self.gray_overflow,
-            "gray queue not drained at atomic"
-        );
-        self.sweep_cur = std::mem::replace(&mut self.all, ptr::null_mut());
-        // the sweep moves survivors in front of anything allocated now, out
-        // of allocation order: until the next safe point every object counts
-        // as young
-        self.young = ptr::null_mut();
-        self.phase = GcPhase::Sweep;
-    }
-
-    /// Phase peek (for the VM-side step driver).
-    pub(crate) fn gc_phase_is_pause(&self) -> bool {
-        self.phase == GcPhase::Pause
-    }
-    pub(crate) fn gc_phase_is_propagate(&self) -> bool {
-        self.phase == GcPhase::Propagate
-    }
-    #[allow(dead_code)] // public phase-peek API trio; sweep variant unused internally
-    pub(crate) fn gc_phase_is_sweep(&self) -> bool {
-        self.phase == GcPhase::Sweep
     }
 }

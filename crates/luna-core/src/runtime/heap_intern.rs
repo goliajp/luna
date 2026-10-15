@@ -85,7 +85,7 @@ impl Heap {
         // PUC `luaS_new` resurrect guard (lstring.c).
         // The bucket-chain is walked open-loop without consulting GC
         // color; during incremental sweep an existing entry may be
-        // dead-white (in `sweep_cur`, scheduled for `free_obj`). If we
+        // dead-white (not swept yet, to be freed by the sweep). If we
         // hand its pointer back, the budget-paced sweep frees it out
         // from under the mutator and the next bucket walk dereferences
         // a libc-recycled slot.

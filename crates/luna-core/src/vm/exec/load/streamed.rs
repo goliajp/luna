@@ -23,9 +23,11 @@ impl Vm {
         })
     }
 
-    /// 5.4 on, `lua_load` checks for a collection before it reads.
+    /// 5.4 on, `lua_load` checks for a collection before it reads (5.1:
+    /// `f_parser`, once the first character is read).
     pub(crate) fn lua_load_checkpoint(&mut self) {
-        if self.version >= LuaVersion::Lua54 {
+        // 5.1's `f_parser` checks before it parses or undumps
+        if self.version >= LuaVersion::Lua54 || self.version == LuaVersion::Lua51 {
             self.native_checkpoint();
         }
     }

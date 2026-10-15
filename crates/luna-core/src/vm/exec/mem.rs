@@ -42,9 +42,10 @@ impl Vm {
         // the running operation's registers may lie above the last safe
         // point's live top
         let live_top = std::mem::replace(&mut self.gc_top, self.stack.len() as u32);
+        self.gc_hold_threads();
         if self.heap.gc_phase_is_propagate() {
-            // finish the cycle in progress: what it finds dead goes, and
-            // what was born during it stays until the next cycle
+            // finish the cycle in progress: what it finds dead goes; the
+            // objects made since the last safe point are held as young
             let mut m = self.heap.loan_marker();
             self.mark_roots(&mut m);
             self.heap.mark_young(&mut m);
@@ -55,6 +56,7 @@ impl Vm {
             self.heap.gc_finish_sweep();
         } else {
             self.heap.gc_finish_sweep();
+            self.gc_count_marked();
             let mut m = self.heap.gc_begin_full();
             self.mark_roots(&mut m);
             self.heap.mark_young(&mut m);
@@ -64,7 +66,7 @@ impl Vm {
         }
         self.heap.release_pool();
         self.gc_top = live_top;
-        self.heap.rearm_gc_pause(self.gc_pause);
+        self.gc_full_pause();
         true
     }
 

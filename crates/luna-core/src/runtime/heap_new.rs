@@ -44,8 +44,8 @@ impl Heap {
             seed,
             live: 0,
             bytes: 0,
-            next_gc: GC_MIN_THRESHOLD,
-            gc_limit: GC_MIN_THRESHOLD,
+            pace: crate::runtime::gc_pace::Pace::new(),
+            gc_limit: usize::MAX,
             current_white: WHITE0,
             gray: mark::GrayStack::default(),
             gray_overflow: false,
@@ -53,7 +53,7 @@ impl Heap {
             store_failed: false,
             propagate: None,
             phase: GcPhase::Pause,
-            sweep_cur: ptr::null_mut(),
+            sweep_prev: ptr::null_mut(),
             gc_stopped: false,
             finalize: crate::runtime::mem::LVec::new(mem.mem()),
             tobefnz: crate::runtime::mem::LVec::new(mem.mem()),
@@ -98,9 +98,9 @@ impl Drop for Heap {
     fn drop(&mut self) {
         // free everything regardless of reachability, including any list still
         // detached for an in-flight incremental sweep
-        // SAFETY: the heap is being dropped, so nothing uses its objects any more; `all`, `sweep_cur` and `fixed` hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds tables from `alloc_block` already unlinked from every list
+        // SAFETY: the heap is being dropped, so nothing uses its objects any more; `all` and `fixed` hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds tables from `alloc_block` already unlinked from every list
         unsafe {
-            for mut cur in [self.all, self.sweep_cur, self.fixed] {
+            for mut cur in [self.all, self.fixed] {
                 while !cur.is_null() {
                     let next = (*cur).next;
                     self.free_obj(cur);

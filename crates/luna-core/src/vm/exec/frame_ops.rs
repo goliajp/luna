@@ -197,9 +197,6 @@ impl Vm {
                 }
                 let n_key = self.str_value(b"n")?;
                 self.raw_set(t, n_key, Value::Int(n as i64))?;
-                // once-per-table barrier (mirror SETLIST): t is born BLACK
-                // during Propagate; the bulk inserts above don't barrier.
-                self.heap.barrier_back(t);
                 self.stack[func_slot as usize] = Value::Table(t);
                 self.set_r(base, inst.a(), Value::Table(t));
             }

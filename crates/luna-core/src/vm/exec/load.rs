@@ -47,7 +47,8 @@ impl Vm {
         chunkname: &[u8],
         name: Option<Gc<crate::runtime::LuaStr>>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
-        // 5.4 on, `lua_load` checks for a collection before it parses
+        // 5.4 on, `lua_load` checks for a collection before it parses, as
+        // 5.1's `f_parser` does
         if !std::mem::take(&mut self.heap.puc.load_checked) {
             self.lua_load_checkpoint();
         }

@@ -63,14 +63,17 @@ fn weak_kv_table_marks_surviving_string_keys() {
 #[test]
 fn incremental_gc_step() {
     // an incremental ("step") cycle must terminate and actually free garbage:
-    // build a pile, drop it, then sweep with the smallest budget until a cycle
+    // build a pile, drop it, then step with the smallest budget until a cycle
     // completes — the loop must end (true is eventually returned) and the heap
-    // must shrink below the pre-drop size.
+    // must shrink below the pre-drop size. A cycle the pile's building
+    // started keeps it (the table it was stored in is marked again), as in
+    // PUC; the cycle after that frees it.
     check_bool(
         "collectgarbage('incremental') collectgarbage() \
          local a = {} for i = 1, 500 do a[i] = {{}} end \
          local before = collectgarbage('count') \
          a = nil \
+         repeat until collectgarbage('step', 1) \
          repeat until collectgarbage('step', 1) \
          return collectgarbage('count') < before",
         true,

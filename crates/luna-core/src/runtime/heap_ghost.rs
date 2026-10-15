@@ -35,11 +35,7 @@ impl Heap {
     /// already.
     pub(crate) fn ghost_record(&mut self, kind: PucKind, size: usize) -> Result<(), Oom> {
         let size = size as u32 | if kind == PucKind::ShortStr { SHORT } else { 0 };
-        let born = if self.phase == GcPhase::Propagate {
-            BLACK
-        } else {
-            self.current_white
-        };
+        let born = self.current_white;
         let head = self.all;
         let ghost_head = !head.is_null()
             // SAFETY: `head`, not null, heads a live object of this heap
@@ -56,6 +52,28 @@ impl Heap {
             sizes,
         })?;
         Ok(())
+    }
+
+    /// Free up to `quota` of the newest objects the dead record `g` holds
+    /// (a sweep meets them newest first); how many, and whether none is
+    /// left (the caller then unlinks and frees the record).
+    ///
+    /// # Safety
+    /// `g` heads a dead record of this heap.
+    pub(in crate::runtime::heap) unsafe fn free_ghost_records(&mut self, g: *mut Ghost, quota: i64) -> (i64, bool) {
+        let mut n = 0;
+        // SAFETY: the caller's contract
+        unsafe {
+            while n < quota {
+                let Some(s) = (*g).sizes.pop() else { break };
+                if s & SHORT != 0 {
+                    self.puc.strt_nuse -= 1;
+                }
+                self.acct_free((s & !SHORT) as usize);
+                n += 1;
+            }
+            (n, (*g).sizes.is_empty())
+        }
     }
 
     /// A record of PUC's objects freed: each one's free counted.

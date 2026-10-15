@@ -1,6 +1,11 @@
 //! Byte accounting and collection pacing.
 
 use super::*;
+use crate::runtime::table::Dialect;
+
+#[path = "gc_work.rs"]
+mod work;
+pub(super) use work::{array_bytes, hash_bytes, objsize, stack_bytes, thread_bytes};
 
 impl Heap {
     /// Number of GC-managed objects currently linked into the heap (live + not
@@ -36,11 +41,11 @@ impl Heap {
     /// loop. Safe to call between dispatch ticks (the only allocs
     /// happen in the caller's bookkeeping).
     ///
-    /// The walk visits the live `all` list, the `sweep_cur` detached
-    /// list and the never-swept fixed list, so a mid-cycle invocation
-    /// reports the same total as [`Heap::live_objects`].
+    /// The walk visits the `all` list (in a sweep, with the dead objects
+    /// not yet swept) and the never-swept fixed list, so a mid-cycle
+    /// invocation reports the same total as [`Heap::live_objects`].
     pub fn walk_objects(&self, mut visit: impl FnMut(ObjTag)) {
-        for head in [self.all, self.sweep_cur, self.fixed] {
+        for head in [self.all, self.fixed] {
             let mut cur = head;
             while !cur.is_null() {
                 // SAFETY: pointers come from the runtime's
@@ -85,34 +90,78 @@ impl Heap {
         self.gc_stopped
     }
 
+    /// `collectgarbage("stop")` / `"restart"`. A restart makes a step due
+    /// at once (5.1 `GCthreshold = totalbytes`, later `luaE_setdebt(g, 0)`).
     pub(crate) fn gc_set_stopped(&mut self, stopped: bool) {
         self.gc_stopped = stopped;
-        self.set_next_gc(self.next_gc);
+        if !stopped {
+            let d = self.table_dialect;
+            match d {
+                Dialect::L51 => self.pace.set_threshold(self.bytes as i64),
+                _ => self.pace.set_debt(d, self.bytes, 0),
+            }
+        }
+        self.refresh_gc_limit();
     }
 
-    pub(super) fn set_next_gc(&mut self, next: usize) {
-        self.next_gc = next;
-        self.gc_limit = if self.gc_stopped { usize::MAX } else { next };
+    /// The count at which the next step falls due, from the pace; none
+    /// while the collector is stopped (the dialects after 5.1 still step
+    /// then, only to put the debt back, which changes nothing a program
+    /// sees).
+    pub(crate) fn refresh_gc_limit(&mut self) {
+        self.gc_limit = if self.gc_stopped {
+            usize::MAX
+        } else {
+            self.pace.limit(self.table_dialect)
+        };
     }
 
-    /// Re-arm with caller-supplied `pause` (PUC param, % of live bytes). The
-    /// next cycle fires once `bytes >= live * pause / 100`. `pause=200` (PUC
-    /// default) waits for the heap to double; `pause=100` fires immediately
-    /// when alloc resumes; `pause=300` is 3× — lower pause = more aggressive.
+    /// A cycle ended with the count at what it is now: the pause before
+    /// the next one, `pause` in percent of what survived (PUC `setpause`;
+    /// 5.1 `setthreshold`).
     pub fn rearm_gc_pause(&mut self, pause: i64) {
-        let pause = pause.max(0) as usize;
-        let target = self
-            .bytes
-            .saturating_mul(pause)
-            .saturating_div(100)
-            .max(GC_MIN_THRESHOLD);
-        self.set_next_gc(target);
+        use crate::runtime::gc_pace::*;
+        let d = self.table_dialect;
+        let bytes = self.bytes;
+        match d {
+            Dialect::L51 => {
+                self.pace.estimate = bytes as i64;
+                self.pace.set_threshold(threshold_51(bytes as i64, pause));
+            }
+            Dialect::L55 => {
+                let marked = bytes as i64 - self.fixed_bytes();
+                self.pace.estimate = marked;
+                let debt = pause_debt_55(bytes, marked.saturating_mul(pause) / 100);
+                self.pace.set_debt(d, bytes, debt);
+            }
+            _ => {
+                self.pace.estimate = bytes as i64;
+                let debt = pause_debt(d, bytes, bytes as i64, pause);
+                self.pace.set_debt(d, bytes, debt);
+            }
+        }
+        self.pace.state = St::Pause;
+        self.refresh_gc_limit();
     }
 
-    /// Re-arm the auto-GC threshold after a collection (PUC pause-style: next
-    /// collection once the live set roughly doubles).
+    /// [`Heap::rearm_gc_pause`] with PUC's usual pause (200%).
     pub fn rearm_gc(&mut self) {
-        self.set_next_gc(self.bytes.saturating_mul(2).max(GC_MIN_THRESHOLD));
+        self.rearm_gc_pause(200);
+    }
+
+    /// The bytes of PUC's objects that no collection marks (`fixedgc`:
+    /// the reserved words, the metamethod names, `_ENV`, the memory
+    /// error's message).
+    pub(crate) fn fixed_bytes(&self) -> i64 {
+        let s = self.sizes;
+        let mut n: i64 = self
+            .puc
+            .pins
+            .iter()
+            .map(|p| s.string(p.len(), false) as i64)
+            .sum();
+        n += s.string(b"not enough memory".len(), false) as i64;
+        n
     }
 
     /// Every live object is rooted now (an interpreter safe point, or the

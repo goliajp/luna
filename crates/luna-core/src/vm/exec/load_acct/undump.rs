@@ -21,11 +21,6 @@ impl Vm {
             return Ok(());
         };
         let d = self.heap.table_dialect;
-        // 5.1's `f_parser` checks for a collection first
-        #[cfg(feature = "gc-trace")]
-        if d == Dialect::L51 {
-            self.trace_checkpoint();
-        }
         let (mut protos, mut closing) = (Vec::new(), Vec::new());
         walk(cl.proto, &mut protos, &mut closing);
         let mut protos = protos.into_iter();
