@@ -109,12 +109,7 @@ impl Heap {
             match (*h).tag {
                 ObjTag::Table => {
                     let t = h as *mut Table;
-                    if let Some(i) = self
-                        .puc
-                        .own_tables
-                        .iter()
-                        .position(|&o| o == t as *const Table)
-                    {
+                    if let Some(i) = self.puc.own_tables.iter().position(|&o| std::ptr::eq(o, t)) {
                         self.puc.own_tables.swap_remove(i);
                     } else {
                         self.acct_table_free((*t).asize as usize, (*t).node_count());

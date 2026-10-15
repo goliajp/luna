@@ -157,18 +157,18 @@ impl Vm {
     /// The strings PUC's parser makes formatting `msg`, if it formats it.
     fn parser_msg(&mut self, msg: &[u8]) -> Result<(), SyntaxError> {
         let v = self.version;
-        if let Some(x) = msg.strip_suffix(b" expected") {
-            if let Some(t) = token_named(v, x) {
-                // `error_expected`
-                let t = self.token2str(t)?;
-                let fmt: &[u8] = if v == LuaVersion::Lua51 {
-                    b"'%s' expected"
-                } else {
-                    b"%s expected"
-                };
-                self.heap.pushfstring(fmt, &[FmtArg::S(&t)])?;
-                return Ok(());
-            }
+        if let Some(x) = msg.strip_suffix(b" expected")
+            && let Some(t) = token_named(v, x)
+        {
+            // `error_expected`
+            let t = self.token2str(t)?;
+            let fmt: &[u8] = if v == LuaVersion::Lua51 {
+                b"'%s' expected"
+            } else {
+                b"%s expected"
+            };
+            self.heap.pushfstring(fmt, &[FmtArg::S(&t)])?;
+            return Ok(());
         }
         let mut args = Vec::new();
         let close: &[u8] = if v == LuaVersion::Lua51 {

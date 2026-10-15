@@ -63,7 +63,7 @@ impl Table {
     /// the new size, 5.5 sets `lenhint` to half of it.
     #[inline]
     pub(super) fn reset_hints(&mut self) {
-        let n = self.asize as u32;
+        let n = self.asize;
         self.alimit.set(n);
         self.lenhint.set(n / 2);
     }
