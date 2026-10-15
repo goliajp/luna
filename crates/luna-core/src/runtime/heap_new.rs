@@ -147,7 +147,10 @@ impl Heap {
         // `stack_init`: `BASIC_STACK_SIZE`, 5.1 with its extra slots
         let stack_size = if l51 { 45 } else { 40 };
         let coro = crate::runtime::Coro {
-            hdr: GcHeader::new(ObjTag::Coro),
+            hdr: GcHeader {
+                aux: self.take_id(),
+                ..GcHeader::new(ObjTag::Coro)
+            },
             status: crate::runtime::CoroStatus::Suspended,
             body,
             started: false,

@@ -83,12 +83,9 @@ pub(super) fn emit_checked_get<M: Module>(
         t,
         TABLE_ARRAY_PTR_OFFSET as i32,
     );
-    let asize = bcx.ins().load(
-        types::I64,
-        MemFlagsData::trusted(),
-        t,
-        TABLE_ASIZE_OFFSET as i32,
-    );
+    let asize = bcx
+        .ins()
+        .uload32(MemFlagsData::trusted(), t, TABLE_ASIZE_OFFSET as i32);
     let avals_bytes = bcx.ins().ishl_imm_u(asize, 3);
     let atags_ptr = bcx.ins().iadd(avals_ptr, avals_bytes);
     let tag_addr = bcx.ins().iadd(atags_ptr, key_minus_1);
@@ -217,9 +214,7 @@ pub(super) fn emit_array_in_range(
     );
     bcx.switch_to_block(past_blk);
     bcx.seal_block(past_blk);
-    let asize = bcx
-        .ins()
-        .load(types::I64, flags, t, TABLE_ASIZE_OFFSET as i32);
+    let asize = bcx.ins().uload32(flags, t, TABLE_ASIZE_OFFSET as i32);
     let in_array = bcx.ins().icmp(IntCC::UnsignedLessThan, key_minus_1, asize);
     bcx.ins().brif(
         in_array,

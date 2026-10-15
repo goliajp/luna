@@ -300,10 +300,10 @@ const _: () = {
     assert!(std::mem::size_of::<*mut u8>() == 8);
     assert!(std::mem::size_of::<luna_core::runtime::value::RawVal>() == 8);
     assert!(std::mem::align_of::<luna_core::runtime::value::RawVal>() == 8);
-    // `asize` is u64 so a single `load i64` yields the
-    // array-part length; the JIT then shifts left 3 to multiply by 8
-    // for the `atags_ptr = array_ptr + asize * 8` computation.
-    assert!(std::mem::size_of::<u64>() == 8);
+    // `asize` is a u32 the JIT loads zero-extended (`uload32`), then
+    // shifts left 3 to multiply by 8 for the `atags_ptr = array_ptr +
+    // asize * 8` computation.
+    assert!(std::mem::size_of::<u32>() == 4);
 };
 
 /// a single recognized `math.<fn>(arg)` fold. The four

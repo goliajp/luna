@@ -55,7 +55,8 @@ impl Heap {
         is_async: bool,
     ) -> Result<Gc<NativeClosure>, Oom> {
         let fix = self.fix_natives && upvals.is_empty() && !is_async;
-        let hdr = GcHeader::native(upvals);
+        let mut hdr = GcHeader::native(upvals);
+        hdr.aux = self.take_id();
         let kind = if is_async {
             crate::vm::exec::native_call::NativeKind::Async
         } else {

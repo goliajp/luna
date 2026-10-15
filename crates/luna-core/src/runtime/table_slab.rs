@@ -29,7 +29,7 @@ impl Table {
     /// borrows involved).
     #[inline(always)]
     pub(super) fn array_base(&self) -> *mut u8 {
-        if self.asize <= INLINE_ASIZE {
+        if u64::from(self.asize) <= INLINE_ASIZE {
             self.inline_storage.get() as *mut u8
         } else {
             self.array_ptr
@@ -129,7 +129,7 @@ impl Table {
     /// Free the array part's slab, if it has one. The table must not read
     /// its array part again before setting up a new one.
     pub(super) fn free_array_slab(&mut self, mem: MemRef) {
-        if self.asize > INLINE_ASIZE {
+        if u64::from(self.asize) > INLINE_ASIZE {
             // SAFETY: an array part larger than the inline storage lives in
             // a slab from `alloc_slab(mem, asize)`, owned by this table
             unsafe { Self::free_slab(mem, self.array_ptr, self.asize as usize) };

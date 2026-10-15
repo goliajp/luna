@@ -105,12 +105,9 @@ fn emit_array_bound<E: Emit>(
 }
 
 fn load_asize<E: Emit>(bcx: &mut E, t: Value) -> Value {
-    bcx.ins().load(
-        types::I64,
-        MemFlagsData::trusted(),
-        t,
-        super::super::TABLE_ASIZE_OFFSET as i32,
-    )
+    let off = super::super::TABLE_ASIZE_OFFSET as i32;
+    let w = bcx.ins().load(types::I32, MemFlagsData::trusted(), t, off);
+    bcx.ins().uextend(types::I64, w)
 }
 
 /// Branch to `hit`, with the address of `t[key]`'s payload as its one

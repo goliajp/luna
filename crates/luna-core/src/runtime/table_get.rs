@@ -32,7 +32,7 @@ impl Table {
         if idx < u64::from(self.alimit.get()) {
             return Some(idx as usize);
         }
-        if idx < self.asize {
+        if idx < u64::from(self.asize) {
             self.alimit.set(i as u32);
             return Some(idx as usize);
         }
