@@ -2,6 +2,7 @@
 //! and string literals are not required to be UTF-8); only `\u{...}` escapes
 //! produce UTF-8 output.
 
+use crate::frontend::error::NearKind;
 use crate::frontend::error::SyntaxError;
 use crate::frontend::names::{Names, Sym};
 use crate::frontend::span::Span;
@@ -46,6 +47,10 @@ pub struct Lexer<'s, S: Source = Whole<'s>> {
     /// where the contents of the string literal just read are in `buf`,
     /// when not interning
     str_range: (usize, usize),
+    /// where the token or comment being scanned starts, and the near-token
+    /// of the error the scanner raised
+    pub(crate) tok_start: usize,
+    pub(crate) near_kind: std::cell::Cell<NearKind>,
 }
 
 /// One lexed item as the parser sees it: either a token, or a byte PUC's
@@ -114,7 +119,13 @@ impl<'s, S: Source> Lexer<'s, S> {
             names: None,
             last_sym: Sym(0),
             str_range: (0, 0),
+            tok_start: 0,
+            near_kind: std::cell::Cell::new(NearKind::None),
         }
+    }
+
+    pub(crate) fn pos(&self) -> usize {
+        self.pos
     }
 
     /// The source bytes read so far.
@@ -182,6 +193,7 @@ impl<'s, S: Source> Lexer<'s, S> {
     #[cold]
     #[inline(never)]
     fn error(&self, msg: &str, near: Near<'_>) -> SyntaxError {
+        self.near_kind.set(near.kind());
         let mut out = msg.as_bytes().to_vec();
         out.extend_from_slice(b" near ");
         out.extend_from_slice(&near_text(self.version, near));
@@ -206,7 +218,10 @@ impl<'s, S: Source> Lexer<'s, S> {
             Lexed::Tok(t) => Ok(self.token_info(t)),
             // PUC's token code for a NUL byte is 0, which `lexerror` takes
             // as "no near-token".
-            Lexed::Char(0, _) => Err(SyntaxError::new(self.line, "unexpected symbol")),
+            Lexed::Char(0, _) => {
+                self.near_kind.set(NearKind::None);
+                Err(SyntaxError::new(self.line, "unexpected symbol"))
+            }
             Lexed::Char(c, _) => Err(self.error("unexpected symbol", Near::Char(c))),
         }
     }
@@ -217,6 +232,7 @@ impl<'s, S: Source> Lexer<'s, S> {
         self.buf.clear();
         loop {
             let start = self.pos;
+            self.tok_start = start;
             let line = self.line;
             let Some(c) = self.cur() else {
                 return Ok(Lexed::Tok(LexTok {

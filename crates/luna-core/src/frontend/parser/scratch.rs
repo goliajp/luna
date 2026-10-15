@@ -69,11 +69,16 @@ pub(crate) struct Parsed {
 }
 
 /// Where a parse failed: at token `at` (the first is 0), or reading the
-/// token after it (`scanning`).
+/// token after it (`scanning`, from byte `scan.0` of the source to
+/// `scan.1`), or reading the first token (`first`); and what the error
+/// quotes as its near-token.
 #[derive(Clone, Copy)]
 pub(crate) struct Failed {
     pub(crate) at: u32,
     pub(crate) scanning: bool,
+    pub(crate) first: bool,
+    pub(crate) scan: (u32, u32),
+    pub(crate) near: crate::frontend::error::NearKind,
 }
 
 /// The vectors a parse builds its tree in, kept by a VM from one load to
@@ -179,6 +184,26 @@ impl ParseScratch {
         st.arms.clear();
     }
 
+    /// The first token failed to scan: the parse failed with nothing read.
+    pub(super) fn first_failed(&mut self, mut lex: TokenSource, e: SyntaxError) -> SyntaxError {
+        if let Some(o) = lex.out_of_memory() {
+            return o.into();
+        }
+        let (near, start, pos) = lex.scan_state();
+        self.failed = Some(Failed {
+            at: 0,
+            scanning: true,
+            first: true,
+            scan: (start as u32, pos as u32),
+            near,
+        });
+        self.recording = Some(marks::Recording::cleared(self.recording.take()));
+        self.recorded = false;
+        self.streamed = lex.take_streamed();
+        self.chunk.names = lex.take_names();
+        e
+    }
+
     /// The tree and statement end lines [`parse_in_place`] left here.
     ///
     /// [`parse_in_place`]: super::parse_in_place
@@ -191,6 +216,16 @@ impl ParseScratch {
     pub(crate) fn recorded(&self) -> Option<(&marks::Marks, &marks::scan::Scanned)> {
         let r = self.recording.as_deref().filter(|_| self.recorded)?;
         Some((&r.marks, &r.scanned))
+    }
+
+    /// What a recording parse that failed scanned before it failed, and
+    /// the names of the tokens.
+    pub(crate) fn failed_scan(
+        &self,
+    ) -> Option<(&marks::scan::Scanned, &crate::frontend::names::Names)> {
+        self.failed?;
+        let r = self.recording.as_deref().filter(|_| self.record)?;
+        Some((&r.scanned, &self.chunk.names))
     }
 
     /// The parse left here, as the owner of its vectors.

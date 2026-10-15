@@ -21,46 +21,14 @@ use crate::runtime::heap::PucKind;
 use crate::runtime::table::{Dialect, TableError};
 use crate::runtime::{Proto, Table};
 
+mod arr;
 mod consts;
 mod events;
+mod failed;
 mod scan;
+mod syntax_msg;
 
-/// One array PUC grows by doubling (`luaM_growvector`) and trims when the
-/// function ends.
-#[derive(Clone, Copy, Default)]
-struct Arr {
-    n: usize,
-    cap: usize,
-}
-
-impl Arr {
-    /// One more element of `elem` bytes.
-    fn push(&mut self, heap: &mut Heap, elem: usize) {
-        if self.n + 1 > self.cap {
-            let new = if self.cap < 2 { 4 } else { self.cap * 2 };
-            heap.acct_block(self.cap * elem, new * elem);
-            self.cap = new;
-        }
-        self.n += 1;
-    }
-
-    /// Grown to hold `n` (the parser's descriptor arrays, which shrink and
-    /// grow again).
-    fn reach(&mut self, heap: &mut Heap, n: usize, elem: usize) {
-        while self.cap < n {
-            let new = if self.cap < 2 { 4 } else { self.cap * 2 };
-            heap.acct_block(self.cap * elem, new * elem);
-            self.cap = new;
-        }
-        self.n = n;
-    }
-
-    /// Trimmed to its elements (`luaM_shrinkvector`).
-    fn trim(&mut self, heap: &mut Heap, elem: usize) {
-        heap.acct_block(self.cap * elem, self.n * elem);
-        self.cap = self.n;
-    }
-}
+use arr::Arr;
 
 /// A function being compiled, in PUC's terms.
 #[derive(Default)]
@@ -85,6 +53,17 @@ struct Fs {
     /// emitted so far
     shape: usize,
     pc: usize,
+}
+
+/// Where the replay of a load that failed stops: before the events at
+/// token `events` (with `ended`, after those at it that finish what ended
+/// before it: PUC finishes them seeing the token, then fails on it), after
+/// what the scanner does up to token `scans`.
+#[derive(Clone, Copy)]
+struct Cut {
+    events: i64,
+    ended: bool,
+    scans: i64,
 }
 
 /// The replay's state.
@@ -144,27 +123,19 @@ fn walk(p: Gc<Proto>, opening: &mut Vec<Gc<Proto>>, closing: &mut Vec<Gc<Proto>>
     closing.push(p);
 }
 
-impl Vm {
-    /// Count a text chunk that compiled to `proto` (without counting) as
-    /// PUC's parser allocates it. Nothing is counted while luna builds its
-    /// own objects.
-    pub(super) fn acct_text_load(
-        &mut self,
-        src: &[u8],
-        parsed: &crate::frontend::parser::ParseScratch,
-        cl: Gc<LuaClosure>,
-    ) -> Result<(), SyntaxError> {
-        let proto = cl.proto;
-        let Some((marks, scanned)) = parsed.recorded() else {
-            return Ok(());
-        };
-        let chunk = parsed.parsed().0;
-        let d = self.heap.table_dialect;
-        let s = self.heap.sizes;
+impl<'s> Replay<'s> {
+    /// A replay of the load of `proto`, whose scanner made `scanned`.
+    fn new(
+        d: Dialect,
+        proto: Gc<Proto>,
+        version: crate::version::LuaVersion,
+        scanned: &'s Scanned,
+        names: &'s crate::frontend::ast::Names,
+        src: &'s [u8],
+    ) -> Replay<'s> {
         let (mut opening, mut closing) = (Vec::new(), Vec::new());
         walk(proto, &mut opening, &mut closing);
-        let shapes = crate::vm::dump::shapes(&proto, self.version).unwrap_or_default();
-        let mut r = Replay {
+        Replay {
             d,
             fs: Vec::new(),
             h: None,
@@ -174,34 +145,39 @@ impl Vm {
             label: Arr::default(),
             opening,
             opened: 0,
-            shapes,
+            shapes: crate::vm::dump::shapes(&proto, version).unwrap_or_default(),
             closing,
             closed: 0,
             source: proto.source,
             scanned,
-            names: &chunk.names,
+            names,
             src,
-            syms: vec![(None, 0); chunk.names.len()],
+            syms: vec![(None, 0); names.len()],
             reserved: [(None, 0); crate::frontend::parser::scan::RESERVED],
             anchors: 0,
-        };
-        // `luaY_parser` (5.5 `f_parser`) before the main function opens
-        match d {
-            Dialect::L51 => {}
-            Dialect::L52 => self.acct_main_closure(cl),
-            Dialect::L53 | Dialect::L54 => {
-                self.acct_main_closure(cl);
-                r.h = Some(self.heap.try_new_table()?);
-            }
-            Dialect::L55 => {
-                // the anchor table, then the closure anchored in it
-                r.h = Some(self.heap.try_new_table()?);
-                self.acct_main_closure(cl);
-                self.anchor_in_h(&mut r, None)?;
-            }
         }
+    }
+}
+
+impl Vm {
+    /// Count a text chunk that compiled to `proto` (without counting) as
+    /// PUC's parser allocates it. Nothing is counted while luna builds its
+    /// own objects.
+    pub(super) fn acct_text_load(
+        &mut self,
+        src: &[u8],
+        chunk: &crate::frontend::ast::Chunk,
+        rec: (&crate::frontend::parser::Marks, &Scanned),
+        cl: Gc<LuaClosure>,
+    ) -> Result<(), SyntaxError> {
+        let proto = cl.proto;
+        let (marks, scanned) = rec;
+        let d = self.heap.table_dialect;
+        let s = self.heap.sizes;
+        let mut r = Replay::new(d, proto, self.version, scanned, &chunk.names, src);
+        self.replay_begin(&mut r, cl)?;
         let log = self.compile_scratch.puc_log.take();
-        let replayed = self.replay_log(&mut r, &log, chunk, marks);
+        let replayed = self.replay_log(&mut r, &log, chunk, marks, None);
         self.compile_scratch.puc_log = log;
         replayed?;
         // 5.1's `f_parser` makes the closure now; the others give it its
@@ -221,15 +197,46 @@ impl Vm {
                 None => self.heap.acct_obj(PucKind::Upval, s.upval),
             }
         }
-        // `luaD_protectedparser` frees the buffer and the descriptor arrays
+        self.replay_end(&r);
+        Ok(())
+    }
+
+    /// What PUC makes before the main function opens: from 5.2 the main
+    /// closure, from 5.3 the chunk's table (5.5 anchors the closure in it).
+    fn replay_begin(&mut self, r: &mut Replay, cl: Gc<LuaClosure>) -> Result<(), SyntaxError> {
+        // `luaY_parser` (5.5 `f_parser`) before the main function opens;
+        // 5.1's `f_parser` checks for a collection first
+        #[cfg(feature = "gc-trace")]
+        if r.d == Dialect::L51 {
+            self.trace_checkpoint();
+        }
+        match r.d {
+            Dialect::L51 => {}
+            Dialect::L52 => self.acct_main_closure(cl),
+            Dialect::L53 | Dialect::L54 => {
+                self.acct_main_closure(cl);
+                r.h = Some(self.heap.try_new_table()?);
+            }
+            Dialect::L55 => {
+                // the anchor table, then the closure anchored in it
+                r.h = Some(self.heap.try_new_table()?);
+                self.acct_main_closure(cl);
+                self.anchor_in_h(r, None)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `luaD_protectedparser` frees the scanner's buffer and the parser's
+    /// descriptor arrays.
+    fn replay_end(&mut self, r: &Replay) {
         self.heap.acct_block(r.buff, 0);
-        if d != Dialect::L51 {
-            let (vd, ld) = crate::runtime::puc_size::dyd_sizes(d);
+        if r.d != Dialect::L51 {
+            let (vd, ld) = crate::runtime::puc_size::dyd_sizes(r.d);
             for (a, e) in [(r.actvar, vd), (r.gt, ld), (r.label, ld)] {
                 self.heap.acct_block(a.cap * e, 0);
             }
         }
-        Ok(())
     }
 
     /// The strings PUC's prototypes under `p` keep for their local

@@ -58,6 +58,21 @@ pub(crate) struct Recording {
     found: Option<Found>,
 }
 
+impl Recording {
+    /// `rec` emptied for a load's recording.
+    pub(super) fn cleared(rec: Option<Box<Recording>>) -> Box<Recording> {
+        let mut rec = rec.unwrap_or_default();
+        rec.marks.clear();
+        rec.scanned.strings.clear();
+        rec.scanned.peaks.clear();
+        rec.strings = true;
+        rec.last_end = 0;
+        rec.next_sym = 0;
+        rec.reserved_seen = 0;
+        rec
+    }
+}
+
 /// A token of the source: the line PUC reports an error on it at, the
 /// token as `near` shows it, and where it is in the source.
 pub(crate) struct Found {
@@ -104,8 +119,8 @@ mod scan_buf;
 use scan_buf::{ScanKind, ScanText, Scanned};
 /// What the load's replay needs of the scanner's record.
 pub(crate) mod scan {
-    pub(crate) use super::scan_buf::grown;
     pub(crate) use super::scan_buf::{RESERVED, ScanKind, ScanText, Scanned};
+    pub(crate) use super::scan_buf::{grown, peak};
 }
 
 fn record(
@@ -164,14 +179,7 @@ impl Parser<'_> {
     /// Record this parse in `rec` (emptied first, keeping its vectors), or
     /// a new recording, with the strings the scanner makes.
     pub(super) fn record_load(&mut self, rec: Option<Box<Recording>>) {
-        let mut rec = rec.unwrap_or_default();
-        rec.marks.clear();
-        rec.scanned.strings.clear();
-        rec.scanned.peaks.clear();
-        rec.strings = true;
-        rec.last_end = 0;
-        rec.next_sym = 0;
-        rec.reserved_seen = 0;
+        let rec = Recording::cleared(rec);
         self.start_recording(Some(rec));
     }
 

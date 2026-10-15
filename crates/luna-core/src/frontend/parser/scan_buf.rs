@@ -52,7 +52,7 @@ pub(crate) struct Scanned {
 /// The most bytes the scanner holds in its buffer while it reads the
 /// whitespace and comments `gap` and then the token `raw` (its source
 /// text).
-pub(super) fn peak(version: LuaVersion, gap: &[u8], raw: &[u8]) -> usize {
+pub(crate) fn peak(version: LuaVersion, gap: &[u8], raw: &[u8]) -> usize {
     let tok = match raw.first() {
         Some(b'"' | b'\'') => short_string(version, raw),
         Some(b'[') if raw.len() > 1 => raw.len() - long_open_newline(raw),
@@ -69,7 +69,7 @@ pub(super) fn peak(version: LuaVersion, gap: &[u8], raw: &[u8]) -> usize {
 /// text as one byte each.
 fn long_open_newline(raw: &[u8]) -> usize {
     let open = raw.iter().skip(1).take_while(|&&c| c == b'=').count() + 2;
-    let body = &raw[open..];
+    let body = raw.get(open..).unwrap_or(&[]);
     let mut drop = newline_len(body);
     // each `\r\n` / `\n\r` pair inside is saved as one `\n`
     let mut i = drop;
@@ -98,7 +98,7 @@ fn newline_len(s: &[u8]) -> usize {
 /// decoded.
 fn short_string(version: LuaVersion, raw: &[u8]) -> usize {
     let keeps = version >= LuaVersion::Lua53;
-    let body = &raw[1..raw.len() - 1];
+    let body = raw.get(1..raw.len().saturating_sub(1)).unwrap_or(&[]);
     // the opening quote is saved
     let (mut len, mut peak) = (1usize, 1usize);
     let mut i = 0;
@@ -122,16 +122,14 @@ fn short_string(version: LuaVersion, raw: &[u8]) -> usize {
                 (1, 0, j - i)
             }
             b'u' => {
-                let digits = body[i + 2..]
-                    .iter()
-                    .take_while(|c| c.is_ascii_hexdigit())
-                    .count();
-                let s = std::str::from_utf8(&body[i + 2..i + 2 + digits]).unwrap_or("0");
+                let hex = body.get(i + 2..).unwrap_or(&[]);
+                let digits = hex.iter().take_while(|c| c.is_ascii_hexdigit()).count();
+                let s = std::str::from_utf8(&hex[..digits]).unwrap_or("0");
                 let v = u32::from_str_radix(s, 16).unwrap_or(0);
                 (3 + digits, utf8_len(v), digits + 3)
             }
             b'0'..=b'9' => {
-                let digits = body[i..]
+                let digits = body[i.min(body.len())..]
                     .iter()
                     .take(3)
                     .take_while(|c| c.is_ascii_digit())

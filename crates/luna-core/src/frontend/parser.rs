@@ -123,7 +123,7 @@ fn parse_from_source<'s>(
     scratch.failed = None;
     let cur = match lex.next_token() {
         Ok(cur) => cur,
-        Err(e) => return Err(lex.out_of_memory().map_or(e, SyntaxError::from)),
+        Err(e) => return Err(scratch.first_failed(lex, e)),
     };
     let ParseScratch {
         chunk,
@@ -149,11 +149,10 @@ fn parse_from_source<'s>(
         return Err(o.into());
     }
     if r.is_err() {
-        *failed = Some(Failed {
-            at: p.tok_ix,
-            scanning: p.lex_failed,
-        });
+        *failed = Some(p.failure());
         *streamed = p.lex.take_streamed();
+        // a counted load replays the tokens read up to the failure
+        p.chunk.names = p.lex.take_names();
     }
     let (block, end_line) = r?;
     let Parser {
@@ -223,6 +222,7 @@ impl<'s> Parser<'s> {
             upval_chain_51,
             tok_ix: 0,
             lex_failed: false,
+            near_kind: Default::default(),
             rec: None,
         })
     }
@@ -290,8 +290,10 @@ struct Parser<'s> {
     upval_chain_51: LVec<FnUvSlot>,
     /// the number of `tok` among the tokens read, the first being 0
     tok_ix: u32,
-    /// the scanner failed to read the token after `tok`
+    /// the scanner failed to read the token after `tok`; the near-token
+    /// of the error the parser raised
     lex_failed: bool,
+    near_kind: std::cell::Cell<crate::frontend::error::NearKind>,
     /// set while parsing again to place a compile error (see [`Marks`])
     rec: Option<Box<marks::Recording>>,
 }

@@ -88,3 +88,30 @@ impl fmt::Display for SyntaxError {
 }
 
 impl std::error::Error for SyntaxError {}
+
+/// What PUC's scanner quoted as the near-token of the error a parse
+/// failed with, which decides what it allocates for it: none, `<eof>`, a
+/// byte, a reserved word or symbol, the buffer (a name, a string, a
+/// lexer error inside one), or a numeral's buffer (with its terminating
+/// zero).
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub(crate) enum NearKind {
+    #[default]
+    None,
+    Eof,
+    Char,
+    Fixed,
+    Text,
+    Numeral,
+}
+
+impl crate::frontend::token::Near<'_> {
+    pub(crate) fn kind(&self) -> NearKind {
+        match self {
+            crate::frontend::token::Near::Eof => NearKind::Eof,
+            crate::frontend::token::Near::Char(_) => NearKind::Char,
+            crate::frontend::token::Near::Fixed(_) => NearKind::Fixed,
+            crate::frontend::token::Near::Text(_) => NearKind::Text,
+        }
+    }
+}

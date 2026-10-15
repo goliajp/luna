@@ -133,6 +133,16 @@ impl<'s> TokenSource<'s> {
         }
     }
 
+    /// The near-token of the scanner's error, and where the token it was
+    /// reading starts and where it stopped.
+    pub(super) fn scan_state(&self) -> (crate::frontend::error::NearKind, usize, usize) {
+        match self {
+            TokenSource::Lexer(l) => (l.near_kind.get(), l.tok_start, l.pos()),
+            TokenSource::Stream(l) => (l.near_kind.get(), l.tok_start, l.pos()),
+            TokenSource::PreExpanded { .. } => Default::default(),
+        }
+    }
+
     /// PUC `ls->linenumber`: where the scanner stands, which is where every
     /// syntax error is reported.
     pub(super) fn line(&self) -> u32 {
