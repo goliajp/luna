@@ -22,7 +22,7 @@ use crate::vm::exec::Vm;
 const GC_STEP_OBJS: usize = 32;
 
 /// luna's own pacing defaults: heap growth before a new cycle (%), sweep work
-/// per safe point (see `Vm::maybe_collect_garbage`), and objects per step.
+/// per safe point (see `Vm::checkpoint`), and objects per step.
 pub(crate) const LUNA_PAUSE: i64 = 200;
 pub(crate) const LUNA_STEPMUL: i64 = 100;
 const LUNA_STEPSIZE: i64 = 13;

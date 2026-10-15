@@ -99,6 +99,9 @@ repl-line-editor = ["dep:rustyline"]
 # log the collector's accounting for comparison with an instrumented PUC
 # build (see luna-core's `gc-trace`)
 gc-trace = ["luna-core/gc-trace"]
+# a full collection at every collector checkpoint (see luna-core's
+# `gc-stress`)
+gc-stress = ["luna-core/gc-stress"]
 
 # opt-in LLVM 18 alt JIT backend. Default OFF; Cranelift remains the
 # default backend. With this feature enabled, the

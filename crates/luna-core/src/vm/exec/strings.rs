@@ -102,7 +102,7 @@ impl Vm {
         if out != base_a {
             self.stack[out as usize] = self.stack[base_a as usize];
         }
-        self.maybe_collect_garbage(base_a + 1);
+        self.checkpoint(base_a + 1);
         Ok(())
     }
 

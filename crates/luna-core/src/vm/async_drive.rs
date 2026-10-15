@@ -294,7 +294,7 @@ impl Vm {
         // Same post-call GC checkpoint the sync path runs: the native
         // may have allocated, and the live boundary is now the result
         // window.
-        self.maybe_collect_garbage(self.top);
+        self.checkpoint(self.top);
         Ok(())
     }
 }

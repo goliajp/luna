@@ -108,7 +108,7 @@ impl Vm {
         } else {
             inst.a() + 1
         };
-        self.maybe_collect_garbage(base + live);
+        self.checkpoint(base + live);
         Ok(())
     }
 
