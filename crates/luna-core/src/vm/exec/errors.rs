@@ -85,6 +85,10 @@ impl Vm {
         if let Some(e) = self.runerror_pushes(conv, varinfo) {
             return e;
         }
+        // a native's error is `luaL_error`'s, which checks where it pushes
+        if !self.native_on_top() {
+            self.runerror_checkpoint();
+        }
         self.varinfo_pushed = false;
         // `luaG_runerror` pushes the message (a native's stack only: a
         // Lua frame's handler goes above its window)

@@ -129,7 +129,7 @@ impl Vm {
                 }
                 Value::Native(nc) => {
                     // a C function gets `LUA_MINSTACK` slots (PUC `luaD_precall`)
-                    self.check_lua_stack(func_slot + 1 + nargs, 20, false)?;
+                    self.check_lua_stack(func_slot + 1 + nargs, 20, true)?;
                     if nc.kind != NativeKind::Plain
                         && let Some(r) = self.begin_special_native(nc, func_slot, nargs, nresults)
                     {
@@ -170,6 +170,7 @@ impl Vm {
                     // (native → Lua → native) must keep the outermost
                     // window rooted.
                     self.gc_top = self.gc_top.max(func_slot + 1 + nargs);
+                    self.precall_checkpoint(func_slot + 1 + nargs);
                     // PUC luaD_precall fires the "call" hook for C functions too.
                     // A yield inside the native (coroutine.yield) propagates an
                     // Err and the matching "return" hook fires on resume instead.

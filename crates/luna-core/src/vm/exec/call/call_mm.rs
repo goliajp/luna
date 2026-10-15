@@ -20,7 +20,7 @@ impl Vm {
         // it before looking for one, 5.1 and 5.2 once the hole is open
         let top = func_slot + 1 + nargs;
         if self.version >= LuaVersion::Lua53 {
-            self.check_lua_stack(top, 1, false)?;
+            self.check_lua_stack(top, 1, true)?;
         }
         let mm = self.get_mm(v, Mm::Call);
         if mm.is_nil() || self.call_mm_unusable(mm) {

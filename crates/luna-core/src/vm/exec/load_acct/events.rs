@@ -249,6 +249,11 @@ impl Vm {
         {
             self.store_in(h, Value::Table(k), Value::Nil)?;
         }
+        // 5.2 on, `close_func` checks for a collection at its end
+        #[cfg(feature = "gc-trace")]
+        if d != Dialect::L51 {
+            self.trace_checkpoint();
+        }
         Ok(())
     }
 

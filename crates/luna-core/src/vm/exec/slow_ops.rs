@@ -80,7 +80,11 @@ impl Vm {
                 self.stack[call + 1] = self.stack[(abs + 1) as usize];
                 self.stack[call] = self.stack[abs as usize];
                 let nvars = inst.c() as i32;
-                self.begin_call(call as u32, Some(2), nvars, false)?;
+                if !self.begin_call(call as u32, Some(2), nvars, false)? {
+                    // 5.1's `luaD_call` of a C iterator checks for a
+                    // collection when it returns
+                    self.call_return_checkpoint(call as u32 + nvars as u32);
+                }
             }
             Op::ExtraArg => unreachable!("EXTRAARG executed directly"),
             op => unreachable!("{op:?} is run by the fast loop"),
@@ -112,7 +116,7 @@ impl Vm {
         {
             // 5.3 on make sure of a slot for `__call` before finding none
             if self.version >= LuaVersion::Lua53 {
-                self.check_lua_stack(abs + 1 + nargs, 1, false)?;
+                self.check_lua_stack(abs + 1 + nargs, 1, true)?;
             }
             return Err(self.call_err_at(func, abs + 1 + nargs));
         }
@@ -175,7 +179,7 @@ impl Vm {
                 0
             };
             let fsize = u32::from(cl.proto.max_stack).saturating_sub(delta);
-            self.check_lua_stack(abs + 1 + nargs, fsize, false)?;
+            self.check_lua_stack(abs + 1 + nargs, fsize, true)?;
             // 5.1's `CallInfo` of the callee is taken before this one goes
             if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
                 self.grow_frames()?;
