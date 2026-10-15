@@ -114,9 +114,9 @@ pub use gc_ptr::{Gc, GcObject};
 /// Incremental GC phase.
 ///   * `Pause`     — no cycle in progress; all objects current-white.
 ///   * `Propagate` — gray queue + propagate-state populated; mutator runs
-///                   alongside `gc_step_propagate(budget)` calls. Born objects
-///                   stamp the current-white; barriers re-gray modified
-///                   parents. Transitions to `Sweep` via `gc_finish_atomic`.
+///                   alongside the steps. New objects are current-white;
+///                   barriers mark children or send parents to gray again.
+///                   Transitions to `Sweep` via `gc_finish_atomic`.
 ///   * `Sweep`     — `all` is swept in place, from after `sweep_prev`.
 ///
 /// `mark_all` (the STW path used by `collect_ex`) sequences start_propagate +
