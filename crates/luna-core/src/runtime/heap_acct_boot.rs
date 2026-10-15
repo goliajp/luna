@@ -38,10 +38,11 @@ impl Heap {
         if d >= Dialect::L53 {
             self.acct_string(memerr);
         }
+        // PUC fixes these (`luaC_fix`, 5.1 `luaS_fix`): never collected
         for name in tm_names(d) {
-            self.try_intern(name.as_bytes())?;
+            let s = self.try_intern(name.as_bytes())?;
+            self.puc.pins.push(s);
         }
-        // PUC fixes these (`luaC_fix`): never collected
         if d >= Dialect::L53 {
             let s = self.try_intern(b"_ENV")?;
             self.puc.pins.push(s);
