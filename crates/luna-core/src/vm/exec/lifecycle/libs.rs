@@ -69,10 +69,10 @@ impl Vm {
                     // luna's own default Lua path stands for PUC's
                     if name == b"path"
                         && let Some(&puc) =
-                            self.heap.puc.kept_long.iter().find(|b| {
+                            self.heap.puc.kept_long.iter().find(|(b, _)| {
                                 b.ends_with(b"?.lua") || b.windows(5).any(|w| w == b"?.lua")
                             })
-                        && puc != s.as_bytes()
+                        && puc.0 != s.as_bytes()
                     {
                         self.heap.acct_stand_in(s, puc);
                     }
@@ -80,6 +80,7 @@ impl Vm {
             }
         }
         self.heap.puc.kept_long = Vec::new();
+        self.lib_stand_ins();
         // each library opens in a call one level down, whose `CallInfo` is
         // in the record
         if self.version != LuaVersion::Lua51 {
@@ -88,6 +89,72 @@ impl Vm {
         // the collector starts from no debt, as `lua_gc(L, LUA_GCRESTART)`
         // after `luaL_openlibs` leaves it
         self.heap.gc_set_stopped(false);
+    }
+
+    /// The library objects of luna's, made without counting, that stand
+    /// for PUC's C closures with an upvalue and userdata: the record
+    /// counted PUC's; a marking counts them and a sweep frees them with
+    /// luna's. (5.1's C functions are all closures, counted as luna's.)
+    fn lib_stand_ins(&mut self) {
+        if self.version == LuaVersion::Lua51 {
+            return;
+        }
+        let s = self.heap.sizes;
+        let field = |vm: &Vm, t: &[u8], k: &[u8]| {
+            let t = vm.heap.find_interned(t)?;
+            let Value::Table(t) = vm.globals.get(Value::Str(t)) else {
+                return None;
+            };
+            Some(t.get(Value::Str(vm.heap.find_interned(k)?)))
+        };
+        let stand = |vm: &mut Vm, v: Option<Value>, sizes: Vec<usize>| {
+            let h = match v {
+                Some(Value::Native(n)) => {
+                    vm.heap.unfix_native(n);
+                    n.as_ptr() as *mut _
+                }
+                Some(Value::Userdata(u)) => u.as_ptr() as *mut _,
+                _ => return,
+            };
+            if crate::runtime::heap::is_uncounted(h) {
+                vm.heap.puc.stand_ins.push((h, sizes));
+            }
+        };
+        // `require` and the searchers, with `package` as their upvalue
+        let req = self.heap.find_interned(b"require").map(|k| self.globals.get(Value::Str(k)));
+        stand(self, req, vec![s.c_closure(1)]);
+        if let Some(Value::Table(searchers)) = field(self, b"package", b"searchers") {
+            for i in 1..=4 {
+                stand(self, Some(searchers.get(Value::Int(i))), vec![s.c_closure(1)]);
+            }
+        }
+        // 5.4 on, `random` and `randomseed` share the generator's state
+        if self.version >= LuaVersion::Lua54 {
+            let random = field(self, b"math", b"random");
+            stand(self, random, vec![s.userdata(0, 32), s.c_closure(1)]);
+            let seed = field(self, b"math", b"randomseed");
+            stand(self, seed, vec![s.c_closure(1)]);
+        }
+        // 5.5 keeps its default search paths as external strings over its
+        // own bytes (`LSTRFIX`): a header each
+        if self.version == LuaVersion::Lua55 {
+            for name in [&b"path"[..], b"cpath"] {
+                let p = field(self, b"package", name);
+                if let Some(Value::Str(p)) = p
+                    && !self.heap.puc.stand_ins.iter().any(|s| s.0 == p.as_ptr() as *mut _)
+                {
+                    let h = p.as_ptr() as *mut _;
+                    if crate::runtime::heap::is_uncounted(h) {
+                        self.heap.puc.stand_ins.push((h, vec![s.lngstr_hdr]));
+                    }
+                }
+            }
+        }
+        // the standard files, each a `LStream`
+        for name in [&b"stdin"[..], b"stdout", b"stderr"] {
+            let f = field(self, b"io", name);
+            stand(self, f, vec![s.userdata(0, 2 * s.ptr)]);
+        }
     }
 
     /// Install the base library (`print`, `type`, `pairs`, `tostring`,

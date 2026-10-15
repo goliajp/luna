@@ -289,6 +289,8 @@ impl Heap {
                 ObjTag::Userdata => {
                     if !is_uncounted(h) {
                         self.acct_free((*(h as *mut Userdata)).puc_size);
+                    } else {
+                        self.free_stand_in(h);
                     }
                     self.free_block(h as *mut Userdata);
                 }
@@ -299,6 +301,8 @@ impl Heap {
                         // its block goes back first, then its header
                         self.trace_raw((*s).len() + 1, 0);
                         self.acct_free(self.sizes.lngstr_hdr + 2 * self.sizes.ptr);
+                    } else if (*h).sub & acct::FIXED_EXT != 0 {
+                        self.acct_free(self.sizes.lngstr_hdr);
                     } else if (*h).sub & UNCOUNTED != 0 {
                         self.free_stand_in(h);
                     } else {

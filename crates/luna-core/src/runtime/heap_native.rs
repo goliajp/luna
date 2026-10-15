@@ -132,4 +132,26 @@ impl Heap {
         }
         Ok(g)
     }
+
+    /// A library function made fixed (PUC's light C function) that stands
+    /// for a C closure of PUC's: an object again, back on `all`, and one
+    /// the count leaves to what it stands for.
+    pub(crate) fn unfix_native(&mut self, n: Gc<NativeClosure>) {
+        let h = n.as_ptr() as *mut GcHeader;
+        let mut link: *mut *mut GcHeader = &mut self.fixed;
+        // SAFETY: the links of `fixed` lead to live objects
+        unsafe {
+            while !(*link).is_null() {
+                if *link == h {
+                    *link = (*h).next;
+                    (*h).next = self.all;
+                    (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.current_white);
+                    self.all = h;
+                    acct::set_uncounted(h, true);
+                    return;
+                }
+                link = &mut (**link).next;
+            }
+        }
+    }
 }
