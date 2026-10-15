@@ -1,6 +1,7 @@
 //! `table.concat`.
 
 use super::*;
+use crate::vm::puc_buffer::PucBuffer;
 
 /// The separator `concat` appends: the argument string itself (rooted by
 /// the call frame) or a number's rendering.
@@ -56,35 +57,40 @@ pub(in crate::vm::lib_table) fn t_concat(
         (tv, sep, i, last)
     };
     let mut out = vm.new_buf();
+    let mut b = PucBuffer::new(vm);
     // PUC appends `[i, last)` each followed by the separator, then `last`
     // on its own, so `last == maxinteger` never overflows the counter.
     let mut k = i;
     while k < last {
-        concat_field(vm, tv, k, &mut out)?;
+        concat_field(vm, tv, k, &mut out, &mut b)?;
         vm.buf_push(&mut out, sep.bytes())?;
+        b.add(vm, &out, sep.bytes().len())?;
         k += 1;
     }
     if k == last {
-        concat_field(vm, tv, last, &mut out)?;
+        concat_field(vm, tv, last, &mut out, &mut b)?;
     }
-    let s = vm.lib_built_str(&out)?;
+    if out.len() > crate::runtime::string::MAX_LEN {
+        return Err(vm.rt_err("string length overflow"));
+    }
+    let s = b.finish(vm, &out)?;
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[s])
+    vm.nat_ret(fs, &[Value::Str(s)])
 }
 
-fn concat_field(vm: &mut Vm, tv: Value, k: i64, out: &mut LVec<u8>) -> Result<(), LuaError> {
+fn concat_field(
+    vm: &mut Vm,
+    tv: Value,
+    k: i64,
+    out: &mut LVec<u8>,
+    b: &mut PucBuffer,
+) -> Result<(), LuaError> {
     // the buffer's slot, then the value until it is added
     let buf = vm.buffer_slot(out.len());
-    match tab_geti(vm, tv, k, buf)? {
-        Value::Str(s) => vm.buf_push(out, s.as_bytes())?,
-        Value::Int(x) => {
-            let mut buf = [0u8; 20];
-            vm.buf_push(out, crate::numeric::write_i64_dec(x, &mut buf))?
-        }
-        v @ Value::Float(_) => {
-            let b = argcheck::to_str_bytes(vm, v).expect("a number converts");
-            vm.buf_push(out, &b)?
-        }
+    // `luaL_addvalue`, which turns a number into a string first
+    let s = match tab_geti(vm, tv, k, buf)? {
+        Value::Str(s) => s,
+        v @ (Value::Int(_) | Value::Float(_)) => vm.number_string(v)?,
         // `luaL_typename`: the base type name, never `__name`.
         v => {
             let msg = vm.fmt_bytes(format_args!(
@@ -95,6 +101,7 @@ fn concat_field(vm: &mut Vm, tv: Value, k: i64, out: &mut LVec<u8>) -> Result<()
             // "invalid value (at index %d) in table for 'concat'"
             return Err(crate::vm::builtins::raise_bytes_fmt(vm, 1, &msg));
         }
-    }
-    Ok(())
+    };
+    vm.buf_push(out, s.as_bytes())?;
+    b.add_value(vm, out, s)
 }
