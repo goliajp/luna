@@ -18,6 +18,7 @@ pub(in crate::vm::dump) mod puc_52;
 pub(in crate::vm::dump) mod puc_53;
 pub(in crate::vm::dump) mod puc_54;
 pub(in crate::vm::dump) mod puc_55;
+pub(crate) mod shape;
 
 use super::error::Bad;
 use crate::runtime::function::Proto;
