@@ -102,6 +102,8 @@ struct Replay<'s> {
     /// a distinct key for each object 5.5 anchors that luna has no object
     /// for
     anchors: usize,
+    /// the long strings the scanner made that no constant has taken yet
+    longs: Vec<Gc<crate::runtime::LuaStr>>,
     /// what the reader of a load read piece by piece counted, and the token
     /// whose scan called it (-1: before the parse starts)
     splices: std::collections::VecDeque<(i64, crate::runtime::heap::Deferred)>,
@@ -158,6 +160,7 @@ impl<'s> Replay<'s> {
             syms: vec![(None, 0); names.len()],
             reserved: [(None, 0); crate::frontend::parser::scan::RESERVED],
             anchors: 0,
+            longs: Vec::new(),
             splices: Default::default(),
         }
     }
