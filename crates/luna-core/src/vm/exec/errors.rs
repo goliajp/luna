@@ -219,18 +219,6 @@ impl Vm {
             ErrorStatus::Run
         }
     }
-
-    /// Position prefix of the currently executing Lua frame. PUC `luaL_error`
-    /// calls `luaL_where(L, 1)` which reads `L->ci->previous`. When the prior
-    /// frame is a C function (e.g. a pcall Cont parked above `require`'s
-    /// native call), PUC pushes no prefix — match that by looking only at the
-    /// topmost frame directly and bailing if it is anything but a Lua frame.
-    pub(crate) fn position_prefix(&self) -> Option<String> {
-        Some(match self.error_position()? {
-            ErrPos::At(src, line) => format!("{}:{line}: ", String::from_utf8_lossy(&src)),
-            ErrPos::NoSource => self.stripped_prefix(),
-        })
-    }
 }
 
 /// Where an error is raised: a chunk's id and a line, or a function with

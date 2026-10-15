@@ -159,9 +159,10 @@ impl Vm {
     pub(crate) fn call_err(&mut self, v: Value) -> LuaError {
         let extra = self.call_target_varinfo(v);
         let tn = self.obj_typename(v);
-        let msg = self.compose_type_err("call", &tn, &extra);
         let conv = self.type_err_conv(&extra);
-        self.runerror_named(&msg, &extra, conv)
+        let e = self.typeerror_msg("call", &tn, &extra, conv);
+        self.varinfo_pushed = self.version() >= LuaVersion::Lua53 && !extra.is_empty();
+        e
     }
 
     /// Name the offending call target. A metamethod dispatch pushes a `Cont`
@@ -219,12 +220,23 @@ impl Vm {
     /// current arithmetic instruction when it can be recovered from bytecode.
     pub(crate) fn no_int_rep_err(&mut self) -> LuaError {
         let extra = self.bad_operand_varinfo();
-        // `"number%s has no integer representation"`
-        self.runerror_named(
-            &format!("number{extra} has no integer representation"),
-            &extra,
+        // `varinfo`'s string, then `"number%s has no integer representation"`
+        if let Some((kind, name)) = super::type_err::split_varinfo(&extra) {
+            use crate::runtime::puc_fmt::FmtArg::S;
+            let args = [S(kind.as_bytes()), S(name.as_bytes())];
+            if let Err(e) = self.heap.pushfstring(b" (%s '%s')", &args) {
+                return e.into();
+            }
+        }
+        let args = [crate::runtime::puc_fmt::FmtArg::S(extra.as_bytes())];
+        let e = self.runerror_fmt(
+            b"number%s has no integer representation",
+            &args,
             1,
-        )
+            !extra.is_empty(),
+        );
+        self.varinfo_pushed = self.version() >= LuaVersion::Lua53 && !extra.is_empty();
+        e
     }
 
     /// Inspect the current frame's faulting instruction: find the register
