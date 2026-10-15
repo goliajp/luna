@@ -91,8 +91,30 @@ impl Vm {
         }
         let proto = if is_bytecode {
             let allow_puc = self.puc_bytecode_loading;
-            crate::vm::dump::undump_named(src, &mut self.heap, self.version, allow_puc, chunkname)
+            if self.heap.puc.silent > 0 {
+                crate::vm::dump::undump_named(
+                    src,
+                    &mut self.heap,
+                    self.version,
+                    allow_puc,
+                    chunkname,
+                )
                 .map_err(SyntaxError::unpositioned)?
+            } else {
+                // made without counting, then counted as PUC's undumper
+                // makes it
+                self.heap.puc.silent += 1;
+                let v = self.version;
+                let made =
+                    crate::vm::dump::undump_named(src, &mut self.heap, v, allow_puc, chunkname)
+                        .map_err(SyntaxError::unpositioned)
+                        .and_then(|p| self.hold_puc_names(p).map(|()| p))
+                        .and_then(|p| self.close_chunk(p));
+                self.heap.puc.silent -= 1;
+                let cl = made?;
+                self.acct_undump(src, cl)?;
+                return Ok(cl);
+            }
         } else if self.version.is_macro_lua() {
             let source = match name {
                 Some(n) => n,

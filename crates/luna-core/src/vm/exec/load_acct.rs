@@ -27,6 +27,7 @@ mod events;
 mod failed;
 mod scan;
 mod syntax_msg;
+mod undump;
 
 use arr::Arr;
 

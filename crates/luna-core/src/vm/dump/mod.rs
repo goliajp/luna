@@ -23,6 +23,7 @@ mod header;
 mod luna;
 mod puc;
 mod puc_writer;
+pub(crate) use puc::shape::{Arr, UEv};
 pub(crate) use puc_writer::{Shape, shapes};
 mod reader;
 mod verify;
@@ -122,6 +123,20 @@ pub(crate) fn undump_named(
             out
         }
     })
+}
+
+/// The steps PUC's undumper allocates in loading the binary chunk `bytes`
+/// (one that undumps), `None` for a chunk not in a PUC format.
+pub(crate) fn undump_events(bytes: &[u8]) -> Option<Vec<UEv<'_>>> {
+    let header = match bytes.get(4)? {
+        0x51 => puc::puc_51::HEADER.len(),
+        0x52 => puc::puc_52::HEADER.len(),
+        0x53 => puc::puc_53::HEADER.len(),
+        0x54 => puc::puc_54::HEADER.len(),
+        0x55 => puc::puc_55::HEADER.len(),
+        _ => return None,
+    };
+    puc::shape::undump_events(bytes, header)
 }
 
 /// Whether `bytes` is the start of a binary chunk that ends too early: a
