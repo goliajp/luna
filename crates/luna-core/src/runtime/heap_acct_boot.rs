@@ -193,6 +193,11 @@ impl Heap {
                     self.raw_event(2, x, 0);
                     self.puc.strt_nuse -= 1;
                 }
+                // a step of PUC's, whose frees the trace compares as a set
+                8 | 9 => {
+                    #[cfg(feature = "gc-trace")]
+                    self.trace.line(format_args!("{}", if op[0] == 8 { "g" } else { "G" }));
+                }
                 1 if self.table_dialect == Dialect::L53
                     && x == self.stack_bytes(shrunk.unwrap_or(stack)) =>
                 {
