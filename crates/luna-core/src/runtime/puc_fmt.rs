@@ -38,6 +38,9 @@ const BUFVFS_55: usize = 60 + 64 + 95;
 /// 5.4's `MAXNUMBER2STR`: the room a numeral asks of the buffer.
 const MAXNUMBER2STR_54: usize = 44;
 
+#[path = "puc_concat.rs"]
+mod concat;
+
 impl Heap {
     fn float_fmt(&self) -> FloatFmt {
         match self.table_dialect {
@@ -59,7 +62,11 @@ impl Heap {
 
     /// The string of `fmt` with each directive replaced by the next of
     /// `args`, made as PUC's `lua_pushfstring` makes it.
-    pub(crate) fn pushfstring(&mut self, fmt: &[u8], args: &[FmtArg<'_>]) -> Result<Gc<LuaStr>, Oom> {
+    pub(crate) fn pushfstring(
+        &mut self,
+        fmt: &[u8],
+        args: &[FmtArg<'_>],
+    ) -> Result<Gc<LuaStr>, Oom> {
         match self.table_dialect {
             Dialect::L54 => self.pushfstring_54(fmt, args),
             Dialect::L55 => self.pushfstring_55(fmt, args),
@@ -99,7 +106,7 @@ impl Heap {
                 }
                 (_, Some(&FmtArg::U(u))) => {
                     let mut b = [0u8; 8];
-                    let l = crate::runtime::string::utf8_esc(&mut b, u);
+                    let l = utf8_esc(&mut b, u);
                     Value::Str(self.try_intern(&b[..l])?)
                 }
                 (_, None) => Value::Str(self.try_intern(&[b'%', spec])?),
@@ -170,7 +177,7 @@ impl Heap {
                 }
                 (_, Some(&FmtArg::U(u))) => {
                     let mut t = [0u8; 8];
-                    let l = crate::runtime::string::utf8_esc(&mut t, u);
+                    let l = utf8_esc(&mut t, u);
                     b.add_str(self, &t[..l])?;
                 }
                 (_, None) => b.add_str(self, &[b'%', spec])?,
@@ -224,7 +231,7 @@ impl Heap {
                 }
                 (_, Some(&FmtArg::U(u))) => {
                     let mut t = [0u8; 8];
-                    let l = crate::runtime::string::utf8_esc(&mut t, u);
+                    let l = utf8_esc(&mut t, u);
                     add(self, &mut out, &t[..l]);
                 }
                 (_, None) => add(self, &mut out, &rest[e..(e + 2).min(rest.len())]),
@@ -237,68 +244,6 @@ impl Heap {
             self.acct_block(size, 0);
         }
         Ok(s)
-    }
-
-    /// PUC `luaV_concat(L, total)` over the top `total` values of `st`,
-    /// every one a string or a number: what it makes, in its order, and
-    /// the one value it leaves in their place.
-    pub(crate) fn puc_concat(&mut self, st: &mut Vec<Value>, total: usize) -> Result<(), Oom> {
-        let d = self.table_dialect;
-        let mut total = total;
-        while total > 1 {
-            let top = st.len();
-            self.tostring_value(&mut st[top - 1])?;
-            let Value::Str(y) = st[top - 1] else {
-                unreachable!("converted above")
-            };
-            let mut n = 2;
-            if y.is_empty() {
-                self.tostring_value(&mut st[top - 2])?;
-            } else if d >= Dialect::L52 && matches!(st[top - 2], Value::Str(s) if s.is_empty()) {
-                st[top - 2] = Value::Str(y);
-            } else {
-                let mut tl = y.len();
-                n = 1;
-                while n < total {
-                    self.tostring_value(&mut st[top - n - 1])?;
-                    let Value::Str(s) = st[top - n - 1] else {
-                        unreachable!("converted above")
-                    };
-                    tl += s.len();
-                    n += 1;
-                }
-                if d <= Dialect::L52 {
-                    self.open_gbuff(tl);
-                }
-                let parts: Vec<&[u8]> = st[top - n..]
-                    .iter()
-                    .map(|v| match v {
-                        // SAFETY: the strings are held in `st` and no
-                        // collection runs while the parts are borrowed
-                        Value::Str(s) => unsafe { s.as_bytes_unbounded() },
-                        _ => unreachable!("converted above"),
-                    })
-                    .collect();
-                let s = self.try_intern_parts(&parts)?;
-                st[top - n] = Value::Str(s);
-            }
-            st.truncate(top - (n - 1));
-            total -= n - 1;
-        }
-        Ok(())
-    }
-
-    /// PUC's `tostring` of a concatenation's operand: a number becomes the
-    /// string of it.
-    fn tostring_value(&mut self, v: &mut Value) -> Result<(), Oom> {
-        let n = match *v {
-            Value::Int(i) => Num::Int(i),
-            Value::Float(f) => Num::Float(f),
-            _ => return Ok(()),
-        };
-        let t = self.number_text(n);
-        *v = Value::Str(self.try_intern(t.as_bytes())?);
-        Ok(())
     }
 }
 
@@ -355,4 +300,30 @@ impl Bufvfs {
         }
         Ok(())
     }
+}
+
+/// PUC `luaO_utf8esc`: `x` (up to 2^31-1) in extended UTF-8, written to
+/// the front of `out`; its length.
+pub(crate) fn utf8_esc(out: &mut [u8; 8], mut x: u32) -> usize {
+    if x < 0x80 {
+        out[0] = x as u8;
+        return 1;
+    }
+    let mut cont = [0u8; 6];
+    let mut n = 0;
+    let mut mfb: u32 = 0x3f;
+    loop {
+        cont[n] = 0x80 | (x & 0x3f) as u8;
+        n += 1;
+        x >>= 6;
+        mfb >>= 1;
+        if x <= mfb {
+            break;
+        }
+    }
+    out[0] = ((!mfb << 1) | x) as u8;
+    for (i, &b) in cont[..n].iter().rev().enumerate() {
+        out[1 + i] = b;
+    }
+    n + 1
 }

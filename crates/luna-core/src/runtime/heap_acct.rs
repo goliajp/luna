@@ -10,6 +10,10 @@ use super::*;
 use crate::runtime::puc_size::PucSizes;
 use crate::runtime::table::Dialect;
 
+#[path = "heap_ghost.rs"]
+mod ghost;
+pub(crate) use ghost::Ghost;
+
 /// PUC's structures luna has no object for, as far as the count goes.
 pub(crate) struct PucState {
     /// above 0, nothing is counted: objects PUC made at another point (or

@@ -166,11 +166,7 @@ impl Heap {
             meta_conts: 0,
             stale_frames: 0,
             stack_size,
-            frame_size: if l51 {
-                acct::BASIC_CI_51
-            } else {
-                u32::MAX
-            },
+            frame_size: if l51 { acct::BASIC_CI_51 } else { u32::MAX },
             ci_alloc: if l51 { u32::MAX } else { 0 },
             hook: crate::vm::exec::HookState::default(),
             globals,

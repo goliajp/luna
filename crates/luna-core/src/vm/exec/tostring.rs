@@ -78,7 +78,12 @@ impl Vm {
     /// PUC 5.1 `luaB_tostring` of `v`, argument `arg` of the native at
     /// `fs`, with no `__tostring`: a number is turned into a string in its
     /// argument slot (`lua_tostring`), the string pushed found there.
-    pub(crate) fn tostring_51(&mut self, v: Value, fs: u32, arg: u32) -> Result<Gc<LuaStr>, LuaError> {
+    pub(crate) fn tostring_51(
+        &mut self,
+        v: Value,
+        fs: u32,
+        arg: u32,
+    ) -> Result<Gc<LuaStr>, LuaError> {
         let r = match v {
             Value::Str(s) => return Ok(s),
             Value::Int(_) | Value::Float(_) => {
@@ -90,8 +95,10 @@ impl Vm {
             Value::Bool(b) => self.heap.try_intern(if b { b"true" } else { b"false" }),
             _ => {
                 let p = self.topointer(v);
-                self.heap
-                    .pushfstring(b"%s: %p", &[FmtArg::S(v.type_name().as_bytes()), FmtArg::P(p)])
+                self.heap.pushfstring(
+                    b"%s: %p",
+                    &[FmtArg::S(v.type_name().as_bytes()), FmtArg::P(p)],
+                )
             }
         };
         r.map_err(LuaError::from)

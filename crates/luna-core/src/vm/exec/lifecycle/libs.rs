@@ -62,7 +62,9 @@ impl Vm {
                     // luna's own default Lua path stands for PUC's
                     if name == b"path"
                         && let Some(&puc) =
-                            self.heap.puc.kept_long.iter().find(|b| b.ends_with(b"?.lua") || b.windows(5).any(|w| w == b"?.lua"))
+                            self.heap.puc.kept_long.iter().find(|b| {
+                                b.ends_with(b"?.lua") || b.windows(5).any(|w| w == b"?.lua")
+                            })
                         && puc != s.as_bytes()
                     {
                         self.heap.acct_stand_in(s, puc);

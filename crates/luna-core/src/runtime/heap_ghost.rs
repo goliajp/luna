@@ -61,7 +61,7 @@ impl Heap {
     /// # Safety
     /// `g` heads an unlinked record of this heap that nothing uses
     /// afterwards.
-    pub(super) unsafe fn free_ghost(&mut self, g: *mut Ghost) {
+    pub(in crate::runtime::heap) unsafe fn free_ghost(&mut self, g: *mut Ghost) {
         // SAFETY: the caller's contract
         unsafe {
             for &s in (*g).sizes.iter() {

@@ -25,6 +25,7 @@ mod native_act;
 mod native_top;
 mod raise;
 mod raise_protected;
+mod runerror;
 mod traceback;
 
 pub(crate) use chunk_id::{chunk_id, syntax_chunk_id};
