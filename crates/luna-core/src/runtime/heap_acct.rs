@@ -42,6 +42,9 @@ pub(crate) struct PucState {
     /// the number the last table, function, thread or userdata made got
     /// (`Heap::take_id`): its hash as a key, where PUC's is its address
     pub(crate) next_id: u32,
+    /// the load about to run was checked for a collection already (5.4+
+    /// `lua_load`, before its reader read)
+    pub(crate) load_checked: bool,
 }
 
 impl Default for PucState {
@@ -59,6 +62,7 @@ impl Default for PucState {
             own_tables: Vec::new(),
             load_msg: None,
             next_id: 0,
+            load_checked: false,
         }
     }
 }
@@ -218,12 +222,15 @@ impl Heap {
 
 #[path = "heap_acct_boot.rs"]
 mod boot;
+#[path = "heap_acct_defer.rs"]
+mod defer;
 #[path = "heap_acct_fmt.rs"]
 mod fmt;
 #[path = "heap_acct_parts.rs"]
 mod parts;
 #[path = "heap_acct_thread.rs"]
 mod thread;
+pub(crate) use defer::Deferred;
 pub(crate) use parts::ENV51;
 pub(crate) use thread::BASIC_CI_51;
 

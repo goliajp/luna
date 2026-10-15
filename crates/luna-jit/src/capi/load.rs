@@ -59,6 +59,7 @@ fn load(
     mode: *const c_char,
 ) -> c_int {
     let v = api.version();
+    api.vm.host_load_begin();
     // SAFETY: PUC's contract: a chunk name and a mode are null or
     // NUL-terminated strings
     let name = unsafe { c_bytes(chunkname) }.unwrap_or(b"?").to_vec();
@@ -67,9 +68,6 @@ fn load(
         .map(<[u8]>::to_vec)
         .or_else(|| (v >= LuaVersion::Lua55).then(|| b"bt".to_vec()));
     let at = api.top();
-    if v >= LuaVersion::Lua52 {
-        api.vm.host_nny_enter();
-    }
     // 5.5's parser anchors its work in a table on the stack, under what
     // the reader may push
     let r = if v >= LuaVersion::Lua55 {
@@ -83,9 +81,7 @@ fn load(
     } else {
         read_and_compile(api, reader, data, mode.as_deref(), &name)
     };
-    if v >= LuaVersion::Lua52 {
-        api.vm.host_nny_leave();
-    }
+    api.vm.host_load_end();
     match r {
         Ok(f) => {
             if v >= LuaVersion::Lua55 {

@@ -47,6 +47,8 @@ impl ScanText {
 pub(crate) struct Scanned {
     pub(crate) strings: Vec<(u32, ScanText, ScanKind)>,
     pub(crate) peaks: Vec<(u32, u32)>,
+    /// a streamed parse's: where each token ends (the byte read after it)
+    pub(crate) ends: Vec<u32>,
 }
 
 /// The most bytes the scanner holds in its buffer while it reads the

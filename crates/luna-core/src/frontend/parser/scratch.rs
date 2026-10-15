@@ -66,6 +66,17 @@ pub(crate) struct Parsed {
     /// the source of a parse that read it piece by piece, where a compile
     /// error is placed (a whole source is the caller's)
     pub(crate) src: Option<LVec<u8>>,
+    /// what a recording parse recorded (see [`ParseScratch::recorded`])
+    recording: Option<Box<marks::Recording>>,
+    recorded: bool,
+}
+
+impl Parsed {
+    /// What the parse recorded, when it was asked to.
+    pub(crate) fn recorded(&self) -> Option<(&marks::Marks, &marks::scan::Scanned)> {
+        let r = self.recording.as_deref().filter(|_| self.recorded)?;
+        Some((&r.marks, &r.scanned))
+    }
 }
 
 /// Where a parse failed: at token `at` (the first is 0), or reading the
@@ -144,7 +155,7 @@ impl ParseScratch {
             streamed: None,
             failed: None,
             record: false,
-            recording: None,
+            recording: p.recording,
             recorded: false,
         };
         s.clear();
@@ -197,7 +208,8 @@ impl ParseScratch {
             scan: (start as u32, pos as u32),
             near,
         });
-        self.recording = Some(marks::Recording::cleared(self.recording.take()));
+        let ends = matches!(lex, TokenSource::Stream(_));
+        self.recording = Some(marks::Recording::cleared(self.recording.take(), ends));
         self.recorded = false;
         self.streamed = lex.take_streamed();
         self.chunk.names = lex.take_names();
@@ -236,6 +248,8 @@ impl ParseScratch {
             lex_buf: self.lex_buf,
             stacks: self.stacks,
             src: self.streamed,
+            recording: self.recording,
+            recorded: self.recorded,
         }
     }
 }

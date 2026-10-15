@@ -153,6 +153,10 @@ impl Vm {
         if let Some(c) = cut {
             self.scan_until(r, &mut strs, &mut peaks, c.scans)?;
         }
+        // the reader's last calls, past the last token
+        while let Some((_, d)) = r.splices.pop_front() {
+            self.heap.defer_apply(d);
+        }
         Ok(())
     }
 
@@ -167,6 +171,17 @@ impl Vm {
         loop {
             let p = peaks.peek().map(|&&(t, _)| i64::from(t));
             let st = strs.peek().map(|(t, ..)| i64::from(*t));
+            // a reader call while the token is read: before what the scan
+            // of the token makes
+            if let Some(&(s, _)) = r.splices.front()
+                && s <= tok
+                && p.is_none_or(|p| s <= p)
+                && st.is_none_or(|st| s <= st)
+            {
+                let (_, d) = r.splices.pop_front().expect("peeked");
+                self.heap.defer_apply(d);
+                continue;
+            }
             match (p, st) {
                 (Some(p), _) if p <= tok && st.is_none_or(|st| p <= st) => {
                     let &(_, peak) = peaks.next().expect("peeked");

@@ -47,6 +47,8 @@ pub(crate) struct Recording {
     /// the scanner's buffer holds more than its first 32 bytes, with how
     /// many; and where the last token read ended
     strings: bool,
+    /// with `strings`, a source read piece by piece: where each token ends
+    ends: bool,
     pub(crate) scanned: Scanned,
     last_end: usize,
     /// from 5.3: the names numbered below this one, and the reserved words
@@ -59,12 +61,15 @@ pub(crate) struct Recording {
 }
 
 impl Recording {
-    /// `rec` emptied for a load's recording.
-    pub(super) fn cleared(rec: Option<Box<Recording>>) -> Box<Recording> {
+    /// `rec` emptied for a load's recording (`ends`: of a source read
+    /// piece by piece).
+    pub(super) fn cleared(rec: Option<Box<Recording>>, ends: bool) -> Box<Recording> {
         let mut rec = rec.unwrap_or_default();
         rec.marks.clear();
         rec.scanned.strings.clear();
         rec.scanned.peaks.clear();
+        rec.scanned.ends.clear();
+        rec.ends = ends;
         rec.strings = true;
         rec.last_end = 0;
         rec.next_sym = 0;
@@ -179,7 +184,7 @@ impl Parser<'_> {
     /// Record this parse in `rec` (emptied first, keeping its vectors), or
     /// a new recording, with the strings the scanner makes.
     pub(super) fn record_load(&mut self, rec: Option<Box<Recording>>) {
-        let rec = Recording::cleared(rec);
+        let rec = Recording::cleared(rec, matches!(self.lex, TokenSource::Stream(_)));
         self.start_recording(Some(rec));
     }
 
