@@ -172,7 +172,7 @@ impl Vm {
         // comparator callback doesn't free strings/tables snapshotted
         // off the live table (sort.lua's `load(..)(); collectgarbage()`
         // compare regression).
-        for &v in self.sort_scratch.iter().flatten() {
+        for &v in self.sort_scratch.iter().flatten().chain(&self.lib_roots) {
             m.value(v);
         }
         // The running-natives chain holds Gc<NativeClosure>s
