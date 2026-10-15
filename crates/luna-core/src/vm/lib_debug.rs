@@ -61,9 +61,6 @@ pub(crate) fn try_open_debug(vm: &mut Vm) -> Result<(), LuaError> {
     }
     vm.lib_set_global("debug", Value::Table(t))?;
     vm.barrier_back_table(t);
-    // PUC's LUA_REGISTRYINDEX table — eagerly built so `_HOOKKEY` (weak-key)
-    // is observable from db.lua :328 the moment the debug library loads.
-    init_registry(vm)?;
     // register in package.loaded so require"debug" finds it
     let pkg_k = vm.str_value(b"package")?;
     if let Value::Table(pkg) = vm.globals().get(pkg_k) {
@@ -86,29 +83,6 @@ fn set_field(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) -> Result<(), LuaErro
 fn set_str(vm: &mut Vm, t: Gc<Table>, k: &str, bytes: &[u8]) -> Result<(), LuaError> {
     let v = vm.str_value(bytes)?;
     set_field(vm, t, k, v)?;
-    Ok(())
-}
-
-/// Build PUC's `LUA_REGISTRYINDEX` table (kept on `Vm.registry`, a GC root)
-/// and populate `_HOOKKEY` (PUC `db_sethook`'s per-thread weak-key table).
-/// db.lua :328 only checks `__mode == 'k'`; luna's sethook stores hook state
-/// directly in `Vm.hook`/`Coro.hook`, so the entry is shape-only.
-fn init_registry(vm: &mut Vm) -> Result<(), LuaError> {
-    // the C API may have made the registry already
-    let reg = vm.host_registry();
-    let hook_t = vm.alloc_table()?;
-    let mt = vm.alloc_table()?;
-    let mode_k = vm.str_value(b"k")?;
-    set_field(vm, mt, "__mode", mode_k)?;
-    vm.barrier_back_table(mt);
-    // SAFETY: `hook_t` was allocated above and is held only by this local; the borrow covers one call
-    unsafe { hook_t.as_mut() }.set_metatable(Some(mt));
-    vm.barrier_back_table(hook_t);
-    set_field(vm, reg, "_HOOKKEY", Value::Table(hook_t))?;
-    if vm.ignore_env && vm.version() >= LuaVersion::Lua52 {
-        set_field(vm, reg, "LUA_NOENV", Value::Bool(true))?;
-    }
-    vm.barrier_back_table(reg);
     Ok(())
 }
 
