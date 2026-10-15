@@ -8,7 +8,7 @@ use super::Ar;
 use super::levels::tail_ar;
 
 /// One line of a traceback: a level, or where levels were left out.
-enum TbLine {
+pub(super) enum TbLine {
     Level(i64),
     /// `\n\t...` (5.1-5.3)
     Dots,
@@ -18,7 +18,7 @@ enum TbLine {
 
 /// The lines `luaL_traceback` (5.1: `db_errorfb`) prints for a stack of `n`
 /// levels starting at `level`, replaying each version's elision loop.
-fn traceback_plan(v: LuaVersion, n: i64, mut level: i64) -> Vec<TbLine> {
+pub(super) fn traceback_plan(v: LuaVersion, n: i64, mut level: i64) -> Vec<TbLine> {
     // 5.1's `lua_getstack` answers a negative level with a lost tail call
     let valid = |l: i64| l < n && (l >= 0 || v == LuaVersion::Lua51);
     // PUC `lastlevel` / `countlevels`: the deepest valid level, at least 0
