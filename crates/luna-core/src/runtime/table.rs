@@ -138,9 +138,12 @@ pub struct Table {
     /// heap address (so that `&mut self.inline_storage` is the stable heap
     /// pointer, not a stack-local one). Updated by `Table::resize`.
     pub array_ptr: *mut u8,
-    /// Length of the array part in slots. u64 (rather than `usize` or
-    /// `u32`) so the JIT can load it with a single `load i64`.
-    pub asize: u64,
+    /// Length of the array part in slots (compiled code loads it as a
+    /// 32-bit word, zero-extended).
+    pub asize: u32,
+    /// The number the table got when it was made: its hash as a key (PUC
+    /// hashes a table by its address), the same on every run.
+    pub(crate) id: u32,
     /// hash part: `node_mask + 1` nodes (a power of two), or none. Owned:
     /// it is a leaked `Box<[Node]>` of that length (dangling when empty),
     /// taken back by `take_hash_part`; the length lives in `node_mask` only
@@ -235,6 +238,7 @@ impl Table {
             // bug-detection invariant flags any pre-fixup read.
             array_ptr: std::ptr::null_mut(),
             asize: 0,
+            id: 0,
             inline_storage: std::cell::UnsafeCell::new([0; INLINE_U64S]),
             nodes: std::ptr::NonNull::dangling().as_ptr(),
             node_mask: u32::MAX,
@@ -358,30 +362,21 @@ fn normalize_set_key(key: Value) -> Result<Value, TableError> {
     }
 }
 
+/// What PUC's `hashpointer` takes of an object key: the low 32 bits of
+/// its address; for luna's objects, the number each got when made
+/// (`Heap::take_id`).
 #[inline]
-fn hash_key(k: Value) -> u64 {
+fn pointer_hash(k: Value) -> u32 {
     match k {
-        Value::Int(i) => i as u64, // identity mod size (PUC hashint)
-        Value::Float(f) => mix64(f.to_bits()),
-        Value::Bool(b) => b as u64,
-        Value::Str(s) => s.hash() as u64,
-        Value::Table(t) => mix64(t.as_ptr() as u64),
-        Value::Closure(c) => mix64(c.as_ptr() as u64),
-        Value::Native(n) => mix64(n.as_ptr() as u64),
-        Value::Coro(co) => mix64(co.as_ptr() as u64),
-        Value::Userdata(u) => mix64(u.as_ptr() as u64),
-        Value::LightUserdata(p) => mix64(p as u64),
-        Value::Nil => 0, // unreachable as a stored key
+        Value::Table(t) => t.id,
+        Value::Closure(c) => c.hdr.aux,
+        Value::Native(n) => n.hdr.aux,
+        Value::Coro(co) => co.hdr.aux,
+        Value::Userdata(u) => u.hdr.aux,
+        Value::LightUserdata(p) => p as u32,
+        // the keys `main_position` handles itself
+        _ => 0,
     }
-}
-
-/// splitmix64 finalizer.
-fn mix64(mut x: u64) -> u64 {
-    x ^= x >> 30;
-    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    x ^= x >> 27;
-    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
-    x ^ (x >> 31)
 }
 
 /// For k ≥ 1: the bucket l such that k ∈ (2^(l-1), 2^l].

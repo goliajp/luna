@@ -156,7 +156,7 @@ impl Table {
 
         // Install the new array backing before anything reads it, so the JIT
         // never observes a stale pointer.
-        self.asize = new_asize as u64;
+        self.asize = new_asize as u32;
         self.reset_hints();
         if new_slab.is_null() {
             // SAFETY: exclusive &mut self; write through the cell to

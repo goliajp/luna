@@ -26,7 +26,7 @@ impl Table {
         if FULL_REHASH_ONLY.with(|c| c.get()) {
             return None;
         }
-        let asize = self.asize;
+        let asize = u64::from(self.asize);
         let Value::Int(k) = pending else { return None };
         if k as u64 != asize + 1 || u64::from(self.acount) != asize || self.node_mask != u32::MAX {
             return None;
@@ -76,7 +76,7 @@ impl Table {
             std::ptr::write_bytes(p.add(new_asize * 8 + old), 0, new_asize - old);
         }
         self.array_ptr = p;
-        self.asize = new_asize as u64;
+        self.asize = new_asize as u32;
         self.reset_hints();
         // every old slot holds a value: the run of them is the whole old
         // part, as the full resize's catch-up scan finds

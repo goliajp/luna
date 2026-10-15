@@ -37,11 +37,12 @@ pub(super) fn emit_ipairs_tfor_call<E: Emit>(
     let key_m1 = ctrl;
 
     let asize = lw.bcx.ins().load(
-        types::I64,
+        types::I32,
         cranelift_codegen::ir::MemFlagsData::trusted(),
         t_raw,
         crate::jit_backend::TABLE_ASIZE_OFFSET as i32,
     );
+    let asize = lw.bcx.ins().uextend(types::I64, asize);
     // a table that may be 5.4's is bounded by `alimit`: an index past it
     // goes to the helper, which raises it (see `Table::array_index`)
     use crate::jit_backend::trace::array_slot::TableRules;

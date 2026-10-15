@@ -56,6 +56,7 @@ mod native_panic_behaviour;
 mod native_panic_windows;
 mod native_typed;
 mod numeric_for_kinds;
+mod object_key_order;
 mod os_time_isdst;
 mod pointer_text;
 mod proto_stable_hash;

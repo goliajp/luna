@@ -39,7 +39,9 @@ impl Table {
                 _ => (u64::from(l_hashfloat(f)) % odd) as usize,
             },
             Value::Bool(b) => b as usize & mask,
-            k => hash_key(k) as usize & mask,
+            Value::Str(s) => s.hash() as usize & mask,
+            // `hashpointer`: modulo, as numbers
+            k => (u64::from(pointer_hash(k)) % odd) as usize,
         }
     }
 }

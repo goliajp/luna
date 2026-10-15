@@ -80,7 +80,7 @@ impl Table {
     /// (PUC `luaH_resizearray`). Public for the JIT crates.
     #[doc(hidden)]
     pub fn reserve_list(&mut self, heap: &mut Heap, last: u64) -> Result<(), TableError> {
-        if last <= self.asize {
+        if last <= u64::from(self.asize) {
             return Ok(());
         }
         if last > MAX_ASIZE as u64 {

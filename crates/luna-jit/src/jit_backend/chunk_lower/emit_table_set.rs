@@ -54,12 +54,9 @@ pub(super) fn emit_set_table<M: Module>(
                 // in-range check and the `atags_ptr = avals_ptr +
                 // asize * 8` computation. Avals occupy `slab` from
                 // offset 0; atags trail at byte offset `asize * 8`.
-                let asize = bcx.ins().load(
-                    types::I64,
-                    MemFlagsData::trusted(),
-                    t,
-                    TABLE_ASIZE_OFFSET as i32,
-                );
+                let asize =
+                    bcx.ins()
+                        .uload32(MemFlagsData::trusted(), t, TABLE_ASIZE_OFFSET as i32);
                 let one = bcx.ins().iconst(types::I64, 1);
                 let key_minus_1 = bcx.ins().isub(key, one);
                 // `(key - 1) as u64 < len` unsigned also rejects `key < 1`
@@ -242,12 +239,9 @@ pub(super) fn emit_set_list<M: Module>(
             // the array part first grows to exactly `b` slots when it is
             // smaller (the open form's call result is not counted in the
             // NewTable's size), as the interpreter's SetList does
-            let asize = bcx.ins().load(
-                types::I64,
-                MemFlagsData::trusted(),
-                t,
-                TABLE_ASIZE_OFFSET as i32,
-            );
+            let asize = bcx
+                .ins()
+                .uload32(MemFlagsData::trusted(), t, TABLE_ASIZE_OFFSET as i32);
             let b_v = bcx.ins().iconst(types::I64, b as i64);
             let short = bcx.ins().icmp(IntCC::UnsignedLessThan, asize, b_v);
             let grow_blk = bcx.create_block();
@@ -266,12 +260,9 @@ pub(super) fn emit_set_list<M: Module>(
             bcx.ins().jump(sized_blk, &[]);
             bcx.switch_to_block(sized_blk);
             bcx.seal_block(sized_blk);
-            let asize = bcx.ins().load(
-                types::I64,
-                MemFlagsData::trusted(),
-                t,
-                TABLE_ASIZE_OFFSET as i32,
-            );
+            let asize = bcx
+                .ins()
+                .uload32(MemFlagsData::trusted(), t, TABLE_ASIZE_OFFSET as i32);
             // the inline stores fill an all-nil array part (a fresh
             // constructor table) with non-nil values, so afterwards
             // `acount` and `aprefix` are both `b`; anything else takes
