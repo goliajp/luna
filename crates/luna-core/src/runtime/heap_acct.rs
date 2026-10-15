@@ -22,10 +22,6 @@ pub(crate) struct PucState {
     pub(crate) short_max: usize,
     /// strings PUC's libraries keep and luna's may not: kept alive
     pub(crate) pins: Vec<Gc<crate::runtime::LuaStr>>,
-    /// 5.2+: the CallInfos the main thread has allocated, and how deep its
-    /// calls are now
-    pub(crate) ci_count: usize,
-    pub(crate) depth: usize,
     /// 5.1 and 5.2: the size of the buffer concatenations are made in
     /// (`G(L)->buff`)
     pub(crate) gbuff: usize,
@@ -40,8 +36,6 @@ impl Default for PucState {
             strt_nuse: 0,
             short_max: crate::runtime::string::MAX_SHORT_LEN,
             pins: Vec::new(),
-            ci_count: 0,
-            depth: 0,
             gbuff: 0,
         }
     }
@@ -191,6 +185,7 @@ mod parts;
 #[path = "heap_acct_thread.rs"]
 mod thread;
 pub(crate) use parts::ENV51;
+pub(crate) use thread::BASIC_CI_51;
 
 /// Whether object `h` is one PUC has not made (see [`Heap::acct_new`]).
 #[inline(always)]

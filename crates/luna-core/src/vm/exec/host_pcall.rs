@@ -100,7 +100,12 @@ impl Vm {
         args: &[Value],
         msgh: Value,
     ) -> Result<Vec<Value>, LuaError> {
-        let level = self.builtin(level, &[], builtin)?;
+        // the protected call PUC makes from C is no function of its own:
+        // luna's stand-in for it is not counted
+        self.heap.puc.silent += 1;
+        let level = self.builtin(level, &[], builtin);
+        self.heap.puc.silent -= 1;
+        let level = level?;
         let mut call_args = Vec::with_capacity(args.len() + 2);
         call_args.push(f);
         call_args.push(msgh);

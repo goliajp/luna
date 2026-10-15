@@ -148,6 +148,7 @@ impl Vm {
                 m.stale_frames = rctx.stale_frames;
                 m.stack_size = rctx.stack_size;
                 m.frame_size = rctx.frame_size;
+                m.ci_alloc = rctx.ci_alloc;
             }
             None => self.main_ctx = Some(rctx),
         }
@@ -162,7 +163,7 @@ impl Vm {
         self.natives_base = natives_base;
         self.msgh_floor = msgh_floor;
         // discard the (now-closed) coroutine context and restore the caller
-        let _ = self.take_ctx();
+        let closed = self.take_ctx();
         match resumer {
             Some(r) => {
                 self.load_coro_ctx(r);
@@ -186,8 +187,13 @@ impl Vm {
             m.top = 0;
             m.meta_conts = 0;
             m.stale_frames = 0;
-            m.stack_size = 0;
-            m.frame_size = 0;
+            // `luaE_resetthread` leaves the stack `LUA_MINSTACK` above the
+            // function slot and the error, if there is one; the
+            // `CallInfo`s stay
+            let size = 21 + u32::from(result.is_err() || death_err.is_some());
+            self.heap.acct_stack(closed.stack_size, size);
+            m.stack_size = size;
+            m.ci_alloc = closed.ci_alloc;
             m.resume_at = None;
             m.error_value = None;
             m.error_traceback = None;

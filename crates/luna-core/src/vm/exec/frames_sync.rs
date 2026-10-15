@@ -70,6 +70,7 @@ impl Vm {
             return self.push_cf_slow(cf);
         }
         frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf);
+        self.note_call_level();
         Ok(())
     }
 
@@ -78,6 +79,7 @@ impl Vm {
     fn push_cf_slow(&mut self, cf: CallFrame) -> Result<(), LuaError> {
         self.retry_oom(|vm| vm.frames.reserve(1))?;
         frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf);
+        self.note_call_level();
         Ok(())
     }
 

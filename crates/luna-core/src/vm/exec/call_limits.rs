@@ -32,6 +32,20 @@ impl Vm {
         self.g.stack_last = fast_stack_last(self.version, s);
     }
 
+    /// The running thread's stack resized by PUC to `s` slots
+    /// (`luaD_reallocstack`), as opposed to a switch of threads.
+    pub(crate) fn resize_stack(&mut self, s: u32) {
+        self.heap.acct_stack(self.stack_size, s);
+        self.set_stack_size(s);
+    }
+
+    /// The running thread's 5.1 `CallInfo` array resized to `n` entries
+    /// (`luaD_reallocCI`).
+    pub(super) fn resize_frames_51(&mut self, n: u32) {
+        self.heap.acct_ci51(self.g.frame_size, n);
+        self.g.frame_size = n;
+    }
+
     /// PUC `luaD_checkstack` past the fast bound: the stack grows, or past
     /// the limit the first overflow raises "stack overflow" and leaves the
     /// stack the room for the message handler that runs on it; a call that
@@ -45,11 +59,11 @@ impl Vm {
         }
         match stack_size::check(self.version, self.stack_size, top + 1, need) {
             Grown::Fits(s) => {
-                self.set_stack_size(s);
+                self.resize_stack(s);
                 Ok(())
             }
             Grown::Overflow(s) => {
-                self.set_stack_size(s);
+                self.resize_stack(s);
                 // before 5.4 `luaG_runerror` adds the position to the
                 // message of a Lua function, pushing it too; a C function
                 // (one whose message handler is being called on a full
@@ -75,7 +89,7 @@ impl Vm {
         if self.g.frame_size > self.frame_cap {
             return Err(LuaError(self.errerr()));
         }
-        self.g.frame_size *= 2;
+        self.resize_frames_51(self.g.frame_size * 2);
         if self.g.frame_size > self.frame_cap {
             return Err(self.rt_err("stack overflow"));
         }
@@ -103,7 +117,7 @@ impl Vm {
     /// back to the limit, unless the frames still in use come near it.
     pub(super) fn restore_frame_limit(&mut self) {
         if self.g.frame_size > self.frame_cap && self.frames_in_use() + 1 < self.frame_cap {
-            self.g.frame_size = self.frame_cap;
+            self.resize_frames_51(self.frame_cap);
         }
     }
 }

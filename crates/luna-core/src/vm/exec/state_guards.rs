@@ -62,4 +62,7 @@ pub(crate) struct CallGuards {
     /// frame, the callee's), so not counted in `frames_in_use`.
     /// Per-thread, saved with the coroutine context.
     pub(crate) meta_conts: u32,
+    /// PUC 5.2+: the `CallInfo`s the running thread has allocated besides
+    /// its base one (see `call_info.rs`); `u32::MAX` in 5.1. Per-thread.
+    pub(crate) ci_alloc: u32,
 }

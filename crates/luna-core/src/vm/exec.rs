@@ -23,6 +23,7 @@ use native_call::NativeKind;
 mod arith;
 mod call;
 mod call_fast;
+mod call_info;
 mod call_limits;
 mod close;
 mod compare;

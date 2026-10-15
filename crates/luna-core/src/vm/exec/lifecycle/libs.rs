@@ -14,7 +14,8 @@ impl Vm {
             let kind = crate::runtime::heap::PucKind::CClosure;
             self.heap.acct_obj(kind, size);
         } else {
-            self.heap.acct_call_depth(1);
+            // `pmain`'s
+            self.extend_ci_to(1);
         }
         self.open_all_libs();
     }
@@ -47,6 +48,11 @@ impl Vm {
         self.heap.puc.silent -= 1;
         if self.heap.acct_replay_openlibs().is_err() {
             crate::runtime::mem::oom_abort(std::alloc::Layout::new::<u8>());
+        }
+        // each library opens in a call one level down, whose `CallInfo` is
+        // in the record
+        if self.version != LuaVersion::Lua51 {
+            self.g.ci_alloc += 1;
         }
     }
 

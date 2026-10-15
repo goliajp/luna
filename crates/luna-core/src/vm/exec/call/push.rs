@@ -124,6 +124,7 @@ impl Vm {
             ccmt: std::mem::take(&mut self.pending_ccmt),
         });
         frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf);
+        self.note_call_level();
         // 5.5 vararg layout (PUC luaT_adjustvarargs): the extra args stay on the
         // stack just below the new `base`, so a named vararg can be indexed
         // virtually without allocating a table.

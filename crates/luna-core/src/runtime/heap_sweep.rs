@@ -165,7 +165,13 @@ impl Heap {
                 }
                 ObjTag::Coro => {
                     if !is_uncounted(h) {
-                        self.acct_free(self.sizes.thread);
+                        let c = &*(h as *mut crate::runtime::Coro);
+                        let ci = if self.table_dialect == crate::runtime::table::Dialect::L51 {
+                            c.frame_size
+                        } else {
+                            c.ci_alloc
+                        };
+                        self.acct_thread_free(c.stack_size, ci);
                     }
                     self.free_block(h as *mut crate::runtime::Coro);
                 }
