@@ -182,6 +182,8 @@ end
     full.push_str(POSTAMBLE);
 
     let mut vm = Vm::new(version);
+    // as lua.c, which runs scripts in generational mode from 5.4
+    vm.gc_enter_generational();
     let r = vm
         .eval(&full)
         .expect("luna eval must not error on diff fixtures");
@@ -272,6 +274,8 @@ fn diff_one_err(path: &Path, bin: &str, version: LuaVersion, source: &str) {
     let (puc_pos, puc_n) = normalize_err(puc_msg);
 
     let mut vm = Vm::new(version);
+    // as lua.c, which runs scripts in generational mode from 5.4
+    vm.gc_enter_generational();
     let luna_err = match vm.eval(source) {
         Ok(_) => panic!(
             "[diff_puc] {}: expected a top-level error on luna (fixture is _err) \

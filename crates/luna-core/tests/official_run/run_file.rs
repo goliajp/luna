@@ -175,7 +175,7 @@ const STRESS_CAP: usize = 1 << 30;
 /// 1 GiB limit, which refuses the growth that would pass it and serves the
 /// next request once the memory is back.
 fn new_vm(version: LuaVersion, label: &str) -> Vm {
-    if label == "heavy.lua" {
+    let mut vm = if label == "heavy.lua" {
         let limit = luna_core::runtime::mem::MemoryLimit(STRESS_CAP);
         Vm::new_with_mem(
             version,
@@ -183,7 +183,10 @@ fn new_vm(version: LuaVersion, label: &str) -> Vm {
         )
     } else {
         Vm::new(version)
-    }
+    };
+    // the suites run under lua.c, in generational mode from 5.4
+    vm.gc_enter_generational();
+    vm
 }
 
 /// Prepend the assert-counter preamble and, when enabled, the byte-diff
