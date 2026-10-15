@@ -211,6 +211,10 @@ impl Vm {
         }
         // either we just transitioned, or we entered already in Sweep, or
         // a finalizer started a new cycle (gc_sweep_step is a no-op then)
-        self.heap.gc_sweep_step(budget)
+        let done = self.heap.gc_sweep_step(budget);
+        if done {
+            self.heap.acct_check_sizes();
+        }
+        done
     }
 }
