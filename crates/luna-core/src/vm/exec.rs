@@ -64,6 +64,7 @@ mod limits;
 mod load;
 mod load_acct;
 mod mem;
+mod mem_retry;
 mod meta;
 mod names;
 mod native_args;

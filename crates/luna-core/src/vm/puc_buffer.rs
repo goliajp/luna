@@ -124,7 +124,7 @@ impl PucBuffer {
             Dialect::L52 => {
                 vm.api_check_before();
                 let size = vm.heap.sizes.userdata(0, newsize);
-                vm.heap.acct_ghost(PucKind::Userdata, size)?;
+                vm.ghost(PucKind::Userdata, size)?;
             }
             _ if self.boxed => vm.heap.trace_raw(self.size, newsize),
             _ => {
@@ -168,7 +168,7 @@ impl PucBuffer {
                 self.empty_51(vm, out)?;
                 let n = vm.lib_roots.len() - self.base;
                 let r = if n == 0 {
-                    vm.heap.try_intern(b"")?
+                    vm.alloc_str(b"")?
                 } else {
                     if n >= 2 {
                         self.concat_51(vm, n)?;
@@ -184,14 +184,14 @@ impl PucBuffer {
             Dialect::L55 if self.boxed => {
                 // the box's block becomes the string's
                 vm.heap.trace_raw(self.size, out.len() + 1);
-                let r = vm.heap.new_external_string(out)?;
+                let r = vm.retry_oom(|vm| vm.heap.new_external_string(out))?;
                 vm.api_check_after(Value::Str(r));
                 vm.box_closed();
                 Ok(r)
             }
             _ => {
                 vm.api_check_before();
-                let r = vm.heap.try_intern(out)?;
+                let r = vm.alloc_str(out)?;
                 vm.api_check_after(Value::Str(r));
                 if self.boxed && self.d >= Dialect::L53 {
                     if self.d >= Dialect::L54 {
@@ -221,7 +221,7 @@ impl PucBuffer {
             return Ok(false);
         }
         vm.api_check_before();
-        let s = vm.heap.try_intern(&out[self.start..self.start + self.n])?;
+        let s = vm.alloc_str(&out[self.start..self.start + self.n])?;
         vm.lib_roots.push(Value::Str(s));
         self.start += self.n;
         self.n = 0;
@@ -260,7 +260,7 @@ impl PucBuffer {
         let from = vm.lib_roots.len() - n;
         let mut st: Vec<Value> = vm.lib_roots[from..].to_vec();
         vm.api_check_before();
-        vm.heap.puc_concat(&mut st, n)?;
+        vm.concat_pieces(&mut st, n)?;
         vm.lib_roots.truncate(from);
         vm.lib_roots.push(st[0]);
         Ok(())
@@ -295,7 +295,7 @@ impl Vm {
         } else {
             self.heap.sizes.userdata(1, ubox)
         };
-        self.heap.acct_ghost(PucKind::Userdata, size)?;
+        self.ghost(PucKind::Userdata, size)?;
         self.api_check_after(Value::Nil);
         self.box_metatable()
     }

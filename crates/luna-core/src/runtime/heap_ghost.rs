@@ -25,8 +25,10 @@ impl Heap {
         if self.puc.silent > 0 {
             return Ok(());
         }
+        // the record first: a retry after it failed counts the object once
+        self.ghost_record(kind, size)?;
         self.acct_obj(kind, size);
-        self.ghost_record(kind, size)
+        Ok(())
     }
 
     /// A record of an object PUC made whose allocation was counted
@@ -39,10 +41,10 @@ impl Heap {
             self.current_white
         };
         let head = self.all;
-        // SAFETY: `head`, when not null, heads a live object of this heap
-        if !head.is_null()
-            && unsafe { (*head).tag == ObjTag::Ghost && (*head).flags & COLOR_BITS == born }
-        {
+        let ghost_head = !head.is_null()
+            // SAFETY: `head`, not null, heads a live object of this heap
+            && unsafe { (*head).tag == ObjTag::Ghost && (*head).flags & COLOR_BITS == born };
+        if ghost_head {
             // SAFETY: a header tagged `Ghost` is a `Ghost`, and nothing else
             // refers into it
             return unsafe { (*(head as *mut Ghost)).sizes.push(size) };

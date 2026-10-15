@@ -114,7 +114,7 @@ pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         let s = if vm.version() == LuaVersion::Lua53 {
             // `lua_pushfstring(L, "%I")`, made of pieces
             let f = [crate::runtime::puc_fmt::FmtArg::I(i)];
-            Value::Str(vm.heap.pushfstring(b"%I", &f)?)
+            Value::Str(vm.pushfstring(b"%I", &f)?)
         } else {
             vm.str_value(bytes)?
         };

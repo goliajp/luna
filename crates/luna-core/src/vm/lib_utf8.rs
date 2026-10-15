@@ -146,7 +146,7 @@ fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(vm, i + 1, "value out of range"));
         }
         // `pushutfchar`: `lua_pushfstring(L, "%U", code)`
-        let s = vm.heap.pushfstring(b"%U", &[FmtArg::U(code as u32)])?;
+        let s = vm.pushfstring(b"%U", &[FmtArg::U(code as u32)])?;
         vm.api_check_after(Value::Str(s));
         let Some(b) = b.as_mut() else {
             return vm.nat_ret(fs, &[Value::Str(s)]);
