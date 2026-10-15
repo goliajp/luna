@@ -15,7 +15,7 @@ fn co_wrapped(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     vm.native_push(1);
     let before = vm.special_errors();
     let err = match resume_refusal(vm, co, nargs == 0, in_wrap) {
-        Some(msg) => vm.str_value(msg.as_bytes())?,
+        Some(msg) => refusal_value(vm, &msg)?,
         None => {
             mark_in_wrap(vm, in_wrap, true)?;
             let r = vm.resume_coro(co, args);
