@@ -27,6 +27,7 @@ mod raise;
 mod raise_protected;
 mod runerror;
 mod traceback;
+mod traceback_puc;
 
 pub(crate) use chunk_id::{chunk_id, syntax_chunk_id};
 pub(crate) use levels::tail_ar;

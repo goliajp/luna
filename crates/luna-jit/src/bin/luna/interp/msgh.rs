@@ -9,7 +9,7 @@ pub(super) fn msghandler(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let out = match vm.version() {
         LuaVersion::Lua51 => traceback_51(vm, err)?,
         LuaVersion::Lua52 => match lua_tostring(vm, err) {
-            Some(msg) => traceback(vm, &msg),
+            Some(msg) => traceback(vm, &msg)?,
             None if err.is_nil() => err,
             // `luaL_callmeta`: whatever `__tostring` returns
             None => match vm.metafield(err, "__tostring") {
@@ -22,7 +22,7 @@ pub(super) fn msghandler(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             },
         },
         _ => match lua_tostring(vm, err) {
-            Some(msg) => traceback(vm, &msg),
+            Some(msg) => traceback(vm, &msg)?,
             None => {
                 let mm = vm.metafield(err, "__tostring");
                 let text = if mm.is_nil() {
@@ -35,7 +35,7 @@ pub(super) fn msghandler(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
                     Some(s @ Value::Str(_)) => s,
                     _ => {
                         let msg = format!("(error object is a {} value)", err.type_name());
-                        traceback(vm, msg.as_bytes())
+                        traceback(vm, msg.as_bytes())?
                     }
                 }
             }
@@ -45,9 +45,8 @@ pub(super) fn msghandler(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
 }
 
 /// `luaL_traceback(L, L, msg, 1)` from the message handler.
-fn traceback(vm: &mut Vm, msg: &[u8]) -> Value {
-    let tb = vm.traceback(Some(msg), 1);
-    Value::Str(vm.heap.intern(&tb))
+fn traceback(vm: &mut Vm, msg: &[u8]) -> Result<Value, LuaError> {
+    vm.traceback_string(Some(msg), 1)
 }
 
 /// 5.1 lua.c's `traceback`: a string (or number) message goes through the
