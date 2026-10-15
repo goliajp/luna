@@ -92,7 +92,20 @@ pub(crate) fn type_error(vm: &mut Vm, a: Args, i: u32, expected: &str) -> LuaErr
         return e;
     }
     vm.native_push(1);
-    arg_error(vm, i + 1, &format!("{expected} expected, got {got}"))
+    let msg = vm.heap.pushfstring(
+        b"%s expected, got %s",
+        &[
+            crate::runtime::puc_fmt::FmtArg::S(expected.as_bytes()),
+            crate::runtime::puc_fmt::FmtArg::S(got.as_bytes()),
+        ],
+    );
+    match msg {
+        Ok(m) => {
+            let m = String::from_utf8_lossy(m.as_bytes()).into_owned();
+            arg_error(vm, i + 1, &m)
+        }
+        Err(e) => e.into(),
+    }
 }
 
 /// `luaL_checkany`.

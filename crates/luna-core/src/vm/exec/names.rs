@@ -84,9 +84,10 @@ impl Vm {
                 while let Ok(Some((nk2, nv2))) = inner_t.next(k2) {
                     k2 = nk2;
                     if matches(nv2)
-                        && let Value::Str(inner) = nk2
+                        && let Value::Str(inner_s) = nk2
                     {
-                        let inner = String::from_utf8_lossy(inner.as_bytes()).into_owned();
+                        self.globalfuncname_strings(nk, inner_s)?;
+                        let inner = String::from_utf8_lossy(inner_s.as_bytes()).into_owned();
                         return Some(if outer == "_G" {
                             inner
                         } else {
@@ -97,6 +98,20 @@ impl Vm {
             }
         }
         None
+    }
+
+    /// The strings PUC's `findfield` and `pushglobalfuncname` make naming
+    /// a function found as field `inner` of `outer`: `"."`, the
+    /// concatenation of the three, and from 5.3 the name without `"_G."`.
+    fn globalfuncname_strings(&mut self, outer: Value, inner: Gc<crate::runtime::LuaStr>) -> Option<()> {
+        let dot = self.heap.try_intern(b".").ok()?;
+        let mut st = vec![outer, Value::Str(dot), Value::Str(inner)];
+        self.heap.puc_concat(&mut st, 3).ok()?;
+        let g = matches!(outer, Value::Str(s) if s.as_bytes() == b"_G");
+        if g && self.version >= LuaVersion::Lua53 {
+            self.heap.try_intern(inner.as_bytes()).ok()?;
+        }
+        Some(())
     }
 
     /// How the caller named the running native (PUC `lua_getinfo("n")` at
