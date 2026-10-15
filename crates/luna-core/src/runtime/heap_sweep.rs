@@ -195,6 +195,11 @@ impl Heap {
                             self.acct_free(size);
                         }
                     } else {
+                        #[cfg(feature = "gc-trace")]
+                        if self.trace.where_ {
+                            let b = String::from_utf8_lossy(string::bytes_of(s)).into_owned();
+                            self.trace.line(format_args!("s {b:?}"));
+                        }
                         self.acct_string_free((*s).len());
                     }
                     if (*s).is_short() {

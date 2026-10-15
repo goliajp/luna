@@ -45,6 +45,11 @@ impl Heap {
             if is_new {
                 // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
                 unsafe { self.link(p as *mut GcHeader) };
+                #[cfg(feature = "gc-trace")]
+                if self.trace.where_ {
+                    let b = String::from_utf8_lossy(bytes).into_owned();
+                    self.trace.line(format_args!("s+ {b:?}"));
+                }
                 self.acct_new_string(p as *mut GcHeader, bytes.len());
             } else {
                 return Some(self.found_string(p, bytes.len()));
