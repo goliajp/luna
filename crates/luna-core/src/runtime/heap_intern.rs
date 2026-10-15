@@ -129,6 +129,31 @@ impl Heap {
         Ok(unsafe { Gc::from_ptr(p) })
     }
 
+    /// The string of `parts` one after another (PUC `luaV_concat`'s
+    /// result): looked up when short (5.1: always), else a new long string
+    /// the parts are copied into.
+    pub(crate) fn try_intern_parts(&mut self, parts: &[&[u8]]) -> Result<Gc<LuaStr>, Oom> {
+        let n: usize = parts.iter().map(|p| p.len()).sum();
+        if n <= string::MAX_SHORT_LEN {
+            let mut buf = [0u8; string::MAX_SHORT_LEN];
+            let mut at = 0;
+            for p in parts {
+                buf[at..at + p.len()].copy_from_slice(p);
+                at += p.len();
+            }
+            return self.try_intern(&buf[..n]);
+        }
+        if self.hash51 {
+            return self.try_intern(&parts.concat());
+        }
+        let p = string::alloc_long_parts(self.mem.mem(), parts, self.seed)?;
+        // SAFETY: `alloc_long_parts` just allocated `p`, linked nowhere yet
+        unsafe { self.link(p as *mut GcHeader) };
+        self.acct_new_string(p as *mut GcHeader, n);
+        // SAFETY: `p` is the string linked just above
+        Ok(unsafe { Gc::from_ptr(p) })
+    }
+
     /// The interned string with `bytes`, if one has been made; never
     /// allocates. A short name no string exists for is no table's key.
     pub fn find_interned(&self, bytes: &[u8]) -> Option<Gc<LuaStr>> {
