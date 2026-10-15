@@ -30,18 +30,28 @@ impl Vm {
         self.gc_stepsize = stepsize;
     }
 
-    /// Interpreter safe-point auto-GC: FULL incremental Propagate + adaptive
-    /// paced sweep via `Vm::gc_step`.
+    /// A point where PUC checks whether a collection step is due
+    /// (`luaC_checkGC`), with PUC's stack top there (luna's numbering):
+    /// the slots from `live_top` up are dead to a collection that runs.
     ///
-    /// Running Propagate from a safe-point relies on objects being **born
+    /// Running Propagate from a checkpoint relies on objects being **born
     /// black during Propagate**: a newly allocated object never becomes
     /// dead-white at the atomic flip.
     ///
     /// Adaptive budget scales with heap size: 100M-object heap (heavy.lua's
     /// `loadrep` stress) gets a 25M-object budget so a cycle completes in
-    /// O(SWEEP_DIVISOR) safe-points regardless of size.
+    /// O(SWEEP_DIVISOR) checkpoints regardless of size.
     #[inline(always)]
-    pub(crate) fn maybe_collect_garbage(&mut self, live_top: u32) {
+    pub(crate) fn checkpoint(&mut self, live_top: u32) {
+        #[cfg(feature = "gc-trace")]
+        self.trace_checkpoint();
+        #[cfg(feature = "gc-stress")]
+        if !self.heap.gc_is_stopped() {
+            self.heap.safe_point();
+            self.gc_top = live_top;
+            self.collect_garbage();
+            return;
+        }
         // everything live is rooted here; what is allocated next is young
         self.heap.safe_point();
         if !self.heap.gc_due() || self.gc_finalizing {
@@ -91,7 +101,7 @@ impl Vm {
         // Root the running thread's live registers (PUC marks [stack, top)).
         // `gc_top` is the instruction-level cursor of the last GC
         // safe-point: allocation safe-points set it via
-        // `maybe_collect_garbage(live_top)`, and `begin_call` raises it
+        // `checkpoint(live_top)`, and `begin_call` raises it
         // to the callee's argument top when entering a native — PUC's
         // `L->top = func + 1 + nargs` C-call discipline. Without that
         // raise, an explicit `collectgarbage()` collected with a STALE
@@ -242,14 +252,21 @@ impl Vm {
     /// finalizers the collection scheduled. A no-op (returns 0) when already
     /// inside a finalizer — the collector is not reentrant (PUC).
     pub fn collect_garbage(&mut self) -> usize {
-        if self.gc_finalizing || self.heap.no_gc() {
+        if self.gc_finalizing {
             return 0;
         }
-        self.clear_dead_stack();
-        let freed = self.full_collect();
-        #[cfg(feature = "gc-verify")]
-        self.verify_frame_regs_live("collect_garbage");
-        self.run_finalizers();
+        #[cfg(feature = "gc-trace")]
+        self.heap.trace.line(format_args!("X"));
+        let mut freed = 0;
+        if !self.heap.no_gc() {
+            self.clear_dead_stack();
+            freed = self.full_collect();
+            #[cfg(feature = "gc-verify")]
+            self.verify_frame_regs_live("collect_garbage");
+            self.run_finalizers();
+        }
+        #[cfg(feature = "gc-trace")]
+        self.heap.trace.line(format_args!("x"));
         freed
     }
 
@@ -258,14 +275,25 @@ impl Vm {
     /// variant runs the same cycle but propagates the captured finalizer
     /// error to the explicit caller.
     pub(crate) fn collect_garbage_propagating(&mut self) -> Result<usize, LuaError> {
-        if self.gc_finalizing || self.heap.no_gc() {
+        if self.gc_finalizing {
             return Ok(0);
         }
-        self.clear_dead_stack();
-        let freed = self.full_collect();
-        #[cfg(feature = "gc-verify")]
-        self.verify_frame_regs_live("collect_garbage_propagating");
-        self.run_finalizers_or_err(true)?;
+        #[cfg(feature = "gc-trace")]
+        self.heap.trace.line(format_args!("X"));
+        let mut freed = 0;
+        if !self.heap.no_gc() {
+            self.clear_dead_stack();
+            freed = self.full_collect();
+            #[cfg(feature = "gc-verify")]
+            self.verify_frame_regs_live("collect_garbage_propagating");
+            let r = self.run_finalizers_or_err(true);
+            #[cfg(feature = "gc-trace")]
+            self.heap.trace.line(format_args!("x"));
+            r?;
+            return Ok(freed);
+        }
+        #[cfg(feature = "gc-trace")]
+        self.heap.trace.line(format_args!("x"));
         Ok(freed)
     }
 
@@ -286,6 +314,19 @@ impl Vm {
             self.heap.trace.flush();
             std::process::exit(0);
         }
+    }
+
+    /// A checkpoint in the accounting trace: `k` and the running Lua
+    /// function's current line, 0 in a native.
+    #[cfg(feature = "gc-trace")]
+    fn trace_checkpoint(&mut self) {
+        let line = match self.frames.last() {
+            Some(CallFrame::Lua(f)) if !self.native_on_top() => {
+                crate::vm::callstack::frame_line(f).max(0)
+            }
+            _ => 0,
+        };
+        self.heap.trace.line(format_args!("k {line}"));
     }
 
     /// Whether a `__gc` finalizer is currently running (so `collectgarbage`

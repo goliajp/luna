@@ -210,7 +210,7 @@ impl Vm {
     /// value the C API holds is on a C stack, which the collector marks.
     pub fn host_check_gc(&mut self) {
         let top = self.stack.len() as u32;
-        self.maybe_collect_garbage(top);
+        self.checkpoint(top);
     }
 
     /// The 5.1 environment of the Lua function `cl`: its `_ENV` cell, or the

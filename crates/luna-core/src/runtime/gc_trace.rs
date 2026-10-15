@@ -12,6 +12,8 @@ pub(crate) struct Trace {
     /// `R38_NOGC`: no collection runs, as in the instrumented PUC build
     /// with the same variable set
     pub(crate) no_gc: bool,
+    /// `R38_NOAUTO`: no automatic step runs, a full collection does
+    pub(crate) no_auto: bool,
     /// `R38_WHERE`: each line also names the luna functions that made it
     where_: bool,
 }
@@ -24,6 +26,7 @@ impl Default for Trace {
         Trace {
             out,
             no_gc: std::env::var_os("R38_NOGC").is_some(),
+            no_auto: std::env::var_os("R38_NOAUTO").is_some(),
             where_: std::env::var_os("R38_WHERE").is_some(),
         }
     }
@@ -52,20 +55,20 @@ fn callers() -> String {
     let bt = std::backtrace::Backtrace::force_capture().to_string();
     let mut out = Vec::new();
     for l in bt.lines() {
-        let l = l.trim();
-        let Some((_, name)) = l.split_once(": ") else {
+        let Some((_, name)) = l.trim().split_once(": ") else {
             continue;
         };
-        if !name.starts_with("luna_core::")
-            || name.contains("gc_trace")
-            || name.contains("heap::acct")
-        {
+        if !name.contains("luna") || name.contains("gc_trace") || name.contains("acct_") {
             continue;
         }
-        let name = name.trim_end_matches(|c: char| c == ':' || c.is_ascii_hexdigit());
+        // the symbol's hash
+        let name = match name.rsplit_once("::h") {
+            Some((n, h)) if h.len() == 16 => n,
+            _ => name,
+        };
         let short = name.rsplit("::").take(2).collect::<Vec<_>>();
         out.push(format!("{}::{}", short.get(1).unwrap_or(&""), short[0]));
-        if out.len() == 5 {
+        if out.len() == 12 {
             break;
         }
     }

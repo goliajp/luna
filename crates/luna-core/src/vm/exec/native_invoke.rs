@@ -214,7 +214,7 @@ impl Vm {
         self.finish_results(func_slot, nret, nresults);
         // the native may have allocated; collect with the results as
         // the live boundary (PUC checks GC after a call returns).
-        self.maybe_collect_garbage(self.top);
+        self.checkpoint(self.top);
         Ok(())
     }
 }

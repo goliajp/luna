@@ -43,6 +43,10 @@ gc-verify = []
 # format of an instrumented PUC build, and run no collection when
 # `R38_NOGC` is set: for comparing the two line by line.
 gc-trace = []
+# Run a full collection at every point PUC checks whether a collection
+# step is due (PUC's HARDMEMTESTS): for tests that pin what each such
+# point keeps alive.
+gc-stress = []
 
 [dependencies]
 # This list must remain empty so

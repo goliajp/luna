@@ -43,7 +43,7 @@ impl Vm {
                     }
                 }
                 self.set_r(base, inst.a(), Value::Table(t));
-                self.maybe_collect_garbage(base + inst.a() + 1);
+                self.checkpoint(base + inst.a() + 1);
             }
             Op::SetList => {
                 let a = inst.a();
@@ -92,7 +92,7 @@ impl Vm {
                     tb.set_list_slot(offset as usize + i as usize, self.r(base, a + 1 + i));
                 }
                 // the element temps above the table are now consumed
-                self.maybe_collect_garbage(base + a + 1);
+                self.checkpoint(base + a + 1);
             }
             Op::Pow => {
                 let (l, r) = (self.r(base, inst.b()), self.r(base, inst.c()));

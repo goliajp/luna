@@ -52,7 +52,16 @@ impl Heap {
     /// check for the interpreter loop).
     #[inline(always)]
     pub fn gc_due(&self) -> bool {
-        self.bytes >= self.gc_limit && !self.no_gc()
+        self.bytes >= self.gc_limit && !self.no_gc() && !self.no_auto()
+    }
+
+    /// No automatic step runs (`gc-trace` with `R38_NOAUTO` set).
+    #[inline(always)]
+    fn no_auto(&self) -> bool {
+        #[cfg(feature = "gc-trace")]
+        return self.trace.no_auto;
+        #[cfg(not(feature = "gc-trace"))]
+        false
     }
 
     /// No collection runs (`gc-trace` with `R38_NOGC` set).
