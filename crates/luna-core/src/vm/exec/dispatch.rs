@@ -18,7 +18,7 @@ impl Vm {
             }
         }
         if let Some(cap) = self.heap.mem_cap
-            && self.heap.bytes() > cap
+            && self.heap.cap_bytes() > cap
         {
             self.mem_cap_exceeded(cap)?;
         }

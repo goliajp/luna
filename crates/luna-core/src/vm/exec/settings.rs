@@ -268,11 +268,12 @@ impl Vm {
     /// again until the next call of this method (see
     /// [`Self::set_instr_budget`] for who that stops). `None` removes the
     /// cap; re-arm before the next `call_value` when reusing the Vm across
-    /// requests. The accounting is approximate — internal Vec/Box capacity
-    /// overhead is not tracked, so embedders should size the cap with ~2×
-    /// margin over the desired hard limit and additionally bound the Vm's
-    /// lifetime (drop after each request). While a cap is armed no
-    /// compiled code runs.
+    /// requests. The cap is held against the bytes the allocation context
+    /// has handed out when it counts them (a host function or a memory
+    /// policy); with the system allocator, against PUC's count of the
+    /// objects (`collectgarbage("count")`), which leaves luna's own
+    /// overhead out, so size the cap with a margin there and bound the
+    /// Vm's lifetime too. While a cap is armed no compiled code runs.
     ///
     /// [`LuaErrorKind::MemoryCap`]: crate::vm::error::LuaErrorKind::MemoryCap
     pub fn set_memory_cap(&mut self, cap: Option<usize>) {

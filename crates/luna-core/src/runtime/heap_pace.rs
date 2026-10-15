@@ -14,6 +14,13 @@ impl Heap {
         self.bytes
     }
 
+    /// What a memory cap is held against: the bytes the allocation context
+    /// has handed out, when it counts them (a host function or a policy),
+    /// else PUC's count ([`Heap::bytes`]).
+    pub fn cap_bytes(&self) -> usize {
+        self.mem_ctx().in_use().unwrap_or(self.bytes)
+    }
+
     /// Pure-read walk over the intrusive `all`
     /// objects list, invoking `visit(tag)` once per live (or
     /// not-yet-swept) GC-managed object. Used by `luna-tools`'s

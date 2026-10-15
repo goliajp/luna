@@ -21,7 +21,8 @@ embedder follows the patterns in §2:
   cannot reach the filesystem, environment, network, child processes,
   or the embedder's address space beyond what the host exposed.
 - **Resource exhaustion (CPU / memory).** Per-`call_value` instruction
-  budget and approximate-byte memory cap force a catchable Lua error
+  budget and memory cap (real bytes under a counting allocation
+  context, PUC's object count otherwise) force a catchable Lua error
   before the host loses control.
 - **Bytecode-loader escape.** Precompiled chunks bypass the parser's
   depth and opcode-shape limits. Every loaded chunk passes a structural

@@ -130,6 +130,11 @@ println!("{:?}", vm.memory_in_use());  // bytes the Vm holds now
 A host that supplies the memory itself passes a `lua_Alloc`-style
 function to the `unsafe` `MemOwner::raw`. Without either, a `Vm` uses
 the system allocator, counts nothing, and pays nothing for the context.
+A memory cap (`set_memory_cap`, `SandboxBuilder::with_memory_cap`) is held
+against the bytes the context has handed out when it counts them, and
+with the system allocator against what `collectgarbage("count")`
+reports: every object at the size PUC gives it, luna's own overhead
+left out.
 The constructors that do not start with `try_` (`Vm::new`,
 `Heap::new_table`, `Vm::create_userdata`, ...) end the process when
 memory runs out, as the standard library's containers do.
