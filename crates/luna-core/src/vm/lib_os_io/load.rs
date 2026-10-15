@@ -39,7 +39,9 @@ pub(crate) fn load_path(
     };
     // PUC pushes the chunk name before it opens the file
     let made = match name {
-        Some(n) => vm.heap.pushfstring_s(b"@%s", &[n]),
+        Some(n) => vm
+            .heap
+            .pushfstring(b"@%s", &[crate::runtime::puc_fmt::FmtArg::S(n)]),
         None => vm.heap.try_intern(&chunkname),
     };
     let name_str = match made {
