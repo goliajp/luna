@@ -283,9 +283,14 @@ impl Heap {
             Gc::from_ptr(p)
         };
         let size = self.closure_size(&proto, n);
+        let env = self.env51(&proto);
         self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::LuaClosure, size);
         // SAFETY: `g` is the closure linked just above; no other handle or reference to it exists yet
-        unsafe { g.as_mut() }.init_upvals_ptr();
+        let c = unsafe { g.as_mut() };
+        c.init_upvals_ptr();
+        if env {
+            c.hdr.sub |= super::acct::ENV51;
+        }
         Ok(g)
     }
 

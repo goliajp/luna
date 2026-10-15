@@ -139,8 +139,10 @@ impl Heap {
                 ObjTag::Closure => {
                     let c = &*(h as *mut LuaClosure);
                     if !is_uncounted(h) {
-                        let size = self.closure_size(&c.proto, c.upvals_len as usize);
-                        self.acct_free(size);
+                        // the prototype may be freed already
+                        let env = (*h).sub & super::acct::ENV51 != 0;
+                        let n = c.upvals_len as usize - usize::from(env);
+                        self.acct_free(self.sizes.lua_closure(n));
                     }
                     (*(h as *mut LuaClosure)).free_overflow(self.mem());
                     self.free_block(h as *mut LuaClosure);

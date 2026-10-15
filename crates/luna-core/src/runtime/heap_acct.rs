@@ -188,6 +188,7 @@ mod boot;
 mod fmt;
 #[path = "heap_acct_parts.rs"]
 mod parts;
+pub(crate) use parts::ENV51;
 
 /// Whether object `h` is one PUC has not made (see [`Heap::acct_new`]).
 #[inline(always)]
