@@ -41,11 +41,14 @@ impl Heap {
         for name in tm_names(d) {
             self.try_intern(name.as_bytes())?;
         }
+        // PUC fixes these (`luaC_fix`): never collected
         if d >= Dialect::L53 {
-            self.try_intern(b"_ENV")?;
+            let s = self.try_intern(b"_ENV")?;
+            self.puc.pins.push(s);
         }
         for w in reserved_words(d) {
-            self.try_intern(w.as_bytes())?;
+            let s = self.try_intern(w.as_bytes())?;
+            self.puc.pins.push(s);
         }
         if d <= Dialect::L52 {
             self.acct_string(memerr);
