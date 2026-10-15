@@ -238,6 +238,12 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
         }
         // lua.c sets it before it opens the libraries
         vm.set_ignore_env(ignore_env);
+        // lua.c runs everything inside `pmain`, a C function `main` calls
+        // protected with `lua_cpcall` (5.1: the function and its userdata
+        // on the stack) or `lua_pcall` with `argc` and `argv` as arguments,
+        // before it opens the libraries
+        let slots = if opts.version == LuaVersion::Lua51 { 2 } else { 3 };
+        vm.host_entry_layout(1, slots);
         vm.trace_mark("openlibs");
         vm.open_lua_c_libs();
         vm.trace_mark("/openlibs");
@@ -369,15 +375,6 @@ fn main() {
         vm: new_vm(&opts, ignore_env),
         progname: Some(progname.clone()),
     };
-    // lua.c runs everything inside `pmain`, a C function `main` calls
-    // protected with `lua_cpcall` (5.1: the function and its userdata on
-    // the stack) or `lua_pcall` with `argc` and `argv` as arguments
-    let slots = if opts.version == LuaVersion::Lua51 {
-        2
-    } else {
-        3
-    };
-    interp.vm.host_entry_layout(1, slots);
     // 5.1 runs LUA_INIT before it looks at the options
     let ok = (opts.version != LuaVersion::Lua51 || interp.handle_luainit())
         && match args {

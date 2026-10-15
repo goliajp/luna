@@ -20,6 +20,12 @@ impl Vm {
         } else {
             // `pmain`'s
             self.extend_ci_to(1);
+            // 5.2's `lua_pcall` checks for a collection before `pmain`
+            // stops the collector
+            if self.version == crate::version::LuaVersion::Lua52 {
+                self.heap.refresh_gc_limit();
+                self.native_checkpoint();
+            }
         }
         self.open_all_libs();
     }
