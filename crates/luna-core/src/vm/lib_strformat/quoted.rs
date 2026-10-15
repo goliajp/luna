@@ -56,10 +56,13 @@ pub(crate) fn addliteral(
     a: Args,
     arg: u32,
     out: &mut LVec<u8>,
-) -> Result<(), LuaError> {
+) -> Result<Added, LuaError> {
     let mut item = Vec::new();
     match a.get(vm, arg) {
-        Value::Str(s) => return addquoted(vm, s.as_bytes(), out),
+        Value::Str(s) => {
+            addquoted(vm, s.as_bytes(), out)?;
+            return Ok(Added::Chars);
+        }
         Value::Int(n) if n == i64::MIN => {
             // "-9223372036854775808" would read back as a float
             item.extend_from_slice(b"0x8000000000000000");
@@ -67,12 +70,15 @@ pub(crate) fn addliteral(
         Value::Int(n) => cfmt::signed(out, &Spec::default(), n),
         Value::Float(x) => quotefloat(vm.version(), x, &mut item),
         v @ (Value::Nil | Value::Bool(_)) => {
-            let s = vm.tostring_value(v)?;
-            item.extend_from_slice(&s);
+            // `luaL_tolstring` and `luaL_addvalue`
+            let s = vm.tolstring(v, 0)?;
+            vm.buf_push(out, s.as_bytes())?;
+            return Ok(Added::Value(s));
         }
         _ => return Err(arg_error(vm, arg + 1, "value has no literal form")),
     }
-    vm.buf_push(out, &item)
+    vm.buf_push(out, &item)?;
+    Ok(Added::Sized)
 }
 
 /// A float as a hexadecimal numeral; 5.4 spells the values `%a` cannot

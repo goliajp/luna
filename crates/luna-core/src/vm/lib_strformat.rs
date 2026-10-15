@@ -11,6 +11,7 @@ use crate::vm::builtins::{arg_error, raise_bytes, raise_str};
 use crate::vm::cfmt::{self, Spec};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
+use crate::vm::puc_buffer::PucBuffer;
 mod item51;
 mod item54;
 mod quoted;
@@ -25,6 +26,27 @@ const FLAGS: &[u8] = b"-+ #0";
 /// 2^63, the first double past `i64`.
 const TWO63: f64 = 9_223_372_036_854_775_808.0;
 
+/// How PUC's `str_format` put an item's text into its `luaL_Buffer`.
+pub(crate) enum Added {
+    /// written into room asked for first (`luaL_addsize`; 5.1 copies it
+    /// with `luaL_addlstring`)
+    Sized,
+    /// a character or a few at a time (`addquoted`)
+    Chars,
+    /// the whole string (`luaL_addvalue`)
+    Value(crate::runtime::Gc<crate::runtime::LuaStr>),
+}
+
+/// PUC `MAX_ITEM`, the room `str_format` asks for before an item (5.1
+/// formats into a C array instead).
+fn max_item(v: LuaVersion) -> usize {
+    match v {
+        LuaVersion::Lua51 | LuaVersion::Lua52 => 512,
+        LuaVersion::Lua53 => 120 + 308,
+        _ => 120,
+    }
+}
+
 pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let f = argcheck::check_string(vm, a, 0)?;
@@ -33,6 +55,7 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // room for the format and an item before the buffer regrows
     let mut out = vm.new_buf();
     vm.buf_reserve(&mut out, fmt.len() + cfmt::ITEM_MAX)?;
+    let mut b = PucBuffer::new(vm);
     let mut arg = 0u32;
     let mut i = 0;
     // the buffer's slot counts only when a callback runs or an error is
@@ -47,14 +70,23 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
                 .position(|&b| b == b'%')
                 .map_or(fmt.len(), |k| i + k);
             vm.buf_push(&mut out, &fmt[i - 1..end])?;
+            b.add_chars(vm, &out, end - (i - 1))?;
             i = end;
             continue;
         }
         // a '%' at the very end pairs with the string's terminating zero
         if fmt.get(i) == Some(&b'%') {
             vm.buf_push(&mut out, b"%")?;
+            b.add_chars(vm, &out, 1)?;
             i += 1;
             continue;
+        }
+        if v >= LuaVersion::Lua52 {
+            b.prep(vm, &out, max_item(v))?;
+            // 5.4 on ask for more for a `%f`
+            if v >= LuaVersion::Lua54 && item_conv(fmt, i) == b'f' {
+                b.prep(vm, &out, 110 + 308)?;
+            }
         }
         arg += 1;
         if arg >= nargs {
@@ -62,13 +94,29 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             vm.native_push(buf);
             return Err(arg_error(vm, arg + 1, "no value"));
         }
+        let before = out.len();
         let item = if v >= LuaVersion::Lua54 {
             item54(vm, a, arg, fmt, i, &mut out)
         } else {
             item51(vm, a, arg, fmt, i, &mut out)
         };
         i = match item {
-            Ok(i) => i,
+            Ok((i, Added::Value(s))) => {
+                b.add_value(vm, &out, s)?;
+                i
+            }
+            Ok((i, Added::Chars)) => {
+                b.add_chars(vm, &out, out.len() - before)?;
+                i
+            }
+            Ok((i, Added::Sized)) if v == LuaVersion::Lua51 => {
+                b.add_chars(vm, &out, out.len() - before)?;
+                i
+            }
+            Ok((i, Added::Sized)) => {
+                b.add_size(out.len() - before);
+                i
+            }
             Err(e) => {
                 let buf = vm.buffer_slot(out.len());
                 vm.native_push(buf);
@@ -76,9 +124,21 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             }
         };
     }
-    let s = vm.lib_built_str(&out)?;
+    if out.len() > crate::runtime::string::MAX_LEN {
+        return Err(vm.rt_err("string length overflow"));
+    }
+    let s = b.finish(vm, &out)?;
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[s])
+    vm.nat_ret(fs, &[Value::Str(s)])
+}
+
+/// The conversion byte of the item whose specification starts at `i`.
+fn item_conv(fmt: &[u8], i: usize) -> u8 {
+    let mut p = i;
+    while fmt.get(p).is_some_and(|c| b"-+#0 123456789.".contains(c)) {
+        p += 1;
+    }
+    byte_at(fmt, p)
 }
 
 fn byte_at(fmt: &[u8], i: usize) -> u8 {
