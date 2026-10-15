@@ -72,8 +72,7 @@ const SLOW: u8 = 8;
 /// in a string's `sub` byte: luna made the string for itself, PUC has not
 /// made it, and the count leaves it out (see `heap_acct.rs`)
 pub(crate) const UNCOUNTED: u8 = 0x80;
-/// in a string's `sub` byte: a 5.5 external string, whose bytes PUC keeps
-/// in a block of the allocation function's (`lua_pushexternalstring`)
+/// in a string's `sub` byte: a 5.5 external string (its bytes in a block)
 pub(crate) const EXTERNAL: u8 = 0x40;
 /// The `aux` bit of a table that marks it read-only (`Table::is_readonly`).
 /// A table's other `aux` bits are its absent-metamethod bits, one per event
@@ -181,12 +180,9 @@ pub struct Heap {
     /// the dialect whose table rules (array sizing, hashing of number
     /// keys, the length border) a new table follows
     pub(crate) table_dialect: crate::runtime::table::Dialect,
-    /// PUC 5.3 finalizes a table caught in a cycle through an unreachable
-    /// coroutine one GC round later than the unreachability is detected
-    /// ("two collections are needed to break cycle", gc.lua :502). 5.4 and 5.5
-    /// rewrote the GC and finalize the same cycle in a single pass (their
-    /// gc.lua :544 asserts collected after one `collectgarbage()`). 5.1/5.2
-    /// don't exercise this path. Set by the VM at construction.
+    /// PUC 5.3 finalizes a table in a cycle through an unreachable coroutine
+    /// one collection after it finds it unreachable (gc.lua :502); 5.4 and
+    /// 5.5 in the same one (gc.lua :544). Set by the VM at construction.
     pub(crate) defer_thread_cycle_finalize: bool,
     /// An object finalized once can be registered again (all but 5.2,
     /// whose `luaC_checkfinalizer` refuses a finalized object).
@@ -225,11 +221,8 @@ pub struct Heap {
     /// Incremental traversal state. `Some` between `gc_start_propagate` and
     /// `gc_finish_atomic` (and inline within `mark_all`); `None` otherwise.
     propagate: Option<PropagateState>,
-    /// Pool of freed Table allocations.
-    /// btrees-style workloads create + free ~32k tables per iter;
-    /// jemalloc's malloc/free roundtrip costs ~30ns per table = ~960µs
-    /// total per iter. free_obj parks a freed Table here and new_table
-    /// reuses it; at most 4096 (about 460 KB idle).
+    /// Freed tables (at most 4096) that new tables reuse: a workload making
+    /// and freeing many tables skips the allocator's round trip.
     table_pool: crate::runtime::mem::LVec<std::ptr::NonNull<crate::runtime::table::Table>>,
     /// The main functions of the chunks loaded while `track_chunk_roots`
     /// is set, without keeping them alive: the collector drops each one it
@@ -239,8 +232,7 @@ pub struct Heap {
     /// values the VM refers to without keeping them alive, and whether the
     /// last marking found each dead (see `Vm::forget_dead_errors`)
     pub(crate) weak_watch: Vec<(Value, bool)>,
-    /// the coroutines PUC counts, as of the last marking the ones it kept:
-    /// the threads its collector visits
+    /// the threads PUC's collector visits: since the last marking, the kept
     pub(crate) threads: Vec<Gc<crate::runtime::Coro>>,
     /// the sizes of PUC's objects in this dialect, which `bytes` counts
     pub(crate) sizes: crate::runtime::puc_size::PucSizes,

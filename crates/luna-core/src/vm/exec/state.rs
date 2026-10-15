@@ -98,17 +98,11 @@ pub struct Vm {
     /// overflow at `u32::MAX` retires the slot (NOT pushed here).
     pub(crate) host_roots_free: LVec<u32>,
 
-    /// GC-rooted scratch stack for `table.sort` (and any other
-    /// builtin that needs a Rust-side `Vec<Value>` to outlive a user
-    /// callback). Each entry is one in-flight working buffer; `gc_roots`
-    /// extends with every contained `Value` so a `collectgarbage()`
-    /// inside the comparator cannot free strings/tables snapshotted
-    /// here. Nested sorts push a new buffer on entry, pop on exit
-    /// (sort.lua's `load(..)(); collectgarbage()` compare callback
-    /// regression).
+    /// GC-rooted working buffers of `table.sort` (and any builtin whose
+    /// Rust-side values must outlive a user callback): a collection inside
+    /// the comparator keeps what they hold. Nested sorts push one each.
     pub(crate) sort_scratch: LVec<LVec<Value>>,
-    /// values a library function keeps where PUC's C function has them on
-    /// its stack (the strings of a 5.1 `luaL_Buffer`): roots
+    /// roots: what a library function keeps where PUC's has it on its stack
     pub(crate) lib_roots: Vec<Value>,
     /// Storages [`Vm::install_jit_storage`] replaced: code compiled into
     /// them may still be referenced by this Vm's functions, so they live
