@@ -5,7 +5,7 @@
 //! memory errors.
 
 use super::*;
-use crate::runtime::mem::{LSlice, LVec, Oom, oom_abort};
+use crate::runtime::mem::{LSlice, Oom, oom_abort};
 use std::alloc::Layout;
 
 #[path = "heap_alloc_cells.rs"]
@@ -142,17 +142,17 @@ impl Heap {
 
     /// Give the pooled tables' blocks back to the allocation context (an
     /// emergency collection does, so they can serve other allocations), and
-    /// the gray stack's block, which the emergency collection's roots may
+    /// the gray stack's memory, which the emergency collection's roots may
     /// have grown past what the collector otherwise needs.
     pub(crate) fn release_pool(&mut self) {
-        for &ptr in self.table_pool.take().iter() {
+        for ptr in std::mem::take(&mut self.table_pool) {
             // SAFETY: the pool holds unlinked tables whose interiors were
             // freed when they were pooled; taking the pool made this the
             // only pointer to each
             unsafe { self.free_block(ptr.as_ptr()) };
         }
         if self.gray.is_empty() && !self.gray_overflow {
-            self.gray = LVec::new(self.mem());
+            self.gray = mark::GrayStack::default();
         }
     }
 

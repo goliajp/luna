@@ -47,7 +47,7 @@ impl Heap {
             next_gc: GC_MIN_THRESHOLD,
             gc_limit: GC_MIN_THRESHOLD,
             current_white: WHITE0,
-            gray: crate::runtime::mem::LVec::new(mem.mem()),
+            gray: mark::GrayStack::default(),
             gray_overflow: false,
             young: ptr::null_mut(),
             store_failed: false,
@@ -72,7 +72,7 @@ impl Heap {
             threads: Vec::new(),
             track_chunk_roots: false,
             mem_cap: None,
-            table_pool: crate::runtime::mem::LVec::new(mem.mem()),
+            table_pool: Vec::new(),
             #[cfg(feature = "gc-verify")]
             recently_freed: std::collections::HashSet::new(),
             mem,
@@ -109,7 +109,7 @@ impl Drop for Heap {
             }
             // the pooled tables' interiors were freed when they were
             // recycled; only their blocks are left
-            for &ptr in self.table_pool.take().iter() {
+            for ptr in std::mem::take(&mut self.table_pool) {
                 self.free_block(ptr.as_ptr());
             }
         }
