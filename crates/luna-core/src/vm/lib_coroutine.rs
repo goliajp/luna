@@ -168,11 +168,27 @@ fn mark_in_wrap(vm: &mut Vm, in_wrap: Gc<Table>, on: bool) -> Result<(), LuaErro
     Ok(())
 }
 
+/// The string of a refusal [`resume_refusal`] worded: 5.1's `auxresume`
+/// formats it (`lua_pushfstring`), later dialects push a literal.
+fn refusal_value(vm: &mut Vm, msg: &str) -> Result<Value, LuaError> {
+    let status = msg
+        .strip_prefix("cannot resume ")
+        .and_then(|m| m.strip_suffix(" coroutine"));
+    match status {
+        Some(st) if vm.version() == LuaVersion::Lua51 => {
+            let args = [crate::runtime::puc_fmt::FmtArg::S(st.as_bytes())];
+            let s = vm.heap.pushfstring(b"cannot resume %s coroutine", &args)?;
+            Ok(Value::Str(s))
+        }
+        _ => vm.str_value(msg.as_bytes()),
+    }
+}
+
 fn co_resume(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let co = check_co(vm, Args::new(fs, nargs))?;
     let in_wrap = upval_table(vm, fs, 0);
     if let Some(msg) = resume_refusal(vm, co, false, in_wrap) {
-        let m = vm.str_value(msg.as_bytes())?;
+        let m = refusal_value(vm, &msg)?;
         return vm.nat_ret(fs, &[Value::Bool(false), m]);
     }
     // 5.1 raises when `lua_checkstack` on either thread refuses
