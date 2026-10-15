@@ -148,14 +148,15 @@ impl Vm {
     }
 
     /// PUC's `LUAL_BUFFERSIZE`, the room a library buffer has on the C
-    /// stack before it allocates: `BUFSIZ` up to 5.2, 8192 in 5.3, 1024
-    /// from 5.4 on (64-bit).
+    /// stack before it allocates: the C library's `BUFSIZ` up to 5.2,
+    /// `0x80 * sizeof(void *) * sizeof(lua_Integer)` in 5.3 and
+    /// `16 * sizeof(void *) * sizeof(lua_Number)` from 5.4 on.
     pub(crate) fn lual_buffersize(v: LuaVersion) -> usize {
+        let ptr = std::mem::size_of::<usize>();
         match v {
-            LuaVersion::Lua51 | LuaVersion::Lua52 if cfg!(windows) => 512,
-            LuaVersion::Lua51 | LuaVersion::Lua52 if cfg!(target_vendor = "apple") => 1024,
-            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => 8192,
-            _ => 1024,
+            LuaVersion::Lua51 | LuaVersion::Lua52 => crate::vm::lib_io::BUFSIZ,
+            LuaVersion::Lua53 => 0x80 * ptr * 8,
+            _ => 16 * ptr * 8,
         }
     }
 

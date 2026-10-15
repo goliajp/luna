@@ -74,12 +74,12 @@ impl Vm {
 
     /// The slots a `luaL_Buffer` holding `len` bytes takes on the stack:
     /// 5.4+ a placeholder from the start, 5.2 and 5.3 a box once the
-    /// content passes `LUAL_BUFFERSIZE` (8192 there), 5.1 none.
+    /// content passes `LUAL_BUFFERSIZE`, 5.1 none.
     #[inline]
     pub(crate) fn buffer_slot(&self, len: usize) -> u32 {
         match self.version() {
             LuaVersion::Lua51 => 0,
-            LuaVersion::Lua52 | LuaVersion::Lua53 => u32::from(len > LUAL_BUFFERSIZE_52),
+            v @ (LuaVersion::Lua52 | LuaVersion::Lua53) => u32::from(len > Vm::lual_buffersize(v)),
             _ => 1,
         }
     }
@@ -128,9 +128,6 @@ impl Vm {
         self.native_push(slot);
     }
 }
-
-/// 5.2's and 5.3's `LUAL_BUFFERSIZE` (`BUFSIZ`, 8192 with glibc)
-const LUAL_BUFFERSIZE_52: usize = 8192;
 
 /// The checks of the stack's room `luaO_pushvfstring` makes formatting a
 /// message of `conv` conversions, each as (slot, slots) counted from the
