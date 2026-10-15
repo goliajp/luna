@@ -184,8 +184,7 @@ pub(super) fn emit_set_list<M: Module>(
                 b_field as usize
             };
             let t_raw = bcx.use_var(regs[a]);
-            // Float-declared Table operand
-            // bitcast to I64; see SetTable for the rationale.
+            // a Float-declared table operand: bitcast to I64, as SetTable does
             let t = if matches!(
                 reg_kinds.get(a).copied().unwrap_or(RegKind::Int),
                 RegKind::Float
@@ -276,7 +275,17 @@ pub(super) fn emit_set_list<M: Module>(
                 let room = bcx
                     .ins()
                     .icmp(IntCC::UnsignedGreaterThanOrEqual, asize, b_v);
-                bcx.ins().band(room, empty)
+                let fits = bcx.ins().band(room, empty);
+                if elems.iter().any(|&(tag, _)| tag == RAW_TAG_TABLE) {
+                    // a black table takes the write barrier, on the slow path
+                    use luna_core::runtime::table::jit_layout::{TABLE_FLAGS_OFFSET, TABLE_SLOW_MASK};
+                    let flags = bcx.ins().uload8(types::I64, MemFlagsData::trusted(), t, TABLE_FLAGS_OFFSET as i32);
+                    let slow = bcx.ins().band_imm_u(flags, i64::from(TABLE_SLOW_MASK));
+                    let plain = bcx.ins().icmp_imm_u(IntCC::Equal, slow, 0);
+                    bcx.ins().band(fits, plain)
+                } else {
+                    fits
+                }
             } else {
                 bcx.ins().iconst(types::I8, 0)
             };

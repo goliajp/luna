@@ -28,6 +28,9 @@ pub enum ObjTag {
 }
 
 impl GcHeader {
+    /// Byte offset of the flag byte, for compiled code.
+    pub(crate) const FLAGS_OFFSET: usize = std::mem::offset_of!(GcHeader, flags);
+
     /// Whether this is a read-only table (`Table::is_readonly`).
     #[inline(always)]
     pub(crate) fn readonly(&self) -> bool {

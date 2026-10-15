@@ -43,6 +43,15 @@ pub const TABLE_READONLY_BYTE_OFFSET: usize = std::mem::offset_of!(Table, hdr)
 /// The read-only bit within the byte at [`TABLE_READONLY_BYTE_OFFSET`].
 pub const TABLE_READONLY_BYTE_MASK: u8 = (crate::runtime::heap::READONLY_AUX >> 24) as u8;
 
+/// Byte offset of the table header's flag byte: an inline store of a
+/// collectable value tests [`TABLE_SLOW_MASK`] there (a black table takes
+/// the write barrier, on the slow path).
+pub const TABLE_FLAGS_OFFSET: usize =
+    std::mem::offset_of!(Table, hdr) + crate::runtime::heap::GcHeader::FLAGS_OFFSET;
+
+/// The bit of the flag byte set on a black or read-only table.
+pub const TABLE_SLOW_MASK: u8 = crate::runtime::heap::SLOW;
+
 /// Byte offset of the key within `Node` (= 0): its tag here, its payload
 /// 8 bytes on.
 pub const NODE_KEY_OFFSET: usize = std::mem::offset_of!(Node, key_tag);
