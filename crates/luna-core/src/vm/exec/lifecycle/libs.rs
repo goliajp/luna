@@ -53,8 +53,10 @@ impl Vm {
             crate::runtime::mem::oom_abort(std::alloc::Layout::new::<u8>());
         }
         self.heap.puc.silent -= 1;
-        if self.heap.acct_replay_openlibs().is_err() {
-            crate::runtime::mem::oom_abort(std::alloc::Layout::new::<u8>());
+        match self.heap.acct_replay_openlibs(self.stack_size) {
+            Ok(Some(s)) => self.set_stack_size(s),
+            Ok(None) => {}
+            Err(_) => crate::runtime::mem::oom_abort(std::alloc::Layout::new::<u8>()),
         }
         // the search paths `package` keeps are PUC's strings when they
         // have PUC's bytes
@@ -86,9 +88,7 @@ impl Vm {
         if self.version != LuaVersion::Lua51 {
             self.g.ci_alloc += 1;
         }
-        // the collector starts from no debt, as `lua_gc(L, LUA_GCRESTART)`
-        // after `luaL_openlibs` leaves it
-        self.heap.gc_set_stopped(false);
+        self.heap.acct_libs_pace();
     }
 
     /// The library objects of luna's, made without counting, that stand
