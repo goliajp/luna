@@ -256,6 +256,12 @@ pub(crate) fn alloc_long_pair(
     }
 }
 
+/// A long string of `parts` one after another, hashed when first used as
+/// a key (not 5.1's, whose long strings are interned).
+pub(crate) fn alloc_long_parts(mem: MemRef, parts: &[&[u8]], seed: u32) -> Result<*mut LuaStr, Oom> {
+    alloc_str_of(mem, parts, false, seed, false)
+}
+
 /// A long string: hashed when first used as a key, or at once with PUC
 /// 5.1's hash (`h51`).
 pub(crate) fn alloc_long(
