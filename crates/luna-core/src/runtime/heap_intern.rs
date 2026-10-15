@@ -214,6 +214,30 @@ impl Heap {
         self.fixed = h;
     }
 
+    /// PUC `luaC_fix` for the string `s`, wherever it is on `all` (one
+    /// made before may be fixed again: nothing to do).
+    pub(super) fn fix_string(&mut self, s: Gc<LuaStr>) {
+        let h = s.as_ptr() as *mut GcHeader;
+        let mut link: *mut *mut GcHeader = &mut self.all;
+        // SAFETY: the links of `all` lead to live objects; no collection
+        // is under way while a state is made
+        unsafe {
+            while !(*link).is_null() {
+                if *link == h {
+                    if self.young == h {
+                        self.young = (*h).next;
+                    }
+                    *link = (*h).next;
+                    (*h).next = self.fixed;
+                    (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
+                    self.fixed = h;
+                    return;
+                }
+                link = &mut (**link).next;
+            }
+        }
+    }
+
     /// Make the fixed "not enough memory" string memory errors carry (PUC
     /// `luaS_init` makes `memerrmsg` first thing and fixes it).
     pub(super) fn make_memerr(&mut self) -> Result<(), Oom> {
