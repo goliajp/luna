@@ -20,6 +20,8 @@ local bad = {
   "local veryLongVariableNameNumberOne, veryLongVariableNameNumberTwo = 1, 2\n" ..
     string.rep("veryLongVariableNameNumberOne = veryLongVariableNameNumberTwo + 1\n", 20) .. "end",
 }
+-- (printed at the end: what printing makes is not in the counts)
+local out = {}
 collectgarbage(); collectgarbage(); collectgarbage("stop")
 for i, s in ipairs(bad) do
   local before = collectgarbage("count")
@@ -27,5 +29,8 @@ for i, s in ipairs(bad) do
   local mid = collectgarbage("count")
   collectgarbage(); collectgarbage(); collectgarbage("stop")
   local after = collectgarbage("count")
-  print(i, f, e, string.format("%.0f %.0f", (mid - before) * 1024, (after - before) * 1024))
+  out[i] = {f, e, mid - before, after - before}
+end
+for i, r in ipairs(out) do
+  print(i, r[1], r[2], string.format("%.0f %.0f", r[3] * 1024, r[4] * 1024))
 end
