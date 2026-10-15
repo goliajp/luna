@@ -112,25 +112,39 @@ impl Vm {
             // in the order PUC's parser makes it; that includes its own
             // string of the chunk name, a new one when the name is long
             // (5.2+ does not intern long strings)
-            self.parse_scratch.record = self.heap.puc.silent == 0;
+            let counted = self.heap.puc.silent == 0;
+            self.parse_scratch.record = counted;
             self.heap.puc.silent += 1;
             let long = chunkname.len() > crate::runtime::string::MAX_SHORT_LEN
                 && self.heap.table_dialect != crate::runtime::table::Dialect::L51;
-            let made = match name {
+            let source = match name {
                 Some(n) if !long => Ok(n),
                 _ => self.heap.try_intern(chunkname).map_err(SyntaxError::from),
-            }
-            .and_then(|source| self.compile_text_in_place(src, source))
-            .and_then(|p| self.hold_puc_names(p).map(|()| p))
-            .and_then(|p| Ok((p, self.close_chunk(p)?)));
+            };
+            let made = source
+                .clone()
+                .and_then(|source| self.compile_text_in_place(src, source))
+                .and_then(|p| self.hold_puc_names(p).map(|()| p))
+                .and_then(|p| Ok((p, self.close_chunk(p)?)));
             self.heap.puc.silent -= 1;
+            // what PUC made before the error is counted as it made it
+            let failed = match (&made, source) {
+                (Err(e), Ok(source)) if counted && !e.is_memory() => {
+                    self.acct_failed_load(src, e, source)
+                }
+                _ => Ok(()),
+            };
             self.parse_scratch.record = false;
+            failed?;
             let (_, cl) = made?;
             let scratch = std::mem::replace(
                 &mut self.parse_scratch,
                 crate::frontend::parser::ParseScratch::new(self.heap.mem_owner()),
             );
-            let counted = self.acct_text_load(src, &scratch, cl);
+            let counted = match scratch.recorded() {
+                Some(rec) => self.acct_text_load(src, scratch.parsed().0, rec, cl),
+                None => Ok(()),
+            };
             self.parse_scratch = scratch;
             counted?;
             return Ok(cl);
@@ -199,7 +213,7 @@ impl Vm {
     }
 
     /// The closure of a loaded main function over the globals.
-    fn close_chunk(
+    pub(in crate::vm::exec) fn close_chunk(
         &mut self,
         proto: Gc<crate::runtime::Proto>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {

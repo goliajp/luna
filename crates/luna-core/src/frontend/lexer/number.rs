@@ -83,7 +83,9 @@ impl<S: Source> Lexer<'_, S> {
             None => {
                 self.buf.clear();
                 self.buf.extend_from_slice_or_abort(text);
-                Err(self.buf_error("malformed number"))
+                let e = self.buf_error("malformed number");
+                self.near_kind.set(NearKind::Numeral);
+                Err(e)
             }
         }
     }

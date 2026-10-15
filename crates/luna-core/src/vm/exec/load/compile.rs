@@ -20,7 +20,14 @@ impl Vm {
         );
         if let Err(e) = parsed {
             let failed = self.parse_scratch.failed;
-            return Err(self.error_before(src, failed, source).unwrap_or(e));
+            return Err(match self.error_before(src, failed, source) {
+                Some(e) => {
+                    // a compile error, not where the parse failed
+                    self.parse_scratch.failed = None;
+                    e
+                }
+                None => e,
+            });
         }
         let (chunk, end_lines) = self.parse_scratch.parsed();
         crate::compiler::compile_parsed(
@@ -72,7 +79,7 @@ impl Vm {
         crate::compiler::error_before(src, v, depth, failed?, source, heap, scratch)
     }
 
-    pub(super) fn compile_parsed(
+    pub(in crate::vm::exec) fn compile_parsed(
         &mut self,
         chunk: &crate::frontend::ast::Chunk,
         end_lines: &[u32],

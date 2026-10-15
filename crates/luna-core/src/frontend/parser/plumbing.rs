@@ -1,6 +1,7 @@
 //! Token plumbing: advancing, expecting, error construction and nesting depth.
 
 use super::*;
+use crate::frontend::error::NearKind;
 
 impl<'s> Parser<'s> {
     pub(super) fn advance(&mut self) -> Result<LexTok, SyntaxError> {
@@ -58,6 +59,13 @@ impl<'s> Parser<'s> {
         if self.tok_char == Some(0) {
             return self.plain_error(msg.as_ref());
         }
+        self.near_kind.set(match (self.tok_char, self.tok.tok) {
+            (Some(_), _) => NearKind::Char,
+            (_, Token::Eof) => NearKind::Eof,
+            (_, Token::Name(()) | Token::Str(())) => NearKind::Text,
+            (_, Token::Int(_) | Token::Float(_)) => NearKind::Numeral,
+            _ => NearKind::Fixed,
+        });
         let mut bytes = msg.as_ref().as_bytes().to_vec();
         bytes.extend_from_slice(b" near ");
         bytes.extend_from_slice(&self.near());
@@ -71,6 +79,7 @@ impl<'s> Parser<'s> {
     #[cold]
     #[inline(never)]
     pub(super) fn plain_error(&self, msg: impl Into<Vec<u8>>) -> SyntaxError {
+        self.near_kind.set(NearKind::None);
         SyntaxError {
             line: self.lex.line(),
             msg: msg.into(),
@@ -86,6 +95,22 @@ impl<'s> Parser<'s> {
             self.error(format!("{what} expected"))
         } else {
             self.error(format!("'{what}' expected"))
+        }
+    }
+
+    /// Where this parse failed, and what its error quotes.
+    pub(super) fn failure(&self) -> Failed {
+        let (near, start, pos) = self.lex.scan_state();
+        Failed {
+            at: self.tok_ix,
+            scanning: self.lex_failed,
+            first: false,
+            scan: (start as u32, pos as u32),
+            near: if self.lex_failed {
+                near
+            } else {
+                self.near_kind.get()
+            },
         }
     }
 

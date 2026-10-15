@@ -36,8 +36,25 @@ impl Vm {
     ) -> Result<(), SyntaxError> {
         let s = self.heap.try_intern(bytes)?;
         match r.scan_table(kind) {
-            Some(t) => self.set_in(t, Value::Str(s), Value::Bool(true)),
+            Some(t) => {
+                #[cfg(feature = "gc-trace")]
+                let new = t.get(Value::Str(s)).is_nil();
+                self.set_in(t, Value::Str(s), Value::Bool(true))?;
+                #[cfg(feature = "gc-trace")]
+                self.scan_checkpoint(new);
+                Ok(())
+            }
             None => Ok(()),
+        }
+    }
+
+    /// `luaX_newstring` checks for a collection when it anchors a new
+    /// string (5.5 `anchorstr`): the accounting trace marks where (the
+    /// collection itself waits for the load).
+    #[cfg(feature = "gc-trace")]
+    fn scan_checkpoint(&mut self, new: bool) {
+        if new {
+            self.trace_checkpoint();
         }
     }
 
@@ -73,20 +90,25 @@ impl Vm {
         };
         if *slot != id {
             *slot = id;
+            #[cfg(feature = "gc-trace")]
+            let new = t.get(Value::Str(s)).is_nil();
             self.set_in(t, Value::Str(s), Value::Bool(true))?;
+            #[cfg(feature = "gc-trace")]
+            self.scan_checkpoint(new);
         }
         Ok(())
     }
 
     /// The log's events, with what the scanner does up to each one's token:
     /// it fills its buffer while it reads a token, then makes the token's
-    /// string.
+    /// string. A load that failed stops at `cut`.
     pub(super) fn replay_log(
         &mut self,
         r: &mut Replay,
         log: &[(TokRef, PEv)],
         chunk: &crate::frontend::ast::Chunk,
         marks: &crate::frontend::parser::Marks,
+        cut: Option<Cut>,
     ) -> Result<(), SyntaxError> {
         let scanned = r.scanned;
         let mut strs = scanned.strings.iter().peekable();
@@ -115,34 +137,57 @@ impl Vm {
             } else {
                 at(t)
             };
+            if let Some(c) = cut
+                && tok >= c.events
+                && !(c.ended
+                    && tok == c.events
+                    && matches!(t, TokRef::After(_, 0) | TokRef::StatAfter(_, 0)))
+            {
+                break;
+            }
             #[cfg(feature = "gc-trace")]
             self.heap.trace.line(format_args!("E {tok} {ev:?}"));
-            loop {
-                let p = peaks.peek().map(|&&(t, _)| i64::from(t));
-                let st = strs.peek().map(|(t, ..)| i64::from(*t));
-                match (p, st) {
-                    (Some(p), _) if p <= tok && st.is_none_or(|st| p <= st) => {
-                        let (_, peak) = peaks.next().expect("peeked");
-                        // each save that overflows grows the buffer once
-                        while r.buff < *peak as usize {
-                            let size = crate::frontend::parser::scan::grown(
-                                self.version,
-                                r.buff,
-                                r.buff + 1,
-                            );
-                            self.heap.acct_block(r.buff, size);
-                            r.buff = size;
-                        }
-                    }
-                    (_, Some(st)) if st <= tok => {
-                        let &(_, text, kind) = strs.next().expect("peeked");
-                        self.replay_scan_text(r, text, kind)?;
-                    }
-                    _ => break,
-                }
-            }
+            self.scan_until(r, &mut strs, &mut peaks, tok)?;
             self.replay_event(r, tok, ev)?;
         }
+        if let Some(c) = cut {
+            self.scan_until(r, &mut strs, &mut peaks, c.scans)?;
+        }
         Ok(())
+    }
+
+    /// What the scanner does up to token `tok`.
+    fn scan_until<'a>(
+        &mut self,
+        r: &mut Replay,
+        strs: &mut std::iter::Peekable<impl Iterator<Item = &'a (u32, ScanText, ScanKind)>>,
+        peaks: &mut std::iter::Peekable<impl Iterator<Item = &'a (u32, u32)>>,
+        tok: i64,
+    ) -> Result<(), SyntaxError> {
+        loop {
+            let p = peaks.peek().map(|&&(t, _)| i64::from(t));
+            let st = strs.peek().map(|(t, ..)| i64::from(*t));
+            match (p, st) {
+                (Some(p), _) if p <= tok && st.is_none_or(|st| p <= st) => {
+                    let &(_, peak) = peaks.next().expect("peeked");
+                    self.grow_buff(r, peak as usize);
+                }
+                (_, Some(st)) if st <= tok => {
+                    let &(_, text, kind) = strs.next().expect("peeked");
+                    self.replay_scan_text(r, text, kind)?;
+                }
+                _ => return Ok(()),
+            }
+        }
+    }
+
+    /// The scanner's buffer holding `n` bytes: each save that overflows
+    /// grows it once.
+    pub(super) fn grow_buff(&mut self, r: &mut Replay, n: usize) {
+        while r.buff < n {
+            let size = crate::frontend::parser::scan::grown(self.version, r.buff, r.buff + 1);
+            self.heap.acct_block(r.buff, size);
+            r.buff = size;
+        }
     }
 }

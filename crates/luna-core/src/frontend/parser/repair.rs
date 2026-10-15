@@ -21,6 +21,9 @@ pub(crate) fn completed(
     c_depth: u32,
     failed: Failed,
 ) -> Option<Vec<u8>> {
+    if failed.first {
+        return Some(Vec::new());
+    }
     let at = token_at(src, version, c_depth, failed.at)?;
     // a token that failed to scan ends the source after the one before it
     let cut = if failed.scanning {

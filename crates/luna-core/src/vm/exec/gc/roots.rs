@@ -13,7 +13,12 @@ impl Vm {
         for mt in self.type_mt.into_iter().flatten() {
             m.value(Value::Table(mt));
         }
-        for &n in self.mm_names.iter().chain(&self.heap.puc.pins) {
+        for &n in self
+            .mm_names
+            .iter()
+            .chain(&self.heap.puc.pins)
+            .chain(&self.heap.puc.load_msg)
+        {
             m.value(Value::Str(n));
         }
         // Root the running thread's live registers (PUC marks [stack, top)).

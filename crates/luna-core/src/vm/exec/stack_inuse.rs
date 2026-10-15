@@ -108,18 +108,24 @@ impl Vm {
     /// PUC shrinking the running thread at `at`, its stack reserved up to
     /// `inuse`.
     pub(super) fn shrink_running(&mut self, at: Shrink, inuse: u32) {
+        // PUC shrinks a caught error with the protected call's level still
+        // current; luna has popped the continuation that held it
+        self.shrink_levels(at, inuse, u32::from(at == Shrink::Caught));
+    }
+
+    /// `luaD_pcall` catching the error of a load, whose call is current.
+    pub(super) fn shrink_load_error(&mut self) {
+        let inuse = self.stack_in_use();
+        self.shrink_levels(Shrink::Caught, inuse, 0);
+    }
+
+    fn shrink_levels(&mut self, at: Shrink, inuse: u32, extra: u32) {
         let mut sz = ThreadSizes {
             stack: self.stack_size,
             frames51: self.g.frame_size,
             ci: self.g.ci_alloc,
         };
-        let (mut levels, mut ci_used) = (self.frames_in_use(), self.ci_in_use());
-        if at == Shrink::Caught {
-            // PUC shrinks with the protected call's level still current;
-            // luna has popped the continuation that held it
-            levels += 1;
-            ci_used += 1;
-        }
+        let (levels, ci_used) = (self.frames_in_use() + extra, self.ci_in_use() + extra);
         shrink_thread(
             &mut self.heap,
             self.version,

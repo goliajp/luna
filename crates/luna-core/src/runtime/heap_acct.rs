@@ -36,6 +36,9 @@ pub(crate) struct PucState {
     pub(crate) stand_ins: Vec<(*mut GcHeader, Vec<usize>)>,
     /// tables of luna's own, which PUC has none of: never counted
     pub(crate) own_tables: Vec<*const crate::runtime::Table>,
+    /// the message of the last load that failed, made as PUC makes it,
+    /// until the load's caller takes it
+    pub(crate) load_msg: Option<Gc<crate::runtime::LuaStr>>,
     /// the number the last table, function, thread or userdata made got
     /// (`Heap::take_id`): its hash as a key, where PUC's is its address
     pub(crate) next_id: u32,
@@ -54,6 +57,7 @@ impl Default for PucState {
             kept_long: Vec::new(),
             stand_ins: Vec::new(),
             own_tables: Vec::new(),
+            load_msg: None,
             next_id: 0,
         }
     }
