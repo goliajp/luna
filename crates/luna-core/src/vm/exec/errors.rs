@@ -290,10 +290,8 @@ impl Vm {
         }
     }
 
-    /// PUC `luaL_where(L, level)`: `"short_src:line: "` for the function at
-    /// `level` (0 = the running native), or `None` when that level does not
-    /// exist or has no line information (a C function, a stripped chunk).
-    pub(crate) fn position_prefix_at_level(&self, level: i64) -> Option<String> {
+    /// The `short_src` and current line `luaL_where(L, level)` reports.
+    pub(crate) fn position_at_level(&self, level: i64) -> Option<(Vec<u8>, i64)> {
         let ts = self.thread_stack(None);
         let i = usize::try_from(level).ok()?;
         if i >= ts.levels.len() {
@@ -307,10 +305,7 @@ impl Vm {
             return None;
         };
         let ar = self.closure_ar(ts.lua(fi).closure);
-        Some(format!(
-            "{}:{line}: ",
-            String::from_utf8_lossy(&ar.short_src)
-        ))
+        Some((ar.short_src, line))
     }
 }
 
