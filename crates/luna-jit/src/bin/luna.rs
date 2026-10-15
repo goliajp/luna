@@ -194,14 +194,11 @@ fn print_version(v: LuaVersion) {
 }
 
 fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
-    // luna-core's `Vm::new` defaults to the no-op
-    // JIT backend; the `luna` bin always wants Cranelift, so go
-    // through the wrapper. --no-jit then opts back out.
+    // the bin wants Cranelift (luna-core's `Vm::new` has the no-op JIT
+    // backend); --no-jit opts back out
     let mut vm = if opts.sandbox {
-        // SandboxBuilder lives in luna-core and has no JIT backend, but
-        // its trace flags start on; --no-jit switches them off. Without
-        // --no-jit, install Cranelift afterwards (so the builder's
-        // safe-stdlib whitelist still applies but the JIT is on).
+        // SandboxBuilder has no JIT backend but its trace flags start on:
+        // --no-jit switches them off, otherwise Cranelift goes in after it
         let mut vm = luna_jit::vm::Vm::sandbox(opts.version)
             .open_base()
             .open_math()
@@ -241,10 +238,8 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
         }
         // lua.c sets it before it opens the libraries
         vm.set_ignore_env(ignore_env);
-        #[cfg(feature = "gc-trace")]
         vm.trace_mark("openlibs");
         vm.open_lua_c_libs();
-        #[cfg(feature = "gc-trace")]
         vm.trace_mark("/openlibs");
         vm
     };
@@ -265,8 +260,7 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
         vm.jit.call_hot_threshold = n;
     }
     // Test knob, also left out of --help: with the LLVM backend, how long a
-    // hot trace runs Cranelift's code before LLVM compiles it (0: LLVM at
-    // once, before the trace runs on)
+    // hot trace runs Cranelift's code before LLVM compiles it (0: at once)
     #[cfg(feature = "llvm-jit")]
     if !opts.no_jit
         && std::env::var("LUNA_JIT_BACKEND").as_deref() == Ok("llvm")
@@ -397,9 +391,7 @@ fn main() {
         print_profile(&interp.vm);
     }
     counters::append(&interp.vm);
-    // lua.c closes the state before it exits, which finalizes open files
-    // and so writes out what they still buffer
-    #[cfg(feature = "gc-trace")]
+    // lua.c closes the state before it exits: open files write out buffers
     interp.vm.trace_mark("close");
     drop(interp);
     // C's exit flushes stdout (and stderr, if setvbuf buffered it)
