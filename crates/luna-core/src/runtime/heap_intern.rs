@@ -154,6 +154,24 @@ impl Heap {
         Ok(unsafe { Gc::from_ptr(p) })
     }
 
+    /// 5.5 `lua_pushexternalstring` of `bytes` (longer than any short
+    /// string), the block holding them handed over by a `luaL_Buffer`: a
+    /// long string whose header alone `totalbytes` counts.
+    pub(crate) fn new_external_string(&mut self, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
+        let p = string::alloc_long_parts(self.mem.mem(), &[bytes], self.seed)?;
+        // SAFETY: `alloc_long_parts` just allocated `p`, linked nowhere yet
+        unsafe { self.link(p as *mut GcHeader) };
+        if self.puc.silent > 0 {
+            acct::set_uncounted(p as *mut GcHeader, true);
+        } else {
+            // SAFETY: as above
+            unsafe { (*p).hdr.sub |= EXTERNAL };
+            self.acct_obj(PucKind::LongStr, self.sizes.lngstr_hdr + 2 * self.sizes.ptr);
+        }
+        // SAFETY: `p` is the string linked just above
+        Ok(unsafe { Gc::from_ptr(p) })
+    }
+
     /// The interned string with `bytes`, if one has been made; never
     /// allocates. A short name no string exists for is no table's key.
     pub fn find_interned(&self, bytes: &[u8]) -> Option<Gc<LuaStr>> {

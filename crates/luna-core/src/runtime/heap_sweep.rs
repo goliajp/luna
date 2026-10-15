@@ -185,7 +185,11 @@ impl Heap {
                 ObjTag::Ghost => self.free_ghost(h as *mut ghost::Ghost),
                 ObjTag::Str => {
                     let s = h as *mut LuaStr;
-                    if (*h).sub & UNCOUNTED != 0 {
+                    if (*h).sub & EXTERNAL != 0 {
+                        // its block goes back first, then its header
+                        self.trace_raw((*s).len() + 1, 0);
+                        self.acct_free(self.sizes.lngstr_hdr + 2 * self.sizes.ptr);
+                    } else if (*h).sub & UNCOUNTED != 0 {
                         if let Some(i) = self.puc.stand_ins.iter().position(|&(p, _)| p == h) {
                             let (_, size) = self.puc.stand_ins.swap_remove(i);
                             self.acct_free(size);

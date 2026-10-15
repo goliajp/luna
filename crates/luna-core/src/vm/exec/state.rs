@@ -107,6 +107,9 @@ pub struct Vm {
     /// (sort.lua's `load(..)(); collectgarbage()` compare callback
     /// regression).
     pub(crate) sort_scratch: LVec<LVec<Value>>,
+    /// values a library function keeps where PUC's C function has them on
+    /// its stack (the strings of a 5.1 `luaL_Buffer`): roots
+    pub(crate) lib_roots: Vec<Value>,
     /// Storages [`Vm::install_jit_storage`] replaced: code compiled into
     /// them may still be referenced by this Vm's functions, so they live
     /// as long as the Vm.

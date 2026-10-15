@@ -171,6 +171,24 @@ impl Heap {
         }
     }
 
+    /// A block PUC allocates through the allocation function but leaves
+    /// out of `totalbytes` (the contents of a `luaL_Buffer` box): only the
+    /// accounting trace sees it.
+    #[inline]
+    pub(crate) fn trace_raw(&mut self, old: usize, new: usize) {
+        #[cfg(feature = "gc-trace")]
+        if self.puc.silent == 0 {
+            match (old, new) {
+                (0, 0) => {}
+                (0, n) => self.trace.line(format_args!("a 0 {n}")),
+                (o, 0) => self.trace.line(format_args!("d {o}")),
+                (o, n) => self.trace.line(format_args!("r {o} {n}")),
+            }
+        }
+        #[cfg(not(feature = "gc-trace"))]
+        let _ = (old, new);
+    }
+
     /// An object of `size` bytes freed.
     #[inline]
     pub(crate) fn acct_free(&mut self, size: usize) {
@@ -201,7 +219,7 @@ pub(crate) fn is_uncounted(h: *const GcHeader) -> bool {
     unsafe { (*h).sub & UNCOUNTED != 0 }
 }
 
-fn set_uncounted(h: *mut GcHeader, on: bool) {
+pub(super) fn set_uncounted(h: *mut GcHeader, on: bool) {
     // SAFETY: `h` heads a live object of this heap; only its per-type byte
     // is written, which no type but a table uses otherwise
     unsafe {
