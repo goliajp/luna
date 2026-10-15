@@ -64,4 +64,41 @@ impl Vm {
         self.api_check_after(s);
         Ok(s)
     }
+
+    /// lua.c's `arg` table (`createargtable`; 5.1 and 5.2 `getargs`, which
+    /// first push the script's arguments), made through the API calls
+    /// lua.c makes, with their checks for a collection: `arg[0]` is
+    /// `argv[script]`, the script's arguments count up from 1 and what
+    /// comes before it down from -1.
+    #[doc(hidden)]
+    pub fn host_set_arg(&mut self, argv: &[Vec<u8>], script: usize) -> Result<(), LuaError> {
+        let base = self.lib_roots.len();
+        let r = self.host_arg_table(argv, script);
+        self.lib_roots.truncate(base);
+        let t = r?;
+        self.set_global("arg", Value::Table(t))
+    }
+
+    fn host_arg_table(&mut self, argv: &[Vec<u8>], script: usize) -> Result<Gc<Table>, LuaError> {
+        if self.version <= LuaVersion::Lua52 {
+            for a in &argv[script + 1..] {
+                let s = self.api_push_string(a)?;
+                self.lib_roots.push(s);
+            }
+        }
+        self.api_check_before();
+        let narg = argv.len() - script - 1;
+        let t = match self.table_op(|vm| vm.heap.try_create_table(narg, script + 1)) {
+            Ok(t) => t,
+            Err(e) => return Err(self.table_error(e)),
+        };
+        self.lib_roots.push(Value::Table(t));
+        self.api_check_after_rooted();
+        for (i, a) in argv.iter().enumerate() {
+            let s = self.api_push_string(a)?;
+            let k = Value::Int(i as i64 - script as i64);
+            self.raw_set(t, k, s)?;
+        }
+        Ok(t)
+    }
 }

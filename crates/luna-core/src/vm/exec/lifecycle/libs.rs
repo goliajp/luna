@@ -28,6 +28,10 @@ impl Vm {
             }
         }
         self.open_all_libs();
+        // 5.4 on, lua.c keeps the collector stopped until it has made `arg`
+        if self.version >= crate::version::LuaVersion::Lua54 {
+            self.heap.gc_set_stopped(true);
+        }
     }
 
     /// Open the entire 5.5 standard library on a `new_minimal`-built Vm.
