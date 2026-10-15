@@ -215,6 +215,8 @@ pub struct Heap {
     gray: mark::GrayStack,
     /// objects a back barrier sent to gray (PUC `grayagain`)
     grayagain: mark::GrayStack,
+    /// 5.1, 5.2: the sweep of PUC's string table under way
+    strt: strt::StrtSweep,
     /// objects registered for finalization (a live `__gc` metamethod was set);
     /// parallel-tracked — ownership stays on `all` (PUC `finobj`).
     finalize: crate::runtime::mem::LVec<*mut GcHeader>,
@@ -224,10 +226,8 @@ pub struct Heap {
     /// Incremental traversal state. `Some` between `gc_start_propagate` and
     /// `gc_finish_atomic` (and inline within `mark_all`); `None` otherwise.
     propagate: Option<PropagateState>,
-    /// Freed tables (at most 4096) that new tables reuse: a workload making
-    /// and freeing many tables skips the allocator's round trip. Its list
-    /// is outside the allocation context: a sweep allocates nothing a host
-    /// allocator or memory policy could see, as PUC's does not.
+    /// Freed tables (at most 4096) that new tables reuse, listed outside
+    /// the allocation context: a sweep allocates nothing, as PUC's.
     table_pool: Vec<std::ptr::NonNull<crate::runtime::table::Table>>,
     /// The main functions of the chunks loaded while `track_chunk_roots`
     /// is set, without keeping them alive: the collector drops each one it
@@ -306,6 +306,8 @@ mod mark;
 mod pace;
 #[path = "heap_sweep.rs"]
 mod sweep;
+#[path = "heap_strt.rs"]
+mod strt;
 pub(crate) use self::mark::Marker;
 use self::mark::{blacken, drain_marker, survived_mark, weak_key_alive};
 

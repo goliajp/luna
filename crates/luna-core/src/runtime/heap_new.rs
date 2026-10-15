@@ -49,6 +49,7 @@ impl Heap {
             current_white: WHITE0,
             gray: mark::GrayStack::default(),
             grayagain: mark::GrayStack::default(),
+            strt: Default::default(),
             gray_overflow: false,
             young: ptr::null_mut(),
             store_failed: false,
@@ -99,7 +100,7 @@ impl Drop for Heap {
     fn drop(&mut self) {
         // free everything regardless of reachability, including any list still
         // detached for an in-flight incremental sweep
-        // SAFETY: the heap is being dropped, so nothing uses its objects any more; `all` and `fixed` hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds tables from `alloc_block` already unlinked from every list
+        // SAFETY: the heap is being dropped, so nothing uses its objects any more; `all`, `fixed` and the held strings hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds tables from `alloc_block` already unlinked from every list
         unsafe {
             for mut cur in [self.all, self.fixed] {
                 while !cur.is_null() {
@@ -107,6 +108,10 @@ impl Drop for Heap {
                     self.free_obj(cur);
                     cur = next;
                 }
+            }
+            // and the dead strings a string sweep held off `all`
+            for h in std::mem::take(&mut self.strt.held) {
+                self.free_obj(h);
             }
             // the pooled tables' interiors were freed when they were
             // recycled; only their blocks are left

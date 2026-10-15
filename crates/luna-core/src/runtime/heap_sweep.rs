@@ -95,6 +95,13 @@ impl Heap {
                 let f = (*cur).flags;
                 if is_white(f) && (f & new_white) == 0 {
                     *link = (*cur).next;
+                    if to_live && self.in_string_sweep(cur) {
+                        // PUC's string table holds it, not the list it
+                        // sweeps to the first live object: its string
+                        // sweep comes first
+                        self.strt.held.push(cur);
+                        continue;
+                    }
                     self.free_obj(cur);
                     self.live -= 1;
                 } else {
@@ -303,6 +310,8 @@ impl Heap {
                         self.acct_free(self.sizes.lngstr_hdr + 2 * self.sizes.ptr);
                     } else if (*h).sub & acct::FIXED_EXT != 0 {
                         self.acct_free(self.sizes.lngstr_hdr);
+                    } else if (*h).sub & strt::SWEPT != 0 {
+                        // the string sweep took it off the count
                     } else if (*h).sub & UNCOUNTED != 0 {
                         self.free_stand_in(h);
                     } else {

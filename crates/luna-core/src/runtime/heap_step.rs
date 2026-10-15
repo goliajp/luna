@@ -119,6 +119,11 @@ impl Heap {
         }
         self.atomic_tail(&mut m);
         self.settle_sizer(&mut m);
+        if run.is_some() {
+            self.collect_dead_strings();
+        } else {
+            self.end_string_sweep();
+        }
         // PropagateState consumed; the sweep goes over `all` in place
         // (PUC `entersweep`). Anything allocated past this point goes in
         // front of where it is and survives.
