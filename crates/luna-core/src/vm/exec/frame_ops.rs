@@ -43,7 +43,13 @@ impl Vm {
                     }
                 }
                 self.set_r(base, inst.a(), Value::Table(t));
-                self.checkpoint(base + inst.a() + 1);
+                // 5.1 keeps the whole frame
+                let top = if self.version() == LuaVersion::Lua51 {
+                    self.frame_top()
+                } else {
+                    base + inst.a() + 1
+                };
+                self.checkpoint(top);
             }
             Op::SetList => {
                 let a = inst.a();
@@ -91,8 +97,6 @@ impl Vm {
                 for i in 0..n {
                     tb.set_list_slot(offset as usize + i as usize, self.r(base, a + 1 + i));
                 }
-                // the element temps above the table are now consumed
-                self.checkpoint(base + a + 1);
             }
             Op::Pow => {
                 let (l, r) = (self.r(base, inst.b()), self.r(base, inst.c()));
@@ -103,7 +107,9 @@ impl Vm {
                 // stack so a yielding __concat can suspend
                 let (first, out) = inst.concat_operands();
                 self.top = base + first + inst.b();
-                self.concat_run(base + first, base + out)?;
+                if self.concat_run(base + first, base + out)? {
+                    self.concat_checkpoint(base + first, base + out);
+                }
             }
             Op::ForPrep | Op::ForPrep55 => self.for_prep(inst, base)?,
             Op::TForPrep | Op::TForPrep53 | Op::TForPrep55 => {

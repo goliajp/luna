@@ -52,7 +52,8 @@ impl Vm {
     /// continuation re-enters here on its return.
     /// `out`: where the result goes once the operands from `base_a` up
     /// are folded into one (5.1–5.3 `CONCAT` names its own destination).
-    pub(super) fn concat_run(&mut self, base_a: u32, out: u32) -> Result<(), LuaError> {
+    /// Whether it finished (`false`: the metamethod call is armed).
+    pub(super) fn concat_run(&mut self, base_a: u32, out: u32) -> Result<bool, LuaError> {
         let v = self.version;
         while self.top - base_a >= 2 {
             let top = self.top;
@@ -72,7 +73,7 @@ impl Vm {
                 let dst = top - 2;
                 let out = (out as i64 - base_a as i64) as i16;
                 self.begin_meta_call(mm, &[x, y], MetaAction::Concat { dst, base_a, out })?;
-                return Ok(());
+                return Ok(false);
             }
             let Value::Str(y) = self.stack[(top - 1) as usize] else {
                 unreachable!("converted above")
@@ -126,8 +127,28 @@ impl Vm {
         if out != base_a {
             self.stack[out as usize] = self.stack[base_a as usize];
         }
-        self.checkpoint(base_a + 1);
-        Ok(())
+        Ok(true)
+    }
+
+    /// The checkpoint after `CONCAT` finished in the running Lua function,
+    /// its operands from `base_a` and its result at `out`, with each
+    /// dialect's stack top: 5.1 the whole frame (taken before the result
+    /// is copied, which changes nothing a collection sees); 5.2 and 5.3
+    /// past the result or up to the operands, whichever is higher; later,
+    /// past the result.
+    pub(super) fn concat_checkpoint(&mut self, base_a: u32, out: u32) {
+        let top = match self.version {
+            LuaVersion::Lua51 => self.frame_top(),
+            LuaVersion::Lua52 | LuaVersion::Lua53 => (out + 1).max(base_a),
+            _ => out + 1,
+        };
+        self.checkpoint(top);
+    }
+
+    /// PUC's `ci->top` of the running Lua function: its whole frame.
+    pub(super) fn frame_top(&self) -> u32 {
+        let f = self.top_frame();
+        f.base + u32::from(f.closure.proto.max_stack)
     }
 
     /// PUC's `tostring` of a concatenation's operand in slot `slot`: a
