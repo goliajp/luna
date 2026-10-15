@@ -3,14 +3,18 @@
 use super::*;
 use crate::runtime::mem::LVec;
 
-/// `BUFSIZ`, the size of the chunks ≤5.2 read a line in (`LUAL_BUFFERSIZE`).
+/// The C library's `BUFSIZ`: the size of the chunks ≤5.2 read a line in
+/// (`LUAL_BUFFERSIZE`). glibc's is 8192; the BSDs', and musl's (which
+/// emscripten builds with), 1024; Microsoft's 512.
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
     target_os = "freebsd",
     target_os = "netbsd",
     target_os = "openbsd",
-    target_os = "dragonfly"
+    target_os = "dragonfly",
+    target_env = "musl",
+    target_family = "wasm"
 ))]
 pub(crate) const BUFSIZ: usize = 1024;
 #[cfg(windows)]
@@ -22,7 +26,9 @@ pub(crate) const BUFSIZ: usize = 512;
     target_os = "freebsd",
     target_os = "netbsd",
     target_os = "openbsd",
-    target_os = "dragonfly"
+    target_os = "dragonfly",
+    target_env = "musl",
+    target_family = "wasm"
 )))]
 pub(crate) const BUFSIZ: usize = 8192;
 

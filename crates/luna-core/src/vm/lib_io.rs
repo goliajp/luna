@@ -40,6 +40,7 @@ pub(crate) use open::open_file;
 #[cfg(any(unix, windows))]
 pub(crate) use open::shell_command;
 use open::*;
+pub(crate) use read::BUFSIZ;
 use read::*;
 pub(crate) use results::c_str;
 #[cfg(any(unix, windows))]
