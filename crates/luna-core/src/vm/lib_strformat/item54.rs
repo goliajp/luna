@@ -43,7 +43,8 @@ pub(super) fn item54(
     fmt: &[u8],
     start: usize,
     out: &mut LVec<u8>,
-) -> Result<usize, LuaError> {
+) -> Result<(usize, Added), LuaError> {
+    let mut added = Added::Sized;
     // every conversion but a long `%s` and `%q` fits in this
     vm.buf_reserve(out, cfmt::ITEM_MAX)?;
     // getformat: flags, width and precision bytes ('0' counted as a flag),
@@ -103,21 +104,24 @@ pub(super) fn item54(
             if form.len() > 2 {
                 return Err(raise_str(vm, "specifier '%q' cannot have modifiers"));
             }
-            addliteral(vm, a, arg, out)?;
+            added = addliteral(vm, a, arg, out)?;
         }
         b's' => {
             if form.len() == 2
                 && let Some(s) = plain_str(vm, a, arg)
             {
                 vm.buf_push(out, s.as_bytes())?;
-                return Ok(p + 1);
+                return Ok((p + 1, Added::Value(s)));
             }
             // a `__tostring` runs above the buffer's slot; its result stays
             // pushed over the errors that follow
             let buf = vm.buffer_slot(out.len());
-            let s = vm.tostring_value_pushed(a.get(vm, arg), buf)?;
+            let v = a.get(vm, arg);
+            let gs = vm.tolstring(v, buf)?;
+            let s = gs.as_bytes().to_vec();
             if form.len() == 2 {
                 vm.buf_push(out, &s)?;
+                added = Added::Value(gs);
             } else {
                 if s.contains(&0) {
                     vm.native_push(1);
@@ -129,6 +133,7 @@ pub(super) fn item54(
                 }
                 if !form.contains(&b'.') && s.len() >= 100 {
                     vm.buf_push(out, &s)?;
+                    added = Added::Value(gs);
                 } else {
                     cfmt::cstr(out, &sp, &s);
                 }
@@ -143,5 +148,5 @@ pub(super) fn item54(
             return Err(raise_bytes(vm, &msg));
         }
     }
-    Ok(p + 1)
+    Ok((p + 1, added))
 }

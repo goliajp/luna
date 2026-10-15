@@ -10,9 +10,10 @@ pub(super) fn item51(
     fmt: &[u8],
     start: usize,
     out: &mut LVec<u8>,
-) -> Result<usize, LuaError> {
+) -> Result<(usize, Added), LuaError> {
     let v = vm.version();
     let p = scanformat(vm, fmt, start)?;
+    let mut added = Added::Sized;
     // every conversion but a long `%s` and `%q` fits in this
     vm.buf_reserve(out, cfmt::ITEM_MAX)?;
     let conv = byte_at(fmt, p);
@@ -82,8 +83,9 @@ pub(super) fn item51(
             LuaVersion::Lua51 | LuaVersion::Lua52 => {
                 let s = argcheck::check_string(vm, a, arg)?;
                 addquoted(vm, s.as_bytes(), out)?;
+                added = Added::Chars;
             }
-            _ => addliteral(vm, a, arg, out)?,
+            _ => added = addliteral(vm, a, arg, out)?,
         },
         b's' => {
             if v >= LuaVersion::Lua53
@@ -91,22 +93,26 @@ pub(super) fn item51(
                 && let Some(s) = plain_str(vm, a, arg)
             {
                 vm.buf_push(out, s.as_bytes())?;
-                return Ok(p + 1);
+                return Ok((p + 1, Added::Value(s)));
             }
-            let s = if v == LuaVersion::Lua51 {
-                argcheck::check_string(vm, a, arg)?.as_bytes().to_vec()
+            let gs = if v == LuaVersion::Lua51 {
+                argcheck::check_string(vm, a, arg)?
             } else {
                 // a `__tostring` runs above the buffer's slot
                 let buf = vm.buffer_slot(out.len());
                 if v == LuaVersion::Lua52 {
-                    tolstring_52(vm, a.get(vm, arg), buf)?
+                    let b = tolstring_52(vm, a.get(vm, arg), buf)?;
+                    vm.heap.try_intern(&b)?
                 } else {
-                    vm.tostring_value_pushed(a.get(vm, arg), buf)?
+                    let v = a.get(vm, arg);
+                    vm.tolstring(v, buf)?
                 }
             };
+            let s = gs.as_bytes().to_vec();
             let has_prec = body.contains(&b'.');
             if v >= LuaVersion::Lua53 && body.is_empty() {
                 vm.buf_push(out, &s)?;
+                added = Added::Value(gs);
             } else {
                 if v >= LuaVersion::Lua53 && s.contains(&0) {
                     // over the `luaL_tolstring` result
@@ -115,6 +121,7 @@ pub(super) fn item51(
                 }
                 if !has_prec && s.len() >= 100 {
                     vm.buf_push(out, &s)?;
+                    added = Added::Value(gs);
                 } else {
                     cfmt::cstr(out, &sp, &s);
                 }
@@ -135,7 +142,7 @@ pub(super) fn item51(
             return Err(crate::vm::builtins::raise_bytes_fmt(vm, 2, &msg));
         }
     }
-    Ok(p + 1)
+    Ok((p + 1, added))
 }
 
 /// C's `(int)` conversion of a double on the reference platform: a

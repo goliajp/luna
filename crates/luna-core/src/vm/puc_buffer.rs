@@ -82,6 +82,30 @@ impl PucBuffer {
         Ok(())
     }
 
+    /// `k` bytes added at the end of `out` a character at a time
+    /// (`luaL_addchar`): the buffer grows each time a character finds it
+    /// full.
+    pub(crate) fn add_chars(&mut self, vm: &mut Vm, out: &[u8], k: usize) -> Result<(), LuaError> {
+        if self.d == Dialect::L51 {
+            return self.add(vm, out, k);
+        }
+        let mut k = k;
+        while k > 0 {
+            if self.n == self.size {
+                self.prep(vm, out, 1)?;
+            }
+            let take = (self.size - self.n).min(k);
+            self.n += take;
+            k -= take;
+        }
+        Ok(())
+    }
+
+    /// `sz` bytes written into the room asked for before (`luaL_addsize`).
+    pub(crate) fn add_size(&mut self, sz: usize) {
+        self.n += sz;
+    }
+
     /// Room for `sz` more bytes (`luaL_prepbuffsize`; 5.1's
     /// `luaL_prepbuffer`, which empties the buffer whatever it holds).
     pub(crate) fn prep(&mut self, vm: &mut Vm, out: &[u8], sz: usize) -> Result<(), LuaError> {
