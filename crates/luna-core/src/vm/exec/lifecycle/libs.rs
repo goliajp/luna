@@ -49,6 +49,28 @@ impl Vm {
         if self.heap.acct_replay_openlibs().is_err() {
             crate::runtime::mem::oom_abort(std::alloc::Layout::new::<u8>());
         }
+        // the search paths `package` keeps are PUC's strings when they
+        // have PUC's bytes
+        if let Some(pkg) = self.heap.find_interned(b"package")
+            && let Value::Table(p) = self.globals.get(Value::Str(pkg))
+        {
+            for name in [&b"path"[..], b"cpath"] {
+                if let Some(k) = self.heap.find_interned(name)
+                    && let Value::Str(s) = p.get(Value::Str(k))
+                {
+                    self.heap.acct_adopt_long(s);
+                    // luna's own default Lua path stands for PUC's
+                    if name == b"path"
+                        && let Some(&puc) =
+                            self.heap.puc.kept_long.iter().find(|b| b.ends_with(b"?.lua") || b.windows(5).any(|w| w == b"?.lua"))
+                        && puc != s.as_bytes()
+                    {
+                        self.heap.acct_stand_in(s, puc);
+                    }
+                }
+            }
+        }
+        self.heap.puc.kept_long = Vec::new();
         // each library opens in a call one level down, whose `CallInfo` is
         // in the record
         if self.version != LuaVersion::Lua51 {
