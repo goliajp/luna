@@ -25,10 +25,9 @@ use path::*;
 use require::*;
 use searchers::*;
 
-/// Default search paths. PUC compiles in its install prefix; luna has
+/// Default Lua search path. PUC compiles in its install prefix; luna has
 /// none, so only the current-directory templates remain.
 const LUA_PATH_DEFAULT: &[u8] = b"./?.lua;./?/init.lua";
-const LUA_CPATH_DEFAULT: &[u8] = b"";
 
 /// PUC's message and `loadlib` "where" when built without dynamic libraries.
 const DLMSG: &[u8] = b"dynamic libraries not enabled; check your Lua installation";
@@ -113,7 +112,7 @@ fn open_package_with(vm: &mut Vm, list_opened: bool) -> Result<(), LuaError> {
     let path = env_path(v, noenv, "LUA_PATH", LUA_PATH_DEFAULT);
     let path = vm.str_value(&path)?;
     raw_set(vm, pkg, "path", path)?;
-    let cpath = env_path(v, noenv, "LUA_CPATH", LUA_CPATH_DEFAULT);
+    let cpath = env_path(v, noenv, "LUA_CPATH", &cpath_default(v));
     let cpath = vm.str_value(&cpath)?;
     raw_set(vm, pkg, "cpath", cpath)?;
     // dir separator, path separator, template mark, executable-dir mark,
