@@ -98,9 +98,10 @@ pub(super) fn shrink_thread(
 impl Vm {
     /// [`thread_in_use`] of the running thread.
     pub(super) fn stack_in_use(&self) -> u32 {
+        let host = if self.current.is_none() { self.g.host_ci_top } else { 0 };
         thread_in_use(
             &self.frames,
-            self.top,
+            self.top.max(host),
             &self.running_natives[self.natives_base..],
         )
     }
@@ -149,10 +150,11 @@ impl Vm {
         let v = self.version;
         let inuse = self.stack_in_use();
         self.shrink_running(Shrink::Collector, inuse);
-        let host_frames = self.g.host_frames;
+        let (host_frames, host_ci_top) = (self.g.host_frames, self.g.host_ci_top);
         let natives = &self.running_natives;
         if let Some(m) = &mut self.main_ctx {
-            let inuse = thread_in_use(&m.frames, m.top, &natives[m.natives.clone()]);
+            let top = m.top.max(host_ci_top);
+            let inuse = thread_in_use(&m.frames, top, &natives[m.natives.clone()]);
             let n = (m.frames.len() + m.natives.len()) as u32 + host_frames - m.meta_conts;
             let mut sz = ThreadSizes {
                 stack: m.stack_size,

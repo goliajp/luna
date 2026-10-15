@@ -21,6 +21,7 @@ impl Vm {
             self.stack.push_or_abort(Value::Nil);
         }
         self.top = self.stack.len() as u32;
+        self.g.host_ci_top = self.top + stack_size::MIN_STACK;
     }
 
     /// `lua_close` from inside a running script (`os.exit(code, true)`):
@@ -77,6 +78,7 @@ impl Vm {
                 stack_last: fast_stack_last(version, stack_size::initial(version)),
                 frames_native: 0,
                 host_frames: 0,
+                host_ci_top: 0,
                 meta_conts: 0,
                 ci_alloc: if version == LuaVersion::Lua51 {
                     u32::MAX
