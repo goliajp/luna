@@ -13,6 +13,14 @@ impl Vm {
         key: Option<crate::compiler::const_map::ConstKey>,
         v: Value,
     ) -> Result<(), SyntaxError> {
+        // a long string constant is the string the scanner made (luna's
+        // compiler made its own)
+        if let Value::Str(cs) = v
+            && let Some(i) = r.longs.iter().position(|l| l.as_bytes() == cs.as_bytes())
+        {
+            let ss = r.longs.swap_remove(i);
+            self.heap.acct_move_long(ss, cs);
+        }
         let s = self.heap.sizes;
         let k_first = r.d == Dialect::L55;
         if k_first && let Some(f) = r.fs.last_mut() {

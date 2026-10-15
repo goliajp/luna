@@ -74,8 +74,12 @@ impl Vm {
         let s = match slot.0 {
             Some(s) => s,
             None => {
-                let s = self.heap.try_intern(text.bytes(names, src))?;
+                let bytes = text.bytes(names, src);
+                let s = self.heap.try_intern(bytes)?;
                 slot.0 = Some(s);
+                if bytes.len() > crate::runtime::string::MAX_SHORT_LEN && r.d != Dialect::L51 {
+                    r.longs.push(s);
+                }
                 s
             }
         };

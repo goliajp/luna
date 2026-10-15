@@ -69,6 +69,17 @@ impl Heap {
         }
     }
 
+    /// `cs`, a long string luna's compiler made without counting, is the
+    /// one PUC's scanner made as `ss` (counted) and keeps as the constant:
+    /// the count moves to `cs`.
+    pub(crate) fn acct_move_long(&mut self, ss: Gc<LuaStr>, cs: Gc<LuaStr>) {
+        let (from, to) = (ss.as_ptr() as *mut GcHeader, cs.as_ptr() as *mut GcHeader);
+        if !is_uncounted(from) && is_uncounted(to) {
+            super::set_uncounted(from, true);
+            super::set_uncounted(to, false);
+        }
+    }
+
     /// `s`, a string luna's libraries made without counting, stands where
     /// PUC keeps the long string of `bytes` from its record (luna's own
     /// default `package.path`): when `s` is freed, PUC's is.
