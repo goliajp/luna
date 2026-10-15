@@ -268,3 +268,7 @@ impl Vm {
             .retain(|_| !dead.next().unwrap_or(false));
     }
 }
+
+#[cfg(test)]
+#[path = "raise_tests.rs"]
+mod tests;
