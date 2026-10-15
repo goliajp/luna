@@ -102,7 +102,7 @@ pub(super) fn item51(
                 let buf = vm.buffer_slot(out.len());
                 if v == LuaVersion::Lua52 {
                     let b = tolstring_52(vm, a.get(vm, arg), buf)?;
-                    vm.heap.try_intern(&b)?
+                    vm.alloc_str(&b)?
                 } else {
                     let v = a.get(vm, arg);
                     vm.tolstring(v, buf)?

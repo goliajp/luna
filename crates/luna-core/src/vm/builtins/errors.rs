@@ -111,15 +111,13 @@ fn raise(vm: &mut Vm, msg: Message<'_>, conv: Option<u32>) -> LuaError {
     let r = (|| {
         // 5.3+ `assert` pushes its message before `luaB_error` positions it
         let early = match msg {
-            Message::Pushed(m) => Some(vm.api_pushing(|vm| Ok(vm.heap.try_intern(m)?))?),
+            Message::Pushed(m) => Some(vm.api_pushing(|vm| vm.alloc_str(m))?),
             Message::Fmt(..) => None,
         };
         let at = vm.api_pushing(|vm| lual_where(vm, pos))?;
         let m = match (early, msg) {
             (Some(m), _) => m,
-            (None, Message::Fmt(fmt, args)) => {
-                vm.api_pushing(|vm| Ok(vm.heap.pushfstring(fmt, args)?))?
-            }
+            (None, Message::Fmt(fmt, args)) => vm.api_pushing(|vm| vm.pushfstring(fmt, args))?,
             (None, Message::Pushed(_)) => unreachable!("pushed above"),
         };
         vm.api_check_before();
@@ -155,19 +153,16 @@ fn literal(msg: &[u8]) -> (&[u8], [FmtArg<'_>; 1], usize) {
 /// PUC `luaL_where`: the string of position `pos` (`"%s:%d: "`), `""`
 /// without one.
 pub(crate) fn lual_where(vm: &mut Vm, pos: Option<(Vec<u8>, i64)>) -> Result<Gc<LuaStr>, LuaError> {
-    let s = match pos {
-        Some((src, line)) => vm
-            .heap
-            .pushfstring(b"%s:%d: ", &[FmtArg::S(&src), FmtArg::D(line)]),
-        None => vm.heap.try_intern(b""),
-    };
-    s.map_err(LuaError::from)
+    match pos {
+        Some((src, line)) => vm.pushfstring(b"%s:%d: ", &[FmtArg::S(&src), FmtArg::D(line)]),
+        None => vm.alloc_str(b""),
+    }
 }
 
 /// `lua_concat(L, 2)` of `a` and `b` (strings, or a number before 5.3).
 pub(crate) fn concat2(vm: &mut Vm, a: Value, b: Value) -> Result<Value, LuaError> {
     let mut st = vec![a, b];
-    vm.heap.puc_concat(&mut st, 2)?;
+    vm.concat_pieces(&mut st, 2)?;
     Ok(st[0])
 }
 

@@ -48,34 +48,32 @@ impl Vm {
                 }
             };
         }
-        let r = match v {
-            Value::Str(s) => return Ok(s),
+        match v {
+            Value::Str(s) => Ok(s),
             Value::Int(_) | Value::Float(_) => {
-                return match (self.version, v) {
+                match (self.version, v) {
                     // `lua_pushfstring(L, "%I")` / `"%f"`
                     (LuaVersion::Lua53 | LuaVersion::Lua54, Value::Int(i)) => {
-                        self.heap.pushfstring(b"%I", &[FmtArg::I(i)])
+                        self.pushfstring(b"%I", &[FmtArg::I(i)])
                     }
                     (LuaVersion::Lua53 | LuaVersion::Lua54, Value::Float(f)) => {
-                        self.heap.pushfstring(b"%f", &[FmtArg::F(f)])
+                        self.pushfstring(b"%f", &[FmtArg::F(f)])
                     }
                     _ => return self.number_string(v),
                 }
-                .map_err(LuaError::from)
-                .inspect(|&s| self.api_check_after(Value::Str(s)));
+                .inspect(|&s| self.api_check_after(Value::Str(s)))
             }
             _ => self.pushed_text(v),
-        };
-        r.map_err(LuaError::from)
+        }
     }
 
     /// `lua_pushstring` / `lua_pushfstring` of the text `tostring` gives a
     /// value that is no number or string, checked for as PUC checks.
-    fn pushed_text(&mut self, v: Value) -> Result<Gc<LuaStr>, crate::runtime::mem::Oom> {
+    fn pushed_text(&mut self, v: Value) -> Result<Gc<LuaStr>, LuaError> {
         self.api_check_before();
         let r = match v {
-            Value::Nil => self.heap.try_intern(b"nil"),
-            Value::Bool(b) => self.heap.try_intern(if b { b"true" } else { b"false" }),
+            Value::Nil => self.alloc_str(b"nil"),
+            Value::Bool(b) => self.alloc_str(if b { b"true" } else { b"false" }),
             _ => {
                 let kind = if self.version == LuaVersion::Lua51 {
                     v.type_name().to_string()
@@ -83,8 +81,7 @@ impl Vm {
                     self.obj_typename(v)
                 };
                 let p = self.topointer(v);
-                self.heap
-                    .pushfstring(b"%s: %p", &[FmtArg::S(kind.as_bytes()), FmtArg::P(p)])
+                self.pushfstring(b"%s: %p", &[FmtArg::S(kind.as_bytes()), FmtArg::P(p)])
             }
         }?;
         self.api_check_after(Value::Str(r));
@@ -100,16 +97,15 @@ impl Vm {
         fs: u32,
         arg: u32,
     ) -> Result<Gc<LuaStr>, LuaError> {
-        let r = match v {
-            Value::Str(s) => return Ok(s),
+        match v {
+            Value::Str(s) => Ok(s),
             Value::Int(_) | Value::Float(_) => {
                 let s = self.number_string(v)?;
                 self.nat_set_arg(fs, arg, Value::Str(s));
-                return Ok(s);
+                Ok(s)
             }
             _ => self.pushed_text(v),
-        };
-        r.map_err(LuaError::from)
+        }
     }
 
     /// The string of number `v` (`lua_tolstring` converting it).
@@ -120,7 +116,7 @@ impl Vm {
             _ => unreachable!("a number"),
         };
         let t = self.heap.number_text(n);
-        let s = self.heap.try_intern(t.as_bytes())?;
+        let s = self.alloc_str(t.as_bytes())?;
         // `lua_tolstring` checks for a collection after it converts
         self.api_check_converted(Value::Str(s));
         Ok(s)

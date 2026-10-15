@@ -110,13 +110,13 @@ impl Vm {
             self.native_checkpoint();
         }
         let Some(i) = bad else {
-            self.heap.puc_concat(&mut self.lib_roots, n)?;
+            self.concat_roots(n)?;
             if self.version() >= LuaVersion::Lua53 {
                 self.native_checkpoint();
             }
             return Ok(());
         };
-        self.heap.puc_concat(&mut self.lib_roots, n - i - 1)?;
+        self.concat_roots(n - i - 1)?;
         let bad = self.lib_roots[base + i].type_name();
         Err(self.plain_err(&format!("attempt to concatenate a {bad} value")))
     }
@@ -227,7 +227,7 @@ impl Vm {
                 _ => {}
             }
         }
-        Ok(b.finish(self, &out)?)
+        b.finish(self, &out)
     }
 
     /// `luaL_addvalue` of the string on top of `lib_roots`, popped after.
