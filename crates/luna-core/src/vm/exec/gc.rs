@@ -127,6 +127,7 @@ impl Vm {
         self.watch_errors();
         let freed = self.heap.gc_end_full(m);
         self.collector_shrinks_threads();
+        self.heap.acct_check_sizes();
         self.forget_dead_errors();
         freed
     }

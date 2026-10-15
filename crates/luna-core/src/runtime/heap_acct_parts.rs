@@ -157,6 +157,43 @@ impl Heap {
         self.puc.strt_size = new;
     }
 
+    /// PUC's `checkSizes` when a collection's sweep ends: the string table
+    /// halved when a quarter of it is used (5.1: and it is past twice its
+    /// minimum; 5.2: when less than half is), and 5.1's concatenation
+    /// buffer halved past twice its minimum, 5.2's freed.
+    pub(crate) fn acct_check_sizes(&mut self) {
+        let d = self.table_dialect;
+        let (size, nuse) = (self.puc.strt_size, self.puc.strt_nuse);
+        let shrink = match d {
+            Dialect::L51 => nuse < size / 4 && size > 64,
+            Dialect::L52 => nuse < size / 2,
+            _ => nuse < size / 4,
+        };
+        if shrink {
+            let (old, new) = (size, size / 2);
+            let p = self.sizes.ptr;
+            if d == Dialect::L51 {
+                self.acct_block(0, new * p);
+                self.acct_block(old * p, 0);
+            } else {
+                self.acct_block(old * p, new * p);
+            }
+            self.puc.strt_size = new;
+        }
+        match d {
+            Dialect::L51 if self.puc.gbuff > 64 => {
+                let new = self.puc.gbuff / 2;
+                self.acct_block(self.puc.gbuff, new);
+                self.puc.gbuff = new;
+            }
+            Dialect::L52 => {
+                self.acct_block(self.puc.gbuff, 0);
+                self.puc.gbuff = 0;
+            }
+            _ => {}
+        }
+    }
+
     /// The bytes of each of PUC's arrays for `p` (see `Proto::puc_arrays`),
     /// from luna's own: a text load counts them as PUC's parser grows them
     /// instead.
