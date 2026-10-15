@@ -225,16 +225,17 @@ pub struct Heap {
     /// Pool of freed Table allocations.
     /// btrees-style workloads create + free ~32k tables per iter;
     /// jemalloc's malloc/free roundtrip costs ~30ns per table = ~960µs
-    /// total per iter. Pool recycle: free_obj pushes the raw Table
-    /// pointer here instead of dropping; new_table pops + resets fields.
-    /// Cap at 4096 entries to avoid unbounded growth (worst-case: 4096
-    /// × sizeof(Table) ≈ 460 KB resident memory in idle pool).
+    /// total per iter. free_obj parks a freed Table here and new_table
+    /// reuses it; at most 4096 (about 460 KB idle).
     table_pool: crate::runtime::mem::LVec<std::ptr::NonNull<crate::runtime::table::Table>>,
     /// The main functions of the chunks loaded while `track_chunk_roots`
     /// is set, without keeping them alive: the collector drops each one it
     /// finds dead. Compiled traces taken over from another Vm find the
     /// functions they inlined in these chunks.
     pub(crate) chunk_roots: Vec<Gc<Proto>>,
+    /// values the VM refers to without keeping them alive, and whether the
+    /// last marking found each dead (see `Vm::forget_dead_errors`)
+    pub(crate) weak_watch: Vec<(Value, bool)>,
     /// the sizes of PUC's objects in this dialect, which `bytes` counts
     pub(crate) sizes: crate::runtime::puc_size::PucSizes,
     /// PUC's own structures luna has none of (see `heap_acct.rs`)
@@ -314,7 +315,7 @@ mod pace;
 #[path = "heap_sweep.rs"]
 mod sweep;
 pub(crate) use self::mark::Marker;
-use self::mark::{blacken, drain_marker, weak_key_alive};
+use self::mark::{blacken, drain_marker, survived_mark, weak_key_alive};
 
 #[cfg(feature = "gc-verify")]
 #[path = "heap_verify.rs"]

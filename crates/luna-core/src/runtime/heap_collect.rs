@@ -203,6 +203,9 @@ impl Heap {
             }
         }
         // the chunk roots are weak: forget the dead ones before they are freed
+        for w in &mut self.weak_watch {
+            w.1 = !survived_mark(w.0);
+        }
         self.chunk_roots.retain(|p| {
             // SAFETY: a root still on the list was not freed by an earlier
             // sweep (it was dropped from the list first); this cycle's sweep

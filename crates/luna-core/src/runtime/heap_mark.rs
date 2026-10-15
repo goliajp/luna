@@ -188,3 +188,12 @@ pub(super) fn weak_key_alive(v: Value) -> bool {
     // SAFETY: `v` is a key of a weak table being marked; the sweep that could free its object has not run, and only the flag byte is read
     unsafe { !is_white((*h).flags) }
 }
+
+/// Whether the object of `v` survived the marking just finished (a value
+/// that is no object did): marked, or never collected (fixed).
+pub(super) fn survived_mark(v: Value) -> bool {
+    match v {
+        Value::Str(s) => !is_white(s.hdr.flags),
+        v => weak_key_alive(v),
+    }
+}

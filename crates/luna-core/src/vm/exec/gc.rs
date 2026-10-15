@@ -223,12 +223,17 @@ impl Vm {
             let mut m = self.heap.loan_marker();
             self.mark_roots(&mut m);
             self.heap.stash_marker(m);
+            self.watch_errors();
             self.heap.gc_finish_atomic();
+            self.forget_dead_errors();
         }
         self.heap.gc_finish_sweep();
         let mut m = self.heap.gc_begin_full();
         self.mark_roots(&mut m);
-        self.heap.gc_end_full(m)
+        self.watch_errors();
+        let freed = self.heap.gc_end_full(m);
+        self.forget_dead_errors();
+        freed
     }
 
     /// Run a full collection with the VM's roots, then run any `__gc`

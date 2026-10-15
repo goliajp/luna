@@ -68,6 +68,7 @@ impl Heap {
             hash51: false,
             defer_thread_cycle_finalize: false,
             chunk_roots: Vec::new(),
+            weak_watch: Vec::new(),
             track_chunk_roots: false,
             mem_cap: None,
             table_pool: crate::runtime::mem::LVec::new(mem.mem()),
