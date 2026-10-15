@@ -4,6 +4,7 @@
 use super::*;
 use crate::runtime::mem::{LVec, Oom, catch_load_oom, outside_load};
 
+mod compile;
 mod text;
 pub use text::{ParsedText, TextLoad};
 
@@ -107,88 +108,34 @@ impl Vm {
             )?;
             self.compile_parsed(&parsed.chunk, &parsed.end_lines, source)?
         } else {
-            // PUC's `nCcalls` counts protected calls as well
-            let depth = self.g.nccalls;
-            let source = match name {
-                Some(n) => n,
-                None => self.heap.try_intern(chunkname)?,
-            };
-            let parsed = crate::frontend::parser::parse_in_place(
-                src,
-                self.version,
-                depth,
-                &mut self.parse_scratch,
-            );
-            if let Err(e) = parsed {
-                let failed = self.parse_scratch.failed;
-                return Err(self.error_before(src, failed, source).unwrap_or(e));
+            // what the parser and the compiler make is counted afterwards,
+            // in the order PUC's parser makes it; that includes its own
+            // string of the chunk name, a new one when the name is long
+            // (5.2+ does not intern long strings)
+            self.parse_scratch.record = self.heap.puc.silent == 0;
+            self.heap.puc.silent += 1;
+            let long = chunkname.len() > crate::runtime::string::MAX_SHORT_LEN
+                && self.heap.table_dialect != crate::runtime::table::Dialect::L51;
+            let made = match name {
+                Some(n) if !long => Ok(n),
+                _ => self.heap.try_intern(chunkname).map_err(SyntaxError::from),
             }
-            let (chunk, end_lines) = self.parse_scratch.parsed();
-            crate::compiler::compile_parsed(
-                chunk,
-                end_lines,
-                self.version,
-                source,
-                &mut self.heap,
-                &mut self.compile_scratch,
-            )
-            .map_err(|e| {
-                let s = &mut self.compile_scratch;
-                crate::compiler::place_error(s, chunk, src, self.version, depth, e)
-            })?
+            .and_then(|source| self.compile_text_in_place(src, source))
+            .and_then(|p| self.hold_puc_names(p).map(|()| p))
+            .and_then(|p| Ok((p, self.close_chunk(p)?)));
+            self.heap.puc.silent -= 1;
+            self.parse_scratch.record = false;
+            let (_, cl) = made?;
+            let scratch = std::mem::replace(
+                &mut self.parse_scratch,
+                crate::frontend::parser::ParseScratch::new(self.heap.mem_owner()),
+            );
+            let counted = self.acct_text_load(src, &scratch, cl);
+            self.parse_scratch = scratch;
+            counted?;
+            return Ok(cl);
         };
         self.close_chunk(proto)
-    }
-
-    /// Compile a parsed chunk named `source`, keeping the parse's vectors
-    /// for the next load.
-    fn compile_text(
-        &mut self,
-        mut parsed: crate::frontend::parser::Parsed,
-        source: Gc<crate::runtime::LuaStr>,
-    ) -> Result<Gc<crate::runtime::Proto>, SyntaxError> {
-        let src = parsed.src.take();
-        let proto = self
-            .compile_parsed(&parsed.chunk, &parsed.end_lines, source)
-            .map_err(|e| match &src {
-                Some(src) => {
-                    let (v, depth) = (self.version, self.g.nccalls);
-                    let s = &mut self.compile_scratch;
-                    crate::compiler::place_error(s, &parsed.chunk, src, v, depth, e)
-                }
-                None => e,
-            })?;
-        self.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
-        Ok(proto)
-    }
-
-    /// The compile error a load of `src`, which failed to parse at
-    /// `failed`, meets before its syntax error, if any.
-    fn error_before(
-        &mut self,
-        src: &[u8],
-        failed: Option<crate::frontend::parser::Failed>,
-        source: Gc<crate::runtime::LuaStr>,
-    ) -> Option<SyntaxError> {
-        let (v, depth) = (self.version, self.g.nccalls);
-        let (heap, scratch) = (&mut self.heap, &mut self.compile_scratch);
-        crate::compiler::error_before(src, v, depth, failed?, source, heap, scratch)
-    }
-
-    fn compile_parsed(
-        &mut self,
-        chunk: &crate::frontend::ast::Chunk,
-        end_lines: &[u32],
-        source: Gc<crate::runtime::LuaStr>,
-    ) -> Result<Gc<crate::runtime::Proto>, SyntaxError> {
-        crate::compiler::compile_parsed(
-            chunk,
-            end_lines,
-            self.version,
-            source,
-            &mut self.heap,
-            &mut self.compile_scratch,
-        )
     }
 
     /// Run `f`, a load, so that running out of memory anywhere in it (the

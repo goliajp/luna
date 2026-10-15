@@ -54,6 +54,9 @@ pub(super) struct Level<'a> {
     /// a `global` declaration was made in this function (5.5): until then
     /// no name lookup needs to look for one among `avars`
     pub(super) has_global_decl: bool,
+    /// locals about to be declared whose parser entries are logged already
+    /// ([`Compiler::prelog_localvar`])
+    pub(super) prelogged: u32,
 }
 
 /// A value and its true and false jump lists (PUC `expdesc` `t` / `f`).
@@ -115,6 +118,7 @@ impl<'a> Level<'a> {
             jump_err: None,
             jexps: bufs.jexps,
             has_global_decl: false,
+            prelogged: 0,
         }
     }
 
@@ -169,8 +173,10 @@ impl<'a> Level<'a> {
             call_hot_count: std::cell::Cell::new(0),
             trace_discard_count: std::cell::Cell::new(0),
             trace_gave_up: std::cell::Cell::new(false),
+            puc_arrays: std::cell::Cell::new([0; 7]),
             trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
             inlined_protos: std::cell::RefCell::new(Vec::new()),
+            puc_names: std::cell::RefCell::new(Vec::new()),
             traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
             has_dispatchable_trace: std::cell::Cell::new(false),
             trace_heads: std::cell::Cell::new(
@@ -262,6 +268,8 @@ pub(crate) struct CompileScratch {
     /// the token of the last error the compiler returned, and its message
     /// (see [`super::TokRef`])
     pub(crate) err_tok: Option<(super::TokRef, Vec<u8>, bool)>,
+    /// the last compile's log of what PUC allocates (see [`super::puc_log`])
+    pub(crate) puc_log: LVec<(super::TokRef, super::puc_log::PEv)>,
 }
 
 impl CompileScratch {
@@ -275,6 +283,7 @@ impl CompileScratch {
             lvs: LVec::new(mem),
             operands: LVec::new(mem),
             err_tok: None,
+            puc_log: LVec::new(mem),
         }
     }
 

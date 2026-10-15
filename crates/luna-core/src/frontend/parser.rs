@@ -27,11 +27,11 @@ mod stat;
 mod streams;
 mod token_source;
 mod upval51;
-pub(crate) use marks::{Found, Marks, record_marks, token_at};
+pub(crate) use marks::{Found, Marks, record_marks, scan, token_at};
 use operators::{UNARY_PRIORITY, bin_op_of, bin_priority, un_op_of};
 pub(crate) use repair::completed;
 pub(crate) use scratch::{Failed, ParseScratch, Parsed};
-use scratch::{ListStacks, finish};
+use scratch::{FnFlow, ListStacks, finish};
 pub use streams::parse_tokens;
 pub(crate) use streams::{parse_stream, parse_tokens_at_depth};
 use token_source::Cur;
@@ -132,9 +132,17 @@ fn parse_from_source<'s>(
         stacks,
         streamed,
         failed,
+        record,
+        recording,
+        recorded,
     } = scratch;
     let mut p = Parser::new(lex, cur, version, c_depth, chunk, end_lines, stacks)?;
+    if *record {
+        p.record_load(recording.take());
+    }
     let r = p.main(src_len);
+    *recording = p.stop_recording().or(recording.take());
+    *recorded = *record && r.is_ok();
     // a reader whose pieces could not be kept ended the input early:
     // whatever the parse made of it, the load failed for lack of memory
     if let Some(o) = p.lex.out_of_memory() {
@@ -275,16 +283,10 @@ struct Parser<'s> {
     /// `func_body`, popped on exit. Without parse-time tracking, errors.lua
     /// :775 would race a later structural error (a missing `end`) and lose.
     func_local_count: LVec<(u32, u32, u32)>,
-    /// Parse-time upvalue accounting for PUC 5.1 (errors.lua :238). PUC 5.1's
-    /// `singlevaraux` resolves each identifier as it parses and stops at
-    /// `MAXUPVAL=60`; luna defers name resolution to the compiler so a stack
-    /// of 61 nested `function`s with no `end`s reaches `<eof>` first and the
-    /// missing-`end` error wins. Tracking declared locals + accumulated
-    /// upvalue names per nested function here lets the same 60-deep chain
-    /// trip while we are still inside `foo61`'s body, with the offending
-    /// function's defining line on the error. Only populated for 5.1 — 5.2+
-    /// goes through `_ENV` (which would itself be an upvalue) and 5.5
-    /// tolerates a wider cap.
+    /// 5.1 only: each open function's locals and the upvalue names it has
+    /// gathered, so that PUC's `MAXUPVAL` (60) error is raised in the
+    /// function that passes it, as PUC's `singlevaraux` raises it while it
+    /// parses, before a later missing `end` is reached.
     upval_chain_51: LVec<FnUvSlot>,
     /// the number of `tok` among the tokens read, the first being 0
     tok_ix: u32,
@@ -292,10 +294,4 @@ struct Parser<'s> {
     lex_failed: bool,
     /// set while parsing again to place a compile error (see [`Marks`])
     rec: Option<Box<marks::Recording>>,
-}
-
-pub(crate) struct FnFlow {
-    vararg: bool,
-    /// Loops enclosing the current position inside this function.
-    loops: u32,
 }

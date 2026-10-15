@@ -52,7 +52,16 @@ impl Heap {
     /// check for the interpreter loop).
     #[inline(always)]
     pub fn gc_due(&self) -> bool {
-        self.bytes >= self.gc_limit
+        self.bytes >= self.gc_limit && !self.no_gc()
+    }
+
+    /// No collection runs (`gc-trace` with `R38_NOGC` set).
+    #[inline(always)]
+    pub(crate) fn no_gc(&self) -> bool {
+        #[cfg(feature = "gc-trace")]
+        return self.trace.no_gc;
+        #[cfg(not(feature = "gc-trace"))]
+        false
     }
 
     /// `collectgarbage("stop"/"restart")`: suspend or resume auto-GC.
@@ -88,19 +97,6 @@ impl Heap {
     /// collection once the live set roughly doubles).
     pub fn rearm_gc(&mut self) {
         self.set_next_gc(self.bytes.saturating_mul(2).max(GC_MIN_THRESHOLD));
-    }
-
-    /// Apply a `before → after` box-size delta from a Table mutation
-    /// (`set`/`rehash`/`ensure_*`). Grows credit `Heap.bytes`; shrinks
-    /// debit it. `free_obj` for `ObjTag::Table` then subtracts the table's
-    /// final `internal_bytes()` so the round-trip is symmetric across the
-    /// table's whole lifetime.
-    pub(crate) fn apply_bytes_delta(&mut self, before: usize, after: usize) {
-        if after > before {
-            self.bytes += after - before;
-        } else if before > after {
-            self.bytes = self.bytes.saturating_sub(before - after);
-        }
     }
 
     /// Every live object is rooted now (an interpreter safe point, or the

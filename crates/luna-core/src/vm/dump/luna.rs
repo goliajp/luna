@@ -230,8 +230,10 @@ fn r_proto(
         call_hot_count: std::cell::Cell::new(0),
         trace_discard_count: std::cell::Cell::new(0),
         trace_gave_up: std::cell::Cell::new(false),
+        puc_arrays: std::cell::Cell::new([0; 7]),
         trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
         inlined_protos: std::cell::RefCell::new(Vec::new()),
+        puc_names: std::cell::RefCell::new(Vec::new()),
         traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         has_dispatchable_trace: std::cell::Cell::new(false),
         trace_heads: std::cell::Cell::new(

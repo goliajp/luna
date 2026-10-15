@@ -218,6 +218,11 @@ impl super::Table {
 
     /// Take the hash part out, leaving an empty one: its block and length,
     /// for [`Table::free_nodes`].
+    /// The number of nodes in the hash part (0 for none).
+    pub(crate) fn node_count(&self) -> usize {
+        self.node_mask.wrapping_add(1) as usize
+    }
+
     pub(super) fn take_hash_part(&mut self) -> (*mut Node, usize) {
         let len = self.node_mask.wrapping_add(1) as usize;
         let p = self.nodes;

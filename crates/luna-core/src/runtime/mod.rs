@@ -24,8 +24,13 @@ mod debug_info;
 mod fnv;
 pub mod function;
 pub(crate) mod function_close;
+#[cfg(feature = "gc-trace")]
+pub(crate) mod gc_trace;
 pub mod heap;
 pub mod mem;
+pub(crate) mod puc_boot;
+pub(crate) mod puc_libs;
+pub(crate) mod puc_size;
 pub mod string;
 pub mod table;
 mod upvalue;

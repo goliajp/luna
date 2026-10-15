@@ -58,10 +58,16 @@ fn compile_main_body(
         spine: scratch.spine.take(),
         lvs: scratch.lvs.take(),
         operands: scratch.operands.take(),
-        cur: TokRef::Eof,
+        cur: TokRef::Start,
         early_emit: false,
         next_pending: false,
         err_tok: None,
+        puc_log: {
+            let mut log = scratch.puc_log.take();
+            log.clear();
+            log
+        },
+        puc_state: Default::default(),
     };
     c.sym_strs.clear();
     c.sym_strs.resize_or_abort(ast.names.len(), None);
@@ -72,6 +78,11 @@ fn compile_main_body(
         name: "_ENV".into(),
         read_only: false,
     });
+    // `setvararg`, then the `_ENV` upvalue (5.1 has none)
+    c.log(super::puc_log::PEv::Prologue);
+    if version != LuaVersion::Lua51 {
+        c.log(super::puc_log::PEv::Upval(0));
+    }
     c.enter_block(false);
     scratch.err_tok = None;
     let body = c.stat_block(&ast.block).and_then(|()| {
@@ -83,6 +94,7 @@ fn compile_main_body(
     });
     if let Err(e) = body {
         scratch.err_tok = c.err_tok.take();
+        scratch.puc_log = std::mem::replace(&mut c.puc_log, LVec::new(c.heap.mem()));
         return Err(e);
     }
     let last_target = c.lr().last_target;
@@ -96,6 +108,7 @@ fn compile_main_body(
     scratch.spine = c.spine;
     scratch.lvs = c.lvs;
     scratch.operands = c.operands;
+    scratch.puc_log = c.puc_log;
     scratch.open = c.levels.recycle();
     Ok((proto, last_target))
 }

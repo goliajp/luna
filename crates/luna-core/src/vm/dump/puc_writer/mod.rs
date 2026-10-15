@@ -28,8 +28,7 @@ mod proto_parts;
 
 use self::asm::{Asm, Res};
 use self::proto_parts::{check_skips, consts_for, needs_close, vararg_byte};
-use super::puc::{puc_52, puc_53, puc_54, puc_55};
-use crate::compiler::const_map::const_map_of;
+
 use crate::runtime::Value;
 use crate::runtime::function::Proto;
 use crate::version::LuaVersion;
@@ -75,6 +74,7 @@ struct Up {
 }
 
 /// One function, re-encoded, ready to serialise.
+#[derive(Default)]
 struct Out {
     source: Vec<u8>,
     line_defined: u32,
@@ -90,6 +90,33 @@ struct Out {
     upvals: Vec<Up>,
     protos: Vec<Out>,
     locvars: Vec<(crate::runtime::DebugName, u32, u32)>,
+}
+
+/// A function as PUC's code generator lays it out, for counting its
+/// arrays (see `vm/exec/load_acct.rs`).
+pub(crate) struct Shape {
+    /// luna pc → the first PUC instruction for it; one past the end
+    pub pc_map: Vec<u32>,
+    /// PUC's line of each PUC instruction
+    pub lines: Vec<u32>,
+    /// the luna pc at which each constant PUC has and luna lacks is added
+    pub k_added: Vec<usize>,
+}
+
+/// The [`Shape`] of `proto` and of every function in it, in the order
+/// their functions open (preorder), for dialect `version`.
+pub(crate) fn shapes(proto: &Proto, version: LuaVersion) -> Result<Vec<Shape>, String> {
+    let d = match version {
+        LuaVersion::Lua51 => Dialect::V51,
+        LuaVersion::Lua52 => Dialect::V52,
+        LuaVersion::Lua53 => Dialect::V53,
+        LuaVersion::Lua54 => Dialect::V54,
+        LuaVersion::Lua55 => Dialect::V55,
+        LuaVersion::MacroLua => return Err("MacroLua has no PUC bytecode format".to_string()),
+    };
+    let mut out = Vec::new();
+    build(proto, d, None, Some(&mut out))?;
+    Ok(out)
 }
 
 /// Serialise `proto` as a chunk of the PUC version `version` names;
@@ -112,22 +139,29 @@ pub(crate) fn dump_blocks(
         LuaVersion::Lua55 => Dialect::V55,
         LuaVersion::MacroLua => return Err("MacroLua has no PUC bytecode format".to_string()),
     };
-    let root = build(proto, d, None)?;
+    let root = build(proto, d, None, None)?;
     Ok(format::write(d, &root, strip))
 }
 
 /// `caps`: the upvalue descriptors the parent's `Closure` site gave this
-/// function (`None` for the main function).
-fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
+/// function (`None` for the main function). With `shapes`, only the
+/// functions' [`Shape`]s are made, pushed there in preorder.
+fn build(
+    p: &Proto,
+    d: Dialect,
+    caps: Option<Vec<(bool, u8)>>,
+    shapes: Option<&mut Vec<Shape>>,
+) -> Res<Out> {
     let np = p.num_params as u32;
     let mut asm = Asm::new(p, d.name());
+    asm.shape_only = shapes.is_some();
     // 5.1 / 5.2 have one number type: the constants the encoder adds meet
     // luna's as the floats these become
     if d <= Dialect::V52 {
         asm.consts = consts_for(d, std::mem::take(&mut asm.consts))?;
     }
     let ver = d.version();
-    asm.kmap = (ver, const_map_of(ver, &asm.consts));
+    asm.kmap = (ver, None);
     let mut child_caps: modern::Caps = vec![None; p.protos.len()];
     let vatab = d == Dialect::V55
         && p.is_vararg
@@ -138,7 +172,11 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
         let v55 = d == Dialect::V55;
         let hidden = p.is_vararg && !(v55 && vatab);
         let f = modern::Frame {
-            ops: if v55 { puc_55::OPS } else { puc_54::OPS },
+            ops: if v55 {
+                &crate::vm::dump::puc::opcodes::OPCODES_55
+            } else {
+                &crate::vm::dump::puc::opcodes::OPCODES_54
+            },
             v55,
             np,
             ret_c: if hidden { np + 1 } else { 0 },
@@ -154,9 +192,9 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
                 _ => 53,
             },
             ops: if d == Dialect::V52 {
-                puc_52::OPS
+                &crate::vm::dump::puc::opcodes::OPCODES_52
             } else {
-                puc_53::OPS
+                &crate::vm::dump::puc::opcodes::OPCODES_53
             },
         };
         classic::encode(&mut asm, &f, &mut child_caps)?;
@@ -170,6 +208,17 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
             d.name(),
             body.frame
         ));
+    }
+    if let Some(out) = shapes {
+        out.push(Shape {
+            pc_map: body.pc_map,
+            lines: body.lines,
+            k_added: body.k_added,
+        });
+        for (child, cap) in p.protos.iter().zip(child_caps) {
+            build(child, d, cap, Some(out))?;
+        }
+        return Ok(Out::default());
     }
 
     let mut locvars: Vec<(u32, u32, (crate::runtime::DebugName, u32, u32))> = p
@@ -217,7 +266,7 @@ fn build(p: &Proto, d: Dialect, caps: Option<Vec<(bool, u8)>>) -> Res<Out> {
 
     let mut protos = Vec::with_capacity(p.protos.len());
     for (child, cap) in p.protos.iter().zip(child_caps) {
-        protos.push(build(child, d, cap)?);
+        protos.push(build(child, d, cap, None)?);
     }
     Ok(Out {
         source: p.source.as_bytes().to_vec(),

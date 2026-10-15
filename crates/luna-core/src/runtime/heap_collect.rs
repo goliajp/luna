@@ -186,11 +186,8 @@ impl Heap {
                 }
             }
         }
-        // (5) closure-cache weak refs — PUC `traverseproto` clears
-        // `Proto.cache` when the cached LClosure ended the cycle unmarked.
-        // Without this, an LClosure whose only outstanding reference is the
-        // proto's cache would survive forever and its upvalues' `__gc`
-        // finalisers would never run.
+        // (5) closure-cache weak refs (PUC `traverseproto`): a closure kept
+        // only by a proto's cache is dead, or its upvalues' `__gc` never run
         for &p in &m.cached_protos {
             // SAFETY: `p` was pushed onto `m.cached_protos` by `Proto::trace` this cycle (it is marked); its cached closure, white or not, is not freed before this cycle's sweep
             unsafe {
@@ -202,11 +199,14 @@ impl Heap {
                 }
             }
         }
-        // the chunk roots are weak: forget the dead ones before they are freed
+        // the VM's watched values and the chunk roots are weak: dead ones
+        // are noted or forgotten before they are freed
+        for w in &mut self.weak_watch {
+            w.1 = !survived_mark(w.0);
+        }
         self.chunk_roots.retain(|p| {
-            // SAFETY: a root still on the list was not freed by an earlier
-            // sweep (it was dropped from the list first); this cycle's sweep
-            // has not run, so the header is allocated
+            // SAFETY: a root still listed was not freed (dead ones leave the
+            // list first) and this cycle's sweep has not run
             !unsafe { is_white((*(p.as_ptr() as *mut GcHeader)).flags) }
         });
         // (6) clearbykeys — drop entries whose weak key did not survive

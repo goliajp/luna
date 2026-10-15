@@ -49,14 +49,18 @@ impl Vm {
             self.mark_roots(&mut m);
             self.heap.mark_young(&mut m);
             self.heap.stash_marker(m);
+            self.watch_errors();
             self.heap.gc_finish_atomic();
+            self.forget_dead_errors();
             self.heap.gc_finish_sweep();
         } else {
             self.heap.gc_finish_sweep();
             let mut m = self.heap.gc_begin_full();
             self.mark_roots(&mut m);
             self.heap.mark_young(&mut m);
+            self.watch_errors();
             self.heap.gc_end_full(m);
+            self.forget_dead_errors();
         }
         self.heap.release_pool();
         self.gc_top = live_top;

@@ -16,7 +16,8 @@ use std::collections::HashMap;
 pub(super) type ConstMap = LMap<ConstKey, u32>;
 
 /// The same map for the dump writer, which has no allocation context.
-pub(crate) type DumpConstMap = HashMap<ConstKey, u32>;
+pub(crate) type DumpConstMap =
+    HashMap<ConstKey, u32, std::hash::BuildHasherDefault<crate::runtime::mem::WordHasher>>;
 
 /// The scanner table the rules below read and write: either map.
 pub(crate) trait KeyMap {
@@ -68,6 +69,7 @@ impl ConstList for Vec<Value> {
 
 /// A key of PUC's scanner table.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "gc-trace", derive(Debug))]
 pub(crate) enum ConstKey {
     /// an integer key (a float key with an integer value becomes one)
     Int(i64),
@@ -133,6 +135,8 @@ fn raw_equal(v: LuaVersion, a: &Value, b: &Value) -> bool {
         (Value::Str(x), Value::Str(y)) => x.as_bytes() == y.as_bytes(),
         (Value::Int(x), Value::Int(y)) => x == y,
         (Value::Float(x), Value::Float(y)) => x == y,
+        (Value::Bool(x), Value::Bool(y)) => x == y,
+        (Value::Nil, Value::Nil) => true,
         _ if v <= LuaVersion::Lua52 => matches!((num(a), num(b)), (Some(x), Some(y)) if x == y),
         _ => false,
     }
@@ -198,10 +202,14 @@ pub(crate) fn add_const(
     c: Value,
 ) -> u32 {
     let (plan, trusted) = plan(v, &c);
+    // 5.3 and 5.4 key all the functions of a chunk in one table: an entry
+    // may name another function's constant
+    let trusted = trusted && !shares_keys(v);
     let key = match plan {
         Plan::Key(key) => {
             if let Some(i) = map.find(&key)
-                && (trusted || raw_equal(v, &consts.items()[i as usize], &c))
+                && let Some(old) = consts.items().get(i as usize)
+                && (trusted || raw_equal(v, old, &c))
             {
                 return i;
             }
@@ -238,12 +246,34 @@ pub(crate) fn const_map_of(v: LuaVersion, consts: &[Value]) -> DumpConstMap {
     map
 }
 
+/// Whether dialect `v`'s code generator keys the constants of all the
+/// functions of a chunk in its one scanner table (`ls->h`), where the
+/// others key each function's own.
+pub(crate) fn shares_keys(v: LuaVersion) -> bool {
+    matches!(v, LuaVersion::Lua53 | LuaVersion::Lua54)
+}
+
 impl Compiler<'_> {
     /// The index of constant `c` in the running function (see
     /// [`add_const`]).
     pub(super) fn const_idx(&mut self, c: Value) -> u32 {
         let v = self.version;
-        let l = self.l();
-        add_const(v, &mut l.consts, &mut l.const_map, c)
+        let d = self.depth - 1;
+        let (outer, inner) = self.levels.split_at_mut(d);
+        let l = &mut inner[0];
+        let map = match outer.first_mut() {
+            Some(main) if shares_keys(v) => &mut main.const_map,
+            _ => &mut l.const_map,
+        };
+        let n = l.consts.len();
+        let i = add_const(v, &mut l.consts, map, c);
+        if i as usize == n {
+            let key = match plan(v, &c).0 {
+                Plan::Key(k) => Some(k),
+                Plan::New => None,
+            };
+            self.log(super::puc_log::PEv::Const(key, c));
+        }
+        i
     }
 }

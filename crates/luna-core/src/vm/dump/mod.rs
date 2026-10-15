@@ -23,6 +23,7 @@ mod header;
 mod luna;
 mod puc;
 mod puc_writer;
+pub(crate) use puc_writer::{Shape, shapes};
 mod reader;
 mod verify;
 

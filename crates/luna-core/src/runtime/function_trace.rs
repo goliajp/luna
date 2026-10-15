@@ -20,6 +20,9 @@ impl Proto {
         for &p in self.inlined_protos.borrow().iter() {
             m.mark(p);
         }
+        for &s in self.puc_names.borrow().iter() {
+            m.mark(s);
+        }
         // PUC `traverseproto`: the closure cache is a *weak* reference — if
         // the cached LClosure is unmarked at sweep time, clear the slot
         // instead of marking it. Queue self for the post-mark cleanup pass

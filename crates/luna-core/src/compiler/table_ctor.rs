@@ -84,6 +84,10 @@ impl<'a> Compiler<'a> {
                     }
                 }
                 TableField::Named(name, v) => {
+                    // the key's constant: once the name is read up to 5.3,
+                    // from 5.4 once `=` is (`luaK_indexed`)
+                    let v54 = self.version >= LuaVersion::Lua54;
+                    self.at(TokRef::First(*v, if v54 { 0 } else { -1 }));
                     let c = self.sym_const(name.sym);
                     self.rec_field(treg, Exp::Const(c), *v)?;
                 }

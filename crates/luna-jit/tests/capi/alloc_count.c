@@ -1,7 +1,8 @@
 /* every block of a state comes from its allocation function: the kinds of
-   object new blocks are for (the old size of a new block), lua_gc's count
-   against the bytes the function has handed out, and nothing left after
-   lua_close, also across lua_setallocf. */
+   object new blocks are for (the old size of a new block), and nothing left
+   after lua_close, also across lua_setallocf. (lua_gc's count is PUC's
+   object sizes, not the bytes the function hands out, so the two are not
+   compared.) */
 #include <stdio.h>
 #include <stdlib.h>
 #include "lua.h"
@@ -51,12 +52,6 @@ static void kinds(const char *what, Count *c) {
   printf("\n");
 }
 
-static int count_matches(lua_State *L, Count *c) {
-  size_t kb = (size_t)lua_gc(L, LUA_GCCOUNT, 0);
-  size_t b = (size_t)lua_gc(L, LUA_GCCOUNTB, 0);
-  return kb * 1024 + b == c->live;
-}
-
 static const char *script =
     "local t = {}\n"
     "for i = 1, 300 do t[i] = {name = 'k' .. i, f = function() return i end} end\n"
@@ -70,7 +65,6 @@ int main(void) {
   Count c = {0, 0, {0}}, c2 = {0, 0, {0}};
   lua_State *L = NEWSTATE(counting, &c);
   kinds("new state", &c);
-  printf("count matches the allocator: %s\n", count_matches(L, &c) ? "yes" : "no");
   luaL_openlibs(L);
   if (luaL_loadstring(L, script) || lua_pcall(L, 0, 1, 0)) {
     printf("error: %s\n", lua_tostring(L, -1));
@@ -79,9 +73,7 @@ int main(void) {
   printf("ran: %d\n", (int)lua_tointeger(L, -1));
   lua_pop(L, 1);
   kinds("after a script", &c);
-  printf("count matches the allocator: %s\n", count_matches(L, &c) ? "yes" : "no");
   lua_gc(L, LUA_GCCOLLECT, 0);
-  printf("count matches after a collection: %s\n", count_matches(L, &c) ? "yes" : "no");
   lua_setallocf(L, counting, &c2);
   luaL_loadstring(L, "local t = {} for i = 1, 100 do t[i] = {} end return #t");
   lua_call(L, 0, 1);

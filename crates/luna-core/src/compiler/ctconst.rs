@@ -28,7 +28,7 @@ impl CtConst {
         !matches!(self, CtConst::Nil | CtConst::Bool(false))
     }
 
-    fn num(&self) -> Option<Num> {
+    pub(super) fn num(&self) -> Option<Num> {
         match *self {
             CtConst::Int(i) => Some(Num::Int(i)),
             CtConst::Float(f) => Some(Num::Float(f)),

@@ -37,6 +37,15 @@ pub(crate) fn load_path(
             }
         },
     };
+    // PUC pushes the chunk name before it opens the file
+    let made = match name {
+        Some(n) => vm.heap.pushfstring_s(b"@%s", &[n]),
+        None => vm.heap.try_intern(&chunkname),
+    };
+    let name_str = match made {
+        Ok(s) => s,
+        Err(e) => return Err(LuaError::from(e).0),
+    };
     // `errfile`: the name shown is the chunk name without its '@' / '='.
     let shown = String::from_utf8_lossy(&chunkname[1..]).into_owned();
     let src = match read {
@@ -66,7 +75,7 @@ pub(crate) fn load_path(
         }
         _ => src,
     };
-    load_chunk(vm, src, &chunkname, mode)
+    load_named_chunk(vm, src, &chunkname, Some(name_str), mode)
 }
 
 /// PUC `luaL_loadbufferx`: compile `src` under `chunkname`, the chunk kind
@@ -76,6 +85,17 @@ pub(crate) fn load_chunk(
     vm: &mut Vm,
     src: &[u8],
     chunkname: &[u8],
+    mode: Option<&[u8]>,
+) -> Result<Value, Value> {
+    load_named_chunk(vm, src, chunkname, None, mode)
+}
+
+/// [`load_chunk`] with the chunk name already a heap string (`name`).
+fn load_named_chunk(
+    vm: &mut Vm,
+    src: &[u8],
+    chunkname: &[u8],
+    name: Option<Gc<crate::runtime::LuaStr>>,
     mode: Option<&[u8]>,
 ) -> Result<Value, Value> {
     // `checkmode` (ldo.c): the kind of chunk must be allowed by the mode.
@@ -93,7 +113,7 @@ pub(crate) fn load_chunk(
         ]);
         return Err(msg.unwrap_or_else(|e| e.0));
     }
-    match vm.load(src, chunkname) {
+    match vm.load_named(src, chunkname, name) {
         Ok(cl) => Ok(Value::Closure(cl)),
         Err(e) => Err(vm.load_error_value(&e, chunkname)),
     }

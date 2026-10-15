@@ -57,17 +57,23 @@ impl<'a> Compiler<'a> {
         // control (5.4+: and the closing value), then `luaK_checkstack`
         // leaves room to call the iterator past them
         let values = if layout == ForLayout::Gen53 { 3 } else { 4 };
+        let hidden: &[&'a str] = match layout {
+            ForLayout::Gen53 => &["(for generator)", "(for state)", "(for control)"],
+            ForLayout::Gen54 => &["(for state)"; 4],
+            _ => &["(for state)"; 3],
+        };
+        // 5.5: the control (first) variable is read-only
+        let mut names: LVec<(&'a str, bool)> = LVec::new(self.heap.mem());
+        for (i, v) in vars.iter().enumerate() {
+            names.push_or_abort((self.nm(v), i == 0 && self.version >= LuaVersion::Lua55));
+        }
+        self.log_for_names(sid, hidden, &names);
         let base = self.explist_adjust(exprs, values)?;
         let last = *exprs.last().expect("an expression list");
         self.set_freereg(base + values);
         self.reserve(layout.call_end() - values)?;
         self.set_freereg(base + values);
         self.enter_block(true);
-        let hidden: &[&'a str] = match layout {
-            ForLayout::Gen53 => &["(for generator)", "(for state)", "(for control)"],
-            ForLayout::Gen54 => &["(for state)"; 4],
-            _ => &["(for state)"; 3],
-        };
         self.declare_hidden(base, hidden)?;
         // the closing value: a `return f()` in the body is no tail call,
         // and a `goto` leaving the loop closes it
@@ -85,11 +91,6 @@ impl<'a> Compiler<'a> {
         self.at(TokRef::After(last, 1));
         let prep = self.emit(Inst::iabx(prep_op, base, 0));
         let nvars = vars.len() as u32;
-        // 5.5: the control (first) variable is read-only
-        let mut names: LVec<(&'a str, bool)> = LVec::new(self.heap.mem());
-        for (i, v) in vars.iter().enumerate() {
-            names.push_or_abort((self.nm(v), i == 0 && self.version >= LuaVersion::Lua55));
-        }
         let body_top = self.here();
         self.for_body(sid, &names, vbase, body)?;
         let tforcall_pc = self.here();
@@ -137,6 +138,15 @@ impl<'a> Compiler<'a> {
         end_line: Option<u32>,
     ) -> Result<(), SyntaxError> {
         self.last_line = line;
+        let hidden: &[&'a str] = match self.version {
+            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => {
+                &["(for index)", "(for limit)", "(for step)"]
+            }
+            LuaVersion::Lua55 => &["(for state)"; 2],
+            _ => &["(for state)"; 3],
+        };
+        let v55 = self.version >= LuaVersion::Lua55;
+        self.log_for_names(sid, hidden, &[(var, v55)]);
         let base = self.lr().freereg;
         self.set_freereg(base);
         let se = self.expr(start)?;
@@ -165,12 +175,19 @@ impl<'a> Compiler<'a> {
             None => {
                 self.set_freereg(base + 2);
                 self.reserve(1)?;
+                // up to 5.3 the step 1 is a constant (`luaK_codek`): a
+                // float before 5.3, which has no integers
+                let one = if self.version <= LuaVersion::Lua52 {
+                    Value::Float(1.0)
+                } else {
+                    Value::Int(1)
+                };
+                self.number_const_before_54(one);
                 self.emit(Inst::iasbx(Op::LoadI, base + 2, 1));
             }
         }
         // 5.5 keeps the index in the loop variable: its `forprep` drops one
         // of the three registers the values took
-        let v55 = self.version >= LuaVersion::Lua55;
         let layout = if v55 {
             ForLayout::Num55
         } else {
@@ -185,13 +202,6 @@ impl<'a> Compiler<'a> {
         self.set_freereg(base + 3);
         self.enter_block(true);
         self.l().blocks.last_mut().expect("no block").reg_floor = base;
-        let hidden: &[&'a str] = match self.version {
-            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => {
-                &["(for index)", "(for limit)", "(for step)"]
-            }
-            LuaVersion::Lua55 => &["(for state)"; 2],
-            _ => &["(for state)"; 3],
-        };
         self.declare_hidden(base, hidden)?;
         self.last_line = line;
         let var_reg = base + layout.var();

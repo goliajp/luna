@@ -4,12 +4,14 @@
 use super::*;
 
 impl<'a> Compiler<'a> {
-    /// A function literal: `body`, closed (PUC `close_func`) at token
-    /// `close`, the one after its `end`.
+    /// A function literal: `body`, opened (PUC `addprototype`) at token
+    /// `open`, its `(`, and closed (PUC `close_func`) at token `close`, the
+    /// one after its `end`.
     pub(super) fn function_exp(
         &mut self,
         body: &'a FuncBody,
         is_method: bool,
+        open: TokRef,
         close: TokRef,
     ) -> Result<Exp, SyntaxError> {
         let line = body.line;
@@ -18,6 +20,7 @@ impl<'a> Compiler<'a> {
             return Err(self.err(line, "too many parameters"));
         }
         let is_vararg = !matches!(body.vararg, ast::Vararg::None);
+        self.at(open);
         self.open_level(nparams as u8, is_vararg, line);
         let version = self.version;
         let level = self.l();
@@ -44,14 +47,27 @@ impl<'a> Compiler<'a> {
             });
         }
         self.enter_block(false);
+        // the scanner past `(`: `self`, entered at once
         if is_method {
+            self.at(open.plus(1));
             self.declare_local("self", 0, false)?;
         }
-        for (i, p) in self.ls(body.params).iter().enumerate() {
+        // each parameter is declared once its name is read; their debug
+        // records come at `)` (PUC `parlist`'s `adjustlocalvars`)
+        self.puc_state.defer = true;
+        let params = self.ls(body.params);
+        for (i, p) in params.iter().enumerate() {
+            self.at(open.plus(2 + 2 * i as i32));
             self.declare_local(self.nm(p), (i + is_method as usize) as u32, false)?;
         }
         // 5.5 (PUC `parlist`): an anonymous `...` is a parameter too, with a
         // register after the fixed ones that holds nil
+        // the vararg parameter is made once `...` is read
+        let vararg_local =
+            self.lr().has_vararg_table_pseudo || matches!(body.vararg, ast::Vararg::Named(_));
+        if vararg_local {
+            self.at(open.plus(2 + 2 * params.len() as i32));
+        }
         if self.lr().has_vararg_table_pseudo {
             let r = self.reserve(1)?;
             self.declare_local("(vararg table)", r, false)?;
@@ -88,10 +104,31 @@ impl<'a> Compiler<'a> {
                 self.l().has_compat_vararg_arg = true;
             }
         }
+        // `)`: past the names and their commas, and `...` with its comma
+        let n = params.len() as i32;
+        let dots = match body.vararg {
+            ast::Vararg::None => 0,
+            _ if n > 0 => 2,
+            _ => 1,
+        };
+        self.at(open.plus(1 + (2 * n - 1).max(0) + dots));
+        // 5.5 registers the vararg parameter after the prologue
+        let late = vararg_local && self.puc_state.pending > 0;
+        if late {
+            self.puc_state.pending -= 1;
+        }
+        self.flush_locvars();
+        if is_vararg {
+            self.log(super::puc_log::PEv::Prologue);
+        }
+        if late {
+            self.log(super::puc_log::PEv::LocVar);
+        }
         self.stat_block(&body.block)?;
         self.at(close);
         // PUC attributes the implicit final return to the closing `end` line, so
         // that line shows up in `debug.getinfo(...,"L").activelines`.
+        let final_ret = self.puc_log.len();
         self.final_return(body.end_line)?;
         let proto = self.finish_level(line, body.end_line);
         let idx = self.lr().protos.len() as u32;
@@ -106,6 +143,7 @@ impl<'a> Compiler<'a> {
         let pc = self.emit(Inst::iabx(Op::Closure, 0, idx));
         // 5.2+ `codeclosure` puts the closure in the next register at once
         if self.version >= LuaVersion::Lua52 {
+            self.close_after_closure(final_ret);
             return Ok(Exp::Reg(self.exp_to_nextreg(Exp::Reloc(pc))?));
         }
         Ok(Exp::Reloc(pc))
@@ -128,7 +166,12 @@ impl<'a> Compiler<'a> {
         let lv = self.func_name_lv(sid, name);
         self.force_line = saved_force;
         let lv = lv?;
-        let f = self.function_exp(body, is_method, TokRef::StatAfter(sid, 0))?;
+        let f = self.function_exp(
+            body,
+            is_method,
+            TokRef::StatMark(sid, 0),
+            TokRef::StatAfter(sid, 0),
+        )?;
         let saved_force = self.force_line.replace(name.base.line);
         let res = self.store(lv, f);
         self.force_line = saved_force;

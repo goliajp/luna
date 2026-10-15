@@ -5,6 +5,7 @@ use super::*;
 impl Compiler<'_> {
     /// PUC `exp2reg`: the value of `e`, and of its jump lists, in `reg`.
     pub(super) fn exp_to_reg(&mut self, e: Exp, reg: u32) -> Result<(), SyntaxError> {
+        self.use_early();
         let (v, mut t, f) = self.exp_parts(e);
         self.discharge_to_reg(v, reg)?;
         if let Exp::Jmp(pc) = v {
@@ -65,7 +66,7 @@ impl Compiler<'_> {
                         && lvl.locals.iter().all(|v| v.konst.is_some() || v.reg < reg)
                 };
                 if !(self.version == LuaVersion::Lua51 && fresh()) {
-                    self.emit(Inst::iabc(Op::LoadNil, reg, 0, 0, false));
+                    self.load_nil(reg, 1);
                 }
             }
             Exp::True => {
@@ -75,7 +76,7 @@ impl Compiler<'_> {
                 self.emit(Inst::iabc(Op::LoadFalse, reg, 0, 0, false));
             }
             Exp::Int(i) => {
-                if (-65535..=65535).contains(&i) {
+                if (-65535..=65536).contains(&i) {
                     self.number_const_before_54(Value::Int(i));
                     self.emit(Inst::iasbx(Op::LoadI, reg, i as i32));
                 } else {
@@ -90,7 +91,7 @@ impl Compiler<'_> {
                 let as_int = f as i32;
                 // bit-compare so the LoadF fast path doesn't fold -0.0 to +0.0
                 // (`-0.0 == 0.0` but their bit patterns differ)
-                if (-65535..=65535).contains(&as_int) && (as_int as f64).to_bits() == f.to_bits() {
+                if (-65535..=65536).contains(&as_int) && (as_int as f64).to_bits() == f.to_bits() {
                     self.number_const_before_54(Value::Float(f));
                     self.emit(Inst::iasbx(Op::LoadF, reg, as_int));
                 } else {
@@ -155,6 +156,7 @@ impl Compiler<'_> {
     }
 
     pub(super) fn exp_to_anyreg(&mut self, e: Exp) -> Result<u32, SyntaxError> {
+        self.use_early();
         match e {
             Exp::Reg(r) => Ok(r),
             Exp::Open { pc, base } => {

@@ -91,9 +91,8 @@ impl Table {
     /// Resize the table's array and hash parts. The array part grows
     /// (or shrinks) to `new_asize` NIL-initialized slots; the hash
     /// part rounds to the next power of two ≥ `hash_entries`. Any
-    /// existing entries are re-inserted into the new layout. The
-    /// Box growth is debited/credited to `heap.bytes` so `free_obj`
-    /// can subtract the symmetric amount.
+    /// existing entries are re-inserted into the new layout, and the
+    /// heap counts the parts as PUC's `luaH_resize` allocates them.
     ///
     /// `Heap::new_table_sized` calls this on a freshly
     /// adopted empty table to pre-allocate the array part, sparing
@@ -105,7 +104,6 @@ impl Table {
         hash_entries: usize,
     ) -> Result<(), TableError> {
         let mem = heap.mem();
-        let before = self.internal_bytes();
         let hsize = if hash_entries == 0 {
             0
         } else {
@@ -173,11 +171,7 @@ impl Table {
         }
         self.set_hash_part(new_nodes, hsize);
         self.lastfree = hsize as u32;
-        // PUC `g->GCtotalbytes` analogue: credit (or debit) the box-size
-        // delta so `Heap.bytes` reflects this table's actual internal
-        // memory. `free_obj` subtracts `internal_bytes()` on the way out.
-        let after = self.internal_bytes();
-        heap.apply_bytes_delta(before, after);
+        heap.acct_table_resize(old_asize, old_nodes_len, new_asize, hsize);
         if grow {
             // SAFETY: both backings use the `[avals: n×8][atags: n]` layout;
             // the new one holds `new_asize >= old_asize` zero (nil) slots
