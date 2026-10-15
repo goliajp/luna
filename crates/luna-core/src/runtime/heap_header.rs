@@ -23,6 +23,8 @@ pub enum ObjTag {
     Coro,
     /// [`crate::runtime::userdata::Userdata`].
     Userdata,
+    /// a record of objects PUC made and luna did not (`heap_ghost.rs`)
+    Ghost,
 }
 
 impl GcHeader {
@@ -76,7 +78,11 @@ impl GcHeader {
         GcHeader {
             next: ptr::null_mut(),
             tag,
-            flags: if tag == ObjTag::Str { LEAF } else { 0 },
+            flags: if matches!(tag, ObjTag::Str | ObjTag::Ghost) {
+                LEAF
+            } else {
+                0
+            },
             sub: 0,
             aux: 0,
         }

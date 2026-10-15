@@ -61,7 +61,7 @@ pub(super) unsafe fn blacken(h: *mut GcHeader, m: &mut Marker) {
     unsafe {
         (*h).flags = (*h).with_slow(((*h).flags & !WHITE_BITS) | BLACK);
         match (*h).tag {
-            ObjTag::Str => {}
+            ObjTag::Str | ObjTag::Ghost => {}
             ObjTag::Table => (*(h as *mut Table)).trace(h as *mut Table, m),
             ObjTag::Proto => (*(h as *mut Proto)).trace(h as *mut Proto, m),
             ObjTag::Closure => (*(h as *mut LuaClosure)).trace(m),

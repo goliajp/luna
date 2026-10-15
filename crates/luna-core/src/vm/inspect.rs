@@ -58,12 +58,12 @@ pub struct HeapBucket {
 /// The walk runs under a `&Heap` borrow so no concurrent mutation
 /// can occur; safe to call from any host context that has a `&Vm`.
 /// Cost: O(live_objects) reads of the intrusive next-link, plus
-/// one `Vec::push` per *distinct* tag (≤ 8 entries by design).
+/// one `Vec::push` per *distinct* tag (one entry per tag at most).
 pub fn heap_walk(vm: &Vm) -> HeapSnapshot {
     // Fixed-size table indexed by ObjTag discriminant. Avoids any
     // alloc in the hot loop.
-    let mut counts = [0usize; 8];
-    let mut byte_estimate = [0usize; 8];
+    let mut counts = [0usize; ALL_TAGS.len()];
+    let mut byte_estimate = [0usize; ALL_TAGS.len()];
 
     vm.heap.walk_objects(|tag| {
         let idx = tag as usize;
@@ -103,7 +103,7 @@ pub fn heap_walk(vm: &Vm) -> HeapSnapshot {
 /// [`heap_walk`] to drive bucket ordering and lookup; the array
 /// length is asserted equal to the variant count below so adding
 /// a new variant is a compile error here until the table grows.
-const ALL_TAGS: [ObjTag; 8] = [
+const ALL_TAGS: [ObjTag; 9] = [
     ObjTag::Str,
     ObjTag::Table,
     ObjTag::Proto,
@@ -112,6 +112,7 @@ const ALL_TAGS: [ObjTag; 8] = [
     ObjTag::Native,
     ObjTag::Coro,
     ObjTag::Userdata,
+    ObjTag::Ghost,
 ];
 
 const _OBJTAG_COVERS_EVERY_VARIANT: () = {
@@ -127,7 +128,8 @@ const _OBJTAG_COVERS_EVERY_VARIANT: () = {
         | ObjTag::Upvalue
         | ObjTag::Native
         | ObjTag::Coro
-        | ObjTag::Userdata => (),
+        | ObjTag::Userdata
+        | ObjTag::Ghost => (),
     };
 };
 
@@ -141,6 +143,7 @@ fn tag_name(tag: ObjTag) -> &'static str {
         ObjTag::Native => "native",
         ObjTag::Coro => "coro",
         ObjTag::Userdata => "userdata",
+        ObjTag::Ghost => "ghost",
     }
 }
 
@@ -162,6 +165,7 @@ fn tag_payload_size(tag: ObjTag) -> usize {
         ObjTag::Native => core::mem::size_of::<NativeClosure>(),
         ObjTag::Coro => core::mem::size_of::<Coro>(),
         ObjTag::Userdata => core::mem::size_of::<Userdata>(),
+        ObjTag::Ghost => core::mem::size_of::<crate::runtime::heap::Ghost>(),
     }
 }
 
