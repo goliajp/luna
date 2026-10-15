@@ -50,6 +50,41 @@ pub(super) fn env_path(v: LuaVersion, noenv: bool, var: &str, dft: &[u8]) -> Vec
 
 pub(super) use crate::vm::lib_io::os_bytes;
 
+/// PUC's `LUA_CPATH_DEFAULT` for the target, its install prefix included,
+/// as `setpath` leaves it (on Windows `!` stands for the executable's
+/// directory). luna finds C libraries there but loads none.
+pub(super) fn cpath_default(v: LuaVersion) -> Vec<u8> {
+    let vdir = match v {
+        LuaVersion::Lua51 => "5.1",
+        LuaVersion::Lua52 => "5.2",
+        LuaVersion::Lua53 => "5.3",
+        LuaVersion::Lua54 => "5.4",
+        _ => "5.5",
+    };
+    if cfg!(windows) {
+        let d = if v == LuaVersion::Lua51 {
+            ".\\?.dll;!\\?.dll;!\\loadall.dll".to_string()
+        } else if v == LuaVersion::Lua52 {
+            "!\\?.dll;!\\loadall.dll;.\\?.dll".to_string()
+        } else {
+            format!("!\\?.dll;!\\..\\lib\\lua\\{vdir}\\?.dll;!\\loadall.dll;.\\?.dll")
+        };
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| os_bytes(d.as_os_str())));
+        return match exe_dir {
+            Some(dir) => replace(d.as_bytes(), b"!", &dir),
+            None => d.into_bytes(),
+        };
+    }
+    let cdir = format!("/usr/local/lib/lua/{vdir}/");
+    if v == LuaVersion::Lua51 {
+        format!("./?.so;{cdir}?.so;{cdir}loadall.so").into_bytes()
+    } else {
+        format!("{cdir}?.so;{cdir}loadall.so;./?.so").into_bytes()
+    }
+}
+
 /// `luaL_gsub`: replace every `from` in `src` with `to`.
 pub(super) fn replace(src: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(src.len());
