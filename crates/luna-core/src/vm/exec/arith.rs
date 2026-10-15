@@ -150,9 +150,10 @@ impl Vm {
                 None => self.subject_varinfo(bad),
             };
             let tn = self.obj_typename(bad);
-            let msg = self.compose_type_err(what, &tn, &extra);
             let conv = self.type_err_conv(&extra);
-            return Err(self.runerror_named(&msg, &extra, conv));
+            let e = self.typeerror_msg(what, &tn, &extra, conv);
+            self.varinfo_pushed = self.version() >= LuaVersion::Lua53 && !extra.is_empty();
+            return Err(e);
         }
         Ok(mm)
     }
