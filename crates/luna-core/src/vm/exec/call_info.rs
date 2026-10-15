@@ -7,13 +7,16 @@ use super::*;
 
 impl Vm {
     /// The `CallInfo`s the running thread uses besides its base one: its
-    /// frames as 5.1 counts them in its array, less the array's first
-    /// entry. On the main thread that entry is the protected call the
-    /// standalone interpreter makes its script's (`docall`'s `lua_pcall`
-    /// takes no level of PUC's), with the host's frames below it.
+    /// frames as 5.1 counts them in its array, less a coroutine's base
+    /// `CallInfo` and the host's protected calls on the main thread (which
+    /// counts no base: the host's frames are below its own).
     #[inline(always)]
     pub(super) fn ci_in_use(&self) -> u32 {
-        self.frames_in_use().saturating_sub(1)
+        let base = match self.current {
+            Some(_) => 1,
+            None => self.g.host_pcalls,
+        };
+        self.frames_in_use() - base
     }
 
     /// A call level was entered: counted when the thread has not been this

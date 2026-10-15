@@ -65,4 +65,7 @@ pub(crate) struct CallGuards {
     /// PUC 5.2+: the `CallInfo`s the running thread has allocated besides
     /// its base one (see `call_info.rs`); `u32::MAX` in 5.1. Per-thread.
     pub(crate) ci_alloc: u32,
+    /// the host's protected calls running on the main thread, each a
+    /// frame of luna's and no level of PUC's
+    pub(crate) host_pcalls: u32,
 }
