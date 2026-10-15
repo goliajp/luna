@@ -12,21 +12,26 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         unreachable!("newproxy is registered with its metatable set")
     };
     let arg = vm.nat_arg(fs, nargs, 0);
+    // `lua_newuserdata(L, 0)` comes first, kept on the stack
+    let size = vm.heap.sizes.userdata(1, 0);
+    let u = vm.lib_userdata(UserdataPayload::Empty, false, size)?;
+    vm.lib_roots.push(Value::Userdata(u));
     let mt = match arg {
-        v if !v.truthy() => None,
-        Value::Bool(true) => {
+        v if !v.truthy() => Ok(None),
+        Value::Bool(true) => (|| {
             let m = vm.alloc_table()?;
             // `proxies` is the weak set newproxy carries as its upvalue, so
             // the running native keeps it alive
             vm.lib_set_value(proxies, Value::Table(m), Value::Bool(true))?;
-            Some(m)
-        }
+            Ok(Some(m))
+        })(),
         v => match vm.metatable_of(v) {
-            Some(m) if proxies.get(Value::Table(m)).truthy() => Some(m),
-            _ => return Err(arg_error(vm, 1, "boolean or proxy expected")),
+            Some(m) if proxies.get(Value::Table(m)).truthy() => Ok(Some(m)),
+            _ => Err(arg_error(vm, 1, "boolean or proxy expected")),
         },
     };
-    let u = vm.lib_userdata(UserdataPayload::Empty, false)?;
+    vm.lib_roots.pop();
+    let mt = mt?;
     if let Some(mt) = mt {
         // SAFETY: `u` was allocated on the line above and is held only by this local; the borrow covers one call
         unsafe { u.as_mut() }.set_metatable(Some(mt));

@@ -11,7 +11,15 @@ pub(super) fn new_file(
     fh: FileHandle,
     writable: bool,
 ) -> Result<Gc<Userdata>, LuaError> {
-    let u = vm.lib_userdata(UserdataPayload::File(fh), writable)?;
+    // PUC's handle: 5.1 a `FILE *`, later a `luaL_Stream` (the file and
+    // its close function), from 5.4 with no user value
+    let sz = vm.heap.sizes;
+    let size = match vm.version() {
+        LuaVersion::Lua51 => sz.userdata(1, sz.ptr),
+        LuaVersion::Lua52 | LuaVersion::Lua53 => sz.userdata(1, 2 * sz.ptr),
+        _ => sz.userdata(0, 2 * sz.ptr),
+    };
+    let u = vm.lib_userdata(UserdataPayload::File(fh), writable, size)?;
     // SAFETY: `u` was allocated on the line above and no other handle to it exists yet; the borrow covers one call
     unsafe { u.as_mut() }.set_metatable(vm.file_mt);
     vm.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;

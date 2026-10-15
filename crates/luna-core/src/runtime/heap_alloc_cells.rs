@@ -35,8 +35,24 @@ impl Heap {
         payload: UserdataPayload,
         writable: bool,
     ) -> Result<Gc<Userdata>, Oom> {
+        // a userdata a host makes from Rust has no counterpart in PUC: one
+        // with no block and a user value
         let size = self.sizes.userdata(1, 0);
-        let u = Userdata::new(GcHeader::new(ObjTag::Userdata), payload, writable);
+        self.try_new_userdata_sized(payload, writable, size)
+    }
+
+    /// [`Heap::try_new_userdata`] standing for PUC's userdata of `size`
+    /// bytes (block and user values included).
+    pub(crate) fn try_new_userdata_sized(
+        &mut self,
+        payload: UserdataPayload,
+        writable: bool,
+        size: usize,
+    ) -> Result<Gc<Userdata>, Oom> {
+        let mut hdr = GcHeader::new(ObjTag::Userdata);
+        hdr.aux = self.take_id();
+        let mut u = Userdata::new(hdr, payload, writable);
+        u.puc_size = size;
         self.adopt_counted(u, PucKind::Userdata, size)
     }
 }

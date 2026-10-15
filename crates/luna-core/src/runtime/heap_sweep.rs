@@ -176,9 +176,8 @@ impl Heap {
                     self.free_block(h as *mut crate::runtime::Coro);
                 }
                 ObjTag::Userdata => {
-                    let extra = (*(h as *mut Userdata)).extra_bytes;
                     if !is_uncounted(h) {
-                        self.acct_free(self.sizes.userdata(1, 0) + extra);
+                        self.acct_free((*(h as *mut Userdata)).puc_size);
                     }
                     self.free_block(h as *mut Userdata);
                 }

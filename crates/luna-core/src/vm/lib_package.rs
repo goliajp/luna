@@ -131,8 +131,9 @@ fn open_package_with(vm: &mut Vm, list_opened: bool) -> Result<(), LuaError> {
         let f = vm.lib_native(ll_searchpath)?;
         raw_set(vm, pkg, "searchpath", f)?;
     }
-    // 5.1 marks a module being loaded with a sentinel, to catch loops
-    let sentinel = Value::Userdata(vm.lib_userdata(UserdataPayload::Empty, false)?);
+    // 5.1 marks a module being loaded with a sentinel, to catch loops (a
+    // light userdata of PUC's: nothing it counts)
+    let sentinel = Value::Userdata(vm.lib_userdata(UserdataPayload::Empty, false, 0)?);
     let req = vm.lib_native_with(
         ll_require,
         &[Value::Table(pkg), Value::Table(loaded), sentinel],

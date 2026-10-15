@@ -186,13 +186,18 @@ impl Vm {
     /// A userdata with `payload`, collecting in an emergency when memory
     /// runs out. The object is made empty, so a second attempt has nothing
     /// to rebuild, and then given the payload.
+    /// `size` is what PUC's userdata of the kind takes.
     pub(crate) fn lib_userdata(
         &mut self,
         payload: crate::runtime::userdata::UserdataPayload,
         writable: bool,
+        size: usize,
     ) -> Result<Gc<crate::runtime::Userdata>, LuaError> {
         use crate::runtime::userdata::UserdataPayload;
-        let u = self.retry_oom(|vm| vm.heap.try_new_userdata(UserdataPayload::Empty, writable))?;
+        let u = self.retry_oom(|vm| {
+            vm.heap
+                .try_new_userdata_sized(UserdataPayload::Empty, writable, size)
+        })?;
         // SAFETY: `u` was made above and no other handle to it exists yet; the
         // borrow covers one store, which allocates nothing
         unsafe { u.as_mut() }.payload = payload;
