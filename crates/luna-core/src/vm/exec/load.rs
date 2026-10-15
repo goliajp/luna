@@ -29,6 +29,22 @@ impl Vm {
         chunkname: &[u8],
         name: Option<Gc<crate::runtime::LuaStr>>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
+        // the chunk's name is on the C function's stack meanwhile
+        let base = self.lib_roots.len();
+        self.lib_roots.extend(name.map(Value::Str));
+        let r = self.load_named_rooted(src, chunkname, name);
+        self.lib_roots.truncate(base);
+        r
+    }
+
+    fn load_named_rooted(
+        &mut self,
+        src: &[u8],
+        chunkname: &[u8],
+        name: Option<Gc<crate::runtime::LuaStr>>,
+    ) -> Result<Gc<LuaClosure>, SyntaxError> {
+        // 5.4 on, `lua_load` checks for a collection before it parses
+        self.lua_load_checkpoint();
         // the parser and the compiler cannot collect (what they made so far
         // is held only by them), so a load that ran out of memory is run
         // once more after an emergency collection, as PUC's allocations
@@ -210,6 +226,13 @@ impl Vm {
             let proto = vm.compile_text(parsed, source)?;
             vm.close_chunk(proto)
         })
+    }
+
+    /// 5.4 on, `lua_load` checks for a collection before it reads.
+    pub(crate) fn lua_load_checkpoint(&mut self) {
+        if self.version >= LuaVersion::Lua54 {
+            self.native_checkpoint();
+        }
     }
 
     /// The closure of a loaded main function over the globals.
