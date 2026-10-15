@@ -171,7 +171,9 @@ impl Table {
         }
         self.set_hash_part(new_nodes, hsize);
         self.lastfree = hsize as u32;
-        heap.acct_table_resize(old_asize, old_nodes_len, new_asize, hsize);
+        if !heap.is_own_table(self) {
+            heap.acct_table_resize(old_asize, old_nodes_len, new_asize, hsize);
+        }
         if grow {
             // SAFETY: both backings use the `[avals: n×8][atags: n]` layout;
             // the new one holds `new_asize >= old_asize` zero (nil) slots

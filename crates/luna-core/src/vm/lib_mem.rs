@@ -42,6 +42,30 @@ impl Vm {
             .map(Value::Native)
     }
 
+    /// [`Vm::lib_native_with`] for a function PUC makes with `puc_nup`
+    /// upvalues where luna keeps more.
+    pub(crate) fn lib_native_puc(
+        &mut self,
+        f: NativeFn,
+        upvals: &[Value],
+        puc_nup: usize,
+    ) -> Result<Value, LuaError> {
+        self.retry_oom(|vm| vm.heap.try_new_native_puc(f, upvals, puc_nup))
+            .map(Value::Native)
+    }
+
+    /// [`Vm::lib_native_with`] for a function standing for PUC's objects
+    /// `objs` (see `Heap::try_new_native_stand_in`).
+    pub(crate) fn lib_native_stand_in(
+        &mut self,
+        f: NativeFn,
+        upvals: &[Value],
+        objs: &[(crate::runtime::heap::PucKind, usize)],
+    ) -> Result<Value, LuaError> {
+        self.retry_oom(|vm| vm.heap.try_new_native_stand_in(f, upvals, objs))
+            .map(Value::Native)
+    }
+
     /// A string of `parts` joined, composed in a block of the allocation
     /// context.
     pub(crate) fn concat_str(&mut self, parts: &[&[u8]]) -> Result<Value, LuaError> {

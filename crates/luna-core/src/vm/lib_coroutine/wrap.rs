@@ -52,27 +52,21 @@ fn co_wrapped(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// position of whoever called the wrapped function. ≤5.2 test `lua_isstring`,
 /// so a number error is converted and prefixed too; 5.3+ only strings.
 fn wrap_where(vm: &mut Vm, err: Value) -> Value {
-    let num;
-    let held;
-    let text: &[u8] = match err {
-        Value::Str(s) => {
-            held = s;
-            held.as_bytes()
-        }
-        Value::Int(_) | Value::Float(_) if vm.version() <= LuaVersion::Lua52 => {
-            num = crate::vm::argcheck::to_str_bytes(vm, err).expect("a number converts");
-            &num
-        }
+    match err {
+        Value::Str(_) => {}
+        Value::Int(_) | Value::Float(_) if vm.version() <= LuaVersion::Lua52 => {}
         _ => return err,
-    };
-    let p = vm.position_prefix().unwrap_or_default();
-    vm.concat_str(&[p.as_bytes(), text]).unwrap_or_else(|e| e.0)
+    }
+    let pos = vm.position_at_level(1);
+    let r = crate::vm::builtins::lual_where(vm, pos)
+        .and_then(|at| crate::vm::builtins::concat2(vm, Value::Str(at), err));
+    r.unwrap_or_else(|e| e.0)
 }
 
 pub(super) fn co_wrap(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let body = check_body(vm, Args::new(fs, nargs))?;
-    let co = vm.try_new_coro(body)?;
+    let co = new_body_coro(vm, Args::new(fs, nargs))?;
     let in_wrap = vm.nat_upval(fs, 0);
-    let f = vm.lib_native_with(co_wrapped, &[Value::Coro(co), in_wrap])?;
+    // PUC's function has the coroutine alone
+    let f = vm.lib_native_puc(co_wrapped, &[Value::Coro(co), in_wrap], 1)?;
     vm.nat_ret(fs, &[f])
 }

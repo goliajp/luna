@@ -137,7 +137,9 @@ use basic::{
 use compat51::{nat_gcinfo, nat_getfenv, nat_newproxy, nat_setfenv};
 use errors::nat_assert;
 pub(crate) use errors::nat_error;
-pub(crate) use errors::{arg_error, raise_bytes, raise_bytes_fmt, raise_fmt, raise_str};
+pub(crate) use errors::{
+    arg_error, concat2, lual_where, raise_bytes, raise_bytes_fmt, raise_fmt, raise_str,
+};
 pub use iter::ipairs_iter;
 use iter::{nat_ipairs, nat_next};
 pub(crate) use iter::{nat_pairs, pairs_mm_results};
