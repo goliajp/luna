@@ -241,7 +241,11 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
         }
         // lua.c sets it before it opens the libraries
         vm.set_ignore_env(ignore_env);
+        #[cfg(feature = "gc-trace")]
+        vm.trace_mark("openlibs");
         vm.open_lua_c_libs();
+        #[cfg(feature = "gc-trace")]
+        vm.trace_mark("/openlibs");
         vm
     };
     if let Some(n) = opts.budget {
@@ -393,6 +397,8 @@ fn main() {
     counters::append(&interp.vm);
     // lua.c closes the state before it exits, which finalizes open files
     // and so writes out what they still buffer
+    #[cfg(feature = "gc-trace")]
+    interp.vm.trace_mark("close");
     drop(interp);
     // C's exit flushes stdout (and stderr, if setvbuf buffered it)
     let _ = luna_core::stdio::flush_stdout();
