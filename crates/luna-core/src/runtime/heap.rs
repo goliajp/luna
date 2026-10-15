@@ -299,7 +299,7 @@ impl Heap {
 
 #[path = "heap_acct.rs"]
 mod acct;
-pub(crate) use acct::{PucKind, is_uncounted};
+pub(crate) use acct::{Ghost, PucKind, is_uncounted};
 #[path = "heap_alloc.rs"]
 mod alloc;
 #[path = "heap_barrier.rs"]
@@ -308,9 +308,6 @@ mod barrier;
 mod collect;
 #[path = "heap_finalize.rs"]
 mod finalize;
-#[path = "heap_ghost.rs"]
-mod ghost;
-pub(crate) use ghost::Ghost;
 #[path = "heap_intern.rs"]
 mod intern;
 #[path = "heap_new.rs"]

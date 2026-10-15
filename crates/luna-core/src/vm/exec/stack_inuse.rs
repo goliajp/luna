@@ -120,7 +120,15 @@ impl Vm {
             levels += 1;
             ci_used += 1;
         }
-        shrink_thread(&mut self.heap, self.version, at, inuse, levels, ci_used, &mut sz);
+        shrink_thread(
+            &mut self.heap,
+            self.version,
+            at,
+            inuse,
+            levels,
+            ci_used,
+            &mut sz,
+        );
         self.set_stack_size(sz.stack);
         self.g.frame_size = sz.frames51;
         self.g.ci_alloc = sz.ci;
@@ -146,7 +154,15 @@ impl Vm {
                 ci: m.ci_alloc,
             };
             let ci_used = n - self.g.host_pcalls;
-            shrink_thread(&mut self.heap, v, Shrink::Collector, inuse, n, ci_used, &mut sz);
+            shrink_thread(
+                &mut self.heap,
+                v,
+                Shrink::Collector,
+                inuse,
+                n,
+                ci_used,
+                &mut sz,
+            );
             (m.stack_size, m.frame_size, m.ci_alloc) = (sz.stack, sz.frames51, sz.ci);
         }
     }
@@ -175,7 +191,15 @@ impl Vm {
                 frames51: m.frame_size,
                 ci: m.ci_alloc,
             };
-            shrink_thread(&mut self.heap, v, Shrink::Collector, inuse, n, n - 1, &mut sz);
+            shrink_thread(
+                &mut self.heap,
+                v,
+                Shrink::Collector,
+                inuse,
+                n,
+                n - 1,
+                &mut sz,
+            );
             (m.stack_size, m.frame_size, m.ci_alloc) = (sz.stack, sz.frames51, sz.ci);
         }
         self.heap.threads = threads;

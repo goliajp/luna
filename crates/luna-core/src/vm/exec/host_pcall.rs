@@ -98,7 +98,11 @@ impl Vm {
     /// Call `level`, the native standing in for a protected call PUC's
     /// host makes from C, which takes no level of PUC's (on the main
     /// thread, the only one a host's call runs on).
-    fn call_value_host_level(&mut self, level: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
+    fn call_value_host_level(
+        &mut self,
+        level: Value,
+        args: &[Value],
+    ) -> Result<Vec<Value>, LuaError> {
         let main = self.current.is_none();
         self.g.host_pcalls += u32::from(main);
         let r = self.call_value(level, args);

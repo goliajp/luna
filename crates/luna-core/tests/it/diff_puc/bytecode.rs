@@ -148,13 +148,12 @@ fn diff_puc_bytecode() {
                     f.display()
                 ),
             }
-            let luna =
-                std::panic::catch_unwind(|| {
-                    let mut vm = Vm::new(version);
-                    // as lua.c, which runs scripts in generational mode from 5.4
-                    vm.gc_enter_generational();
-                    run_luac_on_luna(&mut vm, f, &bytes)
-                });
+            let luna = std::panic::catch_unwind(|| {
+                let mut vm = Vm::new(version);
+                // as lua.c, which runs scripts in generational mode from 5.4
+                vm.gc_enter_generational();
+                run_luac_on_luna(&mut vm, f, &bytes)
+            });
             match luna {
                 Ok(Ok(out)) if out == puc => {}
                 Ok(Ok(out)) => failed.push(format!(

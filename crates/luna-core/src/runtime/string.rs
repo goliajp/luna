@@ -240,44 +240,6 @@ fn alloc_str_of(
     Ok(p)
 }
 
-/// A long string of `a` then `b` (together longer than `MAX_SHORT_LEN`).
-pub(crate) fn alloc_long_pair(
-    mem: MemRef,
-    a: &[u8],
-    b: &[u8],
-    seed: u32,
-    h51: bool,
-) -> Result<*mut LuaStr, Oom> {
-    debug_assert!(a.len() + b.len() > MAX_SHORT_LEN);
-    if h51 {
-        alloc_str_of(mem, &[a, b], false, lua_hash_51_pair(a, b), true)
-    } else {
-        alloc_str_of(mem, &[a, b], false, seed, false)
-    }
-}
-
-/// A long string of `parts` one after another, hashed when first used as
-/// a key (not 5.1's, whose long strings are interned).
-pub(crate) fn alloc_long_parts(mem: MemRef, parts: &[&[u8]], seed: u32) -> Result<*mut LuaStr, Oom> {
-    alloc_str_of(mem, parts, false, seed, false)
-}
-
-/// A long string: hashed when first used as a key, or at once with PUC
-/// 5.1's hash (`h51`).
-pub(crate) fn alloc_long(
-    mem: MemRef,
-    bytes: &[u8],
-    seed: u32,
-    h51: bool,
-) -> Result<*mut LuaStr, Oom> {
-    debug_assert!(bytes.len() > MAX_SHORT_LEN);
-    if h51 {
-        alloc_str(mem, bytes, false, lua_hash_51(bytes), true)
-    } else {
-        alloc_str(mem, bytes, false, seed, false)
-    }
-}
-
 /// SAFETY: `p` must come from `alloc_str` on `mem` and not be freed twice.
 pub(crate) unsafe fn free(p: *mut LuaStr, mem: MemRef) {
     // SAFETY: the caller's contract; the layout is the one `alloc_str`
@@ -289,7 +251,9 @@ pub(crate) unsafe fn free(p: *mut LuaStr, mem: MemRef) {
     }
 }
 
+mod long;
 mod table;
+pub(crate) use long::{alloc_long, alloc_long_pair, alloc_long_parts};
 pub(crate) use table::StringTable;
 
 #[cfg(test)]
@@ -341,30 +305,4 @@ mod tests {
         let again = heap.intern(b"key000");
         assert!(first.ptr_eq(again));
     }
-}
-
-/// PUC `luaO_utf8esc`: `x` (up to 2^31-1) in extended UTF-8, written to
-/// the front of `out`; its length.
-pub(crate) fn utf8_esc(out: &mut [u8; 8], mut x: u32) -> usize {
-    if x < 0x80 {
-        out[0] = x as u8;
-        return 1;
-    }
-    let mut cont = [0u8; 6];
-    let mut n = 0;
-    let mut mfb: u32 = 0x3f;
-    loop {
-        cont[n] = 0x80 | (x & 0x3f) as u8;
-        n += 1;
-        x >>= 6;
-        mfb >>= 1;
-        if x <= mfb {
-            break;
-        }
-    }
-    out[0] = ((!mfb << 1) | x) as u8;
-    for (i, &b) in cont[..n].iter().rev().enumerate() {
-        out[1 + i] = b;
-    }
-    n + 1
 }

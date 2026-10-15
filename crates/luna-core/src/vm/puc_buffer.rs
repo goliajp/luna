@@ -114,7 +114,12 @@ impl PucBuffer {
     }
 
     /// `luaL_addvalue` of `s`, whose bytes the caller added to `out`.
-    pub(crate) fn add_value(&mut self, vm: &mut Vm, out: &[u8], s: Gc<LuaStr>) -> Result<(), LuaError> {
+    pub(crate) fn add_value(
+        &mut self,
+        vm: &mut Vm,
+        out: &[u8],
+        s: Gc<LuaStr>,
+    ) -> Result<(), LuaError> {
         let vl = s.len();
         if self.d != Dialect::L51 {
             return self.add(vm, out, vl);

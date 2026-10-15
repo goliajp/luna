@@ -27,13 +27,20 @@ impl Vm {
         let named = split_varinfo(extra);
         if self.version() > LuaVersion::Lua52 {
             if let Some((kind, name)) = named {
-                let r = self.heap.pushfstring(b" (%s '%s')", &[S(kind.as_bytes()), S(name.as_bytes())]);
+                let r = self
+                    .heap
+                    .pushfstring(b" (%s '%s')", &[S(kind.as_bytes()), S(name.as_bytes())]);
                 if let Err(e) = r {
                     return e.into();
                 }
             }
             let args = [S(what.as_bytes()), S(tn.as_bytes()), S(extra.as_bytes())];
-            return self.runerror_fmt(b"attempt to %s a %s value%s", &args, conv, !extra.is_empty());
+            return self.runerror_fmt(
+                b"attempt to %s a %s value%s",
+                &args,
+                conv,
+                !extra.is_empty(),
+            );
         }
         match named {
             Some((kind, name)) if kind != "metamethod" => {

@@ -103,7 +103,11 @@ impl Vm {
     /// The strings PUC's `findfield` and `pushglobalfuncname` make naming
     /// a function found as field `inner` of `outer`: `"."`, the
     /// concatenation of the three, and from 5.3 the name without `"_G."`.
-    fn globalfuncname_strings(&mut self, outer: Value, inner: Gc<crate::runtime::LuaStr>) -> Option<()> {
+    fn globalfuncname_strings(
+        &mut self,
+        outer: Value,
+        inner: Gc<crate::runtime::LuaStr>,
+    ) -> Option<()> {
         let dot = self.heap.try_intern(b".").ok()?;
         let mut st = vec![outer, Value::Str(dot), Value::Str(inner)];
         self.heap.puc_concat(&mut st, 3).ok()?;

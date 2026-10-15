@@ -235,7 +235,12 @@ pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
     };
     let (n, name, extra) = (i64::from(n), name.as_bytes(), extra.as_bytes());
     if vm.version() >= LuaVersion::Lua55 {
-        let args = [FmtArg::S(argword.as_bytes()), FmtArg::D(n), FmtArg::S(name), FmtArg::S(extra)];
+        let args = [
+            FmtArg::S(argword.as_bytes()),
+            FmtArg::D(n),
+            FmtArg::S(name),
+            FmtArg::S(extra),
+        ];
         return raise_lib(vm, b"bad %s #%d to '%s' (%s)", &args, 3);
     }
     let args = [FmtArg::D(n), FmtArg::S(name), FmtArg::S(extra)];

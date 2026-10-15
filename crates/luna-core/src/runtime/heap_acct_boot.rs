@@ -74,7 +74,9 @@ impl Heap {
     pub(crate) fn acct_stand_in(&mut self, s: Gc<LuaStr>, bytes: &[u8]) {
         let h = s.as_ptr() as *mut GcHeader;
         if is_uncounted(h) {
-            let size = self.sizes.string(bytes.len(), self.table_dialect == Dialect::L55);
+            let size = self
+                .sizes
+                .string(bytes.len(), self.table_dialect == Dialect::L55);
             self.puc.stand_ins.push((h, size));
         }
     }
@@ -147,7 +149,11 @@ impl Heap {
         Ok(())
     }
 
-    fn replay_string(&mut self, bytes: &'static [u8], live: bool) -> Result<(), crate::runtime::mem::Oom> {
+    fn replay_string(
+        &mut self,
+        bytes: &'static [u8],
+        live: bool,
+    ) -> Result<(), crate::runtime::mem::Oom> {
         let short = bytes.len() <= crate::runtime::string::MAX_SHORT_LEN
             || self.table_dialect == Dialect::L51;
         if short {
