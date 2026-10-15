@@ -153,25 +153,7 @@ impl Interp {
     /// there is none), the script's arguments count up from 1 and what
     /// comes before it down from -1.
     pub(crate) fn set_arg(&mut self, argv: &[Vec<u8>], script: usize) {
-        // sized as lua.c's `lua_createtable(L, narg, script + 1)`
-        let narg = argv.len() - script - 1;
-        let t = self
-            .vm
-            .heap
-            .try_create_table(narg, script + 1)
-            .expect("the arg table is small");
-        for (i, a) in argv.iter().enumerate() {
-            let k = Value::Int(i as i64 - script as i64);
-            let v = Value::Str(self.vm.heap.intern(a));
-            // SAFETY: CLI driver — `t` was just allocated and is reachable
-            // only from here until it is stored as `arg`.
-            unsafe { t.as_mut() }
-                .set(&mut self.vm.heap, k, v)
-                .expect("integer keys are valid table keys");
-        }
-        self.vm
-            .set_global("arg", Value::Table(t))
-            .expect("set the arg global");
+        self.vm.host_set_arg(argv, script).expect("set the arg global");
     }
 
     /// `handle_script`: load the script (stdin for `-` unless it follows

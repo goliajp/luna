@@ -27,11 +27,12 @@ impl Vm {
         prev
     }
 
-    /// The standalone interpreter switching the collector to generational
+    /// The standalone interpreter restarting the collector in generational
     /// mode before it runs anything (5.4+ `lua.c`).
     #[doc(hidden)]
     pub fn gc_enter_generational(&mut self) {
         if self.version >= LuaVersion::Lua54 {
+            self.heap.gc_set_stopped(false);
             self.gc_switch_mode("generational");
         }
     }
