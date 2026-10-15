@@ -305,6 +305,9 @@ mod barrier;
 mod collect;
 #[path = "heap_finalize.rs"]
 mod finalize;
+#[path = "heap_ghost.rs"]
+mod ghost;
+pub(crate) use ghost::Ghost;
 #[path = "heap_intern.rs"]
 mod intern;
 #[path = "heap_new.rs"]

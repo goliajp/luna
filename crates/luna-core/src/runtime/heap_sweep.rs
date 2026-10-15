@@ -182,6 +182,7 @@ impl Heap {
                     }
                     self.free_block(h as *mut Userdata);
                 }
+                ObjTag::Ghost => self.free_ghost(h as *mut ghost::Ghost),
                 ObjTag::Str => {
                     let s = h as *mut LuaStr;
                     if (*h).sub & UNCOUNTED == 0 {
