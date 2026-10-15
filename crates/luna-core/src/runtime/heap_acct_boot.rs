@@ -58,6 +58,29 @@ impl Heap {
 }
 
 impl Heap {
+    /// `s`, a long string luna's libraries made without counting, is the
+    /// one PUC's record made and kept with the same bytes: counted there,
+    /// it is PUC's now.
+    pub(crate) fn acct_adopt_long(&mut self, s: Gc<LuaStr>) {
+        let h = s.as_ptr() as *mut GcHeader;
+        if is_uncounted(h) && self.puc.kept_long.contains(&s.as_bytes()) {
+            super::set_uncounted(h, false);
+        }
+    }
+
+    /// `s`, a string luna's libraries made without counting, stands where
+    /// PUC keeps the long string of `bytes` from its record (luna's own
+    /// default `package.path`): when `s` is freed, PUC's is.
+    pub(crate) fn acct_stand_in(&mut self, s: Gc<LuaStr>, bytes: &[u8]) {
+        let h = s.as_ptr() as *mut GcHeader;
+        if is_uncounted(h) {
+            let size = self.sizes.string(bytes.len(), self.table_dialect == Dialect::L55);
+            self.puc.stand_ins.push((h, size));
+        }
+    }
+}
+
+impl Heap {
     /// A string just made: counted, or, while luna builds its own objects,
     /// marked as one PUC has not made.
     #[inline]
@@ -124,7 +147,7 @@ impl Heap {
         Ok(())
     }
 
-    fn replay_string(&mut self, bytes: &[u8], live: bool) -> Result<(), crate::runtime::mem::Oom> {
+    fn replay_string(&mut self, bytes: &'static [u8], live: bool) -> Result<(), crate::runtime::mem::Oom> {
         let short = bytes.len() <= crate::runtime::string::MAX_SHORT_LEN
             || self.table_dialect == Dialect::L51;
         if short {
@@ -140,8 +163,22 @@ impl Heap {
         if bytes.len() > crate::runtime::string::MAX_SHORT_LEN && self.table_dialect != Dialect::L51
         {
             // luna does not intern long strings (but 5.1's): nothing to
-            // find later
+            // find later; one luna's libraries keep too is theirs
+            // (`acct_adopt_long`)
+            if live {
+                self.puc.kept_long.push(bytes);
+            }
             return Ok(());
+        }
+        if !live
+            && let Some(s) = self.find_interned(bytes)
+            && is_uncounted(s.as_ptr() as *mut GcHeader)
+        {
+            // a string luna keeps for itself and PUC drops: PUC's (counted
+            // with the op before) is garbage, luna's stays out of the
+            // count until the program makes one
+            let size = self.sizes.string(bytes.len(), false);
+            return self.ghost_record(PucKind::ShortStr, size);
         }
         self.puc.silent += 1;
         let s = self.try_intern(bytes);

@@ -25,6 +25,11 @@ pub(crate) struct PucState {
     /// 5.1 and 5.2: the size of the buffer concatenations are made in
     /// (`G(L)->buff`)
     pub(crate) gbuff: usize,
+    /// the long strings PUC's `luaL_openlibs` made and kept
+    pub(crate) kept_long: Vec<&'static [u8]>,
+    /// uncounted objects of luna's standing for objects of PUC's of the
+    /// given size (see `Heap::acct_stand_in`)
+    pub(crate) stand_ins: Vec<(*mut GcHeader, usize)>,
 }
 
 impl Default for PucState {
@@ -37,6 +42,8 @@ impl Default for PucState {
             short_max: crate::runtime::string::MAX_SHORT_LEN,
             pins: Vec::new(),
             gbuff: 0,
+            kept_long: Vec::new(),
+            stand_ins: Vec::new(),
         }
     }
 }
