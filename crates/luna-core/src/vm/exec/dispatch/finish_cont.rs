@@ -81,6 +81,8 @@ impl Vm {
         // at the continuation's makes `true, results…` contiguous
         let callee = (i64::from(nc.func_slot) + 1 + i64::from(nc.kind.callee_shift())) as u32;
         let nret = self.top - callee;
+        // 5.1's `luaD_call` checks for a collection when the call returns
+        self.call_return_checkpoint(callee + nret);
         if callee != nc.func_slot + 1 {
             // the results may end past the stack's length (`top` runs ahead
             // of it); both ranges of the move must be inside it

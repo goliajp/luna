@@ -4,8 +4,6 @@
 use super::*;
 
 impl Vm {
-    // ---- coroutines ----
-
     pub(crate) fn new_coro(&mut self, body: Value) -> Gc<Coro> {
         self.try_new_coro(body)
             .unwrap_or_else(|_| crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Coro>()))
@@ -14,10 +12,9 @@ impl Vm {
     /// [`Vm::new_coro`], raising a memory error when the thread cannot be
     /// made. `body` is held by the caller (an argument on the stack).
     pub(crate) fn try_new_coro(&mut self, body: Value) -> Result<Gc<Coro>, LuaError> {
-        // The new coroutine inherits the creating thread's current globals
-        // (PUC `lua_newthread`: the new state copies `g->mainthread`'s
-        // `l_gt`). `Vm.globals` always reflects the live thread, so reading
-        // it here picks the creator regardless of which coro is running.
+        // `lua_newthread` checks for a collection first; the new thread
+        // takes the creating thread's globals (`Vm.globals` is the live one's)
+        self.native_checkpoint();
         let globals = self.globals;
         let co = self.retry_oom(|vm| vm.heap.try_new_coro(body, globals))?;
         // a new thread inherits the creator's C hook (PUC `lua_newthread`); a
@@ -188,8 +185,7 @@ impl Vm {
             m.meta_conts = 0;
             m.stale_frames = 0;
             // `luaE_resetthread` leaves the stack `LUA_MINSTACK` above the
-            // function slot and the error, if there is one; the
-            // `CallInfo`s stay
+            // function slot and the error, if any; the `CallInfo`s stay
             let size = 21 + u32::from(result.is_err() || death_err.is_some());
             self.heap.acct_stack(closed.stack_size, size);
             m.stack_size = size;

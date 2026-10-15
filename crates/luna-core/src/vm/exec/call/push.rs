@@ -77,13 +77,18 @@ impl Vm {
     ) -> Result<(), LuaError> {
         let p = cl.proto;
         let (top, max) = (func_slot + 1 + nargs, p.max_stack as u32);
-        self.check_lua_stack(top, max, false)?;
+        self.check_lua_stack(top, max, true)?;
         if p.is_vararg {
             // a vararg function's stack is checked again: 5.2 above the
             // missing parameters (`adjust_varargs`), 5.4 and 5.5 for the
             // function's copy too (`luaT_adjustvarargs`, unless 5.5 builds
             // a vararg table instead)
             match self.version {
+                // 5.1 makes the `arg` table of an old-style vararg function
+                LuaVersion::Lua51 if p.has_compat_vararg_arg => {
+                    let missing = u32::from(p.num_params).saturating_sub(nargs);
+                    self.check_lua_stack(top + missing, max, false)?;
+                }
                 LuaVersion::Lua52 => {
                     let missing = u32::from(p.num_params).saturating_sub(nargs);
                     self.check_lua_stack(top + missing, max, false)?;
@@ -180,10 +185,14 @@ impl Vm {
                 .get_unchecked_mut((base + kept) as usize..end)
                 .fill(Value::Nil)
         };
+        self.precall_checkpoint(base + max);
         // PUC 5.1 `LUAI_COMPAT_VARARG`: the hidden `arg` local (the slot at
         // `base + nparams`) gets `{ n = n_varargs, e1, e2, … }` from the extras
         // just below `base` (5.1 db.lua :279 reads `arg.n` from a line hook).
         if proto.has_compat_vararg_arg {
+            // `adjust_varargs` checks for a collection first, the missing
+            // parameters on the stack
+            self.checkpoint(func_slot + 1 + nargs.max(nparams));
             let arg_slot = (base + nparams) as usize;
             // young until stored in its slot below; `luaH_new(L, nvar, 1)`:
             // an array part of exactly the extras' count (bounded by the

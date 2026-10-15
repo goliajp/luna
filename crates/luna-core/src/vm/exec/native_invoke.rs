@@ -134,7 +134,7 @@ impl Vm {
         nresults: i32,
     ) -> Result<(), LuaError> {
         // a C function gets `LUA_MINSTACK` slots (PUC `luaD_precall`)
-        self.check_lua_stack(func_slot + 1 + nargs, 20, false)?;
+        self.check_lua_stack(func_slot + 1 + nargs, 20, true)?;
         self.pending_tailcalls = 0;
         let ccmt = std::mem::take(&mut self.pending_ccmt);
         self.native_nresults = nresults;
@@ -148,6 +148,7 @@ impl Vm {
             self.frames.len(),
             ccmt,
         ))?;
+        self.precall_checkpoint(func_slot + 1 + nargs);
         // no guard here: a panic unwinds to `exec_with`, which raises it as
         // this native's error (see `Vm::unguarded_native_panic`)
         let result = (nc.f)(self, func_slot, nargs);

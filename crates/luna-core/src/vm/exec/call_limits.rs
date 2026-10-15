@@ -6,23 +6,19 @@ use super::*;
 impl Vm {
     /// Room for `need` slots above `top` on the thread's stack (PUC
     /// `luaD_checkstack` at a call, `top` being `L->top` there), the stack
-    /// grown as PUC grows it, else the error PUC raises. `vararg`: a vararg
-    /// function is called, which 5.4 on checks one slot more for, as its
-    /// frame moves up past the function and the arguments
-    /// (`luaT_adjustvarargs`); the fast path counts that slot for every
-    /// call and the slow one takes it back.
+    /// grown as PUC grows it, else the error PUC raises. `gc`: 5.3 and 5.4
+    /// check for a collection before they grow it (`checkstackGCp`).
     #[inline(always)]
     pub(crate) fn check_lua_stack(
         &mut self,
         top: u32,
         need: u32,
-        vararg: bool,
+        gc: bool,
     ) -> Result<(), LuaError> {
         if top + need < self.g.stack_last {
             return Ok(());
         }
-        let need = need + u32::from(vararg && self.version >= LuaVersion::Lua54);
-        self.grow_lua_stack(top, need)
+        self.grow_lua_stack(top, need, gc)
     }
 
     /// The running thread's stack is now `s` slots (PUC's count).
@@ -53,7 +49,13 @@ impl Vm {
     /// (errors.lua :606, cstack.lua :29).
     #[cold]
     #[inline(never)]
-    pub(super) fn grow_lua_stack(&mut self, top: u32, need: u32) -> Result<(), LuaError> {
+    pub(super) fn grow_lua_stack(&mut self, top: u32, need: u32, gc: bool) -> Result<(), LuaError> {
+        if gc
+            && matches!(self.version, LuaVersion::Lua53 | LuaVersion::Lua54)
+            && top + 1 + need >= stack_size::last(self.version, self.stack_size)
+        {
+            self.checkpoint(top);
+        }
         if self.version == LuaVersion::Lua51 && top + need > STACK_CAP_51 {
             return Err(self.rt_err("stack overflow"));
         }

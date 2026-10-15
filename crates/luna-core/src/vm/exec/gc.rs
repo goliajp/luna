@@ -203,10 +203,34 @@ impl Vm {
         let _ = name;
     }
 
+    /// 5.2's `luaD_precall` checks for a collection on every call, the
+    /// `CallInfo` made, `L->top` at `top` (a Lua function's whole frame).
+    #[inline(always)]
+    pub(crate) fn precall_checkpoint(&mut self, top: u32) {
+        if self.version == crate::version::LuaVersion::Lua52 {
+            self.checkpoint(top);
+        }
+    }
+
+    /// A collection check of PUC's C API inside the running C function:
+    /// its stack is live up to its top.
+    pub(crate) fn native_checkpoint(&mut self) {
+        let top = self.native_top().unwrap_or_else(|| self.lua_window_end());
+        self.checkpoint(top);
+    }
+
+    /// 5.1's `luaD_call` checks for a collection when the call returns,
+    /// its results below `top` (calls from C, metamethods, `pcall`'s).
+    pub(crate) fn call_return_checkpoint(&mut self, top: u32) {
+        if self.version == crate::version::LuaVersion::Lua51 {
+            self.checkpoint(top);
+        }
+    }
+
     /// A checkpoint in the accounting trace: `k` and the running Lua
     /// function's current line, 0 in a native.
     #[cfg(feature = "gc-trace")]
-    fn trace_checkpoint(&mut self) {
+    pub(super) fn trace_checkpoint(&mut self) {
         let line = match self.frames.last() {
             Some(CallFrame::Lua(f)) if !self.native_on_top() => {
                 crate::vm::callstack::frame_line(f).max(0)

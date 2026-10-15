@@ -153,7 +153,8 @@ impl Vm {
                 // named vararg's `n` can be set to anything up to INT_MAX/2,
                 // which the stack cannot hold
                 if wanted < 0 {
-                    self.check_lua_stack(self.lua_window_end(), count, false)?;
+                    let gc = self.version == LuaVersion::Lua54;
+                    self.check_lua_stack(self.lua_window_end(), count, gc)?;
                 }
                 let need = (abs_a + count) as usize;
                 self.grow_stack(need)?;

@@ -43,8 +43,7 @@ pub struct HostContHooks {
     pub resuming: fn(&mut Vm, Gc<Coro>),
     /// A thread the C API has seen was closed: its C frames and stack go.
     pub reset: fn(&mut Vm, Gc<Coro>),
-    /// A thread was made (PUC `lua_newthread`, which `coroutine.create`
-    /// calls too): it takes its copy of the main thread's extra space now.
+    /// A thread was made (`lua_newthread`): it copies the main thread's extra space.
     pub created: fn(&mut Vm, Gc<Coro>),
 }
 
@@ -96,6 +95,7 @@ impl Vm {
     /// A new thread with no function yet (PUC `lua_newthread`): the first
     /// resume takes the function from the thread's C stack.
     pub fn host_new_thread(&mut self) -> Result<Gc<Coro>, LuaError> {
+        self.native_checkpoint();
         let globals = self.globals;
         let co = self.retry_oom(|vm| vm.heap.try_new_coro(Value::Nil, globals))?;
         // a new thread inherits the creator's C hook, as `new_coro` gives it
