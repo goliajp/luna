@@ -138,7 +138,17 @@ impl Vm {
             Some(n) if !long => n,
             _ => self.heap.try_intern(chunkname)?,
         };
-        let proto = self.compile_parsed(&parsed.chunk, &parsed.end_lines, source)?;
+        let proto = self
+            .compile_parsed(&parsed.chunk, &parsed.end_lines, source)
+            .map_err(|e| match &parsed.src {
+                // placed as PUC, which compiles while it reads, meets it
+                Some(src) => {
+                    let (v, depth) = (self.version, self.g.nccalls);
+                    let s = &mut self.compile_scratch;
+                    crate::compiler::place_error(s, &parsed.chunk, src, v, depth, e)
+                }
+                None => e,
+            })?;
         self.hold_puc_names(proto)?;
         self.close_chunk(proto)
     }
