@@ -213,6 +213,14 @@ impl Vm {
         self.checkpoint(top);
     }
 
+    /// The check of an API call that allocates, made before it in 5.1 and
+    /// 5.2 (`before`) and after it pushed from 5.3 on (`!before`).
+    pub fn host_api_check(&mut self, before: bool) {
+        if before == (self.version <= LuaVersion::Lua52) {
+            self.host_check_gc();
+        }
+    }
+
     /// The 5.1 environment of the Lua function `cl`: its `_ENV` cell, or the
     /// globals when it has none.
     pub fn host_closure_env(&self, cl: Gc<LuaClosure>) -> Value {

@@ -120,13 +120,13 @@ impl PucBuffer {
             Dialect::L54 => (self.size / 2 * 3).max(self.n + sz),
             _ => (self.size + self.size / 2).max(self.n + sz + 1),
         };
-        let h = &mut vm.heap;
         match self.d {
             Dialect::L52 => {
-                let size = h.sizes.userdata(0, newsize);
-                h.acct_ghost(PucKind::Userdata, size)?;
+                vm.api_check_before();
+                let size = vm.heap.sizes.userdata(0, newsize);
+                vm.heap.acct_ghost(PucKind::Userdata, size)?;
             }
-            _ if self.boxed => h.trace_raw(self.size, newsize),
+            _ if self.boxed => vm.heap.trace_raw(self.size, newsize),
             _ => {
                 vm.new_box()?;
                 vm.heap.trace_raw(0, newsize);
@@ -185,11 +185,14 @@ impl PucBuffer {
                 // the box's block becomes the string's
                 vm.heap.trace_raw(self.size, out.len() + 1);
                 let r = vm.heap.new_external_string(out)?;
+                vm.api_check_after(Value::Str(r));
                 vm.box_closed();
                 Ok(r)
             }
             _ => {
+                vm.api_check_before();
                 let r = vm.heap.try_intern(out)?;
+                vm.api_check_after(Value::Str(r));
                 if self.boxed && self.d >= Dialect::L53 {
                     if self.d >= Dialect::L54 {
                         // `lua_closeslot` calls the box's `__close`
@@ -217,6 +220,7 @@ impl PucBuffer {
         if self.n == 0 {
             return Ok(false);
         }
+        vm.api_check_before();
         let s = vm.heap.try_intern(&out[self.start..self.start + self.n])?;
         vm.lib_roots.push(Value::Str(s));
         self.start += self.n;
@@ -255,6 +259,7 @@ impl PucBuffer {
     fn concat_51(&mut self, vm: &mut Vm, n: usize) -> Result<(), LuaError> {
         let from = vm.lib_roots.len() - n;
         let mut st: Vec<Value> = vm.lib_roots[from..].to_vec();
+        vm.api_check_before();
         vm.heap.puc_concat(&mut st, n)?;
         vm.lib_roots.truncate(from);
         vm.lib_roots.push(st[0]);
@@ -291,6 +296,7 @@ impl Vm {
             self.heap.sizes.userdata(1, ubox)
         };
         self.heap.acct_ghost(PucKind::Userdata, size)?;
+        self.api_check_after(Value::Nil);
         self.box_metatable()
     }
 
@@ -307,6 +313,11 @@ impl Vm {
         }
         let mt = self.alloc_table_sized(0, 2)?;
         let mtv = Value::Table(mt);
+        self.api_check_after(mtv);
+        // `luaL_newmetatable` pushes the name
+        self.lib_roots.push(mtv);
+        self.api_check_after(key);
+        self.lib_roots.pop();
         // `boxgc`, a light C function: no object of PUC's
         let gc = self.builtin(box_gc, &[], crate::runtime::Builtin::None)?;
         if l53 {

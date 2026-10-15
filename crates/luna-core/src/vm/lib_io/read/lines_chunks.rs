@@ -50,8 +50,13 @@ pub(crate) fn read_line(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> Rd {
         }
         buf.push(c)?;
     }
-    if got_nl || !buf.is_empty() {
-        read_str(vm, &buf)
+    // read a character at a time into chunks of the buffer's size
+    let nl = keep_nl && got_nl;
+    let len = buf.len() - usize::from(nl);
+    let chunks = even_chunks(chunk_size(vm), len);
+    let s = buffered(vm, &buf, &chunks, nl)?;
+    if got_nl || len > 0 {
+        Ok(s)
     } else {
         Ok(Value::Nil)
     }
@@ -62,6 +67,8 @@ pub(crate) fn read_line(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> Rd {
 /// lost, so the line runs on into the next.
 pub(crate) fn read_line_fgets(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> Rd {
     let mut out = LVec::new(vm.heap.mem());
+    let mut chunks = Vec::new();
+    let room = chunk_size(vm);
     loop {
         let mut chunk = Vec::new();
         while chunk.len() < BUFSIZ - 1 {
@@ -76,38 +83,31 @@ pub(crate) fn read_line_fgets(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> Rd
             }
         }
         if chunk.is_empty() {
-            return if out.is_empty() {
-                Ok(Value::Nil)
-            } else {
-                read_str(vm, &out)
-            };
+            // `fgets` found nothing more, after the room was made
+            chunks.push((room, 0));
+            let s = buffered(vm, &out, &chunks, false)?;
+            return Ok(if out.is_empty() { Value::Nil } else { s });
         }
         // strlen: up to the first NUL, the whole chunk when there is none
         let len = chunk.iter().position(|&b| b == 0).unwrap_or(chunk.len());
         if len == 0 || chunk[len - 1] != b'\n' {
             out.extend_from_slice(&chunk[..len])?;
+            chunks.push((room, len));
         } else {
             let end = if keep_nl { len } else { len - 1 };
             out.extend_from_slice(&chunk[..end])?;
-            return read_str(vm, &out);
+            chunks.push((room, end));
+            return buffered(vm, &out, &chunks, false);
         }
     }
-}
-
-/// A string read from a file. One longer than a string can hold is an
-/// allocation failure, which PUC's buffer would meet first.
-pub(crate) fn read_str(vm: &mut Vm, bytes: &[u8]) -> Rd {
-    if bytes.len() > crate::runtime::string::MAX_LEN {
-        return Err(posix_error(ENOMEM).into());
-    }
-    Ok(vm.str_value(bytes)?)
 }
 
 /// `read_all`: never fails (an empty string at end of file).
 pub(crate) fn read_all(vm: &mut Vm, u: Gc<Userdata>) -> Rd {
     if u.crt.is_some() {
         let buf = read_all_crt(vm.version(), u);
-        return read_str(vm, &buf);
+        let chunks = all_chunks(vm, buf.len());
+        return buffered(vm, &buf, &chunks, false);
     }
     let mut buf = LVec::new(vm.heap.mem());
     loop {
@@ -118,7 +118,8 @@ pub(crate) fn read_all(vm: &mut Vm, u: Gc<Userdata>) -> Rd {
             break;
         }
     }
-    read_str(vm, &buf)
+    let chunks = all_chunks(vm, buf.len());
+    buffered(vm, &buf, &chunks, false)
 }
 
 /// `LUAL_BUFFERSIZE` of PUC built for 64-bit Windows.

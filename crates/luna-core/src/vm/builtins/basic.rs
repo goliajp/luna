@@ -5,7 +5,7 @@ use super::*;
 
 pub(super) fn nat_type(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let v = argcheck::check_any(vm, Args::new(fs, nargs), 0)?;
-    let s = vm.str_value(v.type_name().as_bytes())?;
+    let s = vm.api_push_string(v.type_name().as_bytes())?;
     vm.nat_ret(fs, &[s])
 }
 
@@ -112,6 +112,8 @@ pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         let mut buf = [0u8; 20];
         let bytes = crate::numeric::write_i64_dec(i, &mut buf);
         let s = vm.str_value(bytes)?;
+        // the number converted (`lua_tolstring`, 5.3 and 5.4 `%I`)
+        vm.api_check_converted(s);
         if vm.version() == LuaVersion::Lua51 {
             vm.nat_set_arg(fs, 0, s);
         }
@@ -135,6 +137,7 @@ pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
                 }
             {
                 out = vm.str_value(&b)?;
+                vm.api_check_converted(out);
             }
             return vm.nat_ret(fs, &[out]);
         }

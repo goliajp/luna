@@ -341,8 +341,8 @@ fn m_tointeger(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 fn m_type(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = match argcheck::check_any(vm, a, 0)? {
-        Value::Int(_) => vm.str_value(b"integer")?,
-        Value::Float(_) => vm.str_value(b"float")?,
+        Value::Int(_) => vm.api_push_string(b"integer")?,
+        Value::Float(_) => vm.api_push_string(b"float")?,
         _ => Value::Nil,
     };
     vm.nat_ret(fs, &[v])

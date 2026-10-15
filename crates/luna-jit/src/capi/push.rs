@@ -72,9 +72,11 @@ c_exports! {
 /// Push `bytes` as a string and return the string's own bytes
 /// (NUL-terminated), or raise the memory error and return null.
 fn push_bytes(api: &mut Api, bytes: &[u8]) -> *const c_char {
+    api.vm.host_api_check(true);
     match api.vm.host_str(bytes) {
         Ok(v @ Value::Str(st)) => {
             api.push(v);
+            api.vm.host_api_check(false);
             st.as_c_ptr()
         }
         Ok(_) => unreachable!("a string value"),

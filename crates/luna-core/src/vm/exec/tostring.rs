@@ -61,18 +61,34 @@ impl Vm {
                     }
                     _ => return self.number_string(v),
                 }
-                .map_err(LuaError::from);
+                .map_err(LuaError::from)
+                .inspect(|&s| self.api_check_after(Value::Str(s)));
             }
+            _ => self.pushed_text(v),
+        };
+        r.map_err(LuaError::from)
+    }
+
+    /// `lua_pushstring` / `lua_pushfstring` of the text `tostring` gives a
+    /// value that is no number or string, checked for as PUC checks.
+    fn pushed_text(&mut self, v: Value) -> Result<Gc<LuaStr>, crate::runtime::mem::Oom> {
+        self.api_check_before();
+        let r = match v {
             Value::Nil => self.heap.try_intern(b"nil"),
             Value::Bool(b) => self.heap.try_intern(if b { b"true" } else { b"false" }),
             _ => {
-                let kind = self.obj_typename(v);
+                let kind = if self.version == LuaVersion::Lua51 {
+                    v.type_name().to_string()
+                } else {
+                    self.obj_typename(v)
+                };
                 let p = self.topointer(v);
                 self.heap
                     .pushfstring(b"%s: %p", &[FmtArg::S(kind.as_bytes()), FmtArg::P(p)])
             }
-        };
-        r.map_err(LuaError::from)
+        }?;
+        self.api_check_after(Value::Str(r));
+        Ok(r)
     }
 
     /// PUC 5.1 `luaB_tostring` of `v`, argument `arg` of the native at
@@ -91,15 +107,7 @@ impl Vm {
                 self.nat_set_arg(fs, arg, Value::Str(s));
                 return Ok(s);
             }
-            Value::Nil => self.heap.try_intern(b"nil"),
-            Value::Bool(b) => self.heap.try_intern(if b { b"true" } else { b"false" }),
-            _ => {
-                let p = self.topointer(v);
-                self.heap.pushfstring(
-                    b"%s: %p",
-                    &[FmtArg::S(v.type_name().as_bytes()), FmtArg::P(p)],
-                )
-            }
+            _ => self.pushed_text(v),
         };
         r.map_err(LuaError::from)
     }
@@ -112,7 +120,10 @@ impl Vm {
             _ => unreachable!("a number"),
         };
         let t = self.heap.number_text(n);
-        self.heap.try_intern(t.as_bytes()).map_err(LuaError::from)
+        let s = self.heap.try_intern(t.as_bytes())?;
+        // `lua_tolstring` checks for a collection after it converts
+        self.api_check_converted(Value::Str(s));
+        Ok(s)
     }
 
     /// PUC `lua_topointer` of a value `tostring` names by its address.

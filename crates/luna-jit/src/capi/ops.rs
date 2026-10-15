@@ -139,6 +139,10 @@ pub unsafe extern "C" fn luna_capi_lua_lessthan(L: *mut LuaState, i1: c_int, i2:
 pub unsafe extern "C" fn luna_capi_concat(L: *mut LuaState, n: c_int) {
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
+    let v = api.version();
+    if n >= 2 && v <= LuaVersion::Lua52 {
+        api.vm.host_check_gc();
+    }
     match n {
         0 => {
             let s = or_raise!(api, api.str(b""));
@@ -161,7 +165,10 @@ pub unsafe extern "C" fn luna_capi_concat(L: *mut LuaState, n: c_int) {
             }
         }
     }
-    api.vm.host_check_gc();
+    // 5.3 and 5.4 check after any count, 5.5 after a count past 0
+    if v >= LuaVersion::Lua53 && (n > 0 || v != LuaVersion::Lua55) {
+        api.vm.host_check_gc();
+    }
 }
 
 /// PUC 5.2+ `lua_len`: push the length of the value at `idx`, through

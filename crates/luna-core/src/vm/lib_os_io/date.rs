@@ -36,17 +36,22 @@ pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
         };
     };
     if lib_io::c_str(fmt) == b"*t" {
-        let table = vm.alloc_table()?;
+        // `lua_createtable(L, 0, 9)`
+        vm.api_check_before();
+        let table = vm.alloc_table_sized(0, 9)?;
+        vm.api_check_after(Value::Table(table));
         setallfields(vm, table, &tm)?;
         return vm.nat_ret(fs, &[Value::Table(table)]);
     }
     let mut out = vm.new_buf();
+    let mut b = crate::vm::puc_buffer::PucBuffer::new(vm);
     // one conversion's text, short whatever the format
     let mut item = Vec::new();
     let mut i = 0;
     while i < fmt.len() {
         if fmt[i] != b'%' {
             vm.buf_push(&mut out, &fmt[i..=i])?;
+            b.add_chars(vm, &out, 1)?;
             i += 1;
             continue;
         }
@@ -56,6 +61,7 @@ pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             None if v == LuaVersion::Lua51 => {
                 // 5.1 passes a lone trailing '%' through
                 vm.buf_push(&mut out, b"%")?;
+                b.add_chars(vm, &out, 1)?;
                 break;
             }
             None => {
@@ -71,12 +77,21 @@ pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
         };
         item.clear();
         strftime(&rest[..len], &tm, &mut item);
+        // 5.3 on make room for `SIZETIMEFMT` bytes first
+        if v >= LuaVersion::Lua53 {
+            b.prep(vm, &out, 250)?;
+        }
         vm.buf_push(&mut out, &item)?;
+        if v >= LuaVersion::Lua53 {
+            b.add_size(item.len());
+        } else {
+            b.add(vm, &out, item.len())?;
+        }
         i += 1 + len;
     }
-    let r = vm.str_value(&out)?;
+    let r = b.finish(vm, &out)?;
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret(fs, &[Value::Str(r)])
 }
 
 /// How many bytes of `rest` (what follows a '%') form a conversion, or

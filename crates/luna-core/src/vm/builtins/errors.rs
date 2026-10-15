@@ -79,8 +79,15 @@ pub(crate) fn nat_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     }
     // `luaL_where` and the message, concatenated into one value
     vm.native_push(1);
-    let at = lual_where(vm, pos)?;
-    Err(LuaError(concat2(vm, Value::Str(at), msg)?))
+    let base = vm.lib_roots.len();
+    let r = vm.api_pushing(|vm| lual_where(vm, pos)).and_then(|at| {
+        vm.api_check_before();
+        let v = concat2(vm, Value::Str(at), msg)?;
+        vm.api_check_after(v);
+        Ok(v)
+    });
+    vm.lib_roots.truncate(base);
+    Err(LuaError(r?))
 }
 
 /// Raise a string-ish error with the caller's position prefix (PUC level 1).
@@ -97,22 +104,30 @@ fn raise(vm: &mut Vm, msg: Message<'_>, conv: Option<u32>) -> LuaError {
     if let Some(e) = vm.format_pushes(&[at, conv]) {
         return e;
     }
-    // concatenated into one value
+    // concatenated into one value; each piece is pushed, as the API calls
+    // that make them check for a collection
     vm.native_push(1);
+    let base = vm.lib_roots.len();
     let r = (|| {
         // 5.3+ `assert` pushes its message before `luaB_error` positions it
         let early = match msg {
-            Message::Pushed(m) => Some(vm.heap.try_intern(m)?),
+            Message::Pushed(m) => Some(vm.api_pushing(|vm| Ok(vm.heap.try_intern(m)?))?),
             Message::Fmt(..) => None,
         };
-        let at = lual_where(vm, pos)?;
+        let at = vm.api_pushing(|vm| lual_where(vm, pos))?;
         let m = match (early, msg) {
             (Some(m), _) => m,
-            (None, Message::Fmt(fmt, args)) => vm.heap.pushfstring(fmt, args)?,
+            (None, Message::Fmt(fmt, args)) => {
+                vm.api_pushing(|vm| Ok(vm.heap.pushfstring(fmt, args)?))?
+            }
             (None, Message::Pushed(_)) => unreachable!("pushed above"),
         };
-        concat2(vm, Value::Str(at), Value::Str(m))
+        vm.api_check_before();
+        let v = concat2(vm, Value::Str(at), Value::Str(m))?;
+        vm.api_check_after(v);
+        Ok(v)
     })();
+    vm.lib_roots.truncate(base);
     match r {
         Ok(v) => LuaError(v),
         Err(e) => e,
