@@ -37,8 +37,7 @@ impl Table {
                 Dialect::L54 => {
                     let l = self.alimit.get();
                     if l != p {
-                        self.alimit
-                            .set(alimit_after_dense_len(l, p, self.asize as u32));
+                        self.alimit.set(alimit_after_dense_len(l, p, self.asize));
                     }
                 }
                 Dialect::L55 => self.lenhint.set(p),
