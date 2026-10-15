@@ -12,6 +12,8 @@ impl Heap {
     pub(crate) fn gc_begin_propagate(&mut self) -> Marker {
         debug_assert!(self.phase == GcPhase::Pause);
         self.phase = GcPhase::Propagate;
+        // what a back barrier sent there during the last sweep is white now
+        self.grayagain = mark::GrayStack::default();
         self.propagate = Some(PropagateState {
             weak: Vec::new(),
             ephemeron: Vec::new(),
@@ -76,21 +78,11 @@ impl Heap {
     pub(crate) fn gc_finish_atomic_work(&mut self, run: Option<Running>) -> (i64, i64) {
         debug_assert!(self.phase == GcPhase::Propagate);
         let mut m = self.loan_marker();
-        // any residual gray (caller may not have drained to empty)
-        let mut work = 0;
-        match run {
-            Some(run) => {
-                while let Some(h) = m.pop() {
-                    m.leaf_bytes = 0;
-                    // SAFETY: as in `propagate_work`
-                    unsafe {
-                        blacken(h, &mut m);
-                        work += self.object_work(h, run) + m.leaf_bytes;
-                    }
-                }
-            }
-            None => drain_marker(&mut m),
-        }
+        // any residual gray (caller may not have drained to empty), then
+        // what the back barriers sent to gray again (PUC `grayagain`)
+        let mut work = self.drain_work(&mut m, run);
+        self.regray_again(&mut m);
+        work += self.drain_work(&mut m, run);
         // a thread stays gray while marking (`grayagain`): `atomic`
         // traverses each one marked again
         if let Some(run) = run {
@@ -146,6 +138,33 @@ impl Heap {
             _ => self.sweep_objects(usize::MAX, true) as i64,
         };
         (work, swept)
+    }
+
+    /// Drain `m`, with the work PUC counts for each object when `run`
+    /// names the running thread.
+    fn drain_work(&self, m: &mut Marker, run: Option<Running>) -> i64 {
+        let Some(run) = run else {
+            drain_marker(m);
+            return 0;
+        };
+        let mut work = 0;
+        while let Some(h) = m.pop() {
+            m.leaf_bytes = 0;
+            // SAFETY: as in `propagate_work`
+            unsafe {
+                blacken(h, m);
+                work += self.object_work(h, run) + m.leaf_bytes;
+            }
+        }
+        work
+    }
+
+    /// The objects a back barrier sent to gray, on `m`'s stack to be
+    /// traversed again.
+    pub(super) fn regray_again(&mut self, m: &mut Marker) {
+        while let Some(h) = self.grayagain.pop() {
+            m.push_gray(h);
+        }
     }
 
     /// Phase peek (for the VM-side step driver).
