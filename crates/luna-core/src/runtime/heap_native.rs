@@ -46,6 +46,55 @@ impl Heap {
         self.try_new_builtin(f, upvals, Builtin::None, is_async)
     }
 
+    /// [`Heap::try_new_native`] for a library function PUC makes with
+    /// `puc_nup` upvalues where luna keeps more: counted at PUC's size.
+    pub(crate) fn try_new_native_puc(
+        &mut self,
+        f: NativeFn,
+        upvals: &[Value],
+        puc_nup: usize,
+    ) -> Result<Gc<NativeClosure>, Oom> {
+        self.puc.silent += 1;
+        let g = self.try_new_builtin(f, upvals, Builtin::None, false);
+        self.puc.silent -= 1;
+        let g = g?;
+        let h = g.as_ptr() as *mut GcHeader;
+        if self.puc.silent == 0 {
+            acct::set_uncounted(h, false);
+            // SAFETY: `g` was just made; only its per-type byte is written
+            unsafe { (*h).sub = (*h).sub & UNCOUNTED | (puc_nup as u8 + 1) };
+            if puc_nup > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
+                self.acct_obj(PucKind::CClosure, self.sizes.c_closure(puc_nup));
+            }
+        }
+        Ok(g)
+    }
+
+    /// [`Heap::try_new_native`] for a library function standing for the
+    /// objects of PUC's in `objs`, made in that order and freed with it
+    /// (5.4's `gmatch`: a state userdata and a C closure).
+    pub(crate) fn try_new_native_stand_in(
+        &mut self,
+        f: NativeFn,
+        upvals: &[Value],
+        objs: &[(PucKind, usize)],
+    ) -> Result<Gc<NativeClosure>, Oom> {
+        self.puc.silent += 1;
+        let g = self.try_new_builtin(f, upvals, Builtin::None, false);
+        self.puc.silent -= 1;
+        let g = g?;
+        if self.puc.silent == 0 {
+            for &(kind, size) in objs {
+                self.acct_obj(kind, size);
+            }
+            let sizes = objs.iter().map(|&(_, s)| s).collect();
+            self.puc
+                .stand_ins
+                .push((g.as_ptr() as *mut GcHeader, sizes));
+        }
+        Ok(g)
+    }
+
     /// [`Heap::try_new_native`] for the library function `builtin`.
     pub(crate) fn try_new_builtin(
         &mut self,

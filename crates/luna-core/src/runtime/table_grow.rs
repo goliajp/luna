@@ -81,7 +81,9 @@ impl Table {
         // every old slot holds a value: the run of them is the whole old
         // part, as the full resize's catch-up scan finds
         self.aprefix = old as u32;
-        heap.acct_table_resize(old, 0, new_asize, 0);
+        if !heap.is_own_table(self) {
+            heap.acct_table_resize(old, 0, new_asize, 0);
+        }
         Ok(())
     }
 }

@@ -109,7 +109,16 @@ impl Heap {
             match (*h).tag {
                 ObjTag::Table => {
                     let t = h as *mut Table;
-                    self.acct_table_free((*t).asize as usize, (*t).node_count());
+                    if let Some(i) = self
+                        .puc
+                        .own_tables
+                        .iter()
+                        .position(|&o| o == t as *const Table)
+                    {
+                        self.puc.own_tables.swap_remove(i);
+                    } else {
+                        self.acct_table_free((*t).asize as usize, (*t).node_count());
+                    }
                     // pool recycle. Drop the
                     // Box-owned interior (slab, nodes, metatable) so the
                     // Table struct itself can be re-handed-out by a
@@ -154,8 +163,15 @@ impl Heap {
                     self.free_block(h as *mut Upvalue);
                 }
                 ObjTag::Native => {
+                    if is_uncounted(h) {
+                        self.free_stand_in(h);
+                    }
                     let nat = &*(h as *mut NativeClosure);
-                    let n = nat.upvals.len();
+                    // the upvalues PUC's function has, when luna keeps others
+                    let n = match (*h).sub & !UNCOUNTED {
+                        0 => nat.upvals.len(),
+                        k => k as usize - 1,
+                    };
                     if (n > 0 || self.table_dialect == crate::runtime::table::Dialect::L51)
                         && !is_uncounted(h)
                     {
@@ -189,10 +205,7 @@ impl Heap {
                         self.trace_raw((*s).len() + 1, 0);
                         self.acct_free(self.sizes.lngstr_hdr + 2 * self.sizes.ptr);
                     } else if (*h).sub & UNCOUNTED != 0 {
-                        if let Some(i) = self.puc.stand_ins.iter().position(|&(p, _)| p == h) {
-                            let (_, size) = self.puc.stand_ins.swap_remove(i);
-                            self.acct_free(size);
-                        }
+                        self.free_stand_in(h);
                     } else {
                         #[cfg(feature = "gc-trace")]
                         if self.trace.where_ {
@@ -206,6 +219,19 @@ impl Heap {
                     }
                     string::free(s, self.mem());
                 }
+            }
+        }
+    }
+}
+
+impl Heap {
+    /// The objects of PUC's that `h`, an uncounted object of luna's, stood
+    /// for (`PucState::stand_ins`) are freed with it.
+    fn free_stand_in(&mut self, h: *mut GcHeader) {
+        if let Some(i) = self.puc.stand_ins.iter().position(|(p, _)| *p == h) {
+            let (_, sizes) = self.puc.stand_ins.swap_remove(i);
+            for s in sizes {
+                self.acct_free(s);
             }
         }
     }

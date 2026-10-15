@@ -28,8 +28,11 @@ pub(crate) fn try_open_coroutine(vm: &mut Vm) -> Result<(), LuaError> {
     set(vm, "yield", co_yield)?;
     set(vm, "status", co_status)?;
     set(vm, "running", co_running)?;
-    // the threads now inside a wrapped call, which `resume_refusal` needs
-    let in_wrap = Value::Table(vm.alloc_table()?);
+    // the threads now inside a wrapped call, which `resume_refusal` needs:
+    // luna's own table, which PUC has none of
+    let w = vm.alloc_table()?;
+    vm.heap.puc.own_tables.push(w.as_ptr());
+    let in_wrap = Value::Table(w);
     for (name, f) in [
         ("resume", co_resume as crate::runtime::value::NativeFn),
         ("wrap", co_wrap),
@@ -69,9 +72,27 @@ fn check_body(vm: &mut Vm, a: Args) -> Result<Value, LuaError> {
 }
 
 fn co_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let body = check_body(vm, Args::new(fs, nargs))?;
-    let co = vm.try_new_coro(body)?;
+    let co = new_body_coro(vm, Args::new(fs, nargs))?;
     vm.nat_ret(fs, &[Value::Coro(co)])
+}
+
+/// The coroutine of `create`/`wrap` over argument 1: 5.1 makes the thread
+/// before it checks the argument (`luaB_cocreate`), later dialects after.
+fn new_body_coro(vm: &mut Vm, a: Args) -> Result<Gc<Coro>, LuaError> {
+    if vm.version() > LuaVersion::Lua51 {
+        let body = check_body(vm, a)?;
+        return vm.try_new_coro(body);
+    }
+    let co = vm.try_new_coro(Value::Nil)?;
+    // the new thread is pushed over the arguments
+    vm.native_push(1);
+    let body = check_body(vm, a)?;
+    vm.native_pop(1);
+    // SAFETY: `co` was just made and nothing else refers into it; the
+    // borrow covers one store
+    unsafe { co.as_mut() }.body = body;
+    vm.heap.barrier_back(co);
+    Ok(co)
 }
 
 /// The thread argument (lcorolib `getco`): an argcheck without the offending

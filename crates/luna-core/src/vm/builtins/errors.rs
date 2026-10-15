@@ -139,7 +139,7 @@ fn literal(msg: &[u8]) -> (&[u8], [FmtArg<'_>; 1], usize) {
 
 /// PUC `luaL_where`: the string of position `pos` (`"%s:%d: "`), `""`
 /// without one.
-fn lual_where(vm: &mut Vm, pos: Option<(Vec<u8>, i64)>) -> Result<Gc<LuaStr>, LuaError> {
+pub(crate) fn lual_where(vm: &mut Vm, pos: Option<(Vec<u8>, i64)>) -> Result<Gc<LuaStr>, LuaError> {
     let s = match pos {
         Some((src, line)) => vm
             .heap
@@ -150,7 +150,7 @@ fn lual_where(vm: &mut Vm, pos: Option<(Vec<u8>, i64)>) -> Result<Gc<LuaStr>, Lu
 }
 
 /// `lua_concat(L, 2)` of `a` and `b` (strings, or a number before 5.3).
-fn concat2(vm: &mut Vm, a: Value, b: Value) -> Result<Value, LuaError> {
+pub(crate) fn concat2(vm: &mut Vm, a: Value, b: Value) -> Result<Value, LuaError> {
     let mut st = vec![a, b];
     vm.heap.puc_concat(&mut st, 2)?;
     Ok(st[0])

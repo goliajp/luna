@@ -77,7 +77,7 @@ impl Heap {
             let size = self
                 .sizes
                 .string(bytes.len(), self.table_dialect == Dialect::L55);
-            self.puc.stand_ins.push((h, size));
+            self.puc.stand_ins.push((h, vec![size]));
         }
     }
 }

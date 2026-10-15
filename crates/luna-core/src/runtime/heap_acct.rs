@@ -33,7 +33,9 @@ pub(crate) struct PucState {
     pub(crate) kept_long: Vec<&'static [u8]>,
     /// uncounted objects of luna's standing for objects of PUC's of the
     /// given size (see `Heap::acct_stand_in`)
-    pub(crate) stand_ins: Vec<(*mut GcHeader, usize)>,
+    pub(crate) stand_ins: Vec<(*mut GcHeader, Vec<usize>)>,
+    /// tables of luna's own, which PUC has none of: never counted
+    pub(crate) own_tables: Vec<*const crate::runtime::Table>,
     /// the number the last table, function, thread or userdata made got
     /// (`Heap::take_id`): its hash as a key, where PUC's is its address
     pub(crate) next_id: u32,
@@ -51,6 +53,7 @@ impl Default for PucState {
             gbuff: 0,
             kept_long: Vec::new(),
             stand_ins: Vec::new(),
+            own_tables: Vec::new(),
             next_id: 0,
         }
     }

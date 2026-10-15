@@ -84,6 +84,12 @@ impl Heap {
     }
 
     /// A table freed with `a` array slots and `h` nodes (PUC `luaH_free`).
+    /// Whether `t` is one of luna's own tables, which nothing counts.
+    #[inline]
+    pub(crate) fn is_own_table(&self, t: *const crate::runtime::Table) -> bool {
+        !self.puc.own_tables.is_empty() && self.puc.own_tables.contains(&t)
+    }
+
     pub(crate) fn acct_table_free(&mut self, a: usize, h: usize) {
         let (ab, hb) = (self.array_bytes(a), self.hash_bytes(h));
         self.acct_block(hb, 0);
