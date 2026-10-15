@@ -80,6 +80,7 @@ pub(crate) mod stack_size;
 mod state;
 mod state_guards;
 mod strings;
+mod tostring;
 mod trace_adopt;
 mod trace_cache;
 mod trace_close;
