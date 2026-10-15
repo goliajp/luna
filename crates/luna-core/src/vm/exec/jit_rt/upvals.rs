@@ -96,6 +96,8 @@ impl Vm {
         }
         let n = self.heap.try_new_closure(proto, ups).ok()?;
         if cached {
+            // as the interpreter's `CLOSURE` does (`luaC_protobarrier`)
+            self.heap.barrier_back(proto);
             proto.cache.set(Some(n));
         }
         Some(n)
