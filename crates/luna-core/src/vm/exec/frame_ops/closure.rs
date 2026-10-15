@@ -137,6 +137,10 @@ impl Vm {
         }
         let n = self.retry_oom(|vm| vm.heap.try_new_closure(proto, ups))?;
         if cached {
+            // PUC `luaC_protobarrier`: a black prototype is traversed again,
+            // so the atomic step sees its cache (a weak reference) and
+            // clears it if the closure dies
+            self.heap.barrier_back(proto);
             proto.cache.set(Some(n));
         }
         Ok(n)
