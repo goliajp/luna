@@ -112,6 +112,9 @@ pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         let mut buf = [0u8; 20];
         let bytes = crate::numeric::write_i64_dec(i, &mut buf);
         let s = vm.str_value(bytes)?;
+        if vm.version() == LuaVersion::Lua51 {
+            vm.nat_set_arg(fs, 0, s);
+        }
         return vm.nat_ret(fs, &[s]);
     }
     // PUC ≤5.2: `tostring(x)` returns whatever `__tostring` returns — even
@@ -136,9 +139,12 @@ pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             return vm.nat_ret(fs, &[out]);
         }
     }
-    let bytes = vm.tostring_value(v)?;
-    let s = vm.str_value(&bytes)?;
-    vm.nat_ret(fs, &[s])
+    let s = if vm.version() == LuaVersion::Lua51 {
+        vm.tostring_51(v, fs, 0)?
+    } else {
+        vm.tolstring(v, 0)?
+    };
+    vm.nat_ret(fs, &[Value::Str(s)])
 }
 
 pub(super) fn nat_rawget(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
