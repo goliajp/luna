@@ -83,16 +83,13 @@ fn new_body_coro(vm: &mut Vm, a: Args) -> Result<Gc<Coro>, LuaError> {
         let body = check_body(vm, a)?;
         return vm.try_new_coro(body);
     }
-    let co = vm.try_new_coro(Value::Nil)?;
+    // made over the argument whatever it is: a refused one leaves garbage
+    let co = vm.try_new_coro(a.get(vm, 0))?;
     // the new thread is pushed over the arguments
     vm.native_push(1);
-    let body = check_body(vm, a)?;
+    let body = check_body(vm, a);
     vm.native_pop(1);
-    // SAFETY: `co` was just made and nothing else refers into it; the
-    // borrow covers one store
-    unsafe { co.as_mut() }.body = body;
-    vm.heap.barrier_back(co);
-    Ok(co)
+    body.map(|_| co)
 }
 
 /// The thread argument (lcorolib `getco`): an argcheck without the offending
