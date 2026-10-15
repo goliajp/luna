@@ -73,6 +73,7 @@ mod num;
 mod num_double;
 mod num_words;
 mod protected;
+mod puc_api;
 mod settings;
 mod slow_ops;
 mod stack_inuse;

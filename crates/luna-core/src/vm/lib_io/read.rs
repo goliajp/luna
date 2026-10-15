@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::runtime::mem::LVec;
+mod buffered;
 mod lines_chunks;
+pub(crate) use buffered::*;
 pub(crate) use lines_chunks::*;
 
 /// Outcome of `g_read`: the values (the last one nil when a format failed),
@@ -118,6 +120,20 @@ fn g_read_formats(
     fmts: &[Value],
     argno0: u32,
 ) -> Result<ReadOut, LuaError> {
+    // the values read stay on the C function's stack while the next is
+    // read, which may collect
+    let base = vm.lib_roots.len();
+    let r = read_formats(vm, u, fmts, argno0);
+    vm.lib_roots.truncate(base);
+    r
+}
+
+fn read_formats(
+    vm: &mut Vm,
+    u: Gc<Userdata>,
+    fmts: &[Value],
+    argno0: u32,
+) -> Result<ReadOut, LuaError> {
     if fmts.is_empty() {
         return Ok(match read_line(vm, u, false) {
             Ok(v) => ReadOut::Values(vec![v]),
@@ -144,6 +160,7 @@ fn g_read_formats(
         match r {
             Ok(v) => {
                 let stop = v.is_nil();
+                vm.lib_roots.push(v);
                 out.push(v);
                 if stop {
                     break;
@@ -212,10 +229,9 @@ fn read_count(vm: &mut Vm, u: Gc<Userdata>, n: i64) -> Rd {
         } else {
             crt::fread(u, size as usize)
         };
-        if got.is_empty() {
-            return Ok(Value::Nil);
-        }
-        return read_str(vm, &got);
+        let chunks = count_chunks(vm, size.min(usize::MAX as u64) as usize, got.len());
+        let s = buffered(vm, &got, &chunks, false)?;
+        return Ok(if got.is_empty() { Value::Nil } else { s });
     }
     let mut buf = LVec::new(vm.heap.mem());
     while (buf.len() as u64) < size {
@@ -232,22 +248,20 @@ fn read_count(vm: &mut Vm, u: Gc<Userdata>, n: i64) -> Rd {
         // SAFETY: `u` is a file handle the caller holds; the borrow covers one field store
         unsafe { u.as_mut() }.read_pos += take;
     }
-    if buf.is_empty() {
-        Ok(Value::Nil)
-    } else {
-        read_str(vm, &buf)
-    }
+    let chunks = count_chunks(vm, size.min(usize::MAX as u64) as usize, buf.len());
+    let s = buffered(vm, &buf, &chunks, false)?;
+    Ok(if buf.is_empty() { Value::Nil } else { s })
 }
 
 /// `test_eof`: "" if a byte is left, nil at end of file.
 fn test_eof(vm: &mut Vm, u: Gc<Userdata>) -> Rd {
-    Ok(match getc(u)? {
-        Some(c) => {
-            unget(u, &[c]);
-            vm.str_value(b"")?
-        }
-        None => Value::Nil,
-    })
+    let c = getc(u)?;
+    if let Some(c) = c {
+        unget(u, &[c]);
+    }
+    // the empty string is pushed whether a byte is left or not
+    let s = vm.api_push_string(b"")?;
+    Ok(if c.is_some() { s } else { Value::Nil })
 }
 
 fn read_number(vm: &mut Vm, u: Gc<Userdata>) -> Rd {

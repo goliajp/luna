@@ -108,12 +108,20 @@ impl Vm {
         outer: Value,
         inner: Gc<crate::runtime::LuaStr>,
     ) -> Option<()> {
+        // each made by an API call that checks for a collection
+        self.api_check_before();
         let dot = self.heap.try_intern(b".").ok()?;
+        self.api_check_after(Value::Str(dot));
         let mut st = vec![outer, Value::Str(dot), Value::Str(inner)];
+        self.lib_roots.push(Value::Str(dot));
+        self.api_check_before();
+        self.lib_roots.pop();
         self.heap.puc_concat(&mut st, 3).ok()?;
+        self.api_check_after(st[0]);
         let g = matches!(outer, Value::Str(s) if s.as_bytes() == b"_G");
         if g && self.version >= LuaVersion::Lua53 {
-            self.heap.try_intern(inner.as_bytes()).ok()?;
+            let s = self.heap.try_intern(inner.as_bytes()).ok()?;
+            self.api_check_after(Value::Str(s));
         }
         Some(())
     }

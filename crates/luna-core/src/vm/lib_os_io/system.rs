@@ -7,7 +7,7 @@ pub(super) fn os_getenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         .as_bytes()
         .to_vec();
     let v = match std::env::var_os(lib_io::os_path(&name)) {
-        Some(val) => vm.str_value(&os_bytes(&val))?,
+        Some(val) => vm.api_push_string(&os_bytes(&val))?,
         None => Value::Nil,
     };
     vm.nat_ret(fs, &[v])
@@ -107,7 +107,7 @@ pub(super) fn os_tmpname(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaEr
         }
     };
     crate::cerrno::set(2);
-    let s = vm.str_value(name.as_bytes())?;
+    let s = vm.api_push_string(name.as_bytes())?;
     vm.nat_ret(fs, &[s])
 }
 
@@ -279,7 +279,7 @@ pub(super) fn os_setlocale(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     } else {
         names.join(&b'/')
     };
-    let r = vm.str_value(&text)?;
+    let r = vm.api_push_string(&text)?;
     vm.nat_ret(fs, &[r])
 }
 

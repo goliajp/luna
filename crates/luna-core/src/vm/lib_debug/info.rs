@@ -138,8 +138,30 @@ fn info_table(
     ar: &Ar,
     activelines: Value,
 ) -> Result<Gc<Table>, LuaError> {
+    // the table, and what goes in it, made as the API calls PUC's C
+    // function makes do, checking for a collection: kept rooted meanwhile
+    let base = vm.lib_roots.len();
+    vm.lib_roots.push(activelines);
+    let r = info_fields(vm, options, ar, activelines);
+    vm.lib_roots.truncate(base);
+    r
+}
+
+fn info_fields(
+    vm: &mut Vm,
+    options: &[u8],
+    ar: &Ar,
+    activelines: Value,
+) -> Result<Gc<Table>, LuaError> {
     let v = vm.version();
-    let t = vm.alloc_table()?;
+    vm.api_check_before();
+    let t = if v <= LuaVersion::Lua52 {
+        vm.alloc_table_sized(0, 2)?
+    } else {
+        vm.alloc_table()?
+    };
+    vm.lib_roots.push(Value::Table(t));
+    vm.api_check_after_rooted();
     let has = |c: u8| options.contains(&c);
     if has(b'S') {
         // ≤5.3 push the source as a C string (up to a NUL); 5.4+ keep its

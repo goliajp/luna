@@ -159,7 +159,7 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // the result is empty for any count when both pieces are; PUC before
     // 5.5 spins `n` times producing it
     if n <= 0 || l + lsep == 0 {
-        let r = vm.str_value(b"")?;
+        let r = vm.api_push_string(b"")?;
         return vm.nat_ret(fs, &[r]);
     }
     let n = n as u128;
@@ -278,6 +278,6 @@ fn s_dump(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         crate::vm::dump::dump_puc(&cl.proto, strip, v)
             .map_err(|_| raise_str(vm, "unable to dump given function"))?
     };
-    let r = vm.str_value(&bytes)?;
+    let r = vm.api_push_string(&bytes)?;
     vm.nat_ret(fs, &[r])
 }

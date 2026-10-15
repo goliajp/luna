@@ -1,6 +1,7 @@
 //! Errors in the shape of `luaL_fileresult` / `luaL_execresult`, and the C-string and path conversions they share.
 
 use super::*;
+use crate::runtime::puc_fmt::FmtArg;
 
 /// An errno luna reports itself. std reads a raw code as a Win32 error on
 /// Windows, where 22 is "The device does not recognize the command."; the C
@@ -145,10 +146,17 @@ pub(super) fn file_fail_values(
     } else {
         strerror(e)
     };
+    // `lua_pushfstring(L, "%s: %s", ...)` / `lua_pushstring`
     let m = match fname {
-        Some(n) => vm.concat_str(&[c_str(n), b": ", text.as_bytes()])?,
-        None => vm.str_value(text.as_bytes())?,
+        Some(n) => {
+            let args = [FmtArg::S(c_str(n)), FmtArg::S(text.as_bytes())];
+            Value::Str(vm.api_pushing(|vm| Ok(vm.heap.pushfstring(b"%s: %s", &args)?))?)
+        }
+        None => vm.api_push_string(text.as_bytes())?,
     };
+    if fname.is_some() {
+        vm.lib_roots.pop();
+    }
     let code = errno(e).map_or(0, i64::from);
     Ok([Value::Nil, m, Value::Int(code)])
 }
@@ -184,7 +192,7 @@ pub(crate) fn exec_result(
     } else {
         Value::Nil
     };
-    let w = vm.str_value(what.as_bytes())?;
+    let w = vm.api_push_string(what.as_bytes())?;
     vm.nat_ret(fs, &[ok, w, Value::Int(code as i64)])
 }
 

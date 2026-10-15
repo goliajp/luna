@@ -16,6 +16,8 @@ pub(in crate::capi) fn tolstring(
                 unreachable!("a string value");
             };
             api.set(idx, Value::Str(s));
+            // every version checks after converting a number
+            api.vm.host_check_gc();
             s
         }
         _ => return Ok(None),

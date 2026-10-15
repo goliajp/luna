@@ -37,7 +37,7 @@ fn pat_err(vm: &mut Vm, e: PatError) -> LuaError {
 
 fn cap_value(vm: &mut Vm, src: &[u8], c: CapValue) -> Result<Value, LuaError> {
     match c {
-        CapValue::Span(a, b) => vm.str_value(&src[a..b]),
+        CapValue::Span(a, b) => vm.api_push_string(&src[a..b]),
         CapValue::Pos(p) => Ok(Value::Int(p as i64 + 1)),
     }
 }
@@ -58,6 +58,22 @@ fn push_captures(
     } else {
         ms.level()
     };
+    // what is pushed stays rooted while the next is made, which may
+    // collect
+    let base = vm.lib_roots.len();
+    vm.lib_roots.extend_from_slice(out);
+    let r = push_each(vm, ms, src, (s, e, n), out);
+    vm.lib_roots.truncate(base);
+    r
+}
+
+fn push_each(
+    vm: &mut Vm,
+    ms: &MatchState,
+    src: &[u8],
+    (s, e, n): (usize, usize, usize),
+    out: &mut Vec<Value>,
+) -> Result<(), LuaError> {
     for i in 0..n {
         let c = match ms.get_capture(i, s, e) {
             Ok(c) => c,
@@ -67,7 +83,9 @@ fn push_captures(
                 return Err(pat_err(vm, err));
             }
         };
-        out.push(cap_value(vm, src, c)?);
+        let v = cap_value(vm, src, c)?;
+        vm.lib_roots.push(v);
+        out.push(v);
     }
     Ok(())
 }

@@ -13,9 +13,17 @@ use super::*;
 pub unsafe extern "C" fn luna_capi_lua_pushcclosure(L: *mut LuaState, f: LuaCFunction, n: c_int) {
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
+    // a function with no upvalues is light from 5.2 on: nothing to check
+    let checked = n > 0 || api.version() == LuaVersion::Lua51;
+    if checked {
+        api.vm.host_api_check(true);
+    }
     match new_c_closure(&mut api, f, usize::try_from(n).unwrap_or(0)) {
         Ok(c) => api.push(c),
-        Err(e) => api.raise(e),
+        Err(e) => return api.raise(e),
+    }
+    if checked {
+        api.vm.host_api_check(false);
     }
 }
 

@@ -5,6 +5,7 @@
 
 use crate::runtime::Value;
 use crate::runtime::mem::LVec;
+use crate::runtime::puc_fmt::FmtArg;
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
@@ -105,28 +106,6 @@ fn decode(v: LuaVersion, s: &[u8], i: usize, strict: bool) -> Option<(u32, usize
     Some((res, i + count + 1))
 }
 
-/// `luaO_utf8esc`.
-fn encode(vm: &mut Vm, out: &mut LVec<u8>, mut x: u32) -> Result<(), LuaError> {
-    if x < 0x80 {
-        return vm.buf_push(out, &[x as u8]);
-    }
-    // filled from the end, as PUC does; `n` counts the bytes written plus one
-    let mut seq = [0u8; 7];
-    let mut n = 1;
-    let mut mfb: u32 = 0x3f;
-    loop {
-        seq[7 - n] = 0x80 | (x & 0x3f) as u8;
-        n += 1;
-        x >>= 6;
-        mfb >>= 1;
-        if x <= mfb {
-            break;
-        }
-    }
-    seq[7 - n] = ((!mfb << 1) | x) as u8;
-    vm.buf_push(out, &seq[7 - n..])
-}
-
 fn u_posrelat(pos: i64, len: usize) -> i64 {
     if pos >= 0 {
         pos
@@ -148,6 +127,7 @@ fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // with several arguments the buffer's slot counts for an error
     let buf = if nargs != 1 { vm.buffer_slot(0) } else { 0 };
     let mut out = vm.new_buf();
+    let mut b = (nargs != 1).then(|| crate::vm::puc_buffer::PucBuffer::new(vm));
     for i in 0..nargs {
         let code = match argcheck::check_integer(vm, a, i) {
             Ok(code) => code,
@@ -165,11 +145,19 @@ fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             vm.native_push(buf);
             return Err(arg_error(vm, i + 1, "value out of range"));
         }
-        encode(vm, &mut out, code as u32)?;
+        // `pushutfchar`: `lua_pushfstring(L, "%U", code)`
+        let s = vm.heap.pushfstring(b"%U", &[FmtArg::U(code as u32)])?;
+        vm.api_check_after(Value::Str(s));
+        let Some(b) = b.as_mut() else {
+            return vm.nat_ret(fs, &[Value::Str(s)]);
+        };
+        vm.buf_push(&mut out, s.as_bytes())?;
+        b.add_value(vm, &out, s)?;
     }
-    let s = vm.str_value(&out)?;
+    let b = b.expect("several arguments, or none");
+    let s = b.finish(vm, &out)?;
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[s])
+    vm.nat_ret(fs, &[Value::Str(s)])
 }
 
 fn u_codepoint(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

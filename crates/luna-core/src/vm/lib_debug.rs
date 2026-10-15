@@ -81,7 +81,7 @@ fn set_field(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) -> Result<(), LuaErro
 }
 
 fn set_str(vm: &mut Vm, t: Gc<Table>, k: &str, bytes: &[u8]) -> Result<(), LuaError> {
-    let v = vm.str_value(bytes)?;
+    let v = vm.api_push_string(bytes)?;
     set_field(vm, t, k, v)?;
     Ok(())
 }
