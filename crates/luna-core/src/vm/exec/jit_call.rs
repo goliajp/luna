@@ -41,19 +41,18 @@ impl Vm {
             } => {
                 // SAFETY: the source `*const u8` is a JIT-compiled function entry pointer produced by Cranelift with the target `fn`-pointer signature (IntChunkFn / IntFnN); the JitVmGuard above keeps the JIT_VM TLS slot live across the call.
                 let f: crate::jit::IntChunkFn = unsafe { std::mem::transmute(entry) };
-                // Install the active Vm + closure for any Rust helper the
-                // JIT'd code may call (e.g. `luna_jit_new_table`,
-                // `luna_jit_upval_get`) via cranelift `Linkage::Import`.
-                // RAII clear on return. Chunks with no upvalue reads don't
-                // touch the closure slot, paying nothing. Route through
-                // chunk_compiler so the NullJitBackend path stays inert.
-                // Raw-ptr arg avoids the &mut self borrow conflict against
-                // the shared self.jit.chunk_compiler read.
+                // the Vm and closure the helpers the code calls work on,
+                // until the guard drops (a raw pointer: the compiler is
+                // borrowed from `self` meanwhile)
                 let vm_ptr: *mut Vm = self;
+                // no stack slot holds a host-called chunk: root it while it runs
+                let mark = self.jit.ssa_roots.len();
+                self.jit.ssa_roots.push(Value::Closure(cl));
                 let _jit_vm_guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
                 // SAFETY: `f` is the compiled chunk's entry, transmuted above from the entry pointer the backend returned for this proto with this signature; the guard above pins this Vm and `cl` for the helpers the code calls
                 let r = unsafe { f() };
                 drop(_jit_vm_guard);
+                self.jit.ssa_roots.truncate(mark);
                 if let Some(e) = self.jit.pending_raise.take() {
                     return Some(Err(e));
                 }
