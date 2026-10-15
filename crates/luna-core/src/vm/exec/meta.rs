@@ -123,7 +123,10 @@ impl Vm {
             MetaAction::Concat { dst, base_a, out } => {
                 self.stack[dst as usize] = result;
                 self.top = dst + 1;
-                self.concat_run(base_a, (base_a as i64 + out as i64) as u32)?;
+                let out = (base_a as i64 + out as i64) as u32;
+                if self.concat_run(base_a, out)? {
+                    self.concat_checkpoint(base_a, out);
+                }
             }
         }
         Ok(())
