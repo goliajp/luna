@@ -48,6 +48,7 @@ impl Heap {
             gc_limit: usize::MAX,
             current_white: WHITE0,
             gray: mark::GrayStack::default(),
+            grayagain: mark::GrayStack::default(),
             gray_overflow: false,
             young: ptr::null_mut(),
             store_failed: false,

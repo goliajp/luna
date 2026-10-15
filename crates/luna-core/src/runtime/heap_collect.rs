@@ -53,6 +53,7 @@ impl Heap {
     /// goes back to `gray` afterwards, so a collection does not regrow it.
     pub(crate) fn gc_begin_full(&mut self) -> Marker {
         debug_assert!(self.phase == GcPhase::Pause);
+        self.grayagain = mark::GrayStack::default();
         Marker {
             stack: self.gray.take(),
             overflow: std::mem::take(&mut self.gray_overflow),

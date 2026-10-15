@@ -98,7 +98,11 @@ impl Heap {
                 return;
             }
             (*parent).flags = (*parent).with_slow(f & !COLOR_BITS);
-            self.push_gray(parent);
+            // traversed again by the atomic step only (PUC `grayagain`): a
+            // table the program keeps writing does not hold up propagation
+            if self.grayagain.push(parent).is_err() {
+                self.gray_overflow = true;
+            }
         }
     }
 

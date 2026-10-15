@@ -213,6 +213,8 @@ pub struct Heap {
     /// Lives outside `propagate` so barriers can push without going through
     /// the Option; `gc_step_propagate` and `gc_finish_atomic` drain it.
     gray: mark::GrayStack,
+    /// objects a back barrier sent to gray (PUC `grayagain`)
+    grayagain: mark::GrayStack,
     /// objects registered for finalization (a live `__gc` metamethod was set);
     /// parallel-tracked — ownership stays on `all` (PUC `finobj`).
     finalize: crate::runtime::mem::LVec<*mut GcHeader>,
