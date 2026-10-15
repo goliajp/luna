@@ -137,13 +137,19 @@ impl Heap {
     pub(crate) fn acct_replay_openlibs(&mut self) -> Result<(), crate::runtime::mem::Oom> {
         let (ops, strs) = crate::runtime::puc_libs::record(self.table_dialect);
         let mut live = true;
-        for op in ops.as_chunks::<3>().0 {
+        let ops = ops.as_chunks::<3>().0;
+        for (i, op) in ops.iter().enumerate() {
             let (x, y) = (op[1] as usize, op[2] as usize);
             match op[0] {
                 3 => self.replay_string(strs[x], live)?,
                 k => {
                     live = k != 4;
                     self.raw_event(k, x, y);
+                    // garbage that is not a string: 5.1's C closures of the
+                    // `luaopen_` functions `luaL_openlibs` calls
+                    if k == 4 && ops.get(i + 1).is_none_or(|n| n[0] != 3) {
+                        self.ghost_record(PucKind::CClosure, y)?;
+                    }
                 }
             }
         }
