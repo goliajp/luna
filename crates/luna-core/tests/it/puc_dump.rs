@@ -124,6 +124,8 @@ fn luna_dump(version: LuaVersion, source: &str, strip: bool) -> Result<Vec<u8>, 
     let f = vm
         .load(source.as_bytes(), b"=stdin")
         .map_err(|e| format!("luna does not compile it: {}", e.msg_str()))?;
+    // held across a call that may collect
+    vm.pin_host(Value::Closure(f));
     let dump = vm.eval("return string.dump").expect("string.dump")[0];
     let r = vm
         .call_value(dump, &[Value::Closure(f), Value::Bool(strip)])

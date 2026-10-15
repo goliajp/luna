@@ -255,7 +255,7 @@ fn run_debug_command(vm: &mut Vm, line: &[u8]) -> Result<(), Vec<u8>> {
     // `luaL_loadbuffer` parses under the running message handler (5.4+
     // raise a too-deep command's "C stack overflow" through it); the
     // command itself runs under `lua_pcall` without one
-    let err = match vm.load(line, b"=(debug command)") {
+    let err = match vm.load_named(line, b"=(debug command)", None) {
         Ok(f) => match vm.call_protected(Value::Closure(f), &[]) {
             Ok(_) => return Ok(()),
             Err(e) => e.0,

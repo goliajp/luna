@@ -101,7 +101,7 @@ impl<'vm> Future for EvalFuture<'vm> {
                 // Compile. On syntax error we transition directly to
                 // Done with the error — no Lua frames were pushed,
                 // so the Vm is back at quiescent state.
-                let cl = match this.vm.load(src.as_bytes(), name.as_bytes()) {
+                let cl = match this.vm.load_named(src.as_bytes(), name.as_bytes(), None) {
                     Ok(c) => c,
                     Err(syntax) => {
                         // Match `eval_chunk`'s syntax-error shaping
