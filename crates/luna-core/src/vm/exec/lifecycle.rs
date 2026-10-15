@@ -78,6 +78,7 @@ impl Vm {
                 host_frames: 0,
                 meta_conts: 0,
                 ci_alloc: if version == LuaVersion::Lua51 { u32::MAX } else { 0 },
+                host_pcalls: 0,
             },
             nny: 0,
             msgh_depth: 0,

@@ -58,11 +58,14 @@ impl Vm {
     /// [`Vm::call_value_with_handler_in_c`].
     #[doc(hidden)]
     pub fn call_value_in_c(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
-        let level = self.builtin(builtins::nat_host_pcall_in_c, &[], Builtin::HostPcallInC)?;
+        self.heap.puc.silent += 1;
+        let level = self.builtin(builtins::nat_host_pcall_in_c, &[], Builtin::HostPcallInC);
+        self.heap.puc.silent -= 1;
+        let level = level?;
         let mut call_args = Vec::with_capacity(args.len() + 1);
         call_args.push(f);
         call_args.extend_from_slice(args);
-        let mut results = self.call_value(level, &call_args)?;
+        let mut results = self.call_value_host_level(level, &call_args)?;
         if results.first().is_some_and(|ok| ok.truthy()) {
             results.remove(0);
             Ok(results)
@@ -92,6 +95,17 @@ impl Vm {
         })
     }
 
+    /// Call `level`, the native standing in for a protected call PUC's
+    /// host makes from C, which takes no level of PUC's (on the main
+    /// thread, the only one a host's call runs on).
+    fn call_value_host_level(&mut self, level: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
+        let main = self.current.is_none();
+        self.g.host_pcalls += u32::from(main);
+        let r = self.call_value(level, args);
+        self.g.host_pcalls -= u32::from(main);
+        r
+    }
+
     fn host_pcall(
         &mut self,
         level: crate::runtime::value::NativeFn,
@@ -110,7 +124,7 @@ impl Vm {
         call_args.push(f);
         call_args.push(msgh);
         call_args.extend_from_slice(args);
-        let mut results = self.call_value(level, &call_args)?;
+        let mut results = self.call_value_host_level(level, &call_args)?;
         // the protected call's `true, results...` or `false, handled error`
         if results.first().is_some_and(|ok| ok.truthy()) {
             results.remove(0);
