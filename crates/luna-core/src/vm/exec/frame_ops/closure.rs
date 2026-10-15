@@ -168,8 +168,9 @@ impl Vm {
         // SAFETY: `cl` is a live closure (see `Gc`), and no reference into
         // it is held across this write
         unsafe { cl.as_mut() }.upvals_mut()[idx] = uv;
-        // a cell born during propagation is black: its value needs the barrier
-        self.barrier_forward_upvalue(uv, Value::Table(env));
+        // a black closure takes the new cell as PUC's takes the table
+        // (`luaC_objbarrier`)
+        self.heap.barrier_back(cl);
         Ok(())
     }
 }
