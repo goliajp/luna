@@ -342,3 +342,29 @@ mod tests {
         assert!(first.ptr_eq(again));
     }
 }
+
+/// PUC `luaO_utf8esc`: `x` (up to 2^31-1) in extended UTF-8, written to
+/// the front of `out`; its length.
+pub(crate) fn utf8_esc(out: &mut [u8; 8], mut x: u32) -> usize {
+    if x < 0x80 {
+        out[0] = x as u8;
+        return 1;
+    }
+    let mut cont = [0u8; 6];
+    let mut n = 0;
+    let mut mfb: u32 = 0x3f;
+    loop {
+        cont[n] = 0x80 | (x & 0x3f) as u8;
+        n += 1;
+        x >>= 6;
+        mfb >>= 1;
+        if x <= mfb {
+            break;
+        }
+    }
+    out[0] = ((!mfb << 1) | x) as u8;
+    for (i, &b) in cont[..n].iter().rev().enumerate() {
+        out[1 + i] = b;
+    }
+    n + 1
+}
