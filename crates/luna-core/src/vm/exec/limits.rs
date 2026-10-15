@@ -101,7 +101,7 @@ impl Vm {
                 .unwrap_or(self.top);
             self.gc_top = cap_root_top.max(self.top);
             self.collect_garbage();
-            if self.heap.bytes() <= cap {
+            if self.heap.cap_bytes() <= cap {
                 return Ok(());
             }
             self.heap.mem_cap = Some(0);
