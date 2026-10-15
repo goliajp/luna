@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::runtime::ErrorStatus;
+use crate::runtime::puc_fmt::FmtArg;
 mod type_err;
 mod varinfo;
 
@@ -87,8 +88,51 @@ impl Vm {
         // `luaG_runerror` pushes the message (a native's stack only: a
         // Lua frame's handler goes above its window)
         self.native_push_if_native(1);
-        let prefix = self.position_prefix();
-        self.error_from(prefix.as_deref(), msg)
+        let pos = self.error_position();
+        self.raise_text(pos, msg)
+    }
+
+    /// [`Vm::raise_msg`] of a message luna formatted itself: PUC's format
+    /// is taken to be the text, which a message without a conversion is.
+    fn raise_text(&mut self, pos: Option<ErrPos>, msg: std::fmt::Arguments<'_>) -> LuaError {
+        let text = msg.to_string();
+        if text.contains('%') {
+            self.raise_msg(pos, b"%s", &[FmtArg::S(text.as_bytes())])
+        } else {
+            self.raise_msg(pos, text.as_bytes(), &[])
+        }
+    }
+
+    /// PUC `luaG_runerror(L, fmt, ...)`: the message made as
+    /// `luaO_pushvfstring` makes it, then, in a Lua function, the string
+    /// `luaG_addinfo` makes of its position and the message.
+    pub(crate) fn raise_msg(
+        &mut self,
+        pos: Option<ErrPos>,
+        fmt: &[u8],
+        args: &[FmtArg<'_>],
+    ) -> LuaError {
+        let l55 = self.version >= LuaVersion::Lua55;
+        let h = &mut self.heap;
+        let r = h.pushfstring(fmt, args).and_then(|msg| {
+            let msg = msg.as_bytes().to_vec();
+            match pos {
+                None => h.try_intern(&msg),
+                Some(ErrPos::At(src, line)) => h.pushfstring(
+                    b"%s:%d: %s",
+                    &[FmtArg::S(&src), FmtArg::D(line), FmtArg::S(&msg)],
+                ),
+                Some(ErrPos::NoSource) if l55 => h.pushfstring(b"?:?: %s", &[FmtArg::S(&msg)]),
+                Some(ErrPos::NoSource) => h.pushfstring(
+                    b"%s:%d: %s",
+                    &[FmtArg::S(b"?"), FmtArg::D(-1), FmtArg::S(&msg)],
+                ),
+            }
+        });
+        match r {
+            Ok(s) => LuaError(Value::Str(s)),
+            Err(e) => LuaError::from(e),
+        }
     }
 
     /// Error without the `chunk:line:` position prefix. PUC's
@@ -101,7 +145,7 @@ impl Vm {
     /// [`Vm::plain_err`] with a message to format.
     pub(crate) fn plain_errf(&mut self, msg: std::fmt::Arguments<'_>) -> LuaError {
         self.native_push_if_native(1);
-        self.error_from(None, msg)
+        self.raise_text(None, msg)
     }
 
     /// An error whose object is `prefix` then `msg` as a string; a memory
@@ -181,6 +225,15 @@ impl Vm {
     /// native call), PUC pushes no prefix — match that by looking only at the
     /// topmost frame directly and bailing if it is anything but a Lua frame.
     pub(crate) fn position_prefix(&self) -> Option<String> {
+        Some(match self.error_position()? {
+            ErrPos::At(src, line) => format!("{}:{line}: ", String::from_utf8_lossy(&src)),
+            ErrPos::NoSource => self.stripped_prefix(),
+        })
+    }
+
+    /// Where `luaG_addinfo` positions an error raised now: `None` when the
+    /// running function is not a Lua one.
+    pub(crate) fn error_position(&self) -> Option<ErrPos> {
         let f = match self.frames.last()? {
             CallFrame::Lua(f) => f,
             // a native metamethod runs above the Meta continuation of the
@@ -191,7 +244,19 @@ impl Vm {
             }) => self.frames.iter().rev().nth(1)?.lua()?,
             CallFrame::Cont(_) => return None,
         };
-        Some(self.prefix_at(f.closure.proto, f.pc as usize))
+        Some(self.pos_at(f.closure.proto, f.pc as usize))
+    }
+
+    /// The position of the instruction before `pc` in `proto`.
+    pub(super) fn pos_at(&self, proto: Gc<crate::runtime::function::Proto>, pc: usize) -> ErrPos {
+        // a stripped chunk: no source in luna's own format, no line info in
+        // PUC's (whose loader names the missing source "=?")
+        if proto.source.as_bytes().is_empty() || proto.lines.is_empty() {
+            return ErrPos::NoSource;
+        }
+        let line = proto.lines[pc.saturating_sub(1).min(proto.lines.len() - 1)];
+        let raw = proto.source.as_bytes();
+        ErrPos::At(crate::vm::lib_debug::chunk_id(self.version, raw), i64::from(line))
     }
 
     /// `"short_src:line: "` of the instruction before `pc` in `proto`.
@@ -247,6 +312,13 @@ impl Vm {
             String::from_utf8_lossy(&ar.short_src)
         ))
     }
+}
+
+/// Where an error is raised: a chunk's id and a line, or a function with
+/// no source.
+pub(crate) enum ErrPos {
+    At(Vec<u8>, i64),
+    NoSource,
 }
 
 /// Counts of the errors the vm raised with a status of their own (see

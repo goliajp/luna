@@ -41,6 +41,31 @@ impl Vm {
         }
     }
 
+    /// [`Vm::runerror_conv`] for PUC's format `fmt` and its `args`, made
+    /// as PUC makes the message.
+    pub(crate) fn runerror_fmt(
+        &mut self,
+        fmt: &[u8],
+        args: &[crate::runtime::puc_fmt::FmtArg<'_>],
+        conv: u32,
+        varinfo: bool,
+    ) -> crate::vm::error::LuaError {
+        let pos = if self.native_on_top() {
+            if let Some(e) = self.format_pushes(&[Some(conv)]) {
+                return e;
+            }
+            None
+        } else {
+            if let Some(e) = self.runerror_pushes(conv, varinfo) {
+                return e;
+            }
+            self.varinfo_pushed = false;
+            self.error_position()
+        };
+        self.native_push_if_native(1);
+        self.raise_msg(pos, fmt, args)
+    }
+
     /// Is the running function a native (the level-0 `CallInfo` a C one)?
     pub(crate) fn native_on_top(&self) -> bool {
         self.running_natives.len() > self.natives_base
