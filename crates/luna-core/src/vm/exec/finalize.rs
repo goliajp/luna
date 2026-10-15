@@ -124,19 +124,19 @@ impl Vm {
         // PUC `GCTM` pushes the finalizer at `L->top`, above everything in
         // use; a native's top can lie below results a call it made has just
         // returned (print's nested tostring)
+        let (len, top) = (self.stack.len(), self.top);
         let r = match self.native_top() {
-            Some(t) => {
-                let len = self.stack.len();
-                let r = self.call_protected_at(gc, &[obj], t.max(self.top));
-                // the call gives back the slots it took, not the window of
-                // the native below it
-                if self.stack.len() < len {
-                    self.stack.regrow(len, Value::Nil);
-                }
-                r
-            }
+            Some(t) => self.call_protected_at(gc, &[obj], t.max(top)),
             None => self.call_protected(gc, &[obj]),
         };
+        // the call gives back the slots it took, not the window of a native
+        // below it, and leaves the stack and its top as they were (`GCTM`)
+        if self.stack.len() < len {
+            self.stack.regrow(len, Value::Nil);
+        } else {
+            self.stack.truncate(len);
+        }
+        self.top = top;
         self.pending_tm = saved_tm;
         let Err(e) = r else {
             return Ok(());
