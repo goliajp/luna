@@ -183,6 +183,7 @@ pub(crate) struct Running {
 pub(crate) struct Sizer {
     sizes: crate::runtime::puc_size::PucSizes,
     own: Vec<*const Table>,
+    stand_ins: Vec<(*mut GcHeader, Vec<usize>)>,
     run: Running,
     pub(in crate::runtime::heap) marked: i64,
 }
@@ -197,6 +198,11 @@ impl Sizer {
         // SAFETY: the caller's contract; the tag names the type
         unsafe {
             if (*h).tag != ObjTag::Coro {
+                if is_uncounted(h) {
+                    // what an object of luna's stands for
+                    let s = self.stand_ins.iter().find(|s| s.0 == h);
+                    return s.map_or(0, |s| s.1.iter().sum::<usize>() as i64);
+                }
                 return pace::objsize(&self.sizes, d, &self.own, h) as i64;
             }
             let r = &self.run;
@@ -284,6 +290,7 @@ impl Heap {
         Some(Sizer {
             sizes: self.sizes,
             own: std::mem::take(&mut self.puc.own_tables),
+            stand_ins: std::mem::take(&mut self.puc.stand_ins),
             run,
             marked: 0,
         })
@@ -294,6 +301,7 @@ impl Heap {
         if let Some(s) = m.sizer.take() {
             self.pace.estimate += s.marked;
             self.puc.own_tables = s.own;
+            self.puc.stand_ins = s.stand_ins;
         }
     }
 
@@ -308,6 +316,7 @@ impl Heap {
             let n = unsafe { s.size(h) };
             self.pace.estimate += n;
             self.puc.own_tables = s.own;
+            self.puc.stand_ins = s.stand_ins;
         }
     }
 }

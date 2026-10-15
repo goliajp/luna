@@ -71,8 +71,25 @@ impl Heap {
     /// it is PUC's now.
     pub(crate) fn acct_adopt_long(&mut self, s: Gc<LuaStr>) {
         let h = s.as_ptr() as *mut GcHeader;
-        if is_uncounted(h) && self.puc.kept_long.contains(&s.as_bytes()) {
+        let kept = self.puc.kept_long.iter().find(|k| k.0 == s.as_bytes());
+        if let Some(&(_, size)) = kept
+            && is_uncounted(h)
+        {
             super::set_uncounted(h, false);
+            // SAFETY: `s` is a live string; only its per-type byte changes
+            unsafe { (*h).sub |= self.external_kind(size) };
+        }
+    }
+
+    /// The flag of a 5.5 long string PUC made at `size` bytes: one over
+    /// bytes it owns (`LSTRMEM`) or over bytes it does not (`LSTRFIX`),
+    /// which its size alone tells from a regular one.
+    fn external_kind(&self, size: usize) -> u8 {
+        let hdr = self.sizes.lngstr_hdr;
+        match self.table_dialect {
+            Dialect::L55 if size == hdr + 2 * self.sizes.ptr => super::EXTERNAL,
+            Dialect::L55 if size == hdr => super::FIXED_EXT,
+            _ => 0,
         }
     }
 
@@ -90,13 +107,10 @@ impl Heap {
     /// `s`, a string luna's libraries made without counting, stands where
     /// PUC keeps the long string of `bytes` from its record (luna's own
     /// default `package.path`): when `s` is freed, PUC's is.
-    pub(crate) fn acct_stand_in(&mut self, s: Gc<LuaStr>, bytes: &[u8]) {
+    pub(crate) fn acct_stand_in(&mut self, s: Gc<LuaStr>, puc: (&[u8], usize)) {
         let h = s.as_ptr() as *mut GcHeader;
         if is_uncounted(h) {
-            let size = self
-                .sizes
-                .string(bytes.len(), self.table_dialect == Dialect::L55);
-            self.puc.stand_ins.push((h, vec![size]));
+            self.puc.stand_ins.push((h, vec![puc.1]));
         }
     }
 }
@@ -155,13 +169,15 @@ impl Heap {
     pub(crate) fn acct_replay_openlibs(&mut self) -> Result<(), crate::runtime::mem::Oom> {
         let (ops, strs) = crate::runtime::puc_libs::record(self.table_dialect);
         let mut live = true;
+        let mut size = 0;
         let ops = ops.as_chunks::<3>().0;
         for (i, op) in ops.iter().enumerate() {
             let (x, y) = (op[1] as usize, op[2] as usize);
             match op[0] {
-                3 => self.replay_string(strs[x], live)?,
+                3 => self.replay_string(strs[x], live, size)?,
                 k => {
                     live = k != 4;
+                    size = y;
                     self.raw_event(k, x, y);
                     // garbage that is not a string: 5.1's C closures of the
                     // `luaopen_` functions `luaL_openlibs` calls
@@ -174,10 +190,12 @@ impl Heap {
         Ok(())
     }
 
+    /// The string of `bytes` PUC's record made, at `size` bytes.
     fn replay_string(
         &mut self,
         bytes: &'static [u8],
         live: bool,
+        size: usize,
     ) -> Result<(), crate::runtime::mem::Oom> {
         let short = bytes.len() <= crate::runtime::string::MAX_SHORT_LEN
             || self.table_dialect == Dialect::L51;
@@ -197,7 +215,7 @@ impl Heap {
             // find later; one luna's libraries keep too is theirs
             // (`acct_adopt_long`)
             if live {
-                self.puc.kept_long.push(bytes);
+                self.puc.kept_long.push((bytes, size));
             }
             return Ok(());
         }

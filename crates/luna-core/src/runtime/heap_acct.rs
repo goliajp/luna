@@ -30,7 +30,7 @@ pub(crate) struct PucState {
     /// (`G(L)->buff`)
     pub(crate) gbuff: usize,
     /// the long strings PUC's `luaL_openlibs` made and kept
-    pub(crate) kept_long: Vec<&'static [u8]>,
+    pub(crate) kept_long: Vec<(&'static [u8], usize)>,
     /// uncounted objects of luna's standing for objects of PUC's of the
     /// given size (see `Heap::acct_stand_in`)
     pub(crate) stand_ins: Vec<(*mut GcHeader, Vec<usize>)>,
@@ -240,6 +240,10 @@ pub(crate) fn is_uncounted(h: *const GcHeader) -> bool {
     // SAFETY: `h` heads a live object of this heap; its header is read
     unsafe { (*h).sub & UNCOUNTED != 0 }
 }
+
+/// in a string's `sub` byte: a 5.5 external string over bytes PUC does not
+/// own (`LSTRFIX`), its header alone counted
+pub(crate) const FIXED_EXT: u8 = 0x20;
 
 pub(super) fn set_uncounted(h: *mut GcHeader, on: bool) {
     // SAFETY: `h` heads a live object of this heap; only its per-type byte

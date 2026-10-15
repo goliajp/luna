@@ -163,7 +163,11 @@ pub(in crate::runtime::heap) unsafe fn objsize(s: &PucSizes, d: Dialect, own: &[
             ObjTag::Userdata => (*(h as *const Userdata)).puc_size,
             ObjTag::Str => {
                 let st = &*(h as *const LuaStr);
-                s.string(st.len(), !st.is_short() && d == Dialect::L55)
+                match (*h).sub {
+                    f if f & EXTERNAL != 0 => s.lngstr_hdr + 2 * s.ptr,
+                    f if f & acct::FIXED_EXT != 0 => s.lngstr_hdr,
+                    _ => s.string(st.len(), !st.is_short() && d == Dialect::L55),
+                }
             }
             ObjTag::Coro | ObjTag::Ghost => 0,
         }
