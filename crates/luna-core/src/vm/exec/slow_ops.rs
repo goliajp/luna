@@ -180,6 +180,10 @@ impl Vm {
             if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
                 self.grow_frames()?;
             }
+            // 5.2 and 5.3 too take one, from the list above this one
+            if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
+                self.extend_ci_to(self.ci_in_use() + 1);
+            }
             if self.version <= LuaVersion::Lua53 && self.call_hook_armed() {
                 self.tail_call_hook(cl, abs, nargs)?;
             }
