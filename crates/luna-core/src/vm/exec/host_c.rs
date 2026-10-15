@@ -41,8 +41,7 @@ pub struct HostContHooks {
     pub discard: fn(&mut Vm, Gc<Coro>, u32),
     /// A thread the C API has seen is about to be resumed.
     pub resuming: fn(&mut Vm, Gc<Coro>),
-    /// A thread the C API has seen was closed: its C frames and C stack
-    /// go.
+    /// A thread the C API has seen was closed: its C frames and stack go.
     pub reset: fn(&mut Vm, Gc<Coro>),
     /// A thread was made (PUC `lua_newthread`, which `coroutine.create`
     /// calls too): it takes its copy of the main thread's extra space now.
@@ -73,14 +72,12 @@ impl Vm {
         self.host_cont_hooks = Some(hooks);
     }
 
-    /// Install a warning function in place of the default one, or put the
-    /// default back (`None`).
+    /// Install a warning function, or put the default back (`None`).
     pub fn set_host_warn(&mut self, warn: Option<HostWarn>) {
         self.host_warn = warn;
     }
 
-    /// The thread that is running: a coroutine, or the main thread's
-    /// identity object.
+    /// The running thread: a coroutine, or the main thread's identity.
     pub fn host_thread(&self) -> Gc<Coro> {
         self.current
             .unwrap_or_else(|| self.main_coro.expect("main thread"))
@@ -322,9 +319,8 @@ impl Vm {
         self.close_state();
     }
 
-    /// PUC's registry (`LUA_REGISTRYINDEX`). A C API state makes it with
-    /// the state ([`Vm::host_make_registry`]); a Vm that did not is given
-    /// one here, ending the process if that cannot be allocated.
+    /// PUC's registry (`LUA_REGISTRYINDEX`), made now if it was not
+    /// ([`Vm::host_make_registry`]), ending the process if it cannot be.
     pub fn host_registry(&mut self) -> Gc<Table> {
         match self.registry {
             Some(r) => r,
@@ -334,15 +330,20 @@ impl Vm {
         }
     }
 
-    /// Make the registry (PUC `init_registry`), which a C API state has
-    /// from the start, with the entries `lua_newstate` puts in it: from 5.2
-    /// on the main thread and the globals (5.5 also `false` at index 1,
-    /// which `luaL_ref` uses); a memory error when it cannot be made.
+    /// Make the registry (PUC `init_registry`) with the entries
+    /// `lua_newstate` puts in it: from 5.2 on the main thread and the
+    /// globals (5.5 also `false` at index 1, for `luaL_ref`).
     pub fn host_make_registry(&mut self) -> Result<Gc<Table>, LuaError> {
         if let Some(r) = self.registry {
             return Ok(r);
         }
-        let reg = self.alloc_table_sized(3, 0)?;
+        // 5.1 `luaH_new(L, 0, 2)`; later `luaH_resize` to `LUA_RIDX_LAST`
+        let (a, h) = match self.version {
+            LuaVersion::Lua51 => (0, 2),
+            LuaVersion::Lua55 => (3, 0),
+            _ => (2, 0),
+        };
+        let reg = self.alloc_table_sized(a, h)?;
         self.registry = Some(reg);
         let main = Value::Coro(self.host_main_thread());
         let globals = Value::Table(self.globals);
@@ -352,9 +353,8 @@ impl Vm {
             _ => &[(1, main), (2, globals)],
         };
         for &(k, v) in entries {
-            // SAFETY: `reg` was allocated above and is rooted through
-            // `self.registry`; the borrow covers one store into the array
-            // part made above, which does not collect
+            // SAFETY: `reg` is rooted through `self.registry`; the borrow
+            // covers one store into its array part, which does not collect
             let r = unsafe { reg.as_mut() }.set_int_raw(&mut self.heap, k, v);
             debug_assert!(r.is_ok(), "a slot of the array part");
         }

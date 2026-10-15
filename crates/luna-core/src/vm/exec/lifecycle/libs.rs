@@ -2,6 +2,10 @@
 
 use super::*;
 
+#[path = "registry.rs"]
+mod registry;
+pub(crate) use registry::{HOOK_KEY, light_key};
+
 impl Vm {
     /// The standalone interpreter's libraries: first what `lua.c` allocates
     /// to call its main function (5.1's `lua_cpcall` makes a C closure for
@@ -45,6 +49,9 @@ impl Vm {
         }
         // last, so `package.loaded` lists every library opened before it
         self.open_package();
+        if self.puc_registry().is_err() {
+            crate::runtime::mem::oom_abort(std::alloc::Layout::new::<u8>());
+        }
         self.heap.puc.silent -= 1;
         if self.heap.acct_replay_openlibs().is_err() {
             crate::runtime::mem::oom_abort(std::alloc::Layout::new::<u8>());

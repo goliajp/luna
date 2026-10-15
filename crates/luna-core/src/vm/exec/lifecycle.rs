@@ -6,6 +6,7 @@ use crate::runtime::mem::LVec;
 use crate::vm::exec::state::CallGuards;
 
 mod libs;
+pub(crate) use libs::{HOOK_KEY, light_key};
 
 impl Vm {
     /// The host runs its calls from inside a C function of its own that
@@ -106,9 +107,8 @@ impl Vm {
             yielding: None,
             native_nresults: -1,
             main_coro: None,
-            // PUC's `lua_newstate` starts in incremental mode; the
-            // standalone interpreter switches to generational
-            // (`gc_enter_generational`)
+            // PUC's `lua_newstate` starts incremental; lua.c switches to
+            // generational (`gc_enter_generational`)
             gc_mode: "incremental",
             gc_top: 0,
             gc_pause: 200,
@@ -163,10 +163,8 @@ impl Vm {
             running_natives: LVec::new(mem),
             natives_base: 0,
             native_window_panic: 0,
-            // JIT-specific state lives in the `JitState`
-            // sidecar. The `luna` crate's `Vm::new_minimal_with_jit` /
-            // `install_jit_backend` / `luaL_newstate` swap in
-            // `CraneliftBackend` for callers that want JIT acceleration.
+            // JIT state lives in the `JitState` sidecar; the `luna` crate's
+            // constructors swap in `CraneliftBackend` for callers that want it
             jit: crate::vm::jit_state::JitState::with_null_backend(),
             // host roots ticket pool for the `Lua` facade
             host_roots: LVec::new(mem),
@@ -196,9 +194,8 @@ impl Vm {
             async_waker: None,
             async_slice_size: 10_000,
             host_yield_pending: false,
-            // Pending async-native state. Empty by
-            // default; populated only by the dispatcher when an
-            // async-marked NativeClosure is invoked under async_mode.
+            // Pending async-native state, filled only by the dispatcher when
+            // an async-marked native is invoked under async_mode.
             pending_async_native_fut: None,
             pending_async_native_ctx: None,
             jit_owner_id: {

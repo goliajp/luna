@@ -1,11 +1,11 @@
 //! `debug.sethook` and `debug.gethook`.
 
 use super::getthread;
-use crate::runtime::Value;
+use crate::runtime::{Gc, Table, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{Args, check_function, check_string, opt_integer};
 use crate::vm::error::LuaError;
-use crate::vm::exec::{HookState, Vm};
+use crate::vm::exec::{HOOK_KEY, HookState, Vm, light_key};
 
 pub(super) fn d_sethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
@@ -27,8 +27,56 @@ pub(super) fn d_sethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
             count_left: count,
         }
     };
+    // the registry's hook table records the function for the thread
+    let t = hook_table(vm, true)?;
+    let key = thread_key(vm, co);
+    let f = a.get(vm, arg);
+    vm.raw_set(t, key, f)?;
     vm.set_hook(co, state);
     Ok(0)
+}
+
+/// The hook table in the registry, made when it is not there: 5.1
+/// `gethooktable`, later `luaL_getsubtable` (5.3 `lua_rawgetp`). `init`:
+/// `sethook` gives a table it makes from 5.2 on weak keys, with itself as
+/// its metatable.
+fn hook_table(vm: &mut Vm, init: bool) -> Result<Gc<Table>, LuaError> {
+    let v = vm.version();
+    let reg = vm.host_registry();
+    let key = match v {
+        LuaVersion::Lua51 | LuaVersion::Lua53 => light_key(&HOOK_KEY),
+        LuaVersion::Lua52 => vm.str_value(b"_HKEY")?,
+        _ => vm.str_value(b"_HOOKKEY")?,
+    };
+    if let Value::Table(t) = reg.get(key) {
+        return Ok(t);
+    }
+    let t = match v {
+        LuaVersion::Lua51 => vm.alloc_table_sized(0, 1)?,
+        LuaVersion::Lua53 => vm.alloc_table_sized(0, 2)?,
+        _ => vm.alloc_table()?,
+    };
+    vm.raw_set(reg, key, Value::Table(t))?;
+    if init && v >= LuaVersion::Lua52 {
+        let k = vm.str_value(b"k")?;
+        let mode = vm.str_value(b"__mode")?;
+        vm.raw_set(t, mode, k)?;
+        vm.host_set_metatable(Value::Table(t), Some(t))?;
+    }
+    Ok(t)
+}
+
+/// The key of a thread in the hook table: 5.1 its address, later the
+/// thread.
+fn thread_key(vm: &mut Vm, co: Option<Gc<crate::runtime::Coro>>) -> Value {
+    let co = co
+        .or_else(|| vm.current_coro())
+        .unwrap_or_else(|| vm.host_main_thread());
+    if vm.version() == LuaVersion::Lua51 {
+        Value::LightUserdata(co.as_ptr() as *const ())
+    } else {
+        Value::Coro(co)
+    }
 }
 
 pub(super) fn d_gethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -40,6 +88,10 @@ pub(super) fn d_gethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let armed = state.call || state.ret || state.line || state.count;
     // a C hook (`lua_sethook`) keeps its function as a light userdata
     let external = matches!(state.func, None | Some(Value::LightUserdata(_)));
+    // 5.1 and 5.2 look the function up in the hook table, making it
+    if v <= LuaVersion::Lua52 && !(armed && external) {
+        hook_table(vm, false)?;
+    }
     let hook = match state.func {
         _ if armed && external => vm.str_value(b"external hook")?,
         Some(h) if armed => h,
