@@ -43,12 +43,20 @@ pub(super) fn emit_str_sub_fold<E: Emit>(
     let sub_ref = lw.bcx.import_func(str_sub_id);
     let call = lw.bcx.ins().call(sub_ref, &[s, from, to]);
     let r = lw.bcx.inst_results(call)[0];
-    // a string the helper could not make (0, a deopt parked): the trace
-    // leaves at the fold's start and the interpreter makes the call
+    // a string the helper could not make (0, a deopt parked), or one 5.1
+    // and 5.2 check for a collection before making: the trace leaves at
+    // the fold's start and the interpreter makes the call
     let made = lw.bcx.ins().icmp_imm_s(IntCC::NotEqual, r, 0);
     guard!(lw, pl, made, oc.i, record.ops[fold.start_idx].pc);
     lw.bcx.def_var(regs[a as usize], r);
     lw.current_kinds[off + a as usize] = RegKind::Str;
+    // 5.3 on check after `lua_pushlstring` pushed it
+    if !matches!(
+        pl.opts.dialect,
+        Some(luna_core::version::LuaVersion::Lua51 | luna_core::version::LuaVersion::Lua52)
+    ) {
+        gc_due_exit(lw, pl, oc.i, oc.rop.pc + 1);
+    }
     Some(())
 }
 

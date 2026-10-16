@@ -17,9 +17,14 @@ pub(super) fn s_sub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// `string.sub(s, i, j)` past its argument checks, for compiled code:
 /// `None`, with a deopt parked, when the string cannot be made (compiled
 /// code may not collect in an emergency; the interpreter runs the call
-/// again).
+/// again); `None` without one when 5.1 or 5.2 would collect before
+/// `lua_pushlstring` makes it, for the interpreter to make the call. From
+/// 5.3 the check after it is the compiled code's.
 #[doc(hidden)]
 pub fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<LuaStr>> {
+    if vm.version() <= LuaVersion::Lua52 && vm.step_due() {
+        return None;
+    }
     let b = sub_bytes(&s, i, j);
     if let Some(r) = vm.heap.find_single(b) {
         return Some(r);
