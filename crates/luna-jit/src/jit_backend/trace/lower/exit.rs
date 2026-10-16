@@ -159,3 +159,24 @@ fn emit_frame_closures<E: Emit>(lw: &mut Lower<E>, chain: &[FrameMaterializeInfo
     }
     lw.bcx.ins().stack_addr(types::I64, ss, 0)
 }
+
+/// After op `i`, which allocated through a helper, its result defined:
+/// when the helper found a collection step due, leave for `next_pc`,
+/// where the interpreter checks for it as after the op (PUC's
+/// `luaC_checkGC` there).
+pub(super) fn gc_due_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, i: usize, next_pc: u32) {
+    let fref = lw.bcx.import_func(lw.h.rt.gc_due_id);
+    let check = luna_core::vm::exec::JIT_GC_PREV;
+    let check = lw.bcx.ins().iconst(types::I64, i64::from(check));
+    let call = lw.bcx.ins().call(fref, &[check]);
+    let due = lw.bcx.inst_results(call)[0];
+    due_exit(lw, pl, due, i, next_pc);
+}
+
+/// Leave for `next_pc` when `due` (an `i64`) is not 0, with the sunk
+/// tables live after op `i`.
+fn due_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, due: Value, i: usize, next_pc: u32) {
+    let not_due = lw.bcx.ins().icmp_imm_s(IntCC::Equal, due, 0);
+    let after = i + 1;
+    guard!(lw, pl, not_due, after, next_pc);
+}

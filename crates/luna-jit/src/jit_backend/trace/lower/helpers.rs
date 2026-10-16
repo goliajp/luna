@@ -34,6 +34,7 @@ pub(super) struct RuntimeHelpers {
     pub(super) update_raw_id: FuncId,
     pub(super) get_int_id: FuncId,
     pub(super) suppress_admit_id: FuncId,
+    pub(super) gc_due_id: FuncId,
     pub(super) math_fn_check_id: FuncId,
     pub(super) str_sub_id: FuncId,
     pub(super) len_checked_id: FuncId,
@@ -64,16 +65,10 @@ pub(super) fn declare_helpers<E: Emit>(bcx: &mut E) -> Option<Helpers> {
 }
 
 fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
-    // `bcx` arrives as `&mut M` from the
-    // caller. The JIT wrapper [`try_compile_trace_with_options`]
-    // constructs a `JITModule` via [`build_trace_jit_module`]; the AOT
-    // pipeline (luna-aot) feeds an `ObjectModule` of its own. The
-    // helper-symbol contract is identical (both resolve `luna_jit_*` —
-    // the JIT via `JITBuilder::symbol`, the AOT via static link).
+    // a JIT module resolves the `luna_jit_*` symbols itself, an AOT one
+    // through the static link
 
-    // Helper signatures — declared up front so emit can look them
-    // up without re-declaring per call site. Unused declarations
-    // get tree-shaken at optimization.
+    // declared once, for every call site
     // `fn luna_jit_new_table_sized(ops) -> table`, sized by NewTable's operands
     let mut new_table_sig = bcx.make_signature();
     new_table_sig.params.push(AbiParam::new(types::I64));
@@ -361,6 +356,7 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
             &bcx.make_signature(),
         )
         .ok()?;
+    let gc_due_id = declare_i64_import(bcx, "luna_jit_gc_due", 1)?;
     let mut math_fn_check_sig = bcx.make_signature();
     math_fn_check_sig.params.push(AbiParam::new(types::I64));
     math_fn_check_sig.params.push(AbiParam::new(types::I64));
@@ -464,6 +460,7 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
         update_raw_id,
         get_int_id,
         suppress_admit_id,
+        gc_due_id,
         math_fn_check_id,
         str_sub_id,
         len_checked_id,

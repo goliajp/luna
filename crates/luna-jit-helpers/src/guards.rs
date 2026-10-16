@@ -34,6 +34,22 @@ pub unsafe extern "C" fn luna_jit_suppress_trace_admit() {
     vm.jit.suppress_downrec_admit_once = true;
 }
 
+/// 1 when a collection step is due after the allocation compiled code just
+/// made, which then leaves after its op for the interpreter to check the
+/// op at `op_pc` makes (see
+/// `Vm::checkpoint_after_jit`); 0 otherwise.
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread.
+// SAFETY: no other item in the link is named `luna_jit_gc_due`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_gc_due(op_pc: i64) -> i64 {
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
+    let vm = unsafe { current_jit_vm() };
+    i64::from(vm.jit_gc_due(op_pc as u32))
+}
+
 /// Parks a deopt for the running method-JIT call, which then returns at
 /// once: the dispatcher discards its result and runs the call in the
 /// interpreter. Used where compiled code finds, before doing anything

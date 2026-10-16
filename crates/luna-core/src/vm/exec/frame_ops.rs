@@ -6,6 +6,9 @@ use super::*;
 
 mod closure;
 
+/// [`Vm::jit_gc_due`]'s op: the one before the pc compiled code resumes at.
+pub const JIT_GC_PREV: u32 = u32::MAX;
+
 impl Vm {
     #[inline(never)]
     pub(super) fn run_frame_op(&mut self, inst: Inst) -> Result<(), LuaError> {
@@ -223,5 +226,31 @@ impl Vm {
             _ => base + inst.a() + 1,
         };
         self.checkpoint(top);
+    }
+
+    /// Compiled code left with a step due after the op at `op_pc`
+    /// ([`JIT_GC_PREV`]: the one before the running frame's pc): the check
+    /// that op makes.
+    pub(crate) fn checkpoint_after_jit(&mut self, op_pc: u32) {
+        let (cl, base) = (self.top_frame().closure, self.top_frame().base);
+        let pc = if op_pc == JIT_GC_PREV {
+            self.pc_of_top() - 1
+        } else {
+            op_pc
+        };
+        self.checkpoint_after_op(cl.proto.code[pc as usize], base);
+    }
+
+    /// Compiled code just allocated: whether a collection step is due,
+    /// noted with the op whose check it is (`op_pc`, as
+    /// [`Vm::checkpoint_after_jit`] takes it) for the exit it then takes to
+    /// have the interpreter check.
+    #[doc(hidden)]
+    pub fn jit_gc_due(&mut self, op_pc: u32) -> bool {
+        let due = self.heap.gc_due() && !self.gc_finalizing && self.jit.pending_err.is_none();
+        if due {
+            self.jit.gc_exit = Some(op_pc);
+        }
+        due
     }
 }

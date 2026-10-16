@@ -164,12 +164,10 @@ impl Vm {
 
             if self.jit.pending_err.is_some() {
                 self.jit.pending_err = None;
+                self.jit.gc_exit = None;
                 self.jit.counters.deopt += 1;
-                // Unwind any helper-pushed
-                // inlined frames before the interpreter resumes.
-                // Don't restore reg_state — the trace's partial
-                // writes are discarded; interp re-executes from
-                // the original `pc`.
+                // unwind the inlined frames helpers pushed; the trace's
+                // writes are discarded, the interpreter runs from `pc`
                 while self.frames.len() > pre_frames {
                     self.pop_frame();
                 }

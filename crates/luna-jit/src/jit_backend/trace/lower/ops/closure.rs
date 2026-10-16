@@ -61,6 +61,7 @@ pub(super) fn emit_closure_op<E: Emit>(
             lw.bcx.def_var(regs[ins.a() as usize], v);
             lw.current_kinds[off + ins.a() as usize] = RegKind::Closure;
             lw.closure_seen += 1;
+            gc_due_exit(lw, pl, i, rop.pc + 1);
         }
         Op::Close => {
             // close open upvals at slot ≥ A.
