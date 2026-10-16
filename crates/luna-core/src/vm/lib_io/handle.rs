@@ -194,7 +194,11 @@ pub(super) fn f_gc(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = check_stream(vm, Args::new(fs, nargs), 0)?;
     if !u.file().is_closed() {
         close_reset(vm, u);
-        let _ = close_stream(u); // PUC's f_gc drops aux_close's results
+        // PUC's f_gc drops aux_close's results; `io_noclose` makes its
+        // message all the same
+        if let Closed::Std = close_stream(u) {
+            vm.api_push_string(b"cannot close standard file")?;
+        }
     }
     vm.nat_ret(fs, &[])
 }
