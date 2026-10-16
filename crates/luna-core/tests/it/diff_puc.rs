@@ -81,7 +81,11 @@ fn list_fixtures(dialect_dir: &str) -> Vec<PathBuf> {
     };
     for entry in entries.flatten() {
         let p = entry.path();
-        if p.extension().and_then(|s| s.to_str()) == Some("lua") {
+        // `LUNA_DIFF_PUC_ONLY=<text>`: only the fixtures whose path has it
+        let only = std::env::var("LUNA_DIFF_PUC_ONLY").ok();
+        if p.extension().and_then(|s| s.to_str()) == Some("lua")
+            && only.is_none_or(|o| p.to_string_lossy().contains(&o))
+        {
             out.push(p);
         }
     }
@@ -136,54 +140,14 @@ fn run_on_puc(path: &Path, bin: &str, source: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Run `source` via luna's in-process `Vm::eval` with stdout
-/// redirection. luna's `print` builtin writes to the host
-/// process's stdout via `println!`, so capture the harness's own
-/// stdout by spawning a subprocess that exec's `cargo run` —
-/// expensive. Instead, swap luna's print impl during the run
-/// (via `Vm::set_print_handler` if available) or capture from a
-/// thread-local buffer. For v2.2 simplicity: rebuild Lua source
-/// with a leading `local _print = print; function print(...)
-/// local t = {} for i = 1, select('#', ...) do t[i] = tostring(
-/// select(i, ...)) end _G.__luna_diff_puc_buf = _G.
-/// __luna_diff_puc_buf .. table.concat(t, '\t') .. '\n' end`
-/// preamble that redirects to a global buffer, then read it
-/// back at the end.
+/// Run `source` via luna's in-process `Vm::eval`, with the real `print`
+/// and `io.write` and what they write caught (a buffer in Lua would add
+/// to what `collectgarbage("count")` reads).
 fn run_on_luna(version: LuaVersion, source: &str) -> String {
-    const PREAMBLE: &str = r#"
-_G.__luna_diff_puc_buf = ""
-local _orig_print = print
-function print(...)
-    local t = {}
-    local n = select('#', ...)
-    for i = 1, n do t[i] = tostring(select(i, ...)) end
-    _G.__luna_diff_puc_buf = _G.__luna_diff_puc_buf .. table.concat(t, '\t') .. '\n'
-end
-local _orig_io_write = io.write
-io.write = function(...)
-    local t = {}
-    local n = select('#', ...)
-    for i = 1, n do t[i] = tostring(select(i, ...)) end
-    _G.__luna_diff_puc_buf = _G.__luna_diff_puc_buf .. table.concat(t)
-end
-"#;
-    const POSTAMBLE: &str = "\nreturn _G.__luna_diff_puc_buf\n";
-
-    let mut full = String::with_capacity(PREAMBLE.len() + source.len() + POSTAMBLE.len());
-    full.push_str(PREAMBLE);
-    full.push_str(source);
-    full.push_str(POSTAMBLE);
-
     let mut vm = lua_c_vm(version);
-    let r = vm
-        .eval(&full)
-        .expect("luna eval must not error on diff fixtures");
-    match r.first() {
-        Some(luna_core::runtime::Value::Str(s)) => {
-            String::from_utf8_lossy(s.as_bytes()).into_owned()
-        }
-        other => panic!("expected diff_puc buffer string from luna; got {other:?}"),
-    }
+    let (r, out) = super::stdout_capture::caught(|| vm.eval(source).map(|_| ()));
+    r.expect("luna eval must not error on diff fixtures");
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Normalize whitespace runs + trim trailing newlines so trivial
@@ -328,6 +292,10 @@ fn diff_one(path: &Path, bin: &str, version: LuaVersion) {
 #[test]
 fn diff_against_puc() {
     let mut total = 0usize;
+    // `LUNA_DIFF_PUC_KEEP_GOING=1`: every fixture runs, and the test fails
+    // at the end with the list of those that diverged
+    let keep_going = std::env::var_os("LUNA_DIFF_PUC_KEEP_GOING").is_some();
+    let mut failed = Vec::new();
     for &(dialect, version, env_key) in DIALECTS {
         let fixtures = list_fixtures(dialect);
         if fixtures.is_empty() {
@@ -349,13 +317,23 @@ fn diff_against_puc() {
             fixtures.len()
         );
         for f in &fixtures {
-            diff_one(f, &bin, version);
+            if !keep_going {
+                diff_one(f, &bin, version);
+            } else if std::panic::catch_unwind(|| diff_one(f, &bin, version)).is_err() {
+                failed.push(f.display().to_string());
+            }
         }
         total += fixtures.len();
     }
     assert!(
         total > 0,
         "no diff_puc fixtures ran (all dialects empty/skipped)"
+    );
+    assert!(
+        failed.is_empty(),
+        "{} diverged:\n{}",
+        failed.len(),
+        failed.join("\n")
     );
 }
 
