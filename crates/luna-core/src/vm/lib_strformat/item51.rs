@@ -155,6 +155,7 @@ fn tolstring_52(vm: &mut Vm, v: Value, extra: u32) -> Result<Vec<u8>, LuaError> 
     if mm.is_nil() {
         return vm.tostring_value(v);
     }
+    vm.metafield_check(v);
     match vm
         .call_value_pushed(mm, &[v], extra)?
         .first()

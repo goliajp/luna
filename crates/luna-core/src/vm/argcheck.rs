@@ -83,6 +83,9 @@ pub(crate) fn type_error(vm: &mut Vm, a: Args, i: u32, expected: &str) -> LuaErr
     let got = typename_at(vm, a, i);
     // 5.3+ look a `__name` up first, which stays pushed when present; then
     // the message is pushed before `luaL_argerror` adds to it
+    if vm.version() >= LuaVersion::Lua53 && !a.is_none(i) {
+        vm.metafield_check(a.get(vm, i));
+    }
     let named = vm.version() >= LuaVersion::Lua53
         && !a.is_none(i)
         && !vm.get_mm(a.get(vm, i), crate::vm::exec::Mm::Name).is_nil();

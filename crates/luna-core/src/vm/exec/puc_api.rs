@@ -34,6 +34,16 @@ impl Vm {
         }
     }
 
+    /// PUC `luaL_getmetafield` on `v`: when `v` has a metatable it pushes
+    /// the event's name (`lua_pushstring`), which checks for a collection.
+    #[inline]
+    pub(crate) fn metafield_check(&mut self, v: Value) {
+        if self.metatable_of(v).is_some() {
+            self.api_check_before();
+            self.api_check_after_rooted();
+        }
+    }
+
     /// `f` as an API call that pushes the string it makes: checked for
     /// before (5.1, 5.2) or after (5.3 on), the string kept rooted in
     /// `lib_roots` for the caller, who truncates it.

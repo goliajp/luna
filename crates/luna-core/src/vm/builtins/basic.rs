@@ -132,6 +132,11 @@ pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     if vm.version() <= LuaVersion::Lua52 {
         use crate::vm::exec::Mm;
         let mm = vm.get_mm(v, Mm::ToString);
+        // `luaL_callmeta(L, 1, "__tostring")` (5.2 makes it in
+        // `luaL_tolstring`, which takes the check itself)
+        if vm.version() == LuaVersion::Lua51 || !mm.is_nil() {
+            vm.metafield_check(v);
+        }
         if !mm.is_nil() {
             // `luaL_callmeta` is a plain `lua_call`: not yieldable.
             let r = vm.call_value(mm, &[v])?;
@@ -203,6 +208,7 @@ pub(super) fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
         Value::Table(m) => Some(m),
         _ => return Err(argcheck::arg_expected(vm, a, 1, "nil or table")),
     };
+    vm.metafield_check(Value::Table(t));
     if !vm.get_mm(Value::Table(t), Mm::Metatable).is_nil() {
         // over the `__metatable` field `luaL_getmetafield` pushed
         vm.native_push(1);
@@ -225,6 +231,7 @@ pub(super) fn nat_getmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
     use crate::vm::exec::Mm;
     let v = argcheck::check_any(vm, Args::new(fs, nargs), 0)?;
     // __metatable protection: return that field instead
+    vm.metafield_check(v);
     let protected = vm.get_mm(v, Mm::Metatable);
     if !protected.is_nil() {
         return vm.nat_ret(fs, &[protected]);

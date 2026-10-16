@@ -27,6 +27,8 @@ impl Vm {
 
     /// PUC `luaL_tolstring` (5.2+), the string made as PUC makes it.
     pub(crate) fn tolstring(&mut self, v: Value, extra: u32) -> Result<Gc<LuaStr>, LuaError> {
+        // `luaL_callmeta(L, idx, "__tostring")`
+        self.metafield_check(v);
         let mm = self.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
             // `luaL_callmeta` is a plain `lua_call`: `__tostring` cannot yield.
@@ -78,6 +80,10 @@ impl Vm {
                 let kind = if self.version == LuaVersion::Lua51 {
                     v.type_name().to_string()
                 } else {
+                    // 5.3 on: `luaL_getmetafield(L, idx, "__name")`
+                    if self.version >= LuaVersion::Lua53 {
+                        self.metafield_check(v);
+                    }
                     self.obj_typename(v)
                 };
                 let p = self.topointer(v);

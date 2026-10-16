@@ -34,6 +34,8 @@ pub(crate) fn nat_pairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     }
     let t = a.get(vm, 0);
     if ver >= LuaVersion::Lua52 {
+        // `luaL_getmetafield(L, 1, "__pairs")`
+        vm.metafield_check(t);
         let mm = vm.get_mm(t, Mm::Pairs);
         if !mm.is_nil() {
             let n = pairs_mm_results(vm);
