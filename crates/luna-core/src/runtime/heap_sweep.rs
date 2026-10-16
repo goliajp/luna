@@ -189,7 +189,11 @@ impl Heap {
                 return false;
             }
             match (*h).tag {
-                ObjTag::Str => !strt || (self.table_dialect == Dialect::L52 && !(*(h as *const LuaStr)).is_short()),
+                ObjTag::Str => {
+                    !strt
+                        || (self.table_dialect == Dialect::L52
+                            && !(*(h as *const LuaStr)).is_short())
+                }
                 ObjTag::Table => !self.is_own_table(h as *const Table),
                 _ => true,
             }
@@ -234,7 +238,9 @@ impl Heap {
                     (*t).free_parts(self.mem());
                     // the pool owns the table's block until reuse or the
                     // heap's drop; a pool that cannot grow frees it instead
-                    if self.table_pool.len() < TABLE_POOL_CAP && self.table_pool.try_reserve(1).is_ok() {
+                    if self.table_pool.len() < TABLE_POOL_CAP
+                        && self.table_pool.try_reserve(1).is_ok()
+                    {
                         self.table_pool.push(std::ptr::NonNull::new_unchecked(t));
                         (*t).metatable = None;
                     } else {

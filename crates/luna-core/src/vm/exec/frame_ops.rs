@@ -239,7 +239,11 @@ impl Vm {
             return self.checkpoint(self.frame_top());
         }
         let (cl, base) = (self.top_frame().closure, self.top_frame().base);
-        let pc = if op_pc == JIT_GC_PREV { self.pc_of_top() - 1 } else { op_pc };
+        let pc = if op_pc == JIT_GC_PREV {
+            self.pc_of_top() - 1
+        } else {
+            op_pc
+        };
         self.checkpoint_after_op(cl.proto.code[pc as usize], base);
     }
 

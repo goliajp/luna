@@ -21,7 +21,12 @@ impl Vm {
     /// hold new objects only in registers, so no emergency collection
     /// runs; the interpreter then makes the closure).
     #[doc(hidden)]
-    pub fn jit_closure(&mut self, cl: Gc<LuaClosure>, idx: usize, base: u32) -> Option<Gc<LuaClosure>> {
+    pub fn jit_closure(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        idx: usize,
+        base: u32,
+    ) -> Option<Gc<LuaClosure>> {
         self.closure_over(cl, idx, base, false).ok()
     }
 
@@ -62,7 +67,8 @@ impl Vm {
         let nc = if collect {
             self.try_closure_from_proto(proto, ups)?
         } else {
-            self.jit_closure_from_proto(proto, ups).ok_or(LuaError(Value::Nil))?
+            self.jit_closure_from_proto(proto, ups)
+                .ok_or(LuaError(Value::Nil))?
         };
         // (5.1's environment is not an upvalue in PUC: never counted)
         let upval = self.heap.sizes.upval;

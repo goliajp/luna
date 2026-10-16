@@ -290,7 +290,11 @@ fn incremental_sweep_keeps_the_survivors_in_order() {
     let tables: Vec<_> = (0..40).map(|_| heap.new_table()).collect();
     // every other one stays
     let roots: Vec<Value> = tables.iter().step_by(2).map(|&t| Value::Table(t)).collect();
-    let kept: Vec<usize> = tables.iter().step_by(2).map(|t| t.as_ptr() as usize).collect();
+    let kept: Vec<usize> = tables
+        .iter()
+        .step_by(2)
+        .map(|t| t.as_ptr() as usize)
+        .collect();
     heap.gc_start_propagate(&roots, &[]);
     while !heap.gc_step_propagate(usize::MAX) {}
     heap.gc_finish_atomic();

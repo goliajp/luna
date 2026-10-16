@@ -278,8 +278,15 @@ pub(super) fn emit_set_list<M: Module>(
                 let fits = bcx.ins().band(room, empty);
                 if elems.iter().any(|&(tag, _)| tag == RAW_TAG_TABLE) {
                     // a black table takes the write barrier, on the slow path
-                    use luna_core::runtime::table::jit_layout::{TABLE_FLAGS_OFFSET, TABLE_SLOW_MASK};
-                    let flags = bcx.ins().uload8(types::I64, MemFlagsData::trusted(), t, TABLE_FLAGS_OFFSET as i32);
+                    use luna_core::runtime::table::jit_layout::{
+                        TABLE_FLAGS_OFFSET, TABLE_SLOW_MASK,
+                    };
+                    let flags = bcx.ins().uload8(
+                        types::I64,
+                        MemFlagsData::trusted(),
+                        t,
+                        TABLE_FLAGS_OFFSET as i32,
+                    );
                     let slow = bcx.ins().band_imm_u(flags, i64::from(TABLE_SLOW_MASK));
                     let plain = bcx.ins().icmp_imm_u(IntCC::Equal, slow, 0);
                     bcx.ins().band(fits, plain)

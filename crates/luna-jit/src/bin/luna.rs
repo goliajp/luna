@@ -242,7 +242,11 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
         // protected with `lua_cpcall` (5.1: the function and its userdata
         // on the stack) or `lua_pcall` with `argc` and `argv` as arguments,
         // before it opens the libraries
-        let slots = if opts.version == LuaVersion::Lua51 { 2 } else { 3 };
+        let slots = if opts.version == LuaVersion::Lua51 {
+            2
+        } else {
+            3
+        };
         vm.host_entry_layout(1, slots);
         vm.trace_mark("openlibs");
         vm.open_lua_c_libs();

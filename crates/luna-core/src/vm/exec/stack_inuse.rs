@@ -98,7 +98,11 @@ pub(super) fn shrink_thread(
 impl Vm {
     /// [`thread_in_use`] of the running thread.
     pub(super) fn stack_in_use(&self) -> u32 {
-        let host = if self.current.is_none() { self.g.host_ci_top } else { 0 };
+        let host = if self.current.is_none() {
+            self.g.host_ci_top
+        } else {
+            0
+        };
         thread_in_use(
             &self.frames,
             self.top.max(host),

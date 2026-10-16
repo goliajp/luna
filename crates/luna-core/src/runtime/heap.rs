@@ -304,10 +304,10 @@ use self::intern::{make_seed, oom_abort_heap};
 mod mark;
 #[path = "heap_pace.rs"]
 mod pace;
-#[path = "heap_sweep.rs"]
-mod sweep;
 #[path = "heap_strt.rs"]
 mod strt;
+#[path = "heap_sweep.rs"]
+mod sweep;
 pub(crate) use self::mark::Marker;
 use self::mark::{blacken, drain_marker, survived_mark, weak_key_alive};
 

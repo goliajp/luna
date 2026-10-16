@@ -133,7 +133,13 @@ fn moved_by_count(pl: &Plan<'_>, escape: &EscapeAnalysis) -> Vec<u32> {
 /// Sunk site `sid` makes its table at op `i` (pc `pc`): counted as PUC's
 /// is, or, when a collection step falls due with it, made for real as the
 /// trace leaves after the op.
-pub(super) fn emit_sunk_table<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, i: usize, pc: u32, sid: usize) -> Option<()> {
+pub(super) fn emit_sunk_table<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    i: usize,
+    pc: u32,
+    sid: usize,
+) -> Option<()> {
     let ops = super::super::sunk::sunk_ops(&lw.escape.sites[sid], sid);
     let ops = lw.bcx.ins().iconst(types::I64, ops);
     let fref = lw.bcx.import_func(lw.h.rt.sunk_table_id);

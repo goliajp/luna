@@ -29,7 +29,9 @@ impl Vm {
             let debt = pause_debt(d, bytes, self.heap.pace.estimate, pause);
             self.heap.pace.set_debt(d, bytes, debt);
         } else {
-            self.heap.pace.set_debt(d, bytes, debt_after_52(debt, stepmul));
+            self.heap
+                .pace
+                .set_debt(d, bytes, debt_after_52(debt, stepmul));
         }
     }
 
@@ -67,7 +69,9 @@ impl Vm {
             },
             St::SweepFinobj | St::SweepTobefnz => {
                 let finobj = self.heap.pace.state == St::SweepFinobj;
-                if sweep_other(&mut self.heap.pace.fin_left, sweepmax_52(&s)) && self.heap.pace.fin_left.is_some() {
+                if sweep_other(&mut self.heap.pace.fin_left, sweepmax_52(&s))
+                    && self.heap.pace.fin_left.is_some()
+                {
                     return cost;
                 }
                 self.heap.pace.state = if finobj {
@@ -89,7 +93,6 @@ impl Vm {
             }
         }
     }
-
 
     pub(super) fn step_52(&mut self) {
         let d = Dialect::L52;
@@ -120,7 +123,9 @@ impl Vm {
             let debt = pause_debt(d, bytes, self.heap.pace.estimate, pause);
             self.heap.pace.set_debt(d, bytes, debt);
         } else {
-            self.heap.pace.set_debt(d, bytes, debt_after_52(debt, stepmul));
+            self.heap
+                .pace
+                .set_debt(d, bytes, debt_after_52(debt, stepmul));
         }
     }
 
@@ -175,7 +180,6 @@ impl Vm {
             },
         }
     }
-
 
     pub(super) fn step_51(&mut self) {
         let mut lim = step_limit_51(self.gc_params.get(Param::StepMul));

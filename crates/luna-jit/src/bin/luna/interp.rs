@@ -153,7 +153,9 @@ impl Interp {
     /// there is none), the script's arguments count up from 1 and what
     /// comes before it down from -1.
     pub(crate) fn set_arg(&mut self, argv: &[Vec<u8>], script: usize) {
-        self.vm.host_set_arg(argv, script).expect("set the arg global");
+        self.vm
+            .host_set_arg(argv, script)
+            .expect("set the arg global");
     }
 
     /// `handle_script`: load the script (stdin for `-` unless it follows

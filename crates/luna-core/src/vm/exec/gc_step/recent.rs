@@ -6,7 +6,9 @@ impl Vm {
     pub(super) fn step_55(&mut self) {
         let d = Dialect::L55;
         let stepsize = self.gc_params.apply(Param::StepSize, 100);
-        let mut work = self.gc_params.apply(Param::StepMul, stepsize / self.heap.sizes.ptr as i64);
+        let mut work = self
+            .gc_params
+            .apply(Param::StepMul, stepsize / self.heap.sizes.ptr as i64);
         let fast = work == 0;
         let run = self.gc_running();
         loop {
@@ -101,14 +103,12 @@ impl Vm {
         }
     }
 
-
     pub(super) fn step_54(&mut self) {
         let d = Dialect::L54;
         let s = self.heap.sizes;
         let stepmul = (self.gc_params.get(Param::StepMul)) | 1;
         let debt0 = self.heap.pace.debt(d, self.heap.bytes());
-        let (mut debt, stepsize) =
-            work_54(&s, debt0, stepmul, self.gc_params.get(Param::StepSize));
+        let (mut debt, stepsize) = work_54(&s, debt0, stepmul, self.gc_params.get(Param::StepSize));
         let run = self.gc_running();
         loop {
             if self.heap.pace.state == St::Propagate {
