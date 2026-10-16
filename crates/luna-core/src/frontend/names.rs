@@ -95,11 +95,22 @@ impl Names {
 
     /// The number of `s`, giving it one when it is new.
     pub fn intern(&mut self, s: &[u8]) -> Sym {
+        self.intern_as(s, false)
+    }
+
+    /// [`Names::intern`] for bytes known to be ASCII, such as an
+    /// identifier's.
+    pub(crate) fn intern_ascii(&mut self, s: &[u8]) -> Sym {
+        self.intern_as(s, true)
+    }
+
+    #[inline]
+    fn intern_as(&mut self, s: &[u8], ascii: bool) -> Sym {
         if self.ends.is_empty() {
             *self = Names::new(self.text.mem()).reuse(0);
         }
         if s.len() > MAX_HASHED_LEN {
-            return self.append(s);
+            return self.append(s, ascii);
         }
         let mask = self.table.len() - 1;
         let mut i = Self::hash(s) as usize & mask;
@@ -115,7 +126,7 @@ impl Names {
             }
             i = (i + 1) & mask;
         }
-        let sym = self.append(s);
+        let sym = self.append(s, ascii);
         self.table[i] = sym.0 + 1;
         self.hashed += 1;
         if self.hashed as usize * 2 > self.table.len() {
@@ -124,14 +135,14 @@ impl Names {
         sym
     }
 
-    fn append(&mut self, s: &[u8]) -> Sym {
+    fn append(&mut self, s: &[u8], ascii: bool) -> Sym {
         let sym = Sym(self.ends.len() as u32 - 1);
         self.text.extend_from_slice_or_abort(s);
         assert!(
             self.text.len() < NOT_TEXT as usize,
             "names of a chunk past 2 GiB"
         );
-        let flag = if std::str::from_utf8(s).is_ok() {
+        let flag = if ascii || std::str::from_utf8(s).is_ok() {
             0
         } else {
             NOT_TEXT
