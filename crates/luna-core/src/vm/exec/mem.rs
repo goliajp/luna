@@ -42,6 +42,9 @@ impl Vm {
         // the running operation's registers may lie above the last safe
         // point's live top
         let live_top = std::mem::replace(&mut self.gc_top, self.stack.len() as u32);
+        // what the collection frees is counted, also in the middle of what
+        // luna makes without counting (a load)
+        let silent = std::mem::replace(&mut self.heap.puc.silent, 0);
         self.gc_hold_threads();
         self.jit_forget_ghosts();
         if self.heap.gc_phase_is_propagate() {
@@ -68,6 +71,7 @@ impl Vm {
         self.heap.release_pool();
         self.gc_top = live_top;
         self.gc_full_pause();
+        self.heap.puc.silent = silent;
         true
     }
 
