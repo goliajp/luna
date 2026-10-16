@@ -3,6 +3,7 @@
 use super::*;
 
 mod sunk;
+pub(crate) use sunk::TraceGhosts;
 mod upvals;
 
 impl Vm {
