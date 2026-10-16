@@ -50,8 +50,13 @@ impl Vm {
         upvals: &[Value],
         puc_nup: usize,
     ) -> Result<Value, LuaError> {
-        self.retry_oom(|vm| vm.heap.try_new_native_puc(f, upvals, puc_nup))
-            .map(Value::Native)
+        // `lua_pushcclosure`, which checks for a collection
+        self.api_check_before();
+        let f = self
+            .retry_oom(|vm| vm.heap.try_new_native_puc(f, upvals, puc_nup))
+            .map(Value::Native)?;
+        self.api_check_after(f);
+        Ok(f)
     }
 
     /// [`Vm::lib_native_with`] for a function standing for PUC's objects
@@ -61,8 +66,9 @@ impl Vm {
         f: NativeFn,
         upvals: &[Value],
         objs: &[(crate::runtime::heap::PucKind, usize)],
+        counted: usize,
     ) -> Result<Value, LuaError> {
-        self.retry_oom(|vm| vm.heap.try_new_native_stand_in(f, upvals, objs))
+        self.retry_oom(|vm| vm.heap.try_new_native_stand_in(f, upvals, objs, counted))
             .map(Value::Native)
     }
 

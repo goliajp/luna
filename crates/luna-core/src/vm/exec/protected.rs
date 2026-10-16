@@ -249,7 +249,7 @@ impl Vm {
         self.enter_c_level(false)?;
         let arg = self.stack[(func_slot + 1) as usize];
         // `luaL_getmetafield(L, 1, "__pairs")`
-        self.metafield_check(arg);
+        self.metafield_check(arg, b"__pairs")?;
         let mm = self.get_mm(arg, Mm::Pairs);
         self.stack[(func_slot + at + 1) as usize] = arg;
         self.stack[(func_slot + at) as usize] = mm;

@@ -206,9 +206,10 @@ pub(super) fn s_gmatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         Value::Int(init),
         Value::Int(-1),
     ];
-    // PUC's iterator is a C closure of three upvalues, from 5.4 over a
-    // `GMatchState` userdata
-    let it = if vm.version() >= LuaVersion::Lua54 {
+    // PUC's iterator is a C closure of three upvalues, from 5.3 over a
+    // `GMatchState` userdata: the userdata, its check for a collection,
+    // then the closure (`lua_pushcclosure`) and its check
+    let it = if vm.version() >= LuaVersion::Lua53 {
         use crate::runtime::heap::PucKind;
         let sz = vm.heap.sizes;
         let state = 71 * sz.ptr + 8;
@@ -216,7 +217,11 @@ pub(super) fn s_gmatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             (PucKind::Userdata, sz.userdata(0, state)),
             (PucKind::CClosure, sz.c_closure(3)),
         ];
-        vm.lib_native_stand_in(gmatch_iter, &ups, &objs)?
+        vm.heap.acct_obj(objs[0].0, objs[0].1);
+        vm.api_check_after_rooted();
+        let it = vm.lib_native_stand_in(gmatch_iter, &ups, &objs, 1)?;
+        vm.api_check_after(it);
+        it
     } else {
         vm.lib_native_puc(gmatch_iter, &ups, 3)?
     };

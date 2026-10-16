@@ -35,7 +35,7 @@ pub(crate) fn nat_pairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let t = a.get(vm, 0);
     if ver >= LuaVersion::Lua52 {
         // `luaL_getmetafield(L, 1, "__pairs")`
-        vm.metafield_check(t);
+        vm.metafield_check(t, b"__pairs")?;
         let mm = vm.get_mm(t, Mm::Pairs);
         if !mm.is_nil() {
             let n = pairs_mm_results(vm);
@@ -135,8 +135,9 @@ pub(super) fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     if (ver == LuaVersion::Lua52 || ver == LuaVersion::Lua53)
         && let Some(mt) = vm.metatable_of(t)
     {
-        let key = vm.str_value(b"__ipairs")?;
-        let mm = mt.get(key);
+        // `luaL_getmetafield(L, 1, "__ipairs")`
+        let key = vm.metafield_name(t, b"__ipairs")?.expect("a metatable");
+        let mm = mt.get(Value::Str(key));
         if !mm.is_nil() {
             // `lua_call`: not yieldable.
             let rs = vm.call_value(mm, &[t])?;

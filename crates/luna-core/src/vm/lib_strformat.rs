@@ -181,14 +181,18 @@ fn scanformat(vm: &mut Vm, fmt: &[u8], start: usize) -> Result<usize, LuaError> 
 
 /// Argument `arg` when it is a string `luaL_tolstring` gives back as it
 /// is (no `__tostring` in the way).
-fn plain_str(vm: &mut Vm, a: Args, arg: u32) -> Option<crate::runtime::Gc<crate::runtime::LuaStr>> {
+fn plain_str(
+    vm: &mut Vm,
+    a: Args,
+    arg: u32,
+) -> Result<Option<crate::runtime::Gc<crate::runtime::LuaStr>>, LuaError> {
     let v = a.get(vm, arg);
-    match v {
+    Ok(match v {
         Value::Str(s) if vm.get_mm(v, crate::vm::exec::Mm::ToString).is_nil() => {
             // `luaL_tolstring`'s `luaL_callmeta`
-            vm.metafield_check(v);
+            vm.metafield_check(v, b"__tostring")?;
             Some(s)
         }
         _ => None,
-    }
+    })
 }

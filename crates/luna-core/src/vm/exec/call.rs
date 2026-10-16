@@ -130,6 +130,14 @@ impl Vm {
                 Value::Native(nc) => {
                     // a C function gets `LUA_MINSTACK` slots (PUC `luaD_precall`)
                     self.check_lua_stack(func_slot + 1 + nargs, 20, true)?;
+                    // `pcall`, `xpcall` and an async native are C functions
+                    // too: 5.2's `luaD_precall` checks before running them
+                    if matches!(
+                        nc.kind,
+                        NativeKind::Pcall | NativeKind::Xpcall | NativeKind::Async
+                    ) {
+                        self.precall_checkpoint(func_slot + 1 + nargs);
+                    }
                     if nc.kind != NativeKind::Plain
                         && let Some(r) = self.begin_special_native(nc, func_slot, nargs, nresults)
                     {
