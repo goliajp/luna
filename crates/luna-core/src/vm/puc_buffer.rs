@@ -145,18 +145,25 @@ impl PucBuffer {
         s: Gc<LuaStr>,
     ) -> Result<(), LuaError> {
         let vl = s.len();
+        // the value is on the stack while the buffer makes room
+        let at = vm.lib_roots.len();
+        vm.lib_roots.push(Value::Str(s));
         if self.d != Dialect::L51 {
-            return self.add(vm, out, vl);
+            let r = self.add(vm, out, vl);
+            vm.lib_roots.truncate(at);
+            return r;
         }
         if vl <= self.size - self.n {
+            vm.lib_roots.truncate(at);
             self.n += vl;
             return Ok(());
         }
-        // the value goes on the stack as one more string, above the
-        // buffer's contents
+        // it stays there as one more string, the buffer's contents put
+        // below it (`lua_insert`)
         let end = out.len() - vl;
-        self.empty_51(vm, &out[..end])?;
-        vm.lib_roots.push(Value::Str(s));
+        if self.empty_51(vm, &out[..end])? {
+            vm.lib_roots.swap(at, at + 1);
+        }
         self.start = out.len();
         self.adjust_51(vm)
     }
