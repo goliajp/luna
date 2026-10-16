@@ -18,9 +18,9 @@ impl Vm {
     /// 5.3 on: the check after an API call pushed `v`.
     #[inline]
     pub(crate) fn api_check_after(&mut self, v: Value) {
-        if self.version >= LuaVersion::Lua53 {
+        if self.version >= LuaVersion::Lua53 && !self.checkpoint_idle() {
             self.lib_roots.push(v);
-            self.native_checkpoint();
+            self.native_checkpoint_due();
             self.lib_roots.pop();
         }
     }
