@@ -19,7 +19,7 @@ impl Vm {
             .chain(&self.heap.puc.pins)
             .chain(&self.heap.puc.load_msg)
         {
-            m.value(Value::Str(n));
+            m.mark(n);
         }
         // Root the running thread's live registers (PUC marks [stack, top)).
         // `gc_top` is the instruction-level cursor of the last GC
