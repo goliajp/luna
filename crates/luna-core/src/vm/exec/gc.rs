@@ -120,6 +120,7 @@ impl Vm {
         let swept = !self.heap.gc_phase_is_pause() || self.version == LuaVersion::Lua51;
         self.gc_hold_threads();
         self.jit_forget_ghosts();
+        self.name_cache = Default::default();
         if self.heap.gc_phase_is_propagate() {
             let mut m = self.heap.loan_marker();
             self.mark_roots(&mut m);

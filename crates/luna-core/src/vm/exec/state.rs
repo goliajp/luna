@@ -104,6 +104,8 @@ pub struct Vm {
     pub(crate) sort_scratch: LVec<LVec<Value>>,
     /// roots: what a library function keeps where PUC's has it on its stack
     pub(crate) lib_roots: Vec<Value>,
+    /// event names `luaL_getmetafield` pushed since a collection step began
+    pub(crate) name_cache: [(usize, Option<Gc<crate::runtime::LuaStr>>); 5],
     /// Storages [`Vm::install_jit_storage`] replaced: code compiled into
     /// them may still be referenced by this Vm's functions, so they live
     /// as long as the Vm.
