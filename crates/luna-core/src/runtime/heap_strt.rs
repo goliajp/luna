@@ -47,8 +47,11 @@ impl Heap {
                     let s = &*(cur as *const LuaStr);
                     if self.table_dialect == Dialect::L51 || s.is_short() {
                         let b = string::bytes_of(cur as *const LuaStr);
+                        // the string's own hash is PUC's: 5.1's, and 5.2's
+                        // below 32 bytes (where it takes every byte)
                         let h = match self.table_dialect {
-                            Dialect::L51 => string::lua_hash_51(b),
+                            Dialect::L51 => Gc::from_ptr(cur as *mut LuaStr).stored_hash(),
+                            _ if b.len() < 32 => Gc::from_ptr(cur as *mut LuaStr).stored_hash(),
                             _ => hash_52(b, self.seed),
                         };
                         self.strt.dead.push((h % size.max(1), cur));
