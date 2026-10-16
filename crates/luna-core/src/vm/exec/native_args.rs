@@ -83,11 +83,26 @@ impl Vm {
     pub fn nat_ret(&mut self, func_slot: u32, vals: &[Value]) -> Result<u32, LuaError> {
         let need = func_slot as usize + vals.len();
         if self.stack.len() < need {
-            self.grow_stack(need)?;
+            self.grow_stack_holding(need, vals)?;
         }
         for (i, &v) in vals.iter().enumerate() {
             self.stack[func_slot as usize + i] = v;
         }
         Ok(vals.len() as u32)
+    }
+
+    /// The stack grown to `need` slots with `vals`, which the caller holds
+    /// to put there, rooted meanwhile: growing may collect in an emergency.
+    #[cold]
+    pub(crate) fn grow_stack_holding(
+        &mut self,
+        need: usize,
+        vals: &[Value],
+    ) -> Result<(), LuaError> {
+        let at = self.lib_roots.len();
+        self.lib_roots.extend_from_slice(vals);
+        let r = self.grow_stack(need);
+        self.lib_roots.truncate(at);
+        r
     }
 }

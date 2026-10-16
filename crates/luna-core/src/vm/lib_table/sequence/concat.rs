@@ -102,6 +102,10 @@ fn concat_field(
             return Err(crate::vm::builtins::raise_bytes_fmt(vm, 1, &msg));
         }
     };
-    vm.buf_push(out, s.as_bytes())?;
+    // on the stack until added (`luaL_addvalue`), which roots it itself
+    vm.lib_roots.push(Value::Str(s));
+    let pushed = vm.buf_push(out, s.as_bytes());
+    vm.lib_roots.pop();
+    pushed?;
     b.add_value(vm, out, s)
 }

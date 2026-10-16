@@ -142,6 +142,9 @@ fn info_table(
     // function makes do, checking for a collection: kept rooted meanwhile
     let base = vm.lib_roots.len();
     vm.lib_roots.push(activelines);
+    // the function described: off the stack when 5.1–5.3 popped it ('>'),
+    // where PUC's `lua_getinfo` pushes it again for 'f'
+    vm.lib_roots.push(ar.func);
     let r = info_fields(vm, options, ar, activelines);
     vm.lib_roots.truncate(base);
     r
