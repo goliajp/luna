@@ -63,6 +63,16 @@ impl PucBuffer {
     /// (`luaL_addlstring`, `luaL_addchar`)
     #[inline]
     pub(crate) fn add(&mut self, vm: &mut Vm, out: &[u8], l: usize) -> Result<(), LuaError> {
+        if self.size - self.n >= l {
+            self.n += l;
+            return Ok(());
+        }
+        self.add_growing(vm, out, l)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn add_growing(&mut self, vm: &mut Vm, out: &[u8], l: usize) -> Result<(), LuaError> {
         if self.d == Dialect::L51 {
             // one character at a time: the buffer is emptied when a
             // character finds it full
@@ -89,7 +99,8 @@ impl PucBuffer {
     /// full.
     #[inline]
     pub(crate) fn add_chars(&mut self, vm: &mut Vm, out: &[u8], k: usize) -> Result<(), LuaError> {
-        if self.d != Dialect::L51 && self.size - self.n >= k {
+        // with room for them all, no dialect empties or grows the buffer
+        if self.size - self.n >= k {
             self.n += k;
             return Ok(());
         }
