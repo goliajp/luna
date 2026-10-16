@@ -205,9 +205,12 @@ impl Vm {
         &mut self,
         f: impl FnOnce(&mut Vm) -> Result<R, SyntaxError>,
     ) -> Result<R, SyntaxError> {
+        let silent = self.heap.puc.silent;
         match catch_load_oom(|| f(self)) {
             Ok(r) => r,
             Err(()) => {
+                // the failure unwound past what stops counting for the load
+                self.heap.puc.silent = silent;
                 self.compile_scratch = crate::compiler::CompileScratch::new(self.heap.mem());
                 Err(load_oom(&self.heap))
             }
