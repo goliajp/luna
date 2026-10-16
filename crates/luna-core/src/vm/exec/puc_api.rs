@@ -47,7 +47,18 @@ impl Vm {
             return Ok(None);
         }
         self.api_check_before();
-        let s = self.alloc_str(event)?;
+        // by the name's address, as PUC's string cache is; emptied when a
+        // collection step begins, so a string found here is not dead
+        let key = event.as_ptr() as usize;
+        let slot = (key >> 3) % self.name_cache.len();
+        let s = match self.name_cache[slot] {
+            (k, Some(s)) if k == key => s,
+            _ => {
+                let s = self.alloc_str(event)?;
+                self.name_cache[slot] = (key, Some(s));
+                s
+            }
+        };
         self.api_check_after(Value::Str(s));
         Ok(Some(s))
     }

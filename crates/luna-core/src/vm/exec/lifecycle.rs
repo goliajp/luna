@@ -176,6 +176,7 @@ impl Vm {
             },
             host_roots_free: LVec::new(mem),
             sort_scratch: LVec::new(mem),
+            name_cache: Default::default(),
             lib_roots: Vec::new(),
             // LuaUserdata trait sugar's per-Vm
             // metatable cache. Populated lazily by register_userdata.

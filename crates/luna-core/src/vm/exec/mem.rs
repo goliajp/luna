@@ -47,6 +47,7 @@ impl Vm {
         let silent = std::mem::replace(&mut self.heap.puc.silent, 0);
         self.gc_hold_threads();
         self.jit_forget_ghosts();
+        self.name_cache = Default::default();
         if self.heap.gc_phase_is_propagate() {
             // finish the cycle in progress: what it finds dead goes; the
             // objects made since the last safe point are held as young
