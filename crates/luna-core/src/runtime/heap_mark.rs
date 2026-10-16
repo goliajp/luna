@@ -69,6 +69,11 @@ pub(crate) struct Marker {
     pub(super) leaf_bytes: i64,
     /// 5.5: counts what is marked
     pub(super) sizer: Option<super::collect::Sizer>,
+    /// `gc-verify`: instead of marking a child, report one the sweep about
+    /// to run would free (white, not the current white) while the object
+    /// being traced (the second) holds it; the check's name third
+    #[cfg(feature = "gc-verify")]
+    pub(super) verify: Option<(u8, *mut GcHeader, &'static str)>,
 }
 
 /// Drain the gray stack: pop each marked object and trace its children until
@@ -93,6 +98,18 @@ pub(super) unsafe fn blacken(h: *mut GcHeader, m: &mut Marker) {
     // SAFETY: the caller's contract
     unsafe {
         (*h).flags = (*h).with_slow(((*h).flags & !WHITE_BITS) | BLACK);
+        trace_children(h, m);
+    }
+}
+
+/// The children of `h` handed to `m`.
+///
+/// # Safety
+/// As [`blacken`]'s.
+#[inline(always)]
+pub(super) unsafe fn trace_children(h: *mut GcHeader, m: &mut Marker) {
+    // SAFETY: the caller's contract
+    unsafe {
         match (*h).tag {
             ObjTag::Str | ObjTag::Ghost => {}
             ObjTag::Table => (*(h as *mut Table)).trace(h as *mut Table, m),
@@ -209,6 +226,12 @@ impl Marker {
     /// `h` is the header of an object this heap allocated and has not freed.
     #[inline(always)]
     pub(crate) unsafe fn header(&mut self, h: *mut GcHeader) -> bool {
+        #[cfg(feature = "gc-verify")]
+        if let Some(check) = self.verify {
+            // SAFETY: as below
+            unsafe { super::verify::dead_child(h, check) };
+            return false;
+        }
         // SAFETY: `h` heads an allocated object (the caller's contract), and nothing is freed while marking; only the flag byte is touched
         unsafe {
             let f = (*h).flags;

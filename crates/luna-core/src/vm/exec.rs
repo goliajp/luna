@@ -56,6 +56,8 @@ mod index_fast;
 mod index_miss;
 mod index_raw;
 mod index_set;
+#[cfg(feature = "gc-verify")]
+mod index_verify;
 mod jit_call;
 mod jit_rt;
 mod jit_rt_strbuf;

@@ -14,6 +14,19 @@ pub(crate) mod gc_verify_probe {
     use std::collections::HashSet;
     thread_local! {
         pub(crate) static FREED: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
+        /// the bytes of the strings freed, by address
+        pub(crate) static FREED_STR: RefCell<std::collections::HashMap<usize, Vec<u8>>> =
+            RefCell::new(std::collections::HashMap::new());
+    }
+    /// The bytes freed string `p` had.
+    pub(crate) fn freed_str(p: usize) -> String {
+        FREED_STR
+            .with(|f| {
+                f.borrow()
+                    .get(&p)
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+            })
+            .unwrap_or_default()
     }
     pub(crate) fn is_freed(p: usize) -> bool {
         FREED.with(|f| f.borrow().contains(&p))

@@ -19,45 +19,8 @@ impl Vm {
         dst: u32,
         probed: bool,
     ) -> Result<(), LuaError> {
-        // Read-time probe: a collectable key must be live at
-        // the moment it is used. O(1) membership test against the
-        // freed-pointer log — gc-verify diagnostic builds only; exact
-        // under quarantining allocators (ASAN).
         #[cfg(feature = "gc-verify")]
-        if matches!(key, Value::Str(_)) {
-            let h = match key {
-                Value::Str(s) => s.as_ptr() as usize,
-                _ => unreachable!(),
-            };
-            if self.heap.recently_freed.contains(&h) {
-                let (pc, reg_info) = match self.frames.last() {
-                    Some(CallFrame::Lua(f)) => {
-                        let pc = f.pc as usize;
-                        let inst = f.closure.proto.code.get(pc.wrapping_sub(1));
-                        (
-                            pc,
-                            inst.map(|i| {
-                                format!(
-                                    "op[pc-1]={:?} a={} b={} c={} base={}",
-                                    i.op(),
-                                    i.a(),
-                                    i.b(),
-                                    i.c(),
-                                    f.base
-                                )
-                            })
-                            .unwrap_or_default(),
-                        )
-                    }
-                    _ => (0, String::new()),
-                };
-                panic!(
-                    "[gc-verify] op_index READ of dead string key {h:#x} \
-                     (gc_top {}, top {}, pc {pc}, {reg_info})",
-                    self.gc_top, self.top,
-                );
-            }
-        }
+        self.verify_index_key(key);
         match self.index_step_from(t, key, probed)? {
             MmOut::Done(v) => self.stack[dst as usize] = v,
             MmOut::Mm { func, recv } => {

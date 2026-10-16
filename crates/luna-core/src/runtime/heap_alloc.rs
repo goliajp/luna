@@ -261,6 +261,11 @@ impl Heap {
         upvals: &[Gc<Upvalue>],
     ) -> Result<Gc<LuaClosure>, Oom> {
         use crate::runtime::function::INLINE_UPVALS_N;
+        #[cfg(feature = "gc-verify")]
+        self.verify_not_dying(
+            proto.as_ptr() as *const GcHeader,
+            "a new closure's prototype",
+        );
         let n = upvals.len();
         let store = if n > INLINE_UPVALS_N {
             Some(LSlice::from_slice(self.mem(), upvals)?)

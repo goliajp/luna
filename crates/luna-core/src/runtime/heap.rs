@@ -279,6 +279,8 @@ impl Heap {
         }
         self.all = h;
         self.live += 1;
+        #[cfg(feature = "gc-verify")]
+        self.forget_freed(h);
     }
 }
 
