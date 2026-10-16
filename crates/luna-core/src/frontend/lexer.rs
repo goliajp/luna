@@ -413,7 +413,7 @@ impl<'s, S: Source> Lexer<'s, S> {
             b"while" => Token::While,
             _ => {
                 if let Some(names) = &mut self.names {
-                    self.last_sym = names.intern(text);
+                    self.last_sym = names.intern_ascii(text);
                 }
                 Token::Name(())
             }
