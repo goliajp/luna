@@ -95,9 +95,19 @@ impl Heap {
 
     /// The table of `t` resized from `old_a` array slots and `old_h` nodes
     /// to `new_a` and `new_h` (PUC `luaH_resize`).
-    pub(crate) fn ghost_table_resize(&mut self, t: GhostRef, old_a: usize, old_h: usize, new_a: usize, new_h: usize) {
+    pub(crate) fn ghost_table_resize(
+        &mut self,
+        t: GhostRef,
+        old_a: usize,
+        old_h: usize,
+        new_a: usize,
+        new_h: usize,
+    ) {
         self.acct_table_resize(old_a, old_h, new_a, new_h);
-        let (ab, hb) = (self.array_bytes(new_a) as u32, self.hash_bytes(new_h) as u32);
+        let (ab, hb) = (
+            self.array_bytes(new_a) as u32,
+            self.hash_bytes(new_h) as u32,
+        );
         // SAFETY: a ghost table's record lives until the sweep after it,
         // and a sweep comes only after the trace that made it has left
         unsafe {
@@ -179,7 +189,11 @@ impl Heap {
     ///
     /// # Safety
     /// `g` heads a dead record of this heap.
-    pub(in crate::runtime::heap) unsafe fn free_ghost_records(&mut self, g: *mut Ghost, quota: i64) -> (i64, bool) {
+    pub(in crate::runtime::heap) unsafe fn free_ghost_records(
+        &mut self,
+        g: *mut Ghost,
+        quota: i64,
+    ) -> (i64, bool) {
         let mut n = 0;
         // SAFETY: the caller's contract
         unsafe {

@@ -169,7 +169,13 @@ pub(super) fn gc_due_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, i: usize, n
 }
 
 /// [`gc_due_exit`] with the check `check` names (`Vm::checkpoint_after_jit`).
-pub(super) fn gc_due_exit_as<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, i: usize, next_pc: u32, check: u32) {
+pub(super) fn gc_due_exit_as<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    i: usize,
+    next_pc: u32,
+    check: u32,
+) {
     let fref = lw.bcx.import_func(lw.h.rt.gc_due_id);
     let check = lw.bcx.ins().iconst(types::I64, i64::from(check));
     let call = lw.bcx.ins().call(fref, &[check]);
@@ -179,7 +185,13 @@ pub(super) fn gc_due_exit_as<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, i: usize
 
 /// Leave for `next_pc` when `due` (an `i64`) is not 0, with the sunk
 /// tables live after op `i`.
-pub(super) fn due_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, due: Value, i: usize, next_pc: u32) {
+pub(super) fn due_exit<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    due: Value,
+    i: usize,
+    next_pc: u32,
+) {
     let not_due = lw.bcx.ins().icmp_imm_s(IntCC::Equal, due, 0);
     let after = i + 1;
     guard!(lw, pl, not_due, after, next_pc);

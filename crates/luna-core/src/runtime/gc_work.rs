@@ -69,8 +69,9 @@ impl Heap {
                         }
                         // the dummy node counts as one
                         let nodes = t.node_count().max(1);
-                        (self.sizes.table + self.array_bytes(t.asize as usize) + self.sizes.node * nodes)
-                            as i64
+                        (self.sizes.table
+                            + self.array_bytes(t.asize as usize)
+                            + self.sizes.node * nodes) as i64
                     }
                     // 5.1 marks a userdata black at once, 5.2 and 5.3 count
                     // it as they mark it
@@ -100,7 +101,10 @@ impl Heap {
                 ObjTag::Proto => {
                     let a = (*(h as *const Proto)).puc_arrays.get();
                     let s = self.sizes;
-                    1 + p(a[2], s.tvalue) + p(a[6], s.upvaldesc) + p(a[1], s.ptr) + p(a[5], s.locvar)
+                    1 + p(a[2], s.tvalue)
+                        + p(a[6], s.upvaldesc)
+                        + p(a[1], s.ptr)
+                        + p(a[5], s.locvar)
                 }
                 ObjTag::Coro => 0,
                 // a userdata without user values is marked black at once
@@ -114,7 +118,11 @@ impl Heap {
     /// for each of its stack's, 5.5 for each in use.
     fn thread_work(&self, c: &crate::runtime::Coro, run: Option<(u32, u32, u32)>) -> i64 {
         let d = self.table_dialect;
-        let ci = if d == Dialect::L51 { c.frame_size } else { c.ci_alloc };
+        let ci = if d == Dialect::L51 {
+            c.frame_size
+        } else {
+            c.ci_alloc
+        };
         let (top, size, ci) = run.unwrap_or((c.top, c.stack_size, ci));
         match d {
             Dialect::L54 => 1 + i64::from(size),
@@ -135,7 +143,12 @@ impl Heap {
 ///
 /// # Safety
 /// `h` heads an allocated object other than a thread.
-pub(in crate::runtime::heap) unsafe fn objsize(s: &PucSizes, d: Dialect, own: &[*const Table], h: *mut GcHeader) -> usize {
+pub(in crate::runtime::heap) unsafe fn objsize(
+    s: &PucSizes,
+    d: Dialect,
+    own: &[*const Table],
+    h: *mut GcHeader,
+) -> usize {
     // SAFETY: the caller's contract; the tag names the type
     unsafe {
         if is_uncounted(h) {
@@ -147,9 +160,13 @@ pub(in crate::runtime::heap) unsafe fn objsize(s: &PucSizes, d: Dialect, own: &[
                 if own.contains(&t) {
                     return 0;
                 }
-                s.table + array_bytes(s, d, (*t).asize as usize) + hash_bytes(s, d, (*t).node_count())
+                s.table
+                    + array_bytes(s, d, (*t).asize as usize)
+                    + hash_bytes(s, d, (*t).node_count())
             }
-            ObjTag::Proto => s.proto + (*(h as *const Proto)).puc_arrays.get().iter().sum::<u32>() as usize,
+            ObjTag::Proto => {
+                s.proto + (*(h as *const Proto)).puc_arrays.get().iter().sum::<u32>() as usize
+            }
             ObjTag::Closure => {
                 let env = (*h).sub & acct::ENV51 != 0;
                 let n = (*(h as *const LuaClosure)).upvals_len as usize - usize::from(env);
@@ -158,7 +175,11 @@ pub(in crate::runtime::heap) unsafe fn objsize(s: &PucSizes, d: Dialect, own: &[
             ObjTag::Upvalue => s.upval,
             ObjTag::Native => {
                 let n = native_upvals(h);
-                if n > 0 || d == Dialect::L51 { s.c_closure(n) } else { 0 }
+                if n > 0 || d == Dialect::L51 {
+                    s.c_closure(n)
+                } else {
+                    0
+                }
             }
             ObjTag::Userdata => (*(h as *const Userdata)).puc_size,
             ObjTag::Str => {
@@ -202,7 +223,11 @@ pub(in crate::runtime::heap) fn array_bytes(s: &PucSizes, d: Dialect, n: usize) 
 /// pointer (`Limbox`, padded to a node's alignment) in front of eight
 /// nodes or more.
 pub(in crate::runtime::heap) fn hash_bytes(s: &PucSizes, d: Dialect, h: usize) -> usize {
-    let limbox = if cfg!(target_arch = "wasm32") { 8 } else { s.ptr };
+    let limbox = if cfg!(target_arch = "wasm32") {
+        8
+    } else {
+        s.ptr
+    };
     match d {
         Dialect::L55 if h >= 8 => h * s.node + limbox,
         _ => h * s.node,
@@ -211,7 +236,12 @@ pub(in crate::runtime::heap) fn hash_bytes(s: &PucSizes, d: Dialect, h: usize) -
 
 /// PUC's size of a thread with a stack of `stack` slots and `ci`
 /// `CallInfo`s (5.1: the size of its array).
-pub(in crate::runtime::heap) fn thread_bytes(s: &PucSizes, d: Dialect, stack: u32, ci: u32) -> usize {
+pub(in crate::runtime::heap) fn thread_bytes(
+    s: &PucSizes,
+    d: Dialect,
+    stack: u32,
+    ci: u32,
+) -> usize {
     s.thread + stack_bytes(s, d, stack) + s.callinfo * ci as usize
 }
 

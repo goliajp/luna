@@ -104,13 +104,13 @@ impl Vm {
         reg_state[max_stack.min(reg_state_len)..].fill(0);
         let dispatch_ok = self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
             && self.trace_marshal_in(
-            base_us,
-            max_stack,
-            compile_entry_tags,
-            &mut entry_tags,
-            &mut reg_state,
-            !ct.has_any_side_wired.get(),
-        );
+                base_us,
+                max_stack,
+                compile_entry_tags,
+                &mut entry_tags,
+                &mut reg_state,
+                !ct.has_any_side_wired.get(),
+            );
 
         if dispatch_ok {
             debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");

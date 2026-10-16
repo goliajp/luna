@@ -80,10 +80,9 @@ impl Vm {
                     self.heap.acct_adopt_long(s);
                     // luna's own default Lua path stands for PUC's
                     if name == b"path"
-                        && let Some(&puc) =
-                            self.heap.puc.kept_long.iter().find(|(b, _)| {
-                                b.ends_with(b"?.lua") || b.windows(5).any(|w| w == b"?.lua")
-                            })
+                        && let Some(&puc) = self.heap.puc.kept_long.iter().find(|(b, _)| {
+                            b.ends_with(b"?.lua") || b.windows(5).any(|w| w == b"?.lua")
+                        })
                         && puc.0 != s.as_bytes()
                     {
                         self.heap.acct_stand_in(s, puc);
@@ -131,11 +130,18 @@ impl Vm {
             }
         };
         // `require` and the searchers, with `package` as their upvalue
-        let req = self.heap.find_interned(b"require").map(|k| self.globals.get(Value::Str(k)));
+        let req = self
+            .heap
+            .find_interned(b"require")
+            .map(|k| self.globals.get(Value::Str(k)));
         stand(self, req, vec![s.c_closure(1)]);
         if let Some(Value::Table(searchers)) = field(self, b"package", b"searchers") {
             for i in 1..=4 {
-                stand(self, Some(searchers.get(Value::Int(i))), vec![s.c_closure(1)]);
+                stand(
+                    self,
+                    Some(searchers.get(Value::Int(i))),
+                    vec![s.c_closure(1)],
+                );
             }
         }
         // 5.4 on, `random` and `randomseed` share the generator's state
@@ -151,7 +157,12 @@ impl Vm {
             for name in [&b"path"[..], b"cpath"] {
                 let p = field(self, b"package", name);
                 if let Some(Value::Str(p)) = p
-                    && !self.heap.puc.stand_ins.iter().any(|s| s.0 == p.as_ptr() as *mut _)
+                    && !self
+                        .heap
+                        .puc
+                        .stand_ins
+                        .iter()
+                        .any(|s| s.0 == p.as_ptr() as *mut _)
                 {
                     let h = p.as_ptr() as *mut _;
                     if crate::runtime::heap::is_uncounted(h) {

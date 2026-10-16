@@ -121,7 +121,13 @@ pub(super) fn sweep_table_write(
                 a,
                 inline_depth: depth,
                 array_cap: sizes.map_or(0, |(asize, _)| asize as u32),
-                hash_cap: sizes.map_or(0, |(_, h)| if h == 0 { 0 } else { h.next_power_of_two() as u32 }),
+                hash_cap: sizes.map_or(0, |(_, h)| {
+                    if h == 0 {
+                        0
+                    } else {
+                        h.next_power_of_two() as u32
+                    }
+                }),
                 table_ops: crate::jit_backend::pack_table_ops(ins),
                 hash_keys: Vec::new(),
                 // sizes past a table's limit: the helper raises the error

@@ -53,7 +53,9 @@ impl Vm {
             }
             Dialect::L55 => {
                 let threshold = self.gc_params.apply(Param::Pause, p.estimate);
-                self.heap.pace.set_debt(d, bytes, pause_debt_55(bytes, threshold));
+                self.heap
+                    .pace
+                    .set_debt(d, bytes, pause_debt_55(bytes, threshold));
             }
             _ => {
                 p.estimate = bytes as i64;
@@ -71,7 +73,9 @@ impl Vm {
         let bytes = self.heap.bytes();
         let debt = match d {
             Dialect::L54 => -((bytes as i64 / 100) * self.gc_params.get(Param::MinorMul)),
-            Dialect::L55 => self.gc_params.apply(Param::MinorMul, self.heap.pace.estimate),
+            Dialect::L55 => self
+                .gc_params
+                .apply(Param::MinorMul, self.heap.pace.estimate),
             _ => return,
         };
         self.heap.pace.set_debt(d, bytes, debt);
@@ -132,7 +136,11 @@ impl Vm {
         match d {
             Dialect::L51 => {
                 let a = n.max(0) << 10;
-                let t = if a <= bytes as i64 { bytes as i64 - a } else { 0 };
+                let t = if a <= bytes as i64 {
+                    bytes as i64 - a
+                } else {
+                    0
+                };
                 self.heap.pace.set_threshold(t);
                 while self.heap.pace.threshold() <= self.heap.bytes() as i64 {
                     self.puc_step();
@@ -153,7 +161,11 @@ impl Vm {
             }
             Dialect::L53 | Dialect::L54 => {
                 let debt = if n == 0 {
-                    let d0 = if d == Dialect::L53 { -stepsize_52(&self.heap.sizes) } else { 0 };
+                    let d0 = if d == Dialect::L53 {
+                        -stepsize_52(&self.heap.sizes)
+                    } else {
+                        0
+                    };
                     self.heap.pace.set_debt(d, bytes, d0);
                     self.puc_step();
                     1

@@ -72,8 +72,13 @@ impl Vm {
                 return -1;
             }
         } else {
-            let size = self.heap.sizes.string(buf.len(), self.version >= LuaVersion::Lua55);
-            let g = self.heap.acct_ghost_ref(crate::runtime::heap::PucKind::LongStr, size);
+            let size = self
+                .heap
+                .sizes
+                .string(buf.len(), self.version >= LuaVersion::Lua55);
+            let g = self
+                .heap
+                .acct_ghost_ref(crate::runtime::heap::PucKind::LongStr, size);
             self.jit.accum_last = g.ok().map(AccumLast::Long);
         }
         if self.heap.gc_due() && !self.gc_finalizing {
@@ -118,7 +123,8 @@ impl Vm {
             self.heap.puc.silent -= 1;
             if let Some(s) = r {
                 self.heap.ghost_taken(g);
-                self.heap.set_counted(s.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                self.heap
+                    .set_counted(s.as_ptr() as *mut crate::runtime::heap::GcHeader);
             }
         }
         buf.clear();
