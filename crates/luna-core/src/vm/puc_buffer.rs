@@ -40,6 +40,7 @@ pub(crate) struct PucBuffer {
 
 impl PucBuffer {
     /// `luaL_buffinit`
+    #[inline]
     pub(crate) fn new(vm: &mut Vm) -> PucBuffer {
         PucBuffer {
             d: vm.heap.table_dialect,
@@ -60,6 +61,7 @@ impl PucBuffer {
 
     /// `l` bytes added at the end of `out`, the content so far
     /// (`luaL_addlstring`, `luaL_addchar`)
+    #[inline]
     pub(crate) fn add(&mut self, vm: &mut Vm, out: &[u8], l: usize) -> Result<(), LuaError> {
         if self.d == Dialect::L51 {
             // one character at a time: the buffer is emptied when a
@@ -85,7 +87,18 @@ impl PucBuffer {
     /// `k` bytes added at the end of `out` a character at a time
     /// (`luaL_addchar`): the buffer grows each time a character finds it
     /// full.
+    #[inline]
     pub(crate) fn add_chars(&mut self, vm: &mut Vm, out: &[u8], k: usize) -> Result<(), LuaError> {
+        if self.d != Dialect::L51 && self.size - self.n >= k {
+            self.n += k;
+            return Ok(());
+        }
+        self.add_chars_growing(vm, out, k)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn add_chars_growing(&mut self, vm: &mut Vm, out: &[u8], k: usize) -> Result<(), LuaError> {
         if self.d == Dialect::L51 {
             return self.add(vm, out, k);
         }
@@ -108,6 +121,7 @@ impl PucBuffer {
 
     /// Room for `sz` more bytes (`luaL_prepbuffsize`; 5.1's
     /// `luaL_prepbuffer`, which empties the buffer whatever it holds).
+    #[inline]
     pub(crate) fn prep(&mut self, vm: &mut Vm, out: &[u8], sz: usize) -> Result<(), LuaError> {
         if self.d == Dialect::L51 {
             return self.prepbuffer_51(vm, out);
@@ -115,6 +129,13 @@ impl PucBuffer {
         if self.size - self.n >= sz {
             return Ok(());
         }
+        self.grow(vm, sz)
+    }
+
+    /// [`PucBuffer::prep`] when the room is short: a bigger buffer.
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self, vm: &mut Vm, sz: usize) -> Result<(), LuaError> {
         let newsize = match self.d {
             Dialect::L52 | Dialect::L53 => (self.size * 2).max(self.n + sz),
             Dialect::L54 => (self.size / 2 * 3).max(self.n + sz),
