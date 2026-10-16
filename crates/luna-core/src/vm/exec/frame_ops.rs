@@ -8,6 +8,8 @@ mod closure;
 
 /// [`Vm::jit_gc_due`]'s op: the one before the pc compiled code resumes at.
 pub const JIT_GC_PREV: u32 = u32::MAX;
+/// [`Vm::jit_gc_due`]'s op: the call that entered the frame it resumes in.
+pub const JIT_GC_CALL: u32 = u32::MAX - 1;
 
 impl Vm {
     #[inline(never)]
@@ -229,22 +231,22 @@ impl Vm {
     }
 
     /// Compiled code left with a step due after the op at `op_pc`
-    /// ([`JIT_GC_PREV`]: the one before the running frame's pc): the check
-    /// that op makes.
+    /// ([`JIT_GC_PREV`]: the one before the running frame's pc;
+    /// [`JIT_GC_CALL`]: the call that entered the running frame, which 5.2
+    /// checks with the frame's top): the check that op makes.
     pub(crate) fn checkpoint_after_jit(&mut self, op_pc: u32) {
+        if op_pc == JIT_GC_CALL {
+            return self.checkpoint(self.frame_top());
+        }
         let (cl, base) = (self.top_frame().closure, self.top_frame().base);
-        let pc = if op_pc == JIT_GC_PREV {
-            self.pc_of_top() - 1
-        } else {
-            op_pc
-        };
+        let pc = if op_pc == JIT_GC_PREV { self.pc_of_top() - 1 } else { op_pc };
         self.checkpoint_after_op(cl.proto.code[pc as usize], base);
     }
 
-    /// Compiled code just allocated: whether a collection step is due,
-    /// noted with the op whose check it is (`op_pc`, as
-    /// [`Vm::checkpoint_after_jit`] takes it) for the exit it then takes to
-    /// have the interpreter check.
+    /// Compiled code just allocated (or 5.2 entered a call): whether a
+    /// collection step is due, noted with the op whose check it is
+    /// (`op_pc`, as [`Vm::checkpoint_after_jit`] takes it) for the exit it
+    /// then takes to have the interpreter check.
     #[doc(hidden)]
     pub fn jit_gc_due(&mut self, op_pc: u32) -> bool {
         let due = self.heap.gc_due() && !self.gc_finalizing && self.jit.pending_err.is_none();

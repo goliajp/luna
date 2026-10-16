@@ -165,8 +165,12 @@ fn emit_frame_closures<E: Emit>(lw: &mut Lower<E>, chain: &[FrameMaterializeInfo
 /// where the interpreter checks for it as after the op (PUC's
 /// `luaC_checkGC` there).
 pub(super) fn gc_due_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, i: usize, next_pc: u32) {
+    gc_due_exit_as(lw, pl, i, next_pc, luna_core::vm::exec::JIT_GC_PREV);
+}
+
+/// [`gc_due_exit`] with the check `check` names (`Vm::checkpoint_after_jit`).
+pub(super) fn gc_due_exit_as<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, i: usize, next_pc: u32, check: u32) {
     let fref = lw.bcx.import_func(lw.h.rt.gc_due_id);
-    let check = luna_core::vm::exec::JIT_GC_PREV;
     let check = lw.bcx.ins().iconst(types::I64, i64::from(check));
     let call = lw.bcx.ins().call(fref, &[check]);
     let due = lw.bcx.inst_results(call)[0];

@@ -234,13 +234,12 @@ pub struct CompiledTrace {
     /// Which kinds of inlined code the trace holds (`INLINE_*` bits),
     /// for the counters a dispatch of it bumps.
     pub inline_kinds: u8,
-    /// Sorted unique list of slot indices that ANY
-    /// op in this trace's body WRITES (post `inline_depth` offset).
-    /// Computed at compile via `compute_body_writes`; consumed
-    /// by the smart side-trace gate at child compile to
-    /// detect read-before-write live-in registers that would
-    /// re-read the parent's stale exit value across the child's
-    /// internal-loop iters.
+    /// How deep the calls it inlines go: the frames PUC makes for them
+    /// need `CallInfo`s and stack the thread has already
+    pub inline_depth: u8,
+    /// The sorted slots any op of the body writes (inline offsets applied):
+    /// a side trace compiled from one of its exits checks them for
+    /// registers it would read before writing.
     pub body_writes: Box<[u32]>,
     /// Down-recursion stitch link populated by
     /// the lowerer's `downrec_idx_opt` arm

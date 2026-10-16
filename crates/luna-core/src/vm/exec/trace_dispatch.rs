@@ -102,7 +102,8 @@ impl Vm {
         // marshal-in fills the frame's registers; the rest start at zero
         reg_state.resize(reg_state_len, 0i64);
         reg_state[max_stack.min(reg_state_len)..].fill(0);
-        let dispatch_ok = self.trace_marshal_in(
+        let dispatch_ok = self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
+            && self.trace_marshal_in(
             base_us,
             max_stack,
             compile_entry_tags,

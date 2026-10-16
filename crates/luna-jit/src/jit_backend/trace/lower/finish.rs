@@ -318,6 +318,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         // count of Op::Closure ops the trace lowered.
         closure_seen,
         inline_kinds: inline_kinds(pl),
+        inline_depth: record.ops.iter().map(|o| o.inline_depth).max().unwrap_or(0),
         // compute body_writes for the smart side-trace
         // gate. Uses op_offsets (already computed above) to apply
         // inline-depth offsets per op.
