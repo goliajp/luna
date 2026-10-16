@@ -85,6 +85,13 @@ impl Heap {
     /// after all ([`Heap::ghost_table_taken`]).
     pub(crate) fn acct_ghost_table(&mut self, a: usize, h: usize) -> Result<GhostRef, Oom> {
         let (g, at) = self.ghost_push(self.sizes.table as u32)?;
+        // room for the two parts first: no half record is left behind
+        // SAFETY: `ghost_push` just returned `g`, a live record of this heap
+        if let Err(e) = unsafe { (*g).sizes.reserve(2) } {
+            // SAFETY: as above
+            unsafe { (*g).sizes.pop() };
+            return Err(e);
+        }
         self.ghost_push(PART)?;
         self.ghost_push(PART)?;
         self.acct_obj(PucKind::Table, self.sizes.table);
