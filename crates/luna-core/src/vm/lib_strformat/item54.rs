@@ -108,7 +108,7 @@ pub(super) fn item54(
         }
         b's' => {
             if form.len() == 2
-                && let Some(s) = plain_str(vm, a, arg)
+                && let Some(s) = plain_str(vm, a, arg)?
             {
                 vm.buf_push(out, s.as_bytes())?;
                 return Ok((p + 1, Added::Value(s)));

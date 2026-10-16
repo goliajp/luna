@@ -78,13 +78,14 @@ impl Heap {
         f: NativeFn,
         upvals: &[Value],
         objs: &[(PucKind, usize)],
+        counted: usize,
     ) -> Result<Gc<NativeClosure>, Oom> {
         self.puc.silent += 1;
         let g = self.try_new_builtin(f, upvals, Builtin::None, false);
         self.puc.silent -= 1;
         let g = g?;
         if self.puc.silent == 0 {
-            for &(kind, size) in objs {
+            for &(kind, size) in &objs[counted..] {
                 self.acct_obj(kind, size);
             }
             let sizes = objs.iter().map(|&(_, s)| s).collect();

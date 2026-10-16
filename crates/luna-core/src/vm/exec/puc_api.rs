@@ -34,14 +34,28 @@ impl Vm {
         }
     }
 
-    /// PUC `luaL_getmetafield` on `v`: when `v` has a metatable it pushes
-    /// the event's name (`lua_pushstring`), which checks for a collection.
+    /// PUC `luaL_getmetafield(L, idx, event)` on `v`: when `v` has a
+    /// metatable it pushes the event's name (`lua_pushstring`, which makes
+    /// the string and checks for a collection), the string given back.
     #[inline]
-    pub(crate) fn metafield_check(&mut self, v: Value) {
-        if self.metatable_of(v).is_some() {
-            self.api_check_before();
-            self.api_check_after_rooted();
+    pub(crate) fn metafield_name(
+        &mut self,
+        v: Value,
+        event: &[u8],
+    ) -> Result<Option<Gc<LuaStr>>, LuaError> {
+        if self.metatable_of(v).is_none() {
+            return Ok(None);
         }
+        self.api_check_before();
+        let s = self.alloc_str(event)?;
+        self.api_check_after(Value::Str(s));
+        Ok(Some(s))
+    }
+
+    /// [`Vm::metafield_name`] where only the push matters.
+    #[inline]
+    pub(crate) fn metafield_check(&mut self, v: Value, event: &[u8]) -> Result<(), LuaError> {
+        self.metafield_name(v, event).map(drop)
     }
 
     /// `f` as an API call that pushes the string it makes: checked for

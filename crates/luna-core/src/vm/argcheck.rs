@@ -83,8 +83,11 @@ pub(crate) fn type_error(vm: &mut Vm, a: Args, i: u32, expected: &str) -> LuaErr
     let got = typename_at(vm, a, i);
     // 5.3+ look a `__name` up first, which stays pushed when present; then
     // the message is pushed before `luaL_argerror` adds to it
-    if vm.version() >= LuaVersion::Lua53 && !a.is_none(i) {
-        vm.metafield_check(a.get(vm, i));
+    if vm.version() >= LuaVersion::Lua53
+        && !a.is_none(i)
+        && let Err(e) = vm.metafield_check(a.get(vm, i), b"__name")
+    {
+        return e;
     }
     let named = vm.version() >= LuaVersion::Lua53
         && !a.is_none(i)
@@ -95,6 +98,7 @@ pub(crate) fn type_error(vm: &mut Vm, a: Args, i: u32, expected: &str) -> LuaErr
         return e;
     }
     vm.native_push(1);
+    vm.api_check_before();
     let msg = vm.pushfstring(
         b"%s expected, got %s",
         &[
@@ -102,6 +106,9 @@ pub(crate) fn type_error(vm: &mut Vm, a: Args, i: u32, expected: &str) -> LuaErr
             crate::runtime::puc_fmt::FmtArg::S(got.as_bytes()),
         ],
     );
+    if let Ok(m) = msg {
+        vm.api_check_after(Value::Str(m));
+    }
     match msg {
         Ok(m) => {
             let m = String::from_utf8_lossy(m.as_bytes()).into_owned();

@@ -28,7 +28,7 @@ impl Vm {
     /// PUC `luaL_tolstring` (5.2+), the string made as PUC makes it.
     pub(crate) fn tolstring(&mut self, v: Value, extra: u32) -> Result<Gc<LuaStr>, LuaError> {
         // `luaL_callmeta(L, idx, "__tostring")`
-        self.metafield_check(v);
+        self.metafield_check(v, b"__tostring")?;
         let mm = self.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
             // `luaL_callmeta` is a plain `lua_call`: `__tostring` cannot yield.
@@ -82,7 +82,7 @@ impl Vm {
                 } else {
                     // 5.3 on: `luaL_getmetafield(L, idx, "__name")`
                     if self.version >= LuaVersion::Lua53 {
-                        self.metafield_check(v);
+                        self.metafield_check(v, b"__name")?;
                     }
                     self.obj_typename(v)
                 };
@@ -108,6 +108,9 @@ impl Vm {
             Value::Int(_) | Value::Float(_) => {
                 let s = self.number_string(v)?;
                 self.nat_set_arg(fs, arg, Value::Str(s));
+                // `lua_pushstring` of the converted text, which checks
+                // before it finds the string made already
+                self.api_check_before();
                 Ok(s)
             }
             _ => self.pushed_text(v),

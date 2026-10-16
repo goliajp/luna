@@ -90,27 +90,29 @@ pub(super) fn item51(
         b's' => {
             if v >= LuaVersion::Lua53
                 && body.is_empty()
-                && let Some(s) = plain_str(vm, a, arg)
+                && let Some(s) = plain_str(vm, a, arg)?
             {
                 vm.buf_push(out, s.as_bytes())?;
                 return Ok((p + 1, Added::Value(s)));
             }
             let gs = if v == LuaVersion::Lua51 {
-                argcheck::check_string(vm, a, arg)?
+                Some(argcheck::check_string(vm, a, arg)?)
             } else {
                 // a `__tostring` runs above the buffer's slot
                 let buf = vm.buffer_slot(out.len());
                 if v == LuaVersion::Lua52 {
-                    let b = tolstring_52(vm, a.get(vm, arg), buf)?;
-                    vm.alloc_str(&b)?
+                    tolstring_52(vm, a.get(vm, arg), buf)?
                 } else {
                     let v = a.get(vm, arg);
-                    vm.tolstring(v, buf)?
+                    Some(vm.tolstring(v, buf)?)
                 }
             };
-            let s = gs.as_bytes().to_vec();
+            let s = gs.map_or(b"(null)".to_vec(), |g| g.as_bytes().to_vec());
             let has_prec = body.contains(&b'.');
-            if v >= LuaVersion::Lua53 && body.is_empty() {
+            if v >= LuaVersion::Lua53
+                && body.is_empty()
+                && let Some(gs) = gs
+            {
                 vm.buf_push(out, &s)?;
                 added = Added::Value(gs);
             } else {
@@ -119,7 +121,10 @@ pub(super) fn item51(
                     vm.native_push(1);
                     return Err(arg_error(vm, arg + 1, "string contains zeros"));
                 }
-                if !has_prec && s.len() >= 100 {
+                if !has_prec
+                    && s.len() >= 100
+                    && let Some(gs) = gs
+                {
                     vm.buf_push(out, &s)?;
                     added = Added::Value(gs);
                 } else {
@@ -150,21 +155,27 @@ pub(super) fn item51(
 /// 5.2's `luaL_tolstring` does not check what `__tostring` returns: a
 /// value that is not a string or a number formats as C's `%s` of a null
 /// pointer.
-fn tolstring_52(vm: &mut Vm, v: Value, extra: u32) -> Result<Vec<u8>, LuaError> {
+/// The string it leaves pushed; none for such a value.
+fn tolstring_52(
+    vm: &mut Vm,
+    v: Value,
+    extra: u32,
+) -> Result<Option<crate::runtime::Gc<crate::runtime::LuaStr>>, LuaError> {
     let mm = vm.get_mm(v, crate::vm::exec::Mm::ToString);
     if mm.is_nil() {
-        return vm.tostring_value(v);
+        return vm.tolstring(v, extra).map(Some);
     }
-    vm.metafield_check(v);
+    vm.metafield_check(v, b"__tostring")?;
     match vm
         .call_value_pushed(mm, &[v], extra)?
         .first()
         .copied()
         .unwrap_or(Value::Nil)
     {
-        Value::Str(s) => Ok(s.as_bytes().to_vec()),
-        r @ (Value::Int(_) | Value::Float(_)) => Ok(vm.tostring_basic(r)),
-        _ => Ok(b"(null)".to_vec()),
+        Value::Str(s) => Ok(Some(s)),
+        // `lua_tolstring` converts it
+        r @ (Value::Int(_) | Value::Float(_)) => vm.number_string(r).map(Some),
+        _ => Ok(None),
     }
 }
 
