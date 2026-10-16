@@ -124,6 +124,11 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
                 nresults: shape.nresults,
                 n_varargs: shape.n_varargs,
             });
+            // 5.2 checks for a collection on every call of a Lua function,
+            // with the new frame's top: leave in the callee when one is due
+            if pl.opts.dialect == Some(luna_core::version::LuaVersion::Lua52) {
+                gc_due_exit_as(lw, pl, i, 0, luna_core::vm::exec::JIT_GC_CALL);
+            }
         }
         // a return of an inlined function: its values go to the caller's
         // R[A] on, as many as the caller wants (nil past the ones given)

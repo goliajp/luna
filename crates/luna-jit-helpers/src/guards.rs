@@ -35,8 +35,8 @@ pub unsafe extern "C" fn luna_jit_suppress_trace_admit() {
 }
 
 /// 1 when a collection step is due after the allocation compiled code just
-/// made, which then leaves after its op for the interpreter to check the
-/// op at `op_pc` makes (see
+/// made (or the call 5.2 checks at), which then leaves after its op for the
+/// interpreter to check the op at `op_pc` makes (see
 /// `Vm::checkpoint_after_jit`); 0 otherwise.
 ///
 /// # Safety

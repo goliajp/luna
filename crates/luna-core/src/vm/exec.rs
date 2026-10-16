@@ -100,7 +100,7 @@ mod trace_wire;
 mod unwind;
 use coro_ctx::*;
 pub use errors::SpecialErrors;
-pub use frame_ops::JIT_GC_PREV;
+pub use frame_ops::{JIT_GC_CALL, JIT_GC_PREV};
 pub(crate) use hooks::HOOK_YIELD_SLOT;
 pub use hooks::{
     HOOK_MASK_CALL, HOOK_MASK_COUNT, HOOK_MASK_LINE, HOOK_MASK_RETURN, HookState, RustDebugHook,

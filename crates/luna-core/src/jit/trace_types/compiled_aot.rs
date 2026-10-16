@@ -105,6 +105,7 @@ impl CompiledTrace {
             materialize_emit_count: 0,
             closure_seen: 0,
             inline_kinds: 0,
+            inline_depth: 0,
             body_writes: Box::new([]),
             // AOT-install path never triggers a
             // down-recursion stitch (no recorder fires on the

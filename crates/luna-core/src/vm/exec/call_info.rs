@@ -51,3 +51,23 @@ impl Vm {
         }
     }
 }
+
+impl Vm {
+    /// Whether the calls a compiled trace inlines (`depth` levels deep,
+    /// its registers up to `base + window`) fit what the thread has: PUC
+    /// would make them `CallInfo`s and stack where it has not, counted
+    /// and (5.3, 5.4) checked for a collection, so the interpreter runs
+    /// the loop until it has.
+    pub(super) fn inlined_calls_fit(&self, depth: u8, base: u32, window: u32) -> bool {
+        if depth == 0 {
+            return true;
+        }
+        let d = u32::from(depth);
+        let levels = if self.version == LuaVersion::Lua51 {
+            self.frames_in_use() + d <= self.g.frame_size
+        } else {
+            self.ci_in_use() + d <= self.g.ci_alloc
+        };
+        levels && base + window < self.g.stack_last
+    }
+}
