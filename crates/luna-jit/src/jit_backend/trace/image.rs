@@ -1,7 +1,6 @@
-//! A compiled trace as other Vms take it over: its machine code with the
-//! places that hold Vm-specific addresses, what those addresses stand for,
-//! and the data the dispatcher keeps beside the code. Nothing in it points
-//! into the Vm that compiled it.
+//! A compiled trace as other Vms take it over: its machine code, where it
+//! holds Vm-specific addresses and what they stand for, and the dispatcher's
+//! data beside it, none pointing into the Vm that compiled it.
 
 use super::reloc::Code;
 use super::*;
@@ -94,8 +93,7 @@ fn write_upvals(p: &Proto, out: &mut Vec<u8>) {
     }
 }
 
-/// A 64-bit hash of `b`, eight bytes at a time. It only picks the bucket:
-/// a hit is confirmed by comparing the content itself.
+/// A 64-bit hash of `b`, eight bytes at a time, for the bucket only.
 pub(crate) fn hash64(b: &[u8]) -> u64 {
     let mut h: u64 = 0x9e37_79b9_7f4a_7c15 ^ b.len() as u64;
     let (chunks, rest) = b.as_chunks::<8>();
@@ -349,8 +347,7 @@ impl Meta {
     }
 }
 
-/// What the compile of a trace for a Vm that shares its traces hands to
-/// [`build`]: the code, if any, and what its relocations hold here.
+/// What compiling a shared trace hands [`build`]: its code, if any, and its relocations' values.
 pub(crate) struct Captured {
     pub(crate) code: Option<(Tier, Code)>,
     pub(crate) relocs: Vec<(RelocKind, i64)>,

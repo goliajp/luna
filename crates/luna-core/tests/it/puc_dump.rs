@@ -124,8 +124,7 @@ fn luna_dump(version: LuaVersion, source: &str, strip: bool) -> Result<Vec<u8>, 
     let f = vm
         .load(source.as_bytes(), b"=stdin")
         .map_err(|e| format!("luna does not compile it: {}", e.msg_str()))?;
-    // held across a call that may collect
-    vm.pin_host(Value::Closure(f));
+    vm.pin_host(Value::Closure(f)); // held across a call that may collect
     let dump = vm.eval("return string.dump").expect("string.dump")[0];
     let r = vm
         .call_value(dump, &[Value::Closure(f), Value::Bool(strip)])
@@ -136,8 +135,7 @@ fn luna_dump(version: LuaVersion, source: &str, strip: bool) -> Result<Vec<u8>, 
     }
 }
 
-/// Load `bytes` into a luna Vm set up as lua.c and run it, capturing what it
-/// prints the way diff_puc.rs does.
+/// Run `bytes` on a luna Vm set up as lua.c, captured as diff_puc.rs does.
 fn run_on_luna(version: LuaVersion, bytes: &[u8]) -> Result<Outcome, String> {
     let mut vm = super::diff_puc::lua_c_vm(version);
     vm.eval(

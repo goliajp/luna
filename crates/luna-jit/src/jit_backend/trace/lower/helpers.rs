@@ -175,14 +175,10 @@ fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
         .declare_function("luna_jit_op_close", Linkage::Import, &op_close_sig)
         .ok()?;
 
-    // `fn luna_jit_op_tforcall(abs_offset, nvars,
-    // ctrl_out: *mut i64, key_out: *mut i64, val_out: *mut i64, roots) -> i64`.
-    // Batched: helper fills the three out pointers with raw bits
-    // of R[A+2] / R[A+4] / R[A+5] and returns R[A+4]'s tag byte
-    // (0..=11) on success, -1 on deopt. Emit reads the buffer via
-    // cranelift `stack_load` IR (skips per-slot `stack_load` /
-    // `stack_tag` helper calls — 4 helpers per iter would be the
-    // bottleneck).
+    // `fn luna_jit_op_tforcall(abs_offset, nvars, ctrl_out, key_out,
+    // val_out, roots) -> i64`: the raw bits of R[A+2] / R[A+4] / R[A+5]
+    // into the out pointers (one call, not a helper per slot), R[A+4]'s
+    // tag byte returned, -1 to deopt
     let mut op_tforcall_sig = bcx.make_signature();
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
@@ -391,12 +387,9 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
         .declare_function("luna_jit_table_len_checked", Linkage::Import, &len_sig)
         .ok()?;
 
-    // `fn luna_jit_upval_get(idx: i64) -> i64`. The
-    // helper reads `JIT_CL`'s upvals[idx], unpacks to raw payload,
-    // returns it as i64. Type tag is lost across the ABI; the
-    // dispatcher's exit_tags must use the Untouched fallback
-    // (carry the entry tag through) since we can't statically
-    // determine what kind of Value an upval holds.
+    // `fn luna_jit_upval_get(idx: i64) -> i64`: the raw payload of
+    // `JIT_CL`'s upvalue `idx`, without its tag (exit tags carry the
+    // entry tag through)
     let mut upval_get_sig = bcx.make_signature();
     upval_get_sig.params.push(AbiParam::new(types::I64));
     upval_get_sig.returns.push(AbiParam::new(types::I64));
