@@ -126,8 +126,14 @@ impl Vm {
             t => i64::from(t.resolve(chunk, marks)),
         };
         let mut next: Option<(usize, i64)> = None;
+        // the token the previous event named, and the first token at
+        // which the scanner has something left to do
+        let mut last = (TokRef::Start, -1);
+        let mut due = i64::MIN;
         for (i, &(t, ev)) in log.iter().enumerate() {
-            let tok = if t == TokRef::Next {
+            let tok = if t == last.0 {
+                last.1
+            } else if t == TokRef::Next {
                 match next {
                     Some((j, tok)) if j > i => tok,
                     _ => {
@@ -141,7 +147,9 @@ impl Vm {
                     }
                 }
             } else {
-                at(t)
+                let tok = at(t);
+                last = (t, tok);
+                tok
             };
             if let Some(c) = cut
                 && tok >= c.events
@@ -153,7 +161,18 @@ impl Vm {
             }
             #[cfg(feature = "gc-trace")]
             self.heap.trace.line(format_args!("E {tok} {ev:?}"));
-            self.scan_until(r, &mut strs, &mut peaks, tok)?;
+            if tok >= due {
+                self.scan_until(r, &mut strs, &mut peaks, tok)?;
+                due = [
+                    peaks.peek().map(|&&(t, _)| i64::from(t)),
+                    strs.peek().map(|(t, ..)| i64::from(*t)),
+                    r.splices.front().map(|&(t, _)| t),
+                ]
+                .into_iter()
+                .flatten()
+                .min()
+                .unwrap_or(i64::MAX);
+            }
             self.replay_event(r, tok, ev)?;
         }
         if let Some(c) = cut {
