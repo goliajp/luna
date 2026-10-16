@@ -227,9 +227,34 @@ impl Vm {
 
     /// A collection check of PUC's C API inside the running C function:
     /// its stack is live up to its top.
+    #[inline]
     pub(crate) fn native_checkpoint(&mut self) {
+        if self.checkpoint_idle() {
+            return;
+        }
+        self.native_checkpoint_due();
+    }
+
+    #[inline(never)]
+    pub(crate) fn native_checkpoint_due(&mut self) {
         let top = self.native_top().unwrap_or_else(|| self.lua_window_end());
         self.checkpoint(top);
+    }
+
+    /// A checkpoint at which no collection is due and nothing traces or
+    /// checks it: only the safe point is noted.
+    #[inline]
+    pub(crate) fn checkpoint_idle(&mut self) -> bool {
+        let quiet = cfg!(not(any(
+            feature = "gc-trace",
+            feature = "gc-stress",
+            feature = "gc-verify"
+        )));
+        if quiet && !self.heap.gc_due() {
+            self.heap.safe_point();
+            return true;
+        }
+        false
     }
 
     /// 5.1's `luaD_call` checks for a collection when the call returns,
