@@ -48,12 +48,9 @@ fn apply_tail_kinds_and_gates(
         return_idx_opt,
         ..
     } = *pl;
-    // Op::ForLoop at the tail writes R[A] (next loop var), R[A+3]
-    // (visible loop var copy) and, in the 5.4+ count form, R[A+1]
-    // (decremented count), each of R[A]'s kind: the tail only
-    // compiles when R[A..=A+2] share one number kind. Op::TForLoop
-    // writes R[A+2] = R[A+4] on continue, of the key's kind, which the
-    // generic-for tail already left in `current_kinds`.
+    // a tail ForLoop writes R[A], R[A+3] and (5.4+) R[A+1], all of
+    // R[A]'s kind (it compiles only when R[A..=A+2] share one); a
+    // TForLoop's R[A+2] = R[A+4] is already in `current_kinds`
     if let Some(for_loop_idx) = for_loop_idx_opt {
         let rop = &record.ops[for_loop_idx];
         let a = rop.inst.a() as usize;

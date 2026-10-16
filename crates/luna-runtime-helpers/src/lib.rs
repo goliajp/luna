@@ -369,11 +369,9 @@ pub fn run_bytecode_as(bytecode: &[u8], version: LuaVersion) -> i32 {
     run_inner(bytecode, version)
 }
 
-// Re-export of the 56 `luna_jit_*` Cranelift
-// trace-mcode helpers from `luna-jit::jit_backend`. AOT binaries whose
-// embedded `.o` calls these helpers (any trace that does table get/set,
-// upvalue read, concat, etc.) needs them resolvable as strong externs
-// at static-link time.
+// The 56 `luna_jit_*` trace helpers of `luna-jit::jit_backend`: an AOT
+// binary's embedded `.o` calls them, so they must resolve as strong
+// externs at static-link time.
 //
 // The challenge: `luna-runtime-helpers` does not call these symbols
 // itself, so a plain `pub use luna_jit::jit_backend::luna_jit_*` would
