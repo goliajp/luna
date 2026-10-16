@@ -69,6 +69,7 @@ fn parse_format(vm: &mut Vm, fmt: Value, argno: u32) -> Result<Fmt, LuaError> {
             // `luaL_checkstring`'s type error: a `__name` it found, then
             // the message, pushed
             let tn = argcheck::typename_of(vm, fmt);
+            vm.metafield_check(fmt);
             let named = !vm.get_mm(fmt, crate::vm::exec::Mm::Name).is_nil();
             vm.native_push(1 + u32::from(named));
             return Err(arg_error(vm, argno, &format!("string expected, got {tn}")));
