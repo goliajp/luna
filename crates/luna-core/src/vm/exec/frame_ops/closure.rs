@@ -10,17 +10,38 @@ impl Vm {
         cl: Gc<LuaClosure>,
         base: u32,
     ) -> Result<(), LuaError> {
-        let proto = cl.proto.protos[inst.bx() as usize];
+        let nc = self.closure_over(cl, inst.bx() as usize, base, true)?;
+        self.set_r(base, inst.a(), Value::Closure(nc));
+        self.checkpoint_after_op(inst, base);
+        Ok(())
+    }
+
+    /// OP_CLOSURE for compiled code, in a frame of `cl` whose registers
+    /// start at `base`: `None` when an allocation fails (compiled code may
+    /// hold new objects only in registers, so no emergency collection
+    /// runs; the interpreter then makes the closure).
+    #[doc(hidden)]
+    pub fn jit_closure(&mut self, cl: Gc<LuaClosure>, idx: usize, base: u32) -> Option<Gc<LuaClosure>> {
+        self.closure_over(cl, idx, base, false).ok()
+    }
+
+    /// A new closure of `cl.proto.protos[idx]` in a frame of `cl` whose
+    /// registers start at `base`; `collect`: an allocation that fails may
+    /// run an emergency collection.
+    fn closure_over(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        idx: usize,
+        base: u32,
+        collect: bool,
+    ) -> Result<Gc<LuaClosure>, LuaError> {
+        use crate::runtime::function::{INLINE_UPVALS_N, Upvalue};
+        let proto = cl.proto.protos[idx];
         let n_ups = proto.upvals.len();
-        // Build upvals on the stack for small
-        // closures, skipping the per-call Vec/Box alloc
-        // that closure_alloc's 10k iters pay. INLINE_UPVALS_N
-        // = 2 covers most Lua source (1 captured local, or
-        // _ENV + a single capture). Beyond that, fall back
-        // to a heap Vec.
-        use crate::runtime::function::INLINE_UPVALS_N;
-        let mut stack_buf: [std::mem::MaybeUninit<Gc<crate::runtime::function::Upvalue>>;
-            INLINE_UPVALS_N] = [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
+        // most closures capture one or two variables: their upvalues are
+        // gathered on the stack
+        let mut stack_buf: [std::mem::MaybeUninit<Gc<Upvalue>>; INLINE_UPVALS_N] =
+            [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
         let mut heap_buf = crate::runtime::mem::LVec::new(self.heap.mem());
         let use_inline = n_ups <= INLINE_UPVALS_N;
         if !use_inline {
@@ -29,68 +50,20 @@ impl Vm {
         // PUC makes the closure first, then the upvalues it finds no open
         // one for (`luaF_findupval`): the new ones are counted after it
         self.heap.puc.silent += 1;
-        for (i, d) in proto.upvals.iter().enumerate() {
-            // a new upvalue goes on the open list, a root
-            let uv = if d.in_stack {
-                match self.try_find_or_create_upval(base + d.index as u32) {
-                    Ok(uv) => uv,
-                    Err(e) => {
-                        self.heap.puc.silent -= 1;
-                        return Err(e);
-                    }
-                }
-            } else {
-                cl.upvals()[d.index as usize]
-            };
-            if use_inline {
-                stack_buf[i] = std::mem::MaybeUninit::new(uv);
-            } else {
-                heap_buf.push(uv)?;
-            }
-        }
-        // Tiny shim around the two paths so the 5.1 _ENV
-        // clone + cache check below see one uniform
-        // `&mut [Gc<Upvalue>]`. The stack_buf slice points
-        // into the local frame (still valid through the
-        // rest of this Op::Closure handler).
-        let ups: &mut [Gc<crate::runtime::function::Upvalue>] = if use_inline {
-            // SAFETY: the first n_ups slots of stack_buf
-            // were initialised above; we hand out a slice
-            // covering exactly them.
-            unsafe {
-                std::slice::from_raw_parts_mut(
-                    stack_buf.as_mut_ptr() as *mut Gc<crate::runtime::function::Upvalue>,
-                    n_ups,
-                )
-            }
-        } else {
-            &mut heap_buf[..]
-        };
-        // PUC 5.1 had per-function environments: every Lua
-        // function carried its own `env` slot, snapshotted from
-        // the creating function's env at closure time, so a
-        // `setfenv` on one closure never bled into a sibling.
-        // luna shares the creator's closed `_ENV` cell instead of
-        // copying it: `setfenv` never writes a cell in place but gives
-        // the target a new one (`set_closure_env`), so sharing reads
-        // the same as a snapshot. An open cell can change under the
-        // child, so that one is still snapshotted.
-        if self.version() <= LuaVersion::Lua51 && proto.env_upval_idx != u8::MAX {
-            let i = proto.env_upval_idx as usize;
-            if let UpvalState::Open { slot, thread } = ups[i].state() {
-                let cur = self.read_slot(slot, thread);
-                // young until the closure holds it
-                match self.retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Closed(cur))) {
-                    Ok(uv) => ups[i] = uv,
-                    Err(e) => {
-                        self.heap.puc.silent -= 1;
-                        return Err(e);
-                    }
-                }
-            }
-        }
+        let r = self.gather_upvals(cl, proto, base, collect, &mut stack_buf, &mut heap_buf);
         self.heap.puc.silent -= 1;
-        let nc = self.try_closure_from_proto(proto, ups)?;
+        r?;
+        let ups: &[Gc<Upvalue>] = if use_inline {
+            // SAFETY: `gather_upvals` initialised the first `n_ups` slots
+            unsafe { std::slice::from_raw_parts(stack_buf.as_ptr() as *const Gc<Upvalue>, n_ups) }
+        } else {
+            &heap_buf[..]
+        };
+        let nc = if collect {
+            self.try_closure_from_proto(proto, ups)?
+        } else {
+            self.jit_closure_from_proto(proto, ups).ok_or(LuaError(Value::Nil))?
+        };
         // (5.1's environment is not an upvalue in PUC: never counted)
         let upval = self.heap.sizes.upval;
         for (i, uv) in ups.iter().enumerate() {
@@ -100,15 +73,56 @@ impl Vm {
                     .acct_promote_obj(h, crate::runtime::heap::PucKind::Upval, upval);
             }
         }
-        self.set_r(base, inst.a(), Value::Closure(nc));
-        // 5.1 code puts a closure straight into the variable it is assigned
-        // to, which may lie below other live registers: the whole frame stays
-        let live = if self.version() <= LuaVersion::Lua51 {
-            (cl.proto.max_stack as u32).max(inst.a() + 1)
-        } else {
-            inst.a() + 1
-        };
-        self.checkpoint(base + live);
+        Ok(nc)
+    }
+
+    /// The upvalues of a new closure of `proto` in a frame of `cl` at
+    /// `base`, into the first `proto.upvals.len()` slots of `inline` (when
+    /// they fit) or onto `heap`. 5.1 gives the closure its own `_ENV`
+    /// cell: luna shares the creator's closed one (`setfenv` never writes
+    /// a cell in place but gives the function a new one, so sharing reads
+    /// as PUC's copy), and snapshots an open one, which can change under
+    /// the child.
+    fn gather_upvals(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        proto: Gc<crate::runtime::function::Proto>,
+        base: u32,
+        collect: bool,
+        inline: &mut [std::mem::MaybeUninit<Gc<crate::runtime::function::Upvalue>>],
+        heap: &mut crate::runtime::mem::LVec<Gc<crate::runtime::function::Upvalue>>,
+    ) -> Result<(), LuaError> {
+        let use_inline = proto.upvals.len() <= inline.len();
+        let e51 = (self.version() <= LuaVersion::Lua51).then_some(proto.env_upval_idx as usize);
+        for (i, d) in proto.upvals.iter().enumerate() {
+            // a new upvalue goes on the open list, a root
+            let mut uv = if !d.in_stack {
+                cl.upvals()[d.index as usize]
+            } else if collect {
+                self.try_find_or_create_upval(base + d.index as u32)?
+            } else {
+                self.jit_find_or_create_upval(base + d.index as u32)
+                    .ok_or(LuaError(Value::Nil))?
+            };
+            if e51 == Some(i)
+                && let UpvalState::Open { slot, thread } = uv.state()
+            {
+                let cur = self.read_slot(slot, thread);
+                // young until the closure holds it
+                uv = if collect {
+                    self.retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Closed(cur)))?
+                } else {
+                    self.heap
+                        .try_new_upvalue(UpvalState::Closed(cur))
+                        .map_err(|_| LuaError(Value::Nil))?
+                };
+            }
+            if use_inline {
+                inline[i] = std::mem::MaybeUninit::new(uv);
+            } else {
+                heap.push(uv)?;
+            }
+        }
         Ok(())
     }
 
