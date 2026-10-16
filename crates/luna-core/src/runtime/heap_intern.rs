@@ -152,13 +152,11 @@ impl Heap {
     pub(crate) fn try_intern_parts(&mut self, parts: &[&[u8]]) -> Result<Gc<LuaStr>, Oom> {
         let n: usize = parts.iter().map(|p| p.len()).sum();
         if n <= string::MAX_SHORT_LEN {
-            let mut buf = [0u8; string::MAX_SHORT_LEN];
-            let mut at = 0;
-            for p in parts {
-                buf[at..at + p.len()].copy_from_slice(p);
-                at += p.len();
-            }
-            return self.try_intern(&buf[..n]);
+            return self.try_intern(joined(parts, &mut [0u8; string::MAX_SHORT_LEN]));
+        }
+        // 5.1 looks every string up by its bytes
+        if self.hash51 && n <= 512 {
+            return self.try_intern(joined(parts, &mut [0u8; 512]));
         }
         if self.hash51 {
             return self.try_intern(&parts.concat());
@@ -288,4 +286,14 @@ pub(super) fn make_seed() -> u32 {
     h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
     h ^= h >> 33;
     h as u32
+}
+
+/// `parts` one after another in `buf`, which has room for them.
+fn joined<'b>(parts: &[&[u8]], buf: &'b mut [u8]) -> &'b [u8] {
+    let mut at = 0;
+    for p in parts {
+        buf[at..at + p.len()].copy_from_slice(p);
+        at += p.len();
+    }
+    &buf[..at]
 }
