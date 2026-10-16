@@ -225,6 +225,11 @@ impl Vm {
                 base + max.max(inst.a() + 1)
             }
             _ if v51 && inst.op() == Op::NewTable => self.frame_top(),
+            // 5.1's iterator call, its results the top
+            Op::TForCall | Op::TForCall53 | Op::TForCall55 => {
+                let lay = inst.op().for_layout().expect("a loop op");
+                base + inst.a() + lay.var() + inst.c()
+            }
             _ => base + inst.a() + 1,
         };
         self.checkpoint(top);

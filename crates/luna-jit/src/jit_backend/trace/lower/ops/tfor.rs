@@ -140,6 +140,13 @@ pub(super) fn emit_tfor_helper_call<E: Emit>(
         .ins()
         .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, status_or_tag, 0);
     guard!(lw, pl, ok, i, rop.pc);
+    // 5.1's `luaD_call` checks for a collection when the iterator returns:
+    // a step due is noted for whichever exit the loop takes next
+    if pl.opts.dialect == Some(luna_core::version::LuaVersion::Lua51) {
+        let fref = lw.bcx.import_func(lw.h.rt.gc_due_id);
+        let pc = lw.bcx.ins().iconst(types::I64, i64::from(rop.pc));
+        lw.bcx.ins().call(fref, &[pc]);
+    }
     // key tag | value tag << 8 (Vm::jit_op_tforcall)
     let key_tag = lw.bcx.ins().band_imm_u(status_or_tag, 0xff);
     let val_tag = lw.bcx.ins().ushr_imm_u(status_or_tag, 8);

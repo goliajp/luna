@@ -173,6 +173,11 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
         && body_pc == record.head_pc
         && loop_kinds_match(&tail_kinds, &lw.head_kinds)
     {
+        // the step 5.1's iterator call made due is the interpreter's
+        if pl.opts.dialect == Some(luna_core::version::LuaVersion::Lua51) {
+            let call_pc = record.ops[for_loop_idx - 1].pc;
+            gc_due_exit_as(lw, pl, for_loop_idx, body_pc, call_pc);
+        }
         emit_back_edge(lw, pl);
     } else {
         emit_store_back_and_return_pc(
