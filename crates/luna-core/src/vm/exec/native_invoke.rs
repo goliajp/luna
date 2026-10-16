@@ -212,10 +212,9 @@ impl Vm {
         } else {
             self.running_natives.pop();
         }
+        // no check for a collection: PUC's `luaD_poscall` makes none, the
+        // native checked where its API calls do
         self.finish_results(func_slot, nret, nresults);
-        // the native may have allocated; collect with the results as
-        // the live boundary (PUC checks GC after a call returns).
-        self.checkpoint(self.top);
         Ok(())
     }
 }

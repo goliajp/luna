@@ -278,8 +278,7 @@ impl Vm {
             .expect("commit_async_native_result without a pending ctx");
         self.finish_results(ctx.func_slot, nret, ctx.nresults);
         // Fire the matching "return" hook for the
-        // async native, after results land in the call window and
-        // before the post-call GC checkpoint. Mirrors the sync
+        // async native, after results land in the call window. Mirrors the sync
         // native's `hook_return(true, nargs + 1, nret)` placement in
         // `exec.rs`. The sync path widens its C-frame argument window
         // around the hook so `debug.getlocal(2, ftransfer..)` reads
@@ -290,12 +289,8 @@ impl Vm {
         // `hook_return` carry the same information for Rust hooks
         // and for Lua hooks reading `debug.getinfo(.).ftransfer`.
         let ftransfer = ctx.nargs + 1;
-        self.hook_return(true, ftransfer, nret)?;
-        // Same post-call GC checkpoint the sync path runs: the native
-        // may have allocated, and the live boundary is now the result
-        // window.
-        self.checkpoint(self.top);
-        Ok(())
+        // no check for a collection: PUC's `luaD_poscall` makes none
+        self.hook_return(true, ftransfer, nret)
     }
 }
 
