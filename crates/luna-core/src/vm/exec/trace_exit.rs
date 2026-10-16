@@ -6,9 +6,35 @@ use super::*;
 use crate::jit::trace::CompiledTrace;
 
 impl Vm {
-    /// The trace `ct` entered at `pc` returned `continuation_pc`.
+    /// The trace `ct` entered at `pc` returned `continuation_pc`; one that
+    /// left after an allocation with a step due checks for a collection.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn trace_exit_restore(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        base: u32,
+        ct: &CompiledTrace,
+        continuation_pc: i64,
+        pre_frames: usize,
+        reg_state: Vec<i64>,
+        entry_tags: Vec<u8>,
+    ) {
+        self.trace_exit_regs(
+            cl,
+            base,
+            ct,
+            continuation_pc,
+            pre_frames,
+            reg_state,
+            entry_tags,
+        );
+        if let Some(op_pc) = self.jit.gc_exit.take() {
+            self.checkpoint_after_jit(op_pc);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn trace_exit_regs(
         &mut self,
         cl: Gc<LuaClosure>,
         base: u32,
@@ -23,33 +49,12 @@ impl Vm {
         let global_tag_res_kind = ct.global_tag_res_kind;
         let max_stack = cl.proto.max_stack as usize;
         let base_us = base as usize;
-        // Restore each slot using the trace's
-        // exit-tag analysis (see ExitTag docs).
-        // Decode the IR's
-        // side-exit shape. Upper 32 bits = (site_idx
-        // + 1) for inline cmp side-exits, 0 for
-        // legacy clean-tail / non-inline exits.
-        // The decode lives in
-        // `crate::jit::trace::decode_exit_shape` so
-        // side-trace returns can reuse it with the SIDE
-        // TRACE's shape inputs when the sentinel bit
-        // is set on `raw_ret`.
+        // the exit's shape (`decode_exit_shape`): the upper 32 bits are the
+        // inline side exit's site + 1 (0 for any other exit). Bit 63 marks
+        // a return from a side trace the parent tail-called, bits 56..=62
+        // its key in `side_trace_cache`: the low bits are then decoded
+        // with the child's shapes, not the parent's
         let raw_ret = continuation_pc as u64;
-        // Side-trace return decode.
-        // Bit 63 of `raw_ret` is the side-trace
-        // marker the parent's IR OR'd in when it
-        // tail-called into a wired child trace.
-        // Bits 56..=62 carry the sentinel code (the
-        // cache key into the parent's
-        // `side_trace_cache`); bits 0..=55 are the
-        // child's own return value (encoded site or
-        // plain cont_pc) which we MUST decode using
-        // the CHILD's per_exit_inline / per_exit_tags
-        // / exit_tags / exit_hit_counts — not the
-        // parent's. The dispatcher snapshot read
-        // above holds the parent's shapes; when bit
-        // 63 is set we re-fetch the child's via the
-        // sentinel-keyed cache.
         let from_side_trace = (raw_ret >> 63) & 1 == 1;
         let src = self.trace_exit_source(cl, ct, raw_ret, &mut reg_state, base_us, &entry_tags);
         if src.ran && src.off > 0 {
@@ -77,35 +82,20 @@ impl Vm {
         let cont_pc = decoded.cont_pc;
         let exit_hit_idx = decoded.exit_hit_idx;
         let exit_tags_for_pc = decoded.exit_tags_for_pc;
-        // When a side trace ran (tail-called by the
-        // parent's code or invoked here), force
-        // using_global_exit_tags=false so the restore
-        // loop takes the per-tag slow path:
-        // `global_tag_res_kind` classifies the parent's
-        // exit tags, not the child's.
+        // after a side trace ran, the per-tag path: `global_tag_res_kind`
+        // classifies the parent's exit tags, not the child's
         let using_global_exit_tags = if child_ran {
             false
         } else {
             decoded.using_global_exit_tags
         };
-        // Increment the counter (saturate
-        // at u32::MAX to avoid wrap on long runs).
-        // Track whether this increment is
-        // the one that crossed `HOTEXIT_THRESHOLD`
-        // (transition: previous v < threshold, new v
-        // == threshold). The side-trace start is
-        // deferred to just before `continue;` so
-        // vm.stack and frame.pc are fully restored
-        // (the snapshot reads post-restore values).
+        // the exit's hit count (the child's after a side trace), saturating;
+        // the one that reaches `HOTEXIT_THRESHOLD` starts a side trace
+        // once the stack and pc are restored
         let mut side_trace_should_start = false;
-        // For side-trace returns the
-        // counter to bump is the CHILD's (decoded
-        // shape lookup) — `exit_hit_idx` is into the
-        // decoded layout, so use the matching
-        // `decode_hit_counts`. For parent decode
-        // they're aliased (clone of the parent's
-        // own Rc).
-        let tier_exit = !child_ran && is_tier_exit(ct, cont_pc);
+        // an exit to check for a collection is no guard failing either: it
+        // starts no side trace, which would run past the check
+        let tier_exit = !child_ran && is_tier_exit(ct, cont_pc) || self.jit.gc_exit.is_some();
         if let Some(c) = decode_hit_counts.get(exit_hit_idx).filter(|_| !tier_exit) {
             let v = c.get();
             if v < u32::MAX {

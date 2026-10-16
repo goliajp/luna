@@ -174,7 +174,7 @@ pub(super) fn emit_sequence_op<E: Emit>(
                     lw.bcx.ins().call(update_raw_ref, &[slot_arg, raw_arg]);
                 }
             }
-            // the concat steps the collector: the operands are on the
+            // an emergency collection may run: the operands are on the
             // stack now and the registers below them go as roots
             let roots = emit_ssa_roots(lw, i, off + a_us);
             let a_arg = lw.bcx.ins().iconst(types::I64, a_us as i64);
@@ -196,6 +196,7 @@ pub(super) fn emit_sequence_op<E: Emit>(
                 lw.bcx.def_var(regs[r], result_raw);
                 lw.current_kinds[off + r] = RegKind::Str;
             }
+            gc_due_exit(lw, pl, i, rop.pc + 1);
         }
         _ => unreachable!("routed by emit_op"),
     }

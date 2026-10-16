@@ -42,6 +42,8 @@ fn closed_record(proto: Gc<Proto>, head_pc: u32, ops: &[Inst]) -> TraceRecord {
 /// reads as a table before writing it holds a live table's
 /// `Gc::as_ptr()`: the helpers dereference it.
 unsafe fn run_trace(vm: &mut Vm, ct: &CompiledTrace, state: &mut [i64]) -> i64 {
+    // no collection falls due: the trace leaves only where these tests look
+    vm.host_gc(0, [0; 3]).expect("LUA_GCSTOP");
     let _guard = enter_jit(vm, None);
     // SAFETY: the caller's contract; the guard above gives the helpers
     // the Vm

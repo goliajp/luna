@@ -82,8 +82,7 @@ pub struct JitState {
     /// cache for a trace whose record carries the snapshot.
     pub(crate) field_ic_enabled: bool,
 
-    /// The trace currently being recorded, or `None` if
-    /// the dispatch loop is in normal interpretation mode.
+    /// The trace being recorded, if any.
     pub active_trace: Option<Box<crate::jit::trace::TraceRecord>>,
 
     /// Index into `Vm.frames` of the Lua frame that the
@@ -97,12 +96,9 @@ pub struct JitState {
     /// Diagnostic counters; see [`JitCounters`].
     pub counters: JitCounters,
 
-    /// JIT-side error inbox set by a JIT table helper
-    /// when it detects a metatable on the target table. Taken by
-    /// the dispatcher after the JIT entry returns; the interp path
-    /// re-executes the call with proper `__index`/`__newindex`
-    /// semantics. Always `None` outside a JIT entry window.
-    /// Written from `luna::jit_backend::*` Cranelift helpers.
+    /// Set by a helper of compiled code that cannot go on (a metatable on
+    /// the table, no memory): the dispatcher runs the call in the
+    /// interpreter instead. `None` outside compiled code.
     pub pending_err: Option<LuaError>,
 
     /// Reusable buffer for the trace JIT dispatcher's
@@ -115,15 +111,12 @@ pub struct JitState {
     /// nested entries stack; the collector treats them as roots.
     pub ssa_roots: Vec<Value>,
 
-    /// Pool of reusable per-trace string accumulator buffers, in the Vm's
-    /// allocation context: they grow with the string a loop builds.
+    /// Reusable string accumulator buffers, in the allocation context.
     pub str_buf_pool: Vec<crate::runtime::mem::LVec<u8>>,
 
     /// Cap on the buffer pool size.
     pub str_buf_pool_cap: usize,
-
-    /// Companion buffer for `entry_tags` (one u8 per
-    /// register at trace dispatch entry).
+    /// Companion buffer for `entry_tags` (one u8 per register at entry).
     pub entry_tags_buf: Vec<u8>,
 
     /// Closure-compile backend the dispatcher
@@ -135,19 +128,12 @@ pub struct JitState {
     /// Trace-JIT backend.
     pub trace_compiler: Box<dyn crate::jit::TraceCompiler>,
 
-    /// Bounded stitch-back depth remaining for
-    /// the dispatcher's `is_downrec_sentinel` admit path. Cycle-
-    /// safety checkpoint: a `downrec_link`-bearing
-    /// trace whose stitch target is itself can in principle keep
-    /// returning the DOWNREC sentinel forever, and the dispatcher
-    /// would forever re-admit it on the next interpreter loop
-    /// iteration. The counter is consulted BEFORE every downrec
-    /// admit; each admit decrements; when it would reach a negative
-    /// value the dispatcher refuses entry and force-deopts via
+    /// Downrec admits left before the dispatcher refuses one (a trace that
+    /// stitches back to itself could return the DOWNREC sentinel forever):
+    /// each admit takes one; at none the dispatcher force-deopts through
     /// [`Self::suppress_downrec_admit_once`]. Reset to
-    /// [`JitState::STITCH_DEPTH_DEFAULT`] each natural deopt or when the
-    /// suppress flag fires (so a subsequent interp tick past `head_pc`
-    /// re-arms the budget). Default = the constant.
+    /// [`JitState::STITCH_DEPTH_DEFAULT`] at each natural deopt and when
+    /// that flag fires.
     pub stitch_depth_remaining: u32,
 
     /// One-shot suppression flag for the dispatcher's trace admit. Set
@@ -175,6 +161,10 @@ pub struct JitState {
     /// stack left): unlike `pending_err` it is the call's outcome, raised
     /// where the compiled code was entered, not a reason to run it again.
     pub pending_raise: Option<LuaError>,
+    /// compiled code left after an allocation with a collection step due:
+    /// the interpreter checks for it as after the op that allocated, at
+    /// this pc (`u32::MAX`: the one before the pc it resumes at)
+    pub gc_exit: Option<u32>,
 }
 
 impl JitState {
@@ -422,6 +412,7 @@ impl JitState {
             counters: JitCounters::default(),
             pending_err: None,
             pending_raise: None,
+            gc_exit: None,
             reg_state_buf: Vec::new(),
             ssa_roots: Vec::new(),
             str_buf_pool: Vec::new(),

@@ -17,8 +17,7 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
     let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::NewTable => {
-            // sunk path: skip the heap alloc helper. The site's virt slot
-            // Variables (allocated pre-emit) hold the array elements directly.
+            // sunk path: no helper; the site's virtual slots hold the elements.
             // `current_kinds` for the site's slot stays at its entry value
             // (Unset → maps to ExitTag::Untouched, so the dispatcher carries
             // the entry tag in the restore).
@@ -40,6 +39,7 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
             guard!(lw, pl, ok, i, oc.rop.pc);
             lw.bcx.def_var(regs[ins.a() as usize], t);
             lw.current_kinds[off + ins.a() as usize] = RegKind::Table;
+            gc_due_exit(lw, pl, i, oc.rop.pc + 1);
         }
         Op::GetI => {
             // sunk path: a GetI from a Sinkable site at a key in `1..=cap`
