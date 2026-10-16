@@ -57,10 +57,13 @@ pub(super) fn item54(
         return Err(raise_str(vm, "invalid format (too long)"));
     }
     let conv = byte_at(fmt, p);
-    let mut form = Vec::with_capacity(p - start + 2);
-    form.push(b'%');
-    form.extend_from_slice(&fmt[start..p]);
-    form.push(conv);
+    // the length check above keeps it within `MAX_FORMAT`
+    let mut fbuf = [0u8; MAX_FORMAT];
+    let n = p - start;
+    fbuf[0] = b'%';
+    fbuf[1..=n].copy_from_slice(&fmt[start..p]);
+    fbuf[n + 1] = conv;
+    let form = &fbuf[..n + 2];
     let sp = Spec::parse(&fmt[start..p]);
     match conv {
         b'c' => {
