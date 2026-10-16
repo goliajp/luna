@@ -251,10 +251,16 @@ impl Vm {
         Ok(())
     }
 
-    /// A new parser table (`luaH_new`).
+    /// A new parser table (`luaH_new`): the chunk's (5.3 on) takes every
+    /// string the scanner makes, a function's only some.
     fn new_ptab(&mut self, r: &mut Replay) -> Result<PTab, SyntaxError> {
         r.tabs += 1;
-        PTab::new(&mut self.heap, r.tabs)
+        let keys = if r.tabs == 1 && r.d >= Dialect::L53 {
+            r.scanned.strings.len() + 8
+        } else {
+            16
+        };
+        PTab::new(&mut self.heap, r.tabs, keys)
     }
 
     /// `luaD_protectedparser` frees the scanner's buffer and the parser's
