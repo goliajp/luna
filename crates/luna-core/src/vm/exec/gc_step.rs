@@ -21,6 +21,7 @@ impl Vm {
     pub(crate) fn puc_step(&mut self) {
         let d = self.heap.table_dialect;
         self.gc_hold_threads();
+        self.jit_forget_ghosts();
         #[cfg(feature = "gc-trace")]
         self.trace_step(false);
         match d {
