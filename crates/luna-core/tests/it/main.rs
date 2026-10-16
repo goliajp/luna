@@ -42,6 +42,7 @@ mod instr_budget_sticky;
 mod int_mod_idiv;
 mod io_popen_double_close;
 mod jit_default_off;
+mod lib_roots_under_gc;
 mod library_edge_arguments;
 mod load_memory_errors;
 mod load_oom_paths;
