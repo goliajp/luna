@@ -58,6 +58,16 @@ impl<S: Source> Lexer<'_, S> {
         }
         // the lex buffer of a numeral is its source text
         let text = &self.src.bytes()[start..self.pos];
+        // up to 15 decimal digits: exact as a double, and no conversion of
+        // them sets errno
+        if text.len() <= 15 && text.iter().all(u8::is_ascii_digit) {
+            let n = text.iter().fold(0u64, |a, &c| a * 10 + u64::from(c - b'0'));
+            return Ok(if v.has_integers() {
+                Token::Int(n as i64)
+            } else {
+                Token::Float(n as f64)
+            });
+        }
         let hex = text.len() > 1 && text[0] == b'0' && matches!(text[1], b'x' | b'X');
         {
             use crate::cerrno::conv::{Dialect, number};
