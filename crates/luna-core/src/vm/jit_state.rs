@@ -116,12 +116,10 @@ pub struct JitState {
 
     /// Cap on the buffer pool size.
     pub str_buf_pool_cap: usize,
-    /// by sunk site: the record of the table PUC made for it this round
-    pub(crate) sunk_ghosts: Vec<Option<crate::runtime::heap::GhostRef>>,
-    /// the string PUC made last for a trace's accumulated concatenation:
-    /// the one it entered with, or the record of a long one, which the
-    /// buffer's string stands for once made
-    pub(crate) accum_last: Option<crate::vm::exec::AccumLast>,
+    /// by the depth of nested trace runs: the records of PUC's objects
+    /// each running trace stands for (`TraceGhosts`), and the depth
+    pub(crate) ghosts: Vec<crate::vm::exec::TraceGhosts>,
+    pub(crate) ghost_depth: usize,
     /// Companion buffer for `entry_tags` (one u8 per register at entry).
     pub entry_tags_buf: Vec<u8>,
 
@@ -424,8 +422,8 @@ impl JitState {
             str_buf_pool: Vec::new(),
             str_buf_pool_cap: 4,
             entry_tags_buf: Vec::new(),
-            sunk_ghosts: Vec::new(),
-            accum_last: None,
+            ghosts: Vec::new(),
+            ghost_depth: 0,
             chunk_compiler: Box::new(crate::jit::NullJitBackend),
             trace_compiler: Box::new(crate::jit::NullJitBackend),
             stitch_depth_remaining: JitState::STITCH_DEPTH_DEFAULT,

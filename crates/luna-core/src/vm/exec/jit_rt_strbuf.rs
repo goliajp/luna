@@ -3,7 +3,7 @@
 use super::*;
 
 /// What the string of a trace's accumulator buffer stands for (see
-/// `JitState::accum_last`).
+/// `TraceGhosts::accum`).
 #[derive(Clone, Copy)]
 pub(crate) enum AccumLast {
     /// the string the trace entered with, unchanged since
@@ -20,7 +20,7 @@ impl Vm {
     #[doc(hidden)]
     pub fn jit_str_buf_acquire(&mut self) -> Box<crate::runtime::mem::LVec<u8>> {
         let buf = self.jit.str_buf_pool.pop();
-        self.jit.accum_last = None;
+        self.jit_ghosts().accum = None;
         Box::new(buf.unwrap_or_else(|| crate::runtime::mem::LVec::new(self.heap.mem())))
     }
 
@@ -46,7 +46,7 @@ impl Vm {
         piece: Gc<crate::runtime::LuaStr>,
     ) -> bool {
         // the trace's first append: the string it entered with
-        self.jit.accum_last = Some(AccumLast::Entry(piece));
+        self.jit_ghosts().accum = Some(AccumLast::Entry(piece));
         buf.extend_from_slice(piece.as_bytes()).is_ok()
     }
 
@@ -66,7 +66,7 @@ impl Vm {
         if buf.extend_from_slice(piece.as_bytes()).is_err() {
             return -1;
         }
-        self.jit.accum_last = None;
+        self.jit_ghosts().accum = None;
         if buf.len() <= crate::runtime::string::MAX_SHORT_LEN || self.version == LuaVersion::Lua51 {
             if self.heap.try_intern(buf).is_err() {
                 return -1;
@@ -79,7 +79,7 @@ impl Vm {
             let g = self
                 .heap
                 .acct_ghost_ref(crate::runtime::heap::PucKind::LongStr, size);
-            self.jit.accum_last = g.ok().map(AccumLast::Long);
+            self.jit_ghosts().accum = g.ok().map(AccumLast::Long);
         }
         if self.heap.gc_due() && !self.gc_finalizing {
             self.jit.gc_exit = Some(op_pc);
@@ -100,7 +100,7 @@ impl Vm {
     pub fn jit_str_buf_intern(&mut self, buf: &mut crate::runtime::mem::LVec<u8>) -> i64 {
         // hard cap at 256KB
         // the string PUC made last is this one
-        let last = self.jit.accum_last.take();
+        let last = self.jit_ghosts().accum.take();
         if let Some(AccumLast::Entry(e)) = last
             && e.as_bytes() == &buf[..]
         {

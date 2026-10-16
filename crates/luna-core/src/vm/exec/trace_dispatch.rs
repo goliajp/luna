@@ -138,17 +138,12 @@ impl Vm {
             if is_downrec_entry {
                 reg_state[window_size_us] = self.downrec_saved_pc(pre_frames);
             }
-            // `LUNA_AOT_PROBE`
-            // diagnostic hook. The probe fires once per trace dispatch
-            // (regardless of JIT vs AOT origin — both go through this
-            // arm), letting the AOT smoke test verify mcode actually
-            // executed. Guarded behind `OnceLock` so the env read is
-            // a one-time cost per process; not gated on a particular
-            // counter so the smoke test gets a deterministic single-
-            // line `aot_trace_fired pc=N` per first dispatch.
+            // `LUNA_AOT_PROBE`: one line at the first dispatch, for the AOT
+            // smoke test to see compiled code ran
             if jit_probe_enabled() && self.jit.counters.dispatched == 0 {
                 eprintln!("luna-runtime-helpers: aot_trace_fired pc={head_pc_val}");
             }
+            self.jit_ghosts_enter();
             let continuation_pc = {
                 // chunk_compiler.enter
                 // (CraneliftBackend delegates to enter_jit;
@@ -158,6 +153,7 @@ impl Vm {
                 // SAFETY: `entry_fn` is the entry of `ct`, a compiled trace `cl.proto.traces` keeps alive; `reg_state` was sized above to the trace's window (plus the saved-pc slot for a down-recursion entry) and filled by `trace_marshal_in`; the guard above pins this Vm and `cl` for the helpers the trace calls
                 unsafe { entry_fn(reg_state.as_mut_ptr()) }
             };
+            self.jit.ghost_depth -= 1;
             self.jit.counters.dispatched += 1;
             if ct.inline_kinds != 0 {
                 self.count_inline_kinds(ct.inline_kinds);
@@ -184,6 +180,8 @@ impl Vm {
                     self.jit.suppress_downrec_admit_once = true;
                 }
             } else if is_downrec_entry && downrec_close_exit(continuation_pc, head_pc_val) {
+                // a due step leaves through an exit, never the close
+                debug_assert!(self.jit.gc_exit.is_none());
                 self.trace_downrec_classify(continuation_pc, pre_frames);
                 self.jit.reg_state_buf = reg_state;
                 self.jit.entry_tags_buf = entry_tags;
