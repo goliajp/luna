@@ -213,6 +213,29 @@ impl Heap {
         }
     }
 
+    /// `gc-verify`: the short strings the live records hold, each a place
+    /// in PUC's string table.
+    #[cfg(feature = "gc-verify")]
+    pub(in crate::runtime::heap) fn ghost_short_strings(&self) -> usize {
+        let mut n = 0;
+        let mut cur = self.all;
+        // SAFETY: `all` links this heap's live objects; a header tagged
+        // `Ghost` is a `Ghost`
+        unsafe {
+            while !cur.is_null() {
+                if (*cur).tag == ObjTag::Ghost {
+                    let sizes = &(*(cur as *const Ghost)).sizes;
+                    n += sizes
+                        .iter()
+                        .filter(|&&s| s & (SHORT | TAKEN) == SHORT)
+                        .count();
+                }
+                cur = (*cur).next;
+            }
+        }
+        n
+    }
+
     /// A record of PUC's objects freed: each one's free counted.
     ///
     /// # Safety

@@ -134,3 +134,33 @@ fn hash_52(bytes: &[u8], seed: u32) -> u32 {
     }
     h
 }
+
+impl Heap {
+    /// `gc-verify`, once marking is done (the last sweep over): PUC's
+    /// string table holds a place for each counted short string luna has
+    /// and each one a record holds. Panics when the count went astray.
+    #[cfg(feature = "gc-verify")]
+    pub(super) fn verify_string_count(&self, ctx: &str) {
+        // and "not enough memory", which PUC makes at the start and luna
+        // does not
+        let mut n = self.ghost_short_strings() + 1;
+        for mut cur in [self.all, self.fixed] {
+            // SAFETY: the lists link this heap's live objects
+            unsafe {
+                while !cur.is_null() {
+                    if (*cur).tag == ObjTag::Str
+                        && (*(cur as *const LuaStr)).len() <= self.puc.short_max
+                        && (*cur).sub & (UNCOUNTED | EXTERNAL | SWEPT) == 0
+                    {
+                        n += 1;
+                    }
+                    cur = (*cur).next;
+                }
+            }
+        }
+        assert_eq!(
+            n, self.puc.strt_nuse,
+            "{ctx}: counted short strings against PUC's string table"
+        );
+    }
+}

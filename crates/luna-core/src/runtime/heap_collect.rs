@@ -268,6 +268,8 @@ impl Heap {
         self.verify_tricolor("atomic_tail");
         #[cfg(feature = "gc-verify")]
         self.verify_black_children("atomic_tail");
+        #[cfg(feature = "gc-verify")]
+        self.verify_string_count("atomic_tail");
         #[cfg(any(debug_assertions, feature = "gc-verify"))]
         self.verify_slow_bits("atomic_tail");
     }
