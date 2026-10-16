@@ -26,6 +26,23 @@ pub(super) fn new_file(
     Ok(u)
 }
 
+/// `then`, run with the handle PUC makes before an open, `tmpfile` or
+/// `popen` that fails (`newfile`): closed, held while `then` reports the
+/// failure, garbage after.
+pub(super) fn failed_handle<R>(
+    vm: &mut Vm,
+    then: impl FnOnce(&mut Vm) -> Result<R, LuaError>,
+) -> Result<R, LuaError> {
+    vm.api_check_before();
+    let u = new_file(vm, FileHandle::Closed, false)?;
+    vm.api_check_after(Value::Userdata(u));
+    let at = vm.lib_roots.len();
+    vm.lib_roots.push(Value::Userdata(u));
+    let r = then(vm);
+    vm.lib_roots.truncate(at);
+    r
+}
+
 /// `luaL_testudata(L, i, LUA_FILEHANDLE)`: a userdata whose metatable is the
 /// `FILE*` one (luna only gives that metatable to file payloads, but
 /// `debug.setmetatable` can hand it to any userdata).

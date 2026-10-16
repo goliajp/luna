@@ -19,13 +19,15 @@ pub(crate) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         b"r" => true,
         b"w" => false,
         _ if vm.version() >= LuaVersion::Lua53 => {
-            // the new handle is pushed before the mode is checked
-            vm.native_push(1);
-            return Err(arg_error(vm, 2, "invalid mode"));
+            // the new handle is made and pushed before the mode is checked
+            return failed_handle(vm, |vm| {
+                vm.native_push(1);
+                Err(arg_error(vm, 2, "invalid mode"))
+            });
         }
         _ => {
             let e = posix_error(EINVAL);
-            return file_fail(vm, fs, Some(&prog), &e);
+            return failed_handle(vm, |vm| file_fail(vm, fs, Some(&prog), &e));
         }
     };
     reset_errno(vm);
@@ -40,7 +42,7 @@ pub(crate) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return file_fail(vm, fs, Some(&prog), &e),
+        Err(e) => return failed_handle(vm, |vm| file_fail(vm, fs, Some(&prog), &e)),
     };
     let file = if read {
         pipe_file(child.stdout.take().expect("stdout was piped"))

@@ -93,9 +93,11 @@ pub(super) fn io_open(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
         None => b"r".to_vec(),
     };
     if vm.version() >= LuaVersion::Lua52 && !mode_ok(vm.version(), &mode) {
-        // the new handle is pushed before the mode is checked
-        vm.native_push(1);
-        return Err(arg_error(vm, 2, "invalid mode"));
+        // the new handle is made and pushed before the mode is checked
+        return failed_handle(vm, |vm| {
+            vm.native_push(1);
+            Err(arg_error(vm, 2, "invalid mode"))
+        });
     }
     reset_errno(vm);
     match open_file(vm.crt_text, &name, &mode) {
@@ -103,7 +105,7 @@ pub(super) fn io_open(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             let u = opened(vm, o, false)?;
             vm.nat_ret(fs, &[Value::Userdata(u)])
         }
-        Err(e) => file_fail(vm, fs, Some(&name), &e),
+        Err(e) => failed_handle(vm, |vm| file_fail(vm, fs, Some(&name), &e)),
     }
 }
 
@@ -121,11 +123,11 @@ pub(super) fn io_tmpfile(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaEr
         .open(&path)
     {
         Ok(f) => f,
-        Err(e) => return file_fail(vm, fs, None, &e),
+        Err(e) => return failed_handle(vm, |vm| file_fail(vm, fs, None, &e)),
     };
     // tmpfile(3) leaves no name behind; the open handle keeps the file.
     if let Err(e) = std::fs::remove_file(&path) {
-        return file_fail(vm, fs, None, &e);
+        return failed_handle(vm, |vm| file_fail(vm, fs, None, &e));
     }
     // tmpfile(3) opens "w+bD"
     let spec = fopen::libc_mode(b"w+b").expect("a valid mode");
@@ -209,7 +211,7 @@ pub(super) fn open_checked(
 ) -> Result<Gc<Userdata>, LuaError> {
     match open_file(vm.crt_text, name, mode) {
         Ok(o) => Ok(opened(vm, o, false)?),
-        Err(e) => {
+        Err(e) => failed_handle(vm, |vm| {
             note_failure(&e);
             let n = String::from_utf8_lossy(c_str(name)).into_owned();
             let err = strerror(&e);
@@ -222,7 +224,7 @@ pub(super) fn open_checked(
             } else {
                 crate::vm::builtins::raise_fmt(vm, 2, &format!("cannot open file '{n}' ({err})"))
             })
-        }
+        }),
     }
 }
 
