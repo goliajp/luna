@@ -11,31 +11,17 @@ pub(super) fn emit_set_table<M: Module>(
     } = f;
     match ins.op() {
         Op::SetTable => {
-            // `R[A][R[B]] = R[C]`. Pick the Int/Int vs
-            // Float/Float helper at emit time based on R[B]'s
-            // resolved kind (the scan pinned R[B] and R[C] to
-            // the same kind).
-            //
-            // for the Int/Int variant, emit an inline
-            // aset fast path: skip the helper call when the key
-            // falls inside the table's array part. The cranelift
-            // IR reads `atags.len`, `atags.ptr`, `avals.ptr`
-            // straight from the `Gc<Table>` raw ptr (`#[repr(C)]`
-            // + `offset_of!` make the layout stable), branches on
-            // `(key - 1) as u64 < atags.len`, and either writes
-            // the tag byte + i64 payload in-place or falls
-            // through to the slow-path helper.
+            // `R[A][R[B]] = R[C]`, R[B] and R[C] of one kind (the scan
+            // pinned them). Int/Int stores inline when the key falls in
+            // the array part (the `#[repr(C)]` table's layout read from
+            // its pointer), else calls the helper.
             let a = ins.a() as usize;
             let b = ins.b() as usize;
             let c = ins.c() as usize;
             let t_raw = bcx.use_var(regs[a]);
-            // when `R[A]` is Float-declared
-            // because of a same-slot Float writer in another BB
-            // (the binary_trees 5.1/5.2 pattern), `use_var` hands
-            // back F64. Bitcast back to I64 so the inline aset
-            // load / helper call sees a real `Gc<Table>` ptr.
-            // Lossless reinterpret — `aligned_def` did the
-            // matching F64→I64 bitcast at the NewTable write.
+            // `R[A]` Float-declared (a Float writer of the slot in another
+            // block) comes back F64: bitcast to the table pointer, as
+            // `aligned_def` did the other way at the NewTable write
             let t = if matches!(
                 reg_kinds.get(a).copied().unwrap_or(RegKind::Int),
                 RegKind::Float
@@ -49,11 +35,8 @@ pub(super) fn emit_set_table<M: Module>(
             let is_float = matches!(a_kind(reg_kinds, b as u32), RegKind::Float);
 
             if !is_float {
-                // Inline aset fast path (Int key + Int val).
-                // load `asize` (u64) once for both the
-                // in-range check and the `atags_ptr = avals_ptr +
-                // asize * 8` computation. Avals occupy `slab` from
-                // offset 0; atags trail at byte offset `asize * 8`.
+                // `asize` once, for the range check and for the tags,
+                // which follow the values at `asize * 8`
                 let asize =
                     bcx.ins()
                         .uload32(MemFlagsData::trusted(), t, TABLE_ASIZE_OFFSET as i32);

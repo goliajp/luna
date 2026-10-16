@@ -194,8 +194,7 @@ fn print_version(v: LuaVersion) {
 }
 
 fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
-    // the bin wants Cranelift (luna-core's `Vm::new` has the no-op JIT
-    // backend); --no-jit opts back out
+    // Cranelift (`Vm::new` has the no-op backend), unless --no-jit
     let mut vm = if opts.sandbox {
         // SandboxBuilder has no JIT backend but its trace flags start on:
         // --no-jit switches them off, otherwise Cranelift goes in after it

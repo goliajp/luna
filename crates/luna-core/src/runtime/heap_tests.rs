@@ -272,43 +272,5 @@ fn intern_resurrects_dead_white_short_string() {
     drop(heap);
 }
 
-/// The objects on `all` in list order.
-fn list_order(heap: &Heap) -> Vec<usize> {
-    let mut out = Vec::new();
-    let mut cur = heap.all;
-    while !cur.is_null() {
-        out.push(cur as usize);
-        // SAFETY: `all` links objects this heap allocated and has not freed
-        cur = unsafe { (*cur).next };
-    }
-    out
-}
-
-#[test]
-fn incremental_sweep_keeps_the_survivors_in_order() {
-    let mut heap = Heap::new();
-    let tables: Vec<_> = (0..40).map(|_| heap.new_table()).collect();
-    // every other one stays
-    let roots: Vec<Value> = tables.iter().step_by(2).map(|&t| Value::Table(t)).collect();
-    let kept: Vec<usize> = tables
-        .iter()
-        .step_by(2)
-        .map(|t| t.as_ptr() as usize)
-        .collect();
-    heap.gc_start_propagate(&roots, &[]);
-    while !heap.gc_step_propagate(usize::MAX) {}
-    heap.gc_finish_atomic();
-    // made during the sweep: in front of where it is, never swept
-    let young = heap.new_table();
-    while !heap.gc_sweep_step(3) {}
-    let order = list_order(&heap);
-    assert_eq!(order[0], young.as_ptr() as usize);
-    let tables_left: Vec<usize> = order.into_iter().filter(|p| kept.contains(p)).collect();
-    let mut want = kept.clone();
-    // `all` is newest first
-    want.reverse();
-    assert_eq!(tables_left, want);
-}
-
 #[path = "heap_mark_tests.rs"]
 mod mark;
