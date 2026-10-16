@@ -67,6 +67,8 @@ impl Heap {
             leaf_hdr: 0,
             leaf_bytes: 0,
             sizer: self.lend_sizer(),
+            #[cfg(feature = "gc-verify")]
+            verify: None,
         }
     }
 
@@ -264,6 +266,8 @@ impl Heap {
         // string contents to identify the key.
         #[cfg(feature = "gc-verify")]
         self.verify_tricolor("atomic_tail");
+        #[cfg(feature = "gc-verify")]
+        self.verify_black_children("atomic_tail");
         #[cfg(any(debug_assertions, feature = "gc-verify"))]
         self.verify_slow_bits("atomic_tail");
     }
@@ -290,6 +294,8 @@ impl Heap {
             leaf_hdr: self.leaf_hdr(),
             leaf_bytes: 0,
             sizer: self.lend_sizer(),
+            #[cfg(feature = "gc-verify")]
+            verify: None,
         }
     }
 

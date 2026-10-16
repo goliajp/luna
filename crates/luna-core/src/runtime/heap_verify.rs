@@ -165,13 +165,105 @@ impl Heap {
                             let p = value_header(v).map(|h| h as usize).unwrap_or(0);
                             panic!(
                                 "[gc-verify] {ctx}: table {tp:#x} holds dangling {what} \
-                                 (slot {idx}, target {p:#x})"
+                                 (slot {idx}, target {p:#x} {:?})",
+                                crate::runtime::gc_verify_probe::freed_str(p)
                             );
                         });
                     }
                     cur = (*cur).next;
                 }
             }
+        }
+    }
+
+    /// `gc-verify`, once marking is done: no black object holds an object
+    /// the sweep will free (a missed write barrier), whatever its kind.
+    /// Panics naming both on the first.
+    #[cfg(feature = "gc-verify")]
+    pub(super) fn verify_black_children(&self, ctx: &'static str) {
+        let mut m = Marker {
+            stack: Default::default(),
+            overflow: false,
+            scan: std::ptr::null_mut(),
+            weak: Vec::new(),
+            ephemeron: Vec::new(),
+            no_ephemeron: self.no_ephemeron,
+            cached_protos: Vec::new(),
+            leaf_black: 0,
+            leaf_hdr: 0,
+            leaf_bytes: 0,
+            sizer: None,
+            verify: None,
+        };
+        let mut cur = self.all;
+        // SAFETY: `all` links this heap's allocated objects, none freed before
+        // the sweep; tracing with `verify` set reads the children and colors
+        // nothing
+        unsafe {
+            while !cur.is_null() {
+                if is_black((*cur).flags) {
+                    m.verify = Some((self.current_white, cur, ctx));
+                    super::mark::trace_children(cur, &mut m);
+                }
+                cur = (*cur).next;
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gc-verify")]
+impl Heap {
+    /// `gc-verify`: the address `h`, freed before, holds a new object.
+    pub(super) fn forget_freed(&mut self, h: *mut GcHeader) {
+        self.recently_freed.remove(&(h as usize));
+        crate::runtime::gc_verify_probe::FREED.with(|f| f.borrow_mut().remove(&(h as usize)));
+    }
+
+    /// `gc-verify`: a new reference to the object at `h` (`what`) while a
+    /// sweep runs must not be to one the sweep frees.
+    pub(crate) fn verify_not_dying(&self, h: *const GcHeader, what: &str) {
+        // SAFETY: the caller names an allocated object; only its flags are read
+        let f = unsafe { (*h).flags };
+        if self.phase == GcPhase::Sweep && is_white(f) && f & self.current_white == 0 {
+            panic!(
+                "[gc-verify] {what} {:#x} is dead, swept this cycle",
+                h as usize
+            );
+        }
+    }
+
+    /// `gc-verify`: the color of the object at `h` against the heap's
+    /// current white, and the collector's phase.
+    pub(crate) fn describe(&self, h: *const GcHeader) -> String {
+        // SAFETY: the caller names an allocated object; only its flags are read
+        let f = unsafe { (*h).flags };
+        format!(
+            "flags {f:#x} white {:#x} phase {:?}",
+            self.current_white, self.phase
+        )
+    }
+}
+
+/// [`Heap::verify_black_children`]'s check of child `h` of `parent`.
+///
+/// # Safety
+/// `h` and `parent` head allocated objects.
+#[cfg(feature = "gc-verify")]
+pub(super) unsafe fn dead_child(
+    h: *mut GcHeader,
+    (new_white, parent, ctx): (u8, *mut GcHeader, &'static str),
+) {
+    // SAFETY: the caller's contract; only headers are read
+    unsafe {
+        let f = (*h).flags;
+        if is_white(f) && f & new_white == 0 {
+            panic!(
+                "[gc-verify] {ctx}: black {:?} {:#x} holds {:?} {:#x}, which the sweep frees",
+                (*parent).tag,
+                parent as usize,
+                (*h).tag,
+                h as usize
+            );
         }
     }
 }

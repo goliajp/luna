@@ -66,6 +66,20 @@ impl Vm {
     pub(crate) fn checkpoint(&mut self, live_top: u32) {
         #[cfg(feature = "gc-trace")]
         self.trace_checkpoint();
+        // gc-verify: the live top never cuts into a Lua frame that is running
+        #[cfg(feature = "gc-verify")]
+        if let Some(CallFrame::Lua(f)) = self
+            .frames
+            .iter()
+            .rev()
+            .find(|f| matches!(f, CallFrame::Lua(_)))
+            && live_top < f.base
+        {
+            panic!(
+                "[gc-verify] checkpoint with live top {live_top} below the running Lua frame's base {}",
+                f.base
+            );
+        }
         #[cfg(feature = "gc-stress")]
         if !self.heap.gc_is_stopped() {
             self.heap.safe_point();
