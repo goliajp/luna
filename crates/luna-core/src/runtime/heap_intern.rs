@@ -100,10 +100,16 @@ impl Heap {
             let f = (*(p as *mut GcHeader)).flags;
             if is_white(f) && (f & self.current_white) == 0 {
                 self.resurrect(&mut *(p as *mut GcHeader));
-                // the string sweep took it off already: PUC makes it again
+                // the string sweep took it off already: PUC makes it again,
+                // now or (found while nothing is counted) when the program
+                // first uses it
                 if (*p).hdr.sub & strt::SWEPT != 0 {
                     (*p).hdr.sub &= !strt::SWEPT;
-                    self.acct_string(len);
+                    if self.puc.silent > 0 {
+                        acct::set_uncounted(p as *mut GcHeader, true);
+                    } else {
+                        self.acct_string(len);
+                    }
                 }
             }
             // found in the table and kept from this cycle's sweep by the
