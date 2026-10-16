@@ -4,22 +4,30 @@ use super::*;
 use crate::frontend::error::NearKind;
 
 impl<'s> Parser<'s> {
-    pub(super) fn advance(&mut self) -> Result<LexTok, SyntaxError> {
+    pub(super) fn advance(&mut self) -> Result<(), SyntaxError> {
         self.last_line = self.lex.line();
-        let next = match self.peeked.take() {
-            Some(t) => t,
-            None => self
-                .lex
-                .next_token()
-                .inspect_err(|_| self.lex_failed = true)?,
-        };
-        self.prev_line = self.tok.line;
-        self.tok_char = next.char;
-        self.tok_sym = next.sym;
-        let prev = std::mem::replace(&mut self.tok, next.info);
+        let prev_line = self.tok.line;
+        match self.peeked.take() {
+            None => match self.lex.next_into(&mut self.tok) {
+                Ok((char, sym)) => {
+                    self.tok_char = char;
+                    self.tok_sym = sym;
+                }
+                Err(e) => {
+                    self.lex_failed = true;
+                    return Err(e);
+                }
+            },
+            Some(t) => {
+                self.tok_char = t.char;
+                self.tok_sym = t.sym;
+                self.tok = t.info;
+            }
+        }
+        self.prev_line = prev_line;
         self.tok_ix += 1;
         self.reached();
-        Ok(prev)
+        Ok(())
     }
 
     pub(super) fn peek(&mut self) -> Result<&Tok, SyntaxError> {
@@ -153,12 +161,9 @@ impl<'s> Parser<'s> {
         if !matches!(self.tok.tok, Token::Name(_)) {
             return Err(self.error_expected("<name>"));
         }
-        let sym = self.tok_sym;
-        let info = self.advance()?;
-        Ok(Name {
-            sym,
-            line: info.line,
-        })
+        let (sym, line) = (self.tok_sym, self.tok.line);
+        self.advance()?;
+        Ok(Name { sym, line })
     }
 
     /// The text of an interned name.

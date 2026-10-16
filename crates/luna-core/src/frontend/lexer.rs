@@ -229,17 +229,33 @@ impl<'s, S: Source> Lexer<'s, S> {
     /// Like [`Lexer::next_token`], but hands an unrecognised byte back to
     /// the caller instead of failing on it (PUC `llex`'s default case).
     pub(crate) fn next_lexed(&mut self) -> Result<Lexed, SyntaxError> {
+        let mut info = LexTok {
+            tok: Token::Eof,
+            span: Span::new(0, 0),
+            line: 0,
+        };
+        Ok(match self.next_into(&mut info)? {
+            None => Lexed::Tok(info),
+            Some(c) => Lexed::Char(c, info),
+        })
+    }
+
+    /// [`Lexer::next_lexed`] writing the token into `info`, which is left
+    /// as it was on an error. An unrecognised byte comes back with `info`
+    /// holding `Token::Eof` and the byte's place.
+    pub(crate) fn next_into(&mut self, info: &mut LexTok) -> Result<Option<u8>, SyntaxError> {
         self.buf.clear();
         loop {
             let start = self.pos;
             self.tok_start = start;
             let line = self.line;
             let Some(c) = self.cur() else {
-                return Ok(Lexed::Tok(LexTok {
+                *info = LexTok {
                     tok: Token::Eof,
                     span: Span::new(self.pos, self.pos),
                     line: self.line,
-                }));
+                };
+                return Ok(None);
             };
             match c {
                 b'\n' | b'\r' => self.newline(),
@@ -250,16 +266,16 @@ impl<'s, S: Source> Lexer<'s, S> {
                     self.comment()?;
                 }
                 _ => {
-                    let tok = self.token(c)?;
-                    let info = |tok| LexTok {
+                    let (tok, odd) = match self.token(c)? {
+                        Ok(tok) => (tok, None),
+                        Err(c) => (Token::Eof, Some(c)),
+                    };
+                    *info = LexTok {
                         tok,
                         span: Span::new(start, self.pos),
                         line,
                     };
-                    return Ok(match tok {
-                        Ok(tok) => Lexed::Tok(info(tok)),
-                        Err(c) => Lexed::Char(c, info(Token::Eof)),
-                    });
+                    return Ok(odd);
                 }
             }
         }
