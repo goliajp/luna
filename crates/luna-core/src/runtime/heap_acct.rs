@@ -230,6 +230,8 @@ mod boot;
 mod defer;
 #[path = "heap_acct_fmt.rs"]
 mod fmt;
+#[path = "heap_acct_libs.rs"]
+mod libs;
 #[path = "heap_acct_parts.rs"]
 mod parts;
 #[path = "heap_acct_thread.rs"]

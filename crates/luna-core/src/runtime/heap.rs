@@ -300,6 +300,8 @@ mod intern;
 mod new;
 pub(crate) use self::intern::fresh_seed;
 use self::intern::{make_seed, oom_abort_heap};
+#[path = "heap_free.rs"]
+mod free;
 #[path = "heap_mark.rs"]
 mod mark;
 #[path = "heap_pace.rs"]
