@@ -95,6 +95,12 @@ impl Table {
         self.nodes().len()
     }
 
+    /// The array part's size and the hash part's node count.
+    #[cfg(test)]
+    pub(crate) fn part_sizes(&self) -> (usize, usize) {
+        (self.asize(), self.node_count())
+    }
+
     /// The node holding key `k`. Interned strings take the pointer-compare
     /// walk here; every other key walks out of line, so the string path
     /// (the common one) does not pay for the general walk's saved registers.

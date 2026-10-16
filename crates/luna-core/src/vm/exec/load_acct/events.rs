@@ -154,11 +154,11 @@ impl Vm {
             self.setinput(r)?;
         }
         let h = match d {
-            Dialect::L51 | Dialect::L52 | Dialect::L55 => Some(self.heap.try_new_table()?),
+            Dialect::L51 | Dialect::L52 | Dialect::L55 => Some(self.new_ptab(r)?),
             Dialect::L53 | Dialect::L54 => None,
         };
         if d == Dialect::L55 {
-            self.anchor_in_h(r, h)?;
+            self.anchor_in_h(r, h.as_ref().map(|t| t.id));
         }
         let ld = r.opening.get(r.opened).map_or(0, |p| p.line_defined);
         let shape = r.opened;
@@ -245,9 +245,9 @@ impl Vm {
             parent.p.push(&mut self.heap, s.ptr);
         }
         if d == Dialect::L55
-            && let (Some(h), Some(k)) = (r.h, f.h)
+            && let (Some(h), Some(k)) = (r.h.as_mut(), f.h.as_ref())
         {
-            self.store_in(h, Value::Table(k), Value::Nil)?;
+            h.remove(PKey::Tab(k.id));
         }
         // 5.2 on, `close_func` checks for a collection at its end
         #[cfg(feature = "gc-trace")]

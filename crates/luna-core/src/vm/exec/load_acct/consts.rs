@@ -2,6 +2,7 @@
 //! the writes into the parser's tables.
 
 use super::*;
+use crate::runtime::LuaStr;
 
 impl Vm {
     /// A new constant (`addk`): its entry under PUC's key, in the table
@@ -27,13 +28,19 @@ impl Vm {
             f.k.push(&mut self.heap, s.tvalue);
         }
         if let Some(key) = key {
-            let t = match r.d {
-                Dialect::L53 | Dialect::L54 => r.h,
-                _ => r.fs.last().and_then(|f| f.h),
+            let id = match r.d {
+                Dialect::L53 | Dialect::L54 => r.h.as_ref().map(|t| t.id),
+                _ => r.fs.last().and_then(|f| f.h.as_ref()).map(|t| t.id),
             };
-            if let Some(t) = t {
-                let k = self.puc_const_key(r, t, key, v)?;
-                self.set_in(t, k, Value::Int(0))?;
+            if let Some(id) = id {
+                let k = self.puc_const_key(r, id, key, v)?;
+                let t = match r.d {
+                    Dialect::L53 | Dialect::L54 => r.h.as_mut(),
+                    _ => r.fs.last_mut().and_then(|f| f.h.as_mut()),
+                };
+                if let Some(t) = t {
+                    t.insert(&mut self.heap, r.d, k);
+                }
             }
         }
         if !k_first && let Some(f) = r.fs.last_mut() {
@@ -43,24 +50,25 @@ impl Vm {
     }
 
     /// The key PUC's `addk` uses for constant `v` (luna's key `key`) in
-    /// table `t`.
+    /// table number `t`.
     fn puc_const_key(
         &mut self,
-        r: &Replay,
-        t: Gc<Table>,
+        r: &mut Replay,
+        t: u32,
         key: crate::compiler::const_map::ConstKey,
         v: Value,
-    ) -> Result<Value, SyntaxError> {
+    ) -> Result<PKey, SyntaxError> {
         use crate::compiler::const_map::ConstKey as K;
         let num = |v: Value| match v {
             Value::Int(i) => Some(i as f64),
             Value::Float(f) => Some(f),
             _ => None,
         };
-        Ok(match (r.d, v) {
-            (_, Value::Str(_) | Value::Bool(_)) => v,
+        Ok(PKey::of(match (r.d, v) {
+            (_, Value::Str(s)) => return Ok(PKey::of_str(s, &mut r.long_keys)),
+            (_, Value::Bool(_)) => v,
             // nil keys by the table itself
-            (_, Value::Nil) => Value::Table(t),
+            (_, Value::Nil) => return Ok(PKey::Tab(t)),
             (Dialect::L51, v) => Value::Float(num(v).unwrap_or(0.0) + 0.0),
             // 5.2 keys a zero or a nan by a string of its bytes
             (Dialect::L52, v) => {
@@ -81,65 +89,42 @@ impl Vm {
                 K::Float(b) => Value::Float(f64::from_bits(b)),
                 _ => v,
             },
-        })
+        }))
     }
 
-    /// 5.5 `luaD_anchorobj`: an object keyed in the chunk's table (`t`, or
-    /// one luna has no object for).
-    pub(super) fn anchor_in_h(
-        &mut self,
-        r: &mut Replay,
-        t: Option<Gc<Table>>,
-    ) -> Result<(), SyntaxError> {
+    /// 5.5 `luaD_anchorobj`: an object keyed in the chunk's table (parser
+    /// table number `t`, or one luna has no object for).
+    pub(super) fn anchor_in_h(&mut self, r: &mut Replay, t: Option<u32>) {
         let key = match t {
-            Some(t) => Value::Table(t),
+            Some(t) => PKey::Tab(t),
             None => {
                 r.anchors += 1;
-                Value::LightUserdata(r.anchors as *const ())
+                PKey::Ptr(r.anchors)
             }
         };
-        match r.h {
-            Some(h) => self.set_in(h, key, key),
-            None => Ok(()),
+        if let Some(h) = r.h.as_mut() {
+            h.insert(&mut self.heap, r.d, key);
         }
     }
 
-    /// `t[k] = v` in a parser table, when `k` is not there yet (PUC
-    /// `luaH_set` on a new key; a key already there allocates nothing).
-    pub(super) fn set_in(&mut self, t: Gc<Table>, k: Value, v: Value) -> Result<(), SyntaxError> {
-        // a string key is looked for once (the trace shows the keys that
-        // go in before they do)
-        if cfg!(not(feature = "gc-trace")) && matches!(k, Value::Str(_)) {
-            return self
-                .with_table(t, |t, heap| t.insert_absent_str(heap, k, v))
-                .map_err(table_err);
-        }
-        if !t.get(k).is_nil() {
-            return Ok(());
-        }
+    /// The scanner's string `s` keyed in parser table `t` (`luaH_set` on a
+    /// new key; one already there allocates nothing).
+    pub(super) fn set_str_in(
+        &mut self,
+        t: &mut PTab,
+        d: Dialect,
+        #[cfg_attr(not(feature = "gc-trace"), allow(unused_variables))] s: Gc<LuaStr>,
+        k: PKey,
+    ) {
         #[cfg(feature = "gc-trace")]
-        if let Value::Str(s) = k {
+        if !t.contains(k) {
             self.heap.trace.line(format_args!(
-                "K {:p} {} {:08x}",
-                t.as_ptr(),
+                "K {} {} {:08x}",
+                t.id,
                 String::from_utf8_lossy(s.as_bytes()).escape_debug(),
                 s.hash()
             ));
         }
-        self.store_in(t, k, v)
-    }
-
-    /// `t[k] = v` in a parser table.
-    pub(super) fn store_in(&mut self, t: Gc<Table>, k: Value, v: Value) -> Result<(), SyntaxError> {
-        self.with_table(t, |t, heap| t.set(heap, k, v))
-            .map_err(table_err)
-    }
-
-    /// `f` on parser table `t`.
-    fn with_table<R>(&mut self, t: Gc<Table>, f: impl FnOnce(&mut Table, &mut Heap) -> R) -> R {
-        // SAFETY: parser tables are made for this load and held only by
-        // the replay
-        let t = unsafe { t.as_mut() };
-        f(t, &mut self.heap)
+        t.insert(&mut self.heap, d, k);
     }
 }
