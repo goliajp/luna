@@ -65,6 +65,7 @@ impl Vm {
             let ct = cache_trace(proto, ct);
             hold_side_trace(wired, ct);
             keep_inlined(proto, a.inlined);
+            self.heap.barrier_back(proto);
             self.jit.counters.adopted += 1;
         }
         true

@@ -9,70 +9,16 @@ impl Vm {
     /// The active recording reached a close condition.
     pub(super) fn trace_close_recording(&mut self) {
         let rec = self.jit.active_trace.as_mut().expect("recording");
-        // Long-trace bias: a call-triggered
-        // recording that closed with a very short body
-        // (fib base case: `Lt`/`Jmp`/`Return1` = 3 ops,
-        // binary_trees `make(0)`: 4 ops) is pathological.
-        // Compiling + caching it pins `Proto.traces` to a
-        // trace that the length gate will refuse to
-        // dispatch (per `MIN_DISPATCHABLE_TRUNC_BODY_FLOOR
-        // = 40`), AND blocks the back-edge / longer-call
-        // path from re-recording the same head_pc (the
-        // dedup `already_cached` check below short-
-        // circuits). The fix: discard the short call-
-        // triggered recording WITHOUT caching, and bias
-        // the proto's `call_hot_count` back to
-        // `THRESHOLD - HOT_RETRY_WINDOW` so the next
-        // sequence of calls retries the trigger at a
-        // different (hopefully deeper) recursion point.
-        //
-        // Back-edge triggered traces are exempt — a
-        // tight numeric-for loop's body is legitimately
-        // 3 ops (`Add`, ForLoop) and DOES dispatch
-        // usefully when re-entered many times.
-        // Coverage heuristic to detect
-        // pathologically partial call-triggered traces:
-        // for self-recursive / branchy protos like
-        // `fib` (~17 bytecode ops) or
-        // `binary_trees.make` (~26 ops), the recorder
-        // can fire at a BASE-case entry (`fib(0)` or
-        // `make(0)`) producing a 3–4 op trace that
-        // covers a tiny fraction of the proto's code.
-        // That trace is doomed by the length gate
-        // post-compile AND blocks any longer follow-up
-        // (the dedup `already_cached` check below). The
-        // fix: discard call-triggered closes where
-        // `rec.ops.len() * 2 < head_proto.code.len()`
-        // (less than half the proto's bytecode), so the
-        // back-edge / longer call path can take over.
-        //
-        // Why coverage > raw length:protos with
-        // intrinsically short bodies (closure
-        // factories: `Closure + Return1` = 2 ops,
-        // simple wrappers: `LoadI + Return1` = 2 ops)
-        // record 100% coverage even at length 2 — those
-        // ARE legitimately short and the closure /
-        // sunk-emit lowering paths make
-        // them worth compiling. The heuristic admits
-        // them. fib's `[Lt, Jmp, Return1]` (3 of ~17)
-        // and make's `[Lt, Jmp, LoadI, Return1]` (4 of
-        // ~26) get discarded.
-        //
-        // Back-edge triggered traces are unaffected —
-        // a tight numeric-for body legitimately covers
-        // 3 of ~3 proto ops it can dispatch from
-        // (`Add + ForLoop`) and the recorder fires on
-        // the back-edge, not call entry.
-        //
-        // `call_hot_count` is intentionally NOT reset
-        // (an earlier draft tried `THRESHOLD - 32` but
-        // caused active_trace contention with the
-        // outer back-edge trigger — see
-        // setlist_b_zero_with_call_c_zero_sunk_emits).
-        // We give up on dispatching the pathological
-        // shape on the same proto; the back-edge or a
-        // longer call path on a deeper recursion point
-        // can still record + cache a real trace.
+        // A call-triggered recording that covers less than half its
+        // function (`fib`'s base case `Lt, Jmp, Return1`, 3 of ~17 ops) is
+        // dropped, not cached: the length gate would never dispatch it, and
+        // a cached trace at that head keeps a longer recording (the
+        // back-edge, or a call deeper in the recursion) from taking its
+        // place. A short function covered whole (`Closure, Return1`) is
+        // kept; back-edge recordings are exempt (a numeric `for` body of 3
+        // ops dispatches well). `call_hot_count` is not reset: retrying at
+        // `THRESHOLD - 32` fought the outer back-edge trigger for
+        // `active_trace` (setlist_b_zero_with_call_c_zero_sunk_emits).
         let proto_code_len = rec.head_proto.code.len();
         let is_partial_coverage = rec.ops.len() * 2 < proto_code_len;
         // Per-Proto discard cap. The relaxed
@@ -252,6 +198,9 @@ impl Vm {
                         ct,
                         cut.as_ref().unwrap_or(&closed_record),
                     );
+                    // the prototypes it inlined are kept in a black head's
+                    // list: traversed again, they are not swept
+                    self.heap.barrier_back(head_proto);
                     hold_side_trace(wired, ct);
                     self.jit.counters.compiled += 1;
                 }
