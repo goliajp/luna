@@ -23,7 +23,10 @@ fn mode_ok(v: LuaVersion, mode: &[u8]) -> bool {
 /// The handle for a file `fopen` opened, with the C library's `FILE` when
 /// the Vm opens files as PUC built with MSVC does.
 fn opened(vm: &mut Vm, o: Opened, pipe: bool) -> Result<Gc<Userdata>, LuaError> {
+    // `lua_newuserdata(uv)`, which checks for a collection
+    vm.api_check_before();
     let u = new_file(vm, FileHandle::File(o.file), o.spec.writable())?;
+    vm.api_check_after(Value::Userdata(u));
     if vm.crt_text {
         let mut f = msvc::CrtFile::open(&o.spec, pipe);
         f.io.mode = o.mode;
