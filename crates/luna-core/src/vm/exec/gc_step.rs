@@ -247,7 +247,7 @@ impl Vm {
     fn gc_restart(&mut self) {
         self.gc_count_marked();
         let mut m = self.heap.gc_begin_propagate();
-        self.mark_roots(&mut m);
+        self.mark_roots(&mut m, false);
         self.heap.stash_marker(m);
         self.heap.pace.state = St::Propagate;
     }
@@ -258,7 +258,7 @@ impl Vm {
         self.clear_dead_stack();
         let run = self.gc_running();
         let mut m = self.heap.loan_marker();
-        self.mark_roots(&mut m);
+        self.mark_roots(&mut m, true);
         self.heap.stash_marker(m);
         self.watch_errors();
         let r = self.heap.gc_finish_atomic_work(Some(run));

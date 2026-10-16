@@ -8,18 +8,25 @@ impl Vm {
     /// full collector and the incremental driver so both mark the exact
     /// same live set. Marks in place, without collecting the roots first, so
     /// a collection needs no memory for them.
-    pub(crate) fn mark_roots(&self, m: &mut crate::runtime::heap::Marker) {
+    /// `again`: the atomic step of a cycle whose start marked them.
+    pub(crate) fn mark_roots(&self, m: &mut crate::runtime::heap::Marker, again: bool) {
         m.value(Value::Table(self.globals));
         for mt in self.type_mt.into_iter().flatten() {
             m.value(Value::Table(mt));
         }
-        for &n in self
-            .mm_names
-            .iter()
-            .chain(&self.heap.puc.pins)
-            .chain(&self.heap.puc.load_msg)
-        {
-            m.mark(n);
+        // the root strings stay black from the cycle's start to its sweep:
+        // the atomic step marks only the pins added since, and the message
+        // a load may have made meanwhile
+        let puc = &self.heap.puc;
+        if again {
+            for &n in puc.pins[puc.pins_marked.get()..].iter().chain(&puc.load_msg) {
+                m.mark(n);
+            }
+        } else {
+            for &n in self.mm_names.iter().chain(&puc.pins).chain(&puc.load_msg) {
+                m.mark(n);
+            }
+            puc.pins_marked.set(puc.pins.len());
         }
         // Root the running thread's live registers (PUC marks [stack, top)).
         // `gc_top` is the instruction-level cursor of the last GC
