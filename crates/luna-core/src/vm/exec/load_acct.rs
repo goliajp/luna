@@ -17,19 +17,21 @@ use super::*;
 use crate::compiler::TokRef;
 use crate::compiler::puc_log::PEv;
 use crate::frontend::parser::scan::{ScanKind, ScanText, Scanned};
+use crate::runtime::Proto;
 use crate::runtime::heap::PucKind;
-use crate::runtime::table::{Dialect, TableError};
-use crate::runtime::{Proto, Table};
+use crate::runtime::table::Dialect;
 
 mod arr;
 mod consts;
 mod events;
 mod failed;
+mod ptab;
 mod scan;
 mod syntax_msg;
 mod undump;
 
 use arr::Arr;
+use ptab::{PKey, PTab};
 
 /// A function being compiled, in PUC's terms.
 #[derive(Default)]
@@ -43,7 +45,7 @@ struct Fs {
     up: Arr,
     /// the function's own table: 5.1 and 5.2 key its strings and constants
     /// in it, 5.5 its constants (`kcache`)
-    h: Option<Gc<Table>>,
+    h: Option<PTab>,
     prev_line: u32,
     iwthabs: u32,
     /// the last instruction's line entry: absolute, and the line before it
@@ -73,7 +75,12 @@ struct Replay<'s> {
     fs: Vec<Fs>,
     /// the chunk's table (5.3+): the scanner's strings, 5.3 and 5.4's
     /// constants, 5.5's anchors
-    h: Option<Gc<Table>>,
+    h: Option<PTab>,
+    /// the parser tables made so far
+    tabs: u32,
+    /// the first long string of each content keyed in a parser table: a
+    /// table finds a long string by its bytes
+    long_keys: std::collections::HashMap<Box<[u8]>, usize>,
     /// the scanner's buffer
     buff: usize,
     actvar: Arr,
@@ -110,15 +117,6 @@ struct Replay<'s> {
     splices: std::collections::VecDeque<(i64, crate::runtime::heap::Deferred)>,
 }
 
-/// A failed store into a parser table: out of memory (its keys are
-/// strings, numbers, booleans and tables, all valid).
-fn table_err(e: TableError) -> SyntaxError {
-    match e {
-        TableError::Memory(o) => o.into(),
-        _ => unreachable!("a parser-table key is a valid key"),
-    }
-}
-
 /// The prototypes under `p` in the order their functions open (preorder)
 /// and in the order they close.
 fn walk(p: Gc<Proto>, opening: &mut Vec<Gc<Proto>>, closing: &mut Vec<Gc<Proto>>) {
@@ -145,6 +143,8 @@ impl<'s> Replay<'s> {
             d,
             fs: Vec::new(),
             h: None,
+            tabs: 0,
+            long_keys: Default::default(),
             buff: 0,
             actvar: Arr::default(),
             gt: Arr::default(),
@@ -239,16 +239,22 @@ impl Vm {
             Dialect::L52 => self.acct_main_closure(cl),
             Dialect::L53 | Dialect::L54 => {
                 self.acct_main_closure(cl);
-                r.h = Some(self.heap.try_new_table()?);
+                r.h = Some(self.new_ptab(r)?);
             }
             Dialect::L55 => {
                 // the anchor table, then the closure anchored in it
-                r.h = Some(self.heap.try_new_table()?);
+                r.h = Some(self.new_ptab(r)?);
                 self.acct_main_closure(cl);
-                self.anchor_in_h(r, None)?;
+                self.anchor_in_h(r, None);
             }
         }
         Ok(())
+    }
+
+    /// A new parser table (`luaH_new`).
+    fn new_ptab(&mut self, r: &mut Replay) -> Result<PTab, SyntaxError> {
+        r.tabs += 1;
+        PTab::new(&mut self.heap, r.tabs)
     }
 
     /// `luaD_protectedparser` frees the scanner's buffer and the parser's

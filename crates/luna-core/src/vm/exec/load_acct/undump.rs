@@ -27,8 +27,8 @@ impl Vm {
         let mut open: Vec<(Gc<Proto>, [u32; 7])> = Vec::new();
         let reclose = evs.iter().any(|e| matches!(e, UEv::Reclose(_)));
         // 5.5's `f_parser` anchors what the load makes in a table
-        let h = match d {
-            Dialect::L55 => Some(self.heap.try_new_table()?),
+        let mut h = match d {
+            Dialect::L55 => Some(PTab::new(&mut self.heap, 0)?),
             _ => None,
         };
         let (mut buff, mut saved) = (0, 0);
@@ -42,8 +42,8 @@ impl Vm {
                 }
                 UEv::Closure(_) | UEv::Reclose(_) => {
                     self.acct_main_closure(cl);
-                    if let Some(h) = h {
-                        self.set_in(h, Value::Closure(cl), Value::Closure(cl))?;
+                    if let Some(h) = h.as_mut() {
+                        h.insert(&mut self.heap, d, PKey::of(Value::Closure(cl)));
                     }
                 }
                 UEv::Proto => {
@@ -72,10 +72,10 @@ impl Vm {
                 }
                 UEv::Buff(_) => {}
                 UEv::Str(s) => {
-                    let v = self.undump_string(s, open.last().map(|o| o.0))?;
-                    if let Some(h) = h {
+                    self.undump_string(s, open.last().map(|o| o.0))?;
+                    if let Some(h) = h.as_mut() {
                         saved += 1;
-                        self.set_in(h, Value::Int(saved), v)?;
+                        h.insert(&mut self.heap, d, PKey::Int(saved));
                     }
                 }
             }

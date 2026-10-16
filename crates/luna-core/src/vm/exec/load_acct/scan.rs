@@ -5,11 +5,11 @@ use super::*;
 
 impl Replay<'_> {
     /// The table the scanner keys a string of `kind` in, if any.
-    fn scan_table(&self, kind: ScanKind) -> Option<Gc<Table>> {
+    fn scan_table(&mut self, kind: ScanKind) -> Option<&mut PTab> {
         match self.d {
-            Dialect::L51 | Dialect::L52 => self.fs.last().and_then(|f| f.h),
+            Dialect::L51 | Dialect::L52 => self.fs.last_mut().and_then(|f| f.h.as_mut()),
             Dialect::L55 if kind == ScanKind::Reserved => None,
-            _ => self.h,
+            _ => self.h.as_mut(),
         }
     }
 
@@ -35,17 +35,16 @@ impl Vm {
         kind: ScanKind,
     ) -> Result<(), SyntaxError> {
         let s = self.heap.try_intern(bytes)?;
-        match r.scan_table(kind) {
-            Some(t) => {
-                #[cfg(feature = "gc-trace")]
-                let new = t.get(Value::Str(s)).is_nil();
-                self.set_in(t, Value::Str(s), Value::Bool(true))?;
-                #[cfg(feature = "gc-trace")]
-                self.scan_checkpoint(new);
-                Ok(())
-            }
-            None => Ok(()),
+        let d = r.d;
+        let k = PKey::of_str(s, &mut r.long_keys);
+        if let Some(t) = r.scan_table(kind) {
+            #[cfg(feature = "gc-trace")]
+            let new = !t.contains(k);
+            self.set_str_in(t, d, s, k);
+            #[cfg(feature = "gc-trace")]
+            self.scan_checkpoint(new);
         }
+        Ok(())
     }
 
     /// `luaX_newstring` checks for a collection when it anchors a new
@@ -83,22 +82,25 @@ impl Vm {
                 s
             }
         };
-        let Some(t) = r.scan_table(kind) else {
-            return Ok(());
-        };
         // a table's keys stay until the load is done
         let id = r.table_id();
-        let slot = match text {
-            ScanText::Sym(sym) => &mut r.syms[sym.0 as usize].1,
-            ScanText::Reserved(k, _) => &mut r.reserved[usize::from(k)].1,
+        let in_table = match text {
+            ScanText::Sym(sym) => r.syms[sym.0 as usize].1,
+            ScanText::Reserved(k, _) => r.reserved[usize::from(k)].1,
         };
-        if *slot != id {
-            *slot = id;
-            #[cfg(feature = "gc-trace")]
-            let new = t.get(Value::Str(s)).is_nil();
-            self.set_in(t, Value::Str(s), Value::Bool(true))?;
-            #[cfg(feature = "gc-trace")]
-            self.scan_checkpoint(new);
+        let d = r.d;
+        let k = PKey::of_str(s, &mut r.long_keys);
+        let Some(t) = r.scan_table(kind).filter(|_| in_table != id) else {
+            return Ok(());
+        };
+        #[cfg(feature = "gc-trace")]
+        let new = !t.contains(k);
+        self.set_str_in(t, d, s, k);
+        #[cfg(feature = "gc-trace")]
+        self.scan_checkpoint(new);
+        match text {
+            ScanText::Sym(sym) => r.syms[sym.0 as usize].1 = id,
+            ScanText::Reserved(k, _) => r.reserved[usize::from(k)].1 = id,
         }
         Ok(())
     }
