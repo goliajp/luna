@@ -123,7 +123,7 @@ impl Vm {
         self.name_cache = Default::default();
         if self.heap.gc_phase_is_propagate() {
             let mut m = self.heap.loan_marker();
-            self.mark_roots(&mut m);
+            self.mark_roots(&mut m, true);
             self.heap.stash_marker(m);
             self.watch_errors();
             self.heap.gc_finish_atomic();
@@ -136,7 +136,7 @@ impl Vm {
         }
         self.gc_count_marked();
         let mut m = self.heap.gc_begin_full();
-        self.mark_roots(&mut m);
+        self.mark_roots(&mut m, false);
         self.watch_errors();
         let freed = self.heap.gc_end_full(m);
         self.collector_shrinks_threads();

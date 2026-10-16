@@ -26,6 +26,8 @@ pub(crate) struct PucState {
     pub(crate) short_max: usize,
     /// strings PUC's libraries keep and luna's may not: kept alive
     pub(crate) pins: Vec<Gc<crate::runtime::LuaStr>>,
+    /// how many of `pins` the cycle's start marked
+    pub(crate) pins_marked: std::cell::Cell<usize>,
     /// 5.1 and 5.2: the size of the buffer concatenations are made in
     /// (`G(L)->buff`)
     pub(crate) gbuff: usize,
@@ -59,6 +61,7 @@ impl Default for PucState {
             strt_nuse: 0,
             short_max: crate::runtime::string::MAX_SHORT_LEN,
             pins: Vec::new(),
+            pins_marked: std::cell::Cell::new(0),
             gbuff: 0,
             kept_long: Vec::new(),
             libs_pace: None,

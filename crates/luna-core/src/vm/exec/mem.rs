@@ -52,7 +52,7 @@ impl Vm {
             // finish the cycle in progress: what it finds dead goes; the
             // objects made since the last safe point are held as young
             let mut m = self.heap.loan_marker();
-            self.mark_roots(&mut m);
+            self.mark_roots(&mut m, true);
             self.heap.mark_young(&mut m);
             self.heap.stash_marker(m);
             self.watch_errors();
@@ -63,7 +63,7 @@ impl Vm {
             self.heap.gc_finish_sweep();
             self.gc_count_marked();
             let mut m = self.heap.gc_begin_full();
-            self.mark_roots(&mut m);
+            self.mark_roots(&mut m, false);
             self.heap.mark_young(&mut m);
             self.watch_errors();
             self.heap.gc_end_full(m);
