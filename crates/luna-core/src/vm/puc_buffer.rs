@@ -314,12 +314,31 @@ impl Vm {
         let mt = self.alloc_table_sized(0, 2)?;
         let mtv = Value::Table(mt);
         self.api_check_after(mtv);
-        // `luaL_newmetatable` pushes the name
+        // `luaL_newmetatable` pushes the name again: the string looked up
+        // first may have been collected at the check just made
+        let base = self.lib_roots.len();
         self.lib_roots.push(mtv);
+        let r = self.fill_box_metatable(mt, name, reg, l53);
+        self.lib_roots.truncate(base);
+        r
+    }
+
+    /// The new box metatable `mt` (rooted) filled and put in registry
+    /// `reg` under `name`.
+    fn fill_box_metatable(
+        &mut self,
+        mt: Gc<crate::runtime::Table>,
+        name: &[u8],
+        reg: Gc<crate::runtime::Table>,
+        l53: bool,
+    ) -> Result<(), LuaError> {
+        let mtv = Value::Table(mt);
+        let key = self.str_value(name)?;
         self.api_check_after(key);
-        self.lib_roots.pop();
+        self.lib_roots.push(key);
         // `boxgc`, a light C function: no object of PUC's
         let gc = self.builtin(box_gc, &[], crate::runtime::Builtin::None)?;
+        self.lib_roots.push(gc);
         if l53 {
             let n = self.str_value(b"__name")?;
             self.raw_set(mt, n, key)?;
