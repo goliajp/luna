@@ -43,6 +43,7 @@ impl Vm {
         // point's live top
         let live_top = std::mem::replace(&mut self.gc_top, self.stack.len() as u32);
         self.gc_hold_threads();
+        self.jit_forget_ghosts();
         if self.heap.gc_phase_is_propagate() {
             // finish the cycle in progress: what it finds dead goes; the
             // objects made since the last safe point are held as young

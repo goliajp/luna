@@ -66,4 +66,13 @@ impl Vm {
                 .set_counted(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
         }
     }
+
+    /// A collection starts, perhaps inside a running trace (a Lua function
+    /// it calls collects): the sweep may free the records its sunk tables
+    /// and its accumulated string are kept in, so the trace lets go of
+    /// them, and makes what it leaves with counted.
+    pub(crate) fn jit_forget_ghosts(&mut self) {
+        self.jit.sunk_ghosts.fill(None);
+        self.jit.accum_last = None;
+    }
 }

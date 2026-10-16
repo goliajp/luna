@@ -243,3 +243,30 @@ fn concat_inside_an_inlined_function_with_its_own_new_table() {
         }
     }
 }
+
+/// A Lua iterator collects at each call of the generic-for loop, whose
+/// body accumulates a long string: the record of the string PUC made in
+/// the iteration before may be swept meanwhile, and the loop then ends,
+/// making the accumulated string.
+#[test]
+fn a_lua_iterator_collects_under_an_accumulated_concatenation() {
+    check(
+        "",
+        "local function upto(n, i) if i < n then local box = {i} return i + 1 end end
+         local function build(n)
+           local s = ''
+           for i in upto, n, 0 do
+             local piece = 'abcdefghijklmnopqrstuvwxyz0123456789' .. i
+             s = s .. piece
+           end
+           return s
+         end
+         for n = 1, 60 do
+           local s = build(n)
+           local want = {}
+           for i = 1, n do want[i] = 'abcdefghijklmnopqrstuvwxyz0123456789' .. i end
+           if s ~= table.concat(want) then error('wrong string at ' .. n) end
+         end
+         return 'ok'",
+    );
+}
