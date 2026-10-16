@@ -43,13 +43,7 @@ impl Vm {
                     }
                 }
                 self.set_r(base, inst.a(), Value::Table(t));
-                // 5.1 keeps the whole frame
-                let top = if self.version() == LuaVersion::Lua51 {
-                    self.frame_top()
-                } else {
-                    base + inst.a() + 1
-                };
-                self.checkpoint(top);
+                self.checkpoint_after_op(inst, base);
             }
             Op::SetList => {
                 let a = inst.a();
@@ -207,5 +201,27 @@ impl Vm {
             op => unreachable!("{op:?} is not a frame op"),
         }
         Ok(())
+    }
+
+    /// The check for a collection after `inst` (NEWTABLE, CLOSURE or
+    /// CONCAT) finished in the running Lua function, its registers at
+    /// `base`, with each dialect's stack top: 5.1 keeps the whole frame
+    /// (CLOSURE puts the closure straight into its variable, which may lie
+    /// below other live registers), the later dialects up to the result.
+    pub(super) fn checkpoint_after_op(&mut self, inst: Inst, base: u32) {
+        let v51 = self.version() == LuaVersion::Lua51;
+        let top = match inst.op() {
+            Op::Concat => {
+                let (first, out) = inst.concat_operands();
+                return self.concat_checkpoint(base + first, base + out);
+            }
+            Op::Closure if v51 => {
+                let max = self.top_frame().closure.proto.max_stack as u32;
+                base + max.max(inst.a() + 1)
+            }
+            _ if v51 && inst.op() == Op::NewTable => self.frame_top(),
+            _ => base + inst.a() + 1,
+        };
+        self.checkpoint(top);
     }
 }

@@ -200,79 +200,17 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
 }
 
 /// `cl.proto.protos[idx]` as a new closure of a frame of `cl` whose
-/// registers start at stack slot `base`: in-stack upvalues are opened on
-/// that frame's slots (the trace spilled their values first), the others
-/// taken from `cl`; 5.1 gives the closure its own `_ENV` cell and 5.2 /
-/// 5.3 reuse the proto's cached closure, as the interpreter does. Returns
-/// the closure's payload.
+/// registers start at stack slot `base`, as the interpreter's `CLOSURE`
+/// makes it (the trace spilled the in-stack upvalues' values first).
+/// Returns the closure's payload, 0 when it cannot be made.
 pub(crate) fn new_closure(
     vm: &mut luna_core::vm::Vm,
     cl: luna_core::runtime::Gc<luna_core::runtime::LuaClosure>,
     idx: usize,
     base: u32,
 ) -> i64 {
-    use luna_core::runtime::function::{INLINE_UPVALS_N, UpvalState, Upvalue};
-    let inner = cl.proto.protos[idx];
-    let n_ups = inner.upvals.len();
-    // Build the upval slice — small (0..2 typical) so use a stack
-    // array up to INLINE_UPVALS_N like the interp does, else heap.
-    let mut stack_buf: [std::mem::MaybeUninit<luna_core::runtime::Gc<Upvalue>>; INLINE_UPVALS_N] =
-        [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
-    let mut heap_buf = luna_core::runtime::mem::LVec::new(vm.heap.mem());
-    let use_inline = n_ups <= INLINE_UPVALS_N;
-    if !use_inline && heap_buf.reserve_exact(n_ups).is_err() {
-        return 0;
+    match vm.jit_closure(cl, idx, base) {
+        Some(nc) => payload_bits(luna_core::runtime::Value::Closure(nc)),
+        None => 0,
     }
-    for (i, d) in inner.upvals.iter().enumerate() {
-        let uv = if d.in_stack {
-            // `find_or_create_upval` points the open
-            // upval at vm.stack[base + d.index]. The trace IR
-            // emitted a spill before this call, so the slot holds
-            // the right value at capture time.
-            // 0: the trace exits at the `Closure` and the interpreter makes it
-            match vm.jit_find_or_create_upval(base + d.index as u32) {
-                Some(uv) => uv,
-                None => return 0,
-            }
-        } else {
-            cl.upvals()[d.index as usize]
-        };
-        if use_inline {
-            stack_buf[i] = std::mem::MaybeUninit::new(uv);
-        } else if heap_buf.push(uv).is_err() {
-            return 0;
-        }
-    }
-    let ups: &mut [luna_core::runtime::Gc<Upvalue>] = if use_inline {
-        // SAFETY: `use_inline` means `n_ups <= INLINE_UPVALS_N`, and the
-        // loop above wrote `stack_buf[i]` for every `i < n_ups`
-        // (`inner.upvals` has `n_ups` entries), so the slice covers only
-        // initialised slots
-        unsafe {
-            std::slice::from_raw_parts_mut(
-                stack_buf.as_mut_ptr() as *mut luna_core::runtime::Gc<Upvalue>,
-                n_ups,
-            )
-        }
-    } else {
-        &mut heap_buf[..]
-    };
-    // v51 per-closure `_ENV` clone — matches interp Op::Closure.
-    let v51 = vm.version() <= luna_core::version::LuaVersion::Lua51;
-    if v51 && inner.env_upval_idx != u8::MAX {
-        let i = inner.env_upval_idx as usize;
-        let cur = match ups[i].state() {
-            UpvalState::Open { slot, thread } => vm.read_slot(slot, thread),
-            UpvalState::Closed(v) => v,
-        };
-        // 0: the trace exits at the `Closure` and the interpreter makes it
-        match vm.heap.try_new_upvalue(UpvalState::Closed(cur)) {
-            Ok(uv) => ups[i] = uv,
-            Err(_) => return 0,
-        }
-    }
-    let Some(nc) = vm.jit_closure_from_proto(inner, ups) else {
-        return 0;
-    };
-    payload_bits(luna_core::runtime::Value::Closure(nc))
 }
