@@ -253,10 +253,15 @@ impl Vm {
     /// then takes to have the interpreter check.
     #[doc(hidden)]
     pub fn jit_gc_due(&mut self, op_pc: u32) -> bool {
-        let due = self.heap.gc_due() && !self.gc_finalizing && self.jit.pending_err.is_none();
+        let due = self.step_due() && self.jit.pending_err.is_none();
         if due {
             self.jit.gc_exit = Some(op_pc);
         }
         due
+    }
+
+    /// Whether a check for a collection now would step it.
+    pub(crate) fn step_due(&self) -> bool {
+        self.heap.gc_due() && !self.gc_finalizing
     }
 }
