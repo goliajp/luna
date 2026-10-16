@@ -93,6 +93,12 @@ pub fn lower_int_chunk_into<M: Module>(
     };
     let scan = scan::scan_chunk(c)?;
     let cfg = cfg::build_cfg(c, &scan)?;
+    // compiled code returns one value or none, the same on every path: a
+    // chunk that returns one on some paths and none on others is left to
+    // the interpreter
+    if cfg.returns == (true, true) {
+        return None;
+    }
     table_flow::check_table_operands(c, &cfg)?;
     let presize_for_newtable = checks::presize_hints(c, &scan);
     checks::check_fold_blocks(&scan)?;
@@ -158,7 +164,7 @@ pub fn lower_int_chunk_into<M: Module>(
         entry_id,
         ChunkMeta {
             num_args: num_params as u8,
-            returns_one: scan.sees_return1,
+            returns_one: cfg.returns.1,
             arg_float_mask,
             arg_table_mask,
             ret_is_float,

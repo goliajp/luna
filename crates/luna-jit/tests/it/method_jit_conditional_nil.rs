@@ -84,3 +84,19 @@ fn arithmetic_on_a_local_still_nil_raises() {
         }
     }
 }
+
+/// A function that returns a value on one path and falls off its end on
+/// another returns no value there, so a generic `for` it drives ends and
+/// `select('#', ...)` counts none.
+#[test]
+fn a_function_that_returns_on_one_path_returns_nothing_on_the_other() {
+    same(
+        "local function upto(n, i) if i < n then return i + 1 end end
+         local c = 0
+         for i in upto, 30, 0 do c = c + i end
+         local counts = {}
+         for k = 1, 3 do counts[k] = select('#', upto(3, 3)) .. select('#', upto(3, 1)) end
+         return c .. ' ' .. table.concat(counts, ',')",
+        "465 01,01,01",
+    );
+}
