@@ -99,11 +99,12 @@ pub(super) struct PTab {
 }
 
 impl PTab {
-    /// A new empty table (PUC `luaH_new`), counted as PUC's.
-    pub(super) fn new(heap: &mut Heap, id: u32) -> Result<PTab, SyntaxError> {
+    /// A new empty table (PUC `luaH_new`), counted as PUC's, with room
+    /// for about `keys` keys.
+    pub(super) fn new(heap: &mut Heap, id: u32, keys: usize) -> Result<PTab, SyntaxError> {
         Ok(PTab {
             id,
-            keys: Default::default(),
+            keys: std::collections::HashSet::with_capacity_and_hasher(keys, Default::default()),
             asize: 0,
             nodes: 0,
             used: 0,
@@ -120,7 +121,7 @@ impl PTab {
 
     /// `k` put in the table (PUC `luaH_newkey`), when it is not there.
     pub(super) fn insert(&mut self, heap: &mut Heap, d: Dialect, k: PKey) {
-        if self.keys.contains(&k) {
+        if !self.keys.insert(k) {
             return;
         }
         let in_array = k.index().is_some_and(|i| i <= self.asize);
@@ -132,7 +133,6 @@ impl PTab {
         if let Some(i) = k.index() {
             self.nums[ceil_log2(i)] += 1;
         }
-        self.keys.insert(k);
     }
 
     /// `k` set to nil: the key goes, its node stays taken.
@@ -152,7 +152,8 @@ impl PTab {
         if let Some(i) = pending.index() {
             nums[ceil_log2(i)] += 1;
         }
-        let total = self.keys.len() as u64 + 1;
+        // the pending key is in the set already
+        let total = self.keys.len() as u64;
         let (asize, in_array) = match d {
             Dialect::L55 => sizes_55(&nums, self.array_keys(), self.asize),
             _ => sizes(&nums),
@@ -248,7 +249,7 @@ mod tests {
         let mut heap = Heap::new();
         heap.table_dialect = d;
         let t = heap.try_new_table().expect("table");
-        let mut p = PTab::new(&mut heap, 1).expect("parser table");
+        let mut p = PTab::new(&mut heap, 1, 0).expect("parser table");
         let check = |heap: &mut Heap, k: Value, set: bool, p: &mut PTab| {
             // SAFETY: the test's table, which nothing else refers to
             let t = unsafe { t.as_mut() };
