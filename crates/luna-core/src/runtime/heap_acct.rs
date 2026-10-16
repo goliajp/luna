@@ -12,7 +12,7 @@ use crate::runtime::table::Dialect;
 
 #[path = "heap_ghost.rs"]
 mod ghost;
-pub(crate) use ghost::Ghost;
+pub(crate) use ghost::{Ghost, GhostRef};
 
 /// PUC's structures luna has no object for, as far as the count goes.
 pub(crate) struct PucState {

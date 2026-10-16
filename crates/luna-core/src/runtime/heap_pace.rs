@@ -64,7 +64,12 @@ impl Heap {
     /// check for the interpreter loop).
     #[inline(always)]
     pub fn gc_due(&self) -> bool {
-        self.bytes >= self.gc_limit && !self.no_gc() && !self.no_auto()
+        self.gc_due_after(0)
+    }
+
+    /// [`Heap::gc_due`] once `more` bytes more are counted.
+    pub(crate) fn gc_due_after(&self, more: usize) -> bool {
+        self.bytes + more >= self.gc_limit && !self.no_gc() && !self.no_auto()
     }
 
     /// No automatic step runs (`gc-trace` with `R38_NOAUTO` set).

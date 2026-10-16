@@ -129,3 +129,29 @@ fn moved_by_count(pl: &Plan<'_>, escape: &EscapeAnalysis) -> Vec<u32> {
     }
     out
 }
+
+/// Sunk site `sid` makes its table at op `i` (pc `pc`): counted as PUC's
+/// is, or, when a collection step falls due with it, made for real as the
+/// trace leaves after the op.
+pub(super) fn emit_sunk_table<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, i: usize, pc: u32, sid: usize) -> Option<()> {
+    let ops = super::super::sunk::sunk_ops(&lw.escape.sites[sid], sid);
+    let ops = lw.bcx.ins().iconst(types::I64, ops);
+    let fref = lw.bcx.import_func(lw.h.rt.sunk_table_id);
+    let call = lw.bcx.ins().call(fref, &[ops]);
+    let due = lw.bcx.inst_results(call)[0];
+    due_exit(lw, pl, due, i, pc + 1);
+    Some(())
+}
+
+/// Sunk site `sid`'s table grows to `grow_to` nodes (0: it does not) for
+/// a new field, as PUC's does.
+pub(super) fn emit_sunk_growth<E: Emit>(lw: &mut Lower<E>, sid: usize, grow_to: u32) -> Option<()> {
+    if grow_to != 0 {
+        let ops = super::super::sunk::sunk_ops(&lw.escape.sites[sid], sid);
+        let ops = lw.bcx.ins().iconst(types::I64, ops);
+        let to = lw.bcx.ins().iconst(types::I64, i64::from(grow_to));
+        let fref = lw.bcx.import_func(lw.h.rt.sunk_grow_id);
+        lw.bcx.ins().call(fref, &[ops, to]);
+    }
+    Some(())
+}

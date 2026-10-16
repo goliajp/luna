@@ -121,6 +121,7 @@ pub(super) fn sweep_table_write(
                 a,
                 inline_depth: depth,
                 array_cap: sizes.map_or(0, |(asize, _)| asize as u32),
+                hash_cap: sizes.map_or(0, |(_, h)| if h == 0 { 0 } else { h.next_power_of_two() as u32 }),
                 table_ops: crate::jit_backend::pack_table_ops(ins),
                 hash_keys: Vec::new(),
                 // sizes past a table's limit: the helper raises the error
@@ -229,9 +230,20 @@ pub(super) fn sweep_table_write(
                         s
                     }
                 };
+                let site = &mut sites[sid];
+                let grow_to = if slot_opt.is_none() && slot as u32 >= site.hash_cap {
+                    site.hash_cap = (slot as u32 + 1).next_power_of_two();
+                    site.hash_cap
+                } else {
+                    0
+                };
+                if grow_to != 0 && site.array_cap != 0 {
+                    mark_escape(sites, sid);
+                }
                 op_actions[i] = Some(OpAction::SetFieldSunkWrite {
                     site_idx: sid as u32,
                     hash_slot: slot as u32,
+                    grow_to,
                 });
             }
         }

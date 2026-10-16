@@ -105,6 +105,8 @@ pub(super) fn trace_helper(name: &str) -> Option<*const u8> {
         "luna_jit_upval_of_checked" => crate::jit_backend::luna_jit_upval_of_checked as *const u8,
         "luna_jit_op_self_checked" => crate::jit_backend::luna_jit_op_self_checked as *const u8,
         "luna_jit_gc_due" => crate::jit_backend::luna_jit_gc_due as *const u8,
+        "luna_jit_sunk_table" => crate::jit_backend::luna_jit_sunk_table as *const u8,
+        "luna_jit_sunk_grow" => crate::jit_backend::luna_jit_sunk_grow as *const u8,
         "luna_jit_suppress_trace_admit" => {
             crate::jit_backend::luna_jit_suppress_trace_admit as *const u8
         }

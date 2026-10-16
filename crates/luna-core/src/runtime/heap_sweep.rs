@@ -160,7 +160,7 @@ impl Heap {
                         }
                         continue;
                     }
-                    n += (*(cur as *mut Ghost)).sizes.len() as i64;
+                    n += self.ghost_objects(cur as *mut Ghost);
                 } else if self.puc_listed(cur, strt) {
                     n += 1;
                 }
