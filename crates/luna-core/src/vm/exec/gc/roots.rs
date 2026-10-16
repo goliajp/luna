@@ -19,7 +19,10 @@ impl Vm {
         // a load may have made meanwhile
         let puc = &self.heap.puc;
         if again {
-            for &n in puc.pins[puc.pins_marked.get()..].iter().chain(&puc.load_msg) {
+            for &n in puc.pins[puc.pins_marked.get()..]
+                .iter()
+                .chain(&puc.load_msg)
+            {
                 m.mark(n);
             }
         } else {
