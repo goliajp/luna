@@ -11,9 +11,6 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         ..
     } = *pl;
     let Lower { body_loop, .. } = *lw;
-    let RuntimeHelpers {
-        str_buf_extend_id, ..
-    } = lw.h.rt;
     lw.bcx.switch_to_block(body_loop);
     // Intentionally NOT sealed: the tail's clean-close back-edge
     // adds a second predecessor below.
@@ -81,8 +78,9 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
                 // Read piece slot raw bits + buf ptr.
                 let piece_raw = lw.bcx.use_var(regs[ba.piece_slot as usize]);
                 let buf_ptr = lw.bcx.use_var(fctx.buf_var);
-                let extend_ref = lw.bcx.import_func(str_buf_extend_id);
-                let call_inst = lw.bcx.ins().call(extend_ref, &[buf_ptr, piece_raw]);
+                let concat_ref = lw.bcx.import_func(lw.h.rt.str_buf_concat_id);
+                let pc_arg = lw.bcx.ins().iconst(types::I64, i64::from(rop.pc));
+                let call_inst = lw.bcx.ins().call(concat_ref, &[buf_ptr, piece_raw, pc_arg]);
                 let status = lw.bcx.inst_results(call_inst)[0];
                 // Branch on -1 (signed less than 0) → deopt.
                 let zero = lw.bcx.ins().iconst(types::I64, 0);
@@ -97,6 +95,9 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
                 guard_exit(lw, pl, rop.pc, i);
                 lw.bcx.switch_to_block(continue_blk);
                 lw.bcx.seal_block(continue_blk);
+                // a step due: leave after the idiom, the buffer flushed
+                let last = ba.post_idx.unwrap_or(i);
+                due_exit(lw, pl, status, last, record.ops[last].pc + 1);
                 continue;
             }
         }

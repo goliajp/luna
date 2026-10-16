@@ -118,6 +118,25 @@ impl Heap {
         super::set_uncounted(h, false);
     }
 
+    /// An object of `kind` and `size` bytes PUC makes and luna does not
+    /// (yet), as [`Heap::acct_ghost`]: where its record is.
+    pub(crate) fn acct_ghost_ref(&mut self, kind: PucKind, size: usize) -> Result<GhostRef, Oom> {
+        let size32 = size as u32 | if kind == PucKind::ShortStr { SHORT } else { 0 };
+        let (g, at) = self.ghost_push(size32)?;
+        self.acct_obj(kind, size);
+        Ok(GhostRef { g, at })
+    }
+
+    /// luna made the object of `r` after all (one without parts): its
+    /// record neither frees nor sweeps it.
+    pub(crate) fn ghost_taken(&mut self, r: GhostRef) {
+        // SAFETY: as in `ghost_table_resize`
+        unsafe {
+            let sizes = &mut (*r.g).sizes;
+            sizes[r.at] |= TAKEN;
+        }
+    }
+
     /// luna made the table of `t` after all (a trace leaving with it): its
     /// record neither frees nor sweeps it.
     pub(crate) fn ghost_table_taken(&mut self, t: GhostRef) {
