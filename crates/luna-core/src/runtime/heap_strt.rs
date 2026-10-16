@@ -19,6 +19,39 @@ pub(super) struct StrtSweep {
     dead: Vec<(u32, *mut GcHeader)>,
     next: usize,
     pub(super) held: Vec<*mut GcHeader>,
+    /// room for sorting `dead` by bucket
+    sorted: Vec<(u32, *mut GcHeader)>,
+    counts: Vec<u32>,
+}
+
+impl StrtSweep {
+    /// `dead` in bucket order, a bucket's strings in the order found: by
+    /// counting when the table is not much bigger than the list.
+    #[inline(never)]
+    fn sort_dead(&mut self, buckets: u32) {
+        let n = self.dead.len();
+        if buckets as usize > 8 * n {
+            self.dead.sort_by_key(|e| e.0);
+            return;
+        }
+        let counts = &mut self.counts;
+        counts.clear();
+        counts.resize(buckets as usize + 1, 0);
+        for &(b, _) in &self.dead {
+            counts[b as usize + 1] += 1;
+        }
+        for i in 1..counts.len() {
+            counts[i] += counts[i - 1];
+        }
+        self.sorted.clear();
+        self.sorted.resize(n, (0, std::ptr::null_mut()));
+        for &e in &self.dead {
+            let at = &mut counts[e.0 as usize];
+            self.sorted[*at as usize] = e;
+            *at += 1;
+        }
+        std::mem::swap(&mut self.dead, &mut self.sorted);
+    }
 }
 
 impl Heap {
@@ -61,7 +94,7 @@ impl Heap {
             }
         }
         // a stable sort keeps a bucket's strings in the order of the list
-        self.strt.dead.sort_by_key(|e| e.0);
+        self.strt.sort_dead(size.max(1));
     }
 
     /// Whether `h`, dead, waits for the string sweep under way (every dead
@@ -165,5 +198,31 @@ impl Heap {
             n, self.puc.strt_nuse,
             "{ctx}: counted short strings against PUC's string table"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counting_by_bucket_keeps_the_order_a_stable_sort_gives() {
+        let mut seed = 7u32;
+        for (n, buckets) in [(0, 4), (1, 1), (50, 8), (200, 64), (40, 1024), (300, 512)] {
+            let dead: Vec<(u32, *mut GcHeader)> = (0..n)
+                .map(|i| {
+                    seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    ((seed >> 8) % buckets, (i * 16 + 16) as *mut GcHeader)
+                })
+                .collect();
+            let mut want = dead.clone();
+            want.sort_by_key(|e| e.0);
+            let mut s = StrtSweep {
+                dead,
+                ..Default::default()
+            };
+            s.sort_dead(buckets);
+            assert_eq!(s.dead, want, "{n} in {buckets}");
+        }
     }
 }
