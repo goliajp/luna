@@ -61,16 +61,12 @@ impl<'s> Parser<'s> {
                 self.advance()?;
                 Expr::Vararg
             }
-            Token::Int(_) => {
-                let Token::Int(v) = self.advance()?.tok else {
-                    unreachable!()
-                };
+            &Token::Int(v) => {
+                self.advance()?;
                 Expr::Int(v)
             }
-            Token::Float(_) => {
-                let Token::Float(v) = self.advance()?.tok else {
-                    unreachable!()
-                };
+            &Token::Float(v) => {
+                self.advance()?;
                 Expr::Float(v)
             }
             Token::Str(_) => {

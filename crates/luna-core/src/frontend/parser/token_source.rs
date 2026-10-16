@@ -157,6 +157,36 @@ impl<'s> TokenSource<'s> {
     }
 }
 
+impl<'s> TokenSource<'s> {
+    /// The next token written into `tok`, with the byte no token starts
+    /// with and the token's name or literal; `tok` is left as it was on an
+    /// error.
+    #[inline]
+    pub(super) fn next_into(&mut self, tok: &mut LexTok) -> Result<(Option<u8>, Sym), SyntaxError> {
+        let l = match self {
+            TokenSource::Lexer(l) => return lexed_into(l, tok),
+            TokenSource::Stream(l) => return lexed_into(l, tok),
+            TokenSource::PreExpanded { .. } => self.next_token()?,
+        };
+        *tok = l.info;
+        Ok((l.char, l.sym))
+    }
+}
+
+#[inline]
+fn lexed_into<S: Source>(
+    l: &mut Lexer<'_, S>,
+    tok: &mut LexTok,
+) -> Result<(Option<u8>, Sym), SyntaxError> {
+    Ok(match l.next_into(tok)? {
+        None => (None, l.last_sym),
+        Some(c) => {
+            tok.tok = Token::At;
+            (Some(c), Sym(0))
+        }
+    })
+}
+
 /// The next item of a live lexer, as the parser holds it.
 fn lexed<S: Source>(l: &mut Lexer<'_, S>) -> Result<Cur, SyntaxError> {
     Ok(match l.next_lexed()? {
