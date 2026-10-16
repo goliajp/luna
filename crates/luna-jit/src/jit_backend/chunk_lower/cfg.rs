@@ -6,6 +6,9 @@ pub(super) struct ChunkCfg {
     pub(super) num_bbs: usize,
     pub(super) pc_to_bb: Vec<usize>,
     pub(super) bb_predecessors: Vec<Vec<usize>>,
+    /// whether the chunk's reachable blocks return none (`Return0`) and
+    /// one (`Return1`) value
+    pub(super) returns: (bool, bool),
 }
 
 pub(super) fn build_cfg(c: ChunkIn<'_>, scan: &ChunkScan) -> Option<ChunkCfg> {
@@ -157,10 +160,25 @@ pub(super) fn build_cfg(c: ChunkIn<'_>, scan: &ChunkScan) -> Option<ChunkCfg> {
             }
         }
     }
+    let mut reachable = vec![false; num_bbs];
+    let mut work = vec![0];
+    while let Some(b) = work.pop() {
+        if !std::mem::replace(&mut reachable[b], true) {
+            work.extend(&bb_successors[b]);
+        }
+    }
+    let mut returns = (false, false);
+    for (p, ins) in code.iter().enumerate().take(n) {
+        if reachable[pc_to_bb[p]] {
+            returns.0 |= ins.op() == Op::Return0;
+            returns.1 |= ins.op() == Op::Return1;
+        }
+    }
     Some(ChunkCfg {
         bb_pcs,
         num_bbs,
         pc_to_bb,
         bb_predecessors,
+        returns,
     })
 }
