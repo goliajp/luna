@@ -144,15 +144,6 @@ impl Vm {
         Ok(k as u32)
     }
 
-    /// A string a library built from pieces of any size: one longer than a
-    /// string can hold raises, as the concatenation operator does.
-    pub(crate) fn lib_built_str(&mut self, bytes: &[u8]) -> Result<Value, LuaError> {
-        if bytes.len() > crate::runtime::string::MAX_LEN {
-            return Err(self.rt_err("string length overflow"));
-        }
-        self.str_value(bytes)
-    }
-
     /// PUC's `LUAL_BUFFERSIZE`, the room a library buffer has on the C
     /// stack before it allocates: the C library's `BUFSIZ` up to 5.2,
     /// `0x80 * sizeof(void *) * sizeof(lua_Integer)` in 5.3 and
