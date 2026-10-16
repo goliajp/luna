@@ -37,6 +37,7 @@ pub(super) struct RuntimeHelpers {
     pub(super) gc_due_id: FuncId,
     pub(super) sunk_table_id: FuncId,
     pub(super) sunk_grow_id: FuncId,
+    pub(super) str_buf_concat_id: FuncId,
     pub(super) math_fn_check_id: FuncId,
     pub(super) str_sub_id: FuncId,
     pub(super) len_checked_id: FuncId,
@@ -361,6 +362,7 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
     let gc_due_id = declare_i64_import(bcx, "luna_jit_gc_due", 1)?;
     let sunk_table_id = declare_i64_import(bcx, "luna_jit_sunk_table", 1)?;
     let sunk_grow_id = declare_i64_import(bcx, "luna_jit_sunk_grow", 2)?;
+    let str_buf_concat_id = declare_i64_import(bcx, "luna_jit_str_buf_concat", 3)?;
     let mut math_fn_check_sig = bcx.make_signature();
     math_fn_check_sig.params.push(AbiParam::new(types::I64));
     math_fn_check_sig.params.push(AbiParam::new(types::I64));
@@ -467,6 +469,7 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
         gc_due_id,
         sunk_table_id,
         sunk_grow_id,
+        str_buf_concat_id,
         math_fn_check_id,
         str_sub_id,
         len_checked_id,

@@ -70,6 +70,31 @@ pub unsafe extern "C" fn luna_jit_str_buf_extend(buf: i64, str_ptr: i64) -> i64 
     if vm.jit_str_buf_extend(buf, s) { 0 } else { -1 }
 }
 
+/// The `CONCAT` at `op_pc` of a trace's accumulated concatenation: the
+/// piece appended and PUC's string of the two counted (see
+/// `Vm::jit_str_buf_concat`). 0 on success, -1 as
+/// [`luna_jit_str_buf_extend`], 1 when a collection step falls due.
+///
+/// # Safety
+/// As [`luna_jit_str_buf_extend`].
+// SAFETY: no other item in the link is named `luna_jit_str_buf_concat`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_str_buf_concat(buf: i64, str_ptr: i64, op_pc: i64) -> i64 {
+    if buf == 0 || str_ptr == 0 {
+        return -1;
+    }
+    // SAFETY: as in `luna_jit_str_buf_extend`
+    let (vm, buf, s) = unsafe {
+        (
+            current_jit_vm(),
+            &mut *(buf as *mut LVec<u8>),
+            str_arg(str_ptr),
+        )
+    };
+    vm.jit_str_buf_concat(buf, s, op_pc as u32)
+}
+
 /// Trace JIT helper:drain the accumulator buffer
 /// into a fresh `LuaStr` via `heap.intern`, returning the raw ptr
 /// bits for the trace to write into the accumulator slot.

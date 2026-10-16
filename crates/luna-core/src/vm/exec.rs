@@ -59,6 +59,7 @@ mod index_set;
 mod jit_call;
 mod jit_rt;
 mod jit_rt_strbuf;
+pub(crate) use jit_rt_strbuf::AccumLast;
 mod jit_tforcall;
 mod lifecycle;
 mod limits;

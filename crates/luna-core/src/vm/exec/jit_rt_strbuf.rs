@@ -2,6 +2,16 @@
 
 use super::*;
 
+/// What the string of a trace's accumulator buffer stands for (see
+/// `JitState::accum_last`).
+#[derive(Clone, Copy)]
+pub(crate) enum AccumLast {
+    /// the string the trace entered with, unchanged since
+    Entry(Gc<crate::runtime::LuaStr>),
+    /// PUC's long string, recorded
+    Long(crate::runtime::heap::GhostRef),
+}
+
 impl Vm {
     /// Pop a reusable buffer from the JIT accumulator buffer pool, or
     /// make an empty one when the pool is empty. The trace keeps it (as
@@ -10,6 +20,7 @@ impl Vm {
     #[doc(hidden)]
     pub fn jit_str_buf_acquire(&mut self) -> Box<crate::runtime::mem::LVec<u8>> {
         let buf = self.jit.str_buf_pool.pop();
+        self.jit.accum_last = None;
         Box::new(buf.unwrap_or_else(|| crate::runtime::mem::LVec::new(self.heap.mem())))
     }
 
@@ -34,7 +45,42 @@ impl Vm {
         buf: &mut crate::runtime::mem::LVec<u8>,
         piece: Gc<crate::runtime::LuaStr>,
     ) -> bool {
+        // the trace's first append: the string it entered with
+        self.jit.accum_last = Some(AccumLast::Entry(piece));
         buf.extend_from_slice(piece.as_bytes()).is_ok()
+    }
+
+    /// The `CONCAT` at `op_pc` of a trace's accumulated concatenation:
+    /// `piece` appended to the buffer, and the string PUC makes of the two
+    /// counted (a short one made for real, so that it is found as PUC's
+    /// is; a long one recorded, which the buffer's string stands for once
+    /// made). -1 when the buffer cannot grow; 1 when a collection step
+    /// falls due, the trace then leaving after the op.
+    #[doc(hidden)]
+    pub fn jit_str_buf_concat(
+        &mut self,
+        buf: &mut crate::runtime::mem::LVec<u8>,
+        piece: Gc<crate::runtime::LuaStr>,
+        op_pc: u32,
+    ) -> i64 {
+        if buf.extend_from_slice(piece.as_bytes()).is_err() {
+            return -1;
+        }
+        self.jit.accum_last = None;
+        if buf.len() <= crate::runtime::string::MAX_SHORT_LEN || self.version == LuaVersion::Lua51 {
+            if self.heap.try_intern(buf).is_err() {
+                return -1;
+            }
+        } else {
+            let size = self.heap.sizes.string(buf.len(), self.version >= LuaVersion::Lua55);
+            let g = self.heap.acct_ghost_ref(crate::runtime::heap::PucKind::LongStr, size);
+            self.jit.accum_last = g.ok().map(AccumLast::Long);
+        }
+        if self.heap.gc_due() && !self.gc_finalizing {
+            self.jit.gc_exit = Some(op_pc);
+            return 1;
+        }
+        0
     }
 
     /// Drain the accumulator buffer into a fresh string, returning its raw
@@ -48,11 +94,33 @@ impl Vm {
     #[doc(hidden)]
     pub fn jit_str_buf_intern(&mut self, buf: &mut crate::runtime::mem::LVec<u8>) -> i64 {
         // hard cap at 256KB
+        // the string PUC made last is this one
+        let last = self.jit.accum_last.take();
+        if let Some(AccumLast::Entry(e)) = last
+            && e.as_bytes() == &buf[..]
+        {
+            buf.clear();
+            return e.as_ptr() as i64;
+        }
+        let made = match last {
+            Some(AccumLast::Long(g)) => Some(g),
+            _ => None,
+        };
+        if made.is_some() {
+            self.heap.puc.silent += 1;
+        }
         let r = if buf.len() > 256 * 1024 {
             None
         } else {
             self.heap.try_intern(buf).ok()
         };
+        if let Some(g) = made {
+            self.heap.puc.silent -= 1;
+            if let Some(s) = r {
+                self.heap.ghost_taken(g);
+                self.heap.set_counted(s.as_ptr() as *mut crate::runtime::heap::GcHeader);
+            }
+        }
         buf.clear();
         match r {
             Some(gc) => gc.as_ptr() as i64,
