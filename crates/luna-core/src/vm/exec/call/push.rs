@@ -191,8 +191,9 @@ impl Vm {
         // just below `base` (5.1 db.lua :279 reads `arg.n` from a line hook).
         if proto.has_compat_vararg_arg {
             // `adjust_varargs` checks for a collection first, the missing
-            // parameters on the stack
-            self.checkpoint(func_slot + 1 + nargs.max(nparams));
+            // parameters on the stack; the fixed ones are already copied up
+            // to the new frame here (PUC copies them after), and stay live
+            self.checkpoint((func_slot + 1 + nargs.max(nparams)).max(base + nparams));
             let arg_slot = (base + nparams) as usize;
             // young until stored in its slot below; `luaH_new(L, nvar, 1)`:
             // an array part of exactly the extras' count (bounded by the

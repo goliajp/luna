@@ -84,3 +84,19 @@ fn getinfo_keeps_the_popped_function() {
         assert_eq!(run(v, src), "40", "{v:?}");
     }
 }
+
+/// 5.1's `adjust_varargs` checks for a collection before it makes the
+/// `arg` table of an old-style vararg function; the fixed parameters the
+/// call already moved up into the new frame are still the function's.
+#[test]
+fn a_compat_vararg_function_keeps_its_parameters_through_a_collection_at_entry() {
+    let src = "local function f(a, b, ...) return a, b, arg.n end
+               local bad = 0
+               for i = 1, 300 do
+                 local x = {i}
+                 local a, b, n = f(i, x, i, i)
+                 if a ~= i or b ~= x or n ~= 2 then bad = bad + 1 end
+               end
+               return tostring(bad)";
+    assert_eq!(run(LuaVersion::Lua51, src), "0");
+}
