@@ -9,7 +9,8 @@ use crate::runtime::mem::{LVec, Oom};
 
 /// A run of objects PUC made and luna did not: their sizes, in the order
 /// PUC made them, a short string's with [`SHORT`] set (its free leaves
-/// the string table too).
+/// the string table too); a table's header followed by its array and
+/// hash parts, each marked [`PART`].
 #[repr(C)]
 pub(crate) struct Ghost {
     pub(crate) hdr: GcHeader,
@@ -17,6 +18,21 @@ pub(crate) struct Ghost {
 }
 
 const SHORT: u32 = 1 << 31;
+/// a part freed with the object before it, not an object of its own
+const PART: u32 = 1 << 30;
+/// an object luna made after all, which stands for it: neither freed nor
+/// swept here
+const TAKEN: u32 = 1 << 29;
+const FLAGS: u32 = SHORT | PART | TAKEN;
+
+/// Where an object's record is (its record and the object's place in
+/// it), while luna holds no object for it (a trace's sunk table or the
+/// string of its accumulated concatenation).
+#[derive(Clone, Copy)]
+pub(crate) struct GhostRef {
+    g: *mut Ghost,
+    at: usize,
+}
 
 impl Heap {
     /// An object of `kind` and `size` bytes PUC makes and luna does not:
@@ -35,23 +51,107 @@ impl Heap {
     /// already.
     pub(crate) fn ghost_record(&mut self, kind: PucKind, size: usize) -> Result<(), Oom> {
         let size = size as u32 | if kind == PucKind::ShortStr { SHORT } else { 0 };
+        self.ghost_push(size).map(drop)
+    }
+
+    /// `entry` at the end of the newest record (a new one when the newest
+    /// object is not a record); the record and the entry's place.
+    fn ghost_push(&mut self, entry: u32) -> Result<(*mut Ghost, usize), Oom> {
+        let size = entry;
         let born = self.current_white;
         let head = self.all;
         let ghost_head = !head.is_null()
             // SAFETY: `head`, not null, heads a live object of this heap
             && unsafe { (*head).tag == ObjTag::Ghost && (*head).flags & COLOR_BITS == born };
         if ghost_head {
+            let g = head as *mut Ghost;
             // SAFETY: a header tagged `Ghost` is a `Ghost`, and nothing else
             // refers into it
-            return unsafe { (*(head as *mut Ghost)).sizes.push(size) };
+            unsafe { (*g).sizes.push(size)? };
+            // SAFETY: as above
+            return Ok((g, unsafe { (*g).sizes.len() } - 1));
         }
         let mut sizes = LVec::new(self.mem());
         sizes.push(size)?;
-        self.try_adopt(Ghost {
+        let g = self.try_adopt(Ghost {
             hdr: GcHeader::new(ObjTag::Ghost),
             sizes,
         })?;
-        Ok(())
+        Ok((g.as_ptr(), 0))
+    }
+
+    /// A table PUC makes, `a` array slots and `h` nodes, and luna does not
+    /// (yet): counted now, freed by the next sweep unless luna makes it
+    /// after all ([`Heap::ghost_table_taken`]).
+    pub(crate) fn acct_ghost_table(&mut self, a: usize, h: usize) -> Result<GhostRef, Oom> {
+        let (g, at) = self.ghost_push(self.sizes.table as u32)?;
+        self.ghost_push(PART)?;
+        self.ghost_push(PART)?;
+        self.acct_obj(PucKind::Table, self.sizes.table);
+        let t = GhostRef { g, at };
+        self.ghost_table_resize(t, 0, 0, a, h);
+        Ok(t)
+    }
+
+    /// The table of `t` resized from `old_a` array slots and `old_h` nodes
+    /// to `new_a` and `new_h` (PUC `luaH_resize`).
+    pub(crate) fn ghost_table_resize(&mut self, t: GhostRef, old_a: usize, old_h: usize, new_a: usize, new_h: usize) {
+        self.acct_table_resize(old_a, old_h, new_a, new_h);
+        let (ab, hb) = (self.array_bytes(new_a) as u32, self.hash_bytes(new_h) as u32);
+        // SAFETY: a ghost table's record lives until the sweep after it,
+        // and a sweep comes only after the trace that made it has left
+        unsafe {
+            let sizes = &mut (*t.g).sizes;
+            sizes[t.at + 1] = PART | ab;
+            sizes[t.at + 2] = PART | hb;
+        }
+    }
+
+    /// PUC's bytes of a new table of `a` array slots and `h` nodes.
+    pub(crate) fn puc_table_bytes(&self, a: usize, h: usize) -> usize {
+        self.sizes.table + self.array_bytes(a) + self.hash_bytes(h)
+    }
+
+    /// The object behind `h`, made without counting, stands for one of
+    /// PUC's counted already: counted from now on.
+    pub(crate) fn set_counted(&mut self, h: *mut GcHeader) {
+        super::set_uncounted(h, false);
+    }
+
+    /// luna made the table of `t` after all (a trace leaving with it): its
+    /// record neither frees nor sweeps it.
+    pub(crate) fn ghost_table_taken(&mut self, t: GhostRef) {
+        // SAFETY: as in `ghost_table_resize`
+        unsafe {
+            let sizes = &mut (*t.g).sizes;
+            for e in &mut sizes[t.at..t.at + 3] {
+                *e |= TAKEN;
+            }
+        }
+    }
+
+    /// The objects of PUC's a record holds, as a sweep counts them.
+    ///
+    /// # Safety
+    /// `g` heads a record of this heap.
+    pub(in crate::runtime::heap) unsafe fn ghost_objects(&self, g: *mut Ghost) -> i64 {
+        // SAFETY: the caller's contract
+        unsafe {
+            let sizes = &(*g).sizes;
+            sizes.iter().filter(|&&s| s & (PART | TAKEN) == 0).count() as i64
+        }
+    }
+
+    /// The free of a record's entry `s`: the bytes, a short string's place
+    /// in the string table; nothing for an empty part or one luna took.
+    fn ghost_free(&mut self, s: u32) {
+        if s & TAKEN != 0 || s & !FLAGS == 0 {
+            return;
+        }
+        if s & SHORT != 0 {
+            self.puc.strt_nuse -= 1;
+        }
+        self.acct_free((s & !FLAGS) as usize);
     }
 
     /// Free up to `quota` of the newest objects the dead record `g` holds
@@ -66,11 +166,8 @@ impl Heap {
         unsafe {
             while n < quota {
                 let Some(s) = (*g).sizes.pop() else { break };
-                if s & SHORT != 0 {
-                    self.puc.strt_nuse -= 1;
-                }
-                self.acct_free((s & !SHORT) as usize);
-                n += 1;
+                self.ghost_free(s);
+                n += i64::from(s & (PART | TAKEN) == 0);
             }
             (n, (*g).sizes.is_empty())
         }
@@ -84,11 +181,10 @@ impl Heap {
     pub(in crate::runtime::heap) unsafe fn free_ghost(&mut self, g: *mut Ghost) {
         // SAFETY: the caller's contract
         unsafe {
-            for &s in (*g).sizes.iter() {
-                if s & SHORT != 0 {
-                    self.puc.strt_nuse -= 1;
-                }
-                self.acct_free((s & !SHORT) as usize);
+            let n = (&(*g).sizes).len();
+            for i in 0..n {
+                let s = (&(*g).sizes)[i];
+                self.ghost_free(s);
             }
             self.free_block(g);
         }

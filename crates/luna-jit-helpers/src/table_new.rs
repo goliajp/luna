@@ -108,6 +108,46 @@ pub unsafe extern "C" fn luna_jit_table_reserve_list(t: i64, last: i64) {
     }
 }
 
+/// A trace's sunk site makes its table this round (`ops` its `NewTable`'s
+/// packed operands, the site's number + 1 from bit 32): 1 when a
+/// collection step falls due with it, the trace then leaving after the
+/// `NewTable` with the table made for real; 0 when it is counted and
+/// recorded, as PUC's is.
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread.
+// SAFETY: no other item in the link is named `luna_jit_sunk_table`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_sunk_table(ops: i64) -> i64 {
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
+    let vm = unsafe { current_jit_vm() };
+    let (b, c, k) = unpack_table_ops(ops);
+    i64::from(vm.jit_sunk_table(sunk_site(ops), b, c, k))
+}
+
+/// A trace's sunk site (`ops` as [`luna_jit_sunk_table`] takes them) puts a
+/// new field its table has no room for: PUC's grows to `nodes` nodes, from
+/// half as many. Returns 0.
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread.
+// SAFETY: no other item in the link is named `luna_jit_sunk_grow`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_sunk_grow(ops: i64, nodes: i64) -> i64 {
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
+    let vm = unsafe { current_jit_vm() };
+    let to = nodes as usize;
+    vm.jit_sunk_grow(sunk_site(ops), to / 2, to);
+    0
+}
+
+/// The sunk site packed into `ops` from bit 32 (its number + 1, 0 for none).
+fn sunk_site(ops: i64) -> usize {
+    ((ops >> 32) as usize).wrapping_sub(1)
+}
+
 /// Materialize a Sinkable site's virtual array slots into
 /// a heap `Gc<Table>` at a side-exit emit point. The JIT emit lays
 /// out two parallel stack buffers per site per exit (`raws_ptr` of
@@ -152,15 +192,39 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
     // a table that cannot be made here, at an exit, parks a deopt: the
     // dispatcher drops the trace's registers and the interpreter runs the
     // loop again from the trace head
+    let site = sunk_site(ops);
+    let counted = vm.jit_sunk_take(site);
+    let hash = (hash_keys_ptr, hash_raws_ptr, hash_kinds_ptr);
+    // SAFETY: the buffers are as the caller's contract says (# Safety)
+    let t = unsafe { materialize(vm, (b, c, k), cap_u, raws_ptr, kinds_ptr, n_hash_u, hash) };
+    vm.jit_sunk_made(site, counted, t);
+    t.map_or(0, |g| g.as_ptr() as i64)
+}
+
+/// The table of [`luna_jit_materialize_sunk_table`], made and filled; `None`
+/// with a deopt parked when it cannot be.
+///
+/// # Safety
+/// As [`luna_jit_materialize_sunk_table`]'s buffers.
+#[allow(clippy::too_many_arguments)]
+unsafe fn materialize(
+    vm: &mut luna_core::vm::Vm,
+    (b, c, k): (u32, u32, bool),
+    cap_u: usize,
+    raws_ptr: *const u64,
+    kinds_ptr: *const u8,
+    n_hash_u: usize,
+    (hash_keys_ptr, hash_raws_ptr, hash_kinds_ptr): (*const u64, *const u64, *const u8),
+) -> Option<luna_core::runtime::Gc<luna_core::runtime::Table>> {
     let g = match vm.heap.try_new_table_presized(b, c, k) {
         Ok(Some(g)) => g,
         Ok(None) => {
             vm.jit.pending_err = Some(vm.rt_err("table overflow"));
-            return 0;
+            return None;
         }
         Err(_) => {
             vm.jit_park_oom();
-            return 0;
+            return None;
         }
     };
     // SAFETY: `g` was allocated just above and nothing else refers to it
@@ -179,7 +243,7 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
         };
         if table.set_int(&mut vm.heap, (i + 1) as i64, v).is_err() {
             vm.jit_park_oom();
-            return 0;
+            return None;
         }
     }
     // Hash slots. Each entry is a
@@ -203,8 +267,8 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
         let key = luna_core::runtime::Value::Str(key);
         if table.set(&mut vm.heap, key, v).is_err() {
             vm.jit_park_oom();
-            return 0;
+            return None;
         }
     }
-    g.as_ptr() as i64
+    Some(g)
 }

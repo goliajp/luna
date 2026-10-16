@@ -161,7 +161,7 @@ pub(super) fn emit_materialize_live_sunk<E: Emit>(
                 bcx.ins().iconst(types::I64, 0),
             )
         };
-        let ops_val = bcx.ins().iconst(types::I64, site.table_ops);
+        let ops_val = bcx.ins().iconst(types::I64, sunk_ops(site, sid));
         let cap_val = bcx.ins().iconst(types::I64, cap as i64);
         let n_hash_val = bcx.ins().iconst(types::I64, n_hash as i64);
         let mat_ref = bcx.import_func(mat_sunk_id);
@@ -196,4 +196,10 @@ fn sunk_tag<E: Ins>(bcx: &mut E, k: RegKind, v: Value) -> Value {
         return bcx.ins().ireduce(types::I8, t);
     }
     bcx.ins().iconst(types::I8, i64::from(kind_to_raw_tag(k)))
+}
+
+/// The site's `NewTable` operands with its number + 1 from bit 32, as the
+/// sunk-table helpers take them.
+pub(super) fn sunk_ops(site: &AllocSite, sid: usize) -> i64 {
+    site.table_ops | ((sid as i64 + 1) << 32)
 }

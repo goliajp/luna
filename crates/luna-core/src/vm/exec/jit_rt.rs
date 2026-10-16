@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod sunk;
 mod upvals;
 
 impl Vm {

@@ -25,6 +25,10 @@ pub struct AllocSite {
     /// The array part's size the NewTable gives the table (0 for a
     /// hash-only site).
     pub array_cap: u32,
+    /// The nodes of the hash part as the fields put so far leave it: a
+    /// field past them grows PUC's table, which a sunk site with an array
+    /// part does not follow
+    pub hash_cap: u32,
     /// The NewTable's operands packed for `luna_jit_new_table_sized` (`B`,
     /// `C << 8`, `k << 16`); a materialised site is sized by them.
     pub table_ops: i64,
@@ -96,6 +100,9 @@ pub enum OpAction {
         site_idx: u32,
         /// Position in [`AllocSite::hash_keys`] of the field key.
         hash_slot: u32,
+        /// The nodes PUC's table grows to for this new key (0: it has
+        /// room), from half as many
+        grow_to: u32,
     },
     /// `Op::GetField` reading from a sunk site's
     /// hash slot. Same indexing as SetFieldSunkWrite.

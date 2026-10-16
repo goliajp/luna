@@ -175,7 +175,7 @@ pub(super) fn gc_due_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, i: usize, n
 
 /// Leave for `next_pc` when `due` (an `i64`) is not 0, with the sunk
 /// tables live after op `i`.
-fn due_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, due: Value, i: usize, next_pc: u32) {
+pub(super) fn due_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, due: Value, i: usize, next_pc: u32) {
     let not_due = lw.bcx.ins().icmp_imm_s(IntCC::Equal, due, 0);
     let after = i + 1;
     guard!(lw, pl, not_due, after, next_pc);

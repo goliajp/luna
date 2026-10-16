@@ -116,6 +116,8 @@ pub struct JitState {
 
     /// Cap on the buffer pool size.
     pub str_buf_pool_cap: usize,
+    /// by sunk site: the record of the table PUC made for it this round
+    pub(crate) sunk_ghosts: Vec<Option<crate::runtime::heap::GhostRef>>,
     /// Companion buffer for `entry_tags` (one u8 per register at entry).
     pub entry_tags_buf: Vec<u8>,
 
@@ -418,6 +420,7 @@ impl JitState {
             str_buf_pool: Vec::new(),
             str_buf_pool_cap: 4,
             entry_tags_buf: Vec::new(),
+            sunk_ghosts: Vec::new(),
             chunk_compiler: Box::new(crate::jit::NullJitBackend),
             trace_compiler: Box::new(crate::jit::NullJitBackend),
             stitch_depth_remaining: JitState::STITCH_DEPTH_DEFAULT,

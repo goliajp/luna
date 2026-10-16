@@ -25,7 +25,7 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
                 && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
                 && lw.virt_vars[site_idx as usize].is_some()
             {
-                return Some(());
+                return emit_sunk_table(lw, pl, i, oc.rop.pc, site_idx as usize);
             }
             let func_ref = lw.bcx.import_func(new_table_id);
             let ops = lw
@@ -332,13 +332,12 @@ pub(super) fn emit_set_field<E: Emit>(
     let Plan { opts, .. } = *pl;
     let OpCx { i, off, ins, .. } = *oc;
     let regs: &[Variable] = oc.regs;
-    // sunk path: when escape sweep tagged
-    // SetFieldSunkWrite, def_var the source register into
-    // the matching virt slot (array_cap + hash_slot) +
-    // propagate the source RegKind into virt_kinds.
+    // sunk path: the source register goes into the virtual slot
+    // (array_cap + hash_slot) with its kind; PUC's table may grow
     if let Some(OpAction::SetFieldSunkWrite {
         site_idx,
         hash_slot,
+        grow_to,
     }) = lw.escape.op_actions[i]
         && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
         && lw.virt_vars[site_idx as usize].is_some()
@@ -355,7 +354,7 @@ pub(super) fn emit_set_field<E: Emit>(
             .as_mut()
             .expect("Sinkable site has virt_kinds");
         kinds_vec[slot] = src_kind;
-        return Some(());
+        return emit_sunk_growth(lw, site_idx as usize, grow_to);
     }
     // helper path: R[A][K[B]:string] := R[C].
     // the helpers read the operand as a table. A number,
