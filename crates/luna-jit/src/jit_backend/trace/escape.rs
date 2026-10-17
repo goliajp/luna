@@ -176,7 +176,8 @@ pub struct EscapeAnalysis {
     /// in `record.ops`. `None` for ops the sweep didn't tag.
     pub op_actions: Vec<Option<OpAction>>,
     /// Per-op snapshot of the registers bound to a site BEFORE this op
-    /// processes, length = `effective_end`. Read at exit emit sites:
+    /// processes, length = `effective_end + 1`: the last entry is what is
+    /// bound after the last op. Read at exit emit sites:
     /// each listed site is materialised into a heap `Gc<Table>` once
     /// and written into every register listed for it (a `Move` makes
     /// more than one register hold the same table). Sites that end up
@@ -186,7 +187,7 @@ pub struct EscapeAnalysis {
     /// Accumulator sites identified in this trace.
     pub accum_sites: Vec<AccumSite>,
     /// per-op snapshot of bound accumulator-site
-    /// indices, parallel to `live_at_op`. Length = `effective_end`.
+    /// indices. Length = `effective_end`.
     pub accum_live_at_op: Vec<Vec<u32>>,
 }
 

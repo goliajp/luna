@@ -77,7 +77,7 @@ pub(super) fn escape_analyze(
         return EscapeAnalysis {
             sites: Vec::new(),
             op_actions: vec![None; upper0],
-            live_at_op: vec![Vec::new(); upper0],
+            live_at_op: vec![Vec::new(); upper0 + 1],
             accum_sites: Vec::new(),
             accum_live_at_op: Vec::new(),
         };
@@ -169,6 +169,26 @@ pub(super) fn escape_analyze(
             &mut op_actions,
         );
     }
+
+    // what is bound after the last op, for an exit taken after it (a
+    // collection due after an allocation that ends the trace)
+    // (the frames above the next op's are popped by then)
+    let next_depth = record
+        .ops
+        .get(upper)
+        .map_or(max_depth, |r| r.inline_depth as usize + 1);
+    let mut live_end: Vec<LiveBinding> = Vec::new();
+    for row in bindings.iter().take(next_depth) {
+        for (reg, &slot) in row.iter().enumerate() {
+            if let Some(sid) = slot {
+                live_end.push(LiveBinding {
+                    site: sid as u32,
+                    reg: reg as u32,
+                });
+            }
+        }
+    }
+    live_at_op.push(live_end);
 
     escape_at_end(
         record,
