@@ -166,7 +166,13 @@ impl Heap {
                 }
                 if dead {
                     *link = (*cur).next;
-                    self.free_obj(cur);
+                    // gc-verify notes every free in `free_obj`; 5.1 and 5.2
+                    // strings mostly go through the string table's sweep
+                    if !cfg!(feature = "gc-verify") && !strt && Self::is_plain_str(cur) {
+                        self.free_plain_str(cur as *mut LuaStr);
+                    } else {
+                        self.free_obj(cur);
+                    }
                     self.live -= 1;
                 } else {
                     (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);

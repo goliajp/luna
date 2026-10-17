@@ -187,6 +187,7 @@ pub(crate) const MAX_LEN: usize = u32::MAX as usize;
 
 // one byte more than the string for a terminating NUL, so the bytes can be
 // handed to C as a C string, as PUC's strings can
+#[inline]
 fn layout(len: usize) -> Layout {
     Layout::new::<LuaStr>()
         .extend(Layout::array::<u8>(len + 1).expect("string size overflows layout"))
