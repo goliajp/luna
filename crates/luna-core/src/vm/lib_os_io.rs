@@ -63,7 +63,7 @@ pub(crate) fn try_open_os(vm: &mut Vm) -> Result<(), LuaError> {
     let c = vm.str_value(b"C");
     vm.heap.puc.silent -= 1;
     let c = c?;
-    let sl = vm.lib_native_with(os_setlocale, &[c; LC_COUNT])?;
+    let sl = vm.lib_native_nup(os_setlocale, &[c; LC_COUNT], 0)?;
     set_field(vm, os, "setlocale", sl)?;
     vm.lib_set_global("os", Value::Table(os))?;
     vm.barrier_back_table(os);

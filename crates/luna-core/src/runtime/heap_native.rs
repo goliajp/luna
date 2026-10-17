@@ -59,15 +59,23 @@ impl Heap {
         self.puc.silent -= 1;
         let g = g?;
         let h = g.as_ptr() as *mut GcHeader;
+        self.set_native_puc_nup(g, puc_nup);
         if self.puc.silent == 0 {
             acct::set_uncounted(h, false);
-            // SAFETY: `g` was just made; only its per-type byte is written
-            unsafe { (*h).sub = (*h).sub & UNCOUNTED | (puc_nup as u8 + 1) };
             if puc_nup > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
                 self.acct_obj(PucKind::CClosure, self.sizes.c_closure(puc_nup));
             }
         }
         Ok(g)
+    }
+
+    /// Native `g` stands for a C closure of PUC's with `n` upvalues (from
+    /// 5.2 on none: a light function), whatever upvalues luna gives it.
+    pub(crate) fn set_native_puc_nup(&mut self, g: Gc<NativeClosure>, n: usize) {
+        let h = g.as_ptr() as *mut GcHeader;
+        debug_assert!(n + 1 < usize::from(acct::ENV51));
+        // SAFETY: `g` is a live native; only its per-type byte is written
+        unsafe { (*h).sub = (*h).sub & UNCOUNTED | (n as u8 + 1) };
     }
 
     /// [`Heap::try_new_native`] for a library function standing for the

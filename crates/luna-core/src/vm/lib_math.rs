@@ -91,6 +91,13 @@ pub(crate) fn try_open_math(vm: &mut Vm) -> Result<(), LuaError> {
         }
         let b = inlinable_builtin(name.as_bytes()).unwrap_or(Builtin::None);
         let fv = vm.builtin(f, &[], b)?;
+        // 5.4 on, the generator's functions are C closures over its state
+        if ver >= V::Lua54
+            && name.starts_with("random")
+            && let Value::Native(n) = fv
+        {
+            vm.heap.set_native_puc_nup(n, 1);
+        }
         set(vm, name, fv)?;
     }
     // Aliases are the same function value, so `math.atan2 == math.atan`
@@ -125,6 +132,12 @@ pub(crate) fn try_open_math(vm: &mut Vm) -> Result<(), LuaError> {
         let s = r.and_then(|r| Ok((r, vm.lib_native_stand_in(m_randomseed, &[], &[cl], 0)?)));
         vm.heap.fix_natives = fix;
         let (r, s) = s?;
+        // each a C closure over the generator's state
+        for f in [r, s] {
+            if let Value::Native(n) = f {
+                vm.heap.set_native_puc_nup(n, 1);
+            }
+        }
         set(vm, "random", r)?;
         set(vm, "randomseed", s)?;
     }

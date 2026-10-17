@@ -31,6 +31,21 @@ impl Vm {
         self.lib_native_with(f, &[])
     }
 
+    /// [`Vm::lib_native_with`] for a library function PUC makes with
+    /// `puc_nup` upvalues, as the collector counts traversing it.
+    pub(crate) fn lib_native_nup(
+        &mut self,
+        f: NativeFn,
+        upvals: &[Value],
+        puc_nup: usize,
+    ) -> Result<Value, LuaError> {
+        let v = self.lib_native_with(f, upvals)?;
+        if let Value::Native(n) = v {
+            self.heap.set_native_puc_nup(n, puc_nup);
+        }
+        Ok(v)
+    }
+
     /// A native function over `f` with `upvals`, collecting in an emergency
     /// when memory runs out.
     pub(crate) fn lib_native_with(
