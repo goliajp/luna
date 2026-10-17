@@ -76,9 +76,18 @@ impl Heap {
                             Dialect::L53 => t.node_count(),
                             _ => t.node_count().max(1),
                         };
+                        // 5.2 and 5.3 count the strings of PUC's it stands
+                        // for as they mark them
+                        let stands = if d != Dialect::L51 && (*h).cls & STANDS != 0 {
+                            let s = self.puc.stand_ins.iter().filter(|s| s.0 == h);
+                            s.map(|s| s.1).sum()
+                        } else {
+                            0
+                        };
                         (self.sizes.table
                             + self.array_bytes(t.asize as usize)
-                            + self.sizes.node * nodes) as i64
+                            + self.sizes.node * nodes
+                            + stands) as i64
                     }
                     // 5.1 marks a userdata black at once, 5.2 and 5.3 count
                     // it as they mark it
