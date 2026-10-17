@@ -184,7 +184,7 @@ impl Vm {
             freed = self.full_collect();
             #[cfg(feature = "gc-verify")]
             self.verify_frame_regs_live("collect_garbage_propagating");
-            let r = self.run_finalizers_or_err(true);
+            let r = self.run_finalizers_or_err(true, false);
             #[cfg(feature = "gc-trace")]
             self.trace_full_end();
             r?;

@@ -1,5 +1,6 @@
 //! Queuing and running `__gc` finalizers, and the incremental step.
 
+use super::stack_size::{self, Grown};
 use super::*;
 
 impl Vm {
@@ -36,14 +37,25 @@ impl Vm {
     /// finalization), from an automatic collection: errors do not reach the
     /// mutator. Reentrancy-guarded.
     pub(super) fn run_finalizers(&mut self) {
-        let _ = self.run_finalizers_or_err(false);
+        let _ = self.run_finalizers_or_err(false, false);
+    }
+
+    /// Every finalizer, as the state closes (`luaC_freeallobjects` calls
+    /// them with no `luaD_checkminstack`).
+    pub(super) fn run_finalizers_closing(&mut self) {
+        self.heap.queue_all_finalizers();
+        let _ = self.run_finalizers_or_err(false, true);
     }
 
     /// Run the pending finalizers. With `propagate` (an explicit collection
     /// on 5.1–5.3), the first error stops the run and is returned; the
     /// finalizers after it stay queued for the next collection, as in PUC,
     /// where `GCTM` throws out of the loop that calls them.
-    pub(super) fn run_finalizers_or_err(&mut self, propagate: bool) -> Result<(), LuaError> {
+    pub(super) fn run_finalizers_or_err(
+        &mut self,
+        propagate: bool,
+        closing: bool,
+    ) -> Result<(), LuaError> {
         if self.gc_finalizing {
             return Ok(());
         }
@@ -57,7 +69,7 @@ impl Vm {
         let mut first_err: Option<LuaError> = None;
         let mut ran = 0;
         for &obj in &pending {
-            if !self.finalizer_has_room() {
+            if !self.finalizer_has_room(closing) {
                 break;
             }
             ran += 1;
@@ -80,9 +92,36 @@ impl Vm {
     }
 
     /// 5.4/5.5 `luaD_checkminstack`: a finalizer runs only with two C levels
-    /// to spare; otherwise it waits for a later collection.
-    fn finalizer_has_room(&self) -> bool {
-        self.version < LuaVersion::Lua54 || self.g.nccalls + 2 < super::MAX_C_DEPTH
+    /// to spare, two `CallInfo`s past the running one and `BASIC_STACK_SIZE`
+    /// free slots, made when missing; otherwise it waits for a later
+    /// collection.
+    fn finalizer_has_room(&mut self, closing: bool) -> bool {
+        if self.version < LuaVersion::Lua54 {
+            return true;
+        }
+        if self.g.nccalls + 2 >= super::MAX_C_DEPTH {
+            return false;
+        }
+        if closing {
+            return true;
+        }
+        self.extend_ci_to(self.ci_in_use() + 2);
+        let top = self.native_top().unwrap_or(self.gc_top);
+        let s = self.stack_size;
+        if stack_size::last(self.version, s) - top >= stack_size::BASIC {
+            return true;
+        }
+        match stack_size::grow(self.version, s, top, stack_size::BASIC) {
+            Grown::Fits(n) => {
+                self.resize_stack(n);
+                true
+            }
+            Grown::Overflow(n) => {
+                self.resize_stack(n);
+                false
+            }
+            Grown::ErrErr => false,
+        }
     }
 
     /// Call `obj`'s `__gc`. The error a 5.1–5.3 finalizer raised comes back
