@@ -18,6 +18,10 @@ pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     let a = Args::new(fs, nargs);
     let ver = vm.version();
     let (tv, n) = aux_getn(vm, a, TAB_RW)?;
+    if ver <= V::Lua52 {
+        // "assume array is smaller than 2^40"
+        argcheck::check_stack(vm, a, 40, "")?;
+    }
     // 5.3+ checks the size and the comparator only for a non-trivial array.
     if ver >= V::Lua53 && n <= 1 {
         return Ok(0);
