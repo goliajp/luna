@@ -312,7 +312,7 @@ pub struct Vm {
     /// C-call boundary and errors. Always 0 at a suspend point (a yield can
     /// never cross such a call); a resume starts the coroutine at 0 and puts
     /// the resumer's count back after.
-    pub(super) nny: u32,
+    pub(crate) nny: u32,
     /// Nonzero while an xpcall message handler is on the Rust stack. Used so a
     /// stack-overflow that surfaces *inside* the handler is reported as PUC's
     /// "error in error handling" (LUA_ERRERR + `luaD_seterrorobj`), not the

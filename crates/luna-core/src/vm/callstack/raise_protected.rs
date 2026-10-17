@@ -41,7 +41,12 @@ impl Vm {
         let traceback = self.error_traceback.take();
         let natives = self.errored_natives.take();
         let keep = std::mem::replace(&mut self.keep_error_traceback, false);
+        // a protected call made from Rust has no continuation: code under
+        // it cannot yield (a finalizer's `luaD_callnoyield`, a message
+        // handler's, `lua_pcall` with none)
+        self.nny += 1;
         let r = self.call_value_impl(f, args, false, at);
+        self.nny -= 1;
         self.keep_error_traceback = keep;
         self.msgh_running = running;
         self.msgh_floor = floor;

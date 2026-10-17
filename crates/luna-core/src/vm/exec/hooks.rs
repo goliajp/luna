@@ -206,7 +206,10 @@ impl Vm {
         // whole window, or the open results of a call above it) and pushes
         // its registry table before the hook
         let at = top + 1;
+        // `hookf` calls the hook with `lua_call`: it cannot yield
+        self.nny += 1;
         let r = self.call_value_impl(hook, &[name, lv], from_native, Some(at));
+        self.nny -= 1;
         self.pending_is_hook = false;
         self.in_hook = false;
         self.trap = true;
