@@ -81,9 +81,9 @@ pub(crate) fn nat_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     vm.native_push(1);
     let base = vm.lib_roots.len();
     let r = vm.api_pushing(|vm| lual_where(vm, pos)).and_then(|at| {
-        vm.api_check_before();
+        vm.api_check_before()?;
         let v = concat2(vm, Value::Str(at), msg)?;
-        vm.api_check_after(v);
+        vm.api_check_after(v)?;
         Ok(v)
     });
     vm.lib_roots.truncate(base);
@@ -120,9 +120,9 @@ fn raise(vm: &mut Vm, msg: Message<'_>, conv: Option<u32>) -> LuaError {
             (None, Message::Fmt(fmt, args)) => vm.api_pushing(|vm| vm.pushfstring(fmt, args))?,
             (None, Message::Pushed(_)) => unreachable!("pushed above"),
         };
-        vm.api_check_before();
+        vm.api_check_before()?;
         let v = concat2(vm, Value::Str(at), Value::Str(m))?;
-        vm.api_check_after(v);
+        vm.api_check_after(v)?;
         Ok(v)
     })();
     vm.lib_roots.truncate(base);
@@ -280,7 +280,7 @@ fn unnamed_native_name(vm: &mut Vm) -> Result<String, LuaError> {
         argcheck::check_stack(vm, Args::new(top - 1, 0), 6, "not enough stack")?;
         vm.native_pop(2);
     }
-    Ok(match vm.pushglobalfuncname(target) {
+    Ok(match vm.pushglobalfuncname(target)? {
         Some(name) => {
             // the name found stays on the stack
             vm.native_push(1);

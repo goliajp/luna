@@ -179,6 +179,10 @@ impl Vm {
         e: &crate::frontend::error::SyntaxError,
         chunkname: &[u8],
     ) -> Value {
+        // an error a collection check raised inside the load is the load's
+        if let Some(raised) = self.load_raised.take() {
+            return raised.0;
+        }
         let text = e.render(&crate::vm::callstack::syntax_chunk_id(
             self.version(),
             chunkname,

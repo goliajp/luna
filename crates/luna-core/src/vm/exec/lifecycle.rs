@@ -114,6 +114,8 @@ impl Vm {
             gc_stepsize: 13,
             gc_params: crate::vm::lib_gc::GcParams::new(version),
             gc_finalizing: false,
+            gc_raise: None,
+            load_raised: None,
             host_cont_hooks: None,
             host_warn: None,
             host_light: std::collections::HashMap::new(),

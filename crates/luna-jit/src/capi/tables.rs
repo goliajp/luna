@@ -189,10 +189,14 @@ pub unsafe extern "C" fn luna_capi_lua_createtable(L: *mut LuaState, narr: c_int
     let mut api = unsafe { Api::new(L) };
     let narr = usize::try_from(narr).unwrap_or(0);
     let nrec = usize::try_from(nrec).unwrap_or(0);
-    api.vm.host_api_check(true);
+    if let Err(e) = api.vm.host_api_check(true) {
+        return api.raise(e);
+    }
     let t = or_raise!(api, api.vm.host_new_table(narr, nrec));
     api.push(Value::Table(t));
-    api.vm.host_api_check(false);
+    if let Err(e) = api.vm.host_api_check(false) {
+        api.raise(e);
+    }
 }
 
 /// PUC `lua_next`: pop a key and push the table's next key and value

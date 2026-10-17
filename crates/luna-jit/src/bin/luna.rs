@@ -248,7 +248,7 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
         };
         vm.host_entry_layout(1, slots);
         vm.trace_mark("openlibs");
-        vm.open_lua_c_libs();
+        vm.open_lua_c_libs().expect("the libraries open");
         vm.trace_mark("/openlibs");
         vm
     };

@@ -63,7 +63,7 @@ impl Vm {
     ///
     /// The step that falls due is PUC's (`gc_step.rs`).
     #[inline(always)]
-    pub(crate) fn checkpoint(&mut self, live_top: u32) {
+    pub(crate) fn checkpoint(&mut self, live_top: u32) -> Result<(), LuaError> {
         #[cfg(feature = "gc-trace")]
         self.trace_checkpoint();
         // gc-verify: the live top never cuts into a Lua frame that is running
@@ -85,18 +85,18 @@ impl Vm {
             self.heap.safe_point();
             self.gc_top = live_top;
             self.collect_garbage();
-            return;
+            return Ok(());
         }
         // everything live is rooted here; what is allocated next is young
         self.heap.safe_point();
         if !self.heap.gc_due() || self.gc_finalizing {
-            return;
+            return Ok(());
         }
         // Bare `live_top`, no `max(self.top)` widening: every frame-pop site
         // (`finish_results`, the Op::TailCall collapse, pcall unwind) clears
         // the slots it vacates, mirroring PUC's L->top discipline.
         self.gc_top = live_top;
-        self.puc_step();
+        self.puc_step()
     }
 
     /// The running stack's contract with the collector (PUC
@@ -220,26 +220,27 @@ impl Vm {
     /// 5.2's `luaD_precall` checks for a collection on every call, the
     /// `CallInfo` made, `L->top` at `top` (a Lua function's whole frame).
     #[inline(always)]
-    pub(crate) fn precall_checkpoint(&mut self, top: u32) {
+    pub(crate) fn precall_checkpoint(&mut self, top: u32) -> Result<(), LuaError> {
         if self.version == crate::version::LuaVersion::Lua52 {
-            self.checkpoint(top);
+            return self.checkpoint(top);
         }
+        Ok(())
     }
 
     /// A collection check of PUC's C API inside the running C function:
     /// its stack is live up to its top.
     #[inline]
-    pub(crate) fn native_checkpoint(&mut self) {
+    pub(crate) fn native_checkpoint(&mut self) -> Result<(), LuaError> {
         if self.checkpoint_idle() {
-            return;
+            return Ok(());
         }
-        self.native_checkpoint_due();
+        self.native_checkpoint_due()
     }
 
     #[inline(never)]
-    pub(crate) fn native_checkpoint_due(&mut self) {
+    pub(crate) fn native_checkpoint_due(&mut self) -> Result<(), LuaError> {
         let top = self.native_top().unwrap_or_else(|| self.lua_window_end());
-        self.checkpoint(top);
+        self.checkpoint(top)
     }
 
     /// A checkpoint at which no collection is due and nothing traces or
@@ -260,10 +261,11 @@ impl Vm {
 
     /// 5.1's `luaD_call` checks for a collection when the call returns,
     /// its results below `top` (calls from C, metamethods, `pcall`'s).
-    pub(crate) fn call_return_checkpoint(&mut self, top: u32) {
+    pub(crate) fn call_return_checkpoint(&mut self, top: u32) -> Result<(), LuaError> {
         if self.version == crate::version::LuaVersion::Lua51 {
-            self.checkpoint(top);
+            return self.checkpoint(top);
         }
+        Ok(())
     }
 
     /// A checkpoint in the accounting trace: `k` and the running Lua

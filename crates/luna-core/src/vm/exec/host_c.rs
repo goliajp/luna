@@ -95,7 +95,7 @@ impl Vm {
     /// A new thread with no function yet (PUC `lua_newthread`): the first
     /// resume takes the function from the thread's C stack.
     pub fn host_new_thread(&mut self) -> Result<Gc<Coro>, LuaError> {
-        self.native_checkpoint();
+        self.native_checkpoint()?;
         let globals = self.globals;
         let co = self.retry_oom(|vm| vm.heap.try_new_coro(Value::Nil, globals))?;
         // a new thread inherits the creator's C hook, as `new_coro` gives it

@@ -348,6 +348,12 @@ pub struct Vm {
     /// `collectgarbage` gets a no-op (PUC's non-reentrancy: lua_gc returns -1 →
     /// `collectgarbage` yields fail).
     pub(super) gc_finalizing: bool,
+    /// The error a finalizer threw in a 5.1–5.3 automatic step, which PUC
+    /// throws out of the collection check that ran the step.
+    pub(super) gc_raise: Option<LuaError>,
+    /// The error a collection check raised inside a load, which the load
+    /// reports (`load_error_value`).
+    pub(crate) load_raised: Option<LuaError>,
     /// PUC 5.4+ warning system. Lua manual §6.1 `warn`: emitted messages
     /// concatenate across continuation calls until a non-`tocont` call
     /// flushes; the default warnf recognises `@on`/`@off` control messages

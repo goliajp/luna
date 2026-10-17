@@ -48,7 +48,7 @@ impl Vm {
                     }
                 }
                 self.set_r(base, inst.a(), Value::Table(t));
-                self.checkpoint_after_op(inst, base);
+                self.checkpoint_after_op(inst, base)?;
             }
             Op::SetList => {
                 let a = inst.a();
@@ -107,7 +107,7 @@ impl Vm {
                 let (first, out) = inst.concat_operands();
                 self.top = base + first + inst.b();
                 if self.concat_run(base + first, base + out)? {
-                    self.concat_checkpoint(base + first, base + out);
+                    self.concat_checkpoint(base + first, base + out)?;
                 }
             }
             Op::ForPrep | Op::ForPrep55 => self.for_prep(inst, base)?,
@@ -213,7 +213,7 @@ impl Vm {
     /// `base`, with each dialect's stack top: 5.1 keeps the whole frame
     /// (CLOSURE puts the closure straight into its variable, which may lie
     /// below other live registers), the later dialects up to the result.
-    pub(super) fn checkpoint_after_op(&mut self, inst: Inst, base: u32) {
+    pub(super) fn checkpoint_after_op(&mut self, inst: Inst, base: u32) -> Result<(), LuaError> {
         let v51 = self.version() == LuaVersion::Lua51;
         let top = match inst.op() {
             Op::Concat => {
@@ -232,14 +232,14 @@ impl Vm {
             }
             _ => base + inst.a() + 1,
         };
-        self.checkpoint(top);
+        self.checkpoint(top)
     }
 
     /// Compiled code left with a step due after the op at `op_pc`
     /// ([`JIT_GC_PREV`]: the one before the running frame's pc;
     /// [`JIT_GC_CALL`]: the call that entered the running frame, which 5.2
     /// checks with the frame's top): the check that op makes.
-    pub(crate) fn checkpoint_after_jit(&mut self, op_pc: u32) {
+    pub(crate) fn checkpoint_after_jit(&mut self, op_pc: u32) -> Result<(), LuaError> {
         if op_pc == JIT_GC_CALL {
             return self.checkpoint(self.frame_top());
         }
@@ -249,7 +249,7 @@ impl Vm {
         } else {
             op_pc
         };
-        self.checkpoint_after_op(cl.proto.code[pc as usize], base);
+        self.checkpoint_after_op(cl.proto.code[pc as usize], base)
     }
 
     /// Compiled code just allocated (or 5.2 entered a call): whether a

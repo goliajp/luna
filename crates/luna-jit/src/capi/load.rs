@@ -59,7 +59,8 @@ fn load(
     mode: *const c_char,
 ) -> c_int {
     let v = api.version();
-    api.vm.host_load_begin();
+    // a collection check raising there fails the load
+    let begun = api.vm.host_load_begin();
     // SAFETY: PUC's contract: a chunk name and a mode are null or
     // NUL-terminated strings
     let name = unsafe { c_bytes(chunkname) }.unwrap_or(b"?").to_vec();
@@ -70,7 +71,9 @@ fn load(
     let at = api.top();
     // 5.5's parser anchors its work in a table on the stack, under what
     // the reader may push
-    let r = if v >= LuaVersion::Lua55 {
+    let r = if let Err(e) = begun {
+        Err((LUA_ERRRUN, e.0))
+    } else if v >= LuaVersion::Lua55 {
         match api.vm.host_new_table(0, 0) {
             Ok(t) => {
                 api.push(Value::Table(t));

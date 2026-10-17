@@ -25,11 +25,12 @@ impl Vm {
 
     /// 5.4 on, `lua_load` checks for a collection before it reads (5.1:
     /// `f_parser`, once the first character is read).
-    pub(crate) fn lua_load_checkpoint(&mut self) {
+    pub(crate) fn lua_load_checkpoint(&mut self) -> Result<(), LuaError> {
         // 5.1's `f_parser` checks before it parses or undumps
         if self.version >= LuaVersion::Lua54 || self.version == LuaVersion::Lua51 {
-            self.native_checkpoint();
+            return self.native_checkpoint();
         }
+        Ok(())
     }
 
     /// `lua_load` with a reader starts: the check made before it reads,
@@ -37,12 +38,13 @@ impl Vm {
     /// not yieldable while the chunk is parsed (`incnny` in
     /// `luaD_protectedparser`).
     #[doc(hidden)]
-    pub fn host_load_begin(&mut self) {
-        self.lua_load_checkpoint();
+    pub fn host_load_begin(&mut self) -> Result<(), LuaError> {
+        let checked = self.lua_load_checkpoint();
         self.heap.puc.load_checked = true;
         if self.version >= LuaVersion::Lua52 {
             self.nny += 1;
         }
+        checked
     }
 
     /// The parse of the `lua_load` [`Vm::host_load_begin`] began has ended.

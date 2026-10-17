@@ -148,7 +148,7 @@ impl Vm {
             self.frames.len(),
             ccmt,
         ))?;
-        self.precall_checkpoint(func_slot + 1 + nargs);
+        self.precall_checkpoint(func_slot + 1 + nargs)?;
         // no guard here: a panic unwinds to `exec_with`, which raises it as
         // this native's error (see `Vm::unguarded_native_panic`)
         let result = (nc.f)(self, func_slot, nargs);

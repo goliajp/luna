@@ -178,7 +178,7 @@ impl Vm {
                 } else {
                     i64::from(a)
                 };
-                i32::from(lib_gc::step(self, n))
+                i32::from(lib_gc::step(self, n)?)
             }
             GC_SETPAUSE => self.host_gc_set(Param::Pause, a),
             GC_SETSTEPMUL => self.host_gc_set(Param::StepMul, a),

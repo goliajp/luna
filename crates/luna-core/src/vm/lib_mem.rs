@@ -54,13 +54,13 @@ impl Vm {
         // upvalues on the stack
         let base = self.lib_roots.len();
         self.lib_roots.extend_from_slice(upvals);
-        self.api_check_before();
+        self.api_check_before()?;
         let f = self
             .retry_oom(|vm| vm.heap.try_new_native_puc(f, upvals, puc_nup))
             .map(Value::Native);
         self.lib_roots.truncate(base);
         let f = f?;
-        self.api_check_after(f);
+        self.api_check_after(f)?;
         Ok(f)
     }
 

@@ -100,7 +100,9 @@ fn read_and_load(
     mode: Option<&[u8]>,
 ) -> Result<u32, LuaError> {
     let fail = |vm: &mut Vm, msg: Value| vm.nat_ret(a.fs, &[Value::Nil, msg]);
-    vm.host_load_begin();
+    if let Err(e) = vm.host_load_begin() {
+        return fail(vm, e.0);
+    }
     // what each call of the reader counts is set aside, to be counted
     // where PUC's parser calls it: at the byte the piece starts at
     let counted = vm.heap.puc.silent == 0;

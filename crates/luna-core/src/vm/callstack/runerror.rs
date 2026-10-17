@@ -22,7 +22,9 @@ impl Vm {
             if let Some(e) = self.format_pushes(&[Some(conv)]) {
                 return e;
             }
-            self.runerror_checkpoint();
+            if let Err(e) = self.runerror_checkpoint() {
+                return e;
+            }
             self.plain_err(msg)
         } else {
             self.rt_errf_conv(format_args!("{msg}"), conv, varinfo)
@@ -42,13 +44,17 @@ impl Vm {
             if let Some(e) = self.format_pushes(&[Some(conv)]) {
                 return e;
             }
-            self.runerror_checkpoint();
+            if let Err(e) = self.runerror_checkpoint() {
+                return e;
+            }
             None
         } else {
             if let Some(e) = self.runerror_pushes(conv, varinfo) {
                 return e;
             }
-            self.runerror_checkpoint();
+            if let Err(e) = self.runerror_checkpoint() {
+                return e;
+            }
             self.varinfo_pushed = false;
             self.error_position()
         };
@@ -59,14 +65,14 @@ impl Vm {
     /// 5.3 on, `luaG_runerror` checks for a collection before it makes the
     /// message: the stack is live up to the running function's top (a Lua
     /// one's whole frame, with the operand's name `varinfo` pushed).
-    pub(crate) fn runerror_checkpoint(&mut self) {
+    pub(crate) fn runerror_checkpoint(&mut self) -> Result<(), crate::vm::error::LuaError> {
         if self.version() < crate::version::LuaVersion::Lua53 {
-            return;
+            return Ok(());
         }
         let top = match self.native_top() {
             Some(t) => t,
             None => self.lua_window_end() + u32::from(self.varinfo_pushed),
         };
-        self.checkpoint(top);
+        self.checkpoint(top)
     }
 }

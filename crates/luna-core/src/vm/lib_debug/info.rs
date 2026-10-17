@@ -157,14 +157,14 @@ fn info_fields(
     activelines: Value,
 ) -> Result<Gc<Table>, LuaError> {
     let v = vm.version();
-    vm.api_check_before();
+    vm.api_check_before()?;
     let t = if v <= LuaVersion::Lua52 {
         vm.alloc_table_sized(0, 2)?
     } else {
         vm.alloc_table()?
     };
     vm.lib_roots.push(Value::Table(t));
-    vm.api_check_after_rooted();
+    vm.api_check_after_rooted()?;
     let has = |c: u8| options.contains(&c);
     if has(b'S') {
         // ≤5.3 push the source as a C string (up to a NUL); 5.4+ keep its

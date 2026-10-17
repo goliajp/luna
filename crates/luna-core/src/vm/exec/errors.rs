@@ -86,8 +86,10 @@ impl Vm {
             return e;
         }
         // a native's error is `luaL_error`'s, which checks where it pushes
-        if !self.native_on_top() {
-            self.runerror_checkpoint();
+        if !self.native_on_top()
+            && let Err(e) = self.runerror_checkpoint()
+        {
+            return e;
         }
         self.varinfo_pushed = false;
         // `luaG_runerror` pushes the message (a native's stack only: a

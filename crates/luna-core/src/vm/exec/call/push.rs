@@ -192,7 +192,7 @@ impl Vm {
                 .get_unchecked_mut((base + kept) as usize..end)
                 .fill(Value::Nil)
         };
-        self.precall_checkpoint(base + max);
+        self.precall_checkpoint(base + max)?;
         // PUC 5.1 `LUAI_COMPAT_VARARG`: the hidden `arg` local (the slot at
         // `base + nparams`) gets `{ n = n_varargs, e1, e2, … }` from the extras
         // just below `base` (5.1 db.lua :279 reads `arg.n` from a line hook).
@@ -200,7 +200,7 @@ impl Vm {
             // `adjust_varargs` checks for a collection first, the missing
             // parameters on the stack; the fixed ones are already copied up
             // to the new frame here (PUC copies them after), and stay live
-            self.checkpoint((func_slot + 1 + nargs.max(nparams)).max(base + nparams));
+            self.checkpoint((func_slot + 1 + nargs.max(nparams)).max(base + nparams))?;
             let arg_slot = (base + nparams) as usize;
             // young until stored in its slot below; `luaH_new(L, nvar, 1)`:
             // an array part of exactly the extras' count (bounded by the

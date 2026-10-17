@@ -157,7 +157,7 @@ impl PucBuffer {
         };
         match self.d {
             Dialect::L52 => {
-                vm.api_check_before();
+                vm.api_check_before()?;
                 let size = vm.heap.sizes.userdata(0, newsize);
                 vm.ghost(PucKind::Userdata, size)?;
             }
@@ -229,21 +229,22 @@ impl PucBuffer {
                     vm.heap.trace_raw(self.size, out.len() + 1);
                 }
                 let r = vm.retry_oom(|vm| vm.heap.new_external_string(out))?;
-                vm.api_check_after(Value::Str(r));
+                vm.api_check_after(Value::Str(r))?;
                 vm.box_closed();
                 // `lua_gc(L, LUA_GCSTEP, len)`, the string and the box on
                 // the stack
                 vm.lib_roots.push(Value::Str(r));
                 vm.gc_top = vm.native_top().unwrap_or_else(|| vm.lua_window_end());
-                vm.gc_lua_step(out.len() as i64);
+                let stepped = vm.gc_lua_step(out.len() as i64);
                 vm.lib_roots.pop();
+                stepped?;
                 self.drop_box(vm);
                 Ok(r)
             }
             _ => {
-                vm.api_check_before();
+                vm.api_check_before()?;
                 let r = vm.alloc_str(out)?;
-                vm.api_check_after(Value::Str(r));
+                vm.api_check_after(Value::Str(r))?;
                 if self.boxed && self.d >= Dialect::L53 {
                     if self.d >= Dialect::L54 {
                         // `lua_closeslot` calls the box's `__close`
@@ -278,7 +279,7 @@ impl PucBuffer {
         if self.n == 0 {
             return Ok(false);
         }
-        vm.api_check_before();
+        vm.api_check_before()?;
         let s = vm.alloc_str(&out[self.start..self.start + self.n])?;
         vm.lib_roots.push(Value::Str(s));
         self.start += self.n;
@@ -317,7 +318,7 @@ impl PucBuffer {
     fn concat_51(&mut self, vm: &mut Vm, n: usize) -> Result<(), LuaError> {
         let from = vm.lib_roots.len() - n;
         let mut st: Vec<Value> = vm.lib_roots[from..].to_vec();
-        vm.api_check_before();
+        vm.api_check_before()?;
         vm.concat_pieces(&mut st, n)?;
         vm.lib_roots.truncate(from);
         vm.lib_roots.push(st[0]);

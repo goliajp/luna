@@ -9,29 +9,33 @@ use crate::runtime::LuaStr;
 impl Vm {
     /// 5.1 and 5.2: the check before an API call allocates.
     #[inline]
-    pub(crate) fn api_check_before(&mut self) {
+    pub(crate) fn api_check_before(&mut self) -> Result<(), LuaError> {
         if self.version <= LuaVersion::Lua52 {
-            self.native_checkpoint();
+            return self.native_checkpoint();
         }
+        Ok(())
     }
 
     /// 5.3 on: the check after an API call pushed `v`.
     #[inline]
-    pub(crate) fn api_check_after(&mut self, v: Value) {
+    pub(crate) fn api_check_after(&mut self, v: Value) -> Result<(), LuaError> {
         if self.version >= LuaVersion::Lua53 && !self.checkpoint_idle() {
             self.lib_roots.push(v);
-            self.native_checkpoint_due();
+            let r = self.native_checkpoint_due();
             self.lib_roots.pop();
+            return r;
         }
+        Ok(())
     }
 
     /// 5.3 on: the check after an API call pushed a value already rooted
     /// (in `lib_roots`).
     #[inline]
-    pub(crate) fn api_check_after_rooted(&mut self) {
+    pub(crate) fn api_check_after_rooted(&mut self) -> Result<(), LuaError> {
         if self.version >= LuaVersion::Lua53 {
-            self.native_checkpoint();
+            return self.native_checkpoint();
         }
+        Ok(())
     }
 
     /// PUC `luaL_getmetafield(L, idx, event)` on `v`: when `v` has a
@@ -46,7 +50,7 @@ impl Vm {
         if self.metatable_of(v).is_none() {
             return Ok(None);
         }
-        self.api_check_before();
+        self.api_check_before()?;
         // by the name's address, as PUC's string cache is; emptied when a
         // collection step begins, so a string found here is not dead
         let key = event.as_ptr() as usize;
@@ -59,7 +63,7 @@ impl Vm {
                 s
             }
         };
-        self.api_check_after(Value::Str(s));
+        self.api_check_after(Value::Str(s))?;
         Ok(Some(s))
     }
 
@@ -76,27 +80,28 @@ impl Vm {
         &mut self,
         f: impl FnOnce(&mut Vm) -> Result<Gc<LuaStr>, LuaError>,
     ) -> Result<Gc<LuaStr>, LuaError> {
-        self.api_check_before();
+        self.api_check_before()?;
         let r = f(self)?;
         self.lib_roots.push(Value::Str(r));
-        self.api_check_after_rooted();
+        self.api_check_after_rooted()?;
         Ok(r)
     }
 
     /// The check every version makes after `lua_tolstring` converted a
     /// number into `v`.
     #[inline]
-    pub(crate) fn api_check_converted(&mut self, v: Value) {
+    pub(crate) fn api_check_converted(&mut self, v: Value) -> Result<(), LuaError> {
         self.lib_roots.push(v);
-        self.native_checkpoint();
+        let r = self.native_checkpoint();
         self.lib_roots.pop();
+        r
     }
 
     /// `lua_pushlstring`: the string of `bytes`, checked for as PUC checks.
     pub(crate) fn api_push_string(&mut self, bytes: &[u8]) -> Result<Value, LuaError> {
-        self.api_check_before();
+        self.api_check_before()?;
         let s = self.str_value(bytes)?;
-        self.api_check_after(s);
+        self.api_check_after(s)?;
         Ok(s)
     }
 
@@ -121,14 +126,14 @@ impl Vm {
                 self.lib_roots.push(s);
             }
         }
-        self.api_check_before();
+        self.api_check_before()?;
         let narg = argv.len() - script - 1;
         let t = match self.table_op(|vm| vm.heap.try_create_table(narg, script + 1)) {
             Ok(t) => t,
             Err(e) => return Err(self.table_error(e)),
         };
         self.lib_roots.push(Value::Table(t));
-        self.api_check_after_rooted();
+        self.api_check_after_rooted()?;
         for (i, a) in argv.iter().enumerate() {
             let s = self.api_push_string(a)?;
             let k = Value::Int(i as i64 - script as i64);

@@ -49,7 +49,7 @@ impl Vm {
         self.g.frames_native += 1;
         self.note_call_level();
         self.g.jit_top = base + max;
-        self.precall_checkpoint(base + max);
+        self.precall_checkpoint(base + max)?;
         Ok(Some(saved))
     }
 
@@ -150,7 +150,7 @@ impl Vm {
             self.g.frames_native += 1;
             self.note_call_level();
         }
-        self.precall_checkpoint(base + max);
+        self.precall_checkpoint(base + max)?;
         if tail && ci {
             self.g.frames_native -= 1;
         }

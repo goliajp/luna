@@ -22,7 +22,7 @@ impl Vm {
         // on the stack of the running native until the buffer is done
         self.buffer_boxes
             .push((self.running_natives.len() as u32, u));
-        self.api_check_after_rooted();
+        self.api_check_after_rooted()?;
         let mt = self.box_metatable()?;
         // SAFETY: `u` is a live userdata held in `buffer_boxes`; the borrow covers one store, which allocates nothing
         unsafe { u.as_mut() }.set_metatable(Some(mt));
@@ -65,7 +65,7 @@ impl Vm {
         }
         let mt = self.alloc_table_sized(0, 2)?;
         let mtv = Value::Table(mt);
-        self.api_check_after(mtv);
+        self.api_check_after(mtv)?;
         // `luaL_newmetatable` pushes the name again: the string looked up
         // first may have been collected at the check just made
         let base = self.lib_roots.len();
@@ -86,7 +86,7 @@ impl Vm {
     ) -> Result<(), LuaError> {
         let mtv = Value::Table(mt);
         let key = self.str_value(name)?;
-        self.api_check_after(key);
+        self.api_check_after(key)?;
         self.lib_roots.push(key);
         // `boxgc`, a light C function: no object of PUC's
         let gc = self.builtin(box_gc, &[], crate::runtime::Builtin::None)?;

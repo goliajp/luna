@@ -208,17 +208,18 @@ impl Vm {
 
     /// A step of the collector if one is due (PUC `luaC_checkGC`): every
     /// value the C API holds is on a C stack, which the collector marks.
-    pub fn host_check_gc(&mut self) {
+    pub fn host_check_gc(&mut self) -> Result<(), LuaError> {
         let top = self.stack.len() as u32;
-        self.checkpoint(top);
+        self.checkpoint(top)
     }
 
     /// The check of an API call that allocates, made before it in 5.1 and
     /// 5.2 (`before`) and after it pushed from 5.3 on (`!before`).
-    pub fn host_api_check(&mut self, before: bool) {
+    pub fn host_api_check(&mut self, before: bool) -> Result<(), LuaError> {
         if before == (self.version <= LuaVersion::Lua52) {
-            self.host_check_gc();
+            return self.host_check_gc();
         }
+        Ok(())
     }
 
     /// The 5.1 environment of the Lua function `cl`: its `_ENV` cell, or the

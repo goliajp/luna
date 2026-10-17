@@ -15,15 +15,15 @@ pub unsafe extern "C" fn luna_capi_lua_pushcclosure(L: *mut LuaState, f: LuaCFun
     let mut api = unsafe { Api::new(L) };
     // a function with no upvalues is light from 5.2 on: nothing to check
     let checked = n > 0 || api.version() == LuaVersion::Lua51;
-    if checked {
-        api.vm.host_api_check(true);
+    if checked && let Err(e) = api.vm.host_api_check(true) {
+        return api.raise(e);
     }
     match new_c_closure(&mut api, f, usize::try_from(n).unwrap_or(0)) {
         Ok(c) => api.push(c),
         Err(e) => return api.raise(e),
     }
-    if checked {
-        api.vm.host_api_check(false);
+    if checked && let Err(e) = api.vm.host_api_check(false) {
+        api.raise(e);
     }
 }
 
