@@ -225,10 +225,18 @@ impl PucBuffer {
             }
             Dialect::L55 if self.boxed => {
                 // the box's block becomes the string's
-                vm.heap.trace_raw(self.size, out.len() + 1);
+                if self.size != out.len() + 1 {
+                    vm.heap.trace_raw(self.size, out.len() + 1);
+                }
                 let r = vm.retry_oom(|vm| vm.heap.new_external_string(out))?;
                 vm.api_check_after(Value::Str(r));
                 vm.box_closed();
+                // `lua_gc(L, LUA_GCSTEP, len)`, the string and the box on
+                // the stack
+                vm.lib_roots.push(Value::Str(r));
+                vm.gc_top = vm.native_top().unwrap_or_else(|| vm.lua_window_end());
+                vm.gc_lua_step(out.len() as i64);
+                vm.lib_roots.pop();
                 self.drop_box(vm);
                 Ok(r)
             }

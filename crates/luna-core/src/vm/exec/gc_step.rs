@@ -132,6 +132,11 @@ impl Vm {
     /// incremental mode: the debt it sets and the steps it runs, whether
     /// or not the collector is stopped; true when a cycle ended.
     pub(crate) fn gc_lua_step(&mut self, n: i64) -> bool {
+        // the instrumented PUC that `R38_NOAUTO` compares with skips every
+        // `luaC_step`, the ones `lua_gc` asks for too
+        if self.heap.no_auto() {
+            return false;
+        }
         let d = self.heap.table_dialect;
         let bytes = self.heap.bytes();
         let debt_now = self.heap.pace.debt(d, bytes);
