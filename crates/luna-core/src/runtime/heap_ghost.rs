@@ -67,9 +67,9 @@ impl Heap {
             let g = head as *mut Ghost;
             // SAFETY: a header tagged `Ghost` is a `Ghost`, and nothing else
             // refers into it
-            unsafe { (*g).sizes.push(size)? };
-            // SAFETY: as above
-            return Ok((g, unsafe { (*g).sizes.len() } - 1));
+            let sizes = unsafe { &mut (*g).sizes };
+            sizes.push(size)?;
+            return Ok((g, sizes.len() - 1));
         }
         let mut sizes = LVec::new(self.mem());
         sizes.push(size)?;
@@ -87,9 +87,9 @@ impl Heap {
         let (g, at) = self.ghost_push(self.sizes.table as u32)?;
         // room for the two parts first: no half record is left behind
         // SAFETY: `ghost_push` just returned `g`, a live record of this heap
-        if let Err(e) = unsafe { (*g).sizes.reserve(2) } {
-            // SAFETY: as above
-            unsafe { (*g).sizes.pop() };
+        let sizes = unsafe { &mut (*g).sizes };
+        if let Err(e) = sizes.reserve(2) {
+            sizes.pop();
             return Err(e);
         }
         self.ghost_push(PART)?;
@@ -115,13 +115,17 @@ impl Heap {
             self.array_bytes(new_a) as u32,
             self.hash_bytes(new_h) as u32,
         );
-        // SAFETY: a ghost table's record lives until the sweep after it,
-        // and a sweep comes only after the trace that made it has left
-        unsafe {
-            let sizes = &mut (*t.g).sizes;
-            sizes[t.at + 1] = PART | ab;
-            sizes[t.at + 2] = PART | hb;
-        }
+        let sizes = self.record(t);
+        sizes[t.at + 1] = PART | ab;
+        sizes[t.at + 2] = PART | hb;
+    }
+
+    /// The entries of the record `r` is in.
+    fn record(&mut self, r: GhostRef) -> &mut LVec<u32> {
+        // SAFETY: a record lives until the sweep after the trace that made
+        // it has left, and its entries are reached only through here, one
+        // borrow at a time
+        unsafe { &mut (*r.g).sizes }
     }
 
     /// PUC's bytes of a new table of `a` array slots and `h` nodes.
@@ -147,35 +151,20 @@ impl Heap {
     /// luna made the object of `r` after all (one without parts): its
     /// record neither frees nor sweeps it.
     pub(crate) fn ghost_taken(&mut self, r: GhostRef) {
-        // SAFETY: as in `ghost_table_resize`
-        unsafe {
-            let sizes = &mut (*r.g).sizes;
-            sizes[r.at] |= TAKEN;
-        }
+        self.record(r)[r.at] |= TAKEN;
     }
 
     /// luna made the table of `t` after all (a trace leaving with it): its
     /// record neither frees nor sweeps it.
     pub(crate) fn ghost_table_taken(&mut self, t: GhostRef) {
-        // SAFETY: as in `ghost_table_resize`
-        unsafe {
-            let sizes = &mut (*t.g).sizes;
-            for e in &mut sizes[t.at..t.at + 3] {
-                *e |= TAKEN;
-            }
+        for e in &mut self.record(t)[t.at..t.at + 3] {
+            *e |= TAKEN;
         }
     }
 
     /// The objects of PUC's a record holds, as a sweep counts them.
-    ///
-    /// # Safety
-    /// `g` heads a record of this heap.
-    pub(in crate::runtime::heap) unsafe fn ghost_objects(&self, g: *mut Ghost) -> i64 {
-        // SAFETY: the caller's contract
-        unsafe {
-            let sizes = &(*g).sizes;
-            sizes.iter().filter(|&&s| s & (PART | TAKEN) == 0).count() as i64
-        }
+    pub(in crate::runtime::heap) fn ghost_objects(g: &Ghost) -> i64 {
+        g.sizes.iter().filter(|&&s| s & (PART | TAKEN) == 0).count() as i64
     }
 
     /// The free of a record's entry `s`: the bytes, a short string's place
@@ -193,24 +182,18 @@ impl Heap {
     /// Free up to `quota` of the newest objects the dead record `g` holds
     /// (a sweep meets them newest first); how many, and whether none is
     /// left (the caller then unlinks and frees the record).
-    ///
-    /// # Safety
-    /// `g` heads a dead record of this heap.
-    pub(in crate::runtime::heap) unsafe fn free_ghost_records(
+    pub(in crate::runtime::heap) fn free_ghost_records(
         &mut self,
-        g: *mut Ghost,
+        g: &mut Ghost,
         quota: i64,
     ) -> (i64, bool) {
         let mut n = 0;
-        // SAFETY: the caller's contract
-        unsafe {
-            while n < quota {
-                let Some(s) = (*g).sizes.pop() else { break };
-                self.ghost_free(s);
-                n += i64::from(s & (PART | TAKEN) == 0);
-            }
-            (n, (*g).sizes.is_empty())
+        while n < quota {
+            let Some(s) = g.sizes.pop() else { break };
+            self.ghost_free(s);
+            n += i64::from(s & (PART | TAKEN) == 0);
         }
+        (n, g.sizes.is_empty())
     }
 
     /// `gc-verify`: the short strings the live records hold, each a place
@@ -244,9 +227,8 @@ impl Heap {
     pub(in crate::runtime::heap) unsafe fn free_ghost(&mut self, g: *mut Ghost) {
         // SAFETY: the caller's contract
         unsafe {
-            let n = (&(*g).sizes).len();
-            for i in 0..n {
-                let s = (&(*g).sizes)[i];
+            let sizes = &(*g).sizes;
+            for &s in sizes.iter() {
                 self.ghost_free(s);
             }
             self.free_block(g);

@@ -105,9 +105,7 @@ impl Vm {
                     let mut parts: [&[u8]; 16] = [&[]; 16];
                     let from = (top - n) as usize;
                     let strs = vm.stack[from..top as usize].iter().map(|v| match v {
-                        // SAFETY: the operands sit in registers of the
-                        // running instruction, which outlive the borrow
-                        Value::Str(s) => unsafe { s.as_bytes_unbounded() },
+                        Value::Str(s) => s.as_bytes(),
                         _ => unreachable!("converted above"),
                     });
                     if n as usize <= parts.len() {

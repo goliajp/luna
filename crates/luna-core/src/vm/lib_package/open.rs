@@ -120,10 +120,7 @@ pub(crate) fn clibs_metatable(vm: &mut Vm, clibs: Gc<Table>) -> Result<(), LuaEr
     let mt = vm.lib_table(1)?;
     let gc = vm.lib_native(clibs_gc)?;
     raw_set(vm, mt, "__gc", gc)?;
-    // SAFETY: `clibs` is a live table the registry holds; the borrow covers one store
-    unsafe { clibs.as_mut() }.set_metatable(Some(mt));
-    vm.barrier_back_table(clibs);
-    vm.check_finalizer(clibs)
+    vm.host_set_metatable(Value::Table(clibs), Some(mt))
 }
 
 /// The C libraries' finalizer: luna loads none.

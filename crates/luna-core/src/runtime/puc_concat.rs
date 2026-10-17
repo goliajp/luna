@@ -37,9 +37,7 @@ impl Heap {
                 let parts: Vec<&[u8]> = st[top - n..]
                     .iter()
                     .map(|v| match v {
-                        // SAFETY: the strings are held in `st` and no
-                        // collection runs while the parts are borrowed
-                        Value::Str(s) => unsafe { s.as_bytes_unbounded() },
+                        Value::Str(s) => s.as_bytes(),
                         _ => unreachable!("converted above"),
                     })
                     .collect();

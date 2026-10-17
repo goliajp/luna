@@ -14,12 +14,11 @@ impl Heap {
         {
             self.recently_freed.insert(h as usize);
             crate::runtime::gc_verify_probe::FREED.with(|f| f.borrow_mut().insert(h as usize));
-            // SAFETY: the caller's contract: `h` is still allocated
-            if unsafe { (*h).tag } == ObjTag::Str {
-                // SAFETY: as above, a string
-                let b = unsafe { Gc::from_ptr(h as *mut LuaStr) }
-                    .as_bytes()
-                    .to_vec();
+            // SAFETY: the caller's contract: `h` is still allocated, and
+            // read as a string when its tag says it is one
+            let s = unsafe { ((*h).tag == ObjTag::Str).then(|| Gc::from_ptr(h as *mut LuaStr)) };
+            if let Some(s) = s {
+                let b = s.as_bytes().to_vec();
                 crate::runtime::gc_verify_probe::FREED_STR
                     .with(|f| f.borrow_mut().insert(h as usize, b));
             }
