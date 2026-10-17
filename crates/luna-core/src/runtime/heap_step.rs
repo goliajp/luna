@@ -12,6 +12,11 @@ impl Heap {
     pub(crate) fn gc_begin_propagate(&mut self) -> Marker {
         debug_assert!(self.phase == GcPhase::Pause);
         self.phase = GcPhase::Propagate;
+        // 5.2's fixed strings are white like any other: a cycle marks them
+        // where it reaches them, and counts them
+        if self.table_dialect == crate::runtime::table::Dialect::L52 {
+            self.color_fixed_strings(self.current_white);
+        }
         // what a back barrier sent there during the last sweep is white now
         self.grayagain = mark::GrayStack::default();
         self.propagate = Some(PropagateState {
@@ -21,6 +26,21 @@ impl Heap {
             no_ephemeron: self.no_ephemeron,
         });
         self.loan_marker()
+    }
+
+    /// Give the fixed strings the color `c` (0: gray, never marked).
+    fn color_fixed_strings(&mut self, c: u8) {
+        let mut cur = self.fixed;
+        while !cur.is_null() {
+            // SAFETY: the fixed list links live objects, freed only with the
+            // heap; only the flag byte is written
+            unsafe {
+                if (*cur).tag == ObjTag::Str {
+                    (*cur).flags = (*cur).with_slow(((*cur).flags & !COLOR_BITS) | c);
+                }
+                cur = (*cur).next;
+            }
+        }
     }
 
     /// Mark the objects awaiting their finalizers (PUC `markbeingfnz`,
@@ -123,6 +143,9 @@ impl Heap {
             }
         }
         self.atomic_tail(&mut m);
+        if self.table_dialect == crate::runtime::table::Dialect::L52 {
+            self.color_fixed_strings(0);
+        }
         self.settle_sizer(&mut m);
         if run.is_some() {
             self.collect_dead_strings();
