@@ -79,6 +79,7 @@ impl Heap {
             track_chunk_roots: false,
             mem_cap: None,
             table_pool: Vec::new(),
+            slab: Default::default(),
             #[cfg(feature = "gc-verify")]
             recently_freed: std::collections::HashSet::new(),
             mem,
@@ -103,6 +104,8 @@ impl Heap {
 impl Drop for Heap {
     fn drop(&mut self) {
         self.dropping = true;
+        // nothing is counted any more
+        self.puc.silent += 1;
         // free everything regardless of reachability, including any list still
         // detached for an in-flight incremental sweep
         // SAFETY: the heap is being dropped, so nothing uses its objects any more; `all`, `fixed` and the held strings hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds tables from `alloc_block` already unlinked from every list
@@ -123,6 +126,7 @@ impl Drop for Heap {
             for ptr in std::mem::take(&mut self.table_pool) {
                 self.free_block(ptr.as_ptr());
             }
+            self.free_slab();
         }
     }
 }
@@ -195,4 +199,28 @@ impl Heap {
         self.acct_thread_blocks(stack_size);
         Ok(co)
     }
+}
+
+/// A seed of a new heap's own, as [`Heap::new`] picks it.
+pub(crate) fn fresh_seed() -> u32 {
+    make_seed()
+}
+
+/// Hash seed from address entropy (ASLR) and clock, luaL_makeseed style.
+pub(super) fn make_seed() -> u32 {
+    // the instrumented PUC build takes its seed from `R38_SEED` too
+    #[cfg(feature = "gc-trace")]
+    if let Some(s) = std::env::var("R38_SEED").ok().and_then(|s| s.parse().ok()) {
+        return s;
+    }
+    let stack_var = 0u8;
+    let mut h = &stack_var as *const u8 as u64;
+    h ^= (make_seed as *const () as u64) << 16;
+    if let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        h ^= (d.subsec_nanos() as u64) << 32 ^ d.as_secs();
+    }
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    h as u32
 }

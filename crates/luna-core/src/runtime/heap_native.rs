@@ -126,14 +126,34 @@ impl Heap {
         };
         let nup = upvals.len();
         let upvals = LSlice::from_slice(self.mem(), upvals)?;
-        let g = self.try_adopt(NativeClosure {
+        let obj = NativeClosure {
             hdr,
             f,
             upvals,
             is_async,
             kind,
             builtin,
-        })?;
+        };
+        // made in a slab block; a fixed one goes straight onto the fixed list
+        let p = self.slab_block()?;
+        // SAFETY: `p` is a free slot of a slab block, for one native
+        let g = unsafe {
+            p.write(obj);
+            let h = p as *mut GcHeader;
+            (*h).cls |= SLAB;
+            if fix {
+                (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
+                (*h).next = self.fixed;
+                self.fixed = h;
+                self.live += 1;
+            } else {
+                self.link(h);
+            }
+            Gc::from_ptr(p)
+        };
+        if fix {
+            return Ok(g);
+        }
         // PUC 5.2+ makes a C function without upvalues a light value, and
         // its library functions are such functions, whatever upvalues
         // luna's keep (one with upvalues of PUC's is made by
@@ -146,13 +166,11 @@ impl Heap {
             let size = self.sizes.c_closure(nup);
             self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::CClosure, size);
         }
-        if fix {
-            // SAFETY: `try_adopt` just linked `g` at the head of `all`
-            unsafe { self.fix_newest(g.as_ptr() as *mut GcHeader) };
-        }
         Ok(g)
     }
+}
 
+impl Heap {
     /// The library function over `f` made before (PUC's light C function
     /// of `f`: one value however often a library pushes it).
     fn light_native(&self, f: NativeFn, builtin: Builtin) -> Option<Gc<NativeClosure>> {

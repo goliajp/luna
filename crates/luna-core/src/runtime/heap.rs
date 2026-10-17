@@ -40,10 +40,8 @@ pub struct GcHeader {
     /// Per-type byte in what would otherwise be padding: a table keeps the
     /// dialect whose table rules it follows here (`table::Dialect`).
     pub(crate) sub: u8,
-    /// What the sweep reads besides the colour, in what would otherwise be
-    /// padding: `UNLISTED` (an object PUC keeps off the list it sweeps, by
-    /// its kind: a ghost record, a string PUC's string table holds, luna's
-    /// own table) and `RO_CLS` (a read-only table)
+    /// Besides the colour, in what would otherwise be padding: `UNLISTED`,
+    /// `STANDS`, `RO_CLS`, `SLAB`
     pub(crate) cls: u8,
     /// Per-type word in what would otherwise be padding: a table keeps its
     /// absent-metamethod bits here. Zero for a new object.
@@ -72,27 +70,6 @@ const FINALIZED: u8 = 16;
 const DEFERRED: u8 = 32;
 /// the object has no children; fixed at creation
 const LEAF: u8 = 64;
-/// BLACK or a read-only table; see the flag layout on `GcHeader`
-pub(crate) const SLOW: u8 = 8;
-/// in a string's `sub` byte: luna made the string for itself, PUC has not
-/// made it, and the count leaves it out (see `heap_acct.rs`)
-pub(crate) const UNCOUNTED: u8 = 0x80;
-/// in a string's `sub` byte: a 5.5 external string (its bytes in a block)
-pub(crate) const EXTERNAL: u8 = 0x40;
-/// in `cls`: PUC does not list the object, whatever its count and finalizer
-pub(crate) const UNLISTED: u8 = 1;
-/// in `cls`: objects of PUC's stand on it (`PucState::stand_ins`)
-pub(crate) const STANDS: u8 = 2;
-/// in `cls`: a read-only table; one shift from SLOW
-pub(crate) const RO_CLS: u8 = SLOW >> 1;
-
-/// The `aux` bit of a read-only table (`Table::is_readonly`), above its
-/// absent-metamethod bits; the JIT's inline stores test it in its byte.
-pub(crate) const READONLY_AUX: u32 = 1 << 31;
-
-/// Offsets in `GcHeader`, for the JIT's read-only test.
-pub(crate) const AUX_OFFSET: usize = std::mem::offset_of!(GcHeader, aux);
-pub(crate) const SUB_OFFSET: usize = std::mem::offset_of!(GcHeader, sub);
 
 #[inline(always)]
 fn is_white(flags: u8) -> bool {
@@ -113,6 +90,9 @@ pub(crate) fn header_is_marked<T: GcObject>(g: Gc<T>) -> bool {
 #[path = "heap_header.rs"]
 mod header;
 pub use header::ObjTag;
+pub(crate) use header::{
+    AUX_OFFSET, EXTERNAL, READONLY_AUX, RO_CLS, SLAB, SLOW, STANDS, SUB_OFFSET, UNCOUNTED, UNLISTED,
+};
 
 #[path = "gc_ptr.rs"]
 mod gc_ptr;
@@ -243,6 +223,8 @@ pub struct Heap {
     /// Freed tables (at most 4096) that new tables reuse, listed outside
     /// the allocation context: a sweep allocates nothing, as PUC's.
     table_pool: Vec<std::ptr::NonNull<crate::runtime::table::Table>>,
+    /// the blocks the fixed natives are made in
+    slab: slab::NativeSlab,
     /// The main functions of the chunks loaded while `track_chunk_roots`
     /// is set, without keeping them alive: the collector drops each one it
     /// finds dead. Compiled traces taken over from another Vm find the
@@ -312,8 +294,11 @@ mod finalize;
 mod intern;
 #[path = "heap_new.rs"]
 mod new;
-pub(crate) use self::intern::fresh_seed;
-use self::intern::{make_seed, oom_abort_heap};
+#[path = "heap_slab.rs"]
+mod slab;
+use self::intern::oom_abort_heap;
+pub(crate) use self::new::fresh_seed;
+use self::new::make_seed;
 #[path = "heap_free.rs"]
 mod free;
 #[path = "heap_mark.rs"]

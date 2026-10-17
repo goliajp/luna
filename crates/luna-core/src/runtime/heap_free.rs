@@ -92,7 +92,12 @@ impl Heap {
                     {
                         self.acct_free(self.sizes.c_closure(n));
                     }
-                    self.free_block(h as *mut NativeClosure);
+                    if (*h).cls & SLAB != 0 {
+                        ptr::drop_in_place(h as *mut NativeClosure);
+                        self.slab_free(h as *mut NativeClosure);
+                    } else {
+                        self.free_block(h as *mut NativeClosure);
+                    }
                 }
                 ObjTag::Coro => {
                     if !is_uncounted(h) {
@@ -165,9 +170,11 @@ impl Heap {
                 let b = String::from_utf8_lossy(string::bytes_of(s)).into_owned();
                 self.trace.line(format_args!("s {b:?}"));
             }
-            self.acct_string_free((*s).len());
-            if (*s).is_short() && !self.dropping {
-                self.strings.remove(s);
+            if !self.dropping {
+                self.acct_string_free((*s).len());
+                if (*s).is_short() {
+                    self.strings.remove(s);
+                }
             }
             string::free(s, self.mem());
         }
