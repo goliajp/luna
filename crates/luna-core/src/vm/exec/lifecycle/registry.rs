@@ -40,8 +40,12 @@ impl Vm {
         let loaded = field(self, b"loaded")?;
         self.registry_set(reg, "_LOADED", loaded)?;
         if v == LuaVersion::Lua51 {
-            let t = Value::Table(self.alloc_table()?);
-            self.registry_set(reg, "_LOADLIB", t)?;
+            // the metatable of a loaded C library's handle, with the
+            // finalizer that unloads it
+            let t = self.alloc_table()?;
+            let gc = self.lib_native(crate::vm::lib_package::clibs_gc)?;
+            self.registry_set(t, "__gc", gc)?;
+            self.registry_set(reg, "_LOADLIB", Value::Table(t))?;
         } else {
             let t = self.alloc_table()?;
             let clibs = Value::Table(t);

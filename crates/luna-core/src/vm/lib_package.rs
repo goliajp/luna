@@ -17,7 +17,7 @@ use crate::vm::lib_io::c_str;
 
 mod module51;
 mod open;
-pub(crate) use open::clibs_metatable;
+pub(crate) use open::{clibs_gc, clibs_metatable};
 mod path;
 mod require;
 mod searchers;
