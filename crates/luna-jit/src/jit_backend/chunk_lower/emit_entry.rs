@@ -8,7 +8,7 @@ pub(super) fn define_entry<M: Module>(
     fn_id: FuncId,
     scan: &ChunkScan,
     ring: Option<RingSpec>,
-    num_params: usize,
+    (float_mask, table_mask, num_params): (u8, u8, usize),
 ) -> Option<FuncId> {
     let any_self_call = ring.is_some();
     let ChunkScan {
@@ -31,7 +31,20 @@ pub(super) fn define_entry<M: Module>(
             math_fns.push((fold.math_key, fold.name_key));
         }
     }
+    // the arguments as the interpreter holds them, should a check fail
+    let arg_tags = (0..num_params)
+        .map(|i| {
+            if (table_mask >> i) & 1 == 1 {
+                luna_core::runtime::value::raw::TABLE
+            } else if (float_mask >> i) & 1 == 1 {
+                luna_core::runtime::value::raw::FLOAT
+            } else {
+                luna_core::runtime::value::raw::INT
+            }
+        })
+        .collect();
     let checks = EntryChecks {
+        arg_tags,
         self_upval: self_upval_idx.filter(|_| any_self_call),
         math_fns,
         ring,

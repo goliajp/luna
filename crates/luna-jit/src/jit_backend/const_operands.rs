@@ -13,12 +13,16 @@ pub(super) const SCRATCH_REGS: usize = 7;
 
 /// `proto.code` with the constant operands, and the upvalue table of a
 /// `GetTabUpR` / `SetTabUpR` / `SetTabUpK`, loaded into the scratch
-/// registers from `first_scratch` up, and the jumps retargeted. `None`
-/// when the split code cannot be expressed.
-pub(super) fn split_const_operands(proto: &Proto, first_scratch: usize) -> Option<Vec<Inst>> {
+/// registers from `first_scratch` up, and the jumps retargeted; with each
+/// new instruction's pc in `proto.code` (of the instruction it comes
+/// from). `None` when the split code cannot be expressed.
+pub(super) fn split_const_operands(
+    proto: &Proto,
+    first_scratch: usize,
+) -> Option<(Vec<Inst>, Vec<u32>)> {
     let code = &proto.code;
     if !code.iter().any(|&i| needs_split(i)) {
-        return Some(code.to_vec());
+        return Some((code.to_vec(), (0..code.len() as u32).collect()));
     }
     // the scratch registers must fit an 8-bit operand
     if first_scratch + SCRATCH_REGS > 256 {
@@ -26,6 +30,7 @@ pub(super) fn split_const_operands(proto: &Proto, first_scratch: usize) -> Optio
     }
     let scratch = Scratch(first_scratch as u32);
     let mut out: Vec<Inst> = Vec::with_capacity(code.len() + 8);
+    let mut old_of: Vec<u32> = Vec::with_capacity(code.len() + 8);
     // old pc -> new pc, with one entry past the end
     let mut map: Vec<usize> = Vec::with_capacity(code.len() + 1);
     // new pc -> old pc of the instructions that carry a relative target
@@ -38,6 +43,7 @@ pub(super) fn split_const_operands(proto: &Proto, first_scratch: usize) -> Optio
                 if pc > 0 && skips_next(code[pc - 1].op()) {
                     return None;
                 }
+                old_of.extend(std::iter::repeat_n(pc as u32, pair.len()));
                 out.extend(pair);
             }
             None => {
@@ -51,6 +57,7 @@ pub(super) fn split_const_operands(proto: &Proto, first_scratch: usize) -> Optio
                     relative.push((out.len(), pc));
                 }
                 out.push(inst);
+                old_of.push(pc as u32);
             }
         }
     }
@@ -84,7 +91,7 @@ pub(super) fn split_const_operands(proto: &Proto, first_scratch: usize) -> Optio
             }
         };
     }
-    Some(out)
+    Some((out, old_of))
 }
 
 fn needs_split(inst: Inst) -> bool {

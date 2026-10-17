@@ -66,10 +66,12 @@ pub(super) fn emit_checked_get<M: Module>(
     key_minus_1: Value,
     slow: (&str, Value),
     want: i64,
+    hand: (&EmitState, EmitFacts<'_>, usize),
 ) -> Option<Value> {
     let fast_blk = bcx.create_block();
     let slow_blk = bcx.create_block();
     let deopt_blk = bcx.create_block();
+    bcx.set_cold_block(deopt_blk);
     let merge_blk = bcx.create_block();
     bcx.append_block_param(merge_blk, types::I64);
     bcx.ins().brif(fast_ok, fast_blk, &[], slow_blk, &[]);
@@ -127,16 +129,12 @@ pub(super) fn emit_checked_get<M: Module>(
     bcx.ins()
         .brif(ok, merge_blk, &[BlockArg::Value(slow_bits)], deopt_blk, &[]);
 
+    // a metatable or a value of another kind: the interpreter runs the op
     bcx.switch_to_block(deopt_blk);
     bcx.seal_block(deopt_blk);
-    let park_sig = module.make_signature();
-    let park_id = module
-        .declare_function("luna_jit_park_deopt", Linkage::Import, &park_sig)
-        .ok()?;
-    let park = module.declare_func_in_func(park_id, bcx.func);
-    bcx.ins().call(park, &[]);
-    let zero = bcx.ins().iconst(types::I64, 0);
-    bcx.ins().return_(&[zero]);
+    let (st, f, pc) = hand;
+    let at = bcx.ins().iconst(types::I64, i64::from(f.c.old_pc[pc]));
+    super::handoff::emit_handoff(module, bcx, st, f, at)?;
 
     bcx.switch_to_block(merge_blk);
     bcx.seal_block(merge_blk);

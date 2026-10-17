@@ -22,11 +22,6 @@ pub(super) fn emit_math_fold<M: Module>(
         math_folds,
         ..
     } = scan;
-    let EmitState {
-        current_kinds,
-        current_is_nil,
-        ..
-    } = st;
     let mut pc = pc;
     let ins = code[pc];
     match ins.op() {
@@ -58,10 +53,8 @@ pub(super) fn emit_math_fold<M: Module>(
                         // An integer when it fits (NaN and the
                         // infinities do not); otherwise the result
                         // is a float, a kind this register cannot
-                        // hold, and the interpreter reruns the call.
-                        // Folds only compile in chunks without
-                        // table stores, so nothing has happened yet
-                        // that a rerun would repeat.
+                        // hold, and the interpreter runs the call,
+                        // from the fold's first op.
                         let lo = float_const(bcx, -9_223_372_036_854_775_808.0);
                         let hi = float_const(bcx, 9_223_372_036_854_775_808.0);
                         let ge_lo = bcx.ins().fcmp(FloatCC::GreaterThanOrEqual, r, lo);
@@ -72,17 +65,8 @@ pub(super) fn emit_math_fold<M: Module>(
                         bcx.ins().brif(fits, ok_blk, &[], bail_blk, &[]);
                         bcx.switch_to_block(bail_blk);
                         bcx.seal_block(bail_blk);
-                        let park_id = module
-                            .declare_function(
-                                "luna_jit_park_deopt",
-                                Linkage::Import,
-                                &module.make_signature(),
-                            )
-                            .ok()?;
-                        let park_ref = module.declare_func_in_func(park_id, bcx.func);
-                        bcx.ins().call(park_ref, &[]);
-                        let zero = bcx.ins().iconst(types::I64, 0);
-                        bcx.ins().return_(&[zero]);
+                        let at = bcx.ins().iconst(types::I64, i64::from(f.c.old_pc[pc]));
+                        super::handoff::emit_handoff(module, bcx, st, f, at)?;
                         bcx.switch_to_block(ok_blk);
                         bcx.seal_block(ok_blk);
                         bcx.ins().fcvt_to_sint(types::I64, r)
@@ -134,8 +118,8 @@ pub(super) fn emit_math_fold<M: Module>(
                 bcx.inst_results(call_inst)[0]
             };
             aligned_def(bcx, regs, reg_kinds, fold.dst_reg as usize, result);
-            current_kinds[fold.dst_reg as usize] = fold.result_kind();
-            current_is_nil[fold.dst_reg as usize] = false;
+            st.current_kinds[fold.dst_reg as usize] = fold.result_kind();
+            st.current_is_nil[fold.dst_reg as usize] = false;
 
             pc += 3; // skip GetField + Move + Call; outer `pc += 1` lands past the Call.
         }
@@ -162,11 +146,6 @@ pub(super) fn emit_get_upval<M: Module>(
         is_upval_value_read,
         ..
     } = scan;
-    let EmitState {
-        current_kinds,
-        current_is_nil,
-        ..
-    } = st;
     match ins.op() {
         Op::GetUpval => {
             let a = ins.a() as usize;
@@ -189,9 +168,21 @@ pub(super) fn emit_get_upval<M: Module>(
                 let r = module.declare_func_in_func(id, bcx.func);
                 let call_inst = bcx.ins().call(r, &[idx_arg]);
                 let v = bcx.inst_results(call_inst)[0];
+                // anything but a float: the interpreter reads it
+                let parked_id = module
+                    .declare_function("luna_jit_no_deopt_parked", Linkage::Import, &{
+                        let mut s = module.make_signature();
+                        s.returns.push(AbiParam::new(types::I64));
+                        s
+                    })
+                    .ok()?;
+                let parked_ref = module.declare_func_in_func(parked_id, bcx.func);
+                let ok_call = bcx.ins().call(parked_ref, &[]);
+                let ok = bcx.inst_results(ok_call)[0];
+                emit_hand_if_zero(module, bcx, st, f, pc, ok)?;
                 aligned_def(bcx, regs, reg_kinds, a, v);
-                current_kinds[a] = reg_kinds[a];
-                current_is_nil[a] = false;
+                st.current_kinds[a] = reg_kinds[a];
+                st.current_is_nil[a] = false;
             } else {
                 // SelfMarker placeholder. The matching
                 // Op::Call gets rewritten to a direct cranelift
@@ -227,11 +218,6 @@ pub(super) fn emit_self_call<M: Module>(
         ..
     } = f;
     let ChunkScan { self_call_pcs, .. } = scan;
-    let EmitState {
-        current_kinds,
-        current_is_nil,
-        ..
-    } = st;
     match ins.op() {
         Op::Call => {
             debug_assert!(
@@ -261,9 +247,12 @@ pub(super) fn emit_self_call<M: Module>(
             let self_ref = module.declare_func_in_func(fn_id, bcx.func);
             let call = bcx.ins().call(self_ref, &arg_vals);
             let result_i64 = bcx.inst_results(call)[0];
-            if sc.check_failure {
-                return_if_failed(bcx);
-            }
+            super::handoff::emit_after_self_call(module, bcx, st, f, pc)?;
+            let EmitState {
+                current_kinds,
+                current_is_nil,
+                ..
+            } = st;
             // Self-call result is `ret_kind`; bitcast back to
             // F64 if Float. Pre-write `current_kinds[a]` would
             // be stale here.
@@ -283,18 +272,4 @@ pub(super) fn emit_self_call<M: Module>(
         _ => unreachable!("dispatched by op"),
     }
     Some(())
-}
-
-/// Return at once when the failure flag in the stub's context (the pinned
-/// register) is set: a self call this one made, or one below it, failed.
-fn return_if_failed(bcx: &mut FunctionBuilder<'_>) {
-    let abort = bcx.create_block();
-    let cont = bcx.create_block();
-    let ctx = bcx.ins().get_pinned_reg(types::I64);
-    let failed = bcx.ins().load(types::I64, MemFlagsData::trusted(), ctx, 8);
-    bcx.ins().brif(failed, abort, &[], cont, &[]);
-    bcx.switch_to_block(abort);
-    let zero = bcx.ins().iconst(types::I64, 0);
-    bcx.ins().return_(&[zero]);
-    bcx.switch_to_block(cont);
 }

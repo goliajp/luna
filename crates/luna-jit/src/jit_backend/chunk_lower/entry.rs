@@ -9,13 +9,13 @@ pub(super) struct EntryChecks {
     /// The body calls itself: it runs as a ring of copies behind a stub
     /// (see [`SelfCalls`]).
     pub(super) ring: Option<RingSpec>,
+    /// The tag of each argument, for the interpreter when a check fails.
+    pub(super) arg_tags: Vec<u8>,
 }
 
 /// How a self-recursive chunk's ring is built and checked.
 #[derive(Clone, Copy)]
 pub(super) struct RingSpec {
-    /// `luna_jit_helpers::self_call_desc` of the self calls
-    pub(super) desc: i64,
     /// copies of the body in the ring: levels between two checks
     pub(super) copies: u32,
 }
@@ -57,13 +57,6 @@ pub(super) fn define_checked_entry<M: Module>(
     let math_check_id = module
         .declare_function("luna_jit_math_fn_is_library", Linkage::Import, &math_sig)
         .ok()?;
-    let park_id = module
-        .declare_function(
-            "luna_jit_park_deopt",
-            Linkage::Import,
-            &module.make_signature(),
-        )
-        .ok()?;
 
     ctx.func.signature = sig;
     ctx.func.name = UserFuncName::user(0, entry_id.as_u32());
@@ -74,9 +67,7 @@ pub(super) fn define_checked_entry<M: Module>(
     bcx.append_block_params_for_function_params(entry);
     bcx.switch_to_block(entry);
     let args: Vec<Value> = bcx.block_params(entry).to_vec();
-    // luna_jit_self_upval_check parks its own deopt; the math check
-    // leaves that to the bail block.
-    let park_on_bail = !checks.math_fns.is_empty();
+    let entry_args = args.clone();
     if let Some(idx) = checks.self_upval {
         let check_ref = module.declare_func_in_func(self_check_id, bcx.func);
         let idx = bcx.ins().iconst(types::I64, i64::from(idx));
@@ -121,7 +112,7 @@ pub(super) fn define_checked_entry<M: Module>(
         // level 0: the base the call was made at, depth 0
         let base = bcx
             .ins()
-            .load(types::I64, MemFlagsData::trusted(), ctx_addr, 32);
+            .load(types::I64, MemFlagsData::trusted(), ctx_addr, 24);
         args.push(base);
         args.push(bcx.ins().iconst(types::I64, 0));
     }
@@ -132,11 +123,34 @@ pub(super) fn define_checked_entry<M: Module>(
     }
     bcx.ins().return_(&[r]);
 
+    // a check failed: the interpreter runs the call from its start, the
+    // level counted already
     bcx.switch_to_block(bail);
-    if park_on_bail {
-        let park_ref = module.declare_func_in_func(park_id, bcx.func);
-        bcx.ins().call(park_ref, &[]);
+    let n = checks.arg_tags.len();
+    let slot = bcx.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        (16 * n.max(1)) as u32,
+        3,
+    ));
+    for (i, &tag) in checks.arg_tags.iter().enumerate() {
+        let t = bcx.ins().iconst(types::I64, i64::from(tag));
+        bcx.ins().stack_store(types::I64, t, slot, (16 * i) as i32);
+        bcx.ins()
+            .stack_store(types::I64, entry_args[i], slot, (16 * i + 8) as i32);
     }
+    let mut hand_sig = module.make_signature();
+    for _ in 0..4 {
+        hand_sig.params.push(AbiParam::new(types::I64));
+    }
+    let hand_id = module
+        .declare_function("luna_jit_handoff_frame", Linkage::Import, &hand_sig)
+        .ok()?;
+    let hand_ref = module.declare_func_in_func(hand_id, bcx.func);
+    let pc0 = bcx.ins().iconst(types::I64, 0);
+    let level0 = bcx.ins().iconst(types::I64, -1);
+    let regs = bcx.ins().stack_addr(types::I64, slot, 0);
+    let count = bcx.ins().iconst(types::I64, n as i64);
+    bcx.ins().call(hand_ref, &[pc0, level0, regs, count]);
     let zero = bcx.ins().iconst(types::I64, 0);
     bcx.ins().return_(&[zero]);
 
@@ -150,8 +164,8 @@ pub(super) fn define_checked_entry<M: Module>(
 
 /// Defines the stub the last copy of a self-recursive body calls (and the
 /// entry calls first): with the native stack below the limit in its
-/// context, it has `luna_jit_self_call_slow` make the call in the
-/// interpreter; otherwise it calls the first copy.
+/// context, it leaves the call to the interpreter (the caller hands itself
+/// over); otherwise it calls the first copy.
 fn define_stub<M: Module>(
     module: &mut M,
     ctx: &mut cranelift_codegen::Context,
@@ -167,15 +181,6 @@ fn define_stub<M: Module>(
     let stub_id = module
         .declare_function("luna_jit_chunk_stub", Linkage::Local, &sig)
         .ok()?;
-    let mut slow_sig = module.make_signature();
-    for _ in 0..8 {
-        slow_sig.params.push(AbiParam::new(types::I64));
-    }
-    slow_sig.returns.push(AbiParam::new(types::I64));
-    let slow_id = module
-        .declare_function("luna_jit_self_call_slow", Linkage::Import, &slow_sig)
-        .ok()?;
-
     ctx.func.signature = sig;
     ctx.func.name = UserFuncName::user(0, stub_id.as_u32());
     let mut fbc = FunctionBuilderContext::new();
@@ -200,15 +205,13 @@ fn define_stub<M: Module>(
     bcx.ins().return_(&[r]);
 
     bcx.switch_to_block(slow);
-    let slow_ref = module.declare_func_in_func(slow_id, bcx.func);
-    let desc = bcx.ins().iconst(types::I64, ring.desc);
-    let (lua_args, level) = args.split_at(num_params);
-    let mut slow_args = vec![ctx_addr, desc, level[0], level[1]];
-    slow_args.extend_from_slice(lua_args);
-    slow_args.resize_with(8, || bcx.ins().iconst(types::I64, 0));
-    let call = bcx.ins().call(slow_ref, &slow_args);
-    let r = bcx.inst_results(call)[0];
-    bcx.ins().return_(&[r]);
+    // the interpreter makes the call
+    let not_started = bcx
+        .ins()
+        .iconst(types::I64, luna_jit_helpers::SELF_NOT_STARTED);
+    bcx.ins().store(flags, not_started, ctx_addr, 8);
+    let zero = bcx.ins().iconst(types::I64, 0);
+    bcx.ins().return_(&[zero]);
 
     bcx.seal_all_blocks();
     bcx.finalize(module.target_config());
@@ -241,12 +244,9 @@ pub(super) fn count_level<M: Module>(
     let flags = MemFlagsData::trusted();
     let ctx_addr = bcx.ins().get_pinned_reg(types::I64);
     let base_limit = bcx.ins().load(types::I64, flags, ctx_addr, 16);
-    let depth_limit = bcx.ins().load(types::I64, flags, ctx_addr, 24);
-    let deep = bcx.ins().icmp(IntCC::SignedGreaterThan, depth, depth_limit);
-    let high = bcx
+    let cross = bcx
         .ins()
         .icmp(IntCC::SignedGreaterThanOrEqual, base, base_limit);
-    let cross = bcx.ins().bor(deep, high);
     let cold = bcx.create_block();
     let go_on = bcx.create_block();
     let failed = bcx.create_block();

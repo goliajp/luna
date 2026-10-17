@@ -74,22 +74,22 @@ impl Vm {
         func_slot: u32,
         nargs: u32,
         wanted: i32,
-    ) -> bool {
+    ) -> JitRun {
         use crate::runtime::function::JitProtoState;
         // (compiled self-recursion checks the native stack itself, before
         // its first self call)
         if !self.jit.gate {
-            return false;
+            return JitRun::NotRun;
         }
         // Any active debug hook means the interpreter has to run the
         // call so the hook gets the expected events.
         if self.hook.func.is_some() || self.hook.rust_func.is_some() {
-            return false;
+            return JitRun::NotRun;
         }
         let proto = cl.proto;
         if let JitProtoState::Untried = proto.jit.get() {
             if native_stack::is_low(native_stack::COMPILE_RESERVE) {
-                return Default::default();
+                return JitRun::NotRun;
             }
             self.populate_jit_cache(proto);
         }
@@ -106,10 +106,10 @@ impl Vm {
             ret_is_table,
         } = proto.jit.get()
         else {
-            return false;
+            return JitRun::NotRun;
         };
         if num_args as u32 != nargs {
-            return false;
+            return JitRun::NotRun;
         }
         // Pack args into i64 bit-patterns per the per-slot expected
         // kind. A Float-typed slot accepts Value::Float verbatim (and on
@@ -138,16 +138,18 @@ impl Vm {
                 (false, false, Value::Int(x)) => x,
                 (false, true, Value::Float(f)) => f.to_bits() as i64,
                 (false, true, Value::Int(x)) if int_as_float => (x as f64).to_bits() as i64,
-                _ => return false,
+                _ => return JitRun::NotRun,
             };
         }
         // the level the call makes, as `push_frame` would count it; an
         // error there is the call's
         let levels = match self.jit_enter_levels(cl, func_slot, nargs) {
-            Ok(l) => l,
+            Ok(Some(l)) => l,
+            // the interpreter makes the call: its check finds a step due
+            Ok(None) => return JitRun::NotRun,
             Err(e) => {
                 self.jit.pending_raise = Some(e);
-                return true;
+                return JitRun::Done;
             }
         };
         // the Vm and closure the helpers the code calls work on, until
@@ -176,12 +178,16 @@ impl Vm {
         self.jit_leave_levels(levels);
         // the caller raises it
         if self.jit.pending_raise.is_some() {
-            return true;
+            return JitRun::Done;
         }
         // A helper flagged a metatable on a table operand; bail to the
         // interpreter so `push_frame` runs the call from scratch.
         if self.jit.pending_err.take().is_some() {
-            return false;
+            self.jit.handoff.clear();
+            return JitRun::NotRun;
+        }
+        if !self.jit.handoff.is_empty() {
+            return JitRun::Handed;
         }
         // Write result at func_slot, replacing the closure value, then
         // hand to finish_results to pad/truncate per the call site's
@@ -202,7 +208,7 @@ impl Vm {
         } else {
             self.finish_results(func_slot, 0, wanted);
         }
-        true
+        JitRun::Done
     }
 
     /// "stack overflow" raised for a self call of compiled `cl`,
@@ -227,49 +233,5 @@ impl Vm {
             Ok(s) => LuaError(Value::Str(s)),
             Err(o) => o.into(),
         }
-    }
-
-    /// Run in the interpreter the self call compiled `cl` makes at level
-    /// `depth` with its frame at `base`, when too little native stack is
-    /// left: placed where PUC has it, the frame accounted as any call's,
-    /// the compiled levels below counted. Like a library callback it cannot
-    /// yield. Unless the levels are `bare`, they may hold the only
-    /// reference to a table in a native register no collection can see,
-    /// so none runs until the call is done.
-    #[doc(hidden)]
-    pub fn jit_call_interpreted(
-        &mut self,
-        cl: crate::runtime::Gc<crate::runtime::LuaClosure>,
-        args: &[Value],
-        base: u32,
-        depth: u32,
-        bare: bool,
-    ) -> Result<Vec<Value>, LuaError> {
-        let native_before = self.g.frames_native;
-        self.g.frames_native = self.jit.levels_base + depth;
-        let func_slot = base - 1;
-        let top = base + args.len() as u32;
-        self.grow_stack(top as usize)?;
-        if bare {
-            // the levels' slots hold numbers in PUC's stack
-            self.stack[self.jit.levels_slot as usize..func_slot as usize].fill(Value::Nil);
-        }
-        self.stack[func_slot as usize] = Value::Closure(cl);
-        self.stack[base as usize..top as usize].copy_from_slice(args);
-        self.top = top;
-        let stopped = self.heap.gc_is_stopped();
-        if !bare {
-            self.heap.gc_set_stopped(true);
-        }
-        // the method JIT would hand this very call straight back
-        let jit = self.jit.enabled;
-        self.set_jit_flag(false);
-        self.nny += 1;
-        let r = self.call_at(func_slot, args.len() as u32, false);
-        self.nny -= 1;
-        self.set_jit_flag(jit);
-        self.heap.gc_set_stopped(stopped);
-        self.g.frames_native = native_before;
-        r
     }
 }

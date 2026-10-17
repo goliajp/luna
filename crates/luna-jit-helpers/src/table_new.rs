@@ -70,6 +70,32 @@ pub unsafe extern "C" fn luna_jit_new_table_sized(ops: i64) -> i64 {
     }
 }
 
+/// The method JIT's `NewTable` of the packed operands `ops`, made with the
+/// size `presized` gives when a fill follows (counted as the size PUC's
+/// doubling ends at; no collection check comes before the fill ends). 0
+/// when the op is the interpreter's: its check would find a collection
+/// step due, or the table cannot be made; the level then hands itself
+/// over and the interpreter runs the op.
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread.
+// SAFETY: no other item in the link is named `luna_jit_chunk_new_table`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_chunk_new_table(ops: i64, presized: i64) -> i64 {
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
+    let vm = unsafe { current_jit_vm() };
+    let (b, c, k) = unpack_table_ops(ops);
+    if vm.jit.pending_err.is_some() || vm.jit_table_due(b, c, k) {
+        return 0;
+    }
+    let (b, c, k) = unpack_table_ops(presized);
+    match vm.heap.try_new_table_presized(b, c, k) {
+        Ok(Some(g)) => g.as_ptr() as i64,
+        _ => 0,
+    }
+}
+
 /// `NewTable`'s `(B, C, k)` from the packed form compiled code passes.
 fn unpack_table_ops(ops: i64) -> (u32, u32, bool) {
     (

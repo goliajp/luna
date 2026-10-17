@@ -109,15 +109,11 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         regs_ty,
         regs,
         helpers: &helpers,
-        may_park: may_park(plan),
-        // every backward jump, a comparison's too
-        has_loop: plan
-            .code
-            .iter()
-            .enumerate()
-            .any(|(pc, ins)| ins.op() == Op::Jmp && jmp_target(pc, *ins) <= pc),
         read_register: inkwell::intrinsics::Intrinsic::find("llvm.read_register")?
             .get_declaration(&module, &[i64_type.into()])?,
+        nils_at: &plan.nils_at,
+        num_regs: plan.num_regs,
+        pc: std::cell::Cell::new(0),
         self_call_desc: luna_jit_helpers::self_call_desc(
             plan.num_params,
             0,
@@ -146,7 +142,7 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         .chain(&plan.tail_call_pcs)
         .any(|&c| c)
     {
-        emitter.emit_self_guard(plan.num_params)?;
+        emitter.emit_self_guard()?;
     }
 
     // Walk PCs; switch BB on bb_starts boundaries; terminators
@@ -162,6 +158,7 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
             pc += 1;
             continue;
         }
+        emitter.pc.set(pc);
 
         // Entering a new BB? Either we just emitted a terminator (in
         // which case we MUST switch) or the prev BB fell through to
@@ -218,7 +215,7 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
                     plan.self_call_pcs[pc],
                     "scanner accepts only self-recursive Op::Call PCs"
                 );
-                emitter.emit_self_call(ins)?;
+                emitter.emit_self_call(ins, pc)?;
             }
             Op::TailCall => {
                 // Self-recursive tail call (tracker gated).
@@ -229,7 +226,7 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
                     plan.tail_call_pcs[pc],
                     "scanner accepts only self-recursive Op::TailCall PCs"
                 );
-                emitter.emit_self_tail_call(ins)?;
+                emitter.emit_self_tail_call(ins, pc)?;
                 bb_terminated = true;
             }
             _ => {
@@ -292,7 +289,49 @@ fn emit_entry<'ctx>(
         let go = ctx.append_basic_block(entry, "self_go");
         let deopt = ctx.append_basic_block(entry, "self_deopt");
         builder.build_conditional_branch(is_ok, go, deopt).ok()?;
+        // the interpreter runs the call from its start, the level counted
         builder.position_at_end(deopt);
+        let n = plan.num_params;
+        let words = i64_type.array_type(2 * n.max(1));
+        let buf = builder.build_alloca(words, "entry_args").ok()?;
+        for (i, arg) in entry.get_param_iter().enumerate() {
+            let at = |w: u64, name: &str| {
+                // SAFETY: `buf` is an alloca of `2 * n` words and `w < 2 * n`
+                unsafe {
+                    builder.build_in_bounds_gep(
+                        words,
+                        buf,
+                        &[i64_type.const_zero(), i64_type.const_int(w, false)],
+                        name,
+                    )
+                }
+                .ok()
+            };
+            let tag = u64::from(luna_core::runtime::value::raw::INT);
+            builder
+                .build_store(at(2 * i as u64, "tag_at")?, i64_type.const_int(tag, false))
+                .ok()?;
+            builder
+                .build_store(at(2 * i as u64 + 1, "arg_at")?, arg)
+                .ok()?;
+        }
+        let record = helpers.get("luna_jit_handoff_frame").copied()?;
+        let addr = builder
+            .build_ptr_to_int(buf, i64_type, "entry_args_addr")
+            .ok()?;
+        let level0 = i64_type.const_int(u64::MAX, true);
+        builder
+            .build_call(
+                record,
+                &[
+                    zero.into(),
+                    level0.into(),
+                    addr.into(),
+                    i64_type.const_int(u64::from(n), false).into(),
+                ],
+                "handoff",
+            )
+            .ok()?;
         builder.build_return(Some(&zero)).ok()?;
         builder.position_at_end(go);
     }
@@ -313,7 +352,7 @@ fn emit_entry<'ctx>(
                 .ok()?;
             Some(builder.build_load(i64_type, p, name).ok()?.into_int_value())
         };
-        (addr, word(0, "limit")?, word(4, "base")?)
+        (addr, word(0, "limit")?, word(3, "base")?)
     } else {
         (zero, zero, zero)
     };
@@ -332,20 +371,6 @@ fn emit_entry<'ctx>(
     };
     builder.build_return(Some(&v)).ok()?;
     Some(())
-}
-
-/// Whether the body can park a deopt of its own (`luna_jit_park_deopt`, or
-/// a check helper that parks one): a self-recursive call must then ask
-/// after it returns whether the callee parked one.
-fn may_park(plan: &ChunkPlan) -> bool {
-    plan.code.iter().enumerate().any(|(pc, ins)| {
-        plan.reachable[pc]
-            && match ins.op() {
-                Op::GetUpval => plan.is_upval_value_read[pc],
-                Op::Mod | Op::ModK => true,
-                _ => false,
-            }
-    })
 }
 
 /// Lower a comparison and the `Jmp` it consumes into one `condbr`.
