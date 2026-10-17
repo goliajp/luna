@@ -216,6 +216,32 @@ impl Marker {
         unsafe { self.header(g.header()) }
     }
 
+    /// [`Self::mark`] of each string of `strs`: with nothing to count per
+    /// object (5.1, 5.4), a white one turns black and readable only through
+    /// the slow path, as `header` leaves it.
+    pub(crate) fn mark_strings<'a>(&mut self, strs: impl Iterator<Item = &'a Gc<LuaStr>>) {
+        #[cfg(feature = "gc-verify")]
+        let plain = self.verify.is_none();
+        #[cfg(not(feature = "gc-verify"))]
+        let plain = true;
+        if !plain || self.leaf_hdr != 0 || self.sizer.is_some() {
+            for &s in strs {
+                self.mark(s);
+            }
+            return;
+        }
+        for &s in strs {
+            let h = s.header();
+            // SAFETY: a handle's string is allocated and nothing is freed while marking; only its flag byte is touched
+            unsafe {
+                let f = (*h).flags;
+                if is_white(f) {
+                    (*h).flags = (f & !WHITE_BITS) | BLACK | SLOW;
+                }
+            }
+        }
+    }
+
     /// Mark a bare header, returning true if it was newly marked (was white).
     /// Transitions white → gray (in PUC `reallymarkobject` terms): clears the
     /// current-white bit and pushes onto the gray stack. `drain_marker` later

@@ -19,18 +19,13 @@ impl Vm {
         // a load may have made meanwhile
         let puc = &self.heap.puc;
         if again {
-            for &n in puc.pins[puc.pins_marked.get()..]
-                .iter()
-                .chain(&puc.load_msg)
-            {
-                m.mark(n);
-            }
+            m.mark_strings(puc.pins[puc.pins_marked.get()..].iter());
         } else {
-            for &n in self.mm_names.iter().chain(&puc.pins).chain(&puc.load_msg) {
-                m.mark(n);
-            }
+            m.mark_strings(self.mm_names.iter());
+            m.mark_strings(puc.pins.iter());
             puc.pins_marked.set(puc.pins.len());
         }
+        m.mark_strings(puc.load_msg.iter());
         // Root the running thread's live registers (PUC marks [stack, top)).
         // `gc_top` is the instruction-level cursor of the last GC
         // safe-point: allocation safe-points set it via
