@@ -74,7 +74,7 @@ impl Heap {
 
     /// No automatic step runs (`gc-trace` with `R38_NOAUTO` set).
     #[inline(always)]
-    fn no_auto(&self) -> bool {
+    pub(crate) fn no_auto(&self) -> bool {
         #[cfg(feature = "gc-trace")]
         return self.trace.no_auto;
         #[cfg(not(feature = "gc-trace"))]
