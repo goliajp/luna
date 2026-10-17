@@ -2,6 +2,30 @@
 
 use super::*;
 
+/// BLACK or a read-only table; see the flag layout on `GcHeader`
+pub(crate) const SLOW: u8 = 8;
+/// in a string's `sub` byte: luna made the string for itself, PUC has not
+/// made it, and the count leaves it out (see `heap_acct.rs`)
+pub(crate) const UNCOUNTED: u8 = 0x80;
+/// in a string's `sub` byte: a 5.5 external string (its bytes in a block)
+pub(crate) const EXTERNAL: u8 = 0x40;
+/// in `cls`: PUC does not list the object, whatever its count and finalizer
+pub(crate) const UNLISTED: u8 = 1;
+/// in `cls`: objects of PUC's stand on it (`PucState::stand_ins`)
+pub(crate) const STANDS: u8 = 2;
+/// in `cls`: a read-only table; one shift from SLOW
+pub(crate) const RO_CLS: u8 = SLOW >> 1;
+/// in `cls`: a native in one of the heap's blocks of them (`NativeSlab`)
+pub(crate) const SLAB: u8 = 0x10;
+
+/// The `aux` bit of a read-only table (`Table::is_readonly`), above its
+/// absent-metamethod bits; the JIT's inline stores test it in its byte.
+pub(crate) const READONLY_AUX: u32 = 1 << 31;
+
+/// Offsets in `GcHeader`, for the JIT's read-only test.
+pub(crate) const AUX_OFFSET: usize = std::mem::offset_of!(GcHeader, aux);
+pub(crate) const SUB_OFFSET: usize = std::mem::offset_of!(GcHeader, sub);
+
 /// Discriminator the GC stores in every [`GcHeader`] so a raw header pointer
 /// can be cast back to the right object kind during tracing and sweeping.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

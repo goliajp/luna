@@ -273,30 +273,6 @@ pub(super) fn oom_abort_heap() -> ! {
     crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Heap>())
 }
 
-/// A seed of a new heap's own, as [`Heap::new`] picks it.
-pub(crate) fn fresh_seed() -> u32 {
-    make_seed()
-}
-
-/// Hash seed from address entropy (ASLR) and clock, luaL_makeseed style.
-pub(super) fn make_seed() -> u32 {
-    // the instrumented PUC build takes its seed from `R38_SEED` too
-    #[cfg(feature = "gc-trace")]
-    if let Some(s) = std::env::var("R38_SEED").ok().and_then(|s| s.parse().ok()) {
-        return s;
-    }
-    let stack_var = 0u8;
-    let mut h = &stack_var as *const u8 as u64;
-    h ^= (make_seed as *const () as u64) << 16;
-    if let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        h ^= (d.subsec_nanos() as u64) << 32 ^ d.as_secs();
-    }
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    h ^= h >> 33;
-    h as u32
-}
-
 /// `parts` one after another in `buf`, which has room for them.
 fn joined<'b>(parts: &[&[u8]], buf: &'b mut [u8]) -> &'b [u8] {
     let mut at = 0;
