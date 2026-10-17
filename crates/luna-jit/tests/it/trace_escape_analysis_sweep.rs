@@ -119,3 +119,51 @@ fn callee_local_table_with_scalar_return_stays_sinkable() {
         vm.trace_compiled_count()
     );
 }
+
+/// The last op of the loop's body makes a table (`u`), and the exit a
+/// collection due after it takes rebuilds the sunk table `t` still in
+/// its register: PUC's collection at that point finds it there. Without
+/// that exit two of the trace's exits rebuild `t`.
+#[test]
+fn sunk_table_is_rebuilt_at_the_exit_after_the_last_op() {
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    vm.set_jit_enabled(false);
+    vm.set_trace_jit_enabled(true);
+    let r = vm
+        .eval(
+            "local n = 0
+             for i = 1, 1000 do
+                 local t = {i}
+                 n = n + t[1]
+                 local u = {}
+             end
+             return n",
+        )
+        .unwrap();
+    assert!(matches!(r[0], luna_jit::runtime::Value::Int(500500)));
+    assert_eq!(vm.trace_sunk_alloc_count(), 1);
+    assert_eq!(vm.trace_materialize_emit_count(), 3);
+}
+
+/// The exits a collection check takes are no failing guards: however
+/// often a loop takes one, no side trace starts there, so none can run
+/// before the check the exit is for.
+#[test]
+fn collection_exits_start_no_side_trace() {
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    vm.set_jit_enabled(false);
+    vm.set_trace_jit_enabled(true);
+    let r = vm
+        .eval(
+            "collectgarbage('incremental', 1, 100)
+             local keep = {}
+             for i = 1, 20000 do
+                 keep[i % 64 + 1] = {i}
+             end
+             return keep[1][1]",
+        )
+        .unwrap();
+    assert!(matches!(r[0], luna_jit::runtime::Value::Int(19968)));
+    assert!(vm.trace_compiled_count() >= 1);
+    assert_eq!(vm.trace_side_trace_started_count(), 0);
+}
