@@ -22,10 +22,10 @@ pub(crate) fn try_open_utf8(vm: &mut Vm) -> Result<(), LuaError> {
     }
     let t = vm.lib_table_puc("utf8")?;
     let fns: [(&str, fn(&mut Vm, u32, u32) -> Result<u32, LuaError>); 5] = [
-        ("char", u_char),
-        ("codepoint", u_codepoint),
-        ("len", u_len),
         ("offset", u_offset),
+        ("codepoint", u_codepoint),
+        ("char", u_char),
+        ("len", u_len),
         ("codes", u_codes),
     ];
     let mut entries = Vec::with_capacity(6);

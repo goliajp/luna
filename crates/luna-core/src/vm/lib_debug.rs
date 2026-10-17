@@ -30,36 +30,32 @@ pub(crate) use upvalues::{upvalue_name, visible_upvalue_index};
 pub(crate) fn try_open_debug(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();
     let t = vm.lib_table_puc("debug")?;
-    let mut fns: Vec<(&str, crate::runtime::value::NativeFn)> = vec![
-        ("debug", d_debug),
-        ("gethook", d_gethook),
-        ("getinfo", d_getinfo),
-        ("getlocal", d_getlocal),
-        ("getregistry", d_getregistry),
-        ("getmetatable", d_getmetatable),
-        ("getupvalue", d_getupvalue),
-        ("sethook", d_sethook),
-        ("setlocal", d_setlocal),
-        ("setmetatable", d_setmetatable),
-        ("setupvalue", d_setupvalue),
-        ("traceback", d_traceback),
-    ];
+    // in the order of PUC's `dblib` for each version
+    let mut fns: Vec<(&str, crate::runtime::value::NativeFn)> = Vec::with_capacity(17);
+    fns.push(("debug", d_debug));
     if v == LuaVersion::Lua51 {
-        fns.extend([
-            ("getfenv", d_getfenv as crate::runtime::value::NativeFn),
-            ("setfenv", d_setfenv),
-        ]);
+        fns.push(("getfenv", d_getfenv));
     } else {
-        fns.extend([
-            (
-                "getuservalue",
-                d_getuservalue as crate::runtime::value::NativeFn,
-            ),
-            ("setuservalue", d_setuservalue),
-            ("upvalueid", d_upvalueid),
-            ("upvaluejoin", d_upvaluejoin),
-        ]);
+        fns.push(("getuservalue", d_getuservalue));
     }
+    fns.push(("gethook", d_gethook));
+    fns.push(("getinfo", d_getinfo));
+    fns.push(("getlocal", d_getlocal));
+    fns.push(("getregistry", d_getregistry));
+    fns.push(("getmetatable", d_getmetatable));
+    fns.push(("getupvalue", d_getupvalue));
+    if v == LuaVersion::Lua51 {
+        fns.push(("setfenv", d_setfenv));
+    } else {
+        fns.push(("upvaluejoin", d_upvaluejoin));
+        fns.push(("upvalueid", d_upvalueid));
+        fns.push(("setuservalue", d_setuservalue));
+    }
+    fns.push(("sethook", d_sethook));
+    fns.push(("setlocal", d_setlocal));
+    fns.push(("setmetatable", d_setmetatable));
+    fns.push(("setupvalue", d_setupvalue));
+    fns.push(("traceback", d_traceback));
     if v == LuaVersion::Lua54 {
         fns.push(("setcstacklimit", d_setcstacklimit));
     }

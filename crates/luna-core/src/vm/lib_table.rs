@@ -27,36 +27,36 @@ pub(crate) fn try_open_table(vm: &mut Vm) -> Result<(), LuaError> {
     // Ordering note: the enum runs Lua51 < Lua52 < Lua53 < Lua54 <
     // MacroLua < Lua55, so MacroLua (a 5.4 base) inherits exactly the 5.4
     // surface from these comparisons.
-    let mut funcs: Vec<(&str, Native)> = vec![
-        ("insert", t_insert),
-        ("remove", t_remove),
-        ("concat", t_concat),
-        ("sort", t_sort),
-    ];
-    // 5.2+ — on 5.1 `unpack` is a base-library global (builtins).
-    if ver >= V::Lua52 {
-        funcs.extend([("unpack", t_unpack as Native), ("pack", t_pack)]);
+    // in the order of PUC's `tab_funcs` for each version: 5.1 keeps `setn`
+    // registered purely to raise "'setn' is obsolete"; LUA_COMPAT_MAXN is on
+    // in the default 5.2 build only (5.3's default LUA_COMPAT_5_2 does not
+    // include it); on 5.1 `unpack` is a base-library global (builtins)
+    let mut funcs: Vec<(&str, Native)> = Vec::with_capacity(9);
+    funcs.push(("concat", t_concat));
+    if ver == V::Lua51 {
+        funcs.push(("foreach", t_foreach));
+        funcs.push(("foreachi", t_foreachi));
+        funcs.push(("getn", t_getn));
     }
-    if ver >= V::Lua53 {
-        funcs.push(("move", t_move));
+    if ver <= V::Lua52 {
+        funcs.push(("maxn", t_maxn));
     }
     if ver >= V::Lua55 {
         funcs.push(("create", t_create));
     }
-    // LUA_COMPAT_MAXN is on in the default 5.2 build only (5.3's default
-    // LUA_COMPAT_5_2 does not include it).
-    if ver <= V::Lua52 {
-        funcs.push(("maxn", t_maxn));
+    funcs.push(("insert", t_insert));
+    if ver >= V::Lua52 {
+        funcs.push(("pack", t_pack));
+        funcs.push(("unpack", t_unpack));
     }
-    // 5.1 keeps `setn` registered purely to raise "'setn' is obsolete".
+    funcs.push(("remove", t_remove));
     if ver == V::Lua51 {
-        funcs.extend([
-            ("getn", t_getn as Native),
-            ("foreach", t_foreach),
-            ("foreachi", t_foreachi),
-            ("setn", t_setn),
-        ]);
+        funcs.push(("setn", t_setn));
     }
+    if ver >= V::Lua53 {
+        funcs.push(("move", t_move));
+    }
+    funcs.push(("sort", t_sort));
     let t = vm.lib_table_puc("table")?;
     let mut entries = Vec::with_capacity(funcs.len());
     for (name, f) in funcs {

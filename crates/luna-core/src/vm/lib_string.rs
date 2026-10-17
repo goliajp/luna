@@ -22,44 +22,50 @@ type NativeFn = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 pub(crate) fn try_open_string(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();
     let t = vm.lib_table_puc("string")?;
-    let mut fns: Vec<(&str, NativeFn)> = vec![
-        ("len", s_len),
-        ("sub", s_sub),
-        ("upper", s_upper),
-        ("lower", s_lower),
-        ("rep", s_rep),
-        ("reverse", s_reverse),
-        ("byte", s_byte),
-        ("char", s_char),
-        ("find", s_find),
-        ("match", s_match),
-        ("gsub", s_gsub),
-        ("format", crate::vm::lib_strformat::s_format),
-        ("dump", s_dump),
-    ];
-    if v >= LuaVersion::Lua53 {
-        fns.push(("pack", crate::vm::lib_strpack::s_pack));
-        fns.push(("unpack", crate::vm::lib_strpack::s_unpack));
-        fns.push(("packsize", crate::vm::lib_strpack::s_packsize));
-    }
-    let mut entries = Vec::with_capacity(fns.len() + 2);
-    for (name, f) in fns {
+    // in the order of PUC's `strlib`
+    let mut entries = Vec::with_capacity(18);
+    let mut f = |vm: &mut Vm, name: &'static str, f: NativeFn| {
         let b = inlinable_builtin(name.as_bytes()).unwrap_or(crate::runtime::Builtin::None);
         entries.push((name, vm.builtin(f, &[], b)?));
-    }
+        Ok::<(), LuaError>(())
+    };
+    f(vm, "byte", s_byte)?;
+    f(vm, "char", s_char)?;
+    f(vm, "dump", s_dump)?;
+    f(vm, "find", s_find)?;
+    f(vm, "format", crate::vm::lib_strformat::s_format)?;
     // 5.1's LUA_COMPAT_GFIND keeps `gfind` as the very same function as
     // `gmatch`; the suite identity-tests them.
     let gmatch_v = vm.lib_native(s_gmatch)?;
-    entries.push(("gmatch", gmatch_v));
     if v == LuaVersion::Lua51 {
         entries.push(("gfind", gmatch_v));
+    }
+    entries.push(("gmatch", gmatch_v));
+    let mut f = |vm: &mut Vm, name: &'static str, f: NativeFn| {
+        let b = inlinable_builtin(name.as_bytes()).unwrap_or(crate::runtime::Builtin::None);
+        entries.push((name, vm.builtin(f, &[], b)?));
+        Ok::<(), LuaError>(())
+    };
+    f(vm, "gsub", s_gsub)?;
+    f(vm, "len", s_len)?;
+    f(vm, "lower", s_lower)?;
+    f(vm, "match", s_match)?;
+    f(vm, "rep", s_rep)?;
+    f(vm, "reverse", s_reverse)?;
+    f(vm, "sub", s_sub)?;
+    f(vm, "upper", s_upper)?;
+    if v >= LuaVersion::Lua53 {
+        f(vm, "pack", crate::vm::lib_strpack::s_pack)?;
+        f(vm, "packsize", crate::vm::lib_strpack::s_packsize)?;
+        f(vm, "unpack", crate::vm::lib_strpack::s_unpack)?;
     }
     vm.lib_put_all(t, "string", entries)?;
     vm.lib_set_global("string", Value::Table(t))?;
     vm.barrier_back_table(t);
     let mt = vm.lib_table_puc("string_mt")?;
+    // the arithmetic metamethods (5.4 on) before `__index`, as PUC's
+    // `createmetatable` sets them
     let mut entries = Vec::with_capacity(9);
-    entries.push(("__index", Value::Table(t)));
     if v >= LuaVersion::Lua54 {
         let arith: [(&str, NativeFn); 8] = [
             ("__add", mm_add),
@@ -75,6 +81,7 @@ pub(crate) fn try_open_string(vm: &mut Vm) -> Result<(), LuaError> {
             entries.push((name, vm.lib_native(f)?));
         }
     }
+    entries.push(("__index", Value::Table(t)));
     vm.lib_put_all(mt, "string_mt", entries)?;
     vm.barrier_back_table(mt);
     vm.set_string_metatable(Some(mt));

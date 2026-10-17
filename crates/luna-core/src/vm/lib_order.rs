@@ -22,34 +22,31 @@ impl Vm {
         }
     }
 
-    /// Put `entries` into `t`, PUC's library table `name`, in the order PUC
-    /// puts them there.
+    /// Put `entries` into `t`, PUC's library table `name`, which the
+    /// libraries list in the order PUC puts them there (checked against
+    /// PUC's record in debug builds, and by `lib_pairs_order` in the order
+    /// `next` gives).
     pub(crate) fn lib_put_all(
         &mut self,
         t: Gc<Table>,
         name: &str,
-        mut entries: Vec<(&str, Value)>,
+        entries: Vec<(&str, Value)>,
     ) -> Result<(), LuaError> {
-        for op in self.lib_record(name) {
-            let LibOp::K(key) = op else {
-                continue;
-            };
-            // most keys differ in length or first byte: no call to compare
-            let first = |k: &[u8]| k.len() == key.len() && k.first() == key.first();
-            let Some(at) = entries
-                .iter()
-                .rposition(|(k, _)| first(k.as_bytes()) && k.as_bytes() == key)
-            else {
-                continue;
-            };
-            let (k, v) = entries.swap_remove(at);
-            let k = self.str_value(k.as_bytes())?;
-            self.lib_set_value(t, k, v)?;
+        #[cfg(debug_assertions)]
+        {
+            let mut rec = self.lib_record(name).filter_map(|op| match op {
+                LibOp::K(k) => Some(k),
+                LibOp::R(..) => None,
+            });
+            for (k, _) in &entries {
+                assert!(
+                    rec.any(|r| r == k.as_bytes()),
+                    "{name}: {k} out of PUC's order, or not in its record"
+                );
+            }
         }
-        debug_assert!(
-            entries.is_empty(),
-            "{name}: {entries:?} not in PUC's record"
-        );
+        #[cfg(not(debug_assertions))]
+        let _ = name;
         for (k, v) in entries {
             let k = self.str_value(k.as_bytes())?;
             self.lib_set_value(t, k, v)?;
