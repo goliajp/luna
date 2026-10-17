@@ -177,10 +177,8 @@ impl Heap {
     /// for (`PucState::stand_ins`) are freed with it.
     fn free_stand_in(&mut self, h: *mut GcHeader) {
         while let Some(i) = self.puc.stand_ins.iter().position(|(p, _)| *p == h) {
-            let (_, sizes) = self.puc.stand_ins.swap_remove(i);
-            for s in sizes {
-                self.acct_free(s);
-            }
+            let (_, size) = self.puc.stand_ins.swap_remove(i);
+            self.acct_free(size);
         }
     }
 }

@@ -34,9 +34,11 @@ impl Vm {
             let LibOp::K(key) = op else {
                 continue;
             };
+            // most keys differ in length or first byte: no call to compare
+            let first = |k: &[u8]| k.len() == key.len() && k.first() == key.first();
             let Some(at) = entries
                 .iter()
-                .position(|(k, _)| k.len() == key.len() && k.as_bytes() == key)
+                .rposition(|(k, _)| first(k.as_bytes()) && k.as_bytes() == key)
             else {
                 continue;
             };

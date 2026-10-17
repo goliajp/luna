@@ -101,13 +101,17 @@ impl Heap {
         if count {
             self.acct_obj(PucKind::LongStr, size);
         }
-        self.stand_sizes_on(h, vec![size]);
+        self.stand_sizes_on(h, [size]);
     }
 
     /// Objects of PUC's of `sizes` bytes, counted already, live as long
     /// as the object behind `h`.
-    pub(crate) fn stand_sizes_on(&mut self, h: *mut GcHeader, sizes: Vec<usize>) {
-        self.puc.stand_ins.push((h, sizes));
+    pub(crate) fn stand_sizes_on(
+        &mut self,
+        h: *mut GcHeader,
+        sizes: impl IntoIterator<Item = usize>,
+    ) {
+        self.puc.stand_ins.extend(sizes.into_iter().map(|s| (h, s)));
         // SAFETY: `h` heads a live object; only its class byte is written
         unsafe { (*h).cls |= super::STANDS };
     }

@@ -96,10 +96,8 @@ impl Heap {
             for &(kind, size) in &objs[counted..] {
                 self.acct_obj(kind, size);
             }
-            let sizes = objs.iter().map(|&(_, s)| s).collect();
-            self.puc
-                .stand_ins
-                .push((g.as_ptr() as *mut GcHeader, sizes));
+            let h = g.as_ptr() as *mut GcHeader;
+            self.puc.stand_ins.extend(objs.iter().map(|&(_, s)| (h, s)));
         }
         Ok(g)
     }
@@ -175,24 +173,49 @@ impl Heap {
         None
     }
 
-    /// A library function made fixed (PUC's light C function) that stands
-    /// for a C closure of PUC's: an object again, back on `all`, and one
-    /// the count leaves to what it stands for.
-    pub(crate) fn unfix_native(&mut self, n: Gc<NativeClosure>) {
-        let h = n.as_ptr() as *mut GcHeader;
-        let mut link: *mut *mut GcHeader = &mut self.fixed;
-        // SAFETY: the links of `fixed` lead to live objects
+    /// Library functions made fixed (PUC's light C functions) that stand
+    /// for C closures of PUC's: objects again, back on `all` in the order
+    /// given, and ones the count leaves to what they stand for. One not
+    /// on the fixed list is left as it is.
+    pub(crate) fn unfix_natives(&mut self, hs: &[*mut GcHeader]) {
+        // SAFETY: each of `hs` is a live native and the links of `fixed`
+        // lead to live objects; only links, class and flag bytes are written
         unsafe {
-            while !(*link).is_null() {
-                if *link == h {
-                    *link = (*h).next;
-                    (*h).next = self.all;
-                    (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.current_white);
-                    self.all = h;
-                    acct::set_uncounted(h, true);
-                    return;
+            // the ones to take carry a class bit no fixed native has for the
+            // walk, which clears it on each it takes; one with a colour is
+            // not fixed (a fixed object has none) and is not looked for
+            let mut left = 0;
+            for &h in hs {
+                if (*h).flags & COLOR_BITS == 0 {
+                    (*h).cls |= STANDS;
+                    left += 1;
                 }
-                link = &mut (**link).next;
+            }
+            let mut link: *mut *mut GcHeader = &mut self.fixed;
+            while left > 0 && !(*link).is_null() {
+                let h = *link;
+                if (*h).cls & STANDS != 0 {
+                    *link = (*h).next;
+                    (*h).cls &= !STANDS;
+                    left -= 1;
+                } else {
+                    link = &mut (*h).next;
+                }
+            }
+            // one with a colour, or whose class bit the walk left set, was
+            // not on `fixed`, and stays where it is
+            for &h in hs {
+                if (*h).flags & COLOR_BITS != 0 {
+                    continue;
+                }
+                if (*h).cls & STANDS != 0 {
+                    (*h).cls &= !STANDS;
+                    continue;
+                }
+                (*h).next = self.all;
+                (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.current_white);
+                self.all = h;
+                acct::set_uncounted(h, true);
             }
         }
     }

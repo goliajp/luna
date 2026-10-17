@@ -279,14 +279,14 @@ impl Marker {
     }
 
     /// [`Self::mark`] of each string of `strs`: with nothing to count per
-    /// object (5.1, 5.4), a white one turns black and readable only through
-    /// the slow path, as `header` leaves it.
+    /// object but 5.5's sizes, a white one turns black and readable only
+    /// through the slow path, as `header` leaves it.
     pub(crate) fn mark_strings<'a>(&mut self, strs: impl Iterator<Item = &'a Gc<LuaStr>>) {
         #[cfg(feature = "gc-verify")]
         let plain = self.verify.is_none();
         #[cfg(not(feature = "gc-verify"))]
         let plain = true;
-        if !plain || self.leaf_hdr != 0 || self.sizer.is_some() {
+        if !plain || self.leaf_hdr != 0 {
             for &s in strs {
                 self.mark(s);
             }
@@ -298,6 +298,9 @@ impl Marker {
             unsafe {
                 let f = (*h).flags;
                 if is_white(f) {
+                    if let Some(z) = &mut self.sizer {
+                        z.marked += z.size(h);
+                    }
                     (*h).flags = (f & !WHITE_BITS) | BLACK | SLOW;
                 }
             }

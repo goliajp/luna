@@ -38,8 +38,9 @@ pub(crate) struct PucState {
     /// second call does, not from the record
     pub(crate) libs_opened: bool,
     /// uncounted objects of luna's standing for objects of PUC's of the
-    /// given size (see `Heap::acct_stand_in`)
-    pub(crate) stand_ins: Vec<(*mut GcHeader, Vec<usize>)>,
+    /// given size, one entry for each object of PUC's (see
+    /// `Heap::stand_sizes_on`)
+    pub(crate) stand_ins: Vec<(*mut GcHeader, usize)>,
     /// tables of luna's own, which PUC has none of: never counted
     pub(crate) own_tables: Vec<*const crate::runtime::Table>,
     /// the message of the last load that failed, made as PUC makes it,
@@ -66,7 +67,8 @@ impl Default for PucState {
             kept_long: Vec::new(),
             libs_pace: None,
             libs_opened: false,
-            stand_ins: Vec::new(),
+            // the standard libraries make about twenty
+            stand_ins: Vec::with_capacity(32),
             own_tables: Vec::new(),
             load_msg: None,
             next_id: 0,

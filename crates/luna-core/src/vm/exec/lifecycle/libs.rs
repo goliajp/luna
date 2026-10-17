@@ -113,11 +113,12 @@ impl Vm {
         if v == LuaVersion::Lua55 {
             self.host_preload()?;
         }
+        let loaded = self.host_loaded()?;
         for &name in require::openlibs_order(v) {
-            self.open_fresh_lib(name)?;
+            self.open_fresh_lib(name, loaded)?;
             // 5.1's base library opens the coroutine library too
             if v == LuaVersion::Lua51 && name == "_G" {
-                self.open_fresh_lib("coroutine")?;
+                self.open_fresh_lib("coroutine", loaded)?;
             }
         }
         self.puc_registry()?;
@@ -145,7 +146,7 @@ impl Vm {
     /// Library `name` opened on a state that has none, as
     /// `luaL_requiref` opens it there: the opener sets the global, and
     /// `package.loaded` gets the library.
-    fn open_fresh_lib(&mut self, name: &str) -> Result<(), LuaError> {
+    fn open_fresh_lib(&mut self, name: &str, loaded: Gc<Table>) -> Result<(), LuaError> {
         self.try_open_lib(crate::vm::exec::host_c::lib_opener(name))?;
         let g = self.globals;
         let key = self.str_value(name.as_bytes())?;
@@ -154,7 +155,6 @@ impl Vm {
         } else {
             g.get(key)
         };
-        let loaded = self.host_loaded()?;
         self.lib_raw_set(loaded, key, lib)
     }
 
@@ -167,24 +167,32 @@ impl Vm {
             return;
         }
         let s = self.heap.sizes;
-        let field = |vm: &Vm, t: &[u8], k: &[u8]| {
-            let t = vm.heap.find_interned(t)?;
-            let Value::Table(t) = vm.globals.get(Value::Str(t)) else {
-                return None;
-            };
-            Some(t.get(Value::Str(vm.heap.find_interned(k)?)))
+        let lib = |vm: &Vm, t: &[u8]| match vm.globals.get(Value::Str(vm.heap.find_interned(t)?)) {
+            Value::Table(t) => Some(t),
+            _ => None,
         };
-        let stand = |vm: &mut Vm, v: Option<Value>, sizes: Vec<usize>| {
+        let (package, math, io) = (lib(self, b"package"), lib(self, b"math"), lib(self, b"io"));
+        let field = |vm: &Vm, t: Option<Gc<Table>>, k: &[u8]| {
+            Some(t?.get(Value::Str(vm.heap.find_interned(k)?)))
+        };
+        // the natives among them leave the fixed list together, in one walk,
+        // and then stand for PUC's objects as the userdata do at once
+        let mut natives = [(std::ptr::null_mut(), [0; 2], 0); 8];
+        let mut n_natives = 0;
+        let mut stand = |vm: &mut Vm, v: Option<Value>, sizes: &[usize]| {
             let h = match v {
                 Some(Value::Native(n)) => {
-                    vm.heap.unfix_native(n);
-                    n.as_ptr() as *mut _
+                    let mut kept = [0; 2];
+                    kept[..sizes.len()].copy_from_slice(sizes);
+                    natives[n_natives] = (n.as_ptr() as *mut _, kept, sizes.len());
+                    n_natives += 1;
+                    return;
                 }
                 Some(Value::Userdata(u)) => u.as_ptr() as *mut _,
                 _ => return,
             };
             if crate::runtime::heap::is_uncounted(h) {
-                vm.heap.puc.stand_ins.push((h, sizes));
+                vm.heap.puc.stand_ins.extend(sizes.iter().map(|&s| (h, s)));
             }
         };
         // `require` and the searchers, with `package` as their upvalue
@@ -192,40 +200,35 @@ impl Vm {
             .heap
             .find_interned(b"require")
             .map(|k| self.globals.get(Value::Str(k)));
-        stand(self, req, vec![s.c_closure(1)]);
+        stand(self, req, &[s.c_closure(1)]);
         // 5.2's `module`, with `package` as its upvalue too
         if self.version == LuaVersion::Lua52 {
             let m = self
                 .heap
                 .find_interned(b"module")
                 .map(|k| self.globals.get(Value::Str(k)));
-            stand(self, m, vec![s.c_closure(1)]);
+            stand(self, m, &[s.c_closure(1)]);
         }
-        if let Some(Value::Table(searchers)) = field(self, b"package", b"searchers") {
+        if let Some(Value::Table(searchers)) = field(self, package, b"searchers") {
             for i in 1..=4 {
-                stand(
-                    self,
-                    Some(searchers.get(Value::Int(i))),
-                    vec![s.c_closure(1)],
-                );
+                stand(self, Some(searchers.get(Value::Int(i))), &[s.c_closure(1)]);
             }
         }
         // 5.4 on, `random` and `randomseed` share the generator's state
         if self.version >= LuaVersion::Lua54 {
-            let random = field(self, b"math", b"random");
-            stand(self, random, vec![s.userdata(0, 32), s.c_closure(1)]);
-            let seed = field(self, b"math", b"randomseed");
-            stand(self, seed, vec![s.c_closure(1)]);
+            let random = field(self, math, b"random");
+            stand(self, random, &[s.userdata(0, 32), s.c_closure(1)]);
+            let seed = field(self, math, b"randomseed");
+            stand(self, seed, &[s.c_closure(1)]);
         }
         // 5.5 keeps its default search paths as external strings over its
         // own bytes (`LSTRFIX`): a header each, as long as the package
         // table that holds them
         if self.version == LuaVersion::Lua55
-            && let Some(pkg) = self.heap.find_interned(b"package")
-            && let Value::Table(pkg) = self.globals.get(Value::Str(pkg))
+            && let Some(pkg) = package
         {
             for name in [&b"path"[..], b"cpath"] {
-                if let Some(Value::Str(p)) = field(self, b"package", name)
+                if let Some(Value::Str(p)) = field(self, package, name)
                     && crate::runtime::heap::is_uncounted(p.as_ptr() as *mut _)
                 {
                     self.heap.acct_stand_on(pkg.header(), s.lngstr_hdr, false);
@@ -234,8 +237,22 @@ impl Vm {
         }
         // the standard files, each a `LStream`
         for name in [&b"stdin"[..], b"stdout", b"stderr"] {
-            let f = field(self, b"io", name);
-            stand(self, f, vec![s.userdata(0, 2 * s.ptr)]);
+            let f = field(self, io, name);
+            stand(self, f, &[s.userdata(0, 2 * s.ptr)]);
+        }
+        let natives = &natives[..n_natives];
+        let mut hs = [std::ptr::null_mut(); 8];
+        for (h, n) in hs.iter_mut().zip(natives) {
+            *h = n.0;
+        }
+        self.heap.unfix_natives(&hs[..natives.len()]);
+        for &(h, sizes, n) in natives {
+            if crate::runtime::heap::is_uncounted(h) {
+                self.heap
+                    .puc
+                    .stand_ins
+                    .extend(sizes[..n].iter().map(|&s| (h, s)));
+            }
         }
     }
 
