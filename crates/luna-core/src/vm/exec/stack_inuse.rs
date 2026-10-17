@@ -71,7 +71,12 @@ pub(super) fn shrink_thread(
     };
     match v {
         LuaVersion::Lua51 => {
-            if at == Shrink::Collector {
+            // `traversestack` runs when marking reaches the thread and again
+            // when the atomic step remarks it (`grayagain`)
+            for _ in 0..2 {
+                if at != Shrink::Collector {
+                    break;
+                }
                 let (s, calls) = halve_51(sz.stack, inuse, sz.frames51, levels.saturating_sub(1));
                 heap.acct_ci51(sz.frames51, calls);
                 heap.acct_stack(sz.stack, s);
