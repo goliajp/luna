@@ -16,7 +16,7 @@
 
 use crate::runtime::heap::PucKind;
 use crate::runtime::table::Dialect;
-use crate::runtime::{Gc, LuaStr, Value};
+use crate::runtime::{Gc, LuaStr, Userdata, Value};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
@@ -32,6 +32,8 @@ pub(crate) struct PucBuffer {
     n: usize,
     /// a box (5.2: a userdata) holds the bytes
     boxed: bool,
+    /// 5.3+: the box
+    ubox: Option<Gc<Userdata>>,
     /// 5.1: where the C buffer's bytes start in the content
     start: usize,
     /// 5.1: where this buffer's strings start in `Vm::lib_roots`
@@ -47,6 +49,7 @@ impl PucBuffer {
             size: Vm::lual_buffersize(vm.version()),
             n: 0,
             boxed: false,
+            ubox: None,
             start: 0,
             base: vm.lib_roots.len(),
         }
@@ -160,7 +163,7 @@ impl PucBuffer {
             }
             _ if self.boxed => vm.heap.trace_raw(self.size, newsize),
             _ => {
-                vm.new_box()?;
+                self.ubox = Some(vm.new_box()?);
                 vm.heap.trace_raw(0, newsize);
             }
         }
@@ -226,6 +229,7 @@ impl PucBuffer {
                 let r = vm.retry_oom(|vm| vm.heap.new_external_string(out))?;
                 vm.api_check_after(Value::Str(r));
                 vm.box_closed();
+                self.drop_box(vm);
                 Ok(r)
             }
             _ => {
@@ -238,9 +242,16 @@ impl PucBuffer {
                         vm.box_closed();
                     }
                     vm.heap.trace_raw(self.size, 0);
+                    self.drop_box(vm);
                 }
                 Ok(r)
             }
+        }
+    }
+
+    fn drop_box(&mut self, vm: &mut Vm) {
+        if let Some(u) = self.ubox.take() {
+            vm.drop_box(u);
         }
     }
 
@@ -323,84 +334,4 @@ impl Vm {
         };
         Ok(Value::Str(b.finish(self, out)?))
     }
-
-    /// The box of a `luaL_Buffer` (5.3+ `newbox`): a full userdata, garbage
-    /// once the buffer is done, with the metatable PUC keeps in the
-    /// registry for boxes, made the first time.
-    fn new_box(&mut self) -> Result<(), LuaError> {
-        let ubox = 2 * std::mem::size_of::<usize>();
-        let size = if self.heap.table_dialect >= Dialect::L54 {
-            self.heap.sizes.userdata(0, ubox)
-        } else {
-            self.heap.sizes.userdata(1, ubox)
-        };
-        self.ghost(PucKind::Userdata, size)?;
-        self.api_check_after(Value::Nil);
-        self.box_metatable()
-    }
-
-    /// The box's metatable in the registry, made when it is not there:
-    /// 5.3 `luaL_newmetatable(L, "LUABOX")` with `__gc`; 5.4+ `getBoxMT`,
-    /// a table of `__gc` and `__close` under `"_UBOX*"`.
-    fn box_metatable(&mut self) -> Result<(), LuaError> {
-        let l53 = self.heap.table_dialect == Dialect::L53;
-        let name: &[u8] = if l53 { b"LUABOX" } else { b"_UBOX*" };
-        let reg = self.host_registry();
-        let key = self.str_value(name)?;
-        if !reg.get(key).is_nil() {
-            return Ok(());
-        }
-        let mt = self.alloc_table_sized(0, 2)?;
-        let mtv = Value::Table(mt);
-        self.api_check_after(mtv);
-        // `luaL_newmetatable` pushes the name again: the string looked up
-        // first may have been collected at the check just made
-        let base = self.lib_roots.len();
-        self.lib_roots.push(mtv);
-        let r = self.fill_box_metatable(mt, name, reg, l53);
-        self.lib_roots.truncate(base);
-        r
-    }
-
-    /// The new box metatable `mt` (rooted) filled and put in registry
-    /// `reg` under `name`.
-    fn fill_box_metatable(
-        &mut self,
-        mt: Gc<crate::runtime::Table>,
-        name: &[u8],
-        reg: Gc<crate::runtime::Table>,
-        l53: bool,
-    ) -> Result<(), LuaError> {
-        let mtv = Value::Table(mt);
-        let key = self.str_value(name)?;
-        self.api_check_after(key);
-        self.lib_roots.push(key);
-        // `boxgc`, a light C function: no object of PUC's
-        let gc = self.builtin(box_gc, &[], crate::runtime::Builtin::None)?;
-        self.lib_roots.push(gc);
-        if l53 {
-            let n = self.str_value(b"__name")?;
-            self.raw_set(mt, n, key)?;
-            self.raw_set(reg, key, mtv)?;
-            let k = self.str_value(b"__gc")?;
-            self.raw_set(mt, k, gc)?;
-        } else {
-            for k in [&b"__gc"[..], b"__close"] {
-                let k = self.str_value(k)?;
-                self.raw_set(mt, k, gc)?;
-            }
-            self.raw_set(reg, key, mtv)?;
-        }
-        Ok(())
-    }
-
-    /// A box's `__close` (5.4+, `lua_closeslot`): a call one level up.
-    fn box_closed(&mut self) {
-        self.note_c_call();
-    }
-}
-
-/// `boxgc`: luna keeps no block in a box, so there is nothing to free.
-fn box_gc(_vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<u32, LuaError> {
-    Ok(0)
 }

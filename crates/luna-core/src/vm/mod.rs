@@ -54,4 +54,5 @@ pub mod lib_strpack;
 pub mod lib_table;
 pub mod lib_utf8;
 pub mod objname;
+pub(crate) mod puc_box;
 pub(crate) mod puc_buffer;

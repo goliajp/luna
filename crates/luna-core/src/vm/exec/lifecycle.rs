@@ -177,6 +177,7 @@ impl Vm {
             sort_scratch: LVec::new(mem),
             name_cache: Default::default(),
             lib_roots: Vec::new(),
+            buffer_boxes: Vec::new(),
             // LuaUserdata trait sugar's per-Vm
             // metatable cache. Populated lazily by register_userdata.
             userdata_metatables: std::collections::HashMap::new(),

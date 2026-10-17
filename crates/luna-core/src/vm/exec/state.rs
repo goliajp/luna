@@ -93,17 +93,17 @@ pub struct Vm {
     /// vector so the underlying `Gc<T>` stays alive across `eval` calls / yield
     /// boundaries. Freed slots are recycled through `host_roots_free`.
     pub(crate) host_roots: LVec<crate::vm::host_roots::HostRootSlot>,
-    /// Recycled-slot index pool. `pin_host` pops the
-    /// back if non-empty, else extends `host_roots`. Generation
-    /// overflow at `u32::MAX` retires the slot (NOT pushed here).
+    /// Recycled-slot index pool: `pin_host` pops the back if non-empty,
+    /// else extends `host_roots`; a generation overflow retires the slot.
     pub(crate) host_roots_free: LVec<u32>,
 
     /// GC-rooted working buffers of `table.sort` (and any builtin whose
-    /// Rust-side values must outlive a user callback): a collection inside
-    /// the comparator keeps what they hold. Nested sorts push one each.
+    /// Rust-side values must outlive a user callback); one per nested sort.
     pub(crate) sort_scratch: LVec<LVec<Value>>,
     /// roots: what a library function keeps where PUC's has it on its stack
     pub(crate) lib_roots: Vec<Value>,
+    /// `luaL_Buffer` boxes, each with the running natives when it was made
+    pub(crate) buffer_boxes: Vec<(u32, Gc<crate::runtime::Userdata>)>,
     /// event names `luaL_getmetafield` pushed since a collection step began
     pub(crate) name_cache: [(usize, Option<Gc<crate::runtime::LuaStr>>); 5],
     /// Storages [`Vm::install_jit_storage`] replaced: code compiled into
