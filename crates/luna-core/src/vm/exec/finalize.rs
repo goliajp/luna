@@ -108,7 +108,8 @@ impl Vm {
         self.extend_ci_to(self.ci_in_use() + 2);
         let top = self.native_top().unwrap_or(self.gc_top);
         let s = self.stack_size;
-        if stack_size::last(self.version, s) - top >= stack_size::BASIC {
+        // PUC's top is luna's plus one (`stack_size`)
+        if top + stack_size::BASIC < stack_size::last(self.version, s) {
             return true;
         }
         match stack_size::grow(self.version, s, top, stack_size::BASIC) {
