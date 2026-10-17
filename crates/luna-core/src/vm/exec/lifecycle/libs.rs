@@ -68,9 +68,6 @@ impl Vm {
         if let Some(s) = self.heap.acct_replay_openlibs(self.stack_size)? {
             self.set_stack_size(s);
         }
-        if self.version == LuaVersion::Lua51 {
-            self.heap.natives51_listed();
-        }
         // the search paths `package` keeps are PUC's strings when they
         // have PUC's bytes
         if let Some(pkg) = self.heap.find_interned(b"package")

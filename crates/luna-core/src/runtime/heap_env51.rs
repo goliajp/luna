@@ -286,34 +286,6 @@ impl Marker {
 }
 
 impl Heap {
-    /// 5.1's libraries are open: their functions and the standard files,
-    /// which luna made without counting, are PUC's C closures and
-    /// userdata, which the record counted; on the list PUC sweeps, they
-    /// are counted from now on.
-    pub(crate) fn natives51_listed(&mut self) {
-        let mut cur = self.all;
-        // SAFETY: the links of `all` lead to live objects; only the
-        // per-type byte of a native is written
-        unsafe {
-            while !cur.is_null() {
-                let t = (*cur).tag;
-                if t == ObjTag::Native && (*cur).cls & LUNA_ONLY == 0 {
-                    super::acct::set_uncounted(cur, false);
-                }
-                // the standard files
-                if t == ObjTag::Userdata
-                    && matches!(
-                        (*(cur as *const Userdata)).payload,
-                        UserdataPayload::File(_)
-                    )
-                {
-                    super::acct::set_uncounted(cur, false);
-                }
-                cur = (*cur).next;
-            }
-        }
-    }
-
     /// `R38_PROP`: how many objects PUC's list holds as the sweep finds it.
     #[cfg(feature = "gc-trace")]
     pub(crate) fn trace_listed(&mut self) {
