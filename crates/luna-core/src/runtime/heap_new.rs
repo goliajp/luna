@@ -174,6 +174,7 @@ impl Heap {
             top: 0,
             meta_conts: 0,
             stale_frames: 0,
+            yield_ci_top: 0,
             stack_size,
             frame_size: if l51 { acct::BASIC_CI_51 } else { u32::MAX },
             ci_alloc: if l51 { u32::MAX } else { 0 },

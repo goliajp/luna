@@ -191,13 +191,18 @@ impl Vm {
             // SAFETY: `co` survived the marking just done, so it is allocated; it is not the running thread, so its context is saved in it and nothing else refers into it here
             let m = unsafe { co.as_mut() };
             // only a thread waiting on one it resumed has natives running
-            let natives = if m.status == crate::runtime::CoroStatus::Normal {
+            let normal = m.status == crate::runtime::CoroStatus::Normal;
+            let natives = if normal {
                 &self.running_natives[m.natives.clone()]
             } else {
                 &[]
             };
-            let inuse = thread_in_use(&m.frames, m.top, natives);
-            let n = (m.frames.len() + natives.len()) as u32 + 1 - m.meta_conts;
+            // a thread a C function suspended keeps that function's level
+            let suspended = m.status == crate::runtime::CoroStatus::Suspended;
+            let yielded = if suspended { m.yield_ci_top } else { 0 };
+            let inuse = thread_in_use(&m.frames, m.top.max(yielded), natives);
+            let n =
+                (m.frames.len() + natives.len()) as u32 + 1 + u32::from(yielded > 0) - m.meta_conts;
             let mut sz = ThreadSizes {
                 stack: m.stack_size,
                 frames51: m.frame_size,
