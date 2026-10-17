@@ -865,8 +865,8 @@ use luna_jit::Lua;
 use luna_jit::version::LuaVersion;
 
 let mut lua = Lua::new();  // JIT on, Lua 5.5
-lua.open_base();
-lua.open_math();
+lua.open_base()?;
+lua.open_math()?;
 
 // All the IntoValue / FromLuaValue / native_typed plumbing reuses
 // the lower-level Vm code.

@@ -93,6 +93,51 @@ impl Heap {
         }
     }
 
+    /// A long string of PUC's of `size` bytes (counted now with `count`)
+    /// lives as long as the object behind `h`, which holds luna's string
+    /// in its place (the package table: luna's default path is a short
+    /// string all package tables share).
+    pub(crate) fn acct_stand_on(&mut self, h: *mut GcHeader, size: usize, count: bool) {
+        if count {
+            self.acct_obj(PucKind::LongStr, size);
+        }
+        self.puc.stand_ins.push((h, vec![size]));
+        // SAFETY: `h` heads a live object; only its class byte is written
+        unsafe { (*h).cls |= super::STANDS };
+    }
+
+    /// Objects of PUC's of `sizes` bytes, counted already, live as long
+    /// as the object behind `h`.
+    pub(crate) fn stand_sizes_on(&mut self, h: *mut GcHeader, sizes: Vec<usize>) {
+        self.puc.stand_ins.push((h, sizes));
+        // SAFETY: `h` heads a live object; only its class byte is written
+        unsafe { (*h).cls |= super::STANDS };
+    }
+
+    /// Whether objects of PUC's stand on the object behind `h`.
+    pub(crate) fn stands(&self, h: *mut GcHeader) -> bool {
+        // SAFETY: `h` heads a live object; its class byte is read
+        unsafe { (*h).cls & super::STANDS != 0 }
+    }
+
+    /// PUC's bytes of an array part of `n` slots.
+    pub(crate) fn array_bytes_of(&self, n: usize) -> usize {
+        self.array_bytes(n)
+    }
+
+    /// PUC's bytes of a hash part of `n` nodes.
+    pub(crate) fn hash_bytes_of(&self, n: usize) -> usize {
+        self.hash_bytes(n)
+    }
+
+    /// PUC's default `package.path`, from its record of `luaL_openlibs`.
+    pub(crate) fn puc_default_path(&self) -> Option<&'static [u8]> {
+        let (_, strs) = crate::runtime::puc_libs::record(self.table_dialect, false);
+        strs.iter()
+            .copied()
+            .find(|b| b.windows(5).any(|w| w == b"?.lua"))
+    }
+
     /// `cs`, a long string luna's compiler made without counting, is the
     /// one PUC's scanner made as `ss` (counted) and keeps as the constant:
     /// the count moves to `cs`.
@@ -101,16 +146,6 @@ impl Heap {
         if !is_uncounted(from) && is_uncounted(to) {
             super::set_uncounted(from, true);
             super::set_uncounted(to, false);
-        }
-    }
-
-    /// `s`, a string luna's libraries made without counting, stands where
-    /// PUC keeps the long string of `bytes` from its record (luna's own
-    /// default `package.path`): when `s` is freed, PUC's is.
-    pub(crate) fn acct_stand_in(&mut self, s: Gc<LuaStr>, puc: (&[u8], usize)) {
-        let h = s.as_ptr() as *mut GcHeader;
-        if is_uncounted(h) {
-            self.puc.stand_ins.push((h, vec![puc.1]));
         }
     }
 }

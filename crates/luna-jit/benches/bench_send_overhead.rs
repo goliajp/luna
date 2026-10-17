@@ -155,10 +155,10 @@ const TOKEN_BUCKET_1K: &str = r#"
 
 fn fresh_vm() -> Vm {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
-    vm.open_base();
-    vm.open_math();
-    vm.open_string();
-    vm.open_table();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
+    vm.open_string().expect("open the library");
+    vm.open_table().expect("open the library");
     vm
 }
 
@@ -168,10 +168,10 @@ fn fresh_vm_interp() -> Vm {
     // JIT installed. The SendVm comparison is apples-to-apples
     // against this shape since SendVm is interp-only.
     let mut vm = Vm::new_minimal(LuaVersion::Lua54);
-    vm.open_base();
-    vm.open_math();
-    vm.open_string();
-    vm.open_table();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
+    vm.open_string().expect("open the library");
+    vm.open_table().expect("open the library");
     vm
 }
 
@@ -179,10 +179,10 @@ fn fresh_vm_interp() -> Vm {
 fn fresh_send_vm() -> luna_jit::vm::SendVm {
     use luna_jit::vm::SendVm;
     let vm = SendVm::new(LuaVersion::Lua54);
-    vm.open_base();
-    vm.open_math();
-    vm.open_string();
-    vm.open_table();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
+    vm.open_string().expect("open the library");
+    vm.open_table().expect("open the library");
     vm
 }
 

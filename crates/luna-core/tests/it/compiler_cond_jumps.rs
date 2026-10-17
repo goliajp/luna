@@ -31,7 +31,7 @@ fn count(code: &[Inst], ops: &[Op]) -> usize {
 
 fn eval_str(src: &str, v: LuaVersion) -> String {
     let mut vm = Vm::new(v);
-    vm.open_base();
+    vm.open_base().expect("open the library");
     let r = vm
         .eval(src)
         .unwrap_or_else(|e| panic!("{v:?}: {}", vm.error_text(&e)));

@@ -16,7 +16,7 @@ use crate::vm::{
 /// library).
 fn opener(name: &str) -> fn(&mut Vm) -> Result<(), LuaError> {
     match name {
-        "_G" => builtins::try_open_base,
+        "_G" => base_with_loaders,
         "package" => lib_package::try_open_package_bare,
         "coroutine" => lib_coroutine::try_open_coroutine,
         "table" => lib_table::try_open_table,
@@ -29,6 +29,13 @@ fn opener(name: &str) -> fn(&mut Vm) -> Result<(), LuaError> {
         "debug" => lib_debug::try_open_debug,
         _ => unreachable!("the C API names a standard library"),
     }
+}
+
+/// PUC's base library, which has `loadfile` and `dofile` (luna opens them
+/// with `os` and `io`).
+fn base_with_loaders(vm: &mut Vm) -> Result<(), LuaError> {
+    builtins::try_open_base(vm)?;
+    lib_os_io::try_open_file_loaders(vm)
 }
 
 /// Why [`Vm::host_open_lib`] failed.
@@ -52,11 +59,19 @@ impl Vm {
     /// Open the standard library `name` (`_G` for the base library) as the
     /// dialect's `luaopen_*` does, and return what that function returns.
     pub fn host_open_lib(&mut self, name: &str) -> Result<Vec<Value>, HostOpenError> {
+        self.open_lib_as(name, opener(name))
+    }
+
+    /// [`Vm::host_open_lib`] with luna's opener `open` of that library.
+    pub(crate) fn open_lib_as(
+        &mut self,
+        name: &str,
+        open: fn(&mut Vm) -> Result<(), LuaError>,
+    ) -> Result<Vec<Value>, HostOpenError> {
         let g = self.globals;
         let key = self.str_value(name.as_bytes())?;
         if name == "_G" {
-            self.try_open_lib(builtins::try_open_base)?;
-            self.try_open_lib(lib_os_io::try_open_file_loaders)?;
+            self.try_open_lib(open)?;
             if self.version != LuaVersion::Lua51 {
                 return Ok(vec![Value::Table(g)]);
             }
@@ -69,14 +84,14 @@ impl Vm {
         }
         let prev = g.get(key);
         if self.version != LuaVersion::Lua51 {
-            self.try_open_lib(opener(name))?;
+            self.try_open_lib(open)?;
             let fresh = g.get(key);
             self.lib_raw_set(g, key, prev)?;
             return Ok(vec![fresh]);
         }
         let loaded = self.host_loaded()?;
         let entry = loaded.get(key);
-        self.try_open_lib(opener(name))?;
+        self.try_open_lib(open)?;
         let fresh = g.get(key);
         self.lib_raw_set(g, key, prev)?;
         let Value::Table(fresh_t) = fresh else {
@@ -85,6 +100,11 @@ impl Vm {
         let target = match (entry, prev) {
             (Value::Table(t), _) | (Value::Nil, Value::Table(t)) => {
                 self.host_merge(fresh_t, t)?;
+                // the table luna made for the library, garbage now, was
+                // never PUC's
+                if self.heap.puc.silent > 0 {
+                    self.heap.own_table(fresh_t);
+                }
                 t
             }
             (_, Value::Nil) => {
@@ -105,7 +125,7 @@ impl Vm {
     }
 
     /// The registry's `_LOADED` table, made on first use.
-    fn host_loaded(&mut self) -> Result<Gc<Table>, LuaError> {
+    pub(crate) fn host_loaded(&mut self) -> Result<Gc<Table>, LuaError> {
         let reg = self.host_registry();
         let k = self.str_value(b"_LOADED")?;
         if let Value::Table(t) = reg.get(k) {
@@ -127,7 +147,7 @@ impl Vm {
         Ok(())
     }
 
-    fn lib_raw_set(&mut self, t: Gc<Table>, k: Value, v: Value) -> Result<(), LuaError> {
+    pub(crate) fn lib_raw_set(&mut self, t: Gc<Table>, k: Value, v: Value) -> Result<(), LuaError> {
         // SAFETY: `t` is reachable from the Vm's roots (the globals, the
         // registry, or a library table held by the caller); each borrow
         // covers one store, which does not collect

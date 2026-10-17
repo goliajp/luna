@@ -12,7 +12,7 @@ fn main() {
     // 1. Plain Lua with full stdlib + JIT on.
     {
         let mut lua = Lua::new();
-        lua.open_base();
+        lua.open_base().expect("open the library");
         let r: i64 = lua.eval("return 1 + 2").unwrap();
         assert_eq!(r, 3);
         println!("1. Hello: 1 + 2 = {r}");
@@ -35,7 +35,7 @@ fn main() {
     // 3. Globals (IntoValue covers the common primitives).
     {
         let mut lua = Lua::new();
-        lua.open_base();
+        lua.open_base().expect("open the library");
         lua.set_global("count", 42_i64).unwrap();
         lua.set_global("name", "luna").unwrap();
         let r: String = lua.eval("return name .. ':' .. count").unwrap();
@@ -46,7 +46,7 @@ fn main() {
     // 4. Tables — TableBuilder + table_of.
     {
         let mut lua = Lua::new();
-        lua.open_base();
+        lua.open_base().expect("open the library");
         let t = lua.create_table();
         t.set(&mut lua, "answer", 42_i64).unwrap();
         t.set(&mut lua, "name", "luna").unwrap();
@@ -59,7 +59,7 @@ fn main() {
     // 5. Native functions — typed Rust closure callable from Lua.
     {
         let mut lua = Lua::new();
-        lua.open_base();
+        lua.open_base().expect("open the library");
         let add = lua.create_function(|a: i64, b: i64| -> i64 { a + b });
         lua.set_global("add", add).unwrap();
         let r: i64 = lua.eval("return add(40, 2)").unwrap();

@@ -70,13 +70,25 @@ pub(crate) fn try_open_math(vm: &mut Vm) -> Result<(), LuaError> {
     if ver <= V::Lua52 {
         funcs.push(("atan2", m_atan2));
     }
-    // the functions, an alias, `pi`, `huge` and the two integer limits
-    let t = vm.lib_table(funcs.len() + 5)?;
+    // `luaL_newlib` sizes the table for the functions, from 5.3 on with
+    // the alias and placeholders for `pi`, `huge` and the integer limits
+    let t = vm.lib_table(match ver {
+        V::Lua51 | V::Lua52 => funcs.len(),
+        V::Lua53 | V::Lua54 => funcs.len() + 5,
+        _ => funcs.len() + 4,
+    })?;
     let set = |vm: &mut Vm, name: &str, v: Value| -> Result<(), LuaError> {
         let k = vm.str_value(name.as_bytes())?;
         vm.lib_set_value(t, k, v)
     };
+    // 5.4 on, counted: the generator's functions come last, as PUC's
+    // `setrandfunc` makes them, over the state they share
+    let rand_last = ver >= V::Lua54 && vm.heap.puc.silent == 0;
     for (name, f) in funcs {
+        if rand_last && name.starts_with("random") {
+            set(vm, name, Value::Bool(false))?;
+            continue;
+        }
         let b = inlinable_builtin(name.as_bytes()).unwrap_or(Builtin::None);
         let fv = vm.builtin(f, &[], b)?;
         set(vm, name, fv)?;
@@ -99,6 +111,22 @@ pub(crate) fn try_open_math(vm: &mut Vm) -> Result<(), LuaError> {
     if ver >= V::Lua53 {
         set(vm, "maxinteger", Value::Int(i64::MAX))?;
         set(vm, "mininteger", Value::Int(i64::MIN))?;
+    }
+    if rand_last {
+        let sz = vm.heap.sizes;
+        use crate::runtime::heap::PucKind;
+        let (ud, cl) = (
+            (PucKind::Userdata, sz.userdata(0, 32)),
+            (PucKind::CClosure, sz.c_closure(1)),
+        );
+        // collectable, as PUC's closures are: not a light function
+        let fix = std::mem::replace(&mut vm.heap.fix_natives, false);
+        let r = vm.lib_native_stand_in(m_random, &[], &[ud, cl], 0);
+        let s = r.and_then(|r| Ok((r, vm.lib_native_stand_in(m_randomseed, &[], &[cl], 0)?)));
+        vm.heap.fix_natives = fix;
+        let (r, s) = s?;
+        set(vm, "random", r)?;
+        set(vm, "randomseed", s)?;
     }
     vm.lib_set_global("math", Value::Table(t))?;
     vm.barrier_back_table(t);

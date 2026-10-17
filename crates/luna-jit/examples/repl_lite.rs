@@ -32,9 +32,9 @@ fn render(v: Value) -> String {
 
 fn main() {
     let mut lua = Lua::new();
-    lua.open_base();
-    lua.open_math();
-    lua.open_string();
+    lua.open_base().expect("open the library");
+    lua.open_math().expect("open the library");
+    lua.open_string().expect("open the library");
 
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();

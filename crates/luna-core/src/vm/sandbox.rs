@@ -126,19 +126,19 @@ impl SandboxBuilder {
     pub fn build(self) -> Vm {
         let mut vm = Vm::new_minimal(self.version);
         if self.base {
-            vm.open_base();
+            crate::vm::lib_mem::opened(vm.open_base());
         }
         if self.math {
-            vm.open_math();
+            crate::vm::lib_mem::opened(vm.open_math());
         }
         if self.string {
-            vm.open_string();
+            crate::vm::lib_mem::opened(vm.open_string());
         }
         if self.table {
-            vm.open_table();
+            crate::vm::lib_mem::opened(vm.open_table());
         }
         if self.coroutine {
-            vm.open_coroutine();
+            crate::vm::lib_mem::opened(vm.open_coroutine());
         }
         vm.set_instr_budget(self.instr_budget);
         if let Some(cap) = self.memory_cap {

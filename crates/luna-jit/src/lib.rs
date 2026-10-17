@@ -106,10 +106,13 @@ pub fn new_minimal_with_jit(version: version::LuaVersion) -> vm::Vm {
 }
 
 /// Build a JIT-equipped, fully-loaded Vm. Equivalent to
-/// `new_minimal_with_jit(version)` followed by `vm.open_all_libs()`.
+/// `new_minimal_with_jit(version)` followed by `vm.open_all_libs()`;
+/// running out of memory there ends the process, as in `Vm::new`.
 pub fn new_with_jit(version: version::LuaVersion) -> vm::Vm {
     let mut vm = new_minimal_with_jit(version);
-    vm.open_all_libs();
+    if vm.open_all_libs().is_err() {
+        std::alloc::handle_alloc_error(std::alloc::Layout::new::<luna_core::runtime::Value>());
+    }
     vm
 }
 

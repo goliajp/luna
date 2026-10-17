@@ -14,7 +14,7 @@ use luna_core::vm::Vm;
 
 fn main() {
     let mut vm = Vm::new_minimal(LuaVersion::Lua55);
-    vm.open_base();
+    vm.open_base().expect("open the library");
     let r = vm.eval("return 1 + 2").expect("eval failed");
     println!("{:?}", r.first().expect("no return value"));
 }

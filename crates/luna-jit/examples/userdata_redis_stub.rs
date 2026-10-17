@@ -120,7 +120,7 @@ impl LuaUserdata for FakeRedis {
 
 fn main() {
     let mut lua = Lua::new();
-    lua.open_base();
+    lua.open_base().expect("open the library");
 
     // 1-line install (the raw API is ~10 LOC + 1 unsafe block per entry).
     lua.vm()

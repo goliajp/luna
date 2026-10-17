@@ -13,11 +13,11 @@ use luna_jit::vm::error::LuaError;
 
 fn sandbox_51() -> Vm {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua51);
-    vm.open_base();
-    vm.open_math();
-    vm.open_string();
-    vm.open_table();
-    vm.open_coroutine();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
+    vm.open_string().expect("open the library");
+    vm.open_table().expect("open the library");
+    vm.open_coroutine().expect("open the library");
     vm
 }
 
@@ -200,7 +200,7 @@ fn sandbox_budget_stays_exhausted_until_rearmed() {
 fn sandbox_budget_halts_a_jump_to_itself() {
     for src in [&b"while true do end"[..], b"::top:: goto top"] {
         let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
-        vm.open_base();
+        vm.open_base().expect("open the library");
         vm.set_instr_budget(Some(100_000));
         let err = run(&mut vm, src).unwrap_err();
         let msg = vm.error_text(&err);

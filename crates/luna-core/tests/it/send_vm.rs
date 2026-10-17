@@ -40,8 +40,8 @@ fn send_vm_is_send() {
 #[test]
 fn send_vm_eval_basic() {
     let vm = SendVm::new(LuaVersion::Lua55);
-    vm.open_base();
-    vm.open_math();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
 
     let r = vm.eval("return 1+2").expect("eval 1+2");
     assert_eq!(r.len(), 1);
@@ -57,7 +57,7 @@ fn send_vm_eval_basic() {
 #[test]
 fn send_vm_holds_across_thread_move() {
     let vm = SendVm::new(LuaVersion::Lua55);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let handle = thread::spawn(move || {
         // SendVm was constructed on the parent thread; the move into
@@ -78,8 +78,8 @@ fn send_vm_holds_across_thread_move() {
 #[test]
 fn send_vm_100_concurrent_threads() {
     let vm = SendVm::new(LuaVersion::Lua55);
-    vm.open_base();
-    vm.open_math();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
     vm.set_global("counter", 0_i64).unwrap();
 
     let total_iters = Arc::new(AtomicI64::new(0));
@@ -138,7 +138,7 @@ impl LuaUserdata for Counter {
 #[test]
 fn send_vm_set_userdata_through_lock() {
     let vm = SendVm::new(LuaVersion::Lua55);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     vm.set_userdata("c", Counter { value: 10 }).unwrap();
     vm.eval("c:incr(5); c:incr(2)").unwrap();
@@ -196,8 +196,8 @@ fn send_vm_pin_across_clones() {
 #[test]
 fn send_vm_interp_only_loop_runs_correctly() {
     let vm = SendVm::new(LuaVersion::Lua55);
-    vm.open_base();
-    vm.open_math();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
 
     let r = vm
         .eval(

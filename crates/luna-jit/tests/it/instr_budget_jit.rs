@@ -42,8 +42,8 @@ enum Outcome {
 
 fn vm_for(mode: Mode, version: LuaVersion) -> Vm {
     let mut vm = luna_jit::new_minimal_with_jit(version);
-    vm.open_base();
-    vm.open_table();
+    vm.open_base().expect("open the library");
+    vm.open_table().expect("open the library");
     match mode {
         Mode::Interpreter => vm.install_null_jit(),
         Mode::MethodJit => vm.set_trace_jit_enabled(false),

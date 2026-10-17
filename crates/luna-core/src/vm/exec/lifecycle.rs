@@ -6,7 +6,7 @@ use crate::runtime::mem::LVec;
 use crate::vm::exec::state::CallGuards;
 
 mod libs;
-pub(crate) use libs::{HOOK_KEY, light_key};
+pub(crate) use libs::{CLIBS_KEY, HOOK_KEY, light_key};
 
 impl Vm {
     /// The host runs its calls from inside a C function of its own that
@@ -211,10 +211,11 @@ impl Vm {
 
     /// Build a fully-loaded Vm — the default for embedders that want PUC's
     /// standard library surface. Equivalent to `Vm::new_minimal(version)`
-    /// followed by `vm.open_all_libs()`.
+    /// followed by `vm.open_all_libs()`; running out of memory there ends
+    /// the process, as PUC's `luaL_openlibs` outside a protected call.
     pub fn new(version: LuaVersion) -> Vm {
         let mut vm = Vm::new_minimal(version);
-        vm.open_all_libs();
+        crate::vm::lib_mem::opened(vm.open_all_libs());
         vm
     }
 
@@ -258,7 +259,7 @@ impl Vm {
     /// [`Vm::new_minimal_with_mem`]).
     pub fn new_with_mem(version: LuaVersion, mem: crate::runtime::mem::MemOwner) -> Vm {
         let mut vm = Vm::new_minimal_with_mem(version, mem);
-        vm.open_all_libs();
+        crate::vm::lib_mem::opened(vm.open_all_libs());
         vm
     }
 

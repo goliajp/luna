@@ -16,6 +16,8 @@ use crate::vm::exec::Vm;
 use crate::vm::lib_io::c_str;
 
 mod module51;
+mod open;
+pub(crate) use open::clibs_metatable;
 mod path;
 mod require;
 mod searchers;
@@ -44,6 +46,9 @@ pub(crate) fn try_open_package_bare(vm: &mut Vm) -> Result<(), LuaError> {
 
 fn open_package_with(vm: &mut Vm, list_opened: bool) -> Result<(), LuaError> {
     let v = vm.version();
+    if v >= LuaVersion::Lua52 {
+        return open::open_package_puc(vm, list_opened);
+    }
     let pkg = vm.alloc_table()?;
     let loaded = registry_table(vm, "_LOADED")?;
     let names: &[&str] = if list_opened {

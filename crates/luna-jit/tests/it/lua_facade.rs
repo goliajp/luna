@@ -7,7 +7,7 @@ use luna_jit::{Lua, LuaFunction, LuaTable};
 #[test]
 fn lua_new_eval_basic() {
     let mut lua = Lua::new();
-    lua.open_base();
+    lua.open_base().expect("open the library");
     let r: i64 = lua.eval("return 1 + 2").unwrap();
     assert_eq!(r, 3);
 }
@@ -26,7 +26,7 @@ fn lua_sandbox_builder() {
 #[test]
 fn lua_set_global_primitive() {
     let mut lua = Lua::new();
-    lua.open_base();
+    lua.open_base().expect("open the library");
     lua.set_global("answer", 42_i64).unwrap();
     lua.set_global("name", "luna").unwrap();
     let n: i64 = lua.eval("return answer").unwrap();
@@ -38,7 +38,7 @@ fn lua_set_global_primitive() {
 #[test]
 fn lua_create_function_and_call_from_script() {
     let mut lua = Lua::new();
-    lua.open_base();
+    lua.open_base().expect("open the library");
     let add = lua.create_function(|a: i64, b: i64| -> i64 { a + b });
     lua.set_global("add", add).unwrap();
     let r: i64 = lua.eval("return add(40, 2)").unwrap();
@@ -56,7 +56,7 @@ fn lua_function_call_from_host() {
 #[test]
 fn lua_table_set_get() {
     let mut lua = Lua::new();
-    lua.open_base();
+    lua.open_base().expect("open the library");
     let t: LuaTable = lua.create_table();
     t.set(&mut lua, "key", 99_i64).unwrap();
     t.set(&mut lua, "name", "luna").unwrap();
@@ -69,7 +69,7 @@ fn lua_table_set_get() {
 #[test]
 fn lua_table_into_global_and_back() {
     let mut lua = Lua::new();
-    lua.open_base();
+    lua.open_base().expect("open the library");
     let t: LuaTable = lua.create_table();
     t.set(&mut lua, "answer", 42_i64).unwrap();
     lua.set_global("c", t).unwrap();
@@ -80,7 +80,7 @@ fn lua_table_into_global_and_back() {
 #[test]
 fn lua_globals_table_reads_global() {
     let mut lua = Lua::new();
-    lua.open_base();
+    lua.open_base().expect("open the library");
     lua.set_global("magic", 7_i64).unwrap();
     let g: LuaTable = lua.globals();
     let v: i64 = g.get(&mut lua, "magic").unwrap();
@@ -90,7 +90,7 @@ fn lua_globals_table_reads_global() {
 #[test]
 fn lua_pin_keeps_value_alive_across_gc() {
     let mut lua = Lua::new();
-    lua.open_base();
+    lua.open_base().expect("open the library");
     let root = lua.pin("immortal");
     // Force a GC cycle; pinned value should still be there.
     lua.vm().collect_garbage();
@@ -114,7 +114,7 @@ fn lua_unpin_all_resets_pool() {
 #[test]
 fn lua_eval_multi_returns() {
     let mut lua = Lua::new();
-    lua.open_base();
+    lua.open_base().expect("open the library");
     let r = lua.eval_multi("return 1, 2, 3").unwrap();
     assert_eq!(r.len(), 3);
     assert!(matches!(r[0], Value::Int(1)));

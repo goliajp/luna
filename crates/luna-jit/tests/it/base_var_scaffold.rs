@@ -64,7 +64,7 @@ fn fib_3_hot_loop_bumps_base_var_scaffold_declared_at_least_once() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_3_HOT_LOOP_SRC, b"=fib3_hot_sub1_scaffold")
@@ -115,7 +115,7 @@ fn self_link_on_fib_28_result_correct_under_base_var_scaffold() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_28_SRC, b"=fib28_sub1_correctness")
@@ -156,7 +156,7 @@ fn self_link_on_fib_28_preserves_selflink_yields_to_downrec() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_28_SRC, b"=fib28_sub1_sub0_invariant")

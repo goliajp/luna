@@ -110,7 +110,11 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
     // ≤5.3 keep the methods in the metatable itself (`__index = mt`); 5.4
     // moved them to a table of their own and added `__close`. `__name` comes
     // from `luaL_newmetatable`, which only sets it from 5.3 on.
-    let mt = vm.lib_table(if v >= LuaVersion::Lua54 { 5 } else { 11 })?;
+    // `luaL_newmetatable` finds the one an earlier opening registered
+    let mt = match vm.file_mt {
+        Some(mt) => mt,
+        None => vm.lib_table(if v >= LuaVersion::Lua54 { 5 } else { 11 })?,
+    };
     let index = if v >= LuaVersion::Lua54 {
         vm.lib_table(7)?
     } else {

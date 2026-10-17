@@ -215,10 +215,10 @@ fn bench_redis_shape(c: &mut Criterion) {
                     // iter_batched contract); this matches the D1
                     // hand-rolled harness which timed `vm.eval` only.
                     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
-                    vm.open_base();
-                    vm.open_math();
-                    vm.open_string();
-                    vm.open_table();
+                    vm.open_base().expect("open the library");
+                    vm.open_math().expect("open the library");
+                    vm.open_string().expect("open the library");
+                    vm.open_table().expect("open the library");
                     vm
                 },
                 |mut vm| {

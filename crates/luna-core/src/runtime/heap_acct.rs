@@ -36,6 +36,9 @@ pub(crate) struct PucState {
     /// the debt and estimate the collector had reached when the libraries
     /// were open, when it ran meanwhile (5.3)
     pub(crate) libs_pace: Option<(i64, i64)>,
+    /// a library was opened: a later `luaL_openlibs` opens each as PUC's
+    /// second call does, not from the record
+    pub(crate) libs_opened: bool,
     /// uncounted objects of luna's standing for objects of PUC's of the
     /// given size (see `Heap::acct_stand_in`)
     pub(crate) stand_ins: Vec<(*mut GcHeader, Vec<usize>)>,
@@ -65,6 +68,7 @@ impl Default for PucState {
             gbuff: 0,
             kept_long: Vec::new(),
             libs_pace: None,
+            libs_opened: false,
             stand_ins: Vec::new(),
             own_tables: Vec::new(),
             load_msg: None,

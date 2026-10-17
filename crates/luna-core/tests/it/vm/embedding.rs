@@ -63,7 +63,7 @@ fn embedding_selective_open_base_enables_print() {
     // After `new_minimal`, `open_base` is enough to make `print`
     // and friends resolve. The host can keep math/io/debug/os out.
     let mut vm = Vm::new_minimal(LuaVersion::Lua55);
-    vm.open_base();
+    vm.open_base().expect("open the library");
     // `tostring` is part of the base library — exercising it confirms the
     // open ran. We can't directly observe `print` without intercepting
     // stdout, but `type(print)` works.

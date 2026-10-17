@@ -26,6 +26,9 @@ impl Heap {
         }
         // SAFETY: the caller's contract: `h` heads an unlinked object of this heap that nothing uses afterwards; its tag names the type it was boxed as (`adopt`, `new_table`, `alloc_str`), so each arm frees it with the matching layout; a short string stays in the string table's chains until removed here
         unsafe {
+            if (*h).cls & STANDS != 0 {
+                self.free_stand_in(h);
+            }
             match (*h).tag {
                 ObjTag::Table => {
                     let t = h as *mut Table;
@@ -174,7 +177,7 @@ impl Heap {
     /// The objects of PUC's that `h`, an uncounted object of luna's, stood
     /// for (`PucState::stand_ins`) are freed with it.
     fn free_stand_in(&mut self, h: *mut GcHeader) {
-        if let Some(i) = self.puc.stand_ins.iter().position(|(p, _)| *p == h) {
+        while let Some(i) = self.puc.stand_ins.iter().position(|(p, _)| *p == h) {
             let (_, sizes) = self.puc.stand_ins.swap_remove(i);
             for s in sizes {
                 self.acct_free(s);

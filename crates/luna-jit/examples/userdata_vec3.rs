@@ -92,7 +92,7 @@ fn extract_vec3(v: Value) -> Option<Vec3> {
 
 fn main() {
     let mut lua = Lua::new();
-    lua.open_base();
+    lua.open_base().expect("open the library");
 
     // Expose Vec3 as a global table (= the metatable itself), so
     // scripts can do `Vec3.new(1, 2, 3)` to call the static fn.

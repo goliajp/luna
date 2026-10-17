@@ -30,7 +30,10 @@ pub(crate) fn try_open_coroutine(vm: &mut Vm) -> Result<(), LuaError> {
     set(vm, "running", co_running)?;
     // the threads now inside a wrapped call, which `resume_refusal` needs:
     // luna's own table, which PUC has none of
-    let w = vm.alloc_table()?;
+    vm.heap.puc.silent += 1;
+    let w = vm.alloc_table();
+    vm.heap.puc.silent -= 1;
+    let w = w?;
     vm.heap.own_table(w);
     let in_wrap = Value::Table(w);
     for (name, f) in [

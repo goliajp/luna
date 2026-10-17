@@ -7,8 +7,8 @@
 //! use luna_jit::Lua;
 //!
 //! let mut lua = Lua::new();
-//! lua.open_base();
-//! lua.open_math();
+//! lua.open_base().unwrap();
+//! lua.open_math().unwrap();
 //! let r: i64 = lua.eval("return 1 + 2").unwrap();
 //! assert_eq!(r, 3);
 //!
@@ -82,28 +82,48 @@ impl Lua {
     }
 
     /// Open the base library (`print`, `type`, `pcall`, etc.).
-    pub fn open_base(&mut self) {
-        self.0.open_base();
+    ///
+    /// # Errors
+    ///
+    /// As [`Vm::open_base`].
+    pub fn open_base(&mut self) -> Result<(), LuaError> {
+        self.0.open_base()
     }
 
     /// Open the math library.
-    pub fn open_math(&mut self) {
-        self.0.open_math();
+    ///
+    /// # Errors
+    ///
+    /// As [`Vm::open_math`].
+    pub fn open_math(&mut self) -> Result<(), LuaError> {
+        self.0.open_math()
     }
 
     /// Open the string library.
-    pub fn open_string(&mut self) {
-        self.0.open_string();
+    ///
+    /// # Errors
+    ///
+    /// As [`Vm::open_string`].
+    pub fn open_string(&mut self) -> Result<(), LuaError> {
+        self.0.open_string()
     }
 
     /// Open the table library.
-    pub fn open_table(&mut self) {
-        self.0.open_table();
+    ///
+    /// # Errors
+    ///
+    /// As [`Vm::open_table`].
+    pub fn open_table(&mut self) -> Result<(), LuaError> {
+        self.0.open_table()
     }
 
     /// Open the coroutine library.
-    pub fn open_coroutine(&mut self) {
-        self.0.open_coroutine();
+    ///
+    /// # Errors
+    ///
+    /// As [`Vm::open_coroutine`].
+    pub fn open_coroutine(&mut self) -> Result<(), LuaError> {
+        self.0.open_coroutine()
     }
 
     /// Compile and run `src`; extract the first return value as `T`.

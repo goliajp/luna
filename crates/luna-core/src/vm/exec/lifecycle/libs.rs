@@ -4,7 +4,11 @@ use super::*;
 
 #[path = "registry.rs"]
 mod registry;
-pub(crate) use registry::{HOOK_KEY, light_key};
+#[path = "libs/reopen51.rs"]
+mod reopen51;
+#[path = "libs/require.rs"]
+mod require;
+pub(crate) use registry::{CLIBS_KEY, HOOK_KEY, light_key};
 
 impl Vm {
     /// The standalone interpreter's libraries: first what `lua.c` allocates
@@ -27,46 +31,41 @@ impl Vm {
                 self.native_checkpoint();
             }
         }
-        self.open_all_libs();
+        crate::vm::lib_mem::opened(self.open_all_libs());
         // 5.4 on, lua.c keeps the collector stopped until it has made `arg`
         if self.version >= crate::version::LuaVersion::Lua54 {
             self.heap.gc_set_stopped(true);
         }
     }
 
-    /// Open the entire 5.5 standard library on a `new_minimal`-built Vm.
+    /// Open the dialect's standard libraries, as PUC's `luaL_openlibs`.
     /// `Vm::new` calls this; sandboxed embedders open libraries one at a
     /// time instead (`open_base`, `open_math`, `open_table`, …).
-    pub fn open_all_libs(&mut self) {
+    ///
+    /// On a Vm that has opened a library before, each library opens as a
+    /// second `luaL_openlibs` opens it in the dialect: 5.1 registers new
+    /// functions into the library tables it finds, 5.2 makes every library
+    /// anew, 5.3 on leave a library `package.loaded` holds as it is and
+    /// only set its global again.
+    ///
+    /// # Errors
+    ///
+    /// A memory error, or 5.1's "name conflict for module": a library's
+    /// global holds a value that is not a table and `package.loaded` has
+    /// no table for it either.
+    pub fn open_all_libs(&mut self) -> Result<(), LuaError> {
+        if self.heap.puc.libs_opened {
+            return self.reopen_all_libs();
+        }
         // what PUC's `luaL_openlibs` allocates is counted from its record,
         // after luna builds its own libraries without counting
         self.heap.puc.silent += 1;
-        self.open_base();
-        self.open_math();
-        self.open_table();
-        self.open_string();
-        self.open_utf8();
-        self.open_os_io();
-        self.open_debug();
-        self.open_coroutine();
-        // PUC 5.2 introduced `bit32`; 5.3 retired it in the manual BUT
-        // the stock 5.3 build ships -DLUA_COMPAT_5_2, which keeps the
-        // library loaded. The diff ground truth is the default build
-        // (stock lua5.3), so expose it under 5.2 AND
-        // 5.3; 5.4 dropped the compat default for real.
-        if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
-            self.open_bit32();
-        }
-        // last, so `package.loaded` lists every library opened before it
-        self.open_package();
-        if self.puc_registry().is_err() {
-            crate::runtime::mem::oom_abort(std::alloc::Layout::new::<u8>());
-        }
+        let r = self.open_fresh_libs();
         self.heap.puc.silent -= 1;
-        match self.heap.acct_replay_openlibs(self.stack_size) {
-            Ok(Some(s)) => self.set_stack_size(s),
-            Ok(None) => {}
-            Err(_) => crate::runtime::mem::oom_abort(std::alloc::Layout::new::<u8>()),
+        self.heap.puc.libs_opened = true;
+        r?;
+        if let Some(s) = self.heap.acct_replay_openlibs(self.stack_size)? {
+            self.set_stack_size(s);
         }
         // the search paths `package` keeps are PUC's strings when they
         // have PUC's bytes
@@ -78,14 +77,16 @@ impl Vm {
                     && let Value::Str(s) = p.get(Value::Str(k))
                 {
                     self.heap.acct_adopt_long(s);
-                    // luna's own default Lua path stands for PUC's
+                    // luna's own default Lua path stands for PUC's, as long
+                    // as the package table that holds it
                     if name == b"path"
                         && let Some(&puc) = self.heap.puc.kept_long.iter().find(|(b, _)| {
                             b.ends_with(b"?.lua") || b.windows(5).any(|w| w == b"?.lua")
                         })
                         && puc.0 != s.as_bytes()
+                        && crate::runtime::heap::is_uncounted(s.as_ptr() as *mut _)
                     {
-                        self.heap.acct_stand_in(s, puc);
+                        self.heap.acct_stand_on(p.header(), puc.1, false);
                     }
                 }
             }
@@ -98,6 +99,30 @@ impl Vm {
             self.g.ci_alloc += 1;
         }
         self.heap.acct_libs_pace();
+        Ok(())
+    }
+
+    /// Every library on a Vm that has none yet, and the registry entries
+    /// PUC's `luaL_openlibs` leaves.
+    fn open_fresh_libs(&mut self) -> Result<(), LuaError> {
+        use crate::vm::{builtins, lib_coroutine, lib_debug, lib_math, lib_os_io, lib_string};
+        use crate::vm::{lib_bit32, lib_package, lib_table, lib_utf8};
+        self.open_lib(builtins::try_open_base)?;
+        self.open_lib(lib_math::try_open_math)?;
+        self.open_lib(lib_table::try_open_table)?;
+        self.open_lib(lib_string::try_open_string)?;
+        self.open_lib(lib_utf8::try_open_utf8)?;
+        self.open_lib(lib_os_io::try_open_os_io)?;
+        self.open_lib(lib_debug::try_open_debug)?;
+        self.open_lib(lib_coroutine::try_open_coroutine)?;
+        // PUC 5.2 introduced `bit32`; 5.3 retired it in the manual but the
+        // stock 5.3 build (-DLUA_COMPAT_5_2) still loads it
+        if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
+            self.open_lib(lib_bit32::try_open_bit32)?;
+        }
+        // last, so `package.loaded` lists every library opened before it
+        self.open_lib(lib_package::try_open_package)?;
+        self.puc_registry()
     }
 
     /// The library objects of luna's, made without counting, that stand
@@ -135,6 +160,14 @@ impl Vm {
             .find_interned(b"require")
             .map(|k| self.globals.get(Value::Str(k)));
         stand(self, req, vec![s.c_closure(1)]);
+        // 5.2's `module`, with `package` as its upvalue too
+        if self.version == LuaVersion::Lua52 {
+            let m = self
+                .heap
+                .find_interned(b"module")
+                .map(|k| self.globals.get(Value::Str(k)));
+            stand(self, m, vec![s.c_closure(1)]);
+        }
         if let Some(Value::Table(searchers)) = field(self, b"package", b"searchers") {
             for i in 1..=4 {
                 stand(
@@ -152,22 +185,17 @@ impl Vm {
             stand(self, seed, vec![s.c_closure(1)]);
         }
         // 5.5 keeps its default search paths as external strings over its
-        // own bytes (`LSTRFIX`): a header each
-        if self.version == LuaVersion::Lua55 {
+        // own bytes (`LSTRFIX`): a header each, as long as the package
+        // table that holds them
+        if self.version == LuaVersion::Lua55
+            && let Some(pkg) = self.heap.find_interned(b"package")
+            && let Value::Table(pkg) = self.globals.get(Value::Str(pkg))
+        {
             for name in [&b"path"[..], b"cpath"] {
-                let p = field(self, b"package", name);
-                if let Some(Value::Str(p)) = p
-                    && !self
-                        .heap
-                        .puc
-                        .stand_ins
-                        .iter()
-                        .any(|s| s.0 == p.as_ptr() as *mut _)
+                if let Some(Value::Str(p)) = field(self, b"package", name)
+                    && crate::runtime::heap::is_uncounted(p.as_ptr() as *mut _)
                 {
-                    let h = p.as_ptr() as *mut _;
-                    if crate::runtime::heap::is_uncounted(h) {
-                        self.heap.puc.stand_ins.push((h, vec![s.lngstr_hdr]));
-                    }
+                    self.heap.acct_stand_on(pkg.header(), s.lngstr_hdr, false);
                 }
             }
         }
@@ -185,66 +213,75 @@ impl Vm {
     /// retired globals `unpack`, `loadstring`, `setfenv`, `getfenv`,
     /// `newproxy`, `gcinfo` when version == 5.1). Safe to call at most
     /// once per Vm.
-    pub fn open_base(&mut self) {
-        self.open_lib(crate::vm::builtins::try_open_base);
+    pub fn open_base(&mut self) -> Result<(), LuaError> {
+        self.require_lib("_G", Some(crate::vm::builtins::try_open_base))
     }
 
     /// Install the `math` standard library.
-    pub fn open_math(&mut self) {
-        self.open_lib(crate::vm::lib_math::try_open_math);
+    pub fn open_math(&mut self) -> Result<(), LuaError> {
+        self.require_lib("math", Some(crate::vm::lib_math::try_open_math))
     }
 
     /// Install the `table` standard library.
-    pub fn open_table(&mut self) {
-        self.open_lib(crate::vm::lib_table::try_open_table);
+    pub fn open_table(&mut self) -> Result<(), LuaError> {
+        self.require_lib("table", Some(crate::vm::lib_table::try_open_table))
     }
 
     /// Install the `string` standard library (and the shared string metatable).
-    pub fn open_string(&mut self) {
-        self.open_lib(crate::vm::lib_string::try_open_string);
+    pub fn open_string(&mut self) -> Result<(), LuaError> {
+        self.require_lib("string", Some(crate::vm::lib_string::try_open_string))
     }
 
     /// Install the `utf8` standard library (5.3+).
-    pub fn open_utf8(&mut self) {
-        self.open_lib(crate::vm::lib_utf8::try_open_utf8);
+    pub fn open_utf8(&mut self) -> Result<(), LuaError> {
+        self.require_lib("utf8", Some(crate::vm::lib_utf8::try_open_utf8))
     }
 
     /// `os` and `io` are merged because file userdata shares state with both
     /// (`io.tmpname` and `os.tmpname` are the same function, `io.popen`
     /// wraps `os.execute`'s shell).
-    pub fn open_os_io(&mut self) {
-        self.open_lib(crate::vm::lib_os_io::try_open_os_io);
+    pub fn open_os_io(&mut self) -> Result<(), LuaError> {
+        self.require_lib("io", Some(crate::vm::lib_io::try_open_io))?;
+        self.require_lib("os", Some(crate::vm::lib_os_io::try_open_os))?;
+        self.open_lib(crate::vm::lib_os_io::try_open_file_loaders)
     }
 
     /// Install the `debug` standard library (introspection / hooks). Off by
     /// default for sandbox embedders.
-    pub fn open_debug(&mut self) {
-        self.open_lib(crate::vm::lib_debug::try_open_debug);
+    pub fn open_debug(&mut self) -> Result<(), LuaError> {
+        self.require_lib("debug", Some(crate::vm::lib_debug::try_open_debug))
     }
 
     /// Install the `coroutine` standard library.
-    pub fn open_coroutine(&mut self) {
-        self.open_lib(crate::vm::lib_coroutine::try_open_coroutine);
+    pub fn open_coroutine(&mut self) -> Result<(), LuaError> {
+        self.require_lib(
+            "coroutine",
+            Some(crate::vm::lib_coroutine::try_open_coroutine),
+        )
     }
 
     /// `package` plus the 5.1-only `module` and `package.seeall` aliases.
-    pub fn open_package(&mut self) {
-        self.open_lib(crate::vm::lib_package::try_open_package);
+    pub fn open_package(&mut self) -> Result<(), LuaError> {
+        self.require_lib(
+            "package",
+            Some(crate::vm::lib_package::try_open_package_bare),
+        )
     }
 
     /// 5.2-only `bit32` library (5.3+ retired in favour of native bitwise
     /// ops on 64-bit integers).
-    pub fn open_bit32(&mut self) {
-        self.open_lib(crate::vm::lib_bit32::try_open_bit32);
+    pub fn open_bit32(&mut self) -> Result<(), LuaError> {
+        self.require_lib("bit32", Some(crate::vm::lib_bit32::try_open_bit32))
     }
 
     /// From 5.2 on, library functions are PUC light C functions, which are
     /// not collectable: luna keeps them off the swept list and frees them
     /// with the Vm, so a weak table never drops one. 5.1 collects them.
-    /// A memory error here aborts, as PUC's `luaL_openlibs` does outside a
-    /// protected call.
-    pub(crate) fn open_lib(&mut self, open: fn(&mut Vm) -> Result<(), LuaError>) {
-        crate::vm::lib_mem::opened(self.try_open_lib(open));
+    pub(crate) fn open_lib(
+        &mut self,
+        open: fn(&mut Vm) -> Result<(), LuaError>,
+    ) -> Result<(), LuaError> {
+        self.try_open_lib(open)
     }
 
     /// [`Vm::open_lib`] with an opener that raises a memory error.

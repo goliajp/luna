@@ -52,7 +52,7 @@ fn self_link_on_fib_28_bumps_safety_pin_label_in_close_cause_counts() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm.load(FIB_SRC, b"=fib28_selflink_on").expect("loads");
     let _ = vm
@@ -103,7 +103,7 @@ fn self_link_off_fib_28_bumps_length_gate_in_close_cause_counts() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(false);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm.load(FIB_SRC, b"=fib28_selflink_off").expect("loads");
     let _ = vm
@@ -144,7 +144,7 @@ fn dispatch_off_reasons_vec_and_close_cause_counts_hashmap_agree() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm.load(FIB_SRC, b"=fib28_selflink_on_pair").expect("loads");
     let _ = vm
