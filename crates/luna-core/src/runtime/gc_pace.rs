@@ -100,6 +100,8 @@ pub(crate) struct Pace {
     pub(crate) count_marked: bool,
     /// the threads the VM holds, as the step under way found them
     pub(crate) run: Option<super::heap::Running>,
+    /// 5.3 `gcfinnum`: how many finalizers the next batch runs
+    pub(crate) fin_num: u32,
 }
 
 /// 5.1 `GCSTEPSIZE`
@@ -107,11 +109,18 @@ pub(crate) const STEPSIZE_51: i64 = 1024;
 /// 5.1 `GCSWEEPMAX`, `GCSWEEPCOST`
 pub(crate) const SWEEPMAX_51: i64 = 40;
 pub(crate) const SWEEPCOST_51: i64 = 10;
+/// 5.1 `GCFINALIZECOST`
+pub(crate) const FINALIZECOST_51: i64 = 100;
 /// 5.2 and 5.3 `STEPMULADJ`; 5.2 to 5.4 `PAUSEADJ`
 const STEPMULADJ: i64 = 200;
 const PAUSEADJ: i64 = 100;
 /// 5.4 `GCSWEEPMAX`
 pub(crate) const SWEEPMAX_54: i64 = 100;
+/// 5.4 `GCFINMAX` and `GCFINALIZECOST`
+pub(crate) const FINMAX_54: i64 = 10;
+pub(crate) const FINALIZECOST_54: i64 = 50;
+/// 5.5 `CWUFIN`
+pub(crate) const CWUFIN_55: i64 = 10;
 /// 5.5 `GCSWEEPMAX`
 pub(crate) const SWEEPMAX_55: i64 = 20;
 
@@ -126,6 +135,7 @@ impl Pace {
             fin_left: None,
             count_marked: false,
             run: None,
+            fin_num: 0,
         }
     }
 

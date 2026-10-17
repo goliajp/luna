@@ -33,69 +33,91 @@ impl Vm {
         Ok(())
     }
 
-    /// Run pending `__gc` finalizers (objects the collector resurrected for
-    /// finalization), from an automatic collection: errors do not reach the
-    /// mutator. Reentrancy-guarded.
-    pub(super) fn run_finalizers(&mut self) {
-        let _ = self.run_finalizers_or_err(false, false);
-    }
-
     /// Every finalizer, as the state closes (`luaC_freeallobjects` calls
-    /// them with no `luaD_checkminstack`).
+    /// them with no `luaD_checkminstack`); errors go nowhere.
     pub(super) fn run_finalizers_closing(&mut self) {
+        if self.gc_finalizing {
+            return;
+        }
         self.heap.queue_all_finalizers();
-        let _ = self.run_finalizers_or_err(false, true);
+        while self.heap.has_tobefnz() && self.finalizer_has_room(true) {
+            let _ = self.gc_tm(false);
+        }
     }
 
-    /// Run the pending finalizers. With `propagate` (an explicit collection
-    /// on 5.1–5.3), the first error stops the run and is returned; the
-    /// finalizers after it stay queued for the next collection, as in PUC,
-    /// where `GCTM` throws out of the loop that calls them.
-    pub(super) fn run_finalizers_or_err(
-        &mut self,
-        propagate: bool,
-        closing: bool,
-    ) -> Result<(), LuaError> {
-        if self.gc_finalizing {
-            return Ok(());
+    /// The finalizers a full collection calls once it has swept (5.2's
+    /// all, after its pause is set; the others as their steps call them,
+    /// before the pause), and the pause it ends with.
+    pub(super) fn full_gc_finalizers(&mut self) -> Result<(), LuaError> {
+        if self.version == LuaVersion::Lua52 {
+            return self.call_all_pending(true);
         }
-        let pending = self.heap.take_tobefnz();
-        if pending.is_empty() {
-            return Ok(());
+        self.gc_steps_to_pause()?;
+        self.gc_full_repause();
+        Ok(())
+    }
+
+    /// 5.2 `callallpendingfinalizers`: every pending finalizer.
+    pub(super) fn call_all_pending(&mut self, propagate: bool) -> Result<(), LuaError> {
+        while self.heap.has_tobefnz() {
+            self.gc_tm(propagate)?;
         }
-        self.gc_finalizing = true;
-        // PUC `GCTM` turns hooks off while a finalizer runs (`allowhook`)
+        Ok(())
+    }
+
+    /// PUC `GCTM`: call the first pending finalizer, with hooks off and no
+    /// collection step while it runs (5.1: a threshold twice the count;
+    /// later: the collector not running). With `propagate`, the error of
+    /// a 5.1–5.3 finalizer is the error of the caller (5.1 raises it from
+    /// inside the finalizer, under the running message handler); a 5.4 or
+    /// 5.5 one is a warning.
+    pub(super) fn gc_tm(&mut self, propagate: bool) -> Result<(), LuaError> {
+        let propagate = propagate && !self.fin_quiet;
+        let Some(obj) = self.heap.take_one_tobefnz() else {
+            return Ok(());
+        };
+        #[cfg(feature = "gc-trace")]
+        self.heap.trace.line(format_args!("f"));
+        let d = self.version;
         let in_hook = std::mem::replace(&mut self.in_hook, true);
-        let mut first_err: Option<LuaError> = None;
-        let mut ran = 0;
-        for &obj in &pending {
-            if !self.finalizer_has_room(closing) {
-                break;
+        let finalizing = std::mem::replace(&mut self.gc_finalizing, true);
+        let gc_top = self.gc_top;
+        let stopped = self.heap.gc_is_stopped();
+        let fin_stop = self.heap.gc_fin_stop;
+        let threshold = self.heap.pace.threshold();
+        match d {
+            LuaVersion::Lua51 => {
+                let t = 2 * self.heap.bytes() as i64;
+                self.heap.pace.set_threshold(t);
             }
-            ran += 1;
-            if let Err(e) = self.run_one_finalizer(obj)
-                && propagate
-            {
-                first_err = Some(e);
-                break;
-            }
+            LuaVersion::Lua52 | LuaVersion::Lua53 => self.heap.gc_restore_stopped(true),
+            _ => self.heap.gc_fin_stop = true,
         }
-        if ran < pending.len() {
-            self.heap.requeue_tobefnz(&pending[ran..]);
-        }
+        self.heap.refresh_gc_limit();
+        let r = self.run_one_finalizer(obj, propagate);
         self.in_hook = in_hook;
-        self.gc_finalizing = false;
-        match first_err {
-            Some(e) => Err(e),
-            None => Ok(()),
+        self.gc_finalizing = finalizing;
+        self.gc_top = gc_top;
+        match d {
+            // a 5.1 error leaves the threshold the finalizer ran under
+            LuaVersion::Lua51 => {
+                if r.is_ok() {
+                    self.heap.pace.set_threshold(threshold);
+                    self.heap.gc_restore_stopped(stopped);
+                }
+            }
+            LuaVersion::Lua52 | LuaVersion::Lua53 => self.heap.gc_restore_stopped(stopped),
+            _ => self.heap.gc_fin_stop = fin_stop,
         }
+        self.heap.refresh_gc_limit();
+        r
     }
 
     /// 5.4/5.5 `luaD_checkminstack`: a finalizer runs only with two C levels
     /// to spare, two `CallInfo`s past the running one and `BASIC_STACK_SIZE`
     /// free slots, made when missing; otherwise it waits for a later
     /// collection.
-    fn finalizer_has_room(&mut self, closing: bool) -> bool {
+    pub(super) fn finalizer_has_room(&mut self, closing: bool) -> bool {
         if self.version < LuaVersion::Lua54 {
             return true;
         }
@@ -125,9 +147,10 @@ impl Vm {
         }
     }
 
-    /// Call `obj`'s `__gc`. The error a 5.1–5.3 finalizer raised comes back
-    /// as the error the collection raises; 5.4+ turn it into a warning.
-    fn run_one_finalizer(&mut self, obj: Value) -> Result<(), LuaError> {
+    /// Call `obj`'s `__gc`. With `propagate`, the error a 5.1–5.3
+    /// finalizer raised comes back as the error the collection raises;
+    /// 5.4+ turn it into a warning.
+    fn run_one_finalizer(&mut self, obj: Value, propagate: bool) -> Result<(), LuaError> {
         let gc = self.get_mm(obj, Mm::Gc);
         // 5.2/5.3 call only a function (`__gc = true` just marks the object
         // for finalization); 5.1 and 5.4+ call any value
@@ -165,8 +188,9 @@ impl Vm {
         // use; a native's top can lie below results a call it made has just
         // returned (print's nested tostring)
         let (len, top) = (self.stack.len(), self.top);
-        let r = match self.native_top() {
-            Some(t) => self.call_protected_at(gc, &[obj], t.max(top)),
+        let at = self.native_top().map(|t| t.max(top));
+        let r = match at {
+            Some(at) => self.call_protected_at(gc, &[obj], at),
             None => self.call_protected(gc, &[obj]),
         };
         // the call gives back the slots it took, not the window of a native
@@ -183,6 +207,9 @@ impl Vm {
         };
         if self.version >= LuaVersion::Lua54 {
             self.warn_error("__gc", e.0);
+            return Ok(());
+        }
+        if !propagate {
             return Ok(());
         }
         if self.version == LuaVersion::Lua51 {

@@ -230,8 +230,10 @@ pub struct Heap {
     /// parallel-tracked — ownership stays on `all` (PUC `finobj`).
     finalize: crate::runtime::mem::LVec<*mut GcHeader>,
     /// dead finalizables resurrected this cycle, awaiting their `__gc` call by
-    /// the VM (PUC `tobefnz`). Drained via `take_tobefnz`.
+    /// the VM (PUC `tobefnz`); the entries before `tobefnz_head` were handed
+    /// out already (`take_one_tobefnz`).
     tobefnz: crate::runtime::mem::LVec<*mut GcHeader>,
+    tobefnz_head: usize,
     /// Incremental traversal state. `Some` between `gc_start_propagate` and
     /// `gc_finish_atomic` (and inline within `mark_all`); `None` otherwise.
     propagate: Option<PropagateState>,

@@ -25,7 +25,7 @@ impl Heap {
         for &h in &self.finalize {
             live.insert(h as usize);
         }
-        for &h in &self.tobefnz {
+        for &h in self.tobefnz_live() {
             live.insert(h as usize);
         }
         live
@@ -132,7 +132,7 @@ impl Heap {
             for &h in &self.finalize {
                 live.insert(h as usize);
             }
-            for &h in &self.tobefnz {
+            for &h in self.tobefnz_live() {
                 live.insert(h as usize);
             }
             let is_live = |v: Value| -> bool {

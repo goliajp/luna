@@ -267,6 +267,6 @@ impl Vm {
 
     /// Whether a check for a collection now would step it.
     pub(crate) fn step_due(&self) -> bool {
-        self.heap.gc_due() && !self.gc_finalizing
+        self.heap.gc_due()
     }
 }

@@ -88,7 +88,7 @@ impl Heap {
     fn mark_from(&mut self, m: &mut Marker) {
         // objects already queued for finalization but not yet run must stay
         // alive until the VM calls their `__gc` (they may be unreachable now).
-        for &h in &self.tobefnz {
+        for &h in self.tobefnz_live() {
             // SAFETY: a queued finalizable stays allocated until its `__gc` has run (`take_tobefnz`)
             unsafe { m.header(h) };
         }

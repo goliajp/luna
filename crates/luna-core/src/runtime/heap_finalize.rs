@@ -165,7 +165,7 @@ impl Heap {
     pub(crate) fn finalizable_userdata(&self) -> Vec<Gc<crate::runtime::Userdata>> {
         self.finalize
             .iter()
-            .chain(self.tobefnz.iter())
+            .chain(self.tobefnz_live().iter())
             // SAFETY: `finalize` and `tobefnz` hold headers of registered objects, and the sweep never frees a listed one: `separate_finalizables` marks every unreachable entry before it can be swept, and an entry leaves the lists only through `take_tobefnz`; the tag says which entries are userdata
             .filter_map(|&h| unsafe {
                 ((*h).tag == ObjTag::Userdata)
@@ -174,56 +174,26 @@ impl Heap {
             .collect()
     }
 
-    /// Take the objects awaiting their `__gc` call (the VM runs the
-    /// finalizers). Each entry is dispatched on its `ObjTag` so the caller
-    /// can look up `__gc` for either a table or a proxy userdata.
+    /// The value of the queued object `h`, handed out for its `__gc` call.
     ///
     /// Mirrors PUC 5.5 `udata2finalize`: the FINALIZED bit is reset on the
     /// way out so a `setmetatable(obj, mt_with___gc)` inside (or after) the
     /// finalizer can re-register the object for a future round, per the Lua
     /// 5.5 reference manual §2.5.3 re-finalize semantics.
-    pub(crate) fn take_tobefnz(&mut self) -> Vec<crate::runtime::Value> {
+    fn finalizable_value(&mut self, h: *mut GcHeader) -> crate::runtime::Value {
         use crate::runtime::Value;
-        // emptied in place: its capacity stays for the next collection
-        let queued: Vec<_> = self.tobefnz.iter().copied().collect();
-        self.tobefnz.clear();
-        queued
-            .into_iter()
-            // SAFETY: every `tobefnz` entry was marked by `separate_finalizables` (or `mark_all` re-marks it) and so is still allocated; it was registered as a table or a userdata, the two tags matched below, and the caller roots the returned handles until the finalizers have run
-            .map(|h| unsafe {
-                if self.refinalize {
-                    (*h).flags &= !FINALIZED;
+        // SAFETY: every `tobefnz` entry was marked by `separate_finalizables` (or `mark_all` re-marks it) and so is still allocated; it was registered as a table or a userdata, the two tags matched below, and the caller roots the returned handle until the finalizer has run
+        unsafe {
+            if self.refinalize {
+                (*h).flags &= !FINALIZED;
+            }
+            match (*h).tag {
+                ObjTag::Table => Value::Table(Gc::from_ptr(h as *mut Table)),
+                ObjTag::Userdata => {
+                    Value::Userdata(Gc::from_ptr(h as *mut crate::runtime::Userdata))
                 }
-                match (*h).tag {
-                    ObjTag::Table => Value::Table(Gc::from_ptr(h as *mut Table)),
-                    ObjTag::Userdata => {
-                        Value::Userdata(Gc::from_ptr(h as *mut crate::runtime::Userdata))
-                    }
-                    _ => unreachable!("non-finalizable object queued for finalization"),
-                }
-            })
-            .collect()
-    }
-
-    /// Put back, at the head of the queue and in their order, objects
-    /// [`Heap::take_tobefnz`] handed out whose finalizers did not run: they
-    /// run first at the next chance.
-    pub(crate) fn requeue_tobefnz(&mut self, rest: &[crate::runtime::Value]) {
-        let later: Vec<_> = self.tobefnz.iter().copied().collect();
-        self.tobefnz.clear();
-        for v in rest {
-            let h = match *v {
-                crate::runtime::Value::Table(t) => t.as_ptr() as *mut GcHeader,
-                crate::runtime::Value::Userdata(u) => u.as_ptr() as *mut GcHeader,
-                _ => unreachable!("only tables and userdata are queued"),
-            };
-            // SAFETY: `h` was queued and is rooted by the caller until here;
-            // only the flag byte is written
-            unsafe { (*h).flags |= FINALIZED };
-            self.queue_to_finalize(h);
-        }
-        for h in later {
-            self.queue_to_finalize(h);
+                _ => unreachable!("non-finalizable object queued for finalization"),
+            }
         }
     }
 
@@ -250,6 +220,34 @@ impl Heap {
 
     /// How many objects PUC's `tobefnz` list holds.
     pub(crate) fn tobefnz_count(&self) -> i64 {
-        self.tobefnz.len() as i64
+        self.tobefnz_live().len() as i64
+    }
+
+    /// The objects awaiting their `__gc` call, in the order they run.
+    pub(crate) fn tobefnz_live(&self) -> &[*mut GcHeader] {
+        &self.tobefnz[self.tobefnz_head..]
+    }
+
+    /// Whether an object awaits its `__gc` call.
+    pub(crate) fn has_tobefnz(&self) -> bool {
+        self.tobefnz_head < self.tobefnz.len()
+    }
+
+    /// Take the first object awaiting its `__gc` call (PUC
+    /// `udata2finalize`); the caller roots it until the call is made.
+    pub(crate) fn take_one_tobefnz(&mut self) -> Option<crate::runtime::Value> {
+        let &h = self.tobefnz.get(self.tobefnz_head)?;
+        self.tobefnz_head += 1;
+        let n = self.tobefnz.len();
+        if self.tobefnz_head == n {
+            self.tobefnz.clear();
+            self.tobefnz_head = 0;
+        } else if self.tobefnz_head >= 64 && self.tobefnz_head * 2 >= n {
+            // the handed-out front is dropped once it is half the queue
+            self.tobefnz.copy_within(self.tobefnz_head..n, 0);
+            self.tobefnz.truncate(n - self.tobefnz_head);
+            self.tobefnz_head = 0;
+        }
+        Some(self.finalizable_value(h))
     }
 }

@@ -21,7 +21,7 @@ impl Heap {
             no_ephemeron: self.no_ephemeron,
         });
         let mut m = self.loan_marker();
-        for &h in &self.tobefnz {
+        for &h in self.tobefnz_live() {
             // SAFETY: a queued finalizable stays allocated until its `__gc` has run (`take_tobefnz`)
             unsafe { m.header(h) };
         }
@@ -273,7 +273,12 @@ impl Heap {
             // allocated objects; nothing is freed while marking
             unsafe {
                 blacken(h, &mut m);
-                *remaining -= self.object_work(h, run) + m.leaf_bytes;
+                let w = self.object_work(h, run) + m.leaf_bytes;
+                #[cfg(feature = "gc-trace")]
+                if std::env::var_os("R38_PROP").is_some() {
+                    self.trace.line(format_args!("p {} {w}", (*h).tag as u8));
+                }
+                *remaining -= w;
             }
             if *remaining <= floor {
                 break;

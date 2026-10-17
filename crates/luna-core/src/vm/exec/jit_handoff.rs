@@ -35,7 +35,7 @@ impl Vm {
         if cfg!(feature = "gc-trace") {
             return true;
         }
-        self.heap.gc_due_after(bytes) && !self.gc_finalizing
+        self.heap.gc_due_after(bytes)
     }
 
     /// Whether compiled code's `NewTable` of operands `b`, `c`, `k` would
