@@ -37,11 +37,13 @@ pub(super) struct EmitFacts<'a> {
 /// A self-recursive chunk's self calls are direct native calls to its
 /// body, which is laid out as a ring of copies, each calling the next and
 /// the last calling a stub (`entry::define_stub`) that checks the native
-/// stack and the dialect's call budget once per lap before calling the
-/// first copy again; the calls themselves cost nothing. The entry fills
-/// the stub's context (`luna_jit_enter_ctx`) and keeps its address in the
-/// pinned register. Where going on after a failed self call could be seen
-/// (a table write) or might not end (a backward jump), the body reads the
+/// stack once per lap before calling the first copy again. Each level
+/// gets its frame's base and its depth after its arguments, and counts
+/// itself as PUC counts a call (`luna_jit_self_level`) only when it
+/// reaches the base or depth the context allows. The entry fills the
+/// context (`luna_jit_enter_ctx`) and keeps its address in the pinned
+/// register. Where going on after a failed self call could be seen (a
+/// table write) or might not end (a backward jump), the body reads the
 /// context's failure flag after each self call and returns at once when
 /// it is set; elsewhere the callers finish with dummy results that the
 /// dispatcher drops.
@@ -49,6 +51,9 @@ pub(super) struct EmitFacts<'a> {
 pub(super) struct SelfCalls {
     /// read the failure flag after each self call
     pub(super) check_failure: bool,
+    /// this level's base and depth
+    pub(super) base: Value,
+    pub(super) depth: Value,
 }
 
 /// What every op's emit updates.
@@ -83,13 +88,16 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     let ChunkScan { bb_starts, .. } = scan;
     let pc_to_bb = &cfg.pc_to_bb;
     let mut sig = module.make_signature();
-    for _ in 0..num_params {
+    // a self-recursive body takes its level's base and depth too
+    let level_params = if any_self_call { 2 } else { 0 };
+    for _ in 0..num_params + level_params {
         sig.params.push(AbiParam::new(types::I64));
     }
     sig.returns.push(AbiParam::new(types::I64));
     let fn_id = module
         .declare_function("luna_jit_chunk", Linkage::Local, &sig)
         .ok()?;
+    let desc = self_call_desc((arg_float_mask, arg_table_mask), num_params, scan, ret_kind);
 
     let mut ctx = module.make_context();
     ctx.func.signature = sig;
@@ -107,7 +115,13 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
             pc_to_block[pc_i] = Some(bcx.create_block());
         }
     }
-    let entry = pc_to_block[0].expect("entry block exists");
+    // a self-recursive body enters through a block of its own, which counts
+    // its level; the block of pc 0 may be a loop's head
+    let entry = if any_self_call {
+        bcx.create_block()
+    } else {
+        pc_to_block[0].expect("entry block exists")
+    };
     // Append the entry block's function-param block params before
     // switching in, so the params arrive as block args we can read
     // straight into the register Variables.
@@ -161,9 +175,18 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     // `binary_trees`'s `{nil, nil}` leaf stores actual Nil values
     // instead of misinterpreting the 0 bits as `Int(0)`.
     let current_is_nil: Vec<bool> = vec![false; max_stack];
-    let self_calls = any_self_call.then(|| SelfCalls {
-        check_failure: may_show_dummy_results(c),
-    });
+    let self_calls = if any_self_call {
+        let params = bcx.block_params(entry);
+        let (base, depth) = (params[num_params], params[num_params + 1]);
+        super::entry::count_level(module, &mut bcx, desc, base, depth)?;
+        Some(SelfCalls {
+            check_failure: may_show_dummy_results(c),
+            base,
+            depth,
+        })
+    } else {
+        None
+    };
 
     let counted = narrow::plan(&mut bcx, c, scan, reg_kinds, &pc_to_block, any_self_call);
     let f = EmitFacts {
@@ -184,6 +207,11 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
         current_is_nil,
         terminated: false,
     };
+    if any_self_call {
+        let pc0 = pc_to_block[0].expect("entry block exists");
+        bcx.ins().jump(pc0, &[]);
+        bcx.switch_to_block(pc0);
+    }
     emit_pcs(module, &mut bcx, &mut st, f, 0, n, bb_entry_kinds, pc_to_bb)?;
     if !st.terminated {
         let zero = bcx.ins().iconst(types::I64, 0);
@@ -224,8 +252,7 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     module.define_function(fn_id, &mut ctx).ok()?;
     chunk_share::note(module, &ctx, fn_id);
     let ring = any_self_call.then(|| RingSpec {
-        desc: self_call_desc((arg_float_mask, arg_table_mask), num_params, scan, ret_kind),
-        counted: c.float_only,
+        desc,
         copies: ring_copies(ctx.compiled_code().map_or(0, |cc| cc.code_buffer().len())),
     });
     module.clear_context(&mut ctx);

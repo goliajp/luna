@@ -67,8 +67,9 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
     // and fills the self-call context; the body, which self-recursive
     // calls enter directly, takes the context's address first
     let entry = module.add_function("luna_jit_llvm_entry", fn_type, None);
-    // the context's address, the native stack limit and the calls left
-    let mut body_params = vec![i64_type.into(), i64_type.into(), i64_type.into()];
+    // the context's address, the native stack limit, the level's base and
+    // depth
+    let mut body_params = vec![i64_type.into(); 4];
     body_params.extend_from_slice(&param_types);
     let function = module.add_function(
         "luna_jit_llvm_body",
@@ -135,7 +136,7 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
     // bound them with `LoadI` / `Move`.
     for i in 0..plan.num_params {
         let slot = emitter.reg_slot_ptr(i, "param_slot")?;
-        let arg = function.get_nth_param(i + 3)?.into_int_value();
+        let arg = function.get_nth_param(i + 4)?.into_int_value();
         builder.build_store(slot, arg).ok()?;
     }
 
@@ -295,7 +296,7 @@ fn emit_entry<'ctx>(
         builder.build_return(Some(&zero)).ok()?;
         builder.position_at_end(go);
     }
-    let (self_ctx, limit, left) = if self_calls {
+    let (self_ctx, limit, base) = if self_calls {
         let words = i64_type.array_type(luna_jit_helpers::SELF_CTX_WORDS as u32);
         let at = builder.build_alloca(words, "self_ctx").ok()?;
         let addr = builder
@@ -312,12 +313,12 @@ fn emit_entry<'ctx>(
                 .ok()?;
             Some(builder.build_load(i64_type, p, name).ok()?.into_int_value())
         };
-        (addr, word(0, "limit")?, word(2, "left")?)
+        (addr, word(0, "limit")?, word(4, "base")?)
     } else {
         (zero, zero, zero)
     };
     let mut args: Vec<inkwell::values::BasicMetadataValueEnum> =
-        vec![self_ctx.into(), limit.into(), left.into()];
+        vec![self_ctx.into(), limit.into(), base.into(), zero.into()];
     args.extend(
         entry
             .get_param_iter()

@@ -67,6 +67,7 @@ fn method_helper(name: &str) -> Option<*const u8> {
         "luna_jit_park_deopt" => luna_jit_park_deopt as *const u8,
         "luna_jit_enter_ctx" => luna_jit_enter_ctx as *const u8,
         "luna_jit_self_call_slow" => luna_jit_self_call_slow as *const u8,
+        "luna_jit_self_level" => luna_jit_self_level as *const u8,
         "luna_jit_table_get_int_checked" => luna_jit_table_get_int_checked as *const u8,
         "luna_jit_table_get_float_checked" => luna_jit_table_get_float_checked as *const u8,
         _ => return super::trace::reloc::resolve_symbol(name),

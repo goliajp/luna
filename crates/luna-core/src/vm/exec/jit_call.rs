@@ -139,7 +139,7 @@ impl Vm {
         }
     }
 
-    /// `Op::Call` JIT fast path. Run inside `begin_call`
+    /// The JIT fast path of a call. Run inside `begin_call`
     /// before `push_frame`. Returns `true` when the call was handled
     /// in-place (no new Lua frame). Constraints: every arg slot must
     /// be `Value::Int`, the cached arity must match the call site's
@@ -220,8 +220,18 @@ impl Vm {
                 _ => return false,
             };
         }
-        // Vm + closure pin for helpers, routed through chunk_compiler;
-        // see the matching guard in `try_jit_call`.
+        // the level the call makes, as `push_frame` would count it; an
+        // error there is the call's
+        let levels = match self.jit_enter_levels(cl, func_slot, nargs) {
+            Ok(l) => l,
+            Err(e) => {
+                self.jit.pending_raise = Some(e);
+                return true;
+            }
+        };
+        // the Vm and closure the helpers the code calls work on, until
+        // the guard drops (a raw pointer: the compiler is borrowed from
+        // `self` meanwhile)
         let vm_ptr: *mut Vm = self;
         let _jit_vm_guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
         // SAFETY: the source `*const u8` is a JIT-compiled function entry pointer produced by Cranelift with the target `fn`-pointer signature (IntChunkFn / IntFnN); the JitVmGuard above keeps the JIT_VM TLS slot live across the call.
@@ -242,13 +252,13 @@ impl Vm {
             }
         };
         drop(_jit_vm_guard);
+        self.jit_leave_levels(levels);
         // the caller raises it
         if self.jit.pending_raise.is_some() {
             return true;
         }
-        // See matching path in `try_jit_call`. A helper
-        // flagged a metatable on a table operand; bail to the interpreter
-        // so `push_frame` runs the call from scratch.
+        // A helper flagged a metatable on a table operand; bail to the
+        // interpreter so `push_frame` runs the call from scratch.
         if self.jit.pending_err.take().is_some() {
             return false;
         }
@@ -274,26 +284,8 @@ impl Vm {
         true
     }
 
-    /// Lua calls the running thread may still make before one raises
-    /// "stack overflow" for its depth (5.1's `LUAI_MAXCALLS`), not counting
-    /// `native` calls compiled code made on the native stack; `i64::MAX`
-    /// in dialects without that limit.
-    #[doc(hidden)]
-    pub fn jit_call_budget(&self, native: i64) -> i64 {
-        if self.frame_cap == u32::MAX {
-            return i64::MAX;
-        }
-        // the array doubles until a doubling would pass the limit
-        let mut size = self.g.frame_size;
-        while size * 2 <= self.frame_cap {
-            size *= 2;
-        }
-        i64::from(size) - i64::from(self.frames_in_use()) - native
-    }
-
-    /// "stack overflow" raised for a self call of compiled `cl` past
-    /// [`Vm::jit_call_budget`], positioned, as the interpreter would raise
-    /// it, at that call in `cl`.
+    /// "stack overflow" raised for a self call of compiled `cl`,
+    /// positioned, as the interpreter would raise it, at that call in `cl`.
     #[doc(hidden)]
     pub fn jit_depth_error(
         &mut self,
@@ -316,42 +308,43 @@ impl Vm {
         }
     }
 
-    /// Run a call that compiled code makes but cannot run natively, in the
-    /// interpreter: a self-recursive call when the native stack is low.
-    /// `native`, when given, is how many calls the compiled code below made
-    /// on the native stack: they took no interpreter frame but count
-    /// against 5.1's call limit, so the frame array is sized as PUC's
-    /// `CallInfo` array would be with them in it. Like a library callback
-    /// it cannot yield. The compiled frames below may
-    /// hold the only reference to a table they made, in a native register
-    /// no collection can see, so none runs until the call is done (the
-    /// code of such a function calls nothing but itself).
+    /// Run in the interpreter the self call compiled `cl` makes at level
+    /// `depth` with its frame at `base`, when too little native stack is
+    /// left: placed where PUC has it, the frame accounted as any call's,
+    /// the compiled levels below counted. Like a library callback it cannot
+    /// yield. Unless the levels are `bare`, they may hold the only
+    /// reference to a table in a native register no collection can see,
+    /// so none runs until the call is done.
     #[doc(hidden)]
     pub fn jit_call_interpreted(
         &mut self,
         cl: crate::runtime::Gc<crate::runtime::LuaClosure>,
         args: &[Value],
-        native: Option<u32>,
+        base: u32,
+        depth: u32,
+        bare: bool,
     ) -> Result<Vec<Value>, LuaError> {
         let native_before = self.g.frames_native;
-        if let Some(n) = native
-            && self.frame_cap != u32::MAX
-        {
-            self.g.frames_native += n;
-            // the array as PUC would have it: doubled whenever it filled,
-            // the native frames included (`grow_frames`); the budget kept
-            // the doubling under the limit
-            while self.frames_in_use() > self.g.frame_size {
-                self.resize_frames_51(self.g.frame_size * 2);
-            }
+        self.g.frames_native = self.jit.levels_base + depth;
+        let func_slot = base - 1;
+        let top = base + args.len() as u32;
+        self.grow_stack(top as usize)?;
+        if bare {
+            // the levels' slots hold numbers in PUC's stack
+            self.stack[self.jit.levels_slot as usize..func_slot as usize].fill(Value::Nil);
         }
+        self.stack[func_slot as usize] = Value::Closure(cl);
+        self.stack[base as usize..top as usize].copy_from_slice(args);
+        self.top = top;
         let stopped = self.heap.gc_is_stopped();
-        self.heap.gc_set_stopped(true);
+        if !bare {
+            self.heap.gc_set_stopped(true);
+        }
         // the method JIT would hand this very call straight back
         let jit = self.jit.enabled;
         self.set_jit_flag(false);
         self.nny += 1;
-        let r = self.call_value_impl(Value::Closure(cl), args, true, None);
+        let r = self.call_at(func_slot, args.len() as u32, false);
         self.nny -= 1;
         self.set_jit_flag(jit);
         self.heap.gc_set_stopped(stopped);

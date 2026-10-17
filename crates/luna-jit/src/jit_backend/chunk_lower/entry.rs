@@ -16,9 +16,6 @@ pub(super) struct EntryChecks {
 pub(super) struct RingSpec {
     /// `luna_jit_helpers::self_call_desc` of the self calls
     pub(super) desc: i64,
-    /// the dialect counts calls against a depth limit (5.1, and 5.2,
-    /// whose budget is unbounded, compiled alike)
-    pub(super) counted: bool,
     /// copies of the body in the ring: levels between two checks
     pub(super) copies: u32,
 }
@@ -119,6 +116,15 @@ pub(super) fn define_checked_entry<M: Module>(
         bcx.ins().set_pinned_reg(ctx_addr);
     }
     let callee_ref = module.declare_func_in_func(callee, bcx.func);
+    let mut args = args;
+    if let Some(ctx_addr) = saved_pinned.map(|_| bcx.ins().get_pinned_reg(types::I64)) {
+        // level 0: the base the call was made at, depth 0
+        let base = bcx
+            .ins()
+            .load(types::I64, MemFlagsData::trusted(), ctx_addr, 32);
+        args.push(base);
+        args.push(bcx.ins().iconst(types::I64, 0));
+    }
     let call = bcx.ins().call(callee_ref, &args);
     let r = bcx.inst_results(call)[0];
     if let Some(saved) = saved_pinned {
@@ -144,9 +150,8 @@ pub(super) fn define_checked_entry<M: Module>(
 
 /// Defines the stub the last copy of a self-recursive body calls (and the
 /// entry calls first): with the native stack below the limit in its
-/// context, or fewer calls left than the ring has copies, it has
-/// `luna_jit_self_call_slow` make the call in the interpreter; otherwise
-/// it takes the ring's calls out of the budget and calls the first copy.
+/// context, it has `luna_jit_self_call_slow` make the call in the
+/// interpreter; otherwise it calls the first copy.
 fn define_stub<M: Module>(
     module: &mut M,
     ctx: &mut cranelift_codegen::Context,
@@ -155,7 +160,7 @@ fn define_stub<M: Module>(
     ring: RingSpec,
 ) -> Option<FuncId> {
     let mut sig = module.make_signature();
-    for _ in 0..num_params {
+    for _ in 0..num_params + 2 {
         sig.params.push(AbiParam::new(types::I64));
     }
     sig.returns.push(AbiParam::new(types::I64));
@@ -163,7 +168,7 @@ fn define_stub<M: Module>(
         .declare_function("luna_jit_chunk_stub", Linkage::Local, &sig)
         .ok()?;
     let mut slow_sig = module.make_signature();
-    for _ in 0..7 {
+    for _ in 0..8 {
         slow_sig.params.push(AbiParam::new(types::I64));
     }
     slow_sig.returns.push(AbiParam::new(types::I64));
@@ -185,42 +190,22 @@ fn define_stub<M: Module>(
     let ctx_addr = bcx.ins().get_pinned_reg(types::I64);
     let limit = bcx.ins().load(types::I64, flags, ctx_addr, 0);
     let sp = bcx.ins().get_stack_pointer(types::I64);
-    let mut go_slow = bcx.ins().icmp(IntCC::UnsignedLessThan, sp, limit);
-    let copies = i64::from(ring.copies);
-    let left = ring
-        .counted
-        .then(|| bcx.ins().load(types::I64, flags, ctx_addr, 16));
-    if let Some(left) = left {
-        let spent = bcx
-            .ins()
-            .icmp_imm_s(IntCC::SignedLessThanOrEqual, left, copies);
-        go_slow = bcx.ins().bor(go_slow, spent);
-    }
+    let go_slow = bcx.ins().icmp(IntCC::UnsignedLessThan, sp, limit);
     bcx.ins().brif(go_slow, slow, &[], fast, &[]);
 
     bcx.switch_to_block(fast);
-    if let Some(left) = left {
-        let fewer = bcx.ins().iadd_imm_s(left, -copies);
-        bcx.ins().store(flags, fewer, ctx_addr, 16);
-    }
     let body_ref = module.declare_func_in_func(body_id, bcx.func);
     let call = bcx.ins().call(body_ref, &args);
     let r = bcx.inst_results(call)[0];
-    if let Some(left) = left {
-        bcx.ins().store(flags, left, ctx_addr, 16);
-    }
     bcx.ins().return_(&[r]);
 
     bcx.switch_to_block(slow);
     let slow_ref = module.declare_func_in_func(slow_id, bcx.func);
     let desc = bcx.ins().iconst(types::I64, ring.desc);
-    let left = left.unwrap_or_else(|| {
-        bcx.ins()
-            .iconst(types::I64, luna_jit_helpers::SELF_CALL_UNCOUNTED)
-    });
-    let mut slow_args = vec![ctx_addr, desc, left];
-    slow_args.extend_from_slice(&args);
-    slow_args.resize_with(7, || bcx.ins().iconst(types::I64, 0));
+    let (lua_args, level) = args.split_at(num_params);
+    let mut slow_args = vec![ctx_addr, desc, level[0], level[1]];
+    slow_args.extend_from_slice(lua_args);
+    slow_args.resize_with(8, || bcx.ins().iconst(types::I64, 0));
     let call = bcx.ins().call(slow_ref, &slow_args);
     let r = bcx.inst_results(call)[0];
     bcx.ins().return_(&[r]);
@@ -232,4 +217,51 @@ fn define_stub<M: Module>(
     module.clear_context(ctx);
     chunk_share::note_ring(body_id, stub_id, ring.copies);
     Some(stub_id)
+}
+
+/// A self-recursive body's level, at `base` and `depth`, counted when it
+/// reaches the limits in the context (`luna_jit_self_level`); the body
+/// returns at once when that fails. Leaves the builder in the block that
+/// goes on.
+pub(super) fn count_level<M: Module>(
+    module: &mut M,
+    bcx: &mut FunctionBuilder<'_>,
+    desc: i64,
+    base: Value,
+    depth: Value,
+) -> Option<()> {
+    let mut sig = module.make_signature();
+    for _ in 0..4 {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    let level_id = module
+        .declare_function("luna_jit_self_level", Linkage::Import, &sig)
+        .ok()?;
+    let flags = MemFlagsData::trusted();
+    let ctx_addr = bcx.ins().get_pinned_reg(types::I64);
+    let base_limit = bcx.ins().load(types::I64, flags, ctx_addr, 16);
+    let depth_limit = bcx.ins().load(types::I64, flags, ctx_addr, 24);
+    let deep = bcx.ins().icmp(IntCC::SignedGreaterThan, depth, depth_limit);
+    let high = bcx
+        .ins()
+        .icmp(IntCC::SignedGreaterThanOrEqual, base, base_limit);
+    let cross = bcx.ins().bor(deep, high);
+    let cold = bcx.create_block();
+    let go_on = bcx.create_block();
+    let failed = bcx.create_block();
+    bcx.set_cold_block(cold);
+    bcx.set_cold_block(failed);
+    bcx.ins().brif(cross, cold, &[], go_on, &[]);
+    bcx.switch_to_block(cold);
+    let level_ref = module.declare_func_in_func(level_id, bcx.func);
+    let desc = bcx.ins().iconst(types::I64, desc);
+    let call = bcx.ins().call(level_ref, &[ctx_addr, desc, base, depth]);
+    let r = bcx.inst_results(call)[0];
+    bcx.ins().brif(r, failed, &[], go_on, &[]);
+    bcx.switch_to_block(failed);
+    let zero = bcx.ins().iconst(types::I64, 0);
+    bcx.ins().return_(&[zero]);
+    bcx.switch_to_block(go_on);
+    Some(())
 }

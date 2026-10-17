@@ -341,14 +341,14 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
             let v = self.load_reg(a + off, "call_arg")?;
             arg_vals.push(v.into());
         }
-        let v = self.guarded_self_call(&arg_vals, "self_call")?;
+        let v = self.guarded_self_call(&arg_vals, a, false, "self_call")?;
         let slot = self.reg_slot_ptr(a, "call_dst")?;
         builder.build_store(slot, v).ok()?;
         // A call below that failed (the context's flag) or parked a deopt
         // makes the dispatcher drop this call's result. The body has no
         // effect but its result, so without a loop that a dummy result
         // could keep going it may finish: its self calls are bounded by
-        // the budget and the stack. Without the checks LLVM can turn the
+        // the stack. Without the checks LLVM can turn the
         // recursion into a loop (`return f(n - 1) + n`).
         if !self.has_loop {
             return Some(());
@@ -378,7 +378,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
             let v = self.load_reg(a + off, "tail_arg")?;
             arg_vals.push(v.into());
         }
-        let v = self.guarded_self_call(&arg_vals, "tail_call")?;
+        let v = self.guarded_self_call(&arg_vals, a, true, "tail_call")?;
         // Return the tail call result directly — no regs[A] store.
         builder.build_return(Some(&v)).ok()?;
         Some(())
@@ -422,22 +422,41 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         Some(())
     }
 
-    /// A self call: the body itself, with one call fewer left. The body
-    /// checks on entry whether it may run natively (`emit_self_guard`), so
-    /// the call is a plain call LLVM can turn into a loop.
+    /// A self call: the body itself, at the level above this one's
+    /// register `a`. The body checks on entry whether it may run natively
+    /// and counts its level when it must (`emit_self_guard`), so the call
+    /// is a plain call LLVM can turn into a loop. A tail call reuses this
+    /// level; PUC places the callee above it first, which is counted here
+    /// (`luna_jit_self_level` with [`SELF_LEVEL_TAIL`]).
     fn guarded_self_call(
         &self,
         args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
+        a: u32,
+        tail: bool,
         name: &str,
     ) -> Option<inkwell::values::IntValue<'ctx>> {
         let builder = self.builder;
-        let left = self.function.get_nth_param(2)?.into_int_value();
-        let one = self.i64_type.const_int(1, false);
-        let fewer = builder.build_int_sub(left, one, "fewer").ok()?;
+        let i64t = self.i64_type;
+        let base = self.function.get_nth_param(2)?.into_int_value();
+        let depth = self.function.get_nth_param(3)?.into_int_value();
+        let up = builder
+            .build_int_add(base, i64t.const_int(u64::from(a) + 1, false), "up_base")
+            .ok()?;
+        let deeper = builder
+            .build_int_add(depth, i64t.const_int(1, false), "up_depth")
+            .ok()?;
+        let (base, depth) = if tail {
+            let desc = self.self_call_desc | luna_jit_helpers::SELF_LEVEL_TAIL;
+            self.count_level(up, deeper, desc, name)?;
+            (base, depth)
+        } else {
+            (up, deeper)
+        };
         let mut body_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = vec![
             self.function.get_nth_param(0)?.into(),
             self.function.get_nth_param(1)?.into(),
-            fewer.into(),
+            base.into(),
+            depth.into(),
         ];
         body_args.extend_from_slice(args);
         let call = builder.build_call(self.function, &body_args, name).ok()?;
@@ -448,17 +467,75 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         }
     }
 
+    /// The level at `base` and `depth` counted when it reaches the limits
+    /// in the context (`luna_jit_self_level`); return 0 when that fails.
+    fn count_level(
+        &self,
+        base: inkwell::values::IntValue<'ctx>,
+        depth: inkwell::values::IntValue<'ctx>,
+        desc: i64,
+        name: &str,
+    ) -> Option<()> {
+        let builder = self.builder;
+        let i64t = self.i64_type;
+        let base_limit = self.ctx_word(2, "base_limit")?;
+        let depth_limit = self.ctx_word(3, "depth_limit")?;
+        let high = builder
+            .build_int_compare(inkwell::IntPredicate::SGE, base, base_limit, "high")
+            .ok()?;
+        let deep = builder
+            .build_int_compare(inkwell::IntPredicate::SGT, depth, depth_limit, "deep")
+            .ok()?;
+        let cross = builder.build_or(high, deep, "cross").ok()?;
+        let count_bb = self
+            .ctx
+            .append_basic_block(self.function, &format!("{name}_level"));
+        let go_bb = self
+            .ctx
+            .append_basic_block(self.function, &format!("{name}_level_go"));
+        builder
+            .build_conditional_branch(cross, count_bb, go_bb)
+            .ok()?;
+        builder.position_at_end(count_bb);
+        let level_fn = self.helpers.get("luna_jit_self_level").copied()?;
+        let ctx_arg = self.function.get_nth_param(0)?.into_int_value();
+        let r = builder
+            .build_call(
+                level_fn,
+                &[
+                    ctx_arg.into(),
+                    i64t.const_int(desc as u64, false).into(),
+                    base.into(),
+                    depth.into(),
+                ],
+                "level",
+            )
+            .ok()?;
+        let r = match r.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
+            inkwell::values::ValueKind::Instruction(_) => return None,
+        };
+        let ok = builder
+            .build_int_compare(inkwell::IntPredicate::EQ, r, i64t.const_zero(), "level_ok")
+            .ok()?;
+        self.return_if_not(ok, &format!("{name}_level"))?;
+        builder.build_unconditional_branch(go_bb).ok()?;
+        builder.position_at_end(go_bb);
+        Some(())
+    }
+
     /// At the body's start, when it was entered by a self call: with the
-    /// native stack below the context's limit, or no calls left in the
-    /// budget, have `luna_jit_self_call_slow` make this call instead (in
-    /// the interpreter, or raising "stack overflow"), as the Cranelift
-    /// tier's stub does, and return its result.
+    /// native stack below the context's limit, have
+    /// `luna_jit_self_call_slow` make this call instead (in the
+    /// interpreter), as the Cranelift tier's stub does, and return its
+    /// result; otherwise count the level when it must be.
     pub(super) fn emit_self_guard(&self, num_params: u32) -> Option<()> {
         let builder = self.builder;
         let i64t = self.i64_type;
         let ctx_arg = self.function.get_nth_param(0)?.into_int_value();
         let limit = self.function.get_nth_param(1)?.into_int_value();
-        let left = self.function.get_nth_param(2)?.into_int_value();
+        let base = self.function.get_nth_param(2)?.into_int_value();
+        let depth = self.function.get_nth_param(3)?.into_int_value();
         // x86_64 or aarch64, the architectures `lib.rs` admits
         let sp_name = if cfg!(target_arch = "x86_64") {
             "rsp"
@@ -475,18 +552,9 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
             inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
             inkwell::values::ValueKind::Instruction(_) => return None,
         };
-        let low = builder
+        let slow = builder
             .build_int_compare(inkwell::IntPredicate::ULT, sp, limit, "stack_low")
             .ok()?;
-        let spent = builder
-            .build_int_compare(
-                inkwell::IntPredicate::SLE,
-                left,
-                i64t.const_int(1, false),
-                "calls_spent",
-            )
-            .ok()?;
-        let slow = builder.build_or(low, spent, "go_slow").ok()?;
         let slow_bb = self.ctx.append_basic_block(self.function, "self_slow");
         let go_bb = self.ctx.append_basic_block(self.function, "self_native");
         builder
@@ -497,11 +565,11 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         let desc = i64t.const_int(self.self_call_desc as u64, false);
         let zero = i64t.const_zero();
         let mut slow_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
-            vec![ctx_arg.into(), desc.into(), left.into()];
+            vec![ctx_arg.into(), desc.into(), base.into(), depth.into()];
         for i in 0..num_params {
-            slow_args.push(self.function.get_nth_param(3 + i)?.into());
+            slow_args.push(self.function.get_nth_param(4 + i)?.into());
         }
-        slow_args.resize(7, zero.into());
+        slow_args.resize(8, zero.into());
         let r = builder
             .build_call(slow_fn, &slow_args, "self_interp")
             .ok()?;
@@ -511,6 +579,6 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         };
         builder.build_return(Some(&r)).ok()?;
         builder.position_at_end(go_bb);
-        Some(())
+        self.count_level(base, depth, self.self_call_desc, "entry")
     }
 }

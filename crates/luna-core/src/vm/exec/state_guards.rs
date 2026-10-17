@@ -55,6 +55,9 @@ pub(crate) struct CallGuards {
     /// interpreter frames, which take no frame but count against 5.1's
     /// call limit
     pub(crate) frames_native: u32,
+    /// the stack the deepest of those calls reserves (its base plus its
+    /// frame's size), what PUC's `stackinuse` sees of them; 0 with none
+    pub(crate) jit_top: u32,
     /// frames the host holds below the main thread's (`host_entry_layout`)
     pub(crate) host_frames: u32,
     /// the `ci->top` of the host's own C function below them (`pmain`'s),
