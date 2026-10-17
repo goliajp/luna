@@ -56,7 +56,9 @@ impl Vm {
                 off: exit.map_or(0, |e| ct.exit_frame_offset(e as usize)),
             };
         }
-        if !ct.has_any_side_wired.get() {
+        // an exit for a collection check runs no side trace before the
+        // check: the check is the op's, in the frame the exit restores
+        if !ct.has_any_side_wired.get() || self.jit.gc_exit.is_some() {
             return parent_only;
         }
         // The side trace wired to the exit taken runs here rather than
