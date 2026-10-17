@@ -47,9 +47,16 @@ impl LuaClosure {
 }
 
 impl NativeClosure {
+    /// The upvalues PUC's function has; luna's others with luna's own
+    /// objects.
     pub(crate) fn trace(&self, m: &mut Marker) {
-        for &v in self.upvals.iter() {
-            m.value(v);
+        let puc = crate::runtime::heap::native_puc_upvals(self);
+        for (i, &v) in self.upvals.iter().enumerate() {
+            if i < puc {
+                m.value(v);
+            } else {
+                m.quiet_value(v);
+            }
         }
     }
 }

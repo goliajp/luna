@@ -5,7 +5,7 @@ use crate::runtime::table::Dialect;
 
 #[path = "gc_work.rs"]
 mod work;
-pub(super) use work::{array_bytes, hash_bytes, objsize, stack_bytes, thread_bytes};
+pub(super) use work::{array_bytes, hash_bytes, native_upvals, objsize, stack_bytes, thread_bytes};
 
 impl Heap {
     /// Number of GC-managed objects currently linked into the heap (live + not

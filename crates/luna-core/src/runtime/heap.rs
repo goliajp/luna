@@ -91,7 +91,8 @@ pub(crate) fn header_is_marked<T: GcObject>(g: Gc<T>) -> bool {
 mod header;
 pub use header::ObjTag;
 pub(crate) use header::{
-    AUX_OFFSET, EXTERNAL, READONLY_AUX, RO_CLS, SLAB, SLOW, STANDS, SUB_OFFSET, UNCOUNTED, UNLISTED,
+    AUX_OFFSET, EXTERNAL, LUNA_ONLY, READONLY_AUX, RO_CLS, SLAB, SLOW, STANDS, SUB_OFFSET,
+    UNCOUNTED, UNLISTED,
 };
 
 #[path = "gc_ptr.rs"]
@@ -115,6 +116,7 @@ enum GcPhase {
 /// from `gc_start_propagate` to `gc_finish_atomic`); the gray queue is in
 /// `Heap.gray` so write barriers push without going through the Option.
 struct PropagateState {
+    quiet: Vec<*mut GcHeader>,
     weak: Vec<*mut Table>,
     ephemeron: Vec<*mut Table>,
     cached_protos: Vec<*mut Proto>,
@@ -309,7 +311,7 @@ mod pace;
 mod strt;
 #[path = "heap_sweep.rs"]
 mod sweep;
-pub(crate) use self::mark::Marker;
+pub(crate) use self::mark::{Marker, native_puc_upvals};
 use self::mark::{blacken, drain_marker, survived_mark, weak_key_alive};
 
 #[cfg(feature = "gc-verify")]

@@ -20,6 +20,7 @@ impl Heap {
         // what a back barrier sent there during the last sweep is white now
         self.grayagain = mark::GrayStack::default();
         self.propagate = Some(PropagateState {
+            quiet: Vec::new(),
             weak: Vec::new(),
             ephemeron: Vec::new(),
             cached_protos: Vec::new(),
@@ -107,24 +108,36 @@ impl Heap {
         let mut work = self.drain_work(&mut m, run);
         self.regray_again(&mut m);
         work += self.drain_work(&mut m, run);
+        m.drain_quiet();
         // a thread stays gray while marking (`grayagain`): `atomic`
         // traverses each one marked again
         if let Some(run) = run {
             let mut seen_run = false;
-            for &co in self.threads.iter() {
+            for i in 0..self.threads.len() {
+                let co = self.threads[i];
                 let h = co.as_ptr() as *mut GcHeader;
                 seen_run |= h == run.h;
                 // SAFETY: a listed thread is allocated until the sweep
                 unsafe {
                     if !is_white((*h).flags) {
-                        work += self.object_work(h, run);
+                        let w = self.object_work(h, run);
+                        #[cfg(feature = "gc-trace")]
+                        self.trace_prop(h, w, run);
+                        work += w;
                     }
                 }
             }
             // the main thread, luna's own object, is on no list
             if !seen_run && !run.h.is_null() {
                 // SAFETY: the running thread is allocated
-                work += unsafe { self.object_work(run.h, run) };
+                // SAFETY: as above
+                let w = unsafe { self.object_work(run.h, run) };
+                #[cfg(feature = "gc-trace")]
+                // SAFETY: as above
+                unsafe {
+                    self.trace_prop(run.h, w, run)
+                };
+                work += w;
             }
         }
         // pre-atomic ephemeron convergence
@@ -175,7 +188,7 @@ impl Heap {
 
     /// Drain `m`, with the work PUC counts for each object when `run`
     /// names the running thread.
-    fn drain_work(&self, m: &mut Marker, run: Option<Running>) -> i64 {
+    fn drain_work(&mut self, m: &mut Marker, run: Option<Running>) -> i64 {
         let Some(run) = run else {
             drain_marker(m);
             return 0;
@@ -186,7 +199,10 @@ impl Heap {
             // SAFETY: as in `propagate_work`
             unsafe {
                 blacken(h, m);
-                work += self.object_work(h, run) + m.leaf_bytes;
+                let w = self.object_work(h, run) + m.leaf_bytes;
+                #[cfg(feature = "gc-trace")]
+                self.trace_prop(h, w, run);
+                work += w;
             }
         }
         work
@@ -319,30 +335,7 @@ impl Heap {
                 blacken(h, &mut m);
                 let w = self.object_work(h, run) + m.leaf_bytes;
                 #[cfg(feature = "gc-trace")]
-                if self.trace.prop {
-                    let (a, n) = match (*h).tag {
-                        ObjTag::Table => {
-                            let t = &*(h as *const Table);
-                            (t.asize as usize, t.node_count())
-                        }
-                        ObjTag::Coro if h == run.h => (run.size as usize, run.ci as usize),
-                        ObjTag::Coro => {
-                            let c = &*(h as *const crate::runtime::Coro);
-                            (c.stack_size as usize, c.ci_alloc as usize)
-                        }
-                        _ => (0, 0),
-                    };
-                    let mut k = String::from("-");
-                    if (*h).tag == ObjTag::Table {
-                        let t = &*(h as *const Table);
-                        if let Some(s) = t.first_str_key() {
-                            k = String::from_utf8_lossy(s.as_bytes()).into_owned();
-                        }
-                    }
-                    self.trace
-                        .line(format_args!("p {} {w} {a} {n} {k}", (*h).tag as u8));
-                }
-
+                self.trace_prop(h, w, run);
                 *remaining -= w;
             }
             // a thread whose values the VM holds: the VM marks them next
@@ -356,6 +349,51 @@ impl Heap {
         }
         self.stash_marker(m);
         out
+    }
+
+    /// `R38_PROP`: the object `h` traversed with work `w`.
+    #[cfg(feature = "gc-trace")]
+    pub(super) unsafe fn trace_prop(&mut self, h: *mut GcHeader, w: i64, run: Running) {
+        // SAFETY: the caller's contract: `h` heads an allocated object
+        unsafe {
+            if !self.trace.prop {
+                return;
+            }
+            {
+                let (a, n) = match (*h).tag {
+                    ObjTag::Table => {
+                        let t = &*(h as *const Table);
+                        (t.asize as usize, t.node_count())
+                    }
+                    ObjTag::Coro if h == run.h => (run.size as usize, run.ci as usize),
+                    ObjTag::Coro => {
+                        let c = &*(h as *const crate::runtime::Coro);
+                        (c.stack_size as usize, c.ci_alloc as usize)
+                    }
+                    _ => (0, 0),
+                };
+                let mut k = String::from("-");
+                if (*h).tag == ObjTag::Table {
+                    let t = &*(h as *const Table);
+                    if let Some(s) = t.first_str_key() {
+                        k = String::from_utf8_lossy(s.as_bytes()).into_owned();
+                    }
+                } else if (*h).tag == ObjTag::Native {
+                    let n = &*(h as *const crate::runtime::NativeClosure);
+                    k = format!("{:p}", n.f as *const ());
+                } else if (*h).tag == ObjTag::Userdata {
+                    let u = &*(h as *const crate::runtime::Userdata);
+                    let kind = match &u.payload {
+                        crate::runtime::userdata::UserdataPayload::File(_) => "file",
+                        crate::runtime::userdata::UserdataPayload::Empty => "empty",
+                        _ => "host",
+                    };
+                    k = format!("{kind}/{}/{}", u.puc_size, is_uncounted(h));
+                }
+                let tag = (*h).tag as u8;
+                self.trace.line(format_args!("p {tag} {w} {a} {n} {k}"));
+            }
+        }
     }
 
     /// A sweep with nothing dead, as 5.5's `minor2inc` starts one: the

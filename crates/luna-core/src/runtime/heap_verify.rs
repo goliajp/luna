@@ -194,6 +194,8 @@ impl Heap {
             leaf_hdr: 0,
             leaf_bytes: 0,
             sizer: None,
+            quiet: Vec::new(),
+            quiet_mode: false,
             verify: None,
         };
         let mut cur = self.all;
