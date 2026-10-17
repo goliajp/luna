@@ -196,7 +196,8 @@ impl Heap {
 
     /// Whether the sweep counts the object behind `h`: one of PUC's on the
     /// list PUC sweeps, not one with a finalizer pending (but in 5.1, whose
-    /// userdata stay on it, as does its main thread, luna's own object).
+    /// userdata stay on it, as does its main thread, and whose library
+    /// functions and standard files luna made without counting are PUC's).
     ///
     /// # Safety
     /// `h` heads an allocated object of this heap.
@@ -206,7 +207,20 @@ impl Heap {
         unsafe {
             let (f, sub, cls) = ((*h).flags, (*h).sub, (*h).cls);
             if self.table_dialect == Dialect::L51 {
-                cls & UNLISTED == 0 && (sub & UNCOUNTED == 0 || (*h).tag == ObjTag::Coro)
+                let own = match (*h).tag {
+                    ObjTag::Coro => false,
+                    ObjTag::Native => cls & LUNA_ONLY != 0,
+                    // the standard files, made without counting
+                    ObjTag::Userdata => {
+                        sub & UNCOUNTED != 0
+                            && !matches!(
+                                (*(h as *const Userdata)).payload,
+                                UserdataPayload::File(_)
+                            )
+                    }
+                    _ => sub & UNCOUNTED != 0,
+                };
+                cls & UNLISTED == 0 && !own
             } else {
                 (f & FIN) | (sub & UNCOUNTED) | (cls & UNLISTED) == 0
             }
@@ -224,9 +238,16 @@ impl Heap {
         // SAFETY: the caller's contract
         unsafe {
             let d51 = self.table_dialect == Dialect::L51;
-            if is_uncounted(h) && !(d51 && (*h).tag == ObjTag::Coro)
-                || (*h).flags & FIN != 0 && !d51
-            {
+            let own51 = match (*h).tag {
+                ObjTag::Coro => false,
+                ObjTag::Native => (*h).cls & LUNA_ONLY != 0,
+                ObjTag::Userdata => {
+                    is_uncounted(h)
+                        && !matches!((*(h as *const Userdata)).payload, UserdataPayload::File(_))
+                }
+                _ => is_uncounted(h),
+            };
+            if (if d51 { own51 } else { is_uncounted(h) }) || (*h).flags & FIN != 0 && !d51 {
                 return false;
             }
             match (*h).tag {
