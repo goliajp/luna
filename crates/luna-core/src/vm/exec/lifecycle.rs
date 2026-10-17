@@ -33,8 +33,7 @@ impl Vm {
         if self.current.is_none() {
             let _ = self.close_slots(0, None);
         }
-        self.heap.queue_all_finalizers();
-        self.run_finalizers();
+        self.run_finalizers_closing();
     }
 
     /// Build the raw `Vm` struct without main coroutine / RNG seed / library
@@ -361,8 +360,7 @@ impl Drop for Vm {
         // the heap frees them (PUC separatetobefnz(g,1) + callallpending). A
         // single pass — objects created by a closing finalizer are not
         // re-finalized (they go to the heap's free list directly).
-        self.heap.queue_all_finalizers();
-        self.run_finalizers();
+        self.run_finalizers_closing();
         let id = self.jit_owner_id;
         // SAFETY: the finalizers were the last Lua code this Vm runs, and
         // its functions (the only holders of entry points compiled for it)

@@ -20,7 +20,7 @@ pub(crate) const ERROR_STACK: u32 = MAX_STACK + 200;
 /// PUC `EXTRA_STACK`.
 const EXTRA: u32 = 5;
 /// PUC `BASIC_STACK_SIZE` (`2 * LUA_MINSTACK`).
-const BASIC: u32 = 40;
+pub(crate) const BASIC: u32 = 40;
 /// PUC `LUA_MINSTACK`.
 pub(crate) const MIN_STACK: u32 = 20;
 /// PUC 5.1 `LUAI_MAXCSTACK`: what `lua_checkstack` grants a C function.
