@@ -19,6 +19,7 @@ mod cli_console_ctrl_z;
 mod cli_console_screen;
 mod cli_environment;
 mod cli_errors;
+mod cli_exit_flush;
 mod cli_lua_init;
 mod cli_options;
 mod cli_output_order;

@@ -31,8 +31,8 @@ mod stream;
 #[cfg(windows)]
 pub(crate) mod winfs;
 mod write;
-pub(crate) use handle::flush_all;
 use handle::*;
+pub(crate) use handle::{flush_all, flush_all_closing};
 use lines::*;
 pub(crate) use msvc::translate_all;
 use numeral::*;
