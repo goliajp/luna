@@ -55,7 +55,7 @@ fn self_link_on_fib_28_bumps_selflink_yields_to_downrec_close_cause() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_28_SRC, b"=fib28_sub0_pos")
@@ -107,7 +107,7 @@ fn self_link_off_fib_28_does_not_bump_selflink_yields_to_downrec() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(false);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_28_SRC, b"=fib28_stitch_pending_neg")
@@ -151,7 +151,7 @@ fn self_link_on_fib_3_hot_loop_preserves_downrec_restart_and_dispatch() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_3_HOT_LOOP_SRC, b"=fib3_hot_sub0_sanity")

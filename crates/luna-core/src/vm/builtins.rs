@@ -97,6 +97,8 @@ pub(crate) fn try_open_base(vm: &mut Vm) -> Result<(), LuaError> {
         // set (PUC's upvalue `weaktable`): only a userdata carrying one of
         // them counts as a proxy whose metatable may be shared.
         let proxies = vm.alloc_table()?;
+        // PUC's weak table is its own metatable: this one is luna's alone
+        vm.heap.own_table(proxies);
         let weak_k = vm.alloc_table()?;
         let mode_k = vm.str_value(b"__mode")?;
         let mode_v = vm.str_value(b"k")?;

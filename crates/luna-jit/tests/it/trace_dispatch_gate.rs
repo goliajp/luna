@@ -45,7 +45,7 @@ fn flag_stays_clear_when_only_undispatchable_traces_are_cached() {
     // undispatchable, so `get` ends up with a cached trace and no
     // admissible one
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
-    vm.open_base();
+    vm.open_base().expect("open the library");
     let r = run(
         &mut vm,
         b"
@@ -69,7 +69,7 @@ fn flag_is_set_for_a_trace_with_a_downrec_link() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
     let r = run(
         &mut vm,
         b"
@@ -105,7 +105,7 @@ fn flag_is_set_for_an_undispatchable_trace_admitted_by_its_downrec_link() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
     let r = run(
         &mut vm,
         b"
@@ -154,7 +154,7 @@ fn flag_is_set_for_an_undispatchable_trace_admitted_by_its_downrec_link() {
 #[test]
 fn call_head_settles_when_a_call_trace_is_cached() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
-    vm.open_base();
+    vm.open_base().expect("open the library");
     let r = run(
         &mut vm,
         b"

@@ -70,6 +70,7 @@ mod puc_dump;
 mod puc_dump_jumps;
 mod puc_dump_listing;
 mod readonly_tables;
+mod reopen_libs;
 mod rust_coroutine;
 mod rust_debug_hook;
 mod sandbox_builder;

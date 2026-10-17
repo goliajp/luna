@@ -53,7 +53,7 @@ impl LuaUserdata for Counter {
 
 fn main() {
     let mut lua = Lua::new();
-    lua.open_base();
+    lua.open_base().expect("open the library");
 
     // 1. Install the host counter as a Lua global. The trait
     //    metatable is built (once per Vm per T) and auto-installed.

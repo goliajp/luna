@@ -19,7 +19,7 @@ fn enterable(cl: Gc<LuaClosure>) -> (usize, usize) {
 #[test]
 fn undispatchable_trace_is_cached_without_codegen() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
-    vm.open_base();
+    vm.open_base().expect("open the library");
     let before = trace_codegen_count();
     let main = vm
         .load(
@@ -59,7 +59,7 @@ fn downrec_linked_trace_still_gets_code() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
     let before = trace_codegen_count();
     let main = vm
         .load(

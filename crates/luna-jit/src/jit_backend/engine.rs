@@ -200,7 +200,10 @@ impl Engine {
     /// code (as [`crate::new_with_jit`] otherwise).
     pub fn new_vm(&self, version: luna_core::version::LuaVersion) -> luna_core::vm::Vm {
         let mut vm = self.new_minimal_vm(version);
-        vm.open_all_libs();
+        // running out of memory ends the process, as in `Vm::new`
+        if vm.open_all_libs().is_err() {
+            std::alloc::handle_alloc_error(std::alloc::Layout::new::<luna_core::runtime::Value>());
+        }
         vm
     }
 

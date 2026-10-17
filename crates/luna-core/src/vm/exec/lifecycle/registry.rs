@@ -43,11 +43,15 @@ impl Vm {
             let t = Value::Table(self.alloc_table()?);
             self.registry_set(reg, "_LOADLIB", t)?;
         } else {
-            let clibs = Value::Table(self.alloc_table()?);
+            let t = self.alloc_table()?;
+            let clibs = Value::Table(t);
             if v == LuaVersion::Lua53 {
                 self.raw_set(reg, light_key(&CLIBS_KEY), clibs)?;
             } else {
                 self.registry_set(reg, "_CLIBS", clibs)?;
+            }
+            if v != LuaVersion::Lua55 {
+                crate::vm::lib_package::clibs_metatable(self, t)?;
             }
             let preload = field(self, b"preload")?;
             self.registry_set(reg, "_PRELOAD", preload)?;

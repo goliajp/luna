@@ -61,8 +61,8 @@ fn send_vm_is_send() {
 /// asserts identical outcomes after the move.
 fn single_thread_baseline() -> (i64, u64) {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
-    vm.open_base();
-    vm.open_math();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
     // Disable the chunk-compile JIT so the trace JIT is the sole
     // engine that can lift the result; makes the `trace_dispatched_count > 0`
     // assertion below load-bearing rather than masked by the chunk
@@ -118,8 +118,8 @@ fn jit_equipped_vm_crosses_thread_via_send_vm_and_dispatches_trace() {
 
     // Build a JIT-equipped Vm on the main thread; wrap in SendVm.
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
-    vm.open_base();
-    vm.open_math();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     let send = SendVm::from_vm(vm);
@@ -169,8 +169,8 @@ fn jit_equipped_vm_crosses_thread_via_send_vm_and_dispatches_trace() {
 #[test]
 fn trace_compiled_on_thread_a_remains_dispatchable_on_thread_b() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
-    vm.open_base();
-    vm.open_math();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
 
@@ -270,8 +270,8 @@ fn jit_aware_send_vm_ir_walks_cross_thread() {
     let _: Option<&Proto> = None;
 
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
-    vm.open_base();
-    vm.open_math();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
 
@@ -369,8 +369,8 @@ fn perf_parity_single_thread_vs_cross_thread() {
 
     fn fresh_jit_send_vm() -> SendVm {
         let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
-        vm.open_base();
-        vm.open_math();
+        vm.open_base().expect("open the library");
+        vm.open_math().expect("open the library");
         vm.set_jit_enabled(false);
         vm.set_trace_jit_enabled(true);
         SendVm::from_vm(vm)

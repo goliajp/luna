@@ -141,8 +141,8 @@ impl SendVm {
     /// ```ignore
     /// // On thread A: build a JIT-equipped Vm and prepare it.
     /// let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
-    /// vm.open_base();
-    /// vm.open_math();
+    /// vm.open_base().unwrap();
+    /// vm.open_math().unwrap();
     /// // Wrap and ship to a worker thread.
     /// let send = luna_core::vm::SendVm::from_vm(vm);
     /// std::thread::spawn(move || {
@@ -184,28 +184,48 @@ impl SendVm {
 
     /// Install the base library on this `SendVm`. Mirror of
     /// [`Vm::open_base`].
-    pub fn open_base(&self) {
-        self.with_vm_mut(|vm| vm.open_base());
+    ///
+    /// # Errors
+    ///
+    /// As [`Vm::open_base`].
+    pub fn open_base(&self) -> Result<(), LuaError> {
+        self.with_vm_mut(|vm| vm.open_base())
     }
 
     /// Install the math library.
-    pub fn open_math(&self) {
-        self.with_vm_mut(|vm| vm.open_math());
+    ///
+    /// # Errors
+    ///
+    /// As [`Vm::open_math`].
+    pub fn open_math(&self) -> Result<(), LuaError> {
+        self.with_vm_mut(|vm| vm.open_math())
     }
 
     /// Install the string library.
-    pub fn open_string(&self) {
-        self.with_vm_mut(|vm| vm.open_string());
+    ///
+    /// # Errors
+    ///
+    /// As [`Vm::open_string`].
+    pub fn open_string(&self) -> Result<(), LuaError> {
+        self.with_vm_mut(|vm| vm.open_string())
     }
 
     /// Install the table library.
-    pub fn open_table(&self) {
-        self.with_vm_mut(|vm| vm.open_table());
+    ///
+    /// # Errors
+    ///
+    /// As [`Vm::open_table`].
+    pub fn open_table(&self) -> Result<(), LuaError> {
+        self.with_vm_mut(|vm| vm.open_table())
     }
 
     /// Install the coroutine library.
-    pub fn open_coroutine(&self) {
-        self.with_vm_mut(|vm| vm.open_coroutine());
+    ///
+    /// # Errors
+    ///
+    /// As [`Vm::open_coroutine`].
+    pub fn open_coroutine(&self) -> Result<(), LuaError> {
+        self.with_vm_mut(|vm| vm.open_coroutine())
     }
 
     /// Compile and run `src` as an anonymous chunk; return its

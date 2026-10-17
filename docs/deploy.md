@@ -57,7 +57,7 @@ needed for interactive `luna` REPL). Service code wraps `Vm`:
 
 ```rust
 let mut vm = luna_jit::Vm::new(luna_jit::LuaVersion::Lua55);
-vm.open_os_io();  // or omit for sandboxed
+vm.open_os_io().unwrap();  // or omit for sandboxed
 let r: i64 = vm.eval("return 1 + 2").unwrap();
 ```
 

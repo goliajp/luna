@@ -36,7 +36,7 @@ fn count_ops(code: &[Inst], op: Op) -> usize {
 
 fn eval_int(src: &str) -> i64 {
     let mut vm = Vm::new(LuaVersion::Lua55);
-    vm.open_base();
+    vm.open_base().expect("open the library");
     let mut vals = match vm.eval(src) {
         Ok(v) => v,
         Err(e) => panic!("runtime error in {src:?}: {}", vm.error_text(&e)),
@@ -50,7 +50,7 @@ fn eval_int(src: &str) -> i64 {
 
 fn eval_table_get_int(src: &str) -> i64 {
     let mut vm = Vm::new(LuaVersion::Lua55);
-    vm.open_base();
+    vm.open_base().expect("open the library");
     let mut vals = match vm.eval(src) {
         Ok(v) => v,
         Err(e) => panic!("runtime error in {src:?}: {}", vm.error_text(&e)),
@@ -258,7 +258,7 @@ fn eval_int_all(src: &str) -> Vec<i64> {
     .into_iter()
     .map(|v| {
         let mut vm = Vm::new(v);
-        vm.open_base();
+        vm.open_base().expect("open the library");
         let r = vm
             .eval(src)
             .unwrap_or_else(|e| panic!("{v:?}: {}", vm.error_text(&e)));

@@ -110,7 +110,7 @@ pub use hooks::{
     RustHookEvent,
 };
 use jit_tforcall::keep_tfor_vars;
-pub(crate) use lifecycle::{HOOK_KEY, light_key};
+pub(crate) use lifecycle::{CLIBS_KEY, HOOK_KEY, light_key};
 pub use load::{ParsedText, TextLoad};
 pub(crate) use meta::Mm;
 use meta::*;

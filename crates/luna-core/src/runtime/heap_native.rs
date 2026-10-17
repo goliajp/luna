@@ -105,6 +105,12 @@ impl Heap {
         is_async: bool,
     ) -> Result<Gc<NativeClosure>, Oom> {
         let fix = self.fix_natives && upvals.is_empty() && !is_async;
+        if fix
+            && self.puc.libs_opened
+            && let Some(g) = self.light_native(f, builtin)
+        {
+            return Ok(g);
+        }
         let mut hdr = GcHeader::native(upvals);
         hdr.aux = self.take_id();
         let kind = if is_async {
@@ -122,8 +128,15 @@ impl Heap {
             kind,
             builtin,
         })?;
-        // PUC 5.2+ makes a C function without upvalues a light value
-        if nup > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
+        // PUC 5.2+ makes a C function without upvalues a light value, and
+        // its library functions are such functions, whatever upvalues
+        // luna's keep (one with upvalues of PUC's is made by
+        // `try_new_native_puc`)
+        if self.fix_natives {
+            if nup > 0 {
+                acct::set_uncounted(g.as_ptr() as *mut GcHeader, true);
+            }
+        } else if nup > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
             let size = self.sizes.c_closure(nup);
             self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::CClosure, size);
         }
@@ -132,6 +145,26 @@ impl Heap {
             unsafe { self.fix_newest(g.as_ptr() as *mut GcHeader) };
         }
         Ok(g)
+    }
+
+    /// The library function over `f` made before (PUC's light C function
+    /// of `f`: one value however often a library pushes it).
+    fn light_native(&self, f: NativeFn, builtin: Builtin) -> Option<Gc<NativeClosure>> {
+        let mut h = self.fixed;
+        // SAFETY: the links of `fixed` lead to live objects, each read
+        // through its tag's type
+        unsafe {
+            while !h.is_null() {
+                if (*h).tag == ObjTag::Native {
+                    let n = &*(h as *const NativeClosure);
+                    if std::ptr::fn_addr_eq(n.f, f) && n.builtin == builtin && n.upvals.is_empty() {
+                        return Some(Gc::from_ptr(h as *mut NativeClosure));
+                    }
+                }
+                h = (*h).next;
+            }
+        }
+        None
     }
 
     /// A library function made fixed (PUC's light C function) that stands

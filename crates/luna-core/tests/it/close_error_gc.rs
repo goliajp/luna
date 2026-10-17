@@ -14,7 +14,7 @@ use luna_core::vm::Vm;
 fn a_threaded_close_error_survives_a_collection_while_suspended() {
     for v in [LuaVersion::Lua54, LuaVersion::Lua55] {
         let mut vm = Vm::new(v);
-        vm.open_all_libs();
+        vm.open_all_libs().expect("open the library");
         let r = vm
             .eval(
                 r#"

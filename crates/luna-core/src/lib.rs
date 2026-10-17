@@ -36,7 +36,8 @@
 //!    luna-core).
 //! 2. `vm.open_base()` / `open_math()` / `open_string()` /
 //!    `open_table()` / `open_coroutine()` — whitelist only the safe
-//!    subset; skip `os` / `io` / `debug` / `package`.
+//!    subset; skip `os` / `io` / `debug` / `package`. Each returns a
+//!    `Result`: a memory error, or 5.1's "name conflict for module".
 //! 3. `vm.set_bytecode_loading(false)` when running untrusted scripts
 //!    (see caveats below).
 //! 4. `vm.set_instr_budget(Some(N))` + `vm.set_memory_cap(Some(M))`

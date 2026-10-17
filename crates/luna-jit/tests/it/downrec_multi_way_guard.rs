@@ -54,7 +54,7 @@ fn self_link_on_fib_3_hot_loop_lowerer_emits_multi_way_guard() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_3_HOT_LOOP_SRC, b"=fib3_loop_emit")
@@ -105,7 +105,7 @@ fn self_link_on_fib_3_hot_loop_multi_way_guard_inverts_hit_rate() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_3_HOT_LOOP_SRC, b"=fib3_loop_invert")
@@ -168,7 +168,7 @@ fn self_link_off_fib_28_no_multi_way_guard_emit() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(false);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm.load(FIB_28_SRC, b"=fib28_selflink_off").expect("loads");
     let r = vm

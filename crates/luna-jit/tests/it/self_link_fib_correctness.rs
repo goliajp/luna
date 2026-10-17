@@ -38,7 +38,7 @@ fn fib_28_returns_correct_value_with_self_link_enabled() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_SRC, b"=fib28_selflink_on")
@@ -70,7 +70,7 @@ fn fib_28_returns_correct_value_with_self_link_disabled() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(false);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_SRC, b"=fib28_selflink_off")
@@ -103,7 +103,7 @@ fn self_link_on_fib_28_records_safety_pin_dispatch_off_reason() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_SRC, b"=fib28_selflink_on_label")

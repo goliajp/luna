@@ -81,17 +81,16 @@ pub(crate) const UNCOUNTED: u8 = 0x80;
 pub(crate) const EXTERNAL: u8 = 0x40;
 /// in `cls`: PUC does not list the object, whatever its count and finalizer
 pub(crate) const UNLISTED: u8 = 1;
+/// in `cls`: objects of PUC's stand on it (`PucState::stand_ins`)
+pub(crate) const STANDS: u8 = 2;
 /// in `cls`: a read-only table; one shift from SLOW
 pub(crate) const RO_CLS: u8 = SLOW >> 1;
 
-/// The `aux` bit of a table that marks it read-only (`Table::is_readonly`).
-/// A table's other `aux` bits are its absent-metamethod bits, one per event
-/// below this one; the JIT's inline stores test this bit in the byte of
-/// `aux` that holds it.
+/// The `aux` bit of a read-only table (`Table::is_readonly`), above its
+/// absent-metamethod bits; the JIT's inline stores test it in its byte.
 pub(crate) const READONLY_AUX: u32 = 1 << 31;
 
-/// Byte offset of the `aux` word within `GcHeader`, for the JIT's
-/// read-only test.
+/// Offsets in `GcHeader`, for the JIT's read-only test.
 pub(crate) const AUX_OFFSET: usize = std::mem::offset_of!(GcHeader, aux);
 pub(crate) const SUB_OFFSET: usize = std::mem::offset_of!(GcHeader, sub);
 
@@ -104,10 +103,8 @@ fn is_black(flags: u8) -> bool {
     flags & BLACK != 0
 }
 
-/// True when an object header has been reached by marking (gray or black).
-/// `pub(crate)` so other runtime modules (e.g. `Table::refs_contain_unmarked_coro`)
-/// can probe reachability without owning the bit constants. Equivalent to
-/// `isgray(o) || isblack(o)` in PUC.
+/// True when an object header has been reached by marking (gray or black,
+/// PUC `isgray(o) || isblack(o)`), for other runtime modules.
 pub(crate) fn header_is_marked<T: GcObject>(g: Gc<T>) -> bool {
     // SAFETY: `g` is a handle, so its object is allocated (a collect frees only after marking ends), and a `GcObject` starts with its header; only the flag byte is read
     unsafe { !is_white((*g.header()).flags) }
@@ -121,16 +118,12 @@ pub use header::ObjTag;
 mod gc_ptr;
 pub use gc_ptr::{Gc, GcObject};
 
-/// Incremental GC phase.
-///   * `Pause`     — no cycle in progress; all objects current-white.
-///   * `Propagate` — gray queue + propagate-state populated; mutator runs
-///                   alongside the steps. New objects are current-white;
-///                   barriers mark children or send parents to gray again.
-///                   Transitions to `Sweep` via `gc_finish_atomic`.
-///   * `Sweep`     — `all` is swept in place, from after `sweep_prev`.
-///
-/// `mark_all` (the STW path used by `collect_ex`) sequences start_propagate +
-/// drain_all + finish_atomic inline, never crossing a step boundary.
+/// Incremental GC phase: `Pause` (no cycle, all objects current-white),
+/// `Propagate` (the gray queue and propagate state are set; the mutator runs
+/// between steps, new objects current-white, barriers marking children or
+/// sending parents back to gray; `gc_finish_atomic` ends it), `Sweep` (`all`
+/// swept in place from after `sweep_prev`). `mark_all` (the stop-the-world
+/// path) runs all of it inline, never crossing a step boundary.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum GcPhase {
     Pause,
@@ -138,10 +131,9 @@ enum GcPhase {
     Sweep,
 }
 
-/// Cross-step traversal state for the incremental Propagate phase. Owned by
-/// `Heap.propagate` (`Some` between `gc_start_propagate` and `gc_finish_atomic`,
-/// `None` otherwise). The gray queue itself lives in `Heap.gray` so write
-/// barriers can push directly without going through the Option.
+/// Cross-step traversal state of the Propagate phase (`Heap.propagate`, set
+/// from `gc_start_propagate` to `gc_finish_atomic`); the gray queue is in
+/// `Heap.gray` so write barriers push without going through the Option.
 struct PropagateState {
     weak: Vec<*mut Table>,
     ephemeron: Vec<*mut Table>,

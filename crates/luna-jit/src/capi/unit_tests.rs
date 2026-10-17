@@ -215,7 +215,7 @@ fn tables_metatables_and_globals() {
 unsafe fn luaL_openlibs_for_test(l: *mut LuaState) {
     // SAFETY: the caller's contract
     let api = unsafe { Api::new(l) };
-    api.vm.open_all_libs();
+    api.vm.open_all_libs().expect("open the libraries");
 }
 
 #[test]

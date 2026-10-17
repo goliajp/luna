@@ -23,6 +23,24 @@ optimization.
 
 ### Breaking
 
+- `Vm::open_all_libs` and the single-library openers (`open_base`,
+  `open_math`, `open_table`, `open_string`, `open_utf8`, `open_os_io`,
+  `open_debug`, `open_coroutine`, `open_package`, `open_bit32`, and the
+  same methods on `SendVm` and `luna_jit::Lua`) return
+  `Result<(), LuaError>` instead of `()`. They fail on a memory error
+  (which used to end the process) and, in 5.1, with "name conflict for
+  module 'x'" when a library's global holds a value that is not a table
+  and `package.loaded` has no table for it. Opening a library that is
+  open already now does what the dialect's `luaL_openlibs` /
+  `luaL_requiref` does: 5.1 registers new functions into the library
+  table it finds, 5.2 makes the library anew, 5.3 on keep the library
+  `package.loaded` holds and only set its global again. `Vm::new`,
+  `SandboxBuilder::build` and `luna_jit::new_with_jit` still return the
+  Vm itself.
+
+  Migration: add `?` (or `.expect(..)`) to each call, e.g.
+  `vm.open_base()?;` and `vm.open_all_libs()?;`.
+
 - `Coro::stack_extra` (whether the thread's stack was using the room an
   overflow leaves) is replaced by `Coro::stack_size`, the size of the
   thread's stack as PUC counts it (0 for a thread that has not run).

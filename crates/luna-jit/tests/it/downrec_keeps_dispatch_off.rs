@@ -27,7 +27,7 @@ fn downrec_close_keeps_an_earlier_dispatch_off_mark() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
     let cl = vm.load(src, b"=fib_upval").expect("loads");
     let r = vm.call_value(Value::Closure(cl), &[]).expect("runs");
     assert!(matches!(r.get(1), Some(Value::Int(400))), "got {r:?}");

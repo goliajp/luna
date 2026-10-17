@@ -338,8 +338,8 @@ use luna_core::version::LuaVersion;
 use luna_core::vm::SendVm;
 
 let vm = SendVm::new(LuaVersion::Lua55);
-vm.open_base();
-vm.open_math();
+vm.open_base().unwrap();
+vm.open_math().unwrap();
 
 // Move into another thread.
 std::thread::spawn(move || {

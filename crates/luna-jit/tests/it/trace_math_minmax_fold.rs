@@ -25,8 +25,8 @@ use luna_jit::version::LuaVersion;
 fn run_with(src: &str, trace_jit: bool) -> Vec<Value> {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
     vm.set_trace_jit_enabled(trace_jit);
-    vm.open_base();
-    vm.open_math();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
     vm.eval(src).expect("eval")
 }
 
@@ -38,8 +38,8 @@ fn run_with(src: &str, trace_jit: bool) -> Vec<Value> {
 fn token_bucket_dispatches_with_minmax_fold() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
     vm.set_trace_jit_enabled(true);
-    vm.open_base();
-    vm.open_math();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
     let r = vm
         .eval(
             r#"

@@ -67,12 +67,12 @@ constructor `Vm::new_minimal_with_jit(...)` that installs it at construction.
 ```rust
 // luna-core only — interpreter dispatch all the way.
 let mut vm = luna_core::Vm::new_minimal(LuaVersion::Lua55);
-vm.open_base();
+vm.open_base()?;
 vm.eval("return 1 + 2")?;
 
 // luna (interpreter + Cranelift JIT) — hot loops compile.
 let mut vm = luna_jit::Vm::new_minimal_with_jit(LuaVersion::Lua55);
-vm.open_base();
+vm.open_base()?;
 vm.eval("for i = 1, 1e6 do end")?;
 ```
 

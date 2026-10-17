@@ -71,7 +71,7 @@ fn self_link_on_fib_3_hot_loop_dispatcher_classifies_downrec_return() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_3_HOT_LOOP_SRC, b"=fib3_loop")
@@ -142,7 +142,7 @@ fn self_link_on_fib_3_hot_loop_no_infinite_dispatch_cycle() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_3_HOT_LOOP_SRC, b"=fib3_loop_cycle")
@@ -172,7 +172,7 @@ fn self_link_on_fib_3_hot_loop_downrec_trace_lifted_by_multi_way() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(true);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm
         .load(FIB_3_HOT_LOOP_SRC, b"=fib3_loop_pin")
@@ -219,7 +219,7 @@ fn self_link_off_fib_28_no_downrec_dispatch_counters_bump() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     vm.set_self_link_enabled(false);
-    vm.open_base();
+    vm.open_base().expect("open the library");
 
     let cl = vm.load(FIB_28_SRC, b"=fib28_selflink_off").expect("loads");
     let r = vm

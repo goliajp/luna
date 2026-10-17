@@ -20,11 +20,11 @@ fn make_sandbox() -> Vm {
     let mut vm = Vm::new_minimal(LuaVersion::Lua51);
     // Whitelist: base (assert/pcall/type/tostring/pairs/...), math, string,
     // table. NO os/io (no file system, no shell). NO debug. NO package.
-    vm.open_base();
-    vm.open_math();
-    vm.open_string();
-    vm.open_table();
-    vm.open_coroutine();
+    vm.open_base().expect("open the library");
+    vm.open_math().expect("open the library");
+    vm.open_string().expect("open the library");
+    vm.open_table().expect("open the library");
+    vm.open_coroutine().expect("open the library");
     // Sandbox-required gate: bytecode loading off so `load("\27Lua…")`
     // cannot bypass the parser. (An armed instruction budget keeps the JIT's
     // compiled code out by itself.)

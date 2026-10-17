@@ -155,7 +155,7 @@ fn store_from_a_local_keeps_the_previous_assignment_to_it() {
         LuaVersion::Lua55,
     ] {
         let mut vm = Vm::new(v);
-        vm.open_base();
+        vm.open_base().expect("open the library");
         let src = "local b local a = 0 while a < 3 do a = a + 1 b = a end return b";
         let r = vm
             .eval(src)
