@@ -259,8 +259,6 @@ pub struct Heap {
     mem: crate::runtime::mem::MemOwner,
 }
 
-/// Initial auto-GC threshold and floor (PUC GCSTEPSIZE-ish pacing).
-
 impl Heap {
     /// Put a new object on the all-objects list with its born color.
     ///

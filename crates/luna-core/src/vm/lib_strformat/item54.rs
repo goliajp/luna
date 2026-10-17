@@ -67,7 +67,7 @@ pub(super) fn item54(
     let sp = Spec::parse(&fmt[start..p]);
     match conv {
         b'c' => {
-            checkformat(vm, &form, b"-", false)?;
+            checkformat(vm, form, b"-", false)?;
             let c = argcheck::check_integer(vm, a, arg)? as i32;
             cfmt::char(out, &sp, c as u8);
         }
@@ -78,7 +78,7 @@ pub(super) fn item54(
                 b'u' => b"-0",
                 _ => b"-#0",
             };
-            checkformat(vm, &form, flags, true)?;
+            checkformat(vm, form, flags, true)?;
             if let b'd' | b'i' = conv {
                 cfmt::signed(out, &sp, n);
             } else {
@@ -86,18 +86,18 @@ pub(super) fn item54(
             }
         }
         b'a' | b'A' => {
-            checkformat(vm, &form, b"-+#0 ", true)?;
+            checkformat(vm, form, b"-+#0 ", true)?;
             let x = argcheck::check_number(vm, a, arg)?;
             cfmt::float(out, &sp, conv, x);
         }
         b'f' | b'e' | b'E' | b'g' | b'G' => {
             let x = argcheck::check_number(vm, a, arg)?;
-            checkformat(vm, &form, b"-+#0 ", true)?;
+            checkformat(vm, form, b"-+#0 ", true)?;
             cfmt::float(out, &sp, conv, x);
         }
         b'p' => {
             let ptr = topointer(a.get(vm, arg));
-            checkformat(vm, &form, b"-", false)?;
+            checkformat(vm, form, b"-", false)?;
             match ptr {
                 Some(ptr) => cfmt::pointer(out, &sp, ptr),
                 None => cfmt::cstr(out, &sp, b"(null)"),
@@ -130,7 +130,7 @@ pub(super) fn item54(
                     vm.native_push(1);
                     return Err(arg_error(vm, arg + 1, "string contains zeros"));
                 }
-                if let Err(e) = checkformat(vm, &form, b"-", true) {
+                if let Err(e) = checkformat(vm, form, b"-", true) {
                     vm.native_push(1);
                     return Err(e);
                 }
