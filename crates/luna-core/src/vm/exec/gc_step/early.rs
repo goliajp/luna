@@ -3,7 +3,7 @@
 use super::*;
 
 impl Vm {
-    pub(super) fn step_53(&mut self) {
+    pub(super) fn step_53(&mut self) -> Result<(), LuaError> {
         let d = Dialect::L53;
         let s = self.heap.sizes;
         let stepmul = self.gc_params.get(Param::StepMul);
@@ -17,7 +17,7 @@ impl Vm {
                     self.heap.pace.state = St::Atomic;
                 }
             } else {
-                debt -= self.singlestep_53();
+                debt -= self.singlestep_53()?;
             }
             if !(debt > floor && self.heap.pace.state != St::Pause) {
                 break;
@@ -32,13 +32,31 @@ impl Vm {
             self.heap
                 .pace
                 .set_debt(d, bytes, debt_after_52(debt, stepmul));
+            self.run_a_few_finalizers()?;
         }
+        Ok(())
     }
 
-    fn singlestep_53(&mut self) -> i64 {
+    /// 5.3 `runafewfinalizers`: `gcfinnum` of them, twice as many the
+    /// next time while some are left.
+    fn run_a_few_finalizers(&mut self) -> Result<i64, LuaError> {
+        let mut i = 0;
+        while self.heap.has_tobefnz() && i < self.heap.pace.fin_num {
+            self.gc_tm(true)?;
+            i += 1;
+        }
+        self.heap.pace.fin_num = if self.heap.has_tobefnz() {
+            self.heap.pace.fin_num * 2
+        } else {
+            0
+        };
+        Ok(i64::from(i))
+    }
+
+    pub(super) fn singlestep_53(&mut self) -> Result<i64, LuaError> {
         let s = self.heap.sizes;
         let cost = sweepmax_52(&s) * sweepcost_52(&s);
-        match self.heap.pace.state {
+        Ok(match self.heap.pace.state {
             St::Pause => {
                 self.gc_restart();
                 (self.heap.puc.strt_size * s.ptr) as i64
@@ -72,7 +90,7 @@ impl Vm {
                 if sweep_other(&mut self.heap.pace.fin_left, sweepmax_52(&s))
                     && self.heap.pace.fin_left.is_some()
                 {
-                    return cost;
+                    return Ok(cost);
                 }
                 self.heap.pace.state = if finobj {
                     self.heap.pace.fin_left = Some(self.heap.tobefnz_count());
@@ -88,13 +106,19 @@ impl Vm {
                 0
             }
             _ => {
+                // emergency collections run no finalizer (they are full
+                // ones, which never step here)
+                if self.heap.has_tobefnz() {
+                    let n = self.run_a_few_finalizers()?;
+                    return Ok(n * sweepcost_52(&s));
+                }
                 self.heap.pace.state = St::Pause;
                 0
             }
-        }
+        })
     }
 
-    pub(super) fn step_52(&mut self) {
+    pub(super) fn step_52(&mut self) -> Result<(), LuaError> {
         let d = Dialect::L52;
         let s = self.heap.sizes;
         let stepmul = self.gc_params.get(Param::StepMul).max(40);
@@ -127,6 +151,13 @@ impl Vm {
                 .pace
                 .set_debt(d, bytes, debt_after_52(debt, stepmul));
         }
+        // `luaC_forcestep`: a few finalizers, all of them at a pause
+        let mut i = 0;
+        while self.heap.has_tobefnz() && (i < 4 || self.heap.pace.state == St::Pause) {
+            self.gc_tm(true)?;
+            i += 1;
+        }
+        Ok(())
     }
 
     /// 5.2's step that finds no gray object: the atomic step, the
@@ -181,7 +212,7 @@ impl Vm {
         }
     }
 
-    pub(super) fn step_51(&mut self) {
+    pub(super) fn step_51(&mut self) -> Result<(), LuaError> {
         let mut lim = step_limit_51(self.gc_params.get(Param::StepMul));
         let bytes = self.heap.bytes() as i64;
         let p = &mut self.heap.pace;
@@ -193,7 +224,7 @@ impl Vm {
                     self.atomic_51();
                 }
             } else {
-                lim -= self.singlestep_51();
+                lim -= self.singlestep_51()?;
             }
             if self.heap.pace.state == St::Pause || lim <= 0 {
                 break;
@@ -212,6 +243,7 @@ impl Vm {
             let pause = self.gc_params.get(Param::Pause);
             p.set_threshold(threshold_51(p.estimate, pause));
         }
+        Ok(())
     }
 
     /// 5.1's `atomic`, from the step that finds no gray object.
@@ -222,8 +254,8 @@ impl Vm {
         self.heap.pace.strt_swept = 0;
     }
 
-    fn singlestep_51(&mut self) -> i64 {
-        match self.heap.pace.state {
+    pub(super) fn singlestep_51(&mut self) -> Result<i64, LuaError> {
+        Ok(match self.heap.pace.state {
             St::Pause => {
                 self.gc_restart();
                 0
@@ -253,10 +285,18 @@ impl Vm {
                 SWEEPMAX_51 * SWEEPCOST_51
             }
             _ => {
+                if self.heap.has_tobefnz() {
+                    self.gc_tm(true)?;
+                    let p = &mut self.heap.pace;
+                    if p.estimate > FINALIZECOST_51 {
+                        p.estimate -= FINALIZECOST_51;
+                    }
+                    return Ok(FINALIZECOST_51);
+                }
                 self.heap.pace.state = St::Pause;
                 self.heap.pace.dept = 0;
                 0
             }
-        }
+        })
     }
 }

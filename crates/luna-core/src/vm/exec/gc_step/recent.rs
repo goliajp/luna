@@ -3,7 +3,7 @@
 use super::*;
 
 impl Vm {
-    pub(super) fn step_55(&mut self) {
+    pub(super) fn step_55(&mut self) -> Result<(), LuaError> {
         let d = Dialect::L55;
         let stepsize = self.gc_params.apply(Param::StepSize, 100);
         let mut work = self
@@ -19,7 +19,7 @@ impl Vm {
                     work -= 1;
                 }
             } else {
-                let r = self.singlestep_55(fast);
+                let r = self.singlestep_55(fast)?;
                 if r == STEP2PAUSE || (r == ATOMICSTEP && !fast) {
                     break;
                 }
@@ -37,10 +37,11 @@ impl Vm {
             stepsize
         };
         self.heap.pace.set_debt(d, bytes, debt);
+        Ok(())
     }
 
-    fn singlestep_55(&mut self, fast: bool) -> i64 {
-        match self.heap.pace.state {
+    pub(super) fn singlestep_55(&mut self, fast: bool) -> Result<i64, LuaError> {
+        Ok(match self.heap.pace.state {
             St::Pause => {
                 self.gc_restart();
                 1
@@ -48,13 +49,13 @@ impl Vm {
             St::Propagate => {
                 if fast {
                     self.heap.pace.state = St::EnterAtomic;
-                    return 1;
+                    return Ok(1);
                 }
                 let run = self.gc_running();
                 let mut w = 1;
                 if self.heap.propagate_work(&mut w, 0, run) {
                     self.heap.pace.state = St::EnterAtomic;
-                    return 1;
+                    return Ok(1);
                 }
                 1 - w
             }
@@ -63,8 +64,16 @@ impl Vm {
                 self.heap.pace.state = St::SweepAll;
                 ATOMICSTEP
             }
+            St::CallFin => {
+                if self.heap.has_tobefnz() && self.finalizer_has_room(false) {
+                    self.gc_tm(false)?;
+                    return Ok(CWUFIN_55);
+                }
+                self.heap.pace.state = St::Pause;
+                STEP2PAUSE
+            }
             _ => self.sweep_step_55(fast),
-        }
+        })
     }
 
     fn sweep_step_55(&mut self, fast: bool) -> i64 {
@@ -95,15 +104,11 @@ impl Vm {
                 self.heap.pace.state = St::CallFin;
                 SWEEPMAX_55
             }
-            _ => {
-                // the finalizers ran when the cycle found them
-                self.heap.pace.state = St::Pause;
-                STEP2PAUSE
-            }
+            _ => unreachable!("a sweep state"),
         }
     }
 
-    pub(super) fn step_54(&mut self) {
+    pub(super) fn step_54(&mut self) -> Result<(), LuaError> {
         let d = Dialect::L54;
         let s = self.heap.sizes;
         let stepmul = (self.gc_params.get(Param::StepMul)) | 1;
@@ -116,7 +121,7 @@ impl Vm {
                     self.heap.pace.state = St::EnterAtomic;
                 }
             } else {
-                debt -= self.singlestep_54();
+                debt -= self.singlestep_54()?;
             }
             if !(debt > -stepsize && self.heap.pace.state != St::Pause) {
                 break;
@@ -131,10 +136,11 @@ impl Vm {
             let debt = debt_after_54(&s, debt, stepmul);
             self.heap.pace.set_debt(d, bytes, debt);
         }
+        Ok(())
     }
 
-    fn singlestep_54(&mut self) -> i64 {
-        match self.heap.pace.state {
+    pub(super) fn singlestep_54(&mut self) -> Result<i64, LuaError> {
+        Ok(match self.heap.pace.state {
             St::Pause => {
                 self.gc_restart();
                 1
@@ -184,9 +190,17 @@ impl Vm {
                 0
             }
             _ => {
+                if self.heap.has_tobefnz() && self.finalizer_has_room(false) {
+                    let mut n = 0;
+                    while n < FINMAX_54 && self.heap.has_tobefnz() {
+                        self.gc_tm(false)?;
+                        n += 1;
+                    }
+                    return Ok(n * FINALIZECOST_54);
+                }
                 self.heap.pace.state = St::Pause;
                 0
             }
-        }
+        })
     }
 }

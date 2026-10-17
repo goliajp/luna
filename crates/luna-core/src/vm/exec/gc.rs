@@ -89,7 +89,7 @@ impl Vm {
         }
         // everything live is rooted here; what is allocated next is young
         self.heap.safe_point();
-        if !self.heap.gc_due() || self.gc_finalizing {
+        if !self.heap.gc_due() {
             return Ok(());
         }
         // Bare `live_top`, no `max(self.top)` widening: every frame-pop site
@@ -142,37 +142,29 @@ impl Vm {
         self.collector_shrinks_threads();
         self.heap.acct_check_sizes();
         self.forget_dead_errors();
+        // there may be objects to be finalized
+        self.heap.pace.fin_num = 1;
         self.gc_full_pause();
         freed
     }
 
-    /// Run a full collection with the VM's roots, then run any `__gc`
-    /// finalizers the collection scheduled. A no-op (returns 0) when already
-    /// inside a finalizer — the collector is not reentrant (PUC).
+    /// A full collection luna runs on its own (not the program), with the
+    /// finalizers it calls; their errors go nowhere. A no-op (returns 0)
+    /// when already inside a finalizer.
     pub fn collect_garbage(&mut self) -> usize {
-        if self.gc_finalizing {
-            return 0;
-        }
-        #[cfg(feature = "gc-trace")]
-        self.heap.trace.line(format_args!("X"));
-        let mut freed = 0;
-        if !self.heap.no_gc() {
-            self.clear_dead_stack();
-            freed = self.full_collect();
-            #[cfg(feature = "gc-verify")]
-            self.verify_frame_regs_live("collect_garbage");
-            self.run_finalizers();
-        }
-        #[cfg(feature = "gc-trace")]
-        self.trace_full_end();
-        freed
+        let quiet = std::mem::replace(&mut self.fin_quiet, true);
+        let r = self.full_gc();
+        self.fin_quiet = quiet;
+        r.unwrap_or_else(|_| unreachable!("a quiet collection raised"))
     }
 
-    /// PUC 5.1 `collectgarbage` re-raised the first error a `__gc` finalizer
-    /// threw; gc.lua's "errors during collection" probe relies on it. This
-    /// variant runs the same cycle but propagates the captured finalizer
-    /// error to the explicit caller.
+    /// PUC `luaC_fullgc` asked for by the program (`lua_gc`): the error of
+    /// a 5.1–5.3 finalizer it calls is its own.
     pub(crate) fn collect_garbage_propagating(&mut self) -> Result<usize, LuaError> {
+        self.full_gc()
+    }
+
+    fn full_gc(&mut self) -> Result<usize, LuaError> {
         if self.gc_finalizing {
             return Ok(0);
         }
@@ -180,15 +172,15 @@ impl Vm {
         self.heap.trace.line(format_args!("X"));
         let mut freed = 0;
         if !self.heap.no_gc() {
+            // 5.2 calls the pending finalizers before it starts
+            if self.version == LuaVersion::Lua52 {
+                self.call_all_pending(true)?;
+            }
             self.clear_dead_stack();
             freed = self.full_collect();
             #[cfg(feature = "gc-verify")]
-            self.verify_frame_regs_live("collect_garbage_propagating");
-            let r = self.run_finalizers_or_err(true, false);
-            #[cfg(feature = "gc-trace")]
-            self.trace_full_end();
-            r?;
-            return Ok(freed);
+            self.verify_frame_regs_live("collect_garbage");
+            self.full_gc_finalizers()?;
         }
         #[cfg(feature = "gc-trace")]
         self.trace_full_end();

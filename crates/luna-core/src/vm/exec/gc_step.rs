@@ -29,21 +29,19 @@ impl Vm {
         self.name_cache = Default::default();
         #[cfg(feature = "gc-trace")]
         self.trace_step(false);
-        match d {
+        let r = match d {
             Dialect::L51 => self.step_51(),
             Dialect::L52 => self.step_52(),
             Dialect::L53 => self.step_53(),
             Dialect::L54 => self.step_54(),
             Dialect::L55 => self.step_55(),
-        }
+        };
+        self.heap.refresh_gc_limit();
+        // a 5.1–5.3 finalizer's error is thrown out of the step
+        r?;
         #[cfg(feature = "gc-trace")]
         self.trace_step(true);
-        self.heap.refresh_gc_limit();
-        // a finalizer's error a 5.1–5.3 step throws out of the check
-        match self.gc_raise.take() {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     /// PUC `luaC_step` with the collector not running (stopped, or a
@@ -73,29 +71,60 @@ impl Vm {
     /// `setpause` sets.
     pub(crate) fn gc_full_pause(&mut self) {
         let d = self.heap.table_dialect;
-        let bytes = self.heap.bytes();
-        let pause = self.gc_params.get(Param::Pause);
+        let bytes = self.heap.bytes() as i64;
         let p = &mut self.heap.pace;
         p.state = St::Pause;
         p.fin_left = None;
+        if d == Dialect::L51 {
+            p.dept = 0;
+        }
+        if d != Dialect::L55 {
+            p.estimate = bytes;
+        }
+        self.gc_full_repause();
+    }
+
+    /// The pause a full collection sets (`setpause`, 5.1 `setthreshold`)
+    /// from the estimate it left, with the count as it is now: after the
+    /// finalizers it called but 5.2's.
+    pub(crate) fn gc_full_repause(&mut self) {
+        let d = self.heap.table_dialect;
+        let bytes = self.heap.bytes();
+        let pause = self.gc_params.get(Param::Pause);
+        let p = &mut self.heap.pace;
         match d {
-            Dialect::L51 => {
-                p.estimate = bytes as i64;
-                p.dept = 0;
-                p.set_threshold(threshold_51(bytes as i64, pause));
-            }
+            Dialect::L51 => p.set_threshold(threshold_51(p.estimate, pause)),
             Dialect::L55 => {
                 let threshold = self.gc_params.apply(Param::Pause, p.estimate);
-                self.heap
-                    .pace
-                    .set_debt(d, bytes, pause_debt_55(bytes, threshold));
+                p.set_debt(d, bytes, pause_debt_55(bytes, threshold));
             }
             _ => {
-                p.estimate = bytes as i64;
-                p.set_debt(d, bytes, pause_debt(d, bytes, bytes as i64, pause));
+                let e = p.estimate;
+                p.set_debt(d, bytes, pause_debt(d, bytes, e, pause));
             }
         }
         self.heap.refresh_gc_limit();
+    }
+
+    /// A full collection's steps from its finalizers to its pause
+    /// (`luaC_runtilstate(L, bitmask(GCSpause))`); the steps run whether
+    /// or not the collector runs.
+    pub(super) fn gc_steps_to_pause(&mut self) -> Result<(), LuaError> {
+        let d = self.heap.table_dialect;
+        self.heap.pace.state = if d == Dialect::L51 {
+            St::Finalize
+        } else {
+            St::CallFin
+        };
+        while self.heap.pace.state != St::Pause {
+            match d {
+                Dialect::L51 => self.singlestep_51()?,
+                Dialect::L53 => self.singlestep_53()?,
+                Dialect::L54 => self.singlestep_54()?,
+                _ => self.singlestep_55(true)?,
+            };
+        }
+        Ok(())
     }
 
     /// Generational mode entered (`entergen`): the debt before the first
@@ -228,7 +257,6 @@ impl Vm {
             }
         }
     }
-
     /// A step `lua_gc` asks for runs with the collector running: 5.2's
     /// `luaC_forcestep` whatever it is; 5.3 on, `gcrunning` (`gcstp`) set
     /// for it and put back after, unless the step raised.
@@ -246,6 +274,7 @@ impl Vm {
         }
         r
     }
+
     /// The end of a full collection in the trace: 5.5 with its `GCmarked`.
     #[cfg(feature = "gc-trace")]
     pub(crate) fn trace_full_end(&mut self) {
@@ -317,8 +346,8 @@ impl Vm {
         let r = self.heap.gc_finish_atomic_work(Some(run));
         self.collector_shrinks_threads();
         self.forget_dead_errors();
-        // luna runs the finalizers the cycle found at once
-        self.run_finalizers();
+        // there may be objects to be finalized
+        self.heap.pace.fin_num = 1;
         r
     }
 

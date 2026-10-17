@@ -74,6 +74,7 @@ impl Vm {
         }
         self.heap.release_pool();
         self.gc_top = live_top;
+        self.heap.pace.fin_num = 1;
         self.gc_full_pause();
         self.heap.puc.silent = silent;
         true

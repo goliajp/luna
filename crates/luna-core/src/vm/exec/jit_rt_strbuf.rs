@@ -81,7 +81,7 @@ impl Vm {
                 .acct_ghost_ref(crate::runtime::heap::PucKind::LongStr, size);
             self.jit_ghosts().accum = g.ok().map(AccumLast::Long);
         }
-        if self.heap.gc_due() && !self.gc_finalizing {
+        if self.heap.gc_due() {
             self.jit.gc_exit = Some(op_pc);
             return 1;
         }

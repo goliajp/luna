@@ -60,6 +60,7 @@ impl Heap {
             gc_fin_stop: false,
             finalize: crate::runtime::mem::LVec::new(mem.mem()),
             tobefnz: crate::runtime::mem::LVec::new(mem.mem()),
+            tobefnz_head: 0,
             no_ephemeron: false,
             refinalize: true,
             sizes: crate::runtime::puc_size::PucSizes::of(crate::runtime::table::Dialect::L55),

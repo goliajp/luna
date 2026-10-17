@@ -348,9 +348,9 @@ pub struct Vm {
     /// `collectgarbage` gets a no-op (PUC's non-reentrancy: lua_gc returns -1 →
     /// `collectgarbage` yields fail).
     pub(super) gc_finalizing: bool,
-    /// The error a finalizer threw in a 5.1–5.3 automatic step, which PUC
-    /// throws out of the collection check that ran the step.
-    pub(super) gc_raise: Option<LuaError>,
+    /// A collection whose finalizers' errors go nowhere is running (one
+    /// luna starts on its own, not the program).
+    pub(super) fin_quiet: bool,
     /// The error a collection check raised inside a load, which the load
     /// reports (`load_error_value`).
     pub(crate) load_raised: Option<LuaError>,

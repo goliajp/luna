@@ -136,7 +136,7 @@ impl Heap {
                 cur = unsafe { (*cur).next };
             }
         }
-        for &h in self.finalize.iter().chain(&self.tobefnz) {
+        for &h in self.finalize.iter().chain(self.tobefnz_live()) {
             check(h);
         }
     }
