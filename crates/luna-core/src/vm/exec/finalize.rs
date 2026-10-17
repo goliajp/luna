@@ -148,8 +148,8 @@ impl Vm {
     }
 
     /// Call `obj`'s `__gc`. With `propagate`, the error a 5.1–5.3
-    /// finalizer raised comes back as the error the collection raises;
-    /// 5.4+ turn it into a warning.
+    /// finalizer raised comes back as the error the collection raises (5.1
+    /// calls it unprotected); 5.4+ turn it into a warning.
     fn run_one_finalizer(&mut self, obj: Value, propagate: bool) -> Result<(), LuaError> {
         let gc = self.get_mm(obj, Mm::Gc);
         // 5.2/5.3 call only a function (`__gc = true` just marks the object
@@ -189,9 +189,18 @@ impl Vm {
         // returned (print's nested tostring)
         let (len, top) = (self.stack.len(), self.top);
         let at = self.native_top().map(|t| t.max(top));
-        let r = match at {
-            Some(at) => self.call_protected_at(gc, &[obj], at),
-            None => self.call_protected(gc, &[obj]),
+        let r = if propagate && self.version == LuaVersion::Lua51 {
+            // `luaD_call`: an error leaves through the finalizer, under the
+            // message handler that is running; it cannot yield
+            self.nny += 1;
+            let r = self.call_value_impl(gc, &[obj], false, at);
+            self.nny -= 1;
+            r
+        } else {
+            match at {
+                Some(at) => self.call_protected_at(gc, &[obj], at),
+                None => self.call_protected(gc, &[obj]),
+            }
         };
         // the call gives back the slots it took, not the window of a native
         // below it, and leaves the stack and its top as they were (`GCTM`)
