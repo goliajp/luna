@@ -359,6 +359,10 @@ fn pmain(interp: &mut Interp, argv: &[Vec<u8>], args: &LuaArgs) -> bool {
     true
 }
 
+/// The state at the process's exit, kept rather than freed.
+static AT_EXIT: std::sync::atomic::AtomicPtr<Interp> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
 fn main() {
     // the bytes `lua.c`'s `argv` holds: through the ANSI code page on Windows
     let argv: Vec<Vec<u8>> = std::env::args_os()
@@ -391,9 +395,17 @@ fn main() {
         print_profile(&interp.vm);
     }
     counters::append(&interp.vm);
-    // lua.c closes the state before it exits: open files write out buffers
+    // lua.c closes the state before it exits: to-be-closed variables are
+    // closed and finalizers run, so open files write out their buffers.
+    // The memory is not handed back one object at a time: the process ends
+    // here and the system takes it (the state stays reachable to the end,
+    // for leak checkers)
     interp.vm.trace_mark("close");
-    drop(interp);
+    interp.vm.host_close_state();
+    AT_EXIT.store(
+        Box::into_raw(Box::new(interp)),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     // C's exit flushes stdout (and stderr, if setvbuf buffered it)
     let _ = luna_core::stdio::flush_stdout();
     let _ = luna_core::stdio::flush_stderr();
