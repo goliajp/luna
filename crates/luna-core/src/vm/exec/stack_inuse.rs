@@ -110,7 +110,7 @@ impl Vm {
         };
         thread_in_use(
             &self.frames,
-            self.top.max(host),
+            self.top.max(host).max(self.g.jit_top),
             &self.running_natives[self.natives_base..],
         )
     }

@@ -1,18 +1,19 @@
-//! Self-recursive method-JIT calls when the native stack runs low, or when
-//! the dialect's call-depth limit (5.1's `LUAI_MAXCALLS`) is reached.
+//! Self-recursive method-JIT calls: the levels they make, counted as PUC
+//! counts its calls, and the calls made in the interpreter when the native
+//! stack runs low.
 //!
 //! A compiled self-recursive call is a native call, so deep recursion uses
-//! native stack and makes no interpreter frame. The compiled code checks
-//! the stack pointer against a limit and its remaining call budget once
-//! every so many levels; when either runs out, [`luna_jit_self_call_slow`]
-//! makes the call instead: in the interpreter, which goes on to any depth
-//! the Lua stack allows and fails with Lua's own "stack overflow", or, with
-//! no budget left, by raising that error itself.
+//! native stack and makes no interpreter frame. Each level carries its
+//! frame's base and its depth; a level that reaches the base or depth the
+//! context allows calls [`luna_jit_self_level`], which counts it (the
+//! stack its frame needs, its `CallInfo`, 5.2's collection check) and
+//! sets the next limits. The compiled code checks the stack pointer once
+//! every so many levels; when the stack runs low,
+//! [`luna_jit_self_call_slow`] makes the call in the interpreter instead.
 //!
-//! Both tiers keep limit, failure flag and budget in a context their entry
-//! fills ([`luna_jit_enter_ctx`]): the Cranelift tier holds its address in
-//! the pinned register, the LLVM tier passes it, the limit and the calls
-//! left as arguments of its self calls.
+//! Both tiers keep the limits and the failure flag in a context their
+//! entry fills ([`luna_jit_enter_ctx`]): the Cranelift tier holds its
+//! address in the pinned register, the LLVM tier passes it.
 
 use luna_core::runtime::Value;
 
@@ -27,14 +28,11 @@ pub const SELF_CALL_RET_FLOAT: i64 = 2;
 /// See [`SELF_CALL_RET_NONE`].
 pub const SELF_CALL_RET_TABLE: i64 = 3;
 
-/// Words of a Cranelift self-call context: the stack limit, the flag a
-/// failed call sets, the calls left, and the calls the budget started
-/// with.
-pub const SELF_CTX_WORDS: usize = 4;
-
-/// The `left` [`luna_jit_self_call_slow`] gets from code that does not
-/// count its calls: the budget is then the thread's own.
-pub const SELF_CALL_UNCOUNTED: i64 = i64::MIN;
+/// Words of a self-call context: the stack address below which a self
+/// call goes through [`luna_jit_self_call_slow`], the flag a failed call
+/// sets, the base and the depth from which a level calls
+/// [`luna_jit_self_level`], and the base of level 0.
+pub const SELF_CTX_WORDS: usize = 5;
 
 /// What [`luna_jit_self_call_slow`] needs to know about the call, packed
 /// into the constant compiled code passes it: the argument count, which
@@ -46,57 +44,119 @@ pub fn self_call_desc(nargs: u32, float_mask: u8, table_mask: u8, ret: i64) -> i
         | (ret << 24)
 }
 
-/// Fill a Cranelift self-call context: the stack address below which a
-/// self call goes through [`luna_jit_self_call_slow`] (0 when the thread's
-/// stack bounds are not known), the failure flag cleared, and the calls
-/// the running thread may still nest.
+/// Set in the desc [`luna_jit_self_level`] gets for the callee of a self
+/// tail call.
+pub const SELF_LEVEL_TAIL: i64 = 1 << 40;
+
+/// A desc whose levels hold no table: the collector needs nothing of them.
+fn bare(desc: i64) -> bool {
+    (desc >> 16) & 0xff == 0
+}
+
+/// Fill a self-call context for level 0 of the running closure: the stack
+/// address below which a self call goes through
+/// [`luna_jit_self_call_slow`] (0 when the thread's stack bounds are not
+/// known), the failure flag cleared, the limits of the levels after it and
+/// its base.
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread;
-/// `ctx` points to [`SELF_CTX_WORDS`] writable words.
+/// Called from compiled code inside an `enter_jit` window on this thread
+/// opened with the running closure; `ctx` points to [`SELF_CTX_WORDS`]
+/// writable words.
 // SAFETY: no other item in the link is named `luna_jit_enter_ctx`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_enter_ctx(ctx: *mut i64) {
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
-    let vm = unsafe { current_jit_vm() };
-    let budget = vm.jit_call_budget(0);
+    // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
+    // Vm lent to this call and JIT_CL that closure
+    let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
+    let lim = vm.jit_limits(cl, 0);
     // SAFETY: `ctx` points to SELF_CTX_WORDS writable words (# Safety)
     unsafe {
         *ctx = luna_core::native_stack::jit_limit() as i64;
         *ctx.add(1) = 0;
-        *ctx.add(2) = budget;
-        *ctx.add(3) = budget;
+        *ctx.add(2) = i64::from(lim.base);
+        *ctx.add(3) = i64::from(lim.depth);
+        *ctx.add(4) = i64::from(vm.jit.levels_slot);
     }
 }
 
-/// Make the running closure's self-recursive call that compiled code could
-/// not make natively, with the arguments `a0..` described by `desc`
-/// ([`self_call_desc`]), and return its result as compiled code holds it.
-/// `ctx` is the code's context;
-/// `left` the calls the code had left, or [`SELF_CALL_UNCOUNTED`].
-/// With no calls left in the budget the call raises "stack overflow";
-/// otherwise the interpreter makes it. When the call fails, the error is
-/// left in `vm.jit.pending_raise` for the dispatcher to raise; when its
-/// result is not of the kind the compiled code expects, a deopt is parked.
-/// Either way the context's failure flag is set: callers whose going on
-/// could be seen
-/// return at once, the others finish with dummy results that the
-/// dispatcher drops, and every self call they still make lands here and
-/// returns at once.
+/// Count level `depth` of the running closure's self recursion, its frame
+/// at `base` (see [`luna_core::vm::Vm::jit_self_level`]), and set the
+/// context's limits for the levels after it. 0 when the level may go on;
+/// otherwise the error is left in `vm.jit.pending_raise`, the failure flag
+/// set, and the level returns at once.
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread
+/// opened with the running closure; `ctx` points to [`SELF_CTX_WORDS`]
+/// writable words.
+// SAFETY: no other item in the link is named `luna_jit_self_level`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_self_level(
+    ctx: *mut i64,
+    desc: i64,
+    base: i64,
+    depth: i64,
+) -> i64 {
+    // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
+    // Vm lent to this call and JIT_CL that closure
+    let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
+    // a call below already failed: the callers are only unwinding
+    let r = if vm.jit.pending_raise.is_some() || vm.jit.pending_err.is_some() {
+        None
+    } else {
+        let tail = desc & SELF_LEVEL_TAIL != 0;
+        match vm.jit_self_level(cl, base as u32, depth as u32, bare(desc), tail) {
+            Ok(lim) => Some(lim),
+            Err(e) => {
+                vm.jit.pending_raise = Some(e);
+                None
+            }
+        }
+    };
+    // SAFETY: `ctx` points to SELF_CTX_WORDS writable words (# Safety)
+    unsafe {
+        match r {
+            Some(lim) => {
+                *ctx.add(2) = i64::from(lim.base);
+                *ctx.add(3) = i64::from(lim.depth);
+                0
+            }
+            None => {
+                *ctx.add(1) = 1;
+                1
+            }
+        }
+    }
+}
+
+/// Make the running closure's self-recursive call at level `depth`, its
+/// frame at `base`, that compiled code could not make natively, with the
+/// arguments `a0..` described by `desc` ([`self_call_desc`]), and return
+/// its result as compiled code holds it. `ctx` is the code's context.
+/// When the call fails, the error is left in `vm.jit.pending_raise` for
+/// the dispatcher to raise; when its result is not of the kind the
+/// compiled code expects, a deopt is parked. Either way the context's
+/// failure flag is set: callers whose going on could be seen return at
+/// once, the others finish with dummy results that the dispatcher drops,
+/// and every self call they still make returns at once.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread
 /// opened with the running closure; the table arguments `desc` names are
-/// pointers of live tables; `ctx` is null or points to [`SELF_CTX_WORDS`]
-/// writable words.
+/// pointers of live tables; `ctx` points to [`SELF_CTX_WORDS`] writable
+/// words.
 // SAFETY: no other item in the link is named `luna_jit_self_call_slow`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn luna_jit_self_call_slow(
     ctx: *mut i64,
     desc: i64,
-    left: i64,
+    base: i64,
+    depth: i64,
     a0: i64,
     a1: i64,
     a2: i64,
@@ -107,17 +167,10 @@ pub unsafe extern "C" fn luna_jit_self_call_slow(
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
     // a call below already failed: the callers are only unwinding
     if vm.jit.pending_raise.is_some() || vm.jit.pending_err.is_some() {
-        if !ctx.is_null() {
-            // SAFETY: a non-null `ctx` points to SELF_CTX_WORDS writable words (# Safety)
-            unsafe { *ctx.add(1) = 1 };
-        }
+        // SAFETY: `ctx` points to SELF_CTX_WORDS writable words (# Safety)
+        unsafe { *ctx.add(1) = 1 };
         return 0;
     }
-    let budget = if left == SELF_CALL_UNCOUNTED {
-        vm.jit_call_budget(0)
-    } else {
-        left
-    };
     let nargs = (desc & 0xff) as usize;
     let float_mask = (desc >> 8) & 0xff;
     let table_mask = (desc >> 16) & 0xff;
@@ -135,17 +188,7 @@ pub unsafe extern "C" fn luna_jit_self_call_slow(
         };
     }
     let int_as_float = vm.version() <= luna_core::version::LuaVersion::Lua52;
-    let result = if budget <= 0 {
-        Err(vm.jit_depth_error(cl))
-    } else {
-        // the compiled calls below count against 5.1's call limit
-        let native = (left != SELF_CALL_UNCOUNTED && !ctx.is_null()).then(|| {
-            // SAFETY: a non-null `ctx` points to SELF_CTX_WORDS words (# Safety)
-            let initial = unsafe { *ctx.add(3) };
-            (initial - left).clamp(0, i64::from(u32::MAX)) as u32
-        });
-        vm.jit_call_interpreted(cl, &args[..nargs], native)
-    };
+    let result = vm.jit_call_interpreted(cl, &args[..nargs], base as u32, depth as u32, bare(desc));
     let out = match result {
         Ok(vals) => {
             let v = vals.first().copied().unwrap_or(Value::Nil);
@@ -172,10 +215,8 @@ pub unsafe extern "C" fn luna_jit_self_call_slow(
     match out {
         Some(bits) => bits,
         None => {
-            if !ctx.is_null() {
-                // SAFETY: a non-null `ctx` points to SELF_CTX_WORDS writable words (# Safety)
-                unsafe { *ctx.add(1) = 1 };
-            }
+            // SAFETY: `ctx` points to SELF_CTX_WORDS writable words (# Safety)
+            unsafe { *ctx.add(1) = 1 };
             0
         }
     }

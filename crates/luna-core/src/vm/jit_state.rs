@@ -169,6 +169,11 @@ pub struct JitState {
     /// the interpreter checks for it as after the op that allocated, at
     /// this pc (`u32::MAX`: the one before the pc it resumes at)
     pub gc_exit: Option<u32>,
+    /// `g.frames_native` outside the compiled call running now: its levels
+    /// are counted above it (`Vm::jit_self_level`)
+    pub levels_base: u32,
+    /// the slot of the compiled call's level 0 (its base)
+    pub levels_slot: u32,
 }
 
 impl JitState {
@@ -417,6 +422,8 @@ impl JitState {
             pending_err: None,
             pending_raise: None,
             gc_exit: None,
+            levels_base: 0,
+            levels_slot: 0,
             reg_state_buf: Vec::new(),
             ssa_roots: Vec::new(),
             str_buf_pool: Vec::new(),

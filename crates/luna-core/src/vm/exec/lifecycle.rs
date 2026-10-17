@@ -76,6 +76,7 @@ impl Vm {
                 },
                 stack_last: fast_stack_last(version, stack_size::initial(version)),
                 frames_native: 0,
+                jit_top: 0,
                 host_frames: 0,
                 host_ci_top: 0,
                 meta_conts: 0,

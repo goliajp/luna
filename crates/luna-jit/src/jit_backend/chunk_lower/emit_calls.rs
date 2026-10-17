@@ -255,6 +255,9 @@ pub(super) fn emit_self_call<M: Module>(
                 arg_vals.push(v_i64);
             }
             let sc = self_calls?;
+            // the callee's level: its frame above this one's register `a`
+            arg_vals.push(bcx.ins().iadd_imm_s(sc.base, a as i64 + 1));
+            arg_vals.push(bcx.ins().iadd_imm_s(sc.depth, 1));
             let self_ref = module.declare_func_in_func(fn_id, bcx.func);
             let call = bcx.ins().call(self_ref, &arg_vals);
             let result_i64 = bcx.inst_results(call)[0];

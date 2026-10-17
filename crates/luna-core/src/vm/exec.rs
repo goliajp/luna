@@ -59,6 +59,8 @@ mod index_set;
 #[cfg(feature = "gc-verify")]
 mod index_verify;
 mod jit_call;
+mod jit_levels;
+pub use jit_levels::JitLimits;
 mod jit_rt;
 mod jit_rt_strbuf;
 pub(crate) use jit_rt::TraceGhosts;
