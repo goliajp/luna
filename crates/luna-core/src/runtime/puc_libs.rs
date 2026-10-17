@@ -33,3 +33,29 @@ pub(crate) fn record(d: Dialect, stopped: bool) -> (&'static [u32], &'static [&'
         }
     }
 }
+
+#[allow(clippy::all)]
+#[rustfmt::skip]
+#[path = "puc_lib_layout.rs"]
+mod layout;
+
+/// What PUC's `luaL_openlibs` does to a library table's parts.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum LibOp {
+    /// `luaH_resize` to an array part and a hash part of these sizes
+    R(u32, u32),
+    /// the string key enters the hash part
+    K(&'static str),
+}
+
+/// What `d`'s `luaL_openlibs` does to each library table it names (as
+/// `libshape.lua` names them), from the table's making.
+pub(crate) fn lib_layouts(d: Dialect) -> &'static [(&'static str, &'static [LibOp])] {
+    match d {
+        Dialect::L51 => layout::LAYOUT_51,
+        Dialect::L52 => layout::LAYOUT_52,
+        Dialect::L53 => layout::LAYOUT_53,
+        Dialect::L54 => layout::LAYOUT_54,
+        Dialect::L55 => layout::LAYOUT_55,
+    }
+}
