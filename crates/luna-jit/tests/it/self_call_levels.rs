@@ -25,10 +25,14 @@ end
 "#;
 
 /// `src` with the JIT off and with it engaged on the first call; with
-/// the JIT, whether a chunk was compiled.
+/// the JIT, whether a chunk was compiled. Both runs hash with one seed:
+/// where the collector's steps fall depends on the order tables are
+/// traversed in, which the seed sets.
 fn both(v: LuaVersion, src: &str) -> (String, String, usize) {
     let run = |jit: bool| {
-        let mut vm = luna_jit::new_with_jit(v);
+        let mut vm = luna_jit::vm::Vm::new_minimal_with_hash_seed(v, 0x5eed);
+        luna_jit::install_default_jit(&mut vm);
+        vm.open_all_libs().expect("the libraries open");
         vm.set_trace_jit_enabled(false);
         if jit {
             vm.jit.call_hot_threshold = 1;
