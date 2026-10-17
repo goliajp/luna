@@ -15,6 +15,8 @@ pub(crate) const UNLISTED: u8 = 1;
 pub(crate) const STANDS: u8 = 2;
 /// in `cls`: a read-only table; one shift from SLOW
 pub(crate) const RO_CLS: u8 = SLOW >> 1;
+/// in `cls`: an object of luna's own PUC has none of (`Marker::luna_only`)
+pub(crate) const LUNA_ONLY: u8 = 8;
 /// in `cls`: a native in one of the heap's blocks of them (`NativeSlab`)
 pub(crate) const SLAB: u8 = 0x10;
 

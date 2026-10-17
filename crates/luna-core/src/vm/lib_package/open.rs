@@ -81,7 +81,12 @@ fn puc_closure(
     upvals: &[Value],
 ) -> Result<Value, LuaError> {
     if vm.heap.puc.silent > 0 {
-        vm.lib_native_with(f, upvals)
+        let fv = vm.lib_native_with(f, upvals)?;
+        // PUC's one upvalue, the first; luna's others are its own
+        if let Value::Native(n) = fv {
+            vm.heap.set_native_puc_nup(n, 1);
+        }
+        Ok(fv)
     } else {
         vm.lib_native_puc(f, upvals, 1)
     }

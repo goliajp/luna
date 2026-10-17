@@ -46,7 +46,8 @@ fn open_base(vm: &mut Vm, loaders: bool) -> Result<(), LuaError> {
     }
     g.push(("getmetatable", vm.lib_native(nat_getmetatable)?));
     if v >= V::Lua52 {
-        g.push(("ipairs", ipairs(vm)?));
+        let f = ipairs(vm)?;
+        g.push(("ipairs", light(vm, f)));
     }
     if loaders {
         let f = vm.lib_native(crate::vm::lib_os_io::nat_loadfile)?;
@@ -66,7 +67,8 @@ fn open_base(vm: &mut Vm, loaders: bool) -> Result<(), LuaError> {
     // 5.2+ pairs returns the global next itself (a light C function, equal
     // to every other push of `luaB_next`)
     if v >= V::Lua52 {
-        g.push(("pairs", vm.builtin(nat_pairs, &[next_obj], Builtin::Pairs)?));
+        let f = vm.builtin(nat_pairs, &[next_obj], Builtin::Pairs)?;
+        g.push(("pairs", light(vm, f)));
     }
     g.push(("pcall", vm.builtin(nat_pcall, &[], Builtin::Pcall)?));
     g.push(("print", vm.lib_native(nat_print)?));
@@ -122,6 +124,14 @@ fn open_base(vm: &mut Vm, loaders: bool) -> Result<(), LuaError> {
     }
     let globals = vm.globals();
     vm.lib_put_all(globals, "_G", g)
+}
+
+/// `f`, one of PUC's light C functions whatever upvalues luna's keeps.
+fn light(vm: &mut Vm, f: Value) -> Value {
+    if let Value::Native(n) = f {
+        vm.heap.set_native_puc_nup(n, 0);
+    }
+    f
 }
 
 /// `ipairs`, over its iterator.

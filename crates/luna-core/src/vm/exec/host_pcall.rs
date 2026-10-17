@@ -61,7 +61,7 @@ impl Vm {
         self.heap.puc.silent += 1;
         let level = self.builtin(builtins::nat_host_pcall_in_c, &[], Builtin::HostPcallInC);
         self.heap.puc.silent -= 1;
-        let level = level?;
+        let level = luna_only(level?);
         let mut call_args = Vec::with_capacity(args.len() + 1);
         call_args.push(f);
         call_args.extend_from_slice(args);
@@ -123,7 +123,7 @@ impl Vm {
         self.heap.puc.silent += 1;
         let level = self.builtin(level, &[], builtin);
         self.heap.puc.silent -= 1;
-        let level = level?;
+        let level = luna_only(level?);
         let mut call_args = Vec::with_capacity(args.len() + 2);
         call_args.push(f);
         call_args.push(msgh);
@@ -137,4 +137,13 @@ impl Vm {
             Err(LuaError(results.get(1).copied().unwrap_or(Value::Nil)))
         }
     }
+}
+
+/// `f`, a native of luna's own: no function of PUC's.
+fn luna_only(f: Value) -> Value {
+    if let Value::Native(n) = f {
+        // SAFETY: `n` is a live native; only its class byte is written
+        unsafe { (*n.header()).cls |= crate::runtime::heap::LUNA_ONLY };
+    }
+    f
 }

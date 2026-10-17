@@ -68,6 +68,8 @@ impl Heap {
             leaf_hdr: 0,
             leaf_bytes: 0,
             sizer: self.lend_sizer(),
+            quiet: Vec::new(),
+            quiet_mode: false,
             #[cfg(feature = "gc-verify")]
             verify: None,
         }
@@ -298,6 +300,8 @@ impl Heap {
             leaf_hdr: self.leaf_hdr(),
             leaf_bytes: 0,
             sizer: self.lend_sizer(),
+            quiet: std::mem::take(&mut prop.quiet),
+            quiet_mode: false,
             #[cfg(feature = "gc-verify")]
             verify: None,
         }
@@ -309,6 +313,7 @@ impl Heap {
         self.gray = m.stack;
         self.gray_overflow = m.overflow;
         self.propagate = Some(PropagateState {
+            quiet: m.quiet,
             weak: m.weak,
             ephemeron: m.ephemeron,
             cached_protos: m.cached_protos,

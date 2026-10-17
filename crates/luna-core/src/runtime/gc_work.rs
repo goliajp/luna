@@ -207,7 +207,7 @@ pub(in crate::runtime::heap) unsafe fn objsize(
 ///
 /// # Safety
 /// `h` heads an allocated native function.
-unsafe fn native_upvals(h: *mut GcHeader) -> usize {
+pub(in crate::runtime::heap) unsafe fn native_upvals(h: *mut GcHeader) -> usize {
     // SAFETY: the caller's contract
     unsafe {
         match (*h).sub & !UNCOUNTED {
