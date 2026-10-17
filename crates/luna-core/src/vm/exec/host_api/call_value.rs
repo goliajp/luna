@@ -68,24 +68,9 @@ impl Vm {
             self.error_traceback = None;
         }
         self.public_call_depth += 1;
-        // JIT fast path. A host call with no args targeting a Lua
-        // chunk whose body fits the int-arith whitelist short-circuits
-        // the whole interpreter dispatch and runs straight through the
-        // mmap'd native code. The lookup is one Cell::get + one match —
-        // the slow path (compile attempt on first reach) is paid once per
-        // Proto.
-        let r = match f {
-            Value::Closure(cl) if args.is_empty() => self.try_jit_call(cl),
-            _ => None,
-        };
-        let r = match r {
-            Some(Ok(vs)) => {
-                self.public_call_depth -= 1;
-                return Ok(vs);
-            }
-            Some(Err(e)) => Err(e),
-            None => self.call_value_impl(f, args, true, None),
-        };
+        // a compiled function is entered where the call is made
+        // (`try_jit_call_op`), its level counted as any call's
+        let r = self.call_value_impl(f, args, true, None);
         if let Err(e) = r
             && self.public_call_depth == 1
             && self.current.is_none()
