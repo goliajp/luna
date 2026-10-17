@@ -117,6 +117,8 @@ impl Heap {
         }
         self.atomic_tail(m);
         self.settle_sizer(m);
+        #[cfg(feature = "gc-trace")]
+        self.trace_listed();
         debug_assert!(m.stack.is_empty() && !m.overflow);
         self.gray = m.stack.take();
     }

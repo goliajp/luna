@@ -38,6 +38,10 @@ impl Vm {
         // what is still open writes out its buffers, as C's exit flushes
         // every stream (`lua.c` exits right after closing the state)
         crate::vm::lib_io::flush_all_closing(self);
+        // the trace build's log is complete: a host may end the process
+        // without dropping the state
+        #[cfg(feature = "gc-trace")]
+        self.heap.trace.flush();
     }
 
     /// Build the raw `Vm` struct without main coroutine / RNG seed / library

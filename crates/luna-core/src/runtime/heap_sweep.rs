@@ -147,16 +147,17 @@ impl Heap {
                     self.verify_no_dangling("sweep_counted");
                     return (n, false);
                 }
-                let (f, sub, cls) = ((*cur).flags, (*cur).sub, (*cur).cls);
+                n += self.env51_sweep(cur, false);
+                let (f, cls) = ((*cur).flags, (*cur).cls);
                 let dead = is_white(f) && (f & new_white) == 0;
                 #[cfg(feature = "gc-verify")]
                 assert_eq!(
-                    (f & FIN) | (sub & UNCOUNTED) | (cls & UNLISTED) == 0,
+                    self.listed(cur),
                     (*cur).tag != ObjTag::Ghost && self.puc_listed(cur, strt),
                     "[gc-verify] class byte of a {:?}",
                     (*cur).tag
                 );
-                if (f & FIN) | (sub & UNCOUNTED) | (cls & UNLISTED) == 0 {
+                if self.listed(cur) {
                     n += 1;
                 } else if (*cur).tag == ObjTag::Ghost {
                     if dead {
@@ -172,6 +173,8 @@ impl Heap {
                     n += Self::ghost_objects(&*(cur as *mut Ghost));
                 }
                 if dead {
+                    n += self.env51_sweep(cur, true);
+                    self.env51_forget(cur);
                     *link = (*cur).next;
                     // gc-verify notes every free in `free_obj`; 5.1 and 5.2
                     // strings mostly go through the string table's sweep
@@ -185,7 +188,27 @@ impl Heap {
                     // white, so SLOW only for a read-only table (`with_slow`)
                     (*cur).flags = (f & !(COLOR_BITS | SLOW)) | new_white | ((cls & RO_CLS) << 1);
                     self.sweep_prev = cur;
+                    n += self.env51_sweep(cur, true);
                 }
+            }
+        }
+    }
+
+    /// Whether the sweep counts the object behind `h`: one of PUC's on the
+    /// list PUC sweeps, not one with a finalizer pending (but in 5.1, whose
+    /// userdata stay on it, as does its main thread, luna's own object).
+    ///
+    /// # Safety
+    /// `h` heads an allocated object of this heap.
+    #[inline]
+    pub(super) unsafe fn listed(&self, h: *mut GcHeader) -> bool {
+        // SAFETY: the caller's contract
+        unsafe {
+            let (f, sub, cls) = ((*h).flags, (*h).sub, (*h).cls);
+            if self.table_dialect == Dialect::L51 {
+                cls & UNLISTED == 0 && (sub & UNCOUNTED == 0 || (*h).tag == ObjTag::Coro)
+            } else {
+                (f & FIN) | (sub & UNCOUNTED) | (cls & UNLISTED) == 0
             }
         }
     }
@@ -200,7 +223,10 @@ impl Heap {
     unsafe fn puc_listed(&self, h: *mut GcHeader, strt: bool) -> bool {
         // SAFETY: the caller's contract
         unsafe {
-            if is_uncounted(h) || (*h).flags & FIN != 0 {
+            let d51 = self.table_dialect == Dialect::L51;
+            if is_uncounted(h) && !(d51 && (*h).tag == ObjTag::Coro)
+                || (*h).flags & FIN != 0 && !d51
+            {
                 return false;
             }
             match (*h).tag {
