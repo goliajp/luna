@@ -4,8 +4,8 @@ use super::*;
 
 #[path = "heap_step.rs"]
 mod step;
-pub(crate) use step::Running;
 pub(super) use step::Sizer;
+pub(crate) use step::{Propagated, Running};
 
 impl Heap {
     /// Mark from `roots`, sweep everything unreachable. Returns the number of

@@ -13,7 +13,7 @@ impl Vm {
         let run = self.gc_running();
         loop {
             if !fast && self.heap.pace.state == St::Propagate {
-                if self.heap.propagate_work(&mut work, 0, run) {
+                if self.gc_propagate(&mut work, 0, run) {
                     // the step that finds no gray object
                     self.heap.pace.state = St::EnterAtomic;
                     work -= 1;
@@ -53,7 +53,7 @@ impl Vm {
                 }
                 let run = self.gc_running();
                 let mut w = 1;
-                if self.heap.propagate_work(&mut w, 0, run) {
+                if self.gc_propagate(&mut w, 0, run) {
                     self.heap.pace.state = St::EnterAtomic;
                     return Ok(1);
                 }
@@ -117,7 +117,7 @@ impl Vm {
         let run = self.gc_running();
         loop {
             if self.heap.pace.state == St::Propagate {
-                if self.heap.propagate_work(&mut debt, -stepsize, run) {
+                if self.gc_propagate(&mut debt, -stepsize, run) {
                     self.heap.pace.state = St::EnterAtomic;
                 }
             } else {
