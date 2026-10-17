@@ -110,6 +110,21 @@ impl Vm {
         r
     }
 
+    /// [`Vm::call_value_host_level`] with the level at slot `at`.
+    fn call_value_host_level_at(
+        &mut self,
+        level: Value,
+        args: &[Value],
+        at: u32,
+    ) -> Result<Vec<Value>, LuaError> {
+        self.g.host_pcalls += 1;
+        self.nny += 1;
+        let r = self.call_value_k_at(level, args, at);
+        self.nny -= 1;
+        self.g.host_pcalls -= 1;
+        r
+    }
+
     fn host_pcall(
         &mut self,
         level: crate::runtime::value::NativeFn,
@@ -124,11 +139,32 @@ impl Vm {
         let level = self.builtin(level, &[], builtin);
         self.heap.puc.silent -= 1;
         let level = luna_only(level?);
-        let mut call_args = Vec::with_capacity(args.len() + 2);
-        call_args.push(f);
-        call_args.push(msgh);
-        call_args.extend_from_slice(args);
-        let mut results = self.call_value_host_level(level, &call_args)?;
+        let k = self.g.host_slots as usize;
+        let docall = builtin == Builtin::HostXpcallInC
+            && k > 0
+            && self.current.is_none()
+            && self.frames_top == 0
+            && self.top as usize == k;
+        let mut results = if docall {
+            // lua.c's `docall`: the native takes `pmain`'s place, its
+            // arguments above it, then the handler below the function
+            let saved: Vec<Value> = self.stack[..k].to_vec();
+            let mut call_args = Vec::with_capacity(k + 1 + args.len());
+            call_args.extend_from_slice(&saved[1..]);
+            call_args.push(msgh);
+            call_args.push(f);
+            call_args.extend_from_slice(args);
+            let r = self.call_value_host_level_at(level, &call_args, 0);
+            self.stack[..k].copy_from_slice(&saved);
+            self.top = k as u32;
+            r?
+        } else {
+            let mut call_args = Vec::with_capacity(args.len() + 2);
+            call_args.push(f);
+            call_args.push(msgh);
+            call_args.extend_from_slice(args);
+            self.call_value_host_level(level, &call_args)?
+        };
         // the protected call's `true, results...` or `false, handled error`
         if results.first().is_some_and(|ok| ok.truthy()) {
             results.remove(0);
@@ -136,6 +172,61 @@ impl Vm {
         } else {
             Err(LuaError(results.get(1).copied().unwrap_or(Value::Nil)))
         }
+    }
+
+    /// lua.c's `docall` from `pmain`, whose place the native at the bottom
+    /// slot takes: the host's arguments, the handler, then the function
+    /// and its own arguments, called where they are.
+    pub(super) fn begin_docall(
+        &mut self,
+        nargs: u32,
+        nresults: i32,
+        level: bool,
+    ) -> Result<bool, LuaError> {
+        let k = self.g.host_slots;
+        let callee = k + 1;
+        let nfargs = nargs - k - 1;
+        self.pcall_room(callee, nfargs + 1, 0)?;
+        self.enter_pcall_level(level)?;
+        let handler = self.stack[k as usize];
+        self.top = callee + 1 + nfargs;
+        frames_push_sync(
+            &mut self.frames,
+            &mut self.frames_top,
+            &mut self.trap,
+            CallFrame::Cont(NativeCont {
+                kind: ContKind::Xpcall {
+                    handler,
+                    level,
+                    shift: k as i8,
+                    ci_top: 0,
+                },
+                func_slot: 0,
+                nresults,
+            }),
+        );
+        self.begin_call(callee, Some(nfargs), -1, true)?;
+        Ok(true)
+    }
+
+    /// Stack room for the callee and its `n - 1` arguments moved by
+    /// `shift`, and frame room for the continuation, collecting in an
+    /// emergency when memory runs out.
+    pub(super) fn pcall_room(&mut self, from: u32, n: u32, shift: i8) -> Result<(), LuaError> {
+        let to = (i64::from(from) + i64::from(shift)) as u32;
+        self.grow_stack((to + n) as usize)?;
+        self.cf_room()
+    }
+
+    /// The continuation of a protected call takes a C level when it is one
+    /// of PUC's (see `begin_pcall`); the error is raised inside pcall, a C
+    /// function: no position.
+    pub(super) fn enter_pcall_level(&mut self, level: bool) -> Result<(), LuaError> {
+        if level {
+            self.check_c_level(false)?;
+            self.g.nccalls += 1;
+        }
+        Ok(())
     }
 }
 

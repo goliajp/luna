@@ -26,6 +26,7 @@ mod native_top;
 mod raise;
 mod raise_protected;
 mod runerror;
+mod temporaries;
 mod traceback;
 mod traceback_puc;
 

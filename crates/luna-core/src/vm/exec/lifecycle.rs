@@ -23,6 +23,17 @@ impl Vm {
         }
         self.top = self.stack.len() as u32;
         self.g.host_ci_top = self.top + stack_size::MIN_STACK;
+        self.g.host_slots += slots;
+    }
+
+    /// The arguments of the host's C function in the slots
+    /// [`Vm::host_entry_layout`] made, above the function's own: `lua.c`'s
+    /// `pmain` gets `argc` and `argv` (5.1 its light userdata).
+    #[doc(hidden)]
+    pub fn host_entry_args(&mut self, args: &[Value]) {
+        for (i, &v) in args.iter().enumerate() {
+            self.stack[1 + i] = v;
+        }
     }
 
     /// `lua_close` from inside a running script (`os.exit(code, true)`):
@@ -90,6 +101,7 @@ impl Vm {
                 jit_top: 0,
                 host_frames: 0,
                 host_ci_top: 0,
+                host_slots: 0,
                 meta_conts: 0,
                 ci_alloc: [0, u32::MAX][usize::from(version == LuaVersion::Lua51)],
                 host_pcalls: 0,

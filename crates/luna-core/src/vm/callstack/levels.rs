@@ -205,13 +205,7 @@ impl Vm {
                 }
                 (f.base, n - 1)
             }
-            DbgKind::C(CLevel::Cont(fi)) => {
-                let held = self.cont_temporaries(ts, fi);
-                let k = usize::try_from(n).ok()?.checked_sub(1)?;
-                let val = *held.get(k)?;
-                let name = self.temporary_locvar_name().to_string();
-                return Some((name, LocalSlot::Held(val)));
-            }
+            DbgKind::C(CLevel::Cont(fi)) => return self.cont_local(ts, i, fi, n),
             DbgKind::C(CLevel::Native(k)) => (ts.acts[k].func_slot + 1, n - 1),
             DbgKind::C(CLevel::Yield(fs)) => (fs + 1, n - 1),
         };
@@ -250,30 +244,6 @@ impl Vm {
         let idx = n.checked_sub(1)?;
         let lv = active.get(usize::try_from(idx).ok()?)?;
         Some((lv.name.to_string(), lv.reg))
-    }
-
-    /// The values PUC's pcall / xpcall / pairs keep below the function they
-    /// call — their C temporaries (`luaB_pcall` inserts its status boolean,
-    /// `luaB_xpcall` 5.3+ also its function and handler, 5.1/5.2 the handler).
-    fn cont_temporaries(&self, ts: &ThreadStack, fi: usize) -> Vec<Value> {
-        let v = self.version();
-        let CallFrame::Cont(nc) = &ts.frames[fi] else {
-            unreachable!("continuation level")
-        };
-        match nc.kind {
-            ContKind::Pcall { .. } if v == LuaVersion::Lua51 => vec![],
-            ContKind::Pcall { .. } if v == LuaVersion::Lua52 => vec![Value::Nil],
-            ContKind::Pcall { .. } => vec![Value::Bool(true)],
-            ContKind::Xpcall { handler, .. } if v <= LuaVersion::Lua52 => vec![handler],
-            ContKind::Xpcall { handler, .. } => {
-                vec![
-                    ts.stack[(nc.func_slot + 1) as usize],
-                    handler,
-                    Value::Bool(true),
-                ]
-            }
-            _ => vec![],
-        }
     }
 
     /// Write stack slot `slot`, local `name`, of thread `co` (`None`: the
