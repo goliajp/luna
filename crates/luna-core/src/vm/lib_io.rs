@@ -90,6 +90,21 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
     ] {
         io_entries.push((name, vm.lib_native(f)?));
     }
+    // 5.1: the environment the functions have (`newfenv`), popen's its own
+    if v == LuaVersion::Lua51 {
+        use crate::runtime::heap::{ENV_IO, ENV_IO_POPEN};
+        vm.heap.env51_records();
+        for &(name, f) in &io_entries {
+            if let Value::Native(n) = f {
+                let env = if name == "popen" {
+                    ENV_IO_POPEN
+                } else {
+                    ENV_IO
+                };
+                vm.heap.set_env51(n.as_ptr() as *mut _, env);
+            }
+        }
+    }
     // The method `close`: 5.1 and 5.2 register `io_close` itself (5.1 with an
     // environment that has no default output, so a missing argument checks
     // nil); 5.3 split it into `f_close`. 5.2's is the very function value of
@@ -180,6 +195,10 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
             let tty = std::io::stdin().is_terminal();
             crt::attach(h, msvc::CrtFile::standard(msvc::Std::No, tty));
         }
+        if v == LuaVersion::Lua51 {
+            vm.heap
+                .set_env51(h.as_ptr() as *mut _, crate::runtime::heap::ENV_IO_STD);
+        }
         io_entries.push((name, Value::Userdata(h)));
         match name {
             "stdin" => {
@@ -189,6 +208,9 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
             "stdout" => vm.io_output = Some(h),
             _ => {}
         }
+    }
+    if v == LuaVersion::Lua51 {
+        vm.heap.env51_io(vm.io_input, vm.io_output);
     }
     vm.lib_put_all(io, "io", io_entries)?;
     vm.lib_set_global("io", Value::Table(io))?;

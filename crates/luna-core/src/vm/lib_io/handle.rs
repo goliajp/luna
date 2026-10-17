@@ -23,6 +23,11 @@ pub(super) fn new_file(
     // SAFETY: `u` was allocated on the line above and no other handle to it exists yet; the borrow covers one call
     unsafe { u.as_mut() }.set_metatable(vm.file_mt);
     vm.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;
+    // 5.1: the environment of the io function that opens it
+    if vm.version() == LuaVersion::Lua51 {
+        vm.heap
+            .set_env51(u.as_ptr() as *mut _, crate::runtime::heap::ENV_IO);
+    }
     Ok(u)
 }
 

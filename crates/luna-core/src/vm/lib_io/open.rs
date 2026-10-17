@@ -198,6 +198,9 @@ fn g_iofile(vm: &mut Vm, fs: u32, nargs: u32, which: Io) -> Result<u32, LuaError
             Io::Input => vm.io_input = Some(u),
             Io::Output => vm.io_output = Some(u),
         }
+        if vm.version() == LuaVersion::Lua51 {
+            vm.heap.env51_io(vm.io_input, vm.io_output);
+        }
     }
     let cur = default_file(vm, which);
     vm.nat_ret(fs, &[Value::Userdata(cur)])

@@ -55,6 +55,7 @@ impl Heap {
     pub(crate) fn gc_begin_full(&mut self) -> Marker {
         debug_assert!(self.phase == GcPhase::Pause);
         self.grayagain = mark::GrayStack::default();
+        self.env51_whiten();
         Marker {
             stack: self.gray.take(),
             overflow: std::mem::take(&mut self.gray_overflow),
@@ -70,6 +71,7 @@ impl Heap {
             sizer: self.lend_sizer(),
             quiet: Vec::new(),
             quiet_mode: false,
+            env51: self.env51_ptr(),
             #[cfg(feature = "gc-verify")]
             verify: None,
         }
@@ -302,6 +304,7 @@ impl Heap {
             sizer: self.lend_sizer(),
             quiet: std::mem::take(&mut prop.quiet),
             quiet_mode: false,
+            env51: self.env51_ptr(),
             #[cfg(feature = "gc-verify")]
             verify: None,
         }

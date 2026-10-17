@@ -82,6 +82,9 @@ impl Heap {
                     }
                     // 5.1 marks a userdata black at once, 5.2 and 5.3 count
                     // it as they mark it
+                    ObjTag::Ghost if super::super::env51::is_phantom(h) => {
+                        super::super::env51::phantom_size(h)
+                    }
                     ObjTag::Str | ObjTag::Userdata | ObjTag::Upvalue | ObjTag::Ghost => 0,
                     _ => self.puc_objsize(h) as i64,
                 };

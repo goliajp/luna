@@ -65,6 +65,13 @@ pub(super) fn io_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     check_line_formats(vm, nfmt)?;
     let fmts: Vec<Value> = (1..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
     let it = make_lines(vm, u, toclose, &fmts)?;
+    // 5.1: made by `io.lines`, in its environment
+    if let Value::Native(n) = it
+        && vm.version() == LuaVersion::Lua51
+    {
+        vm.heap
+            .set_env51(n.as_ptr() as *mut _, crate::runtime::heap::ENV_IO);
+    }
     // 5.4+ return the file as the generic for's closing value
     if toclose && vm.version() >= LuaVersion::Lua54 {
         return vm.nat_ret(fs, &[it, Value::Nil, Value::Nil, Value::Userdata(u)]);
