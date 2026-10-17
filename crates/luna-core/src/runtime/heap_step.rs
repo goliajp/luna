@@ -161,6 +161,8 @@ impl Heap {
             self.color_fixed_strings(0);
         }
         self.settle_sizer(&mut m);
+        #[cfg(feature = "gc-trace")]
+        self.trace_listed();
         if run.is_some() {
             self.collect_dead_strings();
         } else {

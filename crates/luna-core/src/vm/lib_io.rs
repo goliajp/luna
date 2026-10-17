@@ -211,6 +211,15 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
     }
     if v == LuaVersion::Lua51 {
         vm.heap.env51_io(vm.io_input, vm.io_output);
+        let h = |f: Value| match f {
+            Value::Native(n) => n.as_ptr() as *mut _,
+            Value::Userdata(u) => u.as_ptr() as *mut _,
+            _ => std::ptr::null_mut(),
+        };
+        let first = h(io_entries[0].1);
+        let last = h(io_entries[10].1);
+        let stderr = h(io_entries[13].1);
+        vm.heap.env51_anchors(first, last, stderr);
     }
     vm.lib_put_all(io, "io", io_entries)?;
     vm.lib_set_global("io", Value::Table(io))?;

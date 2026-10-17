@@ -44,6 +44,8 @@ pub(crate) struct Phantom {
     kids: [u8; 1],
     /// the environment it marks first (a closure's)
     env: u8,
+    /// freed by a sweep, as PUC frees it: marked no more
+    dead: bool,
 }
 
 pub(crate) struct Env51 {
@@ -52,6 +54,17 @@ pub(crate) struct Env51 {
     package: *mut GcHeader,
     /// E1's array: the default input and output
     io: [*mut GcHeader; 2],
+    /// where the records are on PUC's list of objects, by the objects of
+    /// luna's next to them: the records two of them are swept with
+    /// reaching the object (`before`) or after it
+    anchors: [Anchor; 3],
+}
+
+#[derive(Clone, Copy)]
+struct Anchor {
+    at: *mut GcHeader,
+    before: bool,
+    recs: [usize; 2],
 }
 
 impl Heap {
@@ -68,7 +81,13 @@ impl Heap {
                 size: size as u32,
                 kids: [if kid == usize::MAX { NONE } else { kid as u8 }],
                 env,
+                dead: false,
             }
+        };
+        let anchor = |recs| Anchor {
+            at: ptr::null_mut(),
+            before: true,
+            recs,
         };
         let none = usize::MAX;
         self.env51_box.get_or_insert_with(|| {
@@ -83,6 +102,11 @@ impl Heap {
                 ],
                 package: ptr::null_mut(),
                 io: [ptr::null_mut(); 2],
+                anchors: [
+                    anchor([E1, FCLOSE]),
+                    anchor([E2, NOCLOSE]),
+                    anchor([E3, PCLOSE]),
+                ],
             })
         })
     }
@@ -99,6 +123,65 @@ impl Heap {
         self.env51_records().io = [h(input), h(output)];
     }
 
+    /// Where the records are on PUC's list: E1 and `io_fclose` after the
+    /// io library's first function, E2 and `io_noclose` before its last,
+    /// E3 and `io_pclose` before `stderr`.
+    pub(crate) fn env51_anchors(
+        &mut self,
+        first: *mut GcHeader,
+        last: *mut GcHeader,
+        stderr: *mut GcHeader,
+    ) {
+        let a = &mut self.env51_records().anchors;
+        (a[0].at, a[0].before) = (first, false);
+        (a[1].at, a[1].before) = (last, true);
+        (a[2].at, a[2].before) = (stderr, true);
+    }
+
+    /// The sweep reaches `cur` (`after`: has swept it): the records swept
+    /// with it, as PUC sweeps them. Returns how many.
+    #[inline]
+    pub(super) fn env51_sweep(&mut self, cur: *mut GcHeader, after: bool) -> i64 {
+        let Some(e) = &mut self.env51_box else {
+            return 0;
+        };
+        let Some(a) = e.anchors.iter().find(|a| a.at == cur && a.before != after) else {
+            return 0;
+        };
+        let (w, mut n, mut freed) = (self.current_white, 0, 0);
+        for r in a.recs {
+            let p = &mut e.ph[r];
+            if p.dead {
+                continue;
+            }
+            n += 1;
+            let f = p.hdr.flags;
+            if is_white(f) && f & w == 0 {
+                p.dead = true;
+                p.hdr.flags = BLACK;
+                freed += p.size as usize;
+            } else {
+                p.hdr.flags = w;
+            }
+        }
+        if freed > 0 {
+            self.acct_free(freed);
+        }
+        #[cfg(feature = "gc-trace")]
+        self.trace.line(format_args!("e51 {n} {freed}"));
+        n
+    }
+
+    /// The object `h` is freed: no record is found by it any more.
+    #[inline]
+    pub(super) fn env51_forget(&mut self, h: *mut GcHeader) {
+        if let Some(e) = &mut self.env51_box {
+            for a in e.anchors.iter_mut().filter(|a| a.at == h) {
+                a.at = ptr::null_mut();
+            }
+        }
+    }
+
     /// The object behind `h`, a native or a userdata, has environment `env`.
     pub(crate) fn set_env51(&mut self, h: *mut GcHeader, env: u8) {
         // SAFETY: `h` heads a live object; only its class byte is written
@@ -109,7 +192,7 @@ impl Heap {
     pub(super) fn env51_whiten(&mut self) {
         let w = self.current_white;
         if let Some(e) = &mut self.env51_box {
-            for p in &mut e.ph {
+            for p in e.ph.iter_mut().filter(|p| !p.dead) {
                 p.hdr.flags = w;
             }
         }
@@ -199,5 +282,64 @@ impl Marker {
                 }
             }
         }
+    }
+}
+
+impl Heap {
+    /// 5.1's libraries are open: their functions and the standard files,
+    /// which luna made without counting, are PUC's C closures and
+    /// userdata, which the record counted; on the list PUC sweeps, they
+    /// are counted from now on.
+    pub(crate) fn natives51_listed(&mut self) {
+        let mut cur = self.all;
+        // SAFETY: the links of `all` lead to live objects; only the
+        // per-type byte of a native is written
+        unsafe {
+            while !cur.is_null() {
+                let t = (*cur).tag;
+                if t == ObjTag::Native && (*cur).cls & LUNA_ONLY == 0 {
+                    super::acct::set_uncounted(cur, false);
+                }
+                // the standard files
+                if t == ObjTag::Userdata
+                    && matches!(
+                        (*(cur as *const Userdata)).payload,
+                        UserdataPayload::File(_)
+                    )
+                {
+                    super::acct::set_uncounted(cur, false);
+                }
+                cur = (*cur).next;
+            }
+        }
+    }
+
+    /// `R38_PROP`: how many objects PUC's list holds as the sweep finds it.
+    #[cfg(feature = "gc-trace")]
+    pub(crate) fn trace_listed(&mut self) {
+        if !self.trace.prop {
+            return;
+        }
+        let mut n = 0i64;
+        let mut by = [0i64; 9];
+        let mut cur = self.all;
+        // SAFETY: the links of `all` lead to live objects
+        unsafe {
+            while !cur.is_null() {
+                if self.listed(cur) {
+                    n += 1;
+                    by[(*cur).tag as usize] += 1;
+                } else if (*cur).tag == ObjTag::Ghost {
+                    let g = Self::ghost_objects(&*(cur as *const Ghost));
+                    n += g;
+                    by[8] += g;
+                }
+                cur = (*cur).next;
+            }
+        }
+        if let Some(e) = &self.env51_box {
+            n += e.ph.iter().filter(|p| !p.dead).count() as i64;
+        }
+        self.trace.line(format_args!("n {n} {by:?}"));
     }
 }
