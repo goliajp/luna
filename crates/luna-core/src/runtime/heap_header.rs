@@ -53,8 +53,10 @@ impl GcHeader {
         debug_assert!(self.tag == ObjTag::Table);
         if on {
             self.aux |= READONLY_AUX;
+            self.cls |= RO_CLS;
         } else {
             self.aux &= !READONLY_AUX;
+            self.cls &= !RO_CLS;
         }
         self.flags = self.with_slow(self.flags);
     }
@@ -87,6 +89,7 @@ impl GcHeader {
                 0
             },
             sub: 0,
+            cls: if tag == ObjTag::Ghost { UNLISTED } else { 0 },
             aux: 0,
         }
     }

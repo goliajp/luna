@@ -120,6 +120,14 @@ impl Heap {
     /// marked as one PUC has not made.
     #[inline]
     pub(crate) fn acct_new_string(&mut self, h: *mut GcHeader, len: usize) {
+        // 5.1's string table holds every string, 5.2's the short ones
+        let held = match self.table_dialect {
+            Dialect::L51 => true,
+            Dialect::L52 => len <= self.puc.short_max,
+            _ => false,
+        };
+        // SAFETY: `h` heads the string just made; only its class byte is written
+        unsafe { (*h).cls = u8::from(held) * super::UNLISTED };
         if self.puc.silent > 0 {
             super::set_uncounted(h, true);
         } else {

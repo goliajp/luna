@@ -70,6 +70,13 @@ impl Heap {
 
     /// Whether `t` is one of luna's own tables, which nothing counts.
     #[inline]
+    /// `t` is luna's own, a table PUC does not have.
+    pub(crate) fn own_table(&mut self, t: Gc<crate::runtime::Table>) {
+        self.puc.own_tables.push(t.as_ptr());
+        // SAFETY: `t` is a live table; only its class byte is written
+        unsafe { (*t.header()).cls |= super::UNLISTED };
+    }
+
     pub(crate) fn is_own_table(&self, t: *const crate::runtime::Table) -> bool {
         !self.puc.own_tables.is_empty() && self.puc.own_tables.contains(&t)
     }

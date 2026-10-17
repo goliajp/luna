@@ -40,6 +40,11 @@ pub struct GcHeader {
     /// Per-type byte in what would otherwise be padding: a table keeps the
     /// dialect whose table rules it follows here (`table::Dialect`).
     pub(crate) sub: u8,
+    /// What the sweep reads besides the colour, in what would otherwise be
+    /// padding: `UNLISTED` (an object PUC keeps off the list it sweeps, by
+    /// its kind: a ghost record, a string PUC's string table holds, luna's
+    /// own table) and `RO_CLS` (a read-only table)
+    pub(crate) cls: u8,
     /// Per-type word in what would otherwise be padding: a table keeps its
     /// absent-metamethod bits here. Zero for a new object.
     pub(crate) aux: u32,
@@ -74,6 +79,11 @@ pub(crate) const SLOW: u8 = 8;
 pub(crate) const UNCOUNTED: u8 = 0x80;
 /// in a string's `sub` byte: a 5.5 external string (its bytes in a block)
 pub(crate) const EXTERNAL: u8 = 0x40;
+/// in `cls`: PUC does not list the object, whatever its count and finalizer
+pub(crate) const UNLISTED: u8 = 1;
+/// in `cls`: a read-only table; one shift from SLOW
+pub(crate) const RO_CLS: u8 = SLOW >> 1;
+
 /// The `aux` bit of a table that marks it read-only (`Table::is_readonly`).
 /// A table's other `aux` bits are its absent-metamethod bits, one per event
 /// below this one; the JIT's inline stores test this bit in the byte of
