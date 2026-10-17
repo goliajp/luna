@@ -83,7 +83,7 @@ impl Vm {
                 if !self.begin_call(call as u32, Some(2), nvars, false)? {
                     // 5.1's `luaD_call` of a C iterator checks for a
                     // collection when it returns
-                    self.call_return_checkpoint(call as u32 + nvars as u32);
+                    self.call_return_checkpoint(call as u32 + nvars as u32)?;
                 }
             }
             Op::ExtraArg => unreachable!("EXTRAARG executed directly"),

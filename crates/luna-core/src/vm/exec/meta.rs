@@ -114,7 +114,7 @@ impl Vm {
         if self.version == LuaVersion::Lua51 {
             self.lib_roots.push(result);
             let top = self.lua_window_end();
-            self.call_return_checkpoint(top);
+            self.call_return_checkpoint(top)?;
             self.lib_roots.pop();
         }
         match action {
@@ -133,7 +133,7 @@ impl Vm {
                 self.top = dst + 1;
                 let out = (base_a as i64 + out as i64) as u32;
                 if self.concat_run(base_a, out)? {
-                    self.concat_checkpoint(base_a, out);
+                    self.concat_checkpoint(base_a, out)?;
                 }
             }
         }

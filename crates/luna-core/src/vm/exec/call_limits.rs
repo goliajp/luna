@@ -54,7 +54,7 @@ impl Vm {
             && matches!(self.version, LuaVersion::Lua53 | LuaVersion::Lua54)
             && top + 1 + need >= stack_size::last(self.version, self.stack_size)
         {
-            self.checkpoint(top);
+            self.checkpoint(top)?;
         }
         if self.version == LuaVersion::Lua51 && top + need > STACK_CAP_51 {
             return Err(self.rt_err("stack overflow"));

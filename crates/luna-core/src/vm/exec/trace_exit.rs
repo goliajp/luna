@@ -28,8 +28,11 @@ impl Vm {
             reg_state,
             entry_tags,
         );
-        if let Some(op_pc) = self.jit.gc_exit.take() {
-            self.checkpoint_after_jit(op_pc);
+        if let Some(op_pc) = self.jit.gc_exit.take()
+            && let Err(e) = self.checkpoint_after_jit(op_pc)
+        {
+            // raised by the op the interpreter goes on from
+            self.jit.pending_raise = Some(e);
         }
     }
 

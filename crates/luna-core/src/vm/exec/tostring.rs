@@ -63,7 +63,7 @@ impl Vm {
                     }
                     _ => return self.number_string(v),
                 }
-                .inspect(|&s| self.api_check_after(Value::Str(s)))
+                .and_then(|s| self.api_check_after(Value::Str(s)).map(|()| s))
             }
             _ => self.pushed_text(v),
         }
@@ -72,7 +72,7 @@ impl Vm {
     /// `lua_pushstring` / `lua_pushfstring` of the text `tostring` gives a
     /// value that is no number or string, checked for as PUC checks.
     fn pushed_text(&mut self, v: Value) -> Result<Gc<LuaStr>, LuaError> {
-        self.api_check_before();
+        self.api_check_before()?;
         let r = match v {
             Value::Nil => self.alloc_str(b"nil"),
             Value::Bool(b) => self.alloc_str(if b { b"true" } else { b"false" }),
@@ -90,7 +90,7 @@ impl Vm {
                 self.pushfstring(b"%s: %p", &[FmtArg::S(kind.as_bytes()), FmtArg::P(p)])
             }
         }?;
-        self.api_check_after(Value::Str(r));
+        self.api_check_after(Value::Str(r))?;
         Ok(r)
     }
 
@@ -110,7 +110,7 @@ impl Vm {
                 self.nat_set_arg(fs, arg, Value::Str(s));
                 // `lua_pushstring` of the converted text, which checks
                 // before it finds the string made already
-                self.api_check_before();
+                self.api_check_before()?;
                 Ok(s)
             }
             _ => self.pushed_text(v),
@@ -127,7 +127,7 @@ impl Vm {
         let t = self.heap.number_text(n);
         let s = self.alloc_str(t.as_bytes())?;
         // `lua_tolstring` checks for a collection after it converts
-        self.api_check_converted(Value::Str(s));
+        self.api_check_converted(Value::Str(s))?;
         Ok(s)
     }
 

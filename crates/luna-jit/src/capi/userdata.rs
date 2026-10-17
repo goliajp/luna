@@ -19,14 +19,19 @@ c_exports! {
 /// function's, or the thread's globals outside any. A memory error is
 /// raised (and null returned) when it cannot be made.
 fn new_userdata(api: &mut Api, size: usize, nuv: usize) -> *mut c_void {
-    api.vm.host_api_check(true);
+    if let Err(e) = api.vm.host_api_check(true) {
+        api.raise(e);
+        return std::ptr::null_mut();
+    }
     let u = or_raise!(api, api.vm.host_new_block(size, nuv), std::ptr::null_mut());
     if api.version() == LuaVersion::Lua51 {
         let env = api.get_or_nil(ENVIRONINDEX_51);
         api.vm.host_set_uservalue(u, 1, env);
     }
     api.push(Value::Userdata(u));
-    api.vm.host_api_check(false);
+    if let Err(e) = api.vm.host_api_check(false) {
+        api.raise(e);
+    }
     api.vm.host_userdata_ptr(u).cast()
 }
 

@@ -41,6 +41,17 @@ impl Vm {
         r
     }
 
+    /// The load fails with `e`, an error a collection check inside it
+    /// raised: kept for the load's caller to report as it is.
+    fn load_failed_by(&mut self, e: LuaError) -> SyntaxError {
+        let text = match e.0 {
+            Value::Str(s) => s.as_bytes().to_vec(),
+            _ => Vec::new(),
+        };
+        self.load_raised = Some(e);
+        SyntaxError::unpositioned(&text[..])
+    }
+
     fn load_named_rooted(
         &mut self,
         src: &[u8],
@@ -49,8 +60,12 @@ impl Vm {
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         // 5.4 on, `lua_load` checks for a collection before it parses, as
         // 5.1's `f_parser` does
-        if !std::mem::take(&mut self.heap.puc.load_checked) {
-            self.lua_load_checkpoint();
+        // (5.1's runs inside the load's protected call: an error there is
+        // the load's)
+        if !std::mem::take(&mut self.heap.puc.load_checked)
+            && let Err(e) = self.lua_load_checkpoint()
+        {
+            return Err(self.load_failed_by(e));
         }
         // the parser and the compiler cannot collect (what they made so far
         // is held only by them), so a load that ran out of memory is run

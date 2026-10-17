@@ -222,9 +222,9 @@ pub(super) fn s_gmatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             (PucKind::CClosure, sz.c_closure(3)),
         ];
         vm.heap.acct_obj(objs[0].0, objs[0].1);
-        vm.api_check_after_rooted();
+        vm.api_check_after_rooted()?;
         let it = vm.lib_native_stand_in(gmatch_iter, &ups, &objs, 1)?;
-        vm.api_check_after(it);
+        vm.api_check_after(it)?;
         it
     } else {
         vm.lib_native_puc(gmatch_iter, &ups, 3)?

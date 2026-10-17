@@ -349,7 +349,7 @@ mod bytecode;
 pub(super) fn lua_c_vm(version: LuaVersion, bin: &str) -> Vm {
     let mut vm = Vm::new_minimal(version);
     vm.host_entry_layout(1, if version == LuaVersion::Lua51 { 2 } else { 3 });
-    vm.open_lua_c_libs();
+    vm.open_lua_c_libs().expect("the libraries open");
     if version >= LuaVersion::Lua53 {
         vm.host_set_arg(&lua_c_argv(bin), 1).expect("arg");
     }

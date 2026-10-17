@@ -81,7 +81,7 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
             } else {
                 argcheck::opt_integer(vm, a, 1, 0)?
             };
-            vec![Value::Bool(step(vm, n))]
+            vec![Value::Bool(step(vm, n)?)]
         }
         "stop" | "restart" => {
             vm.heap.gc_set_stopped(opt == "stop");
@@ -170,10 +170,10 @@ fn options(v: LuaVersion) -> &'static [&'static str] {
 /// small one on ≤5.3 (`GCSTEPSIZE`; gc.lua's `dosteps(0) > 10` pins that it
 /// takes many of them to finish a cycle), and one of the `stepsize`
 /// parameter's size from 5.4 on, where stepsize 0 completes the cycle.
-pub(crate) fn step(vm: &mut Vm, n: i64) -> bool {
+pub(crate) fn step(vm: &mut Vm, n: i64) -> Result<bool, LuaError> {
     if vm.gc_mode_is_generational() {
         vm.collect_garbage();
-        return false;
+        return Ok(false);
     }
     vm.gc_lua_step(n)
 }

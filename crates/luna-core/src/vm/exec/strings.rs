@@ -134,13 +134,13 @@ impl Vm {
     /// is copied, which changes nothing a collection sees); 5.2 and 5.3
     /// past the result or up to the operands, whichever is higher; later,
     /// past the result.
-    pub(super) fn concat_checkpoint(&mut self, base_a: u32, out: u32) {
+    pub(super) fn concat_checkpoint(&mut self, base_a: u32, out: u32) -> Result<(), LuaError> {
         let top = match self.version {
             LuaVersion::Lua51 => self.frame_top(),
             LuaVersion::Lua52 | LuaVersion::Lua53 => (out + 1).max(base_a),
             _ => out + 1,
         };
-        self.checkpoint(top);
+        self.checkpoint(top)
     }
 
     /// PUC's `ci->top` of the running Lua function: its whole frame.

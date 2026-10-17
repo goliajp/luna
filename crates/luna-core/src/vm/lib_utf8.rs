@@ -147,7 +147,7 @@ fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
         // `pushutfchar`: `lua_pushfstring(L, "%U", code)`
         let s = vm.pushfstring(b"%U", &[FmtArg::U(code as u32)])?;
-        vm.api_check_after(Value::Str(s));
+        vm.api_check_after(Value::Str(s))?;
         let Some(b) = b.as_mut() else {
             return vm.nat_ret(fs, &[Value::Str(s)]);
         };

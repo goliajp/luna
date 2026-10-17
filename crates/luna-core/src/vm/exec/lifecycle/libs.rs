@@ -16,7 +16,7 @@ impl Vm {
     /// it, later versions call it one level down), then
     /// [`Vm::open_all_libs`].
     #[doc(hidden)]
-    pub fn open_lua_c_libs(&mut self) {
+    pub fn open_lua_c_libs(&mut self) -> Result<(), LuaError> {
         if self.version == crate::version::LuaVersion::Lua51 {
             let size = self.heap.sizes.c_closure(0);
             let kind = crate::runtime::heap::PucKind::CClosure;
@@ -28,7 +28,7 @@ impl Vm {
             // stops the collector
             if self.version == crate::version::LuaVersion::Lua52 {
                 self.heap.refresh_gc_limit();
-                self.native_checkpoint();
+                self.native_checkpoint()?;
             }
         }
         crate::vm::lib_mem::opened(self.open_all_libs());
@@ -36,6 +36,7 @@ impl Vm {
         if self.version >= crate::version::LuaVersion::Lua54 {
             self.heap.gc_set_stopped(true);
         }
+        Ok(())
     }
 
     /// Open the dialect's standard libraries, as PUC's `luaL_openlibs`.

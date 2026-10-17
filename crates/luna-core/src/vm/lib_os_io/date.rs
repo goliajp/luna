@@ -37,9 +37,9 @@ pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     };
     if lib_io::c_str(fmt) == b"*t" {
         // `lua_createtable(L, 0, 9)`
-        vm.api_check_before();
+        vm.api_check_before()?;
         let table = vm.alloc_table_sized(0, 9)?;
-        vm.api_check_after(Value::Table(table));
+        vm.api_check_after(Value::Table(table))?;
         setallfields(vm, table, &tm)?;
         return vm.nat_ret(fs, &[Value::Table(table)]);
     }

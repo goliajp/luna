@@ -130,7 +130,7 @@ impl Vm {
         {
             let base = self.lib_roots.len();
             self.lib_roots.extend_from_slice(vals);
-            self.call_return_checkpoint(func_slot + vals.len() as u32);
+            self.call_return_checkpoint(func_slot + vals.len() as u32)?;
             self.lib_roots.truncate(base);
         }
         // a call placed inside a frame's window gives the window back: the

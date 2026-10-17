@@ -98,7 +98,9 @@ pub(crate) fn type_error(vm: &mut Vm, a: Args, i: u32, expected: &str) -> LuaErr
         return e;
     }
     vm.native_push(1);
-    vm.api_check_before();
+    if let Err(e) = vm.api_check_before() {
+        return e;
+    }
     let msg = vm.pushfstring(
         b"%s expected, got %s",
         &[
@@ -106,8 +108,10 @@ pub(crate) fn type_error(vm: &mut Vm, a: Args, i: u32, expected: &str) -> LuaErr
             crate::runtime::puc_fmt::FmtArg::S(got.as_bytes()),
         ],
     );
-    if let Ok(m) = msg {
-        vm.api_check_after(Value::Str(m));
+    if let Ok(m) = msg
+        && let Err(e) = vm.api_check_after(Value::Str(m))
+    {
+        return e;
     }
     match msg {
         Ok(m) => {

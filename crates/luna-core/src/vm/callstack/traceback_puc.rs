@@ -93,10 +93,10 @@ impl Vm {
         &mut self,
         f: impl FnOnce(&mut crate::runtime::Heap) -> Result<Gc<LuaStr>, crate::runtime::mem::Oom>,
     ) -> Result<(), LuaError> {
-        self.api_check_before();
+        self.api_check_before()?;
         let s = f(&mut self.heap)?;
         self.lib_roots.push(Value::Str(s));
-        self.api_check_after_rooted();
+        self.api_check_after_rooted()?;
         Ok(())
     }
 
@@ -107,12 +107,12 @@ impl Vm {
         let text = |v: &Value| matches!(v, Value::Str(_) | Value::Int(_) | Value::Float(_));
         let bad = self.lib_roots[base..].iter().rposition(|v| !text(v));
         if n >= 2 && self.version() <= LuaVersion::Lua52 {
-            self.native_checkpoint();
+            self.native_checkpoint()?;
         }
         let Some(i) = bad else {
             self.concat_roots(n)?;
             if self.version() >= LuaVersion::Lua53 {
-                self.native_checkpoint();
+                self.native_checkpoint()?;
             }
             return Ok(());
         };

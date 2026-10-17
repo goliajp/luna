@@ -12,7 +12,7 @@ impl Vm {
     ) -> Result<(), LuaError> {
         let nc = self.closure_over(cl, inst.bx() as usize, base, true)?;
         self.set_r(base, inst.a(), Value::Closure(nc));
-        self.checkpoint_after_op(inst, base);
+        self.checkpoint_after_op(inst, base)?;
         Ok(())
     }
 

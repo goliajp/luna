@@ -18,7 +18,7 @@ const ATOMICSTEP: i64 = -2;
 
 impl Vm {
     /// PUC `luaC_step`: the step that fell due.
-    pub(crate) fn puc_step(&mut self) {
+    pub(crate) fn puc_step(&mut self) -> Result<(), LuaError> {
         let d = self.heap.table_dialect;
         self.gc_hold_threads();
         self.jit_forget_ghosts();
@@ -35,6 +35,11 @@ impl Vm {
         #[cfg(feature = "gc-trace")]
         self.trace_step(true);
         self.heap.refresh_gc_limit();
+        // a finalizer's error a 5.1–5.3 step throws out of the check
+        match self.gc_raise.take() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// A full collection ended (`luaC_fullgc`): the cycle at its pause,
@@ -131,11 +136,11 @@ impl Vm {
     /// `lua_gc(L, LUA_GCSTEP, n)` (`collectgarbage("step", n)`) in
     /// incremental mode: the debt it sets and the steps it runs, whether
     /// or not the collector is stopped; true when a cycle ended.
-    pub(crate) fn gc_lua_step(&mut self, n: i64) -> bool {
+    pub(crate) fn gc_lua_step(&mut self, n: i64) -> Result<bool, LuaError> {
         // the instrumented PUC that `R38_NOAUTO` compares with skips every
         // `luaC_step`, the ones `lua_gc` asks for too
         if self.heap.no_auto() {
-            return false;
+            return Ok(false);
         }
         let d = self.heap.table_dialect;
         let bytes = self.heap.bytes();
@@ -150,12 +155,12 @@ impl Vm {
                 };
                 self.heap.pace.set_threshold(t);
                 while self.heap.pace.threshold() <= self.heap.bytes() as i64 {
-                    self.puc_step();
+                    self.puc_step()?;
                     if self.heap.pace.state == St::Pause {
-                        return true;
+                        return Ok(true);
                     }
                 }
-                false
+                Ok(false)
             }
             Dialect::L52 => {
                 let mut debt = n * 1024 - stepsize_52(&self.heap.sizes);
@@ -163,8 +168,8 @@ impl Vm {
                     debt += debt_now;
                 }
                 self.heap.pace.set_debt(d, bytes, debt);
-                self.puc_step();
-                self.heap.pace.state == St::Pause
+                self.puc_step()?;
+                Ok(self.heap.pace.state == St::Pause)
             }
             Dialect::L53 | Dialect::L54 => {
                 let debt = if n == 0 {
@@ -174,26 +179,26 @@ impl Vm {
                         0
                     };
                     self.heap.pace.set_debt(d, bytes, d0);
-                    self.puc_step();
+                    self.puc_step()?;
                     1
                 } else {
                     let debt = n * 1024 + debt_now;
                     self.heap.pace.set_debt(d, bytes, debt);
                     if debt > 0 {
-                        self.puc_step();
+                        self.puc_step()?;
                     }
                     debt
                 };
-                debt > 0 && self.heap.pace.state == St::Pause
+                Ok(debt > 0 && self.heap.pace.state == St::Pause)
             }
             Dialect::L55 => {
                 let n = if n <= 0 { debt_now } else { n };
                 self.heap.pace.set_debt(d, bytes, debt_now - n);
                 let work = self.heap.pace.debt(d, bytes) <= 0;
                 if work {
-                    self.puc_step();
+                    self.puc_step()?;
                 }
-                work && self.heap.pace.state == St::Pause
+                Ok(work && self.heap.pace.state == St::Pause)
             }
         }
     }

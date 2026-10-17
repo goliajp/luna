@@ -58,6 +58,21 @@ impl Vm {
     pub(crate) fn pushglobalfuncname(
         &mut self,
         target: Gc<crate::runtime::NativeClosure>,
+    ) -> Result<Option<String>, crate::vm::error::LuaError> {
+        let mut raised = None;
+        let name = self.find_globalfuncname(target, &mut raised);
+        match raised {
+            Some(e) => Err(e),
+            None => Ok(name),
+        }
+    }
+
+    /// [`Vm::pushglobalfuncname`], an error a collection check of the
+    /// strings it makes raised left in `raised`.
+    fn find_globalfuncname(
+        &mut self,
+        target: Gc<crate::runtime::NativeClosure>,
+        raised: &mut Option<crate::vm::error::LuaError>,
     ) -> Option<String> {
         // names no string exists for are no table's keys
         let pkg_k = Value::Str(self.heap.find_interned(b"package")?);
@@ -86,7 +101,10 @@ impl Vm {
                     if matches(nv2)
                         && let Value::Str(inner_s) = nk2
                     {
-                        self.globalfuncname_strings(nk, inner_s)?;
+                        if let Err(e) = self.globalfuncname_strings(nk, inner_s) {
+                            *raised = Some(e);
+                            return None;
+                        }
                         let inner = String::from_utf8_lossy(inner_s.as_bytes()).into_owned();
                         return Some(if outer == "_G" {
                             inner
@@ -107,23 +125,24 @@ impl Vm {
         &mut self,
         outer: Value,
         inner: Gc<crate::runtime::LuaStr>,
-    ) -> Option<()> {
+    ) -> Result<(), crate::vm::error::LuaError> {
         // each made by an API call that checks for a collection
-        self.api_check_before();
-        let dot = self.heap.try_intern(b".").ok()?;
-        self.api_check_after(Value::Str(dot));
+        self.api_check_before()?;
+        let dot = self.heap.try_intern(b".")?;
+        self.api_check_after(Value::Str(dot))?;
         let mut st = vec![outer, Value::Str(dot), Value::Str(inner)];
         self.lib_roots.push(Value::Str(dot));
-        self.api_check_before();
+        let r = self.api_check_before();
         self.lib_roots.pop();
-        self.heap.puc_concat(&mut st, 3).ok()?;
-        self.api_check_after(st[0]);
+        r?;
+        self.heap.puc_concat(&mut st, 3)?;
+        self.api_check_after(st[0])?;
         let g = matches!(outer, Value::Str(s) if s.as_bytes() == b"_G");
         if g && self.version >= LuaVersion::Lua53 {
-            let s = self.heap.try_intern(inner.as_bytes()).ok()?;
-            self.api_check_after(Value::Str(s));
+            let s = self.heap.try_intern(inner.as_bytes())?;
+            self.api_check_after(Value::Str(s))?;
         }
-        Some(())
+        Ok(())
     }
 
     /// How the caller named the running native (PUC `lua_getinfo("n")` at

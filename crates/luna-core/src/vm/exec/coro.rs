@@ -14,7 +14,7 @@ impl Vm {
     pub(crate) fn try_new_coro(&mut self, body: Value) -> Result<Gc<Coro>, LuaError> {
         // `lua_newthread` checks for a collection first; the new thread
         // takes the creating thread's globals (`Vm.globals` is the live one's)
-        self.native_checkpoint();
+        self.native_checkpoint()?;
         let globals = self.globals;
         let co = self.retry_oom(|vm| vm.heap.try_new_coro(body, globals))?;
         // a new thread inherits the creator's C hook (PUC `lua_newthread`); a
