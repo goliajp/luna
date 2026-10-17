@@ -43,14 +43,16 @@ fn cap_value(vm: &mut Vm, src: &[u8], c: CapValue) -> Result<Value, LuaError> {
 }
 
 /// PUC `push_captures`: every capture, or the whole match `[s, e)` when
-/// there are none and `whole` is set.
+/// there are none and `whole` is set. `pushed` values are on the stack
+/// above the native's arguments already; `out` holds those of them it
+/// returns.
 fn push_captures(
     vm: &mut Vm,
     ms: &MatchState,
     src: &[u8],
-    s: usize,
-    e: usize,
+    (s, e): (usize, usize),
     whole: bool,
+    pushed: u32,
     out: &mut Vec<Value>,
 ) -> Result<(), LuaError> {
     let n = if ms.level() == 0 && whole {
@@ -58,6 +60,8 @@ fn push_captures(
     } else {
         ms.level()
     };
+    let top = vm.native_top().expect("a native runs") + pushed;
+    crate::vm::argcheck::check_stack_at(vm, top, n as i64, "too many captures")?;
     // what is pushed stays rooted while the next is made, which may
     // collect
     let base = vm.lib_roots.len();
@@ -134,7 +138,7 @@ fn find_aux(vm: &mut Vm, fs: u32, nargs: u32, find: bool) -> Result<u32, LuaErro
                 out.push(Value::Int(s1 as i64 + 1));
                 out.push(Value::Int(e as i64));
             }
-            push_captures(vm, &ms, src, s1, e, !find, &mut out)?;
+            push_captures(vm, &ms, src, (s1, e), !find, out.len() as u32, &mut out)?;
             return vm.nat_ret(fs, &out);
         }
         if anchor || s1 >= ls {
@@ -180,7 +184,7 @@ fn gmatch_iter(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
             vm.nat_set_upval(fs, 2, Value::Int(next as i64));
             vm.nat_set_upval(fs, 3, Value::Int(e as i64));
             let mut out = Vec::new();
-            push_captures(vm, &ms, src, from, e, true, &mut out)?;
+            push_captures(vm, &ms, src, (from, e), true, 0, &mut out)?;
             return vm.nat_ret(fs, &out);
         }
         from += 1;

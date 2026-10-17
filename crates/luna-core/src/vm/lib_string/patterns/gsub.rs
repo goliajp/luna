@@ -153,7 +153,7 @@ pub(crate) fn add_value(
             let mut args = Vec::new();
             // the function, then its arguments, are pushed for the call;
             // a capture error counts the function
-            if let Err(err) = push_captures(vm, ms, src, s, e, true, &mut args) {
+            if let Err(err) = push_captures(vm, ms, src, (s, e), true, buf + 1, &mut args) {
                 vm.native_push(buf + 1);
                 return Err(err);
             }
