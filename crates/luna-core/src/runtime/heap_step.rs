@@ -319,9 +319,30 @@ impl Heap {
                 blacken(h, &mut m);
                 let w = self.object_work(h, run) + m.leaf_bytes;
                 #[cfg(feature = "gc-trace")]
-                if std::env::var_os("R38_PROP").is_some() {
-                    self.trace.line(format_args!("p {} {w}", (*h).tag as u8));
+                if self.trace.prop {
+                    let (a, n) = match (*h).tag {
+                        ObjTag::Table => {
+                            let t = &*(h as *const Table);
+                            (t.asize as usize, t.node_count())
+                        }
+                        ObjTag::Coro if h == run.h => (run.size as usize, run.ci as usize),
+                        ObjTag::Coro => {
+                            let c = &*(h as *const crate::runtime::Coro);
+                            (c.stack_size as usize, c.ci_alloc as usize)
+                        }
+                        _ => (0, 0),
+                    };
+                    let mut k = String::from("-");
+                    if (*h).tag == ObjTag::Table {
+                        let t = &*(h as *const Table);
+                        if let Some(s) = t.first_str_key() {
+                            k = String::from_utf8_lossy(s.as_bytes()).into_owned();
+                        }
+                    }
+                    self.trace
+                        .line(format_args!("p {} {w} {a} {n} {k}", (*h).tag as u8));
                 }
+
                 *remaining -= w;
             }
             // a thread whose values the VM holds: the VM marks them next

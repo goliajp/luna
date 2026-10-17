@@ -247,6 +247,8 @@ impl Table {
     ) -> Result<(), TableError> {
         // as in `set_norm`: never a read-only table
         debug_assert!(!self.is_readonly());
+        #[cfg(feature = "gc-trace")]
+        heap.trace_new_key(self, k);
         self.hdr.aux = 0;
         if self.nodes().is_empty() || !self.place_new(k, v, node::khash_of(k)) {
             self.rehash(heap, k)?;
