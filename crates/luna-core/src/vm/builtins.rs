@@ -93,18 +93,16 @@ pub(crate) fn try_open_base(vm: &mut Vm) -> Result<(), LuaError> {
         vm.lib_set_global("setfenv", f)?;
         let f = vm.lib_native(nat_getfenv)?;
         vm.lib_set_global("getfenv", f)?;
-        // `newproxy` remembers the metatables it created in a weak-keyed
-        // set (PUC's upvalue `weaktable`): only a userdata carrying one of
-        // them counts as a proxy whose metatable may be shared.
+        // `newproxy` remembers the metatables it created in a weak set
+        // (PUC's upvalue `weaktable`, its own metatable): only a userdata
+        // carrying one of them counts as a proxy whose metatable may be
+        // shared
         let proxies = vm.alloc_table()?;
-        // PUC's weak table is its own metatable: this one is luna's alone
-        vm.heap.own_table(proxies);
-        let weak_k = vm.alloc_table()?;
         let mode_k = vm.str_value(b"__mode")?;
-        let mode_v = vm.str_value(b"k")?;
-        vm.lib_set_value(weak_k, mode_k, mode_v)?;
+        let mode_v = vm.str_value(b"kv")?;
+        vm.lib_set_value(proxies, mode_k, mode_v)?;
         // SAFETY: `proxies` was allocated a few lines above and is held only by this local; the borrow covers one call
-        unsafe { proxies.as_mut() }.set_metatable(Some(weak_k));
+        unsafe { proxies.as_mut() }.set_metatable(Some(proxies));
         let f = vm.lib_native_with(nat_newproxy, &[Value::Table(proxies)])?;
         vm.lib_set_global("newproxy", f)?;
     }
