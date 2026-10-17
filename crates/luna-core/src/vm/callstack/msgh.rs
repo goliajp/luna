@@ -43,8 +43,12 @@ impl Vm {
             match self.msgh_once(handler, err, at) {
                 Ok(v) => break v,
                 Err(e) => {
-                    self.g.nccalls += 1;
-                    held += 1;
+                    // a call refused at the C-level limit keeps its level
+                    // in the next run already (`msgh_once`)
+                    if !self.c_overflow_err.is_some_and(|v| v.raw_eq(e)) {
+                        self.g.nccalls += 1;
+                        held += 1;
+                    }
                     err = e;
                     at = self.overflow_top.take();
                 }
