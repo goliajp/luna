@@ -164,10 +164,14 @@ impl Vm {
         // use; a native's top can lie below results a call it made has just
         // returned (print's nested tostring)
         let (len, top) = (self.stack.len(), self.top);
+        // a finalizer cannot yield (`luaD_callnoyield`), even on a
+        // coroutine
+        self.nny += 1;
         let r = match self.native_top() {
             Some(t) => self.call_protected_at(gc, &[obj], t.max(top)),
             None => self.call_protected(gc, &[obj]),
         };
+        self.nny -= 1;
         // the call gives back the slots it took, not the window of a native
         // below it, and leaves the stack and its top as they were (`GCTM`)
         if self.stack.len() < len {
