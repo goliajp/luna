@@ -12,6 +12,7 @@ impl Heap {
     pub(crate) fn gc_begin_propagate(&mut self) -> Marker {
         debug_assert!(self.phase == GcPhase::Pause);
         self.phase = GcPhase::Propagate;
+        self.env51_whiten();
         // 5.2's fixed strings are white like any other: a cycle marks them
         // where it reaches them, and counts them
         if self.table_dialect == crate::runtime::table::Dialect::L52 {
@@ -390,7 +391,14 @@ impl Heap {
                     };
                     k = format!("{kind}/{}/{}", u.puc_size, is_uncounted(h));
                 }
-                let tag = (*h).tag as u8;
+                // a record of 5.1's environments as the table or closure
+                // it stands for
+                let mut tag = (*h).tag as u8;
+                if super::env51::is_phantom(h) {
+                    let t = super::env51::phantom_is_table(h);
+                    tag = if t { ObjTag::Table } else { ObjTag::Native } as u8;
+                    k = String::from("env51");
+                }
                 self.trace.line(format_args!("p {tag} {w} {a} {n} {k}"));
             }
         }

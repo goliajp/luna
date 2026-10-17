@@ -50,6 +50,8 @@ impl NativeClosure {
     /// The upvalues PUC's function has; luna's others with luna's own
     /// objects.
     pub(crate) fn trace(&self, m: &mut Marker) {
+        // 5.1: its environment first
+        m.mark_env51(self.hdr.cls);
         let puc = crate::runtime::heap::native_puc_upvals(self);
         for (i, &v) in self.upvals.iter().enumerate() {
             if i < puc {

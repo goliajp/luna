@@ -227,6 +227,8 @@ pub struct Heap {
     table_pool: Vec<std::ptr::NonNull<crate::runtime::table::Table>>,
     /// the blocks the fixed natives are made in
     slab: slab::NativeSlab,
+    /// 5.1's environments luna has no objects for
+    env51_box: Option<Box<env51::Env51>>,
     /// The main functions of the chunks loaded while `track_chunk_roots`
     /// is set, without keeping them alive: the collector drops each one it
     /// finds dead. Compiled traces taken over from another Vm find the
@@ -290,6 +292,8 @@ mod barrier;
 #[path = "heap_collect.rs"]
 mod collect;
 pub(crate) use collect::{Propagated, Running};
+#[path = "heap_env51.rs"]
+mod env51;
 #[path = "heap_finalize.rs"]
 mod finalize;
 #[path = "heap_intern.rs"]
@@ -301,6 +305,7 @@ mod slab;
 use self::intern::oom_abort_heap;
 pub(crate) use self::new::fresh_seed;
 use self::new::make_seed;
+pub(crate) use env51::{ENV_IO, ENV_IO_POPEN, ENV_IO_STD, ENV_PACKAGE};
 #[path = "heap_free.rs"]
 mod free;
 #[path = "heap_mark.rs"]

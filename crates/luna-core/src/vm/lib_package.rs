@@ -45,6 +45,15 @@ pub(crate) fn try_open_package_bare(vm: &mut Vm) -> Result<(), LuaError> {
     // in its order, then `module` and `require` among the globals
     let pkg = vm.lib_table_puc("package")?;
     vm.lib_set_global("package", Value::Table(pkg))?;
+    // the environment of the loaders, `module` and `require`
+    vm.heap.env51_package(pkg);
+    let env = |vm: &mut Vm, f: Value| {
+        if let Value::Native(n) = f {
+            vm.heap
+                .set_env51(n.as_ptr() as *mut _, crate::runtime::heap::ENV_PACKAGE);
+        }
+        f
+    };
     let loaded = registry_table(vm, "_LOADED")?;
     let loaders = vm.lib_table_puc("package.loaders")?;
     let lf = vm.lib_native(crate::vm::lib_os_io::nat_loadfile)?;
@@ -53,7 +62,8 @@ pub(crate) fn try_open_package_bare(vm: &mut Vm) -> Result<(), LuaError> {
         vm.lib_native_nup(searcher_lua, &[Value::Table(pkg), lf], 0)?,
         vm.lib_native_nup(searcher_c, &[Value::Table(pkg)], 0)?,
         vm.lib_native_nup(searcher_croot, &[Value::Table(pkg)], 0)?,
-    ];
+    ]
+    .map(|f| env(vm, f));
     for (i, f) in fns.into_iter().enumerate() {
         vm.lib_set_value(loaders, Value::Int(i as i64 + 1), f)?;
     }
@@ -75,12 +85,14 @@ pub(crate) fn try_open_package_bare(vm: &mut Vm) -> Result<(), LuaError> {
     // light userdata of PUC's: nothing it counts)
     let sentinel = Value::Userdata(vm.lib_userdata(UserdataPayload::Empty, false, 0)?);
     let m = vm.lib_native_nup(ll_module, &[Value::Table(loaded)], 0)?;
+    let m = env(vm, m);
     vm.lib_set_global("module", m)?;
     let req = vm.lib_native_nup(
         ll_require,
         &[Value::Table(pkg), Value::Table(loaded), sentinel],
         0,
     )?;
+    let req = env(vm, req);
     vm.lib_set_global("require", req)?;
     vm.barrier_back_table(pkg);
     vm.barrier_back_table(loaded);

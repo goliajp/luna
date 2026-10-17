@@ -82,6 +82,8 @@ pub(crate) struct Marker {
     pub(crate) quiet: Vec<*mut GcHeader>,
     /// marking what `quiet` holds: nothing is counted
     pub(super) quiet_mode: bool,
+    /// 5.1's environment records, or null
+    pub(super) env51: *const super::env51::Env51,
     /// `gc-verify`: instead of marking a child, report one the sweep about
     /// to run would free (white, not the current white) while the object
     /// being traced (the second) holds it; the check's name third
@@ -125,7 +127,12 @@ pub(super) unsafe fn trace_children(h: *mut GcHeader, m: &mut Marker) {
     // SAFETY: the caller's contract
     unsafe {
         match (*h).tag {
-            ObjTag::Str | ObjTag::Ghost => {}
+            ObjTag::Str => {}
+            ObjTag::Ghost => {
+                if super::env51::is_phantom(h) {
+                    m.trace_phantom(h);
+                }
+            }
             ObjTag::Table => (*(h as *mut Table)).trace(h as *mut Table, m),
             ObjTag::Proto => (*(h as *mut Proto)).trace(h as *mut Proto, m),
             ObjTag::Closure => (*(h as *mut LuaClosure)).trace(m),

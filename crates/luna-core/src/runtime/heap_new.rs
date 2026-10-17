@@ -80,6 +80,7 @@ impl Heap {
             mem_cap: None,
             table_pool: Vec::new(),
             slab: Default::default(),
+            env51_box: None,
             #[cfg(feature = "gc-verify")]
             recently_freed: std::collections::HashSet::new(),
             mem,
