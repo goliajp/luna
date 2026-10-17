@@ -44,8 +44,10 @@ pub struct MemCtx {
     /// memory errors raised so far, for telling a memory error from a
     /// program's error with the same text
     pub(super) oom_raised: Cell<u64>,
-    /// freed blocks kept for reuse (`Mode::System`, see `pool.rs`)
+    /// freed blocks kept for reuse (`Mode::System`, see `pool.rs` and
+    /// `small.rs`)
     pub(super) pool: RefCell<super::pool::Pool>,
+    pub(super) small: RefCell<super::small::Small>,
 }
 
 /// A handle to a [`MemCtx`], kept by each container to free and grow its
@@ -85,6 +87,7 @@ impl MemCtx {
     pub(crate) fn alloc(&self, layout: Layout, kind: BlockKind) -> Option<NonNull<u8>> {
         debug_assert!(layout.size() != 0);
         match &self.mode {
+            Mode::System if super::small::pooled(layout) => self.alloc_small(layout),
             Mode::System if super::pool::pooled(layout.size()) => self.alloc_pooled(layout),
             // SAFETY: the size is not 0
             Mode::System => NonNull::new(unsafe { std::alloc::alloc(layout) }),
@@ -97,6 +100,12 @@ impl MemCtx {
     pub(crate) fn alloc_zeroed(&self, layout: Layout, kind: BlockKind) -> Option<NonNull<u8>> {
         debug_assert!(layout.size() != 0);
         match &self.mode {
+            Mode::System if super::small::pooled(layout) => {
+                let p = self.alloc_small(layout)?;
+                // SAFETY: `p` is a block of `layout.size()` bytes
+                unsafe { p.as_ptr().write_bytes(0, layout.size()) };
+                Some(p)
+            }
             Mode::System if super::pool::pooled(layout.size()) => self.alloc_pooled_zeroed(layout),
             // SAFETY: the size is not 0
             Mode::System => NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }),
@@ -202,6 +211,12 @@ impl MemCtx {
     #[inline(always)]
     pub(crate) unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {
         match &self.mode {
+            Mode::System if super::small::pooled(layout) => {
+                if !self.small.borrow_mut().keep(p, layout) {
+                    // SAFETY: the caller's contract
+                    unsafe { std::alloc::dealloc(p.as_ptr(), layout) }
+                }
+            }
             Mode::System if super::pool::pooled(layout.size()) => {
                 if !self.pool.borrow_mut().keep(p, layout) {
                     // SAFETY: the caller's contract

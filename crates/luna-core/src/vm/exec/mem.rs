@@ -36,6 +36,9 @@ impl Vm {
     #[cold]
     #[inline(never)]
     pub(crate) fn emergency_collect(&mut self) -> bool {
+        // the blocks kept for reuse go back first, collection or not: the
+        // retry that follows then fails only where it would without them
+        self.heap.mem().ctx().release_kept();
         if !self.emergency_allowed() {
             return false;
         }

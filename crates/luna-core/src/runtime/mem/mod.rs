@@ -17,6 +17,7 @@ mod owner;
 mod policy;
 mod pool;
 mod resize;
+mod small;
 mod vec;
 mod vec_abort;
 

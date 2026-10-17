@@ -12,7 +12,11 @@
 //! allocated of that layout during the last collection cycle, and in all
 //! at most the bytes it allocated of pooled sizes that cycle, capped by
 //! the larger of [`CAP_FLOOR`] and an eighth of the live heap, and by
-//! [`CAP_MAX`]. The pool is trimmed to that at the end of every cycle, and
+//! [`CAP_MAX`]; the small blocks of `small.rs` take their share of that
+//! cap first. The cap bounds what the process keeps resident beyond the
+//! live heap: an eighth of it keeps the overhead in proportion, the floor
+//! lets a small heap keep a steady state's churn, and the maximum bounds
+//! a large heap's. The pool is trimmed to that at the end of every cycle, and
 //! gives everything back when its context goes. Kept blocks are freed
 //! memory to the collector: they count in neither the heap's bytes nor
 //! its pace.
@@ -112,8 +116,7 @@ impl Pool {
     /// A collection cycle ended with `live` bytes in the heap: keep for
     /// each layout what the program allocated of it this cycle, within
     /// the share of `live`, and free the rest.
-    pub(super) fn cycle_ended(&mut self, live: usize) {
-        let share = (live / CAP_SHARE).clamp(CAP_FLOOR, CAP_MAX);
+    pub(super) fn cycle_ended(&mut self, share: usize) {
         self.cap = self.allocated.min(share);
         self.allocated = 0;
         for l in &mut self.lists {
@@ -139,14 +142,22 @@ impl Pool {
     }
 }
 
-impl Drop for Pool {
-    fn drop(&mut self) {
-        for l in &self.lists {
-            for p in &l.blocks {
+impl Pool {
+    /// Give every kept block back to the system.
+    pub(super) fn release(&mut self) {
+        for l in &mut self.lists {
+            for p in l.blocks.drain(..) {
                 // SAFETY: as in `cycle_ended`
                 unsafe { std::alloc::dealloc(p.as_ptr(), l.layout) };
             }
         }
+        self.bytes = 0;
+    }
+}
+
+impl Drop for Pool {
+    fn drop(&mut self) {
+        self.release();
     }
 }
 
@@ -203,7 +214,10 @@ impl MemCtx {
     /// The collector finished a cycle with `live` bytes in the heap.
     pub(crate) fn gc_cycle_ended(&self, live: usize) {
         if matches!(self.mode, Mode::System) {
-            self.pool.borrow_mut().cycle_ended(live);
+            // one cap for both pools, the small blocks served first
+            let share = (live / CAP_SHARE).clamp(CAP_FLOOR, CAP_MAX);
+            let small = self.small.borrow_mut().cycle_ended(share);
+            self.pool.borrow_mut().cycle_ended(share - small);
         }
     }
 }
