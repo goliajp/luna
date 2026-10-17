@@ -86,6 +86,9 @@ impl Vm {
         for &v in self.sort_scratch.iter().flatten().chain(&self.lib_roots) {
             m.value(v);
         }
+        for u in self.live_boxes() {
+            m.value(Value::Userdata(u));
+        }
         // The running-natives chain holds Gc<NativeClosure>s
         // mid-execution. Without rooting them here, a `collectgarbage()`
         // invoked inside the running native (sort.lua's `load(..)();

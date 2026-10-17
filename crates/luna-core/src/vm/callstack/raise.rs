@@ -164,6 +164,8 @@ impl Vm {
             self.msgh_applied = Some(out);
         }
         self.running_natives.truncate(base);
+        // the boxes of the natives the error leaves are garbage
+        self.buffer_boxes.retain(|&(at, _)| at as usize <= base);
         out
     }
 
