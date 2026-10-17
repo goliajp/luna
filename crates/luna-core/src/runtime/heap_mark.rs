@@ -49,6 +49,9 @@ pub(crate) struct Marker {
     /// PUC 5.1 mode: skip ephemeron handling — `__mode='k'` tables mark their
     /// values strongly during the normal trace pass (see [`Heap::no_ephemeron`]).
     pub(crate) no_ephemeron: bool,
+    /// the dialect, whose `reallymarkobject` decides which objects are
+    /// traversed as soon as they are marked
+    pub(crate) dialect: crate::runtime::table::Dialect,
     /// Protos with a non-null closure cache (PUC `Proto.cache`). After
     /// marking is done, any cached LClosure that ended the cycle unmarked is
     /// cleared so the sweep can collect it — the cache is a *weak* reference
@@ -194,6 +197,65 @@ impl Marker {
         }
     }
 
+    /// Whether PUC marks `h` with what it holds as soon as it marks it.
+    ///
+    /// # Safety
+    /// `h` heads an allocated object.
+    #[inline(always)]
+    unsafe fn at_once(&self, h: *mut GcHeader) -> bool {
+        // SAFETY: the caller's contract
+        match unsafe { (*h).tag } {
+            ObjTag::Upvalue => true,
+            ObjTag::Userdata => self.dialect <= crate::runtime::table::Dialect::L53,
+            _ => false,
+        }
+    }
+
+    /// What a userdata `h` marked at once holds: its metatable, then its
+    /// user value, a chain of userdata followed in a loop as PUC 5.3's
+    /// `reallymarkobject` does, so that it takes no stack.
+    ///
+    /// # Safety
+    /// `h` heads an allocated userdata, black already.
+    unsafe fn userdata_at_once(&mut self, mut h: *mut GcHeader) {
+        // SAFETY: the caller's contract; each userdata followed is held by
+        // the one before, allocated while marking
+        unsafe {
+            loop {
+                let u = &*(h as *const Userdata);
+                if let Some(mt) = u.metatable() {
+                    self.mark(mt);
+                }
+                if let UserdataPayload::Host {
+                    data,
+                    trace_fn: Some(trace_fn),
+                    ..
+                } = &u.payload
+                {
+                    let mut um = crate::vm::UserdataMarker::__new_internal(self);
+                    trace_fn(data, &mut um);
+                }
+                let Value::Userdata(next) = u.user_value else {
+                    self.value(u.user_value);
+                    return;
+                };
+                let n = next.header();
+                let f = (*n).flags;
+                if !is_white(f) {
+                    return;
+                }
+                if self.leaf_hdr != 0 {
+                    self.count_leaf(n);
+                }
+                if let Some(s) = &mut self.sizer {
+                    s.marked += s.size(n);
+                }
+                (*n).flags = (*n).with_slow((f & !WHITE_BITS) | BLACK);
+                h = n;
+            }
+        }
+    }
+
     /// Mark a value, returning true if it was newly marked (was white).
     pub(crate) fn value(&mut self, v: Value) -> bool {
         let h = match v {
@@ -274,6 +336,15 @@ impl Marker {
                 // as PUC's `reallymarkobject` makes it
                 if f & self.leaf_black != 0 || (*h).tag == ObjTag::Str {
                     (*h).flags = (*h).with_slow((f & !WHITE_BITS) | BLACK);
+                } else if self.at_once(h) {
+                    // an upvalue, and a userdata up to 5.3, are never gray:
+                    // what they hold is marked as they are
+                    (*h).flags = (*h).with_slow((f & !WHITE_BITS) | BLACK);
+                    if (*h).tag == ObjTag::Userdata {
+                        self.userdata_at_once(h);
+                    } else {
+                        trace_children(h, self);
+                    }
                 } else {
                     (*h).flags = (*h).with_slow(f & !WHITE_BITS);
                     self.push_gray(h);
