@@ -198,3 +198,52 @@ fn gc_finalizer_error_does_not_abort_program() {
         "the good __gc should have run at least once after the bad one errored"
     );
 }
+
+/// A finalizer that an automatic step runs inside a coroutine tries to
+/// yield: it cannot (PUC's `GCTM` calls it with `luaD_callnoyield`), so
+/// the yield fails inside it and the coroutine goes on. Run under
+/// `gc-verify` too, where a frame mixed up by a yield that went through
+/// would be caught.
+#[test]
+fn finalizer_on_a_coroutine_cannot_yield() {
+    for v in [
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        let mut vm = Vm::new(v);
+        let r = vm
+            .eval(
+                r#"
+                local seen
+                local function note()
+                  if seen then return end
+                  local ok, e = pcall(coroutine.yield)
+                  seen = tostring(ok) .. " " .. tostring(e)
+                end
+                do local x = setmetatable({}, {__gc = note}) end
+                local co = coroutine.wrap(function()
+                  local n = 0
+                  for i = 1, 20000 do local t = {i} n = n + #t end
+                  return n
+                end)
+                return co(), seen
+                "#,
+            )
+            .unwrap_or_else(|e| panic!("{v:?}: {}", vm.error_text(&e)));
+        // (a float before 5.3)
+        assert!(
+            matches!(r[0], Value::Int(20000)) || matches!(r[0], Value::Float(f) if f == 20000.0),
+            "{v:?}"
+        );
+        let Value::Str(s) = r[1] else {
+            panic!("{v:?}: the finalizer did not run")
+        };
+        assert_eq!(
+            s.as_bytes(),
+            b"false attempt to yield across a C-call boundary",
+            "{v:?}"
+        );
+    }
+}
