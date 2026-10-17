@@ -72,11 +72,11 @@ impl std::hash::Hasher for KeyHasher {
     }
     fn write(&mut self, bytes: &[u8]) {
         for &b in bytes {
-            self.0 = (self.0.rotate_left(5) ^ u64::from(b)).wrapping_mul(0x51_7cc1_b727_220a_95);
+            self.0 = (self.0.rotate_left(5) ^ u64::from(b)).wrapping_mul(0x517c_c1b7_2722_0a95);
         }
     }
     fn write_u64(&mut self, n: u64) {
-        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x51_7cc1_b727_220a_95);
+        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x517c_c1b7_2722_0a95);
     }
     fn write_usize(&mut self, n: usize) {
         self.write_u64(n as u64);
