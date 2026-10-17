@@ -91,17 +91,19 @@ fn parse_format(vm: &mut Vm, fmt: Value, argno: u32) -> Result<Fmt, LuaError> {
 }
 
 /// `g_read`: apply `fmts` in order until one fails. With no formats, read a
-/// line. `argno0` numbers the first format in argument errors.
+/// line. `argno0` numbers the first format in argument errors; `top` is the
+/// C function's stack top PUC has when it calls `g_read`.
 pub(super) fn g_read(
     vm: &mut Vm,
     u: Gc<Userdata>,
     fmts: &[Value],
     argno0: u32,
+    top: u32,
 ) -> Result<ReadOut, LuaError> {
     reset_errno(vm);
     if u.crt.is_some() {
         crt::begin_read(u);
-        let r = g_read_formats(vm, u, fmts, argno0)?;
+        let r = g_read_formats(vm, u, fmts, argno0, top)?;
         return Ok(if crt::ferror(u) {
             ReadOut::Error(crt::error())
         } else {
@@ -112,7 +114,7 @@ pub(super) fn g_read(
     if let Err(e) = drain_write_buf(u) {
         return Ok(ReadOut::Error(e));
     }
-    g_read_formats(vm, u, fmts, argno0)
+    g_read_formats(vm, u, fmts, argno0, top)
 }
 
 fn g_read_formats(
@@ -120,11 +122,12 @@ fn g_read_formats(
     u: Gc<Userdata>,
     fmts: &[Value],
     argno0: u32,
+    top: u32,
 ) -> Result<ReadOut, LuaError> {
     // the values read stay on the C function's stack while the next is
     // read, which may collect
     let base = vm.lib_roots.len();
-    let r = read_formats(vm, u, fmts, argno0);
+    let r = read_formats(vm, u, fmts, argno0, top);
     vm.lib_roots.truncate(base);
     r
 }
@@ -134,6 +137,7 @@ fn read_formats(
     u: Gc<Userdata>,
     fmts: &[Value],
     argno0: u32,
+    top: u32,
 ) -> Result<ReadOut, LuaError> {
     if fmts.is_empty() {
         return Ok(match read_line(vm, u, false) {
@@ -142,6 +146,9 @@ fn read_formats(
             Err(RdErr::Lua(e)) => return Err(e),
         });
     }
+    // room for all the results and the auxiliary library's buffer
+    let n = fmts.len() as i64 + i64::from(crate::vm::exec::stack_size::MIN_STACK);
+    crate::vm::argcheck::check_stack_at(vm, top, n, "too many arguments")?;
     let mut out = Vec::with_capacity(fmts.len());
     for (i, &f) in fmts.iter().enumerate() {
         let fmt = match parse_format(vm, f, argno0 + i as u32) {
@@ -184,14 +191,15 @@ fn push_read(vm: &mut Vm, fs: u32, r: ReadOut) -> Result<u32, LuaError> {
 pub(super) fn io_read(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = get_io_file(vm, Io::Input)?;
     let fmts: Vec<Value> = (0..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
-    let r = g_read(vm, u, &fmts, 1)?;
+    // `getiofile` pushed the file
+    let r = g_read(vm, u, &fmts, 1, fs + 1 + nargs + 1)?;
     push_read(vm, fs, r)
 }
 
 pub(super) fn f_read(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = check_open(vm, Args::new(fs, nargs), 0)?;
     let fmts: Vec<Value> = (1..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
-    let r = g_read(vm, u, &fmts, 2)?;
+    let r = g_read(vm, u, &fmts, 2, fs + 1 + nargs)?;
     push_read(vm, fs, r)
 }
 

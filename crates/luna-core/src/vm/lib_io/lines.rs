@@ -73,7 +73,7 @@ pub(super) fn io_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
 }
 
 /// `io_readline`: one step of a line iterator.
-fn io_readline(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
+fn io_readline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let Value::Userdata(u) = vm.nat_upval(fs, 0) else {
         unreachable!("line iterator upvalue 0 is its file");
     };
@@ -84,11 +84,18 @@ fn io_readline(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
         .map(|i| vm.nat_upval(fs, i))
         .collect();
     // `lua_settop(L, 1)`, then the formats are pushed for `g_read` (5.2+)
+    let mut top = fs + 1 + nargs;
     if vm.version() >= LuaVersion::Lua52 {
         vm.native_settop(1);
+        top = fs + 2;
+        if vm.version() >= LuaVersion::Lua53 {
+            let n = fmts.len() as i64;
+            crate::vm::argcheck::check_stack_at(vm, top, n, "too many arguments")?;
+        }
         vm.native_push(fmts.len() as u32);
+        top += fmts.len() as u32;
     }
-    let vals = match g_read(vm, u, &fmts, 2)? {
+    let vals = match g_read(vm, u, &fmts, 2, top)? {
         ReadOut::Values(v) => v,
         // the read's error message is raised
         ReadOut::Error(e) => {
