@@ -126,12 +126,7 @@ impl Heap {
                     } else if (*h).sub & UNCOUNTED != 0 {
                         self.free_stand_in(h);
                     } else {
-                        #[cfg(feature = "gc-trace")]
-                        if self.trace.where_ {
-                            let b = String::from_utf8_lossy(string::bytes_of(s)).into_owned();
-                            self.trace.line(format_args!("s {b:?}"));
-                        }
-                        self.acct_string_free((*s).len());
+                        return self.free_plain_str(s);
                     }
                     if (*s).is_short() {
                         self.strings.remove(s);
@@ -139,6 +134,40 @@ impl Heap {
                     string::free(s, self.mem());
                 }
             }
+        }
+    }
+
+    /// Whether the object behind `h` is a string PUC counts as luna does,
+    /// one [`Heap::free_plain_str`] frees.
+    ///
+    /// # Safety
+    /// `h` heads an allocated object of this heap.
+    #[inline(always)]
+    pub(super) unsafe fn is_plain_str(h: *mut GcHeader) -> bool {
+        // SAFETY: the caller's contract; only the header is read
+        unsafe {
+            (*h).tag == ObjTag::Str
+                && (*h).sub & (EXTERNAL | acct::FIXED_EXT | strt::SWEPT | UNCOUNTED) == 0
+        }
+    }
+
+    /// [`Heap::free_obj`] of a string [`Heap::is_plain_str`] accepts.
+    ///
+    /// # Safety
+    /// As for `free_obj`, and `s` is such a string.
+    pub(super) unsafe fn free_plain_str(&mut self, s: *mut LuaStr) {
+        // SAFETY: the caller's contract: `s` is an unlinked string of this heap nothing uses afterwards; a short one is still in the string table
+        unsafe {
+            #[cfg(feature = "gc-trace")]
+            if self.trace.where_ {
+                let b = String::from_utf8_lossy(string::bytes_of(s)).into_owned();
+                self.trace.line(format_args!("s {b:?}"));
+            }
+            self.acct_string_free((*s).len());
+            if (*s).is_short() {
+                self.strings.remove(s);
+            }
+            string::free(s, self.mem());
         }
     }
 
