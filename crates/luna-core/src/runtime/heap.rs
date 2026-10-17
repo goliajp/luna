@@ -186,6 +186,10 @@ pub struct Heap {
     /// one collection after it finds it unreachable (gc.lua :502); 5.4 and
     /// 5.5 in the same one (gc.lua :544). Set by the VM at construction.
     pub(crate) defer_thread_cycle_finalize: bool,
+    /// 5.1: the name `__gc`, which a userdata listed for finalization must
+    /// have in its metatable when it dies to be finalized (PUC 5.1 lists
+    /// every userdata given a metatable and looks then)
+    pub(crate) gc_event_51: Option<Gc<crate::runtime::LuaStr>>,
     /// An object finalized once can be registered again (all but 5.2,
     /// whose `luaC_checkfinalizer` refuses a finalized object).
     pub(crate) refinalize: bool,
