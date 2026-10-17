@@ -15,6 +15,12 @@ pub(crate) fn check_stack(vm: &mut Vm, a: Args, n: i64, msg: &str) -> Result<(),
 /// [`check_stack`] with the C function's top at slot `top`.
 #[inline]
 pub(crate) fn check_stack_at(vm: &mut Vm, top: u32, n: i64, msg: &str) -> Result<(), LuaError> {
+    // 5.2 asks for `LUA_MINSTACK` more, room to run error routines in
+    let n = if vm.version() == LuaVersion::Lua52 {
+        n + i64::from(crate::vm::exec::stack_size::MIN_STACK)
+    } else {
+        n
+    };
     // what fits under the stack's size needs no look at it, except the
     // room granted, which the C function's frame reserves from then on
     let room = i64::from(vm.g.stack_last.saturating_sub(top));
