@@ -71,6 +71,7 @@ mod native_panic_jit;
 mod per_vm_jit_storage;
 mod puc_bytecode_jit;
 mod sandbox;
+mod self_call_levels;
 mod self_link_fib_correctness;
 mod selflink_yields_to_downrec;
 mod send_jit_module_wrapper;
