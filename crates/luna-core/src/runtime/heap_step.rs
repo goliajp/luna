@@ -20,12 +20,16 @@ impl Heap {
             cached_protos: Vec::new(),
             no_ephemeron: self.no_ephemeron,
         });
-        let mut m = self.loan_marker();
+        self.loan_marker()
+    }
+
+    /// Mark the objects awaiting their finalizers (PUC `markbeingfnz`,
+    /// 5.1's `marktmu`).
+    pub(crate) fn mark_tobefnz(&self, m: &mut Marker) {
         for &h in self.tobefnz_live() {
-            // SAFETY: a queued finalizable stays allocated until its `__gc` has run (`take_tobefnz`)
+            // SAFETY: a queued finalizable stays allocated until its `__gc` has run (`take_one_tobefnz`)
             unsafe { m.header(h) };
         }
-        m
     }
 
     /// [`Heap::gc_begin_propagate`] with `roots` / `extra` as the roots.
@@ -186,6 +190,18 @@ impl Heap {
     }
 }
 
+/// Where a run of [`Heap::propagate_work`] stopped.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Propagated {
+    /// no object is gray
+    Empty,
+    /// the work it was given is done
+    Budget,
+    /// it traversed this thread, whose values the VM holds (the running
+    /// one, or the main one while a coroutine runs)
+    Thread(*mut GcHeader),
+}
+
 /// The running thread, for the work of traversing it: its object, and
 /// the top of its stack, the stack's size and its `CallInfo`s (PUC's
 /// counts), which the VM holds while it runs; and the main thread's
@@ -259,13 +275,18 @@ impl Heap {
     /// `remaining`: the first always (a step's loop runs its body once
     /// before testing), the next ones while `remaining` is above `floor`.
     /// Returns whether it looked for one more and found none.
-    pub(crate) fn propagate_work(&mut self, remaining: &mut i64, floor: i64, run: Running) -> bool {
+    pub(crate) fn propagate_work(
+        &mut self,
+        remaining: &mut i64,
+        floor: i64,
+        run: Running,
+    ) -> Propagated {
         debug_assert!(self.phase == GcPhase::Propagate);
         let mut m = self.loan_marker();
-        let mut empty = false;
+        let mut out = Propagated::Budget;
         loop {
             let Some(h) = m.pop() else {
-                empty = true;
+                out = Propagated::Empty;
                 break;
             };
             m.leaf_bytes = 0;
@@ -280,12 +301,17 @@ impl Heap {
                 }
                 *remaining -= w;
             }
+            // a thread whose values the VM holds: the VM marks them next
+            if h == run.h || h == run.main {
+                out = Propagated::Thread(h);
+                break;
+            }
             if *remaining <= floor {
                 break;
             }
         }
         self.stash_marker(m);
-        empty
+        out
     }
 
     /// A sweep with nothing dead, as 5.5's `minor2inc` starts one: the

@@ -14,6 +14,58 @@ impl Vm {
         for mt in self.type_mt.into_iter().flatten() {
             m.value(Value::Table(mt));
         }
+        self.mark_root_strings(m, again);
+        self.mark_running(m);
+        self.mark_main_ctx(m);
+    }
+
+    /// The roots a cycle starts from, in PUC's order (`markroot`, later
+    /// `restartcollection`), which decides the order everything else is
+    /// traversed in: the main thread first (its values are marked when it
+    /// is traversed, [`Vm::mark_thread_values`]), 5.1's globals, the
+    /// registry, the basic types' metatables.
+    pub(crate) fn mark_roots_restart(&self, m: &mut crate::runtime::heap::Marker) {
+        self.mark_root_strings(m, false);
+        if let Some(mc) = self.main_coro {
+            m.value(Value::Coro(mc));
+        }
+        if self.version == LuaVersion::Lua51 {
+            m.value(Value::Table(self.globals));
+        }
+        if let Some(r) = self.registry {
+            m.value(Value::Table(r));
+        }
+        // PUC's tag order: nil, boolean, light userdata, number, string,
+        // function, thread
+        for slot in [0, 1, 5, 2, 3, 4, 6] {
+            if let Some(mt) = self.type_mt[slot] {
+                m.value(Value::Table(mt));
+            }
+        }
+    }
+
+    /// The values of thread `h` that the VM holds, when the step traverses
+    /// it: the running thread's, or the main one's while a coroutine runs.
+    /// The running thread carries what luna roots outside PUC's objects.
+    pub(crate) fn mark_thread_values(
+        &self,
+        m: &mut crate::runtime::heap::Marker,
+        h: *mut crate::runtime::heap::GcHeader,
+    ) {
+        let running = self.current.or(self.main_coro);
+        if running.is_some_and(|c| c.as_ptr() as *mut _ == h) {
+            if self.version == LuaVersion::Lua51 {
+                m.value(Value::Table(self.globals));
+            }
+            self.mark_running(m);
+        } else {
+            self.mark_main_ctx(m);
+        }
+    }
+
+    /// The strings luna roots: the names PUC fixes and the strings PUC's
+    /// libraries keep, and the message a load may have made.
+    fn mark_root_strings(&self, m: &mut crate::runtime::heap::Marker, again: bool) {
         // the root strings stay black from the cycle's start to its sweep:
         // the atomic step marks only the pins added since, and the message
         // a load may have made meanwhile
@@ -26,6 +78,11 @@ impl Vm {
             puc.pins_marked.set(puc.pins.len());
         }
         m.mark_strings(puc.load_msg.iter());
+    }
+
+    /// The running thread's values, and the roots luna has outside PUC's
+    /// objects.
+    fn mark_running(&self, m: &mut crate::runtime::heap::Marker) {
         // Root the running thread's live registers (PUC marks [stack, top)).
         // `gc_top` is the instruction-level cursor of the last GC
         // safe-point: allocation safe-points set it via
@@ -123,7 +180,13 @@ impl Vm {
         if let Some(f) = self.io_stdin {
             m.value(Value::Userdata(f));
         }
-        // the main thread's saved context while a coroutine runs
+        for &(_, uv) in self.open_upvals.iter() {
+            m.mark(uv);
+        }
+    }
+
+    /// The main thread's saved context while a coroutine runs.
+    fn mark_main_ctx(&self, m: &mut crate::runtime::heap::Marker) {
         if let Some(mc) = &self.main_ctx {
             for &v in mc.stack.iter() {
                 m.value(v);
@@ -145,9 +208,6 @@ impl Vm {
                     CallFrame::Cont(_) => {}
                 }
             }
-        }
-        for &(_, uv) in self.open_upvals.iter() {
-            m.mark(uv);
         }
         if let Some(mc) = &self.main_ctx {
             for &(_, uv) in mc.open_upvals.iter() {

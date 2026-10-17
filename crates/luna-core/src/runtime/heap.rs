@@ -302,7 +302,7 @@ mod alloc;
 mod barrier;
 #[path = "heap_collect.rs"]
 mod collect;
-pub(crate) use collect::Running;
+pub(crate) use collect::{Propagated, Running};
 #[path = "heap_finalize.rs"]
 mod finalize;
 #[path = "heap_intern.rs"]

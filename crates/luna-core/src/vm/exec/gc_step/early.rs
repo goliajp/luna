@@ -12,7 +12,7 @@ impl Vm {
         let run = self.gc_running();
         loop {
             if self.heap.pace.state == St::Propagate {
-                self.heap.propagate_work(&mut debt, floor, run);
+                self.gc_propagate(&mut debt, floor, run);
                 if self.heap.gray_is_empty() {
                     self.heap.pace.state = St::Atomic;
                 }
@@ -128,7 +128,7 @@ impl Vm {
         loop {
             if self.heap.pace.state == St::Propagate {
                 let before = debt;
-                let empty = self.heap.propagate_work(&mut debt, floor, run);
+                let empty = self.gc_propagate(&mut debt, floor, run);
                 // what was traversed, for the estimate
                 self.heap.pace.estimate += before - debt;
                 if empty {
@@ -220,7 +220,7 @@ impl Vm {
         let run = self.gc_running();
         loop {
             if self.heap.pace.state == St::Propagate {
-                if self.heap.propagate_work(&mut lim, 0, run) {
+                if self.gc_propagate(&mut lim, 0, run) {
                     self.atomic_51();
                 }
             } else {

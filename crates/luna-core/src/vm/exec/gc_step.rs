@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::runtime::gc_pace::*;
-use crate::runtime::heap::Running;
+use crate::runtime::heap::{Propagated, Running};
 use crate::runtime::table::Dialect;
 use crate::vm::lib_gc::Param;
 
@@ -324,12 +324,36 @@ impl Vm {
         }
     }
 
+    /// PUC's propagation with `work` to do (down to `floor`): when it
+    /// traverses a thread whose values the VM holds, the VM marks them and
+    /// it goes on. True when no object is gray.
+    pub(super) fn gc_propagate(&mut self, work: &mut i64, floor: i64, run: Running) -> bool {
+        loop {
+            match self.heap.propagate_work(work, floor, run) {
+                Propagated::Empty => return true,
+                Propagated::Budget => return false,
+                Propagated::Thread(h) => {
+                    let mut m = self.heap.loan_marker();
+                    self.mark_thread_values(&mut m, h);
+                    self.heap.stash_marker(m);
+                    if *work <= floor {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
     /// `restartcollection` (5.1 `markroot`): the roots marked, the cycle
     /// propagating.
     fn gc_restart(&mut self) {
         self.gc_count_marked();
         let mut m = self.heap.gc_begin_propagate();
-        self.mark_roots(&mut m, false);
+        self.mark_roots_restart(&mut m);
+        // 5.1 marks them in its atomic step
+        if self.version != LuaVersion::Lua51 {
+            self.heap.mark_tobefnz(&mut m);
+        }
         self.heap.stash_marker(m);
         self.heap.pace.state = St::Propagate;
     }
@@ -340,6 +364,9 @@ impl Vm {
         self.clear_dead_stack();
         let run = self.gc_running();
         let mut m = self.heap.loan_marker();
+        if self.version == LuaVersion::Lua51 {
+            self.heap.mark_tobefnz(&mut m);
+        }
         self.mark_roots(&mut m, true);
         self.heap.stash_marker(m);
         self.watch_errors();
