@@ -162,6 +162,23 @@ impl Heap {
     /// Every userdata still awaiting finalization, registered or already
     /// queued. The io library uses it to reach all open files the way C's
     /// `fflush(NULL)` and `exit` reach every `FILE*`.
+    /// Every userdata of the heap, as the state closes.
+    pub(crate) fn all_userdata(&self) -> Vec<Gc<crate::runtime::Userdata>> {
+        let mut out = Vec::new();
+        let mut cur = self.all;
+        // SAFETY: the links of `all` lead to live objects; the tag says
+        // which are userdata
+        unsafe {
+            while !cur.is_null() {
+                if (*cur).tag == ObjTag::Userdata {
+                    out.push(Gc::from_ptr(cur as *mut crate::runtime::Userdata));
+                }
+                cur = (*cur).next;
+            }
+        }
+        out
+    }
+
     pub(crate) fn finalizable_userdata(&self) -> Vec<Gc<crate::runtime::Userdata>> {
         self.finalize
             .iter()

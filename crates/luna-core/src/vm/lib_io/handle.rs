@@ -79,7 +79,17 @@ pub(super) fn check_open(vm: &mut Vm, a: Args, i: u32) -> Result<Gc<Userdata>, L
 
 /// Drain every open handle's output buffer and stdout (C `fflush(NULL)`).
 pub(crate) fn flush_all(vm: &mut Vm) {
-    for u in vm.heap.finalizable_userdata() {
+    flush_these(vm.heap.finalizable_userdata());
+}
+
+/// [`flush_all`] as the state closes: every stream still open, a finalizer
+/// or not (C's `exit` flushes them all).
+pub(crate) fn flush_all_closing(vm: &mut Vm) {
+    flush_these(vm.heap.all_userdata());
+}
+
+fn flush_these(us: Vec<Gc<Userdata>>) {
+    for u in us {
         if matches!(u.payload, UserdataPayload::File(ref fh) if !fh.is_closed()) {
             // like fflush(NULL), a stream that fails to flush does not stop
             // the others and reports nothing

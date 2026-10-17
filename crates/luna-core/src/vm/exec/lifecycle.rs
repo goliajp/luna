@@ -35,6 +35,9 @@ impl Vm {
             let _ = self.close_slots(0, None);
         }
         self.run_finalizers_closing();
+        // what is still open writes out its buffers, as C's exit flushes
+        // every stream (`lua.c` exits right after closing the state)
+        crate::vm::lib_io::flush_all_closing(self);
     }
 
     /// Build the raw `Vm` struct without main coroutine / RNG seed / library
@@ -307,6 +310,8 @@ impl Drop for Vm {
         // single pass — objects created by a closing finalizer are not
         // re-finalized (they go to the heap's free list directly).
         self.run_finalizers_closing();
+        // a stream left open writes out its buffers before its memory goes
+        crate::vm::lib_io::flush_all_closing(self);
         let id = self.jit_owner_id;
         // SAFETY: the finalizers were the last Lua code this Vm runs, and
         // its functions (the only holders of entry points compiled for it)
