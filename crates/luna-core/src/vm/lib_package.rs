@@ -34,127 +34,54 @@ const LUA_PATH_DEFAULT: &[u8] = b"./?.lua;./?/init.lua";
 /// PUC's message and `loadlib` "where" when built without dynamic libraries.
 const DLMSG: &[u8] = b"dynamic libraries not enabled; check your Lua installation";
 
-/// Open the `package` library, failing when memory runs out.
-pub(crate) fn try_open_package(vm: &mut Vm) -> Result<(), LuaError> {
-    open_package_with(vm, true)
-}
-
 /// [`open_package_bare`], raising a memory error.
 pub(crate) fn try_open_package_bare(vm: &mut Vm) -> Result<(), LuaError> {
-    open_package_with(vm, false)
-}
-
-fn open_package_with(vm: &mut Vm, list_opened: bool) -> Result<(), LuaError> {
     let v = vm.version();
     if v >= LuaVersion::Lua52 {
-        return open::open_package_puc(vm, list_opened);
+        return open::open_package_puc(vm);
     }
-    let pkg = vm.alloc_table()?;
+    // 5.1's `luaopen_package`: the package table its functions are
+    // registered in (`luaL_register`, which sets the global), the fields
+    // in its order, then `module` and `require` among the globals
+    let pkg = vm.lib_table_puc("package")?;
+    vm.lib_set_global("package", Value::Table(pkg))?;
     let loaded = registry_table(vm, "_LOADED")?;
-    let names: &[&str] = if list_opened {
-        &[
-            "_G",
-            "package",
-            "coroutine",
-            "table",
-            "io",
-            "os",
-            "string",
-            "bit32",
-            "math",
-            "utf8",
-            "debug",
-        ]
-    } else {
-        &[]
-    };
-    for &name in names {
-        let val = match name {
-            "package" => Value::Table(pkg),
-            _ => {
-                let k = vm.str_value(name.as_bytes())?;
-                vm.globals().get(k)
-            }
-        };
-        if !val.is_nil() {
-            raw_set(vm, loaded, name, val)?;
-        }
-    }
-    raw_set(vm, pkg, "loaded", Value::Table(loaded))?;
-    // 5.1 keeps preload in the package table only; 5.2 moved it to the
-    // registry
-    let preload = if v == LuaVersion::Lua51 {
-        vm.alloc_table()?
-    } else {
-        registry_table(vm, "_PRELOAD")?
-    };
-    raw_set(vm, pkg, "preload", Value::Table(preload))?;
-
-    let searchers = vm.alloc_table()?;
+    let loaders = vm.lib_table_puc("package.loaders")?;
     let lf = vm.lib_native(crate::vm::lib_os_io::nat_loadfile)?;
-    // 5.1's loaders have no upvalue, the later searchers the package table
-    let nup = usize::from(v != LuaVersion::Lua51);
-    let lua_searcher = vm.lib_native_nup(searcher_lua, &[Value::Table(pkg), lf], nup)?;
     let fns = [
-        vm.lib_native_nup(searcher_preload, &[Value::Table(pkg)], nup)?,
-        lua_searcher,
-        vm.lib_native_nup(searcher_c, &[Value::Table(pkg)], nup)?,
-        vm.lib_native_nup(searcher_croot, &[Value::Table(pkg)], nup)?,
+        vm.lib_native_nup(searcher_preload, &[Value::Table(pkg)], 0)?,
+        vm.lib_native_nup(searcher_lua, &[Value::Table(pkg), lf], 0)?,
+        vm.lib_native_nup(searcher_c, &[Value::Table(pkg)], 0)?,
+        vm.lib_native_nup(searcher_croot, &[Value::Table(pkg)], 0)?,
     ];
     for (i, f) in fns.into_iter().enumerate() {
-        vm.lib_set_value(searchers, Value::Int(i as i64 + 1), f)?;
+        vm.lib_set_value(loaders, Value::Int(i as i64 + 1), f)?;
     }
-    vm.barrier_back_table(searchers);
-    match v {
-        LuaVersion::Lua51 => raw_set(vm, pkg, "loaders", Value::Table(searchers))?,
-        LuaVersion::Lua52 => {
-            raw_set(vm, pkg, "searchers", Value::Table(searchers))?;
-            raw_set(vm, pkg, "loaders", Value::Table(searchers))?;
-        }
-        _ => raw_set(vm, pkg, "searchers", Value::Table(searchers))?,
-    }
-
-    // 5.2 on: `-E` (the registry's LUA_NOENV) keeps the defaults
-    let noenv = vm.ignore_env && v >= LuaVersion::Lua52;
-    let path = env_path(v, noenv, "LUA_PATH", LUA_PATH_DEFAULT);
-    let path = vm.str_value(&path)?;
-    raw_set(vm, pkg, "path", path)?;
-    let cpath = env_path(v, noenv, "LUA_CPATH", &cpath_default(v));
-    let cpath = vm.str_value(&cpath)?;
-    raw_set(vm, pkg, "cpath", cpath)?;
-    // dir separator, path separator, template mark, executable-dir mark,
-    // ignore mark; 5.2 added the final newline
-    let config: &[u8] = if v == LuaVersion::Lua51 {
-        b"/\n;\n?\n!\n-"
-    } else {
-        b"/\n;\n?\n!\n-\n"
-    };
-    let config = vm.str_value(config)?;
-    raw_set(vm, pkg, "config", config)?;
-
-    let f = vm.lib_native(ll_loadlib)?;
-    raw_set(vm, pkg, "loadlib", f)?;
-    if v >= LuaVersion::Lua52 {
-        let f = vm.lib_native(ll_searchpath)?;
-        raw_set(vm, pkg, "searchpath", f)?;
-    }
-    // 5.1 marks a module being loaded with a sentinel, to catch loops (a
+    vm.barrier_back_table(loaders);
+    let path = env_path(v, false, "LUA_PATH", LUA_PATH_DEFAULT);
+    let cpath = env_path(v, false, "LUA_CPATH", &cpath_default(v));
+    let entries = vec![
+        ("loadlib", vm.lib_native(ll_loadlib)?),
+        ("seeall", vm.lib_native(ll_seeall)?),
+        ("loaders", Value::Table(loaders)),
+        ("path", vm.str_value(&path)?),
+        ("cpath", vm.str_value(&cpath)?),
+        ("config", vm.str_value(b"/\n;\n?\n!\n-")?),
+        ("loaded", Value::Table(loaded)),
+        ("preload", Value::Table(vm.alloc_table()?)),
+    ];
+    vm.lib_put_all(pkg, "package", entries)?;
+    // a module being loaded is marked with a sentinel, to catch loops (a
     // light userdata of PUC's: nothing it counts)
     let sentinel = Value::Userdata(vm.lib_userdata(UserdataPayload::Empty, false, 0)?);
-    // as the searchers: the package table from 5.2 on
+    let m = vm.lib_native_nup(ll_module, &[Value::Table(loaded)], 0)?;
+    vm.lib_set_global("module", m)?;
     let req = vm.lib_native_nup(
         ll_require,
         &[Value::Table(pkg), Value::Table(loaded), sentinel],
-        nup,
+        0,
     )?;
     vm.lib_set_global("require", req)?;
-    if v <= LuaVersion::Lua52 {
-        let f = vm.lib_native(ll_seeall)?;
-        raw_set(vm, pkg, "seeall", f)?;
-        let m = vm.lib_native_nup(ll_module, &[Value::Table(loaded)], nup)?;
-        vm.lib_set_global("module", m)?;
-    }
-    vm.lib_set_global("package", Value::Table(pkg))?;
     vm.barrier_back_table(pkg);
     vm.barrier_back_table(loaded);
     Ok(())

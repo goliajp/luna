@@ -6,41 +6,53 @@ use crate::vm::argcheck::{self, Args};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
-/// Open the base library, failing when memory runs out.
+/// Open the base library, failing when memory runs out; without
+/// `loadfile` and `dofile`, which luna opens with `os` and `io`.
 pub(crate) fn try_open_base(vm: &mut Vm) -> Result<(), LuaError> {
+    open_base(vm, false)
+}
+
+/// PUC's base library, which has `loadfile` and `dofile`.
+pub(crate) fn try_open_base_puc(vm: &mut Vm) -> Result<(), LuaError> {
+    open_base(vm, true)
+}
+
+fn open_base(vm: &mut Vm, loaders: bool) -> Result<(), LuaError> {
+    // the globals, put in the order PUC's base library puts them
+    let mut g: Vec<(&str, Value)> = Vec::with_capacity(32);
     let f = vm.lib_native(nat_assert)?;
-    vm.lib_set_global("assert", f)?;
+    g.push(("assert", f));
     let f = vm.builtin(nat_error, &[], Builtin::Error)?;
-    vm.lib_set_global("error", f)?;
+    g.push(("error", f));
     let f = vm.builtin(nat_pcall, &[], Builtin::Pcall)?;
-    vm.lib_set_global("pcall", f)?;
+    g.push(("pcall", f));
     let f = vm.builtin(nat_xpcall, &[], Builtin::Xpcall)?;
-    vm.lib_set_global("xpcall", f)?;
+    g.push(("xpcall", f));
     let f = vm.lib_native(nat_type)?;
-    vm.lib_set_global("type", f)?;
+    g.push(("type", f));
     let f = vm.lib_native(nat_print)?;
-    vm.lib_set_global("print", f)?;
+    g.push(("print", f));
     let f = vm.builtin(nat_tostring, &[], Builtin::Tostring)?;
-    vm.lib_set_global("tostring", f)?;
+    g.push(("tostring", f));
     let f = vm.lib_native(nat_rawget)?;
-    vm.lib_set_global("rawget", f)?;
+    g.push(("rawget", f));
     let f = vm.lib_native(nat_rawset)?;
-    vm.lib_set_global("rawset", f)?;
+    g.push(("rawset", f));
     let f = vm.lib_native(nat_rawequal)?;
-    vm.lib_set_global("rawequal", f)?;
+    g.push(("rawequal", f));
     // `rawlen` arrived in 5.2.
     if vm.version() >= crate::version::LuaVersion::Lua52 {
         let f = vm.lib_native(nat_rawlen)?;
-        vm.lib_set_global("rawlen", f)?;
+        g.push(("rawlen", f));
     }
     let f = vm.lib_native(nat_setmetatable)?;
-    vm.lib_set_global("setmetatable", f)?;
+    g.push(("setmetatable", f));
     let f = vm.lib_native(nat_getmetatable)?;
-    vm.lib_set_global("getmetatable", f)?;
+    g.push(("getmetatable", f));
     let f = vm.lib_native(nat_select)?;
-    vm.lib_set_global("select", f)?;
+    g.push(("select", f));
     let next_obj = vm.lib_native(nat_next)?;
-    vm.lib_set_global("next", next_obj)?;
+    g.push(("next", next_obj));
     // 5.2+ pairs returns the global next itself (a light C function, equal
     // to every other push of `luaB_next`); 5.1 has no light C functions and
     // gives pairs its own closure over `luaB_next`, so `pairs{} ~= next`.
@@ -50,49 +62,49 @@ pub(crate) fn try_open_base(vm: &mut Vm) -> Result<(), LuaError> {
         next_obj
     };
     let pairs_obj = vm.builtin(nat_pairs, &[pairs_next], Builtin::Pairs)?;
-    vm.lib_set_global("pairs", pairs_obj)?;
+    g.push(("pairs", pairs_obj));
     let ipairs_it = vm.builtin(ipairs_iter, &[], Builtin::IpairsIter)?;
     let ipairs_obj = vm.lib_native_with(nat_ipairs, &[ipairs_it])?;
-    vm.lib_set_global("ipairs", ipairs_obj)?;
+    g.push(("ipairs", ipairs_obj));
     let f = vm.lib_native(nat_tonumber)?;
-    vm.lib_set_global("tonumber", f)?;
+    g.push(("tonumber", f));
     let load_obj = vm.lib_native(nat_load)?;
-    vm.lib_set_global("load", load_obj)?;
+    g.push(("load", load_obj));
     let f = vm.lib_native(crate::vm::lib_gc::nat_collectgarbage)?;
-    vm.lib_set_global("collectgarbage", f)?;
+    g.push(("collectgarbage", f));
     // PUC 5.4 introduced the warning system. `warn(msg1, …, msgN)` emits
     // pieces of one message via the default warnf (`lauxlib.c::warnfon/off`),
     // which recognises `@on` / `@off` control messages and starts disabled.
     if vm.version() >= crate::version::LuaVersion::Lua54 {
         let f = vm.lib_native(nat_warn)?;
-        vm.lib_set_global("warn", f)?;
+        g.push(("warn", f));
     }
     // PUC 5.2's official build ships -DLUA_COMPAT_ALL, so `loadstring`
     // survives as a `load` alias there too — the diff ground truth is
     // the default build (v2.14 dialect fixture 5.2/521).
     if vm.version() == crate::version::LuaVersion::Lua52 {
-        vm.lib_set_global("loadstring", load_obj)?;
+        g.push(("loadstring", load_obj));
     }
     // PUC 5.1 globals retired in 5.2 (`unpack` → `table.unpack`) and 5.2
     // (`loadstring` → `load`). Provide aliases so the 5.1 test suite, which
     // is full of `unpack(...)` and `loadstring("...")` calls, still resolves.
     if vm.version() == crate::version::LuaVersion::Lua51 {
         let f = vm.lib_native(nat_loadstring)?;
-        vm.lib_set_global("loadstring", f)?;
+        g.push(("loadstring", f));
         let f = vm.lib_native(crate::vm::lib_table::t_unpack)?;
-        vm.lib_set_global("unpack", f)?;
+        g.push(("unpack", f));
         // PUC 5.1 also exposed `gcinfo()` (memory in KB) and `newproxy()`.
         let f = vm.lib_native(nat_gcinfo)?;
-        vm.lib_set_global("gcinfo", f)?;
+        g.push(("gcinfo", f));
         // PUC 5.1 `setfenv`/`getfenv` — every Lua function carries its own
         // env (5.1 `LClosure.env`); 5.2 retired them in favour of the `_ENV`
         // upvalue model. A 5.1 closure shares its creator's `_ENV` cell and
         // `setfenv` replaces the cell, so the change only affects that
         // closure (events.lua / locals.lua / nextvar.lua).
         let f = vm.lib_native(nat_setfenv)?;
-        vm.lib_set_global("setfenv", f)?;
+        g.push(("setfenv", f));
         let f = vm.lib_native(nat_getfenv)?;
-        vm.lib_set_global("getfenv", f)?;
+        g.push(("getfenv", f));
         // `newproxy` remembers the metatables it created in a weak set
         // (PUC's upvalue `weaktable`, its own metatable): only a userdata
         // carrying one of them counts as a proxy whose metatable may be
@@ -104,7 +116,7 @@ pub(crate) fn try_open_base(vm: &mut Vm) -> Result<(), LuaError> {
         // SAFETY: `proxies` was allocated a few lines above and is held only by this local; the borrow covers one call
         unsafe { proxies.as_mut() }.set_metatable(Some(proxies));
         let f = vm.lib_native_with(nat_newproxy, &[Value::Table(proxies)])?;
-        vm.lib_set_global("newproxy", f)?;
+        g.push(("newproxy", f));
     }
     let version = match vm.version() {
         crate::version::LuaVersion::Lua51 => "Lua 5.1",
@@ -116,10 +128,17 @@ pub(crate) fn try_open_base(vm: &mut Vm) -> Result<(), LuaError> {
         crate::version::LuaVersion::Lua55 => "Lua 5.5",
     };
     let v = vm.str_value(version.as_bytes())?;
-    vm.lib_set_global("_VERSION", v)?;
-    let g = Value::Table(vm.globals());
-    vm.lib_set_global("_G", g)?;
-    Ok(())
+    g.push(("_VERSION", v));
+    g.push(("_G", Value::Table(vm.globals())));
+    if loaders {
+        g.push((
+            "loadfile",
+            vm.lib_native(crate::vm::lib_os_io::nat_loadfile)?,
+        ));
+        g.push(("dofile", vm.lib_native(crate::vm::lib_os_io::nat_dofile)?));
+    }
+    let globals = vm.globals();
+    vm.lib_put_all(globals, "_G", g)
 }
 
 mod basic;

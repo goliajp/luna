@@ -14,9 +14,9 @@ use crate::vm::{
 
 /// The opener of library `name` (its global name; `_G` for the base
 /// library).
-fn opener(name: &str) -> fn(&mut Vm) -> Result<(), LuaError> {
+pub(crate) fn lib_opener(name: &str) -> fn(&mut Vm) -> Result<(), LuaError> {
     match name {
-        "_G" => base_with_loaders,
+        "_G" => builtins::try_open_base_puc,
         "package" => lib_package::try_open_package_bare,
         "coroutine" => lib_coroutine::try_open_coroutine,
         "table" => lib_table::try_open_table,
@@ -29,13 +29,6 @@ fn opener(name: &str) -> fn(&mut Vm) -> Result<(), LuaError> {
         "debug" => lib_debug::try_open_debug,
         _ => unreachable!("the C API names a standard library"),
     }
-}
-
-/// PUC's base library, which has `loadfile` and `dofile` (luna opens them
-/// with `os` and `io`).
-fn base_with_loaders(vm: &mut Vm) -> Result<(), LuaError> {
-    builtins::try_open_base(vm)?;
-    lib_os_io::try_open_file_loaders(vm)
 }
 
 /// Why [`Vm::host_open_lib`] failed.
@@ -59,7 +52,7 @@ impl Vm {
     /// Open the standard library `name` (`_G` for the base library) as the
     /// dialect's `luaopen_*` does, and return what that function returns.
     pub fn host_open_lib(&mut self, name: &str) -> Result<Vec<Value>, HostOpenError> {
-        self.open_lib_as(name, opener(name))
+        self.open_lib_as(name, lib_opener(name))
     }
 
     /// [`Vm::host_open_lib`] with luna's opener `open` of that library.
@@ -122,6 +115,18 @@ impl Vm {
             self.lib_raw_set(mt, k, Value::Table(target))?;
         }
         Ok(vec![Value::Table(target)])
+    }
+
+    /// The registry's `_PRELOAD` table, made on first use.
+    pub(crate) fn host_preload(&mut self) -> Result<Gc<Table>, LuaError> {
+        let reg = self.host_registry();
+        let k = self.str_value(b"_PRELOAD")?;
+        if let Value::Table(t) = reg.get(k) {
+            return Ok(t);
+        }
+        let t = self.alloc_table()?;
+        self.lib_raw_set(reg, k, Value::Table(t))?;
+        Ok(t)
     }
 
     /// The registry's `_LOADED` table, made on first use.

@@ -182,7 +182,7 @@ pub(crate) fn nat_loadfile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
 /// `dofile([filename])`: a load failure is raised as is (`lua_error`, no
 /// position added). From 5.2 the chunk may yield (PUC calls it with
 /// `lua_callk`), and the resume finishes `dofile` with the chunk's results.
-pub(super) fn nat_dofile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(crate) fn nat_dofile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     use crate::vm::argcheck::{self, Args};
     let name = argcheck::opt_string(vm, Args::new(fs, nargs), 0)?;
     if vm.version() >= crate::version::LuaVersion::Lua52 {

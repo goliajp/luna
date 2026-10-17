@@ -45,17 +45,31 @@ pub(crate) enum LibOp {
     /// `luaH_resize` to an array part and a hash part of these sizes
     R(u32, u32),
     /// the string key enters the hash part
-    K(&'static str),
+    K(&'static [u8]),
 }
 
-/// What `d`'s `luaL_openlibs` does to each library table it names (as
-/// `libshape.lua` names them), from the table's making.
-pub(crate) fn lib_layouts(d: Dialect) -> &'static [(&'static str, &'static [LibOp])] {
-    match d {
-        Dialect::L51 => layout::LAYOUT_51,
-        Dialect::L52 => layout::LAYOUT_52,
-        Dialect::L53 => layout::LAYOUT_53,
-        Dialect::L54 => layout::LAYOUT_54,
-        Dialect::L55 => layout::LAYOUT_55,
-    }
+/// What `d`'s `luaL_openlibs` does to its library table `name` (as
+/// `libshape.lua` names them), from the table's making, in order.
+pub(crate) fn lib_layout(d: Dialect, name: &str) -> impl Iterator<Item = LibOp> + use<> {
+    let mut rec = match d {
+        Dialect::L51 => layout::layout_51(name),
+        Dialect::L52 => layout::layout_52(name),
+        Dialect::L53 => layout::layout_53(name),
+        Dialect::L54 => layout::layout_54(name),
+        Dialect::L55 => layout::layout_55(name),
+    };
+    std::iter::from_fn(move || {
+        let (&tag, rest) = rec.split_first()?;
+        if tag == b'R' {
+            let size = |b: &[u8]| u32::from(u16::from_le_bytes([b[0], b[1]]));
+            let op = LibOp::R(size(&rest[..2]), size(&rest[2..4]));
+            rec = &rest[4..];
+            Some(op)
+        } else {
+            let n = usize::from(rest[0]);
+            let op = LibOp::K(&rest[1..1 + n]);
+            rec = &rest[1 + n..];
+            Some(op)
+        }
+    })
 }

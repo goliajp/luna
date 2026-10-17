@@ -5,7 +5,9 @@
 //! this test runs.
 //!
 //! Left out: the `arg` table (what lua.c puts in it), and 5.3's registry,
-//! whose `CLIBS` key is a light userdata hashed by its address.
+//! whose C libraries' key is a light userdata hashed by its address, which
+//! differs from run to run in PUC too: where it lands moves the keys it
+//! collides with.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;

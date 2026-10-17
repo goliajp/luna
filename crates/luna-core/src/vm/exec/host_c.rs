@@ -24,6 +24,7 @@ mod values;
 pub use block::HostBlock;
 pub use debug::{HostAr, HostHookFn, HostLevel};
 pub use libs::HostOpenError;
+pub(crate) use libs::lib_opener;
 pub use load::HostLoadError;
 pub use values::{HOST_OP_BNOT, HOST_OP_UNM};
 

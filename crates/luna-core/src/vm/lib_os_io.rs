@@ -25,21 +25,14 @@ use date::*;
 pub(crate) use load::load_chunk;
 pub(crate) use load::load_path;
 pub(crate) use load::load_stdin_text;
-pub(crate) use load::nat_loadfile;
-use load::*;
+pub(crate) use load::{nat_dofile, nat_loadfile};
 use system::*;
 use time::*;
 
-/// Open the `os` and `io` libraries, failing when memory runs out.
-pub(crate) fn try_open_os_io(vm: &mut Vm) -> Result<(), LuaError> {
-    try_open_os(vm)?;
-    lib_io::try_open_io(vm)?;
-    try_open_file_loaders(vm)
-}
-
 /// [`open_os`], failing when memory runs out.
 pub(crate) fn try_open_os(vm: &mut Vm) -> Result<(), LuaError> {
-    let os = vm.lib_table(11)?;
+    let os = vm.lib_table_puc("os")?;
+    let mut entries = Vec::with_capacity(11);
     for (name, f) in [
         ("clock", os_clock as crate::runtime::value::NativeFn),
         ("date", os_date),
@@ -52,8 +45,7 @@ pub(crate) fn try_open_os(vm: &mut Vm) -> Result<(), LuaError> {
         ("time", os_time),
         ("tmpname", os_tmpname),
     ] {
-        let fv = vm.lib_native(f)?;
-        set_field(vm, os, name, fv)?;
+        entries.push((name, vm.lib_native(f)?));
     }
     // the locale in effect per category, which `os.setlocale` reads and
     // sets: strings, so a script reading them through `debug.getupvalue`
@@ -63,8 +55,11 @@ pub(crate) fn try_open_os(vm: &mut Vm) -> Result<(), LuaError> {
     let c = vm.str_value(b"C");
     vm.heap.puc.silent -= 1;
     let c = c?;
-    let sl = vm.lib_native_nup(os_setlocale, &[c; LC_COUNT], 0)?;
-    set_field(vm, os, "setlocale", sl)?;
+    entries.push((
+        "setlocale",
+        vm.lib_native_nup(os_setlocale, &[c; LC_COUNT], 0)?,
+    ));
+    vm.lib_put_all(os, "os", entries)?;
     vm.lib_set_global("os", Value::Table(os))?;
     vm.barrier_back_table(os);
     Ok(())
@@ -76,11 +71,5 @@ pub(crate) fn try_open_file_loaders(vm: &mut Vm) -> Result<(), LuaError> {
     vm.lib_set_global("loadfile", f)?;
     let f = vm.lib_native(nat_dofile)?;
     vm.lib_set_global("dofile", f)?;
-    Ok(())
-}
-
-fn set_field(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) -> Result<(), LuaError> {
-    let k = vm.str_value(k.as_bytes())?;
-    vm.lib_set_value(t, k, v)?;
     Ok(())
 }

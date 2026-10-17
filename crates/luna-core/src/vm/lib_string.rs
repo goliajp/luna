@@ -21,15 +21,7 @@ type NativeFn = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 /// Open the `string` library, failing when memory runs out.
 pub(crate) fn try_open_string(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();
-    let t = vm.lib_table(if v >= LuaVersion::Lua53 { 17 } else { 15 })?;
-    let set = |vm: &mut Vm,
-               t: Gc<crate::runtime::Table>,
-               name: &str,
-               fv: Value|
-     -> Result<(), LuaError> {
-        let k = vm.str_value(name.as_bytes())?;
-        vm.lib_set_value(t, k, fv)
-    };
+    let t = vm.lib_table_puc("string")?;
     let mut fns: Vec<(&str, NativeFn)> = vec![
         ("len", s_len),
         ("sub", s_sub),
@@ -50,22 +42,23 @@ pub(crate) fn try_open_string(vm: &mut Vm) -> Result<(), LuaError> {
         fns.push(("unpack", crate::vm::lib_strpack::s_unpack));
         fns.push(("packsize", crate::vm::lib_strpack::s_packsize));
     }
+    let mut entries = Vec::with_capacity(fns.len() + 2);
     for (name, f) in fns {
         let b = inlinable_builtin(name.as_bytes()).unwrap_or(crate::runtime::Builtin::None);
-        let fv = vm.builtin(f, &[], b)?;
-        set(vm, t, name, fv)?;
+        entries.push((name, vm.builtin(f, &[], b)?));
     }
     // 5.1's LUA_COMPAT_GFIND keeps `gfind` as the very same function as
     // `gmatch`; the suite identity-tests them.
     let gmatch_v = vm.lib_native(s_gmatch)?;
-    set(vm, t, "gmatch", gmatch_v)?;
+    entries.push(("gmatch", gmatch_v));
     if v == LuaVersion::Lua51 {
-        set(vm, t, "gfind", gmatch_v)?;
+        entries.push(("gfind", gmatch_v));
     }
+    vm.lib_put_all(t, "string", entries)?;
     vm.lib_set_global("string", Value::Table(t))?;
     vm.barrier_back_table(t);
-    let mt = vm.lib_table(if v >= LuaVersion::Lua54 { 9 } else { 1 })?;
-    set(vm, mt, "__index", Value::Table(t))?;
+    let mt = vm.lib_table_puc("string_mt")?;
+    let mut entries = vec![("__index", Value::Table(t))];
     if v >= LuaVersion::Lua54 {
         let arith: [(&str, NativeFn); 8] = [
             ("__add", mm_add),
@@ -78,10 +71,10 @@ pub(crate) fn try_open_string(vm: &mut Vm) -> Result<(), LuaError> {
             ("__unm", mm_unm),
         ];
         for (name, f) in arith {
-            let fv = vm.lib_native(f)?;
-            set(vm, mt, name, fv)?;
+            entries.push((name, vm.lib_native(f)?));
         }
     }
+    vm.lib_put_all(mt, "string_mt", entries)?;
     vm.barrier_back_table(mt);
     vm.set_string_metatable(Some(mt));
     Ok(())
