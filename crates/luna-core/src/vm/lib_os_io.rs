@@ -42,8 +42,6 @@ pub(crate) fn try_open_os(vm: &mut Vm) -> Result<(), LuaError> {
         ("getenv", os_getenv),
         ("remove", os_remove),
         ("rename", os_rename),
-        ("time", os_time),
-        ("tmpname", os_tmpname),
     ] {
         entries.push((name, vm.lib_native(f)?));
     }
@@ -59,6 +57,12 @@ pub(crate) fn try_open_os(vm: &mut Vm) -> Result<(), LuaError> {
         "setlocale",
         vm.lib_native_nup(os_setlocale, &[c; LC_COUNT], 0)?,
     ));
+    for (name, f) in [
+        ("time", os_time as crate::runtime::value::NativeFn),
+        ("tmpname", os_tmpname),
+    ] {
+        entries.push((name, vm.lib_native(f)?));
+    }
     vm.lib_put_all(os, "os", entries)?;
     vm.lib_set_global("os", Value::Table(os))?;
     vm.barrier_back_table(os);

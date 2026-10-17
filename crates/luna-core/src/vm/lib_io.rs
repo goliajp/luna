@@ -99,15 +99,28 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
         LuaVersion::Lua52 => io_close,
         _ => f_close,
     };
-    let methods: [(&str, crate::runtime::value::NativeFn); 7] = [
-        ("close", close),
-        ("flush", f_flush),
-        ("lines", f_lines),
-        ("read", f_read),
-        ("seek", f_seek),
-        ("setvbuf", f_setvbuf),
-        ("write", f_write),
-    ];
+    // in the order PUC's `flib` / `meth` list them
+    let methods: [(&str, crate::runtime::value::NativeFn); 7] = if v >= LuaVersion::Lua54 {
+        [
+            ("read", f_read),
+            ("write", f_write),
+            ("lines", f_lines),
+            ("flush", f_flush),
+            ("seek", f_seek),
+            ("close", close),
+            ("setvbuf", f_setvbuf),
+        ]
+    } else {
+        [
+            ("close", close),
+            ("flush", f_flush),
+            ("lines", f_lines),
+            ("read", f_read),
+            ("seek", f_seek),
+            ("setvbuf", f_setvbuf),
+            ("write", f_write),
+        ]
+    };
     // ≤5.3 keep the methods in the metatable itself (`__index = mt`); 5.4
     // moved them to a table of their own and added `__close`. `__name` comes
     // from `luaL_newmetatable`, which only sets it from 5.3 on.
@@ -121,7 +134,19 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
     } else {
         mt
     };
+    let mut mt_entries = Vec::with_capacity(12);
+    if v >= LuaVersion::Lua53 {
+        mt_entries.push(("__name", vm.str_value(b"FILE*")?));
+    }
+    mt_entries.push(("__index", Value::Table(index)));
     let mut index_entries = Vec::with_capacity(methods.len());
+    if v >= LuaVersion::Lua54 {
+        // a to-be-closed file already shut by the user must not re-error,
+        // hence the __gc body rather than f_close
+        mt_entries.push(("__gc", vm.lib_native(f_gc)?));
+        mt_entries.push(("__close", vm.lib_native(f_gc)?));
+        mt_entries.push(("__tostring", vm.lib_native(f_tostring)?));
+    }
     for (name, f) in methods {
         // 5.2's method is the very function value of `io.close`
         let fv = match (v, name) {
@@ -130,22 +155,12 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
         };
         index_entries.push((name, fv));
     }
-    let mut mt_entries = Vec::with_capacity(5 + index_entries.len());
-    mt_entries.extend([
-        ("__index", Value::Table(index)),
-        ("__gc", vm.lib_native(f_gc)?),
-        ("__tostring", vm.lib_native(f_tostring)?),
-    ]);
-    if v >= LuaVersion::Lua53 {
-        mt_entries.push(("__name", vm.str_value(b"FILE*")?));
-    }
     if v >= LuaVersion::Lua54 {
-        // a to-be-closed file already shut by the user must not re-error,
-        // hence the __gc body rather than f_close
-        mt_entries.push(("__close", vm.lib_native(f_gc)?));
         vm.lib_put_all(index, "FILE*.__index", index_entries)?;
     } else {
         mt_entries.extend(index_entries);
+        mt_entries.push(("__gc", vm.lib_native(f_gc)?));
+        mt_entries.push(("__tostring", vm.lib_native(f_tostring)?));
     }
     vm.lib_put_all(mt, "FILE*", mt_entries)?;
     vm.barrier_back_table(index);

@@ -20,18 +20,18 @@ type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 pub(crate) fn try_open_bit32(vm: &mut Vm) -> Result<(), LuaError> {
     let t = vm.lib_table_puc("bit32")?;
     let funcs: [(&str, Native); 12] = [
+        ("arshift", b_arshift),
         ("band", b_and),
+        ("bnot", b_not),
         ("bor", b_or),
         ("bxor", b_xor),
-        ("bnot", b_not),
         ("btest", b_test),
-        ("lshift", b_lshift),
-        ("rshift", b_rshift),
-        ("arshift", b_arshift),
-        ("lrotate", b_lrot),
-        ("rrotate", b_rrot),
         ("extract", b_extract),
+        ("lrotate", b_lrot),
+        ("lshift", b_lshift),
         ("replace", b_replace),
+        ("rrotate", b_rrot),
+        ("rshift", b_rshift),
     ];
     let mut entries = Vec::with_capacity(funcs.len());
     for (name, f) in funcs {

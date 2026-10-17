@@ -44,7 +44,9 @@ mod layout;
 pub(crate) enum LibOp {
     /// `luaH_resize` to an array part and a hash part of these sizes
     R(u32, u32),
-    /// the string key enters the hash part
+    /// the string key enters the hash part (read to check the libraries'
+    /// order, in debug builds)
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     K(&'static [u8]),
 }
 

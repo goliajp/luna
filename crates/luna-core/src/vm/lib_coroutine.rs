@@ -18,15 +18,6 @@ use wrap::co_wrap;
 /// Open the `coroutine` library, failing when memory runs out.
 pub(crate) fn try_open_coroutine(vm: &mut Vm) -> Result<(), LuaError> {
     let t = vm.lib_table_puc("coroutine")?;
-    let mut entries = Vec::with_capacity(8);
-    for (name, f) in [
-        ("create", co_create as crate::runtime::value::NativeFn),
-        ("yield", co_yield),
-        ("status", co_status),
-        ("running", co_running),
-    ] {
-        entries.push((name, vm.lib_native(f)?));
-    }
     // the threads now inside a wrapped call, which `resume_refusal` needs:
     // luna's own table, which PUC has none of
     vm.heap.puc.silent += 1;
@@ -35,12 +26,14 @@ pub(crate) fn try_open_coroutine(vm: &mut Vm) -> Result<(), LuaError> {
     let w = w?;
     vm.heap.own_table(w);
     let in_wrap = Value::Table(w);
-    for (name, f) in [
-        ("resume", co_resume as crate::runtime::value::NativeFn),
-        ("wrap", co_wrap),
-    ] {
-        entries.push((name, vm.lib_native_nup(f, &[in_wrap], 0)?));
-    }
+    // in the order of PUC's `co_funcs`
+    let mut entries = Vec::with_capacity(8);
+    entries.push(("create", vm.lib_native(co_create)?));
+    entries.push(("resume", vm.lib_native_nup(co_resume, &[in_wrap], 0)?));
+    entries.push(("running", vm.lib_native(co_running)?));
+    entries.push(("status", vm.lib_native(co_status)?));
+    entries.push(("wrap", vm.lib_native_nup(co_wrap, &[in_wrap], 0)?));
+    entries.push(("yield", vm.lib_native(co_yield)?));
     if vm.version() >= LuaVersion::Lua53 {
         entries.push(("isyieldable", vm.lib_native(co_isyieldable)?));
     }
