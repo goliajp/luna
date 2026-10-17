@@ -1,24 +1,22 @@
 //! `string.dump` writes the running dialect's PUC bytecode.
 //!
-//! Every diff_puc fixture (`tests/diff_puc/5.x/*.lua`) is compiled by luna
-//! and dumped with luna's `string.dump`; then
+//! Every diff_puc fixture (`tests/diff_puc/5.x/*.lua`) but the count ones
+//! (`*_count*`, whose output a dump changes on PUC itself) is compiled by
+//! luna and dumped with luna's `string.dump`; then
 //!
 //! - `dump_runs_on_puc`: the stock PUC interpreter of that dialect loads
 //!   and runs the dump, and its stdout (or, for `_err` fixtures, its error)
 //!   matches PUC running the source;
 //! - `dump_round_trips_through_luna`: luna loads the dump back (through
 //!   its PUC translator) and runs it to the same outcome;
-//! - `stripped_dump_runs_on_puc` (5.3+, where `string.dump` strips): PUC
-//!   runs `string.dump(f, true)` to the outcome of PUC running the same
-//!   program stripped by its own `luac -s`.
+//! - `stripped_dump_runs_on_puc` (5.3+, where `string.dump` strips): PUC runs
+//!   `string.dump(f, true)` as it runs the program stripped by `luac -s`.
 //!
-//! Needs `PUC_LUA_51` … `PUC_LUA_55` (and `PUC_LUAC_5x` for the stripped
-//! case); a dialect without them is skipped with a notice, or fails under
-//! `LUNA_DIFF_PUC_REQUIRE_ALL=1`.
-//!
-//! `const_operand_forms_round_trip_through_luna` needs no interpreter: the
-//! constant- and immediate-operand opcodes luna's compiler emits are dumped
-//! under every dialect and the dump is run against the source.
+//! Needs `PUC_LUA_51` … `PUC_LUA_55` (`PUC_LUAC_5x` for the stripped case);
+//! a dialect without them is skipped, or fails under
+//! `LUNA_DIFF_PUC_REQUIRE_ALL=1`. `const_operand_forms_round_trip_through_luna`
+//! needs no interpreter: the constant- and immediate-operand opcodes luna's
+//! compiler emits are dumped under every dialect and run against the source.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -47,7 +45,9 @@ fn fixtures(dialect: &str) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = std::fs::read_dir(&dir)
         .map(|d| d.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
-    out.retain(|p| p.extension().is_some_and(|x| x == "lua"));
+    out.retain(|p| {
+        p.extension().is_some_and(|x| x == "lua") && !p.to_string_lossy().contains("_count")
+    });
     out.sort();
     out
 }
@@ -137,7 +137,7 @@ fn luna_dump(version: LuaVersion, source: &str, strip: bool) -> Result<Vec<u8>, 
 
 /// Run `bytes` on a luna Vm set up as lua.c, captured as diff_puc.rs does.
 fn run_on_luna(version: LuaVersion, bytes: &[u8]) -> Result<Outcome, String> {
-    let mut vm = super::diff_puc::lua_c_vm(version);
+    let mut vm = super::diff_puc::lua_c_vm(version, "lua");
     vm.eval(
         r#"
 _G.__luna_diff_puc_buf = ""

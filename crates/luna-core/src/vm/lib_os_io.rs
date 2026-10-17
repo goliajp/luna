@@ -24,6 +24,7 @@ use calendar::*;
 use date::*;
 pub(crate) use load::load_chunk;
 pub(crate) use load::load_path;
+pub(crate) use load::load_stdin_text;
 pub(crate) use load::nat_loadfile;
 use load::*;
 use system::*;

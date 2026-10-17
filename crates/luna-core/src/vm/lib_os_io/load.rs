@@ -48,11 +48,33 @@ pub(crate) fn load_path(
         Ok(s) => s,
         Err(e) => return Err(LuaError::from(e).0),
     };
+    load_read(vm, read, &chunkname, name_str, name.is_some(), mode)
+}
+
+/// [`load_path`] for a chunk read from standard input, given its text.
+pub(crate) fn load_stdin_text(vm: &mut Vm, src: Vec<u8>) -> Result<Value, Value> {
+    let name_str = vm
+        .heap
+        .try_intern(b"=stdin")
+        .map_err(|e| LuaError::from(e).0)?;
+    load_read(vm, Ok(src), b"=stdin", name_str, false, None)
+}
+
+/// The rest of [`load_path`]: what was read (or how reading failed) under
+/// `chunkname`, already the heap string `name_str`.
+fn load_read(
+    vm: &mut Vm,
+    read: Result<Vec<u8>, (&str, std::io::Error)>,
+    chunkname: &[u8],
+    name_str: Gc<crate::runtime::LuaStr>,
+    file: bool,
+    mode: Option<&[u8]>,
+) -> Result<Value, Value> {
     // `errfile`: the name shown is the chunk name without its '@' / '='.
     let shown = String::from_utf8_lossy(&chunkname[1..]).into_owned();
     let src = match read {
         // `luaL_loadfilex` reads a text chunk through a stream in text mode
-        Ok(src) if !crate::vm::dump::is_binary_chunk(&src) && name.is_some() && vm.crt_text => {
+        Ok(src) if !crate::vm::dump::is_binary_chunk(&src) && file && vm.crt_text => {
             crate::vm::lib_io::translate_all(&src)
         }
         Ok(src) => src,
@@ -77,7 +99,7 @@ pub(crate) fn load_path(
         }
         _ => src,
     };
-    load_named_chunk(vm, src, &chunkname, Some(name_str), mode)
+    load_named_chunk(vm, src, chunkname, Some(name_str), mode)
 }
 
 /// PUC `luaL_loadbufferx`: compile `src` under `chunkname`, the chunk kind
