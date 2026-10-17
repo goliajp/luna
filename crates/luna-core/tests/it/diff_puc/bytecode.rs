@@ -130,7 +130,12 @@ fn diff_puc_bytecode() {
             eprintln!("[diff_puc] bytecode {dialect}: SKIPPED — {luac_key} or {env_key} not set");
             continue;
         };
-        let fixtures = list_fixtures(dialect);
+        // a count fixture reads `collectgarbage("count")`, which luna's
+        // side here changes (it catches the output in a Lua buffer)
+        let fixtures: Vec<_> = list_fixtures(dialect)
+            .into_iter()
+            .filter(|f| !f.to_string_lossy().contains("_count"))
+            .collect();
         eprintln!(
             "[diff_puc] bytecode {dialect}: running {} fixtures via {luac}",
             fixtures.len()
