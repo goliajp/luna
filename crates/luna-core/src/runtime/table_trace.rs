@@ -6,7 +6,7 @@
 //! `GcHeader`, and the collectable tags are one contiguous range in both
 //! encodings.
 
-use super::{Node, Table};
+use super::{Dialect, Node, Table};
 use crate::runtime::heap::{GcHeader, Marker};
 use crate::runtime::value::{Value, raw, tag};
 
@@ -50,20 +50,39 @@ impl Table {
     /// `this` is the pointer the marker reached the table through, `self`
     /// reborrowed: a weak table is queued by `this`, since the clearing passes
     /// write through the queued pointer and `&self` grants no write access
+    ///
+    /// The order is PUC's (`traversetable`), which decides the order the
+    /// objects marked here are traversed in: the metatable first, then 5.1
+    /// goes over the array and the nodes from their ends, the later
+    /// dialects from their starts.
     pub(crate) fn trace(&self, this: *mut Table, m: &mut Marker) {
         debug_assert!(std::ptr::eq(this, self));
         let (wk, wv) = match self.metatable {
-            Some(_) => self.weak_mode(),
+            Some(mt) => {
+                m.mark(mt);
+                self.weak_mode()
+            }
             None => (false, false),
         };
-        if !wk && !wv {
+        if self.dialect() == Dialect::L51 {
+            // 5.1 has no ephemerons: a weak table is cleared after marking
+            if wk || wv {
+                m.weak.push(this);
+            }
+            if !wv {
+                self.mark_array_rev(m);
+            }
+            match (!wk, !wv) {
+                (true, true) => self.mark_nodes_rev::<true, true>(m),
+                (true, false) => self.mark_nodes_rev::<true, false>(m),
+                (false, true) => self.mark_nodes_rev::<false, true>(m),
+                (false, false) => {}
+            }
+        } else if !wk && !wv {
             self.mark_array(m);
             self.mark_nodes::<true, true>(m);
         } else {
             self.trace_weak(this, wk, wv, m);
-        }
-        if let Some(mt) = self.metatable {
-            m.mark(mt);
         }
     }
 
@@ -100,6 +119,28 @@ impl Table {
                 // pointer, whichever pointer field of the union holds it, and
                 // the object is allocated because this live table holds it
                 unsafe { m.header(v.s as *mut GcHeader) };
+            }
+        }
+    }
+
+    fn mark_array_rev(&self, m: &mut Marker) {
+        for (&t, v) in self.atags().iter().zip(self.avals()).rev() {
+            if raw::is_gc(t) {
+                // SAFETY: as in `mark_array`
+                unsafe { m.header(v.s as *mut GcHeader) };
+            }
+        }
+    }
+
+    fn mark_nodes_rev<const KEYS: bool, const VALS: bool>(&self, m: &mut Marker) {
+        for n in self.nodes().iter().rev() {
+            if KEYS && value_tag_is_gc(n.key_tag) {
+                // SAFETY: as in `mark_nodes`
+                unsafe { m.header(key_obj(n)) };
+            }
+            if VALS && value_tag_is_gc(n.val.tag_byte()) {
+                // SAFETY: as in `mark_nodes`
+                unsafe { m.header(value_obj(&n.val)) };
             }
         }
     }
