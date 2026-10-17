@@ -28,7 +28,7 @@ const CLASSES: usize = MAX / 8;
 /// Whether blocks of `layout` go through the pool.
 #[inline(always)]
 pub(super) fn pooled(layout: Layout) -> bool {
-    layout.size() <= MAX && layout.size() % 8 == 0 && layout.align() == 8
+    layout.size() <= MAX && layout.size().is_multiple_of(8) && layout.align() == 8
 }
 
 /// A class's blocks: `size` bytes at 8-byte alignment.
@@ -85,8 +85,14 @@ impl Small {
         // SAFETY: a kept block is a live system block of `size` bytes, at
         // least a word, whose first word links the list
         unsafe {
+            // nothing wrote past the link after the block was freed
             #[cfg(any(debug_assertions, feature = "gc-verify"))]
-            check_poison(p, size);
+            assert!(
+                std::slice::from_raw_parts(p.as_ptr().add(8), size - 8)
+                    .iter()
+                    .all(|&b| b == POISON),
+                "a freed block of {size} bytes at {p:p} was written after its free"
+            );
             self.heads[c] = p.as_ptr().cast::<*mut u8>().read();
         }
         self.kept[c] -= 1;
@@ -97,8 +103,11 @@ impl Small {
     /// Keep `p`, a block of `layout` (one [`pooled`] accepts) nothing uses
     /// any more; false when the pool has no room for it, and the caller
     /// frees it.
+    ///
+    /// # Safety
+    /// `p` is a live system block of `layout` that nothing uses.
     #[inline(always)]
-    pub(super) fn keep(&mut self, p: NonNull<u8>, layout: Layout) -> bool {
+    pub(super) unsafe fn keep(&mut self, p: NonNull<u8>, layout: Layout) -> bool {
         let (size, c) = (layout.size(), class(layout.size()));
         if self.kept[c] >= self.want[c] || self.bytes + size > self.cap {
             return false;
@@ -171,21 +180,6 @@ impl Drop for Small {
     }
 }
 
-/// A kept block's bytes past its link are as `keep` left them: nothing
-/// wrote to it after it was freed.
-///
-/// # Safety
-/// `p` is a kept block of `size` bytes.
-#[cfg(any(debug_assertions, feature = "gc-verify"))]
-unsafe fn check_poison(p: NonNull<u8>, size: usize) {
-    // SAFETY: the caller's contract
-    let bytes = unsafe { std::slice::from_raw_parts(p.as_ptr().add(8), size - 8) };
-    assert!(
-        bytes.iter().all(|&b| b == POISON),
-        "a freed block of {size} bytes at {p:p} was written after its free"
-    );
-}
-
 impl MemCtx {
     /// A block of `layout` (one [`pooled`] accepts), kept or new.
     #[inline(always)]
@@ -217,30 +211,40 @@ mod tests {
         (NonNull::new(unsafe { std::alloc::alloc(l) }).unwrap(), l)
     }
 
+    /// `Small::keep` of a block from [`block`] the test gives up.
+    fn keep(s: &mut Small, p: NonNull<u8>, l: Layout) -> bool {
+        // SAFETY: every block the tests keep comes from `block` with `l`,
+        // and the test does not use it afterwards
+        unsafe { s.keep(p, l) }
+    }
+
+    /// Free a block from [`block`] that no pool holds.
+    fn free(p: NonNull<u8>, l: Layout) {
+        // SAFETY: as in `keep`, out of every pool
+        unsafe { std::alloc::dealloc(p.as_ptr(), l) }
+    }
+
     #[test]
     fn keeps_what_the_last_cycle_allocated_and_hands_it_back() {
         let mut s = Small::default();
         let (p, l) = block(48);
         // nothing allocated yet: no room
-        assert!(!s.keep(p, l));
+        assert!(!keep(&mut s, p, l));
         assert!(s.take(l).is_none());
         assert!(s.take(l).is_none());
         // the cycle allocated two blocks of 48 bytes: two are kept
         assert_eq!(s.cycle_ended(1 << 20), 96);
-        assert!(s.keep(p, l));
+        assert!(keep(&mut s, p, l));
         let (q, _) = block(48);
-        assert!(s.keep(q, l));
+        assert!(keep(&mut s, q, l));
         let (r, _) = block(48);
-        assert!(!s.keep(r, l));
-        // SAFETY: `r` is a block of `l` nothing uses
-        unsafe { std::alloc::dealloc(r.as_ptr(), l) };
+        assert!(!keep(&mut s, r, l));
+        free(r, l);
         assert_eq!(s.take(l), Some(q));
         assert_eq!(s.take(l), Some(p));
         assert!(s.take(l).is_none());
-        for x in [p, q] {
-            // SAFETY: the blocks came back out of the pool
-            unsafe { std::alloc::dealloc(x.as_ptr(), l) };
-        }
+        free(p, l);
+        free(q, l);
     }
 
     #[test]
@@ -253,10 +257,9 @@ mod tests {
         // room for three of the ten
         assert_eq!(s.cycle_ended(200), 200);
         let kept: Vec<_> = (0..4).map(|_| block(64).0).collect();
-        let took: Vec<bool> = kept.iter().map(|&p| s.keep(p, l)).collect();
+        let took: Vec<bool> = kept.iter().map(|&p| keep(&mut s, p, l)).collect();
         assert_eq!(took, [true, true, true, false]);
-        // SAFETY: the one the pool refused is a block of `l` nothing uses
-        unsafe { std::alloc::dealloc(kept[3].as_ptr(), l) };
+        free(kept[3], l);
         s.release();
         assert_eq!((s.bytes, s.kept[class(64)]), (0, 0));
     }
@@ -269,7 +272,7 @@ mod tests {
         let (p, l) = block(32);
         assert!(s.take(l).is_none());
         s.cycle_ended(1 << 20);
-        assert!(s.keep(p, l));
+        assert!(keep(&mut s, p, l));
         // SAFETY: the block is still allocated, held by the pool
         unsafe { p.as_ptr().add(20).write(1) };
         let _ = s.take(l);

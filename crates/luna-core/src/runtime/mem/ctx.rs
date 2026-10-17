@@ -211,12 +211,13 @@ impl MemCtx {
     #[inline(always)]
     pub(crate) unsafe fn free(&self, p: NonNull<u8>, layout: Layout) {
         match &self.mode {
-            Mode::System if super::small::pooled(layout) => {
+            // SAFETY: the caller's contract: a system block of `layout`
+            // nothing uses, kept or freed
+            Mode::System if super::small::pooled(layout) => unsafe {
                 if !self.small.borrow_mut().keep(p, layout) {
-                    // SAFETY: the caller's contract
-                    unsafe { std::alloc::dealloc(p.as_ptr(), layout) }
+                    std::alloc::dealloc(p.as_ptr(), layout)
                 }
-            }
+            },
             Mode::System if super::pool::pooled(layout.size()) => {
                 if !self.pool.borrow_mut().keep(p, layout) {
                     // SAFETY: the caller's contract
