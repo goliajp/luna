@@ -70,23 +70,13 @@ pub(crate) fn try_open_math(vm: &mut Vm) -> Result<(), LuaError> {
     if ver <= V::Lua52 {
         funcs.push(("atan2", m_atan2));
     }
-    // `luaL_newlib` sizes the table for the functions, from 5.3 on with
-    // the alias and placeholders for `pi`, `huge` and the integer limits
-    let t = vm.lib_table(match ver {
-        V::Lua51 | V::Lua52 => funcs.len(),
-        V::Lua53 | V::Lua54 => funcs.len() + 5,
-        _ => funcs.len() + 4,
-    })?;
-    let set = |vm: &mut Vm, name: &str, v: Value| -> Result<(), LuaError> {
-        let k = vm.str_value(name.as_bytes())?;
-        vm.lib_set_value(t, k, v)
-    };
+    let t = vm.lib_table_puc("math")?;
+    let mut entries: Vec<(&str, Value)> = Vec::with_capacity(funcs.len() + 6);
     // 5.4 on, counted: the generator's functions come last, as PUC's
     // `setrandfunc` makes them, over the state they share
     let rand_last = ver >= V::Lua54 && vm.heap.puc.silent == 0;
     for (name, f) in funcs {
         if rand_last && name.starts_with("random") {
-            set(vm, name, Value::Bool(false))?;
             continue;
         }
         let b = inlinable_builtin(name.as_bytes()).unwrap_or(Builtin::None);
@@ -98,7 +88,7 @@ pub(crate) fn try_open_math(vm: &mut Vm) -> Result<(), LuaError> {
         {
             vm.heap.set_native_puc_nup(n, 1);
         }
-        set(vm, name, fv)?;
+        entries.push((name, fv));
     }
     // Aliases are the same function value, so `math.atan2 == math.atan`
     // holds: 5.3/5.4 register `atan2` as `math_atan`, and 5.1's
@@ -109,15 +99,14 @@ pub(crate) fn try_open_math(vm: &mut Vm) -> Result<(), LuaError> {
         _ => None,
     };
     if let Some((name, of)) = alias {
-        let k = vm.str_value(of.as_bytes())?;
-        let fv = t.get(k);
-        set(vm, name, fv)?;
+        let fv = entries.iter().find(|(k, _)| *k == of).map(|e| e.1);
+        entries.push((name, fv.expect("the aliased function")));
     }
-    set(vm, "pi", Value::Float(std::f64::consts::PI))?;
-    set(vm, "huge", Value::Float(f64::INFINITY))?;
+    entries.push(("pi", Value::Float(std::f64::consts::PI)));
+    entries.push(("huge", Value::Float(f64::INFINITY)));
     if ver >= V::Lua53 {
-        set(vm, "maxinteger", Value::Int(i64::MAX))?;
-        set(vm, "mininteger", Value::Int(i64::MIN))?;
+        entries.push(("maxinteger", Value::Int(i64::MAX)));
+        entries.push(("mininteger", Value::Int(i64::MIN)));
     }
     if rand_last {
         let sz = vm.heap.sizes;
@@ -138,9 +127,10 @@ pub(crate) fn try_open_math(vm: &mut Vm) -> Result<(), LuaError> {
                 vm.heap.set_native_puc_nup(n, 1);
             }
         }
-        set(vm, "random", r)?;
-        set(vm, "randomseed", s)?;
+        entries.push(("random", r));
+        entries.push(("randomseed", s));
     }
+    vm.lib_put_all(t, "math", entries)?;
     vm.lib_set_global("math", Value::Table(t))?;
     vm.barrier_back_table(t);
     Ok(())

@@ -9,7 +9,7 @@ use crate::vm::exec::host_c::HostOpenError;
 
 /// The libraries `luaL_openlibs` opens, in its order (`linit.c`), by the
 /// name each is registered under.
-fn openlibs_order(v: LuaVersion) -> &'static [&'static str] {
+pub(super) fn openlibs_order(v: LuaVersion) -> &'static [&'static str] {
     match v {
         LuaVersion::Lua51 => &[
             "_G", "package", "table", "io", "os", "string", "math", "debug",

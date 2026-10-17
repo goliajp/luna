@@ -12,10 +12,8 @@ fn pk_funcs(v: LuaVersion) -> usize {
     if v == LuaVersion::Lua52 { 3 } else { 7 }
 }
 
-/// Open `package` (5.2 on); with `list_opened`, `package.loaded` lists the
-/// libraries opened before it (luna's own first opening, which counts
-/// nothing).
-pub(super) fn open_package_puc(vm: &mut Vm, list_opened: bool) -> Result<(), LuaError> {
+/// Open `package` (5.2 on).
+pub(super) fn open_package_puc(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();
     clibs(vm)?;
     let pkg = vm.lib_table(pk_funcs(v))?;
@@ -53,9 +51,6 @@ pub(super) fn open_package_puc(vm: &mut Vm, list_opened: bool) -> Result<(), Lua
     let config = vm.str_value(b"/\n;\n?\n!\n-\n")?;
     raw_set(vm, pkg, "config", config)?;
     let loaded = registry_table(vm, "_LOADED")?;
-    if list_opened {
-        list_libs(vm, loaded, pkg)?;
-    }
     raw_set(vm, pkg, "loaded", Value::Table(loaded))?;
     let preload = registry_table(vm, "_PRELOAD")?;
     raw_set(vm, pkg, "preload", Value::Table(preload))?;
@@ -126,35 +121,6 @@ pub(crate) fn clibs_metatable(vm: &mut Vm, clibs: Gc<Table>) -> Result<(), LuaEr
 /// The C libraries' finalizer: luna loads none.
 pub(crate) fn clibs_gc(_vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     Ok(0)
-}
-
-/// The libraries opened before `package`, in `loaded`.
-fn list_libs(vm: &mut Vm, loaded: Gc<Table>, pkg: Gc<Table>) -> Result<(), LuaError> {
-    for name in [
-        "_G",
-        "package",
-        "coroutine",
-        "table",
-        "io",
-        "os",
-        "string",
-        "bit32",
-        "math",
-        "utf8",
-        "debug",
-    ] {
-        let val = match name {
-            "package" => Value::Table(pkg),
-            _ => {
-                let k = vm.str_value(name.as_bytes())?;
-                vm.globals().get(k)
-            }
-        };
-        if !val.is_nil() {
-            raw_set(vm, loaded, name, val)?;
-        }
-    }
-    Ok(())
 }
 
 /// `package.path` and `package.cpath` (`setpath`), with the strings PUC

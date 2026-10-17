@@ -57,20 +57,20 @@ pub(crate) fn try_open_table(vm: &mut Vm) -> Result<(), LuaError> {
             ("setn", t_setn),
         ]);
     }
-    let t = vm.lib_table(funcs.len())?;
+    let t = vm.lib_table_puc("table")?;
+    let mut entries = Vec::with_capacity(funcs.len());
     for (name, f) in funcs {
-        let fv = vm.lib_native(f)?;
-        let k = vm.str_value(name.as_bytes())?;
-        vm.lib_set_value(t, k, fv)?;
+        entries.push((name, vm.lib_native(f)?));
     }
-    vm.lib_set_global("table", Value::Table(t))?;
+    vm.lib_put_all(t, "table", entries)?;
     // LUA_COMPAT_UNPACK (default in 5.2): `_G.unpack = table.unpack`, the
-    // same function value.
+    // same function value, set as the library opens (before `table`)
     if ver == V::Lua52 {
         let k = vm.str_value(b"unpack")?;
         let f = t.get(k);
         vm.lib_set_global("unpack", f)?;
     }
+    vm.lib_set_global("table", Value::Table(t))?;
     Ok(())
 }
 

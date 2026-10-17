@@ -18,7 +18,7 @@ type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 
 /// Open the `bit32` library, failing when memory runs out.
 pub(crate) fn try_open_bit32(vm: &mut Vm) -> Result<(), LuaError> {
-    let t = vm.lib_table(12)?;
+    let t = vm.lib_table_puc("bit32")?;
     let funcs: [(&str, Native); 12] = [
         ("band", b_and),
         ("bor", b_or),
@@ -33,11 +33,11 @@ pub(crate) fn try_open_bit32(vm: &mut Vm) -> Result<(), LuaError> {
         ("extract", b_extract),
         ("replace", b_replace),
     ];
+    let mut entries = Vec::with_capacity(funcs.len());
     for (name, f) in funcs {
-        let fv = vm.lib_native(f)?;
-        let k = vm.str_value(name.as_bytes())?;
-        vm.lib_set_value(t, k, fv)?;
+        entries.push((name, vm.lib_native(f)?));
     }
+    vm.lib_put_all(t, "bit32", entries)?;
     vm.lib_set_global("bit32", Value::Table(t))?;
     vm.barrier_back_table(t);
     // `luaL_requiref` also records the module in `package.loaded`, which is

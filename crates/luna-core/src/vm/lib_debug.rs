@@ -29,42 +29,45 @@ pub(crate) use upvalues::{upvalue_name, visible_upvalue_index};
 /// Open the `debug` library, failing when memory runs out.
 pub(crate) fn try_open_debug(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();
-    // `luaL_newlib` sizes the table for the dialect's functions
-    let n = match v {
-        LuaVersion::Lua51 => 14,
-        LuaVersion::Lua54 => 17,
-        _ => 16,
-    };
-    let t = vm.lib_table(n)?;
-    let set = |vm: &mut Vm, name: &str, f| -> Result<(), LuaError> {
-        let fv = vm.lib_native(f)?;
-        let k = vm.str_value(name.as_bytes())?;
-        vm.lib_set_value(t, k, fv)
-    };
-    set(vm, "debug", d_debug)?;
-    set(vm, "gethook", d_gethook)?;
-    set(vm, "getinfo", d_getinfo)?;
-    set(vm, "getlocal", d_getlocal)?;
-    set(vm, "getregistry", d_getregistry)?;
-    set(vm, "getmetatable", d_getmetatable)?;
-    set(vm, "getupvalue", d_getupvalue)?;
-    set(vm, "sethook", d_sethook)?;
-    set(vm, "setlocal", d_setlocal)?;
-    set(vm, "setmetatable", d_setmetatable)?;
-    set(vm, "setupvalue", d_setupvalue)?;
-    set(vm, "traceback", d_traceback)?;
+    let t = vm.lib_table_puc("debug")?;
+    let mut fns: Vec<(&str, crate::runtime::value::NativeFn)> = vec![
+        ("debug", d_debug),
+        ("gethook", d_gethook),
+        ("getinfo", d_getinfo),
+        ("getlocal", d_getlocal),
+        ("getregistry", d_getregistry),
+        ("getmetatable", d_getmetatable),
+        ("getupvalue", d_getupvalue),
+        ("sethook", d_sethook),
+        ("setlocal", d_setlocal),
+        ("setmetatable", d_setmetatable),
+        ("setupvalue", d_setupvalue),
+        ("traceback", d_traceback),
+    ];
     if v == LuaVersion::Lua51 {
-        set(vm, "getfenv", d_getfenv)?;
-        set(vm, "setfenv", d_setfenv)?;
+        fns.extend([
+            ("getfenv", d_getfenv as crate::runtime::value::NativeFn),
+            ("setfenv", d_setfenv),
+        ]);
     } else {
-        set(vm, "getuservalue", d_getuservalue)?;
-        set(vm, "setuservalue", d_setuservalue)?;
-        set(vm, "upvalueid", d_upvalueid)?;
-        set(vm, "upvaluejoin", d_upvaluejoin)?;
+        fns.extend([
+            (
+                "getuservalue",
+                d_getuservalue as crate::runtime::value::NativeFn,
+            ),
+            ("setuservalue", d_setuservalue),
+            ("upvalueid", d_upvalueid),
+            ("upvaluejoin", d_upvaluejoin),
+        ]);
     }
     if v == LuaVersion::Lua54 {
-        set(vm, "setcstacklimit", d_setcstacklimit)?;
+        fns.push(("setcstacklimit", d_setcstacklimit));
     }
+    let mut entries = Vec::with_capacity(fns.len());
+    for (name, f) in fns {
+        entries.push((name, vm.lib_native(f)?));
+    }
+    vm.lib_put_all(t, "debug", entries)?;
     vm.lib_set_global("debug", Value::Table(t))?;
     vm.barrier_back_table(t);
     // register in package.loaded so require"debug" finds it

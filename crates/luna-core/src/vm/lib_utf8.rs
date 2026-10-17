@@ -20,11 +20,7 @@ pub(crate) fn try_open_utf8(vm: &mut Vm) -> Result<(), LuaError> {
     if v < LuaVersion::Lua53 {
         return Ok(());
     }
-    let t = vm.lib_table(6)?;
-    let set = |vm: &mut Vm, name: &str, fv: Value| -> Result<(), LuaError> {
-        let k = vm.str_value(name.as_bytes())?;
-        vm.lib_set_value(t, k, fv)
-    };
+    let t = vm.lib_table_puc("utf8")?;
     let fns: [(&str, fn(&mut Vm, u32, u32) -> Result<u32, LuaError>); 5] = [
         ("char", u_char),
         ("codepoint", u_codepoint),
@@ -32,17 +28,17 @@ pub(crate) fn try_open_utf8(vm: &mut Vm) -> Result<(), LuaError> {
         ("offset", u_offset),
         ("codes", u_codes),
     ];
+    let mut entries = Vec::with_capacity(6);
     for (name, f) in fns {
-        let fv = vm.lib_native(f)?;
-        set(vm, name, fv)?;
+        entries.push((name, vm.lib_native(f)?));
     }
     let pattern: &[u8] = if v == LuaVersion::Lua53 {
         b"[\x00-\x7F\xC2-\xF4][\x80-\xBF]*"
     } else {
         b"[\x00-\x7F\xC2-\xFD][\x80-\xBF]*"
     };
-    let p = vm.str_value(pattern)?;
-    set(vm, "charpattern", p)?;
+    entries.push(("charpattern", vm.str_value(pattern)?));
+    vm.lib_put_all(t, "utf8", entries)?;
     vm.lib_set_global("utf8", Value::Table(t))?;
     vm.barrier_back_table(t);
     Ok(())

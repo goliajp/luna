@@ -2,8 +2,6 @@
 
 use super::*;
 
-#[path = "libs/layout.rs"]
-mod layout;
 #[path = "registry.rs"]
 mod registry;
 #[path = "libs/reopen51.rs"]
@@ -108,25 +106,56 @@ impl Vm {
     /// Every library on a Vm that has none yet, and the registry entries
     /// PUC's `luaL_openlibs` leaves.
     fn open_fresh_libs(&mut self) -> Result<(), LuaError> {
-        use crate::vm::{builtins, lib_coroutine, lib_debug, lib_math, lib_os_io, lib_string};
-        use crate::vm::{lib_bit32, lib_package, lib_table, lib_utf8};
-        self.open_lib(builtins::try_open_base)?;
-        self.open_lib(lib_math::try_open_math)?;
-        self.open_lib(lib_table::try_open_table)?;
-        self.open_lib(lib_string::try_open_string)?;
-        self.open_lib(lib_utf8::try_open_utf8)?;
-        self.open_lib(lib_os_io::try_open_os_io)?;
-        self.open_lib(lib_debug::try_open_debug)?;
-        self.open_lib(lib_coroutine::try_open_coroutine)?;
-        // PUC 5.2 introduced `bit32`; 5.3 retired it in the manual but the
-        // stock 5.3 build (-DLUA_COMPAT_5_2) still loads it
-        if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
-            self.open_lib(lib_bit32::try_open_bit32)?;
+        // in PUC's order, as `luaL_requiref` opens each: where each key
+        // lands in the tables they fill (and so the order `next` gives)
+        // depends on it; 5.5 makes the preload table first
+        let v = self.version;
+        if v == LuaVersion::Lua55 {
+            self.host_preload()?;
         }
-        // last, so `package.loaded` lists every library opened before it
-        self.open_lib(lib_package::try_open_package)?;
+        for &name in require::openlibs_order(v) {
+            self.open_fresh_lib(name)?;
+            // 5.1's base library opens the coroutine library too
+            if v == LuaVersion::Lua51 && name == "_G" {
+                self.open_fresh_lib("coroutine")?;
+            }
+        }
         self.puc_registry()?;
-        self.lib_layouts()
+        // `R38_LAYOUT`: how many keys of the globals and of each library
+        // table a collision moved off their main position (the tools check
+        // that a hash seed makes keys collide)
+        #[cfg(feature = "gc-trace")]
+        if std::env::var_os("R38_LAYOUT").is_some() {
+            let mut k = Value::Nil;
+            eprintln!("L _G {}", self.globals.keys_off_main());
+            while let Ok(Some((nk, v))) = self.globals.next(k) {
+                if let (Value::Str(s), Value::Table(t)) = (nk, v) {
+                    eprintln!(
+                        "L {} {}",
+                        String::from_utf8_lossy(s.as_bytes()),
+                        t.keys_off_main()
+                    );
+                }
+                k = nk;
+            }
+        }
+        Ok(())
+    }
+
+    /// Library `name` opened on a state that has none, as
+    /// `luaL_requiref` opens it there: the opener sets the global, and
+    /// `package.loaded` gets the library.
+    fn open_fresh_lib(&mut self, name: &str) -> Result<(), LuaError> {
+        self.try_open_lib(crate::vm::exec::host_c::lib_opener(name))?;
+        let g = self.globals;
+        let key = self.str_value(name.as_bytes())?;
+        let lib = if name == "_G" {
+            Value::Table(g)
+        } else {
+            g.get(key)
+        };
+        let loaded = self.host_loaded()?;
+        self.lib_raw_set(loaded, key, lib)
     }
 
     /// The library objects of luna's, made without counting, that stand

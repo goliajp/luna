@@ -11,7 +11,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 use crate::numeric::{self, FloatFmt, Num};
 use crate::runtime::value::f2i_exact;
-use crate::runtime::{FileHandle, Gc, Table, Userdata, UserdataPayload, Value};
+use crate::runtime::{FileHandle, Gc, Userdata, UserdataPayload, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
@@ -73,7 +73,8 @@ const READ_CHUNK: usize = 4096;
 /// [`open_io`], failing when memory runs out.
 pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
     let v = vm.version();
-    let io = vm.lib_table(14)?;
+    let io = vm.lib_table_puc("io")?;
+    let mut io_entries = Vec::with_capacity(14);
     for (name, f) in [
         ("close", io_close as crate::runtime::value::NativeFn),
         ("flush", io_flush),
@@ -87,7 +88,7 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
         ("type", io_type),
         ("write", io_write),
     ] {
-        put_native(vm, io, name, f)?;
+        io_entries.push((name, vm.lib_native(f)?));
     }
     // The method `close`: 5.1 and 5.2 register `io_close` itself (5.1 with an
     // environment that has no default output, so a missing argument checks
@@ -113,33 +114,39 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
     // `luaL_newmetatable` finds the one an earlier opening registered
     let mt = match vm.file_mt {
         Some(mt) => mt,
-        None => vm.lib_table(if v >= LuaVersion::Lua54 { 5 } else { 11 })?,
+        None => vm.lib_table_puc("FILE*")?,
     };
     let index = if v >= LuaVersion::Lua54 {
-        vm.lib_table(7)?
+        vm.lib_table_puc("FILE*.__index")?
     } else {
         mt
     };
+    let mut index_entries = Vec::with_capacity(methods.len());
     for (name, f) in methods {
-        put_native(vm, index, name, f)?;
+        // 5.2's method is the very function value of `io.close`
+        let fv = match (v, name) {
+            (LuaVersion::Lua52, "close") => io_entries[0].1,
+            _ => vm.lib_native(f)?,
+        };
+        index_entries.push((name, fv));
     }
-    if v == LuaVersion::Lua52 {
-        let k = vm.str_value(b"close")?;
-        let io_close = io.get(k);
-        put(vm, index, "close", io_close)?;
-    }
-    put(vm, mt, "__index", Value::Table(index))?;
-    put_native(vm, mt, "__gc", f_gc)?;
-    put_native(vm, mt, "__tostring", f_tostring)?;
+    let mut mt_entries = vec![
+        ("__index", Value::Table(index)),
+        ("__gc", vm.lib_native(f_gc)?),
+        ("__tostring", vm.lib_native(f_tostring)?),
+    ];
     if v >= LuaVersion::Lua53 {
-        let n = vm.str_value(b"FILE*")?;
-        put(vm, mt, "__name", n)?;
+        mt_entries.push(("__name", vm.str_value(b"FILE*")?));
     }
     if v >= LuaVersion::Lua54 {
         // a to-be-closed file already shut by the user must not re-error,
         // hence the __gc body rather than f_close
-        put_native(vm, mt, "__close", f_gc)?;
+        mt_entries.push(("__close", vm.lib_native(f_gc)?));
+        vm.lib_put_all(index, "FILE*.__index", index_entries)?;
+    } else {
+        mt_entries.extend(index_entries);
     }
+    vm.lib_put_all(mt, "FILE*", mt_entries)?;
     vm.barrier_back_table(index);
     vm.barrier_back_table(mt);
     vm.file_mt = Some(mt);
@@ -157,7 +164,7 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
             let tty = std::io::stdin().is_terminal();
             crt::attach(h, msvc::CrtFile::standard(msvc::Std::No, tty));
         }
-        put(vm, io, name, Value::Userdata(h))?;
+        io_entries.push((name, Value::Userdata(h)));
         match name {
             "stdin" => {
                 vm.io_input = Some(h);
@@ -167,6 +174,7 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
             _ => {}
         }
     }
+    vm.lib_put_all(io, "io", io_entries)?;
     vm.lib_set_global("io", Value::Table(io))?;
     vm.barrier_back_table(io);
     Ok(())
@@ -225,21 +233,4 @@ impl Vm {
         }
         Ok((!line.is_empty()).then_some(line))
     }
-}
-
-fn put(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) -> Result<(), LuaError> {
-    let k = vm.str_value(k.as_bytes())?;
-    vm.lib_set_value(t, k, v)?;
-    Ok(())
-}
-
-fn put_native(
-    vm: &mut Vm,
-    t: Gc<Table>,
-    k: &str,
-    f: crate::runtime::value::NativeFn,
-) -> Result<(), LuaError> {
-    let fv = vm.lib_native(f)?;
-    put(vm, t, k, fv)?;
-    Ok(())
 }
