@@ -298,10 +298,12 @@ impl Vm {
             h: co.map_or(std::ptr::null_mut(), |c| c.as_ptr() as *mut _),
             top: self.gc_top,
             size: self.stack_size,
-            ci: if self.heap.table_dialect == Dialect::L51 {
-                self.g.frame_size
-            } else {
-                self.g.ci_alloc
+            // 5.1 counts its `CallInfo` array, 5.2 the ones in use below
+            // the running one, the later dialects all it has
+            ci: match self.heap.table_dialect {
+                Dialect::L51 => self.g.frame_size,
+                Dialect::L52 => self.ci_in_use(),
+                _ => self.g.ci_alloc,
             },
             main,
             main_size,
@@ -362,7 +364,12 @@ impl Vm {
     /// objects the sweep went over on the way in.
     fn gc_atomic(&mut self) -> (i64, i64) {
         self.clear_dead_stack();
-        let run = self.gc_running();
+        let mut run = self.gc_running();
+        // 5.2's final traversal of a thread counts no `CallInfo`
+        if self.heap.table_dialect == Dialect::L52 {
+            run.ci = 0;
+            run.main_ci = 0;
+        }
         let mut m = self.heap.loan_marker();
         if self.version == LuaVersion::Lua51 {
             self.heap.mark_tobefnz(&mut m);
