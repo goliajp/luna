@@ -69,6 +69,7 @@ impl Heap {
             table_dialect: crate::runtime::table::Dialect::L55,
             hash51: false,
             defer_thread_cycle_finalize: false,
+            gc_event_51: None,
             chunk_roots: Vec::new(),
             weak_watch: Vec::new(),
             threads: Vec::new(),

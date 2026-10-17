@@ -22,6 +22,21 @@ impl Heap {
             // freed while listed (an unreachable one is marked below before any
             // sweep); the header is only read here
             if unsafe { is_white((*h).flags) } {
+                // 5.1 `luaC_separateudata`: a userdata whose metatable has
+                // no `__gc` now is not finalized, and dies
+                // SAFETY: `h` is a listed header, still allocated; a
+                // userdata's tag says what it heads
+                if let Some(name) = self.gc_event_51
+                    && unsafe { (*h).tag } == ObjTag::Userdata
+                    && unsafe { (*(h as *const crate::runtime::Userdata)).metatable() }
+                        .is_none_or(|mt| mt.get_str(name).is_nil())
+                {
+                    // SAFETY: as above; only the flag byte is written
+                    unsafe { (*h).flags = ((*h).flags & !(FIN | DEFERRED)) | FINALIZED };
+                    self.finalize[i] = ptr::null_mut();
+                    queued = true;
+                    continue;
+                }
                 // Two-pass cycle-finalize (PUC 5.3 gc.lua :502): when a
                 // finalizable table holds onto an unreachable coroutine, the
                 // cycle (table → coroutine.stack → closure → table) keeps the

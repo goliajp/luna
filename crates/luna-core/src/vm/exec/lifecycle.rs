@@ -50,6 +50,9 @@ impl Vm {
             *slot = Some(heap.try_intern(name.as_bytes()).ok()?);
         }
         let mm_names = names.map(|n| n.expect("every name was made above"));
+        if version == LuaVersion::Lua51 {
+            heap.gc_event_51 = Some(mm_names[Mm::Gc as usize]);
+        }
 
         let mem = heap.mem();
         let mem_owner = heap.mem_owner();
