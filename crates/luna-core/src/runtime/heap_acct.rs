@@ -198,6 +198,27 @@ impl Heap {
         }
     }
 
+    /// `R38_KEYS`: key `k` enters table `t`'s hash part.
+    #[cfg(feature = "gc-trace")]
+    pub(crate) fn trace_new_key(&mut self, t: &crate::runtime::Table, k: crate::runtime::Value) {
+        use crate::runtime::Value;
+        if !self.trace.keys {
+            return;
+        }
+        let key = match k {
+            Value::Str(s) if s.len() == 0 => String::from("-"),
+            Value::Str(s) => s.as_bytes().iter().map(|b| format!("{b:02x}")).collect(),
+            Value::Int(i) => format!("#{i}"),
+            Value::Float(f) if f.fract() == 0.0 && f.abs() < 1e15 => format!("#{}", f as i64),
+            Value::Float(f) => format!("#{f}"),
+            other => format!("?{}", other.type_name()),
+        };
+        self.trace.line(format_args!(
+            "K {:p} {key}",
+            t as *const crate::runtime::Table
+        ));
+    }
+
     /// A block PUC allocates through the allocation function but leaves
     /// out of `totalbytes` (the contents of a `luaL_Buffer` box): only the
     /// accounting trace sees it.

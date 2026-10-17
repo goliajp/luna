@@ -18,6 +18,12 @@ pub(crate) struct Trace {
     /// `R38_WHERE=<n>` only the allocation events within 30 of the n-th
     /// (counted from 1, as `where.sh` counts PUC's)
     pub(crate) where_: bool,
+    /// `R38_KEYS`: each key a table's hash part gets for the first time
+    /// (`K <table> <key>`, as `libshape_patch.py` logs PUC's)
+    pub(crate) keys: bool,
+    /// `R38_PROP`: each object an incremental step traverses, with its
+    /// type and the work counted for it (`p <tag> <work>`)
+    pub(crate) prop: bool,
     window: Option<(u64, u64)>,
     events: u64,
     /// lines held back (see [`Trace::hold`]), innermost last
@@ -34,6 +40,8 @@ impl Default for Trace {
             no_gc: std::env::var_os("R38_NOGC").is_some(),
             no_auto: std::env::var_os("R38_NOAUTO").is_some(),
             where_: std::env::var_os("R38_WHERE").is_some(),
+            prop: std::env::var_os("R38_PROP").is_some(),
+            keys: std::env::var_os("R38_KEYS").is_some(),
             window: std::env::var("R38_WHERE")
                 .ok()
                 .and_then(|w| w.parse::<u64>().ok())
