@@ -1,5 +1,4 @@
-//! luna-vs-PUC differential test harness (v2.2 origin; v2.14
-//! multi-dialect + multi-channel).
+//! luna-vs-PUC differential test harness.
 //!
 //! ## Layout & dialects
 //! Fixtures live under `tests/diff_puc/5.x/` — each subtree runs
@@ -32,9 +31,8 @@
 //!   channels: the corpus doubles as a test of the PUC chunk translators.
 //!   `puc_bytecode_loads_in_every_dialect` then loads each dialect's
 //!   chunks into Vms of the other four.
-//! - `LUNA_DIFF_PUC_REQUIRE_ALL=1` — every dialect's interpreter and
-//!   `luac` must be present; a missing one fails the run instead of
-//!   skipping the dialect. The diff-puc workflow sets it.
+//! - `LUNA_DIFF_PUC_REQUIRE_ALL=1` — a missing interpreter or `luac`
+//!   fails the run instead of skipping the dialect (the diff-puc workflow).
 //!
 //! Local dev: `brew install lua@5.4` (+ `lua` for 5.5); 5.1.5 /
 //! 5.2.4 / 5.3.6 build in one `make macosx` each from the lua.org
@@ -45,7 +43,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use luna_core::version::LuaVersion;
-use luna_core::vm::Vm;
+use luna_core::vm::{LuaError, Vm};
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/diff_puc")
@@ -140,12 +138,12 @@ fn run_on_puc(path: &Path, bin: &str, source: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Run `source` via luna's in-process `Vm::eval`, with the real `print`
-/// and `io.write` and what they write caught (a buffer in Lua would add
-/// to what `collectgarbage("count")` reads).
-fn run_on_luna(version: LuaVersion, source: &str) -> String {
-    let mut vm = lua_c_vm(version);
-    let (r, out) = super::stdout_capture::caught(|| vm.eval(source).map(|_| ()));
+/// Run `source` as `bin -` runs it, with the real `print` and `io.write`
+/// and what they write caught (a buffer in Lua would add to what
+/// `collectgarbage("count")` reads).
+fn run_on_luna(version: LuaVersion, bin: &str, source: &str) -> String {
+    let mut vm = lua_c_vm(version, bin);
+    let (r, out) = super::stdout_capture::caught(|| run_as_script(&mut vm, bin, source));
     r.expect("luna eval must not error on diff fixtures");
     String::from_utf8_lossy(&out).into_owned()
 }
@@ -228,7 +226,7 @@ fn diff_one_err(path: &Path, bin: &str, version: LuaVersion, source: &str) {
         .unwrap_or(first);
     let (puc_pos, puc_n) = normalize_err(puc_msg);
 
-    let mut vm = lua_c_vm(version);
+    let mut vm = lua_c_vm(version, bin);
     let luna_err = match vm.eval(source) {
         Ok(_) => panic!(
             "[diff_puc] {}: expected a top-level error on luna (fixture is _err) \
@@ -275,7 +273,7 @@ fn diff_one(path: &Path, bin: &str, version: LuaVersion) {
             return;
         }
     };
-    let luna = run_on_luna(version, &source);
+    let luna = run_on_luna(version, bin, &source);
     let puc_n = normalize(&puc);
     let luna_n = normalize(&luna);
     if std::env::var_os("LUNA_DIFF_PUC_VERBOSE").is_some() {
@@ -346,9 +344,33 @@ fn require_all() -> bool {
 
 mod bytecode;
 
-/// A Vm as lua.c runs a script: in generational mode from 5.4.
-pub(super) fn lua_c_vm(version: LuaVersion) -> Vm {
-    let mut vm = Vm::new(version);
+/// A Vm as lua.c sets one up for `bin -`: inside `pmain`, the libraries
+/// open, `arg` made (5.3 on) and, from 5.4, the collector generational.
+pub(super) fn lua_c_vm(version: LuaVersion, bin: &str) -> Vm {
+    let mut vm = Vm::new_minimal(version);
+    vm.host_entry_layout(1, if version == LuaVersion::Lua51 { 2 } else { 3 });
+    vm.open_lua_c_libs();
+    if version >= LuaVersion::Lua53 {
+        vm.host_set_arg(&lua_c_argv(bin), 1).expect("arg");
+    }
     vm.gc_enter_generational();
     vm
+}
+
+fn lua_c_argv(bin: &str) -> Vec<Vec<u8>> {
+    vec![bin.as_bytes().to_vec(), b"-".to_vec()]
+}
+/// lua.c's `handle_script` for `-`: `source` read from stdin, run by `docall`.
+fn run_as_script(vm: &mut Vm, bin: &str, source: &str) -> Result<(), LuaError> {
+    if vm.version() <= LuaVersion::Lua52 {
+        vm.host_set_arg(&lua_c_argv(bin), 1)?;
+    }
+    let f = vm.load_stdin_text(source.as_bytes().to_vec())?;
+    let msgh = vm.native(keep_message);
+    vm.call_value_with_handler_in_c(f, &[], msgh).map(|_| ())
+}
+
+/// The message handler, whose result the stdout channel never sees.
+fn keep_message(_: &mut Vm, _: u32, _: u32) -> Result<u32, LuaError> {
+    Ok(0)
 }
