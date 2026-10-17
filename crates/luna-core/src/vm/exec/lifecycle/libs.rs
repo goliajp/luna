@@ -2,6 +2,8 @@
 
 use super::*;
 
+#[path = "libs/layout.rs"]
+mod layout;
 #[path = "registry.rs"]
 mod registry;
 #[path = "libs/reopen51.rs"]
@@ -123,7 +125,8 @@ impl Vm {
         }
         // last, so `package.loaded` lists every library opened before it
         self.open_lib(lib_package::try_open_package)?;
-        self.puc_registry()
+        self.puc_registry()?;
+        self.lib_layouts()
     }
 
     /// The library objects of luna's, made without counting, that stand
