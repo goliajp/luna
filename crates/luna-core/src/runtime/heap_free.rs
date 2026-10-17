@@ -130,7 +130,7 @@ impl Heap {
                     } else {
                         return self.free_plain_str(s);
                     }
-                    if (*s).is_short() {
+                    if (*s).is_short() && !self.dropping {
                         self.strings.remove(s);
                     }
                     string::free(s, self.mem());
@@ -166,7 +166,7 @@ impl Heap {
                 self.trace.line(format_args!("s {b:?}"));
             }
             self.acct_string_free((*s).len());
-            if (*s).is_short() {
+            if (*s).is_short() && !self.dropping {
                 self.strings.remove(s);
             }
             string::free(s, self.mem());

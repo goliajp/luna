@@ -58,6 +58,7 @@ impl Heap {
             sweep_prev: ptr::null_mut(),
             gc_stopped: false,
             gc_fin_stop: false,
+            dropping: false,
             finalize: crate::runtime::mem::LVec::new(mem.mem()),
             tobefnz: crate::runtime::mem::LVec::new(mem.mem()),
             tobefnz_head: 0,
@@ -101,6 +102,7 @@ impl Heap {
 
 impl Drop for Heap {
     fn drop(&mut self) {
+        self.dropping = true;
         // free everything regardless of reachability, including any list still
         // detached for an in-flight incremental sweep
         // SAFETY: the heap is being dropped, so nothing uses its objects any more; `all`, `fixed` and the held strings hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds tables from `alloc_block` already unlinked from every list

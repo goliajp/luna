@@ -164,6 +164,9 @@ pub struct Heap {
     /// 5.4 and 5.5: a finalizer is running, which no step may interrupt
     /// (PUC `GCSTPGC`)
     pub(crate) gc_fin_stop: bool,
+    /// the heap is being dropped: a string it frees is not taken out of
+    /// the string table, which goes with it
+    dropping: bool,
     /// a raw table store the interpreter's fast path tried could not grow
     /// the table: the slow path it falls back to counts that as the first
     /// attempt (see `Vm::newindex_miss`)
