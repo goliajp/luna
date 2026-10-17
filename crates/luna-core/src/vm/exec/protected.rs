@@ -44,6 +44,12 @@ impl Vm {
         }
         let level = by != ProtectedBy::Host;
         let shift = self.callee_shift(by, false);
+        // `pcall` from Lua takes its `CallInfo` on entry, before its callee
+        // checks for stack (5.1 grows its array for it then)
+        let lua = by == ProtectedBy::Lua;
+        if lua && self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
+            self.grow_frames()?;
+        }
         // the room first: once the level is taken nothing may fail before
         // the continuation that gives it back is pushed
         self.pcall_room(func_slot + 1, nargs, shift)?;
@@ -64,6 +70,9 @@ impl Vm {
                 nresults,
             }),
         );
+        if lua {
+            self.note_call_level();
+        }
         // call f with the remaining args, asking for all results; a yield or
         // error inside propagates with the continuation kept on the stack
         // (caught by `unwind` / preserved across a yield).
