@@ -212,18 +212,25 @@ pub(super) fn open_checked(
     match open_file(vm.crt_text, name, mode) {
         Ok(o) => Ok(opened(vm, o, false)?),
         Err(e) => failed_handle(vm, |vm| {
+            use crate::runtime::puc_fmt::FmtArg;
             note_failure(&e);
-            let n = String::from_utf8_lossy(c_str(name)).into_owned();
             let err = strerror(&e);
-            // over the new handle; 5.1 pushes the message for the argument
-            // error as well
-            let v51 = vm.version() == LuaVersion::Lua51;
-            vm.native_push(1 + u32::from(v51));
-            Err(if v51 {
-                arg_error(vm, 1, &format!("{n}: {err}"))
-            } else {
-                crate::vm::builtins::raise_fmt(vm, 2, &format!("cannot open file '{n}' ({err})"))
-            })
+            let args = [FmtArg::S(c_str(name)), FmtArg::S(err.as_bytes())];
+            // over the new handle
+            vm.native_push(1);
+            if vm.version() != LuaVersion::Lua51 {
+                let fmt = b"cannot open file '%s' (%s)";
+                return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 2));
+            }
+            // 5.1 pushes the message, then raises the argument error with it
+            vm.api_check_before();
+            let m = vm.pushfstring(b"%s: %s", &args)?;
+            vm.native_push(1);
+            vm.lib_roots.push(Value::Str(m));
+            let msg = String::from_utf8_lossy(m.as_bytes()).into_owned();
+            let r = arg_error(vm, 1, &msg);
+            vm.lib_roots.pop();
+            Err(r)
         }),
     }
 }
