@@ -124,7 +124,7 @@ pub(crate) fn clibs_metatable(vm: &mut Vm, clibs: Gc<Table>) -> Result<(), LuaEr
 }
 
 /// The C libraries' finalizer: luna loads none.
-fn clibs_gc(_vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<u32, LuaError> {
+pub(crate) fn clibs_gc(_vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     Ok(0)
 }
 
