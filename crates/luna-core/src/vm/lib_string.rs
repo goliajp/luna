@@ -58,7 +58,8 @@ pub(crate) fn try_open_string(vm: &mut Vm) -> Result<(), LuaError> {
     vm.lib_set_global("string", Value::Table(t))?;
     vm.barrier_back_table(t);
     let mt = vm.lib_table_puc("string_mt")?;
-    let mut entries = vec![("__index", Value::Table(t))];
+    let mut entries = Vec::with_capacity(9);
+    entries.push(("__index", Value::Table(t)));
     if v >= LuaVersion::Lua54 {
         let arith: [(&str, NativeFn); 8] = [
             ("__add", mm_add),

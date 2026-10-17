@@ -130,11 +130,12 @@ pub(crate) fn try_open_io(vm: &mut Vm) -> Result<(), LuaError> {
         };
         index_entries.push((name, fv));
     }
-    let mut mt_entries = vec![
+    let mut mt_entries = Vec::with_capacity(5 + index_entries.len());
+    mt_entries.extend([
         ("__index", Value::Table(index)),
         ("__gc", vm.lib_native(f_gc)?),
         ("__tostring", vm.lib_native(f_tostring)?),
-    ];
+    ]);
     if v >= LuaVersion::Lua53 {
         mt_entries.push(("__name", vm.str_value(b"FILE*")?));
     }

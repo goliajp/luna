@@ -247,7 +247,7 @@ pub(crate) struct Running {
 pub(crate) struct Sizer {
     sizes: crate::runtime::puc_size::PucSizes,
     own: Vec<*const Table>,
-    stand_ins: Vec<(*mut GcHeader, Vec<usize>)>,
+    stand_ins: Vec<(*mut GcHeader, usize)>,
     run: Running,
     pub(in crate::runtime::heap) marked: i64,
 }
@@ -264,8 +264,8 @@ impl Sizer {
             if (*h).tag != ObjTag::Coro {
                 if is_uncounted(h) {
                     // what an object of luna's stands for
-                    let s = self.stand_ins.iter().find(|s| s.0 == h);
-                    return s.map_or(0, |s| s.1.iter().sum::<usize>() as i64);
+                    let s = self.stand_ins.iter().filter(|s| s.0 == h);
+                    return s.map(|s| s.1).sum::<usize>() as i64;
                 }
                 return pace::objsize(&self.sizes, d, &self.own, h) as i64;
             }
