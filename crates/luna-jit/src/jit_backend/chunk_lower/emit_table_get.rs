@@ -5,16 +5,12 @@ pub(super) fn emit_get_i<M: Module>(
     bcx: &mut FunctionBuilder<'_>,
     st: &mut EmitState,
     f: EmitFacts<'_>,
+    pc: usize,
     ins: Inst,
 ) -> Option<()> {
     let EmitFacts {
         reg_kinds, regs, ..
     } = f;
-    let EmitState {
-        current_kinds,
-        current_is_nil,
-        ..
-    } = st;
     match ins.op() {
         Op::GetI => {
             // `R[A] = R[B][imm(C)]`. Inline
@@ -66,10 +62,11 @@ pub(super) fn emit_get_i<M: Module>(
                 key_minus_1,
                 ("luna_jit_table_get_int_checked", key),
                 want,
+                (st, f, pc),
             )?;
             aligned_def(bcx, regs, reg_kinds, a, v);
-            current_kinds[a] = reg_kinds[a];
-            current_is_nil[a] = false;
+            st.current_kinds[a] = reg_kinds[a];
+            st.current_is_nil[a] = false;
         }
         _ => unreachable!("dispatched by op"),
     }
@@ -81,16 +78,12 @@ pub(super) fn emit_get_table<M: Module>(
     bcx: &mut FunctionBuilder<'_>,
     st: &mut EmitState,
     f: EmitFacts<'_>,
+    pc: usize,
     ins: Inst,
 ) -> Option<()> {
     let EmitFacts {
         reg_kinds, regs, ..
     } = f;
-    let EmitState {
-        current_kinds,
-        current_is_nil,
-        ..
-    } = st;
     match ins.op() {
         Op::GetTable => {
             // `R[A] = R[B][R[C]]`. Same fast
@@ -159,10 +152,11 @@ pub(super) fn emit_get_table<M: Module>(
                 ("luna_jit_table_get_int_checked", key_raw)
             };
             let want = want_tag(reg_kinds.get(a).copied().unwrap_or(RegKind::Int));
-            let v = emit_checked_get(bcx, module, t, fast_ok, key_minus_1, slow, want)?;
+            let hand = (&*st, f, pc);
+            let v = emit_checked_get(bcx, module, t, fast_ok, key_minus_1, slow, want, hand)?;
             aligned_def(bcx, regs, reg_kinds, a, v);
-            current_kinds[a] = reg_kinds[a];
-            current_is_nil[a] = false;
+            st.current_kinds[a] = reg_kinds[a];
+            st.current_is_nil[a] = false;
         }
         _ => unreachable!("dispatched by op"),
     }
@@ -174,12 +168,12 @@ pub(super) fn emit_len<M: Module>(
     bcx: &mut FunctionBuilder<'_>,
     st: &mut EmitState,
     f: EmitFacts<'_>,
+    pc: usize,
     ins: Inst,
 ) -> Option<()> {
     let EmitFacts {
         reg_kinds, regs, ..
     } = f;
-    let EmitState { current_kinds, .. } = st;
     match ins.op() {
         Op::Len => {
             // `R[A] = #R[B]`.
@@ -200,13 +194,16 @@ pub(super) fn emit_len<M: Module>(
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
             let id = module
-                .declare_function("luna_jit_table_len", Linkage::Import, &sig)
+                .declare_function("luna_jit_table_len_checked", Linkage::Import, &sig)
                 .ok()?;
             let r = module.declare_func_in_func(id, bcx.func);
             let call_inst = bcx.ins().call(r, &[t]);
             let v = bcx.inst_results(call_inst)[0];
+            // -1: a metatable, whose `__len` the interpreter calls
+            let plain = bcx.ins().icmp_imm_s(IntCC::NotEqual, v, -1);
+            emit_hand_if_zero(module, bcx, st, f, pc, plain)?;
             aligned_def(bcx, regs, reg_kinds, a, v);
-            current_kinds[a] = RegKind::Int;
+            st.current_kinds[a] = RegKind::Int;
         }
         _ => unreachable!("dispatched by op"),
     }

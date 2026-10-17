@@ -12,6 +12,7 @@ mod emit_for_loop;
 mod emit_table_get;
 mod emit_table_set;
 mod entry;
+mod handoff;
 mod helpers;
 mod kind_flow;
 mod kinds;
@@ -26,7 +27,7 @@ mod scan_tables;
 mod table_flow;
 use cfg::ChunkCfg;
 use emit::{EmitFacts, EmitState};
-use emit_alloc::emit_bail_if_zero;
+use emit_alloc::emit_hand_if_zero;
 use entry::*;
 use helpers::*;
 use kinds::KindSweep;
@@ -37,6 +38,8 @@ use scan::ChunkScan;
 struct ChunkIn<'a> {
     proto: Gc<Proto>,
     code: &'a [Inst],
+    /// each instruction's pc in `proto.code` (see `split_const_operands`)
+    old_pc: &'a [u32],
     n: usize,
     num_params: usize,
     max_stack: usize,
@@ -74,8 +77,8 @@ pub fn lower_int_chunk_into<M: Module>(
     // paired Lt|Le|Eq+Jmp).
     // the passes below read register operands only
     let first_scratch = (proto.max_stack as usize).max(num_params);
-    let code = const_operands::split_const_operands(&proto, first_scratch)?;
-    let code = &code[..];
+    let (code, old_pc) = const_operands::split_const_operands(&proto, first_scratch)?;
+    let (code, old_pc) = (&code[..], &old_pc[..]);
     let n = code.len();
     if n == 0 {
         return None;
@@ -85,6 +88,7 @@ pub fn lower_int_chunk_into<M: Module>(
     let c = ChunkIn {
         proto,
         code,
+        old_pc,
         n,
         num_params,
         max_stack,

@@ -32,19 +32,21 @@ pub(super) struct ComputeEmitter<'ctx, 'a> {
     pub(super) helpers: &'a HashMap<&'static str, FunctionValue<'ctx>>,
     /// `luna_jit_helpers::self_call_desc` of this chunk's self calls
     pub(super) self_call_desc: i64,
-    /// The body can park a deopt of its own (see `compute::may_park`).
-    pub(super) may_park: bool,
-    /// The body jumps backwards somewhere.
-    pub(super) has_loop: bool,
     /// `llvm.read_register.i64`, which reads the stack pointer for the
     /// self-call guard.
     pub(super) read_register: FunctionValue<'ctx>,
+    /// The registers holding nil at each self call (`flow::nils_at`).
+    pub(super) nils_at: &'a [Option<Vec<bool>>],
+    /// The registers a level hands to the interpreter.
+    pub(super) num_regs: u32,
+    /// The pc of the op being emitted.
+    pub(super) pc: std::cell::Cell<usize>,
 }
 
 impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
-    /// Call `check(args)`; when it returns 0 (a deopt is parked) return 0
-    /// from the chunk, else go on in a fresh block.
-    pub(super) fn return_unless(
+    /// Call `check(args)`; when it returns 0 hand this level to the
+    /// interpreter at the op being emitted, else go on in a fresh block.
+    pub(super) fn hand_unless(
         &self,
         check: FunctionValue<'ctx>,
         args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
@@ -73,7 +75,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
             .build_conditional_branch(is_ok, ok_bb, deopt_bb)
             .ok()?;
         self.builder.position_at_end(deopt_bb);
-        self.builder.build_return(Some(&zero)).ok()?;
+        self.handoff_here()?;
         self.builder.position_at_end(ok_bb);
         Some(())
     }
@@ -154,10 +156,9 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         Some(())
     }
 
-    /// When `v` is zero, park a deopt and return from the chunk: the
-    /// interpreter runs the call again and raises the error (`n%0`).
+    /// When `v` is zero, hand this level to the interpreter, which runs
+    /// the op and raises the error (`n%0`).
     fn deopt_if_zero(&self, v: inkwell::values::IntValue<'ctx>) -> Option<()> {
-        let park = self.helpers.get("luna_jit_park_deopt").copied()?;
         let zero = self.i64_type.const_zero();
         let is_zero = self
             .builder
@@ -169,10 +170,15 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
             .build_conditional_branch(is_zero, zero_bb, go_bb)
             .ok()?;
         self.builder.position_at_end(zero_bb);
-        self.builder.build_call(park, &[], "park").ok()?;
-        self.builder.build_return(Some(&zero)).ok()?;
+        self.handoff_here()?;
         self.builder.position_at_end(go_bb);
         Some(())
+    }
+
+    /// Hand this level to the interpreter at the op being emitted.
+    fn handoff_here(&self) -> Option<()> {
+        let pc = self.pc.get();
+        self.handoff(self.i64_type.const_int(pc as u64, false), pc)
     }
 
     /// Lua-semantic int mod (`lhs % rhs`).
@@ -304,7 +310,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
             // otherwise luna_jit_upval_get(b) into regs[A].
             let idx_arg = i64_type.const_int(ins.b() as u64, false);
             let check = self.helpers.get("luna_jit_upval_is_int").copied()?;
-            self.return_unless(check, &[idx_arg.into()], "upv")?;
+            self.hand_unless(check, &[idx_arg.into()], "upv")?;
             let helper = self.helpers.get("luna_jit_upval_get").copied()?;
             let call_inst = builder
                 .build_call(helper, &[idx_arg.into()], "upv_val")
@@ -331,7 +337,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
 
     /// Self-recursive `Op::Call`: a direct call to the entry function,
     /// result into regs[A], then return early if a deopt was parked.
-    pub(super) fn emit_self_call(&self, ins: Inst) -> Option<()> {
+    pub(super) fn emit_self_call(&self, ins: Inst, pc: usize) -> Option<()> {
         let builder = self.builder;
         let a = ins.a();
         let nargs = ins.b().saturating_sub(1);
@@ -341,34 +347,18 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
             let v = self.load_reg(a + off, "call_arg")?;
             arg_vals.push(v.into());
         }
-        let v = self.guarded_self_call(&arg_vals, a, false, "self_call")?;
+        let v = self.guarded_self_call(&arg_vals, a, None, "self_call")?;
+        // a call below that failed returns at once; one that went to the
+        // interpreter takes this level with it
+        self.after_self_call(pc, false)?;
         let slot = self.reg_slot_ptr(a, "call_dst")?;
         builder.build_store(slot, v).ok()?;
-        // A call below that failed (the context's flag) or parked a deopt
-        // makes the dispatcher drop this call's result. The body has no
-        // effect but its result, so without a loop that a dummy result
-        // could keep going it may finish: its self calls are bounded by
-        // the stack. Without the checks LLVM can turn the
-        // recursion into a loop (`return f(n - 1) + n`).
-        if !self.has_loop {
-            return Some(());
-        }
-        let failed = self.ctx_word(1, "call_failed")?;
-        let zero = self.i64_type.const_zero();
-        let ok = builder
-            .build_int_compare(inkwell::IntPredicate::EQ, failed, zero, "call_ok")
-            .ok()?;
-        self.return_if_not(ok, "call")?;
-        if self.may_park {
-            let parked = self.helpers.get("luna_jit_no_deopt_parked").copied()?;
-            self.return_unless(parked, &[], "parked")?;
-        }
         Some(())
     }
 
     /// Self-recursive `Op::TailCall`: call the entry function and return
     /// its result (`Op::Call` + `Op::Return1` fused).
-    pub(super) fn emit_self_tail_call(&self, ins: Inst) -> Option<()> {
+    pub(super) fn emit_self_tail_call(&self, ins: Inst, pc: usize) -> Option<()> {
         let builder = self.builder;
         let a = ins.a();
         let nargs = ins.b().saturating_sub(1);
@@ -378,9 +368,126 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
             let v = self.load_reg(a + off, "tail_arg")?;
             arg_vals.push(v.into());
         }
-        let v = self.guarded_self_call(&arg_vals, a, true, "tail_call")?;
+        let v = self.guarded_self_call(&arg_vals, a, Some(pc), "tail_call")?;
+        // the callee took this level: one that went to the interpreter
+        // took it there already
+        self.after_self_call(pc, true)?;
         // Return the tail call result directly — no regs[A] store.
         builder.build_return(Some(&v)).ok()?;
+        Some(())
+    }
+
+    /// After the self call at `pc`: with the context's flag set, return at
+    /// once (a call failed, or with `tail` the callee went to the
+    /// interpreter as this level), or hand this level to the interpreter,
+    /// going on after the call (the callee went there) or with it (the
+    /// callee did not start).
+    fn after_self_call(&self, pc: usize, tail: bool) -> Option<()> {
+        use luna_jit_helpers::{SELF_HANDED, SELF_NOT_STARTED};
+        let builder = self.builder;
+        let i64t = self.i64_type;
+        let flag = self.ctx_word(1, "call_flag")?;
+        let set = builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                flag,
+                i64t.const_zero(),
+                "flag_set",
+            )
+            .ok()?;
+        let cold = self.ctx.append_basic_block(self.function, "flag_cold");
+        let go = self.ctx.append_basic_block(self.function, "flag_go");
+        builder.build_conditional_branch(set, cold, go).ok()?;
+        builder.position_at_end(cold);
+        let hand_at = |what: i64| {
+            builder
+                .build_int_compare(
+                    inkwell::IntPredicate::EQ,
+                    flag,
+                    i64t.const_int(what as u64, false),
+                    "flag_is",
+                )
+                .ok()
+        };
+        let not_started = hand_at(SELF_NOT_STARTED)?;
+        let handed = hand_at(SELF_HANDED)?;
+        let hand = if tail {
+            not_started
+        } else {
+            builder.build_or(not_started, handed, "hand").ok()?
+        };
+        let hand_bb = self.ctx.append_basic_block(self.function, "hand");
+        let ret_bb = self.ctx.append_basic_block(self.function, "flag_ret");
+        builder
+            .build_conditional_branch(hand, hand_bb, ret_bb)
+            .ok()?;
+        builder.position_at_end(ret_bb);
+        builder.build_return(Some(&i64t.const_zero())).ok()?;
+        builder.position_at_end(hand_bb);
+        let at = i64t.const_int(pc as u64, false);
+        let after = i64t.const_int(pc as u64 + 1, false);
+        let resume = builder
+            .build_select(not_started, at, after, "resume")
+            .ok()?;
+        self.handoff(resume.into_int_value(), pc)?;
+        builder.position_at_end(go);
+        Some(())
+    }
+
+    /// Hand this level to the interpreter, which goes on with it at `pc`
+    /// (a value), its registers as they are before the self call at
+    /// `call_pc` (`luna_jit_handoff_frame`), and return.
+    fn handoff(&self, pc: inkwell::values::IntValue<'ctx>, call_pc: usize) -> Option<()> {
+        // (an upvalue check failing parked a deopt the record replaces)
+        use luna_core::runtime::value::raw;
+        let builder = self.builder;
+        let i64t = self.i64_type;
+        let n = self.num_regs;
+        let words = i64t.array_type(2 * n);
+        let buf = builder.build_alloca(words, "handoff_regs").ok()?;
+        let nils = self.nils_at.get(call_pc).cloned().flatten()?;
+        for r in 0..n {
+            let nil = nils.get(r as usize).copied().unwrap_or(true);
+            let tag = if nil { raw::NIL } else { raw::INT };
+            let at = |w: u32, name: &str| {
+                // SAFETY: `buf` is an alloca of `2 * n` words and `w < 2 * n`
+                unsafe {
+                    builder.build_in_bounds_gep(
+                        words,
+                        buf,
+                        &[i64t.const_zero(), i64t.const_int(u64::from(w), false)],
+                        name,
+                    )
+                }
+                .ok()
+            };
+            builder
+                .build_store(at(2 * r, "tag_at")?, i64t.const_int(u64::from(tag), false))
+                .ok()?;
+            if !nil {
+                let v = self.load_reg(r, "handoff_reg")?;
+                builder.build_store(at(2 * r + 1, "val_at")?, v).ok()?;
+            }
+        }
+        let addr = builder.build_ptr_to_int(buf, i64t, "handoff_addr").ok()?;
+        let base = self.function.get_nth_param(2)?.into_int_value();
+        let record = self.helpers.get("luna_jit_handoff_frame").copied()?;
+        builder
+            .build_call(
+                record,
+                &[
+                    pc.into(),
+                    base.into(),
+                    addr.into(),
+                    i64t.const_int(u64::from(n), false).into(),
+                ],
+                "handoff",
+            )
+            .ok()?;
+        let flag_at = self.ctx_addr(1, "flag_at")?;
+        let handed = i64t.const_int(luna_jit_helpers::SELF_HANDED as u64, false);
+        builder.build_store(flag_at, handed).ok()?;
+        builder.build_return(Some(&i64t.const_zero())).ok()?;
         Some(())
     }
 
@@ -432,7 +539,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         &self,
         args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
         a: u32,
-        tail: bool,
+        tail: Option<usize>,
         name: &str,
     ) -> Option<inkwell::values::IntValue<'ctx>> {
         let builder = self.builder;
@@ -445,9 +552,9 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         let deeper = builder
             .build_int_add(depth, i64t.const_int(1, false), "up_depth")
             .ok()?;
-        let (base, depth) = if tail {
+        let (base, depth) = if let Some(pc) = tail {
             let desc = self.self_call_desc | luna_jit_helpers::SELF_LEVEL_TAIL;
-            self.count_level(up, deeper, desc, name)?;
+            self.count_level(up, deeper, desc, Some(pc), name)?;
             (base, depth)
         } else {
             (up, deeper)
@@ -474,19 +581,15 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         base: inkwell::values::IntValue<'ctx>,
         depth: inkwell::values::IntValue<'ctx>,
         desc: i64,
+        tail: Option<usize>,
         name: &str,
     ) -> Option<()> {
         let builder = self.builder;
         let i64t = self.i64_type;
         let base_limit = self.ctx_word(2, "base_limit")?;
-        let depth_limit = self.ctx_word(3, "depth_limit")?;
-        let high = builder
+        let cross = builder
             .build_int_compare(inkwell::IntPredicate::SGE, base, base_limit, "high")
             .ok()?;
-        let deep = builder
-            .build_int_compare(inkwell::IntPredicate::SGT, depth, depth_limit, "deep")
-            .ok()?;
-        let cross = builder.build_or(high, deep, "cross").ok()?;
         let count_bb = self
             .ctx
             .append_basic_block(self.function, &format!("{name}_level"));
@@ -518,21 +621,35 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         let ok = builder
             .build_int_compare(inkwell::IntPredicate::EQ, r, i64t.const_zero(), "level_ok")
             .ok()?;
-        self.return_if_not(ok, &format!("{name}_level"))?;
-        builder.build_unconditional_branch(go_bb).ok()?;
+        match tail {
+            // the tail call did not start: this level goes with it
+            Some(pc) => {
+                let failed_bb = self
+                    .ctx
+                    .append_basic_block(self.function, &format!("{name}_level_failed"));
+                builder
+                    .build_conditional_branch(ok, go_bb, failed_bb)
+                    .ok()?;
+                builder.position_at_end(failed_bb);
+                self.after_self_call(pc, true)?;
+                builder.build_return(Some(&i64t.const_zero())).ok()?;
+            }
+            None => {
+                self.return_if_not(ok, &format!("{name}_level"))?;
+                builder.build_unconditional_branch(go_bb).ok()?;
+            }
+        }
         builder.position_at_end(go_bb);
         Some(())
     }
 
     /// At the body's start, when it was entered by a self call: with the
-    /// native stack below the context's limit, have
-    /// `luna_jit_self_call_slow` make this call instead (in the
-    /// interpreter), as the Cranelift tier's stub does, and return its
-    /// result; otherwise count the level when it must be.
-    pub(super) fn emit_self_guard(&self, num_params: u32) -> Option<()> {
+    /// native stack below the context's limit, leave this call to the
+    /// interpreter (the caller hands itself over), as the Cranelift tier's
+    /// stub does; otherwise count the level when it must be.
+    pub(super) fn emit_self_guard(&self) -> Option<()> {
         let builder = self.builder;
         let i64t = self.i64_type;
-        let ctx_arg = self.function.get_nth_param(0)?.into_int_value();
         let limit = self.function.get_nth_param(1)?.into_int_value();
         let base = self.function.get_nth_param(2)?.into_int_value();
         let depth = self.function.get_nth_param(3)?.into_int_value();
@@ -561,24 +678,12 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
             .build_conditional_branch(slow, slow_bb, go_bb)
             .ok()?;
         builder.position_at_end(slow_bb);
-        let slow_fn = self.helpers.get("luna_jit_self_call_slow").copied()?;
-        let desc = i64t.const_int(self.self_call_desc as u64, false);
-        let zero = i64t.const_zero();
-        let mut slow_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
-            vec![ctx_arg.into(), desc.into(), base.into(), depth.into()];
-        for i in 0..num_params {
-            slow_args.push(self.function.get_nth_param(4 + i)?.into());
-        }
-        slow_args.resize(8, zero.into());
-        let r = builder
-            .build_call(slow_fn, &slow_args, "self_interp")
-            .ok()?;
-        let r = match r.try_as_basic_value() {
-            inkwell::values::ValueKind::Basic(v) => v,
-            inkwell::values::ValueKind::Instruction(_) => return None,
-        };
-        builder.build_return(Some(&r)).ok()?;
+        // the interpreter makes the call
+        let flag_at = self.ctx_addr(1, "flag_at")?;
+        let not_started = i64t.const_int(luna_jit_helpers::SELF_NOT_STARTED as u64, false);
+        builder.build_store(flag_at, not_started).ok()?;
+        builder.build_return(Some(&i64t.const_zero())).ok()?;
         builder.position_at_end(go_bb);
-        self.count_level(base, depth, self.self_call_desc, "entry")
+        self.count_level(base, depth, self.self_call_desc, None, "entry")
     }
 }

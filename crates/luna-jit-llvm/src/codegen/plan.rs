@@ -121,6 +121,9 @@ pub(super) struct ChunkPlan<'a> {
     pub(super) is_upval_value_read: Vec<bool>,
     /// The upvalue the self-recursive calls go through, if any.
     pub(super) self_upval_idx: Option<u32>,
+    /// At each self call: which registers hold nil, for a level handing
+    /// itself to the interpreter there (`flow::nils_at`).
+    pub(super) nils_at: Vec<Option<Vec<bool>>>,
 }
 
 impl<'a> ChunkPlan<'a> {
@@ -170,6 +173,12 @@ impl<'a> ChunkPlan<'a> {
         if !flow::reads_no_nil(code, &reachable, regs) {
             return None;
         }
+        let calls: Vec<bool> = self_call_pcs
+            .iter()
+            .zip(&tail_call_pcs)
+            .map(|(&c, &t)| c || t)
+            .collect();
+        let nils_at = flow::nils_at(code, &consumed_jmp, regs, proto.num_params as u32, &calls)?;
 
         Some(ChunkPlan {
             code,
@@ -184,6 +193,7 @@ impl<'a> ChunkPlan<'a> {
             tail_call_pcs,
             is_upval_value_read,
             self_upval_idx,
+            nils_at,
         })
     }
 }

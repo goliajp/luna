@@ -42,15 +42,11 @@ pub(super) struct EmitFacts<'a> {
 /// itself as PUC counts a call (`luna_jit_self_level`) only when it
 /// reaches the base or depth the context allows. The entry fills the
 /// context (`luna_jit_enter_ctx`) and keeps its address in the pinned
-/// register. Where going on after a failed self call could be seen (a
-/// table write) or might not end (a backward jump), the body reads the
-/// context's failure flag after each self call and returns at once when
-/// it is set; elsewhere the callers finish with dummy results that the
-/// dispatcher drops.
+/// register. After each self call the body reads the context's flag: a
+/// call that failed makes it return at once, one that went to the
+/// interpreter makes it go there too (`handoff`).
 #[derive(Clone, Copy)]
 pub(super) struct SelfCalls {
-    /// read the failure flag after each self call
-    pub(super) check_failure: bool,
     /// this level's base and depth
     pub(super) base: Value,
     pub(super) depth: Value,
@@ -179,11 +175,7 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
         let params = bcx.block_params(entry);
         let (base, depth) = (params[num_params], params[num_params + 1]);
         super::entry::count_level(module, &mut bcx, desc, base, depth)?;
-        Some(SelfCalls {
-            check_failure: may_show_dummy_results(c),
-            base,
-            depth,
-        })
+        Some(SelfCalls { base, depth })
     } else {
         None
     };
@@ -252,12 +244,18 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     module.define_function(fn_id, &mut ctx).ok()?;
     chunk_share::note(module, &ctx, fn_id);
     let ring = any_self_call.then(|| RingSpec {
-        desc,
         copies: ring_copies(ctx.compiled_code().map_or(0, |cc| cc.code_buffer().len())),
     });
     module.clear_context(&mut ctx);
 
-    define_entry(module, &mut ctx, fn_id, scan, ring, num_params)
+    define_entry(
+        module,
+        &mut ctx,
+        fn_id,
+        scan,
+        ring,
+        (arg_float_mask, arg_table_mask, num_params),
+    )
 }
 
 /// Emit the ops at `from..to`, starting in the current block. The function
@@ -336,11 +334,11 @@ fn emit_pcs<M: Module>(
             }
             Op::Lt | Op::Le | Op::Eq => pc = emit_basic::emit_cmp(bcx, st, f, pc, ins),
             Op::NewTable => emit_alloc::emit_new_table(module, bcx, st, f, pc, ins)?,
-            Op::SetTable => emit_table_set::emit_set_table(module, bcx, f, ins)?,
+            Op::SetTable => emit_table_set::emit_set_table(module, bcx, st, f, pc, ins)?,
             Op::SetList => emit_table_set::emit_set_list(module, bcx, st, f, pc, ins)?,
-            Op::GetI => emit_table_get::emit_get_i(module, bcx, st, f, ins)?,
-            Op::GetTable => emit_table_get::emit_get_table(module, bcx, st, f, ins)?,
-            Op::Len => emit_table_get::emit_len(module, bcx, st, f, ins)?,
+            Op::GetI => emit_table_get::emit_get_i(module, bcx, st, f, pc, ins)?,
+            Op::GetTable => emit_table_get::emit_get_table(module, bcx, st, f, pc, ins)?,
+            Op::Len => emit_table_get::emit_len(module, bcx, st, f, pc, ins)?,
             _ => return None,
         }
         pc += 1;
@@ -406,14 +404,4 @@ fn self_call_desc(masks: (u8, u8), num_params: usize, scan: &ChunkScan, ret_kind
         (true, _) => SELF_CALL_RET_INT,
     };
     luna_jit_helpers::self_call_desc(num_params as u32, masks.0, masks.1, ret)
-}
-
-/// Whether computing on after a failed self call could be seen or might
-/// not end: a table write, a new table, or a backward jump.
-fn may_show_dummy_results(c: ChunkIn<'_>) -> bool {
-    c.code.iter().enumerate().any(|(pc, &ins)| match ins.op() {
-        Op::SetTable | Op::SetList | Op::NewTable => true,
-        Op::Jmp => jmp_target(pc, ins) <= pc,
-        _ => false,
-    })
 }

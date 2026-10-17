@@ -174,6 +174,9 @@ pub struct JitState {
     pub levels_base: u32,
     /// the slot of the compiled call's level 0 (its base)
     pub levels_slot: u32,
+    /// the frames of the compiled levels handed to the interpreter,
+    /// deepest first
+    pub handoff: Vec<crate::vm::exec::HandoffFrame>,
 }
 
 impl JitState {
@@ -424,6 +427,7 @@ impl JitState {
             gc_exit: None,
             levels_base: 0,
             levels_slot: 0,
+            handoff: Vec::new(),
             reg_state_buf: Vec::new(),
             ssa_roots: Vec::new(),
             str_buf_pool: Vec::new(),

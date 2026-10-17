@@ -3,7 +3,9 @@ use super::*;
 pub(super) fn emit_set_table<M: Module>(
     module: &mut M,
     bcx: &mut FunctionBuilder<'_>,
+    st: &EmitState,
     f: EmitFacts<'_>,
+    pc: usize,
     ins: Inst,
 ) -> Option<()> {
     let EmitFacts {
@@ -87,7 +89,7 @@ pub(super) fn emit_set_table<M: Module>(
                 let r = module.declare_func_in_func(id, bcx.func);
                 let call = bcx.ins().call(r, &[t, key, val]);
                 let stored = bcx.inst_results(call)[0];
-                emit_bail_if_zero(module, bcx, stored, false)?;
+                emit_hand_if_zero(module, bcx, st, f, pc, stored)?;
                 bcx.ins().jump(merge_blk, &[]);
 
                 bcx.switch_to_block(merge_blk);
@@ -112,7 +114,7 @@ pub(super) fn emit_set_table<M: Module>(
                 let r = module.declare_func_in_func(id, bcx.func);
                 let call = bcx.ins().call(r, &[t, key_i, val_i]);
                 let stored = bcx.inst_results(call)[0];
-                emit_bail_if_zero(module, bcx, stored, false)?;
+                emit_hand_if_zero(module, bcx, st, f, pc, stored)?;
             }
         }
         _ => unreachable!("dispatched by op"),
@@ -330,7 +332,7 @@ pub(super) fn emit_set_list<M: Module>(
                 let tag_v = bcx.ins().iconst(types::I64, tag);
                 let call = bcx.ins().call(r, &[t, key, bits, tag_v]);
                 let stored = bcx.inst_results(call)[0];
-                emit_bail_if_zero(module, bcx, stored, false)?;
+                emit_hand_if_zero(module, bcx, st, f, pc, stored)?;
             }
             bcx.ins().jump(merge_blk, &[]);
 

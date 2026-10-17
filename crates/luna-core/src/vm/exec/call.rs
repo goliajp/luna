@@ -41,12 +41,23 @@ impl Vm {
                     // the int-arith whitelist, every arg is `Value::Int`,
                     // and the cached arity matches, skip frame setup and
                     // run the cached native fn in-place.
-                    if self.try_jit_call_op(cl, func_slot, nargs, nresults) {
+                    let run = self.try_jit_call_op(cl, func_slot, nargs, nresults);
+                    if run != JitRun::NotRun {
                         self.pending_tailcalls = tailcalls;
                         if let Some(e) = self.jit.pending_raise.take() {
+                            self.jit.handoff.clear();
                             return Err(e);
                         }
-                        return Ok(false);
+                        if run == JitRun::Done {
+                            return Ok(false);
+                        }
+                        self.pending_ccmt = if tailcalls > 0 {
+                            tail_ccmt
+                        } else {
+                            chain as u8
+                        };
+                        self.jit_resume_handoff(cl, func_slot, nresults, from_c)?;
+                        return Ok(true);
                     }
                     self.pending_tailcalls = tailcalls;
                     self.pending_ccmt = if tailcalls > 0 {
