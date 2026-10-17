@@ -70,12 +70,24 @@ impl Vm {
     /// message a load may have made.
     fn mark_root_strings(&self, m: &mut crate::runtime::heap::Marker, start: bool, end: bool) {
         let puc = &self.heap.puc;
-        // 5.2's fixed names are marked where reached, as any string
+        // the names PUC fixes stay black (5.2's are marked where reached, as
+        // any string); the others are its libraries' strings, or luna's
+        // own, left to the tables that hold them until the atomic step
         let names_late = self.version == LuaVersion::Lua52;
-        if start && !names_late || end && names_late {
-            m.mark_strings(self.mm_names.iter());
+        let fixed = fixed_names(self.version);
+        let names = |fix: bool| {
+            (0..self.mm_names.len())
+                .filter(move |&i| (fixed >> i & 1 == 1) == fix)
+                .map(|i| &self.mm_names[i])
+        };
+        if start && !names_late {
+            m.mark_strings(names(true));
         }
         if end {
+            if names_late {
+                m.mark_strings(names(true));
+            }
+            m.mark_strings(names(false));
             m.mark_strings(puc.pins.iter());
         }
         m.mark_strings(puc.load_msg.iter());
@@ -215,5 +227,21 @@ impl Vm {
                 m.mark(uv);
             }
         }
+    }
+}
+
+/// Which of `MM_NAMES` are PUC's metamethod names (`luaT_init`, which fixes
+/// them) in version `v`, as bits by index.
+fn fixed_names(v: LuaVersion) -> u32 {
+    // __index __newindex __call __eq __lt __le __concat __len __add __sub
+    // __mul __div __mod __pow __unm __gc
+    let base = 0b100_1000_0001_1111_1111_1100_0111;
+    // __idiv __band __bor __bxor __shl __shr __bnot
+    let ints = 0b1_0111_1110_0000_0000_0000_0000;
+    match v {
+        LuaVersion::Lua51 | LuaVersion::Lua52 => base,
+        LuaVersion::Lua53 => base | ints,
+        // __close
+        _ => base | ints | 1 << 25,
     }
 }
