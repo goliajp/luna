@@ -193,6 +193,7 @@ impl Vm {
             async_waker: None,
             async_slice_size: 10_000,
             host_yield_pending: false,
+            yield_ci_top: 0,
             // Pending async-native state, filled only by the dispatcher when
             // an async-marked native is invoked under async_mode.
             pending_async_native_fut: None,

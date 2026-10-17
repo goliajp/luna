@@ -94,6 +94,8 @@ pub struct Coro {
     pub meta_conts: u32,
     /// Saved `Vm::stale_frames`.
     pub stale_frames: u32,
+    /// suspended by a C function's yield: that function's `ci->top`
+    pub(crate) yield_ci_top: u32,
     /// this thread's debug hook state (PUC per-thread hook/hookmask)
     pub hook: crate::vm::exec::HookState,
     /// PUC `L->l_gt` — the thread's own globals table. Captured from the

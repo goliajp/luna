@@ -236,8 +236,7 @@ impl Vm {
     /// Suspend the running coroutine from the C function at `func_slot`
     /// (PUC `lua_yieldk`), yielding `vals`. With `cont`, the resume runs
     /// the continuation; without, the resume's values are the C function's
-    /// results. The caller has checked [`Vm::host_yield_refusal`]. Returns
-    /// the error value the native returns to leave.
+    /// results. The caller has checked [`Vm::host_yield_refusal`].
     pub fn host_yield(
         &mut self,
         func_slot: u32,
@@ -245,6 +244,7 @@ impl Vm {
         vals: Vec<Value>,
         cont: Option<u32>,
     ) -> LuaError {
+        self.note_yield_ci_top();
         match cont {
             Some(token) => {
                 let at = self.stack.len() as u32;

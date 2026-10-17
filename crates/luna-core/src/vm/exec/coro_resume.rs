@@ -101,8 +101,10 @@ impl Vm {
         } else {
             match self.yielding.take() {
                 Some((vals, fslot, nres)) => {
-                    // SAFETY: `co` is still `self.current`, a root; the borrow covers one field store
-                    unsafe { co.as_mut() }.resume_at = Some((fslot, nres));
+                    // SAFETY: `co` is still `self.current`, a root; the borrow covers two field stores
+                    let c = unsafe { co.as_mut() };
+                    c.resume_at = Some((fslot, nres));
+                    c.yield_ci_top = std::mem::take(&mut self.yield_ci_top);
                     (Ok(vals), CoroStatus::Suspended)
                 }
                 None => {
@@ -249,10 +251,16 @@ impl Vm {
         self.exec_with(1)
     }
 
+    /// The C function yielding, on top of the running natives.
+    pub(crate) fn note_yield_ci_top(&mut self) {
+        self.yield_ci_top = self.running_natives.last().map_or(0, |a| a.ci_top);
+    }
+
     /// `coroutine.yield`: suspend the running coroutine, recording where to
     /// resume. Errors if called outside a coroutine. Returns a sentinel error
     /// that `exec`/`resume_coro` recognise as a yield (never surfaced to Lua).
     pub(crate) fn do_yield(&mut self, func_slot: u32, vals: Vec<Value>) -> LuaError {
+        self.note_yield_ci_top();
         let nres = self.native_nresults;
         self.yielding = Some((vals, func_slot, nres));
         // value is irrelevant: resume_coro consults `self.yielding`, not this

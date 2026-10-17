@@ -416,11 +416,12 @@ pub struct Vm {
     pub(crate) async_mode: bool,
 
     /// Set by the dispatcher when an async-mode budget exhaustion fires;
-    /// checked by `exec_with` (so the sentinel propagates without `unwind`
-    /// running, mirroring `yielding.is_some()`) and by `call_value_impl`
-    /// (so the call frames survive for the next poll). Cleared by
-    /// `drive_one` after translating it to `DispatchOutcome::BudgetExhausted`.
+    /// checked by `exec_with` (the sentinel propagates without `unwind`,
+    /// as for `yielding`) and by `call_value_impl` (the frames survive for
+    /// the next poll); cleared by `drive_one`.
     pub(crate) host_yield_pending: bool,
+    /// the yielding C function's `ci->top` (0: a hook), kept with the thread
+    pub(crate) yield_ci_top: u32,
     /// metamethod event tag (e.g. "close") to attach to the next Lua frame
     /// pushed by `push_frame`; `close_slots` sets this before calling a
     /// `__close` handler so `debug.traceback` names it "metamethod 'close'"
