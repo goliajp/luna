@@ -70,8 +70,12 @@ impl Heap {
                         if self.is_own_table(t) {
                             return 0;
                         }
-                        // the dummy node counts as one
-                        let nodes = t.node_count().max(1);
+                        // the dummy node counts as one, but in 5.3
+                        // (`allocsizenode`)
+                        let nodes = match d {
+                            Dialect::L53 => t.node_count(),
+                            _ => t.node_count().max(1),
+                        };
                         (self.sizes.table
                             + self.array_bytes(t.asize as usize)
                             + self.sizes.node * nodes) as i64
@@ -129,7 +133,8 @@ impl Heap {
         let (top, size, ci) = run.unwrap_or((c.top, c.stack_size, ci));
         match d {
             Dialect::L54 => 1 + i64::from(size),
-            Dialect::L55 => 1 + i64::from(top),
+            // PUC's top is luna's plus one (its slot 0 holds no value of luna's)
+            Dialect::L55 => 2 + i64::from(top),
             _ => self.thread_bytes(size, ci) as i64,
         }
     }
