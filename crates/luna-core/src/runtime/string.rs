@@ -206,7 +206,10 @@ fn alloc_str(
     alloc_str_of(mem, &[bytes], short, hash, hashed)
 }
 
-/// [`alloc_str`] for the bytes of `parts` one after the other.
+/// [`alloc_str`] for the bytes of `parts` one after the other. Inlined:
+/// with one part, as most strings are made, the loops over the parts fold
+/// away.
+#[inline(always)]
 fn alloc_str_of(
     mem: MemRef,
     parts: &[&[u8]],
