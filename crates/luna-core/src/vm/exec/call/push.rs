@@ -44,9 +44,8 @@ impl Vm {
         nresults: i32,
         from_c: bool,
     ) -> Result<(), LuaError> {
-        if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
-            self.grow_frames()?;
-        }
+        // 5.1's `CallInfo` array is grown after the stack test
+        let grow51 = self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size;
         let at = FrameAt::new(self.version, cl.proto, func_slot, nargs);
         // PUC's stack test (`luaD_precall`) wants the arguments' top plus
         // the frame's size below the stack's end: `need + nargs` is that for
@@ -55,16 +54,20 @@ impl Vm {
         // a native calls back finds the stack shorter than its frame on most
         // calls: that room is made here, so the frame is entered by the one
         // copy of the code the common path runs
-        if at.need + nargs >= self.g.stack_last || self.frames.len() == self.frames.capacity() {
+        if grow51
+            || at.need + nargs >= self.g.stack_last
+            || self.frames.len() == self.frames.capacity()
+        {
             return self.push_frame_after_room(cl, func_slot, nargs, nresults, from_c);
         }
         self.grow_stack(at.need as usize)?;
         self.enter_frame(cl, func_slot, nargs, nresults, from_c, at)
     }
 
-    /// [`Vm::push_frame`] near the stack's end or with the frame stack full:
-    /// PUC's exact stack test, then room for `need` stack slots and one more
-    /// frame, collecting in an emergency when memory runs out.
+    /// [`Vm::push_frame`] near the stack's end, with the frame stack full
+    /// or 5.1's `CallInfo` array full: PUC's exact stack test, 5.1's array
+    /// grown, then room for `need` stack slots and one more frame,
+    /// collecting in an emergency when memory runs out.
     #[cold]
     #[inline(never)]
     fn push_frame_after_room(
@@ -99,6 +102,10 @@ impl Vm {
                 }
                 _ => {}
             }
+        }
+        // PUC 5.1 `inc_ci`, after `luaD_checkstack`
+        if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
+            self.grow_frames()?;
         }
         let at = FrameAt::new(self.version, p, func_slot, nargs);
         self.grow_stack(at.need as usize)?;
