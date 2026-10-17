@@ -31,7 +31,7 @@ pub(crate) fn try_open_coroutine(vm: &mut Vm) -> Result<(), LuaError> {
     // the threads now inside a wrapped call, which `resume_refusal` needs:
     // luna's own table, which PUC has none of
     let w = vm.alloc_table()?;
-    vm.heap.puc.own_tables.push(w.as_ptr());
+    vm.heap.own_table(w);
     let in_wrap = Value::Table(w);
     for (name, f) in [
         ("resume", co_resume as crate::runtime::value::NativeFn),

@@ -147,9 +147,18 @@ impl Heap {
                     self.verify_no_dangling("sweep_counted");
                     return (n, false);
                 }
-                let f = (*cur).flags;
+                let (f, sub, cls) = ((*cur).flags, (*cur).sub, (*cur).cls);
                 let dead = is_white(f) && (f & new_white) == 0;
-                if (*cur).tag == ObjTag::Ghost {
+                #[cfg(feature = "gc-verify")]
+                assert_eq!(
+                    (f & FIN) | (sub & UNCOUNTED) | (cls & UNLISTED) == 0,
+                    (*cur).tag != ObjTag::Ghost && self.puc_listed(cur, strt),
+                    "[gc-verify] class byte of a {:?}",
+                    (*cur).tag
+                );
+                if (f & FIN) | (sub & UNCOUNTED) | (cls & UNLISTED) == 0 {
+                    n += 1;
+                } else if (*cur).tag == ObjTag::Ghost {
                     if dead {
                         let left = self.free_ghost_records(cur as *mut Ghost, quota - n);
                         n += left.0;
@@ -161,8 +170,6 @@ impl Heap {
                         continue;
                     }
                     n += self.ghost_objects(cur as *mut Ghost);
-                } else if self.puc_listed(cur, strt) {
-                    n += 1;
                 }
                 if dead {
                     *link = (*cur).next;
@@ -175,7 +182,8 @@ impl Heap {
                     }
                     self.live -= 1;
                 } else {
-                    (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);
+                    // white, so SLOW only for a read-only table (`with_slow`)
+                    (*cur).flags = (f & !(COLOR_BITS | SLOW)) | new_white | ((cls & RO_CLS) << 1);
                     self.sweep_prev = cur;
                 }
             }
@@ -188,6 +196,7 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads an allocated object of this heap.
+    #[cfg(feature = "gc-verify")]
     unsafe fn puc_listed(&self, h: *mut GcHeader, strt: bool) -> bool {
         // SAFETY: the caller's contract
         unsafe {
