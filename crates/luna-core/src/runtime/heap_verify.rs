@@ -188,6 +188,7 @@ impl Heap {
             weak: Vec::new(),
             ephemeron: Vec::new(),
             no_ephemeron: self.no_ephemeron,
+            dialect: self.table_dialect,
             cached_protos: Vec::new(),
             leaf_black: 0,
             leaf_hdr: 0,
