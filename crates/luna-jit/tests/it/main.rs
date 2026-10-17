@@ -21,6 +21,7 @@ mod cli_environment;
 mod cli_errors;
 mod cli_exit_flush;
 mod cli_lua_init;
+mod cli_main_levels;
 mod cli_options;
 mod cli_output_order;
 mod cli_repl;

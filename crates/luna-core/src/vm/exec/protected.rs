@@ -120,15 +120,6 @@ impl Vm {
         to
     }
 
-    /// Stack room for the callee and its `n - 1` arguments moved by
-    /// `shift`, and frame room for the continuation, collecting in an
-    /// emergency when memory runs out.
-    fn pcall_room(&mut self, from: u32, n: u32, shift: i8) -> Result<(), LuaError> {
-        let to = (i64::from(from) + i64::from(shift)) as u32;
-        self.grow_stack((to + n) as usize)?;
-        self.cf_room()
-    }
-
     /// `xpcall(f, msgh, ...)` (PUC luaB_xpcall): like `begin_pcall`, but the
     /// message handler is stashed in the continuation and the arguments are
     /// shifted down over the handler's slot so `f`'s args are contiguous.
@@ -152,6 +143,9 @@ impl Vm {
             })?;
         }
         let level = by != ProtectedBy::Host;
+        if by == ProtectedBy::HostInC && func_slot == 0 && self.g.host_slots > 0 {
+            return self.begin_docall(nargs, nresults, level);
+        }
         // 5.1: `xpcall (f, err)` takes exactly two parameters — extra
         // arguments are NOT forwarded to `f` (5.2 added forwarding;
         // 5.1 calls f with zero args).
@@ -193,17 +187,6 @@ impl Vm {
         );
         self.begin_call(callee, Some(nfargs), -1, true)?;
         Ok(true)
-    }
-
-    /// The continuation of a protected call takes a C level when it is one
-    /// of PUC's (see `begin_pcall`); the error is raised inside pcall, a C
-    /// function: no position.
-    fn enter_pcall_level(&mut self, level: bool) -> Result<(), LuaError> {
-        if level {
-            self.check_c_level(false)?;
-            self.g.nccalls += 1;
-        }
-        Ok(())
     }
 
     /// `pairs(t)` where `t` has a `__pairs` metamethod (PUC luaB_pairs's

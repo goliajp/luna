@@ -81,6 +81,28 @@ impl Vm {
         r
     }
 
+    /// [`Vm::call_value_k`] with the callee at slot `at`.
+    pub(crate) fn call_value_k_at(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        at: u32,
+    ) -> Result<Vec<Value>, LuaError> {
+        if self.public_call_depth == 0 {
+            self.error_traceback = None;
+        }
+        self.public_call_depth += 1;
+        let r = self.call_value_impl(f, args, true, Some(at));
+        if let Err(e) = r
+            && self.public_call_depth == 1
+            && self.current.is_none()
+        {
+            self.raise_native_to_host(e.0);
+        }
+        self.public_call_depth -= 1;
+        r
+    }
+
     /// `call_value` with control over the `from_c` debug boundary. A `__close`
     /// handler runs *within* the closing Lua frame's activation (PUC luaF_close
     /// invokes it inside that ci), so it is called with `from_c = false`: its

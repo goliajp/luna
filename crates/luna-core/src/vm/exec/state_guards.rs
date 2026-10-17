@@ -63,6 +63,9 @@ pub(crate) struct CallGuards {
     /// the `ci->top` of the host's own C function below them (`pmain`'s),
     /// in luna's numbering; 0 without one
     pub(crate) host_ci_top: u32,
+    /// the stack slots the host holds below the main thread's
+    /// (`host_entry_layout`): its C function and its arguments
+    pub(crate) host_slots: u32,
     /// metamethod, `__pairs` and `__close` continuation frames on the
     /// running thread: no frame of PUC's (its metamethod call makes one
     /// frame, the callee's), so not counted in `frames_in_use`.
