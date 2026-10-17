@@ -14,7 +14,7 @@ impl Vm {
         for mt in self.type_mt.into_iter().flatten() {
             m.value(Value::Table(mt));
         }
-        self.mark_root_strings(m, again);
+        self.mark_root_strings(m, !again, true);
         self.mark_running(m);
         self.mark_main_ctx(m);
     }
@@ -25,7 +25,7 @@ impl Vm {
     /// is traversed, [`Vm::mark_thread_values`]), 5.1's globals, the
     /// registry, the basic types' metatables.
     pub(crate) fn mark_roots_restart(&self, m: &mut crate::runtime::heap::Marker) {
-        self.mark_root_strings(m, false);
+        self.mark_root_strings(m, true, false);
         if let Some(mc) = self.main_coro {
             m.value(Value::Coro(mc));
         }
@@ -63,19 +63,20 @@ impl Vm {
         }
     }
 
-    /// The strings luna roots: the names PUC fixes and the strings PUC's
-    /// libraries keep, and the message a load may have made.
-    fn mark_root_strings(&self, m: &mut crate::runtime::heap::Marker, again: bool) {
-        // the root strings stay black from the cycle's start to its sweep:
-        // the atomic step marks only the pins added since, and the message
-        // a load may have made meanwhile
+    /// The strings luna roots: the names PUC fixes, at the cycle's start
+    /// (they stay black to its sweep; 5.2's at its end); the strings PUC's libraries keep,
+    /// in the atomic step (a cycle's start leaves them to the tables
+    /// holding them, whose traversal counts them as PUC's does); the
+    /// message a load may have made.
+    fn mark_root_strings(&self, m: &mut crate::runtime::heap::Marker, start: bool, end: bool) {
         let puc = &self.heap.puc;
-        if again {
-            m.mark_strings(puc.pins[puc.pins_marked.get()..].iter());
-        } else {
+        // 5.2's fixed names are marked where reached, as any string
+        let names_late = self.version == LuaVersion::Lua52;
+        if start && !names_late || end && names_late {
             m.mark_strings(self.mm_names.iter());
+        }
+        if end {
             m.mark_strings(puc.pins.iter());
-            puc.pins_marked.set(puc.pins.len());
         }
         m.mark_strings(puc.load_msg.iter());
     }
