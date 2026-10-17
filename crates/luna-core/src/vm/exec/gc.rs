@@ -107,7 +107,16 @@ impl Vm {
     pub(super) fn clear_dead_stack(&mut self) {
         let lo = (self.gc_top as usize).min(self.stack.len());
         self.stack[lo..].fill(Value::Nil);
-        self.collector_shrinks_stacks();
+        // 5.3 shrinks a thread as its propagation reaches it
+        if self.version != LuaVersion::Lua53 {
+            self.collector_shrinks_stacks();
+        }
+    }
+
+    /// Whether this cycle's propagation has shrunk the running thread.
+    fn running_shrunk(&self) -> bool {
+        let co = self.current.or(self.main_coro);
+        co.is_some_and(|c| self.heap.puc.shrunk.contains(&(c.as_ptr() as *mut _)))
     }
 
     /// A full stop-the-world collection with the VM's roots (PUC
@@ -122,6 +131,11 @@ impl Vm {
         self.jit_forget_ghosts();
         self.name_cache = Default::default();
         if self.heap.gc_phase_is_propagate() {
+            // 5.3 shrinks the running thread as it traverses it, if this
+            // cycle has not yet
+            if self.version == LuaVersion::Lua53 && !self.running_shrunk() {
+                self.collector_shrinks_stacks();
+            }
             let mut m = self.heap.loan_marker();
             self.mark_roots(&mut m, true);
             self.heap.stash_marker(m);
@@ -139,6 +153,11 @@ impl Vm {
         self.mark_roots(&mut m, false);
         self.watch_errors();
         let freed = self.heap.gc_end_full(m);
+        // 5.3 shrinks the threads as the full cycle traverses them, the
+        // others theirs after it
+        if self.version == LuaVersion::Lua53 {
+            self.collector_shrinks_stacks();
+        }
         self.collector_shrinks_threads();
         self.heap.acct_check_sizes();
         self.forget_dead_errors();

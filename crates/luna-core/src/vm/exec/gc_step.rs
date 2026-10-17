@@ -329,11 +329,15 @@ impl Vm {
     /// PUC's propagation with `work` to do (down to `floor`): when it
     /// traverses a thread whose values the VM holds, the VM marks them and
     /// it goes on. True when no object is gray.
-    pub(super) fn gc_propagate(&mut self, work: &mut i64, floor: i64, run: Running) -> bool {
+    pub(super) fn gc_propagate(&mut self, work: &mut i64, floor: i64, mut run: Running) -> bool {
         loop {
             match self.heap.propagate_work(work, floor, run) {
                 Propagated::Empty => return true,
                 Propagated::Budget => return false,
+                Propagated::Shrink(h) => {
+                    self.collector_shrinks_thread(h);
+                    run = self.gc_running();
+                }
                 Propagated::Thread(h) => {
                     let mut m = self.heap.loan_marker();
                     self.mark_thread_values(&mut m, h);
@@ -346,9 +350,27 @@ impl Vm {
         }
     }
 
+    /// The collector visiting thread `h` as it traverses it (5.3).
+    fn collector_shrinks_thread(&mut self, h: *mut crate::runtime::heap::GcHeader) {
+        let co = self.current.or(self.main_coro);
+        if co.is_some_and(|c| c.as_ptr() as *mut _ == h) {
+            let inuse = self.stack_in_use();
+            self.shrink_running(super::stack_inuse::Shrink::Collector, inuse);
+        } else if self.main_ctx.is_some()
+            && self.main_coro.is_some_and(|c| c.as_ptr() as *mut _ == h)
+        {
+            self.collector_shrinks_main();
+        } else {
+            // SAFETY: `h`, gray, heads a live coroutine
+            let co = unsafe { crate::runtime::heap::Gc::from_ptr(h as *mut _) };
+            self.collector_shrinks_coro(co);
+        }
+    }
+
     /// `restartcollection` (5.1 `markroot`): the roots marked, the cycle
     /// propagating.
     fn gc_restart(&mut self) {
+        self.heap.puc.shrunk.clear();
         self.gc_count_marked();
         let mut m = self.heap.gc_begin_propagate();
         self.mark_roots_restart(&mut m);
@@ -378,7 +400,10 @@ impl Vm {
         self.heap.stash_marker(m);
         self.watch_errors();
         let r = self.heap.gc_finish_atomic_work(Some(run));
-        self.collector_shrinks_threads();
+        // 5.3 shrank them as it traversed them
+        if self.version != LuaVersion::Lua53 {
+            self.collector_shrinks_threads();
+        }
         self.forget_dead_errors();
         // there may be objects to be finalized
         self.heap.pace.fin_num = 1;
