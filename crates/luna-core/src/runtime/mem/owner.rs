@@ -5,7 +5,8 @@ use std::ffi::c_void;
 use std::ptr::NonNull;
 
 use super::MemoryPolicy;
-use super::ctx::{MemCtx, MemRef, Mode, RawAllocFn, kind_codes};
+use super::ctx::{MemCtx, MemRef, Mode, RawAllocFn};
+use super::kind::kind_codes;
 use crate::version::LuaVersion;
 
 /// One owner of a [`MemCtx`]; the context is freed with its last owner.

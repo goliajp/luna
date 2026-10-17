@@ -11,6 +11,7 @@
 mod any;
 mod boxed;
 mod ctx;
+mod kind;
 mod map;
 mod owner;
 mod policy;
@@ -21,7 +22,8 @@ mod vec_abort;
 
 pub use any::LAny;
 pub use boxed::{LBox, LSlice};
-pub use ctx::{BlockKind, MemCtx, MemRef, Oom, RawAllocFn};
+pub use ctx::{MemCtx, MemRef, Oom, RawAllocFn};
+pub use kind::BlockKind;
 pub use map::{LMap, WordHasher, word_hash};
 pub use owner::MemOwner;
 pub use policy::{MemoryLimit, MemoryPolicy};
