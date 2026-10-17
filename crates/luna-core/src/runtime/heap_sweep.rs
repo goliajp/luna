@@ -160,7 +160,7 @@ impl Heap {
                     n += 1;
                 } else if (*cur).tag == ObjTag::Ghost {
                     if dead {
-                        let left = self.free_ghost_records(cur as *mut Ghost, quota - n);
+                        let left = self.free_ghost_records(&mut *(cur as *mut Ghost), quota - n);
                         n += left.0;
                         if left.1 {
                             *link = (*cur).next;
@@ -169,7 +169,7 @@ impl Heap {
                         }
                         continue;
                     }
-                    n += self.ghost_objects(cur as *mut Ghost);
+                    n += Self::ghost_objects(&*(cur as *mut Ghost));
                 }
                 if dead {
                     *link = (*cur).next;

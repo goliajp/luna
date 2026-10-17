@@ -101,9 +101,7 @@ impl Heap {
         if count {
             self.acct_obj(PucKind::LongStr, size);
         }
-        self.puc.stand_ins.push((h, vec![size]));
-        // SAFETY: `h` heads a live object; only its class byte is written
-        unsafe { (*h).cls |= super::STANDS };
+        self.stand_sizes_on(h, vec![size]);
     }
 
     /// Objects of PUC's of `sizes` bytes, counted already, live as long

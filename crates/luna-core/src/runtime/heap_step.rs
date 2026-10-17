@@ -91,9 +91,10 @@ impl Heap {
                 let h = co.as_ptr() as *mut GcHeader;
                 seen_run |= h == run.h;
                 // SAFETY: a listed thread is allocated until the sweep
-                if unsafe { !is_white((*h).flags) } {
-                    // SAFETY: as above
-                    work += unsafe { self.object_work(h, run) };
+                unsafe {
+                    if !is_white((*h).flags) {
+                        work += self.object_work(h, run);
+                    }
                 }
             }
             // the main thread, luna's own object, is on no list
@@ -294,16 +295,6 @@ impl Heap {
     /// No object is gray.
     pub(crate) fn gray_is_empty(&self) -> bool {
         self.gray.is_empty() && !self.gray_overflow
-    }
-
-    /// The work of traversing the object behind `h`.
-    ///
-    /// # Safety
-    /// `h` heads an allocated object of this heap.
-    pub(super) unsafe fn object_work(&self, h: *mut GcHeader, run: Running) -> i64 {
-        let thread = (h == run.h).then_some((run.top, run.size, run.ci));
-        // SAFETY: the caller's contract
-        unsafe { self.puc_work(h, thread) }
     }
 }
 

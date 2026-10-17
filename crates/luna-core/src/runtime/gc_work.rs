@@ -31,25 +31,16 @@ impl Heap {
         }
     }
 
-    /// The upvalues PUC's C function standing for the native behind `h`
-    /// has.
-    ///
-    /// # Safety
-    /// `h` heads an allocated native function of this heap.
-    pub(crate) unsafe fn native_puc_upvals(&self, h: *mut GcHeader) -> usize {
-        // SAFETY: the caller's contract
-        unsafe { native_upvals(h) }
-    }
-
     /// The work PUC's `propagatemark` counts for traversing the object
     /// behind `h` (5.1 to 5.3 in bytes, before the strings and userdata it
-    /// marks, which the marker adds; 5.4 and 5.5 in slots). `run` is the
+    /// marks, which the marker adds; 5.4 and 5.5 in slots). `run` holds the
     /// top, the stack's size and the `CallInfo`s of the running thread,
     /// which the VM holds.
     ///
     /// # Safety
     /// `h` heads an allocated object of this heap.
-    pub(crate) unsafe fn puc_work(&self, h: *mut GcHeader, run: Option<(u32, u32, u32)>) -> i64 {
+    pub(crate) unsafe fn object_work(&self, h: *mut GcHeader, run: Running) -> i64 {
+        let run = (h == run.h).then_some((run.top, run.size, run.ci));
         // SAFETY: the caller's contract
         unsafe {
             // the main thread is luna's own, with a stack PUC has
@@ -79,7 +70,7 @@ impl Heap {
                     _ => self.puc_objsize(h) as i64,
                 };
             }
-            let p = |b: u32, e: usize| if e == 0 { 0 } else { (b as usize / e) as i64 };
+            let p = |b: u32, e: usize| (b as usize).checked_div(e).unwrap_or(0) as i64;
             match (*h).tag {
                 ObjTag::Table => {
                     let t = &*(h as *const Table);
@@ -97,7 +88,7 @@ impl Heap {
                     let c = &*(h as *const LuaClosure);
                     1 + i64::from(c.upvals_len)
                 }
-                ObjTag::Native => 1 + self.native_puc_upvals(h) as i64,
+                ObjTag::Native => 1 + native_upvals(h) as i64,
                 ObjTag::Proto => {
                     let a = (*(h as *const Proto)).puc_arrays.get();
                     let s = self.sizes;
