@@ -17,8 +17,9 @@ fn check_line_formats(vm: &mut Vm, n: u32) -> Result<(), LuaError> {
     Ok(())
 }
 
-/// `aux_lines`: an iterator over `u` with upvalues [file, toclose, fmt...].
-/// 5.1's iterator takes no formats.
+/// `aux_lines`: an iterator over `u` with upvalues [file, toclose, fmt...],
+/// made as PUC makes it (`lua_pushcclosure`), with the number of formats
+/// as one more upvalue from 5.2 on. 5.1's iterator takes no formats.
 fn make_lines(
     vm: &mut Vm,
     u: Gc<Userdata>,
@@ -27,10 +28,12 @@ fn make_lines(
 ) -> Result<Value, LuaError> {
     let mut up = crate::runtime::mem::LVec::new(vm.heap.mem());
     up.extend_from_slice(&[Value::Userdata(u), Value::Bool(toclose)])?;
+    let mut nup = 2;
     if vm.version() >= LuaVersion::Lua52 {
         up.extend_from_slice(fmts)?;
+        nup = 3 + fmts.len();
     }
-    vm.lib_native_with(io_readline, &up)
+    vm.lib_native_puc(io_readline, &up, nup)
 }
 
 pub(super) fn f_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
