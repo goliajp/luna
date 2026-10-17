@@ -132,6 +132,10 @@ impl Vm {
         &mut self,
         act: crate::vm::callstack::NativeAct,
     ) -> Result<(), LuaError> {
+        // 5.1's C function takes a `CallInfo` of its array too
+        if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
+            self.grow_frames()?;
+        }
         if self.running_natives.len() == self.running_natives.capacity() {
             self.native_room()?;
         }
@@ -147,6 +151,10 @@ impl Vm {
         &mut self,
         act: crate::vm::callstack::NativeAct,
     ) -> Result<(), LuaError> {
+        // 5.1's C function takes a `CallInfo` of its array too
+        if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
+            self.grow_frames()?;
+        }
         if self.running_natives.len() == self.running_natives.capacity() {
             self.native_room()?;
         }
