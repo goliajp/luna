@@ -109,12 +109,24 @@ impl Heap {
         self.refresh_gc_limit();
     }
 
-    /// The count at which the next step falls due, from the pace; none
-    /// while the collector is stopped (the dialects after 5.1 still step
-    /// then, only to put the debt back, which changes nothing a program
-    /// sees).
+    /// The stop flag put back as it was, with no debt set (PUC `GCTM`
+    /// restoring `gcrunning`).
+    pub(crate) fn gc_restore_stopped(&mut self, stopped: bool) {
+        self.gc_stopped = stopped;
+        self.refresh_gc_limit();
+    }
+
+    /// Whether PUC's `luaC_step` runs a step (`gcrunning`): not while the
+    /// collector is stopped, nor while a 5.4 or 5.5 finalizer runs.
+    pub(crate) fn gc_steps_run(&self) -> bool {
+        !self.gc_stopped && !self.gc_fin_stop
+    }
+
+    /// The count at which the next step falls due, from the pace. 5.1
+    /// stops the collector with an unreachable threshold; the later
+    /// dialects still step then, to put the debt back.
     pub(crate) fn refresh_gc_limit(&mut self) {
-        self.gc_limit = if self.gc_stopped {
+        self.gc_limit = if self.gc_stopped && self.table_dialect == Dialect::L51 {
             usize::MAX
         } else {
             self.pace.limit(self.table_dialect)
