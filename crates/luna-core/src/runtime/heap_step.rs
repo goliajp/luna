@@ -242,6 +242,9 @@ pub(crate) enum Propagated {
     /// it traversed this thread, whose values the VM holds (the running
     /// one, or the main one while a coroutine runs)
     Thread(*mut GcHeader),
+    /// 5.3: the thread it is about to traverse, gray again, which the
+    /// collector shrinks first (`luaD_shrinkstack` in `traversethread`)
+    Shrink(*mut GcHeader),
 }
 
 /// The running thread, for the work of traversing it: its object, and
@@ -331,6 +334,16 @@ impl Heap {
                 out = Propagated::Empty;
                 break;
             };
+            // SAFETY: a popped header heads an allocated object
+            if self.table_dialect == crate::runtime::table::Dialect::L53
+                && unsafe { (*h).tag } == ObjTag::Coro
+                && !self.puc.shrunk.contains(&h)
+            {
+                self.puc.shrunk.push(h);
+                m.push_gray(h);
+                out = Propagated::Shrink(h);
+                break;
+            }
             m.leaf_bytes = 0;
             // SAFETY: `h` came off the gray stack, which holds headers of
             // allocated objects; nothing is freed while marking

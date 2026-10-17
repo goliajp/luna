@@ -20,7 +20,8 @@ fn thread_in_use(frames: &[CallFrame], top: u32, natives: &[NativeAct]) -> u32 {
             CallFrame::Cont(c) => c.kind.ci_top(),
         });
     }
-    for a in natives {
+    // the host's protected-call levels are no frames of PUC's
+    for a in natives.iter().filter(|a| !a.nc.is_luna_only()) {
         lim = lim.max(a.ci_top);
     }
     lim + 2
@@ -64,6 +65,8 @@ pub(super) fn shrink_thread(
         heap.acct_ci(0, n);
         sz.ci -= n;
     };
+    #[cfg(feature = "gc-trace")]
+    heap.trace_shrink(sz.stack, inuse);
     let stack = |heap: &mut crate::runtime::heap::Heap, sz: &mut ThreadSizes| {
         let s = stack_size::shrink(v, sz.stack, inuse);
         heap.acct_stack(sz.stack, s);
@@ -156,9 +159,14 @@ impl Vm {
     /// suspended coroutines are visited after marking
     /// ([`Vm::collector_shrinks_threads`]).
     pub(super) fn collector_shrinks_stacks(&mut self) {
-        let v = self.version;
         let inuse = self.stack_in_use();
         self.shrink_running(Shrink::Collector, inuse);
+        self.collector_shrinks_main();
+    }
+
+    /// The collector visiting the main thread a coroutine suspended.
+    pub(super) fn collector_shrinks_main(&mut self) {
+        let v = self.version;
         let (host_frames, host_ci_top) = (self.g.host_frames, self.g.host_ci_top);
         let natives = &self.running_natives;
         if let Some(m) = &mut self.main_ctx {
@@ -187,44 +195,51 @@ impl Vm {
     /// The collector visiting each coroutine marked live that is not
     /// running: the ones a marking just kept ([`Heap::threads`]).
     pub(super) fn collector_shrinks_threads(&mut self) {
-        let v = self.version;
         let threads = std::mem::take(&mut self.heap.threads);
         for &co in &threads {
             if self.current.is_some_and(|c| c.ptr_eq(co)) {
                 continue;
             }
-            // SAFETY: `co` survived the marking just done, so it is allocated; it is not the running thread, so its context is saved in it and nothing else refers into it here
-            let m = unsafe { co.as_mut() };
-            // only a thread waiting on one it resumed has natives running
-            let normal = m.status == crate::runtime::CoroStatus::Normal;
-            let natives = if normal {
-                &self.running_natives[m.natives.clone()]
-            } else {
-                &[]
-            };
-            // a thread a C function suspended keeps that function's level
-            let suspended = m.status == crate::runtime::CoroStatus::Suspended;
-            let yielded = if suspended { m.yield_ci_top } else { 0 };
-            let inuse = thread_in_use(&m.frames, m.top.max(yielded), natives);
-            let n =
-                (m.frames.len() + natives.len()) as u32 + 1 + u32::from(yielded > 0) - m.meta_conts;
-            let mut sz = ThreadSizes {
-                stack: m.stack_size,
-                frames51: m.frame_size,
-                ci: m.ci_alloc,
-            };
-            shrink_thread(
-                &mut self.heap,
-                v,
-                Shrink::Collector,
-                inuse,
-                n,
-                n - 1,
-                &mut sz,
-            );
-            (m.stack_size, m.frame_size, m.ci_alloc) = (sz.stack, sz.frames51, sz.ci);
+            self.collector_shrinks_coro(co);
         }
         self.heap.threads = threads;
+    }
+
+    /// The collector visiting `co`, a coroutine that is not running.
+    pub(super) fn collector_shrinks_coro(
+        &mut self,
+        co: crate::runtime::heap::Gc<crate::runtime::Coro>,
+    ) {
+        let v = self.version;
+        // SAFETY: `co` survived the marking just done, so it is allocated; it is not the running thread, so its context is saved in it and nothing else refers into it here
+        let m = unsafe { co.as_mut() };
+        // only a thread waiting on one it resumed has natives running
+        let normal = m.status == crate::runtime::CoroStatus::Normal;
+        let natives = if normal {
+            &self.running_natives[m.natives.clone()]
+        } else {
+            &[]
+        };
+        // a thread a C function suspended keeps that function's level
+        let suspended = m.status == crate::runtime::CoroStatus::Suspended;
+        let yielded = if suspended { m.yield_ci_top } else { 0 };
+        let inuse = thread_in_use(&m.frames, m.top.max(yielded), natives);
+        let n = (m.frames.len() + natives.len()) as u32 + 1 + u32::from(yielded > 0) - m.meta_conts;
+        let mut sz = ThreadSizes {
+            stack: m.stack_size,
+            frames51: m.frame_size,
+            ci: m.ci_alloc,
+        };
+        shrink_thread(
+            &mut self.heap,
+            v,
+            Shrink::Collector,
+            inuse,
+            n,
+            n - 1,
+            &mut sz,
+        );
+        (m.stack_size, m.frame_size, m.ci_alloc) = (sz.stack, sz.frames51, sz.ci);
     }
 }
 

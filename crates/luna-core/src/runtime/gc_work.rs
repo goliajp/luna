@@ -147,6 +147,8 @@ impl Heap {
             Dialect::L54 => 1 + i64::from(size),
             // PUC's top is luna's plus one (its slot 0 holds no value of luna's)
             Dialect::L55 => 2 + i64::from(top),
+            // 5.3 counts `lua_State`, without the extra space before it
+            Dialect::L53 => (self.thread_bytes(size, ci) - self.sizes.ptr) as i64,
             _ => self.thread_bytes(size, ci) as i64,
         }
     }

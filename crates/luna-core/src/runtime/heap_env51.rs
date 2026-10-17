@@ -315,3 +315,11 @@ impl Heap {
         self.trace.line(format_args!("n {n} {by:?}"));
     }
 }
+
+impl Heap {
+    /// `R38_TRACE`: a thread of `stack` slots shrunk with `inuse` in use.
+    #[cfg(feature = "gc-trace")]
+    pub(crate) fn trace_shrink(&mut self, stack: u32, inuse: u32) {
+        self.trace.line(format_args!("sh {stack} {inuse}"));
+    }
+}

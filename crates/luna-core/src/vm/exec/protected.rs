@@ -85,8 +85,8 @@ impl Vm {
     /// runs in the host's own frame.
     fn c_frame_top(&self, by: ProtectedBy, func_slot: u32, nargs: u32) -> u32 {
         match by {
-            ProtectedBy::Host => 0,
-            _ => func_slot + 1 + nargs + super::stack_size::MIN_STACK,
+            ProtectedBy::Host | ProtectedBy::HostInC => 0,
+            ProtectedBy::Lua => func_slot + 1 + nargs + super::stack_size::MIN_STACK,
         }
     }
 

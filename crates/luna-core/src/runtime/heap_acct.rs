@@ -41,6 +41,8 @@ pub(crate) struct PucState {
     /// given size, one entry for each object of PUC's (see
     /// `Heap::stand_sizes_on`)
     pub(crate) stand_ins: Vec<(*mut GcHeader, usize)>,
+    /// 5.3: the threads this cycle's propagation has shrunk
+    pub(crate) shrunk: Vec<*mut GcHeader>,
     /// tables of luna's own, which PUC has none of: never counted
     pub(crate) own_tables: Vec<*const crate::runtime::Table>,
     /// the message of the last load that failed, made as PUC makes it,
@@ -69,6 +71,7 @@ impl Default for PucState {
             libs_opened: false,
             // the standard libraries make about twenty
             stand_ins: Vec::with_capacity(32),
+            shrunk: Vec::new(),
             own_tables: Vec::new(),
             load_msg: None,
             next_id: 0,

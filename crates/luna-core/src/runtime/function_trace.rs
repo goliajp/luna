@@ -47,6 +47,13 @@ impl LuaClosure {
 }
 
 impl NativeClosure {
+    /// Whether this native is luna's own, no function of PUC's (the host's
+    /// protected-call levels).
+    #[inline]
+    pub(crate) fn is_luna_only(&self) -> bool {
+        self.hdr.cls & crate::runtime::heap::LUNA_ONLY != 0
+    }
+
     /// The upvalues PUC's function has; luna's others with luna's own
     /// objects.
     pub(crate) fn trace(&self, m: &mut Marker) {
