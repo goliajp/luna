@@ -41,7 +41,7 @@ pub(crate) fn try_open_coroutine(vm: &mut Vm) -> Result<(), LuaError> {
         ("wrap", co_wrap),
     ] {
         let k = vm.str_value(name.as_bytes())?;
-        let fv = vm.lib_native_with(f, &[in_wrap])?;
+        let fv = vm.lib_native_nup(f, &[in_wrap], 0)?;
         vm.lib_set_value(t, k, fv)?;
     }
     if vm.version() >= LuaVersion::Lua53 {

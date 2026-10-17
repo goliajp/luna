@@ -43,11 +43,23 @@ impl Heap {
         let run = (h == run.h).then_some((run.top, run.size, run.ci));
         // SAFETY: the caller's contract
         unsafe {
+            let d = self.table_dialect;
+            // a function of PUC's C closures, the library's too (made
+            // without counting), at PUC's number of upvalues; from 5.2 on
+            // one with none is a light function, no object
+            if (*h).tag == ObjTag::Native {
+                let n = native_upvals(h);
+                return match d {
+                    Dialect::L51 => self.sizes.c_closure(n) as i64,
+                    _ if n == 0 => 0,
+                    Dialect::L52 | Dialect::L53 => self.sizes.c_closure(n) as i64,
+                    _ => 1 + n as i64,
+                };
+            }
             // the main thread is luna's own, with a stack PUC has
             if is_uncounted(h) && (*h).tag != ObjTag::Coro {
                 return 0;
             }
-            let d = self.table_dialect;
             if (*h).tag == ObjTag::Coro {
                 return self.thread_work(&*(h as *const crate::runtime::Coro), run);
             }

@@ -92,12 +92,14 @@ fn open_package_with(vm: &mut Vm, list_opened: bool) -> Result<(), LuaError> {
 
     let searchers = vm.alloc_table()?;
     let lf = vm.lib_native(crate::vm::lib_os_io::nat_loadfile)?;
-    let lua_searcher = vm.lib_native_with(searcher_lua, &[Value::Table(pkg), lf])?;
+    // 5.1's loaders have no upvalue, the later searchers the package table
+    let nup = usize::from(v != LuaVersion::Lua51);
+    let lua_searcher = vm.lib_native_nup(searcher_lua, &[Value::Table(pkg), lf], nup)?;
     let fns = [
-        vm.lib_native_with(searcher_preload, &[Value::Table(pkg)])?,
+        vm.lib_native_nup(searcher_preload, &[Value::Table(pkg)], nup)?,
         lua_searcher,
-        vm.lib_native_with(searcher_c, &[Value::Table(pkg)])?,
-        vm.lib_native_with(searcher_croot, &[Value::Table(pkg)])?,
+        vm.lib_native_nup(searcher_c, &[Value::Table(pkg)], nup)?,
+        vm.lib_native_nup(searcher_croot, &[Value::Table(pkg)], nup)?,
     ];
     for (i, f) in fns.into_iter().enumerate() {
         vm.lib_set_value(searchers, Value::Int(i as i64 + 1), f)?;
@@ -139,15 +141,17 @@ fn open_package_with(vm: &mut Vm, list_opened: bool) -> Result<(), LuaError> {
     // 5.1 marks a module being loaded with a sentinel, to catch loops (a
     // light userdata of PUC's: nothing it counts)
     let sentinel = Value::Userdata(vm.lib_userdata(UserdataPayload::Empty, false, 0)?);
-    let req = vm.lib_native_with(
+    // as the searchers: the package table from 5.2 on
+    let req = vm.lib_native_nup(
         ll_require,
         &[Value::Table(pkg), Value::Table(loaded), sentinel],
+        nup,
     )?;
     vm.lib_set_global("require", req)?;
     if v <= LuaVersion::Lua52 {
         let f = vm.lib_native(ll_seeall)?;
         raw_set(vm, pkg, "seeall", f)?;
-        let m = vm.lib_native_with(ll_module, &[Value::Table(loaded)])?;
+        let m = vm.lib_native_nup(ll_module, &[Value::Table(loaded)], nup)?;
         vm.lib_set_global("module", m)?;
     }
     vm.lib_set_global("package", Value::Table(pkg))?;
