@@ -100,3 +100,19 @@ fn a_compat_vararg_function_keeps_its_parameters_through_a_collection_at_entry()
                return tostring(bad)";
     assert_eq!(run(LuaVersion::Lua51, src), "0");
 }
+
+/// `coroutine.wrap` keeps the new coroutine while it makes the function
+/// over it (5.1 and 5.2 check for a collection first): resuming it finds
+/// it alive.
+#[test]
+fn wrap_keeps_its_coroutine_while_it_makes_the_function() {
+    for v in [LuaVersion::Lua51, LuaVersion::Lua52] {
+        let src = "local n = 0
+            for i = 1, 300 do
+              local f = coroutine.wrap(function(a) return a + 1 end)
+              n = n + f(i) - i - 1
+            end
+            return tostring(n)";
+        assert_eq!(run(v, src), "0", "{v:?}");
+    }
+}
