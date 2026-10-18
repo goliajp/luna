@@ -63,7 +63,9 @@ impl Vm {
         heap.set_version(version).ok()?;
         // luna's own objects PUC made at other points, or not at all
         heap.puc.silent += 1;
-        let globals = heap.try_new_table().ok()?;
+        // 5.1's `luaH_new(L, 0, 2)`, later ones' `luaH_new(L)`
+        let nrec = usize::from(version == LuaVersion::Lua51) * 2;
+        let globals = heap.try_create_table(0, nrec).ok()?;
         let mut names = [None; MM_NAMES.len()];
         for (slot, name) in names.iter_mut().zip(MM_NAMES) {
             *slot = Some(heap.try_intern(name.as_bytes()).ok()?);
@@ -313,6 +315,8 @@ impl Vm {
         // SAFETY: `mc` was allocated on the line above and is held only by this local; the borrow covers one field store
         unsafe { mc.as_mut() }.status = CoroStatus::Running;
         vm.main_coro = Some(mc);
+        // PUC's `init_registry`, counted with the state
+        vm.host_make_registry().ok()?;
         let (a, b) = vm.rng_auto_seed();
         vm.rng_seed(a as u64, b as u64);
         vm.buf_spare

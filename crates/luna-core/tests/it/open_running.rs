@@ -25,12 +25,6 @@ fn open_running_trace() {
     vm.trace_mark("openlibs");
     vm.open_all_libs().expect("the libraries open");
     vm.trace_mark("/openlibs");
-    // `LUNA_PROBE_STATE=<PUC dump>`: the collector's state beside PUC's
-    #[cfg(feature = "gc-trace")]
-    if let Ok(path) = std::env::var("LUNA_PROBE_STATE") {
-        let dump = std::fs::read_to_string(&path).expect("the dump");
-        std::fs::write(format!("{path}.luna"), vm.trace_compare_state(&dump)).expect("written");
-    }
     if !chunk.is_empty() {
         // `luaL_loadstring`: `lua_load`, with its collection checks
         let Ok((f, _)) = vm.host_load_chunk(chunk.as_bytes(), chunk.as_bytes()) else {

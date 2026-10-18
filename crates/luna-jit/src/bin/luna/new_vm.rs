@@ -53,9 +53,7 @@ pub(crate) fn new_vm(opts: &LunaOpts, ignore_env: bool, argc: usize) -> Vm {
         // lua.c sets it before it opens the libraries
         vm.set_ignore_env(ignore_env);
         enter_pmain(&mut vm, opts.version, argc);
-        vm.trace_mark("openlibs");
         vm.open_lua_c_libs().expect("the libraries open");
-        vm.trace_mark("/openlibs");
         vm
     };
     if let Some(n) = opts.budget {

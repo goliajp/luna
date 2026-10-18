@@ -44,16 +44,3 @@ impl Table {
         Ok(None)
     }
 }
-
-impl Table {
-    /// How many keys sit off their main position, moved there by a
-    /// collision.
-    #[cfg(feature = "gc-trace")]
-    pub(crate) fn keys_off_main(&self) -> usize {
-        self.nodes()
-            .iter()
-            .enumerate()
-            .filter(|(i, n)| !n.val.is_nil() && self.main_position(n.key()) != *i)
-            .count()
-    }
-}

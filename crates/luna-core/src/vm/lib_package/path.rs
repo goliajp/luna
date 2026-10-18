@@ -2,38 +2,11 @@
 
 use super::*;
 
-/// `setpath`: unless `noenv`, the environment's path (5.2+ try `NAME_5_x`
-/// first) with ";;" replaced by the default, else the default. 5.1–5.3
-/// replace every ";;"; 5.4 replaces the first and drops a separator left
-/// dangling.
-pub(super) fn env_path(v: LuaVersion, noenv: bool, var: &str, dft: &[u8]) -> Vec<u8> {
-    if noenv {
-        return dft.to_vec();
-    }
-    let suffix = match v {
-        LuaVersion::Lua52 => "_5_2",
-        LuaVersion::Lua53 => "_5_3",
-        LuaVersion::Lua54 => "_5_4",
-        LuaVersion::Lua55 => "_5_5",
-        _ => "",
-    };
-    let versioned = format!("{var}{suffix}");
-    let found = if suffix.is_empty() {
-        std::env::var_os(var)
-    } else {
-        std::env::var_os(&versioned).or_else(|| std::env::var_os(var))
-    };
-    let Some(path) = found else {
-        return dft.to_vec();
-    };
-    let path = os_bytes(&path);
-    if v <= LuaVersion::Lua53 {
-        // ";;" -> ";\1;" -> the default in place of "\1"
-        let marked = replace(&path, b";;", b";\x01;");
-        return replace(&marked, b"\x01", dft);
-    }
+/// 5.4's `setpath` on an environment's path: the default in place of its
+/// first ";;", a separator left dangling dropped.
+pub(super) fn splice_default(path: &[u8], dft: &[u8]) -> Vec<u8> {
     let Some(at) = path.windows(2).position(|w| w == b";;") else {
-        return path;
+        return path.to_vec();
     };
     let mut out = Vec::new();
     if at > 0 {
