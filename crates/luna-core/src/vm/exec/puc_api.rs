@@ -119,15 +119,26 @@ impl Vm {
         self.set_global("arg", Value::Table(t))
     }
 
+    /// `luaL_checkstack(L, n, msg)` in lua.c's `pmain` with `values` values
+    /// on its stack (above its function at slot 0): `pmain`'s level
+    /// reserves that room from then on.
+    #[doc(hidden)]
+    pub fn host_check_stack(&mut self, values: u32, n: u32, msg: &str) -> Result<(), LuaError> {
+        crate::vm::argcheck::check_stack_at(self, 1 + values, i64::from(n), msg)
+    }
+
     fn host_arg_table(&mut self, argv: &[Vec<u8>], script: usize) -> Result<Gc<Table>, LuaError> {
+        let narg = argv.len() - script - 1;
         if self.version <= LuaVersion::Lua52 {
+            // `getargs`, with `pmain`'s arguments on the stack
+            let msg = "too many arguments to script";
+            self.host_check_stack(self.g.host_slots - 1, narg as u32 + 3, msg)?;
             for a in &argv[script + 1..] {
                 let s = self.api_push_string(a)?;
                 self.lib_roots.push(s);
             }
         }
         self.api_check_before()?;
-        let narg = argv.len() - script - 1;
         let t = match self.table_op(|vm| vm.heap.try_create_table(narg, script + 1)) {
             Ok(t) => t,
             Err(e) => return Err(self.table_error(e)),
