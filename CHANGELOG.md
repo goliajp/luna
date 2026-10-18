@@ -41,6 +41,14 @@ optimization.
   Migration: add `?` (or `.expect(..)`) to each call, e.g.
   `vm.open_base()?;` and `vm.open_all_libs()?;`.
 
+- `Vm::host_local` (the C API's `lua_getlocal`) takes `&mut self`. While
+  `load` calls a reader, the slots below the reader hold what PUC's
+  parser or undumper keeps there (its tables, the closure it is filling,
+  5.1's prototypes), which luna makes the first time a local of those
+  levels is looked at, through the debug library or the C API.
+
+  Migration: call it on a `&mut Vm`.
+
 - `Coro::stack_extra` (whether the thread's stack was using the room an
   overflow leaves) is replaced by `Coro::stack_size`, the size of the
   thread's stack as PUC counts it (0 for a thread that has not run).
