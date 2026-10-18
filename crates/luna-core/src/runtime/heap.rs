@@ -40,8 +40,7 @@ pub struct GcHeader {
     /// Per-type byte in what would otherwise be padding: a table keeps the
     /// dialect whose table rules it follows here (`table::Dialect`).
     pub(crate) sub: u8,
-    /// Besides the colour, in what would otherwise be padding: `UNLISTED`,
-    /// `STANDS`, `RO_CLS`, `SLAB`
+    /// Class bits, in padding: `UNLISTED`, `STANDS`, `RO_CLS`, `SLAB`, ...
     pub(crate) cls: u8,
     /// Per-type word in what would otherwise be padding: a table keeps its
     /// absent-metamethod bits here. Zero for a new object.
@@ -80,8 +79,7 @@ fn is_black(flags: u8) -> bool {
     flags & BLACK != 0
 }
 
-/// True when an object header has been reached by marking (gray or black,
-/// PUC `isgray(o) || isblack(o)`), for other runtime modules.
+/// True when marking reached the object (PUC `isgray(o) || isblack(o)`).
 pub(crate) fn header_is_marked<T: GcObject>(g: Gc<T>) -> bool {
     // SAFETY: `g` is a handle, so its object is allocated (a collect frees only after marking ends), and a `GcObject` starts with its header; only the flag byte is read
     unsafe { !is_white((*g.header()).flags) }
@@ -305,7 +303,7 @@ mod slab;
 use self::intern::oom_abort_heap;
 pub(crate) use self::new::fresh_seed;
 use self::new::make_seed;
-pub(crate) use env51::{ENV_IO, ENV_IO_POPEN, ENV_IO_STD, ENV_PACKAGE};
+pub(crate) use env51::{ENV_IO, ENV_IO_POPEN, ENV_IO_STD, ENV_PACKAGE, ENV_PROTO};
 #[path = "heap_free.rs"]
 mod free;
 #[path = "heap_mark.rs"]

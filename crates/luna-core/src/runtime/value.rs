@@ -121,8 +121,8 @@ impl Value {
             Value::Table(_) => "table",
             Value::Closure(_) | Value::Native(_) => "function",
             Value::Coro(_) => "thread",
-            // PUC `lua_typename` collapses full and light userdata to
-            // "userdata"; only `luaL_typeerror` distinguishes them by tag.
+            Value::Userdata(u) if u.is_proto() => "proto",
+            // PUC `lua_typename` collapses full and light userdata
             Value::Userdata(_) | Value::LightUserdata(_) => "userdata",
         }
     }

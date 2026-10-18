@@ -21,6 +21,9 @@ pub(crate) const ENV_PACKAGE: u8 = 1;
 pub(crate) const ENV_IO: u8 = 2;
 pub(crate) const ENV_IO_STD: u8 = 3;
 pub(crate) const ENV_IO_POPEN: u8 = 4;
+/// Not an environment: a userdata standing for a 5.1 prototype on the
+/// stack, whose type is "proto" (see `Userdata::is_proto`).
+pub(crate) const ENV_PROTO: u8 = 5;
 
 /// In a phantom's `sub` byte, telling it from a ghost record.
 const PHANTOM: u8 = 0x40;
@@ -238,7 +241,7 @@ impl Marker {
     /// Mark the environment the class bits `cls` name.
     pub(crate) fn mark_env51(&mut self, cls: u8) {
         let env = cls >> ENV_SHIFT;
-        if env == 0 || self.env51.is_null() {
+        if env == 0 || env == ENV_PROTO || self.env51.is_null() {
             return;
         }
         // SAFETY: the records live as long as the heap the marker marks
