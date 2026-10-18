@@ -42,8 +42,12 @@ impl Opener {
         let key = vm.str_value(k)?;
         let top = self.top(vm);
         let v = vm.stack[top as usize - 1];
-        if !Opener::is_phantom(t) {
-            vm.host_set_index(t, key, v)?;
+        match t {
+            // no metatable, so no `__newindex`: the store `luaV_settable`
+            // makes then
+            Value::Table(tt) if tt.metatable().is_none() => vm.raw_set(tt, key, v)?,
+            _ if Opener::is_phantom(t) => {}
+            _ => vm.host_set_index(t, key, v)?,
         }
         self.pop(vm, 1);
         Ok(())
@@ -178,8 +182,14 @@ impl Opener {
             self.before(vm)?;
         }
         let fv = self.make_fn(vm, f, nup)?;
-        self.pop(vm, nup);
-        self.push(vm, fv)?;
+        if nup > 0 {
+            // the closure takes the first upvalue's slot
+            let t = self.top(vm);
+            vm.stack[(t - nup) as usize] = fv;
+            self.pop(vm, nup - 1);
+        } else {
+            self.push(vm, fv)?;
+        }
         if counted {
             self.after(vm)?;
         }
@@ -190,6 +200,7 @@ impl Opener {
     /// native `f` over `upvals`. From 5.2 on, one PUC makes without
     /// upvalues is its light function: one value for every push of it,
     /// counted as nothing.
+    #[inline]
     pub(crate) fn func(
         &mut self,
         vm: &mut Vm,

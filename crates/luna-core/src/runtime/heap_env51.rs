@@ -79,6 +79,8 @@ pub(crate) struct Env51 {
     /// opening (the last entry of an object counts); the others' is the
     /// first's
     owners: Vec<(*mut GcHeader, u8)>,
+    /// every anchor's object, for a sweep to pass the others by quickly
+    ats: Vec<*mut GcHeader>,
 }
 
 impl Env51 {
@@ -158,6 +160,7 @@ impl Heap {
                 gens: vec![g],
                 package: ptr::null_mut(),
                 owners: Vec::new(),
+                ats: Vec::new(),
             }));
         }
         self.env51_box.as_deref_mut().expect("made above")
@@ -219,6 +222,13 @@ impl Heap {
         (a[0].at, a[0].before) = (first, false);
         (a[1].at, a[1].before) = (last, true);
         (a[2].at, a[2].before) = (stderr, true);
+        let e = self.env51_records();
+        e.ats = e
+            .gens
+            .iter()
+            .flat_map(|g| g.anchors.iter().map(|a| a.at))
+            .collect();
+        e.ats.retain(|h| !h.is_null());
     }
 
     /// The object behind `h`, a native or a userdata, has environment

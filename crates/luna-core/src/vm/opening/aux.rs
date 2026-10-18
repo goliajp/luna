@@ -22,8 +22,13 @@ impl Opener {
         list: &[(u16, u32)],
         nup: u32,
     ) -> Result<(), LuaError> {
+        if nup == 0
+            && let Some(t) = self.plain_table(vm, -1)
+        {
+            return self.fill(vm, t, list);
+        }
         for &(name, f) in list {
-            let name = self.s.strs[usize::from(name)];
+            let name = self.s.str(usize::from(name));
             if self.skipped(name) {
                 continue;
             }
@@ -39,6 +44,46 @@ impl Opener {
             self.setfield(vm, ix, name)?;
         }
         self.pop(vm, nup);
+        Ok(())
+    }
+
+    /// The table at `idx` when nothing but a raw store can happen to it:
+    /// no metatable.
+    fn plain_table(&self, vm: &Vm, idx: i64) -> Option<crate::runtime::Gc<crate::runtime::Table>> {
+        match self.get(vm, idx) {
+            Value::Table(t) if t.metatable().is_none() => Some(t),
+            _ => None,
+        }
+    }
+
+    /// The functions of `list` (no upvalues) stored in `t`, as
+    /// `lua_pushcclosure` and `lua_setfield` store each: nothing a
+    /// collection could see in between (only 5.1's check before it makes
+    /// the closure), so the function goes into the table without passing
+    /// through the stack.
+    fn fill(
+        &mut self,
+        vm: &mut Vm,
+        t: crate::runtime::Gc<crate::runtime::Table>,
+        list: &[(u16, u32)],
+    ) -> Result<(), LuaError> {
+        let v51 = self.v == LuaVersion::Lua51;
+        for &(name, f) in list {
+            let name = self.s.str(usize::from(name));
+            if self.skipped(name) {
+                continue;
+            }
+            let fv = if f == 0 {
+                Value::Bool(false)
+            } else {
+                if v51 {
+                    self.before(vm)?;
+                }
+                self.make_fn(vm, f, 0)?
+            };
+            let key = vm.str_value(name)?;
+            vm.raw_set(t, key, fv)?;
+        }
         Ok(())
     }
 
@@ -78,8 +123,13 @@ impl Opener {
             self.remove(vm, -2);
         }
         self.methods = libname.is_none();
+        if let Some(t) = self.plain_table(vm, -1) {
+            let r = self.fill(vm, t, list);
+            self.methods = false;
+            return r;
+        }
         for &(name, f) in list {
-            let name = self.s.strs[usize::from(name)];
+            let name = self.s.str(usize::from(name));
             if self.skipped(name) {
                 continue;
             }

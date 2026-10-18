@@ -107,6 +107,7 @@ impl Opener {
     }
 
     /// The slot past the top value.
+    #[inline]
     pub(crate) fn top(&self, vm: &Vm) -> u32 {
         match self.native {
             None => vm.stack.len() as u32,
@@ -124,7 +125,18 @@ impl Opener {
                 vm.top = n as u32 + 1;
                 Ok(())
             }
-            Some(_) => vm.native_push_vals(&[v]),
+            Some(_) => {
+                // the slot there already: no growth, nothing to root
+                if let Some(a) = vm.running_natives.last_mut() {
+                    let at = a.top() as usize;
+                    if at < vm.stack.len() {
+                        vm.stack[at] = v;
+                        a.top_off += 1;
+                        return Ok(());
+                    }
+                }
+                vm.native_push_vals(&[v])
+            }
         }
     }
 
@@ -141,11 +153,21 @@ impl Opener {
 
     /// `n` values popped (C `lua_pop`).
     pub(crate) fn pop(&mut self, vm: &mut Vm, n: u32) {
-        let t = self.top(vm);
-        self.set_top(vm, t - n);
+        match self.native {
+            Some(_) => {
+                if let Some(a) = vm.running_natives.last_mut() {
+                    a.top_off -= n as i32;
+                }
+            }
+            None => {
+                let t = self.top(vm);
+                self.set_top(vm, t - n);
+            }
+        }
     }
 
     /// The index `idx` resolved.
+    #[inline]
     pub(crate) fn ix(&self, vm: &Vm, idx: i64) -> Ix {
         match (self.v, idx) {
             (LuaVersion::Lua51, -10002) => Ix::Globals,
@@ -160,6 +182,7 @@ impl Opener {
     }
 
     /// The value at `ix`.
+    #[inline]
     pub(crate) fn at(&self, vm: &Vm, ix: Ix) -> Value {
         match ix {
             Ix::Slot(s) => vm.stack[s as usize],
@@ -221,7 +244,7 @@ impl Opener {
 
     /// The script's string `i` (1-based; 0 is none).
     pub(super) fn str(&self, i: u64) -> Option<&'static [u8]> {
-        (i > 0).then(|| self.s.strs[i as usize - 1])
+        (i > 0).then(|| self.s.str(i as usize - 1))
     }
 
     /// luna's own object `key` the functions being made share, made by
@@ -253,12 +276,17 @@ impl Opener {
 
     /// The function the script numbers `f`, as luna makes it, with PUC's
     /// `nup` upvalues on top (C `lua_pushcclosure`'s object).
+    #[inline]
     pub(super) fn make_fn(&mut self, vm: &mut Vm, f: u32, nup: u32) -> Result<Value, LuaError> {
         let (ctor, id) = native(f);
         match ctor {
             super::Ctor::F(g, b) => {
-                let up: Vec<Value> = (0..nup).map(|i| self.upval(vm, i, nup)).collect();
-                self.func(vm, id as u32, g, b, &up, nup)
+                // PUC's upvalues, the values on top
+                let t = self.top(vm) as usize;
+                let up = &vm.stack[t - nup as usize..t];
+                let mut held = [Value::Nil; 2];
+                held[..up.len()].copy_from_slice(up);
+                self.func(vm, id as u32, g, b, &held[..up.len()], nup)
             }
             super::Ctor::C(c) => c(vm, self, id as u32, nup),
             super::Ctor::Open(g) => {

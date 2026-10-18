@@ -65,12 +65,12 @@ impl Opener {
                 self.setfenv(vm, ix)
             }
             20 => {
-                let list = s.lists[r.u() as usize];
+                let list = s.list(r.u() as usize);
                 self.setfuncs(vm, list, r.z() as u32)
             }
             21 => {
                 let name = self.str(r.u());
-                self.register(vm, name, s.lists[r.u() as usize])
+                self.register(vm, name, s.list(r.u() as usize))
             }
             22 => {
                 let name = self.str(r.u()).unwrap_or_default();
