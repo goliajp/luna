@@ -122,18 +122,23 @@ fn read_and_load(
         // the undumper (and MacroLua's macro pass) take the whole chunk
         let budget = vm.loader_input_budget();
         let mut buf = crate::runtime::mem::LVec::from_slice(vm.heap.mem(), &first)?;
-        // the undumper's slots, and the bytes it needs to get further
-        let (mut slots, mut need) = (0, 0);
+        // how far PUC's undumper gets, as the bytes come
+        let mut undumping = crate::vm::dump::Undumping::new(false);
+        // what the debug library was shown of the undumper's objects
+        let mut shown = crate::vm::exec::reader_layers::UndumpShown::default();
         loop {
-            if buf.len() >= need {
-                match crate::vm::dump::undump_progress(&buf) {
-                    // PUC reads a binary chunk no further than its end
-                    Some(p) if p.done => break,
-                    Some(p) => (slots, need) = (reader::binary_slots(vm.version(), &p), p.need),
-                    None => (slots, need) = (0, 5),
-                }
+            undumping.feed(&buf);
+            // PUC reads a binary chunk no further than its end
+            if undumping.done {
+                break;
             }
-            match next_piece(vm, reader, &mut rs, Phase::Binary(&buf, slots), name) {
+            match next_piece(
+                vm,
+                reader,
+                &mut rs,
+                Phase::Binary(&buf, &undumping, &mut shown),
+                name,
+            ) {
                 Ok(Some(p)) if p.len() > budget.saturating_sub(buf.len()) => {
                     let m = vm.mem_err().0;
                     return fail(vm, m);

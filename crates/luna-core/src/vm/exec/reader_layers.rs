@@ -14,6 +14,24 @@ use super::*;
 use crate::runtime::heap::{ENV_PROTO, LUNA_ONLY, UNLISTED};
 use crate::runtime::mem::LVec;
 
+/// The objects shown for a binary chunk's undumper, kept by the load
+/// for the next reader call (they stay on its stack meanwhile).
+#[derive(Default)]
+pub(crate) struct UndumpShown {
+    /// 5.1: each prototype being read, by the number the undumper gave it
+    protos: Vec<(u32, Value)>,
+    closure: Option<Gc<LuaClosure>>,
+    /// where the source its prototype has is in the bytes
+    source: Option<(usize, usize)>,
+    /// the long string being read, and where it starts
+    long: Option<(usize, Gc<crate::runtime::LuaStr>)>,
+    long_at: usize,
+    /// 5.5: the anchor table, and what is in it
+    anchor: Option<Gc<Table>>,
+    anchored_closure: bool,
+    anchored: usize,
+}
+
 /// A reader call of a running `load`.
 pub(crate) struct ReaderLayer {
     /// the thread the load runs on
@@ -27,8 +45,10 @@ pub(crate) struct ReaderLayer {
     pub(crate) name: (*const u8, usize),
     /// the functions open (`None`: the parse has not started)
     pub(crate) open: Option<u32>,
-    /// the chunk is binary: `src` is what the undumper has
-    pub(crate) binary: bool,
+    /// a binary chunk's undumper and the objects shown for it so far (null
+    /// for text), the load's, which last as long as the call
+    pub(crate) undumping: *const crate::vm::dump::Undumping,
+    pub(crate) shown: *mut UndumpShown,
     pub(crate) filled: bool,
 }
 
@@ -42,20 +62,24 @@ impl Vm {
                 continue;
             }
             l.filled = true;
-            let (thread, at, n, open, binary) = (l.thread, l.at, l.n, l.open, l.binary);
-            // SAFETY: the load that registered the call holds both buffers
-            // until the call returns, and the call is running
-            let (src, name) = unsafe {
+            let (thread, at, n, open) = (l.thread, l.at, l.n, l.open);
+            let (undumping, shown) = (l.undumping, l.shown);
+            // SAFETY: the load that registered the call holds both buffers,
+            // which nothing in the Vm owns or changes, until the call
+            // returns, and the call is running
+            let (src, name): (&[u8], &[u8]) = unsafe {
                 (
-                    std::slice::from_raw_parts(l.src.0, l.src.1).to_vec(),
-                    std::slice::from_raw_parts(l.name.0, l.name.1).to_vec(),
+                    std::slice::from_raw_parts(l.src.0, l.src.1),
+                    std::slice::from_raw_parts(l.name.0, l.name.1),
                 )
             };
             self.heap.puc.silent += 1;
-            let objs = if binary {
-                self.undump_objects(&src)
+            let objs = if undumping.is_null() {
+                self.reader_objects(src, name, open)
             } else {
-                self.reader_objects(&src, &name, open)
+                // SAFETY: as for `src`: the load holds both while the call runs
+                let (u, shown) = unsafe { (&*undumping, &mut *shown) };
+                self.undump_objects(src, u, shown)
             };
             self.heap.puc.silent -= 1;
             let objs = objs?;
@@ -72,7 +96,8 @@ impl Vm {
         let Some(l) = self.reader_layers.pop() else {
             return;
         };
-        if l.filled {
+        // what an undumper holds stays on the stack until the load is done
+        if l.filled && l.undumping.is_null() {
             let stack = self.stack_of_mut(l.thread);
             let end = ((l.at + l.n) as usize).min(stack.len());
             stack[l.at as usize..end].fill(Value::Nil);
@@ -134,81 +159,104 @@ impl Vm {
         })
     }
 
-    /// What PUC's undumper holds on the stack with `src` read: 5.1 the
+    /// What PUC's undumper holds on the stack at `u`, `src` read: 5.1 the
     /// prototypes of the functions it is reading, 5.2 to 5.4 the main
     /// closure and (5.3, 5.4) a long string whose bytes it is reading,
     /// 5.5 its anchor table with the closure and the strings it saved.
-    fn undump_objects(&mut self, src: &[u8]) -> Result<Vec<Value>, LuaError> {
-        use crate::vm::dump::UEv;
-        let Some(p) = crate::vm::dump::undump_progress(src) else {
-            // the format not read yet: only 5.5's anchor table, empty
-            return Ok(match self.version {
-                LuaVersion::Lua55 => vec![Value::Table(self.reader_table()?)],
-                _ => Vec::new(),
-            });
-        };
-        let events: Vec<UEv> = p.events.iter().map(|&(_, e)| e).collect();
-        let open = |e: &UEv| matches!(e, UEv::Proto);
-        let closed = |e: &UEv| matches!(e, UEv::End);
+    /// What was shown before is shown again, brought up to date: PUC's
+    /// objects stay the same through the load.
+    fn undump_objects(
+        &mut self,
+        src: &[u8],
+        u: &crate::vm::dump::Undumping,
+        shown: &mut UndumpShown,
+    ) -> Result<Vec<Value>, LuaError> {
         if self.version == LuaVersion::Lua51 {
-            let n = events.iter().filter(|e| open(e)).count()
-                - events.iter().filter(|e| closed(e)).count();
-            return (0..n).map(|_| self.proto_value()).collect();
+            // a prototype shown before is the same while it is open
+            let same = shown
+                .protos
+                .iter()
+                .zip(&u.open)
+                .take_while(|((id, _), o)| id == *o)
+                .count();
+            shown.protos.truncate(same);
+            for &id in &u.open[same..] {
+                let p = self.proto_value()?;
+                shown.protos.push((id, p));
+            }
+            return Ok(shown.protos.iter().map(|&(_, p)| p).collect());
         }
-        let nups = events.iter().rev().find_map(|e| match e {
-            UEv::Closure(n) | UEv::Reclose(n) => Some(*n),
-            _ => None,
-        });
-        let Some(nups) = nups else {
-            return Ok(match self.version {
-                LuaVersion::Lua55 => vec![Value::Table(self.reader_table()?)],
-                _ => Vec::new(),
-            });
+        let closure = match u.closure {
+            Some(nups) => Some(self.undump_closure(src, u, nups, shown)?),
+            None => None,
         };
-        let cl = self.undump_closure(p.src, p.head, nups)?;
         if self.version == LuaVersion::Lua55 {
-            let t = self.reader_table()?;
+            let t = match shown.anchor {
+                Some(t) => t,
+                None => self.reader_table()?,
+            };
+            shown.anchor = Some(t);
             let put = |vm: &mut Vm, k: Value, v: Value| {
-                // SAFETY: a table made above, reached by nothing else yet
+                // SAFETY: a table of luna's own the load holds
                 let r = vm.table_op(|vm| unsafe { t.as_mut() }.set(&mut vm.heap, k, v));
                 r.map_err(|e| vm.table_error(e))
             };
-            put(self, Value::Closure(cl), Value::Closure(cl))?;
-            let mut saved = 0;
-            for e in &events {
-                if let UEv::Str(s) = e {
-                    saved += 1;
-                    let s = Value::Str(self.heap.try_intern(s)?);
-                    put(self, Value::Int(saved), s)?;
-                }
+            if let Some(cl) = closure
+                && !shown.anchored_closure
+            {
+                put(self, Value::Closure(cl), Value::Closure(cl))?;
+                shown.anchored_closure = true;
+            }
+            for &(at, len) in &u.saved[shown.anchored..] {
+                let s = Value::Str(self.heap.try_intern(&src[at..at + len])?);
+                shown.anchored += 1;
+                put(self, Value::Int(shown.anchored as i64), s)?;
             }
             return Ok(vec![Value::Table(t)]);
         }
-        let mut out = vec![Value::Closure(cl)];
-        if let Some(n) = p.long {
-            // what PUC holds is a string of `n` bytes not read yet: its
-            // contents are whatever its memory had
-            out.push(Value::Str(self.heap.try_intern(&vec![0; n])?));
+        let mut out: Vec<Value> = closure.into_iter().map(Value::Closure).collect();
+        if let Some(n) = u.long {
+            // a string of `n` bytes not read yet: its contents are whatever
+            // PUC's memory had. The same while it is read
+            let s = match shown.long {
+                Some((len, s)) if len == n && u.long_at == shown.long_at => s,
+                _ => self.heap.try_intern(&vec![0; n])?,
+            };
+            (shown.long, shown.long_at) = (Some((n, s)), u.long_at);
+            out.push(Value::Str(s));
         }
         Ok(out)
     }
 
-    /// The closure PUC's undumper is filling: of `nups` upvalues, its
-    /// function's source and first fields as far as they were read.
+    /// The closure PUC's undumper is filling, of `nups` upvalues: its
+    /// function's source and first fields as far as they are read. The
+    /// one shown before stays, made up to date, unless 5.2 made another
+    /// for the function's upvalues.
     fn undump_closure(
         &mut self,
-        src: Option<&[u8]>,
-        head: Option<[u64; 4]>,
+        src: &[u8],
+        u: &crate::vm::dump::Undumping,
         nups: u8,
+        shown: &mut UndumpShown,
     ) -> Result<Gc<LuaClosure>, LuaError> {
-        // a source not read yet is none: PUC shows "=?"
-        let name = src.filter(|s| !s.is_empty()).unwrap_or(b"=?");
-        let source = self.heap.try_intern(name)?;
-        let [line, last, params, vararg] = head.unwrap_or_default();
-        let proto = self
-            .heap
-            .stand_in_proto(source, [line, last], params, vararg)
-            .map_err(LuaError::from)?;
+        let [line, last, params, vararg] = u.head.unwrap_or_default();
+        if let Some(cl) = shown
+            .closure
+            .filter(|cl| cl.upvals().len() == usize::from(nups))
+        {
+            // the source is made once it is read: it can be the whole text
+            if shown.source != u.src {
+                let source = self.undump_source(src, u)?;
+                shown.source = u.src;
+                stand_in::update_source(cl.proto, source);
+                self.heap.barrier_forward(cl.proto, Value::Str(source));
+            }
+            stand_in::update(cl.proto, [line, last], params, vararg);
+            return Ok(cl);
+        }
+        let source = self.undump_source(src, u)?;
+        shown.source = u.src;
+        let proto = stand_in::proto(&mut self.heap, source, [line, last], params, vararg)?;
         let mut ups = LVec::with_capacity(self.heap.mem(), usize::from(nups))?;
         for _ in 0..nups {
             ups.push(self.heap.try_new_upvalue(UpvalState::Closed(Value::Nil))?)?;
@@ -216,7 +264,22 @@ impl Vm {
         let cl = self.heap.try_new_closure(proto, &ups)?;
         // SAFETY: a closure just made; only its class byte is written
         unsafe { (*cl.header()).cls |= LUNA_ONLY };
+        shown.closure = Some(cl);
         Ok(cl)
+    }
+
+    /// The main function's source as far as the undumper has read: none
+    /// yet is "=?", as PUC shows it.
+    fn undump_source(
+        &mut self,
+        src: &[u8],
+        u: &crate::vm::dump::Undumping,
+    ) -> Result<Gc<crate::runtime::LuaStr>, LuaError> {
+        let name = u
+            .src
+            .filter(|&(_, len)| len > 0)
+            .map_or(&b"=?"[..], |(at, len)| &src[at..at + len]);
+        Ok(self.heap.try_intern(name)?)
     }
 
     /// The parser tables of `view`, with the entries PUC's parser put in
