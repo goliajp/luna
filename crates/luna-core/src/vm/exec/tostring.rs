@@ -53,17 +53,28 @@ impl Vm {
         match v {
             Value::Str(s) => Ok(s),
             Value::Int(_) | Value::Float(_) => {
-                match (self.version, v) {
+                let s = match (self.version, v) {
                     // `lua_pushfstring(L, "%I")` / `"%f"`
                     (LuaVersion::Lua53 | LuaVersion::Lua54, Value::Int(i)) => {
-                        self.pushfstring(b"%I", &[FmtArg::I(i)])
+                        self.pushfstring(b"%I", &[FmtArg::I(i)])?
                     }
                     (LuaVersion::Lua53 | LuaVersion::Lua54, Value::Float(f)) => {
-                        self.pushfstring(b"%f", &[FmtArg::F(f)])
+                        self.pushfstring(b"%f", &[FmtArg::F(f)])?
+                    }
+                    // 5.5 `lua_pushstring` of the numeral
+                    (LuaVersion::Lua55, _) => {
+                        let n = match v {
+                            Value::Int(i) => crate::numeric::Num::Int(i),
+                            Value::Float(f) => crate::numeric::Num::Float(f),
+                            _ => unreachable!("a number"),
+                        };
+                        let t = self.heap.number_text(n);
+                        self.alloc_str(t.as_bytes())?
                     }
                     _ => return self.number_string(v),
-                }
-                .and_then(|s| self.api_check_after(Value::Str(s)).map(|()| s))
+                };
+                self.api_check_pushed(Value::Str(s))?;
+                Ok(s)
             }
             _ => self.pushed_text(v),
         }

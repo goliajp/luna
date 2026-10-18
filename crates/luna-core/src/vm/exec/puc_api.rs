@@ -28,6 +28,21 @@ impl Vm {
         Ok(())
     }
 
+    /// 5.3 on: the check after an API call pushed `v` on the running C
+    /// function's stack, which is live up to `v` then.
+    pub(crate) fn api_check_pushed(&mut self, v: Value) -> Result<(), LuaError> {
+        if self.version < LuaVersion::Lua53 || !self.native_on_top() {
+            return self.api_check_after(v);
+        }
+        if self.checkpoint_idle() {
+            return Ok(());
+        }
+        self.native_push_vals(&[v])?;
+        let r = self.native_checkpoint_due();
+        self.native_pop(1);
+        r
+    }
+
     /// 5.3 on: the check after an API call pushed a value already rooted
     /// (in `lib_roots`).
     #[inline]
