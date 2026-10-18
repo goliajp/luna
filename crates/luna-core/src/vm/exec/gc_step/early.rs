@@ -156,7 +156,8 @@ impl Vm {
     fn atomic_51(&mut self) {
         self.gc_atomic();
         self.heap.pace.state = St::SweepString;
-        self.heap.pace.estimate = self.heap.bytes() as i64;
+        // `totalbytes - udsize`: what is to be finalized is not counted
+        self.heap.pace.estimate = self.heap.bytes() as i64 - self.heap.puc.udsize;
         self.heap.pace.strt_swept = 0;
     }
 

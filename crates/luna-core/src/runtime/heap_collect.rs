@@ -116,7 +116,7 @@ impl Heap {
                 }
             }
         }
-        self.atomic_tail(m);
+        self.atomic_tail(m, None);
         self.settle_sizer(m);
         #[cfg(feature = "gc-trace")]
         self.trace_listed();
@@ -143,7 +143,7 @@ impl Heap {
     /// The `origweak` split matters because finalizer resurrection can
     /// re-trace fresh proto/closure → new weak tables joining `m.weak`;
     /// PUC limits the late value-clear to those new heads.
-    pub(super) fn atomic_tail(&mut self, m: &mut Marker) {
+    pub(super) fn atomic_tail(&mut self, m: &mut Marker, run: Option<Running>) -> i64 {
         let early_is_dead = |v: Value| -> bool {
             let h = match v {
                 Value::Str(_) => return false,
@@ -186,8 +186,14 @@ impl Heap {
         // (3) separate + markbeingfnz — resurrect every registered finalizable
         // that ended up unmarked. `m.header(h)` enqueues each into the marker
         // so the following drain_marker propagates through it.
-        self.separate_finalizables(m);
-        drain_marker(m);
+        let mut dead = self.separate_finalizables(m);
+        // 5.1 counts what they keep alive with them (`propagateall`'s work)
+        dead += if self.table_dialect == crate::runtime::table::Dialect::L51 {
+            self.drain_work(m, run)
+        } else {
+            drain_marker(m);
+            0
+        };
         // (4) post-resurrection ephemeron convergence — a resurrected
         // finalizable may bring new keys into reach, which in turn marks new
         // ephemeron values.
@@ -280,6 +286,7 @@ impl Heap {
         self.verify_string_count("atomic_tail");
         #[cfg(any(debug_assertions, feature = "gc-verify"))]
         self.verify_slow_bits("atomic_tail");
+        dead
     }
 
     /// Borrow Heap's persistent propagate state as an ephemeral Marker.

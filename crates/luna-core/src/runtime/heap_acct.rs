@@ -35,6 +35,8 @@ pub(crate) struct PucState {
     /// meanwhile and ended in the pause; how they open (lua.c's or not)
     pub(crate) libs_pace: Option<libs::LibsPace>,
     pub(crate) opening: crate::runtime::puc_libs::Opening,
+    /// 5.1: what the last atomic step found to finalize (`udsize`)
+    pub(crate) udsize: i64,
     /// a library was opened: a later `luaL_openlibs` opens each as PUC's
     /// second call does, not from the record
     pub(crate) libs_opened: bool,
@@ -71,6 +73,7 @@ impl Default for PucState {
             kept_long: Vec::new(),
             libs_pace: None,
             opening: crate::runtime::puc_libs::Opening::Running,
+            udsize: 0,
             libs_opened: false,
             // the standard libraries make about twenty
             stand_ins: Vec::with_capacity(32),
