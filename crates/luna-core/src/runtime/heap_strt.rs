@@ -188,6 +188,14 @@ impl Heap {
         // and "not enough memory", which PUC makes at the start and luna
         // does not
         let mut n = self.ghost_short_strings() + 1;
+        // and 5.1's strings luna's stand for
+        let strt = super::acct::STRT_STAND;
+        n += self
+            .puc
+            .stand_ins
+            .iter()
+            .filter(|s| s.1 & strt != 0)
+            .count();
         for mut cur in [self.all, self.fixed] {
             // SAFETY: the lists link this heap's live objects
             unsafe {

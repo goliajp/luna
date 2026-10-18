@@ -262,6 +262,7 @@ mod fmt;
 mod parts;
 #[path = "heap_acct_thread.rs"]
 mod thread;
+pub(crate) use boot::STRT_STAND;
 pub(crate) use defer::Deferred;
 pub(crate) use parts::ENV51;
 pub(crate) use thread::BASIC_CI_51;

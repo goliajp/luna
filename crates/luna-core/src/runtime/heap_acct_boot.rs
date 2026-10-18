@@ -65,6 +65,9 @@ impl Heap {
     }
 }
 
+/// In a stand-in's size: the object is a string of 5.1's string table.
+pub(crate) const STRT_STAND: usize = 1 << (usize::BITS - 1);
+
 impl Heap {
     /// A long string of PUC's of `size` bytes (counted now with `count`)
     /// lives as long as the object behind `h`, which holds luna's string
@@ -75,6 +78,16 @@ impl Heap {
             self.acct_obj(PucKind::LongStr, size);
         }
         self.stand_sizes_on(h, [size]);
+    }
+
+    /// 5.1's string of `len` bytes, one of its string table's, lives as
+    /// long as the object behind `h` (the package table, which holds
+    /// luna's default path in place of PUC's): counted now, and the
+    /// table's place given back with it.
+    pub(crate) fn acct_stand_strt(&mut self, h: *mut GcHeader, len: usize) {
+        self.acct_string(len);
+        let size = self.sizes.string(len, false);
+        self.stand_sizes_on(h, [size | STRT_STAND]);
     }
 
     /// Objects of PUC's of `sizes` bytes, counted already, live as long

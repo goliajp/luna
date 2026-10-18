@@ -186,7 +186,10 @@ impl Heap {
     fn free_stand_in(&mut self, h: *mut GcHeader) {
         while let Some(i) = self.puc.stand_ins.iter().position(|(p, _)| *p == h) {
             let (_, size) = self.puc.stand_ins.swap_remove(i);
-            self.acct_free(size);
+            if size & super::acct::STRT_STAND != 0 {
+                self.puc.strt_nuse -= 1;
+            }
+            self.acct_free(size & !super::acct::STRT_STAND);
         }
     }
 }
