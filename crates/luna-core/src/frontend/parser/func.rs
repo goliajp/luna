@@ -4,6 +4,7 @@ use super::*;
 
 impl<'s> Parser<'s> {
     pub(super) fn func_body(&mut self, line: u32) -> Result<FuncBody, SyntaxError> {
+        self.lex.opened(true);
         self.expect(Token::LParen, "(")?;
         self.func_local_count.push_or_abort((0, line, 0));
         self.enter_fn_51(line);
@@ -66,6 +67,7 @@ impl<'s> Parser<'s> {
         let block = self.block()?;
         let end_line = self.tok.line; // the `end` token's line, before consuming
         self.expect_match(Token::End, "end", "function", line)?;
+        self.lex.opened(false);
         self.close_function()?;
         self.func_local_count.pop();
         self.leave_fn_51();

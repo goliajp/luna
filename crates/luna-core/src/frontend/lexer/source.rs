@@ -19,6 +19,9 @@ pub trait Source {
     fn out_of_memory(&self) -> Option<Oom> {
         None
     }
+    /// The parse opened (`true`) or closed a function, where PUC's
+    /// `open_func` / `close_func` run.
+    fn opened(&mut self, _open: bool) {}
 }
 
 /// A source held whole in memory.
@@ -36,7 +39,9 @@ impl Source for Whole<'_> {
 /// A reader of the next piece: it appends one piece to the buffer and
 /// returns true, or returns false at the end of the input (PUC's
 /// `lua_Reader` returning no bytes); an error when the buffer cannot grow.
-pub(crate) type Feed<'f> = dyn FnMut(&mut LVec<u8>) -> Result<bool, Oom> + 'f;
+/// It is told how many functions the parse has open, PUC's `FuncState`s
+/// (main included), whose objects PUC holds on the stack meanwhile.
+pub(crate) type Feed<'f> = dyn FnMut(&mut LVec<u8>, u32) -> Result<bool, Oom> + 'f;
 
 /// A source read piece by piece. Once the reader has signalled the end it
 /// is not called again: PUC's scanner stops at the end of input.
@@ -46,6 +51,8 @@ pub(crate) struct Stream<'f> {
     ended: bool,
     /// reading stopped because `buf` could not grow
     oom: Option<Oom>,
+    /// the functions the parse has open
+    open: u32,
 }
 
 impl<'f> Stream<'f> {
@@ -58,6 +65,7 @@ impl<'f> Stream<'f> {
             feed,
             ended,
             oom: None,
+            open: 1,
         }
     }
 }
@@ -88,7 +96,7 @@ impl Source for Stream<'_> {
             return false;
         }
         let before = self.buf.len();
-        match (self.feed)(&mut self.buf) {
+        match (self.feed)(&mut self.buf, self.open) {
             Ok(more) if more && self.buf.len() > before => {}
             Ok(_) => self.ended = true,
             // the scan sees the end of the input; the parse then reports
@@ -104,5 +112,13 @@ impl Source for Stream<'_> {
 
     fn out_of_memory(&self) -> Option<Oom> {
         self.oom
+    }
+
+    fn opened(&mut self, open: bool) {
+        if open {
+            self.open += 1;
+        } else {
+            self.open -= 1;
+        }
     }
 }

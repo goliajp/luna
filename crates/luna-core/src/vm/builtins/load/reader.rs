@@ -1,0 +1,114 @@
+//! `generic_reader`: calling a `load` reader where PUC's C function does.
+
+use super::*;
+
+/// The stack of `load` while it reads from a reader function: the slots
+/// `luaB_load` keeps (5.1 three, 5.2 to 5.4 five, 5.5 its arguments), the
+/// one `generic_reader` keeps the last piece in (5.1 the third, 5.2 to
+/// 5.4 the fifth; 5.5 leaves it on top and pops it before the next call),
+/// then what the parser holds there: per open function a constants table
+/// and a prototype (5.1), the main closure and per open function a
+/// constants table (5.2), the main closure and the scanner table (5.3,
+/// 5.4), the anchor table (5.5).
+pub(super) struct ReaderSlot {
+    fs: u32,
+    /// the slots below the parser's
+    base: u32,
+    /// 5.1 leaves a nil a reader returned on the stack
+    nils: u32,
+}
+
+impl ReaderSlot {
+    /// `luaB_load`'s `lua_settop` before it loads from a reader.
+    pub(super) fn new(vm: &mut Vm, a: Args) -> Result<Self, LuaError> {
+        let base = match vm.version() {
+            LuaVersion::Lua51 => 3,
+            LuaVersion::Lua55 => a.n,
+            _ => 5,
+        };
+        vm.native_settop_nil(base)?;
+        Ok(ReaderSlot {
+            fs: a.fs,
+            base,
+            nils: 0,
+        })
+    }
+
+    /// The slot the last piece is kept in.
+    fn reserved(vm: &Vm) -> Option<u32> {
+        match vm.version() {
+            LuaVersion::Lua51 => Some(3),
+            LuaVersion::Lua55 => None,
+            _ => Some(5),
+        }
+    }
+
+    /// What the parser holds on the stack with `open` functions open
+    /// (`None`: it has not started).
+    fn parser_slots(vm: &Vm, open: Option<u32>) -> u32 {
+        match (vm.version(), open) {
+            // the anchor table goes on before the first read
+            (LuaVersion::Lua55, _) => 1,
+            (_, None) => 0,
+            (LuaVersion::Lua51, Some(n)) => 2 * n,
+            (LuaVersion::Lua52, Some(n)) => 1 + n,
+            _ => 2,
+        }
+    }
+}
+
+/// The next piece of a `load` reader: `None` when it returns nil, no
+/// value or the empty string; a string or number piece is its bytes. Any
+/// other value, or an error the reader raises, fails the load softly with
+/// the message `load` returns after its nil. The reader runs with the
+/// thread non-yieldable, as under PUC's `lua_load`, from where
+/// `generic_reader` calls it, and what it returns is kept where that
+/// function keeps it.
+pub(super) fn next_piece(
+    vm: &mut Vm,
+    reader: Value,
+    rs: &mut ReaderSlot,
+    open: Option<u32>,
+) -> Result<Option<Vec<u8>>, Value> {
+    let reserved = ReaderSlot::reserved(vm);
+    let below = rs.base + rs.nils + ReaderSlot::parser_slots(vm, open);
+    // 5.5's last result is popped here
+    vm.native_settop_nil(below).map_err(|e| e.0)?;
+    let top = vm.native_top().unwrap_or(vm.top);
+    argcheck::check_stack_at(vm, top, 2, "too many nested functions").map_err(|e| e.0)?;
+    let r = vm.call_value(reader, &[]).map_err(|e| e.0)?;
+    let v = r.first().copied().unwrap_or(Value::Nil);
+    let bytes = match v {
+        Value::Nil => None,
+        v => match argcheck::to_str_bytes(vm, v) {
+            Some(b) => Some(b),
+            None => {
+                return Err(vm
+                    .str_value(b"reader function must return a string")
+                    .unwrap_or_else(|e| e.0));
+            }
+        },
+    };
+    // `lua_tolstring` turns a number into a string where it is kept
+    let kept = match v {
+        Value::Int(_) | Value::Float(_) => Value::Str(vm.number_string(v).map_err(|e| e.0)?),
+        v => v,
+    };
+    let held = match (reserved, v) {
+        // 5.2 to 5.4 pop a nil, 5.1 leaves it
+        (Some(_), Value::Nil) if vm.version() >= LuaVersion::Lua52 => Ok(()),
+        (Some(_), Value::Nil) => {
+            if open.is_none() {
+                rs.nils += 1;
+            }
+            vm.native_push_vals(&[Value::Nil])
+        }
+        (Some(slot), _) => {
+            vm.stack[(rs.fs + slot) as usize] = kept;
+            Ok(())
+        }
+        (None, _) => vm.native_push_vals(&[kept]),
+    };
+    held.map_err(|e| e.0)?;
+    Ok(bytes.filter(|b| !b.is_empty()))
+}
