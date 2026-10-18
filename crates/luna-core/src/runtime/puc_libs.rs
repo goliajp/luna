@@ -8,28 +8,54 @@ use crate::runtime::table::Dialect;
 #[path = "puc_libs_data.rs"]
 mod data;
 
-/// The ops and strings of `d`'s record on this pointer width; `stopped`,
-/// 5.3's with no collection running while the libraries open (traces of
-/// runs with no automatic step).
-pub(crate) fn record(d: Dialect, stopped: bool) -> (&'static [u32], &'static [&'static [u8]]) {
+/// How `luaL_openlibs` runs: which of the records says what it does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Opening {
+    /// the collector stopped meanwhile
+    Stopped,
+    /// lua.c's: 5.3's leaves the collector running, the others stop it
+    LuaC,
+    /// an embedder's, after `luaL_newstate`, the collector running
+    Running,
+}
+
+/// The ops and strings of `d`'s record of an `opening` on this pointer
+/// width.
+pub(crate) fn record(d: Dialect, opening: Opening) -> (&'static [u32], &'static [&'static [u8]]) {
+    use Opening::*;
     use data::*;
+    let o = if opening == LuaC && d != Dialect::L53 {
+        Stopped
+    } else {
+        opening
+    };
     if cfg!(target_pointer_width = "64") {
-        match d {
-            Dialect::L51 => (OPS_51_64, STRS_51_64),
-            Dialect::L52 => (OPS_52_64, STRS_52_64),
-            Dialect::L53 if stopped => (OPS_53N_64, STRS_53N_64),
-            Dialect::L53 => (OPS_53_64, STRS_53_64),
-            Dialect::L54 => (OPS_54_64, STRS_54_64),
-            Dialect::L55 => (OPS_55_64, STRS_55_64),
+        match (d, o) {
+            (Dialect::L51, Running) => (OPS_51H_64, STRS_51H_64),
+            (Dialect::L51, _) => (OPS_51_64, STRS_51_64),
+            (Dialect::L52, Running) => (OPS_52H_64, STRS_52H_64),
+            (Dialect::L52, _) => (OPS_52_64, STRS_52_64),
+            (Dialect::L53, Running) => (OPS_53H_64, STRS_53H_64),
+            (Dialect::L53, Stopped) => (OPS_53N_64, STRS_53N_64),
+            (Dialect::L53, LuaC) => (OPS_53_64, STRS_53_64),
+            (Dialect::L54, Running) => (OPS_54H_64, STRS_54H_64),
+            (Dialect::L54, _) => (OPS_54_64, STRS_54_64),
+            (Dialect::L55, Running) => (OPS_55H_64, STRS_55H_64),
+            (Dialect::L55, _) => (OPS_55_64, STRS_55_64),
         }
     } else {
-        match d {
-            Dialect::L51 => (OPS_51_32, STRS_51_32),
-            Dialect::L52 => (OPS_52_32, STRS_52_32),
-            Dialect::L53 if stopped => (OPS_53N_32, STRS_53N_32),
-            Dialect::L53 => (OPS_53_32, STRS_53_32),
-            Dialect::L54 => (OPS_54_32, STRS_54_32),
-            Dialect::L55 => (OPS_55_32, STRS_55_32),
+        match (d, o) {
+            (Dialect::L51, Running) => (OPS_51H_32, STRS_51H_32),
+            (Dialect::L51, _) => (OPS_51_32, STRS_51_32),
+            (Dialect::L52, Running) => (OPS_52H_32, STRS_52H_32),
+            (Dialect::L52, _) => (OPS_52_32, STRS_52_32),
+            (Dialect::L53, Running) => (OPS_53H_32, STRS_53H_32),
+            (Dialect::L53, Stopped) => (OPS_53N_32, STRS_53N_32),
+            (Dialect::L53, LuaC) => (OPS_53_32, STRS_53_32),
+            (Dialect::L54, Running) => (OPS_54H_32, STRS_54H_32),
+            (Dialect::L54, _) => (OPS_54_32, STRS_54_32),
+            (Dialect::L55, Running) => (OPS_55H_32, STRS_55H_32),
+            (Dialect::L55, _) => (OPS_55_32, STRS_55_32),
         }
     }
 }

@@ -23,6 +23,17 @@ optimization.
 
 ### Breaking
 
+- `Vm::new` (and `Vm::new_with_mem`, `luna_jit::new_with_jit`) is PUC's
+  `luaL_newstate` followed by `luaL_openlibs` with the collector running,
+  as an embedder opens the libraries: the collector steps while they open,
+  and the count (`collectgarbage("count")`, `lua_gc(LUA_GCCOUNT)`) and the
+  collector's pace afterwards are what such an embedder's are. They are no
+  longer the stand-alone interpreter's, which stops the collector while the
+  libraries open (but 5.3's). `Vm::open_all_libs` steps the same way when
+  the collector is running and not when it is stopped; for the
+  interpreter's state, stop the collector first (`host_gc` with
+  `LUA_GCSTOP`, 0), open the libraries, and restart it (`LUA_GCRESTART`, 1).
+
 - `Vm::open_all_libs` and the single-library openers (`open_base`,
   `open_math`, `open_table`, `open_string`, `open_utf8`, `open_os_io`,
   `open_debug`, `open_coroutine`, `open_package`, `open_bit32`, and the
