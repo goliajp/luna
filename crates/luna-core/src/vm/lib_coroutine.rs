@@ -80,7 +80,7 @@ fn new_body_coro(vm: &mut Vm, a: Args) -> Result<Gc<Coro>, LuaError> {
     // made over the argument whatever it is: a refused one leaves garbage
     let co = vm.try_new_coro(a.get(vm, 0))?;
     // the new thread is pushed over the arguments
-    vm.native_push(1);
+    vm.native_push_vals(&[Value::Coro(co)])?;
     vm.lib_roots.push(Value::Coro(co));
     let body = check_body(vm, a);
     vm.lib_roots.pop();
@@ -193,11 +193,11 @@ fn co_resume(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         return Err(raise_str(vm, "too many arguments to resume"));
     }
     let args: Vec<Value> = (1..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
+    // the arguments move to the coroutine
+    vm.native_settop(1);
     match vm.resume_coro(co, args) {
         Ok(mut vals) => {
             if v51 && vals.len() as u32 >= max51 {
-                // the arguments moved to the coroutine
-                vm.native_settop(1);
                 return Err(raise_str(vm, "too many results to resume"));
             }
             // PUC `auxresume` gates the transfer on `lua_checkstack(L,

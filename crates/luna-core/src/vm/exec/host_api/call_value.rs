@@ -29,6 +29,18 @@ impl Vm {
         Ok(r)
     }
 
+    /// [`Vm::call_value_pushed`] with the values the native pushes below
+    /// the function, `held`, written where they go.
+    pub(crate) fn call_value_holding(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        held: &[Value],
+    ) -> Result<Vec<Value>, LuaError> {
+        self.native_hold_top(held)?;
+        self.call_value_pushed(f, args, held.len() as u32)
+    }
+
     /// [`Vm::call_value`] placed at slot `at` of the running native's
     /// stack, where a C function that moved the callee below its arguments
     /// calls it (`lua_insert` then `lua_call`).

@@ -119,6 +119,7 @@ pub(super) fn item54(
             // a `__tostring` runs above the buffer's slot; its result stays
             // pushed over the errors that follow
             let buf = vm.buffer_slot(out.len());
+            vm.native_hold_top(&[Vm::buffer_box()][..buf as usize])?;
             let v = a.get(vm, arg);
             let gs = vm.tolstring(v, buf)?;
             let s = gs.as_bytes().to_vec();

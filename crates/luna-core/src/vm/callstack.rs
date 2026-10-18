@@ -98,6 +98,8 @@ pub(crate) struct ThreadStack<'a> {
     acts: &'a [NativeAct],
     /// level 0 first
     pub(crate) levels: Vec<DbgKind>,
+    /// a thread that waits: its level 0 is the native that resumed another
+    pub(crate) suspended: bool,
 }
 
 impl<'a> ThreadStack<'a> {
@@ -159,6 +161,15 @@ impl<'a> ThreadStack<'a> {
             top,
             acts,
             levels,
+            suspended: false,
+        }
+    }
+
+    /// The stack of a thread that waits on a coroutine it resumed.
+    pub(crate) fn suspended(self) -> Self {
+        ThreadStack {
+            suspended: true,
+            ..self
         }
     }
 

@@ -12,14 +12,20 @@ fn co_wrapped(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // the arguments move to the coroutine, and its error comes back pushed
     let args = collect_args(vm, fs, nargs);
     vm.native_settop(0);
-    vm.native_push(1);
     let before = vm.special_errors();
     let err = match resume_refusal(vm, co, nargs == 0, in_wrap) {
-        Some(msg) => refusal_value(vm, &msg)?,
+        Some(msg) => {
+            let m = refusal_value(vm, &msg)?;
+            vm.native_push_vals(&[m])?;
+            m
+        }
         None => {
             mark_in_wrap(vm, in_wrap, true)?;
             let r = vm.resume_coro(co, args);
             mark_in_wrap(vm, in_wrap, false)?;
+            if let Err(e) = &r {
+                vm.native_push_vals(&[e.0])?;
+            }
             match r {
                 Ok(vals) => return vm.nat_ret(fs, &vals),
                 // 5.4+ close a coroutine that died by error before

@@ -11,8 +11,9 @@ use super::{DbgKind, LocalSlot, ThreadStack};
 
 impl Vm {
     /// The `n`-th local of level `i`, continuation `fi`: lua.c's `docall`
-    /// keeps `pmain`'s arguments and the handler on the stack, the others
-    /// values luna holds apart; past them, what a vararg function leaves.
+    /// and `pairs` keep what their C functions have below the function
+    /// they call on the stack, the others values luna holds apart; past
+    /// them, what a vararg function leaves.
     pub(super) fn cont_local(
         &self,
         ts: &ThreadStack,
@@ -22,23 +23,47 @@ impl Vm {
     ) -> Option<(String, LocalSlot)> {
         let k = usize::try_from(n).ok()?.checked_sub(1)?;
         let name = self.temporary_locvar_name().to_string();
-        let below = match i.checked_sub(1) {
-            Some(j) if self.is_docall(ts, fi) => ts.func_slot(j)? as usize - 1,
-            _ => 0,
+        let CallFrame::Cont(nc) = &ts.frames[fi] else {
+            unreachable!("continuation level")
         };
-        if k < below {
-            return Some((name, LocalSlot::Stack(k + 1)));
-        }
-        let held = if below > 0 {
-            vec![]
-        } else {
-            self.cont_temporaries(ts, fi)
+        let on_stack = matches!(nc.kind, ContKind::Pairs { .. }) || self.is_docall(ts, fi);
+        let (held, below) = match i.checked_sub(1) {
+            Some(j) if on_stack => {
+                let base = nc.func_slot as usize + 1;
+                let below = (ts.func_slot(j)? as usize).saturating_sub(base);
+                if k < below {
+                    return Some((name, LocalSlot::Stack(base + k)));
+                }
+                (vec![], below)
+            }
+            _ => (self.cont_temporaries(ts, fi), 0),
         };
         let k = k - below;
         let val = match held.get(k) {
             Some(&v) => v,
             None => *self.vararg_left(ts, i).get(k - held.len())?,
         };
+        Some((name, LocalSlot::Held(val)))
+    }
+
+    /// The `n`-th local of level `i`, native `k`, which called the level
+    /// above it: what the C function has on its stack below the function
+    /// it called, then what a vararg function leaves.
+    pub(super) fn native_local(
+        &self,
+        ts: &ThreadStack,
+        i: usize,
+        k: usize,
+        n: i64,
+    ) -> Option<(String, LocalSlot)> {
+        let at = usize::try_from(n).ok()?.checked_sub(1)?;
+        let name = self.temporary_locvar_name().to_string();
+        let base = ts.acts[k].func_slot as usize + 1;
+        let below = (ts.func_slot(i - 1)? as usize).saturating_sub(base);
+        if at < below {
+            return Some((name, LocalSlot::Stack(base + at)));
+        }
+        let val = *self.vararg_left(ts, i).get(at - below)?;
         Some((name, LocalSlot::Held(val)))
     }
 

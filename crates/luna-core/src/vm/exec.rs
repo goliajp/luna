@@ -54,6 +54,7 @@ mod host_rng;
 mod index;
 mod index_fast;
 mod index_miss;
+mod index_pushed;
 mod index_raw;
 mod index_set;
 #[cfg(feature = "gc-verify")]
@@ -61,6 +62,7 @@ mod index_verify;
 mod jit_call;
 mod jit_handoff;
 mod jit_levels;
+mod main_stack;
 pub use jit_handoff::HandoffFrame;
 use jit_handoff::JitRun;
 pub use jit_levels::JitLimits;

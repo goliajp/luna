@@ -1,6 +1,9 @@
 //! Sequence functions: insert, remove, concat, unpack, pack, move and create.
 
-use super::{TAB_L, TAB_R, TAB_RW, TAB_W, aux_getn, checktab, obj_len, tab_geti, tab_seti};
+use super::{
+    TAB_L, TAB_R, TAB_RW, TAB_W, aux_getn, checktab, obj_len, tab_geti, tab_geti_held, tab_seti,
+    tab_seti_held,
+};
 use crate::runtime::mem::LVec;
 use crate::runtime::{Gc, LuaStr, Value};
 use crate::version::LuaVersion as V;
@@ -39,7 +42,7 @@ pub(super) fn t_insert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             let mut i = e;
             while i > pos {
                 let mv = tab_geti(vm, tv, i - 1, 0)?;
-                tab_seti(vm, tv, i, mv, 1)?;
+                tab_seti_held(vm, tv, i, mv, &[mv])?;
                 i -= 1;
             }
             pos
@@ -114,11 +117,11 @@ pub(super) fn t_remove(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // shifted value and the final nil are pushed above it
     let removed = tab_geti(vm, tv, pos, 0)?;
     while pos < size {
-        let mv = tab_geti(vm, tv, pos + 1, 1)?;
-        tab_seti(vm, tv, pos, mv, 2)?;
+        let mv = tab_geti_held(vm, tv, pos + 1, &[removed])?;
+        tab_seti_held(vm, tv, pos, mv, &[removed, mv])?;
         pos += 1;
     }
-    tab_seti(vm, tv, pos, Value::Nil, 2)?;
+    tab_seti_held(vm, tv, pos, Value::Nil, &[removed, Value::Nil])?;
     vm.nat_ret(fs, &[removed])
 }
 

@@ -86,32 +86,6 @@ impl Vm {
         self.index_value_pushed(t, key, 0)
     }
 
-    /// [`Vm::index_value`] from a native that has `extra` values pushed
-    /// where PUC's C function would have them by now (a key, results so
-    /// far, a buffer's slot): an `__index` it runs starts above them, and
-    /// an error it raises counts them. Nothing is counted on the raw path.
-    pub(crate) fn index_value_pushed(
-        &mut self,
-        t: Value,
-        key: Value,
-        extra: u32,
-    ) -> Result<Value, LuaError> {
-        match self.index_step(t, key) {
-            Ok(MmOut::Done(v)) => Ok(v),
-            Ok(MmOut::Mm { func, recv }) => {
-                self.native_push(extra);
-                let r = self.call_mm1(func, &[recv, key])?;
-                self.native_pop(extra);
-                Ok(r)
-            }
-            Ok(MmOut::CompareSynth { .. }) => unreachable!("CompareSynth from index_step"),
-            Err(e) => {
-                self.native_push(extra);
-                Err(e)
-            }
-        }
-    }
-
     /// PUC `MAXTAGLOOP`: 100 links of `__index`/`__newindex` in 5.1/5.2,
     /// 2000 from 5.3.
     pub(super) fn tag_loop_limit(&self) -> u32 {
@@ -183,31 +157,6 @@ impl Vm {
         v: Value,
     ) -> Result<(), LuaError> {
         self.newindex_value_pushed(t, key, v, 0)
-    }
-
-    /// [`Vm::newindex_value`] with `extra` values pushed, as
-    /// [`Vm::index_value_pushed`].
-    pub(crate) fn newindex_value_pushed(
-        &mut self,
-        t: Value,
-        key: Value,
-        v: Value,
-        extra: u32,
-    ) -> Result<(), LuaError> {
-        match self.newindex_step(t, key, v) {
-            Ok(MmOut::Done(_)) => Ok(()),
-            Ok(MmOut::Mm { func, recv }) => {
-                self.native_push(extra);
-                self.call_value(func, &[recv, key, v])?;
-                self.native_pop(extra);
-                Ok(())
-            }
-            Ok(MmOut::CompareSynth { .. }) => unreachable!("CompareSynth from newindex_step"),
-            Err(e) => {
-                self.native_push(extra);
-                Err(e)
-            }
-        }
     }
 
     /// Resolve `t[key] = v` through the `__newindex` chain. A raw assignment is

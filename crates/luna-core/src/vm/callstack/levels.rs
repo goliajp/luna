@@ -24,7 +24,8 @@ impl Vm {
     pub(crate) fn thread_stack(&self, co: Option<Gc<Coro>>) -> ThreadStack<'_> {
         let v51 = self.version() <= LuaVersion::Lua51;
         match co {
-            Some(co) if !self.is_current_thread(Some(co)) => {
+            Some(co) if self.is_main_coro(co) && self.current.is_some() => self.main_thread_stack(),
+            Some(co) if !self.is_current_thread(Some(co)) && !self.is_main_coro(co) => {
                 // SAFETY: `co` stays allocated while the view lives (the
                 // caller holds it as a native argument, and no collect runs
                 // while the view borrows `self`); it is not the running
@@ -50,14 +51,19 @@ impl Vm {
                     CoroStatus::Normal => c.natives.clone(),
                     _ => 0..0,
                 };
-                ThreadStack::new(
+                let ts = ThreadStack::new(
                     v51,
                     &c.frames,
                     &c.stack,
                     c.top,
                     &self.running_natives[natives],
                     yield_slot,
-                )
+                );
+                if c.status == CoroStatus::Normal {
+                    ts.suspended()
+                } else {
+                    ts
+                }
             }
             _ => ThreadStack::new(
                 v51,
@@ -206,13 +212,16 @@ impl Vm {
                 (f.base, n - 1)
             }
             DbgKind::C(CLevel::Cont(fi)) => return self.cont_local(ts, i, fi, n),
+            DbgKind::C(CLevel::Native(k)) if i > 0 => return self.native_local(ts, i, k, n),
             DbgKind::C(CLevel::Native(k)) => (ts.acts[k].func_slot + 1, n - 1),
             DbgKind::C(CLevel::Yield(fs)) => (fs + 1, n - 1),
         };
         // Past the named locals, anything up to the next level's function
-        // (or the top, for the running level) is a temporary. A native's
-        // window is the arguments it was given.
+        // (or the top, for the running level) is a temporary. The running
+        // native's window is the arguments it was given.
         let limit = match ts.levels[i] {
+            // one waiting on a coroutine has what it did not move to it
+            DbgKind::C(CLevel::Native(k)) if ts.suspended => ts.acts[k].top(),
             DbgKind::C(CLevel::Native(k)) => ts.acts[k].func_slot + 1 + ts.acts[k].nargs,
             _ if i == 0 => ts.top.max(base),
             _ => ts.func_slot(i - 1)?,
@@ -256,7 +265,8 @@ impl Vm {
         v: Value,
     ) -> Result<(), crate::runtime::mem::Oom> {
         let stack = match co {
-            Some(co) if !self.is_current_thread(Some(co)) => {
+            Some(co) if self.is_main_coro(co) && self.current.is_some() => self.main_stack_mut(),
+            Some(co) if !self.is_current_thread(Some(co)) && !self.is_main_coro(co) => {
                 // the coroutine's saved stack is traced through `co`; re-gray it
                 self.heap.barrier_back(co);
                 // SAFETY: `co` is a suspended thread the caller holds (a native argument), not the running one, so the Vm holds no reference into its saved stack; the borrow lives until the slot is written, which does not collect
