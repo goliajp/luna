@@ -82,6 +82,7 @@ pub unsafe extern "C" fn lua_tocfunction(L: *mut LuaState, idx: c_int) -> Option
 /// The pointer C sees for a userdata value.
 fn userdata_ptr(api: &Api, v: Value) -> *mut c_void {
     match v {
+        Value::Userdata(u) if u.is_proto() => std::ptr::null_mut(),
         Value::Userdata(u) => api.vm.host_userdata_ptr(u).cast(),
         Value::LightUserdata(p) => p.cast_mut().cast(),
         _ => std::ptr::null_mut(),

@@ -135,6 +135,8 @@ fn type_tag(v: Value) -> c_int {
         Value::Str(_) => LUA_TSTRING,
         Value::Table(_) => LUA_TTABLE,
         Value::Closure(_) | Value::Native(_) => LUA_TFUNCTION,
+        // 5.1's `LUA_TPROTO`: a prototype of its parser's on the stack
+        Value::Userdata(u) if u.is_proto() => 9,
         Value::Userdata(_) => LUA_TUSERDATA,
         Value::Coro(_) => LUA_TTHREAD,
         Value::LightUserdata(_) => LUA_TLIGHTUSERDATA,

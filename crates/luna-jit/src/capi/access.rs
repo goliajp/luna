@@ -51,6 +51,7 @@ pub unsafe extern "C" fn lua_typename(_L: *mut LuaState, tp: c_int) -> *const c_
         LUA_TTABLE => b"table\0",
         LUA_TFUNCTION => b"function\0",
         LUA_TTHREAD => b"thread\0",
+        9 => b"proto\0",
         _ => b"no value\0",
     };
     name.as_ptr().cast()
@@ -169,10 +170,11 @@ pub unsafe extern "C" fn lua_isinteger(L: *mut LuaState, idx: c_int) -> c_int {
 pub unsafe extern "C" fn lua_isuserdata(L: *mut LuaState, idx: c_int) -> c_int {
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
-    c_int::from(matches!(
-        api.get(idx),
-        Some(Value::Userdata(_) | Value::LightUserdata(_))
-    ))
+    c_int::from(match api.get(idx) {
+        Some(Value::Userdata(u)) => !u.is_proto(),
+        Some(Value::LightUserdata(_)) => true,
+        _ => false,
+    })
 }
 
 /// Write `flag` through `out` unless it is null.

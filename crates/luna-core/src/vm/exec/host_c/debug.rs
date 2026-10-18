@@ -104,6 +104,15 @@ impl Vm {
         self.thread_stack(Some(co))
     }
 
+    /// The objects under a `load` reader, made for the C API's look at the
+    /// locals. `lua_getlocal` raises no error: one memory runs out for
+    /// leaves them unmade, nil.
+    fn host_fill_reader_layers(&mut self) {
+        if !self.reader_layers.is_empty() {
+            let _ = self.fill_reader_layers();
+        }
+    }
+
     /// How many levels thread `co` has.
     pub fn host_level_count(&self, co: Gc<Coro>) -> usize {
         self.host_levels(co).levels.len()
@@ -147,7 +156,12 @@ impl Vm {
 
     /// PUC `lua_getlocal`: the name and value of local `n` of level `i` of
     /// `co` (negative `n`: a vararg, 5.2+).
-    pub fn host_local(&self, co: Gc<Coro>, i: usize, n: i64) -> Option<(String, Value)> {
+    ///
+    /// It takes `&mut self` because a slot under a `load` reader may hold
+    /// an object PUC's parser or undumper has there, which luna makes when
+    /// it is first looked at.
+    pub fn host_local(&mut self, co: Gc<Coro>, i: usize, n: i64) -> Option<(String, Value)> {
+        self.host_fill_reader_layers();
         let ts = self.host_levels(co);
         let (name, at) = self.find_local(&ts, i, n)?;
         let v = match at {
@@ -161,6 +175,7 @@ impl Vm {
     /// PUC `lua_setlocal`: store `v` in local `n` of level `i` of `co`, and
     /// return its name.
     pub fn host_set_local(&mut self, co: Gc<Coro>, i: usize, n: i64, v: Value) -> Option<String> {
+        self.host_fill_reader_layers();
         let ts = self.host_levels(co);
         let (name, at) = self.find_local(&ts, i, n)?;
         drop(ts);

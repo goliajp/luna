@@ -13,6 +13,11 @@ fn debug_locals() {
 }
 
 #[test]
+fn debug_reader_locals() {
+    check("debug_reader_locals")
+}
+
+#[test]
 fn debug_upvalues() {
     check("debug_upvalues")
 }
