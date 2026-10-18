@@ -82,3 +82,30 @@ fn uncallable_gc_warns() {
         status: 0,
     }]);
 }
+
+/// 5.1's `docall` and 5.2's `report` force a complete collection after an
+/// error: an object already unreachable is finalized then, before the
+/// ones the state's close finalizes.
+#[test]
+fn collection_after_error() {
+    let case = Case {
+        files: &[(
+            "fin.lua",
+            "local function mk(name)\n  if newproxy then\n    local p = newproxy(true)\n    getmetatable(p).__gc = function() io.stdout:write(name, \"\\n\") end\n    return p\n  end\n  return setmetatable({}, {__gc = function() io.stdout:write(name, \"\\n\") end})\nend\nlocal u = mk(\"unreachable\")\ng = mk(\"global\")\nu = nil\nerror(\"boom\", 0)\n",
+        )],
+        args: &["fin.lua"],
+        stdin: None,
+        env: &[],
+    };
+    for (d, stdout) in [
+        ("5.1", "unreachable\nglobal\n"),
+        ("5.2", "unreachable\nglobal\n"),
+        ("5.3", "global\nunreachable\n"),
+        ("5.4", "global\nunreachable\n"),
+        ("5.5", "global\nunreachable\n"),
+    ] {
+        let o = case.run(d);
+        assert_eq!(o.stdout, stdout, "--lua={d}");
+        assert_eq!(o.status, 1, "--lua={d}");
+    }
+}

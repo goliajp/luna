@@ -52,6 +52,16 @@ impl Interp {
             },
         };
         self.message(&msg);
+        // 5.2 forces a complete collection in case of errors
+        if v == LuaVersion::Lua52 {
+            self.collect_after_error();
+        }
+    }
+
+    /// `lua_gc(L, LUA_GCCOLLECT, 0)` after a chunk failed (5.1's `docall`,
+    /// 5.2's `report`): whatever a finalizer raises there goes unreported.
+    fn collect_after_error(&mut self) {
+        let _ = self.vm.host_gc(2, [0; 3]);
     }
 
     /// `lua.c`'s `docall`: call `f` with `args` under the message handler.
@@ -59,9 +69,20 @@ impl Interp {
         let msgh = self.vm.native(msghandler);
         // lua.c makes the call from inside `pmain`, the C function the
         // whole interpreter runs in: a traceback ends with that level
-        self.vm
+        let r = self
+            .vm
             .call_value_with_handler_in_c(f, args, msgh)
-            .map_err(|e| e.0)
+            .map_err(|e| e.0);
+        // 5.1 forces a complete collection in case of errors
+        if let Err(e) = r
+            && self.version() == LuaVersion::Lua51
+        {
+            // the message stays on the stack meanwhile
+            let held = self.vm.pin_host(e);
+            self.collect_after_error();
+            let _ = self.vm.unpin(held);
+        }
+        r
     }
 
     /// `dochunk`: run a loaded chunk, reporting a failure to load or run it.
