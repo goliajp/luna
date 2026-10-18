@@ -64,14 +64,23 @@ pub(crate) fn record(d: Dialect, opening: Opening) -> (&'static [u32], &'static 
 /// middle of a cycle, on this pointer width: `S state debt estimate
 /// traversed`, then `B path` for each black object, `G path` for each gray
 /// one in the order the collector takes them, `A path` for each one gray
-/// again (a path from the registry `R` or the main thread `L`; a string by
-/// its bytes, `S:` and hex).
+/// again, and in the sweep `U colour path` for each object still to be
+/// swept, in its order (a path from the registry `R` or the main thread
+/// `L`; a string by its bytes, `S:` and hex).
 pub(crate) fn midcycle(d: Dialect) -> Option<&'static [&'static str]> {
     use data::*;
-    match d {
-        Dialect::L52 if cfg!(target_pointer_width = "64") => Some(STATE_52H_64),
-        Dialect::L52 => Some(STATE_52H_32),
-        _ => None,
+    if cfg!(target_pointer_width = "64") {
+        match d {
+            Dialect::L52 => Some(STATE_52H_64),
+            Dialect::L55 => Some(STATE_55H_64),
+            _ => None,
+        }
+    } else {
+        match d {
+            Dialect::L52 => Some(STATE_52H_32),
+            Dialect::L53 => Some(STATE_53H_32),
+            _ => None,
+        }
     }
 }
 
