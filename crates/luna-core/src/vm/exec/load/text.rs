@@ -28,6 +28,16 @@ impl TextLoad {
     /// the end. Input past the loader's byte budget fails the load with
     /// "not enough memory", as [`Vm::load`] does.
     pub fn parse(self, first: Vec<u8>, feed: &mut dyn FnMut(&mut Vec<u8>) -> bool) -> ParsedText {
+        self.parse_open(first, &mut |buf, _| feed(buf))
+    }
+
+    /// [`TextLoad::parse`], `feed` told as well how many functions the
+    /// parse has open (main included).
+    pub(crate) fn parse_open(
+        self,
+        first: Vec<u8>,
+        feed: &mut dyn FnMut(&mut Vec<u8>, u32) -> bool,
+    ) -> ParsedText {
         let oom = || SyntaxError {
             line: 0,
             msg: b"not enough memory".to_vec(),
@@ -45,10 +55,10 @@ impl TextLoad {
         drop(first);
         let mut over = false;
         let mut piece = Vec::new();
-        let mut capped = |buf: &mut LVec<u8>| -> Result<bool, Oom> {
+        let mut capped = |buf: &mut LVec<u8>, open: u32| -> Result<bool, Oom> {
             piece.clear();
             // the reader runs Lua code, outside the load's unwinding
-            let more = outside_load(|| feed(&mut piece));
+            let more = outside_load(|| feed(&mut piece, open));
             if buf.len() + piece.len() > budget {
                 over = true;
                 return Ok(false);

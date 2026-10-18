@@ -40,6 +40,13 @@ pub(super) struct Cur {
 }
 
 impl<'s> TokenSource<'s> {
+    /// The parse opened or closed a function (see `Source::opened`).
+    pub(super) fn opened(&mut self, open: bool) {
+        if let TokenSource::Stream(l) = self {
+            l.source_mut().opened(open);
+        }
+    }
+
     pub(super) fn next_token(&mut self) -> Result<Cur, SyntaxError> {
         match self {
             TokenSource::Lexer(l) => lexed(l),

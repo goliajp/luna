@@ -3,6 +3,9 @@
 use super::*;
 use crate::runtime::{Gc, LuaStr};
 
+mod reader;
+use reader::{ReaderSlot, next_piece};
+
 /// `load`. 5.1 only loads from a reader function (`loadstring` takes the
 /// strings); 5.2+ takes a string — or a number, which `lua_tolstring`
 /// renders — or a reader, then an optional chunk name, mode and env.
@@ -57,25 +60,6 @@ fn load_mode(vm: &mut Vm, a: Args, i: u32) -> Result<Option<Gc<LuaStr>>, LuaErro
     Ok(mode)
 }
 
-/// The next piece of a `load` reader: `None` when it returns nil, no
-/// value or the empty string; a string or number piece is its bytes. Any
-/// other value, or an error the reader raises, fails the load softly with
-/// the message `load` returns after its nil. The reader runs with the
-/// thread non-yieldable, as under PUC's `lua_load`.
-fn next_piece(vm: &mut Vm, reader: Value) -> Result<Option<Vec<u8>>, Value> {
-    let r = vm.call_value(reader, &[]).map_err(|e| e.0)?;
-    match r.first() {
-        None | Some(Value::Nil) => Ok(None),
-        Some(&v) => match argcheck::to_str_bytes(vm, v) {
-            Some(b) if b.is_empty() => Ok(None),
-            Some(b) => Ok(Some(b)),
-            None => Err(vm
-                .str_value(b"reader function must return a string")
-                .unwrap_or_else(|e| e.0)),
-        },
-    }
-}
-
 /// `load` with a reader function. A text chunk is parsed as the reader
 /// hands it over, and the reader is called only when the parser moves past
 /// the end of what it has, as PUC's parser does: a syntax error stops the
@@ -100,6 +84,7 @@ fn read_and_load(
     mode: Option<&[u8]>,
 ) -> Result<u32, LuaError> {
     let fail = |vm: &mut Vm, msg: Value| vm.nat_ret(a.fs, &[Value::Nil, msg]);
+    let mut rs = ReaderSlot::new(vm, a)?;
     if let Err(e) = vm.host_load_begin() {
         return fail(vm, e.0);
     }
@@ -108,22 +93,23 @@ fn read_and_load(
     let counted = vm.heap.puc.silent == 0;
     let mut splices = Vec::new();
     let mut fed = 0u32;
-    let mut spliced = |vm: &mut Vm, at: u32| {
+    let mut spliced = |vm: &mut Vm, rs: &mut ReaderSlot, at: u32, open: Option<u32>| {
         let mark = counted.then(|| vm.heap.defer_begin());
-        let r = next_piece(vm, reader);
+        let r = next_piece(vm, reader, rs, open);
         if let Some(m) = mark {
             splices.push((at, vm.heap.defer_end(m)));
         }
         r
     };
-    let mut first = match spliced(vm, 0) {
+    let mut first = match spliced(vm, &mut rs, 0, None) {
         Ok(p) => p,
         Err(msg) => return fail(vm, msg),
     };
     // 5.1 peeks at the first character and then reads it again, so a
     // reader that signals the end at once is asked a second time
+    // (from the scanner, the main function open)
     if first.is_none() && vm.version() == LuaVersion::Lua51 {
-        first = match spliced(vm, 0) {
+        first = match spliced(vm, &mut rs, 0, Some(1)) {
             Ok(p) => p,
             Err(msg) => return fail(vm, msg),
         };
@@ -137,7 +123,7 @@ fn read_and_load(
         let budget = vm.loader_input_budget();
         let mut buf = crate::runtime::mem::LVec::from_slice(vm.heap.mem(), &first)?;
         loop {
-            match next_piece(vm, reader) {
+            match next_piece(vm, reader, &mut rs, None) {
                 Ok(Some(p)) if p.len() > budget.saturating_sub(buf.len()) => {
                     let m = vm.mem_err().0;
                     return fail(vm, m);
@@ -159,18 +145,21 @@ fn read_and_load(
     }
     let mut failed = None;
     fed += first.len() as u32;
-    let parsed = text.parse(first, &mut |buf| match spliced(vm, fed) {
-        Ok(Some(p)) => {
-            fed += p.len() as u32;
-            buf.extend_from_slice(&p);
-            true
-        }
-        Ok(None) => false,
-        Err(msg) => {
-            failed = Some(msg);
-            false
-        }
-    });
+    let parsed = text.parse_open(
+        first,
+        &mut |buf, open| match spliced(vm, &mut rs, fed, Some(open)) {
+            Ok(Some(p)) => {
+                fed += p.len() as u32;
+                buf.extend_from_slice(&p);
+                true
+            }
+            Ok(None) => false,
+            Err(msg) => {
+                failed = Some(msg);
+                false
+            }
+        },
+    );
     if let Some(msg) = failed {
         return fail(vm, msg);
     }
