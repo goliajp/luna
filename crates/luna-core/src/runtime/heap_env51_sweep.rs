@@ -5,8 +5,16 @@ use super::*;
 impl Heap {
     /// The sweep reaches `cur` (`after`: has swept it): the records swept
     /// with it, as PUC sweeps them. Returns how many.
-    #[inline]
+    #[inline(always)]
     pub(in crate::runtime) fn env51_sweep(&mut self, cur: *mut GcHeader, after: bool) -> i64 {
+        match &self.env51_box {
+            Some(e) if e.ats.contains(&cur) => self.env51_sweep_at(cur, after),
+            _ => 0,
+        }
+    }
+
+    #[inline(never)]
+    fn env51_sweep_at(&mut self, cur: *mut GcHeader, after: bool) -> i64 {
         let Some(e) = &mut self.env51_box else {
             return 0;
         };
@@ -50,14 +58,18 @@ impl Heap {
     #[inline]
     pub(in crate::runtime) fn env51_forget(&mut self, h: *mut GcHeader) {
         if let Some(e) = &mut self.env51_box {
+            if !e.owners.is_empty() {
+                e.owners.retain(|o| o.0 != h);
+            }
+            if !e.ats.contains(&h) {
+                return;
+            }
             for g in e.gens.iter_mut() {
                 for a in g.anchors.iter_mut().filter(|a| a.at == h) {
                     a.at = ptr::null_mut();
                 }
             }
-            if !e.owners.is_empty() {
-                e.owners.retain(|o| o.0 != h);
-            }
+            e.ats.retain(|&a| a != h);
         }
     }
 
