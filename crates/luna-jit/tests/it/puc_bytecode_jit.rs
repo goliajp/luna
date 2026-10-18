@@ -62,6 +62,18 @@ fn compile(luac: &str, dialect: &str, path: &Path) -> Vec<u8> {
     bytes
 }
 
+/// A Vm with the libraries open, with the JIT or not, its strings hashed
+/// with a fixed seed: where a collection falls depends on how keys
+/// collide, so the two runs compared share one.
+fn vm_for(version: LuaVersion, jit: bool) -> Vm {
+    let mut vm = Vm::new_minimal_with_hash_seed(version, 1);
+    if jit {
+        luna_jit::install_default_jit(&mut vm);
+    }
+    vm.open_all_libs().expect("the libraries open");
+    vm
+}
+
 /// Run `bytes` with `print` / `io.write` captured: the output, or the error
 /// as the standalone interpreter would show it.
 fn run(vm: &mut Vm, path: &Path, bytes: &[u8]) -> Result<String, String> {
@@ -108,8 +120,8 @@ fn puc_bytecode_runs_the_same_with_the_jit() {
         let mut jit_activity = 0u64;
         for f in &fixtures(dialect) {
             let bytes = compile(&luac, dialect, f);
-            let interp = run(&mut Vm::new(version), f, &bytes);
-            let mut vm = luna_jit::new_with_jit(version);
+            let interp = run(&mut vm_for(version, false), f, &bytes);
+            let mut vm = vm_for(version, true);
             let jit = run(&mut vm, f, &bytes);
             // Only these fixtures count: others may JIT source they load
             // with `load`, which says nothing about translated code.
@@ -123,8 +135,8 @@ fn puc_bytecode_runs_the_same_with_the_jit() {
             // The same program compiled by luna itself tells a JIT defect
             // (it diverges there too) from a translation one (it does not).
             let source = std::fs::read(f).expect("read fixture");
-            let src_interp = run(&mut Vm::new(version), f, &source);
-            let src_jit = run(&mut luna_jit::new_with_jit(version), f, &source);
+            let src_interp = run(&mut vm_for(version, false), f, &source);
+            let src_jit = run(&mut vm_for(version, true), f, &source);
             let line = format!(
                 "{}:\n  interpreter: {interp:?}\n  jit:         {jit:?}",
                 f.display()
@@ -148,4 +160,30 @@ fn puc_bytecode_runs_the_same_with_the_jit() {
         );
     }
     assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// `gc-trace`: one fixture's PUC bytecode run as the test above runs it,
+/// on the interpreter or (`LUNA_PBJ_JIT=1`) with the JIT, its accounting
+/// trace written to `R38_TRACE`: for comparing the two. Ignored: run by
+/// hand with `LUNA_PBJ_FILE` (a `luac` output) and `LUNA_PBJ_VERSION`
+/// (51 to 55).
+#[test]
+#[ignore]
+fn puc_bytecode_trace() {
+    let Ok(file) = std::env::var("LUNA_PBJ_FILE") else {
+        return;
+    };
+    let v = match std::env::var("LUNA_PBJ_VERSION").as_deref() {
+        Ok("51") => LuaVersion::Lua51,
+        Ok("52") => LuaVersion::Lua52,
+        Ok("53") => LuaVersion::Lua53,
+        Ok("54") => LuaVersion::Lua54,
+        _ => LuaVersion::Lua55,
+    };
+    let bytes = std::fs::read(&file).expect("the chunk");
+    let mut vm = vm_for(
+        v,
+        std::env::var_os("LUNA_PBJ_JIT").is_some_and(|j| j == "1"),
+    );
+    println!("{:?}", run(&mut vm, Path::new(&file), &bytes));
 }
