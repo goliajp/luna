@@ -184,11 +184,28 @@ impl Vm {
                 return Err(self.table_error(e));
             }
         }
-        // the parts are PUC's size: the same keys put in in the same order
+        // the parts are PUC's size: the same keys put in in the same order.
+        // But 5.5's chunk table, which loses keys: a new key whose main
+        // position holds a removed one takes that node in PUC, which
+        // depends on where its objects are, as PUC's addresses do from run
+        // to run; there the parts are given the sizes the count has
+        let lost: std::collections::HashSet<u32> = view
+            .ops
+            .iter()
+            .filter(|op| op.val.is_none())
+            .map(|op| op.tab)
+            .collect();
+        let l55 = self.version == LuaVersion::Lua55;
         for &(id, a, n) in &view.sizes {
-            if let Some(t) = tabs.get(&id)
-                && (t.asize() as u64, t.node_count() as u64) != (a, n)
-            {
+            let Some(&t) = tabs.get(&id) else { continue };
+            if (t.asize() as u64, t.node_count() as u64) == (a, n) {
+                continue;
+            }
+            if l55 && lost.contains(&id) {
+                // SAFETY: a table made above, reached by nothing else yet
+                let r = unsafe { t.as_mut() }.resize(&mut self.heap, a as usize, n as usize);
+                r.map_err(|e| self.table_error(e))?;
+            } else {
                 self.g.reader_size_mismatch += 1;
             }
         }
