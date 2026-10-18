@@ -43,13 +43,14 @@ fn fixtures(dialect: &str) -> Vec<PathBuf> {
         .map(|d| d.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
     // a count fixture reads `collectgarbage("count")`, and a finalizer
-    // batches fixture where the automatic steps run finalizers, both of
+    // batches or `_gcauto` fixture where the automatic steps run, all of
     // which loading a dump instead of the text changes
     out.retain(|p| {
         let name = p.to_string_lossy();
         p.extension().is_some_and(|x| x == "lua")
             && !name.contains("_count")
             && !name.contains("_finalizer_batches")
+            && !name.contains("_gcauto")
     });
     out.sort();
     out
