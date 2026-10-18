@@ -71,12 +71,16 @@ impl Vm {
                 } else {
                     inst.c() as i64
                 };
-                // one barrier covers every store this op does — PUC's
-                // `luaC_barrierback_` once-per-table optimisation; taken
-                // first, its flag test also refuses a read-only table
-                // (only one marked from outside between its constructor
-                // and this op, by a debug hook, can be)
-                if !self.heap.store_barrier(t) {
+                // one barrier covers every store this op does, as PUC's
+                // `luaC_barrierback` per value would; taken first, its flag
+                // test also refuses a read-only table (only one marked from
+                // outside between its constructor and this op, by a debug
+                // hook, can be)
+                let from = (abs_a + 1) as usize;
+                if !self
+                    .heap
+                    .store_barrier(t, &self.stack[from..from + n as usize])
+                {
                     return Err(self.table_error(TableError::ReadOnly));
                 }
                 let last = offset as u64 + u64::from(n);

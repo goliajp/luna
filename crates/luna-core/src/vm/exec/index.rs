@@ -219,9 +219,10 @@ impl Vm {
                     // a read-only table refuses the write whatever its
                     // metatable says, here and at every table further
                     // along the chain (Redis `luaV_settable`)
-                    // (the write barrier is taken here, before the write: its
-                    // one bit test covers the read-only check too)
-                    if !self.heap.store_barrier(tb) {
+                    // (the write barrier's one bit test covers the read-only
+                    // check too; with nothing stored yet it sends no table
+                    // back to gray)
+                    if !self.heap.store_barrier(tb, &[]) {
                         return Err(self.readonly_error());
                     }
                     // Single-walk collapse — Table::try_set_existing
@@ -238,6 +239,7 @@ impl Vm {
                     // the table and does not collect
                     if !std::mem::take(&mut skip) && unsafe { tb.as_mut() }.set_existing_raw(key, v)
                     {
+                        self.heap.store_barrier(tb, &[v]);
                         return Ok(MmOut::Done(Value::Nil));
                     }
                     let mm = self.get_mm(cur, Mm::NewIndex);

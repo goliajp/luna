@@ -239,7 +239,7 @@ fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value, before: u32) -> Result<(),
                 }
                 Err(_) => return Err(vm.rt_err("table overflow")),
             }
-            vm.barrier_back_table(t);
+            vm.heap.barrier_store(t, &[v]);
         }
         return Ok(());
     }

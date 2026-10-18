@@ -62,27 +62,40 @@ impl Heap {
         unsafe { self.barrier_back_header(parent.header()) }
     }
 
-    /// The write barrier an in-place table store takes before it writes:
-    /// `true` when the store may go ahead (after sending a black table back
-    /// to gray, as [`Self::barrier_back`] does), `false`, having done
-    /// nothing, when the table is read-only. One bit test covers both
+    /// The write barrier a table store of `vals` (the key and the value,
+    /// or a list's values) takes before it writes: `true` when the store
+    /// may go ahead (after sending a black table that takes a white object
+    /// back to gray, as PUC's `luaC_barrierback` does), `false`, having
+    /// done nothing, when the table is read-only. One bit test covers both
     /// cases (`GcHeader::plain_store`).
     #[inline(always)]
-    pub(crate) fn store_barrier(&mut self, t: Gc<crate::runtime::table::Table>) -> bool {
+    pub(crate) fn store_barrier(
+        &mut self,
+        t: Gc<crate::runtime::table::Table>,
+        vals: &[Value],
+    ) -> bool {
         if t.hdr.plain_store() {
             return true;
         }
-        self.store_barrier_slow(t)
+        self.store_barrier_slow(t, vals)
     }
 
     #[cold]
     #[inline(never)]
-    fn store_barrier_slow(&mut self, t: Gc<crate::runtime::table::Table>) -> bool {
+    fn store_barrier_slow(&mut self, t: Gc<crate::runtime::table::Table>, vals: &[Value]) -> bool {
         if t.is_readonly() {
             return false;
         }
-        self.barrier_back(t);
+        self.barrier_store(t, vals);
         true
+    }
+
+    /// PUC's `luaC_barrierback` for a store of `vals` into `t`, read-only
+    /// or not: a black table that takes a white object goes back to gray.
+    pub fn barrier_store<T: GcObject>(&mut self, t: Gc<T>, vals: &[Value]) {
+        if vals.iter().any(|&v| is_white_object(v)) {
+            self.barrier_back(t);
+        }
     }
 
     /// [`Self::barrier_back`] on the parent's header, one body for every
@@ -140,4 +153,19 @@ impl Heap {
             check(h);
         }
     }
+}
+
+/// Whether `v` is an object marking has not reached (PUC `iswhite`).
+fn is_white_object(v: Value) -> bool {
+    let h = match v {
+        Value::Str(s) => s.as_ptr() as *mut GcHeader,
+        Value::Table(t) => t.as_ptr() as *mut GcHeader,
+        Value::Closure(c) => c.as_ptr() as *mut GcHeader,
+        Value::Native(n) => n.as_ptr() as *mut GcHeader,
+        Value::Coro(c) => c.as_ptr() as *mut GcHeader,
+        Value::Userdata(u) => u.as_ptr() as *mut GcHeader,
+        _ => return false,
+    };
+    // SAFETY: `v` holds a live handle; only the flag byte is read
+    is_white(unsafe { (*h).flags })
 }

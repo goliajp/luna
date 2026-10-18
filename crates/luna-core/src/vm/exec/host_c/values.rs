@@ -91,7 +91,8 @@ impl Vm {
                 // SAFETY: `t` is held by the caller's stack slot; the borrow
                 // covers one store and `mt` is a separate handle
                 unsafe { t.as_mut() }.set_metatable(mt);
-                self.heap.barrier_back(t);
+                self.heap
+                    .barrier_store(t, &[mt.map_or(Value::Nil, Value::Table)]);
                 if mt.is_some() {
                     self.check_finalizer(t)?;
                 }
