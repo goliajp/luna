@@ -81,7 +81,7 @@ impl Heap {
                 }
             }
         }
-        self.atomic_tail(&mut m);
+        self.puc.udsize = self.atomic_tail(&mut m, run);
         if self.table_dialect == crate::runtime::table::Dialect::L52 {
             self.color_fixed_strings(0);
         }

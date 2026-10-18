@@ -222,7 +222,8 @@ impl Heap {
                     }
                     _ => sub & UNCOUNTED != 0,
                 };
-                cls & UNLISTED == 0 && !own
+                // one waiting for its finalizer is on 5.1's `tmudata`
+                cls & UNLISTED == 0 && !own && f & DEFERRED == 0
             } else {
                 (f & FIN) | (sub & UNCOUNTED) | (cls & UNLISTED) == 0
             }
@@ -249,7 +250,11 @@ impl Heap {
                 }
                 _ => is_uncounted(h),
             };
-            if (if d51 { own51 } else { is_uncounted(h) }) || (*h).flags & FIN != 0 && !d51 {
+            let pending51 = d51 && (*h).flags & DEFERRED != 0;
+            if (if d51 { own51 } else { is_uncounted(h) })
+                || (*h).flags & FIN != 0 && !d51
+                || pending51
+            {
                 return false;
             }
             match (*h).tag {

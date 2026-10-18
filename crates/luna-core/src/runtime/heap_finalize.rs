@@ -12,9 +12,11 @@ impl Heap {
     /// runs LIFO. luna's `finalize` is a Vec that grows forward, so iterate
     /// it in reverse here to match the LIFO contract (gc.lua's userdata
     /// section asserts the finalizers fire from value 10 back to 0).
-    pub(super) fn separate_finalizables(&mut self, m: &mut Marker) {
+    /// Returns PUC's size of what it moved (5.1 `luaC_separateudata`'s).
+    pub(super) fn separate_finalizables(&mut self, m: &mut Marker) -> i64 {
         let mut i = self.finalize.len();
         let mut queued = false;
+        let mut dead = 0;
         while i > 0 {
             i -= 1;
             let h = self.finalize[i];
@@ -72,6 +74,14 @@ impl Heap {
                 // SAFETY: `h` is the allocated header read above; only its flag
                 // byte is written
                 unsafe { (*h).flags = ((*h).flags & !(FIN | DEFERRED)) | FINALIZED };
+                // 5.1 moves it off the list it sweeps until its finalizer
+                // runs (`tmudata`), which `DEFERRED` stands for there
+                if self.gc_event_51.is_some() {
+                    // SAFETY: as above
+                    unsafe { (*h).flags |= DEFERRED };
+                }
+                // SAFETY: as above
+                dead += unsafe { self.puc_objsize(h) } as i64;
                 self.queue_to_finalize(h);
                 self.finalize[i] = ptr::null_mut();
                 queued = true;
@@ -88,6 +98,7 @@ impl Heap {
         if queued {
             self.finalize.retain(|h| !h.is_null());
         }
+        dead
     }
 
     /// List `h` (not yet listed) for finalization, keeping room in
@@ -257,6 +268,9 @@ impl Heap {
     pub(crate) fn take_one_tobefnz(&mut self) -> Option<crate::runtime::Value> {
         let &h = self.tobefnz.get(self.tobefnz_head)?;
         self.tobefnz_head += 1;
+        // 5.1's `GCTM` puts it back on the list it sweeps
+        // SAFETY: a queued object is allocated until its finalizer has run
+        unsafe { (*h).flags &= !DEFERRED };
         let n = self.tobefnz.len();
         if self.tobefnz_head == n {
             self.tobefnz.clear();
