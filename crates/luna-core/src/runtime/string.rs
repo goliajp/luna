@@ -29,6 +29,9 @@ pub struct LuaStr {
     hash: Cell<u32>,
     hashed: Cell<bool>,
     short: bool,
+    /// 5.1 and 5.2: where the string is in its chain of PUC's string table,
+    /// the newest highest (`Heap::strt_enter`)
+    chain: Cell<u16>,
     // `hdr.aux` is the byte length; that many bytes follow the struct
 }
 
@@ -85,6 +88,15 @@ impl crate::runtime::heap::Gc<LuaStr> {
     /// pointer is valid while the string is alive.
     pub fn as_c_ptr(&self) -> *const std::ffi::c_char {
         self.as_bytes().as_ptr().cast()
+    }
+
+    /// Its place in its chain of PUC's string table (5.1, 5.2).
+    pub(crate) fn chain(&self) -> u16 {
+        self.chain.get()
+    }
+
+    pub(crate) fn set_chain(&self, k: u16) {
+        self.chain.set(k);
     }
 
     /// The hash field as it stands: a short string's hash, a long string's
@@ -233,6 +245,7 @@ fn alloc_str_of(
             hash: Cell::new(hash),
             hashed: Cell::new(hashed),
             short,
+            chain: Cell::new(0),
         });
         let mut dst = p.add(1) as *mut u8;
         for part in parts {

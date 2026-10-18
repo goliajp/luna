@@ -57,6 +57,7 @@ impl Heap {
         }
         if d <= Dialect::L52 {
             self.acct_string(memerr);
+            self.strt_settle();
         }
         if d == Dialect::L51 {
             self.pace.set_threshold(4 * self.bytes as i64);
@@ -86,6 +87,7 @@ impl Heap {
     /// table's place given back with it.
     pub(crate) fn acct_stand_strt(&mut self, h: *mut GcHeader, len: usize) {
         self.acct_string(len);
+        self.strt_settle();
         let size = self.sizes.string(len, false);
         self.stand_sizes_on(h, [size | STRT_STAND]);
     }
@@ -131,6 +133,9 @@ impl Heap {
             super::set_uncounted(h, true);
         } else {
             self.acct_string(len);
+            if held {
+                self.strt_enter(h);
+            }
         }
     }
 
@@ -146,6 +151,7 @@ impl Heap {
         unsafe { self.born(h) };
         super::set_uncounted(h, false);
         self.acct_string(len);
+        self.strt_enter(h);
     }
 
     /// The parser's string of the chunk name `s`: counted now if luna made

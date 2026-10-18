@@ -111,6 +111,7 @@ impl Heap {
                         acct::set_uncounted(p as *mut GcHeader, true);
                     } else {
                         self.acct_string(len);
+                        self.strt_enter(p as *mut GcHeader);
                     }
                 }
             }
