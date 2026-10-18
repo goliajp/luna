@@ -129,9 +129,10 @@ impl Vm {
         if self.version == LuaVersion::Lua51 {
             self.heap.mark_tobefnz(&mut m);
         }
-        // 5.3 counts what the roots other than the threads reach; the
-        // threads, gray again, are traversed with `grayagain`, uncounted
-        let roots = if self.version == LuaVersion::Lua53 {
+        // 5.2 and 5.3 count what the roots other than the threads reach
+        // (a basic type's metatable made meanwhile); the threads, gray
+        // again, are traversed with `grayagain`, uncounted
+        let roots = if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
             self.mark_state_roots(&mut m, true);
             let w = self.heap.drain_work(&mut m, Some(run));
             self.mark_threads_held(&mut m);
