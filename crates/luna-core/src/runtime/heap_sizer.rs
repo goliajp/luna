@@ -23,12 +23,19 @@ impl Sizer {
         // SAFETY: the caller's contract; the tag names the type
         unsafe {
             if (*h).tag != ObjTag::Coro {
-                if is_uncounted(h) {
-                    // what an object of luna's stands for
+                // what an object stands for besides itself (all of it, for
+                // one of luna's own): PUC marks those objects with it
+                let uncounted = is_uncounted(h);
+                let stands = if uncounted || (*h).cls & STANDS != 0 {
                     let s = self.stand_ins.iter().filter(|s| s.0 == h);
-                    return s.map(|s| s.1).sum::<usize>() as i64;
+                    s.map(|s| s.1).sum::<usize>() as i64
+                } else {
+                    0
+                };
+                if uncounted {
+                    return stands;
                 }
-                return pace::objsize(&self.sizes, d, &self.own, h) as i64;
+                return pace::objsize(&self.sizes, d, &self.own, h) as i64 + stands;
             }
             let r = &self.run;
             let (size, ci) = if h == r.h {
