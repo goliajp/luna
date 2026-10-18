@@ -63,6 +63,7 @@ mod jit_call;
 mod jit_handoff;
 mod jit_levels;
 mod main_stack;
+pub(crate) mod reader_layers;
 pub use jit_handoff::HandoffFrame;
 use jit_handoff::JitRun;
 pub use jit_levels::JitLimits;

@@ -43,17 +43,40 @@ impl ReaderSlot {
         }
     }
 
-    /// What the parser holds on the stack with `open` functions open
-    /// (`None`: it has not started).
-    fn parser_slots(vm: &Vm, open: Option<u32>) -> u32 {
-        match (vm.version(), open) {
+    /// What the parser (or the undumper) holds on the stack at `phase`.
+    fn parser_slots(vm: &Vm, phase: Phase) -> u32 {
+        match (vm.version(), phase) {
             // the anchor table goes on before the first read
             (LuaVersion::Lua55, _) => 1,
-            (_, None) => 0,
-            (LuaVersion::Lua51, Some(n)) => 2 * n,
-            (LuaVersion::Lua52, Some(n)) => 1 + n,
-            _ => 2,
+            (_, Phase::Start) => 0,
+            (LuaVersion::Lua51, Phase::Text(n, _)) => 2 * n,
+            (LuaVersion::Lua52, Phase::Text(n, _)) => 1 + n,
+            (_, Phase::Text(..)) => 2,
+            (_, Phase::Binary(_, n)) => n,
         }
+    }
+}
+
+/// Where a load reading from a reader is: before the chunk is known to be
+/// text or binary, parsing text with this many functions open (the source
+/// read so far), or undumping a binary chunk (the bytes read so far, and
+/// the slots the undumper holds).
+#[derive(Clone, Copy)]
+pub(super) enum Phase<'a> {
+    Start,
+    Text(u32, &'a [u8]),
+    Binary(&'a [u8], u32),
+}
+
+/// What PUC's undumper holds on the stack at progress `p`: 5.1 the
+/// prototype of each function it is reading, 5.2 on the main closure once
+/// the header is read, and 5.3 and 5.4 a long string while its bytes are.
+pub(super) fn binary_slots(v: LuaVersion, p: &crate::vm::dump::Progress) -> u32 {
+    use crate::vm::dump::UEv;
+    let count = |f: fn(&UEv) -> bool| p.events.iter().filter(|(_, e)| f(e)).count() as u32;
+    match v {
+        LuaVersion::Lua51 => count(|e| matches!(e, UEv::Proto)) - count(|e| matches!(e, UEv::End)),
+        _ => count(|e| matches!(e, UEv::Closure(_))).min(1) + u32::from(p.long.is_some()),
     }
 }
 
@@ -68,15 +91,40 @@ pub(super) fn next_piece(
     vm: &mut Vm,
     reader: Value,
     rs: &mut ReaderSlot,
-    open: Option<u32>,
+    phase: Phase,
+    name: &[u8],
 ) -> Result<Option<Vec<u8>>, Value> {
     let reserved = ReaderSlot::reserved(vm);
-    let below = rs.base + rs.nils + ReaderSlot::parser_slots(vm, open);
+    let held = rs.base + rs.nils;
+    let parser = ReaderSlot::parser_slots(vm, phase);
     // 5.5's last result is popped here
-    vm.native_settop_nil(below).map_err(|e| e.0)?;
+    vm.native_settop_nil(held + parser).map_err(|e| e.0)?;
     let top = vm.native_top().unwrap_or(vm.top);
     argcheck::check_stack_at(vm, top, 2, "too many nested functions").map_err(|e| e.0)?;
-    let r = vm.call_value(reader, &[]).map_err(|e| e.0)?;
+    // where the debug library finds the parser's objects, made if it looks
+    let (src, open) = match phase {
+        Phase::Start => (&[][..], None),
+        Phase::Text(n, src) => (src, Some(n)),
+        Phase::Binary(src, _) => (src, None),
+    };
+    if parser > 0 {
+        vm.reader_layers
+            .push(crate::vm::exec::reader_layers::ReaderLayer {
+                thread: vm.current,
+                at: rs.fs + 1 + held,
+                n: parser,
+                src: (src.as_ptr(), src.len()),
+                name: (name.as_ptr(), name.len()),
+                open,
+                binary: matches!(phase, Phase::Binary(..)),
+                filled: false,
+            });
+    }
+    let r = vm.call_value(reader, &[]);
+    if parser > 0 {
+        vm.drop_reader_layer();
+    }
+    let r = r.map_err(|e| e.0)?;
     let v = r.first().copied().unwrap_or(Value::Nil);
     let bytes = match v {
         Value::Nil => None,
@@ -98,7 +146,7 @@ pub(super) fn next_piece(
         // 5.2 to 5.4 pop a nil, 5.1 leaves it
         (Some(_), Value::Nil) if vm.version() >= LuaVersion::Lua52 => Ok(()),
         (Some(_), Value::Nil) => {
-            if open.is_none() {
+            if matches!(phase, Phase::Start) {
                 rs.nils += 1;
             }
             vm.native_push_vals(&[Value::Nil])

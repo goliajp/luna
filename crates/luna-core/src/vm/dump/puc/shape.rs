@@ -22,6 +22,10 @@ pub(crate) enum UEv<'a> {
     Buff(u32),
 }
 
+mod cur;
+use cur::Cur;
+pub(crate) use cur::{Progress, undump_progress};
+
 /// The arrays of a prototype, in [`crate::runtime::Proto::puc_arrays`]
 /// order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -35,105 +39,51 @@ pub(crate) enum Arr {
     Upvals,
 }
 
-struct Cur<'a> {
-    b: &'a [u8],
-    p: usize,
-    out: Vec<UEv<'a>>,
-}
-
-impl<'a> Cur<'a> {
-    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
-        let s = self.b.get(self.p..self.p.checked_add(n)?)?;
-        self.p += n;
-        Some(s)
-    }
-    fn u8(&mut self) -> Option<u8> {
-        Some(self.take(1)?[0])
-    }
-    fn u32(&mut self) -> Option<u32> {
-        Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
-    }
-    fn u64(&mut self) -> Option<u64> {
-        Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
-    }
-    /// 5.4 `loadUnsigned`: the last byte has the high bit set.
-    fn var54(&mut self) -> Option<u64> {
-        let mut x = 0u64;
-        loop {
-            let b = self.u8()?;
-            x = (x << 7) | u64::from(b & 0x7f);
-            if b & 0x80 != 0 {
-                return Some(x);
-            }
-        }
-    }
-    /// 5.5 `loadVarint`: every byte but the last has the high bit set.
-    fn var55(&mut self) -> Option<u64> {
-        let mut x = 0u64;
-        loop {
-            let b = self.u8()?;
-            x = (x << 7) | u64::from(b & 0x7f);
-            if b & 0x80 == 0 {
-                return Some(x);
-            }
-        }
-    }
-    fn vec(&mut self, a: Arr, n: u64) -> Option<usize> {
-        let n = u32::try_from(n).ok()?;
-        self.out.push(UEv::Vec(a, n));
-        Some(n as usize)
-    }
-    /// 5.5 `loadAlign`: padding to a multiple of `n` from the chunk's start.
-    fn align(&mut self, n: usize) -> Option<()> {
-        let pad = (n - self.p % n) % n;
-        self.take(pad).map(|_| ())
-    }
-}
-
 /// The steps of loading `bytes`, a binary chunk of dialect `version` (the
 /// version byte) whose header is `header` bytes long; `None` if it does
 /// not read as one.
 pub(crate) fn undump_events(bytes: &[u8], header: usize) -> Option<Vec<UEv<'_>>> {
-    let mut c = Cur {
-        b: bytes,
-        p: header,
-        out: Vec::new(),
-    };
-    match bytes.get(4)? {
+    let mut c = Cur::new(bytes, header);
+    walk(&mut c)?;
+    Some(c.out)
+}
+
+fn walk(c: &mut Cur) -> Option<()> {
+    match c.b.get(4)? {
         0x51 => {
             // `luaU_undump` makes the name of a function with no source
-            c.out.push(UEv::Str(b"=?"));
-            f51(&mut c, 0)?;
+            c.ev(UEv::Str(b"=?"));
+            f51(c, 0)?;
         }
         0x52 => {
-            c.out.push(UEv::Closure(1));
-            c.out.push(UEv::Proto);
-            let ups = f52(&mut c, 0)?;
+            c.ev(UEv::Closure(1));
+            c.ev(UEv::Proto);
+            let ups = f52(c, 0)?;
             if ups != 1 {
-                c.out.push(UEv::Reclose(ups));
+                c.ev(UEv::Reclose(ups));
             }
         }
         0x53 => {
             let n = c.u8()?;
-            c.out.push(UEv::Closure(n));
-            c.out.push(UEv::Proto);
-            f53(&mut c, 0)?;
+            c.ev(UEv::Closure(n));
+            c.ev(UEv::Proto);
+            f53(c, 0)?;
         }
         0x54 => {
             let n = c.u8()?;
-            c.out.push(UEv::Closure(n));
-            c.out.push(UEv::Proto);
-            f54(&mut c, 0)?;
+            c.ev(UEv::Closure(n));
+            c.ev(UEv::Proto);
+            f54(c, 0)?;
         }
         0x55 => {
             let n = c.u8()?;
-            c.out.push(UEv::Closure(n));
-            c.out.push(UEv::Proto);
-            f55(&mut c, 0)?;
+            c.ev(UEv::Closure(n));
+            c.ev(UEv::Proto);
+            f55(c, 0)?;
         }
         _ => return None,
     }
-    Some(c.out)
+    Some(())
 }
 
 const DEEP: u32 = 250;
@@ -142,9 +92,9 @@ const DEEP: u32 = 250;
 fn s51(c: &mut Cur) -> Option<()> {
     let n = c.u64()? as usize;
     if n > 0 {
-        c.out.push(UEv::Buff(u32::try_from(n).ok()?));
+        c.ev(UEv::Buff(u32::try_from(n).ok()?));
         let s = c.take(n)?;
-        c.out.push(UEv::Str(&s[..n - 1]));
+        c.ev(UEv::Str(&s[..n - 1]));
     }
     Some(())
 }
@@ -154,7 +104,7 @@ fn f51(c: &mut Cur, depth: u32) -> Option<()> {
     if depth > DEEP {
         return None;
     }
-    c.out.push(UEv::Proto);
+    c.ev(UEv::Proto);
     s51(c)?;
     c.take(4 + 4 + 4)?;
     let n = c.u32()?;
@@ -190,7 +140,7 @@ fn f51(c: &mut Cur, depth: u32) -> Option<()> {
     for _ in 0..c.vec(Arr::Upvals, n.into())? {
         s51(c)?;
     }
-    c.out.push(UEv::End);
+    c.ev(UEv::End);
     Some(())
 }
 
@@ -199,7 +149,8 @@ fn f52(c: &mut Cur, depth: u32) -> Option<u8> {
     if depth > DEEP {
         return None;
     }
-    c.take(4 + 4 + 3)?;
+    let f = c.take(4 + 4 + 3)?;
+    c.head32(depth, f);
     let n = c.u32()?;
     let n = c.vec(Arr::Code, n.into())?;
     c.take(4 * n)?;
@@ -219,14 +170,18 @@ fn f52(c: &mut Cur, depth: u32) -> Option<u8> {
     }
     let n = c.u32()?;
     for _ in 0..c.vec(Arr::Protos, n.into())? {
-        c.out.push(UEv::Proto);
+        c.ev(UEv::Proto);
         f52(c, depth + 1)?;
     }
     let n = c.u32()?;
     let ups = c.vec(Arr::Upvals, n.into())?;
     c.take(2 * ups)?;
     // the source, then the debug information
+    let n = c.out.len();
     s51(c)?;
+    if depth == 0 {
+        c.src = c.read_since(n).or(Some(b""));
+    }
     let n = c.u32()?;
     let n = c.vec(Arr::Lines, n.into())?;
     c.take(4 * n)?;
@@ -238,7 +193,7 @@ fn f52(c: &mut Cur, depth: u32) -> Option<u8> {
     for _ in 0..c.u32()? {
         s51(c)?;
     }
-    c.out.push(UEv::End);
+    c.ev(UEv::End);
     u8::try_from(ups).ok()
 }
 
@@ -250,8 +205,8 @@ fn s53(c: &mut Cur) -> Option<()> {
         n = c.u64()?;
     }
     if n > 0 {
-        let s = c.take(n as usize - 1)?;
-        c.out.push(UEv::Str(s));
+        let s = c.long_take(n as usize - 1)?;
+        c.ev(UEv::Str(s));
     }
     Some(())
 }
@@ -261,8 +216,13 @@ fn f53(c: &mut Cur, depth: u32) -> Option<()> {
     if depth > DEEP {
         return None;
     }
+    let n = c.out.len();
     s53(c)?;
-    c.take(4 + 4 + 3)?;
+    if depth == 0 {
+        c.src = c.read_since(n).or(Some(b""));
+    }
+    let f = c.take(4 + 4 + 3)?;
+    c.head32(depth, f);
     let n = c.u32()?;
     let n = c.vec(Arr::Code, n.into())?;
     c.take(4 * n)?;
@@ -285,7 +245,7 @@ fn f53(c: &mut Cur, depth: u32) -> Option<()> {
     c.take(2 * n)?;
     let n = c.u32()?;
     for _ in 0..c.vec(Arr::Protos, n.into())? {
-        c.out.push(UEv::Proto);
+        c.ev(UEv::Proto);
         f53(c, depth + 1)?;
     }
     let n = c.u32()?;
@@ -299,7 +259,7 @@ fn f53(c: &mut Cur, depth: u32) -> Option<()> {
     for _ in 0..c.u32()? {
         s53(c)?;
     }
-    c.out.push(UEv::End);
+    c.ev(UEv::End);
     Some(())
 }
 
@@ -307,8 +267,8 @@ fn f53(c: &mut Cur, depth: u32) -> Option<()> {
 fn s54(c: &mut Cur) -> Option<()> {
     let n = c.var54()?;
     if n > 0 {
-        let s = c.take(n as usize - 1)?;
-        c.out.push(UEv::Str(s));
+        let s = c.long_take(n as usize - 1)?;
+        c.ev(UEv::Str(s));
     }
     Some(())
 }
@@ -318,10 +278,16 @@ fn f54(c: &mut Cur, depth: u32) -> Option<()> {
     if depth > DEEP {
         return None;
     }
+    let n = c.out.len();
     s54(c)?;
-    c.var54()?;
-    c.var54()?;
-    c.take(3)?;
+    if depth == 0 {
+        c.src = c.read_since(n).or(Some(b""));
+    }
+    let (line, last) = (c.var54()?, c.var54()?);
+    let f = c.take(3)?;
+    if depth == 0 {
+        c.head = Some([line, last, u64::from(f[0]), u64::from(f[1])]);
+    }
     let n = c.var54()?;
     let n = c.vec(Arr::Code, n)?;
     c.take(4 * n)?;
@@ -341,7 +307,7 @@ fn f54(c: &mut Cur, depth: u32) -> Option<()> {
     c.take(3 * n)?;
     let n = c.var54()?;
     for _ in 0..c.vec(Arr::Protos, n)? {
-        c.out.push(UEv::Proto);
+        c.ev(UEv::Proto);
         f54(c, depth + 1)?;
     }
     let n = c.var54()?;
@@ -361,7 +327,7 @@ fn f54(c: &mut Cur, depth: u32) -> Option<()> {
     for _ in 0..c.var54()? {
         s54(c)?;
     }
-    c.out.push(UEv::End);
+    c.ev(UEv::End);
     Some(())
 }
 
@@ -373,7 +339,7 @@ fn s55(c: &mut Cur) -> Option<()> {
         c.var55()?;
     } else {
         let s = c.take(n as usize)?;
-        c.out.push(UEv::Str(&s[..n as usize - 1]));
+        c.ev(UEv::Str(&s[..n as usize - 1]));
     }
     Some(())
 }
@@ -383,9 +349,11 @@ fn f55(c: &mut Cur, depth: u32) -> Option<()> {
     if depth > DEEP {
         return None;
     }
-    c.var55()?;
-    c.var55()?;
-    c.take(3)?;
+    let (line, last) = (c.var55()?, c.var55()?);
+    let f = c.take(3)?;
+    if depth == 0 {
+        c.head = Some([line, last, u64::from(f[0]), u64::from(f[1])]);
+    }
     let n = c.var55()?;
     c.align(4)?;
     let n = c.vec(Arr::Code, n)?;
@@ -409,10 +377,14 @@ fn f55(c: &mut Cur, depth: u32) -> Option<()> {
     c.take(3 * ups)?;
     let n = c.var55()?;
     for _ in 0..c.vec(Arr::Protos, n)? {
-        c.out.push(UEv::Proto);
+        c.ev(UEv::Proto);
         f55(c, depth + 1)?;
     }
+    let n = c.out.len();
     s55(c)?;
+    if depth == 0 {
+        c.src = c.read_since(n).or(Some(b""));
+    }
     let n = c.var55()?;
     let n = c.vec(Arr::Lines, n)?;
     c.take(n)?;
@@ -433,6 +405,6 @@ fn f55(c: &mut Cur, depth: u32) -> Option<()> {
             s55(c)?;
         }
     }
-    c.out.push(UEv::End);
+    c.ev(UEv::End);
     Some(())
 }

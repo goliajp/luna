@@ -135,6 +135,8 @@ impl Marker {
                             && pace::native_upvals(h) == 0
                 }
                 ObjTag::Table => (*h).cls & UNLISTED != 0,
+                // the closure standing for PUC's parser's (`reader_layers.rs`)
+                ObjTag::Closure => (*h).cls & LUNA_ONLY != 0,
                 ObjTag::Userdata => {
                     is_uncounted(h)
                         && matches!((*(h as *const Userdata)).payload, UserdataPayload::Empty)

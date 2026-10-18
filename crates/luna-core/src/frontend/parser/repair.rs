@@ -42,8 +42,10 @@ pub(crate) fn completed(
         if f.scanning || f.at < failed.at {
             return None;
         }
+        // a local's attribute: the one name every dialect takes
+        let attrib = out.trim_ascii_end().ends_with(b"<");
         out.push(b' ');
-        out.extend_from_slice(missing(&e.msg)?);
+        out.extend_from_slice(if attrib { b"const" } else { missing(&e.msg)? });
     }
     None
 }
@@ -51,7 +53,7 @@ pub(crate) fn completed(
 /// The token a parse error at the end of a source asks for.
 fn missing(msg: &[u8]) -> Option<&'static [u8]> {
     let starts = |p: &str| msg.starts_with(p.as_bytes());
-    if starts("<name> expected") || starts("'<name>' expected") {
+    if starts("<name> expected") || starts("'<name>' expected") || starts("<name> or") {
         return Some(b"_");
     }
     if starts("unexpected symbol") {
@@ -73,4 +75,35 @@ fn missing(msg: &[u8]) -> Option<&'static [u8]> {
         b"end", b"=", b")", b"]", b"}", b"(", b",", b"do", b"then", b"until", b"in", b"::", b">",
     ];
     TOKENS.into_iter().find(|t| *t == &rest[..end])
+}
+
+/// What PUC's scanner has done with `src`, all a reader has handed over
+/// so far, when it asks for the next piece: the tokens it has finished,
+/// and where the one it is reading starts (`src.len()` between tokens).
+/// It reads the byte after a token before it finishes the token, so a
+/// token that reaches the end of `src` is not finished.
+pub(crate) fn scanned_upto(src: &[u8], version: LuaVersion) -> (u32, usize) {
+    let mem = MemOwner::system();
+    let mut scratch = ParseScratch::new(mem.clone());
+    let names = scratch.chunk.names.take();
+    let lex = Lexer::interning(src, version, names, scratch.lex_buf.take());
+    let mut lex = TokenSource::Lexer(lex);
+    let mut done = 0;
+    loop {
+        match lex.next_token() {
+            Ok(c) if c.info.tok == Token::Eof => return (done, src.len()),
+            Ok(c) if c.info.span.end as usize >= src.len() => {
+                return (done, c.info.span.start as usize);
+            }
+            Ok(_) => done += 1,
+            // a string or comment the source ends inside
+            Err(_) => {
+                let start = match &lex {
+                    TokenSource::Lexer(l) => l.tok_start,
+                    _ => src.len(),
+                };
+                return (done, start.min(src.len()));
+            }
+        }
+    }
 }
