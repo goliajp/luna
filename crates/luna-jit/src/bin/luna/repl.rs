@@ -7,78 +7,10 @@ use crate::{Interp, lua_tostring};
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 
-/// `LUA_MAXINPUT`: the size of `lua.c`'s line buffer.
-const MAXINPUT: usize = 512;
-
-/// A line as the reader gave it.
-pub(crate) enum Line {
-    Text(Vec<u8>),
-    Eof,
-    /// the line editor's Ctrl-C: drop the statement being typed
-    #[cfg(feature = "repl-line-editor")]
-    Cancel,
-}
-
-enum Input {
-    Stdin,
-    #[cfg(feature = "repl-line-editor")]
-    Editor(Box<crate::line_editor::LineEditor>),
-}
-
-impl Input {
-    fn new() -> Input {
-        #[cfg(feature = "repl-line-editor")]
-        if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-            match crate::line_editor::LineEditor::new() {
-                Ok(ed) => return Input::Editor(Box::new(ed)),
-                Err(e) => eprintln!("line editor unavailable ({e}); reading plain lines"),
-            }
-        }
-        Input::Stdin
-    }
-
-    /// `lua_readline`.
-    fn read(&mut self, interp: &mut Interp, prompt: &[u8]) -> Line {
-        match self {
-            Input::Stdin => {
-                // unchecked, as lua.c's fputs / fflush
-                luna_core::stdio::write_stdout(prompt);
-                let _ = luna_core::stdio::flush_stdout();
-                match interp.vm.read_stdin_line(MAXINPUT) {
-                    Ok(Some(l)) => Line::Text(l),
-                    // fgets gives NULL at the end of input and on an error
-                    Ok(None) | Err(_) => Line::Eof,
-                }
-            }
-            #[cfg(feature = "repl-line-editor")]
-            Input::Editor(ed) => {
-                // readline writes its prompt through stdout too: what that
-                // holds goes out before it
-                let _ = luna_core::stdio::flush_stdout();
-                ed.read(&mut interp.vm, prompt)
-            }
-        }
-    }
-
-    /// `lua_saveline`: a build without readline keeps no history.
-    #[cfg_attr(not(feature = "repl-line-editor"), allow(unused_variables))]
-    fn save(&mut self, line: &[u8]) {
-        #[cfg(feature = "repl-line-editor")]
-        if let Input::Editor(ed) = self
-            && !line.is_empty()
-        {
-            ed.save(line);
-        }
-    }
-
-    fn finish(self) {
-        match self {
-            Input::Stdin => {}
-            #[cfg(feature = "repl-line-editor")]
-            Input::Editor(ed) => (*ed).finish(),
-        }
-    }
-}
+#[path = "repl/input.rs"]
+mod input;
+use input::Input;
+pub(crate) use input::Line;
 
 /// What `loadline` found.
 enum Loaded {
@@ -108,7 +40,12 @@ pub(crate) fn repl(interp: &mut Interp) -> bool {
             }
         };
         match chunk.and_then(|f| interp.docall(f, &[])) {
-            Ok(vals) => l_print(interp, vals),
+            Ok(vals) => {
+                if let Err(e) = l_print(interp, vals) {
+                    interp.report(e);
+                    break false;
+                }
+            }
             Err(e) => interp.report(e),
         }
     };
@@ -285,10 +222,20 @@ fn checklocal(line: &[u8]) {
 }
 
 /// `l_print`: the chunk's results through the global `print`, called
-/// unprotected by a message handler.
-fn l_print(interp: &mut Interp, vals: Vec<Value>) {
+/// unprotected by a message handler. The error of making room for them
+/// leaves the REPL.
+fn l_print(interp: &mut Interp, vals: Vec<Value>) -> Result<(), Value> {
     if vals.is_empty() {
-        return;
+        return Ok(());
+    }
+    // 5.2 on: `luaL_checkstack` with the results on `pmain`'s stack
+    if interp.version() >= LuaVersion::Lua52 {
+        let msg = "too many results to print";
+        let room = 20; // `LUA_MINSTACK`
+        interp
+            .vm
+            .host_check_stack(vals.len() as u32, room, msg)
+            .map_err(|e| e.0)?;
     }
     let key = interp.str_value("print");
     let print = interp.vm.globals().get(key);
@@ -301,4 +248,5 @@ fn l_print(interp: &mut Interp, vals: Vec<Value>) {
         msg.push(b')');
         interp.message(&msg);
     }
+    Ok(())
 }

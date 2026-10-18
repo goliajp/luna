@@ -202,7 +202,13 @@ impl Interp {
         let Value::Table(t) = arg else {
             return Err(self.str_value("'arg' is not a table"));
         };
-        Ok((1..=t.len()).map(|i| t.get(Value::Int(i))).collect())
+        // with `argc`, `argv` and the script on `pmain`'s stack
+        let n = t.len();
+        let msg = "too many arguments to script";
+        self.vm
+            .host_check_stack(3, n as u32 + 3, msg)
+            .map_err(|e| e.0)?;
+        Ok((1..=n).map(|i| t.get(Value::Int(i))).collect())
     }
 
     /// `runargs`: the `-e`, `-l` and (5.4 on) `-W` options before `optlim`,

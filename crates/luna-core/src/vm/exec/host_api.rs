@@ -51,12 +51,15 @@ impl Vm {
     }
 
     /// The running C function's frame reserves the stack up to `end` (PUC
-    /// `lua_checkstack` raising `ci->top`).
+    /// `lua_checkstack` raising `ci->top`); with none running on the main
+    /// thread, the host's level does.
     pub(crate) fn reserve_native_room(&mut self, end: u32) {
-        if self.running_natives.len() > self.natives_base
-            && let Some(a) = self.running_natives.last_mut()
-        {
-            a.ci_top = a.ci_top.max(end);
+        if self.running_natives.len() > self.natives_base {
+            if let Some(a) = self.running_natives.last_mut() {
+                a.ci_top = a.ci_top.max(end);
+            }
+        } else if self.current.is_none() {
+            self.g.host_ci_top = self.g.host_ci_top.max(end);
         }
     }
 
