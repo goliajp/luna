@@ -3,6 +3,10 @@
 //! time in proportion to the chunk: the undumper's walk picks up where it
 //! stopped, and what the debug library was shown is brought up to date
 //! rather than made again.
+//!
+//! A test binary of its own: the time is the process's CPU time
+//! (`os.clock`), which no test on another thread may add to and which,
+//! unlike the time on the clock, other processes do not add to either.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
@@ -27,7 +31,7 @@ return os.clock() - start
 /// The shortest of a few loads of the chunk with `n` constants, in CPU
 /// seconds.
 fn seconds(v: LuaVersion, n: i64) -> f64 {
-    (0..3)
+    (0..5)
         .map(|_| {
             let mut vm = Vm::new(v);
             let f = vm.load(SCRIPT.as_bytes(), b"=linear").expect("script");
