@@ -29,7 +29,7 @@ mod token_source;
 mod upval51;
 pub(crate) use marks::{Found, Marks, record_marks, scan, token_at};
 use operators::{UNARY_PRIORITY, bin_op_of, bin_priority, un_op_of};
-pub(crate) use repair::completed;
+pub(crate) use repair::{completed, scanned_upto};
 pub(crate) use scratch::{Failed, ParseScratch, Parsed};
 use scratch::{FnFlow, ListStacks, finish};
 pub use streams::parse_tokens;

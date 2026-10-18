@@ -66,6 +66,9 @@ pub(crate) struct CallGuards {
     /// the stack slots the host holds below the main thread's
     /// (`host_entry_layout`): its C function and its arguments
     pub(crate) host_slots: u32,
+    /// parser tables the debug library was shown whose parts differ in
+    /// size from PUC's (`reader_layers.rs`)
+    pub(crate) reader_size_mismatch: u32,
     /// metamethod, `__pairs` and `__close` continuation frames on the
     /// running thread: no frame of PUC's (its metamethod call makes one
     /// frame, the callee's), so not counted in `frames_in_use`.

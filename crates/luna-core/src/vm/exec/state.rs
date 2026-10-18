@@ -68,15 +68,11 @@ pub struct Vm {
     /// snapshot — PUC walks `luaG_funcnamefrompc` over a still-live ci, but
     /// luna's native frames are off-stack so we stash the name explicitly.
     pub(crate) errored_natives: LVec<crate::vm::callstack::ErroredNative>,
-    /// stack of native (`Value::Native`) closures currently running on the
-    /// Rust call stack. `begin_call` pushes the closure before invoking
-    /// `nc.f` and pops on return. Used by `arg_error` to detect a *nested*
-    /// native call (PUC `ar.name == NULL` at level 0 because the level-0
-    /// caller is C, not Lua) and qualify the running function's name via
-    /// `pushglobalfuncname` (e.g. `'sort'` → `'table.sort'`).
-    /// Each entry also records where the native sits on the value and
-    /// frame stacks, so the debug interface can place it among the Lua
-    /// activations as PUC's CallInfo chain would (see `callstack`).
+    /// the natives running on the Rust call stack, pushed by `begin_call`
+    /// around `nc.f`: `arg_error` tells a nested native call by them and
+    /// names the running function (`pushglobalfuncname`), and the debug
+    /// interface places each among the Lua activations by where it sits
+    /// on the value and frame stacks, as PUC's CallInfo chain (`callstack`).
     pub(crate) running_natives: LVec<crate::vm::callstack::NativeAct>,
     /// JIT sidecar. Always present (never `Option`); inert
     /// when `chunk_compiler` / `trace_compiler` are
@@ -100,6 +96,9 @@ pub struct Vm {
     /// GC-rooted working buffers of `table.sort` (and any builtin whose
     /// Rust-side values must outlive a user callback); one per nested sort.
     pub(crate) sort_scratch: LVec<LVec<Value>>,
+    /// the reader calls of the `load`s running, innermost last, whose
+    /// parser objects the debug library may ask for (`reader_layers.rs`)
+    pub(crate) reader_layers: Vec<super::reader_layers::ReaderLayer>,
     /// roots: what a library function keeps where PUC's has it on its stack
     pub(crate) lib_roots: Vec<Value>,
     /// `luaL_Buffer` boxes, each with the running natives when it was made
@@ -207,16 +206,11 @@ pub struct Vm {
     /// The C API's warning function (`lua_setwarnf`), which replaces the
     /// default one; see [`super::host_c`].
     pub(crate) host_warn: Option<super::host_c::HostWarn>,
-    /// Byte budget for source fed into `load` / `loadstring` / `Vm::load`.
-    /// Default [`Vm::DEFAULT_LOADER_INPUT_BUDGET`] (256 MiB). When the
-    /// accumulated reader output (`load(f, ...)`) or a one-shot `&[u8]`
-    /// source exceeds this, the loader returns the PUC-shaped
-    /// `not enough memory` error before the host allocator is asked to
-    /// hold the next chunk. Defends against `heavy.lua::loadrep`-style
-    /// 7 GB+ feeder loops that would otherwise SIGSEGV when `Vec::push`
-    /// crosses `isize::MAX` or the host runs out of RAM.
-    /// Embedders that genuinely need to load > 256 MiB sources widen the
-    /// cap via [`Vm::set_loader_input_budget`].
+    /// Byte budget for source fed into `load` / `loadstring` / `Vm::load`
+    /// (default [`Vm::DEFAULT_LOADER_INPUT_BUDGET`], 256 MiB): past it the
+    /// loader returns PUC's `not enough memory` before the host allocator
+    /// is asked for more, so a feeder loop of gigabytes (`heavy.lua`'s
+    /// `loadrep`) fails cleanly. [`Vm::set_loader_input_budget`] widens it.
     pub(crate) loader_input_budget: usize,
     /// PUC's `LUA_REGISTRYINDEX` table — a single Lua table the debug library
     /// exposes via `debug.getregistry`. Used to hold `_HOOKKEY` (the weak-key

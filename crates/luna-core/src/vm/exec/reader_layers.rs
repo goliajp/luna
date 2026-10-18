@@ -1,0 +1,295 @@
+//! The objects PUC's parser holds on the stack while `load` calls a
+//! reader, made only when the debug library looks at them.
+//!
+//! Each reader call registers where those objects go and what the reader
+//! has handed over so far. `debug.getlocal` and `debug.setlocal` fill the
+//! slots then (`load_acct/view.rs` finds what PUC holds); the objects are
+//! dropped when the reader returns. They are luna's own: nothing counts
+//! them, and the collector marks them as it marks luna's other objects.
+
+mod stand_in;
+
+use super::load_acct::{PVal, ReaderView};
+use super::*;
+use crate::runtime::heap::{ENV_PROTO, LUNA_ONLY, UNLISTED};
+use crate::runtime::mem::LVec;
+
+/// A reader call of a running `load`.
+pub(crate) struct ReaderLayer {
+    /// the thread the load runs on
+    pub(crate) thread: Option<Gc<Coro>>,
+    /// the parser's slots: `n` from `at`
+    pub(crate) at: u32,
+    pub(crate) n: u32,
+    /// what the reader has handed over so far, and the chunk's name; both
+    /// the load's, which lasts as long as the call
+    pub(crate) src: (*const u8, usize),
+    pub(crate) name: (*const u8, usize),
+    /// the functions open (`None`: the parse has not started)
+    pub(crate) open: Option<u32>,
+    /// the chunk is binary: `src` is what the undumper has
+    pub(crate) binary: bool,
+    pub(crate) filled: bool,
+}
+
+impl Vm {
+    /// Put PUC's parser objects in the slots of every reader call running
+    /// that has not had them yet.
+    pub(crate) fn fill_reader_layers(&mut self) -> Result<(), LuaError> {
+        for i in 0..self.reader_layers.len() {
+            let l = &mut self.reader_layers[i];
+            if l.filled {
+                continue;
+            }
+            l.filled = true;
+            let (thread, at, n, open, binary) = (l.thread, l.at, l.n, l.open, l.binary);
+            // SAFETY: the load that registered the call holds both buffers
+            // until the call returns, and the call is running
+            let (src, name) = unsafe {
+                (
+                    std::slice::from_raw_parts(l.src.0, l.src.1).to_vec(),
+                    std::slice::from_raw_parts(l.name.0, l.name.1).to_vec(),
+                )
+            };
+            self.heap.puc.silent += 1;
+            let objs = if binary {
+                self.undump_objects(&src)
+            } else {
+                self.reader_objects(&src, &name, open)
+            };
+            self.heap.puc.silent -= 1;
+            let objs = objs?;
+            let stack = self.stack_of_mut(thread);
+            for (k, v) in objs.into_iter().take(n as usize).enumerate() {
+                stack[at as usize + k] = v;
+            }
+        }
+        Ok(())
+    }
+
+    /// The slots of the reader call that is returning, set back to nil.
+    pub(crate) fn drop_reader_layer(&mut self) {
+        let Some(l) = self.reader_layers.pop() else {
+            return;
+        };
+        if l.filled {
+            let stack = self.stack_of_mut(l.thread);
+            let end = ((l.at + l.n) as usize).min(stack.len());
+            stack[l.at as usize..end].fill(Value::Nil);
+        }
+    }
+
+    /// The value stack of `thread`, running or not.
+    fn stack_of_mut(&mut self, thread: Option<Gc<Coro>>) -> &mut LVec<Value> {
+        match thread {
+            _ if self.is_current_thread(thread) => &mut self.stack,
+            Some(co) if self.is_main_coro(co) => self.main_stack_mut(),
+            Some(co) => {
+                self.heap.barrier_back(co);
+                // SAFETY: `co` is a suspended thread the load runs on, not
+                // the running one: the Vm holds no reference into its saved
+                // stack while this one lasts
+                unsafe { &mut co.as_mut().stack }
+            }
+            None => self.main_stack_mut(),
+        }
+    }
+
+    /// What PUC's parser holds on the stack, in order.
+    fn reader_objects(
+        &mut self,
+        src: &[u8],
+        name: &[u8],
+        open: Option<u32>,
+    ) -> Result<Vec<Value>, LuaError> {
+        if open.is_none() {
+            // only 5.5's anchor table, still empty
+            let t = self.reader_table()?;
+            return Ok(vec![Value::Table(t)]);
+        }
+        let source = self.heap.try_intern(name)?;
+        let Some(view) = self.reader_view(src, source) else {
+            return Ok(Vec::new());
+        };
+        let tabs = self.reader_tables(&view)?;
+        let tab = |id: Option<u32>| match id.and_then(|id| tabs.get(&id)) {
+            Some(&t) => Value::Table(t),
+            None => Value::Nil,
+        };
+        let main = Value::Closure(view.main);
+        Ok(match self.version {
+            LuaVersion::Lua51 => {
+                let mut out = Vec::with_capacity(2 * view.fs_tabs.len());
+                for &h in &view.fs_tabs {
+                    out.push(tab(h));
+                    out.push(self.proto_value()?);
+                }
+                out
+            }
+            LuaVersion::Lua52 => std::iter::once(main)
+                .chain(view.fs_tabs.iter().map(|&h| tab(h)))
+                .collect(),
+            LuaVersion::Lua55 => vec![tab(view.chunk_tab)],
+            _ => vec![main, tab(view.chunk_tab)],
+        })
+    }
+
+    /// What PUC's undumper holds on the stack with `src` read: 5.1 the
+    /// prototypes of the functions it is reading, 5.2 to 5.4 the main
+    /// closure and (5.3, 5.4) a long string whose bytes it is reading,
+    /// 5.5 its anchor table with the closure and the strings it saved.
+    fn undump_objects(&mut self, src: &[u8]) -> Result<Vec<Value>, LuaError> {
+        use crate::vm::dump::UEv;
+        let Some(p) = crate::vm::dump::undump_progress(src) else {
+            // the format not read yet: only 5.5's anchor table, empty
+            return Ok(match self.version {
+                LuaVersion::Lua55 => vec![Value::Table(self.reader_table()?)],
+                _ => Vec::new(),
+            });
+        };
+        let events: Vec<UEv> = p.events.iter().map(|&(_, e)| e).collect();
+        let open = |e: &UEv| matches!(e, UEv::Proto);
+        let closed = |e: &UEv| matches!(e, UEv::End);
+        if self.version == LuaVersion::Lua51 {
+            let n = events.iter().filter(|e| open(e)).count()
+                - events.iter().filter(|e| closed(e)).count();
+            return (0..n).map(|_| self.proto_value()).collect();
+        }
+        let nups = events.iter().rev().find_map(|e| match e {
+            UEv::Closure(n) | UEv::Reclose(n) => Some(*n),
+            _ => None,
+        });
+        let Some(nups) = nups else {
+            return Ok(match self.version {
+                LuaVersion::Lua55 => vec![Value::Table(self.reader_table()?)],
+                _ => Vec::new(),
+            });
+        };
+        let cl = self.undump_closure(p.src, p.head, nups)?;
+        if self.version == LuaVersion::Lua55 {
+            let t = self.reader_table()?;
+            let put = |vm: &mut Vm, k: Value, v: Value| {
+                // SAFETY: a table made above, reached by nothing else yet
+                let r = vm.table_op(|vm| unsafe { t.as_mut() }.set(&mut vm.heap, k, v));
+                r.map_err(|e| vm.table_error(e))
+            };
+            put(self, Value::Closure(cl), Value::Closure(cl))?;
+            let mut saved = 0;
+            for e in &events {
+                if let UEv::Str(s) = e {
+                    saved += 1;
+                    let s = Value::Str(self.heap.try_intern(s)?);
+                    put(self, Value::Int(saved), s)?;
+                }
+            }
+            return Ok(vec![Value::Table(t)]);
+        }
+        let mut out = vec![Value::Closure(cl)];
+        if let Some(n) = p.long {
+            // what PUC holds is a string of `n` bytes not read yet: its
+            // contents are whatever its memory had
+            out.push(Value::Str(self.heap.try_intern(&vec![0; n])?));
+        }
+        Ok(out)
+    }
+
+    /// The closure PUC's undumper is filling: of `nups` upvalues, its
+    /// function's source and first fields as far as they were read.
+    fn undump_closure(
+        &mut self,
+        src: Option<&[u8]>,
+        head: Option<[u64; 4]>,
+        nups: u8,
+    ) -> Result<Gc<LuaClosure>, LuaError> {
+        // a source not read yet is none: PUC shows "=?"
+        let name = src.filter(|s| !s.is_empty()).unwrap_or(b"=?");
+        let source = self.heap.try_intern(name)?;
+        let [line, last, params, vararg] = head.unwrap_or_default();
+        let proto = self
+            .heap
+            .stand_in_proto(source, [line, last], params, vararg)
+            .map_err(LuaError::from)?;
+        let mut ups = LVec::with_capacity(self.heap.mem(), usize::from(nups))?;
+        for _ in 0..nups {
+            ups.push(self.heap.try_new_upvalue(UpvalState::Closed(Value::Nil))?)?;
+        }
+        let cl = self.heap.try_new_closure(proto, &ups)?;
+        // SAFETY: a closure just made; only its class byte is written
+        unsafe { (*cl.header()).cls |= LUNA_ONLY };
+        Ok(cl)
+    }
+
+    /// The parser tables of `view`, with the entries PUC's parser put in
+    /// them, in its order.
+    fn reader_tables(
+        &mut self,
+        view: &ReaderView,
+    ) -> Result<std::collections::HashMap<u32, Gc<Table>>, LuaError> {
+        // SAFETY: the closure stands for PUC's, an object of luna's own;
+        // only its class byte is written
+        unsafe { (*view.main.header()).cls |= LUNA_ONLY };
+        let mut tabs = std::collections::HashMap::new();
+        let named = |v: &Option<PVal>| match v {
+            Some(PVal::Tab(id)) => Some(*id),
+            _ => None,
+        };
+        let ids = view.fs_tabs.iter().flatten().copied().chain(view.chunk_tab);
+        let ids = ids.chain(view.ops.iter().flat_map(|op| {
+            [Some(op.tab), named(&Some(op.key)), named(&op.val)]
+                .into_iter()
+                .flatten()
+        }));
+        for id in ids {
+            if let std::collections::hash_map::Entry::Vacant(e) = tabs.entry(id) {
+                e.insert(self.reader_table()?);
+            }
+        }
+        let resolve = |v: PVal| match v {
+            PVal::V(v) => v,
+            PVal::Tab(id) => tabs.get(&id).map_or(Value::Nil, |&t| Value::Table(t)),
+            PVal::Closure => Value::Closure(view.main),
+        };
+        for op in &view.ops {
+            let (Some(&t), k) = (tabs.get(&op.tab), resolve(op.key)) else {
+                continue;
+            };
+            let v = op.val.map_or(Value::Nil, resolve);
+            // SAFETY: a table made above, reached by nothing else yet
+            let r = self.table_op(|vm| unsafe { t.as_mut() }.set(&mut vm.heap, k, v));
+            if let Err(e) = r {
+                return Err(self.table_error(e));
+            }
+        }
+        // the parts are PUC's size: the same keys put in in the same order
+        for &(id, a, n) in &view.sizes {
+            if let Some(t) = tabs.get(&id)
+                && (t.asize() as u64, t.node_count() as u64) != (a, n)
+            {
+                self.g.reader_size_mismatch += 1;
+            }
+        }
+        Ok(tabs)
+    }
+
+    /// How many parser tables the debug library was shown with parts of
+    /// another size than PUC's (none, unless luna's tables grow otherwise).
+    #[doc(hidden)]
+    pub fn reader_size_mismatches(&self) -> u32 {
+        self.g.reader_size_mismatch
+    }
+
+    /// A parser table: luna's own, not listed or counted.
+    fn reader_table(&mut self) -> Result<Gc<Table>, LuaError> {
+        let t = self.alloc_table()?;
+        // SAFETY: a table just made; only its class byte is written
+        unsafe { (*t.header()).cls |= UNLISTED };
+        Ok(t)
+    }
+
+    /// A 5.1 prototype as the stack holds it: a userdata of type "proto".
+    fn proto_value(&mut self) -> Result<Value, LuaError> {
+        let u = self.lib_userdata(crate::runtime::userdata::UserdataPayload::Empty, false, 0)?;
+        self.heap.set_env51(u.as_ptr() as *mut _, ENV_PROTO);
+        Ok(Value::Userdata(u))
+    }
+}

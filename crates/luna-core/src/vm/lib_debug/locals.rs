@@ -49,6 +49,9 @@ fn find_local(
 
 pub(super) fn d_getlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
+    if !vm.reader_layers.is_empty() {
+        vm.fill_reader_layers()?;
+    }
     let v = vm.version();
     let (co, arg) = getthread(vm, a);
     if v == LuaVersion::Lua51 {
@@ -110,6 +113,9 @@ pub(crate) fn param_name(cl: Gc<LuaClosure>, n: i64) -> Option<String> {
 
 pub(super) fn d_setlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
+    if !vm.reader_layers.is_empty() {
+        vm.fill_reader_layers()?;
+    }
     let (co, arg) = getthread(vm, a);
     let (level, n) = if vm.version() <= LuaVersion::Lua52 {
         let level = check_int(vm, a, arg)?;

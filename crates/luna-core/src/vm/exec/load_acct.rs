@@ -26,160 +26,17 @@ mod consts;
 mod events;
 mod failed;
 mod ptab;
+mod replay;
 mod scan;
 mod syntax_msg;
 mod undump;
+mod view;
+use replay::{Cut, Fs, Replay, walk};
+pub(super) use replay::{PVal, TabOp};
+pub(super) use view::ReaderView;
 
 use arr::Arr;
 use ptab::{PKey, PTab};
-
-/// A function being compiled, in PUC's terms.
-#[derive(Default)]
-struct Fs {
-    code: Arr,
-    line: Arr,
-    abs: Arr,
-    k: Arr,
-    p: Arr,
-    loc: Arr,
-    up: Arr,
-    /// the function's own table: 5.1 and 5.2 key its strings and constants
-    /// in it, 5.5 its constants (`kcache`)
-    h: Option<PTab>,
-    prev_line: u32,
-    iwthabs: u32,
-    /// the last instruction's line entry: absolute, and the line before it
-    /// (to take it back, PUC `removelastlineinfo`)
-    last_abs: bool,
-    last_prev: u32,
-    /// which of the shapes is this function's, and the luna instructions
-    /// emitted so far
-    shape: usize,
-    pc: usize,
-}
-
-/// Where the replay of a load that failed stops: before the events at
-/// token `events` (with `ended`, after those at it that finish what ended
-/// before it: PUC finishes them seeing the token, then fails on it), after
-/// what the scanner does up to token `scans`.
-#[derive(Clone, Copy)]
-struct Cut {
-    events: i64,
-    ended: bool,
-    scans: i64,
-}
-
-/// The replay's state.
-struct Replay<'s> {
-    d: Dialect,
-    fs: Vec<Fs>,
-    /// the chunk's table (5.3+): the scanner's strings, 5.3 and 5.4's
-    /// constants, 5.5's anchors
-    h: Option<PTab>,
-    /// the parser tables made so far
-    tabs: u32,
-    /// the first long string of each content keyed in a parser table: a
-    /// table finds a long string by its bytes
-    long_keys: std::collections::HashMap<Box<[u8]>, usize>,
-    /// the scanner's buffer
-    buff: usize,
-    actvar: Arr,
-    gt: Arr,
-    label: Arr,
-    /// the prototypes in the order their functions open
-    opening: Vec<Gc<Proto>>,
-    opened: usize,
-    /// PUC's layout of each function, in the order they open
-    shapes: Vec<crate::vm::dump::Shape>,
-    /// the prototypes in the order their functions close (postorder), and
-    /// how many have closed
-    closing: Vec<Gc<Proto>>,
-    closed: usize,
-    /// the chunk name, as the prototypes hold it
-    source: Gc<crate::runtime::LuaStr>,
-    /// the strings the scanner made, by token, and the chunk's names and
-    /// source their text is in
-    scanned: &'s Scanned,
-    names: &'s crate::frontend::ast::Names,
-    src: &'s [u8],
-    /// by name number: its string once made, and the table it was last
-    /// found in or put in (see [`Replay::table_id`]; 0 for none)
-    syms: Vec<(Option<Gc<crate::runtime::LuaStr>>, u32)>,
-    /// the same by reserved word
-    reserved: [(Option<Gc<crate::runtime::LuaStr>>, u32); crate::frontend::parser::scan::RESERVED],
-    /// a distinct key for each object 5.5 anchors that luna has no object
-    /// for
-    anchors: usize,
-    /// the long strings the scanner made that no constant has taken yet
-    longs: Vec<Gc<crate::runtime::LuaStr>>,
-    /// what the reader of a load read piece by piece counted, and the token
-    /// whose scan called it (-1: before the parse starts)
-    splices: std::collections::VecDeque<(i64, crate::runtime::heap::Deferred)>,
-}
-
-/// The prototypes under `p` in the order their functions open (preorder)
-/// and in the order they close.
-fn walk(p: Gc<Proto>, opening: &mut Vec<Gc<Proto>>, closing: &mut Vec<Gc<Proto>>) {
-    opening.push(p);
-    for &c in p.protos.iter() {
-        walk(c, opening, closing);
-    }
-    closing.push(p);
-}
-
-impl<'s> Replay<'s> {
-    /// A replay of the load of `proto`, whose scanner made `scanned`.
-    fn new(
-        d: Dialect,
-        proto: Gc<Proto>,
-        version: crate::version::LuaVersion,
-        scanned: &'s Scanned,
-        names: &'s crate::frontend::ast::Names,
-        src: &'s [u8],
-    ) -> Replay<'s> {
-        let (mut opening, mut closing) = (Vec::new(), Vec::new());
-        walk(proto, &mut opening, &mut closing);
-        Replay {
-            d,
-            fs: Vec::new(),
-            h: None,
-            tabs: 0,
-            long_keys: Default::default(),
-            buff: 0,
-            actvar: Arr::default(),
-            gt: Arr::default(),
-            label: Arr::default(),
-            opening,
-            opened: 0,
-            shapes: crate::vm::dump::shapes(&proto, version).unwrap_or_default(),
-            closing,
-            closed: 0,
-            source: proto.source,
-            scanned,
-            names,
-            src,
-            syms: vec![(None, 0); names.len()],
-            reserved: [(None, 0); crate::frontend::parser::scan::RESERVED],
-            anchors: 0,
-            longs: Vec::new(),
-            splices: Default::default(),
-        }
-    }
-
-    /// The reader calls `splices` made at their byte offsets, each placed
-    /// at the token whose scan read that byte.
-    fn splice(&mut self, splices: Vec<(u32, crate::runtime::heap::Deferred)>) {
-        let ends = &self.scanned.ends;
-        for (off, d) in splices {
-            let tok = if off == 0 {
-                -1
-            } else {
-                ends.partition_point(|&e| e < off) as i64
-            };
-            self.splices.push_back((tok, d));
-        }
-    }
-}
 
 impl Vm {
     /// Count a text chunk that compiled to `proto` (without counting) as
@@ -260,7 +117,8 @@ impl Vm {
         } else {
             16
         };
-        PTab::new(&mut self.heap, r.tabs, keys)
+        // a view of the tables for the debug library counts nothing
+        PTab::new(&mut self.heap, r.tabs, keys, r.rec.is_none())
     }
 
     /// `luaD_protectedparser` frees the scanner's buffer and the parser's

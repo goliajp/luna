@@ -28,7 +28,7 @@ impl Vm {
         let reclose = evs.iter().any(|e| matches!(e, UEv::Reclose(_)));
         // 5.5's `f_parser` anchors what the load makes in a table
         let mut h = match d {
-            Dialect::L55 => Some(PTab::new(&mut self.heap, 0, 16)?),
+            Dialect::L55 => Some(PTab::new(&mut self.heap, 0, 16, true)?),
             _ => None,
         };
         let (mut buff, mut saved) = (0, 0);

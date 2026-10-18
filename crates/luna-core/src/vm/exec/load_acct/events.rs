@@ -248,6 +248,8 @@ impl Vm {
             && let (Some(h), Some(k)) = (r.h.as_mut(), f.h.as_ref())
         {
             h.remove(PKey::Tab(k.id));
+            let (h, k) = (h.id, k.id);
+            r.note(h, PVal::Tab(k), None);
         }
         // 5.2 on, `close_func` checks for a collection at its end
         #[cfg(feature = "gc-trace")]

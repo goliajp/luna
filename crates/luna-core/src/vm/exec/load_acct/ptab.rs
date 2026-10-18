@@ -99,9 +99,19 @@ pub(super) struct PTab {
 }
 
 impl PTab {
-    /// A new empty table (PUC `luaH_new`), counted as PUC's, with room
-    /// for about `keys` keys.
-    pub(super) fn new(heap: &mut Heap, id: u32, keys: usize) -> Result<PTab, SyntaxError> {
+    /// A new empty table (PUC `luaH_new`), counted as PUC's (unless
+    /// `counted` is false), with room for about `keys` keys.
+    pub(super) fn new(
+        heap: &mut Heap,
+        id: u32,
+        keys: usize,
+        counted: bool,
+    ) -> Result<PTab, SyntaxError> {
+        let ghost = if counted {
+            Some(heap.acct_ghost_table(0, 0)?)
+        } else {
+            None
+        };
         Ok(PTab {
             id,
             keys: std::collections::HashSet::with_capacity_and_hasher(keys, Default::default()),
@@ -110,11 +120,15 @@ impl PTab {
             used: 0,
             removed: false,
             nums: [0; 65],
-            ghost: Some(heap.acct_ghost_table(0, 0)?),
+            ghost,
         })
     }
 
-    #[cfg(feature = "gc-trace")]
+    /// PUC's array size and node count.
+    pub(super) fn sizes(&self) -> (u64, u64) {
+        (self.asize, self.nodes)
+    }
+
     pub(super) fn contains(&self, k: PKey) -> bool {
         self.keys.contains(&k)
     }
@@ -249,7 +263,7 @@ mod tests {
         let mut heap = Heap::new();
         heap.table_dialect = d;
         let t = heap.try_new_table().expect("table");
-        let mut p = PTab::new(&mut heap, 1, 0).expect("parser table");
+        let mut p = PTab::new(&mut heap, 1, 0, true).expect("parser table");
         let check = |heap: &mut Heap, k: Value, set: bool, p: &mut PTab| {
             // SAFETY: the test's table, which nothing else refers to
             let t = unsafe { t.as_mut() };

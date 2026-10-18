@@ -37,12 +37,15 @@ impl Vm {
         let s = self.heap.try_intern(bytes)?;
         let d = r.d;
         let k = PKey::of_str(s, &mut r.long_keys);
+        let val = r.scan_val(s);
         if let Some(t) = r.scan_table(kind) {
-            #[cfg(feature = "gc-trace")]
-            let new = !t.contains(k);
+            let (new, id) = (!t.contains(k), t.id);
             self.set_str_in(t, d, s, k);
             #[cfg(feature = "gc-trace")]
             self.scan_checkpoint(new);
+            if new {
+                r.note(id, PVal::V(Value::Str(s)), Some(val));
+            }
         }
         Ok(())
     }
@@ -90,14 +93,17 @@ impl Vm {
         };
         let d = r.d;
         let k = PKey::of_str(s, &mut r.long_keys);
+        let val = r.scan_val(s);
         let Some(t) = r.scan_table(kind).filter(|_| in_table != id) else {
             return Ok(());
         };
-        #[cfg(feature = "gc-trace")]
-        let new = !t.contains(k);
+        let (new, tab) = (!t.contains(k), t.id);
         self.set_str_in(t, d, s, k);
         #[cfg(feature = "gc-trace")]
         self.scan_checkpoint(new);
+        if new {
+            r.note(tab, PVal::V(Value::Str(s)), Some(val));
+        }
         match text {
             ScanText::Sym(sym) => r.syms[sym.0 as usize].1 = id,
             ScanText::Reserved(k, _) => r.reserved[usize::from(k)].1 = id,

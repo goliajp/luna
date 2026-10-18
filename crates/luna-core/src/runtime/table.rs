@@ -310,7 +310,7 @@ impl Table {
     }
 
     #[inline]
-    fn asize(&self) -> usize {
+    pub(crate) fn asize(&self) -> usize {
         self.asize as usize
     }
 

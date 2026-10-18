@@ -4,7 +4,7 @@ use super::*;
 use crate::runtime::{Gc, LuaStr};
 
 mod reader;
-use reader::{ReaderSlot, next_piece};
+use reader::{Phase, ReaderSlot, next_piece};
 
 /// `load`. 5.1 only loads from a reader function (`loadstring` takes the
 /// strings); 5.2+ takes a string — or a number, which `lua_tolstring`
@@ -93,15 +93,15 @@ fn read_and_load(
     let counted = vm.heap.puc.silent == 0;
     let mut splices = Vec::new();
     let mut fed = 0u32;
-    let mut spliced = |vm: &mut Vm, rs: &mut ReaderSlot, at: u32, open: Option<u32>| {
+    let mut spliced = |vm: &mut Vm, rs: &mut ReaderSlot, at: u32, phase: Phase| {
         let mark = counted.then(|| vm.heap.defer_begin());
-        let r = next_piece(vm, reader, rs, open);
+        let r = next_piece(vm, reader, rs, phase, name);
         if let Some(m) = mark {
             splices.push((at, vm.heap.defer_end(m)));
         }
         r
     };
-    let mut first = match spliced(vm, &mut rs, 0, None) {
+    let mut first = match spliced(vm, &mut rs, 0, Phase::Start) {
         Ok(p) => p,
         Err(msg) => return fail(vm, msg),
     };
@@ -109,7 +109,7 @@ fn read_and_load(
     // reader that signals the end at once is asked a second time
     // (from the scanner, the main function open)
     if first.is_none() && vm.version() == LuaVersion::Lua51 {
-        first = match spliced(vm, &mut rs, 0, Some(1)) {
+        first = match spliced(vm, &mut rs, 0, Phase::Text(1, b"")) {
             Ok(p) => p,
             Err(msg) => return fail(vm, msg),
         };
@@ -122,8 +122,18 @@ fn read_and_load(
         // the undumper (and MacroLua's macro pass) take the whole chunk
         let budget = vm.loader_input_budget();
         let mut buf = crate::runtime::mem::LVec::from_slice(vm.heap.mem(), &first)?;
+        // the undumper's slots, and the bytes it needs to get further
+        let (mut slots, mut need) = (0, 0);
         loop {
-            match next_piece(vm, reader, &mut rs, None) {
+            if buf.len() >= need {
+                match crate::vm::dump::undump_progress(&buf) {
+                    // PUC reads a binary chunk no further than its end
+                    Some(p) if p.done => break,
+                    Some(p) => (slots, need) = (reader::binary_slots(vm.version(), &p), p.need),
+                    None => (slots, need) = (0, 5),
+                }
+            }
+            match next_piece(vm, reader, &mut rs, Phase::Binary(&buf, slots), name) {
                 Ok(Some(p)) if p.len() > budget.saturating_sub(buf.len()) => {
                     let m = vm.mem_err().0;
                     return fail(vm, m);
@@ -145,21 +155,23 @@ fn read_and_load(
     }
     let mut failed = None;
     fed += first.len() as u32;
-    let parsed = text.parse_open(
-        first,
-        &mut |buf, open| match spliced(vm, &mut rs, fed, Some(open)) {
-            Ok(Some(p)) => {
-                fed += p.len() as u32;
-                buf.extend_from_slice(&p);
-                true
-            }
-            Ok(None) => false,
-            Err(msg) => {
-                failed = Some(msg);
-                false
-            }
-        },
-    );
+    let parsed = text.parse_open(first, &mut |buf, open, src| match spliced(
+        vm,
+        &mut rs,
+        fed,
+        Phase::Text(open, src),
+    ) {
+        Ok(Some(p)) => {
+            fed += p.len() as u32;
+            buf.extend_from_slice(&p);
+            true
+        }
+        Ok(None) => false,
+        Err(msg) => {
+            failed = Some(msg);
+            false
+        }
+    });
     if let Some(msg) = failed {
         return fail(vm, msg);
     }
