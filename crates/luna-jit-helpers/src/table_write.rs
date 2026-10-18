@@ -169,19 +169,16 @@ fn stored(vm: &mut luna_core::vm::Vm, r: Result<(), luna_core::runtime::TableErr
 }
 
 /// The write barrier for a store of `key` / `val` into `g`, as the
-/// interpreter's stores take it: a collectable one in a table the
-/// collector already traced (black) sends the table back to be traced
-/// again, or the new object would be swept while the table holds it.
+/// interpreter's stores take it: a white object in a table the collector
+/// already traced (black) sends the table back to be traced again, or the
+/// new object would be swept while the table holds it.
 pub(crate) fn barrier_for(
     vm: &mut luna_core::vm::Vm,
     g: luna_core::runtime::Gc<luna_core::runtime::Table>,
     key: luna_core::runtime::Value,
     val: luna_core::runtime::Value,
 ) {
-    use luna_core::runtime::value::raw;
-    if raw::is_gc(val.unpack().0) || raw::is_gc(key.unpack().0) {
-        vm.heap.barrier_back(g);
-    }
+    vm.heap.barrier_store(g, &[key, val]);
 }
 
 /// Write `Value::Nil` to `t[key]` (Int key). Used by

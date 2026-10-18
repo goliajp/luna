@@ -105,7 +105,7 @@ impl LuaTable {
         if let Err(e) = unsafe { t.as_mut() }.set(&mut lua.0.heap, k, v) {
             return Err(lua.0.table_error(e));
         }
-        lua.0.heap.barrier_back(t);
+        lua.0.heap.barrier_store(t, &[k, v]);
         Ok(())
     }
 

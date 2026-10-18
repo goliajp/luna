@@ -215,7 +215,7 @@ impl Vm {
         // collect
         let r = self.table_op(|vm| unsafe { t.as_mut() }.set(&mut vm.heap, k, v));
         r.map_err(|e| self.table_error(e))?;
-        self.heap.barrier_back(t);
+        self.heap.barrier_store(t, &[k, v]);
         Ok(())
     }
 

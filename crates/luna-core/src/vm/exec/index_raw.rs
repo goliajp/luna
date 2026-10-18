@@ -8,7 +8,7 @@ impl Vm {
     /// `lua_rawset` does.
     pub(crate) fn raw_set(&mut self, t: Gc<Table>, key: Value, v: Value) -> Result<(), LuaError> {
         // the barrier taken before the write tests the read-only mark too
-        if !self.heap.store_barrier(t) {
+        if !self.heap.store_barrier(t, &[key, v]) {
             return Err(self.readonly_error());
         }
         // SAFETY: `t` is a table the caller holds (an operand of the running op or a native argument); each borrow lives for one `set_inlined`, which touches only the heap and the table and does not collect
@@ -33,7 +33,7 @@ impl Vm {
         if !self.emergency_collect() {
             return Err(crate::runtime::mem::Oom(self.heap.mem()).into());
         }
-        if !self.heap.store_barrier(t) {
+        if !self.heap.store_barrier(t, &[key, v]) {
             return Err(self.readonly_error());
         }
         // SAFETY: `t` is a table the caller holds; the borrow lives for the one `set_inlined`, which does not collect
