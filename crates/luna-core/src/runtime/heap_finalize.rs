@@ -26,11 +26,13 @@ impl Heap {
                 // no `__gc` now is not finalized, and dies
                 // SAFETY: `h` is a listed header, still allocated; a
                 // userdata's tag says what it heads
-                if let Some(name) = self.gc_event_51
-                    && unsafe { (*h).tag } == ObjTag::Userdata
-                    && unsafe { (*(h as *const crate::runtime::Userdata)).metatable() }
-                        .is_none_or(|mt| mt.get_str(name).is_nil())
-                {
+                let no_gc_51 = self.gc_event_51.is_some_and(|name| unsafe {
+                    (*h).tag == ObjTag::Userdata
+                        && (*(h as *const crate::runtime::Userdata))
+                            .metatable()
+                            .is_none_or(|mt| mt.get_str(name).is_nil())
+                });
+                if no_gc_51 {
                     // SAFETY: as above; only the flag byte is written
                     unsafe { (*h).flags = ((*h).flags & !(FIN | DEFERRED)) | FINALIZED };
                     self.finalize[i] = ptr::null_mut();

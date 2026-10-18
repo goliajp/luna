@@ -138,10 +138,11 @@ impl Vm {
         if let Err(e) = self.check_lua_stack(base + nparams, max, gc) {
             return Err(self.jit_positioned(cl, e));
         }
-        if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
-            if let Err(e) = self.grow_frames() {
-                return Err(self.jit_positioned(cl, e));
-            }
+        if self.g.frame_size != u32::MAX
+            && self.frames_in_use() >= self.g.frame_size
+            && let Err(e) = self.grow_frames()
+        {
+            return Err(self.jit_positioned(cl, e));
         }
         // a tail call's callee takes the level of its caller, after
         // 5.1–5.3 placed it above first; 5.4 and 5.5 reuse the frame
