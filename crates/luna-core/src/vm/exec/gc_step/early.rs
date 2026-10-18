@@ -182,13 +182,14 @@ impl Vm {
                 SWEEPCOST_51
             }
             St::SweepAll => {
-                if let Some((_, freed)) = self.sweep_quota(SWEEPMAX_51) {
-                    self.heap.pace.estimate -= freed;
-                }
+                // what `checkSizes` frees at the end is taken off too
+                let old = self.heap.bytes() as i64;
+                self.sweep_quota(SWEEPMAX_51);
                 if !self.heap.gc_phase_is_sweep() {
                     self.heap.acct_check_sizes();
                     self.heap.pace.state = St::Finalize;
                 }
+                self.heap.pace.estimate -= old - self.heap.bytes() as i64;
                 SWEEPMAX_51 * SWEEPCOST_51
             }
             _ => {
