@@ -7,9 +7,10 @@ use crate::runtime::heap::GcHeader;
 
 impl Vm {
     /// The collector as `rec` (`puc_libs::midcycle`) says the opening left
-    /// it, when that is in the propagation of a cycle; false (nothing done)
-    /// otherwise.
+    /// it: in the propagation of a cycle, or (5.5) in the sweep of its
+    /// list of objects; false (nothing done) in another state.
     pub(super) fn libs_midcycle(&mut self, rec: &[&str]) -> bool {
+        use crate::runtime::gc_pace::St;
         let Some(head) = rec.first().and_then(|l| l.strip_prefix("S ")) else {
             return false;
         };
@@ -17,13 +18,23 @@ impl Vm {
         let &[state, debt, estimate, traversed] = w.as_slice() else {
             return false;
         };
-        // the propagation (5.2's `GCSpropagate`)
-        if state != 0 {
-            return false;
-        }
-        let (mut black, mut gray, mut again) = (Vec::new(), Vec::new(), Vec::new());
+        let d = self.heap.table_dialect;
+        let to = match (d, state) {
+            (_, 0) => St::Propagate,
+            // 5.5's `GCSswpallgc`
+            (crate::runtime::table::Dialect::L55, 3) => St::SweepAll,
+            _ => return false,
+        };
+        let (mut black, mut gray, mut again, mut unswept) = (vec![], vec![], vec![], vec![]);
         for line in &rec[1..] {
             let (kind, path) = line.split_at(2);
+            let (alive, path) = match kind {
+                "U " => {
+                    let (c, p) = path.split_once(' ').unwrap_or(("", path));
+                    (c == "B" || c == "G", p)
+                }
+                _ => (true, path),
+            };
             let Some(h) = self.object_at(path) else {
                 debug_assert!(false, "no object at {path}");
                 continue;
@@ -31,16 +42,22 @@ impl Vm {
             match kind {
                 "B " => black.push(h),
                 "G " => gray.push(h),
-                _ => again.push(h),
+                "A " => again.push(h),
+                _ => unswept.push((h, alive)),
             }
         }
         // SAFETY: each header is of an object the registry or the strings
         // hold, and the collector is in the pause after the opening
-        unsafe { self.heap.acct_enter_midcycle(&black, &gray, &again) };
-        let d = self.heap.table_dialect;
+        unsafe {
+            if to == St::Propagate {
+                self.heap.acct_enter_midcycle(&black, &gray, &again);
+            } else {
+                self.heap.acct_enter_midsweep(&unswept);
+            }
+        }
         let bytes = self.heap.bytes();
         let p = &mut self.heap.pace;
-        p.state = crate::runtime::gc_pace::St::Propagate;
+        p.state = to;
         p.estimate = estimate;
         p.trav = traversed;
         p.set_debt(d, bytes, debt);
@@ -127,6 +144,60 @@ impl Vm {
             return None;
         };
         header_of(pkg.get(Value::Str(self.heap.find_interned(name)?)))
+    }
+}
+
+impl Vm {
+    /// Each object a PUC state dump (`O list index tt colour name` lines)
+    /// names, found here by its name: `list index puc-colour place colour
+    /// name`, with `-` for one not found; then `X place colour` for each
+    /// object of PUC's luna has that the dump does not name, and the place
+    /// the sweep goes on from. For comparing the collector's state with
+    /// PUC's object by object.
+    #[cfg(feature = "gc-trace")]
+    #[doc(hidden)]
+    pub fn trace_compare_state(&self, dump: &str) -> String {
+        use std::fmt::Write;
+        let (places, sweep) = self.heap.trace_places();
+        let mut seen = std::collections::HashSet::new();
+        let mut out = String::new();
+        for line in dump.lines() {
+            let w: Vec<&str> = line.splitn(6, ' ').collect();
+            if w.len() < 6 || w[0] != "O" {
+                continue;
+            }
+            match self.object_at(w[5]) {
+                Some(h) => {
+                    seen.insert(h as usize);
+                    let place = places
+                        .get(&(h as usize))
+                        .map_or(String::from("-"), |p| p.to_string());
+                    // SAFETY: the object a path reaches is alive
+                    let c = unsafe { self.heap.trace_colour(h) };
+                    let _ = writeln!(out, "{} {} {} {place} {c} {}", w[1], w[2], w[4], w[5]);
+                }
+                None => {
+                    let _ = writeln!(out, "{} {} {} - - {}", w[1], w[2], w[4], w[5]);
+                }
+            }
+        }
+        let mut rest: Vec<(usize, usize)> = places
+            .iter()
+            .filter(|(h, _)| !seen.contains(*h))
+            .map(|(&h, &p)| (p, h))
+            .collect();
+        rest.sort();
+        for (p, h) in rest {
+            // SAFETY: a listed object is alive
+            let c = unsafe { self.heap.trace_colour(h as *mut GcHeader) };
+            let _ = writeln!(out, "X {p} {c}");
+        }
+        let _ = writeln!(
+            out,
+            "W {}",
+            sweep.map_or(String::from("-"), |s| s.to_string())
+        );
+        out
     }
 }
 
