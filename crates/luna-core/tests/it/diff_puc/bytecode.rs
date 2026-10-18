@@ -138,12 +138,15 @@ fn diff_puc_bytecode() {
         };
         // a count fixture reads `collectgarbage("count")`, which luna's
         // side here changes (it catches the output in a Lua buffer), and
-        // so does where the automatic steps run finalizers
+        // so does where the automatic steps run (finalizer batches, and the
+        // `_gcauto` fixtures)
         let fixtures: Vec<_> = list_fixtures(dialect)
             .into_iter()
             .filter(|f| {
                 let name = f.to_string_lossy();
-                !name.contains("_count") && !name.contains("_finalizer_batches")
+                !name.contains("_count")
+                    && !name.contains("_finalizer_batches")
+                    && !name.contains("_gcauto")
             })
             .collect();
         eprintln!(
