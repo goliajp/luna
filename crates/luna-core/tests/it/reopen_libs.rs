@@ -178,7 +178,10 @@ fn reopen_trace() {
     // `luaL_dostring` runs it
     vm.host_gc(0, [0; 3]).expect("stop");
     let setup = std::env::var("LUNA_REOPEN_SETUP").unwrap_or_default();
-    let f = vm.load(setup.as_bytes(), setup.as_bytes()).expect("setup");
+    // `luaL_dostring`'s load, with its collection checks
+    let Ok((f, _)) = vm.host_load_chunk(setup.as_bytes(), setup.as_bytes()) else {
+        panic!("the setup compiles");
+    };
     vm.call_value(Value::Closure(f), &[]).expect("setup");
     vm.trace_mark("reopen");
     if std::env::var_os("LUNA_REOPEN_SKIP").is_none_or(|v| v.is_empty()) {
