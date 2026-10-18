@@ -239,8 +239,12 @@ impl Vm {
 
     /// Build a fully-loaded Vm — the default for embedders that want PUC's
     /// standard library surface. Equivalent to `Vm::new_minimal(version)`
-    /// followed by `vm.open_all_libs()`; running out of memory there ends
-    /// the process, as PUC's `luaL_openlibs` outside a protected call.
+    /// followed by `vm.open_all_libs()`, which is PUC's `luaL_newstate`
+    /// then `luaL_openlibs` with the collector running: the count and the
+    /// collector's pace afterwards are an embedder's, not the stand-alone
+    /// interpreter's, which stops the collector while the libraries open
+    /// (see [`Vm::open_all_libs`]). Running out of memory there ends the
+    /// process, as PUC's `luaL_openlibs` outside a protected call.
     pub fn new(version: LuaVersion) -> Vm {
         let mut vm = Vm::new_minimal(version);
         crate::vm::lib_mem::opened(vm.open_all_libs());

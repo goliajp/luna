@@ -74,6 +74,21 @@ fn fields_a_program_added_stay_unless_the_library_is_made_anew() {
     }
 }
 
+/// A Vm whose libraries opened as `lua.c` opens them: with the collector
+/// stopped (5.3's leaves it running).
+fn lua_c_opened(v: LuaVersion) -> Vm {
+    let mut vm = Vm::new_minimal(v);
+    let stop = v != LuaVersion::Lua53;
+    if stop {
+        vm.host_gc(0, [0; 3]).expect("stop");
+    }
+    vm.open_all_libs().expect("open");
+    if stop {
+        vm.host_gc(1, [0; 3]).expect("restart");
+    }
+    vm
+}
+
 /// What a host that opened the libraries as `lua.c` does sees around a
 /// second `open_all_libs` (with `reopen`): the collector stopped, `setup`
 /// run as `luaL_dostring` runs it, then the bytes the reopening adds, and
@@ -81,7 +96,7 @@ fn fields_a_program_added_stay_unless_the_library_is_made_anew() {
 fn counts_around(v: LuaVersion, setup: &str, reopen: bool) -> (i64, i64) {
     const LUA_GCSTOP: i32 = 0;
     const LUA_GCCOLLECT: i32 = 2;
-    let mut vm = Vm::new(v);
+    let mut vm = lua_c_opened(v);
     vm.host_gc(LUA_GCSTOP, [0; 3]).expect("stop");
     let f = vm.load(setup.as_bytes(), setup.as_bytes()).expect("setup");
     vm.call_value(Value::Closure(f), &[]).expect("setup");
@@ -158,7 +173,7 @@ fn reopen_trace() {
         .iter()
         .position(|&x| x == d)
         .expect("dialect")];
-    let mut vm = Vm::new(v);
+    let mut vm = lua_c_opened(v);
     // as the host does it: the collector stopped, the setup chunk run as
     // `luaL_dostring` runs it
     vm.host_gc(0, [0; 3]).expect("stop");

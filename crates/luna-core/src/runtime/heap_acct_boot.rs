@@ -134,7 +134,10 @@ impl Heap {
 
     /// PUC's default `package.path`, from its record of `luaL_openlibs`.
     pub(crate) fn puc_default_path(&self) -> Option<&'static [u8]> {
-        let (_, strs) = crate::runtime::puc_libs::record(self.table_dialect, false);
+        let (_, strs) = crate::runtime::puc_libs::record(
+            self.table_dialect,
+            crate::runtime::puc_libs::Opening::Stopped,
+        );
         strs.iter()
             .copied()
             .find(|b| b.windows(5).any(|w| w == b"?.lua"))

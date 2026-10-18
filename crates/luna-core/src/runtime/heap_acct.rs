@@ -31,9 +31,10 @@ pub(crate) struct PucState {
     pub(crate) gbuff: usize,
     /// the long strings PUC's `luaL_openlibs` made and kept
     pub(crate) kept_long: Vec<(&'static [u8], usize)>,
-    /// the debt and estimate the collector had reached when the libraries
-    /// were open, when it ran meanwhile (5.3)
-    pub(crate) libs_pace: Option<(i64, i64)>,
+    /// where the collector stood when the libraries were open, when it ran
+    /// meanwhile and ended in the pause; how they open (lua.c's or not)
+    pub(crate) libs_pace: Option<libs::LibsPace>,
+    pub(crate) opening: crate::runtime::puc_libs::Opening,
     /// a library was opened: a later `luaL_openlibs` opens each as PUC's
     /// second call does, not from the record
     pub(crate) libs_opened: bool,
@@ -69,6 +70,7 @@ impl Default for PucState {
             gbuff: 0,
             kept_long: Vec::new(),
             libs_pace: None,
+            opening: crate::runtime::puc_libs::Opening::Running,
             libs_opened: false,
             // the standard libraries make about twenty
             stand_ins: Vec::with_capacity(32),

@@ -33,10 +33,19 @@ impl Vm {
                 self.native_checkpoint()?;
             }
         }
-        crate::vm::lib_mem::opened(self.open_all_libs());
-        // 5.4 on, lua.c keeps the collector stopped until it has made `arg`
-        if self.version >= crate::version::LuaVersion::Lua54 {
+        // lua.c stops the collector while the libraries open (5.3's leaves
+        // it running), and from 5.4 on until it has made `arg`
+        use crate::version::LuaVersion::{Lua53, Lua54};
+        let stops = self.version != Lua53;
+        if stops {
             self.heap.gc_set_stopped(true);
+        }
+        self.heap.puc.opening = crate::runtime::puc_libs::Opening::LuaC;
+        let opened = self.open_all_libs();
+        self.heap.puc.opening = crate::runtime::puc_libs::Opening::Running;
+        crate::vm::lib_mem::opened(opened);
+        if stops && self.version < Lua54 {
+            self.heap.gc_set_stopped(false);
         }
         Ok(())
     }
@@ -44,6 +53,10 @@ impl Vm {
     /// Open the dialect's standard libraries, as PUC's `luaL_openlibs`.
     /// `Vm::new` calls this; sandboxed embedders open libraries one at a
     /// time instead (`open_base`, `open_math`, `open_table`, …).
+    ///
+    /// With the collector running, it steps while the libraries open, as
+    /// in PUC; with it stopped (`host_gc` with `LUA_GCSTOP`), it does not,
+    /// which is what the stand-alone interpreter does (but 5.3's).
     ///
     /// On a Vm that has opened a library before, each library opens as a
     /// second `luaL_openlibs` opens it in the dialect: 5.1 registers new
