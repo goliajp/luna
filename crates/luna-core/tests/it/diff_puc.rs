@@ -342,7 +342,7 @@ fn require_all() -> bool {
     std::env::var_os("LUNA_DIFF_PUC_REQUIRE_ALL").is_some()
 }
 
-mod bytecode;
+pub(super) mod bytecode;
 
 /// A Vm as lua.c sets one up for `bin -`: inside `pmain`, the libraries
 /// open, `arg` made (5.3 on) and, from 5.4, the collector generational.

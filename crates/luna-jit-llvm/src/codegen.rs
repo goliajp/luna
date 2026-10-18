@@ -53,8 +53,10 @@ use std::hash::Hasher;
 mod compute;
 mod emitter;
 mod flow;
+mod handoff;
 mod helpers;
 mod plan;
+mod self_call;
 
 use compute::compile_compute_chunk;
 use helpers::bind_helper_symbols;

@@ -4,19 +4,16 @@
 //! (`*_count*`, whose output a dump changes on PUC itself) is compiled by
 //! luna and dumped with luna's `string.dump`; then
 //!
-//! - `dump_runs_on_puc`: the stock PUC interpreter of that dialect loads
-//!   and runs the dump, and its stdout (or, for `_err` fixtures, its error)
-//!   matches PUC running the source;
-//! - `dump_round_trips_through_luna`: luna loads the dump back (through
-//!   its PUC translator) and runs it to the same outcome;
+//! - `dump_runs_on_puc`: stock PUC runs the dump to the stdout (for `_err`
+//!   fixtures, the error) of PUC running the source;
+//! - `dump_round_trips_through_luna`: luna runs the dump to that outcome;
 //! - `stripped_dump_runs_on_puc` (5.3+, where `string.dump` strips): PUC runs
 //!   `string.dump(f, true)` as it runs the program stripped by `luac -s`.
 //!
-//! Needs `PUC_LUA_51` … `PUC_LUA_55` (`PUC_LUAC_5x` for the stripped case);
-//! a dialect without them is skipped, or fails under
-//! `LUNA_DIFF_PUC_REQUIRE_ALL=1`. `const_operand_forms_round_trip_through_luna`
-//! needs no interpreter: the constant- and immediate-operand opcodes luna's
-//! compiler emits are dumped under every dialect and run against the source.
+//! Needs `PUC_LUA_5x` (and `PUC_LUAC_5x` when stripped); a dialect without
+//! them is skipped, or fails under `LUNA_DIFF_PUC_REQUIRE_ALL=1`. The
+//! constant-operand forms are checked with no interpreter, run against the
+//! source under every dialect.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -157,10 +154,9 @@ end
     let f = vm
         .load(bytes, b"=dump")
         .map_err(|e| format!("luna refuses its own dump: {}", e.msg_str()))?;
-    // run as lua.c runs a script, from inside its C function, which a
-    // traceback shows; the handler leaves the error as it is (made here: a
-    // collection could free the loaded function before it runs)
-    let msgh = vm.native(same_error);
+    // run from inside lua.c's C function, which a traceback shows, under a
+    // handler that leaves the error as it is
+    let msgh = vm.native(super::diff_puc::bytecode::same_error);
     if let Err(e) = vm.call_value_with_handler_in_c(Value::Closure(f), &[], msgh) {
         let (pos, text) = normalize_err(&vm.error_display(&e));
         return Ok(Outcome::Error(pos, text));
@@ -177,8 +173,8 @@ end
     }
 }
 
-/// Run `check` on every fixture of every dialect whose interpreter is
-/// available; report the per-dialect pass counts and fail on any miss.
+/// Run `check` on every fixture of every dialect with an interpreter; fail
+/// on any miss.
 fn each_fixture(
     name: &str,
     min: LuaVersion,
@@ -417,15 +413,4 @@ fn stripped_dump_runs_on_puc() {
             Ok(())
         },
     );
-}
-
-/// A message handler that returns the error unchanged: the outcome shows
-/// it as lua.c's handler would. A nil one, which 5.5 would replace with its
-/// placeholder once the handler returns, is turned into lua.c's text here.
-fn same_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_core::vm::LuaError> {
-    let mut e = vm.nat_arg(fs, nargs, 0);
-    if e.is_nil() && vm.version() >= LuaVersion::Lua55 {
-        e = luna_core::runtime::Value::Str(vm.heap.intern(b"(error object is a nil value)"));
-    }
-    vm.nat_ret(fs, &[e])
 }

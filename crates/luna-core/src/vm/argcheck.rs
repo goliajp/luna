@@ -80,46 +80,34 @@ pub(crate) fn typename_of(vm: &Vm, v: Value) -> String {
 
 /// `luaL_typeerror`: "bad argument #n to 'f' (T expected, got U)".
 pub(crate) fn type_error(vm: &mut Vm, a: Args, i: u32, expected: &str) -> LuaError {
-    let got = typename_at(vm, a, i);
-    // 5.3+ look a `__name` up first, which stays pushed when present; then
-    // the message is pushed before `luaL_argerror` adds to it
-    if vm.version() >= LuaVersion::Lua53
-        && !a.is_none(i)
-        && let Err(e) = vm.metafield_check(a.get(vm, i), b"__name")
-    {
-        return e;
+    match type_error_msg(vm, a, i, expected) {
+        Ok(m) => arg_error(vm, i + 1, &m),
+        Err(e) => e,
     }
-    let named = vm.version() >= LuaVersion::Lua53
-        && !a.is_none(i)
-        && !vm.get_mm(a.get(vm, i), crate::vm::exec::Mm::Name).is_nil();
+}
+
+/// The "T expected, got U" `luaL_typeerror` pushes before `luaL_argerror`
+/// adds to it; 5.3+ look a `__name` up first, which stays pushed when
+/// present.
+fn type_error_msg(vm: &mut Vm, a: Args, i: u32, expected: &str) -> Result<String, LuaError> {
+    use crate::runtime::puc_fmt::FmtArg::S;
+    let got = typename_at(vm, a, i);
+    let has_name = vm.version() >= LuaVersion::Lua53 && !a.is_none(i);
+    if has_name {
+        vm.metafield_check(a.get(vm, i), b"__name")?;
+    }
+    let named = has_name && !vm.get_mm(a.get(vm, i), crate::vm::exec::Mm::Name).is_nil();
     vm.native_push(u32::from(named));
     // `lua_pushfstring(L, "%s expected, got %s", ...)`
     if let Some(e) = vm.format_pushes(&[Some(2)]) {
-        return e;
+        return Err(e);
     }
     vm.native_push(1);
-    if let Err(e) = vm.api_check_before() {
-        return e;
-    }
-    let msg = vm.pushfstring(
-        b"%s expected, got %s",
-        &[
-            crate::runtime::puc_fmt::FmtArg::S(expected.as_bytes()),
-            crate::runtime::puc_fmt::FmtArg::S(got.as_bytes()),
-        ],
-    );
-    if let Ok(m) = msg
-        && let Err(e) = vm.api_check_after(Value::Str(m))
-    {
-        return e;
-    }
-    match msg {
-        Ok(m) => {
-            let m = String::from_utf8_lossy(m.as_bytes()).into_owned();
-            arg_error(vm, i + 1, &m)
-        }
-        Err(e) => e,
-    }
+    vm.api_check_before()?;
+    let fmt = b"%s expected, got %s";
+    let m = vm.pushfstring(fmt, &[S(expected.as_bytes()), S(got.as_bytes())])?;
+    vm.api_check_after(Value::Str(m))?;
+    Ok(String::from_utf8_lossy(m.as_bytes()).into_owned())
 }
 
 /// `luaL_checkany`.
