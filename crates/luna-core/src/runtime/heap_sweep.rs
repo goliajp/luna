@@ -107,6 +107,7 @@ impl Heap {
                 } else {
                     (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);
                     self.sweep_prev = cur;
+                    self.note_swept(cur);
                     if to_live {
                         break;
                     }
@@ -188,6 +189,7 @@ impl Heap {
                     // white, so SLOW only for a read-only table (`with_slow`)
                     (*cur).flags = (f & !(COLOR_BITS | SLOW)) | new_white | ((cls & RO_CLS) << 1);
                     self.sweep_prev = cur;
+                    self.note_swept(cur);
                     n += self.env51_sweep(cur, true);
                 }
             }
@@ -259,6 +261,19 @@ impl Heap {
                 ObjTag::Table => !self.is_own_table(h as *const Table),
                 _ => true,
             }
+        }
+    }
+
+    /// 5.2's `sweepthread`: a thread the sweep keeps is shrunk, by the VM,
+    /// which holds what that needs (`puc.shrunk` lists them for it).
+    ///
+    /// # Safety
+    /// `h` heads an allocated object of this heap.
+    #[inline]
+    unsafe fn note_swept(&mut self, h: *mut GcHeader) {
+        // SAFETY: the caller's contract
+        if self.table_dialect == Dialect::L52 && unsafe { (*h).tag } == ObjTag::Coro {
+            self.puc.shrunk.push(h);
         }
     }
 

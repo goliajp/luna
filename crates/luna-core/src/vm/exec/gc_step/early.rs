@@ -1,4 +1,4 @@
-//! The steps of 5.1, 5.2 and 5.3.
+//! The steps of 5.1 and 5.3.
 
 use super::*;
 
@@ -116,100 +116,6 @@ impl Vm {
                 0
             }
         })
-    }
-
-    pub(super) fn step_52(&mut self) -> Result<(), LuaError> {
-        let d = Dialect::L52;
-        let s = self.heap.sizes;
-        let stepmul = self.gc_params.get(Param::StepMul).max(40);
-        let mut debt = work_52(d, self.heap.pace.debt(d, self.heap.bytes()), stepmul);
-        let floor = -stepsize_52(&s);
-        let run = self.gc_running();
-        loop {
-            if self.heap.pace.state == St::Propagate {
-                let before = debt;
-                let empty = self.gc_propagate(&mut debt, floor, run);
-                // what was traversed, for the estimate
-                self.heap.pace.estimate += before - debt;
-                if empty {
-                    debt -= self.atomic_52();
-                }
-            } else {
-                debt -= self.singlestep_52();
-            }
-            if !(debt > floor && self.heap.pace.state != St::Pause) {
-                break;
-            }
-        }
-        let bytes = self.heap.bytes();
-        if self.heap.pace.state == St::Pause {
-            let pause = self.gc_params.get(Param::Pause);
-            let debt = pause_debt(d, bytes, self.heap.pace.estimate, pause);
-            self.heap.pace.set_debt(d, bytes, debt);
-        } else {
-            self.heap
-                .pace
-                .set_debt(d, bytes, debt_after_52(debt, stepmul));
-        }
-        // `luaC_forcestep`: a few finalizers, all of them at a pause
-        let mut i = 0;
-        while self.heap.has_tobefnz() && (i < 4 || self.heap.pace.state == St::Pause) {
-            self.gc_tm(true)?;
-            i += 1;
-        }
-        Ok(())
-    }
-
-    /// 5.2's step that finds no gray object: the atomic step, the
-    /// estimate the memory traversed, and the sweep entered.
-    fn atomic_52(&mut self) -> i64 {
-        let s = self.heap.sizes;
-        let (work, swept) = self.gc_atomic();
-        self.heap.pace.estimate += work;
-        self.heap.pace.state = St::SweepString;
-        self.heap.pace.strt_swept = 0;
-        work + swept * sweepcost_52(&s)
-    }
-
-    fn singlestep_52(&mut self) -> i64 {
-        let s = self.heap.sizes;
-        let (max, cost) = (sweepmax_52(&s), sweepcost_52(&s));
-        match self.heap.pace.state {
-            St::Pause => {
-                self.gc_restart();
-                let w = (self.heap.puc.strt_size * s.ptr) as i64;
-                self.heap.pace.estimate = w;
-                w
-            }
-            St::Propagate => self.atomic_52(),
-            St::SweepString => {
-                let size = self.heap.puc.strt_size as i64;
-                let i = max.min(size - self.heap.pace.strt_swept);
-                self.heap.pace.strt_swept += i;
-                self.heap.sweep_strings_upto(self.heap.pace.strt_swept);
-                if self.heap.pace.strt_swept >= size {
-                    self.heap.end_string_sweep();
-                    self.heap.pace.state = St::SweepUdata;
-                    self.heap.pace.fin_left = Some(self.heap.finobj_count());
-                }
-                i * cost
-            }
-            St::SweepUdata => {
-                if sweep_other(&mut self.heap.pace.fin_left, max) {
-                    return max * cost;
-                }
-                self.heap.pace.state = St::SweepAll;
-                0
-            }
-            _ => match self.sweep_quota(max) {
-                Some(_) => max * cost,
-                None => {
-                    self.heap.acct_check_sizes();
-                    self.heap.pace.state = St::Pause;
-                    cost
-                }
-            },
-        }
     }
 
     pub(super) fn step_51(&mut self) -> Result<(), LuaError> {

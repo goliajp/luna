@@ -193,6 +193,7 @@ impl Heap {
             leaf_black: 0,
             leaf_hdr: 0,
             leaf_bytes: 0,
+            leaf_upval: 0,
             sizer: None,
             quiet: Vec::new(),
             quiet_mode: false,

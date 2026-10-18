@@ -41,7 +41,8 @@ pub(crate) struct PucState {
     /// given size, one entry for each object of PUC's (see
     /// `Heap::stand_sizes_on`)
     pub(crate) stand_ins: Vec<(*mut GcHeader, usize)>,
-    /// 5.3: the threads this cycle's propagation has shrunk
+    /// 5.3: the threads this cycle's propagation has shrunk; 5.2: the ones
+    /// the sweep kept, for the VM to shrink
     pub(crate) shrunk: Vec<*mut GcHeader>,
     /// tables of luna's own, which PUC has none of: never counted
     pub(crate) own_tables: Vec<*const crate::runtime::Table>,
@@ -211,7 +212,7 @@ impl Heap {
             return;
         }
         let key = match k {
-            Value::Str(s) if s.len() == 0 => String::from("-"),
+            Value::Str(s) if s.is_empty() => String::from("-"),
             Value::Str(s) => s.as_bytes().iter().map(|b| format!("{b:02x}")).collect(),
             Value::Int(i) => format!("#{i}"),
             Value::Float(f) if f.fract() == 0.0 && f.abs() < 1e15 => format!("#{}", f as i64),

@@ -22,6 +22,11 @@ impl Marker {
                 ObjTag::Str => (self.leaf_hdr + (*(h as *const LuaStr)).len() + 1) as i64,
                 // one standing for PUC's has PUC's size
                 ObjTag::Userdata => (*(h as *const Userdata)).puc_size as i64,
+                // 5.2: an open one stays gray, counting nothing
+                ObjTag::Upvalue => match (*(h as *const crate::runtime::function::Upvalue)).state {
+                    crate::runtime::function::UpvalState::Closed(_) => self.leaf_upval as i64,
+                    _ => 0,
+                },
                 _ => 0,
             };
         }
