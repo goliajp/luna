@@ -2,6 +2,9 @@
 
 use super::*;
 use crate::runtime::puc_libs::Opening;
+
+#[path = "heap_acct_midcycle.rs"]
+mod midcycle;
 use crate::runtime::table::Dialect;
 
 /// Where PUC's collector stood after the last step it took while the
@@ -45,16 +48,7 @@ impl Heap {
         &mut self,
         stack: u32,
     ) -> Result<Option<u32>, crate::runtime::mem::Oom> {
-        #[cfg(feature = "gc-trace")]
-        let no_auto = self.trace.no_auto;
-        #[cfg(not(feature = "gc-trace"))]
-        let no_auto = false;
-        // the collector steps while the libraries open unless it is stopped
-        let opening = if no_auto || self.gc_stopped {
-            Opening::Stopped
-        } else {
-            self.puc.opening
-        };
+        let opening = self.libs_opening();
         let (ops, strs) = crate::runtime::puc_libs::record(self.table_dialect, opening);
         let mut live = Life::Kept;
         let mut size = 0;
@@ -119,12 +113,25 @@ impl Heap {
         Ok(shrunk)
     }
 
+    /// How the libraries open now: the collector steps meanwhile unless it
+    /// is stopped.
+    pub(crate) fn libs_opening(&self) -> Opening {
+        #[cfg(feature = "gc-trace")]
+        let no_auto = self.trace.no_auto;
+        #[cfg(not(feature = "gc-trace"))]
+        let no_auto = false;
+        if no_auto || self.gc_stopped {
+            Opening::Stopped
+        } else {
+            self.puc.opening
+        }
+    }
+
     /// The libraries are open. When the collector stepped meanwhile and
     /// its last step ended in the pause, it stands where the record says:
     /// in the pause, with that debt (5.1: threshold and `gcdept`) and
-    /// estimate. When it was stopped, it stays as it is. Otherwise it
-    /// restarts from no debt.
-    pub(crate) fn acct_libs_pace(&mut self) {
+    /// estimate (true). Otherwise it stands as it was (false).
+    pub(crate) fn acct_libs_pace(&mut self) -> bool {
         let d = self.table_dialect;
         if let Some(p) = self.puc.libs_pace.take() {
             self.pace.state = crate::runtime::gc_pace::St::Pause;
@@ -136,9 +143,9 @@ impl Heap {
                 self.pace.set_debt(d, p.bytes, p.debt);
             }
             self.refresh_gc_limit();
-        } else if !self.gc_stopped {
-            self.gc_set_stopped(false);
+            return true;
         }
+        false
     }
 
     /// The string of `bytes` PUC's record made, at `size` bytes.

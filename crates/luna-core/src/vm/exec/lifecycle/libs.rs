@@ -2,6 +2,8 @@
 
 use super::*;
 
+#[path = "libs/midcycle.rs"]
+mod midcycle;
 #[path = "registry.rs"]
 mod registry;
 #[path = "libs/reopen51.rs"]
@@ -114,7 +116,15 @@ impl Vm {
         if self.version != LuaVersion::Lua51 {
             self.g.ci_alloc += 1;
         }
-        self.heap.acct_libs_pace();
+        // where the collector stands after an opening that stepped: as the
+        // record says, in the pause or mid-cycle; it restarts otherwise
+        let running = self.heap.libs_opening() != crate::runtime::puc_libs::Opening::Stopped;
+        if !self.heap.acct_libs_pace() && running {
+            let rec = crate::runtime::puc_libs::midcycle(self.heap.table_dialect);
+            if !rec.is_some_and(|r| self.libs_midcycle(r)) {
+                self.heap.gc_set_stopped(false);
+            }
+        }
         Ok(())
     }
 

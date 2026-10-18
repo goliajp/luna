@@ -60,6 +60,21 @@ pub(crate) fn record(d: Dialect, opening: Opening) -> (&'static [u32], &'static 
     }
 }
 
+/// Where an embedder's opening leaves `d`'s collector when that is in the
+/// middle of a cycle, on this pointer width: `S state debt estimate
+/// traversed`, then `B path` for each black object, `G path` for each gray
+/// one in the order the collector takes them, `A path` for each one gray
+/// again (a path from the registry `R` or the main thread `L`; a string by
+/// its bytes, `S:` and hex).
+pub(crate) fn midcycle(d: Dialect) -> Option<&'static [&'static str]> {
+    use data::*;
+    match d {
+        Dialect::L52 if cfg!(target_pointer_width = "64") => Some(STATE_52H_64),
+        Dialect::L52 => Some(STATE_52H_32),
+        _ => None,
+    }
+}
+
 #[allow(clippy::all)]
 #[rustfmt::skip]
 #[path = "puc_lib_layout.rs"]
