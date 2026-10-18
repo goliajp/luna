@@ -230,14 +230,20 @@ impl PucBuffer {
                 let r = vm.retry_oom(|vm| vm.heap.new_external_string(out))?;
                 vm.api_check_after(Value::Str(r))?;
                 vm.box_closed();
-                // `lua_gc(L, LUA_GCSTEP, len)`, the string and the box on
-                // the stack
+                // `lua_closeslot` leaves nil where the box was: `lua_gc(L,
+                // LUA_GCSTEP, len)` finds the string on the stack, not the
+                // box
+                self.drop_box(vm);
                 vm.lib_roots.push(Value::Str(r));
+                // the box's slot and the string are above the arguments
+                vm.native_push_if_native(2);
                 vm.gc_top = vm.native_top().unwrap_or_else(|| vm.lua_window_end());
                 let stepped = vm.gc_lua_step(out.len() as i64);
+                if vm.native_on_top() {
+                    vm.native_pop(2);
+                }
                 vm.lib_roots.pop();
                 stepped?;
-                self.drop_box(vm);
                 Ok(r)
             }
             _ => {
