@@ -8,6 +8,9 @@
 use super::*;
 use crate::runtime::table::Dialect;
 
+#[path = "heap_strt_order.rs"]
+mod order;
+
 /// In a string's `sub` byte: the string sweep took it off the count; the
 /// object sweep frees it without counting.
 pub(crate) const SWEPT: u8 = 0x10;
@@ -22,6 +25,11 @@ pub(super) struct StrtSweep {
     /// room for sorting `dead` by bucket
     sorted: Vec<(u32, *mut GcHeader)>,
     counts: Vec<u32>,
+    /// the place the newest string of each bucket has in its chain
+    seq: Vec<u16>,
+    /// the table grew from this many buckets for a string that has not
+    /// entered yet (`Heap::strt_enter`)
+    pub(super) grow_from: Option<usize>,
 }
 
 impl StrtSweep {
@@ -93,8 +101,24 @@ impl Heap {
                 cur = (*cur).next;
             }
         }
-        // a stable sort keeps a bucket's strings in the order of the list
         self.strt.sort_dead(size.max(1));
+        // each bucket's from the head of its chain
+        let dead = &mut self.strt.dead;
+        let mut i = 0;
+        while i < dead.len() {
+            let b = dead[i].0;
+            let mut j = i + 1;
+            while j < dead.len() && dead[j].0 == b {
+                j += 1;
+            }
+            if j - i > 1 {
+                // SAFETY: the dead strings are allocated
+                dead[i..j].sort_unstable_by_key(|e| {
+                    std::cmp::Reverse(unsafe { Gc::from_ptr(e.1 as *mut LuaStr).chain() })
+                });
+            }
+            i = j;
+        }
     }
 
     /// Whether `h`, dead, waits for the string sweep under way (every dead

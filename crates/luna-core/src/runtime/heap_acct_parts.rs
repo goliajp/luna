@@ -147,6 +147,9 @@ impl Heap {
             self.acct_block(old * p, new * p);
         }
         self.puc.strt_size = new;
+        if matches!(self.table_dialect, Dialect::L51 | Dialect::L52) {
+            self.strt_grew(old);
+        }
     }
 
     /// PUC's `checkSizes` when a collection's sweep ends: the string table
@@ -171,6 +174,7 @@ impl Heap {
                 self.acct_block(old * p, new * p);
             }
             self.puc.strt_size = new;
+            self.strt_resized(old);
             // 5.3 and 5.4 correct the estimate by what the shrink freed
             if matches!(d, Dialect::L53 | Dialect::L54) {
                 self.pace.estimate -= ((old - new) * p) as i64;

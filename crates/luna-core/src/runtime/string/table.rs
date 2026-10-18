@@ -97,6 +97,18 @@ impl StringTable {
         Ok((p, true))
     }
 
+    /// Every interned string, to `f`.
+    pub(crate) fn each(&self, mut f: impl FnMut(*mut LuaStr)) {
+        for &head in self.buckets.iter() {
+            let mut cur = head;
+            while !cur.is_null() {
+                f(cur);
+                // SAFETY: the chains hold only allocated strings
+                cur = unsafe { (*cur).hnext };
+            }
+        }
+    }
+
     /// The one-byte string `c`, if there is one (null otherwise).
     #[inline]
     pub(crate) fn single(&self, c: u8) -> *mut LuaStr {
