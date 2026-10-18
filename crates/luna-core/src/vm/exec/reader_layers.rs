@@ -13,7 +13,7 @@ pub(crate) use undump::UndumpShown;
 
 use super::load_acct::{PVal, ReaderView};
 use super::*;
-use crate::runtime::heap::{ENV_PROTO, LUNA_ONLY, UNLISTED};
+use crate::runtime::heap::{ENV_PROTO, LUNA_ONLY};
 use crate::runtime::mem::LVec;
 
 /// A reader call of a running `load`.
@@ -205,8 +205,7 @@ impl Vm {
     /// A parser table: luna's own, not listed or counted.
     fn reader_table(&mut self) -> Result<Gc<Table>, LuaError> {
         let t = self.alloc_table()?;
-        // SAFETY: a table just made; only its class byte is written
-        unsafe { (*t.header()).cls |= UNLISTED };
+        self.heap.own_table(t);
         Ok(t)
     }
 
