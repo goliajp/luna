@@ -170,14 +170,13 @@ impl Marker {
             }
             _ => return,
         };
+        // left white until the counted marking is done, which may reach it
+        // first and count it: tagged in the low bit, which a header's
+        // alignment leaves free
         // SAFETY: a value's object is allocated while it is marked; only
-        // its flag byte is written
-        unsafe {
-            let f = (*h).flags;
-            if is_white(f) {
-                (*h).flags = (*h).with_slow(f & !WHITE_BITS);
-                self.quiet.push(h);
-            }
+        // its flag byte is read
+        if unsafe { is_white((*h).flags) } {
+            self.quiet.push(h.map_addr(|a| a | 1));
         }
     }
 
@@ -189,8 +188,21 @@ impl Marker {
         }
         self.quiet_mode = true;
         while let Some(h) = self.quiet.pop() {
-            // SAFETY: a queued object is gray and allocated until the sweep
-            unsafe { blacken(h, self) };
+            let root = h.addr() & 1 != 0;
+            let h = h.map_addr(|a| a & !1);
+            // SAFETY: a queued object is allocated until the sweep; one
+            // held by luna alone is gray, one of its roots marked only if
+            // still white
+            unsafe {
+                if root {
+                    let f = (*h).flags;
+                    if !is_white(f) {
+                        continue;
+                    }
+                    (*h).flags = (*h).with_slow(f & !WHITE_BITS);
+                }
+                blacken(h, self);
+            }
             drain_marker(self);
         }
         self.quiet_mode = false;
