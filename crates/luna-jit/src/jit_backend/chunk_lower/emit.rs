@@ -124,12 +124,8 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     bcx.append_block_params_for_function_params(entry);
     bcx.switch_to_block(entry);
 
-    // Variables = Lua registers, declared once on the entry block so
-    // every BB downstream can `use_var` / `def_var` them. Each register
-    // gets a Cranelift type chosen from `reg_kinds[i]` (Int → I64,
-    // Float → F64). Unset registers default to I64 — they're unreachable
-    // in well-formed Lua but we still need a valid SSA shape.
-    // the scratch registers of `split_const_operands`
+    // one Variable per Lua register (and the scratch registers of
+    // `split_const_operands`), typed by `reg_kinds` (Unset as I64)
     let max_stack = (proto.max_stack as usize).max(num_params) + const_operands::SCRATCH_REGS;
     let mut regs = declare_regs(&mut bcx, c, reg_kinds, entry, max_stack);
     // a 5.5 numeric loop steps an index of its own and copies it into the
@@ -144,12 +140,9 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
             regs.push(bcx.declare_var(ty));
         }
     }
-    // emit-side per-PC kind tracker. Initialized from
-    // the per-arg masks (Float bit → Float, Table bit → Table, else
-    // Int) and updated forward at every writer op below. Used by
-    // `SetList` to tag-store each element correctly and by
-    // arith/cmp ops in lieu of the global `reg_kinds` slot when the
-    // global slot has been "joint-pinned" by Int + Table re-use.
+    // each register's kind as the emit goes, from the argument masks:
+    // `SetList` tags each element by it, and the arithmetic and
+    // comparisons read it where `reg_kinds` holds an Int and a Table
     let mut current_kinds: Vec<RegKind> = vec![RegKind::Unset; max_stack];
     for i in 0..num_params {
         current_kinds[i] = if (arg_float_mask >> i) & 1 == 1 {
@@ -160,16 +153,9 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
             RegKind::Int
         };
     }
-    // parallel to `current_kinds`: tracks "the value
-    // last written here is a Nil sentinel (raw bits = 0)". Set by
-    // `Op::LoadNil` emit; cleared by any other writer touching the
-    // same register. Reset to all-false at every BB switch (the
-    // narrow LoadNil → SetList window we lower lives entirely in
-    // one BB; broader BB-level Nil dataflow is left for later if
-    // a wider pattern needs it). `SetList` emit reads this to pick
-    // `RAW_TAG_NIL` over the default Int tag, so a chunk like
-    // `binary_trees`'s `{nil, nil}` leaf stores actual Nil values
-    // instead of misinterpreting the 0 bits as `Int(0)`.
+    // whether the value last written to each register is a `LoadNil`'s
+    // (raw bits 0), reset at each block switch: `SetList` then stores the
+    // Nil tag, not Int, so `{nil, nil}` holds nils, not zeros
     let current_is_nil: Vec<bool> = vec![false; max_stack];
     let self_calls = if any_self_call {
         let params = bcx.block_params(entry);
@@ -248,14 +234,8 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     });
     module.clear_context(&mut ctx);
 
-    define_entry(
-        module,
-        &mut ctx,
-        fn_id,
-        scan,
-        ring,
-        (arg_float_mask, arg_table_mask, num_params),
-    )
+    let args = (arg_float_mask, arg_table_mask, num_params);
+    define_entry(module, &mut ctx, fn_id, scan, ring, args)
 }
 
 /// Emit the ops at `from..to`, starting in the current block. The function

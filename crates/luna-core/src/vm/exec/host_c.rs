@@ -37,8 +37,7 @@ pub struct HostContHooks {
     /// on and return how many there are. A yield or an error the
     /// continuation raises comes back as the `Err`.
     pub resume: fn(&mut Vm, Gc<Coro>, u32, u32, Vec<Value>) -> Result<u32, LuaError>,
-    /// Continuation `token` of `thread` will never run: an error left its C
-    /// function.
+    /// Continuation `token` of `thread` will never run: an error left it.
     pub discard: fn(&mut Vm, Gc<Coro>, u32),
     /// A thread the C API has seen is about to be resumed.
     pub resuming: fn(&mut Vm, Gc<Coro>),

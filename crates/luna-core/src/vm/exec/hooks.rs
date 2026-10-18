@@ -193,14 +193,10 @@ impl Vm {
         let name = self.str_value(event)?;
         let lv = line.map_or(Value::Nil, Value::Int);
         self.in_hook = true;
-        // PUC `db_sethook`'s C trampoline `hookf` sits between the engine and
-        // the Lua hook, so `getinfo(2)` inside the hook resolves to the
-        // hooked function. A hooked native has no Lua frame in `frames`: the
-        // hook is pushed `from_c` (a synthetic C level, whose name
-        // `c_frame_name` reads from the caller's call instruction); a hooked
-        // Lua function's frame is still there, and the level descent lands
-        // on it. The hook's frame is `is_hook` (`getinfo(1).namewhat` is
-        // "hook", PUC `CIST_HOOKED`).
+        // PUC's trampoline `hookf` sits between the engine and the Lua hook,
+        // so `getinfo(2)` in the hook is the hooked function: a hooked native
+        // gets a synthetic C level (`from_c`), a Lua function's frame is still
+        // there. The hook's frame is `is_hook` (namewhat "hook", `CIST_HOOKED`).
         self.pending_is_hook = true;
         // `hookf` runs at the interrupted function's top (a Lua frame's
         // whole window, or the open results of a call above it) and pushes

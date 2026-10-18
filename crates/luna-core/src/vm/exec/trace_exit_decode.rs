@@ -56,8 +56,7 @@ impl Vm {
                 off: exit.map_or(0, |e| ct.exit_frame_offset(e as usize)),
             };
         }
-        // an exit for a collection check runs no side trace before the
-        // check: the check is the op's, in the frame the exit restores
+        // a collection-check exit runs no side trace: the check is the op's
         if !ct.has_any_side_wired.get() || self.jit.gc_exit.is_some() {
             return parent_only;
         }
@@ -295,8 +294,7 @@ impl Vm {
 
 /// Which trace's exit decodes a trace's return.
 pub(super) struct ExitSource {
-    /// The side trace whose exit shapes decode the return (`None`: the
-    /// trace's own).
+    /// The side trace whose exit shapes decode the return (`None`: its own).
     pub(super) child: Option<TArc<CompiledTrace>>,
     /// The return bits to decode.
     pub(super) body: u64,

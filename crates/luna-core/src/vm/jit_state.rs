@@ -116,8 +116,8 @@ pub struct JitState {
 
     /// Cap on the buffer pool size.
     pub str_buf_pool_cap: usize,
-    /// by the depth of nested trace runs: the records of PUC's objects
-    /// each running trace stands for (`TraceGhosts`), and the depth
+    /// The records of PUC's objects each running trace stands for
+    /// (`TraceGhosts`), by the depth of nested trace runs, and that depth.
     pub(crate) ghosts: Vec<crate::vm::exec::TraceGhosts>,
     pub(crate) ghost_depth: usize,
     /// Companion buffer for `entry_tags` (one u8 per register at entry).
@@ -210,8 +210,7 @@ pub struct JitCounters {
     pub method_replaced: u64,
     /// Number of traces that have aborted.
     pub aborted: u64,
-    /// Number of compiled traces that closed at a
-    /// `TraceEnd::InlineAbort` exit.
+    /// Compiled traces that closed at a `TraceEnd::InlineAbort` exit.
     pub inline_abort: u64,
     /// Count of closed traces the lowerer compiled.
     pub compiled: u64,
@@ -221,17 +220,13 @@ pub struct JitCounters {
     pub compile_failed: u64,
     /// Number of trace dispatch entries.
     pub dispatched: u64,
-    /// Number of trace entries that came back with
-    /// `jit_pending_err` set.
+    /// Number of trace entries that came back with `jit_pending_err` set.
     pub deopt: u64,
-    /// Count of side-trace recordings the dispatcher
-    /// started.
+    /// Count of side-trace recordings the dispatcher started.
     pub side_trace_started: u64,
-    /// Count of side-trace recordings that closed
-    /// AND reached the lowerer with a non-None outcome.
+    /// Side-trace recordings that closed and the lowerer compiled.
     pub side_trace_compiled: u64,
-    /// Count of side traces that compiled but
-    /// failed the shape-match gate.
+    /// Side traces that compiled but failed the shape-match gate.
     pub side_trace_shape_mismatch: u64,
     /// Dispatches of traces holding each kind of inlined code, by the bit
     /// of [`crate::jit::trace::CompiledTrace::inline_kinds`].
@@ -239,8 +234,7 @@ pub struct JitCounters {
     /// Recordings not compiled because other Vms sharing compiled code
     /// failed to compile one like it.
     pub shared_failures_known: u64,
-    /// The failures of other Vms counted as this one's at those
-    /// recordings.
+    /// The failures of other Vms counted as this one's at those recordings.
     pub shared_failures_counted: u64,
     /// Recordings compiled only up to a call they had followed into a
     /// function the trace could not hold.
@@ -252,11 +246,9 @@ pub struct JitCounters {
     pub side_trace_runs_inlined: u64,
     /// Tally of NewTable sites flagged Sinkable.
     pub sinkable_seen: u64,
-    /// Cumulative count of `BufferState::Bufferable`
-    /// accumulator sites.
+    /// Cumulative count of `BufferState::Bufferable` accumulator sites.
     pub accum_bufferable_seen: u64,
-    /// Tally of Sinkable sites that took the sunk-emit
-    /// path.
+    /// Tally of Sinkable sites that took the sunk-emit path.
     pub sunk_alloc: u64,
     /// Tally of materialise-helper emit sites.
     pub materialize_emit: u64,

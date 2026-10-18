@@ -57,15 +57,9 @@ use luna_core::vm::isa::{Inst, Op};
 /// Arity cap shared with the Cranelift backend.
 const MAX_JIT_ARITY: u32 = 16;
 
-/// Whitelisted op set + control-flow plan that the
-/// compute lowerer understands. Built by [`ChunkPlan::from_proto`];
-/// `None` when the proto falls outside the supported whitelist.
-///
-/// The plan is the full reach-analysed bytecode + a per-PC vector of
-/// basic-block start markers (every entry PC, every jump target, every
-/// PC immediately following a terminator). With branching ops in scope
-/// "reachable" is not a "sequential prefix"; we
-/// trace edges from PC 0 and mark every visited PC for emit.
+/// The control-flow plan of a chunk the compute lowerer can compile
+/// ([`ChunkPlan::from_proto`], `None` outside the whitelist): the bytecode
+/// with what is reachable from PC 0 and where each basic block starts.
 pub(super) struct ChunkPlan<'a> {
     /// Full chunk code (not truncated). The reach map (`reachable`)
     /// tells the lowerer which PCs to emit; unreachable PCs are
@@ -75,11 +69,8 @@ pub(super) struct ChunkPlan<'a> {
     pub(super) consts: &'a [Option<i64>],
     /// Number of i64 register slots to alloca on entry.
     pub(super) num_regs: u32,
-    /// Number of positional i64 args the JIT entry
-    /// accepts. `0` keeps the plain `extern "C" fn() -> i64`
-    /// signature; `> 0` widens to `fn(i64, …, i64) -> i64` and the
-    /// entry BB loads each `function.get_nth_param(i)` into `regs[i]`
-    /// so the lowerer sees param 0..N-1 as live register sources.
+    /// Number of positional i64 args the entry takes; the entry block
+    /// loads each into `regs[i]`.
     pub(super) num_params: u32,
     /// True ↔ all reachable returns are `Return1`; false ↔ all are
     /// `Return0`. A proto whose reachable set mixes the two bails
@@ -121,8 +112,7 @@ pub(super) struct ChunkPlan<'a> {
     pub(super) is_upval_value_read: Vec<bool>,
     /// The upvalue the self-recursive calls go through, if any.
     pub(super) self_upval_idx: Option<u32>,
-    /// At each self call: which registers hold nil, for a level handing
-    /// itself to the interpreter there (`flow::nils_at`).
+    /// The registers holding nil at each self call (`flow::nils_at`).
     pub(super) nils_at: Vec<Option<Vec<bool>>>,
 }
 
@@ -173,12 +163,8 @@ impl<'a> ChunkPlan<'a> {
         if !flow::reads_no_nil(code, &reachable, regs) {
             return None;
         }
-        let calls: Vec<bool> = self_call_pcs
-            .iter()
-            .zip(&tail_call_pcs)
-            .map(|(&c, &t)| c || t)
-            .collect();
-        let nils_at = flow::nils_at(code, &consumed_jmp, regs, proto.num_params as u32, &calls)?;
+        let calls = (&self_call_pcs[..], &tail_call_pcs[..]);
+        let nils_at = flow::nils_at(code, &consumed_jmp, regs, proto.num_params as u32, calls)?;
 
         Some(ChunkPlan {
             code,

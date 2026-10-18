@@ -248,7 +248,7 @@ fn puc_bytecode_loads_in_every_dialect() {
 /// A message handler that returns the error unchanged: the outcome shows
 /// it as lua.c's handler would. A nil one, which 5.5 would replace with its
 /// placeholder once the handler returns, is turned into lua.c's text here.
-fn same_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_core::vm::LuaError> {
+pub(crate) fn same_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_core::vm::LuaError> {
     let mut e = vm.nat_arg(fs, nargs, 0);
     if e.is_nil() && vm.version() >= LuaVersion::Lua55 {
         e = luna_core::runtime::Value::Str(vm.heap.intern(b"(error object is a nil value)"));

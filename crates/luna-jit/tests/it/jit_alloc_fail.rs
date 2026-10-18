@@ -122,10 +122,8 @@ fn compiled_growths(v: LuaVersion, src: &str, kind: Option<BlockKind>) -> usize 
     seen.get()
 }
 
-/// The refused growths: a spread of up to `max` of the `n` there are.
-/// Up to `max` of the growths `1..=n` a run made, short of the last ones:
-/// another run makes a few fewer where the collector's pace follows the
-/// string hashes, which each Vm seeds afresh (5.2, 5.3).
+/// Up to `max` of the growths `1..=n` a run made, short of the last few,
+/// which another run with a fresh string hash seed may not make (5.2, 5.3).
 fn spread(n: usize, max: usize) -> Vec<usize> {
     let end = n - n / 16;
     let step = (end / max).max(1);

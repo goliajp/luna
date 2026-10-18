@@ -193,12 +193,9 @@ pub struct Heap {
     /// PUC's collector state and pace
     pub(crate) pace: crate::runtime::gc_pace::Pace,
     seed: u32,
-    /// Embedding memory cap. When `Some(n)`, the VM's run loop watches
-    /// `bytes` between dispatch turns and, on overshoot, runs a full collect
-    /// and (still overshooting) raises a catchable "memory cap exceeded"
-    /// Lua error. A soft cap, not a hard alloc-time refusal: a single
-    /// allocation can briefly push `bytes` past `n`, but the embedder gets
-    /// control back at the next safe point — host policy.
+    /// Embedding memory cap, soft: between dispatch turns the run loop
+    /// checks `bytes` and over it runs a full collect, then (still over)
+    /// raises a catchable "memory cap exceeded"; one allocation can pass it.
     pub(crate) mem_cap: Option<usize>,
     /// Persistent gray queue: holds objects grayed by write barriers between
     /// the time the marker first reached them and the next propagate step.
@@ -314,6 +311,9 @@ mod pace;
 mod strt;
 #[path = "heap_sweep.rs"]
 mod sweep;
+#[cfg(feature = "gc-trace")]
+#[path = "heap_trace.rs"]
+mod trace;
 pub(crate) use self::mark::{Marker, native_puc_upvals};
 use self::mark::{blacken, drain_marker, survived_mark, weak_key_alive};
 
