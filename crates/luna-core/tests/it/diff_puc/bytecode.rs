@@ -92,7 +92,13 @@ end
             String::from_utf8_lossy(&e.msg)
         )
     })?;
-    if let Err(e) = vm.call_value(luna_core::runtime::Value::Closure(f), &[]) {
+    // run as lua.c runs a script, from inside its C function, which a
+    // traceback shows; the handler leaves the error as it is (made here: a
+    // collection could free the loaded function before it runs)
+    let msgh = vm.native(same_error);
+    if let Err(e) =
+        vm.call_value_with_handler_in_c(luna_core::runtime::Value::Closure(f), &[], msgh)
+    {
         let (pos, text) = normalize_err(&vm.error_display(&e));
         return Ok(Outcome::Error(pos, text));
     }
@@ -237,4 +243,15 @@ fn puc_bytecode_loads_in_every_dialect() {
     if require_all() {
         assert!(ran > 0, "[diff_puc] cross-dialect: nothing ran");
     }
+}
+
+/// A message handler that returns the error unchanged: the outcome shows
+/// it as lua.c's handler would. A nil one, which 5.5 would replace with its
+/// placeholder once the handler returns, is turned into lua.c's text here.
+fn same_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_core::vm::LuaError> {
+    let mut e = vm.nat_arg(fs, nargs, 0);
+    if e.is_nil() && vm.version() >= LuaVersion::Lua55 {
+        e = luna_core::runtime::Value::Str(vm.heap.intern(b"(error object is a nil value)"));
+    }
+    vm.nat_ret(fs, &[e])
 }
