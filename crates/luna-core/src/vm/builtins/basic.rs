@@ -118,8 +118,13 @@ pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         } else {
             vm.str_value(bytes)?
         };
-        // the number converted (`lua_tolstring`, 5.3 and 5.4 `%I`)
-        vm.api_check_converted(s)?;
+        // 5.1 and 5.2 convert the number in place (`lua_tolstring`); 5.3
+        // on push the string (`%I`, 5.5 `lua_pushstring`) and check then
+        if vm.version() >= LuaVersion::Lua53 {
+            vm.api_check_pushed(s)?;
+        } else {
+            vm.api_check_converted(s)?;
+        }
         if vm.version() == LuaVersion::Lua51 {
             vm.nat_set_arg(fs, 0, s);
         }
