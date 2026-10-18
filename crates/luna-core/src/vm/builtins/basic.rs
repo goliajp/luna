@@ -20,7 +20,7 @@ pub(super) fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         let key = vm.str_value(b"tostring")?;
         let ts = vm.index_value(g, key)?;
         // it stays pushed below each call of it
-        vm.native_push(1);
+        vm.native_push_vals(&[ts])?;
         Some(ts)
     } else {
         None
