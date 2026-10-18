@@ -158,7 +158,7 @@ impl Vm {
         // 5.5 vararg layout (PUC luaT_adjustvarargs): the extra args stay on the
         // stack just below the new `base`, so a named vararg can be indexed
         // virtually without allocating a table.
-        if proto.is_vararg && nargs > 0 {
+        if proto.is_vararg {
             let s = (func_slot + 1) as usize;
             let kept = nargs.min(nparams) as usize;
             // `base + kept <= need` since `kept <= nparams <= max_stack`
@@ -168,6 +168,7 @@ impl Vm {
                 let to = (base - n_varargs) as usize;
                 self.stack.copy_within(from..from + n_varargs as usize, to);
             }
+            self.vararg_left_behind(cl, s, kept, base, n_varargs);
         }
         // Only missing parameters become nil (PUC `luaD_precall`): the code
         // writes the rest before reading it, the collector keeps it valid
@@ -244,4 +245,27 @@ fn vararg_table_55(p: Gc<Proto>) -> bool {
     p.code
         .first()
         .is_some_and(|i| i.op() == crate::vm::isa::Op::GetVarg && i.a() == u32::from(p.num_params))
+}
+
+impl Vm {
+    /// What PUC leaves where a vararg function's fixed parameters came from:
+    /// nil ("for GC"); from 5.4 the function copied above the extra
+    /// arguments (`luaT_adjustvarargs`), where luna has the last extra one
+    /// or, with none, the slot below the base.
+    #[inline]
+    fn vararg_left_behind(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        first: usize,
+        kept: usize,
+        base: u32,
+        n_varargs: u32,
+    ) {
+        if first + kept <= (base - n_varargs) as usize {
+            self.stack[first..first + kept].fill(Value::Nil);
+        }
+        if self.version >= LuaVersion::Lua54 && n_varargs == 0 && !vararg_table_55(cl.proto) {
+            self.stack[base as usize - 1] = Value::Closure(cl);
+        }
+    }
 }
