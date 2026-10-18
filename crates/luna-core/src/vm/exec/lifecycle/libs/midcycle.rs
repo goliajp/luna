@@ -21,12 +21,17 @@ impl Vm {
         let d = self.heap.table_dialect;
         let to = match (d, state) {
             (_, 0) => St::Propagate,
-            // 5.5's `GCSswpallgc`
+            // 5.2's `GCSsweepudata`, 5.5's `GCSswpallgc`
+            (crate::runtime::table::Dialect::L52, 3) => St::SweepUdata,
             (crate::runtime::table::Dialect::L55, 3) => St::SweepAll,
             _ => return false,
         };
+        // 5.2: the objects with finalizers its sweep has still to go over
+        let fin_left = rec
+            .iter()
+            .find_map(|l| l.strip_prefix("F ").and_then(|n| n.parse::<i64>().ok()));
         let (mut black, mut gray, mut again, mut unswept) = (vec![], vec![], vec![], vec![]);
-        for line in &rec[1..] {
+        for line in rec[1..].iter().filter(|l| !l.starts_with("F ")) {
             let (kind, path) = line.split_at(2);
             let (alive, path) = match kind {
                 "U " => {
@@ -53,8 +58,13 @@ impl Vm {
                 self.heap.acct_enter_midcycle(&black, &gray, &again);
             } else {
                 self.heap.acct_enter_midsweep(&unswept);
+                if to == St::SweepUdata {
+                    // the strings are swept already
+                    self.heap.end_string_sweep();
+                }
             }
         }
+        self.heap.pace.fin_left = fin_left;
         let bytes = self.heap.bytes();
         let p = &mut self.heap.pace;
         p.state = to;
