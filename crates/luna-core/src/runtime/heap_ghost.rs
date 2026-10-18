@@ -62,7 +62,9 @@ impl Heap {
         let head = self.all;
         let ghost_head = !head.is_null()
             // SAFETY: `head`, not null, heads a live object of this heap
-            && unsafe { (*head).tag == ObjTag::Ghost && (*head).flags & COLOR_BITS == born };
+            && unsafe {
+                (*head).tag == ObjTag::Ghost && (*head).sub == 0 && (*head).flags & COLOR_BITS == born
+            };
         if ghost_head {
             let g = head as *mut Ghost;
             // SAFETY: a header tagged `Ghost` is a `Ghost`, and nothing else
@@ -206,7 +208,7 @@ impl Heap {
         // `Ghost` is a `Ghost`
         unsafe {
             while !cur.is_null() {
-                if (*cur).tag == ObjTag::Ghost {
+                if (*cur).tag == ObjTag::Ghost && (*cur).sub == 0 {
                     let sizes = &(*(cur as *const Ghost)).sizes;
                     n += sizes
                         .iter()

@@ -35,6 +35,20 @@ impl Heap {
                 Value::Userdata(u) => u.as_ptr() as *mut GcHeader,
                 _ => return,
             };
+            self.barrier_forward_obj(parent, ch);
+        }
+    }
+
+    /// [`Self::barrier_forward`] of a black `parent` to the object `ch`.
+    ///
+    /// # Safety
+    /// Both head allocated objects of this heap.
+    pub(crate) unsafe fn barrier_forward_obj(&mut self, parent: *mut GcHeader, ch: *mut GcHeader) {
+        // SAFETY: the caller's contract; only flag bytes are read and written
+        unsafe {
+            if !is_black((*parent).flags) {
+                return;
+            }
             let cf = (*ch).flags;
             if !is_white(cf) {
                 return;
@@ -44,6 +58,7 @@ impl Heap {
             }
             if (*ch).tag == ObjTag::Str {
                 (*ch).flags = (*ch).with_slow((cf & !COLOR_BITS) | BLACK);
+                (*ch).cls &= !super::parse::KEPT;
             } else {
                 (*ch).flags = (*ch).with_slow(cf & !WHITE_BITS);
                 self.push_gray(ch);
@@ -59,7 +74,7 @@ impl Heap {
     #[inline(always)]
     pub fn barrier_back<T: GcObject>(&mut self, parent: Gc<T>) {
         // SAFETY: `parent` is a handle, so its object is allocated, and a `GcObject` starts with its header
-        unsafe { self.barrier_back_header(parent.header()) }
+        unsafe { self.barrier_back_obj(parent.header()) }
     }
 
     /// The write barrier a table store of `vals` (the key and the value,
@@ -103,7 +118,7 @@ impl Heap {
     ///
     /// # Safety
     /// `parent` is the header of an allocated object.
-    unsafe fn barrier_back_header(&mut self, parent: *mut GcHeader) {
+    pub(crate) unsafe fn barrier_back_obj(&mut self, parent: *mut GcHeader) {
         // SAFETY: `parent` heads an allocated object (the caller's contract); only its flag byte is read and written
         unsafe {
             let f = (*parent).flags;

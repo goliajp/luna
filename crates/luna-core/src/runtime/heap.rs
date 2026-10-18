@@ -253,7 +253,8 @@ pub struct Heap {
 }
 
 impl Heap {
-    /// Put a new object on the all-objects list with its born color.
+    /// Put a new object on the all-objects list with its born color, or
+    /// (while a load builds what PUC makes later) aside until PUC makes it.
     ///
     /// # Safety
     /// `h` is the header of an object the caller just allocated (a fresh box
@@ -263,23 +264,17 @@ impl Heap {
     unsafe fn link(&mut self, h: *mut GcHeader) {
         // SAFETY: the caller's contract
         unsafe {
-            (*h).next = self.all;
-            // born the current white in every phase (PUC `luaC_white(g)`):
-            // one made while marking is marked by the atomic step if it is
-            // reachable then (the roots are marked again there, and a black
-            // object that took it was sent back to gray by its barrier)
-            (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.current_white);
+            if self.puc.unborn_on && self.set_aside(h) {
+                return;
+            }
+            self.link_now(h);
         }
-        self.all = h;
-        self.live += 1;
-        #[cfg(feature = "gc-verify")]
-        self.forget_freed(h);
     }
 }
 
 #[path = "heap_acct.rs"]
 mod acct;
-pub(crate) use acct::{Deferred, Ghost, GhostRef, PucKind, is_uncounted};
+pub(crate) use acct::{Deferred, Ghost, GhostRef, PucKind, is_uncounted, parse};
 #[path = "heap_alloc.rs"]
 mod alloc;
 #[path = "heap_barrier.rs"]

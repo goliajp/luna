@@ -1,5 +1,5 @@
 //! The parser's tables as counts: which keys each holds and how big PUC's
-//! array and hash parts are, recorded as PUC's table (`GhostRef`).
+//! array and hash parts are, recorded as PUC's table (`LoadTab`).
 //!
 //! A parser table only gains keys (5.5's chunk table loses its functions'
 //! tables, whose nodes stay occupied), so PUC rehashes exactly when a new
@@ -7,7 +7,7 @@
 //! sizes follow from how many keys there are and which are integers.
 
 use super::*;
-use crate::runtime::heap::GhostRef;
+use crate::runtime::heap::GcHeader;
 
 /// A key's identity in a parser table.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -95,7 +95,8 @@ pub(super) struct PTab {
     removed: bool,
     /// the keys that may go to the array part, by `ceil_log2`
     nums: [u32; 65],
-    ghost: Option<GhostRef>,
+    /// PUC's table, unless nothing is counted
+    tab: Option<*mut GcHeader>,
 }
 
 impl PTab {
@@ -107,8 +108,8 @@ impl PTab {
         keys: usize,
         counted: bool,
     ) -> Result<PTab, SyntaxError> {
-        let ghost = if counted {
-            Some(heap.acct_ghost_table(0, 0)?)
+        let tab = if counted {
+            Some(heap.new_load_tab()?)
         } else {
             None
         };
@@ -120,7 +121,7 @@ impl PTab {
             used: 0,
             removed: false,
             nums: [0; 65],
-            ghost,
+            tab,
         })
     }
 
@@ -133,10 +134,22 @@ impl PTab {
         self.keys.contains(&k)
     }
 
-    /// `k` put in the table (PUC `luaH_newkey`), when it is not there.
-    pub(super) fn insert(&mut self, heap: &mut Heap, d: Dialect, k: PKey) {
+    /// PUC's table, unless nothing is counted.
+    pub(super) fn tab(&self) -> Option<*mut GcHeader> {
+        self.tab
+    }
+
+    /// `k` put in the table (PUC `luaH_newkey`), when it is not there;
+    /// `obj` the object among the key and its value, if any.
+    pub(super) fn insert(
+        &mut self,
+        heap: &mut Heap,
+        d: Dialect,
+        k: PKey,
+        obj: Option<*mut GcHeader>,
+    ) -> Result<(), crate::runtime::mem::Oom> {
         if !self.keys.insert(k) {
-            return;
+            return Ok(());
         }
         let in_array = k.index().is_some_and(|i| i <= self.asize);
         if !in_array && self.used == self.nodes {
@@ -147,10 +160,17 @@ impl PTab {
         if let Some(i) = k.index() {
             self.nums[ceil_log2(i)] += 1;
         }
+        match (self.tab, obj) {
+            (Some(t), Some(o)) => heap.load_tab_ref(t, o),
+            _ => Ok(()),
+        }
     }
 
     /// `k` set to nil: the key goes, its node stays taken.
-    pub(super) fn remove(&mut self, k: PKey) {
+    pub(super) fn remove(&mut self, heap: &mut Heap, k: PKey, obj: *mut GcHeader) {
+        if let Some(t) = self.tab {
+            heap.load_tab_unref(t, obj);
+        }
         if self.keys.remove(&k) {
             if let Some(i) = k.index() {
                 self.nums[ceil_log2(i)] -= 1;
@@ -181,14 +201,8 @@ impl PTab {
         } else {
             hash.next_power_of_two()
         };
-        if let Some(g) = self.ghost {
-            heap.ghost_table_resize(
-                g,
-                self.asize as usize,
-                self.nodes as usize,
-                asize as usize,
-                nodes as usize,
-            );
+        if let Some(t) = self.tab {
+            heap.load_tab_resize(t, asize as usize, nodes as usize);
         }
         let in_hash = total - in_array;
         (self.asize, self.nodes, self.used, self.removed) = (asize, nodes, in_hash, false);
@@ -269,10 +283,10 @@ mod tests {
             let t = unsafe { t.as_mut() };
             if set {
                 t.set(heap, k, Value::Int(0)).expect("set");
-                p.insert(heap, d, PKey::of(k));
+                p.insert(heap, d, PKey::of(k), None).expect("insert");
             } else {
                 t.set(heap, k, Value::Nil).expect("clear");
-                p.remove(PKey::of(k));
+                p.remove(heap, PKey::of(k), std::ptr::null_mut());
             }
             let (a, n) = t.part_sizes();
             assert_eq!(

@@ -31,6 +31,47 @@ impl Heap {
         self.trace.line(format_args!("n {n} {by:?}"));
     }
 
+    /// `R38_KEYS`: key `k` enters table `t`'s hash part.
+    pub(crate) fn trace_new_key(&mut self, t: &crate::runtime::Table, k: crate::runtime::Value) {
+        use crate::runtime::Value;
+        if !self.trace.keys {
+            return;
+        }
+        let key = match k {
+            Value::Str(s) if s.is_empty() => String::from("-"),
+            Value::Str(s) => s.as_bytes().iter().map(|b| format!("{b:02x}")).collect(),
+            Value::Int(i) => format!("#{i}"),
+            Value::Float(f) if f.fract() == 0.0 && f.abs() < 1e15 => format!("#{}", f as i64),
+            Value::Float(f) => format!("#{f}"),
+            other => format!("?{}", other.type_name()),
+        };
+        self.trace.line(format_args!(
+            "K {:p} {key}",
+            t as *const crate::runtime::Table
+        ));
+    }
+
+    /// `R38_SWEEP`: the sweep goes over `h`.
+    ///
+    /// # Safety
+    /// `h` heads a live object of this heap.
+    pub(crate) unsafe fn trace_swept(&mut self, h: *mut GcHeader, dead: bool) {
+        if !self.trace.sweep {
+            return;
+        }
+        // SAFETY: the caller's contract
+        unsafe {
+            let dead = u8::from(dead);
+            if self.listed(h) {
+                let tag = (*h).tag as u8;
+                self.trace.line(format_args!("w {tag} {dead}"));
+            } else if (*h).tag == ObjTag::Ghost && (*h).sub == 0 {
+                let n = Self::ghost_objects(&*(h as *const Ghost));
+                self.trace.line(format_args!("w g{n} {dead}"));
+            }
+        }
+    }
+
     /// `R38_TRACE`: a thread of `stack` slots shrunk with `inuse` in use.
     pub(crate) fn trace_shrink(&mut self, stack: u32, inuse: u32) {
         self.trace.line(format_args!("sh {stack} {inuse}"));

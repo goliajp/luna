@@ -13,6 +13,8 @@ use crate::runtime::table::Dialect;
 #[path = "heap_ghost.rs"]
 mod ghost;
 pub(crate) use ghost::{Ghost, GhostRef};
+#[path = "heap_parse.rs"]
+pub(crate) mod parse;
 
 /// PUC's structures luna has no object for, as far as the count goes.
 pub(crate) struct PucState {
@@ -58,6 +60,13 @@ pub(crate) struct PucState {
     /// the load about to run was checked for a collection already (5.4+
     /// `lua_load`, before its reader read)
     pub(crate) load_checked: bool,
+    /// a load that must not collect is running (`Vm::load`)
+    pub(crate) load_holds: bool,
+    /// the loads a collection step runs in the middle of
+    pub(crate) parse: Vec<parse::ParseFrame>,
+    /// what loads made before PUC does, off the list (`Heap::set_aside`)
+    pub(crate) unborn: Vec<*mut GcHeader>,
+    pub(crate) unborn_on: bool,
 }
 
 impl Default for PucState {
@@ -82,6 +91,10 @@ impl Default for PucState {
             load_msg: None,
             next_id: 0,
             load_checked: false,
+            load_holds: false,
+            parse: Vec::new(),
+            unborn: Vec::new(),
+            unborn_on: false,
         }
     }
 }
@@ -187,6 +200,8 @@ impl Heap {
     /// An object made without counting is PUC's now: counted here.
     pub(crate) fn acct_promote_obj(&mut self, h: *mut GcHeader, kind: PucKind, size: usize) {
         if self.puc.silent == 0 && is_uncounted(h) {
+            // SAFETY: the caller names a live object
+            unsafe { self.born(h) };
             set_uncounted(h, false);
             self.acct_obj(kind, size);
         }
@@ -207,27 +222,6 @@ impl Heap {
             (o, 0) => self.trace.line(format_args!("d {o}")),
             (o, n) => self.trace.line(format_args!("r {o} {n}")),
         }
-    }
-
-    /// `R38_KEYS`: key `k` enters table `t`'s hash part.
-    #[cfg(feature = "gc-trace")]
-    pub(crate) fn trace_new_key(&mut self, t: &crate::runtime::Table, k: crate::runtime::Value) {
-        use crate::runtime::Value;
-        if !self.trace.keys {
-            return;
-        }
-        let key = match k {
-            Value::Str(s) if s.is_empty() => String::from("-"),
-            Value::Str(s) => s.as_bytes().iter().map(|b| format!("{b:02x}")).collect(),
-            Value::Int(i) => format!("#{i}"),
-            Value::Float(f) if f.fract() == 0.0 && f.abs() < 1e15 => format!("#{}", f as i64),
-            Value::Float(f) => format!("#{f}"),
-            other => format!("?{}", other.type_name()),
-        };
-        self.trace.line(format_args!(
-            "K {:p} {key}",
-            t as *const crate::runtime::Table
-        ));
     }
 
     /// A block PUC allocates through the allocation function but leaves

@@ -34,6 +34,7 @@ impl Vm {
         let mut tree = ParseScratch::new(self.heap.mem_owner());
         tree.record = true;
         self.heap.puc.silent += 1;
+        self.heap.set_aside_loads(true);
         let built = match parse_in_place(&fixed, v, depth, &mut tree) {
             Ok(()) => {
                 let (ast, end_lines) = tree.parsed();
@@ -43,6 +44,7 @@ impl Vm {
             }
             Err(_) => None,
         };
+        self.heap.set_aside_loads(false);
         self.heap.puc.silent -= 1;
         let Some(cl) = built else {
             return Ok(());
@@ -97,6 +99,7 @@ impl Vm {
                 self.replay_syntax_error(&mut r, e, failed.near, source.as_bytes())
             });
         self.compile_scratch.puc_log = log;
+        self.replay_left(&r, false);
         if replayed.is_ok() {
             // `luaD_pcall` shrinks the stack, then the parser's buffers go
             self.shrink_load_error();
@@ -110,23 +113,9 @@ impl Vm {
 /// The prototypes of the functions still open keep their arrays as grown:
 /// their sizes are what freeing them frees.
 fn unclosed(r: &mut Replay, s: crate::runtime::puc_size::PucSizes) {
-    let line_elem = if matches!(r.d, Dialect::L54 | Dialect::L55) {
-        1
-    } else {
-        4
-    };
     for f in &r.fs {
         if let Some(p) = r.opening.get(f.shape) {
-            let arrays = [
-                (f.code, 4),
-                (f.p, s.ptr),
-                (f.k, s.tvalue),
-                (f.line, line_elem),
-                (f.abs, s.abslineinfo),
-                (f.loc, s.locvar),
-                (f.up, s.upvaldesc),
-            ];
-            p.puc_arrays.set(arrays.map(|(a, e)| (a.cap * e) as u32));
+            p.puc_arrays.set(f.puc_caps(r.d, &s));
         }
     }
 }

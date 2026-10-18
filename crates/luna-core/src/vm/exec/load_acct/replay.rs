@@ -26,6 +26,30 @@ pub(super) struct Fs {
     /// emitted so far
     pub(super) shape: usize,
     pub(super) pc: usize,
+    /// where its strings start among `Replay::kstr`
+    pub(super) kbase: usize,
+}
+
+impl Fs {
+    /// The bytes of each of its prototype's arrays as grown (see
+    /// `Proto::puc_arrays`).
+    pub(super) fn puc_caps(&self, d: Dialect, s: &crate::runtime::puc_size::PucSizes) -> [u32; 7] {
+        let line = if matches!(d, Dialect::L54 | Dialect::L55) {
+            1
+        } else {
+            4
+        };
+        [
+            (self.code, 4),
+            (self.p, s.ptr),
+            (self.k, s.tvalue),
+            (self.line, line),
+            (self.abs, s.abslineinfo),
+            (self.loc, s.locvar),
+            (self.up, s.upvaldesc),
+        ]
+        .map(|(a, e)| (a.cap * e) as u32)
+    }
 }
 
 /// Where the replay of a load that failed stops: before the events at
@@ -61,6 +85,14 @@ pub(in crate::vm::exec) struct TabOp {
 /// The replay's state.
 pub(super) struct Replay<'s> {
     pub(super) d: Dialect,
+    /// the chunk's main closure
+    pub(super) cl: Option<Gc<LuaClosure>>,
+    /// 5.2: the table of the function closing, while it anchors the token
+    /// read last in the enclosing function's (still on the stack)
+    pub(super) closing_tab: Option<*mut crate::runtime::heap::GcHeader>,
+    /// the strings among the constants of the functions open, each one's
+    /// after those of the function it is nested in
+    pub(super) kstr: Vec<Gc<crate::runtime::LuaStr>>,
     pub(super) fs: Vec<Fs>,
     /// the chunk's table (5.3+): the scanner's strings, 5.3 and 5.4's
     /// constants, 5.5's anchors
@@ -133,6 +165,9 @@ impl<'s> Replay<'s> {
         walk(proto, &mut opening, &mut closing);
         Replay {
             d,
+            cl: None,
+            closing_tab: None,
+            kstr: Vec::new(),
             fs: Vec::new(),
             h: None,
             tabs: 0,

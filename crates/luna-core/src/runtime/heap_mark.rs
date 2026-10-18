@@ -55,16 +55,12 @@ pub(crate) struct Marker {
     /// the dialect, whose `reallymarkobject` decides which objects are
     /// traversed as soon as they are marked
     pub(crate) dialect: crate::runtime::table::Dialect,
-    /// Protos with a non-null closure cache (PUC `Proto.cache`). After
-    /// marking is done, any cached LClosure that ended the cycle unmarked is
-    /// cleared so the sweep can collect it — the cache is a *weak* reference
-    /// (PUC `traverseproto` checks `iswhite(cache)`). Seen via [`Proto::trace`].
+    /// Protos with a closure cache (PUC `Proto.cache`), a weak reference:
+    /// a cached closure left unmarked is cleared once marking is done.
     pub(crate) cached_protos: Vec<*mut crate::runtime::Proto>,
-    /// `LEAF` or 0, tested against an object's flags: mark objects without
-    /// children BLACK on sight (PUC's library functions are not objects).
-    /// Only the stop-the-world mark sets it: a native standing for a C
-    /// closure has work the incremental step charges when it leaves the
-    /// queue. Strings go BLACK on sight in every mark.
+    /// `LEAF` or 0, tested against an object's flags: objects without
+    /// children go BLACK on sight (only the stop-the-world mark sets it; a
+    /// native standing for a C closure has work an incremental step counts).
     pub(super) leaf_black: u8,
     /// 5.2 and 5.3: the size of a string's header, to count what marking
     /// a string or a userdata adds to the work (PUC `GCmemtrav`); 0 for
@@ -83,6 +79,8 @@ pub(crate) struct Marker {
     pub(super) quiet_mode: bool,
     /// 5.1's environment records, or null
     pub(super) env51: *const super::env51::Env51,
+    /// the loads a step runs inside (`PucState::parse`), or null
+    pub(super) parse: *const Vec<super::parse::ParseFrame>,
     /// `gc-verify`: instead of marking a child, report one the sweep about
     /// to run would free (white, not the current white) while the object
     /// being traced (the second) holds it; the check's name third
@@ -102,8 +100,7 @@ pub(super) fn drain_marker(m: &mut Marker) {
 }
 
 /// PUC `propagatemark`: `h` gray → black before tracing its children, so a
-/// child that points back at it (a cycle) finds it black and does not loop.
-/// White bits were cleared when it was grayed.
+/// child that points back at it (a cycle) finds it black.
 ///
 /// # Safety
 /// `h` is the header of a gray object, allocated until the sweep; the tag
@@ -130,6 +127,8 @@ pub(super) unsafe fn trace_children(h: *mut GcHeader, m: &mut Marker) {
             ObjTag::Ghost => {
                 if super::env51::is_phantom(h) {
                     m.trace_phantom(h);
+                } else if super::parse::is_load_tab(h) {
+                    m.trace_load_tab(h);
                 }
             }
             ObjTag::Table => (*(h as *mut Table)).trace(h as *mut Table, m),
@@ -214,12 +213,9 @@ impl Marker {
         unsafe { self.header(g.header()) }
     }
 
-    /// Mark a bare header, returning true if it was newly marked (was white).
-    /// Transitions white → gray (in PUC `reallymarkobject` terms): clears the
-    /// current-white bit and pushes onto the gray stack. `drain_marker` later
-    /// pops it, traces children, and stamps it BLACK. A string, and with
-    /// `leaf_black` set any object without children (a native function
-    /// without upvalues), goes straight to BLACK instead.
+    /// Mark a bare header (PUC `reallymarkobject`), true if it was white:
+    /// gray, on the gray stack; a string, and with `leaf_black` set any
+    /// object without children, straight to BLACK.
     ///
     /// # Safety
     /// `h` is the header of an object this heap allocated and has not freed.
@@ -253,6 +249,7 @@ impl Marker {
                 // as PUC's `reallymarkobject` makes it
                 if f & self.leaf_black != 0 || (*h).tag == ObjTag::Str {
                     (*h).flags = (*h).with_slow((f & !WHITE_BITS) | BLACK);
+                    (*h).cls &= !super::parse::kept_bit((*h).tag);
                 } else if self.at_once(h) {
                     // an upvalue, and a userdata up to 5.3, are never gray:
                     // what they hold is marked as they are

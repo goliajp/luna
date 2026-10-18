@@ -22,7 +22,11 @@ impl Vm {
     /// values stay valid until a call or an `eval` runs.
     pub fn load(&mut self, src: &[u8], chunkname: &[u8]) -> Result<Gc<LuaClosure>, SyntaxError> {
         self.heap.puc.load_checked = true;
-        self.load_named(src, chunkname, None)
+        // the parser's checks for a collection do not collect either
+        let held = std::mem::replace(&mut self.heap.puc.load_holds, true);
+        let r = self.load_named(src, chunkname, None);
+        self.heap.puc.load_holds = held;
+        r
     }
 
     /// [`Vm::load`] with the chunk name already a heap string (`name`,
@@ -43,7 +47,7 @@ impl Vm {
 
     /// The load fails with `e`, an error a collection check inside it
     /// raised: kept for the load's caller to report as it is.
-    fn load_failed_by(&mut self, e: LuaError) -> SyntaxError {
+    pub(super) fn load_failed_by(&mut self, e: LuaError) -> SyntaxError {
         let text = match e.0 {
             Value::Str(s) => s.as_bytes().to_vec(),
             _ => Vec::new(),
@@ -175,6 +179,8 @@ impl Vm {
             let counted = self.heap.puc.silent == 0;
             self.parse_scratch.record = counted;
             self.heap.puc.silent += 1;
+            let base = self.heap.unborn_len();
+            self.heap.set_aside_loads(counted);
             let long = chunkname.len() > crate::runtime::string::MAX_SHORT_LEN
                 && self.heap.table_dialect != crate::runtime::table::Dialect::L51;
             let source = match name {
@@ -186,6 +192,7 @@ impl Vm {
                 .and_then(|source| self.compile_text_in_place(src, source))
                 .and_then(|p| self.hold_puc_names(p).map(|()| p))
                 .and_then(|p| Ok((p, self.close_chunk(p)?)));
+            self.heap.set_aside_loads(false);
             self.heap.puc.silent -= 1;
             // what PUC made before the error is counted as it made it
             let failed = match (&made, source) {
@@ -195,19 +202,29 @@ impl Vm {
                 _ => Ok(()),
             };
             self.parse_scratch.record = false;
-            failed?;
-            let (_, cl) = made?;
-            let scratch = std::mem::replace(
-                &mut self.parse_scratch,
-                crate::frontend::parser::ParseScratch::new(self.heap.mem_owner()),
-            );
-            let counted = match scratch.recorded() {
-                Some(rec) => self.acct_text_load(src, scratch.parsed().0, rec, cl, Vec::new()),
-                None => Ok(()),
+            let out = 'acct: {
+                if let Err(e) = failed {
+                    break 'acct Err(e);
+                }
+                let cl = match made {
+                    Ok((_, cl)) => cl,
+                    Err(e) => break 'acct Err(e),
+                };
+                let scratch = std::mem::replace(
+                    &mut self.parse_scratch,
+                    crate::frontend::parser::ParseScratch::new(self.heap.mem_owner()),
+                );
+                let counted = match scratch.recorded() {
+                    Some(rec) => self.acct_text_load(src, scratch.parsed().0, rec, cl, Vec::new()),
+                    None => Ok(()),
+                };
+                self.parse_scratch = scratch;
+                counted.map(|()| cl)
             };
-            self.parse_scratch = scratch;
-            counted?;
-            return Ok(cl);
+            // what PUC did not make (luna's own, or the garbage of a load
+            // that failed) is on the list now
+            self.heap.flush_unborn(base);
+            return out;
         };
         self.close_chunk(proto)
     }
@@ -220,12 +237,16 @@ impl Vm {
         &mut self,
         f: impl FnOnce(&mut Vm) -> Result<R, SyntaxError>,
     ) -> Result<R, SyntaxError> {
-        let silent = self.heap.puc.silent;
+        let (silent, frames) = (self.heap.puc.silent, self.heap.puc.parse.len());
         match catch_load_oom(|| f(self)) {
             Ok(r) => r,
             Err(()) => {
-                // the failure unwound past what stops counting for the load
+                // the failure unwound past what stops counting for the load,
+                // and past a step's frame of the parser's objects
                 self.heap.puc.silent = silent;
+                self.heap.puc.parse.truncate(frames);
+                self.heap.set_aside_loads(false);
+                self.heap.flush_unborn(0);
                 self.compile_scratch = crate::compiler::CompileScratch::new(self.heap.mem());
                 Err(load_oom(&self.heap))
             }

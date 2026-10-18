@@ -2,12 +2,16 @@
 
 use super::{LuaClosure, NativeClosure, Proto};
 use crate::runtime::heap::Marker;
+use crate::runtime::heap::parse::PARSING;
 
 impl Proto {
     /// `this` is the pointer the marker reached the prototype through, `self`
     /// reborrowed; the post-mark pass clears the cache through it
     pub(crate) fn trace(&self, this: *mut Proto, m: &mut Marker) {
         debug_assert!(std::ptr::eq(this, self));
+        if self.hdr.cls & PARSING != 0 && m.trace_parsing_proto(self) {
+            return;
+        }
         for &k in self.consts.iter() {
             m.value(k);
         }
@@ -39,6 +43,9 @@ impl LuaClosure {
     // kept inline in the drain loop, which visits every closure
     #[inline(always)]
     pub(crate) fn trace(&self, m: &mut Marker) {
+        if self.hdr.cls & PARSING != 0 && m.trace_parsing_closure(self) {
+            return;
+        }
         m.mark(self.proto);
         for &uv in self.upvals().iter() {
             m.mark(uv);

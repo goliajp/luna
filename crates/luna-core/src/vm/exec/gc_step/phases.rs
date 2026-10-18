@@ -26,7 +26,15 @@ impl Vm {
         let (main, main_top, main_size, main_ci) = main.unwrap_or((std::ptr::null_mut(), 0, 0, 0));
         Running {
             h: co.map_or(std::ptr::null_mut(), |c| c.as_ptr() as *mut _),
-            top: self.gc_top,
+            // with a load's parser objects above
+            top: self.gc_top
+                + self
+                    .heap
+                    .puc
+                    .parse
+                    .iter()
+                    .map(|f| f.slots.len() as u32)
+                    .sum::<u32>(),
             size: self.stack_size,
             // 5.1 counts its `CallInfo` array, 5.2 the ones in use below
             // the running one, the later dialects all it has

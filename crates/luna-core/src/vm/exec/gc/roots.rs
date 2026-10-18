@@ -122,7 +122,18 @@ impl Vm {
         // excluded so weak-table entries are not spuriously pinned
         // (gc.lua:544 suspended-coroutine collection).
         let live = (self.gc_top as usize).min(self.stack.len());
-        for &v in self.stack[..live].iter().chain(self.jit.ssa_roots.iter()) {
+        for &v in self.stack[..live].iter() {
+            m.value(v);
+        }
+        // a load's parser objects, above its C function's slots on PUC's
+        // stack
+        for f in &self.heap.puc.parse {
+            for &h in &f.slots {
+                // SAFETY: a parser object is allocated while its load runs
+                unsafe { m.header(h) };
+            }
+        }
+        for &v in self.jit.ssa_roots.iter() {
             m.value(v);
         }
         for cf in &self.frames {

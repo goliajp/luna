@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::runtime::LuaStr;
+use crate::runtime::heap::GcHeader;
 
 impl Vm {
     /// A new constant (`addk`): its entry under PUC's key, in the table
@@ -42,14 +43,27 @@ impl Vm {
                     Dialect::L53 | Dialect::L54 => r.h.as_mut(),
                     _ => r.fs.last_mut().and_then(|f| f.h.as_mut()),
                 };
+                // a string is an object of PUC's; nil is keyed by the
+                // table itself
+                let obj = match kv {
+                    PVal::V(Value::Str(s)) => Some(s.as_ptr() as *mut GcHeader),
+                    _ => None,
+                };
                 if let Some(t) = t {
-                    t.insert(&mut self.heap, r.d, k);
+                    t.insert(&mut self.heap, r.d, k, obj)?;
                 }
                 r.note(id, kv, Some(PVal::V(Value::Int(index as i64))));
             }
         }
         if !k_first && let Some(f) = r.fs.last_mut() {
             f.k.push(&mut self.heap, s.tvalue);
+        }
+        // the constant in the prototype (`luaC_barrier`)
+        if let Value::Str(cs) = v
+            && r.rec.is_none()
+        {
+            r.kstr.push(cs);
+            self.proto_barrier(r, r.fs.len().wrapping_sub(1), cs.as_ptr() as *mut GcHeader);
         }
         Ok(())
     }
@@ -114,21 +128,27 @@ impl Vm {
     }
 
     /// 5.5 `luaD_anchorobj`: an object keyed in the chunk's table (parser
-    /// table number `t`, or one luna has no object for).
-    pub(super) fn anchor_in_h(&mut self, r: &mut Replay, t: Option<u32>) {
-        let key = match t {
-            Some(t) => PKey::Tab(t),
+    /// table number `t` with its table of PUC's, or the main closure).
+    pub(super) fn anchor_in_h(
+        &mut self,
+        r: &mut Replay,
+        t: Option<(u32, Option<*mut GcHeader>)>,
+    ) -> Result<(), SyntaxError> {
+        let (key, obj) = match t {
+            Some((t, tab)) => (PKey::Tab(t), tab),
             None => {
                 r.anchors += 1;
-                PKey::Ptr(r.anchors)
+                let cl = r.cl.map(|c| c.as_ptr() as *mut GcHeader);
+                (PKey::Ptr(r.anchors), cl)
             }
         };
         if let Some(h) = r.h.as_mut() {
-            h.insert(&mut self.heap, r.d, key);
+            h.insert(&mut self.heap, r.d, key, obj)?;
             let id = h.id;
-            let obj = t.map_or(PVal::Closure, PVal::Tab);
+            let obj = t.map_or(PVal::Closure, |t| PVal::Tab(t.0));
             r.note(id, obj, Some(obj));
         }
+        Ok(())
     }
 
     /// The scanner's string `s` keyed in parser table `t` (`luaH_set` on a
@@ -137,9 +157,9 @@ impl Vm {
         &mut self,
         t: &mut PTab,
         d: Dialect,
-        #[cfg_attr(not(feature = "gc-trace"), allow(unused_variables))] s: Gc<LuaStr>,
+        s: Gc<LuaStr>,
         k: PKey,
-    ) {
+    ) -> Result<(), crate::runtime::mem::Oom> {
         #[cfg(feature = "gc-trace")]
         if !t.contains(k) {
             self.heap.trace.line(format_args!(
@@ -149,6 +169,6 @@ impl Vm {
                 s.hash()
             ));
         }
-        t.insert(&mut self.heap, d, k);
+        t.insert(&mut self.heap, d, k, Some(s.as_ptr() as *mut GcHeader))
     }
 }

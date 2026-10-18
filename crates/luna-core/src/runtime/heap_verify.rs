@@ -107,6 +107,7 @@ impl Heap {
     #[cfg(feature = "gc-verify")]
     pub fn verify_no_dangling(&self, ctx: &str) {
         use std::collections::HashSet;
+        self.verify_kept(ctx);
         fn value_header(v: Value) -> Option<*mut GcHeader> {
             match v {
                 Value::Str(s) => Some(s.as_ptr() as *mut GcHeader),
@@ -198,6 +199,7 @@ impl Heap {
             quiet: Vec::new(),
             quiet_mode: false,
             env51: std::ptr::null(),
+            parse: std::ptr::null(),
             verify: None,
         };
         let mut cur = self.all;
@@ -261,13 +263,22 @@ pub(super) unsafe fn dead_child(
     // SAFETY: the caller's contract; only headers are read
     unsafe {
         let f = (*h).flags;
-        if is_white(f) && f & new_white == 0 {
+        // a string only a load holds is kept by the sweep
+        if is_white(f) && f & new_white == 0 && !super::parse::is_kept(h) {
+            let what = if (*h).tag == ObjTag::Str {
+                String::from_utf8_lossy(string::bytes_of(h as *const LuaStr)).into_owned()
+            } else {
+                String::new()
+            };
             panic!(
-                "[gc-verify] {ctx}: black {:?} {:#x} holds {:?} {:#x}, which the sweep frees",
+                "[gc-verify] {ctx}: black {:?} {:#x} (cls {:#x}) holds {:?} {:#x} {what:?} (sub {:#x} cls {:#x}), which the sweep frees",
                 (*parent).tag,
                 parent as usize,
+                (*parent).cls,
                 (*h).tag,
-                h as usize
+                h as usize,
+                (*h).sub,
+                (*h).cls
             );
         }
     }

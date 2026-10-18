@@ -100,6 +100,7 @@ impl Heap {
                     ObjTag::Ghost if super::super::env51::is_phantom(h) => {
                         super::super::env51::phantom_size(h)
                     }
+                    ObjTag::Ghost if super::super::parse::is_load_tab(h) => self.load_tab_work(h),
                     ObjTag::Str | ObjTag::Userdata | ObjTag::Upvalue | ObjTag::Ghost => 0,
                     _ => self.puc_objsize(h) as i64,
                 };
@@ -134,6 +135,7 @@ impl Heap {
                 ObjTag::Coro => 0,
                 // a userdata without user values is marked black at once
                 ObjTag::Userdata => 0,
+                ObjTag::Ghost if super::super::parse::is_load_tab(h) => self.load_tab_work(h),
                 ObjTag::Str | ObjTag::Upvalue | ObjTag::Ghost => 0,
             }
         }
@@ -217,6 +219,9 @@ pub(in crate::runtime::heap) unsafe fn objsize(
                     f if f & acct::FIXED_EXT != 0 => s.lngstr_hdr,
                     _ => s.string(st.len(), !st.is_short() && d == Dialect::L55),
                 }
+            }
+            ObjTag::Ghost if super::super::parse::is_load_tab(h) => {
+                super::super::parse::load_tab_size(s, d, h)
             }
             ObjTag::Coro | ObjTag::Ghost => 0,
         }
