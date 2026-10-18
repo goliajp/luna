@@ -62,7 +62,13 @@ impl Heap {
         // SAFETY: the caller's contract
         unsafe {
             let dead = u8::from(dead);
-            if self.listed(h) {
+            if self.listed(h) && (*h).tag == ObjTag::Str {
+                let b = string::bytes_of(h as *const LuaStr);
+                let b = String::from_utf8_lossy(&b[..b.len().min(24)])
+                    .escape_debug()
+                    .to_string();
+                self.trace.line(format_args!("w 0 {dead} {b}"));
+            } else if self.listed(h) {
                 let tag = (*h).tag as u8;
                 self.trace.line(format_args!("w {tag} {dead}"));
             } else if (*h).tag == ObjTag::Ghost && (*h).sub == 0 {
