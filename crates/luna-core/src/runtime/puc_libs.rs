@@ -60,25 +60,27 @@ pub(crate) fn record(d: Dialect, opening: Opening) -> (&'static [u32], &'static 
     }
 }
 
-/// Where an embedder's opening leaves `d`'s collector when that is in the
-/// middle of a cycle, on this pointer width: `S state debt estimate
+/// Where an `opening` (an embedder's, or 5.3's lua.c's) leaves `d`'s
+/// collector when that is in the middle of a cycle, on this pointer width: `S state debt estimate
 /// traversed`, then `B path` for each black object, `G path` for each gray
 /// one in the order the collector takes them, `A path` for each one gray
 /// again, and in the sweep `U colour path` for each object still to be
 /// swept, in its order (a path from the registry `R` or the main thread
 /// `L`; a string by its bytes, `S:` and hex).
-pub(crate) fn midcycle(d: Dialect) -> Option<&'static [&'static str]> {
+pub(crate) fn midcycle(d: Dialect, opening: Opening) -> Option<&'static [&'static str]> {
+    use Opening::*;
     use data::*;
     if cfg!(target_pointer_width = "64") {
-        match d {
-            Dialect::L52 => Some(STATE_52H_64),
-            Dialect::L55 => Some(STATE_55H_64),
+        match (d, opening) {
+            (Dialect::L52, Running) => Some(STATE_52H_64),
+            (Dialect::L55, Running) => Some(STATE_55H_64),
             _ => None,
         }
     } else {
-        match d {
-            Dialect::L52 => Some(STATE_52H_32),
-            Dialect::L53 => Some(STATE_53H_32),
+        match (d, opening) {
+            (Dialect::L52, Running) => Some(STATE_52H_32),
+            (Dialect::L53, Running) => Some(STATE_53H_32),
+            (Dialect::L53, LuaC) => Some(STATE_53_32),
             _ => None,
         }
     }
