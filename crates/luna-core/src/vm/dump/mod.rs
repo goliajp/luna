@@ -23,7 +23,7 @@ mod header;
 mod luna;
 mod puc;
 mod puc_writer;
-pub(crate) use puc::shape::{Arr, Progress, UEv};
+pub(crate) use puc::shape::{Arr, UEv, Undumping};
 pub(crate) use puc_writer::{Shape, shapes};
 mod reader;
 mod verify;
@@ -129,12 +129,6 @@ pub(crate) fn undump_named(
 /// (one that undumps), `None` for a chunk not in a PUC format.
 pub(crate) fn undump_events(bytes: &[u8]) -> Option<Vec<UEv<'_>>> {
     puc::shape::undump_events(bytes, header_len(bytes)?)
-}
-
-/// How far PUC's undumper gets with `bytes`, the start of a binary chunk a
-/// reader has handed over so far (see [`puc::shape::Progress`]).
-pub(crate) fn undump_progress(bytes: &[u8]) -> Option<Progress<'_>> {
-    Some(puc::shape::undump_progress(bytes, header_len(bytes)?))
 }
 
 /// The length of the header of a PUC binary chunk in the format `bytes`

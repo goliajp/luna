@@ -47,6 +47,7 @@ mod lib_roots_under_gc;
 mod library_edge_arguments;
 mod load_memory_errors;
 mod load_oom_paths;
+mod load_reader_linear;
 mod load_reader_stack;
 mod load_refused_in_turn;
 mod loop_trap;

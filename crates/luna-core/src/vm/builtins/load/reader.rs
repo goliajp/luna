@@ -1,6 +1,8 @@
 //! `generic_reader`: calling a `load` reader where PUC's C function does.
 
 use super::*;
+use crate::vm::dump::Undumping;
+use crate::vm::exec::reader_layers::UndumpShown;
 
 /// The stack of `load` while it reads from a reader function: the slots
 /// `luaB_load` keeps (5.1 three, 5.2 to 5.4 five, 5.5 its arguments), the
@@ -52,7 +54,7 @@ impl ReaderSlot {
             (LuaVersion::Lua51, Phase::Text(n, _)) => 2 * n,
             (LuaVersion::Lua52, Phase::Text(n, _)) => 1 + n,
             (_, Phase::Text(..)) => 2,
-            (_, Phase::Binary(_, n)) => n,
+            (v, Phase::Binary(_, u, _)) => binary_slots(v, u),
         }
     }
 }
@@ -60,23 +62,21 @@ impl ReaderSlot {
 /// Where a load reading from a reader is: before the chunk is known to be
 /// text or binary, parsing text with this many functions open (the source
 /// read so far), or undumping a binary chunk (the bytes read so far, and
-/// the slots the undumper holds).
+/// how far the undumper has got with them).
 #[derive(Clone, Copy)]
 pub(super) enum Phase<'a> {
     Start,
     Text(u32, &'a [u8]),
-    Binary(&'a [u8], u32),
+    Binary(&'a [u8], &'a Undumping, *mut UndumpShown),
 }
 
 /// What PUC's undumper holds on the stack at progress `p`: 5.1 the
 /// prototype of each function it is reading, 5.2 on the main closure once
 /// the header is read, and 5.3 and 5.4 a long string while its bytes are.
-pub(super) fn binary_slots(v: LuaVersion, p: &crate::vm::dump::Progress) -> u32 {
-    use crate::vm::dump::UEv;
-    let count = |f: fn(&UEv) -> bool| p.events.iter().filter(|(_, e)| f(e)).count() as u32;
+pub(super) fn binary_slots(v: LuaVersion, u: &Undumping) -> u32 {
     match v {
-        LuaVersion::Lua51 => count(|e| matches!(e, UEv::Proto)) - count(|e| matches!(e, UEv::End)),
-        _ => count(|e| matches!(e, UEv::Closure(_))).min(1) + u32::from(p.long.is_some()),
+        LuaVersion::Lua51 => u.open.len() as u32,
+        _ => u32::from(u.closure.is_some()) + u32::from(u.long.is_some()),
     }
 }
 
@@ -102,10 +102,10 @@ pub(super) fn next_piece(
     let top = vm.native_top().unwrap_or(vm.top);
     argcheck::check_stack_at(vm, top, 2, "too many nested functions").map_err(|e| e.0)?;
     // where the debug library finds the parser's objects, made if it looks
-    let (src, open) = match phase {
-        Phase::Start => (&[][..], None),
-        Phase::Text(n, src) => (src, Some(n)),
-        Phase::Binary(src, _) => (src, None),
+    let (src, open, undumping, shown) = match phase {
+        Phase::Start => (&[][..], None, std::ptr::null(), std::ptr::null_mut()),
+        Phase::Text(n, src) => (src, Some(n), std::ptr::null(), std::ptr::null_mut()),
+        Phase::Binary(src, u, shown) => (src, None, u as *const Undumping, shown),
     };
     if parser > 0 {
         vm.reader_layers
@@ -116,7 +116,8 @@ pub(super) fn next_piece(
                 src: (src.as_ptr(), src.len()),
                 name: (name.as_ptr(), name.len()),
                 open,
-                binary: matches!(phase, Phase::Binary(..)),
+                undumping,
+                shown,
                 filled: false,
             });
     }
