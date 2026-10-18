@@ -171,6 +171,10 @@ impl Heap {
                 self.acct_block(old * p, new * p);
             }
             self.puc.strt_size = new;
+            // 5.3 and 5.4 correct the estimate by what the shrink freed
+            if matches!(d, Dialect::L53 | Dialect::L54) {
+                self.pace.estimate -= ((old - new) * p) as i64;
+            }
         }
         match d {
             Dialect::L51 if self.puc.gbuff > 64 => {
