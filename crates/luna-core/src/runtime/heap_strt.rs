@@ -148,6 +148,14 @@ impl Heap {
                     continue;
                 }
                 (*h).sub |= SWEPT;
+                #[cfg(feature = "gc-trace")]
+                if self.trace.sweep {
+                    let b = string::bytes_of(h as *const LuaStr);
+                    let b = String::from_utf8_lossy(&b[..b.len().min(24)])
+                        .escape_debug()
+                        .to_string();
+                    self.trace.line(format_args!("w 4 1 {b}"));
+                }
                 self.acct_string_free((*(h as *const LuaStr)).len());
             }
         }

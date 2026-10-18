@@ -206,6 +206,11 @@ impl Heap {
                 return false;
             }
             (*h).cls &= !KEPT;
+            #[cfg(feature = "gc-trace")]
+            self.trace.line(format_args!(
+                "kept {}",
+                (*(h as *const crate::runtime::LuaStr)).len()
+            ));
             // the string sweep took it off the count already
             if (*h).sub & strt::SWEPT != 0 {
                 (*h).sub &= !strt::SWEPT;
