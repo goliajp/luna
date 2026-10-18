@@ -118,6 +118,7 @@ impl Marker {
                         z.marked += z.size(h);
                     }
                     (*h).flags = (f & !WHITE_BITS) | BLACK | SLOW;
+                    (*h).cls &= !super::parse::KEPT;
                 }
             }
         }
@@ -183,6 +184,13 @@ impl Marker {
     /// Mark what the objects of luna's own hold, counting nothing: after
     /// the marking PUC counts, before the weak tables are cleared.
     pub(in crate::runtime::heap) fn drain_quiet(&mut self) {
+        if !self.quiet_mode && self.quiet_parse_trees() {
+            while let Some(h) = self.pop() {
+                // SAFETY: a gray object is allocated until the sweep
+                unsafe { blacken(h, self) };
+            }
+            self.quiet_mode = false;
+        }
         if self.quiet.is_empty() {
             return;
         }

@@ -25,7 +25,7 @@ impl Heap {
                 // dead = other-white (i.e. white but not current-white).
                 // Survivors are BLACK (just-marked) or current-white (born
                 // during the sweep itself).
-                if is_white(f) && (f & new_white) == 0 {
+                if is_white(f) && (f & new_white) == 0 && !self.kept_dead(cur) {
                     *link = (*cur).next;
                     self.free_obj(cur);
                     freed += 1;
@@ -36,6 +36,7 @@ impl Heap {
             }
             self.all = head;
         }
+        self.whiten_unborn();
         self.live -= freed;
         // a sweep keeps the order of `all`, so the young boundary (marked,
         // so it survived) still splits new objects from old ones
@@ -93,15 +94,14 @@ impl Heap {
                 }
                 n += 1;
                 let f = (*cur).flags;
-                if is_white(f) && (f & new_white) == 0 {
+                let dead = is_white(f) && (f & new_white) == 0;
+                if dead && to_live && self.in_string_sweep(cur) {
+                    // PUC's string table holds it, not the list it sweeps to
+                    // the first live object: its string sweep comes first
                     *link = (*cur).next;
-                    if to_live && self.in_string_sweep(cur) {
-                        // PUC's string table holds it, not the list it
-                        // sweeps to the first live object: its string
-                        // sweep comes first
-                        self.strt.held.push(cur);
-                        continue;
-                    }
+                    self.strt.held.push(cur);
+                } else if dead && !self.kept_dead(cur) {
+                    *link = (*cur).next;
                     self.free_obj(cur);
                     self.live -= 1;
                 } else {
@@ -151,10 +151,13 @@ impl Heap {
                 n += self.env51_sweep(cur, false);
                 let (f, cls) = ((*cur).flags, (*cur).cls);
                 let dead = is_white(f) && (f & new_white) == 0;
+                #[cfg(feature = "gc-trace")]
+                self.trace_swept(cur, dead);
                 #[cfg(feature = "gc-verify")]
                 assert_eq!(
                     self.listed(cur),
-                    (*cur).tag != ObjTag::Ghost && self.puc_listed(cur, strt),
+                    ((*cur).tag != ObjTag::Ghost || super::parse::is_load_tab(cur))
+                        && self.puc_listed(cur, strt),
                     "[gc-verify] class byte of a {:?}",
                     (*cur).tag
                 );
@@ -173,7 +176,7 @@ impl Heap {
                     }
                     n += Self::ghost_objects(&*(cur as *mut Ghost));
                 }
-                if dead {
+                if dead && !self.kept_dead(cur) {
                     n += self.env51_sweep(cur, true);
                     self.env51_forget(cur);
                     *link = (*cur).next;
@@ -284,6 +287,7 @@ impl Heap {
 
     /// The sweep reached the end of the list.
     fn end_sweep(&mut self) {
+        self.whiten_unborn();
         self.sweep_prev = ptr::null_mut();
         self.phase = GcPhase::Pause;
         self.mem_ctx().gc_cycle_ended(self.bytes);

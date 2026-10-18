@@ -23,6 +23,8 @@ impl Heap {
     #[inline(never)]
     fn resurrect(&self, h: &mut GcHeader) {
         h.flags = h.with_slow((h.flags & !WHITE_BITS) | self.current_white);
+        // found again: no more a string only a load holds
+        h.cls &= !parse::KEPT;
     }
 
     /// [`Heap::intern`], failing when memory runs out.

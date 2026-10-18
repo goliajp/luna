@@ -43,7 +43,7 @@ impl Vm {
                 UEv::Closure(_) | UEv::Reclose(_) => {
                     self.acct_main_closure(cl);
                     if let Some(h) = h.as_mut() {
-                        h.insert(&mut self.heap, d, PKey::of(Value::Closure(cl)));
+                        h.insert(&mut self.heap, d, PKey::of(Value::Closure(cl)), None)?;
                     }
                 }
                 UEv::Proto => {
@@ -75,7 +75,7 @@ impl Vm {
                     self.undump_string(s, open.last().map(|o| o.0))?;
                     if let Some(h) = h.as_mut() {
                         saved += 1;
-                        h.insert(&mut self.heap, d, PKey::Int(saved));
+                        h.insert(&mut self.heap, d, PKey::Int(saved), None)?;
                     }
                 }
             }

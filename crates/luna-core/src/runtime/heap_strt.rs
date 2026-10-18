@@ -118,7 +118,7 @@ impl Heap {
             // SAFETY: a held string is allocated and on no list
             unsafe {
                 let f = (*h).flags;
-                if is_white(f) && f & new_white == 0 {
+                if is_white(f) && f & new_white == 0 && !self.kept_dead(h) {
                     self.free_obj(h);
                     self.live -= 1;
                 } else {

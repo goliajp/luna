@@ -114,15 +114,25 @@ impl Vm {
             }
             // made without counting, then counted as PUC's parser makes it
             vm.heap.puc.silent += 1;
+            let base = vm.heap.unborn_len();
+            vm.heap.set_aside_loads(true);
             let made = vm.compile_streamed(&mut parsed, chunkname, name);
+            vm.heap.set_aside_loads(false);
             vm.heap.puc.silent -= 1;
-            let cl = made?;
+            let cl = match made {
+                Ok(cl) => cl,
+                Err(e) => {
+                    vm.heap.flush_unborn(base);
+                    return Err(e);
+                }
+            };
             let src = parsed
                 .src
                 .take()
                 .unwrap_or_else(|| LVec::new(vm.heap.mem()));
             let rec = parsed.recorded().expect("counted");
             let r = vm.acct_text_load(&src, &parsed.chunk, rec, cl, splices);
+            vm.heap.flush_unborn(base);
             vm.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
             r.map(|()| cl)
         })

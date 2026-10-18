@@ -24,6 +24,9 @@ pub(crate) struct Trace {
     /// `R38_PROP`: each object an incremental step traverses, with its
     /// type and the work counted for it (`p <tag> <work>`)
     pub(crate) prop: bool,
+    /// `R38_SWEEP`: each object of PUC's a step's sweep goes over (`w <tag>
+    /// <dead>`; a record of PUC's objects `w g<n> <dead>`)
+    pub(crate) sweep: bool,
     window: Option<(u64, u64)>,
     events: u64,
     /// lines held back (see [`Trace::hold`]), innermost last
@@ -41,6 +44,7 @@ impl Default for Trace {
             no_auto: std::env::var_os("R38_NOAUTO").is_some(),
             where_: std::env::var_os("R38_WHERE").is_some(),
             prop: std::env::var_os("R38_PROP").is_some(),
+            sweep: std::env::var_os("R38_SWEEP").is_some(),
             keys: std::env::var_os("R38_KEYS").is_some(),
             window: std::env::var("R38_WHERE")
                 .ok()

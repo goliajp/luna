@@ -108,6 +108,7 @@ gc_objects!(
     crate::runtime::Coro => Thread,
     crate::runtime::Userdata => Userdata,
     crate::runtime::heap::Ghost => Other,
+    crate::runtime::heap::parse::LoadTab => Other,
 );
 
 impl<T: GcObject> Gc<T> {

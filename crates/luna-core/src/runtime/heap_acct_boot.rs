@@ -183,6 +183,8 @@ impl Heap {
         if self.puc.silent > 0 {
             return;
         }
+        // SAFETY: the caller names a live string
+        unsafe { self.born(h) };
         super::set_uncounted(h, false);
         self.acct_string(len);
     }

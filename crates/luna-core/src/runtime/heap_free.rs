@@ -119,6 +119,7 @@ impl Heap {
                     }
                     self.free_block(h as *mut Userdata);
                 }
+                ObjTag::Ghost if super::parse::is_load_tab(h) => self.free_load_tab(h),
                 ObjTag::Ghost => self.free_ghost(h as *mut Ghost),
                 ObjTag::Str => {
                     let s = h as *mut LuaStr;

@@ -25,9 +25,11 @@ mod arr;
 mod consts;
 mod events;
 mod failed;
+mod funcs;
 mod ptab;
 mod replay;
 mod scan;
+mod steps;
 mod syntax_msg;
 mod undump;
 mod view;
@@ -56,10 +58,12 @@ impl Vm {
         let s = self.heap.sizes;
         let mut r = Replay::new(d, proto, self.version, scanned, &chunk.names, src);
         r.splice(splices);
-        self.replay_begin(&mut r, cl)?;
         let log = self.compile_scratch.puc_log.take();
-        let replayed = self.replay_log(&mut r, &log, chunk, marks, None);
+        let replayed = self
+            .replay_begin(&mut r, cl)
+            .and_then(|()| self.replay_log(&mut r, &log, chunk, marks, None));
         self.compile_scratch.puc_log = log;
+        self.replay_left(&r, replayed.is_ok());
         replayed?;
         // 5.1's `f_parser` makes the closure now; the others give it its
         // upvalue (`luaF_initupvals`)
@@ -74,6 +78,7 @@ impl Vm {
                     } else {
                         self.heap.acct_obj(PucKind::Upval, s.upval);
                     }
+                    self.heap.barrier_new_upval(cl, uv);
                 }
                 None => self.heap.acct_obj(PucKind::Upval, s.upval),
             }
@@ -91,6 +96,10 @@ impl Vm {
             let (_, d) = r.splices.pop_front().expect("peeked");
             self.heap.defer_apply(d);
         }
+        r.cl = Some(cl);
+        if r.rec.is_none() && r.d != Dialect::L51 {
+            crate::runtime::heap::parse::set_parsing(cl, true);
+        }
         match r.d {
             Dialect::L51 => {}
             Dialect::L52 => self.acct_main_closure(cl),
@@ -102,7 +111,7 @@ impl Vm {
                 // the anchor table, then the closure anchored in it
                 r.h = Some(self.new_ptab(r)?);
                 self.acct_main_closure(cl);
-                self.anchor_in_h(r, None);
+                self.anchor_in_h(r, None)?;
             }
         }
         Ok(())

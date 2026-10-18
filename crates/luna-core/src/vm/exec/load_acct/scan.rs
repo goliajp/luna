@@ -40,24 +40,25 @@ impl Vm {
         let val = r.scan_val(s);
         if let Some(t) = r.scan_table(kind) {
             let (new, id) = (!t.contains(k), t.id);
-            self.set_str_in(t, d, s, k);
-            #[cfg(feature = "gc-trace")]
-            self.scan_checkpoint(new);
+            self.set_str_in(t, d, s, k)?;
             if new {
                 r.note(id, PVal::V(Value::Str(s)), Some(val));
+                self.scan_checkpoint(r, s)?;
             }
         }
         Ok(())
     }
 
     /// `luaX_newstring` checks for a collection when it anchors a new
-    /// string (5.5 `anchorstr`): the accounting trace marks where (the
-    /// collection itself waits for the load).
-    #[cfg(feature = "gc-trace")]
-    fn scan_checkpoint(&mut self, new: bool) {
-        if new {
-            self.trace_checkpoint();
-        }
+    /// string `s` (5.5 `anchorstr`), which it holds on the stack meanwhile
+    /// (from 5.2).
+    fn scan_checkpoint(
+        &mut self,
+        r: &mut Replay,
+        s: Gc<crate::runtime::LuaStr>,
+    ) -> Result<(), SyntaxError> {
+        let temp = (r.d != Dialect::L51).then_some(s);
+        self.load_checkpoint(r, temp)
     }
 
     /// [`Vm::replay_scan`] of a recorded token: a name or a literal is
@@ -98,15 +99,14 @@ impl Vm {
             return Ok(());
         };
         let (new, tab) = (!t.contains(k), t.id);
-        self.set_str_in(t, d, s, k);
-        #[cfg(feature = "gc-trace")]
-        self.scan_checkpoint(new);
-        if new {
-            r.note(tab, PVal::V(Value::Str(s)), Some(val));
-        }
+        self.set_str_in(t, d, s, k)?;
         match text {
             ScanText::Sym(sym) => r.syms[sym.0 as usize].1 = id,
             ScanText::Reserved(k, _) => r.reserved[usize::from(k)].1 = id,
+        }
+        if new {
+            r.note(tab, PVal::V(Value::Str(s)), Some(val));
+            self.scan_checkpoint(r, s)?;
         }
         Ok(())
     }

@@ -73,6 +73,7 @@ impl Heap {
             quiet: Vec::new(),
             quiet_mode: false,
             env51: self.env51_ptr(),
+            parse: self.parse_ptr(),
             #[cfg(feature = "gc-verify")]
             verify: None,
         }
@@ -316,6 +317,7 @@ impl Heap {
             quiet: std::mem::take(&mut prop.quiet),
             quiet_mode: false,
             env51: self.env51_ptr(),
+            parse: self.parse_ptr(),
             #[cfg(feature = "gc-verify")]
             verify: None,
         }
