@@ -10,11 +10,23 @@ impl Vm {
     /// a collection needs no memory for them.
     /// `again`: the atomic step of a cycle whose start marked them.
     pub(crate) fn mark_roots(&self, m: &mut crate::runtime::heap::Marker, again: bool) {
+        self.mark_state_roots(m, again);
+        self.mark_threads_held(m);
+    }
+
+    /// The roots other than the threads: the globals, the basic types'
+    /// metatables, the strings luna roots.
+    pub(crate) fn mark_state_roots(&self, m: &mut crate::runtime::heap::Marker, again: bool) {
         m.value(Value::Table(self.globals));
         for mt in self.type_mt.into_iter().flatten() {
             m.value(Value::Table(mt));
         }
         self.mark_root_strings(m, !again, true);
+    }
+
+    /// The values of the threads the VM holds: the running one's, and the
+    /// main one's while a coroutine runs.
+    pub(crate) fn mark_threads_held(&self, m: &mut crate::runtime::heap::Marker) {
         self.mark_running(m);
         self.mark_main_ctx(m);
     }

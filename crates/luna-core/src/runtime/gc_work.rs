@@ -40,7 +40,13 @@ impl Heap {
     /// # Safety
     /// `h` heads an allocated object of this heap.
     pub(crate) unsafe fn object_work(&self, h: *mut GcHeader, run: Running) -> i64 {
-        let run = (h == run.h).then_some((run.top, run.size, run.ci));
+        let run = if h == run.h {
+            Some((run.top, run.size, run.ci))
+        } else if h == run.main {
+            Some((run.main_top, run.main_size, run.main_ci))
+        } else {
+            None
+        };
         // SAFETY: the caller's contract
         unsafe {
             let d = self.table_dialect;

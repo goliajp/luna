@@ -35,9 +35,8 @@ impl GrayStack {
 /// Mark accumulator: gray stack plus entry points for Values and bare
 /// object headers (Protos/Upvalues are not first-class Values).
 pub(crate) struct Marker {
-    /// The gray stack. When it cannot grow, the object stays gray off the
-    /// stack and `overflow` is set; [`Marker::refill`] finds such objects
-    /// again by walking `scan`.
+    /// The gray stack. When it cannot grow, the object stays gray off it
+    /// and `overflow` is set; [`Marker::refill`] walks `scan` for them.
     pub(super) stack: GrayStack,
     pub(super) overflow: bool,
     /// The head of the heap's object list when the marker was lent out:
@@ -61,13 +60,11 @@ pub(crate) struct Marker {
     /// cleared so the sweep can collect it — the cache is a *weak* reference
     /// (PUC `traverseproto` checks `iswhite(cache)`). Seen via [`Proto::trace`].
     pub(crate) cached_protos: Vec<*mut crate::runtime::Proto>,
-    /// Mark objects without children BLACK on sight instead of queueing
-    /// them (PUC's library functions are not objects at all). Only the
-    /// stop-the-world mark sets it: a native standing for PUC's C closure
-    /// has work of its own, which the incremental step must charge when it
-    /// leaves the queue. Strings go BLACK on sight in every mark, as in
-    /// PUC's `reallymarkobject`. `LEAF` or 0, tested against an object's
-    /// flags.
+    /// `LEAF` or 0, tested against an object's flags: mark objects without
+    /// children BLACK on sight (PUC's library functions are not objects).
+    /// Only the stop-the-world mark sets it: a native standing for a C
+    /// closure has work the incremental step charges when it leaves the
+    /// queue. Strings go BLACK on sight in every mark.
     pub(super) leaf_black: u8,
     /// 5.2 and 5.3: the size of a string's header, to count what marking
     /// a string or a userdata adds to the work (PUC `GCmemtrav`); 0 for
@@ -75,6 +72,8 @@ pub(crate) struct Marker {
     pub(super) leaf_hdr: usize,
     /// that work so far
     pub(super) leaf_bytes: i64,
+    /// 5.2: the size of a closed upvalue, whose marking is work too; else 0
+    pub(super) leaf_upval: usize,
     /// 5.5: counts what is marked
     pub(super) sizer: Option<super::collect::Sizer>,
     /// luna's own objects reached, gray off the stack until

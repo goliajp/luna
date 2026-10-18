@@ -37,15 +37,14 @@ impl Vm {
         }
     }
 
-    /// Whether the current `collectgarbage` mode is "generational" (where a "step"
-    /// is a minor collection — a full atomic pass — rather than a paced sweep).
+    /// Whether the `collectgarbage` mode is "generational" (a step is then a
+    /// minor collection).
     pub(crate) fn gc_mode_is_generational(&self) -> bool {
         self.gc_mode == "generational"
     }
 
     /// Set luna's collector knobs: heap growth before a new cycle (%), sweep
-    /// work per safe point, and the default step size (0 = a step completes
-    /// the cycle).
+    /// work per safe point, and the default step size (0: the whole cycle).
     pub(crate) fn set_gc_pacing(&mut self, pause: i64, stepmul: i64, stepsize: i64) {
         self.gc_pause = pause;
         self.gc_stepmul = stepmul;
@@ -53,15 +52,10 @@ impl Vm {
     }
 
     /// A point where PUC checks whether a collection step is due
-    /// (`luaC_checkGC`), with PUC's stack top there (luna's numbering):
-    /// the slots from `live_top` up are dead to a collection that runs.
-    ///
-    /// A new object is born white in every phase: one made while marking
-    /// survives the cycle when the atomic step finds it reachable (from the
-    /// roots marked again there, or a black object its barrier sent back
-    /// to gray).
-    ///
-    /// The step that falls due is PUC's (`gc_step.rs`).
+    /// (`luaC_checkGC`, the step in `gc_step.rs`), with PUC's stack top
+    /// there: the slots from `live_top` up are dead to a collection. An
+    /// object made while marking survives when the atomic step finds it
+    /// reachable (from the roots again, or through a barrier).
     #[inline(always)]
     pub(crate) fn checkpoint(&mut self, live_top: u32) -> Result<(), LuaError> {
         #[cfg(feature = "gc-trace")]
@@ -101,14 +95,14 @@ impl Vm {
 
     /// The running stack's contract with the collector (PUC
     /// `traversethread`): the slots from `gc_top` up are dead when a cycle's
-    /// marking ends, so they are cleared right then, before the sweep frees
-    /// anything they point to. The other threads' stacks are marked whole.
-    /// So every slot of every stack holds nil or a live value.
+    /// marking ends, so they are cleared then, before the sweep frees what
+    /// they point to; the other threads' stacks are marked whole.
     pub(super) fn clear_dead_stack(&mut self) {
         let lo = (self.gc_top as usize).min(self.stack.len());
         self.stack[lo..].fill(Value::Nil);
-        // 5.3 shrinks a thread as its propagation reaches it
-        if self.version != LuaVersion::Lua53 {
+        // 5.3 shrinks a thread as its propagation reaches it, 5.2 the main
+        // one where its sweep ends
+        if !matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
             self.collector_shrinks_stacks();
         }
     }
@@ -148,18 +142,23 @@ impl Vm {
         if swept {
             self.heap.acct_check_sizes();
         }
-        self.gc_count_marked();
-        let mut m = self.heap.gc_begin_full();
-        self.mark_roots(&mut m, false);
-        self.watch_errors();
-        let freed = self.heap.gc_end_full(m);
-        // 5.3 shrinks the threads as the full cycle traverses them, the
-        // others theirs after it
-        if self.version == LuaVersion::Lua53 {
-            self.collector_shrinks_stacks();
-        }
-        self.collector_shrinks_threads();
-        self.heap.acct_check_sizes();
+        let freed = if self.version == LuaVersion::Lua52 {
+            self.full_cycle_52(swept)
+        } else {
+            self.gc_count_marked();
+            let mut m = self.heap.gc_begin_full();
+            self.mark_roots(&mut m, false);
+            self.watch_errors();
+            let freed = self.heap.gc_end_full(m);
+            // 5.3 shrinks the threads as the cycle traverses them, the rest
+            // after; 5.2's single steps did both
+            if self.version == LuaVersion::Lua53 {
+                self.collector_shrinks_stacks();
+            }
+            self.collector_shrinks_threads();
+            self.heap.acct_check_sizes();
+            freed
+        };
         self.forget_dead_errors();
         // there may be objects to be finalized
         self.heap.pace.fin_num = 1;
@@ -191,11 +190,12 @@ impl Vm {
         self.heap.trace.line(format_args!("X"));
         let mut freed = 0;
         if !self.heap.no_gc() {
-            // 5.2 calls the pending finalizers before it starts
+            // 5.2 calls pending finalizers first; its atomic step clears the stack
             if self.version == LuaVersion::Lua52 {
                 self.call_all_pending(true)?;
+            } else {
+                self.clear_dead_stack();
             }
-            self.clear_dead_stack();
             freed = self.full_collect();
             #[cfg(feature = "gc-verify")]
             self.verify_frame_regs_live("collect_garbage");

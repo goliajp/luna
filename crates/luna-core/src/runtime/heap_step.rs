@@ -3,6 +3,12 @@
 
 use super::*;
 
+#[path = "heap_atomic.rs"]
+mod atomic;
+#[path = "heap_sizer.rs"]
+mod sizer;
+pub(crate) use sizer::Sizer;
+
 impl Heap {
     /// Begin an incremental mark cycle (precondition: `Pause`): enter
     /// `GcPhase::Propagate` with a fresh PropagateState and lend out the
@@ -88,137 +94,6 @@ impl Heap {
         exhausted
     }
 
-    /// Conclude a Propagate cycle: drain any residual gray, run the atomic
-    /// tail (weak / ephemeron / finalizer / proto-cache / flip), detach `all`
-    /// and enter `GcPhase::Sweep`. Releases `propagate`.
-    /// PUC `atomic` + `entersweep` transition.
-    pub(crate) fn gc_finish_atomic(&mut self) {
-        self.gc_finish_atomic_work(None);
-    }
-
-    /// [`Heap::gc_finish_atomic`], counting the work PUC's `atomic` counts
-    /// for the objects it traverses (with `run` the running thread), and
-    /// entering the sweep as the dialect does: 5.1 sweeps nothing yet, 5.3
-    /// one object, the others to the first object kept. Returns the work
-    /// and how many objects that sweep went over.
-    pub(crate) fn gc_finish_atomic_work(&mut self, run: Option<Running>) -> (i64, i64) {
-        debug_assert!(self.phase == GcPhase::Propagate);
-        let mut m = self.loan_marker();
-        // any residual gray (caller may not have drained to empty), then
-        // what the back barriers sent to gray again (PUC `grayagain`)
-        let mut work = self.drain_work(&mut m, run);
-        self.regray_again(&mut m);
-        work += self.drain_work(&mut m, run);
-        m.drain_quiet();
-        // a thread stays gray while marking (`grayagain`): `atomic`
-        // traverses each one marked again
-        if let Some(run) = run {
-            let mut seen_run = false;
-            for i in 0..self.threads.len() {
-                let co = self.threads[i];
-                let h = co.as_ptr() as *mut GcHeader;
-                seen_run |= h == run.h;
-                // SAFETY: a listed thread is allocated until the sweep
-                unsafe {
-                    if !is_white((*h).flags) {
-                        let w = self.object_work(h, run);
-                        #[cfg(feature = "gc-trace")]
-                        self.trace_prop(h, w, run);
-                        work += w;
-                    }
-                }
-            }
-            // the main thread, luna's own object, is on no list
-            if !seen_run && !run.h.is_null() {
-                // SAFETY: the running thread is allocated
-                // SAFETY: as above
-                let w = unsafe { self.object_work(run.h, run) };
-                #[cfg(feature = "gc-trace")]
-                // SAFETY: as above
-                unsafe {
-                    self.trace_prop(run.h, w, run)
-                };
-                work += w;
-            }
-        }
-        // pre-atomic ephemeron convergence
-        if !m.ephemeron.is_empty() {
-            loop {
-                let mut changed = false;
-                let eph = m.ephemeron.clone();
-                for t in eph {
-                    // SAFETY: as in `mark_all`: `t` is a marked table from `m.ephemeron`, nothing is freed before the sweep, and the marker holds no other reference to it
-                    changed |= unsafe { (*t).converge_ephemeron(&weak_key_alive, &mut m) };
-                }
-                drain_marker(&mut m);
-                if !changed {
-                    break;
-                }
-            }
-        }
-        self.atomic_tail(&mut m);
-        if self.table_dialect == crate::runtime::table::Dialect::L52 {
-            self.color_fixed_strings(0);
-        }
-        self.settle_sizer(&mut m);
-        #[cfg(feature = "gc-trace")]
-        self.trace_listed();
-        if run.is_some() {
-            self.collect_dead_strings();
-        } else {
-            self.end_string_sweep();
-        }
-        // PropagateState consumed; the sweep goes over `all` in place
-        // (PUC `entersweep`). Anything allocated past this point goes in
-        // front of where it is and survives.
-        self.propagate = None;
-        debug_assert!(
-            self.gray.is_empty() && !self.gray_overflow,
-            "gray queue not drained at atomic"
-        );
-        // the newest object at the last safe point may be freed by the
-        // sweep: until the next safe point every object counts as young
-        self.young = ptr::null_mut();
-        self.phase = GcPhase::Sweep;
-        self.sweep_prev = ptr::null_mut();
-        let swept = match self.table_dialect {
-            crate::runtime::table::Dialect::L51 => 0,
-            crate::runtime::table::Dialect::L53 => self.sweep_objects(1, false) as i64,
-            _ => self.sweep_objects(usize::MAX, true) as i64,
-        };
-        (work, swept)
-    }
-
-    /// Drain `m`, with the work PUC counts for each object when `run`
-    /// names the running thread.
-    fn drain_work(&mut self, m: &mut Marker, run: Option<Running>) -> i64 {
-        let Some(run) = run else {
-            drain_marker(m);
-            return 0;
-        };
-        let mut work = 0;
-        while let Some(h) = m.pop() {
-            m.leaf_bytes = 0;
-            // SAFETY: as in `propagate_work`
-            unsafe {
-                blacken(h, m);
-                let w = self.object_work(h, run) + m.leaf_bytes;
-                #[cfg(feature = "gc-trace")]
-                self.trace_prop(h, w, run);
-                work += w;
-            }
-        }
-        work
-    }
-
-    /// The objects a back barrier sent to gray, on `m`'s stack to be
-    /// traversed again.
-    pub(super) fn regray_again(&mut self, m: &mut Marker) {
-        while let Some(h) = self.grayagain.pop() {
-            m.push_gray(h);
-        }
-    }
-
     /// Phase peek (for the VM-side step driver).
     pub(crate) fn gc_phase_is_pause(&self) -> bool {
         self.phase == GcPhase::Pause
@@ -249,9 +124,8 @@ pub(crate) enum Propagated {
 
 /// The running thread, for the work of traversing it: its object, and
 /// the top of its stack, the stack's size and its `CallInfo`s (PUC's
-/// counts), which the VM holds while it runs; and the main thread's
-/// object, stack size and `CallInfo`s while a coroutine runs (null else),
-/// which the VM holds too.
+/// counts), which the VM holds while it runs; and the same of the main
+/// thread while a coroutine runs (null else), which the VM holds too.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Running {
     pub(crate) h: *mut GcHeader,
@@ -259,50 +133,9 @@ pub(crate) struct Running {
     pub(crate) size: u32,
     pub(crate) ci: u32,
     pub(crate) main: *mut GcHeader,
+    pub(crate) main_top: u32,
     pub(crate) main_size: u32,
     pub(crate) main_ci: u32,
-}
-
-/// What a 5.5 marking needs to count the objects it marks (`GCmarked`):
-/// the sizes, luna's own tables (lent by the heap meanwhile) and the
-/// threads the VM holds.
-pub(crate) struct Sizer {
-    sizes: crate::runtime::puc_size::PucSizes,
-    own: Vec<*const Table>,
-    stand_ins: Vec<(*mut GcHeader, usize)>,
-    run: Running,
-    pub(in crate::runtime::heap) marked: i64,
-}
-
-impl Sizer {
-    /// 5.5's `objsize` of the object behind `h`, which marking it adds.
-    ///
-    /// # Safety
-    /// `h` heads an allocated object.
-    pub(in crate::runtime::heap) unsafe fn size(&self, h: *mut GcHeader) -> i64 {
-        let d = crate::runtime::table::Dialect::L55;
-        // SAFETY: the caller's contract; the tag names the type
-        unsafe {
-            if (*h).tag != ObjTag::Coro {
-                if is_uncounted(h) {
-                    // what an object of luna's stands for
-                    let s = self.stand_ins.iter().filter(|s| s.0 == h);
-                    return s.map(|s| s.1).sum::<usize>() as i64;
-                }
-                return pace::objsize(&self.sizes, d, &self.own, h) as i64;
-            }
-            let r = &self.run;
-            let (size, ci) = if h == r.h {
-                (r.size, r.ci)
-            } else if h == r.main {
-                (r.main_size, r.main_ci)
-            } else {
-                let c = &*(h as *const crate::runtime::Coro);
-                (c.stack_size, c.ci_alloc)
-            };
-            pace::thread_bytes(&self.sizes, d, size, ci) as i64
-        }
-    }
 }
 
 impl Heap {
@@ -312,6 +145,14 @@ impl Heap {
             crate::runtime::table::Dialect::L52 | crate::runtime::table::Dialect::L53 => {
                 self.sizes.str_hdr
             }
+            _ => 0,
+        }
+    }
+
+    /// 5.2 counts a closed upvalue a traversal marks.
+    pub(super) fn leaf_upval(&self) -> usize {
+        match self.table_dialect {
+            crate::runtime::table::Dialect::L52 => self.sizes.upval,
             _ => 0,
         }
     }
@@ -335,8 +176,9 @@ impl Heap {
                 break;
             };
             // SAFETY: a popped header heads an allocated object
+            let coro = unsafe { (*h).tag } == ObjTag::Coro;
             if self.table_dialect == crate::runtime::table::Dialect::L53
-                && unsafe { (*h).tag } == ObjTag::Coro
+                && coro
                 && !self.puc.shrunk.contains(&h)
             {
                 self.puc.shrunk.push(h);
@@ -382,6 +224,7 @@ impl Heap {
                         (t.asize as usize, t.node_count())
                     }
                     ObjTag::Coro if h == run.h => (run.size as usize, run.ci as usize),
+                    ObjTag::Coro if h == run.main => (run.main_size as usize, run.main_ci as usize),
                     ObjTag::Coro => {
                         let c = &*(h as *const crate::runtime::Coro);
                         (c.stack_size as usize, c.ci_alloc as usize)
@@ -434,40 +277,10 @@ impl Heap {
     }
 }
 
-impl Heap {
-    /// A sizer for a marker, when markings count `GCmarked`.
-    pub(in crate::runtime::heap) fn lend_sizer(&mut self) -> Option<Sizer> {
-        let run = self.pace.run.filter(|_| self.pace.count_marked)?;
-        Some(Sizer {
-            sizes: self.sizes,
-            own: std::mem::take(&mut self.puc.own_tables),
-            stand_ins: std::mem::take(&mut self.puc.stand_ins),
-            run,
-            marked: 0,
-        })
-    }
-
-    /// The sizer `m` had back: what it counted, and the tables it held.
-    pub(in crate::runtime::heap) fn settle_sizer(&mut self, m: &mut Marker) {
-        if let Some(s) = m.sizer.take() {
-            self.pace.estimate += s.marked;
-            self.puc.own_tables = s.own;
-            self.puc.stand_ins = s.stand_ins;
-        }
-    }
-
-    /// The object behind `h` marked outside a marker (a barrier): 5.5
-    /// counts it.
-    ///
-    /// # Safety
-    /// `h` heads an allocated object of this heap.
-    pub(in crate::runtime::heap) unsafe fn count_marked(&mut self, h: *mut GcHeader) {
-        if let Some(s) = self.lend_sizer() {
-            // SAFETY: the caller's contract
-            let n = unsafe { s.size(h) };
-            self.pace.estimate += n;
-            self.puc.own_tables = s.own;
-            self.puc.stand_ins = s.stand_ins;
-        }
+impl Marker {
+    /// The work the strings and userdata marked so far add (5.2, 5.3),
+    /// counted from 0 again.
+    pub(crate) fn take_leaf_bytes(&mut self) -> i64 {
+        std::mem::take(&mut self.leaf_bytes)
     }
 }

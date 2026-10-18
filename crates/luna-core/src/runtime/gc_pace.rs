@@ -89,6 +89,8 @@ pub(crate) struct Pace {
     base: i64,
     /// 5.1 `estimate`, 5.2 to 5.4 `GCestimate`, 5.5 `GCmarked`
     pub(crate) estimate: i64,
+    /// 5.2 `GCmemtrav`: the memory the cycle has traversed
+    pub(crate) trav: i64,
     /// 5.1 `gcdept`
     pub(crate) dept: i64,
     /// 5.2 and 5.3 `sweepstrgc` (5.1 too): the string table's buckets swept
@@ -130,6 +132,7 @@ impl Pace {
             state: St::Pause,
             base: 0,
             estimate: 0,
+            trav: 0,
             dept: 0,
             strt_swept: 0,
             fin_left: None,
