@@ -42,8 +42,14 @@ fn fixtures(dialect: &str) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = std::fs::read_dir(&dir)
         .map(|d| d.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
+    // a count fixture reads `collectgarbage("count")`, and a finalizer
+    // batches fixture where the automatic steps run finalizers, both of
+    // which loading a dump instead of the text changes
     out.retain(|p| {
-        p.extension().is_some_and(|x| x == "lua") && !p.to_string_lossy().contains("_count")
+        let name = p.to_string_lossy();
+        p.extension().is_some_and(|x| x == "lua")
+            && !name.contains("_count")
+            && !name.contains("_finalizer_batches")
     });
     out.sort();
     out
