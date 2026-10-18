@@ -88,7 +88,8 @@ fn concat_field(
     // the buffer's slot, then the value until it is added
     let buf = vm.buffer_slot(out.len());
     // `luaL_addvalue`, which turns a number into a string first
-    let s = match tab_geti(vm, tv, k, buf)? {
+    let held = [Vm::buffer_box()];
+    let s = match tab_geti_held(vm, tv, k, &held[..buf as usize])? {
         Value::Str(s) => s,
         v @ (Value::Int(_) | Value::Float(_)) => vm.number_string(v)?,
         // `luaL_typename`: the base type name, never `__name`.

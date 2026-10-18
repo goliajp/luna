@@ -26,10 +26,13 @@ pub(super) fn find_loader(
             &format!("'package.{field}' must be a table"),
         ));
     };
+    // 5.1's message is a string on the stack, which each miss replaces
+    // with the two concatenated (`lua_concat`)
     if v == LuaVersion::Lua51 {
-        vm.native_push(1);
+        let empty = vm.str_value(b"")?;
+        vm.native_push_vals(&[empty])?;
     } else {
-        vm.native_buffinit(0);
+        vm.native_buffinit(0)?;
     }
     let mut msg = Vec::new();
     for i in 1.. {
@@ -37,7 +40,12 @@ pub(super) fn find_loader(
         if s.is_nil() {
             // 5.1 keeps the nil; 5.2 and 5.3 push the message made from
             // the buffer, which 5.4+ put in the buffer's place
-            vm.native_push(u32::from(v <= LuaVersion::Lua53));
+            if v == LuaVersion::Lua51 {
+                vm.native_push_vals(&[Value::Nil])?;
+            } else if v <= LuaVersion::Lua53 {
+                let m = vm.str_value(&msg)?;
+                vm.native_push_vals(&[m])?;
+            }
             break;
         }
         let r = vm.call_value(s, &[name])?;
@@ -52,6 +60,11 @@ pub(super) fn find_loader(
                 msg.extend_from_slice(b"\n\t");
             }
             msg.extend_from_slice(&text);
+            if v == LuaVersion::Lua51 {
+                let m = vm.str_value(&msg)?;
+                let top = vm.running_natives.last().map_or(0, |a| a.top_off);
+                vm.native_hold(top - 1, &[m])?;
+            }
         }
     }
     let Value::Str(n) = name else {
@@ -76,7 +89,7 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     // `lua_settop(L, 1)`, the loaded table, then `LOADED[name]`, which 5.2+
     // pop again before searching
     vm.native_settop(1);
-    vm.native_push(1);
+    vm.native_push_vals(&[Value::Table(loaded)])?;
     let cur = vm.native_getfield(Value::Table(loaded), name_s.as_bytes())?;
     if cur.truthy() {
         if v == LuaVersion::Lua51 && same(cur, sentinel) {
@@ -95,7 +108,7 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     // the loader is called where it sits: 5.4+ keep the buffer and the
     // loader data below it
     if v >= LuaVersion::Lua54 {
-        vm.native_push(1);
+        vm.native_push_vals(&[data])?;
     }
     if v == LuaVersion::Lua51 {
         vm.newindex_value(Value::Table(loaded), name, sentinel)?;

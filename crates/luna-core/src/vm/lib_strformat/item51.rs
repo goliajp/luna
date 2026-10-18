@@ -100,6 +100,7 @@ pub(super) fn item51(
             } else {
                 // a `__tostring` runs above the buffer's slot
                 let buf = vm.buffer_slot(out.len());
+                vm.native_hold_top(&[Vm::buffer_box()][..buf as usize])?;
                 if v == LuaVersion::Lua52 {
                     tolstring_52(vm, a.get(vm, arg), buf)?
                 } else {

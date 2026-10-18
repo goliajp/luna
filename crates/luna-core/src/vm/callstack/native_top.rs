@@ -72,6 +72,51 @@ impl Vm {
         }
     }
 
+    /// Write `vals`, values the running native's C function has pushed, to
+    /// its stack from `from` slots past its arguments (below zero: over the
+    /// ones it dropped): `debug.getlocal` finds them there below a function
+    /// it calls, as the collector does.
+    pub(crate) fn native_hold(&mut self, from: i32, vals: &[Value]) -> Result<(), LuaError> {
+        // a native the interpreter runs inline has no record of its own:
+        // the last one is below the running Lua function
+        if !self.native_on_top() {
+            return Ok(());
+        }
+        let Some(a) = self.running_natives.last() else {
+            return Ok(());
+        };
+        let at = (a.func_slot + 1 + a.nargs).wrapping_add_signed(from) as usize;
+        let end = at + vals.len();
+        self.grow_stack_holding(end, vals)?;
+        self.stack[at..end].copy_from_slice(vals);
+        Ok(())
+    }
+
+    /// The running native pushes `vals` (C `lua_push*`): counted as
+    /// [`Vm::native_push`] does, and written where they go.
+    pub(crate) fn native_push_vals(&mut self, vals: &[Value]) -> Result<(), LuaError> {
+        self.native_hold_top(vals)?;
+        self.native_push(vals.len() as u32);
+        Ok(())
+    }
+
+    /// [`Vm::native_hold`] at the running native's top: values a step that
+    /// counts them itself pushes there.
+    pub(crate) fn native_hold_top(&mut self, vals: &[Value]) -> Result<(), LuaError> {
+        match self.running_natives.last() {
+            Some(a) if self.native_on_top() => self.native_hold(a.top_off, vals),
+            _ => Ok(()),
+        }
+    }
+
+    /// What `luaL_Buffer` keeps in its stack slot (see [`Vm::buffer_slot`]):
+    /// 5.4's placeholder is a light userdata, 5.2 and 5.3's box a full one,
+    /// which luna stands in for with a light userdata as well.
+    pub(crate) fn buffer_box() -> Value {
+        static BOX: u8 = 0;
+        Value::LightUserdata(&BOX as *const u8 as *const ())
+    }
+
     /// The slots a `luaL_Buffer` holding `len` bytes takes on the stack:
     /// 5.4+ a placeholder from the start, 5.2 and 5.3 a box once the
     /// content passes `LUAL_BUFFERSIZE`, 5.1 none.
@@ -92,15 +137,31 @@ impl Vm {
         }
     }
 
+    /// [`Vm::native_settop`], the slots it adds past the top set to nil.
+    pub(crate) fn native_settop_nil(&mut self, n: u32) -> Result<(), LuaError> {
+        if let Some(a) = self.running_natives.last() {
+            let added = (n as i32 - a.nargs as i32 - a.top_off).max(0) as usize;
+            self.native_hold_top(&vec![Value::Nil; added])?;
+        }
+        self.native_settop(n);
+        Ok(())
+    }
+
     /// C `lua_getfield(L, idx, key)` on `obj`: the value, left pushed. 5.2+
     /// push the key first, where the value then goes, so an `__index` it
     /// runs starts one slot higher than in 5.1.
     pub(crate) fn native_getfield(&mut self, obj: Value, key: &[u8]) -> Result<Value, LuaError> {
         let k = self.str_value(key)?;
-        let key_first = self.version() >= LuaVersion::Lua52;
-        self.native_push(u32::from(key_first));
+        if self.version() >= LuaVersion::Lua52 {
+            self.native_push_vals(&[k])?;
+            let v = self.index_value(obj, k)?;
+            // the value takes the key's slot
+            let top = self.running_natives.last().map_or(0, |a| a.top_off);
+            self.native_hold(top - 1, &[v])?;
+            return Ok(v);
+        }
         let v = self.index_value(obj, k)?;
-        self.native_push(u32::from(!key_first));
+        self.native_push_vals(&[v])?;
         Ok(v)
     }
 
@@ -114,7 +175,7 @@ impl Vm {
     ) -> Result<(), LuaError> {
         let k = self.str_value(key)?;
         let key_pushed = self.version() >= LuaVersion::Lua52;
-        self.native_push(u32::from(key_pushed));
+        self.native_push_vals(&[k][..usize::from(key_pushed)])?;
         self.newindex_value(obj, k, v)?;
         self.native_pop(1 + u32::from(key_pushed));
         Ok(())
@@ -123,9 +184,9 @@ impl Vm {
     /// C `luaL_buffinitsize(L, &b, n)`, or `luaL_buffinit` with `n` 0:
     /// the buffer's slot (see [`Vm::buffer_slot`]), pushed outright by a
     /// native that keeps it for the rest of its run.
-    pub(crate) fn native_buffinit(&mut self, n: usize) {
+    pub(crate) fn native_buffinit(&mut self, n: usize) -> Result<(), LuaError> {
         let slot = self.buffer_slot(n);
-        self.native_push(slot);
+        self.native_push_vals(&[Vm::buffer_box()][..slot as usize])
     }
 }
 

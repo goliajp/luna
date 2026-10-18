@@ -94,8 +94,9 @@ pub fn ipairs_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let next_i = i.wrapping_add(1);
     // PUC 5.3+ ipairsaux pushes the index, then reads with `lua_geti`
     // (5.3: the key too), honouring __index on any value
-    let extra = 1 + u32::from(vm.version() == LuaVersion::Lua53);
-    let v = vm.index_value_pushed(tv, Value::Int(next_i), extra)?;
+    let extra = 1 + usize::from(vm.version() == LuaVersion::Lua53);
+    let held = [Value::Int(next_i); 2];
+    let v = vm.index_value_holding(tv, Value::Int(next_i), &held[..extra])?;
     if v.is_nil() {
         vm.nat_ret(fs, &[Value::Nil])
     } else {

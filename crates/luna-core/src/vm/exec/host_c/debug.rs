@@ -101,34 +101,7 @@ impl Vm {
         if self.host_is_running(co) {
             return self.thread_stack(None);
         }
-        if !self.is_main_coro(co) {
-            return self.thread_stack(Some(co));
-        }
-        // the main thread waits on the coroutines it resumed: its natives
-        // end where the first of them starts
-        let m = self
-            .main_ctx
-            .as_ref()
-            .expect("the main thread's saved context");
-        let mut end = self.natives_base;
-        let mut c = self.current;
-        while let Some(co) = c {
-            if co.resumer.is_none() {
-                break;
-            }
-            c = co.resumer;
-            if let Some(r) = c {
-                end = r.natives.start;
-            }
-        }
-        ThreadStack::new(
-            self.version <= LuaVersion::Lua51,
-            &m.frames,
-            &m.stack,
-            m.top,
-            &self.running_natives[..end],
-            None,
-        )
+        self.thread_stack(Some(co))
     }
 
     /// How many levels thread `co` has.

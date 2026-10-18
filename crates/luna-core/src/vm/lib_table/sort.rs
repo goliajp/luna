@@ -112,13 +112,28 @@ impl Sorter {
 
     /// Tell the native's record what the scratch stack holds, before a
     /// metamethod, a comparator or an error reads it.
-    fn mark(&self, vm: &mut Vm) {
-        let held = Self::stack(vm).len() as i32;
-        vm.native_set_pushed(self.off + held);
+    fn mark(&self, vm: &mut Vm) -> Result<(), LuaError> {
+        let held = Self::stack(vm).len();
+        vm.native_set_pushed(self.off + held as i32);
+        if self.snapshot.is_some() || !vm.native_on_top() {
+            return Ok(());
+        }
+        // and write it where PUC's stack has it: `lua_settop(L, 2)`'s nil,
+        // then the elements
+        let pad = self.off.max(0) as usize;
+        vm.native_hold(0, &[Value::Nil; 2][..pad])?;
+        let a = vm.running_natives.last().expect("sort runs");
+        let at = (a.func_slot + 1 + a.nargs).wrapping_add_signed(self.off) as usize;
+        vm.grow_stack(at + held)?;
+        let scratch = vm.sort_scratch.last().expect("sort frame");
+        vm.stack[at..at + held].copy_from_slice(scratch);
+        Ok(())
     }
 
     fn invalid_order(&self, vm: &mut Vm) -> LuaError {
-        self.mark(vm);
+        if let Err(e) = self.mark(vm) {
+            return e;
+        }
         raise_str(vm, "invalid order function for sorting")
     }
 
@@ -129,8 +144,9 @@ impl Sorter {
             // stack holds
             None if vm.version() <= V::Lua52 => tab_geti(vm, self.tv, i, 0)?,
             None => {
-                self.mark(vm);
-                vm.index_value_pushed(self.tv, Value::Int(i), key_slot(vm))?
+                self.mark(vm)?;
+                let key = [Value::Int(i)];
+                vm.index_value_holding(self.tv, key[0], &key[..key_slot(vm) as usize])?
             }
         };
         Self::push(vm, v)?;
@@ -147,8 +163,9 @@ impl Sorter {
             }
             None if vm.version() <= V::Lua52 => tab_seti(vm, self.tv, i, v, 0)?,
             None => {
-                self.mark(vm);
-                vm.newindex_value_pushed(self.tv, Value::Int(i), v, key_slot(vm))?;
+                self.mark(vm)?;
+                let key = [Value::Int(i)];
+                vm.newindex_value_holding(self.tv, key[0], v, &key[..key_slot(vm) as usize])?;
             }
         }
         Self::pop(vm, 1);
@@ -169,7 +186,7 @@ impl Sorter {
         match self.comp {
             // sort is an unprotected C call: the comparator runs non-yieldable.
             Some(f) => {
-                self.mark(vm);
+                self.mark(vm)?;
                 Ok(vm
                     .call_value(f, &[x, y])?
                     .first()
@@ -179,7 +196,7 @@ impl Sorter {
                 (Value::Int(a), Value::Int(b)) => Ok(a < b),
                 (Value::Float(a), Value::Float(b)) => Ok(a < b),
                 _ => {
-                    self.mark(vm);
+                    self.mark(vm)?;
                     vm.less_than(x, y, false)
                 }
             },

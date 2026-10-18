@@ -171,7 +171,7 @@ fn key_slot(vm: &Vm) -> u32 {
 
 /// Element read: raw on ≤5.2 (`lua_rawgeti`), through `__index` on 5.3+
 /// (`lua_geti`). `before`: the values the native has pushed by now, which
-/// an `__index` runs above and an error counts.
+/// an `__index` runs above and an error counts, written on the stack.
 fn tab_geti(vm: &mut Vm, tv: Value, i: i64, before: u32) -> Result<Value, LuaError> {
     if vm.version() <= V::Lua52 {
         // checktab already guaranteed a real table on these dialects.
@@ -180,8 +180,47 @@ fn tab_geti(vm: &mut Vm, tv: Value, i: i64, before: u32) -> Result<Value, LuaErr
             _ => Value::Nil,
         });
     }
+    hold_key(vm, i, before)?;
     let extra = before + key_slot(vm);
     vm.index_value_pushed(tv, Value::Int(i), extra)
+}
+
+/// [`tab_geti`] with the values the native has pushed before it, `held`
+/// (at most two), written where they go when an `__index` or an error
+/// can see them.
+fn tab_geti_held(vm: &mut Vm, tv: Value, i: i64, held: &[Value]) -> Result<Value, LuaError> {
+    if vm.version() <= V::Lua52 {
+        return tab_geti(vm, tv, i, 0);
+    }
+    let (all, n) = with_key(vm, i, held);
+    vm.index_value_holding(tv, Value::Int(i), &all[..n])
+}
+
+/// [`tab_seti`] with the values pushed before it, as [`tab_geti_held`].
+fn tab_seti_held(vm: &mut Vm, tv: Value, i: i64, v: Value, held: &[Value]) -> Result<(), LuaError> {
+    if vm.version() <= V::Lua52 {
+        return tab_seti(vm, tv, i, v, 0);
+    }
+    let (all, n) = with_key(vm, i, held);
+    vm.newindex_value_holding(tv, Value::Int(i), v, &all[..n])
+}
+
+/// `held`, then the key 5.3's `lua_geti` / `lua_seti` push.
+fn with_key(vm: &Vm, i: i64, held: &[Value]) -> ([Value; 3], usize) {
+    let mut all = [Value::Nil; 3];
+    all[..held.len()].copy_from_slice(held);
+    all[held.len()] = Value::Int(i);
+    (all, held.len() + key_slot(vm) as usize)
+}
+
+/// 5.3's `lua_geti` / `lua_seti` push the key, above the `before` values
+/// the native has pushed (and written) by then.
+fn hold_key(vm: &mut Vm, i: i64, before: u32) -> Result<(), LuaError> {
+    if key_slot(vm) == 0 {
+        return Ok(());
+    }
+    let top = vm.running_natives.last().map_or(0, |a| a.top_off);
+    vm.native_hold(top + before as i32, &[Value::Int(i)])
 }
 
 /// Element write: raw on ≤5.2 (`lua_rawseti`), through `__newindex` on
@@ -204,6 +243,7 @@ fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value, before: u32) -> Result<(),
         }
         return Ok(());
     }
+    hold_key(vm, i, before)?;
     let extra = before + key_slot(vm);
     vm.newindex_value_pushed(tv, Value::Int(i), v, extra)
 }

@@ -24,8 +24,9 @@ pub(super) fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
             _ => return Err(raise_str(vm, "'package.preload' must be a table")),
         }
     } else {
-        vm.native_push(1);
-        registry_table(vm, "_PRELOAD")?
+        let t = registry_table(vm, "_PRELOAD")?;
+        vm.native_push_vals(&[Value::Table(t)])?;
+        t
     };
     let loader = vm.native_getfield(Value::Table(preload), name.as_bytes())?;
     if loader.is_nil() {

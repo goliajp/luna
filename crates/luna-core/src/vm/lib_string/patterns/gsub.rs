@@ -147,7 +147,8 @@ pub(crate) fn add_value(
             };
             let k = cap_value(vm, src, k)?;
             // the key is pushed for `lua_gettable`
-            vm.index_value_pushed(repl, k, buf + 1)?
+            let held = [Vm::buffer_box(), k];
+            vm.index_value_holding(repl, k, &held[1 - buf as usize..])?
         }
         f => {
             let mut args = Vec::new();
@@ -158,7 +159,8 @@ pub(crate) fn add_value(
                 return Err(err);
             }
             // an unprotected C call: the replacement cannot yield
-            vm.call_value_pushed(f, &args, buf)?
+            let held = [Vm::buffer_box()];
+            vm.call_value_holding(f, &args, &held[..buf as usize])?
                 .first()
                 .copied()
                 .unwrap_or(Value::Nil)

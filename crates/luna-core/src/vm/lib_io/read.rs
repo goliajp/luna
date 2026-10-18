@@ -217,7 +217,9 @@ fn read_count(vm: &mut Vm, u: Gc<Userdata>, n: i64) -> Rd {
     // whole request, which the allocator refuses for absurd sizes
     if size >= UNALLOCATABLE && vm.version() >= LuaVersion::Lua52 {
         // 5.3 has pushed the buffer's box, 5.4+ the buffer's placeholder
-        vm.native_buffinit(0);
+        if let Err(e) = vm.native_buffinit(0) {
+            return Err(RdErr::Lua(e));
+        }
         return Err(RdErr::Lua(match vm.version() {
             LuaVersion::Lua52 if size > u64::MAX - 64 => {
                 vm.plain_err("memory allocation error: block too big")
