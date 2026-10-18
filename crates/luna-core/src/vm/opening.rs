@@ -1,0 +1,214 @@
+//! Opening the standard libraries as PUC's `luaL_openlibs` opens them: a
+//! script of the C API and auxiliary library calls PUC makes, in its
+//! order (`opening/data.rs`, generated from PUC), run on luna's stack with
+//! luna's objects. Each call allocates, counts and checks for a
+//! collection as PUC's does, so the collector steps where PUC's steps.
+//! The C functions are luna's natives, from each library's table of PUC's
+//! functions (`MODULES`).
+
+use crate::runtime::{Builtin, Value};
+use crate::version::LuaVersion;
+use crate::vm::error::LuaError;
+use crate::vm::exec::Vm;
+
+#[allow(clippy::all)]
+#[rustfmt::skip]
+#[path = "opening/data.rs"]
+mod data;
+#[path = "opening/api.rs"]
+mod api;
+#[path = "opening/aux.rs"]
+mod aux;
+#[path = "opening/fenv51.rs"]
+mod fenv51;
+#[path = "opening/run.rs"]
+mod run;
+#[path = "opening/step.rs"]
+mod step;
+
+pub(crate) use run::{Ix, Opener};
+
+/// What PUC's `luaL_openlibs` does in one dialect (see `data.rs`).
+pub(crate) struct Script {
+    /// the calls at the top level of `luaL_openlibs`
+    pub(crate) top: &'static [u8],
+    /// the calls of each `luaopen_*`, by the opener's function
+    pub(crate) opens: &'static [(u32, &'static [u8])],
+    pub(crate) strs: &'static [&'static [u8]],
+    pub(crate) nums: &'static [f64],
+    /// `luaL_Reg` lists: a name's index in `strs`, the function (0: none)
+    pub(crate) lists: &'static [&'static [(u16, u32)]],
+}
+
+/// How luna makes the function PUC's script names.
+#[derive(Clone, Copy)]
+pub(crate) enum Ctor {
+    /// a library function with no upvalues of luna's own: from 5.2 on a
+    /// light C function when PUC's has none, a C closure of PUC's
+    /// upvalues otherwise
+    F(crate::runtime::value::NativeFn, Builtin),
+    /// made by its own code, with PUC's upvalues the top `nup` values of
+    /// the opener's stack
+    C(fn(&mut Vm, &mut Opener, u32, u32) -> Result<Value, LuaError>),
+    /// a library's `luaopen_*`, a native that runs its part of the script
+    /// (see [`run_open`])
+    Open(crate::runtime::value::NativeFn),
+}
+
+/// A table of PUC's C functions: its name in PUC, and how luna makes it.
+pub(crate) type Natives = &'static [(&'static str, Ctor)];
+
+/// Every table, in the order the generator numbers them: a function is
+/// `module << 8 | index`.
+const MODULES: [Natives; 11] = [
+    crate::vm::builtins::PUC_FNS,
+    crate::vm::lib_coroutine::PUC_FNS,
+    crate::vm::lib_string::PUC_FNS,
+    crate::vm::lib_table::PUC_FNS,
+    crate::vm::lib_math::PUC_FNS,
+    crate::vm::lib_io::PUC_FNS,
+    crate::vm::lib_os_io::PUC_FNS,
+    crate::vm::lib_package::PUC_FNS,
+    crate::vm::lib_debug::PUC_FNS,
+    crate::vm::lib_bit32::PUC_FNS,
+    crate::vm::lib_utf8::PUC_FNS,
+];
+
+/// Where each table's functions start in a numbering of them all.
+const OFFSETS: [u16; 12] = {
+    let mut o = [0u16; 12];
+    let mut i = 0;
+    while i < MODULES.len() {
+        o[i + 1] = o[i] + MODULES[i].len() as u16;
+        i += 1;
+    }
+    o
+};
+
+/// How many functions the tables have.
+pub(crate) const FN_COUNT: usize = OFFSETS[11] as usize;
+
+/// The function the script numbers `f` (1 + `module << 8 | index`), and
+/// its place in a numbering of all of them.
+pub(crate) fn native(f: u32) -> (Ctor, usize) {
+    let f = f - 1;
+    let (m, i) = ((f >> 8) as usize, (f & 0xFF) as usize);
+    (MODULES[m][i].1, usize::from(OFFSETS[m]) + i)
+}
+
+/// The number the script gives the C function PUC names `name`.
+pub(crate) fn fn_number(name: &str) -> u32 {
+    for (m, fns) in MODULES.iter().enumerate() {
+        if let Some(i) = fns.iter().position(|&(n, _)| n == name) {
+            return 1 + ((m as u32) << 8 | i as u32);
+        }
+    }
+    unreachable!("a function of the tables")
+}
+
+/// The script of the dialect `v`.
+fn script(v: LuaVersion) -> &'static Script {
+    match v {
+        LuaVersion::Lua51 => &data::SCRIPT_51,
+        LuaVersion::Lua52 => &data::SCRIPT_52,
+        LuaVersion::Lua53 => &data::SCRIPT_53,
+        LuaVersion::Lua55 => &data::SCRIPT_55,
+        _ => &data::SCRIPT_54,
+    }
+}
+
+/// The body of each library's `luaopen_*` (`Ctor::Open`), `name` in
+/// PUC: the running native runs its part of the script, and returns the
+/// `nret` values it left on top.
+pub(crate) fn run_open(
+    vm: &mut Vm,
+    fs: u32,
+    nargs: u32,
+    name: &str,
+    nret: u32,
+) -> Result<u32, LuaError> {
+    let _ = nargs;
+    let s = script(vm.version());
+    // by name: the compiler may merge the bodies of the openers
+    let ops = s
+        .opens
+        .iter()
+        .find(|&&(f, _)| MODULES[(f >> 8) as usize][(f & 0xFF) as usize].0 == name)
+        .map_or(&[][..], |&(_, ops)| ops);
+    let mut op = Opener::native(vm, s, fs);
+    op.sandbox = vm.heap.puc.sandbox_base;
+    op.run(vm, ops)?;
+    let vals = op.top_values(vm, nret);
+    vm.nat_ret(fs, &vals)
+}
+
+/// The script's number of the `luaopen_*` of library `name` (`_G` for
+/// the base library), if the dialect has the library.
+fn opener_of(s: &Script, name: &str) -> Option<u32> {
+    let lib = if name == "_G" { "base" } else { name };
+    s.opens.iter().map(|&(f, _)| f + 1).find(|&f| {
+        let f = f - 1;
+        let n = MODULES[(f >> 8) as usize][(f & 0xFF) as usize].0;
+        n.strip_prefix("luaopen_") == Some(lib)
+    })
+}
+
+impl Vm {
+    /// PUC's `luaL_openlibs` (`luaL_openselectedlibs` in 5.5) at the host
+    /// level: the script's top level.
+    pub(crate) fn run_openlibs(&mut self) -> Result<(), LuaError> {
+        let s = script(self.version());
+        let mut op = Opener::host(self, s);
+        let r = op.run(self, s.top);
+        op.leave(self);
+        r
+    }
+
+    /// Library `name` (`_G` for the base library) opened at the host level
+    /// as PUC opens it one at a time: `luaL_requiref(L, name, luaopen_*,
+    /// 1)`, in 5.1 a call of `luaopen_*` with the name.
+    pub(crate) fn run_open_one(&mut self, name: &str) -> Result<(), LuaError> {
+        let s = script(self.version());
+        // `bit32` where PUC has none: luna's own library
+        if name == "bit32" && opener_of(s, name).is_none() {
+            return crate::vm::lib_bit32::try_open_bit32(self);
+        }
+        let mut op = Opener::host(self, s);
+        let r = op.open_one(self, name);
+        op.leave(self);
+        r
+    }
+
+    /// The body of library `name`'s `luaopen_*` run at the host level, as
+    /// the C API's `luaopen_*` runs it: what it returns.
+    pub(crate) fn run_open_body(&mut self, name: &str) -> Result<Vec<Value>, LuaError> {
+        let s = script(self.version());
+        let Some(f) = opener_of(s, name) else {
+            if name == "bit32" {
+                crate::vm::lib_bit32::try_open_bit32(self)?;
+                let g = self.globals();
+                let lib = self
+                    .heap
+                    .find_interned(b"bit32")
+                    .map(|k| g.get(Value::Str(k)));
+                return Ok(vec![lib.unwrap_or(Value::Nil)]);
+            }
+            return Ok(vec![Value::Nil]);
+        };
+        let ops = s
+            .opens
+            .iter()
+            .find(|&&(g, _)| g + 1 == f)
+            .map_or(&[][..], |&(_, o)| o);
+        let mut op = Opener::host(self, s);
+        let r = op.run(self, ops);
+        let n = if self.version() == LuaVersion::Lua51 && name == "_G" {
+            2
+        } else {
+            1
+        };
+        let vals = op.top_values(self, n);
+        op.leave(self);
+        r.map(|()| vals)
+    }
+}

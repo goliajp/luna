@@ -18,61 +18,8 @@ use legacy::{t_foreach, t_foreachi, t_getn, t_maxn, t_setn};
 pub(crate) use sequence::t_unpack;
 use sequence::{t_concat, t_create, t_insert, t_move, t_pack, t_remove};
 use sort::t_sort;
-
-type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
-
-/// Open the `table` library, failing when memory runs out.
-pub(crate) fn try_open_table(vm: &mut Vm) -> Result<(), LuaError> {
-    let ver = vm.version();
-    // Ordering note: the enum runs Lua51 < Lua52 < Lua53 < Lua54 <
-    // MacroLua < Lua55, so MacroLua (a 5.4 base) inherits exactly the 5.4
-    // surface from these comparisons.
-    // in the order of PUC's `tab_funcs` for each version: 5.1 keeps `setn`
-    // registered purely to raise "'setn' is obsolete"; LUA_COMPAT_MAXN is on
-    // in the default 5.2 build only (5.3's default LUA_COMPAT_5_2 does not
-    // include it); on 5.1 `unpack` is a base-library global (builtins)
-    let mut funcs: Vec<(&str, Native)> = Vec::with_capacity(9);
-    funcs.push(("concat", t_concat));
-    if ver == V::Lua51 {
-        funcs.push(("foreach", t_foreach));
-        funcs.push(("foreachi", t_foreachi));
-        funcs.push(("getn", t_getn));
-    }
-    if ver <= V::Lua52 {
-        funcs.push(("maxn", t_maxn));
-    }
-    if ver >= V::Lua55 {
-        funcs.push(("create", t_create));
-    }
-    funcs.push(("insert", t_insert));
-    if ver >= V::Lua52 {
-        funcs.push(("pack", t_pack));
-        funcs.push(("unpack", t_unpack));
-    }
-    funcs.push(("remove", t_remove));
-    if ver == V::Lua51 {
-        funcs.push(("setn", t_setn));
-    }
-    if ver >= V::Lua53 {
-        funcs.push(("move", t_move));
-    }
-    funcs.push(("sort", t_sort));
-    let t = vm.lib_table_puc("table")?;
-    let mut entries = Vec::with_capacity(funcs.len());
-    for (name, f) in funcs {
-        entries.push((name, vm.lib_native(f)?));
-    }
-    vm.lib_put_all(t, "table", entries)?;
-    // LUA_COMPAT_UNPACK (default in 5.2): `_G.unpack = table.unpack`, the
-    // same function value, set as the library opens (before `table`)
-    if ver == V::Lua52 {
-        let k = vm.str_value(b"unpack")?;
-        let f = t.get(k);
-        vm.lib_set_global("unpack", f)?;
-    }
-    vm.lib_set_global("table", Value::Table(t))?;
-    Ok(())
-}
+mod puc_fns;
+pub(crate) use puc_fns::PUC_FNS;
 
 /// PUC `ltablib.c` argument-check flags (5.3+).
 const TAB_R: u8 = 1;

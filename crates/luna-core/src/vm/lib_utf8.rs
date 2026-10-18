@@ -13,36 +13,8 @@ use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 mod codes;
 pub(crate) use codes::*;
-
-/// Open the `utf8` library, failing when memory runs out.
-pub(crate) fn try_open_utf8(vm: &mut Vm) -> Result<(), LuaError> {
-    let v = vm.version();
-    if v < LuaVersion::Lua53 {
-        return Ok(());
-    }
-    let t = vm.lib_table_puc("utf8")?;
-    let fns: [(&str, fn(&mut Vm, u32, u32) -> Result<u32, LuaError>); 5] = [
-        ("offset", u_offset),
-        ("codepoint", u_codepoint),
-        ("char", u_char),
-        ("len", u_len),
-        ("codes", u_codes),
-    ];
-    let mut entries = Vec::with_capacity(6);
-    for (name, f) in fns {
-        entries.push((name, vm.lib_native(f)?));
-    }
-    let pattern: &[u8] = if v == LuaVersion::Lua53 {
-        b"[\x00-\x7F\xC2-\xF4][\x80-\xBF]*"
-    } else {
-        b"[\x00-\x7F\xC2-\xFD][\x80-\xBF]*"
-    };
-    entries.push(("charpattern", vm.str_value(pattern)?));
-    vm.lib_put_all(t, "utf8", entries)?;
-    vm.lib_set_global("utf8", Value::Table(t))?;
-    vm.barrier_back_table(t);
-    Ok(())
-}
+mod puc_fns;
+pub(crate) use puc_fns::PUC_FNS;
 
 const MAX_UNICODE: u32 = 0x10_FFFF;
 const MAX_UTF: u32 = 0x7FFF_FFFF;

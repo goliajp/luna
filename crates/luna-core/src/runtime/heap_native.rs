@@ -52,10 +52,11 @@ impl Heap {
         &mut self,
         f: NativeFn,
         upvals: &[Value],
+        builtin: Builtin,
         puc_nup: usize,
     ) -> Result<Gc<NativeClosure>, Oom> {
         self.puc.silent += 1;
-        let g = self.try_new_builtin(f, upvals, Builtin::None, false);
+        let g = self.try_new_builtin(f, upvals, builtin, false);
         self.puc.silent -= 1;
         let g = g?;
         let h = g.as_ptr() as *mut GcHeader;
@@ -67,6 +68,21 @@ impl Heap {
             }
         }
         Ok(g)
+    }
+
+    /// The light function the opening made as function `id` (see
+    /// `PucState::lights`).
+    pub(crate) fn light(&self, id: usize) -> Option<Gc<NativeClosure>> {
+        self.puc.lights.get(id).copied().flatten()
+    }
+
+    /// Function `id` of the opening is the light function `g`.
+    pub(crate) fn set_light(&mut self, id: usize, g: Gc<NativeClosure>) {
+        let l = &mut self.puc.lights;
+        if l.len() <= id {
+            l.resize(crate::vm::opening::FN_COUNT.max(id + 1), None);
+        }
+        l[id] = Some(g);
     }
 
     /// Native `g` stands for a C closure of PUC's with `n` upvalues (from
@@ -111,12 +127,6 @@ impl Heap {
         is_async: bool,
     ) -> Result<Gc<NativeClosure>, Oom> {
         let fix = self.fix_natives && upvals.is_empty() && !is_async;
-        if fix
-            && self.puc.libs_opened
-            && let Some(g) = self.light_native(f, builtin)
-        {
-            return Ok(g);
-        }
         let mut hdr = GcHeader::native(upvals);
         hdr.aux = self.take_id();
         let kind = if is_async {
@@ -167,74 +177,5 @@ impl Heap {
             self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::CClosure, size);
         }
         Ok(g)
-    }
-}
-
-impl Heap {
-    /// The library function over `f` made before (PUC's light C function
-    /// of `f`: one value however often a library pushes it).
-    fn light_native(&self, f: NativeFn, builtin: Builtin) -> Option<Gc<NativeClosure>> {
-        let mut h = self.fixed;
-        // SAFETY: the links of `fixed` lead to live objects, each read
-        // through its tag's type
-        unsafe {
-            while !h.is_null() {
-                if (*h).tag == ObjTag::Native {
-                    let n = &*(h as *const NativeClosure);
-                    if std::ptr::fn_addr_eq(n.f, f) && n.builtin == builtin && n.upvals.is_empty() {
-                        return Some(Gc::from_ptr(h as *mut NativeClosure));
-                    }
-                }
-                h = (*h).next;
-            }
-        }
-        None
-    }
-
-    /// Library functions made fixed (PUC's light C functions) that stand
-    /// for C closures of PUC's: objects again, back on `all` in the order
-    /// given, and ones the count leaves to what they stand for. One not
-    /// on the fixed list is left as it is.
-    pub(crate) fn unfix_natives(&mut self, hs: &[*mut GcHeader]) {
-        // SAFETY: each of `hs` is a live native and the links of `fixed`
-        // lead to live objects; only links, class and flag bytes are written
-        unsafe {
-            // the ones to take carry a class bit no fixed native has for the
-            // walk, which clears it on each it takes; one with a colour is
-            // not fixed (a fixed object has none) and is not looked for
-            let mut left = 0;
-            for &h in hs {
-                if (*h).flags & COLOR_BITS == 0 {
-                    (*h).cls |= STANDS;
-                    left += 1;
-                }
-            }
-            let mut link: *mut *mut GcHeader = &mut self.fixed;
-            while left > 0 && !(*link).is_null() {
-                let h = *link;
-                if (*h).cls & STANDS != 0 {
-                    *link = (*h).next;
-                    (*h).cls &= !STANDS;
-                    left -= 1;
-                } else {
-                    link = &mut (*h).next;
-                }
-            }
-            // one with a colour, or whose class bit the walk left set, was
-            // not on `fixed`, and stays where it is
-            for &h in hs {
-                if (*h).flags & COLOR_BITS != 0 {
-                    continue;
-                }
-                if (*h).cls & STANDS != 0 {
-                    (*h).cls &= !STANDS;
-                    continue;
-                }
-                (*h).next = self.all;
-                (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.current_white);
-                self.all = h;
-                acct::set_uncounted(h, true);
-            }
-        }
     }
 }

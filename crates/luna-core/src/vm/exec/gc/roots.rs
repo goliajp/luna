@@ -123,6 +123,14 @@ impl Vm {
         // (gc.lua:544 suspended-coroutine collection).
         let live = (self.gc_top as usize).min(self.stack.len());
         for &v in self.stack[..live].iter() {
+            // a record of 5.1's opening that stands for a table there
+            if self.heap.puc.phantoms
+                && let Value::LightUserdata(p) = v
+                && self.heap.env51_record_index(p as *mut _).is_some()
+            {
+                // SAFETY: a record lives as long as the heap
+                unsafe { m.header(p as *mut _) };
+            }
             m.value(v);
         }
         // a load's parser objects, above its C function's slots on PUC's

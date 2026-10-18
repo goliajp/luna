@@ -66,33 +66,6 @@ impl Heap {
 }
 
 impl Heap {
-    /// `s`, a long string luna's libraries made without counting, is the
-    /// one PUC's record made and kept with the same bytes: counted there,
-    /// it is PUC's now.
-    pub(crate) fn acct_adopt_long(&mut self, s: Gc<LuaStr>) {
-        let h = s.as_ptr() as *mut GcHeader;
-        let kept = self.puc.kept_long.iter().find(|k| k.0 == s.as_bytes());
-        if let Some(&(_, size)) = kept
-            && is_uncounted(h)
-        {
-            super::set_uncounted(h, false);
-            // SAFETY: `s` is a live string; only its per-type byte changes
-            unsafe { (*h).sub |= self.external_kind(size) };
-        }
-    }
-
-    /// The flag of a 5.5 long string PUC made at `size` bytes: one over
-    /// bytes it owns (`LSTRMEM`) or over bytes it does not (`LSTRFIX`),
-    /// which its size alone tells from a regular one.
-    fn external_kind(&self, size: usize) -> u8 {
-        let hdr = self.sizes.lngstr_hdr;
-        match self.table_dialect {
-            Dialect::L55 if size == hdr + 2 * self.sizes.ptr => super::EXTERNAL,
-            Dialect::L55 if size == hdr => super::FIXED_EXT,
-            _ => 0,
-        }
-    }
-
     /// A long string of PUC's of `size` bytes (counted now with `count`)
     /// lives as long as the object behind `h`, which holds luna's string
     /// in its place (the package table: luna's default path is a short
@@ -114,33 +87,6 @@ impl Heap {
         self.puc.stand_ins.extend(sizes.into_iter().map(|s| (h, s)));
         // SAFETY: `h` heads a live object; only its class byte is written
         unsafe { (*h).cls |= super::STANDS };
-    }
-
-    /// Whether objects of PUC's stand on the object behind `h`.
-    pub(crate) fn stands(&self, h: *mut GcHeader) -> bool {
-        // SAFETY: `h` heads a live object; its class byte is read
-        unsafe { (*h).cls & super::STANDS != 0 }
-    }
-
-    /// PUC's bytes of an array part of `n` slots.
-    pub(crate) fn array_bytes_of(&self, n: usize) -> usize {
-        self.array_bytes(n)
-    }
-
-    /// PUC's bytes of a hash part of `n` nodes.
-    pub(crate) fn hash_bytes_of(&self, n: usize) -> usize {
-        self.hash_bytes(n)
-    }
-
-    /// PUC's default `package.path`, from its record of `luaL_openlibs`.
-    pub(crate) fn puc_default_path(&self) -> Option<&'static [u8]> {
-        let (_, strs) = crate::runtime::puc_libs::record(
-            self.table_dialect,
-            crate::runtime::puc_libs::Opening::Stopped,
-        );
-        strs.iter()
-            .copied()
-            .find(|b| b.windows(5).any(|w| w == b"?.lua"))
     }
 
     /// `cs`, a long string luna's compiler made without counting, is the

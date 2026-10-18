@@ -25,59 +25,8 @@ use locals::{d_getlocal, d_setlocal};
 use traceback::d_traceback;
 use upvalues::{d_getupvalue, d_setupvalue, d_upvalueid, d_upvaluejoin};
 pub(crate) use upvalues::{upvalue_name, visible_upvalue_index};
-
-/// Open the `debug` library, failing when memory runs out.
-pub(crate) fn try_open_debug(vm: &mut Vm) -> Result<(), LuaError> {
-    let v = vm.version();
-    let t = vm.lib_table_puc("debug")?;
-    // in the order of PUC's `dblib` for each version
-    let mut fns: Vec<(&str, crate::runtime::value::NativeFn)> = Vec::with_capacity(17);
-    fns.push(("debug", d_debug));
-    if v == LuaVersion::Lua51 {
-        fns.push(("getfenv", d_getfenv));
-    } else {
-        fns.push(("getuservalue", d_getuservalue));
-    }
-    fns.push(("gethook", d_gethook));
-    fns.push(("getinfo", d_getinfo));
-    fns.push(("getlocal", d_getlocal));
-    fns.push(("getregistry", d_getregistry));
-    fns.push(("getmetatable", d_getmetatable));
-    fns.push(("getupvalue", d_getupvalue));
-    if v == LuaVersion::Lua51 {
-        fns.push(("setfenv", d_setfenv));
-    } else {
-        fns.push(("upvaluejoin", d_upvaluejoin));
-        fns.push(("upvalueid", d_upvalueid));
-        fns.push(("setuservalue", d_setuservalue));
-    }
-    fns.push(("sethook", d_sethook));
-    fns.push(("setlocal", d_setlocal));
-    fns.push(("setmetatable", d_setmetatable));
-    fns.push(("setupvalue", d_setupvalue));
-    fns.push(("traceback", d_traceback));
-    if v == LuaVersion::Lua54 {
-        fns.push(("setcstacklimit", d_setcstacklimit));
-    }
-    let mut entries = Vec::with_capacity(fns.len());
-    for (name, f) in fns {
-        entries.push((name, vm.lib_native(f)?));
-    }
-    vm.lib_put_all(t, "debug", entries)?;
-    vm.lib_set_global("debug", Value::Table(t))?;
-    vm.barrier_back_table(t);
-    // register in package.loaded so require"debug" finds it
-    let pkg_k = vm.str_value(b"package")?;
-    if let Value::Table(pkg) = vm.globals().get(pkg_k) {
-        let lk = vm.str_value(b"loaded")?;
-        if let Value::Table(loaded) = pkg.get(lk) {
-            let dk = vm.str_value(b"debug")?;
-            vm.lib_set_value(loaded, dk, Value::Table(t))?;
-            vm.barrier_back_table(loaded);
-        }
-    }
-    Ok(())
-}
+mod puc_fns;
+pub(crate) use puc_fns::PUC_FNS;
 
 fn set_field(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) -> Result<(), LuaError> {
     let key = vm.str_value(k.as_bytes())?;

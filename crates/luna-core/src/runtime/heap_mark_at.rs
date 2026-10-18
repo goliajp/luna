@@ -63,7 +63,7 @@ impl Marker {
                 if let Some(mt) = u.metatable() {
                     self.mark(mt);
                 }
-                self.mark_env51((*h).cls);
+                self.mark_env51(h, (*h).cls);
                 if let UserdataPayload::Host {
                     data,
                     trace_fn: Some(trace_fn),

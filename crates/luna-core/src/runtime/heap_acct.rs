@@ -31,17 +31,8 @@ pub(crate) struct PucState {
     /// 5.1 and 5.2: the size of the buffer concatenations are made in
     /// (`G(L)->buff`)
     pub(crate) gbuff: usize,
-    /// the long strings PUC's `luaL_openlibs` made and kept
-    pub(crate) kept_long: Vec<(&'static [u8], usize)>,
-    /// where the collector stood when the libraries were open, when it ran
-    /// meanwhile and ended in the pause; how they open (lua.c's or not)
-    pub(crate) libs_pace: Option<libs::LibsPace>,
-    pub(crate) opening: crate::runtime::puc_libs::Opening,
     /// 5.1: what the last atomic step found to finalize (`udsize`)
     pub(crate) udsize: i64,
-    /// a library was opened: a later `luaL_openlibs` opens each as PUC's
-    /// second call does, not from the record
-    pub(crate) libs_opened: bool,
     /// uncounted objects of luna's standing for objects of PUC's of the
     /// given size, one entry for each object of PUC's (see
     /// `Heap::stand_sizes_on`)
@@ -67,6 +58,14 @@ pub(crate) struct PucState {
     /// what loads made before PUC does, off the list (`Heap::set_aside`)
     pub(crate) unborn: Vec<*mut GcHeader>,
     pub(crate) unborn_on: bool,
+    /// 5.1's io library opening: records of its environments are on the
+    /// stack (see `vm/opening/fenv51.rs`)
+    pub(crate) phantoms: bool,
+    /// `Vm::open_base` runs: the base library without its file loaders
+    pub(crate) sandbox_base: bool,
+    /// the library functions made as PUC's light C functions, by their
+    /// number in the opening's tables: one value however often pushed
+    pub(crate) lights: Vec<Option<Gc<crate::runtime::NativeClosure>>>,
 }
 
 impl Default for PucState {
@@ -79,11 +78,7 @@ impl Default for PucState {
             short_max: crate::runtime::string::MAX_SHORT_LEN,
             pins: Vec::new(),
             gbuff: 0,
-            kept_long: Vec::new(),
-            libs_pace: None,
-            opening: crate::runtime::puc_libs::Opening::Running,
             udsize: 0,
-            libs_opened: false,
             // the standard libraries make about twenty
             stand_ins: Vec::with_capacity(32),
             shrunk: Vec::new(),
@@ -95,6 +90,9 @@ impl Default for PucState {
             parse: Vec::new(),
             unborn: Vec::new(),
             unborn_on: false,
+            phantoms: false,
+            sandbox_base: false,
+            lights: Vec::new(),
         }
     }
 }
@@ -260,8 +258,6 @@ mod boot;
 mod defer;
 #[path = "heap_acct_fmt.rs"]
 mod fmt;
-#[path = "heap_acct_libs.rs"]
-mod libs;
 #[path = "heap_acct_parts.rs"]
 mod parts;
 #[path = "heap_acct_thread.rs"]

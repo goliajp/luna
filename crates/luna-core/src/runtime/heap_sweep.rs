@@ -21,17 +21,20 @@ impl Heap {
             let mut link: *mut *mut GcHeader = ptr::addr_of_mut!(head);
             while !(*link).is_null() {
                 let cur = *link;
+                self.env51_sweep(cur, false);
                 let f = (*cur).flags;
                 // dead = other-white (i.e. white but not current-white).
                 // Survivors are BLACK (just-marked) or current-white (born
                 // during the sweep itself).
                 if is_white(f) && (f & new_white) == 0 && !self.kept_dead(cur) {
+                    self.env51_freed(cur);
                     *link = (*cur).next;
                     self.free_obj(cur);
                     freed += 1;
                 } else {
                     (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);
                     link = ptr::addr_of_mut!((*cur).next);
+                    self.env51_sweep(cur, true);
                 }
             }
             self.all = head;
@@ -55,9 +58,7 @@ impl Heap {
     /// holds no reference that could have brought it back.
     pub(crate) fn gc_sweep_step(&mut self, budget: usize) -> bool {
         self.sweep_objects(budget, false);
-        // Verify after EVERY step, not just cycle completion: the
-        // mutator runs between steps, so a reference dangling mid-cycle
-        // is already a live bug.
+        // after every step: the mutator runs between them
         #[cfg(feature = "gc-verify")]
         self.verify_no_dangling("sweep_step");
         if self.phase != GcPhase::Sweep {
@@ -93,6 +94,7 @@ impl Heap {
                     break;
                 }
                 n += 1;
+                self.env51_sweep(cur, false);
                 let f = (*cur).flags;
                 let dead = is_white(f) && (f & new_white) == 0;
                 if dead && to_live && self.in_string_sweep(cur) {
@@ -101,6 +103,7 @@ impl Heap {
                     *link = (*cur).next;
                     self.strt.held.push(cur);
                 } else if dead && !self.kept_dead(cur) {
+                    self.env51_freed(cur);
                     *link = (*cur).next;
                     self.free_obj(cur);
                     self.live -= 1;
@@ -108,6 +111,7 @@ impl Heap {
                     (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);
                     self.sweep_prev = cur;
                     self.note_swept(cur);
+                    self.env51_sweep(cur, true);
                     if to_live {
                         break;
                     }

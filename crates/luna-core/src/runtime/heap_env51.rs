@@ -15,6 +15,11 @@
 
 use super::*;
 
+#[path = "heap_env51_mark.rs"]
+mod mark;
+#[path = "heap_env51_sweep.rs"]
+mod sweep;
+
 /// The class bits naming a 5.1 environment (`ENV_*`); none, the globals.
 const ENV_SHIFT: u8 = 5;
 pub(crate) const ENV_PACKAGE: u8 = 1;
@@ -51,23 +56,48 @@ pub(crate) struct Phantom {
     dead: bool,
 }
 
-pub(crate) struct Env51 {
+/// The records of one opening of the io library: a second
+/// `luaL_openlibs` makes its tables and closures anew, the old ones
+/// living on as long as what holds them.
+pub(crate) struct Gen {
     ph: [Phantom; 6],
-    /// the package table, the loaders' environment
-    package: *mut GcHeader,
     /// E1's array: the default input and output
     io: [*mut GcHeader; 2],
     /// where the records are on PUC's list of objects, by the objects of
     /// luna's next to them: the records two of them are swept with
     /// reaching the object (`before`) or after it
     anchors: [Anchor; 3],
+    /// E1 was made: the next one belongs to a new opening
+    opened: bool,
+}
+
+pub(crate) struct Env51 {
+    gens: Vec<Box<Gen>>,
+    /// the package table, the loaders' environment
+    package: *mut GcHeader,
+    /// the objects whose io environment is a later opening's, by the
+    /// opening (the last entry of an object counts); the others' is the
+    /// first's
+    owners: Vec<(*mut GcHeader, u8)>,
 }
 
 impl Env51 {
     /// How many of the records a sweep has not freed.
     #[cfg(feature = "gc-trace")]
     pub(super) fn live(&self) -> i64 {
-        self.ph.iter().filter(|p| !p.dead).count() as i64
+        let live = |g: &Gen| g.ph.iter().filter(|p| !p.dead).count() as i64;
+        self.gens.iter().map(|g| live(g)).sum()
+    }
+
+    /// The opening the io environment of the object behind `h` is from.
+    fn gen_of(&self, h: *mut GcHeader) -> &Gen {
+        let i = self
+            .owners
+            .iter()
+            .rev()
+            .find(|o| o.0 == h)
+            .map_or(0, |o| o.1);
+        &self.gens[usize::from(i)]
     }
 }
 
@@ -79,8 +109,8 @@ struct Anchor {
 }
 
 impl Heap {
-    /// Make 5.1's environment records, once.
-    pub(crate) fn env51_records(&mut self) -> &mut Env51 {
+    /// The records of a new opening of the io library.
+    fn env51_gen(&self) -> Box<Gen> {
         let s = self.sizes;
         let w = self.current_white;
         let rec = |size: usize, kid: usize, env: u8| {
@@ -101,25 +131,67 @@ impl Heap {
             recs,
         };
         let none = usize::MAX;
-        self.env51_box.get_or_insert_with(|| {
-            Box::new(Env51 {
-                ph: [
-                    rec(s.table + 2 * s.tvalue + s.node, FCLOSE, 0),
-                    rec(s.table + s.node, NOCLOSE, 0),
-                    rec(s.table + s.node, PCLOSE, 0),
-                    rec(s.c_closure(0), none, 0),
-                    rec(s.c_closure(0), none, ENV_IO),
-                    rec(s.c_closure(0), none, ENV_IO),
-                ],
-                package: ptr::null_mut(),
-                io: [ptr::null_mut(); 2],
-                anchors: [
-                    anchor([E1, FCLOSE]),
-                    anchor([E2, NOCLOSE]),
-                    anchor([E3, PCLOSE]),
-                ],
-            })
+        Box::new(Gen {
+            ph: [
+                rec(s.table + 2 * s.tvalue + s.node, FCLOSE, 0),
+                rec(s.table + s.node, NOCLOSE, 0),
+                rec(s.table + s.node, PCLOSE, 0),
+                rec(s.c_closure(0), none, 0),
+                rec(s.c_closure(0), none, ENV_IO),
+                rec(s.c_closure(0), none, ENV_IO),
+            ],
+            io: [ptr::null_mut(); 2],
+            anchors: [
+                anchor([E1, FCLOSE]),
+                anchor([E2, NOCLOSE]),
+                anchor([E3, PCLOSE]),
+            ],
+            opened: false,
         })
+    }
+
+    /// 5.1's environment records, made the first time.
+    fn env51_records(&mut self) -> &mut Env51 {
+        if self.env51_box.is_none() {
+            let g = self.env51_gen();
+            self.env51_box = Some(Box::new(Env51 {
+                gens: vec![g],
+                package: ptr::null_mut(),
+                owners: Vec::new(),
+            }));
+        }
+        self.env51_box.as_deref_mut().expect("made above")
+    }
+
+    /// The records of the latest opening.
+    fn env51_gen_now(&mut self) -> &mut Gen {
+        let e = self.env51_records();
+        e.gens.last_mut().expect("one at least")
+    }
+
+    /// Record `k` made now (the opening counted it): current white and
+    /// live; its header, which names it on the stack. E1 made again
+    /// starts the records of another opening.
+    pub(crate) fn env51_born(&mut self, k: usize) -> *mut GcHeader {
+        if k == E1 && self.env51_gen_now().opened {
+            let g = self.env51_gen();
+            self.env51_records().gens.push(g);
+        }
+        let w = self.current_white;
+        let g = self.env51_gen_now();
+        g.opened |= k == E1;
+        let p = &mut g.ph[k];
+        p.hdr.flags = w;
+        p.dead = false;
+        &mut p.hdr as *mut GcHeader
+    }
+
+    /// Which record `h` heads, if one does.
+    pub(crate) fn env51_record_index(&self, h: *mut GcHeader) -> Option<usize> {
+        let e = self.env51_box.as_deref()?;
+        e.gens
+            .iter()
+            .find_map(|g| g.ph.iter().position(|p| std::ptr::eq(&p.hdr, h)))
     }
 
     /// The package table, the loaders' environment.
@@ -127,84 +199,45 @@ impl Heap {
         self.env51_records().package = t.as_ptr() as *mut GcHeader;
     }
 
-    /// The default input and output, E1's array.
+    /// The default input and output, the latest E1's array.
     pub(crate) fn env51_io(&mut self, input: Option<Gc<Userdata>>, output: Option<Gc<Userdata>>) {
         let h =
             |u: Option<Gc<Userdata>>| u.map_or(ptr::null_mut(), |u| u.as_ptr() as *mut GcHeader);
-        self.env51_records().io = [h(input), h(output)];
+        self.env51_gen_now().io = [h(input), h(output)];
     }
 
-    /// Where the records are on PUC's list: E1 and `io_fclose` after the
-    /// io library's first function, E2 and `io_noclose` before its last,
-    /// E3 and `io_pclose` before `stderr`.
+    /// Where the latest records are on PUC's list: E1 and `io_fclose`
+    /// after the io library's first function, E2 and `io_noclose` before
+    /// its last, E3 and `io_pclose` before `stderr`.
     pub(crate) fn env51_anchors(
         &mut self,
         first: *mut GcHeader,
         last: *mut GcHeader,
         stderr: *mut GcHeader,
     ) {
-        let a = &mut self.env51_records().anchors;
+        let a = &mut self.env51_gen_now().anchors;
         (a[0].at, a[0].before) = (first, false);
         (a[1].at, a[1].before) = (last, true);
         (a[2].at, a[2].before) = (stderr, true);
     }
 
-    /// The sweep reaches `cur` (`after`: has swept it): the records swept
-    /// with it, as PUC sweeps them. Returns how many.
-    #[inline]
-    pub(super) fn env51_sweep(&mut self, cur: *mut GcHeader, after: bool) -> i64 {
-        let Some(e) = &mut self.env51_box else {
-            return 0;
-        };
-        let Some(a) = e.anchors.iter().find(|a| a.at == cur && a.before != after) else {
-            return 0;
-        };
-        let (w, mut n, mut freed) = (self.current_white, 0, 0);
-        for r in a.recs {
-            let p = &mut e.ph[r];
-            if p.dead {
-                continue;
-            }
-            n += 1;
-            let f = p.hdr.flags;
-            if is_white(f) && f & w == 0 {
-                p.dead = true;
-                p.hdr.flags = BLACK;
-                freed += p.size as usize;
-            } else {
-                p.hdr.flags = w;
-            }
-        }
-        if freed > 0 {
-            self.acct_free(freed);
-        }
-        #[cfg(feature = "gc-trace")]
-        self.trace.line(format_args!("e51 {n} {freed}"));
-        n
-    }
-
-    /// The object `h` is freed: no record is found by it any more.
-    #[inline]
-    pub(super) fn env51_forget(&mut self, h: *mut GcHeader) {
-        if let Some(e) = &mut self.env51_box {
-            for a in e.anchors.iter_mut().filter(|a| a.at == h) {
-                a.at = ptr::null_mut();
-            }
-        }
-    }
-
-    /// The object behind `h`, a native or a userdata, has environment `env`.
+    /// The object behind `h`, a native or a userdata, has environment
+    /// `env`: one of the io library's is the latest opening's.
     pub(crate) fn set_env51(&mut self, h: *mut GcHeader, env: u8) {
-        // SAFETY: `h` heads a live object; only its class byte is written
-        unsafe { (*h).cls = ((*h).cls & !(7 << ENV_SHIFT)) | (env << ENV_SHIFT) };
-    }
-
-    /// A cycle starts: the records are white, as PUC's objects are.
-    pub(super) fn env51_whiten(&mut self) {
-        let w = self.current_white;
-        if let Some(e) = &mut self.env51_box {
-            for p in e.ph.iter_mut().filter(|p| !p.dead) {
-                p.hdr.flags = w;
+        // SAFETY: `h` heads a live object; only its class and flag bytes
+        // are written: one with an environment to mark is no leaf
+        unsafe {
+            (*h).cls = ((*h).cls & !(7 << ENV_SHIFT)) | (env << ENV_SHIFT);
+            if env != 0 && env != ENV_PROTO {
+                (*h).flags &= !LEAF;
+            }
+        }
+        if let Some(e) = &mut self.env51_box
+            && e.gens.len() > 1
+        {
+            e.owners.retain(|o| o.0 != h);
+            if matches!(env, ENV_IO | ENV_IO_STD | ENV_IO_POPEN) {
+                e.owners.push((h, (e.gens.len() - 1) as u8));
             }
         }
     }
@@ -243,55 +276,4 @@ pub(super) unsafe fn phantom_is_table(h: *mut GcHeader) -> bool {
 pub(super) unsafe fn phantom_size(h: *mut GcHeader) -> i64 {
     // SAFETY: the caller's contract; a record starts with its header
     unsafe { i64::from((*(h as *const Phantom)).size) }
-}
-
-impl Marker {
-    /// Mark the environment the class bits `cls` name.
-    pub(crate) fn mark_env51(&mut self, cls: u8) {
-        let env = cls >> ENV_SHIFT;
-        if env == 0 || env == ENV_PROTO || self.env51.is_null() {
-            return;
-        }
-        // SAFETY: the records live as long as the heap the marker marks
-        let e = unsafe { &*self.env51 };
-        let h = match env {
-            ENV_PACKAGE => e.package,
-            ENV_IO => &e.ph[E1].hdr as *const GcHeader as *mut GcHeader,
-            ENV_IO_STD => &e.ph[E2].hdr as *const GcHeader as *mut GcHeader,
-            _ => &e.ph[E3].hdr as *const GcHeader as *mut GcHeader,
-        };
-        if !h.is_null() {
-            // SAFETY: a record, or the live package table
-            unsafe { self.header(h) };
-        }
-    }
-
-    /// Traverse the record `h`, as PUC traverses its table or closure:
-    /// E1's array from its end, the default output then input, then its
-    /// one node's value; a closure's environment.
-    ///
-    /// # Safety
-    /// `h` heads a record of the marker's.
-    pub(super) unsafe fn trace_phantom(&mut self, h: *mut GcHeader) {
-        // SAFETY: the caller's contract; the records outlive the marking
-        unsafe {
-            let p = &*(h as *const Phantom);
-            let e = &*self.env51;
-            if std::ptr::eq(p, &e.ph[E1]) {
-                for f in [e.io[1], e.io[0]] {
-                    if !f.is_null() {
-                        self.header(f);
-                    }
-                }
-            }
-            if p.env != 0 {
-                self.mark_env51(p.env << ENV_SHIFT);
-            }
-            for &k in &p.kids {
-                if k != NONE {
-                    self.header(&e.ph[usize::from(k)].hdr as *const GcHeader as *mut GcHeader);
-                }
-            }
-        }
-    }
 }

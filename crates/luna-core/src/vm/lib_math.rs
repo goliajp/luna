@@ -20,8 +20,8 @@ use frexp::{frexp, ldexp};
 use minmax::minmax;
 use random::{m_random, m_randomseed};
 
-mod open;
-pub(crate) use open::try_open_math;
+mod puc_fns;
+pub(crate) use puc_fns::{PUC_FNS, puc_setrandfunc};
 
 /// The library function `math.<name>` is, for the functions a JIT may
 /// inline: it replaces the call with its own code only while the field

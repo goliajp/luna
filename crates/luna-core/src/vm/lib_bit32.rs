@@ -13,12 +13,15 @@ use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
+mod puc_fns;
+pub(crate) use puc_fns::PUC_FNS;
 
 type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
 
-/// Open the `bit32` library, failing when memory runs out.
+/// Open the `bit32` library where PUC has none (5.1, 5.4, 5.5), which
+/// luna offers all the same; failing when memory runs out.
 pub(crate) fn try_open_bit32(vm: &mut Vm) -> Result<(), LuaError> {
-    let t = vm.lib_table_puc("bit32")?;
+    let t = vm.lib_table(12)?;
     let funcs: [(&str, Native); 12] = [
         ("arshift", b_arshift),
         ("band", b_and),
@@ -33,11 +36,11 @@ pub(crate) fn try_open_bit32(vm: &mut Vm) -> Result<(), LuaError> {
         ("rrotate", b_rrot),
         ("rshift", b_rshift),
     ];
-    let mut entries = Vec::with_capacity(funcs.len());
     for (name, f) in funcs {
-        entries.push((name, vm.lib_native(f)?));
+        let f = vm.lib_native(f)?;
+        let k = vm.str_value(name.as_bytes())?;
+        vm.lib_set_value(t, k, f)?;
     }
-    vm.lib_put_all(t, "bit32", entries)?;
     vm.lib_set_global("bit32", Value::Table(t))?;
     vm.barrier_back_table(t);
     // `luaL_requiref` also records the module in `package.loaded`, which is
