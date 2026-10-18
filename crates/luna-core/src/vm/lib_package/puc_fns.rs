@@ -210,11 +210,11 @@ fn push_default(
             vm.heap.sizes.string(def.len(), true)
         };
         // 5.1 keeps every string in its string table
-        let v51 = v == LuaVersion::Lua51;
-        if v51 {
-            vm.heap.acct_string(def.len());
+        if v == LuaVersion::Lua51 {
+            vm.heap.acct_stand_strt(pkg.header(), def.len());
+        } else {
+            vm.heap.acct_stand_on(pkg.header(), size, true);
         }
-        vm.heap.acct_stand_on(pkg.header(), size, !v51);
     }
     op.after(vm)
 }
