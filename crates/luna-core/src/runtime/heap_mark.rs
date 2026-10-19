@@ -81,6 +81,8 @@ pub(crate) struct Marker {
     pub(super) env51: *const super::env51::Env51,
     /// the loads a step runs inside (`PucState::parse`), or null
     pub(super) parse: *const Vec<super::parse::ParseFrame>,
+    /// 5.2 and 5.3: the objects of PUC's luna's stand for, or null
+    pub(super) stands: *const Vec<(*mut GcHeader, usize)>,
     /// `gc-verify`: instead of marking a child, report one the sweep about
     /// to run would free (white, not the current white) while the object
     /// being traced (the second) holds it; the check's name third
