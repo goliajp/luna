@@ -26,6 +26,17 @@ impl Vm {
         self.g.host_slots += slots;
     }
 
+    /// The host's own C function ([`Vm::host_entry_layout`], `lua.c`'s
+    /// `pmain`) has returned: the state closes on the thread's base level,
+    /// the call's result (5.2 on, `lua_pcall`'s one) all that is left.
+    pub(crate) fn leave_host_entry(&mut self) {
+        if self.g.host_frames > 0 {
+            self.g.host_ci_top = 0;
+            self.g.host_frames = 0;
+            self.top = u32::from(self.version >= LuaVersion::Lua52);
+        }
+    }
+
     /// The arguments of the host's C function in the slots
     /// [`Vm::host_entry_layout`] made, above the function's own: `lua.c`'s
     /// `pmain` gets `argc` and `argv` (5.1 its light userdata).
@@ -327,6 +338,7 @@ impl Vm {
 
 impl Drop for Vm {
     fn drop(&mut self) {
+        self.leave_host_entry();
         // state close: run `__gc` for every still-registered finalizable before
         // the heap frees them (PUC separatetobefnz(g,1) + callallpending). A
         // single pass — objects created by a closing finalizer are not
