@@ -79,7 +79,11 @@ impl Vm {
         splices: Vec<(u32, crate::runtime::heap::Deferred)>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         self.heap.puc.load_checked = false;
-        let counted = matches!(&parsed.0, Ok(p) if p.recorded().is_some());
+        let counted = match &parsed.0 {
+            Ok(p) => p.recorded().is_some(),
+            Err((e, Some(_))) => self.heap.puc.silent == 0 && !e.is_memory(),
+            Err(_) => false,
+        };
         let mut splices = splices;
         if !counted {
             // nothing of the parse is replayed: the reader's counts stand
@@ -91,6 +95,9 @@ impl Vm {
         self.guarded_load(|vm| {
             let mut parsed = match parsed.0 {
                 Ok(p) => p,
+                Err((e, Some((failed, src)))) if counted => {
+                    return Err(vm.acct_streamed_failure(e, failed, &src, chunkname, name, splices));
+                }
                 Err((e, failed)) => {
                     let source = match name {
                         Some(n) => n,
@@ -122,8 +129,14 @@ impl Vm {
             let cl = match made {
                 Ok(cl) => cl,
                 Err(e) => {
+                    let r = match (&parsed.src, parsed.recorded()) {
+                        (Some(src), Some(rec)) if !e.is_memory() => {
+                            vm.acct_failed_compile(src, &e, &parsed.chunk, rec, splices)
+                        }
+                        _ => vm.splices_stand(splices),
+                    };
                     vm.heap.flush_unborn(base);
-                    return Err(e);
+                    return Err(r.err().unwrap_or(e));
                 }
             };
             let src = parsed
@@ -152,18 +165,63 @@ impl Vm {
             Some(n) if !long => n,
             _ => self.heap.try_intern(chunkname)?,
         };
-        let proto = self
-            .compile_parsed(&parsed.chunk, &parsed.end_lines, source)
-            .map_err(|e| match &parsed.src {
-                // placed as PUC, which compiles while it reads, meets it
-                Some(src) => {
-                    let (v, depth) = (self.version, self.g.nccalls);
-                    let s = &mut self.compile_scratch;
-                    crate::compiler::place_error(s, &parsed.chunk, src, v, depth, e)
-                }
-                None => e,
-            })?;
+        self.compile_scratch.replay.seal = true;
+        let made = self.compile_parsed(&parsed.chunk, &parsed.end_lines, source);
+        self.compile_scratch.replay.seal = false;
+        let proto = made.map_err(|e| match &parsed.src {
+            // placed as PUC, which compiles while it reads, meets it
+            Some(src) => {
+                let (v, depth) = (self.version, self.g.nccalls);
+                let s = &mut self.compile_scratch;
+                crate::compiler::place_error(s, &parsed.chunk, src, v, depth, e)
+            }
+            None => e,
+        })?;
         self.hold_puc_names(proto)?;
         self.close_chunk(proto)
+    }
+
+    /// The error of a counted load whose reader's text, `src`, failed to
+    /// parse at `failed` with `e`, counted as PUC allocates it (see
+    /// [`Vm::acct_failed_load`]); the reader's calls counted `splices`.
+    fn acct_streamed_failure(
+        &mut self,
+        e: SyntaxError,
+        failed: crate::frontend::parser::Failed,
+        src: &[u8],
+        chunkname: &[u8],
+        name: Option<Gc<crate::runtime::LuaStr>>,
+        splices: Vec<(u32, crate::runtime::heap::Deferred)>,
+    ) -> SyntaxError {
+        let (v, depth) = (self.version, self.g.nccalls);
+        let base = self.heap.unborn_len();
+        self.heap.puc.silent += 1;
+        self.heap.set_aside_loads(true);
+        let long = chunkname.len() > crate::runtime::string::MAX_SHORT_LEN
+            && self.heap.table_dialect != crate::runtime::table::Dialect::L51;
+        let source = match name {
+            Some(n) if !long => Ok(n),
+            _ => self.heap.try_intern(chunkname).map_err(SyntaxError::from),
+        };
+        // the text read, parsed again for what its scanner makes
+        let e = match &source {
+            &Ok(source) => {
+                self.parse_scratch.record = true;
+                let _ =
+                    crate::frontend::parser::parse_in_place(src, v, depth, &mut self.parse_scratch);
+                self.parse_scratch.failed = Some(failed);
+                self.error_before(src, Some(failed), source).unwrap_or(e)
+            }
+            Err(o) => o.clone(),
+        };
+        self.heap.set_aside_loads(false);
+        self.heap.puc.silent -= 1;
+        let counted = match source {
+            Ok(source) if !e.is_memory() => self.acct_failed_load(src, &e, source, splices),
+            _ => self.splices_stand(splices),
+        };
+        self.parse_scratch.record = false;
+        self.heap.flush_unborn(base);
+        counted.err().unwrap_or(e)
     }
 }

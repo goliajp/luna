@@ -86,7 +86,8 @@ impl<'s> Parser<'s> {
     /// shows no token).
     pub(super) fn new_local(&mut self) -> Result<(), SyntaxError> {
         let &(active, line_defined, pending) = self.func_local_count.last().expect("func ctx");
-        if self.version <= LuaVersion::Lua54 && active + pending + 1 > MAXVARS {
+        if self.version <= LuaVersion::Lua54 && active + pending + 1 > MAXVARS && !self.stk.lenient
+        {
             return Err(if self.version <= LuaVersion::Lua51 {
                 let what = if self.func_local_count.len() == 1 {
                     "main function".to_string()
@@ -114,7 +115,7 @@ impl<'s> Parser<'s> {
     /// the cap here instead of at declaration.
     pub(super) fn activate_locals(&mut self) -> Result<(), SyntaxError> {
         let (active, _, pending) = *self.func_local_count.last().expect("func ctx");
-        if self.version >= LuaVersion::Lua55 && active + pending > MAXVARS {
+        if self.version >= LuaVersion::Lua55 && active + pending > MAXVARS && !self.stk.lenient {
             return Err(self.local_limit_error());
         }
         let slot = self.func_local_count.last_mut().expect("func ctx");
@@ -130,7 +131,7 @@ impl<'s> Parser<'s> {
             return Ok(());
         }
         let (active, _, _) = *self.func_local_count.last().expect("func ctx");
-        if active + hidden > MAXVARS {
+        if active + hidden > MAXVARS && !self.stk.lenient {
             return Err(self.local_limit_error());
         }
         let slot = self.func_local_count.last_mut().expect("func ctx");

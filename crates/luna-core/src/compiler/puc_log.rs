@@ -56,6 +56,8 @@ pub(super) struct LogState {
     /// the constant the newest 5.4+ string literal made, in the function
     /// at this depth ([`Compiler::drop_literal`])
     pub(super) fresh_literal: Option<(usize, u32)>,
+    /// see [`super::ReplayOpts::lenient`]
+    pub(super) lenient: bool,
 }
 
 impl<'a> Compiler<'a> {
@@ -101,8 +103,14 @@ impl<'a> Compiler<'a> {
     /// Log the parser's entries for the local `name` at token `at`, where
     /// PUC makes them before the statement's expressions, ahead of the
     /// declaration.
-    pub(super) fn prelog_localvar(&mut self, at: TokRef, name: &str) {
+    pub(super) fn prelog_localvar(&mut self, at: TokRef, name: &str) -> Result<(), SyntaxError> {
         let cur = std::mem::replace(&mut self.cur, at);
+        // up to 5.4 `new_localvar` checks the cap as each name is read,
+        // before the statement registers any of them
+        let active = self.lr().avars.iter().filter(|a| a.reg.is_some()).count() as u32;
+        if self.version <= LuaVersion::Lua54 && active + self.lr().prelogged >= MAX_LOCALS {
+            return Err(self.limit_err("local variables", MAX_LOCALS));
+        }
         if let Some(lit) = puc_literal(name) {
             self.log(PEv::Lit(lit));
         }
@@ -111,6 +119,7 @@ impl<'a> Compiler<'a> {
         self.log(PEv::ActVar(n));
         self.cur = cur;
         self.l().prelogged += 1;
+        Ok(())
     }
 
     /// How many entries PUC's `dyd->actvar` holds: the active variables of
@@ -132,25 +141,32 @@ impl<'a> Compiler<'a> {
         sid: StatId,
         collective: Option<crate::frontend::ast::Attrib>,
         names: &[crate::frontend::ast::AttribName],
-    ) {
+    ) -> Result<(), SyntaxError> {
         // `local`, then `<attrib>` before the names (5.5)
         let mut tok = if collective.is_some() { 4 } else { 1 };
         for an in names {
-            self.prelog_localvar(TokRef::StatFirst(sid, tok + 1), self.nm(&an.name));
+            self.prelog_localvar(TokRef::StatFirst(sid, tok + 1), self.nm(&an.name))?;
             tok += 2 + if an.attrib.is_some() { 3 } else { 0 };
         }
+        Ok(())
     }
 
     /// [`Self::prelog_localvar`] for a `for` loop's hidden locals and
     /// variables, which PUC makes on the token after each variable's name,
     /// the hidden ones with the first.
-    pub(super) fn log_for_names(&mut self, sid: StatId, hidden: &[&str], vars: &[(&str, bool)]) {
+    pub(super) fn log_for_names(
+        &mut self,
+        sid: StatId,
+        hidden: &[&str],
+        vars: &[(&str, bool)],
+    ) -> Result<(), SyntaxError> {
         for &h in hidden {
-            self.prelog_localvar(TokRef::StatFirst(sid, 2), h);
+            self.prelog_localvar(TokRef::StatFirst(sid, 2), h)?;
         }
         for (j, &(v, _)) in vars.iter().enumerate() {
-            self.prelog_localvar(TokRef::StatFirst(sid, 2 + 2 * j as i32), v);
+            self.prelog_localvar(TokRef::StatFirst(sid, 2 + 2 * j as i32), v)?;
         }
+        Ok(())
     }
 
     /// The constant of string literal `id`. Up to 5.3 PUC adds it while

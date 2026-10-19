@@ -175,6 +175,7 @@ impl<'s> Parser<'s> {
             // PUC `restassign` checks each target as it reaches the ',' or
             // '=' after it
             if let Expr::Name(n) = self.chunk.exprs[last.0 as usize]
+                && !self.stk.lenient
                 && self
                     .gotos
                     .as_ref()

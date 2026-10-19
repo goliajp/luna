@@ -25,6 +25,7 @@ mod arr;
 mod consts;
 mod events;
 mod failed;
+mod failed_compile;
 mod funcs;
 mod ptab;
 mod replay;

@@ -207,7 +207,10 @@ impl<'a> Compiler<'a> {
                     }
                     upval |= self.lr().locals[b.first_local..].iter().any(|l| l.captured);
                 }
-                let li = li.expect("the frontend checks break");
+                // a lenient compile (see `ReplayOpts`) takes one with no loop
+                let Some(li) = li else {
+                    return Ok(());
+                };
                 if upval {
                     let level = self.reg_level(self.lr().blocks[li].first_avar);
                     self.emit(Inst::iabc(Op::Close, level, 0, 0, false));
@@ -234,8 +237,10 @@ impl<'a> Compiler<'a> {
                 Ok(())
             }
             _ => {
-                let b = self.l().blocks.iter_mut().rev().find(|b| b.is_loop != 0);
-                b.expect("the frontend checks break").is_loop = 2;
+                let Some(b) = self.l().blocks.iter_mut().rev().find(|b| b.is_loop != 0) else {
+                    return Ok(());
+                };
+                b.is_loop = 2;
                 self.goto_55("break")?;
                 Ok(())
             }

@@ -58,6 +58,17 @@ impl<'s> Parser<'s> {
         }
     }
 
+    /// How an error shows the current token.
+    pub(super) fn near_kind_now(&self) -> NearKind {
+        match (self.tok_char, self.tok.tok) {
+            (Some(_), _) => NearKind::Char,
+            (_, Token::Eof) => NearKind::Eof,
+            (_, Token::Name(()) | Token::Str(())) => NearKind::Text,
+            (_, Token::Int(_) | Token::Float(_)) => NearKind::Numeral,
+            _ => NearKind::Fixed,
+        }
+    }
+
     /// PUC `luaX_syntaxerror`: `msg near <current token>`.
     #[cold]
     #[inline(never)]
@@ -67,13 +78,7 @@ impl<'s> Parser<'s> {
         if self.tok_char == Some(0) {
             return self.plain_error(msg.as_ref());
         }
-        self.near_kind.set(match (self.tok_char, self.tok.tok) {
-            (Some(_), _) => NearKind::Char,
-            (_, Token::Eof) => NearKind::Eof,
-            (_, Token::Name(()) | Token::Str(())) => NearKind::Text,
-            (_, Token::Int(_) | Token::Float(_)) => NearKind::Numeral,
-            _ => NearKind::Fixed,
-        });
+        self.near_kind.set(self.near_kind_now());
         let mut bytes = msg.as_ref().as_bytes().to_vec();
         bytes.extend_from_slice(b" near ");
         bytes.extend_from_slice(&self.near());
@@ -190,6 +195,9 @@ impl<'s> Parser<'s> {
         } else {
             MAX_DEPTH
         };
+        // a lenient parse (a completion) has room for the levels the tokens
+        // it adds enter: a load can fail on this limit
+        let limit = limit + 16 * u32::from(self.stk.lenient);
         if self.depth > limit || crate::native_stack::is_low(crate::native_stack::RESERVE) {
             return Err(self.levels_error());
         }

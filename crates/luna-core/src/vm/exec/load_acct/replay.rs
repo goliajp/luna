@@ -2,6 +2,7 @@
 //! and what has been made so far.
 
 use super::*;
+use crate::compiler::TokRef;
 
 /// A function being compiled, in PUC's terms.
 #[derive(Default)]
@@ -61,6 +62,48 @@ pub(super) struct Cut {
     pub(super) events: i64,
     pub(super) ended: bool,
     pub(super) scans: i64,
+    /// a function closing at token `events` (with `ended`) closes: the
+    /// error was not raised while it closed, after its final return
+    pub(super) closes: bool,
+    /// the parser failed where it expected the `end` (or `until`) of a
+    /// block: the block was over, and what leaving it does was done
+    pub(super) block_ends: bool,
+    /// the statements and expressions the failed parse read to their end
+    /// (see `ParseScratch::failed_closed`): only theirs are done when the
+    /// parser fails on the token
+    pub(super) closed: (u32, u32),
+}
+
+impl Cut {
+    /// Whether event `ev`, logged at token `t`, the token of the cut, is
+    /// replayed: one of a node that ended before the token (done while
+    /// the parser looked at it, before it failed on it), or, when the
+    /// error was raised as a function closed, any up to the closing.
+    pub(super) fn takes(&self, t: TokRef, ev: PEv, m: &crate::frontend::parser::Marks) -> bool {
+        if !self.closes {
+            return !matches!(ev, PEv::Close);
+        }
+        let ended = |id: u32, closed: u32, follow: &[u32]| {
+            id < closed
+                && follow
+                    .get(id as usize)
+                    .is_some_and(|&f| i64::from(f) <= self.events)
+        };
+        let (stats, exprs) = self.closed;
+        match t {
+            // a statement's last token: what its body leaves is done
+            // before the parser checks the token is the `end` it expects
+            TokRef::StatAfter(_, -1) if self.block_ends => true,
+            TokRef::After(e, _) | TokRef::First(e, _) | TokRef::Open(e, _) => {
+                ended(e.0, exprs, &m.expr_follow)
+            }
+            TokRef::StatFirst(s, _)
+            | TokRef::StatAfter(s, _)
+            | TokRef::StatMark(s, _)
+            | TokRef::MarkPlus(s, ..) => ended(s.0, stats, &m.stat_follow),
+            _ => false,
+        }
+    }
 }
 
 /// A value in a parser table, as the debug library is shown it.

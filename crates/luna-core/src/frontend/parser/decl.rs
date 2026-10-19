@@ -32,17 +32,17 @@ impl<'s> Parser<'s> {
         }
         self.advance()?;
         let name = self.expect_name()?;
+        // PUC reads the `>` before it looks at the name
+        self.expect(Token::Gt, ">")?;
         let attrib = match self.text(name.sym) {
             "const" => Attrib::Const,
             "close" => Attrib::Close,
+            _ if self.stk.lenient => return Ok(None),
             other => {
-                return Err(SyntaxError {
-                    line: name.line,
-                    msg: format!("unknown attribute '{other}'").into_bytes(),
-                });
+                let msg = format!("unknown attribute '{other}'");
+                return Err(self.plain_error(msg));
             }
         };
-        self.expect(Token::Gt, ">")?;
         Ok(Some(attrib))
     }
 

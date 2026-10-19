@@ -197,7 +197,7 @@ impl Vm {
             // what PUC made before the error is counted as it made it
             let failed = match (&made, source) {
                 (Err(e), Ok(source)) if counted && !e.is_memory() => {
-                    self.acct_failed_load(src, e, source)
+                    self.acct_failed_load(src, e, source, Vec::new())
                 }
                 _ => Ok(()),
             };

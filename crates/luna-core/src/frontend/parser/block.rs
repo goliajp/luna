@@ -38,6 +38,7 @@ impl<'s> Parser<'s> {
                     self.tok.tok,
                     Token::Else | Token::Elseif | Token::End | Token::Eof
                 );
+                self.label_run_ends(mark);
                 self.goto_step(|g| g.finish_labels(last))?;
             }
             if self.block_follow() {
@@ -191,7 +192,7 @@ impl<'s> Parser<'s> {
     /// an unresolved goto when the function closes.
     pub(super) fn break_stat(&mut self) -> Result<(), SyntaxError> {
         let line = self.lex.line();
-        let in_loop = self.funcs.last().expect("func ctx").loops > 0;
+        let in_loop = self.funcs.last().expect("func ctx").loops > 0 || self.stk.lenient;
         if !in_loop && self.version >= LuaVersion::Lua55 {
             return Err(self.error("break outside loop"));
         }
@@ -253,6 +254,25 @@ impl<'s> Parser<'s> {
         self.goto_step(GotoCheck::leave_block)
     }
 
+    /// 5.4 on, the labels read last, which waited for the no-op statements
+    /// after them, are made now (PUC `labelstat`): their token, for the
+    /// compiler, is the current one. `from`: the block's first statement.
+    fn label_run_ends(&mut self, from: usize) {
+        let Some(r) = self
+            .rec
+            .as_deref_mut()
+            .filter(|_| self.version >= LuaVersion::Lua54)
+        else {
+            return;
+        };
+        for &s in self.stk.stats[from..].iter().rev() {
+            if !matches!(self.chunk.stats[s.0 as usize], Stat::Label(_)) {
+                break;
+            }
+            r.marks.stat_follow[s.0 as usize] = self.tok_ix;
+        }
+    }
+
     /// Run a step of the goto check (dialects that have one), turning its
     /// error into a syntax error without a near-token (PUC `semerror`),
     /// which 5.5 reports at the line of the last token consumed.
@@ -262,6 +282,7 @@ impl<'s> Parser<'s> {
     ) -> Result<(), SyntaxError> {
         match self.gotos.as_mut().map(step) {
             Some(Err(GotoErr::Mem(o))) => Err(o.into()),
+            Some(Err(GotoErr::Text(_))) if self.stk.lenient => Ok(()),
             Some(Err(GotoErr::Text(msg))) if self.version >= LuaVersion::Lua55 => {
                 Err(SyntaxError {
                     line: self.last_line,

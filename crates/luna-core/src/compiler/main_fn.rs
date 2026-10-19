@@ -67,7 +67,10 @@ fn compile_main_body(
             log.clear();
             log
         },
-        puc_state: Default::default(),
+        puc_state: super::puc_log::LogState {
+            lenient: scratch.replay.lenient,
+            ..Default::default()
+        },
     };
     c.sym_strs.clear();
     c.sym_strs.resize_or_abort(ast.names.len(), None);
@@ -85,6 +88,7 @@ fn compile_main_body(
     }
     c.enter_block(false);
     scratch.err_tok = None;
+    (scratch.replay.sealed, scratch.replay.at) = (None, None);
     let body = c.stat_block(&ast.block).and_then(|()| {
         // the implicit final return belongs to the chunk's last line (PUC),
         // so a line hook / activelines see it there rather than on the last
@@ -94,6 +98,9 @@ fn compile_main_body(
     });
     if let Err(e) = body {
         scratch.err_tok = c.err_tok.take();
+        if scratch.replay.seal {
+            scratch.replay.sealed = Some(c.seal_levels());
+        }
         scratch.puc_log = std::mem::replace(&mut c.puc_log, LVec::new(c.heap.mem()));
         return Err(e);
     }

@@ -83,6 +83,7 @@ impl Recording {
 pub(crate) struct Found {
     pub(crate) line: u32,
     pub(crate) near: Vec<u8>,
+    pub(crate) kind: crate::frontend::error::NearKind,
     pub(crate) span: Span,
 }
 
@@ -102,19 +103,26 @@ impl Marks {
     }
 }
 
-/// Parse `src` again, as a load at `c_depth` did, recording [`Marks`].
+/// Parse `src` again, as a load at `c_depth` did (`lenient`: see
+/// [`ParseScratch::lenient`]), recording [`Marks`].
 pub(crate) fn record_marks(
     src: &[u8],
     version: LuaVersion,
     c_depth: u32,
+    lenient: bool,
 ) -> Result<Marks, SyntaxError> {
-    record(src, version, c_depth, None).map(|r| r.marks)
+    record(src, version, c_depth, None, lenient).map(|r| r.marks)
 }
 
-/// Token `ix` of `src` as PUC's scanner, on it, reports an error at. A
-/// source that fails to parse has the tokens up to where it fails.
-pub(crate) fn token_at(src: &[u8], version: LuaVersion, c_depth: u32, ix: u32) -> Option<Found> {
-    record(src, version, c_depth, Some(ix)).ok()?.found
+/// Token `ix` of `src` as an error on it reports it, if a parse reaches it.
+pub(crate) fn token_at(
+    src: &[u8],
+    v: LuaVersion,
+    depth: u32,
+    ix: u32,
+    lenient: bool,
+) -> Option<Found> {
+    record(src, v, depth, Some(ix), lenient).ok()?.found
 }
 
 #[path = "marks_scan.rs"]
@@ -133,10 +141,12 @@ fn record(
     version: LuaVersion,
     c_depth: u32,
     target: Option<u32>,
+    lenient: bool,
 ) -> Result<Recording, SyntaxError> {
     // held past the vectors made through it (see `parse_at_depth`)
     let mem = MemOwner::system();
     let mut scratch = ParseScratch::new(mem.clone());
+    scratch.lenient(lenient);
     let names = scratch.chunk.names.take();
     let lex = Lexer::interning(src, version, names, scratch.lex_buf.take());
     let mut lex = TokenSource::Lexer(lex);
@@ -227,6 +237,7 @@ impl Parser<'_> {
         let found = Found {
             line: self.lex.line(),
             near: self.near(),
+            kind: self.near_kind_now(),
             span: self.tok.span,
         };
         self.rec.as_mut().expect("recording").found = Some(found);

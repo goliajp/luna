@@ -45,7 +45,7 @@ impl<'a> Compiler<'a> {
         };
         let n = names.len() as u32;
         // with no values the names are adjusted where the statement ends
-        self.log_local_names(sid, collective, all_names);
+        self.log_local_names(sid, collective, all_names)?;
         self.at(TokRef::StatAfter(sid, 0));
         let base = self.explist_adjust(vals, n)?;
         if let (Some(_), Some(e)) = (&run_last, last_expr) {
