@@ -202,11 +202,22 @@ impl Heap {
         self.env51_records().package = t.as_ptr() as *mut GcHeader;
     }
 
-    /// The default input and output, the latest E1's array.
-    pub(crate) fn env51_io(&mut self, input: Option<Gc<Userdata>>, output: Option<Gc<Userdata>>) {
-        let h =
-            |u: Option<Gc<Userdata>>| u.map_or(ptr::null_mut(), |u| u.as_ptr() as *mut GcHeader);
-        self.env51_gen_now().io = [h(input), h(output)];
+    /// The default input (0) or output (1) in the latest E1's array.
+    pub(crate) fn env51_io(&self, i: usize) -> Option<Gc<Userdata>> {
+        let e = self.env51_box.as_deref()?;
+        let h = e.gens.last()?.io[i];
+        // SAFETY: E1 holds its files: marking it marks them
+        (!h.is_null()).then(|| unsafe { Gc::from_ptr(h as *mut Userdata) })
+    }
+
+    /// The latest E1's array entry `i` set to `u`, with the barrier of
+    /// `lua_rawseti` into E1.
+    pub(crate) fn env51_set_io(&mut self, i: usize, u: Gc<Userdata>) {
+        let g = self.env51_gen_now();
+        g.io[i] = u.as_ptr() as *mut GcHeader;
+        let e1 = &mut g.ph[E1].hdr as *mut GcHeader;
+        // SAFETY: a record lives as long as the heap
+        unsafe { self.barrier_back_obj(e1) };
     }
 
     /// Where the latest records are on PUC's list: E1 and `io_fclose`

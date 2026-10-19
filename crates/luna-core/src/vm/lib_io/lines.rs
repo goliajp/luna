@@ -53,10 +53,10 @@ pub(super) fn io_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         let d = default_file(vm, Io::Input);
         // the default input is fetched from the registry before the check
         vm.native_push(1);
-        if d.file().is_closed() {
-            return Err(raise_str(vm, "attempt to use a closed file"));
+        match d {
+            Some(d) if !d.file().is_closed() => (d, false),
+            _ => return Err(raise_str(vm, "attempt to use a closed file")),
         }
-        (d, false)
     } else {
         let name = argcheck::check_string(vm, a, 0)?.as_bytes().to_vec();
         (open_checked(vm, &name, b"r")?, true)

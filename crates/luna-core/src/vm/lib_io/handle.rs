@@ -2,14 +2,15 @@
 
 use super::*;
 
-/// A new handle carrying the `FILE*` metatable. Like `luaL_setmetatable` on
-/// a metatable with `__gc`, this registers it for finalization, so a file
-/// nobody closed is still flushed and closed when collected or at state
-/// close. `writable` gives it a user-space output buffer.
+/// A file handle made as PUC's `newprefile` makes it: the userdata
+/// (`lua_newuserdata`, which checks for a collection: `checked` makes the
+/// check, the userdata held), then its metatable (`luaL_setmetatable`,
+/// which marks it for finalization).
 pub(super) fn new_file(
     vm: &mut Vm,
     fh: FileHandle,
     writable: bool,
+    checked: impl FnOnce(&mut Vm, Gc<Userdata>) -> Result<(), LuaError>,
 ) -> Result<Gc<Userdata>, LuaError> {
     // PUC's handle: 5.1 a `FILE *`, later a `luaL_Stream` (the file and
     // its close function), from 5.4 with no user value
@@ -19,15 +20,18 @@ pub(super) fn new_file(
         LuaVersion::Lua52 | LuaVersion::Lua53 => sz.userdata(1, 2 * sz.ptr),
         _ => sz.userdata(0, 2 * sz.ptr),
     };
+    vm.api_check_before()?;
     let u = vm.lib_userdata(UserdataPayload::File(fh), writable, size)?;
-    // SAFETY: `u` was allocated on the line above and no other handle to it exists yet; the borrow covers one call
-    unsafe { u.as_mut() }.set_metatable(vm.file_mt);
-    vm.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;
     // 5.1: the environment of the io function that opens it
     if vm.version() == LuaVersion::Lua51 {
         vm.heap
             .set_env51(u.as_ptr() as *mut _, crate::runtime::heap::ENV_IO);
     }
+    checked(vm, u)?;
+    // SAFETY: `u` was allocated above and is held by the caller's check;
+    // the borrow covers one call
+    unsafe { u.as_mut() }.set_metatable(super::refs::file_metatable(vm));
+    vm.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;
     Ok(u)
 }
 
@@ -38,9 +42,9 @@ pub(super) fn failed_handle<R>(
     vm: &mut Vm,
     then: impl FnOnce(&mut Vm) -> Result<R, LuaError>,
 ) -> Result<R, LuaError> {
-    vm.api_check_before()?;
-    let u = new_file(vm, FileHandle::Closed, false)?;
-    vm.api_check_after(Value::Userdata(u))?;
+    let u = new_file(vm, FileHandle::Closed, false, |vm, u| {
+        vm.api_check_after(Value::Userdata(u))
+    })?;
     let at = vm.lib_roots.len();
     vm.lib_roots.push(Value::Userdata(u));
     let r = then(vm);
@@ -56,7 +60,7 @@ fn test_file(vm: &Vm, v: Value) -> Option<Gc<Userdata>> {
         Value::Userdata(u)
             if matches!(u.payload, UserdataPayload::File(_))
                 && u.metatable()
-                    .zip(vm.file_mt)
+                    .zip(super::refs::file_metatable(vm))
                     .is_some_and(|(a, b)| a.ptr_eq(b)) =>
         {
             Some(u)
@@ -176,10 +180,10 @@ pub(super) fn io_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let u = if nargs == 0 {
         let d = default_file(vm, Io::Output);
         vm.native_push(1);
-        if d.file().is_closed() {
-            return Err(raise_str(vm, "attempt to use a closed file"));
+        match d {
+            Some(d) if !d.file().is_closed() => d,
+            _ => return Err(raise_str(vm, "attempt to use a closed file")),
         }
-        d
     } else {
         check_open(vm, Args::new(fs, nargs), 0)?
     };

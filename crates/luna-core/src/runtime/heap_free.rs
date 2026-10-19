@@ -112,6 +112,9 @@ impl Heap {
                     self.free_block(h as *mut crate::runtime::Coro);
                 }
                 ObjTag::Userdata => {
+                    if h == self.stdin_ud {
+                        self.stdin_ud = ptr::null_mut();
+                    }
                     if !is_uncounted(h) {
                         self.acct_free((*(h as *mut Userdata)).puc_size);
                     } else {

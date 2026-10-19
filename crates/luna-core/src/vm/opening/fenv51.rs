@@ -112,12 +112,8 @@ impl Opener {
         // SAFETY: a record lives as long as the heap
         unsafe { vm.heap.barrier_back_obj(p as *mut _) };
         if let Value::Userdata(u) = v {
-            match n {
-                1 => vm.io_input = Some(u),
-                _ => vm.io_output = Some(u),
-            }
+            vm.heap.env51_set_io(n - 1, u);
         }
-        vm.heap.env51_io(vm.io_input, vm.io_output);
     }
 }
 

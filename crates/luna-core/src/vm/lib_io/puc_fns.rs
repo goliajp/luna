@@ -85,18 +85,18 @@ pub(crate) fn puc_createstdfile(
         _ => FileHandle::Stderr,
     };
     let stdin = matches!(fh, FileHandle::Stdin);
-    op.before(vm)?;
-    let h = handle::new_file(vm, fh, !stdin)?;
+    let h = handle::new_file(vm, fh, !stdin, |vm, u| {
+        op.push(vm, Value::Userdata(u))?;
+        op.after(vm)
+    })?;
     if stdin {
-        vm.io_stdin = Some(h);
+        vm.heap.stdin_ud = h.as_ptr() as *mut _;
         if crate::stdio::text_mode() {
             use std::io::IsTerminal;
             let tty = std::io::stdin().is_terminal();
             crt::attach(h, msvc::CrtFile::standard(msvc::Std::No, tty));
         }
     }
-    op.push(vm, Value::Userdata(h))?;
-    op.after(vm)?;
     match k {
         Err(k) => {
             if k > 0 {
@@ -111,10 +111,6 @@ pub(crate) fn puc_createstdfile(
         }
         Ok(k) => {
             if let Some(k) = k {
-                match k {
-                    b"_IO_input" => vm.io_input = Some(h),
-                    _ => vm.io_output = Some(h),
-                }
                 op.pushvalue(vm, -1)?;
                 op.setfield(vm, crate::vm::opening::Ix::Registry, k)?;
             }

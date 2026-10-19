@@ -21,6 +21,8 @@ use crate::vm::exec::Vm;
 mod crt;
 pub(crate) mod fopen;
 mod handle;
+mod refs;
+use refs::{default_file, set_default_file};
 mod lines;
 pub(crate) mod msvc;
 mod numeral;
@@ -76,7 +78,7 @@ const READ_CHUNK: usize = 4096;
 /// (`getF`: `fread` of `LUAL_BUFFERSIZE` until end of file); `None` when
 /// standard input has no `FILE`.
 pub(crate) fn read_stdin_chunk(vm: &Vm) -> Option<Vec<u8>> {
-    let u = vm.io_stdin?;
+    let u = vm.io_stdin()?;
     u.crt.as_ref()?;
     let size = read::lual_buffersize(vm.version());
     let mut src = Vec::new();
@@ -97,7 +99,7 @@ impl Vm {
     /// stdin in between sees what follows, as it shares C's `stdin`.
     pub fn read_stdin_line(&mut self, size: usize) -> std::io::Result<Option<Vec<u8>>> {
         let mut line = Vec::new();
-        if let Some(u) = self.io_stdin {
+        if let Some(u) = self.io_stdin() {
             while line.len() + 1 < size {
                 let Some(b) = getc(u)? else { break };
                 line.push(b);
