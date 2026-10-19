@@ -195,6 +195,9 @@ impl MemCtx {
         if let Some(p) = self.small.borrow_mut().take(layout) {
             return Some(p);
         }
+        if let Some(p) = self.arena.cut(layout) {
+            return Some(p);
+        }
         // SAFETY: the size is not 0
         NonNull::new(unsafe { std::alloc::alloc(layout) })
     }

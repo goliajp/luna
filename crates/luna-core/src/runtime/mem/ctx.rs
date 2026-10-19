@@ -48,6 +48,8 @@ pub struct MemCtx {
     /// `small.rs`)
     pub(super) pool: RefCell<super::pool::Pool>,
     pub(super) small: RefCell<super::small::Small>,
+    /// the block small objects are cut from while the state is built
+    pub(super) arena: super::arena::Arena,
 }
 
 /// A handle to a [`MemCtx`], kept by each container to free and grow its
@@ -157,6 +159,8 @@ impl MemCtx {
         debug_assert!(new != 0);
         match &self.mode {
             // SAFETY: the caller's contract
+            Mode::System if self.arena.holds(p) => unsafe { self.move_from_arena(p, layout, new) },
+            // SAFETY: the caller's contract
             Mode::System if new <= super::resize::SMALL_MOVE => unsafe {
                 super::resize::move_small(p, layout, new)
             },
@@ -214,7 +218,7 @@ impl MemCtx {
             // SAFETY: the caller's contract: a system block of `layout`
             // nothing uses, kept or freed
             Mode::System if super::small::pooled(layout) => unsafe {
-                if !self.small.borrow_mut().keep(p, layout) {
+                if !self.arena.holds(p) && !self.small.borrow_mut().keep(p, layout) {
                     std::alloc::dealloc(p.as_ptr(), layout)
                 }
             },
