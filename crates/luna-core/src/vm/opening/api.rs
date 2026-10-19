@@ -57,7 +57,11 @@ impl Opener {
     pub(crate) fn getfield(&mut self, vm: &mut Vm, ix: Ix, k: &[u8]) -> Result<(), LuaError> {
         let t = self.at(vm, ix);
         let key = vm.str_value(k)?;
-        let v = vm.host_index(t, key)?;
+        let v = match t {
+            // no metatable, so no `__index`: the read `luaV_fastget` makes
+            Value::Table(tt) if tt.metatable().is_none() => tt.get(key),
+            _ => vm.host_index(t, key)?,
+        };
         self.push(vm, v)
     }
 
