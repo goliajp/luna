@@ -7,7 +7,7 @@ use super::num_double as dbl;
 use super::*;
 use crate::runtime::value::tag;
 use call_fast::Returned;
-#[cfg(all(target_arch = "x86_64", not(miri)))]
+#[cfg(all(any(target_arch = "x86_64", target_arch = "x86"), not(miri)))]
 use fast_arith::raw_tag_again;
 use fast_arith::{
     arith_arm, arith_imm_arm, cold_path, is_num_tag, put_flt, put_int, raw_flt, raw_gc, raw_int,
@@ -15,9 +15,9 @@ use fast_arith::{
 };
 use index_fast::self_key;
 use num_words::put_words;
-#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), not(miri)))]
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86"), not(miri)))]
 use num_words::raw_word;
-#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), not(miri)))]
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86"), not(miri)))]
 use num_words::tag_word;
 #[cfg(all(target_arch = "aarch64", not(miri)))]
 use num_words::{first, raw_tag_words3, raw_words3};
