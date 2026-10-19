@@ -38,8 +38,10 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     vm.lib_roots.pop();
     let mt = mt?;
     if let Some(mt) = mt {
-        // SAFETY: `u` was allocated on the line above and is held only by this local; the borrow covers one call
+        // SAFETY: `u` was allocated above and is held by its stack slot; the borrow covers one call
         unsafe { u.as_mut() }.set_metatable(Some(mt));
+        // a step made while the metatable was allocated may have marked `u`
+        vm.heap.barrier_forward(u, Value::Table(mt));
         // PUC 5.1 registered *every* userdata with a metatable for
         // finalization (`luaC_checkfinalizer` deferred the `__gc` check to
         // GC time, so adding `__gc` to a shared metatable *after* the
