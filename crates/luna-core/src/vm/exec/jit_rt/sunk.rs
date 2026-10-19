@@ -129,14 +129,7 @@ impl Vm {
         let Some(rec) = self.jit.active_trace.as_deref() else {
             return;
         };
-        let h = |p: crate::runtime::Gc<crate::runtime::Proto>| p.as_ptr() as *const GcHeader;
-        let protos = std::iter::once(rec.head_proto)
-            .chain(rec.ops.iter().map(|o| o.proto))
-            .chain(rec.side_trace_parent.map(|p| p.0))
-            .chain(rec.retfs.iter().map(|r| r.proto))
-            .chain(rec.downrec_close.as_ref().map(|d| d.target_proto));
-        let key = rec.index_key.map(|s| s.as_ptr() as *const GcHeader);
-        w.extend(protos.map(h).chain(key).map(|o| (o, false)));
+        w.extend(super::recording_check::recording_objects(rec).map(|o| (o, false)));
     }
 
     /// After it: a recording that went through an object the collection

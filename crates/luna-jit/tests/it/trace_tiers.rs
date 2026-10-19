@@ -9,6 +9,7 @@ use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::Vm;
 
+use super::quarantine::with_quarantine;
 use super::trace_corpus::*;
 
 #[test]
@@ -69,6 +70,7 @@ fn moving_traces_partway_keeps_the_results_under_other_seeds() {
 /// comes back to new ones and the run crashed.
 #[test]
 fn a_recording_through_a_load_that_collects_holds_nothing_freed() {
+    Vm::check_recordings_after_collections(true);
     let f = fixtures("5.1")
         .into_iter()
         .find(|f| f.ends_with("815_debug_chunkid.lua"))
@@ -77,8 +79,14 @@ fn a_recording_through_a_load_that_collects_holds_nothing_freed() {
     for seed in 1..=64 {
         let want = run(&mut interp_seeded(LuaVersion::Lua51, seed), &source);
         for hot in [1, 3] {
-            let mut vm = tiered_seeded(LuaVersion::Lua51, seed, hot, TraceTier::Auto, 37);
-            assert_eq!(run(&mut vm, &source), want, "seed {seed}, hot {hot}");
+            // freed blocks zeroed and kept: a recording kept through a
+            // collection that freed what it holds is caught right there
+            let got = with_quarantine(LuaVersion::Lua51, seed, |vm| {
+                opened(vm);
+                set_tiers(vm, hot, TraceTier::Auto, 37);
+                run(vm, &source)
+            });
+            assert_eq!(got, want, "seed {seed}, hot {hot}");
         }
     }
 }
@@ -89,6 +97,7 @@ fn a_recording_through_a_load_that_collects_holds_nothing_freed() {
 /// dead (before the sweep, not after it, when its header is freed).
 #[test]
 fn a_full_collection_during_a_recording_reads_nothing_freed() {
+    Vm::check_recordings_after_collections(true);
     let source = b"
         local n = 0
         for i = 1, 200 do
@@ -102,8 +111,14 @@ fn a_full_collection_during_a_recording_reads_nothing_freed() {
     for seed in 1..=16 {
         let want = run(&mut interp_seeded(LuaVersion::Lua54, seed), source);
         for hot in [1, 3] {
-            let mut vm = tiered_seeded(LuaVersion::Lua54, seed, hot, TraceTier::Auto, 37);
-            assert_eq!(run(&mut vm, source), want, "seed {seed}, hot {hot}");
+            // freed blocks zeroed and kept: a recording kept through a
+            // collection that freed what it holds is caught right there
+            let got = with_quarantine(LuaVersion::Lua54, seed, |vm| {
+                opened(vm);
+                set_tiers(vm, hot, TraceTier::Auto, 37);
+                run(vm, source)
+            });
+            assert_eq!(got, want, "seed {seed}, hot {hot}");
         }
     }
 }

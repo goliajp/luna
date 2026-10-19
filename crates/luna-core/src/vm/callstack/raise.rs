@@ -265,6 +265,7 @@ impl Vm {
         self.errored_natives
             .retain(|_| !dead.next().unwrap_or(false));
         self.forget_dead_recording();
+        self.check_recording_live();
     }
 }
 

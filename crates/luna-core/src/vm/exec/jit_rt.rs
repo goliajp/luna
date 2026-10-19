@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod recording_check;
 mod sunk;
 pub(crate) use sunk::TraceGhosts;
 mod upvals;
