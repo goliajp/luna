@@ -104,6 +104,43 @@ impl Heap {
         }
     }
 
+    /// PUC 5.1's C closure of `f` without upvalues, as the opening makes
+    /// it: counted at PUC's size (luna's made while nothing is counted
+    /// stays uncounted).
+    pub(crate) fn try_new_c0(
+        &mut self,
+        f: NativeFn,
+        builtin: Builtin,
+    ) -> Result<Gc<NativeClosure>, Oom> {
+        let mut hdr = GcHeader::native(&[]);
+        hdr.aux = self.take_id();
+        hdr.sub = 1;
+        let obj = NativeClosure {
+            hdr,
+            f,
+            upvals: crate::runtime::mem::LSlice::empty(self.mem()),
+            is_async: false,
+            kind: crate::vm::exec::native_call::NativeKind::of(builtin),
+            builtin,
+        };
+        let p = self.slab_block()?;
+        // SAFETY: `p` is a free slot of a slab block, for one native
+        let h = unsafe {
+            p.write(obj);
+            let h = p as *mut GcHeader;
+            (*h).cls |= SLAB;
+            self.link(h);
+            h
+        };
+        if self.puc.silent == 0 {
+            self.acct_obj(PucKind::CClosure, self.sizes.c_closure(0));
+        } else {
+            acct::set_uncounted(h, true);
+        }
+        // SAFETY: as above
+        Ok(unsafe { Gc::from_ptr(p) })
+    }
+
     /// The light function the opening made as function `id` (see
     /// `PucState::lights`).
     pub(crate) fn light(&self, id: usize) -> Option<Gc<NativeClosure>> {
@@ -148,6 +185,8 @@ impl Heap {
             }
             let h = g.as_ptr() as *mut GcHeader;
             self.puc.stand_ins.extend(objs.iter().map(|&(_, s)| (h, s)));
+            // SAFETY: `h` heads the native just made; only its class byte
+            unsafe { (*h).cls |= STANDS };
         }
         Ok(g)
     }
