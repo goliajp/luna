@@ -33,34 +33,59 @@ impl Heap {
 
     /// The table of `size` buckets numbered afresh, `skip` left out: each
     /// string in the order a resize from `from` buckets puts it in its
-    /// chain.
+    /// chain (the old buckets in order, each chain from its head).
     fn strt_reorder(&mut self, from: usize, size: usize, skip: *mut LuaStr) {
-        let mut all = Vec::new();
-        self.strings.each(|p| all.push(p));
-        let mut v: Vec<(usize, u16, *mut LuaStr)> = all
-            .into_iter()
-            .filter(|&p| p != skip && self.puc_holds(p))
+        let from = from.max(1);
+        let mut v = std::mem::take(&mut self.strt.order);
+        v.clear();
+        self.strings.each(|p| v.push((0, 0, p)));
+        v.retain(|e| e.2 != skip && self.puc_holds(e.2));
+        let counts = &mut self.strt.counts;
+        counts.clear();
+        counts.resize(from + 1, 0);
+        for e in v.iter_mut() {
             // SAFETY: the table holds allocated strings
-            .map(|p| {
-                (
-                    self.puc_bucket(p, from),
-                    unsafe { Gc::from_ptr(p).chain() },
-                    p,
-                )
-            })
-            .collect();
-        // the old buckets in order, each chain from its head (newest)
-        v.sort_unstable_by_key(|&(b, k, _)| (b, std::cmp::Reverse(k)));
+            let (b, k) = (self.puc_bucket(e.2, from) as u32, unsafe {
+                Gc::from_ptr(e.2).chain()
+            });
+            *e = (b, k, e.2);
+            self.strt.counts[b as usize + 1] += 1;
+        }
+        let counts = &mut self.strt.counts;
+        for i in 1..counts.len() {
+            counts[i] += counts[i - 1];
+        }
+        let mut sorted = std::mem::take(&mut self.strt.ordered);
+        sorted.clear();
+        sorted.resize(v.len(), (0, 0, std::ptr::null_mut()));
+        for &e in &v {
+            let at = &mut self.strt.counts[e.0 as usize];
+            sorted[*at as usize] = e;
+            *at += 1;
+        }
+        // each old chain from its head, the newest (highest number) first;
+        // a chain is short
+        let mut start = 0;
+        while start < sorted.len() {
+            let mut end = start + 1;
+            while end < sorted.len() && sorted[end].0 == sorted[start].0 {
+                end += 1;
+            }
+            sorted[start..end].sort_unstable_by_key(|e| std::cmp::Reverse(e.1));
+            start = end;
+        }
         let seq = &mut self.strt.seq;
         seq.clear();
         seq.resize(size, 0);
-        for (_, _, p) in v {
+        for &(_, _, p) in &sorted {
             let b = self.puc_bucket(p, size);
             let seq = &mut self.strt.seq;
             seq[b] += 1;
             // SAFETY: as above
             unsafe { Gc::from_ptr(p).set_chain(seq[b]) };
         }
+        self.strt.order = v;
+        self.strt.ordered = sorted;
     }
 
     /// The bucket `b` numbered again from 1, in its order.
