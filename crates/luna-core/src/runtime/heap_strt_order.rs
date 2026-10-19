@@ -35,6 +35,9 @@ impl Heap {
     /// string in the order a resize from `from` buckets puts it in its
     /// chain (the old buckets in order, each chain from its head).
     fn strt_reorder(&mut self, from: usize, size: usize, skip: *mut LuaStr) {
+        if self.strt_rehash_halves(from, size, skip) {
+            return;
+        }
         let from = from.max(1);
         let mut v = std::mem::take(&mut self.strt.order);
         v.clear();
@@ -86,6 +89,70 @@ impl Heap {
         }
         self.strt.order = v;
         self.strt.ordered = sorted;
+    }
+
+    /// [`Heap::strt_reorder`] for a table doubled or halved (PUC's resizes
+    /// always are), in one pass and without sorting: doubled, a new bucket
+    /// holds what one old bucket did, its chain reversed; halved, bucket
+    /// `b` holds old bucket `b`'s chain reversed, then above it old bucket
+    /// `b + size`'s reversed. False (nothing done) for any other resize or
+    /// when the numbers would not fit.
+    fn strt_rehash_halves(&mut self, from: usize, size: usize, skip: *mut LuaStr) -> bool {
+        let grow = size == 2 * from;
+        if !(grow || 2 * size == from) || self.strt.seq.len() != from || from == 0 {
+            return false;
+        }
+        let old = std::mem::take(&mut self.strt.seq);
+        let mut seq = std::mem::take(&mut self.strt.spare);
+        seq.clear();
+        // each bound one above the highest number a string may get (a
+        // string never numbered, 0, ends up above the others)
+        if grow {
+            for b in 0..size {
+                match old[b & (from - 1)].checked_add(1) {
+                    Some(n) => seq.push(n),
+                    None => {
+                        self.strt.seq = old;
+                        self.strt.spare = seq;
+                        return false;
+                    }
+                }
+            }
+        } else {
+            for b in 0..size {
+                match old[b]
+                    .checked_add(old[b + size])
+                    .and_then(|n| n.checked_add(2))
+                {
+                    Some(n) => seq.push(n),
+                    None => {
+                        self.strt.seq = old;
+                        self.strt.spare = seq;
+                        return false;
+                    }
+                }
+            }
+        }
+        let mut v = std::mem::take(&mut self.strt.order);
+        v.clear();
+        self.strings.each(|p| v.push((0, 0, p)));
+        for &(_, _, p) in &v {
+            if p == skip || !self.puc_holds(p) {
+                continue;
+            }
+            let b = self.puc_bucket(p, from);
+            // SAFETY: the table holds allocated strings
+            let s = unsafe { Gc::from_ptr(p) };
+            let mut k = old[b] + 1 - s.chain();
+            if !grow && b >= size {
+                k += old[b - size] + 1;
+            }
+            s.set_chain(k);
+        }
+        self.strt.order = v;
+        self.strt.seq = seq;
+        self.strt.spare = old;
+        true
     }
 
     /// The bucket `b` numbered again from 1, in its order.
