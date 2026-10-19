@@ -201,6 +201,8 @@ fn check_string_conv(
         Some(b) if !a.is_none(i) => {
             let s = vm.alloc_str(&b)?;
             vm.nat_set_arg(a.fs, i, Value::Str(s));
+            // `lua_tolstring` checks for a collection after it converts
+            vm.api_check_converted(Value::Str(s))?;
             Ok(s)
         }
         _ => Err(type_error(vm, a, i, "string")),

@@ -52,13 +52,13 @@ fn hook_table(vm: &mut Vm, init: bool) -> Result<Gc<Table>, LuaError> {
         return Ok(t);
     }
     let t = match v {
-        LuaVersion::Lua51 => vm.alloc_table_sized(0, 1)?,
-        LuaVersion::Lua53 => vm.alloc_table_sized(0, 2)?,
-        _ => vm.alloc_table()?,
+        LuaVersion::Lua51 => vm.api_new_table(0, 1)?,
+        LuaVersion::Lua53 => vm.api_new_table(0, 2)?,
+        _ => vm.api_new_table(0, 0)?,
     };
     vm.raw_set(reg, key, Value::Table(t))?;
     if init && v >= LuaVersion::Lua52 {
-        let k = vm.str_value(b"k")?;
+        let k = vm.api_push_string(b"k")?;
         let mode = vm.str_value(b"__mode")?;
         vm.raw_set(t, mode, k)?;
         vm.host_set_metatable(Value::Table(t), Some(t))?;
@@ -93,7 +93,7 @@ pub(super) fn d_gethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         hook_table(vm, false)?;
     }
     let hook = match state.func {
-        _ if armed && external => vm.str_value(b"external hook")?,
+        _ if armed && external => vm.api_push_string(b"external hook")?,
         Some(h) if armed => h,
         _ if v >= LuaVersion::Lua54 => return vm.nat_ret(fs, &[Value::Nil]),
         Some(h) if v <= LuaVersion::Lua52 => h,
@@ -109,6 +109,6 @@ pub(super) fn d_gethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     if state.line {
         mask.push(b'l');
     }
-    let m = vm.str_value(&mask)?;
+    let m = vm.api_push_string(&mask)?;
     vm.nat_ret(fs, &[hook, m, Value::Int(state.count_base)])
 }

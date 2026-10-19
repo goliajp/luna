@@ -206,7 +206,7 @@ fn co_yield(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // `lua_yield` raises through `luaG_runerror` with the yield native itself
     // as the running call, so the message carries no position.
     if let Some(msg) = vm.yield_barrier() {
-        return Err(vm.plain_err(msg));
+        return Err(vm.runerror_in_c(msg));
     }
     let vals = collect_args(vm, fs, nargs);
     Err(vm.do_yield(fs, vals))
@@ -215,7 +215,7 @@ fn co_yield(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 fn co_status(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let co = check_co(vm, Args::new(fs, nargs))?;
     let s = vm.coro_status_str(co);
-    let v = vm.str_value(s.as_bytes())?;
+    let v = vm.api_push_string(s.as_bytes())?;
     vm.nat_ret(fs, &[v])
 }
 

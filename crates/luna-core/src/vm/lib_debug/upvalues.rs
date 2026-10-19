@@ -65,7 +65,7 @@ pub(super) fn d_getupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     };
     match found {
         Some((name, value)) => {
-            let nm = vm.str_value(name.as_bytes())?;
+            let nm = vm.api_push_string(name.as_bytes())?;
             vm.nat_ret(fs, &[nm, value])
         }
         None => vm.nat_ret(fs, &[]),
@@ -95,7 +95,7 @@ pub(super) fn d_setupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     };
     match name {
         Some(name) => {
-            let nm = vm.str_value(name.as_bytes())?;
+            let nm = vm.api_push_string(name.as_bytes())?;
             vm.nat_ret(fs, &[nm])
         }
         None => vm.nat_ret(fs, &[]),

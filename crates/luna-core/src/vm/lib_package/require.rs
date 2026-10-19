@@ -48,6 +48,9 @@ pub(super) fn find_loader(
             }
             break;
         }
+        // `lua_pushstring(L, name)` for the call
+        vm.api_check_before()?;
+        vm.api_check_after(name)?;
         let r = vm.call_value(s, &[name])?;
         let first = r.first().copied().unwrap_or(Value::Nil);
         let second = r.get(1).copied().unwrap_or(Value::Nil);
@@ -61,6 +64,8 @@ pub(super) fn find_loader(
             }
             msg.extend_from_slice(&text);
             if v == LuaVersion::Lua51 {
+                // `lua_concat(L, 2)`
+                vm.api_check_before()?;
                 let m = vm.str_value(&msg)?;
                 let top = vm.running_natives.last().map_or(0, |a| a.top_off);
                 vm.native_hold(top - 1, &[m])?;

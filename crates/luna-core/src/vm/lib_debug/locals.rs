@@ -68,7 +68,7 @@ pub(super) fn d_getlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             _ => None,
         };
         let r = match name {
-            Some(nm) => vm.str_value(nm.as_bytes())?,
+            Some(nm) => vm.api_push_string(nm.as_bytes())?,
             None => Value::Nil,
         };
         return vm.nat_ret(fs, &[r]);
@@ -88,7 +88,7 @@ fn getlocal_result(
     match find_local(vm, co, level, n) {
         Some((name, at)) => {
             let val = read_local(vm, co, at);
-            let nm = vm.str_value(name.as_bytes())?;
+            let nm = vm.api_push_string(name.as_bytes())?;
             vm.nat_ret(fs, &[nm, val])
         }
         None => vm.nat_ret(fs, &[Value::Nil]),
@@ -141,7 +141,7 @@ pub(super) fn d_setlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         None => None,
     };
     let r = match name {
-        Some(nm) => vm.str_value(nm.as_bytes())?,
+        Some(nm) => vm.api_push_string(nm.as_bytes())?,
         None => Value::Nil,
     };
     vm.nat_ret(fs, &[r])
