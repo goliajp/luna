@@ -296,6 +296,16 @@ impl Vm {
         Vm::try_new_minimal_on(version, heap)
     }
 
+    /// [`Vm::try_new_minimal_with_mem`] with string hashing seeded by `seed`
+    /// (see [`Vm::new_minimal_with_hash_seed`]).
+    pub fn try_new_minimal_with_mem_and_seed(
+        version: LuaVersion,
+        mem: crate::runtime::mem::MemOwner,
+        seed: u32,
+    ) -> Option<Vm> {
+        Vm::try_new_minimal_on(version, Heap::try_with_mem(mem, seed)?)
+    }
+
     /// [`Vm::new`] whose memory comes from `mem` (see
     /// [`Vm::new_minimal_with_mem`]).
     pub fn new_with_mem(version: LuaVersion, mem: crate::runtime::mem::MemOwner) -> Vm {
