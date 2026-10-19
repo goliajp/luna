@@ -28,7 +28,7 @@ impl Heap {
         while let Some(e) = rest.iter().position(|&c| c == b'%') {
             b.add_str(self, &rest[..e])?;
             let spec = rest.get(e + 1).copied().unwrap_or(0);
-            match (spec, args.next()) {
+            match (spec, if spec == b'%' { None } else { args.next() }) {
                 (b'%', _) => b.add_str(self, b"%")?,
                 (_, Some(FmtArg::S(s))) => b.add_str(self, s)?,
                 (_, Some(&FmtArg::C(c))) => b.add_str(self, &[c])?,
@@ -89,7 +89,7 @@ impl Heap {
         while let Some(e) = rest.iter().position(|&c| c == b'%') {
             add(self, &mut out, &rest[..e]);
             let spec = rest.get(e + 1).copied().unwrap_or(0);
-            match (spec, args.next()) {
+            match (spec, if spec == b'%' { None } else { args.next() }) {
                 (b'%', _) => add(self, &mut out, b"%"),
                 (_, Some(FmtArg::S(s))) => add(self, &mut out, s),
                 (_, Some(&FmtArg::C(c))) => add(self, &mut out, &[c]),
