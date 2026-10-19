@@ -53,8 +53,14 @@ enum Fmt {
 fn parse_format(vm: &mut Vm, fmt: Value, argno: u32) -> Result<Fmt, LuaError> {
     let v = vm.version();
     match fmt {
+        #[cfg(target_pointer_width = "32")]
+        Value::Int(n) if v <= LuaVersion::Lua52 => {
+            return Ok(Fmt::Count(crate::vm::c_abi::number2integer(v, n as f64)));
+        }
         Value::Int(n) => return Ok(Fmt::Count(n)),
-        Value::Float(f) if v <= LuaVersion::Lua52 => return Ok(Fmt::Count(f as i64)),
+        Value::Float(f) if v <= LuaVersion::Lua52 => {
+            return Ok(Fmt::Count(crate::vm::c_abi::number2integer(v, f)));
+        }
         Value::Float(f) => {
             return f2i_exact(f)
                 .map(Fmt::Count)

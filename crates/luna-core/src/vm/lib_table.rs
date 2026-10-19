@@ -84,7 +84,9 @@ fn obj_len(vm: &mut Vm, v: Value) -> Result<i64, LuaError> {
     let n = argcheck::to_num(vm, lv);
     if ver == V::Lua52 {
         return match n {
-            Some(n) => Ok(i64::from(n.as_f64() as i64 as i32)),
+            Some(n) => Ok(i64::from(
+                crate::vm::c_abi::number2integer(ver, n.as_f64()) as i32
+            )),
             None => {
                 // `luaL_len` leaves the length pushed for the error
                 vm.native_push(1);

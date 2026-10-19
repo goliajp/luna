@@ -79,10 +79,7 @@ fn traceback_51(
         Some(n) => {
             stack.pop();
             // `db_errorfb` keeps the level in a C `int`
-            match n {
-                crate::numeric::Num::Int(i) => i as i32 as i64,
-                crate::numeric::Num::Float(f) => f as i64 as i32 as i64,
-            }
+            crate::vm::c_abi::tointeger52(LuaVersion::Lua51, n) as i32 as i64
         }
         None => default_level,
     };
