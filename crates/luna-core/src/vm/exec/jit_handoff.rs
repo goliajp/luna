@@ -84,8 +84,17 @@ impl Vm {
             .max()
             .unwrap_or(0)
             .max(top);
-        self.grow_stack(end as usize)?;
-        self.retry_oom(|vm| vm.frames.reserve(levels.len()))?;
+        // the levels' values are held nowhere else until they are on the
+        // stack: rooted across what may collect in an emergency
+        let at = self.lib_roots.len();
+        for f in &levels {
+            self.lib_roots.extend_from_slice(&f.vals);
+        }
+        let room = self
+            .grow_stack(end as usize)
+            .and_then(|()| self.retry_oom(|vm| vm.frames.reserve(levels.len())));
+        self.lib_roots.truncate(at);
+        room?;
         let mut want = nresults;
         for (k, f) in levels.iter().rev().enumerate() {
             let fs = f.base - 1;
