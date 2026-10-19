@@ -50,7 +50,7 @@ impl Vm {
         // called, and hand them to pairs's caller.
         if let ContKind::Pairs { at } = nc.kind {
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-            self.cont_popped(true, true);
+            self.cont_popped(false, true);
             let total = crate::vm::builtins::pairs_mm_results(self) as u32;
             let need = (nc.func_slot + total) as usize;
             self.grow_stack(need)?;

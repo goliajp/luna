@@ -118,7 +118,7 @@ impl Vm {
                     ..
                 }) => {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-                    self.cont_popped(true, true);
+                    self.cont_popped(false, true);
                     self.stack.truncate(func_slot as usize);
                     self.top = func_slot;
                     self.tbc.retain(|&s| s < func_slot);
