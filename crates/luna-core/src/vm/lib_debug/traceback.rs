@@ -109,7 +109,7 @@ fn traceback_51(
             .find(|&&p| crate::vm::argcheck::to_str_bytes(vm, p).is_none())
         {
             let msg = format!("attempt to concatenate a {} value", bad.type_name());
-            return Err(vm.plain_err(&msg));
+            return Err(vm.runerror_in_c(&msg));
         }
         for &part in &stack {
             out.extend(crate::vm::argcheck::to_str_bytes(vm, part).expect("checked above"));

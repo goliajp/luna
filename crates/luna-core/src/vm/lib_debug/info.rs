@@ -193,7 +193,14 @@ fn info_fields(
                 set_str(vm, t, "name", name.as_bytes())?;
                 set_str(vm, t, "namewhat", what.as_bytes())?;
             }
-            None => set_str(vm, t, "namewhat", b"")?,
+            None => {
+                // `settabss(L, "name", NULL)`: from 5.3 `lua_pushstring` of
+                // NULL pushes nil and still checks for a collection
+                if v >= LuaVersion::Lua53 {
+                    vm.api_check_after(Value::Nil)?;
+                }
+                set_str(vm, t, "namewhat", b"")?
+            }
         }
     }
     if has(b'r') {

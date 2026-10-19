@@ -209,7 +209,8 @@ fn switch_mode(vm: &mut Vm, a: Args, opt: &'static str) -> Result<Vec<Value>, Lu
     Ok(vec![if v == LuaVersion::Lua52 {
         Value::Int(0)
     } else {
-        vm.str_value(prev.as_bytes())?
+        // `pushmode`'s `lua_pushstring`
+        vm.api_push_string(prev.as_bytes())?
     }])
 }
 

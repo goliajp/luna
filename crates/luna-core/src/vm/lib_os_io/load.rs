@@ -37,18 +37,19 @@ pub(crate) fn load_path(
             }
         },
     };
-    // PUC pushes the chunk name before it opens the file
-    let made = match name {
-        Some(n) => vm
-            .heap
-            .pushfstring(b"@%s", &[crate::runtime::puc_fmt::FmtArg::S(n)]),
-        None => vm.heap.try_intern(&chunkname),
+    // PUC pushes the chunk name before it opens the file, a push that
+    // checks for a collection; the name stays on the stack while it loads
+    let base = vm.lib_roots.len();
+    let made = vm.api_pushing(|vm| match name {
+        Some(n) => vm.pushfstring(b"@%s", &[crate::runtime::puc_fmt::FmtArg::S(n)]),
+        None => vm.alloc_str(&chunkname),
+    });
+    let r = match made {
+        Ok(name_str) => load_read(vm, read, &chunkname, name_str, name.is_some(), mode),
+        Err(e) => Err(e.0),
     };
-    let name_str = match made {
-        Ok(s) => s,
-        Err(e) => return Err(LuaError::from(e).0),
-    };
-    load_read(vm, read, &chunkname, name_str, name.is_some(), mode)
+    vm.lib_roots.truncate(base);
+    r
 }
 
 /// [`load_path`] for a chunk read from standard input, given its text.

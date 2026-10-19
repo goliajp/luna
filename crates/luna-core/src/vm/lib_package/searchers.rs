@@ -35,11 +35,11 @@ pub(super) fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
             "{lead}no field package.preload['{}']",
             String::from_utf8_lossy(c_str(name.as_bytes()))
         );
-        let m = str_value(vm, msg.as_bytes())?;
+        let m = vm.api_push_string(msg.as_bytes())?;
         return vm.nat_ret(fs, &[m]);
     }
     if v >= LuaVersion::Lua54 {
-        let data = str_value(vm, b":preload:")?;
+        let data = vm.api_push_string(b":preload:")?;
         return vm.nat_ret(fs, &[loader, data]);
     }
     vm.nat_ret(fs, &[loader])

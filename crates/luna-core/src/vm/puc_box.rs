@@ -87,7 +87,11 @@ impl Vm {
     ) -> Result<(), LuaError> {
         let mtv = Value::Table(mt);
         let key = self.str_value(name)?;
-        self.api_check_after(key)?;
+        // 5.3's `luaL_newmetatable` pushes the name; 5.4's `getBoxMT` only
+        // keys the registry with it
+        if l53 {
+            self.api_check_after(key)?;
+        }
         self.lib_roots.push(key);
         // `boxgc`, a light C function: no object of PUC's
         let gc = self.builtin(box_gc, &[], crate::runtime::Builtin::None)?;
