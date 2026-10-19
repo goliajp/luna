@@ -157,15 +157,6 @@ impl Heap {
     /// The `origweak` split matters because finalizer resurrection can
     /// re-trace fresh proto/closure → new weak tables joining `m.weak`;
     /// PUC limits the late value-clear to those new heads.
-    /// Whether the object of `h` is one the sweep after the atomic phase
-    /// just run frees: white, but not the white objects made since are.
-    pub(crate) fn dead_after_atomic(&self, h: *const GcHeader) -> bool {
-        // SAFETY: the caller's object is allocated until that sweep; only
-        // its flag byte is read
-        let f = unsafe { (*h).flags };
-        is_white(f) && f & self.current_white == 0
-    }
-
     pub(super) fn atomic_tail(&mut self, m: &mut Marker, run: Option<Running>) -> i64 {
         let early_is_dead = |v: Value| -> bool {
             let h = match v {
@@ -251,6 +242,11 @@ impl Heap {
         // are noted or forgotten before they are freed
         for w in &mut self.weak_watch {
             w.1 = !survived_mark(w.0);
+        }
+        for w in &mut self.weak_objs {
+            // SAFETY: a watched object is allocated until this cycle's
+            // sweep, which has not run; only its flag byte is read
+            w.1 = unsafe { is_white((*w.0).flags) };
         }
         // PUC `luaS_clearcache`
         self.puc.strcache.clear_dead();
