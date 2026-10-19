@@ -357,4 +357,25 @@ impl Heap {
             no_ephemeron,
         });
     }
+
+    /// Whether `h` is an object of this heap the collector keeps: on the
+    /// object lists, and not one a pending sweep frees. Walks every object;
+    /// for checks tests turn on.
+    pub(crate) fn holds_live(&self, h: *const GcHeader) -> bool {
+        for head in [self.all, self.fixed] {
+            let mut cur = head;
+            while !cur.is_null() {
+                if cur as *const GcHeader == h {
+                    // SAFETY: an object on the lists is allocated
+                    let f = unsafe { (*cur).flags };
+                    let dying =
+                        self.phase == GcPhase::Sweep && is_white(f) && f & self.current_white == 0;
+                    return !dying;
+                }
+                // SAFETY: as above
+                cur = unsafe { (*cur).next };
+            }
+        }
+        false
+    }
 }

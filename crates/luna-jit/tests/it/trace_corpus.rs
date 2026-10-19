@@ -107,9 +107,14 @@ pub(super) fn mask(s: &str) -> String {
 /// strings by bucket), so the runs compared share one.
 pub(super) fn seeded(version: LuaVersion, seed: u32) -> Vm {
     let mut vm = Vm::new_minimal_with_hash_seed(version, seed);
-    luna_jit::install_default_jit(&mut vm);
-    vm.open_all_libs().expect("the libraries open");
+    opened(&mut vm);
     vm
+}
+
+/// `vm`, a minimal Vm, with the JIT installed and every library open.
+pub(super) fn opened(vm: &mut Vm) {
+    luna_jit::install_default_jit(vm);
+    vm.open_all_libs().expect("the libraries open");
 }
 
 pub(super) fn interp(version: LuaVersion) -> Vm {
@@ -137,12 +142,18 @@ pub(super) fn tiered_seeded(
     tier_up_at: u32,
 ) -> Vm {
     let mut vm = seeded(version, seed);
+    set_tiers(&mut vm, hot, tier, tier_up_at);
+    vm
+}
+
+/// Make `vm` record loops after `hot` back edges, in `tier`, as
+/// [`tiered_seeded`] does.
+pub(super) fn set_tiers(vm: &mut Vm, hot: u32, tier: TraceTier, tier_up_at: u32) {
     vm.set_jit_enabled(false);
     vm.jit.trace_hot_threshold = hot;
     vm.jit.call_hot_threshold = hot;
     vm.set_trace_tier(tier);
     vm.set_trace_tier_up_at(tier_up_at);
-    vm
 }
 
 /// What a corpus run did: trace entries, traces moved to Cranelift.
