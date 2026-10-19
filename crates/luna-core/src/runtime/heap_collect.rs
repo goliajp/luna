@@ -74,6 +74,7 @@ impl Heap {
             quiet_mode: false,
             env51: self.env51_ptr(),
             parse: self.parse_ptr(),
+            stands: std::ptr::null(),
             #[cfg(feature = "gc-verify")]
             verify: None,
         }
@@ -318,6 +319,7 @@ impl Heap {
             quiet_mode: false,
             env51: self.env51_ptr(),
             parse: self.parse_ptr(),
+            stands: &self.puc.stand_ins,
             #[cfg(feature = "gc-verify")]
             verify: None,
         }

@@ -200,6 +200,7 @@ impl Heap {
             quiet_mode: false,
             env51: std::ptr::null(),
             parse: std::ptr::null(),
+            stands: std::ptr::null(),
             verify: None,
         };
         let mut cur = self.all;

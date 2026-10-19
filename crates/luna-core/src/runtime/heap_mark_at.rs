@@ -17,8 +17,14 @@ impl Marker {
         // SAFETY: the caller's contract; the tag names the type
         unsafe {
             self.leaf_bytes += match (*h).tag {
-                // a string of luna's own is no string of PUC's
-                ObjTag::Str if (*h).sub & UNCOUNTED != 0 => 0,
+                // a string of luna's own is no string of PUC's, but may
+                // stand for some (the default package path)
+                ObjTag::Str if (*h).sub & UNCOUNTED != 0 => match self.stands.as_ref() {
+                    Some(s) if (*h).cls & STANDS != 0 => {
+                        s.iter().filter(|s| s.0 == h).map(|s| s.1 as i64).sum()
+                    }
+                    _ => 0,
+                },
                 ObjTag::Str => (self.leaf_hdr + (*(h as *const LuaStr)).len() + 1) as i64,
                 // one standing for PUC's has PUC's size
                 ObjTag::Userdata => (*(h as *const Userdata)).puc_size as i64,
