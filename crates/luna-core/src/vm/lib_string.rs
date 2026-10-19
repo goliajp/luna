@@ -31,6 +31,18 @@ fn posrelat(pos: i64, len: usize) -> i64 {
     }
 }
 
+/// 5.4's `posrelatI` makes a positive start position a `size_t`, which
+/// wraps on a 32-bit target.
+#[inline(always)]
+fn start_pos(v: LuaVersion, pos: i64) -> i64 {
+    #[cfg(target_pointer_width = "32")]
+    if v >= LuaVersion::Lua54 && pos > 0 {
+        return i64::from(pos as u32);
+    }
+    let _ = v;
+    pos
+}
+
 fn s_len(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
     vm.nat_ret(fs, &[Value::Int(s.len() as i64)])
@@ -102,7 +114,7 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     } else if v < LuaVersion::Lua55 {
         l + lsep > i32::MAX as u128 / n
     } else {
-        l + lsep > i64::MAX as u128 / n
+        l + lsep > u128::from(crate::vm::c_abi::MAX_SIZE_55) / n
     };
     if too_large {
         return Err(raise_str(vm, "resulting string too large"));
@@ -134,7 +146,10 @@ fn s_byte(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let s = argcheck::check_string(vm, a, 0)?;
     let l = s.len();
-    let pi = posrelat(argcheck::opt_integer(vm, a, 1, 1)?, l);
+    let pi = posrelat(
+        start_pos(vm.version(), argcheck::opt_integer(vm, a, 1, 1)?),
+        l,
+    );
     let pose = posrelat(argcheck::opt_integer(vm, a, 2, pi)?, l).min(l as i64);
     let posi = pi.max(1);
     if posi > pose {
