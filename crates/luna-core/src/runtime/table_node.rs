@@ -126,8 +126,9 @@ impl Node {
     #[inline(always)]
     pub(super) fn key_is_str(&self, key: Gc<crate::runtime::string::LuaStr>) -> bool {
         self.key_tag == crate::runtime::value::tag::STR
-            // SAFETY: a string key's payload is its pointer
-            && unsafe { self.key_payload.assume_init() } == key.as_ptr() as usize as u64
+            // SAFETY: a string key's payload starts with its pointer (on a
+            // 32-bit target the word's other half is padding)
+            && unsafe { *(self.key_payload.as_ptr() as *const usize) } == key.as_ptr() as usize
     }
 
     /// True when the slot holds no key and sits in no chain.

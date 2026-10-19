@@ -9,6 +9,11 @@ use super::GcHeader;
 /// `Copy` handle to a heap-allocated GC-managed object. Layout is a single
 /// `NonNull<T>`; the GC walks reachability via root scanning and intrusive
 /// linkage on [`GcHeader`](super::GcHeader), not via reference counts.
+///
+/// Eight bytes, eight-aligned, on every target: a [`Value`](super::Value)
+/// holding one keeps its payload at offset 8 and takes 16 bytes on 32-bit
+/// targets too, where the pointer fills the low half.
+#[repr(C, align(8))]
 pub struct Gc<T> {
     ptr: NonNull<T>,
 }

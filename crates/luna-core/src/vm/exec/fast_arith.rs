@@ -37,6 +37,7 @@ pub(super) unsafe fn raw_tag_again(p: *const Value) -> u8 {
 /// scales it in the add.
 #[inline(always)]
 pub(super) fn reg_a(regs: *mut Value, inst: crate::vm::isa::Inst) -> *mut Value {
+    // 16 bytes on every target (`Gc` is 8-aligned)
     const _: () = assert!(size_of::<Value>() == 16);
     if cfg!(target_arch = "x86_64") {
         regs.wrapping_byte_add(((inst.0 >> 3) & 0xff0) as usize)
@@ -261,6 +262,7 @@ pub(super) use arith_result;
 /// `p` points at a value whose tag says it holds a `Gc` pointer.
 #[inline(always)]
 pub(super) unsafe fn raw_gc(p: *const Value) -> *mut u8 {
-    // SAFETY: the caller's contract; the pointer is the payload word
-    unsafe { *(p as *const *mut u8).add(1) }
+    // SAFETY: the caller's contract; the pointer starts the payload word
+    // (byte 8, on 32-bit targets too)
+    unsafe { *((p as *const u8).add(8) as *const *mut u8) }
 }

@@ -3,6 +3,10 @@
 
 use crate::version::LuaVersion;
 
+/// PUC 5.5's `sizeof(Table)` on this target.
+const TABLE_55: usize =
+    crate::runtime::puc_size::PucSizes::of(crate::runtime::table::Dialect::L55).table;
+
 /// A pacing parameter a dialect lets Lua read or write.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Param {
@@ -74,8 +78,8 @@ impl GcParams {
             (Lua54 | MacroLua, MajorMul) => Some(100),
             (Lua55, Pause) => Some(250),
             (Lua55, StepMul) => Some(200),
-            // LUAI_GCSTEPSIZE = 200 * sizeof(Table), 48 bytes on 64-bit
-            (Lua55, StepSize) => Some(9600),
+            // LUAI_GCSTEPSIZE = 200 * sizeof(Table)
+            (Lua55, StepSize) => Some(200 * TABLE_55 as i32),
             (Lua55, MinorMul) => Some(20),
             (Lua55, MajorMinor) => Some(50),
             (Lua55, MinorMajor) => Some(70),
@@ -205,7 +209,7 @@ mod tests {
         .iter()
         .map(|&q| p.get(q))
         .collect();
-        assert_eq!(got, [20, 50, 68, 250, 200, 9600]);
+        assert_eq!(got, [20, 50, 68, 250, 200, 200 * TABLE_55 as i64]);
     }
 
     #[test]

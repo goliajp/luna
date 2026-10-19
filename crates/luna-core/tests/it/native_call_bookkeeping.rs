@@ -71,7 +71,8 @@ fn stopped_collector_stays_stopped_until_restart() {
             local before = collectgarbage("count")
             for i = 1, 20000 do local _ = {i, i} end
             local grown = collectgarbage("count") - before
-            assert(grown > 1000, grown)
+            -- (KB; less on a 32-bit target, whose tables are smaller)
+            assert(grown > 500, grown)
             collectgarbage("restart")
             local peak = collectgarbage("count")
             for i = 1, 200000 do local _ = {i, i} end
