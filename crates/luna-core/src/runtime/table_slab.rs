@@ -104,7 +104,10 @@ impl Table {
     /// A zeroed slab (avals = `RawVal::NIL` aka `0`; atags = `raw::NIL`
     /// aka `0`) for `asize > INLINE_ASIZE` slots, from `mem`.
     pub(super) fn alloc_slab(mem: MemRef, asize: usize) -> Result<*mut u8, Oom> {
-        let layout = Self::slab_layout(asize);
+        // past the address space (a 32-bit target): no such block
+        let Ok(layout) = std::alloc::Layout::array::<u64>(asize + asize.div_ceil(8)) else {
+            return Err(Oom(mem));
+        };
         match mem.ctx().alloc_zeroed(layout, BlockKind::Other) {
             Some(p) => Ok(p.as_ptr()),
             None => Err(Oom(mem)),

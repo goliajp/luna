@@ -73,7 +73,15 @@ pub(crate) fn t_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // PUC MAXHBITS: a hash part needs ceillog2(m) <= 30 bits; beyond 2^30
     // slots the resize raises "table overflow" rather than attempting it.
     // That is a `luaG_runerror` from inside a C function: no position.
+    #[cfg(target_pointer_width = "64")]
     if m > (1 << 30) {
+        return Err(vm.plain_err("table overflow"));
+    }
+    // a 32-bit `size_t` bounds both parts first: MAXASIZE is
+    // `MAX_SIZET / (sizeof(Value) + 1)`, MAXHSIZE `MAX_SIZET / sizeof(Node)`
+    // (8 and 24 bytes), and the array part is checked first
+    #[cfg(target_pointer_width = "32")]
+    if n > u64::from(u32::MAX / 9) || m.next_power_of_two() > u64::from(u32::MAX / 24) {
         return Err(vm.plain_err("table overflow"));
     }
     // the parts' sizes count in `Heap.bytes`, and `free_obj` takes them
