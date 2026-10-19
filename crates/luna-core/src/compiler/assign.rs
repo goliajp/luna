@@ -83,37 +83,34 @@ impl<'a> Compiler<'a> {
 
     /// The variable `text` as an assignment target.
     pub(super) fn name_lv(&mut self, text: &str, line: u32) -> Result<Lv, SyntaxError> {
-        let read_only = |c: &Self, name: &str| {
-            c.err(
-                line,
-                format!("attempt to assign to const variable '{name}'"),
-            )
-        };
-        match self.resolve_name(text)? {
-            VarKind::Const(_) => Err(read_only(self, text)),
-            VarKind::Local(reg) => {
-                if let Some(name) = self.local_is_read_only(reg) {
-                    let name = name.to_string();
-                    return Err(read_only(self, &name));
-                }
-                Ok(Lv::Local(reg))
-            }
-            VarKind::Upval(u) => {
-                if self.lr().upvals[u as usize].read_only {
-                    return Err(read_only(self, text));
-                }
-                Ok(Lv::Upval(u))
-            }
+        let lv = match self.resolve_name(text)? {
+            VarKind::Const(_) => Err(text.to_string()),
+            VarKind::Local(reg) => match self.local_is_read_only(reg) {
+                Some(name) => Err(name.to_string()),
+                None => Ok(Lv::Local(reg)),
+            },
+            VarKind::Upval(u) if self.lr().upvals[u as usize].read_only => Err(text.to_string()),
+            VarKind::Upval(u) => Ok(Lv::Upval(u)),
             VarKind::Global { .. } => {
                 let VarKind::Global { read_only: ro } = self.resolve_global_kind(text, line)?
                 else {
                     unreachable!()
                 };
                 if ro {
-                    return Err(read_only(self, text));
+                    Err(text.to_string())
+                } else {
+                    Ok(self.global_lv(text)?)
                 }
-                self.global_lv(text)
             }
+        };
+        match lv {
+            Ok(lv) => Ok(lv),
+            // a replay goes on past the error (see `ReplayOpts::lenient`)
+            Err(_) if self.puc_state.lenient => Ok(Lv::Local(0)),
+            Err(name) => Err(self.err(
+                line,
+                format!("attempt to assign to const variable '{name}'"),
+            )),
         }
     }
 

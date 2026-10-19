@@ -20,28 +20,24 @@ impl Vm {
         );
         if let Err(e) = parsed {
             let failed = self.parse_scratch.failed;
-            return Err(match self.error_before(src, failed, source) {
-                Some(e) => {
-                    // a compile error, not where the parse failed
-                    self.parse_scratch.failed = None;
-                    e
-                }
-                None => e,
-            });
+            // a compile error, not where the parse failed (counted as
+            // `Vm::acct_failed_load` finds it)
+            return Err(self.error_before(src, failed, source).unwrap_or(e));
         }
         let (chunk, end_lines) = self.parse_scratch.parsed();
-        crate::compiler::compile_parsed(
+        // a counted load that fails is replayed from what it compiled
+        let s = &mut self.compile_scratch;
+        s.replay.seal = self.parse_scratch.record;
+        let made = crate::compiler::compile_parsed(
             chunk,
             end_lines,
             self.version,
             source,
             &mut self.heap,
-            &mut self.compile_scratch,
-        )
-        .map_err(|e| {
-            let s = &mut self.compile_scratch;
-            crate::compiler::place_error(s, chunk, src, self.version, depth, e)
-        })
+            s,
+        );
+        s.replay.seal = false;
+        made.map_err(|e| crate::compiler::place_error(s, chunk, src, self.version, depth, e))
     }
 
     /// Compile a parsed chunk named `source`, keeping the parse's vectors

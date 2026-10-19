@@ -191,12 +191,24 @@ impl Vm {
             Some(m) if m.as_bytes() == text => Value::Str(m),
             _ => self.str_value(&text).unwrap_or_else(|e| e.0),
         };
+        self.load_runerror_handled(e, msg).unwrap_or(msg)
+    }
+
+    /// The value a load that failed with `e`, whose message is `msg`,
+    /// gives: 5.4 on, the parser's "C stack overflow" is a runtime error,
+    /// raised inside the load's protected call, which the message handler
+    /// installed (`L->errfunc`) runs on. `None`: no handler runs.
+    pub(crate) fn load_runerror_handled(
+        &mut self,
+        e: &crate::frontend::error::SyntaxError,
+        msg: Value,
+    ) -> Option<Value> {
         if self.version() < LuaVersion::Lua54 || e.line != 0 || e.msg != b"C stack overflow" {
-            return msg;
+            return None;
         }
         match self.nearest_catcher() {
-            Some(Some(handler)) => self.call_msgh(handler, msg),
-            _ => msg,
+            Some(Some(handler)) => Some(self.call_msgh(handler, msg)),
+            _ => None,
         }
     }
 

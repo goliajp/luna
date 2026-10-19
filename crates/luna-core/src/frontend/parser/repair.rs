@@ -15,16 +15,19 @@ const MAX_ADDED: usize = 400;
 
 /// What a parse of `src` that failed at `failed` read, completed so that it
 /// parses, or `None` when the error is not one a missing token explains.
+/// `lenient`: parsed as [`ParseScratch::lenient`] does, so a failure on a
+/// goto, a label or a read-only target is completed as well.
 pub(crate) fn completed(
     src: &[u8],
     version: LuaVersion,
     c_depth: u32,
     failed: Failed,
+    lenient: bool,
 ) -> Option<Vec<u8>> {
     if failed.first {
         return Some(Vec::new());
     }
-    let at = token_at(src, version, c_depth, failed.at)?;
+    let at = token_at(src, version, c_depth, failed.at, false)?;
     // a token that failed to scan ends the source after the one before it
     let cut = if failed.scanning {
         at.span.end
@@ -35,6 +38,7 @@ pub(crate) fn completed(
     for _ in 0..MAX_ADDED {
         let mem = MemOwner::system();
         let mut scratch = ParseScratch::new(mem.clone());
+        scratch.lenient(lenient);
         let Err(e) = parse_in_place(&out, version, c_depth, &mut scratch) else {
             return Some(out);
         };

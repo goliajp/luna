@@ -17,6 +17,9 @@ pub(crate) struct ListStacks {
     pub(super) func_local_count: LVec<(u32, u32, u32)>,
     pub(super) funcs: LVec<FnFlow>,
     pub(super) gotos: Option<GotoCheck>,
+    /// goto and read-only checks pass whatever they meet (see
+    /// [`ParseScratch::lenient`])
+    pub(super) lenient: bool,
 }
 
 impl ListStacks {
@@ -31,6 +34,7 @@ impl ListStacks {
             func_local_count: LVec::new(mem),
             funcs: LVec::new(mem),
             gotos: None,
+            lenient: false,
         }
     }
 }
@@ -223,6 +227,15 @@ impl ParseScratch {
         (&self.chunk, &self.end_lines)
     }
 
+    /// The next parses take as valid a goto that finds no label, a label
+    /// defined twice, an assignment to a read-only local, an unknown
+    /// attribute, nesting a little past the limit and more locals than the
+    /// limit: a failed load is replayed from a completion of its source
+    /// that has the construct it failed on.
+    pub(crate) fn lenient(&mut self, on: bool) {
+        self.stacks.lenient = on;
+    }
+
     /// What the last parse recorded, when it was asked to (see
     /// [`ParseScratch::record`]) and succeeded.
     pub(crate) fn recorded(&self) -> Option<(&marks::Marks, &marks::scan::Scanned)> {
@@ -238,6 +251,16 @@ impl ParseScratch {
         self.failed?;
         let r = self.recording.as_deref().filter(|_| self.record)?;
         Some((&r.scanned, &self.chunk.names))
+    }
+
+    /// How many statements and expressions a recording parse that failed
+    /// had read to their end: the nodes before those numbers (see
+    /// [`Marks`]) are the same in a completion of its source.
+    pub(crate) fn failed_closed(&self) -> (u32, u32) {
+        let m = self.recording.as_deref().map(|r| &r.marks);
+        m.map_or((0, 0), |m| {
+            (m.stat_follow.len() as u32, m.expr_follow.len() as u32)
+        })
     }
 
     /// The parse left here, as the owner of its vectors.

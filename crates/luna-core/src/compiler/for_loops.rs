@@ -67,7 +67,7 @@ impl<'a> Compiler<'a> {
         for (i, v) in vars.iter().enumerate() {
             names.push_or_abort((self.nm(v), i == 0 && self.version >= LuaVersion::Lua55));
         }
-        self.log_for_names(sid, hidden, &names);
+        self.log_for_names(sid, hidden, &names)?;
         let base = self.explist_adjust(exprs, values)?;
         let last = *exprs.last().expect("an expression list");
         self.set_freereg(base + values);
@@ -146,7 +146,7 @@ impl<'a> Compiler<'a> {
             _ => &["(for state)"; 3],
         };
         let v55 = self.version >= LuaVersion::Lua55;
-        self.log_for_names(sid, hidden, &[(var, v55)]);
+        self.log_for_names(sid, hidden, &[(var, v55)])?;
         let base = self.lr().freereg;
         self.set_freereg(base);
         let se = self.expr(start)?;

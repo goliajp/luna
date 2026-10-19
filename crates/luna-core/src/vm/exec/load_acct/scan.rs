@@ -159,9 +159,7 @@ impl Vm {
             };
             if let Some(c) = cut
                 && tok >= c.events
-                && !(c.ended
-                    && tok == c.events
-                    && matches!(t, TokRef::After(_, 0) | TokRef::StatAfter(_, 0)))
+                && !(c.ended && tok == c.events && c.takes(t, ev, marks))
             {
                 break;
             }

@@ -159,10 +159,13 @@ pub(crate) fn place_error(
     let Some((t, true)) = scratch.error_token(&e) else {
         return e;
     };
-    let marks = crate::frontend::parser::record_marks(src, version, c_depth);
+    let lenient = scratch.replay.lenient;
+    let marks = crate::frontend::parser::record_marks(src, version, c_depth, lenient);
     let ix = t.resolve(ast, &marks.expect("the source parsed before"));
-    let at = crate::frontend::parser::token_at(src, version, c_depth, ix);
-    shown_at(e, true, &at.expect("a token of the source"))
+    let at = crate::frontend::parser::token_at(src, version, c_depth, ix, lenient);
+    let at = at.expect("a token of the source");
+    scratch.replay.at = Some((ix, at.kind));
+    shown_at(e, true, &at)
 }
 
 /// `e` raised on token `at`: on its line, and showing it when `near`.
@@ -189,16 +192,20 @@ pub(crate) fn error_before(
     scratch: &mut CompileScratch,
 ) -> Option<SyntaxError> {
     use crate::frontend::parser as p;
-    let fixed = p::completed(src, version, c_depth, failed)?;
+    let fixed = p::completed(src, version, c_depth, failed, false)?;
     let mem = crate::runtime::mem::MemOwner::system();
     let mut tree = p::ParseScratch::new(mem.clone());
     p::parse_in_place(&fixed, version, c_depth, &mut tree).ok()?;
     let (ast, end_lines) = tree.parsed();
     let e = super::compile_parsed(ast, end_lines, version, source, heap, scratch).err()?;
     let (t, near) = scratch.error_token(&e)?;
-    let ix = t.resolve(ast, &p::record_marks(&fixed, version, c_depth).ok()?);
+    let ix = t.resolve(ast, &p::record_marks(&fixed, version, c_depth, false).ok()?);
     if ix > failed.at {
         return None;
     }
-    Some(shown_at(e, near, &p::token_at(src, version, c_depth, ix)?))
+    Some(shown_at(
+        e,
+        near,
+        &p::token_at(src, version, c_depth, ix, false)?,
+    ))
 }

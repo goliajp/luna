@@ -53,7 +53,7 @@ impl Vm {
         let mut tree = ParseScratch::new(self.heap.mem_owner());
         tree.record = true;
         if parse_in_place(&text, v, depth, &mut tree).is_err() {
-            text = completed(&text, v, depth, tree.failed?)?;
+            text = completed(&text, v, depth, tree.failed?, false)?;
             tree = ParseScratch::new(self.heap.mem_owner());
             tree.record = true;
             parse_in_place(&text, v, depth, &mut tree).ok()?;
@@ -70,6 +70,9 @@ impl Vm {
             events: i64::from(done),
             ended: false,
             scans: i64::from(done) - 1,
+            closes: true,
+            block_ends: false,
+            closed: (u32::MAX, u32::MAX),
         };
         let log = self.compile_scratch.puc_log.take();
         let replayed = self

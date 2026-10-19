@@ -42,6 +42,8 @@ mod resolve;
 use resolve::VarKind;
 mod return_stat;
 mod scope;
+mod seal;
+pub(crate) use seal::ReplayOpts;
 mod stat;
 mod table_ctor;
 mod vararg_scan;
@@ -273,19 +275,10 @@ impl<'a> Compiler<'a> {
         self.log(puc_log::PEv::Open);
     }
 
-    /// Close the innermost level: the finished function on the heap. The
-    /// level stays, emptied, for the next function at this depth.
+    /// Close the innermost level: the finished function on the heap.
     fn finish_level(&mut self, line: u32, last_line: u32) -> Gc<Proto> {
         self.log(puc_log::PEv::Close);
-        self.depth -= 1;
-        let lvl = &mut self.levels[self.depth];
-        if self.version <= LuaVersion::Lua53 {
-            for i in lvl.code.iter_mut() {
-                *i = crate::vm::isa::imm_form::to_imm(*i, &lvl.consts);
-            }
-        }
-        let proto = lvl.take_proto(self.source, line, last_line, self.heap);
-        self.heap.adopt_proto(proto)
+        self.close_level(line, last_line)
     }
 
     /// The line of statement `sid`'s last token, as the parser recorded it.
