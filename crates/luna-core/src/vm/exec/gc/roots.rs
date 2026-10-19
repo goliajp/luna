@@ -99,7 +99,12 @@ impl Vm {
             if names_late {
                 m.mark_strings(names(true));
             }
-            m.mark_strings(names(false));
+            // luna's own names stay, but one PUC made for the program (as
+            // `getmetatable` makes "__metatable") dies where nothing of
+            // PUC's holds it
+            for &s in names(false) {
+                m.keep(s);
+            }
             m.mark_strings(puc.pins.iter());
         }
         m.mark_strings(puc.load_msg.iter());

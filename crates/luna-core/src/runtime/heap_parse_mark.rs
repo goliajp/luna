@@ -127,12 +127,13 @@ impl Marker {
         true
     }
 
-    /// A string a load's prototype holds: marked, or left white and
-    /// [`KEPT`] when it is PUC's and nothing of PUC's marked it.
-    fn keep(&mut self, s: Gc<crate::runtime::LuaStr>) {
+    /// A string luna holds and PUC may not (a load's prototype's, luna's
+    /// own names): marked, or left white and [`KEPT`] when it is PUC's and
+    /// nothing of PUC's marked it.
+    pub(crate) fn keep(&mut self, s: Gc<crate::runtime::LuaStr>) {
         let h = s.header();
-        // SAFETY: a string a live prototype holds is allocated; only its
-        // header is read and written
+        // SAFETY: a string luna holds is allocated; only its header is read
+        // and written
         unsafe {
             if is_white((*h).flags) && !is_uncounted(h) && (*h).sub & EXTERNAL == 0 {
                 (*h).cls |= KEPT;
