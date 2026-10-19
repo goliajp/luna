@@ -188,9 +188,10 @@ impl Vm {
             .native_top()
             .unwrap_or_else(|| self.lua_window_end().max(self.top));
         self.check_lua_stack(top, super::stack_size::MIN_STACK, false)?;
-        let saved_top = self.top;
-        let saved_len = self.stack.len();
-        let name = self.str_value(event)?;
+        let (saved_top, saved_len) = (self.top, self.stack.len());
+        // `hookf` pushes the event's name; a call hook's function is past its first op
+        let call = matches!(event, b"call" | b"tail call");
+        let name = self.traced_as(false, call, |vm| vm.api_push_string(event))?;
         let lv = line.map_or(Value::Nil, Value::Int);
         self.in_hook = true;
         // PUC's trampoline `hookf` sits between the engine and the Lua hook,
