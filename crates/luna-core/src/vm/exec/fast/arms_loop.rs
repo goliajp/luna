@@ -95,7 +95,7 @@ macro_rules! fast_loop_arms {
         // anything else (`debug.setlocal`, crafted bytecode) goes to
         // `Vm::for_loop`, which raises. 5.1/5.2 loops are float loops.
         // True when the control registers at `$d ra`, the limit at offset
-        // `$d lim`, hold a loop of kind `$d k`. On x86-64 a float loop
+        // `$d lim`, hold a loop of kind `$d k`. On x86 and x86-64 a float loop
         // tests its index (or variable) tag and its step's whole first word
         // and not the limit's tag: the step only reads the limit, and
         // whatever changes it outside the loop's own code unseals the step
@@ -103,7 +103,7 @@ macro_rules! fast_loop_arms {
         // `$d tag` reads the first register's tag: the test of the other
         // kind reads it again (`raw_tag_again`), so that both reads stay
         // compares against memory
-        #[cfg(all(target_arch = "x86_64", not(miri)))]
+        #[cfg(all(any(target_arch = "x86_64", target_arch = "x86"), not(miri)))]
         macro_rules! kind_ok {
             ($d ra:ident, $d k:expr, $d lim:expr) => {
                 kind_ok!($d ra, $d k, $d lim, raw_tag)
@@ -120,14 +120,14 @@ macro_rules! fast_loop_arms {
                 }
             };
         }
-        #[cfg(not(any(target_arch = "aarch64", all(target_arch = "x86_64", not(miri)))))]
+        #[cfg(not(any(target_arch = "aarch64", all(any(target_arch = "x86_64", target_arch = "x86"), not(miri)))))]
         macro_rules! kind_ok {
             ($d ra:ident, $d k:expr, $d lim:expr) => {{
                 let _ = $d lim;
                 raw_tag($d ra) == $d k && raw_tag($d ra.add(1)) == $d k && raw_tag($d ra.add(2)) == $d k
             }};
         }
-        #[cfg(any(all(target_arch = "aarch64", miri), all(target_arch = "x86_64", miri)))]
+        #[cfg(any(all(target_arch = "aarch64", miri), all(any(target_arch = "x86_64", target_arch = "x86"), miri)))]
         macro_rules! kind_ok_again {
             ($d ra:ident, $d k:expr, $d lim:expr) => {
                 kind_ok!($d ra, $d k, $d lim)
@@ -140,13 +140,13 @@ macro_rules! fast_loop_arms {
                 raw_tag($d ra) == $d k && raw_tag($d ra.add(1)) == $d k && raw_tag($d ra.add(2)) == $d k
             }};
         }
-        #[cfg(all(target_arch = "x86_64", not(miri)))]
+        #[cfg(all(any(target_arch = "x86_64", target_arch = "x86"), not(miri)))]
         macro_rules! kind_ok_again {
             ($d ra:ident, $d k:expr, $d lim:expr) => {
                 kind_ok!($d ra, $d k, $d lim, raw_tag_again)
             };
         }
-        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86")))]
         macro_rules! kind_ok_again {
             ($d ra:ident, $d k:expr, $d lim:expr) => {
                 kind_ok!($d ra, $d k, $d lim)

@@ -103,6 +103,28 @@ pub(super) unsafe fn raw_word(p: *const Value) -> u64 {
     w
 }
 
+/// [`raw_word`] on x86, as two 32-bit loads.
+///
+/// # Safety
+/// `p` points at an initialised `Value`.
+#[cfg(all(target_arch = "x86", not(miri)))]
+#[inline(always)]
+pub(super) unsafe fn raw_word(p: *const Value) -> u64 {
+    let (lo, hi): (u32, u32);
+    // SAFETY: as for `raw_words3`
+    unsafe {
+        core::arch::asm!(
+            "mov {lo:e}, dword ptr [{p}]",
+            "mov {hi:e}, dword ptr [{p} + 4]",
+            p = in(reg) p,
+            lo = out(reg) lo,
+            hi = out(reg) hi,
+            options(pure, readonly, nostack, preserves_flags),
+        )
+    };
+    u64::from(lo) | (u64::from(hi) << 32)
+}
+
 /// [`raw_word`] on aarch64.
 ///
 /// # Safety
@@ -139,7 +161,7 @@ pub(super) fn first(mut pc: u32) -> u32 {
 
 /// Make the first word of `v` differ from its tag (see [`tag_word`]): a
 /// numeric `for` with `v` among its control values takes `Vm::for_loop` at
-/// its next step, which checks all three. On aarch64 and x86-64 the step of
+/// its next step, which checks all three. On aarch64, x86 and x86-64 the step of
 /// a float loop does not test the tag of its limit, which it only reads, only
 /// the whole first word of the step after it, so whatever changes a control
 /// value outside the loop's own code unseals the one after it.

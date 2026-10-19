@@ -24,7 +24,7 @@ pub(super) unsafe fn raw_tag(p: *const Value) -> u8 {
 ///
 /// # Safety
 /// `p` points at an initialised `Value`.
-#[cfg(all(target_arch = "x86_64", not(miri)))]
+#[cfg(all(any(target_arch = "x86_64", target_arch = "x86"), not(miri)))]
 #[inline(always)]
 pub(super) unsafe fn raw_tag_again(p: *const Value) -> u8 {
     // SAFETY: the caller's contract; the tag is the first byte
