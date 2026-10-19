@@ -138,10 +138,22 @@ fn vararg_count_beyond_the_stack() {
     assert!(eval_str(LuaVersion::Lua55, src).ends_with("stack overflow"));
 }
 
-/// 5.1's traceback keeps the level in a C `int`.
+/// 5.1's traceback keeps the level in a C `int`. (A 32-bit target makes
+/// 2^63 INT_MIN, a level of 2^31 lost tail calls, which PUC walks one by
+/// one there: no test can wait for it.)
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn traceback_level_past_int() {
     let src = "local ok, t = pcall(debug.traceback, 'x', 2^63)
                return tostring(ok) .. ' ' .. t:sub(1, 18)";
     assert_eq!(eval_str(LuaVersion::Lua51, src), "true x\nstack traceback:");
+}
+
+/// A level far below 0 in 5.1 is that many lost tail calls, each a line.
+#[test]
+fn traceback_many_lost_tail_calls() {
+    let src = "local t = debug.traceback('x', -3)
+               local _, n = t:gsub('%(tail call%)', '')
+               return t:sub(1, 18) .. ' ' .. n";
+    assert_eq!(eval_str(LuaVersion::Lua51, src), "x\nstack traceback: 3");
 }
