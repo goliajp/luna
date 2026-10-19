@@ -64,54 +64,35 @@ fn run_luac_on_puc(bin: &str, luac_file: &Path) -> Outcome {
     Outcome::Error(pos, text)
 }
 
-/// Load PUC bytecode into luna and run it with stdout captured the way
-/// `run_on_luna` does. A load error is a failure of the translator, not an
-/// outcome to compare.
-fn run_luac_on_luna(vm: &mut Vm, path: &Path, bytes: &[u8]) -> Result<Outcome, String> {
-    vm.set_puc_bytecode_loading(true);
-    vm.eval(
-        r#"
-_G.__luna_diff_puc_buf = ""
-function print(...)
-    local t = {}
-    for i = 1, select('#', ...) do t[i] = tostring(select(i, ...)) end
-    _G.__luna_diff_puc_buf = _G.__luna_diff_puc_buf .. table.concat(t, '\t') .. '\n'
-end
-io.write = function(...)
-    local t = {}
-    for i = 1, select('#', ...) do t[i] = tostring(select(i, ...)) end
-    _G.__luna_diff_puc_buf = _G.__luna_diff_puc_buf .. table.concat(t)
-end
-"#,
-    )
-    .expect("capture preamble");
-    let f = vm.load(bytes, b"=luac").map_err(|e| {
-        format!(
-            "luna rejects PUC bytecode of {}: {}",
-            path.display(),
-            String::from_utf8_lossy(&e.msg)
-        )
-    })?;
-    // run as lua.c runs a script, from inside its C function, which a
-    // traceback shows; the handler leaves the error as it is (made here: a
-    // collection could free the loaded function before it runs)
-    let msgh = vm.native(same_error);
-    if let Err(e) =
-        vm.call_value_with_handler_in_c(luna_core::runtime::Value::Closure(f), &[], msgh)
-    {
-        let (pos, text) = normalize_err(&vm.error_display(&e));
-        return Ok(Outcome::Error(pos, text));
-    }
-    match vm
-        .eval("return _G.__luna_diff_puc_buf")
-        .expect("buffer")
-        .first()
-    {
-        Some(luna_core::runtime::Value::Str(s)) => Ok(Outcome::Output(normalize(
-            &String::from_utf8_lossy(s.as_bytes()),
-        ))),
-        other => Err(format!("expected the capture buffer, got {other:?}")),
-    }
+/// Load PUC bytecode into the Vm `make` gives and run it, then drop the Vm
+/// (lua.c's `lua_close`), with stdout caught as `run_on_luna` catches it.
+/// A load error is a failure of the translator, not an outcome to compare.
+fn run_luac_on_luna(
+    make: impl FnOnce() -> Vm,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<Outcome, String> {
+    let (r, out) = super::super::stdout_capture::caught(|| {
+        let mut vm = make();
+        vm.set_puc_bytecode_loading(true);
+        let f = vm.load(bytes, b"=luac").map_err(|e| {
+            format!(
+                "luna rejects PUC bytecode of {}: {}",
+                path.display(),
+                String::from_utf8_lossy(&e.msg)
+            )
+        })?;
+        // run as lua.c runs a script, from inside its C function, which a
+        // traceback shows; the handler leaves the error as it is (made here:
+        // a collection could free the loaded function before it runs)
+        let msgh = vm.native(same_error);
+        let r = vm.call_value_with_handler_in_c(luna_core::runtime::Value::Closure(f), &[], msgh);
+        Ok::<_, String>(r.err().map(|e| normalize_err(&vm.error_display(&e))))
+    });
+    Ok(match r? {
+        Some((pos, text)) => Outcome::Error(pos, text),
+        None => Outcome::Output(normalize(&String::from_utf8_lossy(&out))),
+    })
 }
 
 /// Every fixture of every dialect, compiled with that dialect's stock
@@ -167,10 +148,13 @@ fn diff_puc_bytecode() {
                 ),
             }
             let luna = std::panic::catch_unwind(|| {
-                let mut vm = Vm::new(version);
-                // as lua.c, which runs scripts in generational mode from 5.4
-                vm.gc_enter_generational();
-                run_luac_on_luna(&mut vm, f, &bytes)
+                let make = || {
+                    let mut vm = Vm::new(version);
+                    // as lua.c, which runs scripts in generational mode from 5.4
+                    vm.gc_enter_generational();
+                    vm
+                };
+                run_luac_on_luna(make, f, &bytes)
             });
             match luna {
                 Ok(Ok(out)) if out == puc => {}
@@ -227,12 +211,15 @@ fn puc_bytecode_loads_in_every_dialect() {
             let _ = std::fs::remove_file(&luac_file); // temp file; nothing depends on its removal
             for &(host, host_version, _) in DIALECTS.iter().filter(|d| d.0 != dialect) {
                 let run = std::panic::catch_unwind(|| {
-                    let mut vm = Vm::new(host_version);
-                    // A 5.4 overflow-guarded `for` spins forever under 5.3
-                    // loop semantics, as it would on PUC 5.3; the budget turns
-                    // that into an error, which is an outcome like any other.
-                    vm.set_instr_budget(Some(50_000_000));
-                    run_luac_on_luna(&mut vm, f, &bytes)
+                    let make = || {
+                        let mut vm = Vm::new(host_version);
+                        // A 5.4 overflow-guarded `for` spins forever under 5.3
+                        // loop semantics, as it would on PUC 5.3; the budget
+                        // turns that into an error, an outcome like any other.
+                        vm.set_instr_budget(Some(50_000_000));
+                        vm
+                    };
+                    run_luac_on_luna(make, f, &bytes)
                 });
                 match run {
                     Ok(Ok(_)) => ran += 1,
