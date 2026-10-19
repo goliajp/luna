@@ -7,6 +7,7 @@
 //! window. Either way the values sit in the slots PUC's have, so a
 //! collection marks them in PUC's order.
 
+use super::step::Rd;
 use super::{Script, native};
 use crate::runtime::Value;
 use crate::version::LuaVersion;
@@ -43,35 +44,6 @@ pub(crate) struct Opener {
     /// `Vm::open_base` alone: the base library without `dofile` and
     /// `loadfile`
     pub(crate) sandbox: bool,
-}
-
-/// The operands of one call, read from the script.
-pub(super) struct Rd<'a> {
-    pub(super) b: &'a [u8],
-    pub(super) i: usize,
-}
-
-impl Rd<'_> {
-    /// An operand: a LEB128 varint.
-    pub(super) fn u(&mut self) -> u64 {
-        let mut n = 0u64;
-        let mut shift = 0;
-        loop {
-            let b = self.b[self.i];
-            self.i += 1;
-            n |= u64::from(b & 0x7F) << shift;
-            if b < 0x80 {
-                return n;
-            }
-            shift += 7;
-        }
-    }
-
-    /// A signed operand (zigzag).
-    pub(super) fn z(&mut self) -> i64 {
-        let n = self.u();
-        (n >> 1) as i64 ^ -((n & 1) as i64)
-    }
 }
 
 impl Opener {
@@ -120,8 +92,13 @@ impl Opener {
         match self.native {
             None => {
                 let n = vm.stack.len();
-                vm.grow_stack_holding(n + 1, &[v])?;
-                vm.stack[n] = v;
+                // room already there: nothing can collect, nothing to root
+                if n < vm.stack.capacity() {
+                    vm.stack.push_or_abort(v);
+                } else {
+                    vm.grow_stack_holding(n + 1, &[v])?;
+                    vm.stack[n] = v;
+                }
                 vm.top = n as u32 + 1;
                 Ok(())
             }
@@ -280,6 +257,15 @@ impl Opener {
     pub(super) fn make_fn(&mut self, vm: &mut Vm, f: u32, nup: u32) -> Result<Value, LuaError> {
         let (ctor, id) = native(f);
         match ctor {
+            // a light function (5.2 on), made once
+            super::Ctor::F(g, b) if nup == 0 && self.v != LuaVersion::Lua51 => {
+                if let Some(n) = vm.heap.light(id) {
+                    return Ok(Value::Native(n));
+                }
+                let n = vm.retry_oom(|vm| vm.heap.try_new_light(g, b))?;
+                vm.heap.set_light(id, n);
+                Ok(Value::Native(n))
+            }
             super::Ctor::F(g, b) => {
                 // PUC's upvalues, the values on top
                 let t = self.top(vm) as usize;

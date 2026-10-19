@@ -70,6 +70,40 @@ impl Heap {
         Ok(g)
     }
 
+    /// PUC's light C function `f` (5.2 on, no upvalues), as the opening
+    /// makes it: fixed, uncounted, standing for no object of PUC's.
+    pub(crate) fn try_new_light(
+        &mut self,
+        f: NativeFn,
+        builtin: Builtin,
+    ) -> Result<Gc<NativeClosure>, Oom> {
+        let mut hdr = GcHeader::native(&[]);
+        hdr.aux = self.take_id();
+        // `set_native_puc_nup(g, 0)`: a function of no upvalues of PUC's
+        hdr.sub = 1;
+        let obj = NativeClosure {
+            hdr,
+            f,
+            upvals: crate::runtime::mem::LSlice::empty(self.mem()),
+            is_async: false,
+            kind: crate::vm::exec::native_call::NativeKind::of(builtin),
+            builtin,
+        };
+        let p = self.slab_block()?;
+        // SAFETY: `p` is a free slot of a slab block, for one native, which
+        // goes straight onto the fixed list
+        unsafe {
+            p.write(obj);
+            let h = p as *mut GcHeader;
+            (*h).cls |= SLAB;
+            (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
+            (*h).next = self.fixed;
+            self.fixed = h;
+            self.live += 1;
+            Ok(Gc::from_ptr(p))
+        }
+    }
+
     /// The light function the opening made as function `id` (see
     /// `PucState::lights`).
     pub(crate) fn light(&self, id: usize) -> Option<Gc<NativeClosure>> {

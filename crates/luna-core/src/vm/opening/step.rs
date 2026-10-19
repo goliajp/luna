@@ -1,7 +1,7 @@
 //! The script's calls by their op byte (see `data.rs`), each read with
 //! its operands and made.
 
-use super::run::{Ix, Opener, Rd};
+use super::run::{Ix, Opener};
 use crate::runtime::Value;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
@@ -108,5 +108,34 @@ impl Opener {
             29 => self.newfenv(vm, r.u() as usize),
             _ => unreachable!("an op of the generator"),
         }
+    }
+}
+
+/// The operands of one call, read from the script.
+pub(super) struct Rd<'a> {
+    pub(super) b: &'a [u8],
+    pub(super) i: usize,
+}
+
+impl Rd<'_> {
+    /// An operand: a LEB128 varint.
+    pub(super) fn u(&mut self) -> u64 {
+        let mut n = 0u64;
+        let mut shift = 0;
+        loop {
+            let b = self.b[self.i];
+            self.i += 1;
+            n |= u64::from(b & 0x7F) << shift;
+            if b < 0x80 {
+                return n;
+            }
+            shift += 7;
+        }
+    }
+
+    /// A signed operand (zigzag).
+    pub(super) fn z(&mut self) -> i64 {
+        let n = self.u();
+        (n >> 1) as i64 ^ -((n & 1) as i64)
     }
 }
