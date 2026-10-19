@@ -85,7 +85,19 @@ impl Heap {
     /// Returns the number of objects freed.
     pub(crate) fn gc_end_full(&mut self, mut m: Marker) -> usize {
         self.mark_from(&mut m);
-        self.full_sweep()
+        self.gc_sweep_full()
+    }
+
+    /// The sweep of [`Heap::gc_end_full`], after its marking.
+    pub(crate) fn gc_sweep_full(&mut self) -> usize {
+        // 5.1's full cycle sweeps the string table before the list
+        if self.table_dialect == crate::runtime::table::Dialect::L51 {
+            self.collect_dead_strings();
+            self.sweep_strings_upto(i64::MAX);
+        }
+        let n = self.full_sweep();
+        self.end_string_sweep();
+        n
     }
 
     /// Stop-the-world mark from the roots already in `m`: tobefnz, drain,
@@ -93,7 +105,7 @@ impl Heap {
     /// current-white flip). After return all reachable objects are BLACK
     /// and `current_white` has flipped, so the caller's sweep tests
     /// `other-white` for dead. Does NOT change `phase`.
-    fn mark_from(&mut self, m: &mut Marker) {
+    pub(crate) fn mark_from(&mut self, m: &mut Marker) {
         // objects already queued for finalization but not yet run must stay
         // alive until the VM calls their `__gc` (they may be unreachable now).
         for &h in self.tobefnz_live() {
