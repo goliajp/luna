@@ -61,7 +61,9 @@ impl Lua {
     }
 
     /// A VM of dialect `v` that shares compiled code with the other VMs
-    /// of `engine` (see [`crate::Engine`]).
+    /// of `engine` (see [`crate::Engine`]; 64-bit targets, the ones with
+    /// the JIT).
+    #[cfg(target_pointer_width = "64")]
     pub fn with_engine(engine: &crate::Engine, v: LuaVersion) -> Lua {
         Lua(engine.new_minimal_vm(v))
     }

@@ -40,14 +40,6 @@ luna-core = { path = "../luna-core", version = "= 4.0.2" }
 # build-time supply chain ONLY; luna-core stays 0-dep.
 luna-jit-derive = { path = "../luna-jit-derive", version = "= 4.0.2" }
 
-# `luna_jit_*` helper / TLS / enter_jit crate. luna-jit re-exports
-# `pub use luna_jit_helpers::*;` from `jit_backend/mod.rs` so
-# `crate::jit_backend::luna_jit_*` / `super::luna_jit_*` paths resolve.
-# luna-jit-llvm depends on this crate directly without pulling Cranelift.
-# `version = "= 4.0.2"` pin matches the workspace version so the
-# crates.io resolver picks the exact matching release when embedders
-# bypass the `path` fallback.
-luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 4.0.2" }
 
 # LLVM 18 + inkwell 0.10 alternative JIT backend
 # crate. Optional behind the `llvm-jit` cargo feature (default OFF)
@@ -62,6 +54,29 @@ luna-jit-llvm = { path = "../luna-jit-llvm", version = "= 4.0.2", optional = tru
 # lowering here; same version and LLVM feature as luna-jit-llvm, which
 # also picks the LLVM target of the architecture.
 inkwell = { version = "0.10", default-features = false, features = ["llvm18-1"], optional = true }
+
+
+# optional rustyline-powered REPL polish (tab completion
+# against Vm globals + Lua syntax highlighting + native
+# `~/.luna_history`). Opt-in via `--features repl-line-editor`.
+#
+# Default `cargo install luna-jit` does NOT pull rustyline — lua.c's
+# REPL reading plain lines from stdin stays the baseline so the shipped binary stays small and the supply-chain
+# surface unchanged. luna-core remains 0-third-party-dep regardless;
+# this dep lives in luna-jit only.
+rustyline = { version = "18", optional = true }
+
+# The JIT, on 64-bit targets only: Cranelift has no 32-bit x86 backend,
+# and a 32-bit build of luna runs the interpreter alone.
+[target.'cfg(target_pointer_width = "64")'.dependencies]
+# `luna_jit_*` helper / TLS / enter_jit crate. luna-jit re-exports
+# `pub use luna_jit_helpers::*;` from `jit_backend/mod.rs` so
+# `crate::jit_backend::luna_jit_*` / `super::luna_jit_*` paths resolve.
+# luna-jit-llvm depends on this crate directly without pulling Cranelift.
+# `version = "= 4.0.2"` pin matches the workspace version so the
+# crates.io resolver picks the exact matching release when embedders
+# bypass the `path` fallback.
+luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 4.0.2" }
 
 # JIT backend. cranelift is the mainstream Rust codegen for embedded
 # JITs (wasmtime, cg_clif, etc.). aarch64 + x86-64 from day one,
@@ -79,16 +94,6 @@ target-lexicon = "0.13"
 # page protection for the baseline trace tier's code (cranelift-jit already
 # depends on it)
 region = "3"
-
-# optional rustyline-powered REPL polish (tab completion
-# against Vm globals + Lua syntax highlighting + native
-# `~/.luna_history`). Opt-in via `--features repl-line-editor`.
-#
-# Default `cargo install luna-jit` does NOT pull rustyline — lua.c's
-# REPL reading plain lines from stdin stays the baseline so the shipped binary stays small and the supply-chain
-# surface unchanged. luna-core remains 0-third-party-dep regardless;
-# this dep lives in luna-jit only.
-rustyline = { version = "18", optional = true }
 
 [features]
 # opt-in REPL polish. See the `rustyline` dep comment above.

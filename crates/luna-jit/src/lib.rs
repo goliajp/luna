@@ -44,6 +44,7 @@ pub use luna_core::*;
 pub use luna_jit_derive::{LuaUserdata, lua_userdata_methods};
 
 pub mod capi;
+#[cfg(target_pointer_width = "64")]
 pub mod jit_backend;
 pub mod lua_facade;
 
@@ -56,6 +57,7 @@ pub mod inspect {
     pub use luna_core::vm::inspect::*;
 }
 
+#[cfg(target_pointer_width = "64")]
 pub use jit_backend::engine::Engine;
 pub use lua_facade::{IntoLuaArgs, Lua, LuaFunction, LuaRoot, LuaSandboxBuilder, LuaTable};
 
@@ -64,6 +66,7 @@ pub use lua_facade::{IntoLuaArgs, Lua, LuaFunction, LuaRoot, LuaSandboxBuilder, 
 /// `use luna_jit::jit::TraceRecord`, `use luna_jit::jit::CraneliftBackend`,
 /// `use luna_jit::jit::cache_lookup_or_compile`, etc. resolve through
 /// this module.
+#[cfg(target_pointer_width = "64")]
 pub mod jit {
     pub use crate::jit_backend::{
         CraneliftBackend, cache_lookup_or_compile, enter_jit, try_compile_int_chunk,
@@ -156,6 +159,7 @@ pub fn install_default_jit(vm: &mut vm::Vm) {
 /// Concrete Cranelift backend installer. Always
 /// available; this is the install path `install_default_jit` lands
 /// on when `LUNA_JIT_BACKEND` is unset or `cranelift`.
+#[cfg(target_pointer_width = "64")]
 fn install_cranelift_jit(vm: &mut vm::Vm) {
     vm.install_jit_backend(jit_backend::CraneliftBackend, jit_backend::CraneliftBackend);
     // pair the CraneliftBackend trait impls with a fresh
@@ -163,6 +167,10 @@ fn install_cranelift_jit(vm: &mut vm::Vm) {
     // downcasts to the right concrete type.
     vm.install_jit_storage(jit_backend::storage::CraneliftJitStorage::default());
 }
+
+/// No JIT on a 32-bit target: the interpreter runs everything.
+#[cfg(not(target_pointer_width = "64"))]
+fn install_cranelift_jit(_vm: &mut vm::Vm) {}
 
 #[cfg(feature = "llvm-jit")]
 fn install_llvm_jit(vm: &mut vm::Vm) {

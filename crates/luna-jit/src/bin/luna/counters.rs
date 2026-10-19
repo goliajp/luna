@@ -11,7 +11,14 @@ pub(crate) fn append(vm: &Vm) {
         return;
     };
     let c = &vm.jit.counters;
-    let jt = luna_jit::jit_backend::trace::trace_codegen_count();
+    // a 32-bit build has no JIT, so no code of its
+    #[cfg(target_pointer_width = "64")]
+    let (jt, baseline) = (
+        luna_jit::jit_backend::trace::trace_codegen_count(),
+        luna_jit::jit_backend::trace::baseline_codegen_count(),
+    );
+    #[cfg(not(target_pointer_width = "64"))]
+    let (jt, baseline) = (0, 0);
     #[cfg(feature = "llvm-jit")]
     let llvm = luna_jit::jit_backend::trace::llvm_codegen_count();
     #[cfg(not(feature = "llvm-jit"))]
@@ -24,7 +31,7 @@ pub(crate) fn append(vm: &Vm) {
         c.dispatched,
         c.side_trace_compiled,
         jt,
-        luna_jit::jit_backend::trace::baseline_codegen_count(),
+        baseline,
         llvm,
         c.tiered_up,
         c.method_compiled,
