@@ -7,6 +7,12 @@ impl Heap {
     /// with it, as PUC sweeps them. Returns how many.
     #[inline(always)]
     pub(in crate::runtime) fn env51_sweep(&mut self, cur: *mut GcHeader, after: bool) -> i64 {
+        // an anchor is one of the io library's objects, with its environment
+        // in the class bits: the others are passed by without a search
+        // SAFETY: `cur` heads a live object
+        if unsafe { (*cur).cls } >> ENV_SHIFT == 0 {
+            return 0;
+        }
         match &self.env51_box {
             Some(e) if e.ats.contains(&cur) => self.env51_sweep_at(cur, after),
             _ => 0,
