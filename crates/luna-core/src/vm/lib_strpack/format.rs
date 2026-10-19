@@ -1,12 +1,13 @@
 //! Format-string parsing: options, sizes and alignment.
 
 use super::*;
+use crate::vm::c_abi;
 
 /// PUC's size limit: `INT_MAX` through 5.4 (`MAXSIZE`), `LUA_MAXINTEGER`
 /// in 5.5 (`MAX_SIZE`). It bounds numerals in formats and the packsize.
 pub(super) fn max_size(vm: &Vm) -> u64 {
     if vm.version() >= LuaVersion::Lua55 {
-        i64::MAX as u64
+        crate::vm::c_abi::MAX_SIZE_55
     } else {
         i32::MAX as u64
     }
@@ -85,13 +86,19 @@ fn getoption(
         b'B' => (KOption::Uint, 1),
         b'h' => (KOption::Int, 2),
         b'H' => (KOption::Uint, 2),
-        b'l' | b'j' => (KOption::Int, 8),
-        b'L' | b'J' | b'T' => (KOption::Uint, 8),
+        b'l' => (KOption::Int, c_abi::SIZEOF_LONG),
+        b'j' => (KOption::Int, 8),
+        b'L' => (KOption::Uint, c_abi::SIZEOF_LONG),
+        b'J' => (KOption::Uint, 8),
+        b'T' => (KOption::Uint, c_abi::SIZEOF_SIZE_T),
         b'f' => (KOption::Float, 4),
         b'n' | b'd' => (KOption::Number, 8),
         b'i' => (KOption::Int, getnumlimit(vm, fmt, pos, 4)?),
         b'I' => (KOption::Uint, getnumlimit(vm, fmt, pos, 4)?),
-        b's' => (KOption::Str, getnumlimit(vm, fmt, pos, 8)?),
+        b's' => (
+            KOption::Str,
+            getnumlimit(vm, fmt, pos, c_abi::SIZEOF_SIZE_T)?,
+        ),
         b'c' => {
             let size = getnum(vm, fmt, pos, u64::MAX);
             if size == u64::MAX {
