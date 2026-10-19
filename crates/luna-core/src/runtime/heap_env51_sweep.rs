@@ -15,19 +15,24 @@ impl Heap {
 
     #[inline(never)]
     fn env51_sweep_at(&mut self, cur: *mut GcHeader, after: bool) -> i64 {
-        let Some(e) = &mut self.env51_box else {
-            return 0;
-        };
-        let (w, mut n, mut freed) = (self.current_white, 0, 0);
-        let mut found = false;
-        let mut first = usize::MAX;
-        for g in e.gens.iter_mut() {
+        let w = self.current_white;
+        let (mut n, mut freed, mut found, mut first) = (0, 0, false, usize::MAX);
+        let gens = self.env51_box.as_ref().map_or(0, |e| e.gens.len());
+        for i in 0..gens {
+            // the records of this opening the sweep frees, each on its own
+            // as PUC frees them (an anchor names `newfenv`'s closure before
+            // its table, which it made first)
+            let mut each = [None; 2];
+            let Some(e) = &mut self.env51_box else {
+                return 0;
+            };
+            let g = &mut e.gens[i];
             let Some(a) = g.anchors.iter().find(|a| a.at == cur && a.before != after) else {
                 continue;
             };
             found = true;
-            first = first.min(a.recs[0]);
-            for r in a.recs {
+            first = first.min(a.recs[1]);
+            for (k, r) in a.recs.into_iter().enumerate() {
                 let p = &mut g.ph[r];
                 if p.dead {
                     continue;
@@ -37,21 +42,39 @@ impl Heap {
                 if is_white(f) && f & w == 0 {
                     p.dead = true;
                     p.hdr.flags = BLACK;
-                    freed += p.size as usize;
+                    each[k] = Some(r);
                 } else {
                     p.hdr.flags = w;
                 }
+            }
+            for r in each.into_iter().flatten() {
+                freed += self.env51_free_record(r);
             }
         }
         if !found {
             return 0;
         }
-        if freed > 0 {
-            self.acct_free(freed);
-        }
         #[cfg(feature = "gc-trace")]
         self.trace.line(format_args!("e51 {n} {freed} {first}"));
+        #[cfg(not(feature = "gc-trace"))]
+        let _ = (freed, first);
         n
+    }
+
+    /// Record `r` freed, its blocks one by one as PUC frees them (a
+    /// table's: `luaH_free` frees the node, then the array, then the
+    /// table). Returns the bytes.
+    fn env51_free_record(&mut self, r: usize) -> usize {
+        let s = self.sizes;
+        let parts: &[usize] = match r {
+            super::env51::E1 => &[s.node, 2 * s.tvalue, s.table],
+            super::env51::E2 | super::env51::E3 => &[s.node, s.table],
+            _ => &[s.c_closure(0)],
+        };
+        for &b in parts {
+            self.acct_free(b);
+        }
+        parts.iter().sum()
     }
 
     /// The object `h` is freed: no record is found by it any more.
