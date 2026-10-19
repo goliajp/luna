@@ -212,6 +212,32 @@ jobs:
         run: cargo build -p luna-core --target wasm32-wasip1 --release
 
   # ─────────────────────────────────────────────────────────────────
+  # 32-bit x86 Linux: luna-core's tests, and the luna CLI, which has no
+  # JIT there (Cranelift has no 32-bit x86 backend) and runs the
+  # interpreter. The C parts build with gcc-multilib.
+  # ─────────────────────────────────────────────────────────────────
+  i686:
+    name: i686-unknown-linux-gnu — luna-core tests, luna CLI
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_RELEASE_LTO: "false"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-unknown-linux-gnu
+      - name: apt-get install gcc-multilib
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib
+      - name: cargo test -p luna-core --target i686-unknown-linux-gnu --release
+        run: cargo test -p luna-core --target i686-unknown-linux-gnu --release
+      - name: cargo build -p luna-jit --bin luna --target i686-unknown-linux-gnu --release
+        run: cargo build -p luna-jit --bin luna --target i686-unknown-linux-gnu --release
+      - name: the luna CLI runs
+        run: |
+          out=$(echo 'print(_VERSION, 1 + 2, #string.rep("x", 10))' | target/i686-unknown-linux-gnu/release/luna -)
+          test "$out" = "$(printf 'Lua 5.5\t3\t10')"
+
+  # ─────────────────────────────────────────────────────────────────
   # msrv: the workspace declares rust-version = "1.96"; build every
   # target on exactly that toolchain so the declaration can fail.
   # ─────────────────────────────────────────────────────────────────
