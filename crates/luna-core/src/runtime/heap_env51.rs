@@ -81,6 +81,8 @@ pub(crate) struct Env51 {
     owners: Vec<(*mut GcHeader, u8)>,
     /// every anchor's object, for a sweep to pass the others by quickly
     ats: Vec<*mut GcHeader>,
+    /// the key of the io library's tables' one node, "__close"
+    close: *mut GcHeader,
 }
 
 impl Env51 {
@@ -161,6 +163,7 @@ impl Heap {
                 package: ptr::null_mut(),
                 owners: Vec::new(),
                 ats: Vec::new(),
+                close: ptr::null_mut(),
             }));
         }
         self.env51_box.as_deref_mut().expect("made above")
@@ -261,13 +264,6 @@ impl Heap {
                 e.owners.push((h, (e.gens.len() - 1) as u8));
             }
         }
-    }
-
-    /// The pointer a marker reaches the records through.
-    pub(super) fn env51_ptr(&self) -> *const Env51 {
-        self.env51_box
-            .as_deref()
-            .map_or(ptr::null(), |e| e as *const Env51)
     }
 }
 
