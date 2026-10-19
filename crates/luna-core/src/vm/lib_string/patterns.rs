@@ -1,7 +1,7 @@
 //! Pattern-based string functions: find, match, gmatch and gsub on top of
 //! src/pattern.rs.
 
-use super::posrelat;
+use super::{posrelat, start_pos};
 use crate::pattern::{self, CapValue, Flavor, MatchState, PatError};
 use crate::runtime::{Gc, LuaStr, Value};
 use crate::version::LuaVersion;
@@ -106,7 +106,7 @@ fn find_aux(vm: &mut Vm, fs: u32, nargs: u32, find: bool) -> Result<u32, LuaErro
     let p = argcheck::check_string(vm, a, 1)?;
     let (src, pat) = (s.as_bytes(), p.as_bytes());
     let ls = src.len();
-    let init = posrelat(argcheck::opt_integer(vm, a, 2, 1)?, ls);
+    let init = posrelat(start_pos(v, argcheck::opt_integer(vm, a, 2, 1)?), ls);
     let init = if v == LuaVersion::Lua51 {
         // 5.1 clamps a start past the end instead of failing
         (init - 1).clamp(0, ls as i64) as usize
@@ -199,7 +199,8 @@ pub(super) fn s_gmatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // the start position arrived in 5.4
     let init = if vm.version() >= LuaVersion::Lua54 {
         let ls = s.len() as i64;
-        let i = posrelat(argcheck::opt_integer(vm, a, 2, 1)?, s.len()).max(1) - 1;
+        let i = argcheck::opt_integer(vm, a, 2, 1)?;
+        let i = posrelat(start_pos(LuaVersion::Lua54, i), s.len()).max(1) - 1;
         i.min(ls + 1)
     } else {
         0

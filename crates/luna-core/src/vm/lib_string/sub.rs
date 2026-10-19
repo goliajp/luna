@@ -5,7 +5,7 @@ use super::*;
 pub(super) fn s_sub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let s = argcheck::check_string(vm, a, 0)?;
-    let i = argcheck::check_integer(vm, a, 1)?;
+    let i = start_pos(vm.version(), argcheck::check_integer(vm, a, 1)?);
     let j = argcheck::opt_integer(vm, a, 2, -1)?;
     // `lua_pushlstring`, checked for as PUC checks
     vm.api_check_before()?;
