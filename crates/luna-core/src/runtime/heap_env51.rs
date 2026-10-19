@@ -34,9 +34,9 @@ pub(crate) const ENV_PROTO: u8 = 5;
 const PHANTOM: u8 = 0x40;
 
 // the records, in `Env51::ph`
-const E1: usize = 0;
-const E2: usize = 1;
-const E3: usize = 2;
+pub(super) const E1: usize = 0;
+pub(super) const E2: usize = 1;
+pub(super) const E3: usize = 2;
 const FCLOSE: usize = 3;
 const NOCLOSE: usize = 4;
 const PCLOSE: usize = 5;
@@ -144,9 +144,9 @@ impl Heap {
             ],
             io: [ptr::null_mut(); 2],
             anchors: [
-                anchor([E1, FCLOSE]),
-                anchor([E2, NOCLOSE]),
-                anchor([E3, PCLOSE]),
+                anchor([FCLOSE, E1]),
+                anchor([NOCLOSE, E2]),
+                anchor([PCLOSE, E3]),
             ],
             opened: false,
         })
