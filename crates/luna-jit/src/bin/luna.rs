@@ -292,6 +292,11 @@ fn main() {
                 false
             }
         };
+    // 5.1's `lua_cpcall` checks for a collection as `pmain` returns
+    // (`luaD_call`)
+    if opts.version == LuaVersion::Lua51 {
+        let _ = interp.vm.host_check_gc();
+    }
     if opts.profile {
         print_profile(&interp.vm);
     }

@@ -71,3 +71,20 @@ fn traceback_51(vm: &mut Vm, err: Value) -> Result<Value, LuaError> {
         .copied()
         .unwrap_or(Value::Nil))
 }
+
+/// 5.1's `lua_pushcfunction` of the handler in `docall` checks for a
+/// collection, the chunk `f` and its `args` on the stack.
+pub(super) fn check_handler_push(vm: &mut Vm, f: Value, args: &[Value]) -> Result<(), Value> {
+    if vm.version() != LuaVersion::Lua51 {
+        return Ok(());
+    }
+    let held: Vec<_> = std::iter::once(f)
+        .chain(args.iter().copied())
+        .map(|v| vm.pin_host(v))
+        .collect();
+    let checked = vm.host_api_check(true);
+    for t in held {
+        let _ = vm.unpin(t);
+    }
+    checked.map_err(|e| e.0)
+}
