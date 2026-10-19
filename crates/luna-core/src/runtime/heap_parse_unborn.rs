@@ -92,6 +92,47 @@ impl Heap {
         self.puc.unborn = rest;
     }
 
+    /// Move the object `h` on the list to just before `anchor`, where the
+    /// sweep reaches it right before `anchor`: 5.3's upvalues are not on
+    /// PUC's list but freed with the closure that holds them, before it,
+    /// and a load's closure is older than the upvalues it gets. Both are
+    /// near the head (made by the load that is finishing); `h` stays where
+    /// it is when it is not on the list or the sweep stands at it.
+    ///
+    /// # Safety
+    /// `h` and `anchor` head live objects of this heap.
+    pub(crate) unsafe fn link_before(&mut self, h: *mut GcHeader, anchor: *mut GcHeader) {
+        if h == anchor || h == self.sweep_prev {
+            return;
+        }
+        // SAFETY: the caller's contract; the links walked are the list's
+        unsafe {
+            if (*h).next == UNBORN || (*anchor).next == UNBORN {
+                return;
+            }
+            let mut link: *mut *mut GcHeader = ptr::addr_of_mut!(self.all);
+            while !(*link).is_null() && *link != h {
+                link = ptr::addr_of_mut!((**link).next);
+            }
+            if (*link).is_null() {
+                return;
+            }
+            *link = (*h).next;
+            let mut at: *mut *mut GcHeader = ptr::addr_of_mut!(self.all);
+            while !(*at).is_null() && *at != anchor {
+                at = ptr::addr_of_mut!((**at).next);
+            }
+            if (*at).is_null() {
+                // not found after all: back at the head
+                (*h).next = self.all;
+                self.all = h;
+                return;
+            }
+            (*h).next = anchor;
+            *at = h;
+        }
+    }
+
     /// How many objects are set aside, for [`Heap::flush_unborn`].
     pub(crate) fn unborn_len(&self) -> usize {
         self.puc.unborn.len()

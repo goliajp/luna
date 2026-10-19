@@ -89,6 +89,10 @@ impl Vm {
             for &uv in cl.upvals().iter().take(cl.proto.upvals.len()) {
                 let hdr = uv.as_ptr() as *mut crate::runtime::heap::GcHeader;
                 self.heap.acct_promote_obj(hdr, PucKind::Upval, s.upval);
+                if d == Dialect::L53 {
+                    // SAFETY: both are live objects of this heap
+                    unsafe { self.heap.link_before(hdr, cl.as_ptr() as *mut _) };
+                }
             }
         }
         self.heap.acct_block(buff, 0);
