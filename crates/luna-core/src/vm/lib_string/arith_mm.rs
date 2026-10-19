@@ -40,7 +40,7 @@ fn string_arith(
         // `tonum` pushed each converted operand
         vm.native_push(2);
         let r = match op {
-            Some(op) => arith_num(vm.version(), op, nx, ny).map_err(|msg| vm.plain_err(msg))?,
+            Some(op) => arith_num(vm.version(), op, nx, ny).map_err(|msg| vm.runerror_in_c(msg))?,
             // unary minus works on the second (duplicated) operand
             None => match ny {
                 Num::Int(i) => Value::Int(i.wrapping_neg()),

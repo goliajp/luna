@@ -36,7 +36,7 @@ impl Vm {
             let e = if positioned {
                 self.runerror("C stack overflow")
             } else {
-                self.plain_err("C stack overflow")
+                self.runerror_in_c("C stack overflow")
             };
             // the refused call keeps its level while its handler runs
             self.c_overflow_err = Some(e.0);
@@ -85,7 +85,13 @@ impl Vm {
         if !refused && !low && !(v >= LuaVersion::Lua54 && n + 1 >= MAX_C_DEPTH) {
             return Ok(());
         }
-        let e = self.plain_err("C stack overflow");
+        // `lua_resume`'s own refusal is `resume_error`, which checks for
+        // nothing; past it, `ccall`'s `luaE_checkcstack` raises
+        let e = if refused || low {
+            self.plain_err("C stack overflow")
+        } else {
+            self.runerror_in_c("C stack overflow")
+        };
         if v == LuaVersion::Lua51 || (v >= LuaVersion::Lua54 && !refused && !low) {
             self.set_coro_status(co, CoroStatus::Dead);
             if v >= LuaVersion::Lua54 {

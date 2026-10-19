@@ -10,6 +10,19 @@ impl Vm {
         self.runerror_conv(msg, 0, false)
     }
 
+    /// `luaG_runerror` where PUC's running call is a C function (luna's
+    /// native, or a C level luna has none for): no position, the check
+    /// for a collection made all the same.
+    pub(crate) fn runerror_in_c(&mut self, msg: &str) -> crate::vm::error::LuaError {
+        if let Some(e) = self.format_pushes(&[Some(0)]) {
+            return e;
+        }
+        if let Err(e) = self.runerror_checkpoint() {
+            return e;
+        }
+        self.plain_err(msg)
+    }
+
     /// [`Vm::runerror`] for a message PUC formats with `conv` conversions
     /// (see [`Vm::rt_errf_conv`]).
     pub(crate) fn runerror_conv(
