@@ -23,6 +23,12 @@ path = "src/bin/luna.rs"
 [lints]
 workspace = true
 
+# a full collection at every checkpoint: its own binary, built with the
+# feature that makes every checkpoint collect
+[[test]]
+name = "gc_checkpoints"
+required-features = ["gc-stress"]
+
 [build-dependencies]
 # compiles the C half of the C API (`csrc/`)
 cc = "1"
