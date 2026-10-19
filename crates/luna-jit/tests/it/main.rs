@@ -51,6 +51,7 @@ mod jit_dialect_layouts;
 mod jit_double_dialect_int_arith;
 mod jit_errno;
 mod jit_float_compare_nan;
+mod jit_handoff_roots;
 mod jit_off_switch;
 mod jit_storage_mismatch_no_abort;
 mod jit_table_const_operands;
