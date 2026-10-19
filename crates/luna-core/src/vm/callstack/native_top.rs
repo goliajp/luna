@@ -253,8 +253,9 @@ impl Vm {
         use crate::vm::exec::stack_size::{self, Grown};
         for part in parts {
             for (off, n) in part.map_or_else(Vec::new, |c| pushvfstring_checks(self.version(), c)) {
+                let grew = top + off + 1 + n >= stack_size::last(self.version(), self.stack_size);
                 match stack_size::check(self.version(), self.stack_size, top + off + 1, n) {
-                    Grown::Fits(s) => self.resize_stack(s),
+                    Grown::Fits(s) => self.regrow_stack(grew, s),
                     Grown::Overflow(s) => {
                         self.resize_stack(s);
                         self.overflow_top = Some(top + off + positioned);
