@@ -2,9 +2,8 @@
 //! run a metamethod execute here on locals, in a function of their own so
 //! that its register allocation does not depend on the rest of the loop.
 
-use super::for_loop::int_for_count;
-use super::num_double as dbl;
 use super::*;
+use super::{for_loop::int_for_count, num_double as dbl};
 use crate::runtime::value::tag;
 use call_fast::Returned;
 #[cfg(all(any(target_arch = "x86_64", target_arch = "x86"), not(miri)))]
@@ -15,12 +14,13 @@ use fast_arith::{
 };
 use index_fast::self_key;
 use num_words::put_words;
-#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86"), not(miri)))]
-use num_words::raw_word;
-#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86"), not(miri)))]
-use num_words::tag_word;
 #[cfg(all(target_arch = "aarch64", not(miri)))]
 use num_words::{first, raw_tag_words3, raw_words3};
+#[cfg(all(
+    any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86"),
+    not(miri)
+))]
+use num_words::{raw_word, tag_word};
 
 mod arm_helpers;
 mod arms_arith;
