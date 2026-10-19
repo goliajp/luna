@@ -82,7 +82,7 @@ impl Heap {
         while let Some(e) = rest.iter().position(|&c| c == b'%') {
             st.push(Value::Str(self.try_intern(&rest[..e])?));
             let spec = rest.get(e + 1).copied().unwrap_or(0);
-            let v = match (spec, args.next()) {
+            let v = match (spec, if spec == b'%' { None } else { args.next() }) {
                 (b'%', _) => Value::Str(self.try_intern(b"%")?),
                 (_, Some(FmtArg::S(s))) => Value::Str(self.try_intern(s)?),
                 (_, Some(&FmtArg::C(c))) => {
