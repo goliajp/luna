@@ -102,7 +102,7 @@ impl Vm {
         self.replay_left(&r, false);
         if replayed.is_ok() {
             // `luaD_pcall` shrinks the stack, then the parser's buffers go
-            self.shrink_load_error();
+            self.shrink_caught_error();
             self.replay_end(&r);
         }
         self.parse_scratch = parsed;

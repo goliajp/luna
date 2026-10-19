@@ -126,8 +126,9 @@ impl Vm {
         self.shrink_levels(at, inuse, u32::from(at == Shrink::Caught));
     }
 
-    /// `luaD_pcall` catching the error of a load, whose call is current.
-    pub(super) fn shrink_load_error(&mut self) {
+    /// `luaD_pcall` catching an error, the level it is made from current in
+    /// luna as in PUC (a load's, a finalizer's).
+    pub(super) fn shrink_caught_error(&mut self) {
         let inuse = self.stack_in_use();
         self.shrink_levels(Shrink::Caught, inuse, 0);
     }

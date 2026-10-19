@@ -214,6 +214,10 @@ impl Vm {
         let Err(e) = r else {
             return Ok(());
         };
+        // `luaD_pcall` shrinks the stack it caught the error on
+        if self.version >= LuaVersion::Lua52 {
+            self.shrink_caught_error();
+        }
         if self.version >= LuaVersion::Lua54 {
             self.warn_error("__gc", e.0);
             return Ok(());
@@ -235,10 +239,9 @@ impl Vm {
             Value::Str(s) => s.as_bytes().to_vec(),
             _ => b"no message".to_vec(),
         };
-        let mut text = b"error in __gc metamethod (".to_vec();
-        text.extend_from_slice(&msg);
-        text.push(b')');
-        let v = match self.alloc_str(&text) {
+        // made piece by piece, as `luaO_pushfstring` makes it
+        let fmt = b"error in __gc metamethod (%s)";
+        let v = match self.pushfstring(fmt, &[crate::runtime::puc_fmt::FmtArg::S(&msg)]) {
             Ok(s) => Value::Str(s),
             Err(e) => e.0,
         };
