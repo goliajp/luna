@@ -297,7 +297,10 @@ impl Vm {
     }
 
     /// [`Vm::try_new_minimal_with_mem`] with string hashing seeded by `seed`
-    /// (see [`Vm::new_minimal_with_hash_seed`]).
+    /// rather than a seed of its own, as [`Vm::new_minimal_with_hash_seed`]:
+    /// with an allocator that behaves the same each run, two runs of a
+    /// program lay out their tables, and so iterate them, the same way.
+    /// `None` when `mem` cannot give the Vm the memory it starts with.
     pub fn try_new_minimal_with_mem_and_seed(
         version: LuaVersion,
         mem: crate::runtime::mem::MemOwner,
