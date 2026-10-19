@@ -35,11 +35,6 @@ impl Opener {
         Value::LightUserdata(vm.heap.env51_born(3 + k) as *const ())
     }
 
-    /// Whether `v` stands for one of the records.
-    pub(crate) fn is_phantom(v: Value) -> bool {
-        matches!(v, Value::LightUserdata(_))
-    }
-
     /// The class bits of the environment `env` (none: the globals).
     fn bits_of(&self, vm: &Vm, env: Option<Value>) -> u8 {
         match env {

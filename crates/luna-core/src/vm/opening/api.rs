@@ -46,7 +46,11 @@ impl Opener {
             // no metatable, so no `__newindex`: the store `luaV_settable`
             // makes then
             Value::Table(tt) if tt.metatable().is_none() => vm.raw_set(tt, key, v)?,
-            _ if Opener::is_phantom(t) => {}
+            Value::LightUserdata(p) => {
+                if let (Value::Str(s), Value::LightUserdata(c)) = (key, v) {
+                    vm.heap.env51_set_key(p as *mut _, s, c as *mut _);
+                }
+            }
             _ => vm.host_set_index(t, key, v)?,
         }
         self.pop(vm, 1);

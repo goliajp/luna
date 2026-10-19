@@ -51,6 +51,10 @@ impl Marker {
                     }
                 }
             }
+            // a table's one node: its key, then its value (`kids`)
+            if p.kids[0] != NONE && !e.close.is_null() {
+                self.header(e.close);
+            }
             if p.env != 0 {
                 // a closure's environment, its own opening's E1
                 let e1 = &g.ph[E1].hdr as *const GcHeader as *mut GcHeader;
@@ -60,6 +64,27 @@ impl Marker {
                 if k != NONE {
                     self.header(&g.ph[usize::from(k)].hdr as *const GcHeader as *mut GcHeader);
                 }
+            }
+        }
+    }
+}
+
+impl Heap {
+    /// The pointer a marker reaches the records through.
+    pub(in crate::runtime::heap) fn env51_ptr(&self) -> *const Env51 {
+        self.env51_box
+            .as_deref()
+            .map_or(ptr::null(), |e| e as *const Env51)
+    }
+
+    /// `lua_setfield` of `key` and the record `v` (a closure) into the
+    /// record `t`, one of the io library's tables: 5.1's `luaC_barriert`.
+    pub(crate) fn env51_set_key(&mut self, t: *mut GcHeader, key: Gc<LuaStr>, v: *mut GcHeader) {
+        self.env51_records().close = key.as_ptr() as *mut GcHeader;
+        // SAFETY: records live as long as the heap; only flags are read
+        unsafe {
+            if is_white((*v).flags) {
+                self.barrier_back_obj(t);
             }
         }
     }
