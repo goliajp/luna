@@ -107,7 +107,10 @@ impl Heap {
             }
         }
         self.strt.sort_dead(size.max(1));
-        // each bucket's from the head of its chain
+        // each bucket's from the head of its chain (the trace's order)
+        if !cfg!(feature = "gc-trace") {
+            return;
+        }
         let dead = &mut self.strt.dead;
         let mut i = 0;
         while i < dead.len() {

@@ -5,6 +5,10 @@
 //! head of its new chain. A string's place is a number in its header
 //! (`LuaStr::chain`), the newest of a chain highest; a bucket that runs
 //! out of numbers is numbered again from 1.
+//!
+//! The order is seen only in the accounting trace: the string sweep takes
+//! a whole bucket in a step, so what a step frees, and the count a program
+//! reads, do not depend on it. Only a `gc-trace` build keeps it.
 
 use super::*;
 
@@ -189,7 +193,8 @@ impl Heap {
     /// grown on the way (`grow_from`): 5.1 puts it in, then resizes, 5.2
     /// resizes first.
     pub(crate) fn strt_enter(&mut self, h: *mut GcHeader) {
-        if !matches!(self.table_dialect, Dialect::L51 | Dialect::L52) {
+        if !cfg!(feature = "gc-trace") || !matches!(self.table_dialect, Dialect::L51 | Dialect::L52)
+        {
             return;
         }
         let p = h as *mut LuaStr;
@@ -216,7 +221,7 @@ impl Heap {
     /// PUC's string table resized from `from` buckets with no new string
     /// on the way (a shrink, or a string luna has no object for).
     pub(crate) fn strt_resized(&mut self, from: usize) {
-        if matches!(self.table_dialect, Dialect::L51 | Dialect::L52) {
+        if cfg!(feature = "gc-trace") && matches!(self.table_dialect, Dialect::L51 | Dialect::L52) {
             self.strt.grow_from = None;
             self.strt_reorder(from, self.puc.strt_size, std::ptr::null_mut());
         }
@@ -224,7 +229,9 @@ impl Heap {
 
     /// The table grew from `from` buckets for a string about to enter.
     pub(crate) fn strt_grew(&mut self, from: usize) {
-        self.strt.grow_from = Some(from);
+        if cfg!(feature = "gc-trace") {
+            self.strt.grow_from = Some(from);
+        }
     }
 
     /// A string luna has no object for entered: a growth on its way is
