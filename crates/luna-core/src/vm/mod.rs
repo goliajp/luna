@@ -2,6 +2,7 @@
 
 pub(crate) mod argcheck;
 pub mod builtins;
+pub(crate) mod c_abi;
 pub(crate) mod callstack;
 pub(crate) mod cfmt;
 pub mod dump;
