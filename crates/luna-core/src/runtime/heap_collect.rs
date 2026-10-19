@@ -358,6 +358,7 @@ impl Heap {
         });
     }
 
+    #[cfg(any(feature = "gc-stress", feature = "gc-verify"))]
     /// Whether `h` is an object of this heap the collector keeps: on the
     /// object lists, and not one a pending sweep frees. Walks every object;
     /// for checks tests turn on.
