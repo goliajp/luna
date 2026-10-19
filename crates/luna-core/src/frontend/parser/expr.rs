@@ -115,11 +115,10 @@ impl<'s> Parser<'s> {
         // (which already enters). Keeping the entry out lets errors.lua's
         // `testrep("(")` (paren-only nesting) hit the same 200-level wall as
         // `{`/`,` nesting.
-        // PUC 5.1–5.3 `suffixedexp` captured the line of the *primary*
+        // PUC 5.2–5.3 `suffixedexp` captured the line of the *primary*
         // expression once and pinned every chained call/method to it
-        // (`a\n(...)` → error reports on `a`'s line); 5.4 switched to
-        // tracking the current line at each suffix and reports on the `(`
-        // line instead. errors.lua's `lineerror` covers both:
+        // (`a\n(...)` → error reports on `a`'s line); 5.1's `funcargs` and
+        // 5.4 on take the line of the token the arguments open with. errors.lua's `lineerror` covers both:
         //   - 5.3:  `lineerror([[a\n(\n23)]], 1)` — expects `a`'s line
         //   - 5.4+: `lineerror([[a\n(...)\n23)]], 2)` — expects `(`'s line
         let primary_line = self.tok.line;
@@ -142,7 +141,7 @@ impl<'s> Parser<'s> {
                 Token::Colon => {
                     self.advance()?;
                     let method = self.expect_name()?;
-                    let line = if self.version <= LuaVersion::Lua53 {
+                    let line = if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
                         primary_line
                     } else {
                         self.tok.line
@@ -156,7 +155,7 @@ impl<'s> Parser<'s> {
                     });
                 }
                 Token::LParen | Token::Str(_) | Token::LBrace => {
-                    let line = if self.version <= LuaVersion::Lua53 {
+                    let line = if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
                         primary_line
                     } else {
                         self.tok.line

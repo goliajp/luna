@@ -34,8 +34,9 @@ impl Parser<'_> {
     pub(super) fn call_args(&mut self) -> Result<List<ExprId>, SyntaxError> {
         match &self.tok.tok {
             Token::LParen => {
-                // 5.1 rejects a call paren on a new line (removed in 5.2)
-                if self.version == LuaVersion::Lua51 && self.tok.line != self.prev_line {
+                // 5.1 rejects a call paren on a line after the one the
+                // token before it ended on (removed in 5.2)
+                if self.version == LuaVersion::Lua51 && self.tok.line != self.last_line {
                     return Err(self.error("ambiguous syntax (function call x new statement)"));
                 }
                 let line = self.tok.line;

@@ -49,7 +49,8 @@ impl Compiler<'_> {
         self.set_freereg(base);
         self.reserve(2)?;
         let c = self.sym_const(method.sym);
-        self.last_line = line;
+        // `luaK_self` is coded once the method's name is read
+        self.last_line = method.line;
         if c <= 0xFF {
             self.emit(Inst::iabc(Op::SelfOp, base, o, c, true));
         } else if self.version >= LuaVersion::Lua55 {
