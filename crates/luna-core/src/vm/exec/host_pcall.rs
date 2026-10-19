@@ -228,6 +228,20 @@ impl Vm {
         }
         Ok(())
     }
+
+    /// [`Vm::enter_pcall_level`] for a protected call whose own call may be
+    /// refused at the C level limit: PUC's `luaD_pcall` is in place by then
+    /// and catches the refusal, so the level is taken anyway, for the
+    /// continuation pushed next to give back; the error is the call's.
+    pub(super) fn refusable_level(&mut self, level: bool) -> Result<(), LuaError> {
+        let entered = self.enter_pcall_level(level);
+        if entered.is_err() && level {
+            self.g.nccalls += 1;
+            // its handler runs above the level the continuation holds
+            self.c_overflow_err = None;
+        }
+        entered
+    }
 }
 
 /// `f`, a native of luna's own: no function of PUC's.

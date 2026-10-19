@@ -39,7 +39,12 @@ impl Vm {
     /// PUC calls a C function one level above the running one, which luna
     /// does not call (a `luaL_Buffer` box's `__close`).
     pub(crate) fn note_c_call(&mut self) {
-        let n = self.ci_in_use() + 1;
+        self.note_c_calls(1);
+    }
+
+    /// PUC has `n` C functions' `CallInfo`s above the running one.
+    pub(crate) fn note_c_calls(&mut self, n: u32) {
+        let n = self.ci_in_use() + n;
         self.extend_ci_to(n);
     }
 

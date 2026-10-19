@@ -53,7 +53,12 @@ impl Vm {
         // the room first: once the level is taken nothing may fail before
         // the continuation that gives it back is pushed
         self.pcall_room(func_slot + 1, nargs, shift)?;
-        self.enter_pcall_level(level)?;
+        // its `CallInfo` is there when its call is refused at the C level
+        // limit
+        if lua {
+            self.note_c_calls(1);
+        }
+        let entered = self.refusable_level(level);
         let callee = self.shift_callee(func_slot + 1, nargs, shift);
         let ci_top = self.c_frame_top(by, func_slot, nargs);
         frames_push_sync(
@@ -70,9 +75,7 @@ impl Vm {
                 nresults,
             }),
         );
-        if lua {
-            self.note_call_level();
-        }
+        entered?;
         // call f with the remaining args, asking for all results; a yield or
         // error inside propagates with the continuation kept on the stack
         // (caught by `unwind` / preserved across a yield).
@@ -154,7 +157,7 @@ impl Vm {
         // the room first, while msgh is still on the stack: nothing
         // allocates once its slot is reused, until the continuation holds it
         self.pcall_room(func_slot + 1, nfargs + 1, shift)?;
-        self.enter_pcall_level(level)?;
+        let entered = self.refusable_level(level);
         // layout: [xpcall@func_slot, f@+1, msgh@+2, a1@+3, ...]. Stash msgh and
         // close its gap so f's args become [f@+1, a1@+2, ...].
         let handler = self.stack[(func_slot + 2) as usize];
@@ -185,6 +188,7 @@ impl Vm {
                 nresults,
             }),
         );
+        entered?;
         self.begin_call(callee, Some(nfargs), -1, true)?;
         Ok(true)
     }
