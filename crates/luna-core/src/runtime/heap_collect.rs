@@ -157,6 +157,15 @@ impl Heap {
     /// The `origweak` split matters because finalizer resurrection can
     /// re-trace fresh proto/closure → new weak tables joining `m.weak`;
     /// PUC limits the late value-clear to those new heads.
+    /// Whether the object of `h` is one the sweep after the atomic phase
+    /// just run frees: white, but not the white objects made since are.
+    pub(crate) fn dead_after_atomic(&self, h: *const GcHeader) -> bool {
+        // SAFETY: the caller's object is allocated until that sweep; only
+        // its flag byte is read
+        let f = unsafe { (*h).flags };
+        is_white(f) && f & self.current_white == 0
+    }
+
     pub(super) fn atomic_tail(&mut self, m: &mut Marker, run: Option<Running>) -> i64 {
         let early_is_dead = |v: Value| -> bool {
             let h = match v {

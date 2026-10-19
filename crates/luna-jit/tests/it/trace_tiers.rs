@@ -61,6 +61,28 @@ fn moving_traces_partway_keeps_the_results_under_other_seeds() {
     assert!(seen.tiered_up > 0, "no trace moved to Cranelift");
 }
 
+/// A loop recorded through `loadstring`, whose load collects (5.1's
+/// chunk-name fixture): the recording held the prototype the iteration
+/// before had loaded, which the collection freed, and a trace later
+/// reached it through the freed memory. Over many Vms in one process, one
+/// after another as the corpus runs them, the freed prototypes' memory
+/// comes back to new ones and the run crashed.
+#[test]
+fn a_recording_through_a_load_that_collects_holds_nothing_freed() {
+    let f = fixtures("5.1")
+        .into_iter()
+        .find(|f| f.ends_with("815_debug_chunkid.lua"))
+        .expect("the fixture");
+    let source = std::fs::read(&f).expect("read fixture");
+    for seed in 1..=64 {
+        let want = run(&mut interp_seeded(LuaVersion::Lua51, seed), &source);
+        for hot in [1, 3] {
+            let mut vm = tiered_seeded(LuaVersion::Lua51, seed, hot, TraceTier::Auto, 37);
+            assert_eq!(run(&mut vm, &source), want, "seed {seed}, hot {hot}");
+        }
+    }
+}
+
 /// `src` returns a function; run it under the interpreter and under `vm`
 /// `calls` times, comparing every result.
 fn compare_calls(vm: &mut Vm, src: &str, calls: usize) {

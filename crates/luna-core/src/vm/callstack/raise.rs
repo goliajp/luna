@@ -263,6 +263,7 @@ impl Vm {
         let mut dead = w.iter().skip(2).map(|x| x.1);
         self.errored_natives
             .retain(|_| !dead.next().unwrap_or(false));
+        self.forget_dead_recording();
     }
 }
 
