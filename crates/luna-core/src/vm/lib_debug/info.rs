@@ -46,12 +46,17 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     } else {
         Some(check_int(vm, a, arg)?)
     };
+    // `lua_getinfo` makes the set of lines only for 'L'
+    let want_lines = options.contains(&b'L');
+    let base = vm.lib_roots.len();
     let (ar, activelines) = match level {
         None => {
-            // the options with '>' prepended stay pushed
-            vm.native_push(1);
+            // `lua_pushfstring(L, ">%s", options)`, which stays pushed
+            let fmt = crate::runtime::puc_fmt::FmtArg::S(&options);
+            vm.api_pushing(|vm| vm.pushfstring(b">%s", &[fmt]))?;
             let ar = vm.function_ar(subject);
-            let lines = try_activelines(vm, subject)?;
+            let lines =
+                lines_if(vm, want_lines, subject).inspect_err(|_| vm.lib_roots.truncate(base))?;
             (ar, lines)
         }
         Some(level) => {
@@ -81,7 +86,7 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
                 Some(Some((i, _))) => {
                     let ar = vm.level_ar(&ts, i);
                     drop(ts);
-                    let lines = try_activelines(vm, ar.func)?;
+                    let lines = lines_if(vm, want_lines, ar.func)?;
                     (ar, lines)
                 }
             }
@@ -100,10 +105,21 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     };
     let allowed = valid_options(v);
     if checked.iter().any(|c| !allowed.contains(c)) {
+        vm.lib_roots.truncate(base);
         return Err(arg_error(vm, arg + 2, "invalid option"));
     }
-    let t = info_table(vm, &options, &ar, activelines)?;
-    vm.nat_ret(fs, &[Value::Table(t)])
+    let t = info_table(vm, &options, &ar, activelines);
+    vm.lib_roots.truncate(base);
+    vm.nat_ret(fs, &[Value::Table(t?)])
+}
+
+/// [`try_activelines`] when `want`, else nothing.
+fn lines_if(vm: &mut Vm, want: bool, f: Value) -> Result<Value, LuaError> {
+    if want {
+        try_activelines(vm, f)
+    } else {
+        Ok(Value::Nil)
+    }
 }
 
 /// PUC `collectvalidlines`: the lines holding an instruction, as a set; nil
