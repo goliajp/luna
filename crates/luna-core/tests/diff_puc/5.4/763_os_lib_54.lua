@@ -7,7 +7,8 @@ local ref = os.time{year = 2000, month = 1, day = 1, hour = 0}
 p("time missing", pcall(os.time, {}))
 p("time year bound", pcall(os.time, {year = 2147483648 + 1900, month = 1, day = 1}))
 p("time day bound", pcall(os.time, {year = 2000, month = 1, day = 2147483648}))
-p("time month big", os.time{year = 2000, month = 1 + 12 * 1000, day = 1, hour = 0} - ref)
+-- year 3000 is past a 32-bit time_t, which cannot represent it
+p("time month big", pcall(function() return os.time{year = 2000, month = 1 + 12 * 1000, day = 1, hour = 0} - ref end))
 p("time not integer", pcall(os.time, {year = 2000, month = 1.5, day = 1}))
 p("date unrepresentable", pcall(os.date, "!%Y", 2^62))
 p("date *t", (function() local t = os.date("!*t", 951782400) return t.year, t.month, t.day, t.yday, t.wday, t.isdst end)())

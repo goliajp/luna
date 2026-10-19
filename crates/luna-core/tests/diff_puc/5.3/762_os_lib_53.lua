@@ -7,8 +7,9 @@ local function clean(s) return (tostring(s):gsub("[^%s]*:%d+: ", "POS: ")) end
 local function p(name, ...) local t = {...}; for i = 1, select("#", ...) do t[i] = clean(t[i]) end print(name, select("#", ...), table.concat(t, " ")) end
 local t0 = 86400 * 45 + 3600 * 15 + 61
 p("date C99", os.date("!%a %A %b %B %c|%C %d %D %e %F %g %G %h %H %I %j %m %M %n %p %r %R %S %t %T %u %U %V %w %W %x %X %y %Y %%", t0))
+-- year 9999 is past a 32-bit time_t, out of bounds there
 for _, t in ipairs{0, -1, 951782400, 1234567890, 253402300799, 1609459200, 1293753600} do
-  p("date " .. t, os.date("!%Y-%m-%d %j %U %W %V %G %g %u %w", t))
+  p("date " .. t, pcall(os.date, "!%Y-%m-%d %j %U %W %V %G %g %u %w", t))
 end
 p("date unrepresentable", pcall(os.date, "!%Y", 2^62))
 p("date float time", pcall(os.date, "!%Y", 1.5))
