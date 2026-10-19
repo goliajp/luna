@@ -2,7 +2,7 @@
 //! recorded as garbage, unless the trace leaves with it.
 
 use super::*;
-use crate::runtime::heap::GhostRef;
+use crate::runtime::heap::{GcHeader, GhostRef};
 use crate::runtime::table::new_table_sizes;
 
 /// The records of PUC's objects a running trace stands for, while luna
@@ -103,8 +103,7 @@ impl Vm {
         let g = self.jit_ghosts().sunk[site].take();
         if let (Some(g), Some(t)) = (g, t) {
             self.heap.ghost_table_taken(g);
-            self.heap
-                .set_counted(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+            self.heap.set_counted(t.as_ptr() as *mut GcHeader);
         }
     }
 
@@ -116,6 +115,34 @@ impl Vm {
         for g in &mut self.jit.ghosts {
             g.sunk.fill(None);
             g.accum = None;
+        }
+    }
+}
+
+impl Vm {
+    /// After a collection's atomic phase, before its sweep: a trace being
+    /// recorded (a native it called collects) that went through an object
+    /// the collection found dead, a prototype a load it called freed, is
+    /// dropped, to be recorded again from the start.
+    pub(crate) fn forget_dead_recording(&mut self) {
+        let Some(rec) = self.jit.active_trace.as_deref() else {
+            return;
+        };
+        let h = |p: crate::runtime::Gc<crate::runtime::Proto>| p.as_ptr() as *const GcHeader;
+        let protos = std::iter::once(rec.head_proto)
+            .chain(rec.ops.iter().map(|o| o.proto))
+            .chain(rec.side_trace_parent.map(|p| p.0))
+            .chain(rec.retfs.iter().map(|r| r.proto))
+            .chain(rec.downrec_close.as_ref().map(|d| d.target_proto));
+        let key = rec.index_key.map(|s| s.as_ptr() as *const GcHeader);
+        let dead = protos
+            .map(h)
+            .chain(key)
+            .any(|o| self.heap.dead_after_atomic(o));
+        if dead {
+            self.jit.active_trace = None;
+            self.jit.counters.aborted += 1;
+            self.jit.counters.bump_close_cause("collection");
         }
     }
 }
