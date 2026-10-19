@@ -231,3 +231,48 @@ fn count_dispatchable_split(
     walk(cl.proto, &mut d, &mut nd);
     (d, nd)
 }
+
+/// A side trace runs only from its parent's exit: the interpreter never
+/// enters one at its head pc. Tiering a side trace up reads its parent's
+/// function, which only that keeps alive.
+#[test]
+fn no_side_trace_is_entered_at_its_head() {
+    use luna_jit::runtime::function::Proto;
+    use luna_jit::runtime::heap::Gc;
+    fn walk(proto: Gc<Proto>, sides: &mut Vec<(u32, bool)>) {
+        for ct in proto.traces.borrow().iter() {
+            if ct.dispatch_off_reason == Some("side-trace") {
+                assert!(
+                    !luna_jit::vm::Vm::trace_admits(ct, ct.head_pc, false),
+                    "a side trace at pc {} is entered at its head",
+                    ct.head_pc
+                );
+                sides.push((ct.head_pc, ct.downrec_link.is_some()));
+            }
+        }
+        for inner in proto.protos.iter() {
+            walk(*inner, sides);
+        }
+    }
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
+    vm.set_jit_enabled(false);
+    vm.set_trace_jit_enabled(true);
+    let cl = vm
+        .load(
+            b"local function f(n)
+                  if n < 2 then return n end
+                  return f(n-1) + f(n-2)
+              end
+              local s = 0
+              for i = 1, 3000 do if i % 3 == 0 then s = s + 2 else s = s + 1 end end
+              return f(28) + s",
+            b"=sides",
+        )
+        .unwrap();
+    vm.call_value(luna_jit::runtime::Value::Closure(cl), &[])
+        .unwrap();
+    let mut sides = Vec::new();
+    walk(cl.proto, &mut sides);
+    eprintln!("side traces (head pc, closes by down-recursion): {sides:?}");
+    assert!(!sides.is_empty(), "no side trace was wired");
+}
