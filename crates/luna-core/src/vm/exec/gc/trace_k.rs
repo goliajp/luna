@@ -10,8 +10,17 @@ impl Vm {
     #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(in crate::vm::exec) fn trace_checkpoint(&mut self) {
         // the current line of level 0 (`lua_getstack(L, 0)`): none for a C
-        // function or a function just entered
-        let ts = self.thread_stack(None);
+        // function or a function just entered; the levels below are not
+        // looked at, which a deep stack would make every checkpoint pay for
+        let ts = crate::vm::callstack::ThreadStack::with_levels(
+            self.version <= LuaVersion::Lua51,
+            &self.frames,
+            &self.stack,
+            self.top,
+            &self.running_natives[self.natives_base..],
+            None,
+            1,
+        );
         let line = match ts.levels.first() {
             _ if self.heap.trace.in_c => 0,
             Some(&crate::vm::callstack::DbgKind::Lua(fi))

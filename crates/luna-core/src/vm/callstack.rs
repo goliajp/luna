@@ -114,12 +114,28 @@ impl<'a> ThreadStack<'a> {
         acts: &'a [NativeAct],
         yield_slot: Option<u32>,
     ) -> Self {
-        let mut levels = Vec::with_capacity(frames.len() + acts.len() + 1);
+        Self::with_levels(v51, frames, stack, top, acts, yield_slot, usize::MAX)
+    }
+
+    /// [`ThreadStack::new`] with its first `limit` levels only.
+    pub(crate) fn with_levels(
+        v51: bool,
+        frames: &'a [CallFrame],
+        stack: &'a [Value],
+        top: u32,
+        acts: &'a [NativeAct],
+        yield_slot: Option<u32>,
+        limit: usize,
+    ) -> Self {
+        let mut levels = Vec::with_capacity((frames.len() + acts.len() + 1).min(limit));
         if let Some(fs) = yield_slot {
             levels.push(DbgKind::C(CLevel::Yield(fs)));
         }
         let mut k = acts.len();
         for p in (0..=frames.len()).rev() {
+            if levels.len() >= limit {
+                break;
+            }
             while k > 0 && acts[k - 1].depth() as usize == p {
                 k -= 1;
                 if !is_host_call(Value::Native(acts[k].nc)) {
