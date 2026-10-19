@@ -149,12 +149,13 @@ impl Vm {
             let mut m = self.heap.gc_begin_full();
             self.mark_roots(&mut m, false);
             self.watch_errors();
-            let freed = self.heap.gc_end_full(m);
-            // 5.3 shrinks the threads as the cycle traverses them, the rest
-            // after; 5.2's single steps did both
+            self.heap.mark_from(&mut m);
+            // 5.3 shrinks the threads as the cycle traverses them, before
+            // the sweep, the rest after; 5.2's single steps did both
             if self.version == LuaVersion::Lua53 {
                 self.collector_shrinks_stacks();
             }
+            let freed = self.heap.gc_sweep_full();
             self.collector_shrinks_threads();
             self.heap.acct_check_sizes();
             freed
