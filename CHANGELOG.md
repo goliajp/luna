@@ -1178,7 +1178,13 @@ optimization.
 - 32-bit x86 (`i686-unknown-linux-gnu`) is supported, with the interpreter
   only: luna-core builds and passes its tests there, and so does the
   `luna` CLI, which has no JIT on 32-bit targets (Cranelift has no backend
-  for them). The collector counts as PUC built for i386 counts.
+  for them). luna behaves there as PUC built for i386 (with SSE2 floating
+  point) does: 5.1's and 5.2's integers are 32 bits wide and converted
+  from numbers as that build converts them, `string.pack`'s `l`, `L`, `T`
+  and `s` use a 4-byte `long` and `size_t` (and `!` a 4-byte alignment),
+  string lengths and positions are bounded by a 32-bit `size_t`,
+  `os.time` and `os.date` work with a 32-bit `time_t` (times past 2038
+  are out of bounds), and the collector counts as that build counts.
 - Traces inline calls into vararg functions, calls that want several
   results or all of them, and calls that pass a variable number of
   arguments, and create closures inside inlined functions; the baseline
