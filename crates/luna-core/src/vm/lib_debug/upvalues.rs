@@ -63,9 +63,13 @@ pub(super) fn d_getupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         }),
         _ => unreachable!("checked function"),
     };
+    let src = match f {
+        Value::Closure(cl) => Some(cl.proto.source),
+        _ => None,
+    };
     match found {
         Some((name, value)) => {
-            let nm = vm.api_push_string(name.as_bytes())?;
+            let nm = super::push_name(vm, src, name.as_bytes())?;
             vm.nat_ret(fs, &[nm, value])
         }
         None => vm.nat_ret(fs, &[]),
@@ -93,9 +97,13 @@ pub(super) fn d_setupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         },
         _ => unreachable!("checked function"),
     };
+    let src = match f {
+        Value::Closure(cl) => Some(cl.proto.source),
+        _ => None,
+    };
     match name {
         Some(name) => {
-            let nm = vm.api_push_string(name.as_bytes())?;
+            let nm = super::push_name(vm, src, name.as_bytes())?;
             vm.nat_ret(fs, &[nm])
         }
         None => vm.nat_ret(fs, &[]),

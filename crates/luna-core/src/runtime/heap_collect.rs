@@ -243,6 +243,8 @@ impl Heap {
         for w in &mut self.weak_watch {
             w.1 = !survived_mark(w.0);
         }
+        // PUC `luaS_clearcache`
+        self.puc.strcache.clear_dead();
         self.chunk_roots.retain(|p| {
             // SAFETY: a root still listed was not freed (dead ones leave the
             // list first) and this cycle's sweep has not run

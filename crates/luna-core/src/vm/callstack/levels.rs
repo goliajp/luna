@@ -163,6 +163,9 @@ impl Vm {
             }
         };
         ar.name = self.level_name(ts, i);
+        if let Some(&DbgKind::Lua(caller)) = ts.levels.get(i + 1) {
+            ar.name_in = Some(ts.lua(caller).closure.proto.source);
+        }
         // PUC fills 'r' only for the level a call/return hook interrupted
         // (5.4 `CIST_TRAN`, set when values are transferred; 5.5 for every
         // hook event, with the transfer the event carried).
@@ -291,6 +294,7 @@ pub(crate) fn tail_ar() -> Ar {
         lastlinedefined: -1,
         currentline: -1,
         name: Some(("", String::new())),
+        name_in: None,
         istailcall: false,
         extraargs: 0,
         ftransfer: 0,

@@ -76,3 +76,32 @@ impl Vm {
         levels && base + window < self.g.stack_last
     }
 }
+
+impl Vm {
+    /// Which C stack the running C function is on, as far as where its
+    /// frame lies: the C calls below it (the native functions running, the
+    /// protected and metamethod calls each Lua frame made) and their
+    /// number. Two calls with the same key have their locals at the same
+    /// address in PUC (see `strcache`).
+    pub(crate) fn c_chain_key(&self) -> u32 {
+        // FNV-1a over 32-bit words
+        let mut h = 0x811c_9dc5_u32 ^ self.g.nccalls;
+        let mut mix = |x: u32| h = (h ^ x).wrapping_mul(0x0100_0193);
+        for f in self.frames.iter() {
+            if let CallFrame::Cont(c) = f {
+                mix(match c.kind {
+                    ContKind::Pcall { .. } => 1,
+                    ContKind::Xpcall { .. } => 2,
+                    ContKind::Meta(_) => 3,
+                    ContKind::Pairs { .. } => 4,
+                    ContKind::Close(_) => 5,
+                    ContKind::Host(_) => 6,
+                });
+            }
+        }
+        for n in self.running_natives.iter() {
+            mix(n.nc.f as usize as u32);
+        }
+        h
+    }
+}

@@ -7,7 +7,13 @@ pub(super) fn os_getenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         .as_bytes()
         .to_vec();
     let v = match std::env::var_os(lib_io::os_path(&name)) {
-        Some(val) => vm.api_push_string(&os_bytes(&val))?,
+        // the value lives where the environment keeps it, one place for
+        // each variable
+        Some(val) => {
+            use crate::runtime::heap::strcache::{CStr, site};
+            let at = CStr::Fixed(site::GETENV, site::name_hash(&name));
+            vm.api_push_string_at(at, &os_bytes(&val))?
+        }
         None => Value::Nil,
     };
     vm.nat_ret(fs, &[v])

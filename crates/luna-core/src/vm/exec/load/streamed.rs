@@ -159,12 +159,7 @@ impl Vm {
         chunkname: &[u8],
         name: Option<Gc<crate::runtime::LuaStr>>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
-        let long = chunkname.len() > crate::runtime::string::MAX_SHORT_LEN
-            && self.heap.table_dialect != crate::runtime::table::Dialect::L51;
-        let source = match name {
-            Some(n) if !long => n,
-            _ => self.heap.try_intern(chunkname)?,
-        };
+        let source = self.heap.chunk_name(chunkname, name)?;
         self.compile_scratch.replay.seal = true;
         let made = self.compile_parsed(&parsed.chunk, &parsed.end_lines, source);
         self.compile_scratch.replay.seal = false;
@@ -197,12 +192,10 @@ impl Vm {
         let base = self.heap.unborn_len();
         self.heap.puc.silent += 1;
         self.heap.set_aside_loads(true);
-        let long = chunkname.len() > crate::runtime::string::MAX_SHORT_LEN
-            && self.heap.table_dialect != crate::runtime::table::Dialect::L51;
-        let source = match name {
-            Some(n) if !long => Ok(n),
-            _ => self.heap.try_intern(chunkname).map_err(SyntaxError::from),
-        };
+        let source = self
+            .heap
+            .chunk_name(chunkname, name)
+            .map_err(SyntaxError::from);
         // the text read, parsed again for what its scanner makes
         let e = match &source {
             &Ok(source) => {

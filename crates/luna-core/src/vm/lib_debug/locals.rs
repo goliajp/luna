@@ -47,6 +47,20 @@ fn find_local(
     vm.find_local(&ts, level?, n)
 }
 
+/// The source string of the chunk of the Lua function at `level`: its
+/// locals' names are that chunk's.
+fn level_source(
+    vm: &Vm,
+    co: Option<Gc<Coro>>,
+    level: Option<usize>,
+) -> Option<Gc<crate::runtime::LuaStr>> {
+    let ts = vm.thread_stack(co);
+    match *ts.levels.get(level?)? {
+        crate::vm::callstack::DbgKind::Lua(fi) => Some(ts.lua(fi).closure.proto.source),
+        _ => None,
+    }
+}
+
 pub(super) fn d_getlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     if !vm.reader_layers.is_empty() {
@@ -67,8 +81,12 @@ pub(super) fn d_getlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             Value::Closure(cl) => param_name(cl, n),
             _ => None,
         };
+        let src = match a.get(vm, arg) {
+            Value::Closure(cl) => Some(cl.proto.source),
+            _ => None,
+        };
         let r = match name {
-            Some(nm) => vm.api_push_string(nm.as_bytes())?,
+            Some(nm) => super::push_name(vm, src, nm.as_bytes())?,
             None => Value::Nil,
         };
         return vm.nat_ret(fs, &[r]);
@@ -88,7 +106,8 @@ fn getlocal_result(
     match find_local(vm, co, level, n) {
         Some((name, at)) => {
             let val = read_local(vm, co, at);
-            let nm = vm.api_push_string(name.as_bytes())?;
+            let src = level_source(vm, co, level);
+            let nm = super::push_name(vm, src, name.as_bytes())?;
             vm.nat_ret(fs, &[nm, val])
         }
         None => vm.nat_ret(fs, &[Value::Nil]),
@@ -140,8 +159,9 @@ pub(super) fn d_setlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         Some((name, LocalSlot::Held(_))) => Some(name),
         None => None,
     };
+    let src = level_source(vm, co, level);
     let r = match name {
-        Some(nm) => vm.api_push_string(nm.as_bytes())?,
+        Some(nm) => super::push_name(vm, src, nm.as_bytes())?,
         None => Value::Nil,
     };
     vm.nat_ret(fs, &[r])

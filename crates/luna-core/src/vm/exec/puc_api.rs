@@ -142,6 +142,30 @@ impl Vm {
         Ok(s)
     }
 
+    /// [`Vm::api_push_string`] of a C string that lives at `at`: PUC's
+    /// `lua_pushstring`, through `luaS_new`'s cache.
+    pub(crate) fn api_push_string_at(
+        &mut self,
+        at: crate::runtime::heap::strcache::CStr,
+        bytes: &[u8],
+    ) -> Result<Value, LuaError> {
+        self.api_check_before()?;
+        let s = self.str_value_at(at, bytes)?;
+        self.api_check_after(s)?;
+        Ok(s)
+    }
+
+    /// [`Vm::str_value`] through `luaS_new`'s cache, the C string at `at`.
+    pub(crate) fn str_value_at(
+        &mut self,
+        at: crate::runtime::heap::strcache::CStr,
+        bytes: &[u8],
+    ) -> Result<Value, LuaError> {
+        Ok(Value::Str(
+            self.retry_oom(|vm| vm.heap.intern_at(at, bytes))?,
+        ))
+    }
+
     /// lua.c's `arg` table (`createargtable`; 5.1 and 5.2 `getargs`, which
     /// first push the script's arguments), made through the API calls
     /// lua.c makes, with their checks for a collection: `arg[0]` is
