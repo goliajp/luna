@@ -129,6 +129,20 @@ impl Vm {
                 if self.gc_propagate(&mut lim, 0, run) {
                     self.atomic_51();
                 }
+            } else if self.heap.pace.state == St::SweepString {
+                // the buckets the single steps would sweep before the limit,
+                // at once: nothing else happens between them
+                let p = &self.heap.pace;
+                let left = self.heap.puc.strt_size as i64 - p.strt_swept;
+                let k = ((lim + SWEEPCOST_51 - 1) / SWEEPCOST_51).clamp(1, left.max(1));
+                self.heap.pace.strt_swept += k;
+                let freed = self.heap.sweep_strings_upto(self.heap.pace.strt_swept);
+                self.heap.pace.estimate -= freed;
+                if self.heap.pace.strt_swept >= self.heap.puc.strt_size as i64 {
+                    self.heap.end_string_sweep();
+                    self.heap.pace.state = St::SweepAll;
+                }
+                lim -= k * SWEEPCOST_51;
             } else {
                 lim -= self.singlestep_51()?;
             }
