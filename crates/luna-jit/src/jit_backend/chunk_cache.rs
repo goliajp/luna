@@ -253,9 +253,12 @@ pub(super) fn proto_cache_key(proto: &Proto, pre53: bool, float_only: bool) -> u
             // `math.cos` — `GetField a=5 b=5 c=2` in both, but
             // `consts[2]` resolves to "sin" or "cos") would otherwise
             // collide and serve the wrong libm call from cache.
+            // and by address: the code compares a library's name with the
+            // string it was compiled against, which may die with its proto
             luna_core::runtime::Value::Str(s) => {
                 3u8.hash(&mut h);
                 s.as_bytes().hash(&mut h);
+                (s.as_ptr() as usize).hash(&mut h);
             }
             // Other non-Int/Float consts still hash by discriminant so
             // unrelated protos stay distinct without paying for full

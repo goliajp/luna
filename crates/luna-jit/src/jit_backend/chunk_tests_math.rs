@@ -231,4 +231,62 @@ mod s5b {
         let _ = vm.call_value(Value::Closure(cl), &[]).expect("run");
         assert!(matches!(cl.proto.jit.get(), JitProtoState::Failed));
     }
+
+    /// The compiled code checks `math.sin` is the library's by the
+    /// address of the "sin" its function was compiled with. When that
+    /// string dies and "sin" is made again elsewhere, a function of the
+    /// same content compiles anew rather than take code holding the dead
+    /// address.
+    #[test]
+    fn a_dead_name_string_is_not_served_from_the_cache() {
+        let src = b"local s = 0.0 for i = 1, 100 do s = s + math.sin(i) end return s";
+        let sin_at = |cl: luna_core::runtime::Gc<luna_core::runtime::function::LuaClosure>| {
+            cl.proto.consts.iter().find_map(|c| match c {
+                Value::Str(s) if s.as_bytes() == b"sin" => Some(s.as_ptr() as usize),
+                _ => None,
+            })
+        };
+        let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
+        let cl = vm.load(src, b"=t").expect("compile");
+        let old = sin_at(cl).expect("a sin constant");
+        let r1 = vm.call_value(Value::Closure(cl), &[]).expect("run");
+        assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert_eq!(crate::jit_backend::cache_entry_count(&vm), 1);
+        // "sin" left with no holder: off the library table (rehashed so
+        // no dead key keeps it), out of the closure, and named by no
+        // constant of a chunk running while the collection runs
+        vm.eval(
+            "local k = 's' .. 'in'
+             _G.saved = math[k] math[k] = nil
+             for r = 1, 3 do
+               for i = 1, 64 do math['x'..i] = i end
+               for i = 1, 64 do math['x'..i] = nil end
+             end",
+        )
+        .expect("drop sin");
+        vm.eval("collectgarbage() collectgarbage()")
+            .expect("collect");
+        assert!(
+            vm.heap.find_interned(b"sin").is_none(),
+            "\"sin\" outlived its holders"
+        );
+        vm.eval(
+            "_G.keep = {}
+             for i = 1, 4096 do keep[i] = string.char(97 + i % 26, 98 + i // 26 % 26, 99) end
+             math['s' .. 'in'] = _G.saved",
+        )
+        .expect("make sin again");
+        let cl = vm.load(src, b"=t").expect("compile");
+        let new = sin_at(cl).expect("a sin constant");
+        assert_ne!(old, new, "\"sin\" was not made again elsewhere");
+        let r2 = vm.call_value(Value::Closure(cl), &[]).expect("run");
+        assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert_eq!(crate::jit_backend::cache_entry_count(&vm), 2);
+        match (r1.first(), r2.first()) {
+            (Some(&Value::Float(a)), Some(&Value::Float(b))) => {
+                assert_eq!(a.to_bits(), b.to_bits())
+            }
+            other => panic!("expected floats, got {other:?}"),
+        }
+    }
 }
