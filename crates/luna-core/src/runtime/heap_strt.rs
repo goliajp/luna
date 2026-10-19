@@ -30,6 +30,9 @@ pub(super) struct StrtSweep {
     /// the table grew from this many buckets for a string that has not
     /// entered yet (`Heap::strt_enter`)
     pub(super) grow_from: Option<usize>,
+    /// room for renumbering the chains after a resize
+    order: Vec<(u32, u16, *mut LuaStr)>,
+    ordered: Vec<(u32, u16, *mut LuaStr)>,
 }
 
 impl StrtSweep {
