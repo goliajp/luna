@@ -37,10 +37,7 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let level = if v <= LuaVersion::Lua52 {
         // `lua_isnumber` comes first, so a numeric string is a level
         match to_num(vm, subject) {
-            Some(n) if !a.is_none(arg) => Some(match n {
-                crate::numeric::Num::Int(i) => i,
-                crate::numeric::Num::Float(f) => f as i64,
-            } as i32 as i64),
+            Some(n) if !a.is_none(arg) => Some(crate::vm::c_abi::tointeger52(v, n) as i32 as i64),
             _ if is_function(vm, a, arg) => None,
             _ => return Err(arg_error(vm, arg + 1, "function or level expected")),
         }
