@@ -129,16 +129,7 @@ pub(super) fn search_path(
 
 pub(super) fn ll_searchpath(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
-    let name = argcheck::check_string(vm, a, 0)?.as_bytes().to_vec();
-    let path = argcheck::check_string(vm, a, 1)?.as_bytes().to_vec();
-    let sep = match argcheck::opt_string(vm, a, 2)? {
-        Some(s) => s.as_bytes().to_vec(),
-        None => b".".to_vec(),
-    };
-    let dirsep = match argcheck::opt_string(vm, a, 3)? {
-        Some(s) => s.as_bytes().to_vec(),
-        None => b"/".to_vec(),
-    };
+    let [name, path, sep, dirsep] = searchpath_args(vm, a)?;
     let r = search_path(
         vm.version(),
         c_str(&name),
@@ -181,4 +172,37 @@ pub(super) fn find_file(
         b".",
         b"/",
     ))
+}
+
+/// The arguments of `package.searchpath`, all four checked in one call's
+/// arguments: from the first on.
+#[cfg(not(target_arch = "x86"))]
+fn searchpath_args(vm: &mut Vm, a: Args) -> Result<[Vec<u8>; 4], LuaError> {
+    let name = argcheck::check_string(vm, a, 0)?.as_bytes().to_vec();
+    let path = argcheck::check_string(vm, a, 1)?.as_bytes().to_vec();
+    let sep = opt_bytes(vm, a, 2, b".")?;
+    Ok([name, path, sep, opt_bytes(vm, a, 3, b"/")?])
+}
+
+/// [`searchpath_args`] where gcc evaluates a call's arguments from the
+/// last one on (i386).
+#[cfg(target_arch = "x86")]
+fn searchpath_args(vm: &mut Vm, a: Args) -> Result<[Vec<u8>; 4], LuaError> {
+    let dirsep = opt_bytes(vm, a, 3, b"/")?;
+    let sep = opt_bytes(vm, a, 2, b".")?;
+    let path = argcheck::check_string(vm, a, 1)?.as_bytes().to_vec();
+    Ok([
+        argcheck::check_string(vm, a, 0)?.as_bytes().to_vec(),
+        path,
+        sep,
+        dirsep,
+    ])
+}
+
+/// `luaL_optstring(L, i + 1, def)`'s bytes.
+fn opt_bytes(vm: &mut Vm, a: Args, i: u32, def: &[u8]) -> Result<Vec<u8>, LuaError> {
+    Ok(match argcheck::opt_string(vm, a, i)? {
+        Some(s) => s.as_bytes().to_vec(),
+        None => def.to_vec(),
+    })
 }
