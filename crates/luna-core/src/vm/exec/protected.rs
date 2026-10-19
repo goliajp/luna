@@ -238,7 +238,10 @@ impl Vm {
         // the continuation that gives it back is pushed
         self.grow_stack(need)?;
         self.cf_room()?;
-        self.enter_c_level(false)?;
+        // `luaB_pairs` is a C function with a `CallInfo` of its own, unlike
+        // a metamethod's continuation
+        self.check_c_level(false)?;
+        self.g.nccalls += 1;
         let arg = self.stack[(func_slot + 1) as usize];
         // `luaL_getmetafield(L, 1, "__pairs")`, inside `luaB_pairs`
         self.traced_as(true, false, |vm| vm.metafield_check(arg, b"__pairs"))?;

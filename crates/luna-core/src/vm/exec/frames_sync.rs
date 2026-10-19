@@ -201,7 +201,15 @@ impl Vm {
         if let Some(f) = frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap)
             && is_c_level_cont(&f)
         {
-            self.cont_popped(true, true);
+            // `pairs`'s level is a `CallInfo` of PUC's, a metamethod's none
+            let pairs = matches!(
+                f,
+                CallFrame::Cont(NativeCont {
+                    kind: ContKind::Pairs { .. },
+                    ..
+                })
+            );
+            self.cont_popped(!pairs, true);
         }
     }
 
