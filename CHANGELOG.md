@@ -1175,6 +1175,10 @@ optimization.
 
 ### Added
 
+- 32-bit x86 (`i686-unknown-linux-gnu`) is supported, with the interpreter
+  only: luna-core builds and passes its tests there, and so does the
+  `luna` CLI, which has no JIT on 32-bit targets (Cranelift has no backend
+  for them). The collector counts as PUC built for i386 counts.
 - Traces inline calls into vararg functions, calls that want several
   results or all of them, and calls that pass a variable number of
   arguments, and create closures inside inlined functions; the baseline
