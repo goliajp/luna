@@ -80,6 +80,11 @@ jobs:
           CARGO_PROFILE_RELEASE_LTO: "false"
       - name: cargo test --doc --workspace
         run: cargo test --doc --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
+      # a full collection at every checkpoint, with and without the JIT
+      - name: gc_checkpoints (gc-stress)
+        run: cargo test -p luna-jit --release --features gc-stress --test gc_checkpoints
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
 
   # ─────────────────────────────────────────────────────────────────
   # A Windows host with LLVM but without Visual Studio's C++ tools.

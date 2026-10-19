@@ -30,6 +30,14 @@ impl Vm {
         {
             return None;
         }
+        // 5.2 checks for a collection on every call: one due is
+        // `begin_call`'s to make (and to log, in the trace)
+        if self.version == LuaVersion::Lua52 {
+            if self.heap.gc_due() || cfg!(any(feature = "gc-stress", feature = "gc-trace")) {
+                return None;
+            }
+            self.heap.safe_point();
+        }
         // as `push_frame`: missing parameters are nil, and 5.1 clears the
         // whole window
         let kept = nargs.min(p.num_params as u32);
