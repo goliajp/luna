@@ -10,6 +10,9 @@ use super::levels::tail_ar;
 /// One line of a traceback: a level, or where levels were left out.
 pub(super) enum TbLine {
     Level(i64),
+    /// 5.1: that many lost tail calls, the levels from a negative one up
+    /// to 0 (as many as a level made from a huge number asks for)
+    Tails(u64),
     /// `\n\t...` (5.1-5.3)
     Dots,
     /// `\n\t...\t(skipping N levels)` (5.4+)
@@ -29,6 +32,10 @@ pub(super) fn traceback_plan(v: LuaVersion, n: i64, mut level: i64) -> Vec<TbLin
             const LEVELS1: i64 = 12;
             const LEVELS2: i64 = 10;
             let mut firstpart = true;
+            if level < 0 && valid(level) {
+                out.push(TbLine::Tails(level.unsigned_abs()));
+                level = 0;
+            }
             loop {
                 let l = level;
                 level += 1;
@@ -112,6 +119,7 @@ impl Vm {
             let ars: Vec<Ar> = plan
                 .iter()
                 .filter_map(|line| match *line {
+                    TbLine::Tails(_) => Some(tail_ar()),
                     TbLine::Level(l) if l < 0 => Some(tail_ar()),
                     TbLine::Level(l) => Some(self.level_ar(&ts, l as usize)),
                     _ => None,
@@ -131,6 +139,12 @@ impl Vm {
                 TbLine::Level(_) => {
                     let ar = ars.next().expect("one Ar per level line");
                     self.traceback_line(&ar, &mut out, &mut names);
+                }
+                TbLine::Tails(k) => {
+                    let ar = ars.next().expect("one Ar per level line");
+                    for _ in 0..k {
+                        self.traceback_line(&ar, &mut out, &mut names);
+                    }
                 }
             }
         }
@@ -238,7 +252,12 @@ pub(crate) fn traceback_from_lines<L: AsRef<[u8]>>(
             TbLine::Skip(n) => {
                 out.extend_from_slice(format!("\n\t...\t(skipping {n} levels)").as_bytes())
             }
-            // 5.1's lost tail call at a negative level
+            // 5.1's lost tail calls at negative levels
+            TbLine::Tails(k) => {
+                for _ in 0..k {
+                    out.extend_from_slice(b"\n\t(tail call): ?");
+                }
+            }
             TbLine::Level(l) if l < 0 => out.extend_from_slice(b"\n\t(tail call): ?"),
             TbLine::Level(l) => out.extend_from_slice(lines[(l - hidden) as usize].as_ref()),
         }

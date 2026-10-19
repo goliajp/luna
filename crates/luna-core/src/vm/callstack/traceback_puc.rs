@@ -25,6 +25,7 @@ impl Vm {
         plan.into_iter()
             .map(|line| {
                 let ar = match line {
+                    TbLine::Tails(_) => Some(tail_ar()),
                     TbLine::Level(l) if l < 0 => Some(tail_ar()),
                     TbLine::Level(l) => Some(self.level_ar(&ts, l as usize)),
                     _ => None,
@@ -61,11 +62,26 @@ impl Vm {
         let head: &[u8] = if no_msg { b"" } else { b"\n" };
         self.api_push(|h| h.try_intern(head))?;
         self.api_push(|h| h.try_intern(b"stack traceback:"))?;
-        for (_, ar) in self.traceback_ars(co, level) {
+        for (line, ar) in self.traceback_ars(co, level) {
             let Some(ar) = ar else {
                 self.api_push(|h| h.try_intern(b"\n\t..."))?;
                 continue;
             };
+            let times = match line {
+                TbLine::Tails(k) => k,
+                _ => 1,
+            };
+            for _ in 0..times {
+                self.errorfb_level(&ar, base)?;
+            }
+        }
+        self.api_concat(base)
+    }
+
+    /// One level's line of `db_errorfb`, joined to what is pushed from
+    /// `base` up.
+    fn errorfb_level(&mut self, ar: &Ar, base: usize) -> Result<(), LuaError> {
+        {
             self.api_push(|h| h.try_intern(b"\n\t"))?;
             self.api_push(|h| h.pushfstring(b"%s:", &[FmtArg::S(&ar.short_src)]))?;
             if ar.currentline > 0 {
@@ -84,9 +100,8 @@ impl Vm {
                     h.pushfstring(b" in function <%s:%d>", &args)
                 })?,
             }
-            self.api_concat(base)?;
+            self.api_concat(base)
         }
-        self.api_concat(base)
     }
 
     /// A string an API call makes, pushed on the running C function's
