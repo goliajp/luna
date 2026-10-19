@@ -138,12 +138,12 @@ fn run_on_puc(path: &Path, bin: &str, source: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Run `source` as `bin -` runs it, with the real `print` and `io.write`
-/// and what they write caught (a buffer in Lua would add to what
-/// `collectgarbage("count")` reads).
+/// Run `source` as `bin -` runs it, then close it as lua.c does; output caught.
 fn run_on_luna(version: LuaVersion, bin: &str, source: &str) -> String {
-    let mut vm = lua_c_vm(version, bin);
-    let (r, out) = super::stdout_capture::caught(|| run_as_script(&mut vm, bin, source));
+    let (r, out) = super::stdout_capture::caught(|| {
+        let mut vm = lua_c_vm(version, bin);
+        run_as_script(&mut vm, bin, source).map_err(|e| e.to_string())
+    }); // the Vm drops inside: what the close's finalizers print is caught
     r.expect("luna eval must not error on diff fixtures");
     String::from_utf8_lossy(&out).into_owned()
 }

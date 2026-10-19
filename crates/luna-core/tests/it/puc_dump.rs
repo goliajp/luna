@@ -139,45 +139,24 @@ fn luna_dump(version: LuaVersion, source: &str, strip: bool) -> Result<Vec<u8>, 
     }
 }
 
-/// Run `bytes` on a luna Vm set up as lua.c, captured as diff_puc.rs does.
+/// Run `bytes` on a luna Vm set up as lua.c, then drop it (`lua_close`),
+/// stdout caught as diff_puc.rs catches it.
 fn run_on_luna(version: LuaVersion, bytes: &[u8]) -> Result<Outcome, String> {
-    let mut vm = super::diff_puc::lua_c_vm(version, "lua");
-    vm.eval(
-        r#"
-_G.__luna_diff_puc_buf = ""
-function print(...)
-    local t = {}
-    for i = 1, select('#', ...) do t[i] = tostring(select(i, ...)) end
-    _G.__luna_diff_puc_buf = _G.__luna_diff_puc_buf .. table.concat(t, '\t') .. '\n'
-end
-io.write = function(...)
-    local t = {}
-    for i = 1, select('#', ...) do t[i] = tostring(select(i, ...)) end
-    _G.__luna_diff_puc_buf = _G.__luna_diff_puc_buf .. table.concat(t)
-end
-"#,
-    )
-    .expect("capture preamble");
-    let f = vm
-        .load(bytes, b"=dump")
-        .map_err(|e| format!("luna refuses its own dump: {}", e.msg_str()))?;
-    // run from inside lua.c's C function, which a traceback shows, under a
-    // handler that leaves the error as it is
-    let msgh = vm.native(super::diff_puc::bytecode::same_error);
-    if let Err(e) = vm.call_value_with_handler_in_c(Value::Closure(f), &[], msgh) {
-        let (pos, text) = normalize_err(&vm.error_display(&e));
-        return Ok(Outcome::Error(pos, text));
-    }
-    match vm
-        .eval("return _G.__luna_diff_puc_buf")
-        .expect("buffer")
-        .first()
-    {
-        Some(Value::Str(s)) => Ok(Outcome::Output(normalize(&String::from_utf8_lossy(
-            s.as_bytes(),
-        )))),
-        other => Err(format!("expected the capture buffer, got {other:?}")),
-    }
+    let (r, out) = super::stdout_capture::caught(|| {
+        let mut vm = super::diff_puc::lua_c_vm(version, "lua");
+        let f = vm
+            .load(bytes, b"=dump")
+            .map_err(|e| format!("luna refuses its own dump: {}", e.msg_str()))?;
+        // run from inside lua.c's C function, which a traceback shows, under
+        // a handler that leaves the error as it is
+        let msgh = vm.native(super::diff_puc::bytecode::same_error);
+        let r = vm.call_value_with_handler_in_c(Value::Closure(f), &[], msgh);
+        Ok::<_, String>(r.err().map(|e| normalize_err(&vm.error_display(&e))))
+    });
+    Ok(match r? {
+        Some((pos, text)) => Outcome::Error(pos, text),
+        None => Outcome::Output(normalize(&String::from_utf8_lossy(&out))),
+    })
 }
 
 /// Run `check` on every fixture of every dialect with an interpreter; fail
