@@ -13,9 +13,9 @@ use crate::runtime::Value;
 use crate::runtime::function::{Proto, UpvalDesc};
 use crate::runtime::heap::{Gc, Heap};
 use crate::vm::dump::error::Bad;
-use crate::vm::dump::header;
 use crate::vm::dump::reader::Reader;
 use crate::vm::isa::Op;
+use crate::vm::{c_abi::SIZE_T, dump::header};
 
 const DIALECT: &str = "PUC 5.3";
 
@@ -25,7 +25,7 @@ const DIALECT: &str = "PUC 5.3";
 pub(in crate::vm::dump) const HEADER: &[u8] = &[
     0x1b, b'L', b'u', b'a', 0x53, 0, // signature, version, format
     0x19, 0x93, b'\r', b'\n', 0x1a, b'\n', // LUAC_DATA
-    4, 8, 4, 8, 8, // int, size_t, Instruction, lua_Integer, lua_Number
+    4, SIZE_T, 4, 8, 8, // int, size_t, Instruction, lua_Integer, lua_Number
     0x78, 0x56, 0, 0, 0, 0, 0, 0, // LUAC_INT
     0, 0, 0, 0, 0, 0x28, 0x77, 0x40, // LUAC_NUM
 ];
@@ -113,11 +113,7 @@ fn read_count(r: &mut Reader, min_size: usize) -> Result<usize, Bad> {
 /// NULL string.
 fn read_string<'a>(r: &mut Reader<'a>) -> Result<Option<&'a [u8]>, Bad> {
     let b = r.u8()?;
-    let size = if b == 0xFF {
-        u64::from_le_bytes(r.take(8)?.try_into().expect("8 bytes"))
-    } else {
-        b as u64
-    };
+    let size = if b == 0xFF { r.size_t()? } else { b as u64 };
     if size == 0 {
         return Ok(None);
     }

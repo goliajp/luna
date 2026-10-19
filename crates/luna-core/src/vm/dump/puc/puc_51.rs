@@ -30,9 +30,9 @@ use crate::runtime::Value;
 use crate::runtime::function::{Proto, UpvalDesc};
 use crate::runtime::heap::{Gc, Heap};
 use crate::vm::dump::error::Bad;
-use crate::vm::dump::header;
 use crate::vm::dump::reader::Reader;
 use crate::vm::isa::Op;
+use crate::vm::{c_abi::SIZE_T, dump::header};
 
 mod closure;
 mod ops;
@@ -41,9 +41,9 @@ pub(in crate::vm::dump) use ops::*;
 
 const DIALECT: &str = "PUC 5.1";
 
-/// Header: signature, version, format, endianness, then the sizes of
-/// `int`, `size_t`, `Instruction`, `lua_Number`, and the integral flag.
-pub(in crate::vm::dump) const HEADER: &[u8] = &[0x1b, b'L', b'u', b'a', 0x51, 0, 1, 4, 8, 4, 8, 0];
+/// Header: signature, version, format, endianness, sizes, integral flag.
+pub(in crate::vm::dump) const HEADER: &[u8] =
+    &[0x1b, b'L', b'u', b'a', 0x51, 0, 1, 4, SIZE_T, 4, 8, 0];
 
 /// `LFIELDS_PER_FLUSH` (lopcodes.h).
 const FIELDS_PER_FLUSH: u64 = 50;
@@ -101,7 +101,7 @@ fn read_count(r: &mut Reader, min_size: usize) -> Result<usize, Bad> {
 /// `size_t` length then the bytes, including a trailing NUL that luna drops.
 /// Length 0 is PUC's NULL string.
 fn read_string<'a>(r: &mut Reader<'a>) -> Result<Option<&'a [u8]>, Bad> {
-    let n = u64::from_le_bytes(r.take(8)?.try_into().expect("8 bytes"));
+    let n = r.size_t()?;
     if n == 0 {
         return Ok(None);
     }
@@ -169,7 +169,7 @@ fn read_proto(
     // Upvalue 0 is the synthesised `_ENV`; the rest are filled in from the
     // parent's pseudo-instructions (a main chunk has none).
     let mut upvals = vec![env_upval()];
-    let n = read_count(r, 8)?;
+    let n = read_count(r, SIZE_T as usize)?;
     if n != 0 && n != nups {
         return Err(format!("{DIALECT} chunk: {n} upvalue names for {nups} upvalues").into());
     }

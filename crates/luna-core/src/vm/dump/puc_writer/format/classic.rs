@@ -7,11 +7,16 @@ use crate::vm::dump::puc_writer::Out;
 impl W {
     // ---- 5.1 / 5.2: `int` and `size_t`-length strings with their NUL ----
 
+    /// A `size_t`, as wide as the target's.
+    fn size_t(&mut self, n: u64) {
+        self.bytes(&n.to_le_bytes()[..crate::vm::c_abi::SIZEOF_SIZE_T as usize]);
+    }
+
     fn str51(&mut self, s: Option<&[u8]>) {
         match s {
-            None => self.bytes(&0u64.to_le_bytes()),
+            None => self.size_t(0),
             Some(s) => {
-                self.bytes(&(s.len() as u64 + 1).to_le_bytes());
+                self.size_t(s.len() as u64 + 1);
                 self.out.extend_from_slice(s);
                 self.byte(0);
             }
@@ -111,7 +116,7 @@ impl W {
             self.byte(size as u8);
         } else {
             self.byte(0xFF);
-            self.bytes(&size.to_le_bytes());
+            self.size_t(size);
         }
         self.bytes(s);
     }

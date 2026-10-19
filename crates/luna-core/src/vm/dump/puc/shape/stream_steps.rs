@@ -139,9 +139,9 @@ impl Undumping {
     /// A string: where it is in the bytes (`None`: none, a size of 0).
     pub(super) fn string(&mut self, r: &mut Reader, sv: Sv) -> Option<Option<(usize, usize)>> {
         let n = match sv {
-            Sv::S51 => r.u64()?,
+            Sv::S51 => r.size_t()?,
             Sv::S53 => match r.u8()? {
-                0xFF => r.u64()?,
+                0xFF => r.size_t()?,
                 n => u64::from(n),
             },
             Sv::S54 => r.num(V54)?,
@@ -200,8 +200,11 @@ impl<'a> Reader<'a> {
     pub(super) fn u8(&mut self) -> Option<u8> {
         Some(self.take(1)?[0])
     }
-    pub(super) fn u64(&mut self) -> Option<u64> {
-        Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
+    /// A `size_t` (5.1 to 5.3 string lengths), as wide as the target's.
+    pub(super) fn size_t(&mut self) -> Option<u64> {
+        let mut b = [0u8; 8];
+        b[..usize::BITS as usize / 8].copy_from_slice(self.take(usize::BITS as usize / 8)?);
+        Some(u64::from_le_bytes(b))
     }
     pub(super) fn num(&mut self, k: Num) -> Option<u64> {
         if let Num::U32 = k {

@@ -66,6 +66,20 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
 
+    /// A `size_t` (5.1 to 5.3 string lengths), as wide as the target's.
+    #[cfg(target_pointer_width = "64")]
+    pub(super) fn size_t(&mut self) -> Result<u64, Bad> {
+        Ok(u64::from_le_bytes(
+            self.take(8)?.try_into().expect("8 bytes"),
+        ))
+    }
+
+    /// A `size_t` (5.1 to 5.3 string lengths), as wide as the target's.
+    #[cfg(target_pointer_width = "32")]
+    pub(super) fn size_t(&mut self) -> Result<u64, Bad> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().expect("4 bytes")).into())
+    }
+
     /// A dumped element count, refused when the chunk has fewer than
     /// `min_size` bytes left per element — the count sizes an allocation,
     /// and a corrupt one must not request gigabytes before the reads that

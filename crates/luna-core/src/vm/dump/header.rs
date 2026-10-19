@@ -110,12 +110,37 @@ pub(super) fn check(bytes: &[u8], expected: &[u8], layout: &Layout) -> Result<()
 /// 25 bytes; the trailing 8-byte LUAC_NUM is not locked by an assertion
 /// but the loader still expects it.
 pub(super) const HEADER_53: &[u8] = &[
-    0x1b, b'L', b'u', b'a', 0x53, 0x00, 0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
-    4, // sizeof(int)
-    8, // sizeof(size_t)
-    4, // sizeof(Instruction)
-    8, // sizeof(lua_Integer)
-    8, // sizeof(lua_Number)
-    0x78, 0x56, 0, 0, 0, 0, 0, 0, // LUAC_INT = 0x5678
-    0, 0, 0, 0, 0, 0x28, 0x77, 0x40, // LUAC_NUM = 370.5
+    0x1b,
+    b'L',
+    b'u',
+    b'a',
+    0x53,
+    0x00,
+    0x19,
+    0x93,
+    b'\r',
+    b'\n',
+    0x1a,
+    b'\n',
+    4,                                     // sizeof(int)
+    crate::vm::c_abi::SIZEOF_SIZE_T as u8, // sizeof(size_t)
+    4,                                     // sizeof(Instruction)
+    8,                                     // sizeof(lua_Integer)
+    8,                                     // sizeof(lua_Number)
+    0x78,
+    0x56,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0, // LUAC_INT = 0x5678
+    0,
+    0,
+    0,
+    0,
+    0,
+    0x28,
+    0x77,
+    0x40, // LUAC_NUM = 370.5
 ];
