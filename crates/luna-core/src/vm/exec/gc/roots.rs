@@ -212,18 +212,6 @@ impl Vm {
         if let Some(r) = self.registry {
             m.value(Value::Table(r));
         }
-        if let Some(mt) = self.file_mt {
-            m.value(Value::Table(mt));
-        }
-        if let Some(f) = self.io_input {
-            m.value(Value::Userdata(f));
-        }
-        if let Some(f) = self.io_output {
-            m.value(Value::Userdata(f));
-        }
-        if let Some(f) = self.io_stdin {
-            m.value(Value::Userdata(f));
-        }
         for &(_, uv) in self.open_upvals.iter() {
             m.mark(uv);
         }

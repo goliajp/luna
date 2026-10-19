@@ -224,6 +224,9 @@ pub struct Heap {
     slab: slab::NativeSlab,
     /// 5.1's environments luna has no objects for
     env51_box: Option<Box<env51::Env51>>,
+    /// `io.stdin` as the io library made it, which the host reads lines
+    /// through; null once a collection freed it
+    pub(crate) stdin_ud: *mut GcHeader,
     /// The main functions of the chunks loaded while `track_chunk_roots`
     /// is set, without keeping them alive: the collector drops each one it
     /// finds dead. Compiled traces taken over from another Vm find the

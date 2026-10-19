@@ -24,9 +24,9 @@ fn mode_ok(v: LuaVersion, mode: &[u8]) -> bool {
 /// the Vm opens files as PUC built with MSVC does.
 fn opened(vm: &mut Vm, o: Opened, pipe: bool) -> Result<Gc<Userdata>, LuaError> {
     // `lua_newuserdata(uv)`, which checks for a collection
-    vm.api_check_before()?;
-    let u = new_file(vm, FileHandle::File(o.file), o.spec.writable())?;
-    vm.api_check_after(Value::Userdata(u))?;
+    let u = new_file(vm, FileHandle::File(o.file), o.spec.writable(), |vm, u| {
+        vm.api_check_after(Value::Userdata(u))
+    })?;
     if vm.crt_text {
         let mut f = msvc::CrtFile::open(&o.spec, pipe);
         f.io.mode = o.mode;
@@ -142,40 +142,34 @@ pub(super) fn io_tmpfile(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaEr
 
 #[derive(Clone, Copy)]
 pub(super) enum Io {
-    Input,
-    Output,
-}
-
-pub(super) fn default_file(vm: &Vm, which: Io) -> Gc<Userdata> {
-    match which {
-        Io::Input => vm.io_input,
-        Io::Output => vm.io_output,
-    }
-    .expect("default streams are set when io opens")
+    Input = 0,
+    Output = 1,
 }
 
 /// `getiofile`: the default stream, which must still be open.
 pub(super) fn get_io_file(vm: &mut Vm, which: Io) -> Result<Gc<Userdata>, LuaError> {
-    let u = default_file(vm, which);
+    let f = default_file(vm, which);
     // `getiofile` pushes the stream from the registry
     vm.native_push(1);
-    if u.file().is_closed() {
-        let what = match which {
-            Io::Input => "input",
-            Io::Output => "output",
-        };
-        let adj = if vm.version() >= LuaVersion::Lua54 {
-            "default"
-        } else {
-            "standard"
-        };
-        return Err(crate::vm::builtins::raise_fmt(
-            vm,
-            1,
-            &format!("{adj} {what} file is closed"),
-        ));
+    if let Some(u) = f
+        && !u.file().is_closed()
+    {
+        return Ok(u);
     }
-    Ok(u)
+    let what = match which {
+        Io::Input => "input",
+        Io::Output => "output",
+    };
+    let adj = if vm.version() >= LuaVersion::Lua54 {
+        "default"
+    } else {
+        "standard"
+    };
+    Err(crate::vm::builtins::raise_fmt(
+        vm,
+        1,
+        &format!("{adj} {what} file is closed"),
+    ))
 }
 
 /// `g_iofile`: set the default stream from a file name or a handle, then
@@ -194,16 +188,10 @@ fn g_iofile(vm: &mut Vm, fs: u32, nargs: u32, which: Io) -> Result<u32, LuaError
             }
             None => check_open(vm, a, 0)?,
         };
-        match which {
-            Io::Input => vm.io_input = Some(u),
-            Io::Output => vm.io_output = Some(u),
-        }
-        if vm.version() == LuaVersion::Lua51 {
-            vm.heap.env51_io(vm.io_input, vm.io_output);
-        }
+        set_default_file(vm, which, u)?;
     }
-    let cur = default_file(vm, which);
-    vm.nat_ret(fs, &[Value::Userdata(cur)])
+    let cur = default_file(vm, which).map_or(Value::Nil, Value::Userdata);
+    vm.nat_ret(fs, &[cur])
 }
 
 /// `opencheck` (5.2+) / 5.1's `fileerror`: open or raise.

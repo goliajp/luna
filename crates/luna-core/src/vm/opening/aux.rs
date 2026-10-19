@@ -215,7 +215,7 @@ impl Opener {
 
     /// `luaL_newmetatable`: the registry's table `tname` pushed, made
     /// when there is none (from 5.3 on with `__name`); whether it was
-    /// made. The files' metatable is luna's `file_mt` too.
+    /// made.
     pub(crate) fn newmetatable(&mut self, vm: &mut Vm, tname: &[u8]) -> Result<bool, LuaError> {
         self.getfield(vm, Ix::Registry, tname)?;
         let made = self.get(vm, -1).is_nil();
@@ -231,11 +231,6 @@ impl Opener {
             }
             self.pushvalue(vm, -1)?;
             self.setfield(vm, Ix::Registry, tname)?;
-        }
-        if tname == b"FILE*"
-            && let Value::Table(t) = self.get(vm, -1)
-        {
-            vm.file_mt = Some(t);
         }
         Ok(made)
     }

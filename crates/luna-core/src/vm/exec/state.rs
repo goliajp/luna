@@ -219,15 +219,6 @@ pub struct Vm {
     /// shape stub for db.lua :328; if other registry-keyed APIs land later
     /// they can share this table.
     pub(crate) registry: Option<Gc<Table>>,
-    /// the shared `FILE*` metatable for io file handles (PUC's LUA_FILEHANDLE
-    /// registry entry); attached to every file userdata the io library makes
-    pub(crate) file_mt: Option<Gc<Table>>,
-    /// io library default input/output streams (PUC registry IO_INPUT/IO_OUTPUT)
-    pub(crate) io_input: Option<Gc<crate::runtime::Userdata>>,
-    pub(crate) io_output: Option<Gc<crate::runtime::Userdata>>,
-    /// `io.stdin` as the io library made it, whatever the script later does
-    /// to the `io` table: the stream a host's line reads share
-    pub(crate) io_stdin: Option<Gc<crate::runtime::Userdata>>,
     /// Frames below this index are out of reach of the error handler of
     /// an `xpcall` (PUC `L->errfunc`): a protected call made from Rust — a
     /// finalizer, the handler itself — starts a fresh `errfunc` scope.
