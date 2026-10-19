@@ -3,159 +3,13 @@
 //! Cranelift (at once, or partway through a run). The tier is a per-Vm
 //! setting, so the settings run side by side in one process.
 
-use std::path::{Path, PathBuf};
-
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::jit_backend::trace::{baseline_codegen_count, baseline_fallback};
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::Vm;
 
-const DIALECTS: &[(&str, LuaVersion)] = &[
-    ("5.1", LuaVersion::Lua51),
-    ("5.2", LuaVersion::Lua52),
-    ("5.3", LuaVersion::Lua53),
-    ("5.4", LuaVersion::Lua54),
-    ("5.5", LuaVersion::Lua55),
-];
-
-fn fixtures(dialect: &str) -> Vec<PathBuf> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../luna-core/tests/diff_puc")
-        .join(dialect);
-    let mut out: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
-        .map(|e| e.expect("dir entry").path())
-        .filter(|p| p.extension().is_some_and(|x| x == "lua"))
-        .collect();
-    out.sort();
-    out
-}
-
-/// `source`'s output with `print` / `io.write` captured, or its error;
-/// table and function addresses masked.
-fn run(vm: &mut Vm, source: &[u8]) -> Result<String, String> {
-    vm.eval(
-        r#"
-_G.__out = {}
-function print(...)
-    local t = {}
-    for i = 1, select('#', ...) do t[i] = tostring(select(i, ...)) end
-    _G.__out[#_G.__out + 1] = table.concat(t, '\t') .. '\n'
-end
-io.write = function(...)
-    for i = 1, select('#', ...) do _G.__out[#_G.__out + 1] = tostring(select(i, ...)) end
-end
-"#,
-    )
-    .expect("capture preamble");
-    let r = match vm.load(source, b"=t") {
-        Err(e) => Err(String::from_utf8_lossy(&e.msg).into_owned()),
-        Ok(f) => match vm.call_value(Value::Closure(f), &[]) {
-            Err(e) => Err(vm.error_display(&e)),
-            Ok(_) => match vm
-                .eval("return table.concat(_G.__out)")
-                .expect("buffer")
-                .first()
-            {
-                Some(Value::Str(s)) => Ok(String::from_utf8_lossy(s.as_bytes()).into_owned()),
-                other => panic!("expected the capture buffer, got {other:?}"),
-            },
-        },
-    };
-    r.map(|s| mask(&s)).map_err(|s| mask(&s))
-}
-
-/// Addresses (`table: 0x…`, on Windows 16 upper-case hex digits) differ
-/// between two Vms.
-fn mask(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < b.len() {
-        let hex_run = |from: usize| {
-            b[from..]
-                .iter()
-                .take_while(|c| c.is_ascii_hexdigit())
-                .count()
-        };
-        let n = if b[i..].starts_with(b"0x") {
-            2 + hex_run(i + 2)
-        } else {
-            0
-        };
-        let windows = (i == 0 || !b[i - 1].is_ascii_alphanumeric())
-            && b[i..]
-                .iter()
-                .take_while(|c| {
-                    c.is_ascii_digit() || c.is_ascii_uppercase() && c.is_ascii_hexdigit()
-                })
-                .count()
-                == 16
-            && b.get(i + 16).is_none_or(|c| !c.is_ascii_alphanumeric());
-        if n > 2 || windows {
-            out.push_str("ADDR");
-            i += if windows { 16 } else { n };
-        } else {
-            let ch = s[i..].chars().next().unwrap();
-            out.push(ch);
-            i += ch.len_utf8();
-        }
-    }
-    out
-}
-
-fn interp(version: LuaVersion) -> Vm {
-    let mut vm = luna_jit::new_with_jit(version);
-    vm.set_jit_enabled(false);
-    vm.set_trace_jit_enabled(false);
-    vm
-}
-
-/// A trace-JIT Vm recording loops after `hot` back edges, in `tier`;
-/// `tier_up_at` for [`TraceTier::Auto`].
-fn tiered(version: LuaVersion, hot: u32, tier: TraceTier, tier_up_at: u32) -> Vm {
-    let mut vm = luna_jit::new_with_jit(version);
-    vm.set_jit_enabled(false);
-    vm.jit.trace_hot_threshold = hot;
-    vm.jit.call_hot_threshold = hot;
-    vm.set_trace_tier(tier);
-    vm.set_trace_tier_up_at(tier_up_at);
-    vm
-}
-
-/// What a corpus run did: trace entries, traces moved to Cranelift.
-#[derive(Default)]
-struct Seen {
-    dispatched: u64,
-    tiered_up: u64,
-}
-
-fn corpus(tier: TraceTier, tier_up_at: u32) -> Seen {
-    let mut failed = Vec::new();
-    let mut seen = Seen::default();
-    for &(dialect, version) in DIALECTS {
-        for f in &fixtures(dialect) {
-            let source = std::fs::read(f).expect("read fixture");
-            let want = run(&mut interp(version), &source);
-            for hot in [1, 3] {
-                let mut vm = tiered(version, hot, tier, tier_up_at);
-                let got = run(&mut vm, &source);
-                seen.dispatched += vm.trace_dispatched_count();
-                seen.tiered_up += vm.trace_tiered_up_count();
-                if got != want {
-                    failed.push(format!(
-                        "{} (hot {hot}):\n  interpreter: {want:?}\n  traces:      {got:?}",
-                        f.display()
-                    ));
-                }
-            }
-        }
-    }
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
-    assert!(seen.dispatched > 0, "no trace ran, so nothing was compared");
-    seen
-}
+use super::trace_corpus::*;
 
 #[test]
 fn the_baseline_tier_runs_the_corpus_like_the_interpreter() {
@@ -195,6 +49,15 @@ fn moving_every_trace_to_cranelift_at_once_keeps_the_results() {
 #[test]
 fn moving_traces_to_cranelift_partway_keeps_the_results() {
     let seen = corpus(TraceTier::Auto, 37);
+    assert!(seen.tiered_up > 0, "no trace moved to Cranelift");
+}
+
+/// The corpus again with other hash seeds, one for each dialect: where
+/// collections fall moves with the seed, and what a trace holds across
+/// one shows up only at some of them.
+#[test]
+fn moving_traces_partway_keeps_the_results_under_other_seeds() {
+    let seen = corpus_seeded(TraceTier::Auto, 37, |i| 2 + i as u32);
     assert!(seen.tiered_up > 0, "no trace moved to Cranelift");
 }
 
