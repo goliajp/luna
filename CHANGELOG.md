@@ -1175,6 +1175,11 @@ optimization.
 
 ### Added
 
+- `Vm::try_new_minimal_with_mem_and_seed`: a minimal Vm whose memory comes
+  from a given context (a `MemoryPolicy`, or a host allocation function)
+  and whose string hashing is seeded by a given seed, for runs that are to
+  repeat exactly under a custom allocator. Like `try_new_minimal_with_mem`,
+  `None` when the context cannot give the Vm the memory it starts with.
 - 32-bit x86 (`i686-unknown-linux-gnu`) is supported, with the interpreter
   only: luna-core builds and passes its tests there, and so does the
   `luna` CLI, which has no JIT on 32-bit targets (Cranelift has no backend
