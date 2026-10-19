@@ -123,10 +123,12 @@ impl Vm {
                 if self.heap.pace.strt_swept >= size {
                     self.heap.end_string_sweep();
                     self.heap.pace.state = St::SweepUdata;
-                    // `sweeptolive` leaves no list to sweep when `finobj`
-                    // is empty: the next step moves on at no cost
+                    // `entersweep`'s `sweeptolive` sweeps `finobj` up to
+                    // its first live object: with no more after it there
+                    // is no list left, and the next step moves on at no
+                    // cost
                     let n = self.heap.finobj_count();
-                    self.heap.pace.fin_left = (n > 0).then_some(n);
+                    self.heap.pace.fin_left = (n > 1).then_some(n - 1);
                 }
                 i * cost
             }
