@@ -315,6 +315,7 @@ impl Vm {
     /// pending to-be-closed variables and run every finalizer, dropping
     /// their errors.
     pub fn host_close_state(&mut self) {
+        self.leave_host_entry();
         self.close_state();
     }
 
