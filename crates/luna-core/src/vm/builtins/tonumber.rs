@@ -151,9 +151,10 @@ fn tonumber_51(vm: &mut Vm, a: Args) -> Result<u32, LuaError> {
 /// string (it ends at the first NUL), then only trailing spaces. `strtoul`
 /// takes a sign — negating the unsigned value — and, in base 16, a `0x`
 /// prefix; an out-of-range value is clamped to `ULONG_MAX`, with ERANGE in
-/// `errno`. `unsigned long` has 32 bits on Windows, 64 elsewhere.
+/// `errno`. `unsigned long` has 32 bits on Windows and 32-bit targets,
+/// 64 elsewhere.
 fn strtoul(s: &[u8], base: u32) -> Option<u64> {
-    const ULONG_MAX: u64 = if cfg!(windows) {
+    const ULONG_MAX: u64 = if cfg!(windows) || cfg!(target_pointer_width = "32") {
         u32::MAX as u64
     } else {
         u64::MAX
