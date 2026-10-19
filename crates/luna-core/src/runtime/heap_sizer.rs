@@ -9,6 +9,7 @@ pub(crate) struct Sizer {
     sizes: crate::runtime::puc_size::PucSizes,
     own: Vec<*const Table>,
     stand_ins: Vec<(*mut GcHeader, usize)>,
+    keepers: Vec<(*mut GcHeader, *mut GcHeader)>,
     run: Running,
     pub(in crate::runtime::heap) marked: i64,
 }
@@ -28,7 +29,9 @@ impl Sizer {
                 let uncounted = is_uncounted(h);
                 let stands = if uncounted || (*h).cls & STANDS != 0 {
                     let s = self.stand_ins.iter().filter(|s| s.0 == h);
-                    s.map(|s| s.1).sum::<usize>() as i64
+                    (s.map(|s| s.1).sum::<usize>()
+                        + crate::runtime::heap::acct::keeper::kept_bytes(&self.keepers, h))
+                        as i64
                 } else {
                     0
                 };
@@ -59,6 +62,7 @@ impl Heap {
             sizes: self.sizes,
             own: std::mem::take(&mut self.puc.own_tables),
             stand_ins: std::mem::take(&mut self.puc.stand_ins),
+            keepers: std::mem::take(&mut self.puc.keepers),
             run,
             marked: 0,
         })
@@ -70,6 +74,7 @@ impl Heap {
             self.pace.estimate += s.marked;
             self.puc.own_tables = s.own;
             self.puc.stand_ins = s.stand_ins;
+            self.puc.keepers = s.keepers;
         }
     }
 
@@ -85,6 +90,7 @@ impl Heap {
             self.pace.estimate += n;
             self.puc.own_tables = s.own;
             self.puc.stand_ins = s.stand_ins;
+            self.puc.keepers = s.keepers;
         }
     }
 }

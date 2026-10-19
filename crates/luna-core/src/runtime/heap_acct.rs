@@ -12,6 +12,8 @@ use crate::runtime::table::Dialect;
 
 #[path = "heap_ghost.rs"]
 mod ghost;
+#[path = "heap_keeper.rs"]
+pub(in crate::runtime::heap) mod keeper;
 pub(crate) use ghost::{Ghost, GhostRef};
 #[path = "heap_parse.rs"]
 pub(crate) mod parse;
@@ -37,6 +39,8 @@ pub(crate) struct PucState {
     /// given size, one entry for each object of PUC's (see
     /// `Heap::stand_sizes_on`)
     pub(crate) stand_ins: Vec<(*mut GcHeader, usize)>,
+    /// keepers (`heap_keeper.rs`) and their hosts
+    pub(crate) keepers: Vec<(*mut GcHeader, *mut GcHeader)>,
     /// 5.3: the threads this cycle's propagation has shrunk; 5.2: the ones
     /// the sweep kept, for the VM to shrink
     pub(crate) shrunk: Vec<*mut GcHeader>,
@@ -81,6 +85,7 @@ impl Default for PucState {
             udsize: 0,
             // the standard libraries make about twenty
             stand_ins: Vec::with_capacity(32),
+            keepers: Vec::new(),
             shrunk: Vec::new(),
             own_tables: Vec::new(),
             load_msg: None,

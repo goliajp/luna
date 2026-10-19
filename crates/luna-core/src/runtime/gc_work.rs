@@ -86,7 +86,7 @@ impl Heap {
                         // for as they mark them
                         let stands = if d != Dialect::L51 && (*h).cls & STANDS != 0 {
                             let s = self.puc.stand_ins.iter().filter(|s| s.0 == h);
-                            s.map(|s| s.1).sum()
+                            s.map(|s| s.1).sum::<usize>() + self.kept_bytes(h)
                         } else {
                             0
                         };
