@@ -3,6 +3,7 @@
 use super::*;
 mod gc_verify;
 mod roots;
+mod trace_k;
 
 impl Vm {
     /// Switch the `collectgarbage` mode, returning the previous mode name.
@@ -57,6 +58,7 @@ impl Vm {
     /// object made while marking survives when the atomic step finds it
     /// reachable (from the roots again, or through a barrier).
     #[inline(always)]
+    #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn checkpoint(&mut self, live_top: u32) -> Result<(), LuaError> {
         #[cfg(feature = "gc-trace")]
         self.trace_checkpoint();
@@ -232,6 +234,7 @@ impl Vm {
     /// 5.2's `luaD_precall` checks for a collection on every call, the
     /// `CallInfo` made, `L->top` at `top` (a Lua function's whole frame).
     #[inline(always)]
+    #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn precall_checkpoint(&mut self, top: u32) -> Result<(), LuaError> {
         if self.version == crate::version::LuaVersion::Lua52 {
             return self.checkpoint(top);
@@ -242,6 +245,7 @@ impl Vm {
     /// A collection check of PUC's C API inside the running C function:
     /// its stack is live up to its top.
     #[inline]
+    #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn native_checkpoint(&mut self) -> Result<(), LuaError> {
         if self.checkpoint_idle() {
             return Ok(());
@@ -250,6 +254,7 @@ impl Vm {
     }
 
     #[inline(never)]
+    #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn native_checkpoint_due(&mut self) -> Result<(), LuaError> {
         let top = self.native_top().unwrap_or_else(|| self.lua_window_end());
         self.checkpoint(top)
@@ -278,19 +283,6 @@ impl Vm {
             return self.checkpoint(top);
         }
         Ok(())
-    }
-
-    /// A checkpoint in the accounting trace: `k` and the running Lua
-    /// function's current line, 0 in a native.
-    #[cfg(feature = "gc-trace")]
-    pub(super) fn trace_checkpoint(&mut self) {
-        let line = match self.frames.last() {
-            Some(CallFrame::Lua(f)) if !self.native_on_top() => {
-                crate::vm::callstack::frame_line(f).max(0)
-            }
-            _ => 0,
-        };
-        self.heap.trace.line(format_args!("k {line}"));
     }
 
     /// Whether a `__gc` finalizer is currently running (so `collectgarbage`

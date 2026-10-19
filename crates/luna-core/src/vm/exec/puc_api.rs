@@ -9,6 +9,7 @@ use crate::runtime::LuaStr;
 impl Vm {
     /// 5.1 and 5.2: the check before an API call allocates.
     #[inline]
+    #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn api_check_before(&mut self) -> Result<(), LuaError> {
         if self.version <= LuaVersion::Lua52 {
             return self.native_checkpoint();
@@ -18,6 +19,7 @@ impl Vm {
 
     /// 5.3 on: the check after an API call pushed `v`.
     #[inline]
+    #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn api_check_after(&mut self, v: Value) -> Result<(), LuaError> {
         if self.version >= LuaVersion::Lua53 && !self.checkpoint_idle() {
             self.lib_roots.push(v);
@@ -30,6 +32,7 @@ impl Vm {
 
     /// 5.3 on: the check after an API call pushed `v` on the running C
     /// function's stack, which is live up to `v` then.
+    #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn api_check_pushed(&mut self, v: Value) -> Result<(), LuaError> {
         if self.version < LuaVersion::Lua53 || !self.native_on_top() {
             return self.api_check_after(v);
@@ -46,6 +49,7 @@ impl Vm {
     /// 5.3 on: the check after an API call pushed a value already rooted
     /// (in `lib_roots`).
     #[inline]
+    #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn api_check_after_rooted(&mut self) -> Result<(), LuaError> {
         if self.version >= LuaVersion::Lua53 {
             return self.native_checkpoint();
@@ -57,6 +61,7 @@ impl Vm {
     /// metatable it pushes the event's name (`lua_pushstring`, which makes
     /// the string and checks for a collection), the string given back.
     #[inline]
+    #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn metafield_name(
         &mut self,
         v: Value,
@@ -84,6 +89,7 @@ impl Vm {
 
     /// [`Vm::metafield_name`] where only the push matters.
     #[inline]
+    #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn metafield_check(&mut self, v: Value, event: &[u8]) -> Result<(), LuaError> {
         self.metafield_name(v, event).map(drop)
     }
@@ -91,6 +97,7 @@ impl Vm {
     /// `f` as an API call that pushes the string it makes: checked for
     /// before (5.1, 5.2) or after (5.3 on), the string kept rooted in
     /// `lib_roots` for the caller, who truncates it.
+    #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn api_pushing(
         &mut self,
         f: impl FnOnce(&mut Vm) -> Result<Gc<LuaStr>, LuaError>,
@@ -105,6 +112,7 @@ impl Vm {
     /// The check every version makes after `lua_tolstring` converted a
     /// number into `v`.
     #[inline]
+    #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn api_check_converted(&mut self, v: Value) -> Result<(), LuaError> {
         self.lib_roots.push(v);
         let r = self.native_checkpoint();
@@ -112,7 +120,21 @@ impl Vm {
         r
     }
 
+    /// `lua_createtable(L, narr, nrec)`, checked for as PUC checks.
+    #[cfg_attr(feature = "gc-trace", track_caller)]
+    pub(crate) fn api_new_table(
+        &mut self,
+        narr: usize,
+        nrec: usize,
+    ) -> Result<Gc<Table>, LuaError> {
+        self.api_check_before()?;
+        let t = self.alloc_table_sized(narr, nrec)?;
+        self.api_check_after(Value::Table(t))?;
+        Ok(t)
+    }
+
     /// `lua_pushlstring`: the string of `bytes`, checked for as PUC checks.
+    #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn api_push_string(&mut self, bytes: &[u8]) -> Result<Value, LuaError> {
         self.api_check_before()?;
         let s = self.str_value(bytes)?;

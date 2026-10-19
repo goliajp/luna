@@ -240,8 +240,8 @@ impl Vm {
         self.cf_room()?;
         self.enter_c_level(false)?;
         let arg = self.stack[(func_slot + 1) as usize];
-        // `luaL_getmetafield(L, 1, "__pairs")`
-        self.metafield_check(arg, b"__pairs")?;
+        // `luaL_getmetafield(L, 1, "__pairs")`, inside `luaB_pairs`
+        self.traced_as(true, false, |vm| vm.metafield_check(arg, b"__pairs"))?;
         let mm = self.get_mm(arg, Mm::Pairs);
         self.stack[(func_slot + at + 1) as usize] = arg;
         self.stack[(func_slot + at) as usize] = mm;

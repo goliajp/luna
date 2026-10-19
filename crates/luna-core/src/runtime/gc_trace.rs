@@ -31,6 +31,12 @@ pub(crate) struct Trace {
     events: u64,
     /// lines held back (see [`Trace::hold`]), innermost last
     held: Vec<Vec<String>>,
+    /// a C function of PUC's runs where luna has no level for it yet: a
+    /// checkpoint shows no line
+    pub(crate) in_c: bool,
+    /// a call hook runs: PUC counts the function as past its first
+    /// instruction then (`luaD_hookcall`)
+    pub(crate) call_hook: bool,
 }
 
 impl Default for Trace {
@@ -52,6 +58,8 @@ impl Default for Trace {
                 .map(|n| (n.saturating_sub(30), n + 30)),
             events: 0,
             held: Vec::new(),
+            in_c: false,
+            call_hook: false,
         }
     }
 }
