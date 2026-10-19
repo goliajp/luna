@@ -22,7 +22,7 @@ pub(super) fn item51(
     match conv {
         b'c' => {
             let c = match v {
-                LuaVersion::Lua51 => c_int_cast(argcheck::check_number(vm, a, arg)?),
+                LuaVersion::Lua51 => crate::vm::c_abi::to_int(argcheck::check_number(vm, a, arg)?),
                 LuaVersion::Lua52 => argcheck::check_int(vm, a, arg)?,
                 _ => argcheck::check_integer(vm, a, arg)? as i32,
             };
@@ -37,7 +37,10 @@ pub(super) fn item51(
         }
         b'd' | b'i' => {
             let n = match v {
-                LuaVersion::Lua51 => argcheck::check_number(vm, a, arg)? as i64,
+                // `(long)`
+                LuaVersion::Lua51 => {
+                    crate::vm::c_abi::to_long(argcheck::check_number(vm, a, arg)?) as i64
+                }
                 // PUC casts and checks that the cast lost less than one; a
                 // value outside the integer range must fail, which is what
                 // the check does where the cast yields the "indefinite"
@@ -55,7 +58,10 @@ pub(super) fn item51(
         }
         b'o' | b'u' | b'x' | b'X' => {
             let n = match v {
-                LuaVersion::Lua51 => argcheck::check_number(vm, a, arg)? as u64,
+                // `(unsigned long)`
+                LuaVersion::Lua51 => {
+                    crate::vm::c_abi::to_ulong(argcheck::check_number(vm, a, arg)?) as u64
+                }
                 LuaVersion::Lua52 => {
                     let x = argcheck::check_number(vm, a, arg)?;
                     if !(x > -1.0 && x < 2.0 * TWO63) {
@@ -178,8 +184,4 @@ fn tolstring_52(
         r @ (Value::Int(_) | Value::Float(_)) => vm.number_string(r).map(Some),
         _ => Ok(None),
     }
-}
-
-fn c_int_cast(x: f64) -> i32 {
-    x as i32
 }
