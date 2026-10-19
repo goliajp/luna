@@ -144,6 +144,12 @@ impl Pool {
 
 impl Pool {
     /// Give every kept block back to the system.
+    /// Every kept block given back, and no more kept.
+    pub(super) fn close(&mut self) {
+        self.release();
+        self.cap = 0;
+    }
+
     pub(super) fn release(&mut self) {
         for l in &mut self.lists {
             for p in l.blocks.drain(..) {

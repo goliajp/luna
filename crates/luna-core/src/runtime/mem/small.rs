@@ -131,9 +131,17 @@ impl Small {
     /// pool may hold from now on.
     pub(super) fn cycle_ended(&mut self, room: usize) -> usize {
         self.cap = self.allocated.min(room);
-        self.allocated = 0;
         self.want = self.allocs;
         self.allocs = [0; CLASSES];
+        // room for all of it: every class keeps what it wants, in any order
+        if std::mem::take(&mut self.allocated) <= room {
+            for c in 0..CLASSES {
+                while self.kept[c] > self.want[c] {
+                    self.pop_free(c);
+                }
+            }
+            return self.cap;
+        }
         let mut order: [usize; CLASSES] = std::array::from_fn(|i| i);
         order.sort_unstable_by_key(|&c| std::cmp::Reverse(self.want[c]));
         let mut room = self.cap;
@@ -189,6 +197,16 @@ impl MemCtx {
         }
         // SAFETY: the size is not 0
         NonNull::new(unsafe { std::alloc::alloc(layout) })
+    }
+
+    /// The heap goes: give the blocks kept back and keep no more.
+    pub(crate) fn close_pools(&self) {
+        if matches!(self.mode, super::ctx::Mode::System) {
+            let mut s = self.small.borrow_mut();
+            s.release();
+            s.cap = 0;
+            self.pool.borrow_mut().close();
+        }
     }
 
     /// Memory is short: give the blocks kept for reuse back to the system
