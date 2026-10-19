@@ -137,17 +137,24 @@ fn shift(r: u64, i: i64) -> u64 {
     }
 }
 
-fn b_lshift(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let a = Args::new(fs, nargs);
+/// `b_shift(L, checkunsigned(L, 1), luaL_checkint(L, 2))`: both checked
+/// in one call's arguments, in the order the compiler evaluates them.
+fn shift_args(vm: &mut Vm, a: Args) -> Result<(u64, i64), LuaError> {
+    if crate::vm::c_abi::ARGS_RTL {
+        let i = int_arg(vm, a, 1)?;
+        return Ok((unsigned(vm, a, 0)?, i));
+    }
     let r = unsigned(vm, a, 0)?;
-    let i = int_arg(vm, a, 1)?;
+    Ok((r, int_arg(vm, a, 1)?))
+}
+
+fn b_lshift(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let (r, i) = shift_args(vm, Args::new(fs, nargs))?;
     push(vm, fs, shift(r, i))
 }
 
 fn b_rshift(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let a = Args::new(fs, nargs);
-    let r = unsigned(vm, a, 0)?;
-    let i = int_arg(vm, a, 1)?;
+    let (r, i) = shift_args(vm, Args::new(fs, nargs))?;
     push(vm, fs, shift(r, i.wrapping_neg()))
 }
 

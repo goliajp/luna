@@ -10,6 +10,7 @@ use crate::runtime::{Builtin, Value};
 use crate::version::LuaVersion as V;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::arg_error;
+use crate::vm::c_abi;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
@@ -138,9 +139,15 @@ fn m_frexp(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn m_ldexp(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
-    let m = argcheck::check_number(vm, a, 0)?;
-    // The exponent is a C `int` in every version.
-    let e = argcheck::check_int(vm, a, 1)?;
+    // The exponent is a C `int` in every version; 5.1 checks both in one
+    // call's arguments
+    let (m, e) = if c_abi::ARGS_RTL && vm.version() == V::Lua51 {
+        let e = argcheck::check_int(vm, a, 1)?;
+        (argcheck::check_number(vm, a, 0)?, e)
+    } else {
+        let m = argcheck::check_number(vm, a, 0)?;
+        (m, argcheck::check_int(vm, a, 1)?)
+    };
     let r = cerrno::ldexp_applied(m, ldexp(m, e.into()));
     vm.nat_ret(fs, &[Value::Float(r)])
 }
@@ -159,16 +166,25 @@ fn m_atan(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn m_atan2(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
-    let y = argcheck::check_number(vm, a, 0)?;
-    let x = argcheck::check_number(vm, a, 1)?;
+    let (y, x) = two_numbers(vm, a, true)?;
     vm.nat_ret(fs, &[Value::Float(y.atan2(x))])
 }
 
 fn m_pow(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
-    let x = argcheck::check_number(vm, a, 0)?;
-    let y = argcheck::check_number(vm, a, 1)?;
+    let (x, y) = two_numbers(vm, a, vm.version() == V::Lua51)?;
     vm.nat_ret(fs, &[Value::Float(cerrno::pow(x, y))])
+}
+
+/// Arguments 1 and 2 as numbers, checked in the order the compiler
+/// evaluates the arguments of the call PUC checks them in (`one_call`).
+fn two_numbers(vm: &mut Vm, a: Args, one_call: bool) -> Result<(f64, f64), LuaError> {
+    if c_abi::ARGS_RTL && one_call {
+        let y = argcheck::check_number(vm, a, 1)?;
+        return Ok((argcheck::check_number(vm, a, 0)?, y));
+    }
+    let x = argcheck::check_number(vm, a, 0)?;
+    Ok((x, argcheck::check_number(vm, a, 1)?))
 }
 
 fn m_log(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -209,8 +225,7 @@ fn m_fmod(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         };
         return vm.nat_ret(fs, &[Value::Int(v)]);
     }
-    let x = argcheck::check_number(vm, a, 0)?;
-    let y = argcheck::check_number(vm, a, 1)?;
+    let (x, y) = two_numbers(vm, a, true)?;
     vm.nat_ret(fs, &[Value::Float(cerrno::fmod(x, y))])
 }
 
