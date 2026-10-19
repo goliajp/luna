@@ -91,7 +91,12 @@ pub(crate) fn type_error(vm: &mut Vm, a: Args, i: u32, expected: &str) -> LuaErr
 /// The "T expected, got U" `luaL_typeerror` pushes before `luaL_argerror`
 /// adds to it; 5.3+ look a `__name` up first, which stays pushed when
 /// present.
-fn type_error_msg(vm: &mut Vm, a: Args, i: u32, expected: &str) -> Result<String, LuaError> {
+pub(crate) fn type_error_msg(
+    vm: &mut Vm,
+    a: Args,
+    i: u32,
+    expected: &str,
+) -> Result<String, LuaError> {
     use crate::runtime::puc_fmt::FmtArg::S;
     let got = typename_at(vm, a, i);
     let has_name = vm.version() >= LuaVersion::Lua53 && !a.is_none(i);
@@ -100,16 +105,8 @@ fn type_error_msg(vm: &mut Vm, a: Args, i: u32, expected: &str) -> Result<String
     }
     let named = has_name && !vm.get_mm(a.get(vm, i), crate::vm::exec::Mm::Name).is_nil();
     vm.native_push(u32::from(named));
-    // `lua_pushfstring(L, "%s expected, got %s", ...)`
-    if let Some(e) = vm.format_pushes(&[Some(2)]) {
-        return Err(e);
-    }
-    vm.native_push(1);
-    vm.api_check_before()?;
     let fmt = b"%s expected, got %s";
-    let m = vm.pushfstring(fmt, &[S(expected.as_bytes()), S(got.as_bytes())])?;
-    vm.api_check_after(Value::Str(m))?;
-    Ok(String::from_utf8_lossy(m.as_bytes()).into_owned())
+    option::pushed_extra(vm, 2, fmt, &[S(expected.as_bytes()), S(got.as_bytes())])
 }
 
 /// `luaL_checkany`.

@@ -77,8 +77,15 @@ fn parse_format(vm: &mut Vm, fmt: Value, argno: u32) -> Result<Fmt, LuaError> {
             let tn = argcheck::typename_of(vm, fmt);
             vm.metafield_check(fmt, b"__name")?;
             let named = !vm.get_mm(fmt, crate::vm::exec::Mm::Name).is_nil();
-            vm.native_push(1 + u32::from(named));
-            return Err(arg_error(vm, argno, &format!("string expected, got {tn}")));
+            vm.native_push(u32::from(named));
+            use crate::runtime::puc_fmt::FmtArg::S;
+            let fmt = b"%s expected, got %s";
+            return Err(
+                match argcheck::pushed_extra(vm, 2, fmt, &[S(b"string"), S(tn.as_bytes())]) {
+                    Ok(m) => arg_error(vm, argno, &m),
+                    Err(e) => e,
+                },
+            );
         }
     };
     // ≤5.2 require the '*'; 5.3 made it optional

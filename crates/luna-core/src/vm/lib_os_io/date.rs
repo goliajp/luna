@@ -65,14 +65,17 @@ pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
                 break;
             }
             None => {
-                let shown = String::from_utf8_lossy(lib_io::c_str(rest)).into_owned();
-                let msg = format!("invalid conversion specifier '%{shown}'");
                 // the buffer's slot (5.3+ make room for a conversion before
                 // checking it), then the message `luaL_argerror` adds to
                 let room = if v >= LuaVersion::Lua53 { 250 } else { 1 };
                 let buf = vm.buffer_slot(out.len() + room);
-                vm.native_push(buf + 1);
-                return Err(arg_error(vm, 1, &msg));
+                vm.native_push(buf);
+                let fmt = b"invalid conversion specifier '%%%s'";
+                let conv = [crate::runtime::puc_fmt::FmtArg::S(lib_io::c_str(rest))];
+                return Err(match argcheck::pushed_extra(vm, 2, fmt, &conv) {
+                    Ok(m) => arg_error(vm, 1, &m),
+                    Err(e) => e,
+                });
             }
         };
         item.clear();

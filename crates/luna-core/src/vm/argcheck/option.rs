@@ -26,8 +26,27 @@ pub(crate) fn check_option(
     if let Some(k) = options.iter().position(|o| o.as_bytes() == name) {
         return Ok(k);
     }
-    let shown = String::from_utf8_lossy(name);
-    // the message is pushed before `luaL_argerror` adds to it
+    let fmt = b"invalid option '%s'";
+    match pushed_extra(vm, 1, fmt, &[crate::runtime::puc_fmt::FmtArg::S(name)]) {
+        Ok(m) => Err(arg_error(vm, i + 1, &m)),
+        Err(e) => Err(e),
+    }
+}
+
+/// `lua_pushfstring` of the message `luaL_argerror` then adds to, with
+/// `conv` conversions: its text, the string left pushed.
+pub(crate) fn pushed_extra(
+    vm: &mut Vm,
+    conv: u32,
+    fmt: &[u8],
+    args: &[crate::runtime::puc_fmt::FmtArg],
+) -> Result<String, LuaError> {
+    if let Some(e) = vm.format_pushes(&[Some(conv)]) {
+        return Err(e);
+    }
     vm.native_push(1);
-    Err(arg_error(vm, i + 1, &format!("invalid option '{shown}'")))
+    vm.api_check_before()?;
+    let m = vm.pushfstring(fmt, args)?;
+    vm.api_check_after(Value::Str(m))?;
+    Ok(String::from_utf8_lossy(m.as_bytes()).into_owned())
 }
