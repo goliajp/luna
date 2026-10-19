@@ -14,14 +14,15 @@ use crate::runtime::table::Dialect;
 mod ghost;
 #[path = "heap_keeper.rs"]
 pub(in crate::runtime::heap) mod keeper;
+#[path = "heap_strcache.rs"]
+pub(crate) mod strcache;
 pub(crate) use ghost::{Ghost, GhostRef};
 #[path = "heap_parse.rs"]
 pub(crate) mod parse;
 
 /// PUC's structures luna has no object for, as far as the count goes.
 pub(crate) struct PucState {
-    /// above 0, nothing is counted: objects PUC made at another point (or
-    /// not at all) are being built
+    /// above 0, nothing is counted (objects PUC made elsewhere, or not at all, are being built)
     pub(crate) silent: u32,
     /// the string table's size and its number of strings
     pub(crate) strt_size: usize,
@@ -70,6 +71,8 @@ pub(crate) struct PucState {
     /// the library functions made as PUC's light C functions, by their
     /// number in the opening's tables: one value however often pushed
     pub(crate) lights: Vec<Option<Gc<crate::runtime::NativeClosure>>>,
+    /// 5.3 on, `luaS_new`'s cache (see `strcache`)
+    pub(crate) strcache: strcache::StrCache,
 }
 
 impl Default for PucState {
@@ -98,6 +101,7 @@ impl Default for PucState {
             phantoms: false,
             sandbox_base: false,
             lights: Vec::new(),
+            strcache: Default::default(),
         }
     }
 }

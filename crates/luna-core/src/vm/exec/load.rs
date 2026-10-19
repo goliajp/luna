@@ -174,19 +174,16 @@ impl Vm {
         } else {
             // what the parser and the compiler make is counted afterwards,
             // in the order PUC's parser makes it; that includes its own
-            // string of the chunk name, a new one when the name is long
-            // (5.2+ does not intern long strings)
+            // string of the chunk name (`Heap::chunk_name`)
             let counted = self.heap.puc.silent == 0;
             self.parse_scratch.record = counted;
             self.heap.puc.silent += 1;
             let base = self.heap.unborn_len();
             self.heap.set_aside_loads(counted);
-            let long = chunkname.len() > crate::runtime::string::MAX_SHORT_LEN
-                && self.heap.table_dialect != crate::runtime::table::Dialect::L51;
-            let source = match name {
-                Some(n) if !long => Ok(n),
-                _ => self.heap.try_intern(chunkname).map_err(SyntaxError::from),
-            };
+            let source = self
+                .heap
+                .chunk_name(chunkname, name)
+                .map_err(SyntaxError::from);
             let made = source
                 .clone()
                 .and_then(|source| self.compile_text_in_place(src, source))

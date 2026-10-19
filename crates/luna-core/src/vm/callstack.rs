@@ -79,6 +79,9 @@ pub(crate) struct Ar {
     pub(crate) currentline: i64,
     /// `(namewhat, name)`; `None` is PUC's `namewhat = ""`, `name = NULL`
     pub(crate) name: Option<(&'static str, String)>,
+    /// the source string of the chunk whose code named the function (its
+    /// names are that chunk's strings), where a Lua function called it
+    pub(crate) name_in: Option<crate::runtime::Gc<crate::runtime::LuaStr>>,
     pub(crate) istailcall: bool,
     pub(crate) extraargs: i64,
     pub(crate) ftransfer: i64,

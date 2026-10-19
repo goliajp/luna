@@ -96,7 +96,7 @@ pub(super) fn search_path(
     path: &[u8],
     sep: &[u8],
     dirsep: &[u8],
-) -> Result<Vec<u8>, Vec<u8>> {
+) -> Result<(Vec<u8>, Option<u32>), Vec<u8>> {
     let name = if sep.is_empty() {
         name.to_vec()
     } else {
@@ -107,7 +107,7 @@ pub(super) fn search_path(
         for tpl in path.split(|&b| b == b';').filter(|t| !t.is_empty()) {
             let file = replace(tpl, b"?", &name);
             if readable(&file) {
-                return Ok(file);
+                return Ok((file, None));
             }
             err.extend_from_slice(b"\n\tno file '");
             err.extend_from_slice(&file);
@@ -116,10 +116,15 @@ pub(super) fn search_path(
         return Err(err);
     }
     let expanded = replace(path, b"?", &name);
+    // the names are cut from a buffer in `searchpath`'s frame, or in a box
+    // when they do not fit there
+    let in_frame = expanded.len() < Vm::lual_buffersize(v);
+    let mut off = 0;
     for file in expanded.split(|&b| b == b';') {
         if readable(file) {
-            return Ok(file.to_vec());
+            return Ok((file.to_vec(), in_frame.then_some(off as u32)));
         }
+        off += file.len() + 1;
     }
     err.extend_from_slice(b"no file '");
     err.extend_from_slice(&replace(&expanded, b";", b"'\n\tno file '"));
@@ -138,8 +143,8 @@ pub(super) fn ll_searchpath(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lua
         c_str(&dirsep),
     );
     match r {
-        Ok(file) => {
-            let f = vm.str_value(&file)?;
+        Ok((file, at)) => {
+            let f = found_string(vm, &file, at)?;
             vm.nat_ret(fs, &[f])
         }
         Err(msg) => {
@@ -149,14 +154,25 @@ pub(super) fn ll_searchpath(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lua
     }
 }
 
+/// The string of `file`, the name `searchpath` found: 5.4 on pushed from
+/// byte `at` of its buffer, where that is in its frame (see `strcache`),
+/// ≤5.3 made by `luaL_gsub`.
+pub(super) fn found_string(vm: &mut Vm, file: &[u8], at: Option<u32>) -> Result<Value, LuaError> {
+    use crate::runtime::heap::strcache::{CStr, site};
+    match at {
+        Some(off) => vm.str_value_at(CStr::Frame(site::SEARCHPATH, vm.c_chain_key(), off), file),
+        None => vm.str_value(file),
+    }
+}
+
 /// `findfile`: search `package[pname]` (which must be a string) for `name`.
 pub(super) fn find_file(
     vm: &mut Vm,
     pkg: Gc<Table>,
     name: &[u8],
     pname: &str,
-) -> Result<Result<Vec<u8>, Vec<u8>>, LuaError> {
-    let path = vm.native_getfield(Value::Table(pkg), pname.as_bytes())?;
+) -> Result<Result<(Vec<u8>, Option<u32>), Vec<u8>>, LuaError> {
+    let path = vm.native_getfield(Value::Table(pkg), None, pname.as_bytes())?;
     let Some(path) = argcheck::to_str_bytes(vm, path) else {
         return Err(crate::vm::builtins::raise_fmt(
             vm,

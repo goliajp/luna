@@ -19,7 +19,7 @@ pub(super) fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
     let name = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
     let preload = if v == LuaVersion::Lua51 {
         let pkg = upval_table(vm, fs, 0);
-        match vm.native_getfield(Value::Table(pkg), b"preload")? {
+        match vm.native_getfield(Value::Table(pkg), None, b"preload")? {
             Value::Table(t) => t,
             _ => return Err(raise_str(vm, "'package.preload' must be a table")),
         }
@@ -28,7 +28,11 @@ pub(super) fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
         vm.native_push_vals(&[Value::Table(t)])?;
         t
     };
-    let loader = vm.native_getfield(Value::Table(preload), name.as_bytes())?;
+    let loader = vm.native_getfield(
+        Value::Table(preload),
+        Some(super::require::name_at(name)),
+        name.as_bytes(),
+    )?;
     if loader.is_nil() {
         let lead = if v >= LuaVersion::Lua54 { "" } else { "\n\t" };
         let msg = format!(
@@ -50,7 +54,7 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         .as_bytes()
         .to_vec();
     let pkg = upval_table(vm, fs, 0);
-    let file = match find_file(vm, pkg, &name, "path")? {
+    let (file, at) = match find_file(vm, pkg, &name, "path")? {
         Ok(f) => f,
         Err(msg) => {
             let m = str_value(vm, &msg)?;
@@ -58,16 +62,24 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         }
     };
     let loadfile = vm.nat_upval(fs, 1);
-    let fname = str_value(vm, &file)?;
+    let fname = super::path::found_string(vm, &file, at)?;
     let r = vm.call_value(loadfile, &[fname])?;
     match r.first() {
         Some(f @ Value::Closure(_)) => {
             let f = *f;
-            // 5.1's loader gets only the name; 5.2+ also the file name
+            // 5.1's loader gets only the name; 5.2+ also the file name,
+            // which `checkload` pushes again from the found name's bytes
             if vm.version() == LuaVersion::Lua51 {
                 return vm.nat_ret(fs, &[f]);
             }
-            vm.nat_ret(fs, &[f, fname])
+            let Value::Str(found) = fname else {
+                unreachable!("a string")
+            };
+            vm.lib_roots.extend([f, fname]);
+            let at = crate::runtime::heap::strcache::CStr::In(found.as_ptr() as *const _, 0);
+            let pushed = vm.api_push_string_at(at, &file);
+            vm.lib_roots.truncate(vm.lib_roots.len() - 2);
+            vm.nat_ret(fs, &[f, pushed?])
         }
         _ => {
             let msg = match r.get(1) {
@@ -87,7 +99,7 @@ pub(super) fn searcher_c(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         .to_vec();
     let pkg = upval_table(vm, fs, 0);
     match find_file(vm, pkg, &name, "cpath")? {
-        Ok(file) => Err(load_error(vm, &name, &file, DLMSG)),
+        Ok((file, _)) => Err(load_error(vm, &name, &file, DLMSG)),
         Err(msg) => {
             let m = str_value(vm, &msg)?;
             vm.nat_ret(fs, &[m])
@@ -106,7 +118,7 @@ pub(super) fn searcher_croot(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lu
     };
     let pkg = upval_table(vm, fs, 0);
     match find_file(vm, pkg, &name[..dot], "cpath")? {
-        Ok(file) => Err(load_error(vm, &name, &file, DLMSG)),
+        Ok((file, _)) => Err(load_error(vm, &name, &file, DLMSG)),
         Err(msg) => {
             let m = str_value(vm, &msg)?;
             vm.nat_ret(fs, &[m])

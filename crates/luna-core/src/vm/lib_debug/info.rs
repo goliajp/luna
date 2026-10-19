@@ -1,6 +1,7 @@
 //! `debug.getinfo`: option checking and the result table.
 
-use super::{check_int, getthread, is_function, set_field, set_str};
+use super::{check_int, getthread, is_function, set_field, set_str, set_str_at};
+use crate::runtime::heap::strcache::{CStr, site};
 use crate::runtime::{Gc, Table, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{Args, opt_string, to_num};
@@ -187,8 +188,17 @@ fn info_fields(
         } else {
             &ar.source[..]
         };
-        set_str(vm, t, "source", source)?;
-        set_str(vm, t, "short_src", cstr(&ar.short_src))?;
+        // `lua_pushstring` (≤5.3) looks the source up where the prototype
+        // keeps it, `short_src` where `db_getinfo`'s frame is
+        match ar.func {
+            Value::Closure(cl) if v == LuaVersion::Lua53 => {
+                let at = CStr::In(cl.proto.source.as_ptr() as *const _, 0);
+                set_str_at(vm, t, "source", at, source)?;
+            }
+            _ => set_str(vm, t, "source", source)?,
+        }
+        let at = CStr::Frame(site::GETINFO, vm.c_chain_key(), 0);
+        set_str_at(vm, t, "short_src", at, cstr(&ar.short_src))?;
         set_field(vm, t, "linedefined", Value::Int(ar.linedefined))?;
         set_field(vm, t, "lastlinedefined", Value::Int(ar.lastlinedefined))?;
         set_str(vm, t, "what", ar.what.as_bytes())?;
@@ -206,7 +216,8 @@ fn info_fields(
     if has(b'n') {
         match &ar.name {
             Some((what, name)) => {
-                set_str(vm, t, "name", name.as_bytes())?;
+                let nm = super::push_name(vm, ar.name_in, name.as_bytes())?;
+                set_field(vm, t, "name", nm)?;
                 set_str(vm, t, "namewhat", what.as_bytes())?;
             }
             None => {
@@ -257,6 +268,7 @@ fn popped_ar(f: Value) -> crate::vm::callstack::Ar {
         lastlinedefined: -1,
         currentline: -1,
         name: None,
+        name_in: None,
         istailcall: false,
         extraargs: 0,
         ftransfer: 0,

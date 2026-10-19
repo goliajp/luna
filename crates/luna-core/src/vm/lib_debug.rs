@@ -40,6 +40,36 @@ fn set_str(vm: &mut Vm, t: Gc<Table>, k: &str, bytes: &[u8]) -> Result<(), LuaEr
     Ok(())
 }
 
+/// `lua_pushstring` of `name`, a name the chunk whose source string is
+/// `src` has (when known): a long one is found in `luaS_new`'s cache by
+/// where the chunk's string of it is.
+fn push_name(
+    vm: &mut Vm,
+    src: Option<Gc<crate::runtime::LuaStr>>,
+    name: &[u8],
+) -> Result<Value, LuaError> {
+    use crate::runtime::heap::strcache::{CStr, site};
+    match src {
+        Some(s) => vm.api_push_string_at(
+            CStr::Named(s.as_ptr() as *const _, site::name_hash(name)),
+            name,
+        ),
+        None => vm.api_push_string(name),
+    }
+}
+
+/// [`set_str`] of a C string that lives at `at` (see `strcache`).
+fn set_str_at(
+    vm: &mut Vm,
+    t: Gc<Table>,
+    k: &str,
+    at: crate::runtime::heap::strcache::CStr,
+    bytes: &[u8],
+) -> Result<(), LuaError> {
+    let v = vm.api_push_string_at(at, bytes)?;
+    set_field(vm, t, k, v)
+}
+
 /// PUC `getthread`: an optional leading thread argument, and the offset of
 /// the arguments after it.
 fn getthread(vm: &Vm, a: Args) -> (Option<Gc<Coro>>, u32) {

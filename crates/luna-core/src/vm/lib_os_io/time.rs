@@ -37,7 +37,7 @@ fn getfield_pushed(
     d: i32,
     delta: i64,
 ) -> Result<i32, LuaError> {
-    let v = vm.native_getfield(Value::Table(t), key.as_bytes())?;
+    let v = vm.native_getfield(Value::Table(t), None, key.as_bytes())?;
     let missing = |vm: &mut Vm| raise_fmt(vm, 1, &format!("field '{key}' missing in date table"));
     if vm.version() <= LuaVersion::Lua52 {
         return match argcheck::to_num(vm, v) {
@@ -81,7 +81,7 @@ fn num_exact(n: crate::numeric::Num) -> Option<i64> {
 /// `setfield`: the value is pushed, then `lua_setfield` stores it.
 fn setfield(vm: &mut Vm, t: Gc<Table>, key: &str, v: Value) -> Result<(), LuaError> {
     vm.native_push(1);
-    vm.native_setfield(Value::Table(t), key.as_bytes(), v)
+    vm.native_setfield(Value::Table(t), None, key.as_bytes(), v)
 }
 
 /// `setallfields`: write a broken-down time into `t` in the dialect's
@@ -174,7 +174,7 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             }
         }
     }
-    let isdst = vm.native_getfield(Value::Table(t), b"isdst")?;
+    let isdst = vm.native_getfield(Value::Table(t), None, b"isdst")?;
     vm.native_pop(1);
     // a true isdst (`tm_isdst > 0`; nil is -1, false 0) in a zone without
     // daylight saving time: glibc's mktime takes DST to be one hour ahead
