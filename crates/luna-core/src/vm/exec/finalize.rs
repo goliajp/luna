@@ -136,7 +136,7 @@ impl Vm {
         }
         match stack_size::grow(self.version, s, top, stack_size::BASIC) {
             Grown::Fits(n) => {
-                self.resize_stack(n);
+                self.regrow_stack(true, n);
                 true
             }
             Grown::Overflow(n) => {

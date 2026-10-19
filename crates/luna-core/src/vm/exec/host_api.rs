@@ -42,8 +42,9 @@ impl Vm {
         };
         // 5.1 counts the room from the C function's base
         let base = self.running_natives.last().map_or(top, |a| a.func_slot + 1);
+        let grew = top + 1 + n >= stack_size::last(self.version, self.stack_size);
         let (ok, s) = stack_size::api_check(self.version, self.stack_size, top + 1, base + 1, n);
-        self.resize_stack(s);
+        self.regrow_stack(ok && grew, s);
         if ok {
             self.reserve_native_room(top + n);
         }

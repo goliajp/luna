@@ -35,6 +35,15 @@ impl Vm {
         self.set_stack_size(s);
     }
 
+    /// [`Vm::resize_stack`] after PUC's stack test failed: PUC reallocates
+    /// even to the size the stack has (`luaD_growstack` at the limit).
+    pub(crate) fn regrow_stack(&mut self, grew: bool, s: u32) {
+        if grew && s == self.stack_size {
+            self.heap.acct_stack_same(s);
+        }
+        self.resize_stack(s);
+    }
+
     /// The running thread's 5.1 `CallInfo` array resized to `n` entries
     /// (`luaD_reallocCI`).
     pub(super) fn resize_frames_51(&mut self, n: u32) {
@@ -59,9 +68,10 @@ impl Vm {
         if self.version == LuaVersion::Lua51 && top + need > STACK_CAP_51 {
             return Err(self.rt_err("stack overflow"));
         }
+        let grew = top + 1 + need >= stack_size::last(self.version, self.stack_size);
         match stack_size::check(self.version, self.stack_size, top + 1, need) {
             Grown::Fits(s) => {
-                self.resize_stack(s);
+                self.regrow_stack(grew, s);
                 Ok(())
             }
             Grown::Overflow(s) => {

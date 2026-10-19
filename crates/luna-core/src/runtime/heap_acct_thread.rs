@@ -34,6 +34,12 @@ impl Heap {
         }
     }
 
+    /// The stack of `s` slots reallocated to the size it has.
+    pub(crate) fn acct_stack_same(&mut self, s: u32) {
+        let b = self.stack_bytes(s);
+        self.acct_block(b, b);
+    }
+
     /// 5.1's `CallInfo` array resized from `old` to `new` entries
     /// (`luaD_reallocCI`).
     pub(crate) fn acct_ci51(&mut self, old: u32, new: u32) {
