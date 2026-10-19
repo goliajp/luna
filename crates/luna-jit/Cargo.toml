@@ -29,6 +29,12 @@ workspace = true
 name = "gc_checkpoints"
 required-features = ["gc-stress"]
 
+# recordings through collections, on memory that is never reused, checked
+# by the collector checks the feature builds in
+[[test]]
+name = "recording_freed"
+required-features = ["gc-stress"]
+
 [build-dependencies]
 # compiles the C half of the C API (`csrc/`)
 cc = "1"

@@ -1,12 +1,15 @@
-//! The objects a trace being recorded went through, and a check tests turn
+//! The objects a trace being recorded went through, and, in the builds
+//! that check the collector (`gc-stress`, `gc-verify`), a check tests turn
 //! on: after a collection, a recording still under way holds none the
 //! collection freed or a pending sweep frees.
 
 use super::*;
 use crate::jit::trace::TraceRecord;
 use crate::runtime::heap::GcHeader;
+#[cfg(any(feature = "gc-stress", feature = "gc-verify"))]
 use std::cell::Cell;
 
+#[cfg(any(feature = "gc-stress", feature = "gc-verify"))]
 thread_local! {
     static CHECK: Cell<bool> = const { Cell::new(false) };
 }
@@ -24,6 +27,7 @@ pub(super) fn recording_objects(rec: &TraceRecord) -> impl Iterator<Item = *cons
         .chain(rec.index_key.map(|s| s.as_ptr() as *const GcHeader))
 }
 
+#[cfg(any(feature = "gc-stress", feature = "gc-verify"))]
 impl Vm {
     /// Have every collection on this thread end by checking the trace
     /// being recorded, if any, holds only objects the collector keeps.
