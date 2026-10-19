@@ -22,7 +22,10 @@
 //! - Idempotent under second-call: the slots already hold valid
 //!   `Gc<LuaStr>` pointers, the section walk re-interns the bytes
 //!   (cheap — string-table dedup), and re-writes the slot with the
-//!   same pointer.
+//!   same pointer (pinned once more).
+//! - Each string is pinned as a host root: a collection before the
+//!   program's constants name it (or after they die) would otherwise
+//!   free what the slot points at.
 //! - Empty-section tolerant: a deploy binary that linked zero AOT
 //!   trace `.o`s has both bracket symbols collapsing to the same
 //!   address; the walk loop terminates with zero entries.
@@ -196,10 +199,46 @@ unsafe fn walk_index_bytes(vm: &mut Vm, base: *const u8, len_bytes: usize) -> Op
             core::slice::from_raw_parts(entry.bytes_ptr.add(8), len)
         };
         let interned = vm.heap.try_intern(bytes).ok()?;
+        // the slot holds the string for the Vm's life, whether or not a
+        // constant of the program it loads names it yet
+        vm.pin_host(luna_core::runtime::Value::Str(interned));
         // SAFETY: a non-null `slot_ptr` points at a writable pointer slot
         // (# Safety)
         unsafe { core::ptr::write(entry.slot_ptr, interned.as_ptr() as *const u8) };
         populated += 1;
     }
     Some(populated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use luna_core::version::LuaVersion;
+
+    #[test]
+    fn a_resolved_key_outlives_a_collection_before_any_constant_names_it() {
+        let key = b"a_key_only_a_slot_holds";
+        let mut block = (key.len() as u64).to_le_bytes().to_vec();
+        block.extend_from_slice(key);
+        let mut slot: *const u8 = core::ptr::null();
+        let entries = [IndexEntry {
+            bytes_ptr: block.as_ptr(),
+            slot_ptr: &mut slot,
+        }];
+        let mut vm = Vm::new(LuaVersion::Lua55);
+        // SAFETY: `entries` is one aligned entry whose bytes block and
+        // slot outlive the call
+        let n = unsafe {
+            walk_index_bytes(
+                &mut vm,
+                entries.as_ptr() as *const u8,
+                core::mem::size_of_val(&entries),
+            )
+        };
+        assert_eq!(n, Some(1));
+        vm.eval("collectgarbage() collectgarbage()")
+            .expect("collect");
+        let live = vm.heap.find_interned(key).map(|s| s.as_ptr() as *const u8);
+        assert_eq!(live, Some(slot), "the slot's string was collected");
+    }
 }
