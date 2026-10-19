@@ -9,6 +9,7 @@
 //! fail with [`Oom`], leaving the container unchanged.
 
 mod any;
+mod arena;
 mod boxed;
 mod ctx;
 mod kind;

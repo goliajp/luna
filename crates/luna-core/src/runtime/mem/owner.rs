@@ -24,7 +24,12 @@ impl MemOwner {
             oom_raised: Cell::new(0),
             pool: RefCell::default(),
             small: RefCell::default(),
+            arena: Default::default(),
         });
+        // the system allocator's first small objects come from one block
+        if matches!(ctx.mode, Mode::System) {
+            ctx.arena.open();
+        }
         MemOwner(MemRef(NonNull::from(Box::leak(ctx))))
     }
 
