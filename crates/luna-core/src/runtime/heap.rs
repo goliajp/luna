@@ -282,6 +282,8 @@ pub(crate) use acct::{Deferred, Ghost, GhostRef, PucKind, is_uncounted, parse};
 mod alloc;
 #[path = "heap_barrier.rs"]
 mod barrier;
+#[path = "heap_close.rs"]
+mod close;
 #[path = "heap_collect.rs"]
 mod collect;
 pub(crate) use collect::{Propagated, Running};
