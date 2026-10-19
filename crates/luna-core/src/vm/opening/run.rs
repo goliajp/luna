@@ -266,6 +266,13 @@ impl Opener {
                 vm.heap.set_light(id, n);
                 Ok(Value::Native(n))
             }
+            // 5.1's C closure of no upvalues, in its environment
+            super::Ctor::F(g, b) if nup == 0 => {
+                let n = vm.retry_oom(|vm| vm.heap.try_new_c0(g, b))?;
+                let env = self.env_bits(vm);
+                vm.heap.set_env51(n.as_ptr() as *mut _, env);
+                Ok(Value::Native(n))
+            }
             super::Ctor::F(g, b) => {
                 // PUC's upvalues, the values on top
                 let t = self.top(vm) as usize;

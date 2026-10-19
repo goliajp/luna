@@ -27,7 +27,8 @@ impl Sizer {
                 // what an object stands for besides itself (all of it, for
                 // one of luna's own): PUC marks those objects with it
                 let uncounted = is_uncounted(h);
-                let stands = if uncounted || (*h).cls & STANDS != 0 {
+                // (every object with stand-ins is marked STANDS)
+                let stands = if (*h).cls & STANDS != 0 {
                     let s = self.stand_ins.iter().filter(|s| s.0 == h);
                     (s.map(|s| s.1).sum::<usize>()
                         + crate::runtime::heap::acct::keeper::kept_bytes(&self.keepers, h))
