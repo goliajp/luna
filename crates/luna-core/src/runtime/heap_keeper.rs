@@ -23,7 +23,7 @@ impl Heap {
         let mut hdr = GcHeader::new(ObjTag::Ghost);
         hdr.sub = KEEPER;
         // `kept_dead` asks about it at every sweep
-        hdr.cls = parse::KEPT;
+        hdr.cls |= parse::KEPT;
         let g = self.try_adopt(Ghost { hdr, sizes })?;
         self.acct_obj(PucKind::LongStr, size);
         self.puc.keepers.push((g.as_ptr() as *mut GcHeader, host));
