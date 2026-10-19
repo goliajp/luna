@@ -62,10 +62,19 @@ pub(super) fn unpack_items(
             }
             KOption::Str => {
                 let len = unpack_int(vm, &data[p..], h.islittle, size as usize, false)? as u64;
+                // 5.3 and 5.4 read it as a `size_t`
+                let len = if v <= LuaVersion::Lua54 {
+                    len as usize as u64
+                } else {
+                    len
+                };
                 if len > ld - *pos - size {
-                    // 5.3's `*pos + len + size <= ld` wraps for a huge length
-                    // and lets it through to the string allocation
-                    if v == LuaVersion::Lua53 && (*pos).wrapping_add(len).wrapping_add(size) <= ld {
+                    // 5.3's `*pos + len + size <= ld` wraps (in `size_t`) for
+                    // a huge length and lets it through to the allocation
+                    let end = (*pos as usize)
+                        .wrapping_add(len as usize)
+                        .wrapping_add(size as usize);
+                    if v == LuaVersion::Lua53 && end as u64 <= ld {
                         return Err(vm.plain_err("memory allocation error: block too big"));
                     }
                     return Err(arg_error(vm, 2, "data string too short"));
@@ -167,7 +176,13 @@ pub(super) fn pack_items(
             KOption::Str => {
                 let s = argcheck::check_string(vm, a, i)?;
                 let len = s.len() as u64;
-                if !(size >= SZINT || len < (1u64 << (size * 8))) {
+                // `sizeof(size_t)` before 5.5, `sizeof(lua_Unsigned)` after
+                let whole = if vm.version() >= LuaVersion::Lua55 {
+                    SZINT
+                } else {
+                    crate::vm::c_abi::SIZEOF_SIZE_T
+                };
+                if !(size >= whole || len < (1u64 << (size * 8))) {
                     return Err(arg_error(
                         vm,
                         *arg,

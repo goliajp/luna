@@ -28,9 +28,8 @@ const MAXINTSIZE: u64 = 16;
 const SZINT: u64 = 8;
 /// Native endianness assumed by the `=` option (our targets are little).
 const NATIVE_LITTLE: bool = true;
-/// Native max alignment (`offsetof(struct cD, u)`) on the reference
-/// platform.
-const NATIVE_MAXALIGN: u64 = 8;
+/// Native max alignment (`offsetof(struct cD, u)`).
+const NATIVE_MAXALIGN: u64 = crate::vm::c_abi::MAXALIGN;
 
 /// Grow the result by `n` bytes, or fail as the allocator would.
 fn reserve(vm: &mut Vm, out: &[u8], n: u64) -> Result<(), LuaError> {
@@ -114,6 +113,13 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let data = d.as_bytes();
     let ld = data.len() as u64;
     let init = argcheck::opt_integer(vm, a, 2, 1)?;
+    // a positive position becomes a `size_t`, which wraps on a 32-bit target
+    #[cfg(target_pointer_width = "32")]
+    let init = if init > 0 {
+        i64::from(init as u32)
+    } else {
+        init
+    };
     // 5.3 `posrelat` leaves 0 and far-negative positions at 0, which the
     // bounds check rejects; 5.4's `posrelatI` clips them to 1
     let rel = if init >= 0 {
