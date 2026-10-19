@@ -8,6 +8,27 @@ use crate::jit::trace::CompiledTrace;
 /// once it is cached, and the parent's exit it runs from.
 pub(super) type Wired = (TArc<CompiledTrace>, u32);
 
+/// The `dispatch_off_reason` of a side trace.
+const SIDE_TRACE: &str = "side-trace";
+
+impl Vm {
+    /// Whether the interpreter at `pc` enters trace `t`: one headed there
+    /// that is dispatchable, or that closes by down-recursion (unless
+    /// `downrec_blocked`, set for one entry after a forced exit so the
+    /// interpreter runs the op at the head). Never a side trace: it runs
+    /// only from its parent's exit, so its parent's function is running or
+    /// inlined by a live trace, which tiering the side trace up reads.
+    #[doc(hidden)]
+    pub fn trace_admits(t: &CompiledTrace, pc: u32, downrec_blocked: bool) -> bool {
+        if t.head_pc != pc || t.dispatch_off_reason == Some(SIDE_TRACE) || downrec_blocked {
+            return false;
+        }
+        // a single-compare down-recursion trace stays undispatchable (most
+        // entries would miss its guard) but is entered through its link
+        t.dispatchable || t.downrec_link.is_some()
+    }
+}
+
 impl Vm {
     /// A closed side trace: hook its entry into the parent trace's exit.
     /// `Some` when it may run from there; [`Self::hold_side_trace`] then
@@ -27,6 +48,7 @@ impl Vm {
         // (the lowerer records the other reasons first).
         let runnable = ct.dispatchable || ct.dispatch_off_reason == Some("length-gate");
         ct.dispatchable = false;
+        ct.dispatch_off_reason = Some(SIDE_TRACE);
         let entry_ptr = ct.entry as *const () as *const u8;
         let parent_traces = parent_proto.traces.borrow();
         let parent_ct = parent_traces.iter().find(|t| t.head_pc == parent_head_pc)?;

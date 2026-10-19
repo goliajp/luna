@@ -18,32 +18,7 @@ impl Vm {
             let traces = cl.proto.traces.borrow();
             traces
                 .iter()
-                .find(|t| {
-                    if t.head_pc != pc {
-                        return false;
-                    }
-                    let is_downrec = t.downrec_link.is_some();
-                    // The one-shot suppress
-                    // flag blocks any admit (primary or fallback)
-                    // for `downrec_link`-bearing traces so the
-                    // next interp iter can run the natural op
-                    // at `head_pc` and advance past it. The multi-way
-                    // `dispatchable=true` lift means the suppress
-                    // must also cover the primary `t.dispatchable`
-                    // arm — otherwise the lifted lookup would
-                    // immediately re-admit after a force-deopt
-                    // and the infinite loop returns.
-                    if downrec_admit_blocked {
-                        return false;
-                    }
-                    // Primary arm: `dispatchable=true` traces
-                    // (lifted multi-way DownRec or normal traces).
-                    // Fallback arm: single-CMP `dispatchable=false`
-                    // DownRec traces (single-CMP guard kept
-                    // pinned because the 90% miss-rate would
-                    // make blind admit perf-negative).
-                    t.dispatchable || is_downrec
-                })
+                .find(|t| Vm::trace_admits(t, pc, downrec_admit_blocked))
                 .cloned()
         }) else {
             return false;
