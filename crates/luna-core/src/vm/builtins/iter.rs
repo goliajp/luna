@@ -75,7 +75,7 @@ pub(crate) fn pairs_mm_results(vm: &Vm) -> usize {
 /// "invalid key to 'next'", raised after `lua_settop(L, 2)`.
 fn bad_key(vm: &mut Vm, nargs: u32) -> LuaError {
     vm.native_set_pushed(2 - nargs as i32);
-    vm.plain_err("invalid key to 'next'")
+    vm.runerror_in_c("invalid key to 'next'")
 }
 
 /// PUC `ipairsaux` — the iterator behind `ipairs`. Exposed

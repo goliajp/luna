@@ -75,7 +75,7 @@ pub(super) fn unpack_items(
                         .wrapping_add(len as usize)
                         .wrapping_add(size as usize);
                     if v == LuaVersion::Lua53 && end as u64 <= ld {
-                        return Err(vm.plain_err("memory allocation error: block too big"));
+                        return Err(vm.runerror_in_c("memory allocation error: block too big"));
                     }
                     return Err(arg_error(vm, 2, "data string too short"));
                 }

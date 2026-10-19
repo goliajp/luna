@@ -228,7 +228,7 @@ fn read_count(vm: &mut Vm, u: Gc<Userdata>, n: i64) -> Rd {
         }
         return Err(RdErr::Lua(match vm.version() {
             LuaVersion::Lua52 if size > u64::MAX - 64 => {
-                vm.plain_err("memory allocation error: block too big")
+                vm.runerror_in_c("memory allocation error: block too big")
             }
             LuaVersion::Lua53 => {
                 vm.native_push(1);
