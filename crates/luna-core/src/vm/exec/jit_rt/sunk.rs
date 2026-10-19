@@ -120,11 +120,12 @@ impl Vm {
 }
 
 impl Vm {
-    /// After a collection's atomic phase, before its sweep: a trace being
-    /// recorded (a native it called collects) that went through an object
-    /// the collection found dead, a prototype a load it called freed, is
-    /// dropped, to be recorded again from the start.
-    pub(crate) fn forget_dead_recording(&mut self) {
+    /// Before a collection's atomic phase: the objects a trace being
+    /// recorded went through (a native it called collects), watched
+    /// without being kept alive.
+    pub(crate) fn watch_recording(&mut self) {
+        let w = &mut self.heap.weak_objs;
+        w.clear();
         let Some(rec) = self.jit.active_trace.as_deref() else {
             return;
         };
@@ -135,12 +136,15 @@ impl Vm {
             .chain(rec.retfs.iter().map(|r| r.proto))
             .chain(rec.downrec_close.as_ref().map(|d| d.target_proto));
         let key = rec.index_key.map(|s| s.as_ptr() as *const GcHeader);
-        let dead = protos
-            .map(h)
-            .chain(key)
-            .any(|o| self.heap.dead_after_atomic(o));
-        if dead {
-            self.jit.active_trace = None;
+        w.extend(protos.map(h).chain(key).map(|o| (o, false)));
+    }
+
+    /// After it: a recording that went through an object the collection
+    /// found dead, a prototype a load it called freed, is dropped, to be
+    /// recorded again from the start.
+    pub(crate) fn forget_dead_recording(&mut self) {
+        let w = std::mem::take(&mut self.heap.weak_objs);
+        if w.iter().any(|o| o.1) && self.jit.active_trace.take().is_some() {
             self.jit.counters.aborted += 1;
             self.jit.counters.bump_close_cause("collection");
         }

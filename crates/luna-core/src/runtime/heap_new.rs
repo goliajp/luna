@@ -75,6 +75,7 @@ impl Heap {
             gc_event_51: None,
             chunk_roots: Vec::new(),
             weak_watch: Vec::new(),
+            weak_objs: Vec::new(),
             threads: Vec::new(),
             track_chunk_roots: false,
             mem_cap: None,

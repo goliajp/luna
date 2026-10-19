@@ -224,17 +224,17 @@ pub struct Heap {
     slab: slab::NativeSlab,
     /// 5.1's environments luna has no objects for
     env51_box: Option<Box<env51::Env51>>,
-    /// `io.stdin` as the io library made it, which the host reads lines
-    /// through; null once a collection freed it
+    /// `io.stdin` as made, which the host reads lines through; null once freed
     pub(crate) stdin_ud: *mut GcHeader,
     /// The main functions of the chunks loaded while `track_chunk_roots`
     /// is set, without keeping them alive: the collector drops each one it
     /// finds dead. Compiled traces taken over from another Vm find the
     /// functions they inlined in these chunks.
     pub(crate) chunk_roots: Vec<Gc<Proto>>,
-    /// values the VM refers to without keeping them alive, and whether the
-    /// last marking found each dead (see `Vm::forget_dead_errors`)
+    /// values and objects the VM refers to without keeping them alive, and
+    /// whether the last marking found each dead (`Vm::forget_dead_errors`)
     pub(crate) weak_watch: Vec<(Value, bool)>,
+    pub(crate) weak_objs: Vec<(*const GcHeader, bool)>,
     /// the threads PUC's collector visits: since the last marking, the kept
     pub(crate) threads: Vec<Gc<crate::runtime::Coro>>,
     /// the sizes of PUC's objects in this dialect, which `bytes` counts

@@ -83,6 +83,31 @@ fn a_recording_through_a_load_that_collects_holds_nothing_freed() {
     }
 }
 
+/// A loop recorded through a function it loads, drops and then collects
+/// in full: the recording holds the dead prototype, and the full
+/// collection, which sweeps right after it marks, is where it is found
+/// dead (before the sweep, not after it, when its header is freed).
+#[test]
+fn a_full_collection_during_a_recording_reads_nothing_freed() {
+    let source = b"
+        local n = 0
+        for i = 1, 200 do
+          local f = load('return ' .. i)
+          n = n + f()
+          f = nil
+          collectgarbage()
+        end
+        print(n)
+    ";
+    for seed in 1..=16 {
+        let want = run(&mut interp_seeded(LuaVersion::Lua54, seed), source);
+        for hot in [1, 3] {
+            let mut vm = tiered_seeded(LuaVersion::Lua54, seed, hot, TraceTier::Auto, 37);
+            assert_eq!(run(&mut vm, source), want, "seed {seed}, hot {hot}");
+        }
+    }
+}
+
 /// `src` returns a function; run it under the interpreter and under `vm`
 /// `calls` times, comparing every result.
 fn compare_calls(vm: &mut Vm, src: &str, calls: usize) {

@@ -248,6 +248,7 @@ impl Vm {
             w.push((v.unwrap_or(Value::Nil), false));
         }
         w.extend(self.errored_natives.iter().map(|e| (e.err, false)));
+        self.watch_recording();
     }
 
     /// After it: forget each one the collection found dead, before its
