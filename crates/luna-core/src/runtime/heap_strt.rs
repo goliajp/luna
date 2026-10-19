@@ -32,6 +32,8 @@ pub(super) struct StrtSweep {
     pub(super) grow_from: Option<usize>,
     /// room for renumbering the chains after a resize
     order: Vec<(u32, u16, *mut LuaStr)>,
+    /// the old `seq` kept for the next resize
+    spare: Vec<u16>,
     ordered: Vec<(u32, u16, *mut LuaStr)>,
 }
 
