@@ -203,7 +203,7 @@ impl Heap {
         // SAFETY: the caller's contract
         unsafe {
             if (*h).cls & KEPT == 0 || (*h).tag != ObjTag::Str {
-                return false;
+                return (*h).cls & KEPT != 0 && self.keeper_kept(h);
             }
             (*h).cls &= !KEPT;
             #[cfg(feature = "gc-trace")]

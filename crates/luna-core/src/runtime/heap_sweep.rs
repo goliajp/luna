@@ -168,7 +168,7 @@ impl Heap {
                 if self.listed(cur) {
                     n += 1;
                 } else if (*cur).tag == ObjTag::Ghost {
-                    if dead {
+                    if dead && !self.kept_dead(cur) {
                         let left = self.free_ghost_records(&mut *(cur as *mut Ghost), quota - n);
                         n += left.0;
                         if left.1 {
