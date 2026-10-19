@@ -42,7 +42,7 @@ fn getfield_pushed(
     if vm.version() <= LuaVersion::Lua52 {
         return match argcheck::to_num(vm, v) {
             // (int)lua_tointeger: truncate, then wrap to 32 bits
-            Some(n) => Ok((num_trunc(n) as i32).wrapping_sub(delta as i32)),
+            Some(n) => Ok((c_abi::tointeger52(vm.version(), n) as i32).wrapping_sub(delta as i32)),
             None if d < 0 => Err(missing(vm)),
             None => Ok(d),
         };
@@ -68,14 +68,6 @@ fn getfield_pushed(
         return Err(raise_fmt(vm, 1, &format!("field '{key}' is out-of-bound")));
     }
     Ok((res - delta) as i32)
-}
-
-/// `lua_tointeger` before 5.3: a float truncated toward zero.
-fn num_trunc(n: crate::numeric::Num) -> i64 {
-    match n {
-        crate::numeric::Num::Int(i) => i,
-        crate::numeric::Num::Float(f) => f as i64,
-    }
 }
 
 /// `lua_tointegerx` from 5.3: only an integral value converts.
@@ -206,6 +198,8 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             fields.3,
         )
     };
+    // a time past `time_t` (32 bits on i386) is mktime's failure too
+    let secs = secs.filter(|&s| c_abi::is_time(s));
     // 5.3+ write the fields back before checking the result, as PUC does:
     // normalised when the time exists, as given when it overflows (yday and
     // wday are then left alone: PUC writes whatever its `struct tm` held)
@@ -270,31 +264,4 @@ fn ucrt_mktime(
     }
     let t = mktime(y + 1900, *mon0, mday, hour, min, sec)?;
     (0..=MAX_TIME).contains(&t).then_some(t)
-}
-
-/// `l_checktime` (5.3+) or ≤5.2's `(time_t)luaL_checknumber`.
-pub(super) fn check_time(vm: &mut Vm, a: Args, i: u32) -> Result<i64, LuaError> {
-    if vm.version() <= LuaVersion::Lua52 {
-        return Ok(argcheck::check_number(vm, a, i)? as i64);
-    }
-    argcheck::check_integer(vm, a, i)
-}
-
-pub(super) fn os_difftime(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let a = Args::new(fs, nargs);
-    let t1 = check_time(vm, a, 0)?;
-    // ≤5.2 default the second time to 0; 5.3 made it required
-    let t2 = if vm.version() <= LuaVersion::Lua52 {
-        argcheck::opt_number(vm, a, 1, 0.0)? as i64
-    } else {
-        check_time(vm, a, 1)?
-    };
-    vm.nat_ret(fs, &[Value::Float(t1 as f64 - t2 as f64)])
-}
-
-pub(super) fn os_clock(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
-    // C's clock() is processor time, which std cannot read; the time since
-    // the Vm started stands in for it.
-    let secs = vm.uptime().as_secs_f64();
-    vm.nat_ret(fs, &[Value::Float(secs)])
 }
