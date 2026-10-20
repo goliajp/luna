@@ -115,6 +115,7 @@ impl Heap {
                     if h == self.stdin_ud {
                         self.stdin_ud = ptr::null_mut();
                     }
+                    crate::vm::lib_io::write_out_freed(Gc::from_ptr(h as *mut Userdata));
                     if !is_uncounted(h) {
                         self.acct_free((*(h as *mut Userdata)).puc_size);
                     } else {

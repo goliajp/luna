@@ -97,6 +97,16 @@ pub(crate) fn flush_all_closing(vm: &mut Vm) {
     flush_these(vm.heap.all_userdata());
 }
 
+/// A stream the collector frees without closing it (its `__gc` taken
+/// away): C's `FILE` stays until `exit` flushes it, so what it holds is
+/// written out now.
+pub(crate) fn write_out_freed(u: Gc<Userdata>) {
+    if matches!(u.payload, UserdataPayload::File(ref fh) if !fh.is_closed()) {
+        // as `exit`'s flush, a failure reports nothing
+        let _ = drain_write_buf(u);
+    }
+}
+
 fn flush_these(us: Vec<Gc<Userdata>>) {
     for u in us {
         if matches!(u.payload, UserdataPayload::File(ref fh) if !fh.is_closed()) {
