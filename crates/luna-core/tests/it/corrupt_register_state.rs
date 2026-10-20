@@ -183,6 +183,8 @@ fn crafted_chunk_registers_a_close_slot_twice() {
     let f = vm
         .load(&bytes, b"=crafted")
         .expect("the verifier accepts it");
+    // the loaded function is the host's to keep alive while `eval` runs
+    vm.pin_host(Value::Closure(f));
     let o = vm
         .eval("return setmetatable({}, {__close = function() end})")
         .expect("closable")[0];
