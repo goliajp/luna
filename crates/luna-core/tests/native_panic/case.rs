@@ -47,14 +47,14 @@ fn boomiter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     Ok(vm.nat_return(fs, &[Value::Int(c + 1)]))
 }
 
-/// The four natives `panics.lua` takes as its arguments.
+/// The four natives `panics.lua` takes as its arguments, pinned: each is
+/// made before the others are on any stack.
 pub fn natives(vm: &mut Vm) -> [Value; 4] {
-    [
-        vm.native(boom),
-        vm.native(boom42),
-        vm.native(boomif),
-        vm.native(boomiter),
-    ]
+    [boom, boom42, boomif, boomiter].map(|f| {
+        let v = vm.native(f);
+        vm.pin_host(v);
+        v
+    })
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -83,6 +83,8 @@ fn text(vm: &Vm, e: &LuaError) -> String {
 pub fn run(vm: &mut Vm) -> String {
     let src = std::fs::read(fixture("panics.lua")).expect("read panics.lua");
     let main = vm.load(&src, b"@panics.lua").expect("load panics.lua");
+    // the host keeps these across its calls: pinned
+    vm.pin_host(Value::Closure(main));
     let args = natives(vm);
     let mut log = match vm.call_value(Value::Closure(main), &args) {
         Ok(v) => match v.first() {
@@ -112,6 +114,7 @@ pub fn run(vm: &mut Vm) -> String {
     let handler = vm
         .eval("return function(m) return 'handled ' .. m end")
         .expect("handler")[0];
+    vm.pin_host(handler);
     let f = vm
         .eval("return function(x) local r = boom(x) return r end")
         .expect("f")[0];
