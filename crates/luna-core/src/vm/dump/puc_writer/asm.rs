@@ -10,6 +10,7 @@
 //! are.
 
 use crate::compiler::const_map::{DumpConstMap, add_const, const_map_of};
+use crate::compiler::num_first::{first_nums, num_key};
 use crate::runtime::Value;
 use crate::runtime::function::Proto;
 use crate::version::LuaVersion;
@@ -56,6 +57,8 @@ pub(super) struct Asm<'p> {
     /// the dialect and its scanner table over `consts` (see `const_map`)
     /// built when the encoding first adds a constant
     pub kmap: (LuaVersion, Option<DumpConstMap>),
+    /// 5.3: each number's first index in `consts` (see `konst`)
+    kfirst: Option<DumpConstMap>,
     /// the luna pc of each constant the encoding adds
     pub k_added: Vec<usize>,
     pc: usize,
@@ -91,6 +94,7 @@ impl<'p> Asm<'p> {
             fixups: Vec::new(),
             consts: p.consts.to_vec(),
             kmap: (LuaVersion::Lua54, None),
+            kfirst: None,
             k_added: Vec::new(),
             pc: 0,
             line: 0,
@@ -184,12 +188,24 @@ impl<'p> Asm<'p> {
 
     /// Index of constant `v`, appended where PUC's code generator would.
     pub(super) fn konst(&mut self, v: Value) -> u32 {
+        // 5.3 repeats a number another function took the key of; the
+        // compiler keeps an immediate only for its first constant
+        let key = (self.kmap.0 == LuaVersion::Lua53).then(|| num_key(&v)).flatten();
+        if let Some(key) = &key {
+            let first = self.kfirst.get_or_insert_with(|| first_nums(&self.consts));
+            if let Some(&i) = first.get(key) {
+                return i;
+            }
+        }
         let (ver, map) = &mut self.kmap;
         let map = map.get_or_insert_with(|| const_map_of(*ver, &self.consts));
         let n = self.consts.len();
         let k = add_const(*ver, &mut self.consts, map, v);
         if self.consts.len() > n {
             self.k_added.push(self.pc);
+            if let (Some(key), Some(first)) = (key, &mut self.kfirst) {
+                first.entry(key).or_insert(k);
+            }
         }
         k
     }

@@ -112,8 +112,8 @@ impl Compiler<'_> {
         );
         if immediate {
             match *e {
-                Exp::Int(i) => self.number_const_before_54(Value::Int(i)),
-                Exp::Float(f) => self.number_const_before_54(Value::Float(f)),
+                Exp::Int(i) => _ = self.number_const_before_54(Value::Int(i)),
+                Exp::Float(f) => _ = self.number_const_before_54(Value::Float(f)),
                 _ => {}
             }
         }

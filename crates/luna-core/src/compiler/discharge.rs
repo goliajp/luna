@@ -77,8 +77,10 @@ impl Compiler<'_> {
             }
             Exp::Int(i) => {
                 if (-65535..=65536).contains(&i) {
-                    self.number_const_before_54(Value::Int(i));
-                    self.emit(Inst::iasbx(Op::LoadI, reg, i as i32));
+                    match self.number_const_before_54(Value::Int(i)) {
+                        Some(c) => self.load_const(reg, c),
+                        None => _ = self.emit(Inst::iasbx(Op::LoadI, reg, i as i32)),
+                    }
                 } else {
                     let c = self.const_idx(Value::Int(i));
                     self.load_const(reg, c);
@@ -92,8 +94,10 @@ impl Compiler<'_> {
                 // bit-compare so the LoadF fast path doesn't fold -0.0 to +0.0
                 // (`-0.0 == 0.0` but their bit patterns differ)
                 if (-65535..=65536).contains(&as_int) && (as_int as f64).to_bits() == f.to_bits() {
-                    self.number_const_before_54(Value::Float(f));
-                    self.emit(Inst::iasbx(Op::LoadF, reg, as_int));
+                    match self.number_const_before_54(Value::Float(f)) {
+                        Some(c) => self.load_const(reg, c),
+                        None => _ = self.emit(Inst::iasbx(Op::LoadF, reg, as_int)),
+                    }
                 } else {
                     let c = self.const_idx(Value::Float(f));
                     self.load_const(reg, c);
@@ -185,10 +189,14 @@ impl Compiler<'_> {
     /// Before 5.4 every number is loaded from the constant table (there is
     /// no `LOADI` / `LOADF`): the constant enters the table where PUC's
     /// code generator adds it, so a dump lists constants in PUC's order.
-    pub(super) fn number_const_before_54(&mut self, v: Value) {
-        if self.version < LuaVersion::Lua54 {
-            self.const_idx(v);
+    /// The constant when the code must name it instead of an immediate: a
+    /// repeat of its value (5.3, see `num_first`).
+    pub(super) fn number_const_before_54(&mut self, v: Value) -> Option<u32> {
+        if self.version >= LuaVersion::Lua54 {
+            return None;
         }
+        let i = self.const_idx(v);
+        (self.version == LuaVersion::Lua53 && !self.first_num_const(&v, i)).then_some(i)
     }
 
     /// 5.1: zeros of a condition the parser folded away still entered the

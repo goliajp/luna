@@ -267,6 +267,9 @@ impl Compiler<'_> {
         };
         let n = l.consts.len();
         let i = add_const(v, &mut l.consts, map, c);
+        if v == LuaVersion::Lua53 && i as usize == n {
+            super::num_first::note(l, &c, i);
+        }
         if i as usize == n {
             let key = match plan(v, &c).0 {
                 Plan::Key(k) => Some(k),
