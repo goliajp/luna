@@ -182,21 +182,15 @@ impl Vm {
     /// The open upvalue of stack slot `slot`, made and listed when there
     /// is none; a memory error when it cannot be.
     pub(crate) fn try_find_or_create_upval(&mut self, slot: u32) -> Result<Gc<Upvalue>, LuaError> {
-        match self.open_upvals.binary_search_by_key(&slot, |&(s, _)| s) {
-            Ok(i) => Ok(self.open_upvals[i].1),
-            Err(i) => {
-                let thread = self.current;
-                // 5.1 / 5.2: one the marking found dead is taken back
-                let uv = match self.heap.revive_open(thread, slot) {
-                    Some(uv) => uv,
-                    None => self
-                        .retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Open { slot, thread }))?,
-                };
-                // the new upvalue is young while it is not listed yet
-                self.retry_oom(|vm| vm.open_upvals.insert(i, (slot, uv)))?;
-                Ok(uv)
-            }
-        }
+        let i = match self.open_upval(slot) {
+            Ok(uv) => return Ok(uv),
+            Err(i) => i,
+        };
+        let thread = self.current;
+        let uv = self.retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Open { slot, thread }))?;
+        // the new upvalue is young while it is not listed yet
+        self.retry_oom(|vm| vm.open_upvals.insert(i, (slot, uv)))?;
+        Ok(uv)
     }
 
     pub(crate) fn close_from(&mut self, slot: u32) {
