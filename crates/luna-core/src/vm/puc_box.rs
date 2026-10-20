@@ -112,9 +112,16 @@ impl Vm {
         Ok(())
     }
 
-    /// A box's `__close` (5.4+, `lua_closeslot`): a call one level up.
-    pub(crate) fn box_closed(&mut self) {
+    /// A box's `__close` (5.4+, `lua_closeslot`): a call one level up, of a
+    /// C function, made above the box and the string just pushed with the
+    /// method, the box and the error (`callclosemethod`), which wants
+    /// `LUA_MINSTACK` slots above those (`precallC`).
+    pub(crate) fn box_closed(&mut self) -> Result<(), LuaError> {
+        if let Some(top) = self.native_top() {
+            self.check_lua_stack(top + 2 + 3, crate::vm::exec::stack_size::MIN_STACK, true)?;
+        }
         self.note_c_call();
+        Ok(())
     }
 }
 
