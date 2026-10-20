@@ -65,10 +65,10 @@ impl Vm {
             Ok(i) => Some(self.open_upvals[i].1),
             Err(i) => {
                 let thread = self.current;
-                let uv = self
-                    .heap
-                    .try_new_upvalue(UpvalState::Open { slot, thread })
-                    .ok()?;
+                let uv = match self.heap.revive_open(thread, slot) {
+                    Some(uv) => uv,
+                    None => self.heap.try_new_upvalue(UpvalState::Open { slot, thread }).ok()?,
+                };
                 self.open_upvals.insert(i, (slot, uv)).ok()?;
                 Some(uv)
             }
