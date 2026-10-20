@@ -50,7 +50,8 @@ impl Vm {
         }
     }
 
-    /// PUC `pushglobalfuncname`: walk `package.loaded` to depth 2 looking for
+    /// PUC `pushglobalfuncname`: walk `package.loaded` (5.2: the global
+    /// table) to depth 2 looking for
     /// `target` itself (`lua_rawequal`), and return its qualified
     /// name (e.g. `"table.sort"`). A `_G.X` match is stripped to `"X"`. Returns
     /// `None` if no match is found. Used by `arg_error` when the running native
@@ -74,17 +75,24 @@ impl Vm {
         target: Gc<crate::runtime::NativeClosure>,
         raised: &mut Option<crate::vm::error::LuaError>,
     ) -> Option<String> {
-        // names no string exists for are no table's keys
-        let pkg_k = Value::Str(self.heap.find_interned(b"package")?);
-        let pkg = match self.globals().get(pkg_k) {
-            Value::Table(t) => t,
-            _ => return None,
+        // 5.2 searches the global table, later dialects the loaded modules
+        let loaded = if self.version == LuaVersion::Lua52 {
+            self.globals()
+        } else {
+            // names no string exists for are no table's keys
+            let pkg_k = Value::Str(self.heap.find_interned(b"package")?);
+            let pkg = match self.globals().get(pkg_k) {
+                Value::Table(t) => t,
+                _ => return None,
+            };
+            let loaded_k = Value::Str(self.heap.find_interned(b"loaded")?);
+            match pkg.get(loaded_k) {
+                Value::Table(t) => t,
+                _ => return None,
+            }
         };
-        let loaded_k = Value::Str(self.heap.find_interned(b"loaded")?);
-        let loaded = match pkg.get(loaded_k) {
-            Value::Table(t) => t,
-            _ => return None,
-        };
+        // 5.3 on drops a "_G." the name starts with
+        let strip = self.version >= LuaVersion::Lua53;
         let matches = |v: Value| -> bool { matches!(v, Value::Native(nc) if nc.ptr_eq(target)) };
         let mut k = Value::Nil;
         while let Ok(Some((nk, nv))) = loaded.next(k) {
@@ -92,7 +100,11 @@ impl Vm {
             let Value::Str(outer) = nk else { continue };
             let outer = String::from_utf8_lossy(outer.as_bytes()).into_owned();
             if matches(nv) {
-                return Some(if outer == "_G" { String::new() } else { outer });
+                return Some(if strip && outer == "_G" {
+                    String::new()
+                } else {
+                    outer
+                });
             }
             if let Value::Table(inner_t) = nv {
                 let mut k2 = Value::Nil;
@@ -106,7 +118,7 @@ impl Vm {
                             return None;
                         }
                         let inner = String::from_utf8_lossy(inner_s.as_bytes()).into_owned();
-                        return Some(if outer == "_G" {
+                        return Some(if strip && outer == "_G" {
                             inner
                         } else {
                             format!("{outer}.{inner}")
