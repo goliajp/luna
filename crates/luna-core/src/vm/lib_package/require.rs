@@ -86,38 +86,12 @@ pub(super) fn find_loader(
         if matches!(first, Value::Closure(_) | Value::Native(_)) {
             return Ok((first, second));
         }
-        if let Some(text) = argcheck::to_str_bytes(vm, first) {
-            msg.extend_from_slice(&text);
-            if let Some(b) = buf.as_mut() {
-                // `luaL_addvalue`, which turns a number into a string first
-                let s = match first {
-                    Value::Str(s) => s,
-                    _ => {
-                        let s = vm.alloc_str(&text)?;
-                        vm.api_check_converted(Value::Str(s))?;
-                        s
-                    }
-                };
-                b.add_value(vm, &msg, s)?;
-            }
-            if v == LuaVersion::Lua51 {
-                // `lua_concat(L, 2)` of the message so far and this one
-                vm.api_check_before()?;
-                let at = vm.lib_roots.len();
-                vm.lib_roots.push(first);
-                let m = crate::vm::builtins::concat2(vm, acc, first);
-                vm.lib_roots.truncate(at);
-                let m = m?;
-                acc = m;
-                let top = vm.running_natives.last().map_or(0, |a| a.top_off);
-                vm.native_hold(top - 1, &[m])?;
-            }
-        } else if v >= LuaVersion::Lua54
-            && let Some(b) = buf.as_mut()
-        {
-            msg.truncate(msg.len() - 2);
-            b.sub(2);
-        }
+        // the searcher's result is on PUC's stack while the message grows
+        let held = vm.lib_roots.len();
+        vm.lib_roots.push(first);
+        let r = add_message(vm, first, &mut msg, buf.as_mut(), &mut acc);
+        vm.lib_roots.truncate(held);
+        r?;
     }
     let Value::Str(n) = name else {
         unreachable!("require passes the name as a string");
@@ -129,6 +103,50 @@ pub(super) fn find_loader(
     let e = crate::vm::builtins::raise_lib(vm, b"module '%s' not found:%s", &args, 2);
     vm.lib_roots.truncate(at);
     Err(e)
+}
+
+/// A searcher's message `first` (rooted by the caller) added to the
+/// message: to the buffer (5.2 on), or concatenated to `acc` on the
+/// stack (5.1).
+fn add_message(
+    vm: &mut Vm,
+    first: Value,
+    msg: &mut Vec<u8>,
+    buf: Option<&mut PucBuffer>,
+    acc: &mut Value,
+) -> Result<(), LuaError> {
+    let v = vm.version();
+    if let Some(text) = argcheck::to_str_bytes(vm, first) {
+        msg.extend_from_slice(&text);
+        if let Some(b) = buf {
+            // `luaL_addvalue`, which turns a number into a string first
+            let s = match first {
+                Value::Str(s) => s,
+                _ => {
+                    let s = vm.alloc_str(&text)?;
+                    // converted in its stack slot: the caller drops it
+                    vm.lib_roots.push(Value::Str(s));
+                    vm.api_check_converted(Value::Str(s))?;
+                    s
+                }
+            };
+            b.add_value(vm, msg, s)?;
+        }
+        if v == LuaVersion::Lua51 {
+            // `lua_concat(L, 2)` of the message so far and this one
+            vm.api_check_before()?;
+            let m = crate::vm::builtins::concat2(vm, *acc, first)?;
+            *acc = m;
+            let top = vm.running_natives.last().map_or(0, |a| a.top_off);
+            vm.native_hold(top - 1, &[m])?;
+        }
+    } else if v >= LuaVersion::Lua54
+        && let Some(b) = buf
+    {
+        msg.truncate(msg.len() - 2);
+        b.sub(2);
+    }
+    Ok(())
 }
 
 pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
