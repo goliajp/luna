@@ -21,6 +21,7 @@ impl Heap {
             let mut link: *mut *mut GcHeader = ptr::addr_of_mut!(head);
             while !(*link).is_null() {
                 let cur = *link;
+                self.sweep_open_at(cur);
                 self.env51_sweep(cur, false);
                 let f = (*cur).flags;
                 // dead = other-white (i.e. white but not current-white).
@@ -39,6 +40,7 @@ impl Heap {
             }
             self.all = head;
         }
+        self.sweep_open_end();
         self.whiten_unborn();
         self.live -= freed;
         // a sweep keeps the order of `all`, so the young boundary (marked,
@@ -70,9 +72,7 @@ impl Heap {
         }
     }
 
-    /// Sweep up to `budget` objects from after `sweep_prev` (with
-    /// `to_live`, until one is kept); at the end of the list the sweep is
-    /// over. Returns how many were swept.
+    /// Sweep up to `budget` objects after `sweep_prev` (`to_live`: to the first kept); returns the count.
     pub(super) fn sweep_objects(&mut self, budget: usize, to_live: bool) -> usize {
         let mut n = 0;
         let new_white = self.current_white;
@@ -94,6 +94,7 @@ impl Heap {
                     break;
                 }
                 n += 1;
+                self.sweep_open_at(cur);
                 self.env51_sweep(cur, false);
                 let f = (*cur).flags;
                 let dead = is_white(f) && (f & new_white) == 0;
@@ -121,13 +122,11 @@ impl Heap {
         n
     }
 
-    /// PUC `sweeplist` of `quota` objects of PUC's: sweep in place until
-    /// that many of PUC's objects are swept or the list ends. luna's own
-    /// objects are swept without counting; so are the ones PUC keeps on
-    /// other lists (with a finalizer; 5.1's strings and 5.2's short ones,
-    /// in the string table); a record of PUC's objects counts each one, and
-    /// a dead one may be freed in part. Returns how many were swept and
-    /// whether the list ended.
+    /// PUC `sweeplist` of `quota` objects of PUC's, in place, or to the end
+    /// of the list. luna's own objects and the ones PUC keeps on other lists
+    /// (with a finalizer; 5.1's strings and 5.2's short ones) are swept
+    /// uncounted; a record of PUC's objects counts each one, and a dead one
+    /// may be freed in part. Returns the count and whether the list ended.
     pub(crate) fn sweep_counted(&mut self, quota: i64) -> (i64, bool) {
         let mut n = 0;
         let new_white = self.current_white;
@@ -152,6 +151,7 @@ impl Heap {
                     self.verify_no_dangling("sweep_counted");
                     return (n, false);
                 }
+                self.sweep_open_at(cur);
                 n += self.env51_sweep(cur, false);
                 let (f, cls) = ((*cur).flags, (*cur).cls);
                 let dead = is_white(f) && (f & new_white) == 0;
@@ -291,6 +291,7 @@ impl Heap {
 
     /// The sweep reached the end of the list.
     fn end_sweep(&mut self) {
+        self.sweep_open_end();
         self.whiten_unborn();
         self.sweep_prev = ptr::null_mut();
         self.phase = GcPhase::Pause;

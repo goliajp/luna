@@ -151,6 +151,7 @@ impl Vm {
         };
         self.heap.stash_marker(m);
         self.watch_errors();
+        self.lend_open_lists();
         let (work, swept) = self.heap.gc_finish_atomic_work(Some(run));
         let r = (work + roots, swept);
         // 5.3 shrank them as it traversed them

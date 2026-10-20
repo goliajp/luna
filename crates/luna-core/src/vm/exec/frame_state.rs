@@ -21,17 +21,11 @@ impl Vm {
     // ====================================================================
     // Stack-inline frame metadata accessors (unused).
     //
-    // These methods read/write the LJ_FR2 marker slots at `stack[base-2]`
-    // (closure GCRef) and `stack[base-1]` (FrameMarker as i64). No call
-    // site uses them yet.
-    //
-    // Preconditions (debug-asserted):
-    // - base >= 2 (slots base-2 and base-1 must exist below the frame)
-    // - self.stack.len() > base + max_stack (caller has grown stack)
-    // - For Lua frames, stack[base-2] holds Value::Closure(cl)
-    // - For Lua frames, stack[base-1] holds Value::Int(marker.to_raw())
-    //
-    // No release-build cost when unused (LTO strips dead methods).
+    // These read/write the LJ_FR2 marker slots at `stack[base-2]` (closure
+    // GCRef) and `stack[base-1]` (FrameMarker as i64); no call site uses
+    // them yet. Preconditions (debug-asserted): base >= 2; the stack holds
+    // base + max_stack; a Lua frame has its closure at base-2 and its
+    // marker at base-1.
     // ====================================================================
 
     /// Write a Lua frame's closure pointer into `stack[base-2]`.
@@ -192,8 +186,12 @@ impl Vm {
             Ok(i) => Ok(self.open_upvals[i].1),
             Err(i) => {
                 let thread = self.current;
-                let uv = self
-                    .retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Open { slot, thread }))?;
+                // 5.1 / 5.2: one the marking found dead is taken back
+                let uv = match self.heap.revive_open(thread, slot) {
+                    Some(uv) => uv,
+                    None => self
+                        .retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Open { slot, thread }))?,
+                };
                 // the new upvalue is young while it is not listed yet
                 self.retry_oom(|vm| vm.open_upvals.insert(i, (slot, uv)))?;
                 Ok(uv)
@@ -202,6 +200,7 @@ impl Vm {
     }
 
     pub(crate) fn close_from(&mut self, slot: u32) {
+        self.heap.close_dead_open(self.current, slot);
         while let Some(&(s, uv)) = self.open_upvals.last() {
             if s < slot {
                 break;

@@ -1,6 +1,8 @@
 //! The collector's roots.
 
 use super::*;
+use crate::runtime::heap::OpenLend;
+use crate::runtime::table::Dialect;
 
 impl Vm {
     /// Mark the GC roots in `m`: first-class `Value` roots plus bare-object
@@ -217,9 +219,27 @@ impl Vm {
         if let Some(r) = self.registry {
             m.value(Value::Table(r));
         }
-        for &(_, uv) in self.open_upvals.iter() {
-            m.mark(uv);
+        // 5.1 and 5.2 mark an open upvalue only through its closures
+        if !matches!(m.dialect, Dialect::L51 | Dialect::L52) {
+            for &(_, uv) in self.open_upvals.iter() {
+                m.mark(uv);
+            }
         }
+    }
+
+    /// The open lists the VM holds, lent to the collector for the end of
+    /// this marking (see `heap_open_upvals.rs`).
+    pub(crate) fn lend_open_lists(&mut self) {
+        if !self.heap.open_on_threads() {
+            return;
+        }
+        let running_co = self.current.map_or(std::ptr::null_mut(), |c| c.as_ptr().cast());
+        let main = match (&mut self.main_ctx, self.current) {
+            (Some(mc), Some(_)) => std::ptr::addr_of_mut!(mc.open_upvals),
+            _ => std::ptr::null_mut(),
+        };
+        let running = std::ptr::addr_of_mut!(self.open_upvals);
+        self.heap.open_dead.lend = Some(OpenLend { running, running_co, main });
     }
 
     /// The main thread's saved context while a coroutine runs.
@@ -246,7 +266,9 @@ impl Vm {
                 }
             }
         }
-        if let Some(mc) = &self.main_ctx {
+        if let Some(mc) = &self.main_ctx
+            && !matches!(m.dialect, Dialect::L51 | Dialect::L52)
+        {
             for &(_, uv) in mc.open_upvals.iter() {
                 m.mark(uv);
             }

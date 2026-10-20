@@ -97,12 +97,10 @@ pub(crate) use header::{
 mod gc_ptr;
 pub use gc_ptr::{Gc, GcObject};
 
-/// Incremental GC phase: `Pause` (no cycle, all objects current-white),
-/// `Propagate` (the gray queue and propagate state are set; the mutator runs
-/// between steps, new objects current-white, barriers marking children or
-/// sending parents back to gray; `gc_finish_atomic` ends it), `Sweep` (`all`
-/// swept in place from after `sweep_prev`). `mark_all` (the stop-the-world
-/// path) runs all of it inline, never crossing a step boundary.
+/// Incremental GC phase: `Pause` (all objects current-white), `Propagate`
+/// (gray queue set, the mutator runs between steps under the barriers,
+/// until `gc_finish_atomic`), `Sweep` (`all` swept in place from after
+/// `sweep_prev`); `mark_all` runs all of it inline.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum GcPhase {
     Pause,
@@ -110,9 +108,8 @@ enum GcPhase {
     Sweep,
 }
 
-/// Cross-step traversal state of the Propagate phase (`Heap.propagate`, set
-/// from `gc_start_propagate` to `gc_finish_atomic`); the gray queue is in
-/// `Heap.gray` so write barriers push without going through the Option.
+/// The Propagate phase's state across steps (`Heap.propagate`); the gray
+/// queue is `Heap.gray`, which the barriers push to directly.
 struct PropagateState {
     quiet: Vec<*mut GcHeader>,
     weak: Vec<*mut Table>,
@@ -133,9 +130,8 @@ pub struct Heap {
     /// where the next collection step falls due (`pace`), or `usize::MAX`
     /// while there is none: the one comparison a safe point makes
     gc_limit: usize,
-    /// PUC `g->currentwhite`: which white bit (WHITE0 or WHITE1) means
-    /// "born / surviving this cycle". The other white is the dead-white that
-    /// sweep collects. Flipped at the end of each mark cycle (`atomic`).
+    /// PUC `g->currentwhite`: the white of born / surviving objects; the
+    /// other is the dead white the sweep frees. Flipped by `atomic`.
     current_white: u8,
     /// incremental-sweep phase (Pause unless a `step` cycle is mid-sweep)
     phase: GcPhase,
@@ -243,10 +239,11 @@ pub struct Heap {
     pub(crate) puc: acct::PucState,
     #[cfg(feature = "gc-trace")]
     pub(crate) trace: crate::runtime::gc_trace::Trace,
-    /// `gc-verify` — headers freed since the last collect
-    /// began. O(1) read-time dangling probes (`Vm::op_index`) test
-    /// membership here; cleared when the next mark starts. Only exact
-    /// under ASAN-style quarantining allocators (no immediate reuse).
+    /// 5.1 / 5.2: the dead open upvalues the sweep has not reached
+    pub(crate) open_dead: open_upvals::OpenDead,
+    /// `gc-verify` — headers freed since the last collect began: O(1)
+    /// read-time dangling probes (`Vm::op_index`) test membership here;
+    /// exact only under quarantining allocators (no immediate reuse).
     #[cfg(feature = "gc-verify")]
     pub(crate) recently_freed: std::collections::HashSet<usize>,
     strings: StringTable,
@@ -305,6 +302,9 @@ pub(crate) use env51::{ENV_IO, ENV_IO_POPEN, ENV_IO_STD, ENV_PACKAGE, ENV_PROTO}
 mod free;
 #[path = "heap_mark.rs"]
 mod mark;
+#[path = "heap_open_upvals.rs"]
+mod open_upvals;
+pub(crate) use open_upvals::OpenLend;
 #[path = "heap_pace.rs"]
 mod pace;
 #[path = "heap_strt.rs"]

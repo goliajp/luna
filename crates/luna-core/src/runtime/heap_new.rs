@@ -77,6 +77,7 @@ impl Heap {
             weak_watch: Vec::new(),
             weak_objs: Vec::new(),
             threads: Vec::new(),
+            open_dead: Default::default(),
             track_chunk_roots: false,
             mem_cap: None,
             table_pool: Vec::new(),
