@@ -165,10 +165,16 @@ pub(super) fn get_io_file(vm: &mut Vm, which: Io) -> Result<Gc<Userdata>, LuaErr
     } else {
         "standard"
     };
-    Err(crate::vm::builtins::raise_fmt(
+    let fmt = if adj == "default" {
+        &b"default %s file is closed"[..]
+    } else {
+        &b"standard %s file is closed"[..]
+    };
+    Err(crate::vm::builtins::raise_lib(
         vm,
+        fmt,
+        &[crate::runtime::puc_fmt::FmtArg::S(what.as_bytes())],
         1,
-        &format!("{adj} {what} file is closed"),
     ))
 }
 

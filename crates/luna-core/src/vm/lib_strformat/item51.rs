@@ -140,18 +140,25 @@ pub(super) fn item51(
             }
         }
         _ => {
-            // how each version's `lua_pushfstring` renders the "%c"
-            let mut msg = b"invalid option '%".to_vec();
-            match v {
-                LuaVersion::Lua51 if conv == 0 => {}
-                LuaVersion::Lua53 if !(0x20..0x7F).contains(&conv) => {
-                    msg.extend_from_slice(format!("<\\{conv}>").as_bytes());
-                }
-                _ => msg.push(conv),
-            }
-            msg.extend_from_slice(b"' to 'format'");
-            // `"invalid option '%%%c' to 'format'"`
-            return Err(crate::vm::builtins::raise_bytes_fmt(vm, 2, &msg));
+            // 5.1's "%c" of a NUL is an empty piece (`pushstr` takes its
+            // length with `strlen`)
+            let fmt = b"invalid option '%%%c' to 'format'";
+            return Err(if v == LuaVersion::Lua51 && conv == 0 {
+                let fmt = b"invalid option '%%%s' to 'format'";
+                crate::vm::builtins::raise_lib(
+                    vm,
+                    fmt,
+                    &[crate::runtime::puc_fmt::FmtArg::S(b"")],
+                    2,
+                )
+            } else {
+                crate::vm::builtins::raise_lib(
+                    vm,
+                    fmt,
+                    &[crate::runtime::puc_fmt::FmtArg::C(conv)],
+                    2,
+                )
+            });
         }
     }
     Ok((p + 1, added))

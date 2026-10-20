@@ -31,8 +31,18 @@ fn pattern_bytes(v: LuaVersion, p: &[u8]) -> &[u8] {
 fn pat_err(vm: &mut Vm, e: PatError) -> LuaError {
     // PUC's formats: each '%' shown is a `%%`, and the capture index is
     // `"invalid capture index %%%d"`
+    use crate::runtime::puc_fmt::FmtArg;
     let conv = e.0.matches('%').count() + usize::from(e.0.starts_with("invalid capture index %"));
-    crate::vm::builtins::raise_fmt(vm, conv as u32, &e.0)
+    if let Some(n) =
+        e.0.strip_prefix("invalid capture index %")
+            .and_then(|d| d.parse::<i64>().ok())
+    {
+        let fmt = b"invalid capture index %%%d";
+        return crate::vm::builtins::raise_lib(vm, fmt, &[FmtArg::D(n)], conv as u32);
+    }
+    // the format of a literal message: each '%' a "%%"
+    let fmt = e.0.replace('%', "%%");
+    crate::vm::builtins::raise_lib(vm, fmt.as_bytes(), &[], conv as u32)
 }
 
 fn cap_value(vm: &mut Vm, src: &[u8], c: CapValue) -> Result<Value, LuaError> {

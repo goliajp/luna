@@ -56,10 +56,12 @@ pub(crate) fn unpack_int(
             0xff
         };
         if (limit..size).any(|i| at(i) != fill) {
-            return Err(crate::vm::builtins::raise_fmt(
+            let fmt = b"%d-byte integer does not fit into Lua Integer";
+            return Err(crate::vm::builtins::raise_lib(
                 vm,
+                fmt,
+                &[crate::runtime::puc_fmt::FmtArg::D(size as i64)],
                 1,
-                &format!("{size}-byte integer does not fit into Lua Integer"),
             ));
         }
     }
