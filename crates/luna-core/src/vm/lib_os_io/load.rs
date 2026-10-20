@@ -168,10 +168,9 @@ pub(crate) fn nat_loadfile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             // `load_aux`: a given env (even nil) becomes the first upvalue,
             // when the function has one.
             if vm.version() >= LuaVersion::Lua52 && !a.is_none(2) && !cl.upvals().is_empty() {
+                // the upvalue the load made gets the value: no new one
                 let env = a.get(vm, 2);
-                let uv = vm.lib_closed_upvalue(env)?;
-                // SAFETY: `cl` is the closure `load_path` just built, held only by this local, and `new_upvalue` does not collect; the borrow covers one slot store, inside the bounds checked by `upvals().is_empty()`
-                unsafe { cl.as_mut() }.upvals_mut()[0] = uv;
+                vm.upvalue_set_value(cl, 0, env);
             }
             vm.nat_ret(fs, &[Value::Closure(cl)])
         }
