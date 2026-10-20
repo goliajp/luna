@@ -90,8 +90,19 @@ impl Compiler<'_> {
         };
         // A numeral on the left stays out of a register until the right
         // operand is known: it may become the instruction's own operand, and
-        // otherwise it is loaded after the right one (PUC `luaK_infix`).
-        let left_numeral = deferred.is_none() && matches!(le, Exp::Int(_) | Exp::Float(_));
+        // otherwise it is loaded after the right one (PUC `luaK_infix`); an
+        // order comparison keeps only one that fits an immediate
+        // (`isSCnumber`), and loads any other now.
+        let order = matches!(op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge);
+        let left_numeral = deferred.is_none()
+            && match le {
+                Exp::Int(i) if order => (MIN_SC as i64..=MAX_SC as i64).contains(&i),
+                Exp::Float(f) if order => {
+                    f.fract() == 0.0 && (MIN_SC as f64..=MAX_SC as f64).contains(&f)
+                }
+                Exp::Int(_) | Exp::Float(_) => true,
+                _ => false,
+            };
         let mut l = if left_numeral {
             None
         } else {
@@ -157,7 +168,10 @@ impl Compiler<'_> {
                 // left one a register; with no such form the right one takes
                 // its register first.
                 // ... and an immediate `I << x` is `SHLI`
-                let swap = self.version >= LuaVersion::Lua54
+                // an order comparison (`codeorder`) takes the left numeral
+                // when the right operand is no immediate: `1 < 'x'` is `GTI`
+                let v54 = self.version >= LuaVersion::Lua54;
+                let swap = v54
                     && (matches!(op, BinOp::Add | BinOp::Mul)
                         || matches!(op, BinOp::BAnd | BinOp::BOr | BinOp::BXor)
                             && matches!(le, Exp::Int(_))
@@ -169,6 +183,9 @@ impl Compiler<'_> {
                 } else if let Some(form) = self.const_operand(op, &re, false) {
                     in_inst = Some((form, false));
                     l = Some(self.exp_to_anyreg(le)?);
+                } else if v54 && order && let Some(form) = self.const_operand(op, &le, true) {
+                    in_inst = Some((form, true));
+                    right_reg = Some(self.exp_to_anyreg(re)?);
                 } else {
                     let r = self.exp_to_anyreg(re)?;
                     if r >= saved {
