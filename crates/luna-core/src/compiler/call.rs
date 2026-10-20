@@ -45,10 +45,21 @@ impl Compiler<'_> {
         };
         // `luaK_self`, once `:` and the name are read
         self.at(TokRef::After(obj, 2));
+        // before 5.4 the name is a constant as it is read (`checkname`),
+        // before `luaK_self` puts the object in a register
+        let named = (self.version <= LuaVersion::Lua53).then(|| {
+            let from = self.puc_log.len();
+            let c = self.sym_const(method.sym);
+            self.log_before_early(from);
+            c
+        });
         let o = self.exp_to_anyreg(oe)?;
         self.set_freereg(base);
         self.reserve(2)?;
-        let c = self.sym_const(method.sym);
+        let c = match named {
+            Some(c) => c,
+            None => self.sym_const(method.sym),
+        };
         // `luaK_self` is coded once the method's name is read
         self.last_line = method.line;
         if c <= 0xFF {

@@ -237,6 +237,17 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// The events logged since `from` go before the instructions emitted
+    /// early that precede them: PUC makes them before it uses the value.
+    pub(super) fn log_before_early(&mut self, from: usize) {
+        let log = &mut self.puc_log;
+        let start = log[..from]
+            .iter()
+            .rposition(|(t, _)| *t != TokRef::Next)
+            .map_or(0, |i| i + 1);
+        log[start..].rotate_left(from - start);
+    }
+
     /// A value is used here: the instructions luna emitted early for it are
     /// PUC's now.
     #[inline]
