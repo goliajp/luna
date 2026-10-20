@@ -2,7 +2,6 @@
 //! context, resume and yield.
 
 use super::*;
-use crate::runtime::mem::LVec;
 
 impl Vm {
     /// `coroutine.resume` core: drive `co` with `args` until it yields, returns
@@ -110,27 +109,14 @@ impl Vm {
                 None => {
                     // died: a return is clean, an error is remembered so a later
                     // `coroutine.close` can report it (PUC lua_closethread).
-                    // Keep the error-point traceback (taken by `unwind` before
-                    // popping the failing frames) so `debug.traceback(co)` on
-                    // the dead coroutine still shows the error site, as PUC's
-                    // untouched dead stack does (db.lua :848 family).
+                    // The frames taken where the error was raised stay with
+                    // the dead coroutine, as PUC's untouched dead stack does
+                    // (db.lua :848 family)
                     if drive.is_err() {
-                        let levels = self.error_traceback.take().unwrap_or_default();
-                        let mut tb = b"stack traceback:".to_vec();
-                        tb.extend(crate::vm::callstack::traceback_from_lines(
-                            self.version,
-                            &levels,
-                            0,
-                            0,
-                        ));
-                        // without the memory for the copy the dead thread just
-                        // has no traceback to show
-                        let mem = self.heap.mem();
-                        let ars = self.error_ars.take();
-                        // SAFETY: `co` is still `self.current`, a root, and its frames have unwound, so `m` is the only reference into it for these two stores
-                        let m = unsafe { co.as_mut() };
-                        m.error_traceback = LVec::from_slice(mem, &tb).ok();
-                        m.error_ars = ars;
+                        let dead = self.dead_snapshot.take();
+                        // SAFETY: `co` is still `self.current`, a root, and its frames have unwound, so `m` is the only reference into it for this store
+                        unsafe { co.as_mut() }.dead = dead;
+                        self.heap.barrier_back(co);
                     }
                     if let Err(e) = drive {
                         let kind = self.error_status(e.0, special_before);

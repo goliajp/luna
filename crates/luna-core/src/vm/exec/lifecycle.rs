@@ -192,7 +192,7 @@ impl Vm {
             hook_yield: false,
             hook_resumed: false,
             error_traceback: None,
-            error_ars: None,
+            dead_snapshot: None,
             public_call_depth: 0,
             running_natives: LVec::new(mem),
             natives_base: 0,

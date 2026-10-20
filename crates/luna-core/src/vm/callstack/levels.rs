@@ -25,6 +25,16 @@ impl Vm {
         let v51 = self.version() <= LuaVersion::Lua51;
         match co {
             Some(co) if self.is_main_coro(co) && self.current.is_some() => self.main_thread_stack(),
+            // a coroutine an error killed: its frames as they were then
+            Some(co) if co.status == CoroStatus::Dead && co.dead.is_some() => {
+                // SAFETY: `co` stays allocated while the view lives (the
+                // caller holds it as a native argument, and no collect runs
+                // while the view borrows `self`); a dead coroutine is not
+                // written while `&self` is held
+                let c: &Coro = unsafe { &*co.as_ptr() };
+                let d = c.dead.as_ref().expect("checked above");
+                ThreadStack::new(v51, &d.frames, &c.stack, c.top, &d.natives, None)
+            }
             Some(co) if !self.is_current_thread(Some(co)) && !self.is_main_coro(co) => {
                 // SAFETY: `co` stays allocated while the view lives (the
                 // caller holds it as a native argument, and no collect runs
