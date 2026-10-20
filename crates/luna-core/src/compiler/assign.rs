@@ -80,6 +80,16 @@ impl<'a> Compiler<'a> {
                 };
                 Ok(Lv::Indexed(tr, k))
             }
+            // a completion's target that is no variable (`(a)`, `f()`),
+            // compiled for what PUC makes of it before its error
+            _ if self.puc_state.lenient => {
+                let e = self.expr(t)?;
+                // `(a)` is discharged once the `)` is read
+                self.at(TokRef::After(t, 0));
+                self.use_early();
+                self.exp_to_anyreg(e)?;
+                Ok(Lv::Local(0))
+            }
             _ => unreachable!("parser validates assignment targets"),
         }
     }
