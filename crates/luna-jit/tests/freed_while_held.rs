@@ -203,6 +203,29 @@ fn the_hook_table_key_outlives_the_table_allocation() {
     }
 }
 
+/// The same in the Vms here: the key the table was looked up by, freed by
+/// the table's allocation, reads as an empty string (freed memory is
+/// zeroed), and the table must still be found under its name.
+#[test]
+fn the_hook_table_is_under_its_key() {
+    for (version, key) in [
+        (LuaVersion::Lua52, "YEKH_"),
+        (LuaVersion::Lua54, "YEKKOOH_"),
+        (LuaVersion::Lua55, "YEKKOOH_"),
+    ] {
+        let src = format!(
+            "collectgarbage('restart')
+             debug.sethook(function() end, 'c')
+             -- the key's name made only now: a constant of the chunk would
+             -- keep the key alive
+             local found = type(debug.getregistry()[('{key}'):reverse()]) == 'table'
+             debug.sethook()
+             return found and 1 or 0"
+        );
+        assert_eq!(run(version, 1, 0, &src), "1", "{version:?}");
+    }
+}
+
 /// The open upvalue a coroutine's frame left without a closure, taken off
 /// the thread's list when the marking ends, no longer names the thread,
 /// which the same sweep may free (the `gc-verify` build checks that no
