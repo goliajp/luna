@@ -191,7 +191,7 @@ impl Vm {
             if self.version <= LuaVersion::Lua53 && self.call_hook_armed() {
                 self.tail_call_hook(cl, abs, nargs)?;
             }
-            self.close_slots(fr.base, None)?;
+            self.close_slots_at(fr.base, None, false)?;
             for i in 0..=nargs {
                 self.stack[(fr.func_slot + i) as usize] = self.stack[(abs + i) as usize];
             }

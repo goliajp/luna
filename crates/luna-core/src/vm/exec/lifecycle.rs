@@ -54,7 +54,7 @@ impl Vm {
     /// parked, and only the finalizers run.
     pub(crate) fn close_state(&mut self) {
         if self.current.is_none() {
-            let _ = self.close_slots(0, None);
+            let _ = self.close_slots_at(0, None, false);
         }
         self.run_finalizers_closing();
         // what is still open writes out its buffers, as C's exit flushes
