@@ -44,7 +44,9 @@ impl<'a> Compiler<'a> {
             UnOp::Len => (Op::Len, e),
         };
         let r = self.exp_to_anyreg(folded)?;
+        // `freeexp`: an operand already on top in a temporary frees it too
         self.set_freereg(saved);
+        self.free_reg(r);
         self.last_line = line;
         Ok(Exp::Reloc(self.emit(Inst::iabc(opcode, 0, r, 0, false))))
     }
