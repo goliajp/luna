@@ -271,6 +271,11 @@ impl Vm {
         // the handler call *above* — landing at `self.top` would
         // otherwise clobber a result with the handler closure.
         self.top = self.top.max(abs_a + nret);
+        // a return that closes raises PUC's top to `ci->top` first, where
+        // `luaF_close` calls the methods
+        if inst.k() {
+            self.top = self.top.max(self.lua_window_end());
+        }
         if matches!(inst.op(), Op::Return0 | Op::Return1)
             && !matches!(
                 self.return_fast::<true>(base, abs_a, nret, entry_depth, inst.k()),
