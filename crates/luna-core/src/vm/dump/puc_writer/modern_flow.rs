@@ -224,7 +224,8 @@ impl M<'_, '_> {
         let a = self.asm.run(l.a, 2)?;
         let b = self.asm.r(l.b)?;
         if l.k && (!self.f.v55 || self.asm.short_str(l.c)) {
-            return self.emit(self.abc(Kind::SelfOp, a, b, l.c, true));
+            // 5.5's C is always a constant, its k bit left clear
+            return self.emit(self.abc(Kind::SelfOp, a, b, l.c, !self.f.v55));
         }
         if !self.f.v55 {
             let c = self.asm.r(l.c)?;
