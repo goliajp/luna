@@ -166,10 +166,13 @@ impl<'s> Parser<'s> {
         let mut entered = 0;
         loop {
             let last = *self.stk.exprs.last().expect("one target");
+            // a completion (lenient) takes any target: what PUC made of it
+            // before the error is still counted
             if !matches!(
                 self.chunk.exprs[last.0 as usize],
                 Expr::Name(_) | Expr::Index { .. }
-            ) {
+            ) && !self.stk.lenient
+            {
                 return Err(self.error("syntax error"));
             }
             // PUC `restassign` checks each target as it reaches the ',' or
