@@ -229,7 +229,7 @@ impl PucBuffer {
                 }
                 let r = vm.retry_oom(|vm| vm.heap.new_external_string(out))?;
                 vm.api_check_after(Value::Str(r))?;
-                vm.box_closed();
+                vm.box_closed()?;
                 // `lua_closeslot` leaves nil where the box was: `lua_gc(L,
                 // LUA_GCSTEP, len)` finds the string on the stack, not the
                 // box
@@ -253,7 +253,7 @@ impl PucBuffer {
                 if self.boxed && self.d >= Dialect::L53 {
                     if self.d >= Dialect::L54 {
                         // `lua_closeslot` calls the box's `__close`
-                        vm.box_closed();
+                        vm.box_closed()?;
                     }
                     vm.heap.trace_raw(self.size, 0);
                     self.drop_box(vm);
