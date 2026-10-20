@@ -1,6 +1,9 @@
-//! A trace being recorded holds the prototypes and strings it went
-//! through without keeping them alive; a collection that frees one must
-//! drop the recording before the sweep, without reading the freed object.
+//! What the runtime holds outside Lua's reach, through collections: a
+//! trace being recorded holds the prototypes and strings it went through
+//! without keeping them alive, and a collection that frees one must drop
+//! the recording before the sweep, without reading the freed object; a
+//! coroutine an error killed keeps its frames, whose functions the
+//! collector must keep for the traceback and `getinfo` made from them.
 //!
 //! The Vms here run on memory that is never reused: a freed block is
 //! zeroed and kept until the Vm is gone, so code that reads a freed object
@@ -77,6 +80,8 @@ fn run(version: LuaVersion, seed: u32, hot: u32, source: &str) -> String {
     let out = match vm.eval(source) {
         Ok(r) => match r.first() {
             Some(Value::Int(i)) => i.to_string(),
+            // 5.1's numbers are all floats
+            Some(Value::Float(f)) if f.fract() == 0.0 => (*f as i64).to_string(),
             other => format!("{other:?}"),
         },
         Err(e) => format!("error: {}", vm.error_display(&e)),
@@ -137,4 +142,30 @@ fn a_full_collection_during_a_5_1_recording_reads_nothing_freed() {
          end
          return n",
     );
+}
+
+/// A coroutine killed by an error raised in a function a native called:
+/// that function is held by nothing but the frames the dead coroutine
+/// keeps. Its traceback is the same before and after full collections.
+#[test]
+fn a_dead_coroutine_keeps_the_functions_of_its_frames() {
+    for version in [LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Lua55] {
+        let got = run(
+            version,
+            1,
+            0,
+            "local co = coroutine.create(function()
+               string.gsub('a', 'a', function() local x = {} error('x') end)
+             end)
+             coroutine.resume(co)
+             local before = debug.traceback(co)
+             collectgarbage() collectgarbage()
+             local junk = {}
+             for i = 1, 2000 do junk[i] = function() return i end end
+             local after = debug.traceback(co)
+             local info = debug.getinfo(co, 1, 'S')
+             return before == after and info ~= nil and 1 or 0",
+        );
+        assert_eq!(got, "1", "{version:?}");
+    }
 }
