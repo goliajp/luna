@@ -169,3 +169,69 @@ fn a_dead_coroutine_keeps_the_functions_of_its_frames() {
         assert_eq!(got, "1", "{version:?}");
     }
 }
+
+
+/// `debug.sethook` makes the hook table: the registry key it looked the
+/// table up by may be collected by the table's allocation (here, by the
+/// `gc-stress` build's collection there), so the key is made again for
+/// the store, as `lua_setfield` does. Run in the `luna` command, whose
+/// state opens its libraries as `lua.c` does, with glibc's allocator
+/// filling what is freed (`MALLOC_PERTURB_`), so a key read after it was
+/// freed is not the key.
+#[test]
+fn the_hook_table_key_outlives_the_table_allocation() {
+    let src = "local n = 0
+        local h = function() n = n + 1 end
+        debug.sethook(h, 'c')
+        local f = function() end
+        f(); f()
+        local got = debug.gethook()
+        debug.sethook()
+        print(n > 0 and got == h)";
+    for version in ["5.2", "5.4", "5.5"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_luna"))
+            .args([&format!("--lua={version}"), "-e", src])
+            .env("MALLOC_PERTURB_", "165")
+            .output()
+            .expect("the luna command runs");
+        assert_eq!(
+            (out.status.success(), String::from_utf8_lossy(&out.stdout).trim()),
+            (true, "true"),
+            "{version}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// The open upvalue a coroutine's frame left without a closure, taken off
+/// the thread's list when the marking ends, no longer names the thread,
+/// which the same sweep may free (the `gc-verify` build checks that no
+/// object the sweep keeps holds one it frees).
+#[cfg(feature = "gc-verify")]
+#[test]
+fn a_dead_open_upvalue_names_no_thread() {
+    for version in [LuaVersion::Lua51, LuaVersion::Lua52] {
+        let got = run(
+            version,
+            1,
+            0,
+            "collectgarbage('restart')
+             local keep, n = nil, 0
+             for i = 1, 20 do
+               local co = coroutine.create(function()
+                 local d = i
+                 keep = function() return d end
+                 local lost = function() d = d + 1 end
+                 lost = nil
+                 coroutine.yield()
+               end)
+               coroutine.resume(co)
+               co = nil
+               collectgarbage()
+               n = n + keep()
+             end
+             return n",
+        );
+        assert_eq!(got, "210", "{version:?}");
+    }
+}

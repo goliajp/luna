@@ -30,8 +30,9 @@ name = "gc_checkpoints"
 required-features = ["gc-stress"]
 
 # objects the runtime holds without a Lua root (a recording's, a dead
-# coroutine's frames) through collections, on memory that is never reused,
-# checked by the collector checks the feature builds in
+# coroutine's frames, a dead open upvalue, a registry key) through
+# collections, on memory that is never reused or is filled when freed,
+# checked by the collector checks the features build in
 [[test]]
 name = "freed_while_held"
 required-features = ["gc-stress"]
