@@ -70,6 +70,10 @@ impl Vm {
             results.remove(0);
             Ok(results)
         } else {
+            // from 5.2 `luaD_pcall` shrinks the stack once the error is set
+            if self.version() >= LuaVersion::Lua52 {
+                self.shrink_caught_error();
+            }
             Err(LuaError(results.get(1).copied().unwrap_or(Value::Nil)))
         }
     }
@@ -170,6 +174,10 @@ impl Vm {
             results.remove(0);
             Ok(results)
         } else {
+            // from 5.2 `luaD_pcall` shrinks the stack once the error is set
+            if self.version() >= LuaVersion::Lua52 {
+                self.shrink_caught_error();
+            }
             Err(LuaError(results.get(1).copied().unwrap_or(Value::Nil)))
         }
     }
