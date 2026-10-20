@@ -41,6 +41,7 @@ mod for_loop;
 mod frame_ops;
 mod frame_ops_const;
 mod frame_state;
+mod open_upval;
 mod frames_sync;
 use frames_sync::{frames_pop_known, frames_pop_sync, frames_push_sync};
 mod gc;
