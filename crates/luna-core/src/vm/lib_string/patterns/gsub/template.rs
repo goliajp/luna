@@ -40,16 +40,14 @@ pub(super) fn add_s(
                 let c = ms
                     .get_capture((d - b'1') as usize, s, e)
                     .map_err(|err| pat_err(vm, err))?;
-                // `push_onecapture`, then (5.3) `luaL_tolstring` of it
+                // `push_onecapture`, then (5.3) `luaL_tolstring` of it: the
+                // capture is on PUC's stack meanwhile
                 let v = cap_value(vm, src, c)?;
-                let x = match v {
-                    _ if vm.version() == LuaVersion::Lua53 => vm.tolstring(v, 0)?,
-                    Value::Str(x) => x,
-                    // `luaL_addvalue`'s `lua_tolstring`
-                    n => vm.number_string(n)?,
-                };
-                vm.buf_push(out, x.as_bytes())?;
-                b.add_value(vm, out, x)?;
+                let at = vm.lib_roots.len();
+                vm.lib_roots.push(v);
+                let r = add_capture(vm, v, (out, b));
+                vm.lib_roots.truncate(at);
+                r?;
             }
             b'%' => {
                 vm.buf_push(out, b"%")?;
@@ -63,6 +61,22 @@ pub(super) fn add_s(
         }
     }
     Ok(())
+}
+
+/// Capture value `v`, rooted by the caller, added as a string.
+fn add_capture(
+    vm: &mut Vm,
+    v: Value,
+    (out, b): (&mut LVec<u8>, &mut PucBuffer),
+) -> Result<(), LuaError> {
+    let x = match v {
+        _ if vm.version() == LuaVersion::Lua53 => vm.tolstring(v, 0)?,
+        Value::Str(x) => x,
+        // `luaL_addvalue`'s `lua_tolstring`
+        n => vm.number_string(n)?,
+    };
+    vm.buf_push(out, x.as_bytes())?;
+    b.add_value(vm, out, x)
 }
 
 /// 5.4 on: each run of text up to an escape added at once.
