@@ -66,6 +66,8 @@ fn coroutine_yield_and_resume_returns_yielded_values() {
         .unwrap();
     let body = r.into_iter().next().unwrap();
     let co = vm.create_coroutine(body);
+    // the host keeps the coroutine across calls: pinned
+    vm.pin_host(co);
 
     // 1st resume — yields 1
     let r1 = vm.resume_coroutine(co, vec![]).unwrap();
