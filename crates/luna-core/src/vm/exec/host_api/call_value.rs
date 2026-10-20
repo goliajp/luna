@@ -78,6 +78,7 @@ impl Vm {
         // otherwise leak into the next debug.traceback call).
         if self.public_call_depth == 0 {
             self.error_traceback = None;
+            self.error_ars = None;
         }
         self.public_call_depth += 1;
         // a compiled function is entered where the call is made
@@ -102,6 +103,7 @@ impl Vm {
     ) -> Result<Vec<Value>, LuaError> {
         if self.public_call_depth == 0 {
             self.error_traceback = None;
+            self.error_ars = None;
         }
         self.public_call_depth += 1;
         let r = self.call_value_impl(f, args, true, Some(at));

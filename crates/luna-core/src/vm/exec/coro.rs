@@ -196,7 +196,7 @@ impl Vm {
             m.resume_at = None;
             m.error_value = None;
             m.error_traceback = None;
-            m.error_levels = None;
+            m.error_ars = None;
         }
         self.host_thread_reset(co);
         result.map(|()| death_err)

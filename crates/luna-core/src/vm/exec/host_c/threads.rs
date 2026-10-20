@@ -66,7 +66,7 @@ impl Vm {
         m.status = CoroStatus::Suspended;
         m.resume_at = None;
         m.error_traceback = None;
-        m.error_levels = None;
+        m.error_ars = None;
         m.stack.take();
         m.frames.take();
         m.open_upvals.take();

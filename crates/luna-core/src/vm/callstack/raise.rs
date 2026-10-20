@@ -154,7 +154,11 @@ impl Vm {
             }
             None => {
                 if self.keep_error_traceback && self.error_traceback.is_none() {
-                    self.error_traceback = Some(self.level_lines());
+                    let ars = self.level_ars();
+                    self.error_traceback = Some(self.lines_of(&ars));
+                    // a coroutine it kills keeps its levels as PUC keeps
+                    // its stack
+                    self.error_ars = self.current.map(|_| ars);
                 }
                 err
             }

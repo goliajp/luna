@@ -70,6 +70,7 @@ pub(crate) enum LocalSlot {
 }
 
 /// PUC `lua_Debug`, filled for one level or one function value.
+#[derive(Clone)]
 pub(crate) struct Ar {
     pub(crate) what: &'static str,
     pub(crate) source: Vec<u8>,

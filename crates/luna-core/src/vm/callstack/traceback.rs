@@ -151,15 +151,16 @@ impl Vm {
         out
     }
 
-    /// The traceback line of every level of the running thread, level 0
-    /// first — a snapshot `traceback_from_lines` can elide from any level.
-    pub(crate) fn level_lines(&mut self) -> Vec<Vec<u8>> {
-        let ars: Vec<Ar> = {
-            let ts = self.thread_stack(None);
-            (0..ts.levels.len())
-                .map(|i| self.level_ar(&ts, i))
-                .collect()
-        };
+    /// The running thread's levels, as `lua_getinfo` fills them.
+    pub(crate) fn level_ars(&self) -> Vec<Ar> {
+        let ts = self.thread_stack(None);
+        (0..ts.levels.len())
+            .map(|i| self.level_ar(&ts, i))
+            .collect()
+    }
+
+    /// The traceback line of each of `ars`.
+    pub(crate) fn lines_of(&mut self, ars: &[Ar]) -> Vec<Vec<u8>> {
         let mut names = GlobalNames::default();
         ars.iter()
             .map(|ar| {

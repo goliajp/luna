@@ -20,6 +20,22 @@ impl Vm {
     /// The levels of `co`'s stack a traceback from `level` shows.
     fn traceback_ars(&mut self, co: Option<Gc<Coro>>, level: i64) -> Vec<(TbLine, Option<Ar>)> {
         let v = self.version();
+        // a coroutine an error killed: the levels it had then
+        if let Some(ars) = co.and_then(|c| c.error_ars.clone()) {
+            let plan = traceback_plan(v, ars.len() as i64, level);
+            return plan
+                .into_iter()
+                .map(|line| {
+                    let ar = match line {
+                        TbLine::Tails(_) => Some(tail_ar()),
+                        TbLine::Level(l) if l < 0 => Some(tail_ar()),
+                        TbLine::Level(l) => Some(ars[l as usize].clone()),
+                        _ => None,
+                    };
+                    (line, ar)
+                })
+                .collect();
+        }
         let ts = self.thread_stack(co);
         let plan = traceback_plan(v, ts.levels.len() as i64, level);
         plan.into_iter()

@@ -26,37 +26,8 @@ pub(super) fn d_traceback(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
         return vm.nat_ret(fs, &[m]);
     }
     let level = opt_integer(vm, a, arg + 1, default_level)? as i32 as i64;
-    if !dead_with_levels(co) {
-        let s = vm.puc_traceback(co, msg.as_deref(), level)?;
-        return vm.nat_ret(fs, &[Value::Str(s)]);
-    }
-    let mut out = match msg {
-        Some(mut m) => {
-            m.push(b'\n');
-            m
-        }
-        None => Vec::new(),
-    };
-    out.extend_from_slice(b"stack traceback:");
-    out.extend(thread_traceback(vm, co, level));
-    let s = vm.str_value(&out)?;
-    vm.nat_ret(fs, &[s])
-}
-
-/// A coroutine killed by an error, whose stack luna keeps as text.
-fn dead_with_levels(co: Option<Gc<Coro>>) -> bool {
-    co.is_some_and(|c| c.error_levels.is_some())
-}
-
-/// The level lines of `co`'s traceback; a coroutine killed by an error
-/// shows the stack it died with, as PUC leaves a dead thread's stack.
-fn thread_traceback(vm: &mut Vm, co: Option<Gc<Coro>>, level: i64) -> Vec<u8> {
-    if let Some(co) = co
-        && let Some(lines) = co.error_levels.as_ref()
-    {
-        return crate::vm::callstack::traceback_from_lines(vm.version(), lines, level, 0);
-    }
-    vm.traceback_lines(co, level)
+    let s = vm.puc_traceback(co, msg.as_deref(), level)?;
+    vm.nat_ret(fs, &[Value::Str(s)])
 }
 
 /// PUC 5.1 `db_errorfb`, which works on the raw argument stack: a numeric
@@ -87,34 +58,6 @@ fn traceback_51(
         let top = *stack.last().expect("non-empty");
         return vm.nat_ret(fs, &[top]);
     }
-    if !dead_with_levels(co) {
-        let r = vm.puc_errorfb(co, stack, level)?;
-        return vm.nat_ret(fs, &[r]);
-    }
-    let mut out = Vec::new();
-    if let Some(&msg) = stack.first() {
-        if crate::vm::argcheck::to_str_bytes(vm, msg).is_none() {
-            // `return 1` hands back whatever is on top
-            let top = *stack.last().expect("non-empty");
-            return vm.nat_ret(fs, &[top]);
-        }
-        // `lua_concat` works from the top down, so the rightmost bad part is
-        // the one reported; the C function has no position to add
-        if let Some(bad) = stack
-            .iter()
-            .rev()
-            .find(|&&p| crate::vm::argcheck::to_str_bytes(vm, p).is_none())
-        {
-            let msg = format!("attempt to concatenate a {} value", bad.type_name());
-            return Err(vm.runerror_in_c(&msg));
-        }
-        for &part in &stack {
-            out.extend(crate::vm::argcheck::to_str_bytes(vm, part).expect("checked above"));
-        }
-        out.push(b'\n');
-    }
-    out.extend_from_slice(b"stack traceback:");
-    out.extend(thread_traceback(vm, co, level));
-    let s = vm.str_value(&out)?;
-    vm.nat_ret(fs, &[s])
+    let r = vm.puc_errorfb(co, stack, level)?;
+    vm.nat_ret(fs, &[r])
 }

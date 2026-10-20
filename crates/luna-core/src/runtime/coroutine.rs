@@ -65,9 +65,10 @@ pub struct Coro {
     /// for it (`stack traceback:` and one `\n\t` line per level), as PUC
     /// leaves a dead coroutine's stack in place
     pub error_traceback: Option<LVec<u8>>,
-    /// the same snapshot one line per stack level, so `debug.traceback(co,
-    /// msg, level)` can start at any level
-    pub(crate) error_levels: Option<LVec<LVec<u8>>>,
+    /// its levels at that error, as `lua_getinfo` filled them: what PUC's
+    /// traceback and debug functions find on the stack a dead coroutine
+    /// keeps
+    pub(crate) error_ars: Option<Vec<crate::vm::callstack::Ar>>,
     /// while it waits on a coroutine it resumed (status normal): its own
     /// running natives, as indices into the Vm's `running_natives`
     pub(crate) natives: std::ops::Range<usize>,
@@ -142,6 +143,12 @@ impl Coro {
         }
         if let Some(e) = self.error_value {
             m.value(e);
+        }
+        for ar in self.error_ars.iter().flatten() {
+            m.value(ar.func);
+            if let Some(s) = ar.name_in {
+                m.mark(s);
+            }
         }
         if let Some(h) = self.hook.func {
             m.value(h);
