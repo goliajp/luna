@@ -94,9 +94,10 @@ impl Cut {
             // a statement's last token: what its body leaves is done
             // before the parser checks the token is the `end` it expects
             TokRef::StatAfter(_, -1) if self.block_ends => true,
-            TokRef::After(e, _) | TokRef::First(e, _) | TokRef::Open(e, _) => {
-                ended(e.0, exprs, &m.expr_follow)
-            }
+            // done as the scanner reached the expression's first token,
+            // before the parser read it (`luaK_infix` after an operator)
+            TokRef::First(..) => true,
+            TokRef::After(e, _) | TokRef::Open(e, _) => ended(e.0, exprs, &m.expr_follow),
             TokRef::StatFirst(s, _)
             | TokRef::StatAfter(s, _)
             | TokRef::StatMark(s, _)
