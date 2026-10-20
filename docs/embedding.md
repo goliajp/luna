@@ -676,8 +676,11 @@ let body = vm.eval(r#"
     end
 "#)?[0];
 
-// Create + drive:
+// Create + drive. The coroutine is used across several calls, so it is
+// pinned: a `Value` the host keeps between calls is not otherwise kept
+// alive by the collector.
 let co = vm.create_coroutine(body);
+let ticket = vm.pin_host(co);
 
 let r1 = vm.resume_coroutine(co, vec![])?;
 // r1[0] == Int(1)  — first yield
@@ -687,10 +690,17 @@ let r2 = vm.resume_coroutine(co, vec![])?;
 
 let r3 = vm.resume_coroutine(co, vec![])?;
 // r3[0] == Int(3)  — terminal return; further resumes error
+
+vm.unpin(ticket)?;
 ```
 
 `resume_coroutine` returns `Err(LuaError)` if the body raises or
 if `co` isn't a `Value::Coro`.
+
+A `Value` a `Vm` method returns refers to an object the collector
+manages. Keep it only until the next call into the `Vm`, or pin it
+with `Vm::pin_host` (released with `Vm::unpin`); the handles of the
+`Lua` facade (§11) are pinned already.
 
 ---
 
