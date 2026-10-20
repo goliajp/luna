@@ -233,16 +233,4 @@ impl Vm {
         unsafe { u.as_mut() }.payload = payload;
         Ok(u)
     }
-
-    /// A closed upvalue holding `v`, collecting in an emergency when memory
-    /// runs out.
-    pub(crate) fn lib_closed_upvalue(
-        &mut self,
-        v: Value,
-    ) -> Result<Gc<crate::runtime::Upvalue>, LuaError> {
-        self.retry_oom(|vm| {
-            vm.heap
-                .try_new_upvalue(crate::runtime::UpvalState::Closed(v))
-        })
-    }
 }
