@@ -56,6 +56,12 @@ fn hook_table(vm: &mut Vm, init: bool) -> Result<Gc<Table>, LuaError> {
         LuaVersion::Lua53 => vm.api_new_table(0, 2)?,
         _ => vm.api_new_table(0, 0)?,
     };
+    // `lua_setfield` makes the key's string again: the one read with
+    // `lua_getfield` may have been collected by the table's allocation
+    let key = match key {
+        Value::Str(_) => vm.str_value(if v == LuaVersion::Lua52 { b"_HKEY" } else { b"_HOOKKEY" })?,
+        k => k,
+    };
     vm.raw_set(reg, key, Value::Table(t))?;
     if init && v >= LuaVersion::Lua52 {
         let k = vm.api_push_string(b"k")?;
