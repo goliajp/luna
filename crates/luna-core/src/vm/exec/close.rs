@@ -35,7 +35,7 @@ impl Vm {
 
     /// Close upvalues and run `__close` handlers for slots ≥ `from`, the
     /// last registered first (PUC `luaF_close`); with `above`, each method
-    /// called two slots above its variable, past the error object.
+    /// called above its variable and the error object.
     pub(super) fn close_slots_at(
         &mut self,
         from: u32,
@@ -62,7 +62,9 @@ impl Vm {
             if matches!(v, Value::Nil | Value::Bool(false)) {
                 continue;
             }
-            let at = above.then_some(s + 2);
+            // with no error 5.5 calls right above the variable
+            let no_err55 = pending.is_none() && self.version >= LuaVersion::Lua55;
+            let at = above.then_some(s + 2 - u32::from(no_err55));
             let mm = self.get_mm(v, Mm::Close);
             if mm.is_nil() {
                 // PUC `prepclosingmethod`: the __close metamethod was present

@@ -5,6 +5,7 @@
 use crate::runtime::table::Dialect;
 use crate::runtime::userdata::UserdataPayload;
 use crate::runtime::{Gc, Table, Userdata, Value};
+use crate::version::LuaVersion;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
@@ -114,11 +115,17 @@ impl Vm {
 
     /// A box's `__close` (5.4+, `lua_closeslot`): a call one level up, of a
     /// C function, made above the box and the string just pushed with the
-    /// method, the box and the error (`callclosemethod`), which wants
+    /// method, the box and (5.4) the error (`callclosemethod`), which wants
     /// `LUA_MINSTACK` slots above those (`precallC`).
     pub(crate) fn box_closed(&mut self) -> Result<(), LuaError> {
         if let Some(top) = self.native_top() {
-            self.check_lua_stack(top + 2 + 3, crate::vm::exec::stack_size::MIN_STACK, true)?;
+            let pushed = if self.version() >= LuaVersion::Lua55 {
+                2
+            } else {
+                3
+            };
+            let min = crate::vm::exec::stack_size::MIN_STACK;
+            self.check_lua_stack(top + 2 + pushed, min, true)?;
         }
         self.note_c_call();
         Ok(())
