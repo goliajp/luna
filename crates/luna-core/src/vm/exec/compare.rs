@@ -282,13 +282,19 @@ impl Vm {
                 if mm.is_nil() {
                     // PUC luaG_ordererror: "two X values" when the operand
                     // types match, "X with Y" otherwise (objtypename-aware).
+                    use crate::runtime::puc_fmt::FmtArg::S;
                     let (t1, t2) = (self.obj_typename(l), self.obj_typename(r));
-                    let (msg, conv) = if t1 == t2 {
-                        (format!("attempt to compare two {t1} values"), 1)
+                    let (t1, t2) = (t1.as_bytes(), t2.as_bytes());
+                    return Err(if t1 == t2 {
+                        self.runerror_fmt(b"attempt to compare two %s values", &[S(t1)], 1, false)
                     } else {
-                        (format!("attempt to compare {t1} with {t2}"), 2)
-                    };
-                    return Err(self.runerror_conv(&msg, conv, false));
+                        self.runerror_fmt(
+                            b"attempt to compare %s with %s",
+                            &[S(t1), S(t2)],
+                            2,
+                            false,
+                        )
+                    });
                 }
                 return Ok(MmOut::Mm { func: mm, recv: l });
             }
