@@ -35,6 +35,11 @@ pub(super) fn nat_assert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         // then adds the position to a string only.
         _ => {
             argcheck::check_any(vm, a, 0)?;
+            // the default message is pushed whether or not a message is
+            // there to take its place (`lua_pushliteral` before `lua_settop`)
+            if nargs >= 2 {
+                vm.api_push_string(b"assertion failed!")?;
+            }
             vm.native_settop(1);
             match a.get(vm, 1) {
                 _ if nargs < 2 => Err(raise_value(vm, "assertion failed!")),
