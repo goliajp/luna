@@ -1,6 +1,8 @@
 //! `require` and the loader search behind it.
 
 use super::*;
+use crate::runtime::puc_fmt::FmtArg;
+use crate::vm::puc_buffer::PucBuffer;
 
 /// `findloader`: ask each searcher in turn; the first one to return a
 /// function supplies the loader (and its extra value). The misses are
@@ -29,23 +31,45 @@ pub(super) fn find_loader(
     };
     // 5.1's message is a string on the stack, which each miss replaces
     // with the two concatenated (`lua_concat`)
+    let mut acc = Value::Nil;
     if v == LuaVersion::Lua51 {
-        let empty = vm.str_value(b"")?;
-        vm.native_push_vals(&[empty])?;
+        acc = vm.str_value(b"")?;
+        vm.native_push_vals(&[acc])?;
     } else {
         vm.native_buffinit(0)?;
     }
     let mut msg = Vec::new();
+    // 5.2 on: the message in a `luaL_Buffer`
+    let mut buf = (v >= LuaVersion::Lua52).then(|| PucBuffer::new(vm));
+    // 5.4+'s message, in the buffer's place while the error is made
+    let mut made = None;
     for i in 1.. {
+        // 5.4 on adds the separator first, taken off again when nothing
+        // follows it
+        if v >= LuaVersion::Lua54
+            && let Some(b) = buf.as_mut()
+        {
+            msg.extend_from_slice(b"\n\t");
+            b.add(vm, &msg, 2)?;
+        }
         let s = searchers.get(Value::Int(i));
         if s.is_nil() {
-            // 5.1 keeps the nil; 5.2 and 5.3 push the message made from
-            // the buffer, which 5.4+ put in the buffer's place
-            if v == LuaVersion::Lua51 {
-                vm.native_push_vals(&[Value::Nil])?;
-            } else if v <= LuaVersion::Lua53 {
-                let m = vm.str_value(&msg)?;
-                vm.native_push_vals(&[m])?;
+            // 5.1 keeps the nil; later the message made from the buffer
+            // is pushed (5.4+ in the buffer's place)
+            match buf.take() {
+                None => vm.native_push_vals(&[Value::Nil])?,
+                Some(mut b) => {
+                    if v >= LuaVersion::Lua54 {
+                        msg.truncate(msg.len() - 2);
+                        b.sub(2);
+                    }
+                    let m = b.finish(vm, &msg)?;
+                    if v <= LuaVersion::Lua53 {
+                        vm.native_push_vals(&[Value::Str(m)])?;
+                    } else {
+                        made = Some(m);
+                    }
+                }
             }
             break;
         }
@@ -62,30 +86,48 @@ pub(super) fn find_loader(
             return Ok((first, second));
         }
         if let Some(text) = argcheck::to_str_bytes(vm, first) {
-            // 5.4 puts the separator between messages itself
-            if v >= LuaVersion::Lua54 {
-                msg.extend_from_slice(b"\n\t");
-            }
             msg.extend_from_slice(&text);
+            if let Some(b) = buf.as_mut() {
+                // `luaL_addvalue`, which turns a number into a string first
+                let s = match first {
+                    Value::Str(s) => s,
+                    _ => {
+                        let s = vm.alloc_str(&text)?;
+                        vm.api_check_converted(Value::Str(s))?;
+                        s
+                    }
+                };
+                b.add_value(vm, &msg, s)?;
+            }
             if v == LuaVersion::Lua51 {
-                // `lua_concat(L, 2)`
+                // `lua_concat(L, 2)` of the message so far and this one
                 vm.api_check_before()?;
-                let m = vm.str_value(&msg)?;
+                let at = vm.lib_roots.len();
+                vm.lib_roots.push(first);
+                let m = crate::vm::builtins::concat2(vm, acc, first);
+                vm.lib_roots.truncate(at);
+                let m = m?;
+                acc = m;
                 let top = vm.running_natives.last().map_or(0, |a| a.top_off);
                 vm.native_hold(top - 1, &[m])?;
             }
+        } else if v >= LuaVersion::Lua54
+            && let Some(b) = buf.as_mut()
+        {
+            msg.truncate(msg.len() - 2);
+            b.sub(2);
         }
     }
     let Value::Str(n) = name else {
         unreachable!("require passes the name as a string");
     };
-    let text = format!(
-        "module '{}' not found:{}",
-        String::from_utf8_lossy(c_str(n.as_bytes())),
-        String::from_utf8_lossy(&msg)
-    );
-    // "module '%s' not found:%s"
-    Err(crate::vm::builtins::raise_fmt(vm, 2, &text))
+    // `luaL_error(L, "module '%s' not found:%s", name, msg)`
+    let at = vm.lib_roots.len();
+    vm.lib_roots.extend(made.map(Value::Str));
+    let args = [FmtArg::S(c_str(n.as_bytes())), FmtArg::S(&msg)];
+    let e = crate::vm::builtins::raise_lib(vm, b"module '%s' not found:%s", &args, 2);
+    vm.lib_roots.truncate(at);
+    Err(e)
 }
 
 pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

@@ -127,6 +127,11 @@ impl PucBuffer {
         Ok(())
     }
 
+    /// The last `n` bytes taken off (`luaL_buffsub`).
+    pub(crate) fn sub(&mut self, n: usize) {
+        self.n -= n;
+    }
+
     /// `sz` bytes written into the room asked for before (`luaL_addsize`).
     pub(crate) fn add_size(&mut self, sz: usize) {
         self.n += sz;
