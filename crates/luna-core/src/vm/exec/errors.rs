@@ -122,15 +122,19 @@ impl Vm {
         let l55 = self.version >= LuaVersion::Lua55;
         let h = &mut self.heap;
         let r = h.pushfstring(fmt, args).and_then(|msg| {
+            // with no position the message is the string just made (PUC
+            // `luaG_runerror` in a C function), not a copy of it
+            let Some(pos) = pos else {
+                return Ok(msg);
+            };
             let msg = msg.as_bytes().to_vec();
             match pos {
-                None => h.try_intern(&msg),
-                Some(ErrPos::At(src, line)) => h.pushfstring(
+                ErrPos::At(src, line) => h.pushfstring(
                     b"%s:%d: %s",
                     &[FmtArg::S(&src), FmtArg::D(line), FmtArg::S(&msg)],
                 ),
-                Some(ErrPos::NoSource) if l55 => h.pushfstring(b"?:?: %s", &[FmtArg::S(&msg)]),
-                Some(ErrPos::NoSource) => h.pushfstring(
+                ErrPos::NoSource if l55 => h.pushfstring(b"?:?: %s", &[FmtArg::S(&msg)]),
+                ErrPos::NoSource => h.pushfstring(
                     b"%s:%d: %s",
                     &[FmtArg::S(b"?"), FmtArg::D(-1), FmtArg::S(&msg)],
                 ),
