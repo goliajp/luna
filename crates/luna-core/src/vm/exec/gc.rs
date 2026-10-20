@@ -119,9 +119,8 @@ impl Vm {
     /// `luaC_fullgc`), finishing an incremental cycle in progress first.
     /// Returns the number of objects freed.
     pub(crate) fn full_collect(&mut self) -> usize {
-        // a sweep ends before the full cycle starts, with `checkSizes`: the
-        // one in progress, or the one `luaC_fullgc` starts from marking
-        // (5.1 from a pause too, which it treats as marking)
+        // a sweep (the one in progress, or 5.1's from a pause, which it
+        // treats as marking) ends before the full cycle, with `checkSizes`
         let swept = !self.heap.gc_phase_is_pause() || self.version == LuaVersion::Lua51;
         self.gc_hold_threads();
         self.jit_forget_ghosts();
@@ -136,6 +135,7 @@ impl Vm {
             self.mark_roots(&mut m, true);
             self.heap.stash_marker(m);
             self.watch_errors();
+            self.lend_open_lists();
             self.heap.gc_finish_atomic();
             self.collector_shrinks_threads();
             self.forget_dead_errors();
@@ -151,6 +151,7 @@ impl Vm {
             let mut m = self.heap.gc_begin_full();
             self.mark_roots(&mut m, false);
             self.watch_errors();
+            self.lend_open_lists();
             self.heap.mark_from(&mut m);
             // 5.3 shrinks the threads as the cycle traverses them, before
             // the sweep, the rest after; 5.2's single steps did both

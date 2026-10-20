@@ -3,6 +3,7 @@
 //! — that is swapped into the running `Vm` while it is active and saved back
 //! here while it is suspended.
 
+use crate::runtime::table::Dialect;
 use crate::runtime::Upvalue;
 use crate::runtime::function::{CallFrame, ContKind};
 use crate::runtime::heap::{Gc, GcHeader, Marker};
@@ -130,8 +131,10 @@ impl Coro {
                 }
             }
         }
-        for &(_, uv) in self.open_upvals.iter() {
-            m.mark(uv);
+        if !matches!(m.dialect, Dialect::L51 | Dialect::L52) {
+            for &(_, uv) in self.open_upvals.iter() {
+                m.mark(uv);
+            }
         }
         if let Some(r) = self.resumer {
             m.mark(r);

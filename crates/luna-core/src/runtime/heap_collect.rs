@@ -289,6 +289,7 @@ impl Heap {
         // and the pre-flip current-white becomes the dead-white (the bit the
         // sweep tests for). Born-during-sweep allocations stamp the new
         // current-white via `Heap::link`, so they survive this cycle.
+        self.doom_open_upvals();
         self.current_white ^= WHITE_BITS;
         // the threads the sweep is about to free are no longer visited
         self.threads.retain(|&c| header_is_marked(c));

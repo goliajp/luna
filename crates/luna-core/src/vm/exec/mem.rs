@@ -59,6 +59,7 @@ impl Vm {
             self.heap.mark_young(&mut m);
             self.heap.stash_marker(m);
             self.watch_errors();
+            self.lend_open_lists();
             self.heap.gc_finish_atomic();
             self.forget_dead_errors();
             self.heap.gc_finish_sweep();
