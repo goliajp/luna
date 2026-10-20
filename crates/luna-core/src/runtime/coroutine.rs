@@ -60,15 +60,10 @@ pub struct Coro {
     pub error_value: Option<Value>,
     /// the status of the error it died with
     pub error_status: ErrorStatus,
-    /// the traceback of the coroutine at the error that killed it, taken
-    /// before its frames were unwound: the text `debug.traceback(co)` returns
-    /// for it (`stack traceback:` and one `\n\t` line per level), as PUC
-    /// leaves a dead coroutine's stack in place
-    pub error_traceback: Option<LVec<u8>>,
-    /// its levels at that error, as `lua_getinfo` filled them: what PUC's
-    /// traceback and debug functions find on the stack a dead coroutine
-    /// keeps
-    pub(crate) error_ars: Option<Vec<crate::vm::callstack::Ar>>,
+    /// the frames and the natives running in it when an error killed it, as
+    /// PUC leaves a dead thread's stack in place: what `debug.traceback`,
+    /// `debug.getinfo` and `Vm::coroutine_error_traceback` see of it
+    pub(crate) dead: Option<crate::vm::callstack::DeadStack>,
     /// while it waits on a coroutine it resumed (status normal): its own
     /// running natives, as indices into the Vm's `running_natives`
     pub(crate) natives: std::ops::Range<usize>,
@@ -144,11 +139,8 @@ impl Coro {
         if let Some(e) = self.error_value {
             m.value(e);
         }
-        for ar in self.error_ars.iter().flatten() {
-            m.value(ar.func);
-            if let Some(s) = ar.name_in {
-                m.mark(s);
-            }
+        if let Some(d) = &self.dead {
+            d.trace(m);
         }
         if let Some(h) = self.hook.func {
             m.value(h);

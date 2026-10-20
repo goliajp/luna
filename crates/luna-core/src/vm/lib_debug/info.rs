@@ -60,20 +60,6 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
                 lines_if(vm, want_lines, subject).inspect_err(|_| vm.lib_roots.truncate(base))?;
             (ar, lines)
         }
-        // a coroutine an error killed: the levels it had then
-        Some(level) if co.is_some_and(|c| c.error_ars.is_some()) => {
-            let ar = co.and_then(|c| {
-                c.error_ars
-                    .as_ref()?
-                    .get(usize::try_from(level).ok()?)
-                    .cloned()
-            });
-            let Some(ar) = ar else {
-                return vm.nat_ret(fs, &[Value::Nil]);
-            };
-            let lines = lines_if(vm, want_lines, ar.func)?;
-            (ar, lines)
-        }
         Some(level) => {
             let ts = vm.thread_stack(co);
             let found = if level < 0 {

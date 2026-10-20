@@ -17,6 +17,7 @@ use crate::runtime::Value;
 use crate::runtime::function::{CallFrame, ContKind, Frame};
 
 mod chunk_id;
+mod dead_stack;
 mod function_ar;
 mod global_name;
 mod levels;
@@ -31,6 +32,7 @@ mod traceback;
 mod traceback_puc;
 
 pub(crate) use chunk_id::{chunk_id, syntax_chunk_id};
+pub(crate) use dead_stack::DeadStack;
 pub(crate) use levels::tail_ar;
 pub(crate) use native_act::NativeAct;
 pub(crate) use raise::ErroredNative;

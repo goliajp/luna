@@ -197,8 +197,7 @@ impl Vm {
             m.ci_alloc = closed.ci_alloc;
             m.resume_at = None;
             m.error_value = None;
-            m.error_traceback = None;
-            m.error_ars = None;
+            m.dead = None;
         }
         self.host_thread_reset(co);
         result.map(|()| death_err)

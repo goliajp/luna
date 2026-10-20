@@ -153,12 +153,15 @@ impl Vm {
                 }
             }
             None => {
-                if self.keep_error_traceback && self.error_traceback.is_none() {
+                if self.current.is_some() {
+                    // a coroutine it kills keeps its frames, as PUC keeps
+                    // the dead thread's stack, taken at the deepest point
+                    if self.keep_error_traceback && self.dead_snapshot.is_none() {
+                        self.dead_snapshot = self.dead_stack();
+                    }
+                } else if self.keep_error_traceback && self.error_traceback.is_none() {
                     let ars = self.level_ars();
                     self.error_traceback = Some(self.lines_of(&ars));
-                    // a coroutine it kills keeps its levels as PUC keeps
-                    // its stack
-                    self.error_ars = self.current.map(|_| ars);
                 }
                 err
             }

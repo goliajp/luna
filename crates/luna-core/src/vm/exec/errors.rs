@@ -44,6 +44,33 @@ impl Vm {
         Some(String::from_utf8_lossy(&tb).into_owned())
     }
 
+    /// The traceback of `co`, a coroutine an error killed, in the same text
+    /// as [`Vm::take_error_traceback`]: `stack traceback:` and one line per
+    /// level of the stack it died with, the function that raised first.
+    /// `None` when no error killed it, or once it is closed. The text is
+    /// made when asked for: a dead coroutine keeps only its frames.
+    pub fn coroutine_error_traceback(
+        &mut self,
+        co: crate::runtime::Gc<crate::runtime::Coro>,
+    ) -> Option<String> {
+        co.dead.as_ref()?;
+        let ars: Vec<_> = {
+            let ts = self.thread_stack(Some(co));
+            (0..ts.levels.len())
+                .map(|i| self.level_ar(&ts, i))
+                .collect()
+        };
+        let lines = self.lines_of(&ars);
+        let mut tb = b"stack traceback:".to_vec();
+        tb.extend(crate::vm::callstack::traceback_from_lines(
+            self.version,
+            &lines,
+            0,
+            0,
+        ));
+        Some(String::from_utf8_lossy(&tb).into_owned())
+    }
+
     /// PUC `luaL_traceback(L, L, msg, level)` on the running thread: `msg`
     /// (when given) and a newline, then `stack traceback:` and one line per
     /// stack level from `level` on, level 0 being the running function (the

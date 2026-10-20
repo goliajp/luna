@@ -121,8 +121,9 @@ pub struct Vm {
     /// shows of the coroutine it kills. Cleared on a catch and at host-level
     /// `call_value` entry (`public_call_depth == 0`).
     pub(crate) error_traceback: Option<Vec<Vec<u8>>>,
-    /// The levels of that traceback, when the error kills a coroutine
-    pub(crate) error_ars: Option<Vec<crate::vm::callstack::Ar>>,
+    /// The frames and running natives of a coroutine an error is killing,
+    /// taken where the error was raised: PUC's dead thread keeps its stack
+    pub(crate) dead_snapshot: Option<crate::vm::callstack::DeadStack>,
 
     /// `(source_name, line)` of the most recent error. Set by the dispatcher /
     /// lexer / parser; cleared when a new call_value enters cleanly.
