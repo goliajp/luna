@@ -56,6 +56,9 @@ const DEDUP: &[&str] = &[
      return s, 'a long string, past the forty bytes PUC keeps short', 'k', 'k'\n",
     "local t = {}\nt[1], t[1.0], t[2^53], t[2^53 + 1.0], t['1'] = 1, 2, 3, 4, 5\nreturn t\n",
     "local a = 9007199254740993\nreturn a, 9007199254740992.0, 2^63, -2^63, 1e15, 1e15 + 0.5\n",
+    // 5.3 repeats a number a nested function took the key of in between
+    "local a = 1\nlocal function f() return 1, 2.0 end\nlocal b, t = 1, {}\nt[1] = b\n\
+     for i = b, 2 do t[i] = 2.0 end\nreturn t[1], a + 1, b < 1, b == 2.0, f\n",
 ];
 
 /// Assignments: fields, globals, indexings, upvalues, several targets at
