@@ -34,13 +34,14 @@ pub(super) fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
         name.as_bytes(),
     )?;
     if loader.is_nil() {
-        let lead = if v >= LuaVersion::Lua54 { "" } else { "\n\t" };
-        let msg = format!(
-            "{lead}no field package.preload['{}']",
-            String::from_utf8_lossy(c_str(name.as_bytes()))
-        );
-        let m = vm.api_push_string(msg.as_bytes())?;
-        return vm.nat_ret(fs, &[m]);
+        let fmt: &[u8] = if v >= LuaVersion::Lua54 {
+            b"no field package.preload['%s']"
+        } else {
+            b"\n\tno field package.preload['%s']"
+        };
+        let args = [crate::runtime::puc_fmt::FmtArg::S(c_str(name.as_bytes()))];
+        let m = vm.api_pushfstring(1, fmt, &args)?;
+        return vm.nat_ret(fs, &[Value::Str(m)]);
     }
     if v >= LuaVersion::Lua54 {
         let data = vm.api_push_string(b":preload:")?;
