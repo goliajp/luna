@@ -226,6 +226,8 @@ fn info_fields(
                 if v >= LuaVersion::Lua53 {
                     vm.api_check_after(Value::Nil)?;
                 }
+                // `lua_setfield` makes its key all the same
+                set_field(vm, t, "name", Value::Nil)?;
                 set_str(vm, t, "namewhat", b"")?
             }
         }
