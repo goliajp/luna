@@ -102,12 +102,10 @@ impl Vm {
     /// [`Vm::raise_msg`] of a message luna formatted itself: PUC's format
     /// is taken to be the text, which a message without a conversion is.
     fn raise_text(&mut self, pos: Option<ErrPos>, msg: std::fmt::Arguments<'_>) -> LuaError {
-        let text = msg.to_string();
-        if text.contains('%') {
-            self.raise_msg(pos, b"%s", &[FmtArg::S(text.as_bytes())])
-        } else {
-            self.raise_msg(pos, text.as_bytes(), &[])
-        }
+        // the format of a literal message: each '%' PUC's "%%", a piece of
+        // its own before 5.4
+        let text = msg.to_string().replace('%', "%%");
+        self.raise_msg(pos, text.as_bytes(), &[])
     }
 
     /// PUC `luaG_runerror(L, fmt, ...)`: the message made as
