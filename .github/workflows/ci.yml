@@ -80,11 +80,15 @@ jobs:
           CARGO_PROFILE_RELEASE_LTO: "false"
       - name: cargo test --doc --workspace
         run: cargo test --doc --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
-      # a full collection at every checkpoint, with and without the JIT; and
-      # recordings through collections, checked by the collector checks the
-      # feature builds in
-      - name: gc_checkpoints, freed_while_held (gc-stress)
-        run: cargo test -p luna-jit --release --features gc-stress --test gc_checkpoints --test freed_while_held
+      # a full collection at every checkpoint, with and without the JIT
+      - name: gc_checkpoints (gc-stress)
+        run: cargo test -p luna-jit --release --features gc-stress --test gc_checkpoints
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+      # objects held without a Lua root through collections, checked by the
+      # collector checks both features build in
+      - name: freed_while_held (gc-stress, gc-verify)
+        run: cargo test -p luna-jit --release --features gc-stress,gc-verify --test freed_while_held
         env:
           CARGO_PROFILE_RELEASE_LTO: "false"
 
