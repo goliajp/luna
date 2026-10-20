@@ -66,6 +66,8 @@ fn call_with_handler_returns_the_results() {
     let mut vm = Vm::new(LuaVersion::Lua54);
     let f = load(&mut vm, "return 'z', ...");
     let h = vm.globals().get(Value::Str(vm.heap.intern(b"print")));
+    // a value the host keeps across calls is pinned
+    vm.pin_host(h);
     let r = vm
         .call_value_with_handler(f, &[Value::Int(1), Value::Int(2)], h)
         .expect("no error");
@@ -104,6 +106,9 @@ fn call_with_handler_runs_the_handler_before_unwinding() {
             panic!("no debug library")
         };
         let tb = debug.get(Value::Str(vm.heap.intern(b"traceback")));
+        // values the host keeps across calls are pinned
+        vm.pin_host(f);
+        vm.pin_host(tb);
         let err = vm.call_value_with_handler(f, &[], tb).unwrap_err();
         assert_eq!(str_of(err.0), text, "{v:?}");
         // made from inside a C function of the host's (lua.c's `pmain`),
