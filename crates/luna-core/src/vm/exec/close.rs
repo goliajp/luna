@@ -33,13 +33,18 @@ impl Vm {
         self.retry_oom(|vm| vm.tbc.push(slot))
     }
 
-    /// Close upvalues and run `__close` handlers for slots ≥ `from`
-    /// (handlers in reverse registration order; PUC luaF_close).
-    pub(super) fn close_slots(&mut self, from: u32, err: Option<Value>) -> Result<(), LuaError> {
+    /// Close upvalues and run `__close` handlers for slots ≥ `from`, the
+    /// last registered first (PUC `luaF_close`); with `above`, each method
+    /// called two slots above its variable, past the error object.
+    pub(super) fn close_slots_at(
+        &mut self,
+        from: u32,
+        err: Option<Value>,
+        above: bool,
+    ) -> Result<(), LuaError> {
         self.close_from(from);
-        // PUC: handlers run in reverse declaration order; an error raised by a
-        // handler becomes the error object passed to the remaining ones, and
-        // the rest are still closed. The last raised error propagates.
+        // an error a handler raises is the error object of the ones after
+        // it, which still run; the last one raised propagates
         let mut pending = err;
         let mut result = Ok(());
         let saved_err = self.closing_err;
@@ -57,6 +62,7 @@ impl Vm {
             if matches!(v, Value::Nil | Value::Bool(false)) {
                 continue;
             }
+            let at = above.then_some(s + 2);
             let mm = self.get_mm(v, Mm::Close);
             if mm.is_nil() {
                 // PUC `prepclosingmethod`: the __close metamethod was present
@@ -80,22 +86,14 @@ impl Vm {
             let saved_tm = self
                 .pending_tm
                 .replace(crate::runtime::function::FrameTm::Close);
-            // PUC 5.4 `prepclosingmethod` always pushed (obj, errobj) — errobj
-            // is nil on a normal close (5.4 locals.lua :875's
-            // `func2close(coroutine.yield)` wrap pins `(self, nil)` back
-            // through the yield). PUC 5.5 dropped the trailing nil: a clean
-            // close passes only `obj`, the error case still passes both
-            // (5.5 locals.lua :314 `select("#", ...) == n` with n=1 for the
-            // normal-close arms, n=2 for the error arm).
+            // 5.4 passes (obj, errobj), errobj nil on a normal close; 5.5
+            // passes obj alone then (locals.lua: 5.4 :875, 5.5 :314)
             let call = match pending {
-                Some(e) => self.call_value_impl(mm, &[v, e], error_close, None),
-                None => {
-                    if self.version >= LuaVersion::Lua55 {
-                        self.call_value_impl(mm, &[v], error_close, None)
-                    } else {
-                        self.call_value_impl(mm, &[v, Value::Nil], error_close, None)
-                    }
+                Some(e) => self.call_value_impl(mm, &[v, e], error_close, at),
+                None if self.version >= LuaVersion::Lua55 => {
+                    self.call_value_impl(mm, &[v], error_close, at)
                 }
+                None => self.call_value_impl(mm, &[v, Value::Nil], error_close, at),
             };
             self.pending_tm = saved_tm;
             if let Err(e) = call {

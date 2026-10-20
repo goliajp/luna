@@ -156,7 +156,10 @@ impl Vm {
         // xpcall the coroutine was suspended in
         let natives_base = std::mem::replace(&mut self.natives_base, self.running_natives.len());
         let msgh_floor = std::mem::replace(&mut self.msgh_floor, self.frames.len());
-        let result = self.close_slots(0, death_err);
+        // PUC `luaE_resetthread` closes with LUA_OK or the error: each
+        // method is called above its variable and the error object
+        // (`prepcallclosemth`)
+        let result = self.close_slots_at(0, death_err, true);
         self.natives_base = natives_base;
         self.msgh_floor = msgh_floor;
         // discard the (now-closed) coroutine context and restore the caller
@@ -275,7 +278,7 @@ impl Vm {
     /// rather than letting `unwind` catch it — and `resume_coro` turns it into a
     /// clean death (or, if a handler raised, the coroutine's error).
     pub(crate) fn close_running(&mut self) -> LuaError {
-        let death = match self.close_slots(0, None) {
+        let death = match self.close_slots_at(0, None, false) {
             Ok(()) => None,
             Err(e) => Some(e.0),
         };
