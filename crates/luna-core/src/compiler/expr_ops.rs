@@ -169,18 +169,32 @@ impl<'a> Compiler<'a> {
         Ok(Exp::Reg(base))
     }
 
-    /// True when `name` resolves, in the current function, to a named vararg
-    /// kept virtual (so `name[k]` indexes the stack varargs via OP_VARGIDX).
-    pub(super) fn vararg_virtual_local(&self, name: &str) -> bool {
+    /// What `name` resolves to in the current function as a named vararg
+    /// (a virtual one: `name[k]` indexes the stack varargs via OP_VARGIDX).
+    pub(super) fn vararg_local(&self, name: &str) -> Varg {
         let lvl = self.lr();
         // a more-recent `global name` marker shadows the local
         if lvl.global_declared(name) {
-            return false;
+            return Varg::No;
         }
-        lvl.locals
-            .iter()
-            .rposition(|l| l.name == name)
-            .is_some_and(|idx| lvl.locals[idx].vararg_virtual)
+        lvl.locals.iter().rev().find(|l| l.name == name).map_or(Varg::No, |l| l.vararg)
+    }
+
+    /// The key of `obj[k]` on this function's named vararg table (5.5,
+    /// PUC's `VVARGIND`), which goes into a register whatever it is.
+    pub(super) fn varg_key(
+        &mut self,
+        obj: ExprId,
+        t: TabRef,
+        ke: Exp,
+    ) -> Result<Option<KeyRef>, SyntaxError> {
+        let ast = self.ast;
+        match (ast.expr(obj), t) {
+            (Expr::Name(n), TabRef::Reg(_)) if self.vararg_local(self.nm(n)) == Varg::Table => {
+                Ok(Some(KeyRef::Reg(self.exp_to_anyreg(ke)?)))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Before the object of `obj[key]` is compiled: the whole index when it
@@ -194,7 +208,7 @@ impl<'a> Compiler<'a> {
         // a read `t[k]` / `t.n` of a virtual named vararg: index the stack
         // varargs directly (OP_VARGIDX), allocating no table.
         if let Expr::Name(n) = ast.expr(obj)
-            && self.vararg_virtual_local(self.nm(n))
+            && self.vararg_local(self.nm(n)) == Varg::Virtual
         {
             let saved = self.lr().freereg;
             let ke = self.expr(key)?;
@@ -228,7 +242,10 @@ impl<'a> Compiler<'a> {
         self.at(TokRef::After(key, 0));
         let ke = self.exp_to_val(ke)?;
         self.at(TokRef::After(id, 0));
-        let (t, k) = self.indexed(t, ke)?;
+        let (t, k) = match self.varg_key(obj, t, ke)? {
+            Some(k) => (t, k),
+            None => self.indexed(t, ke)?,
+        };
         self.early_emit = true;
         let e = self.index_get(t, k);
         self.early_emit = false;

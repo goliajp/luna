@@ -77,7 +77,7 @@ impl<'a> Compiler<'a> {
             reg,
             read_only,
             captured: false,
-            vararg_virtual: false,
+            vararg: Varg::No,
             start_pc,
             konst: None,
         });
@@ -106,7 +106,7 @@ impl<'a> Compiler<'a> {
             reg: u32::MAX,
             read_only: true,
             captured: false,
-            vararg_virtual: false,
+            vararg: Varg::No,
             start_pc,
             konst: Some(value),
         });

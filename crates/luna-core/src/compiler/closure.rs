@@ -86,10 +86,11 @@ impl<'a> Compiler<'a> {
                     .locals
                     .last_mut()
                     .expect("just declared")
-                    .vararg_virtual = true;
+                    .vararg = Varg::Virtual;
             } else {
                 self.emit(Inst::iabc(Op::GetVarg, r, 0, 0, false));
                 self.declare_local(name, r, true)?;
+                self.l().locals.last_mut().expect("just declared").vararg = Varg::Table;
             }
         }
         // PUC 5.1's `LUA_COMPAT_VARARG` declares a local `arg` after the
