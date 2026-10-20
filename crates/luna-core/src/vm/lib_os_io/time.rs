@@ -1,7 +1,6 @@
 //! `os.time`, `os.difftime` and `os.clock`, and the date-table fields they read and write.
 
 use super::*;
-use crate::vm::builtins::raise_fmt;
 
 pub(super) fn now() -> i64 {
     std::time::SystemTime::now()
@@ -38,7 +37,15 @@ fn getfield_pushed(
     delta: i64,
 ) -> Result<i32, LuaError> {
     let v = vm.native_getfield(Value::Table(t), None, key.as_bytes())?;
-    let missing = |vm: &mut Vm| raise_fmt(vm, 1, &format!("field '{key}' missing in date table"));
+    let missing = |vm: &mut Vm| {
+        let fmt = b"field '%s' missing in date table";
+        crate::vm::builtins::raise_lib(
+            vm,
+            fmt,
+            &[crate::runtime::puc_fmt::FmtArg::S(key.as_bytes())],
+            1,
+        )
+    };
     if vm.version() <= LuaVersion::Lua52 {
         return match argcheck::to_num(vm, v) {
             // (int)lua_tointeger: truncate, then wrap to 32 bits
@@ -50,8 +57,13 @@ fn getfield_pushed(
     let res = match argcheck::to_num(vm, v).and_then(num_exact) {
         Some(i) => i,
         None if !v.is_nil() => {
-            let msg = format!("field '{key}' is not an integer");
-            return Err(raise_fmt(vm, 1, &msg));
+            let fmt = b"field '%s' is not an integer";
+            return Err(crate::vm::builtins::raise_lib(
+                vm,
+                fmt,
+                &[crate::runtime::puc_fmt::FmtArg::S(key.as_bytes())],
+                1,
+            ));
         }
         None if d < 0 => return Err(missing(vm)),
         None => return Ok(d),
@@ -65,7 +77,13 @@ fn getfield_pushed(
         i32::MIN as i64 + delta <= res
     };
     if !in_range {
-        return Err(raise_fmt(vm, 1, &format!("field '{key}' is out-of-bound")));
+        let fmt = b"field '%s' is out-of-bound";
+        return Err(crate::vm::builtins::raise_lib(
+            vm,
+            fmt,
+            &[crate::runtime::puc_fmt::FmtArg::S(key.as_bytes())],
+            1,
+        ));
     }
     Ok((res - delta) as i32)
 }

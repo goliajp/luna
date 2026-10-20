@@ -200,11 +200,9 @@ pub(crate) fn add_value(
         other => {
             let tn = other.type_name();
             vm.native_push(buf + 1);
-            return Err(crate::vm::builtins::raise_bytes_fmt(
-                vm,
-                1,
-                &[b"invalid replacement value (a ", tn.as_bytes(), b")"].concat(),
-            ));
+            let args = [crate::runtime::puc_fmt::FmtArg::S(tn.as_bytes())];
+            let fmt = b"invalid replacement value (a %s)";
+            return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 1));
         }
     };
     Ok(kept)

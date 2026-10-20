@@ -23,9 +23,10 @@ pub(super) fn find_loader(
     // it is pushed
     let Value::Table(searchers) = vm.native_getfield(Value::Table(pkg), None, field.as_bytes())?
     else {
+        // a literal: the name is part of the format
         return Err(crate::vm::builtins::raise_fmt(
             vm,
-            1,
+            0,
             &format!("'package.{field}' must be a table"),
         ));
     };
@@ -148,11 +149,9 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     )?;
     if cur.truthy() {
         if v == LuaVersion::Lua51 && same(cur, sentinel) {
-            let text = format!(
-                "loop or previous error loading module '{}'",
-                String::from_utf8_lossy(c_str(name_s.as_bytes()))
-            );
-            return Err(crate::vm::builtins::raise_fmt(vm, 1, &text));
+            let args = [FmtArg::S(c_str(name_s.as_bytes()))];
+            let fmt = b"loop or previous error loading module '%s'";
+            return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 1));
         }
         return vm.nat_ret(fs, &[cur]);
     }

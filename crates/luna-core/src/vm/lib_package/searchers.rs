@@ -4,14 +4,13 @@ use super::*;
 
 /// `loaderror` / `checkload` for a module file that failed to load.
 pub(super) fn load_error(vm: &mut Vm, name: &[u8], file: &[u8], msg: &[u8]) -> LuaError {
-    let text = format!(
-        "error loading module '{}' from file '{}':\n\t{}",
-        String::from_utf8_lossy(c_str(name)),
-        String::from_utf8_lossy(file),
-        String::from_utf8_lossy(msg)
-    );
-    // "error loading module '%s' from file '%s':\n\t%s"
-    crate::vm::builtins::raise_fmt(vm, 3, &text)
+    let args = [
+        crate::runtime::puc_fmt::FmtArg::S(c_str(name)),
+        crate::runtime::puc_fmt::FmtArg::S(file),
+        crate::runtime::puc_fmt::FmtArg::S(msg),
+    ];
+    let fmt = b"error loading module '%s' from file '%s':\n\t%s";
+    crate::vm::builtins::raise_lib(vm, fmt, &args, 3)
 }
 
 pub(super) fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

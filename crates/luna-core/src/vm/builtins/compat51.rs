@@ -95,10 +95,11 @@ fn fenv_target(vm: &mut Vm, a: Args, level_optional: bool) -> Result<FenvTarget,
                 .expect("a Lua level has a closure"),
         )),
         Some(DbgKind::C(_)) => Ok(FenvTarget::C),
-        Some(DbgKind::Tail) => Err(crate::vm::builtins::raise_fmt(
+        Some(DbgKind::Tail) => Err(crate::vm::builtins::raise_lib(
             vm,
+            b"no function environment for tail call at level %d",
+            &[crate::runtime::puc_fmt::FmtArg::D(level as i64)],
             1,
-            &format!("no function environment for tail call at level {level}"),
         )),
         None => Err(arg_error(vm, 1, "invalid level")),
     }

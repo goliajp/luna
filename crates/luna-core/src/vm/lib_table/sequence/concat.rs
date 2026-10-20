@@ -94,13 +94,19 @@ fn concat_field(
         v @ (Value::Int(_) | Value::Float(_)) => vm.number_string(v)?,
         // `luaL_typename`: the base type name, never `__name`.
         v => {
-            let msg = vm.fmt_bytes(format_args!(
-                "invalid value ({}) at index {k} in table for 'concat'",
-                v.type_name()
-            ))?;
             vm.native_push(buf + 1);
-            // "invalid value (at index %d) in table for 'concat'"
-            return Err(crate::vm::builtins::raise_bytes_fmt(vm, 1, &msg));
+            // `%I` from 5.4, `%d` before
+            let fmt = if vm.version() >= crate::version::LuaVersion::Lua54 {
+                &b"invalid value (%s) at index %I in table for 'concat'"[..]
+            } else {
+                &b"invalid value (%s) at index %d in table for 'concat'"[..]
+            };
+            let tn = v.type_name();
+            let args = [
+                crate::runtime::puc_fmt::FmtArg::S(tn.as_bytes()),
+                crate::runtime::puc_fmt::FmtArg::I(k),
+            ];
+            return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 2));
         }
     };
     // on the stack until added (`luaL_addvalue`), which roots it itself

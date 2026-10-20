@@ -37,10 +37,11 @@ fn check_stack_slow(vm: &mut Vm, top: u32, n: i64, msg: &str) -> Result<(), LuaE
     if fits {
         Ok(())
     } else {
-        Err(crate::vm::builtins::raise_fmt(
+        Err(crate::vm::builtins::raise_lib(
             vm,
+            b"stack overflow (%s)",
+            &[crate::runtime::puc_fmt::FmtArg::S(msg.as_bytes())],
             1,
-            &format!("stack overflow ({msg})"),
         ))
     }
 }

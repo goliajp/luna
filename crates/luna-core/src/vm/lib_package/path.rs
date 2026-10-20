@@ -124,11 +124,9 @@ pub(super) fn find_file(
 ) -> Result<Result<super::search_acct::Found, Gc<crate::runtime::LuaStr>>, LuaError> {
     let path = vm.native_getfield(Value::Table(pkg), None, pname.as_bytes())?;
     let Some(path) = argcheck::to_str_bytes(vm, path) else {
-        return Err(crate::vm::builtins::raise_fmt(
-            vm,
-            1,
-            &format!("'package.{pname}' must be a string"),
-        ));
+        let args = [crate::runtime::puc_fmt::FmtArg::S(pname.as_bytes())];
+        let fmt = b"'package.%s' must be a string";
+        return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 1));
     };
     super::search_acct::search(vm, c_str(name), c_str(&path), b".", b"/")
 }
