@@ -74,7 +74,10 @@ impl<'a> Compiler<'a> {
                 self.at(TokRef::After(key, 0));
                 let ke = self.exp_to_val(ke)?;
                 self.at(TokRef::After(t, 0));
-                let (tr, k) = self.indexed(tr, ke)?;
+                let (tr, k) = match self.varg_key(obj, tr, ke)? {
+                    Some(k) => (tr, k),
+                    None => self.indexed(tr, ke)?,
+                };
                 Ok(Lv::Indexed(tr, k))
             }
             _ => unreachable!("parser validates assignment targets"),

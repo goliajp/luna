@@ -100,15 +100,21 @@ pub(crate) fn compile_parsed(
     compile_main(ast, end_lines, version, source, heap, scratch).map(|(p, _)| p)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Varg {
+    No,
+    Virtual,
+    Table,
+}
+
 struct LocalVar<'a> {
     name: &'a str,
     reg: u32,
     read_only: bool,
     captured: bool,
-    /// a named vararg (`...t`) bound as a *virtual* view: `t[k]`/`t.n` reads
-    /// compile to OP_VARGIDX (no table). Set only when the pre-scan proved the
-    /// vararg is never written / never escapes / is not `_ENV`.
-    vararg_virtual: bool,
+    /// the 5.5 named vararg (`...t`), `Virtual` when the pre-scan proved it
+    /// is only read as `t[k]` / `t.n` (OP_VARGIDX, no table)
+    vararg: Varg,
     /// pc at which the variable became visible (for debug LocVar records)
     start_pc: u32,
     /// a compile-time constant (5.4+): no register (`reg` is meaningless)
