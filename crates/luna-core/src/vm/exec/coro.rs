@@ -1,12 +1,13 @@
-//! Coroutine bookkeeping: status queries, slots of another thread,
-//! closing a coroutine.
+//! Coroutine bookkeeping: status queries, other threads' slots, closing.
 
 use super::*;
 
 impl Vm {
     pub(crate) fn new_coro(&mut self, body: Value) -> Gc<Coro> {
-        self.try_new_coro(body)
-            .unwrap_or_else(|_| crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Coro>()))
+        self.lib_roots.push(body); // the host's body, on no stack
+        let co = self.try_new_coro(body);
+        self.lib_roots.pop();
+        co.unwrap_or_else(|_| crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Coro>()))
     }
 
     /// [`Vm::new_coro`], raising a memory error when the thread cannot be
