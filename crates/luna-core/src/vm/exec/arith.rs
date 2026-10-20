@@ -104,7 +104,11 @@ impl Vm {
             Ok(v) => Ok(Some(v)),
             // a '%' shown is a `%%` of PUC's format ("attempt to perform
             // 'n%%0'")
-            Err(msg) => Err(self.runerror_conv(msg, msg.matches('%').count() as u32, false)),
+            Err(msg) => {
+                let fmt = msg.replace('%', "%%");
+                let conv = msg.matches('%').count() as u32;
+                Err(self.runerror_fmt(fmt.as_bytes(), &[], conv, false))
+            }
         }
     }
 

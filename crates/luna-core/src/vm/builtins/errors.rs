@@ -145,16 +145,6 @@ pub(crate) enum Message<'a> {
     Pushed(&'a [u8]),
 }
 
-/// The format PUC would have given a message luna formatted itself: the
-/// text, when it has no `%` in it.
-fn literal(msg: &[u8]) -> (&[u8], [FmtArg<'_>; 1], usize) {
-    if msg.contains(&b'%') {
-        (b"%s", [FmtArg::S(msg)], 1)
-    } else {
-        (msg, [FmtArg::S(b"")], 0)
-    }
-}
-
 /// PUC `luaL_where`: the string of position `pos` (`"%s:%d: "`), `""`
 /// without one.
 pub(crate) fn lual_where(vm: &mut Vm, pos: Option<(Vec<u8>, i64)>) -> Result<Gc<LuaStr>, LuaError> {
@@ -197,10 +187,18 @@ pub(crate) fn raise_bytes(vm: &mut Vm, msg: &[u8]) -> LuaError {
     raise_bytes_fmt(vm, 0, msg)
 }
 
-/// [`raise_bytes`] for a message PUC formats with `conv` conversions.
+/// [`raise_bytes`] for a message PUC formats with `conv` conversions: the
+/// text is PUC's format, each '%' in it a "%%" (a piece of its own
+/// before 5.4).
 pub(crate) fn raise_bytes_fmt(vm: &mut Vm, conv: u32, msg: &[u8]) -> LuaError {
-    let (fmt, args, n) = literal(msg);
-    raise(vm, Message::Fmt(fmt, &args[..n]), Some(conv))
+    let mut fmt = Vec::with_capacity(msg.len());
+    for &c in msg {
+        fmt.push(c);
+        if c == b'%' {
+            fmt.push(b'%');
+        }
+    }
+    raise(vm, Message::Fmt(&fmt, &[]), Some(conv))
 }
 
 /// PUC `luaL_argerror`: "bad argument #n to 'name' (extra)".
