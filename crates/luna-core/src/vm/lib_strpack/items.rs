@@ -2,6 +2,7 @@
 //! one at a time.
 
 use super::*;
+use crate::runtime::puc_fmt::FmtArg;
 
 /// The items of `string.unpack` from `pos`, read into `results`.
 pub(super) fn unpack_items(
@@ -131,11 +132,15 @@ pub(super) fn pack_items(
                 KOption::Char | KOption::Str | KOption::Zstr => "string",
                 _ => "number",
             };
-            return Err(arg_error(
-                vm,
-                *arg,
-                &format!("{expected} expected, got nil"),
-            ));
+            // `luaL_typeerror` on the nil mark: its `__name` looked up,
+            // then the message pushed before `luaL_argerror` adds to it
+            vm.metafield_check(Value::Nil, b"__name")?;
+            let fmt = b"%s expected, got %s";
+            let args = [FmtArg::S(expected.as_bytes()), FmtArg::S(b"nil")];
+            return Err(match argcheck::pushed_extra(vm, 2, fmt, &args) {
+                Ok(m) => arg_error(vm, *arg, &m),
+                Err(e) => e,
+            });
         }
         match opt {
             KOption::Int => {
