@@ -143,10 +143,18 @@ impl Compiler<'_> {
         Ok(self.exp_parts(e).2)
     }
 
-    /// [`Self::cond`] of the compiled condition `e`: nil is false there.
+    /// [`Self::cond`] of the compiled condition `e`: nil is false there,
+    /// with jump lists too (`a and nil`).
     pub(super) fn cond_of(&mut self, e: Exp) -> Result<Exp, SyntaxError> {
         let e = match e {
             Exp::Nil => Exp::False,
+            Exp::Jumps(i) => {
+                let j = &mut self.l().jexps[i as usize];
+                if matches!(j.e, Exp::Nil) {
+                    j.e = Exp::False;
+                }
+                e
+            }
             e => e,
         };
         self.go_if_true(e)
