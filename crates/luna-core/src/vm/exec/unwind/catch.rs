@@ -58,6 +58,7 @@ impl Vm {
         // the error has been caught (pcall/xpcall): the captured
         // traceback was for that error and is no longer in flight.
         self.error_traceback = None;
+        self.error_ars = None;
         let fs = nc.func_slot as usize;
         // the catcher's own window already holds these slots unless the
         // stack shrank under it; with no memory to regrow it the memory

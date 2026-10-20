@@ -179,7 +179,7 @@ impl Heap {
             error_value: None,
             error_status: crate::runtime::coroutine::ErrorStatus::Run,
             error_traceback: None,
-            error_levels: None,
+            error_ars: None,
             natives: 0..0,
             stack: LVec::new(mem),
             frames: LVec::new(mem),

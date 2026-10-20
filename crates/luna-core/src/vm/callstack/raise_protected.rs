@@ -54,7 +54,7 @@ impl Vm {
         let running = std::mem::replace(&mut self.msgh_running, handler);
         let floor = std::mem::replace(&mut self.msgh_floor, self.frames.len());
         let applied = self.msgh_applied.take();
-        let traceback = self.error_traceback.take();
+        let traceback = (self.error_traceback.take(), self.error_ars.take());
         let natives = self.errored_natives.take();
         let keep = std::mem::replace(&mut self.keep_error_traceback, false);
         // a protected call made from Rust has no continuation: code under
@@ -67,7 +67,7 @@ impl Vm {
         self.msgh_running = running;
         self.msgh_floor = floor;
         self.msgh_applied = applied;
-        self.error_traceback = traceback;
+        (self.error_traceback, self.error_ars) = traceback;
         let inner = std::mem::replace(&mut self.errored_natives, natives);
         (r, inner)
     }

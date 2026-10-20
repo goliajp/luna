@@ -126,19 +126,11 @@ impl Vm {
                         // without the memory for the copy the dead thread just
                         // has no traceback to show
                         let mem = self.heap.mem();
-                        let copy = || -> Result<_, crate::runtime::mem::Oom> {
-                            let mut kept = LVec::with_capacity(mem, levels.len())?;
-                            for l in &levels {
-                                kept.push(LVec::from_slice(mem, l)?)?;
-                            }
-                            Ok((LVec::from_slice(mem, &tb)?, kept))
-                        };
-                        if let Ok((tb, kept)) = copy() {
-                            // SAFETY: `co` is still `self.current`, a root, and its frames have unwound, so `m` is the only reference into it for these two stores
-                            let m = unsafe { co.as_mut() };
-                            m.error_traceback = Some(tb);
-                            m.error_levels = Some(kept);
-                        }
+                        let ars = self.error_ars.take();
+                        // SAFETY: `co` is still `self.current`, a root, and its frames have unwound, so `m` is the only reference into it for these two stores
+                        let m = unsafe { co.as_mut() };
+                        m.error_traceback = LVec::from_slice(mem, &tb).ok();
+                        m.error_ars = ars;
                     }
                     if let Err(e) = drive {
                         let kind = self.error_status(e.0, special_before);
