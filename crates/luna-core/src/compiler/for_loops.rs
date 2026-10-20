@@ -70,7 +70,13 @@ impl<'a> Compiler<'a> {
         self.log_for_names(sid, hidden, &names)?;
         let base = self.explist_adjust(exprs, values)?;
         let last = *exprs.last().expect("an expression list");
-        self.set_freereg(base + values);
+        // 5.1 and 5.2 keep the extra values' registers until the statement
+        // ends: the room to call the iterator is counted past them
+        let extra = match self.version {
+            LuaVersion::Lua51 | LuaVersion::Lua52 => (exprs.len() as u32).saturating_sub(values),
+            _ => 0,
+        };
+        self.set_freereg(base + values + extra);
         self.reserve(layout.call_end() - values)?;
         self.set_freereg(base + values);
         self.enter_block(true);
