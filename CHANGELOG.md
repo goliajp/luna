@@ -23,6 +23,14 @@ optimization.
 
 ### Breaking
 
+- `Coro::error_traceback` is gone. A coroutine an error killed now keeps
+  its frames, as PUC keeps a dead thread's stack, and its traceback is
+  made when asked for: `Vm::coroutine_error_traceback(co)` returns the
+  same text (`stack traceback:` and one line per level of the stack it
+  died with), or `None` when no error killed it or it has been closed.
+  Replace `co.error_traceback` with `vm.coroutine_error_traceback(co)`.
+  `debug.traceback(co)` and `debug.getinfo(co, level)` on such a coroutine
+  are answered from those frames.
 - `Vm::new` (and `Vm::new_with_mem`, `luna_jit::new_with_jit`) is PUC's
   `luaL_newstate` followed by `luaL_openlibs` with the collector running,
   as an embedder opens the libraries: the collector steps while they open,
