@@ -54,15 +54,13 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         .as_bytes()
         .to_vec();
     let pkg = upval_table(vm, fs, 0);
-    let (file, at) = match find_file(vm, pkg, &name, "path")? {
+    let found = match find_file(vm, pkg, &name, "path")? {
         Ok(f) => f,
-        Err(msg) => {
-            let m = str_value(vm, &msg)?;
-            return vm.nat_ret(fs, &[m]);
-        }
+        Err(msg) => return vm.nat_ret(fs, &[Value::Str(msg)]),
     };
+    let file = found.file.clone();
     let loadfile = vm.nat_upval(fs, 1);
-    let fname = super::path::found_string(vm, &file, at)?;
+    let fname = super::path::found_string(vm, &found)?;
     let r = vm.call_value(loadfile, &[fname])?;
     match r.first() {
         Some(f @ Value::Closure(_)) => {
@@ -99,11 +97,8 @@ pub(super) fn searcher_c(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         .to_vec();
     let pkg = upval_table(vm, fs, 0);
     match find_file(vm, pkg, &name, "cpath")? {
-        Ok((file, _)) => Err(load_error(vm, &name, &file, DLMSG)),
-        Err(msg) => {
-            let m = str_value(vm, &msg)?;
-            vm.nat_ret(fs, &[m])
-        }
+        Ok(f) => Err(load_error(vm, &name, &f.file, DLMSG)),
+        Err(msg) => vm.nat_ret(fs, &[Value::Str(msg)]),
     }
 }
 
@@ -117,12 +112,15 @@ pub(super) fn searcher_croot(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lu
         return vm.nat_ret(fs, &[]);
     };
     let pkg = upval_table(vm, fs, 0);
-    match find_file(vm, pkg, &name[..dot], "cpath")? {
-        Ok((file, _)) => Err(load_error(vm, &name, &file, DLMSG)),
-        Err(msg) => {
-            let m = str_value(vm, &msg)?;
-            vm.nat_ret(fs, &[m])
-        }
+    // the root is pushed, and searched for from there
+    let root = vm.api_push_string(&name[..dot])?;
+    let at = vm.lib_roots.len();
+    vm.lib_roots.push(root);
+    let found = find_file(vm, pkg, &name[..dot], "cpath");
+    vm.lib_roots.truncate(at);
+    match found? {
+        Ok(f) => Err(load_error(vm, &name, &f.file, DLMSG)),
+        Err(msg) => vm.nat_ret(fs, &[Value::Str(msg)]),
     }
 }
 
