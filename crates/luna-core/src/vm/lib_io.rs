@@ -34,7 +34,7 @@ mod stream;
 pub(crate) mod winfs;
 mod write;
 use handle::*;
-pub(crate) use handle::{flush_all, flush_all_closing};
+pub(crate) use handle::{flush_all, flush_all_closing, write_out_freed};
 use lines::*;
 pub(crate) use msvc::translate_all;
 use numeral::*;
