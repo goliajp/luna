@@ -18,11 +18,8 @@ pub(super) fn d_traceback(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     if vm.version() == LuaVersion::Lua51 {
         return traceback_51(vm, fs, a, co, arg, default_level);
     }
-    let msg = if a.is_none(arg) {
-        None
-    } else {
-        crate::vm::argcheck::to_str_bytes(vm, a.get(vm, arg))
-    };
+    // `lua_tostring`: a number message becomes a string in its slot
+    let msg = crate::vm::argcheck::tolstring_in_place(vm, a, arg)?.map(|s| s.as_bytes().to_vec());
     if msg.is_none() && !a.is_none_or_nil(vm, arg) {
         // a message that is not a string is returned untouched
         let m = a.get(vm, arg);
