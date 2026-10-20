@@ -177,7 +177,11 @@ impl<'a> Compiler<'a> {
         if lvl.global_declared(name) {
             return Varg::No;
         }
-        lvl.locals.iter().rev().find(|l| l.name == name).map_or(Varg::No, |l| l.vararg)
+        lvl.locals
+            .iter()
+            .rev()
+            .find(|l| l.name == name)
+            .map_or(Varg::No, |l| l.vararg)
     }
 
     /// The key of `obj[k]` on this function's named vararg table (5.5,

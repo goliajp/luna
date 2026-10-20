@@ -183,7 +183,10 @@ impl Compiler<'_> {
                 } else if let Some(form) = self.const_operand(op, &re, false) {
                     in_inst = Some((form, false));
                     l = Some(self.exp_to_anyreg(le)?);
-                } else if v54 && order && let Some(form) = self.const_operand(op, &le, true) {
+                } else if v54
+                    && order
+                    && let Some(form) = self.const_operand(op, &le, true)
+                {
                     in_inst = Some((form, true));
                     right_reg = Some(self.exp_to_anyreg(re)?);
                 } else {
