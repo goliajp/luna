@@ -206,6 +206,22 @@ fn check_string_conv(
     }
 }
 
+/// `lua_tolstring` on argument `i`: a string as it is, a number converted
+/// in place (as [`check_string`] converts it), anything else `None`.
+pub(crate) fn tolstring_in_place(
+    vm: &mut Vm,
+    a: Args,
+    i: u32,
+) -> Result<Option<crate::runtime::Gc<crate::runtime::LuaStr>>, LuaError> {
+    match a.get(vm, i) {
+        Value::Str(s) => Ok(Some(s)),
+        v @ (Value::Int(_) | Value::Float(_)) if !a.is_none(i) => {
+            check_string_conv(vm, a, i, v).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
 /// `luaL_optlstring`: `None` when the argument is absent or nil.
 pub(crate) fn opt_string(
     vm: &mut Vm,

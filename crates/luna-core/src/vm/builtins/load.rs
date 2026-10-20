@@ -17,7 +17,11 @@ pub(crate) fn nat_load(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         let name = name.map_or_else(|| b"=(load)".to_vec(), |n| n.as_bytes().to_vec());
         return load_reader(vm, a, reader, &name, None);
     }
-    let first = a.get(vm, 0);
+    // `lua_tolstring(L, 1)` first: a number chunk becomes a string there
+    let first = match argcheck::tolstring_in_place(vm, a, 0)? {
+        Some(s) => Value::Str(s),
+        None => a.get(vm, 0),
+    };
     let mode = load_mode(vm, a, 2)?;
     // 5.2-5.4 default to "bt"; 5.5 has no default and allows both
     let mode = match &mode {
@@ -30,10 +34,6 @@ pub(crate) fn nat_load(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     if let Value::Str(src) = first {
         let name = name.unwrap_or(src);
         return load_chunk(vm, a, src.as_bytes(), ChunkName::Str(&name), mode);
-    }
-    if let Some(src) = argcheck::to_str_bytes(vm, first) {
-        let name = name.map_or_else(|| src.clone(), |n| n.as_bytes().to_vec());
-        return load_chunk(vm, a, &src, ChunkName::Bytes(&name), mode);
     }
     let name = name.map_or_else(|| b"=(load)".to_vec(), |n| n.as_bytes().to_vec());
     let reader = argcheck::check_function(vm, a, 0)?;
@@ -243,10 +243,9 @@ fn loaded(
             // `lua_setupvalue(L, -2, 1)`: a function without upvalues
             // ignores the env.
             if vm.version() >= LuaVersion::Lua52 && !a.is_none(3) && !cl.upvals().is_empty() {
+                // the upvalue the load made gets the value: no new one
                 let env = a.get(vm, 3);
-                let uv = vm.lib_closed_upvalue(env)?;
-                // SAFETY: `cl` is the closure the load just built, held only by this local, and `new_upvalue` does not collect; the borrow covers one slot store, inside the bounds checked by `upvals().is_empty()`
-                unsafe { cl.as_mut() }.upvals_mut()[0] = uv;
+                vm.upvalue_set_value(cl, 0, env);
             }
             vm.nat_ret(a.fs, &[Value::Closure(cl)])
         }
