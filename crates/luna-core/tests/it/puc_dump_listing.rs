@@ -126,6 +126,12 @@ const OPERANDS: &[&str] = &[
     "local x = ...\nlocal a, b, c = 1 < 'x', 2 >= 'a' .. x, 1.0 > x.y\n\
      local d, e, f = 1000 < 'x', 1.5 <= x, 128.0 > x\nlocal g = 2^53 < x\n\
      if 7 < ('s'):len() then return x:m() end\nreturn a, b, c, d, e, f, g\n",
+    // a unary operator frees an operand on top; a generic for's extra
+    // values; nil as a condition with jumps; a named vararg table's keys
+    "local t = {}\nlocal a, b = #({1}), -t[1]\nfor k in next, t, nil, print() do a = a + 1 end\n\
+     if a and nil then b = 1 end\nwhile b or nil do end\nreturn a, b\n",
+    "local function f(...t) t[1] = 1; t.x = t[2]; return t.n, (t)[2], t end\n\
+     local function g(...u) return u[1], u.n end\nreturn f, g\n",
 ];
 
 /// A chunk with more constants than an `RK` operand reaches, then stores
