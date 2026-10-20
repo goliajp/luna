@@ -86,82 +86,32 @@ pub(super) fn readable(name: &[u8]) -> bool {
     }
 }
 
-/// `searchpath`: the first readable file among `path`'s templates with
-/// `name` (its `sep`s turned into `dirsep`) in place of each '?', or the
-/// "no file" message listing every candidate. ≤5.3 skip empty templates
-/// and start each entry with "\n\t"; 5.4 keeps empty ones and joins them.
-pub(super) fn search_path(
-    v: LuaVersion,
-    name: &[u8],
-    path: &[u8],
-    sep: &[u8],
-    dirsep: &[u8],
-) -> Result<(Vec<u8>, Option<u32>), Vec<u8>> {
-    let name = if sep.is_empty() {
-        name.to_vec()
-    } else {
-        replace(name, sep, dirsep)
-    };
-    let mut err = Vec::new();
-    if v <= LuaVersion::Lua53 {
-        for tpl in path.split(|&b| b == b';').filter(|t| !t.is_empty()) {
-            let file = replace(tpl, b"?", &name);
-            if readable(&file) {
-                return Ok((file, None));
-            }
-            err.extend_from_slice(b"\n\tno file '");
-            err.extend_from_slice(&file);
-            err.push(b'\'');
-        }
-        return Err(err);
-    }
-    let expanded = replace(path, b"?", &name);
-    // the names are cut from a buffer in `searchpath`'s frame, or in a box
-    // when they do not fit there
-    let in_frame = expanded.len() < Vm::lual_buffersize(v);
-    let mut off = 0;
-    for file in expanded.split(|&b| b == b';') {
-        if readable(file) {
-            return Ok((file.to_vec(), in_frame.then_some(off as u32)));
-        }
-        off += file.len() + 1;
-    }
-    err.extend_from_slice(b"no file '");
-    err.extend_from_slice(&replace(&expanded, b";", b"'\n\tno file '"));
-    err.push(b'\'');
-    Err(err)
-}
-
 pub(super) fn ll_searchpath(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let [name, path, sep, dirsep] = searchpath_args(vm, a)?;
-    let r = search_path(
-        vm.version(),
-        c_str(&name),
-        c_str(&path),
-        c_str(&sep),
-        c_str(&dirsep),
-    );
+    let r =
+        super::search_acct::search(vm, c_str(&name), c_str(&path), c_str(&sep), c_str(&dirsep))?;
     match r {
-        Ok((file, at)) => {
-            let f = found_string(vm, &file, at)?;
-            vm.nat_ret(fs, &[f])
+        Ok(f) => {
+            let s = found_string(vm, &f)?;
+            vm.nat_ret(fs, &[s])
         }
-        Err(msg) => {
-            let m = vm.str_value(&msg)?;
-            vm.nat_ret(fs, &[Value::Nil, m])
-        }
+        Err(msg) => vm.nat_ret(fs, &[Value::Nil, Value::Str(msg)]),
     }
 }
 
 /// The string of `file`, the name `searchpath` found: 5.4 on pushed from
 /// byte `at` of its buffer, where that is in its frame (see `strcache`),
 /// ≤5.3 made by `luaL_gsub`.
-pub(super) fn found_string(vm: &mut Vm, file: &[u8], at: Option<u32>) -> Result<Value, LuaError> {
+pub(super) fn found_string(vm: &mut Vm, f: &super::search_acct::Found) -> Result<Value, LuaError> {
     use crate::runtime::heap::strcache::{CStr, site};
-    match at {
-        Some(off) => vm.str_value_at(CStr::Frame(site::SEARCHPATH, vm.c_chain_key(), off), file),
-        None => vm.str_value(file),
+    match (f.made, f.at) {
+        (Some(s), _) => Ok(Value::Str(s)),
+        (None, Some(off)) => vm.str_value_at(
+            CStr::Frame(site::SEARCHPATH, vm.c_chain_key(), off),
+            &f.file,
+        ),
+        (None, None) => vm.str_value(&f.file),
     }
 }
 
@@ -171,7 +121,7 @@ pub(super) fn find_file(
     pkg: Gc<Table>,
     name: &[u8],
     pname: &str,
-) -> Result<Result<(Vec<u8>, Option<u32>), Vec<u8>>, LuaError> {
+) -> Result<Result<super::search_acct::Found, Gc<crate::runtime::LuaStr>>, LuaError> {
     let path = vm.native_getfield(Value::Table(pkg), None, pname.as_bytes())?;
     let Some(path) = argcheck::to_str_bytes(vm, path) else {
         return Err(crate::vm::builtins::raise_fmt(
@@ -180,14 +130,7 @@ pub(super) fn find_file(
             &format!("'package.{pname}' must be a string"),
         ));
     };
-    // 5.1 turns every '.' of the name into the directory separator itself
-    Ok(search_path(
-        vm.version(),
-        c_str(name),
-        c_str(&path),
-        b".",
-        b"/",
-    ))
+    super::search_acct::search(vm, c_str(name), c_str(&path), b".", b"/")
 }
 
 /// The arguments of `package.searchpath`, all four checked in one call's

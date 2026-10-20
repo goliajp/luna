@@ -133,6 +133,24 @@ impl Vm {
         Ok(t)
     }
 
+    /// `lua_pushfstring` of `conv` conversions: PUC's pieces made (see
+    /// `Heap::pushfstring`), after the stack room its formatting checks
+    /// for, and checked for as PUC checks.
+    pub(crate) fn api_pushfstring(
+        &mut self,
+        conv: u32,
+        fmt: &[u8],
+        args: &[crate::runtime::puc_fmt::FmtArg<'_>],
+    ) -> Result<Gc<LuaStr>, LuaError> {
+        if let Some(e) = self.format_pushes(&[Some(conv)]) {
+            return Err(e);
+        }
+        self.api_check_before()?;
+        let m = self.pushfstring(fmt, args)?;
+        self.api_check_after(Value::Str(m))?;
+        Ok(m)
+    }
+
     /// `lua_pushlstring`: the string of `bytes`, checked for as PUC checks.
     #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn api_push_string(&mut self, bytes: &[u8]) -> Result<Value, LuaError> {
