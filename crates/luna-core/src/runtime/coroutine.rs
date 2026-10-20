@@ -3,11 +3,11 @@
 //! — that is swapped into the running `Vm` while it is active and saved back
 //! here while it is suspended.
 
-use crate::runtime::table::Dialect;
 use crate::runtime::Upvalue;
 use crate::runtime::function::{CallFrame, ContKind};
 use crate::runtime::heap::{Gc, GcHeader, Marker};
 use crate::runtime::mem::LVec;
+use crate::runtime::table::Dialect;
 use crate::runtime::table::Table;
 use crate::runtime::value::Value;
 

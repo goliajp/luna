@@ -130,12 +130,20 @@ impl Heap {
 
     /// The dead open upvalue of `owner`'s `slot`, which a new closure takes
     /// back before the sweep frees it (PUC `luaF_findupval`).
-    pub(crate) fn revive_open(&mut self, thread: Option<Gc<Coro>>, slot: u32) -> Option<Gc<Upvalue>> {
+    pub(crate) fn revive_open(
+        &mut self,
+        thread: Option<Gc<Coro>>,
+        slot: u32,
+    ) -> Option<Gc<Upvalue>> {
         if self.open_dead.dead.is_empty() {
             return None;
         }
         let owner = owner_of(thread);
-        let i = self.open_dead.dead.iter().position(|&(o, s, _)| o == owner && s == slot)?;
+        let i = self
+            .open_dead
+            .dead
+            .iter()
+            .position(|&(o, s, _)| o == owner && s == slot)?;
         let uv = self.open_dead.dead.remove(i).2;
         // SAFETY: a dead open upvalue is kept until its free is counted
         unsafe { (*uv.as_ptr()).state = UpvalState::Open { slot, thread } };

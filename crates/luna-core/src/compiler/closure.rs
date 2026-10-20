@@ -82,11 +82,7 @@ impl<'a> Compiler<'a> {
             let virtual_ok = name != "_ENV" && !self.vararg_forced(&body.block, name);
             if virtual_ok {
                 self.declare_local(name, r, true)?;
-                self.l()
-                    .locals
-                    .last_mut()
-                    .expect("just declared")
-                    .vararg = Varg::Virtual;
+                self.l().locals.last_mut().expect("just declared").vararg = Varg::Virtual;
             } else {
                 self.emit(Inst::iabc(Op::GetVarg, r, 0, 0, false));
                 self.declare_local(name, r, true)?;

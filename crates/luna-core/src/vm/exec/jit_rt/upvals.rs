@@ -66,7 +66,10 @@ impl Vm {
             Err(i) => i,
         };
         let thread = self.current;
-        let uv = self.heap.try_new_upvalue(UpvalState::Open { slot, thread }).ok()?;
+        let uv = self
+            .heap
+            .try_new_upvalue(UpvalState::Open { slot, thread })
+            .ok()?;
         self.open_upvals.insert(i, (slot, uv)).ok()?;
         Some(uv)
     }

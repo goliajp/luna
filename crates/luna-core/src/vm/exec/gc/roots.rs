@@ -233,13 +233,19 @@ impl Vm {
         if !self.heap.open_on_threads() {
             return;
         }
-        let running_co = self.current.map_or(std::ptr::null_mut(), |c| c.as_ptr().cast());
+        let running_co = self
+            .current
+            .map_or(std::ptr::null_mut(), |c| c.as_ptr().cast());
         let main = match (&mut self.main_ctx, self.current) {
             (Some(mc), Some(_)) => std::ptr::addr_of_mut!(mc.open_upvals),
             _ => std::ptr::null_mut(),
         };
         let running = std::ptr::addr_of_mut!(self.open_upvals);
-        self.heap.open_dead.lend = Some(OpenLend { running, running_co, main });
+        self.heap.open_dead.lend = Some(OpenLend {
+            running,
+            running_co,
+            main,
+        });
     }
 
     /// The main thread's saved context while a coroutine runs.
