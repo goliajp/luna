@@ -173,7 +173,13 @@ impl Compiler<'_> {
             // an `RK` key; a small integer one still takes `GetI` / `SetI`
             return Ok(match self.exp_rk(key)? {
                 Rk::K(c) => match key {
-                    Exp::Int(i) if (0..=255).contains(&i) => (t, KeyRef::Int(i as u32)),
+                    Exp::Int(i)
+                        if (0..=255).contains(&i)
+                            && (self.version < LuaVersion::Lua53
+                                || self.first_num_const(&Value::Int(i), c)) =>
+                    {
+                        (t, KeyRef::Int(i as u32))
+                    }
                     _ => (t, KeyRef::K(c)),
                 },
                 Rk::Reg(r) => (t, KeyRef::Reg(r)),

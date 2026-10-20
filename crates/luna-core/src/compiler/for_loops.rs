@@ -182,8 +182,10 @@ impl<'a> Compiler<'a> {
                 } else {
                     Value::Int(1)
                 };
-                self.number_const_before_54(one);
-                self.emit(Inst::iasbx(Op::LoadI, base + 2, 1));
+                match self.number_const_before_54(one) {
+                    Some(c) => self.load_const(base + 2, c),
+                    None => _ = self.emit(Inst::iasbx(Op::LoadI, base + 2, 1)),
+                }
             }
         }
         // 5.5 keeps the index in the loop variable: its `forprep` drops one

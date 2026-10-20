@@ -9,6 +9,9 @@ pub(super) struct Level<'a> {
     pub(super) lines: LVec<u32>,
     pub(super) consts: LVec<Value>,
     pub(super) const_map: ConstMap,
+    /// 5.3: each number's first index in `consts`, which one function may
+    /// repeat when another took its key in the chunk's one table
+    pub(super) num_first: ConstMap,
     pub(super) locals: LVec<LocalVar<'a>>,
     /// ordered active-variable sequence (locals + global decls) for goto scope
     pub(super) avars: LVec<AVar<'a>>,
@@ -25,25 +28,17 @@ pub(super) struct Level<'a> {
     pub(super) locvars: LVec<crate::runtime::LocVar>,
     pub(super) num_params: u8,
     pub(super) is_vararg: bool,
-    /// Mirrors PUC `(vararg table)` locvar emission: true only for an explicit
-    /// anonymous `(...)` parlist (NOT a main chunk's implicit vararg).
+    /// PUC's `(vararg table)` local: an explicit anonymous `(...)` only
     pub(super) has_vararg_table_pseudo: bool,
-    /// PUC 5.1 LUAI_COMPAT_VARARG: the hidden `arg` table local was reserved.
-    /// The runtime populates it on entry; see Proto::has_compat_vararg_arg.
+    /// PUC 5.1 `LUAI_COMPAT_VARARG`'s `arg` local (`Proto::has_compat_vararg_arg`)
     pub(super) has_compat_vararg_arg: bool,
     pub(super) line_defined: u32,
-    /// PUC `fs->lasttarget` equivalent: the highest pc that is the destination
-    /// of any patched jump (forward jump landing here, backward jump-back to a
-    /// previously saved pc, ForLoop / TForLoop back-edge, or a defined label).
-    /// `None` is PUC's sentinel `-1` — no target has been recorded yet.
-    ///
-    /// Maintained monotonically (only advances upward) by `mark_target(pc)`,
-    /// called from every code path that turns some `pc` into a jump landing
-    /// point.
+    /// PUC `fs->lasttarget`: the highest pc any jump lands on (a patched
+    /// jump, a loop's back edge, a label), raised only, by `mark_target`;
+    /// `None` is PUC's `-1`, no target yet
     pub(super) last_target: Option<usize>,
-    /// 5.1: the first zero this function loaded as a constant. PUC 5.1 keys
-    /// its constant table by number value, where `0 == -0`, so every later
-    /// zero, of either sign, loads that one.
+    /// 5.1: the first zero loaded as a constant, which every later zero of
+    /// either sign loads (PUC keys numbers by value, `0 == -0`)
     pub(super) zero_51: Option<f64>,
     /// PUC `fs->jpc` (before 5.4): jumps to the next instruction emitted
     pub(super) jpc: i32,
@@ -97,6 +92,7 @@ impl<'a> Level<'a> {
             lines: bufs.lines,
             consts: bufs.consts,
             const_map: bufs.const_map,
+            num_first: bufs.num_first,
             locals: bufs.locals.recycle(),
             avars: bufs.avars.recycle(),
             blocks: bufs.blocks.recycle(),
@@ -186,6 +182,7 @@ impl<'a> Level<'a> {
             trace_call_head_settled: std::cell::Cell::new(false),
         };
         self.const_map.clear();
+        self.num_first.clear();
         self.locals.clear();
         self.avars.clear();
         self.blocks.clear();
@@ -202,6 +199,7 @@ impl<'a> Level<'a> {
             lines: self.lines,
             consts: self.consts,
             const_map: self.const_map,
+            num_first: self.num_first,
             locals: self.locals.recycle(),
             avars: self.avars.recycle(),
             blocks: self.blocks.recycle(),
@@ -223,6 +221,7 @@ pub(crate) struct LevelBufs {
     lines: LVec<u32>,
     consts: LVec<Value>,
     const_map: ConstMap,
+    num_first: ConstMap,
     locals: LVec<LocalVar<'static>>,
     avars: LVec<AVar<'static>>,
     blocks: LVec<BlockCx<'static>>,
@@ -242,6 +241,7 @@ impl LevelBufs {
             lines: LVec::with_capacity_or_abort(mem, 32),
             consts: LVec::with_capacity_or_abort(mem, 8),
             const_map: ConstMap::new(mem),
+            num_first: ConstMap::new(mem),
             locals: LVec::with_capacity_or_abort(mem, 8),
             avars: LVec::with_capacity_or_abort(mem, 8),
             blocks: LVec::with_capacity_or_abort(mem, 4),
