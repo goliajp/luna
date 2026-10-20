@@ -157,9 +157,14 @@ impl Vm {
                 last = (t, tok);
                 tok
             };
+            // an event at `Next` is done with the one it is made for
+            let made_at = match (t, next) {
+                (TokRef::Next, Some((j, _))) if j < log.len() => log[j].0,
+                _ => t,
+            };
             if let Some(c) = cut
                 && tok >= c.events
-                && !(c.ended && tok == c.events && c.takes(t, ev, marks))
+                && !(c.ended && tok == c.events && c.takes(made_at, ev, marks))
             {
                 break;
             }
