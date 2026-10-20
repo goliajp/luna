@@ -117,6 +117,12 @@ const OPERANDS: &[&str] = &[
      local j = 1 % 0\nlocal k = x - 0\nlocal l = -1 >> x\nlocal m = x - 128\nlocal n = x << 128\n\
      local o = 128 << x\nlocal p = x - -127\nlocal q = x >> 128\n\
      return a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q\n",
+    // an order comparison with a numeral on the left: an immediate one
+    // goes into the instruction even when the right operand is a
+    // constant; any other is loaded before the right operand; and methods
+    "local x = ...\nlocal a, b, c = 1 < 'x', 2 >= 'a' .. x, 1.0 > x.y\n\
+     local d, e, f = 1000 < 'x', 1.5 <= x, 128.0 > x\nlocal g = 2^53 < x\n\
+     if 7 < ('s'):len() then return x:m() end\nreturn a, b, c, d, e, f, g\n",
 ];
 
 /// A chunk with more constants than an `RK` operand reaches, then stores
