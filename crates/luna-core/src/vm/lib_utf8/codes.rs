@@ -63,6 +63,17 @@ pub(crate) fn u_codes(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     if v >= LuaVersion::Lua54 && is_cont(at(s.as_bytes(), 0)) {
         return Err(arg_error(vm, 1, "invalid UTF-8 code"));
     }
-    let it = vm.lib_native_with(codes_iter, &[Value::Bool(!lax)])?;
+    // PUC pushes one of two light C functions: no object, no collection
+    // check; luna keeps which one in an upvalue
+    let it = vm
+        .retry_oom(|vm| {
+            vm.heap.try_new_native_puc(
+                codes_iter,
+                &[Value::Bool(!lax)],
+                crate::runtime::Builtin::None,
+                0,
+            )
+        })
+        .map(Value::Native)?;
     vm.nat_ret(fs, &[it, Value::Str(s), Value::Int(0)])
 }
