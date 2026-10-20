@@ -243,7 +243,9 @@ impl Vm {
         self.grow_stack(need)?;
         self.cf_room()?;
         // `luaB_pairs` is a C function with a `CallInfo` of its own, unlike
-        // a metamethod's continuation
+        // a metamethod's continuation, taken before its call of `__pairs`
+        // is checked against the C level
+        self.note_c_calls(1);
         self.check_c_level(false)?;
         self.g.nccalls += 1;
         let arg = self.stack[(func_slot + 1) as usize];
