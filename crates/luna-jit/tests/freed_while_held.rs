@@ -5,11 +5,13 @@
 //! coroutine an error killed keeps its frames, whose functions the
 //! collector must keep for the traceback and `getinfo` made from them.
 //!
-//! The Vms here run on memory that is never reused: a freed block is
-//! zeroed and kept until the Vm is gone, so code that reads a freed object
-//! finds zeros, the same every run. And the `gc-stress` build checks, at
-//! the end of every collection, that a recording still under way holds
-//! only objects the collector keeps.
+//! The Vms here run on memory that is never reused: a freed block (and the
+//! old block of a reallocation) is filled with [`POISON`] and kept until
+//! the Vm is gone, so code that reads a freed object finds lengths and
+//! pointers that are plainly wrong, the same every run, and most likely
+//! fails on them at once. And the `gc-stress` build checks, at the end of
+//! every collection, that a recording still under way holds only objects
+//! the collector keeps.
 
 use std::alloc::{Layout, alloc, dealloc};
 use std::cell::RefCell;
@@ -22,6 +24,10 @@ use luna_jit::version::LuaVersion;
 use luna_jit::vm::Vm;
 
 const ALIGN: usize = 16;
+
+/// What a freed block is filled with: no length, pointer or tag of a live
+/// object reads as it.
+const POISON: u8 = 0xDB;
 
 #[derive(Default)]
 struct Held(RefCell<Vec<(*mut u8, usize)>>);
@@ -38,7 +44,7 @@ unsafe extern "C" fn quarantine(
     if nsize == 0 {
         if !ptr.is_null() {
             // SAFETY: a live block of `osize` bytes from here
-            unsafe { ptr.write_bytes(0, osize) };
+            unsafe { ptr.write_bytes(POISON, osize) };
             held.0.borrow_mut().push((ptr, osize));
         }
         return std::ptr::null_mut();
@@ -48,11 +54,12 @@ unsafe extern "C" fn quarantine(
     let p = unsafe { alloc(layout) };
     if !ptr.is_null() && !p.is_null() {
         // SAFETY: both blocks are live and at least this long; the old one
-        // came from here with `osize`
+        // came from here with `osize`, and is kept, poisoned, as a freed one
         unsafe {
             std::ptr::copy_nonoverlapping(ptr, p, osize.min(nsize));
-            dealloc(ptr, Layout::from_size_align_unchecked(osize, ALIGN));
+            ptr.write_bytes(POISON, osize);
         }
+        held.0.borrow_mut().push((ptr, osize));
     }
     p as *mut c_void
 }
@@ -191,7 +198,7 @@ fn the_hook_table_key_outlives_the_table_allocation() {
     for version in ["5.2", "5.4", "5.5"] {
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_luna"))
             .args([&format!("--lua={version}"), "-e", src])
-            .env("MALLOC_PERTURB_", "165")
+            .env("MALLOC_PERTURB_", "219")
             .output()
             .expect("the luna command runs");
         assert_eq!(
@@ -203,9 +210,9 @@ fn the_hook_table_key_outlives_the_table_allocation() {
     }
 }
 
-/// The same in the Vms here: the key the table was looked up by, freed by
-/// the table's allocation, reads as an empty string (freed memory is
-/// zeroed), and the table must still be found under its name.
+/// The same in the Vms here: the key the table was looked up by is freed
+/// by the table's allocation, and the table must still be found under its
+/// name.
 #[test]
 fn the_hook_table_is_under_its_key() {
     for (version, key) in [

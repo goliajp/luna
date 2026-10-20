@@ -13,7 +13,14 @@ fn run(dialect: &str, script: &Path, jit: bool) -> String {
     if !jit {
         cmd.arg("--no-jit");
     }
-    let out = cmd.arg(script).env("TZ", "UTC").output().expect("run luna");
+    // glibc fills what is freed, so a freed object read is not mistaken
+    // for a live one
+    let out = cmd
+        .arg(script)
+        .env("TZ", "UTC")
+        .env("MALLOC_PERTURB_", "219")
+        .output()
+        .expect("run luna");
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
     text.replace("\r\n", "\n")
