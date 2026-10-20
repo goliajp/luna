@@ -29,10 +29,11 @@ workspace = true
 name = "gc_checkpoints"
 required-features = ["gc-stress"]
 
-# recordings through collections, on memory that is never reused, checked
-# by the collector checks the feature builds in
+# objects the runtime holds without a Lua root (a recording's, a dead
+# coroutine's frames) through collections, on memory that is never reused,
+# checked by the collector checks the feature builds in
 [[test]]
-name = "recording_freed"
+name = "freed_while_held"
 required-features = ["gc-stress"]
 
 [build-dependencies]
