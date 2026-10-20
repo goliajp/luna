@@ -8,7 +8,7 @@
 
 use super::*;
 use crate::runtime::Coro;
-use crate::runtime::function::Upvalue;
+use crate::runtime::function::{UpvalState, Upvalue};
 use crate::runtime::mem::LVec;
 use crate::runtime::table::Dialect;
 
@@ -78,8 +78,12 @@ impl Heap {
                 if !is_white(f) {
                     return true;
                 }
-                // SAFETY: as above; the block is kept through this sweep
-                unsafe { (*h).flags = (*h).with_slow((f & !COLOR_BITS) | BLACK) };
+                // SAFETY: as above; the block is kept through this sweep,
+                // holding nothing (its thread may be freed by it)
+                unsafe {
+                    (*h).flags = (*h).with_slow((f & !COLOR_BITS) | BLACK);
+                    (*uv.as_ptr()).state = UpvalState::Closed(Value::Nil);
+                }
                 self.open_dead.dead.push((owner, slot, uv));
                 false
             });
@@ -108,6 +112,12 @@ impl Heap {
         }
     }
 
+    /// Whether some dead open upvalue waits for the sweep.
+    #[inline]
+    pub(crate) fn has_dead_open(&self) -> bool {
+        !self.open_dead.dead.is_empty()
+    }
+
     /// Thread `owner` closes its upvalues from `slot` up: the dead ones
     /// among them are freed now.
     #[inline]
@@ -126,7 +136,10 @@ impl Heap {
         }
         let owner = owner_of(thread);
         let i = self.open_dead.dead.iter().position(|&(o, s, _)| o == owner && s == slot)?;
-        Some(self.open_dead.dead.remove(i).2)
+        let uv = self.open_dead.dead.remove(i).2;
+        // SAFETY: a dead open upvalue is kept until its free is counted
+        unsafe { (*uv.as_ptr()).state = UpvalState::Open { slot, thread } };
+        Some(uv)
     }
 
     #[cold]

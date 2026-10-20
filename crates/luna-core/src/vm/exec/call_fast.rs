@@ -121,6 +121,7 @@ impl Vm {
             || WATCH && self.hook.ret && self.hook_armed()
             || close
                 && (self.open_upvals.last().is_some_and(|&(s, _)| s >= base)
+                    || self.heap.has_dead_open()
                     || self.tbc.last().is_some_and(|&s| s >= base))
         {
             return Returned::No;
