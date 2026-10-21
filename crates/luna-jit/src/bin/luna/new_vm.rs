@@ -42,6 +42,8 @@ pub(crate) fn new_vm(opts: &LunaOpts, ignore_env: bool, argc: usize) -> Vm {
             .ok()
             .and_then(|s| s.parse::<u32>().ok());
         let mut vm = match seed {
+            #[cfg(feature = "gc-trace")]
+            _ if std::env::var_os("R38_REFUSE").is_some() => refusing_vm(opts.version),
             Some(s) => luna_jit::vm::Vm::new_minimal_with_hash_seed(opts.version, s),
             None => luna_jit::vm::Vm::new_minimal(opts.version),
         };
@@ -96,6 +98,34 @@ pub(crate) fn new_vm(opts: &LunaOpts, ignore_env: bool, argc: usize) -> Vm {
         vm.set_trace_tier_up_at(n);
     }
     vm
+}
+
+/// A gc-trace knob, as the instrumented PUC has it: `R38_REFUSE=n`
+/// refuses the first growth of a block to `n` bytes or more, once (every
+/// one with `R38_REFUSE_EVERY` set), so that the two run their emergency
+/// collection at the same allocation.
+#[cfg(feature = "gc-trace")]
+fn refusing_vm(version: LuaVersion) -> Vm {
+    use luna_jit::runtime::mem::{BlockKind, MemOwner, MemoryPolicy};
+    struct RefuseOnce(Option<usize>);
+    impl MemoryPolicy for RefuseOnce {
+        fn allow(&mut self, old: usize, new: usize, _: BlockKind, _: usize) -> bool {
+            match self.0 {
+                Some(n) if new >= n && new > old => {
+                    if std::env::var_os("R38_REFUSE_EVERY").is_none() {
+                        self.0 = None;
+                    }
+                    eprintln!("[R38_REFUSE] refused a growth from {old} to {new} bytes");
+                    false
+                }
+                _ => true,
+            }
+        }
+    }
+    let n = std::env::var("R38_REFUSE")
+        .ok()
+        .and_then(|s| s.parse().ok());
+    luna_jit::vm::Vm::new_minimal_with_mem(version, MemOwner::policy(Box::new(RefuseOnce(n))))
 }
 
 /// lua.c runs everything inside `pmain`, a C function `main` calls
