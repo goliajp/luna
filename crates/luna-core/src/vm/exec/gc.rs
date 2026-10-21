@@ -22,6 +22,12 @@ impl Vm {
             #[cfg(feature = "gc-trace")]
             self.heap.trace.line(format_args!("x"));
         }
+        if prev != new && self.version == LuaVersion::Lua52 {
+            match new {
+                "generational" => self.enter_generational_52(),
+                _ => self.leave_generational_52(),
+            }
+        }
         if new == "incremental" && prev == "generational" {
             self.gc_leave_generational();
         }
@@ -38,8 +44,7 @@ impl Vm {
         }
     }
 
-    /// Whether the `collectgarbage` mode is "generational" (a step is then a
-    /// minor collection).
+    /// Whether the `collectgarbage` mode is "generational" (a minor step).
     pub(crate) fn gc_mode_is_generational(&self) -> bool {
         self.gc_mode == "generational"
     }
@@ -52,11 +57,9 @@ impl Vm {
         self.gc_stepsize = stepsize;
     }
 
-    /// A point where PUC checks whether a collection step is due
-    /// (`luaC_checkGC`, the step in `gc_step.rs`), with PUC's stack top
-    /// there: the slots from `live_top` up are dead to a collection. An
-    /// object made while marking survives when the atomic step finds it
-    /// reachable (from the roots again, or through a barrier).
+    /// A point where PUC checks whether a step is due (`luaC_checkGC`), its
+    /// stack top there: the slots from `live_top` up are dead to it. An
+    /// object made while marking survives if the atomic step reaches it.
     #[inline(always)]
     #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn checkpoint(&mut self, live_top: u32) -> Result<(), LuaError> {

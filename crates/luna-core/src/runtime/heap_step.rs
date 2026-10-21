@@ -51,8 +51,7 @@ impl Heap {
         }
     }
 
-    /// Mark the objects awaiting their finalizers (PUC `markbeingfnz`,
-    /// 5.1's `marktmu`).
+    /// Mark the objects awaiting their finalizers (`markbeingfnz`, `marktmu`).
     pub(crate) fn mark_tobefnz(&self, m: &mut Marker) {
         for &h in self.tobefnz_live() {
             // SAFETY: a queued finalizable stays allocated until its `__gc` has run (`take_one_tobefnz`)
@@ -269,6 +268,20 @@ impl Heap {
         self.phase = GcPhase::Sweep;
         self.sweep_prev = ptr::null_mut();
         self.sweep_objects(usize::MAX, true);
+    }
+
+    /// 5.2 `luaC_changemode` to incremental: drop any marking, sweep nothing.
+    pub(crate) fn gc_sweep_unmarked_52(&mut self) {
+        if self.phase == GcPhase::Propagate {
+            self.propagate = None;
+            let _ = self.gray.take();
+            self.gray_overflow = false;
+            self.grayagain = mark::GrayStack::default();
+            self.color_fixed_strings(0);
+            self.phase = GcPhase::Pause;
+        }
+        self.collect_dead_strings();
+        self.gc_sweep_all_live();
     }
 
     /// No object is gray.

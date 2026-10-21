@@ -104,6 +104,29 @@ impl Vm {
         work + swept * sweepcost_52(&s)
     }
 
+    /// 5.2's `luaC_changemode` into generational mode: the cycle under way
+    /// runs on to its propagation (`luaC_runtilstate`), and the estimate is
+    /// what is in use.
+    pub(crate) fn enter_generational_52(&mut self) {
+        while self.heap.pace.state != St::Propagate {
+            self.singlestep_52();
+        }
+        self.heap.pace.estimate = self.heap.bytes() as i64;
+    }
+
+    /// 5.2's `luaC_changemode` back to incremental mode: `entersweep`, then
+    /// the sweep to its end (`luaC_runtilstate(L, ~sweepphases)`).
+    pub(crate) fn leave_generational_52(&mut self) {
+        if self.heap.gc_phase_is_pause() || self.heap.pace.state == St::Propagate {
+            self.heap.gc_sweep_unmarked_52();
+            self.heap.pace.state = St::SweepString;
+            self.heap.pace.strt_swept = 0;
+        }
+        while self.heap.pace.state != St::Pause {
+            self.singlestep_52();
+        }
+    }
+
     pub(super) fn singlestep_52(&mut self) -> i64 {
         let s = self.heap.sizes;
         let (max, cost) = (sweepmax_52(&s), sweepcost_52(&s));
