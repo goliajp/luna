@@ -127,6 +127,15 @@ impl Vm {
     /// method, the box and (5.4) the error (`callclosemethod`), which wants
     /// `LUA_MINSTACK` slots above those (`precallC`).
     fn box_closed(&mut self) -> Result<(), LuaError> {
+        self.box_close_room()?;
+        self.note_c_call();
+        Ok(())
+    }
+
+    /// The room a box's `__close` wants (see [`Vm::box_closed`]); alone
+    /// when an error closes it, from the level of the protected call that
+    /// catches it, whose next `CallInfo` the failed calls left.
+    pub(crate) fn box_close_room(&mut self) -> Result<(), LuaError> {
         if let Some(top) = self.native_top() {
             let pushed = if self.version() >= LuaVersion::Lua55 {
                 2
@@ -136,7 +145,6 @@ impl Vm {
             let min = crate::vm::exec::stack_size::MIN_STACK;
             self.check_lua_stack(top + 2 + pushed, min, true)?;
         }
-        self.note_c_call();
         Ok(())
     }
 }
