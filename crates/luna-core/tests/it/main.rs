@@ -33,6 +33,8 @@ mod fmod_nan_operands;
 mod fmod_nan_operands_msvc;
 mod for_closing_return;
 mod gc_finalizer_edges;
+#[cfg(feature = "gc-stress")]
+mod gc_stress_shards;
 mod heavy_lua_parser_budget;
 mod host_call_yield;
 mod host_protected_call;

@@ -153,7 +153,7 @@ impl Vm {
             gc_finalizing: false,
             posix_locales: 0,
             #[cfg(feature = "gc-stress")]
-            stress_every: (1, 1),
+            stress: Default::default(),
             fin_quiet: false,
             load_raised: None,
             host_cont_hooks: None,

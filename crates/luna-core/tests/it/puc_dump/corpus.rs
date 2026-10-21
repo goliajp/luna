@@ -31,8 +31,8 @@ fn require_all() -> bool {
 /// Fixtures a collection at every checkpoint makes too slow for the merge
 /// check (5.2 checks at every call, and these fill the stack): each runs
 /// as its own test, collecting at every `n`th checkpoint, `n` the least
-/// that keeps it within ten minutes on firefly; at every one when
-/// `LUNA_GC_STRESS_FULL` is set. (test, dialect, fixture, n)
+/// that keeps it within ten minutes on one of firefly's big cores (see
+/// [`slow_fixture`] for full strength). (test, dialect, fixture, n)
 const SLOW: &[(&str, &str, &str, u64)] = &[
     (
         "dump_round_trips_through_luna",
@@ -101,29 +101,35 @@ pub(super) fn each_fixture(name: &str, dialect: usize, shard: usize, check: Chec
     run(name, dialect, &format!("{d}/{shard}"), &all, check);
 }
 
-/// Run `check` on the slow fixture `file` of `DIALECTS[dialect]`, at the
-/// interval [`SLOW`] gives it from an offset a seed picks: the seed is
-/// printed, and `LUNA_GC_STRESS_SEED` runs it again.
+/// Run `check` on the slow fixture `file` of `DIALECTS[dialect]` at the
+/// interval [`SLOW`] gives it, from an offset a seed picks: the seed is
+/// printed, and `LUNA_GC_STRESS_SEED` runs it again. With
+/// `LUNA_GC_STRESS_EVERY=k` and `LUNA_GC_STRESS_OFFSET=i` it collects at
+/// the checkpoints `i`, `i + k`, …: the offsets `0..k` together collect at
+/// every one once (`k` 1 is full strength).
 pub(super) fn slow_fixture(name: &str, dialect: usize, file: &str, check: Check) {
     let d = DIALECTS[dialect].0;
     let &(_, _, _, every) = SLOW
         .iter()
         .find(|&&(t, sd, f, _)| t == name && sd == d && f == file)
         .expect("a fixture SLOW lists");
-    // `LUNA_GC_STRESS_EVERY`: another interval, to measure one
-    let every =
-        std::env::var("LUNA_GC_STRESS_EVERY").map_or(every, |n| n.parse().expect("a number"));
-    let full = std::env::var_os("LUNA_GC_STRESS_FULL").is_some();
-    if cfg!(feature = "gc-stress") && !full && every > 1 {
-        let seed = std::env::var("LUNA_GC_STRESS_SEED")
+    let num = |var: &str| {
+        std::env::var(var)
             .ok()
-            .map(|s| s.parse::<u64>().expect("a number"))
-            .unwrap_or_else(|| {
-                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
-                now.expect("a clock after 1970").as_nanos() as u64
-            });
-        eprintln!("[{name}] {d}/{file}: every {every}th checkpoint, LUNA_GC_STRESS_SEED={seed}");
-        INTERVAL.set(Some((every, seed % every)));
+            .map(|n| n.parse::<u64>().expect("a number"))
+    };
+    let every = num("LUNA_GC_STRESS_EVERY").unwrap_or(every);
+    let offset = num("LUNA_GC_STRESS_OFFSET").unwrap_or_else(|| {
+        let seed = num("LUNA_GC_STRESS_SEED").unwrap_or_else(|| {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+            now.expect("a clock after 1970").as_nanos() as u64
+        });
+        eprintln!("[{name}] {d}/{file}: LUNA_GC_STRESS_SEED={seed}");
+        seed % every
+    });
+    if cfg!(feature = "gc-stress") {
+        eprintln!("[{name}] {d}/{file}: every {every}th checkpoint from the {offset}th");
+        INTERVAL.set(Some((every, offset)));
     }
     let f = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/diff_puc")
