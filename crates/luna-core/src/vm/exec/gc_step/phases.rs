@@ -126,7 +126,7 @@ impl Vm {
     /// PUC `atomic` and `entersweep`; returns the work and how many
     /// objects the sweep went over on the way in.
     pub(super) fn gc_atomic(&mut self) -> (i64, i64) {
-        self.clear_dead_stack();
+        self.clear_dead_stack(true);
         let mut run = self.gc_running();
         // 5.2's final traversal of a thread counts no `CallInfo`
         if self.heap.table_dialect == Dialect::L52 {
