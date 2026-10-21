@@ -37,7 +37,9 @@ impl<'s> Parser<'s> {
         let attrib = match self.text(name.sym) {
             "const" => Attrib::Const,
             "close" => Attrib::Close,
-            _ if self.stk.lenient => return Ok(None),
+            // a lenient parse (what a failed load made, counted) keeps the
+            // place of the name's `<attrib>`; the error cuts what follows
+            _ if self.stk.lenient => Attrib::Const,
             other => {
                 let msg = format!("unknown attribute '{other}'");
                 return Err(self.plain_error(msg));
