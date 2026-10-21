@@ -25,16 +25,23 @@ impl Vm {
         Ok(self.tolstring(v, extra)?.as_bytes().to_vec())
     }
 
-    /// PUC `luaL_tolstring` (5.2+), the string made as PUC makes it.
+    /// PUC `luaL_tolstring` (5.2+), the string made as PUC makes it, with
+    /// the running native's `extra` slots past its top live while it runs:
+    /// a collection it checks for keeps what they hold.
     pub(crate) fn tolstring(&mut self, v: Value, extra: u32) -> Result<Gc<LuaStr>, LuaError> {
+        self.native_push(extra);
+        let r = self.tolstring_above(v);
+        self.native_pop(extra);
+        r
+    }
+
+    fn tolstring_above(&mut self, v: Value) -> Result<Gc<LuaStr>, LuaError> {
         // `luaL_callmeta(L, idx, "__tostring")`
         self.metafield_check(v, b"__tostring")?;
         let mm = self.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
             // `luaL_callmeta` is a plain `lua_call`: `__tostring` cannot yield.
-            self.native_push(extra);
             let r = self.call_value(mm, &[v])?;
-            self.native_pop(extra);
             return match r.first().copied().unwrap_or(Value::Nil) {
                 Value::Str(s) => Ok(s),
                 // `lua_tolstring` turns the number into a string
