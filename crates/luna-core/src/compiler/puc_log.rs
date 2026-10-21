@@ -145,8 +145,11 @@ impl<'a> Compiler<'a> {
         // `local`, then `<attrib>` before the names (5.5)
         let mut tok = if collective.is_some() { 4 } else { 1 };
         for an in names {
-            self.prelog_localvar(TokRef::StatFirst(sid, tok + 1), self.nm(&an.name))?;
-            tok += 2 + if an.attrib.is_some() { 3 } else { 0 };
+            // 5.5 reads a name's `<attrib>` before it makes the variable
+            let attrib = if an.attrib.is_some() { 3 } else { 0 };
+            let after = if self.version >= LuaVersion::Lua55 { attrib } else { 0 };
+            self.prelog_localvar(TokRef::StatFirst(sid, tok + 1 + after), self.nm(&an.name))?;
+            tok += 2 + attrib;
         }
         Ok(())
     }
