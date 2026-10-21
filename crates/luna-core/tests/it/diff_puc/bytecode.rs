@@ -119,16 +119,10 @@ fn diff_puc_bytecode() {
         };
         // a count fixture reads `collectgarbage("count")`, which luna's
         // side here changes (it catches the output in a Lua buffer), and
-        // so does where the automatic steps run (finalizer batches, and the
-        // `_gcauto` fixtures)
+        // so does where the automatic steps run (the fixtures marked so)
         let fixtures: Vec<_> = list_fixtures(dialect)
             .into_iter()
-            .filter(|f| {
-                let name = f.to_string_lossy();
-                !name.contains("_count")
-                    && !name.contains("_finalizer_batches")
-                    && !name.contains("_gcauto")
-            })
+            .filter(|f| !f.to_string_lossy().contains("_count") && !follows_automatic_steps(f))
             .collect();
         eprintln!(
             "[diff_puc] bytecode {dialect}: running {} fixtures via {luac}",
@@ -248,4 +242,14 @@ pub(crate) fn same_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_c
         e = luna_core::runtime::Value::Str(vm.heap.intern(b"(error object is a nil value)"));
     }
     vm.nat_ret(fs, &[e])
+}
+
+/// The fixture's output follows where the automatic collection steps run,
+/// which running it from other than its source text moves: it says so in a
+/// comment line.
+pub(crate) fn follows_automatic_steps(f: &std::path::Path) -> bool {
+    std::fs::read_to_string(f).is_ok_and(|s| {
+        s.lines()
+            .any(|l| l == "-- the output follows where the automatic collection steps run")
+    })
 }
