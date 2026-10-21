@@ -52,6 +52,8 @@ impl Heap {
             strt: Default::default(),
             gray_overflow: false,
             young: ptr::null_mut(),
+            young_held: false,
+            rooted_next: false,
             store_failed: false,
             propagate: None,
             phase: GcPhase::Pause,
