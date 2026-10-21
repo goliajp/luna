@@ -133,12 +133,13 @@ fn parse_from_source<'s>(
         streamed,
         failed,
         record,
+        record_ends,
         recording,
         recorded,
     } = scratch;
     let mut p = Parser::new(lex, cur, version, c_depth, chunk, end_lines, stacks)?;
     if *record {
-        p.record_load(recording.take());
+        p.record_load(recording.take(), *record_ends);
     }
     let r = p.main(src_len);
     *recording = p.stop_recording().or(recording.take());

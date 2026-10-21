@@ -193,8 +193,8 @@ impl Marks {
 impl Parser<'_> {
     /// Record this parse in `rec` (emptied first, keeping its vectors), or
     /// a new recording, with the strings the scanner makes.
-    pub(super) fn record_load(&mut self, rec: Option<Box<Recording>>) {
-        let rec = Recording::cleared(rec, matches!(self.lex, TokenSource::Stream(_)));
+    pub(super) fn record_load(&mut self, rec: Option<Box<Recording>>, ends: bool) {
+        let rec = Recording::cleared(rec, ends || matches!(self.lex, TokenSource::Stream(_)));
         self.start_recording(Some(rec));
     }
 

@@ -199,9 +199,11 @@ impl Vm {
         // the text read, parsed again for what its scanner makes
         let e = match &source {
             &Ok(source) => {
-                self.parse_scratch.record = true;
+                // the reader's calls are placed by where the tokens end
+                (self.parse_scratch.record, self.parse_scratch.record_ends) = (true, true);
                 let _ =
                     crate::frontend::parser::parse_in_place(src, v, depth, &mut self.parse_scratch);
+                self.parse_scratch.record_ends = false;
                 self.parse_scratch.failed = Some(failed);
                 self.error_before(src, Some(failed), source).unwrap_or(e)
             }
