@@ -23,38 +23,8 @@ use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
-const DIALECTS: &[(&str, LuaVersion, &str, &str)] = &[
-    ("5.1", LuaVersion::Lua51, "PUC_LUA_51", "PUC_LUAC_51"),
-    ("5.2", LuaVersion::Lua52, "PUC_LUA_52", "PUC_LUAC_52"),
-    ("5.3", LuaVersion::Lua53, "PUC_LUA_53", "PUC_LUAC_53"),
-    ("5.4", LuaVersion::Lua54, "PUC_LUA_54", "PUC_LUAC_54"),
-    ("5.5", LuaVersion::Lua55, "PUC_LUA_55", "PUC_LUAC_55"),
-];
-
-fn require_all() -> bool {
-    std::env::var_os("LUNA_DIFF_PUC_REQUIRE_ALL").is_some()
-}
-
-fn fixtures(dialect: &str) -> Vec<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/diff_puc")
-        .join(dialect);
-    let mut out: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .map(|d| d.flatten().map(|e| e.path()).collect())
-        .unwrap_or_default();
-    // a count fixture reads `collectgarbage("count")`, and a finalizer
-    // batches or `_gcauto` fixture where the automatic steps run, all of
-    // which loading a dump instead of the text changes
-    out.retain(|p| {
-        let name = p.to_string_lossy();
-        p.extension().is_some_and(|x| x == "lua")
-            && !name.contains("_count")
-            && !name.contains("_finalizer_batches")
-            && !name.contains("_gcauto")
-    });
-    out.sort();
-    out
-}
+mod corpus;
+use corpus::{DIALECTS, corpus_tests};
 
 #[derive(PartialEq, Debug)]
 enum Outcome {
@@ -159,82 +129,71 @@ fn run_on_luna(version: LuaVersion, bytes: &[u8]) -> Result<Outcome, String> {
     })
 }
 
-/// Run `check` on every fixture of every dialect with an interpreter; fail
-/// on any miss.
-fn each_fixture(
-    name: &str,
-    min: LuaVersion,
-    check: impl Fn(&Path, LuaVersion, &str, &str, &str) -> Result<(), String>,
-) {
-    let mut report = Vec::new();
-    let mut failed = Vec::new();
-    for &(dialect, version, lua_key, luac_key) in DIALECTS.iter().filter(|d| d.1 >= min) {
-        let (Ok(lua), luac) = (std::env::var(lua_key), std::env::var(luac_key)) else {
-            assert!(!require_all(), "[{name}] {lua_key} must be set");
-            eprintln!("[{name}] {dialect}: SKIPPED — {lua_key} not set");
-            continue;
-        };
-        let luac = luac.unwrap_or_default();
-        let all = fixtures(dialect);
-        let mut pass = 0;
-        for f in &all {
-            let source = std::fs::read_to_string(f).expect("read fixture");
-            match check(f, version, &lua, &luac, &source) {
-                Ok(()) => pass += 1,
-                Err(e) => failed.push(format!("{}: {e}", f.display())),
-            }
-        }
-        report.push(format!("{dialect} {pass}/{}", all.len()));
+fn runs_on_puc(
+    _: &Path,
+    version: LuaVersion,
+    lua: &str,
+    _: &str,
+    source: &str,
+) -> Result<(), String> {
+    let want = run_puc(lua, &[Path::new("-")], source.as_bytes());
+    let bytes = luna_dump(version, source, false)?;
+    let chunk = temp_file("run", &bytes);
+    let got = run_puc(lua, &[&chunk], b"");
+    let _ = std::fs::remove_file(&chunk); // a leftover temp file is harmless
+    if got != want {
+        return Err(format!(
+            "\n--- PUC source ---\n{want:?}\n--- PUC dump ---\n{got:?}"
+        ));
     }
-    eprintln!("[{name}] passed: {}", report.join(", "));
-    assert!(
-        failed.is_empty(),
-        "[{name}] {} fixtures fail:\n{}",
-        failed.len(),
-        failed.join("\n")
-    );
+    Ok(())
 }
 
-#[test]
-fn dump_runs_on_puc() {
-    each_fixture(
-        "dump_runs_on_puc",
-        LuaVersion::Lua51,
-        |_, version, lua, _, source| {
-            let want = run_puc(lua, &[Path::new("-")], source.as_bytes());
-            let bytes = luna_dump(version, source, false)?;
-            let chunk = temp_file("run", &bytes);
-            let got = run_puc(lua, &[&chunk], b"");
-            let _ = std::fs::remove_file(&chunk); // a leftover temp file is harmless
-            if got != want {
-                return Err(format!(
-                    "\n--- PUC source ---\n{want:?}\n--- PUC dump ---\n{got:?}"
-                ));
-            }
-            Ok(())
-        },
-    );
+fn round_trips(
+    _: &Path,
+    version: LuaVersion,
+    lua: &str,
+    _: &str,
+    source: &str,
+) -> Result<(), String> {
+    let want = run_puc(lua, &[Path::new("-")], source.as_bytes());
+    let bytes = luna_dump(version, source, false)?;
+    let got = std::panic::catch_unwind(|| run_on_luna(version, &bytes))
+        .map_err(|_| "luna panicked".to_string())??;
+    if got != want {
+        return Err(format!(
+            "\n--- PUC source ---\n{want:?}\n--- luna ---\n{got:?}"
+        ));
+    }
+    Ok(())
 }
 
-#[test]
-fn dump_round_trips_through_luna() {
-    each_fixture(
-        "dump_round_trips_through_luna",
-        LuaVersion::Lua51,
-        |_, version, lua, _, source| {
-            let want = run_puc(lua, &[Path::new("-")], source.as_bytes());
-            let bytes = luna_dump(version, source, false)?;
-            let got = std::panic::catch_unwind(|| run_on_luna(version, &bytes))
-                .map_err(|_| "luna panicked".to_string())??;
-            if got != want {
-                return Err(format!(
-                    "\n--- PUC source ---\n{want:?}\n--- luna ---\n{got:?}"
-                ));
-            }
-            Ok(())
-        },
-    );
-}
+corpus_tests!(
+    dump_runs_on_puc,
+    super::super::runs_on_puc,
+    v51 = 0,
+    v52 = 1,
+    v53 = 2,
+    v54 = 3,
+    v55 = 4
+);
+corpus_tests!(
+    dump_round_trips_through_luna,
+    super::super::round_trips,
+    v51 = 0,
+    v52 = 1,
+    v53 = 2,
+    v54 = 3,
+    v55 = 4
+);
+// 5.3+, where `string.dump` strips
+corpus_tests!(
+    stripped_dump_runs_on_puc,
+    super::super::stripped_runs_on_puc,
+    v53 = 2,
+    v54 = 3,
+    v55 = 4
+);
 
 /// Every constant- and immediate-operand opcode, each side of the operator,
 /// with immediates PUC's parser can and cannot negate (`x - 128`,
@@ -367,36 +326,35 @@ fn const_operand_forms_round_trip_through_luna() {
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 
-#[test]
-fn stripped_dump_runs_on_puc() {
-    each_fixture(
-        "stripped_dump_runs_on_puc",
-        LuaVersion::Lua53,
-        |f, version, lua, luac, source| {
-            if luac.is_empty() {
-                return Err("no luac for this dialect".to_string());
-            }
-            let stripped = temp_file("luac", b"");
-            let st = Command::new(luac)
-                .arg("-s")
-                .arg("-o")
-                .arg(&stripped)
-                .arg(f)
-                .status()
-                .map_err(|e| format!("cannot run luac: {e}"))?;
-            assert!(st.success(), "luac -s failed on {}", f.display());
-            let want = run_puc(lua, &[&stripped], b"");
-            let _ = std::fs::remove_file(&stripped); // a leftover temp file is harmless
-            let bytes = luna_dump(version, source, true)?;
-            let chunk = temp_file("strip", &bytes);
-            let got = run_puc(lua, &[&chunk], b"");
-            let _ = std::fs::remove_file(&chunk); // a leftover temp file is harmless
-            if got != want {
-                return Err(format!(
-                    "\n--- PUC luac -s ---\n{want:?}\n--- PUC dump ---\n{got:?}"
-                ));
-            }
-            Ok(())
-        },
-    );
+fn stripped_runs_on_puc(
+    f: &Path,
+    version: LuaVersion,
+    lua: &str,
+    luac: &str,
+    source: &str,
+) -> Result<(), String> {
+    if luac.is_empty() {
+        return Err("no luac for this dialect".to_string());
+    }
+    let stripped = temp_file("luac", b"");
+    let st = Command::new(luac)
+        .arg("-s")
+        .arg("-o")
+        .arg(&stripped)
+        .arg(f)
+        .status()
+        .map_err(|e| format!("cannot run luac: {e}"))?;
+    assert!(st.success(), "luac -s failed on {}", f.display());
+    let want = run_puc(lua, &[&stripped], b"");
+    let _ = std::fs::remove_file(&stripped); // a leftover temp file is harmless
+    let bytes = luna_dump(version, source, true)?;
+    let chunk = temp_file("strip", &bytes);
+    let got = run_puc(lua, &[&chunk], b"");
+    let _ = std::fs::remove_file(&chunk); // a leftover temp file is harmless
+    if got != want {
+        return Err(format!(
+            "\n--- PUC luac -s ---\n{want:?}\n--- PUC dump ---\n{got:?}"
+        ));
+    }
+    Ok(())
 }
