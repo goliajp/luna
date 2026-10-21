@@ -99,7 +99,7 @@ impl Vm {
                 }
                 if v <= LuaVersion::Lua52 {
                     // made in the buffer kept for every concatenation
-                    self.heap.open_gbuff(tl);
+                    self.retry_oom(|vm| vm.heap.open_gbuff(tl))?;
                 }
                 let r = self.retry_oom(|vm| {
                     let mut parts: [&[u8]; 16] = [&[]; 16];
