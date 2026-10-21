@@ -181,15 +181,10 @@ impl Heap {
             }
         }
         match d {
-            Dialect::L51 if self.puc.gbuff > 64 => {
-                let new = self.puc.gbuff / 2;
-                self.acct_block(self.puc.gbuff, new);
-                self.puc.gbuff = new;
+            Dialect::L51 if self.puc.gbuff.size() > 64 => {
+                self.shrink_gbuff(self.puc.gbuff.size() / 2)
             }
-            Dialect::L52 => {
-                self.acct_block(self.puc.gbuff, 0);
-                self.puc.gbuff = 0;
-            }
+            Dialect::L52 => self.shrink_gbuff(0),
             _ => {}
         }
     }

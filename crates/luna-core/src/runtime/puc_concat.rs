@@ -32,7 +32,7 @@ impl Heap {
                     n += 1;
                 }
                 if d <= Dialect::L52 {
-                    self.open_gbuff(tl);
+                    self.open_gbuff(tl)?;
                 }
                 let parts: Vec<&[u8]> = st[top - n..]
                     .iter()
