@@ -66,6 +66,7 @@ impl Vm {
         self.compile_scratch.puc_log = log;
         self.replay_left(&r, replayed.is_ok());
         replayed?;
+        self.replay_long_names(&mut r, proto);
         // 5.1's `f_parser` makes the closure now; the others give it its
         // upvalue (`luaF_initupvals`)
         if d == Dialect::L51 {
@@ -151,16 +152,35 @@ impl Vm {
     /// variable and upvalue names, made now (while nothing is counted) and
     /// held by the prototypes: the replay counts each where PUC's scanner
     /// makes it, and the collector frees it only with its prototype.
+    /// From 5.3 one long name is one string for the whole chunk (the
+    /// scanner's single table of names), in 5.2 one per function.
     pub(super) fn hold_puc_names(&mut self, p: Gc<Proto>) -> Result<(), SyntaxError> {
+        self.hold_names_in(p, &mut Vec::new())
+    }
+
+    fn hold_names_in(
+        &mut self,
+        p: Gc<Proto>,
+        longs: &mut Vec<Gc<crate::runtime::LuaStr>>,
+    ) -> Result<(), SyntaxError> {
+        let shared = !matches!(self.heap.table_dialect, Dialect::L51 | Dialect::L52);
         let names = p.locvars.iter().map(|v| v.name.as_str());
         let names = names.chain(p.upvals.iter().map(|u| u.name.as_str()));
         let mut held = Vec::with_capacity(p.locvars.len() + p.upvals.len());
         for n in names {
-            held.push(self.heap.try_intern(n.as_bytes())?);
+            let n = n.as_bytes();
+            let s = match longs.iter().find(|s| shared && s.as_bytes() == n) {
+                Some(&s) => s,
+                None => self.heap.try_intern(n)?,
+            };
+            if shared && n.len() > crate::runtime::string::MAX_SHORT_LEN {
+                longs.push(s);
+            }
+            held.push(s);
         }
         *p.puc_names.borrow_mut() = held;
         for &c in p.protos.iter() {
-            self.hold_puc_names(c)?;
+            self.hold_names_in(c, longs)?;
         }
         Ok(())
     }
