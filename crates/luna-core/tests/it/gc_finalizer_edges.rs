@@ -240,10 +240,14 @@ fn finalizer_on_a_coroutine_cannot_yield() {
         let Value::Str(s) = r[1] else {
             panic!("{v:?}: the finalizer did not run")
         };
-        assert_eq!(
-            s.as_bytes(),
-            b"false attempt to yield across a C-call boundary",
-            "{v:?}"
-        );
+        // `gc-stress` collects at the first checkpoint after `x` goes, on
+        // the main thread (`coroutine.wrap`'s), where the finalizer's
+        // yield is outside any coroutine
+        let want: &[u8] = if cfg!(feature = "gc-stress") {
+            b"false attempt to yield from outside a coroutine"
+        } else {
+            b"false attempt to yield across a C-call boundary"
+        };
+        assert_eq!(s.as_bytes(), want, "{v:?}");
     }
 }
