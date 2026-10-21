@@ -179,7 +179,11 @@ fn tolstring_52(
     if mm.is_nil() {
         return vm.tolstring(v, extra).map(Some);
     }
-    vm.metafield_check(v, b"__tostring")?;
+    // the slots past the top stay live through the collection it checks for
+    vm.native_push(extra);
+    let r = vm.metafield_check(v, b"__tostring");
+    vm.native_pop(extra);
+    r?;
     match vm
         .call_value_pushed(mm, &[v], extra)?
         .first()
