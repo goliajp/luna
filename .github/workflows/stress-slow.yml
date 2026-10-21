@@ -1,0 +1,92 @@
+# The dump fixtures too slow for a collection at every checkpoint in the
+# merge check (which collects at every nth one there), at full strength,
+# nightly and on demand. A fixture runs as `every` shards, shard `offset`
+# collecting at checkpoints offset, offset + every, ...: together they
+# collect at every checkpoint once. One job per fixture and shard, each
+# estimated within four hours.
+
+name: stress-slow
+
+on:
+  schedule:
+    # nightly at 07:00 UTC, after diff-puc, whose PUC builds it reuses
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+jobs:
+  slow:
+    name: gc-stress at every checkpoint (${{ matrix.test }} ${{ matrix.offset }}/${{ matrix.every }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { test: v52_870, every: 2, offset: 0 }
+          - { test: v52_870, every: 2, offset: 1 }
+          - { test: v52_1047, every: 3, offset: 0 }
+          - { test: v52_1047, every: 3, offset: 1 }
+          - { test: v52_1047, every: 3, offset: 2 }
+    # the longest a hosted job may run
+    timeout-minutes: 360
+    env:
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+      CARGO_PROFILE_RELEASE_LTO: "false"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore PUC builds
+        # The interpreters only change when a pinned version does, so the
+        # built tree is cached per version set and runner architecture.
+        # Bump the key's versions together with the list below.
+        id: puc-cache
+        uses: actions/cache@v6
+        with:
+          path: /tmp/puc-multi
+          key: puc-${{ runner.os }}-${{ runner.arch }}-5.1.5-5.2.4-5.3.6-5.4.9-5.5.1-v1
+
+      - name: Build PUC 5.1.5 / 5.2.4 / 5.3.6 / 5.4.9 / 5.5.1
+        # Always from the lua.org source releases: an apt package would
+        # make the differential basis depend on whatever the runner image
+        # ships. `make posix` (≤5.4) and `make linux` (5.5) avoid the
+        # readline dependency; the harness feeds stdin.
+        if: steps.puc-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential
+          mkdir -p /tmp/puc-multi && cd /tmp/puc-multi
+          for v in 5.1.5 5.2.4 5.3.6 5.4.9; do
+            curl -fsSL "https://www.lua.org/ftp/lua-$v.tar.gz" | tar -xz
+            ( cd "lua-$v" && make posix > /dev/null )
+          done
+          curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o lua-5.5.1.tar.gz
+          echo "1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce  lua-5.5.1.tar.gz" | sha256sum -c -
+          tar -xzf lua-5.5.1.tar.gz && rm lua-5.5.1.tar.gz
+          ( cd lua-5.5.1 && make linux > /dev/null )
+
+      - name: Point the harness at the PUC builds
+        run: |
+          P=/tmp/puc-multi
+          for v in 5.1.5 5.2.4 5.3.6 5.4.9 5.5.1; do
+            d=$(echo "$v" | cut -d. -f1-2 | tr -d .)
+            echo "PUC_LUA_$d=$P/lua-$v/src/lua" >> "$GITHUB_ENV"
+            echo "PUC_LUAC_$d=$P/lua-$v/src/luac" >> "$GITHUB_ENV"
+          done
+          echo "PUC_LUA=$P/lua-5.5.1/src/lua" >> "$GITHUB_ENV"
+
+      - name: Run the fixture's shard
+        env:
+          LUNA_DIFF_PUC_REQUIRE_ALL: "1"
+          LUNA_GC_STRESS_EVERY: ${{ matrix.every }}
+          LUNA_GC_STRESS_OFFSET: ${{ matrix.offset }}
+          # glibc fills what is freed, so a freed object read is not
+          # mistaken for a live one
+          MALLOC_PERTURB_: "219"
+        run: >-
+          cargo test --release -p luna-core --features gc-stress --test it --
+          --exact puc_dump::dump_round_trips_through_luna::slow::${{ matrix.test }} --nocapture

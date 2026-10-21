@@ -38,13 +38,13 @@ const SLOW: &[(&str, &str, &str, u64)] = &[
         "dump_round_trips_through_luna",
         "5.2",
         "1047_msgh_at_full_stack.lua",
-        1,
+        61,
     ),
     (
         "dump_round_trips_through_luna",
         "5.2",
         "870_c_stack_overflow_paths.lua",
-        1,
+        33,
     ),
 ];
 
