@@ -118,11 +118,17 @@ impl Vm {
                 }
                 Err(self.mem_err())
             }
-            LuaVersion::Lua53 => Err(crate::vm::builtins::raise_str(
-                self,
-                "not enough memory for buffer allocation",
-            )),
-            _ => Err(self.mem_err()),
+            _ => Err(self.buf_error()),
+        }
+    }
+
+    /// The error a library buffer raises when the allocation function
+    /// refuses it a block, 5.3 on: 5.3's own message, a memory error later.
+    pub(crate) fn buf_error(&mut self) -> LuaError {
+        if self.version() == LuaVersion::Lua53 {
+            crate::vm::builtins::raise_str(self, "not enough memory for buffer allocation")
+        } else {
+            self.mem_err()
         }
     }
 

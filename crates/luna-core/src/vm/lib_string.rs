@@ -128,6 +128,19 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         return Err(vm.mem_err());
     }
     let mut out = vm.new_buf();
+    // PUC asks for the whole size at once (`luaL_buffinitsize`); from 5.3
+    // on a box is made first, which a refused block leaves behind
+    if v >= LuaVersion::Lua53 && out.reserve(total as usize).is_err() {
+        if total as usize > Vm::lual_buffersize(v) {
+            let b = vm.new_box()?;
+            // 5.4 on, the protected call that catches the error closes it
+            if v >= LuaVersion::Lua54 {
+                vm.box_close_room()?;
+                vm.drop_box(b);
+            }
+        }
+        return Err(vm.buf_error());
+    }
     vm.buf_reserve(&mut out, total as usize)?;
     for k in 0..n {
         vm.buf_push(&mut out, s.as_bytes())?;
