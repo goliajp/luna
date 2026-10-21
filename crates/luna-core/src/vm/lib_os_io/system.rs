@@ -252,11 +252,12 @@ pub(super) fn os_setlocale(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     let a = Args::new(fs, nargs);
     let name = argcheck::opt_string(vm, a, 0)?.map(|s| lib_io::c_str(s.as_bytes()).to_vec());
     let cat = argcheck::check_option(vm, a, 1, Some("all"), &LC_NAMES)?;
-    // upvalues 0..6: collate, ctype, monetary, numeric, time, messages
-    let slots: Vec<usize> = if cat == 0 {
-        (0..LC_COUNT).collect()
+    // bits 0..6 of `vm.posix_locales` (set: "POSIX", else "C"): collate,
+    // ctype, monetary, numeric, time, messages
+    let mask: u8 = if cat == 0 {
+        (1 << LC_COUNT) - 1
     } else {
-        vec![cat - 1]
+        1 << (cat - 1)
     };
     if let Some(name) = name {
         let resolved = if name.is_empty() {
@@ -264,28 +265,23 @@ pub(super) fn os_setlocale(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         } else {
             name
         };
-        if resolved != b"C" && resolved != b"POSIX" {
-            return vm.nat_ret(fs, &[Value::Nil]);
-        }
-        let v = vm.str_value(&resolved)?;
-        for &i in &slots {
-            vm.nat_set_upval(fs, i, v);
+        match &resolved[..] {
+            b"C" => vm.posix_locales &= !mask,
+            b"POSIX" => vm.posix_locales |= mask,
+            _ => return vm.nat_ret(fs, &[Value::Nil]),
         }
     }
-    let names: Vec<Vec<u8>> = slots
-        .iter()
-        .map(|&i| match vm.nat_upval(fs, i) {
-            Value::Str(s) => s.as_bytes().to_vec(),
-            _ => unreachable!("only os.setlocale writes its upvalues, always strings"),
-        })
-        .collect();
+    let posix = vm.posix_locales & mask;
     // a mixed "all" reads as the categories joined by '/'
-    let text = if names.iter().all(|n| *n == names[0]) {
-        names[0].clone()
-    } else {
-        names.join(&b'/')
+    let text = match posix {
+        0 => "C".to_string(),
+        p if p == mask => "POSIX".to_string(),
+        p => (0..LC_COUNT)
+            .map(|i| if p & (1 << i) != 0 { "POSIX" } else { "C" })
+            .collect::<Vec<_>>()
+            .join("/"),
     };
-    let r = vm.api_push_string(&text)?;
+    let r = vm.api_push_string(text.as_bytes())?;
     vm.nat_ret(fs, &[r])
 }
 
