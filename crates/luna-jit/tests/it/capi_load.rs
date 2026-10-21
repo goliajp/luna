@@ -43,6 +43,11 @@ fn alloc_fail() {
 }
 
 #[test]
+fn alloc_emergency() {
+    check("alloc_emergency");
+}
+
+#[test]
 fn alloc_once() {
     check("alloc_once");
 }
