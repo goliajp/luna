@@ -76,18 +76,16 @@ impl Vm {
     }
 
     /// Set the first upvalue of a function `lua_load` just made, which no
-    /// other code holds yet, to `v` (PUC `lua_load`: the globals).
-    /// A memory error when the upvalue cannot be made.
+    /// other code holds yet, to `v` (PUC `lua_load`: the globals), in the
+    /// upvalue the load made. Never fails.
     pub fn host_set_first_upvalue(&mut self, cl: Gc<LuaClosure>, v: Value) -> Result<(), LuaError> {
-        // `cl`, new since the last safe point, is kept by an emergency
-        // collection, and `v` (the globals) is a root
-        let uv = self.retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Closed(v)))?;
-        // SAFETY: `cl` was made by the load that is finishing and only the
-        // caller holds it; the borrow covers one store
-        if let Some(slot) = unsafe { cl.as_mut() }.upvals_mut().first_mut() {
-            *slot = uv;
+        if let Some(&uv) = cl.upvals().first() {
+            // SAFETY: a load makes each upvalue of its function closed and
+            // its own, and only the caller holds the function; the borrow
+            // covers one store
+            unsafe { uv.as_mut() }.set_closed(v);
+            self.heap.barrier_forward(uv, v);
         }
-        self.heap.barrier_back(cl);
         Ok(())
     }
 
