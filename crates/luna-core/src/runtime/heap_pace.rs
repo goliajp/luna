@@ -109,6 +109,12 @@ impl Heap {
         self.refresh_gc_limit();
     }
 
+    /// 5.1: an explicit step sets the threshold that `stop` had put out of
+    /// reach, so the collector runs on its own again after it.
+    pub(crate) fn gc_unstop_51(&mut self) {
+        self.gc_stopped = false;
+    }
+
     /// The stop flag put back as it was, with no debt set (PUC `GCTM`
     /// restoring `gcrunning`).
     pub(crate) fn gc_restore_stopped(&mut self, stopped: bool) {

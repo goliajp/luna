@@ -130,6 +130,7 @@ impl Vm {
         let debt_now = self.heap.pace.debt(d, bytes);
         match d {
             Dialect::L51 => {
+                self.heap.gc_unstop_51();
                 let a = n.max(0) << 10;
                 let t = if a <= bytes as i64 {
                     bytes as i64 - a
