@@ -4,7 +4,7 @@
 
 use crate::runtime::table::Dialect;
 use crate::runtime::userdata::UserdataPayload;
-use crate::runtime::{Gc, Table, Userdata, Value};
+use crate::runtime::{Gc, LuaStr, Table, Userdata, Value};
 use crate::version::LuaVersion;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
@@ -113,11 +113,20 @@ impl Vm {
         Ok(())
     }
 
+    /// [`Vm::box_closed`] with the buffer's string `r` pushed below the
+    /// call, kept by a collection that call's stack check makes.
+    pub(crate) fn box_closed_over(&mut self, r: Gc<LuaStr>) -> Result<(), LuaError> {
+        self.lib_roots.push(Value::Str(r));
+        let closed = self.box_closed();
+        self.lib_roots.pop();
+        closed
+    }
+
     /// A box's `__close` (5.4+, `lua_closeslot`): a call one level up, of a
     /// C function, made above the box and the string just pushed with the
     /// method, the box and (5.4) the error (`callclosemethod`), which wants
     /// `LUA_MINSTACK` slots above those (`precallC`).
-    pub(crate) fn box_closed(&mut self) -> Result<(), LuaError> {
+    fn box_closed(&mut self) -> Result<(), LuaError> {
         if let Some(top) = self.native_top() {
             let pushed = if self.version() >= LuaVersion::Lua55 {
                 2
