@@ -147,7 +147,11 @@ impl<'a> Compiler<'a> {
         for an in names {
             // 5.5 reads a name's `<attrib>` before it makes the variable
             let attrib = if an.attrib.is_some() { 3 } else { 0 };
-            let after = if self.version >= LuaVersion::Lua55 { attrib } else { 0 };
+            let after = if self.version >= LuaVersion::Lua55 {
+                attrib
+            } else {
+                0
+            };
             self.prelog_localvar(TokRef::StatFirst(sid, tok + 1 + after), self.nm(&an.name))?;
             tok += 2 + attrib;
         }
