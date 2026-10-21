@@ -338,9 +338,9 @@ pub struct Vm {
     pub(super) gc_finalizing: bool,
     /// `os.setlocale`: bit `i` set when category `i` is "POSIX", else "C".
     pub(crate) posix_locales: u8,
-    /// `gc-stress`: collect at every `.0`th checkpoint, `.1` more to the next.
+    /// `gc-stress`: which checkpoints collect.
     #[cfg(feature = "gc-stress")]
-    pub(super) stress_every: (u64, u64),
+    pub(super) stress: super::gc_stress::Stress,
     /// A collection whose finalizers' errors go nowhere is running (one
     /// luna starts on its own, not the program).
     pub(super) fin_quiet: bool,
