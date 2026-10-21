@@ -22,3 +22,4 @@ for i = 1, 100000 do
   if steps then break end
 end
 print(steps)
+-- the output follows where the automatic collection steps run

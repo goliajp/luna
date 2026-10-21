@@ -23,3 +23,4 @@ for i = 1, 20000 do
   if ran == 50 then break end
 end
 print(table.concat(log, " "))
+-- the output follows where the automatic collection steps run

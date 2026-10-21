@@ -28,3 +28,4 @@ end, function(m) return "handled: " .. tostring(m) end)
 print(h, clean(m))
 collectgarbage()
 print(table.concat(ran, " "))
+-- the output follows where the automatic collection steps run
