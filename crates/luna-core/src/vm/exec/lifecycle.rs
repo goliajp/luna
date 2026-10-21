@@ -151,6 +151,8 @@ impl Vm {
             gc_stepsize: 13,
             gc_params: crate::vm::lib_gc::GcParams::new(version),
             gc_finalizing: false,
+            #[cfg(feature = "gc-stress")]
+            stress_every: (1, 1),
             fin_quiet: false,
             load_raised: None,
             host_cont_hooks: None,

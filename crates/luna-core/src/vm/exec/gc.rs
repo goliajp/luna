@@ -81,9 +81,7 @@ impl Vm {
         }
         #[cfg(feature = "gc-stress")]
         if !self.heap.gc_is_stopped() {
-            self.heap.safe_point();
-            self.gc_top = live_top;
-            self.collect_garbage();
+            self.stress_checkpoint(live_top);
             return Ok(());
         }
         // everything live is rooted here; what is allocated next is young
