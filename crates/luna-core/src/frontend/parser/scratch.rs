@@ -112,6 +112,8 @@ pub(crate) struct ParseScratch {
     /// the next parse records its marks and the strings PUC's scanner
     /// makes, for a load that is counted
     pub(crate) record: bool,
+    /// and where each token ends, which a streamed parse always records
+    pub(crate) record_ends: bool,
     /// the last recording, kept for its vectors; valid while `recorded`
     pub(super) recording: Option<Box<marks::Recording>>,
     pub(super) recorded: bool,
@@ -129,6 +131,7 @@ impl ParseScratch {
             streamed: None,
             failed: None,
             record: false,
+            record_ends: false,
             recording: None,
             recorded: false,
         }
@@ -159,6 +162,7 @@ impl ParseScratch {
             streamed: None,
             failed: None,
             record: false,
+            record_ends: false,
             recording: p.recording,
             recorded: false,
         };
