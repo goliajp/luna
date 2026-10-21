@@ -182,6 +182,7 @@ impl Vm {
             msgh_runs: 0,
             errerr_raised: 0,
             handler_bypass: None,
+            oom_seen: 0,
             gcmm_raised: 0,
             native_ret_hooked: false,
             tail_hook_fired: false,

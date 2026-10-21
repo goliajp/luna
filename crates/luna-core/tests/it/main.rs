@@ -55,6 +55,7 @@ mod load_refused_in_turn;
 mod loop_trap;
 mod lua_error_structured;
 mod macro_lua;
+mod memerr_no_handler;
 mod mm_absent_cache;
 mod nan_matches_host_printf;
 mod native_call_bookkeeping;

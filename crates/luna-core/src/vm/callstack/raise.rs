@@ -132,6 +132,11 @@ impl Vm {
             self.msgh_applied = Some(err);
             return err;
         }
+        // so is a memory error (LUA_ERRMEM, its message raised since the
+        // last error came here), which leaves no traceback for the host
+        let oom = std::mem::replace(&mut self.oom_seen, self.heap.mem_ctx().oom_raised());
+        let mem = oom != self.oom_seen
+            && matches!(err, Value::Str(s) if s.as_bytes() == b"not enough memory");
         let raised_by = self.take_errored_natives(err);
         let at = self.raise_top(&raised_by);
         let base = self.running_natives.len();
@@ -144,7 +149,7 @@ impl Vm {
         let to_host = catcher.is_none() && self.current.is_none() && self.keep_error_traceback;
         let mut handled = false;
         let out = match catcher {
-            Some(Some(handler)) if !self.msgh_applied.is_some_and(|v| v.raw_eq(err)) => {
+            Some(Some(handler)) if !mem && !self.msgh_applied.is_some_and(|v| v.raw_eq(err)) => {
                 handled = true;
                 match self.errormsg_room(at) {
                     Ok(()) => self.call_msgh_at(handler, err, at),
@@ -159,7 +164,7 @@ impl Vm {
                     if self.keep_error_traceback && self.dead_snapshot.is_none() {
                         self.dead_snapshot = self.dead_stack();
                     }
-                } else if self.keep_error_traceback && self.error_traceback.is_none() {
+                } else if !mem && self.keep_error_traceback && self.error_traceback.is_none() {
                     let ars = self.level_ars();
                     self.error_traceback = Some(self.lines_of(&ars));
                 }
@@ -176,7 +181,7 @@ impl Vm {
         };
         // the value that leaves here is the handled one: it must not be
         // handled again as it unwinds past further frames
-        if handled {
+        if handled || mem {
             self.msgh_applied = Some(out);
         }
         self.running_natives.truncate(base);
