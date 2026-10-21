@@ -2,6 +2,7 @@
 //! a slow build (`gc-stress` collects at every checkpoint) runs them in
 //! parallel.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -27,6 +28,45 @@ fn require_all() -> bool {
     std::env::var_os("LUNA_DIFF_PUC_REQUIRE_ALL").is_some()
 }
 
+/// Fixtures a collection at every checkpoint makes too slow for the merge
+/// check (5.2 checks at every call, and these fill the stack): each runs
+/// as its own test, collecting at every `n`th checkpoint, `n` the least
+/// that keeps it within ten minutes on firefly; at every one when
+/// `LUNA_GC_STRESS_FULL` is set. (test, dialect, fixture, n)
+const SLOW: &[(&str, &str, &str, u64)] = &[
+    (
+        "dump_round_trips_through_luna",
+        "5.2",
+        "1047_msgh_at_full_stack.lua",
+        1,
+    ),
+    (
+        "dump_round_trips_through_luna",
+        "5.2",
+        "870_c_stack_overflow_paths.lua",
+        1,
+    ),
+];
+
+thread_local! {
+    /// The interval and offset the running fixture's Vms collect at.
+    static INTERVAL: Cell<Option<(u64, u64)>> = const { Cell::new(None) };
+}
+
+/// Set up `vm` as the running fixture wants it collected.
+pub(super) fn stressed(vm: &mut luna_core::vm::Vm) {
+    #[cfg(feature = "gc-stress")]
+    if let Some((every, offset)) = INTERVAL.get() {
+        vm.gc_stress_interval(every, offset);
+    }
+    let _ = vm;
+}
+
+fn is_slow(name: &str, dialect: &str, f: &Path) -> bool {
+    SLOW.iter()
+        .any(|&(t, d, file, _)| t == name && d == dialect && f.ends_with(file))
+}
+
 fn fixtures(dialect: &str) -> Vec<PathBuf> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/diff_puc")
@@ -46,10 +86,56 @@ fn fixtures(dialect: &str) -> Vec<PathBuf> {
     out
 }
 
-/// Run `check` on shard `shard` of dialect `DIALECTS[dialect]`'s fixtures;
-/// fail on any miss. Under `gc-stress` each fixture's time is printed as it
-/// finishes.
+/// Run `check` on shard `shard` of dialect `DIALECTS[dialect]`'s fixtures,
+/// the slow ones left to their own tests.
 pub(super) fn each_fixture(name: &str, dialect: usize, shard: usize, check: Check) {
+    let d = DIALECTS[dialect].0;
+    let all: Vec<PathBuf> = fixtures(d)
+        .into_iter()
+        .filter(|f| !is_slow(name, d, f))
+        .enumerate()
+        .filter(|(i, _)| i % SHARDS == shard)
+        .map(|(_, f)| f)
+        .collect();
+    assert!(!all.is_empty(), "[{name}] {d} shard {shard}: no fixtures");
+    run(name, dialect, &format!("{d}/{shard}"), &all, check);
+}
+
+/// Run `check` on the slow fixture `file` of `DIALECTS[dialect]`, at the
+/// interval [`SLOW`] gives it from an offset a seed picks: the seed is
+/// printed, and `LUNA_GC_STRESS_SEED` runs it again.
+pub(super) fn slow_fixture(name: &str, dialect: usize, file: &str, check: Check) {
+    let d = DIALECTS[dialect].0;
+    let &(_, _, _, every) = SLOW
+        .iter()
+        .find(|&&(t, sd, f, _)| t == name && sd == d && f == file)
+        .expect("a fixture SLOW lists");
+    // `LUNA_GC_STRESS_EVERY`: another interval, to measure one
+    let every =
+        std::env::var("LUNA_GC_STRESS_EVERY").map_or(every, |n| n.parse().expect("a number"));
+    let full = std::env::var_os("LUNA_GC_STRESS_FULL").is_some();
+    if cfg!(feature = "gc-stress") && !full && every > 1 {
+        let seed = std::env::var("LUNA_GC_STRESS_SEED")
+            .ok()
+            .map(|s| s.parse::<u64>().expect("a number"))
+            .unwrap_or_else(|| {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+                now.expect("a clock after 1970").as_nanos() as u64
+            });
+        eprintln!("[{name}] {d}/{file}: every {every}th checkpoint, LUNA_GC_STRESS_SEED={seed}");
+        INTERVAL.set(Some((every, seed % every)));
+    }
+    let f = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/diff_puc")
+        .join(d)
+        .join(file);
+    run(name, dialect, &format!("{d}/{file}"), &[f], check);
+    INTERVAL.set(None);
+}
+
+/// Run `check` on `all`; fail on any miss. Under `gc-stress` each
+/// fixture's time is printed as it finishes.
+fn run(name: &str, dialect: usize, label: &str, all: &[PathBuf], check: Check) {
     let (d, version, lua_key, luac_key) = DIALECTS[dialect];
     let (Ok(lua), luac) = (std::env::var(lua_key), std::env::var(luac_key)) else {
         assert!(!require_all(), "[{name}] {lua_key} must be set");
@@ -57,13 +143,6 @@ pub(super) fn each_fixture(name: &str, dialect: usize, shard: usize, check: Chec
         return;
     };
     let luac = luac.unwrap_or_default();
-    let all: Vec<PathBuf> = fixtures(d)
-        .into_iter()
-        .enumerate()
-        .filter(|(i, _)| i % SHARDS == shard)
-        .map(|(_, f)| f)
-        .collect();
-    assert!(!all.is_empty(), "[{name}] {d} shard {shard}: no fixtures");
     let mut failed = Vec::new();
     let start = Instant::now();
     for (i, f) in all.iter().enumerate() {
@@ -74,7 +153,7 @@ pub(super) fn each_fixture(name: &str, dialect: usize, shard: usize, check: Chec
         }
         if cfg!(feature = "gc-stress") {
             eprintln!(
-                "[{name}] {d}/{shard} {}/{} {:.1}s {:.1}s {}",
+                "[{name}] {label} {}/{} {:.1}s {:.1}s {}",
                 i + 1,
                 all.len(),
                 t.elapsed().as_secs_f64(),
@@ -84,7 +163,7 @@ pub(super) fn each_fixture(name: &str, dialect: usize, shard: usize, check: Chec
         }
     }
     eprintln!(
-        "[{name}] {d} shard {shard}: passed {}/{}",
+        "[{name}] {label}: passed {}/{}",
         all.len() - failed.len(),
         all.len()
     );
@@ -97,10 +176,19 @@ pub(super) fn each_fixture(name: &str, dialect: usize, shard: usize, check: Chec
 }
 
 /// `$name::$v::s<k>`: one test for each listed dialect (an index into
-/// [`DIALECTS`]) and each shard, running `$check`.
+/// [`DIALECTS`]) and each shard, running `$check`; `$name::slow::$sv` one
+/// for each slow fixture `$sf` of dialect `$sd`.
 macro_rules! corpus_tests {
-    ($name:ident, $check:path, $($v:ident = $d:literal),+) => {
+    ($name:ident, $check:path, $($v:ident = $d:literal),+
+     $(; slow $($sv:ident = $sd:literal $sf:literal),+)?) => {
         mod $name {
+            $(
+                mod slow {
+                    use super::super::corpus::slow_fixture;
+                    const NAME: &str = stringify!($name);
+                    $(#[test] fn $sv() { slow_fixture(NAME, $sd, $sf, $check) })+
+                }
+            )?
             $(
                 mod $v {
                     use super::super::corpus::each_fixture;
