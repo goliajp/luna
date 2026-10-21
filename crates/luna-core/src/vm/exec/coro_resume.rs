@@ -162,7 +162,14 @@ impl Vm {
         self.stack[0] = body;
         self.stack[1..].copy_from_slice(args);
         self.top = self.stack.len() as u32;
-        match self.begin_call(0, Some(args.len() as u32), -1, true) {
+        let r = self.begin_call(0, Some(args.len() as u32), -1, true);
+        // the body is the call's function now, held by nothing else: it
+        // dies when the call is gone (PUC keeps it only on the stack)
+        if let Some(co) = self.current {
+            // SAFETY: `co` is `self.current`, a root; one field store
+            unsafe { co.as_mut() }.body = Value::Nil;
+        }
+        match r {
             Ok(true) => self.exec_with(1),
             Ok(false) => Ok(self.take_results(0)),
             Err(e) => Err(e),
