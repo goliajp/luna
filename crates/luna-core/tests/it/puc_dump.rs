@@ -114,6 +114,7 @@ fn luna_dump(version: LuaVersion, source: &str, strip: bool) -> Result<Vec<u8>, 
 fn run_on_luna(version: LuaVersion, bytes: &[u8]) -> Result<Outcome, String> {
     let (r, out) = super::stdout_capture::caught(|| {
         let mut vm = super::diff_puc::lua_c_vm(version, "lua");
+        corpus::stressed(&mut vm);
         let f = vm
             .load(bytes, b"=dump")
             .map_err(|e| format!("luna refuses its own dump: {}", e.msg_str()))?;
@@ -184,7 +185,9 @@ corpus_tests!(
     v52 = 1,
     v53 = 2,
     v54 = 3,
-    v55 = 4
+    v55 = 4;
+    slow v52_1047 = 1 "1047_msgh_at_full_stack.lua",
+    v52_870 = 1 "870_c_stack_overflow_paths.lua"
 );
 // 5.3+, where `string.dump` strips
 corpus_tests!(
