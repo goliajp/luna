@@ -96,6 +96,10 @@ impl Vm {
     /// What PUC makes before the main function opens: from 5.2 the main
     /// closure, from 5.3 the chunk's table (5.5 anchors the closure in it).
     fn replay_begin(&mut self, r: &mut Replay, cl: Gc<LuaClosure>) -> Result<(), SyntaxError> {
+        // 5.5's `f_parser` makes the anchor table before it reads
+        if r.d == Dialect::L55 {
+            r.h = Some(self.new_ptab(r)?);
+        }
         // `luaY_parser` (5.5 `f_parser`) before the main function opens;
         // the reader's first call, which reads the first character
         while r.splices.front().is_some_and(|&(t, _)| t < 0) {
@@ -114,8 +118,7 @@ impl Vm {
                 r.h = Some(self.new_ptab(r)?);
             }
             Dialect::L55 => {
-                // the anchor table, then the closure anchored in it
-                r.h = Some(self.new_ptab(r)?);
+                // the closure, anchored in the table
                 self.acct_main_closure(cl);
                 self.anchor_in_h(r, None)?;
             }
