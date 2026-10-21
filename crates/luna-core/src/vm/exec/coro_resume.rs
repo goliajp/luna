@@ -30,17 +30,8 @@ impl Vm {
             Some(r) => {
                 // SAFETY: `r` is `self.current`, the running coroutine and so a root; no reference into it is live here, and `m` ends before the barrier call
                 let m = unsafe { r.as_mut() };
-                m.stack = rctx.stack;
-                m.frames = rctx.frames;
-                m.open_upvals = rctx.open_upvals;
-                m.tbc = rctx.tbc;
-                m.top = rctx.top;
-                m.meta_conts = rctx.meta_conts;
-                m.stale_frames = rctx.stale_frames;
-                m.stack_size = rctx.stack_size;
-                m.frame_size = rctx.frame_size;
-                m.ci_alloc = rctx.ci_alloc;
                 m.globals = rctx.globals;
+                rctx.store_stack_in(m);
                 m.status = CoroStatus::Normal;
                 m.natives = self.natives_base..self.running_natives.len();
                 // bulk overwrite of every traced field on r — mirror
@@ -239,6 +230,15 @@ impl Vm {
     /// The C function yielding, on top of the running natives.
     pub(crate) fn note_yield_ci_top(&mut self) {
         self.yield_ci_top = self.running_natives.last().map_or(0, |a| a.ci_top);
+        self.note_yield_top(u32::MAX);
+    }
+
+    /// The running coroutine's top once it has yielded (see `Coro::yield_top`).
+    fn note_yield_top(&mut self, top: u32) {
+        if let Some(co) = self.current {
+            // SAFETY: `co` is `self.current`, a root; one field store
+            unsafe { co.as_mut() }.yield_top = top;
+        }
     }
 
     /// `coroutine.yield`: suspend the running coroutine, recording where to
@@ -246,6 +246,11 @@ impl Vm {
     /// that `exec`/`resume_coro` recognise as a yield (never surfaced to Lua).
     pub(crate) fn do_yield(&mut self, func_slot: u32, vals: Vec<Value>) -> LuaError {
         self.note_yield_ci_top();
+        // `luaB_yield`'s top less the values the resumer takes
+        let top = self
+            .native_top()
+            .map(|t| t.saturating_sub(vals.len() as u32));
+        self.note_yield_top(top.unwrap_or(u32::MAX));
         let nres = self.native_nresults;
         self.yielding = Some((vals, func_slot, nres));
         // value is irrelevant: resume_coro consults `self.yielding`, not this

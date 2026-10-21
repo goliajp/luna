@@ -2,8 +2,9 @@
 //! up are cleared when a cycle's marking ends, so a stale value a returned
 //! frame left above its caller's registers is either kept alive or wiped,
 //! never left pointing at a freed object. Without that, the stacks marked
-//! whole (the main thread's while a coroutine runs, a suspended
-//! coroutine's) reach freed objects; ASan reports a use-after-free.
+//! later (the main thread's while a coroutine runs, up to the top it had
+//! then; a suspended coroutine's, whole) reach freed objects; ASan reports
+//! a use-after-free.
 
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;

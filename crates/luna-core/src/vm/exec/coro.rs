@@ -137,16 +137,7 @@ impl Vm {
             Some(r) => {
                 // SAFETY: `r` is `self.current`, the running coroutine and so a root; no reference into it is live here, and `m` ends before the barrier call
                 let m = unsafe { r.as_mut() };
-                m.stack = rctx.stack;
-                m.frames = rctx.frames;
-                m.open_upvals = rctx.open_upvals;
-                m.tbc = rctx.tbc;
-                m.top = rctx.top;
-                m.meta_conts = rctx.meta_conts;
-                m.stale_frames = rctx.stale_frames;
-                m.stack_size = rctx.stack_size;
-                m.frame_size = rctx.frame_size;
-                m.ci_alloc = rctx.ci_alloc;
+                rctx.store_stack_in(m);
             }
             None => self.main_ctx = Some(rctx),
         }

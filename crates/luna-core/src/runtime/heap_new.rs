@@ -186,6 +186,8 @@ impl Heap {
             open_upvals: LVec::new(mem),
             tbc: LVec::new(mem),
             top: 0,
+            gc_top: u32::MAX,
+            yield_top: u32::MAX,
             meta_conts: 0,
             stale_frames: 0,
             yield_ci_top: 0,
