@@ -79,6 +79,14 @@ pub struct Coro {
     pub tbc: LVec<u32>,
     /// Saved stack top.
     pub top: u32,
+    /// The top of the native that switched the thread away (PUC's top of a
+    /// suspended thread); `u32::MAX` (the whole stack) before it first runs
+    /// or when the host switched it.
+    pub(crate) gc_top: u32,
+    /// Its top when it last yielded from `coroutine.yield`, the yielded
+    /// values gone to the resumer (PUC `lua_xmove`); `u32::MAX` after a
+    /// yield from a C function of the host.
+    pub(crate) yield_top: u32,
     /// Saved `Vm::stack_size`: PUC's size of the thread's stack, 0 for a
     /// thread that has not run.
     pub stack_size: u32,
@@ -114,11 +122,15 @@ pub struct Coro {
 }
 
 impl Coro {
-    pub(crate) fn trace(&self, m: &mut Marker) {
+    /// PUC `traversethread`: the stack up to its top, what is above it
+    /// cleared (a suspended thread's stack changes only once it runs again).
+    pub(crate) fn trace(&mut self, m: &mut Marker) {
         m.value(self.body);
-        for &v in self.stack.iter() {
+        let top = (self.gc_top as usize).min(self.stack.len());
+        for &v in self.stack[..top].iter() {
             m.value(v);
         }
+        self.stack[top..].fill(Value::Nil);
         for cf in self.frames.iter() {
             match cf {
                 CallFrame::Lua(f) => {

@@ -10,6 +10,10 @@ pub(super) struct SavedCtx {
     pub(super) open_upvals: LVec<(u32, Gc<Upvalue>)>,
     pub(super) tbc: LVec<u32>,
     pub(super) top: u32,
+    /// the top of the native that switched the thread away (PUC's top of a
+    /// suspended thread, whose slots above are dead); `u32::MAX`, the whole
+    /// stack, when the host switched it with no native running
+    pub(super) gc_top: u32,
     pub(super) meta_conts: u32,
     pub(super) stale_frames: u32,
     pub(super) stack_size: u32,
@@ -25,14 +29,44 @@ pub(super) struct SavedCtx {
     pub(super) globals: Gc<Table>,
 }
 
+impl SavedCtx {
+    /// The thread's stack, frames and counts, back into its coroutine.
+    pub(super) fn store_stack_in(self, m: &mut Coro) {
+        m.stack = self.stack;
+        m.frames = self.frames;
+        m.open_upvals = self.open_upvals;
+        m.tbc = self.tbc;
+        m.top = self.top;
+        m.gc_top = self.gc_top;
+        m.meta_conts = self.meta_conts;
+        m.stale_frames = self.stale_frames;
+        m.stack_size = self.stack_size;
+        m.frame_size = self.frame_size;
+        m.ci_alloc = self.ci_alloc;
+    }
+}
+
 impl Vm {
+    /// The main thread's stack while a coroutine runs, from its top up:
+    /// dead, so cleared by every collection, before it frees what the
+    /// slots point to (they are not marked).
+    pub(super) fn clear_saved_main(&mut self) {
+        if let Some(mc) = &mut self.main_ctx {
+            let lo = (mc.gc_top as usize).min(mc.stack.len());
+            mc.stack[lo..].fill(Value::Nil);
+        }
+    }
+
     pub(super) fn take_ctx(&mut self) -> SavedCtx {
+        // read before the frames it looks at are taken
+        let gc_top = self.native_top().unwrap_or(u32::MAX);
         let saved = SavedCtx {
             stack: self.stack.take(),
             frames: self.frames.take(),
             open_upvals: self.open_upvals.take(),
             tbc: self.tbc.take(),
             top: self.top,
+            gc_top,
             meta_conts: self.g.meta_conts,
             stale_frames: self.g.stale_frames,
             stack_size: self.stack_size,
@@ -96,18 +130,15 @@ impl Vm {
         let c = self.take_ctx();
         // SAFETY: `co` is the coroutine `resume_coro` is switching away from, held by its caller; `take_ctx` above did not touch it, and `m` is the only reference into it until the barrier call, which takes only its address
         let m = unsafe { co.as_mut() };
-        m.stack = c.stack;
-        m.frames = c.frames;
-        m.open_upvals = c.open_upvals;
-        m.tbc = c.tbc;
-        m.top = c.top;
-        m.meta_conts = c.meta_conts;
-        m.stale_frames = c.stale_frames;
-        m.stack_size = c.stack_size;
-        m.frame_size = c.frame_size;
-        m.ci_alloc = c.ci_alloc;
         m.hook = c.hook;
         m.globals = c.globals;
+        c.store_stack_in(m);
+        // suspended, its top is where the yield left it
+        m.gc_top = if m.resume_at.is_some() {
+            m.yield_top
+        } else {
+            u32::MAX
+        };
         // bulk-overwrite of every collectable field traced by Coro::trace:
         // demote the coro back to gray so propagate re-traces its new state.
         self.heap.barrier_back(co);

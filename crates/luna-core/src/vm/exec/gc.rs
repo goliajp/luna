@@ -99,10 +99,13 @@ impl Vm {
     /// The running stack's contract with the collector (PUC
     /// `traversethread`): the slots from `gc_top` up are dead when a cycle's
     /// marking ends, so they are cleared then, before the sweep frees what
-    /// they point to; the other threads' stacks are marked whole.
+    /// they point to; the main thread's, while a coroutine runs, from the
+    /// top it had when the coroutine started; other threads' stacks are
+    /// marked whole.
     pub(super) fn clear_dead_stack(&mut self) {
         let lo = (self.gc_top as usize).min(self.stack.len());
         self.stack[lo..].fill(Value::Nil);
+        self.clear_saved_main();
         // 5.3 shrinks a thread as its propagation reaches it, 5.2 the main
         // one where its sweep ends
         if !matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {

@@ -251,7 +251,9 @@ impl Vm {
     /// The main thread's saved context while a coroutine runs.
     fn mark_main_ctx(&self, m: &mut crate::runtime::heap::Marker) {
         if let Some(mc) = &self.main_ctx {
-            for &v in mc.stack.iter() {
+            // PUC marks a thread's stack up to its top
+            let top = (mc.gc_top as usize).min(mc.stack.len());
+            for &v in mc.stack[..top].iter() {
                 m.value(v);
             }
             if let Some(h) = mc.hook.func {

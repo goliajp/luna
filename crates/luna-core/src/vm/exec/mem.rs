@@ -45,6 +45,7 @@ impl Vm {
         // the running operation's registers may lie above the last safe
         // point's live top
         let live_top = std::mem::replace(&mut self.gc_top, self.stack.len() as u32);
+        self.clear_saved_main();
         // what the collection frees is counted, also in the middle of what
         // luna makes without counting (a load)
         let silent = std::mem::replace(&mut self.heap.puc.silent, 0);
