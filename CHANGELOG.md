@@ -250,6 +250,11 @@ optimization.
 
 ### Changed
 
+- A memory error runs no message handler, in every dialect, as PUC's
+  `LUA_ERRMEM` does not: `xpcall(f, h)` returns `false` and "not enough
+  memory" when `f` runs out of memory, without calling `h`, and the
+  stand-alone interpreter reports it without a traceback. 5.1 to 5.3
+  called the handler before.
 - Inserting a key into a table's hash part does less work; which node
   each key takes, and so the order in which `pairs` and `next` visit
   them, is unchanged. A string key's node keeps the low 16 bits of the
