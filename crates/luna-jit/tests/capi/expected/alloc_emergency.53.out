@@ -1,0 +1,4 @@
+0: error [string "local function deep()..."]:8: not enough memory for buffer allocation
+1: 118294
+2: 119457
+3: 120025
