@@ -6,6 +6,34 @@ use crate::runtime::LuaStr;
 use crate::runtime::heap::GcHeader;
 
 impl Vm {
+    /// The long names PUC's scanner made that its prototypes keep as the
+    /// names of local variables and upvalues: their count moves to the
+    /// strings luna's prototypes hold for them (`hold_puc_names`), which
+    /// live as long as PUC's. 5.2 keeps one per function (each has its own
+    /// table of names), later dialects one per chunk; the scanner's other
+    /// copies are garbage.
+    pub(super) fn replay_long_names(&mut self, r: &mut Replay, p: Gc<crate::runtime::Proto>) {
+        if r.rec.is_some() {
+            return;
+        }
+        let per_chunk = r.d != Dialect::L52;
+        let mut moved: Vec<Gc<LuaStr>> = Vec::new();
+        let mut protos = vec![p];
+        while let Some(p) = protos.pop() {
+            for &held in p.puc_names.borrow().iter() {
+                if per_chunk && moved.iter().any(|m| m.as_bytes() == held.as_bytes()) {
+                    continue;
+                }
+                if let Some(i) = r.longs.iter().position(|l| l.as_bytes() == held.as_bytes()) {
+                    moved.push(held);
+                    let ss = r.longs.swap_remove(i);
+                    self.heap.acct_move_long(ss, held);
+                }
+            }
+            protos.extend(p.protos.iter().copied());
+        }
+    }
+
     /// A new constant (`addk`): its entry under PUC's key, in the table
     /// the dialect keys constants in, and the constant array's growth (5.5
     /// grows the array first).
