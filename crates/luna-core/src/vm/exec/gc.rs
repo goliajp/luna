@@ -15,7 +15,7 @@ impl Vm {
             #[cfg(feature = "gc-trace")]
             self.heap.trace.line(format_args!("X"));
             if !self.gc_finalizing && !self.heap.no_gc() {
-                self.clear_dead_stack();
+                self.clear_dead_stack(false);
                 self.full_collect();
                 self.gc_minor_debt();
             }
@@ -101,14 +101,15 @@ impl Vm {
     /// marking ends, so they are cleared then, before the sweep frees what
     /// they point to; the main thread's, while a coroutine runs, from the
     /// top it had when the coroutine started; other threads' stacks are
-    /// marked whole.
-    pub(super) fn clear_dead_stack(&mut self) {
+    /// marked whole. `shrink`: the stacks shrink as an atomic step's
+    /// traversal finds them (a full collection shrinks them in its own).
+    pub(super) fn clear_dead_stack(&mut self, shrink: bool) {
         let lo = (self.gc_top as usize).min(self.stack.len());
         self.stack[lo..].fill(Value::Nil);
         self.clear_saved_main();
         // 5.3 shrinks a thread as its propagation reaches it, 5.2 the main
         // one where its sweep ends
-        if !matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
+        if shrink && !matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
             self.collector_shrinks_stacks();
         }
     }
@@ -157,11 +158,10 @@ impl Vm {
             self.watch_errors();
             self.lend_open_lists();
             self.heap.mark_from(&mut m);
-            // 5.3 shrinks the threads as the cycle traverses them, before
-            // the sweep, the rest after; 5.2's single steps did both
-            if self.version == LuaVersion::Lua53 {
-                self.collector_shrinks_stacks();
-            }
+            // the running threads shrink as the cycle traverses them, after
+            // the sweep it finished (`checkSizes`), the rest after its own
+            // sweep; 5.2's single steps did both
+            self.collector_shrinks_stacks();
             let freed = self.heap.gc_sweep_full();
             self.collector_shrinks_threads();
             self.heap.acct_check_sizes();
@@ -202,7 +202,7 @@ impl Vm {
             if self.version == LuaVersion::Lua52 {
                 self.call_all_pending(true)?;
             } else {
-                self.clear_dead_stack();
+                self.clear_dead_stack(false);
             }
             freed = self.full_collect();
             #[cfg(feature = "gc-verify")]
