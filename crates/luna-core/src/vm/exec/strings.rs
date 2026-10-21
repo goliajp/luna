@@ -140,6 +140,8 @@ impl Vm {
             LuaVersion::Lua52 | LuaVersion::Lua53 => (out + 1).max(base_a),
             _ => out + 1,
         };
+        // the result is in its register
+        self.heap.rooted_next = true;
         self.checkpoint(top)
     }
 

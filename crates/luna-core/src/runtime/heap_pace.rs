@@ -187,31 +187,86 @@ impl Heap {
         n
     }
 
-    /// Every live object is rooted now (an interpreter safe point, or the
-    /// end of a collection): objects allocated from here on are young
-    /// until the next such point.
+    /// Every live object is rooted now (a collection check): objects
+    /// allocated from here on are young until the next such point. The
+    /// newest one so far may be held only by a native that just made it
+    /// (a check after an API call), unless the check is one where the
+    /// stack holds every live value (`rooted_next`).
     #[inline(always)]
     pub(crate) fn safe_point(&mut self) {
-        self.young = self.all;
+        if self.young != self.all {
+            self.young = self.all;
+            self.young_held = !self.rooted_next;
+        } else if self.rooted_next {
+            self.young_held = false;
+        }
+        self.rooted_next = false;
     }
 
-    /// Mark every object allocated since the last [`Heap::safe_point`],
-    /// and the object that was newest then, which keeps the boundary from
-    /// being freed (and its address reused) by the collection. An
-    /// emergency collection runs in the middle of an operation, whose new
-    /// objects may be held only by Rust locals.
-    pub(crate) fn mark_young(&self, m: &mut Marker) {
+    /// How many objects were allocated since the last
+    /// [`Heap::safe_point`]: the ones on `all` before the boundary. A sweep
+    /// keeps them (they are the current white) and their order, and may
+    /// free the boundary itself, so an emergency collection counts them
+    /// before it sweeps anything. `None` while every object counts as
+    /// young (no safe point since the state was made or since an atomic
+    /// step), dead ones a pending sweep frees among them.
+    pub(crate) fn young_len(&self) -> Option<usize> {
+        if self.young.is_null() {
+            return None;
+        }
+        let mut n = 0;
         let mut cur = self.all;
-        while !cur.is_null() {
-            // SAFETY: `cur` is on `all`, whose objects are allocated (nothing
-            // is freed while marking); only the header is touched
-            unsafe {
-                m.header(cur);
-                if cur == self.young {
-                    break;
-                }
+        // SAFETY: the links of `all` lead to allocated objects
+        unsafe {
+            while !cur.is_null() && cur != self.young {
+                n += 1;
                 cur = (*cur).next;
             }
         }
+        Some(n)
+    }
+
+    /// Mark the young objects (see [`Heap::young_len`]), every object on
+    /// `all` for `None`: an emergency collection runs in the middle of an
+    /// operation, whose new objects may be held only by Rust locals. The
+    /// newest object at the safe point too, unless the stack held it then
+    /// (it dies as PUC's would).
+    pub(crate) fn mark_young(&self, m: &mut Marker, n: Option<usize>) {
+        let mut cur = self.all;
+        // SAFETY: the first `n` objects on `all` (all of them for `None`)
+        // are allocated (nothing is freed while marking); only the header
+        // is touched
+        unsafe {
+            for _ in 0..n.unwrap_or(usize::MAX) {
+                if cur.is_null() {
+                    break;
+                }
+                m.header(cur);
+                cur = (*cur).next;
+            }
+            if self.young_held && !self.young.is_null() {
+                m.header(self.young);
+            }
+        }
+    }
+
+    /// After a collection that kept the young objects (see
+    /// [`Heap::young_len`]): they lead `all` in their order, so the
+    /// boundary is the object after them, whatever became of the one
+    /// before.
+    pub(crate) fn keep_young(&mut self, n: Option<usize>) {
+        let Some(n) = n else {
+            self.young = ptr::null_mut();
+            return;
+        };
+        let mut cur = self.all;
+        // SAFETY: the first `n` objects on `all` are the young ones, kept
+        // by the collection; the links lead to live objects
+        unsafe {
+            for _ in 0..n {
+                cur = (*cur).next;
+            }
+        }
+        self.young = cur;
     }
 }

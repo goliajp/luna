@@ -42,6 +42,9 @@ pub(super) struct ThreadSizes {
 pub(super) enum Shrink {
     Collector,
     Caught,
+    /// an emergency collection: 5.2's `sweepthread` frees the unused
+    /// `CallInfo`s but leaves the stack; later dialects touch neither
+    Emergency,
 }
 
 /// PUC shrinking a thread whose frames and top reach slot `inuse`, with
@@ -65,6 +68,12 @@ pub(super) fn shrink_thread(
         heap.acct_ci(0, n);
         sz.ci -= n;
     };
+    if at == Shrink::Emergency {
+        if v == LuaVersion::Lua52 {
+            free_ci(heap, sz, true);
+        }
+        return;
+    }
     #[cfg(feature = "gc-trace")]
     heap.trace_shrink(sz.stack, inuse);
     let stack = |heap: &mut crate::runtime::heap::Heap, sz: &mut ThreadSizes| {
@@ -162,11 +171,26 @@ impl Vm {
     pub(super) fn collector_shrinks_stacks(&mut self) {
         let inuse = self.stack_in_use();
         self.shrink_running(Shrink::Collector, inuse);
-        self.collector_shrinks_main();
+        self.collector_shrinks_main(Shrink::Collector);
+    }
+
+    /// An emergency collection visiting every thread (see
+    /// [`Shrink::Emergency`]).
+    pub(crate) fn emergency_shrinks_threads(&mut self) {
+        let inuse = self.stack_in_use();
+        self.shrink_levels(Shrink::Emergency, inuse, 0);
+        self.collector_shrinks_main(Shrink::Emergency);
+        let threads = std::mem::take(&mut self.heap.threads);
+        for &co in &threads {
+            if !self.current.is_some_and(|c| c.ptr_eq(co)) {
+                self.collector_shrinks_coro(co, Shrink::Emergency);
+            }
+        }
+        self.heap.threads = threads;
     }
 
     /// The collector visiting the main thread a coroutine suspended.
-    pub(super) fn collector_shrinks_main(&mut self) {
+    pub(super) fn collector_shrinks_main(&mut self, at: Shrink) {
         let v = self.version;
         let (host_frames, host_ci_top) = (self.g.host_frames, self.g.host_ci_top);
         let natives = &self.running_natives;
@@ -180,15 +204,7 @@ impl Vm {
                 ci: m.ci_alloc,
             };
             let ci_used = n - self.g.host_pcalls;
-            shrink_thread(
-                &mut self.heap,
-                v,
-                Shrink::Collector,
-                inuse,
-                n,
-                ci_used,
-                &mut sz,
-            );
+            shrink_thread(&mut self.heap, v, at, inuse, n, ci_used, &mut sz);
             (m.stack_size, m.frame_size, m.ci_alloc) = (sz.stack, sz.frames51, sz.ci);
         }
     }
@@ -205,7 +221,7 @@ impl Vm {
             if self.current.is_some_and(|c| c.ptr_eq(co)) {
                 continue;
             }
-            self.collector_shrinks_coro(co);
+            self.collector_shrinks_coro(co, Shrink::Collector);
         }
         self.heap.threads = threads;
     }
@@ -214,6 +230,7 @@ impl Vm {
     pub(super) fn collector_shrinks_coro(
         &mut self,
         co: crate::runtime::heap::Gc<crate::runtime::Coro>,
+        at: Shrink,
     ) {
         let v = self.version;
         // SAFETY: `co` survived the marking just done, so it is allocated; it is not the running thread, so its context is saved in it and nothing else refers into it here
@@ -235,15 +252,7 @@ impl Vm {
             frames51: m.frame_size,
             ci: m.ci_alloc,
         };
-        shrink_thread(
-            &mut self.heap,
-            v,
-            Shrink::Collector,
-            inuse,
-            n,
-            n - 1,
-            &mut sz,
-        );
+        shrink_thread(&mut self.heap, v, at, inuse, n, n - 1, &mut sz);
         (m.stack_size, m.frame_size, m.ci_alloc) = (sz.stack, sz.frames51, sz.ci);
     }
 }

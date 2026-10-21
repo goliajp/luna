@@ -42,13 +42,21 @@ impl Vm {
         if !self.emergency_allowed() {
             return false;
         }
-        // the running operation's registers may lie above the last safe
-        // point's live top
-        let live_top = std::mem::replace(&mut self.gc_top, self.stack.len() as u32);
+        #[cfg(feature = "gc-trace")]
+        self.heap.trace.line(format_args!("X"));
+        // PUC's `L->top` where the allocation was asked for: the running
+        // native's top, else the running Lua function's whole frame (the
+        // last safe point's live top may lie below its registers); what
+        // is above is dead, as for any collection
+        let top = self.native_top().unwrap_or_else(|| self.lua_window_end());
+        let live_top = std::mem::replace(&mut self.gc_top, top);
+        let lo = (top as usize).min(self.stack.len());
+        self.stack[lo..].fill(Value::Nil);
         self.clear_saved_main();
         // what the collection frees is counted, also in the middle of what
         // luna makes without counting (a load)
         let silent = std::mem::replace(&mut self.heap.puc.silent, 0);
+        let young = self.heap.young_len();
         self.gc_hold_threads();
         self.jit_forget_ghosts();
         self.name_cache = Default::default();
@@ -57,7 +65,7 @@ impl Vm {
             // objects made since the last safe point are held as young
             let mut m = self.heap.loan_marker();
             self.mark_roots(&mut m, true);
-            self.heap.mark_young(&mut m);
+            self.heap.mark_young(&mut m, young);
             self.heap.stash_marker(m);
             self.watch_errors();
             self.lend_open_lists();
@@ -69,18 +77,25 @@ impl Vm {
             self.gc_count_marked();
             let mut m = self.heap.gc_begin_full();
             self.mark_roots(&mut m, false);
-            self.heap.mark_young(&mut m);
+            self.heap.mark_young(&mut m, young);
             self.watch_errors();
             // 5.1 and 5.2: the dead open upvalues come off their lists
             self.lend_open_lists();
             self.heap.gc_end_full(m);
             self.forget_dead_errors();
         }
+        // 5.2's sweep frees each thread's unused `CallInfo`s
+        if self.version == LuaVersion::Lua52 {
+            self.emergency_shrinks_threads();
+        }
+        self.heap.keep_young(young);
         self.heap.release_pool();
         self.gc_top = live_top;
         self.heap.pace.fin_num = 1;
         self.gc_full_pause();
         self.heap.puc.silent = silent;
+        #[cfg(feature = "gc-trace")]
+        self.trace_full_end();
         true
     }
 

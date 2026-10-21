@@ -43,8 +43,7 @@ impl Heap {
         self.sweep_open_end();
         self.whiten_unborn();
         self.live -= freed;
-        // a sweep keeps the order of `all`, so the young boundary (marked,
-        // so it survived) still splits new objects from old ones
+        // a sweep keeps the order of `all` (see `Heap::keep_young`)
         #[cfg(feature = "gc-verify")]
         self.verify_no_dangling("full_sweep");
         #[cfg(any(debug_assertions, feature = "gc-verify"))]

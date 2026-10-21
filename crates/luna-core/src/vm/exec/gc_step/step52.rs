@@ -65,7 +65,7 @@ impl Vm {
             let inuse = self.stack_in_use();
             self.shrink_running(crate::vm::exec::stack_inuse::Shrink::Collector, inuse);
         } else {
-            self.collector_shrinks_main();
+            self.collector_shrinks_main(crate::vm::exec::stack_inuse::Shrink::Collector);
         }
     }
 

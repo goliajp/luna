@@ -100,11 +100,11 @@ impl Vm {
         } else if self.main_ctx.is_some()
             && self.main_coro.is_some_and(|c| c.as_ptr() as *mut _ == h)
         {
-            self.collector_shrinks_main();
+            self.collector_shrinks_main(crate::vm::exec::stack_inuse::Shrink::Collector);
         } else {
             // SAFETY: `h`, gray, heads a live coroutine
             let co = unsafe { crate::runtime::heap::Gc::from_ptr(h as *mut _) };
-            self.collector_shrinks_coro(co);
+            self.collector_shrinks_coro(co, crate::vm::exec::stack_inuse::Shrink::Collector);
         }
     }
 

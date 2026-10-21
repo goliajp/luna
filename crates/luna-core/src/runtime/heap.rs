@@ -178,9 +178,12 @@ pub struct Heap {
     all: *mut GcHeader,
     /// PUC `fixedgc`: objects never swept, freed with the heap
     fixed: *mut GcHeader,
-    /// the head of `all` at the last point where every live object was
-    /// rooted; objects before it on `all` are newer (see `mark_young`)
+    /// the head of `all` at the last safe point; objects before it are newer
     young: *mut GcHeader,
+    /// `young` may be held only by a native, so an emergency collection keeps it
+    young_held: bool,
+    /// the next safe point is one where the stack holds every live value
+    pub(crate) rooted_next: bool,
     /// during `GcPhase::Sweep`: the last object swept and kept, whose
     /// `next` is the next one to sweep (null: the head of `all`). Objects
     /// made since are in front of it and are not swept (PUC `sweepgc`)
@@ -189,14 +192,11 @@ pub struct Heap {
     /// PUC's collector state and pace
     pub(crate) pace: crate::runtime::gc_pace::Pace,
     seed: u32,
-    /// Embedding memory cap, soft: between dispatch turns the run loop
-    /// checks `bytes` and over it runs a full collect, then (still over)
-    /// raises a catchable "memory cap exceeded"; one allocation can pass it.
+    /// Embedding memory cap, soft: over `bytes` between dispatch turns, a full collect, then (still
+    /// over) a catchable "memory cap exceeded"; one allocation can pass it.
     pub(crate) mem_cap: Option<usize>,
-    /// Persistent gray queue: holds objects grayed by write barriers between
-    /// the time the marker first reached them and the next propagate step.
-    /// Lives outside `propagate` so barriers can push without going through
-    /// the Option; `gc_step_propagate` and `gc_finish_atomic` drain it.
+    /// Persistent gray queue of objects grayed by write barriers, outside `propagate` so barriers
+    /// skip the Option; `gc_step_propagate` and `gc_finish_atomic` drain it.
     gray: mark::GrayStack,
     /// objects a back barrier sent to gray (PUC `grayagain`)
     grayagain: mark::GrayStack,
