@@ -56,15 +56,15 @@ fn native_upvalues_are_not_replaced() {
     }
 }
 
-/// The locale `os.setlocale` reports is not a table a script can reach
-/// and change.
+/// The locale `os.setlocale` reports is nothing a script can reach and
+/// change: as PUC's, the function has no upvalue.
 #[test]
-fn setlocale_state_is_not_a_table() {
+fn setlocale_state_is_not_reachable() {
     let src = "local _, st = debug.getupvalue(os.setlocale, 1)
                return type(st) .. ' ' .. os.setlocale() .. ' ' .. os.setlocale('C', 'numeric')
                    .. ' ' .. os.setlocale(nil, 'time')";
     for v in &DIALECTS[1..] {
-        assert_eq!(eval_str(*v, src), "string C C C", "{v:?}");
+        assert_eq!(eval_str(*v, src), "nil C C C", "{v:?}");
     }
 }
 

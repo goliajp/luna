@@ -336,6 +336,8 @@ pub struct Vm {
     /// `collectgarbage` gets a no-op (PUC's non-reentrancy: lua_gc returns -1 →
     /// `collectgarbage` yields fail).
     pub(super) gc_finalizing: bool,
+    /// `os.setlocale`: bit `i` set when category `i` is "POSIX", else "C".
+    pub(crate) posix_locales: u8,
     /// `gc-stress`: collect at every `.0`th checkpoint, `.1` more to the next.
     #[cfg(feature = "gc-stress")]
     pub(super) stress_every: (u64, u64),
