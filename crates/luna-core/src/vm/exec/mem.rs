@@ -71,6 +71,8 @@ impl Vm {
             self.mark_roots(&mut m, false);
             self.heap.mark_young(&mut m);
             self.watch_errors();
+            // 5.1 and 5.2: the dead open upvalues come off their lists
+            self.lend_open_lists();
             self.heap.gc_end_full(m);
             self.forget_dead_errors();
         }

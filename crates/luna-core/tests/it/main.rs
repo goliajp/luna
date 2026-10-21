@@ -25,6 +25,7 @@ mod diff_puc;
 mod double_dialect_int_arith;
 mod e2e_programs;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
+mod emergency_open_upvals;
 mod errno_glibc;
 mod error_traceback;
 mod eval_async;
