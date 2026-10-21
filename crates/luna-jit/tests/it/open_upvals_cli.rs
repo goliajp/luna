@@ -18,7 +18,11 @@ fn luna(name: &str, src: &str, flag: Option<&str>) -> String {
     cmd.current_dir(&dir).arg("--lua=5.1").args(flag).arg(name);
     let out = cmd.output().expect("the luna command runs");
     let _ = std::fs::remove_dir_all(&dir); // a leftover temp directory is harmless
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 

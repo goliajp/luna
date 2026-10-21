@@ -177,7 +177,6 @@ fn a_dead_coroutine_keeps_the_functions_of_its_frames() {
     }
 }
 
-
 /// `debug.sethook` makes the hook table: the registry key it looked the
 /// table up by may be collected by the table's allocation (here, by the
 /// `gc-stress` build's collection there), so the key is made again for
@@ -202,7 +201,10 @@ fn the_hook_table_key_outlives_the_table_allocation() {
             .output()
             .expect("the luna command runs");
         assert_eq!(
-            (out.status.success(), String::from_utf8_lossy(&out.stdout).trim()),
+            (
+                out.status.success(),
+                String::from_utf8_lossy(&out.stdout).trim()
+            ),
             (true, "true"),
             "{version}: {}",
             String::from_utf8_lossy(&out.stderr)
