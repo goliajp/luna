@@ -303,7 +303,12 @@ Differences from PUC:
   emergency collection and one more try where PUC makes one (5.2 while
   the collector runs, 5.3 on); `lua_newstate` returns NULL. How many
   blocks luna asks for, and of what sizes, differs from PUC, so a
-  function that refuses the Nth allocation fails at a different place.
+  function that refuses the Nth allocation, or past a total, fails at a
+  different place. The calls are not portable within PUC either: its
+  block sizes and counts change between 32 and 64 bits and between
+  compilers. What luna keeps of PUC's contract is that every block comes
+  from this function. The count a script reads (`collectgarbage("count")`,
+  `lua_gc(LUA_GCCOUNT)`) is PUC's, byte for byte, whatever the blocks.
   Not from it: the memory of the JIT compiler and the code it makes (shared
   between Vms by an `Engine`), the C library's stdio buffers, and short
   Rust strings used for a moment while an error message is put together.
