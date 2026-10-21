@@ -74,7 +74,7 @@ fn load(
     let r = if let Err(e) = begun {
         Err((LUA_ERRRUN, e.0))
     } else if v >= LuaVersion::Lua55 {
-        match api.vm.host_new_table(0, 0) {
+        match api.vm.host_load_anchor() {
             Ok(t) => {
                 api.push(Value::Table(t));
                 read_and_compile(api, reader, data, mode.as_deref(), &name)

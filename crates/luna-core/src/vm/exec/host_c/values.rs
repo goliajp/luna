@@ -62,6 +62,18 @@ impl Vm {
         self.alloc_table_sized(narr, nrec)
     }
 
+    /// The table 5.5's `lua_load` anchors the parser's work in, on the
+    /// stack under what the reader pushes: luna's own, uncounted, as the
+    /// load counts PUC's in its place.
+    pub fn host_load_anchor(&mut self) -> Result<Gc<Table>, LuaError> {
+        self.heap.puc.silent += 1;
+        let t = self.alloc_table();
+        self.heap.puc.silent -= 1;
+        let t = t?;
+        self.heap.own_table(t);
+        Ok(t)
+    }
+
     /// The entry of `t` after key `k` (PUC `lua_next`); an absent key
     /// raises "invalid key to 'next'".
     pub fn host_next(
