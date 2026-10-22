@@ -5,7 +5,7 @@ use crate::version::LuaVersion;
 
 /// PUC 5.5's `sizeof(Table)` on this target.
 const TABLE_55: usize =
-    crate::runtime::puc::size::PucSizes::of(crate::runtime::table::Dialect::L55).table;
+    crate::runtime::puc::size::PucSizes::of(crate::runtime::dialect::Dialect::L55).table;
 
 /// A pacing parameter a dialect lets Lua read or write.
 #[derive(Clone, Copy, PartialEq, Eq)]

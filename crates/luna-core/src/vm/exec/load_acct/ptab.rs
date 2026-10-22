@@ -275,7 +275,7 @@ mod tests {
     /// have the same parts after each.
     fn same_parts(d: Dialect, keys: &[Value], remove: &[Value]) {
         let mut heap = Heap::new();
-        heap.table_dialect = d;
+        heap.set_rules(crate::runtime::dialect::Rules::for_dialect(d));
         let t = heap.try_new_table().expect("table");
         let mut p = PTab::new(&mut heap, 1, 0, true).expect("parser table");
         let check = |heap: &mut Heap, k: Value, set: bool, p: &mut PTab| {

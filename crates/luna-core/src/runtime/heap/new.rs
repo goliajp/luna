@@ -11,23 +11,31 @@ impl Heap {
         &mut self,
         version: crate::version::LuaVersion,
     ) -> Result<(), crate::runtime::mem::Oom> {
-        use crate::version::LuaVersion;
-        // PUC 5.1 had no ephemeron pass: `__mode='k'` tables marked their
-        // values strongly (gc.lua's "weak tables" section relies on that)
-        self.no_ephemeron = version <= LuaVersion::Lua51;
-        self.refinalize = version != LuaVersion::Lua52;
-        self.signed_zero_keys = version <= LuaVersion::Lua52;
-        self.table_dialect = crate::runtime::table::Dialect::of(version);
+        self.rules = crate::runtime::dialect::Rules::of(version);
         self.puc_dialect(version);
         // the strings the heap made before it knew the dialect (its fixed
         // memory error message) move to the dialect's hash
-        self.hash51 = version == LuaVersion::Lua51;
         let seed = self.seed();
         self.rehash_strings(seed);
-        // PUC 5.3 needs two GC cycles to finalize a table caught in a
-        // coroutine reference cycle (gc.lua :502); 5.4+ finalize it in one
-        self.defer_thread_cycle_finalize = version == LuaVersion::Lua53;
         self.acct_boot()
+    }
+
+    /// The dialect's rules.
+    #[inline]
+    pub(crate) fn rules(&self) -> crate::runtime::dialect::Rules {
+        self.rules
+    }
+
+    /// Tests: the rules alone, without what [`Heap::set_version`] counts.
+    #[cfg(test)]
+    pub(crate) fn set_rules(&mut self, rules: crate::runtime::dialect::Rules) {
+        self.rules = rules;
+    }
+
+    /// The dialect whose rules a new table follows.
+    #[inline]
+    pub(crate) fn dialect(&self) -> crate::runtime::dialect::Dialect {
+        self.rules.dialect()
     }
 
     /// Build a fresh empty heap with default GC pacing and no memory cap.
@@ -38,8 +46,8 @@ impl Heap {
     /// Hash the interned strings again with `seed` and the dialect's
     /// function.
     pub(crate) fn rehash_strings(&mut self, seed: u32) {
-        let strict = self.table_dialect <= table::Dialect::L53;
-        self.strings.rehash(seed, self.hash51, strict);
+        let strict = self.dialect() <= crate::runtime::dialect::Dialect::L53;
+        self.strings.rehash(seed, self.rules.hash51(), strict);
     }
 
     /// The seed strings are hashed with.
@@ -84,15 +92,10 @@ impl Heap {
             finalize: crate::runtime::mem::LVec::new(mem.mem()),
             tobefnz: crate::runtime::mem::LVec::new(mem.mem()),
             tobefnz_head: 0,
-            no_ephemeron: false,
-            refinalize: true,
             puc: Default::default(),
             #[cfg(feature = "gc-trace")]
             trace: Default::default(),
-            signed_zero_keys: false,
-            table_dialect: crate::runtime::table::Dialect::L55,
-            hash51: false,
-            defer_thread_cycle_finalize: false,
+            rules: crate::runtime::dialect::Rules::of(crate::version::LuaVersion::Lua55),
             gc_event_51: None,
             chunk_roots: Vec::new(),
             weak_watch: Vec::new(),
@@ -183,7 +186,7 @@ impl Heap {
     ) -> Result<Gc<crate::runtime::Coro>, Oom> {
         let mem = self.mem();
         let size = self.puc.sizes.thread;
-        let l51 = self.table_dialect == table::Dialect::L51;
+        let l51 = self.dialect() == crate::runtime::dialect::Dialect::L51;
         // `stack_init`: `BASIC_STACK_SIZE`, 5.1 with its extra slots
         let stack_size = if l51 { 45 } else { 40 };
         let coro = crate::runtime::Coro {

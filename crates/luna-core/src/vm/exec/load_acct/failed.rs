@@ -93,7 +93,7 @@ impl Vm {
             ParseScratch::new(self.heap.mem_owner()),
         );
         let (scanned, names) = parsed.failed_scan().expect("checked above");
-        let d = self.heap.table_dialect;
+        let d = self.heap.dialect();
         let mut r = Replay::new((d, self.heap.puc_sizes()), cl.proto, v, scanned, names, src);
         r.splice(splices);
         let log = self.compile_scratch.puc_log.take();

@@ -11,7 +11,7 @@ impl Vm {
     #[inline]
     #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn api_check_before(&mut self) -> Result<(), LuaError> {
-        if self.version <= LuaVersion::Lua52 {
+        if self.heap.rules().api_checks_before() {
             return self.native_checkpoint();
         }
         Ok(())
@@ -21,7 +21,7 @@ impl Vm {
     #[inline]
     #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn api_check_after(&mut self, v: Value) -> Result<(), LuaError> {
-        if self.version >= LuaVersion::Lua53 && !self.checkpoint_idle() {
+        if !self.heap.rules().api_checks_before() && !self.checkpoint_idle() {
             let r = self.rooted(&[v], |vm| vm.native_checkpoint_due());
             return r;
         }
@@ -32,7 +32,7 @@ impl Vm {
     /// function's stack, which is live up to `v` then.
     #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn api_check_pushed(&mut self, v: Value) -> Result<(), LuaError> {
-        if self.version < LuaVersion::Lua53 || !self.native_on_top() {
+        if self.heap.rules().api_checks_before() || !self.native_on_top() {
             return self.api_check_after(v);
         }
         if self.checkpoint_idle() {

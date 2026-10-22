@@ -1,7 +1,7 @@
 //! Sweeping and freeing objects.
 
 use super::*;
-use crate::runtime::table::Dialect;
+use crate::runtime::dialect::Dialect;
 
 impl Heap {
     /// Sweep the whole `all` list in one pass: free dead-white objects, survivors to the new
@@ -130,7 +130,7 @@ impl Heap {
         self.sweep_begins();
         let mut n = 0;
         let new_white = self.current_white;
-        let strt = matches!(self.table_dialect, Dialect::L51 | Dialect::L52);
+        let strt = matches!(self.dialect(), Dialect::L51 | Dialect::L52);
         // SAFETY: as in `sweep_objects`
         unsafe {
             loop {
@@ -215,7 +215,7 @@ impl Heap {
         // SAFETY: the caller's contract
         unsafe {
             let (f, sub, cls) = ((*h).flags, (*h).sub, (*h).cls);
-            if self.table_dialect == Dialect::L51 {
+            if self.dialect() == Dialect::L51 {
                 let own = match (*h).tag {
                     ObjTag::Coro => false,
                     ObjTag::Native => cls & LUNA_ONLY != 0,
@@ -247,7 +247,7 @@ impl Heap {
     unsafe fn puc_listed(&self, h: *mut GcHeader, strt: bool) -> bool {
         // SAFETY: the caller's contract
         unsafe {
-            let d51 = self.table_dialect == Dialect::L51;
+            let d51 = self.dialect() == Dialect::L51;
             let own51 = match (*h).tag {
                 ObjTag::Coro => false,
                 ObjTag::Native => (*h).cls & LUNA_ONLY != 0,
@@ -266,9 +266,7 @@ impl Heap {
             }
             match (*h).tag {
                 ObjTag::Str => {
-                    !strt
-                        || (self.table_dialect == Dialect::L52
-                            && !(*(h as *const LuaStr)).is_short())
+                    !strt || (self.dialect() == Dialect::L52 && !(*(h as *const LuaStr)).is_short())
                 }
                 ObjTag::Table => !self.is_own_table(h as *const Table),
                 _ => true,
@@ -284,7 +282,7 @@ impl Heap {
     #[inline]
     unsafe fn note_swept(&mut self, h: *mut GcHeader) {
         // SAFETY: the caller's contract
-        if self.table_dialect == Dialect::L52 && unsafe { (*h).tag } == ObjTag::Coro {
+        if self.dialect() == Dialect::L52 && unsafe { (*h).tag } == ObjTag::Coro {
             self.puc.shrunk.push(h);
         }
     }

@@ -3,8 +3,8 @@
 //! PUC's quantities only; the constants are each version's (`lgc.c`,
 //! `lgc.h`, `luaconf.h`), the sizes the target's ([`PucSizes`]).
 
+use crate::runtime::dialect::Dialect;
 use crate::runtime::puc::size::PucSizes;
-use crate::runtime::table::Dialect;
 
 /// PUC's collector states. Their numbers in each version's `lgc.h` are
 /// [`St::number`].

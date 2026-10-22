@@ -18,7 +18,7 @@ impl Heap {
         self.env51_whiten();
         // 5.2's fixed strings are white like any other: a cycle marks them
         // where it reaches them, and counts them
-        if self.table_dialect == crate::runtime::table::Dialect::L52 {
+        if self.dialect() == crate::runtime::dialect::Dialect::L52 {
             self.color_fixed_strings(self.current_white);
         }
         // what a back barrier sent there during the last sweep is white now
@@ -28,7 +28,7 @@ impl Heap {
             weak: Vec::new(),
             ephemeron: Vec::new(),
             cached_protos: Vec::new(),
-            no_ephemeron: self.no_ephemeron,
+            no_ephemeron: !self.rules.ephemeron(),
         });
         self.loan_marker()
     }
@@ -137,8 +137,8 @@ pub(crate) struct Running {
 impl Heap {
     /// 5.2 and 5.3 count the strings and userdata a traversal marks.
     pub(super) fn leaf_hdr(&self) -> usize {
-        match self.table_dialect {
-            crate::runtime::table::Dialect::L52 | crate::runtime::table::Dialect::L53 => {
+        match self.dialect() {
+            crate::runtime::dialect::Dialect::L52 | crate::runtime::dialect::Dialect::L53 => {
                 self.puc.sizes.str_hdr
             }
             _ => 0,
@@ -147,8 +147,8 @@ impl Heap {
 
     /// 5.2 counts a closed upvalue a traversal marks.
     pub(super) fn leaf_upval(&self) -> usize {
-        match self.table_dialect {
-            crate::runtime::table::Dialect::L52 => self.puc.sizes.upval,
+        match self.dialect() {
+            crate::runtime::dialect::Dialect::L52 => self.puc.sizes.upval,
             _ => 0,
         }
     }
@@ -173,7 +173,7 @@ impl Heap {
             };
             // SAFETY: a popped header heads an allocated object
             let coro = unsafe { (*h).tag } == ObjTag::Coro;
-            if self.table_dialect == crate::runtime::table::Dialect::L53
+            if self.dialect() == crate::runtime::dialect::Dialect::L53
                 && coro
                 && !self.puc.shrunk.contains(&h)
             {

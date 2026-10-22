@@ -18,8 +18,8 @@ use crate::compiler::TokRef;
 use crate::compiler::puc_log::PEv;
 use crate::frontend::parser::scan::{ScanKind, ScanText, Scanned};
 use crate::runtime::Proto;
+use crate::runtime::dialect::Dialect;
 use crate::runtime::heap::PucKind;
-use crate::runtime::table::Dialect;
 
 mod arr;
 mod consts;
@@ -55,7 +55,7 @@ impl Vm {
     ) -> Result<(), SyntaxError> {
         let proto = cl.proto;
         let (marks, scanned) = rec;
-        let d = self.heap.table_dialect;
+        let d = self.heap.dialect();
         let s = self.heap.puc_sizes();
         let mut r = Replay::new(
             (d, self.heap.puc_sizes()),
@@ -173,7 +173,7 @@ impl Vm {
         p: Gc<Proto>,
         longs: &mut Vec<Gc<crate::runtime::LuaStr>>,
     ) -> Result<(), SyntaxError> {
-        let shared = !matches!(self.heap.table_dialect, Dialect::L51 | Dialect::L52);
+        let shared = !matches!(self.heap.dialect(), Dialect::L51 | Dialect::L52);
         let names = p.locvars.iter().map(|v| v.name.as_str());
         let names = names.chain(p.upvals.iter().map(|u| u.name.as_str()));
         let mut held = Vec::with_capacity(p.locvars.len() + p.upvals.len());

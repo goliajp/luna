@@ -4,7 +4,7 @@
 use super::*;
 
 pub(crate) mod counts;
-use crate::runtime::table::Dialect;
+use crate::runtime::dialect::Dialect;
 
 impl Heap {
     /// What PUC's `lua_newstate` allocates, in its order, once the dialect

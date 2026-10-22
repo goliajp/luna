@@ -11,7 +11,7 @@ pub(crate) struct PucModel {
     /// while there is none: the one comparison a safe point makes
     pub(in crate::runtime) gc_limit: usize,
     /// the dialect PUC's sizes, pace and steps are those of
-    pub(in crate::runtime) dialect: crate::runtime::table::Dialect,
+    pub(in crate::runtime) dialect: crate::runtime::dialect::Dialect,
     /// `collectgarbage`'s pacing parameters
     pub(in crate::runtime) params: super::GcParams,
     /// the sizes of PUC's objects in this dialect, which `bytes` counts
@@ -84,9 +84,9 @@ impl Default for PucModel {
         PucModel {
             bytes: 0,
             gc_limit: usize::MAX,
-            dialect: crate::runtime::table::Dialect::L55,
+            dialect: crate::runtime::dialect::Dialect::L55,
             params: super::GcParams::new(crate::version::LuaVersion::Lua55),
-            sizes: super::size::PucSizes::of(crate::runtime::table::Dialect::L55),
+            sizes: super::size::PucSizes::of(crate::runtime::dialect::Dialect::L55),
             pace: super::pace::Pace::new(),
             strt: Default::default(),
             env51_box: None,

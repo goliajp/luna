@@ -20,31 +20,7 @@ pub(crate) const MAX_ASIZE: usize = 1 << 27;
 /// the next resize counts it again.
 pub(crate) const APREFIX_UNKNOWN: u32 = u32::MAX;
 
-/// The PUC version whose table rules a table follows: how its parts are
-/// sized, where a number key goes in the hash part, and which border `#t`
-/// returns when there are several. Kept in the table's header byte.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-#[repr(u8)]
-pub(crate) enum Dialect {
-    L51 = 1,
-    L52,
-    L53,
-    L54,
-    L55,
-}
-
-impl Dialect {
-    pub(crate) fn of(v: crate::version::LuaVersion) -> Dialect {
-        use crate::version::LuaVersion as V;
-        match v {
-            V::Lua51 => Dialect::L51,
-            V::Lua52 => Dialect::L52,
-            V::Lua53 => Dialect::L53,
-            V::Lua54 | V::MacroLua => Dialect::L54,
-            V::Lua55 => Dialect::L55,
-        }
-    }
-}
+use crate::runtime::dialect::Dialect;
 
 /// JIT layout constants for table-field IC.
 ///

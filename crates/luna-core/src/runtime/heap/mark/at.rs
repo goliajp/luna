@@ -143,7 +143,7 @@ impl Marker {
             match (*h).tag {
                 ObjTag::Native => {
                     (*h).cls & LUNA_ONLY != 0
-                        || self.dialect != crate::runtime::table::Dialect::L51
+                        || self.dialect != crate::runtime::dialect::Dialect::L51
                             && pace::native_upvals(h) == 0
                 }
                 ObjTag::Table => (*h).cls & UNLISTED != 0,

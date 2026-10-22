@@ -3,8 +3,8 @@
 //! traversing it (`propagatemark`'s result), by dialect.
 
 use super::*;
+use crate::runtime::dialect::Dialect;
 use crate::runtime::puc::size::PucSizes;
-use crate::runtime::table::Dialect;
 
 impl Heap {
     /// PUC's size of the object behind `h`, as the count has it; 0 for an

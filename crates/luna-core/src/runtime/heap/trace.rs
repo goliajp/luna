@@ -91,10 +91,10 @@ impl Heap {
 
     /// `R38_REFUSE` refuses a new long string of `len` bytes.
     pub(crate) fn refuse_string(&mut self, len: usize) -> bool {
-        let size = self.puc.sizes.string(
-            len,
-            self.table_dialect == crate::runtime::table::Dialect::L55,
-        );
+        let size = self
+            .puc
+            .sizes
+            .string(len, self.dialect() == crate::runtime::dialect::Dialect::L55);
         len > crate::runtime::string::MAX_SHORT_LEN && self.trace.refuse_now(0, size)
     }
 

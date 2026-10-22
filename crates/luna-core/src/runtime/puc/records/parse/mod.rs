@@ -5,8 +5,8 @@
 //! what each prototype being built holds so far ([`ParseFrame`]).
 
 use super::*;
+use crate::runtime::dialect::Dialect;
 use crate::runtime::mem::{LVec, Oom};
-use crate::runtime::table::Dialect;
 
 mod mark;
 #[cfg(feature = "gc-verify")]
