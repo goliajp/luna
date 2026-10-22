@@ -79,10 +79,11 @@ pub(crate) struct CallGuards {
     /// frame, the callee's), so not counted in `frames_in_use`.
     /// Per-thread, saved with the coroutine context.
     pub(crate) meta_conts: u32,
+    /// the continuation frames of a host's `lua_pcall` on the running
+    /// thread: frames 5.1 counts in its array, no `CallInfo` from 5.2
+    /// (see `Vm::ci_in_use`). Per-thread, saved with the coroutine context.
+    pub(crate) host_conts: u32,
     /// PUC 5.2+: the `CallInfo`s the running thread has allocated besides
     /// its base one (see `call_info.rs`); `u32::MAX` in 5.1. Per-thread.
     pub(crate) ci_alloc: u32,
-    /// the host's protected calls running on the main thread, each a
-    /// frame of luna's and no level of PUC's
-    pub(crate) host_pcalls: u32,
 }

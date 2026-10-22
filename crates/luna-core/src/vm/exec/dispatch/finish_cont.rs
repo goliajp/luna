@@ -75,6 +75,9 @@ impl Vm {
             return self.finish_host_cont(nc, hc, entry_depth);
         }
         frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+        if nc.kind.is_host_pcall() {
+            self.host_pcall_popped();
+        }
         self.cont_popped(false, nc.kind.is_level());
         // f's results sit where f was called (`callee_shift` above the
         // slot after the continuation): moved to that slot, writing `true`

@@ -213,6 +213,15 @@ impl Vm {
         }
     }
 
+    /// The continuation of a host's `lua_pcall` left the frame stack: the
+    /// frames below count as levels as they are, so the frame count
+    /// bound worked out with it is no more.
+    #[cold]
+    pub(super) fn host_pcall_popped(&mut self) {
+        self.g.host_conts -= 1;
+        self.g.ci_hint = 0;
+    }
+
     /// A continuation frame left the frame stack (`meta`: one of a
     /// metamethod, `__pairs` or `__close`): the C level it took comes
     /// back, unless it took none (`level`, see `begin_pcall`) or it is

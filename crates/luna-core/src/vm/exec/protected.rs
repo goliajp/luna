@@ -75,6 +75,8 @@ impl Vm {
                 nresults,
             }),
         );
+        // a host's `lua_pcall` takes no `CallInfo` of PUC's
+        self.g.host_conts += u32::from(ci_top == 0);
         entered?;
         // call f with the remaining args, asking for all results; a yield or
         // error inside propagates with the continuation kept on the stack
@@ -188,6 +190,8 @@ impl Vm {
                 nresults,
             }),
         );
+        // a host's `lua_pcall` takes no `CallInfo` of PUC's
+        self.g.host_conts += u32::from(ci_top == 0);
         entered?;
         self.begin_call(callee, Some(nfargs), -1, true)?;
         Ok(true)

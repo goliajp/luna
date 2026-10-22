@@ -178,6 +178,7 @@ impl Vm {
             m.tbc.take();
             m.top = 0;
             m.meta_conts = 0;
+            m.host_conts = 0;
             m.stale_frames = 0;
             // `luaE_resetthread` leaves the stack `LUA_MINSTACK` above the
             // function slot and (5.4) the error, if any; 5.5's `resetCI` sets

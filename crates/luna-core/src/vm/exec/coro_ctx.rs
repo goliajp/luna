@@ -15,6 +15,7 @@ pub(super) struct SavedCtx {
     /// stack, when the host switched it with no native running
     pub(super) gc_top: u32,
     pub(super) meta_conts: u32,
+    pub(super) host_conts: u32,
     pub(super) stale_frames: u32,
     pub(super) stack_size: u32,
     /// the natives running on the thread, in `Vm::running_natives`
@@ -39,6 +40,7 @@ impl SavedCtx {
         m.top = self.top;
         m.gc_top = self.gc_top;
         m.meta_conts = self.meta_conts;
+        m.host_conts = self.host_conts;
         m.stale_frames = self.stale_frames;
         m.stack_size = self.stack_size;
         m.frame_size = self.frame_size;
@@ -68,6 +70,7 @@ impl Vm {
             top: self.top,
             gc_top,
             meta_conts: self.g.meta_conts,
+            host_conts: self.g.host_conts,
             stale_frames: self.g.stale_frames,
             stack_size: self.stack_size,
             natives: self.natives_base..self.running_natives.len(),
@@ -87,6 +90,7 @@ impl Vm {
         self.tbc = c.tbc;
         self.top = c.top;
         self.g.meta_conts = c.meta_conts;
+        self.g.host_conts = c.host_conts;
         self.g.stale_frames = c.stale_frames;
         self.set_stack_size(c.stack_size);
         self.g.frame_size = c.frame_size;
@@ -122,6 +126,7 @@ impl Vm {
         self.g.ci_hint = 0;
         self.frames_resync(); // sync shadow to coro's frames
         self.g.meta_conts = m.meta_conts;
+        self.g.host_conts = m.host_conts;
         self.g.stale_frames = m.stale_frames;
         self.hook = m.hook;
         self.globals = m.globals;

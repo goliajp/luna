@@ -72,6 +72,7 @@ impl Vm {
         m.tbc.take();
         m.top = 0;
         m.meta_conts = 0;
+        m.host_conts = 0;
         m.stale_frames = 0;
         self.heap.barrier_back(co);
     }
