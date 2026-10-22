@@ -197,11 +197,19 @@ impl Heap {
         self.young = self.all;
     }
 
-    /// A sweep may free the object a rooted safe point left as the
-    /// boundary, and its address be reused: that point is forgotten.
+    /// A sweep begins: it may free the object the last safe point left as
+    /// the boundary, and its address be reused. A rooted boundary is
+    /// forgotten; one the sweep frees too, every object counting as young
+    /// until the next safe point (as after the atomic step).
     #[inline(always)]
-    pub(crate) fn forget_rooted(&mut self) {
+    pub(crate) fn sweep_begins(&mut self) {
         self.rooted_young = ptr::null_mut();
+        let b = self.young;
+        // SAFETY: the boundary is a live object: every sweep, the only
+        // thing that frees one, forgets it first when it is dead
+        if !b.is_null() && unsafe { is_white((*b).flags) && (*b).flags & self.current_white == 0 } {
+            self.young = ptr::null_mut();
+        }
     }
 
     /// The next safe point is one where the stack holds every live value.
