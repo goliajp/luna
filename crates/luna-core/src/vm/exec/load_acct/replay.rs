@@ -129,6 +129,7 @@ pub(in crate::vm::exec) struct TabOp {
 /// The replay's state.
 pub(super) struct Replay<'s> {
     pub(super) d: Dialect,
+    pub(super) sizes: crate::runtime::puc_size::PucSizes,
     /// the chunk's main closure
     pub(super) cl: Option<Gc<LuaClosure>>,
     /// 5.2: the table of the function closing, while it anchors the token
@@ -198,7 +199,7 @@ pub(super) fn walk(p: Gc<Proto>, opening: &mut Vec<Gc<Proto>>, closing: &mut Vec
 impl<'s> Replay<'s> {
     /// A replay of the load of `proto`, whose scanner made `scanned`.
     pub(super) fn new(
-        d: Dialect,
+        (d, sizes): (Dialect, crate::runtime::puc_size::PucSizes),
         proto: Gc<Proto>,
         version: crate::version::LuaVersion,
         scanned: &'s Scanned,
@@ -209,6 +210,7 @@ impl<'s> Replay<'s> {
         walk(proto, &mut opening, &mut closing);
         Replay {
             d,
+            sizes,
             cl: None,
             closing_tab: None,
             kstr: Vec::new(),
@@ -266,6 +268,22 @@ impl<'s> Replay<'s> {
                 ends.partition_point(|&e| e < off) as i64
             };
             self.splices.push_back((tok, d));
+        }
+    }
+}
+
+impl Drop for Replay<'_> {
+    /// However the replay ends, the prototypes of the functions still open
+    /// keep the arrays it counted for them: what freeing them takes off
+    /// (see `Proto::puc_arrays`).
+    fn drop(&mut self) {
+        if self.rec.is_some() {
+            return;
+        }
+        for f in &self.fs {
+            if let Some(p) = self.opening.get(f.shape) {
+                p.puc_arrays.set(f.puc_caps(self.d, &self.sizes));
+            }
         }
     }
 }

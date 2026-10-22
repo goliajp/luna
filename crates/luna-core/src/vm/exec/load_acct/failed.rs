@@ -94,7 +94,7 @@ impl Vm {
         );
         let (scanned, names) = parsed.failed_scan().expect("checked above");
         let d = self.heap.table_dialect;
-        let mut r = Replay::new(d, cl.proto, v, scanned, names, src);
+        let mut r = Replay::new((d, self.heap.sizes), cl.proto, v, scanned, names, src);
         r.splice(splices);
         let log = self.compile_scratch.puc_log.take();
         #[cfg(feature = "gc-trace")]
@@ -168,6 +168,7 @@ impl Vm {
             self.shrink_caught_error();
             self.replay_end(&r);
         }
+        drop(r);
         self.parse_scratch = parsed;
         replayed
     }

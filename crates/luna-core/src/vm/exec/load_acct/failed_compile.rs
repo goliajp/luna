@@ -34,7 +34,14 @@ impl Vm {
         };
         let (marks, scanned) = rec;
         let d = self.heap.table_dialect;
-        let mut r = Replay::new(d, proto, self.version, scanned, &chunk.names, src);
+        let mut r = Replay::new(
+            (d, self.heap.sizes),
+            proto,
+            self.version,
+            scanned,
+            &chunk.names,
+            src,
+        );
         r.splice(splices);
         let log = self.compile_scratch.puc_log.take();
         let at = i64::from(at);
