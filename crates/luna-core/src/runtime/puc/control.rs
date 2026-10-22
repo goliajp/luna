@@ -22,15 +22,19 @@ impl Heap {
         self.puc.pace.fin_num = 1;
     }
 
-    /// 5.1's threshold (`GCthreshold`).
+    /// 5.1's `GCTM` runs a finalizer: under a threshold of twice the
+    /// count. The threshold it had, for [`Heap::fin51_threshold_back`].
     #[inline]
-    pub(crate) fn gc_threshold(&self) -> i64 {
-        self.puc.pace.threshold()
+    pub(crate) fn fin51_threshold(&mut self) -> i64 {
+        let saved = self.puc.pace.threshold();
+        self.puc.pace.set_threshold(2 * self.puc.bytes as i64);
+        saved
     }
 
+    /// The finalizer returned: the threshold it ran under is `saved` again.
     #[inline]
-    pub(crate) fn set_gc_threshold(&mut self, t: i64) {
-        self.puc.pace.set_threshold(t);
+    pub(crate) fn fin51_threshold_back(&mut self, saved: i64) {
+        self.puc.pace.set_threshold(saved);
     }
 
     /// Whether this cycle's propagation shrank thread `h` (5.3), or its
@@ -38,24 +42,5 @@ impl Heap {
     #[inline]
     pub(crate) fn shrunk_this_cycle(&self, h: *mut GcHeader) -> bool {
         self.puc.shrunk.contains(&h)
-    }
-
-    /// The threads [`Heap::shrunk_this_cycle`] names, taken (5.2's sweep
-    /// shrinks them), to hand back emptied with [`Heap::put_back_shrunk`].
-    #[inline]
-    pub(crate) fn take_shrunk(&mut self) -> Vec<*mut GcHeader> {
-        std::mem::take(&mut self.puc.shrunk)
-    }
-
-    #[inline]
-    pub(crate) fn put_back_shrunk(&mut self, mut v: Vec<*mut GcHeader>) {
-        v.clear();
-        self.puc.shrunk = v;
-    }
-
-    /// A cycle restarts: no thread shrunk yet.
-    #[inline]
-    pub(crate) fn forget_shrunk(&mut self) {
-        self.puc.shrunk.clear();
     }
 }

@@ -71,7 +71,7 @@ impl ChildCheck {
 }
 
 /// gc-trace: the lines held back while counting is set aside (see
-/// `Heap::defer_begin`); nothing in the product.
+/// `Heap::reader_call_begins`); nothing in the product.
 #[derive(Default)]
 pub(crate) struct HeldLines {
     #[cfg(feature = "gc-trace")]

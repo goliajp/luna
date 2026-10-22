@@ -67,14 +67,7 @@ impl Vm {
         if r.d == Dialect::L52 {
             let env = self.heap.try_intern(b"_ENV")?;
             self.heap.acct_source(env);
-            if !self
-                .heap
-                .pinned()
-                .iter()
-                .any(|p| p.as_ptr() == env.as_ptr())
-            {
-                self.heap.pin(env);
-            }
+            self.heap.pin(env);
         }
         r.buff = 32;
         self.heap.acct_block(0, 32);

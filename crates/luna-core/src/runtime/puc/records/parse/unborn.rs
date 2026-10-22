@@ -21,7 +21,7 @@ unsafe fn is_unborn(h: *mut GcHeader) -> bool {
 
 /// Whether loads were set aside before (see [`Heap::set_loads_aside`]).
 #[must_use = "loads stay as set until the token goes back to `Heap::loads_aside_back`"]
-pub(crate) struct LoadsAside(bool);
+pub(in crate::runtime) struct LoadsAside(bool);
 
 impl Heap {
     /// A new object a load makes before PUC does (luna compiles first),
@@ -72,26 +72,26 @@ impl Heap {
     /// Set what a load makes before PUC does aside (`on`), or no more,
     /// until the token goes back to [`Heap::loads_aside_back`].
     #[inline]
-    pub(crate) fn set_loads_aside(&mut self, on: bool) -> LoadsAside {
+    pub(in crate::runtime) fn set_loads_aside(&mut self, on: bool) -> LoadsAside {
         LoadsAside(std::mem::replace(&mut self.puc.unborn_on, on))
     }
 
     /// Where loads were set aside at some point (a load unwound by running
     /// out of memory goes back there).
     #[inline]
-    pub(crate) fn loads_aside_mark(&self) -> LoadsAside {
+    pub(in crate::runtime) fn loads_aside_mark(&self) -> LoadsAside {
         LoadsAside(self.puc.unborn_on)
     }
 
     /// Back to what [`Heap::set_loads_aside`] changed.
     #[inline]
-    pub(crate) fn loads_aside_back(&mut self, a: LoadsAside) {
+    pub(in crate::runtime) fn loads_aside_back(&mut self, a: LoadsAside) {
         self.puc.unborn_on = a.0;
     }
 
     /// The objects set aside at `from..to` of the list of them that are
     /// still aside go on the list, the others staying where they are.
-    pub(crate) fn born_range(&mut self, (from, to): (usize, usize)) {
+    pub(in crate::runtime) fn born_range(&mut self, (from, to): (usize, usize)) {
         let to = to.min(self.puc.unborn.len());
         for i in from.min(to)..to {
             let h = self.puc.unborn[i];
@@ -104,7 +104,7 @@ impl Heap {
     /// The objects set aside since `base` (a length of the list of them)
     /// that PUC did not make go on the list: luna's own, or garbage of a
     /// load that failed.
-    pub(crate) fn flush_unborn(&mut self, base: usize) {
+    pub(in crate::runtime) fn flush_unborn(&mut self, base: usize) {
         let mut rest = std::mem::take(&mut self.puc.unborn);
         for &h in &rest[base.min(rest.len())..] {
             // SAFETY: an object set aside is allocated, and only here
@@ -134,7 +134,7 @@ impl Heap {
     }
 
     /// How many objects are set aside, for [`Heap::flush_unborn`].
-    pub(crate) fn unborn_len(&self) -> usize {
+    pub(in crate::runtime) fn unborn_len(&self) -> usize {
         self.puc.unborn.len()
     }
 

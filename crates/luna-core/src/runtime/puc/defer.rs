@@ -26,9 +26,10 @@ pub(crate) struct Deferred {
 }
 
 impl Heap {
-    /// Set what is counted from now on aside, and the objects made with
-    /// it; [`Heap::defer_end`] with the returned mark takes it back out.
-    pub(crate) fn defer_begin(&mut self) -> DeferMark {
+    /// A load calls its reader: what is counted from now on is set aside,
+    /// with the objects made meanwhile, until [`Heap::reader_call_ends`]
+    /// with the returned mark.
+    pub(crate) fn reader_call_begins(&mut self) -> DeferMark {
         self.hook_hold_lines();
         DeferMark {
             bytes: self.puc.bytes,
@@ -37,9 +38,9 @@ impl Heap {
         }
     }
 
-    /// What was counted since `mark`, taken out of the count, and the
-    /// objects made since, kept aside.
-    pub(crate) fn defer_end(&mut self, mark: DeferMark) -> Deferred {
+    /// The reader returned: what it counted since `mark` is taken out of
+    /// the count, the objects it made kept aside.
+    pub(crate) fn reader_call_ends(&mut self, mark: DeferMark) -> Deferred {
         self.loads_aside_back(mark.aside);
         let bytes = self.puc.bytes as isize - mark.bytes as isize;
         self.puc.bytes = mark.bytes;
@@ -51,24 +52,25 @@ impl Heap {
         }
     }
 
-    /// Count what was set aside, now.
-    pub(crate) fn defer_apply(&mut self, d: Deferred) {
+    /// The replay reaches where PUC's parser called the reader: what the
+    /// call counted is counted now, its objects listed.
+    pub(crate) fn replay_reader_call(&mut self, d: Deferred) {
         self.puc.bytes = (self.puc.bytes as isize + d.bytes) as usize;
         self.puc.set_aside -= d.bytes;
         self.born_range(d.objs);
         self.hook_put_lines(d.lines);
     }
 
-    /// Where the loads' set aside count and objects stand now, for
-    /// [`Heap::defer_settle`].
-    pub(crate) fn defer_mark(&self) -> (isize, usize) {
+    /// A load with a reader begins: where the counts set aside and the
+    /// objects stand now, for [`Heap::reader_load_ends`].
+    pub(crate) fn reader_load_begins(&self) -> (isize, usize) {
         (self.puc.set_aside, self.unborn_len())
     }
 
     /// A load that began at `mark` ends: what its reader's calls counted
     /// and no replay counted again is counted now, and the objects they
     /// made go on the list.
-    pub(crate) fn defer_settle(&mut self, (bytes, objs): (isize, usize)) {
+    pub(crate) fn reader_load_ends(&mut self, (bytes, objs): (isize, usize)) {
         let left = self.puc.set_aside - bytes;
         self.puc.bytes = (self.puc.bytes as isize + left) as usize;
         self.puc.set_aside = bytes;

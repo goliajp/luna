@@ -89,7 +89,7 @@ impl Vm {
             // nothing of the parse is replayed: the reader's counts stand
             // where they are
             for (_, d) in splices.drain(..) {
-                self.heap.defer_apply(d);
+                self.heap.replay_reader_call(d);
             }
         }
         self.guarded_load(|vm| {
@@ -120,12 +120,10 @@ impl Vm {
                 return vm.close_chunk(proto);
             }
             // made without counting, then counted as PUC's parser makes it
-            let off = vm.heap.counting_off();
-            let base = vm.heap.unborn_len();
-            let aside = vm.heap.set_loads_aside(true);
+            let span = vm.heap.load_begins();
+            let building = vm.heap.build_load(true);
             let made = vm.compile_streamed(&mut parsed, chunkname, name);
-            vm.heap.loads_aside_back(aside);
-            vm.heap.counting_on(off);
+            vm.heap.load_built(building);
             let cl = match made {
                 Ok(cl) => cl,
                 Err(e) => {
@@ -135,7 +133,7 @@ impl Vm {
                         }
                         _ => vm.splices_stand(splices),
                     };
-                    vm.heap.flush_unborn(base);
+                    vm.heap.load_ends(span);
                     return Err(r.err().unwrap_or(e));
                 }
             };
@@ -145,7 +143,7 @@ impl Vm {
                 .unwrap_or_else(|| LVec::new(vm.heap.mem()));
             let rec = parsed.recorded().expect("counted");
             let r = vm.acct_text_load(&src, &parsed.chunk, rec, cl, splices);
-            vm.heap.flush_unborn(base);
+            vm.heap.load_ends(span);
             vm.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
             r.map(|()| cl)
         })
@@ -189,9 +187,8 @@ impl Vm {
         splices: Vec<(u32, crate::runtime::heap::Deferred)>,
     ) -> SyntaxError {
         let (v, depth) = (self.version, self.g.nccalls);
-        let base = self.heap.unborn_len();
-        let off = self.heap.counting_off();
-        let aside = self.heap.set_loads_aside(true);
+        let span = self.heap.load_begins();
+        let building = self.heap.build_load(true);
         let source = self
             .heap
             .chunk_name(chunkname, name)
@@ -209,14 +206,13 @@ impl Vm {
             }
             Err(o) => o.clone(),
         };
-        self.heap.loads_aside_back(aside);
-        self.heap.counting_on(off);
+        self.heap.load_built(building);
         let counted = match source {
             Ok(source) if !e.is_memory() => self.acct_failed_load(src, &e, source, splices),
             _ => self.splices_stand(splices),
         };
         self.parse_scratch.record = false;
-        self.heap.flush_unborn(base);
+        self.heap.load_ends(span);
         counted.err().unwrap_or(e)
     }
 }

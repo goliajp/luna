@@ -69,7 +69,7 @@ pub(crate) struct PucModel {
     /// stack (see `vm/opening/fenv51.rs`)
     pub(super) phantoms: bool,
     /// what loads' readers counted that is set aside and not counted back
-    /// yet (`Heap::defer_begin`)
+    /// yet (`Heap::reader_call_begins`)
     pub(super) set_aside: isize,
     /// the library functions made as PUC's light C functions, by their
     /// number in the opening's tables: one value however often pushed

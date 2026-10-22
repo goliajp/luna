@@ -106,9 +106,9 @@ impl Vm {
             for &s in names(false) {
                 m.keep(s);
             }
-            m.mark_strings(self.heap.pinned().iter());
+            self.heap.mark_pins(m);
         }
-        m.mark_strings(self.heap.load_msg().iter());
+        self.heap.mark_load_msg(m);
     }
 
     /// The running thread's values, and the roots luna has outside PUC's
@@ -141,12 +141,7 @@ impl Vm {
         }
         // a load's parser objects, above its C function's slots on PUC's
         // stack
-        for f in self.heap.parse_frames() {
-            for &h in &f.slots {
-                // SAFETY: a parser object is allocated while its load runs
-                unsafe { m.header(h) };
-            }
-        }
+        self.heap.mark_load_slots(m);
         for &v in self.jit.ssa_roots.iter() {
             m.value(v);
         }

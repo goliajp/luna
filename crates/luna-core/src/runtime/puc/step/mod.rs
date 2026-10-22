@@ -51,8 +51,9 @@ pub(crate) trait StepHost {
     fn run_finalizer(&mut self, propagate: bool) -> Result<(), LuaError>;
     /// Whether the stack has room for a finalizer's call.
     fn finalizer_has_room(&mut self, closing: bool) -> bool;
-    /// 5.2's `sweepthread` of each coroutine the sweep just kept.
-    fn shrink_swept_52(&mut self);
+    /// 5.2's `sweepthread` of coroutine `h`, which the sweep just kept
+    /// (the main thread's comes at the end of the sweep).
+    fn shrink_swept_thread_52(&mut self, h: *mut crate::runtime::heap::GcHeader);
     /// The end of 5.2's sweep: the main thread shrunk.
     fn sweep_main_52(&mut self);
 }
@@ -60,6 +61,9 @@ pub(crate) trait StepHost {
 /// `restartcollection` (5.1 `markroot`): the roots marked, the cycle
 /// propagating.
 fn restart<H: StepHost + ?Sized>(h: &mut H) {
+    // no thread shrunk yet this cycle
+    h.heap().puc.shrunk.clear();
+    gc_count_marked(h);
     h.restart();
     h.heap().puc.pace.enter(St::Propagate);
 }

@@ -44,8 +44,7 @@ impl Vm {
         let mut tree = ParseScratch::new(self.heap.mem_owner());
         tree.record = true;
         tree.lenient(true);
-        let off = self.heap.counting_off();
-        let aside = self.heap.set_loads_aside(true);
+        let building = self.heap.build_load(true);
         self.compile_scratch.replay.lenient = true;
         self.compile_scratch.replay.seal = true;
         let made = match parse_in_place(&fixed, v, depth, &mut tree) {
@@ -72,8 +71,7 @@ impl Vm {
             (opts.sealed, opts.at) = (None, None);
         }
         let built = proto.and_then(|p| self.close_chunk(p).ok());
-        self.heap.loads_aside_back(aside);
-        self.heap.counting_on(off);
+        self.heap.load_built(building);
         if let (Some(Err(_)), true, Some(rec)) = (&made, early, tree.recorded()) {
             // the token is shown as the source has it, not the completion
             let opts = &mut self.compile_scratch.replay;
@@ -181,7 +179,7 @@ impl Vm {
         splices: Vec<(u32, crate::runtime::heap::Deferred)>,
     ) -> Result<(), SyntaxError> {
         for (_, d) in splices {
-            self.heap.defer_apply(d);
+            self.heap.replay_reader_call(d);
         }
         Ok(())
     }

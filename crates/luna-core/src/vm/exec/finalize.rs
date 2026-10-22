@@ -83,12 +83,9 @@ impl Vm {
         let gc_top = self.gc_top;
         let stopped = self.heap.gc_is_stopped();
         let fin_stop = self.heap.gc_fin_stop();
-        let threshold = self.heap.gc_threshold();
+        let mut threshold = 0;
         match d {
-            LuaVersion::Lua51 => {
-                let t = 2 * self.heap.bytes() as i64;
-                self.heap.set_gc_threshold(t);
-            }
+            LuaVersion::Lua51 => threshold = self.heap.fin51_threshold(),
             LuaVersion::Lua52 | LuaVersion::Lua53 => self.heap.gc_restore_stopped(true),
             _ => self.heap.gc_set_fin_stop(true),
         }
@@ -101,7 +98,7 @@ impl Vm {
             // a 5.1 error leaves the threshold the finalizer ran under
             LuaVersion::Lua51 => {
                 if r.is_ok() {
-                    self.heap.set_gc_threshold(threshold);
+                    self.heap.fin51_threshold_back(threshold);
                     self.heap.gc_restore_stopped(stopped);
                 }
             }
