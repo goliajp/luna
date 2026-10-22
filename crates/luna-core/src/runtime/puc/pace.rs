@@ -82,7 +82,7 @@ impl St {
 /// (`Heap::bytes`, PUC's `totalbytes` as `gettotalbytes` reads it).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Pace {
-    pub(crate) state: St,
+    state: St,
     /// where the next step falls due: 5.1 `GCthreshold`; 5.2 to 5.4 the
     /// `totalbytes` field (the count less `GCdebt`); 5.5 `GCtotalbytes`
     /// (the count plus `GCdebt`)
@@ -127,6 +127,18 @@ pub(crate) const CWUFIN_55: i64 = 10;
 pub(crate) const SWEEPMAX_55: i64 = 20;
 
 impl Pace {
+    /// The state the cycle is in (PUC `gcstate`).
+    #[inline]
+    pub(crate) fn state(&self) -> St {
+        self.state
+    }
+
+    /// The cycle moves to `st`: the one place the state changes.
+    #[inline]
+    pub(crate) fn enter(&mut self, st: St) {
+        self.state = st;
+    }
+
     pub(crate) fn new() -> Pace {
         Pace {
             state: St::Pause,

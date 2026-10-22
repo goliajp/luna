@@ -163,7 +163,7 @@ impl Heap {
                 self.puc.pace.set_debt(d, bytes, debt);
             }
         }
-        self.puc.pace.state = St::Pause;
+        self.puc.pace.enter(St::Pause);
         self.refresh_gc_limit();
     }
 

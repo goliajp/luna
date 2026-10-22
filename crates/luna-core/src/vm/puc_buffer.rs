@@ -249,7 +249,7 @@ impl PucBuffer {
                 // the box's slot and the string are above the arguments
                 vm.native_push_if_native(2);
                 vm.gc_top = vm.native_top().unwrap_or_else(|| vm.lua_window_end());
-                let stepped = vm.gc_lua_step(out.len() as i64);
+                let stepped = crate::runtime::puc::step::gc_lua_step(vm, out.len() as i64);
                 if vm.native_on_top() {
                     vm.native_pop(2);
                 }

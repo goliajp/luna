@@ -24,9 +24,7 @@ pub(crate) const LUNA_PAUSE: i64 = 200;
 pub(crate) const LUNA_STEPMUL: i64 = 100;
 const LUNA_STEPSIZE: i64 = 13;
 
-#[path = "lib_gc/params.rs"]
-mod params;
-pub(crate) use params::{GcParams, Param};
+pub(crate) use crate::runtime::puc::Param;
 
 /// `collectgarbage([opt [, ...]])`.
 pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -175,7 +173,7 @@ pub(crate) fn step(vm: &mut Vm, n: i64) -> Result<bool, LuaError> {
         vm.collect_garbage();
         return Ok(false);
     }
-    vm.gc_lua_step(n)
+    crate::runtime::puc::step::gc_lua_step(vm, n)
 }
 
 /// `setpause` / `setstepmul` / `setmajorinc`: store the new value (≤5.3 take
@@ -187,8 +185,8 @@ fn set_param(vm: &mut Vm, a: Args, param: Param, ex: i32) -> Result<i64, LuaErro
     } else {
         argcheck::opt_integer(vm, a, 1, 0)? as i32
     };
-    let prev = vm.gc_params.get(param);
-    vm.gc_params.set(param, new);
+    let prev = vm.heap.puc.params.get(param);
+    vm.heap.puc.params.set(param, new);
     sync_pacing(vm);
     Ok(prev)
 }
@@ -224,7 +222,7 @@ pub(crate) fn set_mode_params(vm: &mut Vm, mode: &str, values: &[i32]) {
     };
     for (&param, &value) in params.iter().zip(values) {
         if value != 0 {
-            vm.gc_params.set(param, value);
+            vm.heap.puc.params.set(param, value);
         }
     }
     sync_pacing(vm);
@@ -260,9 +258,9 @@ fn param_args(vm: &mut Vm, a: Args) -> Result<(Param, i32), LuaError> {
 /// unchanged) and return the previous value.
 fn param(vm: &mut Vm, a: Args) -> Result<Value, LuaError> {
     let (which, value) = param_args(vm, a)?;
-    let prev = vm.gc_params.get(which);
+    let prev = vm.heap.puc.params.get(which);
     if value >= 0 {
-        vm.gc_params.set(which, value);
+        vm.heap.puc.params.set(which, value);
         sync_pacing(vm);
     }
     Ok(Value::Int(prev))
@@ -270,7 +268,7 @@ fn param(vm: &mut Vm, a: Args) -> Result<Value, LuaError> {
 
 /// Carry the Lua-visible parameters over to luna's collector knobs.
 pub(crate) fn sync_pacing(vm: &mut Vm) {
-    let p = &vm.gc_params;
+    let p = &vm.heap.puc.params;
     let pause = p.luna_scaled(Param::Pause, LUNA_PAUSE);
     let stepmul = p.luna_scaled(Param::StepMul, LUNA_STEPMUL);
     let stepsize = match p.default(Param::StepSize) {

@@ -54,7 +54,7 @@ impl Vm {
         // luna makes without counting (a load)
         let counting = self.heap.count_all();
         let young = self.heap.young_len();
-        self.gc_hold_threads();
+        crate::runtime::puc::step::gc_hold_threads(self);
         self.jit_forget_ghosts();
         self.name_cache = Default::default();
         if self.heap.gc_phase_is_propagate() {
@@ -71,7 +71,7 @@ impl Vm {
             self.heap.gc_finish_sweep();
         } else {
             self.heap.gc_finish_sweep();
-            self.gc_count_marked();
+            crate::runtime::puc::step::gc_count_marked(self);
             let mut m = self.heap.gc_begin_full();
             self.mark_roots(&mut m, false);
             self.heap.mark_young(&mut m, young);
@@ -89,10 +89,10 @@ impl Vm {
         self.heap.release_pool();
         self.gc_top = live_top;
         self.heap.puc.pace.fin_num = 1;
-        self.gc_full_pause();
+        crate::runtime::puc::step::gc_full_pause(self);
         self.heap.restore_counting(counting);
         #[cfg(feature = "gc-trace")]
-        self.trace_full_end();
+        crate::runtime::puc::step::trace_full_end(self);
         true
     }
 

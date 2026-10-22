@@ -135,7 +135,6 @@ pub struct Vm {
     pub(crate) hook: HookState,
     /// `collectgarbage`'s parameters as the dialect stores them; they set
     /// the three knobs above through `set_gc_pacing`.
-    pub(crate) gc_params: crate::vm::lib_gc::GcParams,
     /// error object being threaded through a chain of __close handlers; a GC
     /// root for the duration (a handler may trigger collection)
     pub(super) closing_err: Option<Value>,

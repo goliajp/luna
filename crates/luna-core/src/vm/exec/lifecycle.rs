@@ -144,7 +144,6 @@ impl Vm {
             gc_pause: 200,
             gc_stepmul: 100,
             gc_stepsize: 13,
-            gc_params: crate::vm::lib_gc::GcParams::new(version),
             gc_finalizing: false,
             posix_locales: 0,
             #[cfg(feature = "gc-stress")]

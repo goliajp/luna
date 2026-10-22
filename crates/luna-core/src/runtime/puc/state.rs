@@ -12,6 +12,8 @@ pub(crate) struct PucModel {
     pub(crate) gc_limit: usize,
     /// the dialect PUC's sizes, pace and steps are those of
     pub(crate) dialect: crate::runtime::table::Dialect,
+    /// `collectgarbage`'s pacing parameters
+    pub(crate) params: super::GcParams,
     /// the sizes of PUC's objects in this dialect, which `bytes` counts
     pub(crate) sizes: super::size::PucSizes,
     /// PUC's collector state and pace
@@ -85,6 +87,7 @@ impl Default for PucModel {
             bytes: 0,
             gc_limit: usize::MAX,
             dialect: crate::runtime::table::Dialect::L55,
+            params: super::GcParams::new(crate::version::LuaVersion::Lua55),
             sizes: super::size::PucSizes::of(crate::runtime::table::Dialect::L55),
             pace: super::pace::Pace::new(),
             strt: Default::default(),
