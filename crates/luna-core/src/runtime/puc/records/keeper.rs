@@ -56,11 +56,11 @@ impl Heap {
                 return false;
             };
             let f = (*self.puc.keepers[i].1).flags;
-            if is_white(f) && f & self.current_white == 0 {
+            if is_white(f) && f & self.white() == 0 {
                 self.puc.keepers.swap_remove(i);
                 return false;
             }
-            (*h).flags = ((*h).flags & !COLOR_BITS) | self.current_white;
+            (*h).flags = ((*h).flags & !COLOR_BITS) | self.white();
             true
         }
     }

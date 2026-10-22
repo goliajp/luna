@@ -43,7 +43,7 @@ impl Heap {
     /// Whether this dialect's collector keeps open upvalues on threads.
     #[inline]
     pub(crate) fn open_on_threads(&self) -> bool {
-        matches!(self.table_dialect, Dialect::L51 | Dialect::L52)
+        matches!(self.puc.dialect, Dialect::L51 | Dialect::L52)
     }
 
     /// The marking is over: the open upvalues it left white are dead, off
@@ -59,7 +59,7 @@ impl Heap {
         if !lend.main.is_null() {
             lists.push((ptr::null_mut(), lend.main));
         }
-        for &co in &self.threads {
+        for &co in self.threads() {
             let h = co.as_ptr() as *mut GcHeader;
             if h != lend.running_co {
                 // SAFETY: a listed thread is allocated until the sweep

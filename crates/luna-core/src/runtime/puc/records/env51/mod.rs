@@ -116,7 +116,7 @@ impl Heap {
     /// The records of a new opening of the io library.
     fn env51_gen(&self) -> Box<Gen> {
         let s = self.puc.sizes;
-        let w = self.current_white;
+        let w = self.white();
         let rec = |size: usize, kid: usize, env: u8| {
             let mut hdr = GcHeader::new(ObjTag::Ghost);
             hdr.sub = PHANTOM;
@@ -184,7 +184,7 @@ impl Heap {
             let g = self.env51_gen();
             self.env51_records().gens.push(g);
         }
-        let w = self.current_white;
+        let w = self.white();
         let counted = self.counting();
         let g = self.env51_gen_now();
         g.opened |= k == E1;

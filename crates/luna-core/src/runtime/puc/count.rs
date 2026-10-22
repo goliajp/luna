@@ -51,33 +51,15 @@ impl PucKind {
 }
 
 impl Heap {
-    /// Take on `version`'s rules, then count what PUC's `lua_newstate`
-    /// allocates ([`Heap::acct_boot`]).
-    pub(crate) fn set_version(
-        &mut self,
-        version: crate::version::LuaVersion,
-    ) -> Result<(), crate::runtime::mem::Oom> {
-        use crate::version::LuaVersion;
-        // PUC 5.1 had no ephemeron pass: `__mode='k'` tables marked their
-        // values strongly (gc.lua's "weak tables" section relies on that)
-        self.no_ephemeron = version <= LuaVersion::Lua51;
-        self.refinalize = version != LuaVersion::Lua52;
-        self.signed_zero_keys = version <= LuaVersion::Lua52;
+    /// The model takes on `version`: PUC's sizes and dialect, and 5.1's
+    /// string table holding every string.
+    pub(in crate::runtime) fn puc_dialect(&mut self, version: crate::version::LuaVersion) {
         let d = Dialect::of(version);
-        self.table_dialect = d;
+        self.puc.dialect = d;
         self.puc.sizes = PucSizes::of(d);
-        // the strings the heap made before it knew the dialect (its fixed
-        // memory error message) move to the dialect's hash
-        self.hash51 = version == LuaVersion::Lua51;
-        if self.hash51 {
+        if d == Dialect::L51 {
             self.puc.short_max = usize::MAX;
         }
-        let seed = self.seed();
-        self.rehash_strings(seed);
-        // PUC 5.3 needs two GC cycles to finalize a table caught in a
-        // coroutine reference cycle (gc.lua :502); 5.4+ finalize it in one
-        self.defer_thread_cycle_finalize = version == LuaVersion::Lua53;
-        self.acct_boot()
     }
 
     /// A new object of `size` bytes.
@@ -89,7 +71,7 @@ impl Heap {
         self.puc.bytes += size;
         #[cfg(feature = "gc-trace")]
         {
-            let tag = kind.tag(self.table_dialect);
+            let tag = kind.tag(self.puc.dialect);
             self.trace.line(format_args!("a {tag} {size}"));
         }
         #[cfg(not(feature = "gc-trace"))]
@@ -147,7 +129,7 @@ impl Heap {
     /// heap is being dropped.
     #[inline]
     pub(crate) fn acct_part(&mut self, old: usize, new: usize) {
-        if !self.dropping {
+        if !self.is_dropping() {
             self.count_part(old, new);
         }
     }

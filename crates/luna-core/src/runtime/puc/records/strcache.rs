@@ -102,10 +102,8 @@ impl Heap {
     /// long string found in the cache at that address, else a new one,
     /// which the cache keeps there.
     pub(crate) fn intern_at(&mut self, at: CStr, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
-        let cached = matches!(
-            self.table_dialect,
-            Dialect::L53 | Dialect::L54 | Dialect::L55
-        ) && bytes.len() > string::MAX_SHORT_LEN;
+        let cached = matches!(self.puc.dialect, Dialect::L53 | Dialect::L54 | Dialect::L55)
+            && bytes.len() > string::MAX_SHORT_LEN;
         if let Some(s) = self.puc.strcache.find(at, bytes).filter(|_| cached) {
             return Ok(s);
         }
@@ -125,7 +123,7 @@ impl Heap {
         chunkname: &[u8],
         name: Option<Gc<LuaStr>>,
     ) -> Result<Gc<LuaStr>, Oom> {
-        let long = chunkname.len() > string::MAX_SHORT_LEN && self.table_dialect != Dialect::L51;
+        let long = chunkname.len() > string::MAX_SHORT_LEN && self.puc.dialect != Dialect::L51;
         match name {
             Some(n) if !long => Ok(n),
             Some(n) => self.intern_at(CStr::In(n.as_ptr() as *const GcHeader, 0), chunkname),

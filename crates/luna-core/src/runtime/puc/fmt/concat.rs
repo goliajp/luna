@@ -7,7 +7,7 @@ impl Heap {
     /// every one a string or a number: what it makes, in its order, and
     /// the one value it leaves in their place.
     pub(crate) fn puc_concat(&mut self, st: &mut Vec<Value>, total: usize) -> Result<(), Oom> {
-        let d = self.table_dialect;
+        let d = self.puc.dialect;
         let mut total = total;
         while total > 1 {
             let top = st.len();

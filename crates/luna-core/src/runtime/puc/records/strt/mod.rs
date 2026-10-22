@@ -72,12 +72,12 @@ impl Heap {
     pub(in crate::runtime) fn collect_dead_strings(&mut self) {
         self.puc.strt.dead.clear();
         self.puc.strt.next = 0;
-        if !matches!(self.table_dialect, Dialect::L51 | Dialect::L52) {
+        if !matches!(self.puc.dialect, Dialect::L51 | Dialect::L52) {
             return;
         }
         let size = self.puc.strt_size as u32;
-        let new_white = self.current_white;
-        let mut cur = self.all;
+        let new_white = self.white();
+        let mut cur = self.list_head();
         // SAFETY: the links of `all` lead to live objects; no object is
         // freed while the list is walked
         unsafe {
@@ -90,14 +90,14 @@ impl Heap {
                     && (*cur).sub & EXTERNAL == 0
                 {
                     let s = &*(cur as *const LuaStr);
-                    if self.table_dialect == Dialect::L51 || s.is_short() {
+                    if self.puc.dialect == Dialect::L51 || s.is_short() {
                         let b = string::bytes_of(cur as *const LuaStr);
                         // the string's own hash is PUC's: 5.1's, and 5.2's
                         // below 32 bytes (where it takes every byte)
-                        let h = match self.table_dialect {
+                        let h = match self.puc.dialect {
                             Dialect::L51 => Gc::from_ptr(cur as *mut LuaStr).stored_hash(),
                             _ if b.len() < 32 => Gc::from_ptr(cur as *mut LuaStr).stored_hash(),
-                            _ => hash_52(b, self.seed),
+                            _ => hash_52(b, self.seed()),
                         };
                         self.puc.strt.dead.push((h % size.max(1), cur));
                     }
@@ -136,7 +136,7 @@ impl Heap {
             self.puc.strt.next < self.puc.strt.dead.len()
                 && (*h).tag == ObjTag::Str
                 && (*h).sub & (UNCOUNTED | EXTERNAL | SWEPT) == 0
-                && (self.table_dialect == Dialect::L51 || (*(h as *const LuaStr)).is_short())
+                && (self.puc.dialect == Dialect::L51 || (*(h as *const LuaStr)).is_short())
         }
     }
 
@@ -144,17 +144,15 @@ impl Heap {
     /// held off the object list are freed, or put back when a program made
     /// them again meanwhile.
     pub(crate) fn end_string_sweep(&mut self) {
-        let new_white = self.current_white;
+        let new_white = self.white();
         for h in std::mem::take(&mut self.puc.strt.held) {
             // SAFETY: a held string is allocated and on no list
             unsafe {
                 let f = (*h).flags;
                 if is_white(f) && f & new_white == 0 && !self.kept_dead(h) {
-                    self.free_obj(h);
-                    self.live -= 1;
+                    self.free_unlisted(h);
                 } else {
-                    (*h).next = self.all;
-                    self.all = h;
+                    self.relink(h);
                 }
             }
         }
@@ -175,7 +173,7 @@ impl Heap {
             // which comes after this one; a resurrected one is skipped
             unsafe {
                 let f = (*h).flags;
-                if !is_white(f) || f & self.current_white != 0 {
+                if !is_white(f) || f & self.white() != 0 {
                     continue;
                 }
                 (*h).sub |= SWEPT;
@@ -227,7 +225,7 @@ impl Heap {
             .iter()
             .filter(|s| s.1 & strt != 0)
             .count();
-        for mut cur in [self.all, self.fixed] {
+        for mut cur in [self.list_head(), self.fixed_head()] {
             // SAFETY: the lists link this heap's live objects
             unsafe {
                 while !cur.is_null() {
