@@ -2,7 +2,7 @@
 //! `__gc` metamethod, on the C function's stack until the buffer is done,
 //! then garbage that the collector finalizes before freeing it.
 
-use crate::runtime::table::Dialect;
+use crate::runtime::dialect::Dialect;
 use crate::runtime::userdata::UserdataPayload;
 use crate::runtime::{Gc, LuaStr, Table, Userdata, Value};
 use crate::version::LuaVersion;
@@ -134,7 +134,7 @@ impl Vm {
     /// `luaL_newmetatable(L, "LUABOX")` with `__gc`; 5.4+ a table of
     /// `__gc` and `__close` under `"_UBOX*"`.
     fn box_metatable(&mut self) -> Result<Gc<Table>, LuaError> {
-        let l53 = self.heap.table_dialect == Dialect::L53;
+        let l53 = self.heap.dialect() == Dialect::L53;
         let name: &[u8] = if l53 { b"LUABOX" } else { b"_UBOX*" };
         let reg = self.host_registry();
         let key = self.str_value(name)?;

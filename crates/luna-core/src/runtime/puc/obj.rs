@@ -3,7 +3,7 @@
 //! makes there and never PUC's layout.
 
 use super::*;
-use crate::runtime::table::Dialect;
+use crate::runtime::dialect::Dialect;
 
 /// One allocation of PUC's, by what it is.
 #[derive(Clone, Copy, Debug)]

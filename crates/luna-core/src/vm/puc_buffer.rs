@@ -14,8 +14,8 @@
 //!   metatable kept in the registry; 5.5 hands the block to the result
 //!   string
 
+use crate::runtime::dialect::Dialect;
 use crate::runtime::heap::PucKind;
-use crate::runtime::table::Dialect;
 use crate::runtime::{Gc, LuaStr, Userdata, Value};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
@@ -44,7 +44,7 @@ impl PucBuffer {
     #[inline]
     pub(crate) fn new(vm: &mut Vm) -> PucBuffer {
         PucBuffer {
-            d: vm.heap.table_dialect,
+            d: vm.heap.dialect(),
             size: Vm::lual_buffersize(vm.version()),
             n: 0,
             boxed: false,
@@ -287,7 +287,7 @@ impl Vm {
     /// later dialects ask for its whole size first (`luaL_buffinitsize`,
     /// `luaL_pushresultsize`).
     pub(crate) fn buffer_result(&mut self, out: &[u8]) -> Result<Value, LuaError> {
-        let b = if self.heap.table_dialect == Dialect::L51 {
+        let b = if self.heap.dialect() == Dialect::L51 {
             let mut b = PucBuffer::new(self);
             b.add(self, out, out.len())?;
             b

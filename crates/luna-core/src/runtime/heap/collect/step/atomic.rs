@@ -27,9 +27,9 @@ impl Heap {
         // and the barriers' tables again (`retraversegrays`), uncounted;
         // 5.3 stops counting before `grayagain`, the threads among it (the
         // caller counts what the other roots reach)
-        let d = self.table_dialect;
-        let l52 = d == crate::runtime::table::Dialect::L52;
-        let again_free = l52 || d == crate::runtime::table::Dialect::L53;
+        let d = self.dialect();
+        let l52 = d == crate::runtime::dialect::Dialect::L52;
+        let again_free = l52 || d == crate::runtime::dialect::Dialect::L53;
         let first = self.drain_work(&mut m, run);
         self.regray_again(&mut m);
         let again = self.drain_work(&mut m, run);
@@ -82,7 +82,7 @@ impl Heap {
             }
         }
         self.puc.udsize = self.atomic_tail(&mut m, run);
-        if self.table_dialect == crate::runtime::table::Dialect::L52 {
+        if self.dialect() == crate::runtime::dialect::Dialect::L52 {
             self.color_fixed_strings(0);
         }
         self.settle_sizer(&mut m);
@@ -106,9 +106,9 @@ impl Heap {
         self.young = ptr::null_mut();
         self.phase = GcPhase::Sweep;
         self.sweep_prev = ptr::null_mut();
-        let swept = match self.table_dialect {
-            crate::runtime::table::Dialect::L51 => 0,
-            crate::runtime::table::Dialect::L53 => self.sweep_objects(1, false) as i64,
+        let swept = match self.dialect() {
+            crate::runtime::dialect::Dialect::L51 => 0,
+            crate::runtime::dialect::Dialect::L53 => self.sweep_objects(1, false) as i64,
             _ => self.sweep_objects(usize::MAX, true) as i64,
         };
         (work, swept)

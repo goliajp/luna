@@ -13,8 +13,8 @@
 //! same at the same C call depth), or one fixed for the process.
 
 use super::*;
+use crate::runtime::dialect::Dialect;
 use crate::runtime::mem::Oom;
-use crate::runtime::table::Dialect;
 
 /// Where a C string PUC hands to `luaS_new` lives.
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -131,7 +131,7 @@ impl Heap {
             let g = Gc::from_ptr(p);
             let t = g.as_mut();
             t.init_array_ptr();
-            t.hdr.sub = self.table_dialect as u8;
+            t.hdr.sub = self.dialect() as u8;
             t.id = self.take_id();
             t.alimit.set(0);
             t.lenhint.set(0);

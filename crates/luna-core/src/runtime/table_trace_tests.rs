@@ -96,7 +96,9 @@ fn weak_value_table_marks_its_keys() {
 #[test]
 fn weak_key_table_without_ephemerons_marks_its_values() {
     let mut heap = Heap::new();
-    heap.no_ephemeron = true;
+    heap.set_rules(crate::runtime::dialect::Rules::of(
+        crate::version::LuaVersion::Lua51,
+    ));
     let globals = heap.new_table();
     let t = heap.new_table_sized(8);
     with_mode(&mut heap, t, b"k");

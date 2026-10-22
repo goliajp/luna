@@ -61,8 +61,8 @@ impl Heap {
             scan: self.all,
             weak: Vec::new(),
             ephemeron: Vec::new(),
-            no_ephemeron: self.no_ephemeron,
-            dialect: self.table_dialect,
+            no_ephemeron: !self.rules.ephemeron(),
+            dialect: self.dialect(),
             cached_protos: Vec::new(),
             leaf_black: LEAF,
             leaf_hdr: 0,
@@ -90,7 +90,7 @@ impl Heap {
     /// The sweep of [`Heap::gc_end_full`], after its marking.
     pub(crate) fn gc_sweep_full(&mut self) -> usize {
         // 5.1's full cycle sweeps the string table before the list
-        if self.table_dialect == crate::runtime::table::Dialect::L51 {
+        if self.dialect() == crate::runtime::dialect::Dialect::L51 {
             self.collect_dead_strings();
             self.sweep_strings_upto(i64::MAX);
         }
@@ -201,7 +201,7 @@ impl Heap {
         // so the following drain_marker propagates through it.
         let mut dead = self.separate_finalizables(m);
         // 5.1 counts what they keep alive with them (`propagateall`'s work)
-        dead += if self.table_dialect == crate::runtime::table::Dialect::L51 {
+        dead += if self.dialect() == crate::runtime::dialect::Dialect::L51 {
             self.drain_work(m, run)
         } else {
             drain_marker(m);
@@ -327,7 +327,7 @@ impl Heap {
             weak: std::mem::take(&mut prop.weak),
             ephemeron: std::mem::take(&mut prop.ephemeron),
             no_ephemeron: prop.no_ephemeron,
-            dialect: self.table_dialect,
+            dialect: self.dialect(),
             cached_protos: std::mem::take(&mut prop.cached_protos),
             leaf_black: 0,
             leaf_hdr: self.leaf_hdr(),

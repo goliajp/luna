@@ -3,9 +3,9 @@
 //! finalizers it runs.
 
 use super::*;
+use crate::runtime::dialect::Dialect;
 use crate::runtime::heap::{Propagated, Running};
 use crate::runtime::puc::step::StepHost;
-use crate::runtime::table::Dialect;
 
 impl StepHost for Vm {
     #[inline]
@@ -78,7 +78,7 @@ impl Vm {
         let co = self.current.or(self.main_coro);
         let main = match (&self.main_ctx, self.main_coro) {
             (Some(m), Some(mc)) => {
-                let ci = match self.heap.table_dialect {
+                let ci = match self.heap.dialect() {
                     Dialect::L51 => m.frame_size,
                     // the levels below its running one, as for the running
                     // thread ([`Vm::ci_in_use`])
@@ -106,7 +106,7 @@ impl Vm {
             size: self.stack_size,
             // 5.1 counts its `CallInfo` array, 5.2 the ones in use below
             // the running one, the later dialects all it has
-            ci: match self.heap.table_dialect {
+            ci: match self.heap.dialect() {
                 Dialect::L51 => self.g.frame_size,
                 Dialect::L52 => self.ci_in_use(),
                 _ => self.g.ci_alloc,
@@ -181,7 +181,7 @@ impl Vm {
         self.clear_dead_stack(true);
         let mut run = self.gc_running();
         // 5.2's final traversal of a thread counts no `CallInfo`
-        if self.heap.table_dialect == Dialect::L52 {
+        if self.heap.dialect() == Dialect::L52 {
             run.ci = 0;
             run.main_ci = 0;
         }

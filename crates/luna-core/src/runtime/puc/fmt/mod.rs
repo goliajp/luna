@@ -7,9 +7,9 @@
 //! grows a block for what does not fit and makes one string at the end.
 
 use crate::numeric::{self, FloatFmt, Num};
+use crate::runtime::dialect::Dialect;
 use crate::runtime::heap::{Gc, Heap};
 use crate::runtime::mem::Oom;
-use crate::runtime::table::Dialect;
 use crate::runtime::{LuaStr, Value};
 
 /// An argument of a `%` directive.

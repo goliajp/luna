@@ -43,10 +43,10 @@ impl Heap {
     /// return, where the `Result` takes two.
     pub(crate) fn intern_or_none(&mut self, bytes: &[u8]) -> Option<Gc<LuaStr>> {
         // 5.1 interns strings of every length
-        if bytes.len() <= string::MAX_SHORT_LEN || self.hash51 {
+        if bytes.len() <= string::MAX_SHORT_LEN || self.rules.hash51() {
             let (p, is_new) = self
                 .strings
-                .intern(self.mem.mem(), bytes, self.seed, self.hash51)
+                .intern(self.mem.mem(), bytes, self.seed, self.rules.hash51())
                 .ok()?;
             if is_new {
                 // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
@@ -63,7 +63,8 @@ impl Heap {
             // SAFETY: `p` is an interned string the heap manages, new and linked above
             Some(unsafe { Gc::from_ptr(p) })
         } else {
-            let p = string::alloc_long(self.mem.mem(), bytes, self.seed, self.hash51).ok()?;
+            let p =
+                string::alloc_long(self.mem.mem(), bytes, self.seed, self.rules.hash51()).ok()?;
             // SAFETY: `alloc_long` just allocated `p`, linked nowhere yet
             unsafe { self.link(p as *mut GcHeader) };
             self.acct_new_string(p as *mut GcHeader, bytes.len());
@@ -134,7 +135,7 @@ impl Heap {
             buf[a.len()..n].copy_from_slice(b);
             return self.try_intern(&buf[..n]);
         }
-        if self.hash51 {
+        if self.rules.hash51() {
             // 5.1 looks every string up by its bytes
             let mut buf = [0u8; 256];
             if n <= buf.len() {
@@ -144,7 +145,7 @@ impl Heap {
             }
             return self.try_intern(&[a, b].concat());
         }
-        let p = string::alloc_long_pair(self.mem.mem(), a, b, self.seed, self.hash51)?;
+        let p = string::alloc_long_pair(self.mem.mem(), a, b, self.seed, self.rules.hash51())?;
         // SAFETY: `alloc_long_pair` just allocated `p`, linked nowhere yet
         unsafe { self.link(p as *mut GcHeader) };
         self.acct_new_string(p as *mut GcHeader, n);
@@ -165,10 +166,10 @@ impl Heap {
             return self.try_intern(joined(parts, &mut [0u8; string::MAX_SHORT_LEN]));
         }
         // 5.1 looks every string up by its bytes
-        if self.hash51 && n <= 512 {
+        if self.rules.hash51() && n <= 512 {
             return self.try_intern(joined(parts, &mut [0u8; 512]));
         }
-        if self.hash51 {
+        if self.rules.hash51() {
             return self.try_intern(&parts.concat());
         }
         let p = string::alloc_long_parts(self.mem.mem(), parts, self.seed)?;
@@ -212,10 +213,10 @@ impl Heap {
     /// The interned string with `bytes`, if one has been made; never
     /// allocates. A short name no string exists for is no table's key.
     pub fn find_interned(&self, bytes: &[u8]) -> Option<Gc<LuaStr>> {
-        if bytes.len() > string::MAX_SHORT_LEN && !self.hash51 {
+        if bytes.len() > string::MAX_SHORT_LEN && !self.rules.hash51() {
             return None;
         }
-        let p = self.strings.find(bytes, self.seed, self.hash51)?;
+        let p = self.strings.find(bytes, self.seed, self.rules.hash51())?;
         // SAFETY: `p` is a string in the intern table, so allocated; a
         // dead-white one found mid-sweep is kept from this cycle's sweep by
         // the recoloring `try_intern` does

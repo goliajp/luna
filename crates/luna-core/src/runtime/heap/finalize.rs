@@ -50,7 +50,7 @@ impl Heap {
                 // call lands one cycle later. luna mirrors this by resurrecting
                 // the table on the first sighting and only enqueuing it for
                 // `__gc` on the second.
-                let in_thread_cycle = self.defer_thread_cycle_finalize
+                let in_thread_cycle = self.rules.late_thread_cycle_finalize()
                     // SAFETY: `h` is a listed header, still allocated (see
                     // above); only its tag byte is read
                     && unsafe { (*h).tag } == ObjTag::Table
@@ -121,7 +121,7 @@ impl Heap {
     /// Whether an object with header flags `flags` can be registered now:
     /// not while registered, nor, in 5.2, once it has been finalized.
     fn may_register(&self, flags: u8) -> bool {
-        flags & FIN == 0 && (self.refinalize || flags & FINALIZED == 0)
+        flags & FIN == 0 && (self.rules.refinalize() || flags & FINALIZED == 0)
     }
 
     /// Put `h` on `tobefnz`, whose room `register` keeps.
@@ -214,7 +214,7 @@ impl Heap {
         use crate::runtime::Value;
         // SAFETY: every `tobefnz` entry was marked by `separate_finalizables` (or `mark_all` re-marks it) and so is still allocated; it was registered as a table or a userdata, the two tags matched below, and the caller roots the returned handle until the finalizer has run
         unsafe {
-            if self.refinalize {
+            if self.rules.refinalize() {
                 (*h).flags &= !FINALIZED;
             }
             match (*h).tag {

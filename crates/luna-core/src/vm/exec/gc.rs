@@ -242,7 +242,7 @@ impl Vm {
     #[inline(always)]
     #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn precall_checkpoint(&mut self, top: u32) -> Result<(), LuaError> {
-        if self.version == crate::version::LuaVersion::Lua52 {
+        if self.heap.rules().check_on_call() {
             return self.checkpoint(top);
         }
         Ok(())
@@ -285,7 +285,7 @@ impl Vm {
     /// 5.1's `luaD_call` checks for a collection when the call returns,
     /// its results below `top` (calls from C, metamethods, `pcall`'s).
     pub(crate) fn call_return_checkpoint(&mut self, top: u32) -> Result<(), LuaError> {
-        if self.version == crate::version::LuaVersion::Lua51 {
+        if self.heap.rules().check_on_return() {
             return self.checkpoint(top);
         }
         Ok(())

@@ -51,7 +51,9 @@ impl Table {
         val: Value,
     ) -> Result<(), TableError> {
         let k = match key {
-            Value::Float(f) if f == 0.0 && f.is_sign_negative() && heap.signed_zero_keys => {
+            Value::Float(f)
+                if f == 0.0 && f.is_sign_negative() && heap.rules().signed_zero_keys() =>
+            {
                 return self.set_neg_zero(heap, val);
             }
             key => normalize_set_key(key)?,

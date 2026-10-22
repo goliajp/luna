@@ -4,10 +4,10 @@
 //! shrink a stack) it does for them through [`StepHost`]; the formulas and
 //! the state are the model's.
 
+use crate::runtime::dialect::Dialect;
 use crate::runtime::heap::{Heap, Running};
 use crate::runtime::puc::Param;
 use crate::runtime::puc::pace::*;
-use crate::runtime::table::Dialect;
 use crate::vm::LuaError;
 
 mod d51;

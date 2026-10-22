@@ -33,7 +33,7 @@ impl Vm {
             return self.splices_stand(splices);
         };
         let (marks, scanned) = rec;
-        let d = self.heap.table_dialect;
+        let d = self.heap.dialect();
         let mut r = Replay::new(
             (d, self.heap.puc_sizes()),
             proto,

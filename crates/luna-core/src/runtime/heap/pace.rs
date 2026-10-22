@@ -1,7 +1,7 @@
 //! Byte accounting and collection pacing.
 
 use super::*;
-use crate::runtime::table::Dialect;
+use crate::runtime::dialect::Dialect;
 
 pub(super) use crate::runtime::puc::work::native_upvals;
 
@@ -105,7 +105,7 @@ impl Heap {
     pub(crate) fn gc_set_stopped(&mut self, stopped: bool) {
         self.gc_stopped = stopped;
         if !stopped {
-            let d = self.table_dialect;
+            let d = self.dialect();
             match d {
                 Dialect::L51 => self.puc.pace.set_threshold(self.puc.bytes as i64),
                 _ => self.puc.pace.set_debt(d, self.puc.bytes, 0),
@@ -167,10 +167,10 @@ impl Heap {
     /// stops the collector with an unreachable threshold; the later
     /// dialects still step then, to put the debt back.
     pub(crate) fn refresh_gc_limit(&mut self) {
-        self.puc.gc_limit = if self.gc_stopped && self.table_dialect == Dialect::L51 {
+        self.puc.gc_limit = if self.gc_stopped && self.dialect() == Dialect::L51 {
             usize::MAX
         } else {
-            self.puc.pace.limit(self.table_dialect)
+            self.puc.pace.limit(self.dialect())
         };
     }
 
@@ -179,7 +179,7 @@ impl Heap {
     /// 5.1 `setthreshold`).
     pub fn rearm_gc_pause(&mut self, pause: i64) {
         use crate::runtime::puc::pace::*;
-        let d = self.table_dialect;
+        let d = self.dialect();
         let bytes = self.puc.bytes;
         match d {
             Dialect::L51 => {

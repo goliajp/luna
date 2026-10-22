@@ -3,7 +3,7 @@
 //! main thread, the main thread's stack and 5.1's CallInfo array, the
 //! registry's array part, the string table), and the strings it makes.
 
-use crate::runtime::table::Dialect;
+use crate::runtime::dialect::Dialect;
 
 /// The tag-method names `luaT_init` makes, in its order.
 pub(crate) fn tm_names(d: Dialect) -> &'static [&'static str] {

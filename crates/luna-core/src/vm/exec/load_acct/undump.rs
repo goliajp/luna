@@ -20,7 +20,7 @@ impl Vm {
         let Some(evs) = crate::vm::dump::undump_events(bytes) else {
             return Ok(());
         };
-        let d = self.heap.table_dialect;
+        let d = self.heap.dialect();
         let (mut protos, mut closing) = (Vec::new(), Vec::new());
         walk(cl.proto, &mut protos, &mut closing);
         let mut protos = protos.into_iter();
@@ -110,7 +110,7 @@ impl Vm {
             Arr::Code => 4,
             Arr::Protos => s.ptr,
             Arr::Consts => s.tvalue,
-            Arr::Lines if matches!(self.heap.table_dialect, Dialect::L54 | Dialect::L55) => 1,
+            Arr::Lines if matches!(self.heap.dialect(), Dialect::L54 | Dialect::L55) => 1,
             Arr::Lines => 4,
             Arr::AbsLines => s.abslineinfo,
             Arr::LocVars => s.locvar,
@@ -123,8 +123,8 @@ impl Vm {
     /// string of `p`'s that luna made with those bytes, counted now, or
     /// a record of one luna has none of.
     fn undump_string(&mut self, b: &[u8], p: Option<Gc<Proto>>) -> Result<Value, SyntaxError> {
-        let long = b.len() > crate::runtime::string::MAX_SHORT_LEN
-            && self.heap.table_dialect != Dialect::L51;
+        let long =
+            b.len() > crate::runtime::string::MAX_SHORT_LEN && self.heap.dialect() != Dialect::L51;
         if !long {
             return Ok(Value::Str(self.heap.try_intern(b)?));
         }

@@ -7,8 +7,8 @@
 //! context); nothing here touches them.
 
 use super::*;
+use crate::runtime::dialect::Dialect;
 use crate::runtime::puc::size::PucSizes;
-use crate::runtime::table::Dialect;
 
 /// What a counted allocation is, for PUC's tag of it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

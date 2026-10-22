@@ -2,7 +2,7 @@
 //! prototype's arrays in.
 
 use super::*;
-use crate::runtime::table::Dialect;
+use crate::runtime::dialect::Dialect;
 
 /// A Lua closure's header bit: see [`Heap::env51`].
 pub(crate) const ENV51: u8 = 0x40;

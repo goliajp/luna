@@ -2,7 +2,7 @@
 //! allocates their parts in.
 
 use super::*;
-use crate::runtime::table::Dialect;
+use crate::runtime::dialect::Dialect;
 
 impl Heap {
     /// The bytes of a table's array part of `n` slots.

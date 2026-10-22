@@ -6,7 +6,7 @@
 //! object sweep reaches them.
 
 use super::*;
-use crate::runtime::table::Dialect;
+use crate::runtime::dialect::Dialect;
 
 mod order;
 

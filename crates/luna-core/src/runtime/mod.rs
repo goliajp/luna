@@ -2,6 +2,7 @@
 
 mod builtin;
 pub mod coroutine;
+pub(crate) mod dialect;
 pub mod frame_marker;
 /// v2.13 WUC `gc-verify` — thread-local log of every freed GcHeader
 /// pointer, written by `Heap::free_obj` and consulted by read-time

@@ -61,7 +61,7 @@ impl Heap {
         self.set_native_puc_nup(g, puc_nup);
         if self.counting() {
             puc::set_uncounted(h, false);
-            if puc_nup > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
+            if puc_nup > 0 || self.dialect() == crate::runtime::dialect::Dialect::L51 {
                 self.acct_obj(PucKind::CClosure, self.puc.sizes.c_closure(puc_nup));
             }
         }
@@ -241,7 +241,7 @@ impl Heap {
             if nup > 0 {
                 puc::set_uncounted(g.as_ptr() as *mut GcHeader, true);
             }
-        } else if nup > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
+        } else if nup > 0 || self.dialect() == crate::runtime::dialect::Dialect::L51 {
             let size = self.puc.sizes.c_closure(nup);
             self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::CClosure, size);
         }

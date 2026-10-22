@@ -10,7 +10,7 @@ use std::ptr;
 
 use crate::runtime::function::{LuaClosure, NativeClosure, Proto, UpvalState, Upvalue};
 use crate::runtime::string::{self, LuaStr, StringTable};
-use crate::runtime::table::{self, Table};
+use crate::runtime::table::Table;
 use crate::runtime::userdata::{Userdata, UserdataPayload};
 use crate::runtime::value::Value;
 
@@ -38,7 +38,7 @@ pub struct GcHeader {
     /// time a Marker visits an object and the time it traces it.
     pub(in crate::runtime) flags: u8,
     /// Per-type byte in what would otherwise be padding: a table keeps the
-    /// dialect whose table rules it follows here (`table::Dialect`).
+    /// dialect whose table rules it follows here (`crate::runtime::dialect::Dialect`).
     pub(crate) sub: u8,
     /// Class bits, in padding: `UNLISTED`, `STANDS`, `RO_CLS`, `SLAB`, ...
     pub(crate) cls: u8,
@@ -122,6 +122,9 @@ pub(in crate::runtime) struct PropagateState {
 // compiler's own order moved them apart when unrelated fields changed
 #[repr(C)]
 pub struct Heap {
+    /// the dialect's rules: tables, string hashing, what the collector
+    /// keeps and when it finalizes
+    rules: crate::runtime::dialect::Rules,
     /// PUC `g->currentwhite`: the white of born / surviving objects; the
     /// other is the dead white the sweep frees. Flipped by `atomic`.
     current_white: u8,
@@ -145,28 +148,10 @@ pub struct Heap {
     /// standard library's functions, PUC's light C functions)
     fix_natives: bool,
     track_chunk_roots: bool,
-    /// PUC 5.1 has no ephemeron pass: a `__mode='k'` table marks its values
-    /// strongly, so `a[t]=t` survives with nothing else referencing `t`
-    /// (5.1's gc.lua "weak tables" asserts 3*lim survivors, 5.4's 2*lim).
-    pub(crate) no_ephemeron: bool,
-    /// 5.1/5.2: a new table key -0 stays -0 (see `Table::set`)
-    pub(crate) signed_zero_keys: bool,
-    /// hash strings with PUC 5.1's function (`string::lua_hash_51`)
-    pub(crate) hash51: bool,
-    /// the dialect whose table rules (array sizing, hashing of number
-    /// keys, the length border) a new table follows
-    pub(crate) table_dialect: crate::runtime::table::Dialect,
-    /// PUC 5.3 finalizes a table in a cycle through an unreachable coroutine
-    /// one collection after it finds it unreachable (gc.lua :502); 5.4 and
-    /// 5.5 in the same one (gc.lua :544). Set by the VM at construction.
-    pub(crate) defer_thread_cycle_finalize: bool,
     /// 5.1: the name `__gc`, which a userdata listed for finalization must
     /// have in its metatable when it dies to be finalized (PUC 5.1 lists
     /// every userdata given a metatable and looks then)
     gc_event_51: Option<Gc<crate::runtime::LuaStr>>,
-    /// An object finalized once can be registered again (all but 5.2,
-    /// whose `luaC_checkfinalizer` refuses a finalized object).
-    pub(crate) refinalize: bool,
     all: *mut GcHeader,
     /// PUC `fixedgc`: objects never swept, freed with the heap
     fixed: *mut GcHeader,

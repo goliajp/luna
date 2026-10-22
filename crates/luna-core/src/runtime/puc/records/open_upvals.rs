@@ -8,9 +8,9 @@
 
 use super::*;
 use crate::runtime::Coro;
+use crate::runtime::dialect::Dialect;
 use crate::runtime::function::{UpvalState, Upvalue};
 use crate::runtime::mem::LVec;
-use crate::runtime::table::Dialect;
 
 /// The header of `thread`, null for the main thread.
 fn owner_of(thread: Option<Gc<Coro>>) -> *mut GcHeader {

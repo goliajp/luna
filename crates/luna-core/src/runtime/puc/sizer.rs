@@ -19,7 +19,7 @@ impl Sizer {
     /// # Safety
     /// `h` heads an allocated object.
     pub(in crate::runtime) unsafe fn size(&self, h: *mut GcHeader) -> i64 {
-        let d = crate::runtime::table::Dialect::L55;
+        let d = crate::runtime::dialect::Dialect::L55;
         // SAFETY: the caller's contract; the tag names the type
         unsafe {
             if (*h).tag != ObjTag::Coro {

@@ -2,7 +2,7 @@
 //! `CallInfo`s.
 
 use super::*;
-use crate::runtime::table::Dialect;
+use crate::runtime::dialect::Dialect;
 
 /// Whose stack or `CallInfo`s: the main thread, counted with the state,
 /// or a coroutine, counted as the coroutine itself is.

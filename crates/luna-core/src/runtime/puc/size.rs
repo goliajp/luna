@@ -7,7 +7,7 @@
 //! (where 5.2 packs a value into 8 bytes, its "NaN trick"); or wasm32,
 //! which aligns doubles to 8 bytes.
 
-use crate::runtime::table::Dialect;
+use crate::runtime::dialect::Dialect;
 
 /// The structure sizes of one dialect on one pointer width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

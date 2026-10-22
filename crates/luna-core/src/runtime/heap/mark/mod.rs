@@ -53,7 +53,7 @@ pub(crate) struct Marker {
     pub(crate) no_ephemeron: bool,
     /// the dialect, whose `reallymarkobject` decides which objects are
     /// traversed as soon as they are marked
-    pub(crate) dialect: crate::runtime::table::Dialect,
+    pub(crate) dialect: crate::runtime::dialect::Dialect,
     /// Protos with a closure cache (PUC `Proto.cache`), a weak reference:
     /// a cached closure left unmarked is cleared once marking is done.
     pub(crate) cached_protos: Vec<*mut crate::runtime::Proto>,

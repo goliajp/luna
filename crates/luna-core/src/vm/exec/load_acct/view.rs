@@ -60,7 +60,7 @@ impl Vm {
         let cl = self.close_chunk(proto).ok()?;
         let (marks, scanned) = tree.recorded()?;
         let chunk = tree.parsed().0;
-        let d = self.heap.table_dialect;
+        let d = self.heap.dialect();
         let mut r = Replay::new(
             (d, self.heap.puc_sizes()),
             cl.proto,
