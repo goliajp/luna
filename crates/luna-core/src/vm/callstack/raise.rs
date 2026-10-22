@@ -184,10 +184,11 @@ impl Vm {
         if handled || mem {
             self.msgh_applied = Some(out);
         }
+        // the natives the error leaves are still listed: their boxes' slots
+        let now = catcher.is_some() || self.current.is_none();
+        let closed = self.close_left_boxes(base, now);
         self.running_natives.truncate(base);
-        // the boxes of the natives the error leaves are garbage
-        self.buffer_boxes.retain(|&(at, _)| at as usize <= base);
-        out
+        closed.map_or(out, |e| e.0)
     }
 
     /// The message a chunk that failed to compile leaves, `load`'s second

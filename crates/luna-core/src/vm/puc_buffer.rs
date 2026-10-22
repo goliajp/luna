@@ -171,6 +171,7 @@ impl PucBuffer {
                 vm.heap.trace_raw(0, newsize);
             }
         }
+        vm.box_block(self.ubox, newsize);
         self.size = newsize;
         self.boxed = true;
         Ok(())
