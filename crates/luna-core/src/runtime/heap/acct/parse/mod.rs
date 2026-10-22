@@ -8,11 +8,9 @@ use super::*;
 use crate::runtime::mem::{LVec, Oom};
 use crate::runtime::table::Dialect;
 
-#[path = "heap_parse_mark.rs"]
 mod mark;
 #[cfg(feature = "gc-verify")]
 pub(in crate::runtime::heap) use mark::is_kept;
-#[path = "heap_parse_unborn.rs"]
 mod unborn;
 
 /// In a record's `sub` byte: a parser table.

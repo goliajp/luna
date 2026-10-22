@@ -272,5 +272,4 @@ fn intern_resurrects_dead_white_short_string() {
     drop(heap);
 }
 
-#[path = "heap_mark_tests.rs"]
 mod mark;

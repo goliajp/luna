@@ -15,9 +15,7 @@
 
 use super::*;
 
-#[path = "heap_env51_mark.rs"]
 mod mark;
-#[path = "heap_env51_sweep.rs"]
 mod sweep;
 
 /// The class bits naming a 5.1 environment (`ENV_*`); none, the globals.

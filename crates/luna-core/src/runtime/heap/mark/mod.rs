@@ -2,7 +2,6 @@
 
 use super::*;
 
-#[path = "heap_mark_at.rs"]
 mod at;
 pub(crate) use at::native_puc_upvals;
 
