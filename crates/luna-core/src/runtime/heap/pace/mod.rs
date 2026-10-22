@@ -3,7 +3,6 @@
 use super::*;
 use crate::runtime::table::Dialect;
 
-#[path = "gc_work.rs"]
 mod work;
 pub(super) use work::{array_bytes, hash_bytes, native_upvals, objsize, stack_bytes, thread_bytes};
 

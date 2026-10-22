@@ -85,7 +85,6 @@ pub(crate) fn header_is_marked<T: GcObject>(g: Gc<T>) -> bool {
     unsafe { !is_white((*g.header()).flags) }
 }
 
-#[path = "heap_header.rs"]
 mod header;
 pub use header::ObjTag;
 pub(crate) use header::{
@@ -93,7 +92,6 @@ pub(crate) use header::{
     UNCOUNTED, UNLISTED,
 };
 
-#[path = "gc_ptr.rs"]
 mod gc_ptr;
 pub use gc_ptr::{Gc, GcObject};
 
@@ -125,7 +123,7 @@ struct PropagateState {
 #[repr(C)]
 pub struct Heap {
     /// PUC's `totalbytes`: every object and block at the size PUC gives it
-    /// (`sizes`), not what luna's own objects take (see `heap_acct.rs`)
+    /// (`sizes`), not what luna's own objects take (see `heap::acct`)
     pub(crate) bytes: usize,
     /// where the next collection step falls due (`pace`), or `usize::MAX`
     /// while there is none: the one comparison a safe point makes
@@ -234,7 +232,7 @@ pub struct Heap {
     pub(crate) threads: Vec<Gc<crate::runtime::Coro>>,
     /// the sizes of PUC's objects in this dialect, which `bytes` counts
     pub(crate) sizes: crate::runtime::puc_size::PucSizes,
-    /// PUC's own structures luna has none of (see `heap_acct.rs`)
+    /// PUC's own structures luna has none of (see `heap::acct`)
     pub(crate) puc: acct::PucState,
     #[cfg(feature = "gc-trace")]
     pub(crate) trace: crate::runtime::gc_trace::Trace,
@@ -271,55 +269,36 @@ impl Heap {
     }
 }
 
-#[path = "heap_acct.rs"]
 mod acct;
 pub(crate) use acct::{Deferred, Ghost, GhostRef, PucKind, Thread, is_uncounted, parse, strcache};
-#[path = "heap_alloc.rs"]
 mod alloc;
-#[path = "heap_barrier.rs"]
 mod barrier;
-#[path = "heap_close.rs"]
 mod close;
-#[path = "heap_collect.rs"]
 mod collect;
 pub(crate) use collect::{Propagated, Running};
-#[path = "heap_env51.rs"]
 mod env51;
-#[path = "heap_finalize.rs"]
 mod finalize;
-#[path = "heap_intern.rs"]
 mod intern;
-#[path = "heap_new.rs"]
 mod new;
-#[path = "heap_slab.rs"]
 mod slab;
 use self::intern::oom_abort_heap;
 pub(crate) use self::new::fresh_seed;
 use self::new::make_seed;
 pub(crate) use env51::{ENV_IO, ENV_IO_POPEN, ENV_IO_STD, ENV_PACKAGE, ENV_PROTO};
-#[path = "heap_free.rs"]
 mod free;
-#[path = "heap_mark.rs"]
 mod mark;
-#[path = "heap_open_upvals.rs"]
 mod open_upvals;
 pub(crate) use open_upvals::OpenLend;
-#[path = "heap_pace.rs"]
 mod pace;
-#[path = "heap_strt.rs"]
 mod strt;
-#[path = "heap_sweep.rs"]
 mod sweep;
 #[cfg(feature = "gc-trace")]
-#[path = "heap_trace.rs"]
 mod trace;
 pub(crate) use self::mark::{Marker, native_puc_upvals};
 use self::mark::{blacken, drain_marker, survived_mark, weak_key_alive};
 
 #[cfg(feature = "gc-verify")]
-#[path = "heap_verify.rs"]
 mod verify;
 
 #[cfg(test)]
-#[path = "heap_tests.rs"]
 mod tests;

@@ -3,9 +3,7 @@
 
 use super::*;
 
-#[path = "heap_atomic.rs"]
 mod atomic;
-#[path = "heap_sizer.rs"]
 mod sizer;
 pub(crate) use sizer::Sizer;
 

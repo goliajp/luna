@@ -228,7 +228,7 @@ impl Vm {
     }
 
     /// The open lists the VM holds, lent to the collector for the end of
-    /// this marking (see `heap_open_upvals.rs`).
+    /// this marking (see `heap::open_upvals`).
     pub(crate) fn lend_open_lists(&mut self) {
         if !self.heap.open_on_threads() {
             return;

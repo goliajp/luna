@@ -4,7 +4,6 @@ use super::*;
 use crate::runtime::mem::{LSlice, Oom, oom_abort};
 use std::alloc::Layout;
 
-#[path = "heap_native.rs"]
 mod native;
 
 impl Heap {

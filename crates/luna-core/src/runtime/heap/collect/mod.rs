@@ -2,7 +2,6 @@
 
 use super::*;
 
-#[path = "heap_step.rs"]
 mod step;
 pub(super) use step::Sizer;
 pub(crate) use step::{Propagated, Running};

@@ -1,7 +1,7 @@
 //! PUC's incremental steps (`luaC_step` and `singlestep`), by dialect: the
 //! states a cycle goes through, the work each step counts, and the debt a
-//! step leaves. The marking and sweeping are luna's own (`heap_step.rs`,
-//! `heap_sweep.rs`); what is counted is PUC's.
+//! step leaves. The marking and sweeping are luna's own (`heap::collect`,
+//! `heap::sweep`); what is counted is PUC's.
 
 use super::*;
 use crate::runtime::gc_pace::*;

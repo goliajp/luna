@@ -24,7 +24,7 @@ pub(crate) struct PucState {
     /// given size, one entry for each object of PUC's (see
     /// `Heap::stand_sizes_on`)
     pub(crate) stand_ins: Vec<(*mut GcHeader, usize)>,
-    /// keepers (`heap_keeper.rs`) and their hosts
+    /// keepers (`heap::acct::keeper`) and their hosts
     pub(crate) keepers: Vec<(*mut GcHeader, *mut GcHeader)>,
     /// 5.3: the threads this cycle's propagation has shrunk; 5.2: the ones
     /// the sweep kept, for the VM to shrink

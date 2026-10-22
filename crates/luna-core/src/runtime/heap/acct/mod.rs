@@ -10,19 +10,13 @@ use super::*;
 use crate::runtime::puc_size::PucSizes;
 use crate::runtime::table::Dialect;
 
-#[path = "heap_ghost.rs"]
 mod ghost;
-#[path = "heap_keeper.rs"]
 pub(in crate::runtime::heap) mod keeper;
-#[path = "heap_strcache.rs"]
 pub(crate) mod strcache;
 pub(crate) use ghost::{Ghost, GhostRef};
-#[path = "heap_parse.rs"]
 pub(crate) mod parse;
-#[path = "heap_acct_state.rs"]
 mod state;
 #[cfg(test)]
-#[path = "heap_acct_tests.rs"]
 mod tests;
 pub(crate) use state::PucState;
 
@@ -208,17 +202,11 @@ impl Heap {
     }
 }
 
-#[path = "heap_acct_boot.rs"]
 mod boot;
-#[path = "heap_acct_defer.rs"]
 mod defer;
-#[path = "heap_acct_fmt.rs"]
 mod fmt;
-#[path = "heap_acct_parts.rs"]
 mod parts;
-#[path = "heap_acct_proto.rs"]
 mod proto;
-#[path = "heap_acct_thread.rs"]
 mod thread;
 pub(crate) use boot::STRT_STAND;
 pub(crate) use defer::Deferred;

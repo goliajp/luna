@@ -8,7 +8,6 @@
 use super::*;
 use crate::runtime::table::Dialect;
 
-#[path = "heap_strt_order.rs"]
 mod order;
 
 /// In a string's `sub` byte: the string sweep took it off the count; the
