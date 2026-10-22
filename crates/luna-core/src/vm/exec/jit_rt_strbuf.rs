@@ -111,21 +111,19 @@ impl Vm {
             Some(AccumLast::Long(g)) => Some(g),
             _ => None,
         };
-        if made.is_some() {
-            self.heap.puc.silent += 1;
-        }
+        let off = made.map(|_| self.heap.counting_off());
         let r = if buf.len() > 256 * 1024 {
             None
         } else {
             self.heap.try_intern(buf).ok()
         };
-        if let Some(g) = made {
-            self.heap.puc.silent -= 1;
-            if let Some(s) = r {
-                self.heap.ghost_taken(g);
-                self.heap
-                    .set_counted(s.as_ptr() as *mut crate::runtime::heap::GcHeader);
-            }
+        if let Some(off) = off {
+            self.heap.counting_on(off);
+        }
+        if let (Some(g), Some(s)) = (made, r) {
+            self.heap.ghost_taken(g);
+            self.heap
+                .set_counted(s.as_ptr() as *mut crate::runtime::heap::GcHeader);
         }
         buf.clear();
         match r {

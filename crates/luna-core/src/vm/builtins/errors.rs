@@ -84,14 +84,14 @@ pub(crate) fn nat_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     }
     // `luaL_where` and the message, concatenated into one value
     vm.native_push(1);
-    let base = vm.lib_roots.len();
+    let base = vm.lib_roots.mark();
     let r = vm.api_pushing(|vm| lual_where(vm, pos)).and_then(|at| {
         vm.api_check_before()?;
         let v = concat2(vm, Value::Str(at), msg)?;
         vm.api_check_after(v)?;
         Ok(v)
     });
-    vm.lib_roots.truncate(base);
+    vm.lib_roots.release(base);
     Err(LuaError(r?))
 }
 
@@ -112,7 +112,7 @@ fn raise(vm: &mut Vm, msg: Message<'_>, conv: Option<u32>) -> LuaError {
     // concatenated into one value; each piece is pushed, as the API calls
     // that make them check for a collection
     vm.native_push(1);
-    let base = vm.lib_roots.len();
+    let base = vm.lib_roots.mark();
     let r = (|| {
         // 5.3+ `assert` pushes its message before `luaB_error` positions it
         let early = match msg {
@@ -130,7 +130,7 @@ fn raise(vm: &mut Vm, msg: Message<'_>, conv: Option<u32>) -> LuaError {
         vm.api_check_after(v)?;
         Ok(v)
     })();
-    vm.lib_roots.truncate(base);
+    vm.lib_roots.release(base);
     match r {
         Ok(v) => LuaError(v),
         Err(e) => e,

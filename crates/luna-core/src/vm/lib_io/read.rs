@@ -139,9 +139,9 @@ fn g_read_formats(
 ) -> Result<ReadOut, LuaError> {
     // the values read stay on the C function's stack while the next is
     // read, which may collect
-    let base = vm.lib_roots.len();
+    let base = vm.lib_roots.mark();
     let r = read_formats(vm, u, fmts, argno0, top);
-    vm.lib_roots.truncate(base);
+    vm.lib_roots.release(base);
     r
 }
 

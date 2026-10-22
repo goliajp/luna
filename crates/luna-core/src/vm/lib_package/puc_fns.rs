@@ -66,10 +66,7 @@ fn searcher_croot_fn(vm: &mut Vm, op: &mut Opener, id: u32, nup: u32) -> Result<
 /// luna's `loadfile` the Lua searcher loads with: its own, PUC calls
 /// `luaL_loadfilex`.
 fn own_loadfile(vm: &mut Vm) -> Result<Value, LuaError> {
-    vm.heap.puc.silent += 1;
-    let f = vm.lib_native(crate::vm::lib_os_io::nat_loadfile);
-    vm.heap.puc.silent -= 1;
-    f
+    vm.uncounted(|vm| vm.lib_native(crate::vm::lib_os_io::nat_loadfile))
 }
 
 fn searcher_lua_fn(vm: &mut Vm, op: &mut Opener, id: u32, nup: u32) -> Result<Value, LuaError> {
@@ -81,9 +78,7 @@ fn searcher_lua_fn(vm: &mut Vm, op: &mut Opener, id: u32, nup: u32) -> Result<Va
 /// The mark of a module being loaded, to catch loops: a light userdata
 /// of PUC's, nothing it counts.
 fn sentinel(vm: &mut Vm) -> Result<Value, LuaError> {
-    vm.heap.puc.silent += 1;
-    let s = vm.lib_userdata(UserdataPayload::Empty, false, 0);
-    vm.heap.puc.silent -= 1;
+    let s = vm.uncounted(|vm| vm.lib_userdata(UserdataPayload::Empty, false, 0));
     Ok(Value::Userdata(s?))
 }
 
@@ -190,9 +185,7 @@ fn push_default(
         return op.pushstring(vm, luna);
     }
     op.before(vm)?;
-    vm.heap.puc.silent += 1;
-    let s = vm.str_value(luna);
-    vm.heap.puc.silent -= 1;
+    let s = vm.uncounted(|vm| vm.str_value(luna));
     let s = s?;
     op.push(vm, s)?;
     // 5.1 finds the string it made before when the package table still

@@ -24,11 +24,11 @@ impl Vm {
         let (Some(proto), Some((at, near))) = (opts.sealed, opts.at) else {
             return self.splices_stand(splices);
         };
-        self.heap.puc.silent += 1;
+        let off = self.heap.counting_off();
         let aside = self.heap.set_aside_loads(true);
         let cl = self.close_chunk(proto);
         self.heap.set_aside_loads(aside);
-        self.heap.puc.silent -= 1;
+        self.heap.counting_on(off);
         let Ok(cl) = cl else {
             return self.splices_stand(splices);
         };

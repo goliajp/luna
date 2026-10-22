@@ -72,10 +72,7 @@ impl Vm {
         let Err(o) = self.heap.puc_concat(st, total) else {
             return Ok(());
         };
-        let base = self.lib_roots.len();
-        self.lib_roots.extend_from_slice(st);
-        let collected = self.emergency_collect();
-        self.lib_roots.truncate(base);
+        let collected = self.rooted(st, |vm| vm.emergency_collect());
         if !collected {
             return Err(o.into());
         }
@@ -87,7 +84,7 @@ impl Vm {
     /// `lua_concat` of the last `total` values of `lib_roots`.
     pub(crate) fn concat_roots(&mut self, total: usize) -> Result<(), LuaError> {
         let mut st = std::mem::take(&mut self.lib_roots);
-        let r = self.concat_pieces(&mut st, total);
+        let r = self.concat_pieces(st.values_mut(), total);
         self.lib_roots = st;
         r
     }

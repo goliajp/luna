@@ -27,9 +27,7 @@ fn luaopen_coroutine(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
 /// The threads now inside a wrapped call, which `resume` and `wrap` share:
 /// luna's own table, which PUC has none of.
 fn in_wrap(vm: &mut Vm) -> Result<Value, LuaError> {
-    vm.heap.puc.silent += 1;
-    let w = vm.alloc_table();
-    vm.heap.puc.silent -= 1;
+    let w = vm.uncounted(|vm| vm.alloc_table());
     let w = w?;
     Ok(Value::Table(w))
 }

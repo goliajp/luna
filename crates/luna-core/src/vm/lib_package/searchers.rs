@@ -76,7 +76,7 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             vm.lib_roots.extend([f, fname]);
             let at = crate::runtime::heap::strcache::CStr::In(found.as_ptr() as *const _, 0);
             let pushed = vm.api_push_string_at(at, &file);
-            vm.lib_roots.truncate(vm.lib_roots.len() - 2);
+            vm.lib_roots.pop_n(2);
             vm.nat_ret(fs, &[f, pushed?])
         }
         _ => {
@@ -114,10 +114,7 @@ pub(super) fn searcher_croot(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lu
     let pkg = upval_table(vm, fs, 0);
     // the root is pushed, and searched for from there
     let root = vm.api_push_string(&name[..dot])?;
-    let at = vm.lib_roots.len();
-    vm.lib_roots.push(root);
-    let found = find_file(vm, pkg, &name[..dot], "cpath");
-    vm.lib_roots.truncate(at);
+    let found = vm.rooted(&[root], |vm| find_file(vm, pkg, &name[..dot], "cpath"));
     match found? {
         Ok(f) => Err(load_error(vm, &name, &f.file, DLMSG)),
         Err(msg) => vm.nat_ret(fs, &[Value::Str(msg)]),

@@ -187,7 +187,7 @@ impl Heap {
             self.env51_records().gens.push(g);
         }
         let w = self.current_white;
-        let counted = self.puc.silent == 0;
+        let counted = self.counting();
         let g = self.env51_gen_now();
         g.opened |= k == E1;
         let p = &mut g.ph[k];

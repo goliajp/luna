@@ -39,9 +39,9 @@ impl Heap {
     pub(crate) fn acct_proto(&mut self, p: Gc<crate::runtime::function::Proto>) {
         let h = p.as_ptr() as *mut GcHeader;
         self.acct_new(h, PucKind::Proto, self.sizes.proto);
-        let arrays = match self.puc.silent {
-            0 => self.proto_arrays(&p),
-            _ => [0; 7],
+        let arrays = match self.counting() {
+            true => self.proto_arrays(&p),
+            false => [0; 7],
         };
         p.puc_arrays.set(arrays);
         for b in arrays {

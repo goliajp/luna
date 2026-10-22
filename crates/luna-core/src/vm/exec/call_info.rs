@@ -83,17 +83,16 @@ impl Vm {
         self.extend_ci_to(n);
     }
 
-    /// Whether the running thread is counted, as the main one always is:
-    /// what it allocates is counted as it is (see `Heap::acct_part`).
-    pub(crate) fn running_counted(&self) -> bool {
-        self.current
-            .is_none_or(|co| !crate::runtime::heap::is_uncounted(co.as_ptr() as *mut _))
+    /// The running thread, as the heap counts its blocks.
+    pub(crate) fn running_blocks(&self) -> crate::runtime::heap::Thread {
+        use crate::runtime::heap::Thread;
+        self.current.map_or(Thread::Main, Thread::Coro)
     }
 
     /// The running thread has `n` `CallInfo`s at least.
     pub(super) fn extend_ci_to(&mut self, n: u32) {
         while self.g.ci_alloc < n {
-            self.heap.acct_ci(self.running_counted(), 1, 0);
+            self.heap.acct_ci(self.running_blocks(), 1, 0);
             self.g.ci_alloc += 1;
         }
     }

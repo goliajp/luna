@@ -219,11 +219,11 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
     // dispatcher drops the trace's registers and the interpreter runs the
     // loop again from the trace head
     let site = sunk_site(ops);
-    let counted = vm.jit_sunk_take(site);
     let hash = (hash_keys_ptr, hash_raws_ptr, hash_kinds_ptr);
-    // SAFETY: the buffers are as the caller's contract says (# Safety)
-    let t = unsafe { materialize(vm, (b, c, k), cap_u, raws_ptr, kinds_ptr, n_hash_u, hash) };
-    vm.jit_sunk_made(site, counted, t);
+    let t = vm.jit_sunk_make(site, |vm| {
+        // SAFETY: the buffers are as the caller's contract says (# Safety)
+        unsafe { materialize(vm, (b, c, k), cap_u, raws_ptr, kinds_ptr, n_hash_u, hash) }
+    });
     t.map_or(0, |g| g.as_ptr() as i64)
 }
 

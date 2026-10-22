@@ -38,10 +38,10 @@ impl Vm {
         name: Option<Gc<crate::runtime::LuaStr>>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         // the chunk's name is on the C function's stack meanwhile
-        let base = self.lib_roots.len();
+        let base = self.lib_roots.mark();
         self.lib_roots.extend(name.map(Value::Str));
         let r = self.load_named_rooted(src, chunkname, name);
-        self.lib_roots.truncate(base);
+        self.lib_roots.release(base);
         r
     }
 
@@ -114,7 +114,7 @@ impl Vm {
         }
         let proto = if is_bytecode {
             let allow_puc = self.puc_bytecode_loading;
-            if self.heap.puc.silent > 0 {
+            if !self.heap.counting() {
                 crate::vm::dump::undump_named(
                     src,
                     &mut self.heap,
@@ -126,14 +126,14 @@ impl Vm {
             } else {
                 // made without counting, then counted as PUC's undumper
                 // makes it
-                self.heap.puc.silent += 1;
+                let off = self.heap.counting_off();
                 let v = self.version;
                 let made =
                     crate::vm::dump::undump_named(src, &mut self.heap, v, allow_puc, chunkname)
                         .map_err(SyntaxError::unpositioned)
                         .and_then(|p| self.hold_puc_names(p).map(|()| p))
                         .and_then(|p| self.close_chunk(p));
-                self.heap.puc.silent -= 1;
+                self.heap.counting_on(off);
                 let cl = made?;
                 self.acct_undump(src, cl)?;
                 return Ok(cl);
@@ -175,9 +175,9 @@ impl Vm {
             // what the parser and the compiler make is counted afterwards,
             // in the order PUC's parser makes it; that includes its own
             // string of the chunk name (`Heap::chunk_name`)
-            let counted = self.heap.puc.silent == 0;
+            let counted = self.heap.counting();
             self.parse_scratch.record = counted;
-            self.heap.puc.silent += 1;
+            let off = self.heap.counting_off();
             let base = self.heap.unborn_len();
             let aside = self.heap.set_aside_loads(counted);
             let source = self
@@ -190,7 +190,7 @@ impl Vm {
                 .and_then(|p| self.hold_puc_names(p).map(|()| p))
                 .and_then(|p| Ok((p, self.close_chunk(p)?)));
             self.heap.set_aside_loads(aside);
-            self.heap.puc.silent -= 1;
+            self.heap.counting_on(off);
             // what PUC made before the error is counted as it made it
             let failed = match (&made, source) {
                 (Err(e), Ok(source)) if counted && !e.is_memory() => {
@@ -234,14 +234,14 @@ impl Vm {
         &mut self,
         f: impl FnOnce(&mut Vm) -> Result<R, SyntaxError>,
     ) -> Result<R, SyntaxError> {
-        let (silent, frames) = (self.heap.puc.silent, self.heap.puc.parse.len());
+        let (counting, frames) = (self.heap.counting_mark(), self.heap.puc.parse.len());
         let (aside, unborn) = (self.heap.puc.unborn_on, self.heap.unborn_len());
         match catch_load_oom(|| f(self)) {
             Ok(r) => r,
             Err(()) => {
                 // the failure unwound past what stops counting for the load,
                 // and past a step's frame of the parser's objects
-                self.heap.puc.silent = silent;
+                self.heap.restore_counting(counting);
                 self.heap.puc.parse.truncate(frames);
                 self.heap.set_aside_loads(aside);
                 self.heap.flush_unborn(unborn);

@@ -14,7 +14,7 @@ impl Vm {
         }
         let mut scratch = self.parse_scratch.take();
         // a counted load records what its scanner makes
-        scratch.record = self.heap.puc.silent == 0;
+        scratch.record = self.heap.counting();
         Some(TextLoad {
             version: self.version,
             depth: self.g.nccalls,
@@ -81,7 +81,7 @@ impl Vm {
         self.heap.puc.load_checked = false;
         let counted = match &parsed.0 {
             Ok(p) => p.recorded().is_some(),
-            Err((e, Some(_))) => self.heap.puc.silent == 0 && !e.is_memory(),
+            Err((e, Some(_))) => self.heap.counting() && !e.is_memory(),
             Err(_) => false,
         };
         let mut splices = splices;
@@ -120,12 +120,12 @@ impl Vm {
                 return vm.close_chunk(proto);
             }
             // made without counting, then counted as PUC's parser makes it
-            vm.heap.puc.silent += 1;
+            let off = vm.heap.counting_off();
             let base = vm.heap.unborn_len();
             let aside = vm.heap.set_aside_loads(true);
             let made = vm.compile_streamed(&mut parsed, chunkname, name);
             vm.heap.set_aside_loads(aside);
-            vm.heap.puc.silent -= 1;
+            vm.heap.counting_on(off);
             let cl = match made {
                 Ok(cl) => cl,
                 Err(e) => {
@@ -190,7 +190,7 @@ impl Vm {
     ) -> SyntaxError {
         let (v, depth) = (self.version, self.g.nccalls);
         let base = self.heap.unborn_len();
-        self.heap.puc.silent += 1;
+        let off = self.heap.counting_off();
         let aside = self.heap.set_aside_loads(true);
         let source = self
             .heap
@@ -210,7 +210,7 @@ impl Vm {
             Err(o) => o.clone(),
         };
         self.heap.set_aside_loads(aside);
-        self.heap.puc.silent -= 1;
+        self.heap.counting_on(off);
         let counted = match source {
             Ok(source) if !e.is_memory() => self.acct_failed_load(src, &e, source, splices),
             _ => self.splices_stand(splices),

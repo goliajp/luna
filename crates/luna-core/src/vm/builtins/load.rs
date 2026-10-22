@@ -92,7 +92,7 @@ fn read_and_load(
     }
     // what each call of the reader counts is set aside, to be counted
     // where PUC's parser calls it: at the byte the piece starts at
-    let counted = vm.heap.puc.silent == 0;
+    let counted = vm.heap.counting();
     let mut splices = Vec::new();
     let mut fed = 0u32;
     let mut spliced = |vm: &mut Vm, rs: &mut ReaderSlot, at: u32, phase: Phase| {

@@ -57,7 +57,7 @@ impl Vm {
                     std::slice::from_raw_parts(l.name.0, l.name.1),
                 )
             };
-            self.heap.puc.silent += 1;
+            let off = self.heap.counting_off();
             let objs = if undumping.is_null() {
                 self.reader_objects(src, name, open)
             } else {
@@ -65,7 +65,7 @@ impl Vm {
                 let (u, shown) = unsafe { (&*undumping, &mut *shown) };
                 self.undump_objects(src, u, shown)
             };
-            self.heap.puc.silent -= 1;
+            self.heap.counting_on(off);
             let objs = objs?;
             let stack = self.stack_of_mut(thread);
             for (k, v) in objs.into_iter().take(n as usize).enumerate() {

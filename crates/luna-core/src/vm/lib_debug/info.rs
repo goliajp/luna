@@ -49,15 +49,20 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     };
     // `lua_getinfo` makes the set of lines only for 'L'
     let want_lines = options.contains(&b'L');
-    let base = vm.lib_roots.len();
+    let base = vm.lib_roots.mark();
     let (ar, activelines) = match level {
         None => {
             // `lua_pushfstring(L, ">%s", options)`, which stays pushed
             let fmt = crate::runtime::puc_fmt::FmtArg::S(&options);
             vm.api_pushing(|vm| vm.pushfstring(b">%s", &[fmt]))?;
             let ar = vm.function_ar(subject);
-            let lines =
-                lines_if(vm, want_lines, subject).inspect_err(|_| vm.lib_roots.truncate(base))?;
+            let lines = match lines_if(vm, want_lines, subject) {
+                Ok(lines) => lines,
+                Err(e) => {
+                    vm.lib_roots.release(base);
+                    return Err(e);
+                }
+            };
             (ar, lines)
         }
         Some(level) => {
@@ -106,11 +111,11 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     };
     let allowed = valid_options(v);
     if checked.iter().any(|c| !allowed.contains(c)) {
-        vm.lib_roots.truncate(base);
+        vm.lib_roots.release(base);
         return Err(arg_error(vm, arg + 2, "invalid option"));
     }
     let t = info_table(vm, &options, &ar, activelines);
-    vm.lib_roots.truncate(base);
+    vm.lib_roots.release(base);
     vm.nat_ret(fs, &[Value::Table(t?)])
 }
 
@@ -154,13 +159,13 @@ fn info_table(
 ) -> Result<Gc<Table>, LuaError> {
     // the table, and what goes in it, made as the API calls PUC's C
     // function makes do, checking for a collection: kept rooted meanwhile
-    let base = vm.lib_roots.len();
+    let base = vm.lib_roots.mark();
     vm.lib_roots.push(activelines);
     // the function described: off the stack when 5.1–5.3 popped it ('>'),
     // where PUC's `lua_getinfo` pushes it again for 'f'
     vm.lib_roots.push(ar.func);
     let r = info_fields(vm, options, ar, activelines);
-    vm.lib_roots.truncate(base);
+    vm.lib_roots.release(base);
     r
 }
 

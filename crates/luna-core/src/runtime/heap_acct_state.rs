@@ -4,8 +4,10 @@ use super::*;
 
 /// PUC's structures luna has no object for, as far as the count goes.
 pub(crate) struct PucState {
-    /// above 0, nothing is counted (objects PUC made elsewhere, or not at all, are being built)
-    pub(crate) silent: u32,
+    /// above 0, nothing is counted (objects PUC made elsewhere, or not at
+    /// all, are being built): changed only through [`CountingOff`] and
+    /// [`CountingMark`]
+    pub(in crate::runtime::heap) silent: u32,
     /// the string table's size and its number of strings
     pub(crate) strt_size: usize,
     pub(crate) strt_nuse: usize,
@@ -86,5 +88,65 @@ impl Default for PucState {
             lights: Vec::new(),
             strcache: Default::default(),
         }
+    }
+}
+
+/// Counting stopped once (luna builds objects PUC made elsewhere, or not
+/// at all), until [`Heap::counting_on`] takes the token back. Only
+/// [`Heap::counting_off`] makes one.
+#[must_use = "counting stays off until the token goes back to `Heap::counting_on`"]
+pub(crate) struct CountingOff(());
+
+/// How far counting was off at some point, for a caller to return
+/// to it whatever happened since (a load unwound by running out of memory).
+#[must_use]
+pub(crate) struct CountingMark(u32);
+
+impl Heap {
+    /// Whether what is made now is counted.
+    #[inline]
+    pub(crate) fn counting(&self) -> bool {
+        self.puc.silent == 0
+    }
+
+    /// Stop counting until the token is handed back.
+    #[inline]
+    pub(crate) fn counting_off(&mut self) -> CountingOff {
+        self.puc.silent += 1;
+        CountingOff(())
+    }
+
+    /// Count again what [`Heap::counting_off`] stopped.
+    #[inline]
+    pub(crate) fn counting_on(&mut self, _: CountingOff) {
+        self.puc.silent -= 1;
+    }
+
+    /// Run `f` with counting off.
+    #[inline]
+    pub(crate) fn uncounted<R>(&mut self, f: impl FnOnce(&mut Heap) -> R) -> R {
+        let off = self.counting_off();
+        let r = f(self);
+        self.counting_on(off);
+        r
+    }
+
+    /// Where counting stands now, to return to with [`Heap::restore_counting`].
+    #[inline]
+    pub(crate) fn counting_mark(&self) -> CountingMark {
+        CountingMark(self.puc.silent)
+    }
+
+    /// Count everything from here, also in the middle of what is not counted
+    /// (an emergency collection): where it stood, to return to.
+    #[inline]
+    pub(crate) fn count_all(&mut self) -> CountingMark {
+        CountingMark(std::mem::replace(&mut self.puc.silent, 0))
+    }
+
+    /// Back to where counting stood at `m`.
+    #[inline]
+    pub(crate) fn restore_counting(&mut self, m: CountingMark) {
+        self.puc.silent = m.0;
     }
 }

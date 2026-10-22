@@ -72,9 +72,9 @@ impl Vm {
 
     /// Run `f`, counting nothing it makes: what PUC has no object for.
     pub(crate) fn uncounted<R>(&mut self, f: impl FnOnce(&mut Vm) -> R) -> R {
-        self.heap.puc.silent += 1;
+        let off = self.heap.counting_off();
         let r = f(self);
-        self.heap.puc.silent -= 1;
+        self.heap.counting_on(off);
         r
     }
 

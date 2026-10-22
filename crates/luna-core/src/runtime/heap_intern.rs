@@ -111,7 +111,7 @@ impl Heap {
                 // first uses it
                 if (*p).hdr.sub & strt::SWEPT != 0 {
                     (*p).hdr.sub &= !strt::SWEPT;
-                    if self.puc.silent > 0 {
+                    if !self.counting() {
                         acct::set_uncounted(p as *mut GcHeader, true);
                     } else {
                         self.acct_string(len);
@@ -188,7 +188,7 @@ impl Heap {
     /// long string whose header alone `totalbytes` counts.
     pub(crate) fn new_external_string(&mut self, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
         let p = string::alloc_long_parts(self.mem.mem(), &[bytes], self.seed)?;
-        let silent = self.puc.silent > 0;
+        let silent = !self.counting();
         // SAFETY: `alloc_long_parts` just allocated `p`, linked nowhere
         // yet; linked, it is a live string of this heap, and only its kind
         // byte is written

@@ -110,9 +110,7 @@ fn concat_field(
         }
     };
     // on the stack until added (`luaL_addvalue`), which roots it itself
-    vm.lib_roots.push(Value::Str(s));
-    let pushed = vm.buf_push(out, s.as_bytes());
-    vm.lib_roots.pop();
+    let pushed = vm.rooted(&[Value::Str(s)], |vm| vm.buf_push(out, s.as_bytes()));
     pushed?;
     b.add_value(vm, out, s)
 }

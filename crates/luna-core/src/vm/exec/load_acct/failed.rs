@@ -44,7 +44,7 @@ impl Vm {
         let mut tree = ParseScratch::new(self.heap.mem_owner());
         tree.record = true;
         tree.lenient(true);
-        self.heap.puc.silent += 1;
+        let off = self.heap.counting_off();
         let aside = self.heap.set_aside_loads(true);
         self.compile_scratch.replay.lenient = true;
         self.compile_scratch.replay.seal = true;
@@ -73,7 +73,7 @@ impl Vm {
         }
         let built = proto.and_then(|p| self.close_chunk(p).ok());
         self.heap.set_aside_loads(aside);
-        self.heap.puc.silent -= 1;
+        self.heap.counting_on(off);
         if let (Some(Err(_)), true, Some(rec)) = (&made, early, tree.recorded()) {
             // the token is shown as the source has it, not the completion
             let opts = &mut self.compile_scratch.replay;

@@ -151,10 +151,7 @@ impl Vm {
         self.api_check_after(mtv)?;
         // `luaL_newmetatable` pushes the name again: the string looked up
         // first may have been collected at the check just made
-        let base = self.lib_roots.len();
-        self.lib_roots.push(mtv);
-        let r = self.fill_box_metatable(mt, name, reg, l53);
-        self.lib_roots.truncate(base);
+        let r = self.rooted(&[mtv], |vm| vm.fill_box_metatable(mt, name, reg, l53));
         r.map(|()| mt)
     }
 
@@ -197,10 +194,7 @@ impl Vm {
     /// [`Vm::box_closed`] with the buffer's string `r` pushed below the
     /// call, kept by a collection that call's stack check makes.
     pub(crate) fn box_closed_over(&mut self, r: Gc<LuaStr>) -> Result<(), LuaError> {
-        self.lib_roots.push(Value::Str(r));
-        let closed = self.box_closed();
-        self.lib_roots.pop();
-        closed
+        self.rooted(&[Value::Str(r)], |vm| vm.box_closed())
     }
 
     /// A box's `__close` (5.4+, `lua_closeslot`): a call one level up, of a

@@ -43,10 +43,7 @@ pub(super) fn add_s(
                 // `push_onecapture`, then (5.3) `luaL_tolstring` of it: the
                 // capture is on PUC's stack meanwhile
                 let v = cap_value(vm, src, c)?;
-                let at = vm.lib_roots.len();
-                vm.lib_roots.push(v);
-                let r = add_capture(vm, v, (out, b));
-                vm.lib_roots.truncate(at);
+                let r = vm.rooted(&[v], |vm| add_capture(vm, v, (out, b)));
                 r?;
             }
             b'%' => {

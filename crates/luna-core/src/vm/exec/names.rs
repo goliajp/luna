@@ -143,9 +143,7 @@ impl Vm {
         let dot = self.heap.try_intern(b".")?;
         self.api_check_after(Value::Str(dot))?;
         let mut st = vec![outer, Value::Str(dot), Value::Str(inner)];
-        self.lib_roots.push(Value::Str(dot));
-        let r = self.api_check_before();
-        self.lib_roots.pop();
+        let r = self.rooted(&[Value::Str(dot)], |vm| vm.api_check_before());
         r?;
         self.heap.puc_concat(&mut st, 3)?;
         self.api_check_after(st[0])?;

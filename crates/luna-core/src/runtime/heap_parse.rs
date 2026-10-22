@@ -98,7 +98,7 @@ impl Heap {
             hdr,
             asize: 0,
             nodes: 0,
-            counted: self.puc.silent == 0,
+            counted: self.counting(),
             refs,
         })?;
         self.acct_obj(PucKind::Table, self.sizes.table);

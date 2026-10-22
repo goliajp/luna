@@ -273,7 +273,7 @@ impl Heap {
 
 #[path = "heap_acct.rs"]
 mod acct;
-pub(crate) use acct::{Deferred, Ghost, GhostRef, PucKind, is_uncounted, parse, strcache};
+pub(crate) use acct::{Deferred, Ghost, GhostRef, PucKind, Thread, is_uncounted, parse, strcache};
 #[path = "heap_alloc.rs"]
 mod alloc;
 #[path = "heap_barrier.rs"]

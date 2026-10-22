@@ -76,35 +76,32 @@ impl Vm {
         }
     }
 
-    /// A trace leaves with sunk site `site`'s table, which it makes for
-    /// real now: when PUC's was counted this round, it is made without
-    /// counting until [`Vm::jit_sunk_made`]. Returns whether it was.
+    /// A trace leaves with sunk site `site`'s table, which `make` makes
+    /// for real now (`None` when it cannot): when PUC's was counted this
+    /// round, it is made without counting and stands for that one.
     #[doc(hidden)]
-    pub fn jit_sunk_take(&mut self, site: usize) -> bool {
+    pub fn jit_sunk_make(
+        &mut self,
+        site: usize,
+        make: impl FnOnce(&mut Vm) -> Option<Gc<Table>>,
+    ) -> Option<Gc<Table>> {
         let counted = self
             .jit_ghosts()
             .sunk
             .get(site)
             .is_some_and(Option::is_some);
-        if counted {
-            self.heap.puc.silent += 1;
-        }
-        counted
-    }
-
-    /// The table [`Vm::jit_sunk_take`] was for is made (`t`; `None` when it
-    /// could not be): when PUC's was counted, it stands for that one.
-    #[doc(hidden)]
-    pub fn jit_sunk_made(&mut self, site: usize, counted: bool, t: Option<Gc<Table>>) {
         if !counted {
-            return;
+            return make(self);
         }
-        self.heap.puc.silent -= 1;
+        let off = self.heap.counting_off();
+        let t = make(self);
+        self.heap.counting_on(off);
         let g = self.jit_ghosts().sunk[site].take();
         if let (Some(g), Some(t)) = (g, t) {
             self.heap.ghost_table_taken(g);
             self.heap.set_counted(t.as_ptr() as *mut GcHeader);
         }
+        t
     }
 
     /// A collection starts, perhaps inside a running trace (a Lua function

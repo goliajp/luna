@@ -52,9 +52,7 @@ fn new_body_coro(vm: &mut Vm, a: Args) -> Result<Gc<Coro>, LuaError> {
     let co = vm.try_new_coro(a.get(vm, 0))?;
     // the new thread is pushed over the arguments
     vm.native_push_vals(&[Value::Coro(co)])?;
-    vm.lib_roots.push(Value::Coro(co));
-    let body = check_body(vm, a);
-    vm.lib_roots.pop();
+    let body = vm.rooted(&[Value::Coro(co)], |vm| check_body(vm, a));
     vm.native_pop(1);
     body.map(|_| co)
 }
