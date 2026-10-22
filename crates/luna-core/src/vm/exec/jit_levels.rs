@@ -47,7 +47,7 @@ impl Vm {
         self.jit.levels_base = self.g.frames_native;
         self.jit.levels_slot = base;
         self.g.frames_native += 1;
-        self.note_call_level();
+        self.note_level();
         self.g.jit_top = base + max;
         self.precall_checkpoint(base + max)?;
         Ok(Some(saved))
@@ -130,6 +130,7 @@ impl Vm {
         let entry = self.jit.levels_base;
         // the levels below are entered; the deeper ones returned
         self.g.frames_native = entry + depth;
+        self.g.ci_hint = 0;
         self.g.jit_top = base + max;
         if self.jit_level_checks(base + nparams, max) {
             return Ok(None);
@@ -149,7 +150,7 @@ impl Vm {
         let ci = !tail || self.version <= LuaVersion::Lua53;
         if ci {
             self.g.frames_native += 1;
-            self.note_call_level();
+            self.note_level();
         }
         self.precall_checkpoint(base + max)?;
         if tail && ci {

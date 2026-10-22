@@ -53,7 +53,9 @@ impl Vm {
                 .get_unchecked_mut((base + kept) as usize..end)
                 .fill(Value::Nil);
         }
-        if self.frames.len() == self.frames.capacity() {
+        // a frame stack with no room left, or a level with no `CallInfo`
+        // counted yet (`CallGuards::ci_hint`, at most the room)
+        if self.frames.len() as u32 >= self.g.ci_hint {
             return None;
         }
         frames_push_sync(
@@ -75,7 +77,6 @@ impl Vm {
                 ccmt: std::mem::take(&mut self.pending_ccmt),
             }),
         );
-        self.note_call_level();
         // SAFETY: a Lua frame was just pushed
         match unsafe { self.frames.last_mut().unwrap_unchecked() } {
             CallFrame::Lua(f) => Some(f),

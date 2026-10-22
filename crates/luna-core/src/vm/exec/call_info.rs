@@ -19,21 +19,51 @@ impl Vm {
         self.frames_in_use() - base
     }
 
-    /// A call level was entered: counted when the thread has not been this
-    /// deep before. `ci_alloc` stays at its maximum in 5.1, which counts its
-    /// array where it grows (`grow_frames`).
+    /// A Lua function's call level was entered: counted when the thread
+    /// has not been this deep before. `ci_alloc` stays at its maximum in
+    /// 5.1, which counts its array where it grows (`grow_frames`). Only
+    /// the frame count is compared here, against the count below which a
+    /// push needs no `CallInfo` (`CallGuards::ci_hint`); the fast loop's
+    /// calls test it before they push.
     #[inline(always)]
     pub(super) fn note_call_level(&mut self) {
-        if self.ci_in_use() > self.g.ci_alloc {
-            self.extend_ci();
+        if self.frames.len() as u32 > self.g.ci_hint {
+            self.note_level_out_of_line();
+        }
+        #[cfg(any(debug_assertions, feature = "gc-verify"))]
+        assert!(
+            self.ci_in_use() <= self.g.ci_alloc,
+            "a call level went uncounted: the frame count bound is stale"
+        );
+    }
+
+    #[inline(never)]
+    fn note_level_out_of_line(&mut self) {
+        self.note_level();
+    }
+
+    /// A native was entered: one level more, so the frame count bound one
+    /// less (given back when it returns, see `finish_native_call`).
+    #[inline(always)]
+    pub(crate) fn note_native_level(&mut self) {
+        if self.frames.len() as u32 >= self.g.ci_hint {
+            self.note_level();
+        } else {
+            self.g.ci_hint -= 1;
         }
     }
 
-    #[cold]
-    #[inline(never)]
-    fn extend_ci(&mut self) {
+    /// A call level was entered, of a native or of a compiled call (whose
+    /// counts are outside the frames): counted as for a Lua function, and
+    /// the frame count up to which no more is needed worked out again.
+    #[inline]
+    pub(crate) fn note_level(&mut self) {
         let n = self.ci_in_use();
-        self.extend_ci_to(n);
+        if n > self.g.ci_alloc {
+            self.extend_ci_to(n);
+        }
+        let room = self.frames.capacity() as u32;
+        self.g.ci_hint = (self.frames.len() as u32 + (self.g.ci_alloc - n)).min(room);
     }
 
     /// PUC calls a C function one level above the running one, which luna

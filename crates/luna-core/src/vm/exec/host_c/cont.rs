@@ -43,7 +43,7 @@ impl Vm {
         };
         let act = NativeAct::new(ncl, nc.func_slot, 0, self.frames.len(), 0);
         self.running_natives.push(act)?;
-        self.note_call_level();
+        self.note_level();
         self.native_nresults = nc.nresults;
         let thread = self.host_thread();
         match self.in_native_window(|vm| (hooks.resume)(vm, thread, hc.token, nc.func_slot, vals)) {

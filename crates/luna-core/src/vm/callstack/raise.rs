@@ -145,6 +145,7 @@ impl Vm {
             // block kept their room
             self.running_natives.push_or_abort(e.act);
         }
+        self.g.ci_hint = 0;
         let catcher = self.nearest_catcher();
         let to_host = catcher.is_none() && self.current.is_none() && self.keep_error_traceback;
         let mut handled = false;

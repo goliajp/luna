@@ -111,6 +111,7 @@ impl Vm {
         self.g.host_pcalls += u32::from(main);
         let r = self.call_value(level, args);
         self.g.host_pcalls -= u32::from(main);
+        self.g.ci_hint = 0;
         r
     }
 
@@ -126,6 +127,7 @@ impl Vm {
         let r = self.call_value_k_at(level, args, at);
         self.nny -= 1;
         self.g.host_pcalls -= 1;
+        self.g.ci_hint = 0;
         r
     }
 

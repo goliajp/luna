@@ -63,6 +63,11 @@ pub(crate) struct CallGuards {
     /// the `ci->top` of the host's own C function below them (`pmain`'s),
     /// in luna's numbering; 0 without one
     pub(crate) host_ci_top: u32,
+    /// the frame count below which a Lua frame pushed needs no new
+    /// `CallInfo` and has room in the frame stack (see
+    /// `Vm::note_call_level`): 0, worked out again at the next call, after
+    /// anything else that counts as a level changes
+    pub(crate) ci_hint: u32,
     /// the stack slots the host holds below the main thread's
     /// (`host_entry_layout`): its C function and its arguments
     pub(crate) host_slots: u32,
