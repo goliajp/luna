@@ -40,7 +40,7 @@ impl Input {
                 // unchecked, as lua.c's fputs / fflush
                 luna_core::stdio::write_stdout(prompt);
                 let _ = luna_core::stdio::flush_stdout();
-                match interp.vm.read_stdin_line(MAXINPUT) {
+                match interp.vm().read_stdin_line(MAXINPUT) {
                     Ok(Some(l)) => Line::Text(l),
                     // fgets gives NULL at the end of input and on an error
                     Ok(None) | Err(_) => Line::Eof,
@@ -51,7 +51,7 @@ impl Input {
                 // readline writes its prompt through stdout too: what that
                 // holds goes out before it
                 let _ = luna_core::stdio::flush_stdout();
-                ed.read(&mut interp.vm, prompt)
+                ed.read(interp.vm(), prompt)
             }
         }
     }

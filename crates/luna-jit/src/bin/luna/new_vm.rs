@@ -4,13 +4,82 @@
 use luna_jit::VmExt;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
+use luna_jit::vm::{Standalone, StandaloneOptions, Vm};
 
 use crate::LunaOpts;
 
-pub(crate) fn new_vm(opts: &LunaOpts, ignore_env: bool, argc: usize) -> Vm {
+/// The state the interpreter runs in: lua.c's, or the sandbox's (no
+/// lua.c around it).
+pub(crate) enum Host {
+    LuaC(Standalone),
+    Sandbox(Vm),
+}
+
+impl Host {
+    pub(crate) fn vm(&mut self) -> &mut Vm {
+        match self {
+            Host::LuaC(s) => s.vm_mut(),
+            Host::Sandbox(vm) => vm,
+        }
+    }
+
+    pub(crate) fn vm_ref(&self) -> &Vm {
+        match self {
+            Host::LuaC(s) => s.vm(),
+            Host::Sandbox(vm) => vm,
+        }
+    }
+
+    /// What lua.c does in `pmain` after it opened the libraries, before
+    /// it runs anything: from 5.3 `arg`, from 5.4 the collector restarted
+    /// in generational mode (lua.c's state did that as it was made).
+    pub(crate) fn pmain_start(&mut self, argv: &[Vec<u8>], script: usize) {
+        if let Host::Sandbox(vm) = self {
+            if vm.version() >= LuaVersion::Lua53 {
+                sandbox_arg(vm, argv, script);
+            }
+            let op = match vm.version() {
+                LuaVersion::Lua55 => 7,
+                v if v >= LuaVersion::Lua54 => 10,
+                _ => return,
+            };
+            let _ = vm.host_gc(1, [0; 3]);
+            let _ = vm.host_gc(op, [0; 3]);
+        }
+    }
+
+    /// 5.1 and 5.2's `getargs` before the script runs.
+    pub(crate) fn script_args(&mut self, argv: &[Vec<u8>], script: usize) {
+        match self {
+            Host::LuaC(s) => {
+                s.script_args().expect("set the arg global");
+            }
+            Host::Sandbox(vm) if vm.version() <= LuaVersion::Lua52 => sandbox_arg(vm, argv, script),
+            Host::Sandbox(_) => {}
+        }
+    }
+}
+
+/// `arg` in the sandbox: `arg[0]` the script, its arguments from 1, what
+/// comes before it down from -1.
+fn sandbox_arg(vm: &mut Vm, argv: &[Vec<u8>], script: usize) {
+    let mut t = vm.new_table();
+    for (i, a) in argv.iter().enumerate() {
+        t = t.with(i as i64 - script as i64, a.as_slice());
+    }
+    let t = t.build();
+    vm.set_global("arg", Value::Table(t))
+        .expect("set the arg global");
+}
+
+pub(crate) fn new_vm(
+    opts: &LunaOpts,
+    ignore_env: bool,
+    argv: &[Vec<u8>],
+    script: Option<usize>,
+) -> Host {
     // Cranelift (`Vm::new` has the no-op backend), unless --no-jit
-    let mut vm = if opts.sandbox {
+    let mut host = if opts.sandbox {
         // SandboxBuilder has no JIT backend but its trace flags start on:
         // --no-jit switches them off, otherwise Cranelift goes in after it
         let mut vm = luna_jit::vm::Vm::sandbox(opts.version)
@@ -25,7 +94,7 @@ pub(crate) fn new_vm(opts: &LunaOpts, ignore_env: bool, argc: usize) -> Vm {
         } else {
             vm.install_default_jit();
         }
-        vm
+        Host::Sandbox(vm)
     } else {
         // Test knob, deliberately left out of --help: hash strings with a
         // fixed seed, so that two runs, and two builds, do the same work
@@ -50,12 +119,13 @@ pub(crate) fn new_vm(opts: &LunaOpts, ignore_env: bool, argc: usize) -> Vm {
         } else {
             luna_jit::install_default_jit(&mut vm);
         }
-        // lua.c sets it before it opens the libraries
-        vm.set_ignore_env(ignore_env);
-        enter_pmain(&mut vm, opts.version, argc);
-        vm.open_lua_c_libs().expect("the libraries open");
-        vm
+        let lua_c = StandaloneOptions::default().ignore_env(ignore_env);
+        Host::LuaC(
+            vm.into_standalone(argv, script, lua_c)
+                .expect("lua.c's state"),
+        )
     };
+    let vm = host.vm();
     if let Some(n) = opts.budget {
         vm.set_instr_budget(Some(n));
     }
@@ -82,10 +152,7 @@ pub(crate) fn new_vm(opts: &LunaOpts, ignore_env: bool, argc: usize) -> Vm {
             .and_then(|s| s.parse::<u64>().ok())
     {
         let llvm_after = (ms > 0).then(|| std::time::Duration::from_millis(ms));
-        luna_jit::install_llvm_backend_with(
-            &mut vm,
-            luna_jit::jit_backend::LlvmBackend { llvm_after },
-        );
+        luna_jit::install_llvm_backend_with(vm, luna_jit::jit_backend::LlvmBackend { llvm_after });
     }
     // Test knob, also left out of --help: move a trace to the optimizing
     // tier after N loop iterations and entries (0: never)
@@ -95,22 +162,5 @@ pub(crate) fn new_vm(opts: &LunaOpts, ignore_env: bool, argc: usize) -> Vm {
     {
         vm.set_trace_tier_up_at(n);
     }
-    vm
-}
-
-/// lua.c runs everything inside `pmain`, a C function `main` calls
-/// protected with `lua_cpcall` (5.1: the function and its userdata on the
-/// stack) or `lua_pcall` with `argc` and `argv` as arguments, before it
-/// opens the libraries.
-fn enter_pmain(vm: &mut Vm, version: LuaVersion, argc: usize) {
-    // an address standing for the program's own `argv`, or 5.1's userdata
-    static ARGV: u8 = 0;
-    let argv = Value::LightUserdata(&ARGV as *const u8 as *const ());
-    if version == LuaVersion::Lua51 {
-        vm.host_entry_layout(1, 2);
-        vm.host_entry_args(&[argv]);
-    } else {
-        vm.host_entry_layout(1, 3);
-        vm.host_entry_args(&[Value::Int(argc as i64), argv]);
-    }
+    host
 }

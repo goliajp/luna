@@ -8,14 +8,18 @@ use msgh::msghandler;
 
 /// The interpreter: the state `lua.c` keeps around its `lua_State`.
 pub(crate) struct Interp {
-    pub(crate) vm: Vm,
+    pub(crate) host: crate::new_vm::Host,
     /// `progname`: `argv[0]`; none while the REPL runs.
     pub(crate) progname: Option<Vec<u8>>,
 }
 
 impl Interp {
     pub(crate) fn version(&self) -> LuaVersion {
-        self.vm.version()
+        self.host.vm_ref().version()
+    }
+
+    pub(crate) fn vm(&mut self) -> &mut Vm {
+        self.host.vm()
     }
 
     /// `lua.c`'s `l_message`.
@@ -41,7 +45,7 @@ impl Interp {
         if err.is_nil() && v <= LuaVersion::Lua52 {
             return;
         }
-        let msg = match lua_tostring(&mut self.vm, err) {
+        let msg = match lua_tostring(self.vm(), err) {
             Some(m) => m,
             None => match v {
                 LuaVersion::Lua51 | LuaVersion::Lua52 => b"(error object is not a string)".to_vec(),
@@ -61,17 +65,17 @@ impl Interp {
     /// `lua_gc(L, LUA_GCCOLLECT, 0)` after a chunk failed (5.1's `docall`,
     /// 5.2's `report`): whatever a finalizer raises there goes unreported.
     fn collect_after_error(&mut self) {
-        let _ = self.vm.host_gc(2, [0; 3]);
+        let _ = self.vm().host_gc(2, [0; 3]);
     }
 
     /// `lua.c`'s `docall`: call `f` with `args` under the message handler.
     pub(crate) fn docall(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, Value> {
-        msgh::check_handler_push(&mut self.vm, f, args)?;
-        let msgh = self.vm.native(msghandler);
+        msgh::check_handler_push(self.vm(), f, args)?;
+        let msgh = self.vm().native(msghandler);
         // lua.c makes the call from inside `pmain`, the C function the
         // whole interpreter runs in: a traceback ends with that level
         let r = self
-            .vm
+            .vm()
             .call_value_with_handler_in_c(f, args, msgh)
             .map_err(|e| e.0);
         // 5.1 forces a complete collection in case of errors
@@ -79,9 +83,9 @@ impl Interp {
             && self.version() == LuaVersion::Lua51
         {
             // the message stays on the stack meanwhile
-            let held = self.vm.pin_host(e);
+            let held = self.vm().pin_host(e);
             self.collect_after_error();
-            let _ = self.vm.unpin(held);
+            let _ = self.vm().unpin(held);
         }
         r
     }
@@ -100,13 +104,13 @@ impl Interp {
     /// takes text only.
     fn dostring(&mut self, src: &[u8], chunkname: &[u8]) -> Option<Vec<Value>> {
         let mode = (self.version() >= LuaVersion::Lua55).then_some(&b"t"[..]);
-        let loaded = self.vm.load_buffer(src, chunkname, mode);
+        let loaded = self.vm().load_buffer(src, chunkname, mode);
         self.dochunk(loaded, &[])
     }
 
     /// `dofile`: a file, or stdin when `name` is `None`.
     pub(crate) fn dofile(&mut self, name: Option<&[u8]>) -> Option<Vec<Value>> {
-        let loaded = self.vm.load_file(name, None);
+        let loaded = self.vm().load_file(name, None);
         self.dochunk(loaded, &[])
     }
 
@@ -147,15 +151,15 @@ impl Interp {
             }
             _ => (spec, spec),
         };
-        let require = self.vm.globals().get(self.str_value("require"));
-        let name = Value::Str(self.vm.heap.intern(module));
+        let require = self.vm().globals().get(self.str_value("require"));
+        let name = Value::Str(self.vm().heap.intern(module));
         match self.docall(require, &[name]) {
             Ok(_) if self.version() == LuaVersion::Lua51 => true,
             Ok(vals) => {
                 let v = vals.first().copied().unwrap_or(Value::Nil);
                 // the globals table is not ours to refuse; a failure here
                 // would be luna's own
-                self.vm
+                self.vm()
                     .set_global_bytes(global, v)
                     .expect("set the -l global");
                 true
@@ -168,16 +172,7 @@ impl Interp {
     }
 
     pub(crate) fn str_value(&mut self, s: &str) -> Value {
-        Value::Str(self.vm.heap.intern(s.as_bytes()))
-    }
-
-    /// `createargtable` / `getargs`: `arg[0]` is the script (`argv[0]` when
-    /// there is none), the script's arguments count up from 1 and what
-    /// comes before it down from -1.
-    pub(crate) fn set_arg(&mut self, argv: &[Vec<u8>], script: usize) {
-        self.vm
-            .host_set_arg(argv, script)
-            .expect("set the arg global");
+        Value::Str(self.vm().heap.intern(s.as_bytes()))
     }
 
     /// `handle_script`: load the script (stdin for `-` unless it follows
@@ -185,13 +180,13 @@ impl Interp {
     pub(crate) fn handle_script(&mut self, argv: &[Vec<u8>], script: usize) -> bool {
         let v = self.version();
         if v <= LuaVersion::Lua52 {
-            self.set_arg(argv, script);
+            self.host.script_args(argv, script);
         }
         let stdin = argv[script] == b"-" && argv[script - 1] != b"--";
         let name = (!stdin).then(|| argv[script].as_slice());
         // 5.2 on load either kind of chunk; 5.1 had no mode
-        let loaded = self.vm.load_file(name, None);
-        self.vm.trace_mark("/load");
+        let loaded = self.vm().load_file(name, None);
+        self.vm().trace_mark("/load");
         let f = match loaded {
             Ok(f) => f,
             Err(e) => {
@@ -202,7 +197,7 @@ impl Interp {
         let args = if v <= LuaVersion::Lua52 {
             argv[script + 1..]
                 .iter()
-                .map(|a| Value::Str(self.vm.heap.intern(a)))
+                .map(|a| Value::Str(self.vm().heap.intern(a)))
                 .collect()
         } else {
             match self.pushargs() {
@@ -219,14 +214,14 @@ impl Interp {
     /// 5.3's `pushargs`: the script's arguments are `arg[1..#arg]`, as they
     /// are after `-e` / `-l` ran.
     fn pushargs(&mut self) -> Result<Vec<Value>, Value> {
-        let arg = self.vm.globals().get(self.str_value("arg"));
+        let arg = self.vm().globals().get(self.str_value("arg"));
         let Value::Table(t) = arg else {
             return Err(self.str_value("'arg' is not a table"));
         };
         // with `argc`, `argv` and the script on `pmain`'s stack
         let n = t.len();
         let msg = "too many arguments to script";
-        self.vm
+        self.vm()
             .host_check_stack(3, n as u32 + 3, msg)
             .map_err(|e| e.0)?;
         Ok((1..=n).map(|i| t.get(Value::Int(i))).collect())
@@ -258,9 +253,9 @@ impl Interp {
                     }
                 }
                 b'W' if self.version() >= LuaVersion::Lua54 => {
-                    let warn = self.vm.globals().get(self.str_value("warn"));
+                    let warn = self.vm().globals().get(self.str_value("warn"));
                     let on = self.str_value("@on");
-                    self.vm
+                    self.vm()
                         .call_value(warn, &[on])
                         .expect("warn(\"@on\") only switches the warning state");
                 }

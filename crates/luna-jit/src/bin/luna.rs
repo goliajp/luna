@@ -225,11 +225,7 @@ fn pmain(interp: &mut Interp, argv: &[Vec<u8>], args: &LuaArgs) -> bool {
     }
     // 5.3 on create `arg` before anything runs; 5.1 and 5.2 only for a
     // script. With no script, argv[0] is `arg[0]`.
-    if v >= LuaVersion::Lua53 {
-        interp.set_arg(argv, args.script.unwrap_or(0));
-    }
-    // 5.4 on run the collector in generational mode
-    interp.vm.gc_enter_generational();
+    interp.host.pmain_start(argv, args.script.unwrap_or(0));
     // 5.1 ran it before looking at the options
     if v >= LuaVersion::Lua52 && !args.ignore_env && !interp.handle_luainit() {
         return false;
@@ -280,7 +276,12 @@ fn main() {
     let args = collectargs(opts.version, &argv);
     let ignore_env = args.as_ref().is_ok_and(|a| a.ignore_env);
     let mut interp = Interp {
-        vm: new_vm(&opts, ignore_env, argv.len()),
+        host: new_vm(
+            &opts,
+            ignore_env,
+            &argv,
+            args.as_ref().ok().and_then(|a| a.script),
+        ),
         progname: Some(progname.clone()),
     };
     // 5.1 runs LUA_INIT before it looks at the options
@@ -295,19 +296,19 @@ fn main() {
     // 5.1's `lua_cpcall` checks for a collection as `pmain` returns
     // (`luaD_call`)
     if opts.version == LuaVersion::Lua51 {
-        let _ = interp.vm.host_check_gc();
+        let _ = interp.vm().host_check_gc();
     }
     if opts.profile {
-        print_profile(&interp.vm);
+        print_profile(interp.host.vm_ref());
     }
-    counters::append(&interp.vm);
+    counters::append(interp.host.vm_ref());
     // lua.c closes the state before it exits: to-be-closed variables are
     // closed and finalizers run, so open files write out their buffers.
     // The memory is not handed back one object at a time: the process ends
     // here and the system takes it (the state stays reachable to the end,
     // for leak checkers)
-    interp.vm.trace_mark("close");
-    interp.vm.host_close_state();
+    interp.vm().trace_mark("close");
+    interp.vm().host_close_state();
     AT_EXIT.store(
         Box::into_raw(Box::new(interp)),
         std::sync::atomic::Ordering::Relaxed,

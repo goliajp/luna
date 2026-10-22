@@ -15,8 +15,7 @@ impl Vm {
     /// as `lua.c`'s `pmain` does: `lua_cpcall` (5.1) or `lua_pcall` with
     /// two arguments. Call once, before anything runs: the same depth then
     /// ends a recursion in both.
-    #[doc(hidden)]
-    pub fn host_entry_layout(&mut self, frames: u32, slots: u32) {
+    pub(crate) fn host_entry_layout(&mut self, frames: u32, slots: u32) {
         self.g.host_frames += frames;
         for _ in 0..slots {
             self.stack.push_or_abort(Value::Nil);
@@ -40,8 +39,7 @@ impl Vm {
     /// The arguments of the host's C function in the slots
     /// [`Vm::host_entry_layout`] made, above the function's own: `lua.c`'s
     /// `pmain` gets `argc` and `argv` (5.1 its light userdata).
-    #[doc(hidden)]
-    pub fn host_entry_args(&mut self, args: &[Value]) {
+    pub(crate) fn host_entry_args(&mut self, args: &[Value]) {
         for (i, &v) in args.iter().enumerate() {
             self.stack[1 + i] = v;
         }
