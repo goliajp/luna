@@ -225,7 +225,7 @@ impl Heap {
     unsafe fn link(&mut self, h: *mut GcHeader) {
         // SAFETY: the caller's contract
         unsafe {
-            if self.puc.unborn_on && self.set_aside(h) {
+            if self.loads_set_aside() && self.set_aside(h) {
                 return;
             }
             self.link_now(h);
@@ -236,7 +236,7 @@ impl Heap {
 use crate::runtime::puc;
 pub(crate) use crate::runtime::puc::records::{Ghost, GhostRef, parse, strcache};
 use crate::runtime::puc::records::{env51, open_upvals, strt};
-pub(crate) use crate::runtime::puc::{Deferred, PucKind, Thread, is_uncounted};
+pub(crate) use crate::runtime::puc::{Deferred, PucKind, PucObj, Thread, is_uncounted};
 mod alloc;
 mod barrier;
 #[cfg(any(debug_assertions, feature = "gc-verify", feature = "gc-stress"))]

@@ -3,6 +3,13 @@
 
 use super::*;
 
+impl Heap {
+    /// How many of 5.1's environment records a sweep has not freed.
+    pub(in crate::runtime) fn env51_live(&self) -> i64 {
+        self.puc.env51_box.as_ref().map_or(0, |e| e.live())
+    }
+}
+
 impl Env51 {
     /// How many of the records a sweep has not freed.
     pub(in crate::runtime) fn live(&self) -> i64 {

@@ -140,6 +140,18 @@ impl Heap {
         }
     }
 
+    /// The list sweep reached dead string `h` that PUC's string sweep, not
+    /// the list's, frees: held off the list until that sweep ends.
+    #[inline]
+    pub(in crate::runtime) fn hold_for_string_sweep(&mut self, h: *mut GcHeader) {
+        self.puc.strt.held.push(h);
+    }
+
+    /// The strings held for the string sweep, taken (the heap is dropped).
+    pub(in crate::runtime) fn take_held_strings(&mut self) -> Vec<*mut GcHeader> {
+        std::mem::take(&mut self.puc.strt.held)
+    }
+
     /// The string sweep is over (or a full collection ends it): the strings
     /// held off the object list are freed, or put back when a program made
     /// them again meanwhile.

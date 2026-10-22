@@ -25,9 +25,7 @@ impl Heap {
                 cur = (*cur).next;
             }
         }
-        if let Some(e) = &self.puc.env51_box {
-            n += e.live();
-        }
+        n += self.env51_live();
         self.hooks.trace.line(format_args!("n {n} {by:?}"));
     }
 
@@ -91,10 +89,7 @@ impl Heap {
 
     /// `LUNA_GC_REFUSE` refuses a new long string of `len` bytes.
     pub(crate) fn refuse_string(&mut self, len: usize) -> bool {
-        let size = self
-            .puc
-            .sizes
-            .string(len, self.dialect() == crate::runtime::dialect::Dialect::L55);
+        let size = self.puc_size(crate::runtime::puc::PucObj::Str { len, long: true });
         len > crate::runtime::string::MAX_SHORT_LEN && self.hooks.trace.refuse_now(0, size)
     }
 

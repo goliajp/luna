@@ -62,7 +62,7 @@ impl Heap {
         if self.counting() {
             puc::set_uncounted(h, false);
             if puc_nup > 0 || self.dialect() == crate::runtime::dialect::Dialect::L51 {
-                self.acct_obj(PucKind::CClosure, self.puc.sizes.c_closure(puc_nup));
+                self.acct_obj(PucKind::CClosure, self.puc_size(PucObj::CClosure(puc_nup)));
             }
         }
         Ok(g)
@@ -131,27 +131,12 @@ impl Heap {
             h
         };
         if self.counting() {
-            self.acct_obj(PucKind::CClosure, self.puc.sizes.c_closure(0));
+            self.acct_obj(PucKind::CClosure, self.puc_size(PucObj::CClosure(0)));
         } else {
             puc::set_uncounted(h, true);
         }
         // SAFETY: as above
         Ok(unsafe { Gc::from_ptr(p) })
-    }
-
-    /// The light function the opening made as function `id` (see
-    /// `PucModel::lights`).
-    pub(crate) fn light(&self, id: usize) -> Option<Gc<NativeClosure>> {
-        self.puc.lights.get(id).copied().flatten()
-    }
-
-    /// Function `id` of the opening is the light function `g`.
-    pub(crate) fn set_light(&mut self, id: usize, g: Gc<NativeClosure>) {
-        let l = &mut self.puc.lights;
-        if l.len() <= id {
-            l.resize(crate::vm::opening::FN_COUNT.max(id + 1), None);
-        }
-        l[id] = Some(g);
     }
 
     /// Native `g` stands for a C closure of PUC's with `n` upvalues (from
@@ -180,7 +165,7 @@ impl Heap {
                 self.acct_obj(kind, size);
             }
             let h = g.as_ptr() as *mut GcHeader;
-            self.puc.stand_ins.extend(objs.iter().map(|&(_, s)| (h, s)));
+            self.stand_for(h, objs.iter().map(|&(_, s)| s));
             // SAFETY: `h` heads the native just made; only its class byte
             unsafe { (*h).cls |= STANDS };
         }
@@ -242,7 +227,7 @@ impl Heap {
                 puc::set_uncounted(g.as_ptr() as *mut GcHeader, true);
             }
         } else if nup > 0 || self.dialect() == crate::runtime::dialect::Dialect::L51 {
-            let size = self.puc.sizes.c_closure(nup);
+            let size = self.puc_size(PucObj::CClosure(nup));
             self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::CClosure, size);
         }
         Ok(g)

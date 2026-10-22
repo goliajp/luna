@@ -53,7 +53,7 @@ impl Heap {
             if !is_white(cf) {
                 return;
             }
-            if self.puc.pace.count_marked && self.phase == GcPhase::Propagate {
+            if self.puc_counts_marked() && self.phase == GcPhase::Propagate {
                 self.count_marked(ch);
             }
             if (*ch).tag == ObjTag::Str {

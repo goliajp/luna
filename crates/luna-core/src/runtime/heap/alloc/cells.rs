@@ -14,7 +14,7 @@ impl Heap {
     /// [`Heap::new_upvalue`], failing when memory runs out.
     #[inline]
     pub fn try_new_upvalue(&mut self, state: UpvalState) -> Result<Gc<Upvalue>, Oom> {
-        let size = self.puc.sizes.upval;
+        let size = self.puc_size(PucObj::Upval);
         let upval = Upvalue {
             hdr: GcHeader::new(ObjTag::Upvalue),
             state,
@@ -37,7 +37,7 @@ impl Heap {
     ) -> Result<Gc<Userdata>, Oom> {
         // a userdata a host makes from Rust has no counterpart in PUC: one
         // with no block and a user value
-        let size = self.puc.sizes.userdata(1, 0);
+        let size = self.puc_size(PucObj::udata(1, 0));
         self.try_new_userdata_sized(payload, writable, size)
     }
 

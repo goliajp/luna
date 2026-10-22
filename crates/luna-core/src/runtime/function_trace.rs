@@ -34,7 +34,7 @@ impl Proto {
         // becomes collectable (gc.lua's `__gc` finalisers inside `do ... end`
         // blocks rely on this).
         if self.cache.get().is_some() {
-            m.cached_protos.push(this);
+            m.note_cached_proto(this);
         }
     }
 }

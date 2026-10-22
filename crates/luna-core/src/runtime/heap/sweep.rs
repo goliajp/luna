@@ -97,7 +97,7 @@ impl Heap {
                     // PUC's string table holds it, not the list it sweeps to
                     // the first live object: its string sweep comes first
                     *link = (*cur).next;
-                    self.puc.strt.held.push(cur);
+                    self.hold_for_string_sweep(cur);
                 } else if dead && !self.kept_dead(cur) {
                     self.env51_freed(cur);
                     *link = (*cur).next;
@@ -231,7 +231,7 @@ impl Heap {
     unsafe fn note_swept(&mut self, h: *mut GcHeader) {
         // SAFETY: the caller's contract
         if self.dialect() == Dialect::L52 && unsafe { (*h).tag } == ObjTag::Coro {
-            self.puc.shrunk.push(h);
+            self.puc_swept_thread(h);
         }
     }
 
@@ -241,6 +241,6 @@ impl Heap {
         self.whiten_unborn();
         self.sweep_prev = ptr::null_mut();
         self.phase = GcPhase::Pause;
-        self.mem_ctx().gc_cycle_ended(self.puc.bytes);
+        self.mem_ctx().gc_cycle_ended(self.puc_bytes());
     }
 }

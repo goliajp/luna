@@ -22,7 +22,7 @@ impl Heap {
     pub(crate) fn hook_alloc(&mut self, kind: PucKind, size: usize) {
         #[cfg(feature = "gc-trace")]
         {
-            let tag = crate::runtime::gc_trace::puc_tag(kind, self.puc.dialect);
+            let tag = crate::runtime::gc_trace::puc_tag(kind, self.dialect());
             self.hooks.trace.line(format_args!("a {tag} {size}"));
         }
         #[cfg(not(feature = "gc-trace"))]
@@ -35,9 +35,9 @@ impl Heap {
     pub(crate) fn hook_block(&mut self, old: usize, new: usize) {
         #[cfg(feature = "gc-verify")]
         assert!(
-            self.puc.bytes + new >= old,
+            self.puc_bytes() + new >= old,
             "[gc-verify] a block of {old} bytes freed from a count of {}",
-            self.puc.bytes
+            self.puc_bytes()
         );
         #[cfg(feature = "gc-trace")]
         self.hooks.trace.block(old, new);

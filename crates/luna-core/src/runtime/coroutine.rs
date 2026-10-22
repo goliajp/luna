@@ -145,7 +145,7 @@ impl Coro {
                 }
             }
         }
-        if !matches!(m.dialect, Dialect::L51 | Dialect::L52) {
+        if !matches!(m.dialect(), Dialect::L51 | Dialect::L52) {
             for &(_, uv) in self.open_upvals.iter() {
                 m.mark(uv);
             }

@@ -14,14 +14,14 @@ impl Heap {
 
     /// Approximate heap size in bytes.
     pub fn bytes(&self) -> usize {
-        self.puc.bytes
+        self.puc_bytes()
     }
 
     /// What a memory cap is held against: the bytes the allocation context
     /// has handed out, when it counts them (a host function or a policy),
     /// else PUC's count ([`Heap::bytes`]).
     pub fn cap_bytes(&self) -> usize {
-        self.mem_ctx().in_use().unwrap_or(self.puc.bytes)
+        self.mem_ctx().in_use().unwrap_or(self.puc_bytes())
     }
 
     /// Pure-read walk over the intrusive `all`
@@ -67,7 +67,7 @@ impl Heap {
 
     /// [`Heap::gc_due`] once `more` bytes more are counted.
     pub(crate) fn gc_due_after(&self, more: usize) -> bool {
-        self.puc.bytes + more >= self.puc.gc_limit && !self.no_gc() && !self.no_auto()
+        self.puc_due_after(more) && !self.no_gc() && !self.no_auto()
     }
 
     /// `collectgarbage("stop"/"restart")`: suspend or resume auto-GC.
@@ -80,11 +80,7 @@ impl Heap {
     pub(crate) fn gc_set_stopped(&mut self, stopped: bool) {
         self.gc_stopped = stopped;
         if !stopped {
-            let d = self.dialect();
-            match d {
-                Dialect::L51 => self.puc.pace.set_threshold(self.puc.bytes as i64),
-                _ => self.puc.pace.set_debt(d, self.puc.bytes, 0),
-            }
+            self.puc_restart_due();
         }
         self.refresh_gc_limit();
     }
@@ -112,61 +108,20 @@ impl Heap {
     /// stops the collector with an unreachable threshold; the later
     /// dialects still step then, to put the debt back.
     pub(crate) fn refresh_gc_limit(&mut self) {
-        self.puc.gc_limit = if self.gc_stopped && self.dialect() == Dialect::L51 {
-            usize::MAX
-        } else {
-            self.puc.pace.limit(self.dialect())
-        };
+        self.puc_set_limit(self.gc_stopped && self.dialect() == Dialect::L51);
     }
 
     /// A cycle ended with the count at what it is now: the pause before
     /// the next one, `pause` in percent of what survived (PUC `setpause`;
     /// 5.1 `setthreshold`).
     pub fn rearm_gc_pause(&mut self, pause: i64) {
-        use crate::runtime::puc::pace::*;
-        let d = self.dialect();
-        let bytes = self.puc.bytes;
-        match d {
-            Dialect::L51 => {
-                self.puc.pace.estimate = bytes as i64;
-                self.puc
-                    .pace
-                    .set_threshold(threshold_51(bytes as i64, pause));
-            }
-            Dialect::L55 => {
-                let marked = bytes as i64 - self.fixed_bytes();
-                self.puc.pace.estimate = marked;
-                let debt = pause_debt_55(bytes, marked.saturating_mul(pause) / 100);
-                self.puc.pace.set_debt(d, bytes, debt);
-            }
-            _ => {
-                self.puc.pace.estimate = bytes as i64;
-                let debt = pause_debt(d, bytes, bytes as i64, pause);
-                self.puc.pace.set_debt(d, bytes, debt);
-            }
-        }
-        self.puc.pace.enter(St::Pause);
+        self.puc_pause(pause);
         self.refresh_gc_limit();
     }
 
     /// [`Heap::rearm_gc_pause`] with PUC's usual pause (200%).
     pub fn rearm_gc(&mut self) {
         self.rearm_gc_pause(200);
-    }
-
-    /// The bytes of PUC's objects that no collection marks (`fixedgc`:
-    /// the reserved words, the metamethod names, `_ENV`, the memory
-    /// error's message).
-    pub(crate) fn fixed_bytes(&self) -> i64 {
-        let s = self.puc.sizes;
-        let mut n: i64 = self
-            .puc
-            .pins
-            .iter()
-            .map(|p| s.string(p.len(), false) as i64)
-            .sum();
-        n += s.string(b"not enough memory".len(), false) as i64;
-        n
     }
 
     /// Every live object is rooted now (a collection check): objects

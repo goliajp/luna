@@ -52,14 +52,14 @@ impl Heap {
                         // the prototype may be freed already
                         let env = (*h).sub & crate::runtime::puc::ENV51 != 0;
                         let n = c.upvals_len as usize - usize::from(env);
-                        self.acct_part(self.puc.sizes.lua_closure(n), 0);
+                        self.acct_part(self.puc_size(PucObj::LuaClosure(n)), 0);
                     }
                     (*(h as *mut LuaClosure)).free_overflow(self.mem());
                     self.free_block(h as *mut LuaClosure);
                 }
                 ObjTag::Upvalue => {
                     if !is_uncounted(h) {
-                        self.acct_part(self.puc.sizes.upval, 0);
+                        self.acct_part(self.puc_size(PucObj::Upval), 0);
                     }
                     self.free_block(h as *mut Upvalue);
                 }
@@ -76,7 +76,7 @@ impl Heap {
                     if (n > 0 || self.dialect() == crate::runtime::dialect::Dialect::L51)
                         && !is_uncounted(h)
                     {
-                        self.acct_part(self.puc.sizes.c_closure(n), 0);
+                        self.acct_part(self.puc_size(PucObj::CClosure(n)), 0);
                     }
                     if (*h).cls & SLAB != 0 {
                         ptr::drop_in_place(h as *mut NativeClosure);
@@ -116,9 +116,9 @@ impl Heap {
                     if (*h).sub & EXTERNAL != 0 {
                         // its block goes back first, then its header
                         self.trace_raw((*s).len() + 1, 0);
-                        self.acct_part(self.puc.sizes.lngstr_hdr + 2 * self.puc.sizes.ptr, 0);
+                        self.acct_part(self.puc_size(PucObj::ExternalStr), 0);
                     } else if (*h).sub & puc::FIXED_EXT != 0 {
-                        self.acct_part(self.puc.sizes.lngstr_hdr, 0);
+                        self.acct_part(self.puc_size(PucObj::LongStrHeader), 0);
                     } else if (*h).sub & strt::SWEPT != 0 {
                         // the string sweep took it off the count
                     } else if (*h).sub & UNCOUNTED != 0 {
@@ -164,18 +164,6 @@ impl Heap {
                 }
             }
             string::free(s, self.mem());
-        }
-    }
-
-    /// The objects of PUC's that `h`, an uncounted object of luna's, stood
-    /// for (`PucModel::stand_ins`) are freed with it.
-    fn free_stand_in(&mut self, h: *mut GcHeader) {
-        while let Some(i) = self.puc.stand_ins.iter().position(|(p, _)| *p == h) {
-            let (_, size) = self.puc.stand_ins.swap_remove(i);
-            if size & crate::runtime::puc::STRT_STAND != 0 {
-                self.puc.strt_nuse -= 1;
-            }
-            self.acct_part(size & !crate::runtime::puc::STRT_STAND, 0);
         }
     }
 }

@@ -196,10 +196,7 @@ impl Heap {
         if silent {
             puc::set_uncounted(p as *mut GcHeader, true);
         } else {
-            self.acct_obj(
-                PucKind::LongStr,
-                self.puc.sizes.lngstr_hdr + 2 * self.puc.sizes.ptr,
-            );
+            self.acct_obj(PucKind::LongStr, self.puc_size(PucObj::ExternalStr));
         }
         Ok(g)
     }
