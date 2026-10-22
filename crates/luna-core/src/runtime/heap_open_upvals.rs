@@ -162,7 +162,7 @@ impl Heap {
             self.open_dead.dead.remove(i);
             let h = uv.as_ptr() as *mut GcHeader;
             if !is_uncounted(h) {
-                self.acct_free(self.sizes.upval);
+                self.acct_part(self.sizes.upval, 0);
                 acct::set_uncounted(h, true);
             }
         }

@@ -21,6 +21,9 @@ pub(crate) use ghost::{Ghost, GhostRef};
 pub(crate) mod parse;
 #[path = "heap_acct_state.rs"]
 mod state;
+#[cfg(test)]
+#[path = "heap_acct_tests.rs"]
+mod tests;
 pub(crate) use state::PucState;
 
 /// What a counted allocation is, for PUC's tag of it.
@@ -153,6 +156,38 @@ impl Heap {
         }
     }
 
+    /// A block of an object PUC counts going from `old` to `new` bytes (a
+    /// table's parts, a thread's stack or `CallInfo`s; `new` 0 for a free):
+    /// counted as the object itself is, whatever luna builds meanwhile, so
+    /// that what its free takes off is what was counted. Nothing once the
+    /// heap is being dropped.
+    #[inline]
+    pub(crate) fn acct_part(&mut self, old: usize, new: usize) {
+        if !self.dropping {
+            self.count_part(old, new);
+        }
+    }
+
+    /// [`Heap::acct_part`] for a caller that has seen the heap is not
+    /// being dropped.
+    #[inline]
+    pub(in crate::runtime::heap) fn count_part(&mut self, old: usize, new: usize) {
+        #[cfg(feature = "gc-verify")]
+        assert!(
+            self.bytes + new >= old,
+            "[gc-verify] a block of {old} bytes freed from a count of {}",
+            self.bytes
+        );
+        self.bytes = self.bytes + new - old;
+        #[cfg(feature = "gc-trace")]
+        match (old, new) {
+            (0, 0) => {}
+            (0, n) => self.trace.line(format_args!("a 0 {n}")),
+            (o, 0) => self.trace.line(format_args!("d {o}")),
+            (o, n) => self.trace.line(format_args!("r {o} {n}")),
+        }
+    }
+
     /// A block PUC allocates through the allocation function but leaves out of
     /// `totalbytes` (a `luaL_Buffer` box's contents): only the trace sees it.
     #[inline]
@@ -171,23 +206,6 @@ impl Heap {
         #[cfg(not(feature = "gc-trace"))]
         let _ = (old, new);
     }
-
-    /// An object of `size` bytes freed.
-    #[inline]
-    pub(crate) fn acct_free(&mut self, size: usize) {
-        if self.puc.silent > 0 {
-            return;
-        }
-        #[cfg(feature = "gc-verify")]
-        assert!(
-            self.bytes >= size,
-            "[gc-verify] an object of {size} bytes freed from a count of {}",
-            self.bytes
-        );
-        self.bytes -= size;
-        #[cfg(feature = "gc-trace")]
-        self.trace.line(format_args!("d {size}"));
-    }
 }
 
 #[path = "heap_acct_boot.rs"]
@@ -198,11 +216,13 @@ mod defer;
 mod fmt;
 #[path = "heap_acct_parts.rs"]
 mod parts;
+#[path = "heap_acct_proto.rs"]
+mod proto;
 #[path = "heap_acct_thread.rs"]
 mod thread;
 pub(crate) use boot::STRT_STAND;
 pub(crate) use defer::Deferred;
-pub(crate) use parts::ENV51;
+pub(crate) use proto::ENV51;
 pub(crate) use thread::BASIC_CI_51;
 
 /// Whether object `h` is one PUC has not made (see [`Heap::acct_new`]).

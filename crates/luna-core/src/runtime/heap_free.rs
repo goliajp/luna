@@ -31,9 +31,7 @@ impl Heap {
             match (*h).tag {
                 ObjTag::Table => {
                     let t = h as *mut Table;
-                    if let Some(i) = self.puc.own_tables.iter().position(|&o| std::ptr::eq(o, t)) {
-                        self.puc.own_tables.swap_remove(i);
-                    } else {
+                    if (*h).cls & UNLISTED == 0 {
                         self.acct_table_free((*t).asize as usize, (*t).node_count());
                     }
                     // pool recycle. Drop the
@@ -66,14 +64,14 @@ impl Heap {
                         // the prototype may be freed already
                         let env = (*h).sub & super::acct::ENV51 != 0;
                         let n = c.upvals_len as usize - usize::from(env);
-                        self.acct_free(self.sizes.lua_closure(n));
+                        self.acct_part(self.sizes.lua_closure(n), 0);
                     }
                     (*(h as *mut LuaClosure)).free_overflow(self.mem());
                     self.free_block(h as *mut LuaClosure);
                 }
                 ObjTag::Upvalue => {
                     if !is_uncounted(h) {
-                        self.acct_free(self.sizes.upval);
+                        self.acct_part(self.sizes.upval, 0);
                     }
                     self.free_block(h as *mut Upvalue);
                 }
@@ -90,7 +88,7 @@ impl Heap {
                     if (n > 0 || self.table_dialect == crate::runtime::table::Dialect::L51)
                         && !is_uncounted(h)
                     {
-                        self.acct_free(self.sizes.c_closure(n));
+                        self.acct_part(self.sizes.c_closure(n), 0);
                     }
                     if (*h).cls & SLAB != 0 {
                         ptr::drop_in_place(h as *mut NativeClosure);
@@ -117,7 +115,7 @@ impl Heap {
                     }
                     crate::vm::lib_io::write_out_freed(Gc::from_ptr(h as *mut Userdata));
                     if !is_uncounted(h) {
-                        self.acct_free((*(h as *mut Userdata)).puc_size);
+                        self.acct_part((*(h as *mut Userdata)).puc_size, 0);
                     } else {
                         self.free_stand_in(h);
                     }
@@ -130,9 +128,9 @@ impl Heap {
                     if (*h).sub & EXTERNAL != 0 {
                         // its block goes back first, then its header
                         self.trace_raw((*s).len() + 1, 0);
-                        self.acct_free(self.sizes.lngstr_hdr + 2 * self.sizes.ptr);
+                        self.acct_part(self.sizes.lngstr_hdr + 2 * self.sizes.ptr, 0);
                     } else if (*h).sub & acct::FIXED_EXT != 0 {
-                        self.acct_free(self.sizes.lngstr_hdr);
+                        self.acct_part(self.sizes.lngstr_hdr, 0);
                     } else if (*h).sub & strt::SWEPT != 0 {
                         // the string sweep took it off the count
                     } else if (*h).sub & UNCOUNTED != 0 {
@@ -193,7 +191,7 @@ impl Heap {
             if size & super::acct::STRT_STAND != 0 {
                 self.puc.strt_nuse -= 1;
             }
-            self.acct_free(size & !super::acct::STRT_STAND);
+            self.acct_part(size & !super::acct::STRT_STAND, 0);
         }
     }
 }

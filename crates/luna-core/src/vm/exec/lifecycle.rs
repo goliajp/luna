@@ -76,7 +76,7 @@ impl Vm {
         heap.puc.silent += 1;
         // 5.1's `luaH_new(L, 0, 2)`, later ones' `luaH_new(L)`
         let nrec = usize::from(version == LuaVersion::Lua51) * 2;
-        let globals = heap.try_create_table(0, nrec).ok()?;
+        let globals = Heap::boot_table(heap.try_create_table(0, nrec).ok()?);
         let mut names = [None; MM_NAMES.len()];
         for (slot, name) in names.iter_mut().zip(MM_NAMES) {
             *slot = Some(heap.try_intern(name.as_bytes()).ok()?);

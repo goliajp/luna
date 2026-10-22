@@ -102,7 +102,7 @@ impl Opener {
             return;
         }
         let n = n as usize;
-        vm.heap.acct_table_resize(n - 1, 1, n, 1);
+        vm.heap.acct_table_resize((n - 1, 1), (n, 1));
         // `luaC_barriert`: the table, black, takes a new (white) file
         // SAFETY: a record lives as long as the heap
         unsafe { vm.heap.barrier_back_obj(p as *mut _) };

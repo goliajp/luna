@@ -222,7 +222,6 @@ impl Vm {
     /// A parser table: luna's own, not listed or counted.
     fn reader_table(&mut self) -> Result<Gc<Table>, LuaError> {
         let t = self.alloc_table()?;
-        self.heap.own_table(t);
         Ok(t)
     }
 

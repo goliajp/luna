@@ -31,7 +31,6 @@ fn in_wrap(vm: &mut Vm) -> Result<Value, LuaError> {
     let w = vm.alloc_table();
     vm.heap.puc.silent -= 1;
     let w = w?;
-    vm.heap.own_table(w);
     Ok(Value::Table(w))
 }
 

@@ -27,7 +27,7 @@ impl Heap {
                 };
                 return self.thread_bytes(c.stack_size, ci);
             }
-            objsize(&self.sizes, self.table_dialect, &self.puc.own_tables, h)
+            objsize(&self.sizes, self.table_dialect, h)
         }
     }
 
@@ -168,15 +168,14 @@ impl Heap {
     }
 }
 
-/// PUC's size of the object behind `h` other than a thread, in dialect `d`
-/// with `own` luna's own tables; 0 for an object of luna's own.
+/// PUC's size of the object behind `h` other than a thread, in dialect `d`;
+/// 0 for an object of luna's own.
 ///
 /// # Safety
 /// `h` heads an allocated object other than a thread.
 pub(in crate::runtime::heap) unsafe fn objsize(
     s: &PucSizes,
     d: Dialect,
-    own: &[*const Table],
     h: *mut GcHeader,
 ) -> usize {
     // SAFETY: the caller's contract; the tag names the type
@@ -187,7 +186,7 @@ pub(in crate::runtime::heap) unsafe fn objsize(
         match (*h).tag {
             ObjTag::Table => {
                 let t = h as *const Table;
-                if own.contains(&t) {
+                if (*h).cls & UNLISTED != 0 {
                     return 0;
                 }
                 s.table

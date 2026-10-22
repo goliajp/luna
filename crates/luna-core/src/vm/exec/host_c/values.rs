@@ -67,7 +67,6 @@ impl Vm {
     /// load counts PUC's in its place.
     pub fn host_load_anchor(&mut self) -> Result<Gc<Table>, LuaError> {
         let t = self.uncounted(|vm| vm.alloc_table())?;
-        self.heap.own_table(t);
         Ok(t)
     }
 

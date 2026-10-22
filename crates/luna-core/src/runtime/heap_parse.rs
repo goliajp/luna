@@ -10,6 +10,8 @@ use crate::runtime::table::Dialect;
 
 #[path = "heap_parse_mark.rs"]
 mod mark;
+#[cfg(feature = "gc-verify")]
+pub(in crate::runtime::heap) use mark::is_kept;
 #[path = "heap_parse_unborn.rs"]
 mod unborn;
 
@@ -35,6 +37,8 @@ pub(crate) struct LoadTab {
     pub(crate) hdr: GcHeader,
     asize: u32,
     nodes: u32,
+    /// made while counting, so counted as it grows and when it is freed
+    counted: bool,
     pub(super) refs: LVec<*mut GcHeader>,
 }
 
@@ -94,6 +98,7 @@ impl Heap {
             hdr,
             asize: 0,
             nodes: 0,
+            counted: self.puc.silent == 0,
             refs,
         })?;
         self.acct_obj(PucKind::Table, self.sizes.table);
@@ -107,7 +112,9 @@ impl Heap {
         let lt = unsafe { &mut *(t as *mut LoadTab) };
         let (oa, oh) = (lt.asize as usize, lt.nodes as usize);
         (lt.asize, lt.nodes) = (a as u32, h as u32);
-        self.acct_table_resize(oa, oh, a, h);
+        if lt.counted {
+            self.acct_counted_table_resize((oa, oh), (a, h));
+        }
     }
 
     /// `obj` keyed in the parser table `t`: a black table that takes a
@@ -161,10 +168,10 @@ impl Heap {
         unsafe {
             // `luaH_free`: the hash part, the array part, the table
             let t = &*(h as *const LoadTab);
-            let (a, n) = (t.asize as usize, t.nodes as usize);
+            let (a, n, k) = (t.asize as usize, t.nodes as usize, usize::from(t.counted));
             for b in [self.hash_bytes(n), self.array_bytes(a), self.sizes.table] {
                 if b > 0 {
-                    self.acct_free(b);
+                    self.acct_part(b * k, 0);
                 }
             }
             self.free_block(h as *mut LoadTab);
@@ -253,47 +260,6 @@ impl Heap {
         }
         if let crate::runtime::function::UpvalState::Closed(v) = uv.state {
             self.barrier_forward(uv, v);
-        }
-    }
-}
-
-/// Whether `h` is a string only a load holds ([`KEPT`]), which the sweep
-/// keeps.
-///
-/// # Safety
-/// `h` heads an allocated object.
-#[cfg(feature = "gc-verify")]
-pub(in crate::runtime::heap) unsafe fn is_kept(h: *mut GcHeader) -> bool {
-    // SAFETY: the caller's contract
-    unsafe { (*h).tag == ObjTag::Str && (*h).cls & KEPT != 0 }
-}
-
-impl Heap {
-    /// `gc-verify`: a string marked [`KEPT`] is one PUC frees in the sweep
-    /// under way and luna keeps: a string of PUC's still counted, dead to
-    /// this cycle (unmarked, not the current white), on the list the sweep
-    /// has still to reach. The sweep turns it into an uncounted string of
-    /// luna's and drops the mark; a marking that reaches it first drops the
-    /// mark too. Panics on the first that is anything else.
-    #[cfg(feature = "gc-verify")]
-    pub(in crate::runtime::heap) fn verify_kept(&self, ctx: &str) {
-        let mut cur = self.all;
-        // SAFETY: the links of `all` lead to live objects; only headers are
-        // read
-        unsafe {
-            while !cur.is_null() {
-                let (tag, f, cls) = ((*cur).tag, (*cur).flags, (*cur).cls);
-                if tag == ObjTag::Str && cls & KEPT != 0 {
-                    let dead = is_white(f) && f & self.current_white == 0;
-                    assert!(
-                        dead && !is_uncounted(cur) && self.phase == GcPhase::Sweep,
-                        "[gc-verify] {ctx}: kept string {cur:p}: flags {f:#x}, uncounted {}, phase {:?}",
-                        is_uncounted(cur),
-                        self.phase
-                    );
-                }
-                cur = (*cur).next;
-            }
         }
     }
 }

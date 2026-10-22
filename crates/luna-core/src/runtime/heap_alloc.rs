@@ -124,7 +124,7 @@ impl Heap {
         };
         // SAFETY: `p` is a fresh block or a pool table reset above, linked nowhere yet
         unsafe { self.link(p as *mut GcHeader) };
-        self.acct_obj(PucKind::Table, self.sizes.table);
+        self.acct_new_table(p as *mut GcHeader);
         // the Table is now at its final heap address; wire `array_ptr` to
         // point at the inline storage that lives inside it
         // SAFETY: `p` is the table linked just above, which the heap now manages; no other handle or reference to it exists yet

@@ -27,8 +27,6 @@ pub(crate) struct PucState {
     /// 5.3: the threads this cycle's propagation has shrunk; 5.2: the ones
     /// the sweep kept, for the VM to shrink
     pub(crate) shrunk: Vec<*mut GcHeader>,
-    /// tables of luna's own, which PUC has none of: never counted
-    pub(crate) own_tables: Vec<*const crate::runtime::Table>,
     /// the message of the last load that failed, made as PUC makes it,
     /// until the load's caller takes it
     pub(crate) load_msg: Option<Gc<crate::runtime::LuaStr>>,
@@ -75,7 +73,6 @@ impl Default for PucState {
             stand_ins: Vec::with_capacity(32),
             keepers: Vec::new(),
             shrunk: Vec::new(),
-            own_tables: Vec::new(),
             load_msg: None,
             next_id: 0,
             load_checked: false,

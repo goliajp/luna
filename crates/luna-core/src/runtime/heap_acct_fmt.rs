@@ -27,7 +27,7 @@ impl Heap {
             b.reserve_exact(size)?;
             #[cfg(feature = "gc-trace")]
             let waited = self.trace.refused();
-            self.acct_block(old, size);
+            self.acct_part(old, size);
             // gc-trace: `R38_REFUSE` refused this growth of PUC's, which is
             // then as if the allocation failed
             #[cfg(feature = "gc-trace")]
@@ -46,7 +46,7 @@ impl Heap {
     pub(crate) fn shrink_gbuff(&mut self, size: usize) {
         let old = self.puc.gbuff.size();
         self.shrink_gbuff_to(size);
-        self.acct_block(old, self.puc.gbuff.size());
+        self.acct_part(old, self.puc.gbuff.size());
     }
 
     /// The buffer's block made `size` bytes, smaller, uncounted.

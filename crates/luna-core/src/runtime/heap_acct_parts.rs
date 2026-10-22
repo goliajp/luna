@@ -1,11 +1,8 @@
-//! PUC's sizes of tables, strings and prototypes, and the order PUC
+//! PUC's sizes of tables and strings, and the order PUC
 //! allocates their parts in.
 
 use super::*;
 use crate::runtime::table::Dialect;
-
-/// A Lua closure's header bit: see [`Heap::env51`].
-pub(crate) const ENV51: u8 = 0x40;
 
 impl Heap {
     /// The bytes of a table's array part of `n` slots.
@@ -23,71 +20,100 @@ impl Heap {
     /// up to 5.3 a growing array first, then the new nodes, a shrinking
     /// array, the old nodes; from 5.4 the new nodes, the array, the old
     /// nodes. A part of no nodes is PUC's shared dummy node, never
-    /// allocated.
-    pub(crate) fn acct_table_resize(
+    /// allocated. For a table of PUC's luna has none for (a parser's,
+    /// the registry PUC's state starts with): counted unless luna is
+    /// building its own objects.
+    pub(crate) fn acct_table_resize(&mut self, old: (usize, usize), new: (usize, usize)) {
+        if self.puc.silent == 0 {
+            self.table_parts(old, new, Heap::acct_block);
+        }
+    }
+
+    /// [`Heap::acct_table_resize`] of a counted table of luna's: counted
+    /// as the table is, whatever luna builds meanwhile (see
+    /// [`Heap::acct_part`]).
+    pub(crate) fn acct_counted_table_resize(&mut self, old: (usize, usize), new: (usize, usize)) {
+        self.table_parts(old, new, Heap::acct_part);
+    }
+
+    fn table_parts(
         &mut self,
-        old_a: usize,
-        old_h: usize,
-        new_a: usize,
-        new_h: usize,
+        (old_a, old_h): (usize, usize),
+        (new_a, new_h): (usize, usize),
+        part: fn(&mut Heap, usize, usize),
     ) {
         let (oh, nh) = (self.hash_bytes(old_h), self.hash_bytes(new_h));
         let (oa, na) = (self.array_bytes(old_a), self.array_bytes(new_a));
         // with no trace to write, only the sum is seen
         if cfg!(not(feature = "gc-trace")) {
-            if self.puc.silent == 0 {
-                self.bytes = self.bytes + nh + na - oh - oa;
-            }
-            return;
+            return part(self, oh + oa, nh + na);
         }
         match self.table_dialect {
             Dialect::L51 | Dialect::L52 | Dialect::L53 => {
                 if new_a > old_a {
-                    self.acct_block(oa, na);
+                    part(self, oa, na);
                 }
-                self.acct_block(0, nh);
+                part(self, 0, nh);
                 if new_a < old_a {
-                    self.acct_block(oa, na);
+                    part(self, oa, na);
                 }
-                self.acct_block(oh, 0);
+                part(self, oh, 0);
             }
             Dialect::L54 => {
                 // the array is reallocated even at the same size
-                self.acct_block(0, nh);
-                self.acct_block(oa, na);
-                self.acct_block(oh, 0);
+                part(self, 0, nh);
+                part(self, oa, na);
+                part(self, oh, 0);
             }
             Dialect::L55 => {
-                self.acct_block(0, nh);
+                part(self, 0, nh);
                 if new_a != old_a {
-                    self.acct_block(0, na);
-                    self.acct_block(oa, 0);
+                    part(self, 0, na);
+                    part(self, oa, 0);
                 }
-                self.acct_block(oh, 0);
+                part(self, oh, 0);
             }
         }
     }
 
-    /// `t` is luna's own, a table PUC does not have.
-    pub(crate) fn own_table(&mut self, t: Gc<crate::runtime::Table>) {
-        self.puc.own_tables.push(t.as_ptr());
+    /// A new table `h`: counted, or, made while nothing is counted, luna's
+    /// own, a table PUC does not have, which nothing counts as long as it
+    /// lives (its parts as they grow, its free).
+    #[inline]
+    pub(crate) fn acct_new_table(&mut self, h: *mut GcHeader) {
+        if self.puc.silent > 0 {
+            // SAFETY: `h` heads the table just made; only its class byte
+            // is written
+            unsafe { (*h).cls |= super::UNLISTED };
+        } else {
+            self.acct_obj(PucKind::Table, self.sizes.table);
+        }
+    }
+
+    /// `t`, made while nothing was counted, is a table PUC's state starts
+    /// with, which [`Heap::acct_boot`] counted in its place: counted from
+    /// here on, as it grows and when it is freed.
+    pub(crate) fn boot_table(t: Gc<crate::runtime::Table>) -> Gc<crate::runtime::Table> {
         // SAFETY: `t` is a live table; only its class byte is written
-        unsafe { (*t.header()).cls |= super::UNLISTED };
+        unsafe { (*t.header()).cls &= !super::UNLISTED };
+        t
     }
 
     /// Whether `t` is one of luna's own tables, which nothing counts.
     #[inline]
     pub(crate) fn is_own_table(&self, t: *const crate::runtime::Table) -> bool {
-        !self.puc.own_tables.is_empty() && self.puc.own_tables.contains(&t)
+        // SAFETY: `t` is a live table; only its header is read
+        unsafe { (*t.cast::<GcHeader>()).cls & super::UNLISTED != 0 }
     }
 
-    /// A table freed with `a` array slots and `h` nodes (PUC `luaH_free`).
+    /// A counted table freed with `a` array slots and `h` nodes (PUC
+    /// `luaH_free`).
     pub(crate) fn acct_table_free(&mut self, a: usize, h: usize) {
         let (ab, hb) = (self.array_bytes(a), self.hash_bytes(h));
-        self.acct_block(hb, 0);
-        self.acct_block(ab, 0);
+        self.acct_part(hb, 0);
+        self.acct_part(ab, 0);
         let t = self.sizes.table;
-        self.acct_free(t);
+        self.acct_part(t, 0);
     }
 }
 
@@ -135,16 +161,18 @@ impl Heap {
     }
 
     /// The string table doubling: 5.1 allocates the new one and frees the
-    /// old, later versions reallocate.
+    /// old, later versions reallocate. The table is PUC's state's: its
+    /// blocks count whatever luna builds meanwhile (see
+    /// [`Heap::acct_part`]), as the strings it holds come and go.
     #[cold]
     fn grow_strtab(&mut self) {
         let (old, new) = (self.puc.strt_size, self.puc.strt_size * 2);
         let p = self.sizes.ptr;
         if self.table_dialect == Dialect::L51 {
-            self.acct_block(0, new * p);
-            self.acct_block(old * p, 0);
+            self.acct_part(0, new * p);
+            self.acct_part(old * p, 0);
         } else {
-            self.acct_block(old * p, new * p);
+            self.acct_part(old * p, new * p);
         }
         self.puc.strt_size = new;
         if matches!(self.table_dialect, Dialect::L51 | Dialect::L52) {
@@ -168,10 +196,10 @@ impl Heap {
             let (old, new) = (size, size / 2);
             let p = self.sizes.ptr;
             if d == Dialect::L51 {
-                self.acct_block(0, new * p);
-                self.acct_block(old * p, 0);
+                self.acct_part(0, new * p);
+                self.acct_part(old * p, 0);
             } else {
-                self.acct_block(old * p, new * p);
+                self.acct_part(old * p, new * p);
             }
             self.puc.strt_size = new;
             self.strt_resized(old);
@@ -188,104 +216,24 @@ impl Heap {
             _ => {}
         }
     }
-
-    /// The bytes of each of PUC's arrays for `p` (see `Proto::puc_arrays`),
-    /// from luna's own: a text load counts them as PUC's parser grows them
-    /// instead.
-    fn proto_arrays(&self, p: &crate::runtime::function::Proto) -> [u32; 7] {
-        let s = self.sizes;
-        let n = p.code.len();
-        let (lineinfo, abs) = match self.table_dialect {
-            Dialect::L54 | Dialect::L55 => (n, abs_lines(p.line_defined, &p.lines)),
-            _ => (4 * n, 0),
-        };
-        [
-            4 * n,
-            s.ptr * p.protos.len(),
-            s.tvalue * p.consts.len(),
-            lineinfo,
-            s.abslineinfo * abs,
-            s.locvar * p.locvars.len(),
-            s.upvaldesc * p.upvals.len(),
-        ]
-        .map(|b| b as u32)
-    }
-
-    /// A finished prototype with its arrays.
-    /// While luna compiles a text chunk nothing is counted: the load's
-    /// replay counts the prototype (and its arrays as PUC grows them), and
-    /// one the replay never reaches (a chunk that failed to compile) is not
-    /// counted when freed either. The arrays it keeps for its free are
-    /// those counted here: none while nothing is.
-    pub(crate) fn acct_proto(&mut self, p: Gc<crate::runtime::function::Proto>) {
-        let h = p.as_ptr() as *mut GcHeader;
-        self.acct_new(h, PucKind::Proto, self.sizes.proto);
-        let arrays = match self.puc.silent {
-            0 => self.proto_arrays(&p),
-            _ => [0; 7],
-        };
-        p.puc_arrays.set(arrays);
-        for b in arrays {
-            self.acct_block(0, b as usize);
-        }
-    }
-
-    /// A prototype freed.
-    pub(crate) fn acct_proto_free(&mut self, p: &crate::runtime::function::Proto) {
-        let a = p.puc_arrays.get();
-        // 5.5 frees the code and line arrays first
-        let order = if self.table_dialect == Dialect::L55 {
-            [0, 3, 4, 1, 2, 5, 6]
-        } else {
-            [0, 1, 2, 3, 4, 5, 6]
-        };
-        for i in order {
-            self.acct_block(a[i] as usize, 0);
-        }
-        let s = self.sizes.proto;
-        self.acct_free(s);
-    }
 }
 
 impl Heap {
-    /// PUC's size of a Lua closure of `proto` with luna's `n` upvalues
-    /// (5.1's has no upvalue for the environment luna gives it).
-    pub(crate) fn closure_size(&self, proto: &crate::runtime::function::Proto, n: usize) -> usize {
-        self.sizes.lua_closure(n - usize::from(self.env51(proto)))
-    }
-
-    /// Whether a closure of `proto` has 5.1's environment among its
-    /// upvalues (marked [`ENV51`] in the closure's header, so that freeing
-    /// it needs no prototype, which may be freed first).
-    pub(crate) fn env51(&self, proto: &crate::runtime::function::Proto) -> bool {
-        self.table_dialect == Dialect::L51 && proto.env_upval_idx != u8::MAX
-    }
-
-    /// A string of `len` bytes freed.
+    /// A counted string of `len` bytes freed: taken off the count (and
+    /// PUC's string table) whatever luna builds meanwhile, as it was
+    /// counted (see [`Heap::acct_part`]).
     #[inline]
     pub(crate) fn acct_string_free(&mut self, len: usize) {
+        if self.dropping {
+            return;
+        }
         let long = len > self.puc.short_max;
-        if !long && self.puc.silent == 0 {
+        if !long {
             self.puc.strt_nuse -= 1;
         }
         let size = self
             .sizes
             .string(len, long && self.table_dialect == Dialect::L55);
-        self.acct_free(size);
+        self.count_part(size, 0);
     }
-}
-
-/// How many absolute line entries 5.4's `savelineinfo` makes for
-/// instructions on `lines`, in a function defined on `line_defined`.
-fn abs_lines(line_defined: u32, lines: &[u32]) -> usize {
-    let (mut prev, mut since, mut n) = (line_defined, 0u32, 0);
-    for &l in lines {
-        if (i64::from(l) - i64::from(prev)).abs() >= 0x80 || since >= 128 {
-            n += 1;
-            since = 0;
-        }
-        since += 1;
-        prev = l;
-    }
-    n
 }

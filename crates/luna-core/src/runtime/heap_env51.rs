@@ -54,6 +54,8 @@ pub(crate) struct Phantom {
     env: u8,
     /// freed by a sweep, as PUC frees it: marked no more
     dead: bool,
+    /// made while counting: its free is counted
+    counted: bool,
 }
 
 /// The records of one opening of the io library: a second
@@ -127,6 +129,7 @@ impl Heap {
                 kids: [if kid == usize::MAX { NONE } else { kid as u8 }],
                 env,
                 dead: false,
+                counted: false,
             }
         };
         let anchor = |recs| Anchor {
@@ -184,11 +187,11 @@ impl Heap {
             self.env51_records().gens.push(g);
         }
         let w = self.current_white;
+        let counted = self.puc.silent == 0;
         let g = self.env51_gen_now();
         g.opened |= k == E1;
         let p = &mut g.ph[k];
-        p.hdr.flags = w;
-        p.dead = false;
+        (p.hdr.flags, p.dead, p.counted) = (w, false, counted);
         &mut p.hdr as *mut GcHeader
     }
 
