@@ -63,7 +63,7 @@ pub(super) fn atomic_51<H: StepHost + ?Sized>(h: &mut H) {
 pub(super) fn singlestep_51<H: StepHost + ?Sized>(h: &mut H) -> Result<i64, LuaError> {
     Ok(match h.heap().puc.pace.state() {
         St::Pause => {
-            h.restart();
+            restart(h);
             0
         }
         St::Propagate => {

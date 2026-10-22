@@ -167,6 +167,7 @@ impl Vm {
             crt_text: false,
             hook: HookState::default(),
             in_hook: false,
+            opening_sandbox: false,
             trap: true,
             pending_tailcalls: 0,
             pending_ccmt: 0,

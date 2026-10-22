@@ -25,9 +25,9 @@ impl Vm {
             return self.splices_stand(splices);
         };
         let off = self.heap.counting_off();
-        let aside = self.heap.set_aside_loads(true);
+        let aside = self.heap.set_loads_aside(true);
         let cl = self.close_chunk(proto);
-        self.heap.set_aside_loads(aside);
+        self.heap.loads_aside_back(aside);
         self.heap.counting_on(off);
         let Ok(cl) = cl else {
             return self.splices_stand(splices);

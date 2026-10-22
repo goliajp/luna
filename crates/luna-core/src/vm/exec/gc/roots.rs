@@ -83,7 +83,6 @@ impl Vm {
     /// holding them, whose traversal counts them as PUC's does); the
     /// message a load may have made.
     fn mark_root_strings(&self, m: &mut crate::runtime::heap::Marker, start: bool, end: bool) {
-        let puc = &self.heap.puc;
         // the names PUC fixes stay black (5.2's are marked where reached, as
         // any string); the others are its libraries' strings, or luna's
         // own, left to the tables that hold them until the atomic step
@@ -107,9 +106,9 @@ impl Vm {
             for &s in names(false) {
                 m.keep(s);
             }
-            m.mark_strings(puc.pins.iter());
+            m.mark_strings(self.heap.pinned().iter());
         }
-        m.mark_strings(puc.load_msg.iter());
+        m.mark_strings(self.heap.load_msg().iter());
     }
 
     /// The running thread's values, and the roots luna has outside PUC's
@@ -131,7 +130,7 @@ impl Vm {
         let live = (self.gc_top as usize).min(self.stack.len());
         for &v in self.stack[..live].iter() {
             // a record of 5.1's opening that stands for a table there
-            if self.heap.puc.phantoms
+            if self.heap.phantoms()
                 && let Value::LightUserdata(p) = v
                 && self.heap.env51_record_index(p as *mut _).is_some()
             {
@@ -142,7 +141,7 @@ impl Vm {
         }
         // a load's parser objects, above its C function's slots on PUC's
         // stack
-        for f in &self.heap.puc.parse {
+        for f in self.heap.parse_frames() {
             for &h in &f.slots {
                 // SAFETY: a parser object is allocated while its load runs
                 unsafe { m.header(h) };
@@ -241,7 +240,7 @@ impl Vm {
             _ => std::ptr::null_mut(),
         };
         let running = std::ptr::addr_of_mut!(self.open_upvals);
-        self.heap.puc.open_dead.lend = Some(OpenLend {
+        self.heap.lend_open_upvals(OpenLend {
             running,
             running_co,
             main,

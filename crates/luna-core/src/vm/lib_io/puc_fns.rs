@@ -37,7 +37,7 @@ pub(crate) const PUC_FNS: Natives = &[
 
 fn luaopen_io(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let n = run_open(vm, fs, nargs, "luaopen_io", 1)?;
-    vm.heap.puc.phantoms = false;
+    vm.heap.set_phantoms(false);
     if vm.version() == LuaVersion::Lua51
         && let Value::Table(io) = vm.stack[fs as usize]
     {

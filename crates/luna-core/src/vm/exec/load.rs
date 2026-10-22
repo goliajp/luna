@@ -21,11 +21,11 @@ impl Vm {
     /// does not collect: the closures loaded before and held only in Rust
     /// values stay valid until a call or an `eval` runs.
     pub fn load(&mut self, src: &[u8], chunkname: &[u8]) -> Result<Gc<LuaClosure>, SyntaxError> {
-        self.heap.puc.load_checked = true;
+        self.heap.set_load_checked(true);
         // the parser's checks for a collection do not collect either
-        let held = std::mem::replace(&mut self.heap.puc.load_holds, true);
+        let held = self.heap.hold_loads();
         let r = self.load_named(src, chunkname, None);
-        self.heap.puc.load_holds = held;
+        self.heap.release_loads(held);
         r
     }
 
@@ -66,7 +66,7 @@ impl Vm {
         // 5.1's `f_parser` does
         // (5.1's runs inside the load's protected call: an error there is
         // the load's)
-        if !std::mem::take(&mut self.heap.puc.load_checked)
+        if !self.heap.take_load_checked()
             && let Err(e) = self.lua_load_checkpoint()
         {
             return Err(self.load_failed_by(e));
@@ -179,7 +179,7 @@ impl Vm {
             self.parse_scratch.record = counted;
             let off = self.heap.counting_off();
             let base = self.heap.unborn_len();
-            let aside = self.heap.set_aside_loads(counted);
+            let aside = self.heap.set_loads_aside(counted);
             let source = self
                 .heap
                 .chunk_name(chunkname, name)
@@ -189,7 +189,7 @@ impl Vm {
                 .and_then(|source| self.compile_text_in_place(src, source))
                 .and_then(|p| self.hold_puc_names(p).map(|()| p))
                 .and_then(|p| Ok((p, self.close_chunk(p)?)));
-            self.heap.set_aside_loads(aside);
+            self.heap.loads_aside_back(aside);
             self.heap.counting_on(off);
             // what PUC made before the error is counted as it made it
             let failed = match (&made, source) {
@@ -234,16 +234,16 @@ impl Vm {
         &mut self,
         f: impl FnOnce(&mut Vm) -> Result<R, SyntaxError>,
     ) -> Result<R, SyntaxError> {
-        let (counting, frames) = (self.heap.counting_mark(), self.heap.puc.parse.len());
-        let (aside, unborn) = (self.heap.puc.unborn_on, self.heap.unborn_len());
+        let (counting, frames) = (self.heap.counting_mark(), self.heap.parse_mark());
+        let (aside, unborn) = (self.heap.loads_aside_mark(), self.heap.unborn_len());
         match catch_load_oom(|| f(self)) {
             Ok(r) => r,
             Err(()) => {
                 // the failure unwound past what stops counting for the load,
                 // and past a step's frame of the parser's objects
                 self.heap.restore_counting(counting);
-                self.heap.puc.parse.truncate(frames);
-                self.heap.set_aside_loads(aside);
+                self.heap.restore_parse_frames(frames);
+                self.heap.loads_aside_back(aside);
                 self.heap.flush_unborn(unborn);
                 self.compile_scratch = crate::compiler::CompileScratch::new(self.heap.mem());
                 Err(load_oom(&self.heap))

@@ -210,7 +210,7 @@ impl Vm {
             self.version(),
             chunkname,
         ));
-        let msg = match self.heap.puc.load_msg.take() {
+        let msg = match self.heap.take_load_msg() {
             Some(m) if m.as_bytes() == text => Value::Str(m),
             _ => self.str_value(&text).unwrap_or_else(|e| e.0),
         };

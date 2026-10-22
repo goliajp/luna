@@ -25,7 +25,7 @@ impl Vm {
         if self.heap.trace.refused() {
             if self.version >= LuaVersion::Lua54 {
                 let (_, bytes) = self.heap.trace.take_refused();
-                self.heap.puc.bytes = (self.heap.puc.bytes as i64 - bytes) as usize;
+                self.heap.adjust_count(-bytes);
                 self.set_stack_size(old);
                 return Err(self.mem_err());
             }
@@ -61,14 +61,14 @@ impl Vm {
     #[inline(never)]
     fn answer_refusal(&mut self) -> Result<(), LuaError> {
         let (lines, bytes) = self.heap.trace.take_refused();
-        self.heap.puc.bytes = (self.heap.puc.bytes as i64 - bytes) as usize;
+        self.heap.adjust_count(-bytes);
         // a `luaL_Buffer` box's block (5.3 on) is asked of the allocation
         // function directly, with no emergency collection
         if self.heap.trace.refused_raw {
             return Err(self.buf_error());
         }
         if self.emergency_collect() && !self.heap.trace.refuse_every {
-            self.heap.puc.bytes = (self.heap.puc.bytes as i64 + bytes) as usize;
+            self.heap.adjust_count(bytes);
             self.heap.trace.put(lines);
             return Ok(());
         }

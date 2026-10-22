@@ -95,9 +95,9 @@ impl Vm {
     pub fn open_base(&mut self) -> Result<(), LuaError> {
         // without `dofile` and `loadfile`, which luna opens with `os` and
         // `io` (`Vm::open_os_io`)
-        self.heap.puc.sandbox_base = true;
+        self.opening_sandbox = true;
         let r = self.run_open_one("_G");
-        self.heap.puc.sandbox_base = false;
+        self.opening_sandbox = false;
         r
     }
 

@@ -59,7 +59,7 @@ pub(super) fn singlestep_53<H: StepHost + ?Sized>(h: &mut H) -> Result<i64, LuaE
     let cost = sweepmax_52(&s) * sweepcost_52(&s);
     Ok(match h.heap().puc.pace.state() {
         St::Pause => {
-            h.restart();
+            restart(h);
             (h.heap().puc.strt_size * s.ptr) as i64
         }
         St::Propagate => {

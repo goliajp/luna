@@ -45,7 +45,7 @@ impl Vm {
         tree.record = true;
         tree.lenient(true);
         let off = self.heap.counting_off();
-        let aside = self.heap.set_aside_loads(true);
+        let aside = self.heap.set_loads_aside(true);
         self.compile_scratch.replay.lenient = true;
         self.compile_scratch.replay.seal = true;
         let made = match parse_in_place(&fixed, v, depth, &mut tree) {
@@ -72,7 +72,7 @@ impl Vm {
             (opts.sealed, opts.at) = (None, None);
         }
         let built = proto.and_then(|p| self.close_chunk(p).ok());
-        self.heap.set_aside_loads(aside);
+        self.heap.loads_aside_back(aside);
         self.heap.counting_on(off);
         if let (Some(Err(_)), true, Some(rec)) = (&made, early, tree.recorded()) {
             // the token is shown as the source has it, not the completion
@@ -158,10 +158,10 @@ impl Vm {
         self.replay_left(&r, false);
         if replayed.is_ok() {
             // a runtime error runs the message handler where it is raised
-            if let Some(m) = self.heap.puc.load_msg.filter(|_| e.line == 0)
+            if let Some(m) = self.heap.load_msg().filter(|_| e.line == 0)
                 && let Some(v) = self.load_runerror_handled(e, Value::Str(m))
             {
-                self.heap.puc.load_msg = None;
+                self.heap.take_load_msg();
                 self.load_raised = Some(LuaError(v));
             }
             // `luaD_pcall` shrinks the stack, then the parser's buffers go

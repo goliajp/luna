@@ -118,7 +118,7 @@ impl Vm {
     /// Whether this cycle's propagation has shrunk the running thread.
     fn running_shrunk(&self) -> bool {
         let co = self.current.or(self.main_coro);
-        co.is_some_and(|c| self.heap.puc.shrunk.contains(&(c.as_ptr() as *mut _)))
+        co.is_some_and(|c| self.heap.shrunk_this_cycle(c.as_ptr() as *mut _))
     }
 
     /// A full stop-the-world collection with the VM's roots (PUC
@@ -170,7 +170,7 @@ impl Vm {
         };
         self.forget_dead_errors();
         // there may be objects to be finalized
-        self.heap.puc.pace.fin_num = 1;
+        self.heap.finalizers_due();
         crate::runtime::puc::step::gc_full_pause(self);
         freed
     }

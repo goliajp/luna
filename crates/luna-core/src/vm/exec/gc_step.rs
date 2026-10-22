@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::runtime::heap::{Propagated, Running};
-use crate::runtime::puc::pace::St;
 use crate::runtime::puc::step::StepHost;
 use crate::runtime::table::Dialect;
 
@@ -54,14 +53,13 @@ impl Vm {
     /// 5.2's `sweepthread` of each coroutine the sweep just kept (the main
     /// thread's comes at the end of the sweep).
     pub(crate) fn shrink_swept_52(&mut self) {
-        let mut swept = std::mem::take(&mut self.heap.puc.shrunk);
+        let swept = self.heap.take_shrunk();
         for &h in &swept {
             if !self.main_coro.is_some_and(|m| m.as_ptr() as *mut _ == h) {
                 self.collector_shrinks_thread(h);
             }
         }
-        swept.clear();
-        self.heap.puc.shrunk = swept;
+        self.heap.put_back_shrunk(swept);
     }
 
     /// The end of 5.2's sweep: the main thread, swept last, is shrunk
@@ -101,8 +99,7 @@ impl Vm {
             top: self.gc_top
                 + self
                     .heap
-                    .puc
-                    .parse
+                    .parse_frames()
                     .iter()
                     .map(|f| f.slots.len() as u32)
                     .sum::<u32>(),
@@ -167,7 +164,7 @@ impl Vm {
     /// `restartcollection` (5.1 `markroot`): the roots marked, the cycle
     /// propagating.
     pub(super) fn gc_restart(&mut self) {
-        self.heap.puc.shrunk.clear();
+        self.heap.forget_shrunk();
         crate::runtime::puc::step::gc_count_marked(self);
         let mut m = self.heap.gc_begin_propagate();
         self.mark_roots_restart(&mut m);
@@ -176,7 +173,6 @@ impl Vm {
             self.heap.mark_tobefnz(&mut m);
         }
         self.heap.stash_marker(m);
-        self.heap.puc.pace.enter(St::Propagate);
     }
 
     /// PUC `atomic` and `entersweep`; returns the work and how many
@@ -216,7 +212,7 @@ impl Vm {
         }
         self.forget_dead_errors();
         // there may be objects to be finalized
-        self.heap.puc.pace.fin_num = 1;
+        self.heap.finalizers_due();
         r
     }
 

@@ -148,11 +148,10 @@ impl Vm {
                 Ok(Value::Str(s))
             }
             None => {
-                let size = self
-                    .heap
-                    .puc
-                    .sizes
-                    .string(b.len(), self.heap.table_dialect == Dialect::L55);
+                let size = self.heap.puc_size(crate::runtime::puc::PucObj::Str {
+                    len: b.len(),
+                    long: true,
+                });
                 self.heap.acct_ghost(PucKind::LongStr, size)?;
                 Ok(Value::Bool(true))
             }

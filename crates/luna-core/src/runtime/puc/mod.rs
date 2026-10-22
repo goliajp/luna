@@ -14,9 +14,11 @@ use crate::runtime::value::Value;
 
 pub(crate) mod boot;
 pub(crate) use boot::STRT_STAND;
+mod control;
 mod count;
 pub(crate) use count::*;
 mod defer;
+mod loads;
 pub(crate) use defer::Deferred;
 pub(crate) mod fmt;
 mod obj;

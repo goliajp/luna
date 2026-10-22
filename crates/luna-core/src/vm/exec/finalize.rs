@@ -83,15 +83,15 @@ impl Vm {
         let finalizing = std::mem::replace(&mut self.gc_finalizing, true);
         let gc_top = self.gc_top;
         let stopped = self.heap.gc_is_stopped();
-        let fin_stop = self.heap.gc_fin_stop;
-        let threshold = self.heap.puc.pace.threshold();
+        let fin_stop = self.heap.gc_fin_stop();
+        let threshold = self.heap.gc_threshold();
         match d {
             LuaVersion::Lua51 => {
                 let t = 2 * self.heap.bytes() as i64;
-                self.heap.puc.pace.set_threshold(t);
+                self.heap.set_gc_threshold(t);
             }
             LuaVersion::Lua52 | LuaVersion::Lua53 => self.heap.gc_restore_stopped(true),
-            _ => self.heap.gc_fin_stop = true,
+            _ => self.heap.gc_set_fin_stop(true),
         }
         self.heap.refresh_gc_limit();
         let r = self.run_one_finalizer(obj, propagate);
@@ -102,12 +102,12 @@ impl Vm {
             // a 5.1 error leaves the threshold the finalizer ran under
             LuaVersion::Lua51 => {
                 if r.is_ok() {
-                    self.heap.puc.pace.set_threshold(threshold);
+                    self.heap.set_gc_threshold(threshold);
                     self.heap.gc_restore_stopped(stopped);
                 }
             }
             LuaVersion::Lua52 | LuaVersion::Lua53 => self.heap.gc_restore_stopped(stopped),
-            _ => self.heap.gc_fin_stop = fin_stop,
+            _ => self.heap.gc_set_fin_stop(fin_stop),
         }
         self.heap.refresh_gc_limit();
         r

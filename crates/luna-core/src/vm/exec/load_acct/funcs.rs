@@ -69,12 +69,11 @@ impl Vm {
             self.heap.acct_source(env);
             if !self
                 .heap
-                .puc
-                .pins
+                .pinned()
                 .iter()
                 .any(|p| p.as_ptr() == env.as_ptr())
             {
-                self.heap.puc.pins.push(env);
+                self.heap.pin(env);
             }
         }
         r.buff = 32;

@@ -40,6 +40,12 @@ pub(crate) struct OpenDead {
 }
 
 impl Heap {
+    /// The VM's lists of open upvalues, lent to the collection under way.
+    #[inline]
+    pub(crate) fn lend_open_upvals(&mut self, lend: OpenLend) {
+        self.puc.open_dead.lend = Some(lend);
+    }
+
     /// Whether this dialect's collector keeps open upvalues on threads.
     #[inline]
     pub(crate) fn open_on_threads(&self) -> bool {

@@ -39,7 +39,7 @@ pub(crate) trait StepHost {
     /// PUC's propagation with `work` to do (down to `floor`); true when no
     /// object is gray.
     fn propagate(&mut self, work: &mut i64, floor: i64, run: Running) -> bool;
-    /// `restartcollection`: the roots marked, the cycle propagating.
+    /// `restartcollection`: the roots marked.
     fn restart(&mut self);
     /// `atomic` and `entersweep`: the work, and the objects the sweep went
     /// over on the way in.
@@ -58,6 +58,13 @@ pub(crate) trait StepHost {
     /// The collector is in generational mode.
     #[cfg(feature = "gc-trace")]
     fn generational(&self) -> bool;
+}
+
+/// `restartcollection` (5.1 `markroot`): the roots marked, the cycle
+/// propagating.
+fn restart<H: StepHost + ?Sized>(h: &mut H) {
+    h.restart();
+    h.heap().puc.pace.enter(St::Propagate);
 }
 
 /// PUC `luaC_step`: the step that fell due.
@@ -232,13 +239,12 @@ pub(super) fn puc_step_forced<H: StepHost + ?Sized>(h: &mut H) -> Result<(), Lua
     if h.heap().puc.dialect == Dialect::L51 {
         return puc_step(h);
     }
-    let (stopped, fin_stop) = (h.heap().gc_is_stopped(), h.heap().gc_fin_stop);
-    h.heap().gc_fin_stop = false;
+    let run = h.heap().gc_run_mark();
+    h.heap().gc_set_fin_stop(false);
     h.heap().gc_restore_stopped(false);
     let r = puc_step(h);
     if r.is_ok() || h.heap().puc.dialect == Dialect::L52 {
-        h.heap().gc_fin_stop = fin_stop;
-        h.heap().gc_restore_stopped(stopped);
+        h.heap().gc_restore_run(run);
     }
     r
 }
