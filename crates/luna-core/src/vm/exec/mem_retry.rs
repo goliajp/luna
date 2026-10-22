@@ -9,6 +9,40 @@ use crate::runtime::heap::PucKind;
 use crate::runtime::puc_fmt::FmtArg;
 
 impl Vm {
+    /// PUC's `L->top` where an allocation is asked for: the running
+    /// native's top, else what the running Lua function's instruction has
+    /// set it to below the frame's end, else the whole frame. Worked out
+    /// here, when memory has run out, so the instructions pay nothing.
+    pub(crate) fn alloc_top(&self) -> u32 {
+        if let Some(top) = self.native_top() {
+            return top;
+        }
+        let Some(crate::runtime::function::CallFrame::Lua(f)) = self.frames.last() else {
+            return self.lua_window_end();
+        };
+        let p = &f.closure.proto;
+        // a call before its frame is made (`luaD_precall`'s stack and
+        // `CallInfo`): the arguments, the missing ones nil already
+        if f.pc == 0 {
+            return if p.is_vararg {
+                self.lua_window_end()
+            } else {
+                f.base + u32::from(p.num_params)
+            };
+        }
+        let at = |i: u32| p.code.get(f.pc.wrapping_sub(i) as usize).copied();
+        let open_setlist = |i: Option<crate::vm::isa::Inst>| {
+            i.is_some_and(|i| i.op() == crate::vm::isa::Op::SetList && i.b() == 0)
+        };
+        // `CONCAT` folds its operands down to `Vm::top`; an open `SETLIST`
+        // stores the values up to it (its extra argument read already)
+        match at(1) {
+            Some(i) if i.op() == crate::vm::isa::Op::Concat => self.top,
+            i if open_setlist(i) || open_setlist(at(2)) => self.top,
+            _ => self.lua_window_end(),
+        }
+    }
+
     /// `lua_pushfstring`'s string of `fmt` and `args`.
     pub(crate) fn pushfstring(
         &mut self,
