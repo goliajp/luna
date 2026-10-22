@@ -17,6 +17,40 @@ pub(in crate::runtime) unsafe fn is_kept(h: *mut GcHeader) -> bool {
 }
 
 impl Heap {
+    /// `gc-verify`, around each step: what the model's state implies of
+    /// luna's collector phase, and the reverse. Only implications that
+    /// hold whatever path a cycle took: a full or emergency collection
+    /// moves luna's phase without the model's, and luna's sweep may end
+    /// before PUC's (the model then sweeps on with luna paused).
+    pub(in crate::runtime) fn verify_phase_pair(&self, ctx: &str) {
+        use crate::runtime::puc::pace::St;
+        let (st, ph) = (self.puc.pace.state(), self.phase());
+        let marking = matches!(st, St::Propagate | St::EnterAtomic | St::Atomic);
+        let sweeping = matches!(
+            st,
+            St::SweepString
+                | St::SweepUdata
+                | St::SweepAll
+                | St::SweepFinobj
+                | St::SweepTobefnz
+                | St::SweepEnd
+        );
+        let ok = match ph {
+            // marking, in both
+            GcPhase::Propagate => marking,
+            // luna sweeps only while PUC does
+            GcPhase::Sweep => sweeping,
+            // a model in its pause, finalizing, or marking has luna paused,
+            // propagating; luna paused with PUC still sweeping is the one
+            // pairing a cycle's two sweeps allow
+            GcPhase::Pause => !marking && !matches!(st, St::SweepString | St::SweepUdata),
+        };
+        assert!(
+            ok,
+            "[gc-verify] {ctx}: the model is in {st:?} with luna's collector in {ph:?}"
+        );
+    }
+
     /// `gc-verify`, once marking is done (the last sweep over): PUC's
     /// string table holds a place for each counted short string luna has
     /// and each one a record holds. Panics when the count went astray.
