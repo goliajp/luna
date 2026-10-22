@@ -224,9 +224,9 @@ impl Opener {
             {
                 return Ok(Value::Native(n));
             }
-            vm.heap.fix_natives = true;
+            let fixing = vm.heap.fix_natives();
             let n = vm.builtin(f, upvals, b);
-            vm.heap.fix_natives = false;
+            vm.heap.stop_fixing_natives(fixing);
             let Value::Native(n) = n? else {
                 unreachable!("a native")
             };

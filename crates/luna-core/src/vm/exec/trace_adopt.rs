@@ -50,7 +50,7 @@ impl Vm {
                 opts,
                 version,
                 settings,
-                roots: &self.heap.chunk_roots,
+                roots: self.heap.chunk_roots(),
                 mm_names: &self.mm_names,
             };
             jit.trace_compiler.adopt_traces(jit.storage.as_mut(), &req)

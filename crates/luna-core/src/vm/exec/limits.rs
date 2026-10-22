@@ -18,7 +18,7 @@ impl Vm {
     /// whatever changes either limit.
     #[inline]
     pub(crate) fn sync_limited(&mut self) {
-        self.limited = self.instr_budget.is_some() || self.heap.mem_cap.is_some();
+        self.limited = self.instr_budget.is_some() || self.heap.mem_cap().is_some();
         self.jit.gate = self.jit.enabled && !self.limited;
     }
 
@@ -104,7 +104,7 @@ impl Vm {
             if self.heap.cap_bytes() <= cap {
                 return Ok(());
             }
-            self.heap.mem_cap = Some(0);
+            self.heap.set_mem_cap(Some(0));
         }
         self.last_error_kind = crate::vm::error::LuaErrorKind::MemoryCap;
         Err(LuaError(

@@ -88,7 +88,7 @@ fn table_raw_set_cold(tb: &mut Table, heap: &mut Heap, key: Value, v: Value) -> 
         Ok(()) if heap.trace.refused() => false,
         Ok(()) => true,
         Err(e) => {
-            heap.store_failed = matches!(e, crate::runtime::table::TableError::Memory(_));
+            heap.set_store_failed(matches!(e, crate::runtime::table::TableError::Memory(_)));
             false
         }
     }

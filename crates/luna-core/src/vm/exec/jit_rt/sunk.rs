@@ -121,19 +121,19 @@ impl Vm {
     /// recorded went through (a native it called collects), watched
     /// without being kept alive.
     pub(crate) fn watch_recording(&mut self) {
-        let w = &mut self.heap.weak_objs;
-        w.clear();
         let Some(rec) = self.jit.active_trace.as_deref() else {
+            self.heap.watch_objects([]);
             return;
         };
-        w.extend(super::recording_check::recording_objects(rec).map(|o| (o, false)));
+        self.heap
+            .watch_objects(super::recording_check::recording_objects(rec));
     }
 
     /// After it: a recording that went through an object the collection
     /// found dead, a prototype a load it called freed, is dropped, to be
     /// recorded again from the start.
     pub(crate) fn forget_dead_recording(&mut self) {
-        let w = std::mem::take(&mut self.heap.weak_objs);
+        let w = self.heap.take_watched_objects();
         if w.iter().any(|o| o.1) && self.jit.active_trace.take().is_some() {
             self.jit.counters.aborted += 1;
             self.jit.counters.bump_close_cause("collection");

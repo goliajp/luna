@@ -17,13 +17,13 @@ impl Vm {
                 return Err(self.instr_budget_exhausted());
             }
         }
-        if let Some(cap) = self.heap.mem_cap
+        if let Some(cap) = self.heap.mem_cap()
             && self.heap.cap_bytes() > cap
         {
             self.mem_cap_exceeded(cap)?;
         }
         self.trap = self.instr_budget.is_some()
-            || self.heap.mem_cap.is_some()
+            || self.heap.mem_cap().is_some()
             || self.hook_armed()
             || matches!(self.frames.last(), Some(CallFrame::Cont(_)));
         Ok(())
