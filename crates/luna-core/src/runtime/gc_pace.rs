@@ -206,12 +206,22 @@ pub(crate) fn sweepmax_52(s: &PucSizes) -> i64 {
 }
 
 /// The work a 5.2 `incstep` (5.3 `getdebt`) starts with: the debt in
-/// work units, `stepmul` the parameter (5.3 stores at least 40).
+/// work units, `stepmul` the parameter (5.3 stores at least 40), at most
+/// `MAX_LMEM` as PUC caps it.
 pub(crate) fn work_52(d: Dialect, debt: i64, stepmul: i64) -> i64 {
     if d == Dialect::L53 && debt <= 0 {
         return 0;
     }
-    (debt / STEPMULADJ + 1) * stepmul
+    // `l_mem` is as wide as a pointer; 5.2 keeps 2 below its largest
+    let max = (usize::MAX >> 1) as i64 - [0, 2][usize::from(d == Dialect::L52)];
+    let debt = debt / STEPMULADJ + 1;
+    if debt < max / stepmul {
+        // a debt below zero (a step forced early) times a huge multiplier
+        // wraps in PUC's `l_mem` arithmetic as it does here
+        debt.wrapping_mul(stepmul)
+    } else {
+        max
+    }
 }
 
 /// The debt a 5.2 / 5.3 step leaves when the cycle goes on: the work
@@ -292,6 +302,10 @@ mod tests {
         assert_eq!(work_52(Dialect::L52, 0, 200), 200);
         assert_eq!(work_52(Dialect::L53, 0, 200), 0);
         assert_eq!(work_52(Dialect::L53, 401, 200), 600);
+        // a step multiplier too big for the debt in work units: the cap
+        let max = (usize::MAX >> 1) as i64;
+        assert_eq!(work_52(Dialect::L52, 1 << 20, 1 << 55), max - 2);
+        assert_eq!(work_52(Dialect::L53, 1 << 20, 1 << 55), max);
         assert_eq!(debt_after_52(-2400, 200), -2400);
         assert_eq!(pause_debt(Dialect::L53, 1000, 1000, 200), -1000);
         assert_eq!(pause_debt(Dialect::L54, 3000, 1000, 200), 0);
