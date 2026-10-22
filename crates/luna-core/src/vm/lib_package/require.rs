@@ -87,21 +87,20 @@ pub(super) fn find_loader(
             return Ok((first, second));
         }
         // the searcher's result is on PUC's stack while the message grows
-        let held = vm.lib_roots.len();
-        vm.lib_roots.push(first);
-        let r = add_message(vm, first, &mut msg, buf.as_mut(), &mut acc);
-        vm.lib_roots.truncate(held);
+        let r = vm.rooted(&[first], |vm| {
+            add_message(vm, first, &mut msg, buf.as_mut(), &mut acc)
+        });
         r?;
     }
     let Value::Str(n) = name else {
         unreachable!("require passes the name as a string");
     };
     // `luaL_error(L, "module '%s' not found:%s", name, msg)`
-    let at = vm.lib_roots.len();
+    let at = vm.lib_roots.mark();
     vm.lib_roots.extend(made.map(Value::Str));
     let args = [FmtArg::S(c_str(n.as_bytes())), FmtArg::S(&msg)];
     let e = crate::vm::builtins::raise_lib(vm, b"module '%s' not found:%s", &args, 2);
-    vm.lib_roots.truncate(at);
+    vm.lib_roots.release(at);
     Err(e)
 }
 
@@ -190,7 +189,7 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let arg = if v <= LuaVersion::Lua53 {
         vm.lib_roots.extend([loader, data]);
         let pushed = vm.api_push_string_at(name_at(name_s), name_s.as_bytes());
-        vm.lib_roots.truncate(vm.lib_roots.len() - 2);
+        vm.lib_roots.pop_n(2);
         pushed?
     } else {
         name
@@ -216,9 +215,7 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     // `lua_getfield(L, 2, name)` and `lua_setfield(L, 2, name)`: keys
     // `luaS_new` makes of the name
     let key = vm.field_key(Some(name_at(name_s)), name_s.as_bytes())?;
-    vm.lib_roots.push(key);
-    let value = vm.index_value(Value::Table(loaded), key);
-    vm.lib_roots.pop();
+    let value = vm.rooted(&[key], |vm| vm.index_value(Value::Table(loaded), key));
     let mut value = value?;
     let unset = if v == LuaVersion::Lua51 {
         same(value, sentinel)
@@ -228,9 +225,9 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     if unset {
         value = Value::Bool(true);
         let key = vm.field_key(Some(name_at(name_s)), name_s.as_bytes())?;
-        vm.lib_roots.push(key);
-        let set = vm.newindex_value(Value::Table(loaded), key, value);
-        vm.lib_roots.pop();
+        let set = vm.rooted(&[key], |vm| {
+            vm.newindex_value(Value::Table(loaded), key, value)
+        });
         set?;
     }
     // 5.4 also returns the loader data

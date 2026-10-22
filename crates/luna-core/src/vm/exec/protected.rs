@@ -285,9 +285,7 @@ impl Vm {
         args: &[Value],
     ) -> Result<u32, LuaError> {
         let end = slot as usize + 1 + args.len();
-        self.lib_roots.push(f);
-        let grown = self.grow_stack_holding(end, args);
-        self.lib_roots.pop();
+        let grown = self.rooted(&[f], |vm| vm.grow_stack_holding(end, args));
         grown?;
         self.stack[slot as usize] = f;
         self.stack[slot as usize + 1..end].copy_from_slice(args);

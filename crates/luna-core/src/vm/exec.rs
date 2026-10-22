@@ -76,6 +76,8 @@ mod jit_rt_strbuf;
 pub(crate) use jit_rt::TraceGhosts;
 pub(crate) use jit_rt_strbuf::AccumLast;
 mod jit_tforcall;
+mod lib_stack;
+pub(crate) use lib_stack::LibMark;
 mod lifecycle;
 mod limits;
 mod load;

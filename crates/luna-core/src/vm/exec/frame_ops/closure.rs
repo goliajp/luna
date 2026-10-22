@@ -54,9 +54,9 @@ impl Vm {
         }
         // PUC makes the closure first, then the upvalues it finds no open
         // one for (`luaF_findupval`): the new ones are counted after it
-        self.heap.puc.silent += 1;
-        let r = self.gather_upvals(cl, proto, base, collect, &mut stack_buf, &mut heap_buf);
-        self.heap.puc.silent -= 1;
+        let r = self.uncounted(|vm| {
+            vm.gather_upvals(cl, proto, base, collect, &mut stack_buf, &mut heap_buf)
+        });
         r?;
         let ups: &[Gc<Upvalue>] = if use_inline {
             // SAFETY: `gather_upvals` initialised the first `n_ups` slots
@@ -178,12 +178,12 @@ impl Vm {
         env: Gc<Table>,
     ) -> Result<(), LuaError> {
         // luna's own cell: PUC keeps a 5.1 environment in the closure
-        self.heap.puc.silent += 1;
+        let off = self.heap.counting_off();
         let uv = self.retry_oom(|vm| {
             vm.heap
                 .try_new_upvalue(UpvalState::Closed(Value::Table(env)))
         });
-        self.heap.puc.silent -= 1;
+        self.heap.counting_on(off);
         let uv = uv?;
         // SAFETY: `cl` is a live closure (see `Gc`), and no reference into
         // it is held across this write

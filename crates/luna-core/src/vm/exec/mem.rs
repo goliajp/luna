@@ -52,7 +52,7 @@ impl Vm {
         self.clear_saved_main();
         // what the collection frees is counted, also in the middle of what
         // luna makes without counting (a load)
-        let silent = std::mem::replace(&mut self.heap.puc.silent, 0);
+        let counting = self.heap.count_all();
         let young = self.heap.young_len();
         self.gc_hold_threads();
         self.jit_forget_ghosts();
@@ -90,7 +90,7 @@ impl Vm {
         self.gc_top = live_top;
         self.heap.pace.fin_num = 1;
         self.gc_full_pause();
-        self.heap.puc.silent = silent;
+        self.heap.restore_counting(counting);
         #[cfg(feature = "gc-trace")]
         self.trace_full_end();
         true

@@ -36,7 +36,7 @@ pub(crate) struct PucBuffer {
     /// 5.1: where the C buffer's bytes start in the content
     start: usize,
     /// 5.1: where this buffer's strings start in `Vm::lib_roots`
-    base: usize,
+    base: crate::vm::exec::LibMark,
 }
 
 impl PucBuffer {
@@ -50,7 +50,7 @@ impl PucBuffer {
             boxed: false,
             ubox: None,
             start: 0,
-            base: vm.lib_roots.len(),
+            base: vm.lib_roots.mark(),
         }
     }
 
@@ -188,15 +188,15 @@ impl PucBuffer {
     ) -> Result<(), LuaError> {
         let vl = s.len();
         // the value is on the stack while the buffer makes room
-        let at = vm.lib_roots.len();
+        let at = vm.lib_roots.mark();
         vm.lib_roots.push(Value::Str(s));
         if self.d != Dialect::L51 {
             let r = self.add(vm, out, vl);
-            vm.lib_roots.truncate(at);
+            vm.lib_roots.release(at);
             return r;
         }
         if vl <= self.size - self.n {
-            vm.lib_roots.truncate(at);
+            vm.lib_roots.release(at);
             self.n += vl;
             return Ok(());
         }
@@ -204,7 +204,7 @@ impl PucBuffer {
         // below it (`lua_insert`)
         let end = out.len() - vl;
         if self.empty_51(vm, &out[..end])? {
-            vm.lib_roots.swap(at, at + 1);
+            vm.lib_roots.swap(at.at(), at.at() + 1);
         }
         self.start = out.len();
         self.adjust_51(vm)
@@ -215,19 +215,19 @@ impl PucBuffer {
         match self.d {
             Dialect::L51 => {
                 self.empty_51(vm, out)?;
-                let n = vm.lib_roots.len() - self.base;
+                let n = vm.lib_roots.len() - self.base.at();
                 let r = if n == 0 {
                     vm.alloc_str(b"")?
                 } else {
                     if n >= 2 {
                         self.concat_51(vm, n)?;
                     }
-                    match vm.lib_roots[self.base] {
+                    match vm.lib_roots[self.base.at()] {
                         Value::Str(s) => s,
                         _ => unreachable!("the buffer's strings"),
                     }
                 };
-                vm.lib_roots.truncate(self.base);
+                vm.lib_roots.release(self.base);
                 Ok(r)
             }
             Dialect::L55 if self.boxed => {

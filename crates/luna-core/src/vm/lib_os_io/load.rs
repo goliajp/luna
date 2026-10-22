@@ -39,7 +39,7 @@ pub(crate) fn load_path(
     };
     // PUC pushes the chunk name before it opens the file, a push that
     // checks for a collection; the name stays on the stack while it loads
-    let base = vm.lib_roots.len();
+    let base = vm.lib_roots.mark();
     let made = vm.api_pushing(|vm| match name {
         Some(n) => vm.pushfstring(b"@%s", &[crate::runtime::puc_fmt::FmtArg::S(n)]),
         None => vm.alloc_str(&chunkname),
@@ -48,7 +48,7 @@ pub(crate) fn load_path(
         Ok(name_str) => load_read(vm, read, &chunkname, name_str, name.is_some(), mode),
         Err(e) => Err(e.0),
     };
-    vm.lib_roots.truncate(base);
+    vm.lib_roots.release(base);
     r
 }
 

@@ -26,13 +26,13 @@ pub(super) fn search(
     sep: &[u8],
     dirsep: &[u8],
 ) -> Result<Result<Found, Gc<LuaStr>>, LuaError> {
-    let base = vm.lib_roots.len();
+    let base = vm.lib_roots.mark();
     let r = if vm.version() >= LuaVersion::Lua54 {
         search_54(vm, name, path, sep, dirsep)
     } else {
         search_51(vm, name, path, sep, dirsep)
     };
-    vm.lib_roots.truncate(base);
+    vm.lib_roots.release(base);
     r
 }
 
@@ -151,8 +151,7 @@ fn search_51(
                 // replaced by the result
                 vm.api_check_before()?;
                 let joined = crate::vm::builtins::concat2(vm, *a, Value::Str(entry))?;
-                let n = vm.lib_roots.len();
-                vm.lib_roots.truncate(n - 2);
+                vm.lib_roots.pop_n(2);
                 vm.lib_roots.push(joined);
                 *a = joined;
             }

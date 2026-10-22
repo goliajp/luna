@@ -164,10 +164,9 @@ impl Vm {
         if let Ok(vals) = &r
             && self.version == crate::version::LuaVersion::Lua51
         {
-            let base = self.lib_roots.len();
-            self.lib_roots.extend_from_slice(vals);
-            self.call_return_checkpoint(func_slot + vals.len() as u32)?;
-            self.lib_roots.truncate(base);
+            self.rooted(vals, |vm| {
+                vm.call_return_checkpoint(func_slot + vals.len() as u32)
+            })?;
         }
         // a call placed inside a frame's window gives the window back: the
         // frames below run on when the error is caught

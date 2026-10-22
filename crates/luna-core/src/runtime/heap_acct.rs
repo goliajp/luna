@@ -99,7 +99,7 @@ impl Heap {
     /// A new object of `size` bytes.
     #[inline]
     pub(crate) fn acct_obj(&mut self, kind: PucKind, size: usize) {
-        if self.puc.silent > 0 {
+        if !self.counting() {
             return;
         }
         self.bytes += size;
@@ -117,7 +117,7 @@ impl Heap {
     /// has not made, whose free is not counted either (see
     /// [`Heap::acct_promote_obj`]).
     pub(crate) fn acct_new(&mut self, h: *mut GcHeader, kind: PucKind, size: usize) {
-        if self.puc.silent > 0 {
+        if !self.counting() {
             set_uncounted(h, true);
         } else {
             self.acct_obj(kind, size);
@@ -126,7 +126,7 @@ impl Heap {
 
     /// An object made without counting is PUC's now: counted here.
     pub(crate) fn acct_promote_obj(&mut self, h: *mut GcHeader, kind: PucKind, size: usize) {
-        if self.puc.silent == 0 && is_uncounted(h) {
+        if self.counting() && is_uncounted(h) {
             // SAFETY: the caller names a live object
             unsafe { self.born(h) };
             set_uncounted(h, false);
@@ -137,7 +137,7 @@ impl Heap {
     /// A block (an array, a buffer) going from `old` to `new` bytes; either may be 0.
     #[inline]
     pub(crate) fn acct_block(&mut self, old: usize, new: usize) {
-        if self.puc.silent > 0 {
+        if !self.counting() {
             return;
         }
         #[cfg(feature = "gc-verify")]
@@ -193,7 +193,7 @@ impl Heap {
     #[inline]
     pub(crate) fn trace_raw(&mut self, old: usize, new: usize) {
         #[cfg(feature = "gc-trace")]
-        if self.puc.silent == 0 {
+        if self.counting() {
             self.trace.raw = true;
             match (old, new) {
                 (0, 0) => {}
@@ -223,7 +223,7 @@ mod thread;
 pub(crate) use boot::STRT_STAND;
 pub(crate) use defer::Deferred;
 pub(crate) use proto::ENV51;
-pub(crate) use thread::BASIC_CI_51;
+pub(crate) use thread::{BASIC_CI_51, Thread};
 
 /// Whether object `h` is one PUC has not made (see [`Heap::acct_new`]).
 #[inline(always)]

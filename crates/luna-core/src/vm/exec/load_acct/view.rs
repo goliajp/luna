@@ -36,10 +36,7 @@ impl Vm {
         src: &[u8],
         source: Gc<crate::runtime::LuaStr>,
     ) -> Option<ReaderView> {
-        self.heap.puc.silent += 1;
-        let r = self.reader_view_silent(src, source);
-        self.heap.puc.silent -= 1;
-        r
+        self.uncounted(|vm| vm.reader_view_silent(src, source))
     }
 
     fn reader_view_silent(

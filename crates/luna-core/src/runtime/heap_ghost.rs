@@ -38,7 +38,7 @@ impl Heap {
     /// An object of `kind` and `size` bytes PUC makes and luna does not:
     /// counted now, freed by the next sweep.
     pub(crate) fn acct_ghost(&mut self, kind: PucKind, size: usize) -> Result<(), Oom> {
-        if self.puc.silent > 0 {
+        if !self.counting() {
             return Ok(());
         }
         // the record first: a retry after it failed counts the object once
@@ -88,7 +88,7 @@ impl Heap {
     pub(crate) fn acct_ghost_table(&mut self, a: usize, h: usize) -> Result<GhostRef, Oom> {
         // made while counting is set aside: an entry of no bytes, nothing
         // counted for it or freed
-        let size = [self.sizes.table as u32, 0][usize::from(self.puc.silent > 0)];
+        let size = [self.sizes.table as u32, 0][usize::from(!self.counting())];
         let (g, at) = self.ghost_push(size)?;
         // room for the two parts first: no half record is left behind
         // SAFETY: `ghost_push` just returned `g`, a live record of this heap
@@ -152,7 +152,7 @@ impl Heap {
     /// (yet), as [`Heap::acct_ghost`]: where its record is.
     pub(crate) fn acct_ghost_ref(&mut self, kind: PucKind, size: usize) -> Result<GhostRef, Oom> {
         // made while counting is set aside: an entry of no bytes
-        let size = size * usize::from(self.puc.silent == 0);
+        let size = size * usize::from(self.counting());
         let size32 = size as u32 | if kind == PucKind::ShortStr { SHORT } else { 0 };
         let (g, at) = self.ghost_push(size32)?;
         self.acct_obj(kind, size);

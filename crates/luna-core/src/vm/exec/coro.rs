@@ -185,8 +185,8 @@ impl Vm {
             // the top before the error is put; the `CallInfo`s stay
             let err = result.is_err() || death_err.is_some();
             let size = 21 + u32::from(err && self.version < LuaVersion::Lua55);
-            let counted = !crate::runtime::heap::is_uncounted(co.as_ptr() as *mut _);
-            self.heap.acct_stack(counted, closed.stack_size, size);
+            let co = crate::runtime::heap::Thread::Coro(co);
+            self.heap.acct_stack(co, closed.stack_size, size);
             m.stack_size = size;
             m.ci_alloc = closed.ci_alloc;
             m.resume_at = None;

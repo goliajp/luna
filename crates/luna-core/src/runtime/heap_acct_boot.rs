@@ -129,7 +129,7 @@ impl Heap {
         };
         // SAFETY: `h` heads the string just made; only its class byte is written
         unsafe { (*h).cls = u8::from(held) * super::UNLISTED };
-        if self.puc.silent > 0 {
+        if !self.counting() {
             super::set_uncounted(h, true);
         } else {
             self.acct_string(len);
@@ -144,7 +144,7 @@ impl Heap {
     #[cold]
     #[inline(never)]
     pub(crate) fn acct_promote(&mut self, h: *mut GcHeader, len: usize) {
-        if self.puc.silent > 0 {
+        if !self.counting() {
             return;
         }
         // SAFETY: the caller names a live string

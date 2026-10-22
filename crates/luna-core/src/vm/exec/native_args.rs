@@ -99,10 +99,6 @@ impl Vm {
         need: usize,
         vals: &[Value],
     ) -> Result<(), LuaError> {
-        let at = self.lib_roots.len();
-        self.lib_roots.extend_from_slice(vals);
-        let r = self.grow_stack(need);
-        self.lib_roots.truncate(at);
-        r
+        self.rooted(vals, |vm| vm.grow_stack(need))
     }
 }

@@ -22,9 +22,7 @@ impl Vm {
     #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn api_check_after(&mut self, v: Value) -> Result<(), LuaError> {
         if self.version >= LuaVersion::Lua53 && !self.checkpoint_idle() {
-            self.lib_roots.push(v);
-            let r = self.native_checkpoint_due();
-            self.lib_roots.pop();
+            let r = self.rooted(&[v], |vm| vm.native_checkpoint_due());
             return r;
         }
         Ok(())
@@ -114,10 +112,7 @@ impl Vm {
     #[inline]
     #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn api_check_converted(&mut self, v: Value) -> Result<(), LuaError> {
-        self.lib_roots.push(v);
-        let r = self.native_checkpoint();
-        self.lib_roots.pop();
-        r
+        self.rooted(&[v], |vm| vm.native_checkpoint())
     }
 
     /// `lua_createtable(L, narr, nrec)`, checked for as PUC checks.
@@ -191,9 +186,9 @@ impl Vm {
     /// comes before it down from -1.
     #[doc(hidden)]
     pub fn host_set_arg(&mut self, argv: &[Vec<u8>], script: usize) -> Result<(), LuaError> {
-        let base = self.lib_roots.len();
+        let base = self.lib_roots.mark();
         let r = self.host_arg_table(argv, script);
-        self.lib_roots.truncate(base);
+        self.lib_roots.release(base);
         let t = r?;
         self.set_global("arg", Value::Table(t))
     }

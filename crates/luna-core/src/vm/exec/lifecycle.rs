@@ -71,9 +71,6 @@ impl Vm {
     /// caller is responsible for the rest of the bring-up.
     pub(super) fn new_inner(version: LuaVersion, heap: Heap) -> Option<Vm> {
         let mut heap = heap;
-        heap.set_version(version).ok()?;
-        // luna's own objects PUC made at other points, or not at all
-        heap.puc.silent += 1;
         // 5.1's `luaH_new(L, 0, 2)`, later ones' `luaH_new(L)`
         let nrec = usize::from(version == LuaVersion::Lua51) * 2;
         let globals = Heap::boot_table(heap.try_create_table(0, nrec).ok()?);
@@ -216,7 +213,7 @@ impl Vm {
             sort_scratch: LVec::new(mem),
             reader_layers: Vec::new(),
             name_cache: Default::default(),
-            lib_roots: Vec::new(),
+            lib_roots: Default::default(),
             buffer_boxes: Vec::new(),
             // LuaUserdata trait sugar's per-Vm
             // metatable cache. Populated lazily by register_userdata.
@@ -332,7 +329,10 @@ impl Vm {
             .unwrap_or_else(|| crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Vm>()))
     }
 
-    fn try_new_minimal_on(version: LuaVersion, heap: Heap) -> Option<Vm> {
+    fn try_new_minimal_on(version: LuaVersion, mut heap: Heap) -> Option<Vm> {
+        heap.set_version(version).ok()?;
+        // luna's own objects PUC made at other points, or not at all
+        let off = heap.counting_off();
         let mut vm = Vm::new_inner(version, heap)?;
         let mc = vm.heap.try_new_coro(Value::Nil, vm.globals).ok()?;
         // SAFETY: `mc` was allocated on the line above and is held only by this local; the borrow covers one field store
@@ -346,7 +346,7 @@ impl Vm {
             .reserve_exact(Vm::lual_buffersize(version))
             .ok()?;
         vm.state_complete = true;
-        vm.heap.puc.silent -= 1;
+        vm.heap.counting_on(off);
         vm.heap.refresh_gc_limit();
         Some(vm)
     }

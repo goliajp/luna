@@ -9,13 +9,19 @@ use crate::runtime::Value;
 use crate::version::LuaVersion;
 use crate::vm::{LuaError, Vm};
 
+thread_local! {
+    static OFF: std::cell::RefCell<Vec<super::state::CountingOff>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn quiet(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
-    vm.heap.puc.silent += 1;
+    let off = vm.heap.counting_off();
+    OFF.with_borrow_mut(|o| o.push(off));
     Ok(vm.nat_return(fs, &[]))
 }
 
 fn loud(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
-    vm.heap.puc.silent -= 1;
+    let off = OFF.with_borrow_mut(|o| o.pop()).expect("quiet() first");
+    vm.heap.counting_on(off);
     Ok(vm.nat_return(fs, &[]))
 }
 

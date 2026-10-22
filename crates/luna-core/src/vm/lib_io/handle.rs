@@ -45,11 +45,7 @@ pub(super) fn failed_handle<R>(
     let u = new_file(vm, FileHandle::Closed, false, |vm, u| {
         vm.api_check_after(Value::Userdata(u))
     })?;
-    let at = vm.lib_roots.len();
-    vm.lib_roots.push(Value::Userdata(u));
-    let r = then(vm);
-    vm.lib_roots.truncate(at);
-    r
+    vm.rooted(&[Value::Userdata(u)], |vm| then(vm))
 }
 
 /// `luaL_testudata(L, i, LUA_FILEHANDLE)`: a userdata whose metatable is the

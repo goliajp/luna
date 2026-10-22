@@ -55,13 +55,11 @@ impl Heap {
         builtin: Builtin,
         puc_nup: usize,
     ) -> Result<Gc<NativeClosure>, Oom> {
-        self.puc.silent += 1;
-        let g = self.try_new_builtin(f, upvals, builtin, false);
-        self.puc.silent -= 1;
+        let g = self.uncounted(|h| h.try_new_builtin(f, upvals, builtin, false));
         let g = g?;
         let h = g.as_ptr() as *mut GcHeader;
         self.set_native_puc_nup(g, puc_nup);
-        if self.puc.silent == 0 {
+        if self.counting() {
             acct::set_uncounted(h, false);
             if puc_nup > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
                 self.acct_obj(PucKind::CClosure, self.sizes.c_closure(puc_nup));
@@ -132,7 +130,7 @@ impl Heap {
             self.link(h);
             h
         };
-        if self.puc.silent == 0 {
+        if self.counting() {
             self.acct_obj(PucKind::CClosure, self.sizes.c_closure(0));
         } else {
             acct::set_uncounted(h, true);
@@ -175,11 +173,9 @@ impl Heap {
         objs: &[(PucKind, usize)],
         counted: usize,
     ) -> Result<Gc<NativeClosure>, Oom> {
-        self.puc.silent += 1;
-        let g = self.try_new_builtin(f, upvals, Builtin::None, false);
-        self.puc.silent -= 1;
+        let g = self.uncounted(|h| h.try_new_builtin(f, upvals, Builtin::None, false));
         let g = g?;
-        if self.puc.silent == 0 {
+        if self.counting() {
             for &(kind, size) in &objs[counted..] {
                 self.acct_obj(kind, size);
             }

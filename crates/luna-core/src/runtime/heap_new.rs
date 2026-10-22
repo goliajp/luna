@@ -202,7 +202,7 @@ impl Heap {
             host_state: None,
         };
         let co = self.adopt_counted(coro, PucKind::Thread, size)?;
-        if self.puc.silent == 0 {
+        if self.counting() {
             self.threads.push(co);
         }
         self.acct_thread_blocks(stack_size);

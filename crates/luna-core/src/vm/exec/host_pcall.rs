@@ -58,9 +58,8 @@ impl Vm {
     /// [`Vm::call_value_with_handler_in_c`].
     #[doc(hidden)]
     pub fn call_value_in_c(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
-        self.heap.puc.silent += 1;
-        let level = self.builtin(builtins::nat_host_pcall_in_c, &[], Builtin::HostPcallInC);
-        self.heap.puc.silent -= 1;
+        let level = self
+            .uncounted(|vm| vm.builtin(builtins::nat_host_pcall_in_c, &[], Builtin::HostPcallInC));
         let level = luna_only(level?);
         let mut call_args = Vec::with_capacity(args.len() + 1);
         call_args.push(f);
@@ -136,9 +135,7 @@ impl Vm {
     ) -> Result<Vec<Value>, LuaError> {
         // the protected call PUC makes from C is no function of its own:
         // luna's stand-in for it is not counted
-        self.heap.puc.silent += 1;
-        let level = self.builtin(level, &[], builtin);
-        self.heap.puc.silent -= 1;
+        let level = self.uncounted(|vm| vm.builtin(level, &[], builtin));
         let level = luna_only(level?);
         let k = self.g.host_slots as usize;
         let docall = builtin == Builtin::HostXpcallInC
