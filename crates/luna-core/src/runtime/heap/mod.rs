@@ -138,13 +138,13 @@ pub struct Heap {
     /// a raw table store the interpreter's fast path tried could not grow
     /// the table: the slow path it falls back to counts that as the first
     /// attempt (see `Vm::newindex_miss`)
-    pub(crate) store_failed: bool,
+    store_failed: bool,
     /// gray objects are left off `gray` because it could not grow
     gray_overflow: bool,
     /// natives without upvalues allocated while set go on `fixed` (the
     /// standard library's functions, PUC's light C functions)
-    pub(crate) fix_natives: bool,
-    pub(crate) track_chunk_roots: bool,
+    fix_natives: bool,
+    track_chunk_roots: bool,
     /// PUC 5.1 has no ephemeron pass: a `__mode='k'` table marks its values
     /// strongly, so `a[t]=t` survives with nothing else referencing `t`
     /// (5.1's gc.lua "weak tables" asserts 3*lim survivors, 5.4's 2*lim).
@@ -163,7 +163,7 @@ pub struct Heap {
     /// 5.1: the name `__gc`, which a userdata listed for finalization must
     /// have in its metatable when it dies to be finalized (PUC 5.1 lists
     /// every userdata given a metatable and looks then)
-    pub(crate) gc_event_51: Option<Gc<crate::runtime::LuaStr>>,
+    gc_event_51: Option<Gc<crate::runtime::LuaStr>>,
     /// An object finalized once can be registered again (all but 5.2,
     /// whose `luaC_checkfinalizer` refuses a finalized object).
     pub(crate) refinalize: bool,
@@ -183,7 +183,7 @@ pub struct Heap {
     seed: u32,
     /// Embedding memory cap, soft: over `bytes` between dispatch turns, a full collect, then (still
     /// over) a catchable "memory cap exceeded"; one allocation can pass it.
-    pub(crate) mem_cap: Option<usize>,
+    mem_cap: Option<usize>,
     /// Persistent gray queue of objects grayed by write barriers, outside `propagate` so barriers
     /// skip the Option; `gc_step_propagate` and `gc_finish_atomic` drain it.
     gray: mark::GrayStack,
@@ -206,18 +206,18 @@ pub struct Heap {
     /// the blocks the fixed natives are made in
     slab: slab::NativeSlab,
     /// `io.stdin` as made, which the host reads lines through; null once freed
-    pub(crate) stdin_ud: *mut GcHeader,
+    stdin_ud: *mut GcHeader,
     /// The main functions of the chunks loaded while `track_chunk_roots`
     /// is set, without keeping them alive: the collector drops each one it
     /// finds dead. Compiled traces taken over from another Vm find the
     /// functions they inlined in these chunks.
-    pub(crate) chunk_roots: Vec<Gc<Proto>>,
+    chunk_roots: Vec<Gc<Proto>>,
     /// values and objects the VM refers to without keeping them alive, and
     /// whether the last marking found each dead (`Vm::forget_dead_errors`)
-    pub(crate) weak_watch: Vec<(Value, bool)>,
-    pub(crate) weak_objs: Vec<(*const GcHeader, bool)>,
+    weak_watch: Vec<(Value, bool)>,
+    weak_objs: Vec<(*const GcHeader, bool)>,
     /// the threads PUC's collector visits: since the last marking, the kept
-    pub(crate) threads: Vec<Gc<crate::runtime::Coro>>,
+    threads: Vec<Gc<crate::runtime::Coro>>,
     /// PUC's own structures luna has none of (see `runtime::puc`)
     pub(crate) puc: puc::PucModel,
     #[cfg(feature = "gc-trace")]
@@ -263,6 +263,7 @@ mod close;
 mod collect;
 pub(crate) use collect::{Propagated, Running};
 mod finalize;
+mod for_vm;
 mod intern;
 mod list;
 mod new;

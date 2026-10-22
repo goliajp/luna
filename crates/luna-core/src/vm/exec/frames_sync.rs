@@ -161,7 +161,7 @@ impl Vm {
     /// a memory cap, another kind of continuation) is left to the loop head.
     #[inline(never)]
     pub(super) fn settle_frames(&mut self, entry_depth: usize) -> Result<bool, LuaError> {
-        if self.instr_budget.is_some() || self.heap.mem_cap.is_some() || self.hook_armed() {
+        if self.instr_budget.is_some() || self.heap.mem_cap().is_some() || self.hook_armed() {
             return Ok(false);
         }
         loop {

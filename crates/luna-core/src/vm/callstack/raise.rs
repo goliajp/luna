@@ -265,19 +265,16 @@ impl Vm {
     /// Before a collection's atomic phase: the error values the unwinder
     /// compares by identity, watched without being kept alive.
     pub(crate) fn watch_errors(&mut self) {
-        let w = &mut self.heap.weak_watch;
-        w.clear();
-        for v in [self.msgh_applied, self.handler_bypass] {
-            w.push((v.unwrap_or(Value::Nil), false));
-        }
-        w.extend(self.errored_natives.iter().map(|e| (e.err, false)));
+        let vals = [self.msgh_applied, self.handler_bypass].map(|v| v.unwrap_or(Value::Nil));
+        let errs = self.errored_natives.iter().map(|e| e.err);
+        self.heap.watch_values(vals.into_iter().chain(errs));
         self.watch_recording();
     }
 
     /// After it: forget each one the collection found dead, before its
     /// object is freed and its address reused by another value.
     pub(crate) fn forget_dead_errors(&mut self) {
-        let w = std::mem::take(&mut self.heap.weak_watch);
+        let w = self.heap.take_watched_values();
         if w.first().is_some_and(|x| x.1) {
             self.msgh_applied = None;
         }

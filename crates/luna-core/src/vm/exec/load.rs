@@ -258,9 +258,7 @@ impl Vm {
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         // the new prototype is held only here until the closure holds it, so
         // these allocations fail without an emergency collection
-        if self.heap.track_chunk_roots {
-            self.heap.chunk_roots.push(proto);
-        }
+        self.heap.note_chunk_root(proto);
         // PUC `lua_load` (lapi.c) only seeds the loaded closure's first
         // upvalue with the globals table when the closure has *exactly* one
         // upvalue — that's the main-chunk `_ENV` case. A dumped non-main

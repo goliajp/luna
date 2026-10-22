@@ -184,13 +184,13 @@ impl Vm {
         let inuse = self.stack_in_use();
         self.shrink_levels(Shrink::Emergency, inuse, 0);
         self.collector_shrinks_main(Shrink::Emergency);
-        let threads = std::mem::take(&mut self.heap.threads);
+        let threads = self.heap.take_threads();
         for &co in &threads {
             if !self.current.is_some_and(|c| c.ptr_eq(co)) {
                 self.collector_shrinks_coro(co, Shrink::Emergency);
             }
         }
-        self.heap.threads = threads;
+        self.heap.put_back_threads(threads);
     }
 
     /// The collector visiting the main thread a coroutine suspended.
@@ -220,14 +220,14 @@ impl Vm {
         if self.version == LuaVersion::Lua52 {
             return;
         }
-        let threads = std::mem::take(&mut self.heap.threads);
+        let threads = self.heap.take_threads();
         for &co in &threads {
             if self.current.is_some_and(|c| c.ptr_eq(co)) {
                 continue;
             }
             self.collector_shrinks_coro(co, Shrink::Collector);
         }
-        self.heap.threads = threads;
+        self.heap.put_back_threads(threads);
     }
 
     /// The collector visiting `co`, a coroutine that is not running.

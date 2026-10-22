@@ -180,7 +180,7 @@ impl Vm {
     #[doc(hidden)]
     pub fn enable_trace_sharing(&mut self) {
         self.jit.share_traces = true;
-        self.heap.track_chunk_roots = true;
+        self.heap.track_chunk_roots();
     }
 
     #[doc(hidden)]
@@ -277,7 +277,7 @@ impl Vm {
     ///
     /// [`LuaErrorKind::MemoryCap`]: crate::vm::error::LuaErrorKind::MemoryCap
     pub fn set_memory_cap(&mut self, cap: Option<usize>) {
-        self.heap.mem_cap = cap;
+        self.heap.set_mem_cap(cap);
         self.sync_limited();
         self.trap = true;
     }

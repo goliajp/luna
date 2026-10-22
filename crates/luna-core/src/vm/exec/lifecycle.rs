@@ -80,7 +80,7 @@ impl Vm {
         }
         let mm_names = names.map(|n| n.expect("every name was made above"));
         if version == LuaVersion::Lua51 {
-            heap.gc_event_51 = Some(mm_names[Mm::Gc as usize]);
+            heap.set_gc_event_51(mm_names[Mm::Gc as usize]);
         }
 
         let mem = heap.mem();

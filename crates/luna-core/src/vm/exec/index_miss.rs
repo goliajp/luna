@@ -156,7 +156,7 @@ impl Vm {
         // the fast path's raw set ran out of memory: that was the first
         // attempt, so what is left is the emergency collection and one more
         #[cfg(not(feature = "gc-verify"))]
-        let failed = std::mem::take(&mut self.heap.store_failed);
+        let failed = self.heap.take_store_failed();
         // with no `__newindex` to call the write is a raw set (PUC
         // `luaV_finishset`)
         #[cfg(not(feature = "gc-verify"))]
