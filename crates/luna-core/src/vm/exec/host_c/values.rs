@@ -66,12 +66,17 @@ impl Vm {
     /// stack under what the reader pushes: luna's own, uncounted, as the
     /// load counts PUC's in its place.
     pub fn host_load_anchor(&mut self) -> Result<Gc<Table>, LuaError> {
-        self.heap.puc.silent += 1;
-        let t = self.alloc_table();
-        self.heap.puc.silent -= 1;
-        let t = t?;
+        let t = self.uncounted(|vm| vm.alloc_table())?;
         self.heap.own_table(t);
         Ok(t)
+    }
+
+    /// Run `f`, counting nothing it makes: what PUC has no object for.
+    pub(crate) fn uncounted<R>(&mut self, f: impl FnOnce(&mut Vm) -> R) -> R {
+        self.heap.puc.silent += 1;
+        let r = f(self);
+        self.heap.puc.silent -= 1;
+        r
     }
 
     /// The entry of `t` after key `k` (PUC `lua_next`); an absent key
