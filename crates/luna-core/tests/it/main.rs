@@ -38,6 +38,7 @@ mod gc_finalizer_edges;
 mod gc_stress_shards;
 mod heavy_lua_parser_budget;
 mod host_call_yield;
+mod host_pcall_levels;
 mod host_protected_call;
 mod host_roots_slot_recycling;
 mod imm_form;

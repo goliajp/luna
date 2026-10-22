@@ -107,10 +107,7 @@ impl Vm {
         level: Value,
         args: &[Value],
     ) -> Result<Vec<Value>, LuaError> {
-        let main = self.current.is_none();
-        self.g.host_pcalls += u32::from(main);
         let r = self.call_value(level, args);
-        self.g.host_pcalls -= u32::from(main);
         self.g.ci_hint = 0;
         r
     }
@@ -122,11 +119,9 @@ impl Vm {
         args: &[Value],
         at: u32,
     ) -> Result<Vec<Value>, LuaError> {
-        self.g.host_pcalls += 1;
         self.nny += 1;
         let r = self.call_value_k_at(level, args, at);
         self.nny -= 1;
-        self.g.host_pcalls -= 1;
         self.g.ci_hint = 0;
         r
     }
@@ -215,6 +210,8 @@ impl Vm {
                 nresults,
             }),
         );
+        // no `CallInfo` of PUC's (`ci_top` 0)
+        self.g.host_conts += 1;
         self.begin_call(callee, Some(nfargs), -1, true)?;
         Ok(true)
     }

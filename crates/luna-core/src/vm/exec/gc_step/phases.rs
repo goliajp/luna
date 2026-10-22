@@ -15,7 +15,7 @@ impl Vm {
                     // thread ([`Vm::ci_in_use`])
                     Dialect::L52 => {
                         let levels = (m.frames.len() + m.natives.len()) as u32 + self.g.host_frames;
-                        levels - m.meta_conts - self.g.host_pcalls
+                        levels - m.meta_conts - m.host_conts
                     }
                     _ => m.ci_alloc,
                 };

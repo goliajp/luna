@@ -204,8 +204,7 @@ impl Vm {
                 frames51: m.frame_size,
                 ci: m.ci_alloc,
             };
-            let ci_used = n - self.g.host_pcalls;
-            shrink_thread(&mut self.heap, v, at, inuse, n, ci_used, &mut sz);
+            shrink_thread(&mut self.heap, v, at, inuse, n, n - m.host_conts, &mut sz);
             (m.stack_size, m.frame_size, m.ci_alloc) = (sz.stack, sz.frames51, sz.ci);
         }
     }

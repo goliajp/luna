@@ -8,15 +8,12 @@ use super::*;
 impl Vm {
     /// The `CallInfo`s the running thread uses besides its base one: its
     /// frames as 5.1 counts them in its array, less a coroutine's base
-    /// `CallInfo` and the host's protected calls on the main thread (which
-    /// counts no base: the host's frames are below its own).
+    /// `CallInfo` (the main thread counts no base: the host's frames are
+    /// below its own) and the continuations of the host's `lua_pcall`s.
     #[inline(always)]
     pub(super) fn ci_in_use(&self) -> u32 {
-        let base = match self.current {
-            Some(_) => 1,
-            None => self.g.host_pcalls,
-        };
-        self.frames_in_use() - base
+        let base = u32::from(self.current.is_some());
+        self.frames_in_use() - base - self.g.host_conts
     }
 
     /// A Lua function's call level was entered: counted when the thread
@@ -51,6 +48,11 @@ impl Vm {
         } else {
             self.g.ci_hint -= 1;
         }
+        #[cfg(any(debug_assertions, feature = "gc-verify"))]
+        assert!(
+            self.ci_in_use() <= self.g.ci_alloc,
+            "a native's level went uncounted: the frame count bound is stale"
+        );
     }
 
     /// A call level was entered, of a native or of a compiled call (whose

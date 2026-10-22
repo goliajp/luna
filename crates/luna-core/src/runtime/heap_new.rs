@@ -190,6 +190,7 @@ impl Heap {
             gc_top: u32::MAX,
             yield_top: u32::MAX,
             meta_conts: 0,
+            host_conts: 0,
             stale_frames: 0,
             yield_ci_top: 0,
             stack_size,

@@ -97,6 +97,8 @@ pub struct Coro {
     /// Saved `Vm::meta_conts`.
     /// live pcall/xpcall continuation count (PUC nCcalls portion); see Vm
     pub meta_conts: u32,
+    /// Saved `Vm::host_conts`.
+    pub(crate) host_conts: u32,
     /// Saved `Vm::stale_frames`.
     pub stale_frames: u32,
     /// suspended by a C function's yield: that function's `ci->top`

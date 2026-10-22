@@ -13,6 +13,9 @@ impl Vm {
         entry_depth: usize,
     ) -> Unwound {
         frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+        if nc.kind.is_host_pcall() {
+            self.host_pcall_popped();
+        }
         self.cont_popped(false, nc.kind.is_level());
         // the error is caught: 5.1's frame array, grown past its limit for
         // the handler, shrinks back (PUC `restore_stack_limit`)
