@@ -23,6 +23,11 @@ optimization.
 
 ### Breaking
 
+- The hidden `Vm` methods that set a state up as PUC's standalone
+  interpreter does (`open_lua_c_libs`, `host_entry_layout`,
+  `host_entry_args`, `host_set_arg`, `gc_enter_generational`) are gone;
+  `Vm::into_standalone` does the same, in `lua.c`'s order. The hidden
+  `Vm::reader_size_mismatches` is gone too.
 - `Coro::error_traceback` is gone. A coroutine an error killed now keeps
   its frames, as PUC keeps a dead thread's stack, and its traceback is
   made when asked for: `Vm::coroutine_error_traceback(co)` returns the
@@ -1188,6 +1193,12 @@ optimization.
 
 ### Added
 
+- `Vm::into_standalone` and `Standalone`: a Vm in the state PUC's
+  standalone interpreter `lua` has when it starts running anything, made
+  as `lua.c` makes it (its call level and arguments, the libraries, `arg`
+  from 5.3, the collector generational from 5.4). `Standalone::script_args`
+  makes 5.1 and 5.2's `arg` before the script runs; `StandaloneOptions`
+  holds `lua -E`.
 - `Vm::try_new_minimal_with_mem_and_seed`: a minimal Vm whose memory comes
   from a given context (a `MemoryPolicy`, or a host allocation function)
   and whose string hashing is seeded by a given seed, for runs that are to

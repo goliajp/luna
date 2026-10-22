@@ -184,8 +184,7 @@ impl Vm {
     /// lua.c makes, with their checks for a collection: `arg[0]` is
     /// `argv[script]`, the script's arguments count up from 1 and what
     /// comes before it down from -1.
-    #[doc(hidden)]
-    pub fn host_set_arg(&mut self, argv: &[Vec<u8>], script: usize) -> Result<(), LuaError> {
+    pub(crate) fn host_set_arg(&mut self, argv: &[Vec<u8>], script: usize) -> Result<(), LuaError> {
         let base = self.lib_roots.mark();
         let r = self.host_arg_table(argv, script);
         self.lib_roots.release(base);

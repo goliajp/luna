@@ -145,7 +145,7 @@ fn diff_puc_bytecode() {
                 let make = || {
                     let mut vm = Vm::new(version);
                     // as lua.c, which runs scripts in generational mode from 5.4
-                    vm.gc_enter_generational();
+                    generational_as_lua_c(&mut vm, version);
                     vm
                 };
                 run_luac_on_luna(make, f, &bytes)
@@ -252,4 +252,16 @@ pub(crate) fn follows_automatic_steps(f: &std::path::Path) -> bool {
         s.lines()
             .any(|l| l == "-- the output follows where the automatic collection steps run")
     })
+}
+
+/// lua.c from 5.4: `lua_gc(L, LUA_GCRESTART)` and `lua_gc(L, LUA_GCGEN)`
+/// before it runs anything.
+fn generational_as_lua_c(vm: &mut Vm, version: LuaVersion) {
+    let op = match version {
+        LuaVersion::Lua55 => 7,
+        v if v >= LuaVersion::Lua54 => 10,
+        _ => return,
+    };
+    vm.host_gc(1, [0; 3]).expect("restart");
+    vm.host_gc(op, [0; 3]).expect("generational");
 }

@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use luna_core::version::LuaVersion;
-use luna_core::vm::{LuaError, Vm};
+use luna_core::vm::{LuaError, Standalone, StandaloneOptions, Vm};
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/diff_puc")
@@ -141,8 +141,8 @@ fn run_on_puc(path: &Path, bin: &str, source: &str) -> Option<String> {
 /// Run `source` as `bin -` runs it, then close it as lua.c does; output caught.
 fn run_on_luna(version: LuaVersion, bin: &str, source: &str) -> String {
     let (r, out) = super::stdout_capture::caught(|| {
-        let mut vm = lua_c_vm(version, bin);
-        run_as_script(&mut vm, bin, source).map_err(|e| e.to_string())
+        let mut s = lua_c_standalone(version, bin);
+        run_as_script(&mut s, source).map_err(|e| e.to_string())
     }); // the Vm drops inside: what the close's finalizers print is caught
     r.expect("luna eval must not error on diff fixtures");
     String::from_utf8_lossy(&out).into_owned()
@@ -346,25 +346,21 @@ pub(super) mod bytecode;
 
 /// A Vm as lua.c sets one up for `bin -`: inside `pmain`, the libraries
 /// open, `arg` made (5.3 on) and, from 5.4, the collector generational.
-pub(super) fn lua_c_vm(version: LuaVersion, bin: &str) -> Vm {
-    let mut vm = Vm::new_minimal(version);
-    vm.host_entry_layout(1, if version == LuaVersion::Lua51 { 2 } else { 3 });
-    vm.open_lua_c_libs().expect("the libraries open");
-    if version >= LuaVersion::Lua53 {
-        vm.host_set_arg(&lua_c_argv(bin), 1).expect("arg");
-    }
-    vm.gc_enter_generational();
-    vm
+pub(super) fn lua_c_standalone(version: LuaVersion, bin: &str) -> Standalone {
+    Vm::new_minimal(version)
+        .into_standalone(&[bin, "-"], Some(1), StandaloneOptions::default())
+        .expect("lua.c's state")
 }
 
-fn lua_c_argv(bin: &str) -> Vec<Vec<u8>> {
-    vec![bin.as_bytes().to_vec(), b"-".to_vec()]
+/// [`lua_c_standalone`]'s Vm.
+pub(super) fn lua_c_vm(version: LuaVersion, bin: &str) -> Vm {
+    lua_c_standalone(version, bin).into_vm()
 }
+
 /// lua.c's `handle_script` for `-`: `source` read from stdin, run by `docall`.
-fn run_as_script(vm: &mut Vm, bin: &str, source: &str) -> Result<(), LuaError> {
-    if vm.version() <= LuaVersion::Lua52 {
-        vm.host_set_arg(&lua_c_argv(bin), 1)?;
-    }
+fn run_as_script(s: &mut Standalone, source: &str) -> Result<(), LuaError> {
+    s.script_args()?;
+    let vm = s.vm_mut();
     let f = vm.load_stdin_text(source.as_bytes().to_vec())?;
     let msgh = vm.native(keep_message);
     vm.call_value_with_handler_in_c(f, &[], msgh).map(|_| ())

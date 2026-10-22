@@ -37,6 +37,8 @@ pub use exec::{Error, Vm};
 pub use host_roots::{HostRootStale, HostRootTicket};
 pub use into_value::IntoValue;
 pub use sandbox::SandboxBuilder;
+mod standalone;
+pub use standalone::{Standalone, StandaloneOptions};
 pub use table_builder::TableBuilder;
 pub use typed_native::{FromLuaArgs, FromLuaValue, IntoLuaReturn, NativeTypedSig};
 pub use userdata_trait::{

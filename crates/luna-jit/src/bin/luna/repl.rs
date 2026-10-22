@@ -125,7 +125,7 @@ fn multiline(
             Line::Text(more) => join(line, &more),
             Line::Eof if v == LuaVersion::Lua53 => {
                 let key = interp.str_value("_PROMPT2");
-                return Ok(Some(Err(interp.vm.globals().get(key))));
+                return Ok(Some(Err(interp.vm().globals().get(key))));
             }
             Line::Eof => return Ok(Some(r)),
             #[cfg(feature = "repl-line-editor")]
@@ -142,7 +142,10 @@ fn join(line: &mut Vec<u8>, more: &[u8]) {
 /// Compile a line as the chunk `stdin`; 5.5 takes text only.
 fn load(interp: &mut Interp, src: &[u8]) -> Result<Value, Value> {
     let mode = (interp.version() >= LuaVersion::Lua55).then_some(&b"t"[..]);
-    interp.vm.load_buffer(src, b"=stdin", mode).map_err(|e| e.0)
+    interp
+        .vm()
+        .load_buffer(src, b"=stdin", mode)
+        .map_err(|e| e.0)
 }
 
 /// `incomplete`: a syntax error at the end of the input. 5.1 looks for its
@@ -192,13 +195,13 @@ fn get_prompt(interp: &mut Interp, firstline: bool) -> Result<Vec<u8>, Value> {
         ("_PROMPT2", b">> ")
     };
     let key = interp.str_value(name);
-    let val = interp.vm.globals().get(key);
+    let val = interp.vm().globals().get(key);
     let mut p = if interp.version() <= LuaVersion::Lua53 {
-        lua_tostring(&mut interp.vm, val).unwrap_or_else(|| default.to_vec())
+        lua_tostring(interp.vm(), val).unwrap_or_else(|| default.to_vec())
     } else if val.is_nil() {
         default.to_vec()
     } else {
-        interp.vm.tostring_value(val).map_err(|e| e.0)?
+        interp.vm().tostring_value(val).map_err(|e| e.0)?
     };
     if let Some(nul) = p.iter().position(|&c| c == 0) {
         p.truncate(nul);
@@ -233,16 +236,16 @@ fn l_print(interp: &mut Interp, vals: Vec<Value>) -> Result<(), Value> {
         let msg = "too many results to print";
         let room = 20; // `LUA_MINSTACK`
         interp
-            .vm
+            .vm()
             .host_check_stack(vals.len() as u32, room, msg)
             .map_err(|e| e.0)?;
     }
     let key = interp.str_value("print");
-    let print = interp.vm.globals().get(key);
+    let print = interp.vm().globals().get(key);
     // from inside `pmain`, which a traceback taken in a `__tostring` shows
-    if let Err(e) = interp.vm.call_value_in_c(print, &vals) {
+    if let Err(e) = interp.vm().call_value_in_c(print, &vals) {
         // lua_pushfstring renders a NULL string as "(null)"
-        let err = lua_tostring(&mut interp.vm, e.0).unwrap_or_else(|| b"(null)".to_vec());
+        let err = lua_tostring(interp.vm(), e.0).unwrap_or_else(|| b"(null)".to_vec());
         let mut msg = b"error calling 'print' (".to_vec();
         msg.extend_from_slice(&err);
         msg.push(b')');

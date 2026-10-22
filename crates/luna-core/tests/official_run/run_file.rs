@@ -181,8 +181,20 @@ fn new_vm(version: LuaVersion, label: &str) -> Vm {
     } else {
         Vm::new(version)
     };
-    vm.gc_enter_generational();
+    generational_as_lua_c(&mut vm, version);
     vm
+}
+
+/// lua.c from 5.4: `lua_gc(L, LUA_GCRESTART)` and `lua_gc(L, LUA_GCGEN)`
+/// before it runs anything.
+fn generational_as_lua_c(vm: &mut Vm, version: LuaVersion) {
+    let op = match version {
+        LuaVersion::Lua55 => 7,
+        v if v >= LuaVersion::Lua54 => 10,
+        _ => return,
+    };
+    vm.host_gc(1, [0; 3]).expect("restart");
+    vm.host_gc(op, [0; 3]).expect("generational");
 }
 
 /// Prepend the assert-counter preamble and, when enabled, the byte-diff

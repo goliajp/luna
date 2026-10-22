@@ -11,8 +11,7 @@ impl Vm {
     /// to call its main function (5.1's `lua_cpcall` makes a C closure for
     /// it, later versions call it one level down), then
     /// [`Vm::open_all_libs`].
-    #[doc(hidden)]
-    pub fn open_lua_c_libs(&mut self) -> Result<(), LuaError> {
+    pub(crate) fn open_lua_c_libs(&mut self) -> Result<(), LuaError> {
         if self.version == crate::version::LuaVersion::Lua51 {
             let size = self.heap.puc_size(crate::runtime::puc::PucObj::CClosure(0));
             let kind = crate::runtime::heap::PucKind::CClosure;
