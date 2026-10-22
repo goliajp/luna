@@ -270,55 +270,29 @@ fn declare_i64_import<E: Emit>(bcx: &mut E, name: &str, n_params: usize) -> Opti
     bcx.declare_function(name, Linkage::Import, &sig).ok()
 }
 
+/// An imported helper taking `n_params` `i64`s and returning nothing.
+fn declare_void_import<E: Emit>(bcx: &mut E, name: &str, n_params: usize) -> Option<FuncId> {
+    let mut sig = bcx.make_signature();
+    for _ in 0..n_params {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    bcx.declare_function(name, Linkage::Import, &sig).ok()
+}
+
 fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
     // `fn luna_jit_str_buf_acquire() -> i64`.
     // Returns a `*mut Vec<u8>` (boxed-leaked); used by buffered
     // accumulator emit at trace fn entry.
-    let mut str_buf_acquire_sig = bcx.make_signature();
-    str_buf_acquire_sig.returns.push(AbiParam::new(types::I64));
-    let str_buf_acquire_id = bcx
-        .declare_function(
-            "luna_jit_str_buf_acquire",
-            Linkage::Import,
-            &str_buf_acquire_sig,
-        )
-        .ok()?;
+    let str_buf_acquire_id = declare_i64_import(bcx, "luna_jit_str_buf_acquire", 0)?;
 
     // `fn luna_jit_str_buf_release(buf: i64)`.
-    let mut str_buf_release_sig = bcx.make_signature();
-    str_buf_release_sig.params.push(AbiParam::new(types::I64));
-    let str_buf_release_id = bcx
-        .declare_function(
-            "luna_jit_str_buf_release",
-            Linkage::Import,
-            &str_buf_release_sig,
-        )
-        .ok()?;
+    let str_buf_release_id = declare_void_import(bcx, "luna_jit_str_buf_release", 1)?;
 
     // `fn luna_jit_str_buf_extend(buf, str_ptr) -> i64`.
-    let mut str_buf_extend_sig = bcx.make_signature();
-    str_buf_extend_sig.params.push(AbiParam::new(types::I64));
-    str_buf_extend_sig.params.push(AbiParam::new(types::I64));
-    str_buf_extend_sig.returns.push(AbiParam::new(types::I64));
-    let str_buf_extend_id = bcx
-        .declare_function(
-            "luna_jit_str_buf_extend",
-            Linkage::Import,
-            &str_buf_extend_sig,
-        )
-        .ok()?;
+    let str_buf_extend_id = declare_i64_import(bcx, "luna_jit_str_buf_extend", 2)?;
 
     // `fn luna_jit_str_buf_intern(buf) -> i64`.
-    let mut str_buf_intern_sig = bcx.make_signature();
-    str_buf_intern_sig.params.push(AbiParam::new(types::I64));
-    str_buf_intern_sig.returns.push(AbiParam::new(types::I64));
-    let str_buf_intern_id = bcx
-        .declare_function(
-            "luna_jit_str_buf_intern",
-            Linkage::Import,
-            &str_buf_intern_sig,
-        )
-        .ok()?;
+    let str_buf_intern_id = declare_i64_import(bcx, "luna_jit_str_buf_intern", 1)?;
     // Squelch unused warnings.
     let _ = (
         str_buf_acquire_id,
@@ -329,24 +303,9 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
 
     // `fn luna_jit_stack_update_raw(slot, raw)`.
     // Used in Op::Concat operand spill for Unset-kind slots.
-    let mut update_raw_sig = bcx.make_signature();
-    update_raw_sig.params.push(AbiParam::new(types::I64));
-    update_raw_sig.params.push(AbiParam::new(types::I64));
-    let update_raw_id = bcx
-        .declare_function(
-            "luna_jit_stack_update_raw",
-            Linkage::Import,
-            &update_raw_sig,
-        )
-        .ok()?;
+    let update_raw_id = declare_void_import(bcx, "luna_jit_stack_update_raw", 2)?;
 
-    let mut get_int_sig = bcx.make_signature();
-    get_int_sig.params.push(AbiParam::new(types::I64));
-    get_int_sig.params.push(AbiParam::new(types::I64));
-    get_int_sig.returns.push(AbiParam::new(types::I64));
-    let get_int_id = bcx
-        .declare_function("luna_jit_table_get_int", Linkage::Import, &get_int_sig)
-        .ok()?;
+    let get_int_id = declare_i64_import(bcx, "luna_jit_table_get_int", 2)?;
 
     let suppress_admit_id = bcx
         .declare_function(
@@ -359,33 +318,11 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
     let sunk_table_id = declare_i64_import(bcx, "luna_jit_sunk_table", 1)?;
     let sunk_grow_id = declare_i64_import(bcx, "luna_jit_sunk_grow", 2)?;
     let str_buf_concat_id = declare_i64_import(bcx, "luna_jit_str_buf_concat", 3)?;
-    let mut math_fn_check_sig = bcx.make_signature();
-    math_fn_check_sig.params.push(AbiParam::new(types::I64));
-    math_fn_check_sig.params.push(AbiParam::new(types::I64));
-    math_fn_check_sig.returns.push(AbiParam::new(types::I64));
-    let math_fn_check_id = bcx
-        .declare_function(
-            "luna_jit_math_fn_is_library",
-            Linkage::Import,
-            &math_fn_check_sig,
-        )
-        .ok()?;
+    let math_fn_check_id = declare_i64_import(bcx, "luna_jit_math_fn_is_library", 2)?;
 
-    let mut str_sub_sig = bcx.make_signature();
-    for _ in 0..3 {
-        str_sub_sig.params.push(AbiParam::new(types::I64));
-    }
-    str_sub_sig.returns.push(AbiParam::new(types::I64));
-    let str_sub_id = bcx
-        .declare_function("luna_jit_str_sub", Linkage::Import, &str_sub_sig)
-        .ok()?;
+    let str_sub_id = declare_i64_import(bcx, "luna_jit_str_sub", 3)?;
 
-    let mut len_sig = bcx.make_signature();
-    len_sig.params.push(AbiParam::new(types::I64));
-    len_sig.returns.push(AbiParam::new(types::I64));
-    let len_checked_id = bcx
-        .declare_function("luna_jit_table_len_checked", Linkage::Import, &len_sig)
-        .ok()?;
+    let len_checked_id = declare_i64_import(bcx, "luna_jit_table_len_checked", 1)?;
 
     // `fn luna_jit_upval_get(idx: i64) -> i64`: the raw payload of
     // `JIT_CL`'s upvalue `idx`, without its tag (exit tags carry the
@@ -399,28 +336,12 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
     let upval_get_id = bcx
         .declare_function("luna_jit_upval_get", Linkage::Import, &upval_get_sig)
         .ok()?;
-    let mut head_closure_sig = bcx.make_signature();
-    head_closure_sig.returns.push(AbiParam::new(types::I64));
-    let head_closure_id = bcx
-        .declare_function("luna_jit_head_closure", Linkage::Import, &head_closure_sig)
-        .ok()?;
+    let head_closure_id = declare_i64_import(bcx, "luna_jit_head_closure", 0)?;
 
     // `fn luna_jit_trace_materialize_frames(n: u64,
     // metas: *const FrameMaterializeInfo, closures: *const i64) -> i64`. Called by the
     // lowerer's cmp@d>0 emit.
-    let mut materialize_sig = bcx.make_signature();
-    materialize_sig.params.push(AbiParam::new(types::I64));
-    materialize_sig.params.push(AbiParam::new(types::I64));
-    // each frame's closure
-    materialize_sig.params.push(AbiParam::new(types::I64));
-    materialize_sig.returns.push(AbiParam::new(types::I64));
-    let materialize_id = bcx
-        .declare_function(
-            "luna_jit_trace_materialize_frames",
-            Linkage::Import,
-            &materialize_sig,
-        )
-        .ok()?;
+    let materialize_id = declare_i64_import(bcx, "luna_jit_trace_materialize_frames", 3)?;
 
     // `fn luna_jit_materialize_sunk_table(cap: i64,
     // raws_ptr: *const u64, kinds_ptr: *const u8) -> i64`. Emit
@@ -433,23 +354,7 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
     // 7 i64 args:
     //   cap, arr_raws, arr_kinds, n_hash, hash_keys, hash_raws, hash_kinds
     // Returns: heap table raw payload (i64 Gc<Table> ptr).
-    let mut mat_sunk_sig = bcx.make_signature();
-    mat_sunk_sig.params.push(AbiParam::new(types::I64));
-    mat_sunk_sig.params.push(AbiParam::new(types::I64));
-    mat_sunk_sig.params.push(AbiParam::new(types::I64));
-    mat_sunk_sig.params.push(AbiParam::new(types::I64));
-    mat_sunk_sig.params.push(AbiParam::new(types::I64));
-    mat_sunk_sig.params.push(AbiParam::new(types::I64));
-    mat_sunk_sig.params.push(AbiParam::new(types::I64));
-    mat_sunk_sig.params.push(AbiParam::new(types::I64));
-    mat_sunk_sig.returns.push(AbiParam::new(types::I64));
-    let mat_sunk_id = bcx
-        .declare_function(
-            "luna_jit_materialize_sunk_table",
-            Linkage::Import,
-            &mat_sunk_sig,
-        )
-        .ok()?;
+    let mat_sunk_id = declare_i64_import(bcx, "luna_jit_materialize_sunk_table", 8)?;
 
     Some(RuntimeHelpers {
         str_buf_acquire_id,

@@ -44,6 +44,11 @@ pub(crate) enum PucObj {
 }
 
 impl PucObj {
+    /// A full userdata of `bytes` with `nuv` user values.
+    pub(crate) const fn udata(nuv: usize, bytes: usize) -> PucObj {
+        PucObj::Udata { nuv, bytes }
+    }
+
     /// Its bytes in dialect `d` with sizes `s`.
     pub(crate) fn bytes(self, d: Dialect, s: &size::PucSizes) -> usize {
         match self {

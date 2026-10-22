@@ -16,6 +16,7 @@
 
 use crate::runtime::dialect::Dialect;
 use crate::runtime::heap::PucKind;
+use crate::runtime::puc::PucObj;
 use crate::runtime::{Gc, LuaStr, Userdata, Value};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
@@ -164,10 +165,7 @@ impl PucBuffer {
         match self.d {
             Dialect::L52 => {
                 vm.api_check_before()?;
-                let size = vm.heap.puc_size(crate::runtime::puc::PucObj::Udata {
-                    nuv: 0,
-                    bytes: newsize,
-                });
+                let size = vm.heap.puc_size(PucObj::udata(0, newsize));
                 vm.ghost(PucKind::Userdata, size)?;
             }
             _ if self.boxed => vm.heap.trace_raw(self.size, newsize),

@@ -59,14 +59,6 @@ impl Args {
     }
 }
 
-/// The type name `luaL_typeerror` reports for argument `i`.
-pub(crate) fn typename_at(vm: &Vm, a: Args, i: u32) -> String {
-    if a.is_none(i) {
-        return "no value".to_string();
-    }
-    typename_of(vm, a.get(vm, i))
-}
-
 /// The type name `luaL_typeerror` reports for a present value.
 pub(crate) fn typename_of(vm: &Vm, v: Value) -> String {
     if vm.version() >= LuaVersion::Lua53 {
@@ -97,13 +89,27 @@ pub(crate) fn type_error_msg(
     i: u32,
     expected: &str,
 ) -> Result<String, LuaError> {
-    use crate::runtime::puc::fmt::FmtArg::S;
-    let got = typename_at(vm, a, i);
-    let has_name = vm.version() >= LuaVersion::Lua53 && !a.is_none(i);
-    if has_name {
-        vm.metafield_check(a.get(vm, i), b"__name")?;
+    let v = (!a.is_none(i)).then(|| a.get(vm, i));
+    value_type_msg(vm, v, expected)
+}
+
+/// [`type_error`] of `v`, argument `argno`.
+pub(crate) fn value_type_error(vm: &mut Vm, v: Value, argno: u32, expected: &str) -> LuaError {
+    match value_type_msg(vm, Some(v), expected) {
+        Ok(m) => arg_error(vm, argno, &m),
+        Err(e) => e,
     }
-    let named = has_name && !vm.get_mm(a.get(vm, i), crate::vm::exec::Mm::Name).is_nil();
+}
+
+/// [`type_error_msg`] of `v` (`None`: no value).
+fn value_type_msg(vm: &mut Vm, v: Option<Value>, expected: &str) -> Result<String, LuaError> {
+    use crate::runtime::puc::fmt::FmtArg::S;
+    let got = v.map_or_else(|| "no value".to_string(), |v| typename_of(vm, v));
+    let v = v.filter(|_| vm.version() >= LuaVersion::Lua53);
+    if let Some(v) = v {
+        vm.metafield_check(v, b"__name")?;
+    }
+    let named = v.is_some_and(|v| !vm.get_mm(v, crate::vm::exec::Mm::Name).is_nil());
     vm.native_push(u32::from(named));
     let fmt = b"%s expected, got %s";
     option::pushed_extra(vm, 2, fmt, &[S(expected.as_bytes()), S(got.as_bytes())])

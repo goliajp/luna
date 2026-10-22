@@ -6,6 +6,9 @@
 use super::*;
 use crate::runtime::string::LuaStr;
 use crate::runtime::value::tag;
+
+/// gc-verify builds keep every read and write on the probed path.
+const PROBED_ONLY: bool = crate::runtime::gc_hooks::VERIFY;
 use fast_arith::{raw_gc, raw_int, raw_tag};
 use index_set::{table_raw_set_at, table_set_existing_at};
 
@@ -133,13 +136,9 @@ impl Vm {
     /// `pt` and `pk` point at initialised values and `dst` at a register.
     #[inline(always)]
     pub(super) unsafe fn index_raw_at(pt: *const Value, pk: *const Value, dst: *mut Value) -> bool {
-        // gc-verify builds keep every read and write on the probed path
-        if crate::runtime::gc_hooks::VERIFY {
-            return false;
-        }
         // SAFETY: the caller's contract; a table tag means a live table
         unsafe {
-            if raw_tag(pt) == tag::TABLE {
+            if !PROBED_ONLY && raw_tag(pt) == tag::TABLE {
                 return table_get_into(&*(raw_gc(pt) as *const Table), pk, dst);
             }
         }
@@ -157,13 +156,9 @@ impl Vm {
         pk: *const Value,
         dst: *mut Value,
     ) -> bool {
-        // gc-verify builds keep every read and write on the probed path
-        if crate::runtime::gc_hooks::VERIFY {
-            return false;
-        }
         // SAFETY: the caller's contract; a table tag means a live table
         unsafe {
-            if raw_tag(pt) == tag::TABLE {
+            if !PROBED_ONLY && raw_tag(pt) == tag::TABLE {
                 return table_get_kstr_into(&*(raw_gc(pt) as *const Table), pk, dst);
             }
         }
@@ -204,11 +199,7 @@ impl Vm {
         pk: *const Value,
         dst: *mut Value,
     ) -> bool {
-        // gc-verify builds keep every read and write on the probed path
-        if crate::runtime::gc_hooks::VERIFY {
-            return false;
-        }
-        if let Value::Table(tb) = t {
+        if !PROBED_ONLY && let Value::Table(tb) = t {
             // SAFETY: the caller's contract
             return unsafe { table_get_kstr_into(&tb, pk, dst) };
         }
@@ -233,14 +224,10 @@ impl Vm {
         pk: *const Value,
         pv: *const Value,
     ) -> bool {
-        // gc-verify builds keep every read and write on the probed path
-        if crate::runtime::gc_hooks::VERIFY {
-            return false;
-        }
         // SAFETY: the caller's contract; a table tag means a live table,
         // which nothing else borrows while an opcode runs
         unsafe {
-            if raw_tag(pt) == tag::TABLE {
+            if !PROBED_ONLY && raw_tag(pt) == tag::TABLE {
                 let tb = raw_gc(pt) as *mut Table;
                 if (*tb).hdr.plain_store()
                     && (table_set_existing_at(&mut *tb, pk, pv)
@@ -267,14 +254,10 @@ impl Vm {
         pk: *const Value,
         pv: *const Value,
     ) -> bool {
-        // gc-verify builds keep every read and write on the probed path
-        if crate::runtime::gc_hooks::VERIFY {
-            return false;
-        }
         // SAFETY: the caller's contract; a table tag means a live table
         unsafe {
             debug_assert_eq!(raw_tag(pk), tag::STR);
-            if raw_tag(pt) == tag::TABLE {
+            if !PROBED_ONLY && raw_tag(pt) == tag::TABLE {
                 let tb = raw_gc(pt) as *mut Table;
                 let key = Gc::from_ptr_unchecked(raw_gc(pk) as *mut LuaStr);
                 // a nil value in a node is how a removed key is kept
@@ -316,11 +299,8 @@ impl Vm {
         pk: *const Value,
         pv: *const Value,
     ) -> bool {
-        // gc-verify builds keep every read and write on the probed path
-        if crate::runtime::gc_hooks::VERIFY {
-            return false;
-        }
-        if let Value::Table(tb) = t
+        if !PROBED_ONLY
+            && let Value::Table(tb) = t
             && tb.hdr.plain_store()
             // SAFETY: the caller's contract; see `newindex_raw_at`
             && unsafe { table_set_existing_at(tb.as_mut(), pk, pv) }

@@ -190,9 +190,7 @@ impl<'p> Asm<'p> {
     pub(super) fn konst(&mut self, v: Value) -> u32 {
         // 5.3 repeats a number another function took the key of; the
         // compiler keeps an immediate only for its first constant
-        let key = (self.kmap.0 == LuaVersion::Lua53)
-            .then(|| num_key(&v))
-            .flatten();
+        let key = num_key(&v).filter(|_| self.kmap.0 == LuaVersion::Lua53);
         if let Some(key) = &key {
             let first = self.kfirst.get_or_insert_with(|| first_nums(&self.consts));
             if let Some(&i) = first.get(key) {

@@ -272,3 +272,18 @@ pub struct SpecialErrors {
     gcmm: u64,
     mem: u64,
 }
+
+impl Vm {
+    /// PUC `luaG_ordererror`: "two X values" when the operand types match,
+    /// "X with Y" otherwise (`objtypename`).
+    pub(super) fn order_error(&mut self, l: Value, r: Value) -> LuaError {
+        use crate::runtime::puc::fmt::FmtArg::S;
+        let (t1, t2) = (self.obj_typename(l), self.obj_typename(r));
+        let (t1, t2) = (t1.as_bytes(), t2.as_bytes());
+        if t1 == t2 {
+            self.runerror_fmt(b"attempt to compare two %s values", &[S(t1)], 1, false)
+        } else {
+            self.runerror_fmt(b"attempt to compare %s with %s", &[S(t1), S(t2)], 2, false)
+        }
+    }
+}
