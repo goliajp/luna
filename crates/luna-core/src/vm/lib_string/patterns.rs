@@ -226,11 +226,15 @@ pub(super) fn s_gmatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // then the closure (`lua_pushcclosure`) and its check
     let it = if vm.version() >= LuaVersion::Lua53 {
         use crate::runtime::heap::PucKind;
-        let sz = vm.heap.puc.sizes;
-        let state = 71 * sz.ptr + 8;
         let objs = [
-            (PucKind::Userdata, sz.userdata(0, state)),
-            (PucKind::CClosure, sz.c_closure(3)),
+            (
+                PucKind::Userdata,
+                vm.heap.puc_size(crate::runtime::puc::PucObj::GMatchState),
+            ),
+            (
+                PucKind::CClosure,
+                vm.heap.puc_size(crate::runtime::puc::PucObj::CClosure(3)),
+            ),
         ];
         vm.heap.acct_obj(objs[0].0, objs[0].1);
         vm.api_check_after_rooted()?;

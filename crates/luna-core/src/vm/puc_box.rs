@@ -13,12 +13,7 @@ impl Vm {
     /// `newbox`: the userdata, with the metatable PUC keeps in the registry
     /// for boxes (made the first time), registered for finalization.
     pub(crate) fn new_box(&mut self) -> Result<Gc<Userdata>, LuaError> {
-        let ubox = 2 * std::mem::size_of::<usize>();
-        let size = if self.heap.table_dialect >= Dialect::L54 {
-            self.heap.puc.sizes.userdata(0, ubox)
-        } else {
-            self.heap.puc.sizes.userdata(1, ubox)
-        };
+        let size = self.heap.puc_size(crate::runtime::puc::PucObj::Box);
         let u = self.lib_userdata(UserdataPayload::Empty, false, size)?;
         // on the stack of the running native until the buffer is done
         self.buffer_boxes

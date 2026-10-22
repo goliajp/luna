@@ -56,9 +56,9 @@ impl Vm {
         let proto = cl.proto;
         let (marks, scanned) = rec;
         let d = self.heap.table_dialect;
-        let s = self.heap.puc.sizes;
+        let s = self.heap.puc_sizes();
         let mut r = Replay::new(
-            (d, self.heap.puc.sizes),
+            (d, self.heap.puc_sizes()),
             proto,
             self.version,
             scanned,

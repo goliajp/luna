@@ -77,7 +77,7 @@ impl Vm {
         }
         slots.retain(|h| !h.is_null());
         slots.extend(temp.map(hdr));
-        let s = self.heap.puc.sizes;
+        let s = self.heap.puc_sizes();
         let mut open = Vec::with_capacity(r.fs.len());
         for (i, f) in r.fs.iter().enumerate() {
             let Some(p) = r.opening.get(f.shape) else {

@@ -16,7 +16,9 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     // `lua_newuserdata(L, 0)` comes first, kept on the stack; it and
     // `lua_newtable` check for a collection before they allocate
     vm.api_check_before()?;
-    let size = vm.heap.puc.sizes.userdata(1, 0);
+    let size = vm
+        .heap
+        .puc_size(crate::runtime::puc::PucObj::Udata { nuv: 1, bytes: 0 });
     let u = vm.lib_userdata(UserdataPayload::Empty, false, size)?;
     vm.native_push(1);
     vm.lib_roots.push(Value::Userdata(u));

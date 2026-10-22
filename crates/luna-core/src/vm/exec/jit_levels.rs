@@ -62,13 +62,15 @@ impl Vm {
         let grows = top + max >= self.g.stack_last;
         match self.version {
             LuaVersion::Lua52 => {
-                let s = &self.heap.puc.sizes;
                 let stack = if grows {
-                    (2 * self.stack_size + max) as usize * s.tvalue
+                    let n = (2 * self.stack_size + max) as usize;
+                    self.heap.puc_size(crate::runtime::puc::PucObj::Slots(n))
                 } else {
                     0
                 };
-                self.jit_due_after(stack + s.callinfo)
+                self.jit_due_after(
+                    stack + self.heap.puc_size(crate::runtime::puc::PucObj::CallInfo),
+                )
             }
             LuaVersion::Lua53 | LuaVersion::Lua54 => grows && self.jit_due_after(0),
             _ => false,
