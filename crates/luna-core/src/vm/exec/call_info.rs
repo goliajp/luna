@@ -65,7 +65,10 @@ impl Vm {
             self.extend_ci_to(n);
         }
         let room = self.frames.capacity() as u32;
-        self.g.ci_hint = (self.frames.len() as u32 + (self.g.ci_alloc - n)).min(room);
+        // 5.1 counts no `CallInfo` here (`ci_alloc` stays at its maximum):
+        // only the room bounds the frames then
+        let free = (self.frames.len() as u32).checked_add(self.g.ci_alloc - n);
+        self.g.ci_hint = free.map_or(room, |h| h.min(room));
     }
 
     /// PUC calls a C function one level above the running one, which luna
