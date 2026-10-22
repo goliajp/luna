@@ -50,6 +50,9 @@ pub(crate) struct PucState {
     pub(crate) phantoms: bool,
     /// `Vm::open_base` runs: the base library without its file loaders
     pub(crate) sandbox_base: bool,
+    /// what loads' readers counted that is set aside and not counted back
+    /// yet (`Heap::defer_begin`)
+    pub(crate) set_aside: isize,
     /// the library functions made as PUC's light C functions, by their
     /// number in the opening's tables: one value however often pushed
     pub(crate) lights: Vec<Option<Gc<crate::runtime::NativeClosure>>>,
@@ -82,6 +85,7 @@ impl Default for PucState {
             unborn_on: false,
             phantoms: false,
             sandbox_base: false,
+            set_aside: 0,
             lights: Vec::new(),
             strcache: Default::default(),
         }

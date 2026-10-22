@@ -71,7 +71,9 @@ fn load_reader(
     name: &[u8],
     mode: Option<&[u8]>,
 ) -> Result<u32, LuaError> {
+    let mark = vm.heap.defer_mark();
     let r = read_and_load(vm, a, reader, name, mode);
+    vm.heap.defer_settle(mark);
     vm.host_load_end();
     r
 }
