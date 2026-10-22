@@ -20,14 +20,14 @@ impl Heap {
                     return 0;
                 }
                 let c = &*(h as *const crate::runtime::Coro);
-                let ci = if self.table_dialect == Dialect::L51 {
+                let ci = if self.puc.dialect == Dialect::L51 {
                     c.frame_size
                 } else {
                     c.ci_alloc
                 };
                 return self.thread_bytes(c.stack_size, ci);
             }
-            objsize(&self.puc.sizes, self.table_dialect, h)
+            objsize(&self.puc.sizes, self.puc.dialect, h)
         }
     }
 
@@ -49,7 +49,7 @@ impl Heap {
         };
         // SAFETY: the caller's contract
         unsafe {
-            let d = self.table_dialect;
+            let d = self.puc.dialect;
             // a function of PUC's C closures, the library's too (made
             // without counting), at PUC's number of upvalues; from 5.2 on
             // one with none is a light function, no object
@@ -148,7 +148,7 @@ impl Heap {
     /// The work of traversing a thread: up to 5.3 its size, 5.4 one slot
     /// for each of its stack's, 5.5 for each in use.
     fn thread_work(&self, c: &crate::runtime::Coro, run: Option<(u32, u32, u32)>) -> i64 {
-        let d = self.table_dialect;
+        let d = self.puc.dialect;
         let ci = if d == Dialect::L51 {
             c.frame_size
         } else {
@@ -168,7 +168,7 @@ impl Heap {
     /// PUC's size of a thread with a stack of `stack` slots and `ci`
     /// `CallInfo`s (5.1: the size of its array).
     pub(crate) fn thread_bytes(&self, stack: u32, ci: u32) -> usize {
-        thread_bytes(&self.puc.sizes, self.table_dialect, stack, ci)
+        thread_bytes(&self.puc.sizes, self.puc.dialect, stack, ci)
     }
 }
 

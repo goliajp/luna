@@ -14,7 +14,7 @@ impl Heap {
     /// dialect, is counted where PUC makes it.
     pub(crate) fn acct_boot(&mut self) -> Result<(), crate::runtime::mem::Oom> {
         use crate::runtime::puc::boot::counts::{boot_sizes, reserved_words, tm_names};
-        let d = self.table_dialect;
+        let d = self.puc.dialect;
         let b = boot_sizes(d);
         let s = self.puc.sizes;
         self.puc.silent = 0;
@@ -124,7 +124,7 @@ impl Heap {
     #[inline]
     pub(crate) fn acct_new_string(&mut self, h: *mut GcHeader, len: usize) {
         // 5.1's string table holds every string, 5.2's the short ones
-        let held = match self.table_dialect {
+        let held = match self.puc.dialect {
             Dialect::L51 => true,
             Dialect::L52 => len <= self.puc.short_max,
             _ => false,

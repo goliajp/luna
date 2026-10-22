@@ -151,7 +151,7 @@ impl Heap {
         let t = unsafe { &*(h as *const LoadTab) };
         let (a, n) = (t.asize as usize, t.nodes as usize);
         let s = &self.puc.sizes;
-        (match self.table_dialect {
+        (match self.puc.dialect {
             Dialect::L51 | Dialect::L52 => s.table + self.array_bytes(a) + s.node * n.max(1),
             Dialect::L53 => s.table + self.array_bytes(a) + s.node * n,
             Dialect::L54 => 1 + a + 2 * n,
@@ -230,7 +230,7 @@ impl Heap {
             }
             set_uncounted(h, true);
             let f = (*h).flags;
-            (*h).flags = (*h).with_slow((f & !COLOR_BITS) | self.current_white);
+            (*h).flags = (*h).with_slow((f & !COLOR_BITS) | self.white());
         }
         true
     }
@@ -252,12 +252,12 @@ impl Heap {
                 return;
             }
             // in a sweep the closure goes white instead (`luaC_barrier`)
-            if self.phase != GcPhase::Propagate {
+            if self.phase() != GcPhase::Propagate {
                 let f = (*c).flags;
-                (*c).flags = (*c).with_slow((f & !COLOR_BITS) | self.current_white);
+                (*c).flags = (*c).with_slow((f & !COLOR_BITS) | self.white());
                 return;
             }
-            if self.puc.pace.count_marked && self.phase == GcPhase::Propagate {
+            if self.puc.pace.count_marked && self.phase() == GcPhase::Propagate {
                 self.count_marked(u);
             }
             (*u).flags = (*u).with_slow(((*u).flags & !COLOR_BITS) | BLACK);

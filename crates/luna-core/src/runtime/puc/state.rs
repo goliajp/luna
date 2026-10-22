@@ -10,6 +10,8 @@ pub(crate) struct PucModel {
     /// where the next collection step falls due (`pace`), or `usize::MAX`
     /// while there is none: the one comparison a safe point makes
     pub(crate) gc_limit: usize,
+    /// the dialect PUC's sizes, pace and steps are those of
+    pub(crate) dialect: crate::runtime::table::Dialect,
     /// the sizes of PUC's objects in this dialect, which `bytes` counts
     pub(crate) sizes: super::size::PucSizes,
     /// PUC's collector state and pace
@@ -82,6 +84,7 @@ impl Default for PucModel {
         PucModel {
             bytes: 0,
             gc_limit: usize::MAX,
+            dialect: crate::runtime::table::Dialect::L55,
             sizes: super::size::PucSizes::of(crate::runtime::table::Dialect::L55),
             pace: super::pace::Pace::new(),
             strt: Default::default(),

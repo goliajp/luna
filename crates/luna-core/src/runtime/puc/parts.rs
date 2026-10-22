@@ -7,12 +7,12 @@ use crate::runtime::table::Dialect;
 impl Heap {
     /// The bytes of a table's array part of `n` slots.
     pub(in crate::runtime) fn array_bytes(&self, n: usize) -> usize {
-        crate::runtime::puc::work::array_bytes(&self.puc.sizes, self.table_dialect, n)
+        crate::runtime::puc::work::array_bytes(&self.puc.sizes, self.puc.dialect, n)
     }
 
     /// The bytes of a table's hash part of `h` nodes.
     pub(in crate::runtime) fn hash_bytes(&self, h: usize) -> usize {
-        crate::runtime::puc::work::hash_bytes(&self.puc.sizes, self.table_dialect, h)
+        crate::runtime::puc::work::hash_bytes(&self.puc.sizes, self.puc.dialect, h)
     }
 
     /// A table's parts going from `old_a` array slots and `old_h` nodes to
@@ -48,7 +48,7 @@ impl Heap {
         if cfg!(not(feature = "gc-trace")) {
             return part(self, oh + oa, nh + na);
         }
-        match self.table_dialect {
+        match self.puc.dialect {
             Dialect::L51 | Dialect::L52 | Dialect::L53 => {
                 if new_a > old_a {
                     part(self, oa, na);
@@ -126,7 +126,7 @@ impl Heap {
         // string's own count)
         if cfg!(not(feature = "gc-trace")) && self.counting() {
             if len > self.puc.short_max {
-                let l55 = self.table_dialect == Dialect::L55;
+                let l55 = self.puc.dialect == Dialect::L55;
                 self.puc.bytes += self.puc.sizes.string(len, l55);
                 return;
             }
@@ -137,7 +137,7 @@ impl Heap {
             self.puc.strt_nuse += 1;
             return;
         }
-        let d = self.table_dialect;
+        let d = self.puc.dialect;
         let long = len > crate::runtime::string::MAX_SHORT_LEN && d != Dialect::L51;
         let kind = if long {
             PucKind::LongStr
@@ -168,14 +168,14 @@ impl Heap {
     fn grow_strtab(&mut self) {
         let (old, new) = (self.puc.strt_size, self.puc.strt_size * 2);
         let p = self.puc.sizes.ptr;
-        if self.table_dialect == Dialect::L51 {
+        if self.puc.dialect == Dialect::L51 {
             self.acct_part(0, new * p);
             self.acct_part(old * p, 0);
         } else {
             self.acct_part(old * p, new * p);
         }
         self.puc.strt_size = new;
-        if matches!(self.table_dialect, Dialect::L51 | Dialect::L52) {
+        if matches!(self.puc.dialect, Dialect::L51 | Dialect::L52) {
             self.strt_grew(old);
         }
     }
@@ -185,7 +185,7 @@ impl Heap {
     /// minimum; 5.2: when less than half is), and 5.1's concatenation
     /// buffer halved past twice its minimum, 5.2's freed.
     pub(crate) fn acct_check_sizes(&mut self) {
-        let d = self.table_dialect;
+        let d = self.puc.dialect;
         let (size, nuse) = (self.puc.strt_size, self.puc.strt_nuse);
         let shrink = match d {
             Dialect::L51 => nuse < size / 4 && size > 64,
@@ -224,7 +224,7 @@ impl Heap {
     /// counted (see [`Heap::acct_part`]).
     #[inline]
     pub(crate) fn acct_string_free(&mut self, len: usize) {
-        if self.dropping {
+        if self.is_dropping() {
             return;
         }
         let long = len > self.puc.short_max;
@@ -234,7 +234,7 @@ impl Heap {
         let size = self
             .puc
             .sizes
-            .string(len, long && self.table_dialect == Dialect::L55);
+            .string(len, long && self.puc.dialect == Dialect::L55);
         self.count_part(size, 0);
     }
 }

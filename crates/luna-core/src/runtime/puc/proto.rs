@@ -14,7 +14,7 @@ impl Heap {
     fn proto_arrays(&self, p: &crate::runtime::function::Proto) -> [u32; 7] {
         let s = self.puc.sizes;
         let n = p.code.len();
-        let (lineinfo, abs) = match self.table_dialect {
+        let (lineinfo, abs) = match self.puc.dialect {
             Dialect::L54 | Dialect::L55 => (n, abs_lines(p.line_defined, &p.lines)),
             _ => (4 * n, 0),
         };
@@ -53,7 +53,7 @@ impl Heap {
     pub(crate) fn acct_proto_free(&mut self, p: &crate::runtime::function::Proto) {
         let a = p.puc_arrays.get();
         // 5.5 frees the code and line arrays first
-        let order = if self.table_dialect == Dialect::L55 {
+        let order = if self.puc.dialect == Dialect::L55 {
             [0, 3, 4, 1, 2, 5, 6]
         } else {
             [0, 1, 2, 3, 4, 5, 6]
@@ -77,7 +77,7 @@ impl Heap {
     /// upvalues (marked [`ENV51`] in the closure's header, so that freeing
     /// it needs no prototype, which may be freed first).
     pub(crate) fn env51(&self, proto: &crate::runtime::function::Proto) -> bool {
-        self.table_dialect == Dialect::L51 && proto.env_upval_idx != u8::MAX
+        self.puc.dialect == Dialect::L51 && proto.env_upval_idx != u8::MAX
     }
 }
 

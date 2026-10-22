@@ -48,7 +48,7 @@ pub(crate) const BASIC_CI_51: u32 = 8;
 impl Heap {
     /// The bytes of a stack of `s` slots.
     pub(in crate::runtime) fn stack_bytes(&self, s: u32) -> usize {
-        crate::runtime::puc::work::stack_bytes(&self.puc.sizes, self.table_dialect, s)
+        crate::runtime::puc::work::stack_bytes(&self.puc.sizes, self.puc.dialect, s)
     }
 
     /// The stack of `t` resized from `old` to `new` slots
@@ -95,7 +95,7 @@ impl Heap {
         if !self.counting() {
             return;
         }
-        if self.table_dialect == Dialect::L51 {
+        if self.puc.dialect == Dialect::L51 {
             self.ci51_blocks(0, BASIC_CI_51);
         }
         self.stack_blocks(0, stack);
@@ -106,7 +106,7 @@ impl Heap {
     /// array size, or the `CallInfo`s a later thread allocated besides its
     /// base one.
     pub(crate) fn acct_thread_free(&mut self, stack: u32, ci: u32) {
-        if self.table_dialect == Dialect::L51 {
+        if self.puc.dialect == Dialect::L51 {
             self.ci51_blocks(ci, 0);
         } else {
             self.ci_blocks(0, ci);

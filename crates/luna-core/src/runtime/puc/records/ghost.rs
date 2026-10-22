@@ -58,8 +58,8 @@ impl Heap {
     /// object is not a record); the record and the entry's place.
     fn ghost_push(&mut self, entry: u32) -> Result<(*mut Ghost, usize), Oom> {
         let size = entry;
-        let born = self.current_white;
-        let head = self.all;
+        let born = self.white();
+        let head = self.list_head();
         let ghost_head = !head.is_null()
             // SAFETY: `head`, not null, heads a live object of this heap
             && unsafe {
@@ -212,7 +212,7 @@ impl Heap {
     #[cfg(feature = "gc-verify")]
     pub(in crate::runtime) fn ghost_short_strings(&self) -> usize {
         let mut n = 0;
-        let mut cur = self.all;
+        let mut cur = self.list_head();
         // SAFETY: `all` links this heap's live objects; a header tagged
         // `Ghost` is a `Ghost`
         unsafe {

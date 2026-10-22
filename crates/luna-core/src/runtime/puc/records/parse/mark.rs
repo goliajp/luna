@@ -155,11 +155,11 @@ impl Heap {
     pub(crate) unsafe fn parse_barrier(&mut self, parent: *mut GcHeader, child: *mut GcHeader) {
         // SAFETY: the caller's contract; only flag bytes are read and written
         unsafe {
-            if self.phase == GcPhase::Propagate {
+            if self.phase() == GcPhase::Propagate {
                 self.barrier_forward_obj(parent, child);
             } else if is_black((*parent).flags) {
                 let f = (*parent).flags;
-                (*parent).flags = (*parent).with_slow((f & !COLOR_BITS) | self.current_white);
+                (*parent).flags = (*parent).with_slow((f & !COLOR_BITS) | self.white());
             }
         }
     }
@@ -172,7 +172,7 @@ impl Heap {
         let h = p.as_ptr() as *mut GcHeader;
         // SAFETY: a live prototype; only flag bytes are read and written
         unsafe {
-            if self.phase != GcPhase::Propagate || !is_black((*h).flags) {
+            if self.phase() != GcPhase::Propagate || !is_black((*h).flags) {
                 return;
             }
             let strs = p.consts.iter().filter_map(|k| match k {
@@ -225,19 +225,19 @@ impl Heap {
     /// mark too. Panics on the first that is anything else.
     #[cfg(feature = "gc-verify")]
     pub(in crate::runtime) fn verify_kept(&self, ctx: &str) {
-        let mut cur = self.all;
+        let mut cur = self.list_head();
         // SAFETY: the links of `all` lead to live objects; only headers are
         // read
         unsafe {
             while !cur.is_null() {
                 let (tag, f, cls) = ((*cur).tag, (*cur).flags, (*cur).cls);
                 if tag == ObjTag::Str && cls & KEPT != 0 {
-                    let dead = is_white(f) && f & self.current_white == 0;
+                    let dead = is_white(f) && f & self.white() == 0;
                     assert!(
-                        dead && !is_uncounted(cur) && self.phase == GcPhase::Sweep,
+                        dead && !is_uncounted(cur) && self.phase() == GcPhase::Sweep,
                         "[gc-verify] {ctx}: kept string {cur:p}: flags {f:#x}, uncounted {}, phase {:?}",
                         is_uncounted(cur),
-                        self.phase
+                        self.phase()
                     );
                 }
                 cur = (*cur).next;

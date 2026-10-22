@@ -5,6 +5,31 @@ use crate::runtime::mem::{LVec, Oom, oom_abort};
 use std::alloc::Layout;
 
 impl Heap {
+    /// Take on `version`'s rules, then count what PUC's `lua_newstate`
+    /// allocates.
+    pub(crate) fn set_version(
+        &mut self,
+        version: crate::version::LuaVersion,
+    ) -> Result<(), crate::runtime::mem::Oom> {
+        use crate::version::LuaVersion;
+        // PUC 5.1 had no ephemeron pass: `__mode='k'` tables marked their
+        // values strongly (gc.lua's "weak tables" section relies on that)
+        self.no_ephemeron = version <= LuaVersion::Lua51;
+        self.refinalize = version != LuaVersion::Lua52;
+        self.signed_zero_keys = version <= LuaVersion::Lua52;
+        self.table_dialect = crate::runtime::table::Dialect::of(version);
+        self.puc_dialect(version);
+        // the strings the heap made before it knew the dialect (its fixed
+        // memory error message) move to the dialect's hash
+        self.hash51 = version == LuaVersion::Lua51;
+        let seed = self.seed();
+        self.rehash_strings(seed);
+        // PUC 5.3 needs two GC cycles to finalize a table caught in a
+        // coroutine reference cycle (gc.lua :502); 5.4+ finalize it in one
+        self.defer_thread_cycle_finalize = version == LuaVersion::Lua53;
+        self.acct_boot()
+    }
+
     /// Build a fresh empty heap with default GC pacing and no memory cap.
     pub fn new() -> Heap {
         Heap::with_seed(make_seed())

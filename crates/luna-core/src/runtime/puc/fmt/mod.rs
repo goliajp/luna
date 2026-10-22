@@ -38,7 +38,7 @@ mod vfs;
 
 impl Heap {
     fn float_fmt(&self) -> FloatFmt {
-        match self.table_dialect {
+        match self.puc.dialect {
             Dialect::L51 | Dialect::L52 => FloatFmt::Legacy14,
             Dialect::L53 | Dialect::L54 => FloatFmt::G14,
             Dialect::L55 => FloatFmt::TwoStage55,
@@ -48,7 +48,7 @@ impl Heap {
     /// The text of a number as PUC writes it (`lua_number2str`,
     /// `tostringbuff`); 5.1 and 5.2 have no integers.
     pub(crate) fn number_text(&self, n: Num) -> String {
-        let n = match (self.table_dialect, n) {
+        let n = match (self.puc.dialect, n) {
             (Dialect::L51 | Dialect::L52, Num::Int(i)) => Num::Float(i as f64),
             (_, n) => n,
         };
@@ -62,7 +62,7 @@ impl Heap {
         fmt: &[u8],
         args: &[FmtArg<'_>],
     ) -> Result<Gc<LuaStr>, Oom> {
-        match self.table_dialect {
+        match self.puc.dialect {
             Dialect::L54 => self.pushfstring_54(fmt, args),
             Dialect::L55 => self.pushfstring_55(fmt, args),
             _ => self.pushfstring_pieces(fmt, args),
@@ -71,7 +71,7 @@ impl Heap {
 
     /// 5.1 to 5.3: every piece a string (or a number), joined at the end.
     fn pushfstring_pieces(&mut self, fmt: &[u8], args: &[FmtArg<'_>]) -> Result<Gc<LuaStr>, Oom> {
-        let d = self.table_dialect;
+        let d = self.puc.dialect;
         let mut st: Vec<Value> = Vec::new();
         if d == Dialect::L51 {
             st.push(Value::Str(self.try_intern(b"")?));
@@ -127,11 +127,11 @@ impl Heap {
     /// for the concatenation to convert, 5.3 converts it at once.
     fn fmt_number(&mut self, n: Num) -> Result<Value, Oom> {
         let v = match n {
-            Num::Int(i) if self.table_dialect >= Dialect::L53 => Value::Int(i),
+            Num::Int(i) if self.puc.dialect >= Dialect::L53 => Value::Int(i),
             Num::Int(i) => Value::Float(i as f64),
             Num::Float(f) => Value::Float(f),
         };
-        if self.table_dialect == Dialect::L53 {
+        if self.puc.dialect == Dialect::L53 {
             let t = self.number_text(n);
             return Ok(Value::Str(self.try_intern(t.as_bytes())?));
         }

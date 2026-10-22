@@ -21,7 +21,7 @@ impl Heap {
 
     #[inline(never)]
     fn env51_sweep_at(&mut self, cur: *mut GcHeader, after: bool) -> i64 {
-        let w = self.current_white;
+        let w = self.white();
         let (mut n, mut freed, mut found, mut first) = (0, 0, false, usize::MAX);
         let gens = self.puc.env51_box.as_ref().map_or(0, |e| e.gens.len());
         for i in 0..gens {
@@ -114,7 +114,7 @@ impl Heap {
 
     /// A cycle starts: the records are white, as PUC's objects are.
     pub(in crate::runtime) fn env51_whiten(&mut self) {
-        let w = self.current_white;
+        let w = self.white();
         if let Some(e) = &mut self.puc.env51_box {
             for g in e.gens.iter_mut() {
                 for p in g.ph.iter_mut().filter(|p| !p.dead) {

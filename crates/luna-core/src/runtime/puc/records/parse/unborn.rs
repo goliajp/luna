@@ -10,27 +10,6 @@ use super::*;
 const UNBORN: *mut GcHeader = ptr::without_provenance_mut(1);
 
 impl Heap {
-    /// [`Heap::link`] onto the list.
-    ///
-    /// # Safety
-    /// As [`Heap::link`]'s.
-    #[inline]
-    pub(in crate::runtime) unsafe fn link_now(&mut self, h: *mut GcHeader) {
-        // SAFETY: the caller's contract
-        unsafe {
-            (*h).next = self.all;
-            // born the current white in every phase (PUC `luaC_white(g)`):
-            // one made while marking is marked by the atomic step if it is
-            // reachable then (the roots are marked again there, and a black
-            // object that took it was sent back to gray by its barrier)
-            (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.current_white);
-        }
-        self.all = h;
-        self.live += 1;
-        #[cfg(feature = "gc-verify")]
-        self.forget_freed(h);
-    }
-
     /// A new object a load makes before PUC does (luna compiles first),
     /// kept off the list until PUC makes it, which puts it where PUC's is.
     /// False when there is no room to note it (it goes on the list now).
@@ -47,7 +26,7 @@ impl Heap {
         unsafe {
             (*h).next = UNBORN;
             // white as a new object, for the barriers that reach it first
-            (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.current_white);
+            (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.white());
         }
         true
     }
@@ -68,7 +47,7 @@ impl Heap {
             // too (one gray is on a gray stack, traversed whatever its color)
             let f = (*h).flags;
             self.link_now(h);
-            if self.phase == GcPhase::Propagate && is_black(f) {
+            if self.phase() == GcPhase::Propagate && is_black(f) {
                 (*h).flags = f;
             }
         }
@@ -115,34 +94,12 @@ impl Heap {
     /// # Safety
     /// `h` and `anchor` head live objects of this heap.
     pub(crate) unsafe fn link_before(&mut self, h: *mut GcHeader, anchor: *mut GcHeader) {
-        if h == anchor || h == self.sweep_prev {
-            return;
-        }
-        // SAFETY: the caller's contract; the links walked are the list's
+        // SAFETY: the caller's contract
         unsafe {
             if (*h).next == UNBORN || (*anchor).next == UNBORN {
                 return;
             }
-            let mut link: *mut *mut GcHeader = ptr::addr_of_mut!(self.all);
-            while !(*link).is_null() && *link != h {
-                link = ptr::addr_of_mut!((**link).next);
-            }
-            if (*link).is_null() {
-                return;
-            }
-            *link = (*h).next;
-            let mut at: *mut *mut GcHeader = ptr::addr_of_mut!(self.all);
-            while !(*at).is_null() && *at != anchor {
-                at = ptr::addr_of_mut!((**at).next);
-            }
-            if (*at).is_null() {
-                // not found after all: back at the head
-                (*h).next = self.all;
-                self.all = h;
-                return;
-            }
-            (*h).next = anchor;
-            *at = h;
+            self.move_before(h, anchor);
         }
     }
 
@@ -155,7 +112,7 @@ impl Heap {
     /// the sweep leaves every object it goes over (a marking of the cycle
     /// that ended may have reached it).
     pub(in crate::runtime) fn whiten_unborn(&mut self) {
-        let white = self.current_white;
+        let white = self.white();
         for &h in &self.puc.unborn {
             // SAFETY: an object set aside is allocated; only its flags are
             // written
