@@ -92,7 +92,7 @@ impl Vm {
         if e.line == 0 {
             // a runtime error raised by `load`, not positioned
             let m = self.heap.pushfstring(&e.msg, &[])?;
-            self.heap.puc.load_msg = Some(m);
+            self.heap.set_load_msg(m);
             return Ok(());
         }
         let (inner, near_text) = match near {
@@ -109,7 +109,7 @@ impl Vm {
             .heap
             .pushfstring(b"%s:%d: %s", &[FmtArg::S(&id), line, FmtArg::S(inner)])?;
         if near == NearKind::None {
-            self.heap.puc.load_msg = Some(msg);
+            self.heap.set_load_msg(msg);
             return Ok(());
         }
         let msg = msg.as_bytes().to_vec();
@@ -150,7 +150,7 @@ impl Vm {
         let m = self
             .heap
             .pushfstring(fmt, &[FmtArg::S(&msg), FmtArg::S(tok)])?;
-        self.heap.puc.load_msg = Some(m);
+        self.heap.set_load_msg(m);
         Ok(())
     }
 

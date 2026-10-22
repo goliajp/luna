@@ -131,7 +131,7 @@ pub struct Heap {
     gc_stopped: bool,
     /// 5.4 and 5.5: a finalizer is running, which no step may interrupt
     /// (PUC `GCSTPGC`)
-    pub(crate) gc_fin_stop: bool,
+    gc_fin_stop: bool,
     /// the heap is being dropped: a string it frees is not taken out of
     /// the string table, which goes with it
     dropping: bool,

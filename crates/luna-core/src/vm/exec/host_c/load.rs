@@ -204,10 +204,10 @@ impl Vm {
                 let Some(&param) = usize::try_from(a).ok().and_then(|i| PARAM_ORDER.get(i)) else {
                     return Ok(-1);
                 };
-                let prev = self.heap.puc.params.get(param) as i32;
+                let prev = self.heap.gc_params().get(param) as i32;
                 let value = args[1] as i32;
                 if value >= 0 {
-                    self.heap.puc.params.set(param, value);
+                    self.heap.gc_params_mut().set(param, value);
                     lib_gc::sync_pacing(self);
                 }
                 prev
@@ -217,8 +217,8 @@ impl Vm {
 
     /// Set a pacing parameter from `lua_gc` and return its previous value.
     fn host_gc_set(&mut self, param: Param, v: i32) -> i32 {
-        let prev = self.heap.puc.params.get(param) as i32;
-        self.heap.puc.params.set(param, v);
+        let prev = self.heap.gc_params().get(param) as i32;
+        self.heap.gc_params_mut().set(param, v);
         lib_gc::sync_pacing(self);
         prev
     }

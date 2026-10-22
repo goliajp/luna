@@ -213,7 +213,7 @@ fn push_default(
         } else {
             match s {
                 Value::Str(ls)
-                    if luna.len() > vm.heap.puc.short_max
+                    if luna.len() > vm.heap.short_max()
                         && crate::runtime::heap::is_uncounted(ls.header()) =>
                 {
                     vm.heap.acct_stand_on(ls.header(), size, true)

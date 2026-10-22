@@ -88,7 +88,7 @@ impl Vm {
         self.heap.keep_young(young);
         self.heap.release_pool();
         self.gc_top = live_top;
-        self.heap.puc.pace.fin_num = 1;
+        self.heap.finalizers_due();
         crate::runtime::puc::step::gc_full_pause(self);
         self.heap.restore_counting(counting);
         #[cfg(feature = "gc-trace")]

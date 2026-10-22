@@ -12,6 +12,7 @@ mod mark;
 #[cfg(feature = "gc-verify")]
 pub(in crate::runtime) use mark::is_kept;
 mod unborn;
+pub(crate) use unborn::LoadsAside;
 
 /// In a record's `sub` byte: a parser table.
 const LOADTAB: u8 = 0x20;

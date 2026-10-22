@@ -9,6 +9,10 @@ use super::*;
 /// In the `next` of an object set aside: PUC has not made it yet.
 const UNBORN: *mut GcHeader = ptr::without_provenance_mut(1);
 
+/// Whether loads were set aside before (see [`Heap::set_loads_aside`]).
+#[must_use = "loads stay as set until the token goes back to `Heap::loads_aside_back`"]
+pub(crate) struct LoadsAside(bool);
+
 impl Heap {
     /// A new object a load makes before PUC does (luna compiles first),
     /// kept off the list until PUC makes it, which puts it where PUC's is.
@@ -53,10 +57,24 @@ impl Heap {
         }
     }
 
-    /// Set what a load makes before PUC does aside (`on`), or no more;
-    /// what was set before, for the caller to put back.
-    pub(crate) fn set_aside_loads(&mut self, on: bool) -> bool {
-        std::mem::replace(&mut self.puc.unborn_on, on)
+    /// Set what a load makes before PUC does aside (`on`), or no more,
+    /// until the token goes back to [`Heap::loads_aside_back`].
+    #[inline]
+    pub(crate) fn set_loads_aside(&mut self, on: bool) -> LoadsAside {
+        LoadsAside(std::mem::replace(&mut self.puc.unborn_on, on))
+    }
+
+    /// Where loads were set aside at some point (a load unwound by running
+    /// out of memory goes back there).
+    #[inline]
+    pub(crate) fn loads_aside_mark(&self) -> LoadsAside {
+        LoadsAside(self.puc.unborn_on)
+    }
+
+    /// Back to what [`Heap::set_loads_aside`] changed.
+    #[inline]
+    pub(crate) fn loads_aside_back(&mut self, a: LoadsAside) {
+        self.puc.unborn_on = a.0;
     }
 
     /// The objects set aside at `from..to` of the list of them that are

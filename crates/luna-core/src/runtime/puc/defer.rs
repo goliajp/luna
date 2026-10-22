@@ -13,7 +13,7 @@ use super::*;
 pub(crate) struct DeferMark {
     bytes: usize,
     objs: usize,
-    aside: bool,
+    aside: crate::runtime::puc::records::parse::LoadsAside,
 }
 
 /// What was counted while counting was set aside.
@@ -34,14 +34,14 @@ impl Heap {
         DeferMark {
             bytes: self.puc.bytes,
             objs: self.unborn_len(),
-            aside: self.set_aside_loads(true),
+            aside: self.set_loads_aside(true),
         }
     }
 
     /// What was counted since `mark`, taken out of the count, and the
     /// objects made since, kept aside.
     pub(crate) fn defer_end(&mut self, mark: DeferMark) -> Deferred {
-        self.set_aside_loads(mark.aside);
+        self.loads_aside_back(mark.aside);
         let bytes = self.puc.bytes as isize - mark.bytes as isize;
         self.puc.bytes = mark.bytes;
         self.puc.set_aside += bytes;

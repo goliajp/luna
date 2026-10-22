@@ -176,7 +176,7 @@ pub(crate) fn run_open(
     // slots), so a push only writes its slot
     vm.grow_stack(fs as usize + 1 + nargs as usize + 24)?;
     let mut op = Opener::native(vm, s, fs);
-    op.sandbox = vm.heap.puc.sandbox_base;
+    op.sandbox = vm.opening_sandbox;
     op.run(vm, ops)?;
     let vals = op.top_values(vm, nret);
     vm.nat_ret(fs, &vals)

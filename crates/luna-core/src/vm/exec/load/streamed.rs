@@ -40,7 +40,7 @@ impl Vm {
     #[doc(hidden)]
     pub fn host_load_begin(&mut self) -> Result<(), LuaError> {
         let checked = self.lua_load_checkpoint();
-        self.heap.puc.load_checked = true;
+        self.heap.set_load_checked(true);
         if self.version >= LuaVersion::Lua52 {
             self.nny += 1;
         }
@@ -50,7 +50,7 @@ impl Vm {
     /// The parse of the `lua_load` [`Vm::host_load_begin`] began has ended.
     #[doc(hidden)]
     pub fn host_load_end(&mut self) {
-        self.heap.puc.load_checked = false;
+        self.heap.set_load_checked(false);
         if self.version >= LuaVersion::Lua52 {
             self.nny -= 1;
         }
@@ -78,7 +78,7 @@ impl Vm {
         name: Option<Gc<crate::runtime::LuaStr>>,
         splices: Vec<(u32, crate::runtime::heap::Deferred)>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
-        self.heap.puc.load_checked = false;
+        self.heap.set_load_checked(false);
         let counted = match &parsed.0 {
             Ok(p) => p.recorded().is_some(),
             Err((e, Some(_))) => self.heap.counting() && !e.is_memory(),
@@ -122,9 +122,9 @@ impl Vm {
             // made without counting, then counted as PUC's parser makes it
             let off = vm.heap.counting_off();
             let base = vm.heap.unborn_len();
-            let aside = vm.heap.set_aside_loads(true);
+            let aside = vm.heap.set_loads_aside(true);
             let made = vm.compile_streamed(&mut parsed, chunkname, name);
-            vm.heap.set_aside_loads(aside);
+            vm.heap.loads_aside_back(aside);
             vm.heap.counting_on(off);
             let cl = match made {
                 Ok(cl) => cl,
@@ -191,7 +191,7 @@ impl Vm {
         let (v, depth) = (self.version, self.g.nccalls);
         let base = self.heap.unborn_len();
         let off = self.heap.counting_off();
-        let aside = self.heap.set_aside_loads(true);
+        let aside = self.heap.set_loads_aside(true);
         let source = self
             .heap
             .chunk_name(chunkname, name)
@@ -209,7 +209,7 @@ impl Vm {
             }
             Err(o) => o.clone(),
         };
-        self.heap.set_aside_loads(aside);
+        self.heap.loads_aside_back(aside);
         self.heap.counting_on(off);
         let counted = match source {
             Ok(source) if !e.is_memory() => self.acct_failed_load(src, &e, source, splices),

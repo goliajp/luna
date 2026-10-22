@@ -5,6 +5,13 @@ use crate::runtime::table::Dialect;
 
 pub(super) use crate::runtime::puc::work::native_upvals;
 
+/// The collector's run at some point (see [`Heap::gc_run_mark`]).
+#[must_use]
+pub(crate) struct RunMark {
+    stopped: bool,
+    fin_stop: bool,
+}
+
 impl Heap {
     /// Number of GC-managed objects currently linked into the heap (live + not
     /// yet swept). Useful for `collectgarbage("count")`-style introspection.
@@ -118,6 +125,36 @@ impl Heap {
     pub(crate) fn gc_restore_stopped(&mut self, stopped: bool) {
         self.gc_stopped = stopped;
         self.refresh_gc_limit();
+    }
+
+    /// Whether the collector runs as it does now (stopped, and stopped for
+    /// a 5.4 or 5.5 finalizer), to return to with [`Heap::gc_restore_run`].
+    #[inline]
+    pub(crate) fn gc_run_mark(&self) -> RunMark {
+        RunMark {
+            stopped: self.gc_stopped,
+            fin_stop: self.gc_fin_stop,
+        }
+    }
+
+    /// Back to the collector's run at `m`.
+    #[inline]
+    pub(crate) fn gc_restore_run(&mut self, m: RunMark) {
+        self.gc_fin_stop = m.fin_stop;
+        self.gc_restore_stopped(m.stopped);
+    }
+
+    /// Whether a 5.4 or 5.5 finalizer runs, which no step may interrupt.
+    #[inline]
+    pub(crate) fn gc_fin_stop(&self) -> bool {
+        self.gc_fin_stop
+    }
+
+    /// A 5.4 or 5.5 finalizer runs (`on`), and no step may run, or none
+    /// does any more.
+    #[inline]
+    pub(crate) fn gc_set_fin_stop(&mut self, on: bool) {
+        self.gc_fin_stop = on;
     }
 
     /// Whether PUC's `luaC_step` runs a step (`gcrunning`): not while the

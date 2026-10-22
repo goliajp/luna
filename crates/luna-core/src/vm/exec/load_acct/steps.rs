@@ -25,7 +25,7 @@ impl Vm {
         if r.rec.is_some() {
             return Ok(());
         }
-        if self.heap.puc.load_holds {
+        if self.heap.loads_held() {
             #[cfg(feature = "gc-trace")]
             self.trace_checkpoint();
             return Ok(());
@@ -35,9 +35,9 @@ impl Vm {
         }
         let due = self.heap.gc_due();
         let frame = self.parse_frame(r, temp);
-        self.heap.puc.parse.push(frame);
+        let open = self.heap.open_parse_frame(frame);
         let stepped = self.native_checkpoint_due();
-        self.heap.puc.parse.pop();
+        self.heap.close_parse_frame(open);
         // 5.1 and 5.2 drop a function's table when it ends: a name the step
         // freed is made again where it is scanned next
         if due && matches!(r.d, Dialect::L51 | Dialect::L52) {

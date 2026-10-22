@@ -72,11 +72,10 @@ impl Vm {
                 return -1;
             }
         } else {
-            let size = self
-                .heap
-                .puc
-                .sizes
-                .string(buf.len(), self.version >= LuaVersion::Lua55);
+            let size = self.heap.puc_size(crate::runtime::puc::PucObj::Str {
+                len: buf.len(),
+                long: true,
+            });
             let g = self
                 .heap
                 .acct_ghost_ref(crate::runtime::heap::PucKind::LongStr, size);

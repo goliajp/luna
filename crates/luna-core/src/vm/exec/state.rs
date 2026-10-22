@@ -379,6 +379,8 @@ pub struct Vm {
     /// true while the hook itself runs, so its own execution fires no events
     /// (PUC clears the mask for the duration)
     pub(crate) in_hook: bool,
+    /// `Vm::open_base` runs: the base library without its file loaders
+    pub(crate) opening_sandbox: bool,
     /// PUC `trap`: the dispatch loop head has work beyond fetching the next
     /// instruction — an instruction budget, a memory cap or an armed hook.
     /// The loop head clears it when it finds none of them; whatever may

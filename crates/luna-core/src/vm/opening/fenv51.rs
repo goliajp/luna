@@ -25,7 +25,7 @@ impl Opener {
         vm.heap
             .acct_block(0, vm.heap.puc_size(crate::runtime::puc::PucObj::Nodes(1)));
         let h = vm.heap.env51_born(k);
-        vm.heap.puc.phantoms = true;
+        vm.heap.set_phantoms(true);
         self.push(vm, Value::LightUserdata(h as *const ()))?;
         self.after(vm)
     }
