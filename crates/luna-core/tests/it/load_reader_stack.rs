@@ -37,12 +37,7 @@ fn listing(script: &str, v: LuaVersion, seed: u32) -> String {
         other => panic!("a listing, got {other:?}"),
     };
     // each table shown has PUC's array and hash part sizes, which its
-    // collector's counts are made of
-    assert_eq!(
-        vm.reader_size_mismatches(),
-        0,
-        "{v:?} seed {seed}: table sizes"
-    );
+    // collector's counts are made of: gc-verify builds check it
     out
 }
 

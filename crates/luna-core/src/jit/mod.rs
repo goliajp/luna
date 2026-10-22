@@ -28,8 +28,8 @@ pub mod aot_meta;
 // luna's jit_backend module.
 mod abi;
 pub use abi::{
-    CompileResult, IntChunkCompiler, IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4, MAX_JIT_ARITY,
-    NullJitBackend, TraceCompiler,
+    CompileResult, IntChunkCompiler, IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4, JIT_GC_CALL,
+    JIT_GC_PREV, MAX_JIT_ARITY, NullJitBackend, TraceCompiler,
 };
 
 // Per-Vm JIT storage trait. Holds the JIT cache + handle collections

@@ -206,17 +206,10 @@ impl Vm {
                 let r = unsafe { t.as_mut() }.resize(&mut self.heap, a as usize, n as usize);
                 r.map_err(|e| self.table_error(e))?;
             } else {
-                self.g.reader_size_mismatch += 1;
+                self.hook_reader_sizes((t.asize() as u64, t.node_count() as u64), (a, n));
             }
         }
         Ok(tabs)
-    }
-
-    /// How many parser tables the debug library was shown with parts of
-    /// another size than PUC's (none, unless luna's tables grow otherwise).
-    #[doc(hidden)]
-    pub fn reader_size_mismatches(&self) -> u32 {
-        self.g.reader_size_mismatch
     }
 
     /// A parser table: luna's own, not listed or counted.

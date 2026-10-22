@@ -57,7 +57,7 @@ impl Vm {
         let h = if h == 0 { 0 } else { h.next_power_of_two() };
         let size = self.heap.puc_table_bytes(a, h);
         if self.heap.gc_due_after(size) {
-            self.jit.gc_exit = Some(super::JIT_GC_PREV);
+            self.jit.gc_exit = Some(crate::jit::JIT_GC_PREV);
             return true;
         }
         // no memory for the record: the table is not counted, as when the
