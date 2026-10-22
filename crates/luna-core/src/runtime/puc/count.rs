@@ -56,6 +56,7 @@ impl Heap {
     pub(in crate::runtime) fn puc_dialect(&mut self, version: crate::version::LuaVersion) {
         let d = Dialect::of(version);
         self.puc.dialect = d;
+        self.puc.params = super::GcParams::new(version);
         self.puc.sizes = PucSizes::of(d);
         if d == Dialect::L51 {
             self.puc.short_max = usize::MAX;

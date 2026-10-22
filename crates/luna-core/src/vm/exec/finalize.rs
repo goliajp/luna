@@ -52,8 +52,8 @@ impl Vm {
         if self.version == LuaVersion::Lua52 {
             return self.call_all_pending(true);
         }
-        self.gc_steps_to_pause()?;
-        self.gc_full_repause();
+        crate::runtime::puc::step::gc_steps_to_pause(self)?;
+        crate::runtime::puc::step::gc_full_repause(self);
         Ok(())
     }
 

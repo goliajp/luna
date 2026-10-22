@@ -65,7 +65,7 @@ impl GcParams {
 
     /// PUC's compile-time default, or `None` where the dialect has no such
     /// parameter.
-    pub(super) fn default(&self, param: Param) -> Option<i32> {
+    pub(crate) fn default(&self, param: Param) -> Option<i32> {
         use LuaVersion::*;
         use Param::*;
         match (self.version, param) {
@@ -129,7 +129,7 @@ impl GcParams {
     }
 
     /// `param`'s current value on luna's scale for the matching knob.
-    pub(super) fn luna_scaled(&self, param: Param, luna_default: i64) -> i64 {
+    pub(crate) fn luna_scaled(&self, param: Param, luna_default: i64) -> i64 {
         match self.default(param) {
             Some(d) => self.get(param) * luna_default / i64::from(d),
             None => luna_default,

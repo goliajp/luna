@@ -17,19 +17,19 @@ impl Vm {
             if !self.gc_finalizing && !self.heap.no_gc() {
                 self.clear_dead_stack(false);
                 self.full_collect();
-                self.gc_minor_debt();
+                crate::runtime::puc::step::gc_minor_debt(self);
             }
             #[cfg(feature = "gc-trace")]
             self.heap.trace.line(format_args!("x"));
         }
         if prev != new && self.version == LuaVersion::Lua52 {
             match new {
-                "generational" => self.enter_generational_52(),
-                _ => self.leave_generational_52(),
+                "generational" => crate::runtime::puc::step::enter_generational_52(self),
+                _ => crate::runtime::puc::step::leave_generational_52(self),
             }
         }
         if new == "incremental" && prev == "generational" {
-            self.gc_leave_generational();
+            crate::runtime::puc::step::gc_leave_generational(self);
         }
         prev
     }
@@ -94,7 +94,7 @@ impl Vm {
         // (`finish_results`, the Op::TailCall collapse, pcall unwind) clears
         // the slots it vacates, mirroring PUC's L->top discipline.
         self.gc_top = live_top;
-        self.puc_step()
+        crate::runtime::puc::step::puc_step(self)
     }
 
     /// The running stack's contract with the collector (PUC
@@ -128,7 +128,7 @@ impl Vm {
         // a sweep (the one in progress, or 5.1's from a pause, which it
         // treats as marking) ends before the full cycle, with `checkSizes`
         let swept = !self.heap.gc_phase_is_pause() || self.version == LuaVersion::Lua51;
-        self.gc_hold_threads();
+        crate::runtime::puc::step::gc_hold_threads(self);
         self.jit_forget_ghosts();
         self.name_cache = Default::default();
         if self.heap.gc_phase_is_propagate() {
@@ -151,9 +151,9 @@ impl Vm {
             self.heap.acct_check_sizes();
         }
         let freed = if self.version == LuaVersion::Lua52 {
-            self.full_cycle_52(swept)
+            crate::runtime::puc::step::full_cycle_52(self, swept)
         } else {
-            self.gc_count_marked();
+            crate::runtime::puc::step::gc_count_marked(self);
             let mut m = self.heap.gc_begin_full();
             self.mark_roots(&mut m, false);
             self.watch_errors();
@@ -171,7 +171,7 @@ impl Vm {
         self.forget_dead_errors();
         // there may be objects to be finalized
         self.heap.puc.pace.fin_num = 1;
-        self.gc_full_pause();
+        crate::runtime::puc::step::gc_full_pause(self);
         freed
     }
 
@@ -211,7 +211,7 @@ impl Vm {
             self.full_gc_finalizers()?;
         }
         #[cfg(feature = "gc-trace")]
-        self.trace_full_end();
+        crate::runtime::puc::step::trace_full_end(self);
         Ok(freed)
     }
 
