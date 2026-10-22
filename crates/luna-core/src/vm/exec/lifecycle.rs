@@ -62,8 +62,7 @@ impl Vm {
         crate::vm::lib_io::flush_all_closing(self);
         // the trace build's log is complete: a host may end the process
         // without dropping the state
-        #[cfg(feature = "gc-trace")]
-        self.heap.trace.flush();
+        self.heap.hook_flush();
     }
 
     /// Build the raw `Vm` struct without main coroutine / RNG seed / library
@@ -146,7 +145,6 @@ impl Vm {
             gc_stepsize: 13,
             gc_finalizing: false,
             posix_locales: 0,
-            #[cfg(feature = "gc-stress")]
             stress: Default::default(),
             fin_quiet: false,
             load_raised: None,

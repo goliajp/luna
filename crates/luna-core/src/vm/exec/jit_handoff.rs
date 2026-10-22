@@ -32,7 +32,7 @@ impl Vm {
     /// that its checks are traced.
     #[doc(hidden)]
     pub fn jit_due_after(&self, bytes: usize) -> bool {
-        if cfg!(feature = "gc-trace") {
+        if crate::runtime::gc_hooks::TRACE {
             return true;
         }
         self.heap.gc_due_after(bytes)

@@ -58,11 +58,4 @@ impl Heap {
     pub(crate) fn forget_shrunk(&mut self) {
         self.puc.shrunk.clear();
     }
-
-    /// gc-trace: the count moved by `delta` where the instrumented PUC's
-    /// allocation function refused a growth.
-    #[cfg(feature = "gc-trace")]
-    pub(crate) fn adjust_count(&mut self, delta: i64) {
-        self.puc.bytes = (self.puc.bytes as i64 + delta) as usize;
-    }
 }

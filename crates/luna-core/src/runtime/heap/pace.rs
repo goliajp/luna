@@ -77,24 +77,6 @@ impl Heap {
         self.puc.bytes + more >= self.puc.gc_limit && !self.no_gc() && !self.no_auto()
     }
 
-    /// No automatic step runs (`gc-trace` with `R38_NOAUTO` set).
-    #[inline(always)]
-    pub(crate) fn no_auto(&self) -> bool {
-        #[cfg(feature = "gc-trace")]
-        return self.trace.no_auto;
-        #[cfg(not(feature = "gc-trace"))]
-        false
-    }
-
-    /// No collection runs (`gc-trace` with `R38_NOGC` set).
-    #[inline(always)]
-    pub(crate) fn no_gc(&self) -> bool {
-        #[cfg(feature = "gc-trace")]
-        return self.trace.no_gc;
-        #[cfg(not(feature = "gc-trace"))]
-        false
-    }
-
     /// `collectgarbage("stop"/"restart")`: suspend or resume auto-GC.
     pub(crate) fn gc_is_stopped(&self) -> bool {
         self.gc_stopped

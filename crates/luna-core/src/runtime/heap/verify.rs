@@ -3,13 +3,13 @@
 //! created it.
 
 use super::*;
+use crate::runtime::dialect::Dialect;
 
 impl Heap {
     /// `gc-verify` — the set of every live object header
     /// (all + fixed + finalizer queues), for callers that need to
     /// audit their own containers (e.g. the VM auditing its register
     /// stack after a collect).
-    #[cfg(feature = "gc-verify")]
     pub fn debug_live_set(&self) -> std::collections::HashSet<usize> {
         let mut live = std::collections::HashSet::new();
         // SAFETY: heap-owned intrusive lists; all elements are live
@@ -35,8 +35,7 @@ impl Heap {
     /// BLACK table whose collectable child is dead-white (missed
     /// barrier — that child is about to be swept while still
     /// referenced).
-    #[cfg(feature = "gc-verify")]
-    pub(super) fn verify_tricolor(&self, ctx: &str) {
+    pub(crate) fn verify_tricolor(&self, ctx: &str) {
         let new_white = self.current_white;
         // SAFETY: `all` is the heap's own intrusive list; every element
         // is a live allocation (nothing has been freed this cycle yet).
@@ -104,7 +103,6 @@ impl Heap {
     /// pointer + slot detail on the first reference whose target is no
     /// longer live — i.e. at the collect that CREATED the dangling
     /// pointer, not at the later allocator-dependent dereference.
-    #[cfg(feature = "gc-verify")]
     pub fn verify_no_dangling(&self, ctx: &str) {
         use std::collections::HashSet;
         self.verify_kept(ctx);
@@ -180,8 +178,7 @@ impl Heap {
     /// `gc-verify`, once marking is done: no black object holds an object
     /// the sweep will free (a missed write barrier), whatever its kind.
     /// Panics naming both on the first.
-    #[cfg(feature = "gc-verify")]
-    pub(super) fn verify_black_children(&self, ctx: &'static str) {
+    pub(crate) fn verify_black_children(&self, ctx: &'static str) {
         let mut m = Marker {
             stack: Default::default(),
             overflow: false,
@@ -201,7 +198,7 @@ impl Heap {
             env51: std::ptr::null(),
             parse: std::ptr::null(),
             stands: std::ptr::null(),
-            verify: None,
+            verify: Default::default(),
         };
         let mut cur = self.all;
         // SAFETY: `all` links this heap's allocated objects, none freed before
@@ -210,7 +207,7 @@ impl Heap {
         unsafe {
             while !cur.is_null() {
                 if is_black((*cur).flags) {
-                    m.verify = Some((self.current_white, cur, ctx));
+                    m.verify.check = Some((self.current_white, cur, ctx));
                     super::mark::trace_children(cur, &mut m);
                 }
                 cur = (*cur).next;
@@ -218,12 +215,84 @@ impl Heap {
         }
     }
 }
-
-#[cfg(feature = "gc-verify")]
 impl Heap {
+    /// The class byte of `h`, which the sweep goes over, says whether PUC
+    /// lists it (`strt`: the string table holds strings).
+    ///
+    /// # Safety
+    /// `h` heads an allocated object of this heap.
+    pub(crate) unsafe fn verify_class_byte(&self, h: *mut GcHeader, strt: bool) {
+        // SAFETY: the caller's contract
+        unsafe {
+            assert_eq!(
+                self.listed(h),
+                ((*h).tag != ObjTag::Ghost || super::parse::is_load_tab(h))
+                    && self.puc_listed(h, strt),
+                "[gc-verify] class byte of a {:?}",
+                (*h).tag
+            );
+        }
+    }
+
+    /// Whether PUC keeps the object behind `h` on the list it sweeps
+    /// (`allgc`, 5.1 `rootgc`): one of PUC's, with no finalizer pending,
+    /// and (`strt`) no string the string table holds.
+    ///
+    /// # Safety
+    /// `h` heads an allocated object of this heap.
+    unsafe fn puc_listed(&self, h: *mut GcHeader, strt: bool) -> bool {
+        // SAFETY: the caller's contract
+        unsafe {
+            let d51 = self.dialect() == Dialect::L51;
+            let own51 = match (*h).tag {
+                ObjTag::Coro => false,
+                ObjTag::Native => (*h).cls & LUNA_ONLY != 0,
+                ObjTag::Userdata => {
+                    is_uncounted(h)
+                        && !matches!((*(h as *const Userdata)).payload, UserdataPayload::File(_))
+                }
+                _ => is_uncounted(h),
+            };
+            let pending51 = d51 && (*h).flags & DEFERRED != 0;
+            if (if d51 { own51 } else { is_uncounted(h) })
+                || (*h).flags & FIN != 0 && !d51
+                || pending51
+            {
+                return false;
+            }
+            match (*h).tag {
+                ObjTag::Str => {
+                    !strt || (self.dialect() == Dialect::L52 && !(*(h as *const LuaStr)).is_short())
+                }
+                ObjTag::Table => !self.is_own_table(h as *const Table),
+                _ => true,
+            }
+        }
+    }
+
+    /// The first object never swept (`fixedgc`).
+    #[inline]
+    pub(in crate::runtime) fn fixed_head(&self) -> *mut GcHeader {
+        self.fixed
+    }
+
+    /// The object `h` freed: noted for the read-time probes.
+    pub(crate) fn note_freed(&mut self, h: *mut GcHeader) {
+        self.hooks.recently_freed.insert(h as usize);
+        crate::runtime::gc_verify_probe::FREED.with(|f| f.borrow_mut().insert(h as usize));
+        // SAFETY: the caller of `free_obj` names an allocated object, read
+        // as a string when its tag says it is one
+        let s = unsafe { ((*h).tag == ObjTag::Str).then(|| Gc::from_ptr(h as *mut LuaStr)) };
+        if let Some(s) = s {
+            let b = s.as_bytes().to_vec();
+            crate::runtime::gc_verify_probe::FREED_STR
+                .with(|f| f.borrow_mut().insert(h as usize, b));
+        }
+    }
+
     /// `gc-verify`: the address `h`, freed before, holds a new object.
     pub(in crate::runtime) fn forget_freed(&mut self, h: *mut GcHeader) {
-        self.recently_freed.remove(&(h as usize));
+        self.hooks.recently_freed.remove(&(h as usize));
         crate::runtime::gc_verify_probe::FREED.with(|f| f.borrow_mut().remove(&(h as usize)));
     }
 
@@ -256,8 +325,7 @@ impl Heap {
 ///
 /// # Safety
 /// `h` and `parent` head allocated objects.
-#[cfg(feature = "gc-verify")]
-pub(super) unsafe fn dead_child(
+pub(crate) unsafe fn dead_child(
     h: *mut GcHeader,
     (new_white, parent, ctx): (u8, *mut GcHeader, &'static str),
 ) {
@@ -265,7 +333,7 @@ pub(super) unsafe fn dead_child(
     unsafe {
         let f = (*h).flags;
         // a string only a load holds is kept by the sweep
-        if is_white(f) && f & new_white == 0 && !super::parse::is_kept(h) {
+        if is_white(f) && f & new_white == 0 && !crate::runtime::puc::verify::is_kept(h) {
             let what = if (*h).tag == ObjTag::Str {
                 String::from_utf8_lossy(string::bytes_of(h as *const LuaStr)).into_owned()
             } else {

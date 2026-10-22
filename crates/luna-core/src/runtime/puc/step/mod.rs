@@ -55,9 +55,6 @@ pub(crate) trait StepHost {
     fn shrink_swept_52(&mut self);
     /// The end of 5.2's sweep: the main thread shrunk.
     fn sweep_main_52(&mut self);
-    /// The collector is in generational mode.
-    #[cfg(feature = "gc-trace")]
-    fn generational(&self) -> bool;
 }
 
 /// `restartcollection` (5.1 `markroot`): the roots marked, the cycle
@@ -76,8 +73,7 @@ pub(crate) fn puc_step<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> 
     }
     gc_hold_threads(h);
     h.before_step();
-    #[cfg(feature = "gc-trace")]
-    trace_step(h, false);
+    crate::runtime::gc_hooks::hook_step(h, false);
     let r = match d {
         Dialect::L51 => step_51(h),
         Dialect::L52 => step_52(h),
@@ -88,8 +84,7 @@ pub(crate) fn puc_step<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> 
     h.heap().refresh_gc_limit();
     // a 5.1–5.3 finalizer's error is thrown out of the step
     r?;
-    #[cfg(feature = "gc-trace")]
-    trace_step(h, true);
+    crate::runtime::gc_hooks::hook_step(h, true);
     Ok(())
 }
 
@@ -97,8 +92,7 @@ pub(crate) fn puc_step<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> 
 /// finalizer running): the debt put back so that it is not called
 /// again soon; 5.5 does so only for a collector the program stopped.
 pub(super) fn gc_step_not_running<H: StepHost + ?Sized>(h: &mut H) {
-    #[cfg(feature = "gc-trace")]
-    trace_step(h, false);
+    crate::runtime::gc_hooks::hook_step(h, false);
     let d = h.heap().puc.dialect;
     let debt = match d {
         Dialect::L52 => Some(-stepsize_52(&h.heap().puc.sizes)),
@@ -111,8 +105,7 @@ pub(super) fn gc_step_not_running<H: StepHost + ?Sized>(h: &mut H) {
         h.heap().puc.pace.set_debt(d, bytes, debt);
         h.heap().refresh_gc_limit();
     }
-    #[cfg(feature = "gc-trace")]
-    trace_step(h, true);
+    crate::runtime::gc_hooks::hook_step(h, true);
 }
 
 /// A full collection's steps from its finalizers to its pause
@@ -134,31 +127,6 @@ pub(crate) fn gc_steps_to_pause<H: StepHost + ?Sized>(h: &mut H) -> Result<(), L
         };
     }
     Ok(())
-}
-
-/// The accounting trace's line for a step, as PUC's `luaC_step` logs
-/// it (`g` before, `G` after).
-#[cfg(feature = "gc-trace")]
-pub(super) fn trace_step<H: StepHost + ?Sized>(h: &mut H, after: bool) {
-    let d = h.heap().puc.dialect;
-    let c = if after { 'G' } else { 'g' };
-    let bytes = h.heap().bytes();
-    let p = h.heap().puc.pace;
-    let st = p.state().number(d);
-    let kind = i32::from(h.generational());
-    match d {
-        Dialect::L51 => h.heap().trace.line(format_args!(
-            "{c} {st} {bytes} {} {} {}",
-            p.threshold(),
-            p.estimate,
-            p.dept
-        )),
-        _ => h.heap().trace.line(format_args!(
-            "{c} {st} {bytes} {} {} {kind}",
-            p.debt(d, bytes),
-            p.estimate
-        )),
-    }
 }
 
 /// `lua_gc(L, LUA_GCSTEP, n)` (`collectgarbage("step", n)`) in
@@ -247,17 +215,6 @@ pub(super) fn puc_step_forced<H: StepHost + ?Sized>(h: &mut H) -> Result<(), Lua
         h.heap().gc_restore_run(run);
     }
     r
-}
-
-/// The end of a full collection in the trace: 5.5 with its `GCmarked`.
-#[cfg(feature = "gc-trace")]
-pub(crate) fn trace_full_end<H: StepHost + ?Sized>(h: &mut H) {
-    if h.heap().puc.dialect == Dialect::L55 {
-        let marked = h.heap().puc.pace.estimate;
-        h.heap().trace.line(format_args!("x {marked}"));
-    } else {
-        h.heap().trace.line(format_args!("x"));
-    }
 }
 
 /// The threads as the collector is about to find them.

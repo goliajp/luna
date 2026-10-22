@@ -43,10 +43,8 @@ impl Heap {
         self.whiten_unborn();
         self.live -= freed;
         // a sweep keeps the order of `all` (see `Heap::keep_young`)
-        #[cfg(feature = "gc-verify")]
-        self.verify_no_dangling("full_sweep");
-        #[cfg(any(debug_assertions, feature = "gc-verify"))]
-        self.verify_slow_bits("full_sweep");
+        self.check_no_dangling("full_sweep");
+        self.check_slow_bits("full_sweep");
         freed
     }
 
@@ -59,11 +57,9 @@ impl Heap {
     pub(crate) fn gc_sweep_step(&mut self, budget: usize) -> bool {
         self.sweep_objects(budget, false);
         // after every step: the mutator runs between them
-        #[cfg(feature = "gc-verify")]
-        self.verify_no_dangling("sweep_step");
+        self.check_no_dangling("sweep_step");
         if self.phase != GcPhase::Sweep {
-            #[cfg(any(debug_assertions, feature = "gc-verify"))]
-            self.verify_slow_bits("sweep_step");
+            self.check_slow_bits("sweep_step");
             true
         } else {
             false
@@ -142,29 +138,18 @@ impl Heap {
                 let cur = *link;
                 if cur.is_null() {
                     self.end_sweep();
-                    #[cfg(feature = "gc-verify")]
-                    self.verify_no_dangling("sweep_counted");
+                    self.check_no_dangling("sweep_counted");
                     return (n, true);
                 }
                 if n >= quota {
-                    #[cfg(feature = "gc-verify")]
-                    self.verify_no_dangling("sweep_counted");
+                    self.check_no_dangling("sweep_counted");
                     return (n, false);
                 }
                 self.sweep_open_at(cur);
                 n += self.env51_sweep(cur, false);
                 let (f, cls) = ((*cur).flags, (*cur).cls);
                 let dead = is_white(f) && (f & new_white) == 0;
-                #[cfg(feature = "gc-trace")]
-                self.trace_swept(cur, dead);
-                #[cfg(feature = "gc-verify")]
-                assert_eq!(
-                    self.listed(cur),
-                    ((*cur).tag != ObjTag::Ghost || super::parse::is_load_tab(cur))
-                        && self.puc_listed(cur, strt),
-                    "[gc-verify] class byte of a {:?}",
-                    (*cur).tag
-                );
+                self.hook_swept(cur, dead, strt);
                 if self.listed(cur) {
                     n += 1;
                 } else if (*cur).tag == ObjTag::Ghost {
@@ -186,7 +171,7 @@ impl Heap {
                     *link = (*cur).next;
                     // gc-verify notes every free in `free_obj`; 5.1 and 5.2
                     // strings mostly go through the string table's sweep
-                    if !cfg!(feature = "gc-verify") && !strt && Self::is_plain_str(cur) {
+                    if !crate::runtime::gc_hooks::VERIFY && !strt && Self::is_plain_str(cur) {
                         self.free_plain_str(cur as *mut LuaStr);
                     } else {
                         self.free_obj(cur);
@@ -233,43 +218,6 @@ impl Heap {
                 cls & UNLISTED == 0 && !own && f & DEFERRED == 0
             } else {
                 (f & FIN) | (sub & UNCOUNTED) | (cls & UNLISTED) == 0
-            }
-        }
-    }
-
-    /// Whether PUC keeps the object behind `h` on the list it sweeps
-    /// (`allgc`, 5.1 `rootgc`): one of PUC's, with no finalizer pending,
-    /// and (`strt`) no string the string table holds.
-    ///
-    /// # Safety
-    /// `h` heads an allocated object of this heap.
-    #[cfg(feature = "gc-verify")]
-    unsafe fn puc_listed(&self, h: *mut GcHeader, strt: bool) -> bool {
-        // SAFETY: the caller's contract
-        unsafe {
-            let d51 = self.dialect() == Dialect::L51;
-            let own51 = match (*h).tag {
-                ObjTag::Coro => false,
-                ObjTag::Native => (*h).cls & LUNA_ONLY != 0,
-                ObjTag::Userdata => {
-                    is_uncounted(h)
-                        && !matches!((*(h as *const Userdata)).payload, UserdataPayload::File(_))
-                }
-                _ => is_uncounted(h),
-            };
-            let pending51 = d51 && (*h).flags & DEFERRED != 0;
-            if (if d51 { own51 } else { is_uncounted(h) })
-                || (*h).flags & FIN != 0 && !d51
-                || pending51
-            {
-                return false;
-            }
-            match (*h).tag {
-                ObjTag::Str => {
-                    !strt || (self.dialect() == Dialect::L52 && !(*(h as *const LuaStr)).is_short())
-                }
-                ObjTag::Table => !self.is_own_table(h as *const Table),
-                _ => true,
             }
         }
     }

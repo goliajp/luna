@@ -43,10 +43,6 @@ impl StepHost for Vm {
     fn sweep_main_52(&mut self) {
         Vm::sweep_main_52(self);
     }
-    #[cfg(feature = "gc-trace")]
-    fn generational(&self) -> bool {
-        self.gc_mode_is_generational()
-    }
 }
 
 impl Vm {

@@ -1,0 +1,103 @@
+//! gc-verify's checks of the PUC model: the string table's count of
+//! strings, the strings a load keeps for the sweep.
+
+use super::*;
+use crate::runtime::puc::records::ghost::{Ghost, SHORT, TAKEN};
+use crate::runtime::puc::records::parse::KEPT;
+use crate::runtime::puc::records::strt::SWEPT;
+
+/// Whether `h` is a string only a load holds ([`KEPT`]), which the sweep
+/// keeps.
+///
+/// # Safety
+/// `h` heads an allocated object.
+pub(in crate::runtime) unsafe fn is_kept(h: *mut GcHeader) -> bool {
+    // SAFETY: the caller's contract
+    unsafe { (*h).tag == ObjTag::Str && (*h).cls & KEPT != 0 }
+}
+
+impl Heap {
+    /// `gc-verify`, once marking is done (the last sweep over): PUC's
+    /// string table holds a place for each counted short string luna has
+    /// and each one a record holds. Panics when the count went astray.
+    pub(in crate::runtime) fn verify_string_count(&self, ctx: &str) {
+        // and "not enough memory", which PUC makes at the start and luna
+        // does not
+        let mut n = self.ghost_short_strings() + 1;
+        // and 5.1's strings luna's stand for
+        let strt = crate::runtime::puc::STRT_STAND;
+        n += self
+            .puc
+            .stand_ins
+            .iter()
+            .filter(|s| s.1 & strt != 0)
+            .count();
+        for mut cur in [self.list_head(), self.fixed_head()] {
+            // SAFETY: the lists link this heap's live objects
+            unsafe {
+                while !cur.is_null() {
+                    if (*cur).tag == ObjTag::Str
+                        && (*(cur as *const LuaStr)).len() <= self.puc.short_max
+                        && (*cur).sub & (UNCOUNTED | EXTERNAL | SWEPT) == 0
+                    {
+                        n += 1;
+                    }
+                    cur = (*cur).next;
+                }
+            }
+        }
+        assert_eq!(
+            n, self.puc.strt_nuse,
+            "{ctx}: counted short strings against PUC's string table"
+        );
+    }
+
+    /// `gc-verify`: the short strings the live records hold, each a place
+    /// in PUC's string table.
+    pub(in crate::runtime) fn ghost_short_strings(&self) -> usize {
+        let mut n = 0;
+        let mut cur = self.list_head();
+        // SAFETY: `all` links this heap's live objects; a header tagged
+        // `Ghost` is a `Ghost`
+        unsafe {
+            while !cur.is_null() {
+                if (*cur).tag == ObjTag::Ghost && (*cur).sub == 0 {
+                    let sizes = &(*(cur as *const Ghost)).sizes;
+                    n += sizes
+                        .iter()
+                        .filter(|&&s| s & (SHORT | TAKEN) == SHORT)
+                        .count();
+                }
+                cur = (*cur).next;
+            }
+        }
+        n
+    }
+
+    /// `gc-verify`: a string marked [`KEPT`] is one PUC frees in the sweep
+    /// under way and luna keeps: a string of PUC's still counted, dead to
+    /// this cycle (unmarked, not the current white), on the list the sweep
+    /// has still to reach. The sweep turns it into an uncounted string of
+    /// luna's and drops the mark; a marking that reaches it first drops the
+    /// mark too. Panics on the first that is anything else.
+    pub(in crate::runtime) fn verify_kept(&self, ctx: &str) {
+        let mut cur = self.list_head();
+        // SAFETY: the links of `all` lead to live objects; only headers are
+        // read
+        unsafe {
+            while !cur.is_null() {
+                let (tag, f, cls) = ((*cur).tag, (*cur).flags, (*cur).cls);
+                if tag == ObjTag::Str && cls & KEPT != 0 {
+                    let dead = is_white(f) && f & self.white() == 0;
+                    assert!(
+                        dead && !is_uncounted(cur) && self.phase() == GcPhase::Sweep,
+                        "[gc-verify] {ctx}: kept string {cur:p}: flags {f:#x}, uncounted {}, phase {:?}",
+                        is_uncounted(cur),
+                        self.phase()
+                    );
+                }
+                cur = (*cur).next;
+            }
+        }
+    }
+}

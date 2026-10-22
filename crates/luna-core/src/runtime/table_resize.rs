@@ -109,8 +109,7 @@ impl Table {
         } else {
             hash_entries.next_power_of_two()
         };
-        #[cfg(feature = "gc-trace")]
-        if !heap.is_own_table(self) && heap.refuse_table(self.asize as usize, new_asize, hsize) {
+        if heap.refuse_table_now(self, self.asize as usize, new_asize, hsize) {
             return Err(TableError::Memory(crate::runtime::mem::Oom(mem)));
         }
         // both new parts are allocated before the table changes, so a

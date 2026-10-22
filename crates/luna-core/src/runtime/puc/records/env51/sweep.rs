@@ -60,10 +60,7 @@ impl Heap {
         if !found {
             return 0;
         }
-        #[cfg(feature = "gc-trace")]
-        self.trace.line(format_args!("e51 {n} {freed} {first}"));
-        #[cfg(not(feature = "gc-trace"))]
-        let _ = (freed, first);
+        self.trace_line(format_args!("e51 {n} {freed} {first}"));
         n
     }
 

@@ -7,8 +7,7 @@
 use super::*;
 
 /// One allocation-relevant step of PUC's parser or code generator.
-#[derive(Clone, Copy)]
-#[cfg_attr(feature = "gc-trace", derive(Debug))]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum PEv {
     /// a function starts (`open_func`, with 5.4+'s `addprototype`)
     Open,

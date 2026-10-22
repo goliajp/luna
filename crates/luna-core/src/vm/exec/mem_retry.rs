@@ -14,8 +14,7 @@ impl Vm {
     /// set it to below the frame's end, else the whole frame. Worked out
     /// here, when memory has run out, so the instructions pay nothing.
     pub(crate) fn alloc_top(&self) -> u32 {
-        #[cfg(feature = "gc-trace")]
-        if let Some(top) = self.heap.trace.alloc_top {
+        if let Some(top) = self.heap.trace_alloc_top() {
             return top;
         }
         if let Some(top) = self.native_top() {

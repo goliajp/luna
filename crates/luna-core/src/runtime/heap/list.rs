@@ -22,13 +22,6 @@ impl Heap {
         self.all
     }
 
-    /// The first object never swept (`fixedgc`).
-    #[cfg(feature = "gc-verify")]
-    #[inline]
-    pub(in crate::runtime) fn fixed_head(&self) -> *mut GcHeader {
-        self.fixed
-    }
-
     /// The heap is being dropped: nothing is counted.
     #[inline]
     pub(in crate::runtime) fn is_dropping(&self) -> bool {
@@ -63,8 +56,7 @@ impl Heap {
         }
         self.all = h;
         self.live += 1;
-        #[cfg(feature = "gc-verify")]
-        self.forget_freed(h);
+        self.hook_reborn(h);
     }
 
     /// `h`, off the list, back at its head (a string the string sweep

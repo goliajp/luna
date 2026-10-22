@@ -188,9 +188,8 @@ impl Vm {
         s: Gc<LuaStr>,
         k: PKey,
     ) -> Result<(), crate::runtime::mem::Oom> {
-        #[cfg(feature = "gc-trace")]
-        if !t.contains(k) {
-            self.heap.trace.line(format_args!(
+        if crate::runtime::gc_hooks::TRACE && !t.contains(k) {
+            self.heap.trace_line(format_args!(
                 "K {} {} {:08x}",
                 t.id,
                 String::from_utf8_lossy(s.as_bytes()).escape_debug(),

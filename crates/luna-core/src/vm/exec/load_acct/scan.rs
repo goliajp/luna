@@ -168,8 +168,9 @@ impl Vm {
             {
                 break;
             }
-            #[cfg(feature = "gc-trace")]
-            self.heap.trace.line(format_args!("E {tok} {ev:?}"));
+            if crate::runtime::gc_hooks::TRACE {
+                self.heap.trace_line(format_args!("E {tok} {ev:?}"));
+            }
             if tok >= due {
                 self.scan_until(r, &mut strs, &mut peaks, tok)?;
                 due = [

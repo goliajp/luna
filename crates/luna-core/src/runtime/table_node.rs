@@ -144,8 +144,7 @@ impl super::Table {
     /// one a hit is exact and a miss proves nothing.
     #[inline(always)]
     fn str_node_by_ptr(&self, key: Gc<crate::runtime::string::LuaStr>) -> Option<usize> {
-        #[cfg(feature = "gc-verify")]
-        self.verify_find_node_keys(Value::Str(key));
+        self.hook_find_node(Value::Str(key));
         let mask = self.node_mask;
         if mask >> 31 != 0 {
             return None;
@@ -180,7 +179,6 @@ impl super::Table {
 
     /// [`Self::str_slot_by_ptr`] for a write.
     #[inline(always)]
-    #[cfg_attr(feature = "gc-verify", allow(dead_code))]
     pub(crate) fn str_slot_by_ptr_mut(
         &mut self,
         key: Gc<crate::runtime::string::LuaStr>,

@@ -47,6 +47,8 @@ pub(crate) struct Trace {
     refused: Option<usize>,
     /// the bytes counted since it, itself included
     refused_bytes: i64,
+    /// the collector is in generational mode (the steps' lines say so)
+    pub(crate) generational: bool,
     /// the line being written is a block PUC leaves out of its count
     pub(crate) raw: bool,
     /// the refused growth was a block PUC leaves out of its count
@@ -83,6 +85,7 @@ impl Default for Trace {
             refuse_every: std::env::var_os("R38_REFUSE_EVERY").is_some(),
             refused: None,
             refused_bytes: 0,
+            generational: false,
             raw: false,
             refused_raw: false,
             alloc_top: None,
@@ -91,6 +94,17 @@ impl Default for Trace {
 }
 
 impl Trace {
+    /// A block going from `old` to `new` bytes: `a 0 <new>`, `d <old>` or
+    /// `r <old> <new>`.
+    pub(crate) fn block(&mut self, old: usize, new: usize) {
+        match (old, new) {
+            (0, 0) => {}
+            (0, n) => self.line(format_args!("a 0 {n}")),
+            (o, 0) => self.line(format_args!("d {o}")),
+            (o, n) => self.line(format_args!("r {o} {n}")),
+        }
+    }
+
     pub(crate) fn flush(&mut self) {
         if let Some(o) = &mut self.out {
             let _ = o.flush();
@@ -246,4 +260,36 @@ fn callers() -> String {
         }
     }
     out.join("<")
+}
+
+/// The tag PUC passes its allocation function for a new object of `kind`
+/// (5.1 passes none).
+pub(crate) fn puc_tag(
+    kind: crate::runtime::puc::PucKind,
+    d: crate::runtime::dialect::Dialect,
+) -> usize {
+    use crate::runtime::dialect::Dialect;
+    use crate::runtime::puc::PucKind::*;
+    match (d, kind) {
+        (Dialect::L51, _) => 0,
+        (_, ShortStr) => 4,
+        // PUC passes the base type, not the variant
+        (_, LongStr) => 4,
+        (_, Table) => 5,
+        (_, LuaClosure) => 6,
+        (_, CClosure) => 6,
+        (_, Userdata) => 7,
+        (_, Thread) => 8,
+        // 5.3's upvalues are plain blocks
+        (Dialect::L53, Upval) => 0,
+        (Dialect::L52 | Dialect::L53, Proto) => 9,
+        (Dialect::L52, Upval) => 10,
+        (_, Upval) => 9,
+        (_, Proto) => 10,
+    }
+}
+
+/// The seed the instrumented PUC build takes from `R38_SEED` too.
+pub(crate) fn fixed_seed() -> Option<u32> {
+    std::env::var("R38_SEED").ok().and_then(|s| s.parse().ok())
 }

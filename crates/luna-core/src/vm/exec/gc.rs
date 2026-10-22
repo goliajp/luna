@@ -1,8 +1,10 @@
 //! Collector pacing, the root set and full collections.
 
 use super::*;
+#[cfg(feature = "gc-verify")]
 mod gc_verify;
 mod roots;
+#[cfg(feature = "gc-trace")]
 mod trace_k;
 
 impl Vm {
@@ -11,16 +13,15 @@ impl Vm {
     /// (`entergen`), which runs no finalizer.
     pub(crate) fn gc_switch_mode(&mut self, new: &'static str) -> &'static str {
         let prev = std::mem::replace(&mut self.gc_mode, new);
+        self.heap.hook_mode(new == "generational");
         if new == "generational" && prev != new && self.version >= LuaVersion::Lua54 {
-            #[cfg(feature = "gc-trace")]
-            self.heap.trace.line(format_args!("X"));
+            self.heap.trace_line(format_args!("X"));
             if !self.gc_finalizing && !self.heap.no_gc() {
                 self.clear_dead_stack(false);
                 self.full_collect();
                 crate::runtime::puc::step::gc_minor_debt(self);
             }
-            #[cfg(feature = "gc-trace")]
-            self.heap.trace.line(format_args!("x"));
+            self.heap.trace_line(format_args!("x"));
         }
         if prev != new && self.version == LuaVersion::Lua52 {
             match new {
@@ -61,28 +62,10 @@ impl Vm {
     /// stack top there: the slots from `live_top` up are dead to it. An
     /// object made while marking survives if the atomic step reaches it.
     #[inline(always)]
-    #[cfg_attr(feature = "gc-trace", track_caller)]
+    #[track_caller]
     pub(crate) fn checkpoint(&mut self, live_top: u32) -> Result<(), LuaError> {
         self.refused_growth()?;
-        #[cfg(feature = "gc-trace")]
-        self.trace_checkpoint();
-        // gc-verify: the live top never cuts into a Lua frame that is running
-        #[cfg(feature = "gc-verify")]
-        if let Some(CallFrame::Lua(f)) = self
-            .frames
-            .iter()
-            .rev()
-            .find(|f| matches!(f, CallFrame::Lua(_)))
-            && live_top < f.base
-        {
-            panic!(
-                "[gc-verify] checkpoint with live top {live_top} below the running Lua frame's base {}",
-                f.base
-            );
-        }
-        #[cfg(feature = "gc-stress")]
-        if !self.heap.gc_is_stopped() {
-            self.stress_checkpoint(live_top);
+        if self.hook_checkpoint(live_top) {
             return Ok(());
         }
         // everything live is rooted here; what is allocated next is young
@@ -195,8 +178,7 @@ impl Vm {
         if self.gc_finalizing {
             return Ok(0);
         }
-        #[cfg(feature = "gc-trace")]
-        self.heap.trace.line(format_args!("X"));
+        self.heap.trace_line(format_args!("X"));
         let mut freed = 0;
         if !self.heap.no_gc() {
             // 5.2 calls pending finalizers first; its atomic step clears the stack
@@ -206,12 +188,10 @@ impl Vm {
                 self.clear_dead_stack(false);
             }
             freed = self.full_collect();
-            #[cfg(feature = "gc-verify")]
-            self.verify_frame_regs_live("collect_garbage");
+            self.hook_frames_live("collect_garbage");
             self.full_gc_finalizers()?;
         }
-        #[cfg(feature = "gc-trace")]
-        crate::runtime::puc::step::trace_full_end(self);
+        crate::runtime::gc_hooks::hook_full_end(self);
         Ok(freed)
     }
 
@@ -225,22 +205,13 @@ impl Vm {
     /// cuts the comparison with PUC's.
     #[doc(hidden)]
     pub fn trace_mark(&mut self, name: &str) {
-        #[cfg(feature = "gc-trace")]
-        {
-            self.heap.trace.line(format_args!("M {name}"));
-            // `R38_EXIT_AT=<name>`: stop the program at this mark
-            if std::env::var("R38_EXIT_AT").is_ok_and(|at| at == name) {
-                self.heap.trace.flush();
-                std::process::exit(0);
-            }
-        }
-        let _ = name;
+        self.heap.hook_mark(name);
     }
 
     /// 5.2's `luaD_precall` checks for a collection on every call, the
     /// `CallInfo` made, `L->top` at `top` (a Lua function's whole frame).
     #[inline(always)]
-    #[cfg_attr(feature = "gc-trace", track_caller)]
+    #[track_caller]
     pub(crate) fn precall_checkpoint(&mut self, top: u32) -> Result<(), LuaError> {
         if self.heap.rules().check_on_call() {
             return self.checkpoint(top);
@@ -251,7 +222,7 @@ impl Vm {
     /// A collection check of PUC's C API inside the running C function:
     /// its stack is live up to its top.
     #[inline]
-    #[cfg_attr(feature = "gc-trace", track_caller)]
+    #[track_caller]
     pub(crate) fn native_checkpoint(&mut self) -> Result<(), LuaError> {
         if self.checkpoint_idle() {
             return Ok(());
@@ -260,7 +231,7 @@ impl Vm {
     }
 
     #[inline(never)]
-    #[cfg_attr(feature = "gc-trace", track_caller)]
+    #[track_caller]
     pub(crate) fn native_checkpoint_due(&mut self) -> Result<(), LuaError> {
         let top = self.native_top().unwrap_or_else(|| self.lua_window_end());
         self.checkpoint(top)
@@ -270,11 +241,7 @@ impl Vm {
     /// checks it: only the safe point is noted.
     #[inline]
     pub(crate) fn checkpoint_idle(&mut self) -> bool {
-        let quiet = cfg!(not(any(
-            feature = "gc-trace",
-            feature = "gc-stress",
-            feature = "gc-verify"
-        )));
+        let quiet = !crate::runtime::gc_hooks::CHECKPOINTS_WATCHED;
         if quiet && !self.heap.gc_due() {
             self.heap.safe_point();
             return true;

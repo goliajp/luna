@@ -76,8 +76,7 @@ pub(super) fn shrink_thread(
         }
         return;
     }
-    #[cfg(feature = "gc-trace")]
-    heap.trace_shrink(sz.stack, inuse);
+    heap.hook_shrink(sz.stack, inuse);
     let stack = |heap: &mut crate::runtime::heap::Heap, sz: &mut ThreadSizes| {
         let s = stack_size::shrink(v, sz.stack, inuse);
         heap.acct_stack(sz.thread, sz.stack, s);

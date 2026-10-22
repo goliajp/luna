@@ -25,14 +25,11 @@ impl Heap {
             let size = n.max(32);
             let b = self.puc.gbuff.0.get_or_insert_with(|| LVec::new(mem));
             b.reserve_exact(size)?;
-            #[cfg(feature = "gc-trace")]
-            let waited = self.trace.refused();
+            let waited = self.refusal_waits();
             self.acct_part(old, size);
             // gc-trace: `R38_REFUSE` refused this growth of PUC's, which is
             // then as if the allocation failed
-            #[cfg(feature = "gc-trace")]
-            if !waited && self.trace.refused() {
-                let (_, bytes) = self.trace.take_refused();
+            if let Some(bytes) = self.take_new_refusal(waited) {
                 self.puc.bytes = (self.puc.bytes as i64 - bytes) as usize;
                 self.shrink_gbuff_to(old);
                 return Err(Oom(mem));

@@ -27,9 +27,8 @@ impl Vm {
         if self.frames.len() as u32 > self.g.ci_hint {
             self.note_level_out_of_line();
         }
-        #[cfg(any(debug_assertions, feature = "gc-verify"))]
         assert!(
-            self.ci_in_use() <= self.g.ci_alloc,
+            !crate::runtime::gc_hooks::DEBUG_CHECKS || self.ci_in_use() <= self.g.ci_alloc,
             "a call level went uncounted: the frame count bound is stale"
         );
     }
@@ -48,9 +47,8 @@ impl Vm {
         } else {
             self.g.ci_hint -= 1;
         }
-        #[cfg(any(debug_assertions, feature = "gc-verify"))]
         assert!(
-            self.ci_in_use() <= self.g.ci_alloc,
+            !crate::runtime::gc_hooks::DEBUG_CHECKS || self.ci_in_use() <= self.g.ci_alloc,
             "a native's level went uncounted: the frame count bound is stale"
         );
     }

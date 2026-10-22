@@ -26,8 +26,7 @@ impl Vm {
             return Ok(());
         }
         if self.heap.loads_held() {
-            #[cfg(feature = "gc-trace")]
-            self.trace_checkpoint();
+            self.hook_trace_checkpoint();
             return Ok(());
         }
         if self.checkpoint_idle() {

@@ -83,10 +83,8 @@ pub(crate) struct Marker {
     /// 5.2 and 5.3: the objects of PUC's luna's stand for, or null
     pub(in crate::runtime) stands: *const Vec<(*mut GcHeader, usize)>,
     /// `gc-verify`: instead of marking a child, report one the sweep about
-    /// to run would free (white, not the current white) while the object
-    /// being traced (the second) holds it; the check's name third
-    #[cfg(feature = "gc-verify")]
-    pub(in crate::runtime) verify: Option<(u8, *mut GcHeader, &'static str)>,
+    /// to run would free (see `gc_hooks::ChildCheck`)
+    pub(in crate::runtime) verify: crate::runtime::gc_hooks::ChildCheck,
 }
 
 /// Drain the gray stack: pop each marked object and trace its children until
@@ -222,10 +220,8 @@ impl Marker {
     /// `h` is the header of an object this heap allocated and has not freed.
     #[inline(always)]
     pub(crate) unsafe fn header(&mut self, h: *mut GcHeader) -> bool {
-        #[cfg(feature = "gc-verify")]
-        if let Some(check) = self.verify {
-            // SAFETY: as below
-            unsafe { super::verify::dead_child(h, check) };
+        // SAFETY: as below
+        if unsafe { self.verify.report(h) } {
             return false;
         }
         // SAFETY: `h` heads an allocated object (the caller's contract), and nothing is freed while marking; only the flag byte is touched

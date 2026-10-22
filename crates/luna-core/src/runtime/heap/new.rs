@@ -93,8 +93,7 @@ impl Heap {
             tobefnz: crate::runtime::mem::LVec::new(mem.mem()),
             tobefnz_head: 0,
             puc: Default::default(),
-            #[cfg(feature = "gc-trace")]
-            trace: Default::default(),
+            hooks: Default::default(),
             rules: crate::runtime::dialect::Rules::of(crate::version::LuaVersion::Lua55),
             gc_event_51: None,
             chunk_roots: Vec::new(),
@@ -106,8 +105,6 @@ impl Heap {
             table_pool: Vec::new(),
             slab: Default::default(),
             stdin_ud: ptr::null_mut(),
-            #[cfg(feature = "gc-verify")]
-            recently_freed: std::collections::HashSet::new(),
             mem,
         };
         h.make_memerr().ok()?;
@@ -238,9 +235,8 @@ pub(crate) fn fresh_seed() -> u32 {
 
 /// Hash seed from address entropy (ASLR) and clock, luaL_makeseed style.
 pub(super) fn make_seed() -> u32 {
-    // the instrumented PUC build takes its seed from `R38_SEED` too
-    #[cfg(feature = "gc-trace")]
-    if let Some(s) = std::env::var("R38_SEED").ok().and_then(|s| s.parse().ok()) {
+    // the instrumented PUC build takes its seed from the environment too
+    if let Some(s) = crate::runtime::gc_hooks::fixed_seed() {
         return s;
     }
     let stack_var = 0u8;

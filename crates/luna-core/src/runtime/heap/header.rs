@@ -99,12 +99,6 @@ impl GcHeader {
         }
     }
 
-    /// Whether SLOW agrees with BLACK and the read-only mark.
-    #[cfg(any(debug_assertions, feature = "gc-verify"))]
-    pub(crate) fn slow_consistent(&self) -> bool {
-        self.flags == self.with_slow(self.flags)
-    }
-
     pub(crate) fn new(tag: ObjTag) -> GcHeader {
         GcHeader {
             next: ptr::null_mut(),

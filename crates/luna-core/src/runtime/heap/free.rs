@@ -10,19 +10,7 @@ impl Heap {
     /// `h` heads a live object of this heap; the caller has read what it
     /// needs from it (its `next` link) and nothing uses it afterwards.
     pub(in crate::runtime) unsafe fn free_obj(&mut self, h: *mut GcHeader) {
-        #[cfg(feature = "gc-verify")]
-        {
-            self.recently_freed.insert(h as usize);
-            crate::runtime::gc_verify_probe::FREED.with(|f| f.borrow_mut().insert(h as usize));
-            // SAFETY: the caller's contract: `h` is still allocated, and
-            // read as a string when its tag says it is one
-            let s = unsafe { ((*h).tag == ObjTag::Str).then(|| Gc::from_ptr(h as *mut LuaStr)) };
-            if let Some(s) = s {
-                let b = s.as_bytes().to_vec();
-                crate::runtime::gc_verify_probe::FREED_STR
-                    .with(|f| f.borrow_mut().insert(h as usize, b));
-            }
-        }
+        self.hook_freed(h);
         // SAFETY: the caller's contract: `h` heads an unlinked object of this heap that nothing uses afterwards; its tag names the type it was boxed as (`adopt`, `new_table`, `alloc_str`), so each arm frees it with the matching layout; a short string stays in the string table's chains until removed here
         unsafe {
             if (*h).cls & STANDS != 0 {
@@ -168,11 +156,7 @@ impl Heap {
     pub(super) unsafe fn free_plain_str(&mut self, s: *mut LuaStr) {
         // SAFETY: the caller's contract: `s` is an unlinked string of this heap nothing uses afterwards; a short one is still in the string table
         unsafe {
-            #[cfg(feature = "gc-trace")]
-            if self.trace.where_ {
-                let b = String::from_utf8_lossy(string::bytes_of(s)).into_owned();
-                self.trace.line(format_args!("s {b:?}"));
-            }
+            self.hook_string_freed(s);
             if !self.dropping {
                 self.acct_string_free((*s).len());
                 if (*s).is_short() {

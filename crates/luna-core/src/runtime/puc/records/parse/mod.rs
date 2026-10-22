@@ -9,8 +9,6 @@ use crate::runtime::dialect::Dialect;
 use crate::runtime::mem::{LVec, Oom};
 
 mod mark;
-#[cfg(feature = "gc-verify")]
-pub(in crate::runtime) use mark::is_kept;
 mod unborn;
 pub(crate) use unborn::LoadsAside;
 
@@ -218,8 +216,7 @@ impl Heap {
                 return (*h).cls & KEPT != 0 && self.keeper_kept(h);
             }
             (*h).cls &= !KEPT;
-            #[cfg(feature = "gc-trace")]
-            self.trace.line(format_args!(
+            self.trace_line(format_args!(
                 "kept {}",
                 (*(h as *const crate::runtime::LuaStr)).len()
             ));

@@ -29,8 +29,7 @@ impl Heap {
     /// [`Heap::intern`], failing when memory runs out.
     #[inline]
     pub fn try_intern(&mut self, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
-        #[cfg(feature = "gc-trace")]
-        if self.refuse_string(bytes.len()) {
+        if self.refuse_string_now(bytes.len()) {
             return Err(Oom(self.mem.mem()));
         }
         match self.intern_or_none(bytes) {
@@ -51,11 +50,7 @@ impl Heap {
             if is_new {
                 // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
                 unsafe { self.link(p as *mut GcHeader) };
-                #[cfg(feature = "gc-trace")]
-                if self.trace.where_ {
-                    let b = String::from_utf8_lossy(bytes).into_owned();
-                    self.trace.line(format_args!("s+ {b:?}"));
-                }
+                self.hook_string_made(p);
                 self.acct_new_string(p as *mut GcHeader, bytes.len());
             } else {
                 return Some(self.found_string(p, bytes.len()));
@@ -158,8 +153,7 @@ impl Heap {
     /// the parts are copied into.
     pub(crate) fn try_intern_parts(&mut self, parts: &[&[u8]]) -> Result<Gc<LuaStr>, Oom> {
         let n: usize = parts.iter().map(|p| p.len()).sum();
-        #[cfg(feature = "gc-trace")]
-        if self.refuse_string(n) {
+        if self.refuse_string_now(n) {
             return Err(Oom(self.mem.mem()));
         }
         if n <= string::MAX_SHORT_LEN {

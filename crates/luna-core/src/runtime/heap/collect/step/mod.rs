@@ -188,8 +188,7 @@ impl Heap {
             unsafe {
                 blacken(h, &mut m);
                 let w = self.object_work(h, run) + m.leaf_bytes;
-                #[cfg(feature = "gc-trace")]
-                self.trace_prop(h, w, run);
+                self.hook_prop(h, w, run);
                 *remaining -= w;
             }
             // a thread whose values the VM holds: the VM marks them next
@@ -203,59 +202,6 @@ impl Heap {
         }
         self.stash_marker(m);
         out
-    }
-
-    /// `R38_PROP`: the object `h` traversed with work `w`.
-    #[cfg(feature = "gc-trace")]
-    pub(super) unsafe fn trace_prop(&mut self, h: *mut GcHeader, w: i64, run: Running) {
-        // SAFETY: the caller's contract: `h` heads an allocated object
-        unsafe {
-            if !self.trace.prop {
-                return;
-            }
-            {
-                let (a, n) = match (*h).tag {
-                    ObjTag::Table => {
-                        let t = &*(h as *const Table);
-                        (t.asize as usize, t.node_count())
-                    }
-                    ObjTag::Coro if h == run.h => (run.size as usize, run.ci as usize),
-                    ObjTag::Coro if h == run.main => (run.main_size as usize, run.main_ci as usize),
-                    ObjTag::Coro => {
-                        let c = &*(h as *const crate::runtime::Coro);
-                        (c.stack_size as usize, c.ci_alloc as usize)
-                    }
-                    _ => (0, 0),
-                };
-                let mut k = String::from("-");
-                if (*h).tag == ObjTag::Table {
-                    let t = &*(h as *const Table);
-                    if let Some(s) = t.first_str_key() {
-                        k = String::from_utf8_lossy(s.as_bytes()).into_owned();
-                    }
-                } else if (*h).tag == ObjTag::Native {
-                    let n = &*(h as *const crate::runtime::NativeClosure);
-                    k = format!("{:p}", n.f as *const ());
-                } else if (*h).tag == ObjTag::Userdata {
-                    let u = &*(h as *const crate::runtime::Userdata);
-                    let kind = match &u.payload {
-                        crate::runtime::userdata::UserdataPayload::File(_) => "file",
-                        crate::runtime::userdata::UserdataPayload::Empty => "empty",
-                        _ => "host",
-                    };
-                    k = format!("{kind}/{}/{}", u.puc_size, is_uncounted(h));
-                }
-                // a record of 5.1's environments as the table or closure
-                // it stands for
-                let mut tag = (*h).tag as u8;
-                if super::env51::is_phantom(h) {
-                    let t = super::env51::phantom_is_table(h);
-                    tag = if t { ObjTag::Table } else { ObjTag::Native } as u8;
-                    k = String::from("env51");
-                }
-                self.trace.line(format_args!("p {tag} {w} {a} {n} {k}"));
-            }
-        }
     }
 
     /// A sweep with nothing dead, as 5.5's `minor2inc` starts one: the

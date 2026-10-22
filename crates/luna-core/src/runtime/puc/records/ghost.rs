@@ -17,12 +17,12 @@ pub(crate) struct Ghost {
     pub(crate) sizes: LVec<u32>,
 }
 
-const SHORT: u32 = 1 << 31;
+pub(in crate::runtime::puc) const SHORT: u32 = 1 << 31;
 /// a part freed with the object before it, not an object of its own
 const PART: u32 = 1 << 30;
 /// an object luna made after all, which stands for it: neither freed nor
 /// swept here
-const TAKEN: u32 = 1 << 29;
+pub(in crate::runtime::puc) const TAKEN: u32 = 1 << 29;
 const FLAGS: u32 = SHORT | PART | TAKEN;
 
 /// Where an object's record is (its record and the object's place in
@@ -205,29 +205,6 @@ impl Heap {
             n += i64::from(s & (PART | TAKEN) == 0);
         }
         (n, g.sizes.is_empty())
-    }
-
-    /// `gc-verify`: the short strings the live records hold, each a place
-    /// in PUC's string table.
-    #[cfg(feature = "gc-verify")]
-    pub(in crate::runtime) fn ghost_short_strings(&self) -> usize {
-        let mut n = 0;
-        let mut cur = self.list_head();
-        // SAFETY: `all` links this heap's live objects; a header tagged
-        // `Ghost` is a `Ghost`
-        unsafe {
-            while !cur.is_null() {
-                if (*cur).tag == ObjTag::Ghost && (*cur).sub == 0 {
-                    let sizes = &(*(cur as *const Ghost)).sizes;
-                    n += sizes
-                        .iter()
-                        .filter(|&&s| s & (SHORT | TAKEN) == SHORT)
-                        .count();
-                }
-                cur = (*cur).next;
-            }
-        }
-        n
     }
 
     /// A record of PUC's objects freed: each one's free counted.

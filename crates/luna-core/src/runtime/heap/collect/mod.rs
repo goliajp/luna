@@ -74,8 +74,7 @@ impl Heap {
             env51: self.env51_ptr(),
             parse: self.parse_ptr(),
             stands: std::ptr::null(),
-            #[cfg(feature = "gc-verify")]
-            verify: None,
+            verify: Default::default(),
         }
     }
 
@@ -131,8 +130,7 @@ impl Heap {
         }
         self.atomic_tail(m, None);
         self.settle_sizer(m);
-        #[cfg(feature = "gc-trace")]
-        self.trace_listed();
+        self.hook_listed();
         debug_assert!(m.stack.is_empty() && !m.overflow);
         self.gray = m.stack.take();
     }
@@ -299,14 +297,7 @@ impl Heap {
         // upcoming sweep and the table left holding a dangling pointer.
         // Nothing is dangling *yet*, so the reporter may safely print
         // string contents to identify the key.
-        #[cfg(feature = "gc-verify")]
-        self.verify_tricolor("atomic_tail");
-        #[cfg(feature = "gc-verify")]
-        self.verify_black_children("atomic_tail");
-        #[cfg(feature = "gc-verify")]
-        self.verify_string_count("atomic_tail");
-        #[cfg(any(debug_assertions, feature = "gc-verify"))]
-        self.verify_slow_bits("atomic_tail");
+        self.check_after_atomic("atomic_tail");
         dead
     }
 
@@ -339,8 +330,7 @@ impl Heap {
             env51: self.env51_ptr(),
             parse: self.parse_ptr(),
             stands: &self.puc.stand_ins,
-            #[cfg(feature = "gc-verify")]
-            verify: None,
+            verify: Default::default(),
         }
     }
 
@@ -356,27 +346,5 @@ impl Heap {
             cached_protos: m.cached_protos,
             no_ephemeron,
         });
-    }
-
-    #[cfg(any(feature = "gc-stress", feature = "gc-verify"))]
-    /// Whether `h` is an object of this heap the collector keeps: on the
-    /// object lists, and not one a pending sweep frees. Walks every object;
-    /// for checks tests turn on.
-    pub(crate) fn holds_live(&self, h: *const GcHeader) -> bool {
-        for head in [self.all, self.fixed] {
-            let mut cur = head;
-            while !cur.is_null() {
-                if cur as *const GcHeader == h {
-                    // SAFETY: an object on the lists is allocated
-                    let f = unsafe { (*cur).flags };
-                    let dying =
-                        self.phase == GcPhase::Sweep && is_white(f) && f & self.current_white == 0;
-                    return !dying;
-                }
-                // SAFETY: as above
-                cur = unsafe { (*cur).next };
-            }
-        }
-        false
     }
 }

@@ -21,7 +21,6 @@ impl Vm {
 
     /// [`Vm::raw_set`] when a first attempt at the same store already ran
     /// out of memory: the emergency collection, then one more attempt.
-    #[cfg(not(feature = "gc-verify"))]
     #[cold]
     #[inline(never)]
     pub(super) fn raw_set_after_oom(

@@ -2,13 +2,11 @@
 //! hand-over to the metamethod chains for the rest.
 
 // gc-verify builds take every read and write through the probed paths
-#![cfg_attr(feature = "gc-verify", allow(dead_code))]
 
 use super::*;
 use crate::runtime::string::LuaStr;
 use crate::runtime::value::tag;
 use fast_arith::{raw_gc, raw_int, raw_tag};
-#[cfg_attr(feature = "gc-verify", allow(unused_imports))]
 use index_set::{table_raw_set_at, table_set_existing_at};
 
 /// Raw `tb[*pk]` with the key read in place (strings by pointer, integers
@@ -134,10 +132,11 @@ impl Vm {
     /// # Safety
     /// `pt` and `pk` point at initialised values and `dst` at a register.
     #[inline(always)]
-    #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
     pub(super) unsafe fn index_raw_at(pt: *const Value, pk: *const Value, dst: *mut Value) -> bool {
-        // gc-verify builds keep every read on the probed path
-        #[cfg(not(feature = "gc-verify"))]
+        // gc-verify builds keep every read and write on the probed path
+        if crate::runtime::gc_hooks::VERIFY {
+            return false;
+        }
         // SAFETY: the caller's contract; a table tag means a live table
         unsafe {
             if raw_tag(pt) == tag::TABLE {
@@ -153,13 +152,15 @@ impl Vm {
     /// # Safety
     /// As for `index_raw_at`, and `pk` points at a string.
     #[inline(always)]
-    #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
     pub(super) unsafe fn index_raw_kstr_at(
         pt: *const Value,
         pk: *const Value,
         dst: *mut Value,
     ) -> bool {
-        #[cfg(not(feature = "gc-verify"))]
+        // gc-verify builds keep every read and write on the probed path
+        if crate::runtime::gc_hooks::VERIFY {
+            return false;
+        }
         // SAFETY: the caller's contract; a table tag means a live table
         unsafe {
             if raw_tag(pt) == tag::TABLE {
@@ -198,13 +199,15 @@ impl Vm {
     /// # Safety
     /// `pk` points at a string and `dst` at a register.
     #[inline(always)]
-    #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
     pub(super) unsafe fn index_raw_kstr_key_at(
         t: Value,
         pk: *const Value,
         dst: *mut Value,
     ) -> bool {
-        #[cfg(not(feature = "gc-verify"))]
+        // gc-verify builds keep every read and write on the probed path
+        if crate::runtime::gc_hooks::VERIFY {
+            return false;
+        }
         if let Value::Table(tb) = t {
             // SAFETY: the caller's contract
             return unsafe { table_get_kstr_into(&tb, pk, dst) };
@@ -224,14 +227,16 @@ impl Vm {
     /// # Safety
     /// `pt`, `pk` and `pv` point at initialised values.
     #[inline(always)]
-    #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
     pub(super) unsafe fn newindex_raw_at(
         &mut self,
         pt: *const Value,
         pk: *const Value,
         pv: *const Value,
     ) -> bool {
-        #[cfg(not(feature = "gc-verify"))]
+        // gc-verify builds keep every read and write on the probed path
+        if crate::runtime::gc_hooks::VERIFY {
+            return false;
+        }
         // SAFETY: the caller's contract; a table tag means a live table,
         // which nothing else borrows while an opcode runs
         unsafe {
@@ -256,14 +261,16 @@ impl Vm {
     /// # Safety
     /// As for `newindex_raw_at`, and `pk` points at a string.
     #[inline(always)]
-    #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
     pub(super) unsafe fn newindex_raw_kstr_at(
         &mut self,
         pt: *const Value,
         pk: *const Value,
         pv: *const Value,
     ) -> bool {
-        #[cfg(not(feature = "gc-verify"))]
+        // gc-verify builds keep every read and write on the probed path
+        if crate::runtime::gc_hooks::VERIFY {
+            return false;
+        }
         // SAFETY: the caller's contract; a table tag means a live table
         unsafe {
             debug_assert_eq!(raw_tag(pk), tag::STR);
@@ -303,14 +310,16 @@ impl Vm {
     /// # Safety
     /// `pk` and `pv` point at initialised values.
     #[inline(always)]
-    #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
     pub(super) unsafe fn newindex_raw_key_at(
         &mut self,
         t: Value,
         pk: *const Value,
         pv: *const Value,
     ) -> bool {
-        #[cfg(not(feature = "gc-verify"))]
+        // gc-verify builds keep every read and write on the probed path
+        if crate::runtime::gc_hooks::VERIFY {
+            return false;
+        }
         if let Value::Table(tb) = t
             && tb.hdr.plain_store()
             // SAFETY: the caller's contract; see `newindex_raw_at`

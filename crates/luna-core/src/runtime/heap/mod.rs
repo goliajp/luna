@@ -205,13 +205,8 @@ pub struct Heap {
     threads: Vec<Gc<crate::runtime::Coro>>,
     /// PUC's own structures luna has none of (see `runtime::puc`)
     pub(crate) puc: puc::PucModel,
-    #[cfg(feature = "gc-trace")]
-    pub(crate) trace: crate::runtime::gc_trace::Trace,
-    /// `gc-verify` — headers freed since the last collect began: O(1)
-    /// read-time dangling probes (`Vm::op_index`) test membership here;
-    /// exact only under quarantining allocators (no immediate reuse).
-    #[cfg(feature = "gc-verify")]
-    pub(crate) recently_freed: std::collections::HashSet<usize>,
+    /// what the builds only tests use keep (`runtime::gc_hooks`)
+    pub(crate) hooks: crate::runtime::gc_hooks::HookState,
     strings: StringTable,
     /// Where the heap's memory comes from. Last, so the context outlives
     /// whatever the other fields free through it.
@@ -244,6 +239,8 @@ use crate::runtime::puc::records::{env51, open_upvals, strt};
 pub(crate) use crate::runtime::puc::{Deferred, PucKind, Thread, is_uncounted};
 mod alloc;
 mod barrier;
+#[cfg(any(debug_assertions, feature = "gc-verify", feature = "gc-stress"))]
+mod checks;
 mod close;
 mod collect;
 pub(crate) use collect::{Propagated, Running};
@@ -268,7 +265,7 @@ pub(crate) use self::mark::{Marker, native_puc_upvals};
 use self::mark::{blacken, drain_marker, survived_mark, weak_key_alive};
 
 #[cfg(feature = "gc-verify")]
-mod verify;
+pub(crate) mod verify;
 
 #[cfg(test)]
 mod tests;

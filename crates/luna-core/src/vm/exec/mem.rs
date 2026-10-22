@@ -42,8 +42,7 @@ impl Vm {
         if !self.emergency_allowed() {
             return false;
         }
-        #[cfg(feature = "gc-trace")]
-        self.heap.trace.line(format_args!("X"));
+        self.heap.trace_line(format_args!("X"));
         // what is above PUC's `L->top` at the allocation is dead
         let top = self.alloc_top();
         let live_top = std::mem::replace(&mut self.gc_top, top);
@@ -91,8 +90,7 @@ impl Vm {
         self.heap.finalizers_due();
         crate::runtime::puc::step::gc_full_pause(self);
         self.heap.restore_counting(counting);
-        #[cfg(feature = "gc-trace")]
-        crate::runtime::puc::step::trace_full_end(self);
+        crate::runtime::gc_hooks::hook_full_end(self);
         true
     }
 
