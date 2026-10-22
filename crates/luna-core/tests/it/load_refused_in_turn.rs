@@ -43,6 +43,29 @@ impl MemoryPolicy for RefuseNth {
     }
 }
 
+/// A chunk that gives `collectgarbage("count")` in bytes, kept as a global.
+fn counter(vm: &mut Vm) -> Value {
+    let f = vm
+        .load(b"return collectgarbage('count') * 1024", b"=count")
+        .unwrap();
+    vm.set_global("count_chunk", Value::Closure(f)).unwrap();
+    Value::Closure(f)
+}
+
+/// The collector's count of bytes, read with `counter`.
+fn counted(vm: &mut Vm, counter: Value) -> f64 {
+    match vm.call_value(counter, &[]).unwrap()[0] {
+        Value::Float(x) => x,
+        Value::Int(x) => x as f64,
+        ref x => panic!("count gave {x:?}"),
+    }
+}
+
+/// What a failed load leaves the count at, against `base` before: the
+/// count moves by what a collection finds then, less than this, but it
+/// never loses what objects freed later take off it.
+const COUNT_SLACK: f64 = 2048.0;
+
 /// Every allocation of a load, the first, the second and so on, refused in
 /// turn: each time the load fails with the memory error and leaves nothing
 /// behind, and the vm goes on loading and running chunks. When the vm is
@@ -76,6 +99,9 @@ fn a_load_refused_at_each_allocation_in_turn_leaks_nothing() {
             run(&mut vm);
             vm.collect_garbage();
         }
+        // the count is read with a chunk of its own, made before
+        let count = counter(&mut vm);
+        let base_count = counted(&mut vm, count);
         let base = nth.live.get();
         let mut n = 0;
         loop {
@@ -108,6 +134,11 @@ fn a_load_refused_at_each_allocation_in_turn_leaks_nothing() {
             // failure to the next
             run(&mut vm);
             vm.collect_garbage();
+            let c = counted(&mut vm, count);
+            assert!(
+                c + COUNT_SLACK >= base_count,
+                "{v:?} n={n}: the count is {c} after the failed load, {base_count} before"
+            );
             assert!(
                 nth.live.get() <= base,
                 "{v:?} n={n}: {} bytes in use after the failed load and a run, {base} before",
@@ -157,6 +188,9 @@ fn a_reader_refused_at_each_allocation_in_turn_gives_the_memory_error() {
         // the collections below must not free it
         vm.set_global("reader_chunk", Value::Closure(chunk))
             .unwrap();
+        let count = counter(&mut vm);
+        vm.collect_garbage();
+        let base_count = counted(&mut vm, count);
         let mut n = 0;
         let mut memory_errors = 0;
         loop {
@@ -191,6 +225,11 @@ fn a_reader_refused_at_each_allocation_in_turn_gives_the_memory_error() {
             }
             assert!(refused, "{v:?} n={n}: failed with nothing refused");
             vm.collect_garbage();
+            let c = counted(&mut vm, count);
+            assert!(
+                c + COUNT_SLACK >= base_count,
+                "{v:?} n={n}: the count is {c} after the refused load, {base_count} before"
+            );
             n += 1;
             assert!(n < 200_000, "{v:?}: never succeeds");
         }
