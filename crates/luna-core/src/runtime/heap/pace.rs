@@ -3,8 +3,7 @@
 use super::*;
 use crate::runtime::table::Dialect;
 
-mod work;
-pub(super) use work::{array_bytes, hash_bytes, native_upvals, objsize, stack_bytes, thread_bytes};
+pub(super) use crate::runtime::puc::work::native_upvals;
 
 impl Heap {
     /// Number of GC-managed objects currently linked into the heap (live + not
@@ -142,7 +141,7 @@ impl Heap {
     /// the next one, `pause` in percent of what survived (PUC `setpause`;
     /// 5.1 `setthreshold`).
     pub fn rearm_gc_pause(&mut self, pause: i64) {
-        use crate::runtime::gc_pace::*;
+        use crate::runtime::puc::pace::*;
         let d = self.table_dialect;
         let bytes = self.bytes;
         match d {

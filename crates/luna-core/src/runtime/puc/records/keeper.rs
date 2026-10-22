@@ -45,7 +45,7 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads a record of this heap.
-    pub(in crate::runtime::heap) unsafe fn keeper_kept(&mut self, h: *mut GcHeader) -> bool {
+    pub(in crate::runtime) unsafe fn keeper_kept(&mut self, h: *mut GcHeader) -> bool {
         // SAFETY: the caller's contract; a host lives until the sweep
         // passes it, after its keeper
         unsafe {
@@ -67,7 +67,7 @@ impl Heap {
 }
 
 /// [`Heap::kept_bytes`] of the keepers `ks`.
-pub(in crate::runtime::heap) fn kept_bytes(
+pub(in crate::runtime) fn kept_bytes(
     ks: &[(*mut GcHeader, *mut GcHeader)],
     host: *mut GcHeader,
 ) -> usize {

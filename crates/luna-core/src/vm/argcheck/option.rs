@@ -27,7 +27,7 @@ pub(crate) fn check_option(
         return Ok(k);
     }
     let fmt = b"invalid option '%s'";
-    match pushed_extra(vm, 1, fmt, &[crate::runtime::puc_fmt::FmtArg::S(name)]) {
+    match pushed_extra(vm, 1, fmt, &[crate::runtime::puc::fmt::FmtArg::S(name)]) {
         Ok(m) => Err(arg_error(vm, i + 1, &m)),
         Err(e) => Err(e),
     }
@@ -39,7 +39,7 @@ pub(crate) fn pushed_extra(
     vm: &mut Vm,
     conv: u32,
     fmt: &[u8],
-    args: &[crate::runtime::puc_fmt::FmtArg],
+    args: &[crate::runtime::puc::fmt::FmtArg],
 ) -> Result<String, LuaError> {
     if let Some(e) = vm.format_pushes(&[Some(conv)]) {
         return Err(e);

@@ -127,7 +127,7 @@ fn add_s_54(
 
 /// `"invalid use of '%c' in replacement string"`
 fn invalid_escape(vm: &mut Vm) -> LuaError {
-    use crate::runtime::puc_fmt::FmtArg;
+    use crate::runtime::puc::fmt::FmtArg;
     let fmt = b"invalid use of '%c' in replacement string";
     crate::vm::builtins::raise_lib(vm, fmt, &[FmtArg::C(b'%')], 1)
 }

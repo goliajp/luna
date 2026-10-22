@@ -3,7 +3,7 @@
 //! traversing it (`propagatemark`'s result), by dialect.
 
 use super::*;
-use crate::runtime::puc_size::PucSizes;
+use crate::runtime::puc::size::PucSizes;
 use crate::runtime::table::Dialect;
 
 impl Heap {
@@ -97,10 +97,12 @@ impl Heap {
                     }
                     // 5.1 marks a userdata black at once, 5.2 and 5.3 count
                     // it as they mark it
-                    ObjTag::Ghost if super::super::env51::is_phantom(h) => {
-                        super::super::env51::phantom_size(h)
+                    ObjTag::Ghost if crate::runtime::puc::records::env51::is_phantom(h) => {
+                        crate::runtime::puc::records::env51::phantom_size(h)
                     }
-                    ObjTag::Ghost if super::super::parse::is_load_tab(h) => self.load_tab_work(h),
+                    ObjTag::Ghost if crate::runtime::puc::records::parse::is_load_tab(h) => {
+                        self.load_tab_work(h)
+                    }
                     ObjTag::Str | ObjTag::Userdata | ObjTag::Upvalue | ObjTag::Ghost => 0,
                     _ => self.puc_objsize(h) as i64,
                 };
@@ -135,7 +137,9 @@ impl Heap {
                 ObjTag::Coro => 0,
                 // a userdata without user values is marked black at once
                 ObjTag::Userdata => 0,
-                ObjTag::Ghost if super::super::parse::is_load_tab(h) => self.load_tab_work(h),
+                ObjTag::Ghost if crate::runtime::puc::records::parse::is_load_tab(h) => {
+                    self.load_tab_work(h)
+                }
                 ObjTag::Str | ObjTag::Upvalue | ObjTag::Ghost => 0,
             }
         }
@@ -173,11 +177,7 @@ impl Heap {
 ///
 /// # Safety
 /// `h` heads an allocated object other than a thread.
-pub(in crate::runtime::heap) unsafe fn objsize(
-    s: &PucSizes,
-    d: Dialect,
-    h: *mut GcHeader,
-) -> usize {
+pub(in crate::runtime) unsafe fn objsize(s: &PucSizes, d: Dialect, h: *mut GcHeader) -> usize {
     // SAFETY: the caller's contract; the tag names the type
     unsafe {
         if is_uncounted(h) {
@@ -197,7 +197,7 @@ pub(in crate::runtime::heap) unsafe fn objsize(
                 s.proto + (*(h as *const Proto)).puc_arrays.get().iter().sum::<u32>() as usize
             }
             ObjTag::Closure => {
-                let env = (*h).sub & acct::ENV51 != 0;
+                let env = (*h).sub & crate::runtime::puc::ENV51 != 0;
                 let n = (*(h as *const LuaClosure)).upvals_len as usize - usize::from(env);
                 s.lua_closure(n)
             }
@@ -215,12 +215,12 @@ pub(in crate::runtime::heap) unsafe fn objsize(
                 let st = &*(h as *const LuaStr);
                 match (*h).sub {
                     f if f & EXTERNAL != 0 => s.lngstr_hdr + 2 * s.ptr,
-                    f if f & acct::FIXED_EXT != 0 => s.lngstr_hdr,
+                    f if f & crate::runtime::puc::FIXED_EXT != 0 => s.lngstr_hdr,
                     _ => s.string(st.len(), !st.is_short() && d == Dialect::L55),
                 }
             }
-            ObjTag::Ghost if super::super::parse::is_load_tab(h) => {
-                super::super::parse::load_tab_size(s, d, h)
+            ObjTag::Ghost if crate::runtime::puc::records::parse::is_load_tab(h) => {
+                crate::runtime::puc::records::parse::load_tab_size(s, d, h)
             }
             ObjTag::Coro | ObjTag::Ghost => 0,
         }
@@ -231,7 +231,7 @@ pub(in crate::runtime::heap) unsafe fn objsize(
 ///
 /// # Safety
 /// `h` heads an allocated native function.
-pub(in crate::runtime::heap) unsafe fn native_upvals(h: *mut GcHeader) -> usize {
+pub(in crate::runtime) unsafe fn native_upvals(h: *mut GcHeader) -> usize {
     // SAFETY: the caller's contract
     unsafe {
         match (*h).sub & !UNCOUNTED {
@@ -242,7 +242,7 @@ pub(in crate::runtime::heap) unsafe fn native_upvals(h: *mut GcHeader) -> usize 
 }
 
 /// The bytes of a table's array part of `n` slots.
-pub(in crate::runtime::heap) fn array_bytes(s: &PucSizes, d: Dialect, n: usize) -> usize {
+pub(in crate::runtime) fn array_bytes(s: &PucSizes, d: Dialect, n: usize) -> usize {
     match (d, n) {
         (_, 0) => 0,
         // 5.5 keeps the values, then a byte per tag, around an unsigned
@@ -254,7 +254,7 @@ pub(in crate::runtime::heap) fn array_bytes(s: &PucSizes, d: Dialect, n: usize) 
 /// The bytes of a table's hash part of `h` nodes: 5.5 puts a `lastfree`
 /// pointer (`Limbox`, padded to a node's alignment) in front of eight
 /// nodes or more.
-pub(in crate::runtime::heap) fn hash_bytes(s: &PucSizes, d: Dialect, h: usize) -> usize {
+pub(in crate::runtime) fn hash_bytes(s: &PucSizes, d: Dialect, h: usize) -> usize {
     let limbox = if cfg!(target_arch = "wasm32") {
         8
     } else {
@@ -268,18 +268,13 @@ pub(in crate::runtime::heap) fn hash_bytes(s: &PucSizes, d: Dialect, h: usize) -
 
 /// PUC's size of a thread with a stack of `stack` slots and `ci`
 /// `CallInfo`s (5.1: the size of its array).
-pub(in crate::runtime::heap) fn thread_bytes(
-    s: &PucSizes,
-    d: Dialect,
-    stack: u32,
-    ci: u32,
-) -> usize {
+pub(in crate::runtime) fn thread_bytes(s: &PucSizes, d: Dialect, stack: u32, ci: u32) -> usize {
     s.thread + stack_bytes(s, d, stack) + s.callinfo * ci as usize
 }
 
 /// The bytes of a stack of `n` slots (PUC's `stacksize`, which from 5.4
 /// leaves out the `EXTRA_STACK` slots it allocates beyond it).
-pub(in crate::runtime::heap) fn stack_bytes(s: &PucSizes, d: Dialect, n: u32) -> usize {
+pub(in crate::runtime) fn stack_bytes(s: &PucSizes, d: Dialect, n: u32) -> usize {
     match (n, d >= Dialect::L54) {
         (0, _) => 0,
         (n, true) => (n as usize + 5) * s.tvalue,

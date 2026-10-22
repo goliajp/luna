@@ -15,7 +15,7 @@ impl Heap {
     /// # Safety
     /// As [`Heap::link`]'s.
     #[inline]
-    pub(in crate::runtime::heap) unsafe fn link_now(&mut self, h: *mut GcHeader) {
+    pub(in crate::runtime) unsafe fn link_now(&mut self, h: *mut GcHeader) {
         // SAFETY: the caller's contract
         unsafe {
             (*h).next = self.all;
@@ -38,7 +38,7 @@ impl Heap {
     /// # Safety
     /// As [`Heap::link`]'s.
     #[cold]
-    pub(in crate::runtime::heap) unsafe fn set_aside(&mut self, h: *mut GcHeader) -> bool {
+    pub(in crate::runtime) unsafe fn set_aside(&mut self, h: *mut GcHeader) -> bool {
         if self.puc.unborn.try_reserve(1).is_err() {
             return false;
         }
@@ -57,7 +57,7 @@ impl Heap {
     /// # Safety
     /// `h` heads a live object of this heap.
     #[inline]
-    pub(in crate::runtime::heap) unsafe fn born(&mut self, h: *mut GcHeader) {
+    pub(in crate::runtime) unsafe fn born(&mut self, h: *mut GcHeader) {
         // SAFETY: the caller's contract
         unsafe {
             if (*h).next != UNBORN {
@@ -154,7 +154,7 @@ impl Heap {
     /// A sweep is over: what is set aside is white for the next cycle, as
     /// the sweep leaves every object it goes over (a marking of the cycle
     /// that ended may have reached it).
-    pub(in crate::runtime::heap) fn whiten_unborn(&mut self) {
+    pub(in crate::runtime) fn whiten_unborn(&mut self) {
         let white = self.current_white;
         for &h in &self.puc.unborn {
             // SAFETY: an object set aside is allocated; only its flags are

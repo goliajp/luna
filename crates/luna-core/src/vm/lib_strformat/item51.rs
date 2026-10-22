@@ -148,14 +148,14 @@ pub(super) fn item51(
                 crate::vm::builtins::raise_lib(
                     vm,
                     fmt,
-                    &[crate::runtime::puc_fmt::FmtArg::S(b"")],
+                    &[crate::runtime::puc::fmt::FmtArg::S(b"")],
                     2,
                 )
             } else {
                 crate::vm::builtins::raise_lib(
                     vm,
                     fmt,
-                    &[crate::runtime::puc_fmt::FmtArg::C(conv)],
+                    &[crate::runtime::puc::fmt::FmtArg::C(conv)],
                     2,
                 )
             });

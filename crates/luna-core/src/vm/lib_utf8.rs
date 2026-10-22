@@ -5,7 +5,7 @@
 
 use crate::runtime::Value;
 use crate::runtime::mem::LVec;
-use crate::runtime::puc_fmt::FmtArg;
+use crate::runtime::puc::fmt::FmtArg;
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};

@@ -23,7 +23,7 @@ impl Vm {
         extra: &str,
         conv: u32,
     ) -> LuaError {
-        use crate::runtime::puc_fmt::FmtArg::S;
+        use crate::runtime::puc::fmt::FmtArg::S;
         let named = split_varinfo(extra);
         if self.version() > LuaVersion::Lua52 {
             if let Some((kind, name)) = named {

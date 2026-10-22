@@ -4,8 +4,7 @@
 use super::*;
 
 mod atomic;
-mod sizer;
-pub(crate) use sizer::Sizer;
+pub(crate) use crate::runtime::puc::Sizer;
 
 impl Heap {
     /// Begin an incremental mark cycle (precondition: `Pause`): enter

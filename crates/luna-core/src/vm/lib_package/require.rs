@@ -1,7 +1,7 @@
 //! `require` and the loader search behind it.
 
 use super::*;
-use crate::runtime::puc_fmt::FmtArg;
+use crate::runtime::puc::fmt::FmtArg;
 use crate::vm::puc_buffer::PucBuffer;
 
 /// `findloader`: ask each searcher in turn; the first one to return a

@@ -137,7 +137,7 @@ impl Marker {
     /// # Safety
     /// `h` heads an allocated object.
     #[inline]
-    pub(in crate::runtime::heap) unsafe fn luna_only(&self, h: *mut GcHeader) -> bool {
+    pub(in crate::runtime) unsafe fn luna_only(&self, h: *mut GcHeader) -> bool {
         // SAFETY: the caller's contract; the tag names the type
         unsafe {
             match (*h).tag {
@@ -189,7 +189,7 @@ impl Marker {
 
     /// Mark what the objects of luna's own hold, counting nothing: after
     /// the marking PUC counts, before the weak tables are cleared.
-    pub(in crate::runtime::heap) fn drain_quiet(&mut self) {
+    pub(in crate::runtime) fn drain_quiet(&mut self) {
         if !self.quiet_mode && self.quiet_parse_trees() {
             while let Some(h) = self.pop() {
                 // SAFETY: a gray object is allocated until the sweep

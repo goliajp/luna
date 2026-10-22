@@ -31,9 +31,9 @@ pub(crate) enum FmtArg<'a> {
     U(u32),
 }
 
-#[path = "puc_concat.rs"]
 mod concat;
-#[path = "puc_fmt_vfs.rs"]
+mod gbuff;
+pub(crate) use gbuff::Gbuff;
 mod vfs;
 
 impl Heap {

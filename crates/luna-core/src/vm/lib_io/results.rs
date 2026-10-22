@@ -1,7 +1,7 @@
 //! Errors in the shape of `luaL_fileresult` / `luaL_execresult`, and the C-string and path conversions they share.
 
 use super::*;
-use crate::runtime::puc_fmt::FmtArg;
+use crate::runtime::puc::fmt::FmtArg;
 
 /// An errno luna reports itself. std reads a raw code as a Win32 error on
 /// Windows, where 22 is "The device does not recognize the command."; the C

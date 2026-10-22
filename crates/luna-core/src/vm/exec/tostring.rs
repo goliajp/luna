@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::runtime::LuaStr;
-use crate::runtime::puc_fmt::FmtArg;
+use crate::runtime::puc::fmt::FmtArg;
 use crate::vm::cfmt::c_pointer;
 
 impl Vm {

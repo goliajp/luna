@@ -196,7 +196,7 @@ fn unresolved_goto(msg: &[u8]) -> bool {
 
 /// The prototypes of the functions still open keep their arrays as grown:
 /// their sizes are what freeing them frees.
-pub(super) fn unclosed(r: &mut Replay, s: crate::runtime::puc_size::PucSizes) {
+pub(super) fn unclosed(r: &mut Replay, s: crate::runtime::puc::size::PucSizes) {
     for f in &r.fs {
         if let Some(p) = r.opening.get(f.shape) {
             p.puc_arrays.set(f.puc_caps(r.d, &s));

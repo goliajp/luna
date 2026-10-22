@@ -241,7 +241,7 @@ impl Vm {
         };
         // made piece by piece, as `luaO_pushfstring` makes it
         let fmt = b"error in __gc metamethod (%s)";
-        let v = match self.pushfstring(fmt, &[crate::runtime::puc_fmt::FmtArg::S(&msg)]) {
+        let v = match self.pushfstring(fmt, &[crate::runtime::puc::fmt::FmtArg::S(&msg)]) {
             Ok(s) => Value::Str(s),
             Err(e) => e.0,
         };

@@ -222,13 +222,13 @@ impl Vm {
         let extra = self.bad_operand_varinfo();
         // `varinfo`'s string, then `"number%s has no integer representation"`
         if let Some((kind, name)) = super::type_err::split_varinfo(&extra) {
-            use crate::runtime::puc_fmt::FmtArg::S;
+            use crate::runtime::puc::fmt::FmtArg::S;
             let args = [S(kind.as_bytes()), S(name.as_bytes())];
             if let Err(e) = self.heap.pushfstring(b" (%s '%s')", &args) {
                 return e.into();
             }
         }
-        let args = [crate::runtime::puc_fmt::FmtArg::S(extra.as_bytes())];
+        let args = [crate::runtime::puc::fmt::FmtArg::S(extra.as_bytes())];
         let e = self.runerror_fmt(
             b"number%s has no integer representation",
             &args,

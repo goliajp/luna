@@ -47,8 +47,8 @@ pub(crate) const BASIC_CI_51: u32 = 8;
 
 impl Heap {
     /// The bytes of a stack of `s` slots.
-    pub(in crate::runtime::heap) fn stack_bytes(&self, s: u32) -> usize {
-        crate::runtime::heap::pace::stack_bytes(&self.sizes, self.table_dialect, s)
+    pub(in crate::runtime) fn stack_bytes(&self, s: u32) -> usize {
+        crate::runtime::puc::work::stack_bytes(&self.sizes, self.table_dialect, s)
     }
 
     /// The stack of `t` resized from `old` to `new` slots

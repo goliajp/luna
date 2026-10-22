@@ -3,7 +3,7 @@
 //! PUC's quantities only; the constants are each version's (`lgc.c`,
 //! `lgc.h`, `luaconf.h`), the sizes the target's ([`PucSizes`]).
 
-use crate::runtime::puc_size::PucSizes;
+use crate::runtime::puc::size::PucSizes;
 use crate::runtime::table::Dialect;
 
 /// PUC's collector states. Their numbers in each version's `lgc.h` are
@@ -101,7 +101,7 @@ pub(crate) struct Pace {
     /// 5.5: markings count what they mark (`GCmarked`)
     pub(crate) count_marked: bool,
     /// the threads the VM holds, as the step under way found them
-    pub(crate) run: Option<super::heap::Running>,
+    pub(crate) run: Option<crate::runtime::heap::Running>,
     /// 5.3 `gcfinnum`: how many finalizers the next batch runs
     pub(crate) fin_num: u32,
 }

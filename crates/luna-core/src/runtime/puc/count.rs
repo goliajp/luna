@@ -7,18 +7,8 @@
 //! context); nothing here touches them.
 
 use super::*;
-use crate::runtime::puc_size::PucSizes;
+use crate::runtime::puc::size::PucSizes;
 use crate::runtime::table::Dialect;
-
-mod ghost;
-pub(in crate::runtime::heap) mod keeper;
-pub(crate) mod strcache;
-pub(crate) use ghost::{Ghost, GhostRef};
-pub(crate) mod parse;
-mod state;
-#[cfg(test)]
-mod tests;
-pub(crate) use state::PucState;
 
 /// What a counted allocation is, for PUC's tag of it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -165,7 +155,7 @@ impl Heap {
     /// [`Heap::acct_part`] for a caller that has seen the heap is not
     /// being dropped.
     #[inline]
-    pub(in crate::runtime::heap) fn count_part(&mut self, old: usize, new: usize) {
+    pub(in crate::runtime) fn count_part(&mut self, old: usize, new: usize) {
         #[cfg(feature = "gc-verify")]
         assert!(
             self.bytes + new >= old,
@@ -202,17 +192,6 @@ impl Heap {
     }
 }
 
-mod boot;
-mod defer;
-mod fmt;
-mod parts;
-mod proto;
-mod thread;
-pub(crate) use boot::STRT_STAND;
-pub(crate) use defer::Deferred;
-pub(crate) use proto::ENV51;
-pub(crate) use thread::{BASIC_CI_51, Thread};
-
 /// Whether object `h` is one PUC has not made (see [`Heap::acct_new`]).
 #[inline(always)]
 pub(crate) fn is_uncounted(h: *const GcHeader) -> bool {
@@ -224,7 +203,7 @@ pub(crate) fn is_uncounted(h: *const GcHeader) -> bool {
 /// own (`LSTRFIX`), its header alone counted
 pub(crate) const FIXED_EXT: u8 = 0x20;
 
-pub(super) fn set_uncounted(h: *mut GcHeader, on: bool) {
+pub(in crate::runtime) fn set_uncounted(h: *mut GcHeader, on: bool) {
     // SAFETY: `h` heads a live object of this heap; only its per-type byte
     // is written, which no type but a table uses otherwise
     unsafe {

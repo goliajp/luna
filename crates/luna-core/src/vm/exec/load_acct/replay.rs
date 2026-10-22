@@ -34,7 +34,7 @@ pub(super) struct Fs {
 impl Fs {
     /// The bytes of each of its prototype's arrays as grown (see
     /// `Proto::puc_arrays`).
-    pub(super) fn puc_caps(&self, d: Dialect, s: &crate::runtime::puc_size::PucSizes) -> [u32; 7] {
+    pub(super) fn puc_caps(&self, d: Dialect, s: &crate::runtime::puc::size::PucSizes) -> [u32; 7] {
         let line = if matches!(d, Dialect::L54 | Dialect::L55) {
             1
         } else {
@@ -129,7 +129,7 @@ pub(in crate::vm::exec) struct TabOp {
 /// The replay's state.
 pub(super) struct Replay<'s> {
     pub(super) d: Dialect,
-    pub(super) sizes: crate::runtime::puc_size::PucSizes,
+    pub(super) sizes: crate::runtime::puc::size::PucSizes,
     /// the chunk's main closure
     pub(super) cl: Option<Gc<LuaClosure>>,
     /// 5.2: the table of the function closing, while it anchors the token
@@ -199,7 +199,7 @@ pub(super) fn walk(p: Gc<Proto>, opening: &mut Vec<Gc<Proto>>, closing: &mut Vec
 impl<'s> Replay<'s> {
     /// A replay of the load of `proto`, whose scanner made `scanned`.
     pub(super) fn new(
-        (d, sizes): (Dialect, crate::runtime::puc_size::PucSizes),
+        (d, sizes): (Dialect, crate::runtime::puc::size::PucSizes),
         proto: Gc<Proto>,
         version: crate::version::LuaVersion,
         scanned: &'s Scanned,

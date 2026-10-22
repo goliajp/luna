@@ -118,7 +118,7 @@ fn io_readline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(crate::vm::builtins::raise_lib(
                 vm,
                 b"%s",
-                &[crate::runtime::puc_fmt::FmtArg::S(msg.as_bytes())],
+                &[crate::runtime::puc::fmt::FmtArg::S(msg.as_bytes())],
                 1,
             ));
         }

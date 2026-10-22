@@ -17,10 +17,10 @@ pub(crate) const SWEPT: u8 = 0x10;
 /// The dead strings of PUC's string table by bucket, the next one the
 /// string sweep reaches, and those taken off the object list before it.
 #[derive(Default)]
-pub(super) struct StrtSweep {
+pub(in crate::runtime) struct StrtSweep {
     dead: Vec<(u32, *mut GcHeader)>,
     next: usize,
-    pub(super) held: Vec<*mut GcHeader>,
+    pub(in crate::runtime) held: Vec<*mut GcHeader>,
     /// room for sorting `dead` by bucket
     sorted: Vec<(u32, *mut GcHeader)>,
     counts: Vec<u32>,
@@ -69,7 +69,7 @@ impl StrtSweep {
 impl Heap {
     /// The atomic step ended (5.1, 5.2): the dead strings of PUC's string
     /// table, by bucket.
-    pub(super) fn collect_dead_strings(&mut self) {
+    pub(in crate::runtime) fn collect_dead_strings(&mut self) {
         self.strt.dead.clear();
         self.strt.next = 0;
         if !matches!(self.table_dialect, Dialect::L51 | Dialect::L52) {
@@ -130,7 +130,7 @@ impl Heap {
 
     /// Whether `h`, dead, waits for the string sweep under way (every dead
     /// string of PUC's string table does, until it is over).
-    pub(super) fn in_string_sweep(&self, h: *mut GcHeader) -> bool {
+    pub(in crate::runtime) fn in_string_sweep(&self, h: *mut GcHeader) -> bool {
         // SAFETY: `h` heads a live object of this heap
         unsafe {
             self.strt.next < self.strt.dead.len()
@@ -215,12 +215,12 @@ impl Heap {
     /// string table holds a place for each counted short string luna has
     /// and each one a record holds. Panics when the count went astray.
     #[cfg(feature = "gc-verify")]
-    pub(super) fn verify_string_count(&self, ctx: &str) {
+    pub(in crate::runtime) fn verify_string_count(&self, ctx: &str) {
         // and "not enough memory", which PUC makes at the start and luna
         // does not
         let mut n = self.ghost_short_strings() + 1;
         // and 5.1's strings luna's stand for
-        let strt = super::acct::STRT_STAND;
+        let strt = crate::runtime::puc::STRT_STAND;
         n += self
             .puc
             .stand_ins

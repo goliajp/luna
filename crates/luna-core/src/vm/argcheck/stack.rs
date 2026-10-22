@@ -40,7 +40,7 @@ fn check_stack_slow(vm: &mut Vm, top: u32, n: i64, msg: &str) -> Result<(), LuaE
         Err(crate::vm::builtins::raise_lib(
             vm,
             b"stack overflow (%s)",
-            &[crate::runtime::puc_fmt::FmtArg::S(msg.as_bytes())],
+            &[crate::runtime::puc::fmt::FmtArg::S(msg.as_bytes())],
             1,
         ))
     }

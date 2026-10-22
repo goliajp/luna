@@ -9,7 +9,7 @@ impl Heap {
     /// # Safety
     /// `h` heads a live object of this heap; the caller has read what it
     /// needs from it (its `next` link) and nothing uses it afterwards.
-    pub(super) unsafe fn free_obj(&mut self, h: *mut GcHeader) {
+    pub(in crate::runtime) unsafe fn free_obj(&mut self, h: *mut GcHeader) {
         #[cfg(feature = "gc-verify")]
         {
             self.recently_freed.insert(h as usize);
@@ -62,7 +62,7 @@ impl Heap {
                     let c = &*(h as *mut LuaClosure);
                     if !is_uncounted(h) {
                         // the prototype may be freed already
-                        let env = (*h).sub & super::acct::ENV51 != 0;
+                        let env = (*h).sub & crate::runtime::puc::ENV51 != 0;
                         let n = c.upvals_len as usize - usize::from(env);
                         self.acct_part(self.sizes.lua_closure(n), 0);
                     }
@@ -129,7 +129,7 @@ impl Heap {
                         // its block goes back first, then its header
                         self.trace_raw((*s).len() + 1, 0);
                         self.acct_part(self.sizes.lngstr_hdr + 2 * self.sizes.ptr, 0);
-                    } else if (*h).sub & acct::FIXED_EXT != 0 {
+                    } else if (*h).sub & puc::FIXED_EXT != 0 {
                         self.acct_part(self.sizes.lngstr_hdr, 0);
                     } else if (*h).sub & strt::SWEPT != 0 {
                         // the string sweep took it off the count
@@ -157,7 +157,7 @@ impl Heap {
         // SAFETY: the caller's contract; only the header is read
         unsafe {
             (*h).tag == ObjTag::Str
-                && (*h).sub & (EXTERNAL | acct::FIXED_EXT | strt::SWEPT | UNCOUNTED) == 0
+                && (*h).sub & (EXTERNAL | puc::FIXED_EXT | strt::SWEPT | UNCOUNTED) == 0
         }
     }
 
@@ -188,10 +188,10 @@ impl Heap {
     fn free_stand_in(&mut self, h: *mut GcHeader) {
         while let Some(i) = self.puc.stand_ins.iter().position(|(p, _)| *p == h) {
             let (_, size) = self.puc.stand_ins.swap_remove(i);
-            if size & super::acct::STRT_STAND != 0 {
+            if size & crate::runtime::puc::STRT_STAND != 0 {
                 self.puc.strt_nuse -= 1;
             }
-            self.acct_part(size & !super::acct::STRT_STAND, 0);
+            self.acct_part(size & !crate::runtime::puc::STRT_STAND, 0);
         }
     }
 }

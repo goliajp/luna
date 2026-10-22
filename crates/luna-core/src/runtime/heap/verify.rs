@@ -222,7 +222,7 @@ impl Heap {
 #[cfg(feature = "gc-verify")]
 impl Heap {
     /// `gc-verify`: the address `h`, freed before, holds a new object.
-    pub(super) fn forget_freed(&mut self, h: *mut GcHeader) {
+    pub(in crate::runtime) fn forget_freed(&mut self, h: *mut GcHeader) {
         self.recently_freed.remove(&(h as usize));
         crate::runtime::gc_verify_probe::FREED.with(|f| f.borrow_mut().remove(&(h as usize)));
     }

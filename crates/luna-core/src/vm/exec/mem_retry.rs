@@ -6,7 +6,7 @@
 use super::*;
 use crate::runtime::LuaStr;
 use crate::runtime::heap::PucKind;
-use crate::runtime::puc_fmt::FmtArg;
+use crate::runtime::puc::fmt::FmtArg;
 
 impl Vm {
     /// PUC's `L->top` where an allocation is asked for: the running

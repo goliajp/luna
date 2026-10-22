@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::runtime::LuaStr;
-use crate::runtime::puc_fmt::FmtArg;
+use crate::runtime::puc::fmt::FmtArg;
 use crate::vm::puc_buffer::PucBuffer;
 
 /// What a search found: the file name's bytes, where 5.4 on has them in

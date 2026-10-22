@@ -2,6 +2,8 @@
 //! record; strings luna makes for itself.
 
 use super::*;
+
+pub(crate) mod counts;
 use crate::runtime::table::Dialect;
 
 impl Heap {
@@ -11,7 +13,7 @@ impl Heap {
     /// memory error message, which the heap made before it knew the
     /// dialect, is counted where PUC makes it.
     pub(crate) fn acct_boot(&mut self) -> Result<(), crate::runtime::mem::Oom> {
-        use crate::runtime::puc_boot::{boot_sizes, reserved_words, tm_names};
+        use crate::runtime::puc::boot::counts::{boot_sizes, reserved_words, tm_names};
         let d = self.table_dialect;
         let b = boot_sizes(d);
         let s = self.sizes;

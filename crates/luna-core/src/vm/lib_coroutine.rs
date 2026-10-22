@@ -138,7 +138,7 @@ fn refusal_value(vm: &mut Vm, msg: &str) -> Result<Value, LuaError> {
         .and_then(|m| m.strip_suffix(" coroutine"));
     match status {
         Some(st) if vm.version() == LuaVersion::Lua51 => {
-            let args = [crate::runtime::puc_fmt::FmtArg::S(st.as_bytes())];
+            let args = [crate::runtime::puc::fmt::FmtArg::S(st.as_bytes())];
             let s = vm.pushfstring(b"cannot resume %s coroutine", &args)?;
             Ok(Value::Str(s))
         }

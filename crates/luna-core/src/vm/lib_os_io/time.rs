@@ -42,7 +42,7 @@ fn getfield_pushed(
         crate::vm::builtins::raise_lib(
             vm,
             fmt,
-            &[crate::runtime::puc_fmt::FmtArg::S(key.as_bytes())],
+            &[crate::runtime::puc::fmt::FmtArg::S(key.as_bytes())],
             1,
         )
     };
@@ -61,7 +61,7 @@ fn getfield_pushed(
             return Err(crate::vm::builtins::raise_lib(
                 vm,
                 fmt,
-                &[crate::runtime::puc_fmt::FmtArg::S(key.as_bytes())],
+                &[crate::runtime::puc::fmt::FmtArg::S(key.as_bytes())],
                 1,
             ));
         }
@@ -81,7 +81,7 @@ fn getfield_pushed(
         return Err(crate::vm::builtins::raise_lib(
             vm,
             fmt,
-            &[crate::runtime::puc_fmt::FmtArg::S(key.as_bytes())],
+            &[crate::runtime::puc::fmt::FmtArg::S(key.as_bytes())],
             1,
         ));
     }

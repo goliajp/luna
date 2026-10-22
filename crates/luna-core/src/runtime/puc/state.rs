@@ -7,7 +7,7 @@ pub(crate) struct PucState {
     /// above 0, nothing is counted (objects PUC made elsewhere, or not at
     /// all, are being built): changed only through [`CountingOff`] and
     /// [`CountingMark`]
-    pub(in crate::runtime::heap) silent: u32,
+    pub(in crate::runtime) silent: u32,
     /// the string table's size and its number of strings
     pub(crate) strt_size: usize,
     pub(crate) strt_nuse: usize,
@@ -24,7 +24,7 @@ pub(crate) struct PucState {
     /// given size, one entry for each object of PUC's (see
     /// `Heap::stand_sizes_on`)
     pub(crate) stand_ins: Vec<(*mut GcHeader, usize)>,
-    /// keepers (`heap::acct::keeper`) and their hosts
+    /// keepers (`puc::records::keeper`) and their hosts
     pub(crate) keepers: Vec<(*mut GcHeader, *mut GcHeader)>,
     /// 5.3: the threads this cycle's propagation has shrunk; 5.2: the ones
     /// the sweep kept, for the VM to shrink

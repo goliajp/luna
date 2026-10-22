@@ -35,7 +35,7 @@ impl Heap {
     /// # Safety
     /// `p` is an object this heap allocated with [`Heap::alloc_block`],
     /// unlinked, which nothing uses afterwards.
-    pub(super) unsafe fn free_block<T: GcObject>(&self, p: *mut T) {
+    pub(in crate::runtime) unsafe fn free_block<T: GcObject>(&self, p: *mut T) {
         // SAFETY: the caller's contract: the object is initialized and its
         // block of this layout came from this heap's context
         unsafe {
@@ -310,7 +310,7 @@ impl Heap {
         let c = unsafe { g.as_mut() };
         c.init_upvals_ptr();
         if env {
-            c.hdr.sub |= super::acct::ENV51;
+            c.hdr.sub |= crate::runtime::puc::ENV51;
         }
         Ok(g)
     }

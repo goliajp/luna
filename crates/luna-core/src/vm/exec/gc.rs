@@ -216,7 +216,7 @@ impl Vm {
     }
 
     /// What `collectgarbage("count")` and `lua_gc(LUA_GCCOUNT)` report:
-    /// PUC's `totalbytes` (see `heap::acct`).
+    /// PUC's `totalbytes` (see `runtime::puc`).
     pub(crate) fn gc_count_bytes(&self) -> usize {
         self.heap.bytes()
     }
