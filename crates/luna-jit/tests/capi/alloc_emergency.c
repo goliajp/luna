@@ -63,6 +63,17 @@ static const char *scripts[] = {
     "local before = collectgarbage('count')\n"
     "local big = h .. h\n"
     "return (collectgarbage('count') - before) * 1024\n",
+    /* a concatenation's operands below a dead string still in the frame:
+       5.2 on its top is the operands' end */
+    "local h = ('q'):rep(60000)\n"
+    "local function f()\n"
+    "  local t = {1, 2, 3, 4, 5, 6, ('y'):rep(300) .. 'z'}\n"
+    "  t = nil\n"
+    "  local before = collectgarbage('count')\n"
+    "  local big = h .. h\n"
+    "  return (collectgarbage('count') - before) * 1024\n"
+    "end\n"
+    "return f()\n",
 };
 
 int main(void) {
