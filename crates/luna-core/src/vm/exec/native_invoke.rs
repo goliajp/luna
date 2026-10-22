@@ -212,6 +212,7 @@ impl Vm {
         } else {
             self.running_natives.pop();
         }
+        self.g.ci_hint += 1;
         // no check for a collection: PUC's `luaD_poscall` makes none, the
         // native checked where its API calls do
         self.finish_results(func_slot, nret, nresults);

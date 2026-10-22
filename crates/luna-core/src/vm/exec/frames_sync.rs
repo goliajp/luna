@@ -220,6 +220,9 @@ impl Vm {
     #[inline(always)]
     pub(super) fn cont_popped(&mut self, meta: bool, level: bool) {
         self.g.meta_conts -= u32::from(meta);
+        if meta {
+            self.g.ci_hint = 0;
+        }
         let depth = self.frames.len() as u32;
         if depth < self.g.stale_frames {
             self.g.stale_frames = depth;

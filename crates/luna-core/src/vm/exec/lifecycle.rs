@@ -104,16 +104,14 @@ impl Vm {
             g: CallGuards {
                 nccalls: 0,
                 stale_frames: 0,
-                frame_size: if version == LuaVersion::Lua51 {
-                    BASIC_FRAME_SIZE_51
-                } else {
-                    u32::MAX
-                },
+                frame_size: [u32::MAX, BASIC_FRAME_SIZE_51]
+                    [usize::from(version == LuaVersion::Lua51)],
                 stack_last: fast_stack_last(version, stack_size::initial(version)),
                 frames_native: 0,
                 jit_top: 0,
                 host_frames: 0,
                 host_ci_top: 0,
+                ci_hint: 0,
                 host_slots: 0,
                 reader_size_mismatch: 0,
                 meta_conts: 0,
