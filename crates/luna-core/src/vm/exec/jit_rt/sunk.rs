@@ -98,8 +98,7 @@ impl Vm {
         self.heap.counting_on(off);
         let g = self.jit_ghosts().sunk[site].take();
         if let (Some(g), Some(t)) = (g, t) {
-            self.heap.ghost_table_taken(g);
-            self.heap.set_counted(t.as_ptr() as *mut GcHeader);
+            self.heap.ghost_table_made(g, t.as_ptr() as *mut GcHeader);
         }
         t
     }

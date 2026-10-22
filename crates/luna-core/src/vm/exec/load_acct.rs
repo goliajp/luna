@@ -111,7 +111,7 @@ impl Vm {
         // the reader's first call, which reads the first character
         while r.splices.front().is_some_and(|&(t, _)| t < 0) {
             let (_, d) = r.splices.pop_front().expect("peeked");
-            self.heap.defer_apply(d);
+            self.heap.replay_reader_call(d);
         }
         r.cl = Some(cl);
         if r.rec.is_none() && r.d != Dialect::L51 {

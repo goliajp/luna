@@ -177,9 +177,8 @@ impl Vm {
             // string of the chunk name (`Heap::chunk_name`)
             let counted = self.heap.counting();
             self.parse_scratch.record = counted;
-            let off = self.heap.counting_off();
-            let base = self.heap.unborn_len();
-            let aside = self.heap.set_loads_aside(counted);
+            let span = self.heap.load_begins();
+            let building = self.heap.build_load(counted);
             let source = self
                 .heap
                 .chunk_name(chunkname, name)
@@ -189,8 +188,7 @@ impl Vm {
                 .and_then(|source| self.compile_text_in_place(src, source))
                 .and_then(|p| self.hold_puc_names(p).map(|()| p))
                 .and_then(|p| Ok((p, self.close_chunk(p)?)));
-            self.heap.loads_aside_back(aside);
-            self.heap.counting_on(off);
+            self.heap.load_built(building);
             // what PUC made before the error is counted as it made it
             let failed = match (&made, source) {
                 (Err(e), Ok(source)) if counted && !e.is_memory() => {
@@ -218,9 +216,7 @@ impl Vm {
                 self.parse_scratch = scratch;
                 counted.map(|()| cl)
             };
-            // what PUC did not make (luna's own, or the garbage of a load
-            // that failed) is on the list now
-            self.heap.flush_unborn(base);
+            self.heap.load_ends(span);
             return out;
         };
         self.close_chunk(proto)
@@ -234,17 +230,13 @@ impl Vm {
         &mut self,
         f: impl FnOnce(&mut Vm) -> Result<R, SyntaxError>,
     ) -> Result<R, SyntaxError> {
-        let (counting, frames) = (self.heap.counting_mark(), self.heap.parse_mark());
-        let (aside, unborn) = (self.heap.loads_aside_mark(), self.heap.unborn_len());
+        let at = self.heap.load_unwind_point();
         match catch_load_oom(|| f(self)) {
             Ok(r) => r,
             Err(()) => {
                 // the failure unwound past what stops counting for the load,
                 // and past a step's frame of the parser's objects
-                self.heap.restore_counting(counting);
-                self.heap.restore_parse_frames(frames);
-                self.heap.loads_aside_back(aside);
-                self.heap.flush_unborn(unborn);
+                self.heap.unwind_load(at);
                 self.compile_scratch = crate::compiler::CompileScratch::new(self.heap.mem());
                 Err(load_oom(&self.heap))
             }

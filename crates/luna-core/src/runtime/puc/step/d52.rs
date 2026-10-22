@@ -46,13 +46,25 @@ pub(super) fn step_52<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
     Ok(())
 }
 
+/// 5.2's `sweepthread` of each coroutine the sweep just kept (the main
+/// thread's comes at the end of the sweep).
+fn shrink_swept_52<H: StepHost + ?Sized>(h: &mut H) {
+    let swept = std::mem::take(&mut h.heap().puc.shrunk);
+    for &t in &swept {
+        h.shrink_swept_thread_52(t);
+    }
+    let mut swept = swept;
+    swept.clear();
+    h.heap().puc.shrunk = swept;
+}
+
 /// 5.2's `luaC_fullgc` from a pause: the whole cycle as single steps,
 /// as PUC runs it, the estimate what it traverses. The objects freed.
 /// `swept`: a cycle was under way, whose sweep has ended.
 pub(crate) fn full_cycle_52<H: StepHost + ?Sized>(h: &mut H, swept: bool) -> usize {
     let before = h.heap().live_objects();
     if swept {
-        h.shrink_swept_52();
+        shrink_swept_52(h);
         h.sweep_main_52();
     }
     h.heap().puc.pace.enter(St::Pause);
@@ -73,7 +85,7 @@ pub(crate) fn full_cycle_52<H: StepHost + ?Sized>(h: &mut H, swept: bool) -> usi
 pub(super) fn atomic_52<H: StepHost + ?Sized>(h: &mut H) -> i64 {
     let s = h.heap().puc.sizes;
     let (work, swept) = h.atomic();
-    h.shrink_swept_52();
+    shrink_swept_52(h);
     // `GCestimate`: what the cycle traversed, `atomic` included
     h.heap().puc.pace.estimate = h.heap().puc.pace.trav + work;
     h.heap().puc.pace.enter(St::SweepString);
@@ -142,11 +154,11 @@ pub(super) fn singlestep_52<H: StepHost + ?Sized>(h: &mut H) -> i64 {
         }
         _ => match h.sweep_quota(max) {
             Some(_) => {
-                h.shrink_swept_52();
+                shrink_swept_52(h);
                 max * cost
             }
             None => {
-                h.shrink_swept_52();
+                shrink_swept_52(h);
                 h.sweep_main_52();
                 h.heap().acct_check_sizes();
                 h.heap().puc.pace.enter(St::Pause);

@@ -190,7 +190,7 @@ impl Vm {
         }
         // the reader's last calls, past the last token
         while let Some((_, d)) = r.splices.pop_front() {
-            self.heap.defer_apply(d);
+            self.heap.replay_reader_call(d);
         }
         Ok(())
     }
@@ -214,7 +214,7 @@ impl Vm {
                 && st.is_none_or(|st| s <= st)
             {
                 let (_, d) = r.splices.pop_front().expect("peeked");
-                self.heap.defer_apply(d);
+                self.heap.replay_reader_call(d);
                 continue;
             }
             match (p, st) {

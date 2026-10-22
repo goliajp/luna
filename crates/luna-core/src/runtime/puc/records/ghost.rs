@@ -84,7 +84,7 @@ impl Heap {
 
     /// A table PUC makes, `a` array slots and `h` nodes, and luna does not
     /// (yet): counted now, freed by the next sweep unless luna makes it
-    /// after all ([`Heap::ghost_table_taken`]).
+    /// after all ([`Heap::ghost_table_made`]).
     pub(crate) fn acct_ghost_table(&mut self, a: usize, h: usize) -> Result<GhostRef, Oom> {
         // made while counting is set aside: an entry of no bytes, nothing
         // counted for it or freed
@@ -142,12 +142,6 @@ impl Heap {
         self.puc.sizes.table + self.array_bytes(a) + self.hash_bytes(h)
     }
 
-    /// The object behind `h`, made without counting, stands for one of
-    /// PUC's counted already: counted from now on.
-    pub(crate) fn set_counted(&mut self, h: *mut GcHeader) {
-        super::set_uncounted(h, false);
-    }
-
     /// An object of `kind` and `size` bytes PUC makes and luna does not
     /// (yet), as [`Heap::acct_ghost`]: where its record is.
     pub(crate) fn acct_ghost_ref(&mut self, kind: PucKind, size: usize) -> Result<GhostRef, Oom> {
@@ -159,18 +153,22 @@ impl Heap {
         Ok(GhostRef { g, at })
     }
 
-    /// luna made the object of `r` after all (one without parts): its
-    /// record neither frees nor sweeps it.
-    pub(crate) fn ghost_taken(&mut self, r: GhostRef) {
+    /// luna made `h`, without counting, for the object of `r` after all
+    /// (one without parts): the record neither frees nor sweeps it, and
+    /// `h` is counted from now on.
+    pub(crate) fn ghost_made(&mut self, r: GhostRef, h: *mut GcHeader) {
         self.record(r)[r.at] |= TAKEN;
+        super::set_uncounted(h, false);
     }
 
-    /// luna made the table of `t` after all (a trace leaving with it): its
-    /// record neither frees nor sweeps it.
-    pub(crate) fn ghost_table_taken(&mut self, t: GhostRef) {
+    /// luna made `h`, without counting, for the table of `t` after all (a
+    /// trace leaving with it): the record neither frees nor sweeps it, and
+    /// `h` is counted from now on.
+    pub(crate) fn ghost_table_made(&mut self, t: GhostRef, h: *mut GcHeader) {
         for e in &mut self.record(t)[t.at..t.at + 3] {
             *e |= TAKEN;
         }
+        super::set_uncounted(h, false);
     }
 
     /// The objects of PUC's a record holds, as a sweep counts them.

@@ -10,7 +10,7 @@ use crate::runtime::mem::{LVec, Oom};
 
 mod mark;
 mod unborn;
-pub(crate) use unborn::LoadsAside;
+pub(in crate::runtime) use unborn::LoadsAside;
 
 /// In a record's `sub` byte: a parser table.
 const LOADTAB: u8 = 0x20;

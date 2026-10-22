@@ -71,9 +71,9 @@ fn load_reader(
     name: &[u8],
     mode: Option<&[u8]>,
 ) -> Result<u32, LuaError> {
-    let mark = vm.heap.defer_mark();
+    let mark = vm.heap.reader_load_begins();
     let r = read_and_load(vm, a, reader, name, mode);
-    vm.heap.defer_settle(mark);
+    vm.heap.reader_load_ends(mark);
     vm.host_load_end();
     r
 }
@@ -96,10 +96,10 @@ fn read_and_load(
     let mut splices = Vec::new();
     let mut fed = 0u32;
     let mut spliced = |vm: &mut Vm, rs: &mut ReaderSlot, at: u32, phase: Phase| {
-        let mark = counted.then(|| vm.heap.defer_begin());
+        let mark = counted.then(|| vm.heap.reader_call_begins());
         let r = next_piece(vm, reader, rs, phase, name);
         if let Some(m) = mark {
-            splices.push((at, vm.heap.defer_end(m)));
+            splices.push((at, vm.heap.reader_call_ends(m)));
         }
         r
     };

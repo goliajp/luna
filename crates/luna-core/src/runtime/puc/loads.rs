@@ -8,7 +8,7 @@ use crate::runtime::puc::records::parse::ParseFrame;
 /// How many parser frames were open at some point, to return to with
 /// [`Heap::restore_parse_frames`].
 #[must_use]
-pub(crate) struct ParseMark(usize);
+pub(in crate::runtime) struct ParseMark(usize);
 
 /// A parser frame open for a collection step (see [`Heap::open_parse_frame`]).
 #[must_use = "the frame stays open until the token goes back to `Heap::close_parse_frame`"]
@@ -19,10 +19,21 @@ pub(crate) struct ParseOpen(());
 pub(crate) struct LoadsHeld(bool);
 
 impl Heap {
-    /// The loads a collection step runs in the middle of, outermost first.
-    #[inline]
-    pub(crate) fn parse_frames(&self) -> &[ParseFrame] {
-        &self.puc.parse
+    /// Mark the parser objects of the loads a collection step runs in the
+    /// middle of: above their C functions' slots on PUC's stack.
+    pub(crate) fn mark_load_slots(&self, m: &mut Marker) {
+        for f in &self.puc.parse {
+            for &h in &f.slots {
+                // SAFETY: a parser object is allocated while its load runs
+                unsafe { m.header(h) };
+            }
+        }
+    }
+
+    /// How many stack slots the loads' parser objects take (see
+    /// [`Heap::mark_load_slots`]).
+    pub(crate) fn load_slots(&self) -> u32 {
+        self.puc.parse.iter().map(|f| f.slots.len() as u32).sum()
     }
 
     /// `frame` is the innermost load's view while a collection step runs
@@ -40,13 +51,13 @@ impl Heap {
 
     /// Where the parser frames stand now.
     #[inline]
-    pub(crate) fn parse_mark(&self) -> ParseMark {
+    pub(in crate::runtime) fn parse_mark(&self) -> ParseMark {
         ParseMark(self.puc.parse.len())
     }
 
     /// Back to the frames at `m` (a load unwound by running out of memory).
     #[inline]
-    pub(crate) fn restore_parse_frames(&mut self, m: ParseMark) {
+    pub(in crate::runtime) fn restore_parse_frames(&mut self, m: ParseMark) {
         self.puc.parse.truncate(m.0);
     }
 
@@ -113,16 +124,24 @@ impl Heap {
     }
 
     /// `s`, a string a library of PUC's keeps and luna's may not, kept
-    /// alive.
+    /// alive (once, however often pinned).
     #[inline]
     pub(crate) fn pin(&mut self, s: Gc<LuaStr>) {
-        self.puc.pins.push(s);
+        if !self.puc.pins.iter().any(|p| p.as_ptr() == s.as_ptr()) {
+            self.puc.pins.push(s);
+        }
     }
 
-    /// The strings [`Heap::pin`] keeps.
+    /// Mark the strings [`Heap::pin`] keeps.
     #[inline]
-    pub(crate) fn pinned(&self) -> &[Gc<LuaStr>] {
-        &self.puc.pins
+    pub(crate) fn mark_pins(&self, m: &mut Marker) {
+        m.mark_strings(self.puc.pins.iter());
+    }
+
+    /// Mark the message [`Heap::set_load_msg`] left.
+    #[inline]
+    pub(crate) fn mark_load_msg(&self, m: &mut Marker) {
+        m.mark_strings(self.puc.load_msg.iter());
     }
 
     /// The longest string PUC keeps in its string table (5.1: all).
