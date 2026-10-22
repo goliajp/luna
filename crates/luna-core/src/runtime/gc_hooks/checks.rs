@@ -14,12 +14,24 @@ impl Heap {
         let _ = h;
     }
 
-    /// The freed table `t` is made again from the pool: no longer freed.
+    /// An object is made at `h`, which may have been freed before (a
+    /// table from the pool, or memory the allocator gave again).
     #[inline(always)]
     pub(crate) fn hook_reborn(&mut self, h: *mut GcHeader) {
         #[cfg(feature = "gc-verify")]
         self.forget_freed(h);
         let _ = h;
+    }
+
+    /// The object `h`, set aside with the flags `f`, goes on the list.
+    /// gc-verify notes one a marking now over left white: garbage, which
+    /// goes on the list with the live white and may hold objects the sweep
+    /// frees.
+    #[inline(always)]
+    pub(crate) fn hook_born(&mut self, h: *mut GcHeader, f: u8) {
+        #[cfg(feature = "gc-verify")]
+        self.note_born(h, f);
+        let _ = (h, f);
     }
 
     /// gc-verify: `h`, about to be held by `what`, is not one the sweep

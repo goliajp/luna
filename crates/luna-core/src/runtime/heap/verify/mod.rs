@@ -131,6 +131,8 @@ impl Heap {
             for &h in &self.finalize {
                 live.insert(h as usize);
             }
+            // and what a load made that PUC has not yet
+            live.extend(self.unborn_objs().map(|h| h as usize));
             for &h in self.tobefnz_live() {
                 live.insert(h as usize);
             }
@@ -151,7 +153,11 @@ impl Heap {
                     // they are unreachable, so a dangling ref inside them
                     // is benign (their peers may already be freed).
                     let f = (*cur).flags;
-                    if is_white(f) && (f & new_white) == 0 {
+                    // and garbage a load set aside, which went on the list
+                    // with the live white after the marking
+                    if is_white(f) && (f & new_white) == 0
+                        || self.hooks.born_dead.contains(&(cur as usize))
+                    {
                         cur = (*cur).next;
                         continue;
                     }

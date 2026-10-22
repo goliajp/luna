@@ -67,6 +67,7 @@ impl Heap {
     /// The object `h` freed: noted for the read-time probes.
     pub(crate) fn note_freed(&mut self, h: *mut GcHeader) {
         self.hooks.recently_freed.insert(h as usize);
+        self.hooks.born_dead.remove(&(h as usize));
         crate::runtime::gc_verify_probe::FREED.with(|f| f.borrow_mut().insert(h as usize));
         // SAFETY: the caller of `free_obj` names an allocated object, read
         // as a string when its tag says it is one
@@ -75,6 +76,15 @@ impl Heap {
             let b = s.as_bytes().to_vec();
             crate::runtime::gc_verify_probe::FREED_STR
                 .with(|f| f.borrow_mut().insert(h as usize, b));
+        }
+    }
+
+    /// `gc-verify`: the object `h`, set aside with the flags `f`, goes on
+    /// the list; one white but not the current white is garbage the
+    /// marking now over did not reach.
+    pub(in crate::runtime) fn note_born(&mut self, h: *mut GcHeader, f: u8) {
+        if is_white(f) && f & self.current_white == 0 {
+            self.hooks.born_dead.insert(h as usize);
         }
     }
 
