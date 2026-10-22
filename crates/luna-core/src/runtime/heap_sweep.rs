@@ -4,12 +4,11 @@ use super::*;
 use crate::runtime::table::Dialect;
 
 impl Heap {
-    /// Sweep the whole `all` list in one pass: free dead-white objects,
-    /// transition survivors (BLACK or current-white) to the new current-white
-    /// so the next cycle can re-mark them. Returns the number of objects freed.
+    /// Sweep the whole `all` list in one pass: free dead-white objects, survivors to the new
+    /// current-white so the next cycle can re-mark them. Returns the number of objects freed.
     pub(super) fn full_sweep(&mut self) -> usize {
-        // detach the list first so freeing (which needs &mut self for the
-        // string table) never aliases a pointer into self
+        self.forget_rooted();
+        // detach the list first so freeing never aliases a pointer into self
         let mut freed = 0;
         let new_white = self.current_white;
         // SAFETY: the detached list holds only objects this heap allocated and has not freed; `link` points at `head` or at the `next` field of a survivor, and a dead object is unlinked before `free_obj` and not touched after it
@@ -73,6 +72,7 @@ impl Heap {
 
     /// Sweep up to `budget` objects after `sweep_prev` (`to_live`: to the first kept); returns the count.
     pub(super) fn sweep_objects(&mut self, budget: usize, to_live: bool) -> usize {
+        self.forget_rooted();
         let mut n = 0;
         let new_white = self.current_white;
         // SAFETY: `sweep_prev`, when not null, is an object on `all` kept by
@@ -127,6 +127,7 @@ impl Heap {
     /// uncounted; a record of PUC's objects counts each one, and a dead one
     /// may be freed in part. Returns the count and whether the list ended.
     pub(crate) fn sweep_counted(&mut self, quota: i64) -> (i64, bool) {
+        self.forget_rooted();
         let mut n = 0;
         let new_white = self.current_white;
         let strt = matches!(self.table_dialect, Dialect::L51 | Dialect::L52);
