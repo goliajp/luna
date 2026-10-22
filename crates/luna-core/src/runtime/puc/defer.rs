@@ -32,7 +32,7 @@ impl Heap {
         #[cfg(feature = "gc-trace")]
         self.trace.hold();
         DeferMark {
-            bytes: self.bytes,
+            bytes: self.puc.bytes,
             objs: self.unborn_len(),
             aside: self.set_aside_loads(true),
         }
@@ -42,8 +42,8 @@ impl Heap {
     /// objects made since, kept aside.
     pub(crate) fn defer_end(&mut self, mark: DeferMark) -> Deferred {
         self.set_aside_loads(mark.aside);
-        let bytes = self.bytes as isize - mark.bytes as isize;
-        self.bytes = mark.bytes;
+        let bytes = self.puc.bytes as isize - mark.bytes as isize;
+        self.puc.bytes = mark.bytes;
         self.puc.set_aside += bytes;
         Deferred {
             bytes,
@@ -55,7 +55,7 @@ impl Heap {
 
     /// Count what was set aside, now.
     pub(crate) fn defer_apply(&mut self, d: Deferred) {
-        self.bytes = (self.bytes as isize + d.bytes) as usize;
+        self.puc.bytes = (self.puc.bytes as isize + d.bytes) as usize;
         self.puc.set_aside -= d.bytes;
         self.born_range(d.objs);
         #[cfg(feature = "gc-trace")]
@@ -73,7 +73,7 @@ impl Heap {
     /// made go on the list.
     pub(crate) fn defer_settle(&mut self, (bytes, objs): (isize, usize)) {
         let left = self.puc.set_aside - bytes;
-        self.bytes = (self.bytes as isize + left) as usize;
+        self.puc.bytes = (self.puc.bytes as isize + left) as usize;
         self.puc.set_aside = bytes;
         self.flush_unborn(objs);
     }

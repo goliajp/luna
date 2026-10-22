@@ -94,7 +94,7 @@ impl Vm {
         );
         let (scanned, names) = parsed.failed_scan().expect("checked above");
         let d = self.heap.table_dialect;
-        let mut r = Replay::new((d, self.heap.sizes), cl.proto, v, scanned, names, src);
+        let mut r = Replay::new((d, self.heap.puc.sizes), cl.proto, v, scanned, names, src);
         r.splice(splices);
         let log = self.compile_scratch.puc_log.take();
         #[cfg(feature = "gc-trace")]
@@ -151,7 +151,7 @@ impl Vm {
                     };
                     self.grow_buff(&mut r, n);
                 }
-                unclosed(&mut r, self.heap.sizes);
+                unclosed(&mut r, self.heap.puc.sizes);
                 self.replay_syntax_error(&mut r, e, failed.near, source.as_bytes())
             });
         self.compile_scratch.puc_log = log;

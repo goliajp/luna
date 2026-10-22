@@ -35,7 +35,7 @@ impl Vm {
         let (marks, scanned) = rec;
         let d = self.heap.table_dialect;
         let mut r = Replay::new(
-            (d, self.heap.sizes),
+            (d, self.heap.puc.sizes),
             proto,
             self.version,
             scanned,
@@ -57,7 +57,7 @@ impl Vm {
             .replay_begin(&mut r, cl)
             .and_then(|()| self.replay_log(&mut r, &log, chunk, marks, Some(cut)))
             .and_then(|()| {
-                failed::unclosed(&mut r, self.heap.sizes);
+                failed::unclosed(&mut r, self.heap.puc.sizes);
                 self.replay_syntax_error(&mut r, e, near, proto.source.as_bytes())
             });
         self.compile_scratch.puc_log = log;

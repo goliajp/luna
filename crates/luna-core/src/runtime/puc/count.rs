@@ -65,7 +65,7 @@ impl Heap {
         self.signed_zero_keys = version <= LuaVersion::Lua52;
         let d = Dialect::of(version);
         self.table_dialect = d;
-        self.sizes = PucSizes::of(d);
+        self.puc.sizes = PucSizes::of(d);
         // the strings the heap made before it knew the dialect (its fixed
         // memory error message) move to the dialect's hash
         self.hash51 = version == LuaVersion::Lua51;
@@ -86,7 +86,7 @@ impl Heap {
         if !self.counting() {
             return;
         }
-        self.bytes += size;
+        self.puc.bytes += size;
         #[cfg(feature = "gc-trace")]
         {
             let tag = kind.tag(self.table_dialect);
@@ -126,11 +126,11 @@ impl Heap {
         }
         #[cfg(feature = "gc-verify")]
         assert!(
-            self.bytes + new >= old,
+            self.puc.bytes + new >= old,
             "[gc-verify] a block of {old} bytes freed from a count of {}",
-            self.bytes
+            self.puc.bytes
         );
-        self.bytes = self.bytes + new - old;
+        self.puc.bytes = self.puc.bytes + new - old;
         #[cfg(feature = "gc-trace")]
         match (old, new) {
             (0, 0) => {}
@@ -158,11 +158,11 @@ impl Heap {
     pub(in crate::runtime) fn count_part(&mut self, old: usize, new: usize) {
         #[cfg(feature = "gc-verify")]
         assert!(
-            self.bytes + new >= old,
+            self.puc.bytes + new >= old,
             "[gc-verify] a block of {old} bytes freed from a count of {}",
-            self.bytes
+            self.puc.bytes
         );
-        self.bytes = self.bytes + new - old;
+        self.puc.bytes = self.puc.bytes + new - old;
         #[cfg(feature = "gc-trace")]
         match (old, new) {
             (0, 0) => {}

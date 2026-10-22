@@ -13,7 +13,7 @@ impl Heap {
         if unsafe { (*cur).cls } >> ENV_SHIFT == 0 {
             return 0;
         }
-        match &self.env51_box {
+        match &self.puc.env51_box {
             Some(e) if e.ats.contains(&cur) => self.env51_sweep_at(cur, after),
             _ => 0,
         }
@@ -23,13 +23,13 @@ impl Heap {
     fn env51_sweep_at(&mut self, cur: *mut GcHeader, after: bool) -> i64 {
         let w = self.current_white;
         let (mut n, mut freed, mut found, mut first) = (0, 0, false, usize::MAX);
-        let gens = self.env51_box.as_ref().map_or(0, |e| e.gens.len());
+        let gens = self.puc.env51_box.as_ref().map_or(0, |e| e.gens.len());
         for i in 0..gens {
             // the records of this opening the sweep frees, each on its own
             // as PUC frees them (an anchor names `newfenv`'s closure before
             // its table, which it made first)
             let mut each = [None; 2];
-            let Some(e) = &mut self.env51_box else {
+            let Some(e) = &mut self.puc.env51_box else {
                 return 0;
             };
             let g = &mut e.gens[i];
@@ -71,7 +71,7 @@ impl Heap {
     /// table's: `luaH_free` frees the node, then the array, then the
     /// table), counted if it was when made. Returns the bytes.
     fn env51_free_record(&mut self, r: usize, counted: bool) -> usize {
-        let s = self.sizes;
+        let s = self.puc.sizes;
         let parts: &[usize] = match r {
             crate::runtime::puc::records::env51::E1 => &[s.node, 2 * s.tvalue, s.table],
             crate::runtime::puc::records::env51::E2 | crate::runtime::puc::records::env51::E3 => {
@@ -88,7 +88,7 @@ impl Heap {
     /// The object `h` is freed: no record is found by it any more.
     #[inline]
     pub(in crate::runtime) fn env51_forget(&mut self, h: *mut GcHeader) {
-        if let Some(e) = &mut self.env51_box {
+        if let Some(e) = &mut self.puc.env51_box {
             if !e.owners.is_empty() {
                 e.owners.retain(|o| o.0 != h);
             }
@@ -115,7 +115,7 @@ impl Heap {
     /// A cycle starts: the records are white, as PUC's objects are.
     pub(in crate::runtime) fn env51_whiten(&mut self) {
         let w = self.current_white;
-        if let Some(e) = &mut self.env51_box {
+        if let Some(e) = &mut self.puc.env51_box {
             for g in e.gens.iter_mut() {
                 for p in g.ph.iter_mut().filter(|p| !p.dead) {
                     p.hdr.flags = w;

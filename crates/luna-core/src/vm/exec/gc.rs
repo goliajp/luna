@@ -170,7 +170,7 @@ impl Vm {
         };
         self.forget_dead_errors();
         // there may be objects to be finalized
-        self.heap.pace.fin_num = 1;
+        self.heap.puc.pace.fin_num = 1;
         self.gc_full_pause();
         freed
     }

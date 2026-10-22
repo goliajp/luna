@@ -95,7 +95,7 @@ impl Vm {
         };
         // the block and the user values count as PUC's `luaS_newudata`
         // counts them
-        let puc = self.heap.sizes.userdata(nuv, size);
+        let puc = self.heap.puc.sizes.userdata(nuv, size);
         self.heap.try_new_userdata_sized(payload, true, puc)
     }
 

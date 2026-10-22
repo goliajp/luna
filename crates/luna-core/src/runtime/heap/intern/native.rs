@@ -62,7 +62,7 @@ impl Heap {
         if self.counting() {
             puc::set_uncounted(h, false);
             if puc_nup > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
-                self.acct_obj(PucKind::CClosure, self.sizes.c_closure(puc_nup));
+                self.acct_obj(PucKind::CClosure, self.puc.sizes.c_closure(puc_nup));
             }
         }
         Ok(g)
@@ -131,7 +131,7 @@ impl Heap {
             h
         };
         if self.counting() {
-            self.acct_obj(PucKind::CClosure, self.sizes.c_closure(0));
+            self.acct_obj(PucKind::CClosure, self.puc.sizes.c_closure(0));
         } else {
             puc::set_uncounted(h, true);
         }
@@ -140,7 +140,7 @@ impl Heap {
     }
 
     /// The light function the opening made as function `id` (see
-    /// `PucState::lights`).
+    /// `PucModel::lights`).
     pub(crate) fn light(&self, id: usize) -> Option<Gc<NativeClosure>> {
         self.puc.lights.get(id).copied().flatten()
     }
@@ -242,7 +242,7 @@ impl Heap {
                 puc::set_uncounted(g.as_ptr() as *mut GcHeader, true);
             }
         } else if nup > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
-            let size = self.sizes.c_closure(nup);
+            let size = self.puc.sizes.c_closure(nup);
             self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::CClosure, size);
         }
         Ok(g)

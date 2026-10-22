@@ -27,7 +27,7 @@ impl Heap {
                 };
                 return self.thread_bytes(c.stack_size, ci);
             }
-            objsize(&self.sizes, self.table_dialect, h)
+            objsize(&self.puc.sizes, self.table_dialect, h)
         }
     }
 
@@ -56,9 +56,9 @@ impl Heap {
             if (*h).tag == ObjTag::Native {
                 let n = native_upvals(h);
                 return match d {
-                    Dialect::L51 => self.sizes.c_closure(n) as i64,
+                    Dialect::L51 => self.puc.sizes.c_closure(n) as i64,
                     _ if n == 0 => 0,
-                    Dialect::L52 | Dialect::L53 => self.sizes.c_closure(n) as i64,
+                    Dialect::L52 | Dialect::L53 => self.puc.sizes.c_closure(n) as i64,
                     _ => 1 + n as i64,
                 };
             }
@@ -90,9 +90,9 @@ impl Heap {
                         } else {
                             0
                         };
-                        (self.sizes.table
+                        (self.puc.sizes.table
                             + self.array_bytes(t.asize as usize)
-                            + self.sizes.node * nodes
+                            + self.puc.sizes.node * nodes
                             + stands) as i64
                     }
                     // 5.1 marks a userdata black at once, 5.2 and 5.3 count
@@ -128,7 +128,7 @@ impl Heap {
                 ObjTag::Native => 1 + native_upvals(h) as i64,
                 ObjTag::Proto => {
                     let a = (*(h as *const Proto)).puc_arrays.get();
-                    let s = self.sizes;
+                    let s = self.puc.sizes;
                     1 + p(a[2], s.tvalue)
                         + p(a[6], s.upvaldesc)
                         + p(a[1], s.ptr)
@@ -160,7 +160,7 @@ impl Heap {
             // PUC's top is luna's plus one (its slot 0 holds no value of luna's)
             Dialect::L55 => 2 + i64::from(top),
             // 5.3 counts `lua_State`, without the extra space before it
-            Dialect::L53 => (self.thread_bytes(size, ci) - self.sizes.ptr) as i64,
+            Dialect::L53 => (self.thread_bytes(size, ci) - self.puc.sizes.ptr) as i64,
             _ => self.thread_bytes(size, ci) as i64,
         }
     }
@@ -168,7 +168,7 @@ impl Heap {
     /// PUC's size of a thread with a stack of `stack` slots and `ci`
     /// `CallInfo`s (5.1: the size of its array).
     pub(crate) fn thread_bytes(&self, stack: u32, ci: u32) -> usize {
-        thread_bytes(&self.sizes, self.table_dialect, stack, ci)
+        thread_bytes(&self.puc.sizes, self.table_dialect, stack, ci)
     }
 }
 

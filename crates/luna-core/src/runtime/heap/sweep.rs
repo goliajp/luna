@@ -101,7 +101,7 @@ impl Heap {
                     // PUC's string table holds it, not the list it sweeps to
                     // the first live object: its string sweep comes first
                     *link = (*cur).next;
-                    self.strt.held.push(cur);
+                    self.puc.strt.held.push(cur);
                 } else if dead && !self.kept_dead(cur) {
                     self.env51_freed(cur);
                     *link = (*cur).next;
@@ -295,6 +295,6 @@ impl Heap {
         self.whiten_unborn();
         self.sweep_prev = ptr::null_mut();
         self.phase = GcPhase::Pause;
-        self.mem_ctx().gc_cycle_ended(self.bytes);
+        self.mem_ctx().gc_cycle_ended(self.puc.bytes);
     }
 }

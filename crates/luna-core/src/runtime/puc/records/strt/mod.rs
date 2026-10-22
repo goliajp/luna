@@ -70,8 +70,8 @@ impl Heap {
     /// The atomic step ended (5.1, 5.2): the dead strings of PUC's string
     /// table, by bucket.
     pub(in crate::runtime) fn collect_dead_strings(&mut self) {
-        self.strt.dead.clear();
-        self.strt.next = 0;
+        self.puc.strt.dead.clear();
+        self.puc.strt.next = 0;
         if !matches!(self.table_dialect, Dialect::L51 | Dialect::L52) {
             return;
         }
@@ -99,18 +99,18 @@ impl Heap {
                             _ if b.len() < 32 => Gc::from_ptr(cur as *mut LuaStr).stored_hash(),
                             _ => hash_52(b, self.seed),
                         };
-                        self.strt.dead.push((h % size.max(1), cur));
+                        self.puc.strt.dead.push((h % size.max(1), cur));
                     }
                 }
                 cur = (*cur).next;
             }
         }
-        self.strt.sort_dead(size.max(1));
+        self.puc.strt.sort_dead(size.max(1));
         // each bucket's from the head of its chain (the trace's order)
         if !cfg!(feature = "gc-trace") {
             return;
         }
-        let dead = &mut self.strt.dead;
+        let dead = &mut self.puc.strt.dead;
         let mut i = 0;
         while i < dead.len() {
             let b = dead[i].0;
@@ -133,7 +133,7 @@ impl Heap {
     pub(in crate::runtime) fn in_string_sweep(&self, h: *mut GcHeader) -> bool {
         // SAFETY: `h` heads a live object of this heap
         unsafe {
-            self.strt.next < self.strt.dead.len()
+            self.puc.strt.next < self.puc.strt.dead.len()
                 && (*h).tag == ObjTag::Str
                 && (*h).sub & (UNCOUNTED | EXTERNAL | SWEPT) == 0
                 && (self.table_dialect == Dialect::L51 || (*(h as *const LuaStr)).is_short())
@@ -145,7 +145,7 @@ impl Heap {
     /// them again meanwhile.
     pub(crate) fn end_string_sweep(&mut self) {
         let new_white = self.current_white;
-        for h in std::mem::take(&mut self.strt.held) {
+        for h in std::mem::take(&mut self.puc.strt.held) {
             // SAFETY: a held string is allocated and on no list
             unsafe {
                 let f = (*h).flags;
@@ -158,19 +158,19 @@ impl Heap {
                 }
             }
         }
-        self.strt.dead.clear();
-        self.strt.next = 0;
+        self.puc.strt.dead.clear();
+        self.puc.strt.next = 0;
     }
 
     /// The string sweep went up to bucket `upto`: the dead strings of the
     /// buckets before it leave the count. Returns the bytes freed.
     pub(crate) fn sweep_strings_upto(&mut self, upto: i64) -> i64 {
-        let before = self.bytes as i64;
-        while let Some(&(b, h)) = self.strt.dead.get(self.strt.next) {
+        let before = self.puc.bytes as i64;
+        while let Some(&(b, h)) = self.puc.strt.dead.get(self.puc.strt.next) {
             if i64::from(b) >= upto {
                 break;
             }
-            self.strt.next += 1;
+            self.puc.strt.next += 1;
             // SAFETY: a dead string stays allocated until the object sweep,
             // which comes after this one; a resurrected one is skipped
             unsafe {
@@ -190,7 +190,7 @@ impl Heap {
                 self.acct_string_free((*(h as *const LuaStr)).len());
             }
         }
-        before - self.bytes as i64
+        before - self.puc.bytes as i64
     }
 }
 

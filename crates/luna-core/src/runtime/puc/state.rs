@@ -3,7 +3,23 @@
 use super::*;
 
 /// PUC's structures luna has no object for, as far as the count goes.
-pub(crate) struct PucState {
+pub(crate) struct PucModel {
+    /// PUC's `totalbytes`: every object and block at the size PUC gives it
+    /// (`sizes`), not what luna's own objects take (see `runtime::puc`)
+    pub(crate) bytes: usize,
+    /// where the next collection step falls due (`pace`), or `usize::MAX`
+    /// while there is none: the one comparison a safe point makes
+    pub(crate) gc_limit: usize,
+    /// the sizes of PUC's objects in this dialect, which `bytes` counts
+    pub(crate) sizes: super::size::PucSizes,
+    /// PUC's collector state and pace
+    pub(crate) pace: super::pace::Pace,
+    /// 5.1, 5.2: the sweep of PUC's string table under way
+    pub(in crate::runtime) strt: super::records::strt::StrtSweep,
+    /// 5.1's environments luna has no objects for
+    pub(crate) env51_box: Option<Box<super::records::env51::Env51>>,
+    /// 5.1 / 5.2: the dead open upvalues the sweep has not reached
+    pub(crate) open_dead: super::records::open_upvals::OpenDead,
     /// above 0, nothing is counted (objects PUC made elsewhere, or not at
     /// all, are being built): changed only through [`CountingOff`] and
     /// [`CountingMark`]
@@ -60,10 +76,17 @@ pub(crate) struct PucState {
     pub(crate) strcache: strcache::StrCache,
 }
 
-impl Default for PucState {
-    fn default() -> PucState {
+impl Default for PucModel {
+    fn default() -> PucModel {
         // nothing is counted until the dialect is known (`acct_boot`)
-        PucState {
+        PucModel {
+            bytes: 0,
+            gc_limit: usize::MAX,
+            sizes: super::size::PucSizes::of(crate::runtime::table::Dialect::L55),
+            pace: super::pace::Pace::new(),
+            strt: Default::default(),
+            env51_box: None,
+            open_dead: Default::default(),
             silent: 1,
             strt_size: 0,
             strt_nuse: 0,

@@ -14,7 +14,7 @@ impl Vm {
     #[doc(hidden)]
     pub fn open_lua_c_libs(&mut self) -> Result<(), LuaError> {
         if self.version == crate::version::LuaVersion::Lua51 {
-            let size = self.heap.sizes.c_closure(0);
+            let size = self.heap.puc.sizes.c_closure(0);
             let kind = crate::runtime::heap::PucKind::CClosure;
             self.heap.acct_obj(kind, size);
         } else {

@@ -71,7 +71,7 @@ impl Vm {
                 .ok_or(LuaError(Value::Nil))?
         };
         // (5.1's environment is not an upvalue in PUC: never counted)
-        let upval = self.heap.sizes.upval;
+        let upval = self.heap.puc.sizes.upval;
         for (i, uv) in ups.iter().enumerate() {
             if self.version() > LuaVersion::Lua51 || i != proto.env_upval_idx as usize {
                 let h = uv.as_ptr() as *mut crate::runtime::heap::GcHeader;

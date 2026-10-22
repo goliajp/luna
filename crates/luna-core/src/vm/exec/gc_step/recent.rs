@@ -8,14 +8,14 @@ impl Vm {
         let stepsize = self.gc_params.apply(Param::StepSize, 100);
         let mut work = self
             .gc_params
-            .apply(Param::StepMul, stepsize / self.heap.sizes.ptr as i64);
+            .apply(Param::StepMul, stepsize / self.heap.puc.sizes.ptr as i64);
         let fast = work == 0;
         let run = self.gc_running();
         loop {
-            if !fast && self.heap.pace.state == St::Propagate {
+            if !fast && self.heap.puc.pace.state == St::Propagate {
                 if self.gc_propagate(&mut work, 0, run) {
                     // the step that finds no gray object
-                    self.heap.pace.state = St::EnterAtomic;
+                    self.heap.puc.pace.state = St::EnterAtomic;
                     work -= 1;
                 }
             } else {
@@ -30,38 +30,40 @@ impl Vm {
             }
         }
         let bytes = self.heap.bytes();
-        let debt = if self.heap.pace.state == St::Pause {
-            let threshold = self.gc_params.apply(Param::Pause, self.heap.pace.estimate);
+        let debt = if self.heap.puc.pace.state == St::Pause {
+            let threshold = self
+                .gc_params
+                .apply(Param::Pause, self.heap.puc.pace.estimate);
             pause_debt_55(bytes, threshold)
         } else {
             stepsize
         };
-        self.heap.pace.set_debt(d, bytes, debt);
+        self.heap.puc.pace.set_debt(d, bytes, debt);
         Ok(())
     }
 
     pub(super) fn singlestep_55(&mut self, fast: bool) -> Result<i64, LuaError> {
-        Ok(match self.heap.pace.state {
+        Ok(match self.heap.puc.pace.state {
             St::Pause => {
                 self.gc_restart();
                 1
             }
             St::Propagate => {
                 if fast {
-                    self.heap.pace.state = St::EnterAtomic;
+                    self.heap.puc.pace.state = St::EnterAtomic;
                     return Ok(1);
                 }
                 let run = self.gc_running();
                 let mut w = 1;
                 if self.gc_propagate(&mut w, 0, run) {
-                    self.heap.pace.state = St::EnterAtomic;
+                    self.heap.puc.pace.state = St::EnterAtomic;
                     return Ok(1);
                 }
                 1 - w
             }
             St::EnterAtomic => {
                 self.gc_atomic();
-                self.heap.pace.state = St::SweepAll;
+                self.heap.puc.pace.state = St::SweepAll;
                 ATOMICSTEP
             }
             St::CallFin => {
@@ -69,7 +71,7 @@ impl Vm {
                     self.gc_tm(false)?;
                     return Ok(CWUFIN_55);
                 }
-                self.heap.pace.state = St::Pause;
+                self.heap.puc.pace.state = St::Pause;
                 STEP2PAUSE
             }
             _ => self.sweep_step_55(fast),
@@ -78,30 +80,30 @@ impl Vm {
 
     fn sweep_step_55(&mut self, fast: bool) -> i64 {
         let quota = if fast { i64::MAX } else { SWEEPMAX_55 };
-        match self.heap.pace.state {
+        match self.heap.puc.pace.state {
             St::SweepAll => {
                 if self.sweep_quota(quota).is_none() {
-                    self.heap.pace.state = St::SweepFinobj;
-                    self.heap.pace.fin_left = Some(self.heap.finobj_count());
+                    self.heap.puc.pace.state = St::SweepFinobj;
+                    self.heap.puc.pace.fin_left = Some(self.heap.finobj_count());
                 }
                 SWEEPMAX_55
             }
             St::SweepFinobj => {
-                if !sweep_other(&mut self.heap.pace.fin_left, quota) {
-                    self.heap.pace.state = St::SweepTobefnz;
-                    self.heap.pace.fin_left = Some(self.heap.tobefnz_count());
+                if !sweep_other(&mut self.heap.puc.pace.fin_left, quota) {
+                    self.heap.puc.pace.state = St::SweepTobefnz;
+                    self.heap.puc.pace.fin_left = Some(self.heap.tobefnz_count());
                 }
                 SWEEPMAX_55
             }
             St::SweepTobefnz => {
-                if !sweep_other(&mut self.heap.pace.fin_left, quota) {
-                    self.heap.pace.state = St::SweepEnd;
+                if !sweep_other(&mut self.heap.puc.pace.fin_left, quota) {
+                    self.heap.puc.pace.state = St::SweepEnd;
                 }
                 SWEEPMAX_55
             }
             St::SweepEnd => {
                 self.heap.acct_check_sizes();
-                self.heap.pace.state = St::CallFin;
+                self.heap.puc.pace.state = St::CallFin;
                 SWEEPMAX_55
             }
             _ => unreachable!("a sweep state"),
@@ -110,72 +112,72 @@ impl Vm {
 
     pub(super) fn step_54(&mut self) -> Result<(), LuaError> {
         let d = Dialect::L54;
-        let s = self.heap.sizes;
+        let s = self.heap.puc.sizes;
         let stepmul = (self.gc_params.get(Param::StepMul)) | 1;
-        let debt0 = self.heap.pace.debt(d, self.heap.bytes());
+        let debt0 = self.heap.puc.pace.debt(d, self.heap.bytes());
         let (mut debt, stepsize) = work_54(&s, debt0, stepmul, self.gc_params.get(Param::StepSize));
         let run = self.gc_running();
         loop {
-            if self.heap.pace.state == St::Propagate {
+            if self.heap.puc.pace.state == St::Propagate {
                 if self.gc_propagate(&mut debt, -stepsize, run) {
-                    self.heap.pace.state = St::EnterAtomic;
+                    self.heap.puc.pace.state = St::EnterAtomic;
                 }
             } else {
                 debt -= self.singlestep_54()?;
             }
-            if !(debt > -stepsize && self.heap.pace.state != St::Pause) {
+            if !(debt > -stepsize && self.heap.puc.pace.state != St::Pause) {
                 break;
             }
         }
         let bytes = self.heap.bytes();
-        if self.heap.pace.state == St::Pause {
+        if self.heap.puc.pace.state == St::Pause {
             let pause = self.gc_params.get(Param::Pause);
-            let debt = pause_debt(d, bytes, self.heap.pace.estimate, pause);
-            self.heap.pace.set_debt(d, bytes, debt);
+            let debt = pause_debt(d, bytes, self.heap.puc.pace.estimate, pause);
+            self.heap.puc.pace.set_debt(d, bytes, debt);
         } else {
             let debt = debt_after_54(&s, debt, stepmul);
-            self.heap.pace.set_debt(d, bytes, debt);
+            self.heap.puc.pace.set_debt(d, bytes, debt);
         }
         Ok(())
     }
 
     pub(super) fn singlestep_54(&mut self) -> Result<i64, LuaError> {
-        Ok(match self.heap.pace.state {
+        Ok(match self.heap.puc.pace.state {
             St::Pause => {
                 self.gc_restart();
                 1
             }
             St::Propagate => {
-                self.heap.pace.state = St::EnterAtomic;
+                self.heap.puc.pace.state = St::EnterAtomic;
                 0
             }
             St::EnterAtomic => {
                 let (work, _) = self.gc_atomic();
-                self.heap.pace.state = St::SweepAll;
-                self.heap.pace.estimate = self.heap.bytes() as i64;
+                self.heap.puc.pace.state = St::SweepAll;
+                self.heap.puc.pace.estimate = self.heap.bytes() as i64;
                 work
             }
             St::SweepAll => match self.sweep_quota(SWEEPMAX_54) {
                 Some((n, freed)) => {
-                    self.heap.pace.estimate -= freed;
+                    self.heap.puc.pace.estimate -= freed;
                     n
                 }
                 None => {
-                    self.heap.pace.state = St::SweepFinobj;
-                    self.heap.pace.fin_left = Some(self.heap.finobj_count());
+                    self.heap.puc.pace.state = St::SweepFinobj;
+                    self.heap.puc.pace.fin_left = Some(self.heap.finobj_count());
                     0
                 }
             },
             St::SweepFinobj | St::SweepTobefnz => {
-                let finobj = self.heap.pace.state == St::SweepFinobj;
-                match self.heap.pace.fin_left {
+                let finobj = self.heap.puc.pace.state == St::SweepFinobj;
+                match self.heap.puc.pace.fin_left {
                     Some(n) => {
-                        sweep_other(&mut self.heap.pace.fin_left, SWEEPMAX_54);
+                        sweep_other(&mut self.heap.puc.pace.fin_left, SWEEPMAX_54);
                         n.min(SWEEPMAX_54)
                     }
                     None => {
-                        self.heap.pace.state = if finobj {
-                            self.heap.pace.fin_left = Some(self.heap.tobefnz_count());
+                        self.heap.puc.pace.state = if finobj {
+                            self.heap.puc.pace.fin_left = Some(self.heap.tobefnz_count());
                             St::SweepTobefnz
                         } else {
                             St::SweepEnd
@@ -186,7 +188,7 @@ impl Vm {
             }
             St::SweepEnd => {
                 self.heap.acct_check_sizes();
-                self.heap.pace.state = St::CallFin;
+                self.heap.puc.pace.state = St::CallFin;
                 0
             }
             _ => {
@@ -198,7 +200,7 @@ impl Vm {
                     }
                     return Ok(n * FINALIZECOST_54);
                 }
-                self.heap.pace.state = St::Pause;
+                self.heap.puc.pace.state = St::Pause;
                 0
             }
         })

@@ -101,7 +101,7 @@ impl Heap {
             counted: self.counting(),
             refs,
         })?;
-        self.acct_obj(PucKind::Table, self.sizes.table);
+        self.acct_obj(PucKind::Table, self.puc.sizes.table);
         Ok(t.as_ptr() as *mut GcHeader)
     }
 
@@ -150,7 +150,7 @@ impl Heap {
         // SAFETY: the caller's contract
         let t = unsafe { &*(h as *const LoadTab) };
         let (a, n) = (t.asize as usize, t.nodes as usize);
-        let s = &self.sizes;
+        let s = &self.puc.sizes;
         (match self.table_dialect {
             Dialect::L51 | Dialect::L52 => s.table + self.array_bytes(a) + s.node * n.max(1),
             Dialect::L53 => s.table + self.array_bytes(a) + s.node * n,
@@ -169,7 +169,11 @@ impl Heap {
             // `luaH_free`: the hash part, the array part, the table
             let t = &*(h as *const LoadTab);
             let (a, n, k) = (t.asize as usize, t.nodes as usize, usize::from(t.counted));
-            for b in [self.hash_bytes(n), self.array_bytes(a), self.sizes.table] {
+            for b in [
+                self.hash_bytes(n),
+                self.array_bytes(a),
+                self.puc.sizes.table,
+            ] {
                 if b > 0 {
                     self.acct_part(b * k, 0);
                 }
@@ -253,7 +257,7 @@ impl Heap {
                 (*c).flags = (*c).with_slow((f & !COLOR_BITS) | self.current_white);
                 return;
             }
-            if self.pace.count_marked && self.phase == GcPhase::Propagate {
+            if self.puc.pace.count_marked && self.phase == GcPhase::Propagate {
                 self.count_marked(u);
             }
             (*u).flags = (*u).with_slow(((*u).flags & !COLOR_BITS) | BLACK);

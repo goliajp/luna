@@ -139,7 +139,7 @@ impl Heap {
     pub(super) fn leaf_hdr(&self) -> usize {
         match self.table_dialect {
             crate::runtime::table::Dialect::L52 | crate::runtime::table::Dialect::L53 => {
-                self.sizes.str_hdr
+                self.puc.sizes.str_hdr
             }
             _ => 0,
         }
@@ -148,7 +148,7 @@ impl Heap {
     /// 5.2 counts a closed upvalue a traversal marks.
     pub(super) fn leaf_upval(&self) -> usize {
         match self.table_dialect {
-            crate::runtime::table::Dialect::L52 => self.sizes.upval,
+            crate::runtime::table::Dialect::L52 => self.puc.sizes.upval,
             _ => 0,
         }
     }

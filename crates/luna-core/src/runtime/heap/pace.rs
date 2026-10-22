@@ -14,14 +14,14 @@ impl Heap {
 
     /// Approximate heap size in bytes.
     pub fn bytes(&self) -> usize {
-        self.bytes
+        self.puc.bytes
     }
 
     /// What a memory cap is held against: the bytes the allocation context
     /// has handed out, when it counts them (a host function or a policy),
     /// else PUC's count ([`Heap::bytes`]).
     pub fn cap_bytes(&self) -> usize {
-        self.mem_ctx().in_use().unwrap_or(self.bytes)
+        self.mem_ctx().in_use().unwrap_or(self.puc.bytes)
     }
 
     /// Pure-read walk over the intrusive `all`
@@ -67,7 +67,7 @@ impl Heap {
 
     /// [`Heap::gc_due`] once `more` bytes more are counted.
     pub(crate) fn gc_due_after(&self, more: usize) -> bool {
-        self.bytes + more >= self.gc_limit && !self.no_gc() && !self.no_auto()
+        self.puc.bytes + more >= self.puc.gc_limit && !self.no_gc() && !self.no_auto()
     }
 
     /// No automatic step runs (`gc-trace` with `R38_NOAUTO` set).
@@ -100,8 +100,8 @@ impl Heap {
         if !stopped {
             let d = self.table_dialect;
             match d {
-                Dialect::L51 => self.pace.set_threshold(self.bytes as i64),
-                _ => self.pace.set_debt(d, self.bytes, 0),
+                Dialect::L51 => self.puc.pace.set_threshold(self.puc.bytes as i64),
+                _ => self.puc.pace.set_debt(d, self.puc.bytes, 0),
             }
         }
         self.refresh_gc_limit();
@@ -130,10 +130,10 @@ impl Heap {
     /// stops the collector with an unreachable threshold; the later
     /// dialects still step then, to put the debt back.
     pub(crate) fn refresh_gc_limit(&mut self) {
-        self.gc_limit = if self.gc_stopped && self.table_dialect == Dialect::L51 {
+        self.puc.gc_limit = if self.gc_stopped && self.table_dialect == Dialect::L51 {
             usize::MAX
         } else {
-            self.pace.limit(self.table_dialect)
+            self.puc.pace.limit(self.table_dialect)
         };
     }
 
@@ -143,25 +143,27 @@ impl Heap {
     pub fn rearm_gc_pause(&mut self, pause: i64) {
         use crate::runtime::puc::pace::*;
         let d = self.table_dialect;
-        let bytes = self.bytes;
+        let bytes = self.puc.bytes;
         match d {
             Dialect::L51 => {
-                self.pace.estimate = bytes as i64;
-                self.pace.set_threshold(threshold_51(bytes as i64, pause));
+                self.puc.pace.estimate = bytes as i64;
+                self.puc
+                    .pace
+                    .set_threshold(threshold_51(bytes as i64, pause));
             }
             Dialect::L55 => {
                 let marked = bytes as i64 - self.fixed_bytes();
-                self.pace.estimate = marked;
+                self.puc.pace.estimate = marked;
                 let debt = pause_debt_55(bytes, marked.saturating_mul(pause) / 100);
-                self.pace.set_debt(d, bytes, debt);
+                self.puc.pace.set_debt(d, bytes, debt);
             }
             _ => {
-                self.pace.estimate = bytes as i64;
+                self.puc.pace.estimate = bytes as i64;
                 let debt = pause_debt(d, bytes, bytes as i64, pause);
-                self.pace.set_debt(d, bytes, debt);
+                self.puc.pace.set_debt(d, bytes, debt);
             }
         }
-        self.pace.state = St::Pause;
+        self.puc.pace.state = St::Pause;
         self.refresh_gc_limit();
     }
 
@@ -174,7 +176,7 @@ impl Heap {
     /// the reserved words, the metamethod names, `_ENV`, the memory
     /// error's message).
     pub(crate) fn fixed_bytes(&self) -> i64 {
-        let s = self.sizes;
+        let s = self.puc.sizes;
         let mut n: i64 = self
             .puc
             .pins
