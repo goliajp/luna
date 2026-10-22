@@ -28,6 +28,10 @@ pub(crate) struct HookState {
     /// read-time probes (exact only under quarantining allocators)
     #[cfg(feature = "gc-verify")]
     pub(crate) recently_freed: std::collections::HashSet<usize>,
+    /// gc-verify: garbage a load set aside that went on the list after
+    /// the marking that found it dead (see `Heap::hook_born`), until freed
+    #[cfg(feature = "gc-verify")]
+    pub(crate) born_dead: std::collections::HashSet<usize>,
 }
 
 /// gc-verify: a marking that, instead of marking a child, reports one the

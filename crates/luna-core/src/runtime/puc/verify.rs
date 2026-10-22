@@ -22,8 +22,9 @@ impl Heap {
     /// and each one a record holds. Panics when the count went astray.
     pub(in crate::runtime) fn verify_string_count(&self, ctx: &str) {
         // and "not enough memory", which PUC makes at the start and luna
-        // does not
-        let mut n = self.ghost_short_strings() + 1;
+        // does not (a heap no Vm made has no PUC state: its string table
+        // is never sized)
+        let mut n = self.ghost_short_strings() + usize::from(self.puc.strt_size != 0);
         // and 5.1's strings luna's stand for
         let strt = crate::runtime::puc::STRT_STAND;
         n += self
@@ -32,20 +33,22 @@ impl Heap {
             .iter()
             .filter(|s| s.1 & strt != 0)
             .count();
+        // SAFETY: a header on a list or set aside heads an allocated object
+        let counted = |h: *mut GcHeader| unsafe {
+            (*h).tag == ObjTag::Str
+                && (*(h as *const LuaStr)).len() <= self.puc.short_max
+                && (*h).sub & (UNCOUNTED | EXTERNAL | SWEPT) == 0
+        };
         for mut cur in [self.list_head(), self.fixed_head()] {
-            // SAFETY: the lists link this heap's live objects
-            unsafe {
-                while !cur.is_null() {
-                    if (*cur).tag == ObjTag::Str
-                        && (*(cur as *const LuaStr)).len() <= self.puc.short_max
-                        && (*cur).sub & (UNCOUNTED | EXTERNAL | SWEPT) == 0
-                    {
-                        n += 1;
-                    }
-                    cur = (*cur).next;
-                }
+            while !cur.is_null() {
+                n += usize::from(counted(cur));
+                // SAFETY: the lists link this heap's live objects
+                cur = unsafe { (*cur).next };
             }
         }
+        // and the strings a load made that are still set aside: interned
+        // and counted, though off the lists
+        n += self.unborn_objs().filter(|&h| counted(h)).count();
         assert_eq!(
             n, self.puc.strt_nuse,
             "{ctx}: counted short strings against PUC's string table"

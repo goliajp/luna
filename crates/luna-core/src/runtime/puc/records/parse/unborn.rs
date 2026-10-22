@@ -9,6 +9,16 @@ use super::*;
 /// In the `next` of an object set aside: PUC has not made it yet.
 const UNBORN: *mut GcHeader = ptr::without_provenance_mut(1);
 
+/// Whether `h` is set aside: PUC has not made it yet.
+///
+/// # Safety
+/// `h` heads an allocated object.
+#[inline]
+unsafe fn is_unborn(h: *mut GcHeader) -> bool {
+    // SAFETY: the caller's contract
+    unsafe { (*h).next == UNBORN }
+}
+
 /// Whether loads were set aside before (see [`Heap::set_loads_aside`]).
 #[must_use = "loads stay as set until the token goes back to `Heap::loads_aside_back`"]
 pub(crate) struct LoadsAside(bool);
@@ -26,6 +36,7 @@ impl Heap {
             return false;
         }
         self.puc.unborn.push(h);
+        self.hook_reborn(h);
         // SAFETY: the caller's contract
         unsafe {
             (*h).next = UNBORN;
@@ -43,13 +54,14 @@ impl Heap {
     pub(in crate::runtime) unsafe fn born(&mut self, h: *mut GcHeader) {
         // SAFETY: the caller's contract
         unsafe {
-            if (*h).next != UNBORN {
+            if !is_unborn(h) {
                 return;
             }
             // one a marking of this cycle made black already (luna holds it
             // before PUC makes it) stays black: what holds it may be black
             // too (one gray is on a gray stack, traversed whatever its color)
             let f = (*h).flags;
+            self.hook_born(h, f);
             self.link_now(h);
             if self.phase() == GcPhase::Propagate && is_black(f) {
                 (*h).flags = f;
@@ -114,7 +126,7 @@ impl Heap {
     pub(crate) unsafe fn link_before(&mut self, h: *mut GcHeader, anchor: *mut GcHeader) {
         // SAFETY: the caller's contract
         unsafe {
-            if (*h).next == UNBORN || (*anchor).next == UNBORN {
+            if is_unborn(h) || is_unborn(anchor) {
                 return;
             }
             self.move_before(h, anchor);
@@ -131,14 +143,21 @@ impl Heap {
     /// that ended may have reached it).
     pub(in crate::runtime) fn whiten_unborn(&mut self) {
         let white = self.white();
-        for &h in &self.puc.unborn {
+        for h in self.unborn_objs() {
             // SAFETY: an object set aside is allocated; only its flags are
             // written
-            unsafe {
-                if (*h).next == UNBORN {
-                    (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | white);
-                }
-            }
+            unsafe { (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | white) };
         }
+    }
+
+    /// The objects still set aside: allocated, off the lists.
+    pub(in crate::runtime) fn unborn_objs(&self) -> impl Iterator<Item = *mut GcHeader> + '_ {
+        // SAFETY: what the list of them holds is allocated (only
+        // `flush_unborn` drops one, after it put it on the list)
+        self.puc
+            .unborn
+            .iter()
+            .copied()
+            .filter(|&h| unsafe { is_unborn(h) })
     }
 }
