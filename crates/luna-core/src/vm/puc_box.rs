@@ -22,7 +22,7 @@ impl Vm {
         let u = self.lib_userdata(UserdataPayload::Empty, false, size)?;
         // on the stack of the running native until the buffer is done
         self.buffer_boxes
-            .push((self.running_natives.len() as u32, u));
+            .push((self.running_natives.len() as u32, u, 0));
         self.api_check_after_rooted()?;
         let mt = self.box_metatable()?;
         // SAFETY: `u` is a live userdata held in `buffer_boxes`; the borrow covers one store, which allocates nothing
@@ -38,7 +38,7 @@ impl Vm {
         if let Some(i) = self
             .buffer_boxes
             .iter()
-            .rposition(|&(_, b)| b.as_ptr() == u.as_ptr())
+            .rposition(|&(_, b, _)| b.as_ptr() == u.as_ptr())
         {
             self.buffer_boxes.remove(i);
         }
@@ -50,8 +50,68 @@ impl Vm {
         let natives = self.running_natives.len() as u32;
         self.buffer_boxes
             .iter()
-            .filter(move |&&(at, _)| at <= natives)
-            .map(|&(_, u)| u)
+            .filter(move |&&(at, ..)| at <= natives)
+            .map(|&(_, u, _)| u)
+    }
+
+    /// The block of box `u`, if any, is `size` bytes now.
+    pub(crate) fn box_block(&mut self, u: Option<Gc<Userdata>>, size: usize) {
+        let Some(u) = u else {
+            return;
+        };
+        if let Some(b) = self
+            .buffer_boxes
+            .iter_mut()
+            .rfind(|b| b.1.as_ptr() == u.as_ptr())
+        {
+            b.2 = size;
+        }
+    }
+
+    /// The slot of the box native `i` of `running_natives` made (5.4+):
+    /// the placeholder `luaL_buffinit` pushed (see [`Vm::buffer_box`]), or
+    /// its top when there is none. Looked for when an error closes it.
+    fn box_slot(&self, i: usize) -> u32 {
+        let Some(a) = self.running_natives.get(i) else {
+            return 0;
+        };
+        let (from, top) = (a.func_slot + 1 + a.nargs, a.top());
+        (from..top)
+            .rev()
+            .find(|&s| {
+                self.stack
+                    .get(s as usize)
+                    .is_some_and(|v| v.raw_eq(Vm::buffer_box()))
+            })
+            .unwrap_or(top)
+    }
+
+    /// An error leaves the boxes of the natives above `base`: garbage,
+    /// which from 5.4 on the protected call that catches the error closes
+    /// (`now`: one in this thread does), innermost first, each `__close`
+    /// wanting its room above the box's slot and freeing its block. The
+    /// others free it when they are finalized. The error that refusing that
+    /// room raises, if any.
+    pub(crate) fn close_left_boxes(&mut self, base: usize, now: bool) -> Option<LuaError> {
+        let now = now && self.version() >= LuaVersion::Lua54;
+        let mut err = None;
+        for i in (0..self.buffer_boxes.len()).rev() {
+            let (at, _, size) = self.buffer_boxes[i];
+            if at == u32::MAX || at as usize <= base {
+                continue;
+            }
+            let slot = self.box_slot(at as usize - 1);
+            if !now {
+                self.buffer_boxes[i].0 = u32::MAX;
+                continue;
+            }
+            self.buffer_boxes.remove(i);
+            if err.is_none() {
+                err = self.box_close_room_at(slot).err();
+            }
+            self.heap.trace_raw(size, 0);
+        }
+        err
     }
 
     /// The box metatable, made when it is not in the registry: 5.3
@@ -133,23 +193,41 @@ impl Vm {
     }
 
     /// The room a box's `__close` wants (see [`Vm::box_closed`]); alone
-    /// when an error closes it, from the level of the protected call that
-    /// catches it, whose next `CallInfo` the failed calls left.
-    pub(crate) fn box_close_room(&mut self) -> Result<(), LuaError> {
-        if let Some(top) = self.native_top() {
-            let pushed = if self.version() >= LuaVersion::Lua55 {
-                2
-            } else {
-                3
-            };
-            let min = crate::vm::exec::stack_size::MIN_STACK;
-            self.check_lua_stack(top + 2 + pushed, min, true)?;
+    /// when an error closes it (see [`Vm::close_left_boxes`]), from the
+    /// level of the protected call that catches it, whose next `CallInfo`
+    /// the failed calls left.
+    fn box_close_room(&mut self) -> Result<(), LuaError> {
+        match self.native_top() {
+            Some(top) => self.box_close_room_at(top),
+            None => Ok(()),
         }
-        Ok(())
+    }
+
+    /// [`Vm::box_close_room`] for the box at `top`.
+    fn box_close_room_at(&mut self, top: u32) -> Result<(), LuaError> {
+        let pushed = if self.version() >= LuaVersion::Lua55 {
+            2
+        } else {
+            3
+        };
+        let min = crate::vm::exec::stack_size::MIN_STACK;
+        self.check_lua_stack(top + 2 + pushed, min, true)
     }
 }
 
-/// `boxgc`: luna keeps no block in a box, so there is nothing to free.
-fn box_gc(_vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<u32, LuaError> {
+/// `boxgc`: the block of a box an error left behind is freed (luna keeps
+/// none, only PUC's size of it for the trace).
+fn box_gc(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let Value::Userdata(u) = vm.nat_arg(fs, nargs, 0) else {
+        return Ok(0);
+    };
+    let left = vm
+        .buffer_boxes
+        .iter()
+        .rposition(|b| b.0 == u32::MAX && b.1.as_ptr() == u.as_ptr());
+    if let Some(i) = left {
+        let size = vm.buffer_boxes.remove(i).2;
+        vm.heap.trace_raw(size, 0);
+    }
     Ok(0)
 }

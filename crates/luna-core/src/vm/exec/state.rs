@@ -101,8 +101,8 @@ pub struct Vm {
     pub(crate) reader_layers: Vec<super::reader_layers::ReaderLayer>,
     /// roots: what a library function keeps where PUC's has it on its stack
     pub(crate) lib_roots: Vec<Value>,
-    /// `luaL_Buffer` boxes, each with the running natives when it was made
-    pub(crate) buffer_boxes: Vec<(u32, Gc<crate::runtime::Userdata>)>,
+    /// `luaL_Buffer` boxes: the running natives when made (`u32::MAX`: an error left it), block
+    pub(crate) buffer_boxes: Vec<(u32, Gc<crate::runtime::Userdata>, usize)>,
     /// event names `luaL_getmetafield` pushed since a collection step began
     pub(crate) name_cache: [(usize, Option<Gc<crate::runtime::LuaStr>>); 5],
     /// Storages [`Vm::install_jit_storage`] replaced: code compiled into
