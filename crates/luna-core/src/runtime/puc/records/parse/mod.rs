@@ -10,7 +10,7 @@ use crate::runtime::table::Dialect;
 
 mod mark;
 #[cfg(feature = "gc-verify")]
-pub(in crate::runtime::heap) use mark::is_kept;
+pub(in crate::runtime) use mark::is_kept;
 mod unborn;
 
 /// In a record's `sub` byte: a parser table.
@@ -19,12 +19,12 @@ const LOADTAB: u8 = 0x20;
 pub(crate) const PARSING: u8 = 0x20;
 /// In a string's `cls`: only a load in progress holds it, which PUC has
 /// not made it for yet. PUC frees it; luna keeps it, uncounted.
-pub(in crate::runtime::heap) const KEPT: u8 = 0x20;
+pub(in crate::runtime) const KEPT: u8 = 0x20;
 
 /// [`KEPT`] for a string, nothing for another object (whose bit means
 /// something else).
 #[inline(always)]
-pub(in crate::runtime::heap) fn kept_bit(tag: ObjTag) -> u8 {
+pub(in crate::runtime) fn kept_bit(tag: ObjTag) -> u8 {
     if tag == ObjTag::Str { KEPT } else { 0 }
 }
 
@@ -67,7 +67,7 @@ pub(crate) struct ParseFrame {
 /// # Safety
 /// `h` heads an allocated object.
 #[inline]
-pub(in crate::runtime::heap) unsafe fn is_load_tab(h: *mut GcHeader) -> bool {
+pub(in crate::runtime) unsafe fn is_load_tab(h: *mut GcHeader) -> bool {
     // SAFETY: the caller's contract
     unsafe { (*h).tag == ObjTag::Ghost && (*h).sub == LOADTAB }
 }
@@ -76,14 +76,16 @@ pub(in crate::runtime::heap) unsafe fn is_load_tab(h: *mut GcHeader) -> bool {
 ///
 /// # Safety
 /// `h` heads a parser table.
-pub(in crate::runtime::heap) unsafe fn load_tab_size(
-    s: &crate::runtime::puc_size::PucSizes,
+pub(in crate::runtime) unsafe fn load_tab_size(
+    s: &crate::runtime::puc::size::PucSizes,
     d: Dialect,
     h: *mut GcHeader,
 ) -> usize {
     // SAFETY: the caller's contract
     let t = unsafe { &*(h as *const LoadTab) };
-    s.table + pace::array_bytes(s, d, t.asize as usize) + pace::hash_bytes(s, d, t.nodes as usize)
+    s.table
+        + crate::runtime::puc::work::array_bytes(s, d, t.asize as usize)
+        + crate::runtime::puc::work::hash_bytes(s, d, t.nodes as usize)
 }
 
 impl Heap {
@@ -144,7 +146,7 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads a parser table.
-    pub(in crate::runtime::heap) unsafe fn load_tab_work(&self, h: *mut GcHeader) -> i64 {
+    pub(in crate::runtime) unsafe fn load_tab_work(&self, h: *mut GcHeader) -> i64 {
         // SAFETY: the caller's contract
         let t = unsafe { &*(h as *const LoadTab) };
         let (a, n) = (t.asize as usize, t.nodes as usize);
@@ -161,7 +163,7 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads an unlinked parser table nothing uses afterwards.
-    pub(in crate::runtime::heap) unsafe fn free_load_tab(&mut self, h: *mut GcHeader) {
+    pub(in crate::runtime) unsafe fn free_load_tab(&mut self, h: *mut GcHeader) {
         // SAFETY: the caller's contract
         unsafe {
             // `luaH_free`: the hash part, the array part, the table
@@ -177,7 +179,7 @@ impl Heap {
     }
 
     /// The loads in progress, for a marker.
-    pub(in crate::runtime::heap) fn parse_ptr(&self) -> *const Vec<ParseFrame> {
+    pub(in crate::runtime) fn parse_ptr(&self) -> *const Vec<ParseFrame> {
         &self.puc.parse
     }
 }
@@ -204,7 +206,7 @@ impl Heap {
     /// # Safety
     /// `h` heads a live object of this heap.
     #[inline]
-    pub(in crate::runtime::heap) unsafe fn kept_dead(&mut self, h: *mut GcHeader) -> bool {
+    pub(in crate::runtime) unsafe fn kept_dead(&mut self, h: *mut GcHeader) -> bool {
         // SAFETY: the caller's contract
         unsafe {
             if (*h).cls & KEPT == 0 || (*h).tag != ObjTag::Str {

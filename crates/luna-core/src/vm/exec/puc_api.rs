@@ -135,7 +135,7 @@ impl Vm {
         &mut self,
         conv: u32,
         fmt: &[u8],
-        args: &[crate::runtime::puc_fmt::FmtArg<'_>],
+        args: &[crate::runtime::puc::fmt::FmtArg<'_>],
     ) -> Result<Gc<LuaStr>, LuaError> {
         if let Some(e) = self.format_pushes(&[Some(conv)]) {
             return Err(e);

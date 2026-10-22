@@ -6,13 +6,13 @@ use crate::runtime::table::Dialect;
 
 impl Heap {
     /// The bytes of a table's array part of `n` slots.
-    pub(in crate::runtime::heap) fn array_bytes(&self, n: usize) -> usize {
-        crate::runtime::heap::pace::array_bytes(&self.sizes, self.table_dialect, n)
+    pub(in crate::runtime) fn array_bytes(&self, n: usize) -> usize {
+        crate::runtime::puc::work::array_bytes(&self.sizes, self.table_dialect, n)
     }
 
     /// The bytes of a table's hash part of `h` nodes.
-    pub(in crate::runtime::heap) fn hash_bytes(&self, h: usize) -> usize {
-        crate::runtime::heap::pace::hash_bytes(&self.sizes, self.table_dialect, h)
+    pub(in crate::runtime) fn hash_bytes(&self, h: usize) -> usize {
+        crate::runtime::puc::work::hash_bytes(&self.sizes, self.table_dialect, h)
     }
 
     /// A table's parts going from `old_a` array slots and `old_h` nodes to

@@ -73,8 +73,10 @@ impl Heap {
     fn env51_free_record(&mut self, r: usize, counted: bool) -> usize {
         let s = self.sizes;
         let parts: &[usize] = match r {
-            super::env51::E1 => &[s.node, 2 * s.tvalue, s.table],
-            super::env51::E2 | super::env51::E3 => &[s.node, s.table],
+            crate::runtime::puc::records::env51::E1 => &[s.node, 2 * s.tvalue, s.table],
+            crate::runtime::puc::records::env51::E2 | crate::runtime::puc::records::env51::E3 => {
+                &[s.node, s.table]
+            }
             _ => &[s.c_closure(0)],
         };
         for &b in parts {

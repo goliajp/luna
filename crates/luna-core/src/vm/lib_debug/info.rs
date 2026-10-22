@@ -53,7 +53,7 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let (ar, activelines) = match level {
         None => {
             // `lua_pushfstring(L, ">%s", options)`, which stays pushed
-            let fmt = crate::runtime::puc_fmt::FmtArg::S(&options);
+            let fmt = crate::runtime::puc::fmt::FmtArg::S(&options);
             vm.api_pushing(|vm| vm.pushfstring(b">%s", &[fmt]))?;
             let ar = vm.function_ar(subject);
             let lines = match lines_if(vm, want_lines, subject) {

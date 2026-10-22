@@ -2,7 +2,7 @@
 //! library modules share.
 
 use super::*;
-use crate::runtime::puc_fmt::FmtArg;
+use crate::runtime::puc::fmt::FmtArg;
 use crate::runtime::{Gc, LuaStr};
 
 pub(super) fn nat_assert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

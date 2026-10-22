@@ -60,7 +60,7 @@ impl Heap {
         let h = g.as_ptr() as *mut GcHeader;
         self.set_native_puc_nup(g, puc_nup);
         if self.counting() {
-            acct::set_uncounted(h, false);
+            puc::set_uncounted(h, false);
             if puc_nup > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
                 self.acct_obj(PucKind::CClosure, self.sizes.c_closure(puc_nup));
             }
@@ -133,7 +133,7 @@ impl Heap {
         if self.counting() {
             self.acct_obj(PucKind::CClosure, self.sizes.c_closure(0));
         } else {
-            acct::set_uncounted(h, true);
+            puc::set_uncounted(h, true);
         }
         // SAFETY: as above
         Ok(unsafe { Gc::from_ptr(p) })
@@ -158,7 +158,7 @@ impl Heap {
     /// 5.2 on none: a light function), whatever upvalues luna gives it.
     pub(crate) fn set_native_puc_nup(&mut self, g: Gc<NativeClosure>, n: usize) {
         let h = g.as_ptr() as *mut GcHeader;
-        debug_assert!(n + 1 < usize::from(acct::ENV51));
+        debug_assert!(n + 1 < usize::from(puc::ENV51));
         // SAFETY: `g` is a live native; only its per-type byte is written
         unsafe { (*h).sub = (*h).sub & UNCOUNTED | (n as u8 + 1) };
     }
@@ -239,7 +239,7 @@ impl Heap {
         // `try_new_native_puc`)
         if self.fix_natives {
             if nup > 0 {
-                acct::set_uncounted(g.as_ptr() as *mut GcHeader, true);
+                puc::set_uncounted(g.as_ptr() as *mut GcHeader, true);
             }
         } else if nup > 0 || self.table_dialect == crate::runtime::table::Dialect::L51 {
             let size = self.sizes.c_closure(nup);

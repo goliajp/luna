@@ -18,8 +18,8 @@ use crate::runtime::value::Value;
 /// mark bits. Always at offset 0 of the containing struct (`#[repr(C)]`).
 #[repr(C)]
 pub struct GcHeader {
-    next: *mut GcHeader,
-    tag: ObjTag,
+    pub(in crate::runtime) next: *mut GcHeader,
+    pub(in crate::runtime) tag: ObjTag,
     /// tricolor + finalizer state. PUC `gch.marked` layout (lgc.h):
     ///   bit 0 WHITE0 — current-white-A
     ///   bit 1 WHITE1 — current-white-B (the unused white in any given cycle
@@ -36,7 +36,7 @@ pub struct GcHeader {
     ///   bit 7 FIN    — registered for `__gc` (tracked in `finalize`)
     /// Gray = no white bits, no BLACK; that is the in-stack state between the
     /// time a Marker visits an object and the time it traces it.
-    flags: u8,
+    pub(in crate::runtime) flags: u8,
     /// Per-type byte in what would otherwise be padding: a table keeps the
     /// dialect whose table rules it follows here (`table::Dialect`).
     pub(crate) sub: u8,
@@ -51,31 +51,31 @@ pub struct GcHeader {
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<LuaStr>() == 32);
 
-const WHITE0: u8 = 1;
-const WHITE1: u8 = 2;
-const BLACK: u8 = 4;
-const WHITE_BITS: u8 = WHITE0 | WHITE1;
-const COLOR_BITS: u8 = WHITE_BITS | BLACK;
+pub(in crate::runtime) const WHITE0: u8 = 1;
+pub(in crate::runtime) const WHITE1: u8 = 2;
+pub(in crate::runtime) const BLACK: u8 = 4;
+pub(in crate::runtime) const WHITE_BITS: u8 = WHITE0 | WHITE1;
+pub(in crate::runtime) const COLOR_BITS: u8 = WHITE_BITS | BLACK;
 
 /// registered for finalization (`__gc`): the object is tracked in `finalize`.
-const FIN: u8 = 128;
+pub(in crate::runtime) const FIN: u8 = 128;
 /// finalization already scheduled/run: never finalize this object again (PUC
 /// FINALIZEDBIT). Set when it moves to `tobefnz`.
-const FINALIZED: u8 = 16;
+pub(in crate::runtime) const FINALIZED: u8 = 16;
 /// resurrected once because a reference cycle through a coroutine kept the
 /// finalizable alive (PUC 5.3 gc.lua :502 "two collections are needed to
 /// break cycle"). The next time the object is found unreachable it is moved
 /// to `tobefnz` without re-deferring.
-const DEFERRED: u8 = 32;
+pub(in crate::runtime) const DEFERRED: u8 = 32;
 /// the object has no children; fixed at creation
-const LEAF: u8 = 64;
+pub(in crate::runtime) const LEAF: u8 = 64;
 
 #[inline(always)]
-fn is_white(flags: u8) -> bool {
+pub(in crate::runtime) fn is_white(flags: u8) -> bool {
     flags & WHITE_BITS != 0
 }
 #[inline(always)]
-fn is_black(flags: u8) -> bool {
+pub(in crate::runtime) fn is_black(flags: u8) -> bool {
     flags & BLACK != 0
 }
 
@@ -100,7 +100,7 @@ pub use gc_ptr::{Gc, GcObject};
 /// until `gc_finish_atomic`), `Sweep` (`all` swept in place from after
 /// `sweep_prev`); `mark_all` runs all of it inline.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum GcPhase {
+pub(in crate::runtime) enum GcPhase {
     Pause,
     Propagate,
     Sweep,
@@ -108,7 +108,7 @@ enum GcPhase {
 
 /// The Propagate phase's state across steps (`Heap.propagate`); the gray
 /// queue is `Heap.gray`, which the barriers push to directly.
-struct PropagateState {
+pub(in crate::runtime) struct PropagateState {
     quiet: Vec<*mut GcHeader>,
     weak: Vec<*mut Table>,
     ephemeron: Vec<*mut Table>,
@@ -123,30 +123,30 @@ struct PropagateState {
 #[repr(C)]
 pub struct Heap {
     /// PUC's `totalbytes`: every object and block at the size PUC gives it
-    /// (`sizes`), not what luna's own objects take (see `heap::acct`)
+    /// (`sizes`), not what luna's own objects take (see `runtime::puc`)
     pub(crate) bytes: usize,
     /// where the next collection step falls due (`pace`), or `usize::MAX`
     /// while there is none: the one comparison a safe point makes
-    gc_limit: usize,
+    pub(in crate::runtime) gc_limit: usize,
     /// PUC `g->currentwhite`: the white of born / surviving objects; the
     /// other is the dead white the sweep frees. Flipped by `atomic`.
-    current_white: u8,
+    pub(in crate::runtime) current_white: u8,
     /// incremental-sweep phase (Pause unless a `step` cycle is mid-sweep)
-    phase: GcPhase,
+    pub(in crate::runtime) phase: GcPhase,
     /// `collectgarbage("stop")`: auto-GC is suspended while true
-    gc_stopped: bool,
+    pub(in crate::runtime) gc_stopped: bool,
     /// 5.4 and 5.5: a finalizer is running, which no step may interrupt
     /// (PUC `GCSTPGC`)
     pub(crate) gc_fin_stop: bool,
     /// the heap is being dropped: a string it frees is not taken out of
     /// the string table, which goes with it
-    dropping: bool,
+    pub(in crate::runtime) dropping: bool,
     /// a raw table store the interpreter's fast path tried could not grow
     /// the table: the slow path it falls back to counts that as the first
     /// attempt (see `Vm::newindex_miss`)
     pub(crate) store_failed: bool,
     /// gray objects are left off `gray` because it could not grow
-    gray_overflow: bool,
+    pub(in crate::runtime) gray_overflow: bool,
     /// natives without upvalues allocated while set go on `fixed` (the
     /// standard library's functions, PUC's light C functions)
     pub(crate) fix_natives: bool,
@@ -173,50 +173,50 @@ pub struct Heap {
     /// An object finalized once can be registered again (all but 5.2,
     /// whose `luaC_checkfinalizer` refuses a finalized object).
     pub(crate) refinalize: bool,
-    all: *mut GcHeader,
+    pub(in crate::runtime) all: *mut GcHeader,
     /// PUC `fixedgc`: objects never swept, freed with the heap
-    fixed: *mut GcHeader,
+    pub(in crate::runtime) fixed: *mut GcHeader,
     /// the head of `all` at the last safe point; objects before it are newer
-    young: *mut GcHeader,
+    pub(in crate::runtime) young: *mut GcHeader,
     /// `young` as a check where the stack held every live value left it
     /// (`CONCAT`'s): an emergency collection does not keep it for its own sake
-    rooted_young: *mut GcHeader,
+    pub(in crate::runtime) rooted_young: *mut GcHeader,
     /// during `GcPhase::Sweep`: the last object swept and kept, whose
     /// `next` is the next one to sweep (null: the head of `all`). Objects
     /// made since are in front of it and are not swept (PUC `sweepgc`)
-    sweep_prev: *mut GcHeader,
-    live: usize,
+    pub(in crate::runtime) sweep_prev: *mut GcHeader,
+    pub(in crate::runtime) live: usize,
     /// PUC's collector state and pace
-    pub(crate) pace: crate::runtime::gc_pace::Pace,
-    seed: u32,
+    pub(crate) pace: crate::runtime::puc::pace::Pace,
+    pub(in crate::runtime) seed: u32,
     /// Embedding memory cap, soft: over `bytes` between dispatch turns, a full collect, then (still
     /// over) a catchable "memory cap exceeded"; one allocation can pass it.
     pub(crate) mem_cap: Option<usize>,
     /// Persistent gray queue of objects grayed by write barriers, outside `propagate` so barriers
     /// skip the Option; `gc_step_propagate` and `gc_finish_atomic` drain it.
-    gray: mark::GrayStack,
+    pub(in crate::runtime) gray: mark::GrayStack,
     /// objects a back barrier sent to gray (PUC `grayagain`)
-    grayagain: mark::GrayStack,
+    pub(in crate::runtime) grayagain: mark::GrayStack,
     /// 5.1, 5.2: the sweep of PUC's string table under way
-    strt: strt::StrtSweep,
+    pub(in crate::runtime) strt: strt::StrtSweep,
     /// objects registered for finalization (a live `__gc` metamethod was set);
     /// parallel-tracked — ownership stays on `all` (PUC `finobj`).
-    finalize: crate::runtime::mem::LVec<*mut GcHeader>,
+    pub(in crate::runtime) finalize: crate::runtime::mem::LVec<*mut GcHeader>,
     /// dead finalizables resurrected this cycle, awaiting their `__gc` call by
     /// the VM (PUC `tobefnz`); the entries before `tobefnz_head` were handed
     /// out already (`take_one_tobefnz`).
-    tobefnz: crate::runtime::mem::LVec<*mut GcHeader>,
-    tobefnz_head: usize,
+    pub(in crate::runtime) tobefnz: crate::runtime::mem::LVec<*mut GcHeader>,
+    pub(in crate::runtime) tobefnz_head: usize,
     /// Incremental traversal state. `Some` between `gc_start_propagate` and
     /// `gc_finish_atomic` (and inline within `mark_all`); `None` otherwise.
-    propagate: Option<PropagateState>,
+    pub(in crate::runtime) propagate: Option<PropagateState>,
     /// Freed tables (at most 4096) that new tables reuse, listed outside
     /// the allocation context: a sweep allocates nothing, as PUC's.
-    table_pool: Vec<std::ptr::NonNull<crate::runtime::table::Table>>,
+    pub(in crate::runtime) table_pool: Vec<std::ptr::NonNull<crate::runtime::table::Table>>,
     /// the blocks the fixed natives are made in
-    slab: slab::NativeSlab,
+    pub(in crate::runtime) slab: slab::NativeSlab,
     /// 5.1's environments luna has no objects for
-    env51_box: Option<Box<env51::Env51>>,
+    pub(in crate::runtime) env51_box: Option<Box<env51::Env51>>,
     /// `io.stdin` as made, which the host reads lines through; null once freed
     pub(crate) stdin_ud: *mut GcHeader,
     /// The main functions of the chunks loaded while `track_chunk_roots`
@@ -231,9 +231,9 @@ pub struct Heap {
     /// the threads PUC's collector visits: since the last marking, the kept
     pub(crate) threads: Vec<Gc<crate::runtime::Coro>>,
     /// the sizes of PUC's objects in this dialect, which `bytes` counts
-    pub(crate) sizes: crate::runtime::puc_size::PucSizes,
-    /// PUC's own structures luna has none of (see `heap::acct`)
-    pub(crate) puc: acct::PucState,
+    pub(crate) sizes: crate::runtime::puc::size::PucSizes,
+    /// PUC's own structures luna has none of (see `runtime::puc`)
+    pub(crate) puc: puc::PucState,
     #[cfg(feature = "gc-trace")]
     pub(crate) trace: crate::runtime::gc_trace::Trace,
     /// 5.1 / 5.2: the dead open upvalues the sweep has not reached
@@ -243,10 +243,10 @@ pub struct Heap {
     /// exact only under quarantining allocators (no immediate reuse).
     #[cfg(feature = "gc-verify")]
     pub(crate) recently_freed: std::collections::HashSet<usize>,
-    strings: StringTable,
+    pub(in crate::runtime) strings: StringTable,
     /// Where the heap's memory comes from. Last, so the context outlives
     /// whatever the other fields free through it.
-    mem: crate::runtime::mem::MemOwner,
+    pub(in crate::runtime) mem: crate::runtime::mem::MemOwner,
 }
 
 impl Heap {
@@ -269,14 +269,15 @@ impl Heap {
     }
 }
 
-mod acct;
-pub(crate) use acct::{Deferred, Ghost, GhostRef, PucKind, Thread, is_uncounted, parse, strcache};
+use crate::runtime::puc;
+pub(crate) use crate::runtime::puc::records::{Ghost, GhostRef, parse, strcache};
+use crate::runtime::puc::records::{env51, open_upvals, strt};
+pub(crate) use crate::runtime::puc::{Deferred, PucKind, Thread, is_uncounted};
 mod alloc;
 mod barrier;
 mod close;
 mod collect;
 pub(crate) use collect::{Propagated, Running};
-mod env51;
 mod finalize;
 mod intern;
 mod new;
@@ -287,10 +288,8 @@ use self::new::make_seed;
 pub(crate) use env51::{ENV_IO, ENV_IO_POPEN, ENV_IO_STD, ENV_PACKAGE, ENV_PROTO};
 mod free;
 mod mark;
-mod open_upvals;
 pub(crate) use open_upvals::OpenLend;
 mod pace;
-mod strt;
 mod sweep;
 #[cfg(feature = "gc-trace")]
 mod trace;

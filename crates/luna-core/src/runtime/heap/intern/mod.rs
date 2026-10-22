@@ -111,7 +111,7 @@ impl Heap {
                 if (*p).hdr.sub & strt::SWEPT != 0 {
                     (*p).hdr.sub &= !strt::SWEPT;
                     if !self.counting() {
-                        acct::set_uncounted(p as *mut GcHeader, true);
+                        puc::set_uncounted(p as *mut GcHeader, true);
                     } else {
                         self.acct_string(len);
                         self.strt_enter(p as *mut GcHeader);
@@ -199,7 +199,7 @@ impl Heap {
             Gc::from_ptr(p)
         };
         if silent {
-            acct::set_uncounted(p as *mut GcHeader, true);
+            puc::set_uncounted(p as *mut GcHeader, true);
         } else {
             self.acct_obj(PucKind::LongStr, self.sizes.lngstr_hdr + 2 * self.sizes.ptr);
         }
@@ -244,7 +244,7 @@ impl Heap {
 
     /// PUC `luaC_fix` for the string `s`, wherever it is on `all` (one
     /// made before may be fixed again: nothing to do).
-    pub(super) fn fix_string(&mut self, s: Gc<LuaStr>) {
+    pub(in crate::runtime) fn fix_string(&mut self, s: Gc<LuaStr>) {
         let h = s.as_ptr() as *mut GcHeader;
         let mut link: *mut *mut GcHeader = &mut self.all;
         // SAFETY: the links of `all` lead to live objects; no collection

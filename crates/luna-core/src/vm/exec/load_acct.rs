@@ -151,7 +151,7 @@ impl Vm {
     fn replay_end(&mut self, r: &Replay) {
         self.heap.acct_block(r.buff, 0);
         if r.d != Dialect::L51 {
-            let (vd, ld) = crate::runtime::puc_size::dyd_sizes(r.d);
+            let (vd, ld) = crate::runtime::puc::size::dyd_sizes(r.d);
             for (a, e) in [(r.actvar, vd), (r.gt, ld), (r.label, ld)] {
                 self.heap.acct_block(a.cap * e, 0);
             }

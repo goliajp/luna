@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::runtime::mem::Oom;
+use crate::runtime::table::Dialect;
 
 /// Where a C string PUC hands to `luaS_new` lives.
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -174,7 +174,7 @@ impl Heap {
     }
 
     /// The objects of PUC's a record holds, as a sweep counts them.
-    pub(in crate::runtime::heap) fn ghost_objects(g: &Ghost) -> i64 {
+    pub(in crate::runtime) fn ghost_objects(g: &Ghost) -> i64 {
         g.sizes.iter().filter(|&&s| s & (PART | TAKEN) == 0).count() as i64
     }
 
@@ -193,7 +193,7 @@ impl Heap {
     /// Free up to `quota` of the newest objects the dead record `g` holds
     /// (a sweep meets them newest first); how many, and whether none is
     /// left (the caller then unlinks and frees the record).
-    pub(in crate::runtime::heap) fn free_ghost_records(
+    pub(in crate::runtime) fn free_ghost_records(
         &mut self,
         g: &mut Ghost,
         quota: i64,
@@ -210,7 +210,7 @@ impl Heap {
     /// `gc-verify`: the short strings the live records hold, each a place
     /// in PUC's string table.
     #[cfg(feature = "gc-verify")]
-    pub(in crate::runtime::heap) fn ghost_short_strings(&self) -> usize {
+    pub(in crate::runtime) fn ghost_short_strings(&self) -> usize {
         let mut n = 0;
         let mut cur = self.all;
         // SAFETY: `all` links this heap's live objects; a header tagged
@@ -235,7 +235,7 @@ impl Heap {
     /// # Safety
     /// `g` heads an unlinked record of this heap that nothing uses
     /// afterwards.
-    pub(in crate::runtime::heap) unsafe fn free_ghost(&mut self, g: *mut Ghost) {
+    pub(in crate::runtime) unsafe fn free_ghost(&mut self, g: *mut Ghost) {
         // SAFETY: the caller's contract
         unsafe {
             let sizes = &(*g).sizes;

@@ -5,7 +5,7 @@ use super::*;
 /// BLACK or a read-only table; see the flag layout on `GcHeader`
 pub(crate) const SLOW: u8 = 8;
 /// in a string's `sub` byte: luna made the string for itself, PUC has not
-/// made it, and the count leaves it out (see `heap::acct`)
+/// made it, and the count leaves it out (see `runtime::puc`)
 pub(crate) const UNCOUNTED: u8 = 0x80;
 /// in a string's `sub` byte: a 5.5 external string (its bytes in a block)
 pub(crate) const EXTERNAL: u8 = 0x40;
@@ -49,7 +49,7 @@ pub enum ObjTag {
     Coro,
     /// [`crate::runtime::userdata::Userdata`].
     Userdata,
-    /// a record of objects PUC made and luna did not (`heap::acct::ghost`)
+    /// a record of objects PUC made and luna did not (`puc::records::ghost`)
     Ghost,
 }
 

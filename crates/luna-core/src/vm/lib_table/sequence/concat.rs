@@ -103,8 +103,8 @@ fn concat_field(
             };
             let tn = v.type_name();
             let args = [
-                crate::runtime::puc_fmt::FmtArg::S(tn.as_bytes()),
-                crate::runtime::puc_fmt::FmtArg::I(k),
+                crate::runtime::puc::fmt::FmtArg::S(tn.as_bytes()),
+                crate::runtime::puc::fmt::FmtArg::I(k),
             ];
             return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 2));
         }

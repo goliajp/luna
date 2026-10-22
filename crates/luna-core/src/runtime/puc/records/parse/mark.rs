@@ -10,7 +10,7 @@ impl Marker {
     ///
     /// # Safety
     /// `h` heads a parser table, whose objects are allocated.
-    pub(in crate::runtime::heap) unsafe fn trace_load_tab(&mut self, h: *mut GcHeader) {
+    pub(in crate::runtime) unsafe fn trace_load_tab(&mut self, h: *mut GcHeader) {
         // SAFETY: the caller's contract
         unsafe {
             for &r in (*(h as *const LoadTab)).refs.iter() {
@@ -81,7 +81,7 @@ impl Marker {
     /// (left so: the caller drains what this leaves gray). A string of
     /// PUC's no object of PUC's holds is left white, [`KEPT`]: PUC frees
     /// it. False, with nothing done, when no load is in progress.
-    pub(in crate::runtime::heap) fn quiet_parse_trees(&mut self) -> bool {
+    pub(in crate::runtime) fn quiet_parse_trees(&mut self) -> bool {
         // SAFETY: as in `frames`
         if self.parse.is_null() || unsafe { (*self.parse).is_empty() } {
             return false;
@@ -211,7 +211,7 @@ impl Heap {
 /// # Safety
 /// `h` heads an allocated object.
 #[cfg(feature = "gc-verify")]
-pub(in crate::runtime::heap) unsafe fn is_kept(h: *mut GcHeader) -> bool {
+pub(in crate::runtime) unsafe fn is_kept(h: *mut GcHeader) -> bool {
     // SAFETY: the caller's contract
     unsafe { (*h).tag == ObjTag::Str && (*h).cls & KEPT != 0 }
 }
@@ -224,7 +224,7 @@ impl Heap {
     /// luna's and drops the mark; a marking that reaches it first drops the
     /// mark too. Panics on the first that is anything else.
     #[cfg(feature = "gc-verify")]
-    pub(in crate::runtime::heap) fn verify_kept(&self, ctx: &str) {
+    pub(in crate::runtime) fn verify_kept(&self, ctx: &str) {
         let mut cur = self.all;
         // SAFETY: the links of `all` lead to live objects; only headers are
         // read

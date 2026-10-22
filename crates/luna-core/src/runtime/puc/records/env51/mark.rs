@@ -71,7 +71,7 @@ impl Marker {
 
 impl Heap {
     /// The pointer a marker reaches the records through.
-    pub(in crate::runtime::heap) fn env51_ptr(&self) -> *const Env51 {
+    pub(in crate::runtime) fn env51_ptr(&self) -> *const Env51 {
         self.env51_box
             .as_deref()
             .map_or(ptr::null(), |e| e as *const Env51)

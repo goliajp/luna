@@ -2,7 +2,7 @@
 //! one at a time.
 
 use super::*;
-use crate::runtime::puc_fmt::FmtArg;
+use crate::runtime::puc::fmt::FmtArg;
 
 /// The items of `string.unpack` from `pos`, read into `results`.
 pub(super) fn unpack_items(

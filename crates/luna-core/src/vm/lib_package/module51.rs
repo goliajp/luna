@@ -33,7 +33,7 @@ pub(super) fn ll_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
             let Some(t) = find_table(vm, &name)? else {
                 // 5.2 looks the module up in `_LOADED` first, which stays
                 vm.native_push(u32::from(v == LuaVersion::Lua52));
-                let args = [crate::runtime::puc_fmt::FmtArg::S(&name)];
+                let args = [crate::runtime::puc::fmt::FmtArg::S(&name)];
                 let fmt = b"name conflict for module '%s'";
                 return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 1));
             };

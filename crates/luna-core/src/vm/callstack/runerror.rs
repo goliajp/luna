@@ -49,7 +49,7 @@ impl Vm {
     pub(crate) fn runerror_fmt(
         &mut self,
         fmt: &[u8],
-        args: &[crate::runtime::puc_fmt::FmtArg<'_>],
+        args: &[crate::runtime::puc::fmt::FmtArg<'_>],
         conv: u32,
         varinfo: bool,
     ) -> crate::vm::error::LuaError {

@@ -41,7 +41,7 @@ pub(crate) fn load_path(
     // checks for a collection; the name stays on the stack while it loads
     let base = vm.lib_roots.mark();
     let made = vm.api_pushing(|vm| match name {
-        Some(n) => vm.pushfstring(b"@%s", &[crate::runtime::puc_fmt::FmtArg::S(n)]),
+        Some(n) => vm.pushfstring(b"@%s", &[crate::runtime::puc::fmt::FmtArg::S(n)]),
         None => vm.alloc_str(&chunkname),
     });
     let r = match made {

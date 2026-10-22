@@ -4,7 +4,7 @@ use super::*;
 
 impl Table {
     /// Insert / update `(key, val)`. `heap` counts a rehash's parts (see
-    /// `heap::acct`).
+    /// `runtime::puc`).
     /// A read-only table refuses the write with [`TableError::ReadOnly`].
     pub fn set(&mut self, heap: &mut Heap, key: Value, val: Value) -> Result<(), TableError> {
         if self.is_readonly() {

@@ -88,7 +88,7 @@ pub(crate) struct Env51 {
 impl Env51 {
     /// How many of the records a sweep has not freed.
     #[cfg(feature = "gc-trace")]
-    pub(super) fn live(&self) -> i64 {
+    pub(in crate::runtime) fn live(&self) -> i64 {
         let live = |g: &Gen| g.ph.iter().filter(|p| !p.dead).count() as i64;
         self.gens.iter().map(|g| live(g)).sum()
     }
@@ -272,7 +272,7 @@ impl Heap {
 ///
 /// # Safety
 /// `h` heads an allocated object or a record.
-pub(super) unsafe fn is_phantom(h: *mut GcHeader) -> bool {
+pub(in crate::runtime) unsafe fn is_phantom(h: *mut GcHeader) -> bool {
     // SAFETY: the caller's contract
     unsafe { (*h).tag == ObjTag::Ghost && (*h).sub == PHANTOM }
 }
@@ -282,7 +282,7 @@ pub(super) unsafe fn is_phantom(h: *mut GcHeader) -> bool {
 /// # Safety
 /// `h` heads a record.
 #[cfg(feature = "gc-trace")]
-pub(super) unsafe fn phantom_is_table(h: *mut GcHeader) -> bool {
+pub(in crate::runtime) unsafe fn phantom_is_table(h: *mut GcHeader) -> bool {
     // SAFETY: the caller's contract
     unsafe { (*(h as *const Phantom)).kids[0] != NONE }
 }
@@ -291,7 +291,7 @@ pub(super) unsafe fn phantom_is_table(h: *mut GcHeader) -> bool {
 ///
 /// # Safety
 /// `h` heads a record.
-pub(super) unsafe fn phantom_size(h: *mut GcHeader) -> i64 {
+pub(in crate::runtime) unsafe fn phantom_size(h: *mut GcHeader) -> i64 {
     // SAFETY: the caller's contract; a record starts with its header
     unsafe { i64::from((*(h as *const Phantom)).size) }
 }

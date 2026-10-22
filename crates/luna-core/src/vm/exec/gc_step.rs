@@ -4,8 +4,8 @@
 //! `heap::sweep`); what is counted is PUC's.
 
 use super::*;
-use crate::runtime::gc_pace::*;
 use crate::runtime::heap::{Propagated, Running};
+use crate::runtime::puc::pace::*;
 use crate::runtime::table::Dialect;
 use crate::vm::lib_gc::Param;
 

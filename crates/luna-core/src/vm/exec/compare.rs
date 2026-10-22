@@ -282,7 +282,7 @@ impl Vm {
                 if mm.is_nil() {
                     // PUC luaG_ordererror: "two X values" when the operand
                     // types match, "X with Y" otherwise (objtypename-aware).
-                    use crate::runtime::puc_fmt::FmtArg::S;
+                    use crate::runtime::puc::fmt::FmtArg::S;
                     let (t1, t2) = (self.obj_typename(l), self.obj_typename(r));
                     let (t1, t2) = (t1.as_bytes(), t2.as_bytes());
                     return Err(if t1 == t2 {

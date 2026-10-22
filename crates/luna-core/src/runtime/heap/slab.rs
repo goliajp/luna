@@ -6,7 +6,7 @@ use crate::runtime::mem::Oom;
 impl Heap {
     /// A free slot for a native: one a freed native left, or the next of
     /// the newest slab block, or of a new one.
-    pub(in crate::runtime::heap) fn slab_block(&mut self) -> Result<*mut NativeClosure, Oom> {
+    pub(in crate::runtime) fn slab_block(&mut self) -> Result<*mut NativeClosure, Oom> {
         let s = &mut self.slab;
         if let Some(p) = s.free.pop() {
             return Ok(p.as_ptr());
@@ -30,7 +30,7 @@ impl Heap {
     }
 
     /// The slot of `p`, a native of the slab dropped already, free again.
-    pub(in crate::runtime::heap) fn slab_free(&mut self, p: *mut NativeClosure) {
+    pub(in crate::runtime) fn slab_free(&mut self, p: *mut NativeClosure) {
         if !self.dropping {
             self.slab
                 .free
@@ -39,7 +39,7 @@ impl Heap {
     }
 
     /// Give the slab blocks back, the natives in them dropped already.
-    pub(in crate::runtime::heap) fn free_slab(&mut self) {
+    pub(in crate::runtime) fn free_slab(&mut self) {
         for b in std::mem::take(&mut self.slab.blocks) {
             // SAFETY: each block came from this context with this layout
             unsafe { self.mem().ctx().free(b.cast(), slab_layout()) };

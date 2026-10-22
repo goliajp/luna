@@ -97,7 +97,7 @@ pub(crate) fn type_error_msg(
     i: u32,
     expected: &str,
 ) -> Result<String, LuaError> {
-    use crate::runtime::puc_fmt::FmtArg::S;
+    use crate::runtime::puc::fmt::FmtArg::S;
     let got = typename_at(vm, a, i);
     let has_name = vm.version() >= LuaVersion::Lua53 && !a.is_none(i);
     if has_name {

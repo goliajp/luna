@@ -60,7 +60,7 @@ pub(crate) fn unpack_int(
             return Err(crate::vm::builtins::raise_lib(
                 vm,
                 fmt,
-                &[crate::runtime::puc_fmt::FmtArg::D(size as i64)],
+                &[crate::runtime::puc::fmt::FmtArg::D(size as i64)],
                 1,
             ));
         }

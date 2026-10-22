@@ -48,7 +48,7 @@ impl Heap {
 
     /// The marking is over: the open upvalues it left white are dead, off
     /// their lists, and kept (black) until their frees are counted.
-    pub(super) fn doom_open_upvals(&mut self) {
+    pub(in crate::runtime) fn doom_open_upvals(&mut self) {
         let Some(lend) = self.open_dead.lend.take() else {
             return;
         };
@@ -96,7 +96,7 @@ impl Heap {
     /// # Safety
     /// `cur` heads an allocated object.
     #[inline]
-    pub(super) unsafe fn sweep_open_at(&mut self, cur: *mut GcHeader) {
+    pub(in crate::runtime) unsafe fn sweep_open_at(&mut self, cur: *mut GcHeader) {
         // SAFETY: the caller's contract
         if !self.open_dead.dead.is_empty() && unsafe { (*cur).tag } == ObjTag::Coro {
             self.free_dead_open(|o, _| o == cur);
@@ -105,7 +105,7 @@ impl Heap {
 
     /// The sweep is over: the main thread's dead open upvalues are freed
     /// (and any whose thread it did not meet).
-    pub(super) fn sweep_open_end(&mut self) {
+    pub(in crate::runtime) fn sweep_open_end(&mut self) {
         if !self.open_dead.dead.is_empty() {
             self.free_dead_open(|o, _| o.is_null());
             self.free_dead_open(|_, _| true);
@@ -163,7 +163,7 @@ impl Heap {
             let h = uv.as_ptr() as *mut GcHeader;
             if !is_uncounted(h) {
                 self.acct_part(self.sizes.upval, 0);
-                acct::set_uncounted(h, true);
+                crate::runtime::puc::set_uncounted(h, true);
             }
         }
     }

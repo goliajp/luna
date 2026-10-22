@@ -5,9 +5,9 @@ use super::*;
 /// `loaderror` / `checkload` for a module file that failed to load.
 pub(super) fn load_error(vm: &mut Vm, name: &[u8], file: &[u8], msg: &[u8]) -> LuaError {
     let args = [
-        crate::runtime::puc_fmt::FmtArg::S(c_str(name)),
-        crate::runtime::puc_fmt::FmtArg::S(file),
-        crate::runtime::puc_fmt::FmtArg::S(msg),
+        crate::runtime::puc::fmt::FmtArg::S(c_str(name)),
+        crate::runtime::puc::fmt::FmtArg::S(file),
+        crate::runtime::puc::fmt::FmtArg::S(msg),
     ];
     let fmt = b"error loading module '%s' from file '%s':\n\t%s";
     crate::vm::builtins::raise_lib(vm, fmt, &args, 3)
@@ -38,7 +38,7 @@ pub(super) fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
         } else {
             b"\n\tno field package.preload['%s']"
         };
-        let args = [crate::runtime::puc_fmt::FmtArg::S(c_str(name.as_bytes()))];
+        let args = [crate::runtime::puc::fmt::FmtArg::S(c_str(name.as_bytes()))];
         let m = vm.api_pushfstring(1, fmt, &args)?;
         return vm.nat_ret(fs, &[Value::Str(m)]);
     }

@@ -112,16 +112,16 @@ impl Vm {
             PEv::ActVar(_) | PEv::Goto(_) | PEv::Label(_) if r.d == Dialect::L51 => {}
             PEv::ActVar(n) => {
                 // `new_localvar` asks for room past the new entry
-                let (vd, _) = crate::runtime::puc_size::dyd_sizes(r.d);
+                let (vd, _) = crate::runtime::puc::size::dyd_sizes(r.d);
                 r.actvar.reach(&mut self.heap, n as usize + 1, vd);
                 r.actvar.n = n as usize;
             }
             PEv::Goto(n) => {
-                let (_, ld) = crate::runtime::puc_size::dyd_sizes(r.d);
+                let (_, ld) = crate::runtime::puc::size::dyd_sizes(r.d);
                 r.gt.reach(&mut self.heap, n as usize, ld);
             }
             PEv::Label(n) => {
-                let (_, ld) = crate::runtime::puc_size::dyd_sizes(r.d);
+                let (_, ld) = crate::runtime::puc::size::dyd_sizes(r.d);
                 r.label.reach(&mut self.heap, n as usize, ld);
             }
         }

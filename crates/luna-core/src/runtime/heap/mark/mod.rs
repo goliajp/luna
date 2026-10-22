@@ -36,12 +36,12 @@ impl GrayStack {
 pub(crate) struct Marker {
     /// The gray stack. When it cannot grow, the object stays gray off it
     /// and `overflow` is set; [`Marker::refill`] walks `scan` for them.
-    pub(super) stack: GrayStack,
-    pub(super) overflow: bool,
+    pub(in crate::runtime) stack: GrayStack,
+    pub(in crate::runtime) overflow: bool,
     /// The head of the heap's object list when the marker was lent out:
     /// every object that can be gray is on it (new ones are born white,
     /// fixed ones live on their own list).
-    pub(super) scan: *mut GcHeader,
+    pub(in crate::runtime) scan: *mut GcHeader,
     /// live tables with a weak `__mode`, collected during marking and processed
     /// (dead weak entries cleared) before the sweep
     pub(crate) weak: Vec<*mut Table>,
@@ -60,33 +60,33 @@ pub(crate) struct Marker {
     /// `LEAF` or 0, tested against an object's flags: objects without
     /// children go BLACK on sight (only the stop-the-world mark sets it; a
     /// native standing for a C closure has work an incremental step counts).
-    pub(super) leaf_black: u8,
+    pub(in crate::runtime) leaf_black: u8,
     /// 5.2 and 5.3: the size of a string's header, to count what marking
     /// a string or a userdata adds to the work (PUC `GCmemtrav`); 0 for
     /// the other dialects
-    pub(super) leaf_hdr: usize,
+    pub(in crate::runtime) leaf_hdr: usize,
     /// that work so far
-    pub(super) leaf_bytes: i64,
+    pub(in crate::runtime) leaf_bytes: i64,
     /// 5.2: the size of a closed upvalue, whose marking is work too; else 0
-    pub(super) leaf_upval: usize,
+    pub(in crate::runtime) leaf_upval: usize,
     /// 5.5: counts what is marked
-    pub(super) sizer: Option<super::collect::Sizer>,
+    pub(in crate::runtime) sizer: Option<super::collect::Sizer>,
     /// luna's own objects reached, gray off the stack until
     /// [`Marker::drain_quiet`] marks what they hold
     pub(crate) quiet: Vec<*mut GcHeader>,
     /// marking what `quiet` holds: nothing is counted
-    pub(super) quiet_mode: bool,
+    pub(in crate::runtime) quiet_mode: bool,
     /// 5.1's environment records, or null
-    pub(super) env51: *const super::env51::Env51,
+    pub(in crate::runtime) env51: *const super::env51::Env51,
     /// the loads a step runs inside (`PucState::parse`), or null
-    pub(super) parse: *const Vec<super::parse::ParseFrame>,
+    pub(in crate::runtime) parse: *const Vec<super::parse::ParseFrame>,
     /// 5.2 and 5.3: the objects of PUC's luna's stand for, or null
-    pub(super) stands: *const Vec<(*mut GcHeader, usize)>,
+    pub(in crate::runtime) stands: *const Vec<(*mut GcHeader, usize)>,
     /// `gc-verify`: instead of marking a child, report one the sweep about
     /// to run would free (white, not the current white) while the object
     /// being traced (the second) holds it; the check's name third
     #[cfg(feature = "gc-verify")]
-    pub(super) verify: Option<(u8, *mut GcHeader, &'static str)>,
+    pub(in crate::runtime) verify: Option<(u8, *mut GcHeader, &'static str)>,
 }
 
 /// Drain the gray stack: pop each marked object and trace its children until
